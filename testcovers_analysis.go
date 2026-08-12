@@ -134,7 +134,7 @@ type coverTarget struct {
 // candidate block; scanTestCovers itself never writes to the relations
 // read-model.
 func scanTestCovers(dataDir string, pr int, blocks []Block, rels []relations.Relation) []testcovers.Entry {
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, blocksRepo(blocks), pr)
 	idx := buildSymbolIndex(headDir)
 	startBlock := singleNonTestStartBlock(blocks, rels)
 

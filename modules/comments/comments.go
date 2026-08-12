@@ -22,6 +22,7 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS comments (
   id             TEXT PRIMARY KEY,
   run_id         TEXT NOT NULL,
+  repo           TEXT NOT NULL DEFAULT '',   -- canonical repo string: '' = the primary repo
   pr             INTEGER NOT NULL,
   file           TEXT NOT NULL,
   line           INTEGER NOT NULL,
@@ -62,8 +63,12 @@ CREATE INDEX IF NOT EXISTS idx_reactions_comment ON reactions(comment_id);
 
 // Comment is a review comment on one line of code, with its reactions.
 type Comment struct {
-	ID     string `json:"id"`
-	RunID  string `json:"runId"`
+	ID    string `json:"id"`
+	RunID string `json:"runId"`
+	// Repo is the canonical repo string of the PR this comment belongs to: ""
+	// for the primary repo (so every row written before multi-repo existed is
+	// already correct), "owner/name" for any other.
+	Repo   string `json:"repo,omitempty"`
 	PR     int    `json:"pr"`
 	File   string `json:"file"`
 	Line   int    `json:"line"`
@@ -218,9 +223,14 @@ func migrate(db *sql.DB) {
 		`ALTER TABLE comments ADD COLUMN block_wide INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE reactions ADD COLUMN avatar_url TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE reactions ADD COLUMN github_id INTEGER NOT NULL DEFAULT 0`,
+		// Multi-repo (see repos.go): every pre-existing row belongs to the primary
+		// repo, which IS the '' default — a pure ADD with no backfill.
+		`ALTER TABLE comments ADD COLUMN repo TEXT NOT NULL DEFAULT ''`,
 	} {
 		_, _ = db.Exec(col) // ignore "duplicate column name"
 	}
+	// Only after the repo column is guaranteed to exist (see the schema note).
+	_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS idx_comments_pr_repo ON comments(repo, pr)`)
 	// Index the path only after the column is guaranteed to exist (the ADD COLUMN
 	// above runs first). Kept out of the main schema so applying it to an existing
 	// DB — where the column is added here, not by CREATE TABLE — can't error.
@@ -249,13 +259,13 @@ func (m *Module) Save(ctx context.Context, c Comment) error {
 	}
 	_, err := m.db.ExecContext(ctx,
 		`INSERT OR REPLACE INTO comments
-		   (id, run_id, pr, file, line, author, avatar_url, body, created_at, reaction_count, status, code, gran, label, row_start, row_end, seg, anchor_state, path, source, kind, github_id, block_wide)
-		 VALUES (?,?,?,?,?,?,?,?,?,
+		   (id, run_id, repo, pr, file, line, author, avatar_url, body, created_at, reaction_count, status, code, gran, label, row_start, row_end, seg, anchor_state, path, source, kind, github_id, block_wide)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,
 		   COALESCE((SELECT reaction_count FROM comments WHERE id = ?), 0),
 		   COALESCE((SELECT status FROM comments WHERE id = ?), ?),
 		   ?,?,?,?,?,?,?,?,?,?,
 		   COALESCE((SELECT github_id FROM comments WHERE id = ?), ?),?)`,
-		c.ID, c.RunID, c.PR, c.File, c.Line, c.Author, c.AvatarURL, c.Body, c.CreatedAt, c.ID, c.ID, c.Status,
+		c.ID, c.RunID, c.Repo, c.PR, c.File, c.Line, c.Author, c.AvatarURL, c.Body, c.CreatedAt, c.ID, c.ID, c.Status,
 		c.Code, c.Gran, c.Label, c.RowStart, c.RowEnd, c.Seg, c.AnchorState, c.Path, c.Source, c.Kind, c.ID, c.GithubID, c.BlockWide)
 	return err
 }
@@ -401,8 +411,8 @@ func (m *Module) Delete(ctx context.Context, id string) error {
 // pr — the same cascade Delete already relies on. WRITE — workflow-only, the
 // per-PR data-retention cleanup path (see the cleanup workflow). Returns the
 // number of comments removed, for logging.
-func (m *Module) Purge(ctx context.Context, pr int) (int64, error) {
-	res, err := m.db.ExecContext(ctx, `DELETE FROM comments WHERE pr = ?`, pr)
+func (m *Module) Purge(ctx context.Context, repo string, pr int) (int64, error) {
+	res, err := m.db.ExecContext(ctx, `DELETE FROM comments WHERE repo = ? AND pr = ?`, repo, pr)
 	if err != nil {
 		return 0, err
 	}
@@ -425,11 +435,11 @@ func (m *Module) Get(ctx context.Context, id string) (Comment, bool, error) {
 	return list[0], true, nil
 }
 
-// List returns the comments of one PR (or all PRs if pr <= 0), each with its
-// reactions. READ — safe for the UI.
-func (m *Module) List(ctx context.Context, pr int) ([]Comment, error) {
+// List returns the comments of one PR (or every PR of every repo if pr <= 0),
+// each with its reactions. READ — safe for the UI.
+func (m *Module) List(ctx context.Context, repo string, pr int) ([]Comment, error) {
 	if pr > 0 {
-		return m.query(ctx, `WHERE pr = ?`, pr)
+		return m.query(ctx, `WHERE repo = ? AND pr = ?`, repo, pr)
 	}
 	return m.query(ctx, ``)
 }
@@ -450,7 +460,7 @@ func (m *Module) Search(ctx context.Context, prefix string) ([]Comment, error) {
 // query runs the comment select with an optional WHERE clause + args and
 // attaches each comment's reactions. Shared by List and Search.
 func (m *Module) query(ctx context.Context, where string, args ...any) ([]Comment, error) {
-	q := `SELECT id, run_id, pr, file, line, author, avatar_url, body, created_at, reaction_count, status, code, gran, label, row_start, row_end, seg, anchor_state, path, source, kind, github_id, block_wide
+	q := `SELECT id, run_id, repo, pr, file, line, author, avatar_url, body, created_at, reaction_count, status, code, gran, label, row_start, row_end, seg, anchor_state, path, source, kind, github_id, block_wide
 	      FROM comments`
 	if where != "" {
 		q += ` ` + where
@@ -466,7 +476,7 @@ func (m *Module) query(ctx context.Context, where string, args ...any) ([]Commen
 	byID := map[string]int{}
 	for rows.Next() {
 		var c Comment
-		if err := rows.Scan(&c.ID, &c.RunID, &c.PR, &c.File, &c.Line, &c.Author, &c.AvatarURL,
+		if err := rows.Scan(&c.ID, &c.RunID, &c.Repo, &c.PR, &c.File, &c.Line, &c.Author, &c.AvatarURL,
 			&c.Body, &c.CreatedAt, &c.ReactionCount, &c.Status, &c.Code, &c.Gran, &c.Label,
 			&c.RowStart, &c.RowEnd, &c.Seg, &c.AnchorState, &c.Path, &c.Source, &c.Kind, &c.GithubID, &c.BlockWide); err != nil {
 			return nil, err

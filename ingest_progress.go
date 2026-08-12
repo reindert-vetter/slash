@@ -20,27 +20,27 @@ const (
 // ingest simply starts without a known stage until its first Activity sets one.
 var (
 	ingestProgressMu   sync.Mutex
-	ingestProgressByPR = map[int]string{}
+	ingestProgressByPR = map[prKey]string{}
 )
 
 // setIngestStage records that pr's ingest pipeline is currently in stage.
-func setIngestStage(pr int, stage string) {
+func setIngestStage(repo string, pr int, stage string) {
 	ingestProgressMu.Lock()
 	defer ingestProgressMu.Unlock()
-	ingestProgressByPR[pr] = stage
+	ingestProgressByPR[prKey{repo, pr}] = stage
 }
 
 // clearIngestStage drops pr's current stage (called once its Activity returns,
 // success or failure — there's nothing more to report for that step).
-func clearIngestStage(pr int) {
+func clearIngestStage(repo string, pr int) {
 	ingestProgressMu.Lock()
 	defer ingestProgressMu.Unlock()
-	delete(ingestProgressByPR, pr)
+	delete(ingestProgressByPR, prKey{repo, pr})
 }
 
 // ingestStage returns pr's current stage, or "" if none is running.
-func ingestStage(pr int) string {
+func ingestStage(repo string, pr int) string {
 	ingestProgressMu.Lock()
 	defer ingestProgressMu.Unlock()
-	return ingestProgressByPR[pr]
+	return ingestProgressByPR[prKey{repo, pr}]
 }

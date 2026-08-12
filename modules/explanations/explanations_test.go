@@ -25,7 +25,7 @@ func TestExplanationsRoundTrip(t *testing.T) {
 	if err := m.SaveSearching(ctx, e); err != nil {
 		t.Fatal(err)
 	}
-	list, err := m.List(ctx, 5)
+	list, err := m.List(ctx, "", 5)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +39,7 @@ func TestExplanationsRoundTrip(t *testing.T) {
 	if err := m.Save(ctx, e); err != nil {
 		t.Fatal(err)
 	}
-	list, err = m.List(ctx, 5)
+	list, err = m.List(ctx, "", 5)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestExplanationsNewHashSupersedes(t *testing.T) {
 	if err := m.SaveSearching(ctx, Entry{PR: 6, BlockID: "b", UnitKey: "group-2-4", CodeHash: "new"}); err != nil {
 		t.Fatal(err)
 	}
-	list, err := m.List(ctx, 6)
+	list, err := m.List(ctx, "", 6)
 	if err != nil {
 		t.Fatal(err)
 	}

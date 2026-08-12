@@ -27,7 +27,7 @@ import (
 // worktree to fall back to os.RemoveAll).
 func seedWorktree(t *testing.T, dataDir string, pr int) {
 	t.Helper()
-	base, head := worktreeDirs(dataDir, pr)
+	base, head := worktreeDirs(dataDir, "", pr)
 	for _, dir := range []string{base, head} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
@@ -39,7 +39,7 @@ func seedWorktree(t *testing.T, dataDir string, pr int) {
 }
 
 func worktreesExist(dataDir string, pr int) bool {
-	base, head := worktreeDirs(dataDir, pr)
+	base, head := worktreeDirs(dataDir, "", pr)
 	_, errBase := os.Stat(base)
 	_, errHead := os.Stat(head)
 	return errBase == nil || errHead == nil
@@ -55,12 +55,12 @@ func seedGraphDB(t *testing.T, pr int) *sql.DB {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	if err := replacePRBlocks(db, pr, []Block{
+	if err := replacePRBlocks(db, "", pr, []Block{
 		{Name: "foo", File: "app/Foo.php", Category: "OTHER", Line: 1, EndLine: 3, Status: "added", Side: "new", PR: pr},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := saveIngestSHAs(db, pr, "base-sha", "head-sha"); err != nil {
+	if err := saveIngestSHAs(db, "", pr, "base-sha", "head-sha"); err != nil {
 		t.Fatal(err)
 	}
 	return db
@@ -227,12 +227,12 @@ func (ctm *cleanupTestManager) seedAllPRData(t *testing.T, pr int) {
 	t.Helper()
 	ctx := context.Background()
 
-	if err := replacePRBlocks(ctm.graphDB, pr, []Block{
+	if err := replacePRBlocks(ctm.graphDB, "", pr, []Block{
 		{Name: "foo", File: "app/Foo.php", Category: "OTHER", Line: 1, EndLine: 3, Status: "added", Side: "new", PR: pr},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := saveIngestSHAs(ctm.graphDB, pr, "base-sha", "head-sha"); err != nil {
+	if err := saveIngestSHAs(ctm.graphDB, "", pr, "base-sha", "head-sha"); err != nil {
 		t.Fatal(err)
 	}
 	seedWorktree(t, ctm.dataDir, pr)
@@ -244,10 +244,10 @@ func (ctm *cleanupTestManager) seedAllPRData(t *testing.T, pr int) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := ctm.approvals.Replace(ctx, pr, blockID, []int{0}, nil, nil); err != nil {
+	if err := ctm.approvals.Replace(ctx, "", pr, blockID, []int{0}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := ctm.relations.Replace(ctx, pr, []relations.Relation{
+	if err := ctm.relations.Replace(ctx, "", pr, []relations.Relation{
 		{PR: pr, ParentID: blockID, ChildID: blockID, Kind: "event_listener", Line: 1},
 	}); err != nil {
 		t.Fatal(err)
@@ -270,7 +270,7 @@ func (ctm *cleanupTestManager) seedAllPRData(t *testing.T, pr int) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := ctm.commentignore.Set(ctx, pr, "comment-1", true); err != nil {
+	if err := ctm.commentignore.Set(ctx, "", pr, "comment-1", true); err != nil {
 		t.Fatal(err)
 	}
 
@@ -325,32 +325,32 @@ func TestPurgePRRemovesEverything(t *testing.T) {
 	}
 
 	// Read-models are actually empty now.
-	blocks, err := blocksByPR(ctm.graphDB, pr)
+	blocks, err := blocksByPR(ctm.graphDB, "", pr)
 	if err != nil || len(blocks) != 0 {
 		t.Fatalf("blocksByPR after purge = %+v, %v", blocks, err)
 	}
-	if cs, _ := ctm.comments.List(context.Background(), pr); len(cs) != 0 {
+	if cs, _ := ctm.comments.List(context.Background(), "", pr); len(cs) != 0 {
 		t.Fatalf("comments after purge = %+v", cs)
 	}
-	if as, _ := ctm.approvals.List(context.Background(), pr); len(as) != 0 {
+	if as, _ := ctm.approvals.List(context.Background(), "", pr); len(as) != 0 {
 		t.Fatalf("approvals after purge = %+v", as)
 	}
-	if rs, _ := ctm.relations.List(context.Background(), pr); len(rs) != 0 {
+	if rs, _ := ctm.relations.List(context.Background(), "", pr); len(rs) != 0 {
 		t.Fatalf("relations after purge = %+v", rs)
 	}
-	if crs, _ := ctm.callresolve.List(context.Background(), pr); len(crs) != 0 {
+	if crs, _ := ctm.callresolve.List(context.Background(), "", pr); len(crs) != 0 {
 		t.Fatalf("callresolve after purge = %+v", crs)
 	}
-	if tcs, _ := ctm.testcovers.List(context.Background(), pr); len(tcs) != 0 {
+	if tcs, _ := ctm.testcovers.List(context.Background(), "", pr); len(tcs) != 0 {
 		t.Fatalf("testcovers after purge = %+v", tcs)
 	}
-	if _, ok, _ := ctm.prmeta.Get(context.Background(), pr); ok {
+	if _, ok, _ := ctm.prmeta.Get(context.Background(), "", pr); ok {
 		t.Fatal("prmeta row still present after purge")
 	}
-	if exs, _ := ctm.explain.List(context.Background(), pr); len(exs) != 0 {
+	if exs, _ := ctm.explain.List(context.Background(), "", pr); len(exs) != 0 {
 		t.Fatalf("explanations after purge = %+v", exs)
 	}
-	if cis, _ := ctm.commentignore.List(context.Background(), pr); len(cis) != 0 {
+	if cis, _ := ctm.commentignore.List(context.Background(), "", pr); len(cis) != 0 {
 		t.Fatalf("commentignore after purge = %+v", cis)
 	}
 
@@ -392,7 +392,7 @@ func TestCleanupSkipsRecentMerge(t *testing.T) {
 	if !worktreesExist(ctm.dataDir, pr) {
 		t.Fatal("worktrees were removed for a recently-merged PR")
 	}
-	if blocks, _ := blocksByPR(ctm.graphDB, pr); len(blocks) == 0 {
+	if blocks, _ := blocksByPR(ctm.graphDB, "", pr); len(blocks) == 0 {
 		t.Fatal("blocks were removed for a recently-merged PR")
 	}
 }

@@ -23,14 +23,14 @@ func TestAddAndLookup(t *testing.T) {
 	ctx := context.Background()
 	fp := Fingerprint("Dit tarief hoort een constante te zijn.")
 
-	if err := m.Add(ctx, 7, "app/Foo.php", fp, "2026-08-09T10:00:00Z"); err != nil {
+	if err := m.Add(ctx, "", 7, "app/Foo.php", fp, "2026-08-09T10:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Add(ctx, 7, "app/Foo.php", fp, "2026-08-09T11:00:00Z"); err != nil {
+	if err := m.Add(ctx, "", 7, "app/Foo.php", fp, "2026-08-09T11:00:00Z"); err != nil {
 		t.Fatalf("re-adding the same dismissal must be a no-op: %v", err)
 	}
 
-	got, err := m.Fingerprints(ctx, 7)
+	got, err := m.Fingerprints(ctx, "", 7)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestAddAndLookup(t *testing.T) {
 		t.Fatalf("fingerprints = %+v, want the one dismissal", got)
 	}
 	// Another PR never sees it, and neither does another file.
-	other, err := m.Fingerprints(ctx, 8)
+	other, err := m.Fingerprints(ctx, "", 8)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,10 +72,10 @@ func TestFingerprintNormalises(t *testing.T) {
 func TestAddIgnoresEmptyFingerprint(t *testing.T) {
 	m := open(t)
 	ctx := context.Background()
-	if err := m.Add(ctx, 7, "app/Foo.php", "", ""); err != nil {
+	if err := m.Add(ctx, "", 7, "app/Foo.php", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	got, err := m.Fingerprints(ctx, 7)
+	got, err := m.Fingerprints(ctx, "", 7)
 	if err != nil {
 		t.Fatal(err)
 	}

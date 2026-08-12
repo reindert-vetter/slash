@@ -15,7 +15,7 @@ import (
 // defined in two classes.
 func writeCallFixtureRepo(t *testing.T, dataDir string, pr int) {
 	t.Helper()
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"app/Services/OrderService.php": `<?php
 namespace App\Services;
@@ -129,7 +129,7 @@ func TestResolveCallsStatic(t *testing.T) {
 func TestResolveCallsTestHelperClassIndexed(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 8
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"tests/Feature/OrderTest.php": `<?php
 namespace Tests\Feature;
@@ -182,7 +182,7 @@ class TestCase {
 func TestResolveCallsStaticInheritedMethod(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 13259
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"app/Features/PromotionsV2.php": `<?php
 namespace App\Features;
@@ -238,7 +238,7 @@ class CheckoutService {
 func TestResolveCallsStaticInheritedMethodAmbiguous(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 13260
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"app/Features/PromotionsV2.php": `<?php
 namespace App\Features;
@@ -297,7 +297,7 @@ class CheckoutService {
 func TestResolveCallsChangedLinesOnly(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 13
-	baseDir, headDir := worktreeDirs(dataDir, pr)
+	baseDir, headDir := worktreeDirs(dataDir, "", pr)
 	callerBase := `<?php
 namespace App\Services;
 class OrderService {
@@ -356,7 +356,7 @@ class OrderService {
 func TestResolveCallsEnumCase(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 15
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"app/Http/Controllers/UserV3Controller.php": `<?php
 namespace App\Http\Controllers;
@@ -414,7 +414,7 @@ enum AddressType: string
 func TestResolveCallsReceiverVar(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 17
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"app/Actions/FinalizeOrderInvoice.php": `<?php
 namespace App\Actions;
@@ -474,7 +474,7 @@ class Invoice {
 func TestResolveCallsTemporalActivityStub(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 21
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"app/Workflows/ImportStatsFlow.php": `<?php
 namespace App\Workflows;
@@ -530,7 +530,7 @@ final class RunCommandActivity {
 func TestResolveCallsTemporalActivityStubUnknownClass(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 22
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"app/Workflows/ImportStatsFlow.php": `<?php
 namespace App\Workflows;
@@ -573,7 +573,7 @@ class ImportStatsFlow {
 func TestResolveCallsClassRef(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 23
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"config/workflows.php": `<?php
 return [
@@ -628,7 +628,7 @@ final class RunCommandActivity {
 func TestResolveCallsClassRefEntryPoints(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 24
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"config/workflows.php": `<?php
 return [
@@ -709,7 +709,7 @@ final class PlainActivity {
 func TestResolveCallsClassRefModel(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 24
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"app/Jobs/SyncOrders.php": `<?php
 namespace App\Jobs;
@@ -753,7 +753,7 @@ class Order extends Model {
 func TestResolveCallsMacro(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 11
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"app/Exports/ContractsExport.php": `<?php
 namespace App\Exports;
@@ -813,7 +813,7 @@ class MacroServiceProvider {
 func TestResolveCallsFacade(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 21
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"app/Actions/ResetTenancyAction.php": `<?php
 namespace App\Actions;
@@ -881,7 +881,7 @@ final class AccountingDriver {
 func TestResolveCallsMagicProperty(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 9
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"app/Services/Replicator.php": `<?php
 namespace App\Services;
@@ -975,7 +975,7 @@ class Order2 {
 func TestResolveCallsScheduledCommand(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 44
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"modules/Accounting/Internal/Providers/AccountingServiceProvider.php": `<?php
 namespace Modules\Accounting\Internal\Providers;
@@ -1046,7 +1046,7 @@ class AccountingImport {
 func TestResolveCallsConstructor(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 42
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"app/Actions/DisablePlugin.php": `<?php
 namespace App\Actions;
@@ -1112,7 +1112,7 @@ class PlainThing {
 func TestResolveCallsModelUsage(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 55
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"app/Http/Controllers/ProductGroupController.php": `<?php
 namespace App\Http\Controllers;
@@ -1217,7 +1217,7 @@ class ProductGroupResource {
 func TestResolveCallsModelWithoutConstructor(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 56
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"app/Services/OrderCreator.php": `<?php
 namespace App\Services;
@@ -1288,7 +1288,7 @@ func findCallresolveEntry(entries []callresolve.Entry, callerID, callKey string)
 func TestResolveMigrationModelsConvention(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 60
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"database/migrations/2026_01_01_000000_create_product_groups_table.php": `<?php
 use Illuminate\Database\Migrations\Migration;
@@ -1361,7 +1361,7 @@ class ProductGroup extends Model {
 func TestResolveMigrationModelsExplicitTable(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 61
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"database/migrations/2026_01_02_000000_create_pg_table.php": `<?php
 use Illuminate\Database\Migrations\Migration;
@@ -1417,7 +1417,7 @@ class ProductGroup extends Model {
 func TestResolveMigrationModelsMultipleTablesDeduped(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 62
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"database/migrations/2026_01_03_000000_link_contracts_and_orders.php": `<?php
 use Illuminate\Database\Migrations\Migration;
@@ -1492,7 +1492,7 @@ class Contract extends Model {
 func TestResolveDataProviders(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 70
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	relFile := "tests/Feature/PermissionTest.php"
 	src := `<?php
 namespace Tests\Feature;
@@ -1593,7 +1593,7 @@ class PermissionTest extends TestCase
 func TestResolveCallsFoldsLeadingPHPDocInChildCode(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 71
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"app/Services/OrderService.php": `<?php
 namespace App\Services;
@@ -1653,7 +1653,7 @@ class OrderService {
 func TestResolveDataProvidersFoldsLeadingPHPDocInChildCode(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 72
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	relFile := "tests/Feature/PermissionTest.php"
 	src := "<?php\n" +
 		"namespace Tests\\Feature;\n" +
@@ -1716,7 +1716,7 @@ func TestResolveDataProvidersFoldsLeadingPHPDocInChildCode(t *testing.T) {
 func TestResolveCallsTypedParamModel(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 70
-	baseDir, headDir := worktreeDirs(dataDir, pr)
+	baseDir, headDir := worktreeDirs(dataDir, "", pr)
 	entityBase := `<?php
 namespace App\Entity;
 use App\Models\Payment;
@@ -1789,7 +1789,7 @@ class Payment extends Model {
 func TestResolveCallsTypedParamNonModelIgnored(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 71
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"app/Services/PaymentImporter.php": `<?php
 namespace App\Services;
@@ -1833,7 +1833,7 @@ class ImportRequest {
 func TestResolveCallsCastPropertyEnum(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 72
-	baseDir, headDir := worktreeDirs(dataDir, pr)
+	baseDir, headDir := worktreeDirs(dataDir, "", pr)
 	entityBase := `<?php
 namespace App\Entity;
 class PaymentEntity {
@@ -1919,7 +1919,7 @@ enum Driver: string
 func TestResolveCallsCastPropertyAmbiguousEnum(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 73
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	entitySrc := `<?php
 namespace App\Entity;
 class PaymentEntity {
@@ -1980,7 +1980,7 @@ enum Driver: string { case Stripe = 'stripe'; }
 func TestResolveCallsCastPropertyUnknownTargetUnresolved(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 74
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	entitySrc := `<?php
 namespace App\Entity;
 class PaymentEntity {
@@ -2112,7 +2112,7 @@ return [
 func TestResolveTranslations(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 90
-	baseDir, headDir := worktreeDirs(dataDir, pr)
+	baseDir, headDir := worktreeDirs(dataDir, "", pr)
 
 	callerBase := `<?php
 namespace App\Http\Controllers;
@@ -2262,7 +2262,7 @@ return [
 func TestResolveCallsResourceToArray(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 60
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"app/Http/Controllers/AffiliateController.php": `<?php
 namespace App\Http\Controllers;
@@ -2339,7 +2339,7 @@ class ProductResource {
 func TestResolveCallsResourceToArrayVersionedName(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 62
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"app/Http/Controllers/AffiliateController.php": `<?php
 namespace App\Http\Controllers;
@@ -2407,7 +2407,7 @@ class ResourceManager {
 func TestResolveCallsResourceWithoutToArray(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 61
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"app/Http/Controllers/ProductGroupController.php": `<?php
 namespace App\Http\Controllers;
@@ -2448,7 +2448,7 @@ class ProductGroupResource {
 func TestResolveCallsTraitUsage(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 63
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"app/Services/OrderService.php": `<?php
 namespace App\Services;
@@ -2517,7 +2517,7 @@ trait Loggable
 func TestResolveCallsTraitUsageOutsideHeaderIgnored(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 64
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		// A `use Loggable;` statement AFTER the first method declaration falls
 		// outside the class-header block (classHeaderSentinel only spans up to
@@ -2588,7 +2588,7 @@ func writeWorktreeFiles(t *testing.T, dir string, files map[string]string) {
 func TestResolveClassMembers(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 71
-	baseDir, headDir := worktreeDirs(dataDir, pr)
+	baseDir, headDir := worktreeDirs(dataDir, "", pr)
 	const file = "app/Providers/EventServiceProvider.php"
 
 	writeWorktreeFiles(t, baseDir, map[string]string{file: `<?php
@@ -2684,7 +2684,7 @@ class EventServiceProvider
 func TestResolveClassMembersAddedFile(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 72
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	const file = "app/Services/Fresh.php"
 	writeWorktreeFiles(t, headDir, map[string]string{file: `<?php
 namespace App\Services;
@@ -2719,7 +2719,7 @@ class Fresh
 func TestResolveClassMembersAttachedToSibling(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 74
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	const file = "app/Flows/ImportSubscriptionStatsFlow.php"
 	writeWorktreeFiles(t, headDir, map[string]string{file: `<?php
 namespace App\Flows;
@@ -2763,7 +2763,7 @@ class ImportSubscriptionStatsFlow
 func TestResolveClassMembersAttachedToEverySibling(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 75
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	const file = "app/Flows/ImportSubscriptionStatsFlow.php"
 	writeWorktreeFiles(t, headDir, map[string]string{file: `<?php
 namespace App\Flows;
@@ -2806,7 +2806,7 @@ class ImportSubscriptionStatsFlow
 func TestResolveCallsConstRef(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 73
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	writeWorktreeFiles(t, headDir, map[string]string{
 		"app/Services/RetryService.php": `<?php
 namespace App\Services;

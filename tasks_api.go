@@ -446,7 +446,7 @@ func (m *TaskManager) ResumePolling(ctx context.Context) {
 			rootID, _ = m.rootID(r.ID)
 		}
 		if rootID != 0 {
-			prRunID, err := m.ensurePRStatus(input.PR)
+			prRunID, err := m.ensurePRStatus(canonRepo(input.Repo), input.PR)
 			if err != nil {
 				m.logf("task_code_comment: resume ensure pr_status pr=%d: %v", input.PR, err)
 				prRunID = ""
@@ -458,7 +458,7 @@ func (m *TaskManager) ResumePolling(ctx context.Context) {
 				m.importPolled[r.ID] = true
 				m.mu.Unlock()
 			}
-			go m.poll(ctx, r.ID, input.PR, rootID, prRunID)
+			go m.poll(ctx, r.ID, canonRepo(input.Repo), input.PR, rootID, prRunID)
 		}
 	}
 }
@@ -486,12 +486,12 @@ func (m *TaskManager) ResumePRStatusPolling(ctx context.Context) {
 			continue
 		}
 		m.mu.Lock()
-		m.prRuns[input.PR] = r.ID
+		m.prRuns[prKey{canonRepo(input.Repo), input.PR}] = r.ID
 		m.mu.Unlock()
-		go m.pollIngestRefresh(ctx, r.ID, input.PR)
+		go m.pollIngestRefresh(ctx, r.ID, canonRepo(input.Repo), input.PR)
 		// Resume importing/polling this PR's GitHub comments too (mirrors the
 		// fresh-tracker spawn in ensurePRStatus).
-		go m.pollImportComments(ctx, r.ID, input.PR)
+		go m.pollImportComments(ctx, r.ID, canonRepo(input.Repo), input.PR)
 	}
 }
 
@@ -915,7 +915,7 @@ func (s *server) handleProblems(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		seen[pr] = true
-		if meta, ok, err := s.tasks.prmeta.Get(r.Context(), pr); err == nil && ok && meta.Title != "" {
+		if meta, ok, err := s.tasks.prmeta.Get(r.Context(), queryRepo(r), pr); err == nil && ok && meta.Title != "" {
 			titles[strconv.Itoa(pr)] = meta.Title
 		}
 	}
@@ -1248,7 +1248,7 @@ func (s *server) handleComments(w http.ResponseWriter, r *http.Request) {
 		if v := r.URL.Query().Get("pr"); v != "" {
 			pr, _ = strconv.Atoi(v)
 		}
-		list, err = s.tasks.comments.List(r.Context(), pr)
+		list, err = s.tasks.comments.List(r.Context(), queryRepo(r), pr)
 	}
 	if err != nil {
 		http.Error(w, "query failed", http.StatusInternalServerError)
@@ -1271,7 +1271,7 @@ func (s *server) handleRelations(w http.ResponseWriter, r *http.Request) {
 	if v := r.URL.Query().Get("pr"); v != "" {
 		pr, _ = strconv.Atoi(v)
 	}
-	list, err := s.tasks.relations.List(r.Context(), pr)
+	list, err := s.tasks.relations.List(r.Context(), queryRepo(r), pr)
 	if err != nil {
 		http.Error(w, "query failed", http.StatusInternalServerError)
 		return
@@ -1318,7 +1318,7 @@ func (s *server) handleCallResolve(w http.ResponseWriter, r *http.Request) {
 	if v := r.URL.Query().Get("pr"); v != "" {
 		pr, _ = strconv.Atoi(v)
 	}
-	list, err := s.tasks.callresolve.List(r.Context(), pr)
+	list, err := s.tasks.callresolve.List(r.Context(), queryRepo(r), pr)
 	if err != nil {
 		http.Error(w, "query failed", http.StatusInternalServerError)
 		return
@@ -1367,7 +1367,7 @@ func (s *server) handleExplanations(w http.ResponseWriter, r *http.Request) {
 	if v := r.URL.Query().Get("pr"); v != "" {
 		pr, _ = strconv.Atoi(v)
 	}
-	list, err := s.tasks.explain.List(r.Context(), pr)
+	list, err := s.tasks.explain.List(r.Context(), queryRepo(r), pr)
 	if err != nil {
 		http.Error(w, "query failed", http.StatusInternalServerError)
 		return
@@ -1417,7 +1417,7 @@ func (s *server) handleTestCovers(w http.ResponseWriter, r *http.Request) {
 	if v := r.URL.Query().Get("pr"); v != "" {
 		pr, _ = strconv.Atoi(v)
 	}
-	list, err := s.tasks.testcovers.List(r.Context(), pr)
+	list, err := s.tasks.testcovers.List(r.Context(), queryRepo(r), pr)
 	if err != nil {
 		http.Error(w, "query failed", http.StatusInternalServerError)
 		return
@@ -1437,13 +1437,15 @@ func (s *server) handlePRStatusStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		PR int `json:"pr"`
+		PR   int    `json:"pr"`
+		Repo string `json:"repo"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.PR <= 0 {
 		http.Error(w, "invalid pr", http.StatusBadRequest)
 		return
 	}
-	runID, err := s.tasks.manager.EnsurePRStatus(in.PR)
+	in.Repo = canonRepo(in.Repo)
+	runID, err := s.tasks.manager.EnsurePRStatus(in.Repo, in.PR)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
@@ -1460,13 +1462,15 @@ func (s *server) handleApproveStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		PR int `json:"pr"`
+		PR   int    `json:"pr"`
+		Repo string `json:"repo"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.PR <= 0 {
 		http.Error(w, "invalid pr", http.StatusBadRequest)
 		return
 	}
-	runID, err := s.tasks.manager.EnsureApprovals(in.PR)
+	in.Repo = canonRepo(in.Repo)
+	runID, err := s.tasks.manager.EnsureApprovals(in.Repo, in.PR)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
@@ -1486,7 +1490,7 @@ func (s *server) handleApprovals(w http.ResponseWriter, r *http.Request) {
 	if v := r.URL.Query().Get("pr"); v != "" {
 		pr, _ = strconv.Atoi(v)
 	}
-	list, err := s.tasks.approvals.List(r.Context(), pr)
+	list, err := s.tasks.approvals.List(r.Context(), queryRepo(r), pr)
 	if err != nil {
 		http.Error(w, "query failed", http.StatusInternalServerError)
 		return
@@ -1507,13 +1511,15 @@ func (s *server) handleIgnoreCommentStart(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var in struct {
-		PR int `json:"pr"`
+		PR   int    `json:"pr"`
+		Repo string `json:"repo"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.PR <= 0 {
 		http.Error(w, "invalid pr", http.StatusBadRequest)
 		return
 	}
-	runID, err := s.tasks.manager.EnsureIgnoreComment(in.PR)
+	in.Repo = canonRepo(in.Repo)
+	runID, err := s.tasks.manager.EnsureIgnoreComment(in.Repo, in.PR)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
@@ -1537,7 +1543,7 @@ func (s *server) handleCommentIgnores(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing pr", http.StatusBadRequest)
 		return
 	}
-	list, err := s.tasks.commentignore.List(r.Context(), pr)
+	list, err := s.tasks.commentignore.List(r.Context(), queryRepo(r), pr)
 	if err != nil {
 		http.Error(w, "query failed", http.StatusInternalServerError)
 		return
@@ -1672,13 +1678,15 @@ func (s *server) handleClaudeChatStart(w http.ResponseWriter, r *http.Request) {
 	}
 	var in struct {
 		PR        int    `json:"pr"`
+		Repo      string `json:"repo"`
 		CommentID string `json:"commentId"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.PR <= 0 || in.CommentID == "" {
 		http.Error(w, "invalid chat request", http.StatusBadRequest)
 		return
 	}
-	list, err := s.tasks.comments.List(r.Context(), in.PR)
+	in.Repo = canonRepo(in.Repo)
+	list, err := s.tasks.comments.List(r.Context(), in.Repo, in.PR)
 	if err != nil {
 		http.Error(w, "query failed", http.StatusInternalServerError)
 		return
@@ -1720,7 +1728,8 @@ func (s *server) handleCommentBatchStart(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "invalid comment batch request", http.StatusBadRequest)
 		return
 	}
-	list, err := s.tasks.comments.List(r.Context(), in.PR)
+	in.Repo = canonRepo(in.Repo)
+	list, err := s.tasks.comments.List(r.Context(), in.Repo, in.PR)
 	if err != nil {
 		http.Error(w, "query failed", http.StatusInternalServerError)
 		return
@@ -1737,7 +1746,7 @@ func (s *server) handleCommentBatchStart(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
-	if commentBatchRunning(in.PR) {
+	if commentBatchRunning(in.Repo, in.PR) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "batch already running"})
 		return
 	}
@@ -1762,7 +1771,7 @@ func (s *server) handleCommentBatch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "pr required", http.StatusBadRequest)
 		return
 	}
-	p, ok := commentBatchProgressFor(pr)
+	p, ok := commentBatchProgressFor(queryRepo(r), pr)
 	if !ok {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "running": false})
 		return
@@ -1788,7 +1797,7 @@ func (s *server) handleChat(w http.ResponseWriter, r *http.Request) {
 		pr, _ = strconv.Atoi(v)
 	}
 	if pr > 0 {
-		ids, err := s.tasks.chat.ConversationsWithMessages(r.Context(), pr)
+		ids, err := s.tasks.chat.ConversationsWithMessages(r.Context(), queryRepo(r), pr)
 		if err != nil {
 			http.Error(w, "query failed", http.StatusInternalServerError)
 			return
@@ -1858,7 +1867,7 @@ func (s *server) handleChatShadowStatus(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "pr and commentId required", http.StatusBadRequest)
 		return
 	}
-	dir := chatShadowDir(s.dataDir, pr, commentID)
+	dir := chatShadowDir(s.dataDir, queryRepo(r), pr, commentID)
 	if _, err := os.Stat(dir); err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "exists": false})
 		return
@@ -1884,11 +1893,14 @@ func (s *server) handlePendingPush(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	numbers := parsePRList(r.URL.Query().Get("prs"))
+	// A `prs=` entry is a statusKey: a bare number for the primary repo, or
+	// "<owner/name>#<n>" for another repo — the same keys the overview sends and
+	// reads back (prUid in src/overview.mjs).
+	wanted := parseStatusKeyList(r.URL.Query().Get("prs"))
 	out := map[string]*pendingPushView{}
-	for _, pr := range numbers {
-		if v := loadPendingPush(r.Context(), pr); v != nil {
-			out[strconv.Itoa(pr)] = v
+	for _, key := range wanted {
+		if v := loadPendingPush(r.Context(), key.Repo, key.PR); v != nil {
+			out[statusKey(key.Repo, key.PR)] = v
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "pending": out})
@@ -1933,7 +1945,14 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, "retry: 3000\n\n")
 	flusher.Flush()
 
-	id, sub := events.subscribe(pr)
+	// The stream is scoped by (repo, pr): a tab watching plug-and-pay-ops#12 must
+	// not receive the primary repo's PR 12 events, and vice versa. An absent pr
+	// still means "everything", as before.
+	scope := ""
+	if pr > 0 {
+		scope = statusKey(queryRepo(r), pr)
+	}
+	id, sub := events.subscribe(scope)
 	defer events.unsubscribe(id)
 
 	ticker := time.NewTicker(sseKeepAlive)
@@ -2057,7 +2076,7 @@ func (s *server) handlePR(w http.ResponseWriter, r *http.Request) {
 	if v := r.URL.Query().Get("pr"); v != "" {
 		pr, _ = strconv.Atoi(v)
 	}
-	meta, ok, err := s.tasks.prmeta.Get(r.Context(), pr)
+	meta, ok, err := s.tasks.prmeta.Get(r.Context(), queryRepo(r), pr)
 	if err != nil {
 		http.Error(w, "query failed", http.StatusInternalServerError)
 		return

@@ -545,7 +545,7 @@ var (
 // an untouched line never produces a child — the panel shows underlying code of
 // what the PR actually changed.
 func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
-	baseDir, headDir := worktreeDirs(dataDir, pr)
+	baseDir, headDir := worktreeDirs(dataDir, blocksRepo(blocks), pr)
 	idx := buildSymbolIndex(headDir)
 	diffByFile := map[string]*fileChangeSet{}
 	// interfaceVarsByFile caches, per file, the "$var name → interface short
@@ -1114,7 +1114,7 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 // fallback: a migration whose table can't be mapped to a known model just
 // produces no child (silent), never an "unresolved" row.
 func resolveMigrationModels(dataDir string, pr int, blocks []Block) []callresolve.Entry {
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, blocksRepo(blocks), pr)
 	idx := buildSymbolIndex(headDir)
 
 	var out []callresolve.Entry
@@ -1173,7 +1173,7 @@ func resolveMigrationModels(dataDir string, pr int, blocks []Block) []callresolv
 // own span — see funcDeclLine/methodZone's doc comments and
 // .claude/docs/blocks-and-ingest.md.
 func resolveDataProviders(dataDir string, pr int, blocks []Block) []callresolve.Entry {
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, blocksRepo(blocks), pr)
 	idx := buildSymbolIndex(headDir)
 
 	type fileInfo struct {
@@ -1260,7 +1260,7 @@ type langLocaleFile struct {
 // the reviewer sees "missing in <locale>" instead of nothing) — with an empty
 // ChildCode and ChildLine 1.
 func resolveTranslations(dataDir string, pr int, blocks []Block) []callresolve.Entry {
-	baseDir, headDir := worktreeDirs(dataDir, pr)
+	baseDir, headDir := worktreeDirs(dataDir, blocksRepo(blocks), pr)
 	diffByFile := map[string]*fileChangeSet{}
 	langCache := map[string][]langLocaleFile{} // fileSeg → locales that have <fileSeg>.php
 
@@ -1361,7 +1361,7 @@ func resolveTranslations(dataDir string, pr int, blocks []Block) []callresolve.E
 // matches a real call-site literal and the card shows at group/list level
 // instead of being scoped to one line (see isBlockLevelCallKey in home.mjs).
 func resolveClassMembers(dataDir string, pr int, blocks []Block) []callresolve.Entry {
-	baseDir, headDir := worktreeDirs(dataDir, pr)
+	baseDir, headDir := worktreeDirs(dataDir, blocksRepo(blocks), pr)
 
 	var out []callresolve.Entry
 	for _, b := range blocks {

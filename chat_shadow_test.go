@@ -103,7 +103,7 @@ func TestEnsureChatShadowWorktreeCreatesOnFirstUse(t *testing.T) {
 	dataDir := t.TempDir()
 	ctx := context.Background()
 
-	dir, err := ensureChatShadowWorktreeAt(ctx, dataDir, 1001, "conv-a", "feature/x")
+	dir, err := ensureChatShadowWorktreeAt(ctx, dataDir, "", 1001, "conv-a", "feature/x")
 	if err != nil {
 		t.Fatalf("ensureChatShadowWorktreeAt: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestEnsureChatShadowWorktreeRefreshesWhenClean(t *testing.T) {
 	dataDir := t.TempDir()
 	ctx := context.Background()
 
-	dir, err := ensureChatShadowWorktreeAt(ctx, dataDir, 1002, "conv-b", "feature/x")
+	dir, err := ensureChatShadowWorktreeAt(ctx, dataDir, "", 1002, "conv-b", "feature/x")
 	if err != nil {
 		t.Fatalf("first ensure: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestEnsureChatShadowWorktreeRefreshesWhenClean(t *testing.T) {
 	// Someone else pushes a new commit to the real PR branch in the meantime.
 	pushToBare(t, bareDir, "feature/x", "v2\n")
 
-	dir2, err := ensureChatShadowWorktreeAt(ctx, dataDir, 1002, "conv-b", "feature/x")
+	dir2, err := ensureChatShadowWorktreeAt(ctx, dataDir, "", 1002, "conv-b", "feature/x")
 	if err != nil {
 		t.Fatalf("second ensure: %v", err)
 	}
@@ -235,7 +235,7 @@ func TestEnsureChatShadowWorktreeRefreshSurvivesBrokenSubmodule(t *testing.T) {
 
 	// First ensure: a brand new worktree add. Confirmed to not touch the
 	// submodule (no prior state to reconcile against), matching production.
-	dir, err := ensureChatShadowWorktreeAt(ctx, dataDir, 1010, "conv-sub", "feature/x")
+	dir, err := ensureChatShadowWorktreeAt(ctx, dataDir, "", 1010, "conv-sub", "feature/x")
 	if err != nil {
 		t.Fatalf("first ensure (create): %v", err)
 	}
@@ -260,7 +260,7 @@ func TestEnsureChatShadowWorktreeRefreshSurvivesBrokenSubmodule(t *testing.T) {
 
 	// The actual assertion: ensureChatShadowWorktreeAt's own refresh (second
 	// call, existing clean worktree, branch moved on) must still succeed.
-	dir2, err := ensureChatShadowWorktreeAt(ctx, dataDir, 1010, "conv-sub", "feature/x")
+	dir2, err := ensureChatShadowWorktreeAt(ctx, dataDir, "", 1010, "conv-sub", "feature/x")
 	if err != nil {
 		t.Fatalf("refresh across a moved-on branch with a broken submodule: %v", err)
 	}
@@ -290,7 +290,7 @@ func TestEnsureChatShadowWorktreeRefreshSurvivesBrokenSubmodule(t *testing.T) {
 		t.Fatal(err)
 	}
 	pushToBare(t, bareDir, "feature/x", "v3\n")
-	if _, err := ensureChatShadowWorktreeAt(ctx, dataDir, 1010, "conv-sub", "feature/x"); err != nil {
+	if _, err := ensureChatShadowWorktreeAt(ctx, dataDir, "", 1010, "conv-sub", "feature/x"); err != nil {
 		t.Fatalf("refresh on a shadow worktree already wedged by a broken submodule: %v", err)
 	}
 }
@@ -300,7 +300,7 @@ func TestEnsureChatShadowWorktreeNeverDiscardsPendingEdit(t *testing.T) {
 	dataDir := t.TempDir()
 	ctx := context.Background()
 
-	dir, err := ensureChatShadowWorktreeAt(ctx, dataDir, 1003, "conv-c", "feature/x")
+	dir, err := ensureChatShadowWorktreeAt(ctx, dataDir, "", 1003, "conv-c", "feature/x")
 	if err != nil {
 		t.Fatalf("first ensure: %v", err)
 	}
@@ -312,7 +312,7 @@ func TestEnsureChatShadowWorktreeNeverDiscardsPendingEdit(t *testing.T) {
 	// The real branch moved on in the meantime.
 	pushToBare(t, bareDir, "feature/x", "v2\n")
 
-	if _, err := ensureChatShadowWorktreeAt(ctx, dataDir, 1003, "conv-c", "feature/x"); err != nil {
+	if _, err := ensureChatShadowWorktreeAt(ctx, dataDir, "", 1003, "conv-c", "feature/x"); err != nil {
 		t.Fatalf("second ensure: %v", err)
 	}
 	got, _ := os.ReadFile(filepath.Join(dir, "foo.txt"))
@@ -329,7 +329,7 @@ func TestChatShadowLocalPendingStateDetectsDirtyAndAhead(t *testing.T) {
 	dataDir := t.TempDir()
 	ctx := context.Background()
 
-	dir, err := ensureChatShadowWorktreeAt(ctx, dataDir, 1004, "conv-d", "feature/x")
+	dir, err := ensureChatShadowWorktreeAt(ctx, dataDir, "", 1004, "conv-d", "feature/x")
 	if err != nil {
 		t.Fatalf("ensure: %v", err)
 	}
@@ -368,7 +368,7 @@ func TestClearChatShadowRemovesWorktreeAndBranchEvenWithPendingWork(t *testing.T
 	dataDir := t.TempDir()
 	ctx := context.Background()
 
-	dir, err := ensureChatShadowWorktreeAt(ctx, dataDir, 1005, "conv-e", "feature/x")
+	dir, err := ensureChatShadowWorktreeAt(ctx, dataDir, "", 1005, "conv-e", "feature/x")
 	if err != nil {
 		t.Fatalf("ensure: %v", err)
 	}
@@ -376,7 +376,7 @@ func TestClearChatShadowRemovesWorktreeAndBranchEvenWithPendingWork(t *testing.T
 		t.Fatal(err)
 	}
 
-	clearChatShadow(ctx, nil, dataDir, 1005, "conv-e")
+	clearChatShadow(ctx, nil, dataDir, "", 1005, "conv-e")
 
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatalf("shadow worktree still exists after clear: %v", err)
@@ -399,7 +399,7 @@ func TestCommitChatShadowEditsLandsOnPendingRefWithoutPushing(t *testing.T) {
 	ctx := context.Background()
 	cm := testChatModule(t)
 
-	dir, err := ensureChatShadowWorktreeAt(ctx, dataDir, 1004, "conv-d", "feature/x")
+	dir, err := ensureChatShadowWorktreeAt(ctx, dataDir, "", 1004, "conv-d", "feature/x")
 	if err != nil {
 		t.Fatalf("ensure: %v", err)
 	}
@@ -407,14 +407,14 @@ func TestCommitChatShadowEditsLandsOnPendingRefWithoutPushing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	msg := commitChatShadowEditsAt(ctx, cm, dataDir, 1004, "conv-d", "turn-conv-d", "feature/x")
+	msg := commitChatShadowEditsAt(ctx, cm, dataDir, "", 1004, "conv-d", "turn-conv-d", "feature/x")
 	if msg.Kind == chat.KindError {
 		t.Fatalf("commit reported an error: %+v", msg)
 	}
 
 	// The pending ref now holds the edit.
-	ref := prPendingRef(1004, "feature/x")
-	sha := pendingRefSHA(ctx, ref)
+	ref := prPendingRef("", 1004, "feature/x")
+	sha := pendingRefSHA(ctx, "", ref)
 	if sha == "" {
 		t.Fatalf("pending ref %s does not exist after a successful landing", ref)
 	}
@@ -462,19 +462,19 @@ func TestSecondConversationStacksOnPendingRef(t *testing.T) {
 	ctx := context.Background()
 	cm := testChatModule(t)
 
-	dirA, err := ensureChatShadowWorktreeAt(ctx, dataDir, 1010, "conv-a", "feature/x")
+	dirA, err := ensureChatShadowWorktreeAt(ctx, dataDir, "", 1010, "conv-a", "feature/x")
 	if err != nil {
 		t.Fatalf("ensure a: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(dirA, "a.txt"), []byte("from a\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if msg := commitChatShadowEditsAt(ctx, cm, dataDir, 1010, "conv-a", "turn-a", "feature/x"); msg.Kind == chat.KindError {
+	if msg := commitChatShadowEditsAt(ctx, cm, dataDir, "", 1010, "conv-a", "turn-a", "feature/x"); msg.Kind == chat.KindError {
 		t.Fatalf("first landing failed: %+v", msg)
 	}
-	firstSHA := pendingRefSHA(ctx, prPendingRef(1010, "feature/x"))
+	firstSHA := pendingRefSHA(ctx, "", prPendingRef("", 1010, "feature/x"))
 
-	dirB, err := ensureChatShadowWorktreeAt(ctx, dataDir, 1010, "conv-b", "feature/x")
+	dirB, err := ensureChatShadowWorktreeAt(ctx, dataDir, "", 1010, "conv-b", "feature/x")
 	if err != nil {
 		t.Fatalf("ensure b: %v", err)
 	}
@@ -485,11 +485,11 @@ func TestSecondConversationStacksOnPendingRef(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dirB, "b.txt"), []byte("from b\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if msg := commitChatShadowEditsAt(ctx, cm, dataDir, 1010, "conv-b", "turn-b", "feature/x"); msg.Kind == chat.KindError {
+	if msg := commitChatShadowEditsAt(ctx, cm, dataDir, "", 1010, "conv-b", "turn-b", "feature/x"); msg.Kind == chat.KindError {
 		t.Fatalf("second landing failed: %+v", msg)
 	}
 
-	secondSHA := pendingRefSHA(ctx, prPendingRef(1010, "feature/x"))
+	secondSHA := pendingRefSHA(ctx, "", prPendingRef("", 1010, "feature/x"))
 	if secondSHA == "" || secondSHA == firstSHA {
 		t.Fatalf("pending ref did not advance: first=%s second=%s", firstSHA, secondSHA)
 	}
@@ -505,7 +505,7 @@ func TestCommitChatShadowEditsRefusesNonFastForward(t *testing.T) {
 	ctx := context.Background()
 	cm := testChatModule(t)
 
-	dir, err := ensureChatShadowWorktreeAt(ctx, dataDir, 1005, "conv-e", "feature/x")
+	dir, err := ensureChatShadowWorktreeAt(ctx, dataDir, "", 1005, "conv-e", "feature/x")
 	if err != nil {
 		t.Fatalf("ensure: %v", err)
 	}
@@ -518,11 +518,11 @@ func TestCommitChatShadowEditsRefusesNonFastForward(t *testing.T) {
 	// must never silently force through.
 	pushToBare(t, bareDir, "feature/x", "someone else's commit\n")
 
-	msg := commitChatShadowEditsAt(ctx, cm, dataDir, 1005, "conv-e", "turn-conv-e", "feature/x")
+	msg := commitChatShadowEditsAt(ctx, cm, dataDir, "", 1005, "conv-e", "turn-conv-e", "feature/x")
 	if msg.Kind != chat.KindError {
 		t.Fatalf("expected an error message on a non-fast-forward landing, got: %+v", msg)
 	}
-	if sha := pendingRefSHA(ctx, prPendingRef(1005, "feature/x")); sha != "" {
+	if sha := pendingRefSHA(ctx, "", prPendingRef("", 1005, "feature/x")); sha != "" {
 		t.Fatalf("pending ref was created for a refused landing: %s", sha)
 	}
 
@@ -544,7 +544,7 @@ func TestCommitChatShadowEditsNothingToCommit(t *testing.T) {
 
 	// No ensureChatShadowWorktreeAt call at all — no shadow ever existed for
 	// this conversation.
-	msg := commitChatShadowEditsAt(ctx, cm, dataDir, 1006, "conv-f", "turn-conv-f", "feature/x")
+	msg := commitChatShadowEditsAt(ctx, cm, dataDir, "", 1006, "conv-f", "turn-conv-f", "feature/x")
 	if msg.Kind != chat.KindError {
 		t.Fatalf("expected an informational error for a never-created shadow, got: %+v", msg)
 	}

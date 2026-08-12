@@ -23,6 +23,7 @@ const schema = `
 PRAGMA journal_mode = WAL;
 
 CREATE TABLE IF NOT EXISTS relations (
+  repo      TEXT    NOT NULL DEFAULT '',  -- canonical repo string: '' = the primary repo
   pr        INTEGER NOT NULL,
   parent_id TEXT    NOT NULL,
   child_id  TEXT    NOT NULL,
@@ -39,6 +40,11 @@ CREATE INDEX IF NOT EXISTS idx_relations_pr ON relations(pr);
 // duplicate-column error just means the DB is already up to date.
 func migrate(db *sql.DB) {
 	_, _ = db.Exec(`ALTER TABLE relations ADD COLUMN line INTEGER NOT NULL DEFAULT 0`)
+	// Multi-repo (see repos.go): every existing row is the primary repo's, which
+	// IS the '' default.
+	_, _ = db.Exec(`ALTER TABLE relations ADD COLUMN repo TEXT NOT NULL DEFAULT ''`)
+	// Only after the column is guaranteed to exist (see the note in the schema).
+	_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS idx_relations_pr_repo ON relations(repo, pr)`)
 }
 
 // Kind values (extend as more relation types are added).
@@ -69,6 +75,8 @@ const (
 // Relation is one directed parent→child edge between two blocks (by block ID,
 // i.e. "<pr>:<file>:<symbol>"), tagged with its kind.
 type Relation struct {
+	// Repo is the canonical repo string ("" = the primary repo, see repos.go).
+	Repo     string `json:"repo,omitempty"`
 	PR       int    `json:"pr"`
 	ParentID string `json:"parentId"`
 	ChildID  string `json:"childId"`
@@ -114,24 +122,24 @@ func (m *Module) Close() error { return m.db.Close() }
 // and re-inserts rels in a single transaction. WRITE — call only from a
 // workflow Activity. Idempotent (a re-run with the same rels is a no-op), so
 // replay is safe and re-ingest just rebuilds.
-func (m *Module) Replace(ctx context.Context, pr int, rels []Relation) error {
+func (m *Module) Replace(ctx context.Context, repo string, pr int, rels []Relation) error {
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.ExecContext(ctx, `DELETE FROM relations WHERE pr = ?`, pr); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM relations WHERE repo = ? AND pr = ?`, repo, pr); err != nil {
 		return err
 	}
 	stmt, err := tx.PrepareContext(ctx,
-		`INSERT OR IGNORE INTO relations (pr, parent_id, child_id, kind, line) VALUES (?,?,?,?,?)`)
+		`INSERT OR IGNORE INTO relations (repo, pr, parent_id, child_id, kind, line) VALUES (?,?,?,?,?,?)`)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 	for _, r := range rels {
-		if _, err := stmt.ExecContext(ctx, pr, r.ParentID, r.ChildID, r.Kind, r.Line); err != nil {
+		if _, err := stmt.ExecContext(ctx, repo, pr, r.ParentID, r.ChildID, r.Kind, r.Line); err != nil {
 			return err
 		}
 	}
@@ -141,8 +149,8 @@ func (m *Module) Replace(ctx context.Context, pr int, rels []Relation) error {
 // Purge removes every relation row of pr. WRITE — workflow-only, the per-PR
 // data-retention cleanup path (see the cleanup workflow). Returns the number
 // of rows removed, for logging.
-func (m *Module) Purge(ctx context.Context, pr int) (int64, error) {
-	res, err := m.db.ExecContext(ctx, `DELETE FROM relations WHERE pr = ?`, pr)
+func (m *Module) Purge(ctx context.Context, repo string, pr int) (int64, error) {
+	res, err := m.db.ExecContext(ctx, `DELETE FROM relations WHERE repo = ? AND pr = ?`, repo, pr)
 	if err != nil {
 		return 0, err
 	}
@@ -151,9 +159,9 @@ func (m *Module) Purge(ctx context.Context, pr int) (int64, error) {
 
 // List returns all relations for a PR, ordered deterministically. READ — safe
 // for the UI/API.
-func (m *Module) List(ctx context.Context, pr int) ([]Relation, error) {
+func (m *Module) List(ctx context.Context, repo string, pr int) ([]Relation, error) {
 	rows, err := m.db.QueryContext(ctx,
-		`SELECT pr, parent_id, child_id, kind, line FROM relations WHERE pr = ? ORDER BY parent_id, child_id, kind`, pr)
+		`SELECT repo, pr, parent_id, child_id, kind, line FROM relations WHERE repo = ? AND pr = ? ORDER BY parent_id, child_id, kind`, repo, pr)
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +169,7 @@ func (m *Module) List(ctx context.Context, pr int) ([]Relation, error) {
 	var out []Relation
 	for rows.Next() {
 		var r Relation
-		if err := rows.Scan(&r.PR, &r.ParentID, &r.ChildID, &r.Kind, &r.Line); err != nil {
+		if err := rows.Scan(&r.Repo, &r.PR, &r.ParentID, &r.ChildID, &r.Kind, &r.Line); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

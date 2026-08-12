@@ -192,7 +192,7 @@ func matchSnippetRows(rows []alignRow, snippet string) (start, end int, ok bool)
 // dataDir/pr locate the (already refreshed) base/head worktrees; blocks are the
 // PR's current blocks.
 func planCommentReanchor(dataDir string, pr int, changedFiles []string, cs []comments.Comment, blocks []Block) []commentAnchorUpdate {
-	baseDir, headDir := worktreeDirs(dataDir, pr)
+	baseDir, headDir := worktreeDirs(dataDir, blocksRepo(blocks), pr)
 	touched := make(map[string]bool, len(changedFiles))
 	for _, f := range changedFiles {
 		touched[f] = true
@@ -760,7 +760,7 @@ func planReanchor(ctx context.Context, dataDir string, pr int, changedFiles []st
 	}
 	defer cleanup()
 
-	baseDir, headDir := worktreeDirs(dataDir, pr)
+	baseDir, headDir := worktreeDirs(dataDir, blocksRepo(blocks), pr)
 	plan.Approvals = planApprovalRemap(baseDir, headDir, oldBaseDir, oldHeadDir, aps, blocks, touched)
 	return plan
 }

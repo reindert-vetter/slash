@@ -9,11 +9,11 @@ import (
 // and nobody else — the whole filtering contract of the hub.
 func TestEventHubScopesByPR(t *testing.T) {
 	h := newEventHub()
-	_, all := h.subscribe(0)
-	_, mine := h.subscribe(7)
-	_, other := h.subscribe(8)
+	_, all := h.subscribe("")
+	_, mine := h.subscribe(statusKey("", 7))
+	_, other := h.subscribe(statusKey("", 8))
 
-	h.publish(eventChatMessage, 7, "conv-1", nil)
+	h.publish(eventChatMessage, "", 7, "conv-1", nil)
 
 	for name, sub := range map[string]*eventSub{"all": all, "mine": mine} {
 		select {
@@ -36,9 +36,9 @@ func TestEventHubScopesByPR(t *testing.T) {
 // caller's struct can never change what a subscriber reads.
 func TestEventHubSnapshotsPayload(t *testing.T) {
 	h := newEventHub()
-	_, sub := h.subscribe(0)
+	_, sub := h.subscribe("")
 	p := chatProgress{Running: true, Phase: chatPhaseWriting, Partial: "hal"}
-	h.publish(eventChatProgress, 1, "conv", p)
+	h.publish(eventChatProgress, "", 1, "conv", p)
 	p.Partial = "changed after publish"
 
 	ev := <-sub.ch
@@ -55,9 +55,9 @@ func TestEventHubSnapshotsPayload(t *testing.T) {
 // flagged so its connection can send a resync instead of silently skipping.
 func TestEventHubDropsInsteadOfBlocking(t *testing.T) {
 	h := newEventHub()
-	_, sub := h.subscribe(0)
+	_, sub := h.subscribe("")
 	for i := 0; i < eventSubBuffer+10; i++ {
-		h.publish(eventChatMessage, 1, "conv", nil) // would deadlock if it blocked
+		h.publish(eventChatMessage, "", 1, "conv", nil) // would deadlock if it blocked
 	}
 	if !sub.dropped.Load() {
 		t.Fatal("expected the slow subscriber to be flagged as dropped")
@@ -71,7 +71,7 @@ func TestEventHubDropsInsteadOfBlocking(t *testing.T) {
 // the channel, which is what ends the SSE writer loop.
 func TestEventHubUnsubscribe(t *testing.T) {
 	h := newEventHub()
-	id, sub := h.subscribe(0)
+	id, sub := h.subscribe("")
 	if h.subscriberCount() != 1 {
 		t.Fatalf("subscriberCount = %d, want 1", h.subscriberCount())
 	}
@@ -89,12 +89,12 @@ func TestEventHubUnsubscribe(t *testing.T) {
 // the process-wide hub — the nudge an already-open review tree needs after an
 // ingest refresh swapped its blocks (see .claude/docs/server-events.md).
 func TestPublishBlocksChangedIsPRScopedAndEmpty(t *testing.T) {
-	id1, sub := events.subscribe(13255)
+	id1, sub := events.subscribe("13255")
 	defer events.unsubscribe(id1)
-	id2, other := events.subscribe(13263)
+	id2, other := events.subscribe("13263")
 	defer events.unsubscribe(id2)
 
-	publishBlocksChanged(13255)
+	publishBlocksChanged("", 13255)
 
 	select {
 	case ev := <-sub.ch:

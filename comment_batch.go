@@ -53,6 +53,11 @@ import (
 // so what the agent works on is exactly what the reviewer just read in the
 // palette — and so the set can't silently grow between the click and the run.
 type CommentBatchInput struct {
+	// Repo is the canonical repo string this PR belongs to: "" (absent) for the
+	// primary repo — which is what every Execution started before multi-repo
+	// existed carries, so replay of a stored history is unaffected — and
+	// "owner/name" for any other configured repo. See repos.go.
+	Repo       string   `json:"repo,omitempty"`
 	PR         int      `json:"pr"`
 	CommentIDs []string `json:"commentIds"`
 }
@@ -62,6 +67,11 @@ type CommentBatchInput struct {
 // this run is stored under (see chatMessageID's doc comment for why that id must
 // be derived, never random).
 type commentBatchArg struct {
+	// Repo is the canonical repo string this PR belongs to: "" (absent) for the
+	// primary repo — which is what every Execution started before multi-repo
+	// existed carries, so replay of a stored history is unaffected — and
+	// "owner/name" for any other configured repo. See repos.go.
+	Repo       string   `json:"repo,omitempty"`
 	PR         int      `json:"pr"`
 	CommentIDs []string `json:"commentIds"`
 	TurnID     string   `json:"turnId"`
@@ -92,14 +102,14 @@ func commentBatchWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	if in.PR <= 0 || len(in.CommentIDs) == 0 {
 		return json.Marshal(commentBatchResult{})
 	}
-	arg := commentBatchArg{PR: in.PR, CommentIDs: in.CommentIDs, TurnID: w.RunID()}
+	arg := commentBatchArg{Repo: in.Repo, PR: in.PR, CommentIDs: in.CommentIDs, TurnID: w.RunID()}
 	var res commentBatchResult
 	if err := w.ExecuteActivity("runCommentBatch", arg, &res); err != nil {
 		return nil, fmt.Errorf("run comment batch: %w", err)
 	}
 	if res.NeedsLand {
 		if err := w.ExecuteActivity("enqueueChatMerge", chatCommitInput{
-			PR: in.PR, ConversationID: commentBatchConvID(in.PR), TurnID: arg.TurnID,
+			Repo: in.Repo, PR: in.PR, ConversationID: commentBatchConvID(in.PR), TurnID: arg.TurnID,
 		}, nil); err != nil {
 			return nil, fmt.Errorf("enqueue comment batch merge: %w", err)
 		}
@@ -125,35 +135,35 @@ func runCommentBatch(ctx context.Context, tm *TaskManager, cmod *comments.Module
 	for _, c := range items {
 		ids = append(ids, c.ID)
 	}
-	startCommentBatchProgress(arg.PR, ids)
-	defer finishCommentBatchProgress(arg.PR)
+	startCommentBatchProgress(arg.Repo, arg.PR, ids)
+	defer finishCommentBatchProgress(arg.Repo, arg.PR)
 
 	convID := commentBatchConvID(arg.PR)
 	// The landing path (chat_merge → commitChatShadowEditsAt) records its
 	// outcome as a chat.Message on this conversation, so the row has to exist.
 	if chatMod != nil {
-		if err := chatMod.EnsureConversation(ctx, convID, arg.PR); err != nil && tm != nil && tm.logf != nil {
+		if err := chatMod.EnsureConversation(ctx, convID, arg.Repo, arg.PR); err != nil && tm != nil && tm.logf != nil {
 			tm.logf("comment_batch pr %d: ensure conversation: %v", arg.PR, err)
 		}
 	}
 
-	dir, ok := prepareChatShellWorkDir(ctx, tm, dataDir, arg.PR, convID)
+	dir, ok := prepareChatShellWorkDir(ctx, tm, dataDir, arg.Repo, arg.PR, convID)
 	if !ok {
-		failCommentBatchProgress(arg.PR, "Kon geen werkkopie klaarzetten (gh/git niet bereikbaar).")
+		failCommentBatchProgress(arg.Repo, arg.PR, "Kon geen werkkopie klaarzetten (gh/git niet bereikbaar).")
 		return commentBatchResult{}
 	}
 
-	advanceCommentBatchProgress(arg.PR, chatPhaseStarting)
+	advanceCommentBatchProgress(arg.Repo, arg.PR, chatPhaseStarting)
 	result, err := cl.RunChat(ctx, claude.RunRequest{
 		Model:        claude.ModelOpus,
 		Prompt:       commentBatchPrompt(items),
 		SystemPrompt: claude.CommentBatchSystemPrompt,
 		WorkDir:      dir,
 		Tools:        []string{"Read", "Grep", "Glob", "Edit", "Bash"},
-		OnEvent:      commentBatchProgressSink(arg.PR, ids),
+		OnEvent:      commentBatchProgressSink(arg.Repo, arg.PR, ids),
 	})
 	if err != nil {
-		failCommentBatchProgress(arg.PR, "Claude kon de comments niet verwerken. Probeer het opnieuw.")
+		failCommentBatchProgress(arg.Repo, arg.PR, "Claude kon de comments niet verwerken. Probeer het opnieuw.")
 		return commentBatchResult{}
 	}
 
@@ -177,9 +187,9 @@ func runCommentBatch(ctx context.Context, tm *TaskManager, cmod *comments.Module
 			seen[m.CommentID] = true
 			res.Skipped++
 		}
-		markCommentBatchOutcome(arg.PR, m.CommentID, m.Kind, m.Note)
+		markCommentBatchOutcome(arg.Repo, arg.PR, m.CommentID, m.Kind, m.Note)
 	}
-	res.NeedsLand = chatShadowNeedsLanding(ctx, dataDir, arg.PR, convID)
+	res.NeedsLand = chatShadowNeedsLanding(ctx, dataDir, arg.Repo, arg.PR, convID)
 	return res
 }
 
@@ -188,7 +198,7 @@ func runCommentBatch(ctx context.Context, tm *TaskManager, cmod *comments.Module
 // endpoint already checked (still open, not an AI finding) — the list was built
 // in the browser and a comment can have been resolved since.
 func commentBatchTargets(ctx context.Context, cmod *comments.Module, arg commentBatchArg) []comments.Comment {
-	list, err := cmod.List(ctx, arg.PR)
+	list, err := cmod.List(ctx, arg.Repo, arg.PR)
 	if err != nil {
 		return nil
 	}
@@ -303,7 +313,7 @@ func parseCommentBatchMarkers(text string) []commentBatchMarker {
 // Text deltas arrive mid-line, so they are buffered and only COMPLETE lines are
 // scanned; the tail is kept for the next delta. Called serially from RunChat's
 // own single reader goroutine, so the captured buffer needs no lock.
-func commentBatchProgressSink(pr int, ids []string) func(claude.ChatEvent) {
+func commentBatchProgressSink(repo string, pr int, ids []string) func(claude.ChatEvent) {
 	allowed := make(map[string]bool, len(ids))
 	for _, id := range ids {
 		allowed[id] = true
@@ -324,25 +334,25 @@ func commentBatchProgressSink(pr int, ids []string) func(claude.ChatEvent) {
 					continue
 				}
 				if m.Kind == commentBatchStateBusy {
-					markCommentBatchCurrent(pr, m.CommentID)
+					markCommentBatchCurrent(repo, pr, m.CommentID)
 					continue
 				}
-				markCommentBatchOutcome(pr, m.CommentID, m.Kind, m.Note)
+				markCommentBatchOutcome(repo, pr, m.CommentID, m.Kind, m.Note)
 			}
 		case claude.ChatEventThinking:
-			if snap, ok := mutateCommentBatchProgress(pr, func(p *commentBatchProgress) {
+			if snap, ok := mutateCommentBatchProgress(repo, pr, func(p *commentBatchProgress) {
 				p.Phase, p.Tool, p.Detail = chatPhaseThinking, "", ""
 			}); ok {
-				publishCommentBatchProgress(pr, snap)
+				publishCommentBatchProgress(repo, pr, snap)
 			}
 		case claude.ChatEventTool:
-			if snap, ok := mutateCommentBatchProgress(pr, func(p *commentBatchProgress) {
+			if snap, ok := mutateCommentBatchProgress(repo, pr, func(p *commentBatchProgress) {
 				p.Phase, p.Tool = chatPhaseTool, ev.Tool
 				if ev.Detail != "" {
 					p.Detail = ev.Detail
 				}
 			}); ok {
-				publishCommentBatchProgress(pr, snap)
+				publishCommentBatchProgress(repo, pr, snap)
 			}
 		}
 	}

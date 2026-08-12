@@ -28,14 +28,14 @@ import (
 func landOneEdit(t *testing.T, dataDir string, pr int, conversationID, headRefName, file, content string) {
 	t.Helper()
 	ctx := context.Background()
-	dir, err := ensureChatShadowWorktreeAt(ctx, dataDir, pr, conversationID, headRefName)
+	dir, err := ensureChatShadowWorktreeAt(ctx, dataDir, "", pr, conversationID, headRefName)
 	if err != nil {
 		t.Fatalf("ensure shadow: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, file), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if msg := commitChatShadowEditsAt(ctx, testChatModule(t), dataDir, pr, conversationID, "turn-"+conversationID, headRefName); msg.Kind == chat.KindError {
+	if msg := commitChatShadowEditsAt(ctx, testChatModule(t), dataDir, "", pr, conversationID, "turn-"+conversationID, headRefName); msg.Kind == chat.KindError {
 		t.Fatalf("landing failed: %+v", msg)
 	}
 }
@@ -48,13 +48,13 @@ func TestLoadPendingPushReportsLandedWork(t *testing.T) {
 	dataDir := t.TempDir()
 	ctx := context.Background()
 
-	if v := loadPendingPush(ctx, 3001); v != nil {
+	if v := loadPendingPush(ctx, "", 3001); v != nil {
 		t.Fatalf("expected no pending push before anything landed, got %+v", v)
 	}
 
 	landOneEdit(t, dataDir, 3001, "conv-a", "feature/x", "foo.txt", "edited by claude\n")
 
-	v := loadPendingPush(ctx, 3001)
+	v := loadPendingPush(ctx, "", 3001)
 	if v == nil {
 		t.Fatal("expected a pending push after a landing")
 	}
@@ -70,8 +70,8 @@ func TestLoadPendingPushReportsLandedWork(t *testing.T) {
 	if !reflect.DeepEqual(v.Files, []string{"foo.txt"}) {
 		t.Fatalf("files = %v, want [foo.txt]", v.Files)
 	}
-	if v.PushRunID != chatMergeQueueRunID(3001) {
-		t.Fatalf("pushRunId = %q, want %q", v.PushRunID, chatMergeQueueRunID(3001))
+	if v.PushRunID != chatMergeQueueRunID("", 3001) {
+		t.Fatalf("pushRunId = %q, want %q", v.PushRunID, chatMergeQueueRunID("", 3001))
 	}
 }
 
@@ -84,7 +84,7 @@ func TestPushPendingPRPushesAndDropsTheRef(t *testing.T) {
 
 	landOneEdit(t, dataDir, 3002, "conv-b", "feature/x", "foo.txt", "edited by claude\n")
 
-	pushPendingPR(ctx, nil, 3002)
+	pushPendingPR(ctx, nil, "", 3002)
 
 	verify := t.TempDir()
 	if out, err := exec.Command("git", "clone", "--branch", "feature/x", bareDir, verify).CombinedOutput(); err != nil {
@@ -93,7 +93,7 @@ func TestPushPendingPRPushesAndDropsTheRef(t *testing.T) {
 	if got, _ := os.ReadFile(filepath.Join(verify, "foo.txt")); string(got) != "edited by claude\n" {
 		t.Fatalf("pushed content = %q, want the edit", got)
 	}
-	if v := loadPendingPush(ctx, 3002); v != nil {
+	if v := loadPendingPush(ctx, "", 3002); v != nil {
 		t.Fatalf("pending ref survived a successful push: %+v", v)
 	}
 }
@@ -111,9 +111,9 @@ func TestPushPendingPRKeepsRefWhenRefused(t *testing.T) {
 	// fast-forward of the branch.
 	pushToBare(t, bareDir, "feature/x", "someone else\n")
 
-	pushPendingPR(ctx, nil, 3003)
+	pushPendingPR(ctx, nil, "", 3003)
 
-	v := loadPendingPush(ctx, 3003)
+	v := loadPendingPush(ctx, "", 3003)
 	if v == nil {
 		t.Fatal("pending ref was dropped even though the push was refused")
 	}
@@ -163,7 +163,7 @@ func TestChatMergeQueueDispatchesPushAction(t *testing.T) {
 		return nil, nil
 	})
 
-	runID, err := engine.StartWorkflowID(chatMergeQueueRunID(9003), WorkflowChatMerge, ChatMergeQueueInput{PR: 9003})
+	runID, err := engine.StartWorkflowID(chatMergeQueueRunID("", 9003), WorkflowChatMerge, ChatMergeQueueInput{PR: 9003})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +199,7 @@ func TestHandleWorkflowsPushSignal(t *testing.T) {
 
 	m, _, _ := newTestManager(t)
 	s := &server{tasks: &tasks{manager: m, engine: m.engine}}
-	runID, err := m.EnsureChatMergeQueue(3004)
+	runID, err := m.EnsureChatMergeQueue("", 3004)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +220,7 @@ func TestHandleWorkflowsPushSignal(t *testing.T) {
 		t.Fatalf("push action: status = %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
 	}
 
-	if v := loadPendingPush(context.Background(), 3004); v != nil {
+	if v := loadPendingPush(context.Background(), "", 3004); v != nil {
 		t.Fatalf("pending ref survived a push routed through handleWorkflows: %+v", v)
 	}
 }

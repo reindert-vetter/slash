@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS blocks (
   old_file   TEXT NOT NULL DEFAULT '',   -- pre-rename path when the PR moved this
                                           -- block's file (git-detected rename); '' otherwise
   side       TEXT NOT NULL DEFAULT 'new',
+  repo       TEXT NOT NULL DEFAULT '',    -- canonical repo string: '' = the primary repo
+                                          -- (see repos.go), 'owner/name' for any other
   pr         INTEGER NOT NULL DEFAULT 0,
   approved   INTEGER NOT NULL DEFAULT 0,
   description TEXT NOT NULL DEFAULT ''    -- free text from a PHPDoc /** ... */ directly above
@@ -50,9 +52,11 @@ CREATE INDEX IF NOT EXISTS idx_blocks_pr_status ON blocks(pr, status);
 -- newly observed one to discover exactly which files changed since, instead
 -- of re-scanning the whole PR on every refresh.
 CREATE TABLE IF NOT EXISTS pr_ingest (
-  pr       INTEGER PRIMARY KEY,
+  repo     TEXT NOT NULL DEFAULT '',
+  pr       INTEGER NOT NULL,
   base_sha TEXT NOT NULL,
-  head_sha TEXT NOT NULL
+  head_sha TEXT NOT NULL,
+  PRIMARY KEY (repo, pr)
 );
 `
 
@@ -86,25 +90,97 @@ func openDB(path string) (*sql.DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate blocks.old_file: %w", err)
 	}
+	// And for the repo column (multi-repo support, see repos.go). Every row that
+	// predates it belongs to the primary repo, which IS the '' default — so this
+	// is a pure ALTER with no backfill.
+	if _, err := db.Exec(`ALTER TABLE blocks ADD COLUMN repo TEXT NOT NULL DEFAULT ''`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column") {
+		db.Close()
+		return nil, fmt.Errorf("migrate blocks.repo: %w", err)
+	}
+	// The repo-scoped indexes are created here, not in schemaDDL: schemaDDL runs
+	// against an EXISTING db before the ALTER above, where a `repo` column does
+	// not exist yet — the same reason modules/comments keeps its path index out of
+	// its schema.
+	for _, q := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_blocks_repo_pr ON blocks(repo, pr)`,
+		`CREATE INDEX IF NOT EXISTS idx_blocks_repo_pr_status ON blocks(repo, pr, status)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("index %s: %w", q, err)
+		}
+	}
+	if err := migratePRIngestRepo(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return db, nil
+}
+
+// migratePRIngestRepo brings a pre-multi-repo pr_ingest table (PRIMARY KEY on
+// the bare pr) up to PRIMARY KEY (repo, pr). Unlike blocks, this one cannot be a
+// plain ALTER: the PK itself has to change, or PR 12 of a second repo would
+// overwrite PR 12 of the primary one. SQLite can't alter a PK, so the table is
+// rebuilt and copied — it holds two SHAs per PR, derived data that is rewritten
+// on every ingest anyway, so the copy is cheap and losing it would at worst force
+// one full re-scan.
+func migratePRIngestRepo(db *sql.DB) error {
+	var hasRepo bool
+	rows, err := db.Query(`PRAGMA table_info(pr_ingest)`)
+	if err != nil {
+		return fmt.Errorf("inspect pr_ingest: %w", err)
+	}
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull int
+		var dflt any
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
+			rows.Close()
+			return fmt.Errorf("inspect pr_ingest: %w", err)
+		}
+		if name == "repo" {
+			hasRepo = true
+		}
+	}
+	rows.Close()
+	if hasRepo {
+		return nil
+	}
+	stmts := []string{
+		`CREATE TABLE pr_ingest_new (
+			repo TEXT NOT NULL DEFAULT '', pr INTEGER NOT NULL,
+			base_sha TEXT NOT NULL, head_sha TEXT NOT NULL, PRIMARY KEY (repo, pr))`,
+		`INSERT INTO pr_ingest_new (repo, pr, base_sha, head_sha) SELECT '', pr, base_sha, head_sha FROM pr_ingest`,
+		`DROP TABLE pr_ingest`,
+		`ALTER TABLE pr_ingest_new RENAME TO pr_ingest`,
+	}
+	for _, q := range stmts {
+		if _, err := db.Exec(q); err != nil {
+			return fmt.Errorf("migrate pr_ingest.repo: %w", err)
+		}
+	}
+	return nil
 }
 
 // replacePRBlocks replaces all blocks of one PR in a single transaction
 // (idempotent re-ingest: DELETE + bulk INSERT).
-func replacePRBlocks(db *sql.DB, pr int, blocks []Block) error {
+func replacePRBlocks(db *sql.DB, repo string, pr int, blocks []Block) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.Exec(`DELETE FROM blocks WHERE pr = ?`, pr); err != nil {
+	if _, err := tx.Exec(`DELETE FROM blocks WHERE repo = ? AND pr = ?`, repo, pr); err != nil {
 		return fmt.Errorf("delete pr blocks: %w", err)
 	}
 
 	stmt, err := tx.Prepare(`
-		INSERT INTO blocks (id, name, class, file, category, line, end_line, status, file_deleted, old_file, side, pr, approved, description)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		INSERT INTO blocks (id, name, class, file, category, line, end_line, status, file_deleted, old_file, side, repo, pr, approved, description)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return err
 	}
@@ -120,7 +196,7 @@ func replacePRBlocks(db *sql.DB, pr int, blocks []Block) error {
 			fileDeleted = 1
 		}
 		if _, err := stmt.Exec(b.ID(), b.Name, b.Class, b.File, b.Category,
-			b.Line, b.EndLine, b.Status, fileDeleted, b.OldFile, b.Side, b.PR, approved, b.Description); err != nil {
+			b.Line, b.EndLine, b.Status, fileDeleted, b.OldFile, b.Side, b.Repo, b.PR, approved, b.Description); err != nil {
 			return fmt.Errorf("insert block %s: %w", b.ID(), err)
 		}
 	}
@@ -135,7 +211,7 @@ func replacePRBlocks(db *sql.DB, pr int, blocks []Block) error {
 // files with no FK to this table). This is the incremental-refresh
 // counterpart to replacePRBlocks's full per-PR swap — the write path for
 // refreshIngestDelta. A no-op for an empty files list.
-func upsertPRFileBlocks(db *sql.DB, pr int, files []string, blocks []Block) error {
+func upsertPRFileBlocks(db *sql.DB, repo string, pr int, files []string, blocks []Block) error {
 	if len(files) == 0 {
 		return nil
 	}
@@ -146,20 +222,20 @@ func upsertPRFileBlocks(db *sql.DB, pr int, files []string, blocks []Block) erro
 	defer tx.Rollback()
 
 	ph := make([]string, len(files))
-	args := make([]any, 0, len(files)+1)
-	args = append(args, pr)
+	args := make([]any, 0, len(files)+2)
+	args = append(args, repo, pr)
 	for i, f := range files {
 		ph[i] = "?"
 		args = append(args, f)
 	}
-	q := `DELETE FROM blocks WHERE pr = ? AND file IN (` + strings.Join(ph, ",") + `)`
+	q := `DELETE FROM blocks WHERE repo = ? AND pr = ? AND file IN (` + strings.Join(ph, ",") + `)`
 	if _, err := tx.Exec(q, args...); err != nil {
 		return fmt.Errorf("delete delta blocks: %w", err)
 	}
 
 	stmt, err := tx.Prepare(`
-		INSERT INTO blocks (id, name, class, file, category, line, end_line, status, file_deleted, old_file, side, pr, approved, description)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		INSERT INTO blocks (id, name, class, file, category, line, end_line, status, file_deleted, old_file, side, repo, pr, approved, description)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return err
 	}
@@ -175,7 +251,7 @@ func upsertPRFileBlocks(db *sql.DB, pr int, files []string, blocks []Block) erro
 			fileDeleted = 1
 		}
 		if _, err := stmt.Exec(b.ID(), b.Name, b.Class, b.File, b.Category,
-			b.Line, b.EndLine, b.Status, fileDeleted, b.OldFile, b.Side, b.PR, approved, b.Description); err != nil {
+			b.Line, b.EndLine, b.Status, fileDeleted, b.OldFile, b.Side, b.Repo, b.PR, approved, b.Description); err != nil {
 			return fmt.Errorf("insert block %s: %w", b.ID(), err)
 		}
 	}
@@ -186,19 +262,19 @@ func upsertPRFileBlocks(db *sql.DB, pr int, files []string, blocks []Block) erro
 // populated from (by a full ingest or a delta refresh), so a later refresh
 // knows exactly which head SHA to diff from. WRITE — call only from an ingest
 // Activity.
-func saveIngestSHAs(db *sql.DB, pr int, base, head string) error {
+func saveIngestSHAs(db *sql.DB, repo string, pr int, base, head string) error {
 	_, err := db.Exec(`
-		INSERT INTO pr_ingest (pr, base_sha, head_sha) VALUES (?, ?, ?)
-		ON CONFLICT(pr) DO UPDATE SET base_sha = excluded.base_sha, head_sha = excluded.head_sha`,
-		pr, base, head)
+		INSERT INTO pr_ingest (repo, pr, base_sha, head_sha) VALUES (?, ?, ?, ?)
+		ON CONFLICT(repo, pr) DO UPDATE SET base_sha = excluded.base_sha, head_sha = excluded.head_sha`,
+		repo, pr, base, head)
 	return err
 }
 
 // loadIngestSHAs returns the base/head SHA recorded for pr's last ingest, and
 // whether one has ever been recorded (false before the first successful
 // ingest). Read-only — safe to call from the ingest-refresh poller.
-func loadIngestSHAs(db *sql.DB, pr int) (base, head string, ok bool, err error) {
-	err = db.QueryRow(`SELECT base_sha, head_sha FROM pr_ingest WHERE pr = ?`, pr).Scan(&base, &head)
+func loadIngestSHAs(db *sql.DB, repo string, pr int) (base, head string, ok bool, err error) {
+	err = db.QueryRow(`SELECT base_sha, head_sha FROM pr_ingest WHERE repo = ? AND pr = ?`, repo, pr).Scan(&base, &head)
 	if err == sql.ErrNoRows {
 		return "", "", false, nil
 	}
@@ -210,10 +286,10 @@ func loadIngestSHAs(db *sql.DB, pr int) (base, head string, ok bool, err error) 
 
 // blockFileExists reports whether the PR has any stored block in the given
 // file. It guards /api/code against reading arbitrary paths off disk.
-func blockFileExists(db *sql.DB, pr int, file string) (bool, error) {
+func blockFileExists(db *sql.DB, repo string, pr int, file string) (bool, error) {
 	var n int
 	if err := db.QueryRow(
-		`SELECT COUNT(1) FROM blocks WHERE pr = ? AND file = ?`, pr, file,
+		`SELECT COUNT(1) FROM blocks WHERE repo = ? AND pr = ? AND file = ?`, repo, pr, file,
 	).Scan(&n); err != nil {
 		return false, err
 	}
@@ -222,6 +298,8 @@ func blockFileExists(db *sql.DB, pr int, file string) (bool, error) {
 
 // PRSummary is one row of the PR overview: a PR and how many blocks it holds.
 type PRSummary struct {
+	// Repo is the canonical repo string ("" = the primary repo, see repos.go).
+	Repo   string `json:"repo,omitempty"`
 	PR     int    `json:"pr"`
 	Blocks int    `json:"blocks"`
 	Files  int    `json:"files"`
@@ -245,9 +323,9 @@ type PRSummary struct {
 // Feeds the /pr-overview page.
 func listPRs(db *sql.DB) ([]PRSummary, error) {
 	rows, err := db.Query(`
-		SELECT pr, COUNT(*) AS blocks, COUNT(DISTINCT file) AS files
+		SELECT repo, pr, COUNT(*) AS blocks, COUNT(DISTINCT file) AS files
 		FROM blocks
-		GROUP BY pr
+		GROUP BY repo, pr
 		ORDER BY pr DESC`)
 	if err != nil {
 		return nil, err
@@ -257,7 +335,7 @@ func listPRs(db *sql.DB) ([]PRSummary, error) {
 	var out []PRSummary
 	for rows.Next() {
 		var s PRSummary
-		if err := rows.Scan(&s.PR, &s.Blocks, &s.Files); err != nil {
+		if err := rows.Scan(&s.Repo, &s.PR, &s.Blocks, &s.Files); err != nil {
 			return nil, err
 		}
 		out = append(out, s)
@@ -270,14 +348,14 @@ func listPRs(db *sql.DB) ([]PRSummary, error) {
 // (the other tables live in the separate module DBs, see each module's own
 // Purge). WRITE — call only from the cleanup workflow's purgePR Activity.
 // Returns the number of block rows removed, for logging.
-func purgePRBlocks(db *sql.DB, pr int) (int, error) {
+func purgePRBlocks(db *sql.DB, repo string, pr int) (int, error) {
 	tx, err := db.Begin()
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback()
 
-	res, err := tx.Exec(`DELETE FROM blocks WHERE pr = ?`, pr)
+	res, err := tx.Exec(`DELETE FROM blocks WHERE repo = ? AND pr = ?`, repo, pr)
 	if err != nil {
 		return 0, fmt.Errorf("delete pr blocks: %w", err)
 	}
@@ -285,18 +363,18 @@ func purgePRBlocks(db *sql.DB, pr int) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if _, err := tx.Exec(`DELETE FROM pr_ingest WHERE pr = ?`, pr); err != nil {
+	if _, err := tx.Exec(`DELETE FROM pr_ingest WHERE repo = ? AND pr = ?`, repo, pr); err != nil {
 		return int(n), fmt.Errorf("delete pr_ingest: %w", err)
 	}
 	return int(n), tx.Commit()
 }
 
 // blocksByPR reads all blocks of one PR, stably sorted by (file, line).
-func blocksByPR(db *sql.DB, pr int) ([]Block, error) {
+func blocksByPR(db *sql.DB, repo string, pr int) ([]Block, error) {
 	rows, err := db.Query(`
-		SELECT name, class, file, category, line, end_line, status, file_deleted, old_file, side, pr, approved, description
-		FROM blocks WHERE pr = ?
-		ORDER BY file, line`, pr)
+		SELECT name, class, file, category, line, end_line, status, file_deleted, old_file, side, repo, pr, approved, description
+		FROM blocks WHERE repo = ? AND pr = ?
+		ORDER BY file, line`, repo, pr)
 	if err != nil {
 		return nil, err
 	}
@@ -307,7 +385,7 @@ func blocksByPR(db *sql.DB, pr int) ([]Block, error) {
 		var b Block
 		var approved, fileDeleted int
 		if err := rows.Scan(&b.Name, &b.Class, &b.File, &b.Category,
-			&b.Line, &b.EndLine, &b.Status, &fileDeleted, &b.OldFile, &b.Side, &b.PR, &approved, &b.Description); err != nil {
+			&b.Line, &b.EndLine, &b.Status, &fileDeleted, &b.OldFile, &b.Side, &b.Repo, &b.PR, &approved, &b.Description); err != nil {
 			return nil, err
 		}
 		b.Approved = approved == 1

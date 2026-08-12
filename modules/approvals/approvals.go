@@ -29,6 +29,7 @@ const schema = `
 PRAGMA journal_mode = WAL;
 
 CREATE TABLE IF NOT EXISTS approvals (
+  repo     TEXT    NOT NULL DEFAULT '',  -- canonical repo string: '' = the primary repo
   pr       INTEGER NOT NULL,
   block_id TEXT    NOT NULL,
   rows     TEXT    NOT NULL,
@@ -56,6 +57,8 @@ type RowAnchor struct {
 // (Rows), the approved call segments (Calls, "<row>:<segStart>" keys) and the
 // per-row code anchors (Anchors) that survive a shift of the file.
 type Approval struct {
+	// Repo is the canonical repo string ("" = the primary repo, see repos.go).
+	Repo    string      `json:"repo,omitempty"`
 	PR      int         `json:"pr"`
 	BlockID string      `json:"blockId"`
 	Rows    []int       `json:"rows"`
@@ -71,6 +74,12 @@ type Module struct{ db *sql.DB }
 // avatar_url migration in modules/comments.
 func migrate(db *sql.DB) {
 	_, _ = db.Exec(`ALTER TABLE approvals ADD COLUMN anchors TEXT NOT NULL DEFAULT '[]'`)
+	// Multi-repo (see repos.go). The PK stays (pr, block_id): a block id already
+	// carries its repo's key for a non-primary repo, so it cannot collide — the
+	// column is what lets List/Purge stay scoped to one repo's PR.
+	_, _ = db.Exec(`ALTER TABLE approvals ADD COLUMN repo TEXT NOT NULL DEFAULT ''`)
+	// Only after the column is guaranteed to exist (see the note in the schema).
+	_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS idx_approvals_pr_repo ON approvals(repo, pr)`)
 }
 
 // Open opens (or creates) the approvals DB at path and applies the schema.
@@ -102,10 +111,10 @@ func (m *Module) Close() error { return m.db.Close() }
 // rows/calls, or deletes the block's row entirely when both are empty (nothing
 // approved). WRITE — call only from a workflow Activity. Idempotent (re-applying
 // the same set is a no-op), so replay is safe.
-func (m *Module) Replace(ctx context.Context, pr int, blockID string, rows []int, calls []string, anchors []RowAnchor) error {
+func (m *Module) Replace(ctx context.Context, repo string, pr int, blockID string, rows []int, calls []string, anchors []RowAnchor) error {
 	if len(rows) == 0 && len(calls) == 0 {
 		_, err := m.db.ExecContext(ctx,
-			`DELETE FROM approvals WHERE pr = ? AND block_id = ?`, pr, blockID)
+			`DELETE FROM approvals WHERE repo = ? AND pr = ? AND block_id = ?`, repo, pr, blockID)
 		return err
 	}
 	if rows == nil {
@@ -129,7 +138,7 @@ func (m *Module) Replace(ctx context.Context, pr int, blockID string, rows []int
 	if anchors == nil {
 		var existing string
 		err := m.db.QueryRowContext(ctx,
-			`SELECT anchors FROM approvals WHERE pr = ? AND block_id = ?`, pr, blockID).Scan(&existing)
+			`SELECT anchors FROM approvals WHERE repo = ? AND pr = ? AND block_id = ?`, repo, pr, blockID).Scan(&existing)
 		if err == nil && existing != "" {
 			_ = json.Unmarshal([]byte(existing), &anchors)
 		}
@@ -142,16 +151,16 @@ func (m *Module) Replace(ctx context.Context, pr int, blockID string, rows []int
 		return err
 	}
 	_, err = m.db.ExecContext(ctx,
-		`INSERT OR REPLACE INTO approvals (pr, block_id, rows, calls, anchors) VALUES (?,?,?,?,?)`,
-		pr, blockID, string(rowsJSON), string(callsJSON), string(anchorsJSON))
+		`INSERT OR REPLACE INTO approvals (repo, pr, block_id, rows, calls, anchors) VALUES (?,?,?,?,?,?)`,
+		repo, pr, blockID, string(rowsJSON), string(callsJSON), string(anchorsJSON))
 	return err
 }
 
 // Purge removes every approval row of pr. WRITE — workflow-only, the per-PR
 // data-retention cleanup path (see the cleanup workflow). Returns the number
 // of rows removed, for logging.
-func (m *Module) Purge(ctx context.Context, pr int) (int64, error) {
-	res, err := m.db.ExecContext(ctx, `DELETE FROM approvals WHERE pr = ?`, pr)
+func (m *Module) Purge(ctx context.Context, repo string, pr int) (int64, error) {
+	res, err := m.db.ExecContext(ctx, `DELETE FROM approvals WHERE repo = ? AND pr = ?`, repo, pr)
 	if err != nil {
 		return 0, err
 	}
@@ -160,9 +169,9 @@ func (m *Module) Purge(ctx context.Context, pr int) (int64, error) {
 
 // List returns every block's approval state for a PR, ordered deterministically.
 // READ — safe for the UI/API.
-func (m *Module) List(ctx context.Context, pr int) ([]Approval, error) {
+func (m *Module) List(ctx context.Context, repo string, pr int) ([]Approval, error) {
 	rows, err := m.db.QueryContext(ctx,
-		`SELECT pr, block_id, rows, calls, anchors FROM approvals WHERE pr = ? ORDER BY block_id`, pr)
+		`SELECT repo, pr, block_id, rows, calls, anchors FROM approvals WHERE repo = ? AND pr = ? ORDER BY block_id`, repo, pr)
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +182,7 @@ func (m *Module) List(ctx context.Context, pr int) ([]Approval, error) {
 			a                                Approval
 			rowsJSON, callsJSON, anchorsJSON string
 		)
-		if err := rows.Scan(&a.PR, &a.BlockID, &rowsJSON, &callsJSON, &anchorsJSON); err != nil {
+		if err := rows.Scan(&a.Repo, &a.PR, &a.BlockID, &rowsJSON, &callsJSON, &anchorsJSON); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal([]byte(rowsJSON), &a.Rows); err != nil {

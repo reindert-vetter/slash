@@ -35,6 +35,7 @@ const schema = `
 PRAGMA journal_mode = WAL;
 
 CREATE TABLE IF NOT EXISTS test_covers (
+  repo           TEXT    NOT NULL DEFAULT '',  -- canonical repo string: '' = the primary repo
   pr             INTEGER NOT NULL,
   test_id        TEXT    NOT NULL,
   target_key     TEXT    NOT NULL,
@@ -60,6 +61,12 @@ CREATE INDEX IF NOT EXISTS idx_test_covers_pr ON test_covers(pr);
 // duplicate-column error just means the DB is already up to date.
 func migrate(db *sql.DB) {
 	_, _ = db.Exec(`ALTER TABLE test_covers ADD COLUMN line INTEGER NOT NULL DEFAULT 0`)
+	// Multi-repo (see repos.go): existing rows are the primary repo's, which IS the
+	// '' default. The PK stays (pr, test_id, target_key) — a test id already
+	// carries a non-primary repo's key.
+	_, _ = db.Exec(`ALTER TABLE test_covers ADD COLUMN repo TEXT NOT NULL DEFAULT ''`)
+	// Only after the column is guaranteed to exist (see the note in the schema).
+	_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS idx_test_covers_pr_repo ON test_covers(repo, pr)`)
 }
 
 // Status values.
@@ -80,6 +87,8 @@ const (
 
 // Entry is one test → covered-method resolution.
 type Entry struct {
+	// Repo is the canonical repo string ("" = the primary repo, see repos.go).
+	Repo          string `json:"repo,omitempty"`
 	PR            int    `json:"pr"`
 	TestID        string `json:"testId"`
 	TargetKey     string `json:"targetKey"`
@@ -156,8 +165,8 @@ func (m *Module) UpsertGo(ctx context.Context, entries []Entry) error {
 
 	stmt, err := tx.PrepareContext(ctx, `
 INSERT INTO test_covers
-  (pr, test_id, target_key, status, covered_file, covered_class, covered_method, covered_line, covered_code, annotation, model, confidence, updated_at, line)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  (repo, pr, test_id, target_key, status, covered_file, covered_class, covered_method, covered_line, covered_code, annotation, model, confidence, updated_at, line)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(pr, test_id, target_key) DO UPDATE SET
   status         = excluded.status,
   covered_file   = excluded.covered_file,
@@ -178,7 +187,7 @@ WHERE test_covers.status NOT IN ('searching','found','notfound')`)
 
 	for _, e := range entries {
 		if _, err := stmt.ExecContext(ctx,
-			e.PR, e.TestID, e.TargetKey, e.Status,
+			e.Repo, e.PR, e.TestID, e.TargetKey, e.Status,
 			e.CoveredFile, e.CoveredClass, e.CoveredMethod, e.CoveredLine, e.CoveredCode,
 			e.Annotation, e.Model, e.Confidence, now(), e.Line); err != nil {
 			return err
@@ -192,20 +201,20 @@ WHERE test_covers.status NOT IN ('searching','found','notfound')`)
 // block left the PR (re-ingest dropped the file) or its annotation was
 // removed/changed; either way the row — LLM-owned included — is meaningless.
 // WRITE — workflow-Activity-only.
-func (m *Module) Prune(ctx context.Context, pr int, keep []Entry) error {
+func (m *Module) Prune(ctx context.Context, repo string, pr int, keep []Entry) error {
 	if len(keep) == 0 {
-		_, err := m.db.ExecContext(ctx, `DELETE FROM test_covers WHERE pr = ?`, pr)
+		_, err := m.db.ExecContext(ctx, `DELETE FROM test_covers WHERE repo = ? AND pr = ?`, repo, pr)
 		return err
 	}
 	const sep = "\x1f"
-	args := make([]any, 0, len(keep)+1)
-	args = append(args, pr)
+	args := make([]any, 0, len(keep)+2)
+	args = append(args, repo, pr)
 	ph := make([]string, len(keep))
 	for i, e := range keep {
 		ph[i] = "?"
 		args = append(args, e.TestID+sep+e.TargetKey)
 	}
-	q := `DELETE FROM test_covers WHERE pr = ? AND test_id || char(31) || target_key NOT IN (` +
+	q := `DELETE FROM test_covers WHERE repo = ? AND pr = ? AND test_id || char(31) || target_key NOT IN (` +
 		strings.Join(ph, ",") + `)`
 	_, err := m.db.ExecContext(ctx, q, args...)
 	return err
@@ -215,8 +224,8 @@ func (m *Module) Prune(ctx context.Context, pr int, keep []Entry) error {
 // (no keep set): the whole PR is being retired. WRITE — workflow-only, the
 // per-PR data-retention cleanup path (see the cleanup workflow). Returns the
 // number of rows removed, for logging.
-func (m *Module) Purge(ctx context.Context, pr int) (int64, error) {
-	res, err := m.db.ExecContext(ctx, `DELETE FROM test_covers WHERE pr = ?`, pr)
+func (m *Module) Purge(ctx context.Context, repo string, pr int) (int64, error) {
+	res, err := m.db.ExecContext(ctx, `DELETE FROM test_covers WHERE repo = ? AND pr = ?`, repo, pr)
 	if err != nil {
 		return 0, err
 	}
@@ -225,22 +234,22 @@ func (m *Module) Purge(ctx context.Context, pr int) (int64, error) {
 
 // SaveSearching marks the given targets of a test as being searched by the
 // LLM. WRITE — workflow-Activity-only.
-func (m *Module) SaveSearching(ctx context.Context, pr int, testID string, targetKeys []string) error {
+func (m *Module) SaveSearching(ctx context.Context, repo string, pr int, testID string, targetKeys []string) error {
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 	stmt, err := tx.PrepareContext(ctx, `
-INSERT INTO test_covers (pr, test_id, target_key, status, updated_at)
-VALUES (?,?,?,?,?)
+INSERT INTO test_covers (repo, pr, test_id, target_key, status, updated_at)
+VALUES (?,?,?,?,?,?)
 ON CONFLICT(pr, test_id, target_key) DO UPDATE SET status = excluded.status, updated_at = excluded.updated_at`)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 	for _, k := range targetKeys {
-		if _, err := stmt.ExecContext(ctx, pr, testID, k, StatusSearching, now()); err != nil {
+		if _, err := stmt.ExecContext(ctx, repo, pr, testID, k, StatusSearching, now()); err != nil {
 			return err
 		}
 	}
@@ -252,9 +261,9 @@ ON CONFLICT(pr, test_id, target_key) DO UPDATE SET status = excluded.status, upd
 func (m *Module) Save(ctx context.Context, e Entry) error {
 	_, err := m.db.ExecContext(ctx, `
 INSERT OR REPLACE INTO test_covers
-  (pr, test_id, target_key, status, covered_file, covered_class, covered_method, covered_line, covered_code, annotation, model, confidence, updated_at, line)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		e.PR, e.TestID, e.TargetKey, e.Status,
+  (repo, pr, test_id, target_key, status, covered_file, covered_class, covered_method, covered_line, covered_code, annotation, model, confidence, updated_at, line)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		e.Repo, e.PR, e.TestID, e.TargetKey, e.Status,
 		e.CoveredFile, e.CoveredClass, e.CoveredMethod, e.CoveredLine, e.CoveredCode,
 		e.Annotation, e.Model, e.Confidence, now(), e.Line)
 	return err
@@ -262,10 +271,10 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 
 // List returns all test-coverage entries for a PR, ordered deterministically.
 // READ — safe for the UI/API.
-func (m *Module) List(ctx context.Context, pr int) ([]Entry, error) {
+func (m *Module) List(ctx context.Context, repo string, pr int) ([]Entry, error) {
 	rows, err := m.db.QueryContext(ctx, `
-SELECT pr, test_id, target_key, status, covered_file, covered_class, covered_method, covered_line, covered_code, annotation, model, confidence, updated_at, line
-FROM test_covers WHERE pr = ? ORDER BY test_id, target_key`, pr)
+SELECT repo, pr, test_id, target_key, status, covered_file, covered_class, covered_method, covered_line, covered_code, annotation, model, confidence, updated_at, line
+FROM test_covers WHERE repo = ? AND pr = ? ORDER BY test_id, target_key`, repo, pr)
 	if err != nil {
 		return nil, err
 	}
@@ -273,7 +282,7 @@ FROM test_covers WHERE pr = ? ORDER BY test_id, target_key`, pr)
 	var out []Entry
 	for rows.Next() {
 		var e Entry
-		if err := rows.Scan(&e.PR, &e.TestID, &e.TargetKey, &e.Status,
+		if err := rows.Scan(&e.Repo, &e.PR, &e.TestID, &e.TargetKey, &e.Status,
 			&e.CoveredFile, &e.CoveredClass, &e.CoveredMethod, &e.CoveredLine, &e.CoveredCode,
 			&e.Annotation, &e.Model, &e.Confidence, &e.UpdatedAt, &e.Line); err != nil {
 			return nil, err

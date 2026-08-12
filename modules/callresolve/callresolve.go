@@ -30,6 +30,7 @@ const schema = `
 PRAGMA journal_mode = WAL;
 
 CREATE TABLE IF NOT EXISTS call_resolutions (
+  repo         TEXT    NOT NULL DEFAULT '',  -- canonical repo string: '' = the primary repo
   pr           INTEGER NOT NULL,
   caller_id    TEXT    NOT NULL,
   call_key     TEXT    NOT NULL,
@@ -55,6 +56,12 @@ CREATE INDEX IF NOT EXISTS idx_call_resolutions_pr ON call_resolutions(pr);
 // duplicate-column error just means the DB is already up to date.
 func migrate(db *sql.DB) {
 	_, _ = db.Exec(`ALTER TABLE call_resolutions ADD COLUMN kind TEXT NOT NULL DEFAULT 'method_call'`)
+	// Multi-repo (see repos.go): existing rows are the primary repo's, which IS
+	// the '' default. The PK stays (pr, caller_id, call_key) — a caller id already
+	// carries a non-primary repo's key, so it cannot collide.
+	_, _ = db.Exec(`ALTER TABLE call_resolutions ADD COLUMN repo TEXT NOT NULL DEFAULT ''`)
+	// Only after the column is guaranteed to exist (see the note in the schema).
+	_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS idx_call_resolutions_pr_repo ON call_resolutions(repo, pr)`)
 }
 
 // Status values.
@@ -119,6 +126,8 @@ const (
 
 // Entry is one call-site → definition resolution.
 type Entry struct {
+	// Repo is the canonical repo string ("" = the primary repo, see repos.go).
+	Repo        string `json:"repo,omitempty"`
 	PR          int    `json:"pr"`
 	CallerID    string `json:"callerId"`
 	CallKey     string `json:"callKey"`
@@ -185,8 +194,8 @@ func (m *Module) UpsertGo(ctx context.Context, entries []Entry) error {
 
 	stmt, err := tx.PrepareContext(ctx, `
 INSERT INTO call_resolutions
-  (pr, caller_id, call_key, status, kind, child_file, child_class, child_method, child_line, child_code, model, confidence, updated_at)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+  (repo, pr, caller_id, call_key, status, kind, child_file, child_class, child_method, child_line, child_code, model, confidence, updated_at)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(pr, caller_id, call_key) DO UPDATE SET
   status       = excluded.status,
   kind         = excluded.kind,
@@ -210,7 +219,7 @@ WHERE call_resolutions.status NOT IN ('searching','found')`)
 			kind = KindMethodCall
 		}
 		if _, err := stmt.ExecContext(ctx,
-			e.PR, e.CallerID, e.CallKey, e.Status, kind,
+			e.Repo, e.PR, e.CallerID, e.CallKey, e.Status, kind,
 			e.ChildFile, e.ChildClass, e.ChildMethod, e.ChildLine, e.ChildCode,
 			e.Model, e.Confidence, now()); err != nil {
 			return err
@@ -224,21 +233,21 @@ WHERE call_resolutions.status NOT IN ('searching','found')`)
 // caller block left the PR (re-ingest dropped the file) or when its call site is
 // no longer on a changed line; either way the row — LLM-owned included, its call
 // site is gone — is meaningless. WRITE — workflow-Activity-only.
-func (m *Module) Prune(ctx context.Context, pr int, keep []Entry) error {
+func (m *Module) Prune(ctx context.Context, repo string, pr int, keep []Entry) error {
 	if len(keep) == 0 {
-		_, err := m.db.ExecContext(ctx, `DELETE FROM call_resolutions WHERE pr = ?`, pr)
+		_, err := m.db.ExecContext(ctx, `DELETE FROM call_resolutions WHERE repo = ? AND pr = ?`, repo, pr)
 		return err
 	}
 	// Pair the PK columns with a separator that appears in neither.
 	const sep = "\x1f"
-	args := make([]any, 0, len(keep)+1)
-	args = append(args, pr)
+	args := make([]any, 0, len(keep)+2)
+	args = append(args, repo, pr)
 	ph := make([]string, len(keep))
 	for i, e := range keep {
 		ph[i] = "?"
 		args = append(args, e.CallerID+sep+e.CallKey)
 	}
-	q := `DELETE FROM call_resolutions WHERE pr = ? AND caller_id || char(31) || call_key NOT IN (` +
+	q := `DELETE FROM call_resolutions WHERE repo = ? AND pr = ? AND caller_id || char(31) || call_key NOT IN (` +
 		strings.Join(ph, ",") + `)`
 	_, err := m.db.ExecContext(ctx, q, args...)
 	return err
@@ -248,8 +257,8 @@ func (m *Module) Prune(ctx context.Context, pr int, keep []Entry) error {
 // (no keep set): the whole PR is being retired. WRITE — workflow-only, the
 // per-PR data-retention cleanup path (see the cleanup workflow). Returns the
 // number of rows removed, for logging.
-func (m *Module) Purge(ctx context.Context, pr int) (int64, error) {
-	res, err := m.db.ExecContext(ctx, `DELETE FROM call_resolutions WHERE pr = ?`, pr)
+func (m *Module) Purge(ctx context.Context, repo string, pr int) (int64, error) {
+	res, err := m.db.ExecContext(ctx, `DELETE FROM call_resolutions WHERE repo = ? AND pr = ?`, repo, pr)
 	if err != nil {
 		return 0, err
 	}
@@ -258,22 +267,22 @@ func (m *Module) Purge(ctx context.Context, pr int) (int64, error) {
 
 // SaveSearching marks the given calls of a caller as in-progress. WRITE —
 // workflow-Activity-only.
-func (m *Module) SaveSearching(ctx context.Context, pr int, callerID string, calls []string) error {
+func (m *Module) SaveSearching(ctx context.Context, repo string, pr int, callerID string, calls []string) error {
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 	stmt, err := tx.PrepareContext(ctx, `
-INSERT INTO call_resolutions (pr, caller_id, call_key, status, updated_at)
-VALUES (?,?,?,?,?)
+INSERT INTO call_resolutions (repo, pr, caller_id, call_key, status, updated_at)
+VALUES (?,?,?,?,?,?)
 ON CONFLICT(pr, caller_id, call_key) DO UPDATE SET status = excluded.status, updated_at = excluded.updated_at`)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 	for _, c := range calls {
-		if _, err := stmt.ExecContext(ctx, pr, callerID, c, StatusSearching, now()); err != nil {
+		if _, err := stmt.ExecContext(ctx, repo, pr, callerID, c, StatusSearching, now()); err != nil {
 			return err
 		}
 	}
@@ -289,9 +298,9 @@ func (m *Module) Save(ctx context.Context, e Entry) error {
 	}
 	_, err := m.db.ExecContext(ctx, `
 INSERT OR REPLACE INTO call_resolutions
-  (pr, caller_id, call_key, status, kind, child_file, child_class, child_method, child_line, child_code, model, confidence, updated_at)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		e.PR, e.CallerID, e.CallKey, e.Status, kind,
+  (repo, pr, caller_id, call_key, status, kind, child_file, child_class, child_method, child_line, child_code, model, confidence, updated_at)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		e.Repo, e.PR, e.CallerID, e.CallKey, e.Status, kind,
 		e.ChildFile, e.ChildClass, e.ChildMethod, e.ChildLine, e.ChildCode,
 		e.Model, e.Confidence, now())
 	return err
@@ -299,10 +308,10 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 
 // List returns all resolutions for a PR, ordered deterministically. READ — safe
 // for the UI/API.
-func (m *Module) List(ctx context.Context, pr int) ([]Entry, error) {
+func (m *Module) List(ctx context.Context, repo string, pr int) ([]Entry, error) {
 	rows, err := m.db.QueryContext(ctx, `
-SELECT pr, caller_id, call_key, status, kind, child_file, child_class, child_method, child_line, child_code, model, confidence, updated_at
-FROM call_resolutions WHERE pr = ? ORDER BY caller_id, call_key`, pr)
+SELECT repo, pr, caller_id, call_key, status, kind, child_file, child_class, child_method, child_line, child_code, model, confidence, updated_at
+FROM call_resolutions WHERE repo = ? AND pr = ? ORDER BY caller_id, call_key`, repo, pr)
 	if err != nil {
 		return nil, err
 	}
@@ -310,7 +319,7 @@ FROM call_resolutions WHERE pr = ? ORDER BY caller_id, call_key`, pr)
 	var out []Entry
 	for rows.Next() {
 		var e Entry
-		if err := rows.Scan(&e.PR, &e.CallerID, &e.CallKey, &e.Status, &e.Kind,
+		if err := rows.Scan(&e.Repo, &e.PR, &e.CallerID, &e.CallKey, &e.Status, &e.Kind,
 			&e.ChildFile, &e.ChildClass, &e.ChildMethod, &e.ChildLine, &e.ChildCode,
 			&e.Model, &e.Confidence, &e.UpdatedAt); err != nil {
 			return nil, err

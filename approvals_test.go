@@ -20,13 +20,13 @@ func TestApprovalsModuleRoundTrip(t *testing.T) {
 	defer m.Close()
 	ctx := context.Background()
 
-	if err := m.Replace(ctx, 1, "1:a.php:A::x", []int{2, 5, 7}, []string{"5:10"}, nil); err != nil {
+	if err := m.Replace(ctx, "", 1, "1:a.php:A::x", []int{2, 5, 7}, []string{"5:10"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Replace(ctx, 1, "1:b.php:B::y", []int{3}, nil, nil); err != nil {
+	if err := m.Replace(ctx, "", 1, "1:b.php:B::y", []int{3}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	got, err := m.List(ctx, 1)
+	got, err := m.List(ctx, "", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,10 +42,10 @@ func TestApprovalsModuleRoundTrip(t *testing.T) {
 	}
 
 	// Full swap: re-approving A::x with a smaller set overwrites the larger one.
-	if err := m.Replace(ctx, 1, "1:a.php:A::x", []int{2}, nil, nil); err != nil {
+	if err := m.Replace(ctx, "", 1, "1:a.php:A::x", []int{2}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	got, _ = m.List(ctx, 1)
+	got, _ = m.List(ctx, "", 1)
 	var a *approvals.Approval
 	for i := range got {
 		if got[i].BlockID == "1:a.php:A::x" {
@@ -57,16 +57,16 @@ func TestApprovalsModuleRoundTrip(t *testing.T) {
 	}
 
 	// An empty set clears the block's row entirely.
-	if err := m.Replace(ctx, 1, "1:a.php:A::x", nil, nil, nil); err != nil {
+	if err := m.Replace(ctx, "", 1, "1:a.php:A::x", nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	got, _ = m.List(ctx, 1)
+	got, _ = m.List(ctx, "", 1)
 	if len(got) != 1 || got[0].BlockID != "1:b.php:B::y" {
 		t.Fatalf("after clear List = %+v, want only B::y", got)
 	}
 
 	// A different PR is untouched by another PR's writes.
-	if got, _ := m.List(ctx, 2); len(got) != 0 {
+	if got, _ := m.List(ctx, "", 2); len(got) != 0 {
 		t.Fatalf("other PR List = %d rows, want 0", len(got))
 	}
 }
@@ -86,7 +86,7 @@ func TestApproveWorkflow(t *testing.T) {
 
 	ctx := context.Background()
 	pr := 42
-	runID, err := m.EnsureApprovals(pr)
+	runID, err := m.EnsureApprovals("", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestApproveWorkflow(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
-		got, _ := ap.List(ctx, pr)
+		got, _ := ap.List(ctx, "", pr)
 		return len(got) == 1 && len(got[0].Rows) == 2 && len(got[0].Calls) == 1
 	})
 
@@ -111,12 +111,12 @@ func TestApproveWorkflow(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
-		got, _ := ap.List(ctx, pr)
+		got, _ := ap.List(ctx, "", pr)
 		return len(got) == 1 && len(got[0].Rows) == 1 && len(got[0].Calls) == 0
 	})
 
 	// EnsureApprovals is idempotent: a second call reuses the same Execution.
-	again, err := m.EnsureApprovals(pr)
+	again, err := m.EnsureApprovals("", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestApproveWorkflowFileViewed(t *testing.T) {
 	m := NewTaskManager(engine, gh, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, ap, nil, nil, nil, nil, nil, "", "test/repo")
 
 	pr := 43
-	runID, err := m.EnsureApprovals(pr)
+	runID, err := m.EnsureApprovals("", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func TestApproveWorkflowFileViewed(t *testing.T) {
 	waitFor(t, func() bool { return !gh.IsViewed(pr, "app/Foo.php") })
 
 	// The approvals read-model was never touched by the viewed requests.
-	if got, _ := ap.List(context.Background(), pr); len(got) != 0 {
+	if got, _ := ap.List(context.Background(), "", pr); len(got) != 0 {
 		t.Fatalf("approvals List = %+v, want none (viewed-only signals)", got)
 	}
 }
@@ -181,10 +181,10 @@ func TestApprovalAnchorsRoundTripAndPreserve(t *testing.T) {
 	anchors := []approvals.RowAnchor{
 		{Row: 2, Text: "$x = 1;", Prev: "public function total() {", Next: "return $x;"},
 	}
-	if err := m.Replace(ctx, 7, "7:a.php:A::x", []int{2}, nil, anchors); err != nil {
+	if err := m.Replace(ctx, "", 7, "7:a.php:A::x", []int{2}, nil, anchors); err != nil {
 		t.Fatal(err)
 	}
-	list, err := m.List(ctx, 7)
+	list, err := m.List(ctx, "", 7)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,10 +193,10 @@ func TestApprovalAnchorsRoundTripAndPreserve(t *testing.T) {
 	}
 
 	// nil → keep what is stored.
-	if err := m.Replace(ctx, 7, "7:a.php:A::x", []int{2, 3}, nil, nil); err != nil {
+	if err := m.Replace(ctx, "", 7, "7:a.php:A::x", []int{2, 3}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	list, err = m.List(ctx, 7)
+	list, err = m.List(ctx, "", 7)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,10 +205,10 @@ func TestApprovalAnchorsRoundTripAndPreserve(t *testing.T) {
 	}
 
 	// An explicitly empty slice does clear them.
-	if err := m.Replace(ctx, 7, "7:a.php:A::x", []int{2}, nil, []approvals.RowAnchor{}); err != nil {
+	if err := m.Replace(ctx, "", 7, "7:a.php:A::x", []int{2}, nil, []approvals.RowAnchor{}); err != nil {
 		t.Fatal(err)
 	}
-	list, err = m.List(ctx, 7)
+	list, err = m.List(ctx, "", 7)
 	if err != nil {
 		t.Fatal(err)
 	}

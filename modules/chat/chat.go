@@ -31,6 +31,7 @@ PRAGMA journal_mode = WAL;
 
 CREATE TABLE IF NOT EXISTS chat_conversations (
   id         TEXT PRIMARY KEY, -- == the comment thread's own id
+  repo       TEXT NOT NULL DEFAULT '', -- canonical repo string: '' = the primary repo
   pr         INTEGER NOT NULL,
   session_id TEXT NOT NULL DEFAULT '', -- the claude CLI's --session-id/--resume value
   created_at TEXT NOT NULL,
@@ -40,6 +41,7 @@ CREATE TABLE IF NOT EXISTS chat_conversations (
 CREATE TABLE IF NOT EXISTS chat_messages (
   id              TEXT PRIMARY KEY,
   conversation_id TEXT NOT NULL,
+  repo            TEXT NOT NULL DEFAULT '',
   pr              INTEGER NOT NULL,
   role            TEXT NOT NULL,           -- 'user' | 'assistant'
   kind            TEXT NOT NULL DEFAULT '', -- '' (plain text) | 'question' | 'error' | 'retrying' | 'action' | 'draft_reply'
@@ -90,10 +92,12 @@ const (
 type Message struct {
 	ID             string `json:"id"`
 	ConversationID string `json:"conversationId"`
-	PR             int    `json:"pr"`
-	Role           string `json:"role"` // "user" | "assistant"
-	Kind           string `json:"kind,omitempty"`
-	Body           string `json:"body"`
+	// Repo is the canonical repo string ("" = the primary repo, see repos.go).
+	Repo string `json:"repo,omitempty"`
+	PR   int    `json:"pr"`
+	Role string `json:"role"` // "user" | "assistant"
+	Kind string `json:"kind,omitempty"`
+	Body string `json:"body"`
 	// Options is only set for a Kind == KindQuestion assistant turn — the
 	// small set of choices offered alongside free text (capped by the caller,
 	// see runClaudeTurn in workflows.go).
@@ -156,9 +160,16 @@ func migrate(db *sql.DB) {
 	for _, col := range []string{
 		`ALTER TABLE chat_messages ADD COLUMN model TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE chat_messages ADD COLUMN no_shell INTEGER NOT NULL DEFAULT 0`,
+		// Multi-repo (see repos.go): existing rows are the primary repo's, which IS
+		// the '' default. Both PKs are ids (a comment thread id / a ULID), globally
+		// unique, so neither can collide across repos.
+		`ALTER TABLE chat_conversations ADD COLUMN repo TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE chat_messages ADD COLUMN repo TEXT NOT NULL DEFAULT ''`,
 	} {
 		_, _ = db.Exec(col) // ignore "duplicate column name"
 	}
+	// Only after the repo column is guaranteed to exist (see the schema note).
+	_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS idx_chat_messages_pr_repo ON chat_messages(repo, pr)`)
 }
 
 func (m *Module) Close() error { return m.db.Close() }
@@ -168,11 +179,11 @@ func now() string { return time.Now().UTC().Format(time.RFC3339Nano) }
 // EnsureConversation creates the conversation row if it doesn't exist yet
 // (idempotent — a repeated call for the same id is a no-op). WRITE —
 // workflow-Activity-only.
-func (m *Module) EnsureConversation(ctx context.Context, id string, pr int) error {
+func (m *Module) EnsureConversation(ctx context.Context, id string, repo string, pr int) error {
 	ts := now()
 	_, err := m.db.ExecContext(ctx,
-		`INSERT OR IGNORE INTO chat_conversations (id, pr, session_id, created_at, updated_at)
-		 VALUES (?,?,'',?,?)`, id, pr, ts, ts)
+		`INSERT OR IGNORE INTO chat_conversations (id, repo, pr, session_id, created_at, updated_at)
+		 VALUES (?,?,?,'',?,?)`, id, repo, pr, ts, ts)
 	return err
 }
 
@@ -214,11 +225,11 @@ func (m *Module) SaveMessage(ctx context.Context, msg Message) error {
 	}
 	_, err := m.db.ExecContext(ctx,
 		`INSERT OR REPLACE INTO chat_messages
-		   (id, conversation_id, pr, role, kind, body, options_json, answer, model, no_shell, created_at)
-		 VALUES (?,?,?,?,?,?,?,
+		   (id, conversation_id, repo, pr, role, kind, body, options_json, answer, model, no_shell, created_at)
+		 VALUES (?,?,?,?,?,?,?,?,
 		   COALESCE((SELECT answer FROM chat_messages WHERE id = ?), ''),
 		   ?,?,?)`,
-		msg.ID, msg.ConversationID, msg.PR, msg.Role, msg.Kind, msg.Body, optsJSON, msg.ID, msg.Model, msg.NoShell, msg.CreatedAt)
+		msg.ID, msg.ConversationID, msg.Repo, msg.PR, msg.Role, msg.Kind, msg.Body, optsJSON, msg.ID, msg.Model, msg.NoShell, msg.CreatedAt)
 	return err
 }
 
@@ -249,11 +260,11 @@ func (m *Module) ClearConversation(ctx context.Context, id string) error {
 // Purge removes every conversation + message row of pr. WRITE — workflow-only,
 // the per-PR data-retention cleanup path (see the cleanup workflow). Returns
 // the number of messages removed, for logging.
-func (m *Module) Purge(ctx context.Context, pr int) (int64, error) {
-	if _, err := m.db.ExecContext(ctx, `DELETE FROM chat_conversations WHERE pr = ?`, pr); err != nil {
+func (m *Module) Purge(ctx context.Context, repo string, pr int) (int64, error) {
+	if _, err := m.db.ExecContext(ctx, `DELETE FROM chat_conversations WHERE repo = ? AND pr = ?`, repo, pr); err != nil {
 		return 0, err
 	}
-	res, err := m.db.ExecContext(ctx, `DELETE FROM chat_messages WHERE pr = ?`, pr)
+	res, err := m.db.ExecContext(ctx, `DELETE FROM chat_messages WHERE repo = ? AND pr = ?`, repo, pr)
 	if err != nil {
 		return 0, err
 	}
@@ -268,9 +279,9 @@ func (m *Module) Purge(ctx context.Context, pr int) (int64, error) {
 // no longer among the visible ones (see claudeChatVisible in RelatedPanel.mjs).
 // A conversation row that only ever got ensured (no turns) is deliberately not
 // reported — nothing to come back to.
-func (m *Module) ConversationsWithMessages(ctx context.Context, pr int) ([]string, error) {
+func (m *Module) ConversationsWithMessages(ctx context.Context, repo string, pr int) ([]string, error) {
 	rows, err := m.db.QueryContext(ctx,
-		`SELECT DISTINCT conversation_id FROM chat_messages WHERE pr = ? ORDER BY conversation_id`, pr)
+		`SELECT DISTINCT conversation_id FROM chat_messages WHERE repo = ? AND pr = ? ORDER BY conversation_id`, repo, pr)
 	if err != nil {
 		return nil, err
 	}
@@ -290,7 +301,7 @@ func (m *Module) ConversationsWithMessages(ctx context.Context, pr int) ([]strin
 // for the UI/API.
 func (m *Module) List(ctx context.Context, conversationID string) ([]Message, error) {
 	rows, err := m.db.QueryContext(ctx,
-		`SELECT id, conversation_id, pr, role, kind, body, options_json, answer, model, no_shell, created_at
+		`SELECT id, conversation_id, repo, pr, role, kind, body, options_json, answer, model, no_shell, created_at
 		 FROM chat_messages WHERE conversation_id = ? ORDER BY created_at`, conversationID)
 	if err != nil {
 		return nil, err
@@ -300,7 +311,7 @@ func (m *Module) List(ctx context.Context, conversationID string) ([]Message, er
 	for rows.Next() {
 		var msg Message
 		var optsJSON string
-		if err := rows.Scan(&msg.ID, &msg.ConversationID, &msg.PR, &msg.Role, &msg.Kind,
+		if err := rows.Scan(&msg.ID, &msg.ConversationID, &msg.Repo, &msg.PR, &msg.Role, &msg.Kind,
 			&msg.Body, &optsJSON, &msg.Answer, &msg.Model, &msg.NoShell, &msg.CreatedAt); err != nil {
 			return nil, err
 		}

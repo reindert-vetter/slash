@@ -34,12 +34,18 @@ import (
 // keeps it out of ingest.go's own worktreeDirs and lets cleanup.go's own
 // worktree-name scan find and sweep it independently (see reWorktreeDir /
 // removePRWorktrees in cleanup.go).
-func chatShadowDir(dataDir string, pr int, conversationID string) string {
+func chatShadowDir(dataDir string, repo string, pr int, conversationID string) string {
 	root, err := filepath.Abs(dataDir)
 	if err != nil {
 		root = dataDir
 	}
-	return filepath.Join(root, "worktrees", fmt.Sprintf("pr-%d-chatshadow-%s", pr, conversationID))
+	// A second repo's shadow worktrees carry its key up front, so the primary
+	// repo's paths — and cleanup.go's scanner for them — stay unchanged.
+	prefix := ""
+	if repo != "" {
+		prefix = repoKeyOf(repo) + "-"
+	}
+	return filepath.Join(root, "worktrees", fmt.Sprintf("%spr-%d-chatshadow-%s", prefix, pr, conversationID))
 }
 
 // chatShadowBranch is the local branch name a conversation's shadow worktree
@@ -63,14 +69,20 @@ func chatShadowBranch(conversationID string) string {
 // The branch name is part of the ref PATH so every reader can recover it from
 // git alone (`git for-each-ref refs/slash/pending/pr-<n>/`) without a gh call —
 // that is what keeps the pending-push read model (tasks_api.go) purely local.
-func prPendingRef(pr int, headRefName string) string {
+func prPendingRef(repo string, pr int, headRefName string) string {
+	// The primary repo keeps the historical ref layout byte-for-byte (an already
+	// landed, not-yet-pushed edit must stay findable); another repo gets its key
+	// as an extra path segment.
+	if repo != "" {
+		return fmt.Sprintf("refs/slash/pending/%s/pr-%d/%s", repoKeyOf(repo), pr, headRefName)
+	}
 	return fmt.Sprintf("refs/slash/pending/pr-%d/%s", pr, headRefName)
 }
 
 // pendingRefSHA resolves ref to a commit SHA, or "" when it doesn't exist
 // (which is the normal state: no chat edit has landed for this PR yet).
-func pendingRefSHA(ctx context.Context, ref string) string {
-	out, err := runGit(ctx, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
+func pendingRefSHA(ctx context.Context, repo, ref string) string {
+	out, err := runGitFor(ctx, repo, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
 	if err != nil {
 		return ""
 	}
@@ -83,9 +95,9 @@ func pendingRefSHA(ctx context.Context, ref string) string {
 // conversations STACK instead of clobbering each other — the second one starts
 // from the first one's already-landed (but unpushed) commit, rather than from
 // an origin tip that doesn't contain it yet.
-func chatShadowBaseTip(ctx context.Context, pr int, headRefName string) string {
-	ref := prPendingRef(pr, headRefName)
-	if pendingRefSHA(ctx, ref) != "" {
+func chatShadowBaseTip(ctx context.Context, repo string, pr int, headRefName string) string {
+	ref := prPendingRef(repo, pr, headRefName)
+	if pendingRefSHA(ctx, repo, ref) != "" {
 		return ref
 	}
 	return "origin/" + headRefName
@@ -105,11 +117,11 @@ func chatShadowBaseTip(ctx context.Context, pr int, headRefName string) string {
 // code 1, indistinguishable here from a genuine git failure, and both belong in
 // the same place — report the tip as missing and let the merge path deal with
 // it. A false "missing" costs one no-op merge, never correctness.
-func chatShadowMissingTips(ctx context.Context, dir string, pr int, headRefName string) []string {
-	candidates := []string{"origin/" + headRefName, prPendingRef(pr, headRefName)}
+func chatShadowMissingTips(ctx context.Context, dir string, repo string, pr int, headRefName string) []string {
+	candidates := []string{"origin/" + headRefName, prPendingRef(repo, pr, headRefName)}
 	var missing []string
 	for _, ref := range candidates {
-		if pendingRefSHA(ctx, ref) == "" {
+		if pendingRefSHA(ctx, repo, ref) == "" {
 			continue // doesn't exist locally (no pending ref yet) — nothing to contain
 		}
 		if _, err := runGitIn(ctx, dir, "merge-base", "--is-ancestor", ref, "HEAD"); err != nil {
@@ -133,7 +145,7 @@ func chatShadowMissingTips(ctx context.Context, dir string, pr int, headRefName 
 // directory (those touch only that one conversation's own branch/files, never
 // shared clone state — different conversations get different branch refs),
 // so unrelated conversations' edit turns still run fully concurrently.
-func ensureChatShadowWorktree(ctx context.Context, dataDir string, pr int, conversationID string) (string, error) {
+func ensureChatShadowWorktree(ctx context.Context, dataDir string, repo string, pr int, conversationID string) (string, error) {
 	meta, err := fetchPRMeta(ctx, "", pr)
 	if err != nil {
 		return "", fmt.Errorf("fetch pr meta: %w", err)
@@ -141,7 +153,7 @@ func ensureChatShadowWorktree(ctx context.Context, dataDir string, pr int, conve
 	if meta.HeadRefName == "" {
 		return "", fmt.Errorf("pr %d: gh reported no head branch name", pr)
 	}
-	return ensureChatShadowWorktreeAt(ctx, dataDir, pr, conversationID, meta.HeadRefName)
+	return ensureChatShadowWorktreeAt(ctx, dataDir, repo, pr, conversationID, meta.HeadRefName)
 }
 
 // ensureChatShadowWorktreeAt is ensureChatShadowWorktree's body once the PR's
@@ -151,11 +163,11 @@ func ensureChatShadowWorktree(ctx context.Context, dataDir string, pr int, conve
 // real worktree/branch/fetch/reset mechanics offline (mirrors why
 // scanAndStoreIngestBlocksLocked exists next to scanAndStoreIngestBlocks in
 // ingest.go, though that split is about mutex re-entrancy rather than tests).
-func ensureChatShadowWorktreeAt(ctx context.Context, dataDir string, pr int, conversationID, headRefName string) (string, error) {
+func ensureChatShadowWorktreeAt(ctx context.Context, dataDir string, repo string, pr int, conversationID, headRefName string) (string, error) {
 	ingestMu.Lock()
 	defer ingestMu.Unlock()
 
-	if _, err := runGit(ctx, "fetch", "origin", headRefName); err != nil {
+	if _, err := runGitFor(ctx, repo, "fetch", "origin", headRefName); err != nil {
 		return "", fmt.Errorf("fetch head branch %s: %w", headRefName, err)
 	}
 
@@ -163,9 +175,9 @@ func ensureChatShadowWorktreeAt(ctx context.Context, dataDir string, pr int, con
 	// conversation's already-landed-but-unpushed commit must be the starting
 	// point, or this conversation's own landing would try to rewind it (see
 	// chatShadowBaseTip / prPendingRef).
-	tip := chatShadowBaseTip(ctx, pr, headRefName)
+	tip := chatShadowBaseTip(ctx, repo, pr, headRefName)
 
-	dir := chatShadowDir(dataDir, pr, conversationID)
+	dir := chatShadowDir(dataDir, repo, pr, conversationID)
 	if _, err := os.Stat(dir); err != nil {
 		branch := chatShadowBranch(conversationID)
 		// -c submodule.recurse=false: the reviewed repo (plug-and-pay) carries
@@ -180,7 +192,7 @@ func ensureChatShadowWorktreeAt(ctx context.Context, dataDir string, pr int, con
 		// (just a `config` file, no HEAD/objects/refs) behind. See
 		// .claude/docs/workflows-comments.md ("Agentic edits") for the full
 		// incident writeup.
-		if _, err := runGit(ctx, "-c", "submodule.recurse=false", "worktree", "add", "-b", branch, dir, tip); err != nil {
+		if _, err := runGitFor(ctx, repo, "-c", "submodule.recurse=false", "worktree", "add", "-b", branch, dir, tip); err != nil {
 			return "", fmt.Errorf("create chat shadow worktree: %w", err)
 		}
 		return dir, nil
@@ -276,8 +288,8 @@ func chatShadowLocalPendingState(ctx context.Context, dir string) (dirty bool, a
 // several Claude turns before asking to commit) — every turn is a chance to
 // notice and land it, so nothing sits unlanded (and therefore invisible in
 // the review tree) longer than necessary.
-func chatShadowNeedsLanding(ctx context.Context, dataDir string, pr int, conversationID string) bool {
-	dir := chatShadowDir(dataDir, pr, conversationID)
+func chatShadowNeedsLanding(ctx context.Context, dataDir string, repo string, pr int, conversationID string) bool {
+	dir := chatShadowDir(dataDir, repo, pr, conversationID)
 	if _, err := os.Stat(dir); err != nil {
 		return false
 	}
@@ -296,20 +308,20 @@ func chatShadowNeedsLanding(ctx context.Context, dataDir string, pr int, convers
 // clear, so this proceeds unconditionally — never a Go error, only logged,
 // mirroring every other best-effort git/GitHub call in this file. A no-op
 // when no shadow worktree exists for this conversation.
-func clearChatShadow(ctx context.Context, tm *TaskManager, dataDir string, pr int, conversationID string) {
-	dir := chatShadowDir(dataDir, pr, conversationID)
+func clearChatShadow(ctx context.Context, tm *TaskManager, dataDir string, repo string, pr int, conversationID string) {
+	dir := chatShadowDir(dataDir, repo, pr, conversationID)
 	if _, err := os.Stat(dir); err != nil {
 		return
 	}
 	ingestMu.Lock()
 	defer ingestMu.Unlock()
-	if _, err := runGit(ctx, "worktree", "remove", "--force", dir); err != nil {
+	if _, err := runGitFor(ctx, repo, "worktree", "remove", "--force", dir); err != nil {
 		if tm != nil && tm.logf != nil {
 			tm.logf("claude_chat: clear could not remove shadow worktree %s: %v", dir, err)
 		}
 		return
 	}
-	if _, err := runGit(ctx, "branch", "-D", chatShadowBranch(conversationID)); err != nil {
+	if _, err := runGitFor(ctx, repo, "branch", "-D", chatShadowBranch(conversationID)); err != nil {
 		if tm != nil && tm.logf != nil {
 			tm.logf("claude_chat: clear could not delete shadow branch for conversation %s: %v", conversationID, err)
 		}
@@ -329,8 +341,8 @@ func clearChatShadow(ctx context.Context, tm *TaskManager, dataDir string, pr in
 // Returns false only when the directory genuinely isn't there yet (a PR that
 // was never ingested — not reachable in practice for an existing comment
 // thread, but degrading gracefully costs nothing).
-func prepareChatReadOnlyWorkDir(dataDir string, pr int) (string, bool) {
-	_, headDir := worktreeDirs(dataDir, pr)
+func prepareChatReadOnlyWorkDir(dataDir string, repo string, pr int) (string, bool) {
+	_, headDir := worktreeDirs(dataDir, repo, pr)
 	if _, err := os.Stat(headDir); err != nil {
 		return "", false
 	}
@@ -352,8 +364,8 @@ func prepareChatReadOnlyWorkDir(dataDir string, pr int) (string, bool) {
 // silent: runOneClaudeTurn sets chat.Message.NoShell on the turn's own reply,
 // which ClaudeChat.mjs shows as a "Geen bestandstoegang" pill — a reviewer
 // must be able to tell that Claude answered without looking at the code.
-func prepareChatShellWorkDir(ctx context.Context, tm *TaskManager, dataDir string, pr int, conversationID string) (string, bool) {
-	dir, err := ensureChatShadowWorktree(ctx, dataDir, pr, conversationID)
+func prepareChatShellWorkDir(ctx context.Context, tm *TaskManager, dataDir string, repo string, pr int, conversationID string) (string, bool) {
+	dir, err := ensureChatShadowWorktree(ctx, dataDir, repo, pr, conversationID)
 	if err != nil {
 		if tm != nil && tm.logf != nil {
 			tm.logf("claude_chat: shadow worktree unavailable for pr %d conversation %s, degrading to a tool-less turn: %v", pr, conversationID, err)
@@ -395,7 +407,7 @@ const chatShadowBranchMovedOnMsg = "De PR-branch is intussen verder; jouw wijzig
 // ingestMu-guarded: update-ref/worktree-remove/branch-delete all touch the
 // shared clone's own refs and worktree registry — the same reason
 // ensureChatShadowWorktreeAt takes this lock.
-func landAndReclaimChatShadow(ctx context.Context, dir string, pr int, conversationID, headRefName string) error {
+func landAndReclaimChatShadow(ctx context.Context, dir string, repo string, pr int, conversationID, headRefName string) error {
 	ingestMu.Lock()
 	defer ingestMu.Unlock()
 
@@ -405,19 +417,19 @@ func landAndReclaimChatShadow(ctx context.Context, dir string, pr int, conversat
 	}
 	sha := strings.TrimSpace(string(shaOut))
 
-	ref := prPendingRef(pr, headRefName)
-	if cur := pendingRefSHA(ctx, ref); cur != "" && cur != sha {
+	ref := prPendingRef(repo, pr, headRefName)
+	if cur := pendingRefSHA(ctx, repo, ref); cur != "" && cur != sha {
 		if _, err := runGitIn(ctx, dir, "merge-base", "--is-ancestor", cur, sha); err != nil {
 			return fmt.Errorf("landing %s would not be a fast-forward of %s", short(sha), short(cur))
 		}
 	}
-	if _, err := runGit(ctx, "update-ref", ref, sha); err != nil {
+	if _, err := runGitFor(ctx, repo, "update-ref", ref, sha); err != nil {
 		return fmt.Errorf("update pending ref: %w", err)
 	}
 
 	branch := chatShadowBranch(conversationID)
-	_, _ = runGit(ctx, "worktree", "remove", "--force", dir)
-	_, _ = runGit(ctx, "branch", "-D", branch)
+	_, _ = runGitFor(ctx, repo, "worktree", "remove", "--force", dir)
+	_, _ = runGitFor(ctx, repo, "branch", "-D", branch)
 	return nil
 }
 
@@ -448,7 +460,7 @@ func chatShadowConflictedPaths(ctx context.Context, dir string) ([]string, error
 // unexpected git/gh failure would be, and even those are reported to the
 // reviewer as a message rather than failing the workflow (mirrors
 // runOneClaudeTurn's own failed-claude-call handling).
-func commitChatShadowEdits(ctx context.Context, cm *chat.Module, dataDir string, pr int, conversationID, turnID string) chat.Message {
+func commitChatShadowEdits(ctx context.Context, cm *chat.Module, dataDir string, repo string, pr int, conversationID, turnID string) chat.Message {
 	meta, err := fetchPRMeta(ctx, "", pr)
 	if err != nil || meta.HeadRefName == "" {
 		msg := chat.Message{
@@ -459,7 +471,7 @@ func commitChatShadowEdits(ctx context.Context, cm *chat.Module, dataDir string,
 		_ = cm.SaveMessage(ctx, msg)
 		return msg
 	}
-	return commitChatShadowEditsAt(ctx, cm, dataDir, pr, conversationID, turnID, meta.HeadRefName)
+	return commitChatShadowEditsAt(ctx, cm, dataDir, repo, pr, conversationID, turnID, meta.HeadRefName)
 }
 
 // commitChatShadowEditsAt is commitChatShadowEdits's body once the PR's head
@@ -468,7 +480,7 @@ func commitChatShadowEdits(ctx context.Context, cm *chat.Module, dataDir string,
 // git plumbing, so a test can exercise the real commit/fetch/ahead-check/push
 // mechanics (including the fast-forward-only conflict path) against a
 // throwaway local repo.
-func commitChatShadowEditsAt(ctx context.Context, cm *chat.Module, dataDir string, pr int, conversationID, turnID, headRefName string) chat.Message {
+func commitChatShadowEditsAt(ctx context.Context, cm *chat.Module, dataDir string, repo string, pr int, conversationID, turnID, headRefName string) chat.Message {
 	newMsg := func(body string, isErr bool) chat.Message {
 		kind := ""
 		if isErr {
@@ -482,7 +494,7 @@ func commitChatShadowEditsAt(ctx context.Context, cm *chat.Module, dataDir strin
 		return msg
 	}
 
-	dir := chatShadowDir(dataDir, pr, conversationID)
+	dir := chatShadowDir(dataDir, repo, pr, conversationID)
 	if _, err := os.Stat(dir); err != nil {
 		return newMsg("Er is nog geen Claude-wijziging klaargezet om te committen.", true)
 	}
@@ -508,18 +520,18 @@ func commitChatShadowEditsAt(ctx context.Context, cm *chat.Module, dataDir strin
 	// own, inside landAndReclaimChatShadow — a plain sync.Mutex isn't reentrant,
 	// so it must be released here first rather than deferred.
 	ingestMu.Lock()
-	_, fetchErr := runGit(ctx, "fetch", "origin", headRefName)
+	_, fetchErr := runGitFor(ctx, repo, "fetch", "origin", headRefName)
 	if fetchErr != nil {
 		ingestMu.Unlock()
 		return newMsg("Kon de laatste stand van de branch niet ophalen.", true)
 	}
-	missing := chatShadowMissingTips(ctx, dir, pr, headRefName)
+	missing := chatShadowMissingTips(ctx, dir, repo, pr, headRefName)
 	ingestMu.Unlock()
 	if len(missing) > 0 {
 		return newMsg(chatShadowBranchMovedOnMsg, true)
 	}
 
-	if err := landAndReclaimChatShadow(ctx, dir, pr, conversationID, headRefName); err != nil {
+	if err := landAndReclaimChatShadow(ctx, dir, repo, pr, conversationID, headRefName); err != nil {
 		return newMsg("De wijziging kon niet op de PR-branch worden gezet.", true)
 	}
 

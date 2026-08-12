@@ -25,7 +25,7 @@ import (
 // fallback).
 func writeTestCoversFixtureRepo(t *testing.T, dataDir string, pr int) {
 	t.Helper()
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"app/Models/Order.php": `<?php
 namespace App\Models;
@@ -124,7 +124,7 @@ class BareCoversTest extends TestCase
 // depends on) and returns its methods as changed TEST-category PR blocks.
 func testCoversBlocks(t *testing.T, dataDir string, pr int, relFile string) []Block {
 	t.Helper()
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	src, err := os.ReadFile(filepath.Join(headDir, relFile))
 	if err != nil {
 		t.Fatal(err)
@@ -291,7 +291,7 @@ func TestScanTestCoversBareClassFallback(t *testing.T) {
 func TestScanTestCoversClassLevelCoversMethod(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 13
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"app/Http/Controllers/Api/ProductGroupController.php": `<?php
 namespace App\Http\Controllers\Api;
@@ -377,7 +377,7 @@ final class ProductGroupUpdateTest extends HttpTestCase
 func TestScanTestCoversSingleStartpointShortcut(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 20
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"app/Models/Cart.php": `<?php
 namespace App\Models;
@@ -548,7 +548,7 @@ func TestBuildRelationsWorkflowFillsTestCovers(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if err := replacePRBlocks(db, pr, blocks); err != nil {
+	if err := replacePRBlocks(db, "", pr, blocks); err != nil {
 		t.Fatal(err)
 	}
 
@@ -562,9 +562,9 @@ func TestBuildRelationsWorkflowFillsTestCovers(t *testing.T) {
 	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, tc, nil, nil, nil, nil, nil, db, dataDir, "test/repo")
 
 	ctx := context.Background()
-	m.EnsureRelations(ctx, pr) // initial build runs inside StartWorkflow
+	m.EnsureRelations(ctx, "", pr) // initial build runs inside StartWorkflow
 
-	got, err := tc.List(ctx, pr)
+	got, err := tc.List(ctx, "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -592,7 +592,7 @@ func TestBuildRelationsWorkflowFillsTestCovers(t *testing.T) {
 func TestScanTestCoversFoldsLeadingPHPDocInCoveredCode(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 15
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"app/Models/Order.php": "<?php\n" +
 			"namespace App\\Models;\n" +

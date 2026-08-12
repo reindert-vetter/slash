@@ -96,6 +96,8 @@ func groupUnresolvedTestCovers(pr int, covers []testcovers.Entry, attempted map[
 // test method, and the classes a class-level-only annotation named (each
 // becomes its own "class:<Class>" target_key, mirroring the Go scan).
 type testCoverArg struct {
+	// Repo is the canonical repo string ("" = the primary repo, see repos.go).
+	Repo      string   `json:"repo,omitempty"`
 	PR        int      `json:"pr"`
 	TestID    string   `json:"testId"`
 	TestFile  string   `json:"testFile"`
@@ -110,6 +112,8 @@ type testCoverArg struct {
 // file) covering the same class, for each class this test's class-level-only
 // annotation(s) named.
 type testCoverReuseArg struct {
+	// Repo is the canonical repo string ("" = the primary repo, see repos.go).
+	Repo     string   `json:"repo,omitempty"`
 	PR       int      `json:"pr"`
 	TestID   string   `json:"testId"`
 	TestFile string   `json:"testFile"`
@@ -200,7 +204,7 @@ type testCoverAnswer struct {
 // degrades to notfound so the workflow always completes (best-effort, like
 // resolveCallsWithModel).
 func resolveTestCoversWithModel(ctx context.Context, cl claude.Client, dataDir string, arg testCoverArg) []testcovers.Entry {
-	_, headDir := worktreeDirs(dataDir, arg.PR)
+	_, headDir := worktreeDirs(dataDir, arg.Repo, arg.PR)
 	idx := buildSymbolIndex(headDir)
 	agentic := arg.Model == claude.ModelSonnet
 	shortModel := testcovers.ModelHaiku

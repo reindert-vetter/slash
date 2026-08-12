@@ -28,7 +28,7 @@ func TestSourceAndKindRoundTrip(t *testing.T) {
 	if err := m.Save(ctx, Comment{ID: "u1", RunID: "u1", PR: 1, File: "a.php", Line: 1, Body: "hi"}); err != nil {
 		t.Fatal(err)
 	}
-	list, err := m.List(ctx, 1)
+	list, err := m.List(ctx, "", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestAvatarURLRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	list, err := m.List(ctx, 7)
+	list, err := m.List(ctx, "", 7)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestSetStatus(t *testing.T) {
 	if err := m.SetStatus(ctx, "c1", "deleting"); err != nil {
 		t.Fatal(err)
 	}
-	list, err := m.List(ctx, 1)
+	list, err := m.List(ctx, "", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestSetStatus(t *testing.T) {
 	if err := m.Save(ctx, Comment{ID: "c1", RunID: "c1", PR: 1, File: "a.php", Line: 1, Body: "hi"}); err != nil {
 		t.Fatal(err)
 	}
-	list, _ = m.List(ctx, 1)
+	list, _ = m.List(ctx, "", 1)
 	if list[0].Status != "deleting" {
 		t.Fatalf("status after re-save = %q, want deleting (preserved)", list[0].Status)
 	}
@@ -126,7 +126,7 @@ func TestSetGithubID(t *testing.T) {
 	if err := m.Save(ctx, Comment{ID: "c1", RunID: "c1", PR: 1, File: "a.php", Line: 1, Body: "hi"}); err != nil {
 		t.Fatal(err)
 	}
-	list, _ := m.List(ctx, 1)
+	list, _ := m.List(ctx, "", 1)
 	if list[0].GithubID != 0 {
 		t.Fatalf("githubId = %d, want 0 before SetGithubID", list[0].GithubID)
 	}
@@ -134,7 +134,7 @@ func TestSetGithubID(t *testing.T) {
 	if err := m.SetGithubID(ctx, "c1", 12345); err != nil {
 		t.Fatal(err)
 	}
-	list, _ = m.List(ctx, 1)
+	list, _ = m.List(ctx, "", 1)
 	if list[0].GithubID != 12345 {
 		t.Fatalf("githubId = %d, want 12345", list[0].GithubID)
 	}
@@ -143,7 +143,7 @@ func TestSetGithubID(t *testing.T) {
 	if err := m.SetGithubID(ctx, "c1", 0); err != nil {
 		t.Fatal(err)
 	}
-	list, _ = m.List(ctx, 1)
+	list, _ = m.List(ctx, "", 1)
 	if list[0].GithubID != 12345 {
 		t.Fatalf("githubId = %d after SetGithubID(0), want unchanged 12345", list[0].GithubID)
 	}
@@ -153,7 +153,7 @@ func TestSetGithubID(t *testing.T) {
 	if err := m.Save(ctx, Comment{ID: "c1", RunID: "c1", PR: 1, File: "a.php", Line: 1, Body: "hi"}); err != nil {
 		t.Fatal(err)
 	}
-	list, _ = m.List(ctx, 1)
+	list, _ = m.List(ctx, "", 1)
 	if list[0].GithubID != 12345 {
 		t.Fatalf("githubId after re-save = %d, want 12345 (preserved)", list[0].GithubID)
 	}
@@ -169,7 +169,7 @@ func TestUpdateBody(t *testing.T) {
 	if err := m.UpdateBody(ctx, "c1", "edited"); err != nil {
 		t.Fatal(err)
 	}
-	list, _ := m.List(ctx, 1)
+	list, _ := m.List(ctx, "", 1)
 	if len(list) != 1 || list[0].Body != "edited" {
 		t.Fatalf("comments = %+v, want body=edited", list)
 	}
@@ -184,7 +184,7 @@ func TestUpdateReactionBodyAndSetReactionGithubID(t *testing.T) {
 	if err := m.AddReaction(ctx, Reaction{ID: "r1", CommentID: "c1", Source: "ui", Body: "original reply"}); err != nil {
 		t.Fatal(err)
 	}
-	list, _ := m.List(ctx, 1)
+	list, _ := m.List(ctx, "", 1)
 	if len(list[0].Reactions) != 1 || list[0].Reactions[0].GithubID != 0 {
 		t.Fatalf("reactions = %+v, want one reaction with githubId=0", list[0].Reactions)
 	}
@@ -195,7 +195,7 @@ func TestUpdateReactionBodyAndSetReactionGithubID(t *testing.T) {
 	if err := m.UpdateReactionBody(ctx, "r1", "edited reply"); err != nil {
 		t.Fatal(err)
 	}
-	list, _ = m.List(ctx, 1)
+	list, _ = m.List(ctx, "", 1)
 	if len(list[0].Reactions) != 1 || list[0].Reactions[0].Body != "edited reply" || list[0].Reactions[0].GithubID != 999 {
 		t.Fatalf("reactions = %+v, want body=edited reply githubId=999", list[0].Reactions)
 	}
@@ -204,7 +204,7 @@ func TestUpdateReactionBodyAndSetReactionGithubID(t *testing.T) {
 	if err := m.SetReactionGithubID(ctx, "r1", 0); err != nil {
 		t.Fatal(err)
 	}
-	list, _ = m.List(ctx, 1)
+	list, _ = m.List(ctx, "", 1)
 	if list[0].Reactions[0].GithubID != 999 {
 		t.Fatalf("githubId after SetReactionGithubID(0) = %d, want unchanged 999", list[0].Reactions[0].GithubID)
 	}
@@ -260,7 +260,7 @@ func TestDeleteCascadesReactions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	list, err := m.List(ctx, 1)
+	list, err := m.List(ctx, "", 1)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -195,7 +195,7 @@ func claimedInterfaceMethodIDs(pr int, rels []relations.Relation, calls []callre
 // (mirrors resolveMigrationModels's "unmappable → nothing" precedent), never
 // an "unresolved" row.
 func resolveInterfaceImplementations(dataDir string, pr int, blocks []Block, claimedIDs map[string]bool) []callresolve.Entry {
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, blocksRepo(blocks), pr)
 	ifaceMethods := changedInterfaceMethods(blocks)
 	if len(ifaceMethods) == 0 {
 		return nil

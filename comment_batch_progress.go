@@ -61,13 +61,13 @@ type commentBatchProgress struct {
 
 var (
 	commentBatchMu   sync.Mutex
-	commentBatchByPR = map[int]commentBatchProgress{}
+	commentBatchByPR = map[prKey]commentBatchProgress{}
 )
 
 // startCommentBatchProgress installs a fresh snapshot for this PR (replacing
 // whatever a previous run left behind) and publishes it, so the index rows show
 // "in de wachtrij" from the moment the run begins.
-func startCommentBatchProgress(pr int, commentIDs []string) {
+func startCommentBatchProgress(repo string, pr int, commentIDs []string) {
 	now := nowMillis()
 	items := make([]commentBatchItem, 0, len(commentIDs))
 	for _, id := range commentIDs {
@@ -78,42 +78,42 @@ func startCommentBatchProgress(pr int, commentIDs []string) {
 		Items: items, StartedAt: now, UpdatedAt: now,
 	}
 	commentBatchMu.Lock()
-	commentBatchByPR[pr] = p
+	commentBatchByPR[prKey{repo, pr}] = p
 	commentBatchMu.Unlock()
-	publishCommentBatchProgress(pr, p)
+	publishCommentBatchProgress(repo, pr, p)
 }
 
 // mutateCommentBatchProgress applies fn to the stored snapshot and returns the
 // result. The second return is false when this PR has no snapshot at all (an
 // event arriving after a restart, or for a PR that never ran a batch).
-func mutateCommentBatchProgress(pr int, fn func(*commentBatchProgress)) (commentBatchProgress, bool) {
+func mutateCommentBatchProgress(repo string, pr int, fn func(*commentBatchProgress)) (commentBatchProgress, bool) {
 	commentBatchMu.Lock()
 	defer commentBatchMu.Unlock()
-	p, ok := commentBatchByPR[pr]
+	p, ok := commentBatchByPR[prKey{repo, pr}]
 	if !ok {
 		return commentBatchProgress{}, false
 	}
 	fn(&p)
 	p.UpdatedAt = nowMillis()
-	commentBatchByPR[pr] = p
+	commentBatchByPR[prKey{repo, pr}] = p
 	return p, true
 }
 
 // advanceCommentBatchProgress sets the phase (the one transition that happens
 // outside the streamed events: local prep finished, CLI about to be invoked).
-func advanceCommentBatchProgress(pr int, phase string) {
-	if snap, ok := mutateCommentBatchProgress(pr, func(p *commentBatchProgress) {
+func advanceCommentBatchProgress(repo string, pr int, phase string) {
+	if snap, ok := mutateCommentBatchProgress(repo, pr, func(p *commentBatchProgress) {
 		p.Phase = phase
 	}); ok {
-		publishCommentBatchProgress(pr, snap)
+		publishCommentBatchProgress(repo, pr, snap)
 	}
 }
 
 // markCommentBatchCurrent records that Claude announced it is starting on one
 // comment ([slash:start]). An id that isn't in the run's own list is ignored —
 // the model must never be able to invent one.
-func markCommentBatchCurrent(pr int, commentID string) {
-	snap, ok := mutateCommentBatchProgress(pr, func(p *commentBatchProgress) {
+func markCommentBatchCurrent(repo string, pr int, commentID string) {
+	snap, ok := mutateCommentBatchProgress(repo, pr, func(p *commentBatchProgress) {
 		for i := range p.Items {
 			if p.Items[i].CommentID != commentID {
 				continue
@@ -125,15 +125,15 @@ func markCommentBatchCurrent(pr int, commentID string) {
 		}
 	})
 	if ok {
-		publishCommentBatchProgress(pr, snap)
+		publishCommentBatchProgress(repo, pr, snap)
 	}
 }
 
 // markCommentBatchOutcome records one comment's final state ([slash:done] /
 // [slash:skip]). Idempotent per comment: a second marker for the same id
 // overwrites the note but never double-counts the totals.
-func markCommentBatchOutcome(pr int, commentID, state, note string) {
-	snap, ok := mutateCommentBatchProgress(pr, func(p *commentBatchProgress) {
+func markCommentBatchOutcome(repo string, pr int, commentID, state, note string) {
+	snap, ok := mutateCommentBatchProgress(repo, pr, func(p *commentBatchProgress) {
 		for i := range p.Items {
 			if p.Items[i].CommentID != commentID {
 				continue
@@ -155,26 +155,26 @@ func markCommentBatchOutcome(pr int, commentID, state, note string) {
 		}
 	})
 	if ok {
-		publishCommentBatchProgress(pr, snap)
+		publishCommentBatchProgress(repo, pr, snap)
 	}
 }
 
 // failCommentBatchProgress records a run that couldn't even start (no work
 // copy, CLI failure) so the reviewer reads a reason instead of a batch that
 // silently never happens.
-func failCommentBatchProgress(pr int, reason string) {
-	if snap, ok := mutateCommentBatchProgress(pr, func(p *commentBatchProgress) {
+func failCommentBatchProgress(repo string, pr int, reason string) {
+	if snap, ok := mutateCommentBatchProgress(repo, pr, func(p *commentBatchProgress) {
 		p.Error = reason
 	}); ok {
-		publishCommentBatchProgress(pr, snap)
+		publishCommentBatchProgress(repo, pr, snap)
 	}
 }
 
 // finishCommentBatchProgress publishes one last snapshot with Running false and
 // KEEPS it (see the file header): every comment Claude never reached falls back
 // to "open", so a half-finished run doesn't leave rows stuck on "bezig".
-func finishCommentBatchProgress(pr int) {
-	if snap, ok := mutateCommentBatchProgress(pr, func(p *commentBatchProgress) {
+func finishCommentBatchProgress(repo string, pr int) {
+	if snap, ok := mutateCommentBatchProgress(repo, pr, func(p *commentBatchProgress) {
 		p.Running = false
 		p.Current = ""
 		p.Phase, p.Tool, p.Detail = "", "", ""
@@ -184,15 +184,15 @@ func finishCommentBatchProgress(pr int) {
 			}
 		}
 	}); ok {
-		publishCommentBatchProgress(pr, snap)
+		publishCommentBatchProgress(repo, pr, snap)
 	}
 }
 
 // commentBatchProgressFor is the resync read behind GET /api/comment-batch.
-func commentBatchProgressFor(pr int) (commentBatchProgress, bool) {
+func commentBatchProgressFor(repo string, pr int) (commentBatchProgress, bool) {
 	commentBatchMu.Lock()
 	defer commentBatchMu.Unlock()
-	p, ok := commentBatchByPR[pr]
+	p, ok := commentBatchByPR[prKey{repo, pr}]
 	return p, ok
 }
 
@@ -200,13 +200,13 @@ func commentBatchProgressFor(pr int) (commentBatchProgress, bool) {
 // guard behind POST /api/workflows/comment_batch, so two clicks can't put two
 // agents in the same shadow worktree at once. In-memory, so a restart lifts the
 // guard; that is the same trade-off as every other volatile status here.
-func commentBatchRunning(pr int) bool {
-	p, ok := commentBatchProgressFor(pr)
+func commentBatchRunning(repo string, pr int) bool {
+	p, ok := commentBatchProgressFor(repo, pr)
 	return ok && p.Running
 }
 
 // publishCommentBatchProgress pushes the snapshot to every tab watching this PR
 // (no Key: the payload is PR-wide and carries its own per-comment items).
-func publishCommentBatchProgress(pr int, p commentBatchProgress) {
-	events.publish(eventCommentBatchProgress, pr, "", p)
+func publishCommentBatchProgress(repo string, pr int, p commentBatchProgress) {
+	events.publish(eventCommentBatchProgress, repo, pr, "", p)
 }

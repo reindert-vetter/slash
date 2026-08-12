@@ -2,7 +2,6 @@ package main
 
 import (
 	"net/http"
-	"strconv"
 )
 
 // approval_summary.go serves the PR-overview approval badge:
@@ -26,10 +25,14 @@ func (s *server) handleApprovalSummary(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	numbers := parsePRList(r.URL.Query().Get("prs"))
+	// A `prs=` entry is a statusKey: a bare number for the primary repo (the
+	// historical form) or "<owner/name>#<n>" for a PR in another repo — the same
+	// keys the client sends and reads back (prUid in src/overview.mjs).
+	wanted := parseStatusKeyList(r.URL.Query().Get("prs"))
 	summaries := map[string]map[string]int{}
-	for _, pr := range numbers {
-		blocks, err := blocksByPR(s.db, pr)
+	for _, key := range wanted {
+		pr := key.PR
+		blocks, err := blocksByPR(s.db, key.Repo, pr)
 		if err != nil || len(blocks) == 0 {
 			continue
 		}
@@ -38,12 +41,12 @@ func (s *server) handleApprovalSummary(w http.ResponseWriter, r *http.Request) {
 		// the approved-row count clamped to the block's total (approvedRows only
 		// ever holds changed-row indices, so len is the right measure here).
 		approvedByID := map[string]int{}
-		if list, err := s.tasks.approvals.List(r.Context(), pr); err == nil {
+		if list, err := s.tasks.approvals.List(r.Context(), key.Repo, pr); err == nil {
 			for _, a := range list {
 				approvedByID[a.BlockID] = len(a.Rows)
 			}
 		}
-		baseDir, headDir := worktreeDirs(s.dataDir, pr)
+		baseDir, headDir := worktreeDirs(s.dataDir, key.Repo, pr)
 		done, total := 0, 0
 		for _, b := range blocks {
 			t := blockChangedRowCount(baseDir, headDir, b)
@@ -55,7 +58,7 @@ func (s *server) handleApprovalSummary(w http.ResponseWriter, r *http.Request) {
 				done += d
 			}
 		}
-		summaries[strconv.Itoa(pr)] = map[string]int{"done": done, "total": total}
+		summaries[statusKey(key.Repo, pr)] = map[string]int{"done": done, "total": total}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "summaries": summaries})
 }

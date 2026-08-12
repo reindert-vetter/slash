@@ -70,7 +70,7 @@ func TestResolveCallHaikuConfident(t *testing.T) {
 func TestResolveCallHaikuFoundFoldsLeadingPHPDoc(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 29
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"app/Services/OrderService.php": `<?php
 namespace App\Services;
@@ -209,7 +209,7 @@ func TestResolveCallVendorBuiltinDoesNotSuppressRealCandidate(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 28
 	writeCallFixtureRepo(t, dataDir, pr)
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	// Add an app class that defines its own "table" method — same name as
 	// the denylisted Schema Blueprint builtin, but a real app candidate.
 	tableFile := filepath.Join(headDir, "app/Reports/ReportBuilder.php")
@@ -279,7 +279,7 @@ func TestResolveCallVerificationRejectsBogus(t *testing.T) {
 
 func onlyEntry(t *testing.T, cr *callresolve.Module, pr int) callresolve.Entry {
 	t.Helper()
-	list, err := cr.List(context.Background(), pr)
+	list, err := cr.List(context.Background(), "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +291,7 @@ func onlyEntry(t *testing.T, cr *callresolve.Module, pr int) callresolve.Entry {
 
 func mustCallresolveList(t *testing.T, cr *callresolve.Module, pr int) []callresolve.Entry {
 	t.Helper()
-	list, err := cr.List(context.Background(), pr)
+	list, err := cr.List(context.Background(), "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -411,12 +411,12 @@ func TestAutoStartResolveCallOnBuildRelations(t *testing.T) {
 
 	fake := claude.NewFake() // no programmed output → every search ends in "notfound"
 	m, db, cr := autoResolveCallManager(t, dataDir, fake)
-	if err := replacePRBlocks(db, pr, []Block{caller}); err != nil {
+	if err := replacePRBlocks(db, "", pr, []Block{caller}); err != nil {
 		t.Fatal(err)
 	}
 
 	ctx := context.Background()
-	m.EnsureRelations(ctx, pr) // must return without waiting for the auto-search
+	m.EnsureRelations(ctx, "", pr) // must return without waiting for the auto-search
 
 	waitFor(t, func() bool {
 		e, ok := findEntry(mustCallresolveList(t, cr, pr), "fetch")
@@ -436,7 +436,7 @@ func TestAutoStartResolveCallOnBuildRelations(t *testing.T) {
 	// as unresolved (it doesn't know about the DB's LLM state) and UpsertGo
 	// resets both notfound rows back to unresolved — but the auto-trigger
 	// must not search either one again.
-	m.EnsureRelations(ctx, pr)
+	m.EnsureRelations(ctx, "", pr)
 	// Nothing SHOULD happen here (both calls were already attempted), so there
 	// is no positive condition to poll for — give any (wrongly re-triggered)
 	// background search a moment to run before asserting the count didn't grow.
@@ -446,7 +446,7 @@ func TestAutoStartResolveCallOnBuildRelations(t *testing.T) {
 	}
 
 	// A genuinely new unresolved call appears in the same caller.
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	callerFile := filepath.Join(headDir, "app/Services/OrderService.php")
 	body, err := os.ReadFile(callerFile)
 	if err != nil {
@@ -461,7 +461,7 @@ func TestAutoStartResolveCallOnBuildRelations(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m.EnsureRelations(ctx, pr)
+	m.EnsureRelations(ctx, "", pr)
 	waitFor(t, func() bool {
 		e, ok := findEntry(mustCallresolveList(t, cr, pr), "fetchNew")
 		return ok && e.Status == callresolve.StatusNotfound

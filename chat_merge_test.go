@@ -73,7 +73,7 @@ func TestProcessChatMergeCleanlyAutoMergesNonOverlappingEdit(t *testing.T) {
 	ctx := context.Background()
 	cm := testChatModule(t)
 
-	dir, err := ensureChatShadowWorktreeAt(ctx, dataDir, 2001, "conv-x", "feature/x")
+	dir, err := ensureChatShadowWorktreeAt(ctx, dataDir, "", 2001, "conv-x", "feature/x")
 	if err != nil {
 		t.Fatalf("ensure: %v", err)
 	}
@@ -123,14 +123,14 @@ func TestProcessChatMergeSerializesTwoConversationsInArrivalOrder(t *testing.T) 
 	ctx := context.Background()
 	cm := testChatModule(t)
 
-	dirA, err := ensureChatShadowWorktreeAt(ctx, dataDir, 2002, "conv-a", "feature/x")
+	dirA, err := ensureChatShadowWorktreeAt(ctx, dataDir, "", 2002, "conv-a", "feature/x")
 	if err != nil {
 		t.Fatalf("ensure a: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(dirA, "foo.txt"), []byte("foo from a\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	dirB, err := ensureChatShadowWorktreeAt(ctx, dataDir, 2002, "conv-b", "feature/x")
+	dirB, err := ensureChatShadowWorktreeAt(ctx, dataDir, "", 2002, "conv-b", "feature/x")
 	if err != nil {
 		t.Fatalf("ensure b: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestProcessChatMergeSerializesTwoConversationsInArrivalOrder(t *testing.T) 
 // needs now that landing no longer pushes to the remote.
 func pendingFileAt(t *testing.T, pr int, headRefName, path string) string {
 	t.Helper()
-	sha := pendingRefSHA(context.Background(), prPendingRef(pr, headRefName))
+	sha := pendingRefSHA(context.Background(), "", prPendingRef("", pr, headRefName))
 	if sha == "" {
 		t.Fatalf("pending ref for pr %d/%s does not exist", pr, headRefName)
 	}
@@ -205,7 +205,7 @@ func TestProcessChatMergeAbortsAndDegradesOnUnresolvedConflict(t *testing.T) {
 	ctx := context.Background()
 	cm := testChatModule(t)
 
-	dir, err := ensureChatShadowWorktreeAt(ctx, dataDir, 2003, "conv-c", "feature/x")
+	dir, err := ensureChatShadowWorktreeAt(ctx, dataDir, "", 2003, "conv-c", "feature/x")
 	if err != nil {
 		t.Fatalf("ensure: %v", err)
 	}
@@ -296,7 +296,7 @@ func TestChatMergeQueueProcessesRequestsInArrivalOrder(t *testing.T) {
 		return nil, nil
 	})
 
-	runID, err := engine.StartWorkflowID(chatMergeQueueRunID(9001), WorkflowChatMerge, ChatMergeQueueInput{PR: 9001})
+	runID, err := engine.StartWorkflowID(chatMergeQueueRunID("", 9001), WorkflowChatMerge, ChatMergeQueueInput{PR: 9001})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,11 +328,11 @@ func TestEnsureChatMergeQueueIsIdempotent(t *testing.T) {
 	})
 	m := &TaskManager{engine: engine}
 
-	runID, err := m.EnsureChatMergeQueue(9002)
+	runID, err := m.EnsureChatMergeQueue("", 9002)
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, err := m.EnsureChatMergeQueue(9002)
+	again, err := m.EnsureChatMergeQueue("", 9002)
 	if err != nil {
 		t.Fatal(err)
 	}

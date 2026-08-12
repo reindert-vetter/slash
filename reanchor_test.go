@@ -182,7 +182,7 @@ func TestReanchorMatchesRenamedFile(t *testing.T) {
 	dir, pr := t.TempDir(), 940007
 	src := fooPHP("$x = 1;", "return $x;")
 	// The base worktree still holds the file at its old path, the head at the new.
-	baseDir, headDir := worktreeDirs(dir, pr)
+	baseDir, headDir := worktreeDirs(dir, "", pr)
 	writeFileT(t, filepath.Join(baseDir, "Old/Foo.php"), src)
 	writeFileT(t, filepath.Join(headDir, "New/Foo.php"), src)
 
@@ -282,7 +282,7 @@ func TestReanchorApprovalsRemapAndDrop(t *testing.T) {
 	writeFileT(t, filepath.Join(oldHead, "Foo.php"), prevSrc)
 
 	b := fooBlock(pr)
-	baseDir, headDir := worktreeDirs(dir, pr)
+	baseDir, headDir := worktreeDirs(dir, "", pr)
 	// Rows 1 and 2 of the old space are `$x = 1;` and `return $x;`.
 	ap := approvals.Approval{PR: pr, BlockID: b.ID(), Rows: []int{1, 2}, Calls: []string{"2:15"}}
 
@@ -316,7 +316,7 @@ func TestReanchorApprovalsUnchangedEmitsNothing(t *testing.T) {
 	writeFileT(t, filepath.Join(oldHead, "Foo.php"), src)
 
 	b := fooBlock(pr)
-	baseDir, headDir := worktreeDirs(dir, pr)
+	baseDir, headDir := worktreeDirs(dir, "", pr)
 	ap := approvals.Approval{PR: pr, BlockID: b.ID(), Rows: []int{1, 2}}
 
 	got := planApprovalRemap(baseDir, headDir, oldBase, oldHead,
@@ -353,7 +353,7 @@ func TestReanchorApprovalsFollowShiftedRowsViaAnchors(t *testing.T) {
 	writeWorktreeFile(t, dir, pr, "Foo.php", prevSrc, newSrc)
 
 	b := fooBlock(pr)
-	baseDir, headDir := worktreeDirs(dir, pr)
+	baseDir, headDir := worktreeDirs(dir, "", pr)
 	ap := approvals.Approval{
 		PR: pr, BlockID: b.ID(), Rows: []int{1, 2},
 		Anchors: []approvals.RowAnchor{
@@ -395,7 +395,7 @@ func TestReanchorApprovalsDuplicateRowUsesContext(t *testing.T) {
 	writeWorktreeFile(t, dir, pr, "Foo.php", prevSrc, newSrc)
 
 	b := fooBlock(pr)
-	baseDir, headDir := worktreeDirs(dir, pr)
+	baseDir, headDir := worktreeDirs(dir, "", pr)
 	// The SECOND `return $a;` (the one after `$b = 2;`) is what was approved.
 	ap := approvals.Approval{
 		PR: pr, BlockID: b.ID(), Rows: []int{4},
@@ -428,7 +428,7 @@ func TestReanchorApprovalsDropRewrittenRowViaAnchors(t *testing.T) {
 	writeWorktreeFile(t, dir, pr, "Foo.php", prevSrc, newSrc)
 
 	b := fooBlock(pr)
-	baseDir, headDir := worktreeDirs(dir, pr)
+	baseDir, headDir := worktreeDirs(dir, "", pr)
 	ap := approvals.Approval{
 		PR: pr, BlockID: b.ID(), Rows: []int{1, 2}, Calls: []string{"2:4"},
 		Anchors: []approvals.RowAnchor{
@@ -459,7 +459,7 @@ func TestReanchorApprovalsKeepsUnreadableOldSide(t *testing.T) {
 	writeWorktreeFile(t, dir, pr, "Foo.php", src, src)
 
 	b := fooBlock(pr)
-	baseDir, headDir := worktreeDirs(dir, pr)
+	baseDir, headDir := worktreeDirs(dir, "", pr)
 	empty := t.TempDir() // nothing written: git show found the path at neither SHA
 	ap := approvals.Approval{PR: pr, BlockID: b.ID(), Rows: []int{1, 2}}
 
@@ -537,7 +537,7 @@ func TestRemapRowsDuplicateRowSurvivesViaContext(t *testing.T) {
 
 	b := metadataBlock(pr)
 	oldRows, _, _ := blockAlignedRows(oldBase, oldHead, b)
-	baseDir, headDir := worktreeDirs(dir, pr)
+	baseDir, headDir := worktreeDirs(dir, "", pr)
 	newRows, _, _ := blockAlignedRows(baseDir, headDir, b)
 
 	tryOld := rowIndexOf(oldRows, "'source' => 'x',", 0)
@@ -604,7 +604,7 @@ func TestRemapRowsDuplicateGenuinelyChangedRowDropped(t *testing.T) {
 
 	b := metadataBlock(pr)
 	oldRows, _, _ := blockAlignedRows(oldBase, oldHead, b)
-	baseDir, headDir := worktreeDirs(dir, pr)
+	baseDir, headDir := worktreeDirs(dir, "", pr)
 	newRows, _, _ := blockAlignedRows(baseDir, headDir, b)
 
 	tryOld := rowIndexOf(oldRows, "'source' => 'x',", 0)
@@ -646,7 +646,7 @@ func TestRemapRowsDuplicateFullyAmbiguousDropped(t *testing.T) {
 
 	b := metadataBlock(pr)
 	oldRows, _, _ := blockAlignedRows(oldBase, oldHead, b)
-	baseDir, headDir := worktreeDirs(dir, pr)
+	baseDir, headDir := worktreeDirs(dir, "", pr)
 	newRows, _, _ := blockAlignedRows(baseDir, headDir, b)
 
 	tryOld := rowIndexOf(oldRows, "'source' => 'x',", 0)
@@ -682,7 +682,7 @@ func TestSetAnchorRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := cs.List(ctx, 940014)
+	got, err := cs.List(ctx, "", 940014)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -735,7 +735,7 @@ func TestReanchorSignalMovesStoredAnchor(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
-		got, _ := cs.List(ctx, pr)
+		got, _ := cs.List(ctx, "", pr)
 		return len(got) == 1 && got[0].RowStart == 2
 	})
 
@@ -746,11 +746,11 @@ func TestReanchorSignalMovesStoredAnchor(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
-		got, _ := cs.List(ctx, pr)
+		got, _ := cs.List(ctx, "", pr)
 		return len(got) == 1 && got[0].RowStart == 5
 	})
 
-	got, err := cs.List(ctx, pr)
+	got, err := cs.List(ctx, "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -775,7 +775,7 @@ func TestReanchorSignalMovesStoredAnchor(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
-		got, _ := cs.List(ctx, pr)
+		got, _ := cs.List(ctx, "", pr)
 		return len(got) == 1 && got[0].ReactionCount == 1
 	})
 }
@@ -848,7 +848,7 @@ func TestAnchorStateRoundTrip(t *testing.T) {
 	if err := cs.SetAnchor(ctx, "c1", 2, 2, "", "line", comments.AnchorOrphan, ""); err != nil {
 		t.Fatal(err)
 	}
-	got, err := cs.List(ctx, 940015)
+	got, err := cs.List(ctx, "", 940015)
 	if err != nil {
 		t.Fatal(err)
 	}

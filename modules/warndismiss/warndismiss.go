@@ -40,11 +40,12 @@ const schema = `
 PRAGMA journal_mode = WAL;
 
 CREATE TABLE IF NOT EXISTS dismissed_warnings (
+  repo        TEXT    NOT NULL DEFAULT '',  -- canonical repo string: '' = the primary repo
   pr          INTEGER NOT NULL,
   file        TEXT    NOT NULL,
   fingerprint TEXT    NOT NULL,
   created_at  TEXT    NOT NULL DEFAULT '',
-  PRIMARY KEY (pr, file, fingerprint)
+  PRIMARY KEY (repo, pr, file, fingerprint)
 );
 `
 
@@ -61,6 +62,10 @@ func Open(path string) (*Module, error) {
 		db.Close()
 		return nil, fmt.Errorf("warndismiss: apply schema: %w", err)
 	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return &Module{db: db}, nil
 }
 
@@ -69,7 +74,49 @@ func New(db *sql.DB) (*Module, error) {
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("warndismiss: apply schema: %w", err)
 	}
+	if err := migrate(db); err != nil {
+		return nil, err
+	}
 	return &Module{db: db}, nil
+}
+
+// migrate brings a pre-multi-repo table up to PRIMARY KEY (repo, pr, file,
+// fingerprint). Unlike most tables this one cannot be a plain ADD COLUMN: its key
+// is (pr, file, fingerprint), all three of which two different repos can share
+// (same PR number, same path, same finding text), so a dismissal in one repo
+// would silence the other's identical finding. SQLite can't alter a PK, so the
+// table is rebuilt and copied with repo=” — every existing dismissal belongs to
+// the primary repo. See repos.go.
+func migrate(db *sql.DB) error {
+	hasRepo, err := columnExists(db, "dismissed_warnings", "repo")
+	if err != nil || hasRepo {
+		return err
+	}
+	for _, q := range []string{
+		`CREATE TABLE dismissed_warnings_new (
+			repo TEXT NOT NULL DEFAULT '', pr INTEGER NOT NULL, file TEXT NOT NULL,
+			fingerprint TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY (repo, pr, file, fingerprint))`,
+		`INSERT INTO dismissed_warnings_new (repo, pr, file, fingerprint, created_at)
+			SELECT '', pr, file, fingerprint, created_at FROM dismissed_warnings`,
+		`DROP TABLE dismissed_warnings`,
+		`ALTER TABLE dismissed_warnings_new RENAME TO dismissed_warnings`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			return fmt.Errorf("warndismiss: migrate repo: %w", err)
+		}
+	}
+	return nil
+}
+
+// columnExists reports whether table has a column of that name.
+func columnExists(db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.Query(`SELECT 1 FROM pragma_table_info(?) WHERE name = ?`, table, column)
+	if err != nil {
+		return false, fmt.Errorf("warndismiss: inspect %s: %w", table, err)
+	}
+	defer rows.Close()
+	return rows.Next(), rows.Err()
 }
 
 func (m *Module) Close() error { return m.db.Close() }
@@ -92,22 +139,22 @@ func Fingerprint(text string) string {
 // Activity that calls it is safe. An empty fingerprint (an empty finding
 // body) is ignored — it would match every other empty one. WRITE: call only
 // from a workflow Activity.
-func (m *Module) Add(ctx context.Context, pr int, file, fingerprint, at string) error {
+func (m *Module) Add(ctx context.Context, repo string, pr int, file, fingerprint, at string) error {
 	if fingerprint == "" {
 		return nil
 	}
 	_, err := m.db.ExecContext(ctx,
-		`INSERT INTO dismissed_warnings (pr, file, fingerprint, created_at) VALUES (?, ?, ?, ?)
-		 ON CONFLICT(pr, file, fingerprint) DO NOTHING`, pr, file, fingerprint, at)
+		`INSERT INTO dismissed_warnings (repo, pr, file, fingerprint, created_at) VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(repo, pr, file, fingerprint) DO NOTHING`, repo, pr, file, fingerprint, at)
 	return err
 }
 
 // Fingerprints returns every dismissed fingerprint of a PR, keyed by
 // "<file>\x00<fingerprint>" so a caller can test one lookup per finding. READ
 // — safe from anywhere.
-func (m *Module) Fingerprints(ctx context.Context, pr int) (map[string]bool, error) {
+func (m *Module) Fingerprints(ctx context.Context, repo string, pr int) (map[string]bool, error) {
 	rows, err := m.db.QueryContext(ctx,
-		`SELECT file, fingerprint FROM dismissed_warnings WHERE pr = ?`, pr)
+		`SELECT file, fingerprint FROM dismissed_warnings WHERE repo = ? AND pr = ?`, repo, pr)
 	if err != nil {
 		return nil, err
 	}

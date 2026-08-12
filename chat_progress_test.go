@@ -24,7 +24,7 @@ func TestChatProgressLifecycle(t *testing.T) {
 	if _, ok := chatProgressFor("conv"); ok {
 		t.Fatal("expected no progress before the turn starts")
 	}
-	startChatProgress(5, "conv")
+	startChatProgress("", 5, "conv")
 	p, ok := chatProgressFor("conv")
 	if !ok || !p.Running || p.Phase != chatPhasePreparing {
 		t.Fatalf("after start: %+v ok=%v", p, ok)
@@ -33,13 +33,13 @@ func TestChatProgressLifecycle(t *testing.T) {
 	// Local prep finished, the claude CLI is about to be invoked: the
 	// dedicated advanceChatProgress transition, mirroring what runOneClaudeTurn
 	// does between prepareChatShellWorkDir and cl.RunChat.
-	advanceChatProgress(5, "conv", chatPhaseStarting)
+	advanceChatProgress("", 5, "conv", chatPhaseStarting)
 	p, _ = chatProgressFor("conv")
 	if p.Phase != chatPhaseStarting {
 		t.Fatalf("after advanceChatProgress: %+v", p)
 	}
 
-	sink := chatProgressSink(5, "conv")
+	sink := chatProgressSink("", 5, "conv")
 	sink(claude.ChatEvent{Kind: claude.ChatEventThinking})
 	sink(claude.ChatEvent{Kind: claude.ChatEventTool, Tool: "Read"})
 	sink(claude.ChatEvent{Kind: claude.ChatEventTool, Tool: "Read", Detail: "src/Foo.php"})
@@ -60,7 +60,7 @@ func TestChatProgressLifecycle(t *testing.T) {
 		t.Fatalf("writing phase should have cleared the tool label: %+v", p)
 	}
 
-	finishChatProgress(5, "conv")
+	finishChatProgress("", 5, "conv")
 	if _, ok := chatProgressFor("conv"); ok {
 		t.Fatal("expected the finished turn to be forgotten")
 	}
@@ -78,12 +78,12 @@ func TestChatProgressPublishesFinalFrame(t *testing.T) {
 	resetChatProgress()
 	defer resetChatProgress()
 
-	id, sub := events.subscribe(0)
+	id, sub := events.subscribe("") // "" = every PR of every repo
 	defer events.unsubscribe(id)
 
-	startChatProgress(9, "conv-f")
-	chatProgressSink(9, "conv-f")(claude.ChatEvent{Kind: claude.ChatEventText, TextDelta: "bijna"})
-	finishChatProgress(9, "conv-f")
+	startChatProgress("", 9, "conv-f")
+	chatProgressSink("", 9, "conv-f")(claude.ChatEvent{Kind: claude.ChatEventText, TextDelta: "bijna"})
+	finishChatProgress("", 9, "conv-f")
 
 	var last busEvent
 	for len(sub.ch) > 0 {

@@ -30,6 +30,8 @@ import (
 
 // warningReviewArg is the payload of the runAgenticReview Activity.
 type warningReviewArg struct {
+	// Repo is the canonical repo string ("" = the primary repo, see repos.go).
+	Repo        string   `json:"repo,omitempty"`
 	PR          int      `json:"pr"`
 	Files       []string `json:"files"`
 	BlockCount  int      `json:"blockCount"`
@@ -90,7 +92,7 @@ func runCodeWarningReview(ctx context.Context, cl claude.Client, dataDir string,
 	if cl == nil || len(arg.Files) == 0 {
 		return nil
 	}
-	baseDir, headDir := worktreeDirs(dataDir, arg.PR)
+	baseDir, headDir := worktreeDirs(dataDir, arg.Repo, arg.PR)
 	// Which lines this PR actually changed, per file in scope — used twice: to
 	// TELL the model where it may anchor (warningPrompt) and to ENFORCE it
 	// afterwards (the changed-lines guard below), the same
@@ -359,11 +361,11 @@ func existingLineCommentsInScope(list []comments.Comment, files []string) []exis
 //
 // Best-effort: a nil store or a read error leaves the findings untouched — a
 // bookkeeping problem must never swallow a real risk.
-func dropDismissedFindings(ctx context.Context, store *warndismiss.Module, pr int, findings []warningFinding) []warningFinding {
+func dropDismissedFindings(ctx context.Context, store *warndismiss.Module, repo string, pr int, findings []warningFinding) []warningFinding {
 	if store == nil || len(findings) == 0 {
 		return findings
 	}
-	dismissed, err := store.Fingerprints(ctx, pr)
+	dismissed, err := store.Fingerprints(ctx, repo, pr)
 	if err != nil || len(dismissed) == 0 {
 		return findings
 	}
@@ -418,7 +420,7 @@ func anchoredWarning(dataDir string, pr int, blocks []Block, f warningFinding) (
 		PR: pr, File: f.File, Line: f.Line, Author: warningAuthor,
 		Body: f.Text, Source: "ai", Local: true, RowStart: -1, RowEnd: -1,
 	}
-	baseDir, headDir := worktreeDirs(dataDir, pr)
+	baseDir, headDir := worktreeDirs(dataDir, blocksRepo(blocks), pr)
 	b, ok := blockForLine(baseDir, headDir, blocks, f.File, f.Line, "RIGHT")
 	if !ok {
 		in.Kind = "ai_warning"

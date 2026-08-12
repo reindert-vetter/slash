@@ -137,6 +137,17 @@ type CleanupResult struct {
 // documents for base/head.
 var reWorktreeDir = regexp.MustCompile(`^pr-(\d+)-(base|head|chatshadow-.+)$`)
 
+// cleanupRepo scopes the whole retention pass to the PRIMARY repo (see repos.go).
+// A DELIBERATE limitation of the multi-repo work, recorded here rather than left
+// implicit: cleanup discovers candidates by PR NUMBER (from blocks/pr_ingest and
+// the worktree directory names) and reports them as bare numbers in its result,
+// so a second repo's PR 12 and the primary repo's PR 12 are indistinguishable to
+// it — and purging the wrong one would delete a reviewer's approvals. Until this
+// pass is reworked to carry (repo, number) end to end, another repo's data is
+// simply never auto-purged: it accumulates (a few worktrees + derived rows) and
+// can be removed by hand. Everything cleanup touches is derived data.
+const cleanupRepo = ""
+
 // cleanupCandidatePRs returns every PR number that currently has data on disk
 // — a union of the blocks table, the pr_ingest table, and any worktree dir
 // still present. Read-only. Using a union instead of only `blocks` makes a
@@ -146,7 +157,7 @@ var reWorktreeDir = regexp.MustCompile(`^pr-(\d+)-(base|head|chatshadow-.+)$`)
 func cleanupCandidatePRs(db *sql.DB, dataDir string) ([]int, error) {
 	seen := map[int]bool{}
 
-	rows, err := db.Query(`SELECT DISTINCT pr FROM blocks`)
+	rows, err := db.Query(`SELECT DISTINCT pr FROM blocks WHERE repo = ?`, cleanupRepo)
 	if err != nil {
 		return nil, fmt.Errorf("query blocks prs: %w", err)
 	}
@@ -164,7 +175,7 @@ func cleanupCandidatePRs(db *sql.DB, dataDir string) ([]int, error) {
 	}
 	rows.Close()
 
-	rows2, err := db.Query(`SELECT DISTINCT pr FROM pr_ingest`)
+	rows2, err := db.Query(`SELECT DISTINCT pr FROM pr_ingest WHERE repo = ?`, cleanupRepo)
 	if err != nil {
 		return nil, fmt.Errorf("query pr_ingest prs: %w", err)
 	}
@@ -295,7 +306,7 @@ type purgeDeps struct {
 func purgePR(ctx context.Context, d purgeDeps, pr int) (CleanupPurgeResult, error) {
 	res := CleanupPurgeResult{PR: pr, RowsDeleted: map[string]int{}}
 
-	n, err := removePRWorktrees(ctx, d.dataDir, pr)
+	n, err := removePRWorktrees(ctx, d.dataDir, cleanupRepo, pr)
 	if err != nil {
 		return res, fmt.Errorf("remove worktrees: %w", err)
 	}
@@ -304,7 +315,7 @@ func purgePR(ctx context.Context, d purgeDeps, pr int) (CleanupPurgeResult, erro
 	// A PR that is purged is merged/closed and gone from the review tree, so a
 	// pending ref that was never pushed has nothing left to belong to — sweeping
 	// it keeps refs/slash/pending/ from accumulating dead refs (pending_push.go).
-	removePendingRefs(ctx, pr)
+	removePendingRefs(ctx, cleanupRepo, pr)
 
 	if d.engine != nil {
 		deleted, err := deletePRWorkflowRuns(d.engine, pr)
@@ -315,70 +326,70 @@ func purgePR(ctx context.Context, d purgeDeps, pr int) (CleanupPurgeResult, erro
 	}
 
 	if d.db != nil {
-		n, err := purgePRBlocks(d.db, pr)
+		n, err := purgePRBlocks(d.db, cleanupRepo, pr)
 		if err != nil {
 			return res, fmt.Errorf("purge blocks: %w", err)
 		}
 		res.RowsDeleted["blocks"] = n
 	}
 	if d.comments != nil {
-		n, err := d.comments.Purge(ctx, pr)
+		n, err := d.comments.Purge(ctx, cleanupRepo, pr)
 		if err != nil {
 			return res, fmt.Errorf("purge comments: %w", err)
 		}
 		res.RowsDeleted["comments"] = int(n)
 	}
 	if d.approvals != nil {
-		n, err := d.approvals.Purge(ctx, pr)
+		n, err := d.approvals.Purge(ctx, cleanupRepo, pr)
 		if err != nil {
 			return res, fmt.Errorf("purge approvals: %w", err)
 		}
 		res.RowsDeleted["approvals"] = int(n)
 	}
 	if d.relations != nil {
-		n, err := d.relations.Purge(ctx, pr)
+		n, err := d.relations.Purge(ctx, cleanupRepo, pr)
 		if err != nil {
 			return res, fmt.Errorf("purge relations: %w", err)
 		}
 		res.RowsDeleted["relations"] = int(n)
 	}
 	if d.callresolve != nil {
-		n, err := d.callresolve.Purge(ctx, pr)
+		n, err := d.callresolve.Purge(ctx, cleanupRepo, pr)
 		if err != nil {
 			return res, fmt.Errorf("purge callresolve: %w", err)
 		}
 		res.RowsDeleted["callresolve"] = int(n)
 	}
 	if d.testcovers != nil {
-		n, err := d.testcovers.Purge(ctx, pr)
+		n, err := d.testcovers.Purge(ctx, cleanupRepo, pr)
 		if err != nil {
 			return res, fmt.Errorf("purge testcovers: %w", err)
 		}
 		res.RowsDeleted["testcovers"] = int(n)
 	}
 	if d.prmeta != nil {
-		n, err := d.prmeta.Purge(ctx, pr)
+		n, err := d.prmeta.Purge(ctx, cleanupRepo, pr)
 		if err != nil {
 			return res, fmt.Errorf("purge prmeta: %w", err)
 		}
 		res.RowsDeleted["prmeta"] = int(n)
 	}
 	if d.explain != nil {
-		n, err := d.explain.Purge(ctx, pr)
+		n, err := d.explain.Purge(ctx, cleanupRepo, pr)
 		if err != nil {
 			return res, fmt.Errorf("purge explanations: %w", err)
 		}
 		res.RowsDeleted["explanations"] = int(n)
 	}
 	if d.commentignore != nil {
-		n, err := d.commentignore.Purge(ctx, pr)
+		n, err := d.commentignore.Purge(ctx, cleanupRepo, pr)
 		if err != nil {
 			return res, fmt.Errorf("purge commentignore: %w", err)
 		}
 		res.RowsDeleted["commentignore"] = int(n)
 	}
 	if d.chat != nil {
-		n, err := d.chat.Purge(ctx, pr)
+		n, err := d.chat.Purge(ctx, cleanupRepo, pr)
 		if err != nil {
 			return res, fmt.Errorf("purge chat: %w", err)
 		}
@@ -393,8 +404,8 @@ func purgePR(ctx context.Context, d purgeDeps, pr int) (CleanupPurgeResult, erro
 // removePRWorktrees deregisters (best-effort) and removes pr's base/head
 // worktree directories. A directory that's already gone is simply skipped
 // (idempotent — a repeated cleanup pass never errors on it).
-func removePRWorktrees(ctx context.Context, dataDir string, pr int) (int, error) {
-	baseDir, headDir := worktreeDirs(dataDir, pr)
+func removePRWorktrees(ctx context.Context, dataDir string, repo string, pr int) (int, error) {
+	baseDir, headDir := worktreeDirs(dataDir, repo, pr)
 	n := 0
 	for _, dir := range []string{baseDir, headDir} {
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
@@ -402,7 +413,7 @@ func removePRWorktrees(ctx context.Context, dataDir string, pr int) (int, error)
 		}
 		// Deregister the git worktree first (best-effort — an already-broken
 		// or non-worktree directory just falls through to the raw removal).
-		_, _ = runGit(ctx, "worktree", "remove", "--force", dir)
+		_, _ = runGitFor(ctx, repo, "worktree", "remove", "--force", dir)
 		if err := os.RemoveAll(dir); err != nil {
 			return n, fmt.Errorf("remove %s: %w", dir, err)
 		}
@@ -427,19 +438,19 @@ func removePRWorktrees(ctx context.Context, dataDir string, pr int) (int, error)
 			continue
 		}
 		dir := filepath.Join(wtRoot, e.Name())
-		_, _ = runGit(ctx, "worktree", "remove", "--force", dir)
+		_, _ = runGitFor(ctx, repo, "worktree", "remove", "--force", dir)
 		if err := os.RemoveAll(dir); err != nil {
 			return n, fmt.Errorf("remove %s: %w", dir, err)
 		}
 		// Best-effort: also drop the shadow's own local branch (chat/<id> —
 		// see chatShadowBranch), otherwise it dangles in the shared clone
 		// forever for a conversation that never committed/pushed.
-		_, _ = runGit(ctx, "branch", "-D", "chat/"+strings.TrimPrefix(e.Name(), prefix))
+		_, _ = runGitFor(ctx, repo, "branch", "-D", "chat/"+strings.TrimPrefix(e.Name(), prefix))
 		n++
 	}
 
 	// Best-effort: clean up any leftover worktree admin entries in the main repo.
-	_, _ = runGit(ctx, "worktree", "prune")
+	_, _ = runGitFor(ctx, repo, "worktree", "prune")
 	return n, nil
 }
 

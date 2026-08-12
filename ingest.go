@@ -46,13 +46,20 @@ type ingestResult struct {
 // worktreeDirs returns absolute base/head worktree paths for a PR under
 // data/worktrees. They MUST be absolute: `git -C <repo> worktree add <dir>`
 // resolves a relative <dir> against the repo dir, not our CWD.
-func worktreeDirs(dataDir string, pr int) (base, head string) {
+func worktreeDirs(dataDir string, repo string, pr int) (base, head string) {
 	root, err := filepath.Abs(dataDir)
 	if err != nil {
 		root = dataDir
 	}
-	base = filepath.Join(root, "worktrees", fmt.Sprintf("pr-%d-base", pr))
-	head = filepath.Join(root, "worktrees", fmt.Sprintf("pr-%d-head", pr))
+	// A second repo's worktrees carry its key up front ("ops-pr-12-base"), so the
+	// primary repo's directory names — which cleanup.go's scanner and every
+	// existing on-disk worktree already use — stay exactly "pr-<n>-base|head".
+	prefix := ""
+	if repo != "" {
+		prefix = repoKeyOf(repo) + "-"
+	}
+	base = filepath.Join(root, "worktrees", fmt.Sprintf("%spr-%d-base", prefix, pr))
+	head = filepath.Join(root, "worktrees", fmt.Sprintf("%spr-%d-head", prefix, pr))
 	return base, head
 }
 
@@ -71,17 +78,17 @@ type worktreeSHAs struct {
 // locally reachable, and materializes the base/head worktrees. This is the
 // side-effecting first step of the ingest pipeline (network + git), run as the
 // ingest workflow's "prepareWorktrees" Activity.
-func prepareIngestWorktrees(ctx context.Context, dataDir string, pr int) (worktreeSHAs, error) {
+func prepareIngestWorktrees(ctx context.Context, dataDir string, repo string, pr int) (worktreeSHAs, error) {
 	ingestMu.Lock()
 	defer ingestMu.Unlock()
-	return prepareIngestWorktreesLocked(ctx, dataDir, pr)
+	return prepareIngestWorktreesLocked(ctx, dataDir, repo, pr)
 }
 
 // prepareIngestWorktreesLocked is prepareIngestWorktrees's body, extracted so
 // refreshIngestDelta (which already holds ingestMu) can fall back to a full
 // ingest without re-locking a non-reentrant mutex.
-func prepareIngestWorktreesLocked(ctx context.Context, dataDir string, pr int) (worktreeSHAs, error) {
-	meta, err := fetchPRMeta(ctx, "", pr)
+func prepareIngestWorktreesLocked(ctx context.Context, dataDir string, repo string, pr int) (worktreeSHAs, error) {
+	meta, err := fetchPRMeta(ctx, repo, pr)
 	if err != nil {
 		return worktreeSHAs{}, err
 	}
@@ -91,15 +98,15 @@ func prepareIngestWorktreesLocked(ctx context.Context, dataDir string, pr int) (
 	}
 	log.Printf("ingest pr %d: base=%s head=%s files=%d", pr, short(baseSHA), short(headSHA), len(meta.Files))
 
-	if err := ensureCommits(ctx, "", pr, baseSHA, headSHA); err != nil {
+	if err := ensureCommits(ctx, repo, pr, baseSHA, headSHA); err != nil {
 		return worktreeSHAs{}, err
 	}
 
-	baseDir, headDir := worktreeDirs(dataDir, pr)
-	if err := ensureWorktree(ctx, "", baseDir, baseSHA); err != nil {
+	baseDir, headDir := worktreeDirs(dataDir, repo, pr)
+	if err := ensureWorktree(ctx, repo, baseDir, baseSHA); err != nil {
 		return worktreeSHAs{}, fmt.Errorf("base worktree: %w", err)
 	}
-	if err := ensureWorktree(ctx, "", headDir, headSHA); err != nil {
+	if err := ensureWorktree(ctx, repo, headDir, headSHA); err != nil {
 		return worktreeSHAs{}, fmt.Errorf("head worktree: %w", err)
 	}
 
@@ -114,16 +121,16 @@ func prepareIngestWorktreesLocked(ctx context.Context, dataDir string, pr int) (
 // touched PHP files, and full-swaps the resulting blocks into the DB. This is
 // the side-effecting second step of the ingest pipeline (git diff + file reads
 // + DB write), run as the ingest workflow's "scanAndStoreBlocks" Activity.
-func scanAndStoreIngestBlocks(ctx context.Context, db *sql.DB, dataDir string, pr int, shas worktreeSHAs) (*ingestResult, error) {
+func scanAndStoreIngestBlocks(ctx context.Context, db *sql.DB, dataDir string, repo string, pr int, shas worktreeSHAs) (*ingestResult, error) {
 	ingestMu.Lock()
 	defer ingestMu.Unlock()
-	return scanAndStoreIngestBlocksLocked(ctx, db, dataDir, pr, shas)
+	return scanAndStoreIngestBlocksLocked(ctx, db, dataDir, repo, pr, shas)
 }
 
 // scanAndStoreIngestBlocksLocked is scanAndStoreIngestBlocks's body, extracted
 // so refreshIngestDelta (which already holds ingestMu) can fall back to a full
 // ingest without re-locking a non-reentrant mutex.
-func scanAndStoreIngestBlocksLocked(ctx context.Context, db *sql.DB, dataDir string, pr int, shas worktreeSHAs) (*ingestResult, error) {
+func scanAndStoreIngestBlocksLocked(ctx context.Context, db *sql.DB, dataDir string, repo string, pr int, shas worktreeSHAs) (*ingestResult, error) {
 	res := &ingestResult{PR: pr, ByStatus: map[string]int{}}
 
 	// Read the SHAs the blocks table currently holds BEFORE replacing it, so the
@@ -137,7 +144,7 @@ func scanAndStoreIngestBlocksLocked(ctx context.Context, db *sql.DB, dataDir str
 	//
 	// Absent (no prior ingest) is the normal first-ingest case: nothing can be
 	// stale yet, and the empty SHAs make the approval remap a no-op.
-	prevBase, prevHead, _, err := loadIngestSHAs(db, pr)
+	prevBase, prevHead, _, err := loadIngestSHAs(db, repo, pr)
 	if err != nil {
 		return nil, fmt.Errorf("load previous ingest state: %w", err)
 	}
@@ -147,13 +154,13 @@ func scanAndStoreIngestBlocksLocked(ctx context.Context, db *sql.DB, dataDir str
 	// went stale before this pass existed.
 	res.ChangedFiles = shas.Paths
 
-	baseDir, headDir := worktreeDirs(dataDir, pr)
+	baseDir, headDir := worktreeDirs(dataDir, repo, pr)
 
 	// Detect git renames (default -M threshold) so a moved file is scanned as
 	// one logical file (old blocks from the pre-rename path in the base
 	// worktree, new blocks from the head path) instead of a removed+added pair.
 	// Best-effort: a failure just means no rename pairing.
-	renames, rerr := detectRenames(ctx, "", shas.BaseSHA, shas.HeadSHA)
+	renames, rerr := detectRenames(ctx, repo, shas.BaseSHA, shas.HeadSHA)
 	if rerr != nil {
 		log.Printf("ingest pr %d: rename detection failed (continuing without): %v", pr, rerr)
 		renames = nil
@@ -179,7 +186,7 @@ func scanAndStoreIngestBlocksLocked(ctx context.Context, db *sql.DB, dataDir str
 		diffPaths = append(diffPaths, old)
 	}
 
-	rawDiff, err := diffBetweenSHAs(ctx, "", shas.BaseSHA, shas.HeadSHA, diffPaths)
+	rawDiff, err := diffBetweenSHAs(ctx, repo, shas.BaseSHA, shas.HeadSHA, diffPaths)
 	if err != nil {
 		return nil, fmt.Errorf("diff: %w", err)
 	}
@@ -194,12 +201,12 @@ func scanAndStoreIngestBlocksLocked(ctx context.Context, db *sql.DB, dataDir str
 		return nil, fmt.Errorf("pr %d: parsed zero blocks from %d files", pr, len(scanPaths))
 	}
 
-	if err := replacePRBlocks(db, pr, blocks); err != nil {
+	if err := replacePRBlocks(db, repo, pr, blocks); err != nil {
 		return nil, err
 	}
 	// Record the SHAs this full ingest populated the blocks table from, so a
 	// later refreshIngestDelta knows exactly which head SHA to diff from.
-	if err := saveIngestSHAs(db, pr, shas.BaseSHA, shas.HeadSHA); err != nil {
+	if err := saveIngestSHAs(db, repo, pr, shas.BaseSHA, shas.HeadSHA); err != nil {
 		return nil, fmt.Errorf("save ingest shas: %w", err)
 	}
 
@@ -226,11 +233,11 @@ const ingestTimeout = 5 * time.Minute
 // scanAndStoreIngestBlocks — the very same full per-PR swap a manual
 // `POST /api/ingest` performs). This is the ingest workflow's
 // "refreshIngestDelta" Activity, driven by pr_status's SignalPRState branch.
-func refreshIngestDelta(ctx context.Context, db *sql.DB, dataDir string, pr int, baseSHA, headSHA string) (*ingestResult, error) {
+func refreshIngestDelta(ctx context.Context, db *sql.DB, dataDir string, repo string, pr int, baseSHA, headSHA string) (*ingestResult, error) {
 	ingestMu.Lock()
 	defer ingestMu.Unlock()
 
-	prevBase, prevHead, ok, err := loadIngestSHAs(db, pr)
+	prevBase, prevHead, ok, err := loadIngestSHAs(db, repo, pr)
 	if err != nil {
 		return nil, fmt.Errorf("load ingest state: %w", err)
 	}
@@ -241,17 +248,17 @@ func refreshIngestDelta(ctx context.Context, db *sql.DB, dataDir string, pr int,
 		return &ingestResult{PR: pr, Skipped: true}, nil
 	}
 
-	if err := ensureCommits(ctx, "", pr, baseSHA, headSHA); err != nil {
+	if err := ensureCommits(ctx, repo, pr, baseSHA, headSHA); err != nil {
 		return nil, fmt.Errorf("ensure commits: %w", err)
 	}
 
 	if baseSHA != prevBase {
 		log.Printf("ingest refresh pr %d: base sha changed (%s -> %s), falling back to full ingest", pr, short(prevBase), short(baseSHA))
-		shas, err := prepareIngestWorktreesLocked(ctx, dataDir, pr)
+		shas, err := prepareIngestWorktreesLocked(ctx, dataDir, repo, pr)
 		if err != nil {
 			return nil, fmt.Errorf("full ingest fallback: prepare worktrees: %w", err)
 		}
-		full, err := scanAndStoreIngestBlocksLocked(ctx, db, dataDir, pr, shas)
+		full, err := scanAndStoreIngestBlocksLocked(ctx, db, dataDir, repo, pr, shas)
 		if err != nil {
 			return nil, fmt.Errorf("full ingest fallback: scan and store: %w", err)
 		}
@@ -262,23 +269,23 @@ func refreshIngestDelta(ctx context.Context, db *sql.DB, dataDir string, pr int,
 		return full, nil
 	}
 
-	baseDir, headDir := worktreeDirs(dataDir, pr)
-	if err := updateWorktree(ctx, "", headDir, headSHA); err != nil {
+	baseDir, headDir := worktreeDirs(dataDir, repo, pr)
+	if err := updateWorktree(ctx, repo, headDir, headSHA); err != nil {
 		return nil, fmt.Errorf("update head worktree: %w", err)
 	}
 
-	deltaFiles, err := changedFileNames(ctx, "", prevHead, headSHA)
+	deltaFiles, err := changedFileNames(ctx, repo, prevHead, headSHA)
 	if err != nil {
 		return nil, fmt.Errorf("changed files: %w", err)
 	}
 	if len(deltaFiles) == 0 {
-		if err := saveIngestSHAs(db, pr, baseSHA, headSHA); err != nil {
+		if err := saveIngestSHAs(db, repo, pr, baseSHA, headSHA); err != nil {
 			return nil, fmt.Errorf("save ingest shas: %w", err)
 		}
 		return &ingestResult{PR: pr, Skipped: true}, nil
 	}
 
-	rawDiff, err := diffBetweenSHAs(ctx, "", baseSHA, headSHA, deltaFiles)
+	rawDiff, err := diffBetweenSHAs(ctx, repo, baseSHA, headSHA, deltaFiles)
 	if err != nil {
 		return nil, fmt.Errorf("diff delta files: %w", err)
 	}
@@ -291,10 +298,10 @@ func refreshIngestDelta(ctx context.Context, db *sql.DB, dataDir string, pr int,
 		log.Printf("ingest refresh pr %d: parse warning: %v", pr, e)
 	}
 
-	if err := upsertPRFileBlocks(db, pr, deltaFiles, blocks); err != nil {
+	if err := upsertPRFileBlocks(db, repo, pr, deltaFiles, blocks); err != nil {
 		return nil, fmt.Errorf("upsert delta blocks: %w", err)
 	}
-	if err := saveIngestSHAs(db, pr, baseSHA, headSHA); err != nil {
+	if err := saveIngestSHAs(db, repo, pr, baseSHA, headSHA); err != nil {
 		return nil, fmt.Errorf("save ingest shas: %w", err)
 	}
 

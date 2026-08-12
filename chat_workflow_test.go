@@ -574,7 +574,7 @@ func startTestComment(t *testing.T, m *TaskManager, pr int, commentID string) st
 // Run ID.
 func listReplies(t *testing.T, m *TaskManager, runID string) []comments.Reaction {
 	t.Helper()
-	list, err := m.comments.List(context.Background(), 0)
+	list, err := m.comments.List(context.Background(), "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -590,7 +590,7 @@ func listReplies(t *testing.T, m *TaskManager, runID string) []comments.Reaction
 func waitForComment(t *testing.T, m *TaskManager, runID string, ok func([]comments.Comment) bool) {
 	t.Helper()
 	waitFor(t, func() bool {
-		list, err := m.comments.List(context.Background(), 0)
+		list, err := m.comments.List(context.Background(), "", 0)
 		if err != nil {
 			return false
 		}
@@ -727,7 +727,7 @@ func TestChatTurnMessageIDsAreDerivedFromTheTurn(t *testing.T) {
 	// the first turn's session id is silently dropped and the replay below
 	// starts a SECOND fake session (which, with the Fake's per-session turn
 	// cursor, would replay turn 1 instead of moving on to turn 2).
-	if err := cm.EnsureConversation(ctx, commentID, pr); err != nil {
+	if err := cm.EnsureConversation(ctx, commentID, "", pr); err != nil {
 		t.Fatal(err)
 	}
 	arg := chatTurnInput{PR: pr, ConversationID: commentID, Body: "Hoi", TurnID: "msg-42"}
@@ -768,7 +768,7 @@ func TestChatTurnPublishesProgressButPersistsOnlyTheResult(t *testing.T) {
 	ctx := context.Background()
 	const pr, commentID = 970711, "comment-progress"
 
-	id, sub := events.subscribe(pr)
+	id, sub := events.subscribe(statusKey("", pr))
 	defer events.unsubscribe(id)
 
 	fake.SetChatTurns("Hallo daar")
@@ -1155,7 +1155,7 @@ func TestClaudeChatAutoLandsPendingShadowWorkAfterATurn(t *testing.T) {
 	// (or this same turn — the check doesn't care which), leaves behind: a real
 	// local commit in the shadow worktree that never made it onto the PR's
 	// pending ref.
-	dir, err := ensureChatShadowWorktreeAt(ctx, dataDir, pr, commentID, headRefName)
+	dir, err := ensureChatShadowWorktreeAt(ctx, dataDir, "", pr, commentID, headRefName)
 	if err != nil {
 		t.Fatalf("ensure shadow worktree: %v", err)
 	}
@@ -1203,8 +1203,8 @@ func TestClaudeChatAutoLandsPendingShadowWorkAfterATurn(t *testing.T) {
 	}
 
 	// The pending ref now really holds the edit...
-	ref := prPendingRef(pr, headRefName)
-	sha := pendingRefSHA(ctx, ref)
+	ref := prPendingRef("", pr, headRefName)
+	sha := pendingRefSHA(ctx, "", ref)
 	if sha == "" {
 		t.Fatal("pending ref does not exist after the auto-land")
 	}

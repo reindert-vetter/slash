@@ -154,7 +154,7 @@ func TestAutoResolveOrphanedRemovalRequestResolvesComment(t *testing.T) {
 	// gone from the PR's own blocks, so the comment on it orphans.
 	other := Block{PR: pr, File: "Foo.php", Class: "Foo", Name: "subtotal",
 		Line: 3, EndLine: 6, Label: "Foo::subtotal", Status: "added", Side: "new"}
-	if err := replacePRBlocks(mustOpenGraphDB(t, dir), pr, []Block{other}); err != nil {
+	if err := replacePRBlocks(mustOpenGraphDB(t, dir), "", pr, []Block{other}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -170,7 +170,7 @@ func TestAutoResolveOrphanedRemovalRequestResolvesComment(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
-		got, _ := cs.List(context.Background(), pr)
+		got, _ := cs.List(context.Background(), "", pr)
 		return len(got) == 1
 	})
 
@@ -180,11 +180,11 @@ func TestAutoResolveOrphanedRemovalRequestResolvesComment(t *testing.T) {
 	}
 
 	waitFor(t, func() bool {
-		got, _ := cs.List(context.Background(), pr)
+		got, _ := cs.List(context.Background(), "", pr)
 		return len(got) == 1 && got[0].Status == "resolved"
 	})
 
-	got, err := cs.List(context.Background(), pr)
+	got, err := cs.List(context.Background(), "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +231,7 @@ func TestAutoResolveSkipsWhenReplyExists(t *testing.T) {
 	writeWorktreeFile(t, dir, pr, "Foo.php", src, src)
 	other := Block{PR: pr, File: "Foo.php", Class: "Foo", Name: "subtotal",
 		Line: 3, EndLine: 6, Label: "Foo::subtotal", Status: "added", Side: "new"}
-	if err := replacePRBlocks(mustOpenGraphDB(t, dir), pr, []Block{other}); err != nil {
+	if err := replacePRBlocks(mustOpenGraphDB(t, dir), "", pr, []Block{other}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -247,14 +247,14 @@ func TestAutoResolveSkipsWhenReplyExists(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
-		got, _ := cs.List(context.Background(), pr)
+		got, _ := cs.List(context.Background(), "", pr)
 		return len(got) == 1
 	})
 	if err := m.Signal(runID, ReactionSignal{ID: "r1", Source: "ui", Author: "reviewer", Body: "onderzoek ik"}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
-		got, _ := cs.List(context.Background(), pr)
+		got, _ := cs.List(context.Background(), "", pr)
 		return len(got) == 1 && got[0].ReactionCount == 1
 	})
 
@@ -266,7 +266,7 @@ func TestAutoResolveSkipsWhenReplyExists(t *testing.T) {
 		t.Errorf("claude was called %d time(s), want 0 — the guardrail must gate before the LLM call", fake.CallCount())
 	}
 
-	got, err := cs.List(context.Background(), pr)
+	got, err := cs.List(context.Background(), "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +287,7 @@ func TestAutoResolveSkipsAlreadyResolvedComment(t *testing.T) {
 	writeWorktreeFile(t, dir, pr, "Foo.php", src, src)
 	other := Block{PR: pr, File: "Foo.php", Class: "Foo", Name: "subtotal",
 		Line: 3, EndLine: 6, Label: "Foo::subtotal", Status: "added", Side: "new"}
-	if err := replacePRBlocks(mustOpenGraphDB(t, dir), pr, []Block{other}); err != nil {
+	if err := replacePRBlocks(mustOpenGraphDB(t, dir), "", pr, []Block{other}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -303,7 +303,7 @@ func TestAutoResolveSkipsAlreadyResolvedComment(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
-		got, _ := cs.List(context.Background(), pr)
+		got, _ := cs.List(context.Background(), "", pr)
 		return len(got) == 1
 	})
 	// Manually resolved already, unrelated to auto-resolve.
@@ -311,7 +311,7 @@ func TestAutoResolveSkipsAlreadyResolvedComment(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
-		got, _ := cs.List(context.Background(), pr)
+		got, _ := cs.List(context.Background(), "", pr)
 		return len(got) == 1 && got[0].Status == "resolved"
 	})
 
@@ -323,7 +323,7 @@ func TestAutoResolveSkipsAlreadyResolvedComment(t *testing.T) {
 		t.Errorf("claude was called %d time(s), want 0", fake.CallCount())
 	}
 
-	got, err := cs.List(context.Background(), pr)
+	got, err := cs.List(context.Background(), "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +340,7 @@ func TestAutoResolveNeverTriggersOnUnpinned(t *testing.T) {
 	old := fooPHP("$x = 1;", "return $x;")
 	head := fooPHP("$x = 1;", "return $x * 2;") // the anchored line itself was edited
 	writeWorktreeFile(t, dir, pr, "Foo.php", old, head)
-	if err := replacePRBlocks(mustOpenGraphDB(t, dir), pr, []Block{fooBlock(pr)}); err != nil {
+	if err := replacePRBlocks(mustOpenGraphDB(t, dir), "", pr, []Block{fooBlock(pr)}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -355,7 +355,7 @@ func TestAutoResolveNeverTriggersOnUnpinned(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
-		got, _ := cs.List(context.Background(), pr)
+		got, _ := cs.List(context.Background(), "", pr)
 		return len(got) == 1
 	})
 
@@ -367,7 +367,7 @@ func TestAutoResolveNeverTriggersOnUnpinned(t *testing.T) {
 		t.Errorf("claude was called %d time(s), want 0 — only AnchorOrphan may trigger the check", fake.CallCount())
 	}
 
-	got, err := cs.List(context.Background(), pr)
+	got, err := cs.List(context.Background(), "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,7 +388,7 @@ func TestAutoResolveOfflineIsNoOp(t *testing.T) {
 	writeWorktreeFile(t, dir, pr, "Foo.php", src, src)
 	other := Block{PR: pr, File: "Foo.php", Class: "Foo", Name: "subtotal",
 		Line: 3, EndLine: 6, Label: "Foo::subtotal", Status: "added", Side: "new"}
-	if err := replacePRBlocks(mustOpenGraphDB(t, dir), pr, []Block{other}); err != nil {
+	if err := replacePRBlocks(mustOpenGraphDB(t, dir), "", pr, []Block{other}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -402,7 +402,7 @@ func TestAutoResolveOfflineIsNoOp(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
-		got, _ := cs.List(context.Background(), pr)
+		got, _ := cs.List(context.Background(), "", pr)
 		return len(got) == 1
 	})
 
@@ -411,7 +411,7 @@ func TestAutoResolveOfflineIsNoOp(t *testing.T) {
 		t.Fatalf("AutoResolved = %d, want 0 with no claude client", res.AutoResolved)
 	}
 
-	got, err := cs.List(context.Background(), pr)
+	got, err := cs.List(context.Background(), "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}

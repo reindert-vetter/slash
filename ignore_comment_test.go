@@ -37,7 +37,7 @@ func TestIgnoreCommentWorkflow(t *testing.T) {
 	ctx := context.Background()
 	const pr = 12903
 
-	runID, err := m.EnsureIgnoreComment(pr)
+	runID, err := m.EnsureIgnoreComment("", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestIgnoreCommentWorkflow(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
-		got, _ := ci.List(ctx, pr)
+		got, _ := ci.List(ctx, "", pr)
 		return len(got) == 1 && got[0] == "c-1"
 	})
 
@@ -57,7 +57,7 @@ func TestIgnoreCommentWorkflow(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
-		got, _ := ci.List(ctx, pr)
+		got, _ := ci.List(ctx, "", pr)
 		return len(got) == 2
 	})
 
@@ -66,12 +66,12 @@ func TestIgnoreCommentWorkflow(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
-		got, _ := ci.List(ctx, pr)
+		got, _ := ci.List(ctx, "", pr)
 		return len(got) == 1 && got[0] == "c-2"
 	})
 
 	// Idempotent per PR: a second call reuses the same Execution.
-	again, err := m.EnsureIgnoreComment(pr)
+	again, err := m.EnsureIgnoreComment("", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,14 +80,14 @@ func TestIgnoreCommentWorkflow(t *testing.T) {
 	}
 
 	// A different PR gets its own tracker, and its state stays separate.
-	otherRun, err := m.EnsureIgnoreComment(pr + 1)
+	otherRun, err := m.EnsureIgnoreComment("", pr+1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if otherRun == runID {
 		t.Fatal("EnsureIgnoreComment reused one tracker across two PRs")
 	}
-	if got, _ := ci.List(ctx, pr+1); len(got) != 0 {
+	if got, _ := ci.List(ctx, "", pr+1); len(got) != 0 {
 		t.Fatalf("other PR should start empty, got %v", got)
 	}
 }
@@ -99,13 +99,13 @@ func TestEnsureIgnoreCommentReusesRunAfterRestart(t *testing.T) {
 	m, _, _ := newIgnoreCommentManager(t)
 	const pr = 7
 
-	runID, err := m.EnsureIgnoreComment(pr)
+	runID, err := m.EnsureIgnoreComment("", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Simulate a fresh process: same engine/store, no cached Run ID.
-	m.ignRuns = map[int]string{}
-	again, err := m.EnsureIgnoreComment(pr)
+	m.ignRuns = map[prKey]string{}
+	again, err := m.EnsureIgnoreComment("", pr)
 	if err != nil {
 		t.Fatal(err)
 	}

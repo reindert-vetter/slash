@@ -16,7 +16,7 @@ import (
 // interface-typed constructor-promoted property.
 func writeInterfaceFixtureRepo(t *testing.T, dataDir string, pr int) {
 	t.Helper()
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"packages/Contracts/DriverInterface.php": `<?php
 namespace Packages\Contracts;

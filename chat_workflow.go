@@ -26,6 +26,11 @@ import (
 // earlier conversation) means no chat, so the reviewer never gets a placeholder
 // comment they didn't ask for.
 type ClaudeChatInput struct {
+	// Repo is the canonical repo string this PR belongs to: "" (absent) for the
+	// primary repo — which is what every Execution started before multi-repo
+	// existed carries, so replay of a stored history is unaffected — and
+	// "owner/name" for any other configured repo. See repos.go.
+	Repo      string `json:"repo,omitempty"`
 	PR        int    `json:"pr"`
 	CommentID string `json:"commentId"`
 }
@@ -387,6 +392,11 @@ const chatAutoLandTurnSuffix = "-autoland"
 // the wording of a failed attempt's bubble, and they come from the workflow's
 // own loop counter, so both stay deterministic under replay.
 type chatTurnInput struct {
+	// Repo is the canonical repo string this PR belongs to: "" (absent) for the
+	// primary repo — which is what every Execution started before multi-repo
+	// existed carries, so replay of a stored history is unaffected — and
+	// "owner/name" for any other configured repo. See repos.go.
+	Repo           string `json:"repo,omitempty"`
 	PR             int    `json:"pr"`
 	ConversationID string `json:"conversationId"`
 	Body           string `json:"body"`
@@ -438,6 +448,11 @@ func runChatTurnWithRetries(w *tembed.Workflow, turn chatTurnInput) (chatTurnRes
 
 // chatCommitInput is commitChatShadowEdits's own Activity input (chat_shadow.go).
 type chatCommitInput struct {
+	// Repo is the canonical repo string this PR belongs to: "" (absent) for the
+	// primary repo — which is what every Execution started before multi-repo
+	// existed carries, so replay of a stored history is unaffected — and
+	// "owner/name" for any other configured repo. See repos.go.
+	Repo           string `json:"repo,omitempty"`
 	PR             int    `json:"pr"`
 	ConversationID string `json:"conversationId"`
 	TurnID         string `json:"turnId,omitempty"`
@@ -514,6 +529,11 @@ type commentActionDirective struct {
 
 // chatCommentActionInput is applyChatCommentAction's own Activity input.
 type chatCommentActionInput struct {
+	// Repo is the canonical repo string this PR belongs to: "" (absent) for the
+	// primary repo — which is what every Execution started before multi-repo
+	// existed carries, so replay of a stored history is unaffected — and
+	// "owner/name" for any other configured repo. See repos.go.
+	Repo           string                 `json:"repo,omitempty"`
 	PR             int                    `json:"pr"`
 	ConversationID string                 `json:"conversationId"`
 	Directive      commentActionDirective `json:"directive"`
@@ -659,8 +679,8 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 	// moment and grow with what the CLI streams back. None of it is persisted
 	// or fed back into the Activity's result — see the OnEvent doc comment in
 	// modules/claude.
-	startChatProgress(arg.PR, arg.ConversationID)
-	defer finishChatProgress(arg.PR, arg.ConversationID)
+	startChatProgress(arg.Repo, arg.PR, arg.ConversationID)
+	defer finishChatProgress(arg.Repo, arg.PR, arg.ConversationID)
 
 	// t0/logTurnMilestone: a purely operational timing log (server.log), not
 	// reviewer-facing and not persisted anywhere — same carve-out as
@@ -679,7 +699,7 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 
 	sessionID, _ := cm.GetSession(ctx, arg.ConversationID)
 	model := chatModelForAttempt(arg.Attempt)
-	sink := chatProgressSink(arg.PR, arg.ConversationID)
+	sink := chatProgressSink(arg.Repo, arg.PR, arg.ConversationID)
 	loggedFirstEvent, loggedFirstContent := false, false
 	onEvent := func(ev claude.ChatEvent) {
 		if !loggedFirstEvent {
@@ -702,7 +722,7 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 		SystemPrompt: claude.ChatSystemPrompt,
 		OnEvent:      onEvent,
 	}
-	if dir, ok := prepareChatReadOnlyWorkDir(dataDir, arg.PR); ok {
+	if dir, ok := prepareChatReadOnlyWorkDir(dataDir, arg.Repo, arg.PR); ok {
 		hadReadOnly = true
 		req.WorkDir = dir
 		req.Tools = []string{"Read", "Grep", "Glob"}
@@ -714,7 +734,7 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 	// gestart — wachten op Claude" phase, kept distinct from the preceding
 	// "Werkmap klaarzetten…" — see chatPhaseStarting/chatPhasePreparing in
 	// chat_progress.go.
-	advanceChatProgress(arg.PR, arg.ConversationID, chatPhaseStarting)
+	advanceChatProgress(arg.Repo, arg.PR, arg.ConversationID, chatPhaseStarting)
 	result, err := cl.RunChat(ctx, req)
 	logTurnMilestone("claude CLI (read-only attempt) returned after %v (err=%v)", time.Since(t0), err)
 	if err != nil {
@@ -731,7 +751,7 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 	// reviewer's own original message (already in that session's history).
 	hadShell := false
 	if isNeedWriteDirective(result.Text) {
-		dir, ok := prepareChatShellWorkDir(ctx, tm, dataDir, arg.PR, arg.ConversationID)
+		dir, ok := prepareChatShellWorkDir(ctx, tm, dataDir, arg.Repo, arg.PR, arg.ConversationID)
 		if !ok {
 			msg := chat.Message{
 				ID: chatMessageID(arg.TurnID, ""), ConversationID: arg.ConversationID, PR: arg.PR,
@@ -813,7 +833,7 @@ const chatProgressThrottle = 120 * time.Millisecond
 // streamed ChatEvents onto the conversation's volatile progress snapshot and
 // pushes it out. Called serially from RunChat's own single reader goroutine
 // (see RunRequest.OnEvent), so the captured lastPublish needs no lock.
-func chatProgressSink(pr int, conversationID string) func(claude.ChatEvent) {
+func chatProgressSink(repo string, pr int, conversationID string) func(claude.ChatEvent) {
 	var lastPublish time.Time
 	return func(ev claude.ChatEvent) {
 		snap, ok := mutateChatProgress(conversationID, func(p *chatProgress) {
@@ -845,7 +865,7 @@ func chatProgressSink(pr int, conversationID string) func(claude.ChatEvent) {
 			return
 		}
 		lastPublish = time.Now()
-		publishChatProgress(pr, conversationID, snap)
+		publishChatProgress(repo, pr, conversationID, snap)
 	}
 }
 

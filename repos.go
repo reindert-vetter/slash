@@ -313,7 +313,19 @@ func repoFor(repo string) repoConfig {
 func repoSlugFor(repo string) string { return repoFor(repo).Slug }
 
 // repoDirFor is the local clone of a canonical repo string, tilde-expanded.
-func repoDirFor(repo string) string { return expandTilde(repoFor(repo).Dir) }
+//
+// SLASH_REPO_DIR is honoured HERE, per call, for the primary repo — not only at
+// init: a test (and the Playwright harness) sets that env var around a temp git
+// repo, sometimes after the registry was already built, and a value cached at
+// init would silently point at the real ~/dev clone instead.
+func repoDirFor(repo string) string {
+	if repo == "" {
+		if env := strings.TrimSpace(repoDirEnv()); env != "" {
+			return expandTilde(env)
+		}
+	}
+	return expandTilde(repoFor(repo).Dir)
+}
 
 // baseBranchFor is the branch ensureCommits fetches for this repo's PRs.
 func baseBranchFor(repo string) string { return repoFor(repo).BaseBranch }

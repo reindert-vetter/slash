@@ -73,7 +73,7 @@ func TestResolveTestCoversHaikuConfident(t *testing.T) {
 func TestResolveTestCoversHaikuFoundFoldsLeadingPHPDoc(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 38
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"app/Models/Order.php": "<?php\n" +
 			"namespace App\\Models;\n" +
@@ -198,7 +198,7 @@ func TestResolveTestCoversVerificationRejectsBogus(t *testing.T) {
 
 func onlyTestCoverEntry(t *testing.T, tc *testcovers.Module, pr int) testcovers.Entry {
 	t.Helper()
-	list, err := tc.List(context.Background(), pr)
+	list, err := tc.List(context.Background(), "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +220,7 @@ func testBlockID(pr int, file, class, name string) string {
 // than one).
 func findTestCoverEntry(t *testing.T, tc *testcovers.Module, pr int, testID string) testcovers.Entry {
 	t.Helper()
-	list, err := tc.List(context.Background(), pr)
+	list, err := tc.List(context.Background(), "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -467,13 +467,13 @@ func TestAutoStartResolveTestCoversOnBuildRelations(t *testing.T) {
 
 	fake := claude.NewFake() // no programmed output → every search ends in "notfound"
 	m, db, tc := autoResolveTestCoversManager(t, dataDir, fake)
-	if err := replacePRBlocks(db, pr, blocks); err != nil {
+	if err := replacePRBlocks(db, "", pr, blocks); err != nil {
 		t.Fatal(err)
 	}
 	testID := testBlock.ID()
 
 	ctx := context.Background()
-	m.EnsureRelations(ctx, pr) // must return without waiting for the auto-search
+	m.EnsureRelations(ctx, "", pr) // must return without waiting for the auto-search
 
 	waitFor(t, func() bool {
 		e, ok := findCoverEntry(mustTestCoversList(t, tc, pr), testID, "class:Order")
@@ -486,7 +486,7 @@ func TestAutoStartResolveTestCoversOnBuildRelations(t *testing.T) {
 	// Rebuild with nothing changed: the Go rescan still emits the same
 	// unresolved class-level-only target and UpsertGo resets the notfound row
 	// back to unresolved — but the auto-trigger must not search it again.
-	m.EnsureRelations(ctx, pr)
+	m.EnsureRelations(ctx, "", pr)
 	// Nothing SHOULD happen here (already attempted), so there is no positive
 	// condition to poll for — give any (wrongly re-triggered) background
 	// search a moment to run before asserting the count didn't grow.
@@ -499,7 +499,7 @@ func TestAutoStartResolveTestCoversOnBuildRelations(t *testing.T) {
 // mustTestCoversList mirrors mustCallresolveList.
 func mustTestCoversList(t *testing.T, tc *testcovers.Module, pr int) []testcovers.Entry {
 	t.Helper()
-	list, err := tc.List(context.Background(), pr)
+	list, err := tc.List(context.Background(), "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}

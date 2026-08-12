@@ -91,25 +91,35 @@ const (
 // publishCallResolveChanged/publishTestCoversChanged are the two callresolve/
 // testcovers publishers, mirroring publishChatChanged (chat_progress.go): a
 // volatile "refetch me" nudge, never the new rows themselves.
-func publishCallResolveChanged(pr int) { events.publish(eventCallResolveChanged, pr, "", nil) }
-func publishTestCoversChanged(pr int)  { events.publish(eventTestCoversChanged, pr, "", nil) }
+func publishCallResolveChanged(repo string, pr int) {
+	events.publish(eventCallResolveChanged, repo, pr, "", nil)
+}
+func publishTestCoversChanged(repo string, pr int) {
+	events.publish(eventTestCoversChanged, repo, pr, "", nil)
+}
 
 // publishPendingPushChanged nudges every tab watching this PR to refetch
 // GET /api/pending-push (the todo row at the bottom of the block index and the
 // PR-overview's own "ongepusht" pill).
-func publishPendingPushChanged(pr int) { events.publish(eventPendingPushChanged, pr, "", nil) }
+func publishPendingPushChanged(repo string, pr int) {
+	events.publish(eventPendingPushChanged, repo, pr, "", nil)
+}
 
 // publishBlocksChanged nudges every tab watching this PR that its blocks were
 // swapped (an ingest refresh pulled in new commits, or a full re-ingest ran).
 // Same rule as every other event: it carries nothing and is never the truth —
 // GET /api/blocks stays the read, so a dropped frame costs at most one notice.
-func publishBlocksChanged(pr int) { events.publish(eventBlocksChanged, pr, "", nil) }
+func publishBlocksChanged(repo string, pr int) { events.publish(eventBlocksChanged, repo, pr, "", nil) }
 
 // busEvent is one multiplexed message. Data is pre-marshalled at publish time
 // so the hub never holds a live pointer into a caller's struct (which the
 // caller would then keep mutating while several connections read it).
 type busEvent struct {
-	Type string          `json:"type"`
+	Type string `json:"type"`
+	// Repo is the canonical repo string of the PR this event is about ("" = the
+	// primary repo, omitted from the JSON — so a primary-repo frame is
+	// byte-identical to what a single-repo build sent).
+	Repo string          `json:"repo,omitempty"`
 	PR   int             `json:"pr,omitempty"`
 	Key  string          `json:"key,omitempty"`
 	Seq  uint64          `json:"seq"`
@@ -122,7 +132,9 @@ type busEvent struct {
 const eventSubBuffer = 64
 
 type eventSub struct {
-	pr      int // 0 = every PR (and every PR-less event)
+	// scope is the PR this connection watches, as a statusKey ("13000",
+	// "owner/name#12"); "" = every PR (and every PR-less event).
+	scope   string
 	ch      chan busEvent
 	dropped atomic.Bool
 }
@@ -143,11 +155,11 @@ var events = newEventHub()
 
 // subscribe registers a connection interested in pr (0 = everything) and
 // returns its id (for unsubscribe) plus its receive channel.
-func (h *eventHub) subscribe(pr int) (int, *eventSub) {
+func (h *eventHub) subscribe(scope string) (int, *eventSub) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.next++
-	sub := &eventSub{pr: pr, ch: make(chan busEvent, eventSubBuffer)}
+	sub := &eventSub{scope: scope, ch: make(chan busEvent, eventSubBuffer)}
 	h.subs[h.next] = sub
 	return h.next, sub
 }
@@ -168,7 +180,7 @@ func (h *eventHub) unsubscribe(id int) {
 // subscriber whose buffer is full is flagged instead (see the file header).
 // A marshalling failure drops the event silently — this is cosmetic plumbing,
 // never a reason to fail the work that produced it.
-func (h *eventHub) publish(typ string, pr int, key string, data any) {
+func (h *eventHub) publish(typ string, repo string, pr int, key string, data any) {
 	var raw json.RawMessage
 	if data != nil {
 		b, err := json.Marshal(data)
@@ -180,9 +192,13 @@ func (h *eventHub) publish(typ string, pr int, key string, data any) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.seq++
-	ev := busEvent{Type: typ, PR: pr, Key: key, Seq: h.seq, Data: raw}
+	ev := busEvent{Type: typ, Repo: repo, PR: pr, Key: key, Seq: h.seq, Data: raw}
+	scope := ""
+	if pr != 0 {
+		scope = statusKey(repo, pr)
+	}
 	for _, sub := range h.subs {
-		if sub.pr != 0 && pr != 0 && sub.pr != pr {
+		if sub.scope != "" && scope != "" && sub.scope != scope {
 			continue
 		}
 		select {

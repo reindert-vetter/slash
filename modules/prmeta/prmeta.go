@@ -20,7 +20,8 @@ const schema = `
 PRAGMA journal_mode = WAL;
 
 CREATE TABLE IF NOT EXISTS pr_meta (
-  pr               INTEGER PRIMARY KEY,
+  repo             TEXT NOT NULL DEFAULT '',  -- canonical repo string: '' = the primary repo
+  pr               INTEGER NOT NULL,
   title            TEXT NOT NULL DEFAULT '',
   url              TEXT NOT NULL DEFAULT '',
   body             TEXT NOT NULL DEFAULT '',
@@ -43,12 +44,15 @@ CREATE TABLE IF NOT EXISTS pr_meta (
   new_since_kind   TEXT NOT NULL DEFAULT '',
   new_since_at     TEXT NOT NULL DEFAULT '',
   since_facts      TEXT NOT NULL DEFAULT '',
-  since_summary    TEXT NOT NULL DEFAULT ''
+  since_summary    TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (repo, pr)
 );
 `
 
 // Meta is the stored metadata of one PR.
 type Meta struct {
+	// Repo is the canonical repo string ("" = the primary repo, see repos.go).
+	Repo           string   `json:"repo,omitempty"`
 	PR             int      `json:"pr"`
 	Title          string   `json:"title"`
 	URL            string   `json:"url"`
@@ -144,6 +148,35 @@ func migrate(db *sql.DB) {
 	} {
 		_, _ = db.Exec(col) // ignore "duplicate column name"
 	}
+	migrateRepo(db)
+}
+
+// migrateRepo brings a pre-multi-repo pr_meta table up to PRIMARY KEY (repo, pr).
+// This one cannot be a plain ADD COLUMN: the PK is the bare pr, so PR 12 of a
+// second repo would overwrite PR 12 of the primary one. SQLite can't alter a PK,
+// so the table is rebuilt and copied with repo=” — every existing row belongs to
+// the primary repo. Cheap: pr_meta is a derived read-model the pr_status tracker
+// rewrites anyway. See repos.go.
+func migrateRepo(db *sql.DB) {
+	var has int
+	if err := db.QueryRow(`SELECT COUNT(1) FROM pragma_table_info('pr_meta') WHERE name = 'repo'`).Scan(&has); err != nil || has > 0 {
+		return
+	}
+	cols := `pr, title, url, body, author, additions, deletions, changed_files, head_ref, summary,
+		jira_key, jira_title, jira_desc, jira_url, review_decision, checks_total, checks_passed,
+		reviewers, updated_at, gh_updated_at, new_since_kind, new_since_at, since_facts, since_summary`
+	for _, q := range []string{
+		`ALTER TABLE pr_meta RENAME TO pr_meta_old`,
+		schema,
+		`INSERT INTO pr_meta (repo, ` + cols + `) SELECT '', ` + cols + ` FROM pr_meta_old`,
+		`DROP TABLE pr_meta_old`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			// Best-effort, exactly like the ADD COLUMNs above: a failure here
+			// leaves the old table in place rather than breaking startup.
+			return
+		}
+	}
 }
 
 func (m *Module) Close() error { return m.db.Close() }
@@ -156,32 +189,32 @@ func now() string { return time.Now().UTC().Format(time.RFC3339) }
 // written by a later stage of a previous run.
 func (m *Module) SaveBasics(ctx context.Context, meta Meta) error {
 	_, err := m.db.ExecContext(ctx, `
-		INSERT INTO pr_meta (pr, title, url, body, author, additions, deletions, changed_files, head_ref,
+		INSERT INTO pr_meta (repo, pr, title, url, body, author, additions, deletions, changed_files, head_ref,
 			jira_key, jira_title, jira_desc, jira_url, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-		ON CONFLICT(pr) DO UPDATE SET
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(repo, pr) DO UPDATE SET
 			title=excluded.title, url=excluded.url, body=excluded.body, author=excluded.author,
 			additions=excluded.additions, deletions=excluded.deletions, changed_files=excluded.changed_files,
 			head_ref=excluded.head_ref, jira_key=excluded.jira_key, jira_title=excluded.jira_title,
 			jira_desc=excluded.jira_desc, jira_url=excluded.jira_url, updated_at=excluded.updated_at`,
-		meta.PR, meta.Title, meta.URL, meta.Body, meta.Author, meta.Additions, meta.Deletions,
+		meta.Repo, meta.PR, meta.Title, meta.URL, meta.Body, meta.Author, meta.Additions, meta.Deletions,
 		meta.ChangedFiles, meta.HeadRef, meta.JiraKey, meta.JiraTitle, meta.JiraDesc, meta.JiraURL, now())
 	return err
 }
 
 // SaveSummary upserts stage 2: the Claude-generated PR summary. WRITE —
 // workflow-only. Only touches the summary + updated_at columns.
-func (m *Module) SaveSummary(ctx context.Context, pr int, summary string) error {
+func (m *Module) SaveSummary(ctx context.Context, repo string, pr int, summary string) error {
 	_, err := m.db.ExecContext(ctx, `
-		INSERT INTO pr_meta (pr, summary, updated_at) VALUES (?,?,?)
-		ON CONFLICT(pr) DO UPDATE SET summary=excluded.summary, updated_at=excluded.updated_at`,
-		pr, summary, now())
+		INSERT INTO pr_meta (repo, pr, summary, updated_at) VALUES (?,?,?,?)
+		ON CONFLICT(repo, pr) DO UPDATE SET summary=excluded.summary, updated_at=excluded.updated_at`,
+		repo, pr, summary, now())
 	return err
 }
 
 // SaveStatuses upserts stage 3: review decision + CI checks + reviewers. WRITE
 // — workflow-only. Only touches the status columns.
-func (m *Module) SaveStatuses(ctx context.Context, pr int, reviewDecision string, checksTotal, checksPassed int, reviewers []string) error {
+func (m *Module) SaveStatuses(ctx context.Context, repo string, pr int, reviewDecision string, checksTotal, checksPassed int, reviewers []string) error {
 	if reviewers == nil {
 		reviewers = []string{}
 	}
@@ -190,12 +223,12 @@ func (m *Module) SaveStatuses(ctx context.Context, pr int, reviewDecision string
 		return fmt.Errorf("prmeta: marshal reviewers: %w", err)
 	}
 	_, err = m.db.ExecContext(ctx, `
-		INSERT INTO pr_meta (pr, review_decision, checks_total, checks_passed, reviewers, updated_at)
-		VALUES (?,?,?,?,?,?)
-		ON CONFLICT(pr) DO UPDATE SET
+		INSERT INTO pr_meta (repo, pr, review_decision, checks_total, checks_passed, reviewers, updated_at)
+		VALUES (?,?,?,?,?,?,?)
+		ON CONFLICT(repo, pr) DO UPDATE SET
 			review_decision=excluded.review_decision, checks_total=excluded.checks_total,
 			checks_passed=excluded.checks_passed, reviewers=excluded.reviewers, updated_at=excluded.updated_at`,
-		pr, reviewDecision, checksTotal, checksPassed, string(rj), now())
+		repo, pr, reviewDecision, checksTotal, checksPassed, string(rj), now())
 	return err
 }
 
@@ -203,14 +236,14 @@ func (m *Module) SaveStatuses(ctx context.Context, pr int, reviewDecision string
 // 3: the kind word, the moment it refers to, and the PR's own GitHub
 // updatedAt. WRITE — workflow-only. Only touches its own three columns, so it
 // never clobbers a since-summary written by the stage after it.
-func (m *Module) SaveSinceMark(ctx context.Context, pr int, kind, at, ghUpdatedAt string) error {
+func (m *Module) SaveSinceMark(ctx context.Context, repo string, pr int, kind, at, ghUpdatedAt string) error {
 	_, err := m.db.ExecContext(ctx, `
-		INSERT INTO pr_meta (pr, new_since_kind, new_since_at, gh_updated_at, updated_at)
-		VALUES (?,?,?,?,?)
-		ON CONFLICT(pr) DO UPDATE SET
+		INSERT INTO pr_meta (repo, pr, new_since_kind, new_since_at, gh_updated_at, updated_at)
+		VALUES (?,?,?,?,?,?)
+		ON CONFLICT(repo, pr) DO UPDATE SET
 			new_since_kind=excluded.new_since_kind, new_since_at=excluded.new_since_at,
 			gh_updated_at=excluded.gh_updated_at, updated_at=excluded.updated_at`,
-		pr, kind, at, ghUpdatedAt, now())
+		repo, pr, kind, at, ghUpdatedAt, now())
 	return err
 }
 
@@ -218,21 +251,21 @@ func (m *Module) SaveSinceMark(ctx context.Context, pr int, kind, at, ghUpdatedA
 // review — the deterministic facts and Haiku's prose explanation of them.
 // WRITE — workflow-only. Storing empty strings is meaningful: it is how a PR
 // with nothing new (or one this reviewer never reviewed) clears a stale block.
-func (m *Module) SaveSinceReview(ctx context.Context, pr int, facts, summary string) error {
+func (m *Module) SaveSinceReview(ctx context.Context, repo string, pr int, facts, summary string) error {
 	_, err := m.db.ExecContext(ctx, `
-		INSERT INTO pr_meta (pr, since_facts, since_summary, updated_at) VALUES (?,?,?,?)
-		ON CONFLICT(pr) DO UPDATE SET
+		INSERT INTO pr_meta (repo, pr, since_facts, since_summary, updated_at) VALUES (?,?,?,?,?)
+		ON CONFLICT(repo, pr) DO UPDATE SET
 			since_facts=excluded.since_facts, since_summary=excluded.since_summary,
 			updated_at=excluded.updated_at`,
-		pr, facts, summary, now())
+		repo, pr, facts, summary, now())
 	return err
 }
 
 // Purge removes the stored pr_meta row of pr, if any. WRITE — workflow-only,
 // the per-PR data-retention cleanup path (see the cleanup workflow). Returns
 // the number of rows removed (0 or 1), for logging.
-func (m *Module) Purge(ctx context.Context, pr int) (int64, error) {
-	res, err := m.db.ExecContext(ctx, `DELETE FROM pr_meta WHERE pr = ?`, pr)
+func (m *Module) Purge(ctx context.Context, repo string, pr int) (int64, error) {
+	res, err := m.db.ExecContext(ctx, `DELETE FROM pr_meta WHERE repo = ? AND pr = ?`, repo, pr)
 	if err != nil {
 		return 0, err
 	}
@@ -242,16 +275,16 @@ func (m *Module) Purge(ctx context.Context, pr int) (int64, error) {
 // Get returns the stored metadata for pr (ok=false when none is stored yet).
 // READ — safe for the UI. Fields whose stage hasn't run yet are simply zero
 // values, so the UI can render progressively.
-func (m *Module) Get(ctx context.Context, pr int) (Meta, bool, error) {
+func (m *Module) Get(ctx context.Context, repo string, pr int) (Meta, bool, error) {
 	var meta Meta
 	var reviewersJSON string
 	err := m.db.QueryRowContext(ctx, `
-		SELECT pr, title, url, body, author, additions, deletions, changed_files, head_ref,
+		SELECT repo, pr, title, url, body, author, additions, deletions, changed_files, head_ref,
 			summary, jira_key, jira_title, jira_desc, jira_url,
 			review_decision, checks_total, checks_passed, reviewers, updated_at,
 			gh_updated_at, new_since_kind, new_since_at, since_facts, since_summary
-		FROM pr_meta WHERE pr = ?`, pr).
-		Scan(&meta.PR, &meta.Title, &meta.URL, &meta.Body, &meta.Author, &meta.Additions, &meta.Deletions,
+		FROM pr_meta WHERE repo = ? AND pr = ?`, repo, pr).
+		Scan(&meta.Repo, &meta.PR, &meta.Title, &meta.URL, &meta.Body, &meta.Author, &meta.Additions, &meta.Deletions,
 			&meta.ChangedFiles, &meta.HeadRef, &meta.Summary, &meta.JiraKey, &meta.JiraTitle, &meta.JiraDesc,
 			&meta.JiraURL, &meta.ReviewDecision, &meta.ChecksTotal, &meta.ChecksPassed, &reviewersJSON, &meta.UpdatedAt,
 			&meta.GhUpdatedAt, &meta.NewSinceKind, &meta.NewSinceAt, &meta.SinceFacts, &meta.SinceSummary)

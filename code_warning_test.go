@@ -65,7 +65,7 @@ class OrderService {
 // findings).
 func writeWarningFixtureRepo(t *testing.T, dataDir string, pr int) {
 	t.Helper()
-	baseDir, headDir := worktreeDirs(dataDir, pr)
+	baseDir, headDir := worktreeDirs(dataDir, "", pr)
 	for _, w := range []struct{ dir, body string }{{baseDir, warningFixtureBaseBody}, {headDir, warningFixtureBody}} {
 		p := filepath.Join(w.dir, "app/Services/OrderService.php")
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -150,7 +150,7 @@ func TestCodeWarningAnchorsToBlock(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 31
 	writeWarningFixtureRepo(t, dataDir, pr)
-	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), pr, []Block{warningFixtureBlock(pr)}); err != nil {
+	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), "", pr, []Block{warningFixtureBlock(pr)}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -166,7 +166,7 @@ func TestCodeWarningAnchorsToBlock(t *testing.T) {
 		t.Fatalf("run status = %q, want completed", status)
 	}
 
-	list, err := cs.List(context.Background(), pr)
+	list, err := cs.List(context.Background(), "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestCodeWarningAnchorsToBlock(t *testing.T) {
 func TestAnchoredWarningFallsBackToBlockWideFirstRow(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 34
-	baseDir, headDir := worktreeDirs(dataDir, pr)
+	baseDir, headDir := worktreeDirs(dataDir, "", pr)
 	// Its own worktrees rather than writeWarningFixtureRepo's: this needs the
 	// change to sit on exactly one line (1.21), so the block has a single
 	// "first changed row" to fall back onto.
@@ -250,7 +250,7 @@ func TestCodeWarningFallsBackToPRWide(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 32
 	writeWarningFixtureRepo(t, dataDir, pr)
-	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), pr, []Block{warningFixtureBlock(pr)}); err != nil {
+	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), "", pr, []Block{warningFixtureBlock(pr)}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -263,7 +263,7 @@ func TestCodeWarningFallsBackToPRWide(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	list, err := cs.List(context.Background(), pr)
+	list, err := cs.List(context.Background(), "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +288,7 @@ func TestCodeWarningDropsOutOfScopeFile(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 33
 	writeWarningFixtureRepo(t, dataDir, pr)
-	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), pr, []Block{warningFixtureBlock(pr)}); err != nil {
+	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), "", pr, []Block{warningFixtureBlock(pr)}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -299,7 +299,7 @@ func TestCodeWarningDropsOutOfScopeFile(t *testing.T) {
 	if _, err := m.StartCodeWarning(CodeWarningInput{PR: pr}); err != nil {
 		t.Fatal(err)
 	}
-	list, err := cs.List(context.Background(), pr)
+	list, err := cs.List(context.Background(), "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,7 +314,7 @@ func TestCodeWarningSupersedesPreviousRun(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 34
 	writeWarningFixtureRepo(t, dataDir, pr)
-	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), pr, []Block{warningFixtureBlock(pr)}); err != nil {
+	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), "", pr, []Block{warningFixtureBlock(pr)}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -325,7 +325,7 @@ func TestCodeWarningSupersedesPreviousRun(t *testing.T) {
 	if _, err := m.StartCodeWarning(CodeWarningInput{PR: pr}); err != nil {
 		t.Fatal(err)
 	}
-	first, _ := cs.List(context.Background(), pr)
+	first, _ := cs.List(context.Background(), "", pr)
 	if len(first) != 1 || first[0].Body != "First pass finding." {
 		t.Fatalf("after first run: comments = %+v", first)
 	}
@@ -336,7 +336,7 @@ func TestCodeWarningSupersedesPreviousRun(t *testing.T) {
 	if _, err := m.StartCodeWarning(CodeWarningInput{PR: pr}); err != nil {
 		t.Fatal(err)
 	}
-	second, err := cs.List(context.Background(), pr)
+	second, err := cs.List(context.Background(), "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +356,7 @@ func TestCodeWarningSkipsResolvedFinding(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 43
 	writeWarningFixtureRepo(t, dataDir, pr)
-	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), pr, []Block{warningFixtureBlock(pr)}); err != nil {
+	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), "", pr, []Block{warningFixtureBlock(pr)}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -369,7 +369,7 @@ func TestCodeWarningSkipsResolvedFinding(t *testing.T) {
 	if _, err := m.StartCodeWarning(CodeWarningInput{PR: pr}); err != nil {
 		t.Fatal(err)
 	}
-	list, err := cs.List(ctx, pr)
+	list, err := cs.List(ctx, "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,7 +388,7 @@ func TestCodeWarningSkipsResolvedFinding(t *testing.T) {
 	if _, err := m.StartCodeWarning(CodeWarningInput{PR: pr}); err != nil {
 		t.Fatal(err)
 	}
-	after, err := cs.List(ctx, pr)
+	after, err := cs.List(ctx, "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -406,7 +406,7 @@ func TestCodeWarningSkipsDeletedFinding(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 44
 	writeWarningFixtureRepo(t, dataDir, pr)
-	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), pr, []Block{warningFixtureBlock(pr)}); err != nil {
+	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), "", pr, []Block{warningFixtureBlock(pr)}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -421,7 +421,7 @@ func TestCodeWarningSkipsDeletedFinding(t *testing.T) {
 	if _, err := m.StartCodeWarning(CodeWarningInput{PR: pr}); err != nil {
 		t.Fatal(err)
 	}
-	list, err := cs.List(ctx, pr)
+	list, err := cs.List(ctx, "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -445,7 +445,7 @@ func TestCodeWarningSkipsDeletedFinding(t *testing.T) {
 	if _, err := m.StartCodeWarning(CodeWarningInput{PR: pr}); err != nil {
 		t.Fatal(err)
 	}
-	after, err := cs.List(ctx, pr)
+	after, err := cs.List(ctx, "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -465,7 +465,7 @@ func TestCodeWarningCapsFindingsPerBlock(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 35
 	writeWarningFixtureRepo(t, dataDir, pr)
-	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), pr, []Block{warningFixtureBlock(pr)}); err != nil {
+	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), "", pr, []Block{warningFixtureBlock(pr)}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -481,7 +481,7 @@ func TestCodeWarningCapsFindingsPerBlock(t *testing.T) {
 	if _, err := m.StartCodeWarning(CodeWarningInput{PR: pr}); err != nil {
 		t.Fatal(err)
 	}
-	list, err := cs.List(context.Background(), pr)
+	list, err := cs.List(context.Background(), "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -505,7 +505,7 @@ func TestCodeWarningPromptsExistingComments(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 40
 	writeWarningFixtureRepo(t, dataDir, pr)
-	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), pr, []Block{warningFixtureBlock(pr)}); err != nil {
+	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), "", pr, []Block{warningFixtureBlock(pr)}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -545,7 +545,7 @@ func TestCodeWarningPromptsPRIntentAndConversation(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 42
 	writeWarningFixtureRepo(t, dataDir, pr)
-	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), pr, []Block{warningFixtureBlock(pr)}); err != nil {
+	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), "", pr, []Block{warningFixtureBlock(pr)}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -602,7 +602,7 @@ func TestCodeWarningDropsFindingOnUnchangedLine(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 41
 	writeWarningFixtureRepo(t, dataDir, pr)
-	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), pr, []Block{warningFixtureBlock(pr)}); err != nil {
+	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), "", pr, []Block{warningFixtureBlock(pr)}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -618,7 +618,7 @@ func TestCodeWarningDropsFindingOnUnchangedLine(t *testing.T) {
 	if _, err := m.StartCodeWarning(CodeWarningInput{PR: pr}); err != nil {
 		t.Fatal(err)
 	}
-	list, err := cs.List(context.Background(), pr)
+	list, err := cs.List(context.Background(), "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -647,11 +647,11 @@ func TestCodeWarningKeepsApproval(t *testing.T) {
 	pr := 36
 	writeWarningFixtureRepo(t, dataDir, pr)
 	block := warningFixtureBlock(pr)
-	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), pr, []Block{block}); err != nil {
+	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), "", pr, []Block{block}); err != nil {
 		t.Fatal(err)
 	}
 
-	baseDir, headDir := worktreeDirs(dataDir, pr)
+	baseDir, headDir := worktreeDirs(dataDir, "", pr)
 	row, ok := rowForLine(baseDir, headDir, block, 6, "RIGHT")
 	if !ok {
 		t.Fatal("rowForLine: could not resolve line 6 to a row")
@@ -664,21 +664,21 @@ func TestCodeWarningKeepsApproval(t *testing.T) {
 	ctx := context.Background()
 
 	// The reviewer approved this row before the risk check ever ran.
-	if err := ap.Replace(ctx, pr, blockID, []int{row}, nil, nil); err != nil {
+	if err := ap.Replace(ctx, "", pr, blockID, []int{row}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
 	if _, err := m.StartCodeWarning(CodeWarningInput{PR: pr}); err != nil {
 		t.Fatal(err)
 	}
-	list, err := cs.List(ctx, pr)
+	list, err := cs.List(ctx, "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(list) != 1 {
 		t.Fatalf("comments = %d, want 1: %+v", len(list), list)
 	}
-	after, err := ap.List(ctx, pr)
+	after, err := ap.List(ctx, "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -774,12 +774,12 @@ func TestBuildRelationsAutoStartsCodeWarning(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 40
 	writeWarningFixtureRepo(t, dataDir, pr)
-	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), pr, []Block{warningFixtureBlock(pr)}); err != nil {
+	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), "", pr, []Block{warningFixtureBlock(pr)}); err != nil {
 		t.Fatal(err)
 	}
 	m, _ := autoWarnTriggerManager(t, dataDir, claude.NewFake())
 
-	m.EnsureRelations(context.Background(), pr)
+	m.EnsureRelations(context.Background(), "", pr)
 
 	if !codeWarningRunExists(t, m, pr) {
 		t.Fatal("no code_warning run was auto-started after the first build_relations")
@@ -792,7 +792,7 @@ func TestBuildRelationsSkipsAutoWarnWhenDisabled(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 41
 	writeWarningFixtureRepo(t, dataDir, pr)
-	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), pr, []Block{warningFixtureBlock(pr)}); err != nil {
+	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), "", pr, []Block{warningFixtureBlock(pr)}); err != nil {
 		t.Fatal(err)
 	}
 	m, _ := autoWarnTriggerManager(t, dataDir, claude.NewFake())
@@ -800,7 +800,7 @@ func TestBuildRelationsSkipsAutoWarnWhenDisabled(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m.EnsureRelations(context.Background(), pr)
+	m.EnsureRelations(context.Background(), "", pr)
 
 	if codeWarningRunExists(t, m, pr) {
 		t.Fatal("a code_warning run was auto-started while the toggle is off")
@@ -814,13 +814,13 @@ func TestRebuildSignalDoesNotAutoStartCodeWarning(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 42
 	writeWarningFixtureRepo(t, dataDir, pr)
-	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), pr, []Block{warningFixtureBlock(pr)}); err != nil {
+	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), "", pr, []Block{warningFixtureBlock(pr)}); err != nil {
 		t.Fatal(err)
 	}
 	m, _ := autoWarnTriggerManager(t, dataDir, claude.NewFake())
 	ctx := context.Background()
 
-	m.EnsureRelations(ctx, pr) // initial build — auto-starts one code_warning run
+	m.EnsureRelations(ctx, "", pr) // initial build — auto-starts one code_warning run
 	if !codeWarningRunExists(t, m, pr) {
 		t.Fatal("setup: initial build_relations should have auto-started a code_warning run")
 	}
@@ -830,7 +830,7 @@ func TestRebuildSignalDoesNotAutoStartCodeWarning(t *testing.T) {
 	}
 	countBefore := countCodeWarningRuns(runsBefore, m, pr)
 
-	m.EnsureRelations(ctx, pr) // already running — this signals SignalRebuild instead
+	m.EnsureRelations(ctx, "", pr) // already running — this signals SignalRebuild instead
 	// Give any (wrongly fired) goroutine a moment, then compare counts.
 	time.Sleep(200 * time.Millisecond)
 	runsAfter, err := m.engine.Runs()
@@ -967,7 +967,7 @@ const orphanFixtureFile = "app/Services/OrphanService.php"
 
 func writeOrphanFixtureRepo(t *testing.T, dataDir string, pr int) {
 	t.Helper()
-	baseDir, headDir := worktreeDirs(dataDir, pr)
+	baseDir, headDir := worktreeDirs(dataDir, "", pr)
 	for _, w := range []struct{ dir, body string }{{baseDir, orphanFixtureBaseBody}, {headDir, orphanFixtureBody}} {
 		p := filepath.Join(w.dir, orphanFixtureFile)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -1014,7 +1014,7 @@ func TestCodeWarningRetriesOnTooManyOrphans(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 71
 	writeOrphanFixtureRepo(t, dataDir, pr)
-	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), pr, orphanFixtureBlocks(pr)); err != nil {
+	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), "", pr, orphanFixtureBlocks(pr)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1032,7 +1032,7 @@ func TestCodeWarningRetriesOnTooManyOrphans(t *testing.T) {
 	if cl.CallCount() != 2 {
 		t.Fatalf("agentic review calls = %d, want 2 (the bad batch plus exactly one retry)", cl.CallCount())
 	}
-	list, err := cs.List(context.Background(), pr)
+	list, err := cs.List(context.Background(), "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1054,7 +1054,7 @@ func TestCodeWarningKeepsOrphansAfterOneRetry(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 72
 	writeOrphanFixtureRepo(t, dataDir, pr)
-	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), pr, orphanFixtureBlocks(pr)); err != nil {
+	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), "", pr, orphanFixtureBlocks(pr)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1071,7 +1071,7 @@ func TestCodeWarningKeepsOrphansAfterOneRetry(t *testing.T) {
 	if cl.CallCount() != 2 {
 		t.Fatalf("agentic review calls = %d, want 2 (no second retry)", cl.CallCount())
 	}
-	list, err := cs.List(context.Background(), pr)
+	list, err := cs.List(context.Background(), "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}

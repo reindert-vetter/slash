@@ -171,17 +171,17 @@ func runIngestCmd(args []string) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), ingestTimeout)
 	defer cancel()
-	res, err := tk.manager.StartIngest(ctx, pr)
+	res, err := tk.manager.StartIngest(ctx, "", pr)
 	if err != nil {
 		log.Fatalf("ingest: %v", err)
 	}
-	tk.manager.EnsureRelations(ctx, pr)
+	tk.manager.EnsureRelations(ctx, "", pr)
 	// Ensure the pr_status tracker too, mirroring handleIngest — this headless
 	// run has no server runtime (runtimeReady stays false), so the
 	// ingest-refresh/comment-import pollers don't start here, but the tracker
 	// itself (and its one-time basics/summary fetch) is created and picked up
 	// by ResumePRStatusPolling next time the server runs.
-	if _, err := tk.manager.EnsurePRStatus(pr); err != nil {
+	if _, err := tk.manager.EnsurePRStatus("", pr); err != nil {
 		log.Printf("ingest: ensure pr_status pr=%d: %v", pr, err)
 	}
 	out, _ := json.MarshalIndent(res, "", "  ")
@@ -216,7 +216,7 @@ func runRelationsCmd(args []string) {
 	}
 	defer db.Close()
 
-	blocks, err := blocksByPR(db, pr)
+	blocks, err := blocksByPR(db, "", pr)
 	if err != nil {
 		log.Fatalf("load blocks: %v", err)
 	}
@@ -227,7 +227,7 @@ func runRelationsCmd(args []string) {
 		log.Fatalf("open relations db: %v", err)
 	}
 	defer rel.Close()
-	if err := rel.Replace(context.Background(), pr, rels); err != nil {
+	if err := rel.Replace(context.Background(), "", pr, rels); err != nil {
 		log.Fatalf("save relations: %v", err)
 	}
 
@@ -246,7 +246,7 @@ func runRelationsCmd(args []string) {
 	if err := cr.UpsertGo(context.Background(), calls); err != nil {
 		log.Fatalf("save call resolutions: %v", err)
 	}
-	if err := cr.Prune(context.Background(), pr, calls); err != nil {
+	if err := cr.Prune(context.Background(), "", pr, calls); err != nil {
 		log.Fatalf("prune call resolutions: %v", err)
 	}
 
@@ -262,7 +262,7 @@ func runRelationsCmd(args []string) {
 	if err := tc.UpsertGo(context.Background(), covers); err != nil {
 		log.Fatalf("save test covers: %v", err)
 	}
-	if err := tc.Prune(context.Background(), pr, covers); err != nil {
+	if err := tc.Prune(context.Background(), "", pr, covers); err != nil {
 		log.Fatalf("prune test covers: %v", err)
 	}
 
@@ -381,7 +381,7 @@ func runSeedCmd(args []string) {
 		byPR[b.PR] = append(byPR[b.PR], b)
 	}
 	for pr, bs := range byPR {
-		if err := replacePRBlocks(db, pr, bs); err != nil {
+		if err := replacePRBlocks(db, "", pr, bs); err != nil {
 			log.Fatalf("seed pr %d: %v", pr, err)
 		}
 	}
@@ -554,7 +554,7 @@ func seedRelations(dbPath, from string) {
 	}
 	ctx := context.Background()
 	for pr, rs := range byPR {
-		if err := rel.Replace(ctx, pr, rs); err != nil {
+		if err := rel.Replace(ctx, "", pr, rs); err != nil {
 			log.Fatalf("seed relations pr %d: %v", pr, err)
 		}
 	}

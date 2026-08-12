@@ -51,7 +51,12 @@ const (
 // ChatMergeQueueInput starts (or, idempotently, re-ensures) the chat_merge
 // Execution for one PR.
 type ChatMergeQueueInput struct {
-	PR int `json:"pr"`
+	// Repo is the canonical repo string this PR belongs to: "" (absent) for the
+	// primary repo — which is what every Execution started before multi-repo
+	// existed carries, so replay of a stored history is unaffected — and
+	// "owner/name" for any other configured repo. See repos.go.
+	Repo string `json:"repo,omitempty"`
+	PR   int    `json:"pr"`
 }
 
 // ChatMergeRequest is the "merge" Signal's payload — one conversation's commit
@@ -76,8 +81,12 @@ type ChatMergeRequest struct {
 // ensuring it idempotent with no extra in-memory bookkeeping (unlike
 // EnsureApprovals/EnsureIgnoreComment, whose workflows predate this
 // deterministic-id convention and therefore cache a random Run ID instead).
-func chatMergeQueueRunID(pr int) string {
-	return fmt.Sprintf("chatmerge-%d", pr)
+func chatMergeQueueRunID(repo string, pr int) string {
+	// repoRunPrefix is EMPTY for the primary repo, so this keeps producing the
+	// exact historical id ("chatmerge-13000") and a queue Execution started before
+	// multi-repo existed is still found after a restart. Another repo inserts its
+	// key ("chatmerge-ops-12").
+	return fmt.Sprintf("chatmerge-%s%d", repoRunPrefix(repo), pr)
 }
 
 // EnsureChatMergeQueue ensures the chat_merge Execution for pr exists
@@ -85,8 +94,8 @@ func chatMergeQueueRunID(pr int) string {
 // enqueueChatMerge — a cross-workflow Ensure+Signal from inside another
 // Workflow's Activity, the same shape reanchorAfterRefresh already uses for
 // the approve tracker (workflows.go).
-func (m *TaskManager) EnsureChatMergeQueue(pr int) (string, error) {
-	return m.engine.StartWorkflowID(chatMergeQueueRunID(pr), WorkflowChatMerge, ChatMergeQueueInput{PR: pr})
+func (m *TaskManager) EnsureChatMergeQueue(repo string, pr int) (string, error) {
+	return m.engine.StartWorkflowID(chatMergeQueueRunID(repo, pr), WorkflowChatMerge, ChatMergeQueueInput{Repo: repo, PR: pr})
 }
 
 // chatMergeQueueWorkflow is the durable definition. Never completes — a
@@ -104,13 +113,13 @@ func chatMergeQueueWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		// payload, so it is a pure function of the history — the same shape
 		// claudeChatWorkflow's own Action branches have.
 		if req.Action == chatMergeActionPush {
-			if err := w.ExecuteActivity("pushPendingPR", chatMergeInput{PR: in.PR}, nil); err != nil {
+			if err := w.ExecuteActivity("pushPendingPR", chatMergeInput{Repo: in.Repo, PR: in.PR}, nil); err != nil {
 				return nil, fmt.Errorf("push pending pr: %w", err)
 			}
 			continue
 		}
 		if err := w.ExecuteActivity("processChatMerge", chatMergeInput{
-			PR: in.PR, ConversationID: req.ConversationID, TurnID: req.TurnID,
+			Repo: in.Repo, PR: in.PR, ConversationID: req.ConversationID, TurnID: req.TurnID,
 		}, nil); err != nil {
 			return nil, fmt.Errorf("process chat merge: %w", err)
 		}
@@ -119,6 +128,11 @@ func chatMergeQueueWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 
 // chatMergeInput is the processChatMerge Activity's own input.
 type chatMergeInput struct {
+	// Repo is the canonical repo string this PR belongs to: "" (absent) for the
+	// primary repo — which is what every Execution started before multi-repo
+	// existed carries, so replay of a stored history is unaffected — and
+	// "owner/name" for any other configured repo. See repos.go.
+	Repo           string `json:"repo,omitempty"`
 	PR             int    `json:"pr"`
 	ConversationID string `json:"conversationId"`
 	TurnID         string `json:"turnId,omitempty"`
@@ -141,7 +155,7 @@ type chatMergeInput struct {
 // transcript over the same publishChatChanged/SSE path every other chat
 // Activity already uses — never returned synchronously from this Activity.
 func enqueueChatMerge(tm *TaskManager, arg chatCommitInput) {
-	runID, err := tm.EnsureChatMergeQueue(arg.PR)
+	runID, err := tm.EnsureChatMergeQueue(arg.Repo, arg.PR)
 	if err != nil {
 		tm.logf("chat_merge: no queue for pr %d: %v", arg.PR, err)
 		return
@@ -157,10 +171,10 @@ func enqueueChatMerge(tm *TaskManager, arg chatCommitInput) {
 // real head branch name (the one gh/network call in this whole path) and
 // delegate to processChatMergeAt.
 func processChatMerge(ctx context.Context, tm *TaskManager, cm *chat.Module, cl claude.Client, dataDir string, arg chatMergeInput) chat.Message {
-	meta, err := fetchPRMeta(ctx, "", arg.PR)
+	meta, err := fetchPRMeta(ctx, arg.Repo, arg.PR)
 	if err != nil || meta.HeadRefName == "" {
 		msg := chat.Message{
-			ID: chatMessageID(arg.TurnID, ""), ConversationID: arg.ConversationID, PR: arg.PR,
+			ID: chatMessageID(arg.TurnID, ""), ConversationID: arg.ConversationID, Repo: arg.Repo, PR: arg.PR,
 			Role: "assistant", Kind: chat.KindError,
 			Body: "Kon de PR-branch niet bepalen om de wijziging op te landen.",
 		}
@@ -201,15 +215,15 @@ func processChatMerge(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 // outcome, never the transient "moved on" text this uses internally as a
 // detection signal.
 func processChatMergeAt(ctx context.Context, tm *TaskManager, cm *chat.Module, cl claude.Client, dataDir string, arg chatMergeInput, headRefName string) chat.Message {
-	msg := commitChatShadowEditsAt(ctx, cm, dataDir, arg.PR, arg.ConversationID, arg.TurnID, headRefName)
+	msg := commitChatShadowEditsAt(ctx, cm, dataDir, arg.Repo, arg.PR, arg.ConversationID, arg.TurnID, headRefName)
 	if msg.Kind == chat.KindError && msg.Body == chatShadowBranchMovedOnMsg {
-		msg = resolveChatShadowMerge(ctx, cm, cl, dataDir, arg.PR, arg.ConversationID, arg.TurnID, headRefName)
+		msg = resolveChatShadowMerge(ctx, cm, cl, dataDir, arg.Repo, arg.PR, arg.ConversationID, arg.TurnID, headRefName)
 	}
 	if msg.Kind != chat.KindError {
-		refreshTreeAfterLanding(ctx, tm, arg.PR, headRefName)
+		refreshTreeAfterLanding(ctx, tm, arg.Repo, arg.PR, headRefName)
 		// The landing created (or advanced) the PR's pending ref, so the todo row
 		// at the bottom of the block index has something new to show.
-		publishPendingPushChanged(arg.PR)
+		publishPendingPushChanged(arg.Repo, arg.PR)
 	}
 	return msg
 }
@@ -231,19 +245,19 @@ func processChatMergeAt(ctx context.Context, tm *TaskManager, cm *chat.Module, c
 // refresh stays an incremental delta instead of falling back to a full ingest
 // (refreshIngestDelta compares the two). No prior ingest at all → nothing to
 // refresh yet, so this is a no-op.
-func refreshTreeAfterLanding(ctx context.Context, tm *TaskManager, pr int, headRefName string) {
+func refreshTreeAfterLanding(ctx context.Context, tm *TaskManager, repo string, pr int, headRefName string) {
 	if tm == nil || tm.engine == nil || tm.db == nil {
 		return // tests / a manager without an engine or graph DB
 	}
-	sha := pendingRefSHA(ctx, prPendingRef(pr, headRefName))
+	sha := pendingRefSHA(ctx, repo, prPendingRef(repo, pr, headRefName))
 	if sha == "" {
 		return
 	}
-	base, _, ok, err := loadIngestSHAs(tm.db, pr)
+	base, _, ok, err := loadIngestSHAs(tm.db, repo, pr)
 	if err != nil || !ok {
 		return
 	}
-	runID, err := tm.EnsurePRStatus(pr)
+	runID, err := tm.EnsurePRStatus(repo, pr)
 	if err != nil {
 		tm.logf("chat_merge: no pr_status tracker for pr %d: %v", pr, err)
 		return
@@ -293,7 +307,7 @@ func chatMergeConflictConsultMsg(ref, headRefName string, conflicted []string) s
 // (never leaves the shadow worktree mid-conflict) and degrades to a
 // reviewer-facing message; success lands via the same
 // landAndReclaimChatShadow every fast-forward landing already uses.
-func resolveChatShadowMerge(ctx context.Context, cm *chat.Module, cl claude.Client, dataDir string, pr int, conversationID, turnID, headRefName string) chat.Message {
+func resolveChatShadowMerge(ctx context.Context, cm *chat.Module, cl claude.Client, dataDir string, repo string, pr int, conversationID, turnID, headRefName string) chat.Message {
 	newMsg := func(body string, isErr bool) chat.Message {
 		kind := ""
 		if isErr {
@@ -307,7 +321,7 @@ func resolveChatShadowMerge(ctx context.Context, cm *chat.Module, cl claude.Clie
 		return msg
 	}
 
-	dir := chatShadowDir(dataDir, pr, conversationID)
+	dir := chatShadowDir(dataDir, repo, pr, conversationID)
 
 	// EVERY tip the landing must contain, merged one at a time in
 	// chatShadowMissingTips' own fixed order (origin's tip, then the PR's
@@ -321,7 +335,7 @@ func resolveChatShadowMerge(ctx context.Context, cm *chat.Module, cl claude.Clie
 	// regardless of how many tips turn out to need merging (see the file
 	// header and .claude/rules/workflow-determinism.md).
 	resolvedByClaude := false
-	for _, ref := range chatShadowMissingTips(ctx, dir, pr, headRefName) {
+	for _, ref := range chatShadowMissingTips(ctx, dir, repo, pr, headRefName) {
 		_, mergeErr := runGitIn(ctx, dir, "merge", ref, "-m", "Merge "+ref+" for chat edit")
 		conflicted, statusErr := chatShadowConflictedPaths(ctx, dir)
 		if statusErr != nil {
@@ -359,7 +373,7 @@ func resolveChatShadowMerge(ctx context.Context, cm *chat.Module, cl claude.Clie
 		resolvedByClaude = true
 	}
 
-	if err := landAndReclaimChatShadow(ctx, dir, pr, conversationID, headRefName); err != nil {
+	if err := landAndReclaimChatShadow(ctx, dir, repo, pr, conversationID, headRefName); err != nil {
 		// The merge itself is already committed locally at this point (an abort
 		// is no longer possible/meaningful) — a further race is rare enough that
 		// degrading to the ordinary retry message is acceptable; the next

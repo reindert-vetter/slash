@@ -25,8 +25,9 @@ import (
 // block); when no block contains the anchor at all, it degrades to a PR-wide
 // comment (Kind "review", empty File/Label) so it still shows up somewhere.
 // ImportedRootID/Source/Author/CreatedAt are always carried through.
-func mapReviewComment(dataDir string, pr int, blocks []Block, gc github.ReviewComment) CodeCommentInput {
+func mapReviewComment(dataDir string, repo string, pr int, blocks []Block, gc github.ReviewComment) CodeCommentInput {
 	in := CodeCommentInput{
+		Repo:           repo,
 		PR:             pr,
 		Body:           gc.Body,
 		Author:         gc.Author,
@@ -38,7 +39,7 @@ func mapReviewComment(dataDir string, pr int, blocks []Block, gc github.ReviewCo
 		RowEnd:         -1,
 	}
 
-	baseDir, headDir := worktreeDirs(dataDir, pr)
+	baseDir, headDir := worktreeDirs(dataDir, blocksRepo(blocks), pr)
 	side := gc.Side
 	if side == "" {
 		side = "RIGHT"
@@ -71,8 +72,9 @@ func mapReviewComment(dataDir string, pr int, blocks []Block, gc github.ReviewCo
 
 // mapGeneralComment turns a PR-wide GitHub comment (issue comment / review
 // summary) into a CodeCommentInput with no block anchor.
-func mapGeneralComment(pr int, gc github.GeneralComment) CodeCommentInput {
+func mapGeneralComment(repo string, pr int, gc github.GeneralComment) CodeCommentInput {
 	return CodeCommentInput{
+		Repo:           repo,
 		PR:             pr,
 		Body:           gc.Body,
 		Author:         gc.Author,

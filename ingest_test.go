@@ -36,7 +36,7 @@ func TestIngestWorkflowEndToEnd(t *testing.T) {
 	engine := tembed.New(tembed.NewMemoryStore())
 	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, db, dataDir, repoSlug)
 
-	res, err := m.StartIngest(context.Background(), pr)
+	res, err := m.StartIngest(context.Background(), "", pr)
 	if err != nil {
 		t.Fatalf("StartIngest: %v", err)
 	}
@@ -44,7 +44,7 @@ func TestIngestWorkflowEndToEnd(t *testing.T) {
 		t.Fatalf("ingest stored 0 blocks: %+v", res)
 	}
 
-	blocks, err := blocksByPR(db, pr)
+	blocks, err := blocksByPR(db, "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestStartIngestSurfacesRealFailure(t *testing.T) {
 		return nil, fmt.Errorf("prepare worktrees: ingest: prepare worktrees: cannot fetch commit bb4fd705: %s", wantCause)
 	})
 
-	_, err = m.StartIngest(context.Background(), pr)
+	_, err = m.StartIngest(context.Background(), "", pr)
 	if err == nil {
 		t.Fatal("expected StartIngest to fail")
 	}
@@ -114,15 +114,15 @@ func TestIngestEnsuresPRStatus(t *testing.T) {
 	})
 
 	ctx := context.Background()
-	if _, err := m.StartIngest(ctx, pr); err != nil {
+	if _, err := m.StartIngest(ctx, "", pr); err != nil {
 		t.Fatalf("StartIngest: %v", err)
 	}
-	m.EnsureRelations(ctx, pr)
-	if _, err := m.EnsurePRStatus(pr); err != nil {
+	m.EnsureRelations(ctx, "", pr)
+	if _, err := m.EnsurePRStatus("", pr); err != nil {
 		t.Fatalf("EnsurePRStatus: %v", err)
 	}
 
-	if id := m.findPRStatusLocked(pr); id == "" {
+	if id := m.findPRStatusLocked("", pr); id == "" {
 		t.Fatal("no pr_status tracker found for pr after ingest")
 	}
 }

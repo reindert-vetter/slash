@@ -23,10 +23,10 @@ func TestChatRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	const convID = "comment-1"
 
-	if err := m.EnsureConversation(ctx, convID, 5); err != nil {
+	if err := m.EnsureConversation(ctx, convID, "", 5); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.EnsureConversation(ctx, convID, 5); err != nil { // idempotent
+	if err := m.EnsureConversation(ctx, convID, "", 5); err != nil { // idempotent
 		t.Fatal(err)
 	}
 
@@ -76,7 +76,7 @@ func TestChatQuestionAndAnswer(t *testing.T) {
 	ctx := context.Background()
 	const convID = "comment-2"
 
-	if err := m.EnsureConversation(ctx, convID, 7); err != nil {
+	if err := m.EnsureConversation(ctx, convID, "", 7); err != nil {
 		t.Fatal(err)
 	}
 	q := Message{
@@ -114,10 +114,10 @@ func TestConversationsWithMessages(t *testing.T) {
 	m := testModule(t)
 	ctx := context.Background()
 
-	if err := m.EnsureConversation(ctx, "c-empty", 11); err != nil {
+	if err := m.EnsureConversation(ctx, "c-empty", "", 11); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.EnsureConversation(ctx, "c-talked", 11); err != nil {
+	if err := m.EnsureConversation(ctx, "c-talked", "", 11); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.SaveMessage(ctx, Message{ID: "m1", ConversationID: "c-talked", PR: 11, Role: "user", Body: "hoi"}); err != nil {
@@ -130,7 +130,7 @@ func TestConversationsWithMessages(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ids, err := m.ConversationsWithMessages(ctx, 11)
+	ids, err := m.ConversationsWithMessages(ctx, "", 11)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,20 +145,20 @@ func TestChatPurge(t *testing.T) {
 	m := testModule(t)
 	ctx := context.Background()
 
-	if err := m.EnsureConversation(ctx, "c-pr9", 9); err != nil {
+	if err := m.EnsureConversation(ctx, "c-pr9", "", 9); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.SaveMessage(ctx, Message{ID: "m9", ConversationID: "c-pr9", PR: 9, Role: "user", Body: "x"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.EnsureConversation(ctx, "c-pr10", 10); err != nil {
+	if err := m.EnsureConversation(ctx, "c-pr10", "", 10); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.SaveMessage(ctx, Message{ID: "m10", ConversationID: "c-pr10", PR: 10, Role: "user", Body: "y"}); err != nil {
 		t.Fatal(err)
 	}
 
-	n, err := m.Purge(ctx, 9)
+	n, err := m.Purge(ctx, "", 9)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestClearConversation(t *testing.T) {
 	m := testModule(t)
 	ctx := context.Background()
 
-	if err := m.EnsureConversation(ctx, "c1", 5); err != nil {
+	if err := m.EnsureConversation(ctx, "c1", "", 5); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.SaveMessage(ctx, Message{ID: "m1", ConversationID: "c1", PR: 5, Role: "user", Body: "hoi"}); err != nil {
@@ -189,7 +189,7 @@ func TestClearConversation(t *testing.T) {
 	if err := m.SetSession(ctx, "c1", "sess-abc"); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.EnsureConversation(ctx, "c2", 5); err != nil {
+	if err := m.EnsureConversation(ctx, "c2", "", 5); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.SaveMessage(ctx, Message{ID: "m2", ConversationID: "c2", PR: 5, Role: "user", Body: "andere"}); err != nil {

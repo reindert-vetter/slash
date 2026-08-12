@@ -30,7 +30,7 @@ func TestSaveBasicsRoundTrip(t *testing.T) {
 	if err := m.SaveBasics(ctx, in); err != nil {
 		t.Fatal(err)
 	}
-	got, ok, err := m.Get(ctx, 7)
+	got, ok, err := m.Get(ctx, "", 7)
 	if err != nil || !ok {
 		t.Fatalf("ok=%v err=%v", ok, err)
 	}
@@ -53,10 +53,10 @@ func TestSaveSummaryDoesNotClobberBasics(t *testing.T) {
 	if err := m.SaveBasics(ctx, Meta{PR: 1, Title: "T", Body: "B", Author: "a"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.SaveSummary(ctx, 1, "a short summary"); err != nil {
+	if err := m.SaveSummary(ctx, "", 1, "a short summary"); err != nil {
 		t.Fatal(err)
 	}
-	got, ok, err := m.Get(ctx, 1)
+	got, ok, err := m.Get(ctx, "", 1)
 	if err != nil || !ok {
 		t.Fatalf("ok=%v err=%v", ok, err)
 	}
@@ -76,13 +76,13 @@ func TestSaveStatusesDoesNotClobberSummary(t *testing.T) {
 	if err := m.SaveBasics(ctx, Meta{PR: 2, Title: "T2"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.SaveSummary(ctx, 2, "sum"); err != nil {
+	if err := m.SaveSummary(ctx, "", 2, "sum"); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.SaveStatuses(ctx, 2, "APPROVED", 5, 4, []string{"bob", "carol"}); err != nil {
+	if err := m.SaveStatuses(ctx, "", 2, "APPROVED", 5, 4, []string{"bob", "carol"}); err != nil {
 		t.Fatal(err)
 	}
-	got, ok, err := m.Get(ctx, 2)
+	got, ok, err := m.Get(ctx, "", 2)
 	if err != nil || !ok {
 		t.Fatalf("ok=%v err=%v", ok, err)
 	}
@@ -100,7 +100,7 @@ func TestSaveStatusesDoesNotClobberSummary(t *testing.T) {
 // TestGetMissing asserts an unfetched PR reports ok=false.
 func TestGetMissing(t *testing.T) {
 	m := open(t)
-	_, ok, err := m.Get(context.Background(), 999)
+	_, ok, err := m.Get(context.Background(), "", 999)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,13 +120,13 @@ func TestSinceReviewRoundTrip(t *testing.T) {
 	if err := m.SaveBasics(ctx, Meta{PR: 7, Title: "PS-1 doe iets"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.SaveSinceMark(ctx, 7, "review", "2026-08-01T10:00:00Z", "2026-08-04T09:00:00Z"); err != nil {
+	if err := m.SaveSinceMark(ctx, "", 7, "review", "2026-08-01T10:00:00Z", "2026-08-04T09:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.SaveSinceReview(ctx, 7, "- een commit", "Er is iets veranderd."); err != nil {
+	if err := m.SaveSinceReview(ctx, "", 7, "- een commit", "Er is iets veranderd."); err != nil {
 		t.Fatal(err)
 	}
-	got, ok, err := m.Get(ctx, 7)
+	got, ok, err := m.Get(ctx, "", 7)
 	if err != nil || !ok {
 		t.Fatalf("get: ok=%v err=%v", ok, err)
 	}
@@ -144,10 +144,10 @@ func TestSinceReviewRoundTrip(t *testing.T) {
 	}
 
 	// Nothing new any more → both halves cleared, the mark itself untouched.
-	if err := m.SaveSinceReview(ctx, 7, "", ""); err != nil {
+	if err := m.SaveSinceReview(ctx, "", 7, "", ""); err != nil {
 		t.Fatal(err)
 	}
-	got, _, _ = m.Get(ctx, 7)
+	got, _, _ = m.Get(ctx, "", 7)
 	if got.SinceFacts != "" || got.SinceSummary != "" {
 		t.Errorf("not cleared: %q/%q", got.SinceFacts, got.SinceSummary)
 	}

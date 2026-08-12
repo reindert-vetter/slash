@@ -120,12 +120,12 @@ func TestFileDeletedRoundTrip(t *testing.T) {
 	loose := Block{PR: pr, File: "app/B.php", Class: "B", Name: "y", Line: 3, EndLine: 6,
 		Status: StatusRemoved, Side: SideOld}
 
-	if err := replacePRBlocks(db, pr, []Block{del, loose}); err != nil {
+	if err := replacePRBlocks(db, "", pr, []Block{del, loose}); err != nil {
 		t.Fatal(err)
 	}
 	assertFlags := func(stage string) {
 		t.Helper()
-		got, err := blocksByPR(db, pr)
+		got, err := blocksByPR(db, "", pr)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -145,7 +145,7 @@ func TestFileDeletedRoundTrip(t *testing.T) {
 	}
 	assertFlags("replacePRBlocks")
 
-	if err := upsertPRFileBlocks(db, pr, []string{"app/A.php"}, []Block{del}); err != nil {
+	if err := upsertPRFileBlocks(db, "", pr, []string{"app/A.php"}, []Block{del}); err != nil {
 		t.Fatal(err)
 	}
 	assertFlags("upsertPRFileBlocks")
@@ -186,10 +186,10 @@ func TestFileDeletedMigration(t *testing.T) {
 
 	b := Block{PR: 1, File: "app/A.php", Class: "A", Name: "x", Line: 1, EndLine: 2,
 		Status: StatusRemoved, FileDeleted: true, Side: SideOld}
-	if err := replacePRBlocks(db, 1, []Block{b}); err != nil {
+	if err := replacePRBlocks(db, "", 1, []Block{b}); err != nil {
 		t.Fatalf("write after migration: %v", err)
 	}
-	got, err := blocksByPR(db, 1)
+	got, err := blocksByPR(db, "", 1)
 	if err != nil {
 		t.Fatal(err)
 	}

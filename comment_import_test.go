@@ -19,7 +19,7 @@ import (
 // (both sides get the same content unless the test overwrites one).
 func writeWorktreeFile(t *testing.T, dataDir string, pr int, rel, base, head string) {
 	t.Helper()
-	baseDir, headDir := worktreeDirs(dataDir, pr)
+	baseDir, headDir := worktreeDirs(dataDir, "", pr)
 	for dir, content := range map[string]string{baseDir: base, headDir: head} {
 		full := filepath.Join(dir, rel)
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
@@ -53,7 +53,7 @@ func TestMapReviewCommentAnchorsToBlockRow(t *testing.T) {
 
 	gc := github.ReviewComment{ID: 555, Author: "colleague", Body: "why 1?",
 		Path: "Order.php", Line: 4, Side: "RIGHT"}
-	in := mapReviewComment(dir, pr, []Block{b}, gc)
+	in := mapReviewComment(dir, "", pr, []Block{b}, gc)
 
 	if in.Source != "github" || in.ImportedRootID != 555 || in.Kind != "" {
 		t.Fatalf("import meta = source=%q root=%d kind=%q", in.Source, in.ImportedRootID, in.Kind)
@@ -73,7 +73,7 @@ func TestMapReviewCommentNoBlockIsPRWide(t *testing.T) {
 	dir := t.TempDir()
 	pr := 91
 	gc := github.ReviewComment{ID: 7, Body: "general note", Path: "Untracked.php", Line: 99, Side: "RIGHT"}
-	in := mapReviewComment(dir, pr, nil, gc)
+	in := mapReviewComment(dir, "", pr, nil, gc)
 	if in.Kind != "review" || in.Label != "" || in.RowStart != -1 {
 		t.Fatalf("PR-wide = kind=%q label=%q rowStart=%d", in.Kind, in.Label, in.RowStart)
 	}
@@ -84,7 +84,7 @@ func TestMapReviewCommentNoBlockIsPRWide(t *testing.T) {
 
 // mapGeneralComment carries kind + import meta and no anchor.
 func TestMapGeneralComment(t *testing.T) {
-	in := mapGeneralComment(91, github.GeneralComment{ID: 12, Author: "a", Body: "overall LGTM", Kind: "review_summary"})
+	in := mapGeneralComment("", 91, github.GeneralComment{ID: 12, Author: "a", Body: "overall LGTM", Kind: "review_summary"})
 	if in.Kind != "review_summary" || in.Source != "github" || in.ImportedRootID != 12 || in.RowStart != -1 || in.File != "" {
 		t.Fatalf("general = %+v", in)
 	}
@@ -108,9 +108,9 @@ func TestImportPRCommentsIntoReadModel(t *testing.T) {
 		{ID: 300, Author: "boss", Body: "approving with nits", Kind: "review_summary"},
 	})
 
-	m.importPRComments(ctx, pr)
+	m.importPRComments(ctx, "", pr)
 
-	list, _ := cs.List(ctx, pr)
+	list, _ := cs.List(ctx, "", pr)
 	if len(list) != 3 {
 		t.Fatalf("imported %d comments, want 3: %+v", len(list), list)
 	}
@@ -147,8 +147,8 @@ func TestImportPRCommentsIntoReadModel(t *testing.T) {
 	}
 
 	// A second import is a no-op reuse: still exactly three comments, still no posts.
-	m.importPRComments(ctx, pr)
-	list2, _ := cs.List(ctx, pr)
+	m.importPRComments(ctx, "", pr)
+	list2, _ := cs.List(ctx, "", pr)
 	if len(list2) != 3 {
 		t.Fatalf("after re-import %d comments, want 3 (idempotent)", len(list2))
 	}
@@ -172,9 +172,9 @@ func TestImportSkipsKiloReviewComment(t *testing.T) {
 			Body: "<!-- kilo-review -->\nCode Review Summary\nStatus: 2 Issues Found"},
 	})
 
-	m.importPRComments(ctx, pr)
+	m.importPRComments(ctx, "", pr)
 
-	list, _ := cs.List(ctx, pr)
+	list, _ := cs.List(ctx, "", pr)
 	if len(list) != 1 {
 		t.Fatalf("imported %d comments, want 1 (kilo-review skipped): %+v", len(list), list)
 	}
@@ -208,9 +208,9 @@ func TestImportCarriesAuthorAvatars(t *testing.T) {
 		{ID: 200, Author: "BOGSAT", AvatarURL: humanAvatar, Body: "please add a test", Kind: "issue"},
 	})
 
-	m.importPRComments(ctx, pr)
+	m.importPRComments(ctx, "", pr)
 
-	list, _ := cs.List(ctx, pr)
+	list, _ := cs.List(ctx, "", pr)
 	got := map[string]comments.Comment{}
 	for _, c := range list {
 		got[c.ID] = c
@@ -234,9 +234,9 @@ func TestImportCarriesAuthorAvatars(t *testing.T) {
 	gh.SetGeneralComments([]github.GeneralComment{
 		{ID: 500, Author: "BOGSAT", AvatarURL: humanAvatar, Body: "older import", Kind: "issue"},
 	})
-	m.importPRComments(ctx, pr)
+	m.importPRComments(ctx, "", pr)
 	waitFor(t, func() bool {
-		l, _ := cs.List(ctx, pr)
+		l, _ := cs.List(ctx, "", pr)
 		for _, c := range l {
 			if c.ID == "gh-500" && c.AvatarURL == humanAvatar {
 				return true
@@ -257,7 +257,7 @@ func TestImportCarriesAuthorAvatars(t *testing.T) {
 	}
 	gh.EnqueueReply(github.Reply{ID: 400, Author: "BOGSAT", AvatarURL: humanAvatar, Body: "fixed"})
 	waitFor(t, func() bool {
-		l, _ := cs.List(ctx, pr)
+		l, _ := cs.List(ctx, "", pr)
 		for _, c := range l {
 			if c.ID != runID {
 				continue
@@ -291,7 +291,7 @@ func TestImportedThreadMirrorsWithoutEcho(t *testing.T) {
 		t.Fatalf("runID = %q, want gh-900", runID)
 	}
 	// Stored, github-sourced, and NOT re-posted (it already exists on GitHub).
-	list, _ := cs.List(ctx, pr)
+	list, _ := cs.List(ctx, "", pr)
 	if len(list) != 1 || list[0].Source != "github" {
 		t.Fatalf("comments = %+v", list)
 	}
@@ -316,7 +316,7 @@ func TestImportedThreadMirrorsWithoutEcho(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
-		l, _ := cs.List(ctx, pr)
+		l, _ := cs.List(ctx, "", pr)
 		return len(l) == 1 && l[0].ReactionCount == 2
 	})
 	if gh.PostedCount() != 1 {
@@ -355,7 +355,7 @@ func TestPRWideReplyPostsIssueComment(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
-		l, _ := cs.List(ctx, pr)
+		l, _ := cs.List(ctx, "", pr)
 		return len(l) == 1 && l[0].Status == "resolved"
 	})
 	if gh.IssuePostedCount() != 1 {
@@ -385,9 +385,9 @@ func TestImportSkipsAppCreatedComment(t *testing.T) {
 	gh.SetReviewComments([]github.ReviewComment{
 		{ID: 1, Author: "me", Body: "app comment", Path: "src/Order.php", Line: 10, Side: "RIGHT"},
 	})
-	m.importPRComments(ctx, pr)
+	m.importPRComments(ctx, "", pr)
 
-	list, _ := cs.List(ctx, pr)
+	list, _ := cs.List(ctx, "", pr)
 	if len(list) != 1 {
 		t.Fatalf("comments = %d, want 1 (no duplicate of the app-created comment): %+v", len(list), list)
 	}
@@ -436,7 +436,7 @@ func TestResumePollingImportedThread(t *testing.T) {
 	m2.ResumePolling(ctx)
 	gh.EnqueueReply(github.Reply{ID: 1, Author: "x", Body: "late reply"})
 	waitFor(t, func() bool {
-		l, _ := cs.List(ctx, 42)
+		l, _ := cs.List(ctx, "", 42)
 		return len(l) == 1 && l[0].ID == runID && l[0].ReactionCount == 1
 	})
 }
@@ -490,14 +490,14 @@ func TestImportSkipsAvatarBackfillOnFailedRun(t *testing.T) {
 	gh.SetGeneralComments([]github.GeneralComment{
 		{ID: 700, Author: "colleague", AvatarURL: humanAvatar, Body: "imported root", Kind: "issue"},
 	})
-	m.importPRComments(ctx, pr)
+	m.importPRComments(ctx, "", pr)
 
 	for _, l := range logs {
 		if strings.Contains(l, "avatar backfill") {
 			t.Fatalf("expected no avatar-backfill log noise for a terminal run, got: %q", l)
 		}
 	}
-	list, _ := cs.List(ctx, pr)
+	list, _ := cs.List(ctx, "", pr)
 	for _, c := range list {
 		if c.ID == runID && c.AvatarURL == humanAvatar {
 			t.Fatalf("avatar was backfilled onto a permanently-failed run, want left untouched")
@@ -525,10 +525,10 @@ func TestImportAppliesGithubResolvedState(t *testing.T) {
 	gh.SetGeneralComments([]github.GeneralComment{
 		{ID: 200, Author: "colleague", Body: "a PR-wide one", Kind: "issue"},
 	})
-	m.importPRComments(ctx, pr)
+	m.importPRComments(ctx, "", pr)
 
 	statusOf := func() map[string]string {
-		list, _ := cs.List(ctx, pr)
+		list, _ := cs.List(ctx, "", pr)
 		out := map[string]string{}
 		for _, c := range list {
 			out[c.ID] = c.Status
@@ -541,7 +541,7 @@ func TestImportAppliesGithubResolvedState(t *testing.T) {
 
 	// Now one of them is resolved on GitHub. The next import tick picks it up.
 	gh.SetResolvedOnGithub(100)
-	m.importPRComments(ctx, pr)
+	m.importPRComments(ctx, "", pr)
 
 	got := statusOf()
 	if got["gh-100"] != "resolved" {
@@ -564,8 +564,8 @@ func TestImportAppliesGithubResolvedState(t *testing.T) {
 
 	// The resolve trace is stored once, and a further tick is a no-op (the
 	// Status check keeps it quiet) rather than a growing pile of reactions.
-	m.importPRComments(ctx, pr)
-	list, _ := cs.List(ctx, pr)
+	m.importPRComments(ctx, "", pr)
+	list, _ := cs.List(ctx, "", pr)
 	for _, c := range list {
 		if c.ID != "gh-100" {
 			continue

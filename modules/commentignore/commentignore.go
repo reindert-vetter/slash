@@ -31,6 +31,7 @@ const schema = `
 PRAGMA journal_mode = WAL;
 
 CREATE TABLE IF NOT EXISTS comment_ignores (
+  repo       TEXT    NOT NULL DEFAULT '',  -- canonical repo string: '' = the primary repo
   pr         INTEGER NOT NULL,
   comment_id TEXT    NOT NULL,
   PRIMARY KEY (pr, comment_id)
@@ -52,6 +53,7 @@ func Open(path string) (*Module, error) {
 		db.Close()
 		return nil, fmt.Errorf("commentignore: apply schema: %w", err)
 	}
+	migrate(db)
 	return &Module{db: db}, nil
 }
 
@@ -60,7 +62,19 @@ func New(db *sql.DB) (*Module, error) {
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("commentignore: apply schema: %w", err)
 	}
+	migrate(db)
 	return &Module{db: db}, nil
+}
+
+// migrate adds the multi-repo column to an existing DB (CREATE TABLE IF NOT
+// EXISTS never alters one); a duplicate-column error just means it is already up
+// to date. The PK stays (pr, comment_id): a comment id is a GitHub/ULID id that
+// is globally unique, so it cannot collide across repos — the column is what
+// keeps List/Purge scoped to one repo's PR. See repos.go.
+func migrate(db *sql.DB) {
+	_, _ = db.Exec(`ALTER TABLE comment_ignores ADD COLUMN repo TEXT NOT NULL DEFAULT ''`)
+	// Only after the column is guaranteed to exist (see the note in the schema).
+	_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS idx_comment_ignores_pr_repo ON comment_ignores(repo, pr)`)
 }
 
 func (m *Module) Close() error { return m.db.Close() }
@@ -75,23 +89,23 @@ func (m *Module) Close() error { return m.db.Close() }
 // — the frontend only ever matches these ids against the comments it actually
 // loaded, so an orphan is invisible; cleaning it up eagerly would mean giving
 // the comment-delete path a dependency on this module for no visible gain.
-func (m *Module) Set(ctx context.Context, pr int, commentID string, ignored bool) error {
+func (m *Module) Set(ctx context.Context, repo string, pr int, commentID string, ignored bool) error {
 	if !ignored {
 		_, err := m.db.ExecContext(ctx,
-			`DELETE FROM comment_ignores WHERE pr = ? AND comment_id = ?`, pr, commentID)
+			`DELETE FROM comment_ignores WHERE repo = ? AND pr = ? AND comment_id = ?`, repo, pr, commentID)
 		return err
 	}
 	_, err := m.db.ExecContext(ctx,
-		`INSERT OR IGNORE INTO comment_ignores (pr, comment_id) VALUES (?,?)`,
-		pr, commentID)
+		`INSERT OR IGNORE INTO comment_ignores (repo, pr, comment_id) VALUES (?,?,?)`,
+		repo, pr, commentID)
 	return err
 }
 
 // List returns the ignored comment ids of one PR, ordered deterministically.
 // READ — safe for the UI/API.
-func (m *Module) List(ctx context.Context, pr int) ([]string, error) {
+func (m *Module) List(ctx context.Context, repo string, pr int) ([]string, error) {
 	rows, err := m.db.QueryContext(ctx,
-		`SELECT comment_id FROM comment_ignores WHERE pr = ? ORDER BY comment_id`, pr)
+		`SELECT comment_id FROM comment_ignores WHERE repo = ? AND pr = ? ORDER BY comment_id`, repo, pr)
 	if err != nil {
 		return nil, err
 	}
@@ -110,9 +124,9 @@ func (m *Module) List(ctx context.Context, pr int) ([]string, error) {
 // Purge removes every ignored-comment row of one PR and reports how many rows
 // went. WRITE — called by the cleanup workflow's purge Activity once a PR has
 // been merged long enough. Unconditional on pr, so re-running it is a no-op.
-func (m *Module) Purge(ctx context.Context, pr int) (int64, error) {
+func (m *Module) Purge(ctx context.Context, repo string, pr int) (int64, error) {
 	res, err := m.db.ExecContext(ctx,
-		`DELETE FROM comment_ignores WHERE pr = ?`, pr)
+		`DELETE FROM comment_ignores WHERE repo = ? AND pr = ?`, repo, pr)
 	if err != nil {
 		return 0, err
 	}

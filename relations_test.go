@@ -17,7 +17,7 @@ import (
 // EventServiceProvider — enough to exercise every mapping source.
 func writeFixtureRepo(t *testing.T, dataDir string, pr int) {
 	t.Helper()
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		// Dispatcher: dispatches OrderPaid via event(new …) and OrderShipped via
 		// static ::dispatch().
@@ -132,7 +132,7 @@ func TestBuildRelationsBothSidesRequired(t *testing.T) {
 // writeFixtureRepo's dispatch-site matching.
 func writeProviderListenerFixtureRepo(t *testing.T, dataDir string, pr int) {
 	t.Helper()
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"app/Providers/EventServiceProvider.php": `<?php
 namespace App\Providers;
@@ -211,10 +211,10 @@ func TestRelationsModuleRoundTrip(t *testing.T) {
 		{PR: 1, ParentID: "1:a.php:A::x", ChildID: "1:b.php:B::handle", Kind: relations.KindEventListener},
 		{PR: 1, ParentID: "1:a.php:A::x", ChildID: "1:c.php:C::handle", Kind: relations.KindEventListener},
 	}
-	if err := m.Replace(ctx, 1, rels); err != nil {
+	if err := m.Replace(ctx, "", 1, rels); err != nil {
 		t.Fatal(err)
 	}
-	got, err := m.List(ctx, 1)
+	got, err := m.List(ctx, "", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,14 +222,14 @@ func TestRelationsModuleRoundTrip(t *testing.T) {
 		t.Fatalf("List = %d rows, want 2", len(got))
 	}
 	// Replace is a full swap for the PR: a smaller set overwrites the larger one.
-	if err := m.Replace(ctx, 1, rels[:1]); err != nil {
+	if err := m.Replace(ctx, "", 1, rels[:1]); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := m.List(ctx, 1); len(got) != 1 {
+	if got, _ := m.List(ctx, "", 1); len(got) != 1 {
 		t.Fatalf("after shrink List = %d rows, want 1", len(got))
 	}
 	// A different PR is untouched by another PR's Replace.
-	if got, _ := m.List(ctx, 2); len(got) != 0 {
+	if got, _ := m.List(ctx, "", 2); len(got) != 0 {
 		t.Fatalf("other PR List = %d rows, want 0", len(got))
 	}
 }
@@ -243,7 +243,7 @@ func TestRelationsModuleRoundTrip(t *testing.T) {
 // resource-route action forms.
 func writeLaravelFixture(t *testing.T, dataDir string, pr int) {
 	t.Helper()
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"routes/api.php": `<?php
 use App\Http\Controllers\ProductGroupController;
@@ -431,7 +431,7 @@ func TestBuildRelationsLaravelChain(t *testing.T) {
 func TestBuildRelationsRouteToModuleController(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 77
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"routes/client/web.php": `<?php
 use Modules\Sitemaps\Http\Controllers\MerchantFeedController;
@@ -499,7 +499,7 @@ func TestBuildRelationsLaravelChainCapturesLine(t *testing.T) {
 	ctrl := blockBy(blocks, "ProductGroupController", "show")
 	resource := blockBy(blocks, "ProductGroupResource", "toArray")
 
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	raw, err := os.ReadFile(filepath.Join(headDir, "app/Http/Controllers/ProductGroupController.php"))
 	if err != nil {
 		t.Fatal(err)
@@ -579,7 +579,7 @@ func TestBuildRelationsLaravelBothSidesRequired(t *testing.T) {
 func TestBuildRelationsControllerResourceVersionedName(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 62
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	files := map[string]string{
 		"app/Http/Controllers/AffiliateController.php": `<?php
 namespace App\Http\Controllers;
@@ -628,7 +628,7 @@ func TestBuildRelationsWorkflow(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if err := replacePRBlocks(db, pr, []Block{dispatcher, listenerA, listenerB}); err != nil {
+	if err := replacePRBlocks(db, "", pr, []Block{dispatcher, listenerA, listenerB}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -642,9 +642,9 @@ func TestBuildRelationsWorkflow(t *testing.T) {
 	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), rel, testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, db, dataDir, "test/repo")
 
 	ctx := context.Background()
-	m.EnsureRelations(ctx, pr) // initial build runs inside StartWorkflow
+	m.EnsureRelations(ctx, "", pr) // initial build runs inside StartWorkflow
 
-	got, err := rel.List(ctx, pr)
+	got, err := rel.List(ctx, "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -666,7 +666,7 @@ func TestBuildRelationsLaravelWorkflow(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if err := replacePRBlocks(db, pr, blocks); err != nil {
+	if err := replacePRBlocks(db, "", pr, blocks); err != nil {
 		t.Fatal(err)
 	}
 
@@ -680,9 +680,9 @@ func TestBuildRelationsLaravelWorkflow(t *testing.T) {
 	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), rel, testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, db, dataDir, "test/repo")
 
 	ctx := context.Background()
-	m.EnsureRelations(ctx, pr)
+	m.EnsureRelations(ctx, "", pr)
 
-	got, err := rel.List(ctx, pr)
+	got, err := rel.List(ctx, "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}

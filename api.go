@@ -94,7 +94,7 @@ func (s *server) handlePRs(w http.ResponseWriter, r *http.Request) {
 	// falls back to showing just #number with no extra meta line.
 	if s.tasks != nil && s.tasks.prmeta != nil {
 		for i := range prs {
-			if meta, ok, err := s.tasks.prmeta.Get(r.Context(), prs[i].PR); err == nil && ok {
+			if meta, ok, err := s.tasks.prmeta.Get(r.Context(), prs[i].Repo, prs[i].PR); err == nil && ok {
 				prs[i].Title = meta.Title
 				prs[i].Author = meta.Author
 				prs[i].Additions = meta.Additions
@@ -108,7 +108,18 @@ func (s *server) handlePRs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, prs)
 }
 
-// handleBlocks serves GET /api/blocks?pr=N — the blocks of one PR (a delta).
+// queryRepo reads the optional `repo=` parameter every per-PR endpoint accepts
+// and canonicalizes it (see canonRepo): absent — which is what every URL built
+// before multi-repo existed looks like — means the PRIMARY repo, a slug/name/key
+// names another configured repo, and anything unknown also falls back to the
+// primary repo rather than erroring, so a stale link can never address a repo we
+// do not have.
+func queryRepo(r *http.Request) string {
+	return canonRepo(r.URL.Query().Get("repo"))
+}
+
+// handleBlocks serves GET /api/blocks?pr=N[&repo=owner/name] — the blocks of one
+// PR (a delta).
 func (s *server) handleBlocks(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -119,7 +130,7 @@ func (s *server) handleBlocks(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid pr", http.StatusBadRequest)
 		return
 	}
-	blocks, err := blocksByPR(s.db, pr)
+	blocks, err := blocksByPR(s.db, queryRepo(r), pr)
 	if err != nil {
 		http.Error(w, "query failed", http.StatusInternalServerError)
 		return
@@ -144,12 +155,13 @@ func (s *server) handleBlockStats(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid pr", http.StatusBadRequest)
 		return
 	}
-	blocks, err := blocksByPR(s.db, pr)
+	repo := queryRepo(r)
+	blocks, err := blocksByPR(s.db, repo, pr)
 	if err != nil {
 		http.Error(w, "query failed", http.StatusInternalServerError)
 		return
 	}
-	baseDir, headDir := worktreeDirs(s.dataDir, pr)
+	baseDir, headDir := worktreeDirs(s.dataDir, repo, pr)
 	stats := make(map[string]int, len(blocks))
 	for _, b := range blocks {
 		stats[b.ID()] = blockChangedRowCount(baseDir, headDir, b)
@@ -188,12 +200,13 @@ func (s *server) handleCode(w http.ResponseWriter, r *http.Request) {
 		oldFile = file
 	}
 
-	ok, err := blockFileExists(s.db, pr, file)
+	repo := queryRepo(r)
+	ok, err := blockFileExists(s.db, repo, pr, file)
 	if err != nil {
 		http.Error(w, "query failed", http.StatusInternalServerError)
 		return
 	}
-	baseDir, headDir := worktreeDirs(s.dataDir, pr)
+	baseDir, headDir := worktreeDirs(s.dataDir, repo, pr)
 	if !ok {
 		if _, _, inWorktree := resolveWithinWorktree(headDir, file); !inWorktree {
 			http.Error(w, "unknown block", http.StatusNotFound)
@@ -208,19 +221,22 @@ func (s *server) handleCode(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleIngest serves POST /api/ingest {"pr":N} — runs the ingest pipeline.
+// handleIngest serves POST /api/ingest {"pr":N[,"repo":"owner/name"]} — runs the
+// ingest pipeline. An absent/unknown repo means the primary one (canonRepo).
 func (s *server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	var req struct {
-		PR int `json:"pr"`
+		PR   int    `json:"pr"`
+		Repo string `json:"repo"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.PR <= 0 {
 		http.Error(w, "invalid pr", http.StatusBadRequest)
 		return
 	}
+	req.Repo = canonRepo(req.Repo)
 
 	if s.tasks == nil {
 		http.Error(w, "workflow engine unavailable", http.StatusInternalServerError)
@@ -230,14 +246,14 @@ func (s *server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), ingestTimeout)
 	defer cancel()
 
-	res, err := s.tasks.manager.StartIngest(ctx, req.PR)
+	res, err := s.tasks.manager.StartIngest(ctx, req.Repo, req.PR)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
 	// Build the block relations (event→listener, …) now that blocks are stored.
 	// The workflow is the only writer; the initial build runs synchronously.
-	s.tasks.manager.EnsureRelations(ctx, req.PR)
+	s.tasks.manager.EnsureRelations(ctx, req.Repo, req.PR)
 	// Ensure the pr_status tracker exists too (idempotent, non-blocking — see
 	// EnsurePRStatus), so an ingest triggered purely via this endpoint (no
 	// browser tab ever opened on the PR) still gets the PR summary/CI status
@@ -245,7 +261,7 @@ func (s *server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	// tracker spawns for a genuinely new run (pollIngestRefresh/
 	// pollImportComments in ensurePRStatus) — without this, such a PR would
 	// never auto-refresh on later commits until someone happened to open it.
-	if _, err := s.tasks.manager.EnsurePRStatus(req.PR); err != nil {
+	if _, err := s.tasks.manager.EnsurePRStatus(req.Repo, req.PR); err != nil {
 		s.tasks.manager.logf("ingest: ensure pr_status pr=%d: %v", req.PR, err)
 	}
 	writeJSON(w, http.StatusOK, res)
@@ -266,7 +282,7 @@ func (s *server) handleIngestProgress(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid pr", http.StatusBadRequest)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "pr": pr, "stage": ingestStage(pr)})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "pr": pr, "stage": ingestStage(queryRepo(r), pr)})
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

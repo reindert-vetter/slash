@@ -59,23 +59,23 @@ type pendingPushView struct {
 // the pending ref either still exists (not pushed) or doesn't (pushed).
 var pendingPushStatus = struct {
 	sync.Mutex
-	byPR map[int]pendingPushView
-}{byPR: map[int]pendingPushView{}}
+	byPR map[prKey]pendingPushView
+}{byPR: map[prKey]pendingPushView{}}
 
-func setPendingPushState(pr int, state, errMsg string) {
+func setPendingPushState(repo string, pr int, state, errMsg string) {
 	pendingPushStatus.Lock()
 	defer pendingPushStatus.Unlock()
 	if state == "" {
-		delete(pendingPushStatus.byPR, pr)
+		delete(pendingPushStatus.byPR, prKey{repo, pr})
 		return
 	}
-	pendingPushStatus.byPR[pr] = pendingPushView{PR: pr, State: state, Error: errMsg}
+	pendingPushStatus.byPR[prKey{repo, pr}] = pendingPushView{PR: pr, State: state, Error: errMsg}
 }
 
-func pendingPushStateOf(pr int) (state, errMsg string) {
+func pendingPushStateOf(repo string, pr int) (state, errMsg string) {
 	pendingPushStatus.Lock()
 	defer pendingPushStatus.Unlock()
-	v := pendingPushStatus.byPR[pr]
+	v := pendingPushStatus.byPR[prKey{repo, pr}]
 	return v.State, v.Error
 }
 
@@ -87,9 +87,9 @@ func pendingPushStateOf(pr int) (state, errMsg string) {
 // the ref it already has beats a gh lookup on every read. A PR whose head
 // branch was renamed can briefly leave two refs; the most recently committed
 // one wins, and the stale one is swept with the PR (cleanup.go).
-func pendingPushRefFor(ctx context.Context, pr int) (ref, headRef string) {
+func pendingPushRefFor(ctx context.Context, repo string, pr int) (ref, headRef string) {
 	prefix := fmt.Sprintf("refs/slash/pending/pr-%d/", pr)
-	out, err := runGit(ctx, "for-each-ref", "--sort=-committerdate", "--format=%(refname)", prefix)
+	out, err := runGitFor(ctx, repo, "for-each-ref", "--sort=-committerdate", "--format=%(refname)", prefix)
 	if err != nil {
 		return "", ""
 	}
@@ -107,15 +107,15 @@ func pendingPushRefFor(ctx context.Context, pr int) (ref, headRef string) {
 // when nothing is waiting to be pushed. Read-only and local-only: three git
 // plumbing reads, no fetch, no gh — cheap enough for a plain GET handler and for
 // the PR-overview list to ask about several PRs at once.
-func loadPendingPush(ctx context.Context, pr int) *pendingPushView {
-	ref, headRef := pendingPushRefFor(ctx, pr)
+func loadPendingPush(ctx context.Context, repo string, pr int) *pendingPushView {
+	ref, headRef := pendingPushRefFor(ctx, repo, pr)
 	if ref == "" {
 		// Nothing landed. A "failed" status left over from an earlier attempt is
 		// meaningless now, so drop it rather than keep reporting it.
-		setPendingPushState(pr, "", "")
+		setPendingPushState(repo, pr, "", "")
 		return nil
 	}
-	sha := pendingRefSHA(ctx, ref)
+	sha := pendingRefSHA(ctx, repo, ref)
 	if sha == "" {
 		return nil
 	}
@@ -125,13 +125,13 @@ func loadPendingPush(ctx context.Context, pr int) *pendingPushView {
 	// a good-enough display count/file list, never a decision input: the push
 	// itself re-checks against the real remote.
 	base := "origin/" + headRef
-	if pendingRefSHA(ctx, base) != "" {
-		if out, err := runGit(ctx, "rev-list", "--count", base+".."+ref); err == nil {
+	if pendingRefSHA(ctx, repo, base) != "" {
+		if out, err := runGitFor(ctx, repo, "rev-list", "--count", base+".."+ref); err == nil {
 			if n, err := strconv.Atoi(strings.TrimSpace(string(out))); err == nil && n > 0 {
 				v.Ahead = n
 			}
 		}
-		if out, err := runGit(ctx, "diff", "--name-only", base, ref); err == nil {
+		if out, err := runGitFor(ctx, repo, "diff", "--name-only", base, ref); err == nil {
 			for _, f := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 				if f = strings.TrimSpace(f); f != "" {
 					v.Files = append(v.Files, f)
@@ -139,10 +139,10 @@ func loadPendingPush(ctx context.Context, pr int) *pendingPushView {
 			}
 		}
 	}
-	if state, errMsg := pendingPushStateOf(pr); state != "" {
+	if state, errMsg := pendingPushStateOf(repo, pr); state != "" {
 		v.State, v.Error = state, errMsg
 	}
-	v.PushRunID = chatMergeQueueRunID(pr)
+	v.PushRunID = chatMergeQueueRunID(repo, pr)
 	return v
 }
 
@@ -159,28 +159,28 @@ func loadPendingPush(ctx context.Context, pr int) *pendingPushView {
 // not a Go error: the ref is KEPT so the reviewer can merge the newer tip in
 // via a fresh chat commit and try again, and the failure is reported through
 // the volatile status the todo row reads.
-func pushPendingPR(ctx context.Context, tm *TaskManager, pr int) {
-	ref, headRef := pendingPushRefFor(ctx, pr)
+func pushPendingPR(ctx context.Context, tm *TaskManager, repo string, pr int) {
+	ref, headRef := pendingPushRefFor(ctx, repo, pr)
 	if ref == "" {
-		setPendingPushState(pr, "", "")
-		publishPendingPushChanged(pr)
+		setPendingPushState(repo, pr, "", "")
+		publishPendingPushChanged(repo, pr)
 		return
 	}
 
-	setPendingPushState(pr, pendingPushPushing, "")
-	publishPendingPushChanged(pr)
+	setPendingPushState(repo, pr, pendingPushPushing, "")
+	publishPendingPushChanged(repo, pr)
 
 	// ingestMu-guarded like every other operation on the shared clone's refs
 	// (see ensureChatShadowWorktreeAt/landAndReclaimChatShadow).
 	ingestMu.Lock()
-	_, err := runGit(ctx, "push", "origin", ref+":refs/heads/"+headRef)
+	_, err := runGitFor(ctx, repo, "push", "origin", ref+":refs/heads/"+headRef)
 	ingestMu.Unlock()
 	if err != nil {
-		setPendingPushState(pr, pendingPushFailed, pushFailureReason(err))
+		setPendingPushState(repo, pr, pendingPushFailed, pushFailureReason(err))
 		if tm != nil && tm.logf != nil {
 			tm.logf("pending push: pr %d push %s failed: %v", pr, headRef, err)
 		}
-		publishPendingPushChanged(pr)
+		publishPendingPushChanged(repo, pr)
 		return
 	}
 
@@ -189,13 +189,13 @@ func pushPendingPR(ctx context.Context, tm *TaskManager, pr int) {
 	// lets pollIngestRefresh fall back to its plain equality check
 	// (ingestRefreshNeeded) — remote and ingested head are the same commit again.
 	ingestMu.Lock()
-	_, delErr := runGit(ctx, "update-ref", "-d", ref)
+	_, delErr := runGitFor(ctx, repo, "update-ref", "-d", ref)
 	ingestMu.Unlock()
 	if delErr != nil && tm != nil && tm.logf != nil {
 		tm.logf("pending push: pr %d pushed but could not drop %s: %v", pr, ref, delErr)
 	}
-	setPendingPushState(pr, "", "")
-	publishPendingPushChanged(pr)
+	setPendingPushState(repo, pr, "", "")
+	publishPendingPushChanged(repo, pr)
 }
 
 // pushFailureReason reduces a git push failure to one short line for the todo
@@ -214,16 +214,16 @@ func pushFailureReason(err error) string {
 
 // removePendingRefs deletes every pending ref of a PR — used when the PR itself
 // is purged (cleanup.go). Best-effort, like every other git call in that sweep.
-func removePendingRefs(ctx context.Context, pr int) {
+func removePendingRefs(ctx context.Context, repo string, pr int) {
 	prefix := fmt.Sprintf("refs/slash/pending/pr-%d/", pr)
-	out, err := runGit(ctx, "for-each-ref", "--format=%(refname)", prefix)
+	out, err := runGitFor(ctx, repo, "for-each-ref", "--format=%(refname)", prefix)
 	if err != nil {
 		return
 	}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		if line = strings.TrimSpace(line); line != "" {
-			_, _ = runGit(ctx, "update-ref", "-d", line)
+			_, _ = runGitFor(ctx, repo, "update-ref", "-d", line)
 		}
 	}
-	setPendingPushState(pr, "", "")
+	setPendingPushState(repo, pr, "", "")
 }

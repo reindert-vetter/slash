@@ -380,7 +380,7 @@ func unreadCommentCandidates(ctx context.Context, cs *comments.Module, snap *sna
 			if canonRepo(row.Repo) != "" {
 				continue
 			}
-			list, err := cs.List(ctx, row.Number)
+			list, err := cs.List(ctx, "", row.Number)
 			if err != nil {
 				continue // best-effort per PR, mirrors the rest of this file
 			}

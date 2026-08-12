@@ -36,7 +36,7 @@ var relationDetectors = []relationDetector{
 // buildRelations runs every detector over the PR's blocks and concatenates the
 // edges. headDir is the PR's head worktree (worktreeDirs).
 func buildRelations(dataDir string, pr int, blocks []Block) []relations.Relation {
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, blocksRepo(blocks), pr)
 	var out []relations.Relation
 	for _, det := range relationDetectors {
 		out = append(out, det(headDir, pr, blocks)...)

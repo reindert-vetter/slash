@@ -37,7 +37,7 @@ func TestUpsertPRFileBlocksPreservesLinkedData(t *testing.T) {
 	blockB := Block{PR: pr, File: fileB, Class: "InvoiceService", Name: "finalize", Line: 5, EndLine: 15, Status: StatusModified, Side: SideNew}
 
 	// Simulate the initial full ingest.
-	if err := replacePRBlocks(db, pr, []Block{blockA, blockB}); err != nil {
+	if err := replacePRBlocks(db, "", pr, []Block{blockA, blockB}); err != nil {
 		t.Fatal(err)
 	}
 	idA, idB := blockA.ID(), blockB.ID()
@@ -48,10 +48,10 @@ func TestUpsertPRFileBlocksPreservesLinkedData(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ap.Close()
-	if err := ap.Replace(ctx, pr, idA, []int{1, 2}, nil, nil); err != nil {
+	if err := ap.Replace(ctx, "", pr, idA, []int{1, 2}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := ap.Replace(ctx, pr, idB, []int{0}, nil, nil); err != nil {
+	if err := ap.Replace(ctx, "", pr, idB, []int{0}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -90,11 +90,11 @@ func TestUpsertPRFileBlocksPreservesLinkedData(t *testing.T) {
 	// refresh".
 	newBlockA := blockA
 	newBlockA.EndLine = 30
-	if err := upsertPRFileBlocks(db, pr, []string{fileA}, []Block{newBlockA}); err != nil {
+	if err := upsertPRFileBlocks(db, "", pr, []string{fileA}, []Block{newBlockA}); err != nil {
 		t.Fatal(err)
 	}
 
-	blocks, err := blocksByPR(db, pr)
+	blocks, err := blocksByPR(db, "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestUpsertPRFileBlocksPreservesLinkedData(t *testing.T) {
 	}
 
 	// Approvals for both blocks survive untouched.
-	appr, err := ap.List(ctx, pr)
+	appr, err := ap.List(ctx, "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestUpsertPRFileBlocksPreservesLinkedData(t *testing.T) {
 	}
 
 	// The comment on block A survives.
-	comms, err := cs.List(ctx, pr)
+	comms, err := cs.List(ctx, "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestUpsertPRFileBlocksPreservesLinkedData(t *testing.T) {
 
 	// The LLM-found call resolution survives with its status intact — a
 	// refresh must never silently reset an LLM-owned "found" row.
-	entries, err := cr.List(ctx, pr)
+	entries, err := cr.List(ctx, "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,17 +177,17 @@ func TestUpsertPRFileBlocksRemovesDeletedSymbol(t *testing.T) {
 	other := "app/Services/InvoiceService.php"
 	removed := Block{PR: pr, File: file, Class: "OrderService", Name: "oldHelper", Line: 30, EndLine: 32, Status: StatusModified, Side: SideNew}
 	kept := Block{PR: pr, File: other, Class: "InvoiceService", Name: "finalize", Line: 5, EndLine: 15, Status: StatusModified, Side: SideNew}
-	if err := replacePRBlocks(db, pr, []Block{removed, kept}); err != nil {
+	if err := replacePRBlocks(db, "", pr, []Block{removed, kept}); err != nil {
 		t.Fatal(err)
 	}
 
 	// The delta refresh re-parses `file` and finds no blocks at all in it
 	// (e.g. the method was deleted).
-	if err := upsertPRFileBlocks(db, pr, []string{file}, nil); err != nil {
+	if err := upsertPRFileBlocks(db, "", pr, []string{file}, nil); err != nil {
 		t.Fatal(err)
 	}
 
-	blocks, err := blocksByPR(db, pr)
+	blocks, err := blocksByPR(db, "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,22 +206,22 @@ func TestSaveLoadIngestSHAs(t *testing.T) {
 	}
 	defer db.Close()
 
-	if _, _, ok, err := loadIngestSHAs(db, 1); err != nil || ok {
+	if _, _, ok, err := loadIngestSHAs(db, "", 1); err != nil || ok {
 		t.Fatalf("loadIngestSHAs before any save = ok=%v err=%v, want ok=false", ok, err)
 	}
 
-	if err := saveIngestSHAs(db, 1, "base1", "head1"); err != nil {
+	if err := saveIngestSHAs(db, "", 1, "base1", "head1"); err != nil {
 		t.Fatal(err)
 	}
-	base, head, ok, err := loadIngestSHAs(db, 1)
+	base, head, ok, err := loadIngestSHAs(db, "", 1)
 	if err != nil || !ok || base != "base1" || head != "head1" {
 		t.Fatalf("loadIngestSHAs = base=%q head=%q ok=%v err=%v, want base1/head1/true", base, head, ok, err)
 	}
 
-	if err := saveIngestSHAs(db, 1, "base1", "head2"); err != nil {
+	if err := saveIngestSHAs(db, "", 1, "base1", "head2"); err != nil {
 		t.Fatal(err)
 	}
-	base, head, ok, err = loadIngestSHAs(db, 1)
+	base, head, ok, err = loadIngestSHAs(db, "", 1)
 	if err != nil || !ok || base != "base1" || head != "head2" {
 		t.Fatalf("loadIngestSHAs after update = base=%q head=%q ok=%v err=%v, want base1/head2/true", base, head, ok, err)
 	}
@@ -238,7 +238,7 @@ func TestRefreshIngestDeltaRequiresPriorIngest(t *testing.T) {
 	}
 	defer db.Close()
 
-	if _, err := refreshIngestDelta(context.Background(), db, dataDir, 99, "base", "head"); err == nil {
+	if _, err := refreshIngestDelta(context.Background(), db, dataDir, "", 99, "base", "head"); err == nil {
 		t.Fatal("refreshIngestDelta without a prior ingest should error, got nil")
 	}
 }
@@ -254,10 +254,10 @@ func TestRefreshIngestDeltaSkipsWhenHeadUnchanged(t *testing.T) {
 	}
 	defer db.Close()
 
-	if err := saveIngestSHAs(db, 99, "base1", "head1"); err != nil {
+	if err := saveIngestSHAs(db, "", 99, "base1", "head1"); err != nil {
 		t.Fatal(err)
 	}
-	res, err := refreshIngestDelta(context.Background(), db, dataDir, 99, "base1", "head1")
+	res, err := refreshIngestDelta(context.Background(), db, dataDir, "", 99, "base1", "head1")
 	if err != nil {
 		t.Fatalf("refreshIngestDelta: %v", err)
 	}
@@ -286,7 +286,7 @@ func TestRefreshIngestDeltaEndToEnd(t *testing.T) {
 	}
 	defer db.Close()
 
-	shas, err := prepareIngestWorktrees(ctx, dataDir, pr)
+	shas, err := prepareIngestWorktrees(ctx, dataDir, "", pr)
 	if err != nil {
 		t.Fatalf("prepareIngestWorktrees: %v", err)
 	}
@@ -302,18 +302,18 @@ func TestRefreshIngestDeltaEndToEnd(t *testing.T) {
 		t.Skip("could not derive a distinct prior head SHA, skipping")
 	}
 
-	if _, err := scanAndStoreIngestBlocksLocked(ctx, db, dataDir, pr, worktreeSHAs{
+	if _, err := scanAndStoreIngestBlocksLocked(ctx, db, dataDir, "", pr, worktreeSHAs{
 		BaseSHA: shas.BaseSHA, HeadSHA: priorHead, Paths: shas.Paths,
 	}); err != nil {
 		t.Fatalf("seed initial (older) ingest: %v", err)
 	}
 
-	before, err := blocksByPR(db, pr)
+	before, err := blocksByPR(db, "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	res, err := refreshIngestDelta(ctx, db, dataDir, pr, shas.BaseSHA, shas.HeadSHA)
+	res, err := refreshIngestDelta(ctx, db, dataDir, "", pr, shas.BaseSHA, shas.HeadSHA)
 	if err != nil {
 		t.Fatalf("refreshIngestDelta: %v", err)
 	}
@@ -321,12 +321,12 @@ func TestRefreshIngestDeltaEndToEnd(t *testing.T) {
 		t.Fatalf("expected the delta path (base unchanged), got a full fallback: %+v", res)
 	}
 
-	_, head, ok, err := loadIngestSHAs(db, pr)
+	_, head, ok, err := loadIngestSHAs(db, "", pr)
 	if err != nil || !ok || head != shas.HeadSHA {
 		t.Fatalf("loadIngestSHAs after refresh = head=%q ok=%v err=%v, want %q/true", head, ok, err, shas.HeadSHA)
 	}
 
-	after, err := blocksByPR(db, pr)
+	after, err := blocksByPR(db, "", pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -386,5 +386,5 @@ func TestIngestRefreshNeededIgnoresALandedLocalCommit(t *testing.T) {
 // delta on, it must quietly do nothing rather than panic or signal nonsense.
 func TestRefreshTreeAfterLandingNoOpsWithoutPriorIngest(t *testing.T) {
 	setupChatShadowRepo(t, "feature/x", "v1\n")
-	refreshTreeAfterLanding(context.Background(), nil, 4242, "feature/x")
+	refreshTreeAfterLanding(context.Background(), nil, "", 4242, "feature/x")
 }

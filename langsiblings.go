@@ -59,7 +59,7 @@ func (s *server) handleLangSiblings(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "siblings": []langSibling{}})
 		return
 	}
-	_, headDir := worktreeDirs(s.dataDir, pr)
+	_, headDir := worktreeDirs(s.dataDir, queryRepo(r), pr)
 	full, _, inWorktree := resolveWithinWorktree(headDir, langRoot)
 	siblings := []langSibling{}
 	if inWorktree {

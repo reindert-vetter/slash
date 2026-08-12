@@ -67,13 +67,13 @@ var nowMillis = func() int64 { return time.Now().UnixMilli() }
 // than only once the CLI has actually started. The phase moves on to
 // chatPhaseStarting once local prep is done — see advanceChatProgress, called
 // from runOneClaudeTurn right before the claude CLI is invoked.
-func startChatProgress(pr int, conversationID string) {
+func startChatProgress(repo string, pr int, conversationID string) {
 	now := nowMillis()
 	p := chatProgress{Running: true, Phase: chatPhasePreparing, StartedAt: now, UpdatedAt: now}
 	chatProgressMu.Lock()
 	chatProgressByConv[conversationID] = p
 	chatProgressMu.Unlock()
-	publishChatProgress(pr, conversationID, p)
+	publishChatProgress(repo, pr, conversationID, p)
 }
 
 // advanceChatProgress sets phase on the running turn's snapshot and publishes
@@ -81,14 +81,14 @@ func startChatProgress(pr int, conversationID string) {
 // CLI event, reused here for the one phase transition that happens OUTSIDE
 // that stream (local prep finished, about to invoke the CLI). A no-op if the
 // turn already finished (mirrors mutateChatProgress's own late-event guard).
-func advanceChatProgress(pr int, conversationID, phase string) {
+func advanceChatProgress(repo string, pr int, conversationID, phase string) {
 	snap, ok := mutateChatProgress(conversationID, func(p *chatProgress) {
 		p.Phase = phase
 	})
 	if !ok {
 		return
 	}
-	publishChatProgress(pr, conversationID, snap)
+	publishChatProgress(repo, pr, conversationID, snap)
 }
 
 // mutateChatProgress applies fn to the stored snapshot and returns the result.
@@ -113,7 +113,7 @@ func mutateChatProgress(conversationID string, fn func(*chatProgress)) (chatProg
 // the real message has been refetched — and then forgets the turn. A tab that
 // connects after this gets nothing from GET /api/chat/progress and simply
 // renders the stored transcript, which by then holds the finished message.
-func finishChatProgress(pr int, conversationID string) {
+func finishChatProgress(repo string, pr int, conversationID string) {
 	chatProgressMu.Lock()
 	p, ok := chatProgressByConv[conversationID]
 	if ok {
@@ -125,7 +125,7 @@ func finishChatProgress(pr int, conversationID string) {
 	}
 	p.Running = false
 	p.UpdatedAt = nowMillis()
-	publishChatProgress(pr, conversationID, p)
+	publishChatProgress(repo, pr, conversationID, p)
 }
 
 // chatProgressFor returns the current snapshot of a running turn, if any.
@@ -139,15 +139,15 @@ func chatProgressFor(conversationID string) (chatProgress, bool) {
 // publishChatProgress/publishChatChanged are the two chat publishers. Kept
 // here, next to the state they describe, so every push about a conversation
 // goes through one pair of functions.
-func publishChatProgress(pr int, conversationID string, p chatProgress) {
-	events.publish(eventChatProgress, pr, conversationID, p)
+func publishChatProgress(repo string, pr int, conversationID string, p chatProgress) {
+	events.publish(eventChatProgress, repo, pr, conversationID, p)
 }
 
 // publishChatChanged says "this conversation's transcript changed"; the client
 // refetches GET /api/chat rather than trusting a pushed payload.
-func publishChatChanged(pr int, conversationID string) {
+func publishChatChanged(repo string, pr int, conversationID string) {
 	if conversationID == "" {
 		return
 	}
-	events.publish(eventChatMessage, pr, conversationID, nil)
+	events.publish(eventChatMessage, repo, pr, conversationID, nil)
 }

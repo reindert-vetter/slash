@@ -62,7 +62,7 @@ func TestHandleTaskCodeCommentFileRequirement(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 				t.Fatal(err)
 			}
-			list, err := cs.List(context.Background(), 42)
+			list, err := cs.List(context.Background(), "", 42)
 			if err != nil {
 				t.Fatal(err)
 			}

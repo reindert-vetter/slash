@@ -45,33 +45,33 @@ func TestParseCommentBatchMarkers(t *testing.T) {
 // never reached falling back to "open" instead of staying "busy").
 func TestCommentBatchProgressLifecycle(t *testing.T) {
 	pr := 4242
-	startCommentBatchProgress(pr, []string{"c1", "c2", "c3"})
+	startCommentBatchProgress("", pr, []string{"c1", "c2", "c3"})
 	t.Cleanup(func() {
 		commentBatchMu.Lock()
-		delete(commentBatchByPR, pr)
+		delete(commentBatchByPR, prKey{"", pr})
 		commentBatchMu.Unlock()
 	})
-	if !commentBatchRunning(pr) {
+	if !commentBatchRunning("", pr) {
 		t.Fatal("want running after start")
 	}
-	markCommentBatchCurrent(pr, "c1")
-	markCommentBatchCurrent(pr, "nope")
-	p, _ := commentBatchProgressFor(pr)
+	markCommentBatchCurrent("", pr, "c1")
+	markCommentBatchCurrent("", pr, "nope")
+	p, _ := commentBatchProgressFor("", pr)
 	if p.Current != "c1" || p.Items[0].State != commentBatchStateBusy {
 		t.Fatalf("after start marker: %+v", p)
 	}
-	markCommentBatchOutcome(pr, "c1", commentBatchStateDone, "aangepast")
-	markCommentBatchOutcome(pr, "c2", commentBatchStateSkipped, "alleen een vraag")
-	markCommentBatchCurrent(pr, "c3")
-	p, _ = commentBatchProgressFor(pr)
+	markCommentBatchOutcome("", pr, "c1", commentBatchStateDone, "aangepast")
+	markCommentBatchOutcome("", pr, "c2", commentBatchStateSkipped, "alleen een vraag")
+	markCommentBatchCurrent("", pr, "c3")
+	p, _ = commentBatchProgressFor("", pr)
 	if p.Done != 1 || p.Skipped != 1 || p.Total != 3 {
 		t.Fatalf("counts: %+v", p)
 	}
 	if p.Items[0].Note != "aangepast" || p.Current != "c3" {
 		t.Fatalf("outcome bookkeeping: %+v", p)
 	}
-	finishCommentBatchProgress(pr)
-	p, ok := commentBatchProgressFor(pr)
+	finishCommentBatchProgress("", pr)
+	p, ok := commentBatchProgressFor("", pr)
 	if !ok {
 		t.Fatal("finished snapshot must be kept")
 	}
@@ -134,7 +134,7 @@ func TestRunCommentBatchWithoutWorkCopy(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		commentBatchMu.Lock()
-		delete(commentBatchByPR, 12)
+		delete(commentBatchByPR, prKey{"", 12})
 		commentBatchMu.Unlock()
 	})
 
@@ -147,7 +147,7 @@ func TestRunCommentBatchWithoutWorkCopy(t *testing.T) {
 	if len(fake.Calls) != 0 {
 		t.Fatalf("want no claude call, got %d", len(fake.Calls))
 	}
-	p, ok := commentBatchProgressFor(12)
+	p, ok := commentBatchProgressFor("", 12)
 	if !ok || p.Error == "" {
 		t.Fatalf("want a recorded reason, got %+v", p)
 	}
@@ -158,27 +158,27 @@ func TestRunCommentBatchWithoutWorkCopy(t *testing.T) {
 // deltas (the CLI streams per token), so only complete lines may be acted on.
 func TestCommentBatchProgressSinkMarkers(t *testing.T) {
 	pr := 4343
-	startCommentBatchProgress(pr, []string{"c1"})
+	startCommentBatchProgress("", pr, []string{"c1"})
 	t.Cleanup(func() {
 		commentBatchMu.Lock()
-		delete(commentBatchByPR, pr)
+		delete(commentBatchByPR, prKey{"", pr})
 		commentBatchMu.Unlock()
 	})
-	sink := commentBatchProgressSink(pr, []string{"c1"})
+	sink := commentBatchProgressSink("", pr, []string{"c1"})
 	sink(claude.ChatEvent{Kind: claude.ChatEventText, TextDelta: "[slash:sta"})
-	if p, _ := commentBatchProgressFor(pr); p.Current != "" {
+	if p, _ := commentBatchProgressFor("", pr); p.Current != "" {
 		t.Fatal("a half-streamed marker line must not count")
 	}
 	sink(claude.ChatEvent{Kind: claude.ChatEventText, TextDelta: "rt] c1\n"})
-	if p, _ := commentBatchProgressFor(pr); p.Current != "c1" {
+	if p, _ := commentBatchProgressFor("", pr); p.Current != "c1" {
 		t.Fatalf("want c1 current, got %+v", p)
 	}
 	sink(claude.ChatEvent{Kind: claude.ChatEventTool, Tool: "Read", Detail: "src/A.php"})
-	if p, _ := commentBatchProgressFor(pr); p.Phase != chatPhaseTool || p.Tool != "Read" {
+	if p, _ := commentBatchProgressFor("", pr); p.Phase != chatPhaseTool || p.Tool != "Read" {
 		t.Fatalf("tool event: %+v", p)
 	}
 	sink(claude.ChatEvent{Kind: claude.ChatEventText, TextDelta: "[slash:done] c1 aangepast\n"})
-	p, _ := commentBatchProgressFor(pr)
+	p, _ := commentBatchProgressFor("", pr)
 	if p.Done != 1 || p.Items[0].Note != "aangepast" || p.Current != "" {
 		t.Fatalf("done marker: %+v", p)
 	}

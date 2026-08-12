@@ -113,7 +113,7 @@ func TestTaskCodeCommentFlow(t *testing.T) {
 	if gh.PostedCount() != 1 {
 		t.Fatalf("github posted %d, want 1", gh.PostedCount())
 	}
-	list, _ := cs.List(ctx, 42)
+	list, _ := cs.List(ctx, "", 42)
 	if len(list) != 1 || list[0].ID != runID || list[0].Status != "open" {
 		t.Fatalf("comments = %+v", list)
 	}
@@ -124,7 +124,7 @@ func TestTaskCodeCommentFlow(t *testing.T) {
 	}
 	waitFor(t, func() bool { return gh.PostedCount() == 2 }) // mirrored reply
 	waitFor(t, func() bool {
-		l, _ := cs.List(ctx, 42)
+		l, _ := cs.List(ctx, "", 42)
 		return len(l) == 1 && l[0].ReactionCount == 1
 	})
 
@@ -137,7 +137,7 @@ func TestTaskCodeCommentFlow(t *testing.T) {
 	// workflows.go) incorrectly swallowing a real external reply.
 	gh.EnqueueReply(github.Reply{ID: 501, Author: "colleague", Body: "agreed"})
 	waitFor(t, func() bool {
-		l, _ := cs.List(ctx, 42)
+		l, _ := cs.List(ctx, "", 42)
 		return len(l) == 1 && l[0].ReactionCount == 2
 	})
 
@@ -146,14 +146,14 @@ func TestTaskCodeCommentFlow(t *testing.T) {
 	// be unresolved again, see TestTaskCodeCommentUnresolveReopensThread).
 	gh.EnqueueReply(github.Reply{ID: 502, Author: "colleague", Body: "looks fine now", Done: true})
 	waitFor(t, func() bool {
-		l, _ := cs.List(ctx, 42)
+		l, _ := cs.List(ctx, "", 42)
 		return len(l) == 1 && l[0].Status == "resolved"
 	})
 	if s, _ := m.engine.Status(runID); s != tembed.StatusWaiting {
 		t.Fatalf("status = %q, want waiting (a resolve no longer ends the thread)", s)
 	}
 
-	l, _ := cs.List(ctx, 42)
+	l, _ := cs.List(ctx, "", 42)
 	if l[0].Status != "resolved" {
 		t.Fatalf("status = %q, want resolved", l[0].Status)
 	}
@@ -184,7 +184,7 @@ func TestTaskCodeCommentPersistsGithubID(t *testing.T) {
 	if gh.PostedCount() != 1 {
 		t.Fatalf("github posted %d, want 1", gh.PostedCount())
 	}
-	list, _ := cs.List(ctx, 42)
+	list, _ := cs.List(ctx, "", 42)
 	if len(list) != 1 || list[0].ID != runID || list[0].GithubID == 0 {
 		t.Fatalf("comments = %+v, want a non-zero githubId", list)
 	}
@@ -224,7 +224,7 @@ func TestPublishLocalThreadWithReply(t *testing.T) {
 	// the UI reads to stop offering the publish choice.
 	var rootGithubID int64
 	waitFor(t, func() bool {
-		l, _ := cs.List(ctx, 42)
+		l, _ := cs.List(ctx, "", 42)
 		rootGithubID = l[0].GithubID
 		return rootGithubID != 0
 	})
@@ -249,7 +249,7 @@ func TestPublishLocalThreadWithReply(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
-		l, _ := cs.List(ctx, 42)
+		l, _ := cs.List(ctx, "", 42)
 		return l[0].Body == "Unchecked array access (line 12)."
 	})
 	if b, ok := gh.EditedReviews[rootGithubID]; ok {
@@ -280,7 +280,7 @@ func TestPublishLocalThreadWithHistory(t *testing.T) {
 		}
 	}
 	waitFor(t, func() bool {
-		l, _ := cs.List(ctx, 42)
+		l, _ := cs.List(ctx, "", 42)
 		return len(l) == 1 && l[0].ReactionCount == 2
 	})
 	if gh.PostedCount() != 0 {
@@ -364,7 +364,7 @@ func TestPublishActionMovesThreadToGithub(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
-		l, _ := cs.List(ctx, 42)
+		l, _ := cs.List(ctx, "", 42)
 		return len(l) == 1 && l[0].ReactionCount == 1
 	})
 
@@ -382,7 +382,7 @@ func TestPublishActionMovesThreadToGithub(t *testing.T) {
 		}
 	}
 	// No new reply was stored, and the thread now counts as a GitHub chat.
-	l, _ := cs.List(ctx, 42)
+	l, _ := cs.List(ctx, "", 42)
 	if l[0].ReactionCount != 1 {
 		t.Fatalf("reactionCount = %d, want 1 (publish stores no reply)", l[0].ReactionCount)
 	}
@@ -425,7 +425,7 @@ func TestTaskCodeCommentEditRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	list, _ := cs.List(ctx, 42)
+	list, _ := cs.List(ctx, "", 42)
 	rootGithubID := list[0].GithubID
 	if rootGithubID == 0 {
 		t.Fatalf("comments = %+v, want a non-zero githubId", list)
@@ -437,7 +437,7 @@ func TestTaskCodeCommentEditRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
-		l, _ := cs.List(ctx, 42)
+		l, _ := cs.List(ctx, "", 42)
 		return len(l) == 1 && l[0].Body == "This branch is actually fine."
 	})
 	waitFor(t, func() bool { return gh.EditedReviews[rootGithubID] == "This branch is actually fine." })
@@ -462,10 +462,10 @@ func TestTaskCodeCommentEditReply(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
-		l, _ := cs.List(ctx, 42)
+		l, _ := cs.List(ctx, "", 42)
 		return len(l) == 1 && len(l[0].Reactions) == 1 && l[0].Reactions[0].GithubID != 0
 	})
-	list, _ := cs.List(ctx, 42)
+	list, _ := cs.List(ctx, "", 42)
 	rootGithubID := list[0].GithubID
 	replyGithubID := list[0].Reactions[0].GithubID
 	if replyGithubID == rootGithubID {
@@ -478,11 +478,11 @@ func TestTaskCodeCommentEditReply(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
-		l, _ := cs.List(ctx, 42)
+		l, _ := cs.List(ctx, "", 42)
 		return len(l) == 1 && len(l[0].Reactions) == 1 && l[0].Reactions[0].Body == "please clarify the edge case"
 	})
 	// The root comment's own body/GitHub comment were left untouched.
-	list, _ = cs.List(ctx, 42)
+	list, _ = cs.List(ctx, "", 42)
 	if list[0].Body != "Check this." {
 		t.Fatalf("root body = %q, want unchanged", list[0].Body)
 	}
@@ -513,10 +513,10 @@ func TestTaskCodeCommentGithubEchoOfOwnReplyIsIgnored(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
-		l, _ := cs.List(ctx, 42)
+		l, _ := cs.List(ctx, "", 42)
 		return len(l) == 1 && len(l[0].Reactions) == 1 && l[0].Reactions[0].GithubID != 0
 	})
-	list, _ := cs.List(ctx, 42)
+	list, _ := cs.List(ctx, "", 42)
 	mirroredGithubID := list[0].Reactions[0].GithubID
 
 	// The per-thread poller fetches this same reply back from GitHub and
@@ -531,7 +531,7 @@ func TestTaskCodeCommentGithubEchoOfOwnReplyIsIgnored(t *testing.T) {
 	// Give the echo a moment to (not) land, then assert the reaction count
 	// stayed at 1 — a second reaction never gets stored.
 	time.Sleep(30 * time.Millisecond)
-	list, _ = cs.List(ctx, 42)
+	list, _ = cs.List(ctx, "", 42)
 	if len(list) != 1 || len(list[0].Reactions) != 1 {
 		t.Fatalf("reactions = %+v, want exactly 1 (echo of own reply must be ignored)", list[0].Reactions)
 	}
@@ -543,7 +543,7 @@ func TestTaskCodeCommentGithubEchoOfOwnReplyIsIgnored(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
-		l, _ := cs.List(ctx, 42)
+		l, _ := cs.List(ctx, "", 42)
 		return len(l) == 1 && len(l[0].Reactions) == 2
 	})
 }
@@ -561,7 +561,7 @@ func TestTaskCodeCommentEditPRWideRootUsesIssueEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	list, _ := cs.List(ctx, 42)
+	list, _ := cs.List(ctx, "", 42)
 	rootGithubID := list[0].GithubID
 	if rootGithubID == 0 {
 		t.Fatalf("comments = %+v, want a non-zero githubId", list)
@@ -605,7 +605,7 @@ func TestTaskCodeCommentUIResolveResolvesGithubThread(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
-		l, _ := cs.List(ctx, 42)
+		l, _ := cs.List(ctx, "", 42)
 		return len(l) == 1 && l[0].Status == "resolved"
 	})
 
@@ -617,7 +617,7 @@ func TestTaskCodeCommentUIResolveResolvesGithubThread(t *testing.T) {
 	if gh.PostedCount() != 1 {
 		t.Fatalf("github posted %d, want 1 (no /resolve text)", gh.PostedCount())
 	}
-	l, _ := cs.List(ctx, 42)
+	l, _ := cs.List(ctx, "", 42)
 	if len(l) != 1 || l[0].Status != "resolved" {
 		t.Fatalf("comments = %+v, want one resolved", l)
 	}
@@ -647,7 +647,7 @@ func TestTaskCodeCommentUnresolveReopensThread(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
-		l, _ := cs.List(ctx, 42)
+		l, _ := cs.List(ctx, "", 42)
 		return len(l) == 1 && l[0].Status == "resolved"
 	})
 
@@ -658,7 +658,7 @@ func TestTaskCodeCommentUnresolveReopensThread(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
-		l, _ := cs.List(ctx, 42)
+		l, _ := cs.List(ctx, "", 42)
 		return len(l) == 1 && l[0].Status == "open"
 	})
 
@@ -671,7 +671,7 @@ func TestTaskCodeCommentUnresolveReopensThread(t *testing.T) {
 		t.Fatalf("github posted %d, want 1 (no sentinel text)", gh.PostedCount())
 	}
 	// The reopen left a visible trace in the conversation.
-	l, _ := cs.List(ctx, 42)
+	l, _ := cs.List(ctx, "", 42)
 	if len(l) != 1 || len(l[0].Reactions) != 2 || l[0].Reactions[1].Body != reopenSentinel {
 		t.Fatalf("reactions = %+v, want the /resolve trace plus a %q one", l[0].Reactions, reopenSentinel)
 	}
@@ -683,7 +683,7 @@ func TestTaskCodeCommentUnresolveReopensThread(t *testing.T) {
 		t.Fatalf("reply after unresolve: %v", err)
 	}
 	waitFor(t, func() bool {
-		l, _ := cs.List(ctx, 42)
+		l, _ := cs.List(ctx, "", 42)
 		return len(l) == 1 && len(l[0].Reactions) == 3 && l[0].Status == "open"
 	})
 	// That reply — and only that one — mirrored to GitHub (Fake.Reply records
@@ -736,7 +736,7 @@ func TestTaskCodeCommentCallSegmentPrefix(t *testing.T) {
 	if body != want {
 		t.Fatalf("posted body = %q, want %q", body, want)
 	}
-	list, _ := cs.List(ctx, 42)
+	list, _ := cs.List(ctx, "", 42)
 	if len(list) != 1 || list[0].ID != runID || list[0].Body != "Check the null case." {
 		t.Fatalf("stored comment body = %+v, want raw body untouched", list)
 	}
@@ -800,7 +800,7 @@ func TestTaskCodeCommentLocalSkipsGitHub(t *testing.T) {
 	if gh.PostedCount() != 0 {
 		t.Fatalf("github posted %d, want 0 for a local note", gh.PostedCount())
 	}
-	list, _ := cs.List(ctx, 42)
+	list, _ := cs.List(ctx, "", 42)
 	if len(list) != 1 || list[0].ID != runID || list[0].Status != "open" {
 		t.Fatalf("comments = %+v", list)
 	}
@@ -816,7 +816,7 @@ func TestTaskCodeCommentLocalSkipsGitHub(t *testing.T) {
 	if s, _ := m.engine.Status(runID); s != tembed.StatusCompleted {
 		t.Fatalf("status = %q, want completed", s)
 	}
-	if l, _ := cs.List(ctx, 42); len(l) != 0 {
+	if l, _ := cs.List(ctx, "", 42); len(l) != 0 {
 		t.Fatalf("comments = %+v, want none after delete", l)
 	}
 	if gh.DeletedCount() != 0 {
@@ -844,7 +844,7 @@ func TestTaskCodeCommentDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
-		l, _ := cs.List(ctx, 42)
+		l, _ := cs.List(ctx, "", 42)
 		return len(l) == 1 && l[0].ReactionCount == 1
 	})
 
@@ -858,7 +858,7 @@ func TestTaskCodeCommentDelete(t *testing.T) {
 		t.Fatalf("status = %q, want completed", s)
 	}
 	// The comment (and its cascaded reaction) is gone from the read-model.
-	list, err := cs.List(ctx, 42)
+	list, err := cs.List(ctx, "", 42)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -913,7 +913,7 @@ func TestTaskCodeCommentDeleteWithoutReactions(t *testing.T) {
 	if s, _ := m.engine.Status(runID); s != tembed.StatusCompleted {
 		t.Fatalf("status = %q, want completed", s)
 	}
-	list, _ := cs.List(ctx, 43)
+	list, _ := cs.List(ctx, "", 43)
 	if len(list) != 0 {
 		t.Fatalf("comments = %+v, want none after delete", list)
 	}
@@ -936,7 +936,7 @@ func TestPollStopsWhenPRMerged(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	prRunID, err := m.ensurePRStatus(7) // returns the tracker started at StartCodeComment
+	prRunID, err := m.ensurePRStatus("", 7) // returns the tracker started at StartCodeComment
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -981,7 +981,7 @@ func TestHeartbeatKeepsActive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	prRunID, _ := m.ensurePRStatus(8)
+	prRunID, _ := m.ensurePRStatus("", 8)
 
 	m.Heartbeat(runID) // reviewer is active → fast cadence, no PR-state check
 	gh.SetPRState("merged")
@@ -1248,7 +1248,7 @@ func TestTaskSurvivesRestart(t *testing.T) {
 	if s, _ := e2.Status(runID); s != tembed.StatusWaiting {
 		t.Fatalf("status = %s, want waiting", s)
 	}
-	if l, _ := cs.List(context.Background(), 1); len(l) != 1 || l[0].Status != "resolved" {
+	if l, _ := cs.List(context.Background(), "", 1); len(l) != 1 || l[0].Status != "resolved" {
 		t.Fatalf("comments = %+v, want one resolved", l)
 	}
 }
@@ -1269,10 +1269,10 @@ func TestPRStatusFetchesMeta(t *testing.T) {
 	engine := tembed.New(tembed.NewMemoryStore())
 	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), pm, nil, nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
 
-	if _, err := m.EnsurePRStatus(7); err != nil {
+	if _, err := m.EnsurePRStatus("", 7); err != nil {
 		t.Fatal(err)
 	}
-	meta, ok, err := pm.Get(context.Background(), 7)
+	meta, ok, err := pm.Get(context.Background(), "", 7)
 	if err != nil || !ok {
 		t.Fatalf("meta not stored (ok=%v err=%v)", ok, err)
 	}
@@ -1313,7 +1313,7 @@ func TestPRStatusThreeStages(t *testing.T) {
 	engine := tembed.New(tembed.NewMemoryStore())
 	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), pm, nil, nil, nil, nil, nil, cl, jr, nil, "", "test/repo")
 
-	if _, err := m.EnsurePRStatus(7); err != nil {
+	if _, err := m.EnsurePRStatus("", 7); err != nil {
 		t.Fatal(err)
 	}
 	// EnsurePRStatus starts pr_status with StartWorkflowDeferLow: basics (stage
@@ -1323,7 +1323,7 @@ func TestPRStatusThreeStages(t *testing.T) {
 	// the later stages (the Fake Haiku returns immediately, so this is quick).
 	engine.Wait()
 
-	meta, ok, err := pm.Get(context.Background(), 7)
+	meta, ok, err := pm.Get(context.Background(), "", 7)
 	if err != nil || !ok {
 		t.Fatalf("meta not stored (ok=%v err=%v)", ok, err)
 	}
@@ -1407,10 +1407,10 @@ func TestRunsForPR(t *testing.T) {
 	engine := tembed.New(tembed.NewMemoryStore())
 	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), pm, nil, nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
 
-	if _, err := m.EnsurePRStatus(101); err != nil {
+	if _, err := m.EnsurePRStatus("", 101); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.EnsurePRStatus(202); err != nil {
+	if _, err := m.EnsurePRStatus("", 202); err != nil {
 		t.Fatal(err)
 	}
 	m.EnsureInbox(context.Background()) // per-repo, no "pr" field — must not leak into either PR's list

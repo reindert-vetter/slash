@@ -42,7 +42,7 @@ func TestUpsertGoPreservesLLMRows(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	list, err := m.List(ctx, 1)
+	list, err := m.List(ctx, "", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,26 +88,26 @@ func TestPrune(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := m.Prune(ctx, 1, []Entry{{PR: 1, CallerID: stay, CallKey: "prepare"}}); err != nil {
+	if err := m.Prune(ctx, "", 1, []Entry{{PR: 1, CallerID: stay, CallKey: "prepare"}}); err != nil {
 		t.Fatal(err)
 	}
 
-	list, err := m.List(ctx, 1)
+	list, err := m.List(ctx, "", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(list) != 1 || list[0].CallerID != stay || list[0].CallKey != "prepare" {
 		t.Fatalf("PR 1 after prune = %+v, want only %s/prepare", list, stay)
 	}
-	if other, _ := m.List(ctx, 2); len(other) != 1 {
+	if other, _ := m.List(ctx, "", 2); len(other) != 1 {
 		t.Fatalf("PR 2 = %+v, want its row untouched", other)
 	}
 
 	// Empty keep-set clears the whole PR.
-	if err := m.Prune(ctx, 1, nil); err != nil {
+	if err := m.Prune(ctx, "", 1, nil); err != nil {
 		t.Fatal(err)
 	}
-	if list, _ := m.List(ctx, 1); len(list) != 0 {
+	if list, _ := m.List(ctx, "", 1); len(list) != 0 {
 		t.Fatalf("PR 1 after empty-keep prune = %+v, want empty", list)
 	}
 }
@@ -135,7 +135,7 @@ func TestKindRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	list, err := m.List(ctx, 1)
+	list, err := m.List(ctx, "", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +190,7 @@ func TestMigrateAddsKindColumn(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	list, err := m.List(context.Background(), 1)
+	list, err := m.List(context.Background(), "", 1)
 	if err != nil {
 		t.Fatal(err)
 	}

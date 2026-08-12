@@ -111,7 +111,7 @@ func TestRunOneClaudeTurnUsesReadOnlyHeadWorktreeWithoutEscalating(t *testing.T)
 	const pr, commentID = 970732, "comment-readonly"
 
 	dataDir := t.TempDir()
-	_, headDir := worktreeDirs(dataDir, pr)
+	_, headDir := worktreeDirs(dataDir, "", pr)
 	if err := os.MkdirAll(headDir, 0o755); err != nil {
 		t.Fatal(err)
 	}

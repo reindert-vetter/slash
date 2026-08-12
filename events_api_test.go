@@ -26,8 +26,8 @@ func TestHandleEventsStreamsPublishedEvents(t *testing.T) {
 
 	// Wait for the handler to have registered itself, then publish.
 	waitFor(t, func() bool { return events.subscriberCount() == before+1 })
-	events.publish(eventChatProgress, 42, "conv-x", chatProgress{Running: true, Phase: chatPhaseWriting, Partial: "Hal"})
-	events.publish(eventChatMessage, 99, "other-pr", nil) // different PR: must not show up
+	events.publish(eventChatProgress, "", 42, "conv-x", chatProgress{Running: true, Phase: chatPhaseWriting, Partial: "Hal"})
+	events.publish(eventChatMessage, "", 99, "other-pr", nil) // different PR: must not show up
 	waitFor(t, func() bool { return strings.Contains(rr.Body.String(), "conv-x") })
 
 	cancel()
@@ -71,7 +71,7 @@ func TestHandleChatProgress(t *testing.T) {
 		t.Fatalf("no running turn should read as running:false, got %q", body)
 	}
 
-	startChatProgress(7, "c1")
+	startChatProgress("", 7, "c1")
 	rr = httptest.NewRecorder()
 	s.handleChatProgress(rr, httptest.NewRequest(http.MethodGet, "/api/chat/progress?commentId=c1", nil))
 	if body := rr.Body.String(); !strings.Contains(body, `"running":true`) || !strings.Contains(body, chatPhasePreparing) {
@@ -89,9 +89,9 @@ func TestHandleChatProgress(t *testing.T) {
 // skipping events (the drop policy in eventbus.go).
 func TestSSEResyncAfterDrop(t *testing.T) {
 	h := newEventHub()
-	_, sub := h.subscribe(0)
+	_, sub := h.subscribe("")
 	for i := 0; i < eventSubBuffer+1; i++ {
-		h.publish(eventChatMessage, 1, "conv", nil)
+		h.publish(eventChatMessage, "", 1, "conv", nil)
 	}
 	var out strings.Builder
 	if sub.dropped.Swap(false) {

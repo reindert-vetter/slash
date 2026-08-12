@@ -22,6 +22,8 @@ import (
 
 // resolveArg is the payload of the resolveWithModel Activity.
 type resolveArg struct {
+	// Repo is the canonical repo string ("" = the primary repo, see repos.go).
+	Repo        string   `json:"repo,omitempty"`
 	PR          int      `json:"pr"`
 	CallerID    string   `json:"callerId"`
 	CallerFile  string   `json:"callerFile"`
@@ -76,7 +78,7 @@ type llmAnswer struct {
 // notfound). Never returns an error: a model/CLI failure degrades to notfound so
 // the workflow always completes (best-effort, like the github activities).
 func resolveCallsWithModel(ctx context.Context, cl claude.Client, dataDir string, arg resolveArg) []callresolve.Entry {
-	_, headDir := worktreeDirs(dataDir, arg.PR)
+	_, headDir := worktreeDirs(dataDir, arg.Repo, arg.PR)
 	idx := buildSymbolIndex(headDir)
 	agentic := arg.Model == claude.ModelSonnet
 	shortModel := callresolve.ModelHaiku

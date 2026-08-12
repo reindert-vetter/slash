@@ -228,6 +228,11 @@ const (
 
 // CodeCommentInput starts a code-comment Workflow Execution.
 type CodeCommentInput struct {
+	// Repo is the canonical repo string this PR belongs to: "" (absent) for the
+	// primary repo — which is what every Execution started before multi-repo
+	// existed carries, so replay of a stored history is unaffected — and
+	// "owner/name" for any other configured repo. See repos.go.
+	Repo   string `json:"repo,omitempty"`
 	PR     int    `json:"pr"`
 	File   string `json:"file"`
 	Line   int    `json:"line"`
@@ -378,7 +383,12 @@ type postResult struct {
 
 // PRStatusInput starts a pr_status Workflow Execution — one tracker per PR.
 type PRStatusInput struct {
-	PR int `json:"pr"`
+	// Repo is the canonical repo string this PR belongs to: "" (absent) for the
+	// primary repo — which is what every Execution started before multi-repo
+	// existed carries, so replay of a stored history is unaffected — and
+	// "owner/name" for any other configured repo. See repos.go.
+	Repo string `json:"repo,omitempty"`
+	PR   int    `json:"pr"`
 }
 
 // PRStateSignal drives the pr_status tracker via SignalPRState. It carries
@@ -417,12 +427,22 @@ type taskInboxRefreshResult struct {
 // BuildRelationsInput starts (and re-signals) a build_relations Execution — one
 // per PR.
 type BuildRelationsInput struct {
-	PR int `json:"pr"`
+	// Repo is the canonical repo string this PR belongs to: "" (absent) for the
+	// primary repo — which is what every Execution started before multi-repo
+	// existed carries, so replay of a stored history is unaffected — and
+	// "owner/name" for any other configured repo. See repos.go.
+	Repo string `json:"repo,omitempty"`
+	PR   int    `json:"pr"`
 }
 
 // ApproveInput starts an approve Execution — one tracker per PR.
 type ApproveInput struct {
-	PR int `json:"pr"`
+	// Repo is the canonical repo string this PR belongs to: "" (absent) for the
+	// primary repo — which is what every Execution started before multi-repo
+	// existed carries, so replay of a stored history is unaffected — and
+	// "owner/name" for any other configured repo. See repos.go.
+	Repo string `json:"repo,omitempty"`
+	PR   int    `json:"pr"`
 }
 
 // ApprovalSignal carries one block's full approved state into the approve
@@ -478,7 +498,12 @@ type AutoWarnSignal struct {
 
 // IgnoreCommentInput starts an ignore_comment Execution — one tracker per PR.
 type IgnoreCommentInput struct {
-	PR int `json:"pr"`
+	// Repo is the canonical repo string this PR belongs to: "" (absent) for the
+	// primary repo — which is what every Execution started before multi-repo
+	// existed carries, so replay of a stored history is unaffected — and
+	// "owner/name" for any other configured repo. See repos.go.
+	Repo string `json:"repo,omitempty"`
+	PR   int    `json:"pr"`
 }
 
 // IgnoreCommentSignal carries one comment's ignored state into the
@@ -494,6 +519,11 @@ type IgnoreCommentSignal struct {
 // ResolveCallInput starts a resolve_call Execution: it asks the LLM to resolve
 // the given (Go-unresolved) call keys made by one caller block.
 type ResolveCallInput struct {
+	// Repo is the canonical repo string this PR belongs to: "" (absent) for the
+	// primary repo — which is what every Execution started before multi-repo
+	// existed carries, so replay of a stored history is unaffected — and
+	// "owner/name" for any other configured repo. See repos.go.
+	Repo        string   `json:"repo,omitempty"`
 	PR          int      `json:"pr"`
 	CallerID    string   `json:"callerId"`
 	CallerFile  string   `json:"callerFile"`
@@ -507,6 +537,11 @@ type ResolveCallInput struct {
 // classes a class-level-only annotation named (the Go analyzer's "unresolved"
 // status).
 type ResolveTestCoversInput struct {
+	// Repo is the canonical repo string this PR belongs to: "" (absent) for the
+	// primary repo — which is what every Execution started before multi-repo
+	// existed carries, so replay of a stored history is unaffected — and
+	// "owner/name" for any other configured repo. See repos.go.
+	Repo      string   `json:"repo,omitempty"`
 	PR        int      `json:"pr"`
 	TestID    string   `json:"testId"`
 	TestFile  string   `json:"testFile"`
@@ -527,6 +562,11 @@ type ResolveTestCoversInput struct {
 // Code+Context so a stale row is ignored by the frontend after the code
 // changes.
 type ExplainCodeInput struct {
+	// Repo is the canonical repo string this PR belongs to: "" (absent) for the
+	// primary repo — which is what every Execution started before multi-repo
+	// existed carries, so replay of a stored history is unaffected — and
+	// "owner/name" for any other configured repo. See repos.go.
+	Repo     string `json:"repo,omitempty"`
 	PR       int    `json:"pr"`
 	BlockID  string `json:"blockId"`
 	File     string `json:"file"`
@@ -540,7 +580,12 @@ type ExplainCodeInput struct {
 
 // IngestInput starts an ingest Workflow Execution for one PR.
 type IngestInput struct {
-	PR int `json:"pr"`
+	// Repo is the canonical repo string this PR belongs to: "" (absent) for the
+	// primary repo — which is what every Execution started before multi-repo
+	// existed carries, so replay of a stored history is unaffected — and
+	// "owner/name" for any other configured repo. See repos.go.
+	Repo string `json:"repo,omitempty"`
+	PR   int    `json:"pr"`
 }
 
 // SubmitReviewInput starts a submit_review Workflow Execution: submitting a
@@ -549,6 +594,11 @@ type IngestInput struct {
 // may be empty for an APPROVE; GitHub itself rejects a bodyless
 // REQUEST_CHANGES, which validateSubmitReview also rejects up front.
 type SubmitReviewInput struct {
+	// Repo is the canonical repo string this PR belongs to: "" (absent) for the
+	// primary repo — which is what every Execution started before multi-repo
+	// existed carries, so replay of a stored history is unaffected — and
+	// "owner/name" for any other configured repo. See repos.go.
+	Repo  string `json:"repo,omitempty"`
 	PR    int    `json:"pr"`
 	Event string `json:"event"`
 	Body  string `json:"body"`
@@ -559,6 +609,11 @@ type SubmitReviewInput struct {
 // is a list of user logins (validated by validateReadyForReview before the
 // workflow starts); empty means "just mark ready".
 type ReadyForReviewInput struct {
+	// Repo is the canonical repo string this PR belongs to: "" (absent) for the
+	// primary repo — which is what every Execution started before multi-repo
+	// existed carries, so replay of a stored history is unaffected — and
+	// "owner/name" for any other configured repo. See repos.go.
+	Repo      string   `json:"repo,omitempty"`
 	PR        int      `json:"pr"`
 	Reviewers []string `json:"reviewers"`
 }
@@ -568,7 +623,12 @@ type ReadyForReviewInput struct {
 // the Activity resolves the authenticated GitHub user itself, so a request can
 // never remove somebody else.
 type RemoveReviewerInput struct {
-	PR int `json:"pr"`
+	// Repo is the canonical repo string this PR belongs to: "" (absent) for the
+	// primary repo — which is what every Execution started before multi-repo
+	// existed carries, so replay of a stored history is unaffected — and
+	// "owner/name" for any other configured repo. See repos.go.
+	Repo string `json:"repo,omitempty"`
+	PR   int    `json:"pr"`
 }
 
 // CodeWarningInput starts a code_warning Execution: an agentic Opus review
@@ -579,6 +639,11 @@ type RemoveReviewerInput struct {
 // and resolveWarningScope derives the scope itself from the PR's current
 // blocks whenever Files is empty.
 type CodeWarningInput struct {
+	// Repo is the canonical repo string this PR belongs to: "" (absent) for the
+	// primary repo — which is what every Execution started before multi-repo
+	// existed carries, so replay of a stored history is unaffected — and
+	// "owner/name" for any other configured repo. See repos.go.
+	Repo  string   `json:"repo,omitempty"`
 	PR    int      `json:"pr"`
 	Files []string `json:"files,omitempty"`
 }
@@ -610,8 +675,13 @@ type inboxRefreshResult struct {
 // TaskManager registers the workflows + their activities on a tembed engine and
 // runs the per-execution GitHub poller.
 type TaskManager struct {
-	engine      *tembed.Engine
-	gh          github.Client
+	engine *tembed.Engine
+	gh     github.Client
+	// ghByRepo holds one github.Client per NON-primary repo (see ghFor). Lazily
+	// built, guarded by ghMu: the primary repo keeps using the injected gh field,
+	// so a test's Fake stays the only client in play under SLASH_GITHUB=off.
+	ghMu        sync.Mutex
+	ghByRepo    map[string]github.Client
 	comments    *comments.Module
 	inbox       *inbox.Module
 	relations   *relations.Module
@@ -687,21 +757,23 @@ type TaskManager struct {
 	// after downtime never launches dozens of concurrent Opus calls (and their
 	// workflows.db writes) at once — mirrors Engine.Recover's own "drain
 	// serially" precaution for its background low-priority runs.
-	codeWarnQueue     chan int
+	codeWarnQueue     chan prKey
 	codeWarnWorkerOne sync.Once
 
-	mu           sync.Mutex           // guards lastBeat + prRuns + relRuns + apprRuns + ignRuns + inboxRun + snoozeRun + taskInboxRun + autoWarnRun + importPolled
-	lastBeat     map[string]time.Time // code-comment/inbox Run ID → last heartbeat
-	prRuns       map[int]string       // PR → pr_status Run ID
-	relRuns      map[int]string       // PR → build_relations Run ID
-	apprRuns     map[int]string       // PR → approve Run ID
-	ignRuns      map[int]string       // PR → ignore_comment Run ID
-	inboxRun     string               // pr_inbox Run ID (one per repo/process)
-	snoozeRun    string               // task_snooze Run ID (one per repo/process)
-	taskInboxRun string               // task_inbox Run ID (one per repo/process)
-	autoWarnRun  string               // auto_warn Run ID (one per repo/process)
-	importPolled map[string]bool      // imported-thread Run ID → poller running (dedup, operational)
-	avatarTried  map[string]bool      // imported-thread Run ID → avatar backfill attempted (dedup, operational)
+	mu       sync.Mutex           // guards lastBeat + prRuns + relRuns + apprRuns + ignRuns + inboxRun + snoozeRun + taskInboxRun + autoWarnRun + importPolled
+	lastBeat map[string]time.Time // code-comment/inbox Run ID → last heartbeat
+	// Keyed by prKey — (repo, number), see repos.go — so a PR 12 in a second
+	// repo can never be handed the primary repo's PR 12 tracker.
+	prRuns       map[prKey]string // PR → pr_status Run ID
+	relRuns      map[prKey]string // PR → build_relations Run ID
+	apprRuns     map[prKey]string // PR → approve Run ID
+	ignRuns      map[prKey]string // PR → ignore_comment Run ID
+	inboxRun     string           // pr_inbox Run ID (one per repo/process)
+	snoozeRun    string           // task_snooze Run ID (one per repo/process)
+	taskInboxRun string           // task_inbox Run ID (one per repo/process)
+	autoWarnRun  string           // auto_warn Run ID (one per repo/process)
+	importPolled map[string]bool  // imported-thread Run ID → poller running (dedup, operational)
+	avatarTried  map[string]bool  // imported-thread Run ID → avatar backfill attempted (dedup, operational)
 	// polling/pollRestart gate the ONE GitHub reply poller per comment thread
 	// (see beginPolling/endPolling). A thread's poller now stops while the
 	// comment is resolved and is restarted by the reopenComment Activity, so
@@ -728,7 +800,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	m := &TaskManager{
 		engine: engine, gh: gh, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, testcovers: tc, approvals: ap, explain: ex, tasksnooze: ts, claude: cl, jira: jr, db: db, dataDir: dataDir, repo: repo,
 		interval: pollInterval, idle: idlePollInterval,
-		lastBeat: map[string]time.Time{}, prRuns: map[int]string{}, relRuns: map[int]string{}, apprRuns: map[int]string{}, ignRuns: map[int]string{},
+		lastBeat: map[string]time.Time{}, prRuns: map[prKey]string{}, relRuns: map[prKey]string{}, apprRuns: map[prKey]string{}, ignRuns: map[prKey]string{},
 		importPolled: map[string]bool{},
 		avatarTried:  map[string]bool{},
 		polling:      map[string]bool{},
@@ -741,7 +813,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		// a single serial worker) just drops the trigger with a log line,
 		// same "best-effort automatic check" spirit as autoStartCodeWarning's
 		// own enabled-check.
-		codeWarnQueue: make(chan int, 256),
+		codeWarnQueue: make(chan prKey, 256),
 	}
 
 	// Activity: fetch the inbox from GitHub and store it in the read-model
@@ -766,7 +838,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			for si := range snap.Sections {
 				for pi := range snap.Sections[si].PRs {
 					pr := &snap.Sections[si].PRs[pi]
-					cs, err := m.comments.List(ctx, pr.Number)
+					cs, err := m.comments.List(ctx, canonRepo(pr.Repo), pr.Number)
 					if err != nil {
 						continue // keep the GitHub count on a read hiccup
 					}
@@ -903,7 +975,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if c.Gran == "call" && c.Segment != "" {
 			body = fmt.Sprintf("`%s`\n\n%s", c.Segment, body)
 		}
-		id, err := gh.PostReviewComment(ctx, c.PR, c.File, start, end, side, body)
+		id, err := m.ghFor(c.Repo).PostReviewComment(ctx, c.PR, c.File, start, end, side, body)
 		if err != nil {
 			m.logf("task_code_comment: github post skipped: %v", err)
 			return json.Marshal(postResult{RootID: 0})
@@ -1025,6 +1097,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterActivity("reopenComment", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg struct {
 			ID     string `json:"id"`
+			Repo   string `json:"repo,omitempty"`
 			PR     int    `json:"pr"`
 			RootID int64  `json:"rootId"`
 		}
@@ -1038,12 +1111,12 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		// running server has a context to poll under (a one-shot CLI caller has
 		// neither, see baseCtx).
 		if arg.RootID != 0 && m.baseCtx != nil {
-			prRunID, err := m.ensurePRStatus(arg.PR)
+			prRunID, err := m.ensurePRStatus(arg.Repo, arg.PR)
 			if err != nil {
 				m.logf("task_code_comment: reopen ensure pr_status pr=%d: %v", arg.PR, err)
 				prRunID = ""
 			}
-			go m.poll(m.baseCtx, arg.ID, arg.PR, arg.RootID, prRunID)
+			go m.poll(m.baseCtx, arg.ID, arg.Repo, arg.PR, arg.RootID, prRunID)
 		}
 		return nil, nil
 	})
@@ -1052,8 +1125,9 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// not block removing our own record of it).
 	engine.RegisterActivity("deleteGithubComment", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg struct {
-			PR     int   `json:"pr"`
-			RootID int64 `json:"rootId"`
+			Repo   string `json:"repo,omitempty"`
+			PR     int    `json:"pr"`
+			RootID int64  `json:"rootId"`
 		}
 		if err := json.Unmarshal(in, &arg); err != nil {
 			return nil, err
@@ -1061,7 +1135,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if arg.RootID == 0 {
 			return nil, nil
 		}
-		if err := gh.DeleteComment(ctx, arg.PR, arg.RootID); err != nil {
+		if err := m.ghFor(arg.Repo).DeleteComment(ctx, arg.PR, arg.RootID); err != nil {
 			m.logf("task_code_comment: github delete skipped: %v", err)
 		}
 		return nil, nil
@@ -1085,6 +1159,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// reviewer edits it (see the "edit" Action above).
 	engine.RegisterActivity("replyGithub", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg struct {
+			Repo   string `json:"repo,omitempty"`
 			PR     int    `json:"pr"`
 			RootID int64  `json:"rootId"`
 			Body   string `json:"body"`
@@ -1109,8 +1184,9 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// threads.
 	engine.RegisterActivity("resolveGithubThread", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg struct {
-			PR     int   `json:"pr"`
-			RootID int64 `json:"rootId"`
+			Repo   string `json:"repo,omitempty"`
+			PR     int    `json:"pr"`
+			RootID int64  `json:"rootId"`
 		}
 		if err := json.Unmarshal(in, &arg); err != nil {
 			return nil, err
@@ -1118,7 +1194,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if arg.RootID == 0 {
 			return nil, nil
 		}
-		if err := gh.ResolveReviewThread(ctx, arg.PR, arg.RootID); err != nil {
+		if err := m.ghFor(arg.Repo).ResolveReviewThread(ctx, arg.PR, arg.RootID); err != nil {
 			m.logf("task_code_comment: github resolve thread skipped: %v", err)
 		}
 		return nil, nil
@@ -1129,8 +1205,9 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// exact mirror of resolveGithubThread above, same PR-wide carve-out.
 	engine.RegisterActivity("unresolveGithubThread", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg struct {
-			PR     int   `json:"pr"`
-			RootID int64 `json:"rootId"`
+			Repo   string `json:"repo,omitempty"`
+			PR     int    `json:"pr"`
+			RootID int64  `json:"rootId"`
 		}
 		if err := json.Unmarshal(in, &arg); err != nil {
 			return nil, err
@@ -1152,13 +1229,14 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// separate root (knownGithubIDs).
 	engine.RegisterActivity("postGithubIssueComment", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg struct {
+			Repo string `json:"repo,omitempty"`
 			PR   int    `json:"pr"`
 			Body string `json:"body"`
 		}
 		if err := json.Unmarshal(in, &arg); err != nil {
 			return nil, err
 		}
-		id, err := gh.PostIssueComment(ctx, arg.PR, arg.Body)
+		id, err := m.ghFor(arg.Repo).PostIssueComment(ctx, arg.PR, arg.Body)
 		if err != nil {
 			m.logf("task_code_comment: github issue comment skipped: %v", err)
 			return json.Marshal(postResult{})
@@ -1174,9 +1252,9 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if err := json.Unmarshal(in, &input); err != nil {
 			return nil, err
 		}
-		setIngestStage(input.PR, IngestStageWorktrees)
-		defer clearIngestStage(input.PR)
-		shas, err := prepareIngestWorktrees(ctx, m.dataDir, input.PR)
+		setIngestStage(input.Repo, input.PR, IngestStageWorktrees)
+		defer clearIngestStage(input.Repo, input.PR)
+		shas, err := prepareIngestWorktrees(ctx, m.dataDir, input.Repo, input.PR)
 		if err != nil {
 			return nil, fmt.Errorf("ingest: prepare worktrees: %w", err)
 		}
@@ -1189,21 +1267,22 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// themselves, so the workflow history stays compact.
 	engine.RegisterActivity("scanAndStoreBlocks", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg struct {
+			Repo string       `json:"repo,omitempty"`
 			PR   int          `json:"pr"`
 			Shas worktreeSHAs `json:"shas"`
 		}
 		if err := json.Unmarshal(in, &arg); err != nil {
 			return nil, err
 		}
-		setIngestStage(arg.PR, IngestStageScan)
-		defer clearIngestStage(arg.PR)
-		res, err := scanAndStoreIngestBlocks(ctx, m.db, m.dataDir, arg.PR, arg.Shas)
+		setIngestStage(arg.Repo, arg.PR, IngestStageScan)
+		defer clearIngestStage(arg.Repo, arg.PR)
+		res, err := scanAndStoreIngestBlocks(ctx, m.db, m.dataDir, arg.Repo, arg.PR, arg.Shas)
 		if err != nil {
 			return nil, fmt.Errorf("ingest: scan and store blocks: %w", err)
 		}
 		// The blocks table was just fully swapped, so a tab already open on this
 		// PR is showing a stale tree (see eventBlocksChanged, eventbus.go).
-		publishBlocksChanged(arg.PR)
+		publishBlocksChanged(arg.Repo, arg.PR)
 		return json.Marshal(res)
 	})
 
@@ -1214,6 +1293,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// poller's cadence (pollIngestRefresh).
 	engine.RegisterActivity("refreshIngestDelta", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg struct {
+			Repo    string `json:"repo,omitempty"`
 			PR      int    `json:"pr"`
 			BaseSHA string `json:"baseSHA"`
 			HeadSHA string `json:"headSHA"`
@@ -1221,7 +1301,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if err := json.Unmarshal(in, &arg); err != nil {
 			return nil, err
 		}
-		res, err := refreshIngestDelta(ctx, m.db, m.dataDir, arg.PR, arg.BaseSHA, arg.HeadSHA)
+		res, err := refreshIngestDelta(ctx, m.db, m.dataDir, arg.Repo, arg.PR, arg.BaseSHA, arg.HeadSHA)
 		if err != nil {
 			return nil, fmt.Errorf("pr_status: refresh ingest delta: %w", err)
 		}
@@ -1229,7 +1309,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		// or a delta with no changed files) wrote nothing, so nudging the tab
 		// would put a "new commits" notice on screen with nothing behind it.
 		if res != nil && !res.Skipped {
-			publishBlocksChanged(arg.PR)
+			publishBlocksChanged(arg.Repo, arg.PR)
 		}
 		return json.Marshal(res)
 	})
@@ -1258,6 +1338,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// of the pass.
 	engine.RegisterActivity("reanchorAfterRefresh", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg struct {
+			Repo         string   `json:"repo,omitempty"`
 			PR           int      `json:"pr"`
 			PrevBaseSHA  string   `json:"prevBaseSHA"`
 			PrevHeadSHA  string   `json:"prevHeadSHA"`
@@ -1269,17 +1350,17 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if len(arg.ChangedFiles) == 0 || cs == nil {
 			return json.Marshal(reanchorResult{})
 		}
-		blocks, err := blocksByPR(m.db, arg.PR)
+		blocks, err := blocksByPR(m.db, arg.Repo, arg.PR)
 		if err != nil {
 			return nil, fmt.Errorf("reanchor: load blocks: %w", err)
 		}
-		cmts, err := cs.List(ctx, arg.PR)
+		cmts, err := cs.List(ctx, arg.Repo, arg.PR)
 		if err != nil {
 			return nil, fmt.Errorf("reanchor: load comments: %w", err)
 		}
 		var aps []approvals.Approval
 		if m.approvals != nil {
-			if aps, err = m.approvals.List(ctx, arg.PR); err != nil {
+			if aps, err = m.approvals.List(ctx, arg.Repo, arg.PR); err != nil {
 				return nil, fmt.Errorf("reanchor: load approvals: %w", err)
 			}
 		}
@@ -1329,7 +1410,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			}
 		}
 		if len(plan.Approvals) > 0 {
-			runID, err := m.EnsureApprovals(arg.PR)
+			runID, err := m.EnsureApprovals(arg.Repo, arg.PR)
 			if err != nil {
 				m.logf("reanchor: no approve tracker for pr %d: %v", arg.PR, err)
 			} else {
@@ -1357,14 +1438,14 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if err := json.Unmarshal(in, &input); err != nil {
 			return nil, err
 		}
-		setIngestStage(input.PR, IngestStageRelations)
-		defer clearIngestStage(input.PR)
-		blocks, err := blocksByPR(m.db, input.PR)
+		setIngestStage(input.Repo, input.PR, IngestStageRelations)
+		defer clearIngestStage(input.Repo, input.PR)
+		blocks, err := blocksByPR(m.db, input.Repo, input.PR)
 		if err != nil {
 			return nil, fmt.Errorf("build_relations: load blocks: %w", err)
 		}
 		rels := buildRelations(m.dataDir, input.PR, blocks)
-		if err := m.relations.Replace(ctx, input.PR, rels); err != nil {
+		if err := m.relations.Replace(ctx, input.Repo, input.PR, rels); err != nil {
 			return nil, fmt.Errorf("build_relations: save: %w", err)
 		}
 		// Also resolve method calls statically (resolved/unresolved) into the
@@ -1394,7 +1475,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			// Drop stale rows: every (caller, call) pair the scan no longer emits —
 			// the caller block left the PR, or the call site is no longer on a
 			// changed line.
-			if err := m.callresolve.Prune(ctx, input.PR, calls); err != nil {
+			if err := m.callresolve.Prune(ctx, input.Repo, input.PR, calls); err != nil {
 				return nil, fmt.Errorf("build_relations: prune calls: %w", err)
 			}
 			// Automatically start an LLM search for every call the Go resolver
@@ -1421,7 +1502,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			// PR refetches GET /api/callresolve instead of only learning about
 			// it once it happens to select the caller block (see
 			// eventCallResolveChanged, eventbus.go).
-			publishCallResolveChanged(input.PR)
+			publishCallResolveChanged(input.Repo, input.PR)
 		}
 		// Also detect test-coverage annotations statically (resolved/unannotated/
 		// unresolved) into the testcovers read-model. UpsertGo preserves LLM-owned
@@ -1431,10 +1512,10 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			if err := m.testcovers.UpsertGo(ctx, covers); err != nil {
 				return nil, fmt.Errorf("build_relations: save test covers: %w", err)
 			}
-			if err := m.testcovers.Prune(ctx, input.PR, covers); err != nil {
+			if err := m.testcovers.Prune(ctx, input.Repo, input.PR, covers); err != nil {
 				return nil, fmt.Errorf("build_relations: prune test covers: %w", err)
 			}
-			publishTestCoversChanged(input.PR)
+			publishTestCoversChanged(input.Repo, input.PR)
 			// Automatically start an LLM search for every class-level-only
 			// coverage target the Go analyzer just marked unresolved that hasn't
 			// already been attempted — the server-side counterpart of the
@@ -1455,7 +1536,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if m.callresolve == nil {
 			return nil, nil
 		}
-		return nil, m.callresolve.SaveSearching(ctx, arg.PR, arg.CallerID, arg.Calls)
+		return nil, m.callresolve.SaveSearching(ctx, arg.Repo, arg.PR, arg.CallerID, arg.Calls)
 	})
 
 	// Activity: resolve calls with one LLM model (Haiku = context-only shortlist,
@@ -1490,7 +1571,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		// returned (see autoStartResolveCall) — the exact moment a tab already
 		// open on this PR needs telling.
 		if len(entries) > 0 {
-			publishCallResolveChanged(entries[0].PR)
+			publishCallResolveChanged(entries[0].Repo, entries[0].PR)
 		}
 		return json.Marshal(map[string]int{"saved": len(entries)})
 	})
@@ -1509,7 +1590,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		for i, c := range arg.Classes {
 			keys[i] = "class:" + shortName(c)
 		}
-		return nil, m.testcovers.SaveSearching(ctx, arg.PR, arg.TestID, keys)
+		return nil, m.testcovers.SaveSearching(ctx, arg.Repo, arg.PR, arg.TestID, keys)
 	})
 
 	// Activity: look for a sibling test (same PR + same test file, different
@@ -1525,7 +1606,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if m.testcovers == nil {
 			return json.Marshal(testCoverReuseResult{Remaining: arg.Classes})
 		}
-		entries, err := m.testcovers.List(ctx, arg.PR)
+		entries, err := m.testcovers.List(ctx, arg.Repo, arg.PR)
 		if err != nil {
 			return nil, fmt.Errorf("resolve_test_covers: list siblings: %w", err)
 		}
@@ -1564,7 +1645,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		// Same rationale as saveResolutions above: this is the LLM search's
 		// own result, landing after build_relations' Go-only pass.
 		if len(entries) > 0 {
-			publishTestCoversChanged(entries[0].PR)
+			publishTestCoversChanged(entries[0].Repo, entries[0].PR)
 		}
 		return json.Marshal(map[string]int{"saved": len(entries)})
 	})
@@ -1634,7 +1715,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if m.prmeta == nil {
 			return nil, nil
 		}
-		meta, err := gh.PRMeta(ctx, arg.PR)
+		meta, err := m.ghFor(arg.Repo).PRMeta(ctx, arg.PR)
 		if err != nil {
 			m.logf("pr_status: fetch basics pr=%d skipped: %v", arg.PR, err)
 			return nil, nil
@@ -1672,7 +1753,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if m.prmeta == nil || m.claude == nil {
 			return nil, nil
 		}
-		meta, ok, err := m.prmeta.Get(ctx, arg.PR)
+		meta, ok, err := m.prmeta.Get(ctx, arg.Repo, arg.PR)
 		if err != nil || !ok {
 			return nil, nil
 		}
@@ -1687,7 +1768,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			m.logf("pr_status: summary pr=%d skipped: %v", arg.PR, err)
 			return nil, nil
 		}
-		if err := m.prmeta.SaveSummary(ctx, arg.PR, strings.TrimSpace(summary)); err != nil {
+		if err := m.prmeta.SaveSummary(ctx, arg.Repo, arg.PR, strings.TrimSpace(summary)); err != nil {
 			return nil, fmt.Errorf("save pr summary: %w", err)
 		}
 		return nil, nil
@@ -1726,7 +1807,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if st.ChecksState == "SUCCESS" {
 			checksPassed = st.ChecksTotal
 		}
-		if err := m.prmeta.SaveStatuses(ctx, arg.PR, st.ReviewDecision, st.ChecksTotal, checksPassed, reviewers); err != nil {
+		if err := m.prmeta.SaveStatuses(ctx, arg.Repo, arg.PR, st.ReviewDecision, st.ChecksTotal, checksPassed, reviewers); err != nil {
 			return nil, fmt.Errorf("save pr statuses: %w", err)
 		}
 		// The same query already knows whether anything happened after the
@@ -1734,7 +1815,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		// signal the PR overview shows as "nieuw sinds jouw review". Store the
 		// kind AND the moment, so the review tree can render that identical
 		// line and, in the next stage, say what changed since exactly then.
-		if err := m.prmeta.SaveSinceMark(ctx, arg.PR, st.NewSinceKind, st.NewSinceAt, st.UpdatedAt); err != nil {
+		if err := m.prmeta.SaveSinceMark(ctx, arg.Repo, arg.PR, st.NewSinceKind, st.NewSinceAt, st.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("save pr since mark: %w", err)
 		}
 		return nil, nil
@@ -1755,7 +1836,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if m.prmeta == nil || ghDisabled() {
 			return nil, nil
 		}
-		meta, ok, err := m.prmeta.Get(ctx, arg.PR)
+		meta, ok, err := m.prmeta.Get(ctx, arg.Repo, arg.PR)
 		if err != nil || !ok {
 			return nil, nil
 		}
@@ -1763,18 +1844,18 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		// happened after it) → clear whatever an earlier run stored, so the
 		// block disappears instead of going stale.
 		if meta.NewSinceAt == "" {
-			if err := m.prmeta.SaveSinceReview(ctx, arg.PR, "", ""); err != nil {
+			if err := m.prmeta.SaveSinceReview(ctx, arg.Repo, arg.PR, "", ""); err != nil {
 				return nil, fmt.Errorf("clear since review: %w", err)
 			}
 			return nil, nil
 		}
-		changes, err := m.gh.ChangesSince(ctx, arg.PR, meta.NewSinceAt)
+		changes, err := m.ghFor(arg.Repo).ChangesSince(ctx, arg.PR, meta.NewSinceAt)
 		if err != nil {
 			m.logf("pr_status: changes since pr=%d skipped: %v", arg.PR, err)
 			return nil, nil
 		}
 		if len(changes.Commits) == 0 {
-			if err := m.prmeta.SaveSinceReview(ctx, arg.PR, "", ""); err != nil {
+			if err := m.prmeta.SaveSinceReview(ctx, arg.Repo, arg.PR, "", ""); err != nil {
 				return nil, fmt.Errorf("clear since review: %w", err)
 			}
 			return nil, nil
@@ -1800,7 +1881,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 				summary = strings.TrimSpace(out)
 			}
 		}
-		if err := m.prmeta.SaveSinceReview(ctx, arg.PR, facts, summary); err != nil {
+		if err := m.prmeta.SaveSinceReview(ctx, arg.Repo, arg.PR, facts, summary); err != nil {
 			return nil, fmt.Errorf("save since review: %w", err)
 		}
 		return nil, nil
@@ -1810,6 +1891,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// The approvals module is the only writer of the approvals read-model.
 	engine.RegisterActivity("saveApproval", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg struct {
+			Repo    string                `json:"repo,omitempty"`
 			PR      int                   `json:"pr"`
 			BlockID string                `json:"blockId"`
 			Rows    []int                 `json:"rows"`
@@ -1822,7 +1904,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if m.approvals == nil {
 			return nil, nil
 		}
-		return nil, m.approvals.Replace(ctx, arg.PR, arg.BlockID, arg.Rows, arg.Calls, arg.Anchors)
+		return nil, m.approvals.Replace(ctx, arg.Repo, arg.PR, arg.BlockID, arg.Rows, arg.Calls, arg.Anchors)
 	})
 
 	// Activity: persist one task's snooze state (write, workflow-driven). The
@@ -1871,12 +1953,13 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// replay. See TaskManager.autoStartCodeWarning for the on/off check.
 	engine.RegisterActivity("autoStartCodeWarning", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg struct {
-			PR int `json:"pr"`
+			Repo string `json:"repo,omitempty"`
+			PR   int    `json:"pr"`
 		}
 		if err := json.Unmarshal(in, &arg); err != nil {
 			return nil, err
 		}
-		m.enqueueAutoStartCodeWarning(arg.PR)
+		m.enqueueAutoStartCodeWarning(prKey{arg.Repo, arg.PR})
 		return nil, nil
 	})
 
@@ -1885,6 +1968,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// idempotent in both directions, so a replay is safe.
 	engine.RegisterActivity("saveCommentIgnore", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg struct {
+			Repo      string `json:"repo,omitempty"`
 			PR        int    `json:"pr"`
 			CommentID string `json:"commentId"`
 			Ignored   bool   `json:"ignored"`
@@ -1895,13 +1979,14 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if m.commentignore == nil {
 			return nil, nil
 		}
-		return nil, m.commentignore.Set(ctx, arg.PR, arg.CommentID, arg.Ignored)
+		return nil, m.commentignore.Set(ctx, arg.Repo, arg.PR, arg.CommentID, arg.Ignored)
 	})
 
 	// Activity: mark/unmark a file's GitHub "Viewed" checkbox (write,
 	// workflow-driven — the only place that talks to GitHub for this).
 	engine.RegisterActivity("setFileViewed", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg struct {
+			Repo   string `json:"repo,omitempty"`
 			PR     int    `json:"pr"`
 			File   string `json:"file"`
 			Viewed bool   `json:"viewed"`
@@ -1912,7 +1997,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if m.gh == nil || arg.File == "" {
 			return nil, nil
 		}
-		return nil, m.gh.MarkFileViewed(ctx, arg.PR, arg.File, arg.Viewed)
+		return nil, m.ghFor(arg.Repo).MarkFileViewed(ctx, arg.PR, arg.File, arg.Viewed)
 	})
 
 	// Activity: submit a real GitHub PR-level review (write, workflow-driven —
@@ -1927,7 +2012,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if m.gh == nil {
 			return nil, fmt.Errorf("submit review: no github client")
 		}
-		return nil, m.gh.SubmitReview(ctx, arg.PR, arg.Event, arg.Body)
+		return nil, m.ghFor(arg.Repo).SubmitReview(ctx, arg.PR, arg.Event, arg.Body)
 	})
 
 	// Activities for ready_for_review (write, workflow-driven): flip a draft PR
@@ -1951,7 +2036,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if m.gh == nil {
 			return nil, fmt.Errorf("request reviewers: no github client")
 		}
-		return nil, m.gh.RequestReviewers(ctx, arg.PR, arg.Reviewers)
+		return nil, m.ghFor(arg.Repo).RequestReviewers(ctx, arg.PR, arg.Reviewers)
 	})
 	// Activity for remove_reviewer (write, workflow-driven): drop the local
 	// reviewer from a PR's requested reviewers. The login is resolved here, from
@@ -1972,7 +2057,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if me.Login == "" {
 			return nil, fmt.Errorf("remove reviewer: unknown current user")
 		}
-		return nil, m.gh.RemoveReviewer(ctx, arg.PR, me.Login)
+		return nil, m.ghFor(arg.Repo).RemoveReviewer(ctx, arg.PR, me.Login)
 	})
 	engine.RegisterActivity("bumpReviewerUsage", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg ReadyForReviewInput
@@ -2000,7 +2085,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if m.db == nil {
 			return json.Marshal(warningScope{})
 		}
-		blocks, err := blocksByPR(m.db, arg.PR)
+		blocks, err := blocksByPR(m.db, arg.Repo, arg.PR)
 		if err != nil {
 			return nil, fmt.Errorf("code_warning: load blocks: %w", err)
 		}
@@ -2024,7 +2109,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		// fetched and stored by pr_status. Best-effort: a PR whose metadata
 		// hasn't landed yet simply gets a prompt without this context.
 		if m.prmeta != nil {
-			if meta, ok, err := m.prmeta.Get(ctx, arg.PR); err == nil && ok {
+			if meta, ok, err := m.prmeta.Get(ctx, arg.Repo, arg.PR); err == nil && ok {
 				scope.Title = meta.Title
 				scope.Description = meta.Body
 				scope.JiraDescription = meta.JiraDesc
@@ -2042,6 +2127,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// again — that must not sink the rest of the supersede).
 	engine.RegisterActivity("supersedeFileWarnings", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg struct {
+			Repo  string   `json:"repo,omitempty"`
 			PR    int      `json:"pr"`
 			Files []string `json:"files"`
 		}
@@ -2052,7 +2138,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		for _, f := range arg.Files {
 			fileSet[f] = true
 		}
-		list, err := cs.List(ctx, arg.PR)
+		list, err := cs.List(ctx, arg.Repo, arg.PR)
 		if err != nil {
 			return nil, fmt.Errorf("code_warning: list comments: %w", err)
 		}
@@ -2072,7 +2158,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			// is still open. A DELETED finding can't be caught here (its row is
 			// gone), so that half is recorded at delete time instead.
 			if c.Status == "resolved" && m.warndismiss != nil {
-				if err := m.warndismiss.Add(ctx, arg.PR, c.File, warndismiss.Fingerprint(c.Body), time.Now().UTC().Format(time.RFC3339)); err != nil {
+				if err := m.warndismiss.Add(ctx, arg.Repo, arg.PR, c.File, warndismiss.Fingerprint(c.Body), time.Now().UTC().Format(time.RFC3339)); err != nil {
 					m.logf("code_warning: record dismissed warning %s: %v", c.RunID, err)
 				}
 			}
@@ -2098,12 +2184,13 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// can't be signalled again and must not sink the rest of the purge.
 	engine.RegisterActivity("purgeOrphanWarnings", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg struct {
-			PR int `json:"pr"`
+			Repo string `json:"repo,omitempty"`
+			PR   int    `json:"pr"`
 		}
 		if err := json.Unmarshal(in, &arg); err != nil {
 			return nil, err
 		}
-		list, err := cs.List(ctx, arg.PR)
+		list, err := cs.List(ctx, arg.Repo, arg.PR)
 		if err != nil {
 			return nil, fmt.Errorf("code_warning: list comments: %w", err)
 		}
@@ -2129,6 +2216,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// recorded by supersedeFileWarnings instead — see its own comment.
 	engine.RegisterActivity("recordWarningDismissed", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg struct {
+			Repo string `json:"repo,omitempty"`
 			PR   int    `json:"pr"`
 			File string `json:"file"`
 			Body string `json:"body"`
@@ -2139,7 +2227,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if m.warndismiss == nil {
 			return json.Marshal(map[string]bool{"ok": false})
 		}
-		if err := m.warndismiss.Add(ctx, arg.PR, arg.File, warndismiss.Fingerprint(arg.Body), time.Now().UTC().Format(time.RFC3339)); err != nil {
+		if err := m.warndismiss.Add(ctx, arg.Repo, arg.PR, arg.File, warndismiss.Fingerprint(arg.Body), time.Now().UTC().Format(time.RFC3339)); err != nil {
 			return nil, fmt.Errorf("record dismissed warning: %w", err)
 		}
 		return json.Marshal(map[string]bool{"ok": true})
@@ -2156,7 +2244,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if err := json.Unmarshal(in, &arg); err != nil {
 			return nil, err
 		}
-		list, err := cs.List(ctx, arg.PR)
+		list, err := cs.List(ctx, arg.Repo, arg.PR)
 		if err != nil {
 			return nil, fmt.Errorf("code_warning: list existing comments: %w", err)
 		}
@@ -2167,11 +2255,11 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		// of its own in codeWarningWorkflow, so the workflow body's Activity
 		// sequence is unchanged; the filtered result is what gets recorded, so
 		// replay stays deterministic either way.
-		findings = dropDismissedFindings(ctx, m.warndismiss, arg.PR, findings)
+		findings = dropDismissedFindings(ctx, m.warndismiss, arg.Repo, arg.PR, findings)
 		if len(findings) == 0 {
 			return json.Marshal([]warningToCreate{})
 		}
-		blocks, err := blocksByPR(m.db, arg.PR)
+		blocks, err := blocksByPR(m.db, arg.Repo, arg.PR)
 		if err != nil {
 			return nil, fmt.Errorf("code_warning: load blocks: %w", err)
 		}
@@ -2258,7 +2346,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if m.chat == nil {
 			return nil, nil
 		}
-		return nil, m.chat.EnsureConversation(ctx, arg.CommentID, arg.PR)
+		return nil, m.chat.EnsureConversation(ctx, arg.CommentID, arg.Repo, arg.PR)
 	})
 	// Activity: persist one turn (write, workflow-driven). Used for both the
 	// reviewer's own message and — from runClaudeTurn — the assistant's reply,
@@ -2281,7 +2369,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if err := m.chat.SaveMessage(ctx, msg); err != nil {
 			return nil, err
 		}
-		publishChatChanged(msg.PR, msg.ConversationID)
+		publishChatChanged(msg.Repo, msg.PR, msg.ConversationID)
 		return nil, nil
 	})
 	// Activity ("wis gesprek" / chatActionClear): wipe the conversation's
@@ -2299,8 +2387,8 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 				return nil, err
 			}
 		}
-		clearChatShadow(ctx, m, m.dataDir, arg.PR, arg.ConversationID)
-		publishChatChanged(arg.PR, arg.ConversationID)
+		clearChatShadow(ctx, m, m.dataDir, arg.Repo, arg.PR, arg.ConversationID)
+		publishChatChanged(arg.Repo, arg.PR, arg.ConversationID)
 		return nil, nil
 	})
 	// Activity: record the reviewer's answer to a pending question turn (write,
@@ -2340,8 +2428,8 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		// unchanged and keeps the "should the workflow run a further Activity"
 		// decision a plain, STORED field of this Activity's result (see
 		// chatTurnResult.NeedsLand's own doc comment).
-		needsLand := chatShadowNeedsLanding(ctx, m.dataDir, arg.PR, arg.ConversationID)
-		publishChatChanged(arg.PR, arg.ConversationID)
+		needsLand := chatShadowNeedsLanding(ctx, m.dataDir, arg.Repo, arg.PR, arg.ConversationID)
+		publishChatChanged(arg.Repo, arg.PR, arg.ConversationID)
 		return json.Marshal(chatTurnResult{Message: msg, Action: action, NeedsLand: needsLand})
 	})
 	// Activity (Phase 4): apply a validated comment_action directive — reply to
@@ -2360,7 +2448,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			return nil, nil
 		}
 		applyChatCommentAction(ctx, m, arg)
-		publishChatChanged(arg.PR, arg.ConversationID)
+		publishChatChanged(arg.Repo, arg.PR, arg.ConversationID)
 		return nil, nil
 	})
 	// Activity: the ONE agentic Claude run that works through a PR's open
@@ -2405,7 +2493,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			return json.Marshal(chat.Message{})
 		}
 		msg := processChatMerge(ctx, m, m.chat, m.claude, m.dataDir, arg)
-		publishChatChanged(arg.PR, arg.ConversationID)
+		publishChatChanged(arg.Repo, arg.PR, arg.ConversationID)
 		return json.Marshal(msg)
 	})
 
@@ -2417,7 +2505,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if err := json.Unmarshal(in, &arg); err != nil {
 			return nil, err
 		}
-		pushPendingPR(ctx, m, arg.PR)
+		pushPendingPR(ctx, m, arg.Repo, arg.PR)
 		return nil, nil
 	})
 
@@ -2535,12 +2623,12 @@ func (m *TaskManager) waitReady() {
 // runCodeWarnWorker). Called from the autoStartCodeWarning Activity, which
 // must itself stay fast/deterministic — this only ever sends on a buffered
 // channel or logs and drops on the (practically unreachable) full-queue case.
-func (m *TaskManager) enqueueAutoStartCodeWarning(pr int) {
+func (m *TaskManager) enqueueAutoStartCodeWarning(key prKey) {
 	m.codeWarnWorkerOne.Do(func() { go m.runCodeWarnWorker() })
 	select {
-	case m.codeWarnQueue <- pr:
+	case m.codeWarnQueue <- key:
 	default:
-		m.logf("code_warning: auto-start queue full, dropping pr=%d", pr)
+		m.logf("code_warning: auto-start queue full, dropping pr=%s", key)
 	}
 }
 
@@ -2554,9 +2642,36 @@ func (m *TaskManager) enqueueAutoStartCodeWarning(pr int) {
 // drain.
 func (m *TaskManager) runCodeWarnWorker() {
 	m.waitReady()
-	for pr := range m.codeWarnQueue {
-		m.autoStartCodeWarning(pr)
+	for key := range m.codeWarnQueue {
+		m.autoStartCodeWarning(key.Repo, key.PR)
 	}
+}
+
+// ghFor returns the github.Client to use for a canonical repo string: the
+// injected one for the primary repo (which is also the Fake under
+// SLASH_GITHUB=off, so tests never reach the network), and a lazily created,
+// cached per-repo client for any other. Every Activity that talks to GitHub about
+// a specific PR goes through this instead of m.gh directly, so a PR from a second
+// repo is never posted to / read from the primary repo.
+func (m *TaskManager) ghFor(repo string) github.Client {
+	if repo == "" || m.gh == nil {
+		return m.gh
+	}
+	if _, isFake := m.gh.(*github.Fake); isFake {
+		// Offline/test mode: one Fake stands in for every repo.
+		return m.gh
+	}
+	m.ghMu.Lock()
+	defer m.ghMu.Unlock()
+	if c, ok := m.ghByRepo[repo]; ok {
+		return c
+	}
+	if m.ghByRepo == nil {
+		m.ghByRepo = map[string]github.Client{}
+	}
+	c := github.New(repoSlugFor(repo))
+	m.ghByRepo[repo] = c
+	return c
 }
 
 // prInboxWorkflow owns the PR inbox for a repo. It is deterministic: each
@@ -2668,7 +2783,7 @@ func ingestWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 // (StartWorkflow drives a signal-less workflow synchronously) and returns its
 // result summary. Starting an Execution is the sanctioned write path — this is
 // the only way blocks/worktrees are written.
-func (m *TaskManager) StartIngest(ctx context.Context, pr int) (*ingestResult, error) {
+func (m *TaskManager) StartIngest(ctx context.Context, repo string, pr int) (*ingestResult, error) {
 	runID, err := m.engine.StartWorkflow(WorkflowIngest, IngestInput{PR: pr})
 	if err != nil {
 		return nil, err
@@ -3142,6 +3257,7 @@ func approveWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			continue
 		}
 		arg := struct {
+			Repo    string                `json:"repo,omitempty"`
 			PR      int                   `json:"pr"`
 			BlockID string                `json:"blockId"`
 			Rows    []int                 `json:"rows"`
@@ -3221,6 +3337,7 @@ func ignoreCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		var sig IgnoreCommentSignal
 		w.WaitSignal(SignalIgnore, &sig)
 		arg := struct {
+			Repo      string `json:"repo,omitempty"`
 			PR        int    `json:"pr"`
 			CommentID string `json:"commentId"`
 			Ignored   bool   `json:"ignored"`
@@ -4292,7 +4409,7 @@ func (m *TaskManager) StartCodeComment(ctx context.Context, in CodeCommentInput)
 	if err != nil {
 		return "", err
 	}
-	prRunID, err := m.ensurePRStatus(in.PR)
+	prRunID, err := m.ensurePRStatus(canonRepo(in.Repo), in.PR)
 	if err != nil {
 		m.logf("task_code_comment: ensure pr_status pr=%d: %v", in.PR, err)
 		prRunID = ""
@@ -4302,7 +4419,7 @@ func (m *TaskManager) StartCodeComment(ctx context.Context, in CodeCommentInput)
 		return runID, err
 	}
 	if rootID != 0 {
-		go m.poll(ctx, runID, in.PR, rootID, prRunID)
+		go m.poll(ctx, runID, canonRepo(in.Repo), in.PR, rootID, prRunID)
 	}
 	return runID, nil
 }
@@ -4327,20 +4444,21 @@ func (m *TaskManager) Heartbeat(runID string) {
 // returns its Run ID. The UI calls this on page load so the `/` menu's
 // Jira/GitHub links have the PR title. Starting/reusing an Execution is the
 // sanctioned UI write path.
-func (m *TaskManager) EnsurePRStatus(pr int) (string, error) {
-	return m.ensurePRStatus(pr)
+func (m *TaskManager) EnsurePRStatus(repo string, pr int) (string, error) {
+	return m.ensurePRStatus(repo, pr)
 }
 
 // ensurePRStatus returns the Run ID of the pr_status tracker for pr, starting one
 // if none is live yet (one tracker per PR, reused across restarts).
-func (m *TaskManager) ensurePRStatus(pr int) (string, error) {
+func (m *TaskManager) ensurePRStatus(repo string, pr int) (string, error) {
+	key := prKey{repo, pr}
 	m.mu.Lock()
-	if id, ok := m.prRuns[pr]; ok {
+	if id, ok := m.prRuns[key]; ok {
 		m.mu.Unlock()
 		return id, nil
 	}
-	if id := m.findPRStatusLocked(pr); id != "" {
-		m.prRuns[pr] = id
+	if id := m.findPRStatusLocked(repo, pr); id != "" {
+		m.prRuns[key] = id
 		m.mu.Unlock()
 		return id, nil
 	}
@@ -4351,12 +4469,12 @@ func (m *TaskManager) ensurePRStatus(pr int) (string, error) {
 	// ListenAndServe. The generatePRSummary activity is PriorityLow, so this
 	// returns as soon as the fast basics stage is recorded and the summary +
 	// statuses drain in the background (progressive load, exactly as designed).
-	id, err := m.engine.StartWorkflowDeferLow(WorkflowPRStatus, PRStatusInput{PR: pr})
+	id, err := m.engine.StartWorkflowDeferLow(WorkflowPRStatus, PRStatusInput{Repo: repo, PR: pr})
 	if err != nil {
 		m.mu.Unlock()
 		return "", err
 	}
-	m.prRuns[pr] = id
+	m.prRuns[key] = id
 	m.mu.Unlock()
 
 	// Start the ingest-refresh poller for this PR's tracker — only when a
@@ -4365,10 +4483,10 @@ func (m *TaskManager) ensurePRStatus(pr int) (string, error) {
 	// already-existing tracker is instead picked up by
 	// ResumePRStatusPolling).
 	if m.runtimeReady {
-		go m.pollIngestRefresh(m.baseCtx, id, pr)
+		go m.pollIngestRefresh(m.baseCtx, id, repo, pr)
 		// Import existing GitHub comments as live threads, and keep polling for
 		// new ones on the same heartbeat cadence (mirrors pollIngestRefresh).
-		go m.pollImportComments(m.baseCtx, id, pr)
+		go m.pollImportComments(m.baseCtx, id, repo, pr)
 	}
 	return id, nil
 }
@@ -4376,7 +4494,7 @@ func (m *TaskManager) ensurePRStatus(pr int) (string, error) {
 // findPRStatusLocked scans for a running/waiting pr_status tracker for pr. It
 // reads only the engine (no TaskManager state), so it is safe to call while
 // holding m.mu.
-func (m *TaskManager) findPRStatusLocked(pr int) string {
+func (m *TaskManager) findPRStatusLocked(repo string, pr int) string {
 	runs, err := m.engine.Runs()
 	if err != nil {
 		return ""
@@ -4393,7 +4511,7 @@ func (m *TaskManager) findPRStatusLocked(pr int) string {
 			continue
 		}
 		var pin PRStatusInput
-		if json.Unmarshal(in, &pin) == nil && pin.PR == pr {
+		if json.Unmarshal(in, &pin) == nil && pin.PR == pr && canonRepo(pin.Repo) == repo {
 			return r.ID
 		}
 	}
@@ -4424,8 +4542,8 @@ func (m *TaskManager) primePRRunsLocked(runs []tembed.RunRecord) {
 		if json.Unmarshal(in, &pin) != nil {
 			continue
 		}
-		if _, ok := m.prRuns[pin.PR]; !ok {
-			m.prRuns[pin.PR] = r.ID
+		if _, ok := m.prRuns[prKey{canonRepo(pin.Repo), pin.PR}]; !ok {
+			m.prRuns[prKey{canonRepo(pin.Repo), pin.PR}] = r.ID
 		}
 	}
 }
@@ -4434,27 +4552,28 @@ func (m *TaskManager) primePRRunsLocked(runs []tembed.RunRecord) {
 // (re)built its relations. It starts one if none is live (the initial build runs
 // synchronously inside StartWorkflow); otherwise it signals a rebuild. One
 // Execution per PR, reused across restarts. Called after a successful ingest.
-func (m *TaskManager) EnsureRelations(ctx context.Context, pr int) {
+func (m *TaskManager) EnsureRelations(ctx context.Context, repo string, pr int) {
+	key := prKey{repo, pr}
 	m.mu.Lock()
-	runID := m.relRuns[pr]
+	runID := m.relRuns[key]
 	if runID == "" {
-		runID = m.findBuildRelationsLocked(pr)
+		runID = m.findBuildRelationsLocked(repo, pr)
 	}
 	m.mu.Unlock()
 
 	if runID == "" {
-		id, err := m.engine.StartWorkflow(WorkflowBuildRelations, BuildRelationsInput{PR: pr})
+		id, err := m.engine.StartWorkflow(WorkflowBuildRelations, BuildRelationsInput{Repo: repo, PR: pr})
 		if err != nil {
 			m.logf("build_relations: start pr=%d: %v", pr, err)
 			return
 		}
 		m.mu.Lock()
-		m.relRuns[pr] = id
+		m.relRuns[key] = id
 		m.mu.Unlock()
 		return
 	}
 	m.mu.Lock()
-	m.relRuns[pr] = runID
+	m.relRuns[key] = runID
 	m.mu.Unlock()
 	if err := m.engine.SignalWorkflow(runID, SignalRebuild, json.RawMessage("{}")); err != nil {
 		m.logf("build_relations: rebuild signal pr=%d: %v", pr, err)
@@ -4463,7 +4582,7 @@ func (m *TaskManager) EnsureRelations(ctx context.Context, pr int) {
 
 // findBuildRelationsLocked scans for a running/waiting build_relations Execution
 // for pr. Reads only the engine, so it is safe to call while holding m.mu.
-func (m *TaskManager) findBuildRelationsLocked(pr int) string {
+func (m *TaskManager) findBuildRelationsLocked(repo string, pr int) string {
 	runs, err := m.engine.Runs()
 	if err != nil {
 		return ""
@@ -4480,7 +4599,7 @@ func (m *TaskManager) findBuildRelationsLocked(pr int) string {
 			continue
 		}
 		var pin BuildRelationsInput
-		if json.Unmarshal(in, &pin) == nil && pin.PR == pr {
+		if json.Unmarshal(in, &pin) == nil && pin.PR == pr && canonRepo(pin.Repo) == repo {
 			return r.ID
 		}
 	}
@@ -4492,21 +4611,22 @@ func (m *TaskManager) findBuildRelationsLocked(pr int) string {
 // Run ID to signal approvals to; the tracker is reused across restarts (its
 // waiting Execution is re-driven by engine.Recover). Starting/reusing an
 // Execution is the sanctioned UI write path.
-func (m *TaskManager) EnsureApprovals(pr int) (string, error) {
+func (m *TaskManager) EnsureApprovals(repo string, pr int) (string, error) {
+	key := prKey{repo, pr}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if id, ok := m.apprRuns[pr]; ok {
+	if id, ok := m.apprRuns[key]; ok {
 		return id, nil
 	}
-	if id := m.findApproveLocked(pr); id != "" {
-		m.apprRuns[pr] = id
+	if id := m.findApproveLocked(repo, pr); id != "" {
+		m.apprRuns[key] = id
 		return id, nil
 	}
-	id, err := m.engine.StartWorkflow(WorkflowApprove, ApproveInput{PR: pr})
+	id, err := m.engine.StartWorkflow(WorkflowApprove, ApproveInput{Repo: repo, PR: pr})
 	if err != nil {
 		return "", err
 	}
-	m.apprRuns[pr] = id
+	m.apprRuns[key] = id
 	return id, nil
 }
 
@@ -4515,27 +4635,28 @@ func (m *TaskManager) EnsureApprovals(pr int) (string, error) {
 // it has a Run ID to signal ignore/un-ignore to; the tracker is reused across
 // restarts (its waiting Execution is re-driven by engine.Recover). Starting/
 // reusing an Execution is the sanctioned UI write path. Mirrors EnsureApprovals.
-func (m *TaskManager) EnsureIgnoreComment(pr int) (string, error) {
+func (m *TaskManager) EnsureIgnoreComment(repo string, pr int) (string, error) {
+	key := prKey{repo, pr}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if id, ok := m.ignRuns[pr]; ok {
+	if id, ok := m.ignRuns[key]; ok {
 		return id, nil
 	}
-	if id := m.findIgnoreCommentLocked(pr); id != "" {
-		m.ignRuns[pr] = id
+	if id := m.findIgnoreCommentLocked(repo, pr); id != "" {
+		m.ignRuns[key] = id
 		return id, nil
 	}
-	id, err := m.engine.StartWorkflow(WorkflowIgnoreComment, IgnoreCommentInput{PR: pr})
+	id, err := m.engine.StartWorkflow(WorkflowIgnoreComment, IgnoreCommentInput{Repo: repo, PR: pr})
 	if err != nil {
 		return "", err
 	}
-	m.ignRuns[pr] = id
+	m.ignRuns[key] = id
 	return id, nil
 }
 
 // findIgnoreCommentLocked scans for a running/waiting ignore_comment tracker for
 // pr. It reads only the engine, so it is safe to call while holding m.mu.
-func (m *TaskManager) findIgnoreCommentLocked(pr int) string {
+func (m *TaskManager) findIgnoreCommentLocked(repo string, pr int) string {
 	runs, err := m.engine.Runs()
 	if err != nil {
 		return ""
@@ -4552,7 +4673,7 @@ func (m *TaskManager) findIgnoreCommentLocked(pr int) string {
 			continue
 		}
 		var pin IgnoreCommentInput
-		if json.Unmarshal(in, &pin) == nil && pin.PR == pr {
+		if json.Unmarshal(in, &pin) == nil && pin.PR == pr && canonRepo(pin.Repo) == repo {
 			return r.ID
 		}
 	}
@@ -4561,7 +4682,7 @@ func (m *TaskManager) findIgnoreCommentLocked(pr int) string {
 
 // findApproveLocked scans for a running/waiting approve tracker for pr. It reads
 // only the engine, so it is safe to call while holding m.mu.
-func (m *TaskManager) findApproveLocked(pr int) string {
+func (m *TaskManager) findApproveLocked(repo string, pr int) string {
 	runs, err := m.engine.Runs()
 	if err != nil {
 		return ""
@@ -4578,7 +4699,7 @@ func (m *TaskManager) findApproveLocked(pr int) string {
 			continue
 		}
 		var pin ApproveInput
-		if json.Unmarshal(in, &pin) == nil && pin.PR == pr {
+		if json.Unmarshal(in, &pin) == nil && pin.PR == pr && canonRepo(pin.Repo) == repo {
 			return r.ID
 		}
 	}
@@ -4710,7 +4831,7 @@ func (m *TaskManager) AutoWarnEnabled(ctx context.Context) (bool, error) {
 // repeatable refresh (supersedeFileWarnings replaces the previous run's
 // findings for the files in scope), so calling it again here is "refresh the
 // risk check", not "duplicate it".
-func (m *TaskManager) autoStartCodeWarning(pr int) {
+func (m *TaskManager) autoStartCodeWarning(repo string, pr int) {
 	enabled, err := m.AutoWarnEnabled(context.Background())
 	if err != nil {
 		m.logf("code_warning: auto-start pr=%d: check enabled: %v", pr, err)
@@ -4984,7 +5105,7 @@ func ingestRefreshNeeded(ctx context.Context, remoteHead, storedHead string) boo
 // done (merged/closed) — mirrors poll's shutdown check.
 //
 // See ingestRefreshNeeded for why "the SHAs differ" is not enough on its own.
-func (m *TaskManager) pollIngestRefresh(ctx context.Context, prRunID string, pr int) {
+func (m *TaskManager) pollIngestRefresh(ctx context.Context, prRunID string, repo string, pr int) {
 	m.waitReady()
 	ticker := time.NewTicker(m.interval)
 	defer ticker.Stop()
@@ -5014,12 +5135,12 @@ func (m *TaskManager) pollIngestRefresh(ctx context.Context, prRunID string, pr 
 			return
 		}
 
-		meta, err := fetchPRMeta(ctx, "", pr)
+		meta, err := fetchPRMeta(ctx, repo, pr)
 		if err != nil {
 			m.logf("pr_status: ingest refresh check pr=%d: %v", pr, err)
 			continue
 		}
-		_, head, ok, err := loadIngestSHAs(m.db, pr)
+		_, head, ok, err := loadIngestSHAs(m.db, repo, pr)
 		if err != nil {
 			m.logf("pr_status: load ingest state pr=%d: %v", pr, err)
 			continue
@@ -5041,13 +5162,13 @@ func (m *TaskManager) pollIngestRefresh(ctx context.Context, prRunID string, pr 
 // It stops once the pr_status tracker is done (merged/closed). Reading GitHub in
 // glue mirrors poll/pollInbox; the only write is starting an Execution (the
 // sanctioned path), made idempotent by the deterministic gh-<id> Run ID.
-func (m *TaskManager) pollImportComments(ctx context.Context, prRunID string, pr int) {
+func (m *TaskManager) pollImportComments(ctx context.Context, prRunID string, repo string, pr int) {
 	m.waitReady()
 	ticker := time.NewTicker(m.interval)
 	defer ticker.Stop()
 	// Run one import immediately (don't wait a whole tick to surface existing
 	// comments on first load), then gate later ticks to the cadence.
-	m.importPRComments(ctx, pr)
+	m.importPRComments(ctx, repo, pr)
 	lastPoll := time.Now()
 	for {
 		select {
@@ -5073,7 +5194,7 @@ func (m *TaskManager) pollImportComments(ctx context.Context, prRunID string, pr
 		if err != nil || status == tembed.StatusCompleted || status == tembed.StatusFailed {
 			return
 		}
-		m.importPRComments(ctx, pr)
+		m.importPRComments(ctx, repo, pr)
 	}
 }
 
@@ -5083,11 +5204,11 @@ func (m *TaskManager) pollImportComments(ctx context.Context, prRunID string, pr
 // StartWorkflowID no-op rather than a duplicate. It then launches the per-thread
 // reply poller for any thread not already being polled. The GitHub fetch is a
 // read (like poll/pollInbox); the Execution start is the only write.
-func (m *TaskManager) importPRComments(ctx context.Context, pr int) {
+func (m *TaskManager) importPRComments(ctx context.Context, repo string, pr int) {
 	var blocks []Block
 	if m.db != nil {
 		var err error
-		if blocks, err = blocksByPR(m.db, pr); err != nil {
+		if blocks, err = blocksByPR(m.db, repo, pr); err != nil {
 			m.logf("import comments: blocks pr=%d: %v", pr, err)
 			// Continue anyway — general (PR-wide) comments don't need blocks, and a
 			// review comment with no blocks just degrades to PR-wide.
@@ -5095,22 +5216,22 @@ func (m *TaskManager) importPRComments(ctx context.Context, pr int) {
 	}
 
 	var inputs []CodeCommentInput
-	if reviews, err := m.gh.FetchReviewComments(ctx, pr); err != nil {
+	if reviews, err := m.ghFor(repo).FetchReviewComments(ctx, pr); err != nil {
 		m.logf("import comments: fetch review comments pr=%d: %v", pr, err)
 	} else {
 		for _, rc := range reviews {
-			inputs = append(inputs, mapReviewComment(m.dataDir, pr, blocks, rc))
+			inputs = append(inputs, mapReviewComment(m.dataDir, repo, pr, blocks, rc))
 		}
 	}
-	if general, err := m.gh.FetchGeneralComments(ctx, pr); err != nil {
+	if general, err := m.ghFor(repo).FetchGeneralComments(ctx, pr); err != nil {
 		m.logf("import comments: fetch general comments pr=%d: %v", pr, err)
 	} else {
 		for _, gc := range general {
-			inputs = append(inputs, mapGeneralComment(pr, gc))
+			inputs = append(inputs, mapGeneralComment(repo, pr, gc))
 		}
 	}
 
-	prRunID, err := m.ensurePRStatus(pr)
+	prRunID, err := m.ensurePRStatus(repo, pr)
 	if err != nil {
 		prRunID = ""
 	}
@@ -5130,7 +5251,7 @@ func (m *TaskManager) importPRComments(ctx context.Context, pr int) {
 	// The same read-model list also feeds applyGithubResolves below.
 	var existing []comments.Comment
 	if m.comments != nil {
-		if list, err := m.comments.List(ctx, pr); err != nil {
+		if list, err := m.comments.List(ctx, repo, pr); err != nil {
 			m.logf("import comments: list pr=%d: %v", pr, err)
 		} else {
 			existing = list
@@ -5199,11 +5320,11 @@ func (m *TaskManager) importPRComments(ctx context.Context, pr int) {
 		}
 		m.mu.Unlock()
 		if !already {
-			go m.poll(ctx, runID, pr, in.ImportedRootID, prRunID)
+			go m.poll(ctx, runID, repo, pr, in.ImportedRootID, prRunID)
 		}
 	}
 
-	m.applyGithubResolves(ctx, pr, existing)
+	m.applyGithubResolves(ctx, repo, pr, existing)
 }
 
 // applyGithubResolves mirrors GitHub's own "Resolve conversation" state onto
@@ -5240,7 +5361,7 @@ func (m *TaskManager) importPRComments(ctx context.Context, pr int) {
 // thread doesn't get re-resolved behind the reviewer's back either: the
 // "unresolve" action unresolves the GitHub conversation too, so it drops out
 // of this set at the same moment.
-func (m *TaskManager) applyGithubResolves(ctx context.Context, pr int, existing []comments.Comment) {
+func (m *TaskManager) applyGithubResolves(ctx context.Context, repo string, pr int, existing []comments.Comment) {
 	if m.comments == nil || m.gh == nil || len(existing) == 0 {
 		return
 	}
@@ -5255,7 +5376,7 @@ func (m *TaskManager) applyGithubResolves(ctx context.Context, pr int, existing 
 	if !candidates {
 		return
 	}
-	resolved, err := m.gh.ResolvedReviewThreads(ctx, pr)
+	resolved, err := m.ghFor(repo).ResolvedReviewThreads(ctx, pr)
 	if err != nil {
 		m.logf("import comments: resolved threads pr=%d: %v", pr, err)
 		return
@@ -5336,7 +5457,7 @@ func (m *TaskManager) knownGithubIDs(pr int) map[int64]bool {
 // the reviewer: fast (m.interval) while a heartbeat arrived within
 // heartbeatWindow, else slow (m.idle). On the slow cadence it also checks whether
 // the PR is merged/closed, records it on the pr_status tracker, and stops.
-func (m *TaskManager) poll(ctx context.Context, runID string, pr int, rootID int64, prRunID string) {
+func (m *TaskManager) poll(ctx context.Context, runID string, repo string, pr int, rootID int64, prRunID string) {
 	// One poller per thread, and it exits again while the comment is resolved
 	// (see the resolvedComment check below) — so a later reopen can start a
 	// fresh one. See beginPolling for the handshake that makes that safe.
@@ -5345,7 +5466,7 @@ func (m *TaskManager) poll(ctx context.Context, runID string, pr int, rootID int
 	}
 	defer func() {
 		if m.endPolling(runID) {
-			go m.poll(ctx, runID, pr, rootID, prRunID)
+			go m.poll(ctx, runID, repo, pr, rootID, prRunID)
 		}
 	}()
 	seen := map[int64]bool{}
@@ -5395,7 +5516,7 @@ func (m *TaskManager) poll(ctx context.Context, runID string, pr int, rootID int
 			}
 		}
 
-		replies, err := m.gh.FetchReplies(ctx, pr, rootID)
+		replies, err := m.ghFor(repo).FetchReplies(ctx, pr, rootID)
 		if err != nil {
 			m.logf("task_code_comment: fetch replies pr=%d root=%d: %v", pr, rootID, err)
 			continue
@@ -5417,7 +5538,7 @@ func (m *TaskManager) poll(ctx context.Context, runID string, pr int, rootID int
 		// Slow cadence only: check whether the PR merged/closed. Record it on the
 		// pr_status tracker (best-effort) and stop polling this thread.
 		if !active {
-			state, err := m.gh.PRState(ctx, pr)
+			state, err := m.ghFor(repo).PRState(ctx, pr)
 			if err != nil {
 				m.logf("task_code_comment: pr state pr=%d: %v", pr, err)
 			} else if state != "open" {

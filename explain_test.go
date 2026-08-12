@@ -46,7 +46,7 @@ func TestExplainCodeGeneratesDescription(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	list, err := ex.List(context.Background(), 31)
+	list, err := ex.List(context.Background(), "", 31)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestExplainCodeIdempotentStart(t *testing.T) {
 	if n := fake.CallCount(); n != 2 {
 		t.Fatalf("claude called %d times, want 2 (fresh run for new hash)", n)
 	}
-	list, err := ex.List(context.Background(), 31)
+	list, err := ex.List(context.Background(), "", 31)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestExplainCodeOfflineFails(t *testing.T) {
 	if _, err := m.StartExplainCode(explainInput()); err != nil {
 		t.Fatal(err)
 	}
-	list, err := ex.List(context.Background(), 31)
+	list, err := ex.List(context.Background(), "", 31)
 	if err != nil {
 		t.Fatal(err)
 	}

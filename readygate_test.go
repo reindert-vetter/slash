@@ -71,13 +71,13 @@ func TestAutoStartCodeWarningWaitsForReadyGate(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 90
 	writeWarningFixtureRepo(t, dataDir, pr)
-	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), pr, []Block{warningFixtureBlock(pr)}); err != nil {
+	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), "", pr, []Block{warningFixtureBlock(pr)}); err != nil {
 		t.Fatal(err)
 	}
 	m, _ := autoWarnTriggerManager(t, dataDir, claude.NewFake())
 	m.ArmReadyGate()
 
-	m.enqueueAutoStartCodeWarning(pr)
+	m.enqueueAutoStartCodeWarning(prKey{"", pr})
 
 	// Give the (lazily started) worker every chance to misbehave before
 	// asserting it did not.
@@ -104,7 +104,7 @@ func TestAutoStartCodeWarningSerializesMultiplePRs(t *testing.T) {
 	db := mustOpenGraphDB(t, dataDir)
 	for _, pr := range prs {
 		writeWarningFixtureRepo(t, dataDir, pr)
-		if err := replacePRBlocks(db, pr, []Block{warningFixtureBlock(pr)}); err != nil {
+		if err := replacePRBlocks(db, "", pr, []Block{warningFixtureBlock(pr)}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -112,7 +112,7 @@ func TestAutoStartCodeWarningSerializesMultiplePRs(t *testing.T) {
 	m.ArmReadyGate()
 
 	for _, pr := range prs {
-		m.enqueueAutoStartCodeWarning(pr)
+		m.enqueueAutoStartCodeWarning(prKey{"", pr})
 	}
 	m.MarkReady()
 
