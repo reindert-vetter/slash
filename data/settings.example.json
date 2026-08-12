@@ -2,5 +2,20 @@
   "me": {
     "login": "your-github-login",
     "aliases": ["shorter-form-people-actually-type"]
-  }
+  },
+  "repos": [
+    {
+      "slug": "plug-and-pay/plug-and-pay",
+      "key": "pap",
+      "dir": "~/dev/plug-and-pay",
+      "baseBranch": "develop",
+      "primary": true
+    },
+    {
+      "slug": "plug-and-pay/plug-and-pay-ops",
+      "key": "ops",
+      "dir": "~/dev/plug-and-pay-ops",
+      "baseBranch": "master"
+    }
+  ]
 }

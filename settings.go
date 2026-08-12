@@ -55,10 +55,15 @@ type meSettings struct {
 	Aliases []string `json:"aliases"`
 }
 
-// appSettings is the whole file. One field today, room for more later — which is
-// the point of a general settings.json over a mentions-only file.
+// appSettings is the whole file. Two fields today, room for more later — which
+// is the point of a general settings.json over a mentions-only file.
 type appSettings struct {
 	Me meSettings `json:"me"`
+	// Repos is the reviewed-repository registry (see repos.go): which repos
+	// slash lists PRs from, where their local clone lives, and which branch a
+	// PR's base is fetched from. Empty/absent → exactly one repo, gh.go's
+	// built-in primary, i.e. the pre-registry behaviour.
+	Repos []repoConfig `json:"repos"`
 }
 
 // settings returns the effective settings for one data dir, reading
@@ -91,10 +96,10 @@ func loadSettingsFile(path string) appSettings {
 	var s appSettings
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return appSettings{Me: meSettings{Aliases: []string{}}}
+		return appSettings{Me: meSettings{Aliases: []string{}}, Repos: []repoConfig{}}
 	}
 	if err := json.Unmarshal(raw, &s); err != nil {
-		return appSettings{Me: meSettings{Aliases: []string{}}}
+		return appSettings{Me: meSettings{Aliases: []string{}}, Repos: []repoConfig{}}
 	}
 	s.Me.Login = strings.TrimSpace(s.Me.Login)
 	out := []string{}
@@ -109,6 +114,13 @@ func loadSettingsFile(path string) appSettings {
 		out = append(out, a)
 	}
 	s.Me.Aliases = out
+	if s.Repos == nil {
+		s.Repos = []repoConfig{}
+	}
+	// The repo list is normalized by normalizeRepos (repos.go), not here: it
+	// needs defaults that only the registry knows (the built-in primary, the
+	// derived key/dir/baseBranch), and it must happen once at init rather than
+	// on every settings() read.
 	return s
 }
 

@@ -5013,7 +5013,7 @@ func (m *TaskManager) pollIngestRefresh(ctx context.Context, prRunID string, pr 
 			return
 		}
 
-		meta, err := fetchPRMeta(ctx, pr)
+		meta, err := fetchPRMeta(ctx, "", pr)
 		if err != nil {
 			m.logf("pr_status: ingest refresh check pr=%d: %v", pr, err)
 			continue

@@ -105,6 +105,9 @@ func runServe(args []string) {
 
 	// Workflow/comments stores live next to the DB, so a test DB isolates its
 	// workflow state too. (The worktree data dir is separate — see server below.)
+	// The repo registry must exist before anything resolves a clone dir, a repo
+	// slug or a worktree path (see repos.go).
+	initRepos(filepath.Dir(resolvedDB))
 	tk, closeTasks, err := newTasks(context.Background(), db, filepath.Dir(resolvedDB), repoSlug, true)
 	if err != nil {
 		log.Fatalf("init workflows: %v", err)
@@ -156,6 +159,7 @@ func runIngestCmd(args []string) {
 	// Build the workflow engine (no server runtime — no poller resume, no inbox
 	// fetch) just to run the ingest workflow, the sole writer of blocks/worktrees.
 	dataDir := filepath.Dir(resolvedDB)
+	initRepos(dataDir)
 	tk, closeTasks, err := newTasks(context.Background(), db, dataDir, repoSlug, false)
 	if err != nil {
 		log.Fatalf("init workflows: %v", err)
@@ -308,6 +312,7 @@ func runCleanupCmd(args []string) {
 	defer db.Close()
 
 	dataDir := filepath.Dir(resolvedDB)
+	initRepos(dataDir)
 	tk, closeTasks, err := newTasks(context.Background(), db, dataDir, repoSlug, false)
 	if err != nil {
 		log.Fatalf("init workflows: %v", err)

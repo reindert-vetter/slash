@@ -81,7 +81,7 @@ func prepareIngestWorktrees(ctx context.Context, dataDir string, pr int) (worktr
 // refreshIngestDelta (which already holds ingestMu) can fall back to a full
 // ingest without re-locking a non-reentrant mutex.
 func prepareIngestWorktreesLocked(ctx context.Context, dataDir string, pr int) (worktreeSHAs, error) {
-	meta, err := fetchPRMeta(ctx, pr)
+	meta, err := fetchPRMeta(ctx, "", pr)
 	if err != nil {
 		return worktreeSHAs{}, err
 	}
@@ -91,15 +91,15 @@ func prepareIngestWorktreesLocked(ctx context.Context, dataDir string, pr int) (
 	}
 	log.Printf("ingest pr %d: base=%s head=%s files=%d", pr, short(baseSHA), short(headSHA), len(meta.Files))
 
-	if err := ensureCommits(ctx, pr, baseSHA, headSHA); err != nil {
+	if err := ensureCommits(ctx, "", pr, baseSHA, headSHA); err != nil {
 		return worktreeSHAs{}, err
 	}
 
 	baseDir, headDir := worktreeDirs(dataDir, pr)
-	if err := ensureWorktree(ctx, baseDir, baseSHA); err != nil {
+	if err := ensureWorktree(ctx, "", baseDir, baseSHA); err != nil {
 		return worktreeSHAs{}, fmt.Errorf("base worktree: %w", err)
 	}
-	if err := ensureWorktree(ctx, headDir, headSHA); err != nil {
+	if err := ensureWorktree(ctx, "", headDir, headSHA); err != nil {
 		return worktreeSHAs{}, fmt.Errorf("head worktree: %w", err)
 	}
 
@@ -153,7 +153,7 @@ func scanAndStoreIngestBlocksLocked(ctx context.Context, db *sql.DB, dataDir str
 	// one logical file (old blocks from the pre-rename path in the base
 	// worktree, new blocks from the head path) instead of a removed+added pair.
 	// Best-effort: a failure just means no rename pairing.
-	renames, rerr := detectRenames(ctx, shas.BaseSHA, shas.HeadSHA)
+	renames, rerr := detectRenames(ctx, "", shas.BaseSHA, shas.HeadSHA)
 	if rerr != nil {
 		log.Printf("ingest pr %d: rename detection failed (continuing without): %v", pr, rerr)
 		renames = nil
@@ -179,7 +179,7 @@ func scanAndStoreIngestBlocksLocked(ctx context.Context, db *sql.DB, dataDir str
 		diffPaths = append(diffPaths, old)
 	}
 
-	rawDiff, err := diffBetweenSHAs(ctx, shas.BaseSHA, shas.HeadSHA, diffPaths)
+	rawDiff, err := diffBetweenSHAs(ctx, "", shas.BaseSHA, shas.HeadSHA, diffPaths)
 	if err != nil {
 		return nil, fmt.Errorf("diff: %w", err)
 	}
@@ -241,7 +241,7 @@ func refreshIngestDelta(ctx context.Context, db *sql.DB, dataDir string, pr int,
 		return &ingestResult{PR: pr, Skipped: true}, nil
 	}
 
-	if err := ensureCommits(ctx, pr, baseSHA, headSHA); err != nil {
+	if err := ensureCommits(ctx, "", pr, baseSHA, headSHA); err != nil {
 		return nil, fmt.Errorf("ensure commits: %w", err)
 	}
 
@@ -263,11 +263,11 @@ func refreshIngestDelta(ctx context.Context, db *sql.DB, dataDir string, pr int,
 	}
 
 	baseDir, headDir := worktreeDirs(dataDir, pr)
-	if err := updateWorktree(ctx, headDir, headSHA); err != nil {
+	if err := updateWorktree(ctx, "", headDir, headSHA); err != nil {
 		return nil, fmt.Errorf("update head worktree: %w", err)
 	}
 
-	deltaFiles, err := changedFileNames(ctx, prevHead, headSHA)
+	deltaFiles, err := changedFileNames(ctx, "", prevHead, headSHA)
 	if err != nil {
 		return nil, fmt.Errorf("changed files: %w", err)
 	}
@@ -278,7 +278,7 @@ func refreshIngestDelta(ctx context.Context, db *sql.DB, dataDir string, pr int,
 		return &ingestResult{PR: pr, Skipped: true}, nil
 	}
 
-	rawDiff, err := diffBetweenSHAs(ctx, baseSHA, headSHA, deltaFiles)
+	rawDiff, err := diffBetweenSHAs(ctx, "", baseSHA, headSHA, deltaFiles)
 	if err != nil {
 		return nil, fmt.Errorf("diff delta files: %w", err)
 	}

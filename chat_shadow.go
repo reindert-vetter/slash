@@ -134,7 +134,7 @@ func chatShadowMissingTips(ctx context.Context, dir string, pr int, headRefName 
 // shared clone state — different conversations get different branch refs),
 // so unrelated conversations' edit turns still run fully concurrently.
 func ensureChatShadowWorktree(ctx context.Context, dataDir string, pr int, conversationID string) (string, error) {
-	meta, err := fetchPRMeta(ctx, pr)
+	meta, err := fetchPRMeta(ctx, "", pr)
 	if err != nil {
 		return "", fmt.Errorf("fetch pr meta: %w", err)
 	}
@@ -449,7 +449,7 @@ func chatShadowConflictedPaths(ctx context.Context, dir string) ([]string, error
 // reviewer as a message rather than failing the workflow (mirrors
 // runOneClaudeTurn's own failed-claude-call handling).
 func commitChatShadowEdits(ctx context.Context, cm *chat.Module, dataDir string, pr int, conversationID, turnID string) chat.Message {
-	meta, err := fetchPRMeta(ctx, pr)
+	meta, err := fetchPRMeta(ctx, "", pr)
 	if err != nil || meta.HeadRefName == "" {
 		msg := chat.Message{
 			ID: chatMessageID(turnID, ""), ConversationID: conversationID, PR: pr,

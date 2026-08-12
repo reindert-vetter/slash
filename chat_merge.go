@@ -157,7 +157,7 @@ func enqueueChatMerge(tm *TaskManager, arg chatCommitInput) {
 // real head branch name (the one gh/network call in this whole path) and
 // delegate to processChatMergeAt.
 func processChatMerge(ctx context.Context, tm *TaskManager, cm *chat.Module, cl claude.Client, dataDir string, arg chatMergeInput) chat.Message {
-	meta, err := fetchPRMeta(ctx, arg.PR)
+	meta, err := fetchPRMeta(ctx, "", arg.PR)
 	if err != nil || meta.HeadRefName == "" {
 		msg := chat.Message{
 			ID: chatMessageID(arg.TurnID, ""), ConversationID: arg.ConversationID, PR: arg.PR,

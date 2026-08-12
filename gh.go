@@ -10,7 +10,10 @@ import (
 	"strings"
 )
 
-// repoSlug for gh --repo.
+// repoSlug is the built-in PRIMARY repo for gh --repo: the repo slash was built
+// around, and the one a bare PR number/`/pr/<n>` URL/empty repo string refers to.
+// Additional repos are configured in settings.json — see repos.go, which also
+// explains why the primary repo is represented as the empty string internally.
 const repoSlug = "plug-and-pay/plug-and-pay"
 
 // defaultRepoDir is the fallback local clone of plug-and-pay/plug-and-pay when
@@ -23,12 +26,17 @@ const defaultRepoDir = "~/dev/plug-and-pay"
 // (Go's exec/os do not expand "~" themselves), so SLASH_REPO_DIR=~/dev/foo
 // works too.
 func repoDir() string {
-	dir := os.Getenv("SLASH_REPO_DIR")
+	dir := repoDirEnv()
 	if dir == "" {
 		dir = defaultRepoDir
 	}
 	return expandTilde(dir)
 }
+
+// repoDirEnv is the raw SLASH_REPO_DIR override (un-expanded, possibly empty).
+// Split out so the repo registry can apply the same override to whichever
+// configured entry is the primary repo (see normalizeRepos).
+func repoDirEnv() string { return os.Getenv("SLASH_REPO_DIR") }
 
 // expandTilde replaces a leading "~" (bare or "~/…") with the user's home dir.
 // On failure to resolve the home dir it returns the path unchanged.
@@ -67,9 +75,17 @@ type prMeta struct {
 	HeadRefName string `json:"headRefName"`
 }
 
-// runGit runs a git command in repoDir with separate args + context timeout.
+// runGit runs a git command in the PRIMARY repo's clone with separate args +
+// context timeout. Everything that can concern a second repo calls runGitFor
+// instead; this stays as the shorthand for a genuinely primary-repo-only path.
 func runGit(ctx context.Context, args ...string) ([]byte, error) {
-	full := append([]string{"-C", repoDir()}, args...)
+	return runGitFor(ctx, "", args...)
+}
+
+// runGitFor runs a git command in the clone of the given canonical repo string
+// ("" = the primary repo, see repos.go).
+func runGitFor(ctx context.Context, repo string, args ...string) ([]byte, error) {
+	full := append([]string{"-C", repoDirFor(repo)}, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -79,12 +95,12 @@ func runGit(ctx context.Context, args ...string) ([]byte, error) {
 }
 
 // fetchPRMeta retrieves the PR metadata via gh.
-func fetchPRMeta(ctx context.Context, pr int) (*prMeta, error) {
+func fetchPRMeta(ctx context.Context, repo string, pr int) (*prMeta, error) {
 	cmd := exec.CommandContext(ctx, "gh", "pr", "view", strconv.Itoa(pr),
-		"--repo", repoSlug, "--json", "files,baseRefOid,headRefOid,baseRefName,headRefName")
+		"--repo", repoSlugFor(repo), "--json", "files,baseRefOid,headRefOid,baseRefName,headRefName")
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("gh pr view %d: %w", pr, err)
+		return nil, fmt.Errorf("gh pr view %d%s: %w", pr, repoTag(repo), err)
 	}
 	var m prMeta
 	if err := json.Unmarshal(out, &m); err != nil {
@@ -94,35 +110,38 @@ func fetchPRMeta(ctx context.Context, pr int) (*prMeta, error) {
 }
 
 // ensureCommits makes sure both the base and head SHA are present locally.
-func ensureCommits(ctx context.Context, pr int, baseSHA, headSHA string) error {
-	// Head via the pull ref (most reliable), base via develop.
-	_, _ = runGit(ctx, "fetch", "origin", fmt.Sprintf("refs/pull/%d/head", pr))
-	_, _ = runGit(ctx, "fetch", "origin", "develop")
+func ensureCommits(ctx context.Context, repo string, pr int, baseSHA, headSHA string) error {
+	// Head via the pull ref (most reliable), base via the repo's own base branch
+	// (the registry's baseBranch: "develop" for plug-and-pay — the historical
+	// hardcoded value — "master" for plug-and-pay-ops).
+	_, _ = runGitFor(ctx, repo, "fetch", "origin", fmt.Sprintf("refs/pull/%d/head", pr))
+	_, _ = runGitFor(ctx, repo, "fetch", "origin", baseBranchFor(repo))
 
 	for _, sha := range []string{baseSHA, headSHA} {
-		if !commitExists(ctx, sha) {
+		if !commitExists(ctx, repo, sha) {
 			// Fallback: fetch explicitly by SHA (GitHub allows this).
-			if _, err := runGit(ctx, "fetch", "origin", sha); err != nil {
+			if _, err := runGitFor(ctx, repo, "fetch", "origin", sha); err != nil {
 				return fmt.Errorf("cannot fetch commit %s: %w", short(sha), err)
 			}
 		}
-		if !commitExists(ctx, sha) {
+		if !commitExists(ctx, repo, sha) {
 			return fmt.Errorf("commit %s still unresolvable after fetch", short(sha))
 		}
 	}
 	return nil
 }
 
-func commitExists(ctx context.Context, sha string) bool {
-	_, err := runGit(ctx, "cat-file", "-e", sha+"^{commit}")
+func commitExists(ctx context.Context, repo string, sha string) bool {
+	_, err := runGitFor(ctx, repo, "cat-file", "-e", sha+"^{commit}")
 	return err == nil
 }
 
-// ensureWorktree creates (idempotently) a detached worktree at sha in dir.
-func ensureWorktree(ctx context.Context, dir, sha string) error {
+// ensureWorktree creates (idempotently) a detached worktree at sha in dir, owned
+// by repo's clone.
+func ensureWorktree(ctx context.Context, repo, dir, sha string) error {
 	// Path already a worktree? Remove and rebuild for a clean state.
-	_, _ = runGit(ctx, "worktree", "remove", "--force", dir)
-	if _, err := runGit(ctx, "worktree", "add", "--detach", dir, sha); err != nil {
+	_, _ = runGitFor(ctx, repo, "worktree", "remove", "--force", dir)
+	if _, err := runGitFor(ctx, repo, "worktree", "add", "--detach", dir, sha); err != nil {
 		return err
 	}
 	return nil
@@ -150,8 +169,8 @@ func runGitIn(ctx context.Context, dir string, args ...string) ([]byte, error) {
 // approval was written in: the head worktree has by then already been checked out
 // to the new SHA in place (updateWorktree below), so the previous sides are only
 // still reachable through git.
-func showFileAtSHA(ctx context.Context, sha, path string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "git", "-C", repoDir(), "show", sha+":"+path)
+func showFileAtSHA(ctx context.Context, repo, sha, path string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "git", "-C", repoDirFor(repo), "show", sha+":"+path)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("git show %s:%s: %w", sha, path, err)
@@ -165,13 +184,13 @@ func showFileAtSHA(ctx context.Context, sha, path string) ([]byte, error) {
 // poll tick a new head SHA is observed, so re-registering the worktree from
 // scratch each time would be wasteful; falls back to ensureWorktree when the
 // in-place update fails (dir missing, not yet a worktree, or corrupted).
-func updateWorktree(ctx context.Context, dir, sha string) error {
+func updateWorktree(ctx context.Context, repo, dir, sha string) error {
 	if _, err := os.Stat(dir); err == nil {
 		if _, err := runGitIn(ctx, dir, "checkout", "--detach", sha); err == nil {
 			return nil
 		}
 	}
-	return ensureWorktree(ctx, dir, sha)
+	return ensureWorktree(ctx, repo, dir, sha)
 }
 
 // diffBetweenSHAs returns the unified diff between two commits, limited to files.
@@ -181,10 +200,10 @@ func updateWorktree(ctx context.Context, dir, sha string) error {
 // new path in parseUnifiedDiff. For this to fire the caller must include BOTH
 // the new and the old path in files (a pathspec limited to only the new path
 // would filter out the deletion of the old path before git can pair them).
-func diffBetweenSHAs(ctx context.Context, baseSHA, headSHA string, files []string) (string, error) {
+func diffBetweenSHAs(ctx context.Context, repo, baseSHA, headSHA string, files []string) (string, error) {
 	args := []string{"diff", "--no-color", "--find-renames", "--unified=0", baseSHA, headSHA, "--"}
 	args = append(args, files...)
-	out, err := runGit(ctx, args...)
+	out, err := runGitFor(ctx, repo, args...)
 	if err != nil {
 		return "", err
 	}
@@ -198,8 +217,8 @@ func diffBetweenSHAs(ctx context.Context, baseSHA, headSHA string, files []strin
 // delete+add — the accepted "als dat even kan" boundary
 // (.claude/docs/blocks-and-ingest.md). Best-effort caller: on error the full
 // ingest just proceeds with no rename pairing.
-func detectRenames(ctx context.Context, baseSHA, headSHA string) (map[string]string, error) {
-	out, err := runGit(ctx, "diff", "--find-renames", "--name-status", baseSHA, headSHA)
+func detectRenames(ctx context.Context, repo, baseSHA, headSHA string) (map[string]string, error) {
+	out, err := runGitFor(ctx, repo, "diff", "--find-renames", "--name-status", baseSHA, headSHA)
 	if err != nil {
 		return nil, err
 	}
@@ -229,8 +248,8 @@ func detectRenames(ctx context.Context, baseSHA, headSHA string) (map[string]str
 // rows for a file that no longer exists on the PR's head. Listing both the
 // old (deleted) and new (added) path lets that DELETE clean up the old rows
 // like any other real removal.
-func changedFileNames(ctx context.Context, oldSHA, newSHA string) ([]string, error) {
-	out, err := runGit(ctx, "diff", "--no-renames", "--name-only", oldSHA, newSHA)
+func changedFileNames(ctx context.Context, repo, oldSHA, newSHA string) ([]string, error) {
+	out, err := runGitFor(ctx, repo, "diff", "--no-renames", "--name-only", oldSHA, newSHA)
 	if err != nil {
 		return nil, err
 	}

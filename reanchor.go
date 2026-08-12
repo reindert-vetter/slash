@@ -781,7 +781,7 @@ func shadowWorktrees(ctx context.Context, baseSHA, headSHA string, paths []strin
 	headDir = filepath.Join(root, "head")
 	for dir, sha := range map[string]string{baseDir: baseSHA, headDir: headSHA} {
 		for _, rel := range paths {
-			content, err := showFileAtSHA(ctx, sha, rel)
+			content, err := showFileAtSHA(ctx, "", sha, rel)
 			if err != nil {
 				continue // absent at that revision — see the doc comment
 			}
