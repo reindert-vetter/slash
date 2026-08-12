@@ -100,6 +100,20 @@ const cs = reactive({
   // Always reassigned wholesale (never mutated in place), same convention as
   // state.ignoredComments in home.mjs, so the reactive read re-triggers.
   sendFailed: {},
+  // pendingComment — the just-submitted NEW comment's optimistic local echo
+  // (see placeComment/pendingCommentFor/pendingCommentBubble below):
+  // `{file, label, rowStart, rowEnd, gran, seg, body, at}` while the POST +
+  // GET round-trip is in flight, `null` otherwise. exitRelated() already
+  // hands the keyboard straight back to the diff before that round-trip even
+  // starts (deliberate, see placeComment's own doc comment) — this is purely
+  // a VISUAL echo, so the reviewer sees their own message right away instead
+  // of only the generic "Bezig…" footer text, mirroring how a just-sent
+  // Claude chat message stays visible while the reply is still coming in.
+  // Cleared once createComment's own await settles (success or failure) —
+  // by then the real comment, if the post succeeded, is already in cs.list
+  // (createComment awaits loadComments itself), so the real compact card
+  // takes over in the exact same spot with no visible gap.
+  pendingComment: null,
   focus: null,
   threadPos: 0,
   // claudePos is threadPos's twin for the embedded Claude conversation
@@ -3856,6 +3870,24 @@ export async function placeComment(state, commentTarget, opts = {}) {
     }
   }
 
+  // cs.pendingComment — the optimistic local echo (see its own doc comment
+  // above): set right before the exit/POST so the reviewer's own message is
+  // visible immediately, in the same spot the real compact card will take
+  // over in once loadComments (inside createComment) brings it in. `at`
+  // guards the clear below against a LATER placeComment call already having
+  // started its own pending echo by the time this one's await resolves.
+  const pendingAt = Date.now()
+  cs.pendingComment = {
+    file: (t && t.file) || b.file,
+    label: (t && t.label) || b.label,
+    rowStart: t ? t.rowStart : -1,
+    rowEnd: t ? t.rowEnd : -1,
+    gran: t ? t.gran : '',
+    seg: t ? t.seg : '',
+    body,
+    at: pendingAt,
+  }
+
   el.value = ''
   exitRelated()
 
@@ -3880,6 +3912,7 @@ export async function placeComment(state, commentTarget, opts = {}) {
     side: t ? t.side : 'RIGHT',
     segment: t ? t.segment : '',
   })
+  if (cs.pendingComment && cs.pendingComment.at === pendingAt) cs.pendingComment = null
   // The typed text just became a real, placed comment — the draft that was
   // standing in for it (see composeDrafts above) has nothing left to hold.
   // A failed placement instead marks cs.sendFailed and KEEPS the draft, so
@@ -4779,6 +4812,48 @@ function truncateMiddle(str, maxLen = 46) {
   return str.slice(0, head) + '…' + str.slice(str.length - tail)
 }
 
+// pendingCommentFor reads cs.pendingComment (see its own doc comment) scoped
+// to `target`, exactly like commentUnder scopes a real comment to the unit
+// under the cursor — so the optimistic echo only shows while InlineComments
+// is still rendering the same unit it was posted to (e.g. the reviewer
+// hasn't already navigated elsewhere while the POST is in flight). Returns
+// null while nothing is pending, or once the target no longer matches.
+function pendingCommentFor(target) {
+  const p = cs.pendingComment
+  if (!p || !target) return null
+  if (p.file !== target.file || p.label !== target.label) return null
+  return commentUnder(p, target) ? p : null
+}
+
+// pendingCommentBubble renders the just-submitted comment's optimistic local
+// echo (see cs.pendingComment/placeComment) — the reviewer's own message,
+// visible right away instead of only the shared "Bezig…" footer text (see
+// commentFooterText), mirroring how a just-sent Claude chat message stays
+// visible in the transcript while the reply is still coming in. Deliberately
+// NOT a real card: no click handler, no menu, no reply field — it disappears
+// the instant the real comment lands (placeComment clears cs.pendingComment
+// once createComment's own loadComments has already brought the real one
+// into cs.list, so the compact card takes over in the same spot with no gap).
+function pendingCommentBubble(p) {
+  const who = identityOf('ui', 'reviewer', null)
+  return html`
+    <div
+      class="mx-1 flex items-start gap-2 rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50/70 dark:bg-zinc-800/40 px-2.5 py-2 opacity-80"
+      data-testid="comment-item-pending"
+    >
+      <span class="mt-1.5 h-2 w-2 shrink-0 animate-pulse rounded-full bg-indigo-400" aria-hidden="true" title="Bezig met plaatsen…"></span>
+      <span class="flex min-w-0 flex-col gap-0.5">
+        <span class="flex min-w-0 items-center gap-2">
+          ${avatarHTML(who.name, who.avatarUrl, 'h-4 w-4')}
+          <span class="truncate text-[11px] font-medium leading-5 text-slate-600 dark:text-zinc-400">${who.name || 'Jij'}</span>
+        </span>
+        <span class="line-clamp-3 [overflow-wrap:anywhere] text-xs font-medium text-slate-800 dark:text-zinc-200">${p.body}</span>
+        <span class="text-[11px] leading-snug text-slate-500 dark:text-zinc-500">Bezig met plaatsen…</span>
+      </span>
+    </div>
+  `
+}
+
 function compactConversation(c, i) {
   const who = identityOf(c.source, c.author, c.avatarUrl)
   return html`
@@ -5142,6 +5217,12 @@ export function InlineComments(state, commentTarget, openCompose, openCommentMen
           ? moreAboveHint(selI(), 'comment-more-above')
           : ''}
       ${newCommentComposer(state, commentTarget, openCompose)}
+      <div class="contents">
+        ${() => {
+          const p = pendingCommentFor(commentTarget && commentTarget())
+          return p ? pendingCommentBubble(p) : ''
+        }}
+      </div>
       ${() => visibleComments().map((c, i) => commentCard(c, i, openCommentMenu).key('comment:' + c.id))}
     </div>
   `
