@@ -880,7 +880,7 @@ export default function Block(b, opts = {}) {
         collapsedFn()
           ? ''
           : b.category === 'TRANSLATION'
-          ? translationSlot(b, activeGroup, approvedFn, langSiblingsFn, hintsEnabled, commentedFn, lineSummaryFn, diffActive)
+          ? translationSlot(b, activeGroup, approvedFn, langSiblingsFn, hintsEnabled, lineSummaryFn, diffActive)
           : isSvgFile(b)
           ? svgSlot(b)
           : codeDiff(b, activeGroup, hintsEnabled, approvedFn, commentedFn, approvedCallsFn, viewModeFn, lineSummaryFn, diffActive, commentRangeFn)}
@@ -982,17 +982,16 @@ export function translationRowUnits(b) {
 // `hintsEnabled` (Block()'s own opt, see above — only true for the card that
 // currently owns the diff keyboard) gates the green out-of-view scroll hints
 // below, exactly like codeDiff's own `data-hints` — see the wrapper doc
-// comment further down. `commentedFn`/`lineSummaryFn` are the SAME opts
-// Block() already threads into codeDiff (see above) — a TRANSLATION block's
-// per-key rows can carry an open comment (💬) and an "onderliggende code"
-// avatar+N/approve badge exactly like an ordinary code row; both were
-// missing entirely on this render path until now (reported: a comment on a
-// TRANSLATION key showed no indicator at all, unlike a comment on ordinary
-// PHP code). Passed down to translationBlockView as small callbacks
-// (`commentMarkerFor`/`lineSummaryFor`, mirroring the existing `onScroll`
-// callback) rather than the raw Sets/Map themselves, so translationDiff.mjs
-// stays decoupled from Block.mjs's own markup functions (commentMarkerHtml/
-// translationLineSummaryHtml) — no circular import, same reasoning as
+// comment further down. `lineSummaryFn` is the SAME opt Block() already
+// threads into codeDiff (see above) — a TRANSLATION block's per-key rows can
+// carry an "onderliggende code" avatar+N/approve badge exactly like an
+// ordinary code row (this used to also render its own 💬 comment marker
+// inline; removed together with rowCellHTML's, see commentedHere's doc
+// comment there — the badge alone already marks presence). Passed down to
+// translationBlockView as a small callback (`lineSummaryFor`, mirroring the
+// existing `onScroll` callback) rather than the raw Map itself, so
+// translationDiff.mjs stays decoupled from Block.mjs's own markup function
+// (translationLineSummaryHtml) — no circular import, same reasoning as
 // `onScroll` above.
 function translationSlot(
   b,
@@ -1000,7 +999,6 @@ function translationSlot(
   approvedFn,
   langSiblingsFn,
   hintsEnabled = () => false,
-  commentedFn = () => new Set(),
   lineSummaryFn = () => new Map(),
   diffActive = () => false,
 ) {
@@ -1043,7 +1041,6 @@ function translationSlot(
           const container = e.target.closest('[data-testid="code-diff"]')
           if (container) updateHints(container)
         },
-        commentMarkerFor: (row) => (row != null && commentedFn().has(row) ? commentMarkerHtml() : ''),
         lineSummaryFor: (row) => (row != null ? translationLineSummaryHtml(lineSummaryFn().get(row)) : ''),
       })}
       ${scrollHint('up')}
@@ -1472,17 +1469,6 @@ function codePane(
   `
 }
 
-// commentMarkerHtml renders the 💬 span that marks a row/key carrying an open
-// comment (presence only — the count doesn't matter). Shared by rowCellHTML
-// (an ordinary code row, appended after the line's own text) and
-// translationSlot (a TRANSLATION per-key row has no single code line to
-// append to, so it renders the same marker inline in its key header instead
-// — see translationBlockView's commentMarkerFor opt) — one source of markup
-// so the two never drift apart.
-function commentMarkerHtml() {
-  return '<span class="select-none opacity-60" data-comment="1" title="Er zit een comment op deze regel">💬</span>'
-}
-
 // commentRangeBar renders the vertical bar along the RIGHT edge of row `i`
 // when that row falls inside the range of the comment the keyboard currently
 // sits in (RelatedPanel's commentRangeRowSet, threaded down as `commentRange`
@@ -1530,12 +1516,12 @@ function commentRangeBar(i, commentRange) {
 //
 // `opts.emitMeta` (defaults to true; only ever false from unifiedHTML, for
 // the purely decorative OLD half of a paired change) suppresses
-// data-row/data-changed/the change-active anchor/the checkmark/the comment
-// marker — so a paired row's two stacked lines never both carry the same
-// `data-row="i"`, which would make a callArrows/updateHints query for that
-// index ambiguous. Exactly one line per row keeps carrying metadata: the
-// same canonical side approveHere/commentedHere below already single out
-// (the new/right side, or the old/left side when there's no right at all).
+// data-row/data-changed/the change-active anchor/the checkmark/the line
+// summary badge — so a paired row's two stacked lines never both carry the
+// same `data-row="i"`, which would make a callArrows/updateHints query for
+// that index ambiguous. Exactly one line per row keeps carrying metadata: the
+// same canonical side approveHere below already singles out (the new/right
+// side, or the old/left side when there's no right at all).
 function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, focused = true, opts = {}, lineSummaries = null, segDots = null) {
   const { gutter = false, emitMeta = true, commentRange = null } = opts
   const text = sideKey === 'left' ? r.left : r.right
@@ -1620,17 +1606,15 @@ function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, focused = 
       segDotAttr,
     )
   else body = highlight(text)
-  // A 💬 marks a row that carries a comment — presence only (the count
-  // doesn't matter). Shown once per row: on the new (right) pane for a normal
-  // row, on the old (left) pane only for a pure deletion (no right side), so a
-  // modified row doesn't get the marker twice. Appended after the code so it
-  // trails the line and scrolls with it. commentMarkerHtml() below is shared
-  // with translationSlot's per-key rows (a TRANSLATION block has no ordinary
-  // code line to append this to, so it renders the same marker inline in its
-  // key header instead — see translationSlot/translationBlockView).
-  const commentedHere =
-    emitMeta && text !== null && commented.has(i) && (sideKey === 'right' || r.right == null)
-  const marker = commentedHere ? ' ' + commentMarkerHtml() : ''
+  // A commented row no longer gets its own 💬 marker in the code body — the
+  // "onderliggende code" avatar+N badge (lineSummaryHtml below) already marks
+  // presence on that same row (it counts a comment placed directly on the
+  // block's own row too, not only underlying-code-child activity — see
+  // lineChildSummaries in home.mjs), so the emoji was a second, redundant
+  // presence indicator right next to it (reviewer request: "haal comment
+  // balonnetjes weg, de avatar laat het al zien"). Don't reintroduce it. The
+  // `commented` param stays threaded through unchanged — collapsePlan below
+  // still needs it to keep a commented row visible in a trimmed huge block.
   // Anchor the first row of the active group so home.mjs can scroll it to
   // the vertical centre of the diff viewport. Suppressed on the decorative
   // OLD half of a unified pair (emitMeta false) — see the doc comment above.
@@ -1644,17 +1628,17 @@ function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, focused = 
   // there. See "menuAnchor" in home.mjs and keyboard-navigation.md.
   const anchorEnd = emitMeta && active && i === group.end ? ' data-change-active-end="1"' : ''
   const flag = emitMeta && changed ? ' data-changed="1"' : ''
-  // approveHere mirrors commentedHere: the approve mark for a row belongs on
-  // the new (right) pane normally, and on the old (left) pane only for a pure
-  // deletion (no right side) — so a modified row never gets it twice.
+  // approveHere: the approve mark for a row belongs on the new (right) pane
+  // normally, and on the old (left) pane only for a pure deletion (no right
+  // side) — so a modified row never gets it twice.
   const approveHere = emitMeta && (sideKey === 'right' || r.right == null)
   // lineSummaryHtml: the "onderliggende code" per-line badge (avatar+N
   // comment activity, plus a done/total approve fraction) — see
   // lineSummaryBadge below and home.mjs's lineChildSummaries, which builds
   // the lineSummaries Map keyed by the SAME row index rowCellHTML is
   // rendering here (already resolved onto a change-group's first row where
-  // applicable). Same canonical side as commentedHere/approveHere — a
-  // modified row never gets it twice.
+  // applicable). Same canonical side as approveHere — a modified row never
+  // gets it twice.
   const lineSummaryHtml = approveHere && lineSummaries ? lineSummaryBadge(lineSummaries.get(i)) : ''
   // gutterHtml (unified stand only, opts.gutter): the leading "- "/"+ "/"  "
   // marker plus an inline, fixed-width checkmark slot — see the doc comment
@@ -1675,7 +1659,7 @@ function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, focused = 
   // call-arrow overlay (src/callArrows.mjs) to anchor an arrow on the exact
   // call-site row. Suppressed when emitMeta is false, see above.
   const dataRow = emitMeta ? ` data-row="${i}"` : ''
-  return `<div class="${cls}"${anchor}${anchorEnd}${flag}${dataRow}>${check}${gutterHtml}${body}${marker}${lineSummaryHtml}${commentRangeBar(
+  return `<div class="${cls}"${anchor}${anchorEnd}${flag}${dataRow}>${check}${gutterHtml}${body}${lineSummaryHtml}${commentRangeBar(
     i,
     commentRange,
   )}</div>`

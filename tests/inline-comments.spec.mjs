@@ -6,7 +6,10 @@ import { test, expect } from './_fixtures.mjs'
 // the unit under the selection: call ⊂ line ⊂ group ⊂ block — see
 // RelatedPanel's visibleComments/commentUnder/commentRowSet + the
 // state→cs.scope watch in home.mjs). A diff row that carries a comment shows
-// a 💬 marker (Block.mjs's paneHTML). Per conversation, exactly one card:
+// the "onderliggende code" avatar+N badge (Block.mjs's paneHTML/
+// lineSummaryBadge — a comment placed directly on the row counts for it too,
+// see lineChildSummaries in home.mjs); it no longer ALSO gets a separate 💬
+// emoji, removed as redundant. Per conversation, exactly one card:
 // several threads on the same unit each get their own, compact card, and only
 // the one currently focused/selected expands to its full thread. See
 // detail-layout.md ("Inline comment blocks").
@@ -31,7 +34,7 @@ test.describe('PR Review Tree — inline comment blocks', () => {
     await expect(selectedCard(page).locator('h2').first()).toHaveText(label)
   }
 
-  test('a comment shows only as an inline block on its own block, with a 💬 on its row', async ({ page }) => {
+  test('a comment shows only as an inline block on its own block, with the underlying-code badge on its row', async ({ page }) => {
     // Discover a block other than the first (so this spec never pollutes the first
     // block other 12903 specs select by default) and remember its file:line ref
     // (?sel= carries the block's `file:line`, not its index — see CLAUDE.md).
@@ -78,11 +81,11 @@ test.describe('PR Review Tree — inline comment blocks', () => {
     await expect(item).toHaveCount(0)
 
     // Deep-link with its own block selected — the comment shows as an inline
-    // card, and its diff row carries a 💬 marker.
+    // card, and its diff row carries the underlying-code avatar badge.
     await page.goto('/pr/12903?sel=' + encodeURIComponent(mine.fileLine))
     await waitBlock(page, mine.label)
     await expect(item).toHaveCount(1)
-    await expect(page.getByTestId('block-column').locator('[data-comment]').first()).toBeVisible()
+    await expect(page.getByTestId('block-column').getByTestId('line-underlying-summary').first()).toBeVisible()
   })
 
   test('the comment-claude-row card is hidden while there is nothing to show, and reappears once a comment exists', async ({
@@ -170,7 +173,7 @@ test.describe('PR Review Tree — inline comment blocks', () => {
     expect(rowClass).not.toMatch(/\boverflow-hidden\b/)
   })
 
-  test('resolving a comment removes its 💬 marker', async ({ page }) => {
+  test('resolving a comment removes its underlying-code badge', async ({ page }) => {
     await page.goto('/pr/12903')
     await ready(page)
     const first = await ident(page)
@@ -195,7 +198,7 @@ test.describe('PR Review Tree — inline comment blocks', () => {
     await page.goto('/pr/12903?sel=' + encodeURIComponent(first.fileLine))
     await waitBlock(page, first.label)
 
-    const marker = page.getByTestId('block-column').locator('[data-comment]').first()
+    const marker = page.getByTestId('block-column').getByTestId('line-underlying-summary').first()
     await expect(marker).toBeVisible()
 
     const resolved = await page.request.post(`/api/workflows/${runId}/signals/reply`, {
