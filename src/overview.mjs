@@ -1766,14 +1766,31 @@ function recentItemMeta(r) {
   `
 }
 
+// recentItemUrl mirrors treeUrl's repo-prefix rule for this row's own shape
+// (PRSummary: `.pr`/`.repo`, not the `.number` other callers of treeUrl use) —
+// a recently-generated PR from a second repo must still open at
+// /pr/<repo-name>/<n>, not the primary repo's /pr/<n>.
+function recentItemUrl(r) {
+  return '/pr/' + (r.repo ? repoLabel({ repo: r.repo }) + '/' : '') + r.pr
+}
+
+// recentUid(r) — the same "bare number for the primary repo, repo#n
+// otherwise" spelling trySelectPendingPr already matches a `recent:` nav key
+// against (see the comment there). A bare `r.pr` alone would collide between
+// two repos' same PR number, so both the row's own key and the auto-select
+// path must agree on this exact form.
+function recentUid(r) {
+  return r.repo ? r.repo + '#' + r.pr : String(r.pr)
+}
+
 function recentItem(r) {
   return html`
     <a
-      href="${'/pr/' + r.pr}"
+      href="${recentItemUrl(r)}"
       data-testid="recent-item"
       data-pr="${r.pr}"
       data-nav-row
-      data-nav-key="${'recent:' + r.pr}"
+      data-nav-key="${'recent:' + recentUid(r)}"
       class="${ROW_CLASS}"
     >
       ${recentAvatarMark(r)}
@@ -1784,7 +1801,7 @@ function recentItem(r) {
       ${chip('open boom', 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 ring-emerald-500/30', '', 'sparkles')}
       ${chevronFilled('h-4 w-4 text-slate-400 dark:text-zinc-600 group-hover:text-slate-600 dark:group-hover:text-zinc-300')}
     </a>
-  `.key('recent:' + r.pr)
+  `.key('recent:' + recentUid(r))
 }
 
 function recentDrawer() {
@@ -2265,9 +2282,16 @@ async function trySelectPendingPr() {
   pendingSelectPr = null // one-shot regardless of outcome — never re-applied on a later reload
   // The "Recent gegenereerd" drawer is fed by the blocks DB (GET /api/prs), so
   // its rows carry a bare PR number of whichever repo they were ingested from.
-  if (recent.some((r) => String(r.pr) === uid || r.repo + '#' + r.pr === uid)) {
+  // Match via matchesPrRef (row shaped as {repo, number}) so the SHORT repo
+  // NAME spelling the review tree's own overviewExitUrl sends
+  // (prUidHere() → "<repo-name>#<n>", see home.mjs) is accepted too, not just
+  // the full slug#n form recentUid builds — then reuse that row's OWN
+  // recentUid, never the possibly differently-spelled incoming `uid`, as the
+  // nav key so it always agrees with that row's own `.key()`/data-nav-key.
+  const recentMatch = recent.find((r) => matchesPrRef({ repo: r.repo, number: r.pr }, uid))
+  if (recentMatch) {
     state.recentOpen = true
-    selKey = 'recent:' + uid
+    selKey = 'recent:' + recentUid(recentMatch)
     hoverEnabled = false
   }
 }

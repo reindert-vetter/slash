@@ -24,6 +24,20 @@ test.describe('PR overview — ?pr= auto-selects the row we came from', () => {
     await expect.poll(() => item.evaluate((el) => el.classList.contains('ring-indigo-500/50'))).toBe(true)
   })
 
+  // The review tree's own "back to overview" link (overviewExitUrl, home.mjs)
+  // sends the SHORT repo NAME, not the full "owner/name" slug — prUidHere()
+  // there builds "<repo-name>#<n>". matchesPrRef must accept that spelling too
+  // (it isn't the same as this page's own prUid, which uses the full slug), or
+  // returning from a second repo's review tree would silently fail to ring the
+  // row it came from.
+  test('a second repo\'s short-name uid (as the review tree itself sends it) rings its row', async ({ page }) => {
+    await page.goto('/pr-overview?pr=' + encodeURIComponent('plug-and-pay-ops#12'))
+    await appReady(page)
+
+    const row = page.locator('[data-testid="pr-row"][data-pr="plug-and-pay/plug-and-pay-ops#12"]')
+    await expect.poll(() => row.evaluate((el) => el.classList.contains('ring-indigo-500/50'))).toBe(true)
+  })
+
   test('a PR that appears nowhere is a silent no-op', async ({ page }) => {
     await page.goto('/pr-overview?pr=999999')
     await appReady(page)
