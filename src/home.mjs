@@ -449,6 +449,13 @@ const state = reactive({
   // from the starting-points list, revealed by the "Toon N goedgekeurde blokken"
   // button at the bottom. Ephemeral UI state, not bound to the URL.
   showApproved: false,
+  // lineCommentsCollapsed — when true, hides the rows of the "Comments op
+  // regels" section (BlockList.mjs's lineCommentHeading/renderList) without
+  // touching any other toggle. Shown expanded by default (false), the
+  // opposite default of showApproved — reviewer request: "laat het by
+  // default zien, behalve als je het inklapt". Ephemeral UI state, not bound
+  // to the URL, like showApproved.
+  lineCommentsCollapsed: false,
   // pinnedApprovedId — the id of a fully-approved block that a restored
   // ?sel=file:line (see applyBlockRefRestore/revealSelectedIfHidden) happened
   // to land on. BlockList.mjs's renderList keeps exactly that ONE row visible
@@ -2464,6 +2471,17 @@ function commentBlockItem(comments) {
     // per recompute, so neither the sort nor the heading has to re-scan
     // bodies.
     mentioned: comments.some(commentMentionsMe),
+    // lineAnchored — this item hangs on a real source line (a genuinely
+    // block-anchored, non-orphan comment) rather than being PR-wide/orphan
+    // feedback with no "regel" of its own. Computed once here (from the
+    // group's primary comment — commentGroupKeyOf only ever groups comments
+    // that already share this, see its own doc comment) so recomputeLeftList's
+    // rank() and BlockList.mjs's heading logic don't have to re-derive it.
+    // Drives where the row sorts (see rank below): "onder de aangepaste
+    // bestanden" under its own "Comments op regels" heading, including a
+    // MENTIONED one — a PR-wide/orphan mention (no regel at all) is the only
+    // kind that still ranks at the very top, under "Mentioned".
+    lineAnchored: !c.kind && !isOrphanComment(c),
     comment: c,
     comments,
   }
@@ -2576,18 +2594,30 @@ function recomputeLeftList() {
   const childIds = new Set([...state.relations.map((r) => r.childId), ...testCallTargetIds()])
   const selId = state.blocks[state.selected] && state.blocks[state.selected].id
   const q = (state.search || '').trim().toLowerCase()
-  // Comment items rank ahead of every real category (their own group at the
-  // top of "Start", above ROUTE) — they're PR-wide feedback that usually
-  // wants attention first; once resolved they fold into the same
-  // "Toon N goedgekeurde blocks" section as a fully-approved block (see
-  // isFullyApproved/blockApproveCount's comment-item branch below), exactly
-  // like any other row.
-  // A comment that @-mentions the local reviewer ranks above the other comment
-  // items (-2 vs -1) under its own "Mentioned" heading — someone is waiting on
-  // an answer, so it must not sit below unrelated feedback. It is otherwise an
-  // ordinary comment item: resolving it still folds it into the same
-  // "Toon N goedgekeurde blokken" section, mentioned or not.
-  const rank = (b) => (b.kind === 'comment' ? (b.mentioned ? -2 : -1) : childIds.has(b.id) ? 3 : categoryRank(b.category))
+  // A comment item that hangs on a real source line (b.lineAnchored, see
+  // commentBlockItem) sorts UNDER the changed-files categories (rank 2.5 —
+  // above real category ranks, which top out at 2, but below "Onderliggende
+  // code"'s rank 3) under its own "Comments op regels" heading (reviewer
+  // request: a line-linked comment belongs with the code it's about, not
+  // above every changed file). This includes a MENTIONED line-anchored
+  // comment — someone waiting on an answer still gets that row, just inside
+  // this section rather than at the very top.
+  //
+  // A comment with NO regel at all (PR-wide/orphan — b.kind unset here means
+  // b.comment.kind/isOrphanComment, not this synthetic item's own `kind`)
+  // stays ranked ahead of every real category (their own group at the top of
+  // "Start", above ROUTE) — PR-wide feedback usually wants attention first;
+  // once resolved it folds into the same "Toon N goedgekeurde blocks" section
+  // as a fully-approved block (isFullyApproved/blockApproveCount's
+  // comment-item branch below), exactly like any other row. A MENTIONED one
+  // among those (still no regel) ranks above the rest (-2 vs -1) under its
+  // own "Mentioned" heading — someone is waiting on an answer, so it must not
+  // sit below unrelated feedback.
+  const rank = (b) => {
+    if (b.kind !== 'comment') return childIds.has(b.id) ? 3 : categoryRank(b.category)
+    if (b.lineAnchored) return 2.5
+    return b.mentioned ? -2 : -1
+  }
   // An UNRESOLVED block-anchored comment gets its own index row (indexComments,
   // RelatedPanel.mjs) — but only when the block it hangs on is actually in this
   // tree. Otherwise the row would be a dead end: selecting it shows the comment,

@@ -215,6 +215,7 @@ function renderList(state) {
   // one of the sections it invalidates.
   if (state.blocksStale) items.push(staleTreeRow())
   let commentHeadingDone = false
+  let lineCommentHeadingDone = false
   let underlyingHeadingDone = false
   let hiddenCommentHeadingDone = false
   let mentionHeadingDone = false
@@ -225,32 +226,49 @@ function renderList(state) {
     if (!state.showIgnored && isIgnoredComment(state, b)) return
     const pinnedVisible = i === state.selected && b.id === state.pinnedApprovedId
     if (!state.showApproved && !pinnedVisible && isFullyApproved(state, b)) return
-    // Comment-index items (kind:'comment', see commentBlockItem in home.mjs)
-    // sort to the very top of state.blocks (recomputeLeftList's rank -1) —
-    // the first VISIBLE one gets its own "PR-comments" heading, mirroring
+    // A revealed (state.showIgnored) ignored comment gets its own "Verborgen
+    // comments" heading regardless of its mentioned/line-anchored status — a
+    // SEPARATE, separately toggled section from every other comment section
+    // below, not a continuation of any of them. Checked before those, which is
+    // why each of them excludes an ignored comment in turn.
+    if (b.kind === 'comment' && isIgnoredComment(state, b)) {
+      if (!hiddenCommentHeadingDone) {
+        items.push(hiddenCommentHeading().key('hidden-comment-heading'))
+        hiddenCommentHeadingDone = true
+      }
+      items.push(row(state, b, i))
+      return
+    }
+    // A comment item that hangs on a real source line (b.lineAnchored, see
+    // commentBlockItem in home.mjs) sorts UNDER the changed-files categories
+    // (recomputeLeftList's rank 2.5) under its own "Comments op regels"
+    // heading — including a mentioned one (reviewer request: it moves into
+    // this section too, no longer kept at the very top just for that).
+    // Collapsible, shown expanded by default (state.lineCommentsCollapsed).
+    if (b.kind === 'comment' && b.lineAnchored) {
+      if (!lineCommentHeadingDone) {
+        items.push(lineCommentHeading(state).key('line-comment-heading'))
+        lineCommentHeadingDone = true
+      }
+      if (state.lineCommentsCollapsed) return
+      items.push(row(state, b, i))
+      return
+    }
+    // Comment-index items with NO regel at all (PR-wide/orphan feedback) sort
+    // to the very top of state.blocks (recomputeLeftList's rank -1) — the
+    // first VISIBLE one gets its own "PR-comments" heading, mirroring
     // underlyingHeading below.
     // A comment that @-mentions the local reviewer (b.mentioned, see
-    // commentBlockItem/mentions.mjs) sorts above every other comment item
+    // commentBlockItem/mentions.mjs) sorts above every other such comment item
     // (rank -2) and gets its OWN heading — checked before the "PR-comments" one
-    // below, which is why that one excludes b.mentioned. Gated on
-    // !isIgnoredComment for the same reason the PR-comments heading is: a
-    // revealed ignored comment belongs under "Verborgen comments" above, even
-    // when it mentions me.
-    if (!mentionHeadingDone && b.kind === 'comment' && b.mentioned && !isIgnoredComment(state, b)) {
+    // below, which is why that one excludes b.mentioned.
+    if (!mentionHeadingDone && b.kind === 'comment' && b.mentioned) {
       items.push(mentionHeading().key('mention-heading'))
       mentionHeadingDone = true
     }
-    if (!commentHeadingDone && b.kind === 'comment' && !b.mentioned && !isIgnoredComment(state, b)) {
+    if (!commentHeadingDone && b.kind === 'comment' && !b.mentioned) {
       items.push(commentHeading().key('comment-heading'))
       commentHeadingDone = true
-    }
-    // A revealed (state.showIgnored) ignored comment gets its own "Verborgen
-    // comments" heading, distinct from the "PR-comments" one above — it's a
-    // separately toggled section, not merely a continuation of the PR-comments
-    // list.
-    if (!hiddenCommentHeadingDone && isIgnoredComment(state, b)) {
-      items.push(hiddenCommentHeading().key('hidden-comment-heading'))
-      hiddenCommentHeadingDone = true
     }
     // Relation children sort to the bottom of state.blocks (recomputeLeftList,
     // home.mjs); the first VISIBLE one gets the "Onderliggende code" heading
@@ -342,6 +360,39 @@ function mentionHeading() {
       class="border-b border-slate-100 dark:border-zinc-800/60 bg-slate-50 dark:bg-zinc-800/40 px-3 py-1.5 text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-zinc-500"
     >
       Mentioned
+    </div>
+  `
+}
+
+// lineCommentHeading titles the "Comments op regels" section — genuinely
+// block-anchored (not PR-wide/orphan) comment-index items, sorted UNDER the
+// changed-files categories (recomputeLeftList's rank 2.5, home.mjs's
+// commentBlockItem/b.lineAnchored) instead of above everything, including a
+// mentioned one: reviewer request, "comments die gekoppeld zijn aan een
+// regel code moeten in de blokken index onder de aangepaste bestanden staan
+// met een kopje erboven". Shown expanded by default; the chevron button
+// collapses/reveals the section (state.lineCommentsCollapsed — ephemeral,
+// like state.showApproved, not persisted/URL-bound: "laat het by default
+// zien, behalve als je het inklapt"). Mouse-only for now, unlike
+// toggleRow/ignoreToggleRow — a dedicated ↑/↓ sidebar-loop stop felt like
+// more plumbing than this one request asked for.
+function lineCommentHeading(state) {
+  return html`
+    <div
+      data-testid="line-comment-heading"
+      class="flex items-center justify-between border-b border-t border-slate-100 dark:border-zinc-800/60 bg-slate-50 dark:bg-zinc-800/40 px-3 py-1.5"
+    >
+      <span class="text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-zinc-500">Comments op regels</span>
+      <button
+        data-testid="line-comment-toggle"
+        class="text-[11px] font-medium text-slate-500 dark:text-zinc-500 hover:text-slate-700 dark:hover:text-zinc-300"
+        title="${() => (state.lineCommentsCollapsed ? 'Toon comments op regels' : 'Verberg comments op regels')}"
+        @click="${() => {
+          state.lineCommentsCollapsed = !state.lineCommentsCollapsed
+        }}"
+      >
+        ${() => (state.lineCommentsCollapsed ? '▸' : '▾')}
+      </button>
     </div>
   `
 }

@@ -48,13 +48,14 @@ test.describe('comment-index rows grouped per line', () => {
     await leaveSearchBox(page)
     await expect(page.getByTestId('block-row').first()).toBeVisible()
 
-    // Exactly ONE comment row for both comments — not two.
-    const row = page.locator('[data-idx="0"]')
-    await expect(row).toContainText('graag nullsafe hier')
+    // Exactly ONE comment row for both comments — not two. It sorts under
+    // "Comments op regels" (b.lineAnchored, home.mjs) rather than at a fixed
+    // index, so found by its own text.
+    const row = page.locator('[data-idx]').filter({ hasText: 'graag nullsafe hier' })
+    await expect(row).toHaveCount(1)
     await expect(row).toContainText('· +1')
-    await expect(page.locator('[data-idx="1"]')).not.toContainText('en hier ontbreekt')
-    // Only a real block sits at index 1, never a second comment row.
-    await expect(page.getByTestId('comment-heading')).toBeVisible()
+    await expect(page.locator('[data-idx]').filter({ hasText: 'en hier ontbreekt' })).toHaveCount(0)
+    await expect(page.getByTestId('line-comment-heading')).toBeVisible()
 
     // blockApproveCount sums the whole group, not a fixed 0/1.
     await expect(row.getByTestId('block-approval')).toHaveText('0/2')
@@ -69,9 +70,14 @@ test.describe('comment-index rows grouped per line', () => {
     await leaveSearchBox(page)
     await expect(page.getByTestId('block-row').first()).toBeVisible()
 
-    await expect(page.locator('[data-idx="0"]')).toContainText('graag nullsafe hier')
-    await expect(page.locator('[data-idx="0"]')).not.toContainText('· +1')
-    await expect(page.locator('[data-idx="1"]')).toContainText('deze naam kan korter')
+    // Both sort under "Comments op regels" too, but as two SEPARATE rows —
+    // found by their own text rather than a fixed index.
+    const rowA = page.locator('[data-idx]').filter({ hasText: 'graag nullsafe hier' })
+    const rowB = page.locator('[data-idx]').filter({ hasText: 'deze naam kan korter' })
+    await expect(rowA).toHaveCount(1)
+    await expect(rowB).toHaveCount(1)
+    await expect(rowA).not.toContainText('· +1')
+    await expect(rowB).not.toContainText('· +1')
   })
 
   test("Space resolves a group's comments one at a time", async ({ page }) => {
@@ -91,7 +97,11 @@ test.describe('comment-index rows grouped per line', () => {
     await mock
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
-    await expect(page.locator('[data-idx="0"]').getByTestId('block-approval')).toHaveText('0/2')
+    // Select the group's row directly — it sorts under "Comments op regels"
+    // (b.lineAnchored), not at a fixed index — before pressing Space on it.
+    const row = page.locator('[data-idx]').filter({ hasText: 'graag nullsafe hier' })
+    await row.click()
+    await expect(row.getByTestId('block-approval')).toHaveText('0/2')
 
     // First Space resolves the group's first still-open comment (grp-1).
     await page.keyboard.press('Space')
@@ -111,8 +121,9 @@ test.describe('comment-index rows grouped per line', () => {
         source: '',
       }),
     ])
-    await expect(page.locator('[data-idx="0"]').getByTestId('block-approval')).toHaveText('0/1')
-    await expect(page.locator('[data-idx="0"]')).toContainText('en hier ontbreekt een null-check')
+    // Same row, now showing the remaining unresolved comment's own snippet.
+    const rowAfter = page.locator('[data-idx]').filter({ hasText: 'en hier ontbreekt een null-check' })
+    await expect(rowAfter.getByTestId('block-approval')).toHaveText('0/1')
 
     await page.keyboard.press('Space')
     await expect.poll(() => resolved).toEqual(['grp-1', 'grp-2'])

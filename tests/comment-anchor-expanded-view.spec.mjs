@@ -52,9 +52,14 @@ test.describe('a comment-index item anchored to a real block', () => {
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
 
-    // A fresh open lands on the (only, unresolved) comment item by default.
-    await expect(page.locator('[data-idx="0"]')).toHaveClass(/bg-indigo-50/)
-    await expect(page.locator('[data-idx="0"]')).toContainText('please rename this variable')
+    // This comment sorts under "Comments op regels" (b.lineAnchored) — UNDER
+    // the changed-files categories — so a fresh open's default selection
+    // (applyDefaultUnapprovedSelection, plain list order) now lands on an
+    // ordinary unapproved block first, same as if there were no comment at
+    // all; select the comment row directly instead.
+    const row = page.locator('[data-idx]').filter({ hasText: 'please rename this variable' })
+    await row.click()
+    await expect(row).toHaveClass(/bg-indigo-50/)
 
     // The blokken-index never left — unlike an ordinary block's own diff
     // (state.mode==='diff'), which slides it away.
@@ -82,7 +87,7 @@ test.describe('a comment-index item anchored to a real block', () => {
     await expect(drillColumn.getByTestId('diffview-split')).not.toHaveClass(/bg-indigo-100/)
 
     // The sidebar selection itself never moved off the comment row.
-    await expect(page.locator('[data-idx="0"]')).toHaveClass(/bg-indigo-50/)
+    await expect(row).toHaveClass(/bg-indigo-50/)
 
     // ArrowRight hands the keyboard INTO the already-open, already-visible
     // expanded view.
@@ -94,6 +99,10 @@ test.describe('a comment-index item anchored to a real block', () => {
     await mockAnchoredComment(page)
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
+    // See the test above: a fresh open no longer lands here by default (the
+    // comment sorts under "Comments op regels", below the changed-files
+    // categories) — select it directly first.
+    await page.locator('[data-idx]').filter({ hasText: 'please rename this variable' }).click()
     await expect(page.getByTestId('drill-column')).toBeVisible()
 
     await page.keyboard.press('ArrowDown')

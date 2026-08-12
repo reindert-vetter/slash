@@ -292,9 +292,58 @@ the amber tint. Test: `tests/ai-warning-index-icon.spec.mjs`.
 by no real block category) and its own **"PR-comments" heading**
 (`commentHeading`, `data-testid=comment-heading`) above the first visible comment
 item — mirrors `underlyingHeading`, same "own keyed item in one flat array"
-shape. `recomputeLeftList`'s `rank()` puts comment items **first** (rank `-1`,
-ahead of `ROUTE`): PR-wide feedback usually wants attention before diving into
-the tree.
+shape. `recomputeLeftList`'s `rank()` puts a comment item with **no regel at
+all** (PR-wide/orphan feedback) **first** (rank `-1`, ahead of `ROUTE`):
+PR-wide feedback usually wants attention before diving into the tree. A
+comment that DOES hang on a real source line instead sorts **under** the
+changed-files categories — see "Comments op regels" below, which supersedes
+the flat "always ranks first" statement for that case.
+
+### "Comments op regels": a line-anchored comment sorts under the changed files
+
+Reviewer request ("comments die gekoppeld zijn aan een regel code, moet in de
+blokken index onder de aangepaste bestanden staan met een kopje erboven, laat
+het by default zien, behalve als je het inklapt"): a comment-index item that
+hangs on a real source line — `commentBlockItem`'s **`lineAnchored`** field
+(`!c.kind && !isOrphanComment(c)`, the SAME predicate `commentGroupKeyOf`
+already used to decide whether a comment is eligible to group at all) — ranks
+`2.5` in `recomputeLeftList`'s `rank()`: above every real category (which top
+out at `2`) but below `childIds`' `3` ("Onderliggende code"), i.e. it sorts
+**after** the changed-files section instead of above everything. This
+includes a **mentioned** line-anchored comment — it moves into this section
+too rather than staying pinned at the very top just for that (a MENTIONED
+item with NO regel, still PR-wide/orphan, is the only kind that still ranks
+`-2`/top, see "Mentioned" below).
+
+`BlockList.mjs`'s **`lineCommentHeading`** (`data-testid=line-comment-heading`,
+text "Comments op regels") titles the section, mirroring `underlyingHeading`'s
+"own keyed item in one flat array" shape — `renderList` checks
+`b.kind === 'comment' && b.lineAnchored` **before** the mention/PR-comments/
+ignored checks (an ignored line-anchored comment is checked earlier still, so
+it still lands under "Verborgen comments", not here — see the ignored-first
+reordering in `renderList`'s own doc comment). **Collapsible, shown expanded
+by default**: a chevron button inside the heading itself
+(`data-testid=line-comment-toggle`) flips `state.lineCommentsCollapsed`
+(default `false` — the opposite default of `state.showApproved`, whose
+"folded away by default, reveal via a button" shape this deliberately does
+NOT mirror). Ephemeral UI state, like `showApproved` — not persisted, not
+URL-bound. **Mouse-only for now** — unlike `toggleRow`/`ignoreToggleRow` this
+has no dedicated stop in the sidebar's `↑`/`↓` loop; a full keyboard-loop
+entry felt like more plumbing than this one request asked for.
+
+`findNextUnapproved`'s forward-only walk (`state.selected + 1` onward,
+`home.mjs`) can now genuinely pass over a line-anchored comment item on its
+way to a later real block — the "comment items always rank before every real
+block" reasoning it used to rely on no longer holds for this kind. Still no
+crash/regression: `firstUnapprovedInSubtree`'s own `ensureCode(b)` already
+no-ops for `b.kind === 'comment'` (see "Guards on paths that assume a real PR
+block" below), and `blockRows`/`navUnitsOf` on a codeless item yield no units
+to search, so the walk just reads such an item as "nothing to approve here"
+and continues — it was never wired to ALSO consider `blockApproveCount`'s
+resolved-status model, so it still can't land on one, just for a different
+(now accidental rather than structural) reason. Not treated as a bug to fix
+here — the reviewer's request was about where the row SORTS, not about
+`findNextUnapproved`'s otherwise-unrelated unit walk.
 
 Items are synthesized fresh from `RelatedPanel.mjs`'s exported
 **`indexComments()`** — `prWideComments()` (the `kind !== ''`-filtered,
@@ -315,16 +364,20 @@ called unconditionally by `InlineComments` — no separate fetch.
 
 A comment whose body — **or any of its replies** (`c.reactions`, where a mention
 very often lands) — `@`-mentions the local reviewer gets `mentioned: true` on its
-index item (`commentMentionsMe`, `src/mentions.mjs`) and ranks **`-2`**, above
-the other comment items (`-1`), under its own **"Mentioned" heading**
-(`mentionHeading`, `data-testid=mention-heading`, `BlockList.mjs`) — someone is
-waiting on an answer, so it must not sit below unrelated feedback. Otherwise it
-is an ordinary comment item: resolving it still folds it into the same
-"Toon N goedgekeurde blokken" section, and the heading is gated on
-`!isIgnoredComment` for the same reason `commentHeading` is (a revealed ignored
-comment belongs under "Verborgen comments"). `commentHeading`'s own condition
-gained `&& !b.mentioned`, so "PR-comments" starts at the first non-mentioned
-item.
+index item (`commentMentionsMe`, `src/mentions.mjs`). **Only while it also has no
+regel** (PR-wide/orphan, `!b.lineAnchored` — see "Comments op regels" above) does
+that rank it **`-2`**, above the other no-regel comment items (`-1`), under its
+own **"Mentioned" heading** (`mentionHeading`, `data-testid=mention-heading`,
+`BlockList.mjs`) — someone is waiting on an answer, so it must not sit below
+unrelated feedback. A MENTIONED comment that DOES hang on a real line instead
+moves into the "Comments op regels" section like any other line-anchored
+comment (reviewer request) — it keeps `mentioned: true` on the item (still
+read by `blockApproveCount` etc.), it just no longer gets its own top-of-list
+heading for it. Otherwise it is an ordinary comment item: resolving it still
+folds it into the same "Toon N goedgekeurde blokken" section, and the "Mentioned"/
+"PR-comments" headings are checked only for a no-regel item (`renderList`
+branches on `b.lineAnchored` before either), so `commentHeading`'s own
+condition (`&& !b.mentioned`) only ever matters within that no-regel set.
 
 **This is the one case where a block-anchored (`kind === ''`) comment gets an
 index row.** Deliberate (explicitly decided): a mention must not be able to hide
@@ -381,9 +434,10 @@ items match on `undefined === undefined`), `commentTarget`/`placeComment` (a
 comment item can't anchor a NEW line comment), and the `DetailPanel`
 `pair.forEach` render loop.
 
-`findNextUnapproved` needs no guard: its forward-only walk starts at
-`state.selected + 1` and comment items always rank before every real block, so
-the postApprove "Continue" flow can never land on one structurally.
+`findNextUnapproved` needs no guard even though a line-anchored comment item
+no longer always ranks before every real block (see "Comments op regels"
+above) — see that section for why its forward-only walk still can't land on
+one.
 
 ### `?sel=comment:<id>` survives a refresh
 

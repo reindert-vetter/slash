@@ -86,15 +86,16 @@ test.describe('Comment batch', () => {
     await leaveSearchBox(page)
     await expect(page.getByTestId('block-row').first()).toBeVisible()
     // Both fixture comments are anchored to a real block
-    // (ContractController::index) — the default selection lands on the
-    // first one, which now opens that block "as if fully expanded" instead
+    // (ContractController::index) and sort under "Comments op regels"
+    // (b.lineAnchored) rather than at the very top, so the default selection
+    // no longer lands on either automatically — select the first one
+    // directly, which then opens that block "as if fully expanded" instead
     // of showing commentDetailCard (see openCommentAnchorDrill, home.mjs,
     // and comment-anchor-expanded-view.spec.mjs for that behaviour in full).
-    await expect(page.getByTestId('drill-column')).toContainText('ContractController::index')
-
-    // Both open comments are index rows of their own.
     await expect(page.locator('[data-idx]').filter({ hasText: 'graag nullsafe hier' })).toHaveCount(1)
     await expect(page.locator('[data-idx]').filter({ hasText: 'deze naam kan korter' })).toHaveCount(1)
+    await page.locator('[data-idx]').filter({ hasText: 'graag nullsafe hier' }).click()
+    await expect(page.getByTestId('drill-column')).toContainText('ContractController::index')
 
     // The PR menu's "PR keuren" submenu carries the batch entry, counting only
     // the two eligible comments (the AI finding is excluded). `/` only opens the
@@ -139,9 +140,12 @@ test.describe('Comment batch', () => {
     await mock
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
-    // Anchored to a real block — opens "as if fully expanded" instead of
-    // showing commentDetailCard (see openCommentAnchorDrill, home.mjs).
-    // Space must work without the keyboard ever having moved into it.
+    // Sorts under "Comments op regels" (b.lineAnchored), so the default
+    // selection lands elsewhere — select it directly. Anchored to a real
+    // block — opens "as if fully expanded" instead of showing
+    // commentDetailCard (see openCommentAnchorDrill, home.mjs). Space must
+    // work without the keyboard ever having moved into it.
+    await page.locator('[data-idx]').filter({ hasText: 'graag nullsafe hier' }).click()
     await expect(page.getByTestId('drill-column')).toContainText('ContractController::index')
 
     await page.keyboard.press('Space')

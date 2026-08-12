@@ -89,19 +89,22 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     await expect(row).toBeVisible()
     await expect(row).toContainText('Overall this looks great')
     await expect(row.getByTestId('block-approval')).toHaveText('0/1')
-    // The block-scoped comment gets its own index row as well, right after it
-    // (both are comment rows, so both sort ahead of every real block).
-    await expect(page.locator('[data-idx="1"]')).toContainText('please rename this variable')
+    // The block-scoped comment ALSO gets its own index row, but under
+    // "Comments op regels" (b.lineAnchored, home.mjs) — sorted UNDER the
+    // changed-files categories, not right after the PR-wide row (only a
+    // no-regel comment item sorts ahead of every real block).
+    await expect(page.getByTestId('line-comment-heading')).toBeVisible()
+    const anchoredRow = page.locator('[data-idx]').filter({ hasText: 'please rename this variable' })
+    await expect(anchoredRow).toBeVisible()
     // The "Start" item itself has no code anchor, so the block-scoped index
     // right next to it must show NOTHING while it's selected — not "no
     // filter" (see commentScope's sentinel scope, comments-panel.md). Only
     // once you select the block the comment is actually anchored to does it
     // reappear there.
     await expect(page.getByTestId('inline-comments').getByTestId('comment-item')).toHaveCount(0)
-    // Two steps down: past the anchored comment's own index row, onto the first
-    // real block — which is where its inline thread lives.
-    await page.keyboard.press('ArrowDown')
-    await page.keyboard.press('ArrowDown')
+    // Selecting the comment's own block (ContractController::index, the
+    // fixture's anchor) directly — its inline thread shows the comment.
+    await page.locator('[data-idx]').filter({ hasText: 'ContractController::index' }).first().click()
     await expect(page.getByTestId('inline-comments').getByText('please rename this variable')).toBeVisible()
   })
 
@@ -133,22 +136,28 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     // block too — the detail card never appears and the assertion below fails
     // for a reason that has nothing to do with ↑/↓.
     await expect(page.getByTestId('comment-detail-card').first()).toBeVisible()
-    // Already on the comment item (index 0) — step down past the second comment
-    // row (the anchored one now has its own row too) onto an ordinary block,
-    // then back up onto the comment items again.
-    await page.keyboard.press('ArrowDown')
-    await page.keyboard.press('ArrowDown')
-    await expect(page.getByTestId('comment-detail-card')).toHaveCount(0)
-    await page.keyboard.press('ArrowUp')
-    // Landing back on index 1 — the ANCHORED comment (it resolves to a real
-    // block, ContractController::index) — no longer shows commentDetailCard
-    // at all: selecting it opens that block "as if fully expanded" (see
-    // openCommentAnchorDrill, home.mjs), collapsing the comment card's own
-    // spot into a rail instead. See comment-anchor-expanded-view.spec.mjs for
-    // that behaviour in full; here just confirm ↑/↓ still moved the selection.
+    // The anchored comment now sorts under "Comments op regels" — no longer
+    // right next to the PR-wide item at the top — so select it directly by
+    // its own row rather than assuming an adjacent index.
+    const anchoredRow = page.locator('[data-idx]').filter({ hasText: 'please rename this variable' })
+    await anchoredRow.click()
+    // It resolves to a real block (ContractController::index) — no longer
+    // shows commentDetailCard at all: selecting it opens that block "as if
+    // fully expanded" (see openCommentAnchorDrill, home.mjs), collapsing the
+    // comment card's own spot into a rail instead. See
+    // comment-anchor-expanded-view.spec.mjs for that behaviour in full; here
+    // just confirm ↑/↓ still moves the selection onto/off of it.
     await expect(page.getByTestId('comment-detail-card')).toHaveCount(0)
     await expect(page.getByTestId('drill-column')).toContainText('ContractController::index')
-    await expect(page.locator('[data-idx="1"]')).toHaveClass(/bg-indigo-50/)
+    await expect(anchoredRow).toHaveClass(/bg-indigo-50/)
+
+    await page.keyboard.press('ArrowUp')
+    await expect(anchoredRow).not.toHaveClass(/bg-indigo-50/)
+    await expect(page.getByTestId('drill-column')).toHaveCount(0)
+
+    await page.keyboard.press('ArrowDown')
+    await expect(anchoredRow).toHaveClass(/bg-indigo-50/)
+    await expect(page.getByTestId('drill-column')).toContainText('ContractController::index')
   })
 
   test('Enter opens the action menu', async ({ page }) => {
@@ -316,19 +325,21 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     await expect(page.getByTestId('comment-detail-thread').first()).toHaveClass(/ring-indigo-200/)
 
     // ↓ from here falls through immediately: the thread cursor releases and
-    // the sidebar selection advances to the next row — which is the anchored
-    // comment's own index row (every unresolved comment has one now) — instead
-    // of doing nothing.
+    // the sidebar selection advances to the next row in the flat list — which
+    // is now the first REAL block (ContractController::index, CONTROLLER-
+    // first in this fixture) rather than the anchored comment's own index row:
+    // that row sorts under "Comments op regels", i.e. UNDER every real block,
+    // not right next to the PR-wide item any more.
     await page.keyboard.press('ArrowDown')
     await expect(page.locator('[data-idx="0"]')).not.toHaveClass(/bg-indigo-50/)
     await expect(page.locator('[data-idx="1"]')).toHaveClass(/bg-indigo-50/)
-    // Index 1 is the ANCHORED comment (ContractController::index) — landing
-    // on it now opens that block "as if fully expanded" instead of showing
-    // commentDetailCard (see openCommentAnchorDrill, home.mjs, and
-    // comment-anchor-expanded-view.spec.mjs for that behaviour in full); here
-    // just confirm ↓ actually advanced onto that row.
+    // Landing on the real block shows its ordinary diff card — the anchored
+    // comment shows inline there, same as ever — not commentDetailCard/a
+    // drilled anchor (that's the comment-index row's own selected state,
+    // exercised in the test above).
     await expect(page.getByTestId('comment-detail-card')).toHaveCount(0)
-    await expect(page.getByTestId('drill-column')).toContainText('ContractController::index')
+    await expect(page.getByTestId('block-column')).toContainText('ContractController::index')
+    await expect(page.getByTestId('inline-comments').getByText('please rename this variable')).toBeVisible()
   })
 
   test('"Beantwoorden" reveals the reply field only after Enter, and sends via the reply Signal', async ({
@@ -498,10 +509,11 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     await leaveSearchBox(page)
     await expect(page.getByTestId('block-row').first()).toBeVisible()
     await expect(page.getByTestId('comment-heading')).toBeVisible()
-    // Three comment-index rows now: the plain issue comment (index 0, already
-    // selected by default), the anchored comment mockComments always adds
-    // (index 1) and the ai_warning finding (index 2).
-    await page.keyboard.press('ArrowDown')
+    // Two no-regel comment-index rows here: the plain issue comment (index 0,
+    // already selected by default) and the ai_warning finding (index 1) —
+    // right after it, both PR-wide/no-regel items. The anchored comment
+    // mockComments always adds sorts under "Comments op regels" instead (see
+    // the tests above), so it no longer sits between them.
     await page.keyboard.press('ArrowDown')
     const card = page.getByTestId('comment-detail-card').filter({ hasText: 'this call no longer matches' }).first()
     await expect(card).toBeVisible()

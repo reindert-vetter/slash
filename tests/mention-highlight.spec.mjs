@@ -124,7 +124,7 @@ test.describe('@mention of the local reviewer', () => {
     await expect(card.getByTestId('mention').first()).toHaveText('@reindert')
   })
 
-  test('a block-anchored comment mentioning me shares its row with any OTHER comment on the same line, under "Mentioned"', async ({
+  test('a block-anchored comment mentioning me shares its row with any OTHER comment on the same line, under "Comments op regels"', async ({
     page,
   }) => {
     await mockSettings(page)
@@ -142,8 +142,10 @@ test.describe('@mention of the local reviewer', () => {
       }),
       // A block-anchored comment WITHOUT a mention, on the EXACT SAME line —
       // it groups into the SAME row (commentGroupKeyOf/commentBlockItem,
-      // comments-panel.md), which is now "Mentioned" as a whole (mentioned:
-      // true once ANY comment in the group mentions me).
+      // comments-panel.md), which is `mentioned: true` as a whole once ANY
+      // comment in the group mentions me — still sorts under "Comments op
+      // regels" (b.lineAnchored), not "Mentioned": that heading is only for
+      // a mentioned comment with NO regel at all (PR-wide/orphan).
       comment({
         id: 'anchored-plain',
         runId: 'run-anchored-plain',
@@ -160,7 +162,8 @@ test.describe('@mention of the local reviewer', () => {
     await leaveSearchBox(page)
     await expect(page.getByTestId('block-row').first()).toBeVisible()
 
-    await expect(page.getByTestId('mention-heading')).toBeVisible()
+    await expect(page.getByTestId('line-comment-heading')).toBeVisible()
+    await expect(page.getByTestId('mention-heading')).toHaveCount(0)
     // Exactly ONE row for both comments — the dedup in indexComments plus the
     // per-line grouping, which merges them since they share file+label+line.
     // Two rows would share the same state.blocks id ('comment:' + c.id) if it
@@ -175,9 +178,11 @@ test.describe('@mention of the local reviewer', () => {
     await expect(row.getByTestId('block-approval')).toHaveText('0/2')
 
     // Its own block still shows both comments in the inline index — the index
-    // row is an addition, not a move. One step down (the group is now a
-    // SINGLE row instead of two), onto the block itself.
-    await page.keyboard.press('ArrowDown')
+    // row is an addition, not a move. Select the block directly by its own
+    // label rather than assuming it's the adjacent row: the comment item now
+    // sorts under "Comments op regels" (b.lineAnchored), so it no longer sits
+    // right next to its own block in the flat list.
+    await page.locator('[data-idx]').filter({ hasText: ANCHOR_LABEL }).first().click()
     const inline = page.getByTestId('inline-comments')
     await expect(inline.getByText('please rename this variable')).toBeVisible()
     await expect(inline.getByText('hiernaar laten kijken')).toBeVisible()
@@ -208,7 +213,10 @@ test.describe('@mention of the local reviewer', () => {
     // comment-anchor-expanded-view.spec.mjs for that behaviour in full).
     await expect(page.getByTestId('drill-column')).toContainText(ANCHOR_LABEL)
     await expect(page.getByTestId('comment-item').first()).toContainText('hiernaar laten kijken')
-    await expect(page.locator('[data-idx="0"]')).toHaveClass(/bg-indigo-50/)
+    // The row itself is visually selected — found by its own text rather than
+    // a hardcoded index: it now sorts under "Comments op regels" (b.lineAnchored),
+    // not at the very top, so its index is no longer necessarily 0.
+    await expect(page.locator('[data-idx]').filter({ hasText: 'hiernaar laten kijken' })).toHaveClass(/bg-indigo-50/)
   })
 
   test('without settings.json (and no GitHub user) nothing is mentioned', async ({ page }) => {
