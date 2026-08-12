@@ -120,7 +120,10 @@ test.describe('PR Review Tree — left-right nav chain', () => {
     expect(await start.json()).toHaveProperty('runId')
 
     await page.goto('/pr/12903')
-    await page.locator('[data-idx="1"]').click() // CreatePaymentAction::execute
+    // BY LABEL, not by raw index: the comment seeded above has its own index row
+    // (every unresolved comment does, see indexComments in RelatedPanel.mjs), so
+    // every block below it shifted one slot.
+    await page.locator('[data-idx]').filter({ hasText: 'CreatePaymentAction::execute' }).first().click()
     // The related-code card has no outer focus border anymore (removed so its
     // children read as loose blocks); the code stop owning the keyboard shows as
     // cs.focus === 'code', mirrored to the URL as rel.foc.

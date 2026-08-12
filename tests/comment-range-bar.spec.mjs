@@ -43,7 +43,10 @@ test('the focused comment marks its own rows along the right edge of the diff', 
   // frontend's own poll cadence, same as comment-range-first-row).
   await page.goto('/pr/12903')
   await leaveSearchBox(page)
-  await page.locator('[data-idx="1"]').click()
+  // By LABEL, not by raw index: the comment just placed has its own index row
+  // now (every unresolved comment does, see indexComments in RelatedPanel.mjs),
+  // so every block below it shifted one slot.
+  await page.locator('[data-idx]').filter({ hasText: label }).first().click()
   await page.keyboard.press('ArrowRight')
   await expect(page).toHaveURL(/mode=diff/)
 

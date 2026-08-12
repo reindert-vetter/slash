@@ -42,9 +42,10 @@ function mockComments(page, extra = []) {
       rowStart: -1,
       rowEnd: -1,
     },
-    // A block-scoped comment (kind '') — must stay OUT of the "Start" index
-    // and out of the toggle-approved rollup; it belongs to the block-scoped
-    // sidebar instead (unchanged behaviour).
+    // A block-scoped comment (kind ''). It gets its OWN index row too as long
+    // as it is unresolved (see indexComments in RelatedPanel.mjs — reviewer
+    // request: every open comment sits in the blokken-index), on top of still
+    // living in its block's own inline thread.
     {
       id: 'anchored-1',
       runId: 'run-anchored-1',
@@ -88,15 +89,18 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     await expect(row).toBeVisible()
     await expect(row).toContainText('Overall this looks great')
     await expect(row.getByTestId('block-approval')).toHaveText('0/1')
-    // The block-scoped comment never becomes its own Start row — no
-    // [data-idx] row for it.
-    await expect(page.locator('[data-idx]').getByText('please rename this variable')).toHaveCount(0)
+    // The block-scoped comment gets its own index row as well, right after it
+    // (both are comment rows, so both sort ahead of every real block).
+    await expect(page.locator('[data-idx="1"]')).toContainText('please rename this variable')
     // The "Start" item itself has no code anchor, so the block-scoped index
     // right next to it must show NOTHING while it's selected — not "no
     // filter" (see commentScope's sentinel scope, comments-panel.md). Only
     // once you select the block the comment is actually anchored to does it
     // reappear there.
     await expect(page.getByTestId('inline-comments').getByTestId('comment-item')).toHaveCount(0)
+    // Two steps down: past the anchored comment's own index row, onto the first
+    // real block — which is where its inline thread lives.
+    await page.keyboard.press('ArrowDown')
     await page.keyboard.press('ArrowDown')
     await expect(page.getByTestId('inline-comments').getByText('please rename this variable')).toBeVisible()
   })
@@ -108,7 +112,7 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     await expect(page.getByTestId('block-row').first()).toBeVisible()
     await expect(page.locator('[data-idx="0"]')).toHaveClass(/bg-indigo-50/)
 
-    const card = page.getByTestId('comment-detail-card')
+    const card = page.getByTestId('comment-detail-card').first()
     await expect(card).toBeVisible()
     // The body is shown once, as the first message of the thread (no separate
     // duplicated title above it — see commentDetailCard's own doc comment).
@@ -128,20 +132,22 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     // starts from an ordinary block instead, and the ↑ back then lands on a
     // block too — the detail card never appears and the assertion below fails
     // for a reason that has nothing to do with ↑/↓.
-    await expect(page.getByTestId('comment-detail-card')).toBeVisible()
-    // Already on the comment item (index 0) — step down onto an ordinary
-    // block, then back up onto the comment item again.
+    await expect(page.getByTestId('comment-detail-card').first()).toBeVisible()
+    // Already on the comment item (index 0) — step down past the second comment
+    // row (the anchored one now has its own row too) onto an ordinary block,
+    // then back up onto the comment items again.
+    await page.keyboard.press('ArrowDown')
     await page.keyboard.press('ArrowDown')
     await expect(page.getByTestId('comment-detail-card')).toHaveCount(0)
     await page.keyboard.press('ArrowUp')
-    await expect(page.getByTestId('comment-detail-card')).toBeVisible()
+    await expect(page.getByTestId('comment-detail-card').first()).toBeVisible()
   })
 
   test('Enter opens the action menu', async ({ page }) => {
     await mockComments(page)
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
-    await expect(page.getByTestId('comment-detail-card')).toBeVisible()
+    await expect(page.getByTestId('comment-detail-card').first()).toBeVisible()
 
     await page.keyboard.press('Enter')
     const menu = page.getByTestId('command-menu')
@@ -191,7 +197,7 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     )
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
-    await expect(page.getByTestId('comment-detail-card')).toBeVisible()
+    await expect(page.getByTestId('comment-detail-card').first()).toBeVisible()
 
     await page.keyboard.press('Enter')
     const menu = page.getByTestId('command-menu')
@@ -240,7 +246,7 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     )
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
-    await expect(page.getByTestId('comment-detail-card')).toBeVisible()
+    await expect(page.getByTestId('comment-detail-card').first()).toBeVisible()
 
     const bubbles = page.getByTestId('reaction-bubble')
     await expect(bubbles).toHaveCount(2) // the comment's own opening body + the one reaction
@@ -293,21 +299,22 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     await mockComments(page)
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
-    await expect(page.getByTestId('comment-detail-card')).toBeVisible()
+    await expect(page.getByTestId('comment-detail-card').first()).toBeVisible()
     await expect(page.locator('[data-idx="0"]')).toHaveClass(/bg-indigo-50/)
 
     // → steps into the thread — rest position, nothing highlighted yet, but
     // already at the "newest message" end (pos === 0).
     await page.keyboard.press('ArrowRight')
-    await expect(page.getByTestId('comment-detail-thread')).toHaveClass(/ring-indigo-200/)
+    await expect(page.getByTestId('comment-detail-thread').first()).toHaveClass(/ring-indigo-200/)
 
     // ↓ from here falls through immediately: the thread cursor releases and
-    // the sidebar selection advances to the next row (the first real PR
-    // block), instead of doing nothing.
+    // the sidebar selection advances to the next row — which is the anchored
+    // comment's own index row (every unresolved comment has one now) — instead
+    // of doing nothing.
     await page.keyboard.press('ArrowDown')
-    await expect(page.getByTestId('comment-detail-card')).toHaveCount(0)
     await expect(page.locator('[data-idx="0"]')).not.toHaveClass(/bg-indigo-50/)
     await expect(page.locator('[data-idx="1"]')).toHaveClass(/bg-indigo-50/)
+    await expect(page.getByTestId('comment-detail-card').first()).toContainText('please rename this variable')
   })
 
   test('"Beantwoorden" reveals the reply field only after Enter, and sends via the reply Signal', async ({
@@ -322,7 +329,7 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
 
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
-    await expect(page.getByTestId('comment-detail-card')).toBeVisible()
+    await expect(page.getByTestId('comment-detail-card').first()).toBeVisible()
 
     await page.keyboard.press('Enter')
     const menu = page.getByTestId('command-menu')
@@ -363,7 +370,7 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
 
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
-    await expect(page.getByTestId('comment-detail-card')).toBeVisible()
+    await expect(page.getByTestId('comment-detail-card').first()).toBeVisible()
 
     await page.keyboard.press('Enter')
     await expect(page.getByTestId('command-menu')).toBeVisible()
@@ -396,7 +403,7 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
 
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
-    await expect(page.getByTestId('comment-detail-card')).toBeVisible()
+    await expect(page.getByTestId('comment-detail-card').first()).toBeVisible()
 
     await page.keyboard.press('Enter')
     const menu = page.getByTestId('command-menu')
@@ -449,7 +456,7 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     // of folding away into "Toon N goedgekeurde blocks" like every OTHER
     // resolved comment still would.
     await expect(page.getByTestId('comment-heading')).toBeVisible()
-    await expect(page.getByTestId('comment-detail-card')).toBeVisible()
+    await expect(page.getByTestId('comment-detail-card').first()).toBeVisible()
   })
 
   test('an ai_warning finding is also a navigable comment-index item', async ({ page }) => {
@@ -477,10 +484,12 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     await leaveSearchBox(page)
     await expect(page.getByTestId('block-row').first()).toBeVisible()
     await expect(page.getByTestId('comment-heading')).toBeVisible()
-    // Two comment-index rows now: the plain issue comment (index 0, already
-    // selected by default) and the ai_warning finding (index 1).
+    // Three comment-index rows now: the plain issue comment (index 0, already
+    // selected by default), the anchored comment mockComments always adds
+    // (index 1) and the ai_warning finding (index 2).
     await page.keyboard.press('ArrowDown')
-    const card = page.getByTestId('comment-detail-card')
+    await page.keyboard.press('ArrowDown')
+    const card = page.getByTestId('comment-detail-card').filter({ hasText: 'this call no longer matches' }).first()
     await expect(card).toBeVisible()
     await expect(card.getByTestId('comment-ai-warning')).toBeVisible()
     await expect(card).toContainText('this call no longer matches')

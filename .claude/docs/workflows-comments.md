@@ -1475,3 +1475,92 @@ follow-up turn (no "commit" action ever sent) lands it on the pending ref,
 reclaims the shadow worktree, and reports the outcome under its own message
 id; `TestRunChatTurnWithRetriesResetsResultPerAttempt` guards the
 stale-`Kind`-across-retries bug documented above.
+
+## `comment_batch` (`comment_batch.go` + `comment_batch_progress.go`)
+
+"Laat Claude alle openstaande comments verwerken": **ONE** agentic Opus run
+(`claude.ModelOpus`, `Read/Grep/Glob/Edit/Bash`) that walks every open comment
+of a PR and edits code for it. Deliberately one run rather than one per comment
+— the reviewer's own framing ("dan moet alles in 1 agent worden opgepakt"): the
+comments of a PR touch the same files and each other's context, so one session
+that has read everything once is both cheaper and better informed.
+
+Three product decisions shape the whole thing:
+
+1. **Code only.** The run never replies to a comment and never resolves one.
+   The reviewer decides that afterwards, with **Space on the comment's own index
+   row** (`spaceKey`, `home.mjs` → the existing `reply` Signal with
+   `done: true`). So this workflow signals no comment thread at all — unlike
+   `code_warning`, which creates comments of its own.
+2. **The normal landing route.** The edits are made in the very same
+   per-conversation shadow worktree a chat turn uses (`chat_shadow.go`), under
+   the synthetic conversation id `commentBatchConvID(pr)` = `"batch-<pr>"`, and
+   are landed by the existing `chat_merge` queue — so they end up on the PR's
+   local pending ref and the reviewer pushes them himself from the todo row (see
+   `.claude/docs/pending-push.md`). No new git path.
+3. **Skipping is a first-class outcome.** A comment that is only a question, a
+   compliment, or genuinely unclear is skipped WITH a reason and the run moves
+   on; it stays an ordinary open comment.
+
+**Which comments** ("van GitHub + eigen, geen AI"): `commentBatchEligible` —
+open, `source != "ai"`, `kind != "ai_warning"`. Checked server-side against the
+stored comments before the run starts (a browser list can be stale), and
+mirrored in the frontend's own `batchCommentTargets` (`home.mjs`).
+
+**Per-comment progress out of one agent** comes from marker lines the run
+prints, fixed by `claude.CommentBatchSystemPrompt`:
+`[slash:start] <id>` / `[slash:done] <id> <noot>` / `[slash:skip] <id> <noot>`.
+They are parsed **twice**, on purpose: LIVE from the streamed events
+(`commentBatchProgressSink`, same shape as `chatProgressSink`) for the volatile
+snapshot, and once more from the run's **final text** for the Activity's
+recorded result — so the durable result stays a pure function of that text and
+replay never depends on whether a stream was observed (see
+`.claude/rules/workflow-determinism.md`). A marker naming an id the run wasn't
+given is ignored, in both paths.
+
+`comment_batch_progress.go` is that snapshot (`GET /api/comment-batch?pr=N` +
+the `commentbatch.progress` SSE event): the same in-memory carve-out as
+`chat_progress.go`, with ONE deliberate difference — it is **kept** after the
+run finished instead of deleted, because a batch leaves no durable per-comment
+trace at all (see decision 1), so "Claude heeft deze comment verwerkt" would
+otherwise vanish the moment the run ended. A restart drops it and the comments
+are simply open comments again.
+
+### Where the reviewer sees it
+
+- Entry: `REVIEW_BATCH_COMMENTS_ITEM` in both review-submit follow-ups
+  (`reviewApprove`/`reviewChoice`) and therefore also in `/` → GitHub → "PR
+  keuren". It opens the `'bulkComments'` palette mode — the comments under each
+  other, Enter on one **jumps to it**, and a separate "Verwerk N comments met
+  Claude (Opus 5)" row starts the run. That list is a **snapshot** (plain string
+  labels, resolved at open time — see `snapshotCommands`), so no live label
+  function ever reaches CommandMenu's tree.
+- Starting it jumps straight to the FIRST comment of the list, because that is
+  where the progress lives:
+  - `batchPill` (`BlockList.mjs`) on the comment's index row — a pulsing dot
+    plus the WORD ("Claude bezig" / "verwerkt" / "overgeslagen");
+  - the log line in the EXISTING status element `claude-chat-status`
+    (`CommentClaudeFooter`, which `commentDetailCard` now also mounts): while
+    this comment is the current one it shows the same "Claude leest src/x.php"
+    sentence a chat turn shows (`claudeStatusText`, so no second formatter),
+    afterwards its one-line outcome.
+- `src/commentBatch.mjs` is the one shared reactive snapshot behind all three
+  spots (one read + the SSE push, no poll of its own).
+
+### The index change it rides on
+
+`indexComments` (`RelatedPanel.mjs`) now gives **every unresolved comment** its
+own blokken-index row, not just the PR-wide/orphan/mentioned ones — with one
+extra condition in `recomputeLeftList` (`home.mjs`, which owns `state.blocks`):
+the comment's block must actually be in the tree, otherwise the row would be a
+dead end. Two wanted consequences: every open comment is a stop on the ↑/↓ walk,
+and — because `blockApproveCount` already scores a comment row as
+"resolved == approved" — the PR is only fully approved once every comment is
+resolved, **including other people's**. Space resolving such a row is what makes
+that walk finishable.
+
+Tests: `comment_batch_test.go` (marker parsing incl. prose that must not match,
+the progress lifecycle, eligibility + prompt content, the no-work-copy degrade
+path, and the streamed sink with a marker split across two text deltas) and
+`tests/comment-batch.spec.mjs` (the index row, the palette list + its jump, and
+Space resolving a comment row).

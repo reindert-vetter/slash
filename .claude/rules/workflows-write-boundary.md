@@ -82,6 +82,16 @@ doesn't, and the handler reads that live. The push itself is a real write and
 goes through the `chat_merge` queue's `"push"` Signal, never through this
 handler. See `.claude/docs/pending-push.md`.
 
+Sixth example: the per-comment batch progress behind `GET /api/comment-batch`
+(`comment_batch_progress.go`) — an in-memory `map[int]…` saying which comment the
+one `comment_batch` agent is working on and which ones it already handled. No
+module, no read-model, no workflow-history write, and empty again after a
+restart. Safe because it is not the source of truth about anything: the run only
+edits code (it never replies to or resolves a thread), so the durable state is
+the comments themselves plus the landed pending ref. It is deliberately KEPT
+after the run finished — see "comment_batch" in
+`.claude/docs/workflows-comments.md`.
+
 ## Exception: the Claude chat turn may act through a shell
 
 Deliberately granted by Reindert, overriding the rule above for this one path.

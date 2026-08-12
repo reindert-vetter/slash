@@ -114,6 +114,24 @@ Tests: `reanchor_test.go` (`TestReanchorApprovalsFollowShiftedRowsViaAnchors`
 — no previous worktree at all — plus the duplicate-context and rewritten-row
 cases), `approvals_test.go`, `tests/space-descends-into-call.spec.mjs`.
 
+## An open comment is an unapproved unit, and Space resolves it
+
+Every UNRESOLVED comment gets its own blokken-index row (`indexComments`,
+`RelatedPanel.mjs`, plus the "its block must be in the tree" condition in
+`recomputeLeftList`), and `blockApproveCount`'s comment branch already scores
+such a row as "resolved == approved" (0/1 → 1/1). Two deliberate consequences,
+both confirmed by the reviewer: an open comment is a stop on the ↑/↓ walk and on
+`findNextUnapproved`'s, and the PR is only ever fully approved once every comment
+is resolved — **including other people's**.
+
+`spaceKey` (`home.mjs`) therefore has an early branch for such a row: Space
+RESOLVES the comment (`resolvePrCommentItem`, the ordinary `reply` Signal with
+`done: true`), which is that row's whole equivalent of approving. It used to be a
+silent no-op there (a comment item has no diff rows, so `approveTargetRows` came
+back empty). Not a toggle: a resolved block-anchored comment leaves the index,
+and "Unresolve" stays in the row's own Enter menu. Test:
+`tests/comment-batch.spec.mjs`.
+
 ## Placing a comment (or an AI finding) does NOT retract an approval
 
 Deliberately reversed, on explicit request: a comment on an already-approved

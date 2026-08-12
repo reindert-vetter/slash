@@ -16,6 +16,27 @@ like an ordinary PR block, and the block column to the right of the index shows
 its thread instead of a diff. (This replaced the removed `PrWideComments` card,
 see `.claude/docs/detail-layout.md`.)
 
+### Every UNRESOLVED comment gets such a row too, not only the PR-wide ones
+
+Reviewer request ("ik wil dat alle niet resolved comments in de blokken index
+komen"): `indexComments` also returns every block-anchored (`kind === ''`)
+comment that is still open, on top of the PR-wide/orphan/`@`-mentioned ones it
+already returned. Such a comment then lives in TWO places — its own index row and
+its block's own inline thread — which is deliberate: an open comment must not be
+able to hide inside a block you haven't opened yet.
+
+One extra condition lives in `recomputeLeftList` (`home.mjs`) rather than in
+`indexComments`, because it needs `state.blocks`: the comment's block must
+actually be in this tree. Otherwise the row would be a dead end — the card shows
+the comment, but there is no code to step into. The PR-wide/orphan kinds and an
+`@`-mention keep their row unconditionally, as before.
+
+Consequences documented elsewhere: it makes every open comment a stop on the ↑/↓
+walk and an unapproved unit of the PR total, with **Space resolving** such a row
+(see `.claude/docs/approval.md`), and it is what the `comment_batch` progress
+hangs off (`batchPill` on the row, the log line in the card's footer — see
+`.claude/docs/workflows-comments.md`).
+
 ### Selecting a "Start" item empties the block-scoped index
 
 A `kind:'comment'` sidebar item is itself unanchored, so the block-scoped index

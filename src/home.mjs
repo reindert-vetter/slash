@@ -71,6 +71,7 @@ import RelatedPanel, {
   focusedChipChain,
   selectComment,
   indexComments,
+  isKiloReview,
   isOrphanComment,
   commentDetailCard,
   startPrCommentReply,
@@ -115,6 +116,7 @@ import { commentMentionsMe } from './mentions.mjs'
 import { initTheme, themeToggleButton } from './theme.mjs'
 import { ensureAutoWarn, autoWarnToggleButton, autoWarn } from './autowarn.mjs'
 import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
+import { batchItemFor, startCommentBatch, BATCH_STATE_LABEL } from './commentBatch.mjs'
 import TestMethodsColumn from './TestMethodsColumn.mjs'
 import { meLogin } from './avatar.mjs'
 import { relativeTime } from './relativeTime.mjs'
@@ -2319,7 +2321,23 @@ function recomputeLeftList() {
   // ordinary comment item: resolving it still folds it into the same
   // "Toon N goedgekeurde blokken" section, mentioned or not.
   const rank = (b) => (b.kind === 'comment' ? (b.mentioned ? -2 : -1) : childIds.has(b.id) ? 3 : categoryRank(b.category))
-  const commentItems = indexComments().map(commentBlockItem)
+  // An UNRESOLVED block-anchored comment gets its own index row (indexComments,
+  // RelatedPanel.mjs) — but only when the block it hangs on is actually in this
+  // tree. Otherwise the row would be a dead end: selecting it shows the comment,
+  // yet there is no code to step into and no block to fall back to (that is
+  // exactly what the orphan/PR-wide kinds are for, which keep their row
+  // unconditionally, as does a comment that @-mentions me). The check lives here
+  // rather than in indexComments because state.blocks is this module's own.
+  const anchoredBlocks = new Set(state.allBlocks.map((b) => b.file + '|' + b.label))
+  const commentItems = indexComments()
+    .filter(
+      (c) =>
+        c.kind ||
+        isOrphanComment(c) ||
+        commentMentionsMe(c) ||
+        anchoredBlocks.has(c.file + '|' + c.label),
+    )
+    .map(commentBlockItem)
   const visibleBlocks = state.allBlocks.filter((b) => !hidden.has(b.id))
   state.blocks = [...groupTestClasses(visibleBlocks), ...commentItems]
     // The haystack is label + category + FILE PATH (reviewer request: "ik wil
@@ -2868,6 +2886,14 @@ function applyDefaultUnapprovedSelection() {
 function retryDefaultSelectionForComments() {
   if (!freshDefaultSelectionPending) return
   freshDefaultSelectionPending = false
+  // Only from the REST position (the blokken-index itself). Once the reviewer
+  // has stepped into the diff, a late-arriving comment row must never yank the
+  // selection out from under him — and since every unresolved comment now gets
+  // such a row (see recomputeLeftList), the most common trigger is the reviewer
+  // PLACING a comment himself: its own fresh index row lands a poll later, ranks
+  // first, and used to become "the first not-yet-approved item" this would then
+  // jump to, abandoning the diff he was working in.
+  if (state.mode !== 'list') return
   const at = freshDefaultSelectionAt
   const stillAtPick = at
     ? at.toggle
@@ -6053,6 +6079,113 @@ const REVIEW_APPROVE_CONFIRM_COMMANDS = withClose([
   },
 ])
 
+// batchCommentTargets is the set a comment batch may work on: every comment of
+// this PR that is still open and isn't one of our own AI findings — the
+// reviewer's own rule, "van GitHub + eigen, geen AI". Mirrored server-side by
+// commentBatchEligible (comment_batch.go), which re-checks it against the
+// stored comments before the run starts. A bot review summary is skipped for
+// the same reason it gets no index row (isKiloReview).
+//
+// Order is cs.list's own (creation order), so the palette list, the index rows
+// and the agent's own work order all read the same.
+function batchCommentTargets() {
+  return commentListSnapshot().filter(
+    (c) => c.status !== 'resolved' && c.source !== 'ai' && c.kind !== 'ai_warning' && !isKiloReview(c.body),
+  )
+}
+
+// REVIEW_BATCH_COMMENTS_ITEM — the entry point into the batch list, offered by
+// both review-submit follow-ups (and via `/` → GitHub → "PR keuren", which
+// reuses REVIEW_CHOICE_COMMANDS): the reviewer has walked the whole PR and can
+// now hand every comment he placed (plus everyone else's) to ONE Claude agent.
+// It does NOT start anything — it opens the 'bulkComments' list, where the
+// comments sit under each other and a separate, deliberate second choice starts
+// the run (see bulkCommentsCommandsFor).
+const REVIEW_BATCH_COMMENTS_ITEM = {
+  id: 'review-batch-comments',
+  // Hidden entirely when there is nothing to hand over — a PR with no open
+  // comments must not carry a dead row in the one menu that is about
+  // approving/rejecting (see snapshotCommands' `when` support).
+  when: () => batchCommentTargets().length > 0,
+  label: () => {
+    const n = batchCommentTargets().length
+    return 'Laat Claude alle openstaande comments verwerken' + (n ? ' (' + n + ')' : '')
+  },
+  hint: 'claude',
+  run: () => openMenu('bulkComments'),
+}
+
+// bulkCommentsCommandsFor builds the 'bulkComments' list: one "start" row
+// followed by every open comment, so the reviewer first READS what he is about
+// to hand over and can step into any of them (Enter jumps to that comment's
+// index row) before confirming.
+//
+// A snapshot, deliberately: every label is a plain string resolved at open time
+// (see snapshotCommands' own doc comment on why a live label function must never
+// reach CommandMenu's tree). Live progress therefore does NOT live here but on
+// the index rows and in the log line under the selected comment
+// (BlockList.mjs's batchPill / CommentClaudeFooter) — which is also where the
+// reviewer is sent the moment the run starts.
+function bulkCommentsCommandsFor() {
+  const items = batchCommentTargets()
+  if (!items.length) {
+    return withClose([{ id: 'bulk-comments-none', label: 'Geen openstaande comments', hint: 'leeg', run: () => {} }])
+  }
+  const start = {
+    id: 'bulk-comments-start',
+    label: 'Verwerk ' + items.length + (items.length === 1 ? ' comment' : ' comments') + ' met Claude (Opus 5)',
+    hint: 'claude',
+    icon: 'approve-pr',
+    run: () => startBatchForComments(items),
+  }
+  const rows = items.map((c) => ({
+    id: 'bulk-comment-' + c.id,
+    label: bulkCommentLabel(c),
+    hint: batchStateWord(c),
+    run: () => jumpToCommentRow(c.id),
+  }))
+  return withClose([start, ...rows])
+}
+
+// bulkCommentLabel words one row of that list: where the comment sits plus the
+// start of its text, prefixed with a glyph ONLY when a batch already touched it
+// (the word in `hint` carries the same meaning — colourblind rule).
+function bulkCommentLabel(c) {
+  const it = batchItemFor(c.id)
+  const mark = it && it.state === 'done' ? '✓ ' : it && it.state === 'skipped' ? '– ' : ''
+  const where = c.file ? c.file.split('/').pop() + (c.line > 0 ? ':' + c.line : '') : 'PR-comment'
+  const text = (c.body || '').replace(/\s+/g, ' ').trim().slice(0, 60)
+  return mark + where + (text ? ' — ' + text : '')
+}
+
+// batchStateWord is that row's state as a WORD for the hint column: what a
+// previous/running batch made of this comment, or plain "open".
+function batchStateWord(c) {
+  const it = batchItemFor(c.id)
+  return (it && BATCH_STATE_LABEL[it.state]) || 'open'
+}
+
+// startBatchForComments confirms the run and immediately puts the reviewer on
+// the FIRST comment of the list, where the blink status and the log line show
+// what Claude is doing (his own request: "na het verwerken van de comments moet
+// je gaan naar de eerste comment in de lijst"). A refused start (already
+// running, network) leaves the selection alone.
+async function startBatchForComments(items) {
+  const ok = await startCommentBatch(state.pr, items.map((c) => c.id))
+  if (!ok) return
+  pollWorkflows()
+  jumpToCommentRow(items[0].id)
+}
+
+// jumpToCommentRow lands the sidebar selection on one comment's own index row.
+// Every open comment has such a row (see indexComments in RelatedPanel.mjs), and
+// the row may still be a poll tick away, which is exactly what blockRefPending +
+// applyCommentRefRestore's retry already solve for `?sel=comment:<id>`.
+function jumpToCommentRow(commentId) {
+  blockRefPending = 'comment:' + commentId
+  applyCommentRefRestore()
+}
+
 // REVIEW_APPROVE_COMMANDS — shown right after a palette approve action leaves
 // the WHOLE PR fully approved (state.approvalTotal.done === total, over every
 // top-level block plus its nested/drilled PR-block children — see
@@ -6076,6 +6209,7 @@ const REVIEW_APPROVE_COMMANDS = withClose([
     icon: 'approve-pr',
     children: REVIEW_APPROVE_CONFIRM_COMMANDS,
   },
+  REVIEW_BATCH_COMMENTS_ITEM,
 ])
 
 // REVIEW_CHOICE_COMMANDS — shown right after a palette approve action leaves
@@ -6110,6 +6244,7 @@ const REVIEW_CHOICE_COMMANDS = withClose([
     icon: 'reject-pr',
     run: () => openMenu('reviewReject'),
   },
+  REVIEW_BATCH_COMMENTS_ITEM,
 ])
 
 // resolveLabel/snapshotCommands materialize a command list's labels into plain
@@ -6128,12 +6263,19 @@ const REVIEW_CHOICE_COMMANDS = withClose([
 function resolveLabel(c) {
   return typeof c.label === 'function' ? c.label() : c.label
 }
+// `when` (optional) is evaluated here too, and for the same reason as the label:
+// an item that must disappear on a condition gets dropped ONCE, from plain
+// non-reactive code, instead of leaving a live predicate inside CommandMenu's
+// never-disposed tree. Recursing into `children` means a submenu item
+// (REVIEW_BATCH_COMMENTS_ITEM under `/` → GitHub → "PR keuren") is filtered too.
 function snapshotCommands(list) {
-  return list.map((c) => ({
-    ...c,
-    label: resolveLabel(c),
-    children: c.children ? snapshotCommands(c.children) : undefined,
-  }))
+  return list
+    .filter((c) => !c.when || c.when())
+    .map((c) => ({
+      ...c,
+      label: resolveLabel(c),
+      children: c.children ? snapshotCommands(c.children) : undefined,
+    }))
 }
 
 // granNoun names the current comment target's granularity for the compose menu's
@@ -8341,6 +8483,19 @@ function spaceKey() {
     toggleRangeApproval()
     return
   }
+  // A comment index row: Space RESOLVES the comment. That is this row's whole
+  // equivalent of approving — blockApproveCount already scores a comment row as
+  // "resolved == approved" — and it is what makes the ↑/↓ walk over every open
+  // comment (see indexComments in RelatedPanel.mjs) finishable at all. Space
+  // used to be a silent no-op here (a comment item has no diff rows, so
+  // approveTargetRows came back empty). Resolving is not undone by a second
+  // press: a resolved block-anchored comment leaves the index, and "Unresolve"
+  // stays where it was, in the row's own Enter menu (prCommentCommandsFor).
+  const selComment = selectedComment()
+  if (selComment) {
+    if (selComment.status !== 'resolved') resolvePrCommentItem(selComment)
+    return
+  }
   const ctx = approveContext()
   if (!ctx.b) return
   if (!isApproveDone(ctx)) {
@@ -8591,6 +8746,7 @@ function rootCommandsFor(mode) {
   if (mode === 'postApprove') return POSTAPPROVE_COMMANDS
   if (mode === 'reviewApprove') return REVIEW_APPROVE_COMMANDS
   if (mode === 'reviewChoice') return REVIEW_CHOICE_COMMANDS
+  if (mode === 'bulkComments') return bulkCommentsCommandsFor()
   // reviewReject has no static list — resolveCommands builds its one command
   // straight from the typed reason (see there); nothing to snapshot up front.
   if (mode === 'reviewReject') return []
@@ -8799,6 +8955,10 @@ function resolveCommands(query) {
   // handled by the ms.sub check above, not here.
   if (ms.mode === 'reviewApprove') return filterCommands(ms.commands, query)
   if (ms.mode === 'reviewChoice') return filterCommands(ms.commands, query)
+  // The batch list (opened from either of those two, or from `/` → GitHub → "PR
+  // keuren"): a plain snapshotted list of "start" + one row per open comment, so
+  // typing filters it like any other menu. See bulkCommentsCommandsFor.
+  if (ms.mode === 'bulkComments') return filterCommands(ms.commands, query)
   // reviewReject — the free-text rejection-reason step opened by "Wijs de PR
   // af" above. GitHub (and the backend) reject an empty REQUEST_CHANGES body,
   // so this mode has no static command list: build ONE command straight from
@@ -9967,7 +10127,15 @@ function drillPreviewColumns() {
 // modes (reviewApprove/reviewChoice/reviewReject). They all share the same
 // anchoring quirk handled below — see isIndexMenu/lastIndexRowRect.
 function isReviewFollowup(mode) {
-  return mode === 'postApprove' || mode === 'reviewApprove' || mode === 'reviewChoice' || mode === 'reviewReject'
+  return (
+    mode === 'postApprove' ||
+    mode === 'reviewApprove' ||
+    mode === 'reviewChoice' ||
+    mode === 'reviewReject' ||
+    // Opened FROM one of those (REVIEW_BATCH_COMMENTS_ITEM), so it must keep the
+    // same anchor rather than re-measuring against a row that may not be visible.
+    mode === 'bulkComments'
+  )
 }
 
 // menuAnchor returns the element the command palette floats *beneath* (its

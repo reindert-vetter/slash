@@ -6,6 +6,7 @@ import { html } from './vendor/arrow.js'
 import { removedLabel } from './Block.mjs'
 import { avatarHTML, identityOf } from './avatar.mjs'
 import { paletteClass } from './blockPath.mjs'
+import { batchItemFor, BATCH_STATE_LABEL } from './commentBatch.mjs'
 
 // Tailwind classes per category tag, so the pills read like the screenshot.
 const CATEGORY_STYLE = {
@@ -751,6 +752,7 @@ function row(state, b, i) {
       >
       ${() => removedPill(b)}
       ${() => unpushedPill(state, b)}
+      ${() => batchPill(b)}
       ${() => commentActivityPill(state, b)}
       ${() => approvalPill(state, b)}
       <span class="${() => 'shrink-0 text-xs font-medium ' + st.cls}"
@@ -794,6 +796,36 @@ function approvalPill(state, b) {
       title="Goedgekeurde regels (dit block + onderliggende code)"
       >${done ? '✓ ' : ''}${s.done}/${s.total}</span
     >
+  `
+}
+
+// batchPill marks a comment index row that a comment_batch run
+// (comment_batch.go) is working on or has already handled: the WORD says which
+// ("Claude bezig" / "verwerkt" / "overgeslagen", BATCH_STATE_LABEL), a pulsing
+// dot is decoration on top for the one row currently in flight (never
+// colour/animation alone — the reviewer is colourblind, see conventions.md).
+// '' for every non-comment row and for every comment no batch ever touched, so
+// the ordinary index is unchanged. Same nested-slot shape as the pills above.
+function batchPill(b) {
+  if (!b || b.kind !== 'comment' || !b.comment) return ''
+  const it = batchItemFor(b.comment.id)
+  if (!it || it.state === 'open') return ''
+  const busy = it.state === 'busy'
+  return html`
+    <span
+      class="${'shrink-0 flex items-center gap-1 rounded px-1 py-0.5 text-[10px] font-semibold ' +
+      (busy
+        ? 'bg-indigo-100 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300'
+        : 'bg-slate-100 dark:bg-zinc-800 text-slate-500 dark:text-zinc-400')}"
+      data-testid="block-row-batch"
+      title="${it.note || BATCH_STATE_LABEL[it.state] || it.state}"
+    >
+      ${() =>
+        busy
+          ? html`<span class="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-indigo-500"></span>`
+          : ''}
+      <span>${it.state === 'done' ? '✓ ' : ''}${BATCH_STATE_LABEL[it.state] || it.state}</span>
+    </span>
   `
 }
 

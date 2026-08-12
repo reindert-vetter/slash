@@ -53,7 +53,10 @@ test.describe('PR Review Tree — related-panel navigation', () => {
     // already present (the frontend's own 5s poll cadence would otherwise
     // race the next steps).
     await page.goto('/pr/12903')
-    await page.locator('[data-idx="1"]').click()
+    // BY LABEL, not by raw index: the comment seeded above now has its own
+    // index row (every unresolved comment does, see indexComments in
+    // RelatedPanel.mjs), so every block below it shifted one slot.
+    await page.locator('[data-idx]').filter({ hasText: label }).first().click()
 
     // → into the diff, → onto the (only) comment conversation of this unit —
     // reachable because it exists (see hasVisibleComments). Landing on it

@@ -76,6 +76,13 @@ const (
 	// a notice the reviewer clicks, because reloading the tree mid-review would
 	// swap blocks out from under an active cursor. See .claude/docs/server-events.md.
 	eventBlocksChanged = "blocks.changed"
+	// eventCommentBatchProgress carries a volatile commentBatchProgress snapshot
+	// of a running comment_batch run (no Key — the payload is PR-wide and carries
+	// its own per-comment items). Unlike every "…changed" event above there is no
+	// read model to refetch: a batch run's per-comment state exists ONLY in this
+	// volatile snapshot (comment_batch_progress.go), which is why the payload
+	// travels along and GET /api/comment-batch is its resync read.
+	eventCommentBatchProgress = "commentbatch.progress"
 	// eventResync is emitted by the connection itself after it had to drop an
 	// event: "you may have missed something, refetch everything you track".
 	eventResync = "resync"

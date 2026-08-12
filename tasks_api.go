@@ -731,6 +731,15 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// commentId); the UI then signals reviewer turns to its Run ID via
 	// .../signals/message.
 	mux.HandleFunc("/api/workflows/claude_chat", s.handleClaudeChatStart)
+	// POST /api/workflows/comment_batch {pr, commentIds} → ONE agentic Claude run
+	// that works through those open comments and edits code for them
+	// (comment_batch.go). Signal-less: the run reports progress only through the
+	// volatile snapshot below.
+	mux.HandleFunc("/api/workflows/comment_batch", s.handleCommentBatchStart)
+	// GET /api/comment-batch?pr=N → the volatile per-comment snapshot of that
+	// run (comment_batch_progress.go): the resync read for the SSE stream, not a
+	// poll target.
+	mux.HandleFunc("/api/comment-batch", s.handleCommentBatch)
 	// GET /api/chat?commentId=X → read-only chat transcript for one conversation
 	// (see modules/chat; the conversation id IS the comment thread's id, so pr
 	// isn't needed to scope the read).
@@ -923,7 +932,7 @@ func (s *server) handleProblems(w http.ResponseWriter, r *http.Request) {
 // /api/workflows/{runID}/signals/{signalName} (POST signal).
 func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/workflows/")
-	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "remove_reviewer" || rest == "code_warning" || rest == "task_snooze" || rest == "ignore_comment" || rest == "task_inbox" || rest == "cleanup" || rest == "claude_chat" || rest == "auto_warn" {
+	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "remove_reviewer" || rest == "code_warning" || rest == "task_snooze" || rest == "ignore_comment" || rest == "task_inbox" || rest == "cleanup" || rest == "claude_chat" || rest == "auto_warn" || rest == "comment_batch" {
 		http.NotFound(w, r)
 		return
 	}
@@ -1691,6 +1700,74 @@ func (s *server) handleClaudeChatStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
+}
+
+// handleCommentBatchStart starts the comment_batch Execution: one agentic Claude
+// run over the comments the reviewer just confirmed (see comment_batch.go).
+//
+// Every id must name a comment of this PR that is still eligible
+// (commentBatchEligible — open, not an AI finding), so a stale browser list
+// can't smuggle in a resolved comment or an AI warning. A batch that is already
+// running for this PR is refused with 409 rather than started a second time:
+// both runs would edit the same shadow worktree.
+func (s *server) handleCommentBatchStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var in CommentBatchInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.PR <= 0 || len(in.CommentIDs) == 0 {
+		http.Error(w, "invalid comment batch request", http.StatusBadRequest)
+		return
+	}
+	list, err := s.tasks.comments.List(r.Context(), in.PR)
+	if err != nil {
+		http.Error(w, "query failed", http.StatusInternalServerError)
+		return
+	}
+	eligible := map[string]bool{}
+	for _, c := range list {
+		if commentBatchEligible(c) {
+			eligible[c.ID] = true
+		}
+	}
+	for _, id := range in.CommentIDs {
+		if !eligible[id] {
+			http.Error(w, "unknown or ineligible comment", http.StatusBadRequest)
+			return
+		}
+	}
+	if commentBatchRunning(in.PR) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "batch already running"})
+		return
+	}
+	runID, err := s.tasks.manager.StartCommentBatch(in)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
+}
+
+// handleCommentBatch serves GET /api/comment-batch?pr=N — the volatile
+// per-comment snapshot of that PR's batch run, or {ok:true, running:false} when
+// there never was one (or the server restarted since). Read-only.
+func (s *server) handleCommentBatch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	pr, _ := strconv.Atoi(r.URL.Query().Get("pr"))
+	if pr <= 0 {
+		http.Error(w, "pr required", http.StatusBadRequest)
+		return
+	}
+	p, ok := commentBatchProgressFor(pr)
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "running": false})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "running": p.Running, "progress": p})
 }
 
 // handleChat serves two read-only reads, both GET:

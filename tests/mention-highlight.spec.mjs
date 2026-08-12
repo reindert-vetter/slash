@@ -164,13 +164,17 @@ test.describe('@mention of the local reviewer', () => {
     // would share the same state.blocks id ('comment:' + c.id), which is what
     // selection preservation and ?sel=comment:<id> resolve through.
     await expect(page.locator('[data-idx]').filter({ hasText: 'hiernaar laten kijken' })).toHaveCount(1)
-    await expect(page.locator('[data-idx]').filter({ hasText: 'please rename this variable' })).toHaveCount(0)
-    // No "PR-comments" section at all here: the only index comment is a
-    // mentioned one.
-    await expect(page.getByTestId('comment-heading')).toHaveCount(0)
+    // The comment that does NOT mention me gets an ordinary index row of its own
+    // too (every unresolved comment does, see indexComments in
+    // RelatedPanel.mjs) — under the plain "PR-comments" heading, BELOW the
+    // "Mentioned" one, which is the whole point of the -2/-1 rank split.
+    await expect(page.locator('[data-idx]').filter({ hasText: 'please rename this variable' })).toHaveCount(1)
+    await expect(page.getByTestId('comment-heading')).toBeVisible()
 
     // Its own block still shows both comments in the inline index — the index
-    // row is an addition, not a move.
+    // row is an addition, not a move. Two steps down: past that second comment
+    // row, onto the block itself.
+    await page.keyboard.press('ArrowDown')
     await page.keyboard.press('ArrowDown')
     const inline = page.getByTestId('inline-comments')
     await expect(inline.getByText('please rename this variable')).toBeVisible()

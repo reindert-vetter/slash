@@ -43,10 +43,13 @@ test('deleting a comment returns the keyboard to its own diff row', async ({ pag
   expect(start.ok()).toBeTruthy()
 
   // Reload onto the same block/diff so the freshly placed comment shows up
-  // inline for the (only) group unit it's anchored on.
+  // inline for the (only) group unit it's anchored on. Select it BY LABEL, not
+  // by raw index: the comment just placed now has its own index row (every
+  // unresolved comment does, see indexComments in RelatedPanel.mjs), so every
+  // block below it shifted one slot.
   await page.goto('/pr/12903')
   await leaveSearchBox(page)
-  await page.locator('[data-idx="1"]').click()
+  await page.locator('[data-idx]').filter({ hasText: label }).first().click()
   await page.keyboard.press('ArrowRight')
   await expect(page).toHaveURL(/mode=diff/)
 

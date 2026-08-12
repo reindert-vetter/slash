@@ -395,7 +395,10 @@ test('a mouse click straight onto a different block releases a stale claude-focu
     // Reload so the comment is present from the start (avoids racing the
     // frontend's own poll cadence, same as related-nav.spec.mjs).
     await page.goto('/pr/12903')
-    await page.locator('[data-idx="1"]').click()
+    // BY LABEL, not by raw index: the comment seeded above now has its own
+    // index row (every unresolved comment does, see indexComments in
+    // RelatedPanel.mjs), so every block below it shifted one slot.
+    await page.locator('[data-idx]').filter({ hasText: label }).first().click()
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
     await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight') // list -> diff
@@ -414,7 +417,9 @@ test('a mouse click straight onto a different block releases a stale claude-focu
     await page.keyboard.press('ArrowLeft') // claude -> comment
     await page.keyboard.press('ArrowLeft') // comment -> diff
     await page.keyboard.press('ArrowLeft') // diff -> list
-    await page.locator('[data-idx="2"]').click()
+    // The next block BY LABEL, not by raw index: the seeded comment has its own
+    // index row (see indexComments in RelatedPanel.mjs), shifting every block.
+    await page.locator('[data-idx]').filter({ hasText: 'CreatePaymentAction::findOrCreateCustomer' }).first().click()
     await page.keyboard.press('ArrowRight') // list -> diff on block B
 
     // Block B carries no comment of its own — the panel must show ITS own
@@ -463,7 +468,10 @@ test('↓ at the bottom of the Claude chat advances to the next block, and the C
     // Reload so the comment is present from the start (avoids racing the
     // frontend's own poll cadence, same as related-nav.spec.mjs).
     await page.goto('/pr/12903')
-    await page.locator('[data-idx="1"]').click()
+    // BY LABEL, not by raw index: the comment seeded above now has its own
+    // index row (every unresolved comment does, see indexComments in
+    // RelatedPanel.mjs), so every block below it shifted one slot.
+    await page.locator('[data-idx]').filter({ hasText: label }).first().click()
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
     await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight') // list -> diff
@@ -483,7 +491,11 @@ test('↓ at the bottom of the Claude chat advances to the next block, and the C
     // the panel released the keyboard entirely (relatedActive() is false), and
     // the block column now shows a DIFFERENT block than the one the chat hung
     // off (its h2 label no longer matches `label`).
-    await expect(page.locator('[data-idx="2"]')).toHaveClass(/bg-indigo-50/)
+    // Identified BY LABEL, not by raw index: the seeded comment has its own index
+    // row (see indexComments in RelatedPanel.mjs), shifting every block below it.
+    await expect(
+      page.locator('[data-idx]').filter({ hasText: 'CreatePaymentAction::findOrCreateCustomer' }).first(),
+    ).toHaveClass(/bg-indigo-50/)
     await expect(page.getByTestId('related-item')).toHaveCount(0)
     await expect(card).not.toContainText(label)
 
@@ -829,7 +841,10 @@ test('a new comment on an already-commented line gets its own comment + Claude b
   try {
     // Reload so the first comment is present from the start.
     await page.goto('/pr/12903')
-    await page.locator('[data-idx="1"]').click()
+    // BY LABEL, not by raw index: the comment seeded above now has its own
+    // index row (every unresolved comment does, see indexComments in
+    // RelatedPanel.mjs), so every block below it shifted one slot.
+    await page.locator('[data-idx]').filter({ hasText: label }).first().click()
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
     await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight') // list -> diff

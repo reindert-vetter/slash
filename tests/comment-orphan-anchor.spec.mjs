@@ -30,9 +30,10 @@ test.describe('PR Review Tree — an orphaned comment anchor stays reachable', (
     await expect(rows.filter({ hasText: 'Dit ophalen hoort in de repository' })).toHaveCount(1)
     await expect(page.locator('[data-testid="comment-heading"]')).toBeVisible()
 
-    // The still-pinned comment does NOT get such a row — it is reachable through
-    // its own block, so duplicating it in the index would be wrong.
-    await expect(rows.filter({ hasText: 'Deze hangt nog wel aan bestaande code' })).toHaveCount(0)
+    // The still-pinned comment gets a row of its own too, as long as it is
+    // unresolved (see indexComments in RelatedPanel.mjs) — it stays reachable
+    // through its own block as well, which is deliberate: one row, one thread.
+    await expect(rows.filter({ hasText: 'Deze hangt nog wel aan bestaande code' })).toHaveCount(1)
   })
 
   test('selecting the orphan shows its thread with the stale-anchor badge', async ({ page }) => {
@@ -43,7 +44,7 @@ test.describe('PR Review Tree — an orphaned comment anchor stays reachable', (
 
     // Selection alone renders the detail card (no hover, no Enter) — see
     // "Comment-index items" in detail-layout.md.
-    const card = page.locator('[data-testid="comment-detail-card"]')
+    const card = page.locator('[data-testid="comment-detail-card"]').first()
     await expect(card).toBeVisible()
 
     // The badge names the state in WORDS, never colour alone.

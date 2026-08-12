@@ -35,6 +35,7 @@ which the UI then signals. A **one-shot** type runs synchronously to completion
 | `/api/workflows/remove_reviewer` | `{pr}` | one-shot | Drops **me** from that PR's requested reviewers. The request carries no login — the Activity resolves the authenticated user itself, so it can never remove somebody else. 400 on a non-positive pr. |
 | `/api/workflows/cleanup` | — | one-shot | Never accepts a body: the retention cutoff is always server-side. Force-purging specific PRs is CLI-only (`slash cleanup -force`). |
 | `/api/workflows/claude_chat` | `{pr, commentId}` | tracker (per comment thread) | Returns `runId` (`"chat-" + commentId`, deterministic — no in-memory map needed); the UI signals `message`. 400 if `commentId` doesn't name an existing comment of `pr`. Started as a **child** of that comment's `task_code_comment` run (via its `"chat"` Action Signal), with a top-level fallback for a thread that already ended — see "claude_chat" in `.claude/docs/workflows-comments.md`. |
+| `/api/workflows/comment_batch` | `{pr, commentIds}` | one-shot | "Laat Claude alle openstaande comments verwerken": ONE agentic Opus run over those comments, landing its edits through the `chat_merge` queue. 400 when an id doesn't name an eligible (open, non-AI) comment of `pr`, **409 while a batch is already running for that PR** (both runs would edit the same shadow worktree). Progress is volatile only — see the read below and "comment_batch" in `.claude/docs/workflows-comments.md`. |
 | `/api/ingest` | `{pr}` | one-shot | Starts the `ingest` workflow and then `EnsureRelations`; 200 only once both finished. See `.claude/docs/blocks-and-ingest.md`. |
 
 **Adding a signal-less type also means adding its name to the reserved-name
@@ -84,6 +85,7 @@ through the API; use `slash seed -comments <json>`.
 | `POST /api/workflows/{runID}/heartbeat` | Marks a run as actively viewed → fast poll cadence. In-memory only, lost on restart. |
 | `GET /api/ingest/progress?pr=N` | In-memory ingest stage (`worktrees`/`scan`/`relations`) for the generate button. |
 | `GET /api/chat/progress?commentId=X` | In-memory snapshot of a RUNNING `claude_chat` turn (phase/tool/partial answer). The resync read for the stream below, not a poll target. |
+| `GET /api/comment-batch?pr=N` | In-memory per-comment state of that PR's `comment_batch` run (`open`/`busy`/`done`/`skipped` + the running phase/tool). The resync read for the stream below. Deliberately kept after the run finished — the run leaves no durable per-comment trace — but dropped on restart. |
 | `GET /api/events?pr=N` | The one multiplexed SSE stream per browser tab (`eventbus.go`). Pushes volatile notifications only; every consumer refetches its ordinary `GET` on (re)connect. See `.claude/docs/server-events.md`. |
 
 Both are carve-outs from the write boundary because they touch nothing durable

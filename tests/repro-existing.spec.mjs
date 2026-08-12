@@ -20,6 +20,17 @@ test('delayed code load + seeded comments: arrow orphan + list update', async ({
     errors.length = 0
     await page.goto('/pr/91')
     await page.waitForTimeout(400) // comments load; code still pending
+    // Land on the BLOCK, explicitly: every unresolved comment (including the one
+    // seeded above and each one this loop places) now has its own index row that
+    // sorts ahead of the blocks, and a fresh open picks the first unapproved
+    // item — which would be such a row, not the diff this repro is about (see
+    // indexComments in RelatedPanel.mjs).
+    await page
+      .locator('[data-idx]')
+      .filter({ hasText: 'AlphaAction::run' })
+      .first()
+      .click()
+      .catch(() => {})
     await page.keyboard.press('ArrowRight')
     await page.waitForTimeout(1200) // code arrives late -> re-render
     // now place a comment live — comments render inline, next to the diff;

@@ -87,7 +87,9 @@ test('a block-wide-anchored AI finding shows its "hele blok" label on the group 
     // Reload so the comment is present from the start (avoids racing the
     // frontend's own poll cadence, same as related-nav.spec.mjs).
     await page.goto('/pr/12903')
-    await page.locator('[data-idx="1"]').click()
+    // By LABEL, not by raw index: the AI finding placed above now has its own
+    // index row (see indexComments in RelatedPanel.mjs), shifting the blocks.
+    await page.locator('[data-idx]').filter({ hasText: label }).first().click()
     await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight') // list -> diff, same first change group
 

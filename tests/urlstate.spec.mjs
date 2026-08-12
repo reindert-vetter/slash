@@ -88,14 +88,18 @@ test.describe('PR Review Tree — URL state persistence', () => {
 // under the `rel` namespace, so a refresh restores where the cursor sat in the
 // panel — not just which block/diff-line. See RelatedPanel.mjs (bindUrlState +
 // applyRelRestore) and .claude/docs/keyboard-navigation.md.
+const BLOCK1_LABEL = 'CreatePaymentAction::execute'
+
 test.describe('PR Review Tree — panel cursor URL state (rel.*)', () => {
   // intoRelated: list → diff → hand the keyboard to the panel (focus 'code').
   async function intoRelated(page) {
     await page.goto('/pr/12903')
     // Block 0 (ContractController::index, CONTROLLER-first — see categoryRank
     // in home.mjs) has no local diff to preview; select block 1
-    // (CreatePaymentAction::execute).
-    await page.locator('[data-idx="1"]').click()
+    // (CreatePaymentAction::execute). BY LABEL, not by raw index: a spec that
+    // seeded a comment first gets an extra index row for it (every unresolved
+    // comment does, see indexComments in RelatedPanel.mjs), shifting the blocks.
+    await page.locator('[data-idx]').filter({ hasText: BLOCK1_LABEL }).first().click()
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
     await page.keyboard.press('ArrowRight') // list → diff
     await page.keyboard.press('ArrowRight') // diff → related panel
@@ -133,7 +137,7 @@ test.describe('PR Review Tree — panel cursor URL state (rel.*)', () => {
     // CreatePaymentAction::execute), the same way related-nav does — writes go
     // through the workflow endpoint, so the write-boundary holds.
     await page.goto('/pr/12903')
-    await page.locator('[data-idx="1"]').click()
+    await page.locator('[data-idx]').filter({ hasText: BLOCK1_LABEL }).first().click()
     const card = page.getByTestId('block-column').locator('article').first()
     await expect(card).toBeVisible()
     const label = (await card.locator('h2').first().innerText()).trim()

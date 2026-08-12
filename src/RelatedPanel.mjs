@@ -22,6 +22,7 @@ import { labelForWorkflow } from './workflowLabels.mjs'
 import { claudeChatColumn, claudeStatusText } from './ClaudeChat.mjs'
 import { codePreviewColumn } from './CodePreview.mjs'
 import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
+import { syncCommentBatch, batchProgressFor, batchNoteFor } from './commentBatch.mjs'
 import { colWidthStyle, startColumnResize, resetColumnWidth, resizeHandle, parseAutoWidthPx } from './columnWidth.mjs'
 import { autoGrowTextarea, resetTextareaHeight } from './textareaAutoGrow.mjs'
 import { updateScrollFade } from './scrollFade.mjs'
@@ -2351,13 +2352,32 @@ function claudeQueueNote() {
 // report, per "laat weg als het er niks is". Words only, per the colourblind
 // rule — the pulsing dot next to each half is decoration on top, same as the
 // dot claude-chat-thinking already carried.
-export function CommentClaudeFooter() {
+//
+// `commentId` (optional) additionally makes this footer the log line of a
+// COMMENT BATCH run for that one comment (comment_batch.go): while the one agent
+// is working on it, the same `claude-chat-status` element shows the same live
+// "Claude leest src/x.php" sentence a chat turn shows, and afterwards it keeps
+// the one-line outcome ("verwerkt: …" / "overgeslagen: …"). Deliberately this
+// existing element rather than a log spot of its own — a batch run IS Claude
+// doing something to this comment, and the reviewer asked for the place that
+// already exists. Only commentDetailCard passes it (an index/PR-wide comment
+// row, the card the reviewer lands on when a batch starts).
+export function CommentClaudeFooter(commentId = '') {
   const view = claudeChatView()
   const claudeActive = () => view.busy() || !!view.progress() || view.queued().length > 0
+  // The batch half's own text: live while this comment is the current one,
+  // otherwise its finished note. Both come from the volatile snapshot, so this
+  // renders nothing at all for a comment no batch ever touched.
+  const batchText = () => {
+    if (!commentId) return ''
+    const p = batchProgressFor(commentId)
+    if (p) return claudeStatusText(p, 0)
+    return batchNoteFor(commentId)
+  }
   return html`
     <div class="contents">
       ${() =>
-        commentFooterText() || claudeActive()
+        commentFooterText() || claudeActive() || batchText()
           ? html`
               <div
                 class="flex w-0 min-w-full flex-wrap items-center gap-x-4 gap-y-1 border-t border-slate-100 dark:border-zinc-800/60 px-3 py-1.5 text-[11px] text-slate-500 dark:text-zinc-500"
@@ -2384,6 +2404,25 @@ export function CommentClaudeFooter() {
                           data-testid="claude-chat-status"
                         >
                           ${() => claudeStatusText(view.progress(), view.elapsed()) + claudeQueueNote()}
+                        </span>
+                      </span>`
+                    : ''}
+                ${() =>
+                  batchText()
+                    ? html`<span
+                        class="flex min-w-0 flex-1 items-start gap-1.5"
+                        data-testid="comment-batch-footer"
+                      >
+                        <span
+                          class="${() =>
+                            'mt-[0.3rem] inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-indigo-400' +
+                            (batchProgressFor(commentId) ? ' animate-pulse' : '')}"
+                        ></span>
+                        <span
+                          class="line-clamp-3 min-w-0 flex-1 [overflow-wrap:anywhere]"
+                          data-testid="comment-batch-status"
+                        >
+                          ${() => batchText()}
                         </span>
                       </span>`
                     : ''}
@@ -3362,6 +3401,9 @@ function syncComments(pr) {
     cs.sel = 0
     loadComments(pr)
   }
+  // The batch run's volatile per-comment snapshot rides along on the same PR
+  // (one read + the SSE push, no poll of its own — see commentBatch.mjs).
+  syncCommentBatch(pr)
   if (!refreshTimer) {
     refreshTimer = setInterval(() => cs.pr != null && loadComments(cs.pr), 5000)
   }
@@ -6104,7 +6146,7 @@ function moreAboveHint(n, testid) {
 // deliberately hide — matched on BOTH markers (AND) to avoid false positives.
 // Mirrors the Go-side isKiloReview in comment_import.go (the import-skip); this
 // frontend filter additionally hides any such comment already in the DB.
-function isKiloReview(body) {
+export function isKiloReview(body) {
   return !!body && body.includes('<!-- kilo-review -->') && body.includes('Code Review Summary')
 }
 
@@ -6127,10 +6169,25 @@ export function prWideComments() {
 
 // indexComments is the FULL set of comments that get a row in the block index —
 // the PR-wide/orphan ones above, PLUS every block-anchored (kind === '') comment
-// that mentions the local reviewer (see mentions.mjs). Such a comment already
-// lives in its block's own inline thread; the extra row is deliberate, so a
-// mention can't hide inside a block you haven't opened yet. It is one row, not
-// two: the inline thread is a different panel, not a second index item.
+// that is still UNRESOLVED (or mentions the local reviewer, see mentions.mjs).
+// Such a comment already lives in its block's own inline thread; the extra row
+// is deliberate, so an open comment can't hide inside a block you haven't opened
+// yet. It is one row, not two: the inline thread is a different panel, not a
+// second index item.
+//
+// The unresolved half is a reviewer decision with two visible consequences,
+// both wanted: every open comment becomes a stop on the ↑/↓ walk, and — because
+// blockApproveCount already scores a comment row as "resolved == approved"
+// (home.mjs) — the PR is only ever fully approved once every comment is
+// resolved, including other people's. Space on such a row resolves it (see
+// spaceKey in home.mjs), which is what makes that walk finishable. A RESOLVED
+// block-anchored comment drops out of the index again; a resolved PR-wide one
+// stays, exactly as before.
+//
+// One extra condition on that unresolved half lives in home.mjs, not here,
+// because it needs state.blocks: the comment's own block must actually be in the
+// tree (see recomputeLeftList). A row for a comment with no block to step into
+// would be a dead end.
 //
 // DEDUP ON c.id IS LOAD-BEARING, not cosmetic. A PR-wide comment that also
 // mentions me matches both halves, and two items would carry the SAME
@@ -6143,7 +6200,12 @@ export function indexComments() {
   const seen = new Set()
   for (const c of cs.list) {
     const prWide = (c.kind || c.anchorState === 'orphan') && !isKiloReview(c.body)
-    if (!prWide && !(!c.kind && !isOrphanComment(c) && commentMentionsMe(c))) continue
+    const inBlock =
+      !c.kind &&
+      !isOrphanComment(c) &&
+      !isKiloReview(c.body) &&
+      (c.status !== 'resolved' || commentMentionsMe(c))
+    if (!prWide && !inBlock) continue
     if (seen.has(c.id)) continue
     seen.add(c.id)
     out.push(c)
@@ -6740,6 +6802,13 @@ export function commentDetailCard(c, opts) {
               </div>`
             : ''}
       </div>
+      ${() =>
+        // The SAME status/log line the block-scoped comment card already has
+        // (comment-claude-row in home.mjs) — here it also carries this comment's
+        // own comment_batch state, live while Claude is working on it and as a
+        // one-line outcome afterwards. Renders nothing when there's nothing to
+        // report, so an ordinary comment card is unchanged.
+        CommentClaudeFooter(c.id)}
     </div>
   `
 }

@@ -52,6 +52,18 @@ wrong screen. That is what lets the server drop frames freely under pressure.
 - Keep-alive: a `: ping` comment every `sseKeepAlive` (20s), plus a
   `retry: 3000` hint on connect.
 
+### `commentbatch.progress` — the one event whose payload has no read model at all
+
+Like `chat.progress` it carries a volatile snapshot rather than a "go refetch"
+nudge (`comment_batch_progress.go`, `GET /api/comment-batch?pr=N` is its resync
+read). It goes one step further than the others, though, and that is deliberate:
+a `comment_batch` run leaves **no** durable per-comment trace — it only edits
+code, never replies to or resolves a thread — so this snapshot is the only place
+"Claude is working on this comment / has handled it" ever exists. Which is why
+the server keeps it after the run finished and a restart simply loses it (the
+comments are then plain open comments again). Consumers: `src/commentBatch.mjs`
+(one shared reactive snapshot for the index pill and the comment's log line).
+
 ### The type travels in the payload, not in the SSE `event:` field
 
 Load-bearing, not a style choice: a **named** SSE event only reaches a listener

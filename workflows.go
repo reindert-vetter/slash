@@ -174,6 +174,13 @@ const (
 	// only the automatic trigger does. See the "AI risk check" section of
 	// .claude/docs/workflows-analysis.md.
 	WorkflowAutoWarn = "auto_warn"
+	// WorkflowCommentBatch is the Workflow Type behind "laat Claude alle
+	// openstaande comments verwerken": ONE agentic Opus run that walks every
+	// open comment of a PR and edits code for it, landing the result through the
+	// existing chat_merge queue. One-shot, signal-less, and it deliberately never
+	// replies to or resolves a comment — see comment_batch.go and
+	// .claude/docs/workflows-comments.md.
+	WorkflowCommentBatch = "comment_batch"
 	// SignalReply is the Signal Name a reaction is delivered under.
 	SignalReply = "reply"
 	// SignalPRState is the Signal Name the poller delivers an observed PR state
@@ -2348,6 +2355,20 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		publishChatChanged(arg.PR, arg.ConversationID)
 		return nil, nil
 	})
+	// Activity: the ONE agentic Claude run that works through a PR's open
+	// comments (side effect: shells out via claude.Client.RunChat and edits files
+	// in the batch's own shadow worktree). Returns only counts + whether the
+	// worktree now holds work to land — see comment_batch.go.
+	engine.RegisterActivity("runCommentBatch", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg commentBatchArg
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.claude == nil || m.comments == nil {
+			return json.Marshal(commentBatchResult{})
+		}
+		return json.Marshal(runCommentBatch(ctx, m, m.comments, m.chat, m.claude, m.dataDir, arg))
+	})
 	// Activity: hand one conversation's "commit deze wijziging" request off to
 	// the PR's own chat_merge queue (write: ensures + signals a DIFFERENT
 	// Workflow Execution — the same cross-workflow Ensure+Signal shape
@@ -2412,6 +2433,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowCleanup, cleanupWorkflow)
 	engine.RegisterWorkflow(WorkflowClaudeChat, claudeChatWorkflow)
 	engine.RegisterWorkflow(WorkflowChatMerge, chatMergeQueueWorkflow)
+	engine.RegisterWorkflow(WorkflowCommentBatch, commentBatchWorkflow)
 
 	// The LLM-heavy workflows make many/long claude calls (resolve_call runs one
 	// claude call per unresolved call in the block; code_warning a whole agentic
@@ -2431,6 +2453,10 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// chat_merge's own processChatMerge Activity can, on a real conflict, run one
 	// claude subprocess call (resolveConflictWithClaude) — same reasoning.
 	engine.SetWorkflowPriority(WorkflowChatMerge, tembed.PriorityLow)
+	// comment_batch's single Activity IS a long agentic run (minutes) — same
+	// reasoning, plus this is what makes StartCommentBatch's StartWorkflowDeferLow
+	// hand the run off to the background instead of holding the HTTP request.
+	engine.SetWorkflowPriority(WorkflowCommentBatch, tembed.PriorityLow)
 
 	// pr_status itself is important (merge/close detection + ingest refresh) and
 	// stays Normal — but its one slow LLM step, generatePRSummary (a Haiku call),

@@ -112,6 +112,17 @@ var ChatReadOnlySystemPrompt string
 //go:embed prompts/chat_shell.md
 var ChatShellSystemPrompt string
 
+// CommentBatchSystemPrompt is the static instruction block for the
+// comment_batch workflow's ONE agentic Opus run (comment_batch.go): work
+// through every open comment of a PR in a single session, editing code only —
+// never replying to or resolving a thread, which stays the reviewer's own
+// call. It also fixes the `[slash:start]`/`[slash:done]`/`[slash:skip]` marker
+// lines the run streams back, which are what makes per-comment progress
+// visible while one agent is still running (comment_batch_progress.go).
+//
+//go:embed prompts/comment_batch.md
+var CommentBatchSystemPrompt string
+
 // ChatConflictSystemPrompt is the static instruction block for chat_merge's
 // one begrensde Claude attempt when an automatic `git merge` of two chat
 // conversations' shadow-worktree edits leaves real conflicts. A one-shot,
