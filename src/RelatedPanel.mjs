@@ -2570,7 +2570,20 @@ function recomputeCodePreviews() {
     return
   }
   const root = document.querySelector('[data-testid="comment-claude-columns"]')
-  const fences = root ? Array.from(root.querySelectorAll('[data-testid="code-fence"]')) : []
+  // A comment card that isn't currently focused renders `compactConversation`
+  // (see its own doc comment), which still runs the body through
+  // `commentBody`/`renderMarkdown` — so a fence inside it is present in the
+  // DOM (visually clamped via `line-clamp-3`, not actually removed) even
+  // while the card is collapsed. Only a fence inside the FOCUSED card
+  // (`expandedConversation`, `data-expanded="true"`) — or one with no
+  // `comment-item` ancestor at all, i.e. a Claude chat bubble, which has no
+  // compact/expanded state — should get a full-size preview here.
+  const fences = root
+    ? Array.from(root.querySelectorAll('[data-testid="code-fence"]')).filter((el) => {
+        const card = el.closest('[data-testid="comment-item"]')
+        return !card || card.dataset.expanded === 'true'
+      })
+    : []
   const t = getCommentTarget()
   const currentCode = t && t.file && t.code ? t.code : null
   const next = fences.map((el, i) => {

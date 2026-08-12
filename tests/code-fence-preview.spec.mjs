@@ -76,6 +76,45 @@ test('every fenced code block, suggestion included, shows a full-size preview st
   await expect(page.getByTestId('code-preview-close')).toHaveCount(0)
 })
 
+// A comment index item can be SELECTED (its block auto-expands) without being
+// CLICKED/focused — see "A block-anchored index item auto-expands its block…"
+// in .claude/docs/comments-panel.md. Its card then renders compactConversation
+// (line-clamp-3), which still carries the fence's `data-fence-code` in the
+// DOM. recomputeCodePreviews must not pick that up: a preview card must only
+// appear once the card is actually expanded (clicked/focused).
+test('a collapsed (not yet clicked) comment card shows no preview card', async ({ page }, testInfo) => {
+  const pr = seededPr(testInfo)
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: {
+      pr,
+      file: 'test.php',
+      line: 1,
+      author: 'reviewer',
+      body: 'zie voorstel:\n```suggestion\n$hasRestrictions = false;\n```',
+      code: '$order->total();',
+      gran: 'call',
+      label: 'Order::total',
+    },
+  })
+  expect((await start.json()).runId).toBeTruthy()
+
+  await page.goto('/pr/' + pr)
+  await leaveSearchBox(page)
+  const item = page.getByTestId('comment-item').first()
+  await expect(item).toBeVisible()
+  await expect(item).toHaveAttribute('data-expanded', 'false')
+
+  // The fence wrapper is present in the collapsed card, but no preview card
+  // must render for it yet.
+  await expect(page.getByTestId('code-fence')).toHaveCount(1)
+  await expect(page.getByTestId('code-preview-card')).toHaveCount(0)
+
+  // Clicking the card expands it and the preview card now appears.
+  await item.click()
+  await expect(item).toHaveAttribute('data-expanded', 'true')
+  await expect(page.getByTestId('code-preview-card')).toHaveCount(1)
+})
+
 // D1's answer to "wat is oud/nieuw": the "Huidig (PR)" pane is the CURRENT
 // code of the unit the comment is scoped to (commentTarget().code), not the
 // comment's own file/line in the abstract — only present when such a unit

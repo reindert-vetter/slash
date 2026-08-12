@@ -2208,6 +2208,33 @@ Test: `tests/code-fence-preview.spec.mjs` (or a sibling spec) asserts a
 carrying `code-fence-fade-bottom`) inline while its preview card below still
 shows the full code.
 
+## A preview card only shows for a fence inside the FOCUSED comment card
+
+`compactConversation` (the collapsed summary rendered for every comment card
+that isn't currently focused, see its own doc comment in `RelatedPanel.mjs`)
+still runs its body through `commentBody`/`renderMarkdown`, so a fence's
+`<div data-testid="code-fence">` wrapper — `data-fence-code` and all — is
+genuinely present in the DOM even while the card is collapsed; `line-clamp-3`
+only clips it visually. Left as-is, `recomputeCodePreviews` (see "Always on,
+stacked in one column" above) picked that fence up too, so a "Suggestie
+N"/"Codeblok N" preview card appeared for a `↑`/`↓`-selected-but-not-yet-opened
+comment index item — see "A block-anchored index item auto-expands its block…"
+in this doc/`.claude/docs/comments-panel.md` for the navigation state (a
+selected comment's block auto-expands, but the comment card itself only
+expands once the keyboard actually moves into it via `→`) that made this
+visible: the reviewer saw a full "Suggestie 1" card for a comment they hadn't
+opened yet.
+
+**Fix:** `recomputeCodePreviews` filters `[data-testid="code-fence"]` matches
+by `el.closest('[data-testid="comment-item"]')` — both `compactConversation`
+and `expandedConversation` stamp that testid plus `data-expanded="false"`/
+`"true"` on their own root — and only keeps a fence whose nearest such
+ancestor is expanded, or has none at all (a Claude chat bubble, which has no
+compact/expanded state and always shows its fences). Switching a card between
+compact and expanded replaces the whole subtree (different templates), which
+is already a `childList` mutation the existing `MutationObserver` picks up —
+no new observer config needed.
+
 ## Open (frontend gaps)
 
 - No draft-persistence (`composeDrafts`/`replyDrafts`-style) for the chat
