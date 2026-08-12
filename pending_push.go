@@ -17,7 +17,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -88,7 +87,7 @@ func pendingPushStateOf(repo string, pr int) (state, errMsg string) {
 // branch was renamed can briefly leave two refs; the most recently committed
 // one wins, and the stale one is swept with the PR (cleanup.go).
 func pendingPushRefFor(ctx context.Context, repo string, pr int) (ref, headRef string) {
-	prefix := fmt.Sprintf("refs/slash/pending/pr-%d/", pr)
+	prefix := pendingRefPrefix(repo, pr)
 	out, err := runGitFor(ctx, repo, "for-each-ref", "--sort=-committerdate", "--format=%(refname)", prefix)
 	if err != nil {
 		return "", ""
@@ -215,7 +214,7 @@ func pushFailureReason(err error) string {
 // removePendingRefs deletes every pending ref of a PR — used when the PR itself
 // is purged (cleanup.go). Best-effort, like every other git call in that sweep.
 func removePendingRefs(ctx context.Context, repo string, pr int) {
-	prefix := fmt.Sprintf("refs/slash/pending/pr-%d/", pr)
+	prefix := pendingRefPrefix(repo, pr)
 	out, err := runGitFor(ctx, repo, "for-each-ref", "--format=%(refname)", prefix)
 	if err != nil {
 		return

@@ -70,13 +70,20 @@ func chatShadowBranch(conversationID string) string {
 // git alone (`git for-each-ref refs/slash/pending/pr-<n>/`) without a gh call —
 // that is what keeps the pending-push read model (tasks_api.go) purely local.
 func prPendingRef(repo string, pr int, headRefName string) string {
-	// The primary repo keeps the historical ref layout byte-for-byte (an already
-	// landed, not-yet-pushed edit must stay findable); another repo gets its key
-	// as an extra path segment.
+	return pendingRefPrefix(repo, pr) + headRefName
+}
+
+// pendingRefPrefix is the ref-path prefix shared by prPendingRef and every
+// reader that enumerates a PR's pending refs (pendingPushRefFor/
+// removePendingRefs in pending_push.go) — kept in ONE place so the two sides
+// can never drift apart again. The primary repo keeps the historical ref
+// layout byte-for-byte (an already landed, not-yet-pushed edit must stay
+// findable); another repo gets its key as an extra path segment.
+func pendingRefPrefix(repo string, pr int) string {
 	if repo != "" {
-		return fmt.Sprintf("refs/slash/pending/%s/pr-%d/%s", repoKeyOf(repo), pr, headRefName)
+		return fmt.Sprintf("refs/slash/pending/%s/pr-%d/", repoKeyOf(repo), pr)
 	}
-	return fmt.Sprintf("refs/slash/pending/pr-%d/%s", pr, headRefName)
+	return fmt.Sprintf("refs/slash/pending/pr-%d/", pr)
 }
 
 // pendingRefSHA resolves ref to a commit SHA, or "" when it doesn't exist

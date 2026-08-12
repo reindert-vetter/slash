@@ -98,6 +98,50 @@ func TestPushPendingPRPushesAndDropsTheRef(t *testing.T) {
 	}
 }
 
+// A non-primary repo's pending ref carries its key as an extra path segment
+// (chat_shadow.go's prPendingRef) — this must be exactly the prefix
+// pendingPushRefFor/removePendingRefs enumerate, via the single shared
+// pendingRefPrefix, or a second repo's landed edit would never be found (nor
+// swept by cleanup). Regression for a real drift between the two.
+func TestLoadPendingPushFindsANonPrimaryRepo(t *testing.T) {
+	_, cloneDir := setupChatShadowRepo(t, "feature/x", "v1\n")
+	writeSettings(t, `{"repos":[
+		{"slug":"plug-and-pay/plug-and-pay","key":"pap","primary":true},
+		{"slug":"plug-and-pay/plug-and-pay-ops","key":"ops","dir":"`+cloneDir+`","baseBranch":"master"}
+	]}`)
+	const ops = "plug-and-pay/plug-and-pay-ops"
+	dataDir := t.TempDir()
+	ctx := context.Background()
+
+	if v := loadPendingPush(ctx, ops, 12); v != nil {
+		t.Fatalf("expected no pending push before anything landed, got %+v", v)
+	}
+
+	dir, err := ensureChatShadowWorktreeAt(ctx, dataDir, ops, 12, "conv-ops", "feature/x")
+	if err != nil {
+		t.Fatalf("ensure shadow: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("edited by claude\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if msg := commitChatShadowEditsAt(ctx, testChatModule(t), dataDir, ops, 12, "conv-ops", "turn-ops", "feature/x"); msg.Kind == chat.KindError {
+		t.Fatalf("landing failed: %+v", msg)
+	}
+
+	v := loadPendingPush(ctx, ops, 12)
+	if v == nil {
+		t.Fatal("expected a pending push after a landing on the second repo")
+	}
+	if v.HeadRef != "feature/x" {
+		t.Fatalf("headRef = %q, want feature/x", v.HeadRef)
+	}
+
+	removePendingRefs(ctx, ops, 12)
+	if v := loadPendingPush(ctx, ops, 12); v != nil {
+		t.Fatalf("pending ref survived removePendingRefs: %+v", v)
+	}
+}
+
 // A push the remote refuses (someone else pushed meanwhile) must never force
 // anything: the ref is KEPT so the reviewer can merge and retry, and the row
 // reports a failure with an actionable reason.
