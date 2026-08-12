@@ -53,6 +53,59 @@ func TestIngestWorkflowEndToEnd(t *testing.T) {
 	}
 }
 
+// TestIngestWorkflowEndToEndSecondRepo is TestIngestWorkflowEndToEnd's sibling
+// for a NON-primary repo — the exact path that silently dropped `repo` on the
+// way from StartIngest through ingestWorkflow's own Activity args (both fixed
+// alongside this test): without those fixes a second repo's ingest landed its
+// blocks under the primary repo's "" instead. Needs the second repo's real
+// local clone (see repos.go's default `~/dev/<name>` — same convention
+// TestIngestWorkflowEndToEnd relies on for the primary repo), so it skips
+// itself when that repo isn't reachable rather than flaking CI.
+func TestIngestWorkflowEndToEndSecondRepo(t *testing.T) {
+	if _, err := exec.Command("gh", "pr", "view", "12", "--repo", opsSlug, "--json", "number").Output(); err != nil {
+		t.Skipf("gh not reachable, skipping: %v", err)
+	}
+	twoRepoRegistry(t)
+
+	dataDir := t.TempDir()
+	pr := 12
+
+	db, err := openDB(filepath.Join(dataDir, "graph.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	engine := tembed.New(tembed.NewMemoryStore())
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, db, dataDir, repoSlug)
+
+	res, err := m.StartIngest(context.Background(), opsSlug, pr)
+	if err != nil {
+		t.Fatalf("StartIngest: %v", err)
+	}
+	if res.Stored == 0 {
+		t.Fatalf("ingest stored 0 blocks: %+v", res)
+	}
+
+	blocks, err := blocksByPR(db, opsSlug, pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blocks) != res.Stored {
+		t.Fatalf("second repo's own blocks = %d, StartIngest reported %d", len(blocks), res.Stored)
+	}
+
+	// And the primary repo's own row space (same PR number, different repo)
+	// must stay untouched — the whole point of the fix.
+	primaryBlocks, err := blocksByPR(db, "", pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(primaryBlocks) != 0 {
+		t.Fatalf("the second repo's ingest leaked into the primary repo's PR %d: %+v", pr, primaryBlocks)
+	}
+}
+
 // TestStartIngestSurfacesRealFailure asserts StartIngest's error carries the
 // actual recorded failure (the ActivityFailed/WorkflowFailed text), not just a
 // bare "ingest failed (run ...)" the reviewer would have to look up in the

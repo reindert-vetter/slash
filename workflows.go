@@ -2753,9 +2753,10 @@ func ingestWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 
 	var res ingestResult
 	arg := struct {
+		Repo string       `json:"repo,omitempty"`
 		PR   int          `json:"pr"`
 		Shas worktreeSHAs `json:"shas"`
-	}{PR: in.PR, Shas: shas}
+	}{Repo: in.Repo, PR: in.PR, Shas: shas}
 	if err := w.ExecuteActivity("scanAndStoreBlocks", arg, &res); err != nil {
 		return nil, fmt.Errorf("scan and store blocks: %w", err)
 	}
@@ -2771,7 +2772,7 @@ func ingestWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	// Activity is a cheap no-op there. Deliberately after the blocks are stored:
 	// the matcher resolves each anchor against the PR's CURRENT blocks.
 	if err := w.ExecuteActivity("reanchorAfterRefresh", map[string]any{
-		"pr": in.PR, "prevBaseSHA": res.PrevBaseSHA,
+		"repo": in.Repo, "pr": in.PR, "prevBaseSHA": res.PrevBaseSHA,
 		"prevHeadSHA": res.PrevHeadSHA, "changedFiles": res.ChangedFiles,
 	}, nil); err != nil {
 		return nil, fmt.Errorf("reanchor after ingest: %w", err)
@@ -2784,7 +2785,7 @@ func ingestWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 // result summary. Starting an Execution is the sanctioned write path — this is
 // the only way blocks/worktrees are written.
 func (m *TaskManager) StartIngest(ctx context.Context, repo string, pr int) (*ingestResult, error) {
-	runID, err := m.engine.StartWorkflow(WorkflowIngest, IngestInput{PR: pr})
+	runID, err := m.engine.StartWorkflow(WorkflowIngest, IngestInput{Repo: repo, PR: pr})
 	if err != nil {
 		return nil, err
 	}

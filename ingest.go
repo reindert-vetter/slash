@@ -200,6 +200,14 @@ func scanAndStoreIngestBlocksLocked(ctx context.Context, db *sql.DB, dataDir str
 	if len(blocks) == 0 && len(scanPaths) > 0 {
 		return nil, fmt.Errorf("pr %d: parsed zero blocks from %d files", pr, len(scanPaths))
 	}
+	// parseFiles/classifyFile know nothing about repos — they only see the two
+	// worktrees — so every block comes back with the zero-value Repo. Stamp the
+	// real one here, before it reaches replacePRBlocks (which inserts b.Repo
+	// per row, not this function's own `repo` param): without this a second
+	// repo's ingest silently wrote its blocks under the primary repo's "".
+	for i := range blocks {
+		blocks[i].Repo = repo
+	}
 
 	if err := replacePRBlocks(db, repo, pr, blocks); err != nil {
 		return nil, err
@@ -296,6 +304,10 @@ func refreshIngestDelta(ctx context.Context, db *sql.DB, dataDir string, repo st
 	blocks, perr := parseFiles(pr, deltaFiles, nil, baseDir, headDir, diffs)
 	for _, e := range perr {
 		log.Printf("ingest refresh pr %d: parse warning: %v", pr, e)
+	}
+	// Same stamp as the full-ingest path above — see that comment.
+	for i := range blocks {
+		blocks[i].Repo = repo
 	}
 
 	if err := upsertPRFileBlocks(db, repo, pr, deltaFiles, blocks); err != nil {
