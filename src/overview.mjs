@@ -661,7 +661,7 @@ function rowInner(pr, opts) {
     `,
     html`
       <div class="flex shrink-0 items-center gap-3">
-        ${statusArea(pr)} ${() => approvalPill(pr)} ${() => unpushedPill(pr)} ${commentsBit(pr)} ${graphChip(pr)} ${chevronFilled('h-4 w-4 text-slate-400 dark:text-zinc-600 group-hover:text-slate-600 dark:group-hover:text-zinc-300')}
+        ${statusArea(pr)} ${() => approvalPill(pr)} ${() => unpushedPill(pr)} ${commentsBit(pr)} ${() => graphChip(pr)} ${chevronFilled('h-4 w-4 text-slate-400 dark:text-zinc-600 group-hover:text-slate-600 dark:group-hover:text-zinc-300')}
       </div>
     `,
   ]
@@ -788,6 +788,13 @@ async function generatePage(pr, { redirect = true } = {}) {
     if (redirect) {
       location.href = treeUrl(pr)
     } else {
+      // No reloadSnapshot() here (see the comment above) — but the reviewer
+      // still needs visible proof the generate succeeded, so flip this row's
+      // own hasGraph locally: the reactive graphChip/popover-action bindings
+      // above pick this straight up (chip -> "Gegenereerd", popover ->
+      // "Open review-boom"/"Opnieuw genereren") without waiting for the next
+      // refresh/60s poll.
+      pr.hasGraph = true
       ui.ingesting = null
       focusCloseAfterGenerate(pr)
     }
@@ -1250,7 +1257,7 @@ function popover(pr) {
           >esc</span
         >
       </button>
-      ${treeSupported(pr) ? (pr.hasGraph ? ingestedActions(pr) : generateAction(pr)) : ''}
+      ${() => (treeSupported(pr) ? (pr.hasGraph ? ingestedActions(pr) : generateAction(pr)) : '')}
       <a href="${pr.url}" target="_blank" rel="noreferrer" class="${popoverRowCls()}">
         ${icon('external-link', 'h-3.5 w-3.5')} Open op GitHub
       </a>

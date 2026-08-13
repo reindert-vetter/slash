@@ -173,6 +173,10 @@ test.describe('PR Review Tree — PR inbox', () => {
     const close = page.locator('[data-testid="pr-popover"] [data-testid="close-popover"]')
     await expect(close).toBeFocused()
     await expect(page).toHaveURL(/\/pr-overview$/)
+    // Visible proof the generate actually succeeded, without a
+    // reloadSnapshot(): the popover's own action row flips to the
+    // ingested-row actions right away.
+    await expect(page.locator('[data-testid="pr-popover"] [data-testid="open-tree"]')).toBeVisible()
 
     // And that focus is real keyboard ownership: Enter closes the menu.
     await page.keyboard.press('Enter')
@@ -213,9 +217,13 @@ test.describe('PR Review Tree — PR inbox', () => {
     await expect(generate).toBeDisabled()
 
     resolveIngest()
-    // No navigation once it finishes — the button becomes usable again and the
-    // reviewer stays in the overview (see the test above).
-    await expect(generate).toBeEnabled()
+    // No navigation once it finishes — the reviewer stays in the overview
+    // (see the test above). The popover's action row also proves the
+    // generate succeeded, without waiting for a reloadSnapshot(): it flips
+    // from "generate-page" to the ingested-row actions ("Open review-boom" +
+    // "Opnieuw genereren").
+    await expect(page.locator('[data-testid="pr-popover"] [data-testid="open-tree"]')).toBeVisible()
+    await expect(page.locator('[data-testid="pr-popover"] [data-testid="regenerate-page"]')).toBeEnabled()
     await expect(page).toHaveURL(/\/pr-overview$/)
   })
 
