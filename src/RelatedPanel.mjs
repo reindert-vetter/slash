@@ -116,6 +116,18 @@ const cs = reactive({
   pendingComment: null,
   focus: null,
   threadPos: 0,
+  // threadPinned mirrors "is the reviewer's own mouse-scroll still sitting at
+  // the bottom of the comment-thread pane" — independent of threadPos, which
+  // only tracks the ↑/↓ KEYBOARD cursor and stays 0 (rest) even while the
+  // reviewer scrolls the pane's native scrollbar up by hand to reread an
+  // older message. scrollCommentThreadToBottom used to force-scroll to the
+  // newest message on every comment poll purely off threadPos === 0, so a
+  // manual scroll-up got silently yanked back down within a few seconds —
+  // reported bug. Kept alongside threadPos rather than in its own map: this
+  // module only ever shows ONE comment's thread expanded at a time. Reset to
+  // true whenever the thread is (re)entered at rest (toComment) and updated
+  // live by the pane's own @scroll handler (see updateCommentThreadPinned).
+  threadPinned: true,
   // claudePos is threadPos's twin for the embedded Claude conversation
   // ('claude', see the "Embedded Claude conversation" section below): 0 = the
   // composer (typing), 1..n = the n-th turn from the bottom.
@@ -134,6 +146,11 @@ const cs = reactive({
   // keyboard highlight, like state.rangeAnchor, not a navigation position
   // worth restoring after a refresh.
   claudeOptionSel: 0,
+  // claudePinned is threadPinned's twin for the embedded Claude chat pane —
+  // see threadPinned's own doc comment just above. Reset to true whenever the
+  // conversation is (re)entered at rest (enterClaudeChat/toNewFocus/a fresh
+  // anchor) and updated live by claude-chat-thread's own @scroll handler.
+  claudePinned: true,
   scope: null,
   scopeSig: '',
   codeSel: 0,
@@ -929,6 +946,7 @@ function toComment(focusInput = true) {
   cs.composing = false
   cs.focus = 'comment'
   cs.threadPos = 0
+  cs.threadPinned = true
   cs.claudeOptionSel = 0
   scrollCommentIntoView()
   scrollCommentThreadToBottom()
@@ -1201,23 +1219,96 @@ function scrollReactionIntoView() {
   })
 }
 
+// PINNED_EDGE_PX — how close to the bottom edge still counts as "at the
+// bottom" for updateCommentThreadPinned/updateClaudeThreadPinned below. A
+// couple of px of slack for sub-pixel scroll rounding, not a real threshold.
+const PINNED_EDGE_PX = 8
+
+// updateCommentThreadPinned/updateClaudeThreadPinned track whether the
+// reviewer's OWN mouse/wheel scroll still sits at the bottom of the pane —
+// independent of threadPos/claudePos, which only track the ↑/↓ KEYBOARD
+// cursor and stay at rest (0) even while the pane's native scrollbar is
+// dragged up by hand. Called from the pane's own @scroll handler, alongside
+// updateScrollFade.
+function updateCommentThreadPinned(el) {
+  if (!el) return
+  cs.threadPinned = el.scrollTop + el.clientHeight >= el.scrollHeight - PINNED_EDGE_PX
+}
+function updateClaudeThreadPinned(el) {
+  if (!el) return
+  cs.claudePinned = el.scrollTop + el.clientHeight >= el.scrollHeight - PINNED_EDGE_PX
+}
+
+// jumpToCommentThreadBottom/jumpToClaudeThreadBottom are the "scroll to
+// recent messages" button's own handler (ClaudeChat.mjs's counterpart calls
+// the Claude one via a callback, see claudeChatView) — re-pin, THEN scroll,
+// since scrollCommentThreadToBottom/scrollClaudeThreadToBottom below are now
+// themselves no-ops while not pinned.
+export function jumpToCommentThreadBottom() {
+  cs.threadPinned = true
+  scrollCommentThreadToBottom()
+}
+export function jumpToClaudeThreadBottom() {
+  cs.claudePinned = true
+  scrollClaudeThreadToBottom()
+}
+
+// scrollToRecentButton — the small floating "you scrolled away, here's the
+// newest messages" button, shown by expandedConversation while
+// cs.threadPos === 0 && !cs.threadPinned. Same round pill/chevron look as
+// Block.mjs's scrollHint (a static SVG string through the .innerHTML
+// binding, safe since it's our own markup) — the shape carries the meaning
+// per the colorblind rule, so no text label is needed, but a title/
+// aria-label names it anyway. `onClick` is jumpToCommentThreadBottom or
+// jumpToClaudeThreadBottom (this file), or ClaudeChat.mjs's own small local
+// copy of this component for claude-chat-thread — kept file-local rather
+// than shared, since ClaudeChat.mjs deliberately never imports this file
+// back (see its own header comment).
+const SCROLL_TO_BOTTOM_TITLE = 'Naar recente berichten'
+function scrollToRecentButton(onClick, testid) {
+  return html`
+    <button
+      type="button"
+      class="absolute bottom-2 right-2 z-10 flex h-7 w-7 items-center justify-center rounded-full bg-emerald-500 text-white shadow-sm ring-1 ring-black/5 hover:bg-emerald-600"
+      data-testid="${testid}"
+      title="${SCROLL_TO_BOTTOM_TITLE}"
+      aria-label="${SCROLL_TO_BOTTOM_TITLE}"
+      @click="${() => onClick()}"
+    >
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="h-3.5 w-3.5"><path d="M6 9l6 6 6-6"/></svg>
+    </button>
+  `.key(testid)
+}
+
 // scrollCommentThreadToBottom keeps the newest message in view while the
-// reviewer sits at the rest position (cs.threadPos === 0) — the exact mirror
-// of scrollClaudeThreadToBottom below (`comment-thread` is now itself the
-// scrolling container, capped at max-h-[38vh], see "A capped, fading thread"
-// in .claude/docs/comments-panel.md). Called after toComment() resets
-// threadPos to 0 and after a comment poll (loadComments) brings in a new
-// reply on the currently-open thread. A no-op at any other threadPos —
-// walking older messages via ↑ must never be yanked back down. Also updates
-// the top-fade class directly, since a JS-driven scrollTop write isn't
-// guaranteed to fire a native 'scroll' event in every browser.
+// reviewer sits at the rest position (cs.threadPos === 0) AND hasn't
+// scrolled the pane itself away from the bottom by hand (cs.threadPinned) —
+// the exact mirror of scrollClaudeThreadToBottom below (`comment-thread` is
+// now itself the scrolling container, capped at max-h-[38vh], see "A capped,
+// fading thread" in .claude/docs/comments-panel.md). Called after
+// toComment() resets threadPos to 0 and after a comment poll (loadComments)
+// brings in a new reply on the currently-open thread. A no-op at any other
+// threadPos — walking older messages via ↑ must never be yanked back down —
+// and now ALSO a no-op while the reviewer has manually scrolled up: without
+// threadPinned, a poll landing a few seconds later silently snapped a
+// manual scroll-up back down (reported bug) — jumpToCommentThreadBottom's
+// own button (rendered while !threadPinned, see expandedConversation) is the
+// explicit way back down instead. Also updates the top-fade class directly,
+// since a JS-driven scrollTop write isn't guaranteed to fire a native
+// 'scroll' event in every browser.
 function scrollCommentThreadToBottom() {
-  if (cs.threadPos !== 0) return
+  if (cs.threadPos !== 0 || !cs.threadPinned) return
   requestAnimationFrame(() => {
     const el = document.querySelector('[data-testid=comment-thread]')
     if (!el) return
     el.scrollTop = el.scrollHeight
     updateScrollFade(el)
+    // Same "a JS-driven scrollTop write isn't guaranteed to fire a native
+    // 'scroll' event" reasoning as updateScrollFade just above — without this
+    // direct call, threadPinned could be left stuck at a stale `false` (e.g.
+    // from a transient scroll during layout/focus) with nothing to ever flip
+    // it back to true again, permanently suppressing this very function.
+    updateCommentThreadPinned(el)
   })
 }
 
@@ -1383,6 +1474,7 @@ function syncClaudeAnchorForSelection() {
   cc.messages = []
   cc.runId = null
   cc.progress = null
+  cs.claudePinned = true // a different conversation always starts pinned to its own bottom
   cc.sendError = '' // another conversation, so the previous one's rejection no longer applies
   if (nextId == null) {
     cc.status = 'idle'
@@ -1433,6 +1525,7 @@ async function ensureAndLoadChat(pr, commentId) {
     cc.runId = null
     cc.summary = ''
     cc.summaryStatus = ''
+    cs.claudePinned = true // a different conversation always starts pinned to its own bottom
   }
   cc.status = 'loading'
   try {
@@ -1803,6 +1896,7 @@ export async function clearClaudeChat() {
   // but the reviewer's OWN action shouldn't wait on that round trip.
   cc.progress = null
   cs.claudePos = 0
+  cs.claudePinned = true
   cs.claudeOptionSel = 0
   const anchor = cc.commentId != null ? commentById(cc.commentId) : null
   if (anchor && anchor.body === CLAUDE_ANCHOR_PLACEHOLDER) {
@@ -2138,6 +2232,7 @@ export async function enterClaudeChat(pr) {
   const token = focusToken
   cs.focus = 'claude'
   cs.claudePos = 0
+  cs.claudePinned = true
   cs.claudeOptionSel = 0
   await ensureAndLoadChat(pr, c.id)
   if (token !== focusToken) return
@@ -2166,6 +2261,7 @@ export async function enterClaudeChat(pr) {
 function enterClaudeChatFromNew() {
   cs.focus = 'claude'
   cs.claudePos = 0
+  cs.claudePinned = true
   cs.claudeOptionSel = 0
   focusClaudeComposer()
 }
@@ -2286,27 +2382,36 @@ function scrollClaudeMessageIntoView0Options() {
 }
 
 // scrollClaudeThreadToBottom keeps the newest turn in view while the
-// reviewer sits at the rest position (cs.claudePos === 0). Unlike
-// scrollIntoViewVertical (which walks up to an ANCESTOR that scrolls),
-// `claude-chat-thread` (ClaudeChat.mjs) is itself the scrolling container —
-// so this sets its own scrollTop directly, no ancestor lookup, no conflict
-// with the scrollIntoView axis rule in arrowjs-pitfalls.md. Called after a
-// send (focusClaudeComposer), after a transcript refetch adds a message
-// (loadChatMessages) and while the live progress/partial bubble grows
-// (applyChatProgress) — the three moments new content is appended at the
-// bottom of that div without anything moving its scroll position on its
+// reviewer sits at the rest position (cs.claudePos === 0) AND hasn't
+// scrolled the pane itself away from the bottom by hand (cs.claudePinned,
+// see updateClaudeThreadPinned above — same "manual scroll-up got snapped
+// back down" bug as the comment thread's own scrollCommentThreadToBottom).
+// Unlike scrollIntoViewVertical (which walks up to an ANCESTOR that
+// scrolls), `claude-chat-thread` (ClaudeChat.mjs) is itself the scrolling
+// container — so this sets its own scrollTop directly, no ancestor lookup,
+// no conflict with the scrollIntoView axis rule in arrowjs-pitfalls.md.
+// Called after a send (focusClaudeComposer), after a transcript refetch adds
+// a message (loadChatMessages) and while the live progress/partial bubble
+// grows (applyChatProgress) — the three moments new content is appended at
+// the bottom of that div without anything moving its scroll position on its
 // own. A no-op at any other cs.claudePos (walking older turns via ↑ must
-// never be yanked back down).
+// never be yanked back down) or while manually scrolled up —
+// jumpToClaudeThreadBottom's own button is the explicit way back down.
 function scrollClaudeThreadToBottom() {
-  if (cs.claudePos !== 0) return
+  if (cs.claudePos !== 0 || !cs.claudePinned) return
   requestAnimationFrame(() => {
     const el = document.querySelector('[data-testid=claude-chat-thread]')
     if (!el) return
     el.scrollTop = el.scrollHeight
     // A JS-driven scrollTop write isn't guaranteed to fire a native 'scroll'
     // event in every browser, so update the top-fade class directly too (see
-    // scrollFade.mjs / "A capped, fading thread" in comments-panel.md).
+    // scrollFade.mjs / "A capped, fading thread" in comments-panel.md) — and,
+    // for the same reason, resync claudePinned directly too: otherwise a
+    // stale `false` left over from a transient scroll during layout/focus
+    // would have nothing to ever flip it back, permanently suppressing this
+    // very function.
     updateScrollFade(el)
+    updateClaudeThreadPinned(el)
   })
 }
 
@@ -2371,6 +2476,11 @@ function claudeChatView() {
     // none. See sendClaudeMessage/sendErrorText.
     sendError: () => cc.sendError,
     claudePos: () => cs.claudePos,
+    // Whether the reviewer's OWN mouse/wheel scroll still sits at the bottom
+    // of claude-chat-thread — see updateClaudeThreadPinned's own doc comment.
+    // ClaudeChat.mjs shows its "scroll to recent" button while this is false
+    // (and claudePos is 0, the rest position).
+    pinned: () => cs.claudePinned,
     // The still-open question's option highlight (see cs.claudeOptionSel's own
     // doc comment) — 0 while nothing is highlighted.
     claudeOptionSel: () => cs.claudeOptionSel,
@@ -2486,6 +2596,11 @@ function claudeChatCallbacks(state, commentTarget) {
     onRetry: () => retryClaudeTurn(),
     onFocus: () => onClaudeComposeFocus(),
     onEmptyEnter: () => openClaudeMenuFromComposer(),
+    // The pane's own @scroll handler (see updateClaudeThreadPinned) and its
+    // "scroll to recent" button's click handler — both live here, never in
+    // ClaudeChat.mjs itself, since that file never imports this one back.
+    onThreadScroll: (el) => updateClaudeThreadPinned(el),
+    onJumpToBottom: () => jumpToClaudeThreadBottom(),
   }
 }
 
@@ -5152,12 +5267,23 @@ function expandedConversation(c, openCommentMenu) {
         ${() => sendFailedBadge('reply:' + c.id)}
         ${() => commentStatusMark(c)}
       </div>
-      <div
-        class="flex max-h-[38vh] min-h-0 flex-col gap-2 overflow-y-auto p-0.5"
-        data-testid="comment-thread"
-        @scroll="${(e) => updateScrollFade(e.target)}"
-      >
-        ${() => threadMessages(c).map((r, i, arr) => reactionBubble(c, r, i, arr.length).key('msg:' + r.id))}
+      <div class="relative min-h-0">
+        <div
+          class="flex max-h-[38vh] min-h-0 flex-col gap-2 overflow-y-auto p-0.5"
+          data-testid="comment-thread"
+          @scroll="${(e) => {
+            updateScrollFade(e.target)
+            updateCommentThreadPinned(e.target)
+          }}"
+        >
+          ${() => threadMessages(c).map((r, i, arr) => reactionBubble(c, r, i, arr.length).key('msg:' + r.id))}
+        </div>
+        <div class="contents">
+          ${() =>
+            cs.threadPos === 0 && !cs.threadPinned
+              ? scrollToRecentButton(jumpToCommentThreadBottom, 'scroll-to-bottom-comments')
+              : ''}
+        </div>
       </div>
       <div class="flex items-end gap-2 border-t border-slate-100 dark:border-zinc-800/60 pt-2">
         <textarea
@@ -6792,7 +6918,13 @@ export function cancelPrCommentReply() {
 // syncClaudeAnchorForSelection watch picks it up exactly like it already does
 // for a block-scoped comment — no second writer of `cc`, no risk of the two
 // contexts racing. Not bound to the URL — ephemeral UI state, like picm/pct.
-const pcc = reactive({ open: false, commentId: null })
+// pinned mirrors cs.claudePinned/cs.threadPinned above, scoped to THIS card's
+// own claude-chat-thread pane (a comment-index item's embedded chat is a
+// separate DOM instance from the block-scoped one, and claudeChatVisible()'s
+// strict invariant means at most one of the two is ever mounted at once, but
+// they still must not share one flag — see updatePccThreadPinned/
+// jumpToPccThreadBottom below).
+const pcc = reactive({ open: false, commentId: null, pinned: true })
 
 // prCommentClaudeView is claudeChatView()'s PR-wide sibling: same `cc`-backed
 // fields, but claudePos/focused come from THIS card's own state instead of
@@ -6804,7 +6936,25 @@ const pcc = reactive({ open: false, commentId: null })
 // chain; mouse/click only for now.
 function prCommentClaudeView() {
   const base = claudeChatView()
-  return { ...base, claudePos: () => 0, focused: () => pcc.open }
+  return { ...base, claudePos: () => 0, focused: () => pcc.open, pinned: () => pcc.pinned }
+}
+
+// updatePccThreadPinned/jumpToPccThreadBottom are this card's own copies of
+// updateClaudeThreadPinned/jumpToClaudeThreadBottom (see their doc comments),
+// scoped to pcc.pinned instead of cs.claudePinned since this is a separate
+// claude-chat-thread instance (a comment-index item's own embedded chat).
+function updatePccThreadPinned(el) {
+  if (!el) return
+  pcc.pinned = el.scrollTop + el.clientHeight >= el.scrollHeight - PINNED_EDGE_PX
+}
+function jumpToPccThreadBottom() {
+  pcc.pinned = true
+  requestAnimationFrame(() => {
+    const el = document.querySelector('[data-testid=claude-chat-thread]')
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+    updateScrollFade(el)
+  })
 }
 
 // startPrCommentChat reveals the embedded Claude column under comment `c`'s
@@ -6819,6 +6969,7 @@ export async function startPrCommentChat(c) {
   if (!c) return
   pcc.open = true
   pcc.commentId = c.id
+  pcc.pinned = true
   // Mirrors enterClaudeChat's own ordering: focus only AFTER the Execution is
   // ensured and cc.runId is actually populated — sending before that resolves
   // is a silent no-op (sendClaudeMessage's own `if (!runId) return`).
@@ -7141,6 +7292,8 @@ export function commentDetailCard(c, opts) {
                 ${claudeChatColumn(prCommentClaudeView(), {
                   onSend: (text) => queueClaudeMessage(text),
                   onRetry: () => retryClaudeTurn(),
+                  onThreadScroll: (el) => updatePccThreadPinned(el),
+                  onJumpToBottom: () => jumpToPccThreadBottom(),
                 })}
               </div>`
             : ''}

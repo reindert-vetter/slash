@@ -1017,7 +1017,14 @@ both lines as a `<br>`.
 
 The two specs below hand-build a `view` object for `claudeChatColumn`, so they
 also pin its render contract — `queued: () => []` had to be added there when
-the queue landed.
+the queue landed, and `pinned: () => true` when the "scroll to recent
+messages" button did (see "A manual scroll-up must not get yanked back down"
+in `.claude/docs/comments-panel.md`) — a hand-built `view` missing either
+field throws (`view.pinned is not a function`) the moment the toggle it backs
+first evaluates, since `claudeChatColumn` calls it unconditionally.
+`tests/scroll-to-recent-button.spec.mjs` covers the button/pinned mechanism
+itself end to end (through `RelatedPanel.mjs`'s real `claudeChatView()`, not a
+hand-built one).
 
 
 `claude-chat-progress.spec.mjs` covers the live half: it fulfils

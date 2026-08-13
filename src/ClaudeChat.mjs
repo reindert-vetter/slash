@@ -549,6 +549,30 @@ function claudeBubble(msg, i, total, claudePos, optionSel, anchorHint, onSend, o
 // '', which only the reactive path handles correctly. The leading warning
 // WORD carries the meaning; the rose tint is decoration only (colourblind
 // rule).
+// claudeScrollToRecentButton — the local (never imported from RelatedPanel.mjs,
+// per this file's own no-circular-import rule) copy of the "you scrolled
+// away, here's the newest turns" button, mirroring RelatedPanel.mjs's own
+// scrollToRecentButton for comment-thread exactly: same round emerald pill
+// with a chevron-down (shape carries the meaning, colorblind rule — no text
+// label, but a title/aria-label names it), shown by claudeChatColumn while
+// view.claudePos() === 0 && !view.pinned(). `onClick` is
+// callbacks.onJumpToBottom (RelatedPanel.mjs's jumpToClaudeThreadBottom).
+const CLAUDE_SCROLL_TO_BOTTOM_TITLE = 'Naar recente berichten'
+function claudeScrollToRecentButton(onClick) {
+  return html`
+    <button
+      type="button"
+      class="absolute bottom-2 right-2 z-10 flex h-7 w-7 items-center justify-center rounded-full bg-emerald-500 text-white shadow-sm ring-1 ring-black/5 hover:bg-emerald-600"
+      data-testid="scroll-to-bottom-claude"
+      title="${CLAUDE_SCROLL_TO_BOTTOM_TITLE}"
+      aria-label="${CLAUDE_SCROLL_TO_BOTTOM_TITLE}"
+      @click="${() => onClick()}"
+    >
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="h-3.5 w-3.5"><path d="M6 9l6 6 6-6"/></svg>
+    </button>
+  `.key('scroll-to-bottom-claude')
+}
+
 function claudeSendError(view) {
   const text = view.sendError()
   if (!text) return ''
@@ -650,11 +674,15 @@ export function claudeChatColumn(view, callbacks) {
       <p class="text-[11px] font-medium text-slate-500 dark:text-zinc-500" data-testid="claude-chat-header">
         ${claudeMention}
       </p>
-      <div
-        class="flex max-h-[38vh] min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-0.5"
-        data-testid="claude-chat-thread"
-        @scroll="${(e) => updateScrollFade(e.target)}"
-      >
+      <div class="relative min-h-0 flex-1">
+        <div
+          class="flex max-h-[38vh] min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-0.5"
+          data-testid="claude-chat-thread"
+          @scroll="${(e) => {
+            updateScrollFade(e.target)
+            callbacks.onThreadScroll(e.target)
+          }}"
+        >
         ${() => {
           const messages = view.messages()
           const total = messages.length
@@ -690,6 +718,13 @@ export function claudeChatColumn(view, callbacks) {
         }}
         ${() => claudePartialBubble(view)}
         ${() => claudeQueuedBubbles(view)}
+        </div>
+        <div class="contents">
+          ${() =>
+            view.claudePos() === 0 && !view.pinned()
+              ? claudeScrollToRecentButton(callbacks.onJumpToBottom)
+              : ''}
+        </div>
       </div>
       ${() => claudeSendError(view)}
       <div class="flex items-end gap-2 border-t border-slate-100 dark:border-zinc-800/60 pt-2">

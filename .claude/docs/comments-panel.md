@@ -973,6 +973,75 @@ attempt** — it deliberately does not repeat either mistake that attempt made:
   "`comment-claude-row` deliberately carries NO `overflow-hidden`" in
   `.claude/docs/detail-layout.md`) can't recur.
 
+#### A manual scroll-up must not get yanked back down — `threadPinned`/`claudePinned` and the "scroll to recent" button
+
+Reported bug: scrolling a long thread up by hand (the native scrollbar/wheel,
+not `↑`, which walks the separate `cs.threadPos`/`cs.claudePos` KEYBOARD
+cursor) got silently snapped back to the newest message a few seconds later,
+the moment the comment poll (`loadComments`, every 5s) or a Claude
+progress/transcript event called `scrollCommentThreadToBottom`/
+`scrollClaudeThreadToBottom` — both only ever checked
+`cs.threadPos === 0`/`cs.claudePos === 0` (the keyboard rest position), never
+whether the reviewer's own scroll had since moved the pane itself away from
+the bottom.
+
+**`cs.threadPinned`/`cs.claudePinned`** (`RelatedPanel.mjs`, default `true`)
+track exactly that, independent of the `*Pos` cursor — updated live by each
+pane's own `@scroll` handler (`updateCommentThreadPinned`/
+`updateClaudeThreadPinned`, alongside the existing `updateScrollFade` call:
+`pinned = scrollTop + clientHeight >= scrollHeight - PINNED_EDGE_PX`, an 8px
+slack for sub-pixel rounding) and reset to `true` at every "the thread is
+(re)entered at rest" call site (`toComment`, `enterClaudeChat`,
+`enterClaudeChatFromNew`, `clearClaudeChat`, and whenever the visible
+conversation's anchor itself changes in `syncClaudeAnchorForSelection`/
+`ensureAndLoadChat`) — a different conversation always starts pinned to its
+own bottom, never inheriting the previous one's scroll state.
+`scrollCommentThreadToBottom`/`scrollClaudeThreadToBottom` gained a second
+guard, `&& cs.threadPinned`/`&& cs.claudePinned`, alongside the pre-existing
+`*Pos === 0` check — so a poll/progress event landing while the reviewer has
+scrolled away is now a no-op there too, exactly like walking older messages
+via `↑` already was.
+
+**Both scroll-to-bottom functions also resync the pinned flag directly**,
+right next to their existing direct `updateScrollFade` call, for the identical
+reason documented there: a JS-driven `scrollTop` write isn't guaranteed to
+fire a native `'scroll'` event in every browser, and without this a stale
+`pinned = false` — e.g. left over from a transient scroll event during layout/
+focus — would have nothing to ever flip back to `true`, permanently
+suppressing the very function that's supposed to keep the thread pinned.
+
+**The button** (`data-testid=scroll-to-bottom-comments`/`scroll-to-bottom-claude`,
+`scrollToRecentButton` in `RelatedPanel.mjs` and its ClaudeChat.mjs-local twin
+`claudeScrollToRecentButton` — duplicated rather than shared, since
+`ClaudeChat.mjs` never imports `RelatedPanel.mjs` back, see "pure template,
+fed getters" below) is the small round emerald pill with a chevron-down —
+visually identical to `Block.mjs`'s `scrollHint`, deliberately: same shape,
+same "the shape carries the meaning" colorblind-rule reasoning, so **no text
+label**, only a `title`/`aria-label` ("Naar recente berichten"). Shown while
+`*Pos === 0 && !*Pinned` — i.e. exactly when a poll/progress event's own
+auto-scroll would otherwise have fired but didn't — absolutely positioned
+(`bottom-2 right-2`) inside a `relative` wrapper now added around each pane.
+Its own click handler (`jumpToCommentThreadBottom`/`jumpToClaudeThreadBottom`)
+re-pins (`*Pinned = true`) and then calls the ordinary scroll-to-bottom
+function, which is no longer a no-op once re-pinned.
+
+The comment-index item's own embedded chat (`commentDetailCard`'s `pcc`/
+`prCommentClaudeView`, see "A PR-wide comment-index item can also start a
+conversation" in `.claude/docs/claude-chat-panel.md`) is a separate
+`claude-chat-thread` DOM instance and got its **own** `pcc.pinned` field plus
+`updatePccThreadPinned`/`jumpToPccThreadBottom`, wired through the
+`onThreadScroll`/`onJumpToBottom` callbacks (see "the render contract" below)
+rather than sharing `cs.claudePinned` — the two conversations are never both
+mounted at once (`claudeChatVisible()`'s strict invariant), but the pinned
+STATE must not leak from one into the other regardless.
+
+Toggling this slot uses the same stable `<div class="contents">` wrapper as
+every other bare template↔`''` toggle in this file — see the "bare toggling
+expression" pitfall in `.claude/rules/arrowjs-pitfalls.md`. Tests:
+`tests/scroll-to-recent-button.spec.mjs` (the comment-thread case drives the
+real 5s poll end to end; the Claude-thread case only checks the button's own
+wiring, since the underlying pinned/no-op mechanism is structurally identical).
+
 The comment/Claude-column menu anchors (`menuAnchor`'s `'comment'`/`'claude'`/
 `'replyPublish'` branches in `home.mjs`) target `comment-item`/
 `claude-chat-card` — the OUTER card, not the now-scrollable inner thread div —
