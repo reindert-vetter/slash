@@ -641,8 +641,9 @@ export function focusedChipChain() {
 
 // enterRelated hands the keyboard to the Onderliggende-code panel, starting
 // on the first underlying-code child. Called by home.mjs on → from the diff
-// (only when the selected unit carries no comments, see hasVisibleComments/
-// enterCommentsHead below) and on ↓ falling through the last inline comment
+// (only when the selected unit carries no comments, or every one of them is
+// already resolved and this unit has no other open comment — see
+// enterCommentsOrRelated below) and on ↓ falling through the last inline comment
 // conversation (see advanceFromComment). releaseFocus() bumps focusToken so a
 // STALE placeComment/createComment tail (see the guard there) recognizes that
 // the keyboard has moved on to a — possibly different block's — Onderliggende-
@@ -956,6 +957,53 @@ export function hasVisibleComments() {
 export function enterCommentsHead() {
   cs.sel = 0
   toComment()
+}
+
+// enterCommentsOrRelated is home.mjs's single → routing entry point once the
+// keyboard leaves a diff (or an anchored comment-index item's drilled
+// column) — replaces the old inline hasVisibleComments()/enterCommentsHead()/
+// claudeColumnVisible()/enterRelated() chain with one refinement: when the
+// DEFAULT landing comment (visibleComments()[0], what enterCommentsHead()
+// would select) is already resolved, → skips it. Reviewer request: "als die
+// comment al resolved is, ga dan (als ze bestaan) direct naar de volgende
+// comment of onderliggende code. als die niet bestaan, wil ik wel direct naar
+// resolved comment blok" — a resolved thread is done, so defaulting the
+// keyboard there when something still open exists reads as busywork, but
+// with nothing else to land on the resolved comment is still a better
+// landing than an empty Underlying-code panel.
+//
+// Deliberately narrow: only the FIRST comment's resolved status is checked.
+// A unit whose open comment sits somewhere other than index 0 already lands
+// on it via the unaffected branch below (enterCommentsHead() always starts
+// at 0, unconditionally) — this function changes nothing for that case, it
+// only ever fires the skip when index 0 itself is resolved.
+export function enterCommentsOrRelated(pr) {
+  if (hasVisibleComments()) {
+    const list = visibleComments()
+    if (list[0].status !== 'resolved') {
+      enterCommentsHead()
+      return
+    }
+    // The default landing comment is resolved — skip to the next still-open
+    // one if this unit has one (not necessarily adjacent: a run of several
+    // resolved comments ahead of it is skipped in one step).
+    const next = list.findIndex((c) => c.status !== 'resolved')
+    if (next >= 0) {
+      cs.sel = next
+      toComment()
+      return
+    }
+    // Every comment on this unit is resolved — try Underlying code instead.
+    if (rc.children.length > 0) {
+      enterRelated()
+      return
+    }
+    // Nothing else to land on: show the resolved comment anyway.
+    enterCommentsHead()
+    return
+  }
+  if (claudeColumnVisible()) enterClaudeChat(pr)
+  else enterRelated()
 }
 
 // enterCommentsTail lands on the LAST comment conversation — the mirror of

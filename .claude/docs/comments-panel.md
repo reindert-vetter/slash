@@ -207,17 +207,39 @@ calls `leaveRelated()` right before `openCommentAnchorDrill`, and the call
 itself never touches `cs.focus`, so no comment card is ever auto-expanded —
 the row reads "already visible, but not yet selected inside". Only an
 explicit **`→`** hands the keyboard IN, by calling the exact same
-`hasVisibleComments()`/`enterCommentsHead()`/`claudeColumnVisible()`/
-`enterRelated()` chain the ordinary `state.mode === 'diff'` ArrowRight branch
-already uses (`onKeydown`). This is what makes the expanded view fully
-**keyboard-navigable** (a separate, still-standing reviewer request) despite
-`state.mode` staying `'list'`: `relatedActive()`'s `↑`/`↓`/`←`/`→` handling in
-`onKeydown` is unconditional on `state.mode` — it only checks `cs.focus` — so
-once `enterCommentsHead()` sets that, the existing generic
+`enterCommentsOrRelated()` (`RelatedPanel.mjs`) the ordinary
+`state.mode === 'diff'` ArrowRight branch already uses (`onKeydown`) — see
+"→ skips an already-resolved default comment" below for what that function
+does. This is what makes the expanded view fully **keyboard-navigable** (a
+separate, still-standing reviewer request) despite `state.mode` staying
+`'list'`: `relatedActive()`'s `↑`/`↓`/`←`/`→` handling in `onKeydown` is
+unconditional on `state.mode` — it only checks `cs.focus` — so once
+`enterCommentsOrRelated()` sets that, the existing generic
 comment/thread/Claude-column walk takes over exactly as it would for any
 other block. "Uitgeklapt, maar niet direct geselecteerd" — the drilled column
 becomes visible the moment the row is selected; only `→` moves the keyboard
 into it.
+
+### → skips an already-resolved default comment
+
+`enterCommentsOrRelated(pr)` (`RelatedPanel.mjs`) is the single entry point
+both `→` sites above call. `hasVisibleComments()`/`visibleComments()` do not
+filter out a resolved comment — `enterCommentsHead()` always lands on index
+0 regardless of its status — so a unit whose only (or first) comment is
+already resolved used to default the keyboard onto a thread that's done.
+Reviewer request: "als die comment al resolved is, ga dan (als ze bestaan)
+direct naar de volgende comment of onderliggende code. als die niet bestaan,
+wil ik wel direct naar resolved comment blok". `enterCommentsOrRelated` checks
+only `visibleComments()[0].status` — the exact comment `enterCommentsHead()`
+would land on: unchanged (`enterCommentsHead()`) when it isn't resolved,
+including a mixed unit whose OPEN comment sits at some later index (that
+case was already reachable only via index 0 before this change, and stays
+so — out of scope here). When index 0 IS resolved: jump straight to the
+first still-open comment on the unit if one exists (`findIndex`, so a run of
+several resolved comments ahead of it is skipped in one step, not one `↓` at
+a time); else to the Underlying-code panel if this unit has any children;
+else — nothing else to land on — the resolved comment anyway, same as
+before.
 
 Defaults to **Unified** (`state.commentAnchorViewMode`, distinct from the
 global `state.diffViewMode`, per explicit request: only this one view

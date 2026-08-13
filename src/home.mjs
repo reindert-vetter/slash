@@ -37,13 +37,10 @@ import Block, {
 import RelatedPanel, {
   InlineComments,
   ClaudeChatPanel,
-  enterClaudeChat,
   claudeChatVisible,
   claudeColumnVisible,
   TasksPanel,
-  hasVisibleComments,
-  enterCommentsHead,
-  enterRelated,
+  enterCommentsOrRelated,
   startComment,
   startPrWideComment,
   isPrWideComposing,
@@ -2378,7 +2375,7 @@ function commentAnchorBlock(c) {
 // further wiring needed. This is also what makes the drilled column fully
 // KEYBOARD-navigable (reviewer request) despite state.mode staying 'list':
 // relatedActive()'s ↑/↓/←/→ handling in onKeydown is unconditional on mode,
-// so once ArrowRight calls enterCommentsHead() (mirroring the ordinary
+// so once ArrowRight calls enterCommentsOrRelated() (mirroring the ordinary
 // state.mode==='diff' ArrowRight branch), the existing generic
 // comment/thread/Claude-column walk takes over exactly as it would for any
 // other block — no separate mechanism was needed.
@@ -10176,17 +10173,16 @@ function onKeydown(e) {
       // Stepping right leaves this column's diff — clear any active
       // line-range selection, mirroring every other navigation path that
       // supersedes one (see clearRangeAnchor). Lands on the first inline
-      // comment conversation of the selected unit if there is one (see
-      // hasVisibleComments/enterCommentsHead in RelatedPanel.mjs). Otherwise
-      // it enters the embedded Claude chat ONLY when that column actually
-      // exists — i.e. an earlier conversation is hanging on a comment that
-      // isn't in the visible index (claudeChatVisible). With neither, → falls
-      // straight through to the Onderliggende-code panel, as it always did:
-      // nothing auto-creates a comment to hang a chat on.
+      // comment conversation of the selected unit if there is one and it
+      // isn't already resolved, else on the next open comment/Underlying
+      // code (see enterCommentsOrRelated in RelatedPanel.mjs). With no
+      // comment at all it enters the embedded Claude chat ONLY when that
+      // column actually exists — i.e. an earlier conversation is hanging on
+      // a comment that isn't in the visible index (claudeChatVisible). With
+      // neither, → falls straight through to the Onderliggende-code panel, as
+      // it always did: nothing auto-creates a comment to hang a chat on.
       clearRangeAnchor()
-      if (hasVisibleComments()) enterCommentsHead()
-      else if (claudeColumnVisible()) enterClaudeChat(state.pr)
-      else enterRelated()
+      enterCommentsOrRelated(state.pr)
     }
     return
   }
@@ -10250,8 +10246,10 @@ function onKeydown(e) {
     //   doc comment), but the keyboard never moved into it. → hands the
     //   keyboard IN now, mirroring the state.mode==='diff' ArrowRight branch
     //   above verbatim: lands on the first inline comment conversation if
-    //   there is one, else the embedded Claude column if one is hanging on
-    //   it, else the Onderliggende-code panel. This is what makes the
+    //   there is one and isn't already resolved, else the next open
+    //   comment/Underlying code, else the embedded Claude column if one is
+    //   hanging on it, else the Onderliggende-code panel (see
+    //   enterCommentsOrRelated in RelatedPanel.mjs). This is what makes the
     //   expanded view fully keyboard-navigable (reviewer request) despite
     //   state.mode staying 'list' — relatedActive()'s ↑/↓/←/→ handling is
     //   unconditional on mode.
@@ -10265,9 +10263,7 @@ function onKeydown(e) {
       const anchor = commentAnchorBlock(sc)
       if (anchor) {
         clearRangeAnchor()
-        if (hasVisibleComments()) enterCommentsHead()
-        else if (claudeColumnVisible()) enterClaudeChat(state.pr)
-        else enterRelated()
+        enterCommentsOrRelated(state.pr)
       } else if (!isPrCommentThreadFocused(sc)) enterPrCommentThread(sc)
     } else enterDiff()
   } else if (e.key === 'ArrowLeft') {
