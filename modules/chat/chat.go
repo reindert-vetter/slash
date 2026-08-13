@@ -30,12 +30,14 @@ const schema = `
 PRAGMA journal_mode = WAL;
 
 CREATE TABLE IF NOT EXISTS chat_conversations (
-  id         TEXT PRIMARY KEY, -- == the comment thread's own id
-  repo       TEXT NOT NULL DEFAULT '', -- canonical repo string: '' = the primary repo
-  pr         INTEGER NOT NULL,
-  session_id TEXT NOT NULL DEFAULT '', -- the claude CLI's --session-id/--resume value
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  id             TEXT PRIMARY KEY, -- == the comment thread's own id
+  repo           TEXT NOT NULL DEFAULT '', -- canonical repo string: '' = the primary repo
+  pr             INTEGER NOT NULL,
+  session_id     TEXT NOT NULL DEFAULT '', -- the claude CLI's --session-id/--resume value
+  summary        TEXT NOT NULL DEFAULT '', -- the summarize_chat workflow's short Dutch summary
+  summary_status TEXT NOT NULL DEFAULT '', -- '' | 'searching' | 'done' | 'failed' (see SummaryStatus*)
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS chat_messages (
@@ -165,12 +167,25 @@ func migrate(db *sql.DB) {
 		// unique, so neither can collide across repos.
 		`ALTER TABLE chat_conversations ADD COLUMN repo TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE chat_messages ADD COLUMN repo TEXT NOT NULL DEFAULT ''`,
+		// summarize_chat's own two columns (see SummaryStatus* / SaveSummary*).
+		`ALTER TABLE chat_conversations ADD COLUMN summary TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE chat_conversations ADD COLUMN summary_status TEXT NOT NULL DEFAULT ''`,
 	} {
 		_, _ = db.Exec(col) // ignore "duplicate column name"
 	}
 	// Only after the repo column is guaranteed to exist (see the schema note).
 	_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS idx_chat_messages_pr_repo ON chat_messages(repo, pr)`)
 }
+
+// Summary status values (see SaveSummarySearching/SaveSummary/Summary below).
+// "" (the column's default) means "never asked" — distinct from
+// SummaryStatusFailed, so the frontend knows whether a first request has ever
+// gone out at all.
+const (
+	SummaryStatusSearching = "searching" // a summarize_chat run is in progress
+	SummaryStatusDone      = "done"      // the summary text is ready
+	SummaryStatusFailed    = "failed"    // the LLM returned nothing (offline/hiccup)
+)
 
 func (m *Module) Close() error { return m.db.Close() }
 
@@ -207,6 +222,39 @@ func (m *Module) GetSession(ctx context.Context, conversationID string) (string,
 		return "", nil
 	}
 	return sessionID, err
+}
+
+// SaveSummarySearching marks a conversation's summary as in-progress, clearing
+// any previous text — mirrors explanations.Module.SaveSearching. A no-op
+// (returns nil) if the conversation row doesn't exist (shouldn't happen: the
+// summarize_chat workflow only ever runs for an already-anchored conversation).
+// WRITE — workflow-Activity-only.
+func (m *Module) SaveSummarySearching(ctx context.Context, conversationID string) error {
+	_, err := m.db.ExecContext(ctx,
+		`UPDATE chat_conversations SET summary = '', summary_status = ?, updated_at = ? WHERE id = ?`,
+		SummaryStatusSearching, now(), conversationID)
+	return err
+}
+
+// SaveSummary records the finished (done or failed) summary text. WRITE —
+// workflow-Activity-only.
+func (m *Module) SaveSummary(ctx context.Context, conversationID, status, text string) error {
+	_, err := m.db.ExecContext(ctx,
+		`UPDATE chat_conversations SET summary = ?, summary_status = ?, updated_at = ? WHERE id = ?`,
+		text, status, now(), conversationID)
+	return err
+}
+
+// Summary returns the conversation's stored summary text + status ("", ""
+// when never requested, or the conversation row doesn't exist). READ — safe
+// for the UI/API.
+func (m *Module) Summary(ctx context.Context, conversationID string) (text, status string, err error) {
+	err = m.db.QueryRowContext(ctx,
+		`SELECT summary, summary_status FROM chat_conversations WHERE id = ?`, conversationID).Scan(&text, &status)
+	if err == sql.ErrNoRows {
+		return "", "", nil
+	}
+	return text, status, err
 }
 
 // SaveMessage persists one turn (idempotent on ID, so a retried Activity never

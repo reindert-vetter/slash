@@ -1298,6 +1298,14 @@ const cc = reactive({
   // resolve which comment a conversation hangs on when the reviewer's cursor
   // isn't sitting on a visible comment itself.
   conversations: [],
+  // summary/summaryStatus mirror the conversation's own chat_conversations row
+  // (see chat.Module.Summary, handleChat's extended /api/chat response) — the
+  // summarize_chat workflow's short Dutch summary of this transcript, and its
+  // status ('' never requested | 'searching' | 'done' | 'failed'). Refreshed
+  // by every loadChatMessages call, same cadence as cc.messages. Consumed by
+  // convertClaudeAnchorToComment's "Comment hiervan maken" prefill.
+  summary: '',
+  summaryStatus: '',
 })
 
 // pendingClaudeQuestion returns the newest message when it is a still-open
@@ -1423,6 +1431,8 @@ async function ensureAndLoadChat(pr, commentId) {
     cc.commentId = commentId
     cc.messages = []
     cc.runId = null
+    cc.summary = ''
+    cc.summaryStatus = ''
   }
   cc.status = 'loading'
   try {
@@ -1552,6 +1562,8 @@ async function loadChatMessages(commentId, applyDrafts = true) {
     const json = await res.json()
     if (cc.commentId !== commentId) return // stale — a later switch already won
     cc.messages = json.messages || []
+    cc.summary = json.summary || ''
+    cc.summaryStatus = json.summaryStatus || ''
     cc.status = 'idle'
     if (applyDrafts) applyPendingDraftReplies(commentId)
     scrollClaudeThreadToBottom()
@@ -1776,6 +1788,14 @@ export async function retryClaudeTurn() {
   await sendClaudeMessage('', 'retry')
 }
 
+// clearClaudeChat wipes the conversation AND — reviewer request — its
+// backing comment when that comment counts as "empty": still exactly
+// CLAUDE_ANCHOR_PLACEHOLDER, never replaced with the reviewer's own text
+// ("ik zie het ook als een leeg veld als ik '(Nog geen eigen comment getypt —
+// gesprek met Claude gestart.)' zie"). Deliberately keyed on the comment's
+// CONTENT, not on which menu/gate the reviewer used to reach "Wis
+// Claude-gesprek" — a comment that already carries real reviewer text always
+// survives, regardless of entry point.
 export async function clearClaudeChat() {
   await sendClaudeMessage('', 'clear')
   // Belt-and-braces local reset, same reasoning as sendClaudeMessage's own
@@ -1784,6 +1804,104 @@ export async function clearClaudeChat() {
   cc.progress = null
   cs.claudePos = 0
   cs.claudeOptionSel = 0
+  const anchor = cc.commentId != null ? commentById(cc.commentId) : null
+  if (anchor && anchor.body === CLAUDE_ANCHOR_PLACEHOLDER) {
+    await deleteComment(anchor)
+    await loadComments(cs.pr)
+    exitRelated() // nothing left to focus — hand the keyboard back to the diff
+  }
+}
+
+// claudeAnchorIsPlaceholder reports whether the CURRENTLY OPEN conversation's
+// backing comment still carries CLAUDE_ANCHOR_PLACEHOLDER — i.e. "empty" per
+// the reviewer's own definition above. Gates the "Comment hiervan maken" menu
+// item. Looked up via cc.commentId + commentById (never chatAnchorComment()/
+// selComment(), which can resolve to an unrelated comment on the same unit
+// while nothing is anchored yet, see isNewChatUnanchored) — so this is exactly
+// THIS conversation's own anchor, never a neighbour's.
+export function claudeAnchorIsPlaceholder() {
+  if (cc.commentId == null) return false
+  const c = commentById(cc.commentId)
+  return !!c && c.body === CLAUDE_ANCHOR_PLACEHOLDER
+}
+
+// requestChatSummary starts (idempotently, via StartSummarizeChat's
+// deterministic Run ID) the summarize_chat Execution for the given
+// conversation — the sanctioned write path. `msgCount` pins the request to
+// the conversation's CURRENT length, so re-requesting with no new messages
+// since the last request is a free no-op reuse, mirroring explain_code's own
+// idempotent start.
+async function requestChatSummary(commentId, msgCount) {
+  try {
+    await fetch('/api/workflows/summarize_chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pr: cs.pr, repo: repoField(), commentId, msgCount }),
+    })
+  } catch (_) {
+    // best-effort — a transient failure just leaves cc.summaryStatus as-is,
+    // and convertClaudeAnchorToComment's own poll below simply times out.
+  }
+}
+
+// pollChatSummary refetches the transcript (which also carries
+// cc.summary/summaryStatus, see loadChatMessages) every 500ms, up to ~10s,
+// until the just-started summarize_chat run lands (or fails) — a one-shot
+// Haiku call, not worth a dedicated SSE event on top of the existing
+// chat.message channel. `want` is the focusToken snapshotted by the caller
+// (releaseFocus's own pattern, used throughout this file) so a stale poll
+// started for a conversation the reviewer has since left never overwrites
+// anything.
+async function pollChatSummary(commentId, want) {
+  for (let i = 0; i < 20; i++) {
+    await new Promise((r) => setTimeout(r, 500))
+    if (want !== focusToken || cc.commentId !== commentId) return
+    await loadChatMessages(commentId, false)
+    if (cc.summaryStatus === 'done' || cc.summaryStatus === 'failed') return
+  }
+}
+
+// convertClaudeAnchorToComment is the "Comment hiervan maken" menu item
+// (claudeChatCommandsFor, home.mjs) — only ever offered while
+// claudeAnchorIsPlaceholder() is true. Steps the keyboard back onto the
+// comment card (toComment(false), same as ←/Escape from 'claude' — see
+// handleRelatedKey's 'claude' ArrowLeft branch) and opens the origin bubble's
+// own inline editor (the existing "Bewerk bericht" mechanism —
+// startEditMessage's editState/editTargetId) prefilled with a Claude-written
+// summary of the conversation (reviewer request: "voorgevuld met de chat,
+// maar dan door chat geschreven in maximaal 2 zinnen") instead of the
+// placeholder text, so the reviewer edits/confirms a real draft rather than
+// starting from either an empty field or the throwaway placeholder sentence.
+// A summary already generated for the conversation's CURRENT length is reused
+// instantly; otherwise this requests one and waits (pollChatSummary) —
+// leaving the field on its "genereert…" placeholder meanwhile — and only
+// overwrites the field if the reviewer hasn't already started typing their
+// own text into it in the meantime.
+export async function convertClaudeAnchorToComment() {
+  if (cc.commentId == null) return
+  const c = commentById(cc.commentId)
+  if (!c || c.body !== CLAUDE_ANCHOR_PLACEHOLDER) return
+  toComment(false)
+  editState.commentId = c.id
+  editState.targetId = c.id
+  const want = focusToken
+  if (cc.summaryStatus === 'done' && cc.summary) {
+    prefillField('[data-testid=message-edit-compose]', cc.summary)
+    return
+  }
+  prefillField('[data-testid=message-edit-compose]', 'Claude schrijft een samenvatting…')
+  await requestChatSummary(c.id, cc.messages.length)
+  await pollChatSummary(c.id, want)
+  if (want !== focusToken) return
+  const el = document.querySelector('[data-testid=message-edit-compose]')
+  if (!el || el.value.trim() !== 'Claude schrijft een samenvatting…') return // reviewer already started typing
+  if (cc.summaryStatus === 'done' && cc.summary) {
+    prefillField('[data-testid=message-edit-compose]', cc.summary)
+  } else {
+    // Offline/hiccup ('failed'): nothing to prefill — leave it empty, the
+    // same fallback as before summaries existed.
+    prefillField('[data-testid=message-edit-compose]', '')
+  }
 }
 
 // shadowWarning/shadowWarningFor cache the last-known shadow-pending check
@@ -2367,7 +2485,36 @@ function claudeChatCallbacks(state, commentTarget) {
     onSend: (text) => sendClaudeMessageFromNew(state, commentTarget, text),
     onRetry: () => retryClaudeTurn(),
     onFocus: () => onClaudeComposeFocus(),
+    onEmptyEnter: () => openClaudeMenuFromComposer(),
   }
+}
+
+// claudeMenuOpener is home.mjs's openMenu('claude'), registered once at module
+// load (setClaudeMenuOpener) — mirrors replyPublishOpener/
+// setReplyPublishMenuOpener exactly, for the same reason: RelatedPanel never
+// imports from home.mjs (it would be circular; home.mjs imports THIS module),
+// so a cross-module action call goes through a registered callback instead.
+let claudeMenuOpener = null
+export function setClaudeMenuOpener(fn) {
+  claudeMenuOpener = fn
+}
+
+// openClaudeMenuFromComposer is ClaudeChat.mjs's own onEmptyEnter callback —
+// Enter pressed on a BLANK composer (ClaudeChat.mjs's own @keydown already
+// knows this definitively, at the moment of the keypress, before anything
+// could mutate the field): open the Claude-column menu directly from here,
+// rather than home.mjs's document-level onKeydown re-deriving "was it blank"
+// from the DOM after the fact. That re-derivation is exactly what broke: for
+// an ORDINARY non-blank send the composer's own handler clears `el.value`
+// SYNCHRONOUSLY, in the same event dispatch, before the event ever reaches
+// the window-level listener — so by the time that listener could read
+// `el.value`, a just-sent real message and a genuinely blank Enter are
+// indistinguishable (both read "" ). This callback instead fires only from
+// the one call site that already knows the field WAS blank, so no race can
+// exist. See "Comment hiervan maken' on an empty Claude input" in
+// .claude/docs/claude-chat-panel.md.
+function openClaudeMenuFromComposer() {
+  if (claudeMenuOpener) claudeMenuOpener()
 }
 
 // selectHighlightedClaudeOption — the Enter-key counterpart of clicking a
@@ -5967,6 +6114,8 @@ const WORKFLOW_STATUS_NOTE = {
   'resolve_call:completed': 'call-definities opgelost',
   'explain_code:running': 'omschrijving genereren…',
   'explain_code:completed': 'omschrijving gegenereerd',
+  'summarize_chat:running': 'chat-samenvatting genereren…',
+  'summarize_chat:completed': 'chat-samenvatting gegenereerd',
   'approve:waiting': 'wacht op goedkeuringen',
   'pr_inbox:running': 'houdt de PR-inbox bij',
   'pr_inbox:waiting': 'houdt de PR-inbox bij',

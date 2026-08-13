@@ -518,8 +518,15 @@ func agenticToolUniverse(tools []string) []string {
 type Fake struct {
 	mu      sync.Mutex
 	outputs map[string]string
-	errs    map[string]error
-	Calls   []RunRequest
+	// promptOutputs additionally keys on req.SystemPrompt (model+"\n"+prompt),
+	// checked in Run BEFORE the plain model-only outputs map — several
+	// context-only Haiku actions (pr_summary, since_review, chat_summary) share
+	// ModelHaiku but must be programmable independently in the same test run;
+	// each carries its own static SystemPrompt already, so that's a free,
+	// already-unique disambiguator. See SetOutputForPrompt.
+	promptOutputs map[string]string
+	errs          map[string]error
+	Calls         []RunRequest
 	// chatQueue/chatErr program RunChat. chatQueue is the programmed turn
 	// script and is NEVER consumed: chatPos holds a cursor PER SESSION into it,
 	// so a fresh session (SessionID == "") starts over at turn 0 while a
@@ -560,6 +567,18 @@ func (f *Fake) SetOutput(model, out string) {
 	f.outputs[model] = out
 }
 
+// SetOutputForPrompt programs the text Run returns for a given model id AND
+// system prompt — for a context-only action that shares a model with another
+// one (see promptOutputs' own doc comment above).
+func (f *Fake) SetOutputForPrompt(model, systemPrompt, out string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.promptOutputs == nil {
+		f.promptOutputs = map[string]string{}
+	}
+	f.promptOutputs[model+"\n"+systemPrompt] = out
+}
+
 // SetError programs Run to fail for a given model id.
 func (f *Fake) SetError(model string, err error) {
 	f.mu.Lock()
@@ -577,6 +596,9 @@ func (f *Fake) Run(ctx context.Context, req RunRequest) (string, error) {
 	f.Calls = append(f.Calls, req)
 	if err := f.errs[req.Model]; err != nil {
 		return "", err
+	}
+	if out, ok := f.promptOutputs[req.Model+"\n"+req.SystemPrompt]; ok {
+		return out, nil
 	}
 	return f.outputs[req.Model], nil
 }

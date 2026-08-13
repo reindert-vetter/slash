@@ -421,6 +421,21 @@ Symptom to watch for: a close/dismiss button inside a click-swallowing overlay
 that "does nothing" or instantly reopens — check whether its own handler stops
 propagation; don't assume the ancestor's listener still fires.
 
+**Same class of bug, `@keydown` variant: a nested handler that OPENS a menu
+must `stopPropagation()` before doing so.** A document-level `keydown`
+listener (`home.mjs`'s `onKeydown`) that has its own "the menu is already
+open → this key runs/enters the highlighted command" branch will reinterpret
+the SAME keydown event that a nested element's own handler just used to open
+that menu — `menu.open` flips to `true` synchronously, then the event
+continues bubbling into that top-level listener, which now sees an open menu
+and acts on it. Symptom: the menu pops open already one level too deep (e.g.
+straight into a confirm submenu) instead of showing its root list. Fix is the
+same as the click case, same ordering requirement: call
+`e.stopPropagation()` in the nested handler *before* calling whatever opens
+the menu. See `ClaudeChat.mjs`'s composer `@keydown` (the `else` branch
+calling `callbacks.onEmptyEnter?.()`) and "Comment hiervan maken' on an empty
+Claude input" in `.claude/docs/claude-chat-panel.md`.
+
 ## `scrollIntoView` also moves the horizontal axis if you omit `inline`
 
 `Element.scrollIntoView({block: 'nearest'|'center'})` moves the horizontal axis

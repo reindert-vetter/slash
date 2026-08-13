@@ -1841,6 +1841,135 @@ the frontend/palette half.
   the full two-Enter confirm flow and asserts the transcript is empty
   afterwards.
 
+## "Comment hiervan maken" on an empty Claude input
+
+Reviewer request: "enter op een claude input veld wat leeg is moet een menu
+laten zien met de keuze om de chat te verwijderen of er een comment van te
+maken. Verwijder dan ook gelijk de (empty)comment." The "(empty)comment" is
+`CLAUDE_ANCHOR_PLACEHOLDER` — the throwaway body
+(`ensureClaudeAnchorForNew`) a Claude conversation's backing comment gets when
+the reviewer starts chatting before ever typing into "Comment op deze regel".
+
+- **Reaching the menu — a SECOND, callback-driven path, not a widened
+  DOM-focus check**: `Enter` on the Claude column already opened
+  `claudeChatCommandsFor()` while the composer wasn't the focused DOM element
+  (stepped up into the transcript via `↑`, `home.mjs`'s own
+  `document.activeElement !== composerEl` check). Enter on the composer
+  itself, while EMPTY, needs a second, independent route to that same
+  `openMenu('claude')` — deliberately NOT a widened version of that same
+  DOM-focus branch: `home.mjs`'s window-level `onKeydown` only ever sees this
+  key AFTER `ClaudeChat.mjs`'s own `@keydown` (bound directly to the textarea)
+  has already run and, for an ORDINARY non-blank send, already cleared
+  `e.target.value` **synchronously in that same dispatch** — so by the time a
+  document-level handler could read the field, a just-sent real message and a
+  genuinely blank Enter both read `""`, indistinguishable. (This exact
+  landmine broke `tests/claude-chat-panel.spec.mjs`'s own "Wis Claude-gesprek"
+  and several other specs during development — the menu popped open right
+  after an ordinary send.) The fix keeps the decision where it's genuinely
+  known: `ClaudeChat.mjs`'s `@keydown`, in the `else` branch of its existing
+  `if (e.target.value.trim())` guard (which used to silently swallow Enter on
+  a blank field), calls `callbacks.onEmptyEnter?.()` — a new callback next to
+  `onSend`/`onRetry`/`onFocus` in `claudeChatCallbacks` (`RelatedPanel.mjs`),
+  wired to `openClaudeMenuFromComposer()`, which calls the registered
+  `claudeMenuOpener` — `home.mjs` hands that opener down once at module load
+  via `setClaudeMenuOpener(() => openMenu('claude'))`, the EXACT same
+  downward-injection shape `setReplyPublishMenuOpener` already uses for the
+  same reason (`RelatedPanel.mjs` never imports from `home.mjs`, which would
+  be circular). **`e.stopPropagation()` right before that call is
+  load-bearing, not belt-and-braces**: `openMenu('claude')` sets `menu.open =
+  true` synchronously, and if the SAME keydown event were then allowed to go
+  on bubbling into `home.mjs`'s window-level `onKeydown`, its own "the menu is
+  open → this Enter runs/enters the highlighted command" handling (checked
+  before any mode-specific branch) would immediately act on the very keypress
+  that just opened the menu — observed as the menu popping open already
+  showing "Wis Claude-gesprek"'s **confirm submenu**, one level too deep, in
+  early testing.
+- **The extra item**: `claudeChatCommandsFor()` inserts **"Comment hiervan
+  maken"** between "Wis Claude-gesprek" and "Probeer de mislukte turn
+  opnieuw", but only while `claudeAnchorIsPlaceholder()` — the anchor comment
+  is looked up via `cc.commentId` + the private `commentById` helper (never
+  `chatAnchorComment()`/`selComment()`, which can resolve to an unrelated
+  comment on the same unit while nothing is anchored yet, see
+  `isNewChatUnanchored`), so this can't misfire for a neighbouring comment. A
+  comment that already carries the reviewer's own real text never gets the
+  item — nothing left to "make a comment of".
+- **What it does**: `convertClaudeAnchorToComment()` steps the keyboard back
+  onto the comment card exactly like `←`/Escape from `'claude'` does
+  (`toComment(false)`, see `handleRelatedKey`'s `'claude'` branch) and opens
+  the origin bubble's own inline editor — the pre-existing "Bewerk bericht"
+  mechanism (`editState`/`editTargetId`, `startEditMessage`'s own machinery),
+  not a second parallel editor — prefilled with a Claude-WRITTEN summary of
+  the conversation rather than an empty field or the placeholder sentence
+  (reviewer, when asked "empty field or prefilled?": "Voorgevuld met de chat,
+  maar dan door chat geschreven in maximaal 2 zinnen. In die 2 zinnen alleen
+  `,` of `.` gebruiken. code sugesties mogen wel en labels ook met de `
+  tekens enzo"). The reviewer still edits/sends it via that same existing
+  field — nothing here posts anything by itself.
+- **Generating the summary — `summarize_chat`, the same shape as
+  `explain_code`**: a genuinely new short-Dutch-summary Workflow Type
+  (`workflows.go`), because nothing existing summarizes a chat conversation —
+  but built to the exact template `explain_code`/`pr_status`'s own summary
+  Activity already established: one context-only Haiku call
+  (`claude.ChatSummarySystemPrompt`, `modules/claude/prompts/chat_summary.md`
+  — Dutch, at most 2 sentences, comma/period punctuation only, inline
+  code/code-suggestion fences allowed), `markChatSummarySearching` →
+  `generateChatSummary` → `saveChatSummary`, an empty result recorded as a
+  terminal `'failed'` status exactly like `explainCodeWorkflow`. Idempotent
+  per conversation **content**: `StartSummarizeChat`'s deterministic Run ID
+  (`chatSummaryRunID`) hashes `commentId + the conversation's current message
+  count`, so clicking the item again with no new messages since is a free
+  reuse, and a further reply makes the next click regenerate. Storage reuses
+  the EXISTING `chat_conversations` row (two new columns, `summary`/
+  `summary_status` — `chat.Module.SaveSummarySearching`/`SaveSummary`/
+  `Summary`) rather than a new module: a conversation already has exactly one
+  such row, so a summary is naturally 1:1 with it, unlike `explanations`
+  (keyed per navigation unit, many units per PR).
+- **Reaching the frontend**: `GET /api/chat?commentId=` (already polled/
+  refetched at every point `loadChatMessages` runs — after a send, on the
+  `chat.message` SSE event, on (re)entering the column) now also returns
+  `summary`/`summaryStatus`, mirrored onto `cc.summary`/`cc.summaryStatus`.
+  `convertClaudeAnchorToComment` reuses an already-`'done'` summary for the
+  CURRENT length instantly; otherwise it starts the workflow
+  (`POST /api/workflows/summarize_chat {pr,repo,commentId,msgCount}`) and
+  polls that same `GET /api/chat` every 500ms for up to ~10s
+  (`pollChatSummary`) — deliberately a poll, not a new SSE event, for a
+  one-shot Haiku call that isn't worth a dedicated channel on top of the
+  existing `chat.message` one. The edit field shows a "Claude schrijft een
+  samenvatting…" placeholder meanwhile, and the eventual prefill is skipped if
+  the reviewer already started typing their own text into it (a plain
+  string-equality check against that same placeholder — deliberately not the
+  generic `prefillField` helper's own timing, since this specific race —
+  several seconds of LLM latency — is far likelier to matter than anywhere
+  else that helper is used). A `'failed'` result (offline/hiccup) leaves the
+  field empty, the same fallback as before summaries existed.
+- **Cleanup ties to CONTENT, not to which gate opened the menu**: "verwijder
+  dan ook gelijk de (empty)comment" — but only when the anchor comment is
+  still `CLAUDE_ANCHOR_PLACEHOLDER` at the moment "Wis Claude-gesprek" is
+  confirmed (reviewer, when asked "always cleanup, or only via the empty-field
+  entry point?": "Alleen via het lege veld, maar ik zie het ook als een leeg
+  veld als ik '(Nog geen eigen comment getypt — gesprek met Claude gestart.)'
+  zie" — i.e. the state decides, not the entry point). `clearClaudeChat()`
+  therefore checks the SAME `commentById(cc.commentId)` snapshot after
+  clearing and, only if its body is still the placeholder, deletes it
+  (`deleteComment`) + reloads the comment list + calls `exitRelated()` (there
+  is nothing left to focus). A comment already carrying real reviewer text is
+  untouched regardless of how "Wis Claude-gesprek" was reached — including the
+  PRE-EXISTING transcript-`Enter` path, which needed no change of its own for
+  this: the guard is purely content-based.
+- **Testing the Haiku call deterministically**: `claude.Fake` only keyed
+  outputs by model id, and `chat_summary` shares `ModelHaiku` with
+  `pr_status`'s `generatePRSummary`/`generateSinceReviewSummary` — a plain
+  `SetOutput(ModelHaiku, …)` would leak into those. `Fake.SetOutputForPrompt
+  (model, systemPrompt, out)` (additive, `modules/claude/claude.go`) keys on
+  model+SystemPrompt instead, checked before the plain `outputs` map — safe
+  because every context-only action already carries its own distinct static
+  `SystemPrompt`. `SLASH_CLAUDE_CHAT_SUMMARY` (plain string env var, not a
+  JSON fixture — there is only ever one canned summary needed) programs it at
+  worker-spawn time in `tasks_api.go`, mirroring `SLASH_CLAUDE_CHAT_TURNS`;
+  `tests/_fixtures.mjs` sets it once for every worker, harmless for every
+  other test since nothing else triggers `summarize_chat`.
+- Test: `tests/claude-empty-composer-menu.spec.mjs`.
+
 ## A brand-new comment ALWAYS gets its own Claude block, even on an already-commented line
 
 `toNew()`/`ensureClaudeAnchorForNew()` used to decide "is there already an

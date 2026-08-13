@@ -547,6 +547,13 @@ export const test = base.extend({
           // single consuming queue let whichever spec came second start at
           // turn 2 or 3 depending on the scheduler.
           SLASH_CLAUDE_CHAT_TURNS: 'tests/fixtures/claude-chat-turns.json',
+          // summarize_chat (tests/claude-empty-composer-menu.spec.mjs, "Comment
+          // hiervan maken" on an embedded Claude conversation): a plain string,
+          // not a JSON fixture — there is only ever one canned summary needed.
+          // Keyed by SystemPrompt (claude.Fake.SetOutputForPrompt, tasks_api.go),
+          // so this can never leak into pr_status's own Haiku summary Activities,
+          // which share ModelHaiku but carry their own distinct SystemPrompt.
+          SLASH_CLAUDE_CHAT_SUMMARY: 'Claude legt uit dat de `total()` aanroep het orderbedrag optelt, en dat er geen bijzonderheden zijn.',
         },
         stdio: 'ignore',
       })

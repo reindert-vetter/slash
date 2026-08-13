@@ -92,6 +92,7 @@ var perItemRunID = map[string]bool{
 	WorkflowExplainCode:     true, // explainRunID(in)
 	WorkflowClaudeChat:      true, // the conversation id
 	WorkflowChatMerge:       true, // chatMergeQueueRunID(pr)
+	WorkflowSummarizeChat:   true, // chatSummaryRunID(commentID, msgCount)
 }
 
 // runIdentity answers "which task is this run an attempt at?" — the key

@@ -100,6 +100,9 @@ import RelatedPanel, {
   isClaudeChatFocused,
   clearClaudeChat,
   retryClaudeTurn,
+  claudeAnchorIsPlaceholder,
+  convertClaudeAnchorToComment,
+  setClaudeMenuOpener,
   selectHighlightedClaudeOption,
   claudeChatShadowWarning,
   sendPendingReply,
@@ -5884,7 +5887,7 @@ function claudeChatClearConfirmCommandsFor() {
 }
 
 // claudeChatCommandsFor — the root list for Enter on the Claude column (see
-// isClaudeChatFocused/claudeComposeEmpty below, mirrors commentCommandsFor's
+// isClaudeChatFocused above, mirrors commentCommandsFor's
 // own role for the comment column). "Wis Claude-gesprek" is gated behind its
 // own confirm submenu (see claudeChatClearConfirmCommandsFor) rather than
 // running directly — the same two-step pattern REVIEW_APPROVE_COMMANDS uses
@@ -5896,6 +5899,13 @@ function claudeChatClearConfirmCommandsFor() {
 // workflow ignores the Signal when no turn failed, which is cheaper than
 // teaching this menu to inspect the transcript.
 //
+// A third, conditional item — "Comment hiervan maken" — sits BETWEEN those
+// two whenever claudeAnchorIsPlaceholder() (the anchor comment never got the
+// reviewer's own text): reviewer request, reached the same way as the empty
+// composer's Enter (see the widened isClaudeChatFocused() gate in onKeydown).
+// A comment that already carries real text offers no such item — there is
+// nothing left to "make a comment of", it already is one.
+//
 // ORDER IS LOAD-BEARING: withClose pins "Sluit menu" at index 0 and defaultSel
 // starts the selection on index 1, so whatever comes FIRST here is the default
 // Enter action. That must stay "Wis Claude-gesprek" — the item that means
@@ -5904,22 +5914,32 @@ function claudeChatClearConfirmCommandsFor() {
 // no-op, so it must never be what a reflexive second Enter runs. Putting it
 // first broke exactly that (tests/claude-chat-panel.spec.mjs's
 // "Wis Claude-gesprek" spec pressed Enter and got the no-op instead of the
-// confirm submenu).
+// confirm submenu). "Comment hiervan maken" is inserted after it (not first)
+// for the same reason — it only means something on a still-empty anchor.
 function claudeChatCommandsFor() {
-  return withClose([
+  const items = [
     {
       id: 'clear-claude-chat',
       label: 'Wis Claude-gesprek',
       hint: 'wis',
       children: claudeChatClearConfirmCommandsFor(),
     },
-    {
-      id: 'retry-claude-turn',
-      label: 'Probeer de mislukte turn opnieuw',
-      hint: 'opnieuw',
-      run: () => retryClaudeTurn(),
-    },
-  ])
+  ]
+  if (claudeAnchorIsPlaceholder()) {
+    items.push({
+      id: 'convert-claude-anchor',
+      label: 'Comment hiervan maken',
+      hint: 'comment',
+      run: () => convertClaudeAnchorToComment(),
+    })
+  }
+  items.push({
+    id: 'retry-claude-turn',
+    label: 'Probeer de mislukte turn opnieuw',
+    hint: 'opnieuw',
+    run: () => retryClaudeTurn(),
+  })
+  return withClose(items)
 }
 
 // pushTodoConfirmCommands — the one-more-step confirm submenu behind the
@@ -9278,9 +9298,10 @@ function resolveCommands(query) {
   // The comment-scoped menu (Enter on a focused comment row) is just its own
   // small list — no submenu, no make-a-comment fallback.
   if (ms.mode === 'comment') return filterCommands(ms.commands, query)
-  // The Claude-column menu (Enter on the claude focus, empty composer — see
-  // isClaudeChatFocused/claudeComposeEmpty below): same shape, just its own
-  // small list (one command behind its own confirm submenu).
+  // The Claude-column menu (Enter on the claude focus, stepped up OR an empty
+  // composer — see isClaudeChatFocused/claudeChatCommandsFor below): same
+  // shape, just its own small list (one command behind its own confirm
+  // submenu, one more conditional on claudeAnchorIsPlaceholder()).
   if (ms.mode === 'claude') return filterCommands(ms.commands, query)
   // The comment-INDEX-item menu (Enter on a selected comment row in the
   // sidebar — see selectedComment/prCommentCommandsFor): same shape, just its
@@ -9431,6 +9452,15 @@ function openMenu(mode = 'block') {
 // send that needs it starts in RelatedPanel (which never imports from this
 // module). Hand the opener down once, at module load.
 setReplyPublishMenuOpener(() => openMenu('replyPublish'))
+
+// Same downward-injection shape, for Enter on an EMPTY Claude composer:
+// ClaudeChat.mjs's own @keydown (RelatedPanel.mjs's openClaudeMenuFromComposer)
+// knows, at the moment of the keypress, that the field was blank — long before
+// this module's own document-level onKeydown would otherwise have to
+// re-derive that from a DOM value that a REAL send might have just cleared in
+// the same event dispatch (see the 'claude' Enter branch's own doc comment,
+// and openClaudeMenuFromComposer's, for exactly why that race exists).
+setClaudeMenuOpener(() => openMenu('claude'))
 
 // Same downward-injection shape, for the other direction a comment write needs
 // to reach into this module: a freshly placed PR-wide comment must land the
@@ -9729,16 +9759,31 @@ function onKeydown(e) {
       return
     }
     // Enter on the focused Claude column opens its own small menu ("Wis
-    // Claude-gesprek", behind a confirm submenu — see claudeChatCommandsFor)
-    // — but only while the composer itself is NOT the focused element:
-    // focusClaudeComposer only focuses it at claudePos===0 (the rest
-    // position, where Enter must keep sending/newlining via ClaudeChat.mjs's
-    // own @keydown) and explicitly BLURS it for any stepped-up position
-    // (claudePos > 0, walking the transcript) — exactly the state this menu
-    // is meant for. A DOM-focus check rather than reading the composer's
-    // VALUE (unlike commentReplyEmpty for the comment column) — the composer
-    // clears its own value synchronously on send, so a value check here would
-    // race that clear and reopen this menu right after an ordinary send.
+    // Claude-gesprek" + — while the anchor is still empty, see
+    // claudeAnchorIsPlaceholder — "Comment hiervan maken", behind a confirm
+    // submenu for the former — see claudeChatCommandsFor) — but only while the
+    // composer itself is NOT the focused element: focusClaudeComposer only
+    // focuses it at claudePos===0 (the rest position, where Enter must keep
+    // sending/newlining via ClaudeChat.mjs's own @keydown) and explicitly
+    // BLURS it for any stepped-up position (claudePos > 0, walking the
+    // transcript) — exactly the state this menu is meant for. A DOM-focus
+    // check rather than reading the composer's VALUE (unlike commentReplyEmpty
+    // for the comment column) — the composer clears its own value
+    // synchronously on send, so a value check here would race that clear and
+    // reopen this menu right after an ordinary send.
+    //
+    // Enter on an EMPTY, focused composer (the rest position) reaches this
+    // SAME menu too, but via a different path: ClaudeChat.mjs's own @keydown
+    // (which already knows, at the moment of the keypress and before
+    // anything could mutate the field, whether it was blank) calls its
+    // onEmptyEnter callback, which resolves — through
+    // setClaudeMenuOpener(() => openMenu('claude')) below — to the exact same
+    // openMenu('claude') this branch calls. Deliberately NOT folded into this
+    // branch's own condition: re-deriving "was it blank" here, after the
+    // event has already bubbled past ClaudeChat.mjs's handler, cannot
+    // distinguish a genuinely blank Enter from an ORDINARY non-blank send
+    // (whose handler just cleared the field in that same dispatch) — see
+    // openClaudeMenuFromComposer's doc comment (RelatedPanel.mjs).
     if (
       e.key === 'Enter' &&
       isClaudeChatFocused() &&

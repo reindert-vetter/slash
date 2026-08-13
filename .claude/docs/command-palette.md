@@ -17,7 +17,7 @@ Arrow-key navigation of the tree itself lives in
 | `block` | `Enter` in list/diff mode | `COMMANDS` |
 | `pr` | `Enter` at stop 1 (the description column), and `/` on any stop with no menu of its own (see below) | `PR_COMMANDS` |
 | `comment` | `Enter` on a focused comment row with an empty reply field | `commentCommandsFor()` |
-| `claude` | `Enter` on the Claude column while its composer is NOT the focused element (`cs.claudePos > 0`, stepped up into the transcript) | `claudeChatCommandsFor()` — "Wis Claude-gesprek" (confirm submenu, and deliberately first so it stays the `defaultSel` action) + "Probeer de mislukte turn opnieuw" (direct, the keyboard twin of the failed bubble's own button) |
+| `claude` | `Enter` on the Claude column while its composer is NOT the focused element (`cs.claudePos > 0`, stepped up into the transcript), OR — via a separate callback path, see "Comment hiervan maken' on an empty Claude input" in `.claude/docs/claude-chat-panel.md` — while it IS focused but EMPTY (rest position) | `claudeChatCommandsFor()` — "Wis Claude-gesprek" (confirm submenu, and deliberately first so it stays the `defaultSel` action) + "Comment hiervan maken" (only while `claudeAnchorIsPlaceholder()`) + "Probeer de mislukte turn opnieuw" (direct, the keyboard twin of the failed bubble's own button) |
 | `prComment` | `Enter` on a comment-index row | `prCommentCommandsFor()` |
 | `compose` | `Enter`/"Place…" with text in the composer | `COMPOSE_COMMANDS` |
 | `replyPublish` | automatically when a reply is sent on a thread that isn't on GitHub | `replyPublishCommandsFor()` |

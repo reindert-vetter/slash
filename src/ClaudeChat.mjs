@@ -712,6 +712,25 @@ export function claudeChatColumn(view, callbacks) {
                 callbacks.onSend(e.target.value)
                 e.target.value = ''
                 resetTextareaHeight(e.target)
+              } else {
+                // A blank field has nothing to send — open the Claude-column
+                // menu instead of the old silent no-op (reviewer request; see
+                // "Comment hiervan maken' on an empty Claude input" in
+                // .claude/docs/claude-chat-panel.md). Decided HERE, before
+                // anything could mutate e.target.value, rather than home.mjs's
+                // document-level onKeydown re-deriving "was it blank" from the
+                // DOM after this handler already ran — see
+                // openClaudeMenuFromComposer's own doc comment
+                // (RelatedPanel.mjs) for exactly why that re-derivation races.
+                // stopPropagation is load-bearing, not belt-and-braces: this
+                // SAME event would otherwise still bubble into home.mjs's
+                // window-level onKeydown right after openMenu() set menu.open
+                // = true synchronously — which has its OWN early "the menu is
+                // open, this Enter runs/enters the highlighted command"
+                // handling, so the one keypress that opened the menu would
+                // immediately also "press" its own default item.
+                e.stopPropagation()
+                callbacks.onEmptyEnter?.()
               }
             }
           }}"

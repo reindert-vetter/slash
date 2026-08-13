@@ -180,6 +180,15 @@ const (
 	// replies to or resolves a comment — see comment_batch.go and
 	// .claude/docs/workflows-comments.md.
 	WorkflowCommentBatch = "comment_batch"
+	// WorkflowSummarizeChat is the Workflow Type that generates a short Dutch
+	// summary (at most 2 sentences) of an embedded Claude conversation — the
+	// prefill for "Comment hiervan maken" on a still-CLAUDE_ANCHOR_PLACEHOLDER
+	// anchor comment (RelatedPanel.mjs). One Execution per conversation+message
+	// count, started idempotently via a deterministic Run ID (see
+	// chatSummaryRunID) so re-requesting with no new messages never triggers a
+	// second LLM call; it completes when done (no signals). Haiku,
+	// context-only — no escalation, mirroring explain_code/pr_status's summary.
+	WorkflowSummarizeChat = "summarize_chat"
 	// SignalReply is the Signal Name a reaction is delivered under.
 	SignalReply = "reply"
 	// SignalPRState is the Signal Name the poller delivers an observed PR state
@@ -576,6 +585,23 @@ type ExplainCodeInput struct {
 	CodeHash string `json:"codeHash"`
 	Code     string `json:"code"`
 	Context  string `json:"context"`
+}
+
+// SummarizeChatInput starts a summarize_chat Execution: it asks Haiku
+// (context-only, no tools) for a short Dutch summary of one embedded Claude
+// conversation, keyed by the conversation's own comment id. The workflow
+// itself reads the conversation's transcript via an Activity (chat.Module.List)
+// rather than carrying it in the input — unlike explain_code's unit code, a
+// conversation can grow across many turns, and the read-model already IS the
+// durable record of it; the deterministic Run ID (chatSummaryRunID) still
+// pins the input to a message COUNT so a stale replay can't silently
+// re-summarize a conversation that has since grown further.
+type SummarizeChatInput struct {
+	// Repo is the canonical repo string this PR belongs to: "" (absent) for the
+	// primary repo. See repos.go.
+	Repo      string `json:"repo,omitempty"`
+	PR        int    `json:"pr"`
+	CommentID string `json:"commentId"`
 }
 
 // IngestInput starts an ingest Workflow Execution for one PR.
@@ -1702,6 +1728,63 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return nil, m.explain.Save(ctx, e)
 	})
 
+	// Activity: mark a conversation's summary as in-progress (write,
+	// workflow-driven) — mirrors markExplainSearching above.
+	engine.RegisterActivity("markChatSummarySearching", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg SummarizeChatInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.chat == nil {
+			return nil, nil
+		}
+		return nil, m.chat.SaveSummarySearching(ctx, arg.CommentID)
+	})
+	// Activity: ask Haiku (context-only, no tools) to summarize the
+	// conversation's own transcript in at most 2 sentences. Shells out to the
+	// claude CLI — a side effect, hence an Activity. Best-effort: a Claude
+	// hiccup yields empty text (the workflow then records "failed") rather than
+	// sinking the run.
+	engine.RegisterActivity("generateChatSummary", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg SummarizeChatInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.chat == nil || m.claude == nil {
+			return json.Marshal(map[string]string{"text": ""})
+		}
+		msgs, err := m.chat.List(ctx, arg.CommentID)
+		if err != nil {
+			return nil, err
+		}
+		text, err := m.claude.Run(ctx, claude.RunRequest{
+			Prompt:       chatSummaryPrompt(msgs),
+			Model:        claude.ModelHaiku,
+			SystemPrompt: claude.ChatSummarySystemPrompt,
+		})
+		if err != nil {
+			m.logf("summarize_chat: generate pr=%d comment=%s skipped: %v", arg.PR, arg.CommentID, err)
+			text = ""
+		}
+		return json.Marshal(map[string]string{"text": strings.TrimSpace(text)})
+	})
+	// Activity: persist the finished (done or failed) summary (write,
+	// workflow-driven).
+	engine.RegisterActivity("saveChatSummary", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			CommentID string `json:"commentId"`
+			Status    string `json:"status"`
+			Text      string `json:"text"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.chat == nil {
+			return nil, nil
+		}
+		return nil, m.chat.SaveSummary(ctx, arg.CommentID, arg.Status, arg.Text)
+	})
+
 	// Activity: stage 1 of the pr_status tracker — fetch the PR's basics (title,
 	// URL, body, author, diff-stats, head ref) from GitHub, derive a Jira key from
 	// the title and fetch that issue (best-effort), then store all of it in the
@@ -2530,6 +2613,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowClaudeChat, claudeChatWorkflow)
 	engine.RegisterWorkflow(WorkflowChatMerge, chatMergeQueueWorkflow)
 	engine.RegisterWorkflow(WorkflowCommentBatch, commentBatchWorkflow)
+	engine.RegisterWorkflow(WorkflowSummarizeChat, summarizeChatWorkflow)
 
 	// The LLM-heavy workflows make many/long claude calls (resolve_call runs one
 	// claude call per unresolved call in the block; code_warning a whole agentic
@@ -2541,6 +2625,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.SetWorkflowPriority(WorkflowResolveCall, tembed.PriorityLow)
 	engine.SetWorkflowPriority(WorkflowResolveTestCovers, tembed.PriorityLow)
 	engine.SetWorkflowPriority(WorkflowExplainCode, tembed.PriorityLow)
+	engine.SetWorkflowPriority(WorkflowSummarizeChat, tembed.PriorityLow)
 	engine.SetWorkflowPriority(WorkflowCodeWarning, tembed.PriorityLow)
 	// Every claude_chat turn is a real claude subprocess call (see
 	// runOneClaudeTurn) — same reasoning as the LLM-heavy workflows above: an
@@ -3509,6 +3594,54 @@ func explainCodeWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 // sanctioned UI write path.
 func (m *TaskManager) StartExplainCode(in ExplainCodeInput) (string, error) {
 	return m.engine.StartWorkflowID(explainRunID(in), WorkflowExplainCode, in)
+}
+
+// summarizeChatWorkflow generates the comment-column edit field's prefill for
+// "Comment hiervan maken" on an embedded Claude conversation. Deterministic:
+// the LLM call is an Activity, the done/failed decision reads that Activity's
+// recorded result (history), and the Activity order/count is fixed — mark
+// searching, generate, save. Mirrors explainCodeWorkflow exactly, one
+// Activity swapped for the chat-transcript equivalent.
+func summarizeChatWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
+	var in SummarizeChatInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return nil, err
+	}
+	if err := w.ExecuteActivity("markChatSummarySearching", in, nil); err != nil {
+		return nil, fmt.Errorf("mark searching: %w", err)
+	}
+	var gen struct {
+		Text string `json:"text"`
+	}
+	if err := w.ExecuteActivity("generateChatSummary", in, &gen); err != nil {
+		return nil, fmt.Errorf("generate summary: %w", err)
+	}
+	status := chat.SummaryStatusDone
+	if gen.Text == "" {
+		// Offline (claude.Fake) or a Claude hiccup: record a terminal "failed"
+		// status so the frontend stops showing "genereren…" and never
+		// re-requests this exact conversation+message-count (the deterministic
+		// Run ID already dedups).
+		status = chat.SummaryStatusFailed
+	}
+	if err := w.ExecuteActivity("saveChatSummary", map[string]string{
+		"commentId": in.CommentID, "status": status, "text": gen.Text,
+	}, nil); err != nil {
+		return nil, fmt.Errorf("save summary: %w", err)
+	}
+	return json.Marshal(map[string]string{"status": status})
+}
+
+// StartSummarizeChat launches a summarize_chat Execution under its
+// deterministic Run ID (chatSummaryRunID) — StartWorkflowID makes a repeated
+// request with no new messages an idempotent no-op reuse, so the UI can fire
+// on every "Comment hiervan maken" click without ever duplicating an LLM
+// call. msgCount is the caller's own snapshot of the conversation's current
+// message count (the frontend already has cc.messages loaded), so this needs
+// no read of its own just to compute the Run ID. Starting an Execution is the
+// sanctioned UI write path.
+func (m *TaskManager) StartSummarizeChat(in SummarizeChatInput, msgCount int) (string, error) {
+	return m.engine.StartWorkflowID(chatSummaryRunID(in.CommentID, msgCount), WorkflowSummarizeChat, in)
 }
 
 // resolveTestCoversWorkflow resolves a test's class-level-only coverage

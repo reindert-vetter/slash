@@ -35,6 +35,17 @@ var PRSummarySystemPrompt string
 //go:embed prompts/since_review.md
 var SinceReviewSystemPrompt string
 
+// ChatSummarySystemPrompt frames the fifth context-only Haiku action: summarize
+// an embedded Claude conversation in at most 2 sentences (max comma/period
+// punctuation, inline code/code-suggestion fences allowed) — the prefill for
+// the comment-column edit field when the reviewer picks "Comment hiervan
+// maken" on a chat whose backing comment is still CLAUDE_ANCHOR_PLACEHOLDER
+// (RelatedPanel.mjs). Its call-specific content is the conversation's own
+// transcript (chatSummaryPrompt, chat_summary.go).
+//
+//go:embed prompts/chat_summary.md
+var ChatSummarySystemPrompt string
+
 // CodeWarningSystemPrompt is the static instruction block for the
 // code_warning workflow's one agentic Sonnet call: unlike the three above,
 // this is NOT a context-only completion — Sonnet is given Read/Grep/Glob and

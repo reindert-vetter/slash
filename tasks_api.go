@@ -293,6 +293,16 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 				}
 			}
 		}
+		// SLASH_CLAUDE_CHAT_SUMMARY optionally programs the summarize_chat
+		// workflow's Haiku call deterministically — a plain string, not a JSON
+		// fixture (there is only ever one canned summary needed). Keyed by
+		// SystemPrompt (SetOutputForPrompt), not just the model id: pr_status's
+		// own summary Activities (generatePRSummary/generateSinceReviewSummary)
+		// share ModelHaiku and must keep returning "" (their own untouched
+		// default) regardless of this var.
+		if s := os.Getenv("SLASH_CLAUDE_CHAT_SUMMARY"); s != "" {
+			fake.SetOutputForPrompt(claude.ModelHaiku, claude.ChatSummarySystemPrompt, s)
+		}
 		cl = fake
 	}
 	// Under SLASH_JIRA=off the Jira bridge never shells out (offline/tests): an
@@ -661,6 +671,11 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// deterministic Run ID) an AI-explanation execution for one navigation unit
 	// containing an if-statement (the footer description).
 	mux.HandleFunc("/api/workflows/explain_code", s.handleExplainCode)
+	// POST /api/workflows/summarize_chat {pr,commentId} → start (idempotently,
+	// via a deterministic Run ID keyed on the conversation's current message
+	// count) a short-summary execution for one embedded Claude conversation —
+	// the "Comment hiervan maken" prefill (RelatedPanel.mjs).
+	mux.HandleFunc("/api/workflows/summarize_chat", s.handleSummarizeChat)
 	// POST /api/workflows/pr_status {pr} → ensure the per-PR lifecycle tracker
 	// (its start fetches the PR's metadata into the prmeta read-model).
 	mux.HandleFunc("/api/workflows/pr_status", s.handlePRStatusStart)
@@ -1356,6 +1371,38 @@ func (s *server) handleExplainCode(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
 }
 
+// handleSummarizeChat starts a summarize_chat Workflow Execution (POST) — the
+// sanctioned UI write path for the "Comment hiervan maken" prefill on an
+// embedded Claude conversation. The workflow asks Haiku (context-only) to
+// summarize the conversation's own transcript and writes the summary onto its
+// chat_conversations row. Idempotent per conversation+message-count
+// (StartWorkflowID) — msgCount is the frontend's own snapshot of
+// cc.messages.length, so re-requesting with no new messages since the last
+// request never triggers a second LLM call.
+func (s *server) handleSummarizeChat(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Repo      string `json:"repo,omitempty"`
+		PR        int    `json:"pr"`
+		CommentID string `json:"commentId"`
+		MsgCount  int    `json:"msgCount"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.PR <= 0 || body.CommentID == "" {
+		http.Error(w, "invalid summarize request", http.StatusBadRequest)
+		return
+	}
+	in := SummarizeChatInput{Repo: body.Repo, PR: body.PR, CommentID: body.CommentID}
+	runID, err := s.tasks.manager.StartSummarizeChat(in, body.MsgCount)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
+}
+
 // handleExplanations serves GET /api/explanations?pr=N — the read-only AI
 // unit-explanation read-model the footer renders.
 func (s *server) handleExplanations(w http.ResponseWriter, r *http.Request) {
@@ -1821,7 +1868,17 @@ func (s *server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if list == nil {
 		list = []chat.Message{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "messages": list})
+	// summarize_chat's own two fields (see chat.Module.Summary) — "", "" for a
+	// conversation that never had a summary requested, same shape as every
+	// other never-asked read-model row.
+	summary, summaryStatus, err := s.tasks.chat.Summary(r.Context(), commentID)
+	if err != nil {
+		http.Error(w, "query failed", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "messages": list, "summary": summary, "summaryStatus": summaryStatus,
+	})
 }
 
 // handleChatProgress serves GET /api/chat/progress?commentId=X — the volatile
