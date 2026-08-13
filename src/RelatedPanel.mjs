@@ -6508,10 +6508,12 @@ export function prWideComments() {
 // both wanted: every open comment becomes a stop on the ↑/↓ walk, and — because
 // blockApproveCount already scores a comment row as "resolved == approved"
 // (home.mjs) — the PR is only ever fully approved once every comment is
-// resolved, including other people's. Space on such a row resolves it (see
-// spaceKey in home.mjs), which is what makes that walk finishable. A RESOLVED
-// block-anchored comment drops out of the index again; a resolved PR-wide one
-// stays, exactly as before.
+// resolved, including other people's. Resolving such a row is reached through
+// its own Enter menu (prCommentCommandsFor in home.mjs) — deliberately NOT
+// Space, which instead toggles the row's comment_batch checkbox (spaceKey) —
+// which is what makes that walk finishable. A RESOLVED block-anchored comment
+// drops out of the index again; a resolved PR-wide one stays, exactly as
+// before.
 //
 // One extra condition on that unresolved half lives in home.mjs, not here,
 // because it needs state.blocks: the comment's own block must actually be in the

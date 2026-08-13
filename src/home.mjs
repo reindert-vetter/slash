@@ -2467,10 +2467,13 @@ function isCommentAnchorDrillActive(level) {
 // existing single-comment mechanism (selectedComment/prCommentCommandsFor's
 // Beantwoorden/Resolve/Chat/Ignore, the → thread-walk for an UNANCHORED item)
 // keeps reading `b.comment` unchanged and simply acts on the first comment of
-// the line — only blockApproveCount and spaceKey's resolve-progression
-// (firstUnresolvedComment) look at the full `comments` array. A solo comment
-// (the overwhelmingly common case) is a "group" of exactly one, so nothing
-// about its own row changes.
+// the line — only blockApproveCount looks at the full `comments` array (to sum
+// done/total across the whole group). A solo comment (the overwhelmingly
+// common case) is a "group" of exactly one, so nothing about its own row
+// changes. Space's own batch-checkbox toggle (spaceKey) deliberately stays
+// scoped to just `b.comment` (the primary), mirroring batchCheckbox's own
+// scope — see "The comment_batch checkboxes and the bottom action row" in
+// comments-panel.md.
 function commentBlockItem(comments) {
   const c = comments[0]
   const snippet = (c.body || '').trim().replace(/\s+/g, ' ').slice(0, 60)
@@ -6505,14 +6508,14 @@ const REVIEW_APPROVE_CONFIRM_COMMANDS = withClose([
 ])
 
 // startBatchFromRow is the bottom action row's Enter/click action (see
-// onBatchRow/the 'x' keydown branch below): confirm the run over exactly the
-// CHECKED comments (checkedBatchComments, BlockList.mjs — unchecking a row is
-// the curation step, so there is no separate confirm submenu here, unlike the
-// push-todo row) and immediately put the reviewer on the FIRST checked
-// comment, where the pulsing pill and the log line show what Claude is doing
-// (his own request: "na het verwerken van de comments moet je gaan naar de
-// eerste comment in de lijst"). A refused start (already running, network) or
-// an empty selection leaves things as they are.
+// onBatchRow and the batchRowFocused Enter branch below): confirm the run
+// over exactly the CHECKED comments (checkedBatchComments, BlockList.mjs —
+// unchecking a row is the curation step, so there is no separate confirm
+// submenu here, unlike the push-todo row) and immediately put the reviewer
+// on the FIRST checked comment, where the pulsing pill and the log line show
+// what Claude is doing (his own request: "na het verwerken van de comments
+// moet je gaan naar de eerste comment in de lijst"). A refused start
+// (already running, network) or an empty selection leaves things as they are.
 //
 // This replaces the removed 'bulkComments' palette entry point
 // (REVIEW_BATCH_COMMENTS_ITEM) — deliberately with no replacement shortcut in
@@ -6726,20 +6729,6 @@ function topLoadingActive() {
 function selectedComment() {
   const b = curBlock()
   return b && b.kind === 'comment' ? b.comment : null
-}
-
-// firstUnresolvedComment is spaceKey's own resolve target for a comment row —
-// deliberately NOT always b.comment (the group's primary/first comment):
-// once a line groups several comments (commentGroupKeyOf/commentBlockItem),
-// resolving only ever the primary one would get spaceKey permanently stuck
-// as soon as THAT one comment happens to already be resolved while a sibling
-// in the same group is not — blockApproveCount sums the whole group, so the
-// row would stay "not fully approved" with no way for Space to progress it.
-// Falls back to b.comment for a plain, ungrouped/solo row (comments.length
-// === 1, the overwhelmingly common case) — unchanged behavior there.
-function firstUnresolvedComment(b) {
-  const comments = (b && b.comments) || (b && b.comment ? [b.comment] : [])
-  return comments.find((c) => c && c.status !== 'resolved') || comments[0] || null
 }
 
 // focusedBlock is whichever block the active Onderliggende-code panel (and its
@@ -8846,24 +8835,28 @@ function spaceKey() {
     toggleRangeApproval()
     return
   }
-  // A comment index row: Space RESOLVES a comment. That is this row's whole
-  // equivalent of approving — blockApproveCount already scores a comment row as
-  // "resolved == approved" — and it is what makes the ↑/↓ walk over every open
-  // comment (see indexComments in RelatedPanel.mjs) finishable at all. Space
-  // used to be a silent no-op here (a comment item has no diff rows, so
-  // approveTargetRows came back empty). Resolving is not undone by a second
-  // press: a resolved block-anchored comment leaves the index, and "Unresolve"
-  // stays where it was, in the row's own Enter menu (prCommentCommandsFor).
-  // firstUnresolvedComment, not selectedComment/b.comment: a row can now
-  // stand for a GROUP of comments on the same line (commentGroupKeyOf), and
-  // blockApproveCount sums the whole group — always resolving the group's
-  // primary comment would get stuck as soon as it happens to already be
-  // resolved while a sibling in the group isn't, leaving the row forever
-  // "not fully approved" with no way for Space to progress it.
+  // A comment index row: Space used to RESOLVE the comment outright — one
+  // keypress, no confirm — which turned out to be too easy to trigger by
+  // accident once the row also carries a comment_batch checkbox (reviewer
+  // report: "ik wil niet comments kunnen resolven met een spatiebalk in de
+  // blokken index, dat gaat te snel"). Resolving now only happens through the
+  // row's own Enter menu ("Resolve comment", already the default item for
+  // the reviewer's own comment — see prCommentCommandsFor). Space here
+  // instead TOGGLES the row's own batch-selection checkbox
+  // (toggleBatchChecked, mirrors clicking it — see batchCheckbox,
+  // BlockList.mjs) when it has one, or — when it doesn't (an AI finding, or
+  // an ignored-and-revealed comment, neither of which comment_batch may ever
+  // touch — isBatchEligible/isIgnoredComment) — advances to the next row,
+  // mirroring the existing "↓ falls through" convention elsewhere in this
+  // file rather than doing nothing.
   const curB = curBlock()
-  const target = curB && curB.kind === 'comment' ? firstUnresolvedComment(curB) : null
-  if (target) {
-    if (target.status !== 'resolved') resolvePrCommentItem(target)
+  if (curB && curB.kind === 'comment') {
+    if (isBatchEligible(curB.comment) && !isIgnoredComment(state, curB)) {
+      toggleBatchChecked(state, curB.comment.id)
+    } else {
+      stepListSelection(1)
+      scrollSelectedIntoView()
+    }
     return
   }
   const ctx = approveContext()
@@ -10004,7 +9997,7 @@ function onKeydown(e) {
   if (
     (state.toggleFocused || state.ignoreToggleFocused || state.batchRowFocused || state.pushTodoFocused) &&
     !isModifiedKey(e) &&
-    ['f', 'd', 's', 'a', ' ', 'x', 'ArrowRight'].includes(e.key)
+    ['f', 'd', 's', 'a', ' ', 'ArrowRight'].includes(e.key)
   ) {
     e.preventDefault()
     return
@@ -10042,13 +10035,15 @@ function onKeydown(e) {
     return
   }
 
-  // Space — approve the unit under the keyboard (whole block in list mode,
+  // Space — on an ordinary block/unit: approve it (whole block in list mode,
   // else the current group/line/call, exactly like the palette's "Keur ...
   // goed" — see approveContext/toggleApprove) and continue straight to the
   // next unapproved unit in one keypress, without ever showing the
   // postApprove confirm menu. Already standing on an approved unit just jumps
   // to the next one, and reaching the end opens the same review-submit menu
-  // as the natural end of a "Ga door" chain — see spaceKey's own doc comment.
+  // as the natural end of a "Ga door" chain.
+  // On a comment-index row Space does something else entirely — see
+  // spaceKey's own doc comment for why resolving was moved OFF this key.
   // !state.showDescription mirrors the Enter branch above: stop 1 (the
   // PR-description column) has no block context to approve, same reason Enter
   // there opens the 'pr' menu instead of 'block'. preventDefault always fires
@@ -10058,32 +10053,6 @@ function onKeydown(e) {
     e.preventDefault()
     spaceKey()
     return
-  }
-
-  // `x` toggles the SELECTED comment-index row's own comment_batch checkbox
-  // (see batchCheckbox/toggleBatchChecked, BlockList.mjs) — a keyboard twin of
-  // clicking the checkbox itself, per the reviewer's explicit request that
-  // this not be mouse-only. Every other free single letter that reads as
-  // "select/mark this" is already taken elsewhere in this handler (f/d/s
-  // zoom, a cycles the diff view, c/v resize, Space approves+continues,
-  // Enter/`/` open a menu) — `x` was chosen as the one still free, unbound
-  // letter, mirroring the "x selects this row" convention from Gmail-style
-  // list UIs. Deliberately does NOT touch state.selected/cs.focus — it only
-  // flips the checkbox of whichever comment already owns the keyboard, same
-  // scope as Space's resolve action right above it. A no-op on any other
-  // selection (not a comment row, or a comment the batch may never touch —
-  // isBatchEligible) so the key falls through harmlessly rather than being
-  // swallowed.
-  if (e.key === 'x' && !isModifiedKey(e) && !state.showDescription) {
-    const sc = selectedComment()
-    // Mirrors batchCheckbox's own guard (BlockList.mjs) exactly — an ignored
-    // row (only reachable at all once revealed via "Toon N verborgen
-    // comments") shows no checkbox either, so `x` there must stay a no-op.
-    if (sc && isBatchEligible(sc) && !isIgnoredComment(state, curBlock())) {
-      e.preventDefault()
-      toggleBatchChecked(state, sc.id)
-      return
-    }
   }
 
   // `a` cycles the diff-pane view everywhere (every visible Block card: the

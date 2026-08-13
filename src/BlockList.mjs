@@ -791,7 +791,7 @@ function aiWarningIcon() {
 }
 
 // toggleBatchChecked flips one comment's inclusion in the batch — shared by
-// the checkbox's own click handler and home.mjs's `x` key, so mouse and
+// the checkbox's own click handler and home.mjs's `spaceKey`, so mouse and
 // keyboard do the exact same thing (see .claude/docs/mouse-navigation.md).
 export function toggleBatchChecked(state, id) {
   const checkedNow = state.batchChecked[id] !== false
@@ -806,11 +806,10 @@ export function toggleBatchChecked(state, id) {
 // bulkComments palette's "hand over everything" default. Reachable by mouse
 // (its own click, stopPropagation FIRST per the nested-@click rule in
 // arrowjs-pitfalls.md, so it never also re-selects/deselects the row via the
-// row's own @click) AND by keyboard: `x` (home.mjs's onKeydown, chosen because
-// every other free single letter that reads as "select/mark" — s/d/f/a/c/v,
-// Space, Enter, / — is already taken; see keyboard-navigation.md) toggles the
-// SELECTED row's own checkbox, so a reviewer never has to reach for the mouse
-// just to exclude one comment from the run.
+// row's own @click) AND by keyboard: `Space` on the SELECTED row (spaceKey,
+// home.mjs) toggles this same checkbox — see "Generic input-focus guard" in
+// keyboard-navigation.md for why the click handler below ALSO blurs the
+// input immediately.
 function batchCheckbox(state, b) {
   // Mirrors batchEligibleRows exactly (kind + isBatchEligible + not ignored) —
   // an ignored row, once revealed via "Toon N verborgen comments", must not
@@ -826,6 +825,16 @@ function batchCheckbox(state, b) {
       @click="${(e) => {
         e.stopPropagation()
         toggleBatchChecked(state, id)
+        // A checkbox that keeps real DOM focus after a click poisons every
+        // later keydown app-wide: isEditableFocused() (home.mjs) treats ANY
+        // focused INPUT/TEXTAREA as "typing, let it flow through" and swallows
+        // Enter/Space/etc. — reproduced as a real bug (Enter on the row
+        // stopped opening its menu at all after clicking this checkbox).
+        // Blurring immediately hands keyboard control straight back to the
+        // document-level handler, which is where the checkbox's OWN Space
+        // toggle lives anyway (see keyboard-navigation.md's "Generic
+        // input-focus guard").
+        e.target.blur()
       }}"
     />
   `

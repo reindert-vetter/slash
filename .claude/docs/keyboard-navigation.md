@@ -418,7 +418,7 @@ bottom action row") acts DIRECTLY on `Enter`/`→`/click, like a toggle row and
 UNLIKE the push-todo row right below it — it starts the `comment_batch` run
 over whatever is currently checked (`startBatchFromRow`), no confirm step,
 because the checkboxes on the rows above already are the deliberate curation
-step. `f`/`d`/`s`/`a`/`Space`/`x` are no-ops there, same reasoning as a toggle
+step. `f`/`d`/`s`/`a`/`Space` are no-ops there, same reasoning as a toggle
 row.
 
 **The push-todo row** (`state.pushTodoFocused`, the bottom-most stop — see
@@ -426,7 +426,7 @@ row.
 difference: its `Enter`/`→`/click does not act directly, because pushing writes
 to a branch other people work on. It opens a one-more-step confirm menu
 (`openMenu('pushTodo')`), the same two-step shape "Wis Claude-gesprek" uses.
-`f`/`d`/`s`/`a`/`Space`/`x` are no-ops there for the same reason as on a toggle
+`f`/`d`/`s`/`a`/`Space` are no-ops there for the same reason as on a toggle
 row.
 
 **The search box** is reached via `activateSearch()` (real DOM focus, so its
@@ -911,6 +911,15 @@ same functions — no second approve/continue implementation:
   rejecting the whole PR stays a manual, two-step choice regardless of how the
   last unit got approved.
 
+**On a comment-index row, Space does something else entirely: toggle the
+comment_batch checkbox, or advance.** `spaceKey`'s very first branch checks
+`curBlock().kind === 'comment'` before any of the approve logic above ever
+runs — see "The comment_batch checkboxes and the bottom action row" in
+`.claude/docs/comments-panel.md` for the full mechanism (this used to RESOLVE
+the comment outright in one keypress; reverted as "too easy to trigger by
+accident" once the row also carries a checkbox — resolving now only happens
+through the row's own `Enter` menu).
+
 **Guards** (`onKeydown`): `!isModifiedKey(e)` (a held Cmd/Ctrl falls through
 untouched, same as `f`/`d`/`s`/`a`) and `!state.showDescription` — stop 1 (the
 PR-description column) has no block to approve, the same reason `Enter` there
@@ -927,31 +936,6 @@ palette there, so approving with Space is meaningful on that stop too.
 `e.preventDefault()` always fires when handled, so Space never scrolls the
 page nor (were a focusable element to hold real DOM focus) activates it
 natively. Test: `tests/space-approve-continue.spec.mjs`.
-
-## `x` — toggle a comment's batch-selection checkbox
-
-**`x`** toggles the SELECTED comment-index row's own `comment_batch` checkbox
-(`batchCheckbox`/`toggleBatchChecked`, `BlockList.mjs` — see "The comment_batch
-checkboxes and the bottom action row" in `.claude/docs/comments-panel.md`):
-explicitly requested as a keyboard equivalent of clicking the checkbox, so
-excluding a comment from a batch run never requires the mouse. Gated on
-`selectedComment()` returning a comment AND `isBatchEligible(sc)` — a no-op on
-any other selection (an ordinary block, stop 1, a toggle/batch/push-todo row),
-so the key falls through harmlessly instead of being swallowed everywhere.
-Does not touch `state.selected`/`cs.focus` — same narrow scope as `Space`'s
-resolve action right above it, just a different, unrelated control on the same
-row.
-
-**Why `x` specifically:** every other short, "mark/select this" free letter is
-already bound elsewhere in this same handler — `f`/`d`/`s` zoom the diff
-granularity, `a` cycles the diff view, `c`/`v` resize the focused column,
-`Space` approves+continues, `Enter`/`/` open a menu — so `x` was the one
-remaining free single letter, chosen to mirror the "press `x` to select this
-row" convention from Gmail-style list UIs (the checkbox itself is the same
-idea: mark an item for a bulk action). If a future feature needs another
-free letter, audit this same list first — see also the guard list a
-toggle/batch/push-todo row swallows (`['f','d','s','a',' ','x','ArrowRight']`
-in `onKeydown`).
 
 ## `a` — cycling the diff view (split → unified → fit → split)
 
@@ -1063,6 +1047,22 @@ earlier branch claimed the key, no remaining global shortcut (`/`, `f`/`d`/`s`,
   `handleRelatedKey`'s own Escape handling).
 - **`Tab`** deliberately gets no handling: the browser moves focus natively,
   after which the next keystroke doesn't hit this branch anyway.
+- **A control that is an `<input>` but ISN'T meant to hold onto real DOM focus
+  must blur itself right after use.** `isEditableFocused()` matches ANY
+  focused `INPUT`, not just a text field — the comment_batch checkbox
+  (`batchCheckbox`, `BlockList.mjs`) is an `<input type="checkbox">`, and a
+  plain mouse click on it (before this fix) left it holding real DOM focus
+  indefinitely, since nothing else in this app ever moves focus away from a
+  clicked checkbox. Every subsequent keydown — `Enter` on that same row not
+  opening its menu at all was the reported symptom — then silently fell into
+  this exact fallback and did nothing, app-wide, until something else
+  happened to steal focus back. Fixed locally, in the checkbox's own `@click`
+  (`e.target.blur()` right after toggling) rather than by narrowing
+  `isEditableFocused()` itself — that helper is relied on by every shortcut in
+  this file, and the search box/composers/reply fields all genuinely DO want
+  to keep DOM focus, so "any focused INPUT" stays the right definition for all
+  of them. Only a control that toggles via a single click and has no typing
+  concept of its own needs this same treatment if one is added later.
 - The search box (`BlockList.mjs`) needs no fallback — its `@focus`/`@blur` set
   `state.searchActive` from real DOM focus directly.
 

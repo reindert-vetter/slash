@@ -1540,9 +1540,12 @@ checked by default; a bottom action row ("Verwerk N comments met Claude
 (`checkedBatchComments`) and is itself a stop of the sidebar's `↑`/`↓` loop
 (`state.batchRowFocused`, see `.claude/docs/keyboard-navigation.md`) — Enter,
 click, or the row's own click all run `startBatchFromRow` (`home.mjs`)
-directly, no confirm step. Unchecking a row is mouse-click **or** the `x` key
-on that row (see keyboard-navigation.md) — the deliberate curation step that
-replaces the removed palette's "read the list, then confirm" shape.
+directly, no confirm step. Unchecking a row is mouse-click **or** `Space` on
+the selected row (see keyboard-navigation.md) — the deliberate curation step
+that replaces the removed palette's "read the list, then confirm" shape.
+`Space` deliberately does NOT resolve a comment anymore either way — see "The
+comment_batch checkboxes and the bottom action row" in
+`.claude/docs/comments-panel.md`.
 
 Starting it jumps straight to the FIRST checked comment, because that is
 where the progress lives:
@@ -1569,11 +1572,12 @@ the comment's block must actually be in the tree, otherwise the row would be a
 dead end. Two wanted consequences: every open comment is a stop on the ↑/↓ walk,
 and — because `blockApproveCount` already scores a comment row as
 "resolved == approved" — the PR is only fully approved once every comment is
-resolved, **including other people's**. Space resolving such a row is what makes
-that walk finishable.
+resolved, **including other people's**. Resolving such a row (via its own
+`Enter` menu — see `.claude/docs/approval.md`, `Space` deliberately does NOT
+resolve it) is what makes that walk finishable.
 
 Tests: `comment_batch_test.go` (marker parsing incl. prose that must not match,
 the progress lifecycle, eligibility + prompt content, the no-work-copy degrade
 path, and the streamed sink with a marker split across two text deltas) and
 `tests/comment-batch.spec.mjs` (the index row, the checkboxes + bottom action
-row, and Space resolving a comment row).
+row + Space toggling them, and resolving via the Enter menu).

@@ -114,7 +114,7 @@ Tests: `reanchor_test.go` (`TestReanchorApprovalsFollowShiftedRowsViaAnchors`
 — no previous worktree at all — plus the duplicate-context and rewritten-row
 cases), `approvals_test.go`, `tests/space-descends-into-call.spec.mjs`.
 
-## An open comment is an unapproved unit, and Space resolves it
+## An open comment is an unapproved unit, resolved via its own Enter menu
 
 Every UNRESOLVED comment gets its own blokken-index row (`indexComments`,
 `RelatedPanel.mjs`, plus the "its block must be in the tree" condition in
@@ -124,13 +124,19 @@ both confirmed by the reviewer: an open comment is a stop on the ↑/↓ walk an
 `findNextUnapproved`'s, and the PR is only ever fully approved once every comment
 is resolved — **including other people's**.
 
-`spaceKey` (`home.mjs`) therefore has an early branch for such a row: Space
-RESOLVES the comment (`resolvePrCommentItem`, the ordinary `reply` Signal with
-`done: true`), which is that row's whole equivalent of approving. It used to be a
-silent no-op there (a comment item has no diff rows, so `approveTargetRows` came
-back empty). Not a toggle: a resolved block-anchored comment leaves the index,
-and "Unresolve" stays in the row's own Enter menu. Test:
-`tests/comment-batch.spec.mjs`.
+**Space does NOT resolve a comment row — that was reverted.** An earlier cut
+had `spaceKey` (`home.mjs`) resolve the comment directly
+(`resolvePrCommentItem`, the ordinary `reply` Signal with `done: true`) the
+moment the row also grew a comment_batch checkbox (see "The comment_batch
+checkboxes and the bottom action row" in `.claude/docs/comments-panel.md`);
+reported back as "too easy to trigger by accident" ("dat gaat te snel") once
+`Space` also had to do checkbox duty on the same row. `spaceKey`'s comment-row
+branch now toggles the checkbox instead (or advances to the next row when
+there is no checkbox), and **resolving only happens through the row's own
+`Enter` menu** ("Resolve comment", already the default item for the
+reviewer's own comment — `prCommentCommandsFor`). Not a toggle there either: a
+resolved block-anchored comment leaves the index, and "Unresolve" stays in
+that same menu. Test: `tests/comment-batch.spec.mjs`.
 
 ## Placing a comment (or an AI finding) does NOT retract an approval
 

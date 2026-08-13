@@ -32,8 +32,10 @@ the comment, but there is no code to step into. The PR-wide/orphan kinds and an
 `@`-mention keep their row unconditionally, as before.
 
 Consequences documented elsewhere: it makes every open comment a stop on the ↑/↓
-walk and an unapproved unit of the PR total, with **Space resolving** such a row
-(see `.claude/docs/approval.md`), and it is what the `comment_batch` progress
+walk and an unapproved unit of the PR total, resolved via the row's own
+**`Enter` menu** ("Resolve comment" — see `.claude/docs/approval.md`; `Space`
+does NOT resolve a comment row, see "The comment_batch checkboxes and the
+bottom action row" below), and it is what the `comment_batch` progress
 hangs off (`batchPill` on the row, the log line in the card's footer — see
 `.claude/docs/workflows-comments.md`).
 
@@ -63,17 +65,26 @@ off THIS list, not a separate one.
   unlike that durable map: excluding one comment from THIS run is a momentary
   curation, not a standing reviewer decision). Toggling it never touches
   `state.selected` (`e.stopPropagation()` first, per the nested-`@click` rule
-  in `.claude/rules/arrowjs-pitfalls.md`) and is independent of both existing
-  meanings a comment row's own click/keys already carry — **Space still
-  resolves** the row (see above) and **Enter still opens its action menu**
-  (`prCommentCommandsFor`); the checkbox is a third, unrelated control, not a
-  reinterpretation of either.
-- **Reachable by keyboard too, not mouse-only** (explicit reviewer request):
-  **`x`** on the SELECTED comment row toggles its own checkbox
-  (`toggleBatchChecked`, shared with the checkbox's own click handler, so mouse
-  and key do the exact same thing — see `.claude/docs/mouse-navigation.md`).
-  See "`x` — toggle a comment's batch-selection checkbox" in
-  `.claude/docs/keyboard-navigation.md` for why that letter and not another.
+  in `.claude/rules/arrowjs-pitfalls.md`).
+- **`Space` toggles it — reworked after a follow-up reviewer report.** The
+  first cut left `Space` resolving the comment (unrelated to the checkbox) and
+  added a separate `x` key for the checkbox itself; reported back as "does not
+  work well with keyboard navigation" — resolving via a single, easy-to-hit
+  key next to a checkbox was "too easy to trigger by accident", and clicking
+  the checkbox with the MOUSE first (to test it) left the input holding real
+  DOM focus, which silently broke every later `Enter`/`Space` on that row (see
+  "Generic input-focus guard" in `.claude/docs/keyboard-navigation.md` for the
+  `isEditableFocused()` root cause and its fix). Now: `Space` on a
+  comment-index row (`spaceKey`, checked BEFORE any approve logic) toggles the
+  SELECTED row's own checkbox (`toggleBatchChecked`, same function the
+  checkbox's own click uses) when it has one; on a row with **no** checkbox
+  (an AI finding, or an ignored-and-revealed comment) it instead **advances to
+  the next row**, mirroring the existing "↓ falls through" convention rather
+  than doing nothing. Resolving a comment no longer has ANY single-keypress
+  shortcut — it only happens through the row's own `Enter` menu ("Resolve
+  comment", already the default item for the reviewer's own comment). The `x`
+  key from the first cut is gone outright (not kept as an alias): `Space` now
+  covers the same ground and is the more discoverable, checkbox-native key.
 - **The bottom action row** (`batchActionRow`, `data-testid=batch-action-row`)
   sits right after the two toggle rows and before the push-todo section (it
   acts on comments that are already in this list, so it belongs with the rest
