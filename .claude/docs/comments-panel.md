@@ -1083,6 +1083,56 @@ what makes this possible; the backend's initial-post branch needed a matching
 addition (a PR-wide comment posts as a new issue comment) — see
 `.claude/docs/workflows-comments.md`.
 
+**A line-anchored finding reaching the SAME sidebar menu still goes through
+the block-scoped path above, not `convertPrWideWarningToComment`.** A
+line-anchored finding (`!c.kind`, `commentBlockItem`'s `b.lineAnchored` — see
+"Sort a line-anchored comment under the changed files" above) also gets its
+own "Comments op regels" sidebar row, and selecting that row opens this exact
+same menu (`b.kind === 'comment'` → `openMenu('prComment')` regardless of
+`c.kind`) — but its OWN detail view still drills into the real block behind
+it (`home.mjs`'s `DetailPanel` renders that block's ordinary
+`Block()`/`InlineComments`, not `commentDetailCard`), so the block's own "+
+Nieuwe comment" composer is already mounted right there. `prCommentCommandsFor`
+therefore dispatches "Comment hiervan maken" itself, by `c.kind`: a genuinely
+PR-wide `c` still calls `convertPrWideWarningToComment`; a line-anchored `c`
+instead calls `convertWarningToComment` directly (the exact same function
+`commentCommandsFor`'s own item above uses) — which keeps the full anchor
+(`warningOverride`) instead of downgrading it into an unanchored `'issue'`
+comment, and needs no change to `sendConvertedPrWideComment`/`picm` at all.
+
+`placeComment` itself needed one more adjustment for this to actually place
+anything: `state.selected` (`home.mjs`) stays on the comment-index item the
+whole time — the underlying block is only ever reached via drilling behind
+that sidebar row (see `.claude/docs/drilling.md`), never via an ordinary
+selection change — so `state.blocks[state.selected]` (`placeComment`'s `b`)
+is still the synthetic `kind:'comment'` item, not a real block, when "Plaats
+comment" runs. `placeComment`'s own guard against exactly that shape
+(`!b || b.kind === 'comment'`) therefore bailed here too, silently. The fix
+carves out the one legitimate exception: a `warningOverride` already carries
+its own complete, independent anchor (`file`/`label`/`gran`/`rowStart`/
+`rowEnd`/`code`), so `b` isn't needed for anchoring in that case —
+`placeComment` now only bails when there is NEITHER a real block NOR an
+override (`if (!warningOverride && (!b || b.kind === 'comment')) return`).
+
+**Don't reintroduce — this was a bug in TWO layers, and fixing only one still
+leaves it broken:**
+1. The menu item is offered for every `source === 'ai'` sidebar row
+   regardless of `kind`, but it used to unconditionally call
+   `convertPrWideWarningToComment`, whose guard requires `c.kind` (rejecting a
+   line-anchored finding) — since a line-anchored finding has always reached
+   this same menu (only `commentBlockItem`'s ranking, not its existence,
+   changed in "Sort a line-anchored comment..." above), that guard silently
+   no-opped "Comment hiervan maken" for it: filled reply field, menu, then
+   nothing at all — no request, no error, and no visible field either (a
+   `commentDetailCard`'s `comment-detail-reply`, which `startPrCommentConvert`
+   targets, isn't even mounted for this drilled-block detail view).
+2. Dispatching to `convertWarningToComment` alone (fixing only #1) opens the
+   composer correctly — prefilled, focused, visibly on screen — but sending
+   still silently did nothing: `placeComment`'s `!b || b.kind === 'comment'`
+   guard bailed on the very same "`state.selected` is still the comment-index
+   item" fact, with no error and no created/deleted comment either.
+Both are fixed together. Test: `tests/convert-line-anchored-warning.spec.mjs`.
+
 ### Publishing a local thread to GitHub
 
 A thread with no GitHub root of its own — a private "Alleen voor mijzelf" note,

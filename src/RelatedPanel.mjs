@@ -3810,13 +3810,21 @@ export async function placeComment(state, commentTarget, opts = {}) {
     return
   }
   // A synthetic comment-index item (kind:'comment', see home.mjs's
-  // recomputeLeftList/commentBlockItem) has no file/line to anchor a NEW
-  // block-scoped comment to — the composer for such an item should never even
-  // open (the block palette isn't reachable while one is selected, see
-  // selectedComment in home.mjs), but guard here too rather than post a bogus,
-  // unanchored comment if it somehow does. A PR-wide comment took the branch
-  // above and never reaches this.
-  if (!b || b.kind === 'comment') return
+  // recomputeLeftList/commentBlockItem) has no file/line of its own to anchor
+  // a NEW block-scoped comment to — the block palette isn't reachable while
+  // one is selected (see selectedComment in home.mjs), so ordinarily this
+  // composer should never even open while `state.selected` still points at
+  // one. But `warningOverride` (see convertWarningToComment) is exactly the
+  // one legitimate exception: `prCommentCommandsFor`'s "Comment hiervan
+  // maken" on a line-anchored comment-index item (commentBlockItem's
+  // b.lineAnchored) opens THIS composer without ever selecting the real
+  // block it hangs on — it stays drilled behind the sidebar row instead (see
+  // .claude/docs/comments-panel.md's "Converting an AI-controle finding..."),
+  // so `b` here is still the synthetic item. The override already carries a
+  // full, independent anchor (file/label/gran/rowStart/rowEnd/code), so `b`
+  // isn't needed for anchoring in that case — only bail when there is
+  // neither a real block NOR an override to anchor on.
+  if (!warningOverride && (!b || b.kind === 'comment')) return
   const override = warningOverride
   warningOverride = null
   // Capture the exact unit the composer is previewing so the placed comment's
@@ -6504,9 +6512,11 @@ export function handlePrCommentThreadKey(c, key) {
 // reaction on this thread; 'convert' (startPrCommentConvert, see
 // convertPrWideWarningToComment) instead starts a brand-new, unanchored
 // PR-wide comment and deletes this one once that succeeds — a PR-wide AI
-// finding has no diff/composer to reuse (unlike an anchored one, see
-// convertWarningToComment/warningOverride), so it repurposes this reply field
-// instead of duplicating a whole second composer UI.
+// finding has no diff/composer to reuse (unlike a line-anchored one, which
+// drills into its real block and uses convertWarningToComment/warningOverride
+// instead, see convertPrWideWarningToComment's own doc comment), so it
+// repurposes this reply field instead of duplicating a whole second composer
+// UI.
 const picm = reactive({ replying: false, commentId: null, sending: false, mode: 'reply' })
 
 // startPrCommentReply reveals the reply textarea in commentDetailCard (only
@@ -6537,10 +6547,17 @@ function startPrCommentConvert(c) {
 }
 
 // convertPrWideWarningToComment is convertWarningToComment's PR-wide (kind
-// !== '', no file/line anchor) equivalent — an anchored finding reopens the
-// block's own "+ Nieuwe comment" composer (see convertWarningToComment), but
-// a PR-wide one has no diff/block context to reuse, so it repurposes this
-// item's own reply field instead (startPrCommentConvert).
+// !== '', no file/line anchor) equivalent. A line-anchored finding reached
+// via its own comment-index sidebar row still drills into the real block
+// (see commentBlockItem's b.lineAnchored — home.mjs's DetailPanel renders
+// that block's own Block()/InlineComments there, same as an ordinary
+// selection), so home.mjs's prCommentCommandsFor routes THAT case to
+// convertWarningToComment instead (the block's own "+ Nieuwe comment"
+// composer, already mounted on screen) — see comments-panel.md ("Converting
+// an AI-controle finding...") for why a guard requiring c.kind here once
+// silently no-opped for such a finding, before this dispatch existed. A
+// genuinely PR-wide item has no block/diff to drill into at all, so it
+// repurposes this item's own reply field instead (startPrCommentConvert).
 export function convertPrWideWarningToComment(c) {
   if (!c || c.source !== 'ai' || !c.kind) return
   startPrCommentConvert(c)
@@ -6704,7 +6721,10 @@ async function postPrCommentReply(c, body, publish, withHistory) {
 // (possibly edited) text, and only once THAT is confirmed placed does it
 // delete `c` (the AI finding it replaces) — a failed placement must never
 // discard the finding without anything taking its place, mirroring
-// placeComment's own ordering for the anchored case.
+// placeComment's own ordering for the anchored case. Only ever reached for a
+// genuinely PR-wide `c` (`c.kind` set) — see convertPrWideWarningToComment's
+// own doc comment for the line-anchored case, which goes through
+// convertWarningToComment/placeComment instead and keeps its anchor there.
 export async function sendConvertedPrWideComment(c, body) {
   const text = (body || '').trim()
   if (!c || !text) return

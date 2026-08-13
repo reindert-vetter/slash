@@ -5940,16 +5940,24 @@ function isOwnComment(c) {
 // unaffected. "Verwijder comment" follows both, always last of the three and
 // never the default (see deleteItem below).
 //
-// "Comment hiervan maken" — the PR-wide (unanchored) equivalent of
-// commentCommandsFor's own item above — only appears for an AI-authored
-// finding (source === 'ai'). It reveals the SAME reply field "Beantwoorden"
-// does, but in 'convert' mode (startPrCommentConvert/
-// convertPrWideWarningToComment, RelatedPanel.mjs): sending posts a brand-new
-// PR-wide comment (Kind "issue", no file/line — there is none to reuse for a
-// finding that couldn't be pinned to a block) and only then deletes this
-// finding. Placed right after the two core items (never first) — an AI
-// finding is never "own" (isOwnComment excludes source 'ai'), so this can
-// never collide with the reordering above.
+// "Comment hiervan maken" — only appears for an AI-authored finding
+// (source === 'ai'). This sidebar item can be EITHER a genuinely PR-wide,
+// unanchored finding OR a line-anchored one that also gets its own
+// "Comments op regels" row (commentBlockItem's b.lineAnchored) — selecting
+// either still opens this exact menu (selectedComment()/openMenu('prComment')
+// below), but only a PR-wide one has no underlying block to show: a
+// line-anchored item's own detail view still drills into its real block (see
+// DetailPanel), so THAT case reuses the same "+ Nieuwe comment" composer
+// commentCommandsFor's own item below opens (convertWarningToComment, keeps
+// the finding's full anchor via warningOverride) — a guard that instead
+// required `c.kind` here (rejecting exactly that case) is what silently
+// no-opped this whole action for a line-anchored finding: filled reply
+// field, menu, then nothing at all. A genuinely PR-wide finding (`c.kind`
+// set) still goes to convertPrWideWarningToComment, which repurposes this
+// item's own "Beantwoorden" field instead (RelatedPanel.mjs). Placed right
+// after the two core items (never first) — an AI finding is never "own"
+// (isOwnComment excludes source 'ai'), so this can never collide with the
+// reordering above.
 function prCommentCommandsFor() {
   const c = selectedComment()
   const replyItem = {
@@ -6011,7 +6019,7 @@ function prCommentCommandsFor() {
       id: 'pr-comment-from-warning',
       label: 'Comment hiervan maken',
       hint: 'convert',
-      run: () => convertPrWideWarningToComment(c),
+      run: () => (c.kind ? convertPrWideWarningToComment(c) : convertWarningToComment(c)),
     })
   }
   // "Chat met Claude" — reviewer request: chat about THIS PR-wide item (an
