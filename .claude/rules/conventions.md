@@ -164,6 +164,44 @@ arbitrary-value class next to its `truncate`/`line-clamp`/no-wrap class —
 without it a long spaceless token (URL, hash, path) sticks out of the
 card/bubble, since the default only breaks at word boundaries.
 
+### Markdown images: grouped side by side, click-to-fullscreen, →/← to cycle
+
+Reviewer request ("ik wil screenshots uit readme kunnen inzien... als er
+meerdere afbeeldingen achter elkaar zijn zonder tekst, laat het mooi naast
+elkaar zien. als ik erop klik moet het volledig scherm en moet ik door alle
+afbeeldingen kunnen gaan met pijltjes naar rechts"), confirmed to apply
+**"overal waar markdown staat"** — one mechanism, every `renderMarkdown` call
+site, not a per-feature reimplementation. Two pieces:
+
+- **`enhanceImages(html)`** (`markdown.mjs`, the last step of `renderMarkdown`
+  before `highlightMentions`) styles every `<img>` snarkdown produced
+  (`cursor-zoom-in`, rounded border, `data-md-image="true"`) and wraps a RUN of
+  **2 or more** images separated only by whitespace — no other text/tags
+  between them — in a `flex flex-wrap` row, so several screenshots pasted back
+  to back sit side by side as fixed-height thumbnails instead of stacking one
+  full-width image per line. Reliable as a plain regex scan (not a real
+  HTML/DOM parse) specifically because snarkdown never wraps a line in a
+  `<p>` (`src/vendor/snarkdown.js` has no paragraph handling at all — see its
+  own header comment), so two images on consecutive source lines really do
+  end up as `<img>(\s*)<img>` in the output.
+- **`src/imageLightbox.mjs`** — one document-level delegated click listener
+  (`initImageLightbox()`, called once from both `home.mjs` and `inbox.mjs`)
+  reacting to `img[data-md-image]`, scoped to "every other image in the SAME
+  rendered Markdown body" via `.closest('.markdown-body')` — the shared class
+  every `renderMarkdown` render point already carries (see above), so this
+  needed **no** per-call-site wiring: the PR description, comment bodies,
+  Claude-chat bubbles and the `/inbox` task description all get it for free.
+  Opens a fullscreen overlay (`ImageLightboxHost`, mounted top-level next to
+  `MenuHost`/`App` in each page, exactly like the command palette); →/←
+  **wrap around** the image list, Escape closes. `isLightboxOpen()`/
+  `handleLightboxKeydown(e)` are checked FIRST in each page's own global
+  `onKeydown`, mirroring the command palette's own `menu.open` guard — while
+  open, the lightbox owns the keyboard completely.
+
+Same "the shape carries the meaning" colorblind-rule reasoning as
+`scrollHint`/`stepChevron`: the prev/next buttons are a bare chevron, no text
+label, only a `title`/`aria-label`. Test: `tests/image-lightbox.spec.mjs`.
+
 ## Shared avatar helper (`src/avatar.mjs`)
 
 `avatarHTML(name, avatarUrl, sizeCls, extraCls)` — extracted from

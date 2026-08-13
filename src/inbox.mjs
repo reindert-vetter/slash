@@ -17,8 +17,10 @@ import { avatarHTML, displayNameOf, ensureNames, identityOf } from './avatar.mjs
 import { renderMarkdown } from './markdown.mjs'
 import { highlight } from './Block.mjs'
 import { composeTargetHint, commentBody } from './RelatedPanel.mjs'
+import ImageLightboxHost, { initImageLightbox, isLightboxOpen, handleLightboxKeydown } from './imageLightbox.mjs'
 
 initTheme()
+initImageLightbox()
 
 const state = reactive({
   loading: true,
@@ -828,6 +830,14 @@ function moveSelection(delta) {
 }
 
 window.addEventListener('keydown', (e) => {
+  // While the image lightbox is open it owns the keyboard completely — same
+  // guard as home.mjs's onKeydown, checked before anything else (including
+  // the textarea/input focus check right below, since the lightbox has no
+  // input of its own to defer to).
+  if (isLightboxOpen()) {
+    handleLightboxKeydown(e)
+    return
+  }
   const active = document.activeElement
   if (active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT')) {
     if (e.key === 'Escape') active.blur()
@@ -847,4 +857,5 @@ window.addEventListener('keydown', (e) => {
 })
 
 App()(document.getElementById('app'))
+ImageLightboxHost()(document.getElementById('app'))
 init()

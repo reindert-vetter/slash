@@ -120,6 +120,7 @@ import { setPrRepo } from './prContext.mjs'
 import { bindUrlState, num } from './urlState.mjs'
 import { renderMarkdown } from './markdown.mjs'
 import { commentMentionsMe } from './mentions.mjs'
+import ImageLightboxHost, { initImageLightbox, isLightboxOpen, handleLightboxKeydown } from './imageLightbox.mjs'
 import { initTheme, themeToggleButton } from './theme.mjs'
 import { ensureAutoWarn, autoWarnToggleButton, autoWarn } from './autowarn.mjs'
 import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
@@ -136,6 +137,7 @@ import {
 } from './columnWidth.mjs'
 
 initTheme()
+initImageLightbox()
 
 // The PR under review comes from the path. Two shapes, and the first one is the
 // historical one, unchanged:
@@ -9540,6 +9542,15 @@ function contextMenuMode() {
 }
 
 function onKeydown(e) {
+  // While the image lightbox is open it owns the keyboard completely — →/←
+  // walk the other screenshots from the same Markdown body, Escape closes —
+  // checked FIRST, mirroring the command palette's own `menu.open` guard
+  // right below (see imageLightbox.mjs).
+  if (isLightboxOpen()) {
+    handleLightboxKeydown(e)
+    return
+  }
+
   // While the command palette is open it owns the keyboard: ↑/↓ move the
   // selection, Enter runs it, Esc closes, and any typed characters flow into the
   // focused input (we don't preventDefault those). Block navigation is suspended.
@@ -11903,6 +11914,7 @@ PrInfoPanel(state)(app)
 BlockList(state, isPrWideComposing)(app)
 DetailPanel(state)(app)
 MenuHost()(app)
+ImageLightboxHost()(app)
 // The call-arrow overlay: one static fixed <svg> drawn imperatively (see
 // src/callArrows.mjs). Top-level like MenuHost — inside <main> its z-index
 // would be capped at <main>'s own z-10 stacking context.

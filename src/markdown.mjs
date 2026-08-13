@@ -208,6 +208,45 @@ function sanitizeUrls(html) {
   })
 }
 
+// enhanceImages — turns snarkdown's bare `<img src alt>` (no styling, no
+// click behaviour at all) into something worth looking at: every image gets
+// a shared border/rounding + `cursor-zoom-in`, and a RUN of 2 or more images
+// with nothing but whitespace between them (no other text/tags — the
+// "several screenshots pasted one after another" case: reviewer request,
+// "als er meerdere afbeeldingen achter elkaar zijn zonder tekst, laat het
+// mooi naast elkaar zien") gets wrapped in a flex row so they sit side by
+// side instead of stacking one huge image per line. snarkdown itself never
+// wraps a line in a `<p>` (see src/vendor/snarkdown.js — there is no
+// paragraph handling at all), so two images on consecutive source lines
+// really do end up as `<img>(\s*)<img>` in the output with nothing else
+// between them, making this a plain, reliable regex scan rather than a real
+// HTML/DOM parse.
+//
+// `data-md-image` marks every image this function produces, so
+// initImageLightbox's delegated click handler (src/imageLightbox.mjs) can
+// tell a rendered-markdown screenshot apart from an unrelated `<img>` inside
+// the same `.markdown-body` container (in practice there never is one, but
+// this is a cheap, explicit guard rather than relying on ancestor scoping
+// alone). Runs BEFORE highlightMentions (mentions only ever touches text
+// between tags, so order doesn't matter for correctness) and after
+// sanitizeUrls, so a neutralised `src="#"` still gets the same treatment.
+const IMG_CLASS =
+  'max-w-full h-auto rounded-lg border border-slate-200 dark:border-zinc-700 cursor-zoom-in'
+// [&_img]: arbitrary-variant overrides ONLY apply inside this wrapper, so a
+// solo image (IMG_CLASS alone) keeps its natural, width-capped size while a
+// grouped one becomes a fixed-height thumbnail that lines up neatly with its
+// siblings — same image tag, same class, no second img class to keep in sync.
+const IMG_GROUP_CLASS =
+  'flex flex-wrap gap-2 my-2 [&_img]:h-48 [&_img]:w-auto [&_img]:max-w-full [&_img]:flex-shrink-0 [&_img]:object-cover'
+const IMG_TAG_RE = /<img\b([^>]*)>/gi
+const IMG_RUN_RE = /(?:<img\b[^>]*>\s*){2,}/g
+
+function enhanceImages(html) {
+  let out = html.replace(IMG_TAG_RE, (m, attrs) => `<img class="${IMG_CLASS}" data-md-image="true"${attrs}>`)
+  out = out.replace(IMG_RUN_RE, (run) => `<div class="${IMG_GROUP_CLASS}">${run.trim()}</div>`)
+  return out
+}
+
 // hardBreaks(text) -> the same text with every SINGLE newline turned into a
 // Markdown hard break (two trailing spaces), so a line the author typed on its
 // own stays on its own line. Markdown collapses a single newline into a space,
@@ -255,6 +294,7 @@ export function renderMarkdown(text, startIndex = 0, truncate = false) {
   let out = snarkdown(src)
   out = applyPlaceholders(out, store)
   out = sanitizeUrls(out)
+  out = enhanceImages(out)
   // Last: highlight an @mention of the local reviewer (see mentions.mjs). Runs
   // on the finished, already-escaped HTML and only ADDS a <mark> around inert
   // text, so it can't undermine the XSS layer above — and being here means
