@@ -63,7 +63,53 @@ test.describe('PR Review Tree — PRs from a second repository', () => {
     const popover = page.locator(opsRow).locator('[data-testid="pr-popover"]')
     await expect(popover).toBeVisible()
     await expect(popover.locator('[data-testid="close-popover"]')).toBeVisible()
-    // Its GitHub link points at the second repo, not at plug-and-pay.
-    await expect(popover.locator('a[href*="plug-and-pay-ops/pull/12"]')).toHaveCount(1)
+  })
+
+  // A non-primary repo's ingest/comment/chat pipeline has never actually been
+  // run end-to-end (see repoReady in overview.mjs — a deliberately TEMPORARY
+  // gate), so its popover offers no action at all: no generate/open-tree
+  // button, no GitHub/Jira link, no copy-url, no remove-reviewer — only a
+  // single disabled explanation. The → key mirrors a click: it only reveals
+  // that same popover, never navigates anywhere.
+  test('its popover offers no actions, only the disabled "Repo is niet beschikbaar" item', async ({ page }) => {
+    await page.goto('/pr-overview')
+    await appReady(page)
+
+    await page.locator(opsRow).click()
+    const popover = page.locator(opsRow).locator('[data-testid="pr-popover"]')
+    await expect(popover).toBeVisible()
+
+    const unavailable = popover.locator('[data-testid="repo-unavailable"]')
+    await expect(unavailable).toBeVisible()
+    await expect(unavailable).toHaveText('Repo is niet beschikbaar')
+    await expect(unavailable).toBeDisabled()
+
+    await expect(popover.locator('[data-testid="generate-page"]')).toHaveCount(0)
+    await expect(popover.locator('[data-testid="open-tree"]')).toHaveCount(0)
+    await expect(popover.locator('[data-testid="copy-url"]')).toHaveCount(0)
+    await expect(popover.locator('a[href*="plug-and-pay-ops/pull/12"]')).toHaveCount(0)
+
+    await page.keyboard.press('Escape')
+    await expect(popover).toHaveCount(0)
+  })
+
+  // ArrowRight ("act now") on every other row's row either navigates
+  // straight into an existing tree or fires generatePage — see
+  // openOrGenerate in overview.mjs. For this not-yet-proven-repo row it must
+  // do neither: it only reveals the same limited popover a click would.
+  test('ArrowRight on its row only opens the popover, never navigates', async ({ page }) => {
+    await page.goto('/pr-overview')
+    await appReady(page)
+
+    const row = page.locator(opsRow)
+    const idx = Number(await row.getAttribute('data-nav-index'))
+    await page.keyboard.press('Home')
+    for (let i = 0; i < idx; i++) await page.keyboard.press('ArrowDown')
+    await page.keyboard.press('ArrowRight')
+
+    await expect(page).toHaveURL(/\/pr-overview$/)
+    const popover = row.locator('[data-testid="pr-popover"]')
+    await expect(popover).toBeVisible()
+    await expect(popover.locator('[data-testid="repo-unavailable"]')).toHaveText('Repo is niet beschikbaar')
   })
 })
