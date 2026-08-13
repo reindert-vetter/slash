@@ -37,6 +37,70 @@ walk and an unapproved unit of the PR total, with **Space resolving** such a row
 hangs off (`batchPill` on the row, the log line in the card's footer — see
 `.claude/docs/workflows-comments.md`).
 
+### The comment_batch checkboxes and the bottom action row
+
+Reviewer request: "verplaats deze lijst naar de index, dat moet dan checkboxes
+krijgen met de actie row onderin" — followed by "die zijn toch hetzelfde? dat
+moet hetzelfde zijn" once asked whether the palette's comment_batch list and
+this very index were meant to be two different things. They weren't: the
+`comment_batch` run (`.claude/docs/workflows-comments.md`) now works entirely
+off THIS list, not a separate one.
+
+- **Eligibility is the one existing rule, reused verbatim** — `isBatchEligible`
+  (`commentBatch.mjs`): still open, not one of our own AI findings
+  (`source==='ai'`/`kind==='ai_warning'`). `batchEligibleRows(state)`
+  (`BlockList.mjs`) applies it to `state.blocks` itself — deliberately the rows
+  ALREADY in this list, not the wider `commentListSnapshot()` the removed
+  palette read: the checkbox lives on the row, so a comment with no row (e.g.
+  its block isn't in this tree, see "Every UNRESOLVED..." above) simply can't
+  be checked. A kilo-review bot summary needs no separate exclusion here either
+  — it never gets a row at all (see `isKiloReview`'s call sites in
+  `prWideComments`), so it never reaches `batchEligibleRows`.
+- **The checkbox** (`batchCheckbox`, `data-testid=batch-checkbox`) renders on
+  every eligible row, right before its avatar/category badge — **checked by
+  default** (`state.batchChecked` only ever records an explicit *un*check,
+  mirroring `state.ignoredComments`' shape, and is ephemeral/session-only,
+  unlike that durable map: excluding one comment from THIS run is a momentary
+  curation, not a standing reviewer decision). Toggling it never touches
+  `state.selected` (`e.stopPropagation()` first, per the nested-`@click` rule
+  in `.claude/rules/arrowjs-pitfalls.md`) and is independent of both existing
+  meanings a comment row's own click/keys already carry — **Space still
+  resolves** the row (see above) and **Enter still opens its action menu**
+  (`prCommentCommandsFor`); the checkbox is a third, unrelated control, not a
+  reinterpretation of either.
+- **Reachable by keyboard too, not mouse-only** (explicit reviewer request):
+  **`x`** on the SELECTED comment row toggles its own checkbox
+  (`toggleBatchChecked`, shared with the checkbox's own click handler, so mouse
+  and key do the exact same thing — see `.claude/docs/mouse-navigation.md`).
+  See "`x` — toggle a comment's batch-selection checkbox" in
+  `.claude/docs/keyboard-navigation.md` for why that letter and not another.
+- **The bottom action row** (`batchActionRow`, `data-testid=batch-action-row`)
+  sits right after the two toggle rows and before the push-todo section (it
+  acts on comments that are already in this list, so it belongs with the rest
+  of the comment machinery rather than with the branch-level push todo) —
+  "Verwerk N comments met Claude (Opus 5)", `N` = `checkedBatchComments(state)`,
+  and shown only while at least one eligible row exists at all. Disabled while
+  a batch is already running (label switches to "Claude bezig met de
+  comments…") or while nothing is checked. Enter/click run
+  `startBatchFromRow()` **directly — no confirm submenu**, since the
+  checkboxes above already are the deliberate curation step (contrast the
+  push-todo row right below it, which DOES open a confirm menu because pushing
+  writes to a branch other people work on). It is itself a stop of the
+  sidebar's `↑`/`↓` loop (`state.batchRowFocused`) — see "The sidebar's `↑`/`↓`
+  cursor forms one circular loop" in `.claude/docs/keyboard-navigation.md`.
+- **Starting the run** jumps to the first CHECKED comment (`jumpToCommentRow`),
+  where the live pill/log show up, exactly as the removed palette did for its
+  own first row.
+
+### The old palette entry point was removed
+
+`REVIEW_BATCH_COMMENTS_ITEM` (the "Laat Claude alle openstaande comments
+verwerken" row in both review-submit follow-ups, and thus in `/` → GitHub →
+"PR keuren") and the `'bulkComments'` palette mode it opened are gone —
+**deliberately with no replacement shortcut**: the bottom action row above is
+now always visible in the sidebar whenever there's something to batch, which
+already covers that entry point. See `.claude/docs/command-palette.md`.
+
 ### Selecting a "Start" item empties the block-scoped index
 
 A `kind:'comment'` sidebar item is itself unanchored, so the block-scoped index

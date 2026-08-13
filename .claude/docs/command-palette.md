@@ -23,7 +23,11 @@ Arrow-key navigation of the tree itself lives in
 | `replyPublish` | automatically when a reply is sent on a thread that isn't on GitHub | `replyPublishCommandsFor()` |
 | `postApprove` | automatically after a palette approve | `POSTAPPROVE_COMMANDS` |
 | `reviewApprove` / `reviewChoice` / `reviewReject` | automatically when nothing is left ahead | `REVIEW_APPROVE_COMMANDS` / `REVIEW_CHOICE_COMMANDS` / built from the typed text |
-| `bulkComments` | the "Laat Claude alle openstaande comments verwerken" item in either review-submit menu (and thus in `/` → GitHub → "PR keuren") | `bulkCommentsCommandsFor()` — a start row + one row per open comment |
+
+There is deliberately no `bulkComments` mode anymore — "Laat Claude alle
+openstaande comments verwerken" moved out of the palette entirely, into the
+sidebar itself. See "The comment_batch checkboxes and the bottom action row"
+in `.claude/docs/comments-panel.md`.
 
 `openMenu(mode)` sets the mode, `closeMenu` resets it to `'block'`, and
 `resolveCommands`/`rootCommandsFor` switch on it.
@@ -508,31 +512,17 @@ reason for rejection (required)…") as the only instruction. With text, the one
 row calls `submitReview('REQUEST_CHANGES', reason)`.
 
 All three modes share the `lastIndexRowRect` exception with `postApprove` via
-`isReviewFollowup(mode)` — as does `bulkComments` below, which is opened FROM
-them. Tests: `tests/review-submit-menu.spec.mjs`, plus the last test in
-`tests/postapprove-menu.spec.mjs`.
+`isReviewFollowup(mode)`. Tests: `tests/review-submit-menu.spec.mjs`, plus the
+last test in `tests/postapprove-menu.spec.mjs`.
 
-### `bulkComments` — hand every open comment to ONE Claude agent
-
-`REVIEW_BATCH_COMMENTS_ITEM` sits in both `REVIEW_APPROVE_COMMANDS` and
-`REVIEW_CHOICE_COMMANDS` (so also under `/` → GitHub → "PR keuren"): the
-reviewer has walked the whole PR and can now hand every comment on it to one
-agentic run (`comment_batch`, see `.claude/docs/workflows-comments.md`). It does
-not start anything — it opens this mode, where the comments sit under each other:
-`Enter` on one **jumps to that comment's index row**, and one separate row
-("Verwerk N comments met Claude (Opus 5)") starts the run and then jumps to the
-FIRST comment, because that is where the live status/log shows up.
-
-Two conventions it leans on rather than reinventing:
-
-- **`when`** (`snapshotCommands`) drops the entry item entirely when there are no
-  open comments, evaluated once from plain code — same reason a `label` function
-  is resolved there and never left live inside CommandMenu's tree.
-- The list itself is a **snapshot** of plain strings, so live progress
-  deliberately does NOT live in the palette but on the index rows and in the
-  comment's own log line (`batchPill` / `CommentClaudeFooter`).
-
-Test: `tests/comment-batch.spec.mjs`.
+**There used to be a fourth item here, `REVIEW_BATCH_COMMENTS_ITEM`**, opening
+a `'bulkComments'` palette mode that listed every open comment before handing
+them to `comment_batch`. Removed on request — the whole feature moved into the
+sidebar itself (a checkbox per eligible comment-index row plus a bottom
+"Verwerk N comments met Claude" action row), with no menu shortcut left in its
+place: that action row is now always visible whenever there's something to
+batch, which already covers this entry point. See "The comment_batch
+checkboxes and the bottom action row" in `.claude/docs/comments-panel.md`.
 
 ### After a successful submit: copy a one-line summary to the clipboard
 

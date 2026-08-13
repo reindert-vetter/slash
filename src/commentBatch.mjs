@@ -119,6 +119,25 @@ export function syncCommentBatch(pr) {
   onEventsResync(() => refreshCommentBatch(batch.pr))
 }
 
+// isBatchEligible is the reviewer's own rule for what a comment_batch run may
+// touch — "van GitHub + eigen, geen AI": still open, and not one of our own AI
+// findings (source:'ai'/kind:'ai_warning'). Used by BlockList.mjs's
+// batchEligibleRows (which comment-index rows get a batch-selection checkbox)
+// AND, through it, by home.mjs's checkedBatchComments (which comments the
+// sidebar's bottom action row actually hands to Claude) — one predicate, so
+// the checkbox and the run always agree on the same set by construction.
+// Kept here rather than in RelatedPanel.mjs/home.mjs to avoid a circular
+// import: RelatedPanel.mjs already imports FROM BlockList.mjs, so
+// BlockList.mjs can never import back from it (or from home.mjs) — this
+// module has no imports of its own and is exactly the neutral, shared spot
+// both sides already use for batch state. A kilo-review bot summary needs no
+// explicit exclusion here: it never gets a comment-index row in the first
+// place (see isKiloReview's call sites in RelatedPanel.mjs's
+// prWideComments), so it never reaches batchEligibleRows either.
+export function isBatchEligible(c) {
+  return !!c && c.status !== 'resolved' && c.source !== 'ai' && c.kind !== 'ai_warning'
+}
+
 // batchItemFor returns {state, note} for one comment, or null when this run
 // knows nothing about it (the normal case for most comments).
 export function batchItemFor(commentId) {

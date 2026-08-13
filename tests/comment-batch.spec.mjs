@@ -1,17 +1,21 @@
 import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // "Laat Claude alle openstaande comments verwerken" (comment_batch.go) plus the
-// two index changes it rides on:
+// index changes it rides on:
 //
 //  1. EVERY unresolved comment gets its own blokken-index row (indexComments,
 //     RelatedPanel.mjs) — not just PR-wide/mentioned ones.
 //  2. Space on such a row RESOLVES the comment (spaceKey, home.mjs), which is
 //     that row's equivalent of approving and what makes the ↑/↓ walk over the
 //     open comments finishable.
+//  3. Every batch-eligible row (isBatchEligible, commentBatch.mjs) gets its own
+//     checkbox, checked by default; a bottom action row runs the batch over
+//     whatever is currently checked. There is deliberately no palette entry
+//     point anymore — see .claude/docs/comments-panel.md's "The comment_batch
+//     checkboxes and the bottom action row".
 //
 // The batch run itself is server-side and needs a real claude CLI, so this spec
-// stops at the palette: the entry item, the list of comments under each other,
-// and the jump a row performs. See .claude/docs/workflows-comments.md.
+// stops at the POST it sends. See .claude/docs/workflows-comments.md.
 
 // Same mutable-state route shape as comment-index-items.spec.mjs (never
 // unroute+route: the 5s comment poll can land in the gap and reach the real,
@@ -52,10 +56,39 @@ function anchoredComment(id, body, extra = {}) {
   }
 }
 
+function aiFinding(id) {
+  return {
+    id,
+    runId: 'run-' + id,
+    pr: 12903,
+    file: '',
+    line: 0,
+    author: 'AI-controle',
+    body: 'mogelijk risico in deze functie',
+    createdAt: NOW,
+    reactionCount: 0,
+    status: 'open',
+    source: 'ai',
+    kind: 'ai_warning',
+    reactions: [],
+    rowStart: -1,
+    rowEnd: -1,
+  }
+}
+
+function rowFor(page, text) {
+  return page.locator('[data-idx]').filter({ hasText: text })
+}
+
 test.describe('Comment batch', () => {
-  test('an unresolved block-anchored comment gets its own index row; an AI finding is not offered to the batch', async ({
+  test('eligible rows get a checked checkbox, an AI finding gets none, and the bottom action row counts + starts the run', async ({
     page,
   }) => {
+    const started = []
+    await page.route('**/api/workflows/comment_batch', async (route) => {
+      started.push(JSON.parse(route.request().postData() || '{}'))
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{"runId":"batch-run"}' })
+    })
     await mockComments(page, [
       anchoredComment('cb-1', 'graag nullsafe hier'),
       // A DIFFERENT line than cb-1 — comments on the exact same line now
@@ -63,68 +96,67 @@ test.describe('Comment batch', () => {
       // comments-panel.md), and this test wants two SEPARATE rows.
       anchoredComment('cb-2', 'deze naam kan korter', { id: 'cb-2', runId: 'run-cb-2', line: 2 }),
       // An AI risk finding: it still gets its own index row (unchanged), but it
-      // must never be handed to the batch — "van GitHub + eigen, geen AI".
-      {
-        id: 'cb-ai',
-        runId: 'run-cb-ai',
-        pr: 12903,
-        file: '',
-        line: 0,
-        author: 'AI-controle',
-        body: 'mogelijk risico in deze functie',
-        createdAt: NOW,
-        reactionCount: 0,
-        status: 'open',
-        source: 'ai',
-        kind: 'ai_warning',
-        reactions: [],
-        rowStart: -1,
-        rowEnd: -1,
-      },
+      // must never be offered a checkbox — "van GitHub + eigen, geen AI".
+      aiFinding('cb-ai'),
     ])
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
     await expect(page.getByTestId('block-row').first()).toBeVisible()
-    // Both fixture comments are anchored to a real block
-    // (ContractController::index) and sort under "Comments op regels"
-    // (b.lineAnchored) rather than at the very top, so the default selection
-    // no longer lands on either automatically — select the first one
-    // directly, which then opens that block "as if fully expanded" instead
-    // of showing commentDetailCard (see openCommentAnchorDrill, home.mjs,
-    // and comment-anchor-expanded-view.spec.mjs for that behaviour in full).
-    await expect(page.locator('[data-idx]').filter({ hasText: 'graag nullsafe hier' })).toHaveCount(1)
-    await expect(page.locator('[data-idx]').filter({ hasText: 'deze naam kan korter' })).toHaveCount(1)
-    await page.locator('[data-idx]').filter({ hasText: 'graag nullsafe hier' }).click()
+
+    const row1 = rowFor(page, 'graag nullsafe hier')
+    const row2 = rowFor(page, 'deze naam kan korter')
+    const rowAi = rowFor(page, 'mogelijk risico')
+
+    // Checked by default on both eligible rows, no checkbox at all on the AI row.
+    await expect(row1.getByTestId('batch-checkbox')).toBeChecked()
+    await expect(row2.getByTestId('batch-checkbox')).toBeChecked()
+    await expect(rowAi.getByTestId('batch-checkbox')).toHaveCount(0)
+
+    const actionRow = page.getByTestId('batch-action-row')
+    await expect(actionRow).toContainText('Verwerk 2 comments met Claude (Opus 5)')
+
+    // Unchecking one row lowers the count and excludes it from the run.
+    await row2.getByTestId('batch-checkbox').click()
+    await expect(row2.getByTestId('batch-checkbox')).not.toBeChecked()
+    await expect(actionRow).toContainText('Verwerk 1 comment met Claude (Opus 5)')
+
+    // Clicking a REGULAR row never toggles its checkbox (only the checkbox's
+    // own click does) — selecting cb-1 first, both anchored to the same block,
+    // opens it "as if fully expanded" (see openCommentAnchorDrill, home.mjs).
+    await row1.click()
     await expect(page.getByTestId('drill-column')).toContainText('ContractController::index')
+    await expect(row1.getByTestId('batch-checkbox')).toBeChecked()
 
-    // The PR menu's "PR keuren" submenu carries the batch entry, counting only
-    // the two eligible comments (the AI finding is excluded). `/` only opens the
-    // PR-wide menu from stop 1 — with a comment row selected it opens that row's
-    // own menu instead (contextMenuMode, home.mjs).
-    await page.keyboard.press('ArrowLeft')
-    await expect(page.getByTestId('pr-info-column')).toBeVisible()
-    await page.keyboard.press('/')
-    const menu = page.getByTestId('command-menu')
-    await expect(menu).toBeVisible()
-    await menu.getByTestId('command-row').filter({ hasText: 'GitHub' }).first().click()
-    await expect(menu).toContainText('PR keuren')
-    await menu.getByTestId('command-row').filter({ hasText: 'PR keuren' }).click()
-    const entry = menu.getByTestId('command-row').filter({ hasText: 'Laat Claude alle openstaande comments verwerken' })
-    await expect(entry).toContainText('(2)')
+    // The action row starts the run over exactly the checked comment(s) and
+    // jumps to the first one.
+    await actionRow.click()
+    await expect.poll(() => started.length).toBe(1)
+    expect(started[0].commentIds).toEqual(['cb-1'])
+    await expect(page.locator('[data-idx].bg-indigo-50')).toContainText('graag nullsafe hier')
+  })
 
-    // Opening it lists the comments under each other, with a start row on top.
-    await entry.click()
-    await expect(menu.getByTestId('command-row').filter({ hasText: 'Verwerk 2 comments met Claude' })).toBeVisible()
-    await expect(menu.getByTestId('command-row').filter({ hasText: 'graag nullsafe hier' })).toHaveCount(1)
-    await expect(menu.getByTestId('command-row').filter({ hasText: 'mogelijk risico' })).toHaveCount(0)
+  test('the `x` key toggles the selected row\'s own checkbox, mirroring a click', async ({ page }) => {
+    await mockComments(page, [
+      anchoredComment('cb-1', 'graag nullsafe hier'),
+      anchoredComment('cb-2', 'deze naam kan korter', { id: 'cb-2', runId: 'run-cb-2', line: 2 }),
+    ])
+    await page.goto('/pr/12903')
+    await leaveSearchBox(page)
+    await expect(page.getByTestId('block-row').first()).toBeVisible()
 
-    // Enter on a comment row jumps to that comment (and closes the palette).
-    await menu.getByTestId('command-row').filter({ hasText: 'deze naam kan korter' }).click()
-    await expect(page.getByTestId('command-menu')).toHaveCount(0)
-    // Both comments are anchored to the same block, so this jump also opens
-    // it "as if fully expanded" (same as the default selection above) —
-    // check the sidebar landed on the right row instead of commentDetailCard.
-    await expect(page.locator('[data-idx].bg-indigo-50')).toContainText('deze naam kan korter')
+    const row2 = rowFor(page, 'deze naam kan korter')
+    await row2.click()
+    await expect(page.getByTestId('drill-column')).toContainText('ContractController::index')
+    await expect(row2.getByTestId('batch-checkbox')).toBeChecked()
+
+    await page.keyboard.press('x')
+    await expect(row2.getByTestId('batch-checkbox')).not.toBeChecked()
+    await expect(page.getByTestId('batch-action-row')).toContainText('Verwerk 1 comment met Claude (Opus 5)')
+
+    // Pressing it again re-checks — a plain toggle, not a one-way exclude.
+    await page.keyboard.press('x')
+    await expect(row2.getByTestId('batch-checkbox')).toBeChecked()
+    await expect(page.getByTestId('batch-action-row')).toContainText('Verwerk 2 comments met Claude (Opus 5)')
   })
 
   test('Space on a comment index row resolves it', async ({ page }) => {
@@ -145,7 +177,7 @@ test.describe('Comment batch', () => {
     // block — opens "as if fully expanded" instead of showing
     // commentDetailCard (see openCommentAnchorDrill, home.mjs). Space must
     // work without the keyboard ever having moved into it.
-    await page.locator('[data-idx]').filter({ hasText: 'graag nullsafe hier' }).click()
+    await rowFor(page, 'graag nullsafe hier').click()
     await expect(page.getByTestId('drill-column')).toContainText('ContractController::index')
 
     await page.keyboard.press('Space')
@@ -154,6 +186,6 @@ test.describe('Comment batch', () => {
 
     // Once the read model reports it resolved, the row leaves the index again.
     mock.serve([anchoredComment('cb-1', 'graag nullsafe hier', { source: '', status: 'resolved' })])
-    await expect(page.locator('[data-idx]').filter({ hasText: 'graag nullsafe hier' })).toHaveCount(0)
+    await expect(rowFor(page, 'graag nullsafe hier')).toHaveCount(0)
   })
 })

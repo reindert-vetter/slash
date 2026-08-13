@@ -1505,7 +1505,8 @@ Three product decisions shape the whole thing:
 **Which comments** ("van GitHub + eigen, geen AI"): `commentBatchEligible` —
 open, `source != "ai"`, `kind != "ai_warning"`. Checked server-side against the
 stored comments before the run starts (a browser list can be stale), and
-mirrored in the frontend's own `batchCommentTargets` (`home.mjs`).
+mirrored in the frontend's own `isBatchEligible` (`commentBatch.mjs`) — see
+"The comment_batch checkboxes and the bottom action row" below.
 
 **Per-comment progress out of one agent** comes from marker lines the run
 prints, fixed by `claude.CommentBatchSystemPrompt`:
@@ -1528,24 +1529,36 @@ are simply open comments again.
 
 ### Where the reviewer sees it
 
-- Entry: `REVIEW_BATCH_COMMENTS_ITEM` in both review-submit follow-ups
-  (`reviewApprove`/`reviewChoice`) and therefore also in `/` → GitHub → "PR
-  keuren". It opens the `'bulkComments'` palette mode — the comments under each
-  other, Enter on one **jumps to it**, and a separate "Verwerk N comments met
-  Claude (Opus 5)" row starts the run. That list is a **snapshot** (plain string
-  labels, resolved at open time — see `snapshotCommands`), so no live label
-  function ever reaches CommandMenu's tree.
-- Starting it jumps straight to the FIRST comment of the list, because that is
-  where the progress lives:
-  - `batchPill` (`BlockList.mjs`) on the comment's index row — a pulsing dot
-    plus the WORD ("Claude bezig" / "verwerkt" / "overgeslagen");
-  - the log line in the EXISTING status element `claude-chat-status`
-    (`CommentClaudeFooter`, which `commentDetailCard` now also mounts): while
-    this comment is the current one it shows the same "Claude leest src/x.php"
-    sentence a chat turn shows (`claudeStatusText`, so no second formatter),
-    afterwards its one-line outcome.
-- `src/commentBatch.mjs` is the one shared reactive snapshot behind all three
-  spots (one read + the SSE push, no poll of its own).
+**Entirely in the sidebar — there is no palette entry point anymore** (an
+earlier version opened a `'bulkComments'` palette mode with the comments
+listed under each other; removed on request, see "The old palette entry point
+was removed" in `.claude/docs/comments-panel.md` for the reasoning). Every
+batch-eligible comment-index row (`batchEligibleRows`, `BlockList.mjs` — same
+`isBatchEligible` predicate the server mirrors) gets its own checkbox,
+checked by default; a bottom action row ("Verwerk N comments met Claude
+(Opus 5)", `batchActionRow`) runs the batch over exactly the CHECKED ones
+(`checkedBatchComments`) and is itself a stop of the sidebar's `↑`/`↓` loop
+(`state.batchRowFocused`, see `.claude/docs/keyboard-navigation.md`) — Enter,
+click, or the row's own click all run `startBatchFromRow` (`home.mjs`)
+directly, no confirm step. Unchecking a row is mouse-click **or** the `x` key
+on that row (see keyboard-navigation.md) — the deliberate curation step that
+replaces the removed palette's "read the list, then confirm" shape.
+
+Starting it jumps straight to the FIRST checked comment, because that is
+where the progress lives:
+
+- `batchPill` (`BlockList.mjs`) on the comment's index row — a pulsing dot
+  plus the WORD ("Claude bezig" / "verwerkt" / "overgeslagen");
+- the log line in the EXISTING status element `claude-chat-status`
+  (`CommentClaudeFooter`, which `commentDetailCard` now also mounts): while
+  this comment is the current one it shows the same "Claude leest src/x.php"
+  sentence a chat turn shows (`claudeStatusText`, so no second formatter),
+  afterwards its one-line outcome.
+
+`src/commentBatch.mjs` is the one shared reactive snapshot behind all of the
+above (one read + the SSE push, no poll of its own) — it also now exports
+`isBatchEligible`, the single predicate `batchEligibleRows` (`BlockList.mjs`)
+and thus `checkedBatchComments`/`startBatchFromRow` (`home.mjs`) build on.
 
 ### The index change it rides on
 
@@ -1562,5 +1575,5 @@ that walk finishable.
 Tests: `comment_batch_test.go` (marker parsing incl. prose that must not match,
 the progress lifecycle, eligibility + prompt content, the no-work-copy degrade
 path, and the streamed sink with a marker split across two text deltas) and
-`tests/comment-batch.spec.mjs` (the index row, the palette list + its jump, and
-Space resolving a comment row).
+`tests/comment-batch.spec.mjs` (the index row, the checkboxes + bottom action
+row, and Space resolving a comment row).

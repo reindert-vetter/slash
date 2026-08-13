@@ -382,6 +382,7 @@ and the reveal would be a no-op.
 first visible block → … → last visible block
   → toggle-approved (if any hidden approved blocks exist)
   → toggle-ignored  (if any hidden ignored comments exist)
+  → batch-action    (if any comment-index row is eligible for comment_batch)
   → push-todo       (if this PR has landed-but-unpushed chat edits)
   → the search box
   → back to the first visible block
@@ -389,7 +390,7 @@ first visible block → … → last visible block
 
 `↑` walks the same loop backwards. Each trailing row is only a stop when
 actually rendered (`toggleRowVisible()`/`ignoreToggleRowVisible()`/
-`pushTodoRowVisible()`); the search box is
+`batchRowVisible()`/`pushTodoRowVisible()`); the search box is
 always the loop's other end. `stepListSelection(1)` first tries
 `stepVisibleSelected` and only when that finds nothing further
 (`next === state.selected`) steps onto the next existing stop —
@@ -406,12 +407,23 @@ opening the menu resp. entering the diff, and **`f`/`d`/`s`/`a`** are no-ops
 (no block/diff context). A click on a regular row, or typing in the search box,
 always resets both toggle flags.
 
+**The batch action row** (`state.batchRowFocused`, between `toggle-ignored` and
+`push-todo` because that is also its render position, see
+`.claude/docs/comments-panel.md`'s "The comment_batch checkboxes and the
+bottom action row") acts DIRECTLY on `Enter`/`→`/click, like a toggle row and
+UNLIKE the push-todo row right below it — it starts the `comment_batch` run
+over whatever is currently checked (`startBatchFromRow`), no confirm step,
+because the checkboxes on the rows above already are the deliberate curation
+step. `f`/`d`/`s`/`a`/`Space`/`x` are no-ops there, same reasoning as a toggle
+row.
+
 **The push-todo row** (`state.pushTodoFocused`, the bottom-most stop — see
-`.claude/docs/pending-push.md`) mirrors all of that with one deliberate
+`.claude/docs/pending-push.md`) mirrors the toggle rows with one deliberate
 difference: its `Enter`/`→`/click does not act directly, because pushing writes
 to a branch other people work on. It opens a one-more-step confirm menu
 (`openMenu('pushTodo')`), the same two-step shape "Wis Claude-gesprek" uses.
-`f`/`d`/`s`/`a`/`Space` are no-ops there for the same reason as on a toggle row.
+`f`/`d`/`s`/`a`/`Space`/`x` are no-ops there for the same reason as on a toggle
+row.
 
 **The search box** is reached via `activateSearch()` (real DOM focus, so its
 focus ring lights up) and marks the arrival as deliberate via
@@ -911,6 +923,31 @@ palette there, so approving with Space is meaningful on that stop too.
 `e.preventDefault()` always fires when handled, so Space never scrolls the
 page nor (were a focusable element to hold real DOM focus) activates it
 natively. Test: `tests/space-approve-continue.spec.mjs`.
+
+## `x` — toggle a comment's batch-selection checkbox
+
+**`x`** toggles the SELECTED comment-index row's own `comment_batch` checkbox
+(`batchCheckbox`/`toggleBatchChecked`, `BlockList.mjs` — see "The comment_batch
+checkboxes and the bottom action row" in `.claude/docs/comments-panel.md`):
+explicitly requested as a keyboard equivalent of clicking the checkbox, so
+excluding a comment from a batch run never requires the mouse. Gated on
+`selectedComment()` returning a comment AND `isBatchEligible(sc)` — a no-op on
+any other selection (an ordinary block, stop 1, a toggle/batch/push-todo row),
+so the key falls through harmlessly instead of being swallowed everywhere.
+Does not touch `state.selected`/`cs.focus` — same narrow scope as `Space`'s
+resolve action right above it, just a different, unrelated control on the same
+row.
+
+**Why `x` specifically:** every other short, "mark/select this" free letter is
+already bound elsewhere in this same handler — `f`/`d`/`s` zoom the diff
+granularity, `a` cycles the diff view, `c`/`v` resize the focused column,
+`Space` approves+continues, `Enter`/`/` open a menu — so `x` was the one
+remaining free single letter, chosen to mirror the "press `x` to select this
+row" convention from Gmail-style list UIs (the checkbox itself is the same
+idea: mark an item for a bulk action). If a future feature needs another
+free letter, audit this same list first — see also the guard list a
+toggle/batch/push-todo row swallows (`['f','d','s','a',' ','x','ArrowRight']`
+in `onKeydown`).
 
 ## `a` — cycling the diff view (split → unified → fit → split)
 
