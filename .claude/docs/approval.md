@@ -265,6 +265,101 @@ so an index outside `changedRows` is simply ignored. The only visible effect is
 `rowCellHTML`'s left-margin ✓ (`changed && approved.has(i)`) also lighting up on
 the blank row — a shape signal, never colour-only.
 
+## Approving from the mouse: a clickable gutter affordance
+
+Until this was added, the only mouse-reachable approve was the block card's
+top **checkbox** (`toggleBlockApproval`) — always the whole block, never a
+single group/line/call. Reviewer audit finding: `Space` (approve + continue)
+was keyboard-only, so the daily line-by-line review workflow had no mouse
+path at all. Three glyphs, all rendered by `rowCellHTML`'s
+`rowApproveMarkerHTML` (`Block.mjs`), reuse the exact granular state this row
+already renders — no new approval computation, only a clickable presentation
+of it:
+
+- **Line** — a round `✓`/`○` at the row's usual left-1.5 checkmark spot.
+  `✓` (already approved) stays visible unconditionally, exactly like the
+  pre-existing plain checkmark always has; the empty `○` only appears **on
+  hover of that row** (reviewer answer: "leeg rondje bij hover" — a
+  permanently-visible empty circle on every changed row was rejected as too
+  noisy). The hover reveal is CSS-only (`opacity-0
+  group-hover/row:opacity-100`, a *named* Tailwind group scoped to that one
+  row's own `<div>` via `group/row` — never the card-wide unnamed `group`
+  `block-open-menu` uses, which would reveal every row's circle at once), per
+  the "hover carries no state" rule in `.claude/docs/mouse-navigation.md`.
+- **Group** — a SQUARE `▣`/`▢`, a few px further right (`left-4`), rendered
+  **only on the LAST row of the group** (`groupApproveInfo`, computed once
+  per pane render straight from `changeGroups(rows)` — independent of
+  whichever gran/unit the keyboard cursor happens to be on right now). A
+  click approves/retracts every changed row of that whole group. Explicit
+  reviewer answer on the "two markers might land on the same row" concern:
+  DIFFERENT shape (square vs. circle) **and** different position, never
+  colour alone — the colourblind rule.
+- **Call** — the existing per-segment dot markers (`segDotMarkers`, above)
+  are already clickable once a row is partially approved; `segHoverRingMarkers`
+  adds a HOVER-ONLY hollow ring at the same per-character position for a row
+  that has real call structure (more than one segment) but carries **no**
+  approval at all yet (segDots and hoverSegMarks are mutually exclusive — a
+  partially-approved row already shows its real dots). Same `SEG_DOT_BASE`
+  `::after` mechanism as the real dots, just gated by
+  `group-hover/row:after:opacity-100` instead of always-on.
+
+**The glyph is CSS content, never real text** — `before:content-['…']` on an
+otherwise-empty `<span>`. A real text node here leaked into `rowEl.textContent`
+(and any TreeWalker over the row's text nodes), shifting every downstream
+char-index computation by however many glyph characters came before it —
+regression caught by `tests/call-approval-dots.spec.mjs`, which locates a
+segment's own first character by scanning `textContent`. Don't reintroduce a
+real-text glyph here.
+
+**Click routing:** one delegated `click`-in-`mousedown` branch in
+`onBlockMouseDown` (`Block.mjs`), checked **before** the ordinary
+row-selection logic, for `[data-approve-toggle]` (line/group) or
+`[data-seg-dot]` (call) — a single event either selects a row/segment OR
+approves, never both. `[data-approve-toggle]`/`[data-seg-dot]` deliberately
+carry **no `data-row` of their own** (`data-row` must stay unique per aligned
+row — `callArrows.mjs` and several tests rely on exactly one match per index);
+the row index comes from the existing `closest('[data-row]')` walk on the
+ancestor row `<div>`, which resolves correctly whether the click landed on
+ordinary text or on one of these nested spans.
+
+`home.mjs`'s `onApproveClick` prop (wired next to `onRowMouseDown` at both
+real, non-preview card call sites — top-level and a drilled column) calls
+`approveClickAt(level, b, i, row, kind, segStart)`: resolves the clicked
+`kind` (`'line'`/`'group'`/`'call'`) to a navigation unit via `navUnitsOf`
+(mirroring `selectRowAt`'s own level/i plumbing), **forces** that granularity
+onto the keyboard cursor — the same "a click overrides whatever gran the
+keyboard had active" rule the plain row click already applies (see "Line
+selection" in `.claude/docs/diff-render.md`), confirmed by the reviewer to
+extend to this affordance too — and then runs `mouseApprove()`.
+
+**`mouseApprove()` is the mouse counterpart of `Space`, with ONE deliberate
+difference.** It reuses the exact same
+`approveContext()`/`descendIntoUnapprovedCall`/`toggleApprove(true)` chain as
+`spaceKey` (see "`Space` — approve + continue in one keypress" in
+`.claude/docs/keyboard-navigation.md`) — approve (or descend into an
+unapproved call first) plus auto-continue to the next unapproved unit, no
+`postApprove` confirm menu, exactly one click. The difference, per explicit
+reviewer answer ("al goedgekeurd → intrekken"): clicking an ALREADY approved
+marker **retracts** it (`toggleApprove(true)` already flips either direction
+depending on `allIn`), where `spaceKey`'s own "already done" branch instead
+only continues (`isApproveDone` → skip straight to "Ga door", no toggle at
+all) — a reviewer clicking directly on a solid ✓/▣/dot is asking to undo it,
+not to skip past it. A retract never auto-advances either
+(`afterApproveAction`'s `if (!approving) return`), same as every other
+retract path in this app.
+
+**Deliberately scoped to the split/fit stands only** (`rowApproveEnabled`
+gates on `!gutter`, and `opts.gutter` is only ever true from
+`unifiedRowHTML`): the unified stand's own inline `"- "`/`"+ "` gutter
+checkmark (`gutterSpan`) is untouched, not a click target — the same
+"not every stand" precedent as SVG/TRANSLATION blocks (see
+`.claude/docs/diff-render.md`), accepted rather than squeezing a second icon
+into that fixed-width inline slot. `fit` inherits full support for free: it
+reduces to the same single-pane `codePane`/`paneHTML` path as `split`'s own
+right pane (`codeDiff`'s `effectiveOnly === 'right'` branch).
+
+Test: `tests/mouse-approve.spec.mjs`.
+
 ## Comment-activity indicator per tree
 
 Same subtree as the approval rollup. Three render sites, one shared meaning:

@@ -7177,6 +7177,83 @@ function extendRowRange(level, b, row) {
   )
 }
 
+// approveClickAt resolves a click on one of Block.mjs's mouse approve-toggles
+// (the row's ✓/○ line toggle, the ▣/▢ group toggle on a group's last row, or
+// a call segment's dot/hover ring — see onApproveClick/onBlockMouseDown) to a
+// navigation unit and positions the keyboard there, mirroring selectRowAt's
+// own level/i plumbing verbatim (0 = the top-level diff, >0 = a drilled
+// column's own focus level; `i` only matters at level 0, see
+// ensureTopLevelDiffFocus) — a click always forces the CLICKED kind's
+// granularity, the same "override whatever gran the keyboard had active"
+// rule the plain row click already applies (see "Line selection" in
+// diff-render.md), confirmed to extend to this new affordance too. Once
+// positioned it runs mouseApprove() below — the mouse counterpart of Space —
+// so approving (or retracting) and continuing happen in the same click.
+function approveClickAt(level, b, i, row, kind, segStart) {
+  const gran = kind === 'group' ? 'group' : kind === 'call' ? 'call' : 'line'
+  const rows = blockRows(b)
+  if (level === 0) {
+    ensureTopLevelDiffFocus(i)
+    if (state.mode !== 'diff' || !isActiveCard(b)) return
+    const units = navUnitsOf(b, rows, gran)
+    if (!units.length) return
+    let change
+    if (gran === 'call') {
+      change = units.findIndex((u) => u.start === row && u.segStart === segStart)
+      if (change < 0) return
+    } else {
+      change = unitAtRow(units, row)
+    }
+    clearRangeAnchor(0)
+    state.gran = gran
+    state.change = change
+    mouseApprove()
+    return
+  }
+  if (state.focusLevel !== level) return
+  if (relatedActive()) leaveRelated()
+  const cur = state.drillCursor[level - 1]
+  if (!cur) return
+  const units = navUnitsOf(b, rows, gran)
+  if (!units.length) return
+  let change
+  if (gran === 'call') {
+    change = units.findIndex((u) => u.start === row && u.segStart === segStart)
+    if (change < 0) return
+  } else {
+    change = unitAtRow(units, row)
+  }
+  state.drillCursor = state.drillCursor.map((c, idx) => (idx === level - 1 ? { ...c, gran, change, rangeAnchor: null } : c))
+  mouseApprove()
+}
+
+// mouseApprove is the mouse counterpart of Space's approve step (see
+// spaceKey/"Space" in keyboard-navigation.md, further below): it reuses the
+// exact same approveContext()/descendIntoUnapprovedCall/toggleApprove(true)
+// chain, so approving + continuing to the next unapproved unit happen in one
+// click, same as one Space press — no second approve/continue
+// implementation. Deliberately differs from spaceKey in exactly one place,
+// per explicit reviewer answer: clicking an ALREADY approved marker RETRACTS
+// it (toggleApprove(true) already flips either direction depending on
+// whether the target is fully approved) instead of Space's own "already done
+// → only continue" behaviour (isApproveDone's branch in spaceKey never
+// toggles) — a reviewer clicking directly on a ✓/filled square/solid dot is
+// asking to undo it, not to skip past it. A retract intentionally does NOT
+// continue either (toggleApprove/afterApproveAction's `if (!approving)
+// return` — a retract never auto-advances anywhere else in this app, and
+// this mouse action is not an exception).
+function mouseApprove() {
+  const ctx = approveContext()
+  if (!ctx.b) return
+  if (isApproveDone(ctx)) {
+    toggleApprove(true)
+    return
+  }
+  descendIntoUnapprovedCall(ctx).then((handled) => {
+    if (!handled) toggleApprove(true)
+  })
+}
+
 // focusDrillPreviewSibling brings a click on the drilled column's own
 // look-ahead preview card (drillPreviewColumns, always rendered nested inside
 // the ALREADY-focused column — see its own doc comment) onto that sibling:
@@ -11749,6 +11826,10 @@ function DetailPanel(state) {
             // 'call'-segment precision of a single click — both top-level
             // only, see selectRowAt's own comment.
             onRowMouseDown: (row, clickCount, segStart) => selectRowAt(0, b, i, row, clickCount, segStart),
+            // A click on one of Block.mjs's own mouse approve-toggles (the
+            // line/group gutter glyphs, a call segment's dot/hover ring) —
+            // see approveClickAt's own doc comment.
+            onApproveClick: (row, kind, segStart) => approveClickAt(0, b, i, row, kind, segStart),
             // Drag-extends the selection while the button stays down — a
             // no-op unless this card already owns the keyboard (see
             // extendRowRange's own guard), so dragging never starts a range on
@@ -12039,6 +12120,9 @@ function DetailPanel(state) {
                   // needs to hand focus back from the comments/Onderliggende-
                   // code panel when needed, never a level change.
                   onRowMouseDown: (row) => selectRowAt(level, b, null, row),
+                  // Mirrors the top-level card's own wiring above — see
+                  // approveClickAt's own doc comment.
+                  onApproveClick: (row, kind, segStart) => approveClickAt(level, b, null, row, kind, segStart),
                   onRowMouseMove: (row) => extendRowRange(level, b, row),
                   commentedRows: () => commentRowSet(b),
                   commentRangeRows: () => commentRangeRowSet(b),

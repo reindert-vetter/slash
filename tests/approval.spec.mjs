@@ -156,8 +156,17 @@ test.describe('PR Review Tree — combined approval', () => {
         return tokenRect.left - rowRect.left
       }
 
-      const hasCheck = (host) =>
-        !!host.querySelector('span[title="Goedgekeurd"]')
+      // The plain "Goedgekeurd" title only shows on a non-clickable marker
+      // (an unfocused/preview card); this harness mounts an ordinary FOCUSED
+      // Block(), which now also renders the mouse approve-toggle (see
+      // rowApproveMarkerHTML/rowApproveEnabled in Block.mjs) — so an approved
+      // row's title is the clickable "Trek goedkeuring in" instead. Either
+      // way, "approved" means the marker exists and does NOT read as the
+      // not-yet-approved "Keur deze regel goed".
+      const hasCheck = (host) => {
+        const el = host.querySelector('span[data-approve-toggle="line"], span[title="Goedgekeurd"]')
+        return !!el && el.getAttribute('title') !== 'Keur deze regel goed'
+      }
 
       return {
         approvedX: relX(approvedHost),
