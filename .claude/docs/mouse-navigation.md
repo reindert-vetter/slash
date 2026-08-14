@@ -26,6 +26,7 @@ function** the key runs — never a parallel implementation. Concretely:
 | The Claude chat's "Stuur" button | `Enter` in the chat composer | `.claude/docs/claude-chat-panel.md` |
 | Focusing the Claude chat composer (click or Tab), on an already-anchored conversation | `→` from `'comment'` into it | "Clicking straight into the composer…" in `.claude/docs/claude-chat-panel.md` |
 | A `claude-question-option` chip | typing that same answer as free text (the backend records the next message as the open question's answer either way) | `.claude/docs/claude-chat-panel.md` |
+| `block-open-menu` / `pr-menu-button` / `comment-detail-menu` / `claude-chat-menu` (each opens `openMenu(...)`) | `Enter` on the same target | "Every menu also has a mouse entry point" below |
 
 Two consequences worth keeping in mind when adding a click handler:
 
@@ -85,6 +86,52 @@ and fire a genuine `mouseenter` that hijacks the keyboard selection. Both halves
 of that gate (`hoverEnabled` — a coordinate-delta check on `mousemove`, plus
 disarming on a data-driven repaint) are documented with the feature, in
 "The hover-vs-keyboard flag" in `.claude/docs/pr-overview.md`.
+
+## Every menu also has a mouse entry point
+
+Until this was added, only rows *inside* an open menu were clickable —
+opening one at all was almost entirely keyboard-only (Enter/`/`). Four small
+icon buttons close that gap, each just calling the same `openMenu(...)` the
+matching key already calls (rule 1 above — reuse, never a second
+implementation):
+
+| Button (`data-testid`) | Opens | Where | Icon |
+|---|---|---|---|
+| `block-open-menu` | `COMMANDS` (block palette) | `Block.mjs`'s header row, next to `viewModeIndicator` | vertical kebab (⋮) |
+| `pr-menu-button` | `PR_COMMANDS` (PR-wide menu) | `prInfoCard`'s existing `pr-info-theme-row`, next to the theme/auto-warn toggles | shield-check |
+| `comment-detail-menu` | `prCommentCommandsFor()` | `commentDetailCard`'s author line (`RelatedPanel.mjs`) | speech-bubble-with-dots |
+| `claude-chat-menu` | `claudeChatCommandsFor()` | `claude-chat-header` (`ClaudeChat.mjs`), both the block-scoped and the PR-comment-index Claude column | sparkle |
+
+Each gets its **own** icon (reviewer request: "per plek een eigen icoon …
+zodat ze visueel te onderscheiden zijn") rather than one repeated kebab, so
+the four are told apart at a glance while staying in the same visual
+language (small inline SVG, `currentColor`, same size class as the existing
+icon buttons).
+
+**`block-open-menu` is hover-revealed, the other three are always visible**
+(reviewer decision, per button — a block card is dense and stacks many
+instances on screen, the other three surfaces are singular/already-selected
+UI). The reveal is **CSS-only** (`opacity-0 group-hover:opacity-100
+focus-visible:opacity-100` on a static `group` class on the card root) —
+never a reactive `state`/`cs` flag — per rule 4 ("hover carries no state").
+`focus-visible` also reveals it on Tab, and the click handler works
+regardless of visibility (a `dispatchEvent('click')` in a test, or a real
+click right as CSS opacity animates in), so nothing keyboard/touch-only is
+actually gated behind hover; Enter on the same card still opens the identical
+menu either way.
+
+`onOpenMenu`/`openMenu` is threaded as a plain **render-time callback opt**
+at each call site (`Block(b, { onOpenMenu: () => openMenu(...) })`,
+`commentDetailCard(c, { openMenu: () => openMenu('prComment') })`,
+`callbacks.onOpenMenu` inside `claudeChatCallbacks`/the PR-comment Claude
+view's own callbacks object) — the same shape `InlineComments`' own
+`openCommentMenu` already uses, not a new module-level opener registration
+(that shape stays reserved for a call that originates from logic buried
+inside `RelatedPanel.mjs`, like `claudeMenuOpener`, not from a straightforward
+render-prop). The Claude column reuses the **existing**
+`openClaudeMenuFromComposer` (`RelatedPanel.mjs`) for both its call sites, so
+there's still exactly one function that calls `claudeMenuOpener`. Test:
+`tests/mouse-menu-buttons.spec.mjs`.
 
 ## Pitfall: a nested `@click` must call `stopPropagation()` FIRST
 

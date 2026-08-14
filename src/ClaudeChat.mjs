@@ -662,6 +662,35 @@ function claudeSendError(view) {
 // padding gives the ring its 2px back on all four sides. Don't remove it, and
 // keep it in sync with the comment thread's own container (RelatedPanel.mjs's
 // `comment-thread`), which mirrors this pane and has the identical ring.
+// claudeMenuButton — the mouse entry point into claudeChatCommandsFor()
+// ("Wis Claude-gesprek", "Comment hiervan maken", "Probeer de mislukte turn
+// opnieuw" — see claude-chat-panel.md), the same menu Enter already opens on
+// this column. A sparkle glyph (Claude/AI-flavoured), distinct from the
+// block/PR/comment menu icons elsewhere, so the four are visually told apart.
+// `callbacks.onOpenMenu` is optional (defensive — every real caller wires it,
+// see RelatedPanel.mjs's claudeChatCallbacks/prCommentClaudeView call sites),
+// so a missing one renders nothing rather than a dead button.
+function claudeMenuButton(onOpenMenu) {
+  if (!onOpenMenu) return ''
+  return html`
+    <button
+      type="button"
+      title="Claude-menu"
+      data-testid="claude-chat-menu"
+      class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-indigo-600 dark:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-indigo-400"
+      @click="${(e) => {
+        e.stopPropagation()
+        onOpenMenu()
+      }}"
+    >
+      <svg viewBox="0 0 16 16" fill="currentColor" class="h-3.5 w-3.5" aria-hidden="true">
+        <path d="M8 1.2l1.1 3.3 3.3 1.1-3.3 1.1L8 9.9 6.9 6.6 3.6 5.5l3.3-1.1L8 1.2z"></path>
+        <path d="M13 9.6l.6 1.8 1.8.6-1.8.6-.6 1.8-.6-1.8-1.8-.6 1.8-.6.6-1.8z"></path>
+      </svg>
+    </button>
+  `
+}
+
 export function claudeChatColumn(view, callbacks) {
   return html`
     <div
@@ -671,9 +700,12 @@ export function claudeChatColumn(view, callbacks) {
       data-testid="claude-chat-card"
     >
 
-      <p class="text-[11px] font-medium text-slate-500 dark:text-zinc-500" data-testid="claude-chat-header">
-        ${claudeMention}
-      </p>
+      <div class="flex items-center justify-between gap-2">
+        <p class="text-[11px] font-medium text-slate-500 dark:text-zinc-500" data-testid="claude-chat-header">
+          ${claudeMention}
+        </p>
+        ${claudeMenuButton(callbacks.onOpenMenu)}
+      </div>
       <div class="relative min-h-0 flex-1">
         <div
           class="flex max-h-[38vh] min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-0.5"

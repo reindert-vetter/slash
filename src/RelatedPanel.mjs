@@ -2617,6 +2617,10 @@ function claudeChatCallbacks(state, commentTarget) {
     // ClaudeChat.mjs itself, since that file never imports this one back.
     onThreadScroll: (el) => updateClaudeThreadPinned(el),
     onJumpToBottom: () => jumpToClaudeThreadBottom(),
+    // Mouse entry point into claudeChatCommandsFor() ("Wis Claude-gesprek",
+    // "Comment hiervan maken", "Probeer de mislukte turn opnieuw") — reuses
+    // the exact same opener the composer's own blank-Enter already calls.
+    onOpenMenu: () => openClaudeMenuFromComposer(),
   }
 }
 
@@ -7210,6 +7214,38 @@ export async function unresolvePrCommentItem(c) {
   await loadComments(cs.pr)
 }
 
+// commentMenuButton — the mouse entry point into prCommentCommandsFor()
+// (Beantwoorden/Resolve/Verwijder/Bewerk/Chat met Claude/Ignore), the same
+// menu Enter already opens on a comment-index row (home.mjs's
+// selectedComment() branch). A speech-bubble-with-dots icon, distinct from
+// blockMenuButton's plain kebab (Block.mjs) and the PR/Claude menu icons, so
+// a reviewer can tell the four menu buttons apart at a glance. Only rendered
+// on the selected/focused card, never the look-ahead preview (mirrors
+// blockMenuButton's own !preview gate) — a no-op openMenu argument (never
+// passed, in practice) would otherwise render a dead button.
+function commentMenuButton(openMenu) {
+  if (!openMenu) return ''
+  return html`
+    <button
+      type="button"
+      title="Menu voor deze comment"
+      data-testid="comment-detail-menu"
+      class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-indigo-600 dark:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-indigo-400"
+      @click="${(e) => {
+        e.stopPropagation()
+        openMenu()
+      }}"
+    >
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" class="h-3.5 w-3.5" aria-hidden="true">
+        <path d="M1.5 3.5h13v7h-8l-3 2.5v-2.5h-2v-7z"></path>
+        <circle cx="5.2" cy="7" r="0.6" fill="currentColor" stroke="none"></circle>
+        <circle cx="8" cy="7" r="0.6" fill="currentColor" stroke="none"></circle>
+        <circle cx="10.8" cy="7" r="0.6" fill="currentColor" stroke="none"></circle>
+      </svg>
+    </button>
+  `
+}
+
 // commentDetailCard renders the read-only thread (status mark, kind badge,
 // source/AI-warning badges, relative time, then every reaction via
 // threadMessages — the comment's own body is already the first message
@@ -7271,6 +7307,7 @@ export function commentDetailCard(c, opts) {
         ${() => sourceBadge(c)} ${() => aiWarningBadge(c)} ${() => staleAnchorBadge(c)}
         ${() => commentFileChip(c)} ${() => sendFailedBadge('reply:' + c.id)}
         <span class="ml-auto shrink-0 text-[10px] text-slate-500 dark:text-zinc-500">${relTime(c.createdAt)}</span>
+        ${() => (preview ? '' : commentMenuButton(opts && opts.openMenu))}
       </div>
       <div
         class="${() =>
@@ -7374,6 +7411,11 @@ export function commentDetailCard(c, opts) {
                   onRetry: () => retryClaudeTurn(),
                   onThreadScroll: (el) => updatePccThreadPinned(el),
                   onJumpToBottom: () => jumpToPccThreadBottom(),
+                  // Same 'claude' menu the block-scoped column opens — it acts
+                  // on the same cc state regardless of which surface it was
+                  // opened from (see "A PR-wide comment-index item can also
+                  // start a conversation" in claude-chat-panel.md).
+                  onOpenMenu: () => openClaudeMenuFromComposer(),
                 })}
               </div>`
             : ''}

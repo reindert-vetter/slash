@@ -533,6 +533,40 @@ function viewModeIndicator(viewModeFn, setViewMode) {
   `
 }
 
+// blockMenuButton — the mouse entry point into the block-scoped command
+// palette (COMMANDS), the "Enter" equivalent per the click-runs-the-same-
+// function rule in mouse-navigation.md. Distinct icon from the PR/comment/
+// Claude menu buttons (a vertical kebab — "options for THIS item") so the
+// four are visually told apart at a glance, per the colorblind rule's own
+// "shape carries meaning" principle applied here to distinguish targets
+// rather than states. Hover-revealed only (opacity via the static 'group'
+// class on the card root above, plus focus-visible for keyboard/Tab
+// reachability) — never a reactive toggle, so no state hangs off hover
+// itself; the action stays reachable via Enter regardless of pointer
+// position. Rendered next to the file:line label, never on a preview card
+// (see the call site below) — a look-ahead card is never the one Enter
+// would act on.
+function blockMenuButton(onOpenMenu) {
+  return html`
+    <button
+      type="button"
+      title="Menu voor dit blok"
+      data-testid="block-open-menu"
+      class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-400 opacity-0 transition group-hover:opacity-100 focus-visible:opacity-100 hover:bg-slate-100 hover:text-indigo-600 dark:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-indigo-400"
+      @click="${(e) => {
+        e.stopPropagation()
+        onOpenMenu()
+      }}"
+    >
+      <svg viewBox="0 0 16 16" fill="currentColor" class="h-3.5 w-3.5" aria-hidden="true">
+        <circle cx="8" cy="3" r="1.3"></circle>
+        <circle cx="8" cy="8" r="1.3"></circle>
+        <circle cx="8" cy="13" r="1.3"></circle>
+      </svg>
+    </button>
+  `
+}
+
 // descriptionHtml renders a block's PHPDoc description (b.description, see
 // phpDocDescription in phpscan.go) as a safe HTML string for the card's
 // description strip.
@@ -594,6 +628,14 @@ export default function Block(b, opts = {}) {
   // exact card would have without an override.
   const onResizeStart = opts.onResizeStart || (() => {})
   const onResizeReset = opts.onResizeReset || (() => {})
+  // onOpenMenu — opens the same block-scoped command palette (COMMANDS) that
+  // Enter already opens on this card (home.mjs's openMenu(state.showDescription
+  // ? 'pr' : 'block')), so a mouse-only reviewer can reach "Comment op deze
+  // regel"/"Chat over deze regel"/"Open GitHub"/approve without the keyboard.
+  // See blockMenuButton below. Defaults to a no-op so a caller that never
+  // wires it up (e.g. a look-ahead/preview card, which never renders the
+  // button at all — see !preview below) needs no change.
+  const onOpenMenu = opts.onOpenMenu || (() => {})
   const preview = !!opts.preview
   // collapsedFn is a function returning whether this card should shrink to just
   // its header + meta row (category/title/status, file:line + approve pill) —
@@ -699,7 +741,11 @@ export default function Block(b, opts = {}) {
   return html`
     <article
       class="${() =>
-        'relative flex min-h-0 max-w-full flex-col overflow-hidden rounded-xl border bg-white dark:bg-zinc-900 transition ' +
+        // 'group' — purely for the hover-revealed blockMenuButton below (CSS
+        // :hover, no reactive state attached, per the "hover carries no
+        // state" rule in mouse-navigation.md); nothing else in this card
+        // reacts to it.
+        'group relative flex min-h-0 max-w-full flex-col overflow-hidden rounded-xl border bg-white dark:bg-zinc-900 transition ' +
         // A one-sided (added/removed) block only ever shows a single pane, so it
         // renders at the narrow (60%) width by default — the same width the `a`
         // toggle gives every card. A two-sided (modified) block keeps the full
@@ -796,6 +842,11 @@ export default function Block(b, opts = {}) {
           // status indicator; see viewModeIndicator above and the "a —
           // cycling the diff view" section in keyboard-navigation.md.
           diffActive() ? viewModeIndicator(viewModeFn, setViewMode) : ''}
+        ${() =>
+          // Mouse entry point into COMMANDS — never on a preview/look-ahead
+          // card (Enter would never act on it either). See blockMenuButton's
+          // own doc comment.
+          preview ? '' : blockMenuButton(onOpenMenu)}
         ${() =>
           // Landed locally but not on GitHub yet: the code below IS what the
           // reviewer asked Claude for, it just isn't pushed. The word carries

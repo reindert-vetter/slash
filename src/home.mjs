@@ -11201,6 +11201,31 @@ function sinceReviewBlock(state) {
   }}</div>`
 }
 
+// prMenuButton — the mouse entry point into the PR-wide command palette
+// (PR_COMMANDS): "PR keuren"/"Algemene comment plaatsen"/the Jira submenu/
+// "Alle goedkeuringen intrekken" — same openMenu('pr') the '/'-key and Enter
+// (at stop 1) already run, see command-palette.md. A distinct shield-check
+// icon (not the block card's kebab, not a comment/chat icon) so all four new
+// menu buttons stay visually told apart. Sits in the existing
+// pr-info-theme-row, next to the theme/auto-warn toggles, rather than a new
+// row of its own.
+function prMenuButton() {
+  return html`
+    <button
+      type="button"
+      title="PR-menu (keuren, comment plaatsen, Jira, …)"
+      data-testid="pr-menu-button"
+      class="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-50 dark:bg-zinc-800 text-slate-500 dark:text-zinc-400 ring-1 ring-slate-200 dark:ring-zinc-700 hover:text-indigo-600 dark:hover:text-indigo-400"
+      @click="${() => openMenu('pr')}"
+    >
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="h-3.5 w-3.5" aria-hidden="true">
+        <path d="M8 1.5l5 2v3.8c0 3.3-2.1 5.7-5 7.2-2.9-1.5-5-3.9-5-7.2V3.5l5-2z"></path>
+        <path d="M5.7 8l1.6 1.6L10.3 6"></path>
+      </svg>
+    </button>
+  `
+}
+
 function prInfoCard(state) {
   return html`
     <div
@@ -11271,6 +11296,7 @@ function prInfoCard(state) {
       <div class="flex items-center justify-between" data-testid="pr-info-theme-row">
         <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500">Weergave</span>
         <div class="flex items-center gap-1.5">
+          ${prMenuButton()}
           ${autoWarnToggleButton()}
           ${themeToggleButton('h-7 w-7 bg-slate-50 dark:bg-zinc-800 ring-1 ring-slate-200 dark:ring-zinc-700')}
         </div>
@@ -11583,7 +11609,14 @@ function DetailPanel(state) {
           // status so a resolve forces a fresh node (same rekey-on-status-
           // change reasoning as the ordinary block-card key below).
           if (b.kind === 'comment') {
-            const inner = commentDetailCard(b.comment, { preview: i !== sel || !focusedHere })
+            const inner = commentDetailCard(b.comment, {
+              preview: i !== sel || !focusedHere,
+              // Mouse entry point into prCommentCommandsFor() — the exact
+              // same menu Enter already opens on this row (selectedComment()'s
+              // branch in onKeydown, checked ahead of the generic block
+              // palette — a comment-index item is never stop 1).
+              openMenu: () => openMenu('prComment'),
+            })
             const card = html`<div class="contents" data-testid="detail-card">${inner}</div>`.key(
               'detail:' + (i === sel ? 'sel' : 'prev') + ':comment:' + b.id + ':' + (b.comment && b.comment.status),
             )
@@ -11699,6 +11732,11 @@ function DetailPanel(state) {
             approvedCalls: () => approvedCallSet(b),
             // Persist a top-checkbox toggle to the durable approve tracker.
             onApprove: (blk) => persistApproval(blk),
+            // Mouse entry point into COMMANDS — the exact same expression
+            // Enter already runs (see the "Enter" branch in onKeydown), so a
+            // click here reaches "Comment op deze regel"/"Chat over deze
+            // regel"/"Open GitHub"/approve without the keyboard.
+            onOpenMenu: () => openMenu(state.showDescription ? 'pr' : 'block'),
             // A mousedown on this card's diff focuses it exactly like the
             // keyboard would (ensureTopLevelDiffFocus — reviewer request: a
             // click on the non-focused look-ahead preview at i===sel+1 must
@@ -11990,6 +12028,11 @@ function DetailPanel(state) {
                   approvedRows: () => approvedRowSet(b),
                   approvedCalls: () => approvedCallSet(b),
                   onApprove: (blk) => persistApproval(blk),
+                  // Mouse entry point into COMMANDS — mirrors the top-level
+                  // card's own wiring above (state.showDescription is never
+                  // true for a drilled column, but the same expression keeps
+                  // both call sites identical).
+                  onOpenMenu: () => openMenu(state.showDescription ? 'pr' : 'block'),
                   // This card is always the focused drilled column (a
                   // non-focused one collapses to the rail above, whose own
                   // click already calls expandColumn) — so a click here only

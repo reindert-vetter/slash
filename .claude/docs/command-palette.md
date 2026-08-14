@@ -32,6 +32,13 @@ in `.claude/docs/comments-panel.md`.
 `openMenu(mode)` sets the mode, `closeMenu` resets it to `'block'`, and
 `resolveCommands`/`rootCommandsFor` switch on it.
 
+**Every menu also has a mouse entry point now** — `block-open-menu` (on the
+block card), `pr-menu-button` (in `prInfoCard`), `comment-detail-menu` (on a
+comment-index item's detail card) and `claude-chat-menu` (in the Claude
+column header) each just call `openMenu(...)`, same as the matching key. See
+"Every menu also has a mouse entry point" in `.claude/docs/mouse-navigation.md`
+for the full list, icons and the hover-visibility decision per button.
+
 ## Opening, ownership and positioning
 
 `home.mjs` (`menuOverlay`) renders the menu once at `<main>` level as a
