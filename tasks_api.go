@@ -1300,6 +1300,21 @@ func (s *server) handleRelations(w http.ResponseWriter, r *http.Request) {
 // handleResolveCall starts an LLM call-resolution Workflow Execution (POST). It
 // is the sanctioned UI write path for the "Zoek" action — the workflow runs
 // Haiku, escalates to Sonnet if needed, and writes the callresolve read-model.
+//
+// The start itself is fire-and-forget from this handler's point of view:
+// resolveCallWorkflow runs its LLM Activity (resolveWithModel) synchronously
+// on whichever goroutine starts it (tembed's StartWorkflowID has no
+// background-yield path for a live start, only Recover() prioritises —
+// see .claude/docs/tembed-workflows.md), so waiting for it here could block
+// this HTTP response for minutes on a caller with several unresolved calls.
+// The Run ID is fully deterministic from the input (resolveCallRunID), so the
+// client gets the real ID immediately without needing the start to have
+// finished, and follows progress the same way it already does for the
+// automatic server-side trigger: polling /api/callresolve plus the
+// callresolve.changed SSE event (see autoStartResolveCall's own doc comment).
+// A failed start is only logged, mirroring autoStartResolveCall's own
+// best-effort handling — this is a convenience trigger, not the only path to
+// a result (a later poll/rebuild can still pick up the same unresolved call).
 func (s *server) handleResolveCall(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1314,11 +1329,12 @@ func (s *server) handleResolveCall(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid file", http.StatusBadRequest)
 		return
 	}
-	runID, err := s.tasks.manager.StartResolveCall(in)
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-		return
-	}
+	runID := resolveCallRunID(in)
+	go func() {
+		if _, err := s.tasks.manager.StartResolveCall(in); err != nil {
+			s.tasks.manager.logf("resolve_call: UI-triggered start pr=%d caller=%s: %v", in.PR, in.CallerID, err)
+		}
+	}()
 	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
 }
 

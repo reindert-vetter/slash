@@ -9,10 +9,41 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"slash/modules/callresolve"
 	"slash/modules/claude"
 )
+
+// resolveCallMaxConcurrentCLI bounds the number of `claude` CLI subprocesses
+// that resolveCallsWithModel may have running AT ONCE, PROCESS-WIDE — shared
+// by every resolve_call run, not one semaphore per run/Activity. Without a
+// shared cap, resolving several calls within one caller concurrently (see the
+// goroutine loop below) and starting several callers' resolve_call Executions
+// concurrently (autoStartResolveCall, workflows.go) would multiply each
+// other's concurrency instead of adding to a single bounded pool.
+//
+// Chosen conservatively (4), not maximized, based on measured evidence rather
+// than a guess: two resolve_call Executions running concurrently (PR 13381,
+// 2026-08-14 13:45-13:57, ~11-12 minutes each for only 3 calls) were also
+// overlapped by a live agentic code_warning run — but even so, per-call time
+// there was roughly 7x the ~30s "typical" a single Haiku call takes
+// (modules/claude/claude.go's contextTimeout doc). That is evidence that this
+// machine/account cannot absorb a large burst of concurrent `claude`
+// processes without each one slowing down — raising the cap much further
+// risks amplifying exactly the contention that produced that outlier, instead
+// of fixing it. 4 is a deliberate middle ground: enough to meaningfully
+// parallelize a caller with a handful of unresolved calls (the common case,
+// see .claude/docs/workflows-analysis.md's own examples), while still capping
+// how many `claude` processes can pile up when several callers' searches
+// start at once (groupUnresolvedCalls/autoStartResolveCall).
+//
+// resolveCallSemaphore is the shared pool resolveCallsWithModel's goroutines
+// acquire a slot from before running `cl.Run` — a buffered channel used as a
+// counting semaphore, process-wide by virtue of being a package-level var. A
+// test that needs a different cap must replace the channel itself (its
+// capacity is fixed at creation), not just re-point a separate size var.
+var resolveCallSemaphore = make(chan struct{}, 4)
 
 // This file is the LLM side of call resolution (package main; it reads the head
 // worktree and shells out to the claude CLI, so it runs only inside a
@@ -77,6 +108,18 @@ type llmAnswer struct {
 // callresolve.Entry per call (found — verified against the worktree — or
 // notfound). Never returns an error: a model/CLI failure degrades to notfound so
 // the workflow always completes (best-effort, like the github activities).
+//
+// Each call's `claude` CLI invocation runs in its own goroutine — the calls
+// are otherwise fully independent (different prompt, no shared mutable state
+// beyond writing to out[i]) — bounded by resolveCallSemaphore so the actual
+// number of concurrent CLI subprocesses stays capped process-wide. This is
+// purely an internal speedup of a single Activity: the Activity is still
+// called exactly once from resolveCallWorkflow and its (now faster) result is
+// recorded as one event, same as before, so nothing about the workflow's own
+// determinism (see .claude/rules/workflow-determinism.md) changes — a replay
+// just returns the already-recorded result rather than re-running any of
+// this. out is written by index so the result order still matches arg.Calls
+// regardless of which goroutine finishes first.
 func resolveCallsWithModel(ctx context.Context, cl claude.Client, dataDir string, arg resolveArg) []callresolve.Entry {
 	_, headDir := worktreeDirs(dataDir, arg.Repo, arg.PR)
 	idx := buildSymbolIndex(headDir)
@@ -88,8 +131,9 @@ func resolveCallsWithModel(ctx context.Context, cl claude.Client, dataDir string
 
 	callerSrc := extractBlockSource(filepath.Join(headDir, arg.CallerFile), arg.CallerFile, arg.CallerClass, arg.CallerName)
 
-	out := make([]callresolve.Entry, 0, len(arg.Calls))
-	for _, call := range arg.Calls {
+	out := make([]callresolve.Entry, len(arg.Calls))
+	var wg sync.WaitGroup
+	for i, call := range arg.Calls {
 		cands := idx.candidates(call)
 		entry := callresolve.Entry{
 			PR: arg.PR, CallerID: arg.CallerID, CallKey: call,
@@ -100,9 +144,10 @@ func resolveCallsWithModel(ctx context.Context, cl claude.Client, dataDir string
 		// A known vendor/framework builtin with zero static candidates can
 		// never resolve — skip the model call entirely (saves the Haiku
 		// spend too, and never shows the "Zoeken…" affordance for something
-		// that will never find anything).
+		// that will never find anything). No CLI call, so no goroutine/slot
+		// needed.
 		if len(cands) == 0 && isVendorBuiltin(call) {
-			out = append(out, entry)
+			out[i] = entry
 			continue
 		}
 
@@ -116,7 +161,22 @@ func resolveCallsWithModel(ctx context.Context, cl claude.Client, dataDir string
 			req.Tools = []string{"Read", "Grep", "Glob"}
 		}
 
-		if cl != nil {
+		if cl == nil {
+			out[i] = entry
+			continue
+		}
+
+		wg.Add(1)
+		go func(i int, req claude.RunRequest, entry callresolve.Entry) {
+			defer wg.Done()
+			select {
+			case resolveCallSemaphore <- struct{}{}:
+			case <-ctx.Done():
+				out[i] = entry
+				return
+			}
+			defer func() { <-resolveCallSemaphore }()
+
 			if raw, err := cl.Run(ctx, req); err == nil {
 				if ans, ok := parseLLMAnswer(raw); ok && ans.Found {
 					if code, cls, method, line, ok := verifyDefinition(headDir, ans); ok {
@@ -130,9 +190,10 @@ func resolveCallsWithModel(ctx context.Context, cl claude.Client, dataDir string
 					}
 				}
 			}
-		}
-		out = append(out, entry)
+			out[i] = entry
+		}(i, req, entry)
 	}
+	wg.Wait()
 	return out
 }
 

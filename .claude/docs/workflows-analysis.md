@@ -425,13 +425,67 @@ it becomes `found`.
   (`TestResolveCallVendorBuiltinDoesNotSuppressRealCandidate`). Saves spend and
   the pointless "Searching…" chip.
 
+### Why "Call zoeken" felt slow, and the three fixes (measured against PR 13381)
+
+Measured directly from the tembed event history (`data/workflows.db`):
+across 1089 completed `resolve_call` runs (all PRs) the median duration was
+~29s, but p90 ~108s and p99 ~234s, with a max of ~51 minutes — a long tail. For
+PR 13381 specifically (18 runs, 17 completed) two runs took ~11-12 minutes
+each for only 3 calls, running **fully concurrently** with each other AND with
+an unrelated agentic `code_warning` run. Three causes, all fixed:
+
+1. **`resolveCallsWithModel` (`resolve_call.go`) used to call `claude` once per
+   entry in `arg.Calls`, strictly sequentially** — a caller with N unresolved
+   calls always cost N × (a single Haiku call, ~30s typical, `contextTimeout`
+   90s cap). Now each call runs in its **own goroutine**; this is purely an
+   internal speedup of the single `resolveWithModel` Activity — its result is
+   still recorded as one event, so nothing about workflow determinism changes
+   (a replay just reuses the recorded result, see
+   `.claude/rules/workflow-determinism.md`).
+2. **`tembed.Engine.StartWorkflow(ID)` runs a workflow with no blocking point
+   fully synchronously on the calling goroutine** — there is no
+   background-yield for a *live* start, only `Recover()` at startup
+   prioritises (see `.claude/docs/tembed-workflows.md`). Two call sites relied
+   on this without meaning to:
+   - `handleResolveCall` (`tasks_api.go`) used to call `StartResolveCall`
+     directly, so the HTTP response for the "Zoek" click hung until the whole
+     LLM pass finished (minutes). It now starts the Execution in its own
+     goroutine and returns the **deterministic** `resolveCallRunID(in)`
+     immediately — the client tracks progress exactly like the automatic
+     trigger already does (poll `/api/callresolve` + the `callresolve.changed`
+     SSE event). A failed background start is only logged, mirroring
+     `autoStartResolveCall`'s own best-effort handling.
+   - `autoStartResolveCall`'s loop over `groupUnresolvedCalls` used to call
+     `StartResolveCall` for each caller **in the same loop**, so caller N
+     waited for every one of callers 1..N-1's full LLM pass to finish first —
+     visible in the event history as runs starting at the exact millisecond
+     the previous one ended. It now starts each caller's Execution in its own
+     goroutine too.
+3. **A shared, process-wide cap: `resolveCallSemaphore` (`resolve_call.go`), a
+   buffered channel of size 4.** Fixes 1 and 2 both add concurrency (calls
+   within a caller AND callers within a PR), which would otherwise multiply
+   unboundedly — a big rebuild could try to run dozens of `claude` subprocesses
+   at once. The cap is a single package-level channel, so it is shared by
+   every concurrent `resolve_call` run, not one pool per run/Activity — every
+   goroutine from both fixes 1 and 2 acquires a slot from the SAME pool before
+   calling `cl.Run`. Chosen conservatively (4) rather than maximized: the
+   measured PR-13381 outliers show this machine/account does not absorb a
+   burst of concurrent `claude` processes for free (each call there ran ~7x
+   slower than the ~30s typical), so a much higher cap risks amplifying that
+   same contention instead of curing it; 4 still gives real parallelism for
+   the common case of a caller with a handful of unresolved calls. Tests:
+   `TestResolveCallsWithModelRunsConcurrentlyBoundedBySemaphore` (bounds
+   `slow.maxConcurrent()` between 2 and 4), `TestHandleResolveCallDoesNotBlockOnTheLLMCall`
+   (the HTTP response returns well under the LLM delay).
+
 ### The search starts automatically server-side
 
 Right after `buildRelations`' `UpsertGo`/`Prune` (so via both `build_relations`
 and the delta refresh), `autoStartResolveCall` groups the fresh scan's
-`unresolved` rows **per caller** and starts one Execution per group — the
-reviewer needn't open a block first. **Fire-and-forget** (its own goroutine), so
-ingest never waits on a live claude call. `StartResolveCall` is **idempotent**
+`unresolved` rows **per caller** and starts one Execution **per goroutine**
+(bounded by `resolveCallSemaphore`, see above) — the reviewer needn't open a
+block first. **Fire-and-forget** (its own goroutine), so ingest never waits on
+a live claude call. `StartResolveCall` is **idempotent**
 (`resolveCallRunID` over `pr|callerId|sorted(calls)`), so the automatic trigger
 and the frontend's own `startCallSearch` safety net can never both spend a call.
 

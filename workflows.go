@@ -3499,19 +3499,32 @@ func (m *TaskManager) StartResolveCall(in ResolveCallInput) (string, error) {
 // automatic "Zoek" trigger (startCallSearch, home.mjs): it groups every
 // currently unresolved-and-never-yet-attempted call of pr per caller
 // (groupUnresolvedCalls, using resolveCallAttempted's durable "ever
-// submitted" set) and starts a resolve_call Execution for each. Called as its
-// own goroutine from the buildRelations Activity, so it never blocks
-// ingest/EnsureRelations/prStatusWorkflow's delta-refresh on a live claude
-// call. Best-effort: a failed start is logged, never surfaced — this is a
+// submitted" set) and starts a resolve_call Execution for each — one per
+// goroutine, so a rebuild with several unresolved callers doesn't process
+// them one at a time (StartResolveCall/StartWorkflowID runs a resolve_call
+// Execution's Activities, including the live claude calls, synchronously on
+// the calling goroutine — there is no background-yield path for a live
+// start, only Recover() prioritises, see .claude/docs/tembed-workflows.md —
+// so a sequential loop here used to make caller N wait for every one of
+// callers 1..N-1's FULL LLM pass to finish first, even when caller N itself
+// had only one unresolved call). The actual number of concurrent `claude`
+// subprocesses this can start stays bounded by resolveCallSemaphore
+// (resolve_call.go) regardless of how many goroutines are launched here.
+// Called as its own goroutine from the buildRelations Activity, so none of
+// this blocks ingest/EnsureRelations/prStatusWorkflow's delta-refresh.
+// Best-effort: a failed start is logged, never surfaced — this is a
 // convenience trigger, not a required step (the frontend's own trigger still
 // covers the gap if this one fails or never ran, e.g. for a PR whose relations
 // were only ever refreshed headlessly via `slash relations`).
 func (m *TaskManager) autoStartResolveCall(pr int, calls []callresolve.Entry, blocks []Block) {
 	attempted := m.resolveCallAttempted(pr)
 	for _, in := range groupUnresolvedCalls(pr, calls, attempted, blocks) {
-		if _, err := m.StartResolveCall(in); err != nil {
-			m.logf("resolve_call: auto-search start pr=%d caller=%s: %v", pr, in.CallerID, err)
-		}
+		in := in
+		go func() {
+			if _, err := m.StartResolveCall(in); err != nil {
+				m.logf("resolve_call: auto-search start pr=%d caller=%s: %v", pr, in.CallerID, err)
+			}
+		}()
 	}
 }
 

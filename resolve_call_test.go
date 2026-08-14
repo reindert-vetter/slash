@@ -1,11 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -475,4 +480,139 @@ func TestAutoStartResolveCallOnBuildRelations(t *testing.T) {
 	if n := fake.CallCount(); n != 3 {
 		t.Fatalf("claude called %d time(s) after the new call appeared, want 3 (only the new call searched)", n)
 	}
+}
+
+// slowConcurrencyClient is a minimal claude.Client that sleeps `delay` per Run
+// call and tracks the maximum number of Run calls it ever had in flight at
+// once — used to prove resolveCallsWithModel's calls actually overlap (not
+// silently still serial) and never exceed resolveCallSemaphore's cap.
+type slowConcurrencyClient struct {
+	delay time.Duration
+	mu    sync.Mutex
+	cur   int
+	max   int
+}
+
+func (c *slowConcurrencyClient) Run(ctx context.Context, req claude.RunRequest) (string, error) {
+	c.mu.Lock()
+	c.cur++
+	if c.cur > c.max {
+		c.max = c.cur
+	}
+	c.mu.Unlock()
+	time.Sleep(c.delay)
+	c.mu.Lock()
+	c.cur--
+	c.mu.Unlock()
+	return `{"found":false}`, nil
+}
+
+func (c *slowConcurrencyClient) RunChat(context.Context, claude.RunRequest) (claude.ChatResult, error) {
+	return claude.ChatResult{}, nil
+}
+
+func (c *slowConcurrencyClient) maxConcurrent() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.max
+}
+
+// TestResolveCallsWithModelRunsConcurrentlyBoundedBySemaphore proves the
+// per-call `claude` invocations inside a single resolveWithModel Activity
+// call now overlap (option B) instead of running one after another, while
+// never exceeding resolveCallSemaphore's process-wide cap (the "global
+// plafond" — see resolveCallSemaphore's own doc comment for why 4 was
+// chosen). Six calls at a 4-slot cap must show concurrency > 1 and <= 4.
+func TestResolveCallsWithModelRunsConcurrentlyBoundedBySemaphore(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 230
+	writeCallFixtureRepo(t, dataDir, pr)
+
+	slow := &slowConcurrencyClient{delay: 80 * time.Millisecond}
+	arg := resolveArg{
+		PR: pr, CallerID: "x", CallerFile: "app/Services/OrderService.php",
+		CallerClass: "OrderService", CallerName: "build",
+		Calls: []string{"concurA", "concurB", "concurC", "concurD", "concurE", "concurF"},
+		Model: claude.ModelHaiku,
+	}
+
+	start := time.Now()
+	out := resolveCallsWithModel(context.Background(), slow, dataDir, arg)
+	elapsed := time.Since(start)
+
+	if len(out) != len(arg.Calls) {
+		t.Fatalf("got %d entries, want %d", len(out), len(arg.Calls))
+	}
+	for i, e := range out {
+		if e.CallKey != arg.Calls[i] {
+			t.Fatalf("entry %d has CallKey %q, want %q (order must match arg.Calls)", i, e.CallKey, arg.Calls[i])
+		}
+	}
+
+	if max := slow.maxConcurrent(); max <= 1 {
+		t.Fatalf("maxConcurrent = %d, want > 1 (calls ran serially, option B had no effect)", max)
+	} else if max > 4 {
+		t.Fatalf("maxConcurrent = %d, want <= 4 (resolveCallSemaphore's global cap was not respected)", max)
+	}
+
+	// 6 calls at a 4-slot cap take 2 batches (~2*delay), not 6 (fully serial)
+	// or 1 (fully unbounded) — a coarse wall-clock sanity check alongside the
+	// exact concurrency count above.
+	if want := 6 * slow.delay; elapsed >= want {
+		t.Fatalf("elapsed = %s, want well under the fully-serial bound %s", elapsed, want)
+	}
+}
+
+// TestHandleResolveCallDoesNotBlockOnTheLLMCall proves option D: the HTTP
+// handler behind the "Zoek" action returns the deterministic Run ID
+// immediately, without waiting for resolveCallWorkflow's own (potentially
+// minutes-long, see resolve_call.go's autoStartResolveCall doc) synchronous
+// Activity run to finish — StartResolveCall now runs in its own goroutine.
+// The background start must still actually land in the read-model.
+func TestHandleResolveCallDoesNotBlockOnTheLLMCall(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 231
+	writeCallFixtureRepo(t, dataDir, pr)
+	cr, err := callresolve.Open(filepath.Join(dataDir, "callresolve.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cr.Close() })
+
+	slow := &slowConcurrencyClient{delay: 150 * time.Millisecond}
+	engine := tembed.New(tembed.NewMemoryStore())
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), cr, nil, nil, nil, nil, slow, nil, nil, dataDir, "test/repo")
+	s := &server{tasks: &tasks{manager: m, engine: engine}}
+
+	in := callInput(pr, "handleResolveCallTarget")
+	body, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	rec := httptest.NewRecorder()
+	s.handleResolveCall(rec, httptest.NewRequest(http.MethodPost, "/api/workflows/resolve_call", bytes.NewReader(body)))
+	elapsed := time.Since(start)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if elapsed >= slow.delay {
+		t.Fatalf("handleResolveCall took %s, want well under the %s LLM delay (must not block the HTTP response on the workflow's own claude call)", elapsed, slow.delay)
+	}
+
+	var resp map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if want := resolveCallRunID(in); resp["runId"] != want {
+		t.Fatalf("runId = %q, want the deterministic %q (client must get the real id even though the start is still running in the background)", resp["runId"], want)
+	}
+
+	// The background start must still actually complete and write the result.
+	waitFor(t, func() bool {
+		e, ok := findEntry(mustCallresolveList(t, cr, pr), "handleResolveCallTarget")
+		return ok && e.Status != callresolve.StatusSearching
+	})
 }
