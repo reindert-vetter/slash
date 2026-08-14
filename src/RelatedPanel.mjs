@@ -613,11 +613,14 @@ function verticalScroller(el) {
 // alignToTopVertical scrolls `el` to the TOP of its vertical scroller instead
 // of merely into view. Reviewer request: selecting an Onderliggende-code child
 // (or a comment card) that sits below another one must bring it to the top,
-// "zodat hij niet buiten beeld komt" — with a "there's something above" hint
-// in the panel header (moreAboveHint) and ↑ still walking back up. Only ever
-// scrolls DOWN to reach that alignment: clamped at 0, so selecting the first
-// item never yanks the panel past its own top, and (unlike scrollIntoView) it
-// never touches the horizontal axis — same axis rule as above.
+// "zodat hij niet buiten beeld komt" — for a comment card with a "there's
+// something above" hint in the panel header (moreAboveHint) and ↑ still
+// walking back up; for an Onderliggende-code child the cards above collapse to
+// their header instead (see relatedCard's `collapsed`), so no such hint is
+// shown there any more. Only ever scrolls DOWN to reach that alignment:
+// clamped at 0, so selecting the first item never yanks the panel past its own
+// top, and (unlike scrollIntoView) it never touches the horizontal axis — same
+// axis rule as above.
 function alignToTopVertical(el) {
   const node = verticalScroller(el)
   if (!node) return
@@ -6121,10 +6124,12 @@ export function claudeColumnWidthCls() {
 }
 
 // relatedCard renders one child block: a header (label + file:line + relation
-// kind) and a short, non-interactive code excerpt highlighted like the panes.
-// The card sits in a flex row with, when the child itself has changed
-// grandchildren (r.nested), a dashed connector to a narrow chip column on the
-// right (nestedChipColumn) — the drill-hint that there is more underneath.
+// kind) and a short, non-interactive code excerpt highlighted like the panes —
+// unless the card sits above the cursor in the list (`collapsed`, see below),
+// in which case only that header stays visible. The card sits in a flex row
+// with, when the child itself has changed grandchildren (r.nested), a dashed
+// connector to a narrow chip column on the right (nestedChipColumn) — the
+// drill-hint that there is more underneath, also hidden while collapsed.
 // The row div is the template's stable root; the chip column is a static
 // interpolation (fresh keyed node per nested change — the key in the
 // related-code render encodes the nested signature). data-child-id stays on the inner card, so
@@ -6135,6 +6140,16 @@ function relatedCard(r, i, drill) {
   // its drill-hint chips (cs.chipPath, see nestedChip/handleRelatedKey) — only
   // one thing in the code panel is ever visually "active" at a time.
   const selected = () => cs.focus === 'code' && i === cs.codeSel && cs.chipPath.length === 0
+  // collapsed: this card sits ABOVE the cursor in the vertical list (an item
+  // the reviewer has already stepped past on the way down). Only its header
+  // stays visible — the code excerpt/translation view and its drill-hint
+  // chips fall away — so a long walk through Underlying code doesn't grow the
+  // panel unboundedly. A pure function of `i < cs.codeSel`, not a stored
+  // toggle: stepping back up (↑) "un-collapses" a card for free the moment the
+  // cursor passes it again, no separate state to reset. Reviewer request:
+  // "als ik naar beneden ga moeten de bovenstaande blokken ingeklapt worden,
+  // en als ik naar boven ga weer uitgeklapt".
+  const collapsed = () => cs.focus === 'code' && i < cs.codeSel
   const nested = Array.isArray(r.nested) ? r.nested : []
   return html`
     <div class="flex items-start">
@@ -6153,6 +6168,7 @@ function relatedCard(r, i, drill) {
       data-testid="related-item"
       data-child-id="${r.id}"
       data-active="${() => (selected() ? 'true' : 'false')}"
+      data-collapsed="${() => (collapsed() ? 'true' : 'false')}"
       @click="${() => drill && drill(r)}"
     >
       <div class="border-b border-slate-100 dark:border-zinc-800/60 px-3 py-1.5">
@@ -6186,20 +6202,22 @@ function relatedCard(r, i, drill) {
         >
       </div>
       ${() =>
-        r.kind === 'translation'
-          ? translationValueView(r.code, r.transKey || r.label, r.locale || '')
-          : r.code
-            ? html`<code
-                class="language-php m-0 block whitespace-pre-wrap break-words px-3 py-2 font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300"
-                .innerHTML="${() => highlight(r.code)}"
-              ></code>`
-            : r.loading
-              ? html`<p class="px-3 py-2 text-[11px] text-slate-400 dark:text-zinc-500">code laden…</p>`
-              : html`<p class="px-3 py-2 text-[11px] text-slate-400 dark:text-zinc-500" data-testid="related-empty">
-                  geen code gevonden
-                </p>`}
+        collapsed()
+          ? ''
+          : r.kind === 'translation'
+            ? translationValueView(r.code, r.transKey || r.label, r.locale || '')
+            : r.code
+              ? html`<code
+                  class="language-php m-0 block whitespace-pre-wrap break-words px-3 py-2 font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300"
+                  .innerHTML="${() => highlight(r.code)}"
+                ></code>`
+              : r.loading
+                ? html`<p class="px-3 py-2 text-[11px] text-slate-400 dark:text-zinc-500">code laden…</p>`
+                : html`<p class="px-3 py-2 text-[11px] text-slate-400 dark:text-zinc-500" data-testid="related-empty">
+                    geen code gevonden
+                  </p>`}
     </div>
-    ${() => (nested.length ? nestedChipColumn([r], nested, drill, [], i) : '')}
+    ${() => (!collapsed() && nested.length ? nestedChipColumn([r], nested, drill, [], i) : '')}
     </div>
   `
 }
@@ -6538,6 +6556,11 @@ export default function RelatedPanel(state, commentTarget, search) {
 // `n` is the cursor's own index (cs.codeSel / selI()), not a scroll
 // measurement: deterministic, reactive for free, and it can't disagree with
 // what ↑ would actually do.
+//
+// Only used for stacked comment cards (InlineComments' comment-more-above)
+// now — the Onderliggende-code list dropped its own call site once its cards
+// above the cursor started collapsing to just their header (relatedCard's
+// `collapsed`), which already shows what's above without a separate hint.
 function moreAboveHint(n, testid) {
   return html`
     <div
@@ -6581,7 +6604,6 @@ function moreAboveHint(n, testid) {
           'no-scrollbar flex min-h-0 flex-1 flex-col gap-2 overflow-auto p-3 ' +
           (searching() || pending() > 0 ? 'pt-9' : '')}"
       >
-        ${() => (cs.focus === 'code' && cs.codeSel > 0 ? moreAboveHint(cs.codeSel, 'related-more-above') : '')}
         ${() => coversWarning()}
         ${() => {
           // All children render as one flat vertical list, full width, in order.

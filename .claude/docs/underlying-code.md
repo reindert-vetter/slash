@@ -199,35 +199,53 @@ column's full height and then scrolls internally (`min-h-0`, body
 `flex-1 overflow-auto`). Code excerpts **wrap** (`whitespace-pre-wrap
 break-words`, no horizontal scroll).
 
-### The selected child is pulled to the TOP, with a "hierboven" hint
+### Cards above the cursor collapse to just their header
 
-`scrollCodeIntoView` no longer merely brings the active card into view — it
-calls **`alignToTopVertical(el)`**, which scrolls the first vertically
-scrolling ancestor so the card sits at that container's top. Reviewer request:
-selecting a child that sits below another one must bring it to the top "zodat
-hij niet buiten beeld komt". It only ever scrolls DOWN to reach that alignment
-(clamped at `scrollTop 0`, so selecting the first child never yanks the panel
-past its own top) and it never touches the horizontal axis — it shares
+`relatedCard`'s `collapsed = () => cs.focus === 'code' && i < cs.codeSel`: any
+child card the reviewer has stepped past on the way down (its index sits
+before `cs.codeSel` in the flat vertical list) shrinks to just its header —
+the badges, the label and the `file:line` line — with its code excerpt/
+translation view and its drill-hint chip column (`nestedChipColumn`) hidden.
+Reviewer request: "als ik van de eerste onderliggende code naar beneden ga,
+dan wil ik dat de bovenstaande blokken ingeklapt worden, en als ik naar boven
+ga, dan moet het weer uitgeklapt worden. onderstaande blokken moeten
+uitgevouwen zijn." A card at or below the cursor (`i >= cs.codeSel`) always
+renders in full.
+
+- **A pure function of the index comparison, not a stored toggle.** Moving
+  `cs.codeSel` back up (`↑`) "un-collapses" a card for free the moment the
+  cursor passes it again — there is nothing to reset. Same reasoning as
+  `selected` right above it: read inside `relatedCard`'s own nested `${() =>
+  …}` bindings, never in the outer `.map()` closure that builds the list (see
+  the outer-closure-coupling pitfall in `.claude/rules/arrowjs-pitfalls.md`),
+  so a step only re-renders the two cards whose collapsed state actually
+  flipped.
+- **Applies everywhere a card can appear above the cursor** — an ordinary
+  relation/call/covered-method child, a class-member card, and an expanded
+  test row (`testsBar`'s own children, once toggled open, are ordinary
+  `relatedCard` entries at their own index). `testsBar` itself needs no
+  separate collapse: the grouped-tests bar is already a single compact row.
+  Since there is exactly one `RelatedPanel` instance whose children always
+  come from `focusedBlock()` (see "Reactivity" below), this collapse behaviour
+  is identical at every drill depth — the top-level block's Underlying-code
+  list and every drilled column's own list.
+- **`data-collapsed="true"/"false"`** on `data-testid=related-item` (also a
+  reactive function binding) marks the state for tests/inspection.
+- **Still fully clickable while collapsed** — the app-wide mouse rule ("a
+  click does what the key does", `.claude/docs/mouse-navigation.md`) is
+  untouched: `@click` still drills the child regardless of `collapsed()`.
+
+`scrollCodeIntoView` still calls **`alignToTopVertical(el)`**, which scrolls
+the first vertically scrolling ancestor so the selected card sits at that
+container's top (only ever scrolling DOWN to reach that alignment, clamped at
+`scrollTop 0`, and never touching the horizontal axis — it shares
 `verticalScroller` with `scrollIntoViewVertical`, so the `scrollIntoView` axis
-rule in `.claude/rules/arrowjs-pitfalls.md` still holds.
-
-Since the list then visually starts at the selected card, a slim **sticky
-header** (`moreAboveHint`, `data-testid=related-more-above`) says how many
-items sit above it: `▲ N hierboven`. Three deliberate properties:
-
-- **Driven by the cursor index (`cs.codeSel`), not by a scroll measurement** —
-  deterministic, reactive for free, and it can never disagree with what `↑`
-  would actually do.
-- **Only while the panel owns the keyboard** (`cs.focus === 'code'`): it
-  describes that cursor, so it disappears the moment `←` hands focus back.
-- **Colourblind rule:** the meaning is the WORD (the count + "hierboven") plus
-  the ▲ SHAPE; no colour carries anything.
-
-`InlineComments` gets the identical treatment for stacked comment cards
-(`comment-more-above`, gated on `cs.focus` being `'comment'`/`'thread'` and
-`selI() > 0`) — see `.claude/docs/comments-panel.md`. That call site also
-switched from a bare `el.scrollIntoView({block:'nearest'})` (which predates the
-axis rule and dragged `<main>`'s horizontal scroll along) to the same helper.
+rule in `.claude/rules/arrowjs-pitfalls.md` still holds). The sticky "▲ N
+hierboven" hint (`moreAboveHint`) this used to pair with is **gone** for this
+list — now redundant, since the collapsed cards above already show what's
+there without a separate count. `InlineComments` still uses `moreAboveHint`
+for stacked comment cards (`comment-more-above`) unchanged — comment cards have
+no equivalent collapse — see `.claude/docs/comments-panel.md`.
 Test: `tests/related-more-above-hint.spec.mjs`.
 
 **Refresh restore of the panel cursor:** `cs.focus`/`codeSel`/`sel`/`threadPos`
