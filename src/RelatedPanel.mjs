@@ -1466,7 +1466,11 @@ function chatAnchorComment() {
 // conversation the reviewer just started in THIS tab, which briefly made this
 // sync wrongly treat a real, just-created conversation as nonexistent.
 function syncClaudeAnchorForSelection() {
-  if (cs.focus === 'claude' || cs.focus === 'new') return
+  // Also skip while a turn is actively running for the anchored conversation
+  // (hasActiveClaudeTurn) — a plain block/comment switch elsewhere must not
+  // re-anchor (and thereby reset/hide) `cc` while it is mid-turn; see
+  // claudeChatVisible()'s own "stay open" comment above.
+  if (cs.focus === 'claude' || cs.focus === 'new' || hasActiveClaudeTurn()) return
   const c = chatAnchorComment()
   const nextId = c ? c.id : null
   if (nextId === cc.commentId) return
@@ -2318,8 +2322,17 @@ export function isClaudeChatFocused() {
 function isNewChatUnanchored() {
   return cs.focus === 'new' || (cs.focus === 'claude' && cc.commentId == null)
 }
+// Reviewer request: the opened-out conversation (the actual transcript,
+// including the reviewer's own just-typed message) must stay visible for as
+// long as a turn is running for it — even after navigating away to a
+// different block/comment, or after explicitly closing the panel (←/Escape/
+// the "Sluit" button). hasActiveClaudeTurn() is therefore a THIRD, standalone
+// reason to show the column, independent of hasVisibleComments()/
+// isNewChatUnanchored() — see "Stay open while a Claude turn is running" in
+// claude-chat-panel.md. syncClaudeAnchorForSelection has a matching guard so
+// `cc` itself is never re-anchored/reset out from under a running turn.
 export function claudeChatVisible() {
-  return hasVisibleComments() || isNewChatUnanchored()
+  return hasVisibleComments() || isNewChatUnanchored() || hasActiveClaudeTurn()
 }
 
 // claudeColumnVisible is the narrower question "does the CLAUDE HALF of that
@@ -2667,6 +2680,20 @@ function commentFooterText() {
   return ''
 }
 
+// hasActiveClaudeTurn — true whenever the currently anchored conversation
+// (cc) has a turn in flight: a send/Signal round-trip actually running
+// (cc.busy), a live progress snapshot pushed over SSE (cc.progress), or a
+// reviewer message waiting in the client-side queue (cc.queued, see
+// queueClaudeMessage). Extracted out of what used to be two near-identical
+// local closures (hasCommentClaudeFooter's own check and
+// CommentClaudeFooter's `claudeActive`) so BOTH "should the full,
+// opened-out conversation stay visible" checks below share the exact same
+// definition of "a turn is running" — see "Stay open while a Claude turn is
+// running" in .claude/docs/claude-chat-panel.md.
+export function hasActiveClaudeTurn() {
+  return cc.busy || !!cc.progress || cc.queued.length > 0
+}
+
 // hasCommentClaudeFooter — true exactly when CommentClaudeFooter itself would
 // render a status line (comment side busy/replySent, or a Claude turn
 // running/reporting progress). Exported so home.mjs can fold away the whole
@@ -2677,8 +2704,7 @@ function commentFooterText() {
 // comments/Claude chat and nothing in flight, showing as a bare thin gray bar
 // above Onderliggende code (see .claude/docs/comments-panel.md).
 export function hasCommentClaudeFooter() {
-  const view = claudeChatView()
-  return !!commentFooterText() || view.busy() || !!view.progress() || view.queued().length > 0
+  return !!commentFooterText() || hasActiveClaudeTurn()
 }
 
 // claudeQueueNote — the Claude half's queue suffix ("· nog 2 berichten in de
@@ -2715,7 +2741,7 @@ function claudeQueueNote() {
 // row, the card the reviewer lands on when a batch starts).
 export function CommentClaudeFooter(commentId = '') {
   const view = claudeChatView()
-  const claudeActive = () => view.busy() || !!view.progress() || view.queued().length > 0
+  const claudeActive = hasActiveClaudeTurn
   // The batch half's own text: live while this comment is the current one,
   // otherwise its finished note. Both come from the volatile snapshot, so this
   // renders nothing at all for a comment no batch ever touched.
@@ -7295,7 +7321,17 @@ export function commentDetailCard(c, opts) {
       </div>
       <div class="contents">
         ${() =>
-          pcc.open && pcc.commentId === c.id
+          // Also shows while a turn is actively running for this exact
+          // comment (hasActiveClaudeTurn + cc.commentId === c.id), even when
+          // pcc.open is false — reached either because the reviewer clicked
+          // "Sluit" mid-turn or navigated to a different item and back
+          // (closePrCommentChat resets pcc.open on every selection change,
+          // see home.mjs). Reviewer request: the opened-out conversation
+          // (including what was typed) must stay visible for as long as the
+          // turn runs, regardless of pcc's own open/closed toggle — see
+          // "Stay open while a Claude turn is running" in
+          // claude-chat-panel.md.
+          (pcc.open && pcc.commentId === c.id) || (hasActiveClaudeTurn() && cc.commentId === c.id)
             ? html`<div
                 class="flex flex-col gap-1 border-t border-slate-100 dark:border-zinc-800/60 pt-3"
                 data-testid="pr-comment-claude-section"

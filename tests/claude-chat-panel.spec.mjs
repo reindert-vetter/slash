@@ -1362,3 +1362,105 @@ test('a just-sent Claude message scrolls into view and stays there once the turn
   await expect(page.getByTestId('claude-question-option')).toHaveCount(3)
   await expect.poll(distanceFromBottom).toBeLessThanOrEqual(2)
 })
+
+// "Stay open while a Claude turn is running" (claude-chat-panel.md): a mouse
+// click straight onto a DIFFERENT block — the exact move that otherwise
+// releases the panel entirely (see "a mouse click straight onto a different
+// block releases a stale claude-focused panel" above) — must NOT hide the
+// still-running conversation while a turn is actually in flight. Driven via a
+// mocked chat.progress SSE frame (same technique as
+// tests/claude-chat-progress.spec.mjs) rather than a real, slow Claude call,
+// so the "still running" window is deterministic instead of racing a timeout.
+test('the Claude column stays open while a turn is running, even after navigating to a different block', async ({
+  page,
+}) => {
+  await page.goto('/pr/12903')
+  await page.locator('[data-idx="1"]').click()
+  const card = page.getByTestId('block-column').locator('article').first()
+  await expect(card).toBeVisible()
+  const label = (await card.locator('h2').first().innerText()).trim()
+  const file = (await card.locator('.font-mono.text-slate-500').first().innerText()).trim().split(':')[0]
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: { pr: 12903, file, line: 1, author: 'reviewer', body: 'kan dit anders?', label, rowStart: -1, rowEnd: -1 },
+  })
+  const conversationId = (await start.json()).runId
+  expect(conversationId).toBeTruthy()
+  await expect
+    .poll(async () => {
+      const list = await (await page.request.get('/api/comments?pr=12903')).json()
+      return list.some((x) => x.runId === conversationId)
+    })
+    .toBe(true)
+
+  const frame = (data) => `data: ${JSON.stringify(data)}\n\n`
+  // Keeps reporting a turn in progress on every reconnect — the SSE
+  // connection opens well before the chat column is entered (see
+  // claude-chat-progress.spec.mjs's own doc comment on why the first
+  // connection carries nothing but a retry hint).
+  let connections = 0
+  await page.route('**/api/events*', async (route) => {
+    connections++
+    const body =
+      connections === 1
+        ? 'retry: 300\n\n'
+        : 'retry: 300\n\n' +
+          frame({
+            type: 'chat.progress',
+            pr: 12903,
+            key: conversationId,
+            seq: 1,
+            data: { running: true, phase: 'thinking', startedAt: Date.now() - 1000, updatedAt: Date.now() },
+          })
+    await route.fulfill({
+      status: 200,
+      headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' },
+      body,
+    })
+  })
+  // Also mock the resync read (GET /api/chat/progress, fired on every SSE
+  // reconnect right next to the events it is catching up on) to agree with
+  // the pushed frame — otherwise it races the real, unmocked backend (which
+  // never actually ran a turn for this fixture) and can occasionally win,
+  // wiping cc.progress the instant a reconnect's resync resolves after its
+  // own chat.progress event was already applied.
+  await page.route('**/api/chat/progress*', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        running: true,
+        progress: { running: true, phase: 'thinking', startedAt: Date.now() - 1000, updatedAt: Date.now() },
+      }),
+    }),
+  )
+
+  try {
+    await page.goto('/pr/12903')
+    await page.locator('[data-idx]').filter({ hasText: label }).first().click()
+    await expect(page.locator('[data-change-active]').first()).toBeVisible()
+    await leaveSearchBox(page)
+    await page.keyboard.press('ArrowRight') // list -> diff
+    await page.keyboard.press('ArrowRight') // diff -> the comment conversation
+    await page.keyboard.press('ArrowRight') // comment -> claude
+    await expect(page.getByTestId('claude-chat-status')).toContainText('Claude denkt na')
+
+    // Back to the sidebar and a plain mouse click onto a DIFFERENT block —
+    // never through →/←/Escape or ↓ at claudePos === 0.
+    await page.keyboard.press('ArrowLeft') // claude -> comment
+    await page.keyboard.press('ArrowLeft') // comment -> diff
+    await page.keyboard.press('ArrowLeft') // diff -> list
+    await page.locator('[data-idx]').filter({ hasText: 'CreatePaymentAction::findOrCreateCustomer' }).first().click()
+    await page.keyboard.press('ArrowRight') // list -> diff on block B
+
+    // Block B carries no comment of its own, but the still-running
+    // conversation from block A must keep showing — not just its bare
+    // one-line footer status.
+    await expect(page.getByTestId('claude-chat-column')).toBeVisible()
+    await expect(page.getByTestId('claude-chat-status')).toContainText('Claude denkt na')
+  } finally {
+    await page.request.post('/api/workflows/' + conversationId + '/signals/delete', {
+      data: { author: 'reviewer' },
+    })
+  }
+})

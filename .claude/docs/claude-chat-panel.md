@@ -452,6 +452,56 @@ Test: the "a mouse click straight onto a different block releases a stale
 claude-focused panel, not just the dedicated exits" case in
 `tests/claude-chat-panel.spec.mjs`.
 
+### Stay open while a Claude turn is running
+
+Reviewer request: while Claude is actively working on a turn, the fully
+opened-out conversation — the transcript with the reviewer's own just-typed
+message and the live status underneath it — must keep showing, even if the
+reviewer navigates away to a different block/comment or explicitly closes the
+panel (`←`/`Escape`, the PR-comment column's own "Sluit" button). Before this,
+every one of those released the panel down to `CommentClaudeFooter`'s bare
+one-line status ("Claude denkt…"), hiding the very message that status is
+about.
+
+**`hasActiveClaudeTurn()`** (`RelatedPanel.mjs`, exported) is the one shared
+"a turn is running for the anchored conversation" predicate —
+`cc.busy || !!cc.progress || cc.queued.length > 0` — replacing two
+near-identical local closures that used to live separately in
+`hasCommentClaudeFooter()` and `CommentClaudeFooter()`'s own `claudeActive`.
+Three call sites now use it to stay open, not just to report status:
+
+- **`claudeChatVisible()`** gained it as a third, independent `||` branch
+  (alongside `hasVisibleComments()`/`isNewChatUnanchored()`) — the block-scoped
+  `comment-claude-row` (comment column + `ClaudeChatPanel`) now also renders
+  while a turn is running, regardless of whether the current block/selection
+  still has a visible comment of its own.
+- **`syncClaudeAnchorForSelection`** skips its own re-sync while
+  `hasActiveClaudeTurn()` is true, next to its existing `cs.focus ===
+  'claude'/'new'` skip — without this, merely navigating to a different block
+  would still re-anchor (and thereby reset/hide) `cc` out from under the
+  running turn the instant `cs.sel`/`cs.list`/`cs.scopeSig` changed, even
+  though `claudeChatVisible()` itself now says to keep showing it.
+- **`commentDetailCard`'s `pr-comment-claude-section` toggle** (the
+  PR-comment-index "Chat met Claude" column) widened from a bare `pcc.open &&
+  pcc.commentId === c.id` to `(pcc.open && pcc.commentId === c.id) ||
+  (hasActiveClaudeTurn() && cc.commentId === c.id)`. `pcc.open` is what an
+  explicit open/close (`startPrCommentChat`/`closePrCommentChat`, including the
+  "Sluit" button and the unconditional `closePrCommentChat()` in `home.mjs`'s
+  `state.selected` reset watch) still toggles, but the second clause keeps the
+  section rendering regardless of that toggle for as long as `cc` — kept
+  anchored on this exact comment by the `syncClaudeAnchorForSelection` skip
+  above — still has a turn in flight. Clicking "Sluit" mid-turn is therefore a
+  no-op in practice (the section reappears on the very next render); it only
+  actually closes once the turn finishes.
+
+Not extended to `pcc.pinned`/the scroll position or to `cs.focus` itself —
+this is purely about the CONTENT staying visible, not about the keyboard
+cursor following it around; `exitRelated()`/`leaveRelated()` still release
+`cs.focus` exactly as before, so a reviewer who explicitly stepped away keeps
+their keyboard on whatever they navigated to, while the still-running
+conversation stays visible (read-only, until they click back into it) wherever
+its own card renders.
+
 ## `RelatedPanel.mjs`: state, not template
 
 The "Embedded Claude conversation" section owns:
