@@ -159,6 +159,48 @@ test.describe('PR Review Tree — fresh open with no ?sel lands on the first una
     await expect(toggle).toHaveClass(/bg-indigo-50|dark:bg-indigo-500\/15/)
   })
 
+  test('a mouse click into the still-visible preview diff clears the stale toggle-row focus', async ({
+    page,
+  }) => {
+    // Regression: state.toggleFocused (see the "everything approved" test
+    // above) used to survive a click straight into the diff of the block
+    // still previewed on the right (state.selected is left pointing at it —
+    // applyDefaultUnapprovedSelection never moves it when landing on the
+    // toggle row). A mouse click reaches enterDiff via
+    // ensureTopLevelDiffFocus, bypassing onKeydown's own trailing-row guard
+    // (which is what stops a KEYBOARD ArrowRight/Enter/f/d/s/Space from ever
+    // reaching enterDiff while toggleFocused is true) — so the flag rode
+    // along into diff mode and silently hijacked the next Enter (toggling
+    // "Show N approved blocks" instead of opening the block palette). Fixed
+    // in enterDiff() itself, the one function every "enter diff" path funnels
+    // through. See .claude/docs/keyboard-navigation.md.
+    const runId = await resetApprovals(page)
+    await setApproval(page, runId, BLOCK_A_ID, APPROVE_ALL_ROWS)
+    await setApproval(page, runId, BLOCK_B_ID, APPROVE_ALL_ROWS)
+    await waitApproved(page, BLOCK_A_ID, APPROVE_ALL_ROWS.length)
+    await waitApproved(page, BLOCK_B_ID, APPROVE_ALL_ROWS.length)
+
+    await page.goto(`/pr/${PR}`, { keepDescription: true })
+    await page.keyboard.press('ArrowRight')
+    const toggle = page.getByTestId('toggle-approved')
+    await expect(toggle).toHaveClass(/bg-indigo-50|dark:bg-indigo-500\/15/)
+
+    // state.selected still points at block A (never moved off it), so its
+    // diff still previews on the right even though its own sidebar row is
+    // hidden. Click straight into one of its changed rows.
+    const card = page.getByTestId('detail-card').first()
+    const row = card.locator('[data-pane="new"] [data-changed="1"]').first()
+    await expect(row).toBeVisible()
+    await row.click()
+
+    // The toggle row no longer owns the keyboard...
+    await expect(toggle).not.toHaveClass(/bg-indigo-50|dark:bg-indigo-500\/15/)
+    // ...so Enter opens the block palette, not the "Toon/Verberg" toggle.
+    await page.keyboard.press('Enter')
+    await expect(page.getByTestId('command-overlay')).toBeVisible()
+    await expect(toggle).toContainText('Toon') // unchanged — Enter did NOT flip it
+  })
+
   test('a restored ?sel= on an approved block is unaffected (existing pin/reveal path)', async ({
     page,
   }) => {

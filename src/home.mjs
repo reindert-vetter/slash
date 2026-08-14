@@ -5502,6 +5502,31 @@ function enterDiff() {
     if (!b.methods.length) return
   }
   state.mode = 'diff'
+  // The four trailing-row focus flags (toggle-approved/toggle-ignored/
+  // batch-action/push-todo) only ever mean something in LIST mode, at the
+  // bottom of the sidebar — being in diff mode with one of them still true is
+  // an invalid combination. The ordinary keyboard path can never reach here
+  // with one set (onKeydown's own trailing-row guard swallows ArrowRight/f/d/
+  // s/Space/Enter while any of them is true — see that guard's own comment),
+  // but a MOUSE click on the list-mode look-ahead preview reaches enterDiff
+  // via ensureTopLevelDiffFocus, bypassing that keyboard guard entirely. Found
+  // via manual testing on a real, already fully-approved single-block PR:
+  // applyDefaultUnapprovedSelection lands state.toggleFocused true without
+  // moving state.selected off the (now sidebar-hidden) approved block (see
+  // the "everything approved" test in fresh-open-default-selection.spec.mjs)
+  // — so that block's diff still renders in the list-mode preview panel on
+  // the right. A click straight into one of its rows then entered diff mode
+  // without ever clearing the flag — every later Enter/f/d/s/Space in that
+  // diff silently kept hitting the toggle-row branches instead (e.g. Enter
+  // toggled "Show N approved blocks" instead of opening the block palette).
+  // Clearing them here, at the one function every "enter diff" path funnels
+  // through (keyboard AND mouse), covers both. Regression test: "a mouse
+  // click into the still-visible preview diff clears the stale toggle-row
+  // focus" in fresh-open-default-selection.spec.mjs.
+  state.toggleFocused = false
+  state.ignoreToggleFocused = false
+  state.batchRowFocused = false
+  state.pushTodoFocused = false
   // Stepping into a diff leaves the sidebar's own multi-row selection behind.
   clearListAnchor()
   // Stepping in from the list always starts at the coarsest granularity (a whole
@@ -10435,6 +10460,14 @@ function onKeydown(e) {
       // reads as a genuine choice, not the fresh-open default (see
       // state.blockIndexEntered's own comment).
       state.blockIndexEntered = true
+      // Deliberately does NOT clear state.toggleFocused/etc. here — a
+      // fully-approved PR legitimately lands on the toggle-approved row right
+      // after this crossing (see the "everything approved" test above), and
+      // that flag must survive it. The stale-flag bug this comment used to
+      // describe a fix for here was actually a different codepath (a mouse
+      // click forcing diff mode via ensureTopLevelDiffFocus/enterDiff while
+      // toggleFocused was still set from list mode) — see enterDiff's own
+      // clear of these flags below.
     } else if (e.key === 'ArrowLeft') location.href = overviewExitUrl()
     return
   }

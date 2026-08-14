@@ -266,6 +266,31 @@ immediately after the `Enter`-opens-menu branch, before both guards — stop 1
 now uniformly claims every key while open, regardless of block count or which
 sidebar row/toggle happens to also carry `state.toggleFocused`-like state.
 
+**A second, related bug survived that fix**, found later via manual testing on
+a real, already fully-approved single-block PR: `applyDefaultUnapprovedSelection`
+leaves `state.selected` pointing at the (now sidebar-hidden) fully-approved
+block when it lands on the toggle row — so that block's diff still renders in
+the list-mode preview panel on the right (`detail-card`). A mouse click
+straight into one of its rows reaches `enterDiff()` via
+`ensureTopLevelDiffFocus` (see "Mouse line selection" above), which — unlike
+every KEYBOARD path — is never stopped by the trailing-row guard (that guard
+only intercepts `ArrowRight`/`f`/`d`/`s`/`Space`/`Enter` typed while
+`state.toggleFocused` is true; a click bypasses it entirely). `enterDiff()`
+used to leave `state.toggleFocused` (and its `ignoreToggleFocused`/
+`batchRowFocused`/`pushTodoFocused` siblings) untouched, so the stale flag rode
+along into diff mode and silently hijacked the next `Enter`/`f`/`d`/`s`/`Space`
+there (the SAME trailing-row guard, and the toggle-row `Enter` branches further
+down in `onKeydown`, both still saw it as true) — symptom: `Enter` on a
+selected diff row toggled "Show N approved blocks" instead of opening
+`COMMANDS`. Fixed by clearing all four flags inside `enterDiff()` itself — the
+one function every "enter diff" path (keyboard **and** mouse) funnels through
+— rather than in the `state.showDescription` `ArrowRight` branch above:
+clearing them there would incorrectly break the very "everything approved →
+land on the toggle row" case this section opens with, since that transition
+must leave `state.toggleFocused` set. Regression test: "a mouse click into the
+still-visible preview diff clears the stale toggle-row focus" in
+`tests/fresh-open-default-selection.spec.mjs`.
+
 A genuinely block-less PR (`state.blocks.length` truly 0 — nothing ingested
 yet, `emptyState` in `BlockList.mjs`) hit the OTHER guard the same way, and is
 covered separately in `tests/ingest-btn-disabled.spec.mjs` (PR 900001, never
