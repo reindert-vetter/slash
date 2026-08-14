@@ -153,14 +153,49 @@ Shift+↑/↓ built (see "Shift+↑/↓" in keyboard-navigation.md) — just dri
   acts while `e.buttons` still shows the primary button held, so a plain hover
   costs nothing and no separate "dragging" flag or global `mouseup` listener
   is needed — mouseup anywhere simply clears `e.buttons` for every later
-  `mousemove`. `home.mjs`'s `selectRowAt(level, b, i, row)` (`level` 0 =
-  top-level diff, >0 = a drilled column's own focus level) resolves the row to
-  a unit via `unitAtRow` and sets `state.change` (or the drilled column's own
-  `drillCursor` entry) directly — no scrolling, the reviewer already sees the
-  row they clicked.
+  `mousemove`. `home.mjs`'s `selectRowAt(level, b, i, row, clickCount)`
+  (`level` 0 = top-level diff, >0 = a drilled column's own focus level)
+  resolves the row to a unit via `unitAtRow` and sets `state.change` (or the
+  drilled column's own `drillCursor` entry) directly — no scrolling, the
+  reviewer already sees the row they clicked.
+- **A click ALWAYS forces the target gran, overriding whatever the keyboard
+  had left active — even `'call'`.** Reviewer request: "als ik met mijn muis
+  een lijn selecteer, dan wil ik per lijn selecteren en niet per groep",
+  confirmed to also override `'call'`. `onBlockMouseDown` passes along the
+  browser's own `MouseEvent.detail` (its native consecutive-click counter —
+  1/2/3, using the platform's own double-click timing/distance threshold, the
+  same signal a native `dblclick` uses) so `clickGranFor(clickCount)` can tell
+  a plain click from a double/triple one **without a hand-rolled timer**:
+  - **1× (single):** `'line'` — the one clicked line/reference unit.
+  - **2× (double):** `'group'` — the whole change-group the clicked line sits
+    in (reviewer: "als ik dubbelklik, dan wil ik de groep selecteren").
+  - **3×+ (triple):** every line-granularity unit of the **currently open
+    block** merged into one range (`state.rangeAnchor = 0`,
+    `state.change = units.length - 1`) — reviewer: "als ik 3 keer klik, dan
+    wil ik alle regels uit het bestand selecteren", explicitly confirmed to
+    mean the open **block**, never a same-file neighbour or literally every
+    block in the file: `rangeUnit`/approve/comment are hard-scoped to one
+    block everywhere else in the app, and only a block-scoped destination is
+    reachable by keyboard at all (repeated Shift+ArrowDown from the first to
+    the last unit reaches the exact same end state — see mouse-navigation.md
+    Rule 2, a mouse-only shortcut must still be keyboard-reachable).
+  - A **drilled column** deliberately keeps only the single-line click — no
+    double/triple-click depth there at all (reviewer: "alleen top-level"). Its
+    own `gran` is unconditionally forced to `'line'` on every click there
+    regardless of `clickCount`.
+  - **TRANSLATION blocks are excluded everywhere** (their `gran` stays pinned
+    at `'group'` — see `navUnitsOf`/`setGran`/`extendRange`'s own exclusion,
+    above): every click there keeps selecting the one key-row it always did,
+    click count ignored.
 - **Drag-range:** `extendRowRange(level, b, row)` mirrors `extendRange`/
-  `drillExtendRange` — only at `gran==='line'`/`'group'` (`isRangeGran`) and
-  never for a TRANSLATION block (same gate). Deliberately does **not** try to
+  `drillExtendRange`'s `rangeAnchor` mechanism, but **always ranges per LINE**
+  — reviewer confirmed this explicitly ("slepen ook per lijn... nooit per
+  groep"), so unlike `extendRange`/`drillExtendRange` (which operate on
+  whichever `gran` is already active) this unconditionally forces `gran`
+  (`state.gran`/`cur.gran`) to `'line'` the moment a drag actually moves,
+  regardless of whether the initiating click was a double/triple one. Never
+  for a TRANSLATION block (same exclusion as above — no line/group
+  distinction to force there at all). Deliberately does **not** try to
   refocus a different card: a drag only ever extends a selection a preceding
   `selectRowAt` already focused, so a stray `mousemove` over some other card's
   row while the button is still down is simply ignored.
@@ -186,10 +221,12 @@ Shift+↑/↓ built (see "Shift+↑/↓" in keyboard-navigation.md) — just dri
   collapsed rail instead (no rows to click at all) — its own click already
   calls `expandColumn`, unrelated to this feature.
 
-Test: `tests/diff-row-mouse-select.spec.mjs` (click jumps to an arbitrary row,
-a mousedown+mousemove drag produces the same 3-of-4-lines range
-`range-select.spec.mjs`'s Shift+ArrowDown x2 does, and a click on the
-look-ahead preview focuses + selects it).
+Test: `tests/diff-row-mouse-select.spec.mjs` (a single click forces `'line'`
+even from `'group'`/`'call'`, a double-click selects the group, a triple-click
+selects the whole open block, a mousedown+mousemove drag produces the same
+3-of-4-lines range `range-select.spec.mjs`'s Shift+ArrowDown x2 does, a
+drilled column's double-click still only selects the one line, and a click on
+the look-ahead preview focuses + selects it).
 
 ## The active-row cursor bar dims when the diff doesn't own the keyboard
 

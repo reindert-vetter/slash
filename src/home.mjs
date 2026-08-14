@@ -7045,17 +7045,59 @@ function ensureTopLevelDiffFocus(i) {
   enterDiff()
 }
 
-// selectRowAt handles a plain mousedown on a diff row: `level` is 0 for the
+// clickGranFor maps a click's consecutive-click count (Block.mjs's
+// onBlockMouseDown, the browser's own `e.detail` — 1 = single, 2 = double,
+// 3+ = triple, using the platform's own double-click timing/distance
+// threshold, same as a native dblclick) onto the granularity a TOP-LEVEL
+// click should target: 1x = 'line', 2x = the group containing that line, 3x+
+// also resolves to 'line' — the "select the whole block" case below is built
+// out of line-granularity units, exactly the shape a merged Shift+arrow range
+// already has. Reviewer request: "als ik dubbelklik, dan wil ik de groep
+// selecteren, als ik 3 keer klik, dan wil ik alle regels uit het bestand
+// selecteren" (see selectRowAt's own comment for the "whole block, never
+// whole file" scope decision).
+function clickGranFor(clickCount) {
+  return clickCount === 2 ? 'group' : 'line'
+}
+
+// selectRowAt handles a mousedown on a diff row: `level` is 0 for the
 // top-level diff, or the drilled column's own focus level. `i` is the block's
 // own index in state.blocks, only meaningful for level 0 (a drilled column has
 // no sidebar index of its own — it's already the sole thing rendered at its
 // level once focused, see keyboard-navigation.md's drilling section).
-function selectRowAt(level, b, i, row) {
+//
+// A click ALWAYS forces the target gran to 'line' or 'group' (clickGranFor),
+// overriding whatever finer/coarser gran the keyboard had left active — even
+// 'call' (reviewer: "als ik met mijn muis een lijn selecteer, dan wil ik per
+// lijn selecteren en niet per groep"; confirmed this also overrides 'call').
+// `clickCount` only drives that top-level double/triple-click scheme — a
+// drilled column deliberately keeps ONLY the single-line click (still always
+// forced to 'line', just no double/triple-click depth there at all, per
+// reviewer request). TRANSLATION blocks are excluded everywhere (their gran
+// stays pinned at 'group' — see navUnitsOf/setGran/extendRange's own
+// exclusion): every click there keeps selecting the one key-row it always
+// did, regardless of click count.
+function selectRowAt(level, b, i, row, clickCount = 1) {
+  const isTranslation = !!(b && b.category === 'TRANSLATION')
   if (level === 0) {
     ensureTopLevelDiffFocus(i)
     if (state.mode !== 'diff' || !isActiveCard(b)) return
+    if (!isTranslation) state.gran = clickGranFor(clickCount)
     const units = navUnitsOf(b, blockRows(b), state.gran)
     if (!units.length) return
+    if (!isTranslation && clickCount >= 3 && units.length > 1) {
+      // 3x click: select every line-granularity unit of the currently OPEN
+      // block at once (never a same-file neighbour — reviewer confirmed
+      // "het hele open blok", explicitly not a cross-block/whole-file
+      // selection, since approve/comment/rangeUnit are hard-scoped to one
+      // block everywhere else and there is no keyboard equivalent that could
+      // ever cross a block boundary either). Same merged-unit shape a
+      // repeated Shift+ArrowDown from the first to the last unit produces.
+      state.rangeAnchor = 0
+      state.change = units.length - 1
+      return
+    }
+    clearRangeAnchor(0)
     state.change = unitAtRow(units, row)
     return
   }
@@ -7063,26 +7105,31 @@ function selectRowAt(level, b, i, row) {
   if (relatedActive()) leaveRelated()
   const cur = state.drillCursor[level - 1]
   if (!cur) return
-  clearRangeAnchor(level)
-  const units = navUnitsOf(b, blockRows(b), cur.gran)
+  const gran = isTranslation ? cur.gran : 'line'
+  const units = navUnitsOf(b, blockRows(b), gran)
   if (!units.length) return
   const change = unitAtRow(units, row)
-  state.drillCursor = state.drillCursor.map((c, idx) => (idx === level - 1 ? { ...c, change, rangeAnchor: null } : c))
+  state.drillCursor = state.drillCursor.map((c, idx) => (idx === level - 1 ? { ...c, gran, change, rangeAnchor: null } : c))
 }
 
 // extendRowRange handles every mousemove while the button stays down after a
-// selectRowAt — the drag counterpart of Shift+ArrowUp/Down. Only meaningful at
-// gran==='line'/'group' (isRangeGran) and never for a TRANSLATION block, the
-// same gate extendRange/drillExtendRange already use. Deliberately does NOT
-// call ensureTopLevelDiffFocus — a drag only ever extends a selection that a
-// preceding selectRowAt already focused; a mousemove landing on some other
-// card's row while the button is still down (having left the card the drag
-// started on) is out of scope and simply ignored.
+// selectRowAt — the drag counterpart of Shift+ArrowUp/Down. Reviewer
+// confirmed a drag ranges per LINE only, never per group — so this always
+// forces gran to 'line' (the one deliberate difference from extendRange/
+// drillExtendRange, which both keep operating on whichever gran is already
+// active), regardless of whether the initiating click was a double/triple
+// one. Never for a TRANSLATION block, the same gate extendRange/
+// drillExtendRange already use (their gran stays pinned at 'group' with no
+// line/group distinction to force). Deliberately does NOT call
+// ensureTopLevelDiffFocus — a drag only ever extends a selection a preceding
+// selectRowAt already focused; a mousemove landing on some other card's row
+// while the button is still down is out of scope and simply ignored.
 function extendRowRange(level, b, row) {
   if (b && b.category === 'TRANSLATION') return
   if (level === 0) {
-    if (state.mode !== 'diff' || !isActiveCard(b) || state.focusLevel !== 0 || !isRangeGran(state.gran)) return
-    const units = navUnitsOf(b, blockRows(b), state.gran)
+    if (state.mode !== 'diff' || !isActiveCard(b) || state.focusLevel !== 0) return
+    state.gran = 'line'
+    const units = navUnitsOf(b, blockRows(b), 'line')
     if (!units.length) return
     const target = unitAtRow(units, row)
     const anchor = state.rangeAnchor != null ? state.rangeAnchor : state.change
@@ -7092,12 +7139,14 @@ function extendRowRange(level, b, row) {
   }
   if (state.focusLevel !== level) return
   const cur = state.drillCursor[level - 1]
-  if (!cur || !isRangeGran(cur.gran)) return
-  const units = navUnitsOf(b, blockRows(b), cur.gran)
+  if (!cur) return
+  const units = navUnitsOf(b, blockRows(b), 'line')
   if (!units.length) return
   const target = unitAtRow(units, row)
-  const anchor = cur.rangeAnchor != null ? cur.rangeAnchor : cur.change
-  state.drillCursor = state.drillCursor.map((c, idx) => (idx === level - 1 ? { ...c, change: target, rangeAnchor: anchor } : c))
+  const anchor = cur.gran === 'line' && cur.rangeAnchor != null ? cur.rangeAnchor : cur.change
+  state.drillCursor = state.drillCursor.map((c, idx) =>
+    idx === level - 1 ? { ...c, gran: 'line', change: target, rangeAnchor: anchor } : c,
+  )
 }
 
 // focusDrillPreviewSibling brings a click on the drilled column's own
@@ -11596,7 +11645,10 @@ function DetailPanel(state) {
             // straight to the clicked row (selectRowAt). Wired unconditionally
             // (not just for the preview) so a click ALSO works on the already-
             // focused card itself — there it's a plain "select this row".
-            onRowMouseDown: (row) => selectRowAt(0, b, i, row),
+            // `clickCount` (Block.mjs's e.detail) drives the 1x/2x/3x line/
+            // group/whole-block click scheme — top-level only, see
+            // selectRowAt's own comment.
+            onRowMouseDown: (row, clickCount) => selectRowAt(0, b, i, row, clickCount),
             // Drag-extends the selection while the button stays down — a
             // no-op unless this card already owns the keyboard (see
             // extendRowRange's own guard), so dragging never starts a range on

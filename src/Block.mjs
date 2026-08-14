@@ -1993,13 +1993,23 @@ function onPaneClick(rows, e) {
 // separate "dragging" flag / global mouseup listener is needed: mouseup
 // anywhere simply clears `e.buttons` for every later mousemove. See "Line
 // selection: hover, click, drag-range" in .claude/docs/diff-render.md.
+//
+// onBlockMouseDown passes along `e.detail` — the browser's own consecutive-
+// click counter (1 = single, 2 = double, 3 = triple, using its own platform
+// double-click timing/distance threshold, same as native dblclick) — so
+// home.mjs's onRowMouseDown can tell a plain click from a double/triple one
+// without a hand-rolled timer. `preventDefault()` once a row is matched
+// suppresses the browser's own word/paragraph text selection a double/triple
+// click would otherwise also trigger, which visibly fought our own indigo
+// range highlight (reviewer request: block native selection here).
 function onBlockMouseDown(e, cb) {
   if (!cb || e.button !== 0) return
   const el = e.target && e.target.closest && e.target.closest('[data-row]')
   if (!el) return
   const i = +el.getAttribute('data-row')
   if (Number.isNaN(i)) return
-  cb(i)
+  e.preventDefault()
+  cb(i, e.detail)
 }
 function onBlockMouseMove(e, cb) {
   if (!cb || (e.buttons & 1) === 0) return
