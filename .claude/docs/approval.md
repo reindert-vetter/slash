@@ -265,72 +265,56 @@ so an index outside `changedRows` is simply ignored. The only visible effect is
 `rowCellHTML`'s left-margin ✓ (`changed && approved.has(i)`) also lighting up on
 the blank row — a shape signal, never colour-only.
 
-## Approving from the mouse: a clickable gutter affordance
+## Approving from the mouse: a call-segment hover ring, and the passive palette for everything else
 
-Until this was added, the only mouse-reachable approve was the block card's
-top **checkbox** (`toggleBlockApproval`) — always the whole block, never a
-single group/line/call. Reviewer audit finding: `Space` (approve + continue)
-was keyboard-only, so the daily line-by-line review workflow had no mouse
-path at all. Three glyphs, all rendered by `rowCellHTML`'s
-`rowApproveMarkerHTML` (`Block.mjs`), reuse the exact granular state this row
-already renders — no new approval computation, only a clickable presentation
-of it:
+A first cut of this added three clickable gutter glyphs — a round `✓`/`○` per
+line, a square `▣`/`▢` on a group's last row, and a hover-only ring per call
+segment — reusing `toggleApprove`/`toggleCallApprove` and Space's own
+approve-and-continue chain (`mouseApprove`). **The line and group glyphs were
+removed again on reviewer request**: "rondjes/vormpjes aan de linkerkant kan
+weg (vinkje mag blijven) … ik wil direct een menu zien onder de onderste
+geselecteerde regel (zelfde menu als Enter)". Only the plain, always-visible
+✓ checkmark (unconditional, non-clickable — restored to its original form)
+and the **call-segment hover ring** stayed; a mouse **selection** (not a
+hover) now shows the same command palette `Enter` would open, passively —
+see "A mouse selection shows the palette passively" in
+`.claude/docs/command-palette.md` for that replacement mechanism.
 
-- **Line** — a round `✓`/`○` at the row's usual left-1.5 checkmark spot.
-  `✓` (already approved) stays visible unconditionally, exactly like the
-  pre-existing plain checkmark always has; the empty `○` only appears **on
-  hover of that row** (reviewer answer: "leeg rondje bij hover" — a
-  permanently-visible empty circle on every changed row was rejected as too
-  noisy). The hover reveal is CSS-only (`opacity-0
-  group-hover/row:opacity-100`, a *named* Tailwind group scoped to that one
-  row's own `<div>` via `group/row` — never the card-wide unnamed `group`
-  `block-open-menu` uses, which would reveal every row's circle at once), per
-  the "hover carries no state" rule in `.claude/docs/mouse-navigation.md`.
-- **Group** — a SQUARE `▣`/`▢`, a few px further right (`left-4`), rendered
-  **only on the LAST row of the group** (`groupApproveInfo`, computed once
-  per pane render straight from `changeGroups(rows)` — independent of
-  whichever gran/unit the keyboard cursor happens to be on right now). A
-  click approves/retracts every changed row of that whole group. Explicit
-  reviewer answer on the "two markers might land on the same row" concern:
-  DIFFERENT shape (square vs. circle) **and** different position, never
-  colour alone — the colourblind rule.
-- **Call** — the existing per-segment dot markers (`segDotMarkers`, above)
-  are already clickable once a row is partially approved; `segHoverRingMarkers`
-  adds a HOVER-ONLY hollow ring at the same per-character position for a row
-  that has real call structure (more than one segment) but carries **no**
-  approval at all yet (segDots and hoverSegMarks are mutually exclusive — a
-  partially-approved row already shows its real dots). Same `SEG_DOT_BASE`
-  `::after` mechanism as the real dots, just gated by
-  `group-hover/row:after:opacity-100` instead of always-on.
-
-**The glyph is CSS content, never real text** — `before:content-['…']` on an
-otherwise-empty `<span>`. A real text node here leaked into `rowEl.textContent`
-(and any TreeWalker over the row's text nodes), shifting every downstream
-char-index computation by however many glyph characters came before it —
-regression caught by `tests/call-approval-dots.spec.mjs`, which locates a
-segment's own first character by scanning `textContent`. Don't reintroduce a
-real-text glyph here.
+**Call** — the existing per-segment dot markers (`segDotMarkers`, above) are
+clickable once a row is partially approved; `segHoverRingMarkers` adds a
+HOVER-ONLY hollow ring at the same per-character position for a row that has
+real call structure (more than one segment) but carries **no** approval at
+all yet (segDots and hoverSegMarks are mutually exclusive — a
+partially-approved row already shows its real dots). Same `SEG_DOT_BASE`
+`::after` mechanism as the real dots, just gated by
+`group-hover/row:after:opacity-100` instead of always-on. The glyph is CSS
+content, never real text (`before:content-['…']`/`::after` pseudo-elements) —
+a real text node here would leak into `rowEl.textContent` (and any
+TreeWalker over the row's text nodes), shifting every downstream char-index
+computation by however many glyph characters came before it — regression
+caught by `tests/call-approval-dots.spec.mjs`, which locates a segment's own
+first character by scanning `textContent`. Don't reintroduce a real-text
+glyph here.
 
 **Click routing:** one delegated `click`-in-`mousedown` branch in
 `onBlockMouseDown` (`Block.mjs`), checked **before** the ordinary
-row-selection logic, for `[data-approve-toggle]` (line/group) or
-`[data-seg-dot]` (call) — a single event either selects a row/segment OR
-approves, never both. `[data-approve-toggle]`/`[data-seg-dot]` deliberately
-carry **no `data-row` of their own** (`data-row` must stay unique per aligned
-row — `callArrows.mjs` and several tests rely on exactly one match per index);
-the row index comes from the existing `closest('[data-row]')` walk on the
+row-selection logic, for `[data-seg-dot]` — a single event either selects a
+row/segment OR approves, never both. `[data-seg-dot]` deliberately carries
+**no `data-row` of its own** (`data-row` must stay unique per aligned row —
+`callArrows.mjs` and several tests rely on exactly one match per index); the
+row index comes from the existing `closest('[data-row]')` walk on the
 ancestor row `<div>`, which resolves correctly whether the click landed on
 ordinary text or on one of these nested spans.
 
 `home.mjs`'s `onApproveClick` prop (wired next to `onRowMouseDown` at both
 real, non-preview card call sites — top-level and a drilled column) calls
-`approveClickAt(level, b, i, row, kind, segStart)`: resolves the clicked
-`kind` (`'line'`/`'group'`/`'call'`) to a navigation unit via `navUnitsOf`
-(mirroring `selectRowAt`'s own level/i plumbing), **forces** that granularity
-onto the keyboard cursor — the same "a click overrides whatever gran the
-keyboard had active" rule the plain row click already applies (see "Line
-selection" in `.claude/docs/diff-render.md`), confirmed by the reviewer to
-extend to this affordance too — and then runs `mouseApprove()`.
+`approveClickAt(level, b, i, row, kind, segStart)`, always with `kind:'call'`
+now: resolves the clicked segment to a navigation unit via `navUnitsOf`
+(mirroring `selectRowAt`'s own level/i plumbing), **forces** `'call'`
+granularity onto the keyboard cursor — the same "a click overrides whatever
+gran the keyboard had active" rule the plain row click already applies (see
+"Line selection" in `.claude/docs/diff-render.md`) — and then runs
+`mouseApprove()`.
 
 **`mouseApprove()` is the mouse counterpart of `Space`, with ONE deliberate
 difference.** It reuses the exact same
@@ -343,8 +327,8 @@ reviewer answer ("al goedgekeurd → intrekken"): clicking an ALREADY approved
 marker **retracts** it (`toggleApprove(true)` already flips either direction
 depending on `allIn`), where `spaceKey`'s own "already done" branch instead
 only continues (`isApproveDone` → skip straight to "Ga door", no toggle at
-all) — a reviewer clicking directly on a solid ✓/▣/dot is asking to undo it,
-not to skip past it. A retract never auto-advances either
+all) — a reviewer clicking directly on a solid dot is asking to undo it, not
+to skip past it. A retract never auto-advances either
 (`afterApproveAction`'s `if (!approving) return`), same as every other
 retract path in this app.
 

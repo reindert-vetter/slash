@@ -700,10 +700,9 @@ export default function Block(b, opts = {}) {
   const onRowMouseDown = opts.onRowMouseDown || null
   const onRowMouseMove = opts.onRowMouseMove || null
   // onApproveClick — the mouse counterpart of Space (see home.mjs's
-  // approveClickAt/mouseApprove): called with (row, 'line'|'group'|'call',
-  // segStart) when a click lands on one of rowCellHTML's own mouse approve-
-  // toggles (the line/group gutter glyphs, or a call segment's dot/hover
-  // ring — see onBlockMouseDown). Defaults to null, same reasoning as
+  // approveClickAt/mouseApprove): called with (row, 'call', segStart) when a
+  // click lands on one of rowCellHTML's own call-segment dot/hover-ring
+  // markers (see onBlockMouseDown). Defaults to null, same reasoning as
   // onRowMouseDown/onRowMouseMove above: a card that never wires this up
   // (a preview/testClass card) simply never reaches the branch that reads
   // it, since rowCellHTML's own `rowApproveEnabled` (gated on `focused`)
@@ -1667,8 +1666,8 @@ function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, focused = 
   // see approveHere below for which side draws it. The active (indigo)
   // highlight takes precedence visually while the cursor is on the row.
   const isApproved = changed && approved.has(i)
-  // rowApproveEnabled gates every mouse-only approve affordance below (the
-  // line/group gutter toggles, the call-segment hover rings): only for the
+  // rowApproveEnabled gates the one remaining mouse-only approve affordance:
+  // the call-segment hover ring (segHoverRingMarkers, below) — only for the
   // split/fit stands (opts.gutter is only ever true from unifiedRowHTML — the
   // unified stand's own inline "-"/"+" gutter checkmark stays exactly as
   // before, not a click target; a deliberate scope limit, same "not every
@@ -1678,8 +1677,11 @@ function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, focused = 
   // is available before that point), and only on a card that currently owns
   // (or could take over) the keyboard (`focused`, the same gate the plain
   // hover-select affordance further below uses) — a look-ahead preview/
-  // testClass card keeps showing a plain, non-interactive checkmark exactly
-  // as before.
+  // testClass card never shows the hover ring. The line/group gutter
+  // toggles this flag used to also gate were removed (reviewer request: a
+  // selection now shows the command palette directly instead, see
+  // .claude/docs/command-palette.md's "A mouse selection shows the palette
+  // passively" — only the plain, always-visible ✓ checkmark stays).
   const rowApproveEnabled = !gutter && focused && emitMeta && (sideKey === 'right' || r.right == null)
   // Backgrounds are ~20% lighter than the raw Tailwind rose/emerald shades
   // (mixed 20% toward white) so the tint reads as an accent, not a fill.
@@ -1859,29 +1861,10 @@ function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, focused = 
   // a real char in this white-space:pre row and shift the whole line one
   // monospace column to the right on an approved row. Only used outside the
   // unified stand — there the checkmark rides along inside gutterHtml instead.
-  //
-  // check/groupToggle: the mouse-only approve affordances — a click on either
-  // reuses toggleApprove/toggleCallApprove exactly like Space/the palette do
-  // (home.mjs's approveClickAt/mouseApprove), never a second approve
-  // implementation. Deliberately two DIFFERENT shapes at two different
-  // positions — a round ✓/○ at the usual left-1.5 spot for THIS line, a
-  // square ▣/▢ a few px further right for the WHOLE group this row happens to
-  // end (opts.groupApprove, only set on a group's own last row) — so the two
-  // can never read as the same control even for a colourblind reviewer (see
-  // CLAUDE.md): shape and position carry the meaning, the emerald tint is
-  // decoration on top. An empty (not yet approved) glyph only ever shows on
-  // hover (rowApproveEnabled's own `group/row` class); an already-approved
-  // one stays visible unconditionally, exactly like the plain checkmark
-  // always has.
   const check =
     !gutter && isApproved && approveHere
-      ? rowApproveMarkerHTML('line', true, rowApproveEnabled)
-      : rowApproveEnabled
-        ? rowApproveMarkerHTML('line', false, true)
-        : ''
-  const groupApprove = opts.groupApprove
-  const groupToggle =
-    rowApproveEnabled && groupApprove ? rowApproveMarkerHTML('group', groupApprove.fullyApproved, true) : ''
+      ? '<span class="absolute left-1.5 top-1/2 -translate-y-1/2 text-[11px] font-bold leading-none text-emerald-600 dark:text-emerald-400" title="Goedgekeurd">✓</span>'
+      : ''
   // data-row carries the aligned-row index: the DOM child index can't be used
   // to find a row (a collapsed run renders one spacer for many rows), and only
   // the active group's first row has an anchor otherwise. Used by the
@@ -1894,7 +1877,7 @@ function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, focused = 
   // target, but hovering EITHER side must light up both, so both need a
   // handle to find each other.
   const dataRowPair = ` data-row-pair="${i}"`
-  return `<div class="${cls}"${anchor}${anchorEnd}${flag}${dataRow}${dataRowPair}>${check}${groupToggle}${gutterHtml}${body}${lineSummaryHtml}${commentRangeBar(
+  return `<div class="${cls}"${anchor}${anchorEnd}${flag}${dataRow}${dataRowPair}>${check}${gutterHtml}${body}${lineSummaryHtml}${commentRangeBar(
     i,
     commentRange,
   )}</div>`
@@ -2217,30 +2200,26 @@ function onPaneClick(rows, e) {
 //
 // `onApprove` (opts.onApproveClick, home.mjs's approveClickAt) is checked
 // FIRST, before any of the plain row-selection logic above: a click landing
-// on one of rowCellHTML's own mouse approve-toggles (`[data-approve-toggle]`
-// — the line/group gutter glyphs — or `[data-seg-dot]`, a call segment's real
-// dot or hover-only ring) never runs the ordinary click-select path at all,
-// it dispatches straight to the approve action instead. One event, one
-// resolved outcome — never both selecting AND approving on the same click,
-// which a second, separately-wired `@click` listener firing after this
-// `@mousedown` would otherwise risk.
+// on one of rowCellHTML's `[data-seg-dot]` markers (a call segment's real
+// dot, or its hover-only ring — segDotMarkers/segHoverRingMarkers) never runs
+// the ordinary click-select path at all, it dispatches straight to the
+// approve action instead. One event, one resolved outcome — never both
+// selecting AND approving on the same click, which a second, separately-wired
+// `@click` listener firing after this `@mousedown` would otherwise risk. The
+// line/group gutter toggles this used to also route (`[data-approve-toggle]`)
+// were removed — see rowApproveEnabled's own doc comment.
 function onBlockMouseDown(e, cb, onApprove) {
   if (e.button !== 0) return
   const el = e.target && e.target.closest && e.target.closest('[data-row]')
   if (onApprove && el) {
-    const toggleEl = e.target.closest('[data-approve-toggle], [data-seg-dot]')
+    const toggleEl = e.target.closest('[data-seg-dot]')
     if (toggleEl) {
       const row = +el.getAttribute('data-row')
       if (!Number.isNaN(row)) {
         e.preventDefault()
         e.stopPropagation()
-        const kind = toggleEl.getAttribute('data-approve-toggle')
-        if (kind) {
-          onApprove(row, kind, null)
-        } else {
-          const segStart = +toggleEl.getAttribute('data-call-seg')
-          onApprove(row, 'call', Number.isNaN(segStart) ? null : segStart)
-        }
+        const segStart = +toggleEl.getAttribute('data-call-seg')
+        onApprove(row, 'call', Number.isNaN(segStart) ? null : segStart)
         return
       }
     }
@@ -2513,17 +2492,6 @@ function paneHTML(
   emitMeta = true,
 ) {
   const parts = []
-  // groupApprove: the mouse-only "approve this whole group" gutter affordance
-  // (rowCellHTML's `groupToggle`) needs, for the LAST row of every
-  // change-group, whether that group is already fully approved — computed
-  // once per pane render, straight from changeGroups(rows), independent of
-  // whatever the keyboard cursor's own gran/unit happens to be right now (the
-  // `group` parameter above is the ACTIVE unit for highlighting, a different
-  // concept). See groupApproveInfo's own doc comment. Only meaningful when
-  // emitMeta (the split stand's decorative old/left pane never draws it
-  // either) — computing it there anyway is harmless (rowCellHTML never reads
-  // opts.groupApprove without emitMeta) but pointless work, so skip it.
-  const groupApprove = emitMeta ? groupApproveInfo(rows, approved) : null
   const pushRow = (i) => {
     const r = rows[i]
     // Partial call approval: once at least one — but not all — of this row's
@@ -2548,7 +2516,7 @@ function paneHTML(
         commented,
         wrap,
         focused,
-        { commentRange, emitMeta, groupApprove: groupApprove && groupApprove.get(i) },
+        { commentRange, emitMeta },
         lineSummaries,
         segDots,
       ),
@@ -2756,8 +2724,12 @@ function segDotMarkers(text, partial) {
 // `rowApproveEnabled` — `group/row`), for a row that carries no approval at
 // all yet (see hoverSegMarks/segHoverRingMarkers below). `after:opacity-0
 // group-hover/row:after:opacity-100` is the same hover-reveal Tailwind
-// pattern rowApproveMarkerHTML uses for the line/group toggles, applied to
-// the ::after pseudo-element instead of the element itself.
+// pattern the removed line/group gutter toggles used to use, applied to the
+// ::after pseudo-element instead of the element itself. This is the one
+// mouse-approve affordance from the original "clickable gutter" cut that
+// stayed — the line/group toggles were removed in favour of the command
+// palette showing itself on a mouse selection, see
+// .claude/docs/command-palette.md.
 const SEG_DOT_HOVER_CLS =
   SEG_DOT_BASE + ' after:border after:border-slate-400 dark:after:border-zinc-500 after:opacity-0 group-hover/row:after:opacity-100'
 
@@ -2778,66 +2750,6 @@ function segHoverRingMarkers(text, callSegs) {
     map.set(ci, SEG_DOT_HOVER_CLS)
   }
   return map
-}
-
-// rowApproveMarkerHTML renders one mouse-only approve-toggle glyph for a
-// diff row — see rowCellHTML's `check`/`groupToggle` (kind 'line'/'group')
-// and their own doc comment for the shape/position choice. `done` decides
-// the glyph (✓/▣ vs. an empty ring/square); `clickable` (false only for an
-// already-approved marker on an unfocused/preview card — see
-// rowApproveEnabled) gates the `data-approve-toggle`/`data-row` attributes
-// plus, for a NOT-done marker, the hover-only reveal
-// (`opacity-0 group-hover/row:opacity-100`, the same pattern
-// SEG_DOT_HOVER_CLS uses on a ::after pseudo-element instead). A click
-// on either glyph is delegated the same way as a call-segment click — see
-// onBlockMouseDown — through to home.mjs's approveClickAt/mouseApprove,
-// which reuse toggleApprove/toggleCallApprove exactly like Space/the
-// palette (`.claude/docs/approval.md`).
-function rowApproveMarkerHTML(kind, done, clickable) {
-  const isGroup = kind === 'group'
-  const glyph = done ? (isGroup ? '▣' : '✓') : isGroup ? '▢' : '○'
-  const pos = isGroup ? 'left-4' : 'left-1.5'
-  // A non-clickable 'line' marker (an unfocused/preview card, see
-  // rowApproveEnabled) keeps the ORIGINAL, purely informational title
-  // ("Goedgekeurd") — see approval.spec.mjs's "an approved row does not
-  // shift its code to the right", which predates this affordance and
-  // asserts that exact wording. A 'group' marker only ever renders when
-  // clickable (rowCellHTML never calls this with clickable:false for
-  // kind:'group'), so it always gets the action-phrased title.
-  const title = isGroup
-    ? done
-      ? 'Trek goedkeuring van deze groep in'
-      : 'Keur deze hele groep goed'
-    : !clickable
-      ? 'Goedgekeurd'
-      : done
-        ? 'Trek goedkeuring in'
-        : 'Keur deze regel goed'
-  // The glyph is rendered via a `before:content-[...]` pseudo-element, never
-  // as real text inside the span — same reasoning as segDotMarkers'/
-  // SEG_DOT_HOVER_CLS's own `::after` dots: a real text node here would leak
-  // into `rowEl.textContent`/a TreeWalker over the row's text nodes (both
-  // used by call-approval-dots.spec.mjs to locate a segment's own first
-  // character by char index), shifting every downstream char-index
-  // computation by however many glyph characters came before it in the DOM.
-  let cls =
-    'absolute ' +
-    pos +
-    " top-1/2 -translate-y-1/2 text-[11px] font-bold leading-none text-emerald-600 dark:text-emerald-400 before:content-['" +
-    glyph +
-    "']"
-  let attrs = ''
-  if (clickable) {
-    cls += ' cursor-pointer'
-    // Deliberately no data-row here: `data-row` must stay unique per aligned
-    // row (rowCellHTML's own row <div>, read by callArrows.mjs and asserted
-    // exactly-one-per-index by several tests) — onBlockMouseDown's existing
-    // `closest('[data-row]')` walk already finds that ancestor row div
-    // whether the click landed on ordinary text or on this span.
-    attrs = ` data-approve-toggle="${kind}"`
-    if (!done) cls += ' opacity-0 group-hover/row:opacity-100'
-  }
-  return `<span class="${cls}" title="${title}"${attrs}></span>`
 }
 
 // wsOnly reports whether a row differs on both sides purely in whitespace
@@ -3470,29 +3382,6 @@ export function changeGroups(rows) {
     }
   }
   return groups
-}
-
-// groupApproveInfo maps the LAST row of every change-group (changeGroups) to
-// `{ fullyApproved }` — feeds rowCellHTML's mouse-only "approve this whole
-// group" gutter affordance on exactly that row (a group spans several rows,
-// so it needs one single spot to click; the last row is what the reviewer
-// scrolled past last, and it's already where the command palette itself
-// anchors a multi-row selection — see "menuAnchor" in
-// keyboard-navigation.md). `fullyApproved` uses the same "every changed,
-// non-blank row of the range is in `approved`" check blockApproved/
-// blockPartlyApproved use for the whole block, narrowed to one group's own
-// row range. A group with no approvable row at all (pure filler/whitespace,
-// same edge case unitFullyApproved's `!rowsInUnit.length` branch handles) is
-// skipped entirely — there is nothing there to approve or show a marker for.
-function groupApproveInfo(rows, approved) {
-  const map = new Map()
-  for (const g of changeGroups(rows)) {
-    const rowsInGroup = []
-    for (let i = g.start; i <= g.end; i++) if (rowChanged(rows[i]) && rowHasContent(rows[i])) rowsInGroup.push(i)
-    if (!rowsInGroup.length) continue
-    map.set(g.end, { fullyApproved: rowsInGroup.every((i) => approved.has(i)) })
-  }
-  return map
 }
 
 // changeLines is the line-granularity navigation list: one unit per changed row

@@ -141,18 +141,14 @@ test('a pure-deletion row in split view shows its active bar and checkmark on th
   const newRow = host.locator(`[data-pane="new"] [data-row="${rowIndex}"]`)
 
   // The old/left pane shows the removed text, but no active tint, no
-  // checkmark and no data-row of its own. The checkmark itself is a
-  // `before:content-[...]` pseudo-element (see rowApproveMarkerHTML in
-  // Block.mjs — real text here would leak into a plain-text/TreeWalker read
-  // of the row, see call-approval-dots.spec.mjs), so its presence is checked
-  // via the mouse approve-toggle element instead of a `text=✓` locator.
+  // checkmark and no data-row of its own.
   await expect(oldRow).toContainText('$b = 2;')
   await expect(oldRow).not.toHaveClass(/#fed7dc/)
-  await expect(oldRow.locator('[data-approve-toggle="line"]')).toHaveCount(0)
+  await expect(oldRow.locator('text=✓')).toHaveCount(0)
 
   // The new/right pane shows the empty filler row, but it's the one that
   // carries the active tint + checkmark.
   await expect(newRow).toHaveCount(1)
   await expect(newRow).toHaveClass(/#b9f5d9|indigo-50/)
-  await expect(newRow.locator('[data-approve-toggle="line"]')).toHaveAttribute('title', 'Trek goedkeuring in')
+  await expect(newRow.locator('text=✓')).toHaveCount(1)
 })

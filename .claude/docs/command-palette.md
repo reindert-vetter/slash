@@ -39,6 +39,72 @@ column header) each just call `openMenu(...)`, same as the matching key. See
 "Every menu also has a mouse entry point" in `.claude/docs/mouse-navigation.md`
 for the full list, icons and the hover-visibility decision per button.
 
+## A mouse selection shows the palette passively
+
+Reviewer request, replacing the removed per-row/group gutter approve toggles
+(see "Approving from the mouse" in `.claude/docs/approval.md`): "als je iets
+hebt geselecteerd, wil ik direct een menu zien onder de onderste geselecteerde
+regel (zelfde menu als Enter)". A mouse click that lands a diff selection
+(`selectRowAt` — a line, a group, a 3×-click range, or a call segment; both
+the top-level diff and a drilled column) now also calls
+`schedulePassiveMenu()` right after setting the cursor, so the exact same
+`block`-mode palette `Enter` would open shows up, positioned the same way
+(reusing `menuAnchor`/`menuRegion`/`positionMenu` verbatim — under the bottom
+row of the just-selected unit, floating, no layout reflow beyond what already
+happens today).
+
+**Deferred to the next `mouseup`, not called immediately from the
+`mousedown`.** The same `mousedown` that lands a plain click selection is
+also the START of a possible multi-row drag (`extendRowRange`, see "Line
+selection: hover, click, drag-range" in `.claude/docs/diff-render.md`) —
+showing the preview right away, positioned under the FIRST clicked row,
+would float (a real `position:fixed`, z-indexed element) on top of the very
+next rows the drag is about to sweep over. `schedulePassiveMenu` just sets a
+flag; one `mouseup` listener (added once at module load) calls
+`showPassiveMenu()` when it's set, so the preview only ever appears once the
+gesture — a plain click, or a finished drag — is actually done, anchored on
+the FINAL selection either way (`menuAnchor` always reads the current,
+possibly range-extended, `[data-change-active-end]`).
+
+**"Passive" means it never owns the keyboard.** This is a second, independent
+flag on the shared `menu` object (`{ open, passive }`) — `onKeydown`'s
+`if (menu.open) { … }` branch (↑/↓ move the highlighted command, Enter runs
+it, block navigation suspended) is gated on `open` only, never `passive`, so
+`↑`/`↓`/`f`/`d`/`s`/`←`/`→` keep navigating the diff exactly as before while
+the preview is visible. It is purely a **clickable preview**: `CommandMenu`'s
+own rows already run on a plain `@click`, independent of keyboard focus, so
+clicking a row (or typing into its search field) works immediately. `Enter`
+still does exactly what it always did — opens the REAL, keyboard-owning menu
+fresh via `openMenu('block')`, which also clears `passive` — this is the
+"zelfde menu als Enter" part: the passive preview is a preview of that same
+palette, not a second implementation of it.
+
+**Only shown after a genuine mouse selection — never on load, never on a
+keyboard step** (explicit reviewer answer: "alleen na een muisklik").
+`hidePassiveMenu()` is called unconditionally at the very top of `onKeydown`
+(before every other branch, since none of them need to know it existed), so
+any keypress — including the `Enter` that opens the real menu — clears a
+stale preview first. A `mousedown` anywhere outside the preview's own box
+(`[data-testid="command-anchor"]`) and outside a diff row (`[data-row]`,
+which manages the preview itself via the next `selectRowAt` call) also
+dismisses it — clicking the sidebar, a comment, or the description column,
+for instance.
+
+**Rendering:** `passiveMenuOverlay()` (`home.mjs`) is `menuOverlay()`'s
+passive sibling — the identical `CommandMenu(ms, resolveCommands, runCommand)`
+at the identical `data-testid="command-anchor"` box, but deliberately
+**without** the full-screen `data-testid="command-overlay"` catch layer:
+that layer exists to swallow every click and close the menu on an outside
+click, which is exactly the keyboard-owning behaviour a passive preview must
+not have — a click on a different row needs to reach `selectRowAt`
+unimpeded, not get eaten by an overlay first. `MenuHost` renders `open`'s
+overlay first, else `passive`'s, else nothing (same stable-`<div>`-wrapper
+shape as the original toggle, see the "never key a template whose entire
+body is one toggling expression" pitfall in
+`.claude/rules/arrowjs-pitfalls.md`).
+
+Test: `tests/selection-menu.spec.mjs`.
+
 ## Opening, ownership and positioning
 
 `home.mjs` (`menuOverlay`) renders the menu once at `<main>` level as a
@@ -138,11 +204,15 @@ changing GLOBAL state). Test: `tests/command-menu-scroll.spec.mjs`.
 ### Ephemeral state: a stable `menu` plus a disposable `ms`
 
 The menu state is deliberately **not** in the URL. It is split in two: a stable
-`reactive({ open })` (which the top-level `${() => menu.open ? … : ''}` binding
-hangs off) and a disposable `let ms = reactive({query, sel, sub, mode, commands})`
-that `openMenu` **replaces with a fresh object on every open**. Orphan bindings
-from a previous open then point at the old `ms`, which is never touched again,
-so they never fire. `closeMenu` only sets `menu.open = false`.
+`reactive({ open, passive })` (which `MenuHost`'s top-level binding hangs off —
+`open`'s keyboard-owning overlay, else `passive`'s clickable preview, see "A
+mouse selection shows the palette passively" above) and a disposable
+`let ms = reactive({query, sel, sub, mode, commands})` that `openMenu`
+**and** `showPassiveMenu` each **replace with a fresh object on every
+open/show**. Orphan bindings from a previous open then point at the old `ms`,
+which is never touched again, so they never fire. `closeMenu` sets both
+`menu.open = false` and `menu.passive = false` (a command run from either
+render must dismiss both); `hidePassiveMenu` only ever touches `passive`.
 
 This is load-bearing: arrow.js does not fully clean up a dropped subtree, so
 reopening in a different mode used to crash (`W[t] is not a function`). For the

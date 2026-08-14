@@ -5667,7 +5667,12 @@ async function openTask(run) {
 // (the whole PR is fully approved — see REVIEW_APPROVE_COMMANDS),
 // 'reviewChoice' (it isn't — see REVIEW_CHOICE_COMMANDS) or 'reviewReject'
 // (the free-text rejection-reason step "Wijs de PR af" opens).
-const menu = reactive({ open: false })
+// `passive` is a second, independent flag on the same stable `menu` object:
+// true while the palette is shown as a plain, clickable preview under a mouse
+// selection — never taking over the keyboard (unlike `open`) — see
+// showPassiveMenu below and "A mouse selection shows the palette passively"
+// in .claude/docs/command-palette.md.
+const menu = reactive({ open: false, passive: false })
 let ms = reactive({ query: '', sel: 0, sub: null, mode: 'block', commands: [] })
 
 // withClose prepends a "Sluit menu" item to any command list — every root
@@ -7092,6 +7097,14 @@ function clickGranFor(clickCount) {
 // 'group' — see navUnitsOf/setGran/extendRange's own exclusion): every click
 // there keeps selecting the one key-row it always did, regardless of click
 // count or position.
+//
+// Every branch that actually lands a selection also calls
+// schedulePassiveMenu() — the command palette then shows itself, passively,
+// right under the newly selected unit, once the mouse button is RELEASED
+// (see schedulePassiveMenu's own doc comment for why not immediately: this
+// same mousedown may still turn into a multi-row drag via extendRowRange,
+// and showing the palette right away would visually cover the very rows
+// being dragged over).
 function selectRowAt(level, b, i, row, clickCount = 1, segStart = null) {
   const isTranslation = !!(b && b.category === 'TRANSLATION')
   if (level === 0) {
@@ -7104,6 +7117,7 @@ function selectRowAt(level, b, i, row, clickCount = 1, segStart = null) {
         state.gran = 'call'
         clearRangeAnchor(0)
         state.change = idx
+        schedulePassiveMenu()
         return
       }
       // Defensive only (the segment came straight from the same
@@ -7123,10 +7137,12 @@ function selectRowAt(level, b, i, row, clickCount = 1, segStart = null) {
       // repeated Shift+ArrowDown from the first to the last unit produces.
       state.rangeAnchor = 0
       state.change = units.length - 1
+      schedulePassiveMenu()
       return
     }
     clearRangeAnchor(0)
     state.change = unitAtRow(units, row)
+    schedulePassiveMenu()
     return
   }
   if (state.focusLevel !== level) return
@@ -7138,6 +7154,7 @@ function selectRowAt(level, b, i, row, clickCount = 1, segStart = null) {
   if (!units.length) return
   const change = unitAtRow(units, row)
   state.drillCursor = state.drillCursor.map((c, idx) => (idx === level - 1 ? { ...c, gran, change, rangeAnchor: null } : c))
+  schedulePassiveMenu()
 }
 
 // extendRowRange handles every mousemove while the button stays down after a
@@ -7177,18 +7194,21 @@ function extendRowRange(level, b, row) {
   )
 }
 
-// approveClickAt resolves a click on one of Block.mjs's mouse approve-toggles
-// (the row's ✓/○ line toggle, the ▣/▢ group toggle on a group's last row, or
-// a call segment's dot/hover ring — see onApproveClick/onBlockMouseDown) to a
-// navigation unit and positions the keyboard there, mirroring selectRowAt's
-// own level/i plumbing verbatim (0 = the top-level diff, >0 = a drilled
-// column's own focus level; `i` only matters at level 0, see
-// ensureTopLevelDiffFocus) — a click always forces the CLICKED kind's
-// granularity, the same "override whatever gran the keyboard had active"
-// rule the plain row click already applies (see "Line selection" in
-// diff-render.md), confirmed to extend to this new affordance too. Once
+// approveClickAt resolves a click on one of Block.mjs's call-segment approve
+// markers (a dot or a hover-only ring — see onApproveClick/onBlockMouseDown)
+// to a navigation unit and positions the keyboard there, mirroring
+// selectRowAt's own level/i plumbing verbatim (0 = the top-level diff, >0 = a
+// drilled column's own focus level; `i` only matters at level 0, see
+// ensureTopLevelDiffFocus) — a click always forces 'call' granularity, the
+// same "override whatever gran the keyboard had active" rule the plain row
+// click already applies (see "Line selection" in diff-render.md). Once
 // positioned it runs mouseApprove() below — the mouse counterpart of Space —
-// so approving (or retracting) and continuing happen in the same click.
+// so approving (or retracting) and continuing happen in the same click. The
+// `kind` parameter is a holdover from the wider line/group/call gutter
+// affordance this used to also serve (see approval.md's "Approving from the
+// mouse" — the line/group toggles were removed); only `'call'` is ever
+// dispatched now (Block.mjs's onBlockMouseDown only routes `[data-seg-dot]`),
+// left in place rather than pruned since it's still exactly the right shape.
 function approveClickAt(level, b, i, row, kind, segStart) {
   const gran = kind === 'group' ? 'group' : kind === 'call' ? 'call' : 'line'
   const rows = blockRows(b)
@@ -9666,9 +9686,10 @@ function resolveCommands(query) {
 }
 
 // repositionMenu keeps the open palette anchored under the selection as the page
-// resizes or scrolls beneath it. A no-op while the menu is closed.
+// resizes or scrolls beneath it. A no-op while the menu is fully closed —
+// covers the passive preview too, so it stays under its selection on resize.
 function repositionMenu() {
-  if (menu.open) positionMenu()
+  if (menu.open || menu.passive) positionMenu()
 }
 window.addEventListener('resize', repositionMenu)
 window.addEventListener('scroll', repositionMenu, true) // capture: catch inner scrollers too
@@ -9684,6 +9705,10 @@ window.addEventListener('scroll', repositionMenu, true) // capture: catch inner 
 // snapshotCommands — see those for why that must happen from ordinary code and
 // never from inside CommandMenu's own render/filter path.
 function openMenu(mode = 'block') {
+  // A passive preview (see showPassiveMenu) is superseded the moment the real,
+  // keyboard-owning menu opens — same `ms`/positioning either way, so there is
+  // nothing left for the passive render branch to show once `open` is true.
+  menu.passive = false
   // Reset the cached index-row anchor on every fresh open except a follow-up
   // menu itself (isReviewFollowup — postApprove, or one of the review-submit
   // modes, see lastIndexRowRect) — this keeps the cache from ever leaking a
@@ -9737,11 +9762,91 @@ setCommentSelectRequest((commentId) => {
 })
 
 function closeMenu() {
-  // Only flip `open`; the volatile state is replaced wholesale on the next
-  // openMenu, and leaving this (now orphaned) `ms` untouched is exactly what keeps
-  // the torn-down menu's bindings from firing against freed slots.
+  // Only flip the flags; the volatile state is replaced wholesale on the next
+  // openMenu/showPassiveMenu, and leaving this (now orphaned) `ms` untouched
+  // is exactly what keeps the torn-down menu's bindings from firing against
+  // freed slots. `passive` is cleared here too — runCommand (below) calls
+  // closeMenu after running an item picked from EITHER render, so a command
+  // clicked on the passive preview must not leave it lingering afterwards.
   menu.open = false
+  menu.passive = false
 }
+
+// showPassiveMenu shows the SAME command palette a mouse selection would
+// reach via Enter — reusing openMenu's own ms shape, resolveCommands and
+// positioning (menuAnchor/menuRegion/positionMenu) verbatim — but as a plain,
+// clickable preview that does NOT take over the keyboard: `onKeydown`'s
+// `if (menu.open)` branch (↑/↓/Enter/Esc owning the whole keyboard) is
+// gated on `open`, never `passive`, so ordinary row/gran navigation
+// (↑/↓/f/d/s/←/→) keeps working exactly as before while this is visible.
+// Reviewer request: "als je iets hebt geselecteerd, wil ik direct een menu
+// zien onder de onderste geselecteerde regel (zelfde menu als enter)" —
+// this is the mouse-selection replacement for the removed per-row/group
+// gutter approve toggles (see approval.md's "Approving from the mouse").
+// Called only from a mouse-driven row selection (selectRowAt) — never on
+// load or on a keyboard step, per explicit reviewer answer ("alleen na een
+// muisklik"). A no-op while the real menu is already open: a stray mouse
+// event reaching here while `open` is true must not overwrite its `ms`.
+// schedulePassiveMenu defers showPassiveMenu to the next `mouseup` instead of
+// calling it right from the `mousedown` that lands a selection
+// (selectRowAt): a mousedown is also the START of a possible drag-range
+// (extendRowRange, "Line selection: hover, click, drag-range" in
+// diff-render.md) — showing the preview immediately, positioned under the
+// FIRST clicked row, would float on top of the very next rows the drag is
+// about to sweep over, since it's a real `position:fixed` element with a
+// z-index above the diff. Waiting for `mouseup` shows it only once the
+// gesture (plain click OR finished drag) is actually done, positioned under
+// the FINAL selection either way (menuAnchor always reads the current,
+// possibly range-extended, `[data-change-active-end]`). One flag, one
+// listener, added once — `mouseup` always follows a `mousedown` (even a
+// click that never moves), so this never leaves the flag stuck.
+let pendingPassiveMenu = false
+function schedulePassiveMenu() {
+  pendingPassiveMenu = true
+}
+document.addEventListener('mouseup', () => {
+  if (!pendingPassiveMenu) return
+  pendingPassiveMenu = false
+  showPassiveMenu()
+})
+
+function showPassiveMenu(mode = 'block') {
+  if (menu.open) return
+  const commands = snapshotCommands(rootCommandsFor(mode))
+  ms = reactive({ query: '', sel: defaultSel(commands), sub: null, mode, commands })
+  menu.passive = true
+  // No input focus (unlike openMenu) — the whole point is that the keyboard
+  // stays with the diff. positionMenu needs a frame for the just-swapped `ms`
+  // to render at its real size first.
+  requestAnimationFrame(() => menu.passive && positionMenu())
+}
+
+// hidePassiveMenu closes the passive preview only — never touches `open` — so
+// a stray call while the real, keyboard-owning menu is showing is always a
+// no-op (closeMenu already covers that path).
+function hidePassiveMenu() {
+  menu.passive = false
+}
+
+// A mousedown anywhere outside the passive preview's own box (and outside a
+// diff row, which manages the preview itself via selectRowAt/showPassiveMenu)
+// dismisses it — e.g. clicking the sidebar, a comment, or the description
+// column. Capture phase, so it runs before the target's own click handler;
+// excluding `[data-row]` avoids racing the very click that's about to call
+// showPassiveMenu again for a NEW row. Excluding the command-anchor itself
+// keeps a click on one of its own rows working (CommandMenu's own
+// `@click="${() => onRun(c)}"` still fires normally afterwards).
+document.addEventListener(
+  'mousedown',
+  (e) => {
+    if (!menu.passive || menu.open) return
+    const box = document.querySelector('[data-testid="command-anchor"]')
+    if (box && box.contains(e.target)) return
+    if (e.target && e.target.closest && e.target.closest('[data-row]')) return
+    hidePassiveMenu()
+  },
+  true,
+)
 
 // enterSubmenu swaps the visible list to a parent command's children without
 // closing the palette, resetting the query/selection and repositioning (the list
@@ -9809,6 +9914,13 @@ function contextMenuMode() {
 }
 
 function onKeydown(e) {
+  // A passive mouse-selection preview (showPassiveMenu) never survives a
+  // keypress — the reviewer answer was "alleen na een muisklik", so as soon
+  // as the keyboard is used again (any key, including Enter — which is about
+  // to open the REAL menu fresh via openMenu, see the branches below) the
+  // stale preview is gone. Checked first and unconditionally, before every
+  // other branch, since none of them need to know it existed.
+  if (menu.passive && !menu.open) hidePassiveMenu()
   // Cmd+[ / Cmd+] (reviewer request) are a plain remap onto ArrowLeft/
   // ArrowRight — checked FIRST, before every other branch, so the rest of
   // this function (and every helper it calls) never needs to know these keys
@@ -11136,6 +11248,32 @@ function menuOverlay() {
   `
 }
 
+// passiveMenuOverlay — the mouse-selection preview (showPassiveMenu): the
+// SAME CommandMenu, positioned the SAME way (positionMenu/menuAnchor/
+// menuRegion don't distinguish open vs. passive at all), but deliberately
+// WITHOUT menuOverlay's full-screen catch layer: that layer swallows every
+// click on the page to close the menu on an outside click, which is exactly
+// the keyboard-owning behaviour this preview must NOT have — a click on a
+// different row (or anywhere else) needs to reach its own handler
+// unimpeded, not get eaten by this overlay first. Dismissing the preview
+// instead happens via the document-level `mousedown` listener next to
+// showPassiveMenu (outside click) and the `hidePassiveMenu()` call at the
+// top of onKeydown (any keypress). `data-testid="command-anchor"` is the
+// same id positionMenu()/the outside-click check already query — safe since
+// this branch and menuOverlay's are mutually exclusive (MenuHost below).
+function passiveMenuOverlay() {
+  return html`
+    <div
+      class="fixed z-50 max-w-[calc(100vw-1rem)]"
+      style="top:0;left:0;visibility:hidden"
+      data-testid="command-anchor"
+      data-passive="1"
+    >
+      ${CommandMenu(ms, resolveCommands, runCommand)}
+    </div>
+  `
+}
+
 // MenuHost mounts the command-palette overlay at the top level (sibling of
 // PrInfoPanel/BlockList/DetailPanel), not nested inside <main>. <main> is
 // itself `position:fixed` with an explicit z-index (z-10), which makes it a
@@ -11143,9 +11281,21 @@ function menuOverlay() {
 // z-40/z-50) only stacks *within* <main>'s own subtree — externally the whole
 // thing is capped at <main>'s z-10. Mounting the overlay as a separate
 // top-level element lets its own z-40/z-50 compete directly at the root
-// stacking context instead.
+// stacking context instead. `menu.open` (the real, keyboard-owning menu)
+// always wins over `menu.passive` — see openMenu, which clears `passive`
+// itself the moment it sets `open`, so the two are never both true anyway;
+// checking `open` first here is just belt and braces.
 function MenuHost() {
-  return html` <div>${() => (menu.open ? menuOverlay().key('command-overlay') : '')}</div> `
+  return html`
+    <div>
+      ${() =>
+        menu.open
+          ? menuOverlay().key('command-overlay')
+          : menu.passive
+            ? passiveMenuOverlay().key('command-passive')
+            : ''}
+    </div>
+  `
 }
 
 // ── PR-info column ──────────────────────────────────────────────────────────
