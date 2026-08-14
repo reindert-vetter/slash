@@ -647,6 +647,16 @@ export default function Block(b, opts = {}) {
   // approved rows, so the caller (home.mjs) can persist the new state durably.
   // Defaults to a no-op; Block itself stays decoupled from the write path.
   const onApprove = opts.onApprove || (() => {})
+  // onRowMouseDown/onRowMouseMove — the mouse equivalent of ↑/↓ + Shift+↑/↓:
+  // called with the aligned-row index (rowCellHTML's `data-row`) a mousedown/
+  // drag-mousemove landed on, via the delegated handlers below. Both default
+  // to null (not a no-op function) so onBlockMouseDown/onBlockMouseMove can
+  // skip the closest() lookup entirely on a card that never wired one up (the
+  // look-ahead preview at home.mjs's stepChevronSlot call site, testClass
+  // preview cards, …) — see "Line selection: hover, click, drag-range" in
+  // .claude/docs/diff-render.md.
+  const onRowMouseDown = opts.onRowMouseDown || null
+  const onRowMouseMove = opts.onRowMouseMove || null
   // commentedRows is a function returning the Set of rows that carry a comment,
   // so the panes mark them with a 💬 (presence only). A function so the binding
   // re-runs as comments load/change. Defaults to no comments.
@@ -706,6 +716,8 @@ export default function Block(b, opts = {}) {
       style="${() => colWidthStyleFn()}"
       data-col-resize-root
       data-diff-col-key="${'diff:' + b.id}"
+      @mousedown="${(e) => onBlockMouseDown(e, onRowMouseDown)}"
+      @mousemove="${(e) => onBlockMouseMove(e, onRowMouseMove)}"
     >
       ${() =>
         // Any non-preview/look-ahead card may be dragged wider/narrower —
@@ -1576,6 +1588,25 @@ function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, focused = 
     else if (mark === 'ins') cls += ' bg-[#dafbea] dark:bg-emerald-500/10' // emerald-100 +20% white
     else if (text === null) cls += ' bg-slate-50 dark:bg-zinc-800/60' // filler for the missing side
   } else {
+    // Hover affordance for line selection (click / drag-range, see
+    // home.mjs's selectRowAt/extendRowRange): a grey left inset bar, same
+    // colour family as the dimmed cursor bar above — never shown together
+    // with a real cursor bar (this whole branch is only reached for a
+    // non-active row), so there's no risk of one hiding the other. Only
+    // while `focused` (this card already owns, or could take over, the
+    // keyboard — mirrors diffActive()): a look-ahead preview/testClass card
+    // never shows it or reacts to a click at all (opts.onRowMouseDown/
+    // onRowMouseMove default to null there). Shape+thickness would be
+    // identical either way — this is a pure hover-only affordance, not a
+    // second colour-only state (colorblind rule): nothing else on the row
+    // changes. Written as `0px_0px` (equivalent CSS to `0_0`, box-shadow
+    // treats a zero length the same with or without a unit) rather than
+    // reusing the exact `inset_2px_0_0` token the dimmed cursor bar uses —
+    // that literal substring is what tests/diff-active-row-dim.spec.mjs
+    // greps the `class` attribute for, and a *possible* hover class would
+    // otherwise always match it regardless of actual `:hover` state.
+    if (focused)
+      cls += ' cursor-pointer hover:shadow-[inset_2px_0px_0px_#94a3b8] dark:hover:shadow-[inset_2px_0px_0px_#71717a]'
     if (ws) {
       // Whitespace-only re-alignment: no full-line tint (it isn't a real
       // change). Only the shifted whitespace itself is coloured, in the body.
@@ -1945,6 +1976,38 @@ function onPaneClick(rows, e) {
   if (!el) return
   e.stopPropagation()
   expandCollapsedRun(rows, el.getAttribute('data-collapsed-run'))
+}
+
+// onBlockMouseDown / onBlockMouseMove — one delegated pair on the whole card
+// (<article>, see Block()'s own bindings) rather than threading two more
+// callbacks through codeDiff/codePane/unifiedCodeDiff/paneHTML's already long
+// positional parameter lists: a row div lives inside whichever pane's <code>
+// is currently rendered (one in 'fit'/one-sided, two in 'split', one in
+// 'unified'), and `data-row` (rowCellHTML, only on the canonical
+// metadata-carrying line of a row) already uniquely identifies it regardless
+// of which pane/side the click landed on. `cb` is home.mjs's own
+// onRowMouseDown/onRowMouseMove (see Block()'s opts) — null on a card that
+// never wired one up (a preview/testClass card), so both are a plain no-op
+// there. onBlockMouseMove only acts while the primary button is still held
+// (`e.buttons`), so a plain hover-without-drag mousemove costs nothing and no
+// separate "dragging" flag / global mouseup listener is needed: mouseup
+// anywhere simply clears `e.buttons` for every later mousemove. See "Line
+// selection: hover, click, drag-range" in .claude/docs/diff-render.md.
+function onBlockMouseDown(e, cb) {
+  if (!cb || e.button !== 0) return
+  const el = e.target && e.target.closest && e.target.closest('[data-row]')
+  if (!el) return
+  const i = +el.getAttribute('data-row')
+  if (Number.isNaN(i)) return
+  cb(i)
+}
+function onBlockMouseMove(e, cb) {
+  if (!cb || (e.buttons & 1) === 0) return
+  const el = e.target && e.target.closest && e.target.closest('[data-row]')
+  if (!el) return
+  const i = +el.getAttribute('data-row')
+  if (Number.isNaN(i)) return
+  cb(i)
 }
 
 // collapsePlan returns null (render every row — the small-block fast path,

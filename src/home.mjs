@@ -7001,6 +7001,119 @@ function drillExtendRange(level, delta) {
   scrollChangeIntoView()
 }
 
+// ── Mouse line selection: click, hover (CSS only, see Block.mjs), drag-range ──
+// Wired via Block()'s onRowMouseDown/onRowMouseMove opts (home.mjs's own
+// Block(...) call sites below), fired from the delegated onBlockMouseDown/
+// onBlockMouseMove in Block.mjs. Mirrors the keyboard exactly: a plain click
+// is the mouse equivalent of "jump straight to the unit under the cursor"
+// (unitAtRow, the same re-anchoring lookup a gran switch already uses), and a
+// drag is the mouse equivalent of Shift+ArrowUp/Down (isRangeGran/rangeAnchor
+// — the identical mechanism, just driven by mousemove instead of a held key).
+// See "Line selection: hover, click, drag-range" in
+// .claude/docs/diff-render.md.
+
+// ensureTopLevelDiffFocus brings the keyboard fully onto the top-level diff of
+// block index `i` — reviewer request: "een klik op een andere kaart dan de
+// focus kaart moet dat kaart focussen alsof je gewoon met je key er
+// navigeert". Reuses the exact functions the corresponding key sequence would
+// call, never a parallel implementation (mouse-navigation.md, Rule 1):
+// expandColumn(0)/leaveRelated() mirror repeated ← out of a drilled column or
+// the comments/Onderliggende-code panel, stepBlock mirrors ↓ flowing across a
+// same-file boundary, and the ← (list) → (enterDiff) fallback mirrors the
+// general path for a different-file neighbour (there is no same-file flow to
+// reuse there). Called from selectRowAt below; the caller's own unitAtRow
+// lookup then overrides whatever landing unit stepBlock/enterDiff picked, so
+// the reviewer always ends up exactly on the row they clicked.
+function ensureTopLevelDiffFocus(i) {
+  if (state.focusLevel > 0) expandColumn(0)
+  else if (relatedActive()) leaveRelated()
+  if (i === state.selected) {
+    if (state.mode !== 'diff') enterDiff()
+    else clearRangeAnchor(0)
+    return
+  }
+  // stepBlock's same-file flow is only ever a thing WITHIN diff mode (it's
+  // what ↓/f run off the last unit already invoke) — there is no "flow"
+  // concept from list mode, so only try it once we're actually in diff mode.
+  if (state.mode === 'diff' && stepBlock(i - state.selected)) return
+  // Either a different file's neighbour, or the reviewer hadn't stepped into
+  // diff mode yet at all — the real keyboard path is ← back to the list
+  // (already there in the latter case), ↓/click to select the row, then →.
+  state.selected = i
+  clearListAnchor()
+  clearRangeAnchor(0)
+  enterDiff()
+}
+
+// selectRowAt handles a plain mousedown on a diff row: `level` is 0 for the
+// top-level diff, or the drilled column's own focus level. `i` is the block's
+// own index in state.blocks, only meaningful for level 0 (a drilled column has
+// no sidebar index of its own — it's already the sole thing rendered at its
+// level once focused, see keyboard-navigation.md's drilling section).
+function selectRowAt(level, b, i, row) {
+  if (level === 0) {
+    ensureTopLevelDiffFocus(i)
+    if (state.mode !== 'diff' || !isActiveCard(b)) return
+    const units = navUnitsOf(b, blockRows(b), state.gran)
+    if (!units.length) return
+    state.change = unitAtRow(units, row)
+    return
+  }
+  if (state.focusLevel !== level) return
+  if (relatedActive()) leaveRelated()
+  const cur = state.drillCursor[level - 1]
+  if (!cur) return
+  clearRangeAnchor(level)
+  const units = navUnitsOf(b, blockRows(b), cur.gran)
+  if (!units.length) return
+  const change = unitAtRow(units, row)
+  state.drillCursor = state.drillCursor.map((c, idx) => (idx === level - 1 ? { ...c, change, rangeAnchor: null } : c))
+}
+
+// extendRowRange handles every mousemove while the button stays down after a
+// selectRowAt — the drag counterpart of Shift+ArrowUp/Down. Only meaningful at
+// gran==='line'/'group' (isRangeGran) and never for a TRANSLATION block, the
+// same gate extendRange/drillExtendRange already use. Deliberately does NOT
+// call ensureTopLevelDiffFocus — a drag only ever extends a selection that a
+// preceding selectRowAt already focused; a mousemove landing on some other
+// card's row while the button is still down (having left the card the drag
+// started on) is out of scope and simply ignored.
+function extendRowRange(level, b, row) {
+  if (b && b.category === 'TRANSLATION') return
+  if (level === 0) {
+    if (state.mode !== 'diff' || !isActiveCard(b) || state.focusLevel !== 0 || !isRangeGran(state.gran)) return
+    const units = navUnitsOf(b, blockRows(b), state.gran)
+    if (!units.length) return
+    const target = unitAtRow(units, row)
+    const anchor = state.rangeAnchor != null ? state.rangeAnchor : state.change
+    state.rangeAnchor = anchor
+    state.change = target
+    return
+  }
+  if (state.focusLevel !== level) return
+  const cur = state.drillCursor[level - 1]
+  if (!cur || !isRangeGran(cur.gran)) return
+  const units = navUnitsOf(b, blockRows(b), cur.gran)
+  if (!units.length) return
+  const target = unitAtRow(units, row)
+  const anchor = cur.rangeAnchor != null ? cur.rangeAnchor : cur.change
+  state.drillCursor = state.drillCursor.map((c, idx) => (idx === level - 1 ? { ...c, change: target, rangeAnchor: anchor } : c))
+}
+
+// focusDrillPreviewSibling brings a click on the drilled column's own
+// look-ahead preview card (drillPreviewColumns, always rendered nested inside
+// the ALREADY-focused column — see its own doc comment) onto that sibling:
+// the mouse equivalent of ↓/f run off the end of the focused column's own
+// units, which sideways-flows into the next sibling (drillNextChange/
+// drillToSibling). Reuses drillToSibling directly rather than reimplementing
+// the sideways swap.
+function focusDrillPreviewSibling() {
+  if (relatedActive()) leaveRelated()
+  const ctx = drillSiblingContext()
+  const next = ctx && ctx.siblings[ctx.idx + 1]
+  if (next) drillToSibling(next, false)
+}
+
 // scrollFocusIntoView scrolls whichever column now owns the diff keyboard into
 // view — <main> scrolls horizontally, so stepping across drilled columns (or
 // back to the original block) could otherwise land off-screen. Deferred a
@@ -10535,6 +10648,16 @@ function drillPreviewColumns() {
           approvedRows: () => approvedRowSet(previewBlock),
           approvedCalls: () => approvedCallSet(previewBlock),
           onApprove: (blk) => persistApproval(blk),
+          // A click on this look-ahead sibling preview focuses it exactly like
+          // running ↓/f off the end of the currently-focused column's own
+          // units would (see focusDrillPreviewSibling) — no drag-range here,
+          // a still-unfocused card can't be mid-drag.
+          onRowMouseDown: (row) => {
+            const level = state.focusLevel
+            focusDrillPreviewSibling()
+            const nb = state.drill[level - 1]
+            if (nb) selectRowAt(level, nb, null, row)
+          },
           commentedRows: () => commentRowSet(previewBlock),
           lineSummaries: () => lineChildSummaries(previewBlock),
           viewMode: () => (activeSingleSided ? 'unified' : state.diffViewMode),
@@ -11466,6 +11589,19 @@ function DetailPanel(state) {
             approvedCalls: () => approvedCallSet(b),
             // Persist a top-checkbox toggle to the durable approve tracker.
             onApprove: (blk) => persistApproval(blk),
+            // A mousedown on this card's diff focuses it exactly like the
+            // keyboard would (ensureTopLevelDiffFocus — reviewer request: a
+            // click on the non-focused look-ahead preview at i===sel+1 must
+            // focus it "alsof je gewoon met je key er navigeert"), then jumps
+            // straight to the clicked row (selectRowAt). Wired unconditionally
+            // (not just for the preview) so a click ALSO works on the already-
+            // focused card itself — there it's a plain "select this row".
+            onRowMouseDown: (row) => selectRowAt(0, b, i, row),
+            // Drag-extends the selection while the button stays down — a
+            // no-op unless this card already owns the keyboard (see
+            // extendRowRange's own guard), so dragging never starts a range on
+            // a card a mousedown hasn't already focused.
+            onRowMouseMove: (row) => extendRowRange(0, b, row),
             // Reactive Set of rows that carry a comment → a 💬 marker on those
             // rows, so it's visible which units already hold a comment (however
             // many). Reads the comments read-model via RelatedPanel.
@@ -11740,6 +11876,13 @@ function DetailPanel(state) {
                   approvedRows: () => approvedRowSet(b),
                   approvedCalls: () => approvedCallSet(b),
                   onApprove: (blk) => persistApproval(blk),
+                  // This card is always the focused drilled column (a
+                  // non-focused one collapses to the rail above, whose own
+                  // click already calls expandColumn) — so a click here only
+                  // needs to hand focus back from the comments/Onderliggende-
+                  // code panel when needed, never a level change.
+                  onRowMouseDown: (row) => selectRowAt(level, b, null, row),
+                  onRowMouseMove: (row) => extendRowRange(level, b, row),
                   commentedRows: () => commentRowSet(b),
                   commentRangeRows: () => commentRangeRowSet(b),
                   lineSummaries: () => lineChildSummaries(b),

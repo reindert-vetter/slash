@@ -120,6 +120,77 @@ The **call underline** (`UNDERLINE_CLS`, indigo, the active segment at
 `gran==='call'`) is a separate layer on the same `markChars` pass and works
 unchanged, also on a line without a word background.
 
+## Line selection: hover, click, drag-range
+
+Reviewer request: "ik wil dat ik een lijn kan selecteren, hover moet links een
+grijs verticaal feedback geven. klik moet selecteren, muis inhouden en naar
+beneden of naar boven moet meerdere lines kunnen selecteren." The mouse is a
+full alternative input to the existing keyboard cursor, never a parallel
+implementation — a click always resolves to `unitAtRow` (the same
+gran-switch-re-anchoring lookup `setGran`/`setDrillGran` already use) and a
+drag reuses the exact `state.rangeAnchor`/`rangeUnit`/`isRangeGran` mechanism
+Shift+↑/↓ built (see "Shift+↑/↓" in keyboard-navigation.md) — just driven by
+`mousemove` instead of a held key.
+
+- **Hover (CSS only, no state):** `rowCellHTML`'s non-active row branch gets a
+  `hover:` grey inset bar (same colour family as the dimmed cursor bar,
+  `#94a3b8`/`#71717a`) plus `cursor-pointer`, but only while `focused` (this
+  card already owns, or could take over, the keyboard — mirrors
+  `diffActive()`): a look-ahead preview/testClass card never shows it. Written
+  as `inset_2px_0px_0px_...` (equivalent CSS to `inset_2px_0_0_...`, a zero
+  length parses the same with or without a unit) rather than the exact
+  substring the dimmed cursor bar uses — `tests/diff-active-row-dim.spec.mjs`
+  greps the `class` attribute for that literal token, and a *possible* hover
+  class would otherwise always match it regardless of actual `:hover` state.
+- **Click:** one delegated `@mousedown`/`@mousemove` pair on the whole card
+  (`Block()`'s own `<article>`, `onBlockMouseDown`/`onBlockMouseMove` in
+  `Block.mjs`) rather than threading two more callbacks through
+  `codeDiff`/`codePane`/`unifiedCodeDiff`/`paneHTML`'s already long positional
+  parameter lists — a row div lives inside whichever pane's `<code>` is
+  currently rendered, and `data-row` (only on the canonical metadata-carrying
+  line, see `rowCellHTML`'s own doc comment) already uniquely identifies it
+  regardless of which pane/side the click landed on. `onBlockMouseMove` only
+  acts while `e.buttons` still shows the primary button held, so a plain hover
+  costs nothing and no separate "dragging" flag or global `mouseup` listener
+  is needed — mouseup anywhere simply clears `e.buttons` for every later
+  `mousemove`. `home.mjs`'s `selectRowAt(level, b, i, row)` (`level` 0 =
+  top-level diff, >0 = a drilled column's own focus level) resolves the row to
+  a unit via `unitAtRow` and sets `state.change` (or the drilled column's own
+  `drillCursor` entry) directly — no scrolling, the reviewer already sees the
+  row they clicked.
+- **Drag-range:** `extendRowRange(level, b, row)` mirrors `extendRange`/
+  `drillExtendRange` — only at `gran==='line'`/`'group'` (`isRangeGran`) and
+  never for a TRANSLATION block (same gate). Deliberately does **not** try to
+  refocus a different card: a drag only ever extends a selection a preceding
+  `selectRowAt` already focused, so a stray `mousemove` over some other card's
+  row while the button is still down is simply ignored.
+- **A click on a non-focused card focuses it first, exactly like the
+  keyboard would** (reviewer follow-up: "een klik op een andere kaart dan de
+  focus kaart moet dat kaart focussen alsof je gewoon met je key er
+  navigeert" — mouse-navigation.md, Rule 1: reuse the function, never a
+  parallel implementation). `ensureTopLevelDiffFocus(i)` (`home.mjs`) reuses
+  `expandColumn(0)`/`leaveRelated()` (mirrors repeated ← out of a drilled
+  column or the comments/Onderliggende-code panel), `stepBlock` (mirrors ↓
+  flowing across a same-file boundary — only tried once already in diff mode,
+  since that "flow" concept doesn't exist from list mode), and the ←(list)
+  →(`enterDiff`) fallback for a different-file neighbour or a still-list-mode
+  click. `selectRowAt`'s own `unitAtRow` lookup then overrides whatever
+  landing unit `stepBlock`/`enterDiff` picked, so the reviewer always ends up
+  exactly on the clicked row. The two visible non-focused full cards this
+  applies to: the top-level look-ahead preview (`i === sel + 1` in the
+  `pair.forEach` block-column loop) and a drilled column's own sibling preview
+  (`drillPreviewColumns`, focused via `focusDrillPreviewSibling` →
+  `drillToSibling`, since that preview always renders nested inside the
+  ALREADY-focused column — no level change needed there, only the sideways
+  sibling swap). A drilled column that isn't the focused one is always a
+  collapsed rail instead (no rows to click at all) — its own click already
+  calls `expandColumn`, unrelated to this feature.
+
+Test: `tests/diff-row-mouse-select.spec.mjs` (click jumps to an arbitrary row,
+a mousedown+mousemove drag produces the same 3-of-4-lines range
+`range-select.spec.mjs`'s Shift+ArrowDown x2 does, and a click on the
+look-ahead preview focuses + selects it).
+
 ## The active-row cursor bar dims when the diff doesn't own the keyboard
 
 The active row/unit gets an inset left bar (`shadow-[inset_...px_0_0_...]`, a
