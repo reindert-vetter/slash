@@ -192,16 +192,23 @@ test.describe('PR Review Tree — PR inbox', () => {
     await page.goto('/pr-overview')
     await appReady(page)
 
+    let started = false
     let resolveIngest
     const ingestDone = new Promise((resolve) => {
       resolveIngest = resolve
     })
     await page.route('**/api/ingest', async (route) => {
+      started = true
       await ingestDone
       await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' })
     })
+    // Gated on `started`: opening the popover itself now also pings this
+    // endpoint (resumeIngestIfActive, src/overview.mjs) to resume a busy state
+    // after a page refresh — an unconditional "always busy" mock would make
+    // that ping itself falsely mark this PR as already generating before the
+    // click below ever happens.
     await page.route('**/api/ingest/progress*', async (route) => {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true,"stage":"scan"}' })
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, stage: started ? 'scan' : '' }) })
     })
 
     const row = page.locator('[data-testid="pr-row"][data-pr="12801"]')
@@ -225,6 +232,65 @@ test.describe('PR Review Tree — PR inbox', () => {
     await expect(page.locator('[data-testid="pr-popover"] [data-testid="open-tree"]')).toBeVisible()
     await expect(page.locator('[data-testid="pr-popover"] [data-testid="regenerate-page"]')).toBeEnabled()
     await expect(page).toHaveURL(/\/pr-overview$/)
+  })
+
+  // Reviewer request: "als ik het menu weer open, wil ik weer het laad
+  // icoontje zien en zien als het is gegenereerd (live status) — ook als je
+  // de pagina refresht." ui.ingesting/ingestStage (src/overview.mjs) are
+  // plain module state, wiped by a reload — but the ingest Workflow
+  // Execution itself keeps running server-side (StartWorkflow takes no
+  // request context), so GET /api/ingest/progress still answers correctly
+  // after the reload. resumeIngestIfActive/watchResumedIngest resume the
+  // busy UI from that on the next popover open, and confirm completion via
+  // GET /api/prs since this tab never sees the original POST response.
+  test('a page refresh mid-generate still resumes the live status on the next popover open', async ({ page }) => {
+    await page.goto('/pr-overview')
+    await appReady(page)
+
+    let started = false
+    let stage = 'scan'
+    await page.route('**/api/ingest/progress*', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ok: true, stage: started ? stage : '' }),
+      })
+    })
+    // The real /api/ingest POST is never awaited across the reload in this
+    // test — it just hangs forever, mirroring "the browser navigated away
+    // mid-request".
+    await page.route('**/api/ingest', () => {
+      started = true
+    })
+
+    const row = page.locator('[data-testid="pr-row"][data-pr="12801"]')
+    await row.click()
+    const generate = page.locator('[data-testid="pr-popover"] [data-testid="generate-page"]')
+    await generate.click()
+    await expect(generate).toHaveText(/Blocks scannen/)
+
+    await page.reload()
+    await appReady(page)
+
+    // Reopening the popover must resume the busy state from the server-side
+    // progress tracker, even though this tab's own ui.ingesting is gone.
+    await row.click()
+    const generate2 = page.locator('[data-testid="pr-popover"] [data-testid="generate-page"]')
+    await expect(generate2).toHaveText(/Blocks scannen/)
+    await expect(generate2).toBeDisabled()
+
+    // The ingest "finishes" server-side: the progress stage clears and the PR
+    // now shows up as ingested via GET /api/prs.
+    stage = ''
+    await page.route('**/api/prs', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([{ pr: 12801, blocks: 3, files: 2, title: '' }]),
+      })
+    })
+
+    await expect(page.locator('[data-testid="pr-popover"] [data-testid="open-tree"]')).toBeVisible({ timeout: 5000 })
   })
 
   test('a failed generate keeps the popover open with an inline error', async ({ page }) => {
@@ -401,18 +467,23 @@ test.describe('PR Review Tree — PR inbox', () => {
     await page.goto('/pr-overview')
     await appReady(page)
 
+    let started = false
     let resolveIngest
     const ingestDone = new Promise((resolve) => {
       resolveIngest = resolve
     })
     await page.route('**/api/ingest', async (route) => {
+      started = true
       const body = JSON.parse(route.request().postData() || '{}')
       expect(body.pr).toBe(12801)
       await ingestDone
       await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' })
     })
+    // Gated on `started` — see the same note in "generating shows the real
+    // ingest stage while busy" above (resumeIngestIfActive pings this on every
+    // popover open, incl. the one ArrowRight opens by itself here).
     await page.route('**/api/ingest/progress*', async (route) => {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true,"stage":"scan"}' })
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, stage: started ? 'scan' : '' }) })
     })
 
     await selectRowByKeyboard(page, 12801)

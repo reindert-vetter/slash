@@ -706,11 +706,19 @@ function togglePopover(uid) {
   // "Sluit menu" item (see popover() below) always sits first so a stray
   // Enter never merely closes the menu; focusPopoverItem clamps, so a
   // popover with only that one item still focuses it.
-  if (opening)
+  if (opening) {
     requestAnimationFrame(() => {
       positionPopover(uid)
       focusPopoverItem(1)
     })
+    // A page refresh (or a fresh load landing on this PR) wipes ui.ingesting/
+    // ingestStage — plain module state, not persisted anywhere client-side —
+    // even though the ingest itself may still be running server-side. Check
+    // for that on every open so a reopened popover shows the real live state
+    // instead of silently going back to "Genereer review-boom". See
+    // resumeIngestIfActive below.
+    resumeIngestIfActive(findPrByUid(uid))
+  }
 }
 
 // positionPopover measures the just-mounted popover of row `number` (it's
@@ -823,6 +831,88 @@ async function generatePage(pr, { redirect = true } = {}) {
   } finally {
     stopIngestPoll()
     ui.ingestStage = ''
+  }
+}
+
+// resumeIngestIfActive — a page refresh (or a fresh page load) can land while
+// an ingest this tab never started, or a previous /api/ingest fetch this tab
+// DID start, is still running: ui.ingesting/ui.ingestStage are plain module
+// state and both are gone after a reload, but the ingest Workflow Execution
+// itself is not — StartWorkflow (workflows.go) takes no request context, so it
+// keeps running server-side to completion regardless of whether the browser
+// tab/request that triggered it is still around. Called on every popover open
+// (togglePopover above); a cheap read-only ping (see ingest_progress.go's
+// write-boundary carve-out), skipped outright if this tab already tracks an
+// ingest of its own. Reviewer request: "als ik het menu weer open [na het
+// sluiten], wil ik weer het laad icoontje zien en zien als het is
+// gegenereerd (live status) — ook als je de pagina refresht."
+async function resumeIngestIfActive(pr) {
+  if (!pr || !treeSupported(pr) || ui.ingesting) return
+  try {
+    const res = await fetch('/api/ingest/progress?pr=' + pr.number + repoParam(pr))
+    if (!res.ok) return
+    const body = await res.json()
+    // The popover may already have closed again, or a fresh local generate
+    // may have started meanwhile, while this request was in flight.
+    if (!body || !body.ok || !body.stage || ui.openPopover !== prUid(pr) || ui.ingesting) return
+    ui.ingesting = prUid(pr)
+    ui.ingestStage = body.stage
+    watchResumedIngest(pr)
+  } catch (e) {
+    // best-effort — the popover just stays on its idle action
+  }
+}
+
+// watchResumedIngest polls the same GET /api/ingest/progress used by
+// generatePage's own busy button (reusing ingestPollTimer/stopIngestPoll)
+// until the stage clears — the Workflow Execution finished, success or
+// failure. Unlike generatePage, this tab never awaited the original POST
+// /api/ingest response, so success is confirmed the only other way
+// available: whether the PR now actually has blocks (GET /api/prs). A
+// resumed "Opnieuw genereren" that fails is indistinguishable from one that
+// succeeds this way, since the PR already had a graph before it started —
+// accepted: without the original response there is no failure message to
+// show either way, and the tree itself is the ground truth a reviewer can
+// always check.
+function watchResumedIngest(pr) {
+  stopIngestPoll()
+  ingestPollTimer = setInterval(async () => {
+    if (ui.ingesting !== prUid(pr)) {
+      stopIngestPoll()
+      return
+    }
+    try {
+      const res = await fetch('/api/ingest/progress?pr=' + pr.number + repoParam(pr))
+      if (!res.ok) return
+      const body = await res.json()
+      if (ui.ingesting !== prUid(pr)) return
+      if (body && body.ok && body.stage) {
+        ui.ingestStage = body.stage
+        return
+      }
+      stopIngestPoll()
+      const nowIngested = await isNowIngested(pr)
+      if (ui.ingesting === prUid(pr)) {
+        ui.ingesting = null
+        ui.ingestStage = ''
+        if (nowIngested) pr.hasGraph = true
+      }
+    } catch (e) {
+      // best-effort — keep polling on a transient network hiccup
+    }
+  }, 800)
+}
+
+// isNowIngested — a lightweight "does this PR have blocks now" check via the
+// existing GET /api/prs (recent-ingested list), for watchResumedIngest above.
+async function isNowIngested(pr) {
+  try {
+    const res = await fetch('/api/prs')
+    if (!res.ok) return false
+    const list = await res.json()
+    return Array.isArray(list) && list.some((p) => p.pr === pr.number && (p.repo || '') === (pr.repo || ''))
+  } catch (e) {
+    return false
   }
 }
 

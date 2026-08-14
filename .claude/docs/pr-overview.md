@@ -116,6 +116,41 @@ in sync by hand.
   on the overview and only wants the data refreshed (`ui.ingesting` → `null` on
   success). A failure shows `data-testid=regenerate-error` in the same popover.
 
+### A page refresh mid-generate: the busy state resumes on the next popover open
+
+`ui.ingesting`/`ui.ingestStage` are plain module state, wiped by a reload —
+but the ingest itself is a real Workflow Execution
+(`m.engine.StartWorkflow(WorkflowIngest, …)`, `workflows.go`) started from a
+goroutine that takes **no request context**, so it keeps running to
+completion server-side regardless of whether the tab/request that triggered
+it is still around. `GET /api/ingest/progress` therefore still answers
+correctly after a reload; only this tab's own memory of "I'm ingesting PR N"
+was lost. Reviewer request: "als ik in een menu klik op genereer review, en
+ik sluit het menu, dan wil ik als ik het menu weer open, daar weer het laad
+icoontje zien … ook als je de pagina refresht."
+
+`togglePopover` calls **`resumeIngestIfActive(pr)`** on every open (skipped
+outright if this tab already tracks an ingest locally): one cheap
+`GET /api/ingest/progress` ping — same write-boundary carve-out as the
+button's own polling — and if it comes back with a non-empty stage, seeds
+`ui.ingesting`/`ui.ingestStage` from it and hands off to
+**`watchResumedIngest(pr)`**, which keeps polling (reusing
+`ingestPollTimer`/`stopIngestPoll`) until the stage clears. Since this tab
+never awaited the original `POST /api/ingest` response, it has no success/
+failure result to show — completion is confirmed the only other way
+available: **`isNowIngested(pr)`**, a `GET /api/prs` lookup by
+`{pr, repo}`. A resumed "Regenerate" that actually failed is
+indistinguishable from one that succeeded this way (the PR already had a
+graph before it started) — accepted, since there is no failure message to
+recover either way; the tree itself is the ground truth. Applies to both the
+fresh-ingest and the regenerate case identically, since they share one
+progress key. Test: "a page refresh mid-generate still resumes the live
+status on the next popover open" in `tests/overview.spec.mjs` — note its
+`/api/ingest/progress` mock (like the two pre-existing busy-state tests it
+sits next to) must gate the returned stage on the ingest having actually
+started, or `resumeIngestIfActive`'s own ping on the FIRST popover open
+(before the reviewer even clicked "Generate") falsely marks the row busy.
+
 ### Draft → "Klaar voor review" (reviewer picker)
 
 For a **draft** PR (`pr.isDraft`) the popover also shows a **"Klaar voor
