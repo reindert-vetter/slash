@@ -119,11 +119,16 @@ test.describe('PR Review Tree — change navigation', () => {
     })
 
     const host = page.locator('#nav-host')
-    // One anchor per pane (first row of the group), so two in total.
-    await expect(host.locator('[data-change-active]')).toHaveCount(2)
+    // Only the new/right pane carries the anchor now — the old/left pane is
+    // display-only (see "Only the new/right pane drives selection" in
+    // diff-render.md), so this is one, not one per pane.
+    await expect(host.locator('[data-change-active]')).toHaveCount(1)
     // Active rows get the brighter hex tints (rose-200/emerald-200 mixed 20%
-    // toward white) — #fed7dc = active del, #b9f5d9 = active ins. See paneHTML.
-    await expect(host.locator('div[class*="#fed7dc"]')).toHaveCount(2)
+    // toward white) — #fed7dc = active del, #b9f5d9 = active ins. See
+    // paneHTML. #fed7dc only ever marked the old/left pane's own del rows, so
+    // it's gone entirely now; #b9f5d9 (the new/right pane's own ins rows) is
+    // unaffected.
+    await expect(host.locator('div[class*="#fed7dc"]')).toHaveCount(0)
     await expect(host.locator('div[class*="#b9f5d9"]')).toHaveCount(3)
   })
 
@@ -598,8 +603,11 @@ test.describe('PR Review Tree — change navigation', () => {
     await expect(panel.locator('code.language-php').first()).toBeVisible()
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
-    // Active rows (any granularity) carry the inset indigo left bar; count them
-    // across both panes as a granularity-agnostic "how many rows are selected".
+    // Active rows (any granularity) carry the inset indigo left bar; count
+    // them as a granularity-agnostic "how many rows are selected" — only the
+    // new/right pane ever carries this bar (see "Only the new/right pane
+    // drives selection" in diff-render.md), the old/left pane is
+    // display-only.
     const activeRows = panel.locator('div[class*="inset_3px_0_0"]')
     const underline = panel.locator('span[class*="decoration-[#6366f1]"]')
 
@@ -609,13 +617,13 @@ test.describe('PR Review Tree — change navigation', () => {
     await expect(page).not.toHaveURL(/gran=/) // group is the default → omitted
     await expect(activeRows.first()).toBeVisible()
     const groupCount = await activeRows.count()
-    expect(groupCount).toBe(2) // a single-row group: one row × two panes
+    expect(groupCount).toBe(1) // a single-row group: one row × the new/right pane only
 
     // f → call directly (skipping line): gran=call, still one row, and now the
     // segment's chars carry the indigo underline (same colour as the inset bar).
     await page.keyboard.press('f')
     await expect(page).toHaveURL(/gran=call/)
-    await expect(activeRows).toHaveCount(2)
+    await expect(activeRows).toHaveCount(1)
     await expect(underline.first()).toBeVisible()
 
     // d walks back down the levels one step at a time: call → line (no underline).

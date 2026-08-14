@@ -172,6 +172,21 @@
         background-color: #e2e8f0; /* slate-200 */
       }
 
+      /* Paired-row hover (Block.mjs's onRowPairHover/`data-row-pair`, see
+         "Line selection: hover, click, drag-range" in diff-render.md): the
+         old/left pane is display-only in a split diff (no click, no active
+         cursor of its own — see "Only the new/right pane is selectable"), but
+         hovering EITHER side must still light up BOTH — reviewer request. A
+         plain marker class, same reasoning as .call-seg-hover: old/new live in
+         two entirely separate <code> elements, so a bare CSS :hover can only
+         ever affect the element the pointer is actually over, never its
+         counterpart in the other pane. Same visual (and same colour tokens) as
+         the plain per-row hover bar already used for the non-active-row
+         affordance. */
+      .row-pair-hover {
+        box-shadow: inset 2px 0 0 #94a3b8; /* slate-400 */
+      }
+
       /* Prism token colours only — scoped to every Prism code excerpt via the
          `.language-php` class it always carries (the diff panes in Block.mjs, the
          Onderliggende-code cards + comment hint in RelatedPanel.mjs, the footer),
@@ -347,6 +362,9 @@
         :root:not([data-theme='light']) .call-seg.call-seg-hover {
           background-color: #3f3f46; /* zinc-700 */
         }
+        :root:not([data-theme='light']) .row-pair-hover {
+          box-shadow: inset 2px 0 0 #71717a; /* zinc-500 */
+        }
         :root:not([data-theme='light']) .language-php .token.comment,
         :root:not([data-theme='light']) .language-php .token.prolog,
         :root:not([data-theme='light']) .language-php .token.doctype,
@@ -422,6 +440,9 @@
          above the @media block. */
       :root[data-theme='dark'] .call-seg.call-seg-hover {
         background-color: #3f3f46; /* zinc-700 */
+      }
+      :root[data-theme='dark'] .row-pair-hover {
+        box-shadow: inset 2px 0 0 #71717a; /* zinc-500 */
       }
       :root[data-theme='dark'] .language-php .token.comment,
       :root[data-theme='dark'] .language-php .token.prolog,

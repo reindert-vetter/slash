@@ -102,28 +102,33 @@ test.describe('diff trim + context collapsing for huge blocks', () => {
     const small = page.locator('#collapse-host-small')
 
     // The big block: two runs (before/after the change) × two panes = 4
-    // spacers; only the changed row + COLLAPSE_CONTEXT (3) rows around it
-    // render (7 rows × 2 panes).
+    // spacers (the spacer itself is shared between both panes regardless of
+    // which one is the canonical/metadata-carrying side); only the changed
+    // row + COLLAPSE_CONTEXT (3) rows around it render (7 rows). Only the
+    // new/right pane carries `data-row` (see "Only the new/right pane drives
+    // selection" in diff-render.md) — the old/left pane is display-only, so
+    // this counts ONE pane's worth of rows, not two.
     await expect(big.locator('[data-testid=collapsed-run]')).toHaveCount(4)
-    await expect(big.locator('[data-row]')).toHaveCount(14)
+    await expect(big.locator('[data-row]')).toHaveCount(7)
     // The spacer names the hidden row count in words (colorblind rule: the
     // text carries the meaning) — first run hides rows 0..196 (197 rows).
     await expect(big.locator('[data-testid=collapsed-run]').first()).toHaveText(
       '⋯ 197 ongewijzigde regels',
     )
-    // The changed row itself is rendered and still carries its aligned index.
-    await expect(big.locator('[data-row="200"]')).toHaveCount(2)
+    // The changed row itself is rendered and still carries its aligned index
+    // — once, on the new/right pane only.
+    await expect(big.locator('[data-row="200"]')).toHaveCount(1)
 
     // The small block renders every row, no spacer — behaviour unchanged.
     await expect(small.locator('[data-testid=collapsed-run]')).toHaveCount(0)
-    await expect(small.locator('[data-row]')).toHaveCount(200)
+    await expect(small.locator('[data-row]')).toHaveCount(100)
 
     // Clicking a spacer expands that run in place: the first run's rows come
     // back (in BOTH panes — the plan is shared, so they stay aligned), the
     // other run stays collapsed.
     await big.locator('[data-testid=collapsed-run]').first().click()
     await expect(big.locator('[data-testid=collapsed-run]')).toHaveCount(2)
-    await expect(big.locator('[data-row="0"]')).toHaveCount(2)
-    await expect(big.locator('[data-row]')).toHaveCount(14 + 197 * 2)
+    await expect(big.locator('[data-row="0"]')).toHaveCount(1)
+    await expect(big.locator('[data-row]')).toHaveCount(7 + 197)
   })
 })

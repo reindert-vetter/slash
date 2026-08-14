@@ -147,10 +147,13 @@ test('f/d/s zoom a drilled column\'s own granularity (group → line → call)',
   const activeRows = drillColumn.locator('div[class*="inset_3px_0_0"]')
   const underline = drillColumn.locator('span[class*="decoration-[#6366f1]"]')
 
-  // Lands on the first (group-granularity) change on drilling in — a single row.
+  // Lands on the first (group-granularity) change on drilling in — a single
+  // row. Only the new/right pane ever shows the active bar (see "Only the
+  // new/right pane drives selection" in diff-render.md) — the old/left pane
+  // is display-only, so this is one row, not one row × two panes.
   await expect(activeRows.first()).toBeVisible()
   const groupCount = await activeRows.count()
-  expect(groupCount).toBe(2) // one row × two panes
+  expect(groupCount).toBe(1) // one row × the new/right pane only
 
   // f → call directly (skipping line, single-row group): the call segment gets
   // the indigo underline, same row count as before.

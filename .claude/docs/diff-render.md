@@ -148,8 +148,11 @@ Shift+↑/↓ built (see "Shift+↑/↓" in keyboard-navigation.md) — just dri
   `codeDiff`/`codePane`/`unifiedCodeDiff`/`paneHTML`'s already long positional
   parameter lists — a row div lives inside whichever pane's `<code>` is
   currently rendered, and `data-row` (only on the canonical metadata-carrying
-  line, see `rowCellHTML`'s own doc comment) already uniquely identifies it
-  regardless of which pane/side the click landed on. `onBlockMouseMove` only
+  line, see `rowCellHTML`'s own doc comment) already uniquely identifies it.
+  In a **split** diff that canonical line is now, unconditionally, the
+  new/right pane's own row — a click landing in the old/left pane finds no
+  `data-row` ancestor at all and is a no-op — see "Only the new/right pane
+  drives selection" below. `onBlockMouseMove` only
   acts while `e.buttons` still shows the primary button held, so a plain hover
   costs nothing and no separate "dragging" flag or global `mouseup` listener
   is needed — mouseup anywhere simply clears `e.buttons` for every later
@@ -280,6 +283,88 @@ directly on a real (Prism-multi-token) call-segment selects it at `'call'`
 with the whole segment's hover toggling together, a drilled column's
 double-click still only selects the one line, and a click on the look-ahead
 preview focuses + selects it).
+
+## Only the new/right pane drives selection — the old/left pane is display-only
+
+Bug report: in a 'split' diff the old and new pane each render through their
+OWN independent `.innerHTML` binding (`codePane`, one call for `'left'`, one
+for `'right'`), and both used to read the SAME `activeGroup()` — two
+independent reactive consumers of one shared value, the exact "co-subscribers
+can drop an update" shape from `.claude/rules/arrowjs-pitfalls.md`. arrow.js
+could drop the re-run for ONE of the two after an approve-driven auto-advance
+moved `state.change`, leaving the old pane's own binding frozen on the
+PREVIOUS cursor — visibly, two indigo active-row bars on two DIFFERENT rows at
+once, one per pane. Reviewer follow-up, explicitly confirmed per case below:
+"ik wil dat we alleen nieuwe kunnen selecteren en navigeren".
+
+Fix: the old/left pane of a **split** diff no longer has any selection state
+of its own at all — `codeDiff`'s split branch passes the left `codePane` call
+a permanently-null `activeGroup` stub (`NO_ACTIVE_GROUP`) and `emitMeta:
+false` (threaded through `codePane`/`paneHTML` into `rowCellHTML`'s existing
+`opts.emitMeta`, the exact same suppression `unifiedRowHTML` already applies
+to its own decorative OLD half of a paired unified row). This removes not just
+the symptom but the race itself: with the left pane's binding no longer
+reading `activeGroup()`/`state.change` at all, there is nothing left to
+compute independently, so it can never disagree with the right pane again.
+
+Concretely, only the new/right pane's rows now carry: the active cursor bar
+(and its dimmed/grey non-focused variant), `data-row` (so a click there is a
+no-op — see below), `data-changed`, the `data-change-active`(-end) anchor, the
+✓ approve checkmark, and the "onderliggende code" line-summary badge.
+**Including a PURE DELETION** (a removed line with no replacement — the
+right/new side is an empty filler row): reviewer answer "als het side by side
+is, moet rechts een lege regel zichtbaar zijn" — `approveHere`'s existing
+`sideKey === 'right' || r.right == null` fallback for the old/left pane is now
+gated behind the same `emitMeta` flag, so on the split stand's canonical
+right pane it is simply always true (there is no more "or" clause needed
+there), and the checkmark/active bar land on the empty filler row instead of
+the old text. Nothing else needed to change for this: `changeLines`/
+`changeGroups`/`unitAtRow` already operate on the aligned ROW index regardless
+of side, so ↑/↓/f/d/s already reach a pure-deletion row exactly as before —
+only WHICH pane paints the result moved.
+
+**Scope is 'split' only.** The **unified** stand ('a's 2nd stand, one "old (-)
+above new (+)" column, see below) is untouched: it was never two independent
+bindings in the first place (`unifiedHTML` is ONE `.innerHTML` binding), and a
+lone old-only row there (a pure deletion, or any one-sided row) already gets
+full canonical treatment on its own line — reviewer confirmed this stays as
+the exception: "als het boven elkaar is, mag het het wel keuren". A wholly
+`removed` block/file (`effectiveOnly === 'left'` in `codeDiff` — there is no
+"new" pane to defer to at all, only ONE pane renders) is likewise untouched —
+reviewer: "blijft normaal werken".
+
+**Hover is the one thing that still couples both sides**, even though only
+the new/right pane is a click target — reviewer answer "het moet hover state
+krijgen als nieuw connected ook hoverd, en andersom". Every row (regardless of
+`emitMeta`) carries a plain, unconditional `data-row-pair="<i>"` (distinct
+from `data-row`, which stays canonical-only); a delegated `mouseover`/
+`mouseout` pair (`onRowPairHover`, wired next to the existing
+`onCallSegHover` on the card's own `<article>`) toggles a plain marker class,
+**`row-pair-hover`** (`index.html`'s own `<style>`, same grey inset-bar tokens
+as the ordinary per-row hover affordance, light + the two dark mirrors — same
+"custom class, not a Tailwind `hover:` variant" reasoning as `.call-seg-hover`
+right above it: the old and new pane are two entirely separate `<code>`
+elements, so a bare CSS `:hover` can never reach across to the other one), on
+EVERY element sharing that index — including the hovered element itself, since
+the old/left pane also lost its own native `cursor-pointer`/`hover:` classes
+(now gated on `emitMeta` too, next to the existing `focused` gate) precisely
+because it is no longer a click target: showing a pointer cursor there would
+be misleading.
+
+Test: `tests/diff-old-pane-display-only.spec.mjs` (the old pane never carries
+`data-row`/an active tint, a click there is a no-op, an approve-driven
+auto-advance never leaves a stale bar on it, hovering either side lights up
+both, and the pure-deletion empty-filler-row case above). Every pre-existing
+count-based assertion of "one row × two panes" (`tests/navigate.spec.mjs`,
+`tests/drill-focus.spec.mjs`) was updated to "one row × the new/right pane
+only" — that was the bug's own symptom baked into the previous expectation,
+not a coincidental unrelated count. `updateHints` (`Block.mjs`) needed one
+matching fix: it used to resolve "the" scrolling pane via the first
+`[data-scrollsync]` match in document order, which is the old/left pane in
+'split' — now display-only, so its rows no longer carry `data-changed` at
+all. It now prefers `[data-pane="new"] [data-scrollsync]`, falling back to the
+old plain query only for the one render path with no "new" pane at all (a
+wholly removed block).
 
 ## The active-row cursor bar dims when the diff doesn't own the keyboard
 

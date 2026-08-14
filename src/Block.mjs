@@ -718,8 +718,14 @@ export default function Block(b, opts = {}) {
       data-diff-col-key="${'diff:' + b.id}"
       @mousedown="${(e) => onBlockMouseDown(e, onRowMouseDown)}"
       @mousemove="${(e) => onBlockMouseMove(e, onRowMouseMove)}"
-      @mouseover="${(e) => onCallSegHover(e, true)}"
-      @mouseout="${(e) => onCallSegHover(e, false)}"
+      @mouseover="${(e) => {
+        onCallSegHover(e, true)
+        onRowPairHover(e, true)
+      }}"
+      @mouseout="${(e) => {
+        onCallSegHover(e, false)
+        onRowPairHover(e, false)
+      }}"
     >
       ${() =>
         // Any non-preview/look-ahead card may be dragged wider/narrower —
@@ -1154,6 +1160,12 @@ function svgSlot(b) {
   `
 }
 
+// NO_ACTIVE_GROUP is the stub `activeGroup` the split stand's old/left pane
+// gets — see "Only the new/right pane drives selection" below. A stable
+// module-level function (never a fresh closure per render) so it never looks
+// like a changing dependency of its own.
+const NO_ACTIVE_GROUP = () => null
+
 // codeDiff renders the old/new source side by side under the block info. Old on
 // the left, new on the right. The two sides are line-aligned by an LCS diff
 // (alignRows, below) so unchanged lines sit on the same row, a removed line
@@ -1298,6 +1310,18 @@ function codeDiff(
   // commentRangeFn — the old/left pane keeps the empty default, since the
   // comment-range bar marks the right edge of the diff as a whole, not of
   // each half (see rowCellHTML's commentRangeBar).
+  //
+  // Only the new/right pane drives selection here (see "Only the new/right
+  // pane drives selection" in diff-render.md): the left pane gets a
+  // permanently-null activeGroup (never highlights, never underlines) and
+  // `emitMeta:false` (no data-row/checkmark/change-active anchor/line-summary
+  // badge — the exact same suppression unifiedRowHTML already applies to its
+  // own decorative OLD half). This is also what fixes the two-independent-
+  // bindings race that used to let the old and new pane show the active bar
+  // on two DIFFERENT rows at once: with the left pane's own `.innerHTML`
+  // binding no longer reading `activeGroup()`/`state.change` at all, there is
+  // only one binding left that can ever compute "active" — nothing left to
+  // race against.
   return html`
     <div
       class="${'relative flex flex-1 overflow-hidden border-t border-slate-100 dark:border-zinc-800/60 ' +
@@ -1305,7 +1329,7 @@ function codeDiff(
       data-testid="code-diff"
       data-hints="${() => (hintsEnabled() ? 'on' : 'off')}"
     >
-      ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', activeGroup, 'w-1/2', approvedFn, commentedFn, approvedCallsFn, false, lineSummaryFn, diffActive, isYaml)}
+      ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', NO_ACTIVE_GROUP, 'w-1/2', approvedFn, commentedFn, approvedCallsFn, false, lineSummaryFn, diffActive, isYaml, undefined, false)}
       <div class="w-px shrink-0 bg-slate-100 dark:bg-zinc-800"></div>
       ${codePane('new', c.new, rows, 'right', 'border-emerald-100 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', activeGroup, 'w-1/2', approvedFn, commentedFn, approvedCallsFn, false, lineSummaryFn, diffActive, isYaml, commentRangeFn)}
       ${scrollHint('up')}
@@ -1385,7 +1409,17 @@ function scrollHint(dir) {
 // the scroll body's edges (top sits below the pane headers) so they float over
 // the code, not over the OLD/NEW header row.
 export function updateHints(container) {
-  const pane = container.querySelector('[data-scrollsync]')
+  // Prefer the new/right pane's scroller: it's the only one that still
+  // carries `data-changed` in a split diff (the old/left pane is
+  // display-only, see "Only the new/right pane drives selection" in
+  // diff-render.md) — `[data-scrollsync]` alone would grab whichever pane
+  // happens to come FIRST in document order, which is the old/left one in
+  // 'split'. Falls back to the plain query for a whole-removed block (only
+  // an old pane exists there at all) and every other stand, which all carry
+  // `data-pane="new"` on their one and only pane already.
+  const pane =
+    container.querySelector('[data-pane="new"] [data-scrollsync]') ||
+    container.querySelector('[data-scrollsync]')
   const up = container.querySelector('[data-hint="up"]')
   const down = container.querySelector('[data-hint="down"]')
   if (!pane || !up || !down) return
@@ -1468,6 +1502,14 @@ function codePane(
   diffActive = () => false,
   isYaml = false,
   commentRangeFn = () => new Set(),
+  // emitMeta: false ONLY for the split stand's old/left pane (see
+  // codeDiff's "Only the new/right pane drives selection") — suppresses
+  // data-row/the change-active anchor/the checkmark/the line-summary badge on
+  // this pane's own rows, the same suppression unifiedRowHTML already applies
+  // to its decorative OLD half. Every other call site keeps the default
+  // (true): a single-pane render (added/removed/'fit', or the split stand's
+  // own new/right pane) is always the canonical, metadata-carrying side.
+  emitMeta = true,
 ) {
   return html`
     <div class="${'flex min-w-0 min-h-0 flex-col ' + widthCls}" data-pane="${side}">
@@ -1475,8 +1517,10 @@ function codePane(
         <code
           class="language-php m-0 block py-2 font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300"
           @click="${(e) => onPaneClick(rows, e)}"
-          .innerHTML="${() =>
-            paneHTML(rows, sideKey, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn(), wrap, diffActive(), lineSummaryFn(), isYaml, commentRangeFn())}"
+          .innerHTML="${() => {
+            disarmRowPairHover()
+            return paneHTML(rows, sideKey, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn(), wrap, diffActive(), lineSummaryFn(), isYaml, commentRangeFn(), emitMeta)
+          }}"
         ></code>
       </div>
     </div>
@@ -1607,7 +1651,15 @@ function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, focused = 
     // that literal substring is what tests/diff-active-row-dim.spec.mjs
     // greps the `class` attribute for, and a *possible* hover class would
     // otherwise always match it regardless of actual `:hover` state.
-    if (focused)
+    //
+    // Gated on `emitMeta` too (not just `focused`): the split stand's old/left
+    // pane is never a click target (see "Only the new/right pane drives
+    // selection" in diff-render.md), so it gets neither `cursor-pointer` nor
+    // this native self-`:hover` — only the JS-driven `row-pair-hover` class
+    // below, which the delegated onRowPairHover also lights up on its new/
+    // right counterpart (and vice versa — reviewer request: "het moet hover
+    // state krijgen als nieuw connected ook hoverd, en andersom").
+    if (focused && emitMeta)
       cls += ' cursor-pointer hover:shadow-[inset_2px_0px_0px_#94a3b8] dark:hover:shadow-[inset_2px_0px_0px_#71717a]'
     if (ws) {
       // Whitespace-only re-alignment: no full-line tint (it isn't a real
@@ -1712,7 +1764,13 @@ function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, focused = 
   // call-arrow overlay (src/callArrows.mjs) to anchor an arrow on the exact
   // call-site row. Suppressed when emitMeta is false, see above.
   const dataRow = emitMeta ? ` data-row="${i}"` : ''
-  return `<div class="${cls}"${anchor}${anchorEnd}${flag}${dataRow}>${check}${gutterHtml}${body}${lineSummaryHtml}${commentRangeBar(
+  // data-row-pair carries the SAME aligned-row index as data-row, but
+  // unconditionally (regardless of emitMeta/canonical side) — see
+  // onRowPairHover above. Only the canonical (new/right) side is a click
+  // target, but hovering EITHER side must light up both, so both need a
+  // handle to find each other.
+  const dataRowPair = ` data-row-pair="${i}"`
+  return `<div class="${cls}"${anchor}${anchorEnd}${flag}${dataRow}${dataRowPair}>${check}${gutterHtml}${body}${lineSummaryHtml}${commentRangeBar(
     i,
     commentRange,
   )}</div>`
@@ -2063,12 +2121,85 @@ function onBlockMouseMove(e, cb) {
 // class toggle with no side effect on `state` at all, unlike the click/drag
 // handlers, which stay opt-in per card via `cb`.
 function onCallSegHover(e, on) {
+  if (isSpuriousHover(e)) return
   const el = e.target && e.target.closest && e.target.closest('[data-call-seg]')
   if (!el) return
   const row = el.closest('[data-row]')
   if (!row) return
   const seg = el.getAttribute('data-call-seg')
   row.querySelectorAll('[data-call-seg="' + seg + '"]').forEach((n) => n.classList.toggle('call-seg-hover', on))
+}
+
+// disarmRowPairHover/isSpuriousHover — a stationary mouse pointer can still
+// fire a genuine (not synthetic) `mouseover`/`mouseout` when the DOM
+// underneath it changes shape: a pane's `.innerHTML` is fully replaced on
+// every navigation step (a fresh `<div>` per row, see paneHTML/unifiedHTML),
+// so a reviewer whose mouse happens to rest anywhere over the diff while
+// stepping with the KEYBOARD would otherwise see `onRowPairHover`/
+// `onCallSegHover` toggle a class on every such step — a `class` attribute
+// mutation on every keystroke, exactly the "flicker" class of bug
+// `.claude/rules/arrowjs-pitfalls.md` warns about elsewhere, and measured
+// live via `tests/navigate.spec.mjs`'s "only patches the highlight"
+// mutation-count assertion.
+//
+// Same underlying idea as `overview.mjs`'s `hoverEnabled`/`lastMouseX`/
+// `lastMouseY` gate (a stationary pointer must not act after a repaint), but
+// keyed off COORDINATES rather than event ORDERING: an initial attempt armed
+// on the next `mousemove` and disarmed on repaint, trusting that a genuine
+// hover is always preceded by its own `mousemove` — false in practice
+// (browsers, and Playwright's own `.hover()`, can fire `mouseover` for a
+// freshly-entered element BEFORE the `mousemove` to that same position).
+// Instead: `disarmRowPairHover()` (called right before a pane's `.innerHTML`
+// is rewritten) snapshots the pointer's LAST KNOWN position; `isSpuriousHover`
+// compares an incoming mouseover/mouseout's own `clientX`/`clientY` against
+// that snapshot — identical coordinates mean the pointer never actually
+// moved since the DOM churned underneath it (spurious), different
+// coordinates mean a real hover (genuine), regardless of which event fires
+// first. `lastPtrX`/`lastPtrY` are kept live by every call (not just
+// mousemove), so the snapshot at disarm time is always fresh.
+let lastPtrX = null
+let lastPtrY = null
+let disarmedPtrX = null
+let disarmedPtrY = null
+function disarmRowPairHover() {
+  disarmedPtrX = lastPtrX
+  disarmedPtrY = lastPtrY
+}
+function isSpuriousHover(e) {
+  lastPtrX = e.clientX
+  lastPtrY = e.clientY
+  if (disarmedPtrX === null) return false
+  const spurious = e.clientX === disarmedPtrX && e.clientY === disarmedPtrY
+  if (!spurious) {
+    // A genuine move away confirms the guard already did its job — clear it
+    // so a later coincidental return to that exact pixel isn't misjudged.
+    disarmedPtrX = null
+    disarmedPtrY = null
+  }
+  return spurious
+}
+
+// onRowPairHover toggles `row-pair-hover` (index.html's `.row-pair-hover` —
+// the same grey inset bar the plain per-row hover affordance shows) on EVERY
+// row sharing the hovered row's `data-row-pair` index, including the row the
+// pointer is actually over. The old (left) and new (right) pane are two
+// entirely separate <code> elements in a split diff, so hovering one pane's
+// row has no way to reach its counterpart in the other pane through CSS
+// `:hover` alone — and since only the new/right pane keeps its own native
+// `cursor-pointer`/`hover:` classes (the old/left pane is never a click
+// target, see "Only the new/right pane drives selection" in
+// diff-render.md), the old pane needs this JS-driven class for its OWN
+// affordance too, not only to propagate to its counterpart. Delegated the
+// same way as onCallSegHover: always wired, a pure CSS class toggle with no
+// `state` side effect. Reviewer request: "het moet hover state krijgen als
+// nieuw connected ook hovert, en andersom".
+function onRowPairHover(e, on) {
+  if (isSpuriousHover(e)) return
+  const el = e.target && e.target.closest && e.target.closest('[data-row-pair]')
+  if (!el) return
+  const key = el.getAttribute('data-row-pair')
+  const root = e.currentTarget || el.closest('article') || el
+  root.querySelectorAll('[data-row-pair="' + key + '"]').forEach((n) => n.classList.toggle('row-pair-hover', on))
 }
 
 // collapsePlan returns null (render every row — the small-block fast path,
@@ -2224,6 +2355,9 @@ function paneHTML(
   lineSummaries = null,
   isYaml = false,
   commentRange = null,
+  // emitMeta: threaded straight from codePane — see its own doc comment.
+  // false ONLY for the split stand's old/left pane.
+  emitMeta = true,
 ) {
   const parts = []
   const pushRow = (i) => {
@@ -2232,15 +2366,28 @@ function paneHTML(
     // call segments is approved, every segment gets a dot marker (solid =
     // approved, hollow = waiting) UNDER its own first character, inside the
     // code line itself (see segDotMarkers). Only the side that actually shows
-    // the segments draws them — the same canonical side the ✓/💬 use — and
-    // since they are ::after pseudo-elements they add no row and no width, so
-    // both panes stay line-for-line aligned for free.
+    // the segments draws them — the same canonical side the ✓/💬 use, so this
+    // now agrees with emitMeta too — and since they are ::after
+    // pseudo-elements they add no row and no width, so both panes stay
+    // line-for-line aligned for free.
     const partial = partialCallApproval(rows, i, approved, approvedCalls)
-    const approveHere = sideKey === 'right' || r.right == null
+    const approveHere = emitMeta && (sideKey === 'right' || r.right == null)
     const segDots =
       partial && approveHere ? segDotMarkers(sideKey === 'left' ? r.left : r.right, partial) : null
     parts.push(
-      rowCellHTML(r, i, sideKey, group, approved, commented, wrap, focused, { commentRange }, lineSummaries, segDots),
+      rowCellHTML(
+        r,
+        i,
+        sideKey,
+        group,
+        approved,
+        commented,
+        wrap,
+        focused,
+        { commentRange, emitMeta },
+        lineSummaries,
+        segDots,
+      ),
     )
   }
   const plan = collapsePlan(rows, commented)
@@ -2371,8 +2518,10 @@ function unifiedCodeDiff(
         <code
           class="language-php m-0 block py-2 font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300"
           @click="${(e) => onPaneClick(rows, e)}"
-          .innerHTML="${() =>
-            unifiedHTML(rows, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn(), diffActive(), lineSummaryFn(), isYaml, commentRangeFn())}"
+          .innerHTML="${() => {
+            disarmRowPairHover()
+            return unifiedHTML(rows, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn(), diffActive(), lineSummaryFn(), isYaml, commentRangeFn())
+          }}"
         ></code>
       </div>
       ${scrollHint('up')}
