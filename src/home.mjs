@@ -9740,6 +9740,34 @@ function contextMenuMode() {
 }
 
 function onKeydown(e) {
+  // Cmd+[ / Cmd+] (reviewer request) are a plain remap onto ArrowLeft/
+  // ArrowRight — checked FIRST, before every other branch, so the rest of
+  // this function (and every helper it calls) never needs to know these keys
+  // exist: build a minimal event-like object with `key` swapped and recurse
+  // into this same function. The remapped object still carries the real
+  // `metaKey`/`ctrlKey`, so `isModifiedKey(e)` — used further down to bypass
+  // the caret-in-text-field exception, see editableCaretCanMoveLeft/Right's
+  // own callers — still reports "modified" for it, which is exactly why
+  // Cmd+[/] always navigates instead of respecting a caret's own position
+  // like a plain ArrowLeft/ArrowRight would. `preventDefault` is a no-op here
+  // (nothing browser-native to cancel for a plain object) — the ORIGINAL
+  // event still gets prevented right below, so the browser's own Cmd+[/]
+  // history-navigation shortcut is suppressed regardless of which nested
+  // branch ends up handling the remapped key.
+  if (isModifiedKey(e) && (e.key === '[' || e.key === ']')) {
+    e.preventDefault()
+    onKeydown({
+      key: e.key === '[' ? 'ArrowLeft' : 'ArrowRight',
+      shiftKey: e.shiftKey,
+      metaKey: e.metaKey,
+      ctrlKey: e.ctrlKey,
+      target: e.target,
+      preventDefault: () => {},
+      stopPropagation: () => e.stopPropagation(),
+    })
+    return
+  }
+
   // While the image lightbox is open it owns the keyboard completely — →/←
   // walk the other screenshots from the same Markdown body, Escape closes —
   // checked FIRST, mirroring the command palette's own `menu.open` guard
@@ -9902,9 +9930,14 @@ function onKeydown(e) {
       // a comment card) jump into the thread — only hijack the key when the
       // caret has nowhere left to go on that side (empty/at the start resp.
       // at the end, e.g. a freshly opened composer — that keeps its
-      // long-standing nav meaning).
-      !(e.key === 'ArrowLeft' && editableCaretCanMoveLeft()) &&
-      !(e.key === 'ArrowRight' && editableCaretCanMoveRight()) &&
+      // long-standing nav meaning). `isModifiedKey(e)` short-circuits this
+      // exception: it's only ever true here for the Cmd+[/Cmd+] remap above
+      // (a plain ArrowLeft/ArrowRight from the keyboard never carries a
+      // modifier down this path), and Cmd+[/] is no native caret-move
+      // shortcut in a text field, so it must always hit the nav-chain
+      // instead of moving/word-jumping the caret.
+      !(e.key === 'ArrowLeft' && editableCaretCanMoveLeft() && !isModifiedKey(e)) &&
+      !(e.key === 'ArrowRight' && editableCaretCanMoveRight() && !isModifiedKey(e)) &&
       // ArrowUp/ArrowDown get the exact same treatment on the vertical axis —
       // a wrapped, multi-visual-line textarea must let the caret walk up/down
       // its own rows first, only hijacking the key once the caret is already

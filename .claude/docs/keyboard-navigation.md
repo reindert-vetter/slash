@@ -155,6 +155,26 @@ Transitions, and how they differ from the older per-mechanism behaviour:
 - `state.showDescription` deliberately lives **outside** the URL — ephemeral
   cursor state, not a navigation position worth restoring.
 
+### `Cmd+[` / `Cmd+]` (Mac) — `Ctrl+[` / `Ctrl+]` elsewhere — remap onto `←`/`→`
+
+Reviewer request for a chord that works regardless of which stop/field
+currently owns the keyboard. `onKeydown` (`home.mjs`) checks
+`isModifiedKey(e) && (e.key === '[' || e.key === ']')` **first, before every
+other branch**, and recurses into itself with a minimal object whose `key` is
+swapped to `'ArrowLeft'`/`'ArrowRight'` — so it is not a second, parallel nav
+mechanism, it runs the exact same `←`/`→` logic described in this whole
+section, stop for stop.
+
+**One deliberate difference from a plain `←`/`→`:** inside a comment/reply/
+Claude-chat text field, an ordinary `ArrowLeft`/`ArrowRight` defers to the
+caret (`editableCaretCanMoveLeft`/`Right` in `relatedActive()`'s branch) —
+`Cmd+[`/`Cmd+]` never does. Native browsers bind `Cmd+[`/`Cmd+]` to
+history back/forward, never to caret movement, so there is no existing
+in-field meaning to preserve; `isModifiedKey(e)` (still true on the recursed
+object, since it carries the original `metaKey`/`ctrlKey`) short-circuits that
+one exception, so the chord always drives the nav chain, even mid-text. Test:
+`tests/cmd-bracket-nav.spec.mjs`.
+
 ### Focus highlight per stop
 
 **One single, app-wide border rule, no per-block exceptions:** every
