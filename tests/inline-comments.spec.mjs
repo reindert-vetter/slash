@@ -306,18 +306,26 @@ test.describe('PR Review Tree — inline comment blocks', () => {
 
   // compactConversation's preview used to hard-truncate at 1 line — fine for a
   // short human reply, but it cut off a multi-sentence AI-controle finding
-  // (code_warning, source 'ai') after just a few words. It now clamps at 3
-  // lines instead (line-clamp-3), so a typical finding is readable without a
-  // click. See compactConversation's own doc comment in RelatedPanel.mjs.
-  test('an unfocused AI-controle finding clamps at 3 lines, not 1', async ({ page }) => {
+  // (code_warning, source 'ai') after just a few words. It then clamped at 3
+  // lines instead (line-clamp-3). That in turn got superseded by
+  // autoExpandLoneComment (RelatedPanel.mjs): with only 1 or 2 comments on the
+  // unit and no Onderliggende code at all, the clamp is lifted entirely — a
+  // 3-line preview only earns its keep once there's something else in the
+  // column competing for room. PR 12903's blocks have no relations/callresolve
+  // fixture, so `rc.children` is empty here — exactly the condition that
+  // triggers the full expansion. See compactConversation's own doc comment.
+  const longBody =
+    'De hardening vervangt wel de interpolatie in de run-bodies, maar laat het grootste resterende injectiepad staan: ' +
+    'de volledige workflow-diff wordt met een vast delimiter naar de omgeving geschreven, waardoor een diff-regel die ' +
+    'toevallig dezelfde tekst bevat de heredoc vroegtijdig kan afsluiten en willekeurige variabelen kan overschrijven.'
+
+  test('an unfocused AI-controle finding shows in full when it is the only comment and there is no underlying code', async ({
+    page,
+  }) => {
     await page.goto('/pr/12903')
     await ready(page)
     const first = await ident(page)
 
-    const longBody =
-      'De hardening vervangt wel de interpolatie in de run-bodies, maar laat het grootste resterende injectiepad staan: ' +
-      'de volledige workflow-diff wordt met een vast delimiter naar de omgeving geschreven, waardoor een diff-regel die ' +
-      'toevallig dezelfde tekst bevat de heredoc vroegtijdig kan afsluiten en willekeurige variabelen kan overschrijven.'
     const created = await page.request.post('/api/workflows/task_code_comment', {
       data: {
         pr: 12903,
@@ -337,17 +345,37 @@ test.describe('PR Review Tree — inline comment blocks', () => {
     await page.goto('/pr/12903?sel=' + encodeURIComponent(first.fileLine))
     await waitBlock(page, first.label)
 
-    // Not focused (nothing was clicked) — stays compact.
+    // Not focused (nothing was clicked) — still no reply field/thread, but the
+    // clamp is gone: a lone comment with nothing else in the column deserves
+    // its full description.
     const item = page.getByTestId('inline-comments').getByTestId('comment-item').filter({ hasText: 'De hardening vervangt' })
     await expect(item).toHaveAttribute('data-expanded', 'false')
+    const preview = item.locator('span.text-xs.font-medium').first()
+    await expect(preview).not.toHaveClass(/line-clamp-3/)
+    const clamp = await preview.evaluate((el) => getComputedStyle(el).webkitLineClamp)
+    expect(clamp).toBe('none')
+  })
+
+  // The same finding clamps again as soon as a THIRD comment lands on the
+  // unit — autoExpandLoneComment only lifts the clamp for 1 or 2 comments.
+  test('the clamp comes back once a third comment lands on the same unit', async ({ page }) => {
+    await page.goto('/pr/12903')
+    await ready(page)
+    const first = await ident(page)
+
+    for (const body of [longBody, 'tweede reactie op dezelfde regel', 'derde reactie op dezelfde regel']) {
+      const created = await page.request.post('/api/workflows/task_code_comment', {
+        data: { pr: 12903, file: first.file, line: 1, author: 'reviewer', body, label: first.label, rowStart: -1, rowEnd: -1 },
+      })
+      expect(created.ok()).toBeTruthy()
+    }
+
+    await page.goto('/pr/12903?sel=' + encodeURIComponent(first.fileLine))
+    await waitBlock(page, first.label)
+
+    const item = page.getByTestId('inline-comments').getByTestId('comment-item').filter({ hasText: 'De hardening vervangt' })
     const preview = item.locator('span.line-clamp-3').first()
     await expect(preview).toHaveClass(/line-clamp-3/)
-    await expect(preview).not.toHaveClass(/\btruncate\b/)
-    // line-clamp-3 (a webkit line-clamp) reports itself via the CSS box, not
-    // a class assertion alone — assert the actual computed style too, so a
-    // future accidental revert to `truncate` (1 line, no line-clamp) is
-    // caught even if some other class still happened to contain the string
-    // "line-clamp-3" as a substring.
     const clamp = await preview.evaluate((el) => getComputedStyle(el).webkitLineClamp)
     expect(clamp).toBe('3')
   })

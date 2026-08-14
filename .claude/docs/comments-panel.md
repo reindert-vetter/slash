@@ -799,6 +799,25 @@ noise the block-wide AI anchor fix removed (see `.claude/docs/workflows-analysis
 A disjoint unit stays hidden either way. Test:
 `tests/comment-range-first-row.spec.mjs`.
 
+### A not-selected card auto-expands its body when there's little else to see
+
+A third card state next to "not selected, collapsed, no input"
+(`compactConversation`'s ordinary `line-clamp-3`) and "selected, expanded, with
+input" (`expandedConversation`, the full thread + reply field): **not
+selected, but fully expanded, no input**. `autoExpandLoneComment()`
+(`RelatedPanel.mjs`) lifts the 3-line clamp on `compactConversation`'s body
+whenever this unit has only 1 or 2 comments **and** no Onderliggende code at
+all (`rc.children.length === 0`, the same source `related-code`'s own "Geen
+onderliggende code." reads) — reviewer request: a clamp only earns its keep as
+a space-saver when there's something else in the column competing for room; an
+AI-risicowaarschuwing sitting alone above an empty Underlying-code card lost
+most of its own description behind a click for no reason. Still no thread, no
+reply textarea — those only appear once the card is genuinely selected
+(`commentCard`'s existing selected/focused branch, unchanged). Tests:
+`tests/inline-comments.spec.mjs` ("shows in full when it is the only comment
+and there is no underlying code" / "the clamp comes back once a third comment
+lands on the same unit").
+
 ### The focused comment's range gets a bar along the right edge of the diff
 
 Once the keyboard sits **in** a comment, the diff draws a thin vertical bar over

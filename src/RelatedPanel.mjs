@@ -5112,6 +5112,15 @@ function viewingBubble(c, r, i, total, isActive) {
 // while giving a typical 2-4 sentence finding enough room to read in place;
 // a genuinely long comment still ends in "…" and needs a click to read in
 // full.
+//
+// `full` (autoExpandLoneComment, below) lifts that clamp entirely, WITHOUT
+// turning this into expandedConversation — no thread, no reply field, still
+// a plain clickable summary card. Reviewer request: when there is nothing
+// else in this column to look at (1 or 2 comments and no Onderliggende code
+// at all — see "Geen onderliggende code." in RelatedPanel), a 3-line clamp
+// only hides the one thing worth reading for no space-saving reason. This is
+// a genuine third state next to "collapsed, no input" and "selected,
+// expanded, with input": not-selected but fully expanded, no input.
 // truncateMiddle — shortens a string in the MIDDLE instead of the end, so
 // both the start and the end stay readable. Used for a file path (see the
 // comment-meta line below): a plain end-truncate ("resources/admin/…/huddl…")
@@ -5172,7 +5181,18 @@ function pendingCommentBubble(p) {
   `
 }
 
-function compactConversation(c, i) {
+// autoExpandLoneComment — true while this unit's comments deserve the full,
+// unclamped body: only 1 or 2 of them, and no Onderliggende code sitting
+// right below to compete for attention (rc.children, the exact same source
+// RelatedPanel's own "Geen onderliggende code." check reads). Missing/absent
+// underlying code is the trigger, not merely "few comments" — with real
+// children below, the clamp still earns its keep as a space-saver.
+function autoExpandLoneComment() {
+  const list = visibleComments()
+  return list.length > 0 && list.length <= 2 && rc.children.length === 0
+}
+
+function compactConversation(c, i, full) {
   const who = identityOf(c.source, c.author, c.avatarUrl)
   return html`
     <button
@@ -5206,7 +5226,9 @@ function compactConversation(c, i) {
           ${() => sendFailedBadge('reply:' + c.id)}
         </span>
         <span
-          class="line-clamp-3 [overflow-wrap:anywhere] text-xs font-medium text-slate-800 dark:text-zinc-200"
+          class="${full
+            ? '[overflow-wrap:anywhere] text-xs font-medium text-slate-800 dark:text-zinc-200'
+            : 'line-clamp-3 [overflow-wrap:anywhere] text-xs font-medium text-slate-800 dark:text-zinc-200'}"
           .innerHTML="${commentBody(c, threadFenceStartIndexes(c).get('origin:' + c.id) ?? 0)}"
         ></span>
         <span class="truncate text-[11px] leading-snug text-slate-500 dark:text-zinc-500" data-testid="comment-meta"
@@ -5380,7 +5402,7 @@ function commentCard(c, i, openCommentMenu) {
         (selI() === i && (cs.focus === 'comment' || cs.focus === 'thread')) ||
         (cs.focus === 'claude' && chatAnchorComment() && chatAnchorComment().id === c.id)
           ? expandedConversation(c, openCommentMenu)
-          : compactConversation(c, i)}
+          : compactConversation(c, i, autoExpandLoneComment())}
     </div>
   `
 }
