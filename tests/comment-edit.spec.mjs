@@ -221,8 +221,16 @@ test.describe('PR Review Tree — editing an own message', () => {
 
     // The thread cursor (pct) is released: ArrowDown now moves the sidebar
     // cursor along the ordinary block-index loop instead of walking the
-    // (now exited) thread again — with only this one row in the list, that
-    // loop's next stop is the search box.
+    // (now exited) thread again. This comment (kind:'issue', open, not an AI
+    // finding) is comment_batch-eligible, so the loop's next stop is the
+    // batch-action row (state.batchRowFocused, see stepListSelection in
+    // home.mjs) rather than the search box straight away.
+    await page.keyboard.press('ArrowDown')
+    const batchRow = page.getByTestId('batch-action-row')
+    await expect(batchRow).toHaveClass(/bg-indigo-50/)
+
+    // One more step reaches the search box — the loop's final stop, since
+    // there's nothing else below the batch row here.
     await page.keyboard.press('ArrowDown')
     await expect(page.getByTestId('block-search')).toBeFocused()
   })

@@ -1,4 +1,4 @@
-import { test, expect, appReady } from './_fixtures.mjs'
+import { test, expect, appReady, leaveSearchBox } from './_fixtures.mjs'
 
 // The PR overview (/pr-overview) is a live GitHub-style inbox. Under test the Go
 // bridge serves tests/fixtures/inbox.json (SLASH_GITHUB=off + SLASH_INBOX), so
@@ -92,6 +92,16 @@ test.describe('PR Review Tree — PR inbox', () => {
 
     await openTree.click()
     await expect(page).toHaveURL(/\/pr\/12903/)
+    // This is a real `location.href=` navigation (treeUrl/openTree, not
+    // `page.goto()`), so it bypasses the `page.goto()` wrapper in
+    // `_fixtures.mjs` that skips past stop 1 for every other spec. A fresh
+    // `/pr/<id>` open with no `?sel=` lands on stop 1 (state.showDescription,
+    // see "A fresh /pr/<id> open lands on the PR-description column" in
+    // pages-and-routing.md), which also suppresses the block-row highlight
+    // (rowFocused, BlockList.mjs) until the reviewer steps into the index —
+    // so leave it the same way a reviewer/the wrapper would.
+    await leaveSearchBox(page)
+    await page.keyboard.press('ArrowRight')
     const firstRow = page.locator('[data-testid="block-row"]').first()
     await expect(firstRow).toBeVisible()
     // No `sel` param is carried over, so state.selected keeps its default (0):

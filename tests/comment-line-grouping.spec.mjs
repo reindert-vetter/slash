@@ -80,7 +80,16 @@ test.describe('comment-index rows grouped per line', () => {
     await expect(rowB).not.toContainText('· +1')
   })
 
-  test("Space resolves a group's comments one at a time", async ({ page }) => {
+  test("Space toggles the group row's batch checkbox; \"Resolve comment\" resolves its comments one at a time", async ({
+    page,
+  }) => {
+    // Space on a comment row no longer resolves it outright (see spaceKey,
+    // home.mjs, commit "Fix comment_batch checkbox keyboard interaction:
+    // Space toggles, x removed" — reported: resolving via a single keypress
+    // was too easy to trigger by accident once the row also carries a
+    // comment_batch checkbox). Resolving now goes through the row's own Enter
+    // menu ("Resolve comment", the default item for the reviewer's own
+    // comment — prCommentCommandsFor).
     const resolved = []
     await page.route('**/api/workflows/run-grp-1/signals/reply', async (route) => {
       resolved.push('grp-1')
@@ -103,16 +112,27 @@ test.describe('comment-index rows grouped per line', () => {
     await row.click()
     await expect(row.getByTestId('block-approval')).toHaveText('0/2')
 
-    // First Space resolves the group's first still-open comment (grp-1).
+    // The row's checkbox is checked by default (batchCheckbox, BlockList.mjs
+    // — comment_batch's "hand over everything" default). Space toggles it,
+    // exactly like clicking it would — no resolve Signal fires.
+    const checkbox = row.getByTestId('batch-checkbox')
+    await expect(checkbox).toBeChecked()
     await page.keyboard.press('Space')
+    await expect(checkbox).not.toBeChecked()
+    await expect(resolved).toEqual([])
+
+    // "Resolve comment" (the Enter palette's default item for the reviewer's
+    // own comment) resolves the group's first still-open comment (grp-1).
+    await page.keyboard.press('Enter')
+    const menu = page.getByTestId('command-menu')
+    await expect(menu).toBeVisible()
+    await menu.getByTestId('command-row').filter({ hasText: 'Resolve comment' }).click()
     await expect.poll(() => resolved).toEqual(['grp-1'])
 
     // The read model now reports grp-1 resolved — a resolved, non-mentioning
     // comment drops out of indexComments() entirely (unchanged, pre-existing
     // behavior), so the group's own candidate set shrinks to just grp-2
-    // rather than accumulating "1/2". Space must still progress onto grp-2
-    // instead of silently no-op'ing (there is no longer a resolved grp-1 in
-    // the group to get stuck on).
+    // rather than accumulating "1/2".
     mock.serve([
       anchoredComment('grp-1', 'graag nullsafe hier', 1, { source: '', status: 'resolved' }),
       anchoredComment('grp-2', 'en hier ontbreekt een null-check', 1, {
@@ -124,8 +144,11 @@ test.describe('comment-index rows grouped per line', () => {
     // Same row, now showing the remaining unresolved comment's own snippet.
     const rowAfter = page.locator('[data-idx]').filter({ hasText: 'en hier ontbreekt een null-check' })
     await expect(rowAfter.getByTestId('block-approval')).toHaveText('0/1')
+    await rowAfter.click()
 
-    await page.keyboard.press('Space')
+    await page.keyboard.press('Enter')
+    await expect(menu).toBeVisible()
+    await menu.getByTestId('command-row').filter({ hasText: 'Resolve comment' }).click()
     await expect.poll(() => resolved).toEqual(['grp-1', 'grp-2'])
   })
 })
