@@ -250,10 +250,17 @@ the plan, read by `POSTAPPROVE_COMMANDS`'s label function). Test:
   **parent** column (the previous drilled column, or from level 1 the top-level
   block). The closed child reappears in that parent's Underlying-code list on its
   own, since the list is driven by `focusedBlock()` via the `setRelated` watch.
-  Repeated `←` peels back level by level.
+  Repeated `←` peels back level by level. **Also reachable by mouse:** the
+  `block-close-column` button in that column's own header
+  (`Block.mjs`'s `blockCloseColumnButton`) calls the exact same
+  `closeDrilledColumn()` (`home.mjs`) `←` runs at `focusLevel > 0` — see
+  "Every diff card/column also has a mouse way back" in
+  `.claude/docs/mouse-navigation.md`.
 - **Only at level `0` does `←` close the whole diff session**
   (`state.mode='list'`), and only then are `state.drill`/`state.drillCursor`
-  cleared: drilled columns only mean anything within *this* session.
+  cleared: drilled columns only mean anything within *this* session. The
+  top-level card's own `block-leave-diff` button (`blockLeaveDiffButton`)
+  calls the matching `leaveDiffToList()`.
 - **Nothing else may flip `state.mode` to `'list'` while there's drilling.**
   `ensureCode`'s "block with no navigable changes → back to list" fallback (for a
   restored `?mode=diff` URL) is gated to the resting position

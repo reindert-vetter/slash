@@ -29,6 +29,7 @@ function** the key runs — never a parallel implementation. Concretely:
 | Focusing the Claude chat composer (click or Tab), on an already-anchored conversation | `→` from `'comment'` into it | "Clicking straight into the composer…" in `.claude/docs/claude-chat-panel.md` |
 | A `claude-question-option` chip | typing that same answer as free text (the backend records the next message as the open question's answer either way) | `.claude/docs/claude-chat-panel.md` |
 | `block-open-menu` / `pr-menu-button` / `comment-detail-menu` / `claude-chat-menu` (each opens `openMenu(...)`) | `Enter` on the same target | "Every menu also has a mouse entry point" below |
+| `block-leave-diff` (top-level card) / `block-close-column` (a drilled column) | `←` on the diff (`leaveDiffToList`/`closeDrilledColumn`) | "Every diff card/column also has a mouse way back" below |
 
 Two consequences worth keeping in mind when adding a click handler:
 
@@ -134,6 +135,56 @@ render-prop). The Claude column reuses the **existing**
 `openClaudeMenuFromComposer` (`RelatedPanel.mjs`) for both its call sites, so
 there's still exactly one function that calls `claudeMenuOpener`. Test:
 `tests/mouse-menu-buttons.spec.mjs`.
+
+## Every diff card/column also has a mouse way back
+
+Until this was added, `←` was the only way out of a diff session or out of a
+drilled Underlying-code column — clicking a collapsed rail (`expandColumn`,
+above) jumps several levels at once, but there was no click that did just
+what a single `←` press does. Two small icon buttons in `Block.mjs`'s header
+row close that gap, each calling the exact function `←` already runs at that
+depth (`onKeydown`'s `ArrowLeft` branch in `state.mode==='diff'`, `home.mjs`):
+
+| Button (`data-testid`) | Calls | Rendered on | Icon |
+|---|---|---|---|
+| `block-leave-diff` | `leaveDiffToList()` | the top-level block card (`focusLevel===0`) | a bulleted list |
+| `block-close-column` | `closeDrilledColumn()` | the currently focused drilled column | a chevron docked against a bar |
+
+`leaveDiffToList`/`closeDrilledColumn` (`home.mjs`, next to `expandColumn`)
+are themselves just the two bodies extracted verbatim out of that
+`ArrowLeft` branch — `onKeydown` now calls them too, so there is exactly one
+implementation of each, per rule 1 above. Only one of the two opts
+(`onLeaveDiff`/`onCloseColumn`) is ever passed to a given `Block(b, {...})`
+call site in `home.mjs` (top-level vs. a drilled column), and `Block.mjs`
+only renders the matching button while `diffActive()` (the same gate
+`viewModeIndicator` already uses) — so at most one of these buttons is ever
+on screen at a time, on whichever card/column currently owns the diff
+keyboard.
+
+**Always visible, not hover-revealed** (reviewer decision, unlike
+`block-open-menu`): there is only ever one instance showing at once, so the
+"dense card, many instances" reasoning that keeps `block-open-menu`
+hover-only doesn't apply here.
+
+**Each gets its own icon**, not a shared chevron, for the same
+"per plek een eigen icoon" reason as the four menu buttons above — leaving
+the diff entirely and closing one drilled column are different actions with
+different reach, and telling them apart at a glance matters more than reusing
+one glyph.
+
+**Does not collide with the passive command-palette preview**
+(`showPassiveMenu`, see "A mouse selection shows the palette passively" in
+`.claude/docs/command-palette.md`): that preview floats **below the bottom
+row of the current selection**, inside the diff body, while these two
+buttons sit in the card's **header row**, above the diff entirely — the two
+never overlap on screen. The header buttons aren't `[data-row]`
+and aren't inside `[data-testid="command-anchor"]`, so a click on either
+still dismisses a stray passive preview first (the existing document-level
+`mousedown` listener, capture phase) exactly like a click anywhere else
+outside the diff would — the dismiss only *sets a flag*, it never calls
+`stopPropagation()`, so the button's own `@click` (which does call
+`e.stopPropagation()` before its state change, per the pitfall below) still
+fires normally afterward.
 
 ## Pitfall: a nested `@click` must call `stopPropagation()` FIRST
 

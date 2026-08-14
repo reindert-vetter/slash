@@ -7348,6 +7348,40 @@ function expandColumn(level) {
   scrollChangeIntoView(false)
 }
 
+// closeDrilledColumn closes the currently focused drilled column and steps
+// focus back onto the diff of its parent column — extracted from onKeydown's
+// ArrowLeft branch at state.focusLevel > 0 (see that branch's own comments for
+// why each step is there) so Block.mjs's mouse-only "Sluit deze kolom" button
+// (rendered on the currently focused drilled column — see
+// blockCloseColumnButton) can call the exact same function instead of a
+// second implementation, per the click-runs-the-same-function rule in
+// mouse-navigation.md. A no-op with nothing drilled.
+function closeDrilledColumn() {
+  if (state.focusLevel <= 0) return
+  state.drill = state.drill.slice(0, state.focusLevel - 1)
+  state.drillCursor = state.drillCursor.slice(0, state.focusLevel - 1)
+  state.focusLevel -= 1
+  markDrillReturn(state.focusLevel)
+  scrollFocusIntoView()
+  if (state.focusLevel === 0) resetMainScroll()
+  scrollChangeIntoView(false)
+}
+
+// leaveDiffToList leaves the diff session entirely and returns to the block
+// list (stop 3 → stop 2) — extracted from onKeydown's ArrowLeft branch at
+// state.focusLevel === 0 for the same reason as closeDrilledColumn: Block.mjs's
+// "Terug naar de lijst" button on the top-level card (blockLeaveDiffButton)
+// calls this directly instead of duplicating it.
+function leaveDiffToList() {
+  state.mode = 'list'
+  state.drill = []
+  state.drillCursor = []
+  clearRangeAnchor(0)
+  resetMainScroll()
+  scrollSelectedIntoView()
+  refreshHints() // stepping back to the list hides the hints
+}
+
 // collapsedColumnHTML renders the narrow rail a non-focused column shrinks to
 // once drilling has opened a column further right (see DetailPanel) — it
 // reclaims horizontal room for the focused column. `level` is the column's own
@@ -10568,43 +10602,18 @@ function onKeydown(e) {
       else prevChange()
     } else if (e.key === 'ArrowLeft') {
       e.preventDefault()
-      if (state.focusLevel > 0) {
-        // Close the focused drilled column and step focus back onto the diff
-        // of its parent column — the closed child reappears in the parent's
-        // Related-code list (that list is driven by focusedBlock() via the
-        // setRelated watch, so it updates on its own once focusLevel drops).
-        // Repeated ArrowLeft peels back one drilled level at a time.
-        state.drill = state.drill.slice(0, state.focusLevel - 1)
-        state.drillCursor = state.drillCursor.slice(0, state.focusLevel - 1)
-        state.focusLevel -= 1
-        markDrillReturn(state.focusLevel)
-        scrollFocusIntoView()
-        // Popping all the way back out to the top-level block (no drilled
-        // column left) reaches the rest position — snap <main> hard back to
-        // its flush-left start rather than leaning on scrollFocusIntoView's
-        // alignment. A partial pop (focusLevel still > 0) stays untouched:
-        // that's still "inside" the drill, where earlier columns are meant to
-        // stay scrolled off the left edge (see scrollFocusIntoView's comment).
-        if (state.focusLevel === 0) resetMainScroll()
-        // The parent column's card gets a fresh key on this foc/unfoc flip
-        // (see the block-card .key(...) rekey comment above), so its fresh
-        // [data-scrollsync] pane starts at scrollTop 0 — without this, a long
-        // parent block (many lines above the active change) would leave the
-        // reviewer stranded at the top instead of at the edited row. Mirrors
-        // drillIntoChild's own scrollFocusIntoView() + scrollChangeIntoView(false).
-        scrollChangeIntoView(false)
-      } else {
-        // Already on the top-level block's own diff (no drilled column focused):
-        // the existing diff→list transition. Also drop any drilled columns —
-        // they only make sense in the context of this diff session.
-        state.mode = 'list'
-        state.drill = []
-        state.drillCursor = []
-        clearRangeAnchor(0)
-        resetMainScroll()
-        scrollSelectedIntoView()
-        refreshHints() // stepping back to the list hides the hints
-      }
+      // Close the focused drilled column and step focus back onto the diff of
+      // its parent column (the closed child reappears in the parent's
+      // Related-code list — that list is driven by focusedBlock() via the
+      // setRelated watch, so it updates on its own once focusLevel drops;
+      // repeated ArrowLeft peels back one drilled level at a time), or, with
+      // nothing drilled, leave the diff session entirely back to the list.
+      // Both bodies live in closeDrilledColumn/leaveDiffToList (above
+      // expandColumn) so Block.mjs's own mouse buttons
+      // (blockCloseColumnButton/blockLeaveDiffButton) can call the exact same
+      // functions — see mouse-navigation.md.
+      if (state.focusLevel > 0) closeDrilledColumn()
+      else leaveDiffToList()
     } else if (e.key === 'ArrowRight') {
       e.preventDefault()
       // Stepping right leaves this column's diff — clear any active
@@ -11964,6 +11973,11 @@ function DetailPanel(state) {
             // click here reaches "Comment op deze regel"/"Chat over deze
             // regel"/"Open GitHub"/approve without the keyboard.
             onOpenMenu: () => openMenu(state.showDescription ? 'pr' : 'block'),
+            // Mouse entry point back to the block list — the exact same call
+            // the ← key already runs at focusLevel===0 (see leaveDiffToList,
+            // above expandColumn). Block.mjs only shows this while diffActive()
+            // (there is only ever one such card at a time).
+            onLeaveDiff: () => leaveDiffToList(),
             // A mousedown on this card's diff focuses it exactly like the
             // keyboard would (ensureTopLevelDiffFocus — reviewer request: a
             // click on the non-focused look-ahead preview at i===sel+1 must
@@ -12264,6 +12278,13 @@ function DetailPanel(state) {
                   // true for a drilled column, but the same expression keeps
                   // both call sites identical).
                   onOpenMenu: () => openMenu(state.showDescription ? 'pr' : 'block'),
+                  // Mouse entry point back to the parent column — the exact
+                  // same call the ← key already runs at focusLevel>0 (see
+                  // closeDrilledColumn, above expandColumn). This column is
+                  // always the focused one when rendered as a full card (a
+                  // non-focused one collapses to the rail instead), so no
+                  // level check is needed here.
+                  onCloseColumn: () => closeDrilledColumn(),
                   // This card is always the focused drilled column (a
                   // non-focused one collapses to the rail above, whose own
                   // click already calls expandColumn) — so a click here only
