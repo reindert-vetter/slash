@@ -14,6 +14,10 @@ import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 // the browser's own `e.detail` consecutive-click counter — overriding
 // whatever finer/coarser gran the keyboard had left active. A drag always
 // ranges per LINE too, never per group, regardless of how it was started.
+// EXCEPT: a single click landing inside an actual call-segment (a hoverable
+// span, Block.mjs's `data-call-seg`/CALL_HOVER_CLS) selects that exact
+// segment at 'call' granularity instead of 'line' — see the dedicated
+// call-segment test below (PR 12903, a real multi-segment call chain).
 // Reuses PR 102 (RangeSelectAction::execute, four changed lines in two
 // groups; ::other, a same-file neighbour with one changed line) — see
 // materializeRangeSelectWorktrees in tests/_setup.mjs.
@@ -139,6 +143,59 @@ test.describe('PR Review Tree — mouse line selection (click, hover, drag-range
     await expect(nowFocused.locator('div[class*="#b9f5d9"]')).toHaveCount(1)
     await expect(nowFocused.locator('div[class*="#b9f5d9"]')).toContainText('$x')
   })
+})
+
+// A single click landing INSIDE a real call-segment selects that exact
+// segment at 'call' granularity instead of 'line' — the on-character
+// refinement of the click-depth scheme above, top-level only (see the
+// drilled-column test below). PR 12903's CreatePaymentAction::execute (block
+// index 1), whose first change group is a single modified row with a real
+// multi-segment call chain: `$order` / `->billingAddress` / `->update(` / `[`
+// — see navigate.spec.mjs's "f on a single-line group jumps straight to
+// call" for the same fixture line. Prism tokenizes `->billingAddress` itself
+// into two adjacent spans ("->" and "billingAddress") that share ONE
+// `data-call-seg` value — exactly the case onCallSegHover exists for.
+test('a single click on a call-segment selects exactly that segment, with a whole-segment hover affordance', async ({
+  page,
+}) => {
+  await page.goto('/pr/12903')
+  await page.locator('[data-idx="1"]').click() // CreatePaymentAction::execute
+  await page.keyboard.press('ArrowRight') // into the diff, default gran 'group'
+  await expect(page.locator('[data-change-active]').first()).toBeVisible()
+
+  const card = page.getByTestId('detail-card').first()
+  // Scope to the ONE row with the call chain — the block has other changed
+  // rows too, each of which may carry its own (single, unsplit) segment.
+  const row = card.locator('[data-pane="new"] [data-row]').filter({ hasText: 'billingAddress' })
+  const addrSpan = row.locator('[data-call-seg]', { hasText: 'billingAddress' }).first()
+  await expect(addrSpan).toHaveClass(/call-seg\b/)
+  const segId = await addrSpan.getAttribute('data-call-seg')
+
+  // The "->" right before it is a SEPARATE Prism token but the SAME logical
+  // segment (same data-call-seg value) — hovering the identifier must also
+  // grey out that sibling span, not just the exact element under the cursor.
+  const wholeSeg = row.locator(`[data-call-seg="${segId}"]`)
+  await expect(wholeSeg.first()).not.toHaveClass(/call-seg-hover/)
+  await addrSpan.hover()
+  const segCount = await wholeSeg.count()
+  expect(segCount).toBeGreaterThan(1) // really split across ≥2 Prism tokens
+  for (let i = 0; i < segCount; i++) await expect(wholeSeg.nth(i)).toHaveClass(/call-seg-hover/)
+
+  await addrSpan.click()
+  await expect(page).toHaveURL(/gran=call/)
+  // The underline spans BOTH Prism tokens of the selected segment ("->" and
+  // "billingAddress"), so look for the one containing the identifier rather
+  // than assuming DOM order.
+  const underline = card.locator('span[class*="decoration-[#6366f1]"]').filter({ hasText: 'billingAddress' })
+  await expect(underline).toHaveCount(1)
+
+  // A click BESIDE the characters (the row's own blank tail, past all
+  // segments) falls back to 'line' — same row, same block, no special casing.
+  // Click near the row's own right edge, well past the short call chain's
+  // rendered text.
+  const rowBox = await row.boundingBox()
+  await row.click({ position: { x: rowBox.width - 10, y: rowBox.height / 2 } })
+  await expect(page).toHaveURL(/gran=line/)
 })
 
 // A drilled Onderliggende-code column deliberately keeps ONLY the single-line

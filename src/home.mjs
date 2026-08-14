@@ -7069,19 +7069,38 @@ function clickGranFor(clickCount) {
 // A click ALWAYS forces the target gran to 'line' or 'group' (clickGranFor),
 // overriding whatever finer/coarser gran the keyboard had left active — even
 // 'call' (reviewer: "als ik met mijn muis een lijn selecteer, dan wil ik per
-// lijn selecteren en niet per groep"; confirmed this also overrides 'call').
-// `clickCount` only drives that top-level double/triple-click scheme — a
-// drilled column deliberately keeps ONLY the single-line click (still always
-// forced to 'line', just no double/triple-click depth there at all, per
-// reviewer request). TRANSLATION blocks are excluded everywhere (their gran
-// stays pinned at 'group' — see navUnitsOf/setGran/extendRange's own
-// exclusion): every click there keeps selecting the one key-row it always
-// did, regardless of click count.
-function selectRowAt(level, b, i, row, clickCount = 1) {
+// lijn selecteren en niet per groep"; confirmed this also overrides 'call') —
+// UNLESS a single click landed inside a real call-segment (`segStart`,
+// Block.mjs's `data-call-seg`), in which case it selects that exact segment
+// at 'call' granularity instead (reviewer follow-up: "als ik op code druk met
+// mijn cursor, dan wil ik het selecteren als call, als ik naast characters
+// klik, dan wil ik het selecteren als line"). `clickCount`/`segStart` only
+// drive that top-level scheme — a drilled column deliberately keeps ONLY the
+// single-line click (still always forced to 'line', no double/triple-click
+// depth and no call-segment precision there at all, per reviewer request: its
+// own onRowMouseDown closure never even passes these two arguments through).
+// TRANSLATION blocks are excluded everywhere (their gran stays pinned at
+// 'group' — see navUnitsOf/setGran/extendRange's own exclusion): every click
+// there keeps selecting the one key-row it always did, regardless of click
+// count or position.
+function selectRowAt(level, b, i, row, clickCount = 1, segStart = null) {
   const isTranslation = !!(b && b.category === 'TRANSLATION')
   if (level === 0) {
     ensureTopLevelDiffFocus(i)
     if (state.mode !== 'diff' || !isActiveCard(b)) return
+    if (!isTranslation && clickCount === 1 && segStart != null) {
+      const callUnits = navUnitsOf(b, blockRows(b), 'call')
+      const idx = callUnits.findIndex((u) => u.start === row && u.segStart === segStart)
+      if (idx >= 0) {
+        state.gran = 'call'
+        clearRangeAnchor(0)
+        state.change = idx
+        return
+      }
+      // Defensive only (the segment came straight from the same
+      // rowCallSegments/changeCalls split, so this shouldn't happen) — fall
+      // through to the ordinary line click below.
+    }
     if (!isTranslation) state.gran = clickGranFor(clickCount)
     const units = navUnitsOf(b, blockRows(b), state.gran)
     if (!units.length) return
@@ -11646,9 +11665,10 @@ function DetailPanel(state) {
             // (not just for the preview) so a click ALSO works on the already-
             // focused card itself — there it's a plain "select this row".
             // `clickCount` (Block.mjs's e.detail) drives the 1x/2x/3x line/
-            // group/whole-block click scheme — top-level only, see
-            // selectRowAt's own comment.
-            onRowMouseDown: (row, clickCount) => selectRowAt(0, b, i, row, clickCount),
+            // group/whole-block click scheme, and `segStart` the on-character
+            // 'call'-segment precision of a single click — both top-level
+            // only, see selectRowAt's own comment.
+            onRowMouseDown: (row, clickCount, segStart) => selectRowAt(0, b, i, row, clickCount, segStart),
             // Drag-extends the selection while the button stays down — a
             // no-op unless this card already owns the keyboard (see
             // extendRowRange's own guard), so dragging never starts a range on

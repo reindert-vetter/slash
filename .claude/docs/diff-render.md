@@ -187,6 +187,57 @@ Shift+↑/↓ built (see "Shift+↑/↓" in keyboard-navigation.md) — just dri
     at `'group'` — see `navUnitsOf`/`setGran`/`extendRange`'s own exclusion,
     above): every click there keeps selecting the one key-row it always did,
     click count ignored.
+- **A single click landing INSIDE a real call-segment selects that exact
+  segment at `'call'` granularity instead of `'line'`.** Reviewer follow-up:
+  "als ik op code druk met mijn cursor, dan wil ik het selecteren als call,
+  als ik naast characters klik, dan wil ik het selecteren als line" —
+  top-level only (confirmed), and only on the row's NEW/right side (confirmed
+  "oude kant alleen 'line'" — the old/left pane never carries a call
+  selection at all, `changeCalls` only ever segments the new text). A row
+  whose new text has no real call structure (a blank line, or one the click
+  isn't actually inside) falls back to `'line'` (confirmed default).
+  - `rowCellHTML` wraps every call-chain segment of a call-eligible row
+    (`sideKey==='right' && r.rightMark==='ins' && r.right != null`, only
+    while `focused`) in a hoverable+clickable span via the same `markChars`
+    per-character pass the active-segment underline already uses:
+    `CALL_HOVER_CLS` (a plain `call-seg` marker class, see below) plus
+    `data-call-seg="<segment start>"` — the segment's own stable per-row key,
+    the same one `callKey`/call-approval already use. `callSegmentsForRow(r)`
+    (the `rowCallSegments(rows, i)` implementation, extracted so it can be
+    called with the row object directly) computes the segments;
+    `highlightChanges` (paired/modified rows) and the plain `markChars` branch
+    both merge this in alongside the existing `underline`/`segDots` concerns.
+  - `onBlockMouseDown` (`Block.mjs`) additionally resolves
+    `e.target.closest('[data-call-seg]')` and passes that segment's start (or
+    `null`) as a third argument to `onRowMouseDown` — `home.mjs`'s top-level
+    `selectRowAt` uses it (only at `clickCount === 1`, never for a
+    double/triple click) to look up the matching unit in
+    `navUnitsOf(b, rows, 'call')` (`u.start === row && u.segStart === segStart`)
+    and select it directly, `gran` forced to `'call'`. A drilled column's own
+    `onRowMouseDown` closure simply never reads this third argument, which is
+    what keeps a drilled column's click `'line'`-only with zero extra code.
+  - **The hover is not a bare Tailwind `hover:` class.** Prism's own token
+    tags (`<span class="token ...">`) interrupt the character stream
+    `markChars` walks, so one LOGICAL call-segment (e.g. `->billingAddress`)
+    typically renders as SEVERAL adjacent DOM spans sharing the same
+    `data-call-seg` value (one per Prism token) rather than a single merged
+    span — a bare `hover:` class would then only light up whichever one
+    sub-span the cursor happens to sit over, a couple of characters at a
+    time, defeating the explicit ask ("dat lost tegelijk het 'waar ligt de
+    grens'-bezwaar op" — the hover must show the segment's FULL extent).
+    `CALL_HOVER_CLS` is therefore a plain `call-seg` marker with no visual
+    effect of its own; `onCallSegHover(e, on)` — a delegated `@mouseover`/
+    `@mouseout` pair on the same `<article>`, always wired (not opt-in like
+    the click/drag handlers, since it only toggles a CSS class, no `state`
+    write) — finds every sibling span sharing the hovered one's
+    `data-call-seg` value within the same row and toggles `call-seg-hover` on
+    all of them together, so the whole segment highlights as one block
+    regardless of how many Prism tokens it's split into. The actual grey tint
+    (`.call-seg.call-seg-hover`) lives in `index.html`'s `<style>`, same
+    colour family as the plain-row hover bar (`#e2e8f0`/`#3f3f46` — slate-200/
+    zinc-700), with the usual light + two dark mirrors (`@media` and
+    `:root[data-theme='dark']`) — see "What can't use a Tailwind `dark:`
+    variant" in `.claude/rules/conventions.md`.
 - **Drag-range:** `extendRowRange(level, b, row)` mirrors `extendRange`/
   `drillExtendRange`'s `rangeAnchor` mechanism, but **always ranges per LINE**
   — reviewer confirmed this explicitly ("slepen ook per lijn... nooit per
@@ -224,9 +275,11 @@ Shift+↑/↓ built (see "Shift+↑/↓" in keyboard-navigation.md) — just dri
 Test: `tests/diff-row-mouse-select.spec.mjs` (a single click forces `'line'`
 even from `'group'`/`'call'`, a double-click selects the group, a triple-click
 selects the whole open block, a mousedown+mousemove drag produces the same
-3-of-4-lines range `range-select.spec.mjs`'s Shift+ArrowDown x2 does, a
-drilled column's double-click still only selects the one line, and a click on
-the look-ahead preview focuses + selects it).
+3-of-4-lines range `range-select.spec.mjs`'s Shift+ArrowDown x2 does, a click
+directly on a real (Prism-multi-token) call-segment selects it at `'call'`
+with the whole segment's hover toggling together, a drilled column's
+double-click still only selects the one line, and a click on the look-ahead
+preview focuses + selects it).
 
 ## The active-row cursor bar dims when the diff doesn't own the keyboard
 

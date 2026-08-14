@@ -718,6 +718,8 @@ export default function Block(b, opts = {}) {
       data-diff-col-key="${'diff:' + b.id}"
       @mousedown="${(e) => onBlockMouseDown(e, onRowMouseDown)}"
       @mousemove="${(e) => onBlockMouseMove(e, onRowMouseMove)}"
+      @mouseover="${(e) => onCallSegHover(e, true)}"
+      @mouseout="${(e) => onCallSegHover(e, false)}"
     >
       ${() =>
         // Any non-preview/look-ahead card may be dragged wider/narrower —
@@ -1625,16 +1627,36 @@ function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, focused = 
   // underlined (active) and carry its dot at the same time.
   const segDotCls = (pi) => (segDots && segDots.get(pi)) || ''
   const segDotAttr = (pi) => (segDots && segDots.has(pi) ? ` data-seg-dot="${pi}"` : '')
+  // callSegs: every call-chain segment of this row's NEW/right text, wrapped
+  // below in a hoverable+clickable span (CALL_HOVER_CLS/`data-call-seg`) so a
+  // single click can resolve to 'call' granularity instead of 'line' — see
+  // home.mjs's selectRowAt and "Line selection: hover, click, drag-range" in
+  // .claude/docs/diff-render.md. Only while `focused` (same gate as the
+  // plain-row hover bar above) and only the RIGHT side — the old/left pane
+  // never gets a 'call' selection at all (reviewer confirmed "oude kant
+  // alleen 'line'"), and only when this row's new text was actually
+  // segmented (rightMark==='ins'): a removed line with no replacement has no
+  // right text to hover/click on.
+  const callSegs =
+    focused && sideKey === 'right' && r.rightMark === 'ins' && r.right != null ? callSegmentsForRow(r) : null
+  const callSegCls = (pi) => (callSegAt(callSegs, pi) ? CALL_HOVER_CLS : '')
+  const callSegAttr = (pi) => {
+    const seg = callSegAt(callSegs, pi)
+    return seg ? ` data-call-seg="${seg.start}"` : ''
+  }
   let body
   if (text === null) body = '&nbsp;'
-  else if (paired) body = highlightChanges(r, sideKey, ws, underline, segDots)
-  else if ((underline && underline.size) || (segDots && segDots.size))
+  else if (paired) body = highlightChanges(r, sideKey, ws, underline, segDots, callSegs)
+  else if ((underline && underline.size) || (segDots && segDots.size) || callSegs)
     // A one-sided change (pure add / remove): its whole line is the single
     // edit, so underline it end to end.
     body = markChars(
       highlight(text),
-      (pi) => [underline && underline.has(pi) ? UNDERLINE_CLS : '', segDotCls(pi)].filter(Boolean).join(' '),
-      segDotAttr,
+      (pi) =>
+        [underline && underline.has(pi) ? UNDERLINE_CLS : '', segDotCls(pi), callSegCls(pi)]
+          .filter(Boolean)
+          .join(' '),
+      (pi) => segDotAttr(pi) + callSegAttr(pi),
     )
   else body = highlight(text)
   // A commented row no longer gets its own 💬 marker in the code body — the
@@ -2002,14 +2024,24 @@ function onPaneClick(rows, e) {
 // suppresses the browser's own word/paragraph text selection a double/triple
 // click would otherwise also trigger, which visibly fought our own indigo
 // range highlight (reviewer request: block native selection here).
+//
+// It also passes the `data-call-seg` of whichever call-segment span (see
+// rowCellHTML's own `callSegs`) the click landed inside, or `null` when it
+// didn't — home.mjs's top-level selectRowAt uses this to select that exact
+// 'call' segment instead of the whole 'line' on a single click (reviewer:
+// "als ik op code druk... call, als ik naast characters klik... line"). A
+// drilled column's own onRowMouseDown closure simply never reads this third
+// argument, which is what keeps a drilled column's click 'line'-only.
 function onBlockMouseDown(e, cb) {
   if (!cb || e.button !== 0) return
   const el = e.target && e.target.closest && e.target.closest('[data-row]')
   if (!el) return
   const i = +el.getAttribute('data-row')
   if (Number.isNaN(i)) return
+  const segEl = e.target && e.target.closest && e.target.closest('[data-call-seg]')
+  const segStart = segEl ? +segEl.getAttribute('data-call-seg') : null
   e.preventDefault()
-  cb(i, e.detail)
+  cb(i, e.detail, segStart == null || Number.isNaN(segStart) ? null : segStart)
 }
 function onBlockMouseMove(e, cb) {
   if (!cb || (e.buttons & 1) === 0) return
@@ -2018,6 +2050,25 @@ function onBlockMouseMove(e, cb) {
   const i = +el.getAttribute('data-row')
   if (Number.isNaN(i)) return
   cb(i)
+}
+
+// onCallSegHover toggles the `call-seg-hover` marker (index.html's own
+// `<style>` gives `.call-seg.call-seg-hover` its actual grey tint) on EVERY
+// sub-span of the call-segment the pointer entered/left — not just the one
+// element `mouseover`/`mouseout` fired on — because one logical segment can
+// render as several adjacent spans (see CALL_HOVER_CLS's own doc comment).
+// `mouseover`/`mouseout` (not `mouseenter`/`mouseleave`, which don't bubble)
+// delegated on the whole card, same shape as onBlockMouseDown/
+// onBlockMouseMove above — always wired (no opt-out), since it's a pure CSS
+// class toggle with no side effect on `state` at all, unlike the click/drag
+// handlers, which stay opt-in per card via `cb`.
+function onCallSegHover(e, on) {
+  const el = e.target && e.target.closest && e.target.closest('[data-call-seg]')
+  if (!el) return
+  const row = el.closest('[data-row]')
+  if (!row) return
+  const seg = el.getAttribute('data-call-seg')
+  row.querySelectorAll('[data-call-seg="' + seg + '"]').forEach((n) => n.classList.toggle('call-seg-hover', on))
 }
 
 // collapsePlan returns null (render every row — the small-block fast path,
@@ -2417,6 +2468,43 @@ export function rowChanged(r) {
 // accent.
 export const UNDERLINE_CLS = 'underline decoration-2 decoration-[#6366f1] underline-offset-2'
 
+// CALL_HOVER_CLS marks a call-segment as click-selectable at 'call'
+// granularity — a grey hover tint, same colour family as the plain-row hover
+// bar (rowCellHTML's `#94a3b8`/`#71717a`), adapted from an inset left BAR to a
+// background TINT because a segment sits mid-line, not at the row's own left
+// edge (see "Line selection: hover, click, drag-range" in
+// .claude/docs/diff-render.md). Reviewer request: "als ik op code druk met
+// mijn cursor, dan wil ik het selecteren als call... laat het zien met een
+// grijze hover state" — the hover is what tells the reviewer exactly where a
+// segment's boundary is, since "on code" vs "beside characters" alone gives
+// no visual cue up front.
+//
+// Deliberately NOT a plain Tailwind `hover:` variant: Prism's own token spans
+// (`<span class="token ...">`) interrupt the character stream our own
+// per-character overlay (markChars) walks, so one LOGICAL call-segment often
+// renders as several ADJACENT DOM spans sharing the same `data-call-seg`
+// value (one per Prism token) rather than a single merged span. A bare
+// `hover:` class would then only light up whichever ONE sub-span the cursor
+// happens to sit over — a couple of characters at a time — defeating the
+// whole point of showing the segment's FULL boundary at a glance. `call-seg`
+// is therefore a plain marker class with no visual effect of its own; the
+// grey tint only applies via `.call-seg.call-seg-hover` (index.html's
+// `<style>`, light + the two dark mirrors — see "What can't use a Tailwind
+// `dark:` variant" in conventions.md), toggled on EVERY sub-span of the same
+// segment together by the delegated `onCallSegHover` below.
+const CALL_HOVER_CLS = 'call-seg cursor-pointer rounded-sm'
+
+// callSegAt finds the call-chain segment (rowCallSegments' shape,
+// `{start, end}` half-open char ranges) containing character index `pi`, or
+// null. `segs` is null for any row/side that isn't call-eligible (only ever
+// computed for a NEW/right-side row whose text was actually segmented — see
+// rowCellHTML's own `callSegs` and callSegmentsForRow below), so this is a
+// no-op everywheres else (the old/left pane never gets a 'call' selection at
+// all — reviewer confirmed "oude kant alleen 'line'").
+function callSegAt(segs, pi) {
+  return segs ? segs.find((s) => pi >= s.start && pi < s.end) || null : null
+}
+
 // highlightChanges renders one side of a modified row: Prism-highlighted like any
 // line. A real content change no longer gets its own char-level background here
 // — the line-level row background (rose/emerald pane tint) already shows what
@@ -2426,7 +2514,10 @@ export const UNDERLINE_CLS = 'underline decoration-2 decoration-[#6366f1] underl
 // `underline` is an optional Set of char indices (the active call-segment) that
 // gets the indigo underline regardless of `ws`; `segDots` is the optional
 // char-index -> class Map of the call-approval dot markers (segDotMarkers).
-function highlightChanges(r, sideKey, ws, underline, segDots = null) {
+// `callSegs` (optional, see callSegmentsForRow) wraps each call-chain segment
+// in a hoverable, clickable span (CALL_HOVER_CLS + `data-call-seg`) — null for
+// the old/left side, where a call selection doesn't exist.
+function highlightChanges(r, sideKey, ws, underline, segDots = null, callSegs = null) {
   const text = sideKey === 'left' ? r.left : r.right
   const markCls = ws ? (sideKey === 'left' ? 'bg-rose-200 dark:bg-rose-500/30' : 'bg-emerald-200 dark:bg-emerald-500/30') : ''
   const { leftMarked, rightMarked } = ws ? charDiffSides(r.left, r.right) : {}
@@ -2439,9 +2530,13 @@ function highlightChanges(r, sideKey, ws, underline, segDots = null) {
       if (underline && underline.has(pi)) parts.push(UNDERLINE_CLS)
       const dot = segDots && segDots.get(pi)
       if (dot) parts.push(dot)
+      if (callSegAt(callSegs, pi)) parts.push(CALL_HOVER_CLS)
       return parts.join(' ')
     },
-    (pi) => (segDots && segDots.has(pi) ? ` data-seg-dot="${pi}"` : ''),
+    (pi) => {
+      const seg = callSegAt(callSegs, pi)
+      return (segDots && segDots.has(pi) ? ` data-seg-dot="${pi}"` : '') + (seg ? ` data-call-seg="${seg.start}"` : '')
+    },
   )
 }
 
@@ -3053,7 +3148,15 @@ export function changeCalls(rows) {
 // row always has at least one segment — the fully-approved/none-approved cases
 // stay binary and only rows with 2+ segments can be partly approved.
 export function rowCallSegments(rows, i) {
-  const r = rows[i]
+  return callSegmentsForRow(rows[i])
+}
+
+// callSegmentsForRow is rowCallSegments' actual implementation, taking the row
+// object directly instead of a (rows, i) pair — rowCellHTML only ever has `r`
+// itself on hand (see its own `callSegs`, used for the call-segment hover/click
+// affordance), so this avoids threading the whole aligned-rows array through
+// for a lookup that only ever reads `rows[i]` anyway.
+function callSegmentsForRow(r) {
   if (r.rightMark === 'ins' && r.right != null) {
     const segs = segmentCalls(r.right).filter(
       (s) => r.right.slice(s.start, s.end).trim() !== '',

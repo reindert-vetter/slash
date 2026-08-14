@@ -159,6 +159,19 @@
         }
       }
 
+      /* Call-segment hover (Block.mjs's CALL_HOVER_CLS/onCallSegHover — see
+         "Line selection: hover, click, drag-range" in diff-render.md): a
+         plain marker class rather than a Tailwind `hover:` variant, because
+         Prism's own token tags can split ONE logical call-segment into
+         several adjacent DOM spans (one per token) — onCallSegHover toggles
+         this SAME class on every one of them together on mouseover/mouseout,
+         so the whole segment highlights as a single block instead of only
+         whichever one Prism token the cursor happens to sit over. Light/dark
+         mirrors like the Prism/markdown blocks below. */
+      .call-seg.call-seg-hover {
+        background-color: #e2e8f0; /* slate-200 */
+      }
+
       /* Prism token colours only — scoped to every Prism code excerpt via the
          `.language-php` class it always carries (the diff panes in Block.mjs, the
          Onderliggende-code cards + comment hint in RelatedPanel.mjs, the footer),
@@ -331,6 +344,9 @@
          category-per-hue mapping as the light palette above); markdown-body
          reuses the zinc/indigo dark palette used across the rest of the app. */
       @media (prefers-color-scheme: dark) {
+        :root:not([data-theme='light']) .call-seg.call-seg-hover {
+          background-color: #3f3f46; /* zinc-700 */
+        }
         :root:not([data-theme='light']) .language-php .token.comment,
         :root:not([data-theme='light']) .language-php .token.prolog,
         :root:not([data-theme='light']) .language-php .token.doctype,
@@ -404,6 +420,9 @@
       /* Same rules as the @media block above, mirrored for the manual theme
          toggle (src/theme.mjs sets data-theme on <html>) — see the comment
          above the @media block. */
+      :root[data-theme='dark'] .call-seg.call-seg-hover {
+        background-color: #3f3f46; /* zinc-700 */
+      }
       :root[data-theme='dark'] .language-php .token.comment,
       :root[data-theme='dark'] .language-php .token.prolog,
       :root[data-theme='dark'] .language-php .token.doctype,
