@@ -4444,8 +4444,25 @@ function callRows(b) {
 // loaded block's own id: everything before the first ":" is exactly that prefix.
 // Falls back to the bare PR number, which is the primary repo's form, before any
 // block is loaded.
+// blockIdPrefix mirrors the repo prefix a real PR block's id carries
+// ("<pr>" for the primary repo, "<key>#<pr>" otherwise — see model.go's
+// Block.ID) by copying it off an existing real block, since state.pr alone
+// doesn't know a non-primary repo's key. Deliberately reads state.allBlocks
+// (real PR blocks only, from loadBlocks) rather than state.blocks: the
+// latter's [0] can be a SYNTHETIC row — a test_class group
+// (testClassRowItem/groupTestClasses, id "testclass:...") or a comment-index
+// item (commentBlockItem, id "comment:...") — whenever one sorts to the top
+// (recomputeLeftList's rank). Reading state.blocks[0] produced a feedback
+// loop: a synthetic-row prefix breaks testCallTargetIds'/
+// resolvedCallTargetIds' childId reconstruction for THIS call, which
+// reclassifies the target block back onto its own top-level row, which
+// changes the sort so a real block becomes state.blocks[0] again next time —
+// oscillating once per recomputeLeftList() call (e.g. every ~5s off
+// RelatedPanel.mjs's comment-poll indexComments() watch), which read as the
+// whole sidebar reordering itself on its own every few seconds. Reported bug,
+// reproduced live via a Playwright route-intercepted instrumented build.
 function blockIdPrefix() {
-  const b = state.blocks && state.blocks[0]
+  const b = state.allBlocks && state.allBlocks[0]
   if (b && typeof b.id === 'string') {
     const i = b.id.indexOf(':')
     if (i > 0) return b.id.slice(0, i)

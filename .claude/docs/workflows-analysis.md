@@ -476,6 +476,33 @@ Tests: `callresolve_analysis_test.go`, `resolve_call_test.go`,
 `modules/callresolve/callresolve_test.go`; frontend via
 `slash seed -callresolve <json>`.
 
+**`blockIdPrefix()` must read `state.allBlocks[0]`, never `state.blocks[0]`.**
+`resolvedCallTargetIds`/`testCallTargetIds`/`callChildId` (`home.mjs`)
+reconstruct a call-resolution row's child id as
+`blockIdPrefix() + ':' + childFile + ':' + childClass::childMethod` to match it
+against a real PR block id (`<pr>:<file>:<symbol>` for the primary repo,
+`<repoKey>#<pr>:...` otherwise — see `model.go`'s `Block.ID()`).
+`blockIdPrefix()` copies that prefix off an existing real block rather than
+hardcoding `state.pr`, purely to also cover the non-primary-repo form. Reported
+bug: a top-level block whose only resolved caller is a TEST method (the
+`testCallTargetIds` exemption, see above) visibly jumped in and out of
+"Onderliggende code" every ~5 seconds, with the reviewer just sitting there.
+Root cause was reading `state.blocks[0]` — which is not always a real
+block — instead: once the target sorts to the bottom under "Onderliggende
+code", a synthetic `test_class` row (`testClassRowItem`/`groupTestClasses`, id
+`testclass:<file>::<class>`, see `.claude/docs/test-class-grouping.md`) can
+become `state.blocks[0]`, corrupting the prefix (literally `"testclass"`)
+used to reconstruct the very childId that reclassifies the target — which
+un-classifies it, sorting it back to the top, restoring a real
+`state.blocks[0]` on the NEXT `recomputeLeftList()` call, and so on: a
+self-referential feedback loop oscillating once per recompute (the
+comment-poll's `indexComments()` watch alone already fires one every 5s, see
+`RelatedPanel.mjs`'s `refreshTimer`). `state.allBlocks` holds only real PR
+blocks (never a synthetic `test_class`/`comment`/push-todo row), so reading
+its `[0]` instead is stable regardless of how the sidebar currently sorts.
+Test: `tests/blockidprefix-testclass-flicker.spec.mjs` (PR 110's fixture,
+mocks one `/api/callresolve` row, samples across three comment-poll ticks).
+
 ## Linking test coverage (`resolve_test_covers` + `modules/testcovers`)
 
 A PHPUnit test links to the method it tests, in **both directions**: a test
