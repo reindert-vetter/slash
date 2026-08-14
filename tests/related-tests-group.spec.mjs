@@ -90,9 +90,14 @@ test.describe('PR Review Tree — grouped covering tests (tests bar)', () => {
     await page.keyboard.press('ArrowRight') // list → diff
     await page.keyboard.press('ArrowRight') // diff → related panel, first row
 
-    // The covering tests sort first (prio 0, ahead of the call child), so the
-    // bar owns the first cursor slot.
+    // The bar always sorts to the very bottom, below every other child, so
+    // the call child owns the first cursor slot and ↓ reaches the bar next.
     const bar = page.getByTestId('related-tests-bar')
+    await expect(page.getByTestId('related-item').filter({ hasText: 'AddressFormatter::formatAddress' })).toHaveAttribute(
+      'data-active',
+      'true',
+    )
+    await page.keyboard.press('ArrowDown')
     await expect(bar).toHaveAttribute('data-active', 'true')
 
     // Enter on the bar toggles the expansion (never drills) — the cursor

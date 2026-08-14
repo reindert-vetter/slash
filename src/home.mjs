@@ -4194,22 +4194,16 @@ function relatedChildren(b) {
 // kind); expanded, the test cards render as ordinary children directly below
 // the bar, which stays put as the collapse toggle. With no other children (or
 // no tests at all) this is a no-op — the tests render as plain cards, exactly
-// as before. The bar rides along IN the children list itself (at the position
-// the first test sorted to), so the panel cursor stays 1:1 with the visible
-// rows (cs.codeSel indexes rc.children) without any special casing in
-// RelatedPanel's keyboard walk.
+// as before. The bar rides along IN the children list itself (always LAST,
+// below every other child — reviewer request: the bar used to take the slot
+// of the first test in the sorted order, which could land it above code
+// cards), so the panel cursor stays 1:1 with the visible rows (cs.codeSel
+// indexes rc.children) without any special casing in RelatedPanel's keyboard
+// walk.
 function groupTestChildren(b, sorted) {
   const tests = sorted.filter((c) => c.kind === 'covered_by')
   if (tests.length === 0 || tests.length === sorted.length) return sorted
   const others = sorted.filter((c) => c.kind !== 'covered_by')
-  // The bar takes the slot of the first test in the sorted order: count the
-  // non-test children ahead of it (relative order within both partitions is
-  // preserved, sorted is never mutated).
-  let at = 0
-  for (const c of sorted) {
-    if (c.kind === 'covered_by') break
-    at++
-  }
   const group = {
     id: 'tests-group:' + b.id,
     kind: 'tests_group',
@@ -4217,9 +4211,7 @@ function groupTestChildren(b, sorted) {
     tests,
     expanded: state.testsExpanded,
   }
-  return others
-    .slice(0, at)
-    .concat([group], state.testsExpanded ? tests : [], others.slice(at))
+  return others.concat([group], state.testsExpanded ? tests : [])
 }
 
 // CLASS_MEMBER_KINDS are the callresolve kinds whose child is a single declared

@@ -409,8 +409,11 @@ targets the card's **left** edge) isn't affected by the chips on the right. The
 block shows, besides its `covered_by` children, **other** (non-test) children too,
 those tests collapse into one horizontal row
 (`data-testid=related-tests-bar`: chevron + "N tests" pill + one compact chip per
-test method, `data-testid=related-tests-chip`) at the spot where the first test sat
-in the ordering — so they don't push the actual underlying code down.
+test method, `data-testid=related-tests-chip`), always sorted to the very
+**bottom**, below every other child — so they don't push the actual underlying
+code down, and don't sit above it either (reviewer request: the bar used to
+take the slot of the first test in the sorted order, which could land it above
+code cards).
 
 Click or `Enter` on the bar **toggles** `state.testsExpanded` (ephemeral, not in
 the URL, reset to closed on a block switch via `lastRelatedBlockId` in the
