@@ -103,6 +103,24 @@ shape as the original toggle, see the "never key a template whose entire
 body is one toggling expression" pitfall in
 `.claude/rules/arrowjs-pitfalls.md`).
 
+**Visually distinct from the keyboard-owning menu, on top of the missing
+catch layer above.** `CommandMenu(menu, resolve, onRun, opts)` takes an
+optional 4th argument; `passiveMenuOverlay()` is the only caller passing
+`{ passive: true }`. Two things change when `passive`: the pinned "Sluit
+menu" row (see `withClose`/`defaultSel` below) is filtered out of the
+rendered list and replaced by a small **"Sluit menu" button next to the
+input** (`data-testid="command-close-passive"`, looks up the close command
+fresh from `resolve(query)` on click, same `onRun` path as any other row) —
+reviewer request, so closing the preview doesn't cost scrolling past the rest
+of the list — and every row gets **less vertical padding** (`py-1` vs. the
+real menu's `py-2`). `menuOverlay()` (the real menu) keeps the pinned row and
+the taller rows unchanged; only its own `esc` badge sits where the passive
+menu's close button sits. **Right-hand hint badges are gone everywhere**
+(`c.hint` — "approve"/"task"/"claude"/"github", styled like that `esc`
+badge): reviewer request, named nothing either a mouse or keyboard user
+needed to read to use the row. `c.hint` itself still feeds `filterCommands`'s
+fuzzy match text — only the visible badge was removed, not the field.
+
 Test: `tests/selection-menu.spec.mjs`.
 
 ## Opening, ownership and positioning

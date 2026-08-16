@@ -84,11 +84,19 @@ function commandIcon(icon) {
 // mouse and keyboard share one highlighted row. data-cmd-idx (static — `i`
 // never changes for a given row) is only read by scrollSelectedRowIntoView
 // below, to find the currently highlighted row after a keyboard step.
-function commandRow(c, i, menu, onRun) {
+// `passive` (only true for the mouse-triggered preview, see the default
+// export below) shrinks the row's vertical padding — the keyboard-owning
+// palette keeps the taller row. The right-hand hint badge (c.hint — "approve"/
+// "task"/"claude"/"github", styled like the header's "esc" badge) is dropped
+// entirely, in both variants: reviewer request, it named nothing a mouse or
+// keyboard user needed to read to use the row.
+function commandRow(c, i, menu, onRun, passive) {
   return html`
     <button
       class="${() =>
-        'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm transition ' +
+        'flex w-full items-center gap-2 rounded-md px-2.5 text-left text-sm transition ' +
+        (passive ? 'py-1' : 'py-2') +
+        ' ' +
         (menu.sel === i
           ? 'bg-indigo-50 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
           : 'text-slate-700 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800/60')}"
@@ -99,15 +107,27 @@ function commandRow(c, i, menu, onRun) {
     >
       ${() => (c.icon ? commandIcon(c.icon) : '')}
       <span class="flex-1 truncate">${() => labelOf(c)}</span>
-      ${() =>
-        c.hint
-          ? html`<span
-              class="shrink-0 rounded bg-slate-100 dark:bg-zinc-800 px-1.5 py-0.5 font-mono text-[10px] text-slate-400 dark:text-zinc-500"
-              >${c.hint}</span
-            >`
-          : ''}
     </button>
   `
+}
+
+// closeButton — the passive preview's own "Sluit menu" affordance, placed next
+// to the input instead of as the list's pinned first row (which the real,
+// keyboard-owning palette still keeps — see withClose/defaultSel in
+// command-palette.md). Looks up the close-menu command fresh on every click
+// (rather than capturing it once) so it stays correct even if the resolved
+// list changed underneath (a submenu swap, a typed filter).
+function closeButton(menu, resolve, onRun) {
+  return html`<button
+    class="mt-0.5 shrink-0 rounded bg-slate-100 dark:bg-zinc-800 px-2 py-1 text-[10px] font-medium text-slate-500 dark:text-zinc-400 hover:bg-slate-200 dark:hover:bg-zinc-700"
+    data-testid="command-close-passive"
+    @click="${() => {
+      const cmd = resolve(menu.query).find((c) => c.id === 'close-menu')
+      if (cmd) onRun(cmd)
+    }}"
+  >
+    Sluit menu
+  </button>`
 }
 
 /**
@@ -118,7 +138,8 @@ function commandRow(c, i, menu, onRun) {
  * @param {(cmd:object)=>void} onRun - runs a command (closes the menu, then acts).
  * @returns arrow.js template.
  */
-export default function CommandMenu(menu, resolve, onRun) {
+export default function CommandMenu(menu, resolve, onRun, opts = {}) {
+  const passive = !!opts.passive
   // Keyboard ↑/↓ (menu.sel, home.mjs's onKeydown) never used to scroll the
   // highlighted row into view — command-list is a fixed max-h-72 box with its
   // scrollbar hidden (no-scrollbar), so arrowing past the visible rows left
@@ -174,20 +195,33 @@ export default function CommandMenu(menu, resolve, onRun) {
             menu.sel = 0
           }}"
         ></textarea>
-        <span class="mt-1 shrink-0 rounded bg-slate-100 dark:bg-zinc-800 px-1.5 py-0.5 text-[10px] font-medium text-slate-400 dark:text-zinc-500"
-          >esc</span
-        >
+        ${() =>
+          passive
+            ? closeButton(menu, resolve, onRun)
+            : html`<span
+                class="mt-1 shrink-0 rounded bg-slate-100 dark:bg-zinc-800 px-1.5 py-0.5 text-[10px] font-medium text-slate-400 dark:text-zinc-500"
+                >esc</span
+              >`}
       </div>
       <div
         class="no-scrollbar flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto p-1.5"
         data-testid="command-list"
       >
         ${() => {
-          const list = resolve(menu.query)
+          const list = resolve(menu.query).filter((c) => !passive || c.id !== 'close-menu')
           if (list.length === 0) {
-            return html`<p class="px-2.5 py-3 text-[11px] text-slate-400 dark:text-zinc-500">Geen commando's.</p>`
+            // A keyed array-of-one, not a single bare element — see "A slot
+            // that switches between a single element and a keyed array
+            // freezes" in arrowjs-pitfalls.md. Adding the closeButton() slot
+            // above shifted this slot into that exact trap (a reopen after a
+            // no-match query left the reopened list permanently empty).
+            return [
+              html`<p class="px-2.5 py-3 text-[11px] text-slate-400 dark:text-zinc-500">Geen commando's.</p>`.key(
+                'no-commands',
+              ),
+            ]
           }
-          return list.map((c, i) => commandRow(c, i, menu, onRun).key('cmd:' + c.id))
+          return list.map((c, i) => commandRow(c, i, menu, onRun, passive).key('cmd:' + c.id))
         }}
       </div>
     </div>

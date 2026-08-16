@@ -58,6 +58,53 @@ test.describe('PR Review Tree — a mouse selection shows the palette passively'
     await expect(page.getByTestId('command-input')).toBeFocused()
   })
 
+  test('the passive preview has no pinned "Sluit menu" row, has a close button next to the input instead, and shorter rows than the real menu', async ({
+    page,
+  }) => {
+    await page.goto('/pr/102')
+    await leaveSearchBox(page)
+
+    const card = page.getByTestId('detail-card').first()
+    const rowA = card.locator('[data-pane="new"] [data-changed="1"]').filter({ hasText: '$a' })
+    await rowA.click()
+
+    const anchor = page.locator('[data-testid="command-anchor"][data-passive="1"]')
+    await expect(anchor).toBeVisible()
+    await expect(anchor.getByTestId('command-row').filter({ hasText: 'Sluit menu' })).toHaveCount(0)
+    const closeButton = anchor.getByTestId('command-close-passive')
+    await expect(closeButton).toBeVisible()
+    await expect(closeButton).toHaveText('Sluit menu')
+
+    const passiveRowHeight = await anchor.getByTestId('command-row').first().evaluate((el) => el.getBoundingClientRect().height)
+
+    // Clicking it closes the preview, same as any other command.
+    await closeButton.click()
+    await expect(anchor).toHaveCount(0)
+
+    // The real, keyboard-owning menu keeps the pinned row and a taller row.
+    await rowA.click()
+    await page.keyboard.press('Enter')
+    const overlay = page.getByTestId('command-overlay')
+    await expect(overlay).toBeVisible()
+    await expect(overlay.getByTestId('command-row').first()).toContainText('Sluit menu')
+    const openRowHeight = await overlay.getByTestId('command-row').first().evaluate((el) => el.getBoundingClientRect().height)
+    expect(openRowHeight).toBeGreaterThan(passiveRowHeight)
+  })
+
+  test('no menu shows a right-hand hint badge on its rows', async ({ page }) => {
+    await page.goto('/pr/102')
+    await leaveSearchBox(page)
+
+    const card = page.getByTestId('detail-card').first()
+    await card.locator('[data-pane="new"] [data-changed="1"]').filter({ hasText: '$a' }).click()
+    await page.keyboard.press('Enter')
+
+    const row = page.getByTestId('command-overlay').getByTestId('command-row').filter({ hasText: 'Open GitHub' })
+    await expect(row).toBeVisible()
+    // Only the label span is left — no second, right-hand hint-badge span.
+    await expect(row.locator('span')).toHaveCount(1)
+  })
+
   test('clicking outside the diff dismisses the passive preview', async ({ page }) => {
     await page.goto('/pr/102')
     await leaveSearchBox(page)

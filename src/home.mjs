@@ -11311,7 +11311,7 @@ function passiveMenuOverlay() {
       data-testid="command-anchor"
       data-passive="1"
     >
-      ${CommandMenu(ms, resolveCommands, runCommand)}
+      ${CommandMenu(ms, resolveCommands, runCommand, { passive: true })}
     </div>
   `
 }
