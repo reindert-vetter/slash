@@ -259,8 +259,9 @@ the plan, read by `POSTAPPROVE_COMMANDS`'s label function). Test:
 - **Only at level `0` does `←` close the whole diff session**
   (`state.mode='list'`), and only then are `state.drill`/`state.drillCursor`
   cleared: drilled columns only mean anything within *this* session. The
-  top-level card's own `block-leave-diff` button (`blockLeaveDiffButton`)
-  calls the matching `leaveDiffToList()`.
+  mouse equivalent is `MainScrollLeftHint` (`home.mjs`), which calls the
+  matching `leaveDiffToList()` — see "A mouse way to reach content hidden to
+  the left" in `.claude/docs/detail-layout.md`.
 - **Nothing else may flip `state.mode` to `'list'` while there's drilling.**
   `ensureCode`'s "block with no navigable changes → back to list" fallback (for a
   restored `?mode=diff` URL) is gated to the resting position

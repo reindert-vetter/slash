@@ -96,8 +96,49 @@ request — deliberately **no** "scroll all the way right" shortcut. This is a
 `state.focusLevel`/anything reactive, unlike `expandColumn` (which actively
 discards drilled columns) — the two must not be confused. There is
 deliberately no matching "scroll back left" button in this rail: native
-scrolling and the existing `block-leave-diff`/`block-close-column` rails
-already cover going back. Test: `tests/main-scroll-right-hint.spec.mjs`.
+scrolling and `MainScrollLeftHint`/`block-close-column` (below) already cover
+going back. Test: `tests/main-scroll-right-hint.spec.mjs`.
+
+### A mouse way to reach content hidden to the left
+
+`MainScrollLeftHint` (`home.mjs`, mounted once, top-level, right next to
+`MainScrollRightHint`) is the mirror of the button above, `data-testid=
+main-scroll-left-hint`/`main-scroll-left-button` — but it is **not** a pure
+scroll nudge like its right-hand twin: it steps the actual nav chain back one
+stop at a time (diff → block list → PR description, i.e. stop 3 → stop 2 →
+stop 1), the exact thing a single `←` already does at that stop
+(`stepMainLeftOneColumn()`, calling `leaveDiffToList()` or
+`enterDescriptionFromList()`). It replaces the old two-icon `diffLeaveRail`
+(`block-leave-diff` + `block-open-description`, a mouse-only shortcut
+jumping straight from the diff to stop 1 in one click) that used to render
+glued to the top-level `Block()` card — reviewer request: "one button, one
+column revealed per click", the same "stap voor stap" contract as the
+right-hand hint, dropping the two-step shortcut in favour of a persistent,
+always-reachable button.
+
+- **Visibility:** `canStepMainLeft()` (`home.mjs`) — true while
+  `state.mode==='diff' && state.focusLevel===0` (there's a diff to leave back
+  to the list) or `state.mode==='list' && !state.showDescription` (there's a
+  list to leave back to the description). **False** for a drilled column
+  (`focusLevel>0` — that keeps its own `block-close-column` button in its own
+  header, unaffected by this change, see `.claude/docs/mouse-navigation.md`)
+  and once the description is already open (nothing further left to reveal).
+- **Position is NOT a fixed corner in every mode**, unlike
+  `MainScrollRightHint`: in diff mode `<main>` starts at `left-0` and the
+  pr-index is slid fully off-screen (see "`<main>`'s own offsets" below), so
+  `top-6 left-6` lines up exactly with the right-hand hint's own corner. In
+  list mode, though, that corner is where the pr-index (`<aside>`, `fixed
+  left-6 top-6 bottom-6 w-[26rem]`, `BlockList.mjs`) itself sits whenever this
+  button would show (`canStepMainLeft()` is only true there before the
+  description opens, i.e. exactly while the pr-index is fully visible at
+  `translate-x-0`) — so `canStepMainLeftPositionCls()` switches to
+  `top-6 left-[28rem]`, just past the pr-index's own right edge, instead of
+  overlapping its header/search row.
+- Own glyph: a chevron docked against a vertical bar (same shape as
+  `block-close-column`'s icon, mirrored), never colour alone, per the
+  colorblind rule.
+
+Test: `tests/main-scroll-left-hint.spec.mjs`.
 
 ## PR-info column (stop 1, hidden by default)
 

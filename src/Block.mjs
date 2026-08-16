@@ -533,87 +533,6 @@ function viewModeIndicator(viewModeFn, setViewMode) {
   `
 }
 
-// blockLeaveDiffButton — the mouse entry point back to the block list (stop
-// 3 → stop 2), the click equivalent of ← at state.focusLevel===0
-// (leaveDiffToList, home.mjs). Rendered inside diffLeaveRail below (a small
-// block to the LEFT of the top-level card, outside the <article>'s own
-// header row it used to sit in — reviewer request), only while diffActive()
-// (see diffLeaveRail's own caller) — there is at most one such button on
-// screen at a time. Always visible (no hover-reveal, unlike blockMenuButton
-// below): the reviewer decided a per-card kebab can stay hover-only since
-// it's one of many identical instances, but this button only ever exists on
-// the single card that currently owns the diff. Own icon (a bulleted list,
-// "back to the list") distinct from blockCloseColumnButton's icon below,
-// blockMenuButton's kebab, and blockOpenDescriptionButton's rewind glyph
-// right below it, per the "unique icon per target" decision (mirrors
-// f830836's four menu buttons — mouse-navigation.md).
-function blockLeaveDiffButton(onLeaveDiff) {
-  return html`
-    <button
-      type="button"
-      title="Terug naar de lijst"
-      data-testid="block-leave-diff"
-      class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-400 transition hover:bg-slate-100 hover:text-indigo-600 dark:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-indigo-400"
-      @click="${(e) => {
-        e.stopPropagation()
-        onLeaveDiff()
-      }}"
-    >
-      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="h-3.5 w-3.5" aria-hidden="true">
-        <path d="M2 4h12M2 8h8M2 12h5" stroke-linecap="round"></path>
-      </svg>
-    </button>
-  `
-}
-
-// blockOpenDescriptionButton — the mouse-only shortcut straight to stop 1
-// (the PR description), equivalent to pressing ← TWICE from this diff
-// (leaveDiffToDescription, home.mjs) — the reviewer's "ook om de eerste
-// blok te laten zien" request. Sits in diffLeaveRail right below
-// blockLeaveDiffButton. Own icon (a double chevron / "rewind") distinct from
-// every other icon button here, per the "unique icon per target" decision.
-function blockOpenDescriptionButton(onOpenDescription) {
-  return html`
-    <button
-      type="button"
-      title="Ga naar de PR-omschrijving"
-      data-testid="block-open-description"
-      class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-400 transition hover:bg-slate-100 hover:text-indigo-600 dark:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-indigo-400"
-      @click="${(e) => {
-        e.stopPropagation()
-        onOpenDescription()
-      }}"
-    >
-      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="h-3.5 w-3.5" aria-hidden="true">
-        <path d="M9 3L3.5 8 9 13" stroke-linecap="round" stroke-linejoin="round"></path>
-        <path d="M13.5 3L8 8l5.5 5" stroke-linecap="round" stroke-linejoin="round"></path>
-      </svg>
-    </button>
-  `
-}
-
-// diffLeaveRail — a small block to the LEFT of the top-level diff card
-// bundling both mouse ways out of a diff session: back to the block list
-// (blockLeaveDiffButton, ← once) and straight to the PR description
-// (blockOpenDescriptionButton, ← twice). Extracted out of the card's own
-// header row (reviewer request: a dedicated block, not more icons crowded
-// into the header) into its own bordered card, rendered as a sibling of
-// <article> — see the wrapping root at the bottom of Block(). Only ever
-// rendered for the top-level card (onLeaveDiff is only ever wired up there,
-// see home.mjs), never for a drilled column (which keeps
-// blockCloseColumnButton in its own header, see mouse-navigation.md).
-function diffLeaveRail(onLeaveDiff, onOpenDescription) {
-  return html`
-    <div
-      class="mt-2 flex shrink-0 flex-col gap-1 rounded-lg border border-slate-200 bg-white p-1 shadow-sm dark:border-zinc-700 dark:bg-zinc-900"
-      data-testid="diff-leave-rail"
-    >
-      ${blockLeaveDiffButton(onLeaveDiff)}
-      ${onOpenDescription ? blockOpenDescriptionButton(onOpenDescription) : ''}
-    </div>
-  `
-}
-
 // blockCloseColumnButton — the mouse entry point that closes a drilled
 // Underlying-code column and hands focus back to its parent column, the
 // click equivalent of ← at state.focusLevel>0 (closeDrilledColumn,
@@ -622,7 +541,10 @@ function diffLeaveRail(onLeaveDiff, onOpenDescription) {
 // it's the focused one (see "Unfocused columns collapse into a narrow
 // rail" in drilling.md), so this is never shown twice either. Always
 // visible, own icon (a chevron docked against a bar, "collapse this
-// column back") distinct from blockLeaveDiffButton's list glyph above.
+// column back"). The top-level card's own way back (leaveDiffToList) no
+// longer has a per-card button at all — see MainScrollLeftHint (home.mjs)
+// and "A mouse way to reach content hidden to the left" in
+// .claude/docs/detail-layout.md.
 function blockCloseColumnButton(onCloseColumn) {
   return html`
     <button
@@ -745,23 +667,14 @@ export default function Block(b, opts = {}) {
   // wires it up (e.g. a look-ahead/preview card, which never renders the
   // button at all — see !preview below) needs no change.
   const onOpenMenu = opts.onOpenMenu || (() => {})
-  // onLeaveDiff/onCloseColumn — the mouse-only way back that ← already
-  // provides via the keyboard (leaveDiffToList/closeDrilledColumn, home.mjs).
-  // Exactly one of the two is ever passed for a given call site: the
-  // top-level card gets onLeaveDiff ("Terug naar de lijst"), a drilled
-  // column gets onCloseColumn ("Sluit deze kolom") — see
-  // blockLeaveDiffButton/blockCloseColumnButton above and their own call
-  // sites in home.mjs. Both default to null (not a no-op) so the render
-  // slots below can tell "not wired up at all" apart from "wired up" —
-  // same reasoning as onRowMouseDown/onApproveClick above.
-  const onLeaveDiff = opts.onLeaveDiff || null
+  // onCloseColumn — the mouse-only way back out of a DRILLED column that ←
+  // already provides via the keyboard (closeDrilledColumn, home.mjs) — see
+  // blockCloseColumnButton above and its own call site in home.mjs. The
+  // top-level card's own way back (leaveDiffToList) has no per-card button
+  // any more, see MainScrollLeftHint (home.mjs). Defaults to null (not a
+  // no-op) so the render slot below can tell "not wired up at all" apart
+  // from "wired up" — same reasoning as onRowMouseDown/onApproveClick above.
   const onCloseColumn = opts.onCloseColumn || null
-  // onOpenDescription — the mouse-only shortcut to stop 1 (leaveDiffToDescription,
-  // home.mjs), equivalent to pressing ← twice. Only ever passed alongside
-  // onLeaveDiff at the top-level call site (see diffLeaveRail above); defaults
-  // to null so a caller that doesn't wire it up (every drilled-column call
-  // site) simply never shows blockOpenDescriptionButton.
-  const onOpenDescription = opts.onOpenDescription || null
   const preview = !!opts.preview
   // collapsedFn is a function returning whether this card should shrink to just
   // its header + meta row (category/title/status, file:line + approve pill) —
@@ -874,17 +787,6 @@ export default function Block(b, opts = {}) {
   // every other card's 'fit' width stays exactly as uncapped as before.
   const capFitChars = opts.capFitChars || (() => null)
   return html`
-    <div class="flex min-h-0 w-fit max-w-full items-start gap-2">
-      ${() =>
-        // The left-of-card rail (blockLeaveDiffButton +
-        // blockOpenDescriptionButton) — same gate as blockCloseColumnButton's
-        // header slot below: only the top-level card that currently owns the
-        // diff keyboard, never a preview/look-ahead card. onOpenDescription
-        // is optional even here (defaults to '' inside diffLeaveRail), but
-        // onLeaveDiff being wired up at all is what marks "this is the
-        // top-level call site" (a drilled column never passes it — see
-        // home.mjs).
-        !preview && diffActive() && onLeaveDiff ? diffLeaveRail(onLeaveDiff, onOpenDescription) : ''}
     <article
       class="${() =>
         // 'group' — purely for the hover-revealed blockMenuButton below (CSS
@@ -992,10 +894,8 @@ export default function Block(b, opts = {}) {
           // Mouse-only way back out of a DRILLED column — the click
           // equivalent of ←, same gate as viewModeIndicator right above,
           // never on a preview/look-ahead card. The top-level card's own way
-          // back (onLeaveDiff) no longer lives in this header row — it moved
-          // into the left-of-card rail (diffLeaveRail below) together with
-          // the new "jump to stop 1" shortcut. See blockCloseColumnButton
-          // above and diffLeaveRail's own doc comment.
+          // back has no per-card button at all any more — see
+          // MainScrollLeftHint (home.mjs).
           !preview && diffActive() && onCloseColumn ? blockCloseColumnButton(onCloseColumn) : ''}
         ${() =>
           // Mouse entry point into COMMANDS — never on a preview/look-ahead
@@ -1111,7 +1011,6 @@ export default function Block(b, opts = {}) {
           ? svgSlot(b)
           : codeDiff(b, activeGroup, hintsEnabled, approvedFn, commentedFn, approvedCallsFn, viewModeFn, lineSummaryFn, diffActive, commentRangeFn)}
     </article>
-    </div>
   `
 }
 

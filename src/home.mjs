@@ -7459,9 +7459,9 @@ function closeDrilledColumn() {
 
 // leaveDiffToList leaves the diff session entirely and returns to the block
 // list (stop 3 → stop 2) — extracted from onKeydown's ArrowLeft branch at
-// state.focusLevel === 0 for the same reason as closeDrilledColumn: Block.mjs's
-// "Terug naar de lijst" button on the top-level card (blockLeaveDiffButton)
-// calls this directly instead of duplicating it.
+// state.focusLevel === 0 for the same reason as closeDrilledColumn:
+// MainScrollLeftHint's click handler (stepMainLeftOneColumn, below) calls
+// this directly instead of duplicating it.
 function leaveDiffToList() {
   state.mode = 'list'
   state.drill = []
@@ -7472,20 +7472,41 @@ function leaveDiffToList() {
   refreshHints() // stepping back to the list hides the hints
 }
 
-// leaveDiffToDescription — mouse-only shortcut equivalent to pressing ←
-// TWICE from the diff (stop 3 → stop 2 → stop 1): leaveDiffToList()'s own
-// steps, then the exact same stop 2 → stop 1 transition ← already runs in
-// list mode (see the ArrowLeft branch below, in onKeydown's 'list' section).
-// Block.mjs's left-of-diff rail (blockOpenDescriptionButton) calls this
-// directly instead of duplicating either transition.
-function leaveDiffToDescription() {
-  leaveDiffToList()
+// enterDescriptionFromList steps left out of the block list into stop 1 (the
+// PR description) — extracted from onKeydown's ArrowLeft branch in list mode
+// for the same reason as leaveDiffToList/closeDrilledColumn above:
+// MainScrollLeftHint's click handler (stepMainLeftOneColumn, below) calls
+// this directly instead of duplicating it.
+function enterDescriptionFromList() {
   state.toggleFocused = false
   state.ignoreToggleFocused = false
   state.batchRowFocused = false
   state.pushTodoFocused = false
-  state.showDescription = true
+  state.showDescription = true // step left out of the list into stop 1 (the description)
   state.blockIndexEntered = true
+}
+
+// stepMainLeftOneColumn — the click handler behind MainScrollLeftHint
+// (below): exactly one ← step from wherever the keyboard currently is,
+// mirroring stepMainRightOneColumn's own "one column per click" contract.
+// Covers the whole diff → list → description chain; a no-op everywhere else
+// (drilled column, list already showing the description) since
+// canStepMainLeft() gates the button's very visibility for those cases.
+function stepMainLeftOneColumn() {
+  if (state.mode === 'diff' && state.focusLevel === 0) leaveDiffToList()
+  else if (state.mode === 'list' && !state.showDescription) enterDescriptionFromList()
+}
+
+// canStepMainLeft — true while a further column exists to reveal to the LEFT
+// of whatever currently owns the keyboard, i.e. while MainScrollLeftHint
+// should show. Deliberately excludes a drilled column (state.focusLevel > 0)
+// — that already has its own per-column "Sluit deze kolom" button
+// (blockCloseColumnButton, Block.mjs) — and the list once the description is
+// already open (nothing further left to reveal).
+function canStepMainLeft() {
+  if (state.mode === 'diff') return state.focusLevel === 0
+  if (state.mode === 'list') return !state.showDescription
+  return false
 }
 
 // collapsedColumnHTML renders the narrow rail a non-focused column shrinks to
@@ -10723,9 +10744,10 @@ function onKeydown(e) {
       // repeated ArrowLeft peels back one drilled level at a time), or, with
       // nothing drilled, leave the diff session entirely back to the list.
       // Both bodies live in closeDrilledColumn/leaveDiffToList (above
-      // expandColumn) so Block.mjs's own mouse buttons
-      // (blockCloseColumnButton/blockLeaveDiffButton) can call the exact same
-      // functions — see mouse-navigation.md.
+      // expandColumn) so the matching mouse entry points
+      // (Block.mjs's blockCloseColumnButton / MainScrollLeftHint's
+      // stepMainLeftOneColumn) can call the exact same functions — see
+      // mouse-navigation.md.
       if (state.focusLevel > 0) closeDrilledColumn()
       else leaveDiffToList()
     } else if (e.key === 'ArrowRight') {
@@ -10828,12 +10850,7 @@ function onKeydown(e) {
     } else enterDiff()
   } else if (e.key === 'ArrowLeft') {
     e.preventDefault()
-    state.toggleFocused = false
-    state.ignoreToggleFocused = false
-    state.batchRowFocused = false
-    state.pushTodoFocused = false
-    state.showDescription = true // step left out of the list into stop 1 (the description)
-    state.blockIndexEntered = true
+    enterDescriptionFromList()
   }
 }
 
@@ -12087,16 +12104,10 @@ function DetailPanel(state) {
             // click here reaches "Comment op deze regel"/"Chat over deze
             // regel"/"Open GitHub"/approve without the keyboard.
             onOpenMenu: () => openMenu(state.showDescription ? 'pr' : 'block'),
-            // Mouse entry point back to the block list — the exact same call
-            // the ← key already runs at focusLevel===0 (see leaveDiffToList,
-            // above expandColumn). Block.mjs only shows this while diffActive()
-            // (there is only ever one such card at a time).
-            onLeaveDiff: () => leaveDiffToList(),
-            // Mouse-only shortcut for going straight to stop 1 (the PR
-            // description), equivalent to pressing ← twice from this diff.
-            // Only ever passed at THIS (top-level) call site — a drilled
-            // column has no stop-1 destination of its own.
-            onOpenDescription: () => leaveDiffToDescription(),
+            // The top-level card's own mouse way back out of the diff
+            // (leaveDiffToList) no longer has a per-card button — see
+            // MainScrollLeftHint, mounted once top-level next to
+            // MainScrollRightHint.
             // A mousedown on this card's diff focuses it exactly like the
             // keyboard would (ensureTopLevelDiffFocus — reviewer request: a
             // click on the non-focused look-ahead preview at i===sel+1 must
@@ -12623,6 +12634,68 @@ function MainScrollRightHint(state) {
   `
 }
 
+// MainScrollLeftHint — the exact mirror of MainScrollRightHint above, for the
+// left-hand chain: leave the diff -> the block list -> the PR description
+// (stop 3 -> stop 2 -> stop 1), replacing the old two-icon diffLeaveRail /
+// block-open-description rail that used to live glued to the top-level card
+// in Block.mjs (reviewer request: one persistent button, always in the same
+// fixed spot, one column opened per click — the exact "stap voor stap"
+// contract MainScrollRightHint already has, rather than a state-based rail
+// tied to one card). Each click runs stepMainLeftOneColumn(), which is
+// exactly what a single ← already does at that stop — the click-runs-the-
+// same-function rule in mouse-navigation.md. Only visible while
+// canStepMainLeft() is true, i.e. there's something left to reveal; hidden
+// for a drilled column (its own "Sluit deze kolom" button in Block.mjs
+// covers that) and once the description is already open.
+//
+// Position: `left-6` matches MainScrollRightHint's own corner exactly in
+// diff mode, where <main> starts at `left-0` and the pr-index (<aside>) is
+// slid fully off-screen (see detail-layout.md), so there's nothing to
+// overlap. In list mode the pr-index occupies exactly that top-left corner
+// (`fixed left-6 top-6 bottom-6 w-[26rem]`, BlockList.mjs) whenever this
+// button would show (canStepMainLeft() is only true there while the
+// description ISN'T open yet, i.e. the pr-index is fully visible) — so the
+// button sits just past its right edge instead (`left-[28rem]`, 26rem width
+// + 2rem inset) rather than on top of its own header/search row.
+// canStepMainLeftPositionCls() is its own small reactive slot so only the
+// position (not the whole button) reruns on a mode change.
+function canStepMainLeftPositionCls() {
+  return state.mode === 'diff' ? 'top-6 left-6' : 'top-6 left-[28rem]'
+}
+function MainScrollLeftHint(state) {
+  return html`
+    <div class="contents">
+      ${() =>
+        canStepMainLeft()
+          ? html`
+              <div
+                class="${() =>
+                  'fixed z-30 flex shrink-0 flex-col gap-1 rounded-lg border border-slate-200 bg-white p-1 shadow-sm dark:border-zinc-700 dark:bg-zinc-900 ' +
+                  canStepMainLeftPositionCls()}"
+                data-testid="main-scroll-left-hint"
+              >
+                <button
+                  type="button"
+                  title="Terug (één stap)"
+                  data-testid="main-scroll-left-button"
+                  class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-400 transition hover:bg-slate-100 hover:text-indigo-600 dark:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-indigo-400"
+                  @click="${(e) => {
+                    e.stopPropagation()
+                    stepMainLeftOneColumn()
+                  }}"
+                >
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="h-3.5 w-3.5" aria-hidden="true">
+                    <path d="M10 3L5 8l5 5" stroke-linecap="round" stroke-linejoin="round"></path>
+                    <path d="M4 3v10" stroke-linecap="round"></path>
+                  </svg>
+                </button>
+              </div>
+            `
+          : ''}
+    </div>
+  `
+}
+
 // Mount the sidebar and the detail panel into #app. PrInfoPanel is mounted
 // first so it stacks visually under the pr-index while the latter slides
 // right over it during the ~200ms transition (see BlockList.mjs). Comments
@@ -12634,6 +12707,7 @@ BlockList(state, isPrWideComposing)(app)
 DetailPanel(state)(app)
 setupMainOverflowObserver()
 MainScrollRightHint(state)(app)
+MainScrollLeftHint(state)(app)
 MenuHost()(app)
 ImageLightboxHost()(app)
 // The call-arrow overlay: one static fixed <svg> drawn imperatively (see
