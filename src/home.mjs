@@ -7407,6 +7407,22 @@ function leaveDiffToList() {
   refreshHints() // stepping back to the list hides the hints
 }
 
+// leaveDiffToDescription — mouse-only shortcut equivalent to pressing ←
+// TWICE from the diff (stop 3 → stop 2 → stop 1): leaveDiffToList()'s own
+// steps, then the exact same stop 2 → stop 1 transition ← already runs in
+// list mode (see the ArrowLeft branch below, in onKeydown's 'list' section).
+// Block.mjs's left-of-diff rail (blockOpenDescriptionButton) calls this
+// directly instead of duplicating either transition.
+function leaveDiffToDescription() {
+  leaveDiffToList()
+  state.toggleFocused = false
+  state.ignoreToggleFocused = false
+  state.batchRowFocused = false
+  state.pushTodoFocused = false
+  state.showDescription = true
+  state.blockIndexEntered = true
+}
+
 // collapsedColumnHTML renders the narrow rail a non-focused column shrinks to
 // once drilling has opened a column further right (see DetailPanel) — it
 // reclaims horizontal room for the focused column. `level` is the column's own
@@ -12011,6 +12027,11 @@ function DetailPanel(state) {
             // above expandColumn). Block.mjs only shows this while diffActive()
             // (there is only ever one such card at a time).
             onLeaveDiff: () => leaveDiffToList(),
+            // Mouse-only shortcut for going straight to stop 1 (the PR
+            // description), equivalent to pressing ← twice from this diff.
+            // Only ever passed at THIS (top-level) call site — a drilled
+            // column has no stop-1 destination of its own.
+            onOpenDescription: () => leaveDiffToDescription(),
             // A mousedown on this card's diff focuses it exactly like the
             // keyboard would (ensureTopLevelDiffFocus — reviewer request: a
             // click on the non-focused look-ahead preview at i===sel+1 must

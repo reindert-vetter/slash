@@ -30,6 +30,7 @@ function** the key runs — never a parallel implementation. Concretely:
 | A `claude-question-option` chip | typing that same answer as free text (the backend records the next message as the open question's answer either way) | `.claude/docs/claude-chat-panel.md` |
 | `block-open-menu` / `pr-menu-button` / `comment-detail-menu` / `claude-chat-menu` (each opens `openMenu(...)`) | `Enter` on the same target | "Every menu also has a mouse entry point" below |
 | `block-leave-diff` (top-level card) / `block-close-column` (a drilled column) | `←` on the diff (`leaveDiffToList`/`closeDrilledColumn`) | "Every diff card/column also has a mouse way back" below |
+| `block-open-description` (top-level card) | `←` twice on the diff (`leaveDiffToDescription`) | "Every diff card/column also has a mouse way back" below |
 
 Two consequences worth keeping in mind when adding a click handler:
 
@@ -58,6 +59,9 @@ mouse-only *destination* is not.
 - **The `viewModeIndicator` icons** jump straight to a `split`/`unified`/`fit`
   stand, where `a` cycles — see "`a` — cycling the diff view" in
   `.claude/docs/keyboard-navigation.md`.
+- **`block-open-description`** jumps straight from the diff (stop 3) to the PR
+  description (stop 1) in one click; the keyboard reaches the same state with
+  `←` twice — see "Every diff card/column also has a mouse way back" below.
 
 ## Rule 3: genuinely click-only surfaces must not hold state
 
@@ -141,50 +145,73 @@ there's still exactly one function that calls `claudeMenuOpener`. Test:
 Until this was added, `←` was the only way out of a diff session or out of a
 drilled Underlying-code column — clicking a collapsed rail (`expandColumn`,
 above) jumps several levels at once, but there was no click that did just
-what a single `←` press does. Two small icon buttons in `Block.mjs`'s header
-row close that gap, each calling the exact function `←` already runs at that
-depth (`onKeydown`'s `ArrowLeft` branch in `state.mode==='diff'`, `home.mjs`):
+what a single `←` press does. Small icon buttons close that gap, each calling
+the exact function `←` already runs at that depth (`onKeydown`'s `ArrowLeft`
+branch in `state.mode==='diff'`, `home.mjs`):
 
 | Button (`data-testid`) | Calls | Rendered on | Icon |
 |---|---|---|---|
 | `block-leave-diff` | `leaveDiffToList()` | the top-level block card (`focusLevel===0`) | a bulleted list |
+| `block-open-description` | `leaveDiffToDescription()` | the top-level block card (`focusLevel===0`) | a double chevron ("rewind") |
 | `block-close-column` | `closeDrilledColumn()` | the currently focused drilled column | a chevron docked against a bar |
 
 `leaveDiffToList`/`closeDrilledColumn` (`home.mjs`, next to `expandColumn`)
 are themselves just the two bodies extracted verbatim out of that
 `ArrowLeft` branch — `onKeydown` now calls them too, so there is exactly one
-implementation of each, per rule 1 above. Only one of the two opts
-(`onLeaveDiff`/`onCloseColumn`) is ever passed to a given `Block(b, {...})`
-call site in `home.mjs` (top-level vs. a drilled column), and `Block.mjs`
-only renders the matching button while `diffActive()` (the same gate
-`viewModeIndicator` already uses) — so at most one of these buttons is ever
-on screen at a time, on whichever card/column currently owns the diff
-keyboard.
+implementation of each, per rule 1 above. `leaveDiffToDescription` is
+`leaveDiffToList()` immediately followed by the same stop-2 → stop-1
+transition that `onKeydown`'s `ArrowLeft` branch runs in `state.mode==='list'`
+(`state.showDescription = true` plus its sibling flag resets) — i.e. the exact
+same two steps `←` twice would take, composed into one function, per
+"reviewer request: a mouse-only destination is fine, per Rule 2 below, as
+long as the keyboard already reaches the same state in more than one step".
+
+Only `block-leave-diff`/`block-open-description` (top-level) or
+`block-close-column` (a drilled column) are ever passed to a given
+`Block(b, {...})` call site in `home.mjs`, and `Block.mjs` only renders the
+matching button(s) while `diffActive()` (the same gate `viewModeIndicator`
+already uses) — so at most one of these buttons is ever on screen at a time
+per card, on whichever card/column currently owns the diff keyboard.
+
+**`block-leave-diff` and `block-open-description` live OUTSIDE the card**,
+in `diffLeaveRail` — a small bordered block rendered to the LEFT of the
+top-level `<article>` (reviewer request: a dedicated block instead of more
+icons crowded into the header row that already holds `viewModeIndicator`/
+`block-open-menu`). `Block()`'s own template root became a
+`flex items-start gap-2` wrapper around `diffLeaveRail(...)` (a nested
+reactive slot, empty unless `!preview && diffActive() && onLeaveDiff`, same
+shape as every other conditional slot in this file) and the `<article>`
+itself — every existing attribute the resize/measurement code relies on
+(`data-col-resize-root`, `data-diff-col-key`) stays on the `<article>`
+unchanged. `block-close-column` stays where it was, in the drilled column's
+own header row — a drilled column has no stop-1 destination of its own, so it
+never gets a left rail.
 
 **Always visible, not hover-revealed** (reviewer decision, unlike
-`block-open-menu`): there is only ever one instance showing at once, so the
-"dense card, many instances" reasoning that keeps `block-open-menu`
-hover-only doesn't apply here.
+`block-open-menu`): there is only ever one rail/one close button showing at
+once, so the "dense card, many instances" reasoning that keeps
+`block-open-menu` hover-only doesn't apply here.
 
 **Each gets its own icon**, not a shared chevron, for the same
 "per plek een eigen icoon" reason as the four menu buttons above — leaving
-the diff entirely and closing one drilled column are different actions with
-different reach, and telling them apart at a glance matters more than reusing
-one glyph.
+the diff entirely, jumping to the description, and closing one drilled column
+are different actions with different reach, and telling them apart at a
+glance matters more than reusing one glyph.
 
 **Does not collide with the passive command-palette preview**
 (`showPassiveMenu`, see "A mouse selection shows the palette passively" in
 `.claude/docs/command-palette.md`): that preview floats **below the bottom
-row of the current selection**, inside the diff body, while these two
-buttons sit in the card's **header row**, above the diff entirely — the two
-never overlap on screen. The header buttons aren't `[data-row]`
-and aren't inside `[data-testid="command-anchor"]`, so a click on either
-still dismisses a stray passive preview first (the existing document-level
-`mousedown` listener, capture phase) exactly like a click anywhere else
-outside the diff would — the dismiss only *sets a flag*, it never calls
-`stopPropagation()`, so the button's own `@click` (which does call
-`e.stopPropagation()` before its state change, per the pitfall below) still
-fires normally afterward.
+row of the current selection**, inside the diff body, while the rail sits to
+the card's **left**, entirely outside it, and `block-close-column` sits in
+the drilled column's header row, above the diff entirely — none of these ever
+overlap the preview on screen. None of them are `[data-row]`
+and none sit inside `[data-testid="command-anchor"]`, so a click on any of
+them still dismisses a stray passive preview first (the existing
+document-level `mousedown` listener, capture phase) exactly like a click
+anywhere else outside the diff would — the dismiss only *sets a flag*, it
+never calls `stopPropagation()`, so the button's own `@click` (which does
+call `e.stopPropagation()` before its state change, per the pitfall below)
+still fires normally afterward.
 
 ## Pitfall: a nested `@click` must call `stopPropagation()` FIRST
 
