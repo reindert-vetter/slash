@@ -213,6 +213,24 @@ never calls `stopPropagation()`, so the button's own `@click` (which does
 call `e.stopPropagation()` before its state change, per the pitfall below)
 still fires normally afterward.
 
+## A mouse-only way to reach content overflowing to the right
+
+`main-scroll-right-hint` (`MainScrollRightHint`, `home.mjs`) is a small,
+always-in-place button fixed to the top-right corner of the viewport, shown
+only while `<main>`'s own column flow (both list mode and diff mode) has
+content scrolled out of view to the right. Unlike every entry in the tables
+above, a click here has **no keyboard equivalent at all** — it's a bare
+scroll-position nudge (`scrollMainRightOneColumn()`, one column per click),
+never a state change, so Rule 2 ("a mouse-only shortcut must still be
+keyboard-reachable in several steps") doesn't even apply: the same scroll
+position is already reachable with the trackpad/scrollwheel today, this is
+purely a discoverability aid for a hidden scrollbar (`no-scrollbar`, see
+"`<main>` as a horizontally scrolling column flow" in
+`.claude/docs/detail-layout.md`). Full mechanism (the sentinel/
+`IntersectionObserver` detection, why it's fixed rather than scrolling along
+like `diffLeaveRail`): "A mouse way to reach content overflowing to the
+right" in `.claude/docs/detail-layout.md`.
+
 ## Pitfall: a nested `@click` must call `stopPropagation()` FIRST
 
 A nested handler that synchronously mutates reactive state can unmount its own

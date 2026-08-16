@@ -55,6 +55,50 @@ footer (`z-20`, above `<main>`'s `z-10`). "My diff doesn't fit" is therefore a
 space-**allocation** question, not a clipping bug — see the preview-collapse
 mechanism in `.claude/docs/diff-card.md`.
 
+### A mouse way to reach content overflowing to the right
+
+Reviewer request: with the scrollbar hidden (`no-scrollbar` above) and only
+trackpad/scrollwheel to fall back on, there was no visible affordance at all
+for "there's more to the right, click here to reach it" — in **either** mode
+(list or diff), since `<main>`'s column flow is the same mechanism in both.
+`MainScrollRightHint` (`home.mjs`, mounted once, top-level, next to
+`Footer`/`ProgressBar`/`MenuHost`) is a small always-in-place button,
+`data-testid=main-scroll-right-hint`, **fixed to the top-right corner of the
+viewport** (`fixed top-6 right-6`) — deliberately not scrolling along with the
+content, unlike `Block.mjs`'s `diffLeaveRail` it borrows its visual language
+from (bordered rail, own icon): a rail that scrolled with the content could
+only ever be reached by first scrolling to see it, which defeats the purpose.
+Only visible while `state.mainOverflowRight` is true.
+
+**Detection is a 1px sentinel, not per-call-site bookkeeping.** `<main>`'s
+template appends one near-zero-width `data-testid=main-overflow-sentinel` div
+as its very last child (after `related-code`); `setupMainOverflowObserver()`
+(`home.mjs`, called once right after `DetailPanel(state)(app)`) watches it with
+an `IntersectionObserver` rooted at `<main>` itself — `state.mainOverflowRight
+= !entry.isIntersecting`. This reacts to *any* change in `<main>`'s total
+content width (a column appearing/disappearing, the description column
+toggling, a drilled column opening/closing, a manual column-width resize, a
+window resize) automatically, the same reasoning `tests/drill-left-hint-
+visible.spec.mjs` already relies on for `drill-left-hint` — no watch/call-site
+needs to remember to recompute it. The sentinel's own `-ml-4` cancels out the
+`gap-4` `<main>` puts before it, so its right edge lines up with the real last
+column's right edge instead of always reporting one gap's worth of phantom
+overflow even once everything already fits.
+
+**A click hides exactly the current left-most (at least partly visible)
+column, one column per click** — `scrollMainRightOneColumn()` walks `<main>`'s
+own direct children (whatever they are for the current mode — block-column,
+a drilled column, `comments-and-related`, …), finds the first one whose right
+edge still reaches past `<main>`'s own left edge, and adds exactly that
+column's own width to `scrollLeft`. Reviewer's explicit "stap voor stap"
+request — deliberately **no** "scroll all the way right" shortcut. This is a
+**pure scroll-position change**: it never touches `state.drill`/
+`state.focusLevel`/anything reactive, unlike `expandColumn` (which actively
+discards drilled columns) — the two must not be confused. There is
+deliberately no matching "scroll back left" button in this rail: native
+scrolling and the existing `block-leave-diff`/`block-close-column` rails
+already cover going back. Test: `tests/main-scroll-right-hint.spec.mjs`.
+
 ## PR-info column (stop 1, hidden by default)
 
 `data-testid=pr-info-column`, `w-[39rem]` (1.5× the original `26rem`, widened so

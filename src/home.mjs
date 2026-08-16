@@ -680,6 +680,17 @@ const state = reactive({
   // *inside* a passed-in function opt (see previewTooTallForActive's own
   // call sites) so a resize can't force those to rebuild every Block() card.
   viewportH: window.innerHeight,
+  // mainOverflowRight — true while <main>'s own column flow (detail-panel)
+  // has content scrolled out of view to the right, i.e. there is more to
+  // reach with a rightward scroll. Kept in sync by an IntersectionObserver
+  // watching a 1px sentinel appended as <main>'s own last child (see
+  // mainOverflowSentinel below) rather than hand-recomputed at every
+  // navigation/layout call site — the sentinel reacts to ANY change in
+  // <main>'s total content width (a column appearing/disappearing, the
+  // description column opening, a drilled column, a manual column-width
+  // resize) for free. Drives mainScrollRightHint's visibility; see "A mouse
+  // way to reach content overflowing to the right" in detail-layout.md.
+  mainOverflowRight: false,
   // colWidths — per-column manual width override in px, keyed
   // `${kind}:${id}` (kind ∈ 'diff'|'related'|'claude'|'comments'; id is a
   // block's stable b.id for 'diff', `${file}:${line}` for the other three —
@@ -7352,6 +7363,60 @@ function resetMainScroll() {
   })
 }
 
+// scrollMainRightOneColumn — the click handler behind mainScrollRightHint
+// (below): hides exactly the current left-most (at least partly visible)
+// column of <main>'s own flex-row, one column per click, mirroring the
+// reviewer request ("1x naar rechts = hide de linkerblok, nog een klik =
+// ook de volgende"). Deliberately a PURE scroll-position change — it only
+// ever sets <main>.scrollLeft, never state.drill/state.focusLevel/anything
+// reactive, unlike expandColumn (which actively discards drilled columns).
+// Works identically in list mode and diff mode: it walks <main>'s own
+// direct children (whatever they are for the current mode) rather than
+// anything diff/drill-specific.
+function scrollMainRightOneColumn() {
+  const main = document.querySelector('[data-testid="detail-panel"]')
+  if (!main) return
+  const mainLeft = main.getBoundingClientRect().left
+  for (const col of main.children) {
+    if (col.getAttribute('data-testid') === 'main-overflow-sentinel') continue
+    const rect = col.getBoundingClientRect()
+    // The first column whose right edge still reaches past <main>'s own
+    // left (visible) edge is the current left-most one, fully or partially
+    // on screen. Scroll exactly its own width further so that edge lands
+    // flush with <main>'s left edge, i.e. hide it completely.
+    if (rect.right > mainLeft + 1) {
+      main.scrollLeft += rect.right - mainLeft
+      return
+    }
+  }
+}
+
+// setupMainOverflowObserver keeps state.mainOverflowRight in sync with whether
+// <main>'s own 1px sentinel (its last child, see DetailPanel) is currently
+// scrolled out of view — i.e. whether there's more of <main>'s column flow
+// to reach with a rightward scroll. Set up once <main> exists in the DOM
+// (right after DetailPanel(state)(app), below), observing the sentinel
+// against <main> itself as the intersection root. This reacts to ANY
+// change in <main>'s total content width (a column appearing/disappearing,
+// a drilled column, the description column, a manual column-width resize)
+// with no per-call-site bookkeeping — see the doc comment on
+// state.mainOverflowRight. The sentinel's own `-ml-4` cancels out the
+// flex gap-4 <main> puts before it, so its right edge lines up with the
+// real last column's right edge instead of always sitting one gap further
+// out (which would report overflow even once everything already fits).
+function setupMainOverflowObserver() {
+  const main = document.querySelector('[data-testid="detail-panel"]')
+  const sentinel = document.querySelector('[data-testid="main-overflow-sentinel"]')
+  if (!main || !sentinel) return
+  const observer = new IntersectionObserver(
+    ([entry]) => {
+      state.mainOverflowRight = !entry.isIntersecting
+    },
+    { root: main, threshold: 0 },
+  )
+  observer.observe(sentinel)
+}
+
 // expandColumn refocuses the keyboard on an earlier column that's currently
 // collapsed to a rail (see collapsedColumnHTML) — the top-level block (level 0)
 // or a previously drilled-into column (level 1..drill.length). It's a direct
@@ -12509,7 +12574,52 @@ function DetailPanel(state) {
         ${() =>
           RelatedPanel(state, commentTarget, { drill: (child) => drillIntoChild(child) }).key('related-panel')}
       </div>
+      <div class="-ml-4 h-1 w-px shrink-0" data-testid="main-overflow-sentinel"></div>
     </main>
+  `
+}
+
+// mainScrollRightHint — the mouse-only way to reach content overflowing off
+// the right of <main>'s own column flow (list mode and diff mode alike):
+// reviewer request, mirroring Block.mjs's diffLeaveRail in visual language
+// (small bordered rail, own icon) but fixed to the top-right corner of the
+// viewport rather than scrolling along with the content — it must stay
+// reachable regardless of the current scroll position, which is exactly
+// the opposite of diffLeaveRail's own placement (flush against the card it
+// belongs to). Click hides exactly one column at a time
+// (scrollMainRightOneColumn) — no "jump all the way" shortcut, per the
+// reviewer's explicit "stap voor stap" request. Mounted once, top-level,
+// like Footer/ProgressBar/MenuHost; visibility is a nested `${() => ...}`
+// slot inside a stable element root (never a bare toggling expression, see
+// arrowjs-pitfalls.md) driven by state.mainOverflowRight.
+function MainScrollRightHint(state) {
+  return html`
+    <div class="contents">
+      ${() =>
+        state.mainOverflowRight
+          ? html`
+              <div
+                class="fixed top-6 right-6 z-30 flex shrink-0 flex-col gap-1 rounded-lg border border-slate-200 bg-white p-1 shadow-sm dark:border-zinc-700 dark:bg-zinc-900"
+                data-testid="main-scroll-right-hint"
+              >
+                <button
+                  type="button"
+                  title="Meer naar rechts"
+                  data-testid="main-scroll-right-button"
+                  class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-400 transition hover:bg-slate-100 hover:text-indigo-600 dark:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-indigo-400"
+                  @click="${(e) => {
+                    e.stopPropagation()
+                    scrollMainRightOneColumn()
+                  }}"
+                >
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="h-3.5 w-3.5" aria-hidden="true">
+                    <path d="M6 3l5 5-5 5" stroke-linecap="round" stroke-linejoin="round"></path>
+                  </svg>
+                </button>
+              </div>
+            `
+          : ''}
+    </div>
   `
 }
 
@@ -12522,6 +12632,8 @@ const app = document.getElementById('app')
 PrInfoPanel(state)(app)
 BlockList(state, isPrWideComposing)(app)
 DetailPanel(state)(app)
+setupMainOverflowObserver()
+MainScrollRightHint(state)(app)
 MenuHost()(app)
 ImageLightboxHost()(app)
 // The call-arrow overlay: one static fixed <svg> drawn imperatively (see
