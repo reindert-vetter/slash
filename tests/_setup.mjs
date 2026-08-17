@@ -60,6 +60,7 @@ export default function globalSetup() {
   materializeExplainRangeWorktrees()
   materializeWhenScopeWorktrees()
   materializeSignatureRefWorktrees()
+  materializeScopeClassRefWorktrees()
   materializeSettings()
   materializeOpsRepoWorktrees()
 }
@@ -1260,4 +1261,37 @@ class SignatureRefAction
 }
 `,
   )
+}
+
+// materializeScopeClassRefWorktrees writes the synthetic PR 121 fixture
+// worktree for related-class-ref-entry-points-scope.spec.mjs: a `class_ctor:`/
+// `class_method:` entry-point card (rule 6c-bis) must now be scoped to the
+// group/line that actually carries the `Foo::class` reference, exactly like
+// an ordinary call/a class-member card attached to a sibling — reversed on
+// explicit request from the earlier "always block-level" exemption (reported
+// bug: selecting an unrelated call on the same block still showed the
+// referenced class's constructor/first-method cards, see isBlockLevelCallKey
+// in home.mjs). Same two-separate-changed-groups shape as
+// materializeClassMemberScopeWorktrees (PR 115): group 0 (`$unrelated`) never
+// mentions the class, group 1 (`$repo = app(SomeRepo::class)`) does — the
+// unchanged `$filler` line between them splits changeGroups into two
+// independent runs.
+function materializeScopeClassRefWorktrees() {
+  const action = (unrelated, repo) => `<?php
+
+namespace App\\Actions;
+
+class ScopeClassRefAction
+{
+    public function run()
+    {
+        $unrelated = ${unrelated};
+        $filler = 0;
+        $repo = ${repo};
+    }
+}
+`
+  const write = worktreeWriter(121)
+  write('base', 'app/Actions/ScopeClassRefAction.php', action(0, 'null'))
+  write('head', 'app/Actions/ScopeClassRefAction.php', action(1, 'app(SomeRepo::class)'))
 }

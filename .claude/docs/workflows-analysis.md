@@ -276,11 +276,16 @@ Rules, in order:
   index (`resolvedCallTargetIds` skips these two kinds, like `translation`).
   Scoped to this rule ONLY: `new Foo(...)`, model usage and an Activity stub
   already point at the exact method in play, so a constructor + arbitrary first
-  method beside it would be noise. Both keys contain a `:` and are listed in
-  the frontend's `isBlockLevelCallKey` — the caller's line holds `Foo::class`,
-  never a call to the method being shown, so there is no literal site to scope
-  by. Tests: `TestResolveCallsClassRefEntryPoints`,
-  `tests/related-class-ref-entry-points.spec.mjs`.
+  method beside it would be noise. Both keys contain a `:`, but — reversed on
+  explicit request, 2026-08-17 — are no longer in the frontend's
+  `isBlockLevelCallKey`: the caller's line holds `Foo::class`, never a call to
+  the method being shown, but that IS a real literal site (the same one rule
+  6c's own `class_ref` child already scopes to), so `findCallSites` matches the
+  class name against it and both cards are scoped to the selected group/line/
+  call like an ordinary call, instead of staying visible regardless of the
+  cursor. Tests: `TestResolveCallsClassRefEntryPoints`,
+  `tests/related-class-ref-entry-points.spec.mjs`,
+  `tests/related-class-ref-entry-points-scope.spec.mjs`.
 - **7 — API Resource `toArray()`.** A Resource used on a changed line surfaces
   its own `toArray()`, since that's where the output is defined — even when the
   Resource class itself isn't changed (unlike `controllerResourceDetector`'s

@@ -487,6 +487,25 @@ function seed(db) {
   execFileSync(BIN, ['seed', '-db', db, '-from', 'tests/fixtures/signatureref-blocks.json'], {
     stdio: 'ignore',
   })
+  // class_ctor:/class_method: group/line scoping fixture (PR 121,
+  // related-class-ref-entry-points-scope.spec.mjs): a `Foo::class` reference's
+  // entry-point cards attached to a caller with two separate changed groups,
+  // only one of which actually carries the reference — see
+  // materializeScopeClassRefWorktrees (tests/_setup.mjs) for the exact diff
+  // shape (mirrors the scopemember fixture above).
+  execFileSync(
+    BIN,
+    [
+      'seed',
+      '-db',
+      db,
+      '-from',
+      'tests/fixtures/scopeclassref-blocks.json',
+      '-callresolve',
+      'tests/fixtures/scopeclassref-callresolve.json',
+    ],
+    { stdio: 'ignore', env: SEED_ENV },
+  )
 }
 
 function canConnect(port) {

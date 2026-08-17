@@ -3917,12 +3917,21 @@ function childrenOf(b) {
 // Foo::MAX_TRIES reference) is deliberately NOT here at all — its key IS a
 // real literal on a real line, like an ordinary call, for every caller.
 // `class_ctor:`/`class_method:` (a Foo::class reference's constructor and
-// first other method, rule 6c-bis) are block-level for the same reason as the
-// four above: their key names the CLASS, and the caller's own line holds
-// `Foo::class`, never a call to the method being shown — there is no literal
-// site to find, so scoping by one would hide them at every granularity.
+// first other method, rule 6c-bis) are DELIBERATELY NOT here (reversed on
+// explicit request, 2026-08-17): their key names the CLASS, not a call to the
+// method being shown, but the class DOES have a real literal site in the
+// caller — the same `Foo::class` reference rule 6c's own `class_ref` child
+// (the bare classname) already scopes to. Before this, they stayed visible
+// regardless of which call/line the reviewer had selected in the block, which
+// read as "this unrelated call resolves to that method" (reported: selecting
+// `$request->isPartner()` still showed `CommissionRepository::getAsPartner`
+// as "eerste methode", with no relation between the two at all). findCallSites
+// now matches the class name against the same `Foo::class` literal instead of
+// treating this as block-level, so callScopeMethods scopes them exactly like
+// an ordinary call/`class_member:`-on-a-sibling. See
+// tests/related-class-ref-entry-points-scope.spec.mjs.
 function isBlockLevelCallKey(name) {
-  return /^(resource|migration_model|data_provider|trait_usage|class_member|class_ctor|class_method):/.test(name)
+  return /^(resource|migration_model|data_provider|trait_usage|class_member):/.test(name)
 }
 
 // findCallSites locates, in a block's aligned diff rows, every place method
@@ -3953,6 +3962,19 @@ function findCallSites(rows, name) {
     re = isProp
       ? new RegExp('->\\s*' + bare + '\\b|::\\s*\\$' + bare + '\\b', 'g')
       : new RegExp('::\\s*' + bare + '\\b', 'g')
+  } else if (name.startsWith('class_ctor:') || name.startsWith('class_method:')) {
+    // `class_ctor:<Class>` / `class_method:<Class>` (rule 6c-bis, a bare
+    // `Foo::class` reference's constructor/first-other-method entry points):
+    // the key names the CLASS, but that class DOES have a real literal site
+    // in the caller — the very `Foo::class` reference these two cards are
+    // entry points for (rule 6c's own `class_ref` child matches the same
+    // literal, unprefixed, via the generic branch below). Scope them to
+    // wherever that reference actually sits, like an ordinary call —
+    // reversed from the earlier "always block-level" exemption (see
+    // isBlockLevelCallKey's own doc comment).
+    const cls = name.replace(/^(class_ctor|class_method):/, '')
+    const esc = cls.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    re = new RegExp('\\b' + esc + '\\s*::\\s*class\\b', 'g')
   } else if (isBlockLevelCallKey(name)) {
     // A block-level synthetic key (resource:/migration_model:/data_provider:/
     // trait_usage:, see isBlockLevelCallKey) never appears as a literal

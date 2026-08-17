@@ -98,6 +98,16 @@ Each child is one card (`data-testid=related-item`). It follows
   `Ongewijzigd` badge, no index row of their own taken away: a method this PR
   DID change keeps its own row and shows here as well). Test:
   `tests/related-class-ref-entry-points.spec.mjs`.
+  **Scoped to the selected group/line/call like an ordinary call** (reversed
+  on explicit request, 2026-08-17): both cards now only show while the
+  `Foo::class` reference itself sits within the selected unit — no longer
+  block-level/always-visible regardless of the cursor. Before this, selecting
+  an unrelated call/line elsewhere in the same block still showed them, which
+  read as "this call resolves to that method" with no actual relation between
+  the two (reported bug: selecting `$request->isPartner()` still showed
+  `CommissionRepository::getAsPartner` as "eerste methode"). List mode is
+  unaffected (no active cursor to scope by). Test:
+  `tests/related-class-ref-entry-points-scope.spec.mjs`.
 - An **approval badge** (`data-testid=related-approval`, `done/total`, green + ✓
   when fully approved) on any child that is itself a PR block, rendered in that
   child's own header (`approvalBadge`). Per-child only — there is **no**

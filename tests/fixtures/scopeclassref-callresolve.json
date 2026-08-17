@@ -1,0 +1,26 @@
+[
+  {
+    "pr": 121,
+    "callerId": "121:app/Actions/ScopeClassRefAction.php:ScopeClassRefAction::run",
+    "callKey": "class_ctor:SomeRepo",
+    "status": "resolved",
+    "kind": "class_ctor",
+    "childFile": "app/Services/SomeRepo.php",
+    "childClass": "SomeRepo",
+    "childMethod": "__construct",
+    "childLine": 5,
+    "childCode": "public function __construct()\n{\n}"
+  },
+  {
+    "pr": 121,
+    "callerId": "121:app/Actions/ScopeClassRefAction.php:ScopeClassRefAction::run",
+    "callKey": "class_method:SomeRepo",
+    "status": "resolved",
+    "kind": "class_first_method",
+    "childFile": "app/Services/SomeRepo.php",
+    "childClass": "SomeRepo",
+    "childMethod": "find",
+    "childLine": 9,
+    "childCode": "public function find(): array\n{\n    return [];\n}"
+  }
+]

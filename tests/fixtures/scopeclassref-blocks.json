@@ -1,0 +1,13 @@
+[
+  {
+    "pr": 121,
+    "file": "app/Actions/ScopeClassRefAction.php",
+    "class": "ScopeClassRefAction",
+    "name": "run",
+    "category": "ACTION",
+    "line": 7,
+    "endLine": 12,
+    "status": "modified",
+    "side": "new"
+  }
+]
