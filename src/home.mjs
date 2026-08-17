@@ -13144,26 +13144,25 @@ function MainScrollRightHint(state) {
 // for a drilled column (its own "Sluit deze kolom" button in Block.mjs
 // covers that) and once the description is already open.
 //
-// Position: `left-0` matches MainScrollRightHint's own corner exactly in
-// diff mode, where <main> effectively starts at the viewport's own left-6
-// (the pr-index (<aside>) is collapsed to width 0 then, see detail-layout.md)
-// so there's nothing to overlap. Flush against the true viewport edge (not
-// `left-6`) so the rail sits outside the diff card's own header row instead
-// of on top of it — see "A mouse way to reach content hidden to the left" in
-// detail-layout.md. In list mode the pr-index occupies exactly that top-left
-// corner (`w-[26rem]`, visually pinned there via AppColumns' own fixed
-// `left-6`, see BlockList.mjs) whenever this button would show
+// Position: `left-0` matches MainScrollRightHint's own corner (`right-0`)
+// exactly, in BOTH modes — reviewer request: the back button must sit flush
+// against the true viewport edge, not tucked in next to the pr-index. In
+// diff mode <main> effectively starts at the viewport's own left-6 (the
+// pr-index (<aside>) is collapsed to width 0 then, see detail-layout.md) so
+// there's nothing to overlap. In list mode the pr-index occupies that
+// top-left corner too (`w-[26rem]`, visually pinned there via AppColumns'
+// own fixed `left-6`, see BlockList.mjs) whenever this button would show
 // (canStepMainLeft() is only true there while the description ISN'T open
-// yet, i.e. the pr-index is fully visible) — so the button sits just past its
-// right edge instead (`left-[28rem]`, 26rem width + 2rem inset) rather than
-// on top of its own header/search row.
+// yet, i.e. the pr-index is fully visible) — the button now sits in the
+// blank `left-6` gutter to its left, matching the diff-mode gutter case
+// below, rather than past its right edge.
 // canStepMainLeftPositionCls() is its own small reactive slot so only the
 // position (not the whole button) reruns on a mode change.
 // In diff mode it stretches from top-6 to bottom-6 — the hover-catching zone
 // spans the whole (blank) left gutter, see canStepMainLeftZoneCls below for
 // why. The visible icon itself still sits at the very top (`items-start`).
 function canStepMainLeftPositionCls() {
-  return state.mode === 'diff' ? 'top-6 bottom-6 left-0' : 'top-6 left-[28rem]'
+  return state.mode === 'diff' ? 'top-6 bottom-6 left-0' : 'top-6 left-0'
 }
 // canStepMainLeftZoneCls() — the width of the invisible HOVER-CATCHING zone,
 // separate from the visible icon box nested inside it (`group`/
@@ -13182,8 +13181,11 @@ function canStepMainLeftPositionCls() {
 // "never shows even when I move the mouse around". Widening the invisible
 // catcher (not the visible icon) to span that whole gutter means a mouse
 // travelling from the edge toward the card passes over it either way. List
-// mode has no such gap (the pr-index already sits within ~8px of this hint),
-// so it keeps a tight zone matching the icon's own size.
+// mode now has the same kind of gap since the button moved flush to
+// `left-0` (the pr-index itself starts at `left-6`), just narrower (~24px,
+// no extra `gap-6` in front of it since <aside> is the first flex child) —
+// it keeps a tight zone matching the icon's own size regardless, since that
+// narrower gutter is still comfortably wider than the icon box itself.
 //
 // In diff mode that zone also spans the FULL height of the viewport
 // (`top-6 bottom-6` via the position class, `h-9` dropped), on reviewer
@@ -13200,9 +13202,9 @@ function canStepMainLeftPositionCls() {
 // in mouse-navigation.md, not a state read that gates any keyboard-only
 // functionality.
 //
-// List mode keeps the small `h-9` box: there the hint sits at `left-[28rem]`,
-// which already overlaps <main>'s own first column by ~20px, and a full-height
-// strip there WOULD swallow clicks/drag-selections along that card's left edge.
+// List mode keeps the small `h-9` box: there the hint now sits at `left-0`,
+// just left of the pr-index's own `left-6` edge, and a full-height strip
+// there WOULD swallow clicks/drag-selections along that card's left edge.
 function canStepMainLeftZoneCls() {
   return state.mode === 'diff' ? 'w-12' : 'h-9 w-9'
 }
@@ -13238,9 +13240,8 @@ function MainScrollLeftHint(state) {
                       stepMainLeftOneColumn()
                     }}"
                   >
-                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="h-3.5 w-3.5" aria-hidden="true">
-                      <path d="M10 3L5 8l5 5" stroke-linecap="round" stroke-linejoin="round"></path>
-                      <path d="M4 3v10" stroke-linecap="round"></path>
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="h-3.5 w-3.5 -scale-x-100" aria-hidden="true">
+                      <path d="M6 3l5 5-5 5" stroke-linecap="round" stroke-linejoin="round"></path>
                     </svg>
                   </button>
                 </div>
