@@ -6298,16 +6298,29 @@ function toggleIgnoreComment(c) {
 // COMPOSE_COMMANDS — shown when Enter (or the composer button) is pressed on a
 // filled new-comment composer (menu mode 'compose'): choose what to do with the
 // typed text. "Sluit menu" is pinned first (withClose); the menu opens on the
-// 2nd item (defaultSel), where "Plaats comment" (the default action) posts a
-// normal, public comment (the same placeComment path as ever, without
-// opts.local) so the plain "type, Enter, Enter" flow still places a real
-// comment. "Alleen voor mijzelf" places a private note instead (createComment
-// with local:true → the workflow skips the GitHub post). The Claude/Git/Jira
-// items are placeholders (like the Jira items in PR_COMMANDS). Both real-
-// placing items refresh the Taken column right after (pollWorkflows) —
-// task_code_comment starts a new workflow run per comment, and this is more
-// immediate than waiting for the next WORKFLOWS_POLL_MS tick. The Git label
-// names the current selection unit (groep/regel/call) via granNoun.
+// 2nd item (defaultSel), where "Plaats comment" (the default action, and now
+// the only real "place it" item) posts a normal, public comment (the plain
+// placeComment path, no opts.local) so the plain "type, Enter, Enter" flow
+// still places a real comment. The Claude/Git/Jira items are placeholders
+// (like the Jira items in PR_COMMANDS). "Plaats comment" refreshes the Taken
+// column right after (pollWorkflows) — task_code_comment starts a new
+// workflow run per comment, and this is more immediate than waiting for the
+// next WORKFLOWS_POLL_MS tick. The Git label names the current selection unit
+// (groep/regel/call) via granNoun.
+//
+// There used to be a second real item here, "compose-self"/"Alleen voor
+// mijzelf" (placeComment(..., {local:true}) — a private note the workflow
+// never posts to GitHub, see the `Local` input in
+// .claude/docs/workflows-comments.md). Removed on request ("dat gebruik ik
+// niet meer") — this was the ONE UI entry point that let the reviewer choose
+// to keep a brand-new root comment private; `placeComment`'s `opts.local`
+// parameter itself stays (shared, generic plumbing — `ensureClaudeAnchorForNew`,
+// RelatedPanel.mjs, still always creates its Claude-chat anchor comment with
+// `local:true`, and the PR-wide branch still honours `opts.local` for any
+// future/API caller), and `replyPublishCommandsFor`'s "Alleen voor mijzelf
+// (blijft lokaal)" is a DIFFERENT feature (keeping an existing thread's REPLY
+// local, not creating a new private root) and is untouched. See "The compose
+// (comment-kind) menu" in .claude/docs/command-palette.md.
 const COMPOSE_COMMANDS = withClose([
   {
     id: 'compose-post',
@@ -6337,16 +6350,6 @@ const COMPOSE_COMMANDS = withClose([
     // Placeholder — no git-commit/implement integration yet. The label refers to
     // the unit (group/line/call) the comment is scoped to.
     run: () => {},
-  },
-  {
-    id: 'compose-self',
-    label: 'Alleen voor mijzelf',
-    hint: 'privé',
-    run: async () => {
-      await placeComment(state, commentTarget, { local: true })
-      pollWorkflows()
-      scrollFocusIntoView()
-    },
   },
   {
     id: 'compose-jira',
@@ -6591,7 +6594,7 @@ function copySelectionCommand(text) {
 // see nothing landed (no new "Review" run in Taken) and retry via `/`.
 // On success this is itself a fresh workflow run, so pollWorkflows() refreshes
 // the Taken column sooner than the next WORKFLOWS_POLL_MS tick — the same
-// courtesy call compose-post/compose-self already make after placing a comment.
+// courtesy call compose-post already makes after placing a comment.
 // It ALSO copies a one-line PR summary to the clipboard — but only after a
 // genuinely successful submit (a failed fetch returns before this).
 async function submitReview(event, body = '') {

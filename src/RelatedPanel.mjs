@@ -4078,8 +4078,13 @@ async function sendClaudeMessageFromNew(state, commentTarget, text, action) {
 }
 
 // placeComment submits the composer's text as a comment on the current unit.
-// Exported so the comment-kind menu (home.mjs COMPOSE_COMMANDS) can place a
-// private note via opts.local; the composer button routes through the menu too.
+// Exported so the comment-kind menu (home.mjs COMPOSE_COMMANDS) can place it;
+// the composer button routes through the menu too. `opts.local` is still
+// supported (a generic, shared parameter — `ensureClaudeAnchorForNew` below
+// always creates its Claude-chat anchor comment with `local:true`), but no
+// COMPOSE_COMMANDS item passes it true anymore: the one UI entry point that
+// did, "Alleen voor mijzelf", was removed on request — see the doc comment
+// above COMPOSE_COMMANDS in home.mjs.
 //
 // The keyboard goes back to the diff (exitRelated) IMMEDIATELY, before the
 // POST + GET round-trip below even starts — an explicit, optimistic-UI

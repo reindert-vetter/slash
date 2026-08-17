@@ -135,14 +135,25 @@ test.describe('PR Review Tree — per-line onderliggende-code badge', () => {
   })
 
   // Reindert: "als ik alleen een local comment heb op een regel, maak hier dan
-  // een note icoontje van ipv mijn avatar". A private "Alleen voor mijzelf"
-  // note never reaches GitHub (createComment with local:true — the workflow
-  // skips the post, so githubId stays 0; see isLocalComment in
-  // RelatedPanel.mjs), and an avatar answers "who is waiting for you", which
-  // says nothing about your own note — seeing your own face on it is noise.
+  // een note icoontje van ipv mijn avatar". A private note never reaches
+  // GitHub (createComment with local:true — the workflow skips the post, so
+  // githubId stays 0; see isLocalComment in RelatedPanel.mjs), and an avatar
+  // answers "who is waiting for you", which says nothing about your own note
+  // — seeing your own face on it is noise.
   //
   // The distinction is carried by SHAPE (a square note vs. the round avatar)
   // plus the badge's own title text, never by colour — the colorblind rule.
+  //
+  // There used to be a UI entry point for this ("Alleen voor mijzelf" in
+  // COMPOSE_COMMANDS, home.mjs) — removed on request, "dat gebruik ik niet
+  // meer" (see the doc comment above COMPOSE_COMMANDS). The private-note
+  // FEATURE this test covers (the glyph itself, isLocalComment) is untouched
+  // — only the compose menu no longer offers a way to CREATE a new local root
+  // comment — so this seeds one the same way the removed item did: it
+  // rewrites the outgoing `task_code_comment` POST to carry `local:true`,
+  // reusing the exact same anchor/target JSON the ordinary "Plaats comment"
+  // flow already computes (file/label/gran/rowStart/…), rather than
+  // hand-building that payload.
   test('a line whose only comment is a private note shows the note glyph, not the avatar', async ({
     page,
   }) => {
@@ -157,6 +168,11 @@ test.describe('PR Review Tree — per-line onderliggende-code badge', () => {
     await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight') // step into the diff
 
+    await page.route('**/api/workflows/task_code_comment', async (route) => {
+      const data = route.request().postDataJSON()
+      await route.continue({ postData: JSON.stringify({ ...data, local: true }) })
+    })
+
     await page.keyboard.press('Enter')
     await page.getByTestId('command-row').filter({ hasText: 'Comment op deze regel' }).click()
     const composer = page.getByTestId('comment-compose')
@@ -164,7 +180,7 @@ test.describe('PR Review Tree — per-line onderliggende-code badge', () => {
     await composer.fill('even bij mezelf checken')
     await page.keyboard.press('Enter') // opens the compose-kind menu
     await expect(page.getByTestId('command-menu')).toBeVisible()
-    await page.getByTestId('command-row').filter({ hasText: 'Alleen voor mijzelf' }).click()
+    await page.keyboard.press('Enter') // default: "Plaats comment" (rewritten to local:true above)
 
     // Located BY the glyph rather than by row text, so this holds whichever
     // row the step landed on — and the count doubles as the "a private note

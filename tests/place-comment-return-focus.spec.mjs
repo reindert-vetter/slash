@@ -1,9 +1,9 @@
 import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // After placing a comment tied to a piece of code, the reviewer wants to keep
-// reviewing that code — not sit on the composer. placeComment (called by both
-// COMPOSE_COMMANDS items, "Plaats comment" and "Alleen voor mijzelf") hands
-// the keyboard back to the diff (exitRelated) OPTIMISTICALLY — immediately,
+// reviewing that code — not sit on the composer. placeComment (called by
+// COMPOSE_COMMANDS' "Plaats comment") hands the keyboard back to the diff
+// (exitRelated) OPTIMISTICALLY — immediately,
 // before the POST + GET round-trip below even settles, not after a
 // successful save — and home.mjs re-aligns <main> on it
 // (scrollFocusIntoView), same as a plain ← exit out of the inline comment

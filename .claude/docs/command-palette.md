@@ -879,21 +879,31 @@ fallback targets the item's own existing composer entry points instead. Test:
 
 If the composer is open and text has been typed, `Enter` (and the composer's
 own **"Plaats…"** button, via `RelatedPanel`'s `openCompose` prop) opens this
-menu instead of placing the comment immediately. Six rows: **"Sluit menu"**
+menu instead of placing the comment immediately. Five rows: **"Sluit menu"**
 (pinned), **"Plaats comment"** (default, 2nd — so "type, Enter, Enter" still
 places it directly), *Claude command* (placeholder), *Let Claude implement this
 (group/line/call)* (placeholder, label names the unit via `granNoun()` from
-`commentTarget()`), **"Alleen voor mijzelf"**, and *Jira* (a submenu of three
-placeholders).
+`commentTarget()`), and *Jira* (a submenu of three placeholders).
 
 **"Plaats comment"** → `placeComment(state, commentTarget)` posts a normal
-public comment; **"Alleen voor mijzelf"** → `placeComment(…, { local: true })`
-stores a private note that never reaches GitHub (see the `local` flag in
-`.claude/docs/workflows-comments.md`). Both `run`s are `async` and call
-`pollWorkflows()` after a successful place, so the new `task_code_comment` run
-shows in the "Taken" card immediately instead of at the next
-`WORKFLOWS_POLL_MS` tick. Placing a comment leaves the approval of the unit it
-hangs on **untouched** — see `.claude/docs/approval.md`.
+public comment. It's `async` and calls `pollWorkflows()` after a successful
+place, so the new `task_code_comment` run shows in the "Taken" card
+immediately instead of at the next `WORKFLOWS_POLL_MS` tick. Placing a comment
+leaves the approval of the unit it hangs on **untouched** — see
+`.claude/docs/approval.md`.
+
+**There used to be a sixth row, "Alleen voor mijzelf"** (`placeComment(…,
+{ local: true })`, storing a private note that never reaches GitHub — see the
+`local` flag in `.claude/docs/workflows-comments.md`) — removed on request
+("dat gebruik ik niet meer"): it was the one UI entry point that let the
+reviewer keep a brand-new root comment private. `placeComment`'s `opts.local`
+parameter itself is untouched (generic, shared plumbing —
+`ensureClaudeAnchorForNew`, `RelatedPanel.mjs`, still always creates its
+Claude-chat anchor comment with `local:true`), and this is a DIFFERENT feature
+from `replyPublishCommandsFor`'s "Alleen voor mijzelf (blijft lokaal)" below
+(keeping an existing thread's own REPLY local, not creating a brand-new
+private root comment) — that one stays. Test:
+`tests/compose-place-comment.spec.mjs` now also asserts the row is gone.
 
 The Enter branch sits in `onKeydown` **before** the `relatedActive()` branch
 (`isComposeOpen()` + `composeHasText()`), so it works whether the composer was

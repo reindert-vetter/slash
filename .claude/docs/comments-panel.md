@@ -331,13 +331,15 @@ things and nothing else:
   `{file:'', line:0, kind:'issue'}` — the same `Kind` an imported general PR
   comment gets, which is precisely what makes it a navigable "PR-comments"
   index row (`prWideComments`/`commentBlockItem`) rather than an invisible line
-  comment. `opts.local` ("Alleen voor mijzelf") still works;
+  comment. `opts.local` still works (generic, shared plumbing — no
+  `COMPOSE_COMMANDS` item passes it true anymore, see "The compose
+  (comment-kind) menu" in `.claude/docs/command-palette.md`);
 - **no Claude column** (`claudeChatVisible()` returns false, and `→` from the
   composer doesn't `enterClaudeChatFromNew`): `ensureClaudeAnchorForNew` would
   lazily create a backing comment **anchored on the current diff unit**, which
   is exactly what a general comment is not;
-- **no approval revoke** — `COMPOSE_COMMANDS`' `compose-post`/`compose-self`
-  pass a `null` revoke target, since a PR-wide comment hangs on no unit (see
+- **no approval revoke** — `COMPOSE_COMMANDS`' `compose-post` passes a `null`
+  revoke target, since a PR-wide comment hangs on no unit (see
   `.claude/docs/approval.md`).
 
 The flag is cleared by every ordinary composer open (`toNew`) and every exit
@@ -1282,8 +1284,8 @@ composer header/`composeTargetHint` and the eventual `createComment` prefer it
 over `commentTarget()`). Every ordinary composer-open entry point
 (`toNew`/`startComment`/"Annuleer") clears it first, so a stale override can't
 leak into an unrelated comment. The reviewer edits freely, then picks "Plaats
-comment"/"Alleen voor mijzelf" from the usual comment-kind menu
-(`COMPOSE_COMMANDS`, `.claude/docs/command-palette.md`). **Only once the
+comment" from the usual comment-kind menu (`COMPOSE_COMMANDS`,
+`.claude/docs/command-palette.md`). **Only once the
 replacement is confirmed placed** (`createComment` returns `res.ok`) does
 `placeComment` delete the original via the same `delete` Signal
 (`deleteComment(c)`, factored out to target a specific comment) — a failed
@@ -1355,8 +1357,10 @@ Both are fixed together. Test: `tests/convert-line-anchored-warning.spec.mjs`.
 
 ### Publishing a local thread to GitHub
 
-A thread with no GitHub root of its own — a private "Alleen voor mijzelf" note,
-or an AI finding (always `Local:true`) — used to be a one-way street: every
+A thread with no GitHub root of its own — a private note (e.g. the
+auto-created Claude-chat anchor comment, `ensureClaudeAnchorForNew`, always
+`local:true`), or an AI finding (always `Local:true`) — used to be a one-way
+street: every
 reply on it stayed local forever. Sending a reply on such a thread now **holds
 the send and asks first**.
 
@@ -1569,14 +1573,14 @@ naar de code diff — direct, al voordat het echt is opgeslagen", later
 extended to cover a reply too, on both surfaces. Three write paths in
 `RelatedPanel.mjs` all follow the same shape now:
 
-- **`placeComment`** (called by both `COMPOSE_COMMANDS` items, "Place
-  comment"/"Only for myself") calls `exitRelated()` **immediately** — before
-  `createComment`'s POST + GET round-trip even starts, not after it succeeds.
-  Focus returns to the diff of the block/column the comment was attached to
-  (`commentTarget()` follows `focusedBlock()`, so also a drilled column).
-  `home.mjs`'s `compose-post`/`compose-self` `run` functions then call
-  `scrollFocusIntoView()` to re-align `<main>`. So "type, Enter, Enter" leaves
-  the reviewer ready to continue with `↑`/`↓`/`f`/`d`/`s` immediately. Test:
+- **`placeComment`** (called by `COMPOSE_COMMANDS`' "Plaats comment") calls
+  `exitRelated()` **immediately** — before `createComment`'s POST + GET
+  round-trip even starts, not after it succeeds. Focus returns to the diff of
+  the block/column the comment was attached to (`commentTarget()` follows
+  `focusedBlock()`, so also a drilled column). `home.mjs`'s `compose-post`
+  `run` function then calls `scrollFocusIntoView()` to re-align `<main>`. So
+  "type, Enter, Enter" leaves the reviewer ready to continue with
+  `↑`/`↓`/`f`/`d`/`s` immediately. Test:
   `tests/place-comment-return-focus.spec.mjs`.
 - **`postThreadReply`** (`sendReaction`'s write half, the block-scoped inline
   thread) now **also** closes the thread immediately on every reply —

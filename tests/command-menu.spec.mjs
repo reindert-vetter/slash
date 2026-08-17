@@ -158,17 +158,17 @@ test.describe('PR Review Tree — command palette', () => {
     await expect(composer).toBeFocused()
     expect(posted).toBeNull()
 
-    // Finishing now opens the comment-kind menu (the send button no longer places
-    // directly); choosing "Alleen voor mijzelf" places the comment task as a
-    // private note (local:true) with the (possibly extended) text.
+    // Finishing now opens the comment-kind menu (the send button no longer
+    // places directly); the default row, "Plaats comment", posts the
+    // (possibly extended) text publicly.
     await composer.type(' extra.')
     await page.getByTestId('comment-send').click()
     await expect(page.getByTestId('command-menu')).toBeVisible()
-    await page.getByTestId('command-row').filter({ hasText: 'Alleen voor mijzelf' }).click()
+    await page.getByTestId('command-row').filter({ hasText: 'Plaats comment' }).click()
     await expect.poll(() => posted && posted.body).toBe('dit klopt niet helemaal extra.')
     expect(posted.pr).toBe(12903)
     expect(posted.file).toBeTruthy()
-    expect(posted.local).toBe(true)
+    expect(posted.local).toBeFalsy()
     // The placement carries the previewed snippet so the placed comment's thread
     // can show the same code the composer did (see composeTargetHint reuse).
     expect(posted.code).toBeTruthy()
@@ -202,10 +202,10 @@ test.describe('PR Review Tree — command palette', () => {
   })
 
   // The comment-kind menu: Enter (or the send button) on a filled composer opens
-  // a menu to choose what to do with the comment — a Claude command / git-commit
-  // (both placeholders), a private note ("alleen voor mijzelf"), or Jira (a
-  // submenu). Reuses the CommandMenu overlay via menu mode 'compose'. See
-  // COMPOSE_COMMANDS in home.mjs.
+  // a menu to choose what to do with the comment — "Plaats comment" (the
+  // default action), a Claude command / git-commit (both placeholders), or
+  // Jira (a submenu). Reuses the CommandMenu overlay via menu mode 'compose'.
+  // See COMPOSE_COMMANDS in home.mjs.
   test('Enter on a filled composer opens the comment-kind menu (with a Jira submenu)', async ({
     page,
   }) => {
@@ -240,10 +240,13 @@ test.describe('PR Review Tree — command palette', () => {
     const menu = page.getByTestId('command-menu')
     await expect(menu).toBeVisible()
     const rows = page.getByTestId('command-row')
+    await expect(rows.filter({ hasText: 'Plaats comment' })).toHaveCount(1)
     await expect(rows.filter({ hasText: 'Claude commando' })).toHaveCount(1)
     await expect(rows.filter({ hasText: 'implementeren' })).toHaveCount(1)
-    await expect(rows.filter({ hasText: 'Alleen voor mijzelf' })).toHaveCount(1)
     await expect(rows.filter({ hasText: 'Jira' })).toHaveCount(1)
+    // "Alleen voor mijzelf" (a private-note item) was removed on request —
+    // stays gone (see the doc comment above COMPOSE_COMMANDS in home.mjs).
+    await expect(rows.filter({ hasText: 'Alleen voor mijzelf' })).toHaveCount(0)
 
     // Jira opens a submenu with three items; nothing posted yet.
     await rows.filter({ hasText: 'Jira' }).click()
@@ -253,13 +256,13 @@ test.describe('PR Review Tree — command palette', () => {
     await expect(rows.filter({ hasText: 'Nieuwe taak aanmaken' })).toHaveCount(1)
     expect(posted).toBeNull()
 
-    // Esc backs out of the submenu to the root, then choose the private note.
+    // Esc backs out of the submenu to the root, then place the comment.
     await page.keyboard.press('Escape')
-    await expect(rows.filter({ hasText: 'Alleen voor mijzelf' })).toHaveCount(1)
-    await rows.filter({ hasText: 'Alleen voor mijzelf' }).click()
+    await expect(rows.filter({ hasText: 'Plaats comment' })).toHaveCount(1)
+    await rows.filter({ hasText: 'Plaats comment' }).click()
     await expect(menu).not.toBeVisible()
     await expect.poll(() => posted && posted.body).toBe('dit is een notitie')
-    expect(posted.local).toBe(true)
+    expect(posted.local).toBeFalsy()
   })
 
   test('the approve command toggles the selected block', async ({ page }) => {

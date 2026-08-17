@@ -79,7 +79,7 @@ test('composing a comment while a drilled column is focused targets that column,
   // Placing it now must save+anchor on Order.php, not the top-level block's file.
   await page.getByTestId('comment-compose').fill('drilled column comment')
   await page.getByTestId('comment-send').click()
-  await page.getByText('Alleen voor mijzelf').click()
+  await page.getByTestId('command-row').filter({ hasText: 'Plaats comment' }).click()
 
   const item = page
     .getByTestId('inline-comments')

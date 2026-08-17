@@ -502,11 +502,11 @@ comments, a different category): the `refreshInbox` Activity overwrites it per
 row with the count of slash's own open, **GitHub-imported** comments —
 `comments.List(pr)` filtered to `status not in {resolved, deleting, deleted}`
 **and** `source == "github"`, so resolving an imported comment in slash lowers
-the badge directly. A **local** (`source: ""`/`"ui"`) comment — a private
-"Alleen voor mijzelf" note, or the auto-created Claude-chat anchor comment
-(`ensureClaudeAnchorForNew`, `RelatedPanel.mjs`, see
-`.claude/docs/claude-chat-panel.md`) — was never posted to GitHub and must
-never inflate a count meant to mirror the real GitHub comment count; this was
+the badge directly. A **local** (`source: ""`/`"ui"`) comment — e.g. the
+auto-created Claude-chat anchor comment (`ensureClaudeAnchorForNew`,
+`RelatedPanel.mjs`, see `.claude/docs/claude-chat-panel.md`) — was never
+posted to GitHub and must never inflate a count meant to mirror the real
+GitHub comment count; this was
 reversed from an earlier version that counted both sources, which made the
 badge diverge from GitHub's own comment count the moment a reviewer started a
 Claude conversation before typing an actual comment. The comment(s) themselves

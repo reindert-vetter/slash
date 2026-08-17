@@ -9,7 +9,7 @@ async function place(page, body) {
   }
   await page.getByTestId('comment-compose').fill(body)
   await page.getByTestId('comment-send').click()
-  await page.getByText('Alleen voor mijzelf').click()
+  await page.getByTestId('command-row').filter({ hasText: 'Plaats comment' }).click()
 }
 function item(page, body) {
   return page.getByTestId('inline-comments').getByTestId('comment-item').filter({ hasText: body })

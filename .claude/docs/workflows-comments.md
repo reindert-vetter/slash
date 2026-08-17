@@ -173,8 +173,9 @@ against `github.Fake`'s `EditedReviews`/`EditedIssues` maps), plus
 
 ### Private note (`local` flag)
 
-`Local` on the input — sent by "Alleen voor mijzelf" — makes the workflow
-**skip `postGithubComment`**. Replay-safe because the number of Activities
+`Local` on the input — e.g. the Claude-chat auto-anchor comment
+(`ensureClaudeAnchorForNew`, `RelatedPanel.mjs`, always local) — makes the
+workflow **skip `postGithubComment`**. Replay-safe because the number of Activities
 depends on the input, not on live state. `posted.RootID` stays 0, so no poller
 starts and the existing `RootID == 0` guards make `deleteGithubComment`/
 `replyGithub` no-ops: reacting to or deleting a private note never touches
