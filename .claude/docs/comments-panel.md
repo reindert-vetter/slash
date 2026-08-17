@@ -630,6 +630,11 @@ Onderliggende-code panel, so it falls through to the next **index row**. `←`
 change also resets it, mirroring how the same watch resets
 `picm`/`cancelPrCommentReply`. `Enter` still opens the menu regardless.
 
+**Typing a query that matches none of the menu's own labels falls back to
+"Chat over deze comment"/"Beantwoorden met deze tekst"** instead of a dead-end
+"Geen commando's." — see "A no-match query falls back to Chat/Beantwoorden,
+not 'Geen commando's'" in `.claude/docs/command-palette.md`.
+
 ### The menu actions
 
 - **"Beantwoorden"** (`startPrCommentReply`) only reveals the reply textarea in

@@ -805,6 +805,31 @@ risk finding could be resolved but never removed (reported bug); no cursor
 fix-up is needed, unlike `deleteCommentAndSelectRow`, since a PR-wide item has
 no diff row to land on. No new write path anywhere here.
 
+### A no-match query falls back to Chat/Beantwoorden, not "Geen commando's"
+
+Reported bug: selecting a comment-index row (e.g. an AI-risicowaarschuwing),
+pressing `Enter`, then typing an actual question ("Klopt dit echt? geef code
+voorbeelden") fuzzy-matched none of the short labels above ("Beantwoorden",
+"Resolve comment", "Chat met Claude", …) and collapsed to `CommandMenu`'s bare
+"Geen commando's." — a dead end, since a comment-index item has no diff row to
+fall back onto either (stepping `→` into the thread and typing straight into
+the reply field still worked, since that field isn't filtered by the palette
+at all — which is what made this easy to miss). `resolveCommands` (`home.mjs`)
+now gives `ms.mode === 'prComment'` the same shape of no-match fallback as the
+block palette's own (see "Filtering, submenus, and the no-match fallback"
+above), only when `filterCommands(ms.commands, query)` is empty for a
+non-blank query: **"Chat over deze comment"** (default, first —
+`startPrCommentChat(selectedComment())`, then prefills `claude-chat-compose`
+with the typed text) and **"Beantwoorden met deze tekst"**
+(`startPrCommentReply(selectedComment())`, prefills `comment-detail-reply`).
+It can't reuse the block-mode fallback verbatim: that one anchors on
+`commentTarget`/`startComment`/`startClaudeChat`, which assume a real diff
+unit to hang a NEW comment/chat off — a comment-index item has neither
+(`commentTarget()` returns `null` for it, per "Selecting a 'Start' item
+empties the block-scoped index" in `.claude/docs/comments-panel.md`), so this
+fallback targets the item's own existing composer entry points instead. Test:
+`tests/pr-comment-menu-fallback.spec.mjs`.
+
 ## The compose (comment-kind) menu (`compose`, `COMPOSE_COMMANDS`)
 
 If the composer is open and text has been typed, `Enter` (and the composer's

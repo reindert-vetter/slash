@@ -10043,9 +10043,58 @@ function resolveCommands(query) {
   // submenu, one more conditional on claudeAnchorIsPlaceholder()).
   if (ms.mode === 'claude') return filterCommands(ms.commands, query)
   // The comment-INDEX-item menu (Enter on a selected comment row in the
-  // sidebar — see selectedComment/prCommentCommandsFor): same shape, just its
-  // own small list.
-  if (ms.mode === 'prComment') return filterCommands(ms.commands, query)
+  // sidebar — see selectedComment/prCommentCommandsFor): the fixed action list
+  // (Beantwoorden/Resolve/Verwijder/Chat met Claude/...), PLUS its own
+  // no-match fallback mirroring the block-mode one below — reported bug: an
+  // AI-risicowaarschuwing row selected, Enter, typing an actual question
+  // ("Klopt dit echt? geef code voorbeelden") fuzzy-matched none of those
+  // short labels and collapsed to CommandMenu's bare "Geen commando's.", a
+  // dead end (→ into the thread and using the reply field directly still
+  // worked, since that field isn't filtered by the palette at all — which is
+  // what made this easy to miss). Can't reuse the block-mode fallback
+  // verbatim: it anchors on commentTarget/startComment/startClaudeChat, which
+  // assume a real diff unit — a comment-index item has neither (see
+  // commentTarget's own null-for-comment-item guard), so this fallback
+  // targets the item's own composer entry points instead.
+  if (ms.mode === 'prComment') {
+    const list = filterCommands(ms.commands, query)
+    const q = (query || '').trim()
+    if (list.length === 0 && q) {
+      return [
+        {
+          id: 'make-pr-comment-claude-chat',
+          label: 'Chat over deze comment',
+          hint: 'claude',
+          run: () => {
+            startPrCommentChat(selectedComment())
+            requestAnimationFrame(() => {
+              const el = document.querySelector('[data-testid=claude-chat-compose]')
+              if (el) {
+                el.value = q
+                el.focus()
+              }
+            })
+          },
+        },
+        {
+          id: 'make-pr-comment-reply',
+          label: 'Beantwoorden met deze tekst',
+          hint: 'reply',
+          run: () => {
+            startPrCommentReply(selectedComment())
+            requestAnimationFrame(() => {
+              const el = document.querySelector('[data-testid=comment-detail-reply]')
+              if (el) {
+                el.value = q
+                el.focus()
+              }
+            })
+          },
+        },
+      ]
+    }
+    return list
+  }
   // The push-todo row's menu (Enter on the bottom-most index stop — see
   // pushTodoCommandsFor): one command behind its own confirm submenu.
   if (ms.mode === 'pushTodo') return filterCommands(ms.commands, query)
