@@ -127,6 +127,7 @@ import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
 import TestMethodsColumn from './TestMethodsColumn.mjs'
 import { meLogin } from './avatar.mjs'
 import { relativeTime } from './relativeTime.mjs'
+import { fetchProblems, problemRunRow, problemLogRow } from './problems.mjs'
 import {
   loadColumnWidths,
   colWidthStyle,
@@ -215,6 +216,13 @@ const state = reactive({
   // /api/workflows?pr=N), reassigned wholesale on every poll so arrow.js
   // re-renders the "Taken" column in RelatedPanel. See pollWorkflows below.
   workflows: [],
+  // pageProblems — GET /api/problems (repo-wide, read-only), filtered
+  // client-side to THIS pr: failed workflow runs plus mirrored glue-log lines
+  // that never surfaced as a run at all (see ProblemsPanel/pollProblems
+  // below, and "mislukte taken ook zichtbaar op /pr/<id>" in
+  // .claude/docs/detail-layout.md). Reused from the SAME /pr-overview
+  // "Mislukte taken" building blocks (src/problems.mjs).
+  pageProblems: { failedRuns: [], logErrors: [] },
   // blocks — the top-level blocks shown in the sidebar and walked by the
   // navigation: the full set minus any block that is a child in a relation
   // (those are nested under their parent in the RelatedPanel instead). allBlocks
@@ -3808,6 +3816,23 @@ async function pollWorkflows() {
     }
   } catch (_) {
     /* offline/transient — keep the last-known list, try again next tick */
+  }
+}
+
+const PROBLEMS_POLL_MS = 15000
+
+// pollProblems refreshes state.pageProblems from the read-only, repo-wide GET
+// /api/problems (the SAME endpoint the /pr-overview "Mislukte taken" drawer
+// reads, see src/problems.mjs) — filtered client-side to this PR, since the
+// endpoint itself has no `pr=` filter. A slower cadence than pollWorkflows:
+// failures are rare, this is a "did something go wrong out of sight" check,
+// not a live status. Best-effort (offline just leaves the last-known list).
+async function pollProblems() {
+  const { ok, failedRuns, logErrors } = await fetchProblems()
+  if (!ok) return
+  state.pageProblems = {
+    failedRuns: failedRuns.filter((r) => r.pr === state.pr),
+    logErrors: logErrors.filter((e) => e.pr === state.pr),
   }
 }
 
@@ -12384,6 +12409,32 @@ function prInfoCard(state) {
   `
 }
 
+// ProblemsPanel — the review-tree's own small "Mislukte taken" surface,
+// reusing problemRunRow/problemLogRow verbatim from src/problems.mjs (the
+// SAME building blocks the /pr-overview drawer uses — see
+// .claude/docs/detail-layout.md). Unlike that drawer this never collapses:
+// a single PR typically has 0-2 problems at most, so there's nothing to hide
+// behind a toggle, and a reviewer should see it immediately rather than have
+// to think to expand something. Renders nothing at all when there's nothing
+// to show — mounted right below TasksPanel in the same PR-description column.
+// showPr:false on both row kinds: the page is already scoped to this PR, so
+// the "#<pr> · title" chip would only repeat what's already on screen.
+function ProblemsPanel(state) {
+  return html`<div class="contents">${() => {
+    const { failedRuns, logErrors } = state.pageProblems
+    if (failedRuns.length === 0 && logErrors.length === 0) return ''
+    return html`
+      <div
+        class="shrink-0 overflow-hidden rounded-xl border border-rose-200 dark:border-rose-900/40 bg-rose-50/40 dark:bg-rose-950/20"
+        data-testid="page-problems"
+      >
+        ${failedRuns.map((run) => problemRunRow(run, null, { showPr: false }))}
+        ${logErrors.map((entry, i) => problemLogRow(entry, i, null, { showPr: false }))}
+      </div>
+    `
+  }}</div>`
+}
+
 // PrInfoPanel — stop 1 of the left→right nav chain: the PR-description
 // column. A flex sibling of BlockList's <aside> and DetailPanel's <main>
 // (mounted together inside AppColumns, below), in that DOM order — so
@@ -12417,7 +12468,7 @@ function PrInfoPanel(state) {
               class="flex h-full min-h-0 w-[39rem] shrink-0 flex-col gap-3"
               data-testid="pr-info-column"
             >
-              ${prInfoCard(state)} ${TasksPanel(state, openTask)}
+              ${prInfoCard(state)} ${TasksPanel(state, openTask)} ${ProblemsPanel(state)}
             </div>`.key('pr-info-column')
           : ''}
     </div>
@@ -13482,6 +13533,8 @@ loadPendingPush()
 ensurePraiseWords()
 pollWorkflows()
 setInterval(pollWorkflows, WORKFLOWS_POLL_MS)
+pollProblems()
+setInterval(pollProblems, PROBLEMS_POLL_MS)
 
 // callresolve/testcovers' LLM search keeps running server-side well after
 // loadBlocks' own one-shot fetch above (resolve_call/resolve_test_covers are

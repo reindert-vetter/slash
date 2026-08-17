@@ -418,6 +418,16 @@ Load-bearing frontend properties:
   review-tree state: comment cursors, url-state bindings, watches).
   `STATUS_BADGES`/`WORKFLOW_STATUS_NOTE` stayed behind: they describe runs still
   in progress, this block only shows runs that already failed.
+- **The row renderers themselves now live in `src/problems.mjs`**
+  (`fetchProblems`/`problemMark`/`PROBLEM_ROW_CLASS`/`problemPrChip`/
+  `problemCommentLine`/`baseName`/`problemRunRow`/`problemLogRow`), not this
+  file — extracted so the review tree (`/pr/<id>`) can reuse the exact same
+  rows, filtered to the open PR, instead of a second implementation. See
+  "'Mislukte taken' also reaches the review tree" in
+  `.claude/docs/detail-layout.md`. `overview.mjs` still owns everything
+  page-specific (`state.failedRuns`/`logErrors`/`problemsOpen`/`problemsLoaded`,
+  `problemCount`/`problemsToggleText`/`problemsDrawer`) — this page's own
+  behaviour is unchanged, only the row-building code moved.
 
 ### A failure that was later retried successfully drops out of the list
 

@@ -705,3 +705,42 @@ the empty state wraps in an array of one (`.key('no-workflows')`) — both per
 The old dummy Tasks placeholder (`ui.task`,
 `data-testid=task-list`/`chat`/`chat-bubble`/`new-task`) no longer exists — no
 chat, no `ui.task`.
+
+### "Mislukte taken" also reaches the review tree, not only `/pr-overview`
+
+A failed `task_code_comment` run scoped to this PR eventually surfaces via the
+Taken block above once it's stale (5+ minutes, see `TASK_STALE_MS`), but a
+**mirrored glue-log line** (a poller/startup error with no workflow run of its
+own — e.g. "import comments: … exit status 1", see `run_errors.go`) never had
+anywhere to show on `/pr/<id>` at all: only the `/pr-overview` "Mislukte taken"
+drawer read `GET /api/problems` (see `.claude/docs/pr-overview.md`).
+`ProblemsPanel(state)` (`home.mjs`) closes that gap by reusing the **exact
+same** row renderers, extracted into `src/problems.mjs`
+(`fetchProblems`/`problemMark`/`problemPrChip`/`problemCommentLine`/`baseName`/
+`problemRunRow`/`problemLogRow`, formerly local to `overview.mjs`) instead of a
+second implementation — both `problemRunRow`/`problemLogRow` now take their
+`prTitles` map and an optional `{ showPr }` argument instead of reading
+page-specific `state`.
+
+- **`pollProblems()`** polls the same repo-wide `GET /api/problems` on its own
+  slower cadence (`PROBLEMS_POLL_MS`, 15s — failures are rare, this is a
+  "did anything go wrong" check, not a live status) and filters both
+  `failedRuns`/`logErrors` client-side to `pr === state.pr`, since the endpoint
+  itself has no `pr=` filter — into `state.pageProblems`.
+- **`data-testid=page-problems`**, mounted directly below `TasksPanel` inside
+  `PrInfoPanel`'s own column (same `contents`-wrapped toggle pattern as that
+  panel — see the bare-toggling-expression rule in
+  `.claude/rules/arrowjs-pitfalls.md`) — renders nothing at all when there's
+  nothing to show for this PR.
+- **Unlike the overview's drawer, this never collapses behind a toggle.** A
+  single PR typically has 0-2 problems at most, so there's nothing worth
+  hiding, and a reviewer should see it immediately.
+- **`showPr: false`** on both row kinds here: the page is already scoped to
+  this PR, so the "#<pr> · title" chip (`problemPrChip`) would only repeat
+  what's already on screen. `/pr-overview` still passes the default
+  (`showPr: true`, unchanged behaviour there — see
+  `tests/overview-problems.spec.mjs`).
+
+Test: `tests/pr-page-problems.spec.mjs` (a failed run scoped to the open PR
+shows, one for a different PR is filtered out, no PR chip; nothing renders
+when there's nothing wrong).

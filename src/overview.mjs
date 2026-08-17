@@ -11,8 +11,8 @@ import { reactive, html, watch } from './vendor/arrow.js'
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { initTheme, themeToggleButton } from './theme.mjs'
 import { avatarHTML, avatarUrlOf, displayNameOf, ensureMe, ensureNames, fullNameOf, meLogin } from './avatar.mjs'
-import { labelForWorkflow } from './workflowLabels.mjs'
 import { relativeTime } from './relativeTime.mjs'
+import { fetchProblems, problemRunRow, problemLogRow } from './problems.mjs'
 
 initTheme()
 
@@ -2029,86 +2029,10 @@ function problemsToggleText() {
   return 'Mislukte taken · ' + n
 }
 
-// problemMark — the shared "this went wrong" marker: a ⚠ glyph plus a word, so
-// it reads without colour perception. The rose tint is decoration on top.
-function problemMark(word) {
-  return html`<span class="inline-flex shrink-0 items-center gap-1 text-[11px] font-semibold text-rose-700 dark:text-rose-300"
-    ><span aria-hidden="true">⚠</span><span>${word}</span></span
-  >`
-}
-
-const PROBLEM_ROW_CLASS =
-  'flex items-start gap-3 border-b border-slate-100 dark:border-zinc-800/70 px-4 py-3 last:border-b-0'
-
-// problemPrChip — "#13098 · <PR title>", or the bare number when prmeta knows
-// no title (an old/purged PR). Shared by both row kinds: a number alone tells
-// the reviewer nothing about which PR went wrong. The whole chip may shrink so
-// the timestamp beside it never gets pushed out.
-function problemPrChip(pr) {
-  if (!pr) return ''
-  const title = state.prTitles[String(pr)] || ''
-  return html`<span class="min-w-0 truncate text-[12px] text-slate-500 dark:text-zinc-500" title="${'#' + pr + (title ? ' · ' + title : '')}"
-    >#${pr}${title ? ' · ' + title : ''}</span
-  >`
-}
-
-// problemCommentLine — WHICH comment a failed task_code_comment run was about:
-// the file (basename) + line, then a snippet of the body. Only the wording
-// carries the meaning (no colour-only signal, see the colorblind rule).
-// Both slots are always STRINGS — never a conditionally interpolated template,
-// which a static slot would render as the template function's source text (see
-// the arrow.js pitfalls).
-function problemCommentLine(c) {
-  const where = baseName(c.file) + (c.line ? ':' + c.line : '')
-  const snippet = c.snippet ? ' · “' + c.snippet + '”' : ''
-  return html`<p data-testid="problem-run-comment" class="line-clamp-1 text-[12px] text-slate-600 dark:text-zinc-400">
-    <span class="font-mono">${where}</span><span>${snippet}</span>
-  </p>`
-}
-
-// baseName trims a repo path down to its file name for the comment line above.
-function baseName(path) {
-  const s = String(path || '')
-  const i = s.lastIndexOf('/')
-  return i < 0 ? s : s.slice(i + 1)
-}
-
-// problemRunRow — one workflow run that ended in `failed`.
-function problemRunRow(run) {
-  return html`
-    <div data-testid="problem-run" class="${PROBLEM_ROW_CLASS}">
-      ${problemMark('mislukt')}
-      <div class="min-w-0 flex-1">
-        <div class="flex items-center gap-2">
-          <span class="shrink-0 text-[13px] font-semibold text-slate-900 dark:text-zinc-100">${labelForWorkflow(run.workflow)}</span>
-          ${() => problemPrChip(run.pr)}
-          <span class="shrink-0 text-[11px] text-slate-400 dark:text-zinc-600">${relativeTime(run.updatedAt)}</span>
-        </div>
-        <div class="contents">${() => (run.comment ? problemCommentLine(run.comment) : '')}</div>
-        <p class="line-clamp-2 text-[12px] text-slate-500 dark:text-zinc-500" title="${run.error || ''}">${run.error || 'geen foutmelding vastgelegd'}</p>
-      </div>
-    </div>
-  `.key('problem-run:' + run.runId)
-}
-
-// problemLogRow — one mirrored log line. `scope` is the subsystem prefix the
-// line itself carries ("import comments", "pr_status", …); "overgeslagen"
-// because every such line reports work that was skipped, not a hard failure.
-function problemLogRow(entry, i) {
-  return html`
-    <div data-testid="problem-log" class="${PROBLEM_ROW_CLASS}">
-      ${problemMark('overgeslagen')}
-      <div class="min-w-0 flex-1">
-        <div class="flex items-center gap-2">
-          <span class="shrink-0 truncate text-[13px] font-semibold text-slate-900 dark:text-zinc-100">${entry.scope || 'Achtergrondtaak'}</span>
-          ${() => problemPrChip(entry.pr)}
-          <span class="shrink-0 text-[11px] text-slate-400 dark:text-zinc-600">${relativeTime(entry.at)}</span>
-        </div>
-        <p class="line-clamp-2 text-[12px] text-slate-500 dark:text-zinc-500" title="${entry.message || ''}">${entry.message || ''}</p>
-      </div>
-    </div>
-  `.key('problem-log:' + i + ':' + (entry.at || '') + ':' + (entry.message || '').slice(0, 40))
-}
+// problemMark/PROBLEM_ROW_CLASS/problemPrChip/problemCommentLine/baseName/
+// problemRunRow/problemLogRow moved to src/problems.mjs (imported above) so
+// the review tree (/pr/<id>) can reuse the exact same rows instead of a
+// second implementation — see .claude/docs/detail-layout.md.
 
 function problemsDrawer() {
   return html`
@@ -2142,7 +2066,8 @@ function problemsDrawer() {
           ]
         return [
           html`<div class="mt-2 overflow-hidden rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-900/60">
-            ${state.failedRuns.map((run) => problemRunRow(run))} ${state.logErrors.map((entry, i) => problemLogRow(entry, i))}
+            ${state.failedRuns.map((run) => problemRunRow(run, state.prTitles))}
+            ${state.logErrors.map((entry, i) => problemLogRow(entry, i, state.prTitles))}
           </div>`.key('problems:list'),
         ]
       }}
@@ -3191,19 +3116,15 @@ function repollAfterRefresh() {
 // unrelated endpoints. Both arrays are reassigned wholesale so arrow.js
 // re-renders.
 async function loadProblems() {
-  try {
-    const res = await fetch('/api/problems')
-    if (!res.ok) return
-    const body = await res.json()
-    if (!body || !body.ok) return
-    state.failedRuns = Array.isArray(body.failedRuns) ? body.failedRuns : []
-    state.logErrors = Array.isArray(body.logErrors) ? body.logErrors : []
-    state.prTitles = body.prTitles && typeof body.prTitles === 'object' ? body.prTitles : {}
-    state.problemsLoaded = true
-  } catch (e) {
-    // keep whatever we already showed — a transient failure here must never
-    // blank out the list (or the page).
-  }
+  const { ok, failedRuns, logErrors, prTitles } = await fetchProblems()
+  // A transient failure here must never blank out the list (or the page) —
+  // fetchProblems already resolves to empty data on ok:false, so only apply
+  // it when the read genuinely succeeded.
+  if (!ok) return
+  state.failedRuns = failedRuns
+  state.logErrors = logErrors
+  state.prTitles = prTitles
+  state.problemsLoaded = true
 }
 
 // loadRunningCount pulls the live "how much is running right now" figure
