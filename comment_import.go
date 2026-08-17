@@ -19,11 +19,33 @@ import (
 // comment lands on exactly the row the reviewer sees.
 
 // mapReviewComment turns a GitHub thread-root review comment into a
-// CodeCommentInput. When it can pin the comment to a block + aligned row, the
-// result is a normal block-scoped line comment (Kind ""); when it can find the
-// block but not the exact row, RowStart stays -1 (shown anywhere within the
-// block); when no block contains the anchor at all, it degrades to a PR-wide
-// comment (Kind "review", empty File/Label) so it still shows up somewhere.
+// CodeCommentInput, reusing blockForLine/rowForLine like anchoredWarning
+// (code_warning.go) does for an AI finding. Four outcomes:
+//
+//   - The file+line pins to an exact row (rowForLine succeeds) AND that row is
+//     itself one of the block's changed rows (rowChanged + rowHasContent, the
+//     same predicates firstChangedRowIndex uses): a normal, block-scoped line
+//     comment (Kind ""), anchored to that row.
+//   - The file+line pins to a row, but that row is NOT a changed row — a
+//     GitHub review comment can sit on any context line the diff shows around
+//     a hunk, unlike an AI finding (already guarded to a changed line before
+//     it ever reaches here, see anchoredWarning's own comment) — anchored on
+//     the block's own FIRST changed row instead, with BlockWide=true so the
+//     frontend badges it as being about the whole block, not specifically
+//     that row. Mirrors anchoredWarning's identical fallback one-for-one:
+//     without this, the comment stays pinned to a row with no navigable unit
+//     of its own at line granularity (see commentUnder/unitAtRow, home.mjs/
+//     RelatedPanel.mjs), so it silently fails to show under any drilled
+//     cursor — reported bug. (If the block has no changed row at all — a
+//     degenerate case that shouldn't happen for a block a real diff ever
+//     surfaced — the originally pinned row is kept as-is rather than
+//     discarded: a real row beats none.)
+//   - The file+line falls inside a block, but not on any row rowForLine can
+//     find at all: RowStart stays -1 (shown anywhere within the block), the
+//     same "unknown anchor" convention app-placed legacy comments use.
+//   - No block contains the anchor at all: degrades to a PR-wide comment
+//     (Kind "review", empty File/Label) so it still shows up somewhere.
+//
 // ImportedRootID/Source/Author/CreatedAt are always carried through.
 func mapReviewComment(dataDir string, repo string, pr int, blocks []Block, gc github.ReviewComment) CodeCommentInput {
 	in := CodeCommentInput{
@@ -61,8 +83,28 @@ func mapReviewComment(dataDir string, repo string, pr int, blocks []Block, gc gi
 	in.Gran = "line"
 
 	if row, ok := rowForLine(baseDir, headDir, b, gc.Line, side); ok {
+		rows, _, _ := blockAlignedRows(baseDir, headDir, b)
+		if row < len(rows) && rowChanged(rows[row]) && rowHasContent(rows[row]) {
+			in.RowStart = row
+			in.RowEnd = row
+			return in
+		}
+		// Pinned to a real row, but not a changed one (e.g. unchanged context
+		// shown around a hunk) — fall back to the block's first changed row
+		// instead of leaving it pinned to a row with no navigable unit of its
+		// own. See the doc comment above. If the block has no changed row at
+		// all (shouldn't happen for a block a real diff ever surfaced, but
+		// checked rather than assumed), keep the originally pinned row rather
+		// than discarding it to unpinned (-1) — a real row beats none.
+		if fr, ok := firstChangedRowIndex(rows); ok {
+			in.RowStart = fr
+			in.RowEnd = fr
+			in.BlockWide = true
+			return in
+		}
 		in.RowStart = row
 		in.RowEnd = row
+		return in
 	}
 	// Block found but row not pinned: RowStart stays -1 (shown anywhere in the
 	// block), which is the same "unknown anchor" convention app-placed legacy

@@ -264,9 +264,25 @@ not read-only copies.
   effect like `blockstats.go`): `mapReviewComment` maps `file:line(+side)` to a
   block + aligned-row anchor in **exactly the same index space** as
   approvals/app comments (`dedent4` → `alignRows` + `rowForLine`). Block + row
-  found → a normal line comment (`Kind ""`); block but not the exact row →
-  `RowStart -1`; **no** block → PR-wide (`Kind "review"`).
-  `mapGeneralComment` is always anchorless. All carry
+  found → a normal line comment (`Kind ""`), **but only when that row is
+  itself one of the block's changed rows** (`rowChanged`+`rowHasContent`, the
+  same predicates `firstChangedRowIndex` uses, `blockstats.go`) — a GitHub
+  review comment can sit on any unchanged context line the diff shows around a
+  hunk (unlike an AI `code_warning` finding, which is guarded to a changed
+  line before it ever reaches `anchoredWarning`, see "AI risk check of the
+  whole PR" in `workflows-analysis.md`), and such a row has no navigable
+  line-granularity unit of its own on the frontend (`commentUnder`/`unitAtRow`,
+  `RelatedPanel.mjs`/`home.mjs`), so it would silently never show under any
+  drilled cursor — reported bug (a real PR comment anchored on a method's
+  closing brace, several lines past the actual diff hunk). Pinned row found but
+  not a changed one → falls back to the block's own **first changed row**,
+  `BlockWide: true` (mirrors `anchoredWarning`'s identical fallback
+  one-for-one; kept as pinned-but-unchanged instead if the block happens to
+  have no changed row at all — shouldn't happen for a block a real diff ever
+  surfaced, but a real row beats none). Block but no row pinned at all →
+  `RowStart -1` (shown anywhere in the block, the same "unknown anchor"
+  convention app-placed legacy comments use). No block at all → PR-wide
+  (`Kind "review"`). `mapGeneralComment` is always anchorless. All carry
   `ImportedRootID`/`Source "github"`/`Author`/`CreatedAt` (the original GitHub
   timestamp). A LEFT-side comment matches its block via the **old** source range
   (base worktree), since the stored lines are head coordinates.

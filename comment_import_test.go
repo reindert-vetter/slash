@@ -68,6 +68,49 @@ func TestMapReviewCommentAnchorsToBlockRow(t *testing.T) {
 	}
 }
 
+// A review comment pinned to a real row that isn't itself a changed row (e.g.
+// GitHub shows unchanged context lines around a hunk, and a reviewer can
+// comment on one) falls back to the block's own first changed row, with
+// BlockWide=true — mirrors TestAnchoredWarningFallsBackToBlockWideFirstRow
+// (code_warning_test.go) one-for-one. Without this, the comment stays pinned
+// to a context row with no navigable line-granularity unit of its own, so it
+// silently never shows under any drilled cursor (reported bug, PR 13383).
+func TestMapReviewCommentOnUnchangedRowFallsBackToBlockWideFirstRow(t *testing.T) {
+	dir := t.TempDir()
+	pr := 91
+	base := orderPHP
+	head := strings.Replace(orderPHP, "$x = 1;", "$x = 2;", 1)
+	writeWorktreeFile(t, dir, pr, "Order.php", base, head)
+
+	// The method declaration `public function total() {` is on line 3; `$x = 1;`
+	// (the block's only changed line) is line 4; the closing brace `}` is line 6.
+	b := Block{PR: pr, File: "Order.php", Class: "Order", Name: "total",
+		Line: 3, EndLine: 6, Label: "Order::total", Status: "modified", Side: "new"}
+
+	// Comment on the closing brace — a real, pinnable row, but not a changed one.
+	gc := github.ReviewComment{ID: 556, Author: "colleague", Body: "hele methode",
+		Path: "Order.php", Line: 6, Side: "RIGHT"}
+	in := mapReviewComment(dir, "", pr, []Block{b}, gc)
+
+	if in.Kind != "" {
+		t.Fatalf("kind = %q, want \"\" (still block-scoped, not PR-wide)", in.Kind)
+	}
+	if in.RowStart < 0 || in.RowEnd < 0 {
+		t.Fatalf("rowStart/rowEnd = %d/%d, want a pinned row (>= 0) — the block's first changed row", in.RowStart, in.RowEnd)
+	}
+	if in.RowStart != in.RowEnd {
+		t.Fatalf("rowStart=%d rowEnd=%d, want a single row", in.RowStart, in.RowEnd)
+	}
+	// The block's only changed row is `$x = 1;`/`$x = 2;`, row 1 (row 0 is the
+	// unchanged declaration).
+	if want := 1; in.RowStart != want {
+		t.Fatalf("rowStart = %d, want %d (the block's first changed row)", in.RowStart, want)
+	}
+	if !in.BlockWide {
+		t.Fatalf("blockWide = false, want true")
+	}
+}
+
 // A review comment whose anchor falls in no block degrades to a PR-wide comment.
 func TestMapReviewCommentNoBlockIsPRWide(t *testing.T) {
 	dir := t.TempDir()
