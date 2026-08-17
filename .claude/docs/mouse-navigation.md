@@ -106,6 +106,25 @@ of that gate (`hoverEnabled` — a coordinate-delta check on `mousemove`, plus
 disarming on a data-driven repaint) are documented with the feature, in
 "The hover-vs-keyboard flag" in `.claude/docs/pr-overview.md`.
 
+**A second, narrower exception**: `main-scroll-left-hint`/`main-scroll-right-hint`
+(see "Every menu also has a mouse entry point" below) additionally reveal on
+`state.mouseActiveHints` — true while the mouse has moved **anywhere on the
+page** in the last 5s (a single `window.addEventListener('mousemove', ...)`,
+`home.mjs`), auto-hiding again after 5s of no movement. Reviewer request: the
+always-available "terug"/"verder" rail was undiscoverable because it only
+revealed on a direct per-element `hover:`, and a reviewer moving the mouse to
+read a diff would never land on its small fixed-corner box. This is still not
+a case of "hover reaches new content" — the button's `@click` fires exactly
+the same regardless of its opacity (see the existing `block-open-menu`
+paragraph below), and no keyboard-only state depends on it — so it doesn't
+violate the "unreachable by keyboard" concern above; it's purely a
+discoverability affordance layered on top of the pre-existing, unchanged
+visibility gate (`canStepMainLeft()`/`state.mainOverflowRight`). The prior
+`hover:`/`group-hover:opacity-100` on the button itself stays in place
+alongside this flag (an OR, not a replacement) — resting the cursor on the
+button to click it must not have it fade out from under the pointer after 5s
+of no further movement.
+
 ## Every menu also has a mouse entry point
 
 Until this was added, only rows *inside* an open menu were clickable —
@@ -139,11 +158,12 @@ click right as CSS opacity animates in), so nothing keyboard/touch-only is
 actually gated behind hover; Enter on the same card still opens the identical
 menu either way.
 
-The same CSS-only hover-reveal is also used by `main-scroll-left-hint`/
-`main-scroll-right-hint` (opacity-0 by default, `hover:`/`focus-within:` on
-the rail itself rather than a `group`, since the rail has nothing else to
-hover) — see "A mouse way to reach content overflowing to the right"/"...
-hidden to the left" in `.claude/docs/detail-layout.md`.
+The same base reveal (`hover:`/`focus-within:` on the rail itself rather than a
+`group`, since the rail has nothing else to hover) is also used by
+`main-scroll-left-hint`/`main-scroll-right-hint`, **plus** the
+`state.mouseActiveHints` OR-condition described in rule 4 above — see "A mouse
+way to reach content overflowing to the right"/"...hidden to the left" in
+`.claude/docs/detail-layout.md`.
 
 `onOpenMenu`/`openMenu` is threaded as a plain **render-time callback opt**
 at each call site (`Block(b, { onOpenMenu: () => openMenu(...) })`,

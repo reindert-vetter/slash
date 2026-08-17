@@ -125,16 +125,26 @@ viewport, flush against the true edge** (`fixed top-6 right-0`, not
 rail, own icon): a rail that scrolled with the content could only ever be
 reached by first scrolling to see it, which defeats the purpose. Only
 rendered while `state.mainOverflowRight` is true, and even then **hidden by
-default** — `opacity-0 hover:opacity-100 focus-within:opacity-100
-transition-opacity` on the rail itself, the same CSS-only reveal
-`block-open-menu` uses (see "Every menu also has a mouse entry point" in
-`.claude/docs/mouse-navigation.md`), never a reactive `state`/`cs` flag, per
-Rule 4 ("hover carries no state") — reviewer request: the button used to sit
-permanently on top of the diff card's/comment card's own header row (`right-6`
-landed inside the card's own top-right corner), which read as the icon
-"floating over the content"; now it only appears while the mouse is actually
-over that exact spot. The click handler still fires regardless of visibility
-(`dispatchEvent('click')` in tests, same contract as `block-open-menu`).
+default** — `opacity-0 ... transition-opacity`, revealed by **either** of two
+OR'd conditions on the rail's own class: the static `hover:opacity-100
+focus-within:opacity-100` (the same CSS-only reveal `block-open-menu` uses,
+see "Every menu also has a mouse entry point" in
+`.claude/docs/mouse-navigation.md`), **or** the reactive
+`state.mouseActiveHints` flag — true while the mouse has moved anywhere on the
+page in the last 5s (a single `window` `mousemove` listener, `home.mjs`),
+auto-hiding again after 5s of no movement. Reviewer request: the button used to
+sit permanently on top of the diff card's/comment card's own header row
+(`right-6` landed inside the card's own top-right corner), which read as the
+icon "floating over the content"; the CSS-only `hover:` fix that followed then
+made it undiscoverable the other way (the mouse had to land exactly on the
+rail's tiny fixed-corner box) — `state.mouseActiveHints` widens that to "any
+mouse movement", while the original `hover:` stays alongside it so resting the
+cursor on the button to click it doesn't have it fade out mid-click after 5s.
+Deliberately still not a reactive-state-gated *destination* (Rule 4, "hover
+carries no state" in `.claude/docs/mouse-navigation.md`): no keyboard-only
+functionality is gated behind either condition, and the click handler still
+fires regardless of visibility (`dispatchEvent('click')` in tests, same
+contract as `block-open-menu`).
 
 **Detection is a 1px sentinel, not per-call-site bookkeeping.** `<main>`'s
 template appends one near-zero-width `data-testid=main-overflow-sentinel` div
@@ -202,8 +212,10 @@ always-reachable button.
   the pr-index's own right edge, instead of overlapping its header/search row.
 - **Hidden by default, same as `MainScrollRightHint` above** — `opacity-0
   group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity`
-  on the visible icon box, CSS-only, per Rule 4 in
-  `.claude/docs/mouse-navigation.md`. Reviewer request: at `left-6` the button
+  **OR** `state.mouseActiveHints` (any mouse movement anywhere on the page in
+  the last 5s, auto-hiding after 5s idle — see `MainScrollRightHint`'s own
+  entry above for the full mechanism and why `group-hover:` stays alongside
+  it) on the visible icon box. Reviewer request: at `left-6` the button
   used to sit on top of the diff card's own header (overlapping the file
   name/badges); moving it flush to the edge and hiding it until hovered
   removes that permanent overlap.

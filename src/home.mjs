@@ -714,6 +714,16 @@ const state = reactive({
   // resize) for free. Drives mainScrollRightHint's visibility; see "A mouse
   // way to reach content overflowing to the right" in detail-layout.md.
   mainOverflowRight: false,
+  // mouseActiveHints — true while the mouse has moved ANYWHERE on the page
+  // within the last 5s (see the window `mousemove` listener next to the
+  // keydown/keyup/blur wiring below). Reviewer request: `main-scroll-left-
+  // hint`/`main-scroll-right-hint` (below) used to reveal only on a direct
+  // per-element CSS `hover:`, which made the always-visible "terug"/"verder"
+  // rail undiscoverable unless the mouse happened to land exactly on its
+  // small fixed-corner box. This flag ORs into that same opacity — see
+  // "A mouse way to reach content overflowing to the right"/"...hidden to
+  // the left" in detail-layout.md.
+  mouseActiveHints: false,
   // colWidths — per-column manual width override in px, keyed
   // `${kind}:${id}` (kind ∈ 'diff'|'related'|'claude'|'comments'; id is a
   // block's stable b.id for 'diff', `${file}:${line}` for the other three —
@@ -11165,6 +11175,25 @@ window.addEventListener('blur', () => {
   activeKeyResize = null
 })
 
+// mouseActiveHints wiring — see the state field's own doc comment above.
+// `hintIdleTimer` is a plain module variable (not reactive state) purely for
+// bookkeeping; only `state.mouseActiveHints` itself needs to be reactive.
+// Guarded by `!state.mouseActiveHints` so a fast mousemove stream (many
+// events per second while actually moving) writes the reactive flag at most
+// once per idle-to-active transition, never on every pixel of movement.
+let hintIdleTimer = null
+window.addEventListener(
+  'mousemove',
+  () => {
+    if (!state.mouseActiveHints) state.mouseActiveHints = true
+    clearTimeout(hintIdleTimer)
+    hintIdleTimer = setTimeout(() => {
+      state.mouseActiveHints = false
+    }, 5000)
+  },
+  { passive: true },
+)
+
 // connector — the dashed vertical line drawn between two stacked cards that come
 // from the same file, so a reviewer sees at a glance they belong together.
 function connector() {
@@ -12871,6 +12900,16 @@ function DetailPanel(state) {
 // like Footer/ProgressBar/MenuHost; visibility is a nested `${() => ...}`
 // slot inside a stable element root (never a bare toggling expression, see
 // arrowjs-pitfalls.md) driven by state.mainOverflowRight.
+//
+// Opacity is reactive on its own (`${() => ...}` on the whole class value,
+// per the arrow.js whole-attribute-value rule) rather than static
+// `hover:`/`focus-within:` alone: reviewer request, `state.mouseActiveHints`
+// (any mouse movement anywhere on the page, see its own doc comment above)
+// ORs into the same `hover:`/`focus-within:` classes so the button also
+// reveals without the cursor having to land exactly on its small
+// fixed-corner box. `hover:opacity-100` stays alongside it (not replaced) so
+// resting the cursor on the button to click it doesn't have the button fade
+// out from under the pointer after 5s of no further movement.
 function MainScrollRightHint(state) {
   return html`
     <div class="contents">
@@ -12878,7 +12917,9 @@ function MainScrollRightHint(state) {
         state.mainOverflowRight
           ? html`
               <div
-                class="fixed top-6 right-0 z-30 flex shrink-0 flex-col gap-1 rounded-l-lg border border-r-0 border-slate-200 bg-white p-1 opacity-0 shadow-sm transition-opacity hover:opacity-100 focus-within:opacity-100 dark:border-zinc-700 dark:bg-zinc-900"
+                class="${() =>
+                  'fixed top-6 right-0 z-30 flex shrink-0 flex-col gap-1 rounded-l-lg border border-r-0 border-slate-200 bg-white p-1 shadow-sm transition-opacity hover:opacity-100 focus-within:opacity-100 dark:border-zinc-700 dark:bg-zinc-900 ' +
+                  (state.mouseActiveHints ? 'opacity-100' : 'opacity-0')}"
                 data-testid="main-scroll-right-hint"
               >
                 <button
@@ -12966,8 +13007,11 @@ function canStepMainLeftPositionCls() {
 // that hidden column was effectively undiscoverable. The whole left gutter is
 // blank page background in diff mode (see above), so widening the catcher
 // downward swallows no click: the diff card's own left edge starts to the
-// right of it. Still CSS-only (`group`/`group-hover`), so hover carries no
-// state, per Rule 4 in mouse-navigation.md.
+// right of it. `group`/`group-hover` still stays as one of two ways to reveal
+// it (see MainScrollRightHint's own doc comment above for the other,
+// `state.mouseActiveHints`), so this remains an accepted exception to Rule 4
+// in mouse-navigation.md, not a state read that gates any keyboard-only
+// functionality.
 //
 // List mode keeps the small `h-9` box: there the hint sits at `left-[28rem]`,
 // which already overlaps <main>'s own first column by ~20px, and a full-height
@@ -12993,7 +13037,9 @@ function MainScrollLeftHint(state) {
                 data-testid="main-scroll-left-hint"
               >
                 <div
-                  class="flex shrink-0 flex-col gap-1 rounded-lg border border-slate-200 bg-white p-1 opacity-0 shadow-sm transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 dark:border-zinc-700 dark:bg-zinc-900"
+                  class="${() =>
+                    'flex shrink-0 flex-col gap-1 rounded-lg border border-slate-200 bg-white p-1 shadow-sm transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 dark:border-zinc-700 dark:bg-zinc-900 ' +
+                    (state.mouseActiveHints ? 'opacity-100' : 'opacity-0')}"
                 >
                   <button
                     type="button"
