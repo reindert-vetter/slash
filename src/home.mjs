@@ -7298,15 +7298,31 @@ function approveClickAt(level, b, i, row, kind, segStart) {
 // continue either (toggleApprove/afterApproveAction's `if (!approving)
 // return` — a retract never auto-advances anywhere else in this app, and
 // this mouse action is not an exception).
+//
+// Unlike Space — which deliberately shows no menu at all (see spaceKey's own
+// comment) — a click here still shows the passive command-palette preview
+// (see "A mouse selection shows the palette passively" in
+// command-palette.md) once the approve+continue chain has actually settled:
+// this is a MOUSE action, and it can auto-continue the cursor to a unit far
+// from the one that was clicked (a different line/group in the same block, a
+// sibling, even a different top-level block via descendIntoUnapprovedCall),
+// so the reviewer needs the palette to show up at the ACTUAL landing spot,
+// not the clicked one. `toggleApprove`/`toggleCallApprove`/
+// `afterApproveAction` all now return their promise chain for exactly this —
+// `showPassiveMenu()` is called directly (not the mousedown/mouseup-deferred
+// `schedulePassiveMenu()`) because there is no drag-range gesture to protect
+// here, only a single click; its own `if (menu.open) return` guard already
+// makes this a no-op when the chain instead opened a real, keyboard-owning
+// menu (the "nothing left ahead" → reviewApprove/reviewChoice branch).
 function mouseApprove() {
   const ctx = approveContext()
   if (!ctx.b) return
   if (isApproveDone(ctx)) {
-    toggleApprove(true)
+    Promise.resolve(toggleApprove(true)).then(() => showPassiveMenu())
     return
   }
   descendIntoUnapprovedCall(ctx).then((handled) => {
-    if (!handled) toggleApprove(true)
+    Promise.resolve(handled ? undefined : toggleApprove(true)).then(() => showPassiveMenu())
   })
 }
 
@@ -8572,8 +8588,7 @@ function toggleApprove(auto = false) {
   // Nothing to approve on a reference unit — see activeUnitIsReference.
   if (activeUnitIsReference(ctx)) return
   if (ctx.mode === 'diff' && ctx.gran === 'call') {
-    toggleCallApprove(b, ctx.change, auto)
-    return
+    return toggleCallApprove(b, ctx.change, auto)
   }
   const target = approveTargetRows(ctx)
   if (!target.length) return
@@ -8593,7 +8608,7 @@ function toggleApprove(auto = false) {
   b.approvedRows = [...set].sort((x, y) => x - y)
   persistApproval(b)
   // allIn was false → this action just ADDED approval (not revoked it).
-  afterApproveAction(!allIn, b.id, auto)
+  return afterApproveAction(!allIn, b.id, auto)
 }
 
 // toggleTestClassApproval is the class-level counterpart of Block.mjs's top
@@ -8667,7 +8682,7 @@ function toggleCallApprove(b, change = state.change, auto = false) {
   }
   b.approvedRows = [...rowSet].sort((x, y) => x - y)
   persistApproval(b)
-  afterApproveAction(approving, b.id, auto)
+  return afterApproveAction(approving, b.id, auto)
 }
 
 // unitFullyApproved reports whether every changed row (or, at gran==='call', the
@@ -9064,7 +9079,7 @@ let postApproveTarget = null
 function afterApproveAction(approving, blockId, auto = false) {
   if (!approving) return
   const keepList = state.mode !== 'diff'
-  findNextUnapproved().then(async (target) => {
+  return findNextUnapproved().then(async (target) => {
     if (!target) {
       // b.approvedRows/approvedCalls were just reassigned synchronously above
       // (toggleApprove/toggleCallApprove), but state.approvalTotal is filled

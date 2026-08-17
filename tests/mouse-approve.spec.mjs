@@ -40,4 +40,32 @@ test.describe('PR Review Tree — mouse approve (call-segment hover ring)', () =
     // so the row keeps its partial-approval dot strip.
     await expect(row.locator('[data-seg-dot]').first()).toBeVisible()
   })
+
+  // mouseApprove() reuses Space's own approve-and-continue chain, which always
+  // auto-continues the cursor (see afterApproveAction's `auto` parameter) —
+  // unlike a plain row click (selectRowAt), that used to leave no menu behind
+  // at all, wherever the cursor landed. Reviewer report: "soms als ik op een
+  // call klik, dan ga ik ergens anders naar toe, maar ik wil dan het menu
+  // zien" — see ".claude/docs/approval.md"'s "One deliberate DIVERGENCE from
+  // Space" note.
+  test('a call-segment click still shows the passive palette once it lands elsewhere', async ({ page }) => {
+    await page.goto('/pr/12903')
+    await page.locator('[data-idx="1"]').click() // CreatePaymentAction::execute
+    await page.keyboard.press('ArrowRight')
+    await page.keyboard.press('f')
+    await expect(page).toHaveURL(/gran=call/)
+
+    const card = page.getByTestId('detail-card').first()
+    const row = card.locator('[data-pane="new"] [data-row]').filter({ hasText: 'billingAddress' })
+    const dot = row.locator('[data-seg-dot]').first()
+    await row.hover()
+    await dot.click({ force: true })
+
+    // Approving auto-continued the cursor to the next unapproved unit — the
+    // passive preview (same palette Enter would open) must still show up at
+    // that new landing spot, exactly like a plain mouse selection does.
+    const anchor = page.locator('[data-testid="command-anchor"][data-passive="1"]')
+    await expect(anchor).toBeVisible()
+    await expect(page.getByTestId('command-overlay')).toHaveCount(0)
+  })
 })
