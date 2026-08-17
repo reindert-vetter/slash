@@ -139,13 +139,21 @@ this was caught. `right-0` keeps the handle inside the clipped box.
   horizontally without limit).
 - **Reset path 1 — snap-back:** on `mouseup`, if the dragged width ends up
   within `SNAP_BACK_PX` (10px) of the CURRENT auto width, the override is
-  cleared instead of committed. `parseAutoWidthPx(clsString)` computes that
+  cleared instead of committed. `parseAutoWidthPx(clsString, el)` computes that
   auto width from the same width-class string the column would render
-  without an override — **viewport-aware**: every width-class function
-  emits `w-[Nrem] narrow:w-[Nrem] 2xl:w-[Nrem]`, and picking the wrong token
-  (e.g. always the bare one) compared a wide-viewport drag against the
-  narrower base width and wrongly committed an override on a 3px nudge —
-  caught by the regression test below.
+  without an override — two shapes: the `relatedColumnWidthCls`/
+  `commentColumnWidthCls`/`claudeColumnWidthCls`/`boundedWrapWidthCls` shape,
+  **viewport-aware** (`w-[Nrem] narrow:w-[Nrem] 2xl:w-[Nrem]`, and picking the
+  wrong token — e.g. always the bare one — compared a wide-viewport drag
+  against the narrower base width and wrongly committed an override on a 3px
+  nudge, caught by the regression test below); and `Block.mjs`'s
+  `contentWidthCls` shape (`w-[calc(Nch_+_Mrem)]`, a PHP diff card in every
+  stand), where the `ch` unit is resolved against `el`'s own font via a
+  throwaway, off-screen probe element (`chPxFor`, `columnWidth.mjs`) rather
+  than a canvas `measureText` approximation — the latter landed close but not
+  reliably within `SNAP_BACK_PX` (~25px off in one measured case). `el` (the
+  drag's own `root`, from `startColumnResize`) is threaded through
+  `autoWidthPxFn` for exactly this second shape; every other caller ignores it.
 - **Reset path 2 — double-click:** `@dblclick` on the handle calls
   `resetColumnWidth`/`clearColumnWidth` directly, independent of any drag
   distance.

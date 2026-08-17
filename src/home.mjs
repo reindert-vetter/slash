@@ -683,13 +683,13 @@ const state = reactive({
   descriptionExpanded: false,
   // diffViewMode — the global diff-pane preference, cycled everywhere with `a`
   // (onKeydown, DIFF_VIEW_CYCLE below): 'split' (default, old+new side by
-  // side, full width) → 'unified' (a genuinely two-sided block collapses to
-  // ONE column, old (-) directly above new (+), fixed 60% width — see
-  // Block.mjs's unifiedCodeDiff) → 'fit' (only the new/right pane — old code
-  // is never shown, even for a two-sided block, see Block.mjs's fitOnly —
-  // and the card's width follows that pane's own code instead of a fixed
-  // width, see Block.mjs's widthCls/fitWidthCls) → back to 'split'. Read by
-  // every visible Block()
+  // side) → 'unified' (a genuinely two-sided block collapses to ONE column,
+  // old (-) directly above new (+) — see Block.mjs's unifiedCodeDiff) →
+  // 'fit' (only the new/right pane — old code is never shown, even for a
+  // two-sided block, see Block.mjs's fitOnly) → back to 'split'. Every
+  // stand's card width follows the code actually around the cursor rather
+  // than a fixed tier (Block.mjs's widthCls/contentWidthCls). Read by every
+  // visible Block()
   // card (the selected/preview cards and every open drilled column) via its
   // viewMode opt — see Block.mjs's codeDiff. Ephemeral UI state, not bound to
   // the URL, like showDescription/showApproved above.
@@ -809,11 +809,10 @@ Object.assign(state.colWidths, loadColumnWidths())
 
 // DIFF_VIEW_CYCLE is the fixed order `a` steps through — see state.diffViewMode
 // above. 'unified' restructures a two-sided block into one "old above new"
-// column at a fixed 60% width (Block.mjs's unifiedCodeDiff/narrowed); 'fit'
-// hides the old pane entirely (Block.mjs's fitOnly, unlike 'unified' which
-// still shows old code, just stacked) and sizes the card off the one
-// remaining pane's own code (Block.mjs's fitWidthCls) instead of a fixed
-// width.
+// column (Block.mjs's unifiedCodeDiff); 'fit' hides the old pane entirely
+// (Block.mjs's fitOnly, unlike 'unified' which still shows old code, just
+// stacked). Every stand's card width is content-driven (Block.mjs's
+// contentWidthCls), not a fixed tier.
 const DIFF_VIEW_CYCLE = ['split', 'unified', 'fit']
 
 // toggleDiffView steps state.diffViewMode to the next stand in DIFF_VIEW_CYCLE
@@ -823,7 +822,7 @@ const DIFF_VIEW_CYCLE = ['split', 'unified', 'fit']
 // the top of the function instead of staying on the active change. Not a
 // navigation step, so no glide (mirrors ensureCode's `false` for a cached/
 // already-loaded re-render, see detail-layout.md).
-// This resizes every visible card (narrowed()/fitWidthCls(), Block.mjs)
+// This resizes every visible card (contentWidthCls(), Block.mjs)
 // without touching state.selected/mode/gran/change, so the setRelated watch
 // that normally drives the call-arrow overlay never fires — resettleCallArrows
 // redraws the existing pairs at the new geometry, with the same immediate +
@@ -10537,9 +10536,27 @@ function resolveCommandsInner(query) {
 // — it's pinned to the exact point the reviewer right-clicked — so a scroll
 // or resize just closes it instead, mirroring how a real native OS context
 // menu also disappears the moment the page under it moves.
+//
+// `nativeMenuOpenedAt` guards against the menu's OWN opening gesture closing
+// itself: a right-click on a not-yet-selected diff row (handleRowContextMenu)
+// first resolves the click into a selection (resolveClickSelection ->
+// ensureTopLevelDiffFocus), which can itself trigger a scroll
+// (scrollFocusIntoView/scrollChangeIntoView, e.g. because the row's own card
+// changed WIDTH once selected — its width is content-driven now, see
+// contentWidthCls/Block.mjs — and no longer necessarily matches the
+// unselected preview's width) — that scroll's own event can land a frame
+// AFTER openMenu already flipped menu.open=true, which this listener would
+// otherwise read as "the page moved under an already-open menu" and close it
+// immediately, even though the reviewer never got to see it at all. A short
+// grace window (comfortably longer than one requestAnimationFrame) treats a
+// scroll that lands right after opening as part of the SAME gesture, not an
+// unrelated later scroll.
+const NATIVE_MENU_SCROLL_GRACE_MS = 150
+let nativeMenuOpenedAt = 0
 function repositionMenu() {
   if (!menu.open) return
   if (ms.native) {
+    if (Date.now() - nativeMenuOpenedAt < NATIVE_MENU_SCROLL_GRACE_MS) return
     closeMenu()
     return
   }
@@ -10605,6 +10622,7 @@ function openMenu(mode = 'block', opts = {}) {
     x: opts.x || 0,
     y: opts.y || 0,
   })
+  if (native) nativeMenuOpenedAt = Date.now()
   menu.open = true
   requestAnimationFrame(() => {
     // Position first — the palette starts visibility:hidden, and a hidden element
@@ -12983,9 +13001,10 @@ function DetailPanel(state) {
             // the current granularity's units (a run, a line, or a call
             // segment) — merged with an active Shift+arrow range selection,
             // if any (see rangeUnit/extendRange/isRangeGran). Also feeds the
-            // 'fit' stand's width (Block.mjs's fitWidthCls/
-            // activeUnitLineChars): the card narrows to just THIS unit's own
-            // longest line, see topLevelActiveUnit's own doc comment.
+            // content-driven width, every stand (Block.mjs's contentWidthCls/
+            // selectionWindowLineChars): the card sizes off THIS unit's own
+            // window (± 2 neighboring changed rows), see topLevelActiveUnit's
+            // own doc comment.
             //
             // isActiveCard(), not `i === state.selected`: this closure is a
             // genuine, persistent reactive binding (Block.mjs re-invokes it on

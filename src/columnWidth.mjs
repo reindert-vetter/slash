@@ -97,24 +97,64 @@ export function resetColumnWidth(state, key) {
   clearColumnWidth(state, key)
 }
 
-// parseAutoWidthPx extracts the ACTIVE `w-[<N>rem]` token from one of the
-// existing width-class functions (widthCls/relatedColumnWidthCls/
-// commentColumnWidthCls/claudeColumnWidthCls) — every one of them emits the
-// same `w-[Nrem] narrow:w-[Nrem] 2xl:w-[Nrem]` shape (see diff-card.md's
-// "Narrow viewport" section) — and converts it to a real pixel value against
-// the page's CURRENT root font-size (not a hardcoded 16, so browser
-// zoom/user font-size settings are respected). Only used to decide "close
-// enough to auto, snap back" on mouseup — never to draw anything (drawing is
-// the class itself, until an override exists).
+// parseAutoWidthPx extracts the ACTIVE width token from one of the existing
+// width-class functions (widthCls/relatedColumnWidthCls/
+// commentColumnWidthCls/claudeColumnWidthCls) and converts it to a real pixel
+// value. Only used to decide "close enough to auto, snap back" on mouseup —
+// never to draw anything (drawing is the class itself, until an override
+// exists).
 //
-// Picking the right one of the three tokens for the CURRENT viewport is
-// load-bearing, not cosmetic: at a wide viewport (>=1536px, Tailwind's
-// default 2xl breakpoint) the `2xl:` token wins over the bare one, and below
-// 1400px (this app's custom `narrow` screen, index.html) the `narrow:` token
-// wins instead — using the bare token unconditionally made a small drag at a
-// wide viewport compare against the WRONG (narrower) auto width and commit
-// an override instead of snapping back.
-export function parseAutoWidthPx(clsString) {
+// Two shapes are understood:
+//
+// 1. `w-[Nrem] narrow:w-[Nrem] 2xl:w-[Nrem]` (relatedColumnWidthCls/
+//    commentColumnWidthCls/claudeColumnWidthCls, and Block.mjs's
+//    boundedWrapWidthCls for a non-PHP file) — converted against the page's
+//    CURRENT root font-size (not a hardcoded 16, so browser zoom/user
+//    font-size settings are respected). Picking the right one of the three
+//    tokens for the CURRENT viewport is load-bearing, not cosmetic: at a wide
+//    viewport (>=1536px, Tailwind's default 2xl breakpoint) the `2xl:` token
+//    wins over the bare one, and below 1400px (this app's custom `narrow`
+//    screen, index.html) the `narrow:` token wins instead — using the bare
+//    token unconditionally made a small drag at a wide viewport compare
+//    against the WRONG (narrower) auto width and commit an override instead
+//    of snapping back.
+// 2. `w-[calc(Nch_+_Mrem)]` (Block.mjs's contentWidthCls, a PHP file, every
+//    stand) — `ch` resolves against `el`'s OWN font (the card `<article>`,
+//    passed in by startColumnResize as the same root element the drag
+//    already scopes to). Measured via a throwaway, off-screen probe element
+//    (`width: 100ch`, divided back down) rather than a canvas
+//    `measureText` approximation — a canvas font string never quite matched
+//    the browser's own `ch` resolution closely enough for the 10px
+//    snap-back window (a first attempt landed ~25px off). This DOES force a
+//    layout, but only of a detached, empty probe — never the card's own
+//    content — so it doesn't race the render it feeds, unlike measuring the
+//    card itself would. `el` is optional (absent for every non-Block.mjs
+//    caller, which never emits this shape) — returns null without it, same
+//    as an unrecognized class string.
+function chPxFor(el) {
+  const cs = getComputedStyle(el)
+  const probe = document.createElement('span')
+  probe.style.position = 'absolute'
+  probe.style.visibility = 'hidden'
+  probe.style.whiteSpace = 'nowrap'
+  probe.style.fontFamily = cs.fontFamily
+  probe.style.fontSize = cs.fontSize
+  probe.style.fontWeight = cs.fontWeight
+  probe.style.fontStyle = cs.fontStyle
+  probe.style.width = '100ch'
+  document.body.appendChild(probe)
+  const px = probe.getBoundingClientRect().width / 100
+  document.body.removeChild(probe)
+  return px || 8
+}
+
+export function parseAutoWidthPx(clsString, el) {
+  const calc = /w-\[calc\(([\d.]+)ch_\+_([\d.]+)rem\)\]/.exec(clsString)
+  if (calc) {
+    if (!el) return null
+    const remPx = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
+    return parseFloat(calc[1]) * chPxFor(el) + parseFloat(calc[2]) * remPx
+  }
   const bare = /(?:^|\s)w-\[([\d.]+)rem\]/.exec(clsString)
   if (!bare) return null
   const narrow = /narrow:w-\[([\d.]+)rem\]/.exec(clsString)
@@ -153,7 +193,7 @@ export function startColumnResize(e, state, key, autoWidthPxFn) {
     document.removeEventListener('mouseup', onUp)
     const current = state.colWidths[key]
     if (current == null) return
-    const autoPx = autoWidthPxFn()
+    const autoPx = autoWidthPxFn(root)
     if (autoPx != null && Math.abs(current - autoPx) <= SNAP_BACK_PX) clearColumnWidth(state, key)
     else setColumnWidth(state, key, current)
   }

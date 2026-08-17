@@ -1046,11 +1046,12 @@ selected/preview card and every open drilled column) through `DIFF_VIEW_CYCLE`
   two-sided block (`fitOnly(b)` in `Block.mjs`, folded into `codeDiff`'s
   `effectiveOnly` next to `singleSide(b)`). **The one exception:** a REMOVED
   block has no new side, so it keeps showing its old/left pane — hiding it would
-  leave nothing to review. The only stand with a content-driven width.
+  leave nothing to review.
 
 `state.diffViewMode` is ephemeral, no URL binding (like
-`showDescription`/`showApproved`). The **widths** each stand produces, and
-`fitWidthCls`/`boundedWrapWidthCls`/`narrowed`, live in
+`showDescription`/`showApproved`). **All three stands share the same
+content-driven width** (`contentWidthCls`/`boundedWrapWidthCls`, `Block.mjs`)
+— toggling `a` changes the pane STRUCTURE above, not the card's width; see
 `.claude/docs/diff-card.md`.
 
 **`'unified'` hides nothing — it restructures.** For an aligned row that is a

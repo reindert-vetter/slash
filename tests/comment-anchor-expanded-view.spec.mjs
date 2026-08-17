@@ -123,9 +123,13 @@ test.describe('a comment-index item anchored to a real block', () => {
     const menuBox = await menu.boundingBox()
     const drillBox = await drillColumn.boundingBox()
     expect(menuBox.width).toBeGreaterThan(200)
-    // Positioned over the drilled column (same left edge, not the collapsed
-    // rail sitting to its left).
-    expect(Math.abs(menuBox.x - drillBox.x)).toBeLessThan(2)
+    // Sized to the drilled column's own width (menuRegion resolves to it, not
+    // the narrow collapsed rail) — checked via WIDTH rather than the exact
+    // left edge, since the drilled column's own width is content-driven now
+    // (contentWidthCls, Block.mjs) and can exceed the viewport, in which case
+    // positionMenu deliberately clamps the menu's left edge into view while
+    // still matching its width to the region.
+    expect(Math.abs(menuBox.width - drillBox.width)).toBeLessThan(2)
   })
 
   test('navigating away closes the expanded view again', async ({ page }) => {

@@ -332,20 +332,21 @@ alongside a base class wins below 1400px with no specificity conflict; at/above
 - **`relatedColumnWidthCls`** (and thus `commentColumnWidthCls`/
   `claudeColumnWidthCls`, scaled off it) drops floor/ceiling from
   `w-[42rem]`/`w-[56rem]` (672/896px) to **`w-[40rem]`/`w-[48rem]` (640/768px)**.
-- **`widthCls`** (`Block.mjs`, the diff card — top-level and every drilled column)
-  drops its two tiers from `w-[70rem]`/`w-[42rem]` (1120/672px) to
-  **`w-[42rem]`/`w-[28rem]` (672/448px)** — the `split` tier reuses the number the
-  narrow-60%/`singleSide` tier had above 1400px, which in turn drops further,
-  keeping roughly the same ~60% ratio so the `a` toggle still visibly differs.
-  Deliberately scoped to `widthCls`'s own two tiers: `fit`'s content-driven width
-  (`fitWidthCls`/`boundedWrapWidthCls`, `.claude/docs/diff-card.md`) is
-  untouched — it's an opt-in stand that is uncapped upward by design and was never
-  going to reliably fit at 1378px.
-- **The sum at the common floor:** `42rem` + `1rem` (`gap-4`) + `40rem` = `83rem`
-  = 1328px, comfortably inside a ~1378px window (vs. the reported 1808px before).
-  A genuinely wide child still grows this column to its (lower) ceiling and may
-  still need some horizontal scroll — narrowing improves the typical case, it
-  doesn't guarantee every combination fits.
+- **`widthCls`'s own narrow tier is HISTORICAL** — it applied to the fixed
+  `split`/`unified` width tiers a PHP diff card used to have (`w-[70rem]`/
+  `w-[42rem]` → `w-[42rem]`/`w-[28rem]`). Those fixed tiers are gone: every
+  stand's PHP width is content-driven now (`contentWidthCls`,
+  `.claude/docs/diff-card.md`) with no `narrow:`-specific variant at all — see
+  "Narrow viewport (`narrow:`, < 1400px) — no longer a `widthCls` concern" there.
+  The budget math below (measured against the removed 672px/448px tiers) is
+  kept for the historical reasoning, not as a currently-accurate number for a
+  PHP diff card.
+- **The sum at the common floor (as measured when this was written):** `42rem`
+  + `1rem` (`gap-4`) + `40rem` = `83rem` = 1328px, comfortably inside a
+  ~1378px window (vs. the reported 1808px before). A genuinely wide child
+  still grows this column to its (lower) ceiling and may still need some
+  horizontal scroll — narrowing improves the typical case, it doesn't
+  guarantee every combination fits.
 
 The Playwright default viewport (1280×720, see
 `.claude/docs/testing-playwright.md`) is itself below 1400px, so effectively the

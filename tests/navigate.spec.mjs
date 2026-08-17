@@ -641,7 +641,8 @@ test.describe('PR Review Tree — change navigation', () => {
   })
 
   // Regression guard: a plain change-step within the same block must only move
-  // the active-group highlight, not rebuild the card. canStep() (which drives the
+  // the active-group highlight (plus, now, the card's own content-driven width
+  // — see below), never rebuild the whole card. canStep() (which drives the
   // grey step-chevron) reads state.change/mode/focusLevel; calling it directly
   // inside the DetailPanel block-column's outer array-building closure (rather
   // than in its own nested reactive slot) used to make THAT closure depend on
@@ -701,13 +702,21 @@ test.describe('PR Review Tree — change navigation', () => {
 
     // Watch every attribute mutation on the block column for the next step. The
     // active-row highlight itself is a .innerHTML replace inside <code> (not an
-    // attribute), so a clean highlight-only update records zero attribute
-    // mutations here.
+    // attribute), so a clean highlight-only update records zero UNRELATED
+    // attribute mutations here. The card's own `class` (width) attribute is the
+    // one deliberate exception now: every stand's width is content-driven off
+    // the active selection's own window (contentWidthCls/
+    // selectionWindowLineChars, Block.mjs — "the card may grow/shrink live as
+    // you navigate", explicit reviewer request), so a `class` mutation on the
+    // active card AND the look-ahead preview (whose own width is capped
+    // relative to the active card, fitCapCharsFor) is now the expected,
+    // MINIMAL footprint of a same-block step — not the old bug of the WHOLE
+    // card (badges/description/approve checkbox) repatching.
     await page.evaluate(() => {
-      window.__mutations = 0
+      window.__records = []
       const target = document.querySelector('[data-testid="block-column"]')
       window.__obs = new MutationObserver((records) => {
-        window.__mutations += records.length
+        for (const r of records) window.__records.push({ attr: r.attributeName, tag: r.target.tagName })
       })
       window.__obs.observe(target, { attributes: true, subtree: true })
     })
@@ -716,8 +725,12 @@ test.describe('PR Review Tree — change navigation', () => {
     await expect(page).toHaveURL(/chg=1/)
     await page.waitForTimeout(200)
 
-    const mutations = await page.evaluate(() => window.__mutations)
-    expect(mutations).toBe(0)
+    const records = await page.evaluate(() => window.__records)
+    // Only `class` attributes on <article> cards (the width recompute) —
+    // nothing else (no badge/description/approve-checkbox attribute, no
+    // unrelated element) mutates for a same-block step.
+    expect(records.every((r) => r.attr === 'class' && r.tag === 'ARTICLE')).toBe(true)
+    expect(records.length).toBeLessThanOrEqual(2) // the active card + its look-ahead preview
 
     // The highlight itself DID move.
     await expect(page.locator('[data-change-active]').first()).toBeVisible()

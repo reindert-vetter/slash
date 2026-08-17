@@ -142,13 +142,13 @@ export function singleSide(b) {
 // ADDED block. A one-sided REMOVED block is the deliberate exception:
 // singleSide(b) wins first, so it keeps showing its old/left pane in 'fit'
 // too — that's the only code it has, hiding it would leave nothing to
-// review. Used by both codeDiff (which pane(s) render) and fitWidthCls
+// review. Used by both codeDiff (which pane(s) render) and contentWidthCls
 // (which side's text drives the width) so the two stay in lockstep.
 function fitOnly(b) {
   return singleSide(b) || 'right'
 }
 
-// fitOnlyText — the exact text fitWidthCls/fitCapCharsFor measure: whichever
+// fitOnlyText — the exact text contentWidthCls/fitCapCharsFor measure: whichever
 // side fitOnly(b) renders, guarded against missing/errored code. Extracted so
 // both call sites (a card's own width and another card's cap on it, see
 // fitCapCharsFor below) can never drift apart.
@@ -159,22 +159,9 @@ function fitOnlyText(b) {
   return fitOnly(b) === 'left' ? oldText : newText
 }
 
-// narrowed reports whether the `a` toggle should shrink this card to its 60%
-// width. The reviewer wants EVERY visible card — modified, added, removed, a
-// preview/look-ahead card, or any drilled column — to shrink in lockstep
-// while `a`'s unified stand is on, regardless of singleSide(b): a
-// genuinely one-sided block was already narrow on its own, and the unified
-// stand's single "old above new" column (see unifiedCodeDiff below) is
-// exactly as narrow. Shared by every card via the same viewMode option, so
-// this one flag keeps them all in sync. Deliberately excludes 'fit' (see
-// widthCls below) — that third `a` stand gets its own, content-based width
-// instead of this fixed 60%.
-function narrowed(viewMode) {
-  return viewMode() === 'unified'
-}
 
 // isPhpFile — the discriminator between 'fit''s two different behaviors
-// (see fitWidthCls/boundedWrapWidthCls below): a plain `.php` extension
+// (see contentWidthCls/boundedWrapWidthCls below): a plain `.php` extension
 // check on b.file. PHP code gets the uncapped, max-line-based 'fit' width
 // (a long PHP statement is typically one unbreakable logical line, so it
 // must stay fully visible, unwrapped); everything else (markdown, JSON,
@@ -265,12 +252,12 @@ export function codeGrowthChars(code) {
 }
 
 // codeMaxLineChars — the TRUE longest non-comment line in `code` (not a
-// percentile). Used only by fitWidthCls's 'fit' stand: unlike the
+// percentile). Used only by contentWidthCls: unlike the
 // non-ballooning default width elsewhere (codeGrowthChars, still used by
 // relatedColumnWidthCls and by every other card width in this file), the
 // reviewer explicitly wants 'fit' to guarantee that the single widest real
 // code line is never cut off/hidden behind an invisible horizontal scroll —
-// see fitWidthCls's own doc comment for the full reasoning and the
+// see contentWidthCls's own doc comment for the full reasoning and the
 // deliberate scope (only 'fit'; 'split'/'unified' keep their existing, fixed
 // widths and can still clip a very long line).
 function codeMaxLineChars(code) {
@@ -278,32 +265,41 @@ function codeMaxLineChars(code) {
   return lens.length ? lens[lens.length - 1] : 0
 }
 
-// activeUnitLineChars — like codeMaxLineChars, but restricted to the rows the
-// reviewer currently has selected/highlighted: the {start,end} row range of
-// the active navigation unit (a change group, a single line, a call segment,
-// or a Shift+arrow range — same shape `activeGroup` already carries, see
-// Block()'s own doc comment), on whichever side fitOnly(b) renders. This is
-// the reviewer's explicit follow-up request: the 'fit' stand's uncapped width
-// must follow ONLY the selected line/unit, not the block's own true longest
-// line elsewhere — a block with one long outlier line shouldn't balloon the
-// card while the reviewer is looking at (and has selected) a short one.
+// selectionWindowLineChars — like codeMaxLineChars, but restricted to a small
+// WINDOW of rows around the reviewer's current selection: the up-to-2
+// CHANGED rows directly above the active navigation unit (a change group, a
+// single line, a call segment, or a Shift+arrow range — same shape
+// `activeGroup` already carries, see Block()'s own doc comment), the unit's
+// own rows, and the up-to-2 changed rows directly below — on whichever side
+// fitOnly(b) renders. Reviewer request: every stand's width should follow
+// what's actually in view around the cursor, not the block's own true
+// longest line elsewhere (which could sit far outside the visible window) —
+// see "de 2 omliggende aangepaste rijen" in diff-card.md.
 //
-// Returns null when there is nothing to measure in that range — no `unit` at
-// all, or a unit whose rows carry no text on the rendered side (e.g. a pure
-// deletion row landed on at 'line' granularity within a 'fit'-hidden-old
-// modified block: there is no visible "selected line" to size against). The
-// caller (fitWidthCls) then falls back to the previous whole-block
-// codeMaxLineChars behavior — never a silent 0-width card.
-function activeUnitLineChars(b, unit) {
+// Superseded activeUnitLineChars, which scanned only the unit's own row
+// range with no neighbor window at all.
+//
+// Returns null when there is nothing to measure — no `unit` at all, no
+// changed row in the block, or a window whose rows carry no text on the
+// rendered side (e.g. a pure deletion row landed on at 'line' granularity
+// within a 'fit'-hidden-old modified block). The caller then falls back to
+// the whole-block codeMaxLineChars behavior — never a silent 0-width card.
+function selectionWindowLineChars(b, unit) {
   if (!unit) return null
   const rows = blockRows(b)
   if (!rows.length) return null
+  const changed = changedRows(rows)
+  if (!changed.length) return null
   const side = fitOnly(b) === 'left' ? 'left' : 'right'
   const start = Math.max(0, unit.start)
   const end = Math.min(rows.length - 1, unit.end)
+  const inSelection = changed.filter((i) => i >= start && i <= end)
+  const before = changed.filter((i) => i < start).slice(-2)
+  const after = changed.filter((i) => i > end).slice(0, 2)
+  const windowRows = [...before, ...inSelection, ...after]
   let max = 0
   let any = false
-  for (let i = start; i <= end; i++) {
+  for (const i of windowRows) {
     const raw = rows[i][side]
     if (raw == null) continue
     const line = raw.replace(/\s+$/, '')
@@ -317,107 +313,88 @@ function activeUnitLineChars(b, unit) {
   return any ? max : null
 }
 
-// fitCapCharsFor — the effective 'fit'-stand cap another card should never
-// exceed, expressed in the SAME chars unit fitWidthCls builds its own width
-// from: for a PHP file, its own codeMaxLineChars (mirrors fitWidthCls
-// exactly, via the shared fitOnlyText helper); for a non-PHP file there is no
-// chars-based width at all (boundedWrapWidthCls is a fixed floor), so this
-// returns 0 — capping a preview's fitWidthCls at 0 chars collapses it to that
-// exact same 42rem/49.2rem floor via the `max(...)` in fitWidthCls below,
-// which is exactly the width a non-PHP active card renders at.
+// fitCapCharsFor — the effective content-driven-width cap another card
+// should never exceed, expressed in the SAME chars unit widthCls builds its
+// own width from: for a PHP file, its own codeMaxLineChars (mirrors
+// contentWidthCls exactly, via the shared fitOnlyText helper); for a non-PHP
+// file there is no chars-based width at all (boundedWrapWidthCls is a fixed
+// floor), so this returns 0 — capping a preview's contentWidthCls at 0 chars
+// collapses it to that same fixed floor via the `max(...)` in
+// contentWidthCls below, which is exactly the width a non-PHP active card
+// renders at.
 //
 // Used by home.mjs's look-ahead preview call sites (never by a card's own,
 // unconstrained width) to fix the gap in "the preview must never be wider
 // than the active card" (see diff-card.md): the existing activeSingleSided
-// override only narrows a preview by forcing 'unified', which does nothing
-// in the 'fit' stand and nothing when BOTH cards are two-sided (modified) PHP
-// files with a different own longest line — reported: a `modified` preview
-// (`ContractsExport::headings`) rendered wider than the `modified` active
-// card next to it (`ContractsExport::map`) in 'fit', because each card's
-// 'fit' width is otherwise entirely its own content's business.
+// override only narrows a preview by forcing 'unified', which by itself no
+// longer changes the width formula (every stand is content-driven now) —
+// this cap is what actually keeps a preview from rendering wider than the
+// active card next to it when both are two-sided (modified) PHP files with
+// a different own longest line.
 //
 // unit — optional, the SAME {start,end} row range the active card's own
 // activeGroup opt is currently highlighting (home.mjs passes
-// topLevelActiveUnit(...)/focusedActiveUnit()): since fitWidthCls now narrows
-// a card's own width to just its selected unit's longest line (see
-// activeUnitLineChars above), the cap must track that same, usually smaller,
-// number — otherwise a preview could again render wider than the active card
-// whenever the active card's selected line is short but some OTHER line in
-// that same block is long. Absent (or no usable line in that range) falls
-// back to the previous whole-block codeMaxLineChars.
+// topLevelActiveUnit(...)/focusedActiveUnit()): since the width now narrows
+// to just the selection's own window (see selectionWindowLineChars above),
+// the cap must track that same, usually smaller, number. Absent (or no
+// usable line in that window) falls back to the whole-block
+// codeMaxLineChars.
 export function fitCapCharsFor(b, unit) {
   if (!isPhpFile(b)) return 0
-  const unitChars = activeUnitLineChars(b, unit)
-  return unitChars != null ? unitChars : codeMaxLineChars(fitOnlyText(b))
+  const windowChars = selectionWindowLineChars(b, unit)
+  return windowChars != null ? windowChars : codeMaxLineChars(fitOnlyText(b))
 }
 
-// widthCls picks the card's width class for the current `a` stand: for
-// 'fit', a PHP file gets the uncapped, content-based width (fitWidthCls);
-// any other file gets a bounded width instead (boundedWrapWidthCls) — see
-// isPhpFile above for why. Every other stand keeps the existing binary
-// choice (narrow 60% vs. full split width), unchanged for every file type.
+// widthCls picks the card's width class: a PHP file gets the content-driven
+// width (contentWidthCls, below), in EVERY stand ('split'/'unified'/'fit'
+// alike) — any other file gets the fixed, bounded width instead
+// (boundedWrapWidthCls) — see isPhpFile above for why.
 //
-// Below the `narrow` breakpoint (< 1400px, see the tailwind.config comment
-// in index.html) BOTH tiers shrink further — the reviewer explicitly asked
-// for the diff column itself to narrow too, not just the comments/
-// Onderliggende-code column next to it (see "Narrow viewport (< 1400px)" in
-// detail-layout.md for the full width budget this was measured against):
-// 70rem/82rem -> 42rem (the same number the "narrow 60%" tier already used
-// above 1400px) and 42rem/49.2rem -> 28rem, keeping roughly the same ~60%
-// ratio between the two tiers so a same-file `a` toggle (unified vs. split)
-// still visibly differs at this viewport too — see the ratio assertion in
-// diffview.spec.mjs ("`a` cycles the live diff card through split ->
-// unified -> fit -> split"). Deliberately scoped to THIS function — `fit`'s
-// own uncapped, content-based width (fitWidthCls/boundedWrapWidthCls) stays
-// untouched: it's an opt-in stand that already routinely exceeds every
-// fixed width here by design, so it was never going to reliably fit at
-// 1378px regardless, and narrowing its floor too would only add risk to the
-// many `fit`-specific assertions in diffview.spec.mjs for no product
-// benefit.
+// The three stands used to differ here (a fixed 60%-width 'unified' tier, a
+// fixed full-width 'split' tier, only 'fit' content-driven) — on explicit
+// reviewer request that distinction is gone: every stand now sizes a PHP
+// card off what's actually around the cursor (selectionWindowLineChars),
+// floored at MIN_CONTENT_WIDTH_CHARS (80) characters, uncapped upward. The
+// card genuinely grows/shrinks as the reviewer navigates — see
+// contentWidthCls's own doc comment. `viewMode` itself no longer affects the
+// WIDTH (only which/how many panes codeDiff renders — see the `effectiveOnly`
+// branch there), so it's unused here now; kept as a parameter for call-site
+// compatibility (home.mjs passes it positionally next to capFitChars/
+// activeGroup).
 function widthCls(b, viewMode, capFitChars, activeGroup) {
-  if (viewMode() === 'fit') return isPhpFile(b) ? fitWidthCls(b, capFitChars, activeGroup) : boundedWrapWidthCls()
-  return narrowed(viewMode) || singleSide(b)
-    ? 'w-[42rem] narrow:w-[28rem] 2xl:w-[49.2rem] '
-    : 'w-[70rem] narrow:w-[42rem] 2xl:w-[82rem] '
+  return isPhpFile(b) ? contentWidthCls(b, capFitChars, activeGroup) : boundedWrapWidthCls()
 }
 
-// boundedWrapWidthCls — the 'fit' width for a NON-PHP file (see isPhpFile):
-// the same narrow 60% width a one-sided added/removed block already uses in
-// every other stand — deliberately NOT content-based. 'fit' only ever shows
-// ONE pane now (fitOnly, above — old is never shown next to new anymore, not
-// even for a genuinely two-sided modified block), so there's no second,
-// full-split-width branch to account for any more. Long lines are made to
-// fit THIS width by wrapping instead (the `wrap` flag on codePane/paneHTML),
-// so nothing needs to balloon the card past what's actually necessary — the
-// direct fix for "the 3rd stand must not be wider than needed" for non-code
-// (markdown/prose/config) text, where a long line reads perfectly fine
-// wrapped, unlike a PHP statement.
+// boundedWrapWidthCls — the width for a NON-PHP file (see isPhpFile), in
+// every stand: the same narrow 60%-equivalent width a one-sided added/
+// removed block already used — deliberately NOT content-based. Long lines
+// are made to fit THIS width by wrapping instead (the `wrap` flag on
+// codePane/paneHTML in 'fit'; 'split'/'unified' already wrapped nothing
+// before and still don't, unaffected by this change) — the direct fix for
+// "the diff must not be wider than needed" for non-code (markdown/prose/
+// config) text, where a long line reads perfectly fine wrapped, unlike a PHP
+// statement.
 function boundedWrapWidthCls() {
   return 'w-[42rem] 2xl:w-[49.2rem] '
 }
 
-// fitWidthCls — the card width for the `a` toggle's third ('fit') stand, for
-// a PHP FILE ONLY (widthCls routes any other file to boundedWrapWidthCls
-// instead, see isPhpFile above): make the card as wide as its own code
-// actually needs, instead of the fixed 60% ('unified') or full ('split')
-// width. Floored at the existing 60% width (so 'fit' never goes narrower
-// than 'unified'), but — on explicit reviewer request — deliberately UNCAPPED
-// upward: unlike every other width in this file (and unlike codeGrowthChars,
-// the 75th-percentile non-ballooning technique RelatedPanel.mjs's
-// relatedColumnWidthCls still uses), 'fit' must guarantee that the single
-// widest real PHP code line of the block is fully visible, without wrapping
-// and without an invisible horizontal scroll — cutting off part of a long
-// line defeats the entire point of a stand whose stated purpose is "width
-// follows the code". Uses codeMaxLineChars (the TRUE longest non-comment
-// line, not a percentile) for exactly that reason — a percentile-based width
-// plus a ceiling is precisely what let a genuinely long line get silently
-// clipped before this change (reported: a `modified` block's 168-character
-// `throw new RuntimeException(...)` line was cut off mid-word in 'fit',
-// identically to 'split' — see the CSS `max()` below, which drops the
-// previous `clamp(...)` ceiling entirely). Purely a character-count
-// calculation on the already-loaded source text, no live DOM measurement
-// (`scrollWidth`/`getBoundingClientRect`), per the existing approach and the
-// arrow.js pitfalls in conventions.md.
+// MIN_CONTENT_WIDTH_CHARS — the floor for contentWidthCls, in characters
+// (not rem/px): a reviewer request to replace the old fixed 42rem/70rem-ish
+// tiers with one flat, character-based minimum shared by every stand.
+const MIN_CONTENT_WIDTH_CHARS = 80
+
+// contentWidthCls — the card width for a PHP file, for EVERY `a`-cycle stand
+// ('split'/'unified'/'fit' alike — see widthCls above): make the card as
+// wide as the code actually around the cursor needs, instead of a fixed
+// tier. Floored at MIN_CONTENT_WIDTH_CHARS (80) characters, but — on
+// explicit reviewer request — deliberately UNCAPPED upward: unlike
+// codeGrowthChars (the 75th-percentile non-ballooning technique
+// RelatedPanel.mjs's relatedColumnWidthCls still uses), this must guarantee
+// that the widest real PHP code line actually in view is fully visible,
+// without wrapping and without an invisible horizontal scroll. Purely a
+// character-count calculation on the already-loaded source text, no live DOM
+// measurement (`scrollWidth`/`getBoundingClientRect`), per the existing
+// approach and the arrow.js pitfalls in conventions.md.
 //
 // This uncapped guarantee turned out to backfire for a NON-PHP file: a
 // markdown bullet/prose line reads perfectly fine wrapped (unlike a PHP
@@ -426,52 +403,43 @@ function boundedWrapWidthCls() {
 // the whole card (reported: 336 characters → ~6800px). Hence the PHP-only
 // scope: a non-PHP file gets boundedWrapWidthCls + wrapping instead.
 //
-// Deliberately scoped to 'fit' + PHP ONLY — 'split' and 'unified' keep their
-// existing, fixed widths and can still clip a very long line exactly as
-// before, for every file type; this was an explicit, discussed choice (not a
-// guess), see keyboard-navigation.md ("`a` — cycling the diff view").
-//
-// 'fit' never shows the old pane of a genuinely two-sided (modified) block
-// anymore (fitOnly, above — a deliberate change from the earlier "both
-// panes, doubled width" formula: the reviewer explicitly asked for 'fit' to
-// hide old code, mirroring how an already one-sided added block only ever
-// showed its one pane) — so this is now ALWAYS a single-pane calculation,
-// based on whichever side fitOnly(b) actually renders: the new/right text
-// for an added or modified block, the old/left text for a removed block
-// (the one deliberate exception — a removed block has no new side to prefer,
-// so its old pane stays visible in every stand, 'fit' included).
+// Based on whichever side fitOnly(b) renders: the new/right text for an
+// added or modified block, the old/left text for a removed block (the one
+// deliberate exception — a removed block has no new side to prefer, so its
+// old pane stays visible in every stand). A genuinely two-sided (modified)
+// block in 'split' still shows both panes side by side (codeDiff's own
+// `effectiveOnly` branch, unaffected by this change) — its WIDTH is
+// deliberately still measured off the single new/right side only, the same
+// canonical side that already drives selection/approval (see "Only the
+// new/right pane drives selection" in diff-render.md); the old/left pane can
+// still clip a very long removed line in 'split', same as before.
 //
 // capFitChars — an optional `() => number|null` (only ever passed by home.mjs
 // for a look-ahead PREVIEW card, see fitCapCharsFor's own doc comment above):
 // when it returns a finite number, this card's own chars are clamped down to
-// it BEFORE the `max(42rem, …)` floor applies, so a preview can never render
-// wider than the active card it's stacked with even though both are
+// it BEFORE the MIN_CONTENT_WIDTH_CHARS floor applies, so a preview can never
+// render wider than the active card it's stacked with even though both are
 // genuinely two-sided PHP blocks with a different longest line. Absent for
-// every non-preview card (a card's own width stays exactly as uncapped as the
-// doc comment above describes), and a no-op whenever the preview's own chars
+// every non-preview card, and a no-op whenever the preview's own chars
 // already happen to be the smaller number.
 //
 // activeGroup — an optional `() => {start,end}|null` (Block()'s own opt of
 // the same name — the reviewer's currently selected/highlighted navigation
-// unit). On explicit reviewer follow-up request, this stand's chars-count
-// is now taken from ONLY that unit's own longest line (activeUnitLineChars),
-// not the block's true longest line wherever it happens to sit — a block
-// with one long outlier line elsewhere must not keep the card wide while a
-// short selected line is what's actually in view. Falls back to the
-// previous whole-block codeMaxLineChars when there's no active unit (a
-// preview/collapsed card, list mode without changes, or a caller that
-// doesn't pass this opt at all — every existing direct-mount test, see
-// diffview.spec.mjs) or when the unit's own rows carry no measurable text on
-// the rendered side.
-function fitWidthCls(b, capFitChars, activeGroup) {
-  const unitChars = activeUnitLineChars(b, activeGroup && activeGroup())
-  const chars = unitChars != null ? unitChars : codeMaxLineChars(fitOnlyText(b))
+// unit). The chars-count is taken from a WINDOW around that unit — the up to
+// 2 changed rows directly above it, the unit's own rows, and the up to 2
+// changed rows directly below (selectionWindowLineChars) — not the block's
+// true longest line wherever it happens to sit. Falls back to the whole-block
+// codeMaxLineChars when there's no active unit (a preview/collapsed card,
+// list mode without changes, or a caller that doesn't pass this opt at all —
+// every existing direct-mount test, see diffview.spec.mjs) or when the
+// window's own rows carry no measurable text on the rendered side.
+function contentWidthCls(b, capFitChars, activeGroup) {
+  const windowChars = selectionWindowLineChars(b, activeGroup && activeGroup())
+  const chars = windowChars != null ? windowChars : codeMaxLineChars(fitOnlyText(b))
   const cap = capFitChars && capFitChars()
   const clamped = typeof cap === 'number' && isFinite(cap) ? Math.min(chars, cap) : chars
-  return (
-    `w-[max(42rem,calc(${clamped}ch_+_2rem))] ` +
-    `2xl:w-[max(49.2rem,calc(${clamped}ch_+_2rem))] `
-  )
+  const floored = Math.max(MIN_CONTENT_WIDTH_CHARS, clamped)
+  return `w-[calc(${floored}ch_+_2rem)] `
 }
 
 // VIEW_MODE_META describes the three `a`-cycle stands (state.diffViewMode,
@@ -657,7 +625,7 @@ export default function Block(b, opts = {}) {
   // — see unifiedCodeDiff below — fixed 60% width), or 'fit' (only the
   // new/right pane, old is never shown — see fitOnly above — the card width
   // follows that pane's own code instead of a fixed width — see
-  // widthCls/fitWidthCls above). Cycled everywhere with `a` (home.mjs). A
+  // widthCls/contentWidthCls above). Cycled everywhere with `a` (home.mjs). A
   // function so codeDiff's own reactive slot picks up the change, mirroring
   // activeGroup/hintsEnabled above.
   const viewModeFn = opts.viewMode || (() => 'split')
@@ -870,7 +838,7 @@ export default function Block(b, opts = {}) {
         // pass these opts).
         !preview
           ? resizeHandle(
-              (e) => onResizeStart(e, () => parseAutoWidthPx(widthCls(b, viewModeFn))),
+              (e) => onResizeStart(e, (root) => parseAutoWidthPx(widthCls(b, viewModeFn), root)),
               () => onResizeReset(),
             )
           : ''}
@@ -1388,7 +1356,7 @@ function codeDiff(
   // growing the card to fit the longest line (widthCls/boundedWrapWidthCls
   // pick the matching width; this flag makes the row rendering itself wrap
   // instead of overflowing on a single `whitespace-pre` line) — see
-  // isPhpFile/fitWidthCls's own doc comment for the full reasoning. Since
+  // isPhpFile/contentWidthCls's own doc comment for the full reasoning. Since
   // 'fit' now always forces a single pane above, this only ever reaches the
   // single-pane codePane branches below (effectiveOnly === 'right'/'left')
   // — there is no two-pane wrapping path left to reach.

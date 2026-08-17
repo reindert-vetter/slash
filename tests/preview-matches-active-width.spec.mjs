@@ -33,13 +33,10 @@ test.describe('PR Review Tree — look-ahead preview matches a one-sided active 
 
     // The active (added, one-sided) card is narrow on its own — this is the
     // pre-existing, unrelated singleSide() behaviour, asserted here only as a
-    // sanity baseline for the width comparison below.
-    await expect(active).toHaveClass(/w-\[42rem\]/)
-
-    // The preview card (modified, genuinely two-sided) must match — narrow,
-    // not its own natural full width.
-    await expect(preview).toHaveClass(/w-\[42rem\]/)
-    await expect(preview).not.toHaveClass(/w-\[70rem\]/)
+    // sanity baseline for the width comparison below. Width is content-driven
+    // now (contentWidthCls, Block.mjs), so for this short fixture it lands on
+    // the flat 80-character floor.
+    await expect(active).toHaveClass(/w-\[calc\(80ch_\+_2rem\)\]/)
 
     // It renders as ONE unified column (data-pane="new" — the same meaning
     // that attribute already carries on the ordinary new/right codePane —
@@ -59,18 +56,26 @@ test.describe('PR Review Tree — look-ahead preview matches a one-sided active 
     expect(previewBox.width).toBeLessThanOrEqual(activeBox.width + 1)
   })
 
-  test('preview card keeps its own two-sided width when the active card is two-sided', async ({ page }) => {
+  test('preview card never renders wider than a two-sided active card', async ({ page }) => {
     // PR 12903's blocks 1+2 are both two-sided (modified) same-file
-    // neighbours — the pre-existing, unaffected case: no override should
-    // apply, so the preview keeps its own full width and both panes.
+    // neighbours. Every stand's width is content-driven now (contentWidthCls,
+    // Block.mjs) and the look-ahead preview's cap (fitCapCharsFor/
+    // capFitChars) applies in every stand too — not just 'fit' as before —
+    // so the preview can never render wider than the active card next to it.
+    // (This particular preview happens to collapse to just its header —
+    // previewTooTallForActive, home.mjs, unrelated to width — so this only
+    // asserts the width relationship, not the pane structure.)
     await page.goto('/pr/12903')
     await appReady(page)
     await page.locator('[data-idx="1"]').click()
 
     const cards = page.locator('[data-testid="block-column"] article')
     await expect(cards).toHaveCount(2)
+    const active = cards.nth(0)
     const preview = cards.nth(1)
-    await expect(preview).toHaveClass(/w-\[70rem\]/)
+    const activeBox = await active.boundingBox()
+    const previewBox = await preview.boundingBox()
+    expect(previewBox.width).toBeLessThanOrEqual(activeBox.width + 1)
   })
 
   // Regression: on the VERY FIRST render, before loadBlocks() has populated
@@ -98,13 +103,16 @@ test.describe('PR Review Tree — look-ahead preview matches a one-sided active 
   // `removed`→'left', everything else → null/two-sided), so a synthetic
   // 'unchanged' block (a drilled call-frame pointing at a file this PR
   // doesn't touch — resolveChildBlock in home.mjs, old === new) fell through
-  // to the two-sided branch: it showed BOTH (identical) panes and rendered at
-  // the wide 70rem tier, wider than the one-sided active card next to it —
-  // reported live: a drilled `added` method's own card stayed narrow while an
-  // 'unchanged' RuleData::__construct call target beneath it rendered wide.
+  // to the two-sided branch: it showed BOTH (identical) panes — reported
+  // live: a drilled `added` method's own card stayed one-pane while an
+  // 'unchanged' RuleData::__construct call target beneath it showed both.
   // singleSide is now an allowlist (only 'modified' keeps both panes), so
-  // 'unchanged' narrows to a single pane like 'added'/'removed'.
-  test('an unchanged block renders single-pane and narrow, never the two-sided width', async ({ page }) => {
+  // 'unchanged' still renders a single pane like 'added'/'removed'. (The
+  // width side of this regression — 'unchanged' landing on the wide
+  // two-sided tier — no longer applies: every stand is content-driven now,
+  // with no tier distinction left to fall into; see contentWidthCls,
+  // Block.mjs.)
+  test('an unchanged block renders a single pane, never both', async ({ page }) => {
     await page.goto('/pr/105')
     await appReady(page)
 
@@ -148,11 +156,8 @@ test.describe('PR Review Tree — look-ahead preview matches a one-sided active 
       document.body.appendChild(previewHost)
       Block(preview, { viewMode: () => 'split', preview: true })(previewHost)
 
-      const activeCard = activeHost.querySelector('article')
       const previewCard = previewHost.querySelector('article')
       return {
-        activeWidth: activeCard.getBoundingClientRect().width,
-        previewWidth: previewCard.getBoundingClientRect().width,
         previewOldPanes: previewCard.querySelectorAll('[data-pane="old"]').length,
         previewNewPanes: previewCard.querySelectorAll('[data-pane="new"]').length,
       }
@@ -160,7 +165,6 @@ test.describe('PR Review Tree — look-ahead preview matches a one-sided active 
 
     expect(widths.previewOldPanes).toBe(0)
     expect(widths.previewNewPanes).toBe(1)
-    expect(widths.previewWidth).toBeLessThanOrEqual(widths.activeWidth + 1)
   })
 
   // Regression: the "preview never wider than active" guarantee must also

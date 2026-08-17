@@ -3,10 +3,10 @@
 How wide a block-diff card gets and why. The **keyboard** side of the `a` cycle
 (the guards, the `viewModeIndicator` clicks, what `unified` restructures) lives
 in "`a` — cycling the diff view" in `.claude/docs/keyboard-navigation.md`; this
-file is the **width and render** side: `widthCls`/`fitWidthCls`/
-`boundedWrapWidthCls`/`narrowed` (`Block.mjs`), the `narrow:` breakpoint, and the
-two rules that keep the look-ahead preview card subordinate to the active one
-("never wider", and collapsing away entirely when the active diff doesn't fit).
+file is the **width and render** side: `widthCls`/`contentWidthCls`/
+`boundedWrapWidthCls` (`Block.mjs`), and the two rules that keep the look-ahead
+preview card subordinate to the active one ("never wider", and collapsing away
+entirely when the active diff doesn't fit).
 
 Everything here is a **pure character-count / already-known-counts calculation**
 — never a live DOM measurement (`scrollWidth`/`getBoundingClientRect`), which
@@ -42,18 +42,18 @@ being active, so a repeated click is genuinely free.
 
 ## What decides the width: `widthCls`
 
-`widthCls(b, viewMode)` (`Block.mjs`) is the single entry point; the card's root
-`<article>` concatenates its result into its class string. Two branches:
-
-- **`fit`** routes on file type: a **PHP** file gets the uncapped, content-driven
-  `fitWidthCls(b)`, anything else gets the fixed `boundedWrapWidthCls()` (see
-  below for why the two differ).
-- **`split`/`unified`** keep a binary choice between two fixed tiers:
-
-  | condition | width |
-  |---|---|
-  | `narrowed(viewMode) \|\| singleSide(b)` | `w-[42rem] narrow:w-[28rem] 2xl:w-[49.2rem]` |
-  | otherwise (a two-sided block in `split`) | `w-[70rem] narrow:w-[42rem] 2xl:w-[82rem]` |
+**Reviewer request, explicitly confirmed:** all three `a` stands get the same
+content-driven width — the earlier fixed 60%/full-split tiers for `split`/
+`unified` are gone. `widthCls(b, viewMode, capFitChars, activeGroup)`
+(`Block.mjs`) is the single entry point; the card's root `<article>`
+concatenates its result into its class string. One branch, by file type: a
+**PHP** file gets the uncapped, content-driven `contentWidthCls(b, ...)`;
+anything else gets the fixed `boundedWrapWidthCls()` (see below for why the
+two differ). `viewMode` no longer affects the WIDTH at all — it only decides
+which/how many panes `codeDiff` renders (`effectiveOnly`, `unifiedCodeDiff`);
+a same-file `a` toggle now changes the pane STRUCTURE (side-by-side → stacked
+→ new-only) without the card resizing, unless the underlying selection window
+itself changes.
 
 **`singleSide(b)`** is status-driven, not code-driven: `modified` → `null`
 (genuinely two different sides to compare), `removed` → `'left'`, everything
@@ -79,80 +79,78 @@ again. Regression test:
 `tests/preview-matches-active-width.spec.mjs`'s "an unchanged block renders
 single-pane and narrow" test.
 
-**`narrowed(viewMode)`** is simply `viewMode() === 'unified'`. Since the unified
-stand collapses a two-sided block into ONE "old above new" column
-(`unifiedCodeDiff`), a full split width would be mostly empty — so `unified`
-reuses the exact same 60% tier a one-sided block already has. It applies to
-**every** card in lockstep (modified, added, removed, preview, drilled column),
-which is what keeps a column flow from looking ragged mid-toggle. It deliberately
-**excludes** `fit`: that stand has its own, content-based width instead of this
-fixed one.
+## `contentWidthCls` — PHP only, uncapped upward, floored at 80 characters
 
-## `fit`: two behaviours, split by file type (`isPhpFile`)
+Superseded `fitWidthCls` (the old name only applied to the `fit` stand; the
+same formula now drives every stand for a PHP file). Whichever side
+`fitOnly(b)` renders (`singleSide(b) || 'right'`, same as before — the new/
+right text for an added or modified block, the old/left text for a removed
+block) is measured, but **not the whole block**: only a WINDOW around the
+current selection.
 
-`fit` renders exactly **one** pane (`fitOnly(b)` = `singleSide(b) || 'right'`), so
-there is no two-pane width branch left to account for. What differs is how that
-one pane's width is chosen.
+### `selectionWindowLineChars` — the up to 2 neighboring changed rows on each side
 
-### `fitWidthCls` — PHP only, uncapped upward
+Reviewer request: "kijk naar de 2 omliggende aangepaste rijen" — the chars
+count comes from the reviewer's current navigation unit (a change group, a
+single line, a call segment, or a Shift+arrow range — `Block()`'s own
+`activeGroup` opt) **plus** the up to 2 CHANGED rows directly above it and the
+up to 2 changed rows directly below (`changedRows`, filtered/sliced around the
+unit's own `{start,end}` row range) — never the block's true longest line
+wherever it happens to sit outside that window. Falls back to the whole-block
+`codeMaxLineChars` when there's no active unit at all (a preview/collapsed
+card, list mode without changes) or the window's own rows carry no measurable
+text on the rendered side.
 
 ```
-w-[max(42rem,calc(<chars>ch_+_2rem))]  2xl:w-[max(49.2rem,calc(<chars>ch_+_2rem))]
+w-[calc(<chars>ch_+_2rem)]
 ```
 
-`<chars>` is, in order of precedence: **`activeUnitLineChars`** — the longest
-non-comment line among ONLY the rows of the currently selected/highlighted
-navigation unit (`Block()`'s own `activeGroup` opt — a change group, a single
-line, a call segment, or a Shift+arrow range, whichever `{start,end}` row range
-is currently landed on) — falling back to **`codeMaxLineChars`** — the TRUE
-longest non-comment line of the WHOLE block, on whichever side `fitOnly(b)`
-renders (new/right for added+modified, old/left for a removed block) — when
-there is no active unit (a preview/collapsed card, list mode without changes,
-or a caller that doesn't pass `activeGroup` at all). The `ch` unit is exactly
-one monospace glyph, so this is arithmetic on the already-loaded source string.
+`<chars>` is `selectionWindowLineChars` (see above), falling back to
+**`codeMaxLineChars`** — the TRUE longest non-comment line of the WHOLE block,
+on whichever side `fitOnly(b)` renders — when there is no active unit at all
+(a preview/collapsed card, list mode without changes, or a caller that doesn't
+pass `activeGroup`), floored at `MIN_CONTENT_WIDTH_CHARS` (80 characters). The
+`ch` unit is exactly one glyph of whichever font the card's own `<article>`
+happens to inherit, so this is arithmetic on the already-loaded source string
+— never a live measurement of the rendered text itself.
 
-**Follow-up, on explicit reviewer request:** the block's own true longest line,
-wherever it happens to sit, must not dictate the width while the reviewer is
-looking at (and has selected) a genuinely short line elsewhere in the same
-block — reported: a `Cart::applyPromotion` card ballooned to ~1330px in `fit`
-because of one long line elsewhere in the method, while the actively selected
-line (`$hasRestrictions = …`) was short. `activeUnitLineChars` (`Block.mjs`)
-restricts the scan to the active unit's own row range, on the same side
-`fitOnly(b)` renders, with the same comment-line exclusion as
-`nonCommentLineLengths`. Home.mjs feeds it the exact same unit its own
-`activeGroup` opt already highlights with — `topLevelActiveUnit(b)` for the
-top-level selected card, `focusedActiveUnit()` for a focused drilled column
-(both pulled out of the existing inline `activeGroup` closures, no behavior
-change there) — so highlighting and width always agree on which unit is
-"selected". A unit whose rows carry no measurable text on the rendered side
-(e.g. landing on a pure-deletion line at `line` granularity within a `fit`-
-hidden-old modified block — there is nothing to show on that pane for that
-row) falls back to the whole-block `codeMaxLineChars`, never to a 0-width
-card.
+**The card genuinely grows/shrinks live as the reviewer navigates** — explicit
+reviewer request/confirmation ("de blok mag groter en kleiner worden ... de
+kaart beweegt live mee per navigatie-stap"). `home.mjs` feeds
+`selectionWindowLineChars` the exact same unit its own `activeGroup` opt
+already highlights with — `topLevelActiveUnit(b)` for the top-level selected
+card, `focusedActiveUnit()` for a focused drilled column — so highlighting and
+width always agree on which unit is "selected". A unit whose rows carry no
+measurable text on the rendered side falls back to the whole-block
+`codeMaxLineChars`, never to a 0-width card. **Trade-off, accepted:** since the
+card's own `class` attribute now depends on `activeGroup()`, a same-block
+navigation step (e.g. `f`/`d`/↓ within the same group) legitimately mutates
+the active card's (and its look-ahead preview's) `class` attribute every step
+— the minimal, intentional footprint of "the card resizes as you navigate",
+not the old "whole card rebuilds" flicker bug (badges/description/approve
+checkbox never move) — see `tests/navigate.spec.mjs`'s own regression test.
 
 **The preview cap moves in lockstep.** `fitCapCharsFor(b, unit)` (the "preview
 must never be wider than the active card" mechanism, see below) takes the same
-optional unit and applies the identical `activeUnitLineChars` restriction
+optional unit and applies the identical `selectionWindowLineChars` restriction
 before its own `codeMaxLineChars` fallback — otherwise a preview capped at the
 active card's OLD (whole-block) width could again render wider than the active
-card's new, usually narrower, selected-line width. Both call sites
+card's new, usually narrower, selected-window width. Both call sites
 (`home.mjs`) pass the matching unit: `topLevelActiveUnit(curBlock())` for the
 top-level look-ahead preview, `focusedActiveUnit()` for the drill-preview
-column.
+column. This cap is what actually keeps a preview narrower than the active
+card now that every stand shares one width formula — `activeSingleSided`
+forcing a preview's `viewMode` to `'unified'` (see below) no longer changes
+its width by itself.
 
-Two further deliberate departures from every other width in the codebase, both
-explicit reviewer decisions rather than oversights:
-
-- **The true maximum, not the 75th percentile.** `codeGrowthChars` (the
-  non-ballooning percentile technique `relatedColumnWidthCls` still uses) plus a
-  ceiling is precisely what let a genuinely long line get silently clipped —
-  reported: a 168-character `throw new RuntimeException(...)` cut off mid-word in
-  `fit`, identically to `split`. A stand whose whole stated purpose is "width
-  follows the code" must not hide code.
-- **A floor but no ceiling** (`max()`, not `clamp()`): floored at the 60% tier so
-  `fit` is never narrower than `unified`, unbounded above so the widest real line
-  is always fully visible without wrapping and without an invisible horizontal
-  scroll.
+**The true maximum, not the 75th percentile.** `codeGrowthChars` (the
+non-ballooning percentile technique `relatedColumnWidthCls` still uses) plus a
+ceiling is precisely what let a genuinely long line get silently clipped —
+reported: a 168-character `throw new RuntimeException(...)` cut off mid-word.
+A width that's supposed to "follow the code" must not hide code. **A floor but
+no ceiling**: floored at `MIN_CONTENT_WIDTH_CHARS`, unbounded above so the
+widest real line in the selection window is always fully visible without
+wrapping and without an invisible horizontal scroll.
 
 Both `codeMaxLineChars` and `codeGrowthChars` run over `nonCommentLineLengths`,
 which skips blank lines, a leading PHPDoc block, `//`/`#` lines and `*`
@@ -174,10 +172,10 @@ nothing by staying on one physical line but reads terribly split mid-expression;
 prose/config is the opposite — that asymmetry is the entire justification for the
 split.
 
-**Scope, stated so it isn't read as a bug:** only `fit` guarantees a long line is
-fully visible. `split` and `unified` keep their fixed widths and can still clip a
-very long line, for every file type. That was a discussed choice, not an
-omission.
+**Scope, stated so it isn't read as a bug:** only a PHP file's `contentWidthCls`
+guarantees a long line is fully visible, and only within its own selection
+window — a non-PHP file's fixed `boundedWrapWidthCls` never grows regardless of
+stand.
 
 An **SVG** block needs nothing of its own here: `svgSlot` replaces the text diff
 with rendered `<img>` previews and never reads `viewMode`, and an `.svg` file is
@@ -185,32 +183,18 @@ by construction not a PHP file, so it already gets `boundedWrapWidthCls` in the
 `fit` stand exactly like markdown/JSON (see "SVG blocks" in
 `.claude/docs/diff-render.md`).
 
-## Narrow viewport (`narrow:`, < 1400px)
+## Narrow viewport (`narrow:`, < 1400px) — no longer a `widthCls` concern
 
-`index.html`'s `tailwind.config` defines a custom **max-width** screen
-`narrow: { max: '1399px' }` — a hard cutoff, not a gradually scaling vw formula.
-Tailwind emits a screen's CSS after the corresponding unprefixed utility (the
-same source-order mechanism `2xl:` already relies on), so a `narrow:` class
-alongside a base class wins below 1400px with no specificity conflict, and at or
-above 1400px nothing changes at all.
-
-`widthCls` drops **both** of its fixed tiers there: `70rem`/`82rem` → `42rem`,
-and `42rem`/`49.2rem` → `28rem`. The upper tier reuses the number the narrow tier
-already had above 1400px, and the lower one drops in step, so the ~60% ratio
-survives and a same-file `a` toggle (split vs. unified) still visibly differs at
-this viewport too — pinned by the ratio assertion in `tests/diffview.spec.mjs`.
-
-This is **scoped to `widthCls`'s own two tiers on purpose**: `fit`'s
-content-driven width (`fitWidthCls`/`boundedWrapWidthCls`) is untouched. It is an
-opt-in stand that already routinely exceeds every fixed width by design, so it
-was never going to reliably fit at ~1378px regardless, and narrowing its floor
-would only put the many `fit`-specific assertions at risk for no product gain.
-The matching shrink on the neighbouring column, and the width budget the numbers
-were measured against, live in "Narrow viewport (< 1400px)" in
-`.claude/docs/underlying-code.md`.
-
-Note that Playwright's default viewport (1280×720) is itself below 1400px, so
-effectively the whole suite exercises the narrow tiers.
+`index.html`'s `tailwind.config` still defines the custom **max-width** screen
+`narrow: { max: '1399px' }` (used elsewhere, e.g. `boundedWrapWidthCls`'s
+non-PHP width and the neighbouring Onderliggende-code column — see "Narrow
+viewport (< 1400px)" in `.claude/docs/underlying-code.md`), but a PHP file's
+`contentWidthCls` no longer has a `narrow:`-specific tier: it was always
+content-driven at every viewport once `fit`-only, and now that every stand
+shares that formula, the earlier `70rem`/`82rem` → `42rem` /
+`42rem`/`49.2rem` → `28rem` narrow-viewport shrink (which only ever applied to
+the fixed tiers `split`/`unified` used to have) has nothing left to act on —
+removed along with those tiers, not overlooked.
 
 ## The look-ahead preview must never be wider than the active card
 
@@ -219,83 +203,53 @@ on its own; a genuinely two-sided block previewed next to it would render at its
 own natural full split width and be **wider than the thing that owns the
 keyboard** — which reads as the preview being the main event.
 
-Both preview sites therefore compute `activeSingleSided = !!singleSide(<active
-block>)` and pass
-`viewMode: () => (activeSingleSided ? 'unified' : state.diffViewMode)` for the
-preview card only:
+**Since every stand's width is content-driven now (`contentWidthCls`), this
+guarantee lives ENTIRELY in `fitCapCharsFor`/`capFitChars` (below) — there is
+no separate `viewMode`-based override left.** Historically (before the "all
+three stands are content-driven" change) a first mechanism,
+`activeSingleSided` (`!!singleSide(<active block>)`, forcing a one-sided
+active card's preview into `viewMode: 'unified'`), narrowed a preview by
+riding the `split`/`unified` fixed-tier width `unified` used to have; that
+tier is gone, so this override no longer changes a preview's WIDTH by itself
+— `drillPreviewColumns`/`DetailPanel`'s `pair.forEach` still pass it (mirrors
+the active card's own stand for the preview's pane STRUCTURE, e.g. hiding the
+old pane the same way the active card does), but the actual width guarantee
+is `fitCapCharsFor`'s job below, unconditionally, for every stand.
 
-- `DetailPanel`'s `pair.forEach` (`home.mjs`) for the top-level look-ahead
-  preview, resolving the active block through **`curBlock()`** (not a raw
-  `state.blocks[sel]` read) so a selected `test_class` row resolves to its active
-  method;
-- `drillPreviewColumns` for the preview stacked under the focused drilled column,
-  using `focusedBlock()`.
-
-Three properties of this rule are deliberate:
-
-- **It reuses the `narrowed()` knob** the `a` toggle already owns, just
-  conditioned per render instead of only on the global stand — no fourth width
-  computation.
-- **One-directional.** A two-sided active card never forces a one-sided preview
-  to *widen*; only narrowing happens.
-- **It is a WIDTH guarantee only.** Since the second stand was reworked from
-  "hide the old pane" into "stack old above new in one column", a two-sided
-  preview forced into `unified` still shows its own removed (`-`) lines — just
-  narrow and stacked. The older, stronger "the preview shows nothing the active
-  card doesn't have" guarantee was consciously dropped, not lost.
-
-The selected/active card itself is never given this override. Test:
+The selected/active card itself is never given this cap. Test:
 `tests/preview-matches-active-width.spec.mjs` (fixture PR 105).
 
-**Why a two-sided (`modified`) ACTIVE card needs no override of its own.**
-When `activeSingleSided` is `false` (the active card is itself `modified`),
-the preview's `viewMode` closure falls through to the same
-`state.diffViewMode` the active card reads — so in `split`/`unified` both
-cards resolve `widthCls`'s binary tier from the identical `narrowed(viewMode)`
-value and their own `singleSide(b)`; a `modified` active card always has
-`singleSide(active) === null`, so it always sits on the wide `70rem`/`82rem`
-tier itself, which is the ceiling every fixed-tier width in `split`/`unified`
-can reach. A preview can therefore never render **wider** than a `modified`
-active card in those two stands — only narrower or equal — with no fourth
-mechanism needed; this was verified in code (not just asserted) after a
-suspected gap here turned out to already be closed by the two mechanisms
-above (`activeSingleSided` and `singleSide`'s own allowlist fix). Only `fit`
-has genuinely per-card, content-driven widths — see `fitCapCharsFor` next —
-which is why the cap below is scoped to that one stand. Regression test:
-`tests/preview-matches-active-width.spec.mjs`'s "a modified active card is
-never smaller than a wider modified preview, in every stand" (loops all three
-`a` stands with a preview whose own code is deliberately much longer).
+### `fitCapCharsFor`/`capFitChars` — the one mechanism, every stand
 
-### The `fit` stand needed a SECOND mechanism: `fitCapCharsFor`/`capFitChars`
+Reported (back when this was `fit`-only): a `modified` preview
+(`ContractsExport::headings`) rendered wider than the `modified` active card
+next to it (`ContractsExport::map`), because each card's content-driven width
+is otherwise entirely its own content's business — the longest non-comment
+line in ITS OWN selection window, with no notion of its neighbour. Now that
+every stand shares that formula, the same gap exists in `split`/`unified` too
+whenever both cards are two-sided (`modified`) PHP files with a different
+longest line in view — `fitCapCharsFor` closes it uniformly, not just for
+`fit`.
 
-The `activeSingleSided` override above only narrows a preview by forcing
-`viewMode` to `'unified'` — it does nothing for the `fit` stand (which never
-reads `narrowed()`, see `widthCls` above) and nothing when **both** the active
-and preview card are two-sided (`modified`) PHP files: reported, a `modified`
-preview (`ContractsExport::headings`) rendered wider than the `modified`
-active card next to it (`ContractsExport::map`) in `fit`, because each card's
-`fitWidthCls` is otherwise entirely its own content's business — the single
-longest non-comment line of the block it happens to render, with no notion of
-its neighbour.
-
-`fitCapCharsFor(b)` (`Block.mjs`, exported) answers "what chars-count would
-`b`'s own `fit` width be capped at" — its own `codeMaxLineChars` for a PHP
-file, `0` for a non-PHP file (whose `fit` width is the fixed
-`boundedWrapWidthCls` floor anyway, so capping a preview at `0` chars
-collapses it to that exact same floor via `fitWidthCls`'s `max(42rem, …)`).
-`fitWidthCls`/`widthCls` take an optional `capFitChars` — a `() =>
+`fitCapCharsFor(b, unit)` (`Block.mjs`, exported) answers "what chars-count
+would `b`'s own content-driven width be capped at" — `selectionWindowLineChars`
+(falling back to `codeMaxLineChars`) for a PHP file, `0` for a non-PHP file
+(whose width is the fixed `boundedWrapWidthCls` floor anyway, so capping a
+preview at `0` chars collapses it to that exact same floor via
+`contentWidthCls`'s own `Math.max(MIN_CONTENT_WIDTH_CHARS, …)`).
+`contentWidthCls`/`widthCls` take an optional `capFitChars` — a `() =>
 number|null` — and clamp their own computed `chars` down to it before
-building the `max(...)` class string; absent (every non-preview card) means
-no cap, unchanged from before.
+flooring/building the class string; absent (every non-preview card) means no
+cap, unchanged from before.
 
 Both preview call sites pass `capFitChars: () => fitCapCharsFor(<active
-block>)` (`curBlock()` at the top level, `focusedBlock()` for
-`drillPreviewColumns`) — the exact same lazy-closure discipline as `collapsed`
-right next to it (a function, read from Block's own nested reactive slot,
-never resolved in the outer array-building closure). One-directional and
-purely additive, same as `activeSingleSided`: it only ever narrows a preview,
-never widens the active card, and is a no-op whenever the preview's own chars
-already happen to be the smaller number.
+block>, <active unit>)` (`curBlock()`/`topLevelActiveUnit(curBlock())` at the
+top level, `focusedBlock()`/`focusedActiveUnit()` for `drillPreviewColumns`)
+— the exact same lazy-closure discipline as `collapsed` right next to it (a
+function, read from Block's own nested reactive slot, never resolved in the
+outer array-building closure). One-directional and purely additive: it only
+ever narrows a preview, never widens the active card, and is a no-op whenever
+the preview's own chars already happen to be the smaller number.
 
 **Does not fight a manual column-width override** (mouse-drag or the `c`/`v`
 keyboard resize, see `.claude/docs/column-resize.md`): both write an inline
