@@ -74,15 +74,23 @@ const state = reactive({
 
 // ui is separate from state so opening/closing a popover doesn't touch the
 // bits bound into url-less local reactivity elsewhere.
-// ingesting: the prUid currently running /api/ingest (disables its "Genereer
-// review-boom"/"Opnieuw genereren" button); ingestStage: the current ingest
-// pipeline stage for that PR ("worktrees"/"scan"/"relations"/""), polled from
-// GET /api/ingest/progress while busy — see INGEST_STAGE_LABELS below;
+// ingestingByPr / ingestStageByPr: prUid -> true / prUid -> current ingest
+// pipeline stage ("worktrees"/"scan"/"relations"/""), keyed per PR (like
+// state.statuses/approvals/pendingPush) so several rows can be generating a
+// review tree AT THE SAME TIME — clicking "Genereer review-boom" on one row
+// no longer blocks a click on another (Reindert: "meerdere trees kunnen
+// genereren door meerdere achter elkaar aan te klikken"). ingestBusy(pr)
+// reads ingestingByPr[prUid(pr)]; ingestLabel(pr, ...) reads
+// ingestStageByPr[prUid(pr)], both polled per PR from GET
+// /api/ingest/progress while busy — see INGEST_STAGE_LABELS below.
 // ingestError + ingestErrorFor: the last ingest failure message and which PR it
 // belongs to (cleared on a fresh attempt or when its popover closes) —
 // ingestErrorFor lets the standalone regenerate button on an already-ingested
-// row show the error under the right row even though ui.ingesting itself has
-// already reset to null by the time the catch runs.
+// row show the error under the right row even though that PR's own
+// ingestingByPr entry has already reset by the time the catch runs. These stay
+// plain scalars (not per-PR) because only one popover is ever open at a time
+// and togglePopover always clears them on every open, so they can never leak
+// between rows.
 // readyFor: the prUid whose reviewer picker is expanded (null = collapsed);
 // reviewers: the fetched candidate list (repo collaborators, most-used-first);
 // reviewersLoading/reviewersError: fetch state; selectedReviewers: a login→true
@@ -96,7 +104,7 @@ const state = reactive({
 // positionPopover below), so a row near the bottom of the viewport never opens
 // a popover that's clipped off-screen.
 const ui = reactive({
-  openPopover: null, ingesting: null, ingestStage: '', ingestError: null, ingestErrorFor: null, copiedFor: null,
+  openPopover: null, ingestingByPr: {}, ingestStageByPr: {}, ingestError: null, ingestErrorFor: null, copiedFor: null,
   readyFor: null, reviewers: [], reviewersLoading: false, reviewersError: null, selectedReviewers: {}, readySubmitting: false,
   removingReviewer: null, removeReviewerError: null,
   popoverAbove: false,
@@ -711,8 +719,9 @@ function togglePopover(uid) {
       positionPopover(uid)
       focusPopoverItem(1)
     })
-    // A page refresh (or a fresh load landing on this PR) wipes ui.ingesting/
-    // ingestStage — plain module state, not persisted anywhere client-side —
+    // A page refresh (or a fresh load landing on this PR) wipes
+    // ui.ingestingByPr/ingestStageByPr — plain module state, not persisted
+    // anywhere client-side —
     // even though the ingest itself may still be running server-side. Check
     // for that on every open so a reopened popover shows the real live state
     // instead of silently going back to "Genereer review-boom". See
@@ -767,40 +776,49 @@ function positionPopover(uid) {
 //
 // While the POST is in flight, generatePage polls GET /api/ingest/progress —
 // a purely in-memory, ephemeral read of which pipeline stage the server is
-// currently running for this PR (see ingest_progress.go) — into ui.ingestStage,
-// so the busy button shows real progress instead of a static "Bezig met
-// genereren…" (see INGEST_STAGE_LABELS + generateAction/ingestedActions below).
-let ingestPollTimer = null
+// currently running for this PR (see ingest_progress.go) — into
+// ui.ingestStageByPr[prUid], so the busy button shows real progress instead of
+// a static "Bezig met genereren…" (see INGEST_STAGE_LABELS +
+// generateAction/ingestedActions below).
+//
+// ingestPollTimers is keyed per PR (prUid -> interval id), NOT a single shared
+// timer: several rows can be mid-ingest at once (Reindert: "meerdere trees
+// kunnen genereren door meerdere achter elkaar aan te klikken"), and a single
+// shared timer would have one row's stopIngestPoll() kill another row's poll.
+const ingestPollTimers = new Map()
 
-function stopIngestPoll() {
-  if (ingestPollTimer) {
-    clearInterval(ingestPollTimer)
-    ingestPollTimer = null
+function stopIngestPoll(uid) {
+  const t = ingestPollTimers.get(uid)
+  if (t) {
+    clearInterval(t)
+    ingestPollTimers.delete(uid)
   }
 }
 
 async function pollIngestStage(pr) {
+  const uid = prUid(pr)
   try {
     const res = await fetch('/api/ingest/progress?pr=' + pr.number + repoParam(pr))
     if (!res.ok) return
     const body = await res.json()
-    // Drop a stale response if a different (or no longer active) ingest has
-    // since taken over — mirrors the ingestErrorFor guard below.
-    if (ui.ingesting === prUid(pr) && body && body.ok) ui.ingestStage = body.stage || ''
+    // Drop a stale response if this PR's ingest is no longer active — mirrors
+    // the ingestErrorFor guard below.
+    if (ui.ingestingByPr[uid] && body && body.ok) ui.ingestStageByPr[uid] = body.stage || ''
   } catch (e) {
     // best-effort — the button just keeps its last-known/generic label
   }
 }
 
 async function generatePage(pr, { redirect = true } = {}) {
-  if (ui.ingesting) return // one ingest at a time; button is disabled anyway
-  ui.ingesting = prUid(pr)
-  ui.ingestStage = ''
+  const uid = prUid(pr)
+  if (ui.ingestingByPr[uid]) return // this row is already busy; button is disabled anyway
+  ui.ingestingByPr[uid] = true
+  ui.ingestStageByPr[uid] = ''
   ui.ingestError = null
   ui.ingestErrorFor = null
-  stopIngestPoll()
+  stopIngestPoll(uid)
   pollIngestStage(pr)
-  ingestPollTimer = setInterval(() => pollIngestStage(pr), 800)
+  ingestPollTimers.set(uid, setInterval(() => pollIngestStage(pr), 800))
   try {
     const res = await fetch('/api/ingest', {
       method: 'POST',
@@ -821,42 +839,45 @@ async function generatePage(pr, { redirect = true } = {}) {
       // "Open review-boom"/"Opnieuw genereren") without waiting for the next
       // refresh/60s poll.
       pr.hasGraph = true
-      ui.ingesting = null
+      ui.ingestingByPr[uid] = false
       focusCloseAfterGenerate(pr)
     }
   } catch (e) {
-    ui.ingesting = null
+    ui.ingestingByPr[uid] = false
     ui.ingestError = e.message || 'Genereren mislukt'
-    ui.ingestErrorFor = prUid(pr)
+    ui.ingestErrorFor = uid
   } finally {
-    stopIngestPoll()
-    ui.ingestStage = ''
+    stopIngestPoll(uid)
+    ui.ingestStageByPr[uid] = ''
   }
 }
 
 // resumeIngestIfActive — a page refresh (or a fresh page load) can land while
 // an ingest this tab never started, or a previous /api/ingest fetch this tab
-// DID start, is still running: ui.ingesting/ui.ingestStage are plain module
-// state and both are gone after a reload, but the ingest Workflow Execution
-// itself is not — StartWorkflow (workflows.go) takes no request context, so it
-// keeps running server-side to completion regardless of whether the browser
-// tab/request that triggered it is still around. Called on every popover open
-// (togglePopover above); a cheap read-only ping (see ingest_progress.go's
-// write-boundary carve-out), skipped outright if this tab already tracks an
-// ingest of its own. Reviewer request: "als ik het menu weer open [na het
-// sluiten], wil ik weer het laad icoontje zien en zien als het is
-// gegenereerd (live status) — ook als je de pagina refresht."
+// DID start, is still running: ui.ingestingByPr/ingestStageByPr are plain
+// module state and both are gone after a reload, but the ingest Workflow
+// Execution itself is not — StartWorkflow (workflows.go) takes no request
+// context, so it keeps running server-side to completion regardless of
+// whether the browser tab/request that triggered it is still around. Called on
+// every popover open (togglePopover above); a cheap read-only ping (see
+// ingest_progress.go's write-boundary carve-out), skipped outright if this tab
+// already tracks an ingest of THIS PR (another PR being busy never blocks
+// this). Reviewer request: "als ik het menu weer open [na het sluiten], wil
+// ik weer het laad icoontje zien en zien als het is gegenereerd (live status)
+// — ook als je de pagina refresht."
 async function resumeIngestIfActive(pr) {
-  if (!pr || !treeSupported(pr) || ui.ingesting) return
+  if (!pr || !treeSupported(pr)) return
+  const uid = prUid(pr)
+  if (ui.ingestingByPr[uid]) return
   try {
     const res = await fetch('/api/ingest/progress?pr=' + pr.number + repoParam(pr))
     if (!res.ok) return
     const body = await res.json()
     // The popover may already have closed again, or a fresh local generate
     // may have started meanwhile, while this request was in flight.
-    if (!body || !body.ok || !body.stage || ui.openPopover !== prUid(pr) || ui.ingesting) return
-    ui.ingesting = prUid(pr)
-    ui.ingestStage = body.stage
+    if (!body || !body.ok || !body.stage || ui.openPopover !== uid || ui.ingestingByPr[uid]) return
+    ui.ingestingByPr[uid] = true
+    ui.ingestStageByPr[uid] = body.stage
     watchResumedIngest(pr)
   } catch (e) {
     // best-effort — the popover just stays on its idle action
@@ -864,8 +885,8 @@ async function resumeIngestIfActive(pr) {
 }
 
 // watchResumedIngest polls the same GET /api/ingest/progress used by
-// generatePage's own busy button (reusing ingestPollTimer/stopIngestPoll)
-// until the stage clears — the Workflow Execution finished, success or
+// generatePage's own busy button (reusing ingestPollTimers/stopIngestPoll, per
+// PR) until the stage clears — the Workflow Execution finished, success or
 // failure. Unlike generatePage, this tab never awaited the original POST
 // /api/ingest response, so success is confirmed the only other way
 // available: whether the PR now actually has blocks (GET /api/prs). A
@@ -875,32 +896,36 @@ async function resumeIngestIfActive(pr) {
 // show either way, and the tree itself is the ground truth a reviewer can
 // always check.
 function watchResumedIngest(pr) {
-  stopIngestPoll()
-  ingestPollTimer = setInterval(async () => {
-    if (ui.ingesting !== prUid(pr)) {
-      stopIngestPoll()
-      return
-    }
-    try {
-      const res = await fetch('/api/ingest/progress?pr=' + pr.number + repoParam(pr))
-      if (!res.ok) return
-      const body = await res.json()
-      if (ui.ingesting !== prUid(pr)) return
-      if (body && body.ok && body.stage) {
-        ui.ingestStage = body.stage
+  const uid = prUid(pr)
+  stopIngestPoll(uid)
+  ingestPollTimers.set(
+    uid,
+    setInterval(async () => {
+      if (!ui.ingestingByPr[uid]) {
+        stopIngestPoll(uid)
         return
       }
-      stopIngestPoll()
-      const nowIngested = await isNowIngested(pr)
-      if (ui.ingesting === prUid(pr)) {
-        ui.ingesting = null
-        ui.ingestStage = ''
-        if (nowIngested) pr.hasGraph = true
+      try {
+        const res = await fetch('/api/ingest/progress?pr=' + pr.number + repoParam(pr))
+        if (!res.ok) return
+        const body = await res.json()
+        if (!ui.ingestingByPr[uid]) return
+        if (body && body.ok && body.stage) {
+          ui.ingestStageByPr[uid] = body.stage
+          return
+        }
+        stopIngestPoll(uid)
+        const nowIngested = await isNowIngested(pr)
+        if (ui.ingestingByPr[uid]) {
+          ui.ingestingByPr[uid] = false
+          ui.ingestStageByPr[uid] = ''
+          if (nowIngested) pr.hasGraph = true
+        }
+      } catch (e) {
+        // best-effort — keep polling on a transient network hiccup
       }
-    } catch (e) {
-      // best-effort — keep polling on a transient network hiccup
-    }
-  }, 800)
+    }, 800),
+  )
 }
 
 // isNowIngested — a lightweight "does this PR have blocks now" check via the
@@ -934,17 +959,19 @@ function focusCloseAfterGenerate(pr) {
 
 // ingestBusy(pr) / ingestLabel(pr, idleLabel) / ingestIcon(pr) are read from
 // their own nested ${() => …} bindings (not a plain `busy` value captured once
-// when the popover opens) so they actually react to ui.ingesting/ui.ingestStage
-// changing while the popover stays open — the same arrow.js pitfall documented
-// in .claude/rules/conventions.md ("een geneste ${() => canStep(...)}-binding"):
-// a plain-JS ternary computed inside the outer, only-occasionally-rerun
-// ${() => popover(pr)} slot never updates once busy flips mid-render.
+// when the popover opens) so they actually react to
+// ui.ingestingByPr/ingestStageByPr changing while the popover stays open — the
+// same arrow.js pitfall documented in .claude/rules/conventions.md ("een
+// geneste ${() => canStep(...)}-binding"): a plain-JS ternary computed inside
+// the outer, only-occasionally-rerun ${() => popover(pr)} slot never updates
+// once busy flips mid-render. Each PR has its own entry (prUid-keyed), so
+// several rows can show their own independent busy state at once.
 function ingestBusy(pr) {
-  return ui.ingesting === prUid(pr)
+  return !!ui.ingestingByPr[prUid(pr)]
 }
 
 function ingestLabel(pr, idleLabel) {
-  return ingestBusy(pr) ? INGEST_STAGE_LABELS[ui.ingestStage] || 'Bezig met genereren…' : idleLabel
+  return ingestBusy(pr) ? INGEST_STAGE_LABELS[ui.ingestStageByPr[prUid(pr)]] || 'Bezig met genereren…' : idleLabel
 }
 
 // The idle glyph is the TREE, not the sparkles: this row BUILDS the review

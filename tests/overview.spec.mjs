@@ -303,6 +303,73 @@ test.describe('PR Review Tree — PR inbox', () => {
     await expect(page.locator('[data-testid="pr-popover"] [data-testid="open-tree"]')).toBeVisible({ timeout: 5000 })
   })
 
+  // Reviewer request: "ik wil in prs overview meerdere trees kunnen genereren
+  // door meerdere achter elkaar aan te klikken" — clicking "Genereer
+  // review-boom" on one row must not block clicking it on a different row
+  // while the first is still busy. An earlier version kept ui.ingesting as a
+  // single page-wide scalar, so generatePage's guard silently no-opped the
+  // second row's click (see the "Several rows can generate a review tree at
+  // the same time" section in .claude/docs/pr-overview.md).
+  test('generating two different rows at the same time', async ({ page }) => {
+    await page.goto('/pr-overview')
+    await appReady(page)
+
+    const resolvers = {}
+    const done = {
+      12888: new Promise((resolve) => {
+        resolvers[12888] = resolve
+      }),
+      12801: new Promise((resolve) => {
+        resolvers[12801] = resolve
+      }),
+    }
+    await page.route('**/api/ingest', async (route) => {
+      const body = JSON.parse(route.request().postData() || '{}')
+      await done[body.pr]
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' })
+    })
+    await page.route('**/api/ingest/progress*', async (route) => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true,"stage":""}' })
+    })
+
+    // Start the first row's ingest, then close its popover and start a SECOND
+    // row's ingest while the first is still in flight.
+    const row1 = page.locator('[data-testid="pr-row"][data-pr="12888"]')
+    await row1.click()
+    const generate1 = page.locator('[data-testid="pr-popover"] [data-testid="generate-page"]')
+    await generate1.click()
+    await expect(generate1).toBeDisabled()
+    await page.keyboard.press('Escape')
+
+    const row2 = page.locator('[data-testid="pr-row"][data-pr="12801"]')
+    await row2.click()
+    const generate2 = page.locator('[data-testid="pr-popover"] [data-testid="generate-page"]')
+    // This is the actual regression check: the second row's button must
+    // really start (and disable itself), not silently no-op because the
+    // first row is still busy.
+    await generate2.click()
+    await expect(generate2).toBeDisabled()
+
+    // Reopen the first row: it must still show its own independent busy state.
+    await page.keyboard.press('Escape')
+    await row1.click()
+    await expect(page.locator('[data-testid="pr-popover"] [data-testid="generate-page"]')).toBeDisabled()
+
+    // Resolve the second PR's ingest first — only that row should flip to
+    // ingested, the first must stay busy.
+    resolvers[12801]()
+    await expect(page.locator('[data-testid="pr-popover"] [data-testid="generate-page"]')).toBeDisabled()
+    await page.keyboard.press('Escape')
+    await row2.click()
+    await expect(page.locator('[data-testid="pr-popover"] [data-testid="open-tree"]')).toBeVisible()
+    await page.keyboard.press('Escape')
+
+    // Now resolve the first PR's ingest too.
+    resolvers[12888]()
+    await row1.click()
+    await expect(page.locator('[data-testid="pr-popover"] [data-testid="open-tree"]')).toBeVisible()
+  })
+
   test('a failed generate keeps the popover open with an inline error', async ({ page }) => {
     await page.goto('/pr-overview')
     await appReady(page)

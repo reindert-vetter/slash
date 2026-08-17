@@ -78,18 +78,18 @@ in sync by hand.
   runs, the button shows a spinner + the **actual pipeline stage** ("Preparing
   worktrees…" / "Scanning blocks…" / "Building relations…",
   `INGEST_STAGE_LABELS`, fallback "Generating…") and is `disabled`
-  (`ui.ingesting`, against a double ingest). `generatePage` polls
-  **`GET /api/ingest/progress?pr=N`** every 800ms into `ui.ingestStage`
-  (`ingest_progress.go`, purely in-memory — within the write-boundary exception
-  for stateless pings). The busy text/icon and the `disabled`/`class` styling
-  each hang off their **own** nested `${() => …}` binding
-  (`ingestBusy`/`ingestLabel`/`ingestIcon`), never a plain-JS ternary on a
-  once-captured variable — otherwise the button never updates while the popover
-  is already open (see `.claude/rules/arrowjs-pitfalls.md`). Its **idle** glyph
-  is the `tree` icon (`ICON_PATHS`), the same one `graphChip` uses for a PR
-  without a tree: this row *builds* the tree, so it shows what it produces,
-  while `sparkles` stays the "there IS a tree" glyph ("Open review tree" and
-  `graphChip`'s `hasGraph` branch). That `tree` path is Lucide's
+  (`ui.ingestingByPr[prUid]`, against a double ingest of the SAME row).
+  `generatePage` polls **`GET /api/ingest/progress?pr=N`** every 800ms into
+  `ui.ingestStageByPr[prUid]` (`ingest_progress.go`, purely in-memory — within
+  the write-boundary exception for stateless pings). The busy text/icon and the
+  `disabled`/`class` styling each hang off their **own** nested `${() => …}`
+  binding (`ingestBusy`/`ingestLabel`/`ingestIcon`), never a plain-JS ternary on
+  a once-captured variable — otherwise the button never updates while the
+  popover is already open (see `.claude/rules/arrowjs-pitfalls.md`). Its
+  **idle** glyph is the `tree` icon (`ICON_PATHS`), the same one `graphChip`
+  uses for a PR without a tree: this row *builds* the tree, so it shows what it
+  produces, while `sparkles` stays the "there IS a tree" glyph ("Open review
+  tree" and `graphChip`'s `hasGraph` branch). That `tree` path is Lucide's
   **`tree-deciduous`** — a rounded crown on a visible **trunk**; it replaced
   `tree-pine`, whose stacked triangles read as a Christmas tree rather than a
   review tree (Reindert). `handleIngest`
@@ -111,14 +111,50 @@ in sync by hand.
 - **`pr.hasGraph === true`** (`ingestedActions(pr)`): **"Open review tree"**
   (`data-testid=open-tree`, `location.href = '/pr/' + pr.number`) and
   **"Regenerate"** (`data-testid=regenerate-page`), the same
-  `generatePage`/`ui.ingesting`/`ui.ingestStage` flow but with
+  `generatePage`/`ui.ingestingByPr`/`ui.ingestStageByPr` flow but with
   `{ redirect: false }` — regenerating must **not** navigate, the reviewer stays
-  on the overview and only wants the data refreshed (`ui.ingesting` → `null` on
-  success). A failure shows `data-testid=regenerate-error` in the same popover.
+  on the overview and only wants the data refreshed (`ui.ingestingByPr[prUid]`
+  → `false` on success). A failure shows `data-testid=regenerate-error` in the
+  same popover.
+
+### Several rows can generate a review tree AT THE SAME TIME
+
+Reviewer request: "ik wil in prs overview meerdere trees kunnen genereren door
+meerdere achter elkaar aan te klikken" — click "Generate review tree" on one
+row, move on, and click it on another row while the first is still running.
+
+- **The Go side already supported this.** `POST /api/ingest` is an ordinary
+  blocking handler; each request runs in its own goroutine and
+  `engine.StartWorkflow` mints a fresh, non-deterministic Run ID per call, so
+  two different PRs never collide on one Execution. `ingestMu`
+  (`ingest.go`) already serializes the heavy git/worktree/scan steps between
+  PRs at the process level (queued, not raced), so concurrent requests for
+  different PRs are safe without any backend change.
+- **The block was purely client-side.** `ui.ingestingByPr`/
+  `ui.ingestStageByPr` are **prUid-keyed maps** (the same shape as
+  `state.statuses`/`state.approvals`/`state.pendingPush`), not scalars — an
+  earlier version used one shared `ui.ingesting`/`ui.ingestStage` for the whole
+  page, so `generatePage`'s guard (`if (ui.ingesting) return`) silently no-opped
+  a click on a second row's already-`disabled`-looking-enabled button while a
+  first row was mid-ingest. `ingestPollTimers` is likewise a `Map<prUid,
+  intervalId>`, not one shared timer — a shared timer would have one row's
+  `stopIngestPoll()` kill a different row's poll. `resumeIngestIfActive`/
+  `watchResumedIngest` gate on `ui.ingestingByPr[prUid(pr)]` only, so resuming
+  (or reopening) one PR's popover is never blocked by another PR still being
+  busy.
+- **`ui.ingestError`/`ingestErrorFor` stay plain scalars, deliberately not
+  per-PR** — only one popover is ever open at a time (`ui.openPopover`), and
+  `togglePopover` always clears both on every open, so a stale error from a
+  different row's earlier failure can never bleed into the one popover that's
+  visible.
+- Test: "generating two different rows at the same time" in
+  `tests/overview.spec.mjs` — both rows' spinners stay independently busy while
+  their (separately mocked/delayed) `/api/ingest` calls are in flight, and each
+  resolves into its own "Open review tree" without disturbing the other.
 
 ### A page refresh mid-generate: the busy state resumes on the next popover open
 
-`ui.ingesting`/`ui.ingestStage` are plain module state, wiped by a reload —
+`ui.ingestingByPr`/`ui.ingestStageByPr` are plain module state, wiped by a reload —
 but the ingest itself is a real Workflow Execution
 (`m.engine.StartWorkflow(WorkflowIngest, …)`, `workflows.go`) started from a
 goroutine that takes **no request context**, so it keeps running to
@@ -133,9 +169,10 @@ icoontje zien … ook als je de pagina refresht."
 outright if this tab already tracks an ingest locally): one cheap
 `GET /api/ingest/progress` ping — same write-boundary carve-out as the
 button's own polling — and if it comes back with a non-empty stage, seeds
-`ui.ingesting`/`ui.ingestStage` from it and hands off to
-**`watchResumedIngest(pr)`**, which keeps polling (reusing
-`ingestPollTimer`/`stopIngestPoll`) until the stage clears. Since this tab
+this PR's `ui.ingestingByPr`/`ui.ingestStageByPr` entry from it and hands off
+to **`watchResumedIngest(pr)`**, which keeps polling (reusing this PR's own
+entry in `ingestPollTimers`/`stopIngestPoll`) until the stage clears. Since
+this tab
 never awaited the original `POST /api/ingest` response, it has no success/
 failure result to show — completion is confirmed the only other way
 available: **`isNowIngested(pr)`**, a `GET /api/prs` lookup by
