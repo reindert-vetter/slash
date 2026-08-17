@@ -85,41 +85,46 @@ export default function BlockList(state, isPrWideComposing = () => false) {
     <aside
       data-testid="pr-index"
       class="${() =>
-        // No footer reservation here — the pr-index is only meaningfully
-        // visible in list mode (it slides fully off-screen in diff mode, see
-        // the translate-x ternary below), and the footer only ever shows
-        // content in diff mode (state.footerVisible, see Footer.mjs), so
-        // there is nothing for it to reserve space for.
-        'fixed bottom-6 left-6 top-6 flex w-[26rem] flex-col overflow-hidden rounded-xl border bg-white dark:bg-zinc-900 transition-all duration-200 ease-out ' +
-        // Light-blue border while the keyboard drives stop 2 (list-mode, not
-        // showing the description) — mirrors diffActive on the block-diff card
-        // and the stop-1 border above, so all three stops highlight the same way.
-        (state.mode === 'list' && !state.showDescription
-          ? 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
-          : 'border-slate-300 dark:border-zinc-700 ring-1 ring-black/5') +
-        ' ' +
+        // A real flex sibling of PrInfoPanel/<main> now (mounted together
+        // inside one fixed row wrapper, see AppColumns in home.mjs) — no more
+        // fixed left-6/top-6/bottom-6 of its own, and no more translate-x
+        // trick to make way for PrInfoPanel: since that column sits BEFORE
+        // this one in the same flex row, the row itself pushes this aside
+        // right whenever it's open. No footer reservation here either — the
+        // pr-index is only meaningfully visible in list mode (it collapses to
+        // width 0 in diff mode, see the ternary below), and the footer only
+        // ever shows content in diff mode (state.footerVisible, see
+        // Footer.mjs), so there is nothing for it to reserve space for.
+        'flex h-full shrink-0 flex-col overflow-hidden rounded-xl bg-white dark:bg-zinc-900 transition-all duration-200 ease-out ' +
         (state.mode === 'diff' || state.testColumnFocused || isPrWideComposing()
-          ? // Slides fully away in diff mode, and equally once the
-            // methodes-kolom (stop 2b) owns the keyboard in list mode —
-            // stepping right past this index hides it either way;
-            // testColumnFocused survives the diff→list transition, so ←
-            // from a method's diff lands on the methodes-kolom with this
-            // index still hidden, and only a second ← brings it back.
-            // Third case: while an "algemene" (PR-wide) comment is being
-            // written, so the composer isn't squeezed in beside an index and
-            // a diff it has nothing to do with — ← closes the composer and
-            // brings this straight back (see comments-panel.md/detail-layout.md).
-            '-translate-x-[28rem] opacity-0 pointer-events-none'
-          : // showDescription (stop 1, list-mode only) slides this pr-index one
-            // column-width right so the PR-description panel can take its usual
-            // left-6 spot instead of appearing after it — see PrInfoPanel/
-            // detail-layout.md. 40.5rem = the description panel's own width
-            // (39rem, 1.5x the original 26rem) plus the 1.5rem gap it leaves
-            // before the pr-index, so the two sit flush next to each other
-            // exactly like pr-index/<main> do.
-            state.showDescription
-            ? 'translate-x-[40.5rem] opacity-100'
-            : 'translate-x-0 opacity-100')}"
+          ? // Collapses to width 0 (not just hidden via translate/opacity) so
+            // it genuinely gives its space back to <main> instead of merely
+            // sliding out of view while still claiming a flex slot — the fix
+            // for a diff/comment column rendering PARTLY BEHIND this index
+            // (a real, screenshot-reported bug from the old translate-based
+            // hide: a position:fixed/translated box never gives up its own
+            // layout space, so <main>'s own manually-synced offset was the
+            // ONLY thing keeping the two apart, and any state where that sync
+            // drifted showed content sliding in behind this aside). Collapses
+            // in diff mode, and equally once the methodes-kolom (stop 2b)
+            // owns the keyboard in list mode — stepping right past this index
+            // hides it either way; testColumnFocused survives the diff→list
+            // transition, so ← from a method's diff lands on the
+            // methodes-kolom with this index still collapsed, and only a
+            // second ← brings it back. Third case: while an "algemene"
+            // (PR-wide) comment is being written, so the composer isn't
+            // squeezed in beside an index and a diff it has nothing to do
+            // with — ← closes the composer and brings this straight back
+            // (see comments-panel.md/detail-layout.md).
+            'w-0 border-0 opacity-0 pointer-events-none'
+          : 'w-[26rem] border opacity-100 ' +
+            // Light-blue border while the keyboard drives stop 2 (list-mode,
+            // not showing the description) — mirrors diffActive on the
+            // block-diff card and the stop-1 border above, so all three
+            // stops highlight the same way.
+            (state.mode === 'list' && !state.showDescription
+              ? 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
+              : 'border-slate-300 dark:border-zinc-700 ring-1 ring-black/5'))}"
     >
       <header class="shrink-0 border-b border-slate-200 dark:border-zinc-800 px-4 py-3">
         <div class="flex items-center gap-2">

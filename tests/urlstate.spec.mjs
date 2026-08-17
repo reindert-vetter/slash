@@ -59,11 +59,11 @@ test.describe('PR Review Tree — URL state persistence', () => {
     await appReady(page)
     expect(normalizeQuery(new URL(page.url()).search)).toBe(normalizeQuery(before))
 
-    // Diff mode restored → the detail panel is in its full-width, flush-left
-    // (left-0, see "Let <main> run flush to the viewport edges" in
-    // detail-layout.md) layout.
-    const panel = page.locator('[data-testid="detail-panel"]')
-    await expect(panel).toHaveClass(/left-0/)
+    // Diff mode restored → the pr-index (<aside>) is collapsed to width 0 so
+    // <main> takes the full-width diff layout (see "Columns instead of
+    // independently fixed panels" in detail-layout.md; <main> itself carries
+    // no reactive position class any more).
+    await expect(page.getByTestId('pr-index')).toHaveClass(/w-0/)
     expect(new URL(page.url()).searchParams.get('mode')).toBe('diff')
   })
 

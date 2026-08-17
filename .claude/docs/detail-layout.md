@@ -26,6 +26,53 @@ column's own width, and the "Taken" block.
   (`split`/`unified`/`fit`), `fitWidthCls`, "preview never wider than active",
   the preview-collapse mechanism.
 
+## Columns instead of independently fixed panels
+
+`PrInfoPanel`, `<aside>` (the pr-index, `BlockList.mjs`) and `<main>`
+(`DetailPanel`) are real flex siblings of **one** row, `AppColumns(state)`
+(`home.mjs`, `data-testid=app-columns`, `position:fixed inset` box — see
+below for its exact edges) — in that DOM order, left to right. This replaced
+an earlier shape where each of the three was its **own independent**
+`position:fixed` panel, kept apart only by hand: `<aside>`/`<main>` each
+carried a `left-[Nrem]`/`translate-x-[Nrem]` computed to happen to match its
+neighbours' widths (`29rem`, `40.5rem`, `69.5rem`, `42rem`, …), and hiding
+`<aside>` was a `translate-x` + `opacity` trick — which, being
+`position:fixed`, **never actually gave its layout space back**; only
+`<main>`'s own separately-computed offset kept content from landing on top of
+it. A real, reported bug (a resolved comment's card rendering partly BEHIND
+the still-open pr-index) was traced to exactly that: two independently
+hand-synced numbers with no structural guarantee they'd ever agree, or a
+frame where they briefly didn't. `AppColumns` removes the whole magic-number
+system: every column is now a genuine flex item, so the browser computes
+"next to, never under" automatically, and a hidden/collapsed column always
+gives its own layout space back rather than merely being covered.
+
+- `AppColumns` itself is `fixed left-6 right-0 top-6 z-10 flex items-stretch
+  gap-6` plus a reactive `bottom` (see "`<main>`'s own offsets" below) — the
+  bounding box every child stretches to fill vertically.
+- `PrInfoPanel` (open) and `<aside>` are `shrink-0` with an explicit width
+  (`w-[39rem]`/`w-[26rem]`); `<main>` is `flex-1 min-w-0` and takes whatever
+  space its neighbours don't claim.
+- **Collapse, don't cover:** `PrInfoPanel` fully unmounts when
+  `state.showDescription` is false (unchanged, see below); `<aside>` collapses
+  to `w-0 opacity-0 pointer-events-none` (instead of the old
+  `-translate-x-[28rem] opacity-0`) whenever it should get out of the way
+  (diff mode, the methodes-kolom owning the keyboard, or an "algemene"
+  PR-wide compose — see `BlockList.mjs`'s own class comment). Both still
+  animate over the existing 200ms (`transition-all duration-200 ease-out`,
+  now animating `width` instead of `transform`), so opening/collapsing
+  `<aside>` still slides visually — the difference is that the space is
+  really reclaimed, not just painted over.
+- Since `<main>` no longer needs to know anything about its neighbours'
+  widths to position itself, its own class list is fully **static** (no
+  `${() => …}` binding at all) — one less per-navigation-step attribute
+  re-evaluation, in the same spirit as the "don't couple a whole closure to
+  one small reactive read" rule in `.claude/rules/arrowjs-pitfalls.md`.
+
+Test: `tests/main-columns-no-overlap.spec.mjs` (asserts `<aside>`'s right edge
+never passes `<main>`'s left edge, in both the ordinary list-mode case and
+with `PrInfoPanel` open).
+
 ## `<main>` as a horizontally scrolling column flow
 
 `DetailPanel` (`home.mjs`) is a `<main>` **flex-row** that packs its columns
@@ -164,28 +211,20 @@ title/summary/description/Jira box truncate less quickly), rendered by
 `prInfoCard(state)` inside its own `PrInfoPanel(state)` component (`home.mjs`).
 It is the leftmost stop of the left→right nav chain (see
 `.claude/docs/keyboard-navigation.md`) **and** visually the leftmost thing on
-screen — as its own `position:fixed` panel, a sibling of `<aside>` (the
-pr-index, `BlockList.mjs`) and `<main>`, mounted before both. Reason: `<aside>`
-is itself `position:fixed` and sits outside `<main>`'s flex flow, so a
-flex-child of `<main>` would render *after* it (that was the earlier, wrong
-shape); the panel therefore takes over the pr-index's fixed `left-6` spot and
-pushes the pr-index right.
+screen — a flex sibling of `<aside>` (the pr-index, `BlockList.mjs`) and
+`<main>` inside `AppColumns` (see "Columns instead of independently fixed
+panels" above), mounted first in that row so it visually sits to the left of
+both.
 
 `state.showDescription` (default `false`, ephemeral — outside the URL) decides
 whether the column exists at all; closed it takes up **no space** (the whole
-`${() => state.showDescription ? … : ''}` block drops away). Open (only in
-`state.mode==='list'`) moves three things in lockstep off that one flag:
-
-- `PrInfoPanel` appears at `left-6`.
-- `<aside>` shifts `translate-x-[40.5rem]` (instead of `translate-x-0`, in
-  `BlockList.mjs`'s class ternary — checked **before** the existing
-  `mode==='diff'` branch, which wins: in diff mode the pr-index still slides
-  fully away). 40.5rem = the column's 39rem plus the 1.5rem gap, so the two sit
-  snugly together.
-- `<main>` shifts the same 40.5rem (`left-[69.5rem]` instead of
-  `left-[29rem]`, in the same ternary as its `mode==='diff' → left-6` branch),
-  so the block column doesn't land under the shifted pr-index. Decoupled from
-  `<aside>`'s transition but the same distance, so both animate in sync (200ms).
+`${() => state.showDescription ? … : ''}` block drops away, wrapped in a
+stable `class="contents"` root per the bare-toggling-expression rule in
+`.claude/rules/arrowjs-pitfalls.md`). Open (only in `state.mode==='list'`),
+`<aside>` and `<main>` need no code of their own to react to it any more —
+being real flex siblings AFTER this column in `AppColumns`, the row simply
+pushes them right by this column's own width plus the row's `gap-6` (1.5rem)
+as soon as it mounts, and back left the instant it unmounts.
 
 Reached from the pr-index (stop 2) with `←`; `→` closes it. While open,
 `onKeydown` ignores `↑`/`↓` (no internal cursor). Both this card and the
@@ -426,14 +465,25 @@ narrow enough, and close enough, to share a row instead of each claiming a full
 
 ## `<main>`'s own offsets
 
-In `'list'` mode `<main>` starts at `left-[29rem]` (next to the sidebar), in
-`'diff'` mode at `left-0` (no sidebar to clear); in both cases the columns pack
-from the left. `<main>`'s right edge is `right-0` in every mode, **deliberately
-asymmetric** with every other panel (sidebar/footer/`PrInfoPanel` keep their
-1.5rem edge): the far edge is exactly where a wide last column's content used to
-get clipped before it was scrolled fully into view, so that margin was traded
-for usable scroll width. The bottom offset tracks the footer's real height —
-see `.claude/docs/footer.md`.
+`<main>` itself carries no positional classes at all any more (see "Columns
+instead of independently fixed panels" above) — it's `flex-1 min-w-0` inside
+`AppColumns`, so its left edge is wherever `PrInfoPanel`/`<aside>` (open or
+collapsed) leave off, and it packs its own columns from the left the same way
+regardless of mode. Its **right** edge is `AppColumns`' own `right-0`, which
+still deliberately carries **no** 1.5rem margin — asymmetric with every other
+panel (`PrInfoPanel`/`<aside>` sit inside the row's own `left-6`, the footer
+keeps its 1.5rem edge too): the far edge is exactly where a wide last column's
+content used to get clipped before it was scrolled fully into view, so that
+margin was traded for usable scroll width.
+
+The **bottom** offset — the one value that still has to react to state — lives
+on `AppColumns` itself, not on `<main>` alone: `bottom-6` normally, or
+`bottom-[${footerBoxPx(state) + PROGRESS_BAR_PX}px]` while the footer is
+visible, tracking its real content-driven height (`.claude/docs/footer.md`).
+Applying it to the whole row rather than just `<main>` is equivalent to the
+old `<main>`-only reservation, because the footer only ever shows content in
+diff mode — exactly when `PrInfoPanel`/`<aside>` are unmounted/collapsed
+anyway, so they never actually need the extra room.
 
 ### Writing an "algemene" (PR-wide) comment clears the screen for it
 

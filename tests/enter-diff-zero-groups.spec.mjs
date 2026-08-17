@@ -50,24 +50,27 @@ test('→ on a block with 0 own change groups still enters the diff, and a furth
   await rows.filter({ hasText: 'findOrCreateCustomer' }).click()
 
   const panel = page.getByTestId('detail-panel')
+  const aside = page.getByTestId('pr-index')
   await expect(panel.locator('code.language-php').first()).toBeVisible()
   // List-mode preview: 0 groups means nothing to highlight.
   await expect(page.locator('[data-change-active]')).toHaveCount(0)
-  await expect(panel).toHaveClass(/left-\[29rem\]/)
+  // List mode: the pr-index still has its full width (<main> itself carries
+  // no reactive position class any more, see "Columns instead of
+  // independently fixed panels" in detail-layout.md).
+  await expect(aside).toHaveClass(/w-\[26rem\]/)
 
-  // → still steps into the diff — the panel expands to its full-width diff
-  // layout (flush to the left edge — left-0, see "Let <main> run flush to
-  // the viewport edges" in detail-layout.md) — even though there's nothing
+  // → still steps into the diff — the pr-index collapses to width 0 so
+  // <main> takes the full-width diff layout — even though there's nothing
   // to highlight.
   await page.keyboard.press('ArrowRight')
-  await expect(panel).toHaveClass(/left-0/)
+  await expect(aside).toHaveClass(/w-0/)
   await expect(page.locator('[data-change-active]')).toHaveCount(0)
 
   // Give ensureCode's (now-removed) "0 groups → back to list" fallback a
   // window to fire if it still existed — diff mode must stick, not bounce
   // back to the narrow list layout once the block's code has fully landed.
   await page.waitForTimeout(300)
-  await expect(panel).toHaveClass(/left-0/)
+  await expect(aside).toHaveClass(/w-0/)
 
   // A further → opens Onderliggende code, showing the resolved relation child.
   await page.keyboard.press('ArrowRight')

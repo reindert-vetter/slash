@@ -469,7 +469,11 @@ test.describe('PR Review Tree — command palette', () => {
     // keyboard it moves the menu selection instead, so the panel stays narrow.
     await page.keyboard.press('ArrowDown')
     await page.keyboard.press('ArrowRight')
-    await expect(panel).toHaveClass(/left-\[29rem\]/)
+    // Still list mode: the panel stays narrow — the pr-index (<aside>) still
+    // has its full list-mode width instead of collapsing for diff mode (see
+    // "Columns instead of independently fixed panels" in detail-layout.md;
+    // <main> itself carries no reactive position class any more).
+    await expect(page.getByTestId('pr-index')).toHaveClass(/w-\[26rem\]/)
     await expect(page).not.toHaveURL(/mode=diff/)
   })
 })

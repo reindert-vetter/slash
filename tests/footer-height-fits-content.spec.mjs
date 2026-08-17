@@ -64,13 +64,14 @@ test.describe('footer height fits its actual content', () => {
     expect(groupHeight).toBeGreaterThan(lineHeight)
     expect(groupHeight).toBeLessThanOrEqual(140)
 
-    // <main>'s own bottom reservation always matches the footer's real
-    // height exactly (footerBoxPx is the single source of truth for both),
-    // plus PROGRESS_BAR_PX for the always-visible review-progress bar sitting
+    // The app-columns row (AppColumns, home.mjs — <main>'s flex parent, see
+    // detail-layout.md) always reserves the footer's real height exactly
+    // (footerBoxPx is the single source of truth for both), plus
+    // PROGRESS_BAR_PX for the always-visible review-progress bar sitting
     // below the footer (see "A separate, always-visible progress bar" in
     // footer.md).
-    const main = page.getByTestId('detail-panel')
-    const mainClass = await main.getAttribute('class')
-    expect(mainClass).toContain(`bottom-[${groupHeight + PROGRESS_BAR_PX}px]`)
+    const columns = page.getByTestId('app-columns')
+    const columnsClass = await columns.getAttribute('class')
+    expect(columnsClass).toContain(`bottom-[${groupHeight + PROGRESS_BAR_PX}px]`)
   })
 })

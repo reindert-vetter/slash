@@ -40,6 +40,16 @@ test.describe('PR Review Tree — hide approved blocks + header counter', () => 
       })
       const host = document.createElement('div')
       host.id = 'bl-host'
+      // The real page's own BlockList (already loaded above) sits inside
+      // AppColumns, which carries a real z-10 stacking context (see "Columns
+      // instead of independently fixed panels" in detail-layout.md) — this
+      // synthetic second instance needs to unambiguously sit ON TOP of it (the
+      // click below targets an element inside `host`, not the real page's own
+      // row at the same on-screen spot) rather than relying on DOM-order
+      // tie-breaking between two equal, un-positioned z-index:auto elements.
+      host.style.position = 'fixed'
+      host.style.inset = '0'
+      host.style.zIndex = '999999'
       document.body.appendChild(host)
       BlockList(state)(host)
       window.__st = state

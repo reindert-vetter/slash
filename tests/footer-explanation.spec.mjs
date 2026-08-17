@@ -123,11 +123,13 @@ test.describe('PR Review Tree — footer AI description for if-units', () => {
     // exactly (footerBoxPx: padding + 3 diff lines, no description reserved),
     // plus PROGRESS_BAR_PX (3px) for the always-visible review-progress bar
     // sitting below the footer (see "A separate, always-visible progress bar"
-    // in footer.md): well under the old fixed 90px tier, and <main>'s own
-    // reservation is the identical figure (the single-source-of-truth
-    // guarantee — see the "Footer" section in keyboard-navigation.md).
-    await expect(page.getByTestId('detail-panel')).toHaveClass(/bottom-\[77px\]/)
-    await expect(page.getByTestId('detail-panel')).not.toHaveClass(/bottom-\[140px\]/)
-    await expect(page.getByTestId('detail-panel')).not.toHaveClass(/bottom-6\b/)
+    // in footer.md): well under the old fixed 90px tier. This reservation now
+    // lives on the shared app-columns row wrapper (AppColumns, home.mjs) —
+    // <main> itself is a plain flex-1 child of it, see detail-layout.md — but
+    // it's still the single-source-of-truth figure the "Footer" section in
+    // keyboard-navigation.md describes.
+    await expect(page.getByTestId('app-columns')).toHaveClass(/bottom-\[77px\]/)
+    await expect(page.getByTestId('app-columns')).not.toHaveClass(/bottom-\[140px\]/)
+    await expect(page.getByTestId('app-columns')).not.toHaveClass(/bottom-6\b/)
   })
 })

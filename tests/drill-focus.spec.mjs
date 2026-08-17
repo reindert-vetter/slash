@@ -78,11 +78,13 @@ test('drilled columns are navigable left/right with the keyboard', async ({ page
   await expect(blockArticle).toHaveClass(/border-indigo-300/)
 
   // 3. One more ← drops back to the list (mode change) — the existing
-  // diff→list behaviour.
+  // diff→list behaviour. The pr-index (<aside>) reclaims its own width once
+  // it's no longer collapsed for diff mode (AppColumns/BlockList.mjs) — the
+  // list-mode signal now that <main> itself carries no reactive left offset.
   await page.keyboard.press('ArrowLeft')
   await page.waitForTimeout(200)
   await expect(drillColumn).toHaveCount(0)
-  await expect(panel).toHaveClass(/left-\[29rem\]/)
+  await expect(page.getByTestId('pr-index')).toHaveClass(/w-\[26rem\]/)
 })
 
 // Verifies a drilled column zooms its OWN granularity with f/d/s (group → line

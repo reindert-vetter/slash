@@ -145,23 +145,26 @@ test.describe('PR Review Tree — change navigation', () => {
 
     // Wait for the selected block's diff to load.
     const panel = page.getByTestId('detail-panel')
+    const aside = page.getByTestId('pr-index')
     await expect(panel.locator('code.language-php').first()).toBeVisible()
 
     // In list mode the selected block already *previews* its first change (the
-    // very group → steps onto), and the panel sits in its narrow list layout.
+    // very group → steps onto), and the pr-index still has its full width
+    // (<main> itself carries no reactive position class any more, see
+    // "Columns instead of independently fixed panels" in detail-layout.md).
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
-    await expect(panel).toHaveClass(/left-\[29rem\]/)
+    await expect(aside).toHaveClass(/w-\[26rem\]/)
 
-    // → steps in: mode flips to diff, the panel expands to full width (flush
-    // to the left edge — left-0, see "Let <main> run flush to the viewport
-    // edges" in detail-layout.md), and the first change is still highlighted.
+    // → steps in: mode flips to diff, the pr-index collapses to width 0 so
+    // <main> takes the full-width diff layout, and the first change is still
+    // highlighted.
     await page.keyboard.press('ArrowRight')
-    await expect(panel).toHaveClass(/left-0/)
+    await expect(aside).toHaveClass(/w-0/)
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
-    // ← steps back out: the panel returns to the narrow list layout.
+    // ← steps back out: the pr-index regains its full width.
     await page.keyboard.press('ArrowLeft')
-    await expect(panel).toHaveClass(/left-\[29rem\]/)
+    await expect(aside).toHaveClass(/w-\[26rem\]/)
   })
 
   // Cross-block flow only continues within the SAME file. In the fixture,

@@ -7395,7 +7395,7 @@ function scrollMainRightOneColumn() {
 // <main>'s own 1px sentinel (its last child, see DetailPanel) is currently
 // scrolled out of view — i.e. whether there's more of <main>'s column flow
 // to reach with a rightward scroll. Set up once <main> exists in the DOM
-// (right after DetailPanel(state)(app), below), observing the sentinel
+// (right after AppColumns(state)(app), below), observing the sentinel
 // against <main> itself as the intersection root. This reacts to ANY
 // change in <main>'s total content width (a column appearing/disappearing,
 // a drilled column, the description column, a manual column-width resize)
@@ -11739,14 +11739,12 @@ function prInfoCard(state) {
   `
 }
 
-// PrInfoPanel — stop 1 of the left→right nav chain: the PR-description column.
-// It is its own fixed-position panel (mounted as a sibling of BlockList/
-// DetailPanel), NOT a flex child of <main> — the pr-index (<aside> in
-// BlockList.mjs) is itself position:fixed and outside <main>'s flex flow, so
-// this panel has to live at that same level to sit flush left of it (at the
-// pr-index's usual left-6 spot) while BlockList slides itself right
-// (translate-x-[40.5rem]) to make room. See the "verplaats pr description naar
-// links" note in detail-layout.md for the full rationale/measurements.
+// PrInfoPanel — stop 1 of the left→right nav chain: the PR-description
+// column. A flex sibling of BlockList's <aside> and DetailPanel's <main>
+// (mounted together inside AppColumns, below), in that DOM order — so
+// opening it simply pushes <aside>/<main> right via ordinary flex reflow, no
+// translate-x/left-offset arithmetic needed anywhere. See "Columns instead of
+// independently fixed panels" in detail-layout.md.
 // Width is 1.5x the original 26rem (w-[39rem]) — the reviewer wanted more
 // room to read the PR title/summary/description/Jira box without truncation.
 // TasksPanel (RelatedPanel.mjs) used to live in a fixed right-hand sidebar
@@ -11754,13 +11752,19 @@ function prInfoCard(state) {
 // below prInfoCard in the same PR-description column (stop 1 of the nav
 // chain) — only shows runs that are genuinely in progress or that have been
 // sitting idle for a while (see visibleWorkflowRuns' 5-minute filter).
+// A stable "contents" root (see the bare-toggling-expression pitfall in
+// arrowjs-pitfalls.md) so this slot can freely switch between the real column
+// and nothing: closed, it collapses to zero width and claims no flex slot in
+// the row below (AppColumns); open, the inner div itself IS the flex item
+// (shrink-0 + an explicit width — no more fixed left-6/top-6/bottom-6 of its
+// own, now that PrInfoPanel/<aside>/<main> are real siblings in one flex row).
 function PrInfoPanel(state) {
   return html`
-    <div>
+    <div class="contents">
       ${() =>
         state.showDescription
           ? html`<div
-              class="fixed bottom-6 left-6 top-6 z-10 flex min-h-0 w-[39rem] flex-col gap-3"
+              class="flex h-full min-h-0 w-[39rem] shrink-0 flex-col gap-3"
               data-testid="pr-info-column"
             >
               ${prInfoCard(state)} ${TasksPanel(state, openTask)}
@@ -11802,65 +11806,24 @@ function testClassPreviewCard(state, row) {
   `
 }
 
-// DetailPanel — the area right of the fixed sidebar. It shows the block card for
-// the selected row, and the next row's card already (a look-ahead preview). When
+// DetailPanel — the area right of the sidebar. It shows the block card for the
+// selected row, and the next row's card already (a look-ahead preview). When
 // both cards are from the same file, a dashed connector links them.
+//
+// A plain, static flex-item class list — no more `${() => ...}` left-offset
+// arithmetic here at all. <main> used to be its own independent
+// `position:fixed` box, so it had to manually compute a `left-[Nrem]` that
+// happened to clear PrInfoPanel's/<aside>'s own widths — three panels kept in
+// sync only by hand, with the bottom reservation (below) as the sole
+// remaining exception (see AppColumns in home.mjs's mount section for why
+// that one still needs to be dynamic). Now that all three are real siblings
+// in one flex row (AppColumns), <main> simply takes the remaining space
+// (`flex-1 min-w-0`) regardless of which of its neighbours are open/closed —
+// removing the entire magic-number system this file used to document here.
 function DetailPanel(state) {
   return html`
     <main
-      class="${() =>
-        'fixed top-6 z-10 flex min-h-0 flex-row gap-4 overflow-x-auto no-scrollbar transition-all duration-200 ease-out ' +
-        // Reserve a bottom strip matching the footer's own real, content-driven
-        // height — footerBoxPx(state), the exact same function Footer.mjs's
-        // own height class calls (imported here), so the two can never drift
-        // apart: none when the footer has nothing to show, otherwise exactly
-        // as tall as the footer's own box (see the "Footer" section in
-        // keyboard-navigation.md) — so the columns never slide in behind it,
-        // but don't leave dead space once it's smaller/gone either. Also see
-        // <main>'s implicit overflow-y:auto note below the column bindings —
-        // this reservation is what keeps a too-tall active card's own diff
-        // clipped/scrollable within this box instead of ever rendering behind
-        // the footer.
-        // The always-visible review-progress bar (ProgressBar.mjs) adds its own
-        // PROGRESS_BAR_PX on top of footerBoxPx once the footer is visible
-        // (the footer's own root already sits PROGRESS_BAR_PX above bottom-0,
-        // see Footer.mjs) — matching that stack keeps a column from sliding in
-        // behind either bar. When the footer is hidden the existing bottom-6
-        // (24px) gutter already comfortably fits the 3px bar, so it's left as
-        // is (no need to reserve extra space for it there).
-        (!state.footerVisible ? 'bottom-6 ' : `bottom-[${footerBoxPx(state) + PROGRESS_BAR_PX}px] `) +
-        // No 1.5rem margin on the right anymore — the far edge is where the
-        // last column's own content clipped (hidden by no-scrollbar) before
-        // it was fully scrolled into view, so <main> now runs flush to the
-        // viewport edge instead, reclaiming that margin as extra usable/
-        // scrollable width. Deliberately asymmetric with every other panel
-        // (sidebar/footer/PrInfoPanel), which keep their own 1.5rem edge.
-        'right-0 ' +
-        (isPrWideComposing()
-          ? // Writing an "algemene" (PR-wide) comment: the pr-index is hidden
-            // (BlockList.mjs's matching branch) and the block column below
-            // renders nothing, so the composer is the only column left. The
-            // PR-description column deliberately STAYS if it was open — the
-            // request was to hide the index and the code blocks — so clear
-            // its 40.5rem (1.5rem gutter + 39rem) plus the usual 1.5rem gap;
-            // that is exactly left-[69.5rem] minus the pr-index's own 27.5rem.
-            state.showDescription
-            ? 'left-[42rem]'
-            : 'left-0'
-          : state.mode === 'diff' || state.testColumnFocused
-            ? // Flush to the left edge too, for the same reason — in diff mode
-              // there's no sidebar to clear, so no reason to reserve a margin.
-              // Same while the methodes-kolom (stop 2b) owns the keyboard: the
-              // pr-index slides away then too (see BlockList.mjs's matching
-              // testColumnFocused branch), so <main> reclaims its space.
-              'left-0'
-            : // showDescription (list-mode only) pushes PrInfoPanel to left-6 and
-            // slides the pr-index right by one column-width (40.5rem, see
-            // BlockList.mjs) — <main> needs to clear both, so it shifts the same
-            // 40.5rem past its usual left-[29rem].
-            state.showDescription
-            ? 'left-[69.5rem]'
-            : 'left-[29rem]')}"
+      class="flex h-full min-h-0 min-w-0 flex-1 flex-row gap-4 overflow-x-auto no-scrollbar transition-all duration-200 ease-out"
       data-testid="detail-panel"
     >
       ${() => {
@@ -12649,17 +12612,18 @@ function MainScrollRightHint(state) {
 // covers that) and once the description is already open.
 //
 // Position: `left-0` matches MainScrollRightHint's own corner exactly in
-// diff mode, where <main> starts at `left-0` and the pr-index (<aside>) is
-// slid fully off-screen (see detail-layout.md), so there's nothing to
-// overlap. Flush against the true viewport edge (not `left-6`) so the rail
-// sits outside the diff card's own header row instead of on top of it — see
-// "A mouse way to reach content hidden to the left" in detail-layout.md. In
-// list mode the pr-index occupies exactly that top-left corner
-// (`fixed left-6 top-6 bottom-6 w-[26rem]`, BlockList.mjs) whenever this
-// button would show (canStepMainLeft() is only true there while the
-// description ISN'T open yet, i.e. the pr-index is fully visible) — so the
-// button sits just past its right edge instead (`left-[28rem]`, 26rem width
-// + 2rem inset) rather than on top of its own header/search row.
+// diff mode, where <main> effectively starts at the viewport's own left-6
+// (the pr-index (<aside>) is collapsed to width 0 then, see detail-layout.md)
+// so there's nothing to overlap. Flush against the true viewport edge (not
+// `left-6`) so the rail sits outside the diff card's own header row instead
+// of on top of it — see "A mouse way to reach content hidden to the left" in
+// detail-layout.md. In list mode the pr-index occupies exactly that top-left
+// corner (`w-[26rem]`, visually pinned there via AppColumns' own fixed
+// `left-6`, see BlockList.mjs) whenever this button would show
+// (canStepMainLeft() is only true there while the description ISN'T open
+// yet, i.e. the pr-index is fully visible) — so the button sits just past its
+// right edge instead (`left-[28rem]`, 26rem width + 2rem inset) rather than
+// on top of its own header/search row.
 // canStepMainLeftPositionCls() is its own small reactive slot so only the
 // position (not the whole button) reruns on a mode change.
 function canStepMainLeftPositionCls() {
@@ -12699,15 +12663,42 @@ function MainScrollLeftHint(state) {
   `
 }
 
-// Mount the sidebar and the detail panel into #app. PrInfoPanel is mounted
-// first so it stacks visually under the pr-index while the latter slides
-// right over it during the ~200ms transition (see BlockList.mjs). Comments
-// and Tasks are no longer separate mounts — comments render inline inside
-// DetailPanel's <main>, Tasks inside PrInfoPanel's own column.
+// AppColumns — the one fixed row that replaces the old three independently
+// `position:fixed` panels (PrInfoPanel/<aside>/<main>). Real flex siblings
+// now, in DOM order left→right, so a closed/collapsed column (PrInfoPanel
+// unmounted, <aside> collapsed to width 0, see their own class comments)
+// genuinely gives its space back to its neighbours instead of merely being
+// covered by a translate/opacity trick while <main> separately (and
+// fragilely) computed a matching offset by hand — that hand-synced-offset
+// system is gone; <main> is just `flex-1 min-w-0` now (see DetailPanel's own
+// doc comment) and reflows automatically whichever of its neighbours are
+// open. See "Columns instead of independently fixed panels" in
+// detail-layout.md.
+//
+// The wrapper itself keeps the one offset that still has to react to state:
+// the bottom footer reservation. PrInfoPanel/<aside> never need it — the
+// footer only ever shows content in diff mode, exactly when <aside> is
+// collapsed (see BlockList.mjs) — so applying it to the whole row is
+// equivalent to the old <main>-only reservation, without a separate
+// per-child value.
+function AppColumns(state) {
+  return html`
+    <div
+      class="${() =>
+        'fixed left-6 right-0 top-6 z-10 flex min-h-0 items-stretch gap-6 transition-all duration-200 ease-out ' +
+        (!state.footerVisible ? 'bottom-6' : `bottom-[${footerBoxPx(state) + PROGRESS_BAR_PX}px]`)}"
+      data-testid="app-columns"
+    >
+      ${PrInfoPanel(state)} ${BlockList(state, isPrWideComposing)} ${DetailPanel(state)}
+    </div>
+  `
+}
+
+// Mount the app's column row into #app. Comments and Tasks are no longer
+// separate mounts — comments render inline inside DetailPanel's <main>, Tasks
+// inside PrInfoPanel's own column.
 const app = document.getElementById('app')
-PrInfoPanel(state)(app)
-BlockList(state, isPrWideComposing)(app)
-DetailPanel(state)(app)
+AppColumns(state)(app)
 setupMainOverflowObserver()
 MainScrollRightHint(state)(app)
 MainScrollLeftHint(state)(app)

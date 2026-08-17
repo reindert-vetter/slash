@@ -94,10 +94,10 @@ test('delayed 0-group root code keeps diff mode while drilled; ← peels back to
   // Wait past the delayed root-code fetch — the buggy list-flip happened here.
   await page.waitForTimeout(3500)
 
-  // Still diff mode: the pr-index stays slid away (list mode would show
-  // translate-x-0 plus the indigo list-focus ring).
+  // Still diff mode: the pr-index stays collapsed to width 0 (list mode would
+  // show its full w-[26rem] plus the indigo list-focus ring).
   const aside = page.getByTestId('pr-index')
-  await expect(aside).toHaveClass(/-translate-x-\[28rem\]/)
+  await expect(aside).toHaveClass(/w-0/)
   await expect(drill).toHaveCount(1)
 
   // ← peels the drilled column: focus back on the (now expanded) parent's own
@@ -105,6 +105,6 @@ test('delayed 0-group root code keeps diff mode while drilled; ← peels back to
   await page.keyboard.press('ArrowLeft')
   await expect(page.getByTestId('drill-column')).toHaveCount(0)
   await expect(page.getByTestId('block-collapsed')).toHaveCount(0)
-  await expect(aside).toHaveClass(/-translate-x-\[28rem\]/)
+  await expect(aside).toHaveClass(/w-0/)
   await expect(page.getByTestId('pr-info-column')).toHaveCount(0)
 })

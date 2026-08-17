@@ -180,12 +180,12 @@ test.describe('PR Review Tree — postApprove follow-up menu', () => {
 
     // Lands on block 6 (the next not-yet-approved block, same skip-past-2-5 as
     // the diff-mode case above) but never enters its diff: no `mode=diff` in
-    // the URL, and the sidebar keeps its normal on-screen list-mode placement
-    // (in diff mode it slides fully off-screen — see BlockList.mjs).
+    // the URL, and the sidebar keeps its normal on-screen list-mode width (in
+    // diff mode it collapses to width 0 — see BlockList.mjs).
     await expect.poll(() => selParam(page)).toBe(BLOCK6_SEL)
     await expect(page).not.toHaveURL(/mode=diff/)
-    await expect(page.getByTestId('pr-index')).toHaveClass(/translate-x-0/)
-    await expect(page.getByTestId('pr-index')).not.toHaveClass(/-translate-x-\[28rem\]/)
+    await expect(page.getByTestId('pr-index')).toHaveClass(/w-\[26rem\]/)
+    await expect(page.getByTestId('pr-index')).not.toHaveClass(/\bw-0\b/)
   })
 
   // "Nothing left ahead" no longer just closes the palette — it now opens one
