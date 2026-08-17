@@ -62,13 +62,24 @@ trackpad/scrollwheel to fall back on, there was no visible affordance at all
 for "there's more to the right, click here to reach it" — in **either** mode
 (list or diff), since `<main>`'s column flow is the same mechanism in both.
 `MainScrollRightHint` (`home.mjs`, mounted once, top-level, next to
-`Footer`/`ProgressBar`/`MenuHost`) is a small always-in-place button,
+`Footer`/`ProgressBar`/`MenuHost`) is a small button,
 `data-testid=main-scroll-right-hint`, **fixed to the top-right corner of the
-viewport** (`fixed top-6 right-6`) — deliberately not scrolling along with the
-content, unlike `Block.mjs`'s `diffLeaveRail` it borrows its visual language
-from (bordered rail, own icon): a rail that scrolled with the content could
-only ever be reached by first scrolling to see it, which defeats the purpose.
-Only visible while `state.mainOverflowRight` is true.
+viewport, flush against the true edge** (`fixed top-6 right-0`, not
+`right-6`) — deliberately not scrolling along with the content, unlike
+`Block.mjs`'s `diffLeaveRail` it borrows its visual language from (bordered
+rail, own icon): a rail that scrolled with the content could only ever be
+reached by first scrolling to see it, which defeats the purpose. Only
+rendered while `state.mainOverflowRight` is true, and even then **hidden by
+default** — `opacity-0 hover:opacity-100 focus-within:opacity-100
+transition-opacity` on the rail itself, the same CSS-only reveal
+`block-open-menu` uses (see "Every menu also has a mouse entry point" in
+`.claude/docs/mouse-navigation.md`), never a reactive `state`/`cs` flag, per
+Rule 4 ("hover carries no state") — reviewer request: the button used to sit
+permanently on top of the diff card's/comment card's own header row (`right-6`
+landed inside the card's own top-right corner), which read as the icon
+"floating over the content"; now it only appears while the mouse is actually
+over that exact spot. The click handler still fires regardless of visibility
+(`dispatchEvent('click')` in tests, same contract as `block-open-menu`).
 
 **Detection is a 1px sentinel, not per-call-site bookkeeping.** `<main>`'s
 template appends one near-zero-width `data-testid=main-overflow-sentinel` div
@@ -126,14 +137,20 @@ always-reachable button.
 - **Position is NOT a fixed corner in every mode**, unlike
   `MainScrollRightHint`: in diff mode `<main>` starts at `left-0` and the
   pr-index is slid fully off-screen (see "`<main>`'s own offsets" below), so
-  `top-6 left-6` lines up exactly with the right-hand hint's own corner. In
-  list mode, though, that corner is where the pr-index (`<aside>`, `fixed
-  left-6 top-6 bottom-6 w-[26rem]`, `BlockList.mjs`) itself sits whenever this
-  button would show (`canStepMainLeft()` is only true there before the
-  description opens, i.e. exactly while the pr-index is fully visible at
-  `translate-x-0`) — so `canStepMainLeftPositionCls()` switches to
-  `top-6 left-[28rem]`, just past the pr-index's own right edge, instead of
-  overlapping its header/search row.
+  `top-6 left-0` (flush against the true viewport edge, not `left-6`) lines up
+  exactly with the right-hand hint's own corner. In list mode, though, that
+  corner is where the pr-index (`<aside>`, `fixed left-6 top-6 bottom-6
+  w-[26rem]`, `BlockList.mjs`) itself sits whenever this button would show
+  (`canStepMainLeft()` is only true there before the description opens, i.e.
+  exactly while the pr-index is fully visible at `translate-x-0`) — so
+  `canStepMainLeftPositionCls()` switches to `top-6 left-[28rem]`, just past
+  the pr-index's own right edge, instead of overlapping its header/search row.
+- **Hidden by default, same as `MainScrollRightHint` above** — `opacity-0
+  hover:opacity-100 focus-within:opacity-100 transition-opacity` on the rail
+  itself, CSS-only, per Rule 4 in `.claude/docs/mouse-navigation.md`. Reviewer
+  request: at `left-6` the button used to sit on top of the diff card's own
+  header (overlapping the file name/badges); moving it flush to the edge and
+  hiding it until hovered removes that permanent overlap.
 - Own glyph: a chevron docked against a vertical bar (same shape as
   `block-close-column`'s icon, mirrored), never colour alone, per the
   colorblind rule.

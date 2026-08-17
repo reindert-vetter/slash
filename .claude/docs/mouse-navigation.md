@@ -123,6 +123,12 @@ click right as CSS opacity animates in), so nothing keyboard/touch-only is
 actually gated behind hover; Enter on the same card still opens the identical
 menu either way.
 
+The same CSS-only hover-reveal is also used by `main-scroll-left-hint`/
+`main-scroll-right-hint` (opacity-0 by default, `hover:`/`focus-within:` on
+the rail itself rather than a `group`, since the rail has nothing else to
+hover) — see "A mouse way to reach content overflowing to the right"/"...
+hidden to the left" in `.claude/docs/detail-layout.md`.
+
 `onOpenMenu`/`openMenu` is threaded as a plain **render-time callback opt**
 at each call site (`Block(b, { onOpenMenu: () => openMenu(...) })`,
 `commentDetailCard(c, { openMenu: () => openMenu('prComment') })`,

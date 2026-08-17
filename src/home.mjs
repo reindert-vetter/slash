@@ -12610,7 +12610,7 @@ function MainScrollRightHint(state) {
         state.mainOverflowRight
           ? html`
               <div
-                class="fixed top-6 right-6 z-30 flex shrink-0 flex-col gap-1 rounded-lg border border-slate-200 bg-white p-1 shadow-sm dark:border-zinc-700 dark:bg-zinc-900"
+                class="fixed top-6 right-0 z-30 flex shrink-0 flex-col gap-1 rounded-l-lg border border-r-0 border-slate-200 bg-white p-1 opacity-0 shadow-sm transition-opacity hover:opacity-100 focus-within:opacity-100 dark:border-zinc-700 dark:bg-zinc-900"
                 data-testid="main-scroll-right-hint"
               >
                 <button
@@ -12648,10 +12648,13 @@ function MainScrollRightHint(state) {
 // for a drilled column (its own "Sluit deze kolom" button in Block.mjs
 // covers that) and once the description is already open.
 //
-// Position: `left-6` matches MainScrollRightHint's own corner exactly in
+// Position: `left-0` matches MainScrollRightHint's own corner exactly in
 // diff mode, where <main> starts at `left-0` and the pr-index (<aside>) is
 // slid fully off-screen (see detail-layout.md), so there's nothing to
-// overlap. In list mode the pr-index occupies exactly that top-left corner
+// overlap. Flush against the true viewport edge (not `left-6`) so the rail
+// sits outside the diff card's own header row instead of on top of it — see
+// "A mouse way to reach content hidden to the left" in detail-layout.md. In
+// list mode the pr-index occupies exactly that top-left corner
 // (`fixed left-6 top-6 bottom-6 w-[26rem]`, BlockList.mjs) whenever this
 // button would show (canStepMainLeft() is only true there while the
 // description ISN'T open yet, i.e. the pr-index is fully visible) — so the
@@ -12660,7 +12663,7 @@ function MainScrollRightHint(state) {
 // canStepMainLeftPositionCls() is its own small reactive slot so only the
 // position (not the whole button) reruns on a mode change.
 function canStepMainLeftPositionCls() {
-  return state.mode === 'diff' ? 'top-6 left-6' : 'top-6 left-[28rem]'
+  return state.mode === 'diff' ? 'top-6 left-0' : 'top-6 left-[28rem]'
 }
 function MainScrollLeftHint(state) {
   return html`
@@ -12670,7 +12673,7 @@ function MainScrollLeftHint(state) {
           ? html`
               <div
                 class="${() =>
-                  'fixed z-30 flex shrink-0 flex-col gap-1 rounded-lg border border-slate-200 bg-white p-1 shadow-sm dark:border-zinc-700 dark:bg-zinc-900 ' +
+                  'fixed z-30 flex shrink-0 flex-col gap-1 rounded-lg border border-slate-200 bg-white p-1 opacity-0 shadow-sm transition-opacity hover:opacity-100 focus-within:opacity-100 dark:border-zinc-700 dark:bg-zinc-900 ' +
                   canStepMainLeftPositionCls()}"
                 data-testid="main-scroll-left-hint"
               >
