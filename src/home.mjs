@@ -7719,16 +7719,28 @@ function focusDrillPreviewSibling() {
   if (next) drillToSibling(next, false)
 }
 
+// focusedColumnEl resolves the actual on-screen column that currently owns
+// the keyboard at a given focusLevel: the top-level block-column at level 0,
+// or the drilled column at that level (`drill-column`'s own 1-based index)
+// otherwise. Shared by scrollFocusIntoView below and menuAnchor/menuRegion's
+// 'prComment'/'replyPublish' fallback (see the comment there for why the bare
+// `[data-testid="block-column"]` selector alone is wrong once a comment's own
+// anchor block is drilled open, openCommentAnchorDrill: that column collapses
+// to a narrow rail — still carrying the same testid — while a deeper
+// drill-column holds the real, focused content).
+function focusedColumnEl(level = state.focusLevel) {
+  return level === 0
+    ? document.querySelector('[data-testid="block-column"]')
+    : document.querySelectorAll('[data-testid="drill-column"]')[level - 1]
+}
+
 // scrollFocusIntoView scrolls whichever column now owns the diff keyboard into
 // view — <main> scrolls horizontally, so stepping across drilled columns (or
 // back to the original block) could otherwise land off-screen. Deferred a
 // frame so a freshly-pushed drill column exists in the DOM first.
 function scrollFocusIntoView(level = state.focusLevel) {
   requestAnimationFrame(() => {
-    const el =
-      level === 0
-        ? document.querySelector('[data-testid="block-column"]')
-        : document.querySelectorAll('[data-testid="drill-column"]')[level - 1]
+    const el = focusedColumnEl(level)
     // Always align to the *left* edge of the viewport: the top-level block
     // column is the leftmost column, and a freshly-focused drilled column
     // should land flush against <main>'s left edge too (rather than its right
@@ -11782,10 +11794,7 @@ function menuAnchor() {
   // the comment column it belongs to.
   if (ms.mode === 'replyPublish') {
     if ((pendingPublishInfo() || {}).kind === 'prwide') {
-      return (
-        document.querySelector('[data-testid="comment-detail-card"]') ||
-        document.querySelector('[data-testid="block-column"]')
-      )
+      return document.querySelector('[data-testid="comment-detail-card"]') || focusedColumnEl()
     }
     return (
       document.querySelectorAll('[data-testid="comment-item"]')[commentSelIndex()] ||
@@ -11808,11 +11817,22 @@ function menuAnchor() {
   // in the block column, to the right of the index — that card already shows
   // the thread (see commentDetailCard/detail-layout.md), so the menu opens
   // right underneath it instead of over the sidebar row.
+  //
+  // Falls back to focusedColumnEl(), NOT the bare `[data-testid="block-column"]`
+  // selector: while the reviewer opened this exact comment item via
+  // openCommentAnchorDrill (its own anchor block drilled open next to it, see
+  // that function's own doc comment), state.focusLevel > 0 and the top-level
+  // block-column collapses to a narrow rail — commentDetailCard is never
+  // rendered in that state at all (DetailPanel's own !focusedHere branch
+  // returns the rail before ever reaching the comment-kind row) — so the bare
+  // selector still matched an element, just the wrong (56px-wide, rail) one,
+  // both mispositioning the menu over the collapsed rail AND clamping it to
+  // the rail's own width. focusedColumnEl() resolves to the actual focused
+  // drill-column in that case. Bug report: "als ik een onderliggende code open
+  // doordat ik een comment open... wil ik dat het menu op de juiste blok
+  // zichtbaar is (niet in de parent)".
   if (ms.mode === 'prComment') {
-    return (
-      document.querySelector('[data-testid="comment-detail-card"]') ||
-      document.querySelector('[data-testid="block-column"]')
-    )
+    return document.querySelector('[data-testid="comment-detail-card"]') || focusedColumnEl()
   }
   // Enter from the blokken-index (list mode): anchor on the selected row
   // itself, not the list-mode diff preview beneath it (see
@@ -11880,10 +11900,7 @@ function menuRegion() {
   // reply, same region as 'comment' for a block-scoped reply.
   if (ms.mode === 'replyPublish') {
     if ((pendingPublishInfo() || {}).kind === 'prwide') {
-      return (
-        document.querySelector('[data-testid="comment-detail-card"]') ||
-        document.querySelector('[data-testid="block-column"]')
-      )
+      return document.querySelector('[data-testid="comment-detail-card"]') || focusedColumnEl()
     }
     return (
       document.querySelector('[data-testid="comment-thread"]') ||
@@ -11898,11 +11915,11 @@ function menuRegion() {
       document.querySelector('[data-testid="comment-claude-row"]')
     )
   }
+  // See the matching 'prComment' branch in menuAnchor above for why this
+  // falls back to focusedColumnEl() rather than the bare block-column
+  // selector (openCommentAnchorDrill's collapsed-rail case).
   if (ms.mode === 'prComment') {
-    return (
-      document.querySelector('[data-testid="comment-detail-card"]') ||
-      document.querySelector('[data-testid="block-column"]')
-    )
+    return document.querySelector('[data-testid="comment-detail-card"]') || focusedColumnEl()
   }
   if (isIndexMenu()) {
     return document.querySelector('[data-testid="pr-index"]')

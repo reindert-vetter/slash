@@ -95,6 +95,39 @@ test.describe('a comment-index item anchored to a real block', () => {
     await expect(item).toHaveAttribute('data-expanded', 'true')
   })
 
+  // Bug report: "als ik een onderliggende code open doordat ik een comment
+  // open dat het menu op de juiste blok zichtbaar is (niet in de parent)".
+  // Enter on the comment-index row (still selected, not yet stepped in with
+  // ArrowRight) opens its own 'prComment' menu (selectedComment()'s branch in
+  // onKeydown) — menuAnchor/menuRegion used to fall back to the bare
+  // `[data-testid="block-column"]` selector once `comment-detail-card` isn't
+  // rendered (which it never is while the anchor is drilled open, see
+  // DetailPanel's own !focusedHere branch), and that selector still matched —
+  // just the collapsed, 56px-wide rail (`block-collapsed`) instead of the
+  // real, focused `drill-column`. Fixed via `focusedColumnEl()` (home.mjs).
+  test('the comment-index-item menu opens on the drilled anchor column, not the collapsed rail', async ({
+    page,
+  }) => {
+    await mockAnchoredComment(page)
+    await page.goto('/pr/12903')
+    await leaveSearchBox(page)
+
+    await page.locator('[data-idx]').filter({ hasText: 'please rename this variable' }).click()
+    const drillColumn = page.getByTestId('drill-column')
+    await expect(drillColumn).toBeVisible()
+
+    await page.keyboard.press('Enter')
+    const menu = page.getByTestId('command-menu')
+    await expect(menu).toBeVisible()
+    // A real menu, not the narrow rail's width (~56px).
+    const menuBox = await menu.boundingBox()
+    const drillBox = await drillColumn.boundingBox()
+    expect(menuBox.width).toBeGreaterThan(200)
+    // Positioned over the drilled column (same left edge, not the collapsed
+    // rail sitting to its left).
+    expect(Math.abs(menuBox.x - drillBox.x)).toBeLessThan(2)
+  })
+
   test('navigating away closes the expanded view again', async ({ page }) => {
     await mockAnchoredComment(page)
     await page.goto('/pr/12903')
