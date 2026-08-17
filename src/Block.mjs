@@ -1317,6 +1317,12 @@ const NO_ACTIVE_GROUP = () => null
 // as a dependency, same as its existing b.code dependency — flipping `a`
 // re-renders just this per-card slot (split ↔ unified single column), not the
 // outer per-column closures in home.mjs. See keyboard-navigation.md.
+// lastDiffDebugKey — TEMP DEBUG, remove together with the instrumentation in
+// codeDiff below. Plain module-level variable (never reactive state, same
+// discipline as blockRowsCache/codeRequested), so re-checking it never
+// triggers/depends on an arrow.js reactive notify.
+let lastDiffDebugKey = null
+
 function codeDiff(
   b,
   activeGroup,
@@ -1348,13 +1354,20 @@ function codeDiff(
     </div>`
   }
   const rows = blockRows(b)
-  // TEMP DEBUG instrumentation — remove after investigation. Logs, per
-  // changed line, how many characters it has, tagged with the current diff
-  // view (split/unified/fit) so the same block can be compared across all
-  // three stands via the `a` toggle.
-  changedRows(rows).forEach((i) => {
-    console.log(`[diff-debug] view=${viewMode()} row=${i} chars=${rowAnchorText(rows[i]).length}`)
-  })
+  // TEMP DEBUG instrumentation — remove after investigation. One summarized
+  // line per block/render (not one per changed line — that flooded the
+  // console and made the tab sluggish), and only logged again when the
+  // block/view/char-counts actually differ from the last log, so repeated
+  // re-renders of the same block/view are silent.
+  {
+    const vm = viewMode()
+    const charsList = changedRows(rows).map((i) => rowAnchorText(rows[i]).length)
+    const debugKey = `${b.file}:${b.line}|${vm}|${charsList.join(',')}`
+    if (debugKey !== lastDiffDebugKey) {
+      lastDiffDebugKey = debugKey
+      console.log(`[diff-debug] block=${b.file}:${b.line} view=${vm} chars=[${charsList.join(',')}]`)
+    }
+  }
   const only = singleSide(b)
   // Unlike the removed old-'new' stand, the unified stand no longer hides a
   // two-sided (modified) block's old pane — it restructures the block into
