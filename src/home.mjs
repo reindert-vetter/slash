@@ -12629,6 +12629,28 @@ function MainScrollRightHint(state) {
 function canStepMainLeftPositionCls() {
   return state.mode === 'diff' ? 'top-6 left-0' : 'top-6 left-[28rem]'
 }
+// canStepMainLeftZoneCls() — the width of the invisible HOVER-CATCHING zone,
+// separate from the visible icon box nested inside it (`group`/
+// `group-hover:`, same reasoning as `block-open-menu`'s reveal — see
+// mouse-navigation.md). In diff mode there is a real, empty gap between the
+// true viewport edge (where the icon itself sits, per the "tegen de rand"
+// request) and the diff card's own visible left edge: AppColumns' own
+// `left-6` inset PLUS one `gap-6` that still applies before <main> even
+// though the collapsed <aside> takes zero width (a flex `gap` reserves its
+// space between EVERY pair of children, collapsed-width or not) — about 48px
+// of blank page background. Regression found after the AppColumns merge
+// (0fe3d4b): the icon's own hover target used to double as "hover the visible
+// card's corner", because before that merge the card sat flush against this
+// same x:0 spot; once the card moved ~48px right, that blank gap became a
+// dead zone nobody would think to point at, and the hint was reported as
+// "never shows even when I move the mouse around". Widening the invisible
+// catcher (not the visible icon) to span that whole gutter means a mouse
+// travelling from the edge toward the card passes over it either way. List
+// mode has no such gap (the pr-index already sits within ~8px of this hint),
+// so it keeps a tight zone matching the icon's own size.
+function canStepMainLeftZoneCls() {
+  return state.mode === 'diff' ? 'w-12' : 'w-9'
+}
 function MainScrollLeftHint(state) {
   return html`
     <div class="contents">
@@ -12637,25 +12659,31 @@ function MainScrollLeftHint(state) {
           ? html`
               <div
                 class="${() =>
-                  'fixed z-30 flex shrink-0 flex-col gap-1 rounded-lg border border-slate-200 bg-white p-1 opacity-0 shadow-sm transition-opacity hover:opacity-100 focus-within:opacity-100 dark:border-zinc-700 dark:bg-zinc-900 ' +
-                  canStepMainLeftPositionCls()}"
+                  'group fixed z-30 flex h-9 items-start justify-start ' +
+                  canStepMainLeftPositionCls() +
+                  ' ' +
+                  canStepMainLeftZoneCls()}"
                 data-testid="main-scroll-left-hint"
               >
-                <button
-                  type="button"
-                  title="Terug (één stap)"
-                  data-testid="main-scroll-left-button"
-                  class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-400 transition hover:bg-slate-100 hover:text-indigo-600 dark:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-indigo-400"
-                  @click="${(e) => {
-                    e.stopPropagation()
-                    stepMainLeftOneColumn()
-                  }}"
+                <div
+                  class="flex shrink-0 flex-col gap-1 rounded-lg border border-slate-200 bg-white p-1 opacity-0 shadow-sm transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 dark:border-zinc-700 dark:bg-zinc-900"
                 >
-                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="h-3.5 w-3.5" aria-hidden="true">
-                    <path d="M10 3L5 8l5 5" stroke-linecap="round" stroke-linejoin="round"></path>
-                    <path d="M4 3v10" stroke-linecap="round"></path>
-                  </svg>
-                </button>
+                  <button
+                    type="button"
+                    title="Terug (één stap)"
+                    data-testid="main-scroll-left-button"
+                    class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-400 transition hover:bg-slate-100 hover:text-indigo-600 dark:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-indigo-400"
+                    @click="${(e) => {
+                      e.stopPropagation()
+                      stepMainLeftOneColumn()
+                    }}"
+                  >
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="h-3.5 w-3.5" aria-hidden="true">
+                      <path d="M10 3L5 8l5 5" stroke-linecap="round" stroke-linejoin="round"></path>
+                      <path d="M4 3v10" stroke-linecap="round"></path>
+                    </svg>
+                  </button>
+                </div>
               </div>
             `
           : ''}

@@ -182,22 +182,40 @@ always-reachable button.
   header, unaffected by this change, see `.claude/docs/mouse-navigation.md`)
   and once the description is already open (nothing further left to reveal).
 - **Position is NOT a fixed corner in every mode**, unlike
-  `MainScrollRightHint`: in diff mode `<main>` starts at `left-0` and the
-  pr-index is slid fully off-screen (see "`<main>`'s own offsets" below), so
-  `top-6 left-0` (flush against the true viewport edge, not `left-6`) lines up
-  exactly with the right-hand hint's own corner. In list mode, though, that
-  corner is where the pr-index (`<aside>`, `fixed left-6 top-6 bottom-6
-  w-[26rem]`, `BlockList.mjs`) itself sits whenever this button would show
-  (`canStepMainLeft()` is only true there before the description opens, i.e.
-  exactly while the pr-index is fully visible at `translate-x-0`) — so
+  `MainScrollRightHint`: in diff mode the pr-index (`<aside>`) collapses to
+  width 0 (a real flex sibling now, see "Columns instead of independently
+  fixed panels" below — not the old translate-based hide), so `top-6 left-0`
+  (flush against the true viewport edge, not `left-6`) lines up exactly with
+  the right-hand hint's own corner. In list mode, though, that corner is where
+  the pr-index (`w-[26rem]`, `BlockList.mjs`) itself sits whenever this button
+  would show (`canStepMainLeft()` is only true there before the description
+  opens, i.e. exactly while the pr-index is fully visible) — so
   `canStepMainLeftPositionCls()` switches to `top-6 left-[28rem]`, just past
   the pr-index's own right edge, instead of overlapping its header/search row.
 - **Hidden by default, same as `MainScrollRightHint` above** — `opacity-0
-  hover:opacity-100 focus-within:opacity-100 transition-opacity` on the rail
-  itself, CSS-only, per Rule 4 in `.claude/docs/mouse-navigation.md`. Reviewer
-  request: at `left-6` the button used to sit on top of the diff card's own
-  header (overlapping the file name/badges); moving it flush to the edge and
-  hiding it until hovered removes that permanent overlap.
+  group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity`
+  on the visible icon box, CSS-only, per Rule 4 in
+  `.claude/docs/mouse-navigation.md`. Reviewer request: at `left-6` the button
+  used to sit on top of the diff card's own header (overlapping the file
+  name/badges); moving it flush to the edge and hiding it until hovered
+  removes that permanent overlap.
+- **The invisible hover-catching zone is wider than the visible icon in diff
+  mode** (`canStepMainLeftZoneCls()`, `w-12` vs. the icon's own `w-9`/`h-9`
+  box, a `group`/`group-hover` pair rather than a plain `hover:` on the icon
+  itself). Found as a regression after the AppColumns merge
+  (`.claude/docs/detail-layout.md`'s own "Columns instead of independently
+  fixed panels" below): a flex `gap-6` still reserves its space between
+  `<aside>` and `<main>` even while `<aside>` is collapsed to width 0, so in
+  diff mode there is a real ~48px strip of blank page background between the
+  true left edge (where the icon sits) and the diff card's own visible left
+  edge. Before that merge the card sat flush against the same spot, so
+  hovering the card's own corner doubled as reaching the (already invisible)
+  hint; once the card moved right, that gap became a dead zone with no visual
+  cue, and the hint was reported as "not showing even when I move the mouse
+  around" (`git blame` reference for this fix: the commit right after
+  `9ffd73b`, which introduced the plain `hover:`-on-icon version). List mode
+  has no such gap (the pr-index already sits within ~8px of this hint), so it
+  keeps a tight zone matching the icon's own size.
 - Own glyph: a chevron docked against a vertical bar (same shape as
   `block-close-column`'s icon, mirrored), never colour alone, per the
   colorblind rule.
