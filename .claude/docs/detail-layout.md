@@ -384,7 +384,11 @@ each load-bearing:
   `myLastActivity` (`inbox.go`) → `prmeta` → `GET /api/pr`'s
   `newSinceKind`/`newSinceAt`/`ghUpdatedAt`. Explicitly NOT a second
   "since" of its own next to the overview's — see stage 3/4 of `pr_status` in
-  `.claude/docs/workflows-trackers.md`.
+  `.claude/docs/workflows-trackers.md`. That moment also folds in the
+  reviewer's own in-app "approved everything per line" moment
+  (`combineSinceMoment`) — needed for this exact block to behave correctly on
+  your own PR (PPTD-948, see "A third variant of the same Signal" in
+  `.claude/docs/approval.md`).
 - **Two stacked halves**: Haiku's short explanation (`sinceSummary`,
   `pr-info-since-summary`) above the deterministic commit/file list
   (`sinceFacts`, `pr-info-since-facts`), both through `renderMarkdown`. The AI

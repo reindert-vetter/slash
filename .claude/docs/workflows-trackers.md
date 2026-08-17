@@ -51,6 +51,26 @@ everything (see "Progressive loading" in `.claude/docs/detail-layout.md`):
    `inbox.go`) and the PR's own GitHub `updatedAt`. The overview only ever
    needed the word; the review tree needs the moment too, and it must be the
    SAME moment, not a second approximation beside it.
+   **That moment is not purely GitHub-derived**: `statusFromNode`
+   (`inbox.go`) folds in `prmeta`'s own `FullyApprovedAt` via
+   `combineSinceMoment(ghAt, ghKind, fullyApprovedAt)` — whichever of the two
+   is LATER wins, always reported as kind `"review"` when the local one wins.
+   This is what makes the badge correct on **your own PR** (PPTD-948): GitHub
+   never carries a review FROM the author on their own PR, so `ghAt` is often
+   empty/stale, while the reviewer may well have approved every line in the
+   tree itself. `FullyApprovedAt` is written by a **separate** path, not this
+   Activity: `home.mjs`'s `state.approvalTotal` watch fires a `fullyApproved:
+   true` Signal on the `approve` tracker (same "set" Signal channel as the
+   file-viewed request, see `.claude/docs/approval.md`) the moment
+   `done===total>0` transitions to true, driving the `saveFullyApprovedAt`
+   Activity → `prmeta.SaveFullyApprovedAt`. It is a fixed historical moment,
+   never adjusted with hindsight — a later commit moves the PR's own
+   `updatedAt` past it, so the badge reappears on its own once there is
+   something new to see, without any special-casing here.
+   `statusesFor`/`buildInboxSnapshot` take a `*prmeta.Module` (may be `nil`)
+   purely to look this moment up per PR — the same fold applies to
+   `/pr-overview` and `/inbox`, not only the review tree, since all three
+   funnel through `statusFromNode`.
 4. **`generateSinceReviewSummary`** — what changed since that moment, for the
    review tree's sky "Sinds jouw laatste review" block (see
    `.claude/docs/detail-layout.md`). Runs after stage 3 because it reads the

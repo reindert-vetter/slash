@@ -293,6 +293,15 @@ alike, in every section.
   (`afterRFC3339`). The result (`prStatus.NewSinceKind`, `"comment"|"review"`,
   omitted when empty) rides the existing heavy status backfill —
   `GET /api/inbox/status` — no new endpoint.
+- **On your own PR, that GitHub-derived moment is folded together with the
+  reviewer's own in-app "approved everything per line" moment**
+  (`combineSinceMoment`, `statusFromNode`) — whichever of the two is later
+  wins. GitHub never carries a review submission *from* the author on their
+  own PR, so without this a reviewer who fully approved their own PR in the
+  review tree kept seeing a stale "nieuw sinds jouw review" here and on
+  `/pr/<id>` (PPTD-948). Full mechanism, including where the local moment is
+  written: "A third variant of the same Signal" in `.claude/docs/approval.md`
+  and "`pr_status` (per PR)" stage 3 in `.claude/docs/workflows-trackers.md`.
 - **Inline review comments are NOT separately queried.** A single inline
   comment (with or without "start a review") is always submitted as part of a
   review in GitHub's data model, so its timestamp already surfaces via

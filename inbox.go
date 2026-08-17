@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"slash/modules/prmeta"
 )
 
 // inbox.go is the read-only GitHub bridge behind the /pr-overview inbox. It
@@ -472,7 +474,10 @@ func mapPRNode(n ghPRNode, heavy bool, login string) inboxRow {
 		Comments:     n.Comments.TotalCount,
 	}
 	if heavy {
-		st := statusFromNode(n, login)
+		// "" — mapPRNode (search results) never reads NewSinceKind/NewSinceAt
+		// off st below, so there is nothing to fold a fully-approved moment
+		// into here.
+		st := statusFromNode(n, login, "")
 		r.Mergeable = st.Mergeable
 		r.ReviewDecision = st.ReviewDecision
 		r.Reviewers = st.Reviewers
@@ -483,8 +488,11 @@ func mapPRNode(n ghPRNode, heavy bool, login string) inboxRow {
 }
 
 // statusFromNode extracts the heavy status from a full node. login is the
-// logged-in reviewer (ghLogin) — used only for myLastActivity.
-func statusFromNode(n ghPRNode, login string) prStatus {
+// logged-in reviewer (ghLogin) — used only for myLastActivity. fullyApprovedAt
+// is the RFC3339 moment (prmeta's stored FullyApprovedAt, "" when never
+// reached) at which the reviewer last had every changed row approved in the
+// review tree itself — see combineSinceMoment for why this is folded in here.
+func statusFromNode(n ghPRNode, login string, fullyApprovedAt string) prStatus {
 	st := prStatus{
 		Mergeable:      n.Mergeable,
 		ReviewDecision: n.ReviewDecision,
@@ -498,11 +506,36 @@ func statusFromNode(n ghPRNode, login string) prStatus {
 		}
 	}
 	st.UpdatedAt = n.UpdatedAt
-	if at, kind := myLastActivity(n, login); at != "" && afterRFC3339(n.UpdatedAt, at) {
+	at, kind := myLastActivity(n, login)
+	at, kind = combineSinceMoment(at, kind, fullyApprovedAt)
+	if at != "" && afterRFC3339(n.UpdatedAt, at) {
 		st.NewSinceKind = kind
 		st.NewSinceAt = at
 	}
 	return st
+}
+
+// combineSinceMoment folds the reviewer's own in-app "approved everything per
+// line" moment (fullyApprovedAt) into the GitHub-derived "since" moment
+// (ghAt/ghKind, from myLastActivity): whichever of the two is LATER wins.
+// Explicit request (own PR, PPTD-948): a reviewer's own PR generates no
+// GitHub review of their own — ghAt is then often empty or stale — but
+// finishing a full local per-line pass is just as much "I've seen this" as an
+// actual GitHub review, so it must count too. The chosen kind is always
+// "review" when fullyApprovedAt wins, since that's exactly what it represents.
+//
+// This never needs re-deriving when new commits land afterward: a later
+// commit moves the PR's own updatedAt forward, past both candidates, so the
+// "since" badge reappears correctly on its own — fullyApprovedAt is a fixed
+// historical moment, never adjusted with hindsight.
+func combineSinceMoment(ghAt, ghKind, fullyApprovedAt string) (at, kind string) {
+	if fullyApprovedAt == "" {
+		return ghAt, ghKind
+	}
+	if ghAt == "" || afterRFC3339(fullyApprovedAt, ghAt) {
+		return fullyApprovedAt, "review"
+	}
+	return ghAt, ghKind
 }
 
 // myLastActivity finds the logged-in reviewer's own most recent comment/review
@@ -804,8 +837,10 @@ func buildInbox(ctx context.Context, db *sql.DB) ([]inboxSection, error) {
 // PRs may live in DIFFERENT repos, so the query carries one `repository(...)`
 // alias per repo (`r0`, `r1`, …), each holding that repo's own `pr<n>` aliases;
 // the result map is keyed by statusKey, i.e. still the bare number for the
-// primary repo.
-func statusesFor(ctx context.Context, keys []prKey) (map[string]prStatus, error) {
+// primary repo. pm looks up each PR's stored FullyApprovedAt (see
+// combineSinceMoment) — nil is fine (offline/test callers), it then simply
+// never folds a local approval moment in.
+func statusesFor(ctx context.Context, keys []prKey, pm *prmeta.Module) (map[string]prStatus, error) {
 	if len(keys) == 0 {
 		return map[string]prStatus{}, nil
 	}
@@ -858,10 +893,25 @@ func statusesFor(ctx context.Context, keys []prKey) (map[string]prStatus, error)
 			if n.Number == 0 {
 				continue
 			}
-			out[statusKey(repo, n.Number)] = statusFromNode(n, login)
+			out[statusKey(repo, n.Number)] = statusFromNode(n, login, fullyApprovedAtOf(ctx, pm, repo, n.Number))
 		}
 	}
 	return out, nil
+}
+
+// fullyApprovedAtOf reads one PR's stored FullyApprovedAt from prmeta, or ""
+// when unknown/unavailable (no module, no stored row, or a read error) — a
+// plain point read, cheap enough per PR for the batch sizes statusesFor deals
+// with (one inbox refresh, or a single PR in fetchPRStatuses).
+func fullyApprovedAtOf(ctx context.Context, pm *prmeta.Module, repo string, pr int) string {
+	if pm == nil {
+		return ""
+	}
+	meta, ok, err := pm.Get(ctx, repo, pr)
+	if err != nil || !ok {
+		return ""
+	}
+	return meta.FullyApprovedAt
 }
 
 func splitRepo(slug string) (owner, name string) {
@@ -938,8 +988,9 @@ type snapshotResult struct {
 // buildInboxSnapshot fetches the current inbox from GitHub (or the fixture under
 // SLASH_GITHUB=off) and its per-PR statuses, overlaying hasGraph from the DB.
 // This is the one place the pr_inbox Activity reaches GitHub; the HTTP handlers
-// only ever read the persisted read-model.
-func buildInboxSnapshot(ctx context.Context, db *sql.DB) (*snapshotResult, error) {
+// only ever read the persisted read-model. pm is passed through to
+// statusesFor (see combineSinceMoment) — nil is fine, same as there.
+func buildInboxSnapshot(ctx context.Context, db *sql.DB, pm *prmeta.Module) (*snapshotResult, error) {
 	if ghDisabled() {
 		f, ok := loadFixture()
 		if !ok {
@@ -965,7 +1016,7 @@ func buildInboxSnapshot(ctx context.Context, db *sql.DB) (*snapshotResult, error
 			keys = append(keys, prKey{p.Repo, p.Number})
 		}
 	}
-	statuses, err := statusesFor(ctx, keys)
+	statuses, err := statusesFor(ctx, keys, pm)
 	if err != nil {
 		// A status failure is non-fatal — serve the rows, skip the pills.
 		statuses = map[string]prStatus{}

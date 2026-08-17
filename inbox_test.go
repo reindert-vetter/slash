@@ -250,7 +250,7 @@ func TestMyLastActivity(t *testing.T) {
 		var n ghPRNode
 		n.UpdatedAt = "2026-01-01T09:00:00Z"
 		n.Reviews.Nodes = []reviewNode{rev(me, "APPROVED", "2026-01-01T09:00:00Z")}
-		st := statusFromNode(n, me)
+		st := statusFromNode(n, me, "")
 		if st.NewSinceKind != "" {
 			t.Fatalf("got NewSinceKind %q, want empty (updatedAt == your review time)", st.NewSinceKind)
 		}
@@ -260,7 +260,7 @@ func TestMyLastActivity(t *testing.T) {
 		var n ghPRNode
 		n.UpdatedAt = "2026-01-01T12:00:00Z"
 		n.Reviews.Nodes = []reviewNode{rev(me, "CHANGES_REQUESTED", "2026-01-01T09:00:00Z")}
-		st := statusFromNode(n, me)
+		st := statusFromNode(n, me, "")
 		if st.NewSinceKind != "review" {
 			t.Fatalf("got NewSinceKind %q, want \"review\"", st.NewSinceKind)
 		}
@@ -276,7 +276,7 @@ func TestMyLastActivity(t *testing.T) {
 			CreatedAt string `json:"createdAt"`
 		}{CreatedAt: "2026-01-01T09:00:00Z"})
 		n.Comments.Nodes[0].Author.Login = me
-		st := statusFromNode(n, me)
+		st := statusFromNode(n, me, "")
 		if st.NewSinceKind != "comment" {
 			t.Fatalf("got NewSinceKind %q, want \"comment\"", st.NewSinceKind)
 		}
@@ -293,7 +293,7 @@ func TestMyLastActivity(t *testing.T) {
 			CreatedAt string `json:"createdAt"`
 		}{CreatedAt: "2026-01-01T09:00:00Z"})
 		n.Comments.Nodes[0].Author.Login = me
-		st := statusFromNode(n, me)
+		st := statusFromNode(n, me, "")
 		if st.NewSinceKind != "review" {
 			t.Fatalf("got NewSinceKind %q, want \"review\" (later than the comment)", st.NewSinceKind)
 		}
@@ -303,9 +303,77 @@ func TestMyLastActivity(t *testing.T) {
 		var n ghPRNode
 		n.UpdatedAt = "2026-01-01T12:00:00Z"
 		n.Reviews.Nodes = []reviewNode{rev("someone-else", "APPROVED", "2026-01-01T09:00:00Z")}
-		st := statusFromNode(n, me)
+		st := statusFromNode(n, me, "")
 		if st.NewSinceKind != "" {
 			t.Fatalf("got NewSinceKind %q, want empty (you never acted on this PR)", st.NewSinceKind)
 		}
 	})
+
+	// Own-PR scenario (PPTD-948): GitHub never carries a review FROM the
+	// author on their own PR, so myLastActivity's ghAt is empty — only the
+	// in-app FullyApprovedAt tells the badge "you've already seen this".
+	t.Run("own PR: never reviewed on GitHub, but fully approved in-app after the last update", func(t *testing.T) {
+		var n ghPRNode
+		n.UpdatedAt = "2026-01-01T09:00:00Z"
+		st := statusFromNode(n, me, "2026-01-01T10:00:00Z")
+		if st.NewSinceKind != "" {
+			t.Fatalf("got NewSinceKind %q, want empty (fully approved AFTER the last update)", st.NewSinceKind)
+		}
+	})
+
+	t.Run("own PR: fully approved, then a later commit reopens the badge", func(t *testing.T) {
+		var n ghPRNode
+		n.UpdatedAt = "2026-01-01T12:00:00Z" // a new commit landed after the full approval
+		st := statusFromNode(n, me, "2026-01-01T10:00:00Z")
+		if st.NewSinceKind != "review" || st.NewSinceAt != "2026-01-01T10:00:00Z" {
+			t.Fatalf("got (%q, %q), want (\"review\", the fully-approved moment)", st.NewSinceKind, st.NewSinceAt)
+		}
+	})
+}
+
+// TestCombineSinceMoment covers the pure fold at the heart of the fix above:
+// whichever of the GitHub-derived moment (ghAt/ghKind) and the in-app
+// fully-approved moment is LATER wins; fullyApprovedAt winning always reports
+// kind "review" (that's exactly what it represents).
+func TestCombineSinceMoment(t *testing.T) {
+	cases := []struct {
+		name                       string
+		ghAt, ghKind, fullyApprove string
+		wantAt, wantKind           string
+	}{
+		{
+			name: "no local approval moment at all: GitHub wins as-is",
+			ghAt: "2026-01-01T09:00:00Z", ghKind: "comment",
+			wantAt: "2026-01-01T09:00:00Z", wantKind: "comment",
+		},
+		{
+			name:         "no GitHub activity at all: the local moment wins",
+			fullyApprove: "2026-01-01T09:00:00Z",
+			wantAt:       "2026-01-01T09:00:00Z", wantKind: "review",
+		},
+		{
+			name: "GitHub activity is later: it wins",
+			ghAt: "2026-01-01T12:00:00Z", ghKind: "review",
+			fullyApprove: "2026-01-01T09:00:00Z",
+			wantAt:       "2026-01-01T12:00:00Z", wantKind: "review",
+		},
+		{
+			name: "the local full-approval moment is later: it wins, as a review",
+			ghAt: "2026-01-01T09:00:00Z", ghKind: "comment",
+			fullyApprove: "2026-01-01T12:00:00Z",
+			wantAt:       "2026-01-01T12:00:00Z", wantKind: "review",
+		},
+		{
+			name:   "neither ever happened",
+			wantAt: "", wantKind: "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			at, kind := combineSinceMoment(tc.ghAt, tc.ghKind, tc.fullyApprove)
+			if at != tc.wantAt || kind != tc.wantKind {
+				t.Fatalf("got (%q, %q), want (%q, %q)", at, kind, tc.wantAt, tc.wantKind)
+			}
+		})
+	}
 }

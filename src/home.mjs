@@ -2332,6 +2332,36 @@ function signalFileViewed(file, viewed) {
   })
 }
 
+// wasFullyApproved — module scope, not on `state`, same reasoning as
+// viewedFiles: it only guards the ONE-TIME transition below, never rendered.
+// See notifyFullyApprovedIfNeeded.
+let wasFullyApproved = false
+
+// notifyFullyApprovedIfNeeded fires ONLY on the transition into "every
+// changed row/call in the whole tree is approved" (state.approvalTotal,
+// filled right above by the approvalSummaries watch) — mirrors
+// syncViewedFiles' own "only on transitions" shape. Tells the durable
+// `approve` tracker to stamp prmeta's FullyApprovedAt (see
+// combineSinceMoment, inbox.go): on your OWN PR, GitHub never sees a review
+// FROM you, so this in-app "I've read every line" moment is what makes
+// "nieuw sinds jouw review" correct there too (PPTD-948). Fire-and-forget,
+// same write path as persistApproval/signalFileViewed — the UI only ever
+// signals the tracker, never writes a read-model directly.
+function notifyFullyApprovedIfNeeded() {
+  const isFullyApproved =
+    state.approvalTotal.total > 0 && state.approvalTotal.done === state.approvalTotal.total
+  if (isFullyApproved && !wasFullyApproved && state.approveRunId) {
+    fetch(`/api/workflows/${state.approveRunId}/signals/set`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fullyApproved: true }),
+    }).catch(() => {
+      /* best-effort */
+    })
+  }
+  wasFullyApproved = isFullyApproved
+}
+
 // recomputeLeftList derives state.blocks from allBlocks: everything except the
 // PR blocks that are the definition of a resolved method call (already shown
 // in the "Onderliggende code" panel). A called-and-shown function shouldn't
@@ -8902,6 +8932,7 @@ watch(
     // the pills above — a block shared by several subtrees counts once. See
     // prWideApproveTotal.
     state.approvalTotal = prWideApproveTotal()
+    notifyFullyApprovedIfNeeded()
   },
 )
 

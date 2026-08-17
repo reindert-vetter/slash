@@ -10,6 +10,7 @@ import (
 
 	"slash/modules/comments"
 	"slash/modules/jira"
+	"slash/modules/prmeta"
 	"slash/modules/taskinbox"
 )
 
@@ -236,6 +237,9 @@ type taskInboxDeps struct {
 	db       *sql.DB
 	comments *comments.Module
 	jira     jira.Client
+	// prmeta is passed through to buildInboxSnapshot for the "fully approved
+	// since" fold (see combineSinceMoment, inbox.go) — nil is fine.
+	prmeta *prmeta.Module
 }
 
 // buildTaskInbox fetches all three task sources and turns them into scored
@@ -251,7 +255,7 @@ func buildTaskInbox(ctx context.Context, deps taskInboxDeps) ([]taskinbox.Task, 
 	// how to go offline via SLASH_INBOX, see inbox.go) — no separate GitHub
 	// query is needed for "my own open PRs" beyond what the inbox already
 	// computes for its own sections.
-	snap, err := buildInboxSnapshot(ctx, deps.db)
+	snap, err := buildInboxSnapshot(ctx, deps.db, deps.prmeta)
 	if err != nil {
 		snap = nil // best-effort: PR-derived sources simply contribute nothing this round
 	}

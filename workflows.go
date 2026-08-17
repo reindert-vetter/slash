@@ -476,6 +476,14 @@ type ApprovalSignal struct {
 	Anchors []approvals.RowAnchor `json:"anchors"`
 	File    string                `json:"file"`
 	Viewed  *bool                 `json:"viewed"`
+	// FullyApproved rides the same "set" Signal a third way (mirrors the
+	// File/Viewed pair above): true means the client just detected the
+	// transition into "every changed row/call in the tree is now approved"
+	// (state.approvalTotal, home.mjs) and asks to stamp prmeta's
+	// FullyApprovedAt with the current time — see combineSinceMoment
+	// (inbox.go) for what that feeds into. BlockID/Rows/Calls/File/Viewed are
+	// ignored when this is true.
+	FullyApproved bool `json:"fullyApproved,omitempty"`
 }
 
 // TaskSnoozeInput starts a task_snooze Execution — one tracker per repo.
@@ -846,7 +854,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// (write, workflow-driven). Best-effort: on a fetch failure we keep the last
 	// good snapshot so the workflow never fails on a transient GitHub hiccup.
 	engine.RegisterActivity("refreshInbox", func(ctx context.Context, in []byte) ([]byte, error) {
-		snap, err := buildInboxSnapshot(ctx, m.db)
+		snap, err := buildInboxSnapshot(ctx, m.db, m.prmeta)
 		if err != nil {
 			m.logf("pr_inbox: refresh skipped: %v", err)
 			return json.Marshal(inboxRefreshResult{})
@@ -907,7 +915,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if m.taskinbox == nil {
 			return json.Marshal(taskInboxRefreshResult{})
 		}
-		tasks, err := buildTaskInbox(ctx, taskInboxDeps{db: m.db, comments: m.comments, jira: m.jira})
+		tasks, err := buildTaskInbox(ctx, taskInboxDeps{db: m.db, comments: m.comments, jira: m.jira, prmeta: m.prmeta})
 		if err != nil {
 			m.logf("task_inbox: refresh skipped: %v", err)
 			return json.Marshal(taskInboxRefreshResult{})
@@ -1870,7 +1878,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		}
 		// Repo is threaded in with the rest of the workflow layer; a tracker
 		// still only ever runs for the primary repo at this point.
-		statuses, err := statusesFor(ctx, []prKey{{"", arg.PR}})
+		statuses, err := statusesFor(ctx, []prKey{{"", arg.PR}}, m.prmeta)
 		if err != nil {
 			m.logf("pr_status: fetch statuses pr=%d skipped: %v", arg.PR, err)
 			return nil, nil
@@ -1988,6 +1996,24 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			return nil, nil
 		}
 		return nil, m.approvals.Replace(ctx, arg.Repo, arg.PR, arg.BlockID, arg.Rows, arg.Calls, arg.Anchors)
+	})
+
+	// Activity: stamp the moment the reviewer last had every changed row/call
+	// approved in the review tree (write, workflow-driven). prmeta is the only
+	// writer of its own read-model. See ApprovalSignal.FullyApproved and
+	// combineSinceMoment (inbox.go).
+	engine.RegisterActivity("saveFullyApprovedAt", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			Repo string `json:"repo,omitempty"`
+			PR   int    `json:"pr"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.prmeta == nil {
+			return nil, nil
+		}
+		return nil, m.prmeta.SaveFullyApprovedAt(ctx, arg.Repo, arg.PR)
 	})
 
 	// Activity: persist one task's snooze state (write, workflow-driven). The
@@ -3349,6 +3375,16 @@ func approveWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			}{PR: in.PR, File: sig.File, Viewed: *sig.Viewed}
 			if err := w.ExecuteActivity("setFileViewed", arg, nil); err != nil {
 				return nil, fmt.Errorf("set file viewed: %w", err)
+			}
+			continue
+		}
+		if sig.FullyApproved {
+			arg := struct {
+				Repo string `json:"repo,omitempty"`
+				PR   int    `json:"pr"`
+			}{Repo: in.Repo, PR: in.PR}
+			if err := w.ExecuteActivity("saveFullyApprovedAt", arg, nil); err != nil {
+				return nil, fmt.Errorf("save fully approved at: %w", err)
 			}
 			continue
 		}

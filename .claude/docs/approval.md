@@ -79,6 +79,30 @@ rows, calls, anchors}`, `persistApproval`). The UI never writes directly — onl
 this Signal, within the write boundary. See "Persisting reviewer approval" in
 `.claude/docs/workflows-trackers.md`.
 
+### A third variant of the same Signal: "I just finished approving everything"
+
+The `set` Signal (`ApprovalSignal`, `workflows.go`) rides a THIRD shape besides
+the ordinary block-approval payload and the file-viewed request
+(`{file, viewed}`): `{fullyApproved: true}`. `home.mjs`'s decoupled
+`approvalSummaries`/`approvalTotal` watch (the one described in "Combined
+approval per tree" below) calls `notifyFullyApprovedIfNeeded()` right after
+filling `state.approvalTotal`, which fires this Signal **only on the
+transition** into `done === total > 0` (a module-scope `wasFullyApproved` flag,
+same one-shot shape as `syncViewedFiles`). `approveWorkflow` runs the
+`saveFullyApprovedAt` Activity, which stamps `prmeta`'s `FullyApprovedAt` with
+the current time (`prmeta.SaveFullyApprovedAt`, always a plain overwrite —
+never a max — since each firing is by construction later than the last).
+
+This is what makes the review tree's "nieuw sinds jouw review" badge correct on
+your **own** PR (PPTD-948): GitHub never carries a review submission *from* the
+author on their own PR, so the GitHub-derived moment (`myLastActivity`,
+`inbox.go`) is often empty or stale, while the reviewer may have approved every
+line in the tree right here in the app. `statusFromNode`'s
+`combineSinceMoment` folds this local moment in — whichever of the two is
+LATER wins. Full mechanism, including why a stale `FullyApprovedAt` self-heals
+once new commits land: "`pr_status` (per PR)" stage 3 in
+`.claude/docs/workflows-trackers.md`.
+
 ### An approval carries the CODE it approved, not just a row index
 
 `anchors` (`approvalAnchors` in `home.mjs` → `approvals.RowAnchor` → the

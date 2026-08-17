@@ -155,3 +155,47 @@ func TestSinceReviewRoundTrip(t *testing.T) {
 		t.Errorf("since mark cleared as a side effect: %q", got.NewSinceKind)
 	}
 }
+
+// TestSaveFullyApprovedAtRoundTrip covers the reviewer's own "approved
+// everything per line" moment (PPTD-948): it round-trips through Get, doesn't
+// clobber unrelated columns already written, and overwriting it a second time
+// (the transition firing again after new commits) simply replaces the value.
+func TestSaveFullyApprovedAtRoundTrip(t *testing.T) {
+	m := open(t)
+	ctx := context.Background()
+	if err := m.SaveBasics(ctx, Meta{PR: 9, Title: "PS-2 iets anders"}); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := m.Get(ctx, "", 9)
+	if err != nil || !ok {
+		t.Fatalf("get: ok=%v err=%v", ok, err)
+	}
+	if got.FullyApprovedAt != "" {
+		t.Errorf("want empty FullyApprovedAt before it's ever set, got %q", got.FullyApprovedAt)
+	}
+
+	if err := m.SaveFullyApprovedAt(ctx, "", 9); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err = m.Get(ctx, "", 9)
+	if err != nil || !ok {
+		t.Fatalf("get: ok=%v err=%v", ok, err)
+	}
+	if got.FullyApprovedAt == "" {
+		t.Fatal("want a non-empty FullyApprovedAt after SaveFullyApprovedAt")
+	}
+	if got.Title != "PS-2 iets anders" {
+		t.Errorf("basics clobbered: title=%q", got.Title)
+	}
+	first := got.FullyApprovedAt
+
+	// Firing again (a later full-approval completion) simply overwrites.
+	if err := m.SaveFullyApprovedAt(ctx, "", 9); err != nil {
+		t.Fatal(err)
+	}
+	got, _, _ = m.Get(ctx, "", 9)
+	if got.FullyApprovedAt == "" {
+		t.Fatal("want a non-empty FullyApprovedAt after the second call")
+	}
+	_ = first // both calls may land in the same second under `now()`'s RFC3339 resolution
+}

@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS pr_meta (
   new_since_at     TEXT NOT NULL DEFAULT '',
   since_facts      TEXT NOT NULL DEFAULT '',
   since_summary    TEXT NOT NULL DEFAULT '',
+  fully_approved_at TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (repo, pr)
 );
 `
@@ -93,6 +94,16 @@ type Meta struct {
 	// alone.
 	SinceFacts   string `json:"sinceFacts"`
 	SinceSummary string `json:"sinceSummary"`
+	// FullyApprovedAt is the RFC3339 moment the reviewer last had every
+	// changed row/call approved in the review tree itself (set by
+	// SaveFullyApprovedAt, driven by the `approve` tracker's "fullyApproved"
+	// Signal — see home.mjs's approvalTotal watch). Empty means "never
+	// reached, or not tracked yet". Folded into NewSinceKind/NewSinceAt
+	// (see combineSinceMoment, inbox.go): whichever of the GitHub-derived
+	// moment and this one is LATER wins — a reviewer's own PR generates no
+	// GitHub review of their own, so this is what makes "nieuw sinds jouw
+	// review" correct on your own PR (PPTD-948).
+	FullyApprovedAt string `json:"fullyApprovedAt,omitempty"`
 }
 
 // Module is the prmeta service (owns its own SQLite read-model).
@@ -147,6 +158,7 @@ func migrate(db *sql.DB) {
 		`ALTER TABLE pr_meta ADD COLUMN new_since_at TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE pr_meta ADD COLUMN since_facts TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE pr_meta ADD COLUMN since_summary TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE pr_meta ADD COLUMN fully_approved_at TEXT NOT NULL DEFAULT ''`,
 	} {
 		_, _ = db.Exec(col) // ignore "duplicate column name"
 	}
@@ -166,7 +178,8 @@ func migrateRepo(db *sql.DB) {
 	}
 	cols := `pr, title, url, body, author, additions, deletions, changed_files, head_ref, summary,
 		jira_key, jira_title, jira_desc, jira_url, review_decision, checks_total, checks_passed,
-		reviewers, updated_at, gh_updated_at, new_since_kind, new_since_at, since_facts, since_summary`
+		reviewers, updated_at, gh_updated_at, new_since_kind, new_since_at, since_facts, since_summary,
+		fully_approved_at`
 	for _, q := range []string{
 		`ALTER TABLE pr_meta RENAME TO pr_meta_old`,
 		schema,
@@ -263,6 +276,22 @@ func (m *Module) SaveSinceReview(ctx context.Context, repo string, pr int, facts
 	return err
 }
 
+// SaveFullyApprovedAt stamps "now" as the moment the reviewer last had every
+// changed row/call approved in the review tree. WRITE — workflow-only, driven
+// by the `approve` tracker's "fullyApproved" Signal (home.mjs's approvalTotal
+// watch fires it on the transition into fully-approved — see
+// combineSinceMoment, inbox.go). Always overwrites with the current time: each
+// firing is, by construction, a genuinely later completion than the last, so a
+// plain overwrite (never a max()) is correct.
+func (m *Module) SaveFullyApprovedAt(ctx context.Context, repo string, pr int) error {
+	_, err := m.db.ExecContext(ctx, `
+		INSERT INTO pr_meta (repo, pr, fully_approved_at, updated_at) VALUES (?,?,?,?)
+		ON CONFLICT(repo, pr) DO UPDATE SET
+			fully_approved_at=excluded.fully_approved_at, updated_at=excluded.updated_at`,
+		repo, pr, now(), now())
+	return err
+}
+
 // Purge removes the stored pr_meta row of pr, if any. WRITE — workflow-only,
 // the per-PR data-retention cleanup path (see the cleanup workflow). Returns
 // the number of rows removed (0 or 1), for logging.
@@ -284,12 +313,12 @@ func (m *Module) Get(ctx context.Context, repo string, pr int) (Meta, bool, erro
 		SELECT repo, pr, title, url, body, author, additions, deletions, changed_files, head_ref,
 			summary, jira_key, jira_title, jira_desc, jira_url,
 			review_decision, checks_total, checks_passed, reviewers, updated_at,
-			gh_updated_at, new_since_kind, new_since_at, since_facts, since_summary
+			gh_updated_at, new_since_kind, new_since_at, since_facts, since_summary, fully_approved_at
 		FROM pr_meta WHERE repo = ? AND pr = ?`, repo, pr).
 		Scan(&meta.Repo, &meta.PR, &meta.Title, &meta.URL, &meta.Body, &meta.Author, &meta.Additions, &meta.Deletions,
 			&meta.ChangedFiles, &meta.HeadRef, &meta.Summary, &meta.JiraKey, &meta.JiraTitle, &meta.JiraDesc,
 			&meta.JiraURL, &meta.ReviewDecision, &meta.ChecksTotal, &meta.ChecksPassed, &reviewersJSON, &meta.UpdatedAt,
-			&meta.GhUpdatedAt, &meta.NewSinceKind, &meta.NewSinceAt, &meta.SinceFacts, &meta.SinceSummary)
+			&meta.GhUpdatedAt, &meta.NewSinceKind, &meta.NewSinceAt, &meta.SinceFacts, &meta.SinceSummary, &meta.FullyApprovedAt)
 	if err == sql.ErrNoRows {
 		return Meta{}, false, nil
 	}
