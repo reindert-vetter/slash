@@ -1,10 +1,10 @@
 import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // A mouse selection shows the command palette passively (home.mjs's
-// showPassiveMenu/hidePassiveMenu, Block.mjs's selectRowAt call sites) — the
-// replacement for the removed per-row/group gutter approve toggles, see "A
-// mouse selection shows the palette passively" in
-// .claude/docs/command-palette.md. Reuses PR 102 (RangeSelectAction::execute,
+// showPassiveMenu/hidePassiveMenu, home.mjs's resolveClickSelection/
+// resolveRangeSelection) — the replacement for the removed per-row/group
+// gutter approve toggles, see "A mouse selection shows the palette passively"
+// in .claude/docs/command-palette.md. Reuses PR 102 (RangeSelectAction::execute,
 // four changed lines in two groups) — see tests/diff-row-mouse-select.spec.mjs.
 test.describe('PR Review Tree — a mouse selection shows the palette passively', () => {
   test('clicking a row shows the palette under it, without owning the keyboard', async ({ page }) => {

@@ -767,10 +767,11 @@ longer get their own background (see "Char diff" in
 at line level only. An empty added line has no characters and thus no
 underline.
 
-The same range is also reachable by mouse — a mousedown+drag over several
-rows extends `state.rangeAnchor` exactly like holding Shift, click alone jumps
-the cursor to an arbitrary row. See "Line selection: hover, click, drag-range"
-in `.claude/docs/diff-render.md`.
+The same range is also reachable by mouse — a real (native) text selection
+over several rows resolves to the same `state.rangeAnchor` range exactly like
+holding Shift, a plain click alone jumps the cursor to the row it landed on
+(or does nothing at all on an unchanged line). See "Line selection: click and
+browser text selection" in `.claude/docs/diff-render.md`.
 
 ## Shift+↑/↓ — selecting multiple lines/groups at once (`state.rangeAnchor`)
 

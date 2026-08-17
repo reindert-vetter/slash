@@ -310,7 +310,7 @@ ordinary text or on one of these nested spans.
 real, non-preview card call sites — top-level and a drilled column) calls
 `approveClickAt(level, b, i, row, kind, segStart)`, always with `kind:'call'`
 now: resolves the clicked segment to a navigation unit via `navUnitsOf`
-(mirroring `selectRowAt`'s own level/i plumbing), **forces** `'call'`
+(mirroring `resolveClickSelection`'s own level/i plumbing), **forces** `'call'`
 granularity onto the keyboard cursor — the same "a click overrides whatever
 gran the keyboard had active" rule the plain row click already applies (see
 "Line selection" in `.claude/docs/diff-render.md`) — and then runs
@@ -345,8 +345,8 @@ selection. `toggleApprove`/`toggleCallApprove`/`afterApproveAction` all
 return their promise chain for exactly this reason; `mouseApprove` calls
 `showPassiveMenu()` directly once that chain resolves — not the
 mousedown/mouseup-deferred `schedulePassiveMenu()`, since a click on an
-approve dot never starts a drag-range gesture that a preview could visually
-collide with. `showPassiveMenu`'s own `if (menu.open) return` guard makes
+approve dot never starts a multi-row selection gesture that a preview could
+visually collide with. `showPassiveMenu`'s own `if (menu.open) return` guard makes
 this a no-op on the "nothing left ahead" branch, which opens the real,
 keyboard-owning `reviewApprove`/`reviewChoice` menu instead.
 

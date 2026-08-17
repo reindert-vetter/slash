@@ -22,7 +22,7 @@ function** the key runs — never a parallel implementation. Concretely:
 | The approve checkbox on a block card | the palette's "Approve …" item | `.claude/docs/approval.md` |
 | `pr-info-body-toggle` ("more…") | the PR menu's "Show full description" | `.claude/docs/detail-layout.md` |
 | A `/pr-overview` row → popover | `Enter` on the selected row | `.claude/docs/pr-overview.md` |
-| A diff row → 1×/2×/3× click selects the line/group/whole block, mousedown+drag = a per-line range | `f`/`d`/`s` (zoom) + `↑`/`↓` (jump to it in steps), Shift+`↑`/`↓` (range) | "Line selection: hover, click, drag-range" in `.claude/docs/diff-render.md` |
+| A diff row → a genuine click selects a call-segment/line (or nothing, on an unchanged line), a real browser text selection (drag, native double-/triple-click, or Shift+click) always rounds up to a per-line range | `f`/`d`/`s` (zoom) + `↑`/`↓` (jump to it in steps), Shift+`↑`/`↓` (range) | "Line selection: click and browser text selection" in `.claude/docs/diff-render.md` |
 | A call segment's dot/hover ring (`data-seg-dot`) | `Space` (approve + continue) | "Approving from the mouse" in `.claude/docs/approval.md` |
 | A mouse selection (diff row/group/call) | landing on that unit, then `Enter` | "A mouse selection shows the palette passively" in `.claude/docs/command-palette.md` |
 | The Claude chat's "Stuur" button | `Enter` in the chat composer | `.claude/docs/claude-chat-panel.md` |

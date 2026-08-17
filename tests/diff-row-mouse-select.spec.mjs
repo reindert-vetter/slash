@@ -1,28 +1,36 @@
 import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
-// Mouse line selection (Block.mjs's onBlockMouseDown/onBlockMouseMove ->
-// home.mjs's selectRowAt/extendRowRange/ensureTopLevelDiffFocus): a click
-// jumps the diff cursor straight to the clicked row, a mousedown+mousemove
-// drag extends it into a multi-row range exactly like Shift+ArrowUp/Down
-// (reusing the same state.rangeAnchor mechanism, see range-select.spec.mjs),
-// and a click on a non-focused card (the look-ahead preview) first focuses
-// that card the same way the keyboard would (stepBlock/enterDiff) before
-// landing on the clicked row.
+// Mouse line selection (Block.mjs's onBlockMouseDown -> home.mjs's
+// beginMouseSelection/resolveClickSelection/resolveRangeSelection/
+// ensureTopLevelDiffFocus): the diff is now ordinary, browser-selectable text
+// (reviewer request: "ik wil de browser selectie manier gebruiken") — a
+// mousedown only seeds which row/call-segment/card a gesture started on, and
+// the actual selection is resolved exactly once, on the next `mouseup`, by
+// reading `window.getSelection()`. See "Line selection: click and browser
+// text selection" in .claude/docs/diff-render.md.
 //
-// A click ALWAYS forces gran to 'line' (single), 'group' (double) or the
-// whole open block (triple) — clickGranFor/selectRowAt in home.mjs, driven by
-// the browser's own `e.detail` consecutive-click counter — overriding
-// whatever finer/coarser gran the keyboard had left active. A drag always
-// ranges per LINE too, never per group, regardless of how it was started.
-// EXCEPT: a single click landing inside an actual call-segment (a hoverable
-// span, Block.mjs's `data-call-seg`/CALL_HOVER_CLS) selects that exact
-// segment at 'call' granularity instead of 'line' — see the dedicated
-// call-segment test below (PR 12903, a real multi-segment call chain).
+// A genuine click (no drag, a COLLAPSED selection) ALWAYS resolves to 'line'
+// granularity — overriding whatever finer/coarser gran the keyboard had left
+// active, even 'call' — EXCEPT a single click landing inside an actual
+// call-segment, which selects that exact segment at 'call' granularity
+// instead (see the dedicated call-segment test below). A click that lands on
+// neither a call-segment nor an actual changed/landable line does NOTHING at
+// all (reviewer: "als er geen line is aangepast, dan wil ik daar geen
+// interactie van zien").
+//
+// A REAL (non-collapsed) browser selection — a mousedown+drag, a native
+// double-click (word select), a native triple-click (paragraph select,
+// confined to the row's own <div>), or a native Shift+click (the browser's
+// own selection-extend behaviour) — always rounds up to a per-LINE range
+// (reviewer: "afronden op hele regels"), reusing the exact same
+// state.rangeAnchor mechanism Shift+ArrowUp/Down built (see range-select.spec.mjs).
+//
 // Reuses PR 102 (RangeSelectAction::execute, four changed lines in two
-// groups; ::other, a same-file neighbour with one changed line) — see
-// materializeRangeSelectWorktrees in tests/_setup.mjs.
-test.describe('PR Review Tree — mouse line selection (click, hover, drag-range)', () => {
-  test('a single click always selects one LINE, even from group or call granularity', async ({ page }) => {
+// groups, split by one unchanged `$mid` line; ::other, a same-file neighbour
+// with one changed line) — see materializeRangeSelectWorktrees in
+// tests/_setup.mjs.
+test.describe('PR Review Tree — mouse line selection (click, native selection)', () => {
+  test('a genuine click always selects one LINE, even from group or call granularity', async ({ page }) => {
     await page.goto('/pr/102')
     await leaveSearchBox(page)
 
@@ -48,26 +56,62 @@ test.describe('PR Review Tree — mouse line selection (click, hover, drag-range
     await expect(activeRows).toContainText('$a')
   })
 
-  test('a double-click selects the whole group the line sits in', async ({ page }) => {
+  test('a click on an unchanged line does nothing at all', async ({ page }) => {
     await page.goto('/pr/102')
     await leaveSearchBox(page)
 
     await page.keyboard.press('ArrowRight')
-    await page.keyboard.press('f') // move off the default group first, to prove the click re-selects it
+    await page.keyboard.press('f') // gran 'line', cursor on $a
+    const card = page.getByTestId('detail-card').first()
+    const activeRows = card.locator('div[class*="#b9f5d9"]')
+    const changedRows = card.locator('[data-pane="new"] [data-changed="1"]')
+    await changedRows.nth(0).click() // $a
+    await expect(activeRows).toHaveCount(1)
+    await expect(activeRows).toContainText('$a')
+    // Dismiss the passive command-palette preview the click above triggered
+    // (schedulePassiveMenu) — it floats right under the selected row and
+    // would otherwise intercept the next click below.
+    await page.keyboard.press('Escape')
+
+    // `$mid = 5;` is the one unchanged line sitting between the two groups —
+    // never touched by the PR, so it carries no data-changed at all.
+    const midRow = card.locator('[data-pane="new"] [data-row]').filter({ hasText: '$mid' })
+    await expect(midRow).toHaveCount(1)
+    await midRow.click()
+
+    // Nothing moved: the cursor is still exactly where it was before the click.
+    await expect(activeRows).toHaveCount(1)
+    await expect(activeRows).toContainText('$a')
+  })
+
+  test('a native double-click still selects only the ONE line it lands on', async ({ page }) => {
+    await page.goto('/pr/102')
+    await leaveSearchBox(page)
+
+    await page.keyboard.press('ArrowRight')
+    await page.keyboard.press('f') // move off the default group first, to prove the click re-selects
     const card = page.getByTestId('detail-card').first()
     const activeRows = card.locator('div[class*="#b9f5d9"]')
     const changedRows = card.locator('[data-pane="new"] [data-changed="1"]')
     await expect(activeRows).toHaveCount(1)
 
-    await changedRows.nth(2).dblclick() // $c — in the SECOND group ($c/$d)
-    await expect(activeRows).toHaveCount(2)
-    await expect(activeRows.nth(0)).toContainText('$c')
-    await expect(activeRows.nth(1)).toContainText('$d')
-    // 'group' is the URL's default granularity, so it's omitted entirely.
-    await expect(page).not.toHaveURL(/gran=/)
+    // A row div spans the full card width, but its text ("        $c = 3;")
+    // is short and left-aligned — clicking the LOCATOR's default (center)
+    // position lands on blank space past the visible text, where a native
+    // double-click has no word to select and instead picks up the row's own
+    // trailing whitespace/newline, which can bleed into the next row. Click
+    // near the actual glyphs instead, same as a reviewer actually would.
+    const cRow = changedRows.nth(2) // $c
+    const cBox = await cRow.boundingBox()
+    await cRow.dblclick({ position: { x: 24, y: cBox.height / 2 } }) // native word-select, confined to its own row
+    await expect(activeRows).toHaveCount(1)
+    await expect(activeRows).toContainText('$c')
+    // 'line' is the gran that was already active — the point of this test is
+    // that a native double-click does NOT widen the selection to the group.
+    await expect(page).toHaveURL(/gran=line/)
   })
 
-  test('a triple-click selects every line of the currently open block, never a same-file neighbour', async ({
+  test('a native triple-click still selects only the ONE line it lands on, never the whole block', async ({
     page,
   }) => {
     await page.goto('/pr/102')
@@ -78,17 +122,19 @@ test.describe('PR Review Tree — mouse line selection (click, hover, drag-range
     const activeRows = card.locator('div[class*="#b9f5d9"]')
     const changedRows = card.locator('[data-pane="new"] [data-changed="1"]')
 
-    await changedRows.nth(1).click({ clickCount: 3 }) // $b, triple-click
-    // All four changed lines of `execute` — never flowing into `other`.
-    await expect(activeRows).toHaveCount(4)
-    await expect(page.locator('[data-idx="0"]')).toHaveClass(/bg-indigo-50/)
-
-    await page.keyboard.press('Enter')
-    await expect(page.getByTestId('command-row').nth(1)).toContainText('Keur deze 4 regels goed')
-    await page.keyboard.press('Escape')
+    const bRow = changedRows.nth(1) // $b
+    const bBox = await bRow.boundingBox()
+    await bRow.click({ clickCount: 3, position: { x: 24, y: bBox.height / 2 } }) // native triple-click (paragraph select)
+    // Never flows into every changed line of the block — a native
+    // triple-click stops at the row's own block-level <div>.
+    await expect(activeRows).toHaveCount(1)
+    await expect(activeRows).toContainText('$b')
+    await expect(page).toHaveURL(/gran=line/)
   })
 
-  test('mousedown + drag selects a contiguous LINE range, exactly like Shift+ArrowDown', async ({ page }) => {
+  test('mousedown + drag (a real browser text selection) rounds up to a contiguous LINE range, exactly like Shift+ArrowDown', async ({
+    page,
+  }) => {
     await page.goto('/pr/102')
     await leaveSearchBox(page)
 
@@ -147,7 +193,7 @@ test.describe('PR Review Tree — mouse line selection (click, hover, drag-range
 
 // A single click landing INSIDE a real call-segment selects that exact
 // segment at 'call' granularity instead of 'line' — the on-character
-// refinement of the click-depth scheme above, top-level only (see the
+// refinement of the click scheme above, top-level only (see the
 // drilled-column test below). PR 12903's CreatePaymentAction::execute (block
 // index 1), whose first change group is a single modified row with a real
 // multi-segment call chain: `$order` / `->billingAddress` / `->update(` / `[`
@@ -199,11 +245,11 @@ test('a single click on a call-segment selects exactly that segment, with a whol
 })
 
 // A drilled Onderliggende-code column deliberately keeps ONLY the single-line
-// click — no double/triple-click depth there at all (reviewer: "alleen
+// click — no call-segment precision there at all (reviewer: "alleen
 // top-level"). PR 106's TreeChildAction2::run (two adjacent changed lines,
 // ONE 'group' unit) — see drill-approve-line-skip.spec.mjs for the same
 // fixture's own doc comment.
-test('a double-click inside a drilled column still selects only the ONE clicked line', async ({ page }) => {
+test('a native double-click inside a drilled column still selects only the ONE clicked line', async ({ page }) => {
   await page.goto('/pr/106')
   await leaveSearchBox(page)
   await page.keyboard.press('ArrowRight') // parent's diff
@@ -221,8 +267,12 @@ test('a double-click inside a drilled column still selects only the ONE clicked 
   await expect(activeRows).toHaveCount(2) // the whole (only) group, the default landing
 
   const changedRows = drill.locator('[data-pane="new"] [data-changed="1"]')
-  await changedRows.first().dblclick()
-  // Still just the ONE line — a drilled column never widens to the group on
-  // a double-click, unlike the top-level diff.
+  const firstRow = changedRows.first()
+  const firstBox = await firstRow.boundingBox()
+  // Click near the actual text, not the row's default (blank) center — see
+  // the top-level double-click test's own comment for why.
+  await firstRow.dblclick({ position: { x: 24, y: firstBox.height / 2 } })
+  // Still just the ONE line — a native double-click never widens to the
+  // group in a drilled column, same as at the top level.
   await expect(activeRows).toHaveCount(1)
 })

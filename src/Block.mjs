@@ -728,24 +728,25 @@ export default function Block(b, opts = {}) {
   // approved rows, so the caller (home.mjs) can persist the new state durably.
   // Defaults to a no-op; Block itself stays decoupled from the write path.
   const onApprove = opts.onApprove || (() => {})
-  // onRowMouseDown/onRowMouseMove — the mouse equivalent of ↑/↓ + Shift+↑/↓:
-  // called with the aligned-row index (rowCellHTML's `data-row`) a mousedown/
-  // drag-mousemove landed on, via the delegated handlers below. Both default
-  // to null (not a no-op function) so onBlockMouseDown/onBlockMouseMove can
-  // skip the closest() lookup entirely on a card that never wired one up (the
-  // look-ahead preview at home.mjs's stepChevronSlot call site, testClass
-  // preview cards, …) — see "Line selection: hover, click, drag-range" in
+  // onRowMouseDown — the mouse equivalent of ↑/↓: called with the aligned-row
+  // index (rowCellHTML's `data-row`) a mousedown landed on, via the delegated
+  // onBlockMouseDown below. Defaults to null (not a no-op function) so
+  // onBlockMouseDown can skip the closest() lookup entirely on a card that
+  // never wired one up (the look-ahead preview at home.mjs's stepChevronSlot
+  // call site, testClass preview cards, …). It only SEEDS the gesture — the
+  // actual click-vs-selection resolution happens once, on `mouseup`, by
+  // reading `window.getSelection()` (home.mjs's `beginMouseSelection`) — see
+  // "Line selection: click and browser text selection" in
   // .claude/docs/diff-render.md.
   const onRowMouseDown = opts.onRowMouseDown || null
-  const onRowMouseMove = opts.onRowMouseMove || null
   // onApproveClick — the mouse counterpart of Space (see home.mjs's
   // approveClickAt/mouseApprove): called with (row, 'call', segStart) when a
   // click lands on one of rowCellHTML's own call-segment dot/hover-ring
   // markers (see onBlockMouseDown). Defaults to null, same reasoning as
-  // onRowMouseDown/onRowMouseMove above: a card that never wires this up
-  // (a preview/testClass card) simply never reaches the branch that reads
-  // it, since rowCellHTML's own `rowApproveEnabled` (gated on `focused`)
-  // already keeps the click targets themselves out of such a card's HTML.
+  // onRowMouseDown above: a card that never wires this up (a preview/
+  // testClass card) simply never reaches the branch that reads it, since
+  // rowCellHTML's own `rowApproveEnabled` (gated on `focused`) already keeps
+  // the click targets themselves out of such a card's HTML.
   const onApproveClick = opts.onApproveClick || null
   // commentedRows is a function returning the Set of rows that carry a comment,
   // so the panes mark them with a 💬 (presence only). A function so the binding
@@ -811,7 +812,6 @@ export default function Block(b, opts = {}) {
       data-col-resize-root
       data-diff-col-key="${'diff:' + b.id}"
       @mousedown="${(e) => onBlockMouseDown(e, onRowMouseDown, onApproveClick)}"
-      @mousemove="${(e) => onBlockMouseMove(e, onRowMouseMove)}"
       @mouseover="${(e) => {
         onCallSegHover(e, true)
         onRowPairHover(e, true)
@@ -1760,15 +1760,16 @@ function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, focused = 
     else if (mark === 'ins') cls += ' bg-[#dafbea] dark:bg-emerald-500/10' // emerald-100 +20% white
     else if (text === null) cls += ' bg-slate-50 dark:bg-zinc-800/60' // filler for the missing side
   } else {
-    // Hover affordance for line selection (click / drag-range, see
-    // home.mjs's selectRowAt/extendRowRange): a grey left inset bar, same
+    // Hover affordance for line selection (click / a real text selection, see
+    // home.mjs's beginMouseSelection/resolveClickSelection/
+    // resolveRangeSelection): a grey left inset bar, same
     // colour family as the dimmed cursor bar above — never shown together
     // with a real cursor bar (this whole branch is only reached for a
     // non-active row), so there's no risk of one hiding the other. Only
     // while `focused` (this card already owns, or could take over, the
     // keyboard — mirrors diffActive()): a look-ahead preview/testClass card
-    // never shows it or reacts to a click at all (opts.onRowMouseDown/
-    // onRowMouseMove default to null there). Shape+thickness would be
+    // never shows it or reacts to a click at all (opts.onRowMouseDown
+    // defaults to null there). Shape+thickness would be
     // identical either way — this is a pure hover-only affordance, not a
     // second colour-only state (colorblind rule): nothing else on the row
     // changes. Written as `0px_0px` (equivalent CSS to `0_0`, box-shadow
@@ -1812,8 +1813,8 @@ function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, focused = 
   // callSegs: every call-chain segment of this row's NEW/right text, wrapped
   // below in a hoverable+clickable span (CALL_HOVER_CLS/`data-call-seg`) so a
   // single click can resolve to 'call' granularity instead of 'line' — see
-  // home.mjs's selectRowAt and "Line selection: hover, click, drag-range" in
-  // .claude/docs/diff-render.md. Only while `focused` (same gate as the
+  // home.mjs's resolveClickSelection and "Line selection: click and browser
+  // text selection" in .claude/docs/diff-render.md. Only while `focused` (same gate as the
   // plain-row hover bar above) and only the RIGHT side — the old/left pane
   // never gets a 'call' selection at all (reviewer confirmed "oude kant
   // alleen 'line'"), and only when this row's new text was actually
@@ -2211,38 +2212,44 @@ function onPaneClick(rows, e) {
   expandCollapsedRun(rows, el.getAttribute('data-collapsed-run'))
 }
 
-// onBlockMouseDown / onBlockMouseMove — one delegated pair on the whole card
-// (<article>, see Block()'s own bindings) rather than threading two more
-// callbacks through codeDiff/codePane/unifiedCodeDiff/paneHTML's already long
-// positional parameter lists: a row div lives inside whichever pane's <code>
-// is currently rendered (one in 'fit'/one-sided, two in 'split', one in
+// onBlockMouseDown — a delegated handler on the whole card (<article>, see
+// Block()'s own bindings) rather than threading another callback through
+// codeDiff/codePane/unifiedCodeDiff/paneHTML's already long positional
+// parameter lists: a row div lives inside whichever pane's <code> is
+// currently rendered (one in 'fit'/one-sided, two in 'split', one in
 // 'unified'), and `data-row` (rowCellHTML, only on the canonical
 // metadata-carrying line of a row) already uniquely identifies it regardless
-// of which pane/side the click landed on. `cb` is home.mjs's own
-// onRowMouseDown/onRowMouseMove (see Block()'s opts) — null on a card that
-// never wired one up (a preview/testClass card), so both are a plain no-op
-// there. onBlockMouseMove only acts while the primary button is still held
-// (`e.buttons`), so a plain hover-without-drag mousemove costs nothing and no
-// separate "dragging" flag / global mouseup listener is needed: mouseup
-// anywhere simply clears `e.buttons` for every later mousemove. See "Line
-// selection: hover, click, drag-range" in .claude/docs/diff-render.md.
+// of which pane/side the click landed on.
 //
-// onBlockMouseDown passes along `e.detail` — the browser's own consecutive-
-// click counter (1 = single, 2 = double, 3 = triple, using its own platform
-// double-click timing/distance threshold, same as native dblclick) — so
-// home.mjs's onRowMouseDown can tell a plain click from a double/triple one
-// without a hand-rolled timer. `preventDefault()` once a row is matched
-// suppresses the browser's own word/paragraph text selection a double/triple
-// click would otherwise also trigger, which visibly fought our own indigo
-// range highlight (reviewer request: block native selection here).
+// Reviewer request: "ik wil dat ik alles kan selecteren als normaal [...] ik
+// wil de browser selectie manier gebruiken" — this handler therefore no
+// longer resolves a selection itself, and no longer calls `preventDefault()`
+// on an ordinary click: the browser's own text selection is left to run (drag,
+// native double/triple-click word/line select, a native Shift+click extending
+// an existing selection — all of them). It only SEEDS which row/call-segment/
+// card the gesture *started* on — `cb` is home.mjs's `beginMouseSelection`,
+// null on a card that never wired one up (a preview/testClass card), so this
+// is a plain no-op there. The actual resolution (a plain click vs. a real,
+// possibly multi-row selection) happens once, on the next `mouseup`, by
+// reading `window.getSelection()` — see "Line selection: click and browser
+// text selection" in .claude/docs/diff-render.md.
 //
-// It also passes the `data-call-seg` of whichever call-segment span (see
-// rowCellHTML's own `callSegs`) the click landed inside, or `null` when it
-// didn't — home.mjs's top-level selectRowAt uses this to select that exact
-// 'call' segment instead of the whole 'line' on a single click (reviewer:
-// "als ik op code druk... call, als ik naast characters klik... line"). A
-// drilled column's own onRowMouseDown closure simply never reads this third
-// argument, which is what keeps a drilled column's click 'line'-only.
+// It passes the `data-call-seg` of whichever call-segment span (see
+// rowCellHTML's own `callSegs`) the mousedown landed inside, or `null` when it
+// didn't — home.mjs's top-level resolveClickSelection uses this to select
+// that exact 'call' segment instead of the whole 'line' on a plain click
+// (reviewer: "als ik op code druk... call, als ik naast characters klik...
+// line"). A drilled column's own beginMouseSelection closure simply never
+// passes this through, which is what keeps a drilled column's click
+// 'line'-only.
+//
+// It also passes `e.shiftKey` — a Shift+click is ALWAYS resolved via app
+// state (home.mjs's resolveShiftClickSelection), never via the browser's own
+// native selection-extend behaviour: this app's diff panes reassign their
+// entire `.innerHTML` on every relevant state change, which makes a native
+// selection an unreliable anchor to extend from across two separate clicks
+// — see "Line selection: click and browser text selection" in
+// .claude/docs/diff-render.md.
 //
 // `onApprove` (opts.onApproveClick, home.mjs's approveClickAt) is checked
 // FIRST, before any of the plain row-selection logic above: a click landing
@@ -2253,7 +2260,9 @@ function onPaneClick(rows, e) {
 // selecting AND approving on the same click, which a second, separately-wired
 // `@click` listener firing after this `@mousedown` would otherwise risk. The
 // line/group gutter toggles this used to also route (`[data-approve-toggle]`)
-// were removed — see rowApproveEnabled's own doc comment.
+// were removed — see rowApproveEnabled's own doc comment. This is the one
+// remaining branch that still calls `preventDefault()`/`stopPropagation()` —
+// a dot is a small, isolated click target, not a text-selection surface.
 function onBlockMouseDown(e, cb, onApprove) {
   if (e.button !== 0) return
   const el = e.target && e.target.closest && e.target.closest('[data-row]')
@@ -2276,16 +2285,7 @@ function onBlockMouseDown(e, cb, onApprove) {
   if (Number.isNaN(i)) return
   const segEl = e.target && e.target.closest && e.target.closest('[data-call-seg]')
   const segStart = segEl ? +segEl.getAttribute('data-call-seg') : null
-  e.preventDefault()
-  cb(i, e.detail, segStart == null || Number.isNaN(segStart) ? null : segStart)
-}
-function onBlockMouseMove(e, cb) {
-  if (!cb || (e.buttons & 1) === 0) return
-  const el = e.target && e.target.closest && e.target.closest('[data-row]')
-  if (!el) return
-  const i = +el.getAttribute('data-row')
-  if (Number.isNaN(i)) return
-  cb(i)
+  cb(i, segStart == null || Number.isNaN(segStart) ? null : segStart, e.currentTarget, e.shiftKey)
 }
 
 // onCallSegHover toggles the `call-seg-hover` marker (index.html's own
@@ -2294,10 +2294,10 @@ function onBlockMouseMove(e, cb) {
 // element `mouseover`/`mouseout` fired on — because one logical segment can
 // render as several adjacent spans (see CALL_HOVER_CLS's own doc comment).
 // `mouseover`/`mouseout` (not `mouseenter`/`mouseleave`, which don't bubble)
-// delegated on the whole card, same shape as onBlockMouseDown/
-// onBlockMouseMove above — always wired (no opt-out), since it's a pure CSS
-// class toggle with no side effect on `state` at all, unlike the click/drag
-// handlers, which stay opt-in per card via `cb`.
+// delegated on the whole card, same shape as onBlockMouseDown above — always
+// wired (no opt-out), since it's a pure CSS class toggle with no side effect
+// on `state` at all, unlike the click handler, which stays opt-in per card via
+// `cb`.
 function onCallSegHover(e, on) {
   if (isSpuriousHover(e)) return
   const el = e.target && e.target.closest && e.target.closest('[data-call-seg]')
@@ -2832,7 +2832,7 @@ export const UNDERLINE_CLS = 'underline decoration-2 decoration-[#6366f1] underl
 // granularity — a grey hover tint, same colour family as the plain-row hover
 // bar (rowCellHTML's `#94a3b8`/`#71717a`), adapted from an inset left BAR to a
 // background TINT because a segment sits mid-line, not at the row's own left
-// edge (see "Line selection: hover, click, drag-range" in
+// edge (see "Line selection: click and browser text selection" in
 // .claude/docs/diff-render.md). Reviewer request: "als ik op code druk met
 // mijn cursor, dan wil ik het selecteren als call... laat het zien met een
 // grijze hover state" — the hover is what tells the reviewer exactly where a

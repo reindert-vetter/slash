@@ -120,31 +120,46 @@ The **call underline** (`UNDERLINE_CLS`, indigo, the active segment at
 `gran==='call'`) is a separate layer on the same `markChars` pass and works
 unchanged, also on a line without a word background.
 
-## Line selection: hover, click, drag-range
+## Line selection: click and browser text selection
 
-Reviewer request: "ik wil dat ik een lijn kan selecteren, hover moet links een
-grijs verticaal feedback geven. klik moet selecteren, muis inhouden en naar
-beneden of naar boven moet meerdere lines kunnen selecteren." The mouse is a
-full alternative input to the existing keyboard cursor, never a parallel
-implementation — a click always resolves to `unitAtRow` (the same
-gran-switch-re-anchoring lookup `setGran`/`setDrillGran` already use) and a
-drag reuses the exact `state.rangeAnchor`/`rangeUnit`/`isRangeGran` mechanism
-Shift+↑/↓ built (see "Shift+↑/↓" in keyboard-navigation.md) — just driven by
-`mousemove` instead of a held key.
+Reviewer request: "ik wil dat huidige manier van selecteren in de diff met
+mijn muis weg gaat [...] ik wil de browser selectie manier gebruiken" — the
+mouse used to reimplement its own click-count-based line/group/whole-block
+scheme and its own hand-rolled drag range, fighting the browser's native text
+selection the whole time (`preventDefault()` on every row mousedown). That is
+gone: the diff is now **ordinary selectable text**, and the app only
+translates whatever the browser ends up selecting into a navigation unit,
+once, right after the gesture finishes.
 
-- **Hover (CSS only, no state):** `rowCellHTML`'s non-active row branch gets a
-  `hover:` grey inset bar (same colour family as the dimmed cursor bar,
-  `#94a3b8`/`#71717a`) plus `cursor-pointer`, but only while `focused` (this
-  card already owns, or could take over, the keyboard — mirrors
-  `diffActive()`): a look-ahead preview/testClass card never shows it. Written
-  as `inset_2px_0px_0px_...` (equivalent CSS to `inset_2px_0_0_...`, a zero
-  length parses the same with or without a unit) rather than the exact
-  substring the dimmed cursor bar uses — `tests/diff-active-row-dim.spec.mjs`
-  greps the `class` attribute for that literal token, and a *possible* hover
-  class would otherwise always match it regardless of actual `:hover` state.
-- **Click:** one delegated `@mousedown`/`@mousemove` pair on the whole card
-  (`Block()`'s own `<article>`, `onBlockMouseDown`/`onBlockMouseMove` in
-  `Block.mjs`) rather than threading two more callbacks through
+Three follow-up answers shaped the exact translation rule:
+
+1. **A real (non-collapsed) selection always rounds up to whole LINES** —
+   "afronden op hele regels: elke aangeraakte regel wordt meegenomen" — `gran`
+   is unconditionally forced to `'line'` (never `'group'`/`'call'`), and there
+   is no "unchanged line → no interaction" exception here: any real selection
+   resolves to *some* line range, each end snapped to the nearest real unit
+   exactly like a gran switch already does (`unitAtRow`).
+2. **A genuine click (no drag at all)** selects a call-segment if the click
+   landed on one, else the exact line/reference unit under it, else — "als er
+   geen line is aangepast, dan wil ik daar geen interactie van zien" —
+   **absolutely nothing**: no focus steal, no scroll, no state change. This is
+   the one place a click is *stricter* than before: the old scheme snapped to
+   the NEAREST unit regardless of where exactly the click landed.
+3. **Native double-/triple-click keep their browser-native meaning**
+   ("native (woord/regel)") rather than a custom group/whole-block meaning —
+   this falls out of rule 1 for free, see below. **Shift+click is the one
+   exception**: it is resolved deterministically via app state
+   (`resolveShiftClickSelection`), never via the browser's own native
+   selection-extend behaviour — see why below.
+
+- **Hover (CSS only, no state, unchanged):** `rowCellHTML`'s non-active row
+  branch gets a `hover:` grey inset bar (same colour family as the dimmed
+  cursor bar, `#94a3b8`/`#71717a`) plus `cursor-pointer`, but only while
+  `focused` (this card already owns, or could take over, the keyboard —
+  mirrors `diffActive()`): a look-ahead preview/testClass card never shows it.
+- **Mousedown only SEEDS the gesture** — one delegated `@mousedown` on the
+  whole card (`Block()`'s own `<article>`, `onBlockMouseDown` in `Block.mjs`)
+  rather than threading a callback through
   `codeDiff`/`codePane`/`unifiedCodeDiff`/`paneHTML`'s already long positional
   parameter lists — a row div lives inside whichever pane's `<code>` is
   currently rendered, and `data-row` (only on the canonical metadata-carrying
@@ -152,53 +167,84 @@ Shift+↑/↓ built (see "Shift+↑/↓" in keyboard-navigation.md) — just dri
   In a **split** diff that canonical line is now, unconditionally, the
   new/right pane's own row — a click landing in the old/left pane finds no
   `data-row` ancestor at all and is a no-op — see "Only the new/right pane
-  drives selection" below. `onBlockMouseMove` only
-  acts while `e.buttons` still shows the primary button held, so a plain hover
-  costs nothing and no separate "dragging" flag or global `mouseup` listener
-  is needed — mouseup anywhere simply clears `e.buttons` for every later
-  `mousemove`. `home.mjs`'s `selectRowAt(level, b, i, row, clickCount)`
-  (`level` 0 = top-level diff, >0 = a drilled column's own focus level)
-  resolves the row to a unit via `unitAtRow` and sets `state.change` (or the
-  drilled column's own `drillCursor` entry) directly — no scrolling, the
-  reviewer already sees the row they clicked.
-- **A click ALWAYS forces the target gran, overriding whatever the keyboard
-  had left active — even `'call'`.** Reviewer request: "als ik met mijn muis
-  een lijn selecteer, dan wil ik per lijn selecteren en niet per groep",
-  confirmed to also override `'call'`. `onBlockMouseDown` passes along the
-  browser's own `MouseEvent.detail` (its native consecutive-click counter —
-  1/2/3, using the platform's own double-click timing/distance threshold, the
-  same signal a native `dblclick` uses) so `clickGranFor(clickCount)` can tell
-  a plain click from a double/triple one **without a hand-rolled timer**:
-  - **1× (single):** `'line'` — the one clicked line/reference unit.
-  - **2× (double):** `'group'` — the whole change-group the clicked line sits
-    in (reviewer: "als ik dubbelklik, dan wil ik de groep selecteren").
-  - **3×+ (triple):** every line-granularity unit of the **currently open
-    block** merged into one range (`state.rangeAnchor = 0`,
-    `state.change = units.length - 1`) — reviewer: "als ik 3 keer klik, dan
-    wil ik alle regels uit het bestand selecteren", explicitly confirmed to
-    mean the open **block**, never a same-file neighbour or literally every
-    block in the file: `rangeUnit`/approve/comment are hard-scoped to one
-    block everywhere else in the app, and only a block-scoped destination is
-    reachable by keyboard at all (repeated Shift+ArrowDown from the first to
-    the last unit reaches the exact same end state — see mouse-navigation.md
-    Rule 2, a mouse-only shortcut must still be keyboard-reachable).
-  - A **drilled column** deliberately keeps only the single-line click — no
-    double/triple-click depth there at all (reviewer: "alleen top-level"). Its
-    own `gran` is unconditionally forced to `'line'` on every click there
-    regardless of `clickCount`.
-  - **TRANSLATION blocks are excluded everywhere** (their `gran` stays pinned
-    at `'group'` — see `navUnitsOf`/`setGran`/`extendRange`'s own exclusion,
-    above): every click there keeps selecting the one key-row it always did,
-    click count ignored.
+  drives selection" below. `onBlockMouseDown` no longer calls
+  `preventDefault()` for this (the seg-dot approve branch, below, still does —
+  that is a small, isolated click target, not a text-selection surface) and
+  passes `(row, segStart, cardEl, shiftKey)` to `home.mjs`'s
+  `beginMouseSelection` (`cardEl` is the mousedown's own `e.currentTarget`),
+  which only records a plain, non-reactive `pendingMouseSelection = { level,
+  b, i, row, segStart, cardEl, shiftKey }` — `level` 0 = top-level diff, >0 =
+  a drilled column's own focus level. Nothing in `state` changes yet: at
+  mousedown time it isn't known whether the gesture will end up a plain
+  click or a real selection.
+- **Resolution happens exactly once, on the next `mouseup`**
+  (`resolvePendingMouseSelection`, the same document-level listener
+  `schedulePassiveMenu` already deferred to — see its own doc comment further
+  down):
+  - **`shiftKey` is checked FIRST, before `window.getSelection()` is ever
+    read** → `resolveShiftClickSelection(pending)`: extends
+    `state.rangeAnchor`/`state.change` (or the drilled column's own
+    `drillCursor` entry) to the clicked row, mirroring the OLD
+    keyboard-driven `extendRange`'s own row-index logic verbatim (just
+    resolved once here instead of continuously on every mousemove of a
+    drag). **Deliberately never resolved via the browser's own native
+    selection-extend behaviour**, unlike everything else on this list —
+    every diff pane is one big `.innerHTML` string, reassigned WHOLESALE on
+    every `state.change`/`gran` write (`codePane`/`paneHTML`), so the very
+    state mutation a PRECEDING plain click just made destroys every row's
+    DOM node, including whichever one held the browser's native caret. A
+    following native Shift+click then has no valid anchor left to extend
+    from — observed in testing: Chrome doesn't cleanly collapse the
+    selection in that case, it silently reassigns the anchor to the FIRST
+    node of the new container instead, several rows away from where the
+    reviewer actually clicked. Falls through to `resolveClickSelection`
+    when the clicked card doesn't already own the keyboard (no earlier
+    selection there to extend from). Test: `tests/shift-click-range.spec.mjs`.
+  - **No selection, or a COLLAPSED one** → `resolveClickSelection(pending)`:
+    rule 2 above. A call-segment first (`segStart != null`, looked up in
+    `navUnitsOf(b, rows, 'call')` the same way as before), else the exact
+    line/reference unit the row belongs to
+    (`units.findIndex((u) => u.start <= row && row <= u.end)` — deliberately
+    **not** the nearest-fallback `unitAtRow`, so an unchanged, non-landable row
+    resolves to `-1` and the function returns immediately, before even calling
+    `ensureTopLevelDiffFocus`). TRANSLATION blocks are excluded from the
+    call-segment branch (their `gran` stays pinned at `'group'` — see
+    `navUnitsOf`/`setGran`/`extendRange`'s own exclusion) — every click there
+    keeps landing on the one key-row it always did.
+  - **A real, non-collapsed selection whose two ends (`sel.anchorNode`,
+    `sel.focusNode`) both resolve to a `[data-row]` inside the SAME `cardEl`
+    the gesture started on** (`rowOfNode`, which returns `null` rather than
+    guessing when a selection spilled outside that card) →
+    `resolveRangeSelection(pending, startRow, endRow)`: rule 1 above — always
+    `gran: 'line'`, both ends snapped via the ordinary nearest-fallback
+    `unitAtRow`, `state.rangeAnchor`/`state.change` (or the drilled column's
+    own `drillCursor` entry) set directly from the two resolved unit indices.
+    Never for a TRANSLATION block (same exclusion as above) — a selection
+    there just falls back to a plain click on its own start row. Deliberately
+    does **not** try to refocus a different card: a selection that spilled
+    outside the originating card resolves to `null` ends and is treated as a
+    plain click on the mousedown's own row instead.
+  - This is also what makes **native double-click** (word select) and
+    **native triple-click** (paragraph select — browsers scope this to the
+    nearest block-level ancestor, which is the row's own `<div>` here, so
+    `startRow === endRow`) resolve correctly with **zero** extra code: each
+    simply produces a genuine, non-collapsed `Selection` self-contained
+    within one row, and `resolveRangeSelection` doesn't care how that
+    selection came to exist. Unlike Shift+click, neither of these depends on
+    a PRIOR selection surviving a render, which is exactly why they're safe
+    to read natively.
+  - The native selection itself is deliberately **left in place** afterwards
+    (never cleared) — that visible native highlight is literally "de browser
+    selectie" the reviewer asked to see for a genuine drag/double-/
+    triple-click.
 - **A single click landing INSIDE a real call-segment selects that exact
-  segment at `'call'` granularity instead of `'line'`.** Reviewer follow-up:
-  "als ik op code druk met mijn cursor, dan wil ik het selecteren als call,
-  als ik naast characters klik, dan wil ik het selecteren als line" —
-  top-level only (confirmed), and only on the row's NEW/right side (confirmed
-  "oude kant alleen 'line'" — the old/left pane never carries a call
-  selection at all, `changeCalls` only ever segments the new text). A row
-  whose new text has no real call structure (a blank line, or one the click
-  isn't actually inside) falls back to `'line'` (confirmed default).
+  segment at `'call'` granularity instead of `'line'`** (unchanged from
+  before, just now scoped to a genuine click, see rule 2) — top-level only,
+  and only on the row's NEW/right side (confirmed "oude kant alleen 'line'" —
+  the old/left pane never carries a call selection at all, `changeCalls` only
+  ever segments the new text). A row whose new text has no real call structure
+  (a blank line, or one the click isn't actually inside) falls back to
+  `'line'`.
   - `rowCellHTML` wraps every call-chain segment of a call-eligible row
     (`sideKey==='right' && r.rightMark==='ins' && r.right != null`, only
     while `focused`) in a hoverable+clickable span via the same `markChars`
@@ -212,12 +258,11 @@ Shift+↑/↓ built (see "Shift+↑/↓" in keyboard-navigation.md) — just dri
     both merge this in alongside the existing `underline`/`segDots` concerns.
   - `onBlockMouseDown` (`Block.mjs`) additionally resolves
     `e.target.closest('[data-call-seg]')` and passes that segment's start (or
-    `null`) as a third argument to `onRowMouseDown` — `home.mjs`'s top-level
-    `selectRowAt` uses it (only at `clickCount === 1`, never for a
-    double/triple click) to look up the matching unit in
+    `null`) as the second argument to `onRowMouseDown` — `home.mjs`'s
+    top-level `resolveClickSelection` uses it to look up the matching unit in
     `navUnitsOf(b, rows, 'call')` (`u.start === row && u.segStart === segStart`)
     and select it directly, `gran` forced to `'call'`. A drilled column's own
-    `onRowMouseDown` closure simply never reads this third argument, which is
+    `beginMouseSelection` closure simply never passes this through, which is
     what keeps a drilled column's click `'line'`-only with zero extra code.
   - **The hover is not a bare Tailwind `hover:` class.** Prism's own token
     tags (`<span class="token ...">`) interrupt the character stream
@@ -231,7 +276,7 @@ Shift+↑/↓ built (see "Shift+↑/↓" in keyboard-navigation.md) — just dri
     `CALL_HOVER_CLS` is therefore a plain `call-seg` marker with no visual
     effect of its own; `onCallSegHover(e, on)` — a delegated `@mouseover`/
     `@mouseout` pair on the same `<article>`, always wired (not opt-in like
-    the click/drag handlers, since it only toggles a CSS class, no `state`
+    the click handler, since it only toggles a CSS class, no `state`
     write) — finds every sibling span sharing the hovered one's
     `data-call-seg` value within the same row and toggles `call-seg-hover` on
     all of them together, so the whole segment highlights as one block
@@ -241,48 +286,41 @@ Shift+↑/↓ built (see "Shift+↑/↓" in keyboard-navigation.md) — just dri
     zinc-700), with the usual light + two dark mirrors (`@media` and
     `:root[data-theme='dark']`) — see "What can't use a Tailwind `dark:`
     variant" in `.claude/rules/conventions.md`.
-- **Drag-range:** `extendRowRange(level, b, row)` mirrors `extendRange`/
-  `drillExtendRange`'s `rangeAnchor` mechanism, but **always ranges per LINE**
-  — reviewer confirmed this explicitly ("slepen ook per lijn... nooit per
-  groep"), so unlike `extendRange`/`drillExtendRange` (which operate on
-  whichever `gran` is already active) this unconditionally forces `gran`
-  (`state.gran`/`cur.gran`) to `'line'` the moment a drag actually moves,
-  regardless of whether the initiating click was a double/triple one. Never
-  for a TRANSLATION block (same exclusion as above — no line/group
-  distinction to force there at all). Deliberately does **not** try to
-  refocus a different card: a drag only ever extends a selection a preceding
-  `selectRowAt` already focused, so a stray `mousemove` over some other card's
-  row while the button is still down is simply ignored.
 - **A click on a non-focused card focuses it first, exactly like the
   keyboard would** (reviewer follow-up: "een klik op een andere kaart dan de
   focus kaart moet dat kaart focussen alsof je gewoon met je key er
   navigeert" — mouse-navigation.md, Rule 1: reuse the function, never a
-  parallel implementation). `ensureTopLevelDiffFocus(i)` (`home.mjs`) reuses
+  parallel implementation). `ensureTopLevelDiffFocus(i)` (`home.mjs`, called
+  from both `resolveClickSelection` and `resolveRangeSelection`) reuses
   `expandColumn(0)`/`leaveRelated()` (mirrors repeated ← out of a drilled
   column or the comments/Onderliggende-code panel), `stepBlock` (mirrors ↓
   flowing across a same-file boundary — only tried once already in diff mode,
   since that "flow" concept doesn't exist from list mode), and the ←(list)
   →(`enterDiff`) fallback for a different-file neighbour or a still-list-mode
-  click. `selectRowAt`'s own `unitAtRow` lookup then overrides whatever
-  landing unit `stepBlock`/`enterDiff` picked, so the reviewer always ends up
-  exactly on the clicked row. The two visible non-focused full cards this
+  click. The caller's own unit lookup then overrides whatever landing unit
+  `stepBlock`/`enterDiff` picked, so the reviewer always ends up exactly on
+  the clicked/selected row. The two visible non-focused full cards this
   applies to: the top-level look-ahead preview (`i === sel + 1` in the
   `pair.forEach` block-column loop) and a drilled column's own sibling preview
   (`drillPreviewColumns`, focused via `focusDrillPreviewSibling` →
   `drillToSibling`, since that preview always renders nested inside the
   ALREADY-focused column — no level change needed there, only the sideways
-  sibling swap). A drilled column that isn't the focused one is always a
-  collapsed rail instead (no rows to click at all) — its own click already
-  calls `expandColumn`, unrelated to this feature.
+  sibling swap; this one call site resolves eagerly at mousedown instead of
+  deferring to mouseup, since a still-unfocused preview never supports a
+  drag/selection range, only the single row clicked). A drilled column that
+  isn't the focused one is always a collapsed rail instead (no rows to click
+  at all) — its own click already calls `expandColumn`, unrelated to this
+  feature.
 
-Test: `tests/diff-row-mouse-select.spec.mjs` (a single click forces `'line'`
-even from `'group'`/`'call'`, a double-click selects the group, a triple-click
-selects the whole open block, a mousedown+mousemove drag produces the same
-3-of-4-lines range `range-select.spec.mjs`'s Shift+ArrowDown x2 does, a click
-directly on a real (Prism-multi-token) call-segment selects it at `'call'`
-with the whole segment's hover toggling together, a drilled column's
-double-click still only selects the one line, and a click on the look-ahead
-preview focuses + selects it).
+Test: `tests/diff-row-mouse-select.spec.mjs` (a genuine click always forces
+`'line'` even from `'group'`/`'call'`, a native double-/triple-click still
+only selects the one line it lands on, a mousedown+drag native selection
+produces the same 3-of-4-lines range `range-select.spec.mjs`'s
+Shift+ArrowDown x2 does, a click directly on a real (Prism-multi-token)
+call-segment selects it at `'call'` with the whole segment's hover toggling
+together, a click on an unchanged/non-landable line is a no-op, a drilled
+column's double-click still only selects the one line, and a click on the
+look-ahead preview focuses + selects it).
 
 ## Only the new/right pane drives selection — the old/left pane is display-only
 

@@ -7051,15 +7051,47 @@ function drillExtendRange(level, delta) {
   scrollChangeIntoView()
 }
 
-// ── Mouse line selection: click, hover (CSS only, see Block.mjs), drag-range ──
-// Wired via Block()'s onRowMouseDown/onRowMouseMove opts (home.mjs's own
-// Block(...) call sites below), fired from the delegated onBlockMouseDown/
-// onBlockMouseMove in Block.mjs. Mirrors the keyboard exactly: a plain click
-// is the mouse equivalent of "jump straight to the unit under the cursor"
-// (unitAtRow, the same re-anchoring lookup a gran switch already uses), and a
-// drag is the mouse equivalent of Shift+ArrowUp/Down (isRangeGran/rangeAnchor
-// — the identical mechanism, just driven by mousemove instead of a held key).
-// See "Line selection: hover, click, drag-range" in
+// ── Mouse line selection: native browser text selection, resolved on mouseup ──
+// Wired via Block()'s onRowMouseDown opt (home.mjs's own Block(...) call sites
+// below), fired from the delegated onBlockMouseDown in Block.mjs. Reviewer
+// request: "ik wil dat huidige manier van selecteren in de diff met mijn muis
+// weg gaat [...] ik wil de browser selectie manier gebruiken" — a mousedown on
+// a row no longer resolves anything itself; it only SEEDS which row/call-
+// segment/card the gesture started on (beginMouseSelection, below), and the
+// browser's own text selection is left completely alone (Block.mjs no longer
+// calls preventDefault() for it). The gesture is resolved exactly ONCE, on the
+// next `mouseup` (the same deferred moment schedulePassiveMenu already used,
+// further down), by reading `window.getSelection()`:
+//
+// - **Shift+click is checked FIRST, before ever reading the native
+//   selection** → resolveShiftClickSelection: extends the app's OWN
+//   rangeAnchor/change (or the drilled column's own drillCursor entry) to the
+//   clicked row, exactly like the old keyboard-driven extendRowRange did.
+//   Deliberately NOT resolved via the browser's native selection-extend
+//   behaviour — every diff pane is one big `.innerHTML` string, reassigned
+//   WHOLESALE on every `state.change`/`gran` write, so the state mutation a
+//   PRECEDING plain click just made destroys every row's DOM node, including
+//   whichever one held the browser's native caret; a following Shift+click
+//   then has no valid anchor left to extend from (observed: Chrome doesn't
+//   cleanly collapse the selection in that case, it silently reassigns the
+//   anchor to the first node of the new container — silently WRONG, not
+//   merely absent). See resolveShiftClickSelection's own comment.
+// - No selection at all, or a COLLAPSED one (a plain click with no drag) →
+//   resolveClickSelection: a call-segment first, else the exact line/
+//   reference unit the click landed on, else — reviewer confirmed — NO
+//   interaction at all ("als er geen line is aangepast, dan wil ik daar geen
+//   interactie van zien").
+// - A real, non-collapsed selection whose two ends both resolve to a
+//   `[data-row]` inside the SAME card the gesture started on →
+//   resolveRangeSelection: rounds up to every touched LINE (never per group,
+//   never per call — reviewer: "afronden op hele regels"), reusing the exact
+//   nearest-fallback `unitAtRow` lookup a gran switch already uses. This is
+//   also what makes a native double/triple-click (word/paragraph select,
+//   confined to one row's own <div>, and self-contained — it never depends
+//   on a PRIOR selection the way Shift+click would) fall out of this SAME
+//   mechanism for free.
+//
+// See "Line selection: click and browser text selection" in
 // .claude/docs/diff-render.md.
 
 // ensureTopLevelDiffFocus brings the keyboard fully onto the top-level diff of
@@ -7071,9 +7103,10 @@ function drillExtendRange(level, delta) {
 // the comments/Onderliggende-code panel, stepBlock mirrors ↓ flowing across a
 // same-file boundary, and the ← (list) → (enterDiff) fallback mirrors the
 // general path for a different-file neighbour (there is no same-file flow to
-// reuse there). Called from selectRowAt below; the caller's own unitAtRow
-// lookup then overrides whatever landing unit stepBlock/enterDiff picked, so
-// the reviewer always ends up exactly on the row they clicked.
+// reuse there). Called from resolveClickSelection/resolveRangeSelection
+// below; the caller's own unit lookup then overrides whatever landing unit
+// stepBlock/enterDiff picked, so the reviewer always ends up exactly on the
+// row they clicked/selected.
 function ensureTopLevelDiffFocus(i) {
   if (state.focusLevel > 0) expandColumn(0)
   else if (relatedActive()) leaveRelated()
@@ -7095,61 +7128,149 @@ function ensureTopLevelDiffFocus(i) {
   enterDiff()
 }
 
-// clickGranFor maps a click's consecutive-click count (Block.mjs's
-// onBlockMouseDown, the browser's own `e.detail` — 1 = single, 2 = double,
-// 3+ = triple, using the platform's own double-click timing/distance
-// threshold, same as a native dblclick) onto the granularity a TOP-LEVEL
-// click should target: 1x = 'line', 2x = the group containing that line, 3x+
-// also resolves to 'line' — the "select the whole block" case below is built
-// out of line-granularity units, exactly the shape a merged Shift+arrow range
-// already has. Reviewer request: "als ik dubbelklik, dan wil ik de groep
-// selecteren, als ik 3 keer klik, dan wil ik alle regels uit het bestand
-// selecteren" (see selectRowAt's own comment for the "whole block, never
-// whole file" scope decision).
-function clickGranFor(clickCount) {
-  return clickCount === 2 ? 'group' : 'line'
+// pendingMouseSelection is the plain (non-reactive) module-level record a
+// mousedown seeds — never touches `state` itself, since a mousedown doesn't
+// yet know whether the gesture will end up a plain click or a real drag/
+// native selection. Cleared by resolvePendingMouseSelection on the very next
+// mouseup, so it never survives past the gesture that set it.
+let pendingMouseSelection = null
+
+// beginMouseSelection is Block()'s onRowMouseDown callback (see the two
+// DetailPanel call sites below): `level`/`b`/`i` are exactly the plumbing
+// resolveClickSelection/resolveRangeSelection need (0 = top-level diff, >0 =
+// a drilled column's own focus level; `i` only meaningful at level 0).
+// `segStart` is null from a drilled column's own closure, which keeps a
+// drilled column's click 'call'-free, same as before. `cardEl` is the
+// mousedown's own `e.currentTarget` (Block.mjs) — the card the gesture
+// started on, used by rowOfNode below to scope a resolved selection to it.
+// `shiftKey` is only ever read as resolveShiftClickSelection's own trigger (see
+// the file-level comment above).
+function beginMouseSelection(level, b, i, row, segStart, cardEl, shiftKey) {
+  pendingMouseSelection = { level, b, i, row, segStart, cardEl, shiftKey }
 }
 
-// selectRowAt handles a mousedown on a diff row: `level` is 0 for the
-// top-level diff, or the drilled column's own focus level. `i` is the block's
-// own index in state.blocks, only meaningful for level 0 (a drilled column has
-// no sidebar index of its own — it's already the sole thing rendered at its
-// level once focused, see keyboard-navigation.md's drilling section).
-//
-// A click ALWAYS forces the target gran to 'line' or 'group' (clickGranFor),
-// overriding whatever finer/coarser gran the keyboard had left active — even
-// 'call' (reviewer: "als ik met mijn muis een lijn selecteer, dan wil ik per
-// lijn selecteren en niet per groep"; confirmed this also overrides 'call') —
-// UNLESS a single click landed inside a real call-segment (`segStart`,
-// Block.mjs's `data-call-seg`), in which case it selects that exact segment
-// at 'call' granularity instead (reviewer follow-up: "als ik op code druk met
-// mijn cursor, dan wil ik het selecteren als call, als ik naast characters
-// klik, dan wil ik het selecteren als line"). `clickCount`/`segStart` only
-// drive that top-level scheme — a drilled column deliberately keeps ONLY the
-// single-line click (still always forced to 'line', no double/triple-click
-// depth and no call-segment precision there at all, per reviewer request: its
-// own onRowMouseDown closure never even passes these two arguments through).
-// TRANSLATION blocks are excluded everywhere (their gran stays pinned at
-// 'group' — see navUnitsOf/setGran/extendRange's own exclusion): every click
-// there keeps selecting the one key-row it always did, regardless of click
-// count or position.
-//
-// Every branch that actually lands a selection also calls
-// schedulePassiveMenu() — the command palette then shows itself, passively,
-// right under the newly selected unit, once the mouse button is RELEASED
-// (see schedulePassiveMenu's own doc comment for why not immediately: this
-// same mousedown may still turn into a multi-row drag via extendRowRange,
-// and showing the palette right away would visually cover the very rows
-// being dragged over).
-function selectRowAt(level, b, i, row, clickCount = 1, segStart = null) {
-  const isTranslation = !!(b && b.category === 'TRANSLATION')
+// rowOfNode walks a Selection endpoint (a DOM Node — often a Text node) up to
+// its nearest `[data-row]` ancestor and returns that row's numeric index, but
+// ONLY when that element actually sits inside `cardEl` — the card the
+// gesture's own mousedown started on. A selection that spilled into a
+// different card (or outside any diff row entirely, e.g. into a comment/
+// description column) must never be resolved against THIS card's units, so
+// this returns null rather than guessing.
+function rowOfNode(node, cardEl) {
+  if (!node || !cardEl) return null
+  const el = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement
+  const rowEl = el && el.closest && el.closest('[data-row]')
+  if (!rowEl || !cardEl.contains(rowEl)) return null
+  const row = +rowEl.getAttribute('data-row')
+  return Number.isNaN(row) ? null : row
+}
+
+// resolvePendingMouseSelection is called from the document's own `mouseup`
+// listener (the same one schedulePassiveMenu already defers to, further
+// down), exactly once per gesture. See the file-level comment above for the
+// click-vs-range decision. Shift+click is checked FIRST, before ever reading
+// `window.getSelection()` — it is resolved via app state alone
+// (resolveShiftClickSelection), never via the browser's own native
+// selection-extend behaviour. That is a deliberate departure from "just read
+// whatever the browser selected", forced by this app's own rendering: a
+// diff pane is one big `.innerHTML` string, reassigned WHOLESALE on every
+// `state.change`/`gran` write (see "`blockRows(b)` is memoized" in
+// diff-render.md) — so the very state mutation a PRECEDING plain click just
+// made destroys every row's DOM node, including whichever one the browser's
+// native caret pointed at. A subsequent Shift+click then has no valid native
+// anchor to extend from any more; observed in testing, Chrome doesn't cleanly
+// collapse the selection in that case, it silently reassigns the anchor to
+// the first node of the (new) container instead — silently wrong, not merely
+// absent. A genuine drag (one continuous mousedown→mouseup, no state
+// mutation in between) and a native double-/triple-click (self-contained,
+// never depends on a PRIOR selection) don't have this problem, so they still
+// read `window.getSelection()` directly, below.
+function resolvePendingMouseSelection() {
+  const pending = pendingMouseSelection
+  pendingMouseSelection = null
+  if (!pending) return
+  if (pending.shiftKey) {
+    if (!resolveShiftClickSelection(pending)) resolveClickSelection(pending)
+    return
+  }
+  const sel = window.getSelection()
+  if (sel && !sel.isCollapsed) {
+    const startRow = rowOfNode(sel.anchorNode, pending.cardEl)
+    const endRow = rowOfNode(sel.focusNode, pending.cardEl)
+    if (startRow != null && endRow != null) {
+      resolveRangeSelection(pending, startRow, endRow)
+      return
+    }
+  }
+  resolveClickSelection(pending)
+}
+
+// resolveShiftClickSelection extends the app's OWN keyboard/mouse-set cursor
+// (state.rangeAnchor/state.change, or the drilled column's own drillCursor
+// entry) to the clicked row — deliberately never via the browser's native
+// selection-extend behaviour (see resolvePendingMouseSelection's own comment
+// for why that's unreliable here). Mirrors the old extendRowRange's own
+// row-index logic verbatim, just resolved once here instead of continuously
+// on every mousemove of a drag. Never for a TRANSLATION block, same
+// exclusion as resolveRangeSelection. Returns whether it actually extended
+// something, so a Shift+click landing on a card that doesn't already own the
+// keyboard falls through to the ordinary "select this row" path
+// (resolveClickSelection) instead — there is no earlier selection on that
+// card to extend from.
+function resolveShiftClickSelection({ level, b, row }) {
+  if (b && b.category === 'TRANSLATION') return false
+  const rows = blockRows(b)
   if (level === 0) {
-    ensureTopLevelDiffFocus(i)
-    if (state.mode !== 'diff' || !isActiveCard(b)) return
-    if (!isTranslation && clickCount === 1 && segStart != null) {
-      const callUnits = navUnitsOf(b, blockRows(b), 'call')
+    if (state.mode !== 'diff' || !isActiveCard(b) || state.focusLevel !== 0) return false
+    state.gran = 'line'
+    const units = navUnitsOf(b, rows, 'line')
+    if (!units.length) return false
+    const target = unitAtRow(units, row)
+    const anchor = state.rangeAnchor != null ? state.rangeAnchor : state.change
+    state.rangeAnchor = anchor
+    state.change = target
+    schedulePassiveMenu()
+    return true
+  }
+  if (state.focusLevel !== level) return false
+  const cur = state.drillCursor[level - 1]
+  if (!cur) return false
+  const units = navUnitsOf(b, rows, 'line')
+  if (!units.length) return false
+  const target = unitAtRow(units, row)
+  const anchor = cur.gran === 'line' && cur.rangeAnchor != null ? cur.rangeAnchor : cur.change
+  state.drillCursor = state.drillCursor.map((c, idx) =>
+    idx === level - 1 ? { ...c, gran: 'line', change: target, rangeAnchor: anchor } : c,
+  )
+  schedulePassiveMenu()
+  return true
+}
+
+// resolveClickSelection implements a genuine click (no drag, no native
+// double/triple-click, no Shift+click extend — those all produce a real
+// selection and go through resolveRangeSelection instead). Reviewer answer:
+// "call selecteren, als er geen call geselecteerd kan worden, dan de line
+// selecteren. als er geen line is aangepast, dan wil ik daar geen interactie
+// van zien" — so a click that lands on neither a real call-segment nor an
+// exact line/reference unit does ABSOLUTELY NOTHING: no focus steal, no
+// scroll, no state change at all (unlike the old click-count scheme, which
+// snapped to the NEAREST unit regardless of exactly where the click landed).
+// `level`/`i` mirror ensureTopLevelDiffFocus's own plumbing (0 = top-level
+// diff, >0 = a drilled column's own focus level; `i` only meaningful at
+// level 0). TRANSLATION blocks are excluded from the call-segment branch
+// (their gran stays pinned at 'group' — see navUnitsOf/setGran's own
+// exclusion): every click there keeps landing on the one key-row under it,
+// same as before.
+function resolveClickSelection({ level, b, i, row, segStart }) {
+  const isTranslation = !!(b && b.category === 'TRANSLATION')
+  const rows = blockRows(b)
+  if (level === 0) {
+    if (!isTranslation && segStart != null) {
+      const callUnits = navUnitsOf(b, rows, 'call')
       const idx = callUnits.findIndex((u) => u.start === row && u.segStart === segStart)
       if (idx >= 0) {
+        ensureTopLevelDiffFocus(i)
+        if (state.mode !== 'diff' || !isActiveCard(b)) return
         state.gran = 'call'
         clearRangeAnchor(0)
         state.change = idx
@@ -7160,81 +7281,82 @@ function selectRowAt(level, b, i, row, clickCount = 1, segStart = null) {
       // rowCallSegments/changeCalls split, so this shouldn't happen) — fall
       // through to the ordinary line click below.
     }
-    if (!isTranslation) state.gran = clickGranFor(clickCount)
-    const units = navUnitsOf(b, blockRows(b), state.gran)
-    if (!units.length) return
-    if (!isTranslation && clickCount >= 3 && units.length > 1) {
-      // 3x click: select every line-granularity unit of the currently OPEN
-      // block at once (never a same-file neighbour — reviewer confirmed
-      // "het hele open blok", explicitly not a cross-block/whole-file
-      // selection, since approve/comment/rangeUnit are hard-scoped to one
-      // block everywhere else and there is no keyboard equivalent that could
-      // ever cross a block boundary either). Same merged-unit shape a
-      // repeated Shift+ArrowDown from the first to the last unit produces.
-      state.rangeAnchor = 0
-      state.change = units.length - 1
-      schedulePassiveMenu()
-      return
-    }
+    const lineUnits = navUnitsOf(b, rows, 'line')
+    const idx = lineUnits.findIndex((u) => u.start <= row && row <= u.end)
+    if (idx < 0) return // no changed/landable line here — no interaction at all
+    ensureTopLevelDiffFocus(i)
+    if (state.mode !== 'diff' || !isActiveCard(b)) return
+    if (!isTranslation) state.gran = 'line'
     clearRangeAnchor(0)
-    state.change = unitAtRow(units, row)
+    state.change = idx
     schedulePassiveMenu()
     return
   }
   if (state.focusLevel !== level) return
-  if (relatedActive()) leaveRelated()
   const cur = state.drillCursor[level - 1]
   if (!cur) return
   const gran = isTranslation ? cur.gran : 'line'
-  const units = navUnitsOf(b, blockRows(b), gran)
-  if (!units.length) return
-  const change = unitAtRow(units, row)
-  state.drillCursor = state.drillCursor.map((c, idx) => (idx === level - 1 ? { ...c, gran, change, rangeAnchor: null } : c))
+  const units = navUnitsOf(b, rows, gran)
+  const idx = units.findIndex((u) => u.start <= row && row <= u.end)
+  if (idx < 0) return // same "no landable unit here → no interaction" rule
+  if (relatedActive()) leaveRelated()
+  state.drillCursor = state.drillCursor.map((c, idx2) => (idx2 === level - 1 ? { ...c, gran, change: idx, rangeAnchor: null } : c))
   schedulePassiveMenu()
 }
 
-// extendRowRange handles every mousemove while the button stays down after a
-// selectRowAt — the drag counterpart of Shift+ArrowUp/Down. Reviewer
-// confirmed a drag ranges per LINE only, never per group — so this always
-// forces gran to 'line' (the one deliberate difference from extendRange/
-// drillExtendRange, which both keep operating on whichever gran is already
-// active), regardless of whether the initiating click was a double/triple
-// one. Never for a TRANSLATION block, the same gate extendRange/
-// drillExtendRange already use (their gran stays pinned at 'group' with no
-// line/group distinction to force). Deliberately does NOT call
-// ensureTopLevelDiffFocus — a drag only ever extends a selection a preceding
-// selectRowAt already focused; a mousemove landing on some other card's row
-// while the button is still down is out of scope and simply ignored.
-function extendRowRange(level, b, row) {
-  if (b && b.category === 'TRANSLATION') return
+// resolveRangeSelection implements a real, non-collapsed selection — a mouse
+// drag, a native double/triple-click (word/paragraph select, always confined
+// to one row's own <div>, so startRow === endRow there), or the browser's own
+// Shift+click extend (which reuses its existing selection anchor) — all of
+// which land here identically, since all three simply produce a genuine
+// Selection spanning from `startRow` to `endRow`. Reviewer answer: "afronden
+// op hele regels: elke aangeraakte regel wordt meegenomen" — gran is
+// unconditionally forced to 'line' (never 'group'/'call'), and unlike
+// resolveClickSelection there is no "unchanged line → no interaction"
+// exception here: a genuine text selection always resolves to SOME line
+// range, snapping each end to the nearest real unit exactly like a gran
+// switch already does (unitAtRow). Never for a TRANSLATION block — the same
+// exclusion setGran/extendRange already apply — so a text selection there
+// simply falls back to a plain click on its start row.
+function resolveRangeSelection(pending, startRow, endRow) {
+  const { level, b, i } = pending
+  if (b && b.category === 'TRANSLATION') {
+    resolveClickSelection({ ...pending, row: startRow, segStart: null })
+    return
+  }
+  const rows = blockRows(b)
+  const lo = Math.min(startRow, endRow)
+  const hi = Math.max(startRow, endRow)
   if (level === 0) {
-    if (state.mode !== 'diff' || !isActiveCard(b) || state.focusLevel !== 0) return
+    ensureTopLevelDiffFocus(i)
+    if (state.mode !== 'diff' || !isActiveCard(b)) return
     state.gran = 'line'
-    const units = navUnitsOf(b, blockRows(b), 'line')
+    const units = navUnitsOf(b, rows, 'line')
     if (!units.length) return
-    const target = unitAtRow(units, row)
-    const anchor = state.rangeAnchor != null ? state.rangeAnchor : state.change
-    state.rangeAnchor = anchor
-    state.change = target
+    state.rangeAnchor = unitAtRow(units, lo)
+    state.change = unitAtRow(units, hi)
+    schedulePassiveMenu()
     return
   }
   if (state.focusLevel !== level) return
   const cur = state.drillCursor[level - 1]
   if (!cur) return
-  const units = navUnitsOf(b, blockRows(b), 'line')
+  const units = navUnitsOf(b, rows, 'line')
   if (!units.length) return
-  const target = unitAtRow(units, row)
-  const anchor = cur.gran === 'line' && cur.rangeAnchor != null ? cur.rangeAnchor : cur.change
+  if (relatedActive()) leaveRelated()
+  const startIdx = unitAtRow(units, lo)
+  const endIdx = unitAtRow(units, hi)
   state.drillCursor = state.drillCursor.map((c, idx) =>
-    idx === level - 1 ? { ...c, gran: 'line', change: target, rangeAnchor: anchor } : c,
+    idx === level - 1 ? { ...c, gran: 'line', change: endIdx, rangeAnchor: startIdx } : c,
   )
+  schedulePassiveMenu()
 }
 
 // approveClickAt resolves a click on one of Block.mjs's call-segment approve
 // markers (a dot or a hover-only ring — see onApproveClick/onBlockMouseDown)
 // to a navigation unit and positions the keyboard there, mirroring
-// selectRowAt's own level/i plumbing verbatim (0 = the top-level diff, >0 = a
-// drilled column's own focus level; `i` only matters at level 0, see
+// resolveClickSelection's own level/i plumbing verbatim (0 = the top-level
+// diff, >0 = a drilled column's own focus level; `i` only matters at level 0, see
 // ensureTopLevelDiffFocus) — a click always forces 'call' granularity, the
 // same "override whatever gran the keyboard had active" rule the plain row
 // click already applies (see "Line selection" in diff-render.md). Once
@@ -7310,8 +7432,8 @@ function approveClickAt(level, b, i, row, kind, segStart) {
 // not the clicked one. `toggleApprove`/`toggleCallApprove`/
 // `afterApproveAction` all now return their promise chain for exactly this —
 // `showPassiveMenu()` is called directly (not the mousedown/mouseup-deferred
-// `schedulePassiveMenu()`) because there is no drag-range gesture to protect
-// here, only a single click; its own `if (menu.open) return` guard already
+// `schedulePassiveMenu()`) because there is no multi-row selection gesture to
+// protect here, only a single click; its own `if (menu.open) return` guard already
 // makes this a no-op when the chain instead opened a real, keyboard-owning
 // menu (the "nothing left ahead" → reviewApprove/reviewChoice branch).
 function mouseApprove() {
@@ -9959,28 +10081,33 @@ function closeMenu() {
 // zien onder de onderste geselecteerde regel (zelfde menu als enter)" —
 // this is the mouse-selection replacement for the removed per-row/group
 // gutter approve toggles (see approval.md's "Approving from the mouse").
-// Called only from a mouse-driven row selection (selectRowAt) — never on
-// load or on a keyboard step, per explicit reviewer answer ("alleen na een
-// muisklik"). A no-op while the real menu is already open: a stray mouse
-// event reaching here while `open` is true must not overwrite its `ms`.
+// Called only from a mouse-driven row selection (resolveClickSelection/
+// resolveRangeSelection) — never on load or on a keyboard step, per explicit
+// reviewer answer ("alleen na een muisklik"). A no-op while the real menu is
+// already open: a stray mouse event reaching here while `open` is true must
+// not overwrite its `ms`.
 // schedulePassiveMenu defers showPassiveMenu to the next `mouseup` instead of
-// calling it right from the `mousedown` that lands a selection
-// (selectRowAt): a mousedown is also the START of a possible drag-range
-// (extendRowRange, "Line selection: hover, click, drag-range" in
-// diff-render.md) — showing the preview immediately, positioned under the
-// FIRST clicked row, would float on top of the very next rows the drag is
-// about to sweep over, since it's a real `position:fixed` element with a
-// z-index above the diff. Waiting for `mouseup` shows it only once the
-// gesture (plain click OR finished drag) is actually done, positioned under
-// the FINAL selection either way (menuAnchor always reads the current,
-// possibly range-extended, `[data-change-active-end]`). One flag, one
-// listener, added once — `mouseup` always follows a `mousedown` (even a
-// click that never moves), so this never leaves the flag stuck.
+// calling it right from the `mousedown` that starts a gesture: the SAME
+// mousedown may still turn into a real drag/native-selection range
+// (resolvePendingMouseSelection, "Line selection: click and browser text
+// selection" in diff-render.md) — showing the preview immediately, positioned
+// under the FIRST clicked row, would float on top of the very next rows a
+// drag is about to sweep over, since it's a real `position:fixed` element
+// with a z-index above the diff. Waiting for `mouseup` shows it only once the
+// gesture (plain click OR finished drag/selection) is actually resolved,
+// positioned under the FINAL selection either way (menuAnchor always reads
+// the current, possibly range-extended, `[data-change-active-end]`). One
+// flag, one listener, added once — `mouseup` always follows a `mousedown`
+// (even a click that never moves), so this never leaves the flag stuck. The
+// SAME listener also runs resolvePendingMouseSelection FIRST, so a selection
+// lands and schedulePassiveMenu (if it ran during that resolution) is honored
+// in the same tick.
 let pendingPassiveMenu = false
 function schedulePassiveMenu() {
   pendingPassiveMenu = true
 }
 document.addEventListener('mouseup', () => {
+  resolvePendingMouseSelection()
   if (!pendingPassiveMenu) return
   pendingPassiveMenu = false
   showPassiveMenu()
@@ -10005,8 +10132,8 @@ function hidePassiveMenu() {
 }
 
 // A mousedown anywhere outside the passive preview's own box (and outside a
-// diff row, which manages the preview itself via selectRowAt/showPassiveMenu)
-// dismisses it — e.g. clicking the sidebar, a comment, or the description
+// diff row, which manages the preview itself via resolvePendingMouseSelection/
+// showPassiveMenu) dismisses it — e.g. clicking the sidebar, a comment, or the description
 // column. Capture phase, so it runs before the target's own click handler;
 // excluding `[data-row]` avoids racing the very click that's about to call
 // showPassiveMenu again for a NEW row. Excluding the command-anchor itself
@@ -11104,13 +11231,15 @@ function drillPreviewColumns() {
           onApprove: (blk) => persistApproval(blk),
           // A click on this look-ahead sibling preview focuses it exactly like
           // running ↓/f off the end of the currently-focused column's own
-          // units would (see focusDrillPreviewSibling) — no drag-range here,
-          // a still-unfocused card can't be mid-drag.
+          // units would (see focusDrillPreviewSibling) — resolved eagerly,
+          // right at mousedown, rather than deferred to the next mouseup like
+          // every other card: a still-unfocused preview never supports a
+          // drag/native-selection range, only the single row clicked.
           onRowMouseDown: (row) => {
             const level = state.focusLevel
             focusDrillPreviewSibling()
             const nb = state.drill[level - 1]
-            if (nb) selectRowAt(level, nb, null, row)
+            if (nb) resolveClickSelection({ level, b: nb, i: null, row, segStart: null })
           },
           commentedRows: () => commentRowSet(previewBlock),
           lineSummaries: () => lineChildSummaries(previewBlock),
@@ -12086,27 +12215,25 @@ function DetailPanel(state) {
             // (leaveDiffToList) no longer has a per-card button — see
             // MainScrollLeftHint, mounted once top-level next to
             // MainScrollRightHint.
-            // A mousedown on this card's diff focuses it exactly like the
-            // keyboard would (ensureTopLevelDiffFocus — reviewer request: a
-            // click on the non-focused look-ahead preview at i===sel+1 must
-            // focus it "alsof je gewoon met je key er navigeert"), then jumps
-            // straight to the clicked row (selectRowAt). Wired unconditionally
-            // (not just for the preview) so a click ALSO works on the already-
-            // focused card itself — there it's a plain "select this row".
-            // `clickCount` (Block.mjs's e.detail) drives the 1x/2x/3x line/
-            // group/whole-block click scheme, and `segStart` the on-character
-            // 'call'-segment precision of a single click — both top-level
-            // only, see selectRowAt's own comment.
-            onRowMouseDown: (row, clickCount, segStart) => selectRowAt(0, b, i, row, clickCount, segStart),
+            // A mousedown on this card's diff only SEEDS the gesture
+            // (beginMouseSelection) — the actual focus/select happens once, on
+            // the next mouseup, once we know whether it turned into a plain
+            // click or a real (native) selection (resolveClickSelection/
+            // resolveRangeSelection, both of which call ensureTopLevelDiffFocus
+            // — reviewer request: a click on the non-focused look-ahead
+            // preview at i===sel+1 must focus it "alsof je gewoon met je key er
+            // navigeert"). Wired unconditionally (not just for the preview) so
+            // a click ALSO works on the already-focused card itself — there
+            // it's a plain "select this row". `segStart` carries the
+            // on-character 'call'-segment precision of a single click — see
+            // resolveClickSelection's own comment. `cardEl` scopes a later
+            // real selection to this card, `shiftKey` feeds resolveShiftClickSelection.
+            onRowMouseDown: (row, segStart, cardEl, shiftKey) =>
+              beginMouseSelection(0, b, i, row, segStart, cardEl, shiftKey),
             // A click on one of Block.mjs's own mouse approve-toggles (the
             // line/group gutter glyphs, a call segment's dot/hover ring) —
             // see approveClickAt's own doc comment.
             onApproveClick: (row, kind, segStart) => approveClickAt(0, b, i, row, kind, segStart),
-            // Drag-extends the selection while the button stays down — a
-            // no-op unless this card already owns the keyboard (see
-            // extendRowRange's own guard), so dragging never starts a range on
-            // a card a mousedown hasn't already focused.
-            onRowMouseMove: (row) => extendRowRange(0, b, row),
             // Reactive Set of rows that carry a comment → a 💬 marker on those
             // rows, so it's visible which units already hold a comment (however
             // many). Reads the comments read-model via RelatedPanel.
@@ -12397,12 +12524,16 @@ function DetailPanel(state) {
                   // non-focused one collapses to the rail above, whose own
                   // click already calls expandColumn) — so a click here only
                   // needs to hand focus back from the comments/Onderliggende-
-                  // code panel when needed, never a level change.
-                  onRowMouseDown: (row) => selectRowAt(level, b, null, row),
+                  // code panel when needed, never a level change. `segStart`
+                  // is dropped (never passed through) — a drilled column's
+                  // click stays 'line'-only, no call-segment precision there,
+                  // same as before; a real (native) selection/Shift+click
+                  // still ranges here via the same mouseup resolution.
+                  onRowMouseDown: (row, segStart, cardEl, shiftKey) =>
+                    beginMouseSelection(level, b, null, row, null, cardEl, shiftKey),
                   // Mirrors the top-level card's own wiring above — see
                   // approveClickAt's own doc comment.
                   onApproveClick: (row, kind, segStart) => approveClickAt(level, b, null, row, kind, segStart),
-                  onRowMouseMove: (row) => extendRowRange(level, b, row),
                   commentedRows: () => commentRowSet(b),
                   commentRangeRows: () => commentRangeRowSet(b),
                   lineSummaries: () => lineChildSummaries(b),

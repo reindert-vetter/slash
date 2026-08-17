@@ -44,27 +44,28 @@ for the full list, icons and the hover-visibility decision per button.
 Reviewer request, replacing the removed per-row/group gutter approve toggles
 (see "Approving from the mouse" in `.claude/docs/approval.md`): "als je iets
 hebt geselecteerd, wil ik direct een menu zien onder de onderste geselecteerde
-regel (zelfde menu als Enter)". A mouse click that lands a diff selection
-(`selectRowAt` — a line, a group, a 3×-click range, or a call segment; both
-the top-level diff and a drilled column) now also calls
-`schedulePassiveMenu()` right after setting the cursor, so the exact same
-`block`-mode palette `Enter` would open shows up, positioned the same way
-(reusing `menuAnchor`/`menuRegion`/`positionMenu` verbatim — under the bottom
-row of the just-selected unit, floating, no layout reflow beyond what already
-happens today).
+regel (zelfde menu als Enter)". A mouse gesture that lands a diff selection
+(`resolveClickSelection`/`resolveRangeSelection` — a line, a real (native)
+multi-line text selection, or a call segment; both the top-level diff and a
+drilled column) now also calls `schedulePassiveMenu()` right after setting the
+cursor, so the exact same `block`-mode palette `Enter` would open shows up,
+positioned the same way (reusing `menuAnchor`/`menuRegion`/`positionMenu`
+verbatim — under the bottom row of the just-selected unit, floating, no layout
+reflow beyond what already happens today).
 
 **Deferred to the next `mouseup`, not called immediately from the
-`mousedown`.** The same `mousedown` that lands a plain click selection is
-also the START of a possible multi-row drag (`extendRowRange`, see "Line
-selection: hover, click, drag-range" in `.claude/docs/diff-render.md`) —
-showing the preview right away, positioned under the FIRST clicked row,
-would float (a real `position:fixed`, z-indexed element) on top of the very
-next rows the drag is about to sweep over. `schedulePassiveMenu` just sets a
-flag; one `mouseup` listener (added once at module load) calls
-`showPassiveMenu()` when it's set, so the preview only ever appears once the
-gesture — a plain click, or a finished drag — is actually done, anchored on
-the FINAL selection either way (`menuAnchor` always reads the current,
-possibly range-extended, `[data-change-active-end]`).
+`mousedown`.** The same `mousedown` that seeds a gesture
+(`beginMouseSelection`) may still turn into a real, multi-row browser text
+selection, resolved only once the gesture finishes (see "Line selection: click
+and browser text selection" in `.claude/docs/diff-render.md`) — showing the
+preview right away, positioned under the FIRST clicked row, would float (a
+real `position:fixed`, z-indexed element) on top of the very next rows a drag
+is about to sweep over. `schedulePassiveMenu` just sets a flag; one `mouseup`
+listener (added once at module load) resolves the pending selection and then
+calls `showPassiveMenu()` when the flag is set, so the preview only ever
+appears once the gesture — a plain click, or a finished drag/selection — is
+actually done, anchored on the FINAL selection either way (`menuAnchor` always
+reads the current, possibly range-extended, `[data-change-active-end]`).
 
 **"Passive" means it never owns the keyboard.** This is a second, independent
 flag on the shared `menu` object (`{ open, passive }`) — `onKeydown`'s
@@ -86,8 +87,8 @@ keyboard step** (explicit reviewer answer: "alleen na een muisklik").
 any keypress — including the `Enter` that opens the real menu — clears a
 stale preview first. A `mousedown` anywhere outside the preview's own box
 (`[data-testid="command-anchor"]`) and outside a diff row (`[data-row]`,
-which manages the preview itself via the next `selectRowAt` call) also
-dismisses it — clicking the sidebar, a comment, or the description column,
+which manages the preview itself via the next mouse gesture's own resolution)
+also dismisses it — clicking the sidebar, a comment, or the description column,
 for instance.
 
 **Rendering:** `passiveMenuOverlay()` (`home.mjs`) is `menuOverlay()`'s
@@ -96,7 +97,7 @@ at the identical `data-testid="command-anchor"` box, but deliberately
 **without** the full-screen `data-testid="command-overlay"` catch layer:
 that layer exists to swallow every click and close the menu on an outside
 click, which is exactly the keyboard-owning behaviour a passive preview must
-not have — a click on a different row needs to reach `selectRowAt`
+not have — a click on a different row needs to reach `beginMouseSelection`
 unimpeded, not get eaten by an overlay first. `MenuHost` renders `open`'s
 overlay first, else `passive`'s, else nothing (same stable-`<div>`-wrapper
 shape as the original toggle, see the "never key a template whose entire
