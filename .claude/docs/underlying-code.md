@@ -293,6 +293,15 @@ no co-subscription on the selected block's `b.code`. Consequence: the width
 symmetry with the neighbouring column is a **default**, not a guarantee. Test:
 `tests/related-code-grow.spec.mjs`.
 
+**The card list's own scroll wrapper drops its LEFT padding (`p-3 pl-0`).**
+`comment-claude-row` (`home.mjs`) puts its shared card border flush against the
+column's true left edge, with no left inset of its own; this section's ordinary
+`p-3` padding used to indent every "Onderliggende code" card 12px further right
+than that, so the cards visibly didn't line up on the left with the comment/chat
+card above them (reviewer report, confirmed with a pixel measurement:
+231px vs. 219px). Top/right/bottom keep the original `p-3` spacing — only the
+left side was trimmed.
+
 `InlineComments`/`ClaudeChatPanel` reuse this same clamp **scaled**, not
 verbatim: `commentColumnWidthCls()` (2/3) and `claudeColumnWidthCls()` (1/3),
 sitting side by side in `comments-and-related`'s first row — see

@@ -6605,7 +6605,20 @@ function moreAboveHint(n, testid) {
           : ''}
       <div
         class="${() =>
-          'no-scrollbar flex min-h-0 flex-1 flex-col gap-2 overflow-auto p-3 ' +
+          // pl-0 (not the p-3 default): the comment/Claude row above this
+          // panel (comment-claude-row, home.mjs) has its own card border
+          // sitting flush against the column's true left edge, with no
+          // equivalent left inset of its own — this wrapper's ordinary p-3
+          // padding therefore used to indent every card 12px further right
+          // than that row, so the "Onderliggende code" cards visibly didn't
+          // line up on the left with the comment/chat card above them
+          // (reviewer report, confirmed with a pixel measurement of a
+          // screenshot: 231px vs 219px). Only the LEFT side is trimmed —
+          // top/right/bottom keep the original p-3 spacing; a plain, later
+          // `pl-0` always wins over the `p-3` shorthand's own left component
+          // regardless of class order (Tailwind orders side-specific
+          // utilities after the shorthand in its generated stylesheet).
+          'no-scrollbar flex min-h-0 flex-1 flex-col gap-2 overflow-auto p-3 pl-0 ' +
           (searching() || pending() > 0 ? 'pt-9' : '')}"
       >
         ${() => coversWarning()}
