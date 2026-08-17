@@ -591,6 +591,29 @@ const state = reactive({
   // URL — ephemeral UI state, like `menu`/`ui.task`, not a navigation position a
   // refresh needs to restore.
   showDescription: false,
+  // descriptionPinned / keepIndexInDiff — "keep this left column VISIBLE even
+  // though the keyboard has moved past it, because it still fits". Both are
+  // written only by applyDiffColumnFit (see its own doc comment) after a MOUSE
+  // click into a diff: a click is an unambiguous "show me this diff" request,
+  // not a step through the left→right nav chain, so nothing has to be given up
+  // as long as the width is there. Reviewer request: "als er in de breedte
+  // alles past, moeten we niets verbergen; past het niet, verberg dan eerst de
+  // PR-omschrijving en daarna de PR-index."
+  //
+  // descriptionPinned is deliberately SEPARATE from showDescription rather than
+  // widening that flag: showDescription doubles as "stop 1 owns the keyboard"
+  // in a dozen places in onKeydown (Enter/Space/`/`/←/→ all branch on it), and
+  // mode:'diff' + showDescription:true is exactly the invalid combination that
+  // once left the keyboard stuck at stop 1. So showDescription keeps meaning
+  // "stop 1 has the keyboard" unchanged, and PrInfoPanel renders on
+  // `showDescription || descriptionPinned` — visibility, not ownership.
+  descriptionPinned: false,
+  // keepIndexInDiff does the same for the pr-index (<aside>), which otherwise
+  // collapses to width 0 for every diff (see BlockList.mjs). Only ever true in
+  // diff mode, and reset by enterDiff so the KEYBOARD path (→ out of the list)
+  // keeps behaving exactly as before — stepping right past the index hides it,
+  // per the nav chain.
+  keepIndexInDiff: false,
   // blockIndexEntered — whether the reviewer has actually stepped INTO the
   // block index during this session, as opposed to state.selected merely
   // holding its just-loaded default (0) or the fresh-open automatic
@@ -714,6 +737,11 @@ const state = reactive({
 // file.
 window.addEventListener('resize', () => {
   state.viewportH = window.innerHeight
+  // A narrower window can take away the room a kept-open left column needed
+  // (see applyDiffColumnFit). Only re-checked while something IS being kept —
+  // widening the window never re-opens a column by itself, the reviewer asks
+  // for that with a click.
+  if (state.keepIndexInDiff || state.descriptionPinned) applyDiffColumnFit()
 })
 
 // Seed state.colWidths from the cookie set on an earlier visit. Cookies are
@@ -5513,6 +5541,22 @@ function enterDiff() {
     if (!b.methods.length) return
   }
   state.mode = 'diff'
+  // Entering a diff always takes the keyboard out of stop 1 and, by default,
+  // gives the pr-index' width back to the diff — the nav-chain behaviour the
+  // KEYBOARD has always had. A mouse click can hand either column back
+  // afterwards, but only if it genuinely fits: ensureTopLevelDiffFocus (the
+  // one mouse entry point) calls scheduleDiffColumnFit right after this, which
+  // re-evaluates both flags. See state.descriptionPinned/keepIndexInDiff.
+  state.keepIndexInDiff = false
+  if (state.showDescription) {
+    // Only reachable from the mouse: the keyboard's own → at stop 1 merely
+    // closes the description (onKeydown's showDescription branch) and never
+    // reaches enterDiff. Provisionally KEEP the column on screen (the fit pass
+    // may drop it again) while handing the keyboard to the diff.
+    state.showDescription = false
+    state.descriptionPinned = true
+    state.blockIndexEntered = true
+  }
   // The four trailing-row focus flags (toggle-approved/toggle-ignored/
   // batch-action/push-todo) only ever mean something in LIST mode, at the
   // bottom of the sidebar — being in diff mode with one of them still true is
@@ -7113,12 +7157,16 @@ function ensureTopLevelDiffFocus(i) {
   if (i === state.selected) {
     if (state.mode !== 'diff') enterDiff()
     else clearRangeAnchor(0)
+    scheduleDiffColumnFit()
     return
   }
   // stepBlock's same-file flow is only ever a thing WITHIN diff mode (it's
   // what ↓/f run off the last unit already invoke) — there is no "flow"
   // concept from list mode, so only try it once we're actually in diff mode.
-  if (state.mode === 'diff' && stepBlock(i - state.selected)) return
+  if (state.mode === 'diff' && stepBlock(i - state.selected)) {
+    scheduleDiffColumnFit()
+    return
+  }
   // Either a different file's neighbour, or the reviewer hadn't stepped into
   // diff mode yet at all — the real keyboard path is ← back to the list
   // (already there in the latter case), ↓/click to select the row, then →.
@@ -7126,6 +7174,11 @@ function ensureTopLevelDiffFocus(i) {
   clearListAnchor()
   clearRangeAnchor(0)
   enterDiff()
+  // A click is not a nav-chain step: keep whichever left column still fits
+  // (see applyDiffColumnFit). Called here, at the one function every MOUSE
+  // path into a top-level diff funnels through, so the keyboard's own
+  // enterDiff callers keep their unchanged "stepping right hides it" behaviour.
+  scheduleDiffColumnFit()
 }
 
 // pendingMouseSelection is the plain (non-reactive) module-level record a
@@ -7529,6 +7582,89 @@ function scrollMainRightOneColumn() {
   }
 }
 
+// --- "hide a left column only when it genuinely doesn't fit" -----------------
+//
+// AppColumns' own geometry, as plain constants rather than a live measurement:
+// its `left-6` inset, the `gap-6` between PrInfoPanel/<aside>/<main>, <main>'s
+// own `gap-4` between its columns, and the two fixed left-column widths
+// (<aside> `w-[26rem]`, pr-info-column `w-[39rem]`). Kept next to each other so
+// a class change on either column is one edit here too.
+const APP_COLUMNS_LEFT_PX = 24
+const APP_COLUMNS_GAP_PX = 24
+const MAIN_COLUMN_GAP_PX = 16
+const PR_INDEX_COL_PX = 416
+const PR_INFO_COL_PX = 624
+
+// mainContentWidthPx — the real width <main>'s column flow WANTS, i.e. the sum
+// of its own columns plus their gaps. Deliberately not `main.scrollWidth`:
+// <main> is `flex-1`, so once everything already fits its scrollWidth is its
+// (stretched) client width, which would report "needs the whole screen" exactly
+// in the case this function exists to detect. The sentinel is skipped for the
+// same reason scrollMainRightOneColumn skips it, and a zero-width child (a
+// column hidden via `hidden`/`w-0`) claims no gap either.
+//
+// This IS a live DOM measurement, unlike every width in diff-card.md — but it
+// measures the ALREADY RENDERED result and only feeds the visibility of columns
+// that sit OUTSIDE <main> (whose own children are all `shrink-0` fixed widths),
+// so it can't race the render it feeds: hiding/showing <aside> or the pr-info
+// column never changes this number.
+function mainContentWidthPx() {
+  const main = document.querySelector('[data-testid="detail-panel"]')
+  if (!main) return null
+  let total = 0
+  let cols = 0
+  for (const col of main.children) {
+    if (col.getAttribute('data-testid') === 'main-overflow-sentinel') continue
+    const w = col.getBoundingClientRect().width
+    if (w <= 0) continue
+    total += w
+    cols++
+  }
+  return total + Math.max(0, cols - 1) * MAIN_COLUMN_GAP_PX
+}
+
+// applyDiffColumnFit decides how many of the two left columns can stay visible
+// next to <main>'s current column flow — see state.descriptionPinned/
+// keepIndexInDiff for the reviewer request behind it.
+//
+// The order is the explicit one from that request: the PR-description column
+// (the LEFT-most one) is dropped first, the pr-index only if it still doesn't
+// fit after that. So the index is decided first (it survives longer) and the
+// description gets whatever room is left over.
+//
+// Purely SHRINKING outside the click path: it can only ever keep something
+// already visible, never make a column appear on its own — descriptionPinned is
+// raised in enterDiff (a mouse click leaving stop 1), and keepIndexInDiff only
+// while actually in diff mode. That is what keeps a resize/drill from
+// spontaneously opening a column the reviewer never asked for.
+function applyDiffColumnFit() {
+  const content = mainContentWidthPx()
+  if (content == null) return
+  const available = window.innerWidth - APP_COLUMNS_LEFT_PX
+  let need = content
+  if (state.mode === 'diff') {
+    state.keepIndexInDiff = need + APP_COLUMNS_GAP_PX + PR_INDEX_COL_PX <= available
+    if (state.keepIndexInDiff) need += APP_COLUMNS_GAP_PX + PR_INDEX_COL_PX
+  } else {
+    // In list mode the pr-index is always visible, so it's part of the budget
+    // rather than a candidate for hiding.
+    need += APP_COLUMNS_GAP_PX + PR_INDEX_COL_PX
+  }
+  if (state.descriptionPinned) {
+    state.descriptionPinned = need + APP_COLUMNS_GAP_PX + PR_INFO_COL_PX <= available
+  }
+}
+
+// scheduleDiffColumnFit runs the fit twice on purpose: once synchronously
+// against the layout as it stands (so a click that keeps the index doesn't
+// first show one frame with it collapsed), and once after the next frame, when
+// the mode switch/new columns have actually rendered and the measurement is
+// exact.
+function scheduleDiffColumnFit() {
+  applyDiffColumnFit()
+  requestAnimationFrame(applyDiffColumnFit)
+}
+
 // setupMainOverflowObserver keeps state.mainOverflowRight in sync with whether
 // <main>'s own 1px sentinel (its last child, see DetailPanel) is currently
 // scrolled out of view — i.e. whether there's more of <main>'s column flow
@@ -7549,6 +7685,16 @@ function setupMainOverflowObserver() {
   const observer = new IntersectionObserver(
     ([entry]) => {
       state.mainOverflowRight = !entry.isIntersecting
+      // A column opening further right (drilling, the comments panel) is
+      // exactly the moment a kept-open left column stops fitting — this
+      // observer already fires on ANY change of <main>'s content width, so it
+      // doubles as the re-check trigger. Only while something is actually
+      // being kept, and applyDiffColumnFit itself only ever shrinks from here,
+      // so this can't oscillate: giving the space back reduces the overflow,
+      // it never creates more.
+      if (!entry.isIntersecting && (state.keepIndexInDiff || state.descriptionPinned)) {
+        applyDiffColumnFit()
+      }
     },
     { root: main, threshold: 0 },
   )
@@ -7643,7 +7789,10 @@ function stepMainLeftOneColumn() {
 // already open (nothing further left to reveal).
 function canStepMainLeft() {
   if (state.mode === 'diff') return state.focusLevel === 0
-  if (state.mode === 'list') return !state.showDescription
+  // descriptionPinned: in list mode a pinned-open description column is
+  // already fully visible (see applyDiffColumnFit), so there is nothing left
+  // to reveal — same reason showDescription suppresses this button.
+  if (state.mode === 'list') return !state.showDescription && !state.descriptionPinned
   return false
 }
 
@@ -10700,6 +10849,11 @@ function onKeydown(e) {
     e.preventDefault()
     if (e.key === 'ArrowRight') {
       state.showDescription = false
+      // → out of stop 1 is a nav-chain step, so the column really goes away —
+      // including when a mouse click had pinned it open earlier (see
+      // state.descriptionPinned). Without this, the keyboard could no longer
+      // close a column it had just closed.
+      state.descriptionPinned = false
       // A real crossing into the block index — from here on a selected row
       // reads as a genuine choice, not the fresh-open default (see
       // state.blockIndexEntered's own comment).
@@ -11906,7 +12060,12 @@ function PrInfoPanel(state) {
   return html`
     <div class="contents">
       ${() =>
-        state.showDescription
+        // showDescription = stop 1 owns the keyboard; descriptionPinned = a
+        // mouse click moved the keyboard into a diff but the column still fits
+        // beside it, so there was no reason to take it away (see
+        // applyDiffColumnFit). Visibility is the OR of the two; every keyboard
+        // branch in onKeydown keeps reading showDescription alone.
+        state.showDescription || state.descriptionPinned
           ? html`<div
               class="flex h-full min-h-0 w-[39rem] shrink-0 flex-col gap-3"
               data-testid="pr-info-column"
@@ -12772,8 +12931,11 @@ function MainScrollRightHint(state) {
 // on top of its own header/search row.
 // canStepMainLeftPositionCls() is its own small reactive slot so only the
 // position (not the whole button) reruns on a mode change.
+// In diff mode it stretches from top-6 to bottom-6 — the hover-catching zone
+// spans the whole (blank) left gutter, see canStepMainLeftZoneCls below for
+// why. The visible icon itself still sits at the very top (`items-start`).
 function canStepMainLeftPositionCls() {
-  return state.mode === 'diff' ? 'top-6 left-0' : 'top-6 left-[28rem]'
+  return state.mode === 'diff' ? 'top-6 bottom-6 left-0' : 'top-6 left-[28rem]'
 }
 // canStepMainLeftZoneCls() — the width of the invisible HOVER-CATCHING zone,
 // separate from the visible icon box nested inside it (`group`/
@@ -12794,8 +12956,24 @@ function canStepMainLeftPositionCls() {
 // travelling from the edge toward the card passes over it either way. List
 // mode has no such gap (the pr-index already sits within ~8px of this hint),
 // so it keeps a tight zone matching the icon's own size.
+//
+// In diff mode that zone also spans the FULL height of the viewport
+// (`top-6 bottom-6` via the position class, `h-9` dropped), on reviewer
+// request: "als het PR-omschrijvingsblok niet meer zichtbaar is, laat die knop
+// dan zien als ik met mijn muis beweeg — hij bestaat al, maar is niet
+// zichtbaar". A 36px-tall catcher in the top-left corner is simply not
+// something a mouse passes over by accident, so the button that walks back to
+// that hidden column was effectively undiscoverable. The whole left gutter is
+// blank page background in diff mode (see above), so widening the catcher
+// downward swallows no click: the diff card's own left edge starts to the
+// right of it. Still CSS-only (`group`/`group-hover`), so hover carries no
+// state, per Rule 4 in mouse-navigation.md.
+//
+// List mode keeps the small `h-9` box: there the hint sits at `left-[28rem]`,
+// which already overlaps <main>'s own first column by ~20px, and a full-height
+// strip there WOULD swallow clicks/drag-selections along that card's left edge.
 function canStepMainLeftZoneCls() {
-  return state.mode === 'diff' ? 'w-12' : 'w-9'
+  return state.mode === 'diff' ? 'w-12' : 'h-9 w-9'
 }
 function MainScrollLeftHint(state) {
   return html`
@@ -12805,7 +12983,10 @@ function MainScrollLeftHint(state) {
           ? html`
               <div
                 class="${() =>
-                  'group fixed z-30 flex h-9 items-start justify-start ' +
+                  // No `h-9` here: the height comes from the position class
+                  // (diff mode stretches top-6..bottom-6) or from the zone
+                  // class (list mode keeps its own h-9 box).
+                  'group fixed z-30 flex items-start justify-start ' +
                   canStepMainLeftPositionCls() +
                   ' ' +
                   canStepMainLeftZoneCls()}"

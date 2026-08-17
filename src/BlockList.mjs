@@ -96,7 +96,9 @@ export default function BlockList(state, isPrWideComposing = () => false) {
         // ever shows content in diff mode (state.footerVisible, see
         // Footer.mjs), so there is nothing for it to reserve space for.
         'flex h-full shrink-0 flex-col overflow-hidden rounded-xl bg-white dark:bg-zinc-900 transition-all duration-200 ease-out ' +
-        (state.mode === 'diff' || state.testColumnFocused || isPrWideComposing()
+        ((state.mode === 'diff' && !state.keepIndexInDiff) ||
+        (state.mode !== 'diff' && state.testColumnFocused) ||
+        isPrWideComposing()
           ? // Collapses to width 0 (not just hidden via translate/opacity) so
             // it genuinely gives its space back to <main> instead of merely
             // sliding out of view while still claiming a flex slot — the fix
@@ -106,16 +108,35 @@ export default function BlockList(state, isPrWideComposing = () => false) {
             // layout space, so <main>'s own manually-synced offset was the
             // ONLY thing keeping the two apart, and any state where that sync
             // drifted showed content sliding in behind this aside). Collapses
-            // in diff mode, and equally once the methodes-kolom (stop 2b)
-            // owns the keyboard in list mode — stepping right past this index
-            // hides it either way; testColumnFocused survives the diff→list
-            // transition, so ← from a method's diff lands on the
-            // methodes-kolom with this index still collapsed, and only a
-            // second ← brings it back. Third case: while an "algemene"
-            // (PR-wide) comment is being written, so the composer isn't
-            // squeezed in beside an index and a diff it has nothing to do
-            // with — ← closes the composer and brings this straight back
-            // (see comments-panel.md/detail-layout.md).
+            // in diff mode (see keepIndexInDiff below), and — ONLY while
+            // still in list mode — equally once the methodes-kolom (stop 2b)
+            // owns the keyboard: stepping right past this index hides it
+            // either way. testColumnFocused itself survives the diff→list
+            // transition (so ← from a method's diff lands on the
+            // methodes-kolom), but it deliberately no longer forces the
+            // collapse once state.mode is 'diff' — inside a test method's
+            // diff the pr-index is governed by the same keepIndexInDiff fit
+            // check as an ordinary block's diff (see below), not by
+            // testColumnFocused; without the `state.mode !== 'diff'` guard a
+            // mouse click into a test method's diff always collapsed this
+            // index even on a wide viewport with room to spare (bug report:
+            // "een click op een test index laat blokken index nog wel
+            // inklappen"), because testColumnFocused stayed true straight
+            // through the click. Third case: while an "algemene" (PR-wide)
+            // comment is being written, so the composer isn't squeezed in
+            // beside an index and a diff it has nothing to do with — ←
+            // closes the composer and brings this straight back (see
+            // comments-panel.md/detail-layout.md).
+            //
+            // state.keepIndexInDiff is the one exception to the diff-mode
+            // collapse: after a MOUSE click into a diff (an ordinary block's
+            // OR a test class's active method's — both funnel through the
+            // same ensureTopLevelDiffFocus, see home.mjs) this index stays
+            // put as long as it still fits beside <main>'s own columns — a
+            // click is not a step through the nav chain, so nothing is given
+            // up for free. The keyboard path never sets it (enterDiff resets
+            // it), so → out of the list keeps collapsing this exactly as
+            // before. See applyDiffColumnFit in home.mjs / detail-layout.md.
             'w-0 border-0 opacity-0 pointer-events-none'
           : 'w-[26rem] border opacity-100 ' +
             // Light-blue border while the keyboard drives stop 2 (list-mode,

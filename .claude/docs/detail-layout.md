@@ -54,11 +54,19 @@ gives its own layout space back rather than merely being covered.
   (`w-[39rem]`/`w-[26rem]`); `<main>` is `flex-1 min-w-0` and takes whatever
   space its neighbours don't claim.
 - **Collapse, don't cover:** `PrInfoPanel` fully unmounts when
-  `state.showDescription` is false (unchanged, see below); `<aside>` collapses
+  `state.showDescription || state.descriptionPinned` is false (see below);
+  `<aside>` collapses
   to `w-0 opacity-0 pointer-events-none` (instead of the old
   `-translate-x-[28rem] opacity-0`) whenever it should get out of the way
-  (diff mode, the methodes-kolom owning the keyboard, or an "algemene"
-  PR-wide compose — see `BlockList.mjs`'s own class comment). Both still
+  (diff mode **unless `state.keepIndexInDiff` says it still fits**, the
+  methodes-kolom owning the keyboard **while still in list mode**, or an
+  "algemene" PR-wide compose — see `BlockList.mjs`'s own class comment).
+  `state.testColumnFocused` (stop 2b owning the keyboard, see
+  `test-class-grouping.md`) only forces the collapse in list mode; once
+  `state.mode === 'diff'` — including a test class's active method's diff —
+  the collapse is decided purely by `keepIndexInDiff`, same as an ordinary
+  block, so a mouse click into a test method's diff can keep the index open
+  too. Both still
   animate over the existing 200ms (`transition-all duration-200 ease-out`,
   now animating `width` instead of `transform`), so opening/collapsing
   `<aside>` still slides visually — the difference is that the space is
@@ -216,11 +224,96 @@ always-reachable button.
   `9ffd73b`, which introduced the plain `hover:`-on-icon version). List mode
   has no such gap (the pr-index already sits within ~8px of this hint), so it
   keeps a tight zone matching the icon's own size.
+- **In diff mode that zone also spans the FULL height** of the row
+  (`top-6 bottom-6` in `canStepMainLeftPositionCls()`, and the wrapper's own
+  `h-9` dropped so the height comes from the position/zone class). Widening it
+  sideways still wasn't enough to make the button discoverable — a 36px-tall
+  catcher in one corner is not something a mouse crosses by accident, and it
+  was reported again as "die knop bestaat al, maar is niet zichtbaar" once the
+  PR-description column started disappearing on width grounds (see the fit rule
+  below). The whole left gutter is blank page background in diff mode, so a
+  full-height catcher swallows no click: the diff card's own left edge starts
+  to the right of it. **List mode deliberately keeps its `h-9` box** — there
+  the hint sits at `left-[28rem]`, already ~20px over `<main>`'s own first
+  column, and a full-height strip there *would* swallow clicks and
+  drag-selections along that card's left edge.
 - Own glyph: a chevron docked against a vertical bar (same shape as
   `block-close-column`'s icon, mirrored), never colour alone, per the
   colorblind rule.
 
 Test: `tests/main-scroll-left-hint.spec.mjs`.
+
+### A mouse click into a diff only hides a left column that no longer fits
+
+The keyboard's left→right chain hides as it goes: stepping right out of the
+list collapses the pr-index (`<aside>` → width 0, `BlockList.mjs`) and stop 1's
+PR-description column is closed long before that. A **mouse click** on a diff
+row is not such a step — reviewer request: "als ik met mijn muis op een diff
+klik, en in de breedte past alles, dan moeten we niets verbergen; past het niet,
+verberg dan eerst het PR-omschrijvingsblok en daarna de PR-index." So a click
+keeps whichever left columns still fit, and drops the **left-most one first**.
+
+- **Two flags, both written only by `applyDiffColumnFit` (`home.mjs`):**
+  `state.keepIndexInDiff` (the pr-index stays open despite diff mode — the one
+  exception to `BlockList.mjs`'s collapse condition) and
+  `state.descriptionPinned` (the PR-description column stays *visible*).
+- **Applies identically to a test class's active method.** A click into a
+  `test_class` row's active method's diff funnels through the exact same
+  `ensureTopLevelDiffFocus`/`enterDiff`/`scheduleDiffColumnFit` path as an
+  ordinary block (`i` is the `test_class` row's own top-level index — see
+  `DetailPanel`'s `wasTestClass` branch in `home.mjs`), so `keepIndexInDiff`
+  ends up computed the same way. `BlockList.mjs`'s collapse condition must
+  therefore let `keepIndexInDiff` win over `state.testColumnFocused` once
+  `state.mode === 'diff'` — `testColumnFocused` only forces the collapse
+  while still in **list mode** (stop 2b owning the keyboard, unrelated to
+  this feature). Missing that `state.mode !== 'diff'` guard was a real bug:
+  since `testColumnFocused` survives the whole diff-mode transition (see
+  `test-class-grouping.md`), it kept collapsing the index on every click into
+  a test method's diff regardless of `keepIndexInDiff`/available width.
+- **`descriptionPinned` is deliberately separate from `showDescription`.** That
+  flag doubles as "stop 1 owns the keyboard" in a dozen `onKeydown` branches
+  (Enter/Space/`/`/←/→), and `mode:'diff' + showDescription:true` is exactly the
+  invalid combination that once left the keyboard stuck at stop 1 (see the
+  `hadInitialSelParam` comment at the bottom of `home.mjs`). So
+  `showDescription` keeps meaning *ownership*, unchanged, and `PrInfoPanel`
+  renders on `showDescription || descriptionPinned` — *visibility*. `enterDiff`
+  performs the swap (`showDescription = false`, `descriptionPinned = true`),
+  which only ever happens from the mouse: the keyboard's own → at stop 1 just
+  closes the description and never reaches `enterDiff`. That same → also clears
+  `descriptionPinned`, so the keyboard can still close a column a click pinned.
+- **The order is index-first, description-last.** `applyDiffColumnFit` decides
+  the pr-index first (it survives longer) and gives the description whatever is
+  left over — which is what makes the left-most column the first to go.
+- **`mainContentWidthPx()` measures, but can't race the render it feeds.** It
+  sums `<main>`'s own direct children (skipping the overflow sentinel and any
+  zero-width child) plus their `gap-4`s — deliberately **not**
+  `main.scrollWidth`, which for a `flex-1` `<main>` equals its stretched client
+  width exactly when everything already fits, i.e. reports "needs the whole
+  screen" in the one case this function exists to detect. Every child of
+  `<main>` is `shrink-0` with its own computed width, so showing/hiding a column
+  *outside* `<main>` never changes this number — unlike the character-count
+  widths in `.claude/docs/diff-card.md`, this measurement is safe.
+- **It only ever shrinks, except on the click itself.** `descriptionPinned` is
+  raised by `enterDiff` and `keepIndexInDiff` only while actually in diff mode,
+  so a resize or a drilled column can *take* a column away but never make one
+  appear on its own. Re-checked from two places, both gated on something
+  actually being kept: the `resize` listener, and `setupMainOverflowObserver`'s
+  own callback (a column opening further right is exactly when a kept column
+  stops fitting, and that observer already fires on any `<main>` content-width
+  change). Can't oscillate — giving space back only ever reduces the overflow.
+- **`scheduleDiffColumnFit()` runs it twice**: synchronously (so a click that
+  keeps the index never shows one frame with it collapsed) and again after the
+  next frame, when the mode switch has really rendered. It's called from
+  `ensureTopLevelDiffFocus`, the single function every mouse path into a
+  top-level diff funnels through — which is what keeps every keyboard
+  `enterDiff` caller on the old behaviour.
+- `canStepMainLeft()` treats a pinned description in list mode as "already
+  open": nothing left to reveal, so `main-scroll-left-hint` stays hidden.
+
+Test: `tests/diff-click-column-fit.spec.mjs` (a wide viewport keeps the index, a
+narrow one still collapses it, the keyboard path is unchanged, shrinking the
+window drops the description before the index, and a click into a test class's
+active method's diff keeps the index open on a wide viewport too).
 
 ## PR-info column (stop 1, hidden by default)
 
@@ -236,9 +329,13 @@ both.
 
 `state.showDescription` (default `false`, ephemeral — outside the URL) decides
 whether the column exists at all; closed it takes up **no space** (the whole
-`${() => state.showDescription ? … : ''}` block drops away, wrapped in a
-stable `class="contents"` root per the bare-toggling-expression rule in
-`.claude/rules/arrowjs-pitfalls.md`). Open (only in `state.mode==='list'`),
+`${() => state.showDescription || state.descriptionPinned ? … : ''}` block drops
+away, wrapped in a stable `class="contents"` root per the
+bare-toggling-expression rule in `.claude/rules/arrowjs-pitfalls.md`).
+`descriptionPinned` is the one way the column is visible **without** owning the
+keyboard — a mouse click into a diff that still had room for it, see "A mouse
+click into a diff only hides a left column that no longer fits" above. Open
+(with the keyboard, only in `state.mode==='list'`),
 `<aside>` and `<main>` need no code of their own to react to it any more —
 being real flex siblings AFTER this column in `AppColumns`, the row simply
 pushes them right by this column's own width plus the row's `gap-6` (1.5rem)

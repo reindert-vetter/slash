@@ -43,6 +43,22 @@ Two consequences worth keeping in mind when adding a click handler:
   `Enter` sends the reply). See "Status mark / send-status indicator" in
   `.claude/docs/comments-panel.md`.
 
+## Rule 1b: a click is not a nav-chain STEP, so it gives nothing up for free
+
+The keyboard's left→right chain is a sequence of stops: stepping right past a
+column means leaving it behind, so the PR-description column and the pr-index
+disappear as you go. A **click** into a diff isn't a step — it's "show me this",
+with no statement at all about the columns to its left. Reviewer request: "als
+ik met mijn muis op een diff klik, en in de breedte past alles, dan moeten we
+niets verbergen; past het niet, verberg dan eerst de PR-omschrijving en daarna
+de PR-index."
+
+So a mouse click keeps whichever left columns still fit, dropping the left-most
+one first, while the keyboard path stays exactly as it was. Mechanism
+(`applyDiffColumnFit`, `state.descriptionPinned`/`keepIndexInDiff`, the
+measurement and why it can't race the render): "A mouse click into a diff only
+hides a left column that no longer fits" in `.claude/docs/detail-layout.md`.
+
 ## Rule 2: a mouse-only shortcut is allowed, but only as a shortcut
 
 A few targets do something the keyboard cannot do in one step. That is fine as
