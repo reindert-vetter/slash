@@ -1348,6 +1348,13 @@ function codeDiff(
     </div>`
   }
   const rows = blockRows(b)
+  // TEMP DEBUG instrumentation — remove after investigation. Logs, per
+  // changed line, how many characters it has, tagged with the current diff
+  // view (split/unified/fit) so the same block can be compared across all
+  // three stands via the `a` toggle.
+  changedRows(rows).forEach((i) => {
+    console.log(`[diff-debug] view=${viewMode()} row=${i} chars=${rowAnchorText(rows[i]).length}`)
+  })
   const only = singleSide(b)
   // Unlike the removed old-'new' stand, the unified stand no longer hides a
   // two-sided (modified) block's old pane — it restructures the block into
