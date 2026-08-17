@@ -265,7 +265,7 @@ so an index outside `changedRows` is simply ignored. The only visible effect is
 `rowCellHTML`'s left-margin ✓ (`changed && approved.has(i)`) also lighting up on
 the blank row — a shape signal, never colour-only.
 
-## Approving from the mouse: a call-segment hover ring, and the passive palette for everything else
+## Approving from the mouse: a call-segment hover ring
 
 A first cut of this added three clickable gutter glyphs — a round `✓`/`○` per
 line, a square `▣`/`▢` on a group's last row, and a hover-only ring per call
@@ -275,10 +275,12 @@ removed again on reviewer request**: "rondjes/vormpjes aan de linkerkant kan
 weg (vinkje mag blijven) … ik wil direct een menu zien onder de onderste
 geselecteerde regel (zelfde menu als Enter)". Only the plain, always-visible
 ✓ checkmark (unconditional, non-clickable — restored to its original form)
-and the **call-segment hover ring** stayed; a mouse **selection** (not a
-hover) now shows the same command palette `Enter` would open, passively —
-see "A mouse selection shows the palette passively" in
-`.claude/docs/command-palette.md` for that replacement mechanism.
+and the **call-segment hover ring** stayed. The mouse-**selection** command
+palette that request originally led to (a passive preview shown under every
+mouse selection) was itself later replaced outright by the right-click
+context menu — see "The right-click context menu" in
+`.claude/docs/command-palette.md` — so a plain mouse selection (click or
+drag) shows no menu at all any more; only a right-click does.
 
 **Call** — the existing per-segment dot markers (`segDotMarkers`, above) are
 clickable once a row is partially approved; `segHoverRingMarkers` adds a
@@ -316,7 +318,7 @@ gran the keyboard had active" rule the plain row click already applies (see
 "Line selection" in `.claude/docs/diff-render.md`) — and then runs
 `mouseApprove()`.
 
-**`mouseApprove()` is the mouse counterpart of `Space`, with ONE deliberate
+**`mouseApprove()` is the mouse counterpart of `Space`, with one deliberate
 difference.** It reuses the exact same
 `approveContext()`/`descendIntoUnapprovedCall`/`toggleApprove(true)` chain as
 `spaceKey` (see "`Space` — approve + continue in one keypress" in
@@ -332,23 +334,15 @@ to skip past it. A retract never auto-advances either
 (`afterApproveAction`'s `if (!approving) return`), same as every other
 retract path in this app.
 
-**One deliberate DIVERGENCE from `Space`, added later:** `mouseApprove()`
-shows the passive command-palette preview (see "A mouse selection shows the
-palette passively" in `.claude/docs/command-palette.md`) once the
-approve-and-continue chain has actually settled — `Space` itself still shows
-no menu at all (unchanged, see its own doc comment in
-`.claude/docs/keyboard-navigation.md`). Reviewer report: a click on a call
-that auto-continued the cursor elsewhere (a sibling unit, a different block,
-or down into a resolved call's own subtree via `descendIntoUnapprovedCall`)
-left no visible menu at the new landing spot at all, unlike a plain click
-selection. `toggleApprove`/`toggleCallApprove`/`afterApproveAction` all
-return their promise chain for exactly this reason; `mouseApprove` calls
-`showPassiveMenu()` directly once that chain resolves — not the
-mousedown/mouseup-deferred `schedulePassiveMenu()`, since a click on an
-approve dot never starts a multi-row selection gesture that a preview could
-visually collide with. `showPassiveMenu`'s own `if (menu.open) return` guard makes
-this a no-op on the "nothing left ahead" branch, which opens the real,
-keyboard-owning `reviewApprove`/`reviewChoice` menu instead.
+**`mouseApprove()` used to also show the mouse-selection passive
+command-palette preview** once the approve-and-continue chain settled, for a
+click that auto-continued the cursor elsewhere (a sibling unit, a different
+block, or down into a resolved call's own subtree via
+`descendIntoUnapprovedCall`) — that preview mechanism is gone (see above), so
+`mouseApprove()` now matches `Space` exactly: approve (or retract) + continue,
+no menu shown either way. Right-clicking the landed-on unit afterwards reaches
+the same `block` context menu a plain right-click anywhere else in the diff
+would.
 
 **Deliberately scoped to the split/fit stands only** (`rowApproveEnabled`
 gates on `!gutter`, and `opts.gutter` is only ever true from

@@ -562,15 +562,18 @@ const state = reactive({
   // by activateSearch, cleared by exitSearch/setSearch.
   searchLoopFocused: false,
   onSearch: setSearch,
-  // onPushTodo — the push-todo row's click handler. A click runs the same
-  // function a key runs (see .claude/docs/mouse-navigation.md): it moves the
-  // keyboard stop onto the row and opens the same confirm menu Enter opens,
-  // never the push itself.
-  onPushTodo: () => {
+  // onPushTodo — the push-todo row's click (and right-click) handler. A click
+  // runs the same function a key runs (see .claude/docs/mouse-navigation.md):
+  // it moves the keyboard stop onto the row and opens the same confirm menu
+  // Enter opens, never the push itself. `opts` is forwarded to openMenu
+  // unchanged — a plain click passes nothing, a right-click passes
+  // `{native,x,y}` (see "The right-click context menu" in
+  // command-palette.md), same shape as Block.mjs's onOpenMenu.
+  onPushTodo: (opts) => {
     state.toggleFocused = false
     state.ignoreToggleFocused = false
     state.pushTodoFocused = true
-    openMenu('pushTodo')
+    openMenu('pushTodo', opts)
   },
   // onBatchRow — the batch action row's click handler. A click runs the same
   // function the row's own Enter runs (see .claude/docs/mouse-navigation.md):
@@ -582,6 +585,21 @@ const state = reactive({
     state.pushTodoFocused = false
     state.batchRowFocused = true
     startBatchFromRow()
+  },
+  // onRowContextMenu — a sidebar row's right-click handler (BlockList.mjs's
+  // row(), which lands the selection first, exactly like its own @click).
+  // Resolves the SAME menu Enter would open on this now-selected row
+  // (rightClickMenuMode — 'block' for an ordinary block, 'prComment' for a
+  // comment-index item) and opens it native-styled at the cursor. A no-op
+  // (native browser menu stays) while a real text field has focus, or when
+  // rightClickMenuMode() finds nothing to open. See "The right-click context
+  // menu" in command-palette.md.
+  onRowContextMenu: (e) => {
+    if (isEditableFocused()) return
+    const mode = rightClickMenuMode()
+    if (!mode) return
+    e.preventDefault()
+    openMenu(mode, { native: true, x: e.clientX, y: e.clientY })
   },
   // showDescription — stop 1 of the left→right nav chain (see
   // keyboard-navigation.md): the PR-info/description column, hidden by default so
@@ -5757,13 +5775,13 @@ async function openTask(run) {
 // (the whole PR is fully approved — see REVIEW_APPROVE_COMMANDS),
 // 'reviewChoice' (it isn't — see REVIEW_CHOICE_COMMANDS) or 'reviewReject'
 // (the free-text rejection-reason step "Wijs de PR af" opens).
-// `passive` is a second, independent flag on the same stable `menu` object:
-// true while the palette is shown as a plain, clickable preview under a mouse
-// selection — never taking over the keyboard (unlike `open`) — see
-// showPassiveMenu below and "A mouse selection shows the palette passively"
-// in .claude/docs/command-palette.md.
-const menu = reactive({ open: false, passive: false })
-let ms = reactive({ query: '', sel: 0, sub: null, mode: 'block', commands: [] })
+const menu = reactive({ open: false })
+// `ms.native`/`ms.x`/`ms.y` are only meaningful while `ms.native` is true — the
+// right-click context-menu variant (see openMenu/positionNativeMenu below and
+// "The right-click context menu" in command-palette.md): CommandMenu renders
+// without a search field and positionMenu places the box at (x, y) instead of
+// under a diff-row/region anchor.
+let ms = reactive({ query: '', sel: 0, sub: null, mode: 'block', commands: [], native: false, x: 0, y: 0 })
 
 // withClose prepends a "Sluit menu" item to any command list — every root
 // list (COMMANDS, PR_COMMANDS, ...) and every submenu's `children` alike, so
@@ -5783,8 +5801,17 @@ function withClose(list, onClose) {
 // defaultSel picks the initial selection for a freshly opened menu/submenu:
 // the 2nd item (index 1), so the pinned "Sluit menu" is never itself the
 // default Enter action — but never past the end, so a list with 0 or 1 real
-// item still gets a valid index instead of pointing at nothing.
-function defaultSel(list) {
+// item still gets a valid index instead of pointing at nothing. `list` is
+// always the RAW list (withClose's pinned row still at index 0) — the same
+// one passed to `ms.commands`.
+//
+// `native` (a right-click context menu) has no pinned row at all in the
+// FILTERED list resolveCommands/CommandMenu actually walk (see
+// resolveCommands' own native filter just below, which drops 'close-menu'
+// whether or not `list` — always the RAW, unfiltered list — happens to carry
+// one), so its first real action already sits at index 0.
+function defaultSel(list, native) {
+  if (native) return 0
   return Math.min(1, Math.max(0, list.length - 1))
 }
 
@@ -6535,6 +6562,20 @@ async function copyReviewSummary(text) {
   }
 }
 
+// copySelectionCommand builds the native (right-click) context menu's
+// "Kopieer selectie" item — see openMenu's own doc comment for when it's
+// added at all. `text` is snapshotted once, at open time, so a later change
+// to the page's selection (the menu itself takes no DOM focus away from it)
+// never retroactively changes what a delayed click on this row would copy.
+function copySelectionCommand(text) {
+  return {
+    id: 'copy-selection',
+    label: 'Kopieer selectie',
+    hint: 'copy kopieer',
+    run: () => copyReviewSummary(text),
+  }
+}
+
 // submitReview posts a real GitHub PR-level review via the submit_review
 // Workflow (POST /api/workflows/submit_review — the sanctioned write path,
 // see .claude/rules/workflows-write-boundary.md; the backend itself is out
@@ -7114,8 +7155,7 @@ function drillExtendRange(level, delta) {
 // segment/card the gesture started on (beginMouseSelection, below), and the
 // browser's own text selection is left completely alone (Block.mjs no longer
 // calls preventDefault() for it). The gesture is resolved exactly ONCE, on the
-// next `mouseup` (the same deferred moment schedulePassiveMenu already used,
-// further down), by reading `window.getSelection()`:
+// next `mouseup`, by reading `window.getSelection()`:
 //
 // - **Shift+click is checked FIRST, before ever reading the native
 //   selection** → resolveShiftClickSelection: extends the app's OWN
@@ -7327,9 +7367,10 @@ function captureSelectionSnapshot(sel, cardEl) {
 // just its start/end order.
 //
 // Deferred one `requestAnimationFrame` — the same "wait one frame for the
-// just-swapped state to actually render" pattern `showPassiveMenu`'s own
-// `positionMenu` call already relies on — so the row elements being queried
-// here are the NEW (already re-rendered) ones. `cardEl.isConnected` guards
+// just-swapped state to actually render" pattern `showPassiveMenu` used to
+// rely on (removed, see "The right-click context menu" in
+// command-palette.md) — so the row elements being queried here are the NEW
+// (already re-rendered) ones. `cardEl.isConnected` guards
 // against the reviewer having navigated away before that frame fires (the
 // card itself unmounted, e.g. `document.body.contains` is false already).
 function restoreExactSelection(cardEl, snapshot) {
@@ -7349,8 +7390,7 @@ function restoreExactSelection(cardEl, snapshot) {
 }
 
 // resolvePendingMouseSelection is called from the document's own `mouseup`
-// listener (the same one schedulePassiveMenu already defers to, further
-// down), exactly once per gesture. See the file-level comment above for the
+// listener, exactly once per gesture. See the file-level comment above for the
 // click-vs-range decision. Shift+click is checked FIRST, before ever reading
 // `window.getSelection()` — it is resolved via app state alone
 // (resolveShiftClickSelection), never via the browser's own native
@@ -7403,7 +7443,9 @@ function resolvePendingMouseSelection() {
 // something, so a Shift+click landing on a card that doesn't already own the
 // keyboard falls through to the ordinary "select this row" path
 // (resolveClickSelection) instead — there is no earlier selection on that
-// card to extend from.
+// card to extend from. No longer calls a passive-menu-preview scheduler
+// (removed — see "The right-click context menu" in command-palette.md); an
+// ordinary click/selection now shows no menu at all, only a right-click does.
 function resolveShiftClickSelection({ level, b, row }) {
   if (b && b.category === 'TRANSLATION') return false
   const rows = blockRows(b)
@@ -7416,7 +7458,6 @@ function resolveShiftClickSelection({ level, b, row }) {
     const anchor = state.rangeAnchor != null ? state.rangeAnchor : state.change
     state.rangeAnchor = anchor
     state.change = target
-    schedulePassiveMenu()
     return true
   }
   if (state.focusLevel !== level) return false
@@ -7429,7 +7470,6 @@ function resolveShiftClickSelection({ level, b, row }) {
   state.drillCursor = state.drillCursor.map((c, idx) =>
     idx === level - 1 ? { ...c, gran: 'line', change: target, rangeAnchor: anchor } : c,
   )
-  schedulePassiveMenu()
   return true
 }
 
@@ -7448,6 +7488,14 @@ function resolveShiftClickSelection({ level, b, row }) {
 // (their gran stays pinned at 'group' — see navUnitsOf/setGran's own
 // exclusion): every click there keeps landing on the one key-row under it,
 // same as before.
+//
+// Returns whether it actually landed on a real navigation unit — true for
+// every branch that mutates state.gran/change (or a drilled column's own
+// drillCursor entry), false for the "no landable unit here" and early-exit
+// branches. An ordinary click (resolvePendingMouseSelection) ignores this;
+// handleRowContextMenu (the right-click path, below) reads it to decide
+// whether to suppress the native browser menu — see "The right-click context
+// menu" in command-palette.md.
 function resolveClickSelection({ level, b, i, row, segStart }) {
   const isTranslation = !!(b && b.category === 'TRANSLATION')
   const rows = blockRows(b)
@@ -7457,12 +7505,11 @@ function resolveClickSelection({ level, b, i, row, segStart }) {
       const idx = callUnits.findIndex((u) => u.start === row && u.segStart === segStart)
       if (idx >= 0) {
         ensureTopLevelDiffFocus(i)
-        if (state.mode !== 'diff' || !isActiveCard(b)) return
+        if (state.mode !== 'diff' || !isActiveCard(b)) return false
         state.gran = 'call'
         clearRangeAnchor(0)
         state.change = idx
-        schedulePassiveMenu()
-        return
+        return true
       }
       // Defensive only (the segment came straight from the same
       // rowCallSegments/changeCalls split, so this shouldn't happen) — fall
@@ -7470,25 +7517,42 @@ function resolveClickSelection({ level, b, i, row, segStart }) {
     }
     const lineUnits = navUnitsOf(b, rows, 'line')
     const idx = lineUnits.findIndex((u) => u.start <= row && row <= u.end)
-    if (idx < 0) return // no changed/landable line here — no interaction at all
+    if (idx < 0) return false // no changed/landable line here — no interaction at all
     ensureTopLevelDiffFocus(i)
-    if (state.mode !== 'diff' || !isActiveCard(b)) return
+    if (state.mode !== 'diff' || !isActiveCard(b)) return false
     if (!isTranslation) state.gran = 'line'
     clearRangeAnchor(0)
     state.change = idx
-    schedulePassiveMenu()
-    return
+    return true
   }
-  if (state.focusLevel !== level) return
+  if (state.focusLevel !== level) return false
   const cur = state.drillCursor[level - 1]
-  if (!cur) return
+  if (!cur) return false
   const gran = isTranslation ? cur.gran : 'line'
   const units = navUnitsOf(b, rows, gran)
   const idx = units.findIndex((u) => u.start <= row && row <= u.end)
-  if (idx < 0) return // same "no landable unit here → no interaction" rule
+  if (idx < 0) return false // same "no landable unit here → no interaction" rule
   if (relatedActive()) leaveRelated()
   state.drillCursor = state.drillCursor.map((c, idx2) => (idx2 === level - 1 ? { ...c, gran, change: idx, rangeAnchor: null } : c))
-  schedulePassiveMenu()
+  return true
+}
+
+// handleRowContextMenu is the right-click counterpart of beginMouseSelection/
+// resolvePendingMouseSelection above (see Block.mjs's onRowContextMenu opt,
+// wired at both DetailPanel Block() call sites next to onRowMouseDown). A
+// right-click has no drag/native-selection gesture to protect (unlike a
+// mousedown, per the file-level comment above), so this resolves SYNCHRONOUSLY
+// via resolveClickSelection — the exact same landing logic an ordinary click
+// uses — and only opens the (native-styled, cursor-positioned) block palette
+// when that actually landed on a real unit; otherwise it returns false and
+// Block.mjs's onBlockContextMenu leaves the native browser menu in place
+// (Copy/Look up on an unchanged/filler line). Mode is always 'block': a
+// right-click on a diff row only ever happens while a block is focused, never
+// at stop 1. See "The right-click context menu" in command-palette.md.
+function handleRowContextMenu(level, b, i, row, segStart, x, y) {
+  if (!resolveClickSelection({ level, b, i, row, segStart })) return false
+  openMenu('block', { native: true, x, y })
+  return true
 }
 
 // resolveRangeSelection implements a real, non-collapsed selection — a mouse
@@ -7534,7 +7598,6 @@ function resolveRangeSelection(pending, startRow, endRow, snapshot) {
     if (!units.length) return
     state.rangeAnchor = unitAtRow(units, lo)
     state.change = unitAtRow(units, hi)
-    schedulePassiveMenu()
     restoreExactSelection(cardEl, snapshot)
     return
   }
@@ -7549,7 +7612,6 @@ function resolveRangeSelection(pending, startRow, endRow, snapshot) {
   state.drillCursor = state.drillCursor.map((c, idx) =>
     idx === level - 1 ? { ...c, gran: 'line', change: endIdx, rangeAnchor: startIdx } : c,
   )
-  schedulePassiveMenu()
   restoreExactSelection(cardEl, snapshot)
 }
 
@@ -7623,29 +7685,23 @@ function approveClickAt(level, b, i, row, kind, segStart) {
 // this mouse action is not an exception).
 //
 // Unlike Space — which deliberately shows no menu at all (see spaceKey's own
-// comment) — a click here still shows the passive command-palette preview
-// (see "A mouse selection shows the palette passively" in
-// command-palette.md) once the approve+continue chain has actually settled:
-// this is a MOUSE action, and it can auto-continue the cursor to a unit far
-// from the one that was clicked (a different line/group in the same block, a
-// sibling, even a different top-level block via descendIntoUnapprovedCall),
-// so the reviewer needs the palette to show up at the ACTUAL landing spot,
-// not the clicked one. `toggleApprove`/`toggleCallApprove`/
-// `afterApproveAction` all now return their promise chain for exactly this —
-// `showPassiveMenu()` is called directly (not the mousedown/mouseup-deferred
-// `schedulePassiveMenu()`) because there is no multi-row selection gesture to
-// protect here, only a single click; its own `if (menu.open) return` guard already
-// makes this a no-op when the chain instead opened a real, keyboard-owning
-// menu (the "nothing left ahead" → reviewApprove/reviewChoice branch).
+// comment) — this used to also show the mouse-selection passive
+// command-palette preview once the approve+continue chain settled. That
+// preview mechanism no longer exists at all (see "The right-click context
+// menu" in command-palette.md — right-click replaced it everywhere, and a
+// call-approve dot has no obvious "cursor position" of its own to right-click
+// on after an auto-continue jumps elsewhere), so a click on a call-approve
+// dot now behaves exactly like Space: approve (or retract) + auto-continue,
+// no menu shown.
 function mouseApprove() {
   const ctx = approveContext()
   if (!ctx.b) return
   if (isApproveDone(ctx)) {
-    Promise.resolve(toggleApprove(true)).then(() => showPassiveMenu())
+    toggleApprove(true)
     return
   }
   descendIntoUnapprovedCall(ctx).then((handled) => {
-    Promise.resolve(handled ? undefined : toggleApprove(true)).then(() => showPassiveMenu())
+    if (!handled) toggleApprove(true)
   })
 }
 
@@ -10161,8 +10217,24 @@ function rangeCommandsFor() {
 // that opens either the Claude composer or the comment composer with the
 // typed text pre-filled, so the reviewer can continue typing ("Chat over deze
 // regel", default, and "Comment op deze regel" below it). Shared by the menu
-// render and the keyboard handler so both walk the same list.
+// render (CommandMenu's own `resolve` prop) and the keyboard handler so both
+// walk the exact same list — which is why the `native` (right-click) filter
+// below lives HERE, in the one shared function, rather than separately in
+// CommandMenu.mjs's render and in onKeydown's ↑/↓/Enter handling: those two
+// consumers indexing into two subtly different lists is exactly the bug this
+// avoids (see the comment on this wrapper's own definition below).
 function resolveCommands(query) {
+  const list = resolveCommandsInner(query)
+  // A native (right-click) context menu never shows the pinned "Sluit menu"
+  // row at all (reviewer: "niet nodig als ik met rechtermuisknop open doe" —
+  // Esc/an outside click already close it) — filtered here, the single
+  // shared source, so CommandMenu's render and onKeydown's ms.sel bounds
+  // always agree on the same indices. A no-op for a mode/step whose list
+  // never had one in the first place (e.g. reviewReject's dynamic list).
+  return ms.native ? list.filter((c) => c.id !== 'close-menu') : list
+}
+
+function resolveCommandsInner(query) {
   // A submenu (ms.sub, set by enterSubmenu when a command has `children` —
   // e.g. "Open GitHub", or REVIEW_APPROVE_CONFIRM_COMMANDS opened from
   // "Keur de HELE PR goed" below) always wins, regardless of ms.mode: mode
@@ -10330,10 +10402,18 @@ function resolveCommands(query) {
 }
 
 // repositionMenu keeps the open palette anchored under the selection as the page
-// resizes or scrolls beneath it. A no-op while the menu is fully closed —
-// covers the passive preview too, so it stays under its selection on resize.
+// resizes or scrolls beneath it. A no-op while the menu is fully closed. A
+// `native` (right-click) menu has no persistent anchor element to re-measure
+// — it's pinned to the exact point the reviewer right-clicked — so a scroll
+// or resize just closes it instead, mirroring how a real native OS context
+// menu also disappears the moment the page under it moves.
 function repositionMenu() {
-  if (menu.open || menu.passive) positionMenu()
+  if (!menu.open) return
+  if (ms.native) {
+    closeMenu()
+    return
+  }
+  positionMenu()
 }
 window.addEventListener('resize', repositionMenu)
 window.addEventListener('scroll', repositionMenu, true) // capture: catch inner scrollers too
@@ -10348,11 +10428,14 @@ window.addEventListener('scroll', repositionMenu, true) // capture: catch inner 
 // plain (non-reactive) function, by resolving rootCommandsFor(mode) through
 // snapshotCommands — see those for why that must happen from ordinary code and
 // never from inside CommandMenu's own render/filter path.
-function openMenu(mode = 'block') {
-  // A passive preview (see showPassiveMenu) is superseded the moment the real,
-  // keyboard-owning menu opens — same `ms`/positioning either way, so there is
-  // nothing left for the passive render branch to show once `open` is true.
-  menu.passive = false
+//
+// `opts.native` (set by every right-click entry point — see "The right-click
+// context menu" in command-palette.md) renders the native/context-menu style
+// (CommandMenu's own `native` opt) and positions the box at `opts.x`/`opts.y`
+// instead of under a diff-row/region anchor; a plain click/`Enter`/`/` open
+// passes no opts at all, which keeps every existing behaviour unchanged.
+function openMenu(mode = 'block', opts = {}) {
+  const native = !!opts.native
   // Reset the cached index-row anchor on every fresh open except a follow-up
   // menu itself (isReviewFollowup — postApprove, or one of the review-submit
   // modes, see lastIndexRowRect) — this keeps the cache from ever leaking a
@@ -10361,22 +10444,51 @@ function openMenu(mode = 'block') {
   // anchor row is visible.
   if (!isReviewFollowup(mode)) lastIndexRowRect = null
   const commands = snapshotCommands(rootCommandsFor(mode))
+  // A native (right-click) menu suppresses the native browser context menu —
+  // and with it, the native "Copy" item — so it needs its own, reviewer
+  // request: "menu item toevoegen om selected te kunnen kopieren". Appended
+  // at the END of the list (never disturbing defaultSel's "2nd item" —
+  // whatever that mode's own default action already was), and ONLY when
+  // there is an actual, non-empty text selection at the moment of opening
+  // (window.getSelection() — a right-click never collapses an existing
+  // selection the way a left-click would, so whatever the reviewer dragged
+  // before right-clicking is still intact here). Deliberately absent
+  // otherwise — a plain click-landed line/call selection (resolveClickSelection)
+  // is a navigation cursor, not a text selection, and has no well-defined
+  // "what would this copy" answer, so this never invents one.
+  if (native) {
+    const selectionText = window.getSelection ? window.getSelection().toString() : ''
+    if (selectionText) commands.push(copySelectionCommand(selectionText))
+  }
   // defaultSel starts the selection on the 2nd item — the pinned "Sluit
   // menu" (withClose) is never itself the default Enter action — falling
   // back to 0 for a mode with 0-1 real items (reviewReject's dynamic list,
   // which never gets a close item, see withClose's doc comment).
-  ms = reactive({ query: '', sel: defaultSel(commands), sub: null, mode, commands })
+  ms = reactive({
+    query: '',
+    sel: defaultSel(commands, native),
+    sub: null,
+    mode,
+    commands,
+    native,
+    x: opts.x || 0,
+    y: opts.y || 0,
+  })
   menu.open = true
   requestAnimationFrame(() => {
     // Position first — the palette starts visibility:hidden, and a hidden element
-    // can't take focus, so make it visible before focusing the input.
+    // can't take focus, so make it visible before focusing the input. The
+    // native (right-click) variant focuses it too — reviewer: "direct input
+    // selecteren" — typing must work immediately, no extra click needed.
     positionMenu()
     const el = document.querySelector('[data-testid="command-input"]')
     if (el) el.focus()
   })
   // Stepping into the diff animates the panel width (200ms). If `/` is pressed
   // mid-transition the region is measured too narrow, so re-place once it settles.
-  setTimeout(() => menu.open && positionMenu(), 220)
+  // Not relevant for a native menu — a right-click always lands on already
+  // rendered, unanimated content.
+  if (!native) setTimeout(() => menu.open && positionMenu(), 220)
 }
 
 // The publish follow-up is a command-palette menu, so it lives here — but the
@@ -10390,8 +10502,10 @@ setReplyPublishMenuOpener(() => openMenu('replyPublish'))
 // this module's own document-level onKeydown would otherwise have to
 // re-derive that from a DOM value that a REAL send might have just cleared in
 // the same event dispatch (see the 'claude' Enter branch's own doc comment,
-// and openClaudeMenuFromComposer's, for exactly why that race exists).
-setClaudeMenuOpener(() => openMenu('claude'))
+// and openClaudeMenuFromComposer's, for exactly why that race exists). `opts`
+// forwards to openMenu unchanged — a right-click on the claude-chat-card
+// (ClaudeChat.mjs) passes {native,x,y} through this exact same opener.
+setClaudeMenuOpener((opts) => openMenu('claude', opts))
 
 // Same downward-injection shape, for the other direction a comment write needs
 // to reach into this module: a freshly placed PR-wide comment must land the
@@ -10406,96 +10520,21 @@ setCommentSelectRequest((commentId) => {
 })
 
 function closeMenu() {
-  // Only flip the flags; the volatile state is replaced wholesale on the next
-  // openMenu/showPassiveMenu, and leaving this (now orphaned) `ms` untouched
-  // is exactly what keeps the torn-down menu's bindings from firing against
-  // freed slots. `passive` is cleared here too — runCommand (below) calls
-  // closeMenu after running an item picked from EITHER render, so a command
-  // clicked on the passive preview must not leave it lingering afterwards.
+  // Only flip the flag; the volatile state is replaced wholesale on the next
+  // openMenu, and leaving this (now orphaned) `ms` untouched is exactly what
+  // keeps the torn-down menu's bindings from firing against freed slots.
   menu.open = false
-  menu.passive = false
 }
 
-// showPassiveMenu shows the SAME command palette a mouse selection would
-// reach via Enter — reusing openMenu's own ms shape, resolveCommands and
-// positioning (menuAnchor/menuRegion/positionMenu) verbatim — but as a plain,
-// clickable preview that does NOT take over the keyboard: `onKeydown`'s
-// `if (menu.open)` branch (↑/↓/Enter/Esc owning the whole keyboard) is
-// gated on `open`, never `passive`, so ordinary row/gran navigation
-// (↑/↓/f/d/s/←/→) keeps working exactly as before while this is visible.
-// Reviewer request: "als je iets hebt geselecteerd, wil ik direct een menu
-// zien onder de onderste geselecteerde regel (zelfde menu als enter)" —
-// this is the mouse-selection replacement for the removed per-row/group
-// gutter approve toggles (see approval.md's "Approving from the mouse").
-// Called only from a mouse-driven row selection (resolveClickSelection/
-// resolveRangeSelection) — never on load or on a keyboard step, per explicit
-// reviewer answer ("alleen na een muisklik"). A no-op while the real menu is
-// already open: a stray mouse event reaching here while `open` is true must
-// not overwrite its `ms`.
-// schedulePassiveMenu defers showPassiveMenu to the next `mouseup` instead of
-// calling it right from the `mousedown` that starts a gesture: the SAME
-// mousedown may still turn into a real drag/native-selection range
-// (resolvePendingMouseSelection, "Line selection: click and browser text
-// selection" in diff-render.md) — showing the preview immediately, positioned
-// under the FIRST clicked row, would float on top of the very next rows a
-// drag is about to sweep over, since it's a real `position:fixed` element
-// with a z-index above the diff. Waiting for `mouseup` shows it only once the
-// gesture (plain click OR finished drag/selection) is actually resolved,
-// positioned under the FINAL selection either way (menuAnchor always reads
-// the current, possibly range-extended, `[data-change-active-end]`). One
-// flag, one listener, added once — `mouseup` always follows a `mousedown`
-// (even a click that never moves), so this never leaves the flag stuck. The
-// SAME listener also runs resolvePendingMouseSelection FIRST, so a selection
-// lands and schedulePassiveMenu (if it ran during that resolution) is honored
-// in the same tick.
-let pendingPassiveMenu = false
-function schedulePassiveMenu() {
-  pendingPassiveMenu = true
-}
+// The `mouseup` listener that used to resolve a pending mouse selection AND
+// (if scheduled) show the removed passive command-palette preview now only
+// does the first half: resolving a plain click / real (native) selection
+// gesture is unrelated to any menu at all these days — see
+// resolvePendingMouseSelection's own doc comment and "The right-click context
+// menu" in command-palette.md for what replaced the passive preview.
 document.addEventListener('mouseup', () => {
   resolvePendingMouseSelection()
-  if (!pendingPassiveMenu) return
-  pendingPassiveMenu = false
-  showPassiveMenu()
 })
-
-function showPassiveMenu(mode = 'block') {
-  if (menu.open) return
-  const commands = snapshotCommands(rootCommandsFor(mode))
-  ms = reactive({ query: '', sel: defaultSel(commands), sub: null, mode, commands })
-  menu.passive = true
-  // No input focus (unlike openMenu) — the whole point is that the keyboard
-  // stays with the diff. positionMenu needs a frame for the just-swapped `ms`
-  // to render at its real size first.
-  requestAnimationFrame(() => menu.passive && positionMenu())
-}
-
-// hidePassiveMenu closes the passive preview only — never touches `open` — so
-// a stray call while the real, keyboard-owning menu is showing is always a
-// no-op (closeMenu already covers that path).
-function hidePassiveMenu() {
-  menu.passive = false
-}
-
-// A mousedown anywhere outside the passive preview's own box (and outside a
-// diff row, which manages the preview itself via resolvePendingMouseSelection/
-// showPassiveMenu) dismisses it — e.g. clicking the sidebar, a comment, or the description
-// column. Capture phase, so it runs before the target's own click handler;
-// excluding `[data-row]` avoids racing the very click that's about to call
-// showPassiveMenu again for a NEW row. Excluding the command-anchor itself
-// keeps a click on one of its own rows working (CommandMenu's own
-// `@click="${() => onRun(c)}"` still fires normally afterwards).
-document.addEventListener(
-  'mousedown',
-  (e) => {
-    if (!menu.passive || menu.open) return
-    const box = document.querySelector('[data-testid="command-anchor"]')
-    if (box && box.contains(e.target)) return
-    if (e.target && e.target.closest && e.target.closest('[data-row]')) return
-    hidePassiveMenu()
-  },
-  true,
-)
 
 // enterSubmenu swaps the visible list to a parent command's children without
 // closing the palette, resetting the query/selection and repositioning (the list
@@ -10504,8 +10543,10 @@ function enterSubmenu(children) {
   ms.sub = children
   ms.query = ''
   // Same "open on the 2nd item" convention as openMenu — every submenu gets
-  // its own pinned "Sluit menu" first (withClose), so start past it.
-  ms.sel = defaultSel(children)
+  // its own pinned "Sluit menu" first (withClose), so start past it (unless
+  // this is a native context menu, which never shows that pinned row at all
+  // — see resolveCommands' own native filter).
+  ms.sel = defaultSel(children, ms.native)
   requestAnimationFrame(() => {
     positionMenu()
     const el = document.querySelector('[data-testid="command-input"]')
@@ -10562,14 +10603,42 @@ function contextMenuMode() {
   return 'block'
 }
 
+// rightClickMenuMode picks the palette mode a right-click should open at
+// wherever the keyboard/selection now sits (after handleContextMenu's own
+// landing step has already run) — the general principle the reviewer gave:
+// "rechtsklik opent hetzelfde menu dat Enter op die plek zou openen. Is er op
+// die plek geen zo'n menu ... dan onderdruk je niets en blijft het native
+// menu staan." Unlike `/`'s own contextMenuMode (which deliberately treats
+// the description/toggle/ignoreToggle/batch rows as "fall back to the
+// general PR menu", since `/` always wants to show SOMETHING searchable),
+// this mirrors Enter's ACTUAL behaviour at each of those spots: three of them
+// run a direct action with no menu at all (see onKeydown's own
+// toggleFocused/ignoreToggleFocused/batchRowFocused branches), so this
+// returns null there — a right-click leaves the native browser menu in
+// place, exactly like an unchanged diff line does. `compose`/`comment`/
+// `claude` — deliberately absent from contextMenuMode's own table for the
+// same reason `/` never reaches them — ARE covered here, since a right-click
+// (unlike `/`) can land directly inside those panels; matches
+// isCommentOrThreadFocused/isClaudeChatFocused's own Enter branches, except
+// deliberately more permissive on the reply-field-non-empty gate (mouse-
+// navigation.md's "a click may be more permissive than the key" — the same
+// reasoning the send-status button next to "Stuur" already uses).
+function rightClickMenuMode() {
+  if (isEditableFocused()) return null // a real text field keeps its native Cut/Copy/Paste/spellcheck menu
+  if (isComposeOpen() && composeHasText()) return 'compose'
+  if (relatedActive()) {
+    if (isCommentOrThreadFocused()) return 'comment'
+    if (isClaudeChatFocused()) return 'claude'
+    // Onderliggende-code panel focused (cs.focus === 'code'): Enter there
+    // drills a child, never opens a menu — see onKeydown's own isCodeFocused
+    // branch — so a right-click there leaves the native menu alone too.
+    return null
+  }
+  if (state.toggleFocused || state.ignoreToggleFocused || state.batchRowFocused) return null
+  return contextMenuMode()
+}
+
 function onKeydown(e) {
-  // A passive mouse-selection preview (showPassiveMenu) never survives a
-  // keypress — the reviewer answer was "alleen na een muisklik", so as soon
-  // as the keyboard is used again (any key, including Enter — which is about
-  // to open the REAL menu fresh via openMenu, see the branches below) the
-  // stale preview is gone. Checked first and unconditionally, before every
-  // other branch, since none of them need to know it existed.
-  if (menu.passive && !menu.open) hidePassiveMenu()
   // Cmd+[ / Cmd+] (reviewer request) are a plain remap onto ArrowLeft/
   // ArrowRight — checked FIRST, before every other branch, so the rest of
   // this function (and every helper it calls) never needs to know these keys
@@ -10619,7 +10688,7 @@ function onKeydown(e) {
       if (ms.sub) {
         ms.sub = null
         ms.query = ''
-        ms.sel = defaultSel(ms.commands)
+        ms.sel = defaultSel(ms.commands, ms.native)
       } else {
         closeMenu()
       }
@@ -11856,8 +11925,10 @@ function menuRegion() {
 // width, right side) and places it just below the vertical anchor, flipping
 // *above* when it wouldn't fit below and clamping into the viewport either way.
 // Called after the menu renders (its size is then known) and again on
-// resize/scroll while open, since the anchor moves with the page.
+// resize/scroll while open, since the anchor moves with the page. A `native`
+// (right-click) menu has no anchor/region at all — see positionNativeMenu.
 function positionMenu() {
+  if (ms.native) return positionNativeMenu()
   const box = document.querySelector('[data-testid="command-anchor"]')
   const anchor = menuAnchor()
   const region = menuRegion()
@@ -11882,11 +11953,38 @@ function positionMenu() {
   box.style.visibility = 'visible'
 }
 
-// menuOverlay — the `/` command palette as a floating popover over the whole page.
-// A full-screen catch layer closes it on an outside click; the palette itself is
-// fixed-positioned by positionMenu just beneath the current selection (see
-// menuAnchor), over everything else. Starts hidden until positioned to avoid a
-// top-left flash on the first frame.
+// positionNativeMenu places the right-click context menu at the exact point
+// the reviewer clicked (ms.x/ms.y, set by openMenu), clamped into the
+// viewport — mirroring how a real native OS context menu never renders
+// partially off-screen. Unlike positionMenu, its width is intrinsic
+// (CommandMenu's own `native` sizing, min-w/max-w), never stretched to a
+// region's width.
+function positionNativeMenu() {
+  const box = document.querySelector('[data-testid="command-anchor"]')
+  if (!box) return
+  box.style.width = 'auto'
+  const gap = 4
+  const vh = window.innerHeight
+  const vw = window.innerWidth
+  const mh = box.offsetHeight
+  const mw = box.offsetWidth
+  const left = Math.max(gap, Math.min(ms.x, vw - mw - gap))
+  const top = Math.max(gap, Math.min(ms.y, vh - mh - gap))
+  box.style.left = left + 'px'
+  box.style.top = top + 'px'
+  box.style.visibility = 'visible'
+}
+
+// menuOverlay — the command palette (both the searchable keyboard palette and
+// the right-click `native` context menu, see CommandMenu's own `native` opt)
+// as a floating popover over the whole page. A full-screen catch layer closes
+// it on an outside click — deliberately unconditional, including for a
+// `native` menu: unlike the removed passive mouse-selection preview, a
+// right-click menu DOES own the keyboard (`menu.open`), so dismissing it on
+// any outside click matches a real native OS context menu too. The palette
+// itself is fixed-positioned by positionMenu (menuAnchor/menuRegion for the
+// keyboard palette, ms.x/ms.y for a native one), over everything else. Starts
+// hidden until positioned to avoid a top-left flash on the first frame.
 function menuOverlay() {
   return html`
     <div class="fixed inset-0 z-40" data-testid="command-overlay" @click="${() => closeMenu()}">
@@ -11896,34 +11994,8 @@ function menuOverlay() {
         data-testid="command-anchor"
         @click="${(e) => e.stopPropagation()}"
       >
-        ${CommandMenu(ms, resolveCommands, runCommand)}
+        ${CommandMenu(ms, resolveCommands, runCommand, { native: ms.native })}
       </div>
-    </div>
-  `
-}
-
-// passiveMenuOverlay — the mouse-selection preview (showPassiveMenu): the
-// SAME CommandMenu, positioned the SAME way (positionMenu/menuAnchor/
-// menuRegion don't distinguish open vs. passive at all), but deliberately
-// WITHOUT menuOverlay's full-screen catch layer: that layer swallows every
-// click on the page to close the menu on an outside click, which is exactly
-// the keyboard-owning behaviour this preview must NOT have — a click on a
-// different row (or anywhere else) needs to reach its own handler
-// unimpeded, not get eaten by this overlay first. Dismissing the preview
-// instead happens via the document-level `mousedown` listener next to
-// showPassiveMenu (outside click) and the `hidePassiveMenu()` call at the
-// top of onKeydown (any keypress). `data-testid="command-anchor"` is the
-// same id positionMenu()/the outside-click check already query — safe since
-// this branch and menuOverlay's are mutually exclusive (MenuHost below).
-function passiveMenuOverlay() {
-  return html`
-    <div
-      class="fixed z-50 max-w-[calc(100vw-1rem)]"
-      style="top:0;left:0;visibility:hidden"
-      data-testid="command-anchor"
-      data-passive="1"
-    >
-      ${CommandMenu(ms, resolveCommands, runCommand, { passive: true })}
     </div>
   `
 }
@@ -11935,21 +12007,9 @@ function passiveMenuOverlay() {
 // z-40/z-50) only stacks *within* <main>'s own subtree — externally the whole
 // thing is capped at <main>'s z-10. Mounting the overlay as a separate
 // top-level element lets its own z-40/z-50 compete directly at the root
-// stacking context instead. `menu.open` (the real, keyboard-owning menu)
-// always wins over `menu.passive` — see openMenu, which clears `passive`
-// itself the moment it sets `open`, so the two are never both true anyway;
-// checking `open` first here is just belt and braces.
+// stacking context instead.
 function MenuHost() {
-  return html`
-    <div>
-      ${() =>
-        menu.open
-          ? menuOverlay().key('command-overlay')
-          : menu.passive
-            ? passiveMenuOverlay().key('command-passive')
-            : ''}
-    </div>
-  `
+  return html` <div>${() => (menu.open ? menuOverlay().key('command-overlay') : '')}</div> `
 }
 
 // ── PR-info column ──────────────────────────────────────────────────────────
@@ -12126,6 +12186,16 @@ function prInfoCard(state) {
           ? 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
           : 'border-slate-300 dark:border-zinc-700 ring-1 ring-black/5')}"
       data-testid="pr-info-card"
+      @contextmenu="${(e) => {
+        // Right-click anywhere on the PR-description card = the same click
+        // pr-menu-button already runs, just native-styled and positioned at
+        // the cursor — no landing step needed, this card only ever renders
+        // while it already owns the keyboard (state.showDescription). See
+        // "The right-click context menu" in command-palette.md.
+        if (isEditableFocused()) return
+        e.preventDefault()
+        openMenu('pr', { native: true, x: e.clientX, y: e.clientY })
+      }}"
     >
       <div>
         <div class="flex items-start gap-2">
@@ -12464,7 +12534,7 @@ function DetailPanel(state) {
               // same menu Enter already opens on this row (selectedComment()'s
               // branch in onKeydown, checked ahead of the generic block
               // palette — a comment-index item is never stop 1).
-              openMenu: () => openMenu('prComment'),
+              openMenu: (opts) => openMenu('prComment', opts),
             })
             const card = html`<div class="contents" data-testid="detail-card">${inner}</div>`.key(
               'detail:' + (i === sel ? 'sel' : 'prev') + ':comment:' + b.id + ':' + (b.comment && b.comment.status),
@@ -12584,8 +12654,13 @@ function DetailPanel(state) {
             // Mouse entry point into COMMANDS — the exact same expression
             // Enter already runs (see the "Enter" branch in onKeydown), so a
             // click here reaches "Comment op deze regel"/"Chat over deze
-            // regel"/"Open GitHub"/approve without the keyboard.
-            onOpenMenu: () => openMenu(state.showDescription ? 'pr' : 'block'),
+            // regel"/"Open GitHub"/approve without the keyboard. `opts` is
+            // forwarded straight through to openMenu — a plain click passes
+            // nothing (unchanged), a right-click on the card (Block.mjs's own
+            // onBlockContextMenu, outside any [data-row]) passes
+            // `{native,x,y}` so the SAME call opens the native-styled,
+            // cursor-positioned context menu instead.
+            onOpenMenu: (opts) => openMenu(state.showDescription ? 'pr' : 'block', opts),
             // The top-level card's own mouse way back out of the diff
             // (leaveDiffToList) no longer has a per-card button — see
             // MainScrollLeftHint, mounted once top-level next to
@@ -12605,6 +12680,9 @@ function DetailPanel(state) {
             // real selection to this card, `shiftKey` feeds resolveShiftClickSelection.
             onRowMouseDown: (row, segStart, cardEl, shiftKey) =>
               beginMouseSelection(0, b, i, row, segStart, cardEl, shiftKey),
+            // Right-click equivalent of onRowMouseDown above — see
+            // handleRowContextMenu's own doc comment.
+            onRowContextMenu: (row, segStart, x, y) => handleRowContextMenu(0, b, i, row, segStart, x, y),
             // A click on one of Block.mjs's own mouse approve-toggles (the
             // line/group gutter glyphs, a call segment's dot/hover ring) —
             // see approveClickAt's own doc comment.
@@ -12887,7 +12965,7 @@ function DetailPanel(state) {
                   // card's own wiring above (state.showDescription is never
                   // true for a drilled column, but the same expression keeps
                   // both call sites identical).
-                  onOpenMenu: () => openMenu(state.showDescription ? 'pr' : 'block'),
+                  onOpenMenu: (opts) => openMenu(state.showDescription ? 'pr' : 'block', opts),
                   // Mouse entry point back to the parent column — the exact
                   // same call the ← key already runs at focusLevel>0 (see
                   // closeDrilledColumn, above expandColumn). This column is
@@ -12906,6 +12984,10 @@ function DetailPanel(state) {
                   // still ranges here via the same mouseup resolution.
                   onRowMouseDown: (row, segStart, cardEl, shiftKey) =>
                     beginMouseSelection(level, b, null, row, null, cardEl, shiftKey),
+                  // Right-click equivalent — mirrors onRowMouseDown's own
+                  // 'line'-only restriction (segStart dropped) and
+                  // the top-level card's onRowContextMenu wiring above.
+                  onRowContextMenu: (row, segStart, x, y) => handleRowContextMenu(level, b, null, row, null, x, y),
                   // Mirrors the top-level card's own wiring above — see
                   // approveClickAt's own doc comment.
                   onApproveClick: (row, kind, segStart) => approveClickAt(level, b, null, row, kind, segStart),
@@ -13027,8 +13109,11 @@ function DetailPanel(state) {
                 // a click on the reply-status button next to "Stuur" opens the same
                 // comment-scoped menu (Resolve/Delete/Open op GitHub) without
                 // requiring the reply field to be empty first, since a direct click
-                // is an unambiguous request, unlike the overloaded Enter key.
-                () => openMenu('comment'),
+                // is an unambiguous request, unlike the overloaded Enter key. `opts`
+                // forwards straight to openMenu (a right-click passes
+                // {native,x,y} — see "The right-click context menu" in
+                // command-palette.md), same shape as every other onOpenMenu.
+                (opts) => openMenu('comment', opts),
               ).key('inline-comments')}
             ${() =>
               // A vertical dashed separator (not the horizontal connector

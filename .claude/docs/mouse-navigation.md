@@ -24,7 +24,7 @@ function** the key runs — never a parallel implementation. Concretely:
 | A `/pr-overview` row → popover | `Enter` on the selected row | `.claude/docs/pr-overview.md` |
 | A diff row → a genuine click selects a call-segment/line (or nothing, on an unchanged line), a real browser text selection (drag, native double-/triple-click, or Shift+click) always rounds up to a per-line range | `f`/`d`/`s` (zoom) + `↑`/`↓` (jump to it in steps), Shift+`↑`/`↓` (range) | "Line selection: click and browser text selection" in `.claude/docs/diff-render.md` |
 | A call segment's dot/hover ring (`data-seg-dot`) | `Space` (approve + continue) | "Approving from the mouse" in `.claude/docs/approval.md` |
-| A mouse selection (diff row/group/call) | landing on that unit, then `Enter` | "A mouse selection shows the palette passively" in `.claude/docs/command-palette.md` |
+| A right-click anywhere with a menu of its own (a diff row/group/call, a sidebar row, the PR description, a comment thread, the Claude column, …) | `Enter` at that same spot, native-styled at the cursor | "The right-click context menu" in `.claude/docs/command-palette.md` |
 | The Claude chat's "Stuur" button | `Enter` in the chat composer | `.claude/docs/claude-chat-panel.md` |
 | Focusing the Claude chat composer (click or Tab), on an already-anchored conversation | `→` from `'comment'` into it | "Clicking straight into the composer…" in `.claude/docs/claude-chat-panel.md` |
 | A `claude-question-option` chip | typing that same answer as free text (the backend records the next message as the open question's answer either way) | `.claude/docs/claude-chat-panel.md` |
@@ -208,21 +208,6 @@ persistent, fixed-position button mirroring `main-scroll-right-hint`'s own
 "one column per click, no shortcut" contract, so `leaveDiffToDescription`
 (the old shortcut) is gone too — reaching stop 1 from the diff is now two
 clicks (diff → list, then list → description), same as pressing `←` twice.
-
-**Does not collide with the passive command-palette preview**
-(`showPassiveMenu`, see "A mouse selection shows the palette passively" in
-`.claude/docs/command-palette.md`): that preview floats **below the bottom
-row of the current selection**, inside the diff body, while
-`main-scroll-left-hint` is fixed to the viewport corner (well outside `<main>`)
-and `block-close-column` sits in the drilled column's header row, above the
-diff entirely — none of these ever overlap the preview on screen. None of
-them are `[data-row]` and none sit inside `[data-testid="command-anchor"]`,
-so a click on any of them still dismisses a stray passive preview first (the
-existing document-level `mousedown` listener, capture phase) exactly like a
-click anywhere else outside the diff would — the dismiss only *sets a flag*,
-it never calls `stopPropagation()`, so the button's own `@click` (which does
-call `e.stopPropagation()` before its state change, per the pitfall below)
-still fires normally afterward.
 
 ## A mouse-only way to reach content overflowing to the right
 

@@ -29,98 +29,145 @@ openstaande comments verwerken" moved out of the palette entirely, into the
 sidebar itself. See "The comment_batch checkboxes and the bottom action row"
 in `.claude/docs/comments-panel.md`.
 
-`openMenu(mode)` sets the mode, `closeMenu` resets it to `'block'`, and
-`resolveCommands`/`rootCommandsFor` switch on it.
+`openMenu(mode, opts)` sets the mode (and, via `opts`, the right-click
+`native`/`x`/`y` styling — see "The right-click context menu" below),
+`closeMenu` resets it to `'block'`, and `resolveCommands`/`rootCommandsFor`
+switch on the mode.
 
 **Every menu also has a mouse entry point now** — `block-open-menu` (on the
 block card), `pr-menu-button` (in `prInfoCard`), `comment-detail-menu` (on a
 comment-index item's detail card) and `claude-chat-menu` (in the Claude
 column header) each just call `openMenu(...)`, same as the matching key. See
 "Every menu also has a mouse entry point" in `.claude/docs/mouse-navigation.md`
-for the full list, icons and the hover-visibility decision per button.
+for the full list, icons and the hover-visibility decision per button. Every
+one of these — plus every other surface with a menu of its own — is also
+reachable by right-clicking anywhere on its card, native-styled and
+positioned at the cursor: see "The right-click context menu" below.
 
-## A mouse selection shows the palette passively
+## The right-click context menu
 
-Reviewer request, replacing the removed per-row/group gutter approve toggles
-(see "Approving from the mouse" in `.claude/docs/approval.md`): "als je iets
-hebt geselecteerd, wil ik direct een menu zien onder de onderste geselecteerde
-regel (zelfde menu als Enter)". A mouse gesture that lands a diff selection
-(`resolveClickSelection`/`resolveRangeSelection` — a line, a real (native)
-multi-line text selection, or a call segment; both the top-level diff and a
-drilled column) now also calls `schedulePassiveMenu()` right after setting the
-cursor, so the exact same `block`-mode palette `Enter` would open shows up,
-positioned the same way (reusing `menuAnchor`/`menuRegion`/`positionMenu`
-verbatim — under the bottom row of the just-selected unit, floating, no layout
-reflow beyond what already happens today).
+Reviewer request: a native right-click (Cmd/Ctrl-less, the ordinary secondary
+mouse button) should show the app's own menu, styled like the native
+macOS/Chrome context menu, instead of the browser's own Copy/Look up/Inspect
+menu — "overal in de app", not just the diff. The guiding principle, which
+also folds neatly into Rule 1 of `.claude/docs/mouse-navigation.md` ("a click
+runs the same function a key runs"): **a right-click opens the exact same menu
+`Enter` would open at that spot.** If there's no such menu there (a direct
+action like the toggle-approved row, or an unchanged/filler diff line), or the
+target is a real editable field, nothing is suppressed and the native browser
+menu stays — never invent a menu action doesn't offer. This **replaced** the
+earlier "a mouse selection shows the palette passively" preview outright (a
+plain click/drag no longer shows any menu at all, only a right-click does);
+that older mechanism (`schedulePassiveMenu`/`showPassiveMenu`/
+`passiveMenuOverlay`/`menu.passive`) has been deleted, not kept alongside.
 
-**Deferred to the next `mouseup`, not called immediately from the
-`mousedown`.** The same `mousedown` that seeds a gesture
-(`beginMouseSelection`) may still turn into a real, multi-row browser text
-selection, resolved only once the gesture finishes (see "Line selection: click
-and browser text selection" in `.claude/docs/diff-render.md`) — showing the
-preview right away, positioned under the FIRST clicked row, would float (a
-real `position:fixed`, z-indexed element) on top of the very next rows a drag
-is about to sweep over. `schedulePassiveMenu` just sets a flag; one `mouseup`
-listener (added once at module load) resolves the pending selection and then
-calls `showPassiveMenu()` when the flag is set, so the preview only ever
-appears once the gesture — a plain click, or a finished drag/selection — is
-actually done, anchored on the FINAL selection either way (`menuAnchor` always
-reads the current, possibly range-extended, `[data-change-active-end]`).
+### It's a styling/positioning variant of the SAME `CommandMenu`, not a second implementation
 
-**"Passive" means it never owns the keyboard.** This is a second, independent
-flag on the shared `menu` object (`{ open, passive }`) — `onKeydown`'s
-`if (menu.open) { … }` branch (↑/↓ move the highlighted command, Enter runs
-it, block navigation suspended) is gated on `open` only, never `passive`, so
-`↑`/`↓`/`f`/`d`/`s`/`←`/`→` keep navigating the diff exactly as before while
-the preview is visible. It is purely a **clickable preview**: `CommandMenu`'s
-own rows already run on a plain `@click`, independent of keyboard focus, so
-clicking a row (or typing into its search field) works immediately. `Enter`
-still does exactly what it always did — opens the REAL, keyboard-owning menu
-fresh via `openMenu('block')`, which also clears `passive` — this is the
-"zelfde menu als Enter" part: the passive preview is a preview of that same
-palette, not a second implementation of it.
+`openMenu(mode, opts)` takes an optional 2nd argument; every right-click entry
+point calls it with `{ native: true, x: e.clientX, y: e.clientY }` (a plain
+click/`Enter`/`/` pass nothing, unchanged). `ms.native`/`ms.x`/`ms.y` carry
+that through to `CommandMenu(ms, resolve, onRun, { native: ms.native })`
+(`CommandMenu.mjs`). What `native` actually changes, deliberately kept small:
 
-**Only shown after a genuine mouse selection — never on load, never on a
-keyboard step** (explicit reviewer answer: "alleen na een muisklik").
-`hidePassiveMenu()` is called unconditionally at the very top of `onKeydown`
-(before every other branch, since none of them need to know it existed), so
-any keypress — including the `Enter` that opens the real menu — clears a
-stale preview first. A `mousedown` anywhere outside the preview's own box
-(`[data-testid="command-anchor"]`) and outside a diff row (`[data-row]`,
-which manages the preview itself via the next mouse gesture's own resolution)
-also dismisses it — clicking the sidebar, a comment, or the description column,
-for instance.
+- **Width & position** — narrow, intrinsic width (`min-w-[220px] max-w-xs`,
+  never stretched to a pane's region) at the exact point the reviewer
+  right-clicked, clamped into the viewport (`positionNativeMenu`, `home.mjs`)
+  — instead of `positionMenu`'s anchor/region-based placement under a diff
+  selection.
+- **Row style** — shorter rows (`py-1` vs. `py-2`) and a solid macOS-blue
+  highlight (`bg-blue-500 text-white`) instead of the palette's indigo tint; a
+  row with `children` gets a trailing `›` chevron (the standard macOS submenu
+  affordance).
+- **No pinned "Sluit menu" row** — reviewer: "niet nodig als ik met
+  rechtermuisknop open doe"; Esc and an outside click already close it, same
+  as any real native OS context menu. Filtered in the ONE place both
+  `CommandMenu`'s render and `onKeydown`'s ↑/↓/Enter share
+  (`resolveCommands`, `home.mjs` — it wraps the mode-specific
+  `resolveCommandsInner` and drops `c.id === 'close-menu'` whenever
+  `ms.native`), precisely so those two consumers never index into two subtly
+  different lists. `defaultSel(list, native)` mirrors this: `0` for `native`
+  (the filtered list's first row is already the first real action), the
+  usual "skip the pinned row" `1` otherwise.
+- **The search field stays, and gets focus on open** — reviewer: "direct
+  input selecteren"; typing must work immediately, no extra click. This is
+  NOT input-less like a native OS menu — it's still the same searchable
+  palette underneath, just narrower.
+- **"Kopieer selectie"** — see its own section below.
 
-**Rendering:** `passiveMenuOverlay()` (`home.mjs`) is `menuOverlay()`'s
-passive sibling — the identical `CommandMenu(ms, resolveCommands, runCommand)`
-at the identical `data-testid="command-anchor"` box, but deliberately
-**without** the full-screen `data-testid="command-overlay"` catch layer:
-that layer exists to swallow every click and close the menu on an outside
-click, which is exactly the keyboard-owning behaviour a passive preview must
-not have — a click on a different row needs to reach `beginMouseSelection`
-unimpeded, not get eaten by an overlay first. `MenuHost` renders `open`'s
-overlay first, else `passive`'s, else nothing (same stable-`<div>`-wrapper
-shape as the original toggle, see the "never key a template whose entire
-body is one toggling expression" pitfall in
-`.claude/rules/arrowjs-pitfalls.md`).
+Everything else — filtering, submenus (`enterSubmenu`), the no-match
+fallback, `runCommand`, keyboard ownership (`menu.open`) — is identical to
+the keyboard-triggered palette; there is exactly one `CommandMenu` component
+and one `openMenu` function.
 
-**Visually distinct from the keyboard-owning menu, on top of the missing
-catch layer above.** `CommandMenu(menu, resolve, onRun, opts)` takes an
-optional 4th argument; `passiveMenuOverlay()` is the only caller passing
-`{ passive: true }`. Two things change when `passive`: the pinned "Sluit
-menu" row (see `withClose`/`defaultSel` below) is filtered out of the
-rendered list and replaced by a small **"Sluit menu" button next to the
-input** (`data-testid="command-close-passive"`, looks up the close command
-fresh from `resolve(query)` on click, same `onRun` path as any other row) —
-reviewer request, so closing the preview doesn't cost scrolling past the rest
-of the list — and every row gets **less vertical padding** (`py-1` vs. the
-real menu's `py-2`). `menuOverlay()` (the real menu) keeps the pinned row and
-the taller rows unchanged; only its own `esc` badge sits where the passive
-menu's close button sits. **Right-hand hint badges are gone everywhere**
-(`c.hint` — "approve"/"task"/"claude"/"github", styled like that `esc`
-badge): reviewer request, named nothing either a mouse or keyboard user
-needed to read to use the row. `c.hint` itself still feeds `filterCommands`'s
-fuzzy match text — only the visible badge was removed, not the field.
+### Where a right-click lands: reusing each surface's own click-landing step first
+
+A right-click never assumes the keyboard/selection is already where the
+cursor points — it lands there FIRST (reusing the exact function that
+surface's own left-click already calls, per Rule 1), then resolves which menu
+`Enter` would now open, then opens it. Concretely, one `@contextmenu` binding
+per surface, colocated with (or added right next to) that surface's existing
+`@click`/mouse-entry-point button, `preventDefault`ing only when it actually
+opens something:
+
+| Surface | Landing step | Menu opened |
+|---|---|---|
+| A diff row (top-level or a drilled column, `Block.mjs`'s delegated `onBlockContextMenu`) | `resolveClickSelection` (synchronous — a right-click has no drag/native-selection gesture to protect, unlike a `mousedown`) | `block`, only if it actually landed on a real unit (`handleRowContextMenu`, `home.mjs`) — else the native menu stays (an unchanged/filler line keeps its Copy/Look up) |
+| Elsewhere on a block card (header/gutter, no `[data-row]` under the cursor) | none needed | the block's own `onOpenMenu` (same as `block-open-menu`) |
+| A sidebar row (`BlockList.mjs`'s `row()`) | the same `state.selected = i` + flag resets its own `@click` does | `rightClickMenuMode()` (see below) — `block` for an ordinary block, `prComment` for a comment-index item, or nothing (native menu stays) for a row with no menu of its own |
+| The push-todo row (`BlockList.mjs`'s `pushTodoRow`) | `state.onPushTodo`'s own landing | `pushTodo` — literally the same handler the `@click` calls, just forwarding `{native,x,y}` |
+| `pr-info-card` | none needed (only rendered while it already owns the keyboard) | `pr` (same as `pr-menu-button`) |
+| `comment-detail-card` (a PR-wide comment item) | none needed (only rendered for the selected item) | `prComment` (same as `comment-detail-menu`) |
+| The focused block-scoped thread (`expandedConversation`, `RelatedPanel.mjs`) | none needed | `comment` (same as `reaction-status`'s `openCommentMenu`) — except inside the reply `<textarea>` itself, which keeps its native Cut/Copy/Paste/spellcheck menu |
+| An unfocused thread row in the same block (`compactConversation`) | `cs.sel = i; toComment(); beat()` — its own `@click` | `comment` |
+| `claude-chat-card` (`ClaudeChat.mjs`, both the block-scoped and PR-comment-index Claude column) | none needed | `claude` (same as `claude-chat-menu`), except inside the composer `<textarea>` |
+
+`rightClickMenuMode()` (`home.mjs`) is the general-purpose resolver for
+"which menu would `Enter` open right here, right now" — it deliberately does
+**not** reuse `/`'s own `contextMenuMode()` verbatim, because `/` and `Enter`
+genuinely disagree at three spots: the toggle-approved/toggle-ignored/batch
+rows run a **direct action** on `Enter` (no menu at all), while `/` falls back
+to the general `pr` menu there since `/` always wants to show something
+searchable. `rightClickMenuMode()` mirrors `Enter`, not `/`: `null` (native
+menu stays) for those three rows, and — unlike `contextMenuMode()`, which
+`/` never reaches from inside a panel at all — it DOES cover `compose`/
+`comment`/`claude` when the target is inside one of those panels (since a
+right-click, unlike `/`, can land directly there), falling back to
+`contextMenuMode()` for everything else (`pushTodo`/`prComment`/`pr`/`block`).
+One universal guard sits in front of all of it: `isEditableFocused()` (or,
+locally, a `.closest('textarea, input')` check right in the handler) — a real
+text field always keeps its native Cut/Copy/Paste/spellcheck menu, mirroring
+"a right-click may be more permissive than Enter, but a text field is never
+overridden" (see mouse-navigation.md's "a click may be more permissive than
+the key" for the general shape of that asymmetry, applied here in the OTHER
+direction: comment/thread focus is more permissive on right-click than
+`Enter`'s own `commentReplyEmpty()` gate, since a right-click is as
+unambiguous a request as the existing `reaction-status` button).
+
+Every `onOpenMenu`-style callback threaded down as a render prop (`Block.mjs`,
+`RelatedPanel.mjs`, `ClaudeChat.mjs`) now forwards an optional `opts` object
+straight to `openMenu` — `(opts) => openMenu(mode, opts)` — so a plain click
+(`onOpenMenu()`, no args) and a right-click (`onOpenMenu({native,x,y})`) reach
+`openMenu` through the exact same function, never two.
+
+### "Kopieer selectie"
+
+Suppressing the native context menu also removes native "Copy" — reviewer:
+"menu item toevoegen om selected te kunnen kopieren". `openMenu` appends a
+**"Kopieer selectie"** command to the end of the list (never disturbing
+`defaultSel`'s own default action) whenever `opts.native` is true AND
+`window.getSelection().toString()` is non-empty AT THE MOMENT OF OPENING — a
+right-click never collapses an existing browser text selection the way a
+left-click would, so whatever the reviewer dragged before right-clicking is
+still intact by the time `openMenu` reads it. Deliberately **absent** when
+there is no real text selection: a plain right-click that only lands a
+navigation cursor (`resolveClickSelection` — a line/call unit, not a text
+range) has no well-defined "what would this copy" answer, so nothing is
+invented for that case; the item simply doesn't appear. Runs
+`copySelectionCommand(text)` → the same `navigator.clipboard.writeText` +
+minimal-error-handling shape as `copyReviewSummary` (no toast convention in
+this app, see `.claude/rules/conventions.md`), with `text` snapshotted once at
+open time so a later change to the page's selection can't retroactively
+change what a delayed click on this row would copy.
 
 Test: `tests/selection-menu.spec.mjs`.
 
@@ -222,16 +269,14 @@ changing GLOBAL state). Test: `tests/command-menu-scroll.spec.mjs`.
 
 ### Ephemeral state: a stable `menu` plus a disposable `ms`
 
-The menu state is deliberately **not** in the URL. It is split in two: a stable
-`reactive({ open, passive })` (which `MenuHost`'s top-level binding hangs off —
-`open`'s keyboard-owning overlay, else `passive`'s clickable preview, see "A
-mouse selection shows the palette passively" above) and a disposable
-`let ms = reactive({query, sel, sub, mode, commands})` that `openMenu`
-**and** `showPassiveMenu` each **replace with a fresh object on every
-open/show**. Orphan bindings from a previous open then point at the old `ms`,
-which is never touched again, so they never fire. `closeMenu` sets both
-`menu.open = false` and `menu.passive = false` (a command run from either
-render must dismiss both); `hidePassiveMenu` only ever touches `passive`.
+The menu state is deliberately **not** in the URL. It is split in two: a
+stable `reactive({ open })` (which `MenuHost`'s top-level binding hangs off)
+and a disposable `let ms = reactive({query, sel, sub, mode, commands, native,
+x, y})` that `openMenu` **replaces with a fresh object on every open** —
+`native`/`x`/`y` are only meaningful while `native` is true (a right-click
+menu, see "The right-click context menu" above). Orphan bindings from a
+previous open then point at the old `ms`, which is never touched again, so
+they never fire. `closeMenu` only sets `menu.open = false`.
 
 This is load-bearing: arrow.js does not fully clean up a dropped subtree, so
 reopening in a different mode used to crash (`W[t] is not a function`). For the

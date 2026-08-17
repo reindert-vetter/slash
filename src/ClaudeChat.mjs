@@ -698,6 +698,17 @@ export function claudeChatColumn(view, callbacks) {
         'flex min-h-0 flex-1 flex-col gap-2 rounded-xl border p-3 ' +
         (view.focused() ? 'border-indigo-300 dark:border-indigo-500/40' : 'border-transparent')}"
       data-testid="claude-chat-card"
+      @contextmenu="${(e) => {
+        // Right-click anywhere on this card = the same click claudeMenuButton
+        // already runs, native-styled at the cursor — except inside the
+        // composer textarea itself, which keeps its native Cut/Copy/Paste/
+        // spellcheck menu. See "The right-click context menu" in
+        // command-palette.md.
+        if (e.target.closest && e.target.closest('textarea, input')) return
+        if (!callbacks.onOpenMenu) return
+        e.preventDefault()
+        callbacks.onOpenMenu({ native: true, x: e.clientX, y: e.clientY })
+      }}"
     >
 
       <div class="flex items-center justify-between gap-2">

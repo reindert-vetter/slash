@@ -84,21 +84,28 @@ function commandIcon(icon) {
 // mouse and keyboard share one highlighted row. data-cmd-idx (static — `i`
 // never changes for a given row) is only read by scrollSelectedRowIntoView
 // below, to find the currently highlighted row after a keyboard step.
-// `passive` (only true for the mouse-triggered preview, see the default
-// export below) shrinks the row's vertical padding — the keyboard-owning
-// palette keeps the taller row. The right-hand hint badge (c.hint — "approve"/
-// "task"/"claude"/"github", styled like the header's "esc" badge) is dropped
-// entirely, in both variants: reviewer request, it named nothing a mouse or
-// keyboard user needed to read to use the row.
-function commandRow(c, i, menu, onRun, passive) {
+// `native` (only true for the right-click context menu, see the default
+// export below) shrinks the row's vertical padding AND swaps the highlight
+// color to a macOS/Chrome-style solid blue (bg-blue-500 text-white) instead
+// of the keyboard palette's indigo tint — see CommandMenu's own doc comment
+// for why this variant exists at all. The right-hand hint badge (c.hint —
+// "approve"/"task"/"claude"/"github", styled like the header's "esc" badge)
+// is dropped entirely, in both variants: reviewer request, it named nothing a
+// mouse or keyboard user needed to read to use the row. A `native` row with
+// `c.children` gets a trailing `›` chevron — the standard macOS submenu
+// affordance — the real palette has no equivalent (its own submenu still
+// just replaces the list in place, see enterSubmenu in home.mjs).
+function commandRow(c, i, menu, onRun, native) {
   return html`
     <button
       class="${() =>
         'flex w-full items-center gap-2 rounded-md px-2.5 text-left text-sm transition ' +
-        (passive ? 'py-1' : 'py-2') +
+        (native ? 'py-1' : 'py-2') +
         ' ' +
         (menu.sel === i
-          ? 'bg-indigo-50 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
+          ? native
+            ? 'bg-blue-500 text-white'
+            : 'bg-indigo-50 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
           : 'text-slate-700 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800/60')}"
       data-testid="command-row"
       data-cmd-idx="${i}"
@@ -107,27 +114,9 @@ function commandRow(c, i, menu, onRun, passive) {
     >
       ${() => (c.icon ? commandIcon(c.icon) : '')}
       <span class="flex-1 truncate">${() => labelOf(c)}</span>
+      ${() => (native && c.children ? html`<span class="shrink-0 text-xs opacity-70">›</span>` : '')}
     </button>
   `
-}
-
-// closeButton — the passive preview's own "Sluit menu" affordance, placed next
-// to the input instead of as the list's pinned first row (which the real,
-// keyboard-owning palette still keeps — see withClose/defaultSel in
-// command-palette.md). Looks up the close-menu command fresh on every click
-// (rather than capturing it once) so it stays correct even if the resolved
-// list changed underneath (a submenu swap, a typed filter).
-function closeButton(menu, resolve, onRun) {
-  return html`<button
-    class="mt-0.5 shrink-0 rounded bg-slate-100 dark:bg-zinc-800 px-2 py-1 text-[10px] font-medium text-slate-500 dark:text-zinc-400 hover:bg-slate-200 dark:hover:bg-zinc-700"
-    data-testid="command-close-passive"
-    @click="${() => {
-      const cmd = resolve(menu.query).find((c) => c.id === 'close-menu')
-      if (cmd) onRun(cmd)
-    }}"
-  >
-    Sluit menu
-  </button>`
 }
 
 /**
@@ -139,7 +128,15 @@ function closeButton(menu, resolve, onRun) {
  * @returns arrow.js template.
  */
 export default function CommandMenu(menu, resolve, onRun, opts = {}) {
-  const passive = !!opts.passive
+  // `native` is the right-click context-menu variant (home.mjs's
+  // handleContextMenu family) — see the file-level rewrite of "A mouse
+  // selection shows the palette passively" into "The right-click context
+  // menu" in command-palette.md. It replaced the earlier mouse-selection
+  // `passive` preview outright (removed, not renamed alongside — that
+  // feature no longer exists at all), but keeps the exact same shape: a
+  // second, purely presentational mode of the same keyboard-owning
+  // `CommandMenu`/`openMenu`, never a second implementation.
+  const native = !!opts.native
   // Keyboard ↑/↓ (menu.sel, home.mjs's onKeydown) never used to scroll the
   // highlighted row into view — command-list is a fixed max-h-72 box with its
   // scrollbar hidden (no-scrollbar), so arrowing past the visible rows left
@@ -162,9 +159,21 @@ export default function CommandMenu(menu, resolve, onRun, opts = {}) {
       if (el) el.scrollIntoView({ block: 'nearest' })
     },
   )
+  // The search field stays present in the `native` variant too (reviewer:
+  // "direct input selecteren", typing must work immediately on open) — this
+  // is a styling/positioning variant of the SAME searchable palette, not a
+  // second, input-less implementation. What `native` actually changes: the
+  // box's width/row padding/highlight colour (macOS blue vs. the palette's
+  // indigo), the position (the cursor point vs. an anchored diff-row/region,
+  // see positionNativeMenu in home.mjs), and — like the removed passive
+  // preview before it — no pinned "Sluit menu" row (reviewer: "niet nodig als
+  // ik met rechtermuisknop open doe"; Esc/an outside click still close it).
   return html`
     <div
-      class="flex max-h-72 min-h-0 w-full flex-col overflow-hidden rounded-xl border border-indigo-300 dark:border-indigo-500 bg-white dark:bg-zinc-900 shadow-2xl ring-1 ring-indigo-500/20"
+      class="${() =>
+        native
+          ? 'flex max-h-72 min-h-0 min-w-[220px] max-w-xs flex-col overflow-hidden rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-zinc-800 py-1 shadow-xl ring-1 ring-black/5 dark:ring-white/10'
+          : 'flex max-h-72 min-h-0 w-full flex-col overflow-hidden rounded-xl border border-indigo-300 dark:border-indigo-500 bg-white dark:bg-zinc-900 shadow-2xl ring-1 ring-indigo-500/20'}"
       data-testid="command-menu"
     >
       <div class="flex items-start gap-2 border-b border-slate-100 dark:border-zinc-800/60 px-3 py-2">
@@ -195,33 +204,34 @@ export default function CommandMenu(menu, resolve, onRun, opts = {}) {
             menu.sel = 0
           }}"
         ></textarea>
-        ${() =>
-          passive
-            ? closeButton(menu, resolve, onRun)
-            : html`<span
-                class="mt-1 shrink-0 rounded bg-slate-100 dark:bg-zinc-800 px-1.5 py-0.5 text-[10px] font-medium text-slate-400 dark:text-zinc-500"
-                >esc</span
-              >`}
+        <span
+          class="mt-1 shrink-0 rounded bg-slate-100 dark:bg-zinc-800 px-1.5 py-0.5 text-[10px] font-medium text-slate-400 dark:text-zinc-500"
+          >esc</span
+        >
       </div>
       <div
-        class="no-scrollbar flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto p-1.5"
+        class="${() =>
+          'no-scrollbar flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto ' + (native ? 'px-1 py-0.5' : 'p-1.5')}"
         data-testid="command-list"
       >
         ${() => {
-          const list = resolve(menu.query).filter((c) => !passive || c.id !== 'close-menu')
+          // `resolve` (home.mjs's resolveCommands) already drops the pinned
+          // "Sluit menu" row for a native menu — see its own doc comment for
+          // why that filter lives there and not here: onKeydown's ↑/↓/Enter
+          // index into the exact same list this renders, so there must be
+          // only one place that decides which rows exist at all.
+          const list = resolve(menu.query)
           if (list.length === 0) {
             // A keyed array-of-one, not a single bare element — see "A slot
             // that switches between a single element and a keyed array
-            // freezes" in arrowjs-pitfalls.md. Adding the closeButton() slot
-            // above shifted this slot into that exact trap (a reopen after a
-            // no-match query left the reopened list permanently empty).
+            // freezes" in arrowjs-pitfalls.md.
             return [
               html`<p class="px-2.5 py-3 text-[11px] text-slate-400 dark:text-zinc-500">Geen commando's.</p>`.key(
                 'no-commands',
               ),
             ]
           }
-          return list.map((c, i) => commandRow(c, i, menu, onRun, passive).key('cmd:' + c.id))
+          return list.map((c, i) => commandRow(c, i, menu, onRun, native).key('cmd:' + c.id))
         }}
       </div>
     </div>

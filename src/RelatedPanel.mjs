@@ -2642,7 +2642,10 @@ function claudeChatCallbacks(state, commentTarget) {
     // Mouse entry point into claudeChatCommandsFor() ("Wis Claude-gesprek",
     // "Comment hiervan maken", "Probeer de mislukte turn opnieuw") — reuses
     // the exact same opener the composer's own blank-Enter already calls.
-    onOpenMenu: () => openClaudeMenuFromComposer(),
+    // `opts` forwards straight through (a right-click on claude-chat-card
+    // passes {native,x,y} — see "The right-click context menu" in
+    // command-palette.md).
+    onOpenMenu: (opts) => openClaudeMenuFromComposer(opts),
   }
 }
 
@@ -2670,8 +2673,8 @@ export function setClaudeMenuOpener(fn) {
 // the one call site that already knows the field WAS blank, so no race can
 // exist. See "Comment hiervan maken' on an empty Claude input" in
 // .claude/docs/claude-chat-panel.md.
-function openClaudeMenuFromComposer() {
-  if (claudeMenuOpener) claudeMenuOpener()
+function openClaudeMenuFromComposer(opts) {
+  if (claudeMenuOpener) claudeMenuOpener(opts)
 }
 
 // selectHighlightedClaudeOption — the Enter-key counterpart of clicking a
@@ -5247,7 +5250,7 @@ function autoExpandLoneComment() {
   return list.length > 0 && list.length <= 2 && rc.children.length === 0
 }
 
-function compactConversation(c, i, full) {
+function compactConversation(c, i, full, openCommentMenu) {
   const who = identityOf(c.source, c.author, c.avatarUrl)
   return html`
     <button
@@ -5265,6 +5268,17 @@ function compactConversation(c, i, full) {
         cs.sel = i
         toComment()
         beat()
+      }}"
+      @contextmenu="${(e) => {
+        // Right-click lands on this (not-yet-focused) thread row exactly like
+        // the @click above, then opens the comment-scoped menu at the cursor
+        // — see "The right-click context menu" in command-palette.md.
+        if (!openCommentMenu) return
+        e.preventDefault()
+        cs.sel = i
+        toComment()
+        beat()
+        openCommentMenu({ native: true, x: e.clientX, y: e.clientY })
       }}"
     >
       ${() => commentStatusMark(c, 'mt-1')}
@@ -5338,6 +5352,18 @@ function expandedConversation(c, openCommentMenu) {
         (c.status === 'resolved' ? 'bg-slate-50/60 dark:bg-zinc-800/40' : 'bg-white dark:bg-zinc-900')}"
       data-testid="comment-item"
       data-expanded="true"
+      @contextmenu="${(e) => {
+        // Right-click anywhere on this (already-focused) thread card = the
+        // same click reaction-status already runs, native-styled at the
+        // cursor — except inside the reply textarea itself, which keeps its
+        // native Cut/Copy/Paste/spellcheck menu (mirrors the "an unchanged
+        // diff line keeps the native menu" rule for editable surfaces in
+        // general). See "The right-click context menu" in command-palette.md.
+        if (e.target.closest && e.target.closest('textarea, input')) return
+        if (!openCommentMenu) return
+        e.preventDefault()
+        openCommentMenu({ native: true, x: e.clientX, y: e.clientY })
+      }}"
     >
       <div class="flex items-center justify-end gap-2" data-testid="comment-meta-line">
         ${() => sourceBadge(c)} ${() => aiWarningBadge(c)} ${() => blockWideBadge(c)} ${() => staleAnchorBadge(c)}
@@ -5457,7 +5483,7 @@ function commentCard(c, i, openCommentMenu) {
         (selI() === i && (cs.focus === 'comment' || cs.focus === 'thread')) ||
         (cs.focus === 'claude' && chatAnchorComment() && chatAnchorComment().id === c.id)
           ? expandedConversation(c, openCommentMenu)
-          : compactConversation(c, i, autoExpandLoneComment())}
+          : compactConversation(c, i, autoExpandLoneComment(), openCommentMenu)}
     </div>
   `
 }
@@ -7322,6 +7348,17 @@ export function commentDetailCard(c, opts) {
           : 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30 ') +
         (c.status === 'resolved' ? 'bg-slate-50/60 dark:bg-zinc-800/40 ' : 'bg-white dark:bg-zinc-900 ')}"
       data-testid="comment-detail-card"
+      @contextmenu="${(e) => {
+        // Right-click anywhere on this card = the same click commentMenuButton
+        // already runs, native-styled and positioned at the cursor — mirrors
+        // pr-info-card's own wiring. No landing step needed: this card is
+        // only ever shown for the already-selected comment-index item. See
+        // "The right-click context menu" in command-palette.md.
+        const openMenu = opts && opts.openMenu
+        if (!openMenu || preview) return
+        e.preventDefault()
+        openMenu({ native: true, x: e.clientX, y: e.clientY })
+      }}"
     >
       <div
         class="flex flex-wrap items-center gap-2 border-b border-slate-100 pb-2.5 dark:border-zinc-800/60"
@@ -7450,7 +7487,7 @@ export function commentDetailCard(c, opts) {
                   // on the same cc state regardless of which surface it was
                   // opened from (see "A PR-wide comment-index item can also
                   // start a conversation" in claude-chat-panel.md).
-                  onOpenMenu: () => openClaudeMenuFromComposer(),
+                  onOpenMenu: (opts) => openClaudeMenuFromComposer(opts),
                 })}
               </div>`
             : ''}

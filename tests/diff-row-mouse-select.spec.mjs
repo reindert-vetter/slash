@@ -68,10 +68,6 @@ test.describe('PR Review Tree — mouse line selection (click, native selection)
     await changedRows.nth(0).click() // $a
     await expect(activeRows).toHaveCount(1)
     await expect(activeRows).toContainText('$a')
-    // Dismiss the passive command-palette preview the click above triggered
-    // (schedulePassiveMenu) — it floats right under the selected row and
-    // would otherwise intercept the next click below.
-    await page.keyboard.press('Escape')
 
     // `$mid = 5;` is the one unchanged line sitting between the two groups —
     // never touched by the PR, so it carries no data-changed at all.

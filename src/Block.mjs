@@ -739,6 +739,16 @@ export default function Block(b, opts = {}) {
   // "Line selection: click and browser text selection" in
   // .claude/docs/diff-render.md.
   const onRowMouseDown = opts.onRowMouseDown || null
+  // onRowContextMenu — the right-click counterpart of onRowMouseDown: called
+  // with (row, segStart, clientX, clientY) via the delegated
+  // onBlockContextMenu below, on the exact same [data-row]/[data-call-seg]
+  // targets. Unlike a mousedown gesture a right-click never seeds a drag —
+  // it's resolved SYNCHRONOUSLY, not deferred to mouseup — so home.mjs's
+  // handleRowContextMenu can call resolveClickSelection directly and return
+  // whether it actually landed on something. Defaults to null, same
+  // reasoning as onRowMouseDown (a preview/testClass card never wires this).
+  // See "The right-click context menu" in command-palette.md.
+  const onRowContextMenu = opts.onRowContextMenu || null
   // onApproveClick — the mouse counterpart of Space (see home.mjs's
   // approveClickAt/mouseApprove): called with (row, 'call', segStart) when a
   // click lands on one of rowCellHTML's own call-segment dot/hover-ring
@@ -812,6 +822,7 @@ export default function Block(b, opts = {}) {
       data-col-resize-root
       data-diff-col-key="${'diff:' + b.id}"
       @mousedown="${(e) => onBlockMouseDown(e, onRowMouseDown, onApproveClick)}"
+      @contextmenu="${(e) => onBlockContextMenu(e, onRowContextMenu, opts.onOpenMenu)}"
       @mouseover="${(e) => {
         onCallSegHover(e, true)
         onRowPairHover(e, true)
@@ -2286,6 +2297,48 @@ function onBlockMouseDown(e, cb, onApprove) {
   const segEl = e.target && e.target.closest && e.target.closest('[data-call-seg]')
   const segStart = segEl ? +segEl.getAttribute('data-call-seg') : null
   cb(i, segStart == null || Number.isNaN(segStart) ? null : segStart, e.currentTarget, e.shiftKey)
+}
+
+// onBlockContextMenu — the right-click counterpart of onBlockMouseDown above,
+// and this app's one entry point into "the right-click context menu" (see
+// command-palette.md) for a diff card. Right-click on a [data-row] resolves
+// SYNCHRONOUSLY (unlike a mousedown, a right-click never starts a drag/native
+// selection gesture, so there's nothing to defer to mouseup) via `cb`
+// (home.mjs's handleRowContextMenu), which returns whether it actually landed
+// on a real navigation unit (a changed line/call) — `false` for a click on an
+// unchanged/filler line, per resolveClickSelection's own "no landable unit →
+// no interaction" rule. Only on `true` do we preventDefault/stopPropagation:
+// otherwise the native browser context menu stays (Copy/Look up on ordinary
+// read-only code, exactly the reviewer's explicit answer for that case).
+//
+// A right-click that lands OUTSIDE any row (the card's header, gutter, empty
+// space) falls back to `onOpenMenu` — the exact same callback
+// blockMenuButton's own click already runs — so right-clicking anywhere on
+// the card still reaches the block palette, mirroring "rechtsklik opent
+// hetzelfde menu dat Enter op die plek zou openen". `onOpenMenu` is the RAW
+// opt (may be undefined for a preview/testClass card that never wires it),
+// not the no-op-defaulted `onOpenMenu` local used by blockMenuButton — a card
+// with no real menu of its own must leave the native browser menu in place
+// here too.
+function onBlockContextMenu(e, cb, onOpenMenu) {
+  const el = e.target && e.target.closest && e.target.closest('[data-row]')
+  if (el) {
+    if (!cb) return
+    const i = +el.getAttribute('data-row')
+    if (Number.isNaN(i)) return
+    const segEl = e.target && e.target.closest && e.target.closest('[data-call-seg]')
+    const segStart = segEl ? +segEl.getAttribute('data-call-seg') : null
+    const handled = cb(i, segStart == null || Number.isNaN(segStart) ? null : segStart, e.clientX, e.clientY)
+    if (handled) {
+      e.preventDefault()
+      e.stopPropagation()
+    }
+    return
+  }
+  if (!onOpenMenu) return
+  e.preventDefault()
+  e.stopPropagation()
+  onOpenMenu({ native: true, x: e.clientX, y: e.clientY })
 }
 
 // onCallSegHover toggles the `call-seg-hover` marker (index.html's own

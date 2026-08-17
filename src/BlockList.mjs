@@ -539,6 +539,10 @@ function pushTodoRow(state) {
           ? 'border-indigo-300 dark:border-indigo-500 bg-indigo-50 dark:bg-indigo-500/15 ring-1 ring-inset ring-indigo-200 dark:ring-indigo-500/30'
           : 'border-slate-300 dark:border-zinc-700 hover:bg-slate-50 dark:hover:bg-zinc-800/60')}"
       @click="${() => state.onPushTodo && state.onPushTodo()}"
+      @contextmenu="${(e) => {
+        e.preventDefault()
+        state.onPushTodo && state.onPushTodo({ native: true, x: e.clientX, y: e.clientY })
+      }}"
     >
       <span class="flex items-center gap-2 text-xs font-medium text-slate-700 dark:text-zinc-300">
         <span aria-hidden="true">⇧</span>
@@ -933,6 +937,26 @@ function row(state, b, i) {
         // summary) is still showing next to the shifted-right index — see
         // rowFocused's own comment above.
         state.blockIndexEntered = true
+      }}"
+      @contextmenu="${(e) => {
+        // Right-click lands the cursor here exactly like the @click above,
+        // then opens whatever menu Enter would open at this row (an ordinary
+        // block's own COMMANDS, or the PR-comment menu for a comment-index
+        // row — resolved by state.onRowContextMenu, threaded down from
+        // home.mjs's rightClickMenuMode/handleContextMenu, same shape as
+        // onPushTodo/onBatchRow above). See "The right-click context menu" in
+        // command-palette.md.
+        state.selected = i
+        state.listAnchor = null
+        state.methodAnchor = null
+        state.toggleFocused = false
+        state.ignoreToggleFocused = false
+        state.pushTodoFocused = false
+        state.batchRowFocused = false
+        state.classMethodSel = 0
+        state.testColumnFocused = false
+        state.blockIndexEntered = true
+        state.onRowContextMenu && state.onRowContextMenu(e)
       }}"
     >
       <span

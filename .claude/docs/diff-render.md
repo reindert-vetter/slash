@@ -178,9 +178,7 @@ Three follow-up answers shaped the exact translation rule:
   mousedown time it isn't known whether the gesture will end up a plain
   click or a real selection.
 - **Resolution happens exactly once, on the next `mouseup`**
-  (`resolvePendingMouseSelection`, the same document-level listener
-  `schedulePassiveMenu` already deferred to — see its own doc comment further
-  down):
+  (`resolvePendingMouseSelection`, a document-level listener):
   - **`shiftKey` is checked FIRST, before `window.getSelection()` is ever
     read** → `resolveShiftClickSelection(pending)`: extends
     `state.rangeAnchor`/`state.change` (or the drilled column's own
@@ -258,9 +256,7 @@ Three follow-up answers shaped the exact translation rule:
     `resolveRangeSelection` threads this `snapshot` through and, right after
     its own `state` write, calls `restoreExactSelection(cardEl, snapshot)`:
     deferred one `requestAnimationFrame` (`cardEl.isConnected` guards against
-    the reviewer having navigated away in that one frame) — the same
-    "wait one frame for the just-swapped state to actually render" pattern
-    `showPassiveMenu`'s own `positionMenu` call already relies on — then
+    the reviewer having navigated away in that one frame) — then
     `locateOffsetInRow` (a `TreeWalker` over the row's OWN, freshly rendered
     text nodes, summing lengths until the target offset falls inside one) maps
     each snapshot endpoint back onto a real (Text node, local offset) pair in
