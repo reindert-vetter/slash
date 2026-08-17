@@ -10668,7 +10668,17 @@ function onKeydown(e) {
   // event still gets prevented right below, so the browser's own Cmd+[/]
   // history-navigation shortcut is suppressed regardless of which nested
   // branch ends up handling the remapped key.
-  if (isModifiedKey(e) && (e.key === '[' || e.key === ']')) {
+  //
+  // `!e.shiftKey` (reviewer request, follow-up): Shift+Cmd+[/] is deliberately
+  // EXCLUDED from this remap and falls straight through — no preventDefault,
+  // no recursion — so the browser's own native Shift+Cmd+[/] (tab-switching in
+  // Chrome/Safari on Mac) keeps working. Before this, the guard didn't check
+  // shift at all, so Shift+Cmd+[/] silently drove the same custom nav as a
+  // kale Cmd+[/] — which, combined with kale Cmd+[/] sometimes being consumed
+  // at the OS/browser level before it reaches this handler (a Safari
+  // history-back quirk that preventDefault can't undo), is why the reviewer
+  // only ever saw the custom nav fire via the shift chord in practice.
+  if (isModifiedKey(e) && !e.shiftKey && (e.key === '[' || e.key === ']')) {
     e.preventDefault()
     onKeydown({
       key: e.key === '[' ? 'ArrowLeft' : 'ArrowRight',

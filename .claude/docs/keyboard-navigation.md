@@ -159,11 +159,17 @@ Transitions, and how they differ from the older per-mechanism behaviour:
 
 Reviewer request for a chord that works regardless of which stop/field
 currently owns the keyboard. `onKeydown` (`home.mjs`) checks
-`isModifiedKey(e) && (e.key === '[' || e.key === ']')` **first, before every
-other branch**, and recurses into itself with a minimal object whose `key` is
-swapped to `'ArrowLeft'`/`'ArrowRight'` — so it is not a second, parallel nav
-mechanism, it runs the exact same `←`/`→` logic described in this whole
-section, stop for stop.
+`isModifiedKey(e) && !e.shiftKey && (e.key === '[' || e.key === ']')` **first,
+before every other branch**, and recurses into itself with a minimal object
+whose `key` is swapped to `'ArrowLeft'`/`'ArrowRight'` — so it is not a second,
+parallel nav mechanism, it runs the exact same `←`/`→` logic described in this
+whole section, stop for stop.
+
+**`Shift+Cmd+[` / `Shift+Cmd+]` are deliberately excluded** (reviewer
+follow-up request) and fall straight through this whole function untouched —
+no `preventDefault`, no recursion — so the browser's own native
+Shift+Cmd+[/] (tab-switching in Chrome/Safari on Mac) keeps working. Only the
+**kale** `Cmd+[`/`Cmd+]` (no Shift) drives the custom nav now.
 
 **One deliberate difference from a plain `←`/`→`:** inside a comment/reply/
 Claude-chat text field, an ordinary `ArrowLeft`/`ArrowRight` defers to the

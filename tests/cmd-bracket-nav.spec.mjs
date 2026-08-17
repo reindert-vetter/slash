@@ -10,6 +10,11 @@ import { test, expect, leaveSearchBox, openNewComment } from './_fixtures.mjs'
 // exception in relatedActive()'s branch) — a native browser Cmd+[/] is a
 // history-back/forward shortcut, never a caret move, so there is no existing
 // meaning to preserve there.
+//
+// Follow-up reviewer request: Shift+Cmd+[/] must NOT drive this custom nav —
+// it's excluded so the browser's own native Shift+Cmd+[/] (tab-switching in
+// Chrome/Safari on Mac) keeps working. Only the kale Cmd+[/] (no Shift) is
+// remapped now.
 test.describe('Cmd+[ / Cmd+] remap onto the left-right nav chain', () => {
   test('Meta+[ opens the PR-description column (stop 1) exactly like ArrowLeft, Meta+] closes it like ArrowRight', async ({
     page,
@@ -26,6 +31,18 @@ test.describe('Cmd+[ / Cmd+] remap onto the left-right nav chain', () => {
     await expect(info).toBeVisible()
 
     await page.keyboard.press('Meta+]')
+    await expect(info).toHaveCount(0)
+  })
+
+  test('Shift+Meta+[ does NOT drive the custom nav (left for the browser\'s own tab-switch)', async ({ page }) => {
+    await page.goto('/pr/12903')
+    await leaveSearchBox(page)
+
+    const info = page.getByTestId('pr-info-column')
+    await expect(info).toHaveCount(0)
+
+    await page.keyboard.press('Shift+Meta+[')
+    // Custom nav must not have fired: the PR-description column stays closed.
     await expect(info).toHaveCount(0)
   })
 
