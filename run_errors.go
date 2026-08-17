@@ -71,6 +71,68 @@ type FailedRun struct {
 	// for every other Workflow Type. Without it a row only names the PR, and a
 	// PR with a dozen failed comment threads is unreadable.
 	Comment *CommentRef `json:"comment,omitempty"`
+	// Retryable reports whether starting this task over actually does anything
+	// (see retryableWorkflow) — the "Taken" block's row menu offers "Opnieuw
+	// proberen" only then, and says so instead of pretending otherwise.
+	Retryable bool `json:"retryable"`
+}
+
+// retryableWorkflow answers "does starting this Workflow Type over with the
+// same input actually run it again?" — the gate behind RetryRun and the
+// Retryable field above.
+//
+// Two kinds are excluded, and for both a retry would be a lie rather than a
+// failure:
+//
+//   - a per-ITEM deterministic Run ID (perItemRunID): startWorkflowID is
+//     idempotent, so a second start returns the very same failed run and
+//     nothing happens at all;
+//   - a retired Workflow Type (retiredWorkflowTypes, cleanup.go): its
+//     registering code is gone, so the engine rejects the start outright.
+//
+// Everything else has a workflow+pr identity (runIdentity), where a fresh run
+// supersedes the failed one (supersededRuns) and the failure drops off the
+// list by itself.
+func retryableWorkflow(workflow string) bool {
+	return workflow != "" && !perItemRunID[workflow] && !retiredWorkflowTypes[workflow]
+}
+
+// RetryRun starts a FRESH Execution of the failed run's own Workflow Type with
+// that run's stored input — the "Opnieuw proberen" item in the review tree's
+// "Taken" row menu (see .claude/docs/detail-layout.md). It returns the new Run
+// ID.
+//
+// This is a write, and it is the sanctioned one: starting an Execution is
+// exactly what .claude/rules/workflows-write-boundary.md allows an endpoint to
+// do. It deliberately does NOT delete or touch the failed run — supersededRuns
+// already hides a failure once a later attempt at the same identity exists, so
+// the old attempt stays in the store as history until cleanup collects it.
+func (m *TaskManager) RetryRun(runID string) (string, error) {
+	runs, err := m.engine.Runs()
+	if err != nil {
+		return "", err
+	}
+	var rec *tembed.RunRecord
+	for i := range runs {
+		if runs[i].ID == runID {
+			rec = &runs[i]
+			break
+		}
+	}
+	if rec == nil {
+		return "", fmt.Errorf("retry: unknown run %q", runID)
+	}
+	if rec.Status != tembed.StatusFailed {
+		return "", fmt.Errorf("retry: run %q is %s, not failed", runID, rec.Status)
+	}
+	if !retryableWorkflow(rec.Workflow) {
+		return "", fmt.Errorf("retry: workflow %q cannot be started over", rec.Workflow)
+	}
+	in, err := m.engine.Input(runID)
+	if err != nil {
+		return "", fmt.Errorf("retry: read input: %w", err)
+	}
+	return m.engine.StartWorkflow(rec.Workflow, json.RawMessage(in))
 }
 
 // perItemRunID lists the Workflow Types started through StartWorkflowID with a
@@ -268,7 +330,7 @@ func (m *TaskManager) FailedRuns(limit int) []FailedRun {
 		if t, ok := alive[runIdentity(r.Workflow, r.ID, pr)]; ok && t.After(r.CreatedAt) {
 			continue // a later attempt at the same task took over
 		}
-		f := FailedRun{RunID: r.ID, Workflow: r.Workflow, PR: pr, UpdatedAt: r.UpdatedAt}
+		f := FailedRun{RunID: r.ID, Workflow: r.Workflow, PR: pr, UpdatedAt: r.UpdatedAt, Retryable: retryableWorkflow(r.Workflow)}
 		if r.Workflow == WorkflowTaskCodeComment {
 			if in, err := m.engine.Input(r.ID); err == nil {
 				var cc CodeCommentInput

@@ -19,6 +19,10 @@ import { renderMarkdown, countCodeFences, annotateFenceNumbers } from './markdow
 import { avatarHTML, displayNameOf, ensureMe, ensureNames, identityOf, meLogin } from './avatar.mjs'
 import { commentMentionsMe, ensureSettings } from './mentions.mjs'
 import { labelForWorkflow } from './workflowLabels.mjs'
+// baseName — the same "trim a repo path to its file name" helper the
+// /pr-overview "Mislukte taken" drawer uses, reused by the merged Taken row's
+// failed-run note (failedRunNote below) so both name a file the same way.
+import { baseName } from './problems.mjs'
 import { repoParam, repoField } from './prContext.mjs'
 import { claudeChatColumn, claudeStatusText } from './ClaudeChat.mjs'
 import { codePreviewColumn } from './CodePreview.mjs'
@@ -6475,75 +6479,349 @@ export function visibleWorkflowRuns(state) {
   })
 }
 
-// workflowRow renders one run. A task_code_comment run with a resolved
-// `comment` reference is clickable: it opens that comment's block/diff-unit
-// and selects its thread (openTask, from home.mjs). Other run types are
-// purely informational. No keyboard cursor here — Tasks is click-only (it
-// lives under the PR-description column, which already suppresses ↑/↓, see
-// keyboard-navigation.md).
-function workflowRow(run, openTask, state) {
-  const badge = STATUS_BADGES[run.status] || { label: run.status, cls: 'bg-slate-50 dark:bg-zinc-800/60 text-slate-500 dark:text-zinc-500 ring-slate-200 dark:ring-zinc-800' }
-  const active = run.status === 'running' || run.status === 'waiting'
-  const clickable = !!(run.comment && openTask)
+// ── One merged list: live runs + failures + skipped log lines ───────────────
+// "Taken" and the separate "Mislukte taken" block below it (home.mjs's former
+// ProblemsPanel) were two cards saying the same kind of thing about the same
+// PR, so a reviewer had to read two lists to know what background work was in
+// trouble. They are now ONE list inside this card (reviewer: "dit bij elkaar
+// doen") — failures first, since they're the only rows there is anything to do
+// about. See "The Taken block" in .claude/docs/detail-layout.md.
+//
+// Every row is one plain, NON-reactive descriptor object (buildTaskRows below)
+// rather than a raw run/log entry: the row template then needs no conditional
+// template slot at all (every slot is an always-present string), and the row
+// menu in home.mjs gets exactly the fields it needs to decide what it can
+// offer — see taskCommandsFor there.
+
+// taskUi — the card's own small, local UI state: the refresh button's in-flight
+// flag and the log lines the reviewer dismissed via the row menu. Dismissal is
+// deliberately CLIENT-side only: /api/problems' buffer is an in-memory log
+// mirror the server rebuilds on its own terms (run_errors.go), so "verberg
+// deze melding" means "stop showing it to me in this tab", not a durable write
+// — which also keeps it outside the workflow write-boundary.
+// `retrying` is the third piece: the Run IDs the reviewer just retried, so the
+// row says so IMMEDIATELY instead of looking untouched until a poll lands (see
+// markTaskRetrying).
+const taskUi = reactive({ busy: false, hiddenLogs: [], retrying: [] })
+
+// markTaskRetrying/clearTaskRetrying — "ik wil gelijk zien dat het weer aan het
+// draaien is". A retry is a fresh Execution of another Workflow Type, so the
+// failure row only actually disappears once /api/problems has seen that the
+// failure is superseded — up to a full poll away, and the row until then looks
+// exactly as it did before the click. Marking the Run ID flips that row to
+// "↻ opnieuw gestart" in the same tick as the click (buildTaskRows below), and
+// nothing has to clean the mark up: the row it belongs to disappears with the
+// failure itself. clearTaskRetrying exists for the failure case — the POST came
+// back with an error, so the row must go back to saying "mislukt".
+export function markTaskRetrying(runId) {
+  if (!runId || taskUi.retrying.includes(runId)) return
+  taskUi.retrying = [...taskUi.retrying, runId]
+}
+
+export function clearTaskRetrying(runId) {
+  if (!runId || !taskUi.retrying.includes(runId)) return
+  taskUi.retrying = taskUi.retrying.filter((id) => id !== runId)
+}
+
+// hideTaskLogLine drops one mirrored log line from the merged list (the row
+// menu's "Verberg deze melding"). Keyed by logRowKey, so the same line coming
+// back on the next /api/problems poll stays hidden.
+export function hideTaskLogLine(key) {
+  if (!key || taskUi.hiddenLogs.includes(key)) return
+  taskUi.hiddenLogs = [...taskUi.hiddenLogs, key]
+}
+
+// setTasksRefreshBusy lets home.mjs report its refresh round trip (pollWorkflows
+// + pollProblems) so the button can show it's working.
+export function setTasksRefreshBusy(busy) {
+  taskUi.busy = !!busy
+}
+
+// logRowKey identifies a mirrored log line across polls. The buffer has no id
+// of its own, so this is content-derived — the same pair problemLogRow's own
+// .key() already uses.
+function logRowKey(entry) {
+  return 'log:' + (entry.at || '') + '|' + (entry.message || '').slice(0, 120)
+}
+
+// TASK_WORD_CLS / the marker word. Every row leads with a WORD, never a colour
+// alone (see the colorblind rule in conventions.md): a problem row says
+// "⚠ mislukt"/"⚠ overgeslagen", a live run keeps its ordinary status word
+// ("draait"/"klaar"). Always a plain string in one always-present slot, so the
+// row template has no template↔'' toggle anywhere (see the
+// statically-interpolated-template pitfall in arrowjs-pitfalls.md).
+const TASK_WORD_BASE = 'shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 '
+const PROBLEM_WORD_CLS =
+  TASK_WORD_BASE + 'bg-rose-50 dark:bg-rose-500/15 text-rose-700 dark:text-rose-300 ring-rose-200 dark:ring-rose-500/30'
+// RETRYING_WORD_CLS — the just-retried row, in the amber of a `running` badge
+// (STATUS_BADGES.running): it IS running again, and the ↻ glyph + the words
+// carry that on their own.
+const RETRYING_WORD_CLS = TASK_WORD_BASE + STATUS_BADGES.running.cls
+
+// failedRunLabel/failedRunNote — what a failed run's two lines say: the
+// workflow's own name, then WHICH comment it was about (a task_code_comment
+// run) plus the recorded failure message. Same information the /pr-overview
+// drawer's problemRunRow shows, folded into the merged row's fixed two lines.
+function failedRunNote(run) {
+  const parts = []
+  const c = run.comment
+  if (c) {
+    const where = baseName(c.file) + (c.line ? ':' + c.line : '')
+    parts.push(where + (c.snippet ? ' · “' + c.snippet + '”' : ''))
+  }
+  parts.push(run.error || 'geen foutmelding vastgelegd')
+  return parts.join(' — ')
+}
+
+// buildTaskRows is the merged, ordered list the card renders. Order is by
+// actionability, not by time: every problem first (failed runs + skipped log
+// lines, mixed and newest-first among themselves), then the live/idle runs
+// visibleWorkflowRuns already selected. A failed run is taken ONLY from
+// state.pageProblems, never from state.workflows: /api/problems drops a
+// failure that a later attempt already superseded (supersededRuns,
+// run_errors.go), so reading both would resurrect exactly the failures that
+// are no longer anything to act on.
+export function buildTaskRows(state) {
+  const problems = (state && state.pageProblems) || { failedRuns: [], logErrors: [] }
+  const failed = (problems.failedRuns || []).map((run) => {
+    // A retried row keeps its place (so the reviewer's eye stays where it
+    // clicked) but says it's running again — word, note AND status/key, so the
+    // key change forces a fresh node instead of a patched one (see the
+    // block-card-key convention in conventions.md).
+    const retrying = taskUi.retrying.includes(run.runId)
+    return {
+      kind: 'run',
+      problem: true,
+      key: (retrying ? 'retrying:' : 'failed:') + run.runId,
+      at: new Date(run.updatedAt).getTime() || 0,
+      word: retrying ? '↻ opnieuw gestart' : '⚠ mislukt',
+      wordCls: retrying ? RETRYING_WORD_CLS : PROBLEM_WORD_CLS,
+      status: retrying ? 'retrying' : 'failed',
+      retrying,
+      runId: run.runId,
+      label: labelForWorkflow(run.workflow),
+      note: retrying ? 'opnieuw gestart — bezig…' : failedRunNote(run),
+      when: retrying ? 'net nu' : relTime(run.updatedAt),
+      error: run.error || '',
+      comment: run.comment || null,
+      retryable: !!run.retryable,
+      run,
+    }
+  })
+  const logs = (problems.logErrors || [])
+    .map((entry) => ({
+      kind: 'log',
+      problem: true,
+      key: logRowKey(entry),
+      at: new Date(entry.at).getTime() || 0,
+      word: '⚠ overgeslagen',
+      wordCls: PROBLEM_WORD_CLS,
+      status: 'skipped',
+      runId: '',
+      label: entry.scope || 'Achtergrondtaak',
+      note: entry.message || '',
+      when: relTime(entry.at),
+      error: entry.message || '',
+      comment: null,
+      retryable: false,
+      entry,
+    }))
+    .filter((row) => !taskUi.hiddenLogs.includes(row.key))
+  const trouble = [...failed, ...logs].sort((a, b) => b.at - a.at)
+  const failedIds = new Set(failed.map((r) => r.runId))
+  const live = visibleWorkflowRuns(state)
+    .filter((r) => r.status !== 'failed' && !failedIds.has(r.runId))
+    .map((run) => {
+      const badge = STATUS_BADGES[run.status] || {
+        label: run.status,
+        cls: 'bg-slate-50 dark:bg-zinc-800/60 text-slate-500 dark:text-zinc-500 ring-slate-200 dark:ring-zinc-800',
+      }
+      return {
+        kind: 'run',
+        problem: false,
+        key: 'run:' + run.runId + ':' + run.status,
+        at: new Date(run.updatedAt).getTime() || 0,
+        word: badge.label,
+        wordCls: TASK_WORD_BASE + badge.cls,
+        status: run.status,
+        runId: run.runId,
+        label: labelForWorkflow(run.workflow),
+        note: workflowNote(run, state),
+        when: relTime(run.updatedAt),
+        error: '',
+        comment: run.comment || null,
+        retryable: false,
+        run,
+      }
+    })
+  return [...trouble, ...live]
+}
+
+// TASK_ROW_H_REM — every row is exactly this tall, which is what makes the
+// "3,5 rows visible" cut below possible at all: the reviewer asked for a HALF
+// row at the bottom precisely so it's obvious more is there ("maximaal 3,5
+// laten zien (half omdat je dan het idee krijgt dat er meer is)"), and that
+// only reads as half a row if rows don't vary in height. Hence the fixed
+// height + one truncated note line per row instead of the old free-flowing
+// two/three-line row. Kept in sync BY HAND with taskRow's own literal
+// `h-[3.25rem]` class — a computed `h-[${…}rem]` would be a class name Tailwind
+// only ever sees after the row is already in the DOM.
+const TASK_ROW_H_REM = 3.25
+// TASK_FULL_ROWS — how many rows are FULLY visible; the .5 above it is the
+// clipped hint. The footer counts everything past those full rows.
+const TASK_FULL_ROWS = 3
+const TASK_LIST_MAX_H = (TASK_FULL_ROWS + 0.5) * TASK_ROW_H_REM
+
+// taskRow renders one descriptor. EVERY row is clickable and opens the row menu
+// (reviewer: "ook ik moet het aan kunnen klikken, met een menu om het opnieuw
+// te proberen") — what that menu offers per row kind lives in home.mjs's
+// taskCommandsFor. `openRowMenu` is optional so a bare TasksPanel(state) mount
+// (the direct-mount specs) still renders.
+//
+// It IS a keyboard stop as well: ↓ from the PR description walks into this list
+// (`state.taskFocus` holds the focused row's KEY — see "Walking into the Taken
+// block" in .claude/docs/keyboard-navigation.md). The focus class is therefore a
+// FUNCTION binding reading that reactive key, not part of the statically
+// interpolated class string: the row's `.key()` deliberately doesn't encode
+// focus (a ↓/↑ step must not tear down and rebuild every row it passes), and
+// arrow.js doesn't re-run a reused keyed node's static slots. Comparing
+// `row.key` rather than a captured index is the same rule as `isActiveCard` —
+// the list reorders under a poll, an index snapshot would go stale (see
+// conventions.md).
+function taskRow(row, actions) {
+  const openRowMenu = actions && actions.openRowMenu
+  const focusState = actions && actions.focusState
+  const focused = () => !!focusState && focusState.taskFocus === row.key
   return html`
     <div
       class="${() =>
-        'flex flex-col gap-0.5 rounded-md px-2 py-1.5 ring-1 ring-inset ring-transparent ' +
-        (active ? '' : 'opacity-60') +
-        (clickable ? ' cursor-pointer hover:bg-slate-50 dark:hover:bg-zinc-800/60' : '')}"
+        'flex h-[3.25rem] shrink-0 cursor-pointer flex-col justify-center gap-0.5 border-b border-slate-100 dark:border-zinc-800/60 px-3 last:border-b-0 hover:bg-slate-50 dark:hover:bg-zinc-800/60 ' +
+        (row.retrying
+          ? 'bg-amber-50/70 dark:bg-amber-950/25 '
+          : row.problem
+            ? 'bg-rose-50/60 dark:bg-rose-950/25 '
+            : row.status === 'running'
+              ? ''
+              : 'opacity-60 ') +
+        (focused() ? 'ring-2 ring-inset ring-indigo-400 dark:ring-indigo-500 opacity-100' : '')}"
       data-testid="workflow-row"
-      data-status="${run.status}"
-      data-run-id="${run.runId}"
-      @click="${() => (clickable ? openTask(run) : null)}"
+      data-task-kind="${row.kind}"
+      data-task-key="${row.key}"
+      data-task-problem="${row.problem ? 'true' : 'false'}"
+      data-task-focused="${() => (focused() ? 'true' : 'false')}"
+      data-status="${row.status}"
+      data-run-id="${row.runId}"
+      @click="${(e) => (openRowMenu ? openRowMenu(row, e) : null)}"
+      @contextmenu="${(e) => {
+        // A right-click lands on the same menu as a left-click here (the row
+        // has no other action to preserve), matching the app-wide right-click
+        // convention — see "The right-click context menu" in
+        // .claude/docs/command-palette.md. preventDefault suppresses the
+        // native menu; openRowMenu itself stops the propagation that would
+        // otherwise reach the PR-info column's own contextmenu handler.
+        if (!e || !openRowMenu) return
+        e.preventDefault()
+        openRowMenu(row, e)
+      }}"
     >
       <div class="flex items-center gap-2">
-        <span class="min-w-0 flex-1 truncate text-[12px] text-slate-700 dark:text-zinc-300" data-testid="workflow-label"
-          >${labelForWorkflow(run.workflow)}</span
+        <span class="${row.wordCls}" data-testid="workflow-status">${row.word}</span>
+        <span class="min-w-0 flex-1 truncate text-[12px] font-medium text-slate-700 dark:text-zinc-300" data-testid="workflow-label"
+          >${row.label}</span
         >
-        <span
-          class="${'shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ' + badge.cls}"
-          data-testid="workflow-status"
-          >${badge.label}</span
-        >
+        <span class="shrink-0 text-[10px] text-slate-400 dark:text-zinc-600" data-testid="workflow-updated">${row.when}</span>
       </div>
-      <p class="line-clamp-2 text-[11px] leading-snug text-slate-400 dark:text-zinc-500" data-testid="workflow-note">
-        ${workflowNote(run, state)}
-      </p>
-      <p class="text-[10px] text-slate-300 dark:text-zinc-600" data-testid="workflow-updated">
-        ${relTime(run.updatedAt)}
+      <p class="truncate text-[11px] leading-snug text-slate-500 dark:text-zinc-500" data-testid="workflow-note" title="${row.note}">
+        ${row.note}
       </p>
     </div>
   `
 }
 
+// tasksRefreshButton — "verversen" on demand instead of waiting for the next
+// poll tick (pollWorkflows every 2.5s, pollProblems every 15s — a retry's
+// result would otherwise sit invisible for up to 15 seconds). The glyph is the
+// only label, like scrollHint/stepChevron, with the wording in title/aria-label
+// (see the colorblind rule): a spinning ring would be decoration, the disabled
+// state is what actually reports "busy".
+function tasksRefreshButton(actions) {
+  const refresh = actions && actions.refresh
+  return html`
+    <button
+      class="${() =>
+        'shrink-0 rounded-md border border-slate-200 dark:border-zinc-700 px-2 py-1 text-[14px] leading-none text-slate-500 dark:text-zinc-400 hover:bg-slate-50 dark:hover:bg-zinc-800 ' +
+        (taskUi.busy ? 'opacity-50' : '')}"
+      data-testid="tasks-refresh"
+      title="Taken verversen"
+      aria-label="Taken verversen"
+      disabled="${() => taskUi.busy || !refresh}"
+      @click="${(e) => {
+        if (!e) return
+        e.stopPropagation()
+        if (refresh) refresh()
+      }}"
+    >
+      ${() => (taskUi.busy ? '…' : '⟳')}
+    </button>
+  `
+}
+
 // TasksPanel — the exported "Taken" block, mounted by home.mjs under the
 // PR-description column (prInfoCard), no longer a fixed right-hand sidebar.
-// Only shows runs that are genuinely in progress, or that have been sitting
-// idle for a while (visibleWorkflowRuns) — no more Active/Recent split, a
-// single filtered list.
-export function TasksPanel(state, openTask) {
+// It now shows the merged list (buildTaskRows): the failures and skipped log
+// lines for this PR first, then the runs that are genuinely in progress or
+// have been sitting idle for a while (visibleWorkflowRuns).
+//
+// `actions` (all optional, so the direct-mount specs can pass nothing):
+//   openRowMenu(row, event) — a click on any row, opens home.mjs's row menu
+//   refresh()               — the header's ⟳ button
+//   focusState              — the reactive object carrying `taskFocus` (the
+//                             focused row's key); home.mjs passes its own
+//                             `state`, so the rows follow the keyboard cursor
+export function TasksPanel(state, actions = {}) {
   return html`
     <section
-      class="flex w-full shrink-0 max-h-[16rem] min-h-[6rem] flex-col overflow-hidden rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 ring-1 ring-black/5"
+      class="flex w-full shrink-0 flex-col overflow-hidden rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 ring-1 ring-black/5"
       data-testid="workflows-panel"
     >
-      <div class="border-b border-slate-100 dark:border-zinc-800/60 px-3 py-2.5">
-        <h2 class="text-sm font-semibold text-slate-800 dark:text-zinc-200">Taken</h2>
-        <p class="text-[11px] text-slate-400 dark:text-zinc-500">workflow-runs · deze PR</p>
+      <div class="flex items-start gap-2 border-b border-slate-100 dark:border-zinc-800/60 px-3 py-2.5">
+        <div class="min-w-0 flex-1">
+          <h2 class="text-sm font-semibold text-slate-800 dark:text-zinc-200">Taken</h2>
+          <p class="text-[11px] text-slate-400 dark:text-zinc-500">workflow-runs · deze PR</p>
+        </div>
+        ${tasksRefreshButton(actions)}
       </div>
-      <div class="no-scrollbar flex min-h-0 flex-1 flex-col gap-1 overflow-auto p-2">
+      <div
+        class="no-scrollbar flex min-h-0 shrink-0 flex-col overflow-auto"
+        style="${'max-height:' + TASK_LIST_MAX_H + 'rem'}"
+        data-testid="tasks-list"
+      >
         ${() => {
           // Always return an ARRAY from this slot (see the "no comments" note
           // above): a slot that alternates between a single element and an
           // array can freeze empty after the first empty render.
-          const runs = visibleWorkflowRuns(state)
-          return runs.length === 0
-            ? [html`<p class="px-1 py-2 text-[11px] text-slate-400 dark:text-zinc-500">Geen taken.</p>`.key('no-workflows')]
-            : // Key includes status: a run whose status just changed (e.g.
-              // running → completed) needs a fresh node, not a patched one —
-              // arrow.js only re-runs a keyed node's own bindings on a key
-              // change (see the block-card-key convention in conventions.md).
-              runs.map((r) => workflowRow(r, openTask, state).key('run:' + r.runId + ':' + r.status))
+          const rows = buildTaskRows(state)
+          return rows.length === 0
+            ? [html`<p class="px-3 py-3 text-[11px] text-slate-400 dark:text-zinc-500">Geen taken.</p>`.key('no-workflows')]
+            : // The key carries the row's status (see the block-card-key
+              // convention in conventions.md): arrow.js only re-runs a keyed
+              // node's own bindings when its key changes, and a row whose
+              // status just moved (running → klaar, or a failure that got
+              // retried) must re-render, not be patched in place.
+              rows.map((r) => taskRow(r, actions).key(r.key))
+        }}
+      </div>
+      <div class="contents">
+        ${() => {
+          const hidden = buildTaskRows(state).length - TASK_FULL_ROWS
+          return hidden > 0
+            ? html`<p
+                class="border-t border-slate-100 dark:border-zinc-800/60 px-3 py-1.5 text-[11px] text-slate-400 dark:text-zinc-500"
+                data-testid="tasks-more"
+              >
+                nog ${hidden} meer — scroll voor de rest
+              </p>`
+            : ''
         }}
       </div>
     </section>

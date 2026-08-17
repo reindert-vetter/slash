@@ -108,15 +108,52 @@ code).
    `↓` out of the chat (stop 5b) no longer reaches this stop at all — it jumps
    straight to the next block instead (see stop 5b above).
 
-Tasks has no keyboard stop at all — it is click-only, under stop 1.
+### Walking into the Taken block
+
+The "Taken" block under the PR-description card (see
+`.claude/docs/detail-layout.md`) **is** reachable by keyboard — it used to be
+click-only, and stop 1 swallowed `↑`/`↓` entirely. Reviewer: *"ik wil met mijn
+down key naar beneden en daar kunnen navigeren, ik moet ook naar rechts kunnen,
+naar de diff, en naar boven terug naar pr description."* It is a cursor WITHIN
+stop 1, not a stop of its own in the `→` chain:
+
+- **`state.taskFocus`** holds the focused row's **key**, or `''` when the
+  description card itself has the cursor (which is also what makes
+  `prInfoCard`'s own focus ring drop — exactly one of the two looks focused).
+  A key, never an index: the merged list reorders under its own polls (see
+  "Snapshot a selection by stable ID" in `.claude/rules/conventions.md`), so
+  `stepTaskFocus(dir)` re-resolves the cursor against the CURRENT list on every
+  step and a row that disappeared simply leaves index -1 (`↓` then starts at the
+  top again).
+- **`↓`** enters the list at the top row, then walks down and stops on the last
+  row. **`↑`** walks up and, from the FIRST row, releases the cursor back to the
+  description card instead of getting stuck. The focused row scrolls itself into
+  the block's 3,5-row window via `scrollIntoViewVertical` — never bare
+  `scrollIntoView`, see the axis rule in `.claude/rules/arrowjs-pitfalls.md`.
+- **`→`** is unchanged and works from a focused row too: it leaves stop 1 for the
+  block index (and one more `→` reaches the diff), clearing `taskFocus` on the
+  way out. **`←`** also keeps its meaning — it exits the chain to `/pr-overview`,
+  even from a focused row; `↑` is the way back to the description.
+- **`Enter`** on a focused row opens **that row's** menu (`'task'`, anchored under
+  the row) instead of the PR-wide `'pr'` menu — the keyboard twin of clicking it.
+  Same shape as the push-todo row's own `Enter`.
+- The cursor is cleared whenever stop 1 stops owning the keyboard: the
+  `ArrowRight` branch does it directly, and a `watch` on `state.showDescription`
+  covers every other route (a mouse click into a diff, `enterDiff`, an
+  auto-selection) — otherwise returning to stop 1 later would land on a stale row.
+
+`f`/`d`/`s`/`a`/Space are untouched here: stop 1 has no diff context, so they
+stay the no-ops they already were. Test: `tests/taken-keyboard-nav.spec.mjs`.
 
 Transitions, and how they differ from the older per-mechanism behaviour:
 
 - **Stop 1 ↔ 2:** `←` in `'list'` mode (outside the search box) opens the
   description (`state.showDescription = true`); it used to open the search box
   (`activateSearch()`). `→` closes it again and hands the keyboard back to the
-  index. While it is open `↑`/`↓` are both no-ops (PR-wide comments live in the
-  index itself now, see below). **The search box is not its own stop** — it
+  index. While it is open `↑`/`↓` walk into the "Taken" block below the
+  description card and back out again (see "Walking into the Taken block" above;
+  they used to be plain no-ops, and still are when that list is empty — PR-wide
+  comments live in the index itself, see below). **The search box is not its own stop** — it
   belongs to stop 2 and is no longer reachable via `←`; a mouse click (or
   native Tab) still gets you there and typing filters as always. If it already
   has focus (`state.searchActive`), `←` goes to stop 1 via `exitSearch()`

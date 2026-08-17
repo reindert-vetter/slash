@@ -23,6 +23,7 @@ Arrow-key navigation of the tree itself lives in
 | `replyPublish` | automatically when a reply is sent on a thread that isn't on GitHub | `replyPublishCommandsFor()` |
 | `postApprove` | automatically after a palette approve | `POSTAPPROVE_COMMANDS` |
 | `reviewApprove` / `reviewChoice` / `reviewReject` | automatically when nothing is left ahead | `REVIEW_APPROVE_COMMANDS` / `REVIEW_CHOICE_COMMANDS` / built from the typed text |
+| `task` | a click (left OR right) on any row of the "Taken" block — `openTaskRowMenu`, always `native`-styled at the cursor | `taskCommandsFor()` — "Open de comment" / "Opnieuw proberen" (dropped while that retry is still in flight; or the honest "kan niet opnieuw proberen" line) / "Kopieer foutmelding" / "Verberg deze melding" / "Verversen", each present only when the clicked row's own descriptor supports it. See "Refreshing and the per-row menu" in `.claude/docs/detail-layout.md` |
 
 There is deliberately no `bulkComments` mode anymore — "Laat Claude alle
 openstaande comments verwerken" moved out of the palette entirely, into the

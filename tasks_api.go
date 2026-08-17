@@ -788,6 +788,11 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// workflow runs (repo-wide) + the mirrored glue log lines. Feeds the
 	// "Mislukte taken" block at the bottom of /pr-overview. See run_errors.go.
 	mux.HandleFunc("/api/problems", s.handleProblems)
+	// POST /api/workflows/retry {runId} → start a FRESH Execution of that failed
+	// run's own Workflow Type with its stored input (the "Probeer opnieuw" item
+	// in the review tree's "Taken" row menu). A start, so it stays inside the
+	// workflow write-boundary; see TaskManager.RetryRun.
+	mux.HandleFunc("/api/workflows/retry", s.handleRetryRun)
 	// GET /api/running-count → read-only: how many workflow runs are
 	// tembed.StatusRunning RIGHT NOW, repo-wide. Feeds the live badge next to
 	// the PR count on /pr-overview. A separate top-level path, not
@@ -943,11 +948,36 @@ func (s *server) handleProblems(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "failedRuns": failed, "logErrors": logs, "prTitles": titles})
 }
 
+// handleRetryRun serves POST /api/workflows/retry {"runId":"…"} — start the
+// failed run's own Workflow Type over with its stored input. 400 for a run that
+// cannot be retried at all (unknown, not failed, per-item Run ID or a retired
+// type — see retryableWorkflow), which is exactly what the row menu already
+// tells the reviewer before they click.
+func (s *server) handleRetryRun(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var in struct {
+		RunID string `json:"runId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.RunID) == "" {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	runID, err := s.tasks.manager.RetryRun(strings.TrimSpace(in.RunID))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "runId": runID})
+}
+
 // handleWorkflows routes /api/workflows/{runID} (GET status) and
 // /api/workflows/{runID}/signals/{signalName} (POST signal).
 func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/workflows/")
-	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "remove_reviewer" || rest == "code_warning" || rest == "task_snooze" || rest == "ignore_comment" || rest == "task_inbox" || rest == "cleanup" || rest == "claude_chat" || rest == "auto_warn" || rest == "comment_batch" {
+	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "remove_reviewer" || rest == "code_warning" || rest == "task_snooze" || rest == "ignore_comment" || rest == "task_inbox" || rest == "cleanup" || rest == "claude_chat" || rest == "auto_warn" || rest == "comment_batch" || rest == "retry" {
 		http.NotFound(w, r)
 		return
 	}

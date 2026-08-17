@@ -259,3 +259,70 @@ func TestFailedRunsCarriesCommentRef(t *testing.T) {
 		t.Fatalf("snippet = %q, want a preview of the comment body", c.Snippet)
 	}
 }
+
+// TestRetryRunStartsAFreshAttempt covers the "Probeer opnieuw" path behind
+// POST /api/workflows/retry: a failed run's own Workflow Type is started again
+// with its stored input, which supersedes the failure (so it drops out of
+// FailedRuns), while a per-item deterministic-Run-ID type is refused outright —
+// starting that one over would be an idempotent no-op, so the row menu says so
+// instead (see retryableWorkflow).
+func TestRetryRunStartsAFreshAttempt(t *testing.T) {
+	engine := tembed.New(tembed.NewMemoryStore())
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
+
+	attempts := 0
+	engine.RegisterWorkflow("test_flaky", func(w *tembed.Workflow, input []byte) ([]byte, error) {
+		attempts++
+		if attempts == 1 {
+			return nil, errors.New("first attempt boom")
+		}
+		return nil, nil
+	})
+
+	failedID, _ := engine.StartWorkflow("test_flaky", struct {
+		PR int `json:"pr"`
+	}{PR: 12903})
+	if got := m.FailedRuns(failedRunCap); len(got) != 1 || !got[0].Retryable {
+		t.Fatalf("FailedRuns = %+v, want exactly one retryable failure", got)
+	}
+
+	newID, err := m.RetryRun(failedID)
+	if err != nil {
+		t.Fatalf("RetryRun: %v", err)
+	}
+	if newID == failedID {
+		t.Fatal("RetryRun reused the failed run's ID; it must start a fresh Execution")
+	}
+	if attempts != 2 {
+		t.Fatalf("workflow ran %d times, want 2 (the retry must actually run it)", attempts)
+	}
+	// The fresh attempt succeeded, so the failure is superseded and no longer
+	// something the reviewer has to act on.
+	if got := m.FailedRuns(failedRunCap); len(got) != 0 {
+		t.Fatalf("FailedRuns after a successful retry = %+v, want none", got)
+	}
+	// The input travelled along verbatim — the retry is the same task, not a
+	// blank one.
+	in, err := engine.Input(newID)
+	if err != nil || !strings.Contains(string(in), "12903") {
+		t.Fatalf("retry input = %q (err %v), want the original input", in, err)
+	}
+
+	// A per-item Run ID cannot be retried at all.
+	engine.RegisterWorkflow(WorkflowTaskCodeComment, func(w *tembed.Workflow, input []byte) ([]byte, error) {
+		return nil, errors.New("comment boom")
+	})
+	perItemID, _ := engine.StartWorkflowID("comment-1", WorkflowTaskCodeComment, struct {
+		PR int `json:"pr"`
+	}{PR: 12903})
+	if retryableWorkflow(WorkflowTaskCodeComment) {
+		t.Fatal("retryableWorkflow says a per-item Run ID can be retried")
+	}
+	if _, err := m.RetryRun(perItemID); err == nil {
+		t.Fatal("RetryRun accepted a per-item Run ID; want an error")
+	}
+	// And neither can a run that isn't failed at all.
+	if _, err := m.RetryRun("nope"); err == nil {
+		t.Fatal("RetryRun accepted an unknown run ID; want an error")
+	}
+}

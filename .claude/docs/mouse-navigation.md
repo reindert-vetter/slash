@@ -30,6 +30,7 @@ function** the key runs — never a parallel implementation. Concretely:
 | A `claude-question-option` chip | typing that same answer as free text (the backend records the next message as the open question's answer either way) | `.claude/docs/claude-chat-panel.md` |
 | `block-open-menu` / `pr-menu-button` / `comment-detail-menu` / `claude-chat-menu` (each opens `openMenu(...)`) | `Enter` on the same target | "Every menu also has a mouse entry point" below |
 | `main-scroll-left-button` (top-level diff/list) / `block-close-column` (a drilled column) | `←` at that stop (`leaveDiffToList`/`enterDescriptionFromList`/`closeDrilledColumn`) | "Every diff card/column also has a mouse way back" below |
+| A "Taken" row (`workflow-row`) — the click also lands the keyboard cursor on it (`state.taskFocus`), so `↑`/`↓` continue from there | `Enter` on that row after walking in with `↓` | "Walking into the Taken block" in `.claude/docs/keyboard-navigation.md` |
 
 Two consequences worth keeping in mind when adding a click handler:
 

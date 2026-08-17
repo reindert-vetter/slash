@@ -40,6 +40,11 @@ import RelatedPanel, {
   claudeChatVisible,
   claudeColumnVisible,
   TasksPanel,
+  buildTaskRows,
+  hideTaskLogLine,
+  setTasksRefreshBusy,
+  markTaskRetrying,
+  clearTaskRetrying,
   enterCommentsOrRelated,
   startComment,
   startPrWideComment,
@@ -127,7 +132,11 @@ import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
 import TestMethodsColumn from './TestMethodsColumn.mjs'
 import { meLogin } from './avatar.mjs'
 import { relativeTime } from './relativeTime.mjs'
-import { fetchProblems, problemRunRow, problemLogRow } from './problems.mjs'
+// Only the fetch wrapper is needed here now: the rows themselves are rendered
+// by the merged "Taken" block (TasksPanel, RelatedPanel.mjs), not by a separate
+// problems card of our own — see "The Taken block" in
+// .claude/docs/detail-layout.md.
+import { fetchProblems } from './problems.mjs'
 import {
   loadColumnWidths,
   colWidthStyle,
@@ -218,11 +227,23 @@ const state = reactive({
   workflows: [],
   // pageProblems — GET /api/problems (repo-wide, read-only), filtered
   // client-side to THIS pr: failed workflow runs plus mirrored glue-log lines
-  // that never surfaced as a run at all (see ProblemsPanel/pollProblems
+  // that never surfaced as a run at all (see buildTaskRows in
+  // RelatedPanel.mjs, which merges these INTO the "Taken" block, and
+  // pollProblems
   // below, and "mislukte taken ook zichtbaar op /pr/<id>" in
   // .claude/docs/detail-layout.md). Reused from the SAME /pr-overview
   // "Mislukte taken" building blocks (src/problems.mjs).
   pageProblems: { failedRuns: [], logErrors: [] },
+  // taskFocus — while stop 1 (the PR-description column) owns the keyboard, the
+  // KEY of the focused row in the "Taken" block, or '' when the description
+  // card itself has the focus. A key, not an index: the merged list reorders
+  // under its own polls, and an index snapshot would silently point at another
+  // row (see "Snapshot a selection by stable ID" in
+  // .claude/rules/conventions.md). Ephemeral UI state, deliberately not in the
+  // URL — like showDescription, which it only ever means anything alongside.
+  // See stepTaskFocus and "Walking into the Taken block" in
+  // .claude/docs/keyboard-navigation.md.
+  taskFocus: '',
   // blocks — the top-level blocks shown in the sidebar and walked by the
   // navigation: the full set minus any block that is a child in a relation
   // (those are nested under their parent in the RelatedPanel instead). allBlocks
@@ -8512,6 +8533,21 @@ watch(
   () => setCommentScope(commentScope()),
 )
 
+// The "Taken" keyboard cursor (state.taskFocus, see stepTaskFocus) only exists
+// WITHIN stop 1: it is a position inside the PR-description column, so the
+// moment that column stops owning the keyboard the cursor must be gone —
+// otherwise coming back to stop 1 later lands on a stale row instead of on the
+// description card, and the card's own focus ring stays suppressed by a cursor
+// nobody can see (prInfoCard reads `!state.taskFocus`). The ArrowRight branch in
+// onKeydown clears it itself; this watch covers every OTHER way stop 1 loses
+// ownership (a mouse click into a diff, enterDiff, an auto-selection).
+watch(
+  () => state.showDescription,
+  (shown) => {
+    if (!shown) state.taskFocus = ''
+  },
+)
+
 // lastRelatedBlockId tracks which block the underlying-code panel showed on
 // the previous watch run — plain module state (not reactive; only used to
 // detect a block switch inside the callback below, which then collapses the
@@ -10116,6 +10152,7 @@ function rootCommandsFor(mode) {
   if (mode === 'claude') return claudeChatCommandsFor()
   if (mode === 'prComment') return prCommentCommandsFor()
   if (mode === 'pushTodo') return pushTodoCommandsFor()
+  if (mode === 'task') return taskCommandsFor()
   if (mode === 'replyPublish') return replyPublishCommandsFor()
   if (mode === 'postApprove') return POSTAPPROVE_COMMANDS
   if (mode === 'reviewApprove') return REVIEW_APPROVE_COMMANDS
@@ -10493,7 +10530,8 @@ window.addEventListener('scroll', repositionMenu, true) // capture: catch inner 
 // is known) focuses the input and positions it just beneath the current selection.
 // `mode` picks the command list (see resolveCommands): 'block' (default),
 // 'comment', 'pr', 'compose', 'replyPublish', 'postApprove', 'reviewApprove',
-// 'reviewChoice' or 'reviewReject'. It installs a FRESH `ms` reactive so the previous
+// 'reviewChoice', 'reviewReject' or 'task' (a clicked row of the "Taken"
+// block — see taskCommandsFor). It installs a FRESH `ms` reactive so the previous
 // open's (undisposed) CommandMenu bindings can't fire when this menu mutates its
 // state — see the note on the menu/ms split. `commands` is filled here, in this
 // plain (non-reactive) function, by resolving rootCommandsFor(mode) through
@@ -11170,6 +11208,16 @@ function onKeydown(e) {
   // ArrowRight branch) keeps stepping into that method's diff.
   if (e.key === 'Enter') {
     e.preventDefault()
+    // A focused "Taken" row is its own stop within stop 1, so Enter there opens
+    // that ROW's menu ('task') instead of the PR-wide one — the keyboard twin of
+    // clicking it (openTaskRowMenu). Same shape as the push-todo row's own
+    // Enter, and it re-resolves the cursor key against the current list, so a
+    // row that vanished under a poll falls through to the 'pr' menu.
+    const taskRow = state.showDescription ? focusedTaskRowFromState() : null
+    if (taskRow) {
+      openTaskRowMenu(taskRow, null)
+      return
+    }
     openMenu(state.showDescription ? 'pr' : 'block')
     return
   }
@@ -11194,7 +11242,21 @@ function onKeydown(e) {
   // account of both root causes.
   if (state.showDescription) {
     e.preventDefault()
+    // ↓/↑ walk into (and back out of) the "Taken" block below the description
+    // card — stop 1 used to swallow both keys entirely. stepTaskFocus returns
+    // false when there is nothing to walk into (an empty list, or ↑ while the
+    // description card already has the focus), which keeps the key the same
+    // no-op it was. See "Walking into the Taken block" in
+    // .claude/docs/keyboard-navigation.md.
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      stepTaskFocus(e.key === 'ArrowDown' ? 1 : -1)
+      return
+    }
     if (e.key === 'ArrowRight') {
+      // → is the nav chain's own step to the right, from a focused Taken row
+      // just as much as from the description card itself: the reviewer asked to
+      // reach the diff from here, not to have to walk back up first.
+      state.taskFocus = ''
       state.showDescription = false
       // → out of stop 1 is a nav-chain step, so the column really goes away —
       // including when a mouse click had pinned it open earlier (see
@@ -12268,7 +12330,10 @@ function prInfoCard(state) {
         // Light-blue border while the keyboard drives stop 1 (this panel is only
         // ever mounted while showDescription is true, but read it here anyway so
         // the binding stays reactive) — mirrors diffActive on the block-diff card.
-        (state.showDescription
+        // `!state.taskFocus`: ↓ can move the cursor down into the "Taken" block
+        // below without leaving stop 1, and exactly one of the two may look
+        // focused at a time (see stepTaskFocus).
+        (state.showDescription && !state.taskFocus
           ? 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
           : 'border-slate-300 dark:border-zinc-700 ring-1 ring-black/5')}"
       data-testid="pr-info-card"
@@ -12409,30 +12474,209 @@ function prInfoCard(state) {
   `
 }
 
-// ProblemsPanel — the review-tree's own small "Mislukte taken" surface,
-// reusing problemRunRow/problemLogRow verbatim from src/problems.mjs (the
-// SAME building blocks the /pr-overview drawer uses — see
-// .claude/docs/detail-layout.md). Unlike that drawer this never collapses:
-// a single PR typically has 0-2 problems at most, so there's nothing to hide
-// behind a toggle, and a reviewer should see it immediately rather than have
-// to think to expand something. Renders nothing at all when there's nothing
-// to show — mounted right below TasksPanel in the same PR-description column.
-// showPr:false on both row kinds: the page is already scoped to this PR, so
-// the "#<pr> · title" chip would only repeat what's already on screen.
-function ProblemsPanel(state) {
-  return html`<div class="contents">${() => {
-    const { failedRuns, logErrors } = state.pageProblems
-    if (failedRuns.length === 0 && logErrors.length === 0) return ''
-    return html`
-      <div
-        class="shrink-0 overflow-hidden rounded-xl border border-rose-200 dark:border-rose-900/40 bg-rose-50/40 dark:bg-rose-950/20"
-        data-testid="page-problems"
-      >
-        ${failedRuns.map((run) => problemRunRow(run, null, { showPr: false }))}
-        ${logErrors.map((entry, i) => problemLogRow(entry, i, null, { showPr: false }))}
-      </div>
-    `
-  }}</div>`
+// refreshTasks re-reads BOTH sources behind the merged "Taken" block — the
+// workflow runs (2.5s poll) and the problems list (15s poll) — on the
+// reviewer's own request, via the card's ⟳ button and its row menu. Without it
+// the result of a retry could sit invisible for up to 15 seconds.
+// setTasksRefreshBusy drives the button's own disabled/busy look.
+async function refreshTasks() {
+  setTasksRefreshBusy(true)
+  try {
+    await Promise.all([pollWorkflows(), pollProblems()])
+  } finally {
+    setTasksRefreshBusy(false)
+  }
+}
+
+// retryFailedRun starts the failed run's own Workflow Type over with its stored
+// input (POST /api/workflows/retry — a workflow START, the sanctioned write
+// path, see .claude/rules/workflows-write-boundary.md). Only offered for a run
+// the backend itself marked `retryable` (see retryableWorkflow in
+// run_errors.go), so the failure branch here is a genuine surprise, not the
+// normal "can't retry this kind" case.
+//
+// markTaskRetrying runs FIRST, before the request is even sent: the retry is a
+// NEW Execution, so the failed row itself only disappears once /api/problems
+// has seen the failure superseded — up to a poll away, during which the row
+// would otherwise look exactly as it did before the click ("ik wil gelijk zien
+// dat het weer aan het draaien is"). The mark flips it to "↻ opnieuw gestart"
+// in the same tick and needs no cleanup: the row goes away with the failure.
+// Only a failed POST clears it again, so the row honestly returns to "mislukt".
+// Error handling otherwise follows submitReview's: no toast convention in this
+// app, so it logs.
+async function retryFailedRun(runId) {
+  if (!runId) return
+  markTaskRetrying(runId)
+  // The row's key encodes its state ('failed:' → 'retrying:'), so the keyboard
+  // cursor has to move along with it or the focus ring would drop off the very
+  // row the reviewer just acted on.
+  if (state.taskFocus === 'failed:' + runId) state.taskFocus = 'retrying:' + runId
+  try {
+    const res = await fetch('/api/workflows/retry', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ runId }),
+    })
+    if (!res.ok) {
+      clearTaskRetrying(runId)
+      console.error('retry failed:', res.status, await res.text())
+    }
+  } catch (err) {
+    clearTaskRetrying(runId)
+    console.error('retry failed:', err)
+  }
+  await refreshTasks()
+}
+
+// stepTaskFocus — ↓/↑ while stop 1 owns the keyboard (reviewer: "ik wil met mijn
+// down key naar beneden en daar kunnen navigeren … en naar boven terug naar pr
+// description"). ↓ from the description card walks into the "Taken" list, then
+// row by row; ↑ walks back up and, from the first row, RELEASES the focus back
+// to the description card (`taskFocus = ''`) rather than getting stuck.
+//
+// The cursor is the row's key, so it is re-resolved against the CURRENT list on
+// every step: a row that disappeared under a poll simply leaves index -1, and ↓
+// then starts at the top again instead of landing somewhere arbitrary.
+// Returns false when there is nothing to walk into at all (no rows), so the
+// caller can leave the keypress a plain no-op, exactly as it was before.
+function stepTaskFocus(dir) {
+  const rows = buildTaskRows(state)
+  if (rows.length === 0) {
+    state.taskFocus = ''
+    return false
+  }
+  const at = rows.findIndex((r) => r.key === state.taskFocus)
+  if (at < 0) {
+    // Not in the list yet: ↓ enters at the top, ↑ from the description does
+    // nothing (there is nothing above stop 1's own card).
+    if (dir < 0) return false
+    state.taskFocus = rows[0].key
+    scrollTaskRowIntoView(rows[0].key)
+    return true
+  }
+  const next = at + dir
+  if (next < 0) {
+    state.taskFocus = '' // back out to the PR description itself
+    return true
+  }
+  if (next >= rows.length) return true // already on the last row: stay put
+  state.taskFocus = rows[next].key
+  scrollTaskRowIntoView(rows[next].key)
+  return true
+}
+
+// scrollTaskRowIntoView keeps the focused row visible inside the block's own
+// 3,5-row window. scrollIntoViewVertical (never bare scrollIntoView) because
+// this list sits inside <main>'s horizontally scrolling column flow — see the
+// scrollIntoView axis rule in .claude/rules/arrowjs-pitfalls.md. One frame
+// later, so the row's focus class/ring is already on the node being scrolled.
+function scrollTaskRowIntoView(key) {
+  requestAnimationFrame(() => {
+    const el = document.querySelector(`[data-testid=workflow-row][data-task-key="${key}"]`)
+    if (el) scrollIntoViewVertical(el)
+  })
+}
+
+// focusedTaskRowFromState re-resolves state.taskFocus against the current list —
+// what Enter acts on, and how the row menu is opened without a mouse.
+function focusedTaskRowFromState() {
+  if (!state.taskFocus) return null
+  return buildTaskRows(state).find((r) => r.key === state.taskFocus) || null
+}
+
+// focusedTaskRow — the merged "Taken" row the reviewer just clicked, snapshotted
+// as a PLAIN (non-reactive) value at click time, exactly like every other
+// menu-mode's own live-state read (see resolveLabel/snapshotCommands): the
+// command list is built once from it in openMenu and nothing that reads global
+// state ever reaches CommandMenu's never-disposed reactive tree.
+let focusedTaskRow = null
+
+// openTaskRowMenu is what a click on ANY row in the Taken block runs (reviewer:
+// "ook ik moet het aan kunnen klikken, met een menu om het opnieuw te
+// proberen"). It opens the native/context-menu variant at the cursor — the same
+// shape a right-click uses elsewhere (see "The right-click context menu" in
+// command-palette.md) — because the row itself is the anchor the reviewer is
+// pointing at. stopPropagation FIRST, before the state mutation that opens the
+// menu (see the nested-@click rule in arrowjs-pitfalls.md).
+function openTaskRowMenu(row, e) {
+  if (e && e.stopPropagation) e.stopPropagation()
+  focusedTaskRow = row
+  // A click lands the keyboard cursor on the row it acted on, so ↓/↑ continue
+  // from there — the same "a click runs what a key runs" rule as every other
+  // surface (see .claude/docs/mouse-navigation.md). Only while stop 1 actually
+  // owns the keyboard: the column can also be merely pinned open next to a diff
+  // (state.descriptionPinned), where a focus ring would point at a cursor that
+  // isn't there.
+  if (state.showDescription && row) state.taskFocus = row.key
+  // A keyboard open (Enter on the focused row) passes no event, so anchor the
+  // box on that row's own rect instead of a mouse position — the row IS the
+  // anchor either way.
+  const at = e && typeof e.clientX === 'number' ? { x: e.clientX, y: e.clientY } : taskRowAnchor(row)
+  openMenu('task', { native: true, x: at.x, y: at.y })
+}
+
+// taskRowAnchor — where a keyboard-opened row menu appears: just under the
+// focused row's left edge, the same "point at the thing you acted on" idea as
+// the mouse position for a click. Falls back to the origin if the row somehow
+// isn't in the DOM (openMenu clamps the box into the viewport itself).
+function taskRowAnchor(row) {
+  const el = row && document.querySelector(`[data-testid=workflow-row][data-task-key="${row.key}"]`)
+  if (!el) return { x: 0, y: 0 }
+  const r = el.getBoundingClientRect()
+  return { x: r.left + 24, y: r.bottom }
+}
+
+// taskCommandsFor builds the clicked row's menu (openMenu('task'), plain
+// non-reactive code — see rootCommandsFor). What a row offers follows strictly
+// from what it IS:
+//
+//   - a failed run whose type can be started over → "Opnieuw proberen" (gone
+//     while that retry is still in flight — the row already says "↻ opnieuw
+//     gestart", and a second start would queue a second Execution);
+//   - a failed run with a per-item Run ID (a comment thread, a chat, …) → the
+//     honest "kan niet opnieuw" line instead, since starting it again is a
+//     no-op that returns the very same failed run (see retryableWorkflow);
+//   - a run linked to a comment → "Open de comment" (openTask), which used to
+//     be the row's whole click behaviour;
+//   - a mirrored log line → "Verberg deze melding" (this tab only, see
+//     hideTaskLogLine);
+//   - anything with an error message → "Kopieer foutmelding".
+//
+// "Verversen" closes the list, so a row that offers nothing else still does
+// something useful. Wording note: the retry item is "Opnieuw proberen" and the
+// refresh one is the short "Verversen" — two long, similar-looking items read
+// as the same action twice (reviewer feedback on "Taken verversen").
+function taskCommandsFor() {
+  const row = focusedTaskRow
+  if (!row) return withClose([])
+  const items = []
+  if (row.comment) {
+    items.push({ id: 'task-open-comment', label: 'Open de comment', hint: 'open comment', run: () => openTask(row.run) })
+  }
+  if (row.problem && row.kind === 'run' && !row.retrying) {
+    if (row.retryable) {
+      items.push({ id: 'task-retry', label: 'Opnieuw proberen', hint: 'opnieuw retry', run: () => retryFailedRun(row.runId) })
+    } else {
+      items.push({
+        id: 'task-retry-blocked',
+        label: 'Kan niet opnieuw proberen — deze taak start alleen bij de bron',
+        hint: 'opnieuw retry',
+        run: () => {},
+      })
+    }
+  }
+  if (row.error) {
+    items.push({ id: 'task-copy-error', label: 'Kopieer foutmelding', hint: 'copy kopieer', run: () => copyReviewSummary(row.error) })
+  }
+  if (row.kind === 'log') {
+    items.push({ id: 'task-hide-log', label: 'Verberg deze melding', hint: 'verberg', run: () => hideTaskLogLine(row.key) })
+  }
+  // "Verversen", not "Taken verversen": next to "Opnieuw proberen" a second
+  // long item read as the same action twice (reviewer feedback). The ⟳ button
+  // in the card header does exactly this too — the item exists so a row that
+  // offers nothing else still does something useful.
+  items.push({ id: 'task-refresh', label: 'Verversen', hint: 'refresh verversen', run: () => refreshTasks() })
+  return withClose(items)
 }
 
 // PrInfoPanel — stop 1 of the left→right nav chain: the PR-description
@@ -12468,7 +12712,8 @@ function PrInfoPanel(state) {
               class="flex h-full min-h-0 w-[39rem] shrink-0 flex-col gap-3"
               data-testid="pr-info-column"
             >
-              ${prInfoCard(state)} ${TasksPanel(state, openTask)} ${ProblemsPanel(state)}
+              ${prInfoCard(state)}
+              ${TasksPanel(state, { openRowMenu: openTaskRowMenu, refresh: refreshTasks, focusState: state })}
             </div>`.key('pr-info-column')
           : ''}
     </div>

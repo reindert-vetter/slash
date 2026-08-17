@@ -653,11 +653,16 @@ being typed in, which then **silently could not take DOM focus at all**
 ## Tasks: a block under the PR-description column
 
 Workflow runs of the current PR sit in a **`shrink-0`** block
-(`TasksPanel(state, openTask)`, `<section data-testid=workflows-panel>`, title
+(`TasksPanel(state, actions)`, `<section data-testid=workflows-panel>`, title
 **"Taken"**) stacked directly **below** `prInfoCard` inside `PrInfoPanel`'s own
 fixed column — only visible while `state.showDescription` is true. A plain
 sibling in that column's `flex-col gap-3` container, so `prInfoCard`'s `flex-1`
-shares the height with this `shrink-0 max-h-[16rem]` block.
+shares the height with this `shrink-0` block. `actions` is
+`{ openRowMenu, refresh }`, both optional (the direct-mount specs pass
+nothing).
+
+**It is ONE merged list, not two cards.** The failures for this PR live in the
+same list — see "One block: runs, failures and skipped log lines" below.
 
 **Filtered to what needs attention — no Active/Recent split.**
 `visibleWorkflowRuns(state)` (exported from `RelatedPanel.mjs`) shows a run only
@@ -672,9 +677,19 @@ once it's actively running or has been idle long enough to be worth a look
 (and never while `waiting`). Running-first, then most-recently-updated. Test:
 `tests/workflows-panel-notes.spec.mjs`.
 
-**Click-only — no keyboard cursor.** Stop 1 suppresses `↑`/`↓`, so a Taken row
-(`workflowRow`) has no focus ring of its own; only a click on a
-`comment`-bearing row calls `openTask(run)` (`home.mjs`), which looks up the
+**A cursor of its own, reachable by keyboard.** `↓` from the PR-description card
+walks into this list and `↑` walks back out — the block is a cursor WITHIN stop 1
+(`state.taskFocus`, the focused row's key; the focused row gets an indigo ring
+and `data-task-focused=true`, and `prInfoCard`'s own ring drops while it is set).
+The full rules, including `Enter`/`→`/`←` from a focused row, live in "Walking
+into the Taken block" in `.claude/docs/keyboard-navigation.md`. Because the row's
+`.key()` deliberately does NOT encode focus, the focus class is a **function**
+binding comparing `row.key` against that reactive cursor — not part of the
+statically interpolated class string, which a reused keyed node would never
+re-run (see `.claude/rules/arrowjs-pitfalls.md`). A click on **any** row opens that
+row's own menu (`openTaskRowMenu` → `openMenu('task')`, see below); the
+`comment`-bearing rows keep their old behaviour as that menu's default item
+"Open de comment" → `openTask(run)` (`home.mjs`), which looks up the
 block by `comment.file`+`comment.label`, steps the diff to the stored
 granularity/row range (`unitsFor`+`unitAtRow`, the same walk as `setGran`), and
 selects the comment via `selectComment(runId)` (exported from
@@ -684,8 +699,9 @@ selects the comment via `selectComment(runId)` (exported from
 informational. `openTask` also searches every `test_class` row's `.methods` —
 see `.claude/docs/test-class-grouping.md`.
 
-Each row shows, below the label + status badge, a short **description**
-(`data-testid=workflow-note`, gray, `line-clamp-2`, `workflowNote` in
+Each row shows, below the status word + label, a short **description**
+(`data-testid=workflow-note`, gray, `truncate` — one line, see the fixed row
+height below, `workflowNote` in
 `RelatedPanel.mjs`): for a `task_code_comment` run the rich
 `class::method · line N · "snippet"` from the run's `comment` ref
 (`WorkflowRunView.comment`); for every other type a sentence explaining *why*
@@ -706,41 +722,132 @@ The old dummy Tasks placeholder (`ui.task`,
 `data-testid=task-list`/`chat`/`chat-bubble`/`new-task`) no longer exists — no
 chat, no `ui.task`.
 
-### "Mislukte taken" also reaches the review tree, not only `/pr-overview`
+### One block: runs, failures and skipped log lines
 
 A failed `task_code_comment` run scoped to this PR eventually surfaces via the
 Taken block above once it's stale (5+ minutes, see `TASK_STALE_MS`), but a
 **mirrored glue-log line** (a poller/startup error with no workflow run of its
 own — e.g. "import comments: … exit status 1", see `run_errors.go`) never had
 anywhere to show on `/pr/<id>` at all: only the `/pr-overview` "Mislukte taken"
-drawer read `GET /api/problems` (see `.claude/docs/pr-overview.md`).
-`ProblemsPanel(state)` (`home.mjs`) closes that gap by reusing the **exact
-same** row renderers, extracted into `src/problems.mjs`
-(`fetchProblems`/`problemMark`/`problemPrChip`/`problemCommentLine`/`baseName`/
-`problemRunRow`/`problemLogRow`, formerly local to `overview.mjs`) instead of a
-second implementation — both `problemRunRow`/`problemLogRow` now take their
-`prTitles` map and an optional `{ showPr }` argument instead of reading
-page-specific `state`.
+drawer read `GET /api/problems` (see `.claude/docs/pr-overview.md`). That gap
+was first closed by a SECOND card below Taken (`ProblemsPanel`, `home.mjs`,
+`data-testid=page-problems`, reusing `problemRunRow`/`problemLogRow` from
+`src/problems.mjs`). **That card is gone** — reviewer: *"dit bij elkaar doen"*:
+two stacked cards said the same kind of thing about the same PR, so a reviewer
+had to read two lists to know what background work was in trouble.
 
-- **`pollProblems()`** polls the same repo-wide `GET /api/problems` on its own
-  slower cadence (`PROBLEMS_POLL_MS`, 15s — failures are rare, this is a
-  "did anything go wrong" check, not a live status) and filters both
+Everything now goes through **`buildTaskRows(state)`** (`RelatedPanel.mjs`,
+exported), which returns one ordered list of plain, **non-reactive** row
+descriptors:
+
+- **Order is actionability, not time**: the problems first (failed runs +
+  skipped log lines, mixed and newest-first among themselves), then the
+  live/idle runs `visibleWorkflowRuns` already selected.
+- **A failed run comes ONLY from `state.pageProblems`**, never from
+  `state.workflows` (`status !== 'failed'` filters those out, plus a runId
+  guard). `/api/problems` drops a failure that a later attempt already
+  superseded (`supersededRuns`, `run_errors.go`); reading both sources would
+  resurrect exactly the failures that are no longer anything to act on.
+- **A descriptor, not a raw run**, for two reasons: every slot in `taskRow`'s
+  template is then an always-present **string** (no conditional template slot
+  at all — see the statically-interpolated-template pitfall in
+  `.claude/rules/arrowjs-pitfalls.md`), and the row menu in `home.mjs` gets
+  exactly the fields it needs (`problem`/`kind`/`retryable`/`error`/`comment`/
+  `runId`/`key`) to decide what it can offer.
+- **`pollProblems()`** still polls the repo-wide `GET /api/problems` on its own
+  slower cadence (`PROBLEMS_POLL_MS`, 15s — failures are rare, this is a "did
+  anything go wrong" check, not a live status) and filters both
   `failedRuns`/`logErrors` client-side to `pr === state.pr`, since the endpoint
   itself has no `pr=` filter — into `state.pageProblems`.
-- **`data-testid=page-problems`**, mounted directly below `TasksPanel` inside
-  `PrInfoPanel`'s own column (same `contents`-wrapped toggle pattern as that
-  panel — see the bare-toggling-expression rule in
-  `.claude/rules/arrowjs-pitfalls.md`) — renders nothing at all when there's
-  nothing to show for this PR.
-- **Unlike the overview's drawer, this never collapses behind a toggle.** A
-  single PR typically has 0-2 problems at most, so there's nothing worth
-  hiding, and a reviewer should see it immediately.
-- **`showPr: false`** on both row kinds here: the page is already scoped to
-  this PR, so the "#<pr> · title" chip (`problemPrChip`) would only repeat
-  what's already on screen. `/pr-overview` still passes the default
-  (`showPr: true`, unchanged behaviour there — see
-  `tests/overview-problems.spec.mjs`).
+- No PR chip anywhere: the page is already scoped to this PR, so
+  `problemPrChip`'s "#<pr> · title" would only repeat what's on screen.
+  `/pr-overview` keeps its own drawer and `src/problems.mjs` rows unchanged
+  (`showPr: true`, see `tests/overview-problems.spec.mjs`); only `baseName` is
+  still imported from that module here, so both pages name a file identically.
 
-Test: `tests/pr-page-problems.spec.mjs` (a failed run scoped to the open PR
-shows, one for a different PR is filtered out, no PR chip; nothing renders
-when there's nothing wrong).
+**The word carries the state, the rose tint is decoration** (colorblind rule):
+a problem row leads with `⚠ mislukt` / `⚠ overgeslagen`
+(`data-testid=workflow-status`, the same slot a live run's `draait`/`klaar`
+badge uses), on a `bg-rose-50/60 dark:bg-rose-950/25` row.
+
+### 3,5 rows visible, and a count of the rest
+
+Reviewer: *"maximaal 3,5 laten zien (half omdat je dan het idee krijgt dat er
+meer is)"*. The half row is the affordance, so it must genuinely read as half a
+row:
+
+- **Every row is exactly `h-[3.25rem]`** — a fixed height with ONE truncated
+  note line, instead of the old free-flowing two/three-line row. `taskRow`'s
+  literal class and `TASK_ROW_H_REM` are kept in sync **by hand**: a computed
+  `h-[${…}rem]` would be a class name Tailwind's Play CDN only sees after the
+  row is already in the DOM.
+- **The list's `max-height` is `(TASK_FULL_ROWS + 0.5) * TASK_ROW_H_REM`**
+  (`11.375rem`), set as an inline `style` since the value is computed;
+  `overflow-auto` (`no-scrollbar`) so the mouse still reaches everything.
+- **`data-testid=tasks-more`** — "nog N meer — scroll voor de rest" under the
+  list whenever there are more rows than the 3 fully visible ones. It sits in
+  the usual stable `contents` wrapper (the bare-toggling-expression rule).
+
+### Refreshing and the per-row menu
+
+- **`data-testid=tasks-refresh`** (the header's `⟳`, glyph-only with the wording
+  in `title`/`aria-label`) runs `refreshTasks()` (`home.mjs`): `pollWorkflows()`
+  **and** `pollProblems()` at once, with `setTasksRefreshBusy` driving the
+  button's disabled/`…` look. Without it a retry's result could sit invisible
+  for up to 15 seconds.
+- **A click on any row** runs `openTaskRowMenu(row, e)` → `openMenu('task')` and
+  also lands the keyboard cursor on that row (the "a click runs what a key runs"
+  rule, `.claude/docs/mouse-navigation.md`) — but only while stop 1 really owns
+  the keyboard, never while the column is merely pinned open beside a diff
+  (`state.descriptionPinned`), where a ring would point at an absent cursor.
+  The menu itself is the native/context-menu variant positioned at the mouse —
+  or, for an `Enter` open, just under the focused row's own rect
+  (`taskRowAnchor`): the row is the anchor either way. It calls `e.stopPropagation()` **before** opening —
+  see the nested-`@click` rule in `.claude/rules/arrowjs-pitfalls.md`. The
+  clicked descriptor is snapshotted into the plain module variable
+  `focusedTaskRow`, so nothing reading global state reaches CommandMenu's
+  never-disposed reactive tree (`resolveLabel`/`snapshotCommands`).
+- **`taskCommandsFor()`** (`home.mjs`, registered as `rootCommandsFor`'s
+  `'task'` mode) offers only what follows from the row: "Open de comment" for a
+  `comment`-bearing run, **"Opnieuw proberen"** for a retryable failure,
+  "Kopieer foutmelding" when there's a message, "Verberg deze melding" for a
+  log line, and always the short **"Verversen"**. The two action words are
+  deliberately asymmetric in length: "Opnieuw proberen" next to a second long
+  item ("Taken verversen", as it first shipped) read as the same action twice.
+- **Hiding a log line is client-side only** (`hideTaskLogLine`, `taskUi.hiddenLogs`
+  in `RelatedPanel.mjs`, keyed on `at|message` so the next poll doesn't bring it
+  back): `/api/problems`' buffer is an in-memory log mirror the server rebuilds
+  on its own terms, so "verberg" means "stop showing it in this tab", which also
+  keeps it outside the workflow write-boundary.
+
+**A retry says so in the same tick** (reviewer: "graag even dat ik gelijk zie
+dat het weer aan het draaien is"). The retry is a NEW Execution, so the failure
+row only disappears once `/api/problems` has seen it superseded — up to a poll
+away, during which the row would otherwise look untouched. `markTaskRetrying`
+(`RelatedPanel.mjs`, `taskUi.retrying`) is therefore called BEFORE the request
+goes out and flips that row to **"↻ opnieuw gestart"** / "opnieuw gestart —
+bezig…" in amber (`data-status=retrying`, and the key flips too so the node is
+rebuilt rather than patched). No cleanup is needed — the row dies with the
+failure it belongs to; only a failed POST calls `clearTaskRetrying` so the row
+honestly returns to "mislukt". While the mark is set the menu drops its retry
+item, so one click can't queue two Executions.
+
+**"Opnieuw proberen" = start the same Workflow Type over with the stored input.**
+`POST /api/workflows/retry {runId}` → `handleRetryRun` (`tasks_api.go`) →
+`TaskManager.RetryRun` (`run_errors.go`): read the failed run's own input, then
+`engine.StartWorkflow(sameType, sameInput)`. A **start**, so it stays inside
+`.claude/rules/workflows-write-boundary.md`; the failed run itself is
+deliberately left alone — `supersededRuns` hides it as soon as a newer attempt
+at the same identity exists, and `cleanup` collects it later.
+
+Not every failure can be retried, and the menu says so instead of pretending:
+`retryableWorkflow` (`run_errors.go`) excludes a **per-item deterministic Run
+ID** (`perItemRunID` — a comment thread, a chat, an explain/resolve key: a
+second start is idempotent and returns the very same failed run) and a
+**retired Workflow Type** (`retiredWorkflowTypes`, whose registering code is
+gone). `FailedRun.retryable` carries that to the UI, which then shows "Kan niet
+opnieuw proberen — deze taak start alleen bij de bron".
+
+Test: `tests/pr-page-problems.spec.mjs` (a failure scoped to the open PR shows
+in the Taken list, one for a different PR is filtered out, no PR chip; the
+row menu's retry/hide items; the "nog N meer" footer).
