@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	_ "modernc.org/sqlite"
+
+	"slash/modules/sqlitedsn"
 )
 
 // schemaDDL is the source of truth for storage; keep it in sync with
@@ -61,8 +63,14 @@ CREATE TABLE IF NOT EXISTS pr_ingest (
 `
 
 // openDB opens (or creates) the SQLite DB and applies the schema.
+//
+// Through sqlitedsn.DSN for the busy_timeout, exactly like every module store
+// (and tembed's own): the blocks DB has the same concurrent writers — an
+// ingest/refresh Activity writing while a reviewer's request reads — and
+// without it one of them fails on the spot with SQLITE_BUSY instead of waiting
+// out the lock. See modules/sqlitedsn.
 func openDB(path string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", sqlitedsn.DSN(path))
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}

@@ -539,6 +539,11 @@ server was started from. Two categories, both surfaced:
   that thread. Every module store now opens through **`modules/sqlitedsn`**
   (`sqlitedsn.DSN(path)` → `_pragma=busy_timeout(5000)`, matching tembed);
   a **new module must too** — the `add-module` template does it by default.
+  The **blocks DB** (`openDB`, `db.go`) opens the same way for the same reason:
+  an ingest/refresh Activity writes to it while a request reads. The only bare
+  `sql.Open("sqlite", path)` calls left are two test helpers
+  (`classify_test.go`, `warndismiss_test.go`), which build their own fixture DB
+  rather than a production store.
 - **The log mirror** — an in-memory **ring buffer** (100 lines) fed by wrapping
   **`TaskManager.logf`**, the single funnel every glue-level error already goes
   through, so one wrapper covers them all and a future call site is free.
