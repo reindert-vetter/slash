@@ -53,6 +53,22 @@ type warningReviewArg struct {
 	// model's own call (see code_warning.md's system prompt); this is context,
 	// not a Go-side dedup filter.
 	Existing []existingLineComment `json:"existing,omitempty"`
+	// PastDismissed is every AI finding the reviewer already resolved or
+	// deleted, on a file in scope, in an EARLIER run of this check
+	// (modules/warndismiss) — its own file + wording, not just the fingerprint
+	// hash. Handed to the model so it can also recognise a REWORDED repeat of
+	// one of these (the fingerprint filter in dropDismissedFindings only
+	// catches a near-exact repeat). Deliberately best-effort context, exactly
+	// like Existing above — not a second Go-side hard filter; that hard floor
+	// (dropDismissedFindings) still runs unconditionally after this call.
+	PastDismissed []dismissedFinding `json:"pastDismissed,omitempty"`
+}
+
+// dismissedFinding is one earlier AI finding the reviewer dismissed, scoped
+// to a file in this run's review scope (see dismissedFindingsInScope).
+type dismissedFinding struct {
+	File string `json:"file"`
+	Text string `json:"text"`
 }
 
 // existingLineComment is one open, non-AI thread already on the PR, handed to
@@ -248,6 +264,12 @@ func warningPrompt(arg warningReviewArg, changed map[string]*fileChangeSet) stri
 			}
 		}
 	}
+	if len(arg.PastDismissed) > 0 {
+		b.WriteString("\nFindings the reviewer already dismissed (resolved or deleted) in an earlier run of this check, on these same files — do not report one of these again, including a reworded version that makes essentially the same point (see the system prompt's rule about them):\n")
+		for _, d := range arg.PastDismissed {
+			fmt.Fprintf(&b, "- %s: %s\n", d.File, clipForPrompt(d.Text, maxPromptComment))
+		}
+	}
 	return b.String()
 }
 
@@ -346,6 +368,38 @@ func existingLineCommentsInScope(list []comments.Comment, files []string) []exis
 	})
 	sort.SliceStable(prWide, func(i, j int) bool { return prWide[i].ID < prWide[j].ID })
 	out := append(scoped, prWide...)
+	if len(out) > maxPromptComments {
+		out = out[:maxPromptComments]
+	}
+	return out
+}
+
+// dismissedFindingsInScope filters the PR's full dismissed-finding history
+// (modules/warndismiss.List) down to the files this run is actually
+// reviewing, mirroring existingLineCommentsInScope's own scoping — a
+// dismissal on a file outside scope is irrelevant noise for this prompt. A
+// row with no stored text (dismissed before the text column existed) is
+// skipped: there is nothing useful to hand the model. Sorted (file, text) for
+// a deterministic prompt and capped at maxPromptComments for the same reason
+// existingLineCommentsInScope caps its own list.
+func dismissedFindingsInScope(dismissed []warndismiss.DismissedFinding, files []string) []dismissedFinding {
+	allowed := make(map[string]bool, len(files))
+	for _, f := range files {
+		allowed[f] = true
+	}
+	out := make([]dismissedFinding, 0, len(dismissed))
+	for _, d := range dismissed {
+		if d.Text == "" || !allowed[d.File] {
+			continue
+		}
+		out = append(out, dismissedFinding{File: d.File, Text: d.Text})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].File != out[j].File {
+			return out[i].File < out[j].File
+		}
+		return out[i].Text < out[j].Text
+	})
 	if len(out) > maxPromptComments {
 		out = out[:maxPromptComments]
 	}

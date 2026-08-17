@@ -983,7 +983,7 @@ a manually triggered, low-frequency action.
   `code_warning.md` — that keeps the contract file stable and the checklist a
   one-file diff.
 - **A finding the reviewer dismissed never comes back** (`modules/warndismiss`,
-  `data/warndismiss.db`: `dismissed_warnings(pr, file, fingerprint,
+  `data/warndismiss.db`: `dismissed_warnings(pr, file, fingerprint, text,
   created_at)`). The check re-runs automatically on every ingest refresh with
   new code, and the supersede below wipes the previous findings first — so a
   resolved or deleted finding used to return as a fresh **open** comment on
@@ -992,11 +992,30 @@ a manually triggered, low-frequency action.
   and a resolved one is deleted by that same supersede.
   - **Identity is the finding's TEXT, not its line**
     (`warndismiss.Fingerprint`: lowercased, whitespace collapsed, sha256),
-    keyed per `(pr, file)`. A later commit shifts lines; the text is what the
-    reviewer judged. **Known limit, accepted:** a genuinely REPHRASED repeat
-    gets a different fingerprint and surfaces again — normalisation only
-    catches the near-identical wording, which is the common case for the same
-    prompt over the same code.
+    keyed per `(pr, file)` — never per line, deliberately: a later commit
+    shifts lines, and the text is what the reviewer actually judged. This
+    fingerprint match is a **hard floor, enforced in Go**
+    (`dropDismissedFindings`, run unconditionally after every agentic call):
+    a near-identical repeat (cosmetic whitespace/case differences only) is
+    always dropped, regardless of what the model does.
+  - **On top of that hard floor, the finding's own TEXT is also stored**
+    (`warndismiss.Add`'s `text` column, `warndismiss.List`) and handed to the
+    model as prompt context (`warningReviewArg.PastDismissed`,
+    `dismissedFindingsInScope` in `code_warning.go`, scoped to the files
+    under review like `Existing` already is) — a second, **best-effort**
+    layer that closes the accepted gap the hard floor still has: a genuinely
+    REPHRASED repeat produces a different fingerprint and used to surface
+    again, since normalisation only catches near-identical wording. The
+    prompt lists every past-dismissed finding's file + text under a section
+    telling the model to skip a new finding that makes essentially the same
+    point, even reworded (`code_warning.md`'s matching rule, next to the
+    existing "skip a duplicate of an existing comment" one for `Existing`).
+    This is a judgment call, not a second hard filter — the model can still
+    let a rephrased repeat through, unlike the fingerprint check. Scope
+    stays per-file, not per-line, same reasoning as the fingerprint check.
+    Tests: `TestListReturnsDismissedText`, `TestMigrateTextAddsColumnToExistingDB`
+    (`modules/warndismiss`), `TestDismissedFindingsInScope`,
+    `TestCodeWarningPromptsPastDismissed` (`code_warning_test.go`).
   - **Two write points, both chosen to leave every workflow body's Activity
     order untouched** (tembed replays positionally, so an inserted step would
     break every still-open comment thread): the **resolved** half is recorded

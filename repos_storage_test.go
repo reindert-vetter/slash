@@ -167,7 +167,7 @@ func TestModulesAreRepoScoped(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer wd.Close()
-	if err := wd.Add(ctx, "", 12, "a.php", "fp-1", "2026-01-01T00:00:00Z"); err != nil {
+	if err := wd.Add(ctx, "", 12, "a.php", "fp-1", "some finding text", "2026-01-01T00:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
 	if fps, err := wd.Fingerprints(ctx, testOps, 12); err != nil || len(fps) != 0 {

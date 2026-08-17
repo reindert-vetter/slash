@@ -457,6 +457,89 @@ func TestCodeWarningSkipsDeletedFinding(t *testing.T) {
 	}
 }
 
+// dismissedFindingsInScope filters a PR's full dismissed-finding history down
+// to the files under review, drops rows with no stored text (dismissed before
+// the text column existed), and sorts deterministically — the pure function
+// behind the "past dismissed" prompt section (see TestCodeWarningPromptsPastDismissed).
+func TestDismissedFindingsInScope(t *testing.T) {
+	dismissed := []warndismiss.DismissedFinding{
+		{File: "app/Out.php", Text: "Out of scope, must not appear."},
+		{File: "app/B.php", Text: "Missing index on this query."},
+		{File: "app/A.php", Text: ""}, // no stored text (pre-migration row): skipped
+		{File: "app/A.php", Text: "Hardcoded VAT rate."},
+	}
+	got := dismissedFindingsInScope(dismissed, []string{"app/A.php", "app/B.php"})
+	want := []dismissedFinding{
+		{File: "app/A.php", Text: "Hardcoded VAT rate."},
+		{File: "app/B.php", Text: "Missing index on this query."},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("dismissedFindingsInScope = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("dismissedFindingsInScope[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+// After the reviewer deletes a finding, the NEXT run's prompt carries its
+// text under the "already dismissed" section — on top of the hard fingerprint
+// filter (TestCodeWarningSkipsDeletedFinding) — so the model can also
+// recognise a reworded repeat of the same risk (code_warning.md).
+func TestCodeWarningPromptsPastDismissed(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 45
+	writeWarningFixtureRepo(t, dataDir, pr)
+	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), "", pr, []Block{warningFixtureBlock(pr)}); err != nil {
+		t.Fatal(err)
+	}
+
+	fake := claude.NewFake()
+	fake.SetOutput(claude.ModelOpus, `[{"file":"app/Services/OrderService.php","line":6,"text":"Hardcoded 1.21 VAT rate."}]`)
+	m, cs, _ := warningManager(t, dataDir, fake)
+	ctx := context.Background()
+
+	if _, err := m.StartCodeWarning(CodeWarningInput{PR: pr}); err != nil {
+		t.Fatal(err)
+	}
+	list, err := cs.List(ctx, "", pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("after first run: comments = %d, want 1: %+v", len(list), list)
+	}
+	if err := m.Signal(list[0].RunID, ReactionSignal{ID: "ui-1", Author: "reviewer", Action: "delete"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A different-wording finding on the same run: the hard fingerprint filter
+	// wouldn't catch this, only the model reading the prompt context could.
+	fake.SetOutput(claude.ModelOpus, `[{"file":"app/Services/OrderService.php","line":6,"text":"BTW-tarief 1.21 staat hard gecodeerd."}]`)
+	if _, err := m.StartCodeWarning(CodeWarningInput{PR: pr}); err != nil {
+		t.Fatal(err)
+	}
+	// Pick out the code_warning prompts specifically (their own unique marker
+	// text), ignoring any unrelated background call (e.g. a PR-summary
+	// refresh) the shared TaskManager may also have fired in between —
+	// this test only cares about what runCodeWarningReview itself sent.
+	var reviewPrompts []string
+	for _, c := range fake.Calls {
+		if strings.Contains(c.Prompt, "Changed files in this PR to review") {
+			reviewPrompts = append(reviewPrompts, c.Prompt)
+		}
+	}
+	if len(reviewPrompts) != 2 {
+		t.Fatalf("code_warning review calls = %d, want 2: %+v", len(reviewPrompts), reviewPrompts)
+	}
+	prompt := reviewPrompts[1]
+	if !strings.Contains(prompt, "already dismissed") ||
+		!strings.Contains(prompt, "app/Services/OrderService.php: Hardcoded 1.21 VAT rate.") {
+		t.Fatalf("second prompt does not carry the dismissed finding's text: %s", prompt)
+	}
+}
+
 // The cap of ~2 findings per block in scope is enforced in Go, not left to
 // the model's instruction-following: with one block in scope (cap 2), a
 // four-finding Sonnet answer is trimmed to 2, keeping the lowest file/line

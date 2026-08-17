@@ -2241,7 +2241,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			// is still open. A DELETED finding can't be caught here (its row is
 			// gone), so that half is recorded at delete time instead.
 			if c.Status == "resolved" && m.warndismiss != nil {
-				if err := m.warndismiss.Add(ctx, arg.Repo, arg.PR, c.File, warndismiss.Fingerprint(c.Body), time.Now().UTC().Format(time.RFC3339)); err != nil {
+				if err := m.warndismiss.Add(ctx, arg.Repo, arg.PR, c.File, warndismiss.Fingerprint(c.Body), c.Body, time.Now().UTC().Format(time.RFC3339)); err != nil {
 					m.logf("code_warning: record dismissed warning %s: %v", c.RunID, err)
 				}
 			}
@@ -2310,7 +2310,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if m.warndismiss == nil {
 			return json.Marshal(map[string]bool{"ok": false})
 		}
-		if err := m.warndismiss.Add(ctx, arg.Repo, arg.PR, arg.File, warndismiss.Fingerprint(arg.Body), time.Now().UTC().Format(time.RFC3339)); err != nil {
+		if err := m.warndismiss.Add(ctx, arg.Repo, arg.PR, arg.File, warndismiss.Fingerprint(arg.Body), arg.Body, time.Now().UTC().Format(time.RFC3339)); err != nil {
 			return nil, fmt.Errorf("record dismissed warning: %w", err)
 		}
 		return json.Marshal(map[string]bool{"ok": true})
@@ -2332,6 +2332,17 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			return nil, fmt.Errorf("code_warning: list existing comments: %w", err)
 		}
 		arg.Existing = existingLineCommentsInScope(list, arg.Files)
+		if m.warndismiss != nil {
+			dismissed, err := m.warndismiss.List(ctx, arg.Repo, arg.PR)
+			if err != nil {
+				// Best-effort, like dropDismissedFindings below: a read
+				// problem here must not swallow the review itself, only the
+				// extra "don't repeat this reworded" context for the model.
+				m.logf("code_warning: list dismissed findings: %v", err)
+			} else {
+				arg.PastDismissed = dismissedFindingsInScope(dismissed, arg.Files)
+			}
+		}
 		findings := runCodeWarningReview(ctx, m.claude, m.dataDir, arg)
 		// Drop anything the reviewer already resolved or deleted in an earlier
 		// run (modules/warndismiss). Inside this Activity rather than as a step
