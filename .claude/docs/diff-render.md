@@ -215,7 +215,7 @@ Three follow-up answers shaped the exact translation rule:
     `sel.focusNode`) both resolve to a `[data-row]` inside the SAME `cardEl`
     the gesture started on** (`rowOfNode`, which returns `null` rather than
     guessing when a selection spilled outside that card) →
-    `resolveRangeSelection(pending, startRow, endRow)`: rule 1 above — always
+    `resolveRangeSelection(pending, startRow, endRow, snapshot)`: rule 1 above — always
     `gran: 'line'`, both ends snapped via the ordinary nearest-fallback
     `unitAtRow`, `state.rangeAnchor`/`state.change` (or the drilled column's
     own `drillCursor` entry) set directly from the two resolved unit indices.
@@ -233,10 +233,58 @@ Three follow-up answers shaped the exact translation rule:
     selection came to exist. Unlike Shift+click, neither of these depends on
     a PRIOR selection surviving a render, which is exactly why they're safe
     to read natively.
-  - The native selection itself is deliberately **left in place** afterwards
-    (never cleared) — that visible native highlight is literally "de browser
-    selectie" the reviewer asked to see for a genuine drag/double-/
-    triple-click.
+  - **The native selection is actively RESTORED afterwards, exact character
+    for character — it does not just "stay in place".** Bug report: "ik kan
+    niet normaal met een muis een selectie doen ... want na een fractie van
+    een seconde is het niet meer geselecteerd". Root cause:
+    `resolveRangeSelection`'s own `state.gran`/`change`/`rangeAnchor` write
+    (right above) triggers the SAME wholesale `.innerHTML` reassignment that
+    makes a native Shift+click unreliable (see that bullet above) — the row
+    DOM the reviewer's own real selection pointed into gets destroyed within
+    the same tick, so without intervention the visible/copyable selection
+    collapses to nothing a fraction of a second after the reviewer releases
+    the mouse, well before `resolveRangeSelection` even finished running in
+    the OLD, pre-fix behaviour.
+
+    The fix: `resolvePendingMouseSelection` calls `captureSelectionSnapshot`
+    on the real `sel` BEFORE dispatching to `resolveRangeSelection` — for
+    each of `sel.anchorNode`/`sel.focusNode` it resolves the owning row
+    (`closestRowEl`) and the ROW-RELATIVE CHARACTER OFFSET of that boundary
+    point (`rowRelativeOffset`, a throwaway `Range.setEnd(...)` +
+    `toString().length` — the standard "text offset within a container"
+    trick), giving `{ anchorRow, anchorOffset, focusRow, focusOffset }`. That
+    survives the re-render because it names a POSITION (row + character
+    count into that row's rendered text), not a specific Text node object.
+    `resolveRangeSelection` threads this `snapshot` through and, right after
+    its own `state` write, calls `restoreExactSelection(cardEl, snapshot)`:
+    deferred one `requestAnimationFrame` (`cardEl.isConnected` guards against
+    the reviewer having navigated away in that one frame) — the same
+    "wait one frame for the just-swapped state to actually render" pattern
+    `showPassiveMenu`'s own `positionMenu` call already relies on — then
+    `locateOffsetInRow` (a `TreeWalker` over the row's OWN, freshly rendered
+    text nodes, summing lengths until the target offset falls inside one) maps
+    each snapshot endpoint back onto a real (Text node, local offset) pair in
+    the NEW DOM, and `Selection.setBaseAndExtent(anchorNode, anchorOffset,
+    focusNode, focusOffset)` re-applies it — `setBaseAndExtent`, not a plain
+    `Range`, because it preserves the true anchor→focus DIRECTION the
+    reviewer actually dragged in, not just a start/end pair in document order.
+
+    **Deliberately restored EXACT, never rounded to the `lo`/`hi` line range**
+    `state.rangeAnchor`/`change` use just above it in the same function:
+    confirmed explicitly — rounding the visible/copyable selection itself
+    (not just the app's own navigation unit) would silently turn "select half
+    a word to copy it" into "select and copy three whole lines instead",
+    which is exactly backwards from the reviewer's own stated goal ("ik wil
+    alles kunnen selecteren als normaal [...] en kopiëren"). The app's own
+    unit selection and the reviewer's own visible/copyable text selection are
+    two independent things from here on — the first is always whole-line
+    (rule 1), the second is always exactly what was dragged.
+
+    Not attempted for a Shift+click (`resolveShiftClickSelection` never reads
+    or restores a native selection at all — see that bullet above) or for a
+    plain click (`resolveClickSelection` — nothing real was selected to
+    begin with, a click's own native caret is collapsed). Test:
+    `tests/diff-row-mouse-select.spec.mjs`.
 - **A single click landing INSIDE a real call-segment selects that exact
   segment at `'call'` granularity instead of `'line'`** (unchanged from
   before, just now scoped to a genuine click, see rule 2) — top-level only,

@@ -168,6 +168,61 @@ test.describe('PR Review Tree — mouse line selection (click, native selection)
     await page.keyboard.press('Escape')
   })
 
+  // Bug report: "ik kan niet normaal met een muis een selectie doen ... want
+  // na een fractie van een seconde is het niet meer geselecteerd (in de
+  // diff)". resolveRangeSelection's own state write (above) re-renders the
+  // pane's whole innerHTML, which used to collapse the reviewer's own native
+  // selection within the same tick — restoreExactSelection now re-applies it.
+  // Deliberately captures the EXACT selection text mid-drag (before mouseup
+  // triggers the app's own state write) and asserts the FINAL, post-restore
+  // selection matches it character for character — proving the restore is
+  // exact, never rounded up to the whole-line `state.rangeAnchor`/`change`
+  // range the test above asserts on the SAME kind of gesture (reviewer:
+  // "ik wil alles kunnen selecteren als normaal [...] en kopiëren" — a
+  // half-selected word must copy as a half-selected word, not three whole
+  // lines).
+  test('a native drag selection survives the resulting re-render EXACTLY, never rounded to whole lines', async ({
+    page,
+  }) => {
+    await page.goto('/pr/102')
+    await leaveSearchBox(page)
+
+    await page.keyboard.press('ArrowRight')
+    await page.keyboard.press('f') // gran 'line', cursor on $a
+
+    const card = page.getByTestId('detail-card').first()
+    const changedRows = card.locator('[data-pane="new"] [data-changed="1"]')
+    await page.waitForTimeout(400)
+
+    // Land mid-text on both ends (not the row's default center, which can sit
+    // in blank space past the short code — see the double-click test above)
+    // so the drag genuinely starts/ends PARTWAY through a line, never at a
+    // line boundary.
+    const from = await changedRows.nth(0).boundingBox() // $a
+    const to = await changedRows.nth(2).boundingBox() // $c
+    await page.mouse.move(from.x + 40, from.y + from.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(to.x + 40, to.y + to.height / 2)
+
+    // Capture what the browser itself thinks is selected WHILE still
+    // mid-drag, before mouseup ever reaches resolveRangeSelection.
+    const expected = await page.evaluate(() => window.getSelection().toString())
+    expect(expected.length).toBeGreaterThan(0)
+
+    await page.mouse.up()
+    // Give the re-render (and its own restoreExactSelection) time to run —
+    // long enough to catch the old "collapses within a fraction of a second"
+    // bug, which failed well inside 100ms.
+    await page.waitForTimeout(300)
+
+    const after = await page.evaluate(() => ({
+      collapsed: window.getSelection().isCollapsed,
+      text: window.getSelection().toString(),
+    }))
+    expect(after.collapsed).toBe(false)
+    expect(after.text).toBe(expected)
+  })
+
   test('clicking a row on the non-focused look-ahead preview focuses it like a key would', async ({ page }) => {
     await page.goto('/pr/102')
     await leaveSearchBox(page)

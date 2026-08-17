@@ -7143,7 +7143,15 @@ function drillExtendRange(level, delta) {
 //   also what makes a native double/triple-click (word/paragraph select,
 //   confined to one row's own <div>, and self-contained — it never depends
 //   on a PRIOR selection the way Shift+click would) fall out of this SAME
-//   mechanism for free.
+//   mechanism for free. That rounding is for `state.rangeAnchor`/`change`
+//   ONLY — resolveRangeSelection's own `state` write destroys the row DOM the
+//   real selection pointed into (the same wholesale-`.innerHTML` mechanism
+//   Shift+click has to work around above), so `resolvePendingMouseSelection`
+//   snapshots the EXACT original selection first (captureSelectionSnapshot)
+//   and resolveRangeSelection re-applies it, character-for-character, once
+//   the new DOM exists (restoreExactSelection) — reviewer: "ik wil alles
+//   kunnen selecteren als normaal [...] en kopiëren", so what stays visibly
+//   selected/copyable must NOT be rounded up the way the navigation unit is.
 //
 // See "Line selection: click and browser text selection" in
 // .claude/docs/diff-render.md.
@@ -7212,20 +7220,132 @@ function beginMouseSelection(level, b, i, row, segStart, cardEl, shiftKey) {
   pendingMouseSelection = { level, b, i, row, segStart, cardEl, shiftKey }
 }
 
-// rowOfNode walks a Selection endpoint (a DOM Node — often a Text node) up to
-// its nearest `[data-row]` ancestor and returns that row's numeric index, but
-// ONLY when that element actually sits inside `cardEl` — the card the
-// gesture's own mousedown started on. A selection that spilled into a
-// different card (or outside any diff row entirely, e.g. into a comment/
-// description column) must never be resolved against THIS card's units, so
-// this returns null rather than guessing.
-function rowOfNode(node, cardEl) {
+// closestRowEl walks a Selection endpoint (a DOM Node — often a Text node) up
+// to its nearest `[data-row]` ancestor element, but ONLY when that element
+// actually sits inside `cardEl` — the card the gesture's own mousedown
+// started on. A selection that spilled into a different card (or outside any
+// diff row entirely, e.g. into a comment/description column) must never be
+// resolved against THIS card's units, so this returns null rather than
+// guessing. Shared by rowOfNode (below) and captureSelectionSnapshot.
+function closestRowEl(node, cardEl) {
   if (!node || !cardEl) return null
   const el = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement
   const rowEl = el && el.closest && el.closest('[data-row]')
   if (!rowEl || !cardEl.contains(rowEl)) return null
+  return rowEl
+}
+
+// rowOfNode resolves a Selection endpoint to its row's numeric `data-row`
+// index — see closestRowEl for the actual walk/scoping.
+function rowOfNode(node, cardEl) {
+  const rowEl = closestRowEl(node, cardEl)
+  if (!rowEl) return null
   const row = +rowEl.getAttribute('data-row')
   return Number.isNaN(row) ? null : row
+}
+
+// rowRelativeOffset measures how many characters of `rowEl`'s own rendered
+// text sit before the boundary point (node, offset) — i.e. the position a
+// browser Selection boundary inside that row corresponds to, counted from the
+// row's own start. Used to survive the row's DOM nodes being replaced
+// wholesale (see restoreExactSelection's own doc comment): the character
+// count itself is stable across a re-render (same text, same checkmarks/
+// badges) even though the exact Text node objects are not. Implemented via a
+// throwaway Range + `toString()` rather than a hand-rolled TreeWalker sum —
+// the browser already does the visual-order text concatenation correctly
+// (this is the standard trick for "text offset within a container").
+function rowRelativeOffset(rowEl, node, offset) {
+  const r = document.createRange()
+  r.selectNodeContents(rowEl)
+  r.setEnd(node, offset)
+  return r.toString().length
+}
+
+// locateOffsetInRow is rowRelativeOffset's inverse: given a row element and a
+// character count (from a snapshot taken before that row's own DOM was torn
+// down and rebuilt), finds the (Text node, local offset) pair at that
+// position in the CURRENT row. Walks the row's own text nodes in document
+// order — the same order `rowRelativeOffset`'s Range-based count implies —
+// summing lengths until the target position falls inside one of them.
+// Clamps to the end of the last text node when `charOffset` reaches or
+// exceeds the row's total length (e.g. a selection boundary that sat exactly
+// at the row's own end). Returns null for a row with no text at all (should
+// not happen for a real code row, but guarded rather than assumed).
+function locateOffsetInRow(rowEl, charOffset) {
+  const walker = document.createTreeWalker(rowEl, NodeFilter.SHOW_TEXT)
+  let remaining = charOffset
+  let lastNode = null
+  let node
+  while ((node = walker.nextNode())) {
+    lastNode = node
+    const len = node.textContent.length
+    if (remaining <= len) return { node, offset: remaining }
+    remaining -= len
+  }
+  return lastNode ? { node: lastNode, offset: lastNode.textContent.length } : null
+}
+
+// captureSelectionSnapshot records a native Selection's anchor/focus as
+// {row, row-relative character offset} pairs — everything restoreExactSelection
+// needs to reconstruct the EXACT same selection (same start/end point, same
+// direction) after the row DOM it pointed into gets replaced wholesale. See
+// restoreExactSelection's own doc comment for why this exists at all. Returns
+// null when either endpoint doesn't resolve to a row inside `cardEl` (mirrors
+// rowOfNode's own "don't guess" contract) — the caller then simply skips the
+// restore.
+function captureSelectionSnapshot(sel, cardEl) {
+  const anchorRowEl = closestRowEl(sel.anchorNode, cardEl)
+  const focusRowEl = closestRowEl(sel.focusNode, cardEl)
+  if (!anchorRowEl || !focusRowEl) return null
+  return {
+    anchorRow: +anchorRowEl.getAttribute('data-row'),
+    anchorOffset: rowRelativeOffset(anchorRowEl, sel.anchorNode, sel.anchorOffset),
+    focusRow: +focusRowEl.getAttribute('data-row'),
+    focusOffset: rowRelativeOffset(focusRowEl, sel.focusNode, sel.focusOffset),
+  }
+}
+
+// restoreExactSelection re-applies a native Selection snapshot (see
+// captureSelectionSnapshot) once the row DOM it pointed into has been
+// rebuilt — reviewer report: "ik kan niet normaal met een muis een selectie
+// doen ... want na een fractie van een seconde is het niet meer geselecteerd
+// (in de diff)". Root cause: every diff pane reassigns its entire
+// `.innerHTML` on the very `state.gran`/`change`/`rangeAnchor` write
+// resolveRangeSelection makes right after a real drag/native selection (see
+// resolvePendingMouseSelection's own comment) — that wholesale replacement
+// destroys the row's old DOM nodes, so the browser's own native selection
+// (which the reviewer explicitly wants to keep using for reading/copying —
+// "het doel van de feature was juist dat je gewoon met de muis kunt
+// selecteren (en kopiëren)") collapses to nothing within the same tick.
+//
+// Deliberately restores the EXACT original start/end (same characters, same
+// direction), never rounded up to the whole line the way the app's own
+// `state.rangeAnchor`/`change` are (confirmed: rounding the visible/copyable
+// selection itself would silently corrupt a "select half a word to copy it"
+// gesture) — `Selection.setBaseAndExtent` (not a plain Range) is what
+// preserves the true anchor→focus direction the reviewer dragged in, not
+// just its start/end order.
+//
+// Deferred one `requestAnimationFrame` — the same "wait one frame for the
+// just-swapped state to actually render" pattern `showPassiveMenu`'s own
+// `positionMenu` call already relies on — so the row elements being queried
+// here are the NEW (already re-rendered) ones. `cardEl.isConnected` guards
+// against the reviewer having navigated away before that frame fires (the
+// card itself unmounted, e.g. `document.body.contains` is false already).
+function restoreExactSelection(cardEl, snapshot) {
+  if (!snapshot) return
+  requestAnimationFrame(() => {
+    if (!cardEl || !cardEl.isConnected) return
+    const anchorRowEl = cardEl.querySelector('[data-row="' + snapshot.anchorRow + '"]')
+    const focusRowEl = cardEl.querySelector('[data-row="' + snapshot.focusRow + '"]')
+    if (!anchorRowEl || !focusRowEl) return
+    const anchorPos = locateOffsetInRow(anchorRowEl, snapshot.anchorOffset)
+    const focusPos = locateOffsetInRow(focusRowEl, snapshot.focusOffset)
+    if (!anchorPos || !focusPos) return
+    const sel = window.getSelection()
+    if (!sel) return
+    sel.setBaseAndExtent(anchorPos.node, anchorPos.offset, focusPos.node, focusPos.offset)
+  })
 }
 
 // resolvePendingMouseSelection is called from the document's own `mouseup`
@@ -7261,7 +7381,11 @@ function resolvePendingMouseSelection() {
     const startRow = rowOfNode(sel.anchorNode, pending.cardEl)
     const endRow = rowOfNode(sel.focusNode, pending.cardEl)
     if (startRow != null && endRow != null) {
-      resolveRangeSelection(pending, startRow, endRow)
+      // Snapshot the real selection BEFORE resolveRangeSelection's own state
+      // write tears down the row DOM it points into — see
+      // restoreExactSelection's own doc comment.
+      const snapshot = captureSelectionSnapshot(sel, pending.cardEl)
+      resolveRangeSelection(pending, startRow, endRow, snapshot)
       return
     }
   }
@@ -7381,8 +7505,20 @@ function resolveClickSelection({ level, b, i, row, segStart }) {
 // switch already does (unitAtRow). Never for a TRANSLATION block — the same
 // exclusion setGran/extendRange already apply — so a text selection there
 // simply falls back to a plain click on its start row.
-function resolveRangeSelection(pending, startRow, endRow) {
-  const { level, b, i } = pending
+//
+// `snapshot` (captureSelectionSnapshot, or null) is the ORIGINAL native
+// selection the reviewer actually made, captured before this function's own
+// `state` write below tears down the row DOM it points into.
+// restoreExactSelection re-applies it, EXACT character-for-character — never
+// rounded to the `lo`/`hi` line range `state.rangeAnchor`/`change` use — once
+// the new DOM has rendered: the app's own navigation unit is deliberately
+// whole-line, but what the reviewer can still read/copy with the mouse must
+// stay exactly what they dragged (reviewer: "ik wil alles kunnen selecteren
+// als normaal"; see restoreExactSelection's own doc comment for the full
+// reasoning). Skipped on every early return below (no `state` write there,
+// so nothing to restore against).
+function resolveRangeSelection(pending, startRow, endRow, snapshot) {
+  const { level, b, i, cardEl } = pending
   if (b && b.category === 'TRANSLATION') {
     resolveClickSelection({ ...pending, row: startRow, segStart: null })
     return
@@ -7399,6 +7535,7 @@ function resolveRangeSelection(pending, startRow, endRow) {
     state.rangeAnchor = unitAtRow(units, lo)
     state.change = unitAtRow(units, hi)
     schedulePassiveMenu()
+    restoreExactSelection(cardEl, snapshot)
     return
   }
   if (state.focusLevel !== level) return
@@ -7413,6 +7550,7 @@ function resolveRangeSelection(pending, startRow, endRow) {
     idx === level - 1 ? { ...c, gran: 'line', change: endIdx, rangeAnchor: startIdx } : c,
   )
   schedulePassiveMenu()
+  restoreExactSelection(cardEl, snapshot)
 }
 
 // approveClickAt resolves a click on one of Block.mjs's call-segment approve
