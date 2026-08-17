@@ -156,6 +156,34 @@ Rules, in order:
   `TestResolveCallsStaticInheritedMethod`/
   `TestResolveCallsStaticInheritedMethodAmbiguous`.
   and the automatic search should try.
+  **`$this->`/`self::`/`static::` inside an ANONYMOUS class** (e.g. every
+  Laravel migration's `return new class extends Migration { ... }`) used to
+  silently produce nothing at all, not even `unresolved`: `Block.Class` is
+  `""` for such a method (`phpscan.go` has no stable name to key an anonymous
+  class on — see the `resolveMigrationModels` bullet below), and
+  `buildSymbolIndex` used to skip every `Class == ""` block from `idx.byClass`
+  entirely, so `methodOnClass(idx, "", m[1])` always looked up an empty
+  bucket. Fixed by indexing such methods separately, keyed by FILE instead of
+  class name (`idx.anonMethods`, looked up via `methodInAnonClass`) — "own
+  class" for a call inside an anonymous class body unambiguously means "this
+  same anonymous class, this same file". Reported bug: a migration's private
+  helper methods (`$this->renameIndex(...)`, called from `up()`) showed no
+  Underlying-code card. Test: `TestResolveCallsAnonymousClassOwnMethod`.
+- **1b — `parent::m(`.** Resolves to a method on the caller's PARENT class.
+  `phpscan.go` now stamps every method `Block` with `Parent` (the class
+  frame's `extends` target, via the new `classExtendsTarget` header scan —
+  set for a named class AND an anonymous one alike, e.g. `new class extends
+  Migration`), and `buildSymbolIndex` indexes it as `idx.classParent`
+  (named class → parent, by short name) / `idx.anonParent` (anonymous class →
+  parent, by file, mirroring `idx.anonMethods`). A `parent::m(` that resolves
+  through that map to an indexed method → `resolved`; a parent the worktree
+  index doesn't see at all (very often the case — a framework class like
+  `Migration`/`Model`/`Command`/`TestCase`, `vendor` is skipped) or that
+  doesn't declare `m()` → `unresolved`, same "call site is on a changed line,
+  let the automatic search try" reasoning as rule 1's own unknown-method
+  fallback, never silence. `parent::` had no rule at all before this — it
+  simply matched nothing. Tests: `TestResolveCallsParentMethod`/
+  `TestResolveCallsParentMethodUnindexed`.
 - **2b/2c/2d — Eloquent models.** `new Foo(` on a model class explicitly
   **excludes** the constructor even when one exists (the reviewer wants the
   model, not its constructor body). `scanModels` indexes every `app/Models/`

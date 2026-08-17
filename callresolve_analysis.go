@@ -52,6 +52,26 @@ type symbolIndex struct {
 	// interfaceImplementationDetector ("A2") and resolveInterfaceImplementations
 	// ("B"), see interfaces.go.
 	implementors map[string][]implClass
+	// anonMethods maps a file path to the methods declared inside an
+	// ANONYMOUS class in that file (Block.Class == "", e.g. every Laravel
+	// migration's `return new class extends Migration { ... }`). Such a
+	// method has no class name to key idx.byClass on, but "own class" for a
+	// $this->/self::/static:: call inside that same anonymous class body
+	// unambiguously means "this same anonymous class, this same file" — see
+	// methodInAnonClass. Deliberately a SEPARATE map, not folded into
+	// byClass under some sentinel key: several files in the worktree each
+	// declare their own unrelated anonymous class (every migration does),
+	// and byClass[""] would wrongly merge all of them into one bucket.
+	anonMethods map[string][]Block
+	// classParent maps a NAMED class's short name to its `extends` target's
+	// short name (Block.Parent, phpscan.go) — resolveCalls' `parent::` rule.
+	// Absent = no `extends` clause, or ambiguous file collision (last write
+	// wins, same silent-limit trade-off idx.facades/idx.models already
+	// accept for a same-named class in two files).
+	classParent map[string]string
+	// anonParent mirrors classParent for an anonymous class, keyed by file
+	// (mirrors anonMethods) since there is no class name to key on.
+	anonParent map[string]string
 }
 
 // idxSkipDirs is deliberately narrow: "tests" is NOT skipped, because a
@@ -82,6 +102,9 @@ func buildSymbolIndex(headDir string) *symbolIndex {
 		traits:      map[string]Block{},
 		modelTables: map[string]string{},
 		modelCasts:  map[string]map[string]string{},
+		anonMethods: map[string][]Block{},
+		classParent: map[string]string{},
+		anonParent:  map[string]string{},
 
 		interfaceClasses: map[string]bool{},
 		implementors:     map[string][]implClass{},
@@ -109,7 +132,18 @@ func buildSymbolIndex(headDir string) *symbolIndex {
 		}
 		fileBlocks := ScanBlocks(src, rel)
 		for _, b := range fileBlocks {
-			if b.Class == "" || b.Name == "" {
+			if b.Name == "" {
+				continue
+			}
+			if b.Class == "" {
+				// An anonymous class's method (e.g. a Laravel migration's
+				// `return new class extends Migration { ... }`) has no class
+				// name to key idx.byClass on — index it per-file instead, see
+				// anonMethods/methodInAnonClass.
+				idx.anonMethods[b.File] = append(idx.anonMethods[b.File], b)
+				if b.Parent != "" {
+					idx.anonParent[b.File] = shortName(b.Parent)
+				}
 				continue
 			}
 			short := shortName(b.Class)
@@ -120,6 +154,9 @@ func buildSymbolIndex(headDir string) *symbolIndex {
 			}
 			if b.IsInterface {
 				idx.interfaceClasses[short] = true
+			}
+			if b.Parent != "" {
+				idx.classParent[short] = shortName(b.Parent)
 			}
 		}
 		// A `class X implements ... Y ...` declaration — index Y → X so a call
@@ -423,6 +460,7 @@ func (idx *symbolIndex) candidates(callKey string) []Block {
 var (
 	reThisCall   = regexp.MustCompile(`\$this->([A-Za-z_]\w*)\s*\(`)
 	reSelfCall   = regexp.MustCompile(`(?:self|static)::([A-Za-z_]\w*)\s*\(`)
+	reParentCall = regexp.MustCompile(`parent::([A-Za-z_]\w*)\s*\(`)
 	reStaticCall = regexp.MustCompile(`([A-Za-z_]\w*)::([A-Za-z_]\w*)\s*\(`)
 	reNewCall    = regexp.MustCompile(`\(new\s+([\\A-Za-z_][\\\w]*)\s*(?:\([^)]*\))?\)->([A-Za-z_]\w*)\s*\(`)
 	// reNewObj matches a bare object construction `new Foo(` — it couples to the
@@ -620,12 +658,39 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 			emitKind(key, def, callresolve.KindMethodCall)
 		}
 
-		// 1. $this->m( / self::m( / static::m( → a method on the caller's own class.
+		// 1. $this->m( / self::m( / static::m( → a method on the caller's own
+		// class — for an anonymous class (Block.Class == "", e.g. a Laravel
+		// migration's `return new class extends Migration { ... }`) there is
+		// no class name to look up, so "own class" resolves per-file instead
+		// (methodInAnonClass; see idx.anonMethods).
 		for _, m := range append(reThisCall.FindAllStringSubmatch(scan, -1),
 			reSelfCall.FindAllStringSubmatch(scan, -1)...) {
-			if def := methodOnClass(idx, b.Class, m[1]); def != nil {
+			var def *Block
+			if b.Class == "" {
+				def = methodInAnonClass(idx, b.File, m[1])
+			} else {
+				def = methodOnClass(idx, b.Class, m[1])
+			}
+			if def != nil {
 				emit(m[1], def)
 			}
+		}
+		// 1b. parent::m( → a method on the caller's PARENT class. The parent
+		// is very often a framework class (Migration, Model, Controller,
+		// TestCase) that idx never indexed (vendor is skipped), in which case
+		// this falls to `unresolved` — same "call site is on a changed line,
+		// let the automatic search try" reasoning as rule 1's own unknown-
+		// method fallback, not silence.
+		for _, m := range reParentCall.FindAllStringSubmatch(scan, -1) {
+			parentClass := idx.classParent[shortName(b.Class)]
+			if b.Class == "" {
+				parentClass = idx.anonParent[b.File]
+			}
+			var def *Block
+			if parentClass != "" {
+				def = methodOnClass(idx, parentClass, m[1])
+			}
+			emit(m[1], def)
 		}
 		// 2. (new Foo)->m( → method on Foo.
 		for _, m := range reNewCall.FindAllStringSubmatch(scan, -1) {
@@ -1953,6 +2018,20 @@ func methodOnClass(idx *symbolIndex, class, method string) *Block {
 	for i := range idx.byClass[short] {
 		if idx.byClass[short][i].Name == method {
 			return &idx.byClass[short][i]
+		}
+	}
+	return nil
+}
+
+// methodInAnonClass is methodOnClass's counterpart for a caller whose own
+// class is anonymous (Block.Class == ""), scoped by FILE instead of class
+// name — see idx.anonMethods. Used by resolveCalls rule 1 for a
+// $this->/self::/static:: call inside such a class (e.g. a Laravel
+// migration's private helper methods).
+func methodInAnonClass(idx *symbolIndex, file, method string) *Block {
+	for i := range idx.anonMethods[file] {
+		if idx.anonMethods[file][i].Name == method {
+			return &idx.anonMethods[file][i]
 		}
 	}
 	return nil

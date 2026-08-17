@@ -68,6 +68,13 @@ type classFrame struct {
 	name      string
 	kind      string // "class" | "trait" | "interface" | "enum"
 	openDepth int    // brace depth the body lives within
+	// parent is the (possibly qualified) name from this class's `extends`
+	// clause, "" when absent — only ever set for kind=="class" (a trait/enum
+	// can't extend, and an interface's multiple `extends` is out of scope
+	// for the `parent::` resolution rule this feeds, see
+	// callresolve_analysis.go). Set for a named AND an anonymous class alike
+	// (`new class extends Migration`, classHeaderName's `name==""` case).
+	parent string
 
 	// Header-block tracking (class/trait/enum only — see classHeaderSentinel).
 	headerEligible bool // named class/trait/enum (not interface, not anonymous)
@@ -132,6 +139,14 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 			return ""
 		}
 		return classes[len(classes)-1].kind
+	}
+	// currentParent returns the top frame's `extends` target (or "") — stamped
+	// onto every method Block declared in that frame, see Block.Parent.
+	currentParent := func() string {
+		if len(classes) == 0 {
+			return ""
+		}
+		return classes[len(classes)-1].parent
 	}
 	// popClasses removes frames whose body has been closed. A frame that never
 	// saw a method declaration emits its class-header block here, spanning the
@@ -278,11 +293,19 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 				// Find a class name (may be absent: anonymous class).
 				name, bodyAt := classHeaderName(s, end)
 				if bodyAt >= 0 {
+					// Only a "class" (not trait/interface/enum) can `extends` a
+					// single parent; classExtendsTarget scans the header text
+					// between the keyword and the body/list of interfaces.
+					parent := ""
+					if word == "class" {
+						parent = classExtendsTarget(s[end:bodyAt])
+					}
 					// Push a frame; the body opens at the next '{' (depth becomes
 					// depth+1), so openDepth = depth+1.
 					classes = append(classes, classFrame{
 						name:      name,
 						kind:      word,
+						parent:    parent,
 						openDepth: depth + 1,
 						// Only a named class/trait/enum gets a header block —
 						// interfaces have no header content worth capturing, and an
@@ -336,6 +359,7 @@ func scanPHP(s, filename string) (blocks []Block, ok bool) {
 					// .claude/docs/blocks-and-ingest.md).
 					b.IsInterface = currentClassKind() == "interface"
 					b.IsTrait = currentClassKind() == "trait"
+					b.Parent = currentParent()
 					blocks = append(blocks, b)
 					if headerFrame != nil {
 						headerFrame.headerClosed = true
@@ -920,6 +944,29 @@ func classHeaderName(s string, from int) (name string, bodyAt int) {
 		}
 	}
 	return name, -1
+}
+
+// reClassExtends matches a class header's `extends X` clause, X possibly
+// namespace-qualified (`extends \App\Base\Foo`). Anchored to the keyword, not
+// to the start of the string, so it works on the header segment
+// classExtendsTarget is handed (from right after the `class` keyword up to
+// the body-opening `{`) regardless of an anonymous class's constructor args
+// or an `implements ...` clause following it.
+var reClassExtends = regexp.MustCompile(`\bextends\s+([\\\w]+)`)
+
+// classExtendsTarget returns the (possibly qualified) parent class name from
+// a class header segment, "" when there is none. Only ever called for a
+// `class` frame (never trait/interface/enum) — see the classFrame.parent doc
+// comment. header is everything between the `class` keyword and the body's
+// opening `{`, so this never crosses into the class body itself (a nested
+// `extends`-like string inside a method could otherwise confuse a whole-file
+// regex).
+func classExtendsTarget(header string) string {
+	m := reClassExtends.FindStringSubmatch(header)
+	if m == nil {
+		return ""
+	}
+	return m[1]
 }
 
 // --- char classification ---------------------------------------------------

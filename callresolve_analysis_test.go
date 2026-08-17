@@ -291,6 +291,154 @@ class CheckoutService {
 	}
 }
 
+// TestResolveCallsAnonymousClassOwnMethod: a Laravel migration's
+// `return new class extends Migration { ... }` gives every method in it
+// Block.Class == "" (phpscan.go has no stable name to key an anonymous class
+// on). A $this-> or self:: call from one of its methods to a PRIVATE sibling
+// method declared in that same anonymous class body must still resolve —
+// "own class" for such a call means "this same anonymous class, this same
+// file" (methodInAnonClass), not "no class at all". Reported bug: it used to
+// silently produce nothing, not even an `unresolved` row.
+func TestResolveCallsAnonymousClassOwnMethod(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 13221
+	_, headDir := worktreeDirs(dataDir, "", pr)
+	file := `<?php
+use Illuminate\Database\Migrations\Migration;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        foreach (self::INDEXES as $from => $to) {
+            $this->renameIndex($from, $to);
+        }
+    }
+
+    private function renameIndex(string $from, string $to): void
+    {
+        if (!$this->hasIndex($from)) {
+            return;
+        }
+    }
+
+    private function hasIndex(string $name): bool
+    {
+        return true;
+    }
+};
+`
+	rel := "database/migrations/2026_08_14_130000_rename_users_indexes.php"
+	p := filepath.Join(headDir, rel)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(file), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	caller := Block{PR: pr, File: rel, Class: "", Name: "up", Side: SideNew, Status: StatusModified}
+
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	e, ok := findEntry(entries, "renameIndex")
+	if !ok {
+		t.Fatal("no entry for call \"renameIndex\" — $this-> inside an anonymous class silently produced nothing")
+	}
+	if e.Status != callresolve.StatusResolved {
+		t.Fatalf("renameIndex: status = %q, want %q", e.Status, callresolve.StatusResolved)
+	}
+	if e.ChildMethod != "renameIndex" || e.ChildFile != rel {
+		t.Fatalf("renameIndex: child = %q in %q, want method %q in %q", e.ChildMethod, e.ChildFile, "renameIndex", rel)
+	}
+}
+
+// TestResolveCallsParentMethod: `parent::m(` resolves to the method declared
+// on the caller's own (indexed) parent class, using the `extends` target
+// phpscan.go now stamps on every Block (Block.Parent).
+func TestResolveCallsParentMethod(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 13222
+	_, headDir := worktreeDirs(dataDir, "", pr)
+	files := map[string]string{
+		"app/Models/BaseModel.php": `<?php
+namespace App\Models;
+class BaseModel {
+    public function __construct(array $attributes = []) {}
+}
+`,
+		"app/Models/ProductGroup.php": `<?php
+namespace App\Models;
+class ProductGroup extends BaseModel {
+    public function __construct(array $attributes = []) {
+        parent::__construct($attributes);
+    }
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	caller := Block{PR: pr, File: "app/Models/ProductGroup.php", Class: "ProductGroup", Name: "__construct", Side: SideNew, Status: StatusModified}
+
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	e, ok := findEntry(entries, "__construct")
+	if !ok {
+		t.Fatal("no entry for call \"__construct\" — parent:: is not resolved at all")
+	}
+	if e.Status != callresolve.StatusResolved {
+		t.Fatalf("__construct: status = %q, want %q", e.Status, callresolve.StatusResolved)
+	}
+	if e.ChildClass != "BaseModel" {
+		t.Fatalf("__construct: child class = %q, want %q", e.ChildClass, "BaseModel")
+	}
+}
+
+// TestResolveCallsParentMethodUnindexed: the far more common case — the
+// parent is a framework class (e.g. Laravel's own Migration/Model) that the
+// worktree index never sees (vendor is skipped). `parent::` must still turn
+// into an `unresolved` row, not silence, mirroring rule 1's own "method
+// exists nowhere in the app" fallback.
+func TestResolveCallsParentMethodUnindexed(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 13223
+	_, headDir := worktreeDirs(dataDir, "", pr)
+	file := `<?php
+namespace App\Console\Commands;
+use Illuminate\Console\Command;
+class SyncOrders extends Command {
+    public function handle(): void {
+        parent::handle();
+    }
+}
+`
+	rel := "app/Console/Commands/SyncOrders.php"
+	p := filepath.Join(headDir, rel)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(file), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	caller := Block{PR: pr, File: rel, Class: "SyncOrders", Name: "handle", Side: SideNew, Status: StatusModified}
+
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	e, ok := findEntry(entries, "handle")
+	if !ok {
+		t.Fatal("no entry for call \"handle\" — parent:: onto an unindexed framework class produced nothing")
+	}
+	if e.Status != callresolve.StatusUnresolved {
+		t.Fatalf("handle: status = %q, want %q", e.Status, callresolve.StatusUnresolved)
+	}
+}
+
 // TestResolveCallsChangedLinesOnly: when a base worktree exists, only calls on
 // lines the PR changed produce entries — a call on an untouched line must not
 // surface as underlying code (that was the unrelated-children bug).

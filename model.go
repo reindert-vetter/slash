@@ -65,6 +65,14 @@ type Block struct {
 	// of the file's path, since a trait file isn't confined to a `Traits/`
 	// directory. See .claude/docs/blocks-and-ingest.md.
 	IsTrait bool `json:"-"`
+	// Parent is the (possibly qualified) name in this method's enclosing
+	// class's `extends` clause, "" when the class has none (or this is a
+	// trait/interface/enum method, or Class is empty). Set by phpscan.go's
+	// scanPHP from the classFrame it was declared in. Transient — consumed
+	// only by callresolve_analysis.go's `parent::` resolution rule, not
+	// needed by the frontend, hence json:"-". See
+	// .claude/docs/blocks-and-ingest.md.
+	Parent string `json:"-"`
 }
 
 // ID is stable per (repo, pr, file, symbol) so re-ingest is idempotent. For the
