@@ -27,6 +27,8 @@ import (
 	"fmt"
 
 	_ "modernc.org/sqlite"
+
+	"slash/modules/sqlitedsn"
 )
 
 const schema = `
@@ -43,7 +45,7 @@ type Module struct{ db *sql.DB }
 
 // Open opens (or creates) the autowarn DB at path and applies the schema.
 func Open(path string) (*Module, error) {
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", sqlitedsn.DSN(path))
 	if err != nil {
 		return nil, fmt.Errorf("autowarn: open db: %w", err)
 	}

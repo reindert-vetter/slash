@@ -24,6 +24,8 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"slash/modules/sqlitedsn"
 )
 
 const schema = `
@@ -133,7 +135,7 @@ type Module struct{ db *sql.DB }
 
 // Open opens (or creates) the chat DB at path and applies the schema.
 func Open(path string) (*Module, error) {
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", sqlitedsn.DSN(path))
 	if err != nil {
 		return nil, fmt.Errorf("chat: open db: %w", err)
 	}

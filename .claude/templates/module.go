@@ -9,6 +9,8 @@ import (
 	"fmt"
 
 	_ "modernc.org/sqlite"
+
+	"slash/modules/sqlitedsn"
 )
 
 const schema = `
@@ -30,8 +32,13 @@ type Item struct {
 type Module struct{ db *sql.DB }
 
 // Open opens (or creates) the module's own DB and applies its schema.
+//
+// ALWAYS open through sqlitedsn.DSN — never a bare path. It sets busy_timeout,
+// without which a write that meets a locked DB fails instantly with
+// SQLITE_BUSY, and for a module store that means a PERMANENTLY failed workflow
+// run (a failed run can never accept a Signal again). See modules/sqlitedsn.
 func Open(path string) (*Module, error) {
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", sqlitedsn.DSN(path))
 	if err != nil {
 		return nil, fmt.Errorf("example: open db: %w", err)
 	}

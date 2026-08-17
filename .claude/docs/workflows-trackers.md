@@ -527,6 +527,18 @@ server was started from. Two categories, both surfaced:
   `startWorkflowID` is idempotent so it can never be retried at all. Full rules:
   "A failure that was later retried successfully drops out of the list" in
   `.claude/docs/pr-overview.md`.
+  Historically the single most common entry here was
+  `database is locked (5) (SQLITE_BUSY)` out of a module write (`save
+  reaction`, `mark searching`, …). That was not contention worth reporting but
+  a plain configuration bug: only `tembed`'s own store opened its DB with
+  `busy_timeout`, while all 15 module stores used a bare
+  `sql.Open("sqlite", path)` and therefore gave up on a locked DB
+  **immediately** instead of waiting. Since a failed run is terminal
+  (`SignalWorkflow` refuses one, so its thread can never accept a reply again),
+  one unlucky poll landing on top of a reviewer's own write permanently broke
+  that thread. Every module store now opens through **`modules/sqlitedsn`**
+  (`sqlitedsn.DSN(path)` → `_pragma=busy_timeout(5000)`, matching tembed);
+  a **new module must too** — the `add-module` template does it by default.
 - **The log mirror** — an in-memory **ring buffer** (100 lines) fed by wrapping
   **`TaskManager.logf`**, the single funnel every glue-level error already goes
   through, so one wrapper covers them all and a future call site is free.
