@@ -256,6 +256,14 @@
       .language-php .token.italic {
         font-style: italic;
       }
+      /* Mouse text selection inside a code excerpt (diff panes in Block.mjs,
+         Onderliggende-code cards + comment hint in RelatedPanel.mjs, the
+         footer) gets its own tint instead of the browser default blue, so it
+         reads as distinct from the app's own selection/cursor affordances
+         above the green/rose diff-row tints and Prism token colours. */
+      .language-php ::selection {
+        background-color: rgba(79, 70, 229, 0.25); /* indigo-600 tint */
+      }
 
       /* Minimal element styling for rendered Markdown (src/markdown.mjs),
          used for the PR-info column's summary/body/Jira-description
@@ -407,6 +415,9 @@
         :root:not([data-theme='light']) .language-php .token.class-name {
           color: #d2a8ff;
         }
+        :root:not([data-theme='light']) .language-php ::selection {
+          background-color: rgba(129, 140, 248, 0.35); /* indigo-400 tint */
+        }
 
         :root:not([data-theme='light']) .markdown-body h1,
         :root:not([data-theme='light']) .markdown-body h2,
@@ -485,6 +496,9 @@
       :root[data-theme='dark'] .language-php .token.function,
       :root[data-theme='dark'] .language-php .token.class-name {
         color: #d2a8ff;
+      }
+      :root[data-theme='dark'] .language-php ::selection {
+        background-color: rgba(129, 140, 248, 0.35); /* indigo-400 tint */
       }
 
       :root[data-theme='dark'] .markdown-body h1,
