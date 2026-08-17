@@ -100,9 +100,9 @@ function drawCallArrows() {
     // same visibility rule updateHints uses for the green scroll chevrons).
     if (rRect.bottom <= paneRect.top + 0.5 || rRect.top >= paneRect.bottom - 0.5) continue
     const cRect = childEl.getBoundingClientRect()
-    const x1 = paneRect.right - 2
+    const x1 = paneRect.right - 6
     const y1 = (rRect.top + rRect.bottom) / 2
-    const x2 = cRect.left - 4
+    const x2 = cRect.left - 10
     // Aim at the child card's header line; clamp to the panel's visible box so
     // a card scrolled out of the panel keeps a (clamped) arrow pointing at
     // where it went.
