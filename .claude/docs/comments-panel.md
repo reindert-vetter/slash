@@ -804,6 +804,36 @@ noise the block-wide AI anchor fix removed (see `.claude/docs/workflows-analysis
 A disjoint unit stays hidden either way. Test:
 `tests/comment-range-first-row.spec.mjs`.
 
+**The `seg` check only applies when BOTH sides are a call.** `commentUnder`'s
+call branch used to read `c.gran === 'call' && c.seg === t.seg` for *every*
+comment as soon as the cursor sat on a call segment, which threw away the
+containment model one level too far: a comment anchored on the whole LINE (or
+group) that the call sits inside is about that line, so `s`/call granularity
+hid it even though the cursor had not left its row. Reported bug: standing on
+the very `trans(...)` call an AI risk finding was written about made the
+finding vanish from the comment column, while its ⚠ badge stayed on the row —
+the reviewer saw the marker and had no way to reach the comment ("waar is de ai
+waarschuwing comment?"). It now reads `t.gran === 'call' && c.gran === 'call'`:
+only ANOTHER call's comment is out of scope on a call segment. Note this is the
+one granularity where a comment on the cursor's *own* row could disappear, and
+call granularity is exactly where a reviewer stands to approve that call. Test:
+`tests/comment-call-gran-scope.spec.mjs`.
+
+### The marker layer and the index must agree about what exists
+
+Two layers answer "is there a comment here": the **markers** (`commentRowSet`'s
+💬 per row, `commentActivitySummary`'s avatar/⚠ + N badge, which
+`lineChildSummaries` in `home.mjs` puts on a diff row) and the **index**
+(`recomputeView`/`commentUnder` → the cards in the comment column). The markers
+are deliberately NOT cursor-scoped — they say "somewhere in this block/row",
+which is the whole point of a marker — but every other exclusion has to match,
+or a row gets an indicator that no cursor position can ever resolve. So both
+marker functions skip an **orphan** (`anchorState === 'orphan'`) exactly like
+`recomputeView`'s `anchored` filter does: an orphan lost its code and lives on
+as its own "Start" index row (`indexComments`), never in the block-scoped
+index. Same class of bug as the two paragraphs above; when adding a filter to
+one layer, check the other.
+
 ### A not-selected card auto-expands its body when there's little else to see
 
 A third card state next to "not selected, collapsed, no input"

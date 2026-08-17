@@ -298,15 +298,27 @@ export function setCommentScope(scope) {
 // same row as t (a group/multi-line comment stays reachable from its own FIRST
 // row, e.g. after narrowing from group to line granularity — its rows all carry
 // a 💬 marker, see commentRowSet, so it must not become unreachable there);
-// and — when t is a single 'call' segment — the same call (gran + seg). A
+// and — when BOTH t and c are a single 'call' segment — the same call (seg). A
 // comment with an unknown anchor (rowStart < 0: legacy/seeded) is always shown
 // within its block. Deliberately NOT plain overlap: a wide comment must not
 // surface under every row it happens to span, only under its start row (which
 // is where the reviewer anchored it).
+//
+// The seg check is deliberately limited to a comment that is ITSELF anchored on
+// a call segment, because the filter is CONTAINMENT — call ⊂ line ⊂ group (see
+// commentTarget in home.mjs, which stores exactly that). A line/group comment
+// covering this row is about the whole line, so it stays reachable while the
+// cursor zooms into one call inside that line; only another CALL's comment is
+// out of scope. Reported bug: standing on the very `trans(...)` call an AI risk
+// finding was written about (gran 'line', same row) made that finding disappear
+// from the comment column — while its ⚠ badge stayed on the row, so the
+// reviewer saw the marker and could not reach the comment. `s`/call
+// granularity is exactly where a reviewer lands when approving that call, so
+// this was the one granularity that hid a comment anchored on its own row.
 function commentUnder(c, t) {
   if (c.rowStart == null || c.rowStart < 0) return true
   if (c.rowStart !== t.rowStart && (c.rowStart < t.rowStart || c.rowEnd > t.rowEnd)) return false
-  if (t.gran === 'call') return c.gran === 'call' && c.seg === t.seg
+  if (t.gran === 'call' && c.gran === 'call') return c.seg === t.seg
   return true
 }
 
@@ -388,6 +400,12 @@ export function commentRowSet(b) {
   for (const c of cs.list) {
     if (c.file !== b.file || c.label !== b.label) continue
     if (c.status === 'resolved') continue
+    // Same exclusion as recomputeView's own `anchored` filter: an orphan lost
+    // the code it was anchored to and is deliberately NOT in the block-scoped
+    // index (it gets a "Start" row of its own, see indexComments). Marking a
+    // row for it would promise a comment no cursor position can ever reach —
+    // the marker layer and the index must never disagree about what exists.
+    if (isOrphanComment(c)) continue
     if (c.rowStart == null || c.rowStart < 0) continue
     for (let i = c.rowStart; i <= c.rowEnd; i++) set.add(i)
   }
@@ -493,6 +511,10 @@ export function commentActivitySummary(keys, matchesRow) {
   let local = true
   for (const c of cs.list) {
     if (c.kind) continue // PR-wide comment — no file:label anchor, can't be in scope
+    // Orphan: excluded for the same reason as in commentRowSet/recomputeView —
+    // it is not in the block-scoped index, so counting it here would badge a
+    // line with an indicator that leads nowhere.
+    if (isOrphanComment(c)) continue
     if (c.status === 'resolved') continue
     if (!keys.has(c.file + '|' + c.label)) continue
     if (matchesRow && !matchesRow(c)) continue
