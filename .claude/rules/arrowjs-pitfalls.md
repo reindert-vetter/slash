@@ -171,6 +171,67 @@ selected block**, silently, with no crash. The same stable-element root fixed
 that too; no separate fix. Regression tests:
 `tests/step-preview-stability.spec.mjs`, `tests/diff-code-vs-title.spec.mjs`.
 
+## A narrow event-listener-only child toggled bare — fixed defensively, root cause NOT fully proven
+
+Reviewer-reported bug: `blockCloseColumnButton`'s own `@click` handler
+(`Block.mjs`) fired with **`e === undefined`**, crashing on `e.stopPropagation()`
+— reproducible **only** by selecting a PR-comment index item that auto-drills
+its own anchor block open (`openCommentAnchorDrill`, see "The right-click
+context menu"'s sibling doc `command-palette.md`), against a **real, live** PR
+(13221) — never on a plain click of the button itself.
+
+**What IS established** (temporary `console.log`/`console.trace`
+instrumentation in `blockCloseColumnButton`, reverted after — not left in the
+tree): the button mounts exactly **once**, and that *same, only* mounted
+instance's own `@click` closure fires **within the same microtask as its own
+mount**, via arrow.js's `Vt` (the reactive-recompute microtask flush) calling
+its internal `rt` recompute function with **zero arguments** — not via
+`ie`/`addEventListener` (which always passes the real DOM event). So this is
+arrow.js's own internals invoking the closure, not a real click, and not a
+second/stale instance from an earlier navigation.
+
+**What is a STRONG HYPOTHESIS, not proof:** `We`'s `@`-prefixed (event
+listener) branch is the **only** binding kind that never registers itself in
+the `At`/`Pt` bookkeeping arrays `pe()` (arrow.js's chunk-reuse patcher) uses
+to safely resync a recycled chunk — every other binding kind (reactive
+attribute, reactive content) does, via `lt(...)`. That asymmetry means an
+event-listener pool slot has no safety net if its numeric pool index is ever
+shared with/handed to a differently-typed consumer. This was **not**
+confirmed live (the captured JS stack is only 2 frames deep inside the
+minified bundle — V8 can inline/hide intermediate frames — so an
+alternative mechanism cannot be ruled out).
+
+**What did NOT reproduce:** the exact same interaction (select a comment
+whose anchor auto-drills open), built as an isolated Playwright fixture
+(mocked single comment, `tests/comment-anchor-expanded-view.spec.mjs`'s own
+`mockAnchoredComment` helper, PR 12903) — zero errors, every time. Whatever
+extra ingredient PR 13221's real data/timing supplies was not isolated
+within the time spent on this. **Do not assume this is fully understood** —
+a future session hitting a similar symptom should re-open the investigation
+rather than treat this as closed.
+
+**The fix applied is deliberately defensive/precedent-matching, not a
+root-cause fix:** the three Block.mjs-family templates whose **entire**
+expression list is one-or-two bare event listeners (no other reactive
+attribute/content binding at all) and which their own caller toggles bare
+between the template and `''` — `blockCloseColumnButton`,
+`blockMenuButton` (`Block.mjs`), and `resizeHandle` (`columnWidth.mjs`,
+shared by 4 call sites) — each got (1) the same stable
+`<div class="contents">` wrapper as `stepChevronSlot` above (matches the
+established convention in this file even though the mechanism here isn't
+proven to be the identical "keyed body IS the toggle" derailment — these
+three are **not** separately `.key()`'d), and (2) a guard in the handler
+(`if (!e) return`, or `onDown` wrapped as `(e) => e && onDown(e)`) that
+turns a future misfire into a silent no-op instead of a crash. **Every
+other** `${() => cond ? … : ''}` toggle in `Block.mjs` (40+ bindings
+audited) was deliberately left alone: each either already has a reactive
+attribute/content binding alongside its event listener (giving it an `At`
+registration and thus the `pe()` safety net above), returns a consistently
+one-shaped value (e.g. `pathPills` always returns an array), or is a
+plain string↔string ternary with no template involved at all — none of
+these share the narrow "nothing but event listeners" shape the hypothesis
+above is about, and none showed any symptom.
+
 ## A statically interpolated template↔string slot leaks the template function as text
 
 `` ${cond ? html`…` : ''} `` **without** `() =>`. Observed in

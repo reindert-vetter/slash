@@ -224,16 +224,28 @@ export function startKeyResize(state, key, root, dir) {
 // change) plus a subtle hover tint so the strip is discoverable at all. The
 // card/column root this is nested inside must carry `relative` +
 // `data-col-resize-root` (the drag's `closest(...)` anchor).
+//
+// Wrapped in a stable `<div class="contents">` root, and `onDown` guards
+// against a missing event (onReset/`@dblclick` needs no event at all, so it
+// stays unguarded) — every call site (Block.mjs, RelatedPanel.mjs ×3) toggles
+// this bare (`cond ? resizeHandle(...) : ''`), and this template's only
+// expressions are its two event listeners, no other reactive binding. Same
+// shape/reasoning as blockCloseColumnButton/blockMenuButton in Block.mjs: see
+// "A narrow event-listener-only child toggled bare" in
+// .claude/rules/arrowjs-pitfalls.md for what is and isn't established about
+// why a slot like this can misfire.
 export function resizeHandle(onDown, onReset) {
   // `right-0` (flush with the INNER right edge), not a negative offset: some
   // resizable roots (related-code, the block-diff `<article>`) carry
   // `overflow-hidden`, which clips a positioned child that sticks out past
   // the box's own edge — a negative offset made the handle unpaintable and
   // therefore un-hit-testable there, so mousedown silently never fired.
-  return html`<div
-    class="absolute right-0 top-0 z-10 h-full w-2 cursor-col-resize select-none hover:bg-indigo-300/40 dark:hover:bg-indigo-500/30"
-    data-testid="col-resize-handle"
-    @mousedown="${onDown}"
-    @dblclick="${onReset}"
-  ></div>`
+  return html`<div class="contents">
+    <div
+      class="absolute right-0 top-0 z-10 h-full w-2 cursor-col-resize select-none hover:bg-indigo-300/40 dark:hover:bg-indigo-500/30"
+      data-testid="col-resize-handle"
+      @mousedown="${(e) => e && onDown(e)}"
+      @dblclick="${onReset}"
+    ></div>
+  </div>`
 }

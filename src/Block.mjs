@@ -545,14 +545,27 @@ function viewModeIndicator(viewModeFn, setViewMode) {
 // longer has a per-card button at all — see MainScrollLeftHint (home.mjs)
 // and "A mouse way to reach content hidden to the left" in
 // .claude/docs/detail-layout.md.
+//
+// Wrapped in a stable `<div class="contents">` root (mirroring
+// stepChevronSlot in home.mjs) and its `@click` guards against a missing
+// event: a reproducible bug (live PR, never in an isolated fixture — see
+// "A narrow event-listener-only child toggled bare" in
+// .claude/rules/arrowjs-pitfalls.md) fires this exact handler with
+// `e===undefined` from arrow.js's own reactive-recompute flush, not from a
+// real click — the caller (Block.mjs's own `${() => ... ?
+// blockCloseColumnButton(...) : ''}` slot) toggles this bare, and the
+// button's ONLY expression is this one `@click`. Both changes are a
+// defensive/precedent-matching fix, not a proven root-cause fix — see that
+// doc entry for exactly what is and isn't established.
 function blockCloseColumnButton(onCloseColumn) {
-  return html`
+  return html`<div class="contents">
     <button
       type="button"
       title="Sluit deze kolom"
       data-testid="block-close-column"
       class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-400 transition hover:bg-slate-100 hover:text-indigo-600 dark:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-indigo-400"
       @click="${(e) => {
+        if (!e) return
         e.stopPropagation()
         onCloseColumn()
       }}"
@@ -561,7 +574,7 @@ function blockCloseColumnButton(onCloseColumn) {
         <path d="M10 3v10M6 5l-3 3 3 3" stroke-linecap="round" stroke-linejoin="round"></path>
       </svg>
     </button>
-  `
+  </div>`
 }
 
 // blockMenuButton — the mouse entry point into the block-scoped command
@@ -577,14 +590,22 @@ function blockCloseColumnButton(onCloseColumn) {
 // position. Rendered next to the file:line label, never on a preview card
 // (see the call site below) — a look-ahead card is never the one Enter
 // would act on.
+//
+// Wrapped in a stable `<div class="contents">` root, and its `@click`
+// guards against a missing event — same shape/reasoning as
+// blockCloseColumnButton above (a single event-listener-only expression,
+// toggled bare by its own caller): see "A narrow event-listener-only child
+// toggled bare" in .claude/rules/arrowjs-pitfalls.md for what is and isn't
+// established about why.
 function blockMenuButton(onOpenMenu) {
-  return html`
+  return html`<div class="contents">
     <button
       type="button"
       title="Menu voor dit blok"
       data-testid="block-open-menu"
       class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-400 opacity-0 transition group-hover:opacity-100 focus-visible:opacity-100 hover:bg-slate-100 hover:text-indigo-600 dark:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-indigo-400"
       @click="${(e) => {
+        if (!e) return
         e.stopPropagation()
         onOpenMenu()
       }}"
@@ -595,7 +616,7 @@ function blockMenuButton(onOpenMenu) {
         <circle cx="8" cy="13" r="1.3"></circle>
       </svg>
     </button>
-  `
+  </div>`
 }
 
 // descriptionHtml renders a block's PHPDoc description (b.description, see
