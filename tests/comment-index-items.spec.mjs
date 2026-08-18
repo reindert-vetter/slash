@@ -85,9 +85,12 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     await expect(page.getByTestId('block-row').first()).toBeVisible()
 
     await expect(page.getByTestId('comment-heading')).toBeVisible()
-    const row = page.locator('[data-idx="0"]')
+    // The PR-wide comment section now sorts right above "Comments op regels"
+    // (recomputeLeftList's rank 2.4, under every real category — reviewer
+    // request: "gooi algemene pr comments net boven Comments op regels"), no
+    // longer at data-idx="0", so locate the row by its own content.
+    const row = page.locator('[data-idx]').filter({ hasText: 'Overall this looks great' })
     await expect(row).toBeVisible()
-    await expect(row).toContainText('Overall this looks great')
     await expect(row.getByTestId('block-approval')).toHaveText('0/1')
     // The block-scoped comment ALSO gets its own index row, but under
     // "Comments op regels" (b.lineAnchored, home.mjs) — sorted UNDER the
@@ -113,7 +116,13 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
     await expect(page.getByTestId('block-row').first()).toBeVisible()
-    await expect(page.locator('[data-idx="0"]')).toHaveClass(/bg-indigo-50/)
+    // The PR-wide comment section now sorts right above "Comments op regels"
+    // (rank 2.4, no longer data-idx="0" — see the previous test's own note),
+    // but a fresh open's DEFAULT SELECTION still prioritizes it over an
+    // ordinary block (defaultSelectionRank, home.mjs) — only its own display
+    // position moved, not what a fresh open lands on.
+    const row = page.locator('[data-idx]').filter({ hasText: 'Overall this looks great' })
+    await expect(row).toHaveClass(/bg-indigo-50/)
 
     const card = page.getByTestId('comment-detail-card').first()
     await expect(card).toBeVisible()
@@ -317,7 +326,10 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
     await expect(page.getByTestId('comment-detail-card').first()).toBeVisible()
-    await expect(page.locator('[data-idx="0"]')).toHaveClass(/bg-indigo-50/)
+    // No longer data-idx="0" (the PR-comments section now sorts right above
+    // "Comments op regels", rank 2.4) — locate it by content instead.
+    const prWideRow = page.locator('[data-idx]').filter({ hasText: 'Overall this looks great' })
+    await expect(prWideRow).toHaveClass(/bg-indigo-50/)
 
     // → steps into the thread — rest position, nothing highlighted yet, but
     // already at the "newest message" end (pos === 0).
@@ -326,19 +338,19 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
 
     // ↓ from here falls through immediately: the thread cursor releases and
     // the sidebar selection advances to the next row in the flat list — which
-    // is now the first REAL block (ContractController::index, CONTROLLER-
-    // first in this fixture) rather than the anchored comment's own index row:
-    // that row sorts under "Comments op regels", i.e. UNDER every real block,
-    // not right next to the PR-wide item any more.
+    // is now the anchored comment's own index row (it sorts right after the
+    // PR-wide section, at rank 2.5 under "Comments op regels" — the real
+    // block itself sorts BEFORE the PR-wide section now, at a real category
+    // rank, so it is no longer the next row after it).
     await page.keyboard.press('ArrowDown')
-    await expect(page.locator('[data-idx="0"]')).not.toHaveClass(/bg-indigo-50/)
-    await expect(page.locator('[data-idx="1"]')).toHaveClass(/bg-indigo-50/)
-    // Landing on the real block shows its ordinary diff card — the anchored
-    // comment shows inline there, same as ever — not commentDetailCard/a
-    // drilled anchor (that's the comment-index row's own selected state,
-    // exercised in the test above).
+    const anchoredRow = page.locator('[data-idx]').filter({ hasText: 'please rename this variable' })
+    await expect(anchoredRow).toHaveClass(/bg-indigo-50/)
+    // Selecting that row resolves to its real block (ContractController::index)
+    // shown "as if fully expanded" (openCommentAnchorDrill) — not
+    // commentDetailCard, same as the anchored-row selection exercised in the
+    // test above.
     await expect(page.getByTestId('comment-detail-card')).toHaveCount(0)
-    await expect(page.getByTestId('block-column')).toContainText('ContractController::index')
+    await expect(page.getByTestId('drill-column')).toContainText('ContractController::index')
     await expect(page.getByTestId('inline-comments').getByText('please rename this variable')).toBeVisible()
   })
 

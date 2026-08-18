@@ -22,14 +22,29 @@ import { test, expect } from './_fixtures.mjs'
 //
 // Fixture: PR 110 (see test-class-grouping.spec.mjs) — TriggersIndexTest's
 // two methods. mockComments (mirrors comment-index-items.spec.mjs) lets the
-// test insert a PR-wide comment AFTER the initial restore has already
-// selected and rendered the test method's diff: a comment item ranks ahead
-// of every real block (recomputeLeftList's rank -1), so its arrival via the
-// next comment poll reindexes the still-selected class row by exactly one —
-// the same "index shifts while staying selected" mechanics recomputeLeftList
-// produced in production once loadRelations/loadCallResolve/loadTestCovers
-// landed.
+// test insert a comment AFTER the initial restore has already selected and
+// rendered the test method's diff. It must be one that still ranks ahead of
+// every real block so its arrival reindexes the still-selected class row by
+// exactly one — the same "index shifts while staying selected" mechanics
+// recomputeLeftList produced in production once
+// loadRelations/loadCallResolve/loadTestCovers landed. An ORDINARY PR-wide
+// comment no longer does that (it now ranks 2.4, right above "Comments op
+// regels", under every real category — reviewer request: "gooi algemene pr
+// comments net boven Comments op regels"); only a comment that `@`-mentions
+// the local reviewer still ranks -2, above everything, so this test mocks
+// `/api/settings` and mentions that login (mirrors mention-highlight.spec.mjs).
 const PR = 110
+const ME = 'reindert-vetter'
+
+function mockSettings(page) {
+  return page.route('**/api/settings', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, me: { login: ME, aliases: [] } }),
+    }),
+  )
+}
 
 function mockComments(page) {
   const state = { comments: [] }
@@ -42,6 +57,7 @@ function mockComments(page) {
 test('the active diff cursor survives a reindex of the still-selected row after a URL restore', async ({
   page,
 }) => {
+  await mockSettings(page)
   const comments = mockComments(page)
 
   const sel = encodeURIComponent('testclass:tests/Feature/TriggersIndexTest.php::TriggersIndexTest')
@@ -53,10 +69,11 @@ test('the active diff cursor survives a reindex of the still-selected row after 
   const initialCount = await activeRow.count()
   expect(initialCount).toBeGreaterThan(0)
 
-  // Insert a PR-wide comment — the next 5s comment poll picks it up and
-  // reindexes every existing row (including the still-selected class row) by
-  // one, exactly like loadRelations/loadCallResolve/loadTestCovers landing
-  // shortly after the restore did in production.
+  // Insert a comment that `@`-mentions the local reviewer — the next 5s
+  // comment poll picks it up and reindexes every existing row (including the
+  // still-selected class row) by one, exactly like
+  // loadRelations/loadCallResolve/loadTestCovers landing shortly after the
+  // restore did in production.
   comments.serve([
     {
       id: 'reindex-1',
@@ -65,7 +82,7 @@ test('the active diff cursor survives a reindex of the still-selected row after 
       file: '',
       line: 0,
       author: 'octocat',
-      body: 'a PR-wide note that ranks ahead of every block',
+      body: `@${ME} a note that ranks ahead of every block`,
       createdAt: new Date().toISOString(),
       reactionCount: 0,
       status: 'open',
@@ -79,7 +96,9 @@ test('the active diff cursor survives a reindex of the still-selected row after 
 
   // The comment item must actually have landed and reindexed the list (proof
   // the reindex really happened, not just a timing coincidence) ...
-  await expect(page.getByTestId('block-row').first()).toContainText('a PR-wide note', { timeout: 8000 })
+  await expect(page.getByTestId('block-row').first()).toContainText('a note that ranks ahead of every block', {
+    timeout: 8000,
+  })
   // ... and the active-row cursor on the still-selected test method's diff
   // must still be there — the bug made it vanish permanently right around
   // this point.

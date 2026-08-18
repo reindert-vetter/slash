@@ -282,13 +282,16 @@ function renderList(state) {
       return
     }
     // Comment-index items with NO regel at all (PR-wide/orphan feedback) sort
-    // to the very top of state.blocks (recomputeLeftList's rank -1) — the
-    // first VISIBLE one gets its own "PR-comments" heading, mirroring
+    // right above the "Comments op regels" section (recomputeLeftList's rank
+    // 2.4, just under 2.5 — reviewer request: "gooi algemene pr comments net
+    // boven Comments op regels", moved down from the very top of the list) —
+    // the first VISIBLE one gets its own "PR-comments" heading, mirroring
     // underlyingHeading below.
     // A comment that @-mentions the local reviewer (b.mentioned, see
-    // commentBlockItem/mentions.mjs) sorts above every other such comment item
-    // (rank -2) and gets its OWN heading — checked before the "PR-comments" one
-    // below, which is why that one excludes b.mentioned.
+    // commentBlockItem/mentions.mjs) is the one exception that STAYS at the
+    // very top (rank -2, above every category) and gets its OWN heading —
+    // checked before the "PR-comments" one below, which is why that one
+    // excludes b.mentioned.
     if (!mentionHeadingDone && b.kind === 'comment' && b.mentioned) {
       items.push(mentionHeading().key('mention-heading'))
       mentionHeadingDone = true

@@ -156,7 +156,12 @@ test('a stale block-scoped cs.focus does not hijack Enter in the PR-comment Clau
     // page); dispatchEvent bypasses that check and still fires the row's real
     // @click handler.
     await page.getByTestId('block-row').filter({ hasText: 'Dit endpoint' }).first().dispatchEvent('click')
-    await expect(page.getByTestId('comment-detail-card')).toBeVisible()
+    // The PR-wide section now sorts right above "Comments op regels" (rank
+    // 2.4), so the block-scoped comment seeded above can be its immediate
+    // NEXT sidebar row — the look-ahead preview then also renders a (dimmed)
+    // comment-detail-card for that one. `.first()` is the selected/focused
+    // one (see commentDetailCard's own `preview` styling).
+    await expect(page.getByTestId('comment-detail-card').first()).toBeVisible()
 
     await page.keyboard.press('Enter')
     const menu = page.getByTestId('command-menu')

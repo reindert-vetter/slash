@@ -2151,7 +2151,7 @@ async function loadBlocks() {
   // no-op unless the CURRENT selection is hidden), applyDefaultUnapprovedSelection
   // always picks a target, so it needs this explicit check instead.
   // Deliberately an ID snapshot, not the raw index: the indexComments()
-  // watch (recomputeLeftList, see below) can insert new rank -1 comment
+  // watch (recomputeLeftList, see below) can insert new comment
   // items and reindex the SAME still-selected block to a different index in
   // the meantime — that's not the reviewer moving the selection, just
   // recomputeLeftList's own id-preserving reindex (mirrors its own `selId`
@@ -2823,19 +2823,22 @@ function recomputeLeftList() {
   // this section rather than at the very top.
   //
   // A comment with NO regel at all (PR-wide/orphan — b.kind unset here means
-  // b.comment.kind/isOrphanComment, not this synthetic item's own `kind`)
-  // stays ranked ahead of every real category (their own group at the top of
-  // "Start", above ROUTE) — PR-wide feedback usually wants attention first;
+  // b.comment.kind/isOrphanComment, not this synthetic item's own `kind`) is
+  // still not tied to any particular block, but sorts UNDER every real
+  // category (rank 2.4 — reviewer request: "gooi algemene pr comments net
+  // boven Comments op regels", i.e. right above the line-anchored section
+  // rather than at the very top) and just above "Comments op regels" (2.5);
   // once resolved it folds into the same "Toon N goedgekeurde blocks" section
   // as a fully-approved block (isFullyApproved/blockApproveCount's
   // comment-item branch below), exactly like any other row. A MENTIONED one
-  // among those (still no regel) ranks above the rest (-2 vs -1) under its
-  // own "Mentioned" heading — someone is waiting on an answer, so it must not
-  // sit below unrelated feedback.
+  // among those (still no regel) is the one exception that STAYS at the very
+  // top (-2, above every category) under its own "Mentioned" heading —
+  // someone is waiting on an answer, so that one must not sit below
+  // unrelated feedback; only the ordinary, unmentioned PR-wide section moved.
   const rank = (b) => {
     if (b.kind !== 'comment') return childIds.has(b.id) ? 3 : categoryRank(b.category)
     if (b.lineAnchored) return 2.5
-    return b.mentioned ? -2 : -1
+    return b.mentioned ? -2 : 2.4
   }
   // An UNRESOLVED block-anchored comment gets its own index row (indexComments,
   // RelatedPanel.mjs) — but only when the block it hangs on is actually in this
@@ -3393,8 +3396,8 @@ function revealSelectedIfHidden() {
 // depends on state.approvalSummaries, which isn't known any earlier.
 //
 // freshDefaultSelectionPending/freshDefaultSelectionAt back a RETRY of this
-// same pick once the PR-wide comment list (which ranks first, see
-// recomputeLeftList's rank -1) arrives — comment items are populated by
+// same pick once the PR-wide comment list (see
+// recomputeLeftList's rank, now 2.4 for the ordinary section) arrives — comment items are populated by
 // RelatedPanel's own, independent comment poll (loadComments), which now
 // awaits ensureMe() before pushing cs.list (see avatar.mjs — the reviewer's
 // own GitHub identity lookup), an extra network round trip that can land
@@ -3403,13 +3406,40 @@ function revealSelectedIfHidden() {
 // have won the very first default selection never gets it, and the reviewer
 // silently lands elsewhere. freshDefaultSelectionAt snapshots the picked
 // block's stable id (not its raw index — recomputeLeftList reindexes
-// existing rows by id when the comment watch inserts new rank -1 items, so
+// existing rows by id when the comment watch inserts new items, so
 // the id is what stays stable across that reindex) resp. `true` for the
 // toggle-row pick, so retryDefaultSelectionForComments can tell whether
 // nothing else (a click, an arrow key, a restored ?sel=) has since moved the
 // selection away from that automatic pick.
+// defaultSelectionRank is a SEPARATE priority order from recomputeLeftList's
+// own display `rank()` above, used only to decide which unapproved item a
+// fresh open auto-selects. The two used to be identical (a comment item's
+// display position doubled as its selection priority), but moving the
+// ordinary "PR-comments" section's DISPLAY rank down to 2.4 (reviewer
+// request: "gooi algemene pr comments net boven Comments op regels") must not
+// also silently change which item wins the fresh-open pick — untouched
+// product behaviour nobody asked to change, and the very thing
+// tests/comment-index-items.spec.mjs's "a fresh open lands on the unresolved
+// comment item" asserts. So a no-regel comment (mentioned or not) still
+// outranks every real block here, exactly like before this reorder; only a
+// line-anchored comment still ranks after blocks (unchanged either way).
+function defaultSelectionRank(b) {
+  if (b.kind !== 'comment') return 1
+  if (b.lineAnchored) return 2
+  return b.mentioned ? -1 : 0
+}
+
 function applyDefaultUnapprovedSelection() {
-  const idx = state.blocks.findIndex((b) => !isFullyApproved(state, b))
+  let idx = -1
+  let bestRank = Infinity
+  state.blocks.forEach((b, i) => {
+    if (isFullyApproved(state, b)) return
+    const r = defaultSelectionRank(b)
+    if (r < bestRank) {
+      bestRank = r
+      idx = i
+    }
+  })
   if (idx >= 0) {
     state.selected = idx
     // A comment-index item (kind:'comment') has no diff — a stray restored

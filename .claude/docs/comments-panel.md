@@ -394,11 +394,14 @@ by no real block category) and its own **"PR-comments" heading**
 (`commentHeading`, `data-testid=comment-heading`) above the first visible comment
 item — mirrors `underlyingHeading`, same "own keyed item in one flat array"
 shape. `recomputeLeftList`'s `rank()` puts a comment item with **no regel at
-all** (PR-wide/orphan feedback) **first** (rank `-1`, ahead of `ROUTE`):
-PR-wide feedback usually wants attention before diving into the tree. A
-comment that DOES hang on a real source line instead sorts **under** the
-changed-files categories — see "Comments op regels" below, which supersedes
-the flat "always ranks first" statement for that case.
+all** (PR-wide/orphan feedback) at rank `2.4` — under every real category
+(which top out at `2`) and right above the line-anchored "Comments op regels"
+section (`2.5`, see below). Reviewer request: "gooi algemene pr comments net
+boven Comments op regels" — this section used to rank first (`-1`, ahead of
+`ROUTE`) but that pinned it above the tree even for feedback nobody was
+waiting on; it now sits directly next to the other comment section instead. A
+comment that DOES hang on a real source line sorts the same way, just at
+`2.5` — see "Comments op regels" below.
 
 ### "Comments op regels": a line-anchored comment sorts under the changed files
 
@@ -467,10 +470,12 @@ A comment whose body — **or any of its replies** (`c.reactions`, where a menti
 very often lands) — `@`-mentions the local reviewer gets `mentioned: true` on its
 index item (`commentMentionsMe`, `src/mentions.mjs`). **Only while it also has no
 regel** (PR-wide/orphan, `!b.lineAnchored` — see "Comments op regels" above) does
-that rank it **`-2`**, above the other no-regel comment items (`-1`), under its
-own **"Mentioned" heading** (`mentionHeading`, `data-testid=mention-heading`,
-`BlockList.mjs`) — someone is waiting on an answer, so it must not sit below
-unrelated feedback. A MENTIONED comment that DOES hang on a real line instead
+that rank it **`-2`**, above every real category AND above the ordinary no-regel
+"PR-comments" section (`2.4`), under its own **"Mentioned" heading**
+(`mentionHeading`, `data-testid=mention-heading`, `BlockList.mjs`) — someone is
+waiting on an answer, so it must not sit below unrelated feedback. This is the
+one no-regel comment case deliberately left at the very top when the ordinary
+"PR-comments" section moved down to `2.4` (see above). A MENTIONED comment that DOES hang on a real line instead
 moves into the "Comments op regels" section like any other line-anchored
 comment (reviewer request) — it keeps `mentioned: true` on the item (still
 read by `blockApproveCount` etc.), it just no longer gets its own top-of-list
