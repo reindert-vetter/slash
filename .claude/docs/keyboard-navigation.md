@@ -1055,6 +1055,12 @@ content-driven width** (`contentWidthCls`/`boundedWrapWidthCls`, `Block.mjs`)
 — toggling `a` changes the pane STRUCTURE above, not the card's width; see
 `.claude/docs/diff-card.md`.
 
+**Landing on a block whose every change spans exactly one row auto-jumps the
+INITIAL stand to `'unified'`** — a one-time default, not a permanent override
+(`a`/the indicator still cycle normally afterward); see "Landing on an
+all-single-line block auto-jumps the INITIAL stand to `unified`" in
+`.claude/docs/diff-card.md` for the full mechanism.
+
 **`'unified'` hides nothing — it restructures.** For an aligned row that is a
 real del+ins pair (or a whitespace-only re-alignment, `wsOnly`),
 `unifiedRowHTML` stacks the OLD line (`-`, rose) above the NEW one (`+`,

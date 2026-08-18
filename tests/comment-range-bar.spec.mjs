@@ -18,6 +18,15 @@ test('the focused comment marks its own rows along the right edge of the diff', 
   await page.locator('[data-idx="1"]').click()
   await page.keyboard.press('ArrowRight') // list -> diff, lands on the first change group
   await expect(page).toHaveURL(/mode=diff/)
+  // Block 1's own single (one-row) change group auto-jumps the initial
+  // stand to 'unified' once its code arrives (home.mjs's
+  // allChangesAreSingleLine watch), which stacks the row twice (old above
+  // new) and doubles the comment-range-bar count below — wait for the code
+  // to actually be visible (so that auto-jump has already fired) before
+  // forcing 'split' back, or the click races the async code fetch and gets
+  // silently overridden the moment it resolves.
+  await expect(page.getByTestId('code-diff').first().locator('code.language-php').first()).toBeVisible()
+  await page.getByTestId('diffview-split').click()
 
   const card = page.locator('[data-testid="block-column"] article').first()
   const label = (await card.locator('h2').first().innerText()).trim()
@@ -49,6 +58,12 @@ test('the focused comment marks its own rows along the right edge of the diff', 
   await page.locator('[data-idx]').filter({ hasText: label }).first().click()
   await page.keyboard.press('ArrowRight')
   await expect(page).toHaveURL(/mode=diff/)
+  // The reload above starts a fresh page (a fresh JS module context), so the
+  // 'split' override from before the reload doesn't carry over — force it
+  // again, once the code has rendered (see the comment on the first
+  // occurrence of this pattern, above).
+  await expect(page.getByTestId('code-diff').first().locator('code.language-php').first()).toBeVisible()
+  await page.getByTestId('diffview-split').click()
 
   const item = page.getByTestId('inline-comments').getByTestId('comment-item').filter({ hasText: body })
   await expect(item).toBeVisible()

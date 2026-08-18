@@ -40,6 +40,62 @@ that are easy to forget and both load-bearing:
 `applyDiffViewMode` early-returns on an unknown stand and on the stand already
 being active, so a repeated click is genuinely free.
 
+## Landing on an all-single-line block auto-jumps the INITIAL stand to `unified`
+
+Reviewer request (2026-08-18, screenshot of `SubscriptionReader::
+recurringMutations`, whose diff is a scatter of separate one-line changes
+throughout the function): "als er in een blok elke keer maar 1 regel is
+aangepast, laat dan gelijk de -/+ view zien niet de side-by-side." Confirmed
+explicitly as the BROAD reading: every change GROUP in the block spans
+exactly one row — including a block with only ONE such group (not just a
+block with several).
+
+`allChangesAreSingleLine(b)` (`home.mjs`) is `changeGroups(blockRows(b))`
+every entry of which has `start === end`, and at least one group (an empty
+diff is not "single-line", there's nothing to show either way). A `watch` on
+`[state.selected, state.mode, state.focusLevel, state.classMethodSel,
+state.blocks, curBlock() && curBlock().code]` (mirroring the setCommentScope/
+setRelated watches' "list every reactive dep inline" rule) fires
+`applyDiffViewMode('unified')` the first time such a block's code is loaded
+and visible in the TOP-LEVEL diff (`state.focusLevel === 0` — never while a
+drilled Onderliggende-code column owns the keyboard, since `state.diffViewMode`
+is the one global stand every card shares, and auto-jumping it while drilled
+would also flip column(s) this request never mentioned).
+
+**Only the INITIAL stand, never a permanent override** — explicitly confirmed
+as option 2 of two offered: `autoUnifiedForBlockRef` (plain module state, keyed
+like `lastSelectedBlockRef`/`lastFiredSelectionRef` above — by `file:line`, or
+a `test_class` row's own id for its active method) marks a block as "already
+decided" the moment its code loads, so the watch never re-fires for the SAME
+block — the reviewer can freely cycle away with `a`/the indicator afterward
+and it sticks for as long as that block stays selected. Since
+`state.diffViewMode` is one shared global value with no per-block memory,
+this also means: once the reviewer visits ANY single-line-only block, the
+stand stays `'unified'` for every ordinary (multi-line) block visited
+afterward too, until manually cycled away again — an accepted trade-off of
+"one global stand", not a bug.
+
+**Known, accepted race:** the ref is only marked once the code has actually
+arrived (the `!b.code` guard inside the watch returns before that point), so
+a manual `a`/indicator click that lands WHILE the code is still fetching can
+be silently overridden the moment this watch gets its first real look at the
+freshly-loaded code. Not fixed — in practice code arrives well before a
+reviewer could reach for the toggle. Every Playwright spec that lands on a
+single-line block and needs `'split'` for its own (unrelated) assertions
+first waits for the code to render, THEN clicks `diffview-split` — see
+`tests/diffview.spec.mjs`, `tests/mouse-approve.spec.mjs`,
+`tests/navigate.spec.mjs`, `tests/drill-focus.spec.mjs`,
+`tests/comment-range-bar.spec.mjs`, `tests/command-menu.spec.mjs`,
+`tests/select-all-shortcut.spec.mjs` for the pattern (a couple of them twice —
+`comment-range-bar.spec.mjs` reloads the page mid-test, which resets the
+plain-module `autoUnifiedForBlockRef` and re-triggers the auto-jump).
+
+**This is exactly the shape of PR 12903's own shared anchor fixture**
+(`tests/_setup.mjs`'s `materializeMainWorktrees`): both of its two blocks
+carry a single one-row change group each — so entering either one's diff now
+starts at `'unified'` by default, which is why so many otherwise-unrelated
+specs anchored on that fixture needed the "force split back" step above.
+
 ## What decides the width: `widthCls`
 
 **Reviewer request, explicitly confirmed:** all three `a` stands get the same

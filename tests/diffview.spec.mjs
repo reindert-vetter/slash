@@ -706,6 +706,15 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     await page.keyboard.press('ArrowRight') // step into the diff
     const diff = page.getByTestId('code-diff').first()
     await expect(diff).toBeVisible()
+    // Block 1's own single (one-row) change group auto-jumps the initial
+    // stand to 'unified' once its code arrives (home.mjs's
+    // allChangesAreSingleLine watch) — wait for the code to actually render
+    // (so the auto-jump has already fired) before forcing 'split' back, or
+    // the click races the async code fetch and gets silently overridden the
+    // moment it resolves. This is what makes the cycle below genuinely start
+    // at 'split', as its own name says.
+    await expect(diff.locator('code.language-php').first()).toBeVisible()
+    await page.getByTestId('diffview-split').click()
     const panes = diff.locator('code.language-php')
     await expect(panes).toHaveCount(2)
 

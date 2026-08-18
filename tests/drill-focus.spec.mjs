@@ -134,6 +134,16 @@ test('f/d/s zoom a drilled column\'s own granularity (group → line → call)',
   await expect(panel.locator('code.language-php').first()).toBeVisible()
   await page.keyboard.press('ArrowRight')
   await expect(page).toHaveURL(/mode=diff/) // confirms the parent's own diff was entered
+  // The parent's own single (one-row) change group auto-jumps the initial
+  // stand to 'unified' once its code arrives (home.mjs's
+  // allChangesAreSingleLine watch) — wait for the code to actually render
+  // (so the auto-jump has already fired) before forcing 'split' back, or the
+  // click races the async code fetch and gets silently overridden.
+  // state.diffViewMode is one global stand shared by every card, including
+  // the drilled column this test is actually about, and 'unified' would
+  // double the active-row count below.
+  await expect(panel.locator('code.language-php').first()).toBeVisible()
+  await page.getByTestId('diffview-split').click()
   await page.waitForTimeout(200)
 
   const child = page.getByTestId('related-item')

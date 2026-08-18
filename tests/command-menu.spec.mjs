@@ -409,6 +409,15 @@ test.describe('PR Review Tree — command palette', () => {
 
     // Step into the diff so both panes are shown, then open the palette.
     await page.keyboard.press('ArrowRight')
+    // Block 1's own single (one-row) change group auto-jumps the initial
+    // stand to 'unified' once its code arrives (home.mjs's
+    // allChangesAreSingleLine watch) — wait for the code to actually render
+    // (so the auto-jump has already fired) before forcing 'split' back, or
+    // the click races the async code fetch and gets silently overridden.
+    // This test is about the palette matching the (half-width, side-by-side)
+    // new pane, not the view stand.
+    await expect(page.getByTestId('code-diff').first().locator('code.language-php').first()).toBeVisible()
+    await page.getByTestId('diffview-split').click()
     await page.keyboard.press('Enter')
     await expect(page.getByTestId('command-menu')).toBeVisible()
 

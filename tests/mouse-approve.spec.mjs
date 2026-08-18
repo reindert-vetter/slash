@@ -19,6 +19,15 @@ test.describe('PR Review Tree — mouse approve (call-segment hover ring)', () =
     await page.goto('/pr/12903')
     await page.locator('[data-idx="1"]').click() // CreatePaymentAction::execute
     await page.keyboard.press('ArrowRight')
+    // Block 1's own single (one-row) change group auto-jumps the initial
+    // stand to 'unified' once its code arrives (home.mjs's
+    // allChangesAreSingleLine watch) — the hover-ring approve affordance
+    // this test exercises only exists in 'split'/'fit' (see
+    // rowApproveEnabled in Block.mjs). Wait for the code to actually render
+    // (so that auto-jump has already fired) before forcing 'split' back, or
+    // the click races the async code fetch and gets silently overridden.
+    await expect(page.getByTestId('code-diff').first().locator('code.language-php').first()).toBeVisible()
+    await page.getByTestId('diffview-split').click()
     // This group spans exactly one line, so a single 'f' already jumps
     // straight from 'group' to 'call' (see keyboard-navigation.md's "Refining
     // a group that spans exactly one line…") — a second 'f' would step to the
@@ -50,6 +59,11 @@ test.describe('PR Review Tree — mouse approve (call-segment hover ring)', () =
     await page.goto('/pr/12903')
     await page.locator('[data-idx="1"]').click() // CreatePaymentAction::execute
     await page.keyboard.press('ArrowRight')
+    // See the previous test: wait for code, then force 'split' back — the
+    // hover-ring approve affordance doesn't exist in the auto-jumped
+    // 'unified' stand, and clicking too early races the async code fetch.
+    await expect(page.getByTestId('code-diff').first().locator('code.language-php').first()).toBeVisible()
+    await page.getByTestId('diffview-split').click()
     await page.keyboard.press('f')
     await expect(page).toHaveURL(/gran=call/)
 

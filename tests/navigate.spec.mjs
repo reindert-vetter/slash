@@ -618,6 +618,15 @@ test.describe('PR Review Tree — change navigation', () => {
     await page.keyboard.press('ArrowRight')
     await expect(page).toHaveURL(/mode=diff/)
     await expect(page).not.toHaveURL(/gran=/) // group is the default → omitted
+    // Block 1's own single (one-row) change group auto-jumps the initial
+    // stand to 'unified' once its code arrives (home.mjs's
+    // allChangesAreSingleLine watch), which shows the active bar on BOTH the
+    // old and new line — wait for the code to actually render (so the
+    // auto-jump has already fired) before forcing 'split' back, or the click
+    // races the async code fetch and gets silently overridden. This test is
+    // about granularity stepping, not the view stand.
+    await expect(panel.locator('code.language-php').first()).toBeVisible()
+    await page.getByTestId('diffview-split').click()
     await expect(activeRows.first()).toBeVisible()
     const groupCount = await activeRows.count()
     expect(groupCount).toBe(1) // a single-row group: one row × the new/right pane only

@@ -838,6 +838,77 @@ function setDiffViewMode(mode) {
   applyDiffViewMode(mode)
 }
 
+// autoUnifiedForBlockRef — plain (non-reactive) bookkeeping: the ref of the
+// top-level block the single-line auto-jump watch (below) already fired for,
+// so a same-block re-render (a manual `a` cycle, an approve, a code
+// re-fetch, …) never re-forces the stand back to 'unified' once the
+// reviewer has deliberately switched away from it while still on this block.
+let autoUnifiedForBlockRef = undefined
+
+// allChangesAreSingleLine reports whether EVERY change group in `b`'s diff
+// spans exactly one row (a changeGroups() unit with start === end) — i.e.
+// the block never has a multi-line, contiguous change run. A block with no
+// changes at all (an empty diff — its only reviewable content is its
+// Onderliggende code, see enterDiff's own comment) is deliberately NOT such
+// a block: there is nothing single-line about it either way.
+function allChangesAreSingleLine(b) {
+  const rows = blockRows(b)
+  if (!rows.length) return false
+  const groups = changeGroups(rows)
+  return groups.length > 0 && groups.every((g) => g.start === g.end)
+}
+
+// Reviewer request: "als er in een blok elke keer maar 1 regel is aangepast,
+// laat dan gelijk de -/+ view zien niet de side-by-side" — landing on such a
+// block jumps state.diffViewMode to 'unified' as its INITIAL stand only
+// (explicitly confirmed option: not a permanent override — the reviewer can
+// still cycle away with `a`/the indicator exactly as before, and it stays
+// away for as long as this same block is selected). Scoped to the TOP-LEVEL
+// selected block (state.focusLevel === 0, i.e. never while a drilled
+// Onderliggende-code column owns the keyboard): state.diffViewMode is one
+// global stand shared by every visible card (see diff-card.md's "There is no
+// per-card stand"), so auto-jumping it while drilled would also flip
+// column(s) this request never mentioned.
+//
+// Fires once per landing on a genuinely NEW block (autoUnifiedForBlockRef,
+// keyed the same way lastSelectedBlockRef/lastFiredSelectionRef above are —
+// by file:line, or a test_class row's own id for its active method) —
+// deliberately not on every re-render of the SAME block. Needs the block's
+// code loaded (blockRows/changeGroups both need it) — curBlock().code is
+// listed inline so this re-fires once a fresh fetch (ensureCode) resolves,
+// the same pattern the setCommentScope/setRelated watches above use.
+//
+// Known, accepted race: the ref is only marked as "handled" once the code
+// has actually loaded (the `!b.code` guard below returns before that point),
+// so a manual `a`/indicator click that lands WHILE the code is still
+// fetching can be silently overridden once this watch gets its first real
+// look at the freshly-arrived code. In practice code arrives well before a
+// reviewer could reach for the toggle, so this is not fixed here — see
+// tests/diffview.spec.mjs / mouse-approve.spec.mjs / navigate.spec.mjs /
+// drill-focus.spec.mjs / comment-range-bar.spec.mjs / command-menu.spec.mjs /
+// select-all-shortcut.spec.mjs's own "force split back" steps, which all
+// wait for the code to render first for exactly this reason.
+watch(
+  () => [
+    state.selected,
+    state.mode,
+    state.focusLevel,
+    state.classMethodSel,
+    state.blocks,
+    curBlock() && curBlock().code,
+  ],
+  () => {
+    if (state.mode !== 'diff' || state.focusLevel !== 0) return
+    const b = curBlock()
+    if (!b || b.kind === 'comment' || !b.code || b.code.error) return
+    const row = curTestClassRow()
+    const ref = row ? row.id : `${b.file}:${b.line}`
+    if (ref === autoUnifiedForBlockRef) return
+    autoUnifiedForBlockRef = ref
+    if (allChangesAreSingleLine(b)) applyDiffViewMode('unified')
+  },
+)
+
 // isEditableFocused reports whether DOM focus currently sits on a text input —
 // used to keep the `a` shortcut (a real letter a reviewer might type) from
 // firing while typing into a field that isn't otherwise guarded by cs.focus
