@@ -4380,7 +4380,7 @@ const CLASS_MEMBER_KINDS = new Set(['class_property', 'class_constant_changed', 
 // leave it empty.
 function resolvedCallChildren(b) {
   if (!b) return []
-  const resolved = callRows(b).filter((r) => r.status === 'resolved' || r.status === 'found')
+  const resolved = preferredCallRows(b).filter((r) => r.status === 'resolved' || r.status === 'found')
   if (resolved.length === 0) return []
   const rows = blockRows(b)
   const scope = callScopeMethods(b, rows)
@@ -4557,7 +4557,10 @@ function callArrowPairs(b) {
   if (!unit) return []
   const byId = allBlocksById()
   const pairs = []
-  for (const r of callRows(b)) {
+  // preferredCallRows, not callRows: the panel deduplicates two rows pointing at
+  // the same definition down to one card, and an arrow must never target a card
+  // that is no longer rendered.
+  for (const r of preferredCallRows(b)) {
     if (r.status !== 'resolved' && r.status !== 'found') continue
     if (!byId.has(callChildId(r))) continue // only a changed target (a real PR block)
     const sites = findCallSites(rows, r.callKey)
@@ -4577,6 +4580,72 @@ function callArrowPairs(b) {
 function callRows(b) {
   if (!b || !state.callResolve) return NO_ROWS
   return callResolveByCallerId().get(b.id) || NO_ROWS
+}
+
+// callTargetKey identifies the DEFINITION a resolved/found call row points at
+// (file + class + method) — the same target two differently-keyed rows of one
+// caller can share. Empty for a row with nothing to point at (unresolved, or a
+// class-level row without a method), which preferredCallRows reads as "never
+// deduplicate this one".
+function callTargetKey(r) {
+  if (!r.childFile || !r.childMethod) return ''
+  return r.childFile + '::' + (r.childClass || '') + '::' + r.childMethod
+}
+
+// callRowRank orders two rows of the SAME caller that resolve to the SAME
+// target, lowest wins (see preferredCallRows):
+//   0 — a real Go-resolved call (the call key IS the literal in the source, so
+//       it scopes to the actual call segment and carries the call arrow);
+//   1 — a Go-resolved synthetic entry point (rule 6c-bis's class_ctor/
+//       class_first_method, keyed to the `Foo::class` literal instead);
+//   2 — an LLM-found row (status 'found'): deterministic Go resolution wins over
+//       a model's, on explicit request.
+function callRowRank(r) {
+  if (r.status === 'found') return 2
+  if (r.kind === 'class_ctor' || r.kind === 'class_first_method') return 1
+  return 0
+}
+
+// preferredCallRows is callRows minus the rows that would render a SECOND,
+// identical Onderliggende-code card: whenever several resolved/found rows of one
+// caller point at the very same definition, only the best-ranked one survives
+// (callRowRank). Real case: `app(Foo::class)->run()` yields both rule 6c-bis's
+// `class_method:Foo` entry point AND a `run` row for the call itself, both
+// landing on Foo::run — the reviewer saw the same card twice, once badged
+// "eerste method" and once "bron: haiku" (PR 13392). Go's own rule 4a now
+// resolves that receiver deterministically so no LLM row is even requested, but
+// this stays as the general safety net: it also cleans up PRs ingested BEFORE
+// that rule existed, and it is what drops the entry-point row that still
+// duplicates the real call.
+//
+// Used by resolvedCallChildren (the cards) and callArrowPairs (the arrows) —
+// deliberately BOTH, since an arrow must never point at a card the panel no
+// longer renders. Every other callRows consumer already collapses its rows onto
+// the target block id via a Set/Map (directChildBlocks, lineChildSummaries,
+// resolvedCallTargetIds, firstUnapprovedCallSiteInUnit, referenceRows), so a
+// duplicate row is harmless there and their raw view stays intact.
+function preferredCallRows(b) {
+  const rows = callRows(b)
+  if (rows.length < 2) return rows
+  const best = new Map()
+  for (const r of rows) {
+    if (r.status !== 'resolved' && r.status !== 'found') continue
+    const key = callTargetKey(r)
+    if (!key) continue
+    const cur = best.get(key)
+    if (!cur || callRowRank(r) < callRowRank(cur)) best.set(key, r)
+  }
+  let dropped = false
+  const kept = rows.filter((r) => {
+    if (r.status !== 'resolved' && r.status !== 'found') return true
+    const key = callTargetKey(r)
+    if (!key) return true
+    if (best.get(key) === r) return true
+    dropped = true
+    return false
+  })
+  // Same array identity when nothing was deduplicated — the common case.
+  return dropped ? kept : rows
 }
 
 // blockIdPrefix is the "<pr>" (primary repo) or "<repo-key>#<pr>" prefix every

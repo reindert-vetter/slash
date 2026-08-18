@@ -61,6 +61,7 @@ export default function globalSetup() {
   materializeWhenScopeWorktrees()
   materializeSignatureRefWorktrees()
   materializeScopeClassRefWorktrees()
+  materializeDupTargetWorktrees()
   materializeBlockMoveWorktrees()
   materializeSettings()
   materializeOpsRepoWorktrees()
@@ -1393,4 +1394,30 @@ class ScopeClassRefAction
   const write = worktreeWriter(121)
   write('base', 'app/Actions/ScopeClassRefAction.php', action(0, 'null'))
   write('head', 'app/Actions/ScopeClassRefAction.php', action(1, 'app(SomeRepo::class)'))
+}
+
+// materializeDupTargetWorktrees writes the synthetic PR 122 fixture worktree for
+// related-duplicate-call-target.spec.mjs: one changed group holding two
+// `app(Foo::class)->m()` calls, so two DIFFERENT call keys of the same caller
+// resolve to the same definition and would otherwise render the same
+// Onderliggende-code card twice (see preferredCallRows in home.mjs). The
+// duplication itself is seeded in duptarget-callresolve.json — the worktree only
+// has to supply a real diff for the block to render.
+function materializeDupTargetWorktrees() {
+  const action = (some, other) => `<?php
+
+namespace App\\Actions;
+
+class DupTargetAction
+{
+    public function run()
+    {
+        $result = ${some};
+        $other = ${other};
+    }
+}
+`
+  const write = worktreeWriter(122)
+  write('base', 'app/Actions/DupTargetAction.php', action('null', 'null'))
+  write('head', 'app/Actions/DupTargetAction.php', action('app(SomeRepo::class)->find()', 'app(OtherRepo::class)->handle()'))
 }

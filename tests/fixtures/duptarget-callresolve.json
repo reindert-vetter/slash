@@ -1,0 +1,64 @@
+[
+  {
+    "pr": 122,
+    "callerId": "122:app/Actions/DupTargetAction.php:DupTargetAction::run",
+    "callKey": "class_ctor:SomeRepo",
+    "status": "resolved",
+    "kind": "class_ctor",
+    "childFile": "app/Services/SomeRepo.php",
+    "childClass": "SomeRepo",
+    "childMethod": "__construct",
+    "childLine": 5,
+    "childCode": "public function __construct()\n{\n}"
+  },
+  {
+    "pr": 122,
+    "callerId": "122:app/Actions/DupTargetAction.php:DupTargetAction::run",
+    "callKey": "class_method:SomeRepo",
+    "status": "resolved",
+    "kind": "class_first_method",
+    "childFile": "app/Services/SomeRepo.php",
+    "childClass": "SomeRepo",
+    "childMethod": "find",
+    "childLine": 9,
+    "childCode": "public function find(): array\n{\n    return [];\n}"
+  },
+  {
+    "pr": 122,
+    "callerId": "122:app/Actions/DupTargetAction.php:DupTargetAction::run",
+    "callKey": "find",
+    "status": "found",
+    "kind": "method_call",
+    "model": "haiku",
+    "confidence": "high",
+    "childFile": "app/Services/SomeRepo.php",
+    "childClass": "SomeRepo",
+    "childMethod": "find",
+    "childLine": 9,
+    "childCode": "public function find(): array\n{\n    return [];\n}"
+  },
+  {
+    "pr": 122,
+    "callerId": "122:app/Actions/DupTargetAction.php:DupTargetAction::run",
+    "callKey": "class_method:OtherRepo",
+    "status": "resolved",
+    "kind": "class_first_method",
+    "childFile": "app/Services/OtherRepo.php",
+    "childClass": "OtherRepo",
+    "childMethod": "handle",
+    "childLine": 7,
+    "childCode": "public function handle(): void\n{\n}"
+  },
+  {
+    "pr": 122,
+    "callerId": "122:app/Actions/DupTargetAction.php:DupTargetAction::run",
+    "callKey": "handle",
+    "status": "resolved",
+    "kind": "method_call",
+    "childFile": "app/Services/OtherRepo.php",
+    "childClass": "OtherRepo",
+    "childMethod": "handle",
+    "childLine": 7,
+    "childCode": "public function handle(): void\n{\n}"
+  }
+]

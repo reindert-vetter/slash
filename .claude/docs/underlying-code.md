@@ -172,6 +172,56 @@ a changed production method plus new tests for it showed a single index entry �
 the test class — with the actual changed code hidden entirely, reachable only by
 drilling from the test's own Onderliggende-code panel.
 
+## One card per resolved call target
+
+Two DIFFERENT call keys of one caller can resolve to the very same definition,
+and the panel used to render that as two identical cards. The real case
+(reported on PR 13392) is `app(Foo::class)->run('_v2')`: rule 6c-bis emits the
+class's entry points (`class_method:Foo` → `Foo::run`, badged "eerste method")
+while the `->run(` call itself is its own row — so
+`CreateAndBackfillSubscriptionViewsActivity::run` showed up twice, once as
+"eerste method" and once as "bron: haiku". Both rows were correct; there was
+just no rule saying one target gets one card.
+
+`preferredCallRows(b)` (`home.mjs`) is `callRows` minus the losers: it groups a
+caller's `resolved`/`found` rows by their target (`callTargetKey` — file +
+class + method) and keeps the best-ranked row per target (`callRowRank`, lowest
+wins):
+
+1. **a real Go-resolved call** — its call key IS the literal in the source, so
+   it scopes to the actual call segment and carries the call arrow;
+2. **a Go-resolved synthetic entry point** (`class_ctor`/`class_first_method`,
+   keyed to the `Foo::class` literal instead);
+3. **an LLM-found row** (`status: 'found'`) — deterministic Go resolution beats
+   a model's, on explicit request ("de Go-rij blijft").
+
+Ties keep source order, and a row with nothing to point at (an `unresolved`
+call, a class-level row with no method) is never deduplicated.
+
+- **Used by `resolvedCallChildren` AND `callArrowPairs`, deliberately both** —
+  an arrow must never point at a card the panel no longer renders (the same
+  rule the scoping section below states for `hideOutOfScope`).
+- **Every other `callRows` consumer keeps the raw rows.**
+  `directChildBlocks`, `lineChildSummaries`, `resolvedCallTargetIds`,
+  `firstUnapprovedCallSiteInUnit` and `referenceRows` all collapse their rows
+  onto the target BLOCK id via a Set/Map already, so a duplicate row is
+  harmless there — and dropping it would cost them a real call site (the
+  approve-through-call walk still needs to know about both the `Foo::class`
+  literal and the `->run(` segment).
+- **The backend now prevents the common case at the source, but this stays.**
+  `callresolve_analysis.go`'s rule 4a resolves `app(Foo::class)->m(`
+  deterministically, so no LLM lookup is requested for it any more (see
+  `.claude/docs/workflows-analysis.md`). That fixes newly ingested PRs only —
+  a PR ingested before it still carries the stored `found` row — and it does
+  not remove the entry-point row, which is exactly the duplicate this function
+  drops. Ranking 1 above 2 also means the surviving card is the deterministic
+  one on such an older PR.
+
+Test: `tests/related-duplicate-call-target.spec.mjs` (fixture PR 122,
+`duptarget-*.json` + `materializeDupTargetWorktrees`), which seeds both
+branches: one target covered by an entry point + an LLM row, another by an
+entry point + a Go-resolved real call.
+
 ## "loading code…" vs. "no code found"
 
 Every child descriptor carries a `loading` flag, set in `home.mjs` (the
