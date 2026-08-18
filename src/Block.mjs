@@ -667,16 +667,15 @@ export default function Block(b, opts = {}) {
   const preview = !!opts.preview
   // collapsedFn is a function returning whether this card should shrink to just
   // its header + meta row (category/title/status, file:line + approve pill) —
-  // no description, no diff body. Only ever passed truthy for a look-ahead
-  // PREVIEW card, when the ACTIVE card next to/above it doesn't fully fit the
-  // screen on its own (see previewTooTallForActive in home.mjs) — freeing the
-  // preview's usual space for the active card instead. A function (not a
-  // value), read from this card's own nested `${() => ...}` slot below
-  // (mirrors activeGroup/hintsEnabled) — home.mjs's callers must NOT resolve
-  // it eagerly in their outer array-building closures (see
-  // previewTooTallForActive's own doc comment): it depends on the live window
-  // size and the footer's own current height, both of which change far more
-  // often than this card's own content does. Defaults to never collapsing.
+  // no description, no diff body. Only ever passed for a look-ahead PREVIEW
+  // card — home.mjs's two preview call sites (DetailPanel's pair.forEach,
+  // drillPreviewColumns) both pass `() => true` unconditionally, so every
+  // preview always collapses regardless of the active card's own height (see
+  // "The look-ahead preview always collapses to just its header" in
+  // .claude/docs/diff-card.md). Still a function (not a plain value), read
+  // from this card's own nested `${() => ...}` slot below (mirrors
+  // activeGroup/hintsEnabled) for parity with the rest of Block()'s reactive
+  // opts. Defaults to never collapsing for every non-preview card.
   const collapsedFn = opts.collapsed || (() => false)
   // activeGroup is a function returning the currently-navigated change group
   // ({ start, end } row indices) for this block, or null. It's a function (not a
@@ -1473,8 +1472,8 @@ function codeDiff(
 // held; a bare fixed-px floor would fix that but also stretch a genuinely
 // short diff (a one-line getter) into a mostly-empty box. So this floor only
 // kicks in once `rowCount` would, on its own, roughly reach that same share
-// of the viewport anyway: DIFF_FLOOR_ROW_PX mirrors home.mjs's own
-// PREVIEW_ROW_PX per-code-row estimate, so DIFF_FLOOR_MIN_ROWS is simply
+// of the viewport anyway: DIFF_FLOOR_ROW_PX mirrors Footer.mjs's own
+// per-code-row estimate, so DIFF_FLOOR_MIN_ROWS is simply
 // "how many rows it takes to reach DIFF_FLOOR_VH on a typical viewport" —
 // deliberately a rough content-size gate, not a live window.innerHeight
 // check: rowCount is a stable content fact (computed once per codeDiff()

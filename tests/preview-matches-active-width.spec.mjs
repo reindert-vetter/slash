@@ -16,7 +16,11 @@ import { test, expect, appReady, evaluateSettled } from './_fixtures.mjs'
 // a genuinely two-sided preview forced into 'unified' still shows its own
 // removed (-) line, only narrow and stacked instead of side by side. That
 // guarantee was deliberately dropped (see detail-layout.md); only the WIDTH
-// guarantee remains.
+// guarantee remains. (The pane-structure assertions this test once made are
+// moot now too: every preview always collapses to just its header — see "The
+// look-ahead preview always collapses to just its header" in diff-card.md —
+// so there is no rendered pane at all to assert against; only the width
+// class/bounding-box comparison still applies.)
 test.describe('PR Review Tree — look-ahead preview matches a one-sided active block', () => {
   test('preview card narrows to unified when the active card is one-sided', async ({ page }) => {
     await page.goto('/pr/105')
@@ -38,16 +42,9 @@ test.describe('PR Review Tree — look-ahead preview matches a one-sided active 
     // the flat 80-character floor.
     await expect(active).toHaveClass(/w-\[calc\(80ch_\+_2rem\)\]/)
 
-    // It renders as ONE unified column (data-pane="new" — the same meaning
-    // that attribute already carries on the ordinary new/right codePane —
-    // never a separate `[data-pane="old"]` wrapper), but that single column
-    // DOES show the removed (-) line of its own real change: unified no
-    // longer hides old content, it only restructures it — see the header
-    // comment above.
-    await expect(preview.locator('[data-pane="old"]')).toHaveCount(0)
-    await expect(preview.locator('[data-pane="new"]')).toHaveCount(1)
-    await expect(preview.locator('span.text-rose-500')).toHaveCount(1)
-    await expect(preview.locator('span.text-emerald-500')).toHaveCount(1)
+    // The preview always collapses to just its header (see diff-card.md) —
+    // no pane of any kind renders, since there's no diff body at all.
+    await expect(preview.locator('[data-testid="code-diff"]')).toHaveCount(0)
 
     // Sanity: the active card's own bounding width and the preview's agree —
     // never wider, per the one-directional rule (see detail-layout.md).
@@ -62,9 +59,9 @@ test.describe('PR Review Tree — look-ahead preview matches a one-sided active 
     // Block.mjs) and the look-ahead preview's cap (fitCapCharsFor/
     // capFitChars) applies in every stand too — not just 'fit' as before —
     // so the preview can never render wider than the active card next to it.
-    // (This particular preview happens to collapse to just its header —
-    // previewTooTallForActive, home.mjs, unrelated to width — so this only
-    // asserts the width relationship, not the pane structure.)
+    // (Every preview always collapses to just its header — Block()'s own
+    // `collapsed` opt, unrelated to width — so this only asserts the width
+    // relationship, not the pane structure.)
     await page.goto('/pr/12903')
     await appReady(page)
     await page.locator('[data-idx="1"]').click()

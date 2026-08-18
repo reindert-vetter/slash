@@ -132,8 +132,8 @@ this was caught. `right-0` keeps the handle inside the clipped box.
 - **Drag** (`startColumnResize`): `mousedown` on the handle starts it,
   `document`-level `mousemove`/`mouseup` track the rest of the gesture — the
   same module-level-listener shape as `home.mjs`'s own
-  `window.addEventListener('resize', ...)` for `state.viewportH` — needed
-  because the pointer routinely leaves the handle's thin (`w-2`, 8px) hit
+  `window.addEventListener('resize', ...)` (re-checking `applyDiffColumnFit`)
+  — needed because the pointer routinely leaves the handle's thin (`w-2`, 8px) hit
   area mid-drag. Floored at `MIN_COL_PX` (200px) so a column can never
   collapse to an unusable sliver; no upper bound (`<main>` already scrolls
   horizontally without limit).

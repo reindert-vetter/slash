@@ -1,22 +1,22 @@
 import { test, expect, appReady } from './_fixtures.mjs'
 
 // The look-ahead preview card (the "block below" the selected/active one, see
-// DetailPanel's pair.forEach in home.mjs and drillPreviewColumns) collapses to
-// just its header + meta row (no description, no diff body) once the ACTIVE
-// card next to it doesn't fully fit the available screen height on its own —
-// previewTooTallForActive (home.mjs) + Block()'s `collapsed` opt (Block.mjs).
-// This frees the space the preview would otherwise take for the active card's
-// own (longer) diff, per the "give the block below less room" request.
+// DetailPanel's pair.forEach in home.mjs and drillPreviewColumns) always
+// collapses to just its header + meta row (no description, no diff body) —
+// Block()'s `collapsed` opt, unconditionally true for every preview card
+// (reviewer request: "laat blokken onder de huidige actieve blok alleen de
+// header zien"). Deliberately no longer conditioned on whether the active
+// card fits the screen (the earlier previewTooTallForActive estimator is
+// gone) — both a tall and a short active block leave the preview collapsed.
 //
 // PR 12903's own two blocks (CreatePaymentAction::execute at index 1,
 // ::findOrCreateCustomer at index 2, same file — see step-preview-stability.
 // spec.mjs) are both small by design (the main anchor fixture, see
 // blocks-and-ingest.md), so their code is routed here to fabricate the two
-// shapes this test actually needs: a genuinely tall active block (60 rows,
-// comfortably over PREVIEW_COLLAPSE-worthy at the default 1280×720 viewport,
-// see previewTooTallForActive's own constants) and a short sibling.
-test.describe('look-ahead preview collapses when the active card does not fit', () => {
-  test('a tall active block collapses the preview to just its header', async ({ page }) => {
+// shapes this test actually needs: a genuinely tall active block (60 rows)
+// and a short one, to confirm the preview collapses in both cases.
+test.describe('look-ahead preview always collapses to just its header', () => {
+  test('a tall active block leaves the preview collapsed to just its header', async ({ page }) => {
     await page.route('**/api/code**', async (route) => {
       const url = new URL(route.request().url())
       const name = url.searchParams.get('name')
@@ -70,9 +70,9 @@ test.describe('look-ahead preview collapses when the active card does not fit', 
     await expect(preview).not.toContainText('$y = 20')
   })
 
-  test('a short active block leaves the preview fully expanded', async ({ page }) => {
-    // Both sides small — well under the collapse threshold — so the preview
-    // keeps showing its usual description + diff body, unaffected.
+  test('a short active block also leaves the preview collapsed', async ({ page }) => {
+    // Both sides small — well within any screen — but the preview still
+    // collapses: it is no longer conditional on the active card's own height.
     await page.route('**/api/code**', async (route) => {
       const url = new URL(route.request().url())
       const name = url.searchParams.get('name')
@@ -95,7 +95,10 @@ test.describe('look-ahead preview collapses when the active card does not fit', 
 
     const cards = page.locator('[data-testid="block-column"] article')
     await expect(cards).toHaveCount(2)
+    const active = cards.nth(0)
     const preview = cards.nth(1)
-    await expect(preview.locator('[data-testid="code-diff"]')).toHaveCount(1)
+
+    await expect(active.locator('[data-testid="code-diff"]')).toHaveCount(1)
+    await expect(preview.locator('[data-testid="code-diff"]')).toHaveCount(0)
   })
 })

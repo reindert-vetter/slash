@@ -170,8 +170,9 @@ export function parseAutoWidthPx(clsString, el) {
 // startColumnResize wires up one drag gesture: mousedown on the handle starts
 // it, document-level mousemove/mouseup track the rest — the same
 // module-level-listener shape as home.mjs's own
-// `window.addEventListener('resize', ...)` for state.viewportH, needed
-// because the pointer routinely leaves the handle's own thin hit area mid-drag.
+// `window.addEventListener('resize', ...)` (re-checking applyDiffColumnFit),
+// needed because the pointer routinely leaves the handle's own thin hit area
+// mid-drag.
 // `autoWidthPxFn` is supplied by the caller (each kind knows its own
 // width-class function) and is only read once, on mouseup, to decide the
 // snap-back.

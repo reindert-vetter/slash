@@ -260,66 +260,37 @@ wins exactly as it already does over `activeSingleSided`/every other
 auto-width rule (the same accepted trade-off already documented in
 `column-resize.md`).
 
-## The look-ahead preview collapses when the active diff doesn't fit
+## The look-ahead preview always collapses to just its header
 
-`<main>` already scrolls and clips cleanly, so a too-tall active diff is never a
-clipping bug — it is a **space-allocation** question (see
-`.claude/docs/detail-layout.md` and `.claude/docs/footer.md`). The answer is to
-take the space back from the preview: when the active card's own diff doesn't fit
-the available height, the preview shrinks to just its header + meta row
-(category/title/status, `file:line` + approve pill) — no description, no diff
-body.
+Reviewer request ("laat blokken onder de huidige actieve blok alleen de
+header zien, dus niet de code zelf, maar de rest wel, gewoon ingeklapt enzo,
+dus ook veel kleiner"): every card visible below/next to the active one — the
+top-level look-ahead preview AND a drilled column's own preview
+(`drillPreviewColumns`) — shows only its header + meta row (category/title/
+status, `file:line` + approve pill), never the description or the diff body,
+**unconditionally**, regardless of how tall the active card next to it is.
 
-`Block()`'s **`collapsed`** opt drives that: a `() => boolean`, only ever passed
-truthy for a **preview** card, read from the card's own nested `${() => …}` slot
-(mirroring `activeGroup`/`hintsEnabled`) and defaulting to "never collapse".
+`Block()`'s **`collapsed`** opt drives that: a `() => boolean`, only ever
+passed for a **preview** card, read from the card's own nested `${() => …}`
+slot (mirroring `activeGroup`/`hintsEnabled`) and defaulting to "never
+collapse" for every other card. Both preview call sites (`home.mjs`'s
+`DetailPanel` `pair.forEach` and `drillPreviewColumns`) pass
+`collapsed: () => true` — still a function, for parity with the other opts,
+even though the value itself is now constant.
 
-`previewTooTallForActive(activeBlock)` (`home.mjs`) is the estimator, built
-entirely from already-known counts:
+**Superseded, on purpose:** this used to be conditional —
+`previewTooTallForActive(activeBlock)` estimated whether the active card's own
+diff would fit the screen (from `blockRows(active).length`, `state.viewportH`,
+and a plain-module-variable footer-height snapshot) and only collapsed the
+preview when it didn't. That whole estimator
+(`previewTooTallForActive`/`PREVIEW_ROW_PX`/`ACTIVE_CARD_CHROME_PX`/
+`PREVIEW_HEADER_RESERVE_PX`/`MAIN_TOP_PX`, `footerReservePxSnapshot`,
+`state.viewportH`) is removed now that every preview collapses unconditionally
+— there's nothing left to estimate.
 
-```
-needed    = ACTIVE_CARD_CHROME_PX (150) + blockRows(active).length * PREVIEW_ROW_PX (18)
-available = state.viewportH - MAIN_TOP_PX (24) - footerReservePxSnapshot - PREVIEW_HEADER_RESERVE_PX (110)
-```
-
-`PREVIEW_ROW_PX` mirrors `Footer.mjs`'s own per-code-row estimate (the same
-`text-[11px] leading-relaxed`), `ACTIVE_CARD_CHROME_PX` is a rough allowance for
-everything above the active card's diff body, and `PREVIEW_HEADER_RESERVE_PX` is
-the room the collapsed preview's own header + the connector between the two cards
-still need. A block whose code hasn't loaded returns `false` (never collapse on
-missing information).
-
-Two reactivity constraints, both bought with real bugs:
-
-- **The call sites pass a FUNCTION, never a resolved value.** The *available*
-  side genuinely depends on the live window size and on the footer's current
-  height — which itself varies with the focused unit, so it changes on every
-  navigation step. Calling `previewTooTallForActive` directly inside the outer
-  array-building closures (`pair.forEach`, the drilled-columns `.map()`) would
-  couple those whole closures — and thus every `Block()` card and all its Prism
-  highlighting — to that fast-changing state: the "outer closure vs. nested
-  reactive slot" pitfall in `.claude/rules/arrowjs-pitfalls.md`. `Block()`
-  invokes the closure from its own small slot instead.
-- **It reads `footerReservePxSnapshot`, a PLAIN module-level variable** — never
-  `state.footerVisible`/`footerUnit`/`footerExplain`, and not a reactive state
-  field merely *derived* from them either. This function runs from inside a
-  preview card's nested slot, and such a card can be torn down and rebuilt
-  mid-navigation (`drillToSibling` replacing a drilled column). A first attempt
-  stored it reactively, set from `updateFooter()` — itself a watch callback that
-  fires reentrantly as part of that very cascade — and crashed arrow.js outright
-  (`f[d] is not a function`, the LOCAL PATCH class of use-after-free), not merely
-  missed an update. A plain variable can never be a reactive dependency, exactly
-  like `codeRequested`/`blockRowsCache` elsewhere. **Accepted trade-off:** the
-  decision only re-evaluates when something else already re-runs that slot (a
-  resize bumping `state.viewportH`, or the card rebuilding), so the snapshot has
-  a small staleness window. Don't "fix" that by making it reactive.
-
-`state.viewportH` exists for the same reason and is kept in sync by a
-module-level `resize` listener; it is read only from inside passed-in function
-opts, so a resize never forces the outer closures to rebuild.
-
-Test: `tests/preview-collapse-when-active-tall.spec.mjs` (a fabricated 60-row
-active block collapses the preview; a short one leaves it fully expanded).
+Test: `tests/preview-collapse-when-active-tall.spec.mjs` (both a fabricated
+60-row active block and a short one leave the preview collapsed to just its
+header).
 
 ## A big-enough diff body gets a viewport-relative minimum height
 
@@ -335,7 +306,7 @@ description.
 removed-file banner's inner pane, the default two-pane split, and
 `unifiedCodeDiff`/`translationBlockView`'s own wrapper) gives that wrapper
 `min-h-[45vh]` — a **viewport-relative** floor via a plain CSS `vh` unit, not a
-fixed px value and not a `state.viewportH` read — once `rowCount` (the same
+fixed px value and not a live window-size read — once `rowCount` (the same
 `blockRows(b).length`/`translationRowUnits(b).length` each branch already
 computes) reaches `DIFF_FLOOR_MIN_ROWS` (20); below that it stays `min-h-0`,
 same as before. **Deliberately conditional on content size:** a genuinely
@@ -343,9 +314,9 @@ short diff (e.g. a 3-line constructor) must never be stretched to fill 45% of
 the screen just because it sits under a long description — that would trade
 one bad look (squeezed code) for another (a mostly-empty card). 20 rows is a
 rough gate, not a live measurement: at `DIFF_FLOOR_ROW_PX` (18, mirroring
-`home.mjs`'s own `PREVIEW_ROW_PX` per-row estimate) a 20-row diff already
-reaches roughly 45vh's own height unaided on a modest laptop screen, so the
-floor only ever kicks in for a diff that would want that much room anyway.
+`Footer.mjs`'s own per-row estimate) a 20-row diff already reaches roughly
+45vh's own height unaided on a modest laptop screen, so the floor only ever
+kicks in for a diff that would want that much room anyway.
 
 Since `rowCount` is a stable content fact (computed once per `codeDiff()`
 call, not live window size), this needs no reactive slot — it's a plain string
@@ -353,11 +324,11 @@ concatenated into the wrapper's otherwise-static `class` (the same
 "concatenate outside the template" pattern as `narrowed`/`widthCls`, see the
 attribute-interpolation rule in `.claude/rules/arrowjs-pitfalls.md`).
 
-`<main>` already scrolls/clips cleanly (see "The look-ahead preview collapses…"
-above), so growing the active card's diff this way simply pushes whatever
-comes after it (the look-ahead preview card) further down the page — an
-accepted, deliberate trade-off, not a layout bug. This floor applies to every
-card that goes through `codeDiff`/`unifiedCodeDiff`/`translationBlockView`,
-selected or preview alike; a preview card that's tall enough to trigger it is
-generally also the one `previewTooTallForActive` (above) already collapses to
-just its header.
+`<main>` already scrolls/clips cleanly (see "The look-ahead preview always
+collapses…" above), so growing the active card's diff this way simply pushes
+whatever comes after it (the look-ahead preview card) further down the page —
+an accepted, deliberate trade-off, not a layout bug. This floor applies to
+every card that goes through `codeDiff`/`unifiedCodeDiff`/`translationBlockView`,
+selected or preview alike — though every preview already collapses to just its
+header regardless (see above), so this floor only ever visibly stretches the
+active/selected card.

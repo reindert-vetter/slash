@@ -88,9 +88,6 @@ layer as `ProgressBar`, and `pointer-events-none` since nothing else sits at
 bottom-reservation (adds `PROGRESS_BAR_PX` on top of `footerBoxPx(state)`
 whenever the footer is visible) read the exact same figure — the same
 single-source-of-truth pattern `footerBoxPx` itself already uses.
-`footerReservePxSnapshot` (read by `previewTooTallForActive`, see the "Height"
-section above) also folds in `PROGRESS_BAR_PX` unconditionally, since the bar
-always consumes its own sliver of the bottom regardless of `footerVisible`.
 When the footer is hidden, `<main>` keeps its existing `bottom-6` (24px)
 gutter unchanged — the 3px bar comfortably fits inside that already-existing
 space, so no separate reservation was needed there. Test:
