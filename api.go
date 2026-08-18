@@ -171,6 +171,9 @@ func (s *server) handleBlockStats(w http.ResponseWriter, r *http.Request) {
 
 // handleCode serves GET /api/code?pr=N&file=...&class=...&name=... — the old
 // and new source of one block, read from the base/head worktrees of that PR.
+// Optional oldFile/oldClass/oldName redirect the OLD side to the block's
+// pre-move location/symbol (a renamed file, or a renamed/moved method — see
+// blockmove.go).
 // The file must either belong to a stored block of the PR, or — as a fallback
 // for e.g. a resolved method-call target in a file the PR didn't touch —
 // resolve to a real file inside the head worktree (guards arbitrary reads).
@@ -199,6 +202,16 @@ func (s *server) handleCode(w http.ResponseWriter, r *http.Request) {
 	if oldFile == "" || strings.Contains(oldFile, "..") {
 		oldFile = file
 	}
+	// Same for a renamed/moved METHOD (blockmove.go): the old side lives under
+	// its pre-move symbol. oldName empty → the block wasn't renamed, so the old
+	// side is read under the current symbol. oldClass is only honoured together
+	// with oldName, so a stray oldClass can never redirect the lookup on its own.
+	oldName, oldClass := q.Get("oldName"), class
+	if oldName == "" {
+		oldName, oldClass = name, class
+	} else {
+		oldClass = q.Get("oldClass")
+	}
 
 	repo := queryRepo(r)
 	ok, err := blockFileExists(s.db, repo, pr, file)
@@ -216,7 +229,7 @@ func (s *server) handleCode(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"file": file,
-		"old":  enrichedCodeSide(extractBlockSource(filepath.Join(baseDir, oldFile), oldFile, class, name)),
+		"old":  enrichedCodeSide(extractBlockSource(filepath.Join(baseDir, oldFile), oldFile, oldClass, oldName)),
 		"new":  enrichedCodeSide(extractBlockSource(filepath.Join(headDir, file), file, class, name)),
 	})
 }

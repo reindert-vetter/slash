@@ -16,6 +16,14 @@ line an empty filler row on the left, and changed lines get red (old) / green
 (new). Both panes render the same number of rows at the same row height, so they
 align vertically for free.
 
+**The old side does not always come from the same file/symbol as the new one.**
+`ensureCode` adds `oldFile`/`oldClass`/`oldName` to that request for a block the
+PR moved or renamed, and the server reads the base worktree at that pre-move
+location instead (`blockmove.go`, and "Moved or renamed block" in
+`.claude/docs/blocks-and-ingest.md`). Nothing here changes as a result — the two
+sides still arrive as plain old/new text — but a rename means the very first
+aligned row is a genuine del/ins pair (the declaration), not a context row.
+
 The line diff matches **whitespace-insensitively** (`diffLines` compares on
 `s.replace(/\s+/g,'')`, à la `git diff -w`): a line that was only re-indented
 still pairs with its counterpart and shows as a whitespace-only re-alignment

@@ -5348,6 +5348,13 @@ async function ensureCode(b) {
     // A renamed file's OLD source lives at its pre-rename path in the base
     // worktree — tell the server so the old diff side is read from there.
     if (b.oldFile && b.oldFile !== b.file) params.set('oldFile', b.oldFile)
+    // Same for a renamed/moved METHOD: its OLD source sits under the pre-move
+    // symbol in the base worktree (blockmove.go stamps oldName/oldClass). Sent
+    // as a pair — the server only honours oldClass together with oldName.
+    if (b.oldName) {
+      params.set('oldName', b.oldName)
+      params.set('oldClass', b.oldClass || '')
+    }
     const res = await fetch(`/api/code?${params}`)
     if (!res.ok) {
       b.code = { error: `code load failed: ${res.status}` }

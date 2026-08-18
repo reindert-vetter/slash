@@ -3,7 +3,7 @@
 // parent (home.mjs) mounts it and owns the keyboard navigation.
 
 import { html } from './vendor/arrow.js'
-import { removedLabel } from './Block.mjs'
+import { movedLabel, removedLabel } from './Block.mjs'
 import { avatarHTML, identityOf } from './avatar.mjs'
 import { paletteClass } from './blockPath.mjs'
 import { batch, batchItemFor, BATCH_STATE_LABEL, isBatchEligible } from './commentBatch.mjs'
@@ -970,7 +970,7 @@ function row(state, b, i) {
         title="${b.label}"
         >${b.label}</span
       >
-      ${() => removedPill(b)}
+      ${() => removedPill(b)} ${() => movedPill(b)}
       ${() => unpushedPill(state, b)}
       ${() => batchPill(b)}
       ${() => commentActivityPill(state, b)}
@@ -994,6 +994,24 @@ function removedPill(b) {
     <span
       data-testid="block-row-removed"
       class="shrink-0 rounded bg-rose-100 dark:bg-rose-500/20 px-1 py-0.5 text-[10px] font-bold text-rose-700 dark:text-rose-300"
+      >${label}</span
+    >
+  `
+}
+
+// movedPill is removedPill's sibling for a block the PR RENAMED or MOVED
+// (blockmove.go merged the old and new symbol into one block): the reviewer
+// sees "Hernoemd"/"Verplaatst" while scanning the startpoints, without having
+// to open the card. The WORD carries it — the pill colour is decoration (see
+// conventions.md). '' for everything else, same nested-slot shape as the pills
+// around it.
+function movedPill(b) {
+  const label = movedLabel(b)
+  if (!label) return ''
+  return html`
+    <span
+      data-testid="block-row-moved"
+      class="shrink-0 rounded bg-sky-100 dark:bg-sky-500/20 px-1 py-0.5 text-[10px] font-bold text-sky-700 dark:text-sky-300"
       >${label}</span
     >
   `

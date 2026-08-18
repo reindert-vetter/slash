@@ -655,11 +655,12 @@ query param that `ensureCode` passes along) and `blockstats.go`
 `baseDir/<oldFile>` instead of `baseDir/<file>` — otherwise a moved block would
 diff against an empty base path and count entirely as `added`.
 
-**Display** (`Block.mjs`): when `b.oldFile && b.oldFile !== b.file` the card shows
-the **old path (struck through) above** the new `file:line` line, in a stable
-`flex-col` root (the toggling `${() => …}` slot sits inside that root — the "bare
-toggling expression" pitfall, `.claude/rules/arrowjs-pitfalls.md`);
-`data-testid=block-old-path`.
+**Display** (`Block.mjs`): the card shows the **old path above** the new
+`file:line` line, marked `- oud` / `+ nieuw`. That stack is shared with the
+moved/renamed BLOCK below and lives in `blockOldPathLine(b)` — see "Moved or
+renamed block" for the markup and the arrow.js constraint. It used to be a
+strikethrough on the old path only; the two markers replaced it so a moved file
+and a moved method read identically (and like a diff).
 
 **Boundaries.** Best-effort: a move git doesn't recognise as a rename at its
 default `-M` threshold (~50% similarity) isn't in the map and simply stays
@@ -671,3 +672,116 @@ until a full re-ingest.
 Tests: `classify_test.go` (`TestRenamePairsBlocks`), `blockstats_test.go`
 (`TestBlockChangedRowCountReadsRenamedOldPath`), `tests/rename-file.spec.mjs` (PR
 104 fixture `tests/fixtures/rename-blocks.json`).
+
+## Moved or renamed block (`blockmove.go`)
+
+A method the PR **renamed** — or **moved** to another file/class — is stored as
+**one** block, not as a loose `removed` + `added` pair. Without this the
+reviewer gets two half-stories ("this code is gone", "this code is new") and no
+diff of what actually changed inside the body, which is the only interesting
+part of a rename.
+
+`classify.go` cannot do this. It pairs old and new blocks on `symbol()` alone, so
+a changed name is by definition two blocks; and it runs **per file** (one worker
+per file, `parseFiles`), so it can never see a method that landed elsewhere.
+Detection therefore runs **once, PR-wide**, over the finished block list —
+`matchMovedBlocks` in **`blockmove.go`**, called from `parseFiles` just before the
+stable sort, so **both** ingest paths (full ingest and delta refresh) get it.
+
+### How a pair is found
+
+Over the PR's unmatched `removed` × `added` blocks, in three widening steps so a
+large PR can't turn ingest into an O(n·m·lines²) crawl:
+
+1. **Size bound**, implied by the threshold rather than chosen: with
+   `sim = 2·eq/(n+m)` and `eq ≤ min(n,m)`, a pair can only reach 0.75 when
+   `max ≤ (2/0.75 − 1)·min` = 5/3·min. More lopsided → rejected without reading a
+   line (`moveSizeRatio`).
+2. **Multiset bound**: the number of shared whitespace-normalized lines, ignoring
+   order, is a hard ceiling on the LCS — so a pair failing 0.75 here can never
+   pass the real comparison. Exact-safe pruning, O(n+m), and it removes nearly
+   everything in practice.
+3. **The real similarity**, `2·eq/(n+m)` over `diffLines` (the same
+   whitespace-insensitive LCS the diff itself uses), threshold
+   **`moveSimilarity` = 0.75**. Capped at **`moveMaxPairs` = 2000** comparisons,
+   taken in upper-bound order — hitting the cap means a rename goes undetected,
+   never that a wrong pair is made.
+
+Bodies are compared with blank and brace-only lines dropped, and a body under
+**`moveMinLines` = 5** compared lines never takes part: two unrelated trivial
+accessors sharing a one-line body otherwise score a perfect match.
+
+**Conservative on purpose** — a false pair *hides* a genuinely removed method
+behind a coincidentally similar new one, which is worse than missing a rename.
+Measured on PR 13394: `getIndexCommissionsForPartner` → `getAsPartner` scores
+0.82 and pairs; its sibling `getIndexCommissionsForTenant` → `getAsTenant`
+scores 0.743 and deliberately does **not**. Raising the threshold is cheap;
+lowering it is what needs evidence.
+
+Everything is deterministic — no AI, no clock, and every ordering (candidates,
+scored pairs, greedy assignment) breaks ties on block id, never on map iteration
+order. A re-ingest must produce the same blocks, or a block id moves out from
+under the comments and approvals hanging off it.
+
+### What a pair becomes
+
+The **new** block survives, `Status = modified`, gaining the old block's identity
+in `OldFile`/`OldClass`/`OldName`/`OldLine` (`model.go` → columns
+`old_class`/`old_name`/`old_line`, light `ALTER TABLE` migrations like
+`old_file`). `Class`/`Name`/`Line` stay the head ones, so the block id keeps
+living on the head symbol. The old block is **dropped** — its "Verwijderd" row
+disappears from the startpoints, and anything keyed to its block id (approvals,
+comments) is orphaned. That is accepted: the code is presented anew as an
+old-vs-new diff.
+
+`mergeMovedBlock` takes the old block's **`oldPath()`**, not its `File`: inside a
+git-renamed file both sides already carry the new path in `File` and the
+pre-rename one in `OldFile`. `FileDeleted` is deliberately **not** inherited —
+the whole point is that this code did not disappear.
+
+`Block.oldSymbol()` mirrors `Block.oldPath()`, and the two together are what make
+the old side readable: `/api/code` (`oldFile`/`oldClass`/`oldName` query params,
+sent by `ensureCode` in `home.mjs`; `oldClass` is only honoured together with
+`oldName`) and `blockAlignedRows` (`blockstats.go`) read the base worktree at the
+pre-move path AND symbol. Miss either and the old side comes back empty and the
+whole body counts as one big addition.
+
+### Display
+
+`Block.mjs` exports three helpers, all reused by `BlockList.mjs`:
+
+- **`movedLabel(b)`** — the word: "Hernoemd" when the name changed, "Verplaatst"
+  for a pure move. Null for every other block, *including* a bare git-detected
+  file rename (no `oldName`), which keeps reading as its plain status word. The
+  word carries the meaning; the badge colour is decoration (the reviewer is
+  colourblind). Shown as the card's status badge and as `movedPill`
+  (`data-testid=block-row-moved`) in the startpoint list.
+- **`blockOldLabel(b)`** — the pre-move `Class::method`, stacked as `- oud` above
+  the card title's `+ nieuw` (`data-testid=block-old-label`). Null when the
+  symbol is unchanged. A cross-file move that keeps its name but changes class
+  still shows it — the class *is* the change.
+- **`blockOldPathLine(b)`** — the pre-move `path:line`, stacked as `- oud` above
+  the card's `+ nieuw` path (`data-testid=block-old-path`). Covers both sources
+  of a move: a git file rename (`oldFile` alone) and a method-level move
+  (`oldLine`, plus `oldFile` when it landed in another file).
+
+Both stacks are a `${() => …}` slot inside a **stable** `flex-col` element root,
+never a bare toggling expression — the pitfall in
+`.claude/rules/arrowjs-pitfalls.md`. The `+` prefix on the new line is a plain
+string binding (`(blockOldLabel(b) ? '+ ' : '') + b.label`), so no extra
+conditional template is involved.
+
+### Boundary: the delta refresh sees only its own files
+
+`refreshIngestDelta` rescans only the files changed since the last ingest, so
+`matchMovedBlocks` only sees those files' blocks. A move whose source **and**
+target are both in that delta pairs normally (the usual case — a move touches
+both files). If only the target is, the old `removed` block stays in the DB as a
+loose row until a full "Opnieuw genereren", because `upsertPRFileBlocks` is
+scoped to the rescanned files and never touches the source file's rows.
+
+Tests: `blockmove_test.go` (same-file rename, cross-file move, best-of-several
+candidates, a below-threshold pair staying split, the tiny-method guard, and the
+old side read through `blockAlignedRows`) and `tests/block-moved.spec.mjs` (PR
+122 fixture `tests/fixtures/blockmove-blocks.json` +
+`materializeBlockMoveWorktrees`).

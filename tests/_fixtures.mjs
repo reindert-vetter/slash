@@ -289,6 +289,15 @@ function seed(db) {
     ['seed', '-db', db, '-from', 'tests/fixtures/filedeleted-blocks.json'],
     { stdio: 'ignore', env: SEED_ENV },
   )
+  // Moved/renamed-block fixture (PR 122, block-moved.spec.mjs): one method
+  // renamed within its file and one moved to another file/class — both stored
+  // as a SINGLE block carrying its pre-move identity in oldFile/oldClass/
+  // oldName/oldLine, exactly as blockmove.go's PR-wide detection emits them
+  // during a real ingest. Worktrees: materializeBlockMoveWorktrees.
+  execFileSync(BIN, ['seed', '-db', db, '-from', 'tests/fixtures/blockmove-blocks.json'], {
+    stdio: 'ignore',
+    env: SEED_ENV,
+  })
   // Shift+arrow range-select fixture (PR 102, range-select.spec.mjs): two
   // same-file blocks — `execute` changes four contiguous lines (worktree
   // materialized in _setup.mjs, materializeRangeSelectWorktrees) so a

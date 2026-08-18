@@ -14,18 +14,20 @@ test.describe('PR Review Tree — renamed-file path display', () => {
 
     // Block 0 (file/line order) is InvoiceService::total — the moved file.
     const oldPath = page.locator('[data-testid="block-old-path"]').first()
-    await expect(oldPath).toHaveText('app/Services/Legacy/InvoiceService.php')
-    // Struck-through, rendered as its own line (muted) above the new path.
-    await expect(oldPath).toHaveClass(/line-through/)
+    // Marked `- oud` / `+ nieuw`, the same stack a renamed/moved BLOCK uses
+    // (blockmove.go) — it replaced an old-path-only strikethrough so a moved
+    // file and a moved method read identically, and like a diff. No `:line`
+    // here: a git file rename records no pre-move LINE, only a path.
+    await expect(oldPath).toHaveText('- app/Services/Legacy/InvoiceService.php')
 
     // The new path + line sits directly below, in the same stacked container.
     const container = oldPath.locator('..')
-    await expect(container).toContainText('app/Services/New/InvoiceService.php:12')
+    await expect(container).toContainText('+ app/Services/New/InvoiceService.php:12')
 
     // Old path is visually above the new path.
     const oldBox = await oldPath.boundingBox()
     const newLine = container.locator('span', {
-      hasText: 'app/Services/New/InvoiceService.php:12',
+      hasText: '+ app/Services/New/InvoiceService.php:12',
     })
     const newBox = await newLine.boundingBox()
     expect(oldBox.y).toBeLessThan(newBox.y)

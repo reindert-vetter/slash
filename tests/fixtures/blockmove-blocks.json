@@ -1,0 +1,31 @@
+[
+  {
+    "pr": 122,
+    "file": "app/Repositories/CommissionRepository.php",
+    "class": "CommissionRepository",
+    "name": "getAsPartner",
+    "category": "REPOSITORY",
+    "line": 9,
+    "endLine": 19,
+    "status": "modified",
+    "side": "new",
+    "oldClass": "CommissionRepository",
+    "oldName": "getIndexCommissionsForPartner",
+    "oldLine": 7
+  },
+  {
+    "pr": 122,
+    "file": "app/Queries/CommissionQuery.php",
+    "class": "CommissionQuery",
+    "name": "movedAway",
+    "category": "QUERY",
+    "line": 7,
+    "endLine": 16,
+    "status": "modified",
+    "side": "new",
+    "oldFile": "app/Repositories/CommissionRepository.php",
+    "oldClass": "CommissionRepository",
+    "oldName": "movedAway",
+    "oldLine": 18
+  }
+]

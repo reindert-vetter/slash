@@ -65,6 +65,13 @@ func parseFiles(pr int, paths []string, renames map[string]string, baseDir, head
 		all = append(all, r.blocks...)
 	}
 
+	// PR-wide moved/renamed-block detection, deliberately AFTER every file has
+	// been classified: classifyFile pairs old and new blocks on symbol() alone
+	// and only ever sees one file, so a method that was renamed — or moved to
+	// another file/class entirely — reaches this point as a loose removed +
+	// added pair. See blockmove.go.
+	all = matchMovedBlocks(all, baseDir, headDir)
+
 	// Stable order for deterministic /api/blocks output.
 	sort.SliceStable(all, func(i, j int) bool {
 		if all[i].File != all[j].File {

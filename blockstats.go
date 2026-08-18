@@ -25,9 +25,11 @@ import (
 // the two sides and applies the display transform, so no consumer can drift out of
 // that space:
 //
-//   - The OLD side is read from the block's pre-rename path (b.oldPath()) so a
-//     moved file is diffed against where its source actually was in the base
-//     worktree; b.oldPath() == b.File for a non-renamed block.
+//   - The OLD side is read from the block's pre-move path AND pre-move symbol
+//     (b.oldPath() / b.OldClass+b.OldName, mirroring b.oldSymbol()) so a moved
+//     file — or a renamed/moved METHOD, see blockmove.go — is diffed against
+//     where its source actually was in the base worktree. Both fall back to the
+//     block's current path/symbol when the PR didn't move it.
 //   - Both sides go through enrichedCodeSide (code.go): fold a leading PHPDoc's
 //     @return/@param types into the signature, else drop the leading doc outright,
 //     then trim one wholly-blank trailing line. Exactly what /api/code applies for
@@ -41,7 +43,11 @@ import (
 // line counts still line up with Start.
 func blockAlignedRows(baseDir, headDir string, b Block) (rows []alignRow, oldSide, newSide codeSide) {
 	oldRel := b.oldPath()
-	oldSide = enrichedCodeSide(extractBlockSource(filepath.Join(baseDir, oldRel), oldRel, b.Class, b.Name))
+	oldClass, oldName := b.Class, b.Name
+	if b.OldName != "" {
+		oldClass, oldName = b.OldClass, b.OldName
+	}
+	oldSide = enrichedCodeSide(extractBlockSource(filepath.Join(baseDir, oldRel), oldRel, oldClass, oldName))
 	newSide = enrichedCodeSide(extractBlockSource(filepath.Join(headDir, b.File), b.File, b.Class, b.Name))
 	oldText, newText := dedent4(oldSide.Text, newSide.Text)
 	return alignRows(oldText, newText), oldSide, newSide

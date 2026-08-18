@@ -43,7 +43,18 @@ type Block struct {
 	// stays the NEW path (so the block id/diff key live on the head path); the
 	// old source is read from OldFile in the base worktree (/api/code,
 	// blockstats). See .claude/docs/blocks-and-ingest.md.
-	OldFile  string `json:"oldFile"`
+	OldFile string `json:"oldFile"`
+	// OldClass/OldName/OldLine are the pre-move identity of a block the PR
+	// RENAMED or MOVED: the same body reappearing under a different symbol
+	// (and possibly in a different file/class). Detected PR-wide after
+	// classification, see matchMovedBlocks in blockmove.go. Empty for every
+	// other block. Class/Name/Line stay the NEW ones (so the block id lives on
+	// the head symbol); the OLD diff side is read from oldPath()+oldSymbol().
+	// OldLine is display-only (the `- old` line of the stacked path header).
+	// See .claude/docs/blocks-and-ingest.md.
+	OldClass string `json:"oldClass"`
+	OldName  string `json:"oldName"`
+	OldLine  int    `json:"oldLine"`
 	Side     string `json:"side"`     // new|old
 	Approved bool   `json:"approved"` // approved by the reviewer?
 	Label    string `json:"label"`    // "Class::method" or "name" — for the frontend
@@ -129,6 +140,27 @@ func (b Block) oldPath() string {
 		return b.OldFile
 	}
 	return b.File
+}
+
+// oldSymbol is the symbol this block's OLD source is stored under in the base
+// worktree: its pre-move symbol when the PR renamed/moved it, else its current
+// one. Mirror of oldPath() — used by /api/code and blockstats so the old diff
+// side is read from where the code actually was before the move.
+func (b Block) oldSymbol() string {
+	name, class := b.Name, b.Class
+	if b.OldName != "" {
+		name, class = b.OldName, b.OldClass
+	}
+	if class != "" {
+		return class + "::" + name
+	}
+	return name
+}
+
+// moved reports whether the PR renamed or moved this block — the same body
+// reappearing under a different symbol and/or in a different file.
+func (b Block) moved() bool {
+	return b.OldName != "" && (b.OldName != b.Name || b.OldClass != b.Class || b.oldPath() != b.File)
 }
 
 // symbol is the key old and new blocks are matched on.

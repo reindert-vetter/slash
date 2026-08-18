@@ -94,6 +94,40 @@ export function removedLabel(b) {
   return null
 }
 
+// movedLabel returns the Dutch word for a block the PR RENAMED or MOVED — the
+// same body reappearing under a different symbol and/or in a different
+// file/class (blockmove.go stamps b.oldName/b.oldClass/b.oldLine/b.oldFile on
+// the merged block). "Hernoemd" when the name itself changed, "Verplaatst" for
+// a pure move under the same name. Null for every other block, INCLUDING a
+// bare git-detected FILE rename (no b.oldName) — that one keeps reading as the
+// plain status word, exactly as before. The word carries the meaning; the badge
+// colour is decoration (the reviewer is colourblind, see conventions.md).
+export function movedLabel(b) {
+  if (!b || !b.oldName) return null
+  return b.oldName !== b.name ? 'Hernoemd' : 'Verplaatst'
+}
+
+// blockOldLabel is the pre-move `Class::method` of a renamed/moved block — the
+// `- oud` line stacked above the card's own title. Null when nothing about the
+// symbol changed (a pure cross-file move, or a plain block).
+export function blockOldLabel(b) {
+  if (!b || !b.oldName) return null
+  const label = b.oldClass ? b.oldClass + '::' + b.oldName : b.oldName
+  return label === (b.label || '') ? null : label
+}
+
+// blockOldPathLine is the pre-move `path:line` of a renamed/moved block — the
+// `- oud` line stacked above the card's own path. Covers both sources of a
+// move: a git-detected FILE rename (b.oldFile, which may be the only thing set)
+// and blockmove.go's method-level move (b.oldLine, and b.oldFile when it landed
+// in another file). Null when there is nothing different to show.
+export function blockOldPathLine(b) {
+  if (!b) return null
+  const path = b.oldFile && b.oldFile !== b.file ? b.oldFile : b.file
+  if (path === b.file && !b.oldLine) return null
+  return b.oldLine ? path + ':' + b.oldLine : path
+}
+
 // blockLabel returns the full display label for a block (or a plain label
 // string): `class::method`, falling back to just the bare name when the block
 // has no class ("class::method everywhere"). Shared by the drill-hint chips
@@ -111,6 +145,11 @@ export function blockLabel(x) {
 // diff banner) — deliberately louder than the plain status word.
 const REMOVED_BADGE_CLS =
   'shrink-0 rounded px-1.5 py-0.5 text-xs font-bold bg-rose-100 dark:bg-rose-500/20 text-rose-700 dark:text-rose-300'
+
+// Same shape for a renamed/moved block (movedLabel) — the WORD says what
+// happened, this is only its badge.
+const MOVED_BADGE_CLS =
+  'shrink-0 rounded px-1.5 py-0.5 text-xs font-bold bg-sky-100 dark:bg-sky-500/20 text-sky-700 dark:text-sky-300'
 
 // singleSide returns which pane to show when a block is one-sided: an added block
 // has no old source (show only 'right'/new), a removed block has no new source
@@ -1106,36 +1145,58 @@ export default function Block(b, opts = {}) {
           >${() => b.category}</span
         >
         ${() => pathPills(b)}
-        <h2 class="flex-1 truncate font-mono text-sm font-semibold text-slate-800 dark:text-zinc-200">
-          ${() => b.label}
-        </h2>
+        <span class="flex min-w-0 flex-1 flex-col gap-0.5">
+          ${() =>
+            // Renamed/moved method: the OLD symbol above the new one, marked
+            // `-` / `+` (same stacking as the path below). The nested toggling
+            // slot lives inside this stable flex-col root — never a bare keyed
+            // toggling expression, see the pitfall in
+            // .claude/rules/arrowjs-pitfalls.md.
+            blockOldLabel(b)
+              ? html`<span
+                  data-testid="block-old-label"
+                  class="truncate font-mono text-xs font-medium text-rose-600 dark:text-rose-400"
+                  >- ${blockOldLabel(b)}</span
+                >`
+              : ''}
+          <h2 class="truncate font-mono text-sm font-semibold text-slate-800 dark:text-zinc-200">
+            ${() => (blockOldLabel(b) ? '+ ' : '') + (b.label || '')}
+          </h2>
+        </span>
         <span
           data-testid="block-status-badge"
           class="${() =>
             // One stable span whose whole class/text flip together (whole-value
             // function bindings, see conventions.md): a prominent rose badge for
             // deleted code (fileDeleted / removed), else the plain status word.
-            removedLabel(b) ? REMOVED_BADGE_CLS : 'shrink-0 text-xs font-medium ' + statusColor(b.status)}"
-          >${() => removedLabel(b) || b.status}</span
+            removedLabel(b)
+              ? REMOVED_BADGE_CLS
+              : movedLabel(b)
+                ? MOVED_BADGE_CLS
+                : 'shrink-0 text-xs font-medium ' + statusColor(b.status)}"
+          >${() => removedLabel(b) || movedLabel(b) || b.status}</span
         >
       </div>
 
       <div class="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2">
         <span class="flex flex-col gap-0.5 font-mono text-xs">
           ${() =>
-            // Renamed file: show the OLD path above the NEW one. The nested
-            // toggling slot lives inside this stable flex-col root (never a
-            // bare keyed toggling expression) — see the "kale toggelende
-            // expressie" pitfall in .claude/rules/conventions.md.
-            b.oldFile && b.oldFile !== b.file
+            // Renamed file OR renamed/moved method: show the OLD path:line
+            // above the NEW one, marked `-` / `+` (not a strikethrough — the
+            // two markers read the same way as the symbol stack above and as a
+            // diff itself). The nested toggling slot lives inside this stable
+            // flex-col root (never a bare keyed toggling expression) — see the
+            // "kale toggelende expressie" pitfall in
+            // .claude/rules/arrowjs-pitfalls.md.
+            blockOldPathLine(b)
               ? html`<span
                   data-testid="block-old-path"
-                  class="text-slate-400 line-through dark:text-zinc-600"
-                  >${b.oldFile}</span
+                  class="font-mono text-rose-600 dark:text-rose-400"
+                  >- ${blockOldPathLine(b)}</span
                 >`
               : ''}
           <span class="font-mono text-slate-500 dark:text-zinc-500"
-            >${() => b.file + ':' + b.line}</span
+            >${() => (blockOldPathLine(b) ? '+ ' : '') + b.file + ':' + b.line}</span
           >
         </span>
         <span class="flex-1"></span>

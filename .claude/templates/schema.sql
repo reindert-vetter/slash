@@ -19,6 +19,9 @@ CREATE TABLE IF NOT EXISTS blocks (
                                            -- (absent in the head worktree, git's "+++ /dev/null")
   old_file   TEXT NOT NULL DEFAULT '',   -- pre-rename path if the PR moved this block's file
                                           -- (git-detected rename); '' otherwise. file stays the NEW path
+  old_class  TEXT NOT NULL DEFAULT '',   -- pre-move class/name/line if the PR RENAMED or MOVED this
+  old_name   TEXT NOT NULL DEFAULT '',   -- block (same body under a different symbol, blockmove.go);
+  old_line   INTEGER NOT NULL DEFAULT 0, -- '' / 0 otherwise. class/name/line stay the NEW ones
   side       TEXT NOT NULL DEFAULT 'new',-- new|old: which worktree line/end_line refer to
   pr         INTEGER NOT NULL DEFAULT 0, -- PR number this block belongs to
   approved   INTEGER NOT NULL DEFAULT 0, -- 0/1: approved by the reviewer?

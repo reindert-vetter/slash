@@ -61,8 +61,107 @@ export default function globalSetup() {
   materializeWhenScopeWorktrees()
   materializeSignatureRefWorktrees()
   materializeScopeClassRefWorktrees()
+  materializeBlockMoveWorktrees()
   materializeSettings()
   materializeOpsRepoWorktrees()
+}
+
+// materializeBlockMoveWorktrees writes the base/head worktrees for the
+// moved/renamed-block fixture (PR 122, tests/block-moved.spec.mjs). Two moves
+// in one PR, both of which blockmove.go collapses into a single block during a
+// real ingest and which tests/fixtures/blockmove-blocks.json seeds directly:
+//
+//   - getIndexCommissionsForPartner -> getAsPartner, same file, one changed
+//     line in the body (the docblock and the const above it also push its
+//     declaration from line 7 to line 9, so the stacked `- path:line` really
+//     differs from the `+ path:line` below it);
+//   - CommissionRepository::movedAway -> CommissionQuery::movedAway, same body,
+//     a different FILE and class — the cross-file case classify.go can never
+//     see, since it runs per file.
+//
+// The head repository file deliberately no longer contains movedAway: its old
+// side must be read from the base worktree's CommissionRepository, which is
+// exactly what the oldFile/oldName round trip through /api/code is for.
+function materializeBlockMoveWorktrees() {
+  const write = worktreeWriter(122)
+  const repo = 'app/Repositories/CommissionRepository.php'
+  const query = 'app/Queries/CommissionQuery.php'
+  const movedBody = `        $rows = Revenue::query()
+            ->where('tenant_id', $id)
+            ->whereNotNull('paid_at')
+            ->orderBy('paid_at', 'desc')
+            ->get();
+
+        return $rows->all();`
+
+  write(
+    'base',
+    repo,
+    `<?php
+
+namespace App\\Repositories;
+
+class CommissionRepository
+{
+    public function getIndexCommissionsForPartner(int $id): array
+    {
+        $rows = Commission::query()
+            ->where('partner_id', $id)
+            ->where('amount', '>', 0)
+            ->orderBy('created_at', 'desc')
+            ->get();
+
+        return $rows->all();
+    }
+
+    public function movedAway(int $id): array
+    {
+${movedBody}
+    }
+}
+`,
+  )
+  write(
+    'head',
+    repo,
+    `<?php
+
+namespace App\\Repositories;
+
+class CommissionRepository
+{
+    public const DEFAULT_LIMIT = 25;
+
+    /** Commissions of one partner. */
+    public function getAsPartner(int $id): array
+    {
+        $rows = Commission::query()
+            ->where('partner_id', $id)
+            ->where('amount', '>', 0)
+            ->orderBy('created_at', 'asc')
+            ->get();
+
+        return $rows->all();
+    }
+}
+`,
+  )
+  write(
+    'head',
+    query,
+    `<?php
+
+namespace App\\Queries;
+
+class CommissionQuery
+{
+    public function movedAway(int $id): array
+    {
+${movedBody}
+    }
+}
+`,
+  )
 }
 
 // materializeOpsRepoWorktrees writes the base/head worktrees for the SECOND

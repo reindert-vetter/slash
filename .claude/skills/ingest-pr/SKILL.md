@@ -1,6 +1,6 @@
 ---
 name: ingest-pr
-description: Ingest a GitHub PR into blocks — fetch the PR, set up base/head worktrees, parse the changed PHP files into functions/methods, classify them as added/removed/modified, and store them in the SQLite blocks table. Use when adding to or debugging the PR→blocks pipeline (ingest.go, phpscan.go, classify.go, gh.go, parse_pool.go).
+description: Ingest a GitHub PR into blocks — fetch the PR, set up base/head worktrees, parse the changed PHP files into functions/methods, classify them as added/removed/modified, and store them in the SQLite blocks table. Use when adding to or debugging the PR→blocks pipeline (ingest.go, phpscan.go, classify.go, blockmove.go, gh.go, parse_pool.go).
 ---
 
 # Ingesting a PR into blocks
@@ -35,7 +35,15 @@ function/method, or the whole file if parsing fails). The data lands in the
    new = `added`; only in old = `removed` (`side='old'`); in both and the span
    touches a changed line = `modified`; otherwise skip. The category tag
    comes from the path (`categoryFor`).
-7. **Storing** — `replacePRBlocks`: one transaction,
+7. **Pairing moves (PR-wide)** — `matchMovedBlocks` (`blockmove.go`), the last
+   step of `parseFiles`: a method the PR renamed, or moved to another
+   file/class, arrives here as a loose `removed` + `added` pair (step 6 pairs
+   on symbol only, and per file). Bodies ≥ 75% identical collapse into ONE
+   `modified` block carrying `oldFile`/`oldClass`/`oldName`/`oldLine`.
+   Deterministic and deliberately conservative — see "Moved or renamed block"
+   in `.claude/docs/blocks-and-ingest.md` before touching the threshold or the
+   cost ceilings.
+8. **Storing** — `replacePRBlocks`: one transaction,
    `DELETE FROM blocks WHERE pr=?` followed by a bulk INSERT (idempotent
    re-ingest).
 
