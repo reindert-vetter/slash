@@ -13048,14 +13048,17 @@ function DetailPanel(state) {
             // true for the preview, unconditionally — see the "look-ahead
             // preview" note above drillPreviewColumns.
             collapsed: i !== sel ? () => true : undefined,
-            // Only the look-ahead PREVIEW card ever gets a cap — the 'fit'-stand
-            // counterpart of the activeSingleSided override above (see
-            // fitCapCharsFor's own doc comment): that override only narrows via
-            // 'unified' and only fires for a one-sided active card, so it does
-            // nothing in 'fit' or when both the active and preview card are
-            // two-sided PHP blocks with a different longest line. Same lazy-
-            // closure discipline as collapsed right above.
-            capFitChars: i !== sel ? () => fitCapCharsFor(curBlock() || {}, topLevelActiveUnit(curBlock())) : undefined,
+            // Only the look-ahead PREVIEW card ever gets a FIXED width — a
+            // flat MIN_CONTENT_WIDTH_CHARS floor, never content-driven,
+            // regardless of file type or the preview's own longest line (see
+            // Block()'s own `narrowFixed` doc comment). Reviewer decision:
+            // since this preview always collapses to just its header anyway
+            // (right above), there is no reason for it to ever be wider than
+            // the active card next to it — this supersedes the older
+            // activeSingleSided/capFitChars mechanism for THIS call site
+            // (still content-driven-but-capped for drillPreviewColumns,
+            // unchanged, see .claude/docs/diff-card.md).
+            narrowFixed: i !== sel ? () => true : undefined,
             // The key encodes (a) whether this card is the *selected* one or the
             // look-ahead *preview*, (b) whether its code has loaded yet, and (c)
             // whether the keyboard is actually focused on it (vs. a drilled

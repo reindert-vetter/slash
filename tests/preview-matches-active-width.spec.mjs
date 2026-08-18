@@ -230,4 +230,71 @@ test.describe('PR Review Tree — look-ahead preview matches a one-sided active 
       expect(widths.previewWidth, `stand=${stand}`).toBeLessThanOrEqual(widths.activeWidth + 1)
     }
   })
+
+  // Direct-mount unit test: the top-level look-ahead preview's `narrowFixed`
+  // opt (Block.mjs/home.mjs's DetailPanel `pair.forEach`) — reviewer
+  // decision: this preview's width is now a FLAT MIN_CONTENT_WIDTH_CHARS
+  // (80) floor, never content-driven, since it always collapses to just its
+  // header anyway (no diff body ever renders). Scoped to ONLY that call
+  // site — a drilled column's own look-ahead preview (drillPreviewColumns)
+  // is untouched and keeps its existing content-driven-but-capped width.
+  test('narrowFixed gives the main-column preview a flat width regardless of content, but leaves an ordinary card content-driven', async ({
+    page,
+  }) => {
+    await page.goto('/pr/105')
+    await appReady(page)
+
+    const cls = await evaluateSettled(page, async () => {
+      const { reactive } = await import('/src/vendor/arrow.js')
+      const Block = (await import('/src/Block.mjs')).default
+      const wideLine =
+        'return $this->fooBarValuesFromRequestPayloadDataThatIsGenuinelyMuchLongerThanEightyCharactersWide($a, $b, $c);'
+      const makeBlock = (name, line) =>
+        reactive({
+          category: 'ACTION',
+          label: 'Foo::' + name,
+          status: 'modified',
+          file: 'app/Foo.php',
+          line,
+          name,
+          class: 'Foo',
+          approved: false,
+          code: {
+            old: { start: line, end: line + 2, text: `public function ${name}(): int {\n    return 1;\n}` },
+            new: { start: line, end: line + 2, text: `public function ${name}(): int {\n    ${wideLine}\n}` },
+          },
+        })
+
+      const fixedHost = document.createElement('div')
+      fixedHost.id = 'narrow-fixed-preview-host'
+      document.body.appendChild(fixedHost)
+      Block(makeBlock('fixedPreview', 200), {
+        viewMode: () => 'fit',
+        preview: true,
+        collapsed: () => true,
+        narrowFixed: () => true,
+      })(fixedHost)
+
+      const contentDrivenHost = document.createElement('div')
+      contentDrivenHost.id = 'narrow-fixed-not-set-host'
+      document.body.appendChild(contentDrivenHost)
+      // Same wide content, same 'fit' stand, but no narrowFixed opt at all —
+      // mirrors an ordinary active card (and drillPreviewColumns' own
+      // preview, which never passes narrowFixed either).
+      Block(makeBlock('contentDriven', 210), { viewMode: () => 'fit' })(contentDrivenHost)
+
+      return {
+        fixed: document.querySelector('#narrow-fixed-preview-host article').className,
+        contentDriven: document.querySelector('#narrow-fixed-not-set-host article').className,
+      }
+    })
+
+    expect(cls.fixed).toMatch(/w-\[calc\(80ch_\+_2rem\)\]/)
+    // The content-driven card, given the exact same wide line, grows well
+    // past the flat 80-character floor — proof narrowFixed is what's
+    // actually suppressing the growth above, not some property of the
+    // fixture itself.
+    const contentDrivenMatch = /w-\[calc\((\d+)ch_\+_2rem\)\]/.exec(cls.contentDriven)
+    expect(Number(contentDrivenMatch[1])).toBeGreaterThan(80)
+  })
 })

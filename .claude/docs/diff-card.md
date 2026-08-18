@@ -403,6 +403,36 @@ Test: `tests/preview-collapse-when-active-tall.spec.mjs` (both a fabricated
 60-row active block and a short one leave the preview collapsed to just its
 header).
 
+### The MAIN-COLUMN look-ahead preview also gets a FIXED width, never content-driven
+
+Scope: **only** the top-level look-ahead preview in the block column
+(`DetailPanel`'s `pair.forEach`, `i !== sel`, `home.mjs`) — **not**
+`drillPreviewColumns`' preview under a drilled Underlying-code column, which
+keeps its existing content-driven-but-capped width unchanged (see
+`fitCapCharsFor`/`capFitChars` below). Reviewer decision: since this preview
+always collapses to just its header anyway (above — no diff body ever
+renders, so its own longest line is never even visible), there's no reason
+for its width to follow its own content at all any more. It now gets a flat
+`MIN_CONTENT_WIDTH_CHARS` (80) + the same `+2rem` chrome every content-driven
+card uses — `w-[calc(80ch_+_2rem)]` — for every file type, regardless of
+content or of the active card's own width.
+
+`Block()`'s **`narrowFixed`** opt drives this: a `() => boolean`, checked
+FIRST in `widthCls` (`Block.mjs`), before the `isPhpFile`/`contentWidthCls`/
+`boundedWrapWidthCls` branch — so it short-circuits for any file type, not
+just PHP. Only `DetailPanel`'s `pair.forEach` passes
+`narrowFixed: i !== sel ? () => true : undefined`; every other card
+(including `drillPreviewColumns`') defaults to never-fixed, unaffected.
+
+**Supersedes the `activeSingleSided`/`capFitChars`/`fitCapCharsFor` mechanism
+for this ONE call site** (the "preview must never be wider than the active
+card" guarantee, see `fitCapCharsFor`/`capFitChars` below) — a flat, content-
+independent width can never exceed anything, so the cap is now unreachable
+dead code there and was removed (`capFitChars` no longer passed at this call
+site). `drillPreviewColumns` still needs the older, content-driven-but-capped
+mechanism (its own preview is NOT scoped by this decision) and is otherwise
+unchanged.
+
 ## A big-enough diff body gets a viewport-relative minimum height
 
 `Block()`'s description strip (`block-description`, above the diff) has no

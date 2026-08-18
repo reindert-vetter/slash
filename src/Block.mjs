@@ -518,7 +518,15 @@ export function fitCapCharsFor(b, unit) {
 // only line ran off the edge of a 'unified' card, and both panes of a
 // 'split' card truncated their own already-fitting content because the
 // total card width was sized for one pane, then halved into two.
-function widthCls(b, viewMode, capFitChars, activeGroup) {
+//
+// `narrowFixed` — a function; when it returns true, short-circuits ALL of
+// the above and returns the flat `NARROW_FIXED_WIDTH_CLS` instead, checked
+// FIRST (before isPhpFile) so it applies to any file type. Only ever true
+// for the top-level look-ahead preview (see Block()'s own `narrowFixedFn`
+// doc comment) — reviewer decision: that preview's width no longer follows
+// its own content at all.
+function widthCls(b, viewMode, capFitChars, activeGroup, narrowFixed) {
+  if (narrowFixed && narrowFixed()) return NARROW_FIXED_WIDTH_CLS
   return isPhpFile(b) ? contentWidthCls(b, capFitChars, activeGroup, viewMode) : boundedWrapWidthCls()
 }
 
@@ -539,6 +547,14 @@ function boundedWrapWidthCls() {
 // (not rem/px): a reviewer request to replace the old fixed 42rem/70rem-ish
 // tiers with one flat, character-based minimum shared by every stand.
 const MIN_CONTENT_WIDTH_CHARS = 80
+
+// NARROW_FIXED_WIDTH_CLS — the top-level look-ahead preview's own fixed
+// width (widthCls's `narrowFixed` short-circuit above): exactly
+// MIN_CONTENT_WIDTH_CHARS plus the same `+2rem` chrome every content-driven
+// card already uses, so it visually matches the floor width of an ordinary
+// narrow card — just never grows past it, regardless of file type or
+// content.
+const NARROW_FIXED_WIDTH_CLS = `w-[calc(${MIN_CONTENT_WIDTH_CHARS}ch_+_2rem)] `
 
 // contentWidthCls — the card width for a PHP file, for EVERY `a`-cycle stand
 // ('split'/'unified'/'fit' alike — see widthCls above): make the card as
@@ -1002,6 +1018,21 @@ export default function Block(b, opts = {}) {
   // passed for a look-ahead preview card (home.mjs); defaults to "no cap" so
   // every other card's 'fit' width stays exactly as uncapped as before.
   const capFitChars = opts.capFitChars || (() => null)
+  // narrowFixed — a function returning whether this card gets a FIXED,
+  // non-content-driven width (`NARROW_FIXED_WIDTH_CLS`, widthCls above),
+  // bypassing contentWidthCls/boundedWrapWidthCls entirely regardless of
+  // file type or content. Only ever passed `() => true` for the top-level
+  // look-ahead preview (DetailPanel's `pair.forEach`, home.mjs) — reviewer
+  // decision: that preview never needs to show its own longest line (it
+  // always collapses to just its header anyway, see collapsedFn above), so
+  // giving it a fixed width removes any reason for it to ever be wider than
+  // the active card next to it, superseding the old capFitChars/
+  // fitCapCharsFor mechanism for this ONE call site. Deliberately NOT used
+  // by the drilled-column look-ahead preview (drillPreviewColumns), which
+  // keeps its existing content-driven-but-capped width — see
+  // .claude/docs/diff-card.md. Defaults to never fixed, for every other
+  // card.
+  const narrowFixedFn = opts.narrowFixed || (() => false)
   return html`
     <article
       class="${() =>
@@ -1017,7 +1048,7 @@ export default function Block(b, opts = {}) {
         // `narrowed`) then shrinks EVERY visible card — modified included — to
         // that same narrow width in lockstep. `a`'s third stand ('fit') gets its
         // own, content-based width instead — see widthCls.
-        widthCls(b, viewModeFn, capFitChars, activeGroup) +
+        widthCls(b, viewModeFn, capFitChars, activeGroup, narrowFixedFn) +
         (preview
           ? 'max-h-72 border-slate-300 dark:border-zinc-700 opacity-50'
           : diffActive()
@@ -1063,7 +1094,7 @@ export default function Block(b, opts = {}) {
         // enough to break a same-position (+3px) drag's snap-back.
         !preview
           ? resizeHandle(
-              (e) => onResizeStart(e, (root) => parseAutoWidthPx(widthCls(b, viewModeFn, capFitChars, activeGroup), root)),
+              (e) => onResizeStart(e, (root) => parseAutoWidthPx(widthCls(b, viewModeFn, capFitChars, activeGroup, narrowFixedFn), root)),
               () => onResizeReset(),
             )
           : ''}
