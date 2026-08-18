@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -98,8 +99,13 @@ func runGitFor(ctx context.Context, repo string, args ...string) ([]byte, error)
 func fetchPRMeta(ctx context.Context, repo string, pr int) (*prMeta, error) {
 	cmd := exec.CommandContext(ctx, "gh", "pr", "view", strconv.Itoa(pr),
 		"--repo", repoSlugFor(repo), "--json", "files,baseRefOid,headRefOid,baseRefName,headRefName")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return nil, fmt.Errorf("gh pr view %d%s: %w: %s", pr, repoTag(repo), err, msg)
+		}
 		return nil, fmt.Errorf("gh pr view %d%s: %w", pr, repoTag(repo), err)
 	}
 	var m prMeta
