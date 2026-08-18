@@ -266,24 +266,47 @@ function codeMaxLineChars(code) {
 }
 
 // selectionWindowLineChars — like codeMaxLineChars, but restricted to a small
-// WINDOW of rows around the reviewer's current selection: the up-to-2
-// CHANGED rows directly above the active navigation unit (a change group, a
-// single line, a call segment, or a Shift+arrow range — same shape
-// `activeGroup` already carries, see Block()'s own doc comment), the unit's
-// own rows, and the up-to-2 changed rows directly below — on whichever side
-// fitOnly(b) renders. Reviewer request: every stand's width should follow
-// what's actually in view around the cursor, not the block's own true
-// longest line elsewhere (which could sit far outside the visible window) —
-// see "de 2 omliggende aangepaste rijen" in diff-card.md.
+// WINDOW of rows around the reviewer's current selection: the unit's own
+// rows (a change group, a single line, a call segment, or a Shift+arrow
+// range — same shape `activeGroup` already carries, see Block()'s own doc
+// comment) plus up to 2 CHANGED neighbor rows on each side, on whichever
+// side fitOnly(b) renders. Reviewer request: every stand's width should
+// follow what's actually in view around the cursor, not the block's own
+// true longest line elsewhere (which could sit far outside the visible
+// window) — see "de 2 omliggende aangepaste rijen" in diff-card.md.
+//
+// A neighbor only counts when it sits DIRECTLY ADJACENT to the unit's own
+// boundary (real row index, one step at a time) AND itself has measurable
+// text on the rendered side (not blank, not comment-only) — the window
+// walk stops the instant either check fails, it never skips past a
+// disqualified row to keep searching further out. Without this, "the
+// nearest changed row however far away" could jump across a comment/filler
+// gap to an unrelated changed row elsewhere in the block and let that one
+// row dictate the whole card's width (reported: a cursor on an
+// old-side-only deletion row picked up a far-away 135-char streaming line
+// from a different if-block).
 //
 // Superseded activeUnitLineChars, which scanned only the unit's own row
 // range with no neighbor window at all.
 //
-// Returns null when there is nothing to measure — no `unit` at all, no
-// changed row in the block, or a window whose rows carry no text on the
-// rendered side (e.g. a pure deletion row landed on at 'line' granularity
-// within a 'fit'-hidden-old modified block). The caller then falls back to
-// the whole-block codeMaxLineChars behavior — never a silent 0-width card.
+// Returns `null` ONLY when there's no `unit` at all, or the block has no
+// changed row whatsoever — genuinely nothing to position a window around.
+// The caller then falls back to the whole-block codeMaxLineChars (the one
+// case that legitimately has no cursor position to measure around, e.g. a
+// preview/collapsed card or list mode without changes).
+//
+// Returns `0` — deliberately NOT null — when a `unit` DOES exist but
+// neither its own rows nor either directly-adjacent neighbor carry any
+// measurable text on the rendered side (e.g. the cursor sits deep inside a
+// multi-row old-side-only deletion run at 'line' granularity, see above).
+// `0` reads as "cap at nothing" to both callers (contentWidthCls's
+// `Math.max(MIN_CONTENT_WIDTH_CHARS, …)` floor, fitCapCharsFor's own
+// documented 0-means-floor contract) and collapses the card to the plain
+// MIN_CONTENT_WIDTH_CHARS floor — reviewer decision: a cursor position with
+// nothing nearby to measure must NOT fall back to the block's true global
+// longest line (that reintroduced the exact width-spike bug this window was
+// built to fix, just spread across every row of a same-side deletion run
+// instead of a single one).
 function selectionWindowLineChars(b, unit) {
   if (!unit) return null
   const rows = blockRows(b)
@@ -293,24 +316,63 @@ function selectionWindowLineChars(b, unit) {
   const side = fitOnly(b) === 'left' ? 'left' : 'right'
   const start = Math.max(0, unit.start)
   const end = Math.min(rows.length - 1, unit.end)
-  const inSelection = changed.filter((i) => i >= start && i <= end)
-  const before = changed.filter((i) => i < start).slice(-2)
-  const after = changed.filter((i) => i > end).slice(0, 2)
-  const windowRows = [...before, ...inSelection, ...after]
-  let max = 0
-  let any = false
-  for (const i of windowRows) {
+  const changedSet = new Set(changed)
+
+  // measurableLen — the row's length on the rendered side, or null when the
+  // row carries nothing worth measuring (blank, or comment-only) — same
+  // exclusions as before, just factored out so both the in-selection loop
+  // and the neighbor walk below share one definition of "counts".
+  const measurableLen = (i) => {
     const raw = rows[i][side]
-    if (raw == null) continue
+    if (raw == null) return null
     const line = raw.replace(/\s+$/, '')
     const trimmed = line.trim()
-    if (trimmed === '') continue
+    if (trimmed === '') return null
     if (trimmed.startsWith('//') || trimmed.startsWith('#') || trimmed.startsWith('*') || trimmed.startsWith('/*'))
-      continue
-    any = true
-    if (line.length > max) max = line.length
+      return null
+    return line.length
   }
-  return any ? max : null
+
+  // neighborLens — walk outward from the unit's own boundary ONE ROW AT A
+  // TIME (real row index, not "the next entry in `changed`") and stop the
+  // instant a row doesn't qualify (not itself a changed row, or nothing
+  // measurable on it) — reviewer decision: only a row directly adjacent to
+  // the cursor counts as a neighbor, never "the nearest measurable row,
+  // however far away". Fixes the width spike where an unrelated changed row
+  // far outside the visible window (across a comment/filler gap) used to
+  // set the whole card's width.
+  const neighborLens = (boundary, dir) => {
+    const lens = []
+    let i = boundary
+    for (let step = 0; step < 2; step++) {
+      i += dir
+      if (i < 0 || i >= rows.length) break
+      if (!changedSet.has(i)) break
+      const len = measurableLen(i)
+      if (len == null) break
+      lens.push(len)
+    }
+    return lens
+  }
+
+  let max = 0
+  let any = false
+  for (const i of changed) {
+    if (i < start || i > end) continue
+    const len = measurableLen(i)
+    if (len == null) continue
+    any = true
+    if (len > max) max = len
+  }
+  for (const len of [...neighborLens(start, -1), ...neighborLens(end, 1)]) {
+    any = true
+    if (len > max) max = len
+  }
+  // A unit exists but nothing in it (or directly adjacent to it) was
+  // measurable — return 0, not null, so the caller floors to
+  // MIN_CONTENT_WIDTH_CHARS instead of falling back to the block's true
+  // global longest line (see this function's own doc comment above).
+  return any ? max : 0
 }
 
 // fitCapCharsFor — the effective content-driven-width cap another card
@@ -336,9 +398,11 @@ function selectionWindowLineChars(b, unit) {
 // activeGroup opt is currently highlighting (home.mjs passes
 // topLevelActiveUnit(...)/focusedActiveUnit()): since the width now narrows
 // to just the selection's own window (see selectionWindowLineChars above),
-// the cap must track that same, usually smaller, number. Absent (or no
-// usable line in that window) falls back to the whole-block
-// codeMaxLineChars.
+// the cap must track that same, usually smaller, number. Absent falls back
+// to the whole-block codeMaxLineChars; present but nothing measurable
+// nearby returns 0 (selectionWindowLineChars's own 0-vs-null contract),
+// which caps a preview at the plain floor rather than the block's true
+// global longest line.
 export function fitCapCharsFor(b, unit) {
   if (!isPhpFile(b)) return 0
   const windowChars = selectionWindowLineChars(b, unit)
@@ -425,14 +489,17 @@ const MIN_CONTENT_WIDTH_CHARS = 80
 //
 // activeGroup — an optional `() => {start,end}|null` (Block()'s own opt of
 // the same name — the reviewer's currently selected/highlighted navigation
-// unit). The chars-count is taken from a WINDOW around that unit — the up to
-// 2 changed rows directly above it, the unit's own rows, and the up to 2
-// changed rows directly below (selectionWindowLineChars) — not the block's
-// true longest line wherever it happens to sit. Falls back to the whole-block
-// codeMaxLineChars when there's no active unit (a preview/collapsed card,
-// list mode without changes, or a caller that doesn't pass this opt at all —
-// every existing direct-mount test, see diffview.spec.mjs) or when the
-// window's own rows carry no measurable text on the rendered side.
+// unit). The chars-count is taken from a WINDOW around that unit — the unit's
+// own rows plus up to 2 directly-adjacent changed rows on each side
+// (selectionWindowLineChars) — not the block's true longest line wherever it
+// happens to sit. Falls back to the whole-block codeMaxLineChars only when
+// there's no active unit at all (a preview/collapsed card, list mode without
+// changes, or a caller that doesn't pass this opt at all — every existing
+// direct-mount test, see diffview.spec.mjs). A unit that IS present but whose
+// window carries no measurable text at all floors to MIN_CONTENT_WIDTH_CHARS
+// instead (selectionWindowLineChars returns 0, not null, for that case) —
+// deliberately not the block's true global longest line, which would
+// reintroduce the width-spike bug this window exists to prevent.
 function contentWidthCls(b, capFitChars, activeGroup) {
   const windowChars = selectionWindowLineChars(b, activeGroup && activeGroup())
   const chars = windowChars != null ? windowChars : codeMaxLineChars(fitOnlyText(b))

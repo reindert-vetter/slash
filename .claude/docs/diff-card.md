@@ -88,18 +88,47 @@ right text for an added or modified block, the old/left text for a removed
 block) is measured, but **not the whole block**: only a WINDOW around the
 current selection.
 
-### `selectionWindowLineChars` — the up to 2 neighboring changed rows on each side
+### `selectionWindowLineChars` — the up to 2 neighboring changed rows on each side, but only if directly adjacent
 
 Reviewer request: "kijk naar de 2 omliggende aangepaste rijen" — the chars
 count comes from the reviewer's current navigation unit (a change group, a
 single line, a call segment, or a Shift+arrow range — `Block()`'s own
 `activeGroup` opt) **plus** the up to 2 CHANGED rows directly above it and the
-up to 2 changed rows directly below (`changedRows`, filtered/sliced around the
-unit's own `{start,end}` row range) — never the block's true longest line
-wherever it happens to sit outside that window. Falls back to the whole-block
-`codeMaxLineChars` when there's no active unit at all (a preview/collapsed
-card, list mode without changes) or the window's own rows carry no measurable
-text on the rendered side.
+up to 2 changed rows directly below — never the block's true longest line
+wherever it happens to sit outside that window.
+
+**A neighbor only counts when it sits DIRECTLY ADJACENT to the unit's own
+boundary** — reviewer decision: "alleen omliggende gewijzigde rijen meetellen
+als het direct ernaast staat". The walk steps outward one **real row index**
+at a time (`start-1`, `start-2` / `end+1`, `end+2` — not "the next entry in
+`changedRows`, however far away") and **stops the instant a row doesn't
+qualify** — either it isn't itself a changed row, or it has no measurable text
+on the rendered side (blank, or comment-only, same exclusion as the whole-block
+scan) — it never skips past a disqualified row to keep searching further out.
+Without this, a comment/filler gap right next to the cursor let the window
+jump to the nearest changed row **however far away** and let that one distant
+row dictate the whole card's width — reported bug: a cursor on an
+old-side-only deletion row (no measurable text on the rendered/new side) had
+its window skip straight past several unrelated rows to a 135-char line in a
+completely different `if`-block, ballooning the card far past its neighbors
+(chg=5: 88ch, chg=6: 135ch, chg=7: 89ch, for the same block).
+
+**Falls back to the whole-block `codeMaxLineChars` ONLY when there's no
+active unit at all** (a preview/collapsed card, list mode without changes) —
+that's the one case with genuinely no cursor position to measure a window
+around. When a unit IS present but neither its own rows nor either
+directly-adjacent neighbor carry any measurable text on the rendered side
+(the exact old-side-only-deletion-run scenario above),
+`selectionWindowLineChars` returns `0` — not `null` — so the card instead
+floors to `MIN_CONTENT_WIDTH_CHARS`. **This distinction was added after an
+initial attempt at just the adjacency fix (above) fell back to the
+whole-block max for that second case too**: since a long same-side deletion
+run has NO measurable neighbor within reach for almost every row inside it
+(each row's immediate neighbor is itself another unmeasurable deletion row),
+that first attempt turned the original single-row spike (chg=6 → 135ch) into
+a **multi-row** spike (chg=5 through chg=8 all → 135ch) — strictly worse for
+the reported complaint. Falling back to the plain floor instead of the
+block's true global longest line for this specific case fixed that.
 
 ```
 w-[calc(<chars>ch_+_2rem)]
@@ -107,12 +136,14 @@ w-[calc(<chars>ch_+_2rem)]
 
 `<chars>` is `selectionWindowLineChars` (see above), falling back to
 **`codeMaxLineChars`** — the TRUE longest non-comment line of the WHOLE block,
-on whichever side `fitOnly(b)` renders — when there is no active unit at all
-(a preview/collapsed card, list mode without changes, or a caller that doesn't
-pass `activeGroup`), floored at `MIN_CONTENT_WIDTH_CHARS` (80 characters). The
-`ch` unit is exactly one glyph of whichever font the card's own `<article>`
-happens to inherit, so this is arithmetic on the already-loaded source string
-— never a live measurement of the rendered text itself.
+on whichever side `fitOnly(b)` renders — only when there is no active unit at
+all (a preview/collapsed card, list mode without changes, or a caller that
+doesn't pass `activeGroup`); a present unit with nothing measurable nearby
+instead yields `0`, which the same `Math.max(MIN_CONTENT_WIDTH_CHARS, …)` call
+floors to the plain 80-character minimum. The `ch` unit is exactly one glyph
+of whichever font the card's own `<article>` happens to inherit, so this is
+arithmetic on the already-loaded source string — never a live measurement of
+the rendered text itself.
 
 **The card genuinely grows/shrinks live as the reviewer navigates** — explicit
 reviewer request/confirmation ("de blok mag groter en kleiner worden ... de
@@ -120,9 +151,11 @@ kaart beweegt live mee per navigatie-stap"). `home.mjs` feeds
 `selectionWindowLineChars` the exact same unit its own `activeGroup` opt
 already highlights with — `topLevelActiveUnit(b)` for the top-level selected
 card, `focusedActiveUnit()` for a focused drilled column — so highlighting and
-width always agree on which unit is "selected". A unit whose rows carry no
-measurable text on the rendered side falls back to the whole-block
-`codeMaxLineChars`, never to a 0-width card. **Trade-off, accepted:** since the
+width always agree on which unit is "selected". A unit whose rows (and
+directly-adjacent neighbors) carry no measurable text on the rendered side
+floors to `MIN_CONTENT_WIDTH_CHARS`, never to a 0-width card and never to the
+block's true global longest line either — see the fallback split above.
+**Trade-off, accepted:** since the
 card's own `class` attribute now depends on `activeGroup()`, a same-block
 navigation step (e.g. `f`/`d`/↓ within the same group) legitimately mutates
 the active card's (and its look-ahead preview's) `class` attribute every step
@@ -233,10 +266,12 @@ longest line in view — `fitCapCharsFor` closes it uniformly, not just for
 
 `fitCapCharsFor(b, unit)` (`Block.mjs`, exported) answers "what chars-count
 would `b`'s own content-driven width be capped at" — `selectionWindowLineChars`
-(falling back to `codeMaxLineChars`) for a PHP file, `0` for a non-PHP file
-(whose width is the fixed `boundedWrapWidthCls` floor anyway, so capping a
-preview at `0` chars collapses it to that exact same floor via
-`contentWidthCls`'s own `Math.max(MIN_CONTENT_WIDTH_CHARS, …)`).
+(falling back to `codeMaxLineChars` only when there's no unit at all; a
+present unit with nothing measurable nearby yields `0`, same as below) for a
+PHP file, `0` unconditionally for a non-PHP file (whose width is the fixed
+`boundedWrapWidthCls` floor anyway, so capping a preview at `0` chars
+collapses it to that exact same floor via `contentWidthCls`'s own
+`Math.max(MIN_CONTENT_WIDTH_CHARS, …)`).
 `contentWidthCls`/`widthCls` take an optional `capFitChars` — a `() =>
 number|null` — and clamp their own computed `chars` down to it before
 flooring/building the class string; absent (every non-preview card) means no

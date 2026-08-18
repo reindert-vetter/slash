@@ -318,6 +318,100 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     expect(selectedLineWidth).toBeLessThan(wholeBlockWidth - 200)
   })
 
+  // Direct-mount unit test: a cursor row deep inside a multi-row old-side-only
+  // deletion run (see "de rij zelf niet meetbaar, en de directe buur ook
+  // niet" in diff-card.md) must floor to MIN_CONTENT_WIDTH_CHARS, never to
+  // the block's true global longest line. Two earlier, rejected behaviors
+  // both failed this: (1) "reach for the nearest measurable changed row,
+  // however far away" grabbed a long unrelated line and ballooned a single
+  // step's width; (2) fixing that with strict adjacency but still falling
+  // back to the whole-block max on "nothing measurable" turned that single
+  // spike into a multi-row spike (every row inside the deletion run has no
+  // measurable adjacent neighbor either).
+  test('a cursor deep inside an old-side-only deletion run floors, never balloons to the block max', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+    await appReady(page)
+
+    await evaluateSettled(page, async () => {
+      const { reactive } = await import('/src/vendor/arrow.js')
+      const Block = (await import('/src/Block.mjs')).default
+      const longLine =
+        'return $this->fooBarValuesFromRequestPayloadDataThatIsGenuinelyMuchLongerThanTheSelectedLine' +
+        '($a, $b, $c, $d, $e, $f, $g, $h);'
+      const makeBlock = () =>
+        reactive({
+          category: 'ACTION',
+          label: 'Cart::applyPromotion',
+          status: 'modified',
+          file: 'app/Cart.php',
+          line: 338,
+          name: 'applyPromotion',
+          class: 'Cart',
+          approved: false,
+          code: {
+            // Row 0: signature (context). Row 1: a short changed line,
+            // measurable on the new/right side. Rows 2-4: a 3-row-deep
+            // old-side-only deletion run (present in old, absent from new) —
+            // row 3 is the SELECTED middle row, with no measurable neighbor
+            // directly adjacent on either side (rows 2 and 4 are themselves
+            // unmeasurable deletion rows). Row 5: the block's true longest
+            // line, UNCHANGED (identical old/new) so it drives the
+            // no-active-unit fallback but is never itself a "neighbor".
+            old: {
+              start: 338,
+              end: 348,
+              text:
+                `public function applyPromotion(): void {
+` +
+                `    $a1 = 1;
+    $old1 = 1;
+    $old2 = 2;
+    $old3 = 3;
+` +
+                `    ${longLine}
+}`,
+            },
+            new: {
+              start: 338,
+              end: 348,
+              text: `public function applyPromotion(): void {
+    $b1 = 1;
+    ${longLine}
+}`,
+            },
+          },
+        })
+
+      const noUnitHost = document.createElement('div')
+      noUnitHost.id = 'fit-deletion-run-no-unit-host'
+      document.body.appendChild(noUnitHost)
+      Block(makeBlock(), { viewMode: () => 'fit' })(noUnitHost)
+
+      const midDeletionHost = document.createElement('div')
+      midDeletionHost.id = 'fit-deletion-run-mid-host'
+      document.body.appendChild(midDeletionHost)
+      // Row 3 is the middle deletion row (old1/old2/old3 sit at rows 2/3/4).
+      Block(makeBlock(), { viewMode: () => 'fit', activeGroup: () => ({ start: 3, end: 3 }) })(midDeletionHost)
+    })
+
+    const noUnitWidth = await page
+      .locator('#fit-deletion-run-no-unit-host article')
+      .evaluate((el) => el.getBoundingClientRect().width)
+    const midDeletionWidth = await page
+      .locator('#fit-deletion-run-mid-host article')
+      .evaluate((el) => el.getBoundingClientRect().width)
+
+    // Without an active unit the card still follows the block's true longest
+    // (unchanged) line — comfortably past the 80-char floor.
+    expect(noUnitWidth).toBeGreaterThan(1000)
+    // With the middle deletion row selected, nothing measurable is directly
+    // adjacent, so the card floors down near MIN_CONTENT_WIDTH_CHARS — far
+    // below the global max, not equal to it.
+    expect(midDeletionWidth).toBeLessThan(noUnitWidth - 400)
+  })
+
   // Direct-mount unit test: the look-ahead preview's 'fit'-stand cap
   // (fitCapCharsFor/capFitChars, Block.mjs — see "The look-ahead preview must
   // never be wider than the active card" in diff-card.md). Two genuinely
