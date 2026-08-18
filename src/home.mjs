@@ -13612,7 +13612,7 @@ function MainScrollRightHint(state) {
           ? html`
               <div
                 class="${() =>
-                  'fixed top-6 right-0 z-30 flex shrink-0 flex-col gap-1 rounded-l-lg border border-r-0 border-slate-200 bg-white p-1 shadow-sm transition-opacity hover:opacity-100 focus-within:opacity-100 dark:border-zinc-700 dark:bg-zinc-900 ' +
+                  'fixed top-6 right-0 z-30 flex shrink-0 flex-col gap-1 rounded-l-lg border border-r-0 border-slate-300 bg-white p-1 shadow-md transition-opacity hover:opacity-100 focus-within:opacity-100 dark:border-zinc-700 dark:bg-zinc-900 ' +
                   (state.mouseActiveHints ? 'opacity-100' : 'opacity-0')}"
                 data-testid="main-scroll-right-hint"
               >
@@ -13620,13 +13620,13 @@ function MainScrollRightHint(state) {
                   type="button"
                   title="Meer naar rechts"
                   data-testid="main-scroll-right-button"
-                  class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-400 transition hover:bg-slate-100 hover:text-indigo-600 dark:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-indigo-400"
+                  class="flex h-7 w-7 shrink-0 items-center justify-center rounded text-slate-500 transition hover:bg-slate-100 hover:text-indigo-600 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-indigo-400"
                   @click="${(e) => {
                     e.stopPropagation()
                     scrollMainRightOneColumn()
                   }}"
                 >
-                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="h-3.5 w-3.5" aria-hidden="true">
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4" aria-hidden="true">
                     <path d="M6 3l5 5-5 5" stroke-linecap="round" stroke-linejoin="round"></path>
                   </svg>
                 </button>
@@ -13734,20 +13734,20 @@ function MainScrollLeftHint(state) {
               >
                 <div
                   class="${() =>
-                    'flex shrink-0 flex-col gap-1 rounded-lg border border-slate-200 bg-white p-1 shadow-sm transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 dark:border-zinc-700 dark:bg-zinc-900 ' +
+                    'flex shrink-0 flex-col gap-1 rounded-lg border border-slate-300 bg-white p-1 shadow-md transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 dark:border-zinc-700 dark:bg-zinc-900 ' +
                     (state.mouseActiveHints ? 'opacity-100' : 'opacity-0')}"
                 >
                   <button
                     type="button"
                     title="Terug (één stap)"
                     data-testid="main-scroll-left-button"
-                    class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-400 transition hover:bg-slate-100 hover:text-indigo-600 dark:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-indigo-400"
+                    class="flex h-7 w-7 shrink-0 items-center justify-center rounded text-slate-500 transition hover:bg-slate-100 hover:text-indigo-600 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-indigo-400"
                     @click="${(e) => {
                       e.stopPropagation()
                       stepMainLeftOneColumn()
                     }}"
                   >
-                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="h-3.5 w-3.5 -scale-x-100" aria-hidden="true">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4 -scale-x-100" aria-hidden="true">
                       <path d="M6 3l5 5-5 5" stroke-linecap="round" stroke-linejoin="round"></path>
                     </svg>
                   </button>
