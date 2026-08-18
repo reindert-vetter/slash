@@ -64,9 +64,9 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     const panes = page.locator('#view-mode-host code.language-php')
     const card = page.locator('#view-mode-host article')
     // Split (default): both panes render. The card width is content-driven
-    // (not a fixed tier) in every stand now — for this tiny fixture (both
-    // lines well under 80 characters) it sits at the flat 80-character floor
-    // regardless of viewMode.
+    // (not a fixed tier) — for this tiny fixture (canonical 29 chars, well
+    // under the 80-char floor) the combined 'split' total (min(80,29)+29=58)
+    // still floors to the flat 80-character minimum, same as before.
     await expect(panes).toHaveCount(2)
     await expect(card).toHaveClass(/w-\[calc\(80ch_\+_2rem\)\]/)
 
@@ -717,19 +717,21 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
 
     await page.keyboard.press('a') // split → unified
     await expect(panes).toHaveCount(1)
-    // The pane structure changed (one stacked column instead of two), but the
-    // width itself stays the same content-driven value.
-    await expect
-      .poll(async () => {
-        const box = await card.boundingBox()
-        return box.width
-      })
-      .toBeCloseTo(splitBox.width, 0)
+    // The pane structure changed (one stacked column instead of two). Since
+    // 2026-08-18, 'split' no longer shares one width formula with
+    // 'unified'/'fit': the non-canonical (old/left) pane in 'split' stays
+    // fixed at the floor instead of following its own content, so 'split'
+    // is generally WIDER than 'unified'/'fit' for a two-sided block whose
+    // canonical side has any real content (see contentWidthCls's own doc
+    // comment) — capture 'unified's own width instead of comparing it to
+    // the 'split' baseline.
+    const unifiedBox = await card.boundingBox()
 
     await page.keyboard.press('a') // unified → fit
     // 'fit' shows only the NEW pane (old code is hidden, unlike 'unified'
-    // which still shows it stacked) — the width is unaffected, still the same
-    // content-driven value.
+    // which still shows it stacked) — 'fit' and 'unified' still share the
+    // same canonical-side-only formula (unaffected by the 'split' change
+    // above), so their widths stay equal to each other.
     await expect(panes).toHaveCount(1)
     await expect(diff.locator('[data-pane="old"]')).toHaveCount(0)
     await expect
@@ -737,10 +739,13 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
         const box = await card.boundingBox()
         return box.width
       })
-      .toBeCloseTo(splitBox.width, 0)
+      .toBeCloseTo(unifiedBox.width, 0)
 
     await page.keyboard.press('a') // fit → split
     await expect(panes).toHaveCount(2)
+    // Round-tripping back to 'split' reproduces the SAME width it started
+    // at — deterministic given the same block/selection, even though it no
+    // longer matches 'unified'/'fit's width.
     await expect
       .poll(async () => {
         const box = await card.boundingBox()
@@ -949,16 +954,16 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     expect(Number(match[1])).toBeGreaterThan(90)
   })
 
-  // Direct-mount unit test: 'split' shows old and new side by side in two
-  // EQUAL-width panes, so the total card width must fit BOTH sides of the
-  // selected row, not just the canonical one halved. But the OTHER (non-
-  // canonical) side must NOT reach for a neighbor past the selected row's
-  // own boundary — only the unit's own in-selection rows count on that side
-  // (selectionWindowLineChars's `includeNeighbors` param). Guards the
-  // regression found while building this fix: an old-only long line sitting
-  // just past the boundary (a neighbor, not part of the selection) inflated
-  // a 'split' card to ~4x its needed width.
-  test('viewMode="split" fits both sides of the selected row, but a neighbor on the non-canonical side stays out of the window', async ({
+  // Direct-mount unit test: since 2026-08-18, 'split' no longer measures the
+  // non-canonical (old/left) pane's own content at all — it stays fixed at
+  // the floor (MIN_CONTENT_WIDTH_CHARS) regardless — and the neighbor
+  // extension PAST the selection's own boundary is gone entirely, on EITHER
+  // side, not just the non-canonical one (reviewer decision: "kijk niet naar
+  // omliggende rijen, maar alleen naar de huidige geselecteerde regel/groep/
+  // call"). So a long line directly adjacent to (but not part of) the
+  // selected unit must not inflate the card's width, even on the CANONICAL
+  // (new/right) side, which used to keep the neighbor reach.
+  test('viewMode="split" fixes the non-canonical pane at the floor and never reaches a neighbor past the selection', async ({
     page,
   }) => {
     await page.goto('/pr/12903')
@@ -967,8 +972,15 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     await evaluateSettled(page, async () => {
       const { reactive } = await import('/src/vendor/arrow.js')
       const Block = (await import('/src/Block.mjs')).default
-      const longOldNeighbor =
-        "$oldNeighborLongLine = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';"
+      // Row 1's own new-side text is a deliberate 81 characters — just past
+      // MIN_CONTENT_WIDTH_CHARS (80) so its OWN measurement is distinguishable
+      // from the floor, unlike a short line which the floor would mask either
+      // way. The neighbor is deliberately much longer (126) so picking it up
+      // would be unmistakable.
+      const selectedNewLine =
+        '    $b1 = 1234567890123456789012345678901234567890123456789012345678901234567890;'
+      const longNewNeighbor =
+        "    $newNeighborLongLine = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';"
       const b = reactive({
         category: 'ACTION',
         label: 'Foo::baz',
@@ -979,35 +991,37 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
         class: 'Foo',
         approved: false,
         code: {
-          // Row 0: signature (context). Row 1: the SELECTED short changed
-          // line (both sides short). Row 2: an old-only long line — a
-          // directly-adjacent NEIGHBOR of row 1, not part of the selection.
+          // Row 0: signature (context). Row 1: the SELECTED changed line
+          // (its own new-side text is 81 chars). Row 2: a new-only (added)
+          // 126-char line — a directly-adjacent NEIGHBOR of row 1, on the
+          // CANONICAL side, not part of the selection.
           old: {
             start: 90,
-            end: 93,
-            text: 'public function baz(): void {\n    $a1 = 1;\n    ' + longOldNeighbor + '\n}',
+            end: 92,
+            text: 'public function baz(): void {\n    $a1 = 1;\n}',
           },
           new: {
             start: 90,
-            end: 92,
-            text: 'public function baz(): void {\n    $b1 = 1;\n}',
+            end: 93,
+            text: 'public function baz(): void {\n' + selectedNewLine + '\n' + longNewNeighbor + '\n}',
           },
         },
       })
       const host = document.createElement('div')
-      host.id = 'split-neighbor-other-side-host'
+      host.id = 'split-neighbor-canonical-side-host'
       document.body.appendChild(host)
       // Row 1 is the selected line (a gran=line-equivalent single-row unit).
       Block(b, { viewMode: () => 'split', activeGroup: () => ({ start: 1, end: 1 }) })(host)
     })
 
-    const card = page.locator('#split-neighbor-other-side-host article')
+    const card = page.locator('#split-neighbor-canonical-side-host article')
     const cls = await card.getAttribute('class')
     const match = /w-\[calc\((\d+)ch_\+_2rem\)\]/.exec(cls)
-    // Both sides of the selected row are short (well under 80 characters),
-    // so the card floors — proof the ~100-character neighbor on the OTHER
-    // side never entered the window at all.
-    expect(Number(match[1])).toBe(80)
+    // 81 (the selected row's own canonical chars) + 80 (the non-canonical
+    // pane's fixed floor) = 161 — proof the 126-character neighbor (canonical
+    // side, directly adjacent, NOT part of the selection) never entered the
+    // window at all; picking it up would have produced 126+80=206 instead.
+    expect(Number(match[1])).toBe(161)
   })
 
   // Direct-mount unit test: reviewer decision (option 2 of 3 offered) — a

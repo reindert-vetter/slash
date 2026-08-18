@@ -86,106 +86,146 @@ same formula now drives every stand for a PHP file). For a one-sided
 (added/removed) block, or ANY block in `'fit'` (always one pane, see
 `fitOnly`), only that single canonical side is measured, but **not the whole
 block**: only a WINDOW around the current selection. A genuinely two-sided
-(`modified`) block in `'split'`/`'unified'` measures BOTH sides and combines
-them — see "`windowCharsForMode` — combining both sides for `split`/
-`unified`" below.
+(`modified`) block in `'unified'` measures BOTH sides and combines them;
+`'split'` measures only the canonical side (see "`windowCharsForMode` —
+`unified` combines both sides; `split` no longer measures the non-canonical
+side at all" below).
 
-### `selectionWindowLineChars` — the up to 2 neighboring changed rows on each side, but only if directly adjacent
+### `selectionWindowLineChars` — the unit's own rows, capped at 5
 
-Reviewer request: "kijk naar de 2 omliggende aangepaste rijen" — the chars
-count comes from the reviewer's current navigation unit (a change group, a
-single line, a call segment, or a Shift+arrow range — `Block()`'s own
-`activeGroup` opt) **plus** the up to 2 CHANGED rows directly above it and the
-up to 2 changed rows directly below — never the block's true longest line
-wherever it happens to sit outside that window.
-
-**A neighbor only counts when it sits DIRECTLY ADJACENT to the unit's own
-boundary** — reviewer decision: "alleen omliggende gewijzigde rijen meetellen
-als het direct ernaast staat". The walk steps outward one **real row index**
-at a time (`start-1`, `start-2` / `end+1`, `end+2` — not "the next entry in
-`changedRows`, however far away") and **stops the instant a row doesn't
-qualify** — either it isn't itself a changed row, or it has no measurable text
-on the rendered side (blank, or comment-only, same exclusion as the whole-block
-scan) — it never skips past a disqualified row to keep searching further out.
-Without this, a comment/filler gap right next to the cursor let the window
-jump to the nearest changed row **however far away** and let that one distant
-row dictate the whole card's width — reported bug: a cursor on an
-old-side-only deletion row (no measurable text on the rendered/new side) had
-its window skip straight past several unrelated rows to a 135-char line in a
-completely different `if`-block, ballooning the card far past its neighbors
-(chg=5: 88ch, chg=6: 135ch, chg=7: 89ch, for the same block).
+**Superseded (2026-08-18):** an earlier version of this also reached up to 2
+CHANGED rows PAST the unit's own boundary on the canonical side ("kijk naar
+de 2 omliggende aangepaste rijen") — a directly-adjacent-only neighbor walk,
+with all the adjacency/measurability guards described in this section's
+history below. Reviewer decision reversed that: **"kijk niet naar omliggende
+rijen, maar alleen naar de huidige geselecteerde regel/groep/call, met een
+maximum van 5 lines"** — the neighbor extension outside the unit is gone
+entirely; only the unit's OWN rows (a change group, a single line, a call
+segment, or a Shift+arrow range) ever count, capped at
+`SELECTION_UNIT_MAX_SCAN_ROWS` (5, was `GROUP_INTERIOR_FULL_SCAN_ROWS` = 20)
+— see the next section for what that cap does once a unit is larger than 5
+rows. Applies uniformly to every granularity now, not just the old
+wholly-added/removed-function edge case.
 
 **Falls back to the whole-block `codeMaxLineChars` ONLY when there's no
 active unit at all** (a preview/collapsed card, list mode without changes) —
 that's the one case with genuinely no cursor position to measure a window
-around. When a unit IS present but neither its own rows nor either
-directly-adjacent neighbor carry any measurable text on the rendered side
-(the exact old-side-only-deletion-run scenario above),
-`selectionWindowLineChars` returns `0` — not `null` — so the card instead
-floors to `MIN_CONTENT_WIDTH_CHARS`. **This distinction was added after an
-initial attempt at just the adjacency fix (above) fell back to the
-whole-block max for that second case too**: since a long same-side deletion
-run has NO measurable neighbor within reach for almost every row inside it
-(each row's immediate neighbor is itself another unmeasurable deletion row),
-that first attempt turned the original single-row spike (chg=6 → 135ch) into
-a **multi-row** spike (chg=5 through chg=8 all → 135ch) — strictly worse for
-the reported complaint. Falling back to the plain floor instead of the
-block's true global longest line for this specific case fixed that.
+around. When a unit IS present but nothing in it carries measurable text on
+the rendered side (e.g. the cursor sits deep inside a multi-row old-side-only
+deletion run at `line` granularity), `selectionWindowLineChars` returns `0`
+— not `null` — so the card instead floors to `MIN_CONTENT_WIDTH_CHARS`,
+never the block's true global longest line (which would reintroduce the
+original width-spike bug this window exists to prevent).
 
-### A unit that balloons past `GROUP_INTERIOR_FULL_SCAN_ROWS` (20) only has its edges measured
+<details>
+<summary>History: the removed neighbor-extension mechanism</summary>
 
-Reviewer decision (option 2 of 3 offered for this case): a `gran=group` unit
-is normally a handful of contiguous changed lines — but for a **wholly-added
-or wholly-removed** block, `changeGroups` finds exactly ONE group spanning
-the ENTIRE function body, because there's no unchanged context row anywhere
-inside it to end the run early. Reported bug: a 42-row added function's own
-169-character line (row ~31, nowhere near either edge, out of the visible
-viewport) drove the whole card's width the moment the reviewer drilled into
-it, since the in-selection scan had no size limit of its own — only the
-neighbor extension OUTSIDE the unit was adjacency-restricted (above).
+The original version reached up to 2 CHANGED rows past the unit's boundary,
+with a neighbor only counting when DIRECTLY ADJACENT (one real row index at a
+time, stopping the instant a row didn't qualify) — this fixed a reported bug
+where a comment/filler gap let the window jump to the nearest changed row
+however far away (a cursor on an old-side-only deletion row picked up a
+far-away 135-char line from a different `if`-block). That whole mechanism —
+and the bug class it guarded against — no longer applies now that there is no
+neighbor reach at all: nothing outside the unit's own rows is ever measured,
+adjacent or not.
 
-`GROUP_INTERIOR_FULL_SCAN_ROWS` = 20 (deliberately generous — comfortably
-above any ordinary multi-line modified-block change run, so this never
-narrows a normal group). A unit at or under that size is scanned in full,
-unchanged. A LARGER unit gets the exact same "within `WINDOW_EDGE_ROWS` (2)
-of a boundary" treatment its outside neighbors already get — rows more than
-2 away from BOTH `unit.start` and `unit.end` are treated as out of view, same
-as a too-far neighbor. One shared mental model: "only what's within 2 rows
-of a boundary you're actually near counts", whether that boundary is the
-edge of the unit itself or the unit's edge as seen from OUTSIDE it.
+</details>
 
-### `windowCharsForMode` — combining both sides for `split`/`unified`
+### A unit that balloons past `SELECTION_UNIT_MAX_SCAN_ROWS` (5) only has its edges measured
 
-Reported bugs (screenshots): a selected group whose OLD side carried a much
+A `gran=group` unit is normally a handful of contiguous changed lines — but
+for a **wholly-added or wholly-removed** block, `changeGroups` finds exactly
+ONE group spanning the ENTIRE function body, because there's no unchanged
+context row anywhere inside it to end the run early. Originally reported bug
+(back when the threshold was 20 and the unit itself was the only thing this
+capped): a 42-row added function's own 169-character line (row ~31, nowhere
+near either edge, out of the visible viewport) drove the whole card's width
+the moment the reviewer drilled into it.
+
+`SELECTION_UNIT_MAX_SCAN_ROWS` = 5 (lowered from the original 20 on reviewer
+decision, see the previous section — now the ONLY thing bounding a large
+`gran=group`/`call`/Shift-range unit, since there's no neighbor extension left
+to have its own separate restriction). A unit at or under that size is
+scanned in full, unchanged. A LARGER unit gets the "within `WINDOW_EDGE_ROWS`
+(2) of a boundary" treatment — rows more than 2 away from BOTH `unit.start`
+and `unit.end` are treated as out of view. One shared mental model: "only
+what's within 2 rows of a boundary you're actually near counts".
+
+### `windowCharsForMode` — `unified` combines both sides; `split` no longer measures the non-canonical side at all
+
+Originally (screenshots): a selected group whose OLD side carried a much
 longer line than its NEW side ran off the right edge of a `'unified'` card
 (only the new/right side was ever measured); and a `'split'` card's own two
 panes truncated content that individually would have fit, because the total
 card width was sized for ONE pane's own chars, then halved into two equal
 `w-1/2` panes. Reviewer: "2 sides diff mag ook breder" (split may grow for
-this).
+this) — `'split'` and `'unified'` both started measuring BOTH sides and
+combining them, `'split'` at `2 * Math.max(left, right)` (both panes equal,
+neither clips).
 
-A one-sided block (`singleSide(b)` truthy) or `'fit'` (always forces a
-single pane, see `fitOnly`) still measures only that one canonical side —
-unaffected, mirrors `codeDiff`'s own `effectiveOnly` gate exactly, including
-the removed-block exception. A genuinely two-sided (`modified`) block in
-`'split'`/`'unified'` calls `selectionWindowLineChars` TWICE — once per side
-— and combines the results: `'unified'` stacks old above new in ONE column,
-so it takes `Math.max(left, right)`; `'split'` shows both side by side in
-two EQUAL-width panes, so it takes `2 * Math.max(left, right)` — sized so
-EITHER pane can fit the wider side, at the cost of some unused slack on the
-shorter side (accepted trade-off, not a bug).
+**Superseded for `'split'` (2026-08-18):** reviewer report — a screenshot
+where the canonical (new/right) side carried one much longer SQL-ish line
+than the old/left side, and the old *EQUAL-width* split stretched the
+old/left pane to match it uselessly wide, mostly padding. Reviewer: "de
+linkerkant in de diff kan altijd op minimaal blijven, iets van 80
+characters." `'split'` no longer reads the non-canonical (old/left, for a
+`modified` block) side's own content AT ALL: `windowCharsForMode`'s `'split'`
+branch is now `Math.min(MIN_CONTENT_WIDTH_CHARS, canonicalChars) +
+canonicalChars` — only the canonical side is measured, and the
+non-canonical side's contribution is capped at the shared 80-char floor
+instead of tracking the (possibly much longer) canonical side. Whenever
+`canonicalChars <= MIN_CONTENT_WIDTH_CHARS` (the common case) this reduces to
+`2 * canonicalChars` — IDENTICAL to the pre-existing `2 * Math.max(...)`
+total for that case, so an ordinary short two-sided block's `'split'` card is
+completely unaffected; only once the canonical side's own chars exceed 80
+does the non-canonical pane stop growing with it.
 
-**Only the CANONICAL side (`fitOnly(b)`) gets the neighbor extension** — the
-other side passes `includeNeighbors: false` to `selectionWindowLineChars`,
-restricting it to the unit's own in-selection rows only. Discovered while
-building this fix: giving the non-canonical side the same 2-row neighbor
-reach as the canonical one let an unrelated, unselected line just past the
-boundary (structurally 2 rows away, not semantically related) inflate a
-`'split'` card to roughly 4x its needed width — worse than the very
-narrowness bug being fixed. The canonical side keeps its full neighbor
-window (unchanged, still the side selection/approval tracks, see "Only the
-new/right pane drives selection" in diff-render.md); the other side is only
-shown for context and only guaranteed to fit what's actually selected.
+`'unified'` is untouched by this change: it still measures BOTH sides via
+`Math.max(canonicalChars, otherChars)` (unaffected — it stacks old above new
+in ONE column, so it still needs whichever side is wider). A one-sided block
+(`singleSide(b)` truthy) or `'fit'` (always forces a single pane, see
+`fitOnly`) still measures only that one canonical side — unaffected, mirrors
+`codeDiff`'s own `effectiveOnly` gate exactly, including the removed-block
+exception.
+
+**`SPLIT_LEFT_PANE_WIDTH_CLS` reproduces that formula using only STATIC
+CSS**, deliberately not a per-render `${() => ...}` computation on the pane
+itself: `'w-1/2 max-w-[calc(80ch_+_1rem)] shrink-0'` — plain `w-1/2` (the
+original mechanism) capped at a static `max-w`. Since the card's own total is
+`2 * canonicalChars` whenever `canonicalChars <= 80`, `w-1/2` alone already
+equals `canonicalChars` and the cap never engages; only once the total grows
+past that (canonical > 80) does 50% exceed 80 and the cap clamp in, matching
+`Math.min(80, canonicalChars)` exactly. The canonical (new/right) pane gets
+`flex-1 min-w-0` instead of its own `w-1/2` — it simply fills whatever the
+capped left pane doesn't claim.
+
+Two alternatives were tried and rejected for this pane, both instructive:
+
+- **`w-max` (CSS `width:max-content`)**, sizing the pane off its own rendered
+  text directly (no JS chars computation needed at all): rejected because it
+  needs an actual browser layout pass, which visibly lagged behind the code's
+  async load/highlight by roughly a second in testing — the pane resized
+  after the initial render, moving whatever sat in the canonical pane out
+  from under a reviewer's cursor mid-hover
+  (`tests/diff-row-mouse-select.spec.mjs`). This file is pure character-count
+  arithmetic everywhere else specifically to avoid exactly that class of bug.
+- **A CSS custom property** (`--split-canon-ch`) set via the article's own
+  `style` attribute, read by the pane's class via `var()`: rejected because
+  it still mutates a SECOND attribute (`style`, not just `class`) on the
+  article's own already-reactive step, colliding with
+  `tests/column-resize.spec.mjs`'s assertion that an unresized card's
+  `style` attribute is exactly `''`. A reactive `class` binding on the pane
+  itself was rejected too, for the more general reason below.
+
+**Only the ARTICLE's own `class` may depend on content/selection.** Both
+rejected alternatives — and a reactive class directly on the pane — would
+make a SECOND element's attribute mutate on a same-block navigation step
+(`tests/navigate.spec.mjs`'s "only the highlight moves, not the whole card"
+guarantee, which asserts every mutation record is `class` on the `ARTICLE`
+tag specifically). `w-1/2` + a static `max-w` needs neither: both are plain,
+unconditional, content-independent Tailwind utilities baked into
+`codeDiff`'s own template once, never re-evaluated per step.
 
 **The snap-back resize baseline (`parseAutoWidthPx`, `columnWidth.mjs`) must
 call `widthCls` with the exact same arguments as the card's own class
