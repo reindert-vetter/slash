@@ -91,8 +91,10 @@ off THIS list, not a separate one.
   of the comment machinery rather than with the branch-level push todo) —
   "Verwerk N comments met Claude (Opus 5)", `N` = `checkedBatchComments(state)`,
   and shown only while at least one eligible row exists at all. Disabled while
-  a batch is already running (label switches to "Claude bezig met de
-  comments…") or while nothing is checked. Enter/click run
+  a batch is already running (the label then switches to the three-line
+  running state — counter, "Bezig met: &lt;comment&gt;", and the live
+  `claudeStatusText` activity, see "Where the reviewer sees it" in
+  `.claude/docs/workflows-comments.md`) or while nothing is checked. Enter/click run
   `startBatchFromRow()` **directly — no confirm submenu**, since the
   checkboxes above already are the deliberate curation step (contrast the
   push-todo row right below it, which DOES open a confirm menu because pushing

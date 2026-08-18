@@ -243,4 +243,52 @@ test.describe('Comment batch', () => {
     mock.serve([anchoredComment('cb-1', 'graag nullsafe hier', { source: '', status: 'resolved' })])
     await expect(row).toHaveCount(0)
   })
+
+  test('while a run is in flight the action row names the current comment, the counter and the live activity', async ({
+    page,
+  }) => {
+    // The PR-wide progress snapshot (comment_batch_progress.go) as the server
+    // would serve it halfway through a run: one comment done, one skipped, and
+    // Claude currently reading a file for cb-1.
+    await page.route('**/api/comment-batch*', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          progress: {
+            running: true,
+            total: 3,
+            done: 1,
+            skipped: 1,
+            current: 'cb-1',
+            phase: 'tool',
+            tool: 'Read',
+            detail: 'src/Foo.php',
+            items: [
+              { commentId: 'cb-1', state: 'busy' },
+              { commentId: 'cb-2', state: 'done', note: 'nullsafe toegevoegd' },
+              { commentId: 'cb-3', state: 'skipped', note: 'alleen een vraag' },
+            ],
+          },
+        }),
+      }),
+    )
+    await mockComments(page, [
+      anchoredComment('cb-1', 'graag nullsafe hier'),
+      anchoredComment('cb-2', 'deze naam kan korter', { id: 'cb-2', runId: 'run-cb-2', line: 2 }),
+    ])
+    await page.goto('/pr/12903')
+    await leaveSearchBox(page)
+    await expect(page.getByTestId('block-row').first()).toBeVisible()
+
+    const actionRow = page.getByTestId('batch-action-row')
+    // Counter: handled (done + skipped) of the total, plus the skipped count.
+    await expect(actionRow).toContainText('2 van 3')
+    await expect(actionRow).toContainText('1 overgeslagen')
+    // Which comment — named by the very label its own index row carries.
+    await expect(actionRow).toContainText('Bezig met: graag nullsafe hier')
+    // And what Claude is doing right now, in claudeStatusText's own wording.
+    await expect(actionRow).toContainText('Claude leest src/Foo.php')
+    await expect(actionRow).toBeDisabled()
+  })
 })

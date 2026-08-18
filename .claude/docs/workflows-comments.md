@@ -1575,7 +1575,21 @@ where the progress lives:
   (`CommentClaudeFooter`, which `commentDetailCard` now also mounts): while
   this comment is the current one it shows the same "Claude leest src/x.php"
   sentence a chat turn shows (`claudeStatusText`, so no second formatter),
-  afterwards its one-line outcome.
+  afterwards its one-line outcome;
+- the **bottom action row itself** (`batchRunningLines`, `BlockList.mjs`),
+  which is the only PR-WIDE spot: it used to say nothing but "Claude bezig met
+  de comments…" for the whole run. On request ("geef meer feedback als claude
+  bezig is, bijvoorbeeld met welke comment hij bezig is en hoeveel van de
+  hoeveel hij heeft verwerkt") it now shows three lines — the counter
+  (`done + skipped` of `total`, plus the skipped count when there is one),
+  "Bezig met: &lt;label&gt;" naming `batch.current` by the very label its own
+  index row carries (`batchCurrentLabel`, so the two can never word the same
+  comment differently), and the live activity through that same
+  `claudeStatusText`. That third line is knowingly a DUPLICATE of the footer's
+  when the reviewer happens to stand on the current comment — accepted,
+  because the run must read as alive from anywhere in the sidebar. A
+  `batch.error` replaces it. Elapsed seconds are 0 here, as in
+  `RelatedPanel.mjs`'s own batch call: no ticker for a decoration line.
 
 `src/commentBatch.mjs` is the one shared reactive snapshot behind all of the
 above (one read + the SSE push, no poll of its own) — it also now exports

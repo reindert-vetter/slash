@@ -7,6 +7,7 @@ import { movedLabel, removedLabel } from './Block.mjs'
 import { avatarHTML, identityOf } from './avatar.mjs'
 import { paletteClass } from './blockPath.mjs'
 import { batch, batchItemFor, BATCH_STATE_LABEL, isBatchEligible } from './commentBatch.mjs'
+import { claudeStatusText } from './ClaudeChat.mjs'
 
 // Tailwind classes per category tag, so the pills read like the screenshot.
 const CATEGORY_STYLE = {
@@ -689,10 +690,76 @@ function batchActionRow(state) {
     >
       ${() =>
         running
-          ? 'Claude bezig met de comments…'
+          ? batchRunningLines(state)
           : 'Verwerk ' + n + (n === 1 ? ' comment' : ' comments') + ' met Claude (Opus 5)'}
     </button>
   `.key('batch-action-row-' + (running ? 'busy' : 'idle') + '-' + n)
+}
+
+// batchRunningLines is what that row says WHILE a run is in flight. Reviewer
+// request ("geef meer feedback als claude bezig is, bijvoorbeeld met welke
+// comment hij bezig is en hoeveel van de hoeveel hij heeft verwerkt"): the old
+// single sentence "Claude bezig met de comments…" stood still for minutes and
+// named neither the comment nor the progress. Three lines instead, all from the
+// volatile PR-wide snapshot (commentBatch.mjs):
+//
+//   1. the counter — handled (done + skipped) of total, plus the skipped count
+//      when there is one;
+//   2. WHICH comment Claude announced it is on ([slash:start], batch.current),
+//      named by the very label its own index row carries;
+//   3. WHAT it is doing right now, formatted by claudeStatusText — the SAME
+//      formatter the chat turn and the comment footer use, so there is no
+//      second wording of "Claude leest src/Foo.php". Deliberately repeated here
+//      even though the footer of the selected comment may show the same
+//      sentence: the reviewer must see the run is alive without standing on the
+//      exact comment it is working on.
+//
+// Every line is a plain STRING in an always-present element (never a
+// template↔'' slot), so no keyed/static-interpolation pitfall applies — see
+// .claude/rules/arrowjs-pitfalls.md. Elapsed seconds are deliberately 0, like
+// RelatedPanel.mjs's own batch call: no ticker for a decoration line.
+function batchRunningLines(state) {
+  const total = batch.total
+  const handled = batch.done + batch.skipped
+  let counter = 'Claude verwerkt comments · ' + handled + ' van ' + total
+  if (batch.skipped > 0) counter += ' · ' + batch.skipped + ' overgeslagen'
+  const current = batchCurrentLabel(state)
+  // An error replaces the activity line: a run that could not start says why
+  // instead of pretending Claude is still thinking.
+  const activity = batch.error
+    ? batch.error
+    : claudeStatusText(
+        { running: true, phase: batch.phase || 'starting', tool: batch.tool, detail: batch.detail },
+        0,
+      )
+  return html`
+    <span class="block">
+      <span class="block tabular-nums">${counter}</span>
+      <span class="block truncate font-normal text-[11px] text-slate-500 dark:text-zinc-400"
+        >${current ? 'Bezig met: ' + current : ''}</span
+      >
+      <span class="block truncate font-normal text-[11px] text-slate-500 dark:text-zinc-400"
+        >${activity}</span
+      >
+    </span>
+  `
+}
+
+// batchCurrentLabel names the comment batch.current points at, reusing the
+// label its own index row already shows (the 60-char body snippet built by
+// commentBlockItem in home.mjs) — so the action row and the row it refers to
+// can never word the same comment differently. '' when the run has no current
+// comment yet (the preparing phase) or when that comment has no row in this
+// tree; the counter and activity lines then carry the feedback on their own.
+function batchCurrentLabel(state) {
+  const id = batch.current
+  if (!id) return ''
+  for (const b of state.blocks || []) {
+    if (b.kind !== 'comment') continue
+    const group = b.comments || (b.comment ? [b.comment] : [])
+    for (const c of group) if (c && c.id === id) return b.label || ''
+  }
+  return ''
 }
 
 // approvalSummaryLine is the PR-wide combined-approval counter in the header,
