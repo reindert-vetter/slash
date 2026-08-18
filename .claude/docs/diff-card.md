@@ -82,11 +82,13 @@ single-pane and narrow" test.
 ## `contentWidthCls` — PHP only, uncapped upward, floored at 80 characters
 
 Superseded `fitWidthCls` (the old name only applied to the `fit` stand; the
-same formula now drives every stand for a PHP file). Whichever side
-`fitOnly(b)` renders (`singleSide(b) || 'right'`, same as before — the new/
-right text for an added or modified block, the old/left text for a removed
-block) is measured, but **not the whole block**: only a WINDOW around the
-current selection.
+same formula now drives every stand for a PHP file). For a one-sided
+(added/removed) block, or ANY block in `'fit'` (always one pane, see
+`fitOnly`), only that single canonical side is measured, but **not the whole
+block**: only a WINDOW around the current selection. A genuinely two-sided
+(`modified`) block in `'split'`/`'unified'` measures BOTH sides and combines
+them — see "`windowCharsForMode` — combining both sides for `split`/
+`unified`" below.
 
 ### `selectionWindowLineChars` — the up to 2 neighboring changed rows on each side, but only if directly adjacent
 
@@ -129,6 +131,71 @@ that first attempt turned the original single-row spike (chg=6 → 135ch) into
 a **multi-row** spike (chg=5 through chg=8 all → 135ch) — strictly worse for
 the reported complaint. Falling back to the plain floor instead of the
 block's true global longest line for this specific case fixed that.
+
+### A unit that balloons past `GROUP_INTERIOR_FULL_SCAN_ROWS` (20) only has its edges measured
+
+Reviewer decision (option 2 of 3 offered for this case): a `gran=group` unit
+is normally a handful of contiguous changed lines — but for a **wholly-added
+or wholly-removed** block, `changeGroups` finds exactly ONE group spanning
+the ENTIRE function body, because there's no unchanged context row anywhere
+inside it to end the run early. Reported bug: a 42-row added function's own
+169-character line (row ~31, nowhere near either edge, out of the visible
+viewport) drove the whole card's width the moment the reviewer drilled into
+it, since the in-selection scan had no size limit of its own — only the
+neighbor extension OUTSIDE the unit was adjacency-restricted (above).
+
+`GROUP_INTERIOR_FULL_SCAN_ROWS` = 20 (deliberately generous — comfortably
+above any ordinary multi-line modified-block change run, so this never
+narrows a normal group). A unit at or under that size is scanned in full,
+unchanged. A LARGER unit gets the exact same "within `WINDOW_EDGE_ROWS` (2)
+of a boundary" treatment its outside neighbors already get — rows more than
+2 away from BOTH `unit.start` and `unit.end` are treated as out of view, same
+as a too-far neighbor. One shared mental model: "only what's within 2 rows
+of a boundary you're actually near counts", whether that boundary is the
+edge of the unit itself or the unit's edge as seen from OUTSIDE it.
+
+### `windowCharsForMode` — combining both sides for `split`/`unified`
+
+Reported bugs (screenshots): a selected group whose OLD side carried a much
+longer line than its NEW side ran off the right edge of a `'unified'` card
+(only the new/right side was ever measured); and a `'split'` card's own two
+panes truncated content that individually would have fit, because the total
+card width was sized for ONE pane's own chars, then halved into two equal
+`w-1/2` panes. Reviewer: "2 sides diff mag ook breder" (split may grow for
+this).
+
+A one-sided block (`singleSide(b)` truthy) or `'fit'` (always forces a
+single pane, see `fitOnly`) still measures only that one canonical side —
+unaffected, mirrors `codeDiff`'s own `effectiveOnly` gate exactly, including
+the removed-block exception. A genuinely two-sided (`modified`) block in
+`'split'`/`'unified'` calls `selectionWindowLineChars` TWICE — once per side
+— and combines the results: `'unified'` stacks old above new in ONE column,
+so it takes `Math.max(left, right)`; `'split'` shows both side by side in
+two EQUAL-width panes, so it takes `2 * Math.max(left, right)` — sized so
+EITHER pane can fit the wider side, at the cost of some unused slack on the
+shorter side (accepted trade-off, not a bug).
+
+**Only the CANONICAL side (`fitOnly(b)`) gets the neighbor extension** — the
+other side passes `includeNeighbors: false` to `selectionWindowLineChars`,
+restricting it to the unit's own in-selection rows only. Discovered while
+building this fix: giving the non-canonical side the same 2-row neighbor
+reach as the canonical one let an unrelated, unselected line just past the
+boundary (structurally 2 rows away, not semantically related) inflate a
+`'split'` card to roughly 4x its needed width — worse than the very
+narrowness bug being fixed. The canonical side keeps its full neighbor
+window (unchanged, still the side selection/approval tracks, see "Only the
+new/right pane drives selection" in diff-render.md); the other side is only
+shown for context and only guaranteed to fit what's actually selected.
+
+**The snap-back resize baseline (`parseAutoWidthPx`, `columnWidth.mjs`) must
+call `widthCls` with the exact same arguments as the card's own class
+binding** — `capFitChars`/`activeGroup` included, not just `viewMode` — so
+the "auto width" a drag compares itself against always matches what's
+actually on screen. Omitting the unit falls back to the whole-block,
+un-windowed chars on both sides, which used to differ from the window-scoped
+on-screen width by only a few px for most real content, but the `'split'`
+doubling above made that gap large enough to break a same-position (+3px)
+drag's snap-back (`tests/column-resize.spec.mjs`).
 
 ```
 w-[calc(<chars>ch_+_2rem)]
@@ -276,6 +343,15 @@ collapses it to that exact same floor via `contentWidthCls`'s own
 number|null` — and clamp their own computed `chars` down to it before
 flooring/building the class string; absent (every non-preview card) means no
 cap, unchanged from before.
+
+**`fitCapCharsFor` deliberately stays single-side/canonical**, even now that
+a two-sided block's own width (`windowCharsForMode` above) combines both
+sides for `'split'`/`'unified'`: it doesn't need to know the active card's
+current stand at all, because a smaller cap only ever narrows a preview
+further — it can never make the preview exceed the active card, which is the
+one guarantee this mechanism exists for. Keeping it simple here was a
+deliberate choice to avoid threading `viewMode` through every `fitCapCharsFor`
+call site in `home.mjs` for a guarantee that already holds without it.
 
 Both preview call sites pass `capFitChars: () => fitCapCharsFor(<active
 block>, <active unit>)` (`curBlock()`/`topLevelActiveUnit(curBlock())` at the

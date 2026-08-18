@@ -148,15 +148,24 @@ function fitOnly(b) {
   return singleSide(b) || 'right'
 }
 
-// fitOnlyText — the exact text contentWidthCls/fitCapCharsFor measure: whichever
-// side fitOnly(b) renders, guarded against missing/errored code. Extracted so
-// both call sites (a card's own width and another card's cap on it, see
-// fitCapCharsFor below) can never drift apart.
-function fitOnlyText(b) {
+// sideText — the raw source text for one side ('left'/'right'), guarded
+// against missing/errored code. Used directly by contentWidthCls's
+// 'split'/'unified' branch (which needs BOTH sides' own whole-block
+// fallback text, not just the canonical one) and by fitOnlyText below.
+function sideText(b, side) {
   const c = b.code
   const oldText = c && !c.error && c.old ? c.old.text : ''
   const newText = c && !c.error && c.new ? c.new.text : ''
-  return fitOnly(b) === 'left' ? oldText : newText
+  return side === 'left' ? oldText : newText
+}
+
+// fitOnlyText — the exact text contentWidthCls/fitCapCharsFor measure in
+// 'fit' (and for a one-sided block, in every stand): whichever side
+// fitOnly(b) renders, guarded against missing/errored code. Extracted so
+// both call sites (a card's own width and another card's cap on it, see
+// fitCapCharsFor below) can never drift apart.
+function fitOnlyText(b) {
+  return sideText(b, fitOnly(b))
 }
 
 
@@ -265,26 +274,89 @@ function codeMaxLineChars(code) {
   return lens.length ? lens[lens.length - 1] : 0
 }
 
+// WINDOW_EDGE_ROWS — the "directly adjacent" budget shared by TWO distinct
+// restrictions in selectionWindowLineChars below: how far a NEIGHBOR outside
+// the unit may sit (see neighborLens), and — reused for the same reason, see
+// GROUP_INTERIOR_FULL_SCAN_ROWS below — how far INSIDE a huge unit's own
+// boundary still counts as "near enough to the edge you're looking at".
+// One shared constant so both read as the same mental model: "only what's
+// within 2 rows of a boundary you're actually near counts".
+const WINDOW_EDGE_ROWS = 2
+
+// GROUP_INTERIOR_FULL_SCAN_ROWS — a unit at or under this many rows is
+// scanned in full (every one of its own rows counts, same as before this
+// constant existed); a unit LARGER than this only has its edges (the first/
+// last WINDOW_EDGE_ROWS rows) measured. Reviewer decision (option 2 of the
+// 3 offered): a `gran=group` unit for a genuinely multi-line but ordinary
+// change run is always comfortably under this — it stays fully measured,
+// unchanged. This only ever kicks in for the edge case where 'group' theory
+// (one contiguous changed run) happens to swallow an ENTIRE function body,
+// which only happens for a wholly-added/removed block: there is no
+// unchanged context row anywhere inside it to end the run early, so the
+// "group" IS the whole function — dozens of rows, none of which the
+// reviewer is necessarily looking at right now. Without this cap, a long
+// unrelated line deep in that function (out of view, e.g. near the middle)
+// drove the whole card's width — reported: a 42-row added function's own
+// 169-char line (row ~31, nowhere near either edge) ballooned a card whose
+// visible viewport only showed the first few rows. 20 is deliberately
+// generous — comfortably above any ordinary multi-line modified-block
+// change run — so this never narrows a normal group, only a whole-function
+// one.
+const GROUP_INTERIOR_FULL_SCAN_ROWS = 20
+
 // selectionWindowLineChars — like codeMaxLineChars, but restricted to a small
 // WINDOW of rows around the reviewer's current selection: the unit's own
 // rows (a change group, a single line, a call segment, or a Shift+arrow
 // range — same shape `activeGroup` already carries, see Block()'s own doc
-// comment) plus up to 2 CHANGED neighbor rows on each side, on whichever
-// side fitOnly(b) renders. Reviewer request: every stand's width should
-// follow what's actually in view around the cursor, not the block's own
-// true longest line elsewhere (which could sit far outside the visible
-// window) — see "de 2 omliggende aangepaste rijen" in diff-card.md.
+// comment) plus up to WINDOW_EDGE_ROWS CHANGED neighbor rows on each side.
+// Reviewer request: every stand's width should follow what's actually in
+// view around the cursor, not the block's own true longest line elsewhere
+// (which could sit far outside the visible window) — see "de 2 omliggende
+// aangepaste rijen" in diff-card.md.
+//
+// `side` — which pane's text to measure ('left'/'right'), defaulting to
+// whichever single side `fitOnly(b)` renders (the original, single-side
+// contract every existing call kept until the split/unified fix below).
+// contentWidthCls now calls this TWICE per two-sided (modified) block in
+// 'split'/'unified' — once per side — and combines the two results itself
+// (see contentWidthCls's own doc comment): 'unified' stacks old above new
+// in ONE column, so it needs whichever side is wider; 'split' shows both
+// side by side in two EQUAL-width panes, so each pane must individually fit
+// its own longest line. Passing an explicit `side` here is what makes that
+// possible without duplicating the window/neighbor logic below.
+//
+// `includeNeighbors` (default true) — whether the up-to-WINDOW_EDGE_ROWS
+// neighbor extension outside the unit applies at all. The CANONICAL side
+// (the one selection/approval already tracks, see diff-render.md) keeps it;
+// contentWidthCls passes `false` for the OTHER side, so that side only ever
+// measures the unit's own in-selection rows, never reaches past the
+// boundary. Reviewer-facing reasoning: the neighbor window exists to avoid
+// clipping a clearly-related row just past the exact selection on the side
+// that's actually driving navigation — the other side is only shown for
+// context, and letting IT also reach 2 rows past the boundary surfaced a
+// real regression during testing: a `gran=line` single-row selection's
+// off-side neighbor happened to land 2 rows deep into an unrelated nested
+// array literal, ballooning a 'split' card to ~4x its needed width for
+// content that wasn't even part of what was selected. The unit's OWN span
+// is unaffected either way (still fully measured up to
+// GROUP_INTERIOR_FULL_SCAN_ROWS, see below) — this only trims the extra
+// reach BEYOND the boundary on the side that isn't driving the selection.
 //
 // A neighbor only counts when it sits DIRECTLY ADJACENT to the unit's own
-// boundary (real row index, one step at a time) AND itself has measurable
-// text on the rendered side (not blank, not comment-only) — the window
-// walk stops the instant either check fails, it never skips past a
-// disqualified row to keep searching further out. Without this, "the
-// nearest changed row however far away" could jump across a comment/filler
-// gap to an unrelated changed row elsewhere in the block and let that one
-// row dictate the whole card's width (reported: a cursor on an
-// old-side-only deletion row picked up a far-away 135-char streaming line
-// from a different if-block).
+// boundary (real row index, one step at a time, up to WINDOW_EDGE_ROWS) AND
+// itself has measurable text on the rendered side (not blank, not
+// comment-only) — the window walk stops the instant either check fails, it
+// never skips past a disqualified row to keep searching further out.
+// Without this, "the nearest changed row however far away" could jump
+// across a comment/filler gap to an unrelated changed row elsewhere in the
+// block and let that one row dictate the whole card's width (reported: a
+// cursor on an old-side-only deletion row picked up a far-away 135-char
+// streaming line from a different if-block).
+//
+// The unit's OWN rows get the same "near an edge" treatment once the unit
+// itself grows past GROUP_INTERIOR_FULL_SCAN_ROWS — see that constant's own
+// doc comment for why (a wholly-added/removed block's single 'group' unit
+// can legitimately BE the entire function).
 //
 // Superseded activeUnitLineChars, which scanned only the unit's own row
 // range with no neighbor window at all.
@@ -296,10 +368,10 @@ function codeMaxLineChars(code) {
 // preview/collapsed card or list mode without changes).
 //
 // Returns `0` — deliberately NOT null — when a `unit` DOES exist but
-// neither its own rows nor either directly-adjacent neighbor carry any
-// measurable text on the rendered side (e.g. the cursor sits deep inside a
-// multi-row old-side-only deletion run at 'line' granularity, see above).
-// `0` reads as "cap at nothing" to both callers (contentWidthCls's
+// nothing within the (possibly edge-restricted) window carries measurable
+// text on the rendered side (e.g. the cursor sits deep inside a multi-row
+// old-side-only deletion run at 'line' granularity, see above). `0` reads
+// as "cap at nothing" to both callers (contentWidthCls's
 // `Math.max(MIN_CONTENT_WIDTH_CHARS, …)` floor, fitCapCharsFor's own
 // documented 0-means-floor contract) and collapses the card to the plain
 // MIN_CONTENT_WIDTH_CHARS floor — reviewer decision: a cursor position with
@@ -307,16 +379,18 @@ function codeMaxLineChars(code) {
 // longest line (that reintroduced the exact width-spike bug this window was
 // built to fix, just spread across every row of a same-side deletion run
 // instead of a single one).
-function selectionWindowLineChars(b, unit) {
+function selectionWindowLineChars(b, unit, side = fitOnly(b) === 'left' ? 'left' : 'right', includeNeighbors = true) {
   if (!unit) return null
   const rows = blockRows(b)
   if (!rows.length) return null
   const changed = changedRows(rows)
   if (!changed.length) return null
-  const side = fitOnly(b) === 'left' ? 'left' : 'right'
   const start = Math.max(0, unit.start)
   const end = Math.min(rows.length - 1, unit.end)
   const changedSet = new Set(changed)
+  // See GROUP_INTERIOR_FULL_SCAN_ROWS above: only a unit far bigger than any
+  // ordinary change run gets its own interior edge-restricted too.
+  const restrictInterior = end - start + 1 > GROUP_INTERIOR_FULL_SCAN_ROWS
 
   // measurableLen — the row's length on the rendered side, or null when the
   // row carries nothing worth measuring (blank, or comment-only) — same
@@ -344,7 +418,7 @@ function selectionWindowLineChars(b, unit) {
   const neighborLens = (boundary, dir) => {
     const lens = []
     let i = boundary
-    for (let step = 0; step < 2; step++) {
+    for (let step = 0; step < WINDOW_EDGE_ROWS; step++) {
       i += dir
       if (i < 0 || i >= rows.length) break
       if (!changedSet.has(i)) break
@@ -359,17 +433,23 @@ function selectionWindowLineChars(b, unit) {
   let any = false
   for (const i of changed) {
     if (i < start || i > end) continue
+    // Deep interior of an oversized unit (see restrictInterior above) —
+    // more than WINDOW_EDGE_ROWS away from BOTH of the unit's own
+    // boundaries — is treated as out of view, same as a too-far neighbor.
+    if (restrictInterior && i - start > WINDOW_EDGE_ROWS && end - i > WINDOW_EDGE_ROWS) continue
     const len = measurableLen(i)
     if (len == null) continue
     any = true
     if (len > max) max = len
   }
-  for (const len of [...neighborLens(start, -1), ...neighborLens(end, 1)]) {
-    any = true
-    if (len > max) max = len
+  if (includeNeighbors) {
+    for (const len of [...neighborLens(start, -1), ...neighborLens(end, 1)]) {
+      any = true
+      if (len > max) max = len
+    }
   }
-  // A unit exists but nothing in it (or directly adjacent to it) was
-  // measurable — return 0, not null, so the caller floors to
+  // A unit exists but nothing in it (or directly adjacent to it, when
+  // measurable — was) — return 0, not null, so the caller floors to
   // MIN_CONTENT_WIDTH_CHARS instead of falling back to the block's true
   // global longest line (see this function's own doc comment above).
   return any ? max : 0
@@ -403,6 +483,14 @@ function selectionWindowLineChars(b, unit) {
 // nearby returns 0 (selectionWindowLineChars's own 0-vs-null contract),
 // which caps a preview at the plain floor rather than the block's true
 // global longest line.
+//
+// Deliberately stays single-side/canonical (fitOnlyText's own side) even
+// now that a genuinely two-sided (modified) block's OWN width
+// (contentWidthCls below) combines both sides for 'split'/'unified' — a
+// smaller cap only ever narrows a preview further, never widens it past the
+// active card, so this simpler, single-side cap still satisfies the one
+// guarantee it exists for ("never wider than the active card") without
+// needing to know the active card's current stand at all.
 export function fitCapCharsFor(b, unit) {
   if (!isPhpFile(b)) return 0
   const windowChars = selectionWindowLineChars(b, unit)
@@ -420,13 +508,18 @@ export function fitCapCharsFor(b, unit) {
 // card off what's actually around the cursor (selectionWindowLineChars),
 // floored at MIN_CONTENT_WIDTH_CHARS (80) characters, uncapped upward. The
 // card genuinely grows/shrinks as the reviewer navigates — see
-// contentWidthCls's own doc comment. `viewMode` itself no longer affects the
-// WIDTH (only which/how many panes codeDiff renders — see the `effectiveOnly`
-// branch there), so it's unused here now; kept as a parameter for call-site
-// compatibility (home.mjs passes it positionally next to capFitChars/
-// activeGroup).
+// contentWidthCls's own doc comment.
+//
+// `viewMode` DOES still affect the width, just not by picking a fixed tier
+// per stand any more: a genuinely two-sided (modified) block's 'split'/
+// 'unified' stands each need to know how many panes are actually rendered
+// side by side vs. stacked, to size the card so NEITHER visible pane clips
+// (see contentWidthCls's own doc comment) — reported: a selected old-side-
+// only line ran off the edge of a 'unified' card, and both panes of a
+// 'split' card truncated their own already-fitting content because the
+// total card width was sized for one pane, then halved into two.
 function widthCls(b, viewMode, capFitChars, activeGroup) {
-  return isPhpFile(b) ? contentWidthCls(b, capFitChars, activeGroup) : boundedWrapWidthCls()
+  return isPhpFile(b) ? contentWidthCls(b, capFitChars, activeGroup, viewMode) : boundedWrapWidthCls()
 }
 
 // boundedWrapWidthCls — the width for a NON-PHP file (see isPhpFile), in
@@ -467,16 +560,24 @@ const MIN_CONTENT_WIDTH_CHARS = 80
 // the whole card (reported: 336 characters → ~6800px). Hence the PHP-only
 // scope: a non-PHP file gets boundedWrapWidthCls + wrapping instead.
 //
-// Based on whichever side fitOnly(b) renders: the new/right text for an
-// added or modified block, the old/left text for a removed block (the one
-// deliberate exception — a removed block has no new side to prefer, so its
-// old pane stays visible in every stand). A genuinely two-sided (modified)
-// block in 'split' still shows both panes side by side (codeDiff's own
-// `effectiveOnly` branch, unaffected by this change) — its WIDTH is
-// deliberately still measured off the single new/right side only, the same
-// canonical side that already drives selection/approval (see "Only the
-// new/right pane drives selection" in diff-render.md); the old/left pane can
-// still clip a very long removed line in 'split', same as before.
+// A one-sided block (added/removed, singleSide(b) truthy), and ANY block in
+// 'fit' (which always collapses to one pane — fitOnly, above), is measured
+// off that single canonical side only, exactly as before. A genuinely
+// two-sided (modified) block in 'split'/'unified' now measures BOTH sides
+// and combines them (windowCharsForMode below) — 'unified' stacks old
+// above new in ONE column, so it needs whichever side is wider
+// (`Math.max`); 'split' shows both side by side in two EQUAL-width
+// (`w-1/2`) panes, so each pane must individually fit its own longest
+// line, sized at TWICE the wider side (`2 * Math.max(...)`) — the shorter
+// side gets some unused slack rather than either pane clipping. Reviewer
+// request: "2 sides diff mag ook breeder" — split is explicitly allowed to
+// grow for this. Previously both stands were measured off the single new/
+// right side only (the same canonical side that drives selection/approval,
+// see "Only the new/right pane drives selection" in diff-render.md),
+// which let a long OLD-side-only line inside the selection overflow a
+// 'unified' card, and let a 'split' card's own two panes truncate content
+// that individually would have fit — the total width was sized for ONE
+// pane, then halved into two.
 //
 // capFitChars — an optional `() => number|null` (only ever passed by home.mjs
 // for a look-ahead PREVIEW card, see fitCapCharsFor's own doc comment above):
@@ -485,28 +586,77 @@ const MIN_CONTENT_WIDTH_CHARS = 80
 // render wider than the active card it's stacked with even though both are
 // genuinely two-sided PHP blocks with a different longest line. Absent for
 // every non-preview card, and a no-op whenever the preview's own chars
-// already happen to be the smaller number.
+// already happen to be the smaller number. Deliberately still a single,
+// canonical-side number (fitCapCharsFor's own doc comment) even now that a
+// two-sided block's own width can combine both sides — a smaller cap only
+// ever narrows a preview further, never risks it exceeding the active card.
 //
 // activeGroup — an optional `() => {start,end}|null` (Block()'s own opt of
 // the same name — the reviewer's currently selected/highlighted navigation
 // unit). The chars-count is taken from a WINDOW around that unit — the unit's
-// own rows plus up to 2 directly-adjacent changed rows on each side
-// (selectionWindowLineChars) — not the block's true longest line wherever it
-// happens to sit. Falls back to the whole-block codeMaxLineChars only when
-// there's no active unit at all (a preview/collapsed card, list mode without
-// changes, or a caller that doesn't pass this opt at all — every existing
-// direct-mount test, see diffview.spec.mjs). A unit that IS present but whose
-// window carries no measurable text at all floors to MIN_CONTENT_WIDTH_CHARS
-// instead (selectionWindowLineChars returns 0, not null, for that case) —
+// own rows plus up to WINDOW_EDGE_ROWS directly-adjacent changed rows on
+// each side (selectionWindowLineChars) — not the block's true longest line
+// wherever it happens to sit, AND not the unit's own full span once that
+// span balloons past GROUP_INTERIOR_FULL_SCAN_ROWS (see that constant's own
+// doc comment — a wholly-added/removed block's single 'group' unit can
+// legitimately BE the entire function). Falls back to the whole-block
+// codeMaxLineChars only when there's no active unit at all (a preview/
+// collapsed card, list mode without changes, or a caller that doesn't pass
+// this opt at all — every existing direct-mount test, see
+// diffview.spec.mjs). A unit that IS present but whose window carries no
+// measurable text at all floors to MIN_CONTENT_WIDTH_CHARS instead
+// (selectionWindowLineChars returns 0, not null, for that case) —
 // deliberately not the block's true global longest line, which would
 // reintroduce the width-spike bug this window exists to prevent.
-function contentWidthCls(b, capFitChars, activeGroup) {
-  const windowChars = selectionWindowLineChars(b, activeGroup && activeGroup())
-  const chars = windowChars != null ? windowChars : codeMaxLineChars(fitOnlyText(b))
+//
+// viewMode — an optional `() => 'split'|'unified'|'fit'` (widthCls forwards
+// its own same-named param, home.mjs's viewModeFn), defaulting to 'split'
+// for the rare direct call/test that omits it (matching codeDiff's own
+// default). See windowCharsForMode below for how it picks which side(s) to
+// combine.
+function contentWidthCls(b, capFitChars, activeGroup, viewMode) {
+  const unit = activeGroup && activeGroup()
+  const mode = (viewMode && viewMode()) || 'split'
+  const chars = windowCharsForMode(b, unit, mode)
   const cap = capFitChars && capFitChars()
   const clamped = typeof cap === 'number' && isFinite(cap) ? Math.min(chars, cap) : chars
   const floored = Math.max(MIN_CONTENT_WIDTH_CHARS, clamped)
   return `w-[calc(${floored}ch_+_2rem)] `
+}
+
+// windowOrFallbackChars — selectionWindowLineChars for one side, with the
+// "no unit at all" null falling back to that SAME side's own whole-block
+// codeMaxLineChars (mirrors the existing single-side fallback, just made
+// reusable per side instead of hardcoded to the canonical one).
+// `includeNeighbors` is forwarded as-is to selectionWindowLineChars (see its
+// own doc comment) — irrelevant to the no-unit fallback itself, which never
+// had a neighbor concept to begin with.
+function windowOrFallbackChars(b, unit, side, includeNeighbors) {
+  const windowChars = selectionWindowLineChars(b, unit, side, includeNeighbors)
+  return windowChars != null ? windowChars : codeMaxLineChars(sideText(b, side))
+}
+
+// windowCharsForMode — combines however many sides `mode` actually renders
+// on screen at once, mirroring codeDiff's own `effectiveOnly` gate exactly:
+// a one-sided block (singleSide(b) truthy) or 'fit' (which always forces a
+// single pane, see fitOnly) only ever measures that one canonical side,
+// same as before this fix. A genuinely two-sided (modified) block in
+// 'split'/'unified' measures BOTH sides and combines them — see
+// contentWidthCls's own doc comment above for why 'unified' takes the max
+// and 'split' doubles it. Only the CANONICAL side (fitOnly(b) — the one
+// selection/approval already tracks) gets the neighbor extension; the OTHER
+// side is restricted to its own in-selection rows only (`includeNeighbors:
+// false`, see selectionWindowLineChars's own doc comment for why) — it's
+// shown for context, not itself driving navigation, and letting it also
+// reach past the boundary caused a disproportionate 'split' width spike in
+// testing.
+function windowCharsForMode(b, unit, mode) {
+  const canonical = fitOnly(b)
+  if (singleSide(b) || mode === 'fit') return windowOrFallbackChars(b, unit, canonical, true)
+  const other = canonical === 'left' ? 'right' : 'left'
+  const canonicalChars = windowOrFallbackChars(b, unit, canonical, true)
+  const otherChars = windowOrFallbackChars(b, unit, other, false)
+  return mode === 'split' ? 2 * Math.max(canonicalChars, otherChars) : Math.max(canonicalChars, otherChars)
 }
 
 // VIEW_MODE_META describes the three `a`-cycle stands (state.diffViewMode,
@@ -901,10 +1051,19 @@ export default function Block(b, opts = {}) {
         // column-resize.md). Never shown on a card whose caller didn't wire
         // up resizing at all (onResizeStart stays a no-op then, so this
         // handle would drag nothing — e.g. testClass preview cards never
-        // pass these opts).
+        // pass these opts). The snap-back baseline (parseAutoWidthPx) MUST
+        // call widthCls with the exact same arguments as the card's own
+        // class binding above — capFitChars/activeGroup included, not just
+        // viewModeFn — so "the auto width" it compares the drag against is
+        // exactly what's currently on screen; passing only `b`/`viewModeFn`
+        // (no unit) falls back to the whole-block, un-windowed chars, which
+        // used to differ from the window-scoped on-screen width only by a
+        // few px for most real content but now can differ by a lot once
+        // 'split'/'unified' combine both sides (see contentWidthCls) —
+        // enough to break a same-position (+3px) drag's snap-back.
         !preview
           ? resizeHandle(
-              (e) => onResizeStart(e, (root) => parseAutoWidthPx(widthCls(b, viewModeFn), root)),
+              (e) => onResizeStart(e, (root) => parseAutoWidthPx(widthCls(b, viewModeFn, capFitChars, activeGroup), root)),
               () => onResizeReset(),
             )
           : ''}

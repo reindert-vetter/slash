@@ -891,4 +891,175 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     })
     await expect(indicator).toHaveCount(0)
   })
+
+  // Direct-mount unit test: a genuinely two-sided (modified) block's
+  // 'unified' stand stacks old (-) above new (+) in ONE column — the width
+  // must therefore account for BOTH sides, not just the canonical new/right
+  // one. Reported bug: a selected group whose OLD side carries a much
+  // longer line than its NEW side ran off the right edge of a 'unified'
+  // card, because only the (short) new/right side drove the width.
+  test('viewMode="unified" sizes the card off whichever side is wider, not just the new/right one', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+    await appReady(page)
+
+    await evaluateSettled(page, async () => {
+      const { reactive } = await import('/src/vendor/arrow.js')
+      const Block = (await import('/src/Block.mjs')).default
+      const longOld =
+        "$oldLongLine = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';"
+      const b = reactive({
+        category: 'ACTION',
+        label: 'Foo::oldwide',
+        status: 'modified',
+        file: 'app/Foo.php',
+        line: 80,
+        name: 'oldwide',
+        class: 'Foo',
+        approved: false,
+        code: {
+          // Row 0: signature (context). Row 1: the OLD-only long line (no
+          // new counterpart). Row 2: a short changed line on both sides.
+          // The two changed rows form one contiguous group.
+          old: {
+            start: 80,
+            end: 84,
+            text: 'public function oldwide(): void {\n    ' + longOld + '\n    return 1;\n}',
+          },
+          new: {
+            start: 80,
+            end: 82,
+            text: 'public function oldwide(): void {\n    return 2;\n}',
+          },
+        },
+      })
+      const host = document.createElement('div')
+      host.id = 'unified-old-wide-host'
+      document.body.appendChild(host)
+      Block(b, { viewMode: () => 'unified', activeGroup: () => ({ start: 1, end: 2 }) })(host)
+    })
+
+    const card = page.locator('#unified-old-wide-host article')
+    const cls = await card.getAttribute('class')
+    const match = /w-\[calc\((\d+)ch_\+_2rem\)\]/.exec(cls)
+    // The old-only line is ~100 characters — comfortably past the short
+    // new/right side's own content and past the 80-char floor, proving the
+    // old side was actually measured for 'unified'.
+    expect(Number(match[1])).toBeGreaterThan(90)
+  })
+
+  // Direct-mount unit test: 'split' shows old and new side by side in two
+  // EQUAL-width panes, so the total card width must fit BOTH sides of the
+  // selected row, not just the canonical one halved. But the OTHER (non-
+  // canonical) side must NOT reach for a neighbor past the selected row's
+  // own boundary — only the unit's own in-selection rows count on that side
+  // (selectionWindowLineChars's `includeNeighbors` param). Guards the
+  // regression found while building this fix: an old-only long line sitting
+  // just past the boundary (a neighbor, not part of the selection) inflated
+  // a 'split' card to ~4x its needed width.
+  test('viewMode="split" fits both sides of the selected row, but a neighbor on the non-canonical side stays out of the window', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+    await appReady(page)
+
+    await evaluateSettled(page, async () => {
+      const { reactive } = await import('/src/vendor/arrow.js')
+      const Block = (await import('/src/Block.mjs')).default
+      const longOldNeighbor =
+        "$oldNeighborLongLine = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';"
+      const b = reactive({
+        category: 'ACTION',
+        label: 'Foo::baz',
+        status: 'modified',
+        file: 'app/Foo.php',
+        line: 90,
+        name: 'baz',
+        class: 'Foo',
+        approved: false,
+        code: {
+          // Row 0: signature (context). Row 1: the SELECTED short changed
+          // line (both sides short). Row 2: an old-only long line — a
+          // directly-adjacent NEIGHBOR of row 1, not part of the selection.
+          old: {
+            start: 90,
+            end: 93,
+            text: 'public function baz(): void {\n    $a1 = 1;\n    ' + longOldNeighbor + '\n}',
+          },
+          new: {
+            start: 90,
+            end: 92,
+            text: 'public function baz(): void {\n    $b1 = 1;\n}',
+          },
+        },
+      })
+      const host = document.createElement('div')
+      host.id = 'split-neighbor-other-side-host'
+      document.body.appendChild(host)
+      // Row 1 is the selected line (a gran=line-equivalent single-row unit).
+      Block(b, { viewMode: () => 'split', activeGroup: () => ({ start: 1, end: 1 }) })(host)
+    })
+
+    const card = page.locator('#split-neighbor-other-side-host article')
+    const cls = await card.getAttribute('class')
+    const match = /w-\[calc\((\d+)ch_\+_2rem\)\]/.exec(cls)
+    // Both sides of the selected row are short (well under 80 characters),
+    // so the card floors — proof the ~100-character neighbor on the OTHER
+    // side never entered the window at all.
+    expect(Number(match[1])).toBe(80)
+  })
+
+  // Direct-mount unit test: reviewer decision (option 2 of 3 offered) — a
+  // `gran=group` unit that balloons past GROUP_INTERIOR_FULL_SCAN_ROWS (a
+  // wholly-added/removed block's single group can legitimately BE the
+  // entire function, since there's no unchanged context row to end the run
+  // early) only has its EDGES measured, same as a too-far neighbor. Without
+  // this, a long line buried in the middle of a big added function —
+  // nowhere near either edge, out of the visible viewport — drove the whole
+  // card's width.
+  test('a huge single group (a wholly-added function) floors instead of following a line buried deep in its middle', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+    await appReady(page)
+
+    await evaluateSettled(page, async () => {
+      const { reactive } = await import('/src/vendor/arrow.js')
+      const Block = (await import('/src/Block.mjs')).default
+      const longMiddleLine =
+        "$deepLine = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';"
+      // 25 short lines with one long one buried in the middle (index 12) —
+      // comfortably past GROUP_INTERIOR_FULL_SCAN_ROWS (20) so the interior
+      // cap kicks in, and the long line sits far from both edges.
+      const lines = []
+      for (let i = 0; i < 25; i++) lines.push(i === 12 ? '    ' + longMiddleLine : '    $v' + i + ' = ' + i + ';')
+      const text = 'public function wholeadded(): void {\n' + lines.join('\n') + '\n}'
+      const b = reactive({
+        category: 'ACTION',
+        label: 'Foo::wholeadded',
+        status: 'added',
+        file: 'app/Foo.php',
+        line: 100,
+        name: 'wholeadded',
+        class: 'Foo',
+        approved: false,
+        code: { new: { start: 100, end: 100 + lines.length + 1, text } },
+      })
+      const host = document.createElement('div')
+      host.id = 'group-interior-cap-host'
+      document.body.appendChild(host)
+      // The whole function is one contiguous changed run (added-only) —
+      // select it entirely, exactly like changeGroups would for 'group'.
+      Block(b, { viewMode: () => 'split', activeGroup: () => ({ start: 0, end: lines.length + 1 }) })(host)
+    })
+
+    const card = page.locator('#group-interior-cap-host article')
+    const cls = await card.getAttribute('class')
+    const match = /w-\[calc\((\d+)ch_\+_2rem\)\]/.exec(cls)
+    // The buried line is ~100 characters — if it were still measured, the
+    // card would be comfortably past 90ch. Instead it floors, since it's
+    // nowhere near either edge of the (now edge-restricted) group.
+    expect(Number(match[1])).toBe(80)
+  })
 })
