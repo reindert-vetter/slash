@@ -766,6 +766,45 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 					def = methodOnClass(idx, acc, m[2])
 				}
 			}
+			if def == nil && nativeEnumMethods[m[2]] {
+				// 3b. A NATIVE enum method on an indexed enum —
+				// CustomerInclude::cases() (also from()/tryFrom()). PHP
+				// declares these itself, so no worktree block will ever
+				// define them; the useful child is the enum DECLARATION,
+				// exactly as rule 6 already does for an enum CASE reference
+				// (child_method = the method name, so the card reads
+				// `CustomerInclude::cases`). Must run BEFORE the
+				// unique-global-candidate fallback below, which would
+				// otherwise latch onto any unrelated class that happens to
+				// declare a same-named method.
+				if enums := idx.enums[shortName(recv)]; len(enums) == 1 && !seen[m[2]] {
+					e := enums[0]
+					seen[m[2]] = true
+					code := enrichedCodeSide(blockSource(headDir, e))
+					out = append(out, callresolve.Entry{
+						PR: pr, CallerID: callerID, CallKey: m[2], Status: callresolve.StatusResolved,
+						ChildFile: e.File, ChildClass: e.Class, ChildMethod: m[2],
+						ChildLine: code.Start, ChildCode: code.Text,
+					})
+					continue
+				}
+			}
+			if def == nil && isVendorBuiltin(m[2]) {
+				// A vendor/framework/PHP builtin name (resolve_call.go's own
+				// denylist) that the receiver doesn't declare resolves to
+				// NOTHING, deliberately — not to the unique global candidate
+				// below, and not to `unresolved` either. Reported bug:
+				// CustomerInclude::cases() (a native enum method on an enum
+				// the index didn't recognise) showed the wholly unrelated
+				// `Interval::cases` as underlying code, purely because that
+				// was the only app method of that name. `unresolved` would be
+				// no better here: the same denylist documents that neither
+				// Haiku nor the agentic Sonnet can ever find app code for
+				// these, so the row would only offer a "Zoeken…" affordance
+				// that never finds anything. Same "silently nothing"
+				// trade-off as rules 6b/6c/8.
+				continue
+			}
 			if def == nil {
 				// Foo doesn't declare m() itself and isn't a facade — it may be
 				// INHERITED from a base class (methodOnClass has no extends-chain
@@ -1913,6 +1952,14 @@ func studly(s string) string {
 	}
 	return strings.Join(parts, "")
 }
+
+// nativeEnumMethods are the methods PHP gives every backed/pure enum for free.
+// No worktree block ever declares them, so a `Foo::cases()` static call can
+// only sensibly point at the enum DECLARATION itself — see resolveCalls rule
+// 3b. `cases` is in resolve_call.go's vendorBuiltinNames for the same reason
+// (the LLM can never find it either); this map is the Go-side counterpart that
+// turns it into a useful child instead of a wrong one.
+var nativeEnumMethods = map[string]bool{"cases": true, "from": true, "tryFrom": true}
 
 // enumCaseCandidates returns the enums named recv that actually define case (or
 // const) key — the definitions a reference like AddressType::BILLING points to.

@@ -194,6 +194,25 @@ Rules, in order:
   parameter type is a structural property of the whole (changed) function,
   mirroring `controllerModelDetector`. Inherited Eloquent methods
   (`fill`/`save`/`query`) stay plain `unresolved`.
+- **3b — a native enum method (`Foo::cases()`).** PHP declares
+  `cases`/`from`/`tryFrom` for every enum itself, so no worktree block ever
+  defines them and `methodOnClass` always misses. On an **indexed enum**
+  receiver the child is the enum DECLARATION (`nativeEnumMethods` +
+  `idx.enums`, exactly rule 6's shape with `child_method` = the method name,
+  so the card reads `CustomerInclude::cases`). On any other receiver such a
+  call — and more generally any name in `resolve_call.go`'s
+  `vendorBuiltinNames` denylist (`isVendorBuiltin`) — resolves to **nothing at
+  all**: it must NOT reach the unique-global-candidate fallback above, and
+  `unresolved` is no better, since that same denylist records that neither
+  Haiku nor the agentic Sonnet can ever find app code for these (the row would
+  only offer a "Zoeken…" affordance that never finds anything). Same "silently
+  nothing" trade-off as rules 6b/6c/8. Reported bug (PR 13381):
+  `new MultipleIn(CustomerInclude::cases())` showed the wholly unrelated
+  `Interval::cases` (`modules/Statistics/Enums/Interval.php`) as underlying
+  code, purely because that was the only app symbol named `cases` and the
+  fallback treats a single global candidate as certain. Tests:
+  `TestResolveCallsEnumCasesCall`/
+  `TestResolveCallsBuiltinStaticNoGlobalFallback`.
 - **3 — facades.** `scanFacades` links `class X extends …Facade` +
   `getFacadeAccessor()`, so a `Foo::m(` that doesn't resolve on `Foo` retries on
   the accessor. A method on neither stays `unresolved` (vendor isn't indexed).

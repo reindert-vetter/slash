@@ -556,6 +556,125 @@ enum AddressType: string
 	}
 }
 
+// TestResolveCallsEnumCasesCall: a NATIVE enum method call
+// (CustomerInclude::cases()) must resolve to the enum DECLARATION, never to an
+// unrelated class that happens to declare a same-named method. Reported bug
+// (PR 13381): `new MultipleIn(CustomerInclude::cases())` showed
+// `Interval::cases` as underlying code, because that unrelated enum was the
+// only app symbol named `cases` and rule 3's unique-global-candidate fallback
+// picked it up.
+func TestResolveCallsEnumCasesCall(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 13381
+	_, headDir := worktreeDirs(dataDir, "", pr)
+	files := map[string]string{
+		"app/Enums/Includes/CustomerInclude.php": `<?php
+namespace App\Enums\Includes;
+enum CustomerInclude: string
+{
+    case ORDERS = 'orders';
+    case SUBSCRIPTIONS = 'subscriptions';
+}
+`,
+		// The only class in the worktree declaring a method literally named
+		// `cases` — the wrong answer this test guards against.
+		"modules/Statistics/Enums/Interval.php": `<?php
+namespace Modules\Statistics\Enums;
+class Interval
+{
+    public static function cases(): array
+    {
+        return [];
+    }
+}
+`,
+		"app/Http/Requests/CustomerShowRequest.php": `<?php
+namespace App\Http\Requests;
+use App\Enums\Includes\CustomerInclude;
+class CustomerShowRequest {
+    public function rules(): array
+    {
+        return ['include' => new MultipleIn(CustomerInclude::cases())];
+    }
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	caller := Block{PR: pr, File: "app/Http/Requests/CustomerShowRequest.php", Class: "CustomerShowRequest", Name: "rules", Side: SideNew, Status: StatusModified}
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	e, ok := findEntry(entries, "cases")
+	if !ok {
+		t.Fatal("no entry for call 'cases'")
+	}
+	if e.Status != callresolve.StatusResolved {
+		t.Fatalf("cases: status=%q, want resolved", e.Status)
+	}
+	if got := e.ChildClass + "::" + e.ChildMethod; got != "CustomerInclude::cases" {
+		t.Fatalf("cases: child=%q, want CustomerInclude::cases", got)
+	}
+	if !strings.Contains(e.ChildCode, "case ORDERS") {
+		t.Errorf("cases: child code missing the enum body, got %q", e.ChildCode)
+	}
+}
+
+// TestResolveCallsBuiltinStaticNoGlobalFallback: the same builtin method name
+// on a receiver that is NOT an indexed enum (a vendor enum, an unscanned file)
+// must produce NO entry at all — neither the unrelated unique global candidate
+// nor an `unresolved` row that the LLM search could never satisfy.
+func TestResolveCallsBuiltinStaticNoGlobalFallback(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 13382
+	_, headDir := worktreeDirs(dataDir, "", pr)
+	files := map[string]string{
+		"modules/Statistics/Enums/Interval.php": `<?php
+namespace Modules\Statistics\Enums;
+class Interval
+{
+    public static function cases(): array
+    {
+        return [];
+    }
+}
+`,
+		"app/Http/Requests/VendorRequest.php": `<?php
+namespace App\Http\Requests;
+use Vendor\Package\SomeVendorEnum;
+class VendorRequest {
+    public function rules(): array
+    {
+        return ['x' => SomeVendorEnum::cases()];
+    }
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	caller := Block{PR: pr, File: "app/Http/Requests/VendorRequest.php", Class: "VendorRequest", Name: "rules", Side: SideNew, Status: StatusModified}
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	if e, ok := findEntry(entries, "cases"); ok {
+		t.Fatalf("cases: got entry %+v, want none (builtin name, receiver not an indexed enum)", e)
+	}
+}
+
 // TestResolveCallsReceiverVar covers a method call whose receiver variable
 // names its class — $order->billingAddress() resolves to Order::billingAddress
 // even though Invoice defines the same method (globally ambiguous).
