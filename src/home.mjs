@@ -5944,7 +5944,10 @@ async function deleteCommentAndSelectRow() {
 // which mirrors both halves: the status AND the GitHub conversation).
 // "Sluit menu" is pinned first (withClose); the menu opens on
 // the 2nd item (defaultSel), so "Resolve comment" stays the default Enter
-// action. This is already true regardless of who wrote the comment — unlike
+// action — EXCEPT for an AI finding (isAiComment), which has no resolve slot
+// at all and therefore opens on "Verwijder comment": deleting it immediately,
+// with no confirm step, is exactly what the reviewer asked for.
+// This is already true regardless of who wrote the comment — unlike
 // prCommentCommandsFor below, this menu has no "Beantwoorden" item to reorder
 // (a block-scoped comment's reply field is always visible and typed into
 // directly; this menu only ever opens once that field is empty, see
@@ -6023,29 +6026,50 @@ function isResolvedComment(c) {
   return !!c && c.status === 'resolved'
 }
 
+// isAiComment — whether this comment is a code_warning finding rather than a
+// human conversation: an anchored one carries Source "ai" (code_warning.go),
+// an unanchored one additionally carries Kind "ai_warning". Same pair as
+// isBatchEligible (commentBatch.mjs) and comment_batch.go's own check.
+//
+// Reviewer request ("ai comments wil ik niet resolven, maar wil ik
+// verwijderen"): BOTH menus below drop their resolve/unresolve slot entirely
+// for such a finding — resolving is a conversation concept that doesn't apply
+// to it, deleting is what the reviewer actually does with one. Unresolve goes
+// too, not just resolve: the whole notion doesn't belong on an AI finding.
+// A block-anchored finding can be the primary comment of a mixed index group
+// (commentGroupKeyOf only excludes kind/orphan comments), in which case that
+// group row has no resolve item until the finding itself is deleted —
+// accepted.
+function isAiComment(c) {
+  return !!c && ((c.source || '') === 'ai' || c.kind === 'ai_warning')
+}
+
 function commentCommandsFor() {
   const focused = focusedComment()
-  const items = [
-    isResolvedComment(focused)
-      ? {
-          id: 'unresolve-comment',
-          label: 'Unresolve comment',
-          hint: 'heropen',
-          run: () => unresolveFocusedComment(),
-        }
-      : {
-          id: 'resolve-comment',
-          label: 'Resolve comment',
-          hint: 'resolve',
-          run: () => resolveFocusedComment(),
-        },
-    {
-      id: 'delete-comment',
-      label: 'Verwijder comment',
-      hint: 'delete',
-      run: () => deleteCommentAndSelectRow(),
-    },
-  ]
+  const items = []
+  if (!isAiComment(focused)) {
+    items.push(
+      isResolvedComment(focused)
+        ? {
+            id: 'unresolve-comment',
+            label: 'Unresolve comment',
+            hint: 'heropen',
+            run: () => unresolveFocusedComment(),
+          }
+        : {
+            id: 'resolve-comment',
+            label: 'Resolve comment',
+            hint: 'resolve',
+            run: () => resolveFocusedComment(),
+          },
+    )
+  }
+  items.push({
+    id: 'delete-comment',
+    label: 'Verwijder comment',
+    hint: 'delete',
+    run: () => deleteCommentAndSelectRow(),
+  })
   const c = focused
   // "Bewerk bericht" edits whichever message the keyboard is currently ON —
   // the root/opening message at rest, or the specific reply stepped into via
@@ -6245,7 +6269,10 @@ function isOwnComment(c) {
 // comment instead of cs's selected one. On an ALREADY resolved thread that
 // same slot reads "Unresolve comment" instead (isResolvedComment →
 // unresolvePrCommentItem) — never both, so the ordering rule above is
-// unaffected. "Verwijder comment" follows both, always last of the three and
+// unaffected. For an AI finding (isAiComment) neither exists: the list is
+// [Beantwoorden, Verwijder comment], so "Beantwoorden" is the default there
+// regardless of the ownership rule (an AI finding is never "own" anyway).
+// "Verwijder comment" follows both, always last of the three and
 // never the default (see deleteItem below).
 //
 // "Comment hiervan maken" — only appears for an AI-authored finding
@@ -6309,7 +6336,15 @@ function prCommentCommandsFor() {
       if (sel) deletePrCommentItem(sel)
     },
   }
-  const items = isOwnComment(c) ? [resolveItem, replyItem, deleteItem] : [replyItem, resolveItem, deleteItem]
+  // An AI finding (isAiComment) gets NO resolve/unresolve item at all — see
+  // that helper's own doc comment. It is never "own" either, so the list is
+  // simply [Beantwoorden, Verwijder]: replying stays the default, deleting
+  // stays out of first place.
+  const items = isAiComment(c)
+    ? [replyItem, deleteItem]
+    : isOwnComment(c)
+      ? [resolveItem, replyItem, deleteItem]
+      : [replyItem, resolveItem, deleteItem]
   // "Bewerk bericht" edits whichever message the keyboard is currently ON in
   // this item's own thread (→/enterPrCommentThread + pct, see
   // focusedPrThreadMessage) — only for the reviewer's OWN message.

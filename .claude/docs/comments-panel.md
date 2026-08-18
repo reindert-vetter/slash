@@ -601,7 +601,17 @@ default-selected (`defaultSel`); otherwise "Beantwoorden" stays first. Both item
 are always present, only the order changes — never colliding with "Comment
 hiervan maken" below, since an AI finding (`source === 'ai'`) is never "own".
 Then optionally **"Comment hiervan maken"** (AI findings only, see below) and
-finally **"Ignore"**. `isOwnComment`'s github+`meLogin()` branch has no
+finally **"Ignore"**.
+
+**An AI finding gets no resolve/unresolve item at all** (`isAiComment(c)` —
+`source === 'ai'` or `kind === 'ai_warning'`, the same pair `isBatchEligible`
+uses): reviewer request, "ai comments wil ik niet resolven, maar wil ik
+verwijderen". Both halves go, not just "Resolve comment" — resolving is a
+conversation concept that doesn't apply to a `code_warning` finding. So this
+menu reads **"Beantwoorden"** then **"Verwijder comment"** there, with
+"Beantwoorden" default (an AI finding is never "own", so the ownership
+reordering never applied to it anyway). The block-scoped menu drops the same
+slot, see below. `isOwnComment`'s github+`meLogin()` branch has no
 Playwright coverage — the offline harness has no seed hook for the current user
 (`GET /api/me` answers `{ok:false}`), so `meLogin()` is always `''` in tests.
 
@@ -643,7 +653,8 @@ not 'Geen commando's'" in `.claude/docs/command-palette.md`.
   the detail card (`picm.replying = true` + `picm.commentId = c.id`) and focuses
   it — the reviewer types and sends from there (`Enter` or the send button),
   never from the menu.
-- **"Resolve comment"** (`resolvePrCommentItem`) sends the same `"/resolve"`
+- **"Resolve comment"** (absent for an AI finding, see above)
+  (`resolvePrCommentItem`) sends the same `"/resolve"`
   sentinel + `done:true` reply Signal as `resolveFocusedComment` — local-only for
   a PR-wide thread, GitHub-resolved for a review-diff thread, see
   `.claude/docs/workflows-comments.md`. Both reply and resolve go through the
@@ -1273,9 +1284,12 @@ but a reviewer who agrees often wants their OWN, editable, non-local comment
 instead of the AI's wording.
 
 **Block-scoped (`convertWarningToComment`, `RelatedPanel.mjs`):**
-`commentCommandsFor`'s menu gains **"Comment hiervan maken"** after "Resolve
-comment"/"Verwijder comment" (not the default), shown only when
-`source === 'ai'`. It opens the block's own composer (`newCommentComposer`)
+`commentCommandsFor`'s menu gains **"Comment hiervan maken"** after
+"Verwijder comment" (not the default), shown only when
+`source === 'ai'` — which is also exactly when that menu has NO
+"Resolve comment"/"Unresolve comment" item (`isAiComment`, see above), so
+"Verwijder comment" is the default-selected item on such a finding and one
+`Enter` deletes it outright, with no confirm step (deliberate). It opens the block's own composer (`newCommentComposer`)
 prefilled with the finding's body and — load-bearing — anchored on the
 **finding's own** `file`/`label`/`gran`/`rowStart`/`rowEnd`/`code`, not whatever
 the live cursor sits on: a module-level `warningOverride` (`{original, target}`)
@@ -1292,7 +1306,7 @@ replacement is confirmed placed** (`createComment` returns `res.ok`) does
 placement leaves the finding standing.
 
 **PR-wide (`kind:'ai_warning'`, no anchor):** `prCommentCommandsFor` gets the
-same item (again gated on `source === 'ai'`, after "Resolve comment") wired to
+same item (again gated on `source === 'ai'`, after "Verwijder comment") wired to
 `convertPrWideWarningToComment`, which repurposes the item's own "Beantwoorden"
 field (`picm` gained a `mode`: `'reply'` default or `'convert'`) instead of
 opening a second composer. `startPrCommentConvert` reveals that field prefilled;

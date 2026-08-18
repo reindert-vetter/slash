@@ -166,13 +166,15 @@ test.describe('Publish a local comment thread to GitHub', () => {
     await expect(page.getByTestId('comment-thread')).toContainText('lokale aantekening')
 
     // Enter on the now-empty reply field opens the comment menu, which offers
-    // the publish item — Resolve is still the default, so nothing happens on
-    // that first keypress.
+    // the publish item. On an AI finding the default item is "Verwijder
+    // comment" (there is no resolve slot, see isAiComment in home.mjs), so
+    // this keypress only opens the menu — it never runs anything.
     await page.getByTestId('reaction-compose').press('Enter')
     await expect(menu).toBeVisible()
     const publish = menu.getByTestId('command-row').filter({ hasText: 'Zet op GitHub' })
     await expect(publish).toHaveCount(1)
-    await expect(menu.getByTestId('command-row').nth(1)).toContainText('Resolve comment')
+    await expect(menu).not.toContainText('Resolve comment')
+    await expect(menu.getByTestId('command-row').nth(1)).toContainText('Verwijder comment')
     await publish.click()
     await expect(menu.getByTestId('command-row').nth(1)).toContainText('Alleen de AI-melding')
     await menu.getByTestId('command-row').nth(2).click() // met de eerdere 1 bericht

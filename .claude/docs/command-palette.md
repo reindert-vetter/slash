@@ -739,13 +739,19 @@ If the keyboard is on a placed comment row in `RelatedPanel`
 (`isCommentOrThreadFocused()` — `cs.focus === 'comment'` at rest, OR
 `cs.focus === 'thread'` while stepped ↑ into one of its own replies) **and the
 reply field is empty**, `Enter` opens this menu instead of the block palette —
-three to seven rows:
+two to seven rows:
 
 1. **"Close menu"** (pinned).
 2. **"Resolve comment"** (default, 2nd item) — or **"Unresolve comment"** in
    that same slot once the thread is resolved (`isResolvedComment`); never
-   both.
-3. **"Verwijder comment"**.
+   both. **Absent entirely for an AI finding** (`isAiComment` — `source ===
+   'ai'` or `kind === 'ai_warning'`, `home.mjs`): reviewer request, "ai
+   comments wil ik niet resolven, maar wil ik verwijderen". Both halves go,
+   including "Unresolve comment" — resolving is a conversation concept that
+   doesn't apply to a `code_warning` finding.
+3. **"Verwijder comment"** — the default-selected item on an AI finding, since
+   item 2 doesn't exist there, so one `Enter` deletes it outright with no
+   confirm step (deliberate).
 4. **"Bewerk bericht"** — only for the reviewer's OWN message
    (`isOwnMessage`), which the keyboard is currently on
    (`focusedThreadMessage()` — the root at rest, or the specific reply
@@ -815,7 +821,10 @@ side and `.claude/docs/comments-panel.md` for the row/detail card itself.
 `selectedComment()` gates a branch checked **before** the generic
 Enter-opens-menu handling.
 
-Rows: **"Sluit menu"** (pinned) → **"Beantwoorden"** and **"Resolve comment"**,
+Rows (for an AI finding — `isAiComment`, see the comment-scoped menu above —
+the resolve/unresolve slot is missing altogether, leaving **"Beantwoorden"**
+default and **"Verwijder comment"** right behind it):
+**"Sluit menu"** (pinned) → **"Beantwoorden"** and **"Resolve comment"**,
 whose order depends on `isOwnComment(c)` (`home.mjs`): for the reviewer's own
 comment — placed in this app (`!c.source || c.source === 'ui'`) or placed on
 GitHub by them and later imported (`c.source === 'github'` +

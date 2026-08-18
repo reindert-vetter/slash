@@ -65,14 +65,16 @@ test.describe('Convert an AI-controle finding into a real comment', () => {
     const menu = page.getByTestId('command-menu')
     await expect(menu).toBeVisible()
     const rows = menu.getByTestId('command-row')
-    // "Sluit menu", "Resolve comment" (default), "Verwijder comment", "Comment
-    // hiervan maken", "Zet op GitHub" (the finding is local — see
-    // publishThreadCommand) — no "Open op GitHub" (a Local:true finding never
-    // posts).
-    await expect(rows).toHaveCount(5)
-    await expect(rows.nth(1)).toContainText('Resolve comment')
-    await expect(rows.nth(3)).toContainText('Comment hiervan maken')
-    await rows.nth(3).click()
+    // "Sluit menu", "Verwijder comment" (default), "Comment hiervan maken",
+    // "Zet op GitHub" (the finding is local — see publishThreadCommand) — no
+    // "Open op GitHub" (a Local:true finding never posts), and NO
+    // "Resolve comment"/"Unresolve comment" at all: an AI finding is deleted,
+    // never resolved (isAiComment, home.mjs).
+    await expect(rows).toHaveCount(4)
+    await expect(menu).not.toContainText('Resolve comment')
+    await expect(rows.nth(1)).toContainText('Verwijder comment')
+    await expect(rows.nth(2)).toContainText('Comment hiervan maken')
+    await rows.nth(2).click()
     await expect(menu).toHaveCount(0)
 
     const composer = page.getByTestId('comment-compose')
@@ -149,14 +151,16 @@ test.describe('Convert an AI-controle finding into a real comment', () => {
     const menu = page.getByTestId('command-menu')
     await expect(menu).toBeVisible()
     const rows = menu.getByTestId('command-row')
-    // "Sluit menu", "Beantwoorden" (default), "Resolve comment", "Verwijder
-    // comment", "Comment hiervan maken", "Chat met Claude", "Zet op GitHub"
-    // (the finding is local), "Ignore".
-    await expect(rows).toHaveCount(8)
+    // "Sluit menu", "Beantwoorden" (default), "Verwijder comment", "Comment
+    // hiervan maken", "Chat met Claude", "Zet op GitHub" (the finding is
+    // local), "Ignore" — no "Resolve comment" on an AI finding (isAiComment,
+    // home.mjs).
+    await expect(rows).toHaveCount(7)
+    await expect(menu).not.toContainText('Resolve comment')
     await expect(rows.nth(1)).toContainText('Beantwoorden')
-    await expect(rows.nth(3)).toContainText('Verwijder comment')
-    await expect(rows.nth(4)).toContainText('Comment hiervan maken')
-    await rows.nth(4).click()
+    await expect(rows.nth(2)).toContainText('Verwijder comment')
+    await expect(rows.nth(3)).toContainText('Comment hiervan maken')
+    await rows.nth(3).click()
     await expect(menu).toHaveCount(0)
 
     const reply = page.getByTestId('comment-detail-reply')

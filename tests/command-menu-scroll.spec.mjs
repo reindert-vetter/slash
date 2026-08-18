@@ -7,10 +7,10 @@ import { test, expect, seededPr, leaveSearchBox } from './_fixtures.mjs'
 // on ↑/↓" in .claude/docs/command-palette.md.
 //
 // A PR-wide, local, AI-authored finding's own action menu is long enough to
-// overflow on its own (Sluit menu, Beantwoorden, Resolve comment, Verwijder
-// comment, Comment hiervan maken, Chat met Claude, Zet op GitHub, Ignore =
-// 8 rows) — the exact shape tests/convert-warning-to-comment.spec.mjs also
-// seeds.
+// overflow on its own (Sluit menu, Beantwoorden, Verwijder comment, Comment
+// hiervan maken, Chat met Claude, Zet op GitHub, Ignore = 7 rows; an AI
+// finding has no "Resolve comment", see isAiComment in home.mjs) — the exact
+// shape tests/convert-warning-to-comment.spec.mjs also seeds.
 test('arrowing down through a long prComment menu keeps the highlighted row inside the visible list', async ({
   page,
 }, testInfo) => {
@@ -33,19 +33,26 @@ test('arrowing down through a long prComment menu keeps the highlighted row insi
   await leaveSearchBox(page)
   await expect(page.getByTestId('comment-detail-card')).toBeVisible()
 
+  // Force the overflow deterministically instead of relying on the row count
+  // alone: the list's own max-h-72 leaves this menu borderline now that an AI
+  // finding has no "Resolve comment" row (7 instead of 8, see isAiComment in
+  // home.mjs), and the behaviour under test is the scroll-into-view, not how
+  // many rows happen to fit.
+  await page.addStyleTag({ content: '[data-testid="command-list"] { max-height: 100px !important; }' })
+
   await page.keyboard.press('Enter')
   const menu = page.getByTestId('command-menu')
   await expect(menu).toBeVisible()
   const rows = menu.getByTestId('command-row')
-  await expect(rows).toHaveCount(8)
+  await expect(rows).toHaveCount(7)
 
   const list = page.getByTestId('command-list')
-  for (let i = 0; i < 7; i++) {
+  for (let i = 0; i < 6; i++) {
     await page.keyboard.press('ArrowDown')
   }
-  // The last row (index 7, "Ignore") is now selected and must be fully
+  // The last row (index 6, "Ignore") is now selected and must be fully
   // within the scrollable list's own bounding box — not clipped below it.
-  const lastRow = rows.nth(7)
+  const lastRow = rows.nth(6)
   await expect(lastRow).toContainText('Ignore')
   await expect(lastRow).toHaveClass(/bg-indigo-50/)
   const listBox = await list.boundingBox()

@@ -58,9 +58,10 @@ test('Comment hiervan maken on a line-anchored finding, reached via its own side
   const rows = menu.getByTestId('command-row')
   // Same shape as prCommentCommandsFor's PR-wide case (see
   // convert-warning-to-comment.spec.mjs): "Sluit menu", "Beantwoorden"
-  // (default), "Resolve comment", "Verwijder comment", "Comment hiervan
-  // maken", "Chat met Claude", "Zet op GitHub" (the finding is local), "Ignore".
-  await expect(rows).toHaveCount(8)
+  // (default), "Verwijder comment", "Comment hiervan maken", "Chat met
+  // Claude", "Zet op GitHub" (the finding is local), "Ignore" — an AI finding
+  // has no "Resolve comment" (isAiComment, home.mjs).
+  await expect(rows).toHaveCount(7)
   const convertRow = rows.filter({ hasText: 'Comment hiervan maken' })
   await expect(convertRow).toHaveCount(1)
   await convertRow.click()
