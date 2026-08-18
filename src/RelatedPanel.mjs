@@ -6488,8 +6488,9 @@ export function visibleWorkflowRuns(state) {
 // ProblemsPanel) were two cards saying the same kind of thing about the same
 // PR, so a reviewer had to read two lists to know what background work was in
 // trouble. They are now ONE list inside this card (reviewer: "dit bij elkaar
-// doen") — failures first, since they're the only rows there is anything to do
-// about. See "The Taken block" in .claude/docs/detail-layout.md.
+// doen"), ordered purely by recency — a stale failure must not sit above a
+// task that just finished. See "The Taken block" in
+// .claude/docs/detail-layout.md.
 //
 // Every row is one plain, NON-reactive descriptor object (buildTaskRows below)
 // rather than a raw run/log entry: the row template then needs no conditional
@@ -6577,12 +6578,14 @@ function failedRunNote(run) {
   return parts.join(' — ')
 }
 
-// buildTaskRows is the merged, ordered list the card renders. Order is by
-// actionability, not by time: every problem first (failed runs + skipped log
-// lines, mixed and newest-first among themselves), then the live/idle runs
-// visibleWorkflowRuns already selected. A failed run is taken ONLY from
-// state.pageProblems, never from state.workflows: /api/problems drops a
-// failure that a later attempt already superseded (supersededRuns,
+// buildTaskRows is the merged, ordered list the card renders. Order is purely
+// by recency (each row's own `at`, newest first) across BOTH groups — problems
+// (failed runs + skipped log lines) and the live/idle runs visibleWorkflowRuns
+// already selected are sorted together as one list, not problems-first. A
+// reviewer reported the opposite ordering as confusing: three day-old failed
+// rows sat above a run that had finished 5 minutes ago. A failed run is taken
+// ONLY from state.pageProblems, never from state.workflows: /api/problems
+// drops a failure that a later attempt already superseded (supersededRuns,
 // run_errors.go), so reading both would resurrect exactly the failures that
 // are no longer anything to act on.
 export function buildTaskRows(state) {
@@ -6658,7 +6661,7 @@ export function buildTaskRows(state) {
         run,
       }
     })
-  return [...trouble, ...live]
+  return [...trouble, ...live].sort((a, b) => b.at - a.at)
 }
 
 // TASK_ROW_H_REM — every row is exactly this tall, which is what makes the

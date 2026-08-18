@@ -740,9 +740,17 @@ Everything now goes through **`buildTaskRows(state)`** (`RelatedPanel.mjs`,
 exported), which returns one ordered list of plain, **non-reactive** row
 descriptors:
 
-- **Order is actionability, not time**: the problems first (failed runs +
-  skipped log lines, mixed and newest-first among themselves), then the
-  live/idle runs `visibleWorkflowRuns` already selected.
+- **Order is purely by recency** — every row's own `at` (a normalized ms
+  timestamp: a failed run's/log line's own `updatedAt`/`at`, a live run's
+  `updatedAt`), newest first, across **both** groups at once: problems
+  (failed runs + skipped log lines) and the live/idle runs
+  `visibleWorkflowRuns` already selected are sorted together as one list, not
+  problems-first. An earlier version sorted problems-first regardless of age
+  ("order is by actionability, not by time") — reported as confusing: three
+  day-old failed rows sat above a run that had finished 5 minutes ago.
+  `visibleWorkflowRuns`'s own running-first-then-recency sort still decides
+  which live runs are even selected, but the final merge re-sorts everything
+  by `at`, so that running-first exemption no longer survives past the merge.
 - **A failed run comes ONLY from `state.pageProblems`**, never from
   `state.workflows` (`status !== 'failed'` filters those out, plus a runId
   guard). `/api/problems` drops a failure that a later attempt already

@@ -1,4 +1,4 @@
-import { test, expect, appReady } from './_fixtures.mjs'
+import { test, expect, appReady, evaluateSettled } from './_fixtures.mjs'
 
 // The review tree (/pr/<id>) used to have no way at all to surface "something
 // went wrong out of sight" — a mirrored glue-log line (no workflow run of its
@@ -174,6 +174,56 @@ test.describe('review tree — failures inside the merged "Taken" block', () => 
     // Hidden for this tab, and it stays hidden across the next poll (the stub
     // keeps serving the same line).
     await expect(logRow).toHaveCount(0)
+  })
+
+  test('a recently finished run sorts above a day-old failure — recency, not problem-first', async ({ page }) => {
+    // Reported bug: three day-old "mislukt" rows sat above a run that had
+    // finished 5 minutes ago. buildTaskRows now sorts the whole merged list
+    // by recency (`at`), not problems-first — see detail-layout.md.
+    await page.goto('/pr/12903')
+    await appReady(page)
+
+    await evaluateSettled(page, async () => {
+      const { reactive } = await import('/src/vendor/arrow.js')
+      const mod = await import('/src/RelatedPanel.mjs')
+      const state = reactive({
+        pr: 12903,
+        workflows: [
+          {
+            runId: 'wf-just-finished',
+            workflow: 'explain_code',
+            status: 'done',
+            // Comfortably past TASK_STALE_MS (5 min) so it reliably shows,
+            // and far more recent than the day-old failure below.
+            createdAt: new Date(Date.now() - 11 * 60000).toISOString(),
+            updatedAt: new Date(Date.now() - 10 * 60000).toISOString(),
+          },
+        ],
+        pageProblems: {
+          failedRuns: [
+            {
+              runId: 'wf-old-failure',
+              workflow: 'task_code_comment',
+              pr: 12903,
+              updatedAt: new Date(Date.now() - 24 * 60 * 60000).toISOString(),
+              error: 'a day-old failure',
+              retryable: false,
+            },
+          ],
+          logErrors: [],
+        },
+      })
+      const host = document.createElement('div')
+      host.id = 'wf-recency-host'
+      document.body.appendChild(host)
+      mod.TasksPanel(state, null)(host)
+    })
+
+    const rows = page.locator('#wf-recency-host [data-testid=workflow-row]')
+    await expect(rows).toHaveCount(2)
+    // The recently finished run must be first, the day-old failure second.
+    await expect(rows.nth(0)).toHaveAttribute('data-run-id', 'wf-just-finished')
+    await expect(rows.nth(1)).toHaveAttribute('data-run-id', 'wf-old-failure')
   })
 
   test('more rows than fit report "nog N meer"', async ({ page }) => {
