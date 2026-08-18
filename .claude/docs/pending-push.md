@@ -150,7 +150,9 @@ event it is never the truth, only "refetch me" (`.claude/docs/server-events.md`)
   (`state.pushTodoFocused`, mirroring `ignoreToggleFocused` everywhere — see
   `.claude/docs/keyboard-navigation.md`). `Enter` and a click do the same thing:
   open a **one-more-step confirm** menu (`pushTodoCommandsFor` →
-  `pushTodoConfirmCommands`, the two-step shape "Wis Claude-gesprek" uses), so
+  `pushTodoConfirmCommands`, the two-step shape "Keur de HELE PR goed" uses —
+  "Wis Claude-gesprek" only confirms while its shadow worktree has pending
+  work, see `.claude/docs/claude-chat-panel.md`), so
   the first keypress never pushes. Confirming calls `pushPendingWork`, which
   signals the queue.
 - **Per-block marking**: an index row (`unpushedPill`, `BlockList.mjs`) and the

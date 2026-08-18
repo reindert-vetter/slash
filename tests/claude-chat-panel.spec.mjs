@@ -1254,11 +1254,15 @@ test('Claude chat composer grows with multi-line content and resets after sendin
 })
 
 // "Wis Claude-gesprek" (chat_workflow.go's chatActionClear): a command-palette
-// item, confirm-gated (two Enters, mirroring "Keur de HELE PR goed"'s own
-// REVIEW_APPROVE_CONFIRM_COMMANDS submenu), reachable only while the composer
+// item that clears on the FIRST Enter (no confirm step — reviewer request),
+// reachable only while the composer
 // is NOT the focused element (claudePos > 0 — see focusClaudeComposer) so a
 // plain Enter on the composer itself keeps sending/newlining as before.
-test('Wis Claude-gesprek: confirm-gated command palette clears the transcript', async ({ page }, testInfo) => {
+// The one case that still confirms — pending shadow-worktree work — is the
+// next test.
+test('Wis Claude-gesprek: the command palette clears the transcript on the first Enter', async ({
+  page,
+}, testInfo) => {
   const pr = seededPr(testInfo)
   const start = await page.request.post('/api/workflows/task_code_comment', {
     data: {
@@ -1300,10 +1304,71 @@ test('Wis Claude-gesprek: confirm-gated command palette clears the transcript', 
   await expect(menu).toBeVisible()
   await expect(page.getByTestId('command-row').filter({ hasText: 'Wis Claude-gesprek' })).toBeVisible()
 
-  // First Enter opens the confirm submenu, not the clear itself — the
+  // One Enter clears it — no confirm submenu in between (this conversation
+  // has no shadow worktree, so claudeChatShadowWarning is empty).
+  await page.keyboard.press('Enter')
+  await expect(menu).not.toBeVisible()
+  await expect(page.getByTestId('claude-chat-empty')).toBeVisible()
+  await expect(page.getByTestId('claude-message')).toHaveCount(0)
+})
+
+// The other half: while the conversation's shadow worktree still holds
+// uncommitted/unpushed agentic-edit work, "Wis Claude-gesprek" DOES confirm
+// first — that work is the one thing clearing loses for good. The pending
+// state itself is a real git check (chatShadowLocalPendingState); it is routed
+// here instead of constructing a dirty shadow worktree, because what is under
+// test is the frontend gate (claudeChatShadowWarning → children vs run in
+// claudeChatCommandsFor), not the git plumbing (covered by chat_shadow_test.go).
+test('Wis Claude-gesprek: pending shadow work still asks for confirmation first', async ({
+  page,
+}, testInfo) => {
+  const pr = seededPr(testInfo)
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: {
+      pr,
+      file: 'test.php',
+      line: 1,
+      author: 'reviewer',
+      body: 'kan dit sneller?',
+      code: '$order->total();',
+      gran: 'call',
+      label: 'Order::total',
+    },
+  })
+  expect((await start.json()).runId).toBeTruthy()
+
+  await page.route('**/api/chat/shadow-status*', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ exists: true, dirty: true, ahead: 1 }),
+    }),
+  )
+
+  await page.goto('/pr/' + pr)
+  const item = page.getByTestId('comment-item').first()
+  await expect(item).toBeVisible()
+  await item.click()
+  await page.keyboard.press('ArrowRight') // comment -> claude
+  const composer = page.getByTestId('claude-chat-compose')
+  await expect(composer).toBeFocused()
+
+  await composer.fill('Kun je hier iets over zeggen?')
+  await composer.press('Enter')
+  await expect(page.getByTestId('claude-message')).toHaveCount(2)
+
+  await page.keyboard.press('ArrowUp')
+  await expect(composer).not.toBeFocused()
+  await page.keyboard.press('Enter')
+  const menu = page.getByTestId('command-menu')
+  await expect(menu).toBeVisible()
+
+  // First Enter opens the confirm submenu naming the pending work — the
   // transcript must still be there.
   await page.keyboard.press('Enter')
-  await expect(page.getByTestId('command-row').filter({ hasText: 'Ja, wis dit gesprek' })).toBeVisible()
+  const confirmRow = page.getByTestId('command-row').filter({ hasText: 'Ja, toch wissen' })
+  await expect(confirmRow).toBeVisible()
+  await expect(confirmRow).toContainText('shadow-worktree')
   await expect(page.getByTestId('claude-message')).toHaveCount(2)
 
   // Second Enter (the confirm step) actually clears it.

@@ -6106,22 +6106,26 @@ function commentCommandsFor() {
 }
 
 // claudeChatClearConfirmCommandsFor — the one-more-step confirm submenu for
-// "Wis Claude-gesprek" (mirrors REVIEW_APPROVE_CONFIRM_COMMANDS): clearing a
-// conversation is destructive (wipes the transcript + any not-yet-committed
-// agentic-edit shadow worktree, see chat_workflow.go's chatActionClear), so it
-// never fires on the first Enter — this submenu is the deliberate second
-// keypress. Built fresh each time (not a static const, unlike
-// REVIEW_APPROVE_CONFIRM_COMMANDS) because its label carries a live warning
-// when claudeChatShadowWarning (a plain snapshot read, refreshed by
-// enterClaudeChat right after entering the chat — see RelatedPanel.mjs)
-// reports pending (uncommitted/unpushed) shadow-worktree work that clearing
-// would discard.
-function claudeChatClearConfirmCommandsFor() {
-  const warning = claudeChatShadowWarning()
+// "Wis Claude-gesprek", used ONLY when there is real work to lose: pending
+// (uncommitted/unpushed) agentic-edit work in the conversation's own shadow
+// worktree, which clearing would discard (chat_workflow.go's chatActionClear).
+// Reviewer request ("na wis claude gesprek, hoef ik geen bevestiging te zien",
+// then: "dan wel als bevestigingscherm laten in dat geval") — an ordinary
+// conversation clears on the first Enter, see claudeChatCommandsFor.
+//
+// `warning` therefore doubles as the gate AND the label: this submenu is never
+// built without one, so there is no plain "Ja, wis dit gesprek" variant left.
+// It comes from claudeChatShadowWarning, a plain snapshot read of the cache
+// refreshed by enterClaudeChat right after entering the chat (RelatedPanel.mjs)
+// — the menu is built by non-reactive code that cannot await a fetch. A failed
+// or still-pending check therefore reads as "nothing to lose" and clears
+// straight away; that is the accepted trade-off for not blocking the menu on a
+// network round trip, not an oversight.
+function claudeChatClearConfirmCommandsFor(warning) {
   return withClose([
     {
       id: 'clear-claude-chat-confirm',
-      label: warning ? 'Ja, toch wissen — ' + warning : 'Ja, wis dit gesprek',
+      label: 'Ja, toch wissen — ' + warning,
       hint: 'bevestig',
       run: () => clearClaudeChat(),
     },
@@ -6130,10 +6134,12 @@ function claudeChatClearConfirmCommandsFor() {
 
 // claudeChatCommandsFor — the root list for Enter on the Claude column (see
 // isClaudeChatFocused above, mirrors commentCommandsFor's
-// own role for the comment column). "Wis Claude-gesprek" is gated behind its
-// own confirm submenu (see claudeChatClearConfirmCommandsFor) rather than
-// running directly — the same two-step pattern REVIEW_APPROVE_COMMANDS uses
-// for "Keur de HELE PR goed"; "Probeer de mislukte turn opnieuw" runs
+// own role for the comment column). "Wis Claude-gesprek" runs STRAIGHT AWAY
+// on the first Enter — no confirm step (reviewer request) — EXCEPT while the
+// conversation's shadow worktree still holds pending agentic-edit work, the
+// one case where clearing loses something that isn't recoverable: then, and
+// only then, it keeps its confirm submenu (claudeChatClearConfirmCommandsFor)
+// naming what would be lost; "Probeer de mislukte turn opnieuw" runs
 // straight away (it re-runs one failed turn, nothing destructive) and is the
 // keyboard twin of the "Opnieuw proberen" button on the failed bubble itself
 // (ClaudeChat.mjs) — same function either way, per
@@ -6151,20 +6157,23 @@ function claudeChatClearConfirmCommandsFor() {
 // ORDER IS LOAD-BEARING: withClose pins "Sluit menu" at index 0 and defaultSel
 // starts the selection on index 1, so whatever comes FIRST here is the default
 // Enter action. That must stay "Wis Claude-gesprek" — the item that means
-// something in every state, and that has its own confirm step. The retry only
+// something in every state. The retry only
 // means something after a turn finally failed; anywhere else it is a silent
 // no-op, so it must never be what a reflexive second Enter runs. Putting it
 // first broke exactly that (tests/claude-chat-panel.spec.mjs's
 // "Wis Claude-gesprek" spec pressed Enter and got the no-op instead of the
-// confirm submenu). "Comment hiervan maken" is inserted after it (not first)
+// clear). "Comment hiervan maken" is inserted after it (not first)
 // for the same reason — it only means something on a still-empty anchor.
 function claudeChatCommandsFor() {
+  const shadowWarning = claudeChatShadowWarning()
   const items = [
     {
       id: 'clear-claude-chat',
       label: 'Wis Claude-gesprek',
       hint: 'wis',
-      children: claudeChatClearConfirmCommandsFor(),
+      ...(shadowWarning
+        ? { children: claudeChatClearConfirmCommandsFor(shadowWarning) }
+        : { run: () => clearClaudeChat() }),
     },
   ]
   if (claudeAnchorIsPlaceholder()) {

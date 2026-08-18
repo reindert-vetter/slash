@@ -111,9 +111,10 @@ test.describe('PR Review Tree — "Comment hiervan maken" on an empty Claude inp
       await page.keyboard.press('Enter')
       const menu = page.getByTestId('command-menu')
       await expect(menu).toBeVisible()
-      await page.keyboard.press('Enter') // "Wis Claude-gesprek" is the default selection
-      await expect(page.getByTestId('command-row').filter({ hasText: 'Ja, wis dit gesprek' })).toBeVisible()
-      await page.keyboard.press('Enter') // confirm
+      // "Wis Claude-gesprek" is the default selection and clears straight away
+      // — no confirm step, this conversation has no pending shadow work (see
+      // claudeChatCommandsFor).
+      await page.keyboard.press('Enter')
 
       await expect(menu).not.toBeVisible()
       await expect(page.getByTestId('claude-message')).toHaveCount(0)

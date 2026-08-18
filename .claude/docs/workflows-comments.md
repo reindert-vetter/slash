@@ -1387,8 +1387,9 @@ recognizes the `question` shape:
 ### "Wis gesprek" (`chatActionClear`) — clearing a conversation
 
 A fourth `ChatMessageSignal.Action` value, `"clear"`, alongside `""`/`"edit"`/
-`"commit"` — the command-palette's confirm-gated "Wis Claude-gesprek" (frontend
-mechanism: "Wis Claude-gesprek" in `.claude/docs/claude-chat-panel.md`). Needs
+`"commit"` — the command-palette's "Wis Claude-gesprek", which confirms first
+only while the shadow worktree still holds pending work (frontend mechanism:
+"Wis Claude-gesprek" in `.claude/docs/claude-chat-panel.md`). Needs
 no `Body` (validated in `tasks_api.go`'s `SignalMessage` handler alongside
 `"commit"`).
 
@@ -1436,8 +1437,9 @@ turn, which is the resync read for the SSE stream `GET /api/events` pushes the
 live progress over (`.claude/docs/server-events.md`);
 `GET /api/chat/shadow-status?pr=N&commentId=X` → read-only
 `{exists, dirty, ahead}` for a conversation's shadow worktree
-(`chatShadowLocalPendingState`) — the check the "Wis Claude-gesprek" palette
-command runs before warning the reviewer about discarding pending shadow work.
+(`chatShadowLocalPendingState`) — the check that decides whether the "Wis
+Claude-gesprek" palette command clears straight away or first shows a confirm
+submenu naming the pending shadow work it would discard.
 No module write, no workflow, no network (purely local git plumbing against a
 directory already on disk) — the same read-only-side-effect class as
 `blockstats.go`/`comment_import.go` reading a worktree, so it needs no

@@ -513,7 +513,8 @@ row.
 `.claude/docs/pending-push.md`) mirrors the toggle rows with one deliberate
 difference: its `Enter`/`→`/click does not act directly, because pushing writes
 to a branch other people work on. It opens a one-more-step confirm menu
-(`openMenu('pushTodo')`), the same two-step shape "Wis Claude-gesprek" uses.
+(`openMenu('pushTodo')`), the same two-step shape "Keur de HELE PR goed" uses
+(and "Wis Claude-gesprek" only while its shadow worktree has pending work).
 `f`/`d`/`s`/`a`/`Space` are no-ops there for the same reason as on a toggle
 row.
 

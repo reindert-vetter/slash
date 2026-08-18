@@ -1896,9 +1896,11 @@ function drainClaudeQueue() {
 // chat_workflow.go) — wipes the transcript + the stored claude session, and
 // best-effort removes the conversation's agentic-edit shadow worktree
 // (chat_shadow.go's clearChatShadow). Only ever reached from the command
-// palette's confirm-gated "Wis Claude-gesprek" item (home.mjs), which already
-// ran the extra pending-work warning (chatShadowPendingWarning below) before
-// this point — so this itself asks for no further confirmation.
+// palette's "Wis Claude-gesprek" item (home.mjs), which runs straight away
+// unless the pending-work check below (claudeChatShadowWarning) reports
+// unsaved agentic-edit work in the shadow worktree — that is the one case it
+// still puts a confirm submenu in front. Either way the decision is already
+// made by the time we get here, so this itself asks for nothing further.
 // retryClaudeTurn sends the "retry" ChatMessageSignal (chatActionRetry in
 // chat_workflow.go): re-run the turn whose automatic backoff ladder
 // (3/6/12/24/48 seconds, escalating to Sonnet) ran out, from the workflow's
@@ -2033,10 +2035,12 @@ export async function convertClaudeAnchorToComment() {
 
 // shadowWarning/shadowWarningFor cache the last-known shadow-pending check
 // (refreshChatShadowWarning) for the CURRENTLY open conversation, so
-// claudeChatShadowWarning below can answer SYNCHRONOUSLY — home.mjs builds
-// the "Wis Claude-gesprek" confirm submenu at Enter/openMenu time (plain,
-// non-reactive code, mirroring commentCommandsFor's own focusedCommentGithubId
-// snapshot read), which cannot itself await a fetch.
+// claudeChatShadowWarning below can answer SYNCHRONOUSLY — home.mjs decides at
+// Enter/openMenu time whether "Wis Claude-gesprek" clears straight away or
+// gets a confirm submenu first (plain, non-reactive code, mirroring
+// commentCommandsFor's own focusedCommentGithubId snapshot read), and cannot
+// itself await a fetch. A check that failed or hasn't landed yet therefore
+// reads as "nothing pending" and the clear runs on the first Enter.
 let shadowWarning = ''
 let shadowWarningFor = null
 
@@ -2272,7 +2276,7 @@ export async function enterClaudeChat(pr) {
   ensureChatEvents(pr)
   loadChatProgress(c.id)
   focusClaudeComposer()
-  // Fire-and-forget: the "Wis Claude-gesprek" palette command's extra warning
+  // Fire-and-forget: the "Wis Claude-gesprek" palette command's confirm gate
   // (claudeChatShadowWarning) reads this cache synchronously at open time —
   // entering the chat must not wait on this read-only check.
   refreshChatShadowWarning(pr, c.id)

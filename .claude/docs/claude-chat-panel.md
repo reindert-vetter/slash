@@ -1845,9 +1845,14 @@ must be told.
 
 ## "Wis Claude-gesprek" — clearing a conversation (chatActionClear)
 
-A confirm-gated command-palette item, not a header button (explicit product
-choice) — mirrors "Keur de HELE PR goed"'s own `REVIEW_APPROVE_CONFIRM_COMMANDS`
-two-step shape rather than a plain click. Backend mechanics (the `"clear"`
+A command-palette item, not a header button (explicit product choice).
+It **runs on the first Enter, with no confirmation** — reviewer request ("na
+wis claude gesprek, hoef ik geen bevestiging te zien") — **except** while the
+conversation's shadow worktree still holds pending agentic-edit work, the one
+case where clearing loses something unrecoverable: there it keeps the two-step
+confirm submenu ("dan wel als bevestigingscherm laten in dat geval"), the same
+shape "Keur de HELE PR goed"'s own `REVIEW_APPROVE_CONFIRM_COMMANDS` uses
+unconditionally. Backend mechanics (the `"clear"`
 `ChatMessageSignal.Action`, `clearChatConversation`/`clearChatShadow`) are in
 `.claude/docs/workflows-comments.md`'s `claude_chat` section; this section is
 the frontend/palette half.
@@ -1867,10 +1872,13 @@ the frontend/palette half.
   this menu right after every send.
 - **`claudeChatCommandsFor()`/`claudeChatClearConfirmCommandsFor()`** (`home.mjs`,
   wired into `rootCommandsFor`/`resolveCommands` as mode `'claude'`): the root
-  list is one item ("Wis Claude-gesprek") whose `children` is a one-item
-  confirm submenu ("Ja, wis dit gesprek" / "Ja, toch wissen — …") — never runs
-  directly, mirroring `REVIEW_APPROVE_CONFIRM_COMMANDS`. Built fresh on every
-  open (not a static list) because the confirm label carries a live warning.
+  item ("Wis Claude-gesprek") carries **either** a plain `run: clearClaudeChat`
+  **or** `children` — the one-item confirm submenu ("Ja, toch wissen — …") —
+  depending on whether `claudeChatShadowWarning()` returns a warning at open
+  time. So the warning is both the gate and the confirm label; there is no
+  plain "Ja, wis dit gesprek" row any more, because a conversation with nothing
+  pending never reaches that submenu. Built fresh on every open (not a static
+  list) for exactly that reason.
 - **`menuAnchor()`/`menuRegion()` need their own `'claude'` branch** — every
   other mode ultimately falls back to the selected block's diff row
   (`[data-change-active]` et al.), which does not exist when the Claude column
@@ -1885,18 +1893,22 @@ the frontend/palette half.
   Dutch warning sentence when the conversation's own agentic-edit shadow
   worktree still has uncommitted or locally-unpushed work. `home.mjs` reads
   that cache **synchronously** at menu-open time via `claudeChatShadowWarning()`
-  — the confirm submenu is built by plain, non-reactive code
+  — the menu is built by plain, non-reactive code
   (`rootCommandsFor`/`openMenu`) that cannot itself `await` a fetch, the same
   reason `commentCommandsFor`'s own `focusedCommentGithubId()` is a snapshot
-  read rather than a live query. A stale/failed check just means the extra
-  warning line is missing, never a wrong block.
+  read rather than a live query. Now that the same value decides whether there
+  is a confirm step at all, a stale/failed check means the clear runs on the
+  first Enter instead of asking — accepted deliberately (the alternative is
+  blocking the menu on a network round trip), and never a wrong block: the
+  clear itself is unchanged.
 - **`clearClaudeChat()`** (`RelatedPanel.mjs`) sends the `"clear"` Signal and
   resets `cc.progress`/`cs.claudePos` locally — belt-and-braces on top of the
   `chat.message` SSE event's own refetch, same reasoning as `sendClaudeMessage`'s
   own post-send refetch.
-- Test: `tests/claude-chat-panel.spec.mjs`'s "Wis Claude-gesprek" case drives
-  the full two-Enter confirm flow and asserts the transcript is empty
-  afterwards.
+- Tests: `tests/claude-chat-panel.spec.mjs` has both halves — the ordinary
+  case clears on a single Enter, and a second case routes
+  `GET /api/chat/shadow-status` to report pending work and asserts the confirm
+  submenu appears (transcript still there) before the second Enter clears it.
 
 ## "Comment hiervan maken" on an empty Claude input
 
