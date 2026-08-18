@@ -233,6 +233,27 @@ Rules, in order:
   Runs before 3b/4 and marks the call key `seen`, mirroring 3a. An
   unindexed Activity class (vendor/framework) still resolves to `unresolved`,
   never silently nothing — the call sits on a changed line.
+- **4a — `app(Foo::class)->m(`.** A container-resolved receiver names its own
+  class literally, so the call is deterministic even though the bare method
+  name is ambiguous app-wide. `reClassRefReceiver` is anchored at the END of
+  the text preceding an `->m(` match, so it only fires for a `Foo::class )`
+  sitting directly in front of that arrow (`app(...)`/`resolve(...)`/
+  `make(...)` alike — the container function name is not checked, only the
+  `::class` + `)`); the method is then looked up with `methodOnClass`. An
+  unindexed class (vendor/framework) falls through to rule 4's ordinary
+  unique-candidate/`unresolved` path unchanged. Runs INSIDE rule 4, before its
+  `idx.candidates` fallback.
+  Motivation is twofold and both halves are load-bearing: (1) `->run(`/
+  `->handle(` on a container-resolved Activity is the single most common shape
+  in this codebase's tests, and every one of them used to be shipped off to
+  the LLM (`resolve_call`) to re-discover what the source already spells out —
+  paid for, per call site; (2) that LLM row then raced rule 6c-bis's own
+  entry-point row for the same class into a **duplicate card** in the
+  Onderliggende-code panel (reported on PR 13392: `app(…Activity::class)
+  ->run('_v2')` showed `CreateAndBackfillSubscriptionViewsActivity::run` twice,
+  once badged "eerste method" and once "bron: haiku"). Go and the LLM were both
+  right; the panel just had two rows for one target. Tests:
+  `TestResolveCallsAppClassReceiver`/`TestResolveCallsAppClassReceiverUnknownClass`.
 - **5/5a — Eloquent magic properties.** `->name` without parentheses is the
   relation **method** `name()`; treated as a call only when `name`'s body is a
   relation (`morphOne`/`hasMany`/`belongsTo`), so bare attribute access (`->id`)
@@ -305,6 +326,13 @@ Rules, in order:
   cursor. Tests: `TestResolveCallsClassRefEntryPoints`,
   `tests/related-class-ref-entry-points.spec.mjs`,
   `tests/related-class-ref-entry-points-scope.spec.mjs`.
+  **Both rows stay in the read model even when the caller ALSO calls that very
+  method** (`app(Foo::class)->run()` → this rule's `class_method:Foo` plus rule
+  4a's `run`, both pointing at `Foo::run`): deduplicating server-side would
+  have to guess which of the two the reviewer wants, and it could never repair
+  a PR ingested before rule 4a existed. The frontend collapses them to one card
+  instead — `preferredCallRows` in `home.mjs`, see "One card per resolved call
+  target" in `.claude/docs/underlying-code.md`.
 - **7 — API Resource `toArray()`.** A Resource used on a changed line surfaces
   its own `toArray()`, since that's where the output is defined — even when the
   Resource class itself isn't changed (unlike `controllerResourceDetector`'s

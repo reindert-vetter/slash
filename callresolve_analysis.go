@@ -470,6 +470,13 @@ var (
 	// constructor is a distinct child keyed by the class name.
 	reNewObj    = regexp.MustCompile(`\bnew\s+([\\A-Za-z_][\\\w]*)\s*\(`)
 	reArrowCall = regexp.MustCompile(`->([A-Za-z_]\w*)\s*\(`)
+	// reClassRefReceiver matches a receiver that names its own class literally
+	// and is immediately followed by an arrow call: the `app(Foo::class)` /
+	// `resolve(Foo::class)` / `make(Foo::class)` container form in
+	// `app(Foo::class)->run($x)`. Anchored at the END of the text preceding a
+	// `->m(` match, so it only fires for a receiver that really sits directly in
+	// front of that arrow. Group 1 is the class name (see rule 4a).
+	reClassRefReceiver = regexp.MustCompile(`([\\A-Za-z_][\\\w]*)::class\s*\)\s*$`)
 	// reCommandCall matches a scheduled artisan call `->command('name ...')` and
 	// captures the whole command string (the name is its first token). Used to
 	// resolve $schedule->command('accounting:import ...') to the command's handle.
@@ -946,10 +953,27 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 		// A method name not defined anywhere in the app worktree (framework/
 		// builtins live under skipped vendor/) is *also* unresolved: it sits on a
 		// changed line, so the reviewer gets the "Zoek" button instead of nothing.
-		for _, m := range reArrowCall.FindAllStringSubmatch(scan, -1) {
-			key := m[1]
+		for _, loc := range reArrowCall.FindAllStringSubmatchIndex(scan, -1) {
+			key := scan[loc[2]:loc[3]]
 			if seen[key] {
 				continue
+			}
+			// 4a. app(Foo::class)->m( — the receiver names its class literally,
+			// so this call is deterministically resolvable even though the bare
+			// method name is ambiguous app-wide. Without this, `run`/`handle`/
+			// `execute` on a container-resolved Activity fell through to
+			// `unresolved` and was shipped off to the LLM (resolve_call), which
+			// then re-discovered exactly what the source already spells out —
+			// paid for, and racing rule 6c-bis's own entry-point row for the
+			// same class into a DUPLICATE card in the Onderliggende-code panel
+			// (see "The entry points of a referenced class" in
+			// .claude/docs/underlying-code.md). An unindexed class (vendor/
+			// framework) still falls through to the ordinary path below.
+			if pm := reClassRefReceiver.FindStringSubmatch(scan[:loc[0]]); pm != nil {
+				if def := methodOnClass(idx, shortName(pm[1]), key); def != nil {
+					emit(key, def)
+					continue
+				}
 			}
 			cands := idx.candidates(key)
 			if len(cands) == 1 {

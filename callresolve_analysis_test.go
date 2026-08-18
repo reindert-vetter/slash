@@ -3140,3 +3140,120 @@ class Ambiguous
 		t.Errorf("an ambiguous constant reference must not produce an entry, got %+v", entries)
 	}
 }
+
+// TestResolveCallsAppClassReceiver covers rule 4a: `app(Foo::class)->run(...)`
+// names its own class literally, so the call resolves deterministically even
+// though the bare method name `run` is ambiguous app-wide. Before this rule the
+// call became `unresolved` and was shipped off to the LLM (resolve_call), which
+// re-discovered exactly what the source already spells out — and produced a
+// SECOND card next to rule 6c-bis's own entry-point row for the same class.
+func TestResolveCallsAppClassReceiver(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 33
+	_, headDir := worktreeDirs(dataDir, "", pr)
+	files := map[string]string{
+		"tests/Feature/BackfillTest.php": `<?php
+namespace Tests\Feature;
+final class BackfillTest {
+    public function it_backfills(): void {
+        app(BackfillActivity::class)->run('_v2');
+    }
+}
+`,
+		"app/Workflows/Activities/BackfillActivity.php": `<?php
+namespace App\Workflows\Activities;
+final class BackfillActivity {
+    public function run(string $suffix): void {
+    }
+}
+`,
+		// A second, unrelated run() so idx.candidates("run") is ambiguous: without
+		// rule 4a the call below falls through to StatusUnresolved.
+		"app/Workflows/Activities/OtherActivity.php": `<?php
+namespace App\Workflows\Activities;
+final class OtherActivity {
+    public function run(string $suffix): void {
+    }
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	caller := Block{PR: pr, File: "tests/Feature/BackfillTest.php", Class: "BackfillTest", Name: "it_backfills", Side: SideNew, Status: StatusModified}
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	run, ok := findEntry(entries, "run")
+	if !ok {
+		t.Fatal("no entry for call key run")
+	}
+	if run.Status != callresolve.StatusResolved {
+		t.Fatalf("run status=%q, want %q", run.Status, callresolve.StatusResolved)
+	}
+	if run.Kind != callresolve.KindMethodCall {
+		t.Errorf("run kind=%q, want %q", run.Kind, callresolve.KindMethodCall)
+	}
+	if run.ChildClass != "BackfillActivity" || run.ChildMethod != "run" {
+		t.Errorf("run resolved to %s::%s, want BackfillActivity::run", run.ChildClass, run.ChildMethod)
+	}
+}
+
+// TestResolveCallsAppClassReceiverUnknownClass keeps rule 4a from swallowing the
+// ordinary path: an unindexed (vendor/framework) class has no method to point
+// at, so the call must still end up unresolved — LLM territory, as before.
+func TestResolveCallsAppClassReceiverUnknownClass(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 34
+	_, headDir := worktreeDirs(dataDir, "", pr)
+	files := map[string]string{
+		"tests/Feature/BackfillTest.php": `<?php
+namespace Tests\Feature;
+final class BackfillTest {
+    public function it_backfills(): void {
+        app(VendorOnlyActivity::class)->run('_v2');
+    }
+}
+`,
+		"app/Workflows/Activities/BackfillActivity.php": `<?php
+namespace App\Workflows\Activities;
+final class BackfillActivity {
+    public function run(string $suffix): void {
+    }
+}
+`,
+		"app/Workflows/Activities/OtherActivity.php": `<?php
+namespace App\Workflows\Activities;
+final class OtherActivity {
+    public function run(string $suffix): void {
+    }
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	caller := Block{PR: pr, File: "tests/Feature/BackfillTest.php", Class: "BackfillTest", Name: "it_backfills", Side: SideNew, Status: StatusModified}
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	run, ok := findEntry(entries, "run")
+	if !ok {
+		t.Fatal("no entry for call key run")
+	}
+	if run.Status != callresolve.StatusUnresolved {
+		t.Errorf("run status=%q, want %q", run.Status, callresolve.StatusUnresolved)
+	}
+}
