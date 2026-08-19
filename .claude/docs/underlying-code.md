@@ -602,6 +602,11 @@ visibility rule as `updateHints`); a child card scrolled out internally keeps an
 arrow **clamped** to the panel edge. Test: `tests/call-arrows.spec.mjs` (fixture
 PR 100, `arrow-*.json` + `materializeArrowWorktrees`).
 
+**A second, sibling arrow family links a comment card to its own diff row**
+the same way — see "Linking a comment card to its diff row" in
+`.claude/docs/comments-panel.md`. `callArrows.mjs` draws both families in one
+pass (`setCallArrows`/`setCommentArrows`, a shared `buildArrowPaths` helper).
+
 ## Scoping to the navigation cursor
 
 `home.mjs` (`callScopeMethods`/`findCallSites`) links every resolved call to the

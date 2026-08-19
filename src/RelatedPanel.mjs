@@ -31,6 +31,7 @@ import { syncCommentBatch, batchProgressFor, batchNoteFor } from './commentBatch
 import { colWidthStyle, startColumnResize, resetColumnWidth, resizeHandle, parseAutoWidthPx } from './columnWidth.mjs'
 import { autoGrowTextarea, resetTextareaHeight } from './textareaAutoGrow.mjs'
 import { updateScrollFade } from './scrollFade.mjs'
+import { setCommentArrows } from './callArrows.mjs'
 
 // colWidthKeyFor — the manual-column-width identity (see columnWidth.mjs /
 // .claude/docs/column-resize.md) for the three RelatedPanel-side columns
@@ -353,14 +354,21 @@ function recomputeView() {
   // is exactly this — show nothing".
   if (s && s.none) {
     cs.view = []
-    return
-  }
-  if (!s) {
+  } else if (!s) {
     cs.view = anchored
-    return
+  } else {
+    const inBlock = anchored.filter((c) => c.file === s.file && c.label === s.label)
+    cs.view = s.mode !== 'diff' || s.rowStart < 0 ? inBlock : inBlock.filter((c) => commentUnder(c, s))
   }
-  const inBlock = anchored.filter((c) => c.file === s.file && c.label === s.label)
-  cs.view = s.mode !== 'diff' || s.rowStart < 0 ? inBlock : inBlock.filter((c) => commentUnder(c, s))
+  // One arrow per currently-rendered comment card, row → card — see
+  // "Linking a comment card to its diff row" in comments-panel.md. Pushed
+  // from here (not a separate watch) so it always stays in lockstep with
+  // cs.view, whatever changed it (a scope move OR a comment list poll).
+  setCommentArrows(
+    cs.view
+      .filter((c) => c.rowStart != null && c.rowStart >= 0)
+      .map((c) => ({ row: c.rowStart, commentId: c.id })),
+  )
 }
 
 // visibleComments is the current filtered index — the scoped/​narrowed comments
@@ -5410,6 +5418,7 @@ function compactConversation(c, i, full, openCommentMenu) {
           ? 'bg-slate-50/60 dark:bg-zinc-800/40 hover:border-indigo-200 dark:hover:border-indigo-500/40'
           : 'bg-white dark:bg-zinc-900 hover:bg-slate-50 dark:hover:bg-zinc-800/60')}"
       data-testid="comment-item"
+      data-comment-id="${c.id}"
       data-expanded="false"
       @click="${() => {
         cs.sel = i
@@ -5503,6 +5512,7 @@ function expandedConversation(c, openCommentMenu) {
         ' ' +
         (c.status === 'resolved' ? 'bg-slate-50/60 dark:bg-zinc-800/40' : 'bg-white dark:bg-zinc-900')}"
       data-testid="comment-item"
+      data-comment-id="${c.id}"
       data-expanded="true"
       @contextmenu="${(e) => {
         // Right-click anywhere on this (already-focused) thread card = the

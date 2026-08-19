@@ -3,14 +3,25 @@
 // to the matching *changed* underlying-code child card in the Onderliggende-code
 // panel (a method_call child whose definition is itself a PR block).
 //
+// A second, structurally identical family of arrows — one per visible COMMENT
+// card, row → its own comment card in the comment/Claude row above the
+// Onderliggende-code panel — reuses the same overlay/draw pass (setCommentArrows,
+// see "Linking a comment card to its diff row" in comments-panel.md): with
+// several open comments on different lines of the same block, the card only
+// ever showed a bare `file:line` and the diff showed nothing but generic 💬
+// dots, so nothing on screen said WHICH card belonged to WHICH row.
+//
 // Deliberately an IMPERATIVE drawing layer, not a reactive template (the
-// updateHints/positionMenu model): home.mjs computes the pairs inside its
+// updateHints/positionMenu model): home.mjs computes the call pairs inside its
 // existing setRelated watch *callback* (untracked — so no new reactive reader
 // of b.code can co-subscribe with the diff render, see the stuck-on-loading
-// pitfall in conventions.md) and pushes them here via setCallArrows. Everything
-// after that is plain DOM: querySelector + getBoundingClientRect + an innerHTML
-// write into one statically-mounted fixed <svg> overlay. No arrow.js binding in
-// this module ever reads reactive state.
+// pitfall in conventions.md) and pushes them here via setCallArrows; the
+// comment pairs are computed the same untracked way by RelatedPanel.mjs's own
+// recomputeView (it owns cs.view, the source of truth for what's rendered) and
+// pushed via setCommentArrows. Everything after that is plain DOM:
+// querySelector + getBoundingClientRect + an innerHTML write into one
+// statically-mounted fixed <svg> overlay. No arrow.js binding in this module
+// ever reads reactive state.
 //
 // The overlay is positioned exactly over <main> (the detail panel) on every
 // draw, and an <svg> clips its own contents by default — so arrows can never
@@ -25,6 +36,16 @@ import { html } from './vendor/arrow.js'
 // `childId` the panel descriptor id (matched via relatedCard's data-child-id).
 // A plain module variable on purpose (not reactive): the draw is imperative.
 let pairs = []
+
+// commentPairs — the SAME idea, one flowing arrow per open comment card
+// (RelatedPanel.mjs' commentCard, above InlineComments): { row, commentId },
+// `commentId` matched via that card's own `data-comment-id`. Pushed by
+// RelatedPanel.mjs itself (not home.mjs — it owns cs.view, the source of
+// truth for which comments are actually rendered right now), from
+// recomputeView, so it stays in lockstep with the comment list/scope without
+// a second watch. See "Linking a comment card to its diff row" in
+// comments-panel.md.
+let commentPairs = []
 let raf = 0
 
 // ARROW is the shared stroke style: the call-underline indigo (#6366f1),
@@ -38,6 +59,15 @@ const STROKE = '#6366f1'
 // settled layout.
 export function setCallArrows(next) {
   pairs = Array.isArray(next) ? next : []
+  scheduleArrowDraw()
+  setTimeout(scheduleArrowDraw, 250)
+}
+
+// setCommentArrows — the comment-card counterpart, called by
+// RelatedPanel.mjs' recomputeView on every list/scope change. Same
+// schedule (immediate + 250ms settle, for the same width-transition reason).
+export function setCommentArrows(next) {
+  commentPairs = Array.isArray(next) ? next : []
   scheduleArrowDraw()
   setTimeout(scheduleArrowDraw, 250)
 }
@@ -66,34 +96,18 @@ export function scheduleArrowDraw() {
   })
 }
 
-// drawCallArrows measures both anchors and rewrites the overlay's paths. Reads
-// only the DOM — never reactive state (see the module note above).
-function drawCallArrows() {
-  const svg = document.querySelector('[data-testid="call-arrows"]')
-  if (!svg) return
-  const hide = () => {
-    svg.style.display = 'none'
-    svg.innerHTML = ''
-  }
-  if (pairs.length === 0) return hide()
-  const main = document.querySelector('[data-testid="detail-panel"]')
-  if (!main) return hide()
-  // The selected top-level card's NEW pane (the first match under <main> — the
-  // selected card renders before the look-ahead preview, same selector
-  // precedent as home.mjs' menuRegion) and the Onderliggende-code panel. The
-  // collapsed related rail (laptop width) renders no child cards, so arrows
-  // simply disappear with it.
-  const pane = main.querySelector('[data-pane="new"]')
-  const panel = main.querySelector('[data-testid="related-code"]')
-  if (!pane || !panel) return hide()
-  const scroller = pane.querySelector('[data-scrollsync]')
-  const paneRect = (scroller || pane).getBoundingClientRect()
+// buildArrowPaths draws one arrow-set: a { row, id } pair list, the panel
+// selector it targets and the id attribute that panel's cards carry — shared
+// by both the call-arrow (row → underlying-code card) and the comment-arrow
+// (row → comment card) families, which differ only in those three things.
+function buildArrowPaths(list, idKey, panelSelector, idAttr, testid, main, pane, paneRect, mainRect) {
+  const panel = main.querySelector(panelSelector)
+  if (!panel || list.length === 0) return []
   const panelRect = panel.getBoundingClientRect()
-  const mainRect = main.getBoundingClientRect()
   const parts = []
-  for (const p of pairs) {
+  for (const p of list) {
     const rowEl = pane.querySelector(`[data-row="${p.row}"]`)
-    const childEl = panel.querySelector(`[data-child-id="${CSS.escape(p.childId)}"]`)
+    const childEl = panel.querySelector(`[${idAttr}="${CSS.escape(p[idKey])}"]`)
     if (!rowEl || !childEl) continue
     const rRect = rowEl.getBoundingClientRect()
     // Call-site row scrolled out of the diff viewport → no arrow for it (the
@@ -115,9 +129,47 @@ function drawCallArrows() {
     parts.push(
       `<path d="M ${sx(x1)} ${sy(y1)} C ${sx(x1 + dx)} ${sy(y1)}, ${sx(x2 - dx)} ${sy(y2)}, ${sx(x2)} ${sy(y2)}"` +
         ` fill="none" stroke="${STROKE}" stroke-opacity="0.45" stroke-width="1.5" stroke-linecap="round"` +
-        ` marker-end="url(#call-arrow-head)" data-testid="call-arrow"></path>`,
+        ` marker-end="url(#call-arrow-head)" data-testid="${testid}"></path>`,
     )
   }
+  return parts
+}
+
+// drawCallArrows measures both anchors and rewrites the overlay's paths. Reads
+// only the DOM — never reactive state (see the module note above).
+function drawCallArrows() {
+  const svg = document.querySelector('[data-testid="call-arrows"]')
+  if (!svg) return
+  const hide = () => {
+    svg.style.display = 'none'
+    svg.innerHTML = ''
+  }
+  if (pairs.length === 0 && commentPairs.length === 0) return hide()
+  const main = document.querySelector('[data-testid="detail-panel"]')
+  if (!main) return hide()
+  // The selected top-level card's NEW pane (the first match under <main> — the
+  // selected card renders before the look-ahead preview, same selector
+  // precedent as home.mjs' menuRegion). The collapsed related rail (laptop
+  // width) renders no child cards, so arrows simply disappear with it.
+  const pane = main.querySelector('[data-pane="new"]')
+  if (!pane) return hide()
+  const scroller = pane.querySelector('[data-scrollsync]')
+  const paneRect = (scroller || pane).getBoundingClientRect()
+  const mainRect = main.getBoundingClientRect()
+  const parts = [
+    ...buildArrowPaths(pairs, 'childId', '[data-testid="related-code"]', 'data-child-id', 'call-arrow', main, pane, paneRect, mainRect),
+    ...buildArrowPaths(
+      commentPairs,
+      'commentId',
+      '[data-testid="comment-claude-row"]',
+      'data-comment-id',
+      'comment-arrow',
+      main,
+      pane,
+      paneRect,
+      mainRect,
+    ),
+  ]
   if (parts.length === 0) return hide()
   svg.style.display = 'block'
   svg.style.top = mainRect.top + 'px'

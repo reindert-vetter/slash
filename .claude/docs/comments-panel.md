@@ -1243,6 +1243,69 @@ fixes that, and `commentColumnWidthCls() + connector + claudeColumnWidthCls()`
 still sums to exactly `relatedColumnWidthCls()`, so the row lines up with
 `related-code` below it.
 
+### Linking a comment card to its diff row: one arrow per comment, reusing the call-arrow overlay
+
+Reviewer report (PR 13392, `ImportSubscriptionStatsFlow::run`, split view):
+selecting a line-anchored "Comments op regels" index item shows every comment
+on that BLOCK — not just the one on the selected line, see "An anchored 'Start'
+item…" above, which is `s.mode !== 'diff'`'s `inBlock` branch before the first
+`→` — as a stack of cards, each carrying nothing but a bare `…StatsFlow.php:161`
+file:line line. With seven comments spread over four different lines, nothing
+on screen said which card belonged to which row; the reviewer had to read the
+line number off the card and go hunt for it in the diff by eye.
+`commentRangeRowSet`'s right-edge bar (above) doesn't help here either — it
+only marks the ONE comment the keyboard has actually stepped **into**
+(`cs.focus === 'comment'/'thread'/'claude'`), not the other six merely sitting
+in the list.
+
+Rather than inventing a new mechanism, this reuses the existing **call-arrow
+overlay** (`src/callArrows.mjs`, see "Call-arrow overlay" in
+`underlying-code.md`) — the precedent for "draw a line between the diff and a
+card in the column beside it" — as a second, structurally identical arrow
+family: one flowing indigo arrow per comment CARD currently rendered in
+`InlineComments`, from its own row in the diff to the card itself, drawn
+**simultaneously** for every visible card exactly like the call-arrow family
+already draws one arrow per visible `method_call` child at once. Per the
+colourblind rule the connection itself (a literal line from row to card) is
+the signal, not a colour distinction between the two arrow families — they
+never need telling apart, since they point at two different panels.
+
+- **`setCommentArrows(pairs)`** (`callArrows.mjs`, exported) is the comment
+  counterpart of `setCallArrows`: a second module-level `commentPairs` array,
+  same immediate + 250ms-settle redraw schedule. `drawCallArrows`'s per-arrow
+  body is factored into a shared `buildArrowPaths(list, idKey, panelSelector,
+  idAttr, testid, …)`, called once for the call family
+  (`related-code`/`data-child-id`/`call-arrow`) and once for the comment family
+  (`comment-claude-row`/`data-comment-id`/`comment-arrow`) — both draw into the
+  same overlay `<svg>` in one pass.
+- **Pushed from `RelatedPanel.mjs`'s own `recomputeView`**, not from a
+  `home.mjs` watch like the call family: `RelatedPanel.mjs` already owns
+  `cs.view` (the exact set of comments actually rendered right now, after every
+  scope/list filter), so computing the pairs anywhere else risks drifting out
+  of sync with what's really on screen. `recomputeView` is the single funnel
+  every `cs.view` reassignment already goes through (a scope change from
+  `setCommentScope` OR a fresh comment-list poll), so no second watch was
+  needed — the arrow list simply always mirrors `cs.view`: `cs.view.filter(c
+  => c.rowStart != null && c.rowStart >= 0).map(c => ({ row: c.rowStart,
+  commentId: c.id }))`.
+- **Not gated on `state.mode === 'diff'`** (unlike `callArrowPairs`) —
+  deliberately, since the motivating case is exactly the "as if fully
+  expanded" anchored view **before** the first `→`, still in list mode (see
+  "An anchored 'Start' item…" above). The diff itself is already visible
+  there, so the arrows should be too.
+- **Each comment card carries `data-comment-id="<id>"`** on its own root
+  (`compactConversation`'s button, `expandedConversation`'s div) — the
+  matching id `buildArrowPaths` looks up via `[data-comment-id="…"]`, mirroring
+  `relatedCard`'s `data-child-id`.
+- A comment with no resolved anchor (`rowStart` unknown/`-1` — an orphan, or a
+  legacy/seeded row) simply gets no arrow, same "missing information ⇒ no
+  arrow" rule the call family already follows for an `Unchanged` target.
+  Several comments sharing one row (two threads on the same line) each still
+  get their own arrow, converging on that row — no special-casing, the same
+  way two call sites on one line would.
+
+Test: `tests/comment-arrows.spec.mjs`.
+
 ### The selected conversation is pulled to the top, with a "hierboven" hint
 
 Stacked comment cards follow the Onderliggende-code column exactly:
