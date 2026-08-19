@@ -311,9 +311,13 @@ test.describe('PR Review Tree — inline comment blocks', () => {
   // autoExpandLoneComment (RelatedPanel.mjs): with only 1 or 2 comments on the
   // unit and no Onderliggende code at all, the clamp is lifted entirely — a
   // 3-line preview only earns its keep once there's something else in the
-  // column competing for room. PR 12903's blocks have no relations/callresolve
-  // fixture, so `rc.children` is empty here — exactly the condition that
-  // triggers the full expansion. See compactConversation's own doc comment.
+  // column competing for room. The test below deliberately steps to a block
+  // OTHER than the default-selected one: PR 12903's fixture gives exactly one
+  // block Onderliggende-code children (CreatePaymentAction::execute, see
+  // tests/fixtures/relations.json), and a PR now opens on the first block by
+  // (file, line) rather than category order — which makes that very block the
+  // default selection, the one block in this fixture where `rc.children` is
+  // NOT empty. See compactConversation's own doc comment.
   const longBody =
     'De hardening vervangt wel de interpolatie in de run-bodies, maar laat het grootste resterende injectiepad staan: ' +
     'de volledige workflow-diff wordt met een vast delimiter naar de omgeving geschreven, waardoor een diff-regel die ' +
@@ -326,24 +330,36 @@ test.describe('PR Review Tree — inline comment blocks', () => {
     await ready(page)
     const first = await ident(page)
 
+    // Step away from the default-selected block: it is CreatePaymentAction::execute,
+    // the one block in this fixture that DOES have Onderliggende-code children (see
+    // tests/fixtures/relations.json) — the clamp must stay lifted only for a block
+    // with none.
+    for (let i = 0; i < 12; i++) {
+      if ((await ident(page)).label !== first.label) break
+      await page.keyboard.press('ArrowDown')
+      await page.waitForTimeout(120)
+    }
+    const mine = await ident(page)
+    expect(mine.label).not.toBe(first.label)
+
     const created = await page.request.post('/api/workflows/task_code_comment', {
       data: {
         pr: 12903,
-        file: first.file,
+        file: mine.file,
         line: 1,
         author: 'AI check',
         body: longBody,
         source: 'ai',
         local: true,
-        label: first.label,
+        label: mine.label,
         rowStart: -1,
         rowEnd: -1,
       },
     })
     expect(created.ok()).toBeTruthy()
 
-    await page.goto('/pr/12903?sel=' + encodeURIComponent(first.fileLine))
-    await waitBlock(page, first.label)
+    await page.goto('/pr/12903?sel=' + encodeURIComponent(mine.fileLine))
+    await waitBlock(page, mine.label)
 
     // Not focused (nothing was clicked) — still no reply field/thread, but the
     // clamp is gone: a lone comment with nothing else in the column deserves
