@@ -172,6 +172,35 @@ a changed production method plus new tests for it showed a single index entry �
 the test class — with the actual changed code hidden entirely, reachable only by
 drilling from the test's own Onderliggende-code panel.
 
+**A `testCallTargetIds` row with a CONFIRMED zero approval total gets no index
+row at all.** Such a row's card already shows no checkbox (see "A block with
+zero changed rows has nothing to approve" in `.claude/docs/approval.md`), so
+giving it its own "Onderliggende code" index slot on top of that is a dead
+entry with nothing to do — reported on PR 13392's
+`DeleteTenantSubscriptionsActivity.php` (a real, whitespace/trivial-only diff
+called from a test). `recomputeLeftList`'s `visibleBlocks` filter drops a
+`testCallTargetIds` member whenever `state.blockTotals[b.id] === 0` (strict,
+not falsy — `undefined` means the stats haven't loaded yet, so the row stays
+visible until the real number is known); `loadBlocks` re-runs
+`recomputeLeftList` a second time once `loadBlockStats` lands, since the first
+run happens before `state.blockTotals` is filled. The block stays in
+`state.allBlocks`, so it's untouched everywhere else: the Onderliggende-code
+panel still shows it and it still drills open.
+
+**Deliberately scoped to `testCallTargetIds` only, not every `childIds`
+row.** An ordinary relation child (`state.relations`) only exists between two
+blocks that BOTH changed (see "Relations between blocks" in
+`.claude/docs/workflows-analysis.md`), so a confirmed-zero relation child
+should never occur for real ingested data — applying the filter there too
+turned out to only catch fixture/test-support blocks with no real diffable
+source (several existing specs seed a relation child living outside any real
+worktree), a testing artifact rather than a real "nothing to approve" case.
+`resolvedCallTargetIds`'s ordinary (non-test) call targets are unaffected
+either — those already hide outright as pure reference code, never gaining an
+index row in the first place. An ordinary top-level block with total 0 also
+keeps its own index slot, per the general "zero changed rows" case in
+`.claude/docs/approval.md` — only a `testCallTargetIds` row loses it.
+
 ## One card per resolved call target
 
 Two DIFFERENT call keys of one caller can resolve to the very same definition,

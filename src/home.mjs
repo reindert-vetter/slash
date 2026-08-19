@@ -2169,6 +2169,12 @@ async function loadBlocks() {
   // in the meantime — land on the first not-yet-approved item instead
   // (applyDefaultUnapprovedSelection) — see its own doc comment below.
   await Promise.all([loadApprovals(), loadBlockStats(), loadIgnoredComments(), ensureAutoWarn()])
+  // state.blockTotals only lands here (loadBlockStats), after the FIRST
+  // recomputeLeftList() call above already ran without it — re-run so a
+  // childIds row with a confirmed zero total drops out of the index (see the
+  // comment in recomputeLeftList itself). Preserves selection by id, like
+  // every other recomputeLeftList() call.
+  recomputeLeftList()
   await Promise.resolve()
   await Promise.resolve()
   const curSelectedId = state.blocks[state.selected] ? state.blocks[state.selected].id : null
@@ -2852,7 +2858,8 @@ function recomputeLeftList() {
   // resolvedCallTargetIds/testCallTargetIds — so it joins the relation
   // children here instead of vanishing.
   const hidden = new Set([...resolvedCallTargetIds(), ...swallowedClassHeaderIds()])
-  const childIds = new Set([...state.relations.map((r) => r.childId), ...testCallTargetIds()])
+  const testTargetIds = testCallTargetIds()
+  const childIds = new Set([...state.relations.map((r) => r.childId), ...testTargetIds])
   const selId = state.blocks[state.selected] && state.blocks[state.selected].id
   const q = (state.search || '').trim().toLowerCase()
   // A comment item that hangs on a real source line (b.lineAnchored, see
@@ -2908,7 +2915,29 @@ function recomputeLeftList() {
     commentGroups.get(key).push(c)
   }
   const commentItems = [...commentGroups.values()].map(commentBlockItem)
-  const visibleBlocks = state.allBlocks.filter((b) => !hidden.has(b.id))
+  // A testCallTargetIds row (a test literally calling the production method
+  // it exercises) with a CONFIRMED server-side total of 0 (state.blockTotals,
+  // GET /api/blockstats — see "A block with zero changed rows has nothing to
+  // approve" in .claude/docs/approval.md) has nothing to approve, so it gets
+  // no checkbox on its own card already; giving it its own "Onderliggende
+  // code" index row on top of that is a dead entry with nothing to do
+  // (reported on PR 13392's DeleteTenantSubscriptionsActivity.php — a genuine,
+  // whitespace/trivial-only diff called from a test). Drop it from the index
+  // — it stays in state.allBlocks, so the Onderliggende-code panel and
+  // drilling into it are unaffected, only the standalone index row goes away.
+  // `=== 0` (not falsy/undefined) so "stats not loaded yet" keeps the row
+  // visible until the real number is known.
+  //
+  // Deliberately NOT applied to an ordinary relation child (state.relations):
+  // a relation only exists between two blocks that BOTH changed (see
+  // "Relations between blocks" in .claude/docs/workflows-analysis.md), so a
+  // confirmed-zero relation child should never occur for real ingested data —
+  // and also deliberately not applied to an ordinary top-level block with
+  // total 0 (see the general "zero changed rows" case in
+  // .claude/docs/approval.md), which keeps its own index slot as before.
+  const visibleBlocks = state.allBlocks.filter(
+    (b) => !hidden.has(b.id) && !(testTargetIds.has(b.id) && state.blockTotals[b.id] === 0),
+  )
   state.blocks = [...groupTestClasses(visibleBlocks), ...commentItems]
     // The haystack is label + category + FILE PATH (reviewer request: "ik wil
     // ook op bestandsnaam kunnen zoeken") — the path is what you remember when
