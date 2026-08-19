@@ -3007,7 +3007,21 @@ function recomputeLeftList() {
   for (const b of state.blocks) if (childIds.has(b.id)) underlying[b.id] = true
   state.underlyingIds = underlying
   const at = state.blocks.findIndex((b) => b.id === selId)
-  state.selected = at >= 0 ? at : Math.min(state.selected, Math.max(0, state.blocks.length - 1))
+  // The previously selected id survives a reindex (id-preserving, see
+  // conventions.md's "snapshot a selection by stable ID" entry) → keep it.
+  // Genuinely GONE (e.g. the selected PR-wide/anchored comment just got
+  // resolved elsewhere while the reviewer was deep in a drilled subtree —
+  // indexComments drops a resolved block-anchored comment entirely, see its
+  // own doc comment) used to fall back to `Math.min(state.selected, …)` —
+  // the OLD raw index clamped into the new (shorter) list, landing on
+  // whatever now happens to sit at that position. That's an arbitrary
+  // leftover position, not a real selection decision, and often scrolled out
+  // of view — reviewer report: "ik heb dan niks geselecteerd ... selecteer
+  // dan de eerste in de blokken index". Reset to the first row instead,
+  // mirroring setSearch's own `state.selected = 0` after a filter change
+  // (the other place "the old selection no longer applies" already resets
+  // to the top rather than clamping a stale index).
+  state.selected = at >= 0 ? at : 0
 }
 
 // Re-derive state.blocks whenever the index-comment list changes (initial

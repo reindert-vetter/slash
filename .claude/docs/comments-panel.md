@@ -1880,3 +1880,30 @@ composing a brand-new comment" in `.claude/docs/claude-chat-panel.md`),
 as a **reply** on that already-existing thread instead (also optimistic-exit,
 also `cs.sendFailed`-tracked under the same `'reply:'+commentId` key), so
 exactly one comment ever exists for that draft.
+
+### A selection that vanished while deep in the tree falls back to the first row, not an arbitrary one
+
+Reviewer request: "als ik in een tree ben en ik ga naar blokken index, en ik
+heb dan niks geselecteerd omdat er iets weg is (omdat ik aan het kijken was
+dieper in de code, maar comment is goedgekeurd ofzo), dan wil ik niet niks
+selecteren in de blokken index, selecteer dan de eerste in de blokken index".
+
+`recomputeLeftList` (`home.mjs`) preserves the current selection across a
+reindex by matching the previously-selected block/comment's stable **id**
+(`selId`), the same "snapshot by identity, not index" reasoning as
+`.claude/rules/conventions.md`'s own entry. That id can genuinely disappear —
+most commonly a selected block-anchored comment being resolved while the
+reviewer is drilled several levels deep into its own anchor (or into anything
+else): a resolved block-anchored comment drops out of `indexComments()`
+entirely (see that function's own doc comment, `RelatedPanel.mjs`), and the
+comment poll (every 5s) can pick that change up on its own, with no reload.
+
+The not-found fallback used to be `Math.min(state.selected, blocks.length -
+1)` — the stale **raw index** clamped into the new, shorter list. That lands
+on whatever now happens to sit at that position: an arbitrary leftover, often
+scrolled out of view, which is exactly what read as "nothing selected" even
+though some row was technically highlighted. Fixed to reset to the first row
+(`state.selected = 0`) instead — mirroring `setSearch`'s own `state.selected =
+0` after a filter change, the other place "the old selection no longer
+applies" already resets to the top rather than clamping a stale index. Test:
+`tests/selection-lost-falls-back-to-first.spec.mjs`.
