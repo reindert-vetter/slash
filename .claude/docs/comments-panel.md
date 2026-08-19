@@ -1559,9 +1559,11 @@ the send and asks first**.
   consumed by `sendPendingReply(publish, withHistory)` before its first await.
 - **The menu** is a command-palette mode `'replyPublish'`
   (`replyPublishCommandsFor`, `home.mjs` — see
-  `.claude/docs/command-palette.md`): local is the default item, the two GitHub
-  items grow a with/without-the-earlier-messages submenu only when there
-  actually are earlier local replies.
+  `.claude/docs/command-palette.md`): its own local-reply item has since been
+  removed (same request as the compose menu's own removed local item), so
+  "Alleen mijn antwoord op GitHub" is now the default; the two GitHub items
+  grow a with/without-the-earlier-messages submenu only when there actually
+  are earlier local replies.
 - **`openPublishMenu` defers the open by one frame.** Both fields open it from
   their own `Enter` handler, and that keydown keeps bubbling to home.mjs's
   document-level handler; opening synchronously made that same keystroke

@@ -6720,10 +6720,12 @@ function toggleIgnoreComment(c) {
 // parameter itself stays (shared, generic plumbing — `ensureClaudeAnchorForNew`,
 // RelatedPanel.mjs, still always creates its Claude-chat anchor comment with
 // `local:true`, and the PR-wide branch still honours `opts.local` for any
-// future/API caller), and `replyPublishCommandsFor`'s "Alleen voor mijzelf
-// (blijft lokaal)" is a DIFFERENT feature (keeping an existing thread's REPLY
-// local, not creating a new private root) and is untouched. See "The compose
-// (comment-kind) menu" in .claude/docs/command-palette.md.
+// future/API caller). `replyPublishCommandsFor`'s own "Alleen voor mijzelf
+// (blijft lokaal)" reply item (keeping an existing thread's REPLY local, not
+// creating a new private root) was a DIFFERENT feature and outlived this one
+// for a while, but has since been removed too, on the same kind of request —
+// see that function's own doc comment. See "The compose (comment-kind) menu"
+// in .claude/docs/command-palette.md.
 const COMPOSE_COMMANDS = withClose([
   {
     id: 'compose-post',
@@ -6771,10 +6773,22 @@ const COMPOSE_COMMANDS = withClose([
 // reply on a thread that has never touched GitHub (a private note, or an AI
 // finding — see needsPublishChoice/openPublishMenu in RelatedPanel.mjs). The
 // send is held until an item here runs it, so nothing reaches GitHub without
-// this choice. Local stays the DEFAULT action: "Sluit menu" is pinned first
-// (withClose) and defaultSel opens on the 2nd item, which is the local one, so
-// the plain "type, Enter, Enter" flow behaves exactly as before this menu
-// existed.
+// this choice.
+//
+// There used to be a third, DEFAULT item here, "reply-publish-local"/"Alleen
+// voor mijzelf (blijft lokaal)" (`sendPendingReply('', false)` — keeps the
+// reply local, same as before this menu existed). Removed on request ("dat
+// gebruik ik niet meer"), the same kind of removal `COMPOSE_COMMANDS` went
+// through earlier for its own "Alleen voor mijzelf" item (see that constant's
+// own doc comment) — `sendPendingReply`'s `publish: ''` branch and the
+// backend's local-reply plumbing stay, generic and unused from here, exactly
+// like `placeComment`'s `opts.local`. "Sluit menu" is pinned first
+// (withClose) and defaultSel opens on the 2nd item, so **"Alleen mijn
+// antwoord op GitHub" is now the default Enter action** — a bare "type,
+// Enter, Enter" on a still-local thread now publishes just the typed reply
+// straight away, instead of keeping it local. Confirmed acceptable
+// (reviewer request, "Ja, prima" — the same shift `COMPOSE_COMMANDS` already
+// went through when its own local item was removed).
 //
 // The two GitHub items only grow a submenu when there is actually an earlier
 // local conversation to decide about (localReplies > 0) — asking "with or
@@ -6815,12 +6829,6 @@ function replyPublishCommandsFor() {
           ]),
         }
   return withClose([
-    {
-      id: 'reply-publish-local',
-      label: 'Alleen voor mijzelf (blijft lokaal)',
-      hint: 'privé',
-      run: () => sendPendingReply('', false),
-    },
     historyChoice('reply-publish-reply', 'Alleen mijn antwoord op GitHub', 'reply'),
     historyChoice('reply-publish-thread', rootLabel, 'thread'),
   ])

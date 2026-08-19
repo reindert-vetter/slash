@@ -932,11 +932,12 @@ leaves the approval of the unit it hangs on **untouched** — see
 reviewer keep a brand-new root comment private. `placeComment`'s `opts.local`
 parameter itself is untouched (generic, shared plumbing —
 `ensureClaudeAnchorForNew`, `RelatedPanel.mjs`, still always creates its
-Claude-chat anchor comment with `local:true`), and this is a DIFFERENT feature
-from `replyPublishCommandsFor`'s "Alleen voor mijzelf (blijft lokaal)" below
-(keeping an existing thread's own REPLY local, not creating a brand-new
-private root comment) — that one stays. Test:
-`tests/compose-place-comment.spec.mjs` now also asserts the row is gone.
+Claude-chat anchor comment with `local:true`). This was a DIFFERENT feature
+from `replyPublishCommandsFor`'s own "Alleen voor mijzelf (blijft lokaal)"
+item (keeping an existing thread's own REPLY local, not creating a brand-new
+private root comment) — that one has since been removed too, on the same kind
+of request, see below. Test: `tests/compose-place-comment.spec.mjs` now also
+asserts the row is gone.
 
 The Enter branch sits in `onKeydown` **before** the `relatedActive()` branch
 (`isComposeOpen()` + `composeHasText()`), so it works whether the composer was
@@ -950,13 +951,23 @@ fixes (above).
 The compose menu's sibling for an **existing** thread that has never touched
 GitHub (a private note, or an AI finding). Sending a reply there doesn't post:
 the send is held (`pendingPublish` in `RelatedPanel.mjs`) and this menu decides
-what may become public. Four rows: **"Sluit menu"** (pinned), **"Alleen voor
-mijzelf (blijft lokaal)"** (default, 2nd — so "type, Enter, Enter" keeps
-behaving exactly as before this menu existed), **"Alleen mijn antwoord op
-GitHub"** and **"Ook de AI-melding op GitHub"** / **"Ook mijn comment op
-GitHub"** (label by `source`). Every item calls
+what may become public. Three rows: **"Sluit menu"** (pinned), **"Alleen mijn
+antwoord op GitHub"** (default, 2nd) and **"Ook de AI-melding op GitHub"** /
+**"Ook mijn comment op GitHub"** (label by `source`). Every item calls
 `sendPendingReply(publish, withHistory)`, which re-runs the very same send with
 a `publish` flag on the `reply` Signal.
+
+**There used to be a fourth, DEFAULT row, "Alleen voor mijzelf (blijft
+lokaal)"** (`sendPendingReply('', false)`, keeping the reply local — the
+"type, Enter, Enter" flow behaved exactly as before this menu existed).
+Removed on request ("dat gebruik ik niet meer" — the exact same request, and
+the same accepted default-shifts-one-item-down consequence, as the compose
+menu's own "Alleen voor mijzelf" above): a bare "type, Enter, Enter" on a
+still-local thread now publishes just the typed reply to GitHub instead of
+keeping it local. `sendPendingReply`'s `publish: ''` branch and the backend's
+local-reply plumbing (`ReactionSignal.Publish`, `workflows.go`) stay — generic,
+unused from here, exactly like `placeComment`'s `opts.local` above. Test:
+`tests/reply-publish-local-thread.spec.mjs`.
 
 The two GitHub items become a **submenu** (*"Zonder de eerdere N berichten"* /
 *"Met de eerdere N berichten"*) only when the thread actually holds earlier
