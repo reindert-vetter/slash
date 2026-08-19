@@ -496,6 +496,43 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     await expect(page.getByTestId('comment-detail-card').first()).toBeVisible()
   })
 
+  // Reviewer report: "Nog geen eigen comment... moet niet in de index, moet
+  // ook gewoon niet zichtbaar zijn." A comment created solely to anchor a
+  // Claude conversation, never replaced with the reviewer's own text, is not
+  // something anyone wrote — see isChatAnchorPlaceholder (RelatedPanel.mjs).
+  test('a bare Claude-chat anchor comment gets no index row and no detail card', async ({ page }) => {
+    const now = new Date().toISOString()
+    mockComments(page, [
+      {
+        id: 'chat-anchor-1',
+        runId: 'run-chat-anchor-1',
+        pr: 12903,
+        file: 'app/Http/Controllers/Api/ContractController.php',
+        label: 'Gone::method',
+        line: 5,
+        author: 'reviewer',
+        body: '(Nog geen eigen comment getypt — gesprek met Claude gestart.)',
+        createdAt: now,
+        reactionCount: 0,
+        status: 'open',
+        source: 'ui',
+        kind: '',
+        anchorState: 'orphan',
+        reactions: [],
+        rowStart: -1,
+        rowEnd: -1,
+      },
+    ])
+    await page.goto('/pr/12903')
+    await leaveSearchBox(page)
+
+    // The ordinary PR-wide comment still has its row — so the list really did
+    // render — but the bare anchor has none, orphan badge or not.
+    await expect(page.locator('[data-idx]').filter({ hasText: 'Overall this looks great' })).toHaveCount(1)
+    await expect(page.locator('[data-idx]').filter({ hasText: 'Nog geen eigen comment' })).toHaveCount(0)
+    await expect(page.getByText('Nog geen eigen comment')).toHaveCount(0)
+  })
+
   test('an ai_warning finding is also a navigable comment-index item', async ({ page }) => {
     const now = new Date().toISOString()
     await mockComments(page, [

@@ -27,6 +27,41 @@ test.describe('PR Review Tree — the right-click context menu', () => {
     await expect(page).toHaveURL(/gran=line/)
   })
 
+  // Reviewer report: "als ik iets selecteer en dan rechtermuisknop druk, gaat
+  // de selectie weg. dat wil ik niet." handleRowContextMenu used to run
+  // resolveClickSelection unconditionally, collapsing a drag/Shift range back
+  // onto the single clicked line — see rowInsideActiveSelection (home.mjs).
+  test('right-clicking inside an existing range keeps that range instead of collapsing it', async ({ page }) => {
+    await page.goto('/pr/102')
+    await leaveSearchBox(page)
+
+    await page.keyboard.press('ArrowRight')
+    await page.keyboard.press('f') // gran 'line', cursor on $a
+    const card = page.getByTestId('detail-card').first()
+    const activeRows = card.locator('div[class*="#b9f5d9"]')
+    const changedRows = card.locator('[data-pane="new"] [data-changed="1"]')
+    await expect(activeRows).toHaveCount(1)
+
+    // Extend to a 3-line range with the keyboard (the mouse-drag equivalent
+    // is covered in diff-row-mouse-select.spec.mjs).
+    await page.keyboard.press('Shift+ArrowDown')
+    await page.keyboard.press('Shift+ArrowDown')
+    await expect(activeRows).toHaveCount(3)
+
+    // Right-click the MIDDLE row of that range: the menu opens and the range
+    // is still all three lines, so its actions still act on the selection.
+    await changedRows.nth(1).click({ button: 'right' })
+    await expect(page.getByTestId('command-overlay')).toBeVisible()
+    await expect(activeRows).toHaveCount(3)
+    await expect(page.getByTestId('command-row').filter({ hasText: 'Keur deze 3 regels goed' })).toBeVisible()
+    await page.keyboard.press('Escape')
+
+    // A row OUTSIDE the range still lands there first, as before.
+    await changedRows.nth(3).click({ button: 'right' })
+    await expect(page.getByTestId('command-overlay')).toBeVisible()
+    await expect(activeRows).toHaveCount(1)
+  })
+
   test('right-clicking an unchanged line leaves the native browser menu in place', async ({ page }) => {
     await page.goto('/pr/102')
     await leaveSearchBox(page)

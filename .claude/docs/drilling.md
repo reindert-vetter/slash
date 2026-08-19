@@ -24,10 +24,14 @@ outside diff mode. **One deliberate exception:** `openCommentAnchorDrill`
 (`home.mjs`) opens a drilled column while STAYING in list mode, for a
 PR-comment index item anchored to a real block — see "An anchored 'Start' item
 instead opens its block 'as if fully expanded'" in `.claude/docs/comments-panel.md`.
-Every mechanism below (opening/closing, `.key()`, scrolling, the rail) is
-otherwise unaware of the distinction — only `BlockList`'s "hide the index in
-diff mode" check and the two `home.mjs` watches noted there needed to special-
-case it.
+Every mechanism below (opening/closing, `.key()`, scrolling) is otherwise
+unaware of the distinction — only `BlockList`'s "hide the index in diff mode"
+check, the two `home.mjs` watches noted there, and **the rail** needed to
+special-case it: for this one drill the column it was opened FROM is hidden
+outright instead of collapsing to a rail (and its `drill-left-hint` chevron
+with it), so the anchored column sits exactly where an ordinary block card
+would — `commentAnchorColumnHidden`, see "The anchored column IS the leading
+column" in `.claude/docs/comments-panel.md`.
 
 A drill entry is **one of two forms**:
 

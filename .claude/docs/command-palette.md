@@ -112,7 +112,7 @@ opens something:
 
 | Surface | Landing step | Menu opened |
 |---|---|---|
-| A diff row (top-level or a drilled column, `Block.mjs`'s delegated `onBlockContextMenu`) | `resolveClickSelection` (synchronous — a right-click has no drag/native-selection gesture to protect, unlike a `mousedown`) | `block`, only if it actually landed on a real unit (`handleRowContextMenu`, `home.mjs`) — else the native menu stays (an unchanged/filler line keeps its Copy/Look up) |
+| A diff row (top-level or a drilled column, `Block.mjs`'s delegated `onBlockContextMenu`) | `resolveClickSelection` (synchronous — a right-click has no drag/native-selection gesture to protect, unlike a `mousedown`) — **skipped when the click lands INSIDE the current selection**, see below | `block`, only if it actually landed on a real unit (`handleRowContextMenu`, `home.mjs`) — else the native menu stays (an unchanged/filler line keeps its Copy/Look up) |
 | Elsewhere on a block card (header/gutter, no `[data-row]` under the cursor) | none needed | the block's own `onOpenMenu` (same as `block-open-menu`) |
 | A sidebar row (`BlockList.mjs`'s `row()`) | the same `state.selected = i` + flag resets its own `@click` does | `rightClickMenuMode()` (see below) — `block` for an ordinary block, `prComment` for a comment-index item, or nothing (native menu stays) for a row with no menu of its own |
 | The push-todo row (`BlockList.mjs`'s `pushTodoRow`) | `state.onPushTodo`'s own landing | `pushTodo` — literally the same handler the `@click` calls, just forwarding `{native,x,y}` |
@@ -121,6 +121,29 @@ opens something:
 | The focused block-scoped thread (`expandedConversation`, `RelatedPanel.mjs`) | none needed | `comment` (same as `reaction-status`'s `openCommentMenu`) — except inside the reply `<textarea>` itself, which keeps its native Cut/Copy/Paste/spellcheck menu |
 | An unfocused thread row in the same block (`compactConversation`) | `cs.sel = i; toComment(); beat()` — its own `@click` | `comment` |
 | `claude-chat-card` (`ClaudeChat.mjs`, both the block-scoped and PR-comment-index Claude column) | none needed | `claude` (same as `claude-chat-menu`), except inside the composer `<textarea>` |
+
+#### A right-click inside the current selection never collapses it
+
+Reviewer report: "als ik iets selecteer en dan rechtermuisknop druk, gaat de
+selectie weg. dat wil ik niet." The landing step above is unconditional for a
+LEFT click, and rightly so — but for a right click it destroyed the very thing
+the menu is about: `resolveClickSelection` collapses a Shift+arrow/drag range
+back onto the single clicked line and re-forces `gran` to `'line'`, so
+"Keur deze 3 regels goed" had already become "Keur deze regel goed" by the
+time the menu appeared.
+
+`rowInsideActiveSelection(level, b, row)` (`home.mjs`) therefore gates it: the
+landing step runs only when the clicked row falls OUTSIDE the unit the focused
+cursor currently covers — the single group/line/call unit, or the merged span
+of an active range (`rangeUnit`). Inside it, the menu just opens. A row
+outside still lands there first, unchanged, matching every other platform.
+It returns `false` whenever that level doesn't own the keyboard, or the card
+is a look-ahead preview (`isActiveCard`), so those keep landing normally too.
+
+Skipping the `state` write also keeps the reviewer's **native** text selection
+alive for free — it is that write's row-DOM teardown which otherwise wipes it
+(the same mechanism `restoreExactSelection` exists to repair for a drag). Test:
+`tests/selection-menu.spec.mjs`.
 
 `rightClickMenuMode()` (`home.mjs`) is the general-purpose resolver for
 "which menu would `Enter` open right here, right now" — it deliberately does

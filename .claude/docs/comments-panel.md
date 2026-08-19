@@ -193,9 +193,9 @@ is the whole point: `BlockList` only hides the blokken-index in
 `state.selected` is never touched, so the sidebar highlight stays on the
 comment row itself rather than jumping to the block. The top-level
 block-column (which would otherwise render the comment's own
-`commentDetailCard`) collapses to a narrow rail instead, since
-`focusedBlock()` now resolves through `state.focusLevel > 0` to the drilled
-anchor — `commentTarget()`/`commentScope()`/`relatedChildren()` all follow
+`commentDetailCard`) is **hidden entirely** — see "The anchored column IS the
+leading column" below — since `focusedBlock()` now resolves through
+`state.focusLevel > 0` to the drilled anchor — `commentTarget()`/`commentScope()`/`relatedChildren()` all follow
 that for free, so the comment thread (correctly scoped now, since an
 anchored finding's own `Kind` is `''` per `anchoredWarning` in
 `code_warning.go` — it passes `recomputeView`'s `!c.kind` filter like any
@@ -254,12 +254,80 @@ a time); else to the Underlying-code panel if this unit has any children;
 else — nothing else to land on — the resolved comment anyway, same as
 before.
 
-Defaults to **Unified** (`state.commentAnchorViewMode`, distinct from the
-global `state.diffViewMode`, per explicit request: only this one view
-defaults differently) — `isCommentAnchorDrillActive(level)` picks which field
-a given drilled column's `viewMode`/`setViewMode` reads/writes; every OTHER
-drilled column (an ordinary Onderliggende-code child) still follows the
-shared preference.
+### The anchored column IS the leading column, and follows the shared stand
+
+Reviewer request (2026-08-19): "als je een comment op regel selecteert, [wil
+ik] hetzelfde zien als dat je via de code hebt genavigeerd." Two differences
+made this view read as its own thing rather than as the block you'd have
+navigated to, and both are gone:
+
+- **No collapsed rail.** The top-level block-column used to collapse to the
+  same 56px rail an ordinary block gets once one of ITS children is drilled
+  into, which pushed the anchor's diff card one rail plus one of `<main>`'s
+  `gap-4` gaps to the right of where an ordinary block card starts.
+  `commentAnchorColumnHidden()` (`home.mjs`) now hides that column outright —
+  both the wrapper (`hidden`, so the empty flex child costs no gap) and its
+  content (the `!focusedHere` branch returns `[]` before ever building the
+  rail) — so the drilled anchor becomes the leading column and the layout is
+  exactly blokken-index → diff card → Onderliggende code → comments. The
+  drilled column's own **`drill-left-hint` chevron** is suppressed for the
+  same reason: it hints at the column this one was drilled FROM, and there
+  isn't one on screen any more.
+  **Gated on `state.focusLevel > 0`**, so stepping the keyboard back OUT with
+  `←` still shows the comment's own `commentDetailCard` here instead of an
+  empty column.
+- **No private diff stand.** This view used to default to **Unified** via its
+  own `state.commentAnchorViewMode` field (distinct from the global
+  `state.diffViewMode`, reset on every fresh open), which `viewMode`/
+  `setViewMode` picked via `isCommentAnchorDrillActive(level)`. That field is
+  removed: the anchored column reads and writes `state.diffViewMode` like
+  every other column, so the `a` cycle carries over in both directions and a
+  stand picked here survives navigating away and back.
+  `isCommentAnchorDrillActive` itself stays — it is what
+  `commentAnchorColumnHidden`/the chevron gate are built on.
+
+### Only one thing reads as selected at a time
+
+Reviewer request: "als ik navigeer door comments op regels dan wil ik niet dat
+er 2 dingen geselecteerd zijn, dus selecteer alleen items in blokken index
+totdat ik naar rechts druk" — walking the index with ↑/↓ lit up BOTH the
+sidebar row and a line in the column it had just opened. And its follow-up:
+"als ik een comment op regel naar rechts druk, dan moet in de blokken index de
+selectie op gray selected zijn."
+
+Two halves of one rule — whoever owns the arrows owns the selection:
+
+- **Before `→`**: `commentAnchorAwaitingEntry(level)` (`home.mjs`,
+  `isCommentAnchorDrillActive(level) && !relatedActive()`) makes the drilled
+  column's `activeGroup` opt return `null`, so no unit is highlighted at all.
+  `state.drillCursor` is deliberately NOT touched — it still points at the
+  comment's own line, ready for the step in, and `commentScope` keeps
+  filtering the thread by it.
+- **After `→`**: the sidebar row switches to a grey, arrow-less "handed off"
+  look (`rowHandedOff`, `BlockList.mjs`). Per the colourblind rule the tint is
+  not the signal: the `›` cursor marker goes transparent at the same time, so
+  the difference is a SHAPE (arrow present or not) with the grey/indigo tint
+  only reinforcing it.
+
+`BlockList` learns this from **`state.indexHandedOff`**, kept by a small
+`watch` in `home.mjs` — not a direct `relatedActive()` call, because
+`RelatedPanel` already imports `BlockList` (`statusInfo`/`categoryClass`) and
+the reverse import would close a cycle. That watch is deliberately narrower
+than a bare `relatedActive()`: it also requires
+`isCommentAnchorDrillActive(1)`. A bulk action started FROM a standing index
+selection ("Comment op deze N regels") also opens a composer, i.e.
+`relatedActive()` is true, while its Shift+arrow range must visibly stay
+selected — greying it there broke `tests/list-range-select.spec.mjs`. Every
+other `→` enters diff mode and hides the index outright. Test:
+`tests/comment-anchor-expanded-view.spec.mjs`.
+
+Accepted consequence, not a bug: dropping the forced Unified means the
+anchored column is usually **wider** now (`'split'` measures
+`min(80, canonical) + canonical` against `'unified'`'s
+`max(canonical, other)`, see `.claude/docs/diff-card.md`), wide enough that
+`positionMenu` can clamp the `prComment` palette narrower than the column it
+is sized against — `tests/comment-anchor-expanded-view.spec.mjs` therefore
+asserts the menu width as an upper bound rather than an exact match.
 
 **Stays open until the sidebar selection moves to a DIFFERENT item** — not on
 any ←/Escape inside it (explicit reviewer decision: no extra close gesture was
@@ -463,6 +531,65 @@ narrower `prWideComments()`: a newly polled block-anchored comment (or reply)
 that mentions me must trigger a recompute too, or its row would only appear on
 the next unrelated one. `cs.list` itself is loaded/polled by `syncComments`,
 called unconditionally by `InlineComments` — no separate fetch.
+
+### An unanchored item shows the ordinary Claude column, on the right
+
+An unanchored comment-index item — a PR-wide comment, an orphan, an
+`ai_warning` that resolves to no block — scopes to `commentScope`'s
+`{ none: true, prComment: c }` sentinel, so `cs.view` is empty by design (see
+"A `kind:'comment'` sidebar item is itself unanchored" above). `claudeChatVisible()`
+read that as "no comment here to hang a chat on" and hid the whole
+comments+Claude row; the only way to reach Claude was the "Chat met Claude"
+command, which opened a SECOND, embedded copy of the chat stacked inside the
+item's own detail card.
+
+Reviewer request: "ik zie hier niet de claude chat. ik wil hetzelfde blokje
+zien als normaal rechts. Bij alle algemene comments en ai waarschuwingen."
+
+- **`isPrCommentScope()`** (`RelatedPanel.mjs`) — that sentinel with a real
+  comment on it — is now a fourth reason for `claudeChatVisible()`. The column
+  is simply there while such an item is selected, anchored by
+  `chatAnchorComment`'s pre-existing `s.none` branch plus
+  `syncClaudeAnchorForSelection`; no new writer of `cc`.
+- **The comments half hides** (`InlineComments`'s own `hidden`, same
+  predicate): its list is empty by design and the thread already renders in the
+  item's `commentDetailCard`, so it would only be a fixed-width gap.
+- **The embedded copy is gone**, along with the `pcc` reactive, its
+  `prCommentClaudeView`/`updatePccThreadPinned`/`jumpToPccThreadBottom`
+  helpers, the `pr-comment-claude-section`/`pr-comment-claude-close` markup and
+  `closePrCommentChat`. One chat, one surface — don't reintroduce it.
+  `startPrCommentChat` (the "Chat met Claude" command) kept its name and now
+  only ensures the Execution and focuses the column's composer.
+
+Test: `tests/pr-comment-claude-chat.spec.mjs`.
+
+### A bare Claude-chat anchor is not a comment and gets no row
+
+A conversation with Claude always hangs on an existing comment (the backend's
+`CommentID` constraint), so chatting **before** typing anything lazily creates
+one whose body is the literal `CLAUDE_ANCHOR_PLACEHOLDER` string ("(Nog geen
+eigen comment getypt — gesprek met Claude gestart.)", see
+`ensureClaudeAnchorForNew` in `.claude/docs/claude-chat-panel.md`). Nobody
+wrote that text, so it must not read as feedback: reviewer report — "Nog geen
+eigen comment... moet niet in de index, moet ook gewoon niet zichtbaar zijn",
+about such an anchor sitting in the PR-comments section with an orphan
+("verouderd — code verdwenen") badge.
+
+`isChatAnchorPlaceholder(c)` (`RelatedPanel.mjs`, exported) is the predicate;
+**`prWideComments()` and `indexComments()` both skip it**, which removes the
+sidebar row AND the `commentDetailCard` next to it in one go (that card reads
+`prWideComments()`, not `cs.view`).
+
+**Deliberately the index side only** — `recomputeView` still shows the bubble
+in the block-scoped thread on the unit it hangs on. That bubble is the running
+conversation's origin message, the thing "Comment hiervan maken" edits into a
+real comment, and the anchor `chatAnchorComment`/`ensureClaudeAnchorForNew`
+resolve against; hiding it there breaks the very first send that created it
+(`cc.runId` never populates, so `sendClaudeMessage` silently no-ops — measured,
+7 specs). So: an anchor whose block still resolves stays reachable through that
+block, and an ORPHANED one — the case in the report — is simply gone, its
+conversation with it. Accepted: it had no code left to point at. Test:
+`tests/comment-index-items.spec.mjs`.
 
 ### "Mentioned": an `@`-mention of the local reviewer ranks above everything
 
@@ -1099,15 +1226,15 @@ Its own click handler (`jumpToCommentThreadBottom`/`jumpToClaudeThreadBottom`)
 re-pins (`*Pinned = true`) and then calls the ordinary scroll-to-bottom
 function, which is no longer a no-op once re-pinned.
 
-The comment-index item's own embedded chat (`commentDetailCard`'s `pcc`/
-`prCommentClaudeView`, see "A PR-wide comment-index item can also start a
-conversation" in `.claude/docs/claude-chat-panel.md`) is a separate
-`claude-chat-thread` DOM instance and got its **own** `pcc.pinned` field plus
-`updatePccThreadPinned`/`jumpToPccThreadBottom`, wired through the
-`onThreadScroll`/`onJumpToBottom` callbacks (see "the render contract" below)
-rather than sharing `cs.claudePinned` — the two conversations are never both
-mounted at once (`claudeChatVisible()`'s strict invariant), but the pinned
-STATE must not leak from one into the other regardless.
+**Historical:** a comment-index item used to have its OWN embedded chat inside
+`commentDetailCard` (the `pcc` reactive), a second `claude-chat-thread` DOM
+instance with its own `pcc.pinned` field plus
+`updatePccThreadPinned`/`jumpToPccThreadBottom` wired through the
+`onThreadScroll`/`onJumpToBottom` callbacks, precisely so the pinned STATE
+could not leak between the two. That whole copy is gone — such an item now
+shows the ordinary right-hand column, see "An unanchored item shows the
+ordinary Claude column, on the right" above — so `cs.claudePinned` is again
+the only pinned flag for a Claude thread.
 
 Toggling this slot uses the same stable `<div class="contents">` wrapper as
 every other bare template↔`''` toggle in this file — see the "bare toggling

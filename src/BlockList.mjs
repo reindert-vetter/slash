@@ -815,6 +815,22 @@ function rowFocused(state, i) {
   return rowIsCursor(state, i) || rowInListRange(state, i)
 }
 
+// rowHandedOff — this row is still the selection, but the arrows have moved on
+// to the right-hand panel (state.indexHandedOff mirrors relatedActive(), see
+// its own comment in home.mjs). Only reachable while the index is even visible
+// next to a focused panel, i.e. an anchored comment-index item whose column is
+// open — every other → hides the index outright by entering diff mode.
+//
+// Reviewer request: "als ik een comment op regel naar rechts druk, dan moet in
+// de blokken index de selectie op gray selected zijn". The tint alone is not
+// the signal (the reviewer is colourblind, see conventions.md): the `›` cursor
+// marker goes transparent at the same time, so the difference between "the
+// arrows are here" and "the arrows have moved on" is a SHAPE — the arrow is
+// present or it isn't — with the grey/indigo tint only reinforcing it.
+function rowHandedOff(state, i) {
+  return !!state.indexHandedOff && rowFocused(state, i)
+}
+
 // rowIsCursor is the strict "this row IS the cursor" half of rowFocused —
 // used on its own for the `›` marker, so that with a Shift+arrow multi-row
 // selection (rowInListRange below) the reviewer can still see WHICH row the
@@ -983,9 +999,11 @@ function row(state, b, i) {
         // stays as an extra signal on a selected row, since a large chunk of
         // the Playwright suite already asserts bg-indigo-50 there.
         'flex cursor-default items-center gap-2 border px-3 py-2 text-sm ' +
-        (rowFocused(state, i)
-          ? 'border-indigo-300 dark:border-indigo-500 bg-indigo-50 dark:bg-indigo-500/15 ring-1 ring-inset ring-indigo-200 dark:ring-indigo-500/30'
-          : 'border-slate-300 dark:border-zinc-700 hover:bg-slate-50 dark:hover:bg-zinc-800/60')}"
+        (rowHandedOff(state, i)
+          ? 'border-slate-400 dark:border-zinc-600 bg-slate-100 dark:bg-zinc-800/70 ring-1 ring-inset ring-slate-300 dark:ring-zinc-600'
+          : rowFocused(state, i)
+            ? 'border-indigo-300 dark:border-indigo-500 bg-indigo-50 dark:bg-indigo-500/15 ring-1 ring-inset ring-indigo-200 dark:ring-indigo-500/30'
+            : 'border-slate-300 dark:border-zinc-700 hover:bg-slate-50 dark:hover:bg-zinc-800/60')}"
       @click="${() => {
         state.selected = i
         // A click is a plain, single-row choice: it supersedes a Shift+arrow
@@ -1030,7 +1048,8 @@ function row(state, b, i) {
       }}"
     >
       <span
-        class="${() => (rowIsCursor(state, i) ? 'text-indigo-500 dark:text-indigo-400' : 'text-transparent')}"
+        class="${() =>
+          rowIsCursor(state, i) && !state.indexHandedOff ? 'text-indigo-500 dark:text-indigo-400' : 'text-transparent'}"
         >›</span
       >
       ${() => batchCheckbox(state, b)}

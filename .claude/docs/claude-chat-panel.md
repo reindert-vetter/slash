@@ -414,7 +414,7 @@ is about switching BLOCKS while the keyboard was still inside the panel.
 
 Fixed in `home.mjs`, not `RelatedPanel.mjs`: the existing `watch(() =>
 state.selected, …)` (which already resets `cancelPrCommentReply`/
-`exitPrCommentThread`/`closePrCommentChat` on every selection change, and —
+`exitPrCommentThread` on every selection change, and —
 scoped to a comment-index item only — `leaveRelated()`, see "Fix Enter being
 swallowed in the PR-comment Claude composer") now ALSO calls `leaveRelated()`
 on a genuine switch to a different ORDINARY block. Once `cs.focus` is back to
@@ -481,20 +481,16 @@ Three call sites now use it to stay open, not just to report status:
   would still re-anchor (and thereby reset/hide) `cc` out from under the
   running turn the instant `cs.sel`/`cs.list`/`cs.scopeSig` changed, even
   though `claudeChatVisible()` itself now says to keep showing it.
-- **`commentDetailCard`'s `pr-comment-claude-section` toggle** (the
-  PR-comment-index "Chat met Claude" column) widened from a bare `pcc.open &&
-  pcc.commentId === c.id` to `(pcc.open && pcc.commentId === c.id) ||
-  (hasActiveClaudeTurn() && cc.commentId === c.id)`. `pcc.open` is what an
-  explicit open/close (`startPrCommentChat`/`closePrCommentChat`, including the
-  "Sluit" button and the unconditional `closePrCommentChat()` in `home.mjs`'s
-  `state.selected` reset watch) still toggles, but the second clause keeps the
-  section rendering regardless of that toggle for as long as `cc` — kept
-  anchored on this exact comment by the `syncClaudeAnchorForSelection` skip
-  above — still has a turn in flight. Clicking "Sluit" mid-turn is therefore a
-  no-op in practice (the section reappears on the very next render); it only
-  actually closes once the turn finishes.
+- **Historical:** the PR-comment-index item used to render its own embedded
+  copy of the chat (`commentDetailCard`'s `pr-comment-claude-section`, toggled
+  by `pcc.open && pcc.commentId === c.id`), and that toggle had to be widened
+  with `|| (hasActiveClaudeTurn() && cc.commentId === c.id)` for the same
+  "stay open while a turn runs" reason. Both the copy and the toggle are gone —
+  such an item now shows the ordinary column, whose own `claudeChatVisible()`
+  already carries that clause. See "An unanchored item shows the ordinary
+  Claude column, on the right" in `.claude/docs/comments-panel.md`.
 
-Not extended to `pcc.pinned`/the scroll position or to `cs.focus` itself —
+Not extended to the scroll position or to `cs.focus` itself —
 this is purely about the CONTENT staying visible, not about the keyboard
 cursor following it around; `exitRelated()`/`leaveRelated()` still release
 `cs.focus` exactly as before, so a reviewer who explicitly stepped away keeps
@@ -619,12 +615,20 @@ directly under the item's own detail card instead.
   no risk of the two contexts racing. This is why "Chat met Claude" needs no
   new fetch of its own for the anchor: by the time the reviewer opens the
   menu, `cc.commentId` already matches the selected item.
-- **`pcc`** (`RelatedPanel.mjs`, `{ open, commentId }`) is the ephemeral
-  visibility toggle, mirroring `picm`/`pct`'s own shape (scoped to ONE
-  comment id, since the selected AND the look-ahead preview item both render
-  through the very same `commentDetailCard`). It only toggles whether the
-  column is SHOWN — the conversation data stays `cc`.
-- **`startPrCommentChat(c)`** sets `pcc.open`/`pcc.commentId`, then `await`s
+- **The column is the ordinary one, and it is simply THERE.**
+  `isPrCommentScope()` (`RelatedPanel.mjs`) — `commentScope`'s sentinel with a
+  real comment on it — is one of `claudeChatVisible()`'s reasons, so
+  `comments-and-related`'s own `ClaudeChatPanel` renders next to the item for
+  as long as it is selected, with the comments half hidden (empty by design).
+  Reviewer request: "ik wil hetzelfde blokje zien als normaal rechts. Bij alle
+  algemene comments en ai waarschuwingen." **This replaced** a second,
+  embedded copy of the chat inside `commentDetailCard` (the `pcc` reactive
+  plus `prCommentClaudeView`/`updatePccThreadPinned`/`jumpToPccThreadBottom`
+  and a `pr-comment-claude-section` toggle) that only appeared after the
+  command ran — one chat, one surface, one set of testids. Don't reintroduce
+  it. Full write-up: "An unanchored item shows the ordinary Claude column, on
+  the right" in `.claude/docs/comments-panel.md`.
+- **`startPrCommentChat(c)`** therefore only `await`s
   `ensureAndLoadChat(cs.pr, c.id)` (the same idempotent
   `POST /api/workflows/claude_chat` call `enterClaudeChat` makes) **before**
   focusing the composer — mirroring `enterClaudeChat`'s own ordering. Skipping
@@ -636,46 +640,21 @@ directly under the item's own detail card instead.
   round-trip a human's own typing speed provides; see
   `tests/pr-comment-claude-chat.spec.mjs`, which this exact race broke before
   the `await` was added).
-- **`closePrCommentChat()`** just resets `pcc` — the conversation itself is
-  untouched (mirrors `←` out of the block-scoped chat never deleting it).
-  Called from the "Sluit" button inside the embedded column, and from
-  `home.mjs`'s existing `state.selected` reset watch (alongside
-  `cancelPrCommentReply`/`exitPrCommentThread`) so a stray open column never
-  leaks onto whatever gets selected next. **That same watch also calls
-  `leaveRelated()`** (releases the BLOCK-SCOPED panel's own `cs.focus`), but
-  only when the NEWLY selected item is itself a comment-index item
-  (`kind:'comment'`) — never on an ordinary block-to-block selection change,
-  see the watch's own doc comment in `home.mjs` for why a blanket reset there
-  is unsafe. `pcc` never touches `cs.focus` itself (it has no keyboard cursor
-  of its own, mouse only, see `prCommentClaudeView()` below), so a stale
-  `cs.focus` left over from a DIFFERENT block's comment/thread/claude panel
-  (never explicitly exited via `←`/Escape) used to survive a plain mouse click
-  straight onto a comment-index item's "Chat met Claude" composer — reported
-  bug: typing into that composer and pressing Enter did nothing, swallowed by
-  `home.mjs`'s `relatedActive()`-gated Enter/arrow handling instead of
-  reaching `ClaudeChat.mjs`'s own send handler, "fixed" by a refresh only
-  because a `cs.focus` restored from the URL that resolves to nothing gets
-  dropped, not because anything was actually repaired. Test:
+- **`home.mjs`'s `state.selected` reset watch calls `leaveRelated()`** (which
+  releases the panel's own `cs.focus`) when the NEWLY selected item is itself a
+  comment-index item (`kind:'comment'`) — never on an ordinary block-to-block
+  selection change, see the watch's own doc comment in `home.mjs` for why a
+  blanket reset there is unsafe. `startPrCommentChat` does not set `cs.focus`
+  itself, so a stale `cs.focus` left over from a DIFFERENT block's
+  comment/thread/claude panel (never explicitly exited via `←`/Escape) used to
+  survive a plain mouse click straight onto this composer — reported bug:
+  typing into it and pressing Enter did nothing, swallowed by `home.mjs`'s
+  `relatedActive()`-gated Enter/arrow handling instead of reaching
+  `ClaudeChat.mjs`'s own send handler, "fixed" by a refresh only because a
+  `cs.focus` restored from the URL that resolves to nothing gets dropped, not
+  because anything was actually repaired. Test:
   `tests/pr-comment-claude-chat.spec.mjs`'s "a stale block-scoped cs.focus…"
   case.
-- **`prCommentClaudeView()`** is `claudeChatView()`'s sibling: same `cc`-backed
-  fields, but `claudePos`/`focused` come from `pcc` instead of the
-  block-scoped panel's `cs.claudePos`/`cs.focus` (an unrelated, URL-bound
-  keyboard cursor for the diff-mode column — must never be touched from here).
-  **Deliberately smaller scope**: no `↑`/`↓` turn-walking cursor of its own
-  yet (`claudePos` always `0`) — mouse/click only. `claudeChatColumn`
-  (`ClaudeChat.mjs`) is reused as-is, rendered inside `commentDetailCard`
-  behind its own `${() => pcc.open && pcc.commentId === c.id ? html\`...\` :
-  ''}` toggle (same "toggling template↔string needs a function binding" shape
-  as the reply composer right above it in the same card — see
-  `.claude/rules/arrowjs-pitfalls.md`); mutual exclusivity with the
-  block-scoped column's own `claude-chat-compose`/`claude-chat-send` (both
-  reused testids, one global `document.querySelector` inside
-  `claudeChatColumn`'s send button) is guaranteed by construction — a
-  comment-index item (`b.kind === 'comment'`) never also renders
-  `comments-and-related`'s block-scoped `ClaudeChatPanel` content, see "The
-  detail card, in place of a `Block` diff card" in
-  `.claude/docs/comments-panel.md`.
 - **`handleClaudeChatStart` (`tasks_api.go`) needs a REAL comment record**,
   regardless of `Kind` — it 400s "unknown comment" when `commentId` isn't
   found via `s.tasks.comments.List`. This is stricter than

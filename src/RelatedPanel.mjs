@@ -1457,7 +1457,7 @@ function chatAnchorComment() {
   // A PR-wide comment-index item (home.mjs's commentScope sentinel, see its
   // own doc comment) carries the actual comment it was selected for — reuse
   // the SAME sync path a block-scoped comment gets instead of introducing a
-  // second writer of `cc` (see startPrCommentChat/pcc below, and
+  // second writer of `cc` (see startPrCommentChat below, and
   // syncClaudeAnchorForSelection's own doc comment for why nothing else may
   // race it).
   if (s.none) return s.prComment || null
@@ -2365,7 +2365,25 @@ function isNewChatUnanchored() {
 // claude-chat-panel.md. syncClaudeAnchorForSelection has a matching guard so
 // `cc` itself is never re-anchored/reset out from under a running turn.
 export function claudeChatVisible() {
-  return hasVisibleComments() || isNewChatUnanchored() || hasActiveClaudeTurn()
+  return hasVisibleComments() || isPrCommentScope() || isNewChatUnanchored() || hasActiveClaudeTurn()
+}
+
+// isPrCommentScope — an unanchored comment-index item (a PR-wide comment, an
+// orphan, or an ai_warning that resolves to no block) is selected: home.mjs's
+// commentScope sentinel, `{ none: true, prComment: c }`. Such an item has no
+// code unit, so cs.view is empty by design (recomputeView) — but it DOES have
+// a comment, and therefore a conversation worth showing.
+//
+// Reviewer request: "ik wil hetzelfde blokje zien als normaal rechts. Bij alle
+// algemene comments en ai waarschuwingen." So the ordinary right-hand Claude
+// column shows here too, anchored by chatAnchorComment's own `s.none` branch —
+// the same component, in the same place, as for any block-scoped comment.
+// This REPLACED an embedded copy inside the item's own detail card that only
+// appeared after the "Chat met Claude" command (the `pcc` toggle); one chat,
+// one surface.
+function isPrCommentScope() {
+  const s = cs.scope
+  return !!(s && s.none && s.prComment)
 }
 
 // claudeColumnVisible is the narrower question "does the CLAUDE HALF of that
@@ -3993,6 +4011,28 @@ let claudeAutoAnchor = null
 // is what the anchor comment's body reads until the reviewer's own text
 // replaces it via placeComment's reply-update path.
 const CLAUDE_ANCHOR_PLACEHOLDER = '(Nog geen eigen comment getypt — gesprek met Claude gestart.)'
+
+// isChatAnchorPlaceholder — a comment that exists ONLY to give a Claude
+// conversation something to hang on (the backend's CommentID constraint, see
+// ensureClaudeAnchorForNew) and that the reviewer never replaced with their
+// own text. Nobody wrote it, so it gets no row in the blokken-index and no
+// detail card of its own: both prWideComments (which feeds the PR-comments
+// section AND commentDetailCard) and indexComments skip it. Reviewer request:
+// "Nog geen eigen comment... moet niet in de index, moet ook gewoon niet
+// zichtbaar zijn."
+//
+// Deliberately scoped to the INDEX side only. The block-scoped thread bubble
+// on the unit it hangs on stays exactly as it was: it is the origin message of
+// the running conversation, the thing "Comment hiervan maken" edits into a real
+// comment, and the anchor chatAnchorComment/ensureClaudeAnchorForNew resolve
+// against — hiding it there breaks the very first send that creates it
+// (cc.runId never populates). Practical consequence of the split: a placeholder
+// whose anchor still resolves stays reachable through its block, and an
+// ORPHANED one (code gone) is simply gone from view, which is what the report
+// was about.
+export function isChatAnchorPlaceholder(c) {
+  return !!c && c.body === CLAUDE_ANCHOR_PLACEHOLDER
+}
 
 // ensureClaudeAnchorForNew lazily creates the ONE backing comment a Claude
 // conversation needs (the backend's own constraint: CommentID must name an
@@ -5645,7 +5685,14 @@ export function InlineComments(state, commentTarget, openCompose, openCommentMen
   const widthKey = () => colWidthKeyFor('comments', commentTarget)
   return html`
     <div
-      class="${() => 'relative flex shrink-0 flex-col justify-end gap-2 ' + commentColumnWidthCls()}"
+      class="${() =>
+        // `hidden` for an unanchored comment-index item (isPrCommentScope):
+        // cs.view is empty there by design and the thread itself renders in
+        // the item's own commentDetailCard, so this column would be a bare
+        // fixed-width gap left of the Claude column.
+        (isPrCommentScope() ? 'hidden ' : '') +
+        'relative flex shrink-0 flex-col justify-end gap-2 ' +
+        commentColumnWidthCls()}"
       style="${() => colWidthStyle(state, widthKey())}"
       data-testid="inline-comments"
       data-col-resize-root
@@ -7044,7 +7091,9 @@ export function isKiloReview(body) {
 // deliberately does NOT touch its `kind` — that would flip isPRWide on the backend
 // and start mirroring its replies to GitHub as issue comments.
 export function prWideComments() {
-  return cs.list.filter((c) => (c.kind || c.anchorState === 'orphan') && !isKiloReview(c.body))
+  return cs.list.filter(
+    (c) => (c.kind || c.anchorState === 'orphan') && !isKiloReview(c.body) && !isChatAnchorPlaceholder(c),
+  )
 }
 
 // indexComments is the FULL set of comments that get a row in the block index —
@@ -7081,6 +7130,8 @@ export function indexComments() {
   const out = []
   const seen = new Set()
   for (const c of cs.list) {
+    // A bare Claude-chat anchor never gets a row — see isChatAnchorPlaceholder.
+    if (isChatAnchorPlaceholder(c)) continue
     const prWide = (c.kind || c.anchorState === 'orphan') && !isKiloReview(c.body)
     const inBlock =
       !c.kind &&
@@ -7325,94 +7376,30 @@ export function cancelPrCommentReply() {
   picm.mode = 'reply'
 }
 
-// pcc ("PR-index comment chat") is the ephemeral toggle for the embedded
-// Claude conversation shown under a comment-index item's own detail card
-// (commentDetailCard) — the PR-wide sibling of ClaudeChatPanel's block-scoped
-// column, reached via the "Chat met Claude" command (home.mjs's
-// prCommentCommandsFor) instead of `→` (a comment-index item has no code
-// context to hang a `→` chain off — see keyboard-navigation.md). `commentId`
-// scopes `open` to ONE specific item, mirroring picm/pct just above: the
-// selected AND the look-ahead preview item both render through this very same
-// commentDetailCard.
+// startPrCommentChat focuses the Claude conversation of an unanchored
+// comment-index item — the "Chat met Claude" command (home.mjs's
+// prCommentCommandsFor), the mouse/menu equivalent of the `→` chain a
+// block-scoped comment has. The COLUMN itself is already on screen by then:
+// isPrCommentScope() keeps claudeChatVisible() true for as long as such an
+// item is selected (see its own doc comment), so this only has to make sure
+// the Execution/transcript are actually loaded before focusing the composer.
 //
-// This only toggles VISIBILITY here — the conversation DATA is the existing
-// `cc` (see claudeChatView), which already keeps itself correctly anchored on
-// whichever comment-index item is selected: home.mjs's commentScope sentinel
-// now carries the actual comment (`{ none: true, prComment: c }`), and
-// chatAnchorComment()'s own `s.none` branch returns it, so the pre-existing
-// syncClaudeAnchorForSelection watch picks it up exactly like it already does
-// for a block-scoped comment — no second writer of `cc`, no risk of the two
-// contexts racing. Not bound to the URL — ephemeral UI state, like picm/pct.
-// pinned mirrors cs.claudePinned/cs.threadPinned above, scoped to THIS card's
-// own claude-chat-thread pane (a comment-index item's embedded chat is a
-// separate DOM instance from the block-scoped one, and claudeChatVisible()'s
-// strict invariant means at most one of the two is ever mounted at once, but
-// they still must not share one flag — see updatePccThreadPinned/
-// jumpToPccThreadBottom below).
-const pcc = reactive({ open: false, commentId: null, pinned: true })
-
-// prCommentClaudeView is claudeChatView()'s PR-wide sibling: same `cc`-backed
-// fields, but claudePos/focused come from THIS card's own state instead of
-// the block-scoped panel's `cs.claudePos`/`cs.focus` — those drive an
-// unrelated URL-bound keyboard cursor (rel.cpos/rel.foc) for the diff-mode
-// Claude column, and must never be touched from here (see pcc's own doc
-// comment). No turn-walking cursor of its own yet (claudePos always 0) —
-// deliberately smaller scope than the block-scoped chat's full keyboard
-// chain; mouse/click only for now.
-function prCommentClaudeView() {
-  const base = claudeChatView()
-  return { ...base, claudePos: () => 0, focused: () => pcc.open, pinned: () => pcc.pinned }
-}
-
-// updatePccThreadPinned/jumpToPccThreadBottom are this card's own copies of
-// updateClaudeThreadPinned/jumpToClaudeThreadBottom (see their doc comments),
-// scoped to pcc.pinned instead of cs.claudePinned since this is a separate
-// claude-chat-thread instance (a comment-index item's own embedded chat).
-function updatePccThreadPinned(el) {
-  if (!el) return
-  pcc.pinned = el.scrollTop + el.clientHeight >= el.scrollHeight - PINNED_EDGE_PX
-}
-function jumpToPccThreadBottom() {
-  pcc.pinned = true
-  requestAnimationFrame(() => {
-    const el = document.querySelector('[data-testid=claude-chat-thread]')
-    if (!el) return
-    el.scrollTop = el.scrollHeight
-    updateScrollFade(el)
-  })
-}
-
-// startPrCommentChat reveals the embedded Claude column under comment `c`'s
-// detail card and ensures its Execution — called by the "Chat met Claude"
-// command. `cc.commentId` is already `c.id` by the time this runs
-// (chatAnchorComment/syncClaudeAnchorForSelection resolved it the moment the
-// item was selected, see pcc's own doc comment above), so ensureAndLoadChat
-// here is the same idempotent call enterClaudeChat makes — it only needs to
-// make sure the Execution/transcript are actually loaded before focusing the
-// composer.
+// `cc.commentId` is already `c.id` when this runs — chatAnchorComment's
+// `s.none` branch plus syncClaudeAnchorForSelection resolved it the moment the
+// item was selected — so ensureAndLoadChat is the same idempotent call
+// enterClaudeChat makes. Ordering mirrors it too: focus only AFTER cc.runId is
+// populated, since sending before that resolves is a silent no-op
+// (sendClaudeMessage's own `if (!runId) return`).
+//
+// There used to be a SECOND, embedded copy of the chat inside the item's own
+// detail card, toggled by a `pcc` reactive ("PR-index comment chat") and only
+// visible after this command ran. Removed with the column above — one chat,
+// one surface. Don't reintroduce it.
 export async function startPrCommentChat(c) {
   if (!c) return
-  pcc.open = true
-  pcc.commentId = c.id
-  pcc.pinned = true
-  // Mirrors enterClaudeChat's own ordering: focus only AFTER the Execution is
-  // ensured and cc.runId is actually populated — sending before that resolves
-  // is a silent no-op (sendClaudeMessage's own `if (!runId) return`).
   await ensureAndLoadChat(cs.pr, c.id)
   ensureChatEvents(cs.pr)
   focusEl('[data-testid=claude-chat-compose]')
-}
-
-// closePrCommentChat hides the embedded Claude column again — called by
-// home.mjs whenever the sidebar selection moves off the comment item it
-// belongs to (mirrors cancelPrCommentReply/exitPrCommentThread's own reset),
-// and by the column's own close control. The conversation itself is left
-// alone (cc keeps following the selection via syncClaudeAnchorForSelection) —
-// only this card's visibility toggle resets, same as leaving a block-scoped
-// conversation via ← never deletes it either.
-export function closePrCommentChat() {
-  pcc.open = false
-  pcc.commentId = null
 }
 
 // sendPrCommentReply posts a real reply (done:false) via the exact same
@@ -7737,48 +7724,6 @@ export function commentDetailCard(c, opts) {
                   ${() => sendStatusIcon(picm.sending ? 'sending' : 'draft')}
                   ${() => (picm.mode === 'convert' ? 'Plaats' : 'Stuur')}
                 </button>
-              </div>`
-            : ''}
-      </div>
-      <div class="contents">
-        ${() =>
-          // Also shows while a turn is actively running for this exact
-          // comment (hasActiveClaudeTurn + cc.commentId === c.id), even when
-          // pcc.open is false — reached either because the reviewer clicked
-          // "Sluit" mid-turn or navigated to a different item and back
-          // (closePrCommentChat resets pcc.open on every selection change,
-          // see home.mjs). Reviewer request: the opened-out conversation
-          // (including what was typed) must stay visible for as long as the
-          // turn runs, regardless of pcc's own open/closed toggle — see
-          // "Stay open while a Claude turn is running" in
-          // claude-chat-panel.md.
-          (pcc.open && pcc.commentId === c.id) || (hasActiveClaudeTurn() && cc.commentId === c.id)
-            ? html`<div
-                class="flex flex-col gap-1 border-t border-slate-100 dark:border-zinc-800/60 pt-3"
-                data-testid="pr-comment-claude-section"
-              >
-                <div class="flex items-center justify-between">
-                  <span class="text-[11px] font-medium text-slate-500 dark:text-zinc-500">Claude</span>
-                  <button
-                    type="button"
-                    class="rounded px-1.5 py-0.5 text-[11px] text-slate-400 hover:bg-slate-100 dark:text-zinc-500 dark:hover:bg-zinc-800"
-                    data-testid="pr-comment-claude-close"
-                    @click="${() => closePrCommentChat()}"
-                  >
-                    Sluit
-                  </button>
-                </div>
-                ${claudeChatColumn(prCommentClaudeView(), {
-                  onSend: (text) => queueClaudeMessage(text),
-                  onRetry: () => retryClaudeTurn(),
-                  onThreadScroll: (el) => updatePccThreadPinned(el),
-                  onJumpToBottom: () => jumpToPccThreadBottom(),
-                  // Same 'claude' menu the block-scoped column opens — it acts
-                  // on the same cc state regardless of which surface it was
-                  // opened from (see "A PR-wide comment-index item can also
-                  // start a conversation" in claude-chat-panel.md).
-                  onOpenMenu: (opts) => openClaudeMenuFromComposer(opts),
-                })}
               </div>`
             : ''}
       </div>

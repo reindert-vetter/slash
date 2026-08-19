@@ -14,21 +14,26 @@ async function deleteCommentBestEffort(page, runId, ms = 5000) {
   }
 }
 
-// "Chat met Claude" (prCommentCommandsFor, home.mjs) — the PR-wide sibling of
-// the block-scoped embedded Claude conversation: a comment-index item (an
-// AI-controle finding, or any other PR-wide comment) has no code context to
-// reach Claude via → (see claude-chat-panel.md's "chain, key by key"), so this
-// command opens the SAME claude_chat conversation directly under the item's
-// own detail card (RelatedPanel.mjs's commentDetailCard / pcc / prCommentClaudeView).
-// See ".claude/docs/claude-chat-panel.md" for the mechanism this reuses
-// (chatAnchorComment's `s.prComment` branch, syncClaudeAnchorForSelection).
+// An unanchored comment-index item (an AI-controle finding, any other PR-wide
+// comment, an orphan) shows the ORDINARY right-hand Claude column, exactly as a
+// block-scoped comment does — reviewer request: "ik wil hetzelfde blokje zien
+// als normaal rechts. Bij alle algemene comments en ai waarschuwingen." The
+// column is on screen for as long as such an item is selected
+// (isPrCommentScope → claudeChatVisible, RelatedPanel.mjs); "Chat met Claude"
+// (prCommentCommandsFor, home.mjs) only ensures the Execution and focuses its
+// composer, since the item has no code context to reach it via → (see
+// claude-chat-panel.md's "chain, key by key"). It replaced an embedded second
+// copy inside the item's own detail card (the `pcc` toggle) — one chat, one
+// surface. See ".claude/docs/claude-chat-panel.md" for the mechanism this
+// reuses (chatAnchorComment's `s.prComment` branch,
+// syncClaudeAnchorForSelection).
 //
 // The seeded comment must be a REAL backend record (not a mocked GET) —
 // POST /api/workflows/claude_chat's own handler (handleClaudeChatStart,
 // tasks_api.go) looks the commentId up in the real comments module and 400s
 // with "unknown comment" otherwise, regardless of what /api/comments answers.
 
-test('"Chat met Claude" opens the embedded column under a PR-wide comment-index item and round-trips a message', async ({
+test('a PR-wide comment-index item shows the ordinary Claude column, and "Chat met Claude" round-trips a message', async ({
   page,
 }, testInfo) => {
   const pr = seededPr(testInfo)
@@ -57,18 +62,22 @@ test('"Chat met Claude" opens the embedded column under a PR-wide comment-index 
   await leaveSearchBox(page)
   await expect(page.getByTestId('comment-detail-card')).toBeVisible()
 
-  // Not shown until explicitly opened.
-  await expect(page.getByTestId('pr-comment-claude-section')).toHaveCount(0)
+  // The Claude column is simply THERE, next to the item — no command needed,
+  // same card the block-scoped chat renders in.
+  await expect(page.getByTestId('claude-chat-card')).toBeVisible()
+  const compose = page.getByTestId('claude-chat-compose')
+  await expect(compose).toBeVisible()
+  // ...and the comments half of that shared card stays out of the way: an
+  // unanchored item has no scoped comment list, its thread lives in the detail
+  // card (isPrCommentScope's `hidden` in InlineComments).
+  await expect(page.getByTestId('inline-comments')).toBeHidden()
 
+  // "Chat met Claude" now only ensures the Execution and focuses the composer.
   await page.keyboard.press('Enter')
   const menu = page.getByTestId('command-menu')
   await expect(menu).toBeVisible()
   await menu.getByTestId('command-row').getByText('Chat met Claude', { exact: true }).click()
   await expect(menu).toHaveCount(0)
-
-  const section = page.getByTestId('pr-comment-claude-section')
-  await expect(section).toBeVisible()
-  const compose = page.getByTestId('claude-chat-compose')
   await expect(compose).toBeFocused()
 
   await compose.fill('Kan dit sneller?')
@@ -76,11 +85,6 @@ test('"Chat met Claude" opens the embedded column under a PR-wide comment-index 
   await expect(page.getByTestId('claude-message-body').last()).toContainText(
     'Ik heb naar de code gekeken. Zal ik een aanpak voorstellen?',
   )
-
-  // Closing hides the column again without touching the conversation itself
-  // (a later reopen — not exercised here — would show the same transcript).
-  await page.getByTestId('pr-comment-claude-close').click()
-  await expect(page.getByTestId('pr-comment-claude-section')).toHaveCount(0)
 })
 
 // Regression test for: "if I submit to Claude, I get a menu instead of the

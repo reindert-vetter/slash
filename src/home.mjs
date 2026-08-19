@@ -85,7 +85,6 @@ import RelatedPanel, {
   startPrCommentReply,
   cancelPrCommentReply,
   startPrCommentChat,
-  closePrCommentChat,
   resolvePrCommentItem,
   deletePrCommentItem,
   unresolvePrCommentItem,
@@ -675,6 +674,16 @@ const state = reactive({
   // Deliberately NOT applied to toggleRow — see its own comment in
   // BlockList.mjs for why.
   blockIndexEntered: false,
+  // indexHandedOff — mirrors relatedActive() (RelatedPanel.mjs's "does the
+  // right-hand panel own the keyboard") onto `state`, purely so BlockList can
+  // read it: BlockList must NOT import RelatedPanel, which already imports
+  // BlockList (statusInfo/categoryClass), so a direct call would close an
+  // import cycle. Kept in sync by the watch next to the selection watches
+  // below. The only consumer is the sidebar row's own "selected, but the
+  // arrows have moved on" styling — see rowFocused/rowHandedOff in
+  // BlockList.mjs and "Only one thing reads as selected" in
+  // .claude/docs/comments-panel.md. Ephemeral, like blockIndexEntered.
+  indexHandedOff: false,
   // descriptionExpanded — whether the PR description (Omschrijving) in the
   // PR-info column is shown in full or truncated (the default). Toggled by both
   // the "Toon volledige omschrijving"/"Omschrijving inklappen" PR-menu item and
@@ -694,20 +703,6 @@ const state = reactive({
   // viewMode opt — see Block.mjs's codeDiff. Ephemeral UI state, not bound to
   // the URL, like showDescription/showApproved above.
   diffViewMode: 'split',
-  // commentAnchorViewMode — the diff-pane preference for ONE specific,
-  // narrow case: a PR-comment index item that is anchored to a real block
-  // (see openCommentAnchorDrill/commentAnchorBlock) is shown "as if the code
-  // were already fully expanded" by drilling into that block automatically,
-  // while staying in list mode (so the pr-index/blokken-index stays visible
-  // — unlike an ordinary drilled column). That expanded view defaults to
-  // 'unified', deliberately independent of the reviewer's own global
-  // diffViewMode preference above (explicit request: only THIS view
-  // defaults differently) — isCommentAnchorDrillActive's viewMode/setViewMode
-  // pair reads/writes this field instead of diffViewMode while such a drill
-  // is the one open. Reset to 'unified' every time a fresh comment-anchor
-  // drill opens (openCommentAnchorDrill), so a toggle on one finding never
-  // carries over to the next. Ephemeral UI state, not bound to the URL.
-  commentAnchorViewMode: 'unified',
   // explanations — the AI unit-explanation read-model (GET /api/explanations):
   // per `${blockId}|${unitKey}` an entry { codeHash, status, text }, generated
   // by the explain_code workflow (Opus) for any line/group unit the reviewer
@@ -1196,8 +1191,8 @@ watch(
 // reviewer was actually still on, which this watch then (wrongly) read as "a
 // real navigation move" and wiped its live Onderliggende-code focus.
 //
-// `pcc` (RelatedPanel.mjs's PR-comment Claude composer) never touches
-// cs.focus itself (no keyboard cursor of its own, mouse only) — so a stale
+// The PR-comment Claude composer (startPrCommentChat, RelatedPanel.mjs) does
+// not set cs.focus itself — so a stale
 // cs.focus left over from a DIFFERENT block's comment/thread/claude panel
 // (never explicitly exited via ←/Escape) used to survive a plain mouse click
 // straight onto a comment-index item's "Chat met Claude" composer:
@@ -1297,7 +1292,6 @@ watch(
     lastFiredSelectionRef = fireRef
     cancelPrCommentReply()
     exitPrCommentThread()
-    closePrCommentChat()
     if (b && b.kind === 'comment') {
       // Unconditional, even before a baseline exists — unlike the ordinary-
       // block case below, cs.focus/the keyboard can NEVER legitimately be
@@ -2606,10 +2600,6 @@ function openCommentAnchorDrill(b) {
   state.drill = [anchor]
   state.drillCursor = [commentAnchorCursor(anchor, c)]
   state.focusLevel = 1
-  // Standaard Unified diff for this expanded view specifically (explicit
-  // request) — independent of the reviewer's own global diffViewMode
-  // preference, see state.commentAnchorViewMode's own doc comment.
-  state.commentAnchorViewMode = 'unified'
   scrollFocusIntoView()
   // commentAnchorCursor's row lookup needs the anchor's own aligned diff rows
   // (blockRows), which aren't there yet on this block's very first open — it
@@ -2642,6 +2632,57 @@ function isCommentAnchorDrillActive(level) {
   const b = curBlock()
   return !!(b && b.kind === 'comment' && state.drill[0] === commentAnchorBlock(b.comment))
 }
+
+// commentAnchorColumnHidden reports whether the top-level block-column must
+// disappear ENTIRELY rather than collapse to its usual narrow rail. While an
+// anchored comment-index item's own drilled column owns the keyboard (see
+// openCommentAnchorDrill), that rail was the one visible difference between
+// this view and having navigated to the very same block through the code: the
+// anchor's diff card sat one rail (plus one of <main>'s gap-4 gaps) to the
+// right of where an ordinary block card starts. Reviewer request: "als je een
+// comment op regel selecteert, [wil ik] hetzelfde zien als dat je via de code
+// hebt genavigeerd" — so the drilled anchor becomes the leading column and the
+// layout matches ordinary code navigation exactly (blokken-index, diff card,
+// Onderliggende code, comments).
+//
+// Gated on focusLevel > 0: stepping the keyboard back OUT of the drilled
+// column (←) must still show the comment's own commentDetailCard here, never
+// an empty column.
+function commentAnchorColumnHidden() {
+  return state.focusLevel > 0 && isCommentAnchorDrillActive(1)
+}
+
+// commentAnchorAwaitingEntry — an anchored comment-index item's column is open
+// (openCommentAnchorDrill) but the reviewer is still walking the blokken-index
+// with ↑/↓ and hasn't handed the keyboard in with `→` yet. Reviewer request:
+// "als ik navigeer door comments op regels dan wil ik niet dat er 2 dingen
+// geselecteerd zijn, dus selecteer alleen items in blokken index totdat ik
+// naar rechts druk" — so until that `→`, the column shows the code with NO
+// active unit highlighted at all; the sidebar row is the only thing that
+// reads as selected. The cursor itself (state.drillCursor) is untouched: it
+// still points at the comment's own line, ready for the moment the reviewer
+// steps in, and commentScope keeps filtering the thread by it.
+function commentAnchorAwaitingEntry(level) {
+  return isCommentAnchorDrillActive(level) && !relatedActive()
+}
+
+// Keep state.indexHandedOff in sync — deps enumerated inline in the getter per
+// the watch rule in .claude/rules/arrowjs-pitfalls.md. See its own comment on
+// `state` for why BlockList reads a mirrored field instead of calling
+// relatedActive() itself.
+//
+// Deliberately NARROWER than a bare relatedActive(): only an anchored
+// comment-index item's own column counts. Every other way of handing the
+// keyboard right either hides the index (diff mode) or is a bulk action run
+// FROM a still-standing index selection — e.g. "Comment op deze N regels"
+// opens the composer (relatedActive() true) while the Shift+arrow range must
+// visibly stay selected, see tests/list-range-select.spec.mjs.
+watch(
+  () => [relatedActive(), state.selected, state.blocks, state.drill],
+  () => {
+    state.indexHandedOff = relatedActive() && isCommentAnchorDrillActive(1)
+  },
+)
 
 // commentBlockItem now takes a GROUP of one or more comments that all sit on
 // the exact same source line (see commentGroupKeyOf/recomputeLeftList —
@@ -7856,9 +7897,53 @@ function resolveClickSelection({ level, b, i, row, segStart }) {
 // right-click on a diff row only ever happens while a block is focused, never
 // at stop 1. See "The right-click context menu" in command-palette.md.
 function handleRowContextMenu(level, b, i, row, segStart, x, y) {
-  if (!resolveClickSelection({ level, b, i, row, segStart })) return false
+  // A right-click INSIDE the current selection leaves it exactly as it is —
+  // reviewer report: "als ik iets selecteer en dan rechtermuisknop druk, gaat
+  // de selectie weg. dat wil ik niet". resolveClickSelection would collapse a
+  // Shift+arrow / drag range back onto the single clicked line (and re-force
+  // gran to 'line'), which is the opposite of what a context menu on a
+  // selection should do — the menu's actions are ABOUT that selection.
+  // Clicking a row outside it still lands there first, unchanged, matching
+  // every other platform's right-click behaviour.
+  //
+  // Skipping the `state` write also keeps the reviewer's NATIVE text
+  // selection alive for free: it is the row-DOM teardown that write triggers
+  // which otherwise wipes it (see restoreExactSelection's own doc comment).
+  if (!rowInsideActiveSelection(level, b, row)) {
+    if (!resolveClickSelection({ level, b, i, row, segStart })) return false
+  }
   openMenu('block', { native: true, x, y })
   return true
+}
+
+// rowInsideActiveSelection reports whether `row` already falls within the unit
+// the given level's cursor covers — a single group/line/call unit, or the
+// merged span of an active Shift+arrow/drag range (rangeUnit). Returns false
+// whenever that level doesn't currently own the keyboard, or the card isn't
+// the active one (a look-ahead preview), so a right-click there still lands
+// normally.
+function rowInsideActiveSelection(level, b, row) {
+  const rows = blockRows(b)
+  if (!rows.length) return false
+  let gran
+  let change
+  let anchor
+  if (level === 0) {
+    if (state.mode !== 'diff' || !isActiveCard(b)) return false
+    gran = state.gran
+    change = state.change
+    anchor = state.rangeAnchor
+  } else {
+    if (state.focusLevel !== level) return false
+    const cur = state.drillCursor[level - 1]
+    if (!cur) return false
+    gran = cur.gran
+    change = cur.change
+    anchor = cur.rangeAnchor
+  }
+  const units = navUnitsOf(b, rows, gran)
+  const u = rangeUnit(units, change, isRangeGran(gran) ? anchor : null)
+  return !!u && row >= u.start && row <= u.end
 }
 
 // resolveRangeSelection implements a real, non-collapsed selection — a mouse
@@ -12970,11 +13055,13 @@ function DetailPanel(state) {
         class="${() =>
           // `hidden` (display:none), not an empty column: an empty flex child
           // would still cost one of <main>'s own gap-4 gaps. Whole-value
-          // binding per the arrow.js attribute rule, and its ONLY dependency
-          // is cs.prWideCompose — no navigation step touches that, so this
-          // adds no per-step attribute mutation (see navigate.spec.mjs's
-          // flicker assertion).
-          'flex min-h-0 shrink-0 flex-col gap-3' + (isPrWideComposing() ? ' hidden' : '')}"
+          // binding per the arrow.js attribute rule. Its dependencies are
+          // cs.prWideCompose and (via commentAnchorColumnHidden) the SELECTION
+          // plus state.drill/focusLevel — none of which a change/gran step
+          // inside a card touches, so this still adds no per-step attribute
+          // mutation (see navigate.spec.mjs's flicker assertion).
+          'flex min-h-0 shrink-0 flex-col gap-3' +
+          (isPrWideComposing() || commentAnchorColumnHidden() ? ' hidden' : '')}"
         data-testid="block-column"
       >
       ${() => {
@@ -13004,6 +13091,11 @@ function DetailPanel(state) {
         // never flips between a scalar and an array shape — see the
         // single↔array arrow.js pitfall in conventions.md.
         if (!focusedHere) {
+          // An anchored comment-index item gets no rail at all — its own
+          // drilled column takes this column's place entirely, see
+          // commentAnchorColumnHidden (which also hides the wrapper, so this
+          // empty array costs no gap).
+          if (commentAnchorColumnHidden()) return []
           const selectedBlock = state.blocks[sel] || {}
           return [collapsedColumnHTML(selectedBlock, 0, 'block-collapsed').key('block-collapsed')]
         }
@@ -13450,7 +13542,13 @@ function DetailPanel(state) {
           return html`
             <div class="${drillColumnCls}" data-testid="drill-column" data-drill-idx="${i}">
               <div class="relative flex min-h-0 flex-col">
-                ${focusedHere
+                ${
+                // The chevron hints at the column this one was drilled FROM —
+                // meaningless when that column isn't there: an anchored
+                // comment-index item's own top-level column is hidden
+                // entirely (commentAnchorColumnHidden), so this drilled
+                // anchor IS the leading column.
+                focusedHere && !(level === 1 && commentAnchorColumnHidden())
                   ? html`
                       <div
                         class="pointer-events-none absolute -left-3 top-1/2 z-10 -translate-y-1/2"
@@ -13478,7 +13576,8 @@ function DetailPanel(state) {
                   // Also feeds the 'fit' stand's width the same way the
                   // top-level card's activeGroup does — see
                   // focusedActiveUnit's own doc comment.
-                  activeGroup: () => (state.focusLevel === level ? focusedActiveUnit() : null),
+                  activeGroup: () =>
+                    state.focusLevel === level && !commentAnchorAwaitingEntry(level) ? focusedActiveUnit() : null,
                   hintsEnabled: () => state.focusLevel === level,
                   diffActive: () => state.focusLevel === level && !relatedActive(),
                   approvedRows: () => approvedRowSet(b),
@@ -13517,16 +13616,13 @@ function DetailPanel(state) {
                   commentedRows: () => commentRowSet(b),
                   commentRangeRows: () => commentRangeRowSet(b),
                   lineSummaries: () => lineChildSummaries(b),
-                  // The one drilled column opened automatically for an
-                  // anchored comment-index item (see openCommentAnchorDrill/
-                  // isCommentAnchorDrillActive) defaults to Unified,
-                  // independent of the reviewer's own global diffViewMode —
-                  // every other drilled column (an ordinary Enter on an
-                  // Onderliggende-code child) keeps following that shared
-                  // preference, unchanged.
-                  viewMode: () => (isCommentAnchorDrillActive(level) ? state.commentAnchorViewMode : state.diffViewMode),
-                  setViewMode: (m) =>
-                    isCommentAnchorDrillActive(level) ? (state.commentAnchorViewMode = m) : setDiffViewMode(m),
+                  // Follows the shared stand like every other column — the
+                  // anchored comment-index item's own column used to default
+                  // to Unified via a separate state.commentAnchorViewMode
+                  // field; removed on reviewer request ("hetzelfde zien als
+                  // via de code genavigeerd"), see openCommentAnchorDrill.
+                  viewMode: () => state.diffViewMode,
+                  setViewMode: (m) => setDiffViewMode(m),
                   // Same manual column-width override as the top-level card
                   // (see columnWidth.mjs) — a drilled column gets its own
                   // independent override, keyed by its own block's id (a real
