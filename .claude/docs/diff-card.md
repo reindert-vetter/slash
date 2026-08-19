@@ -164,14 +164,50 @@ rows. Applies uniformly to every granularity now, not just the old
 wholly-added/removed-function edge case.
 
 **Falls back to the whole-block `codeMaxLineChars` ONLY when there's no
-active unit at all** (a preview/collapsed card, list mode without changes) —
-that's the one case with genuinely no cursor position to measure a window
-around. When a unit IS present but nothing in it carries measurable text on
-the rendered side (e.g. the cursor sits deep inside a multi-row old-side-only
-deletion run at `line` granularity), `selectionWindowLineChars` returns `0`
-— not `null` — so the card instead floors to `MIN_CONTENT_WIDTH_CHARS`,
-never the block's true global longest line (which would reintroduce the
-original width-spike bug this window exists to prevent).
+active unit at all, OR the block/side has zero changed rows at all**
+(`selectionWindowLineChars` returns `null` in both cases) — a preview/
+collapsed card, list mode without changes, or a drilled-in block whose only
+changed row sits on the other side/elsewhere. That's the one case with
+genuinely no cursor position to measure a window around. When a unit IS
+present, has a changed row to anchor on, but nothing in the window carries
+measurable text on the rendered side (e.g. the cursor sits deep inside a
+multi-row old-side-only deletion run at `line` granularity),
+`selectionWindowLineChars` returns `0` — not `null` — so the card instead
+floors to `MIN_CONTENT_WIDTH_CHARS`, never the block's true global longest
+line (which would reintroduce the original width-spike bug this window
+exists to prevent).
+
+### The zero-changed-rows fallback is CAPPED, unlike every other "floor but no ceiling" path
+
+Reported bug (2026-08-19, live PR 13392, `FillStats::handle`'s drilled-in
+`<class-header>` child): the class header shown as unchanged CONTEXT (only a
+nearby property changed) has no changed row of its own, so
+`selectionWindowLineChars` returned `null` regardless of cursor position, and
+`windowOrFallbackChars`/`fitCapCharsFor` fell back to the whole-block
+`codeMaxLineChars` — the TRUE longest line of the entire class header,
+uncapped. That header happened to contain a 185+ character
+`$signature`-adjacent doc-comment/property line, so the card (and every
+column after it in `<main>`'s horizontal flow) stretched far past the
+viewport for code the reviewer wasn't even looking at.
+
+This is a **narrower exception**, not a reversal of "floor but no ceiling"
+(the section above/below): that guarantee — never hide a real diff line
+behind an invisible horizontal scroll — only holds once the BLOCK has at
+least one changed row somewhere. The gate is deliberately **not** "no active
+unit was passed" — a block with real changes but no unit (e.g. list mode, or
+a fresh mount before a cursor lands) must keep the existing uncapped
+fallback, since it genuinely has something changed to guarantee visibility
+for; only a block with ZERO changed rows anywhere (a pure-context card, like
+the class-header example above) has nothing being reviewed on that side at
+all. `blockHasChangedRow(b)` (`Block.mjs`) is the actual gate;
+`fallbackCodeMaxLineChars(b, code)` applies it, clamping the whole-block
+`codeMaxLineChars` fallback at `NO_CHANGE_MAX_WIDTH_CHARS` (100 —
+reviewer-chosen, above the `MIN_CONTENT_WIDTH_CHARS` floor of 80) only when
+`blockHasChangedRow` is false. The code pane's own `overflow-auto` absorbs
+the rest as an internal horizontal scrollbar, same as any other over-width
+pane — no new wrap logic. The cursor-driven window path (a unit WITH at
+least one changed row) is untouched and stays genuinely uncapped, and so
+does the no-unit fallback for a block that DOES have changed rows elsewhere.
 
 <details>
 <summary>History: the removed neighbor-extension mechanism</summary>

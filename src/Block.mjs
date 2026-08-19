@@ -313,6 +313,44 @@ function codeMaxLineChars(code) {
   return lens.length ? lens[lens.length - 1] : 0
 }
 
+// NO_CHANGE_MAX_WIDTH_CHARS — a cap applied ONLY to the whole-block
+// codeMaxLineChars fallback that windowOrFallbackChars/fitCapCharsFor use
+// when a BLOCK HAS ZERO CHANGED ROWS AT ALL (not merely "no unit was
+// passed" — a block with real changed rows but no active unit, e.g. list
+// mode/a fresh mount, keeps the existing uncapped fallback below;
+// blockHasChangedRow is what actually decides). Reviewer-reported bug:
+// drilling into unchanged context code (e.g. a class header shown only
+// because a property nearby changed) sized the card off that context's own
+// true longest line, uncapped — one 185-char property-doc line stretched
+// the card (and every column after it) far past the screen. A real diff
+// line keeps its deliberate "floor but no ceiling" guarantee
+// (selectionWindowLineChars/contentWidthCls's own doc comments,
+// diff-card.md) — that only applies once the block has at least one
+// changed row somewhere. This cap exists purely for the
+// zero-changed-rows-in-the-whole-block fallback path: the code pane already
+// has its own `overflow-auto`, so capping here just trades an oversized
+// card for an internal horizontal scrollbar, exactly like any other
+// over-width pane. Reviewer-chosen value: 100 (comfortably above the
+// MIN_CONTENT_WIDTH_CHARS floor of 80).
+const NO_CHANGE_MAX_WIDTH_CHARS = 100
+
+// blockHasChangedRow — whether `b` carries even a single changed row
+// ANYWHERE (not scoped to `unit`/a side) — see NO_CHANGE_MAX_WIDTH_CHARS's
+// own doc comment above for why this, not "no unit was passed", is the
+// actual gate for the fallback cap.
+function blockHasChangedRow(b) {
+  return changedRows(blockRows(b)).length > 0
+}
+
+// codeMaxLineChars fallback, capped at NO_CHANGE_MAX_WIDTH_CHARS ONLY when
+// `b` has no changed row at all; otherwise the existing uncapped "floor but
+// no ceiling" guarantee applies unchanged (a block with real changes but no
+// active unit, e.g. list mode).
+function fallbackCodeMaxLineChars(b, code) {
+  const chars = codeMaxLineChars(code)
+  return blockHasChangedRow(b) ? chars : Math.min(NO_CHANGE_MAX_WIDTH_CHARS, chars)
+}
+
 // WINDOW_EDGE_ROWS — how far INSIDE a unit's own boundary still counts as
 // "near enough to the edge you're looking at" once that unit grows past
 // SELECTION_UNIT_MAX_SCAN_ROWS (below). Reviewer decision (2026-08-18): the
@@ -369,9 +407,16 @@ const SELECTION_UNIT_MAX_SCAN_ROWS = 5
 //
 // Returns `null` ONLY when there's no `unit` at all, or the block has no
 // changed row whatsoever — genuinely nothing to position a window around.
-// The caller then falls back to the whole-block codeMaxLineChars (the one
-// case that legitimately has no cursor position to measure around, e.g. a
-// preview/collapsed card or list mode without changes).
+// The caller then falls back to the whole-block codeMaxLineChars via
+// fallbackCodeMaxLineChars, which additionally CAPS that fallback at
+// NO_CHANGE_MAX_WIDTH_CHARS but ONLY when the block has zero changed rows
+// anywhere (blockHasChangedRow, see NO_CHANGE_MAX_WIDTH_CHARS's own doc
+// comment) — a block with real changes but simply no `unit` here (a
+// preview/collapsed card, list mode) keeps the existing uncapped fallback,
+// since there IS a real diff line somewhere to guarantee visibility for;
+// only a drilled-in block whose changed row sits entirely elsewhere (e.g. a
+// pure-context class header) gets capped, so an exceptionally long
+// UNCHANGED context line can't balloon the card.
 //
 // Returns `0` — deliberately NOT null — when a `unit` DOES exist but nothing
 // within the (possibly edge-restricted) window carries measurable text on
@@ -452,9 +497,13 @@ function selectionWindowLineChars(b, unit, side = fitOnly(b) === 'left' ? 'left'
 // activeGroup opt is currently highlighting (home.mjs passes
 // topLevelActiveUnit(...)/focusedActiveUnit()): since the width now narrows
 // to just the selection's own window (see selectionWindowLineChars above),
-// the cap must track that same, usually smaller, number. Absent falls back
-// to the whole-block codeMaxLineChars; present but nothing measurable
-// nearby returns 0 (selectionWindowLineChars's own 0-vs-null contract),
+// the cap must track that same, usually smaller, number. Absent, or present
+// but the block has no changed row at all, falls back to the whole-block
+// codeMaxLineChars (fallbackCodeMaxLineChars — capped at
+// NO_CHANGE_MAX_WIDTH_CHARS only if the block has zero changed rows
+// anywhere, see that function's own doc comment; otherwise uncapped as
+// before); present with a changed row but nothing measurable nearby returns
+// 0 (selectionWindowLineChars's own 0-vs-null contract),
 // which caps a preview at the plain floor rather than the block's true
 // global longest line.
 //
@@ -468,7 +517,7 @@ function selectionWindowLineChars(b, unit, side = fitOnly(b) === 'left' ? 'left'
 export function fitCapCharsFor(b, unit) {
   if (!isPhpFile(b)) return 0
   const windowChars = selectionWindowLineChars(b, unit)
-  return windowChars != null ? windowChars : codeMaxLineChars(fitOnlyText(b))
+  return windowChars != null ? windowChars : fallbackCodeMaxLineChars(b, fitOnlyText(b))
 }
 
 // widthCls picks the card's width class: a PHP file gets the content-driven
@@ -650,12 +699,15 @@ function contentWidthCls(b, capFitChars, activeGroup, viewMode) {
 }
 
 // windowOrFallbackChars — selectionWindowLineChars for one side, with the
-// "no unit at all" null falling back to that SAME side's own whole-block
-// codeMaxLineChars (mirrors the existing single-side fallback, just made
-// reusable per side instead of hardcoded to the canonical one).
+// null (no unit at all, or the block has no changed row) falling back to
+// that SAME side's own whole-block codeMaxLineChars via
+// fallbackCodeMaxLineChars — capped at NO_CHANGE_MAX_WIDTH_CHARS only when
+// the block has zero changed rows anywhere, uncapped otherwise (see that
+// function's own doc comment) — mirrors the existing single-side fallback,
+// just made reusable per side instead of hardcoded to the canonical one.
 function windowOrFallbackChars(b, unit, side) {
   const windowChars = selectionWindowLineChars(b, unit, side)
-  return windowChars != null ? windowChars : codeMaxLineChars(sideText(b, side))
+  return windowChars != null ? windowChars : fallbackCodeMaxLineChars(b, sideText(b, side))
 }
 
 // windowCharsForMode — combines however many sides `mode` actually renders

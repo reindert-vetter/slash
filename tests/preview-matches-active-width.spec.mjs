@@ -297,4 +297,62 @@ test.describe('PR Review Tree — look-ahead preview matches a one-sided active 
     const contentDrivenMatch = /w-\[calc\((\d+)ch_\+_2rem\)\]/.exec(cls.contentDriven)
     expect(Number(contentDrivenMatch[1])).toBeGreaterThan(80)
   })
+
+  // Regression (2026-08-19, live PR 13392, FillStats::handle's drilled-in
+  // <class-header> child): a block/side with ZERO changed rows (here:
+  // status 'unchanged', old === new — the same shape resolveChildBlock/a
+  // drilled context card builds) used to fall back to the block's TRUE
+  // longest line, uncapped, via codeMaxLineChars — an exceptionally long
+  // UNCHANGED context line (well past 100 chars) then stretched the card
+  // far past the screen. NO_CHANGE_MAX_WIDTH_CHARS (100, Block.mjs) now
+  // caps exactly that fallback path, so the card stays at the cap instead
+  // of growing to the line's full length. Contrast with the "grows well
+  // past 80" content-driven case just above, which DOES have a changed row
+  // and must stay genuinely uncapped.
+  test('a block with no changed rows caps its width instead of following its longest unchanged line', async ({
+    page,
+  }) => {
+    await page.goto('/pr/105')
+    await appReady(page)
+
+    const cls = await evaluateSettled(page, async () => {
+      const { reactive } = await import('/src/vendor/arrow.js')
+      const Block = (await import('/src/Block.mjs')).default
+      // Well past NO_CHANGE_MAX_WIDTH_CHARS (100) — a real (non-comment) code
+      // line, mirroring the reported bug's `$signature` property line rather
+      // than a doc-comment (nonCommentLineLengths deliberately excludes
+      // comment lines, so a comment wouldn't exercise the cap at all).
+      const veryLongLine =
+        "protected \$signature = 'stats:fill {--model= : The model to process, an exceptionally long option description that keeps going}';"
+      const noChangeSrc = `class FillStats extends Command {\n    ${veryLongLine}\n}`
+      const noChangeBlock = reactive({
+        category: 'OTHER',
+        label: 'FillStats::<class-header>',
+        status: 'unchanged',
+        file: 'app/Console/Commands/Maintenance/FillStats.php',
+        line: 1,
+        name: '<class-header>',
+        class: 'FillStats',
+        approved: false,
+        // old === new, exactly resolveChildBlock's shape for context with no
+        // changed rows of its own.
+        code: { old: { start: 1, end: 4, text: noChangeSrc }, new: { start: 1, end: 4, text: noChangeSrc } },
+      })
+
+      const host = document.createElement('div')
+      host.id = 'no-change-cap-host'
+      document.body.appendChild(host)
+      // Also pass an activeGroup (a drilled-in card always has a cursor
+      // unit) — since the block itself has zero changed rows,
+      // selectionWindowLineChars still returns null (not just for the
+      // "no unit at all" case), exercising the same fallback path a real
+      // drilled context card hits.
+      Block(noChangeBlock, { viewMode: () => 'fit', activeGroup: () => ({ start: 0, end: 3 }) })(host)
+
+      return { className: host.querySelector('article').className }
+    })
+
+    // Capped at NO_CHANGE_MAX_WIDTH_CHARS (100), not the ~110+-char raw line.
+    expect(cls.className).toMatch(/w-\[calc\(100ch_\+_2rem\)\]/)
+  })
 })
