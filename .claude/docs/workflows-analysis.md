@@ -901,6 +901,47 @@ a manually triggered, low-frequency action.
   block", not a fixed number. The model is told the cap, but it is
   **hard-enforced in Go** (sort on `file, line`, truncate), so a model ignoring
   the instruction can't exceed it.
+- **A file already reviewed at its current content is skipped — no Opus call
+  at all** (`modules/warnreviewed`, `data/warnreviewed.db`:
+  `reviewed_files(repo, pr, file, hash, reviewed_at)`, same shape as
+  `warndismiss` above). Reviewer request: "ik wil ai warnings alleen genereren
+  op code wat niet eerder al gecontroleerd is door ai warnings flow" — the
+  automatic re-run on every ingest refresh used to spend a full agentic Opus
+  call on every changed file again, even one this same check had already
+  looked at and found nothing new to say about.
+  - **File-level, not line-level**: the identity is (repo, pr, file) → sha256
+    of the file's HEAD content (`warnreviewed.HashContent`). Any change
+    anywhere in the file — even one unrelated line — puts the whole file back
+    in scope; `resolveWarningScope` already reasons per file, not per line.
+  - `resolveWarningScope` hashes each candidate file's current head content
+    (`hashHeadFiles`, `code_warning.go`) and drops it from `scope.Files` only
+    when that hash equals what's stored (`filesNeedingReview`,
+    `code_warning.go`) — so `supersedeFileWarnings` never even touches that
+    file's existing comments, and the reviewer's earlier findings on it stay
+    exactly as they are. If every file in the PR's changed-file scope is
+    already reviewed at its current content, `scope.Files` comes back empty
+    and `codeWarningWorkflow` returns `{"found":0}` before doing anything
+    else — no supersede, no Opus call, whether the trigger was automatic or
+    the manual "Diepgravend onderzoek".
+  - **A file that can't be read right now (missing, worktree not ready, a
+    permission error) is NEVER treated as unchanged** — `filesNeedingReview`
+    only ever trusts a hash it could actually compute this run; an absent
+    entry always means "review it again". Uncertainty must never silently
+    skip a review — a redundant Opus call is the accepted cost, a missed
+    finding is not.
+  - **Recorded only after the agentic call actually ran**: `runCodeWarningReview`
+    now also returns `ok` (true only when the Opus call itself succeeded, even
+    with zero findings) — a CLI/model failure must not be recorded as "this
+    file was reviewed". `runAgenticReview` (the Activity, `workflows.go`) then
+    hashes and records (`warnreviewed.MarkReviewed`, an upsert) every file it
+    was actually asked to review — i.e. `arg.Files`, the already-filtered
+    scope. Best-effort like `warndismiss`'s own writes: a store read/write
+    error only costs a redundant review later, never a missed one.
+  - Tests: `TestFilesNeedingReview` (`code_warning_test.go`, the pure
+    filtering decision), `TestCodeWarningSkipsUnchangedFile` (a second run
+    makes no further Opus call and leaves the existing finding untouched),
+    `modules/warnreviewed/warnreviewed_test.go` (store round-trip + repo
+    scoping, mirroring `TestModulesAreRepoScoped`'s `warndismiss` coverage).
 - **A finding must anchor on a line the PR CHANGED.** The model may read and
   reason about anything in the worktree (that is the whole point of the
   agentic pass), but a finding about code this PR left alone is out of scope —

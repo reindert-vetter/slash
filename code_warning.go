@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
 	"slash/modules/claude"
 	"slash/modules/comments"
 	"slash/modules/warndismiss"
+	"slash/modules/warnreviewed"
 )
 
 // This file is the LLM side of the code_warning workflow (package main; it
@@ -104,9 +107,16 @@ const warningAuthor = "AI-controle"
 // given (never a fabricated file), sorted, and capped at arg.MaxFindings.
 // Never returns an error: a model/CLI failure degrades to no findings (like
 // resolveCallsWithModel), so the workflow always completes.
-func runCodeWarningReview(ctx context.Context, cl claude.Client, dataDir string, arg warningReviewArg) []warningFinding {
+//
+// The second return value, ok, is true only when the agentic call actually
+// ran and returned (even if it reported zero findings) — false when there was
+// nothing to review or the CLI call itself failed. The caller
+// (runAgenticReview, workflows.go) uses it to decide whether the files in
+// scope may be recorded as reviewed (modules/warnreviewed): a call that never
+// really happened must not be recorded as having checked anything.
+func runCodeWarningReview(ctx context.Context, cl claude.Client, dataDir string, arg warningReviewArg) ([]warningFinding, bool) {
 	if cl == nil || len(arg.Files) == 0 {
-		return nil
+		return nil, false
 	}
 	baseDir, headDir := worktreeDirs(dataDir, arg.Repo, arg.PR)
 	// Which lines this PR actually changed, per file in scope — used twice: to
@@ -125,7 +135,7 @@ func runCodeWarningReview(ctx context.Context, cl claude.Client, dataDir string,
 	}
 	raw, err := cl.Run(ctx, req)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	findings := parseWarningFindings(raw)
 
@@ -159,7 +169,7 @@ func runCodeWarningReview(ctx context.Context, cl claude.Client, dataDir string,
 	if arg.MaxFindings > 0 && len(kept) > arg.MaxFindings {
 		kept = kept[:arg.MaxFindings]
 	}
-	return kept
+	return kept, true
 }
 
 // changedLineSets returns, per file in scope, the head-side lines this PR
@@ -370,6 +380,50 @@ func existingLineCommentsInScope(list []comments.Comment, files []string) []exis
 	out := append(scoped, prWide...)
 	if len(out) > maxPromptComments {
 		out = out[:maxPromptComments]
+	}
+	return out
+}
+
+// hashHeadFiles reads each file's CURRENT content from the head worktree and
+// returns its warnreviewed hash, keyed by file — used both to decide which
+// files still need a review (filesNeedingReview) and, after a successful
+// review, to record what was just reviewed. A file that cannot be read right
+// now (missing, permission error, worktree not ready, …) is left OUT of the
+// result on purpose: filesNeedingReview treats an absent entry as "unknown,
+// must review", never as "unchanged" — an unreadable file must never silently
+// drop out of scope.
+func hashHeadFiles(headDir string, files []string) map[string]string {
+	out := make(map[string]string, len(files))
+	for _, f := range files {
+		data, err := os.ReadFile(filepath.Join(headDir, f))
+		if err != nil {
+			continue
+		}
+		out[f] = warnreviewed.HashContent(data)
+	}
+	return out
+}
+
+// filesNeedingReview narrows files down to the ones code_warning must still
+// spend an agentic Opus call on: a file is dropped from scope only when ITS
+// OWN current head hash (currentHash, from hashHeadFiles) is both KNOWN and
+// equal to the hash it was reviewed at last time (reviewedHash, see
+// modules/warnreviewed). File-level, not line-level, per the reviewer's own
+// request ("ai warnings alleen genereren op code wat niet eerder al
+// gecontroleerd is") — an unrelated one-line change anywhere in the file
+// still puts the whole file back in scope, since that already-computed hash
+// covers the whole file.
+//
+// A file missing from currentHash (hashHeadFiles could not read it just now)
+// is NEVER dropped — uncertainty must never silently skip a review; a
+// redundant call is the accepted trade-off, a missed one is not.
+func filesNeedingReview(files []string, currentHash, reviewedHash map[string]string) []string {
+	out := make([]string, 0, len(files))
+	for _, f := range files {
+		cur, ok := currentHash[f]
+		if !ok || cur != reviewedHash[f] {
+			out = append(out, f)
+		}
 	}
 	return out
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -21,6 +22,7 @@ import (
 	"slash/modules/prmeta"
 	"slash/modules/relations"
 	"slash/modules/warndismiss"
+	"slash/modules/warnreviewed"
 )
 
 // warningFixtureBody is the fixture PHP file both worktrees carry: a single
@@ -115,6 +117,22 @@ func warningManager(t *testing.T, dataDir string, fake claude.Client) (*TaskMana
 	t.Cleanup(func() { wd.Close() })
 	m.warndismiss = wd
 	return m, cs, gh
+}
+
+// warningManagerWithReviewed is warningManager plus a real warnreviewed
+// module wired in (production leaves it nil-safe but this is what newTasks
+// actually wires), for asserting that a re-run skips a file whose head
+// content hasn't changed since the last successful review.
+func warningManagerWithReviewed(t *testing.T, dataDir string, fake claude.Client) (*TaskManager, *comments.Module, *warnreviewed.Module) {
+	t.Helper()
+	m, cs, _ := warningManager(t, dataDir, fake)
+	wr, err := warnreviewed.Open(filepath.Join(dataDir, "warnreviewed.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { wr.Close() })
+	m.warnreviewed = wr
+	return m, cs, wr
 }
 
 // warningManagerWithApprovals is warningManager plus a real approvals module,
@@ -345,6 +363,116 @@ func TestCodeWarningSupersedesPreviousRun(t *testing.T) {
 	}
 	if second[0].Body != "Second pass finding." {
 		t.Fatalf("after second run: body = %q, want the fresh finding", second[0].Body)
+	}
+}
+
+// filesNeedingReview is pure logic (no disk I/O): it decides, per file,
+// whether the head content just hashed (currentHash) still matches what
+// code_warning last reviewed (reviewedHash, modules/warnreviewed). Table-
+// driven since the interesting behaviour is entirely in this decision, not in
+// any I/O around it — see hashHeadFiles for the disk-reading half.
+func TestFilesNeedingReview(t *testing.T) {
+	cases := []struct {
+		name         string
+		files        []string
+		currentHash  map[string]string
+		reviewedHash map[string]string
+		want         []string
+	}{
+		{
+			name:         "never reviewed before stays in scope",
+			files:        []string{"a.php"},
+			currentHash:  map[string]string{"a.php": "h1"},
+			reviewedHash: map[string]string{},
+			want:         []string{"a.php"},
+		},
+		{
+			name:         "unchanged since last review drops out of scope",
+			files:        []string{"a.php"},
+			currentHash:  map[string]string{"a.php": "h1"},
+			reviewedHash: map[string]string{"a.php": "h1"},
+			want:         nil,
+		},
+		{
+			name:         "changed since last review stays in scope",
+			files:        []string{"a.php"},
+			currentHash:  map[string]string{"a.php": "h2"},
+			reviewedHash: map[string]string{"a.php": "h1"},
+			want:         []string{"a.php"},
+		},
+		{
+			name: "a file that could not be hashed just now is NEVER dropped, " +
+				"even though it was reviewed before — uncertainty must not skip a review",
+			files:        []string{"a.php"},
+			currentHash:  map[string]string{},
+			reviewedHash: map[string]string{"a.php": "h1"},
+			want:         []string{"a.php"},
+		},
+		{
+			name:         "mixed scope: only the genuinely unchanged file drops",
+			files:        []string{"a.php", "b.php"},
+			currentHash:  map[string]string{"a.php": "h1", "b.php": "h2"},
+			reviewedHash: map[string]string{"a.php": "h1", "b.php": "hOLD"},
+			want:         []string{"b.php"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := filesNeedingReview(c.files, c.currentHash, c.reviewedHash)
+			if !slices.Equal(got, c.want) {
+				t.Errorf("got %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// A code_warning re-run must not spend another agentic Opus call on a file
+// whose head content hasn't changed since the last successful review, and the
+// existing finding on that file stays exactly as it is — reviewer request:
+// "ik wil ai warnings alleen genereren op code wat niet eerder al
+// gecontroleerd is door ai warnings flow". See modules/warnreviewed.
+func TestCodeWarningSkipsUnchangedFile(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 61
+	writeWarningFixtureRepo(t, dataDir, pr)
+	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), "", pr, []Block{warningFixtureBlock(pr)}); err != nil {
+		t.Fatal(err)
+	}
+
+	cl := &scriptedClaude{outs: []string{
+		`[{"file":"app/Services/OrderService.php","line":6,"text":"First run finding."}]`,
+	}}
+	m, cs, _ := warningManagerWithReviewed(t, dataDir, cl)
+
+	if _, err := m.StartCodeWarning(CodeWarningInput{PR: pr}); err != nil {
+		t.Fatal(err)
+	}
+	if cl.CallCount() != 1 {
+		t.Fatalf("first run: opus calls = %d, want 1", cl.CallCount())
+	}
+	first, err := cs.List(context.Background(), "", pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 1 {
+		t.Fatalf("after first run: comments = %+v", first)
+	}
+
+	// Second run, the file's head content is untouched: no second Opus call,
+	// and the existing finding must be left exactly alone — never superseded
+	// then recreated, since it was never in scope for this run at all.
+	if _, err := m.StartCodeWarning(CodeWarningInput{PR: pr}); err != nil {
+		t.Fatal(err)
+	}
+	if cl.CallCount() != 1 {
+		t.Fatalf("second run: opus calls = %d, want still 1 (unchanged file skipped)", cl.CallCount())
+	}
+	second, err := cs.List(context.Background(), "", pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second) != 1 || second[0].ID != first[0].ID {
+		t.Fatalf("second run must leave the existing finding untouched: before=%+v after=%+v", first, second)
 	}
 }
 

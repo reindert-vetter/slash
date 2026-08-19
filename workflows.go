@@ -31,6 +31,7 @@ import (
 	"slash/modules/tasksnooze"
 	"slash/modules/testcovers"
 	"slash/modules/warndismiss"
+	"slash/modules/warnreviewed"
 )
 
 // This file wires the first task as a durable tembed Workflow. Terminology
@@ -760,14 +761,22 @@ type TaskManager struct {
 	// the dismissal recording a no-op and the filter a pass-through, i.e.
 	// exactly the pre-existing behaviour.
 	warndismiss *warndismiss.Module
-	claude      claude.Client
-	jira        jira.Client
-	db          *sql.DB
-	dataDir     string
-	repo        string
-	interval    time.Duration // fast cadence (reviewer active)
-	idle        time.Duration // slow cadence + PR-state check (reviewer idle)
-	logf        func(string, ...any)
+	// warnreviewed remembers, per file, the sha256 of the head content
+	// code_warning last successfully reviewed, so a later run can skip a file
+	// that hasn't changed since instead of paying for another agentic Opus
+	// call on it. Set post-construction like the stores above; a nil store
+	// makes resolveWarningScope's filter a pass-through (every file stays in
+	// scope, i.e. the pre-existing behaviour) and the recording in
+	// runAgenticReview a no-op.
+	warnreviewed *warnreviewed.Module
+	claude       claude.Client
+	jira         jira.Client
+	db           *sql.DB
+	dataDir      string
+	repo         string
+	interval     time.Duration // fast cadence (reviewer active)
+	idle         time.Duration // slow cadence + PR-state check (reviewer idle)
+	logf         func(string, ...any)
 
 	// baseCtx is the server-lifetime context background pollers spawned outside
 	// a request (e.g. ensurePRStatus's fresh-poller spawn) run under — a
@@ -2202,6 +2211,20 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if len(files) == 0 {
 			files = distinctSortedFiles(blocks)
 		}
+		// Drop a file whose head content is unchanged since code_warning last
+		// reviewed it (modules/warnreviewed) — the reviewer asked for "only
+		// generate AI warnings on code not already checked by this flow".
+		// Best-effort on a read error (like dropDismissedFindings): a
+		// bookkeeping problem must never silently narrow the review.
+		if m.warnreviewed != nil {
+			reviewedHash, err := m.warnreviewed.Hashes(ctx, arg.Repo, arg.PR)
+			if err != nil {
+				m.logf("code_warning: read reviewed-file hashes: %v", err)
+			} else {
+				_, headDir := worktreeDirs(m.dataDir, arg.Repo, arg.PR)
+				files = filesNeedingReview(files, hashHeadFiles(headDir, files), reviewedHash)
+			}
+		}
 		fileSet := make(map[string]bool, len(files))
 		for _, f := range files {
 			fileSet[f] = true
@@ -2369,7 +2392,22 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 				arg.PastDismissed = dismissedFindingsInScope(dismissed, arg.Files)
 			}
 		}
-		findings := runCodeWarningReview(ctx, m.claude, m.dataDir, arg)
+		findings, ok := runCodeWarningReview(ctx, m.claude, m.dataDir, arg)
+		// Record every file the model was actually asked to review as
+		// "reviewed at this hash" (modules/warnreviewed), so the next run can
+		// skip it while it stays unchanged — only once the agentic call itself
+		// really happened (ok), never after a CLI/model failure degraded to no
+		// findings. Best-effort: a write error here only costs a redundant
+		// review next time, never a missed one.
+		if ok && m.warnreviewed != nil {
+			_, headDir := worktreeDirs(m.dataDir, arg.Repo, arg.PR)
+			at := time.Now().UTC().Format(time.RFC3339)
+			for f, hash := range hashHeadFiles(headDir, arg.Files) {
+				if err := m.warnreviewed.MarkReviewed(ctx, arg.Repo, arg.PR, f, hash, at); err != nil {
+					m.logf("code_warning: record reviewed file %s: %v", f, err)
+				}
+			}
+		}
 		// Drop anything the reviewer already resolved or deleted in an earlier
 		// run (modules/warndismiss). Inside this Activity rather than as a step
 		// of its own in codeWarningWorkflow, so the workflow body's Activity
