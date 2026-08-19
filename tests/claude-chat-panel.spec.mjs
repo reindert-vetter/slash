@@ -526,7 +526,7 @@ test('composing a new comment: the Claude column shows before it is placed, and 
   page,
 }) => {
   await page.goto('/pr/12903')
-  await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+  await expect(page.getByTestId('block-column')).toBeVisible()
   await leaveSearchBox(page)
   // Block 0 has no local diff to step into (see place-comment-return-focus.
   // spec.mjs) — block 1 does, and (per that same spec + comment-nav-race.
@@ -636,7 +636,7 @@ test('→ from the still-open new-comment composer reaches Claude directly, with
   page,
 }) => {
   await page.goto('/pr/12903')
-  await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+  await expect(page.getByTestId('block-column')).toBeVisible()
   await leaveSearchBox(page)
   await page.locator('[data-idx="1"]').click()
   await page.keyboard.press('ArrowRight') // list -> diff
@@ -711,7 +711,7 @@ test('"Chat over deze regel" opens the Claude composer directly, keeps the comme
   page,
 }) => {
   await page.goto('/pr/12903')
-  await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+  await expect(page.getByTestId('block-column')).toBeVisible()
   await leaveSearchBox(page)
   await page.locator('[data-idx="1"]').click()
   await page.keyboard.press('ArrowRight') // list -> diff

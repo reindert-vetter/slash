@@ -103,7 +103,7 @@ test.describe('PR Review Tree — review-submit follow-up (Keur de HELE PR goed 
     await clearBlockApproval(page, BLOCK6_ID)
     await mockClipboard(page)
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await expect(page.getByTestId('block-column')).toBeVisible()
     await page.keyboard.press('Escape')
 
     // Approve block 1's only group — this still leaves block 6 open, so it
@@ -170,7 +170,7 @@ test.describe('PR Review Tree — review-submit follow-up (Keur de HELE PR goed 
     await clearBlockApproval(page, BLOCK6_ID)
     await mockClipboard(page)
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await expect(page.getByTestId('block-column')).toBeVisible()
     await page.keyboard.press('Escape')
 
     // Approve block 6 only — block 1 stays open, so the PR isn't fully done.
@@ -249,7 +249,7 @@ test.describe('PR Review Tree — review-submit follow-up (Keur de HELE PR goed 
     await clearBlockApproval(page, BLOCK6_ID)
     await mockClipboard(page)
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await expect(page.getByTestId('block-column')).toBeVisible()
     await page.keyboard.press('Escape')
 
     await page.locator('[data-idx="1"]').click()
@@ -321,7 +321,7 @@ test.describe('PR Review Tree — review-submit follow-up (Keur de HELE PR goed 
     const praiseWords = page.waitForResponse('**/api/praisewords')
     await page.goto('/pr/12903')
     expect((await praiseWords).ok()).toBe(true)
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await expect(page.getByTestId('block-column')).toBeVisible()
     await page.keyboard.press('Escape')
 
     await page.locator('[data-idx="1"]').click()
@@ -366,7 +366,7 @@ test.describe('PR Review Tree — review-submit follow-up (Keur de HELE PR goed 
     page,
   }) => {
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await expect(page.getByTestId('block-column')).toBeVisible()
     await page.keyboard.press('Escape')
 
     // `/` opens the menu of the CURRENT stop (contextMenuMode, home.mjs), so

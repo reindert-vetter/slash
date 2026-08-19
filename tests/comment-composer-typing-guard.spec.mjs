@@ -24,7 +24,7 @@ test.describe('PR Review Tree — composer typing guard', () => {
     page,
   }) => {
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await expect(page.getByTestId('block-column')).toBeVisible()
     // Block 0 (ContractController::index) carries no local diff on this seeded
     // PR — select block 1 (CreatePaymentAction::execute) so → actually enters
     // diff mode (mirrors nav-chain.spec.mjs).
@@ -69,7 +69,7 @@ test.describe('PR Review Tree — composer typing guard', () => {
   // composer — see .claude/docs/claude-chat-panel.md).
   test('Shift+Enter adds a newline in the comment composer, and it grows with content', async ({ page }) => {
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await expect(page.getByTestId('block-column')).toBeVisible()
     await page.locator('[data-idx="1"]').click()
     await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight') // list → diff

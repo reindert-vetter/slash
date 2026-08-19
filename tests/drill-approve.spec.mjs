@@ -23,6 +23,12 @@ test.describe('PR Review Tree — approving inside a drilled Onderliggende-code 
   }) => {
     await page.goto('/pr/95')
 
+    // TreeChildAction.php now WINS the fresh-open default tie-break over
+    // TreeParentAction.php (file order, see "Land a fresh PR open on the
+    // first block of the first-changed file"), so select the parent
+    // explicitly — this test is specifically about drilling INTO the child
+    // from the parent, not about which one opens by default.
+    await page.locator('[data-idx="0"]').click()
     await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight') // step into the parent's diff
     await expect(page.locator('[data-change-active]').first()).toBeVisible()

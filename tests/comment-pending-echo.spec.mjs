@@ -24,7 +24,7 @@ test('placing a comment shows the typed text immediately, before the save resolv
   })
 
   await page.goto('/pr/12903')
-  await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+  await expect(page.getByTestId('block-column')).toBeVisible()
   await leaveSearchBox(page)
   // Block 0 (ContractController::index, CONTROLLER-first) has no local diff to
   // step into (see command-menu.spec.mjs) — select block 1, which does.

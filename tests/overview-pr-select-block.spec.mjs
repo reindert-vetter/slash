@@ -6,16 +6,21 @@ import { test, expect } from './_fixtures.mjs'
 // "Open review-boom", must land back on that same block — not the default
 // first one.
 test.describe('PR overview — ?sel= round-trip keeps the same block selected', () => {
-  test('selecting block 1, exiting via ←←, and reopening the tree restores block 1', async ({ page }) => {
+  test('selecting block 6, exiting via ←←, and reopening the tree restores block 6', async ({ page }) => {
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await expect(page.getByTestId('block-column')).toBeVisible()
 
-    // Block 0 (ContractController::index) sorts first; pick a different block
-    // (CreatePaymentAction::execute) so the default (index 0) restore would be
-    // a visible regression, not accidentally correct.
-    await page.locator('[data-idx="1"]').click()
-    await expect(page.locator('[data-testid=block-row].bg-indigo-50')).toHaveAttribute('data-idx', '1')
-    await expect(page).toHaveURL(/sel=app%2FActions%2FCreatePaymentAction\.php%3A26/)
+    // Block 1 (CreatePaymentAction::execute) is now the fresh-open DEFAULT
+    // itself (applyDefaultUnapprovedSelection tie-breaks unapproved ordinary
+    // blocks by (file, line) — see "Land a fresh PR open on the first block of
+    // the first-changed file" — and app/Actions/CreatePaymentAction.php sorts
+    // first among this fixture's real changes), so picking it here would let a
+    // BROKEN ?sel= restore fall back to the default and still land on the same
+    // block — a false pass. Pick block 6 (Order::address) instead: a
+    // different, later-sorting file, so a broken restore is visibly wrong.
+    await page.locator('[data-idx="6"]').click()
+    await expect(page.locator('[data-testid=block-row].bg-indigo-50')).toHaveAttribute('data-idx', '6')
+    await expect(page).toHaveURL(/sel=app%2FModels%2FOrder\.php%3A88/)
 
     await page.keyboard.press('ArrowLeft') // block-index → stop 1 (description)
     await expect(page.getByTestId('pr-info-column')).toHaveCount(1)
@@ -23,15 +28,15 @@ test.describe('PR overview — ?sel= round-trip keeps the same block selected', 
     await expect(page).toHaveURL(/\/pr-overview/)
 
     // The exit URL must carry the block reference we left from alongside `pr`.
-    expect(page.url()).toContain('sel=app%2FActions%2FCreatePaymentAction.php%3A26')
+    expect(page.url()).toContain('sel=app%2FModels%2FOrder.php%3A88')
 
     const row = page.locator('[data-testid="pr-row"][data-pr="12903"]')
     await row.click()
     await page.getByTestId('open-tree').click()
 
     await expect(page).toHaveURL(/\/pr\/12903/)
-    await expect(page).toHaveURL(/sel=app%2FActions%2FCreatePaymentAction\.php%3A26/)
-    await expect(page.locator('[data-testid=block-row].bg-indigo-50')).toHaveAttribute('data-idx', '1')
+    await expect(page).toHaveURL(/sel=app%2FModels%2FOrder\.php%3A88/)
+    await expect(page.locator('[data-testid=block-row].bg-indigo-50')).toHaveAttribute('data-idx', '6')
   })
 
   test('opening an unrelated PR from the overview never carries a stale sel along', async ({ page }) => {

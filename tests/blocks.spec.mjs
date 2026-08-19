@@ -66,7 +66,12 @@ test.describe('PR Review Tree — block list', () => {
     const rows = page.getByTestId('block-row')
     const highlighted = page.locator('[data-testid="block-row"].bg-indigo-50')
 
-    // First row selected by default.
+    // Row 0 is not the fresh-open DEFAULT any more (applyDefaultUnapprovedSelection
+    // now tie-breaks by (file, line) — see "Land a fresh PR open on the first
+    // block of the first-changed file" — so CreatePaymentAction::execute, row 1,
+    // wins on this fixture); this test is about ↑/↓ traversal mechanics, not
+    // about the default pick itself, so select row 0 explicitly first.
+    await rows.nth(0).click()
     await expect(rows.nth(0)).toHaveClass(/bg-indigo-50/)
 
     // Walk down to the last row.
@@ -109,6 +114,11 @@ test.describe('PR Review Tree — block list', () => {
     const panel = page.getByTestId('detail-panel')
     const cards = panel.locator('article')
 
+    // Row 0 is not the fresh-open default any more (see the same comment in
+    // "arrow keys move the selection through the whole list" above) — select
+    // it explicitly so the pair below is deterministic.
+    await page.getByTestId('block-row').nth(0).click()
+
     // Selected (0) + look-ahead (1) = two cards.
     await expect(cards).toHaveCount(2)
     await expect(cards.nth(0)).toContainText(EXPECTED_LABELS[0])
@@ -135,6 +145,11 @@ test.describe('PR Review Tree — block list', () => {
   }) => {
     const panel = page.getByTestId('detail-panel')
     const connector = panel.getByTestId('file-connector')
+
+    // Row 0 is not the fresh-open default any more (see the same comment in
+    // "arrow keys move the selection through the whole list" above) — select
+    // it explicitly.
+    await page.getByTestId('block-row').nth(0).click()
 
     // Row 0 (ContractController, CONTROLLER-first) and row 1 (CreatePaymentAction
     // execute) differ → no connector.

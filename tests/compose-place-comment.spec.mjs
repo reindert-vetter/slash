@@ -17,7 +17,7 @@ test('Enter on a filled composer defaults to "Plaats comment" (public) and refre
   page,
 }) => {
   await page.goto('/pr/12903')
-  await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+  await expect(page.getByTestId('block-column')).toBeVisible()
   await leaveSearchBox(page)
   await page.keyboard.press('ArrowRight') // list -> diff
 

@@ -13,7 +13,7 @@ test('"Plaats comment over dit bereik" anchors on the cursor block and lists eve
   page,
 }) => {
   await page.goto('/pr/12903')
-  await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+  await expect(page.getByTestId('block-column')).toBeVisible()
   await leaveSearchBox(page)
 
   // Three rows selected, cursor on the third — stay in list mode, never →
@@ -69,7 +69,7 @@ test('"Chat met Claude over dit bereik" sends a manifest (no source code) coveri
   page,
 }) => {
   await page.goto('/pr/12903')
-  await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+  await expect(page.getByTestId('block-column')).toBeVisible()
   await leaveSearchBox(page)
 
   await page.keyboard.press('Shift+ArrowDown')

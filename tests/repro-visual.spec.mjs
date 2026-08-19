@@ -19,7 +19,7 @@ function item(page, body) {
 
 test('call gran on billingAddress-like block, then re-navigate', async ({ page }) => {
   await page.goto('/pr/91')
-  await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+  await expect(page.getByTestId('block-column')).toBeVisible()
   await page.keyboard.press('ArrowRight') // diff group
   await page.waitForTimeout(200)
   await page.keyboard.press('f') // line
@@ -41,7 +41,7 @@ test('call gran on billingAddress-like block, then re-navigate', async ({ page }
 
 test('two blocks: comment on block A, switch to B and back', async ({ page }) => {
   await page.goto('/pr/91')
-  await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+  await expect(page.getByTestId('block-column')).toBeVisible()
   await page.keyboard.press('ArrowRight')
   await page.waitForTimeout(200)
   await placeVia(page, 'block A comment')

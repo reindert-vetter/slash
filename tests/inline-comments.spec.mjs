@@ -15,7 +15,7 @@ import { test, expect } from './_fixtures.mjs'
 // detail-layout.md ("Inline comment blocks").
 test.describe('PR Review Tree — inline comment blocks', () => {
   async function ready(page) {
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await expect(page.getByTestId('block-column')).toBeVisible()
   }
   // selectedCard is the selected block's card (the first card in the column).
   function selectedCard(page) {

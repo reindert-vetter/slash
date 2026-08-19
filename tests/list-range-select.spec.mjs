@@ -17,6 +17,11 @@ test.describe('PR Review Tree — Shift+arrow multi-row selection in the index',
 
     const rows = page.getByTestId('block-row')
     const selected = page.locator('[data-testid=block-row].bg-indigo-50')
+    // Row 0 is not the fresh-open default any more (applyDefaultUnapprovedSelection
+    // tie-breaks by (file, line) now — see "Land a fresh PR open on the first
+    // block of the first-changed file"), so select it explicitly: the range
+    // below (rows 0-1-2) is deliberately anchored there.
+    await rows.first().click()
     await expect(rows.first()).toHaveClass(/bg-indigo-50/)
     await expect(selected).toHaveCount(1)
 

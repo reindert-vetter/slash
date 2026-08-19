@@ -19,7 +19,7 @@ const SEEDED_SUMMARY = 'Claude legt uit dat de `total()` aanroep het orderbedrag
 
 async function seedPlaceholderChat(page) {
   await page.goto('/pr/12903')
-  await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+  await expect(page.getByTestId('block-column')).toBeVisible()
   await leaveSearchBox(page)
   await page.locator('[data-idx="1"]').click()
   await page.keyboard.press('ArrowRight') // list -> diff

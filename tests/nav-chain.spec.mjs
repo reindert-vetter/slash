@@ -11,7 +11,7 @@ import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 test.describe('PR Review Tree — left-right nav chain', () => {
   test('← on the block-index opens the PR-description column (stop 1), → closes it again', async ({ page }) => {
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await expect(page.getByTestId('block-column')).toBeVisible()
 
     const info = page.getByTestId('pr-info-column')
     await expect(info).toHaveCount(0)
@@ -82,7 +82,7 @@ test.describe('PR Review Tree — left-right nav chain', () => {
 
   test('← on stop 1 (the PR-description column) exits the chain to the PR overview', async ({ page }) => {
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await expect(page.getByTestId('block-column')).toBeVisible()
 
     await page.keyboard.press('ArrowLeft') // block-index → stop 1 (description)
     await expect(page.getByTestId('pr-info-column')).toHaveCount(1)

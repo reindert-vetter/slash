@@ -21,7 +21,7 @@ test.describe('Cmd+[ / Cmd+] remap onto the left-right nav chain', () => {
   }) => {
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await expect(page.getByTestId('block-column')).toBeVisible()
 
     const info = page.getByTestId('pr-info-column')
     await expect(info).toHaveCount(0)

@@ -29,6 +29,12 @@ test.describe('PR Review Tree — approving a line inside a drilled column jumps
   }) => {
     await page.goto('/pr/106')
 
+    // TreeChildAction2.php now WINS the fresh-open default tie-break over
+    // TreeParentAction2.php (file order, see "Land a fresh PR open on the
+    // first block of the first-changed file"), so select the parent
+    // explicitly — this test is specifically about drilling INTO the child
+    // from the parent, not about which one opens by default.
+    await page.locator('[data-idx="0"]').click()
     await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight') // step into the parent's diff
     await expect(page.locator('[data-change-active]').first()).toBeVisible()

@@ -24,7 +24,7 @@ async function openPrWideComposer(page) {
 
 test('the `/` menu places a real PR-wide comment, which then shows in the block index', async ({ page }) => {
   await page.goto('/pr/12903')
-  await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+  await expect(page.getByTestId('block-column')).toBeVisible()
   await leaveSearchBox(page)
 
   await openPrWideComposer(page)
@@ -60,7 +60,7 @@ test('the `/` menu places a real PR-wide comment, which then shows in the block 
 
 test('the index and code columns hide while composing, and ArrowLeft brings them back', async ({ page }) => {
   await page.goto('/pr/12903')
-  await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+  await expect(page.getByTestId('block-column')).toBeVisible()
   await leaveSearchBox(page)
 
   const index = page.getByTestId('pr-index')

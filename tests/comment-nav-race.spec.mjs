@@ -26,7 +26,7 @@ test('a stale placeComment tail must not clobber a later, unrelated Onderliggend
   })
 
   await page.goto('/pr/12903')
-  await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+  await expect(page.getByTestId('block-column')).toBeVisible()
   await leaveSearchBox(page)
 
   // Block A: idx 1 (ContractController::index at idx 0 has no local diff, see

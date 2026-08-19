@@ -25,10 +25,18 @@ test.describe('PR Review Tree — postApprove follow-up menu walks the tree', ()
     await expect(page.getByTestId('block-row')).toHaveCount(2)
     await expect(page.getByTestId('block-row').first()).toContainText('TreeParentAction::execute')
     await expect(page.getByTestId('block-row').nth(1)).toContainText('TreeChildAction::run')
+
+    // TreeChildAction.php now WINS the fresh-open default tie-break over
+    // TreeParentAction.php (file order, see "Land a fresh PR open on the
+    // first block of the first-changed file"), so select the parent
+    // explicitly — the related-item check right below (the parent's own
+    // Onderliggende-code panel) and this whole test are specifically about
+    // the PARENT's own postApprove follow-up descending into its child.
+    await page.locator('[data-idx="0"]').click()
+
     const related = page.getByTestId('related-item')
     await expect(related).toContainText('TreeChildAction::run')
 
-    // Step into the parent's diff and approve its only group via the palette.
     await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight')
     await expect(page.locator('[data-change-active]').first()).toBeVisible()

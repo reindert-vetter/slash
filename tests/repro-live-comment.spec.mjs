@@ -17,7 +17,7 @@ function item(page, body) {
 
 test('place on a later unit (2nd/3rd change) shows in list', async ({ page }) => {
   await page.goto('/pr/12903')
-  await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+  await expect(page.getByTestId('block-column')).toBeVisible()
   await page.keyboard.press('ArrowRight') // enter diff (group 0)
   await page.waitForTimeout(150)
   await page.keyboard.press('ArrowDown') // group 1
@@ -30,7 +30,7 @@ test('place on a later unit (2nd/3rd change) shows in list', async ({ page }) =>
 
 test('placing a 2nd comment keeps both in the list', async ({ page }) => {
   await page.goto('/pr/12903')
-  await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+  await expect(page.getByTestId('block-column')).toBeVisible()
   await page.keyboard.press('ArrowRight')
   await page.waitForTimeout(150)
   await place(page, 'first one')
@@ -42,7 +42,7 @@ test('placing a 2nd comment keeps both in the list', async ({ page }) => {
 
 test('place at line, then move selection to group — comment stays visible', async ({ page }) => {
   await page.goto('/pr/12903')
-  await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+  await expect(page.getByTestId('block-column')).toBeVisible()
   await page.keyboard.press('ArrowRight') // diff, group
   await page.waitForTimeout(150)
   await page.keyboard.press('f') // -> line

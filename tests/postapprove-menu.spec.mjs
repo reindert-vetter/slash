@@ -200,7 +200,7 @@ test.describe('PR Review Tree — postApprove follow-up menu', () => {
   }) => {
     await clearBlockApproval(page, BLOCK1_ID)
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await expect(page.getByTestId('block-column')).toBeVisible()
     await page.keyboard.press('Escape')
 
     // Select block 6 (Order::address) directly and step into its diff — it's

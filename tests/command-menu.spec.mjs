@@ -13,7 +13,7 @@ test.describe('PR Review Tree — command palette', () => {
     page,
   }) => {
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await expect(page.getByTestId('block-column')).toBeVisible()
     await leaveSearchBox(page)
 
     const menu = page.getByTestId('command-menu')
@@ -104,7 +104,7 @@ test.describe('PR Review Tree — command palette', () => {
 
   test('Space with text already typed stays a normal space, not a run', async ({ page }) => {
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await expect(page.getByTestId('block-column')).toBeVisible()
     await leaveSearchBox(page)
 
     await page.keyboard.press('Enter')
@@ -210,7 +210,7 @@ test.describe('PR Review Tree — command palette', () => {
     page,
   }) => {
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await expect(page.getByTestId('block-column')).toBeVisible()
     await leaveSearchBox(page)
 
     let posted = null
@@ -365,7 +365,7 @@ test.describe('PR Review Tree — command palette', () => {
     page,
   }) => {
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await expect(page.getByTestId('block-column')).toBeVisible()
     await leaveSearchBox(page)
 
     await page.keyboard.press('Enter')
@@ -471,7 +471,7 @@ test.describe('PR Review Tree — command palette', () => {
 
   test('block navigation is suspended while the menu is open', async ({ page }) => {
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await expect(page.getByTestId('block-column')).toBeVisible()
     await leaveSearchBox(page)
     const panel = page.getByTestId('detail-panel')
     await expect(panel.locator('code.language-php').first()).toBeVisible()

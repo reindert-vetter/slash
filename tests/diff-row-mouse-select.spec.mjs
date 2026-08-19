@@ -302,6 +302,11 @@ test('a single click on a call-segment selects exactly that segment, with a whol
 // fixture's own doc comment.
 test('a native double-click inside a drilled column still selects only the ONE clicked line', async ({ page }) => {
   await page.goto('/pr/106')
+  // TreeChildAction2.php now WINS the fresh-open default tie-break over
+  // TreeParentAction2.php (file order, see "Land a fresh PR open on the first
+  // block of the first-changed file"), so select the parent explicitly — this
+  // test is specifically about drilling INTO the child from the parent.
+  await page.locator('[data-idx="0"]').click()
   await leaveSearchBox(page)
   await page.keyboard.press('ArrowRight') // parent's diff
   await page.keyboard.press('ArrowRight') // into the Onderliggende-code panel

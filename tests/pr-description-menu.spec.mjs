@@ -10,7 +10,7 @@ import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 test.describe('PR Review Tree — PR-wide menu on the description column (stop 1)', () => {
   test('Enter on stop 1 opens the PR-wide menu positioned over the description column', async ({ page }) => {
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await expect(page.getByTestId('block-column')).toBeVisible()
 
     // ← from the block-index opens stop 1 (the description column).
     await page.keyboard.press('ArrowLeft')

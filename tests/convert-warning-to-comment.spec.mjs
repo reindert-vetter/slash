@@ -29,7 +29,7 @@ test.describe('Convert an AI-controle finding into a real comment', () => {
 
   test('an anchored finding: the composer opens prefilled, and placing it deletes the original', async ({ page }) => {
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row').first()).toHaveClass(/bg-indigo-50/)
+    await expect(page.getByTestId('block-column')).toBeVisible()
     const mine = await ident(page)
 
     const aiBody = 'deze aanroep valideert de invoer niet meer sinds de wijziging'
