@@ -234,4 +234,40 @@ test.describe('PR Review Tree — editing an own message', () => {
     await page.keyboard.press('ArrowDown')
     await expect(page.getByTestId('block-search')).toBeFocused()
   })
+
+  test('Shift+Enter while editing a message inserts a newline instead of opening the action menu', async ({
+    page,
+  }, testInfo) => {
+    const pr = seededPr(testInfo)
+    const body = 'meerdere-regels ' + Math.random().toString(36).slice(2)
+    await seedComment(page, pr, body)
+
+    await page.goto('/pr/' + pr)
+    await leaveSearchBox(page)
+    const row = page.getByTestId('comment-item').filter({ hasText: body })
+    await expect(row).toBeVisible()
+    await row.click()
+
+    await page.getByTestId('reaction-edit').first().click()
+    const editor = page.getByTestId('message-edit-compose')
+    await expect(editor).toBeFocused()
+    await expect(editor).toHaveValue(body)
+
+    await editor.press('End')
+    await editor.press('Shift+Enter')
+    await page.keyboard.type('tweede-regel')
+
+    // The menu must NOT have opened — the reply field being empty (a
+    // different element from the edit textarea) used to make Shift+Enter
+    // match the same branch a bare Enter uses to open it.
+    await expect(page.getByTestId('command-menu')).toHaveCount(0)
+    await expect(editor).toBeFocused()
+    await expect(editor).toHaveValue(body + '\ntweede-regel')
+
+    // The edit is still fully functional afterwards — saving persists the
+    // multi-line body.
+    await page.getByTestId('message-edit-save').click()
+    await expect(page.getByTestId('message-edit-compose')).toHaveCount(0)
+    await expect(page.getByTestId('reaction-bubble').first()).toContainText('tweede-regel')
+  })
 })

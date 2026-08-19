@@ -935,6 +935,22 @@ there is nothing stray to release in that case. The "Annuleer" button keeps
 calling the plain `cancelEditMessage()` — a mouse click doesn't carry the same
 "get me out of here" intent as Escape.
 
+**Shift+Enter inserts a newline in the edit textarea; a bare Enter saves.**
+`editingBubble`'s own `@keydown` only claims `Enter` (no shift, saves via
+`sendMessageEdit`) and `Escape` (cancels) — Shift+Enter is deliberately left
+alone so the browser's default textarea behavior inserts the newline, same
+convention as every other composer here. That fell through to `home.mjs`'s
+document-level `onKeydown`, whose `isCommentOrThreadFocused() &&
+commentReplyEmpty()` branch (the one that opens the comment action menu on a
+bare Enter with an empty reply field) matched on `e.key === 'Enter'` alone,
+with no `!e.shiftKey` guard — and `commentReplyEmpty()` reads the THREAD's own
+reply field (`reaction-compose`), a different element from
+`message-edit-compose`, which stays empty while editing. So every Shift+Enter
+typed while editing an own message popped the action menu on top of the
+editor instead of adding a line break. Fixed by adding `!e.shiftKey` to that
+branch's condition — the same guard `isComposeOpen()`'s own Enter-opens-menu
+branch already carried a few lines above it.
+
 ## Inline comment blocks
 
 Block-scoped comment threads (`kind === ''`, the `task_code_comment` workflow)

@@ -11355,7 +11355,16 @@ function onKeydown(e) {
     // exactly how "Bewerk bericht" reaches a reply, not just the root message,
     // mirroring the comment-index item's own Enter (which already opens
     // regardless of its thread-walk position).
-    if (e.key === 'Enter' && isCommentOrThreadFocused() && commentReplyEmpty()) {
+    // `!e.shiftKey` is load-bearing, not defensive: commentReplyEmpty() reads
+    // the THREAD'S OWN reply field (`reaction-compose`), which is a different
+    // element from the inline edit textarea (`message-edit-compose`,
+    // editingBubble in RelatedPanel.mjs) and stays empty while editing — so
+    // without this guard, Shift+Enter typed to add a newline while editing an
+    // own message always matched this branch too (reply field genuinely
+    // empty) and popped the action menu on top of the edit instead of
+    // inserting the newline. See "Editing an own message" in
+    // .claude/docs/comments-panel.md.
+    if (e.key === 'Enter' && !e.shiftKey && isCommentOrThreadFocused() && commentReplyEmpty()) {
       e.preventDefault()
       openMenu('comment')
     }
