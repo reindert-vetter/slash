@@ -40,7 +40,7 @@ async function seedPlaceholderChat(page) {
   expect(runId).toBeTruthy()
   const item = page.getByTestId('comment-item')
   await expect(item).toHaveCount(1)
-  await expect(item).toContainText('Nog geen eigen comment getypt')
+  await expect(item).toContainText('Claude gesprek')
   await expect(page.getByTestId('claude-message-body').last()).toContainText('Ik heb naar de code gekeken')
   return { runId, claudeComposer }
 }

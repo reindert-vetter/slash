@@ -566,7 +566,7 @@ test('composing a new comment: the Claude column shows before it is placed, and 
     // Sending to Claude lazily created the ONE backing comment.
     const item = page.getByTestId('comment-item')
     await expect(item).toHaveCount(1)
-    await expect(item).toContainText('Nog geen eigen comment getypt')
+    await expect(item).toContainText('Claude gesprek')
     // The Fake walks its programmed turn script with a cursor PER SESSION
     // (see claude.Fake.SetChatTurns), and this is a brand-new conversation,
     // so — like the file's first test — it sees the FIRST programmed reply,
@@ -747,7 +747,7 @@ test('"Chat over deze regel" opens the Claude composer directly, keeps the comme
     // the plain "Comment op deze regel" flow.
     const item = page.getByTestId('comment-item')
     await expect(item).toHaveCount(1)
-    await expect(item).toContainText('Nog geen eigen comment getypt')
+    await expect(item).toContainText('Claude gesprek')
     await expect(page.getByTestId('claude-message-body').last()).toContainText('Ik heb naar de code gekeken')
     expect(firstMsgReq.postDataJSON().body).toBe('Wat doet deze functie?')
 

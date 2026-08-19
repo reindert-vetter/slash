@@ -654,12 +654,108 @@ verwijderen".** There is no real reviewer comment behind it yet, so "resolving"
 it is meaningless; only "Verwijder comment" makes sense, same as the existing
 `isAiComment` exception right above it in that same function — `isAiComment(c)
 || isChatAnchorPlaceholder(c)` both skip the resolve/unresolve slot, for two
-different reasons but the same visible effect. Once the reviewer actually types
-something (`convertClaudeAnchorToComment`/an ordinary reply), the body stops
-being the placeholder and the ordinary Resolve item comes back — this gate
-reads the comment's own body, not a sticky flag. `prCommentCommandsFor` (the
-comment-INDEX menu) needs no matching change: such an anchor never gets an
-index row at all (see above), so that menu is never opened for one.
+different reasons but the same visible effect. Once the reviewer actually edits
+the root text (`convertClaudeAnchorToComment`, or the plain "Bewerk bericht"
+pencil on the origin bubble — the only two things that ever change THIS
+comment's own body, see "Overname zonder extra menu-item" below for why an
+ordinary REPLY does not), the body stops being the placeholder and the
+ordinary Resolve item comes back — this gate reads the comment's own body, not
+a sticky flag. `prCommentCommandsFor` (the comment-INDEX menu) needs no
+matching change: such an anchor never gets an index row at all (see above), so
+that menu is never opened for one.
+
+### A bare Claude-chat anchor reads as a conversation, not as a comment
+
+The section above only hides the anchor from the **index** — the block-scoped
+thread bubble on the unit it hangs on was, until this fix, still rendered as
+an ordinary compact/expanded comment card: the reviewer's own avatar next to
+their own name, with the literal placeholder sentence as the "body" —
+reviewer report: "het is leuk dat het bestaat als comment, maar het moet niet
+als een comment laten zien… je kan het hernoemen naar 'Claude gesprek'". Two
+DISPLAY-time substitutions, both keyed on `isChatAnchorPlaceholder(c)` (never
+a stored flag — the same "read the body, not a sticky bit" discipline the
+Resolve/Unresolve gate above already uses), applied everywhere the comment
+still LIVES in `cs.list`/`cs.view` exactly as before (per "Deliberately the
+index side only" above — this section changes nothing about what exists,
+only how it's drawn):
+
+- **The author/avatar row** (`compactConversation`'s own
+  `data-testid=comment-author-line`, and `viewingBubble`'s
+  `data-testid=reaction-author-line` for the thread's ORIGIN message only,
+  `r.id === 'origin:'+c.id`) is replaced by **`chatAnchorAuthorLine()`**
+  (`RelatedPanel.mjs`) — a small chat-bubble glyph plus the literal, italic
+  label **"Claude gesprek"**. No avatar, no reviewer name: nothing here
+  suggests Reindert typed this. Per the colourblind rule the word carries the
+  meaning; the glyph is decoration. The edit pencil next to the origin
+  bubble stays reachable regardless (`isOwnMessage(r) && !status` is
+  untouched) — editing it is exactly one of the two ways to turn this into a
+  real comment (the other being "Comment hiervan maken", below).
+- **The body text** — `commentBody(c, …)`, the single render point every
+  comment/reaction body already funnels through (`conventions.md`) — returns
+  a fixed, muted, italic **`CHAT_ANCHOR_NOTE_HTML`** ("Nog geen eigen comment
+  — bekijk het gesprek hiernaast.") instead of `renderMarkdown`ing the raw
+  `CLAUDE_ANCHOR_PLACEHOLDER` sentence, exactly the same DISPLAY-time
+  transform `threadStatusSentinel`/`statusLineHTML` already apply to a
+  `"/resolve"`/`"/reopen"` reaction body right above it in that same
+  function. The **stored** body is untouched (still the literal
+  placeholder) — every existing predicate/write path that keys on that exact
+  string (`isChatAnchorPlaceholder`, `clearClaudeChat`,
+  `claudeAnchorIsPlaceholder`, `convertClaudeAnchorToComment`) needs no
+  change.
+
+**A `0/1`-style approval count still counts it** — confirmed explicitly
+("0/1-badges wel meetellen hoor, dat is prima"): nothing above touches
+`commentRowSet`/`commentActivitySummary`/`blockApproveCount` or any other
+counting path, only the two render points listed. A running Claude
+conversation with no reviewer text yet is still an open thing to finish, so
+it should keep counting as unresolved wherever a real comment already would
+— it just must not be mistaken for prose the reviewer wrote. Test:
+`tests/claude-chat-panel.spec.mjs`/`tests/claude-empty-composer-menu.spec.mjs`
+(both already asserted the raw placeholder sentence; updated to assert
+"Claude gesprek" instead — same anchor, same fixture, only the copy changed).
+
+### Overname zonder extra menu-item: typing a first real comment silently takes over the anchor
+
+`placeComment` already had ONE narrow case of this: `claudeAutoAnchor`, an
+ephemeral session flag `ensureClaudeAnchorForNew` sets the moment it lazily
+creates the anchor, checked by `placeComment` so "Plaats…" on that SAME
+composing session posts the typed text as a **reply** on the existing thread
+instead of starting a second, unrelated comment (see
+"Optimistically visible while composing a brand-new comment" in
+`claude-chat-panel.md`). Reviewer request, generalizing this: "als ik eerste
+echte comment typ, hoef ik niet een extra menu item om die 'Claude gesprek'
+comment ook mee te nemen" — the SAME line, in a LATER, unrelated session (the
+reviewer closed the panel, or reloaded, so `claudeAutoAnchor` is long gone),
+must behave identically.
+
+**`placeholderAnchorFor(draftKey)`** (`RelatedPanel.mjs`) replaces the
+ephemeral-flag check with an **identity** lookup: it finds a
+`isChatAnchorPlaceholder` comment in `cs.list` whose own anchor fields
+(`file`/`label`/`gran`/`rowStart`/`rowEnd`/`seg`) produce the exact same
+`draftKeyFor(...)` string as the unit being composed on right now — reusing
+`draftKeyFor` itself rather than duplicating its field list, since a stored
+comment carries those same field names. `placeComment` calls this
+unconditionally (the ephemeral `claudeAutoAnchor` flag, when it does match,
+resolves to the very same comment, so it needed no separate branch any more
+— just a reset for hygiene) and, on a match, takes the exact same
+reply-Signal path as before: post the reviewer's typed text as a reply,
+never rewrite the root body (there is no "edit body" Signal — a comment's
+body is fixed at Execution start, see `ensureClaudeAnchorForNew`'s own doc
+comment). The origin bubble therefore keeps reading "Claude gesprek" even
+after this — the real, attributed text lives in the reply right below it,
+under the reviewer's own identity, exactly as an ordinary reply always has.
+Test: `tests/comment-anchor-takeover.spec.mjs`.
+
+**"Comment hiervan maken" (`convertClaudeAnchorToComment`,
+`claudeChatCommandsFor`) stays** — decided, not left as an oversight. It
+solves a DIFFERENT problem: a reviewer who never intends to type their own
+comment at all, and instead wants a Claude-WRITTEN summary of the
+conversation turned into the comment (prefilling the origin bubble's own
+editor with a 1-2 sentence summary, see its own doc comment above). The
+take-over above only ever fires once the reviewer has ALREADY decided to type
+something themselves — it cannot substitute for "let Claude draft this for
+me", so removing the menu item would be a regression for that path, not a
+simplification.
 
 ### "Mentioned": an `@`-mention of the local reviewer ranks above everything
 

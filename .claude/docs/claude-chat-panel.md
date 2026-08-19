@@ -111,7 +111,14 @@ weight "Plaats…" already has.
   `claudeAutoAnchor` is cleared on every fresh `toNew` (a stale pointer from a
   different unit's draft must never be reused; `draftKeyFor`'s own
   unit-scoped compare in `placeComment` is a second safety net on top of
-  that).
+  that). **This take-over is no longer limited to the SAME session** —
+  `placeComment` now looks the anchor up by IDENTITY
+  (`placeholderAnchorFor(draftKey)`) rather than only trusting this ephemeral
+  flag, so typing a first real comment on the same line in a LATER session
+  (panel closed and reopened, or a fresh page load) takes over the existing
+  placeholder too, instead of creating a second, unrelated comment right next
+  to it. See "Overname zonder extra menu-item" in `comments-panel.md` for the
+  full mechanism and why "Comment hiervan maken" still exists alongside it.
 
 ### `→` reaches the Claude composer directly from the still-open `'new'` field
 

@@ -887,6 +887,25 @@ function draftKeyFor(t) {
   return (t.file || '') + '|' + (t.label || '') + '|' + (t.gran || '') + '|' + t.rowStart + '-' + t.rowEnd + '|' + (t.seg || '')
 }
 
+// placeholderAnchorFor finds an EXISTING chat-anchor placeholder comment
+// (see isChatAnchorPlaceholder) whose own anchor identity matches the given
+// draftKey — i.e. draftKeyFor(c) === draftKey, reusing that same function
+// since a stored comment carries the exact same file/label/gran/rowStart/
+// rowEnd/seg fields commentTarget() does. Used by placeComment (below) to
+// silently take over such a comment instead of creating a second one when
+// the reviewer types their first real text on a line that already only has
+// a Claude conversation on it — see "Overname zonder extra menu-item" in
+// claude-chat-panel.md. Deliberately identity-based (the anchor's own
+// fields), not the ephemeral claudeAutoAnchor session flag: that flag only
+// ever matches within the SAME toNew() session that lazily created the
+// anchor (ensureClaudeAnchorForNew) — closing the panel and reopening
+// "Comment op deze regel" later on the exact same line used to fall through
+// to createComment and post a SECOND, unrelated comment right next to the
+// placeholder.
+function placeholderAnchorFor(draftKey) {
+  return cs.list.find((c) => isChatAnchorPlaceholder(c) && draftKeyFor(c) === draftKey) || null
+}
+
 // toNew / toComment land on an inline comment card. Landing already opens the
 // reply pane and drops the caret in it — the reviewer types straight away, no
 // → needed: 'new' shows an empty new-comment composer; a comment shows its
@@ -4257,8 +4276,11 @@ export async function placeComment(state, commentTarget, opts = {}) {
   const t = override ? override.target : (commentTarget && commentTarget()) || null
   const draftKey = draftKeyFor(t)
 
-  // A Claude message already lazily created the ONE backing comment for this
-  // exact draft (see ensureClaudeAnchorForNew) — "Plaats…" must not start a
+  // A Claude conversation already lazily created the ONE backing comment for
+  // this exact unit — either just now, in THIS composing session
+  // (ensureClaudeAnchorForNew, tracked by claudeAutoAnchor) or earlier, in a
+  // session the reviewer has since left and reopened (placeholderAnchorFor,
+  // an identity lookup that survives that gap) — "Plaats…" must not start a
   // SECOND Execution next to it. There is no "edit body" Signal (a comment's
   // body is fixed at Execution start), so "updating" it means posting the
   // reviewer's own typed text as a reply on that same thread — the same
@@ -4266,10 +4288,11 @@ export async function placeComment(state, commentTarget, opts = {}) {
   // creating a new one. The anchor's own local-ness (fixed at creation,
   // always private, see ensureClaudeAnchorForNew) wins over opts.local here:
   // chatting with Claude first already made this a private thread.
-  if (claudeAutoAnchor && claudeAutoAnchor.draftKey === draftKey) {
-    claudeAutoAnchor = null
-    const c = chatAnchorComment()
-    if (c && c.runId) {
+  if (claudeAutoAnchor && claudeAutoAnchor.draftKey === draftKey) claudeAutoAnchor = null
+  const placeholderAnchor = placeholderAnchorFor(draftKey)
+  if (placeholderAnchor) {
+    const c = placeholderAnchor
+    if (c.runId) {
       composeDrafts.delete(draftKey)
       el.value = ''
       exitRelated()
@@ -5141,6 +5164,13 @@ function viewingBubble(c, r, i, total, isActive) {
   // local reviewer for it (see avatar.mjs), so the name and the picture always
   // describe the same person.
   const who = identityOf(r.source, r.author, r.avatarUrl)
+  // The origin bubble of a bare Claude-chat anchor (see isChatAnchorPlaceholder)
+  // must not read as a message the reviewer wrote — same treatment as
+  // compactConversation's own author line, see chatAnchorAuthorLine's doc
+  // comment. The edit pencil below stays reachable regardless: editing this
+  // bubble IS one of the two ways ("Comment hiervan maken" is the other) to
+  // turn it into a real comment.
+  const isAnchorOrigin = r.id === 'origin:' + c.id && isChatAnchorPlaceholder(c)
   const active = isActive || (() => cs.focus === 'thread' && cs.threadPos === total - i)
   // Own (ui-placed) messages get a soft indigo tint instead of the earlier
   // saturated bg-indigo-500 + white text — markdown bodies (links, inline
@@ -5153,12 +5183,33 @@ function viewingBubble(c, r, i, total, isActive) {
   return html`
     <div class="${() => 'flex flex-col gap-0.5 ' + (mine ? 'items-end' : 'items-start')}">
       <div class="flex items-center gap-2 py-0.5" data-testid="reaction-author-line">
-        ${avatarHTML(who.name, who.avatarUrl, 'h-5 w-5')}
-        <span
-          class="whitespace-nowrap text-[11px] font-medium leading-5 text-slate-600 dark:text-zinc-400"
-          data-testid="reaction-author"
-          >${who.name || 'onbekend'}</span
-        >
+        ${() =>
+          isAnchorOrigin
+            ? html`
+                <span class="contents">
+                  <span
+                    class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-indigo-100 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-300"
+                    aria-hidden="true"
+                  >
+                    ${chatAnchorGlyph()}
+                  </span>
+                  <span
+                    class="whitespace-nowrap text-[11px] font-medium italic leading-5 text-slate-500 dark:text-zinc-400"
+                    data-testid="reaction-author"
+                    >Claude gesprek</span
+                  >
+                </span>
+              `
+            : html`
+                <span class="contents">
+                  ${avatarHTML(who.name, who.avatarUrl, 'h-5 w-5')}
+                  <span
+                    class="whitespace-nowrap text-[11px] font-medium leading-5 text-slate-600 dark:text-zinc-400"
+                    data-testid="reaction-author"
+                    >${who.name || 'onbekend'}</span
+                  >
+                </span>
+              `}
         ${() =>
           isOwnMessage(r) && !status
             ? html`<button
@@ -5303,6 +5354,49 @@ function autoExpandLoneComment() {
   return list.length > 0 && list.length <= 2 && rc.children.length === 0
 }
 
+// chatAnchorGlyph — a plain chat-bubble outline, decoration only (the WORD
+// "Claude gesprek" next to it carries the meaning, per the colourblind
+// rule) — used by chatAnchorAuthorLine below.
+function chatAnchorGlyph() {
+  return html`<svg
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    class="h-3 w-3"
+    aria-hidden="true"
+  ><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>`
+}
+
+// chatAnchorAuthorLine replaces the ordinary avatar+name author line
+// (compactConversation/viewingBubble's own author-line span, see their call
+// sites below) for a bare Claude-chat anchor (isChatAnchorPlaceholder) —
+// "Comment hiervan maken" is a review request; this bubble was never typed
+// by anyone, so it must read as "an ongoing Claude conversation" rather than
+// as a message from the reviewer with no avatar/name that would otherwise
+// suggest Reindert wrote it. Paired with CHAT_ANCHOR_NOTE_HTML (commentBody)
+// below, which replaces the body text the same way. See "A bare Claude-chat
+// anchor reads as a conversation, not as a comment" in comments-panel.md.
+function chatAnchorAuthorLine() {
+  return html`
+    <span class="flex min-w-0 items-center gap-2" data-testid="comment-author-line" data-chat-anchor="true">
+      <span
+        class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-indigo-100 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-300"
+        aria-hidden="true"
+      >
+        ${chatAnchorGlyph()}
+      </span>
+      <span
+        class="truncate text-[11px] font-medium italic leading-5 text-slate-500 dark:text-zinc-400"
+        data-testid="comment-author"
+        >Claude gesprek</span
+      >
+    </span>
+  `
+}
+
 function compactConversation(c, i, full, openCommentMenu) {
   const who = identityOf(c.source, c.author, c.avatarUrl)
   return html`
@@ -5336,17 +5430,22 @@ function compactConversation(c, i, full, openCommentMenu) {
     >
       ${() => commentStatusMark(c, 'mt-1')}
       <span class="flex min-w-0 flex-col gap-0.5">
-        <span class="flex min-w-0 items-center gap-2" data-testid="comment-author-line">
-          ${authorAvatarStack(c, who)}
-          <span class="truncate text-[11px] font-medium leading-5 text-slate-600 dark:text-zinc-400" data-testid="comment-author"
-            >${who.name || 'onbekend'}</span
-          >
-          ${() => sourceBadge(c)}
-          ${() => aiWarningBadge(c)}
-          ${() => blockWideBadge(c)}
-          ${() => staleAnchorBadge(c)}
-          ${() => sendFailedBadge('reply:' + c.id)}
-        </span>
+        ${() =>
+          isChatAnchorPlaceholder(c)
+            ? chatAnchorAuthorLine()
+            : html`
+                <span class="flex min-w-0 items-center gap-2" data-testid="comment-author-line">
+                  ${authorAvatarStack(c, who)}
+                  <span class="truncate text-[11px] font-medium leading-5 text-slate-600 dark:text-zinc-400" data-testid="comment-author"
+                    >${who.name || 'onbekend'}</span
+                  >
+                  ${() => sourceBadge(c)}
+                  ${() => aiWarningBadge(c)}
+                  ${() => blockWideBadge(c)}
+                  ${() => staleAnchorBadge(c)}
+                  ${() => sendFailedBadge('reply:' + c.id)}
+                </span>
+              `}
         <span
           class="${full
             ? '[overflow-wrap:anywhere] text-xs font-medium text-slate-800 dark:text-zinc-200'
@@ -7177,11 +7276,26 @@ const COMMENT_KIND_LABEL = { issue: 'PR-comment', review: 'PR-comment', review_s
 export function commentBody(c, startIndex = 0) {
   return () => {
     if (!c) return ''
+    if (isChatAnchorPlaceholder(c)) return CHAT_ANCHOR_NOTE_HTML
     const st = threadStatusSentinel(c.body)
     if (st) return statusLineHTML(st)
     return renderMarkdown(c.body, startIndex, true)
   }
 }
+
+// CHAT_ANCHOR_NOTE_HTML replaces the raw CLAUDE_ANCHOR_PLACEHOLDER sentence
+// wherever a body renders (the compact card, the expanded card's own origin
+// bubble via viewingBubble) — see "A bare Claude-chat anchor reads as a
+// conversation, not as a comment" in comments-panel.md. Deliberately terse
+// and muted/italic, the same visual register as statusLineHTML's status
+// line: nobody wrote this, so it must never look like ordinary reviewer
+// prose. Paired with chatAnchorAuthorLine below, which replaces the
+// author/avatar row so the two together read as "an ongoing Claude
+// conversation", never as a message from the reviewer.
+const CHAT_ANCHOR_NOTE_HTML =
+  '<span class="italic text-slate-400 dark:text-zinc-500" data-testid="chat-anchor-note">' +
+  'Nog geen eigen comment — bekijk het gesprek hiernaast.' +
+  '</span>'
 
 // THREAD_STATUS_SENTINELS — the two command-like reply bodies the backend
 // stores to mark a thread's state change (resolveSentinel/reopenSentinel,
