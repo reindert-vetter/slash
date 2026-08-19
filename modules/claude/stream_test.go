@@ -1,6 +1,10 @@
 package claude
 
 import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -95,6 +99,80 @@ func TestReadChatStreamHandlesVeryLongLines(t *testing.T) {
 	// The hint is truncated before it ever reaches a status label.
 	if len(got[0].Detail) > maxEventDetail+len("…") {
 		t.Fatalf("detail not truncated: %d chars", len(got[0].Detail))
+	}
+}
+
+// A result frame can carry is_error:true — the CLI's own verdict that the
+// turn failed (an API-level error, e.g. an invalid model, a billing problem,
+// or a usage limit) — with a real, human-readable explanation in Result. This
+// must parse into ChatResult.IsError rather than being silently indistinguishable
+// from a normal success (verified against a real `claude -p --model
+// <invalid>` run — see ChatCallError's doc comment in claude.go).
+func TestReadChatStreamParsesIsError(t *testing.T) {
+	stream := `{"type":"result","subtype":"success","is_error":true,"result":"Claude AI usage limit reached.","session_id":"s-4"}` + "\n"
+	res, err := readChatStream(strings.NewReader(stream), nil)
+	if err != nil {
+		t.Fatalf("readChatStream: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected IsError to be true")
+	}
+	if res.Text != "Claude AI usage limit reached." {
+		t.Fatalf("result text = %q", res.Text)
+	}
+}
+
+// lastNonEmptyLine is used to pull one readable diagnostic line out of the
+// CLI's captured stderr when the stream never produced a result frame at
+// all.
+func TestLastNonEmptyLine(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"", ""},
+		{"\n\n", ""},
+		{"single line", "single line"},
+		{"first\nsecond\n", "second"},
+		{"first\n\n  \nlast line  \n", "last line"},
+	}
+	for _, c := range cases {
+		if got := lastNonEmptyLine(c.in); got != c.want {
+			t.Fatalf("lastNonEmptyLine(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestRunChatSurfacesTheCLIsOwnReasonOnANonZeroExit reproduces, with a fake
+// `claude` binary, the exact real-CLI behaviour observed with a genuinely
+// invalid --model: the process still writes a complete, well-formed result
+// frame (is_error:true, a real human-readable Result) to stdout and THEN
+// exits non-zero. Before ChatCallError existed, RunChat's cmd.Wait() error
+// check ran BEFORE the parsed result was ever looked at, so this real text
+// was thrown away in favor of a bare "exit status 1" — this test guards that
+// bug fix rather than the general case in TestReadChatStreamParsesIsError.
+func TestRunChatSurfacesTheCLIsOwnReasonOnANonZeroExit(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "claude")
+	script := "#!/bin/sh\n" +
+		`echo '{"type":"result","subtype":"success","is_error":true,"result":"Claude AI usage limit reached.","session_id":"s-5"}'` + "\n" +
+		"exit 1\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	m := New("")
+	_, err := m.RunChat(context.Background(), RunRequest{Model: ModelSonnet, Prompt: "hi"})
+	if err == nil {
+		t.Fatal("expected an error for is_error:true")
+	}
+	var cce *ChatCallError
+	if !errors.As(err, &cce) {
+		t.Fatalf("expected a *ChatCallError, got %T: %v", err, err)
+	}
+	if !cce.Definitive {
+		t.Fatalf("expected Definitive (the CLI's own completed verdict), got %+v", cce)
+	}
+	if cce.Reason != "Claude AI usage limit reached." {
+		t.Fatalf("Reason = %q, want the CLI's own result text, not a bare exit-status message", cce.Reason)
 	}
 }
 

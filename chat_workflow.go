@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -603,8 +604,11 @@ const chatNeedWriteContinuationPrompt = "Je hebt nu Edit en een echte shell (Bas
 // chatFailureMessage words + persists one failed claude CLI call as a visible
 // turn (see chatFailureTurn) — shared by both attempts of runOneClaudeTurn's
 // two-step call, so a CLI failure on either one degrades the same way.
-func chatFailureMessage(ctx context.Context, cm *chat.Module, arg chatTurnInput, model string) chat.Message {
-	kind, body := chatFailureTurn(arg.Attempt, model)
+// callErr is RunChat's own returned error, passed through so chatFailureTurn
+// can surface the CLI's real explanation when there is one (see
+// claude.ChatCallError) instead of only ever generic wording.
+func chatFailureMessage(ctx context.Context, cm *chat.Module, arg chatTurnInput, model string, callErr error) chat.Message {
+	kind, body := chatFailureTurn(arg.Attempt, model, callErr)
 	msg := chat.Message{
 		ID: chatMessageID(arg.TurnID, ""), ConversationID: arg.ConversationID, PR: arg.PR,
 		Role: "assistant", Kind: kind, Body: body, Model: model,
@@ -738,7 +742,7 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 	result, err := cl.RunChat(ctx, req)
 	logTurnMilestone("claude CLI (read-only attempt) returned after %v (err=%v)", time.Since(t0), err)
 	if err != nil {
-		return chatFailureMessage(ctx, cm, arg, model), nil
+		return chatFailureMessage(ctx, cm, arg, model, err), nil
 	}
 	if err := cm.SetSession(ctx, arg.ConversationID, result.SessionID); err != nil {
 		// Best-effort: losing the session id only means the NEXT call/turn starts
@@ -775,7 +779,7 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 		result2, err2 := cl.RunChat(ctx, shellReq)
 		logTurnMilestone("claude CLI (shell attempt) returned after %v (err=%v)", time.Since(t0), err2)
 		if err2 != nil {
-			return chatFailureMessage(ctx, cm, arg, model), nil
+			return chatFailureMessage(ctx, cm, arg, model, err2), nil
 		}
 		if err := cm.SetSession(ctx, arg.ConversationID, result2.SessionID); err != nil {
 			_ = err
@@ -810,10 +814,32 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 // Opus to Sonnet is exactly the kind of thing a reviewer should not have to
 // guess at; the meaning lives in those words, never in the bubble's colour
 // (the colourblind rule).
-func chatFailureTurn(attempt int, model string) (kind, body string) {
+//
+// callErr's Reason (claude.ChatCallError, see its doc comment) — the CLI's
+// OWN explanation of what went wrong, e.g. an account usage limit or a
+// billing problem — replaces the generic "Er ging iets mis" wording whenever
+// available, so the reviewer sees the real cause instead of a made-up one.
+// When that Reason is Definitive (the CLI completed the turn and judged it a
+// failure itself, rather than a bare process/exec hiccup on our end) the
+// ladder is stopped immediately: an automatic retry a few seconds later is
+// very unlikely to change a verdict the CLI already reached on its own — a
+// usage limit in particular normally resets hours later, not seconds — so
+// promising a countdown here would be misleading. A callErr with no
+// Definitive Reason (or a plain error, e.g. from existing tests) falls
+// through to the unchanged ladder behaviour below.
+func chatFailureTurn(attempt int, model string, callErr error) (kind, body string) {
 	total := len(chatRetryDelays) + 1
 	failed := fmt.Sprintf("Er ging iets mis bij het praten met Claude (%s). Poging %d van %d mislukt",
 		chatModelLabel(model), attempt+1, total)
+
+	var cce *claude.ChatCallError
+	if errors.As(callErr, &cce) && cce.Reason != "" {
+		failed = fmt.Sprintf("Claude (%s) meldde zelf een fout: %s", chatModelLabel(model), cce.Reason)
+		if cce.Definitive {
+			return chat.KindError, failed + " Dit lost een automatische nieuwe poging vermoedelijk niet op — probeer het straks handmatig opnieuw."
+		}
+	}
+
 	if attempt >= len(chatRetryDelays) {
 		return chat.KindError, failed + " — dat was de laatste automatische poging. Probeer het handmatig opnieuw."
 	}

@@ -1777,6 +1777,65 @@ Opus→Sonnet escalation, the `"retry"` Signal) is in
   the pill's mere presence already means "another model answered this one" —
   a word, never a colour.
 
+### A failure bubble shows the CLI's own reason when it has one — e.g. a usage limit
+
+Reported bug: a real account usage-limit hit rendered as the exact same
+generic, fake-sounding "Er ging iets mis... Poging 5 van 6 mislukt — nieuwe
+poging over 48 seconden" as any other failure — misleading, since nothing
+about *this* attempt (waiting 48s) was going to fix a limit that resets hours
+later.
+
+**Root cause, verified directly** (a manual `claude -p --output-format
+stream-json --verbose` run with a deliberately invalid `--model`): the CLI
+still completes its stream and writes a final `result` frame with
+`"is_error":true` and a real, human-readable `result` string explaining
+exactly what went wrong — while the *process itself* still exits non-zero.
+`modules/claude.RunChat` checked `cmd.Wait()`'s error BEFORE ever looking at
+that already-parsed text, so it was thrown away every time in favor of a bare
+`exit status 1` — the reason chat_workflow.go's `chatFailureTurn` could only
+ever produce the one generic sentence, no matter the real cause underneath.
+
+Fix, `modules/claude/claude.go`:
+
+- `ChatResult` gained `IsError bool` (`readChatStream` now also parses
+  `is_error` off the `result` frame).
+- `RunChat` returns a new `*ChatCallError{Reason, Definitive, Err}` instead of
+  a bare wrapped error. `Reason` is the CLI's own `result` text when
+  `IsError` was true (checked **before** the exit-code check, since this can
+  be true even on a zero exit) — `Definitive: true` in that case, meaning the
+  CLI itself, having run the turn to completion, judged it a failure — as
+  opposed to a bare process/exec problem (pipe broken, binary missing, our
+  own context timeout), where `Reason` falls back to the last non-blank
+  stderr line (now captured at all, where it used to be discarded
+  entirely) and `Definitive` stays `false`.
+- `chat_workflow.go`'s `chatFailureTurn(attempt, model, callErr)` (now takes
+  the error) uses `errors.As` to pull out a `*claude.ChatCallError`: a
+  non-empty `Reason` replaces the generic "Er ging iets mis" wording with
+  "Claude (Sonnet) meldde zelf een fout: `<reason, verbatim>`" — never a
+  message this app invents. When `Definitive` is also true, the automatic
+  retry ladder is skipped **immediately** (`chat.KindError`, no countdown): a
+  verdict the CLI already reached on its own is very unlikely to change
+  within the ladder's few-second/-minute rungs — a usage limit in particular
+  normally resets hours later. A `Reason` that isn't `Definitive` (a plain
+  exec hiccup) keeps the existing ladder unchanged, and a bare error with no
+  `ChatCallError` at all (e.g. `context.DeadlineExceeded`, or what every
+  pre-existing retry test in `chat_workflow_test.go` already programs via
+  `Fake.SetChatError`) produces **exactly** the pre-existing generic wording —
+  additive only, no behaviour change for those.
+- Deliberately **not** a dedicated "usage limit" Kind/badge: there is no
+  verified, stable signal in the CLI's stream-json output that identifies a
+  usage limit specifically (as opposed to any other API-level error) short of
+  string-matching the CLI's own free-form English sentence, which would be
+  exactly the "fragiele stringmatch" this app avoids gambling on. Showing the
+  CLI's OWN words verbatim — whatever they say — is the honest middle
+  ground: if the real cause is a usage limit, the reviewer reads that in
+  Claude's own sentence instead of a manufactured generic one.
+- Tests: `TestReadChatStreamParsesIsError`,
+  `TestRunChatSurfacesTheCLIsOwnReasonOnANonZeroExit` (a fake `claude` binary
+  reproducing the exact real-CLI shape above, `modules/claude/stream_test.go`)
+  and `TestChatFailureTurn*` (three cases — a `Definitive` reason, a
+  non-`Definitive` one, and a bare error — `chat_workflow_test.go`).
+
 ### A rejected Signal must not be silent
 
 `sendClaudeMessage` (`RelatedPanel.mjs`) used to `await fetch(...)` and never

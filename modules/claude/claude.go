@@ -126,7 +126,53 @@ const maxEventDetail = 120
 type ChatResult struct {
 	Text      string
 	SessionID string
+	// IsError mirrors the CLI's own `"is_error"` field on the final `result`
+	// stream frame: the turn ran to completion but the CLI itself judged it a
+	// failure (e.g. an API-level error such as an invalid model, a billing
+	// problem, or a usage limit — see the CLI's own `result` text for which).
+	// A ChatResult with IsError set is never returned as a "success" by
+	// RunChat — see ChatCallError.
+	IsError bool
 }
+
+// ChatCallError wraps a RunChat failure with, where available, the CLI's OWN
+// human-readable explanation — never a message this module invents.
+//
+// Verified directly (manual `claude -p --output-format stream-json --verbose`
+// run with a deliberately invalid --model): the CLI still completes its
+// stream and prints a final `result` frame with `"is_error":true` and a
+// `result` string spelling out exactly what went wrong ("There's an issue
+// with the selected model…"), while the process itself exits non-zero.
+// Before this type existed, RunChat treated any non-zero exit as fatal and
+// discarded that already-parsed, informative text — the caller only ever
+// saw a bare "exit status 1", which is why a Claude call failure always
+// rendered as the same generic "Er ging iets mis" wording (chatFailureTurn,
+// chat_workflow.go) no matter the real cause.
+//
+// Definitive is true only when Reason came from that `is_error` verdict — a
+// completed CLI turn that judged ITSELF a failure, as opposed to a bare
+// process/exec problem (pipe broken, binary missing, our own context
+// timeout). That distinction matters for whether an automatic retry is even
+// worth suggesting: a CLI-level verdict (e.g. a usage limit, which normally
+// resets hours later, not seconds) is very unlikely to change on an
+// immediate retry, unlike a plain exec hiccup.
+type ChatCallError struct {
+	Reason     string // human-readable, from the CLI itself; "" if truly unknown
+	Definitive bool
+	Err        error // the underlying process/parse error, always non-nil
+}
+
+func (e *ChatCallError) Error() string {
+	if e.Reason != "" {
+		return e.Reason
+	}
+	if e.Err != nil {
+		return e.Err.Error()
+	}
+	return "claude chat call failed"
+}
+
+func (e *ChatCallError) Unwrap() error { return e.Err }
 
 // Client is the module's behaviour, so workflows and tests can depend on an
 // interface and swap in Fake.
@@ -281,19 +327,40 @@ func (m *Module) RunChat(ctx context.Context, req RunRequest) (ChatResult, error
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return ChatResult{}, fmt.Errorf("claude -p --output-format stream-json (%s): %w", req.Model, err)
+		return ChatResult{}, &ChatCallError{Err: fmt.Errorf("claude -p --output-format stream-json (%s): %w", req.Model, err)}
 	}
+	// Captured (not discarded) so a failure can carry the CLI's own diagnostic
+	// text when the stream itself never produced a usable `result` frame — see
+	// ChatCallError.
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = &stderrBuf
 	if err := cmd.Start(); err != nil {
-		return ChatResult{}, fmt.Errorf("claude -p --output-format stream-json (%s): %w", req.Model, err)
+		return ChatResult{}, &ChatCallError{Err: fmt.Errorf("claude -p --output-format stream-json (%s): %w", req.Model, err)}
 	}
 	// Read to EOF first, then Wait — a Wait before the pipe is drained would
 	// close it out from under the reader.
 	res, parseErr := readChatStream(stdout, req.OnEvent)
-	if err := cmd.Wait(); err != nil {
-		return ChatResult{}, fmt.Errorf("claude -p --output-format stream-json (%s): %w", req.Model, err)
+	waitErr := cmd.Wait()
+
+	// The CLI ran to completion and told us, in its own words, that the turn
+	// failed (is_error on the result frame) — its own verdict, checked BEFORE
+	// waitErr, since this can be true even on a zero exit. Never let this
+	// text be silently thrown away in favor of a bare "exit status N" (see
+	// ChatCallError's doc comment for the verified repro).
+	if parseErr == nil && res.IsError {
+		return ChatResult{}, &ChatCallError{Reason: res.Text, Definitive: true, Err: waitErr}
+	}
+	if waitErr != nil {
+		return ChatResult{}, &ChatCallError{
+			Reason: lastNonEmptyLine(stderrBuf.String()),
+			Err:    fmt.Errorf("claude -p --output-format stream-json (%s): %w", req.Model, waitErr),
+		}
 	}
 	if parseErr != nil {
-		return ChatResult{}, fmt.Errorf("claude -p --output-format stream-json (%s): %w", req.Model, parseErr)
+		return ChatResult{}, &ChatCallError{
+			Reason: lastNonEmptyLine(stderrBuf.String()),
+			Err:    fmt.Errorf("claude -p --output-format stream-json (%s): %w", req.Model, parseErr),
+		}
 	}
 	if res.SessionID == "" {
 		// Shouldn't happen (the CLI always echoes session_id), but never drop the
@@ -312,6 +379,7 @@ type chatStreamLine struct {
 	Type      string `json:"type"`
 	Subtype   string `json:"subtype"`
 	Result    string `json:"result"`
+	IsError   bool   `json:"is_error"`
 	SessionID string `json:"session_id"`
 	Event     *struct {
 		Type  string `json:"type"`
@@ -352,7 +420,7 @@ func readChatStream(r io.Reader, onEvent func(ChatEvent)) (ChatResult, error) {
 			var l chatStreamLine
 			if json.Unmarshal([]byte(s), &l) == nil {
 				if l.Type == "result" {
-					res.Text, res.SessionID, seenResult = l.Result, l.SessionID, true
+					res.Text, res.SessionID, res.IsError, seenResult = l.Result, l.SessionID, l.IsError, true
 				} else if onEvent != nil {
 					emitChatEvents(l, onEvent)
 				}
@@ -366,6 +434,20 @@ func readChatStream(r io.Reader, onEvent func(ChatEvent)) (ChatResult, error) {
 		return ChatResult{}, fmt.Errorf("no result frame in stream output")
 	}
 	return res, nil
+}
+
+// lastNonEmptyLine returns the last non-blank line of s, trimmed — used to
+// pull one readable diagnostic line out of the CLI's captured stderr when the
+// stream itself never produced a `result` frame to explain the failure with.
+// "" when s has no non-blank line at all.
+func lastNonEmptyLine(s string) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if line := strings.TrimSpace(lines[i]); line != "" {
+			return line
+		}
+	}
+	return ""
 }
 
 // emitChatEvents maps one parsed non-result frame onto zero or more

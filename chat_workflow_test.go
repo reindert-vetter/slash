@@ -1218,3 +1218,62 @@ func TestClaudeChatAutoLandsPendingShadowWorkAfterATurn(t *testing.T) {
 		t.Fatalf("expected the shadow worktree to be reclaimed after landing, got err=%v", err)
 	}
 }
+
+// TestChatFailureTurnSurfacesTheCLIsOwnDefinitiveReason: a bug fix (see
+// claude.ChatCallError's own doc comment for the verified repro) — RunChat
+// used to discard a claude CLI turn's own "is_error" explanation whenever the
+// process exited non-zero, so every Claude call failure rendered the exact
+// same generic "Er ging iets mis" wording no matter the real cause (a usage
+// limit, a billing problem, an invalid model, …). chatFailureTurn is a pure
+// function, so this is tested directly rather than through a full workflow
+// round trip.
+func TestChatFailureTurnSurfacesTheCLIsOwnDefinitiveReason(t *testing.T) {
+	callErr := &claude.ChatCallError{
+		Reason:     "Claude AI usage limit reached. Your limit will reset at 3pm.",
+		Definitive: true,
+	}
+	kind, body := chatFailureTurn(0, claude.ModelOpus, callErr)
+	if kind != chat.KindError {
+		t.Fatalf("expected chat.KindError for a definitive CLI verdict (an automatic retry is pointless), got %q", kind)
+	}
+	if !strings.Contains(body, "usage limit reached") {
+		t.Fatalf("expected the CLI's own reason verbatim in the message, got %q", body)
+	}
+	if strings.Contains(body, "nieuwe poging over") {
+		t.Fatalf("must not promise a retry countdown for a definitive CLI verdict, got %q", body)
+	}
+	if strings.Contains(body, "Poging 1 van") {
+		t.Fatalf("must not use the generic attempt-counting wording once a real reason is known, got %q", body)
+	}
+}
+
+// TestChatFailureTurnKeepsTheLadderForANonDefinitiveReason: a ChatCallError
+// with a Reason from stderr but not Definitive (a plain process/exec hiccup,
+// not the CLI's own completed verdict) must not shortcut the existing
+// backoff ladder — only a Definitive CLI verdict does that (see the doc
+// comment on chatFailureTurn).
+func TestChatFailureTurnKeepsTheLadderForANonDefinitiveReason(t *testing.T) {
+	callErr := &claude.ChatCallError{Reason: "network is unreachable"}
+	kind, body := chatFailureTurn(0, claude.ModelOpus, callErr)
+	if kind != chat.KindRetrying {
+		t.Fatalf("expected chat.KindRetrying to keep trying a non-definitive failure, got %q", kind)
+	}
+	if !strings.Contains(body, "nieuwe poging over") {
+		t.Fatalf("expected the usual retry countdown to still be promised, got %q", body)
+	}
+}
+
+// TestChatFailureTurnUnchangedForAPlainError: a bare error (no
+// claude.ChatCallError at all — e.g. context.DeadlineExceeded, or what every
+// pre-existing test in this file already programs via SetChatError) must
+// produce EXACTLY the pre-existing generic wording, so this fix is additive
+// only.
+func TestChatFailureTurnUnchangedForAPlainError(t *testing.T) {
+	kind, body := chatFailureTurn(0, claude.ModelOpus, errors.New("claude: overloaded"))
+	if kind != chat.KindRetrying {
+		t.Fatalf("expected chat.KindRetrying, got %q", kind)
+	}
+	if !strings.Contains(body, "Er ging iets mis bij het praten met Claude") {
+		t.Fatalf("expected the unchanged generic wording, got %q", body)
+	}
+}
