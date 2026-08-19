@@ -4891,27 +4891,6 @@ function staleAnchorBadge(c) {
   >`
 }
 
-// commentFileChip names the file (and, when it has one, the line) a comment is
-// about, in the detail card's header. Added for the PR-wide AI risk findings
-// (kind "ai_warning", see anchoredWarning in code_warning.go): such a finding
-// could not be pinned to a block, so nothing else on the card says WHERE it was
-// about — while the file/line the model named is stored on the comment all
-// along. Generic over every kind rather than special-cased on "ai_warning": a
-// path is just as useful on an orphaned or imported PR-wide comment, and a
-// block-anchored comment's own card is the one place its file isn't repeated
-// anywhere else either. Empty file (a genuinely PR-wide issue comment) → no
-// chip at all.
-function commentFileChip(c) {
-  if (!c || !c.file) return ''
-  const text = truncateMiddle(c.file) + (c.line > 0 ? ':' + c.line : '')
-  return html`<span
-    class="inline-flex shrink-0 items-center rounded-full bg-slate-100 px-1.5 py-0.5 font-mono text-[9px] font-medium text-slate-600 dark:bg-zinc-800 dark:text-zinc-400"
-    data-testid="comment-detail-file"
-    title="${c.file + (c.line > 0 ? ':' + c.line : '')}"
-    >${text}</span
-  >`
-}
-
 // markSendFailed/clearSendFailed — write cs.sendFailed (see its own doc
 // comment above, next to cs's declaration). Reassigned wholesale so the
 // reactive read re-triggers, same convention as state.ignoredComments.
@@ -5156,11 +5135,18 @@ function editingBubble(c, msg) {
 // to target an edit at the right run/reaction id, see editTargetId) — wrapped
 // in a stable `contents` root so toggling to/from editingBubble never derails
 // arrow.js's keyed reconcile (the "bare toggling expression" pitfall).
-function reactionBubble(c, r, i, total, isActive) {
-  return html`<div class="contents">${() => (isEditingMessage(c, r) ? editingBubble(c, r) : viewingBubble(c, r, i, total, isActive))}</div>`
+// `bare` (default false) drops the avatar+name identity span and the
+// bordered/tinted bubble box — used by commentDetailCard's origin message
+// only, whose card already shows that identity once in its own header (see
+// its own doc comment): without this, the origin repeated the avatar+name a
+// second time inside its own box. The edit pencil (own messages only) stays
+// reachable regardless — editing your own root comment must not silently
+// disappear along with the chrome.
+function reactionBubble(c, r, i, total, isActive, bare) {
+  return html`<div class="contents">${() => (isEditingMessage(c, r) ? editingBubble(c, r) : viewingBubble(c, r, i, total, isActive, bare))}</div>`
 }
 
-function viewingBubble(c, r, i, total, isActive) {
+function viewingBubble(c, r, i, total, isActive, bare) {
   const mine = r.source === 'ui'
   // A state-change message ("/resolve", "/reopen") is not a chat message: it
   // renders as a plain status line (see threadStatusSentinel/commentBody), so
@@ -5192,32 +5178,34 @@ function viewingBubble(c, r, i, total, isActive) {
     <div class="${() => 'flex flex-col gap-0.5 ' + (mine ? 'items-end' : 'items-start')}">
       <div class="flex items-center gap-2 py-0.5" data-testid="reaction-author-line">
         ${() =>
-          isAnchorOrigin
-            ? html`
-                <span class="contents">
-                  <span
-                    class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-indigo-100 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-300"
-                    aria-hidden="true"
-                  >
-                    ${chatAnchorGlyph()}
+          bare
+            ? ''
+            : isAnchorOrigin
+              ? html`
+                  <span class="contents">
+                    <span
+                      class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-indigo-100 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-300"
+                      aria-hidden="true"
+                    >
+                      ${chatAnchorGlyph()}
+                    </span>
+                    <span
+                      class="whitespace-nowrap text-[11px] font-medium italic leading-5 text-slate-500 dark:text-zinc-400"
+                      data-testid="reaction-author"
+                      >Claude gesprek</span
+                    >
                   </span>
-                  <span
-                    class="whitespace-nowrap text-[11px] font-medium italic leading-5 text-slate-500 dark:text-zinc-400"
-                    data-testid="reaction-author"
-                    >Claude gesprek</span
-                  >
-                </span>
-              `
-            : html`
-                <span class="contents">
-                  ${avatarHTML(who.name, who.avatarUrl, 'h-5 w-5')}
-                  <span
-                    class="whitespace-nowrap text-[11px] font-medium leading-5 text-slate-600 dark:text-zinc-400"
-                    data-testid="reaction-author"
-                    >${who.name || 'onbekend'}</span
-                  >
-                </span>
-              `}
+                `
+              : html`
+                  <span class="contents">
+                    ${avatarHTML(who.name, who.avatarUrl, 'h-5 w-5')}
+                    <span
+                      class="whitespace-nowrap text-[11px] font-medium leading-5 text-slate-600 dark:text-zinc-400"
+                      data-testid="reaction-author"
+                      >${who.name || 'onbekend'}</span
+                    >
+                  </span>
+                `}
         ${() =>
           isOwnMessage(r) && !status
             ? html`<button
@@ -5234,6 +5222,15 @@ function viewingBubble(c, r, i, total, isActive) {
       <div
         class="${() => {
           const sel = active()
+          if (bare) {
+            // No border/tint box at all — commentDetailCard's origin message
+            // reads as plain text under its own already-shown header, exactly
+            // like a line comment's body (compactConversation).
+            return (
+              'rounded-md text-xs font-medium text-slate-800 dark:text-zinc-200 [overflow-wrap:anywhere] ' +
+              (sel ? 'ring-2 ring-indigo-400' : '')
+            )
+          }
           if (status) {
             return (
               'max-w-[92%] px-1 py-1 text-[11px] italic leading-relaxed text-slate-500 dark:text-zinc-400' +
@@ -5462,12 +5459,20 @@ function compactConversation(c, i, full, openCommentMenu) {
           .innerHTML="${commentBody(c, threadFenceStartIndexes(c).get('origin:' + c.id) ?? 0)}"
         ></span>
         <span class="truncate text-[11px] leading-snug text-slate-500 dark:text-zinc-500" data-testid="comment-meta"
-          >${() =>
-            truncateMiddle(c.file) + ':' + c.line + ' · ' + c.reactionCount + ' reacties · ' + c.status + lastReplyNote(c)}</span
+          >${() => truncateMiddle(c.file) + ':' + c.line + ' · ' + commentReactionStatusLine(c)}</span
         >
       </span>
     </button>
   `
+}
+
+// commentReactionStatusLine — the "N reacties · status" tail of a comment's
+// meta line, extracted out of compactConversation so commentDetailCard (a
+// general/PR-wide comment's own detail card) can reuse the exact same
+// wording/shape instead of inventing its own — see "look more like a line
+// comment" in comments-panel.md.
+function commentReactionStatusLine(c) {
+  return c.reactionCount + ' reacties · ' + c.status + lastReplyNote(c)
 }
 
 // expandedConversation — the full thread (every message via threadMessages/
@@ -7262,14 +7267,6 @@ export function isOrphanComment(c) {
   return !!c && c.anchorState === 'orphan'
 }
 
-// COMMENT_KIND_LABEL names the kind badge on a comment-index item: issue/
-// review comments read the same ("PR-comment"); a review summary gets its own
-// label. "ai_warning" is a code_warning finding that couldn't be pinned to a
-// block (see anchoredWarning in code_warning.go) — the aiWarningBadge next to
-// this label already carries the warning-triangle icon, so this stays a plain
-// text label rather than duplicating it.
-const COMMENT_KIND_LABEL = { issue: 'PR-comment', review: 'PR-comment', review_summary: 'Review', ai_warning: 'AI-risico' }
-
 // commentBody is the single place a comment's body text is rendered — kept
 // tiny and reusable (compactConversation/expandedConversation/reactionBubble
 // above and commentDetailCard below) so this one function drives markdown rendering
@@ -7708,12 +7705,22 @@ function commentMenuButton(openMenu) {
   `
 }
 
-// commentDetailCard renders the read-only thread (status mark, kind badge,
-// source/AI-warning badges, relative time, then every reaction via
-// threadMessages — the comment's own body is already the first message
-// there, so it is deliberately NOT also rendered as a separate title above
-// the thread (that looked duplicated), plus — once picm.replying is true
-// (see startPrCommentReply) — a reply textarea + send button. This is what
+// commentDetailCard renders a general/PR-wide comment's read-only thread —
+// status mark, source/AI-warning badges, then the comment's own body as
+// plain text right under the author line (no separate bubble box: an
+// earlier version rendered the opening message through reactionBubble too,
+// which repeated the avatar+name a second time inside its own bordered/
+// tinted box), any REAL replies below that via reactionBubble, and a footer
+// meta line (file:line, reacties/status, relative time — reusing
+// commentReactionStatusLine, the same wording compactConversation's own
+// "comment-meta" line uses). Reviewer request: "ik wil algemene comments
+// meer laten lijken op comments op een regel" — this card now deliberately
+// mirrors compactConversation's shape (author line with inline badges, plain
+// body, one muted meta line) instead of the three-stacked-pills header
+// (kind/file-chip/time) plus boxed thread it had before; the kind pill
+// (COMMENT_KIND_LABEL) is gone outright, since the line-comment card never
+// showed one either. Plus — once picm.replying is true (see
+// startPrCommentReply) — a reply textarea + send button. This is what
 // home.mjs's DetailPanel shows in the block column, to the right of the
 // index, in place of a Block diff card whenever the selected sidebar item is
 // a synthetic comment item (b.kind === 'comment') — see detail-layout.md.
@@ -7743,7 +7750,10 @@ export function commentDetailCard(c, opts) {
         // "stop" (drilled column / Onderliggende code) the keyboard can step
         // into that would steal this border away, so non-preview here is
         // simply the whole of the selected/focused state.
-        'flex w-[42rem] shrink-0 flex-col gap-3 rounded-2xl border p-4 shadow-sm ' +
+        // Widened by 50px on top of the previous 42rem — reviewer request,
+        // room for the footer meta line below to stay readable now that it
+        // carries the file path that used to sit in its own header pill.
+        'flex w-[calc(42rem+50px)] shrink-0 flex-col gap-3 rounded-2xl border p-4 shadow-sm ' +
         (preview
           ? 'border-slate-300 dark:border-zinc-700 opacity-60 '
           : 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30 ') +
@@ -7762,7 +7772,7 @@ export function commentDetailCard(c, opts) {
       }}"
     >
       <div
-        class="flex flex-wrap items-center gap-2 border-b border-slate-100 pb-2.5 dark:border-zinc-800/60"
+        class="flex flex-wrap items-center gap-2"
         data-testid="comment-detail-author-line"
       >
         ${() => commentStatusMark(c)}
@@ -7772,14 +7782,8 @@ export function commentDetailCard(c, opts) {
           data-testid="comment-detail-author"
           >${detailWho.name || 'onbekend'}</span
         >
-        <span
-          class="rounded-full bg-slate-200/70 dark:bg-zinc-800 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-slate-600 dark:text-zinc-400"
-          data-testid="comment-detail-kind"
-          >${COMMENT_KIND_LABEL[c.kind] || c.kind || 'Regelcomment'}</span
-        >
         ${() => sourceBadge(c)} ${() => aiWarningBadge(c)} ${() => staleAnchorBadge(c)}
-        ${() => commentFileChip(c)} ${() => sendFailedBadge('reply:' + c.id)}
-        <span class="ml-auto shrink-0 text-[10px] text-slate-500 dark:text-zinc-500">${relTime(c.createdAt)}</span>
+        ${() => sendFailedBadge('reply:' + c.id)}
         ${() => (preview ? '' : commentMenuButton(opts && opts.openMenu))}
       </div>
       <div
@@ -7790,10 +7794,36 @@ export function commentDetailCard(c, opts) {
       >
         ${() =>
           threadMessages(c).map((r, ti, arr) =>
-            reactionBubble(c, r, ti, arr.length, () => !preview && pct.commentId === c.id && pct.pos === arr.length - ti).key(
-              'detail-msg:' + r.id,
-            ),
+            // The origin message (ti===0) passes `bare` — see reactionBubble's
+            // own doc comment: this card's header already shows the
+            // avatar+name once, so the origin drops its own copy plus the
+            // bordered/tinted bubble box, reading as plain text instead
+            // (still keeps its edit pencil and its ↑/↓ ring affordance).
+            reactionBubble(
+              c,
+              r,
+              ti,
+              arr.length,
+              () => !preview && pct.commentId === c.id && pct.pos === arr.length - ti,
+              ti === 0,
+            ).key('detail-msg:' + r.id),
           )}
+      </div>
+      <div
+        class="truncate border-t border-slate-100 pt-2.5 text-[11px] leading-snug text-slate-500 dark:border-zinc-800/60 dark:text-zinc-500"
+        data-testid="comment-detail-meta"
+      >
+        ${() =>
+          // Same shape as compactConversation's own "comment-meta" line (the
+          // block-scoped line comment this card now mirrors) — file:line, then
+          // the shared reacties/status tail — plus the relative time, which
+          // that line-comment card has no room for but this wider one does.
+          // No file at all (a genuine PR-wide issue/review comment, never
+          // anchored to code) simply drops that leading segment.
+          (c.file ? truncateMiddle(c.file) + (c.line > 0 ? ':' + c.line : '') + ' · ' : '') +
+          commentReactionStatusLine(c) +
+          ' · ' +
+          relTime(c.createdAt)}
       </div>
       <div class="contents">
         ${() =>

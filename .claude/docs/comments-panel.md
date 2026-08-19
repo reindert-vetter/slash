@@ -859,11 +859,35 @@ the selection if the comment is already resolved and thus hidden
 `DetailPanel`'s `pair.forEach` loop branches at the top on
 `b.kind === 'comment'`: instead of `ensureCode(b)` + `Block(b, {...})` it renders
 `commentDetailCard(b.comment, { preview })` (`RelatedPanel.mjs`, exported) — a
-read-only thread (status mark, kind badge, source/AI-warning badge, relative
-time, markdown body via the shared `commentBody`, every reaction via the shared
-`threadMessages`/`reactionBubble`) wrapped in the same
-`data-testid=detail-card` stable-`contents` root as an ordinary card, keyed on
-`'detail:'+role+':comment:'+id+':'+status` (a resolve thus forces a fresh node).
+read-only thread wrapped in the same `data-testid=detail-card` stable-`contents`
+root as an ordinary card, keyed on `'detail:'+role+':comment:'+id+':'+status`
+(a resolve thus forces a fresh node). Width: `w-[calc(42rem+50px)]` — 50px wider
+than the ordinary block card's `42rem`, room for the wider footer meta line
+below.
+
+**Mirrors `compactConversation`'s shape (the block-scoped line-comment card),
+not a bespoke layout of its own** — reviewer request: "ik wil algemene
+comments meer laten lijken op comments op een regel". An earlier version had
+its own header (status mark, avatar, name, a kind pill via
+`COMMENT_KIND_LABEL`, source/AI-warning badges, a `commentFileChip` pill,
+relative time) and then rendered the ORIGIN message a second time through
+`reactionBubble` — which repeats the avatar+name inside its own bordered/tinted
+bubble, so "AI-controle" (say) showed up twice stacked on top of each other.
+Now: the header (`comment-detail-author-line`) only carries status mark,
+avatar, name, `sourceBadge`/`aiWarningBadge`/`staleAnchorBadge`/
+`sendFailedBadge` and the menu button — the kind pill (`COMMENT_KIND_LABEL`)
+is gone outright, since `compactConversation` never showed one either. The
+thread container (`comment-detail-thread`, keeps its `ring-2` while
+`pct.commentId === c.id`, see below) renders the origin message as **plain
+text** via the shared `commentBody` — no bubble chrome — and only a REAL reply
+beyond it via `reactionBubble`. A single muted footer line
+(`comment-detail-meta`, `truncate`) closes the card: `file:line` (only when
+`c.file` is set — a genuine PR-wide `issue`/`review` comment has none) then
+**`commentReactionStatusLine(c)`** — extracted out of `compactConversation`'s
+own meta line (`N reacties · status` + `lastReplyNote`) so both cards render
+that tail identically — then the relative time (room `compactConversation`'s
+narrower card doesn't have). `commentFileChip` and the `COMMENT_KIND_LABEL`
+map are removed outright, not just unused — nothing else called them.
 
 `preview` (`i !== sel || !focusedHere`) dims the look-ahead card like `Block()`'s
 own `preview` prop, and since this card replaces a `Block()` card in the same

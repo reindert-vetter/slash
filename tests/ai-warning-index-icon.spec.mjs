@@ -49,12 +49,14 @@ test('a not-yet-published AI finding shows a warning icon in the index, a human 
     await expect(humanRow.getByTestId('block-row-ai-warning')).toHaveCount(0)
 
     // Such a finding anchored to no block at all, so its detail card's only
-    // statement of what it is about is the file it named (commentFileChip,
-    // RelatedPanel.mjs) — which used to be stored but never shown.
+    // statement of what it is about is the file it named — folded into the
+    // card's footer meta line (RelatedPanel.mjs's commentDetailCard, the same
+    // truncateMiddle(file):line shape compactConversation's own "comment-meta"
+    // line uses), which used to be stored but never shown.
     // .first(): the look-ahead preview card of the next comment item sits in
     // the same column and, here, names the same file.
     await warnRow.click()
-    await expect(page.getByTestId('comment-detail-file').first()).toHaveText('app/Foo.php')
+    await expect(page.getByTestId('comment-detail-meta').first()).toContainText('app/Foo.php')
   } finally {
     for (const id of [warnRunId, humanRunId]) {
       await page.request.post('/api/workflows/' + id + '/signals/delete', { data: { author: 'reviewer' } })

@@ -52,10 +52,6 @@ test.describe('PR Review Tree — an orphaned comment anchor stays reachable', (
     await expect(stale).toBeVisible()
     await expect(stale).toContainText('verouderd')
 
-    // Its kind badge falls back to a readable label instead of rendering empty:
-    // an orphan keeps kind '' (a block comment), so COMMENT_KIND_LABEL misses.
-    await expect(card.locator('[data-testid="comment-detail-kind"]')).toContainText('Regelcomment')
-
     // The thread still shows the code the comment was placed on — a record of
     // what it was about, even though that code is gone from the PR.
     await expect(card).toContainText('Dit ophalen hoort in de repository')
