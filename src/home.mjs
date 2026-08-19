@@ -11983,6 +11983,20 @@ function onKeydown(e) {
     } else enterDiff()
   } else if (e.key === 'ArrowLeft') {
     e.preventDefault()
+    // Symmetric with the ArrowRight branch above: a FIRST → into an anchored
+    // comment only flips state.commentAnchorEntered (revealing the drilled
+    // column's diff highlight while the keyboard stays on the sidebar list —
+    // see that branch's own doc comment). A ← reached here (relatedActive()
+    // already false, i.e. not swallowed by the branch above) must undo that
+    // same single step before falling through to enterDescriptionFromList() —
+    // otherwise "comment index -> diff -> comment index" via 2x→ would need
+    // only 1x← to fully return, landing one stop too far left. Reviewer
+    // request: "als ik 2 keer naar rechts ga, wil ik ook 2x naar links moeten
+    // komen".
+    if (state.commentAnchorEntered) {
+      state.commentAnchorEntered = false
+      return
+    }
     enterDescriptionFromList()
   }
 }
@@ -13708,7 +13722,8 @@ function DetailPanel(state) {
                   activeGroup: () =>
                     state.focusLevel === level && !commentAnchorAwaitingEntry(level) ? focusedActiveUnit() : null,
                   hintsEnabled: () => state.focusLevel === level,
-                  diffActive: () => state.focusLevel === level && !relatedActive(),
+                  diffActive: () =>
+                    state.focusLevel === level && !relatedActive() && !commentAnchorAwaitingEntry(level),
                   approvedRows: () => approvedRowSet(b),
                   approvedCalls: () => approvedCallSet(b),
                   onApprove: (blk) => persistApproval(blk),

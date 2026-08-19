@@ -336,6 +336,34 @@ sidebar was still just being walked with `↑`/`↓`.
   reasoning as `.claude/rules/conventions.md`'s own entry, applied here
   defensively so a later `state.allBlocks`/`state.blocks` reassignment can
   never silently desync the two and let the suppression above miss.
+- **The card's own blue border needed the same `commentAnchorAwaitingEntry`
+  guard as the active-row highlight, not just `!relatedActive()`.** The
+  drilled column's `diffActive` opt (`home.mjs`, feeding `Block.mjs`'s
+  `border-indigo-300` outer border) used to be
+  `() => state.focusLevel === level && !relatedActive()` — true as soon as
+  `openCommentAnchorDrill` sets `state.focusLevel = 1` on selection, i.e.
+  before the first `→`. Reviewer report: "als ik een comment selecteer in de
+  index, wil ik dat er maar in kolom/blok geselecteerd is (en blauw border
+  heeft)" — walking ↑/↓ through the index showed the sidebar row's own indigo
+  selection AND the drilled card's blue border at once. Fixed by adding
+  `&& !commentAnchorAwaitingEntry(level)`, the same expression `activeGroup`
+  already used — so the border only appears from the first `→` onward, same
+  as the highlight and the `diffview-fit`/`a`-cycle stand toggle (also gated
+  on `diffActive()`, see `Block.mjs`).
+- **`←` must undo `commentAnchorEntered` symmetrically with `→`.** Reviewer
+  follow-up: "als ik 2 keer naar rechts ga, wil ik ook 2x naar links moeten
+  om op dezelfde plek te komen" (comment index → diff-entered → related panel,
+  and back). The first `←` out of the related panel is already handled
+  generically by `relatedActive()`'s branch in `onKeydown` (`exitRelated`
+  undoes the second `→`). Without a fix the SECOND `←` fell through to the
+  plain list-mode branch, which unconditionally calls
+  `enterDescriptionFromList()` — skipping straight past the "diff entered,
+  still on the sidebar" stop instead of first undoing the first `→`. Fixed by
+  checking `state.commentAnchorEntered` first in that branch: if true, flip
+  it back to `false` and `return` (undoing exactly one `→`); only a further
+  `←` reaches `enterDescriptionFromList()`. Test:
+  `tests/comment-anchor-expanded-view.spec.mjs` ("only one blue border at a
+  time, and 2x ArrowLeft mirrors 2x ArrowRight").
 
 `BlockList` learns this from **`state.indexHandedOff`**, kept by a small
 `watch` in `home.mjs` — not a direct `relatedActive()` call, because

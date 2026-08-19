@@ -155,6 +155,11 @@ test.describe('a comment-index item anchored to a real block', () => {
     const drillColumn = page.getByTestId('drill-column')
     await expect(drillColumn).toBeVisible()
 
+    // The stand toggle only shows once the diff is "entered" (diffActive,
+    // gated on commentAnchorAwaitingEntry — see the border test above): a
+    // first ArrowRight reveals it, still without handing the keyboard in.
+    await page.keyboard.press('ArrowRight')
+
     // Pick a stand inside the anchored column itself — it writes the SHARED
     // state.diffViewMode now, not a private field of this one view.
     await drillColumn.getByTestId('diffview-fit').click()
@@ -166,6 +171,7 @@ test.describe('a comment-index item anchored to a real block', () => {
     await expect(page.getByTestId('drill-column')).toHaveCount(0)
     await row.click()
     await expect(drillColumn).toBeVisible()
+    await page.keyboard.press('ArrowRight')
     await expect(drillColumn.getByTestId('diffview-fit')).toHaveClass(/bg-indigo-100/)
   })
 
@@ -219,6 +225,61 @@ test.describe('a comment-index item anchored to a real block', () => {
     await expect(row).not.toHaveClass(/bg-indigo-50/)
     await expect(row).toHaveClass(/bg-slate-100/)
     await expect(row.locator('text=›')).toHaveClass(/text-transparent/)
+  })
+
+  // Reviewer request: "als ik een comment selecteer in de index, wil ik dat er
+  // maar in kolom/blok geselecteerd is (en blauw border heeft) ... als ik 2
+  // keer naar rechts ga, wil ik ook 2x naar links moeten om op dezelfde plek
+  // te komen". Two bugs: (1) the drilled anchor column's blue border
+  // (diffActive) used to show even before a FIRST ArrowRight — while only the
+  // sidebar row should read as selected — because it wasn't gated on
+  // commentAnchorAwaitingEntry like the active-row highlight already was; (2)
+  // walking back with ← used to skip a step (2x→ in, only 1x← needed to fully
+  // exit) because the plain list-mode ← branch unconditionally called
+  // enterDescriptionFromList() instead of first undoing commentAnchorEntered.
+  test('only one blue border at a time, and 2x ArrowLeft mirrors 2x ArrowRight', async ({ page }) => {
+    await mockAnchoredComment(page, {
+      id: 'anchor-changed',
+      file: 'app/Actions/CreatePaymentAction.php',
+      label: 'CreatePaymentAction::execute',
+      body: 'rename this argument',
+    })
+    await page.goto('/pr/12903')
+    await leaveSearchBox(page)
+
+    const row = page.locator('[data-idx]').filter({ hasText: 'rename this argument' })
+    await row.click()
+    const drillColumn = page.getByTestId('drill-column')
+    await expect(drillColumn).toBeVisible()
+
+    // Before any ArrowRight: only the sidebar row reads as selected, the
+    // drilled card must NOT show the blue diffActive border yet.
+    await expect(row).toHaveClass(/bg-indigo-50/)
+    const card = drillColumn.locator('[data-diff-col-key]').first()
+    await expect(card).not.toHaveClass(/border-indigo-300/)
+
+    // First ArrowRight: reveals the active-row highlight (existing test
+    // above) and now the card's own border too.
+    await page.keyboard.press('ArrowRight')
+    await expect(card).toHaveClass(/border-indigo-300/)
+    await expect(row).toHaveClass(/bg-indigo-50/)
+
+    // Second ArrowRight: hands the keyboard into the related panel.
+    await page.keyboard.press('ArrowRight')
+    await expect(row).toHaveClass(/bg-slate-100/)
+
+    // First ArrowLeft undoes the second step only (back to the "diff
+    // entered" stop: sidebar still selected, card border still blue).
+    await page.keyboard.press('ArrowLeft')
+    await expect(row).toHaveClass(/bg-indigo-50/)
+    await expect(card).toHaveClass(/border-indigo-300/)
+
+    // Second ArrowLeft undoes the first step: back to plain comment-index
+    // selection, no card border, drilled column still open.
+    await page.keyboard.press('ArrowLeft')
+    await expect(card).not.toHaveClass(/border-indigo-300/)
+    await expect(row).toHaveClass(/bg-indigo-50/)
+    await expect(drillColumn).toBeVisible()
   })
 
   test('navigating away closes the expanded view again', async ({ page }) => {
