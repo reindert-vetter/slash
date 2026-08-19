@@ -1483,6 +1483,21 @@ function applyDrillRefRestore() {
     if (!match) break
     drillIntoChild(match)
     parent = state.drill[state.drill.length - 1]
+    // Apply THIS level's own restored cursor right away if it's a 'group'
+    // cursor — needed before the NEXT iteration resolves `parent`'s own
+    // children: resolvedCallChildren's call-scoping (callScopeMethods) filters
+    // a call child down to whichever change group is CURRENTLY active,
+    // regardless of granularity, using drillIntoChild's own fresh
+    // {change:0, gran:'group'} push — so a target child that only appears
+    // inside a LATER restored group (group:N, N>0) can never be found by the
+    // next relatedChildren(parent) lookup while that default group:0 cursor
+    // is still in effect. A restored 'line'/'call' cursor is deliberately NOT
+    // applied here (see this function's own doc comment above): that would
+    // flip THIS level's own relatedChildren into the hide-everything 'scoped'
+    // branch before the next path segment can be found under it.
+    const lvl = state.drill.length
+    const entry = drillCursorRefPending && drillCursorRefPending[lvl - 1]
+    if (entry && entry.gran === 'group') applyDrillCursorRestoreAt(lvl, parent)
   }
   state.drill.forEach((b, idx) => applyDrillCursorRestoreAt(idx + 1, b))
   // The deepest level also still honours the legacy `?dgran=`/`?dchg=` pair

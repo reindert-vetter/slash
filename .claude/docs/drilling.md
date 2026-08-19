@@ -120,6 +120,37 @@ travel along in the `/pr-overview` round trip
 (`overviewExitUrl()`/`treeUrl()`, see "`?sel=` travels along…" in
 `.claude/docs/pages-and-routing.md`).
 
+**Bug found and fixed: a two-level-deep restore could silently drop to one
+level, nondeterministically.** Reviewer report: "als ik in een onderliggende
+blok van een onderliggende blok refresh dan ga ik naar de bovenliggende
+blok" — a refresh at drill depth 2 sometimes landed one level shallower, with
+`?drill=`/`?dcur=` in the resulting URL silently truncated to the first
+segment. Root cause was narrower than the "`line`/`call` cursor applied too
+early" case the two-pass order above already guards against: a restored
+**`group`** cursor at a non-zero index (e.g. `group:1`) on an ANCESTOR level
+was, by design, deferred until after the whole path is walked — but that
+ancestor's own children are looked up (`relatedChildren(parent)` in the very
+next loop iteration) while its cursor still sits at the walk's default
+`group:0`. `relatedChildren`'s outer `scoped` guard only fires for `line`/
+`call`, so a relation-edge or test-coverage child is still found fine — but
+`resolvedCallChildren`'s OWN internal scoping (`callScopeMethods`, unconditional
+on granularity: it scopes to whichever change group is CURRENTLY active
+regardless of `line`/`call`/`group`) can filter a call-resolved child down to
+just group 0's rows. A target child whose call site only sits inside the
+group the restore actually wants (`group:1`) then isn't in
+`relatedChildren(parent)`'s candidate list yet, the next path segment isn't
+found, and the walk stops one level short — reproduced as genuinely
+nondeterministic against a real PR (roughly coin-flip, depending on whether
+the ancestor's own `/api/code` fetch happened to have already landed, which
+flips `resolvedCallChildren`'s scope from "not yet computable → unfiltered"
+to "computable → filtered to group 0"). Fixed in `applyDrillRefRestore`: right
+after `drillIntoChild` for a level, if that level's own
+`drillCursorRefPending` entry is a `group` cursor, apply it immediately (via
+`applyDrillCursorRestoreAt`) — BEFORE the next iteration resolves that level's
+children — rather than waiting for the second pass. A restored `line`/`call`
+cursor is still deliberately left for the second pass, for exactly the reason
+the two-pass order above documents.
+
 ## Column navigation: `state.focusLevel`
 
 **Every** column — the top-level block card and every drilled column — is a
