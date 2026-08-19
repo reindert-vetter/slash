@@ -106,6 +106,7 @@ import RelatedPanel, {
   retryClaudeTurn,
   claudeAnchorIsPlaceholder,
   convertClaudeAnchorToComment,
+  isChatAnchorPlaceholder,
   setClaudeMenuOpener,
   selectHighlightedClaudeOption,
   claudeChatShadowWarning,
@@ -6164,7 +6165,12 @@ async function deleteCommentAndSelectRow() {
 // the 2nd item (defaultSel), so "Resolve comment" stays the default Enter
 // action — EXCEPT for an AI finding (isAiComment), which has no resolve slot
 // at all and therefore opens on "Verwijder comment": deleting it immediately,
-// with no confirm step, is exactly what the reviewer asked for.
+// with no confirm step, is exactly what the reviewer asked for. A bare
+// Claude-chat anchor (isChatAnchorPlaceholder — no reviewer text was ever
+// typed, see claude-chat-panel.md) drops the same slot for the same reason:
+// there is no real reviewer comment here to resolve, only a conversation to
+// delete (reviewer request: "wil ik niet kunnen resolven, alleen kunnen
+// verwijderen").
 // This is already true regardless of who wrote the comment — unlike
 // prCommentCommandsFor below, this menu has no "Beantwoorden" item to reorder
 // (a block-scoped comment's reply field is always visible and typed into
@@ -6265,7 +6271,7 @@ function isAiComment(c) {
 function commentCommandsFor() {
   const focused = focusedComment()
   const items = []
-  if (!isAiComment(focused)) {
+  if (!isAiComment(focused) && !isChatAnchorPlaceholder(focused)) {
     items.push(
       isResolvedComment(focused)
         ? {

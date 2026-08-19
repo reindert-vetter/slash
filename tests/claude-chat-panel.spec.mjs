@@ -750,6 +750,24 @@ test('"Chat over deze regel" opens the Claude composer directly, keeps the comme
     await expect(item).toContainText('Nog geen eigen comment getypt')
     await expect(page.getByTestId('claude-message-body').last()).toContainText('Ik heb naar de code gekeken')
     expect(firstMsgReq.postDataJSON().body).toBe('Wat doet deze functie?')
+
+    // A bare Claude-chat anchor (no reviewer text ever typed) offers no
+    // Resolve/Unresolve item — reviewer request: "wil ik niet kunnen
+    // resolven, alleen kunnen verwijderen" (isChatAnchorPlaceholder,
+    // commentCommandsFor in home.mjs).
+    // Step back from the Claude composer to the comment ('←' on
+    // cs.focus === 'claude' → toComment(), see handleRelatedKey's 'claude'
+    // ArrowLeft branch — the anchor now exists, so this is not the
+    // no-anchor-yet toNewFocus() branch).
+    await page.keyboard.press('ArrowLeft')
+    await expect(page.getByTestId('reaction-compose')).toBeFocused()
+    await page.keyboard.press('Enter')
+    const menu = page.getByTestId('command-menu')
+    await expect(menu).toBeVisible()
+    await expect(menu).not.toContainText('Resolve comment')
+    await expect(menu).not.toContainText('Unresolve comment')
+    await expect(menu.getByTestId('command-row').filter({ hasText: 'Verwijder comment' })).toHaveCount(1)
+    await page.keyboard.press('Escape')
   } finally {
     // Never leave this real, non-mocked comment behind on the shared PR
     // 12903 fixture (see place-comment-return-focus.spec.mjs).

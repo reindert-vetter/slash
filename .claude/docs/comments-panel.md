@@ -591,6 +591,20 @@ block, and an ORPHANED one — the case in the report — is simply gone, its
 conversation with it. Accepted: it had no code left to point at. Test:
 `tests/comment-index-items.spec.mjs`.
 
+**And that bubble's own `Enter` menu (`commentCommandsFor`, `home.mjs`) offers
+no Resolve/Unresolve item either — reviewer request: "een chat met alleen een
+claude gesprek (zonder comment), wil ik niet kunnen resolven, alleen kunnen
+verwijderen".** There is no real reviewer comment behind it yet, so "resolving"
+it is meaningless; only "Verwijder comment" makes sense, same as the existing
+`isAiComment` exception right above it in that same function — `isAiComment(c)
+|| isChatAnchorPlaceholder(c)` both skip the resolve/unresolve slot, for two
+different reasons but the same visible effect. Once the reviewer actually types
+something (`convertClaudeAnchorToComment`/an ordinary reply), the body stops
+being the placeholder and the ordinary Resolve item comes back — this gate
+reads the comment's own body, not a sticky flag. `prCommentCommandsFor` (the
+comment-INDEX menu) needs no matching change: such an anchor never gets an
+index row at all (see above), so that menu is never opened for one.
+
 ### "Mentioned": an `@`-mention of the local reviewer ranks above everything
 
 A comment whose body — **or any of its replies** (`c.reactions`, where a mention
