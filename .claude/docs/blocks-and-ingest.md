@@ -435,6 +435,15 @@ share a category and thus a rank — the stable sort keeps them together.
 `sel`/refresh restore is unaffected (it looks up by block id/`file:line`, not
 index).
 
+**This category order is a display grouping only — it is deliberately NOT
+what a fresh open lands on.** `applyDefaultUnapprovedSelection` (`home.mjs`)
+picks the first not-yet-approved ORDINARY block by `(file, line)` — plain
+file order — rather than by this array's category order, so "open a
+just-generated PR" lands on the first block of the first-changed file, not on
+whichever category (e.g. CONTROLLER) happens to rank first. See that
+function's own doc comment in `home.mjs` for the tie-break and why comment
+items are unaffected.
+
 ### The HTTP layer matches on `Http/<Dir>/`, not on an `app/` prefix
 
 `CONTROLLER`/`REQUEST`/`RESOURCE` key on the `Http/Controllers/`,

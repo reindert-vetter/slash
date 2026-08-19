@@ -3454,17 +3454,29 @@ function revealSelectedIfHidden() {
 
 // applyDefaultUnapprovedSelection lands a genuinely fresh open (no ?sel=
 // restored at all — see hadSelParam in loadBlocks) on the first not-yet-
-// fully-approved item in state.blocks, in plain list order. Deliberately no
-// distinction between a top-level Start block and an underlying-code child
-// (recomputeLeftList/BlockList.mjs's renderList already treat them as one
-// flat, ordered list, and so does ↑/↓ via stepVisibleSelected) — whichever
-// comes first in that order wins. If every item is already fully approved
-// (or there are no blocks at all), there's nothing to select: instead land
-// the keyboard on the toggle-approved row (mirrors stepListSelection's own
-// ↓-past-the-end stop), provided that row actually exists
-// (toggleRowVisible). Called only from the load path, after
+// fully-approved item in state.blocks. Deliberately no distinction between a
+// top-level Start block and an underlying-code child (recomputeLeftList/
+// BlockList.mjs's renderList already treat them as one flat, ordered list,
+// and so does ↑/↓ via stepVisibleSelected) — either can win. If every item is
+// already fully approved (or there are no blocks at all), there's nothing to
+// select: instead land the keyboard on the toggle-approved row (mirrors
+// stepListSelection's own ↓-past-the-end stop), provided that row actually
+// exists (toggleRowVisible). Called only from the load path, after
 // loadApprovals/loadBlockStats have landed (see loadBlocks) — isFullyApproved
 // depends on state.approvalSummaries, which isn't known any earlier.
+//
+// Among ORDINARY blocks (defaultSelectionRank === 1) the tie-break is FILE
+// ORDER (smallest `(file, line)`), not state.blocks' own array order —
+// reviewer request: "als ik een gegenereerde PR open, wil ik naar eerste
+// aangepaste bestand toe". state.blocks is sorted by recomputeLeftList's
+// categoryRank (ROUTE, then CONTROLLER, then everything else — see "Sort
+// order of the left list" in .claude/docs/blocks-and-ingest.md), which is a
+// DISPLAY grouping, not "where a fresh open should land"; picking the
+// array-order winner used to land on whichever category ranked first (e.g. a
+// CONTROLLER touched near the end of the diff) instead of the first block of
+// the first-changed file. Comment items (rank -1/0/2) are UNAFFECTED — their
+// own tie-break stays plain array/display order, exactly as before; see
+// defaultSelectionRank's own comment for why that priority must not move.
 //
 // freshDefaultSelectionPending/freshDefaultSelectionAt back a RETRY of this
 // same pick once the PR-wide comment list (see
@@ -3503,11 +3515,23 @@ function defaultSelectionRank(b) {
 function applyDefaultUnapprovedSelection() {
   let idx = -1
   let bestRank = Infinity
+  let bestFile = null
+  let bestLine = Infinity
   state.blocks.forEach((b, i) => {
     if (isFullyApproved(state, b)) return
     const r = defaultSelectionRank(b)
     if (r < bestRank) {
       bestRank = r
+      bestFile = b.file
+      bestLine = b.line
+      idx = i
+      return
+    }
+    // Same rank: only ordinary blocks (rank 1) re-tie-break by file order —
+    // a comment tie keeps array/display order, untouched (see doc above).
+    if (r === bestRank && r === 1 && bestFile != null && (b.file < bestFile || (b.file === bestFile && b.line < bestLine))) {
+      bestFile = b.file
+      bestLine = b.line
       idx = i
     }
   })
