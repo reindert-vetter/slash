@@ -360,6 +360,13 @@ thread** — deliberately NOT the same action (changed on request so `→` mirro
 `→` on an ordinary block: it steps you *into* something). The menu itself is
 `prCommentCommandsFor` — see `.claude/docs/command-palette.md`.
 
+This section covers the **unanchored** case (a genuine PR-wide/orphan
+comment, nothing to drill into) — one `→` steps straight into its own thread,
+as below. A comment-index item that DOES resolve to a real block instead
+takes **two** `→` presses (first reveals the anchored diff's active-row
+highlight, second steps into its comments) — see "Only one thing reads as
+selected at a time" in `.claude/docs/comments-panel.md`.
+
 `→` (`enterPrCommentThread`, `RelatedPanel.mjs`) reuses the same
 `threadMessages`/`reactionBubble` rendering as the block-scoped thread, on its
 own ephemeral, non-URL-bound cursor (`pct`, see

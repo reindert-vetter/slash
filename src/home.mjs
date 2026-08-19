@@ -685,6 +685,19 @@ const state = reactive({
   // BlockList.mjs and "Only one thing reads as selected" in
   // .claude/docs/comments-panel.md. Ephemeral, like blockIndexEntered.
   indexHandedOff: false,
+  // commentAnchorEntered — the authoritative "has the reviewer pressed →
+  // once yet" bit for an anchored comment-index item's own drilled column
+  // (openCommentAnchorDrill). Reviewer request: "als ik 1 keer naar rechts
+  // ga, selecteer code, als ik 2 keer naar rechts ga selecteer dan eerste
+  // openstaande comment" — a single → used to jump straight into the
+  // comments (enterCommentsOrRelated), skipping the "just show the code as
+  // entered" stop every ordinary block gets. False the moment a (different)
+  // comment-index item is selected (reset alongside commentAnchorDrillFor,
+  // see the state.selected watch below) and true from the first → onward,
+  // regardless of whether relatedActive() has since become true too — see
+  // commentAnchorAwaitingEntry. Ephemeral, like indexHandedOff, not bound to
+  // the URL: a refresh re-requires the first →.
+  commentAnchorEntered: false,
   // descriptionExpanded — whether the PR description (Omschrijving) in the
   // PR-info column is shown in full or truncated (the default). Toggled by both
   // the "Toon volledige omschrijving"/"Omschrijving inklappen" PR-menu item and
@@ -1283,6 +1296,7 @@ function closeCommentAnchorDrillIfOwned() {
   state.drillCursor = []
   state.focusLevel = 0
   commentAnchorDrillFor = null
+  state.commentAnchorEntered = false
 }
 watch(
   () => state.selected,
@@ -1300,6 +1314,11 @@ watch(
       // is merely selected — a restored value here is never worth
       // preserving.
       leaveRelated()
+      // A genuinely new comment-index selection always starts back at
+      // "awaiting entry" — a stale commentAnchorEntered from the PREVIOUSLY
+      // selected comment item must not let this one's diff show highlighted
+      // before its own first →.
+      state.commentAnchorEntered = false
       // "As if the code were already fully expanded" for a comment anchored
       // to a real block — see openCommentAnchorDrill's own doc comment.
       // Reviewer request: this opens automatically while walking ↑/↓ through
@@ -2634,10 +2653,21 @@ function openCommentAnchorDrill(b) {
 // stack-length-scoped so drilling further IN from the anchor (a second,
 // ordinary child) still correctly identifies which single level is the
 // special one.
+//
+// Checked against `commentAnchorDrillFor` — the plain bookkeeping var
+// openCommentAnchorDrill/closeCommentAnchorDrillIfOwned already keep in sync
+// with "which item currently owns the ONE open drilled column" — rather than
+// re-deriving the anchor via a fresh `commentAnchorBlock(b.comment) ===
+// state.drill[0]` object-identity comparison on every call. The two SHOULD
+// always agree, but re-deriving on every read repeats a `state.allBlocks.find`
+// lookup and compares by reference — exactly the "snapshot by stable ID, not
+// identity" trap conventions.md warns about — for no benefit, since
+// commentAnchorDrillFor is already the authoritative, one-time-computed
+// answer.
 function isCommentAnchorDrillActive(level) {
   if (level !== 1) return false
   const b = curBlock()
-  return !!(b && b.kind === 'comment' && state.drill[0] === commentAnchorBlock(b.comment))
+  return !!(b && b.kind === 'comment' && commentAnchorDrillFor === b.id)
 }
 
 // commentAnchorColumnHidden reports whether the top-level block-column must
@@ -2669,8 +2699,19 @@ function commentAnchorColumnHidden() {
 // reads as selected. The cursor itself (state.drillCursor) is untouched: it
 // still points at the comment's own line, ready for the moment the reviewer
 // steps in, and commentScope keeps filtering the thread by it.
+//
+// Follow-up reviewer request: "als ik 1 keer naar rechts ga, selecteer code,
+// als ik 2 keer naar rechts ga selecteer dan eerste openstaande comment" — a
+// single → used to both un-suppress this highlight AND jump straight into the
+// comments in one step (enterCommentsOrRelated, see the ArrowRight branch in
+// onKeydown), which is exactly why the diff briefly read as "entered" and
+// "not entered" at once depending on timing. `state.commentAnchorEntered` is
+// now the one authoritative bit for "has the first → already happened" — set
+// by that same ArrowRight branch, independent of relatedActive() (which only
+// becomes true on the SECOND →, once enterCommentsOrRelated actually moves
+// the keyboard into the comment/thread).
 function commentAnchorAwaitingEntry(level) {
-  return isCommentAnchorDrillActive(level) && !relatedActive()
+  return isCommentAnchorDrillActive(level) && !relatedActive() && !state.commentAnchorEntered
 }
 
 // Keep state.indexHandedOff in sync — deps enumerated inline in the getter per
@@ -11905,8 +11946,16 @@ function onKeydown(e) {
     // - Anchored (commentAnchorBlock resolves): the anchor's block is
     //   already open as a drilled column (state.drill[0], opened
     //   automatically on selection by openCommentAnchorDrill — see its own
-    //   doc comment), but the keyboard never moved into it. → hands the
-    //   keyboard IN now, mirroring the state.mode==='diff' ArrowRight branch
+    //   doc comment), but the keyboard never moved into it, and its active
+    //   row stays un-highlighted (commentAnchorAwaitingEntry). Reviewer
+    //   request: "als ik 1 keer naar rechts ga, selecteer code, als ik 2
+    //   keer naar rechts ga selecteer dan eerste openstaande comment" — a
+    //   FIRST → only flips state.commentAnchorEntered, revealing the diff's
+    //   active-row highlight (mirroring the ordinary "step into the diff"
+    //   stop every other block gets) while the keyboard stays on the
+    //   sidebar list (↑/↓ keep walking the index, exactly as before this
+    //   →). Only a SECOND → (commentAnchorEntered already true) hands the
+    //   keyboard IN, mirroring the state.mode==='diff' ArrowRight branch
     //   above verbatim: lands on the first inline comment conversation if
     //   there is one and isn't already resolved, else the next open
     //   comment/Underlying code, else the embedded Claude column if one is
@@ -11924,8 +11973,12 @@ function onKeydown(e) {
     if (sc) {
       const anchor = commentAnchorBlock(sc)
       if (anchor) {
-        clearRangeAnchor()
-        enterCommentsOrRelated(state.pr)
+        if (!state.commentAnchorEntered) {
+          state.commentAnchorEntered = true
+        } else {
+          clearRangeAnchor()
+          enterCommentsOrRelated(state.pr)
+        }
       } else if (!isPrCommentThreadFocused(sc)) enterPrCommentThread(sc)
     } else enterDiff()
   } else if (e.key === 'ArrowLeft') {

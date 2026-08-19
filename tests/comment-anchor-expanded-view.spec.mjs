@@ -92,8 +92,12 @@ test.describe('a comment-index item anchored to a real block', () => {
     // The sidebar selection itself never moved off the comment row.
     await expect(row).toHaveClass(/bg-indigo-50/)
 
-    // ArrowRight hands the keyboard INTO the already-open, already-visible
-    // expanded view.
+    // A FIRST ArrowRight only reveals the diff as "entered" (see the
+    // dedicated highlight test below) — the keyboard stays on the sidebar
+    // and the comment item is still compact. Only a SECOND ArrowRight hands
+    // the keyboard INTO the already-open, already-visible expanded view.
+    await page.keyboard.press('ArrowRight')
+    await expect(item).toHaveAttribute('data-expanded', 'false')
     await page.keyboard.press('ArrowRight')
     await expect(item).toHaveAttribute('data-expanded', 'true')
   })
@@ -198,10 +202,20 @@ test.describe('a comment-index item anchored to a real block', () => {
     await expect(row.locator('text=›')).toHaveClass(/text-indigo-500/)
     await expect(drillColumn.locator('[data-change-active]')).toHaveCount(0)
 
-    // ArrowRight hands the keyboard in: now the column carries the selection
-    // and the row steps back to the grey, arrow-less "handed off" look.
+    // A FIRST ArrowRight only "selects the code": the active row lights up,
+    // but the sidebar keeps the keyboard (still the indigo selected look,
+    // not yet handed off) — reviewer request: "als ik 1 keer naar rechts ga,
+    // selecteer code, als ik 2 keer naar rechts ga selecteer dan eerste
+    // openstaande comment".
     await page.keyboard.press('ArrowRight')
     await expect(drillColumn.locator('[data-change-active]').first()).toBeVisible()
+    await expect(row).toHaveClass(/bg-indigo-50/)
+    await expect(row.locator('text=›')).toHaveClass(/text-indigo-500/)
+
+    // A SECOND ArrowRight hands the keyboard in: now the column carries the
+    // selection and the row steps back to the grey, arrow-less "handed off"
+    // look.
+    await page.keyboard.press('ArrowRight')
     await expect(row).not.toHaveClass(/bg-indigo-50/)
     await expect(row).toHaveClass(/bg-slate-100/)
     await expect(row.locator('text=›')).toHaveClass(/text-transparent/)

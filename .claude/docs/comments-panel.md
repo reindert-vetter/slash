@@ -295,19 +295,47 @@ sidebar row and a line in the column it had just opened. And its follow-up:
 "als ik een comment op regel naar rechts druk, dan moet in de blokken index de
 selectie op gray selected zijn."
 
-Two halves of one rule — whoever owns the arrows owns the selection:
+Two halves of one rule — whoever owns the arrows owns the selection. A
+follow-up reviewer request split the old single `→` into **two** steps: "als
+ik 1 keer naar rechts ga, selecteer code, als ik 2 keer naar rechts ga
+selecteer dan eerste openstaande comment" — a bare `→` used to both
+un-suppress the highlight AND jump straight into the comments
+(`enterCommentsOrRelated`) in one step, which is exactly why it could
+intermittently read as "already entered" (highlight showing) while the
+sidebar was still just being walked with `↑`/`↓`.
 
-- **Before `→`**: `commentAnchorAwaitingEntry(level)` (`home.mjs`,
-  `isCommentAnchorDrillActive(level) && !relatedActive()`) makes the drilled
-  column's `activeGroup` opt return `null`, so no unit is highlighted at all.
-  `state.drillCursor` is deliberately NOT touched — it still points at the
-  comment's own line, ready for the step in, and `commentScope` keeps
-  filtering the thread by it.
-- **After `→`**: the sidebar row switches to a grey, arrow-less "handed off"
+- **Before the first `→`**: `commentAnchorAwaitingEntry(level)` (`home.mjs`,
+  `isCommentAnchorDrillActive(level) && !relatedActive() &&
+  !state.commentAnchorEntered`) makes the drilled column's `activeGroup` opt
+  return `null`, so no unit is highlighted at all. `state.drillCursor` is
+  deliberately NOT touched — it still points at the comment's own line, ready
+  for the step in, and `commentScope` keeps filtering the thread by it.
+- **`state.commentAnchorEntered`** is the one authoritative bit for "has the
+  reviewer pressed `→` at least once already" — ephemeral, not URL-bound (like
+  `state.indexHandedOff`), reset to `false` whenever a genuinely different
+  comment-index item is selected (`closeCommentAnchorDrillIfOwned` and the
+  `state.selected` watch's own comment branch, `home.mjs`).
+- **The first `→`** (`commentAnchorEntered` still `false`) only flips that
+  flag: the diff's active-row highlight appears (mirrors the ordinary "step
+  into the diff" stop every other block gets — see the left→right chain in
+  `.claude/docs/keyboard-navigation.md`), but the keyboard stays on the
+  sidebar list — `↑`/`↓` keep walking the index exactly as before, and the row
+  stays the ordinary indigo "selected" look, not yet handed off.
+- **The second `→`** (`commentAnchorEntered` already `true`) hands the
+  keyboard IN via `enterCommentsOrRelated`, unchanged from before this split.
+  Only THEN does the sidebar row switch to a grey, arrow-less "handed off"
   look (`rowHandedOff`, `BlockList.mjs`). Per the colourblind rule the tint is
   not the signal: the `›` cursor marker goes transparent at the same time, so
   the difference is a SHAPE (arrow present or not) with the grey/indigo tint
   only reinforcing it.
+- **`isCommentAnchorDrillActive`** identifies "is this drilled column the
+  comment-anchor one" via the plain, already-authoritative
+  `commentAnchorDrillFor === b.id` bookkeeping var rather than re-deriving the
+  anchor block via a fresh `commentAnchorBlock(b.comment)` object-identity
+  comparison on every read — the same "snapshot by stable ID, not identity"
+  reasoning as `.claude/rules/conventions.md`'s own entry, applied here
+  defensively so a later `state.allBlocks`/`state.blocks` reassignment can
+  never silently desync the two and let the suppression above miss.
 
 `BlockList` learns this from **`state.indexHandedOff`**, kept by a small
 `watch` in `home.mjs` — not a direct `relatedActive()` call, because
