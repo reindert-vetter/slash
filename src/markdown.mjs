@@ -197,6 +197,119 @@ export function annotateFenceNumbers(text, startIndex = 0) {
   return { text: annotated, count: counter }
 }
 
+// Emphasis snarkdown applies but GitHub/CommonMark does NOT
+// ---------------------------------------------------------
+// snarkdown treats every `_`/`__`/`*`/`**`/`~~` it meets as an emphasis
+// delimiter, and its own `flush()` auto-CLOSES whatever is still open at the
+// end of the text. Two reviewer-reported bugs came straight out of that, both
+// on text nobody wrote as Markdown (an identifier inside a comment, an
+// AI-generated risk warning):
+//
+//   1. `payment_external_id` rendered as payment<em>external</em>id. An
+//      intra-word `_` is literal in CommonMark/GitHub — emphasis with `_`
+//      never starts or ends inside a word.
+//   2. "wat via __toString een volledige datum …" turned EVERYTHING from
+//      `toString` to the end of the comment bold: one unpaired `__` that
+//      snarkdown opens and never sees closed, then auto-closes at the very
+//      end. CommonMark leaves a delimiter that cannot pair as literal text.
+//
+// Both are fixed the same way: the offending delimiter characters are swapped
+// for a private-use placeholder BEFORE snarkdown sees them and swapped back
+// straight after (`restoreProtectedChars`), so they end up as plain, visible
+// text. Private-use codepoints on purpose: not Markdown-special, not
+// HTML-special, so they pass through `escapeHtml` and snarkdown untouched, and
+// the swap-back happens before `applyPlaceholders`, so a code fence's
+// Prism-highlighted HTML is never scanned for them.
+//
+// Deliberately NOT done: patching src/vendor/snarkdown.js (vendored verbatim,
+// see its header) or implementing CommonMark's full delimiter-run algorithm.
+// This is the flanking rule only — enough for both bugs above.
+const PROTECT = { _: '\uE000', '*': '\uE001', '~': '\uE002' }
+const PROTECTED_RE = /[\uE000-\uE002]/g
+const UNPROTECT = { '\uE000': '_', '\uE001': '*', '\uE002': '~' }
+
+// A private-use codepoint that came in with the source text itself would be
+// turned into a stray `_`/`*`/`~` by the swap-back, so drop it up front.
+function stripProtectedChars(text) {
+  return text.replace(PROTECTED_RE, '')
+}
+
+// Bug 1: an underscore run with an alphanumeric on BOTH sides is part of the
+// word (`payment_external_id`, `a__b`), never emphasis. `_id`/`id_` — only one
+// side alphanumeric — are deliberately left alone: those still take part in
+// ordinary emphasis pairing below, exactly as CommonMark's flanking rules
+// allow. `*` is untouched here, since CommonMark *does* allow intra-word `*`
+// emphasis.
+function protectIntraWordUnderscores(text) {
+  return text.replace(/([A-Za-z0-9])(_+)(?=[A-Za-z0-9])/g, (m, before, run) => before + PROTECT._.repeat(run.length))
+}
+
+// The scan for bug 2. An inline code span is consumed as one atom so a
+// delimiter inside it is skipped — snarkdown's own tokenizer gets to it first
+// too (its `` `([^`].*?)` `` alternative), so it never was emphasis. Kept in
+// step with that pattern: single line, at least one character.
+const EMPHASIS_SCAN_SOURCE = '`[^`\\n]+`|__|\\*\\*|[_*]|~~'
+// `* * *` is a horizontal rule and a leading `* ` is a list bullet — both are
+// consumed by an earlier alternative of snarkdown's tokenizer, so neutralising
+// them would break the rule/list instead of fixing anything.
+const HR_LINE_RE = /^[ \t]*\*([ \t]+\*)+[ \t]*$/
+const BLANK_RE = /^[ \t]*$/
+
+function isStructuralAsterisk(text, index, raw) {
+  if (raw[0] !== '*') return false
+  const start = text.lastIndexOf('\n', index - 1) + 1
+  let end = text.indexOf('\n', index)
+  if (end < 0) end = text.length
+  if (HR_LINE_RE.test(text.slice(start, end))) return true
+  return raw === '*' && BLANK_RE.test(text.slice(start, index)) && /^[ \t]/.test(text.slice(index + 1))
+}
+
+// neutralizeUnpairedEmphasis walks the delimiters in order and pairs them per
+// KIND (`__` only with `__`, `*` only with `*`, …) the way snarkdown's own
+// `context` stack does, but with CommonMark's flanking rule on top: a
+// delimiter can only OPEN when a non-space follows it and can only CLOSE when a
+// non-space precedes it. Whatever is left unpaired — a stack leftover or a
+// delimiter that can neither open nor close — becomes literal text.
+function neutralizeUnpairedEmphasis(text) {
+  const re = new RegExp(EMPHASIS_SCAN_SOURCE, 'g')
+  const tokens = []
+  let m
+  while ((m = re.exec(text))) {
+    const raw = m[0]
+    if (raw[0] === '`') continue
+    if (isStructuralAsterisk(text, m.index, raw)) continue
+    tokens.push({ index: m.index, raw })
+  }
+  if (!tokens.length) return text
+  const stacks = new Map()
+  const unpaired = new Set()
+  for (const tok of tokens) {
+    const nextCh = text[tok.index + tok.raw.length] || ''
+    const prevCh = text[tok.index - 1] || ''
+    const canOpen = nextCh !== '' && !/\s/.test(nextCh)
+    const canClose = prevCh !== '' && !/\s/.test(prevCh)
+    const stack = stacks.get(tok.raw) || []
+    stacks.set(tok.raw, stack)
+    if (canClose && stack.length) stack.pop()
+    else if (canOpen) stack.push(tok)
+    else unpaired.add(tok.index)
+  }
+  for (const stack of stacks.values()) for (const tok of stack) unpaired.add(tok.index)
+  if (!unpaired.size) return text
+  let out = ''
+  let cursor = 0
+  for (const tok of tokens) {
+    if (!unpaired.has(tok.index)) continue
+    out += text.slice(cursor, tok.index) + PROTECT[tok.raw[0]].repeat(tok.raw.length)
+    cursor = tok.index + tok.raw.length
+  }
+  return out + text.slice(cursor)
+}
+
+function restoreProtectedChars(html) {
+  return html.replace(PROTECTED_RE, (ch) => UNPROTECT[ch])
+}
+
 // Defense in depth: neutralise dangerous URL schemes in href/src attributes.
 const UNSAFE_SCHEME_RE = /^\s*(javascript|vbscript|data:text\/html):/i
 
@@ -291,7 +404,15 @@ export function renderMarkdown(text, startIndex = 0, truncate = false) {
   let src = String(text)
   src = extractCodeFences(src, store, startIndex, truncate)
   src = escapeHtml(src)
+  // Keep snarkdown away from the two emphasis cases it gets wrong (an
+  // intra-word `_`, an unpairable `**`/`__`) — see the block comment above
+  // `PROTECT`. The swap-back sits right after snarkdown and BEFORE
+  // applyPlaceholders, so a fence's Prism HTML is never touched.
+  src = stripProtectedChars(src)
+  src = protectIntraWordUnderscores(src)
+  src = neutralizeUnpairedEmphasis(src)
   let out = snarkdown(src)
+  out = restoreProtectedChars(out)
   out = applyPlaceholders(out, store)
   out = sanitizeUrls(out)
   out = enhanceImages(out)

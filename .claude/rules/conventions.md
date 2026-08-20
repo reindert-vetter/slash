@@ -85,6 +85,29 @@ safeHtmlString`) that adds three things:
    escape loose HTML in the source text, only the attribute values it builds
    itself — and link/image URLs additionally pass through `sanitizeUrls`, which
    neutralizes `javascript:`/`vbscript:`/`data:text/html`.
+4. Two pieces of emphasis snarkdown applies but GitHub/CommonMark does not.
+   snarkdown treats every `_`/`__`/`*`/`**`/`~~` as a delimiter and its own
+   `flush()` auto-CLOSES whatever is still open at the end of the text, which
+   produced two reviewer-reported bugs on text nobody wrote as Markdown: an
+   identifier `payment_external_id` rendered as payment*external*id, and one
+   unpaired `__` in an AI risk-warning body (`wat via __toString een …`) turned
+   the comment bold from there to its very end. `markdown.mjs` therefore swaps
+   the offending delimiter CHARACTERS for a private-use placeholder before
+   snarkdown sees them (`protectIntraWordUnderscores` — an underscore run with
+   an alphanumeric on **both** sides; `neutralizeUnpairedEmphasis` — a
+   delimiter that cannot pair under CommonMark's flanking rule: only a
+   non-space after it lets it open, only a non-space before it lets it close)
+   and swaps them back straight after snarkdown, before `applyPlaceholders`, so
+   a fence's Prism HTML is never scanned. Deliberate boundaries: `_id`/`id_`
+   (one side alphanumeric) are **left alone** and still pair normally, `*` may
+   still emphasize intra-word (CommonMark allows that), an inline code span is
+   skipped as one atom, and a leading `* ` bullet plus a `* * *` rule are
+   skipped so a list/rule keeps working. `src/vendor/snarkdown.js` stays
+   verbatim — don't "fix" this in the vendored file. Test:
+   `tests/markdown.spec.mjs` ("keeps an intra-word underscore and an unpaired
+   ** / __ literal, at every render point"), which asserts all three real
+   call-site argument shapes; every render point shares this because
+   `markdown.mjs` is the **only** importer of snarkdown.
 
 ### Fenced code blocks get a language badge, a running number, and a wider set of Prism grammars
 
