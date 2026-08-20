@@ -369,6 +369,22 @@ text), a **Description** section (PR body + optional Jira box), and review/CI
 pills at the bottom (same shapes as `overview.mjs`'s dark-zinc pills but in the
 light card theme: `bg-emerald-50`/`bg-rose-50`/`bg-amber-50`).
 
+**Two layers, and that split is load-bearing:** everything readable scrolls
+inside `pr-info-scroll` (which owns the card's `overflow-auto` and its `gap-3`),
+and the review/CI pills sit BELOW that scroller as a fixed card **footer**
+(`pr-info-statuses`, a `shrink-0` row behind a `border-t`). They used to be the
+scroller's last child with `mt-auto`, which is how a squeezed-flat
+`pr-info-body` could paint its text straight over them — *"die extra gegeven,
+labels enzo, laat dat als een footer van dat blok zien, dingen moeten niet over
+elkaar heen"* (see "Description truncation" below for the other half of that
+bug). Outside the scroller they also stay in view while the reviewer reads the
+blocks above them, and no block inside the scroller can reach them at all.
+Because the card itself no longer scrolls, `pr-info-scroll` is what
+`scrollIntoViewVertical`/`alignToTopVertical` (`RelatedPanel.mjs`) find as the
+first vertically scrolling ancestor — the keyboard scroll of the since-review /
+Omschrijving blocks rides on that walk, so keep the `overflow-auto` on exactly
+one of the two.
+
 The card reads **exclusively** `state.prMeta`/`state.pr`/`state.prUrl`/
 `state.jiraKey` — never `b.code` — so it never becomes a co-subscriber with the
 diff render (the "stuck on loading" pitfall,
@@ -463,7 +479,22 @@ collapsing something, so it fills whatever room is left above the status pills.
 `min-h-[4rem]` floor so an oversized Jira description below it (`shrink-0`,
 unbounded) can't squeeze it away; its inner `.markdown-body` swaps
 `h-full overflow-hidden` for no height constraint once expanded (the card itself
-scrolls then). **No DOM measurement:** the character count remains the sole
+scrolls then).
+
+**`flex-1` needs a floor and a clip, or it overlaps its neighbours.** `flex-1`
+is `flex: 1 1 0%`, so with a card whose content ALREADY overflows (Doel + three
+since-review blocks + an expanded commit list) there is no leftover space to
+fill and `min-h-0` let the block shrink to a ~40px sliver — while
+`pr-info-body-wrap`'s own `min-h-[4rem]` floor kept painting its text outside
+it, straight over the status pills. `pr-info-body` therefore carries
+`min-h-[6.5rem]` (that inner 4rem plus this block's own `p-2.5` and heading)
+**and** `overflow-hidden`, which makes the overlap structurally impossible
+regardless of layout. Same class of bug as the expanded body that was squeezed
+to ~20px as a plain flex item and got `shrink-0`. Regression test:
+`tests/pr-info-footer-overlap.spec.mjs` — it asserts measured geometry (the
+clipped visible bottom of the block vs. the pills' top, and that nothing inside
+the block paints below its own rect), because a class assertion cannot see an
+overlap. **No DOM measurement:** the character count remains the sole
 deterministic decision for "does the affordance exist", the browser's flex
 layout decides the height. Accepted edge case: a body just over 280 characters
 that happens to fit the (roomier) collapsed height still shows "meer…" with

@@ -13343,11 +13343,23 @@ function prMenuButton() {
   `
 }
 
+// prInfoCard is built in two layers: everything readable scrolls inside
+// `pr-info-scroll` (which owns the card's `overflow-auto` + `gap-3`), and the
+// status pills sit BELOW that scroller as a fixed card footer
+// (`pr-info-statuses`, a `shrink-0` row behind a `border-t`). They used to be
+// the last child inside the scroller with `mt-auto`, which is how a
+// squeezed-flat `pr-info-body` could paint its text straight over them
+// (reviewer: "die extra gegeven, labels enzo, laat dat als een footer van dat
+// blok zien, dingen moeten niet over elkaar heen"). Being outside the scroller
+// also keeps them in view while the reviewer reads/scrolls the blocks above.
 function prInfoCard(state) {
   return html`
     <div
       class="${() =>
-        'flex min-h-0 flex-col gap-3 overflow-auto rounded-2xl border bg-white dark:bg-zinc-900 p-5 shadow-sm ' +
+        // No `overflow-auto`/`gap-3` here any more: those moved to the inner
+        // pr-info-scroll area below, so the status pills can sit OUTSIDE the
+        // scroller as a real card footer (see prInfoStatusFooter).
+        'flex min-h-0 flex-col rounded-2xl border bg-white dark:bg-zinc-900 p-5 shadow-sm ' +
         // PR-wide comments no longer have their own card here — they're
         // navigable "Start" sidebar items instead, see recomputeLeftList/
         // commentBlockItem and detail-layout.md. The Tasks block (TasksPanel,
@@ -13376,6 +13388,7 @@ function prInfoCard(state) {
         openMenu('pr', { native: true, x: e.clientX, y: e.clientY })
       }}"
     >
+      <div class="flex min-h-0 flex-1 flex-col gap-3 overflow-auto" data-testid="pr-info-scroll">
       <div>
         <div class="flex items-start gap-2">
           <h1 class="min-w-0 flex-1 text-lg font-semibold leading-snug text-slate-900 dark:text-zinc-100" data-testid="pr-info-title">
@@ -13444,7 +13457,16 @@ function prInfoCard(state) {
       ${sinceReviewBlocks(state)}
       <div
         class="${() =>
-          'flex min-h-0 flex-col rounded-lg p-2.5 ' +
+          // `min-h-[6.5rem]` + `overflow-hidden`, never `min-h-0`: `flex-1`
+          // below means `flex: 1 1 0%`, so with a card whose content ALREADY
+          // overflows (Doel + three since blocks + an expanded commit list)
+          // there is no leftover space to fill and the block was squeezed to a
+          // ~40px sliver — while pr-info-body-wrap's own `min-h-[4rem]` floor
+          // kept painting its text straight over the status pills below
+          // (reported: "dingen moeten niet over elkaar heen"). The floor is
+          // that inner 4rem plus this block's own padding and heading; the
+          // clip makes overlap structurally impossible either way.
+          'flex min-h-[6.5rem] flex-col overflow-hidden rounded-lg p-2.5 ' +
           // Only claim the card's leftover vertical space while there's
           // actually something being collapsed — a short/empty body, or an
           // already-expanded long one, stays at its natural content height
@@ -13516,7 +13538,11 @@ function prInfoCard(state) {
                 ></div>`
             : html`<p class="shrink-0 text-[13px] text-slate-400 dark:text-zinc-500">geen omschrijving</p>`}
       </div>
-      <div class="mt-auto flex flex-wrap items-center gap-1.5 pt-1" data-testid="pr-info-statuses">
+      </div>
+      <div
+        class="mt-3 flex shrink-0 flex-wrap items-center gap-1.5 border-t border-slate-200 dark:border-zinc-800 pt-2.5"
+        data-testid="pr-info-statuses"
+      >
         ${() => prStatusSlot(state.prMeta)}
       </div>
     </div>
