@@ -6,11 +6,11 @@ import { test, expect, openNewComment } from './_fixtures.mjs'
 async function placeVia(page, body) {
   await openNewComment(page)
   await page.getByTestId('comment-compose').fill(body)
+  // An ordinary composer posts directly on "Plaats..." now (no comment-kind
+  // menu, see .claude/docs/command-palette.md) — this used to type "mijzelf"
+  // into the menu's search field to pick the (since-removed) "Alleen voor
+  // mijzelf" item; that whole extra step is gone.
   await page.getByTestId('comment-send').click()
-  await page.waitForTimeout(200)
-  await page.getByTestId('command-input').fill('mijzelf')
-  await page.waitForTimeout(150)
-  await page.keyboard.press('Enter')
   await page.waitForTimeout(800)
 }
 function item(page, body) {

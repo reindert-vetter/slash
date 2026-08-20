@@ -45,11 +45,10 @@ test('delayed code load + seeded comments: arrow orphan + list update', async ({
       .catch(() => {})
     const body = 'late ' + i
     await page.getByTestId('comment-compose').fill(body).catch(() => {})
+    // An ordinary composer posts directly on "Plaats..." now (no comment-kind
+    // menu, see .claude/docs/command-palette.md) — the old "type mijzelf,
+    // Enter" step picked the since-removed "Alleen voor mijzelf" item.
     await page.getByTestId('comment-send').click().catch(() => {})
-    await page.waitForTimeout(200)
-    await page.getByTestId('command-input').fill('mijzelf').catch(() => {})
-    await page.waitForTimeout(150)
-    await page.keyboard.press('Enter')
     await page.waitForTimeout(700)
     const listed = await page.getByTestId('inline-comments').getByTestId('comment-item').filter({ hasText: body }).count()
     console.log(`ITER ${i}: listed=${listed} errs=${errors.length} ${errors.length ? JSON.stringify([...new Set(errors)]) : ''}`)
