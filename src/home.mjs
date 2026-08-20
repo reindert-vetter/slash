@@ -3309,16 +3309,43 @@ watch(
 // remains in that direction, stays put on the current (already-visible)
 // selection rather than jumping into a trailing run of hidden blocks.
 function stepVisibleSelected(dir) {
+  return stepVisibleFrom(state.selected, dir)
+}
+
+// stepVisibleFrom is stepVisibleSelected's body with an explicit starting index,
+// so the same "which index does BlockList actually render a row for" rule can
+// answer a second question: which block the look-ahead PREVIEW card should show
+// (DetailPanel below). That preview used to read the RAW next index
+// (`i === sel + 1`) while every navigation path went through this scan, so a
+// hidden row directly after the selection was previewed under the diff even
+// though the index listed no such row and ↓ would never land on it — reported
+// bug: a resolved, ORPHANED comment about a file that is no longer in the PR at
+// all (its row hidden because "resolved == approved", see blockApproveCount's
+// comment branch + renderList's showApproved skip) rendered as a full card
+// stacked under an unrelated PHP test diff. Returns `from` itself when nothing
+// visible remains in that direction, exactly as before.
+function stepVisibleFrom(from, dir) {
   const last = state.blocks.length - 1
-  let i = state.selected
-  let candidate = i
+  let candidate = from
   for (;;) {
     candidate += dir
-    if (candidate < 0 || candidate > last) return i
+    if (candidate < 0 || candidate > last) return from
     const b = state.blocks[candidate]
     if (!state.showIgnored && isIgnoredComment(state, b)) continue
     if (state.showApproved || !isFullyApproved(state, b)) return candidate
   }
+}
+
+// previewIndexAfter names the state.blocks index the look-ahead preview card
+// shows: the next VISIBLE row after `sel` — i.e. exactly where ↓ lands
+// (stepVisibleSelected(1)) — or null when `sel` is the last visible row, in
+// which case there is nothing to preview. Product decision (explicit): the
+// preview stays equal to the ↓ target even when that target is a comment-index
+// item, so the card below the diff always means "this is the next stop" rather
+// than "the next diff".
+function previewIndexAfter(sel) {
+  const next = stepVisibleFrom(sel, 1)
+  return next === sel ? null : next
 }
 
 // lastVisibleIndex is the mirror-image scan of stepVisibleSelected: the last
@@ -14047,9 +14074,16 @@ function DetailPanel(state) {
           const selectedBlock = state.blocks[sel] || {}
           return [collapsedColumnHTML(selectedBlock, 0, 'block-collapsed').key('block-collapsed')]
         }
+        // The look-ahead preview is the next VISIBLE row, not the raw next
+        // index — the same scan ↓ uses (previewIndexAfter/stepVisibleFrom
+        // above), so the card stacked under the diff is always exactly the
+        // stop ↓ lands on. `null` when the selection is the last visible row:
+        // nothing to preview. See "The block column and its neighbour" in
+        // .claude/docs/detail-layout.md.
+        const previewIdx = previewIndexAfter(sel)
         const pair = state.blocks
           .map((b, i) => ({ b, i }))
-          .filter(({ i }) => i === sel || i === sel + 1)
+          .filter(({ i }) => i === sel || i === previewIdx)
         const out = []
         // Whether the ACTIVE (selected) card is one-sided (added/removed) — see
         // singleSide() in Block.mjs. Task 29: a look-ahead preview next to a
@@ -14127,7 +14161,7 @@ function DetailPanel(state) {
             // Only the ACTUALLY SELECTED row (i === sel, decision: "zodra een
             // class-rij geselecteerd is") gets the full, interactive
             // methodes-kolom + the active method's diff card. The
-            // look-ahead PREVIEW slot (i === sel + 1, the next sidebar row)
+            // look-ahead PREVIEW slot (previewIdx, the next VISIBLE row)
             // instead gets a small, dimmed summary card — mirrors how an
             // ordinary preview stays a compact Block() card rather than a
             // fully interactive one.

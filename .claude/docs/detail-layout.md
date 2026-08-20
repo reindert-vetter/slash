@@ -560,6 +560,31 @@ one-sided is always narrow regardless of `a`, since there's nothing to show next
 to it. Full width mechanics (the `a` cycle, `fit`, narrow viewport) live in
 `.claude/docs/diff-card.md`.
 
+### The look-ahead preview is the next VISIBLE row, i.e. the `↓` target
+
+`DetailPanel`'s `pair` resolves that second card through `previewIndexAfter`
+(`home.mjs`), which reuses the **same** scan `↓` itself walks
+(`stepVisibleFrom`, extracted out of `stepVisibleSelected` — see
+`.claude/docs/keyboard-navigation.md`), so it skips exactly the rows
+`BlockList.mjs`'s `renderList` hides: a fully-approved block and an ignored
+comment while `state.showApproved`/`showIgnored` are false. `null` when the
+selection is the last visible row → no preview card at all.
+
+It used to read the raw next index (`i === sel + 1`), so a hidden row directly
+after the selection was previewed even though the index listed no such row and
+`↓` would never land on it. Reported live (PR 13431): a **resolved, orphaned**
+comment about a file no longer in the PR ("verouderd — code verdwenen", see
+`prWideComments` in `.claude/docs/comments-panel.md`) rendered as a card under
+an unrelated PHP test diff — its row hidden because a comment item scores
+"resolved == approved" (`blockApproveCount`), the card previewed anyway.
+
+**Product decision (explicit): the preview stays equal to the `↓` target even
+when that target is a comment-index item.** So the card below the diff always
+means "this is the next stop", never "the next diff" — the alternative
+(previewing only real diff blocks) was rejected precisely because it would make
+the two disagree again, deliberately this time. Test:
+`tests/preview-next-visible-row.spec.mjs`.
+
 **Directly next to it** (not at the right screen edge) sits the **Underlying
 code** card (`RelatedPanel.mjs`'s default export, `data-testid=related-code`,
 `shrink-0`), stop 5/6 of the nav chain, inline in the same column flow. Its

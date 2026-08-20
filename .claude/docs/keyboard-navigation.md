@@ -499,7 +499,12 @@ all using the same `isFullyApproved` criterion as `renderList`:
 
 - **`↑`/`↓` skip it** (`stepVisibleSelected`, used by both the normal and the
   search-box-active branch). No visible block left in that direction → the
-  selection stays where it is rather than landing on the hidden tail.
+  selection stays where it is rather than landing on the hidden tail. Its body
+  now lives in `stepVisibleFrom(from, dir)` (an explicit starting index), so the
+  **look-ahead preview card** can ask the same question — "which row does `↓`
+  land on" — instead of previewing a raw `sel + 1` the index doesn't even show;
+  see "The look-ahead preview is the next VISIBLE row" in
+  `.claude/docs/detail-layout.md`.
 - **Load/refresh-restore → pin, don't unfold everything.** A restored
   `?sel=file:line` may point at a hidden block — that is the reviewer's own
   position, so `revealSelectedIfHidden` sets `state.pinnedApprovedId` to that

@@ -910,6 +910,16 @@ that tail identically — then the relative time (room `compactConversation`'s
 narrower card doesn't have). `commentFileChip` and the `COMMENT_KIND_LABEL`
 map are removed outright, not just unused — nothing else called them.
 
+**Only a row that is actually IN the index gets such a preview card.** The
+look-ahead slot resolves through `previewIndexAfter` (the `↓` target, see "The
+look-ahead preview is the next VISIBLE row" in
+`.claude/docs/detail-layout.md`), so a comment item whose row `renderList`
+hides — a RESOLVED one, since a comment scores "resolved == approved"
+(`blockApproveCount`), or an ignored one — is never previewed. Before that, a
+resolved **orphan** comment (`prWideComments` keeps it as an index item so it
+isn't invisible everywhere) showed up as a card under a completely unrelated
+block's diff, which read as "this comment belongs to this code".
+
 `preview` (`i !== sel || !focusedHere`) dims the look-ahead card like `Block()`'s
 own `preview` prop, and since this card replaces a `Block()` card in the same
 slot it gets the same on/off border (`border-slate-300` while `preview`,
