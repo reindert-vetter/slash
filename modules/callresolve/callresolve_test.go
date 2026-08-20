@@ -58,6 +58,60 @@ func TestUpsertGoPreservesLLMRows(t *testing.T) {
 	}
 }
 
+// A notfound row (the LLM looked and found nothing) survives a rebuild that
+// still reports the same call as unresolved — but a rebuild that CAN now pin it
+// statically still wins. Without the first half an answered call fell back to
+// unresolved on every rebuild, which left the frontend's "zoeken…" pill up
+// forever for a search nobody was running (reported on PR 13431) and made a
+// shifted unresolved set re-spend LLM budget; without the second half a real
+// static improvement would be suppressed forever.
+func TestUpsertGoNotfoundSurvivesUnresolvedButNotResolved(t *testing.T) {
+	m, err := Open(filepath.Join(t.TempDir(), "callresolve.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	ctx := context.Background()
+
+	caller := "1:a.php:A::build"
+	if err := m.UpsertGo(ctx, []Entry{
+		{PR: 1, CallerID: caller, CallKey: "getJson", Status: StatusUnresolved},
+		{PR: 1, CallerID: caller, CallKey: "helper", Status: StatusUnresolved},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The LLM gives up on both.
+	for _, key := range []string{"getJson", "helper"} {
+		if err := m.Save(ctx, Entry{PR: 1, CallerID: caller, CallKey: key, Status: StatusNotfound, Model: ModelHaiku}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// A later rebuild: getJson is still unpinnable, helper is now pinned.
+	if err := m.UpsertGo(ctx, []Entry{
+		{PR: 1, CallerID: caller, CallKey: "getJson", Status: StatusUnresolved},
+		{PR: 1, CallerID: caller, CallKey: "helper", Status: StatusResolved, ChildFile: "b.php", ChildClass: "B", ChildMethod: "helper"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	list, err := m.List(ctx, "", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byKey := map[string]Entry{}
+	for _, e := range list {
+		byKey[e.CallKey] = e
+	}
+	if e := byKey["getJson"]; e.Status != StatusNotfound || e.Model != ModelHaiku {
+		t.Fatalf("getJson = %+v, want the LLM's notfound row preserved against an incoming unresolved", e)
+	}
+	if e := byKey["helper"]; e.Status != StatusResolved || e.ChildMethod != "helper" {
+		t.Fatalf("helper = %+v, want the Go resolver's resolved row to win over notfound", e)
+	}
+}
+
 func TestPrune(t *testing.T) {
 	m, err := Open(filepath.Join(t.TempDir(), "callresolve.db"))
 	if err != nil {

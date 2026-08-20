@@ -6719,7 +6719,7 @@ function relatedWidthCls(chars, scale, subtractRem = 0) {
 // expression home.mjs's comment-claude-row uses for its own `hidden` class
 // (measured: that row is then 0px wide).
 //
-// Deliberately NOT gated on the "zoeken…" pill (searching()/pending() in
+// Deliberately NOT gated on the "zoeken…" pill (searching() in
 // RelatedPanel below): an unresolved call whose LLM search is still running is
 // the normal state for a test method full of framework calls, and waiting for
 // it would keep the dead 787px for as long as the search takes. If the search
@@ -7422,10 +7422,22 @@ export function TasksPanel(state, actions = {}) {
 // as its own diff column.
 export default function RelatedPanel(state, commentTarget, search) {
   const kids = () => rc.children
-  // Calls the Go resolver could not pin (status unresolved) + any in flight
-  // (searching). Both show the "zoeken…" spinner — the LLM search auto-runs.
+  // Calls/coverage targets the Go resolver could not pin (status unresolved) +
+  // any in flight (searching). The LLM search auto-runs for them, but ONLY a
+  // row that is really `searching` shows the "zoeken…" pill: `unresolved`
+  // means "the Go resolver couldn't pin this", which is not by itself a
+  // running action. A stuck-forever pill was a real reviewer report (PR 13431)
+  // — callresolve.UpsertGo used to reset an answered `notfound` row back to
+  // `unresolved` on every rebuild, while both search triggers correctly
+  // refused to re-ask (the deterministic resolve_call Run ID is idempotent and
+  // resolveCallAttempts remembers the attempt in the durable history), so the
+  // row sat at `unresolved` with nothing running and nothing under "Taken".
+  // A genuine search marks its rows `searching` before the LLM call (the
+  // markCallsSearching Activity), so the pill still shows for every real run —
+  // just one poll tick later than the old, over-eager `pending()` did. See
+  // "Automatic LLM search for unresolved calls" in
+  // .claude/docs/underlying-code.md.
   const unresolved = () => rc.unresolved
-  const pending = () => unresolved().filter((r) => r.status === 'unresolved').length
   const searching = () => unresolved().some((r) => r.status === 'searching')
   // coversWarning renders the "dekking niet te bepalen" line under the card
   // header's description when the focused block is a test with no usable
@@ -7486,7 +7498,7 @@ export default function RelatedPanel(state, commentTarget, search) {
             )
           : ''}
       ${() =>
-        searching() || pending() > 0
+        searching()
           ? html`<span
               class="absolute right-2 top-2 z-10 shrink-0 rounded-md border border-slate-200 dark:border-zinc-800 bg-white/90 dark:bg-zinc-900/90 px-2 py-1 text-[11px] text-slate-400 dark:text-zinc-500"
               data-testid="related-searching"
@@ -7509,7 +7521,7 @@ export default function RelatedPanel(state, commentTarget, search) {
           // regardless of class order (Tailwind orders side-specific
           // utilities after the shorthand in its generated stylesheet).
           'no-scrollbar flex min-h-0 flex-1 flex-col gap-2 overflow-auto p-3 pl-0 ' +
-          (searching() || pending() > 0 ? 'pt-9' : '')}"
+          (searching() ? 'pt-9' : '')}"
       >
         ${() => coversWarning()}
         ${() => {

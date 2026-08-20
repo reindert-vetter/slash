@@ -98,8 +98,15 @@ confidence, updated_at)`, PK `(pr, caller_id, call_key)`. The row carries the
 `searching`/`found`/`notfound` (LLM).
 
 - `UpsertGo` writes Go rows but **never overwrites** a `searching`/`found`
-  row → the LLM wins over a rebuild. It *does* reset a `notfound` row back to
-  `unresolved` (see `resolveCallAttempted` below for why that matters).
+  row → the LLM wins over a rebuild. A `notfound` row is protected **narrowly**:
+  an incoming `unresolved` (the Go resolver still can't pin it) leaves it alone,
+  an incoming `resolved` (a rebuild that *can* pin it now) still wins. It used
+  to reset `notfound` → `unresolved` unconditionally, which stranded answered
+  rows: the UI then showed a permanent "zoeken…" pill for a search nobody was
+  running, because both triggers correctly refuse to re-ask (see "The search
+  starts automatically server-side" below). `testcovers.UpsertGo` protects
+  `notfound` **unconditionally** — deliberately different, there is no better
+  static answer to let through for a class-level-only annotation.
 - `Prune(pr, keep)` removes any row whose `(caller_id, call_key)` isn't in the
   current Go scan (caller fell out of the PR, or the call site is no longer on
   a changed line) — including LLM rows, since the site is gone.
@@ -604,20 +611,37 @@ and the delta refresh), `autoStartResolveCall` groups the fresh scan's
 (bounded by `resolveCallSemaphore`, see above) — the reviewer needn't open a
 block first. **Fire-and-forget** (its own goroutine), so ingest never waits on
 a live claude call. `StartResolveCall` is **idempotent**
-(`resolveCallRunID` over `pr|callerId|sorted(calls)`), so the automatic trigger
-and the frontend's own `startCallSearch` safety net can never both spend a call.
+(`resolveCallRunID` over `pr|callerId|sorted(calls)` — plus `|attempt=N` from the
+second round on, see below), so the automatic trigger and the frontend's own
+`startCallSearch` safety net can never both spend a call.
 
-- **Never re-submits an already-attempted call, across any number of later
-  rebuilds:** `groupUnresolvedCalls` requires a call to be `unresolved` **and**
-  absent from `resolveCallAttempted(pr)` — the durable set of every
-  `(callerId, callKey)` that ever appeared in a `resolve_call` input, read from
-  the event history, **not** from the read model's status. Load-bearing:
-  `UpsertGo` resets a `notfound` row back to `unresolved` on every rebuild that
-  doesn't touch that call, so a DB snapshot could only distinguish "already
-  attempted" for the one rebuild right after a search. Accepted consequence:
-  such a row's status can keep cosmetically flipping to `unresolved` — the
-  guarantee is "never a second LLM call", not "the status reflects that it was
-  tried".
+- **At most one search plus one retry per call, ever** (`maxResolveCallAttempts`
+  = 2). `groupUnresolvedCalls` requires a call to be `unresolved` in the fresh
+  scan **and** to have fewer than that many attempts in
+  `resolveCallAttempts(pr)` — a **count** per `(callerId, callKey)` of every
+  `resolve_call` input it ever appeared in, read from the event history, **not**
+  from the read model's status (a status can be rewritten by a rebuild; the
+  history never forgets, across any number of rebuilds and any restart).
+- **The retry only fires for a STRANDED row**, never for an answered one:
+  besides the attempt count, `groupUnresolvedCalls` requires the **stored**
+  status (`storedCallStatuses`, a plain module read, taken after this rebuild's
+  own `UpsertGo`) to still be `unresolved`. The fresh Go scan reports every
+  unpinnable call as `unresolved` regardless of what the LLM answered, so
+  without that second condition each rebuild would hand *every* answered call a
+  second LLM pass. `notfound`/`found` (an answer survives, see `UpsertGo` above)
+  and `searching` (a run is in flight) are left alone.
+- **A retry needs its own Run ID, and that is the whole point.** A plain
+  resubmit of the same set is by design an idempotent no-op, which is exactly
+  why stranded rows could never repair themselves. `ResolveCallInput.Attempt`
+  (the search *generation*) therefore joins `resolveCallRunID`'s key — **only
+  when > 0**, so a generation-0 ID stays byte-identical to every ID minted
+  before the field existed (an answered call must not silently re-run).
+  Calls are grouped per `(callerId, generation)` so every call in one input
+  truthfully shares that input's `Attempt`.
+- **The retry lands on the next relations build of that PR**, not on a page
+  load: reading the attempt counts walks the whole event history, which is far
+  too heavy for the HTTP path. Deliberate choice (reviewer-approved) — the
+  frontend trigger stays generation-0 only.
 - **Deliberately server-only:** the headless twin `slash relations <pr>`
   bypasses the engine entirely and starts no search; such a PR relies on the
   frontend trigger once a server is running.
@@ -812,8 +836,10 @@ likewise carries the full child descriptor + code text.
   side: a tested method that is a PR block is always changed, primary reviewable
   code, so a test must never make it disappear. A **warning**
   (`related-covers-warning`) shows for an `unannotated` row, or a `notfound` one
-  after a failed search, with different text per case; the "searching…"
-  indicator reuses callresolve's own helpers, and the search starts
+  after a failed search, with different text per case; the "zoeken…" indicator
+  reuses callresolve's own helpers (so it too shows only for a `searching` row,
+  never for a merely `unresolved` one — see "Automatic LLM search for unresolved
+  calls" in `.claude/docs/underlying-code.md`), and the search starts
   automatically from the same `setRelated` watch.
 - Tests: `testcovers_analysis_test.go`, `resolve_test_covers_test.go`,
   `modules/testcovers/testcovers_test.go`, `tests/testcovers.spec.mjs` (seeded

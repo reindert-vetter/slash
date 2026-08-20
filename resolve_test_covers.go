@@ -39,8 +39,8 @@ func resolveTestCoversRunID(in ResolveTestCoversInput) string {
 // resolve_test_covers Execution's input for this PR
 // (resolveTestCoversAttempted, workflows.go — reads the durable workflow
 // event history, not the testcovers read-model's own status column, for the
-// same reason groupUnresolvedCalls does: UpsertGo resets a notfound row back
-// to unresolved on every rebuild that doesn't touch it). A test whose block id
+// same reason groupUnresolvedCalls does: a read-model status can be rewritten
+// by a rebuild, while the history never forgets). A test whose block id
 // isn't in blocks is skipped (defensive). Pure and deterministic, so it's
 // directly unit-testable without the engine/goroutine, mirroring
 // groupUnresolvedCalls.

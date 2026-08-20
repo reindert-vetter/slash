@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -306,10 +308,10 @@ func mustCallresolveList(t *testing.T, cr *callresolve.Module, pr int) []callres
 // --- groupUnresolvedCalls (pure, no engine/goroutine) ---
 
 // One start per caller: a resolved call is excluded (not Unresolved), a call
-// whose caller block isn't in blocks is skipped, and a call already submitted
-// to a resolve_call Execution before (via attempted — a durable, ever-tried
-// set, see resolveCallAttempted) is skipped too — a rebuild must never
-// resubmit a call the LLM already attempted.
+// whose caller block isn't in blocks is skipped, and a call that already used
+// up its search plus its one retry round (attempts >= maxResolveCallAttempts,
+// counted from the durable history — see resolveCallAttempts) is skipped too:
+// a rebuild must never keep resubmitting the same call.
 func TestGroupUnresolvedCalls(t *testing.T) {
 	callerA := Block{PR: 1, File: "app/Services/A.php", Class: "A", Name: "run"}
 	callerB := Block{PR: 1, File: "app/Services/B.php", Class: "B", Name: "go"}
@@ -323,11 +325,11 @@ func TestGroupUnresolvedCalls(t *testing.T) {
 		// No block for this caller id — must be skipped defensively.
 		{PR: 1, CallerID: "1:app/Ghost.php:Ghost::boo", CallKey: "gone", Status: callresolve.StatusUnresolved},
 	}
-	attempted := map[string]bool{
-		callerB.ID() + "\x1f" + "w": true, // already tried before — skip
+	attempts := map[string]int{
+		callerB.ID() + "\x1f" + "w": maxResolveCallAttempts, // search + retry used up — skip
 	}
 
-	got := groupUnresolvedCalls(1, calls, attempted, blocks)
+	got := groupUnresolvedCalls(1, calls, attempts, nil, blocks)
 	if len(got) != 1 {
 		t.Fatalf("groupUnresolvedCalls returned %d group(s), want 1: %+v", len(got), got)
 	}
@@ -340,17 +342,122 @@ func TestGroupUnresolvedCalls(t *testing.T) {
 	}
 }
 
-// A call that was never attempted before (absent from attempted) stays
-// eligible, even if it's the only call for its caller.
+// A call that was never attempted before (absent from attempts) stays
+// eligible, even if it's the only call for its caller, and is generation 0.
 func TestGroupUnresolvedCallsKeepsNeverAttemptedCall(t *testing.T) {
 	caller := Block{PR: 1, File: "app/Services/A.php", Class: "A", Name: "run"}
 	calls := []callresolve.Entry{
 		{PR: 1, CallerID: caller.ID(), CallKey: "x", Status: callresolve.StatusUnresolved},
 	}
 
-	got := groupUnresolvedCalls(1, calls, map[string]bool{}, []Block{caller})
+	got := groupUnresolvedCalls(1, calls, map[string]int{}, nil, []Block{caller})
 	if len(got) != 1 || len(got[0].Calls) != 1 || got[0].Calls[0] != "x" {
 		t.Fatalf("groupUnresolvedCalls = %+v, want one group with call x", got)
+	}
+	if got[0].Attempt != 0 {
+		t.Fatalf("group.Attempt = %d, want 0 (first pass keeps the historical Run ID)", got[0].Attempt)
+	}
+}
+
+// A call that had its FIRST pass already (attempts == 1, still below the cap)
+// gets exactly one retry round, in its OWN group and generation: mixing it with
+// a never-searched call of the same caller would misreport one of the two
+// Attempts, and the retry needs its own generation to escape the deterministic
+// Run ID's idempotent no-op (the very reason a stale 'unresolved' row used to
+// keep the "zoeken…" pill up forever — see maxResolveCallAttempts).
+func TestGroupUnresolvedCallsRetriesOncePerGeneration(t *testing.T) {
+	caller := Block{PR: 1, File: "app/Services/A.php", Class: "A", Name: "run"}
+	calls := []callresolve.Entry{
+		{PR: 1, CallerID: caller.ID(), CallKey: "tried", Status: callresolve.StatusUnresolved},
+		{PR: 1, CallerID: caller.ID(), CallKey: "fresh", Status: callresolve.StatusUnresolved},
+	}
+	attempts := map[string]int{caller.ID() + "\x1f" + "tried": 1}
+	// Stranded: its earlier attempt left no answer behind.
+	stored := map[string]string{
+		caller.ID() + "\x1f" + "tried": callresolve.StatusUnresolved,
+		caller.ID() + "\x1f" + "fresh": callresolve.StatusUnresolved,
+	}
+
+	got := groupUnresolvedCalls(1, calls, attempts, stored, []Block{caller})
+	if len(got) != 2 {
+		t.Fatalf("groupUnresolvedCalls returned %d group(s), want 2 (one per generation): %+v", len(got), got)
+	}
+	byAttempt := map[int][]string{}
+	for _, g := range got {
+		if g.CallerID != caller.ID() {
+			t.Fatalf("group caller = %q, want %q", g.CallerID, caller.ID())
+		}
+		byAttempt[g.Attempt] = g.Calls
+	}
+	if want := []string{"tried"}; len(byAttempt[1]) != 1 || byAttempt[1][0] != want[0] {
+		t.Fatalf("generation 1 calls = %v, want %v", byAttempt[1], want)
+	}
+	if want := []string{"fresh"}; len(byAttempt[0]) != 1 || byAttempt[0][0] != want[0] {
+		t.Fatalf("generation 0 calls = %v, want %v", byAttempt[0], want)
+	}
+	// And the retry really is a different Execution than its own first pass.
+	first := ResolveCallInput{PR: 1, CallerID: caller.ID(), Calls: []string{"tried"}}
+	retry := ResolveCallInput{PR: 1, CallerID: caller.ID(), Calls: []string{"tried"}, Attempt: 1}
+	if resolveCallRunID(first) == resolveCallRunID(retry) {
+		t.Fatal("retry Run ID equals the first pass's — StartWorkflowID would dedup it into a no-op")
+	}
+}
+
+// The cap is absolute: a pair that used up its search plus its retry is never
+// submitted again, however many rebuilds follow.
+func TestGroupUnresolvedCallsStopsAtTheAttemptCap(t *testing.T) {
+	caller := Block{PR: 1, File: "app/Services/A.php", Class: "A", Name: "run"}
+	calls := []callresolve.Entry{
+		{PR: 1, CallerID: caller.ID(), CallKey: "x", Status: callresolve.StatusUnresolved},
+	}
+	attempts := map[string]int{caller.ID() + "\x1f" + "x": maxResolveCallAttempts}
+
+	stored := map[string]string{caller.ID() + "\x1f" + "x": callresolve.StatusUnresolved}
+	if got := groupUnresolvedCalls(1, calls, attempts, stored, []Block{caller}); len(got) != 0 {
+		t.Fatalf("groupUnresolvedCalls = %+v, want no group at all (cap reached)", got)
+	}
+}
+
+// An already-searched call whose ANSWER still stands is not retried, even though
+// this rebuild's Go scan reports it as unresolved again (the scan knows nothing
+// about the LLM's verdict). Only a stranded row — stored status still
+// 'unresolved' — gets the extra round; without this the retry would hand every
+// answered call in the PR a second LLM pass on the next rebuild.
+func TestGroupUnresolvedCallsSkipsAnsweredCalls(t *testing.T) {
+	caller := Block{PR: 1, File: "app/Services/A.php", Class: "A", Name: "run"}
+	calls := []callresolve.Entry{
+		{PR: 1, CallerID: caller.ID(), CallKey: "answered", Status: callresolve.StatusUnresolved},
+		{PR: 1, CallerID: caller.ID(), CallKey: "inflight", Status: callresolve.StatusUnresolved},
+		{PR: 1, CallerID: caller.ID(), CallKey: "stranded", Status: callresolve.StatusUnresolved},
+	}
+	attempts := map[string]int{
+		caller.ID() + "\x1f" + "answered": 1,
+		caller.ID() + "\x1f" + "inflight": 1,
+		caller.ID() + "\x1f" + "stranded": 1,
+	}
+	stored := map[string]string{
+		caller.ID() + "\x1f" + "answered": callresolve.StatusNotfound,
+		caller.ID() + "\x1f" + "inflight": callresolve.StatusSearching,
+		caller.ID() + "\x1f" + "stranded": callresolve.StatusUnresolved,
+	}
+
+	got := groupUnresolvedCalls(1, calls, attempts, stored, []Block{caller})
+	if len(got) != 1 || len(got[0].Calls) != 1 || got[0].Calls[0] != "stranded" {
+		t.Fatalf("groupUnresolvedCalls = %+v, want only the stranded call", got)
+	}
+	if got[0].Attempt != 1 {
+		t.Fatalf("group.Attempt = %d, want 1 (the retry generation)", got[0].Attempt)
+	}
+}
+
+// Generation 0 must keep hashing exactly like it did before the Attempt field
+// existed: an already-answered call may never silently re-run because its Run
+// ID moved. Asserted against the literal key resolveCallRunID has always used.
+func TestResolveCallRunIDGenerationZeroIsUnchanged(t *testing.T) {
+	in := ResolveCallInput{PR: 7, CallerID: "7:app/A.php:A::run", Calls: []string{"b", "a"}}
+	sum := sha256.Sum256([]byte("7|7:app/A.php:A::run|a,b"))
+	if want := "rslv-" + hex.EncodeToString(sum[:12]); resolveCallRunID(in) != want {
+		t.Fatalf("resolveCallRunID = %q, want the pre-Attempt %q", resolveCallRunID(in), want)
 	}
 }
 
@@ -394,12 +501,12 @@ func autoResolveCallManager(t *testing.T, dataDir string, fake *claude.Fake) (*T
 // (a) EnsureRelations (the buildRelations Activity) starts a search for a
 // Go-unresolved call automatically, without the frontend ever calling
 // POST /api/workflows/resolve_call. (b) A rebuild with nothing changed never
-// re-spends an LLM call — even though the call ended up "notfound" and
-// UpsertGo resets a notfound row back to "unresolved" on that very rebuild;
-// resolveCallAttempted's durable, history-based set (not the callresolve
-// read-model's own fluctuating status) is what prevents the resubmit, and it
-// keeps holding across further rebuilds too, not just the one right after a
-// search. (c) A genuinely new unresolved call that appears after an edit gets
+// re-spends an LLM call — even though this rebuild's Go scan reports the same
+// call as unresolved all over again (it knows nothing about the LLM's verdict);
+// resolveCallAttempts' durable, history-based count plus the stored row's
+// surviving "notfound" (see groupUnresolvedCalls' retry rule and
+// callresolve.UpsertGo) are what prevent the resubmit, and they keep holding
+// across further rebuilds too, not just the one right after a search. (c) A genuinely new unresolved call that appears after an edit gets
 // its own fresh search, while the already-searched calls are left alone.
 //
 // writeCallFixtureRepo's OrderService::build has TWO Go-unresolved calls
@@ -438,9 +545,9 @@ func TestAutoStartResolveCallOnBuildRelations(t *testing.T) {
 	}
 
 	// Rebuild with nothing changed: the Go rescan still emits "fetch"/"query"
-	// as unresolved (it doesn't know about the DB's LLM state) and UpsertGo
-	// resets both notfound rows back to unresolved — but the auto-trigger
-	// must not search either one again.
+	// as unresolved (it doesn't know about the DB's LLM state), but UpsertGo
+	// keeps both stored rows at notfound and the auto-trigger must not search
+	// either one again — not on this rebuild and not on any later one.
 	m.EnsureRelations(ctx, "", pr)
 	// Nothing SHOULD happen here (both calls were already attempted), so there
 	// is no positive condition to poll for — give any (wrongly re-triggered)
@@ -471,14 +578,73 @@ func TestAutoStartResolveCallOnBuildRelations(t *testing.T) {
 		e, ok := findEntry(mustCallresolveList(t, cr, pr), "fetchNew")
 		return ok && e.Status == callresolve.StatusNotfound
 	})
-	// Exactly one more claude call — for "fetchNew" only. "fetch"/"query"
-	// legitimately show "unresolved" again in the read-model at this point
-	// (this build's own UpsertGo just reset them, same as after the no-op
-	// rebuild above) — that's cosmetic, pre-existing UpsertGo behavior; the
-	// actual guarantee under test is that they were NOT resubmitted to the
-	// LLM, which the call count below proves.
+	// Exactly one more claude call — for "fetchNew" only. "fetch"/"query" keep
+	// their stored notfound through this rebuild as well, so they are neither
+	// resubmitted nor visually stuck on "unresolved" (which is what used to
+	// leave the frontend's "zoeken…" pill up forever, see
+	// maxResolveCallAttempts).
 	if n := fake.CallCount(); n != 3 {
 		t.Fatalf("claude called %d time(s) after the new call appeared, want 3 (only the new call searched)", n)
+	}
+	for _, key := range []string{"fetch", "query"} {
+		if e, ok := findEntry(mustCallresolveList(t, cr, pr), key); !ok || e.Status != callresolve.StatusNotfound {
+			t.Fatalf("%s entry = %+v, want its notfound answer preserved across rebuilds", key, e)
+		}
+	}
+}
+
+// A row STRANDED at unresolved — already submitted to a resolve_call Execution,
+// but with no answer left in the read-model — gets exactly ONE extra search
+// round on the next relations build, and then never again. This is the repair
+// path for the rows an older UpsertGo dropped back to unresolved after they had
+// already been answered: the deterministic Run ID makes a plain resubmit an
+// idempotent no-op, so the retry only happens because it runs under its own
+// generation (ResolveCallInput.Attempt, see resolveCallRunID).
+func TestAutoStartResolveCallRetriesAStrandedRowOnce(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 211
+	writeCallFixtureRepo(t, dataDir, pr)
+	caller := Block{PR: pr, File: "app/Services/OrderService.php", Class: "OrderService", Name: "build", Side: SideNew, Status: StatusModified}
+
+	fake := claude.NewFake() // no programmed output → every search ends in "notfound"
+	m, db, cr := autoResolveCallManager(t, dataDir, fake)
+	if err := replacePRBlocks(db, "", pr, []Block{caller}); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	m.EnsureRelations(ctx, "", pr) // first pass: fetch + query
+	waitFor(t, func() bool {
+		e, ok := findEntry(mustCallresolveList(t, cr, pr), "fetch")
+		return ok && e.Status == callresolve.StatusNotfound
+	})
+	if n := fake.CallCount(); n != 2 {
+		t.Fatalf("claude called %d time(s) after the first build, want 2", n)
+	}
+
+	// Strand both rows exactly like the old UpsertGo did: their answer is gone,
+	// while the workflow history still remembers the attempt. Written through
+	// Save (the LLM-owned path) because UpsertGo now protects a notfound row
+	// against precisely this incoming unresolved.
+	for _, key := range []string{"fetch", "query"} {
+		if err := cr.Save(ctx, callresolve.Entry{PR: pr, CallerID: caller.ID(), CallKey: key, Status: callresolve.StatusUnresolved}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Next build: one retry round for both stranded calls.
+	m.EnsureRelations(ctx, "", pr)
+	waitFor(t, func() bool { return fake.CallCount() == 4 })
+	waitFor(t, func() bool {
+		e, ok := findEntry(mustCallresolveList(t, cr, pr), "fetch")
+		return ok && e.Status == callresolve.StatusNotfound
+	})
+
+	// And the round really was the LAST one: another build changes nothing.
+	m.EnsureRelations(ctx, "", pr)
+	time.Sleep(50 * time.Millisecond)
+	if n := fake.CallCount(); n != 4 {
+		t.Fatalf("claude called %d time(s) after a further rebuild, want still 4 (the retry is granted once)", n)
 	}
 }
 

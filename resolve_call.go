@@ -284,63 +284,125 @@ func clip(s string, n int) string {
 // client sent). The raw key contains slashes/colons (a caller ID embeds a file
 // path), so it's hashed rather than embedded — Run IDs double as JSONL store
 // filenames.
+//
+// in.Attempt (the search generation, see maxResolveCallAttempts) joins the key
+// only when it is > 0, so a generation-0 ID stays byte-identical to every Run
+// ID minted before that field existed — the hash-stability requirement
+// repos.go documents for exactly this reason. That single suffix is what makes
+// the one extra retry round possible at all: re-asking the same call set is
+// otherwise, by design, an idempotent no-op.
 func resolveCallRunID(in ResolveCallInput) string {
 	calls := append([]string(nil), in.Calls...)
 	sort.Strings(calls)
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%d|%s|%s", in.PR, in.CallerID, strings.Join(calls, ","))))
+	key := fmt.Sprintf("%d|%s|%s", in.PR, in.CallerID, strings.Join(calls, ","))
+	if in.Attempt > 0 {
+		key = fmt.Sprintf("%s|attempt=%d", key, in.Attempt)
+	}
+	sum := sha256.Sum256([]byte(key))
 	return "rslv-" + hex.EncodeToString(sum[:12])
 }
 
+// maxResolveCallAttempts caps how many times ONE (callerId, callKey) pair may
+// ever be submitted to a resolve_call Execution: 2, i.e. the original pass plus
+// exactly one retry round. The retry exists because a `notfound` answer used to
+// be forgotten by callresolve.UpsertGo on every rebuild (see its doc comment),
+// leaving rows sitting at `unresolved` with no run left that would ever pick
+// them up again — the frontend then showed a permanent "zoeken…" pill for a
+// search nobody was running (reported on PR 13431). Those rows are given one
+// more, deliberately paid-for LLM pass; with UpsertGo now preserving
+// `notfound`, that answer sticks and the pair never returns here.
+//
+// The cap is what keeps this bounded instead of turning every rebuild into a
+// fresh round: it is counted from the durable workflow history
+// (resolveCallAttempts, workflows.go), so it survives a restart and cannot be
+// reset by a read-model rewrite. Raising it later is a one-constant change,
+// and each new generation gets its own Run ID (resolveCallRunID above).
+const maxResolveCallAttempts = 2
+
 // groupUnresolvedCalls turns the Go resolver's freshly scanned entries into one
-// ResolveCallInput per caller — the payload the automatic server-side search
-// trigger (autoStartResolveCall, workflows.go) starts a resolve_call Execution
-// for. Only a call that is currently Unresolved AND was never submitted to a
-// resolve_call Execution before is included: attempted is the set of every
-// (callerId, callKey) pair that has EVER appeared in a resolve_call
-// Execution's input for this PR (resolveCallAttempted, workflows.go — reads
-// the durable workflow event history, not the callresolve read-model's own
-// status column). That distinction matters because UpsertGo resets a
-// notfound row back to unresolved on every rebuild that doesn't touch that
-// call (it only protects searching/found, see its own doc comment) — a
-// snapshot of the DB's OWN status would only catch the very next rebuild
-// after a search, not one further down the line, since nothing writes it back
-// to notfound in between. The event history never forgets, so this holds
-// across any number of rebuilds. A caller whose block id isn't in blocks
-// (defensive — should not happen, Prune keeps callresolve's callers in
-// lockstep with the PR's blocks) is skipped. Pure and deterministic, so it's
-// directly unit-testable without the engine/goroutine.
-func groupUnresolvedCalls(pr int, calls []callresolve.Entry, attempted map[string]bool, blocks []Block) []ResolveCallInput {
+// ResolveCallInput per caller AND search generation — the payload the automatic
+// server-side search trigger (autoStartResolveCall, workflows.go) starts a
+// resolve_call Execution for. A call is included when it is currently
+// Unresolved and has been submitted to a resolve_call Execution FEWER than
+// maxResolveCallAttempts times: attempts counts, per (callerId, callKey), how
+// often that pair has appeared in a resolve_call Execution's input for this PR
+// (resolveCallAttempts, workflows.go — reads the durable workflow event
+// history, not the callresolve read-model's own status column). The history is
+// the right source because it never forgets: a read-model status can be
+// rewritten by a rebuild, and it was exactly such a rewrite (UpsertGo dropping
+// an answered notfound back to unresolved, since fixed narrowly — see its doc
+// comment) that stranded rows at unresolved with no run left to pick them up.
+//
+// A pair's own count becomes the group's Attempt, which resolveCallRunID folds
+// into the Run ID — so the retry round is a real, separate Execution while
+// re-asking the SAME generation stays the idempotent no-op it has always been.
+// Calls are therefore grouped per (callerId, generation), not just per caller:
+// every call in one input then truthfully shares that input's Attempt, which is
+// what the next run's count reads back.
+//
+// The retry is deliberately narrow: an already-attempted call is only re-asked
+// when the STORED row (stored: the read-model's current status per pair, keyed
+// the same way as attempts) is still `unresolved` — i.e. genuinely STRANDED,
+// with no answer to show for its earlier attempt. `calls` is this rebuild's
+// fresh Go scan, which reports every unpinnable call as unresolved regardless
+// of what the LLM already answered, so without the stored status a rebuild
+// would hand EVERY answered call a second LLM pass instead of only the ones
+// that lost their answer. A row that is `notfound`/`found` (an answer survives,
+// see callresolve.UpsertGo) or `searching` (a run is in flight) is left alone.
+// A never-attempted call needs no stored row at all — UpsertGo has just written
+// it as unresolved anyway.
+//
+// A caller whose block id isn't in blocks (defensive — should not happen, Prune
+// keeps callresolve's callers in lockstep with the PR's blocks) is skipped.
+// Pure and deterministic (map iteration never drives the output order — `order`
+// does), so it's directly unit-testable without the engine/goroutine.
+func groupUnresolvedCalls(pr int, calls []callresolve.Entry, attempts map[string]int, stored map[string]string, blocks []Block) []ResolveCallInput {
 	byID := make(map[string]Block, len(blocks))
 	for _, b := range blocks {
 		byID[b.ID()] = b
 	}
 
-	callsByCaller := map[string][]string{}
-	var order []string
+	// One group per caller AND generation: a caller can hold both a
+	// never-searched call (generation 0) and one that already had its first
+	// pass (generation 1), and mixing those in one input would misreport the
+	// Attempt of half of them.
+	type callerGen struct {
+		callerID string
+		attempt  int
+	}
+	callsByGroup := map[callerGen][]string{}
+	var order []callerGen
 	for _, e := range calls {
 		if e.Status != callresolve.StatusUnresolved {
 			continue
 		}
-		if attempted[e.CallerID+"\x1f"+e.CallKey] {
-			continue // already submitted to a resolve_call Execution before — don't resubmit
+		key := e.CallerID + "\x1f" + e.CallKey
+		n := attempts[key]
+		if n >= maxResolveCallAttempts {
+			continue // already had its search plus its one retry — never ask again
 		}
-		if _, ok := callsByCaller[e.CallerID]; !ok {
-			order = append(order, e.CallerID)
+		if s, ok := stored[key]; n > 0 && (!ok || s != callresolve.StatusUnresolved) {
+			continue // already searched and its answer still stands — not stranded
 		}
-		callsByCaller[e.CallerID] = append(callsByCaller[e.CallerID], e.CallKey)
+		g := callerGen{callerID: e.CallerID, attempt: n}
+		if _, ok := callsByGroup[g]; !ok {
+			order = append(order, g)
+		}
+		callsByGroup[g] = append(callsByGroup[g], e.CallKey)
 	}
 
 	out := make([]ResolveCallInput, 0, len(order))
-	for _, callerID := range order {
-		b, ok := byID[callerID]
+	for _, g := range order {
+		b, ok := byID[g.callerID]
 		if !ok {
 			continue
 		}
-		cs := callsByCaller[callerID]
+		cs := callsByGroup[g]
 		sort.Strings(cs)
 		out = append(out, ResolveCallInput{
-			PR: pr, CallerID: callerID, CallerFile: b.File,
+			PR: pr, CallerID: g.callerID, CallerFile: b.File,
 			CallerClass: b.Class, CallerName: b.Name, Calls: cs,
+			Attempt: g.attempt,
 		})
 	}
 	return out

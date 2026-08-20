@@ -266,8 +266,9 @@ const state = reactive({
   relations: [],
   // callResolve — the call-resolution read-model (GET /api/callresolve): per
   // (caller block, called method) rows. status resolved (Go) / found (LLM) become
-  // children in the Onderliggende-code panel; unresolved/searching drive the
-  // "Zoek" button + spinner.
+  // children in the Onderliggende-code panel; unresolved drives the automatic
+  // LLM search, and only `searching` shows the "zoeken…" pill (RelatedPanel.mjs
+  // — `unresolved` on its own is not a running action).
   callResolve: [],
   // testCovers — the test-coverage read-model (GET /api/testcovers): per test
   // block, which method(s) it covers. status resolved (method-level annotation)
@@ -5485,7 +5486,8 @@ function coveredByChildren(b) {
 
 // unresolvedTestCovers returns block b's test-coverage targets the Go analyzer
 // could not resolve statically (status unresolved) plus any currently
-// searching — feeding the "zoeken…" indicator, mirroring unresolvedCalls.
+// searching — feeding the automatic LLM search and, for `searching`, the
+// "zoeken…" pill, mirroring unresolvedCalls.
 // Unlike calls, coverage is a whole-test concept (not tied to a diff line/
 // call), so this is never scoped to the selected navigation unit.
 function unresolvedTestCovers(b) {
@@ -5983,11 +5985,11 @@ function lineChildSummaries(b) {
 }
 
 // unresolvedCalls returns the selected block's calls the Go resolver could not
-// pin (status unresolved) plus any currently searching — feeding the "Zoek"
-// button + spinner in the panel. Scoped like relatedChildren (see
-// callScopeMethods): in diff mode only the calls under the selected unit
-// (group/line/call), so "Zoek" is coupled to what you selected; in list mode the
-// block's whole set.
+// pin (status unresolved) plus any currently searching — feeding the automatic
+// LLM search plus, for the `searching` ones only, the panel's "zoeken…" pill
+// (see RelatedPanel.mjs). Scoped like relatedChildren (see callScopeMethods):
+// in diff mode only the calls under the selected unit (group/line/call), so the
+// search is coupled to what you selected; in list mode the block's whole set.
 function unresolvedCalls(b) {
   const all = callRows(b).filter((r) => r.status === 'unresolved' || r.status === 'searching')
   if (all.length === 0) return all

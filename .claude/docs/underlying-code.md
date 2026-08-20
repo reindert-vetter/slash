@@ -460,7 +460,7 @@ keeps snapping back correctly (`.claude/docs/column-resize.md`).
   `tests/comment-claude-column-widths.spec.mjs` (row visible → clamp width,
   sum exact).
 
-**Deliberately NOT gated on the "zoeken…" pill** (`searching()`/`pending()`):
+**Deliberately NOT gated on the "zoeken…" pill** (`searching()`):
 an unresolved call whose LLM search is still running is the normal state for a
 test method full of framework calls, and waiting for it would keep the dead
 787px for as long as the search takes. If the search does land a child, the
@@ -893,16 +893,27 @@ watch as soon as the panel shows a block with `unresolved` calls
 `searchRequested` so it fires once). It resolves the block's **entire** unresolved
 set, not just the selected unit, so the reviewer never has to navigate anywhere.
 
-While searching, the card shows a "searching…" pill
-(`data-testid=related-searching`, also while `unresolved` is still queued) —
-`position:absolute right-2 top-2 z-10` on the `<section>` itself, so it floats
-above the scrollable list instead of taking flow space. **The scrollable wrapper
-reserves top padding (`pt-9`) for exactly as long as that pill shows**
-(`searching() || pending() > 0`, a reactive whole-value class binding): without it
-the pill sat on top of the first card's right-aligned header badges
-(`diffStatBadge`/`approvalBadge`). Deliberate trade-off: no permanent empty strip
-once nothing is searching, at the cost of the list shifting a few pixels when a
-search starts/finishes.
+While searching, the card shows a "zoeken…" pill
+(`data-testid=related-searching`) — `position:absolute right-2 top-2 z-10` on
+the `<section>` itself, so it floats above the scrollable list instead of taking
+flow space. **The scrollable wrapper reserves top padding (`pt-9`) for exactly
+as long as that pill shows** (`searching()`, a reactive whole-value class
+binding): without it the pill sat on top of the first card's right-aligned
+header badges (`diffStatBadge`/`approvalBadge`). Deliberate trade-off: no
+permanent empty strip once nothing is searching, at the cost of the list
+shifting a few pixels when a search starts/finishes.
+
+**Only a row that is really `searching` gets the pill — a merely `unresolved`
+row does not** (it used to: `searching() || pending() > 0`). `unresolved` means
+"the Go resolver could not pin this call", which is not by itself a running
+action, and a reviewer reported exactly the resulting lie: a permanent "zoeken…"
+with nothing under "Taken" (PR 13431, a row stranded at `unresolved` by an older
+`callresolve.UpsertGo` while both search triggers correctly refused to re-ask
+it). A real search still surfaces — the `markCallsSearching` Activity marks its
+rows `searching` before the LLM call — just one poll tick later than the old,
+over-eager condition. Tests:
+`tests/related-searching-only-while-searching.spec.mjs` (both directions),
+`tests/related-searching-overlap.spec.mjs` (the `pt-9` reservation).
 
 See "Resolving (also unchanged) called methods" in
 `.claude/docs/workflows-analysis.md`.

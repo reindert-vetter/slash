@@ -567,6 +567,16 @@ type ResolveCallInput struct {
 	CallerClass string   `json:"callerClass"`
 	CallerName  string   `json:"callerName"`
 	Calls       []string `json:"calls"`
+	// Attempt is the search GENERATION of this input: 0 for the first pass over
+	// these calls, 1 for the one extra retry round a call may ever get (see
+	// maxResolveCallAttempts / groupUnresolvedCalls). It exists purely to give
+	// the retry its own identity: resolveCallRunID folds it into the Run ID, so
+	// re-asking a call the history already knows about is a genuinely different
+	// (but still deterministic and idempotent) Execution instead of the no-op
+	// reuse the plain caller+calls hash would produce. Kept `omitempty` so a
+	// generation-0 input hashes byte-identically to every Run ID minted before
+	// this field existed — an already-answered call must not silently re-run.
+	Attempt int `json:"attempt,omitempty"`
 }
 
 // ResolveTestCoversInput starts a resolve_test_covers Execution: it asks the
@@ -1558,25 +1568,27 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 				return nil, fmt.Errorf("build_relations: prune calls: %w", err)
 			}
 			// Automatically start an LLM search for every call the Go resolver
-			// just marked unresolved that hasn't already been attempted (see
+			// just marked unresolved that hasn't used up its attempts yet (see
 			// autoStartResolveCall/groupUnresolvedCalls) — the server-side
 			// counterpart of the frontend's own automatic trigger
-			// (startCallSearch, home.mjs). Grouped per caller, one Execution per
-			// group, started in its own goroutine so this Activity — and thus
+			// (startCallSearch, home.mjs). Grouped per caller (and search
+			// generation), one Execution per group, started in its own goroutine
+			// so this Activity — and thus
 			// ingest/EnsureRelations/prStatusWorkflow's delta-refresh — never
 			// waits on a live claude call. StartResolveCall's own deterministic
-			// Run ID makes a repeat request for an unchanged unresolved set an
-			// idempotent no-op, and autoStartResolveCall itself only considers a
-			// call that has never appeared in a resolve_call Execution's input
-			// before (via the durable workflow history, not the callresolve
-			// read-model's own status — which UpsertGo resets from notfound back
-			// to unresolved on every rebuild, so it alone can't tell "already
-			// attempted" apart from "genuinely new" past the very next rebuild).
-			// The frontend trigger stays in place as a safety net — e.g. for a PR
-			// whose relations were only ever refreshed headlessly via
-			// `slash relations`, which never runs this Activity at all (see
+			// Run ID makes a repeat request for an unchanged unresolved set at
+			// the same generation an idempotent no-op, and autoStartResolveCall
+			// counts a call's earlier attempts in the durable workflow history
+			// (resolveCallAttempts), not in the callresolve read-model's own
+			// status column, so the cap holds across any number of rebuilds and
+			// any restart. THIS is also where the one retry round for a row
+			// stranded at unresolved lands: it fires on the next relations build
+			// of that PR, not on a page load (a page load must not walk the whole
+			// event history). The frontend trigger stays in place as a safety net
+			// — e.g. for a PR whose relations were only ever refreshed headlessly
+			// via `slash relations`, which never runs this Activity at all (see
 			// .claude/docs/tembed-workflows.md).
-			go m.autoStartResolveCall(input.PR, calls, blocks)
+			go m.autoStartResolveCall(input.Repo, input.PR, calls, blocks)
 			// "Something changed in callresolve" — a tab already open on this
 			// PR refetches GET /api/callresolve instead of only learning about
 			// it once it happens to select the caller block (see
@@ -3730,9 +3742,10 @@ func (m *TaskManager) StartResolveCall(in ResolveCallInput) (string, error) {
 
 // autoStartResolveCall is the server-side counterpart of the frontend's
 // automatic "Zoek" trigger (startCallSearch, home.mjs): it groups every
-// currently unresolved-and-never-yet-attempted call of pr per caller
-// (groupUnresolvedCalls, using resolveCallAttempted's durable "ever
-// submitted" set) and starts a resolve_call Execution for each — one per
+// currently unresolved call of pr that hasn't used up maxResolveCallAttempts
+// per caller + search generation (groupUnresolvedCalls, using
+// resolveCallAttempts' durable per-call history count) and starts a
+// resolve_call Execution for each — one per
 // goroutine, so a rebuild with several unresolved callers doesn't process
 // them one at a time (StartResolveCall/StartWorkflowID runs a resolve_call
 // Execution's Activities, including the live claude calls, synchronously on
@@ -3749,9 +3762,9 @@ func (m *TaskManager) StartResolveCall(in ResolveCallInput) (string, error) {
 // convenience trigger, not a required step (the frontend's own trigger still
 // covers the gap if this one fails or never ran, e.g. for a PR whose relations
 // were only ever refreshed headlessly via `slash relations`).
-func (m *TaskManager) autoStartResolveCall(pr int, calls []callresolve.Entry, blocks []Block) {
-	attempted := m.resolveCallAttempted(pr)
-	for _, in := range groupUnresolvedCalls(pr, calls, attempted, blocks) {
+func (m *TaskManager) autoStartResolveCall(repo string, pr int, calls []callresolve.Entry, blocks []Block) {
+	attempts := m.resolveCallAttempts(pr)
+	for _, in := range groupUnresolvedCalls(pr, calls, attempts, m.storedCallStatuses(repo, pr), blocks) {
 		in := in
 		go func() {
 			if _, err := m.StartResolveCall(in); err != nil {
@@ -3761,23 +3774,53 @@ func (m *TaskManager) autoStartResolveCall(pr int, calls []callresolve.Entry, bl
 	}
 }
 
-// resolveCallAttempted returns every (callerId, callKey) pair that has EVER
-// been submitted to a resolve_call Execution for pr, regardless of that
-// Execution's current status — durable, since it reads the workflow event
+// storedCallStatuses reads the callresolve read-model's CURRENT status per
+// (callerId, callKey) pair for pr — the second half of groupUnresolvedCalls'
+// retry rule (see its doc comment): an already-attempted call is only re-asked
+// while its stored row is still 'unresolved', i.e. it has no answer left to
+// show. A module READ, so it is allowed from anywhere (only writes must go
+// through a workflow Activity, see .claude/rules/workflows-write-boundary.md);
+// it runs in autoStartResolveCall's own goroutine, after the buildRelations
+// Activity's UpsertGo, so it sees this rebuild's freshly merged statuses.
+// A read error degrades to an empty map, which makes the retry a no-op —
+// the conservative direction: never spend LLM budget on a guess.
+func (m *TaskManager) storedCallStatuses(repo string, pr int) map[string]string {
+	if m.callresolve == nil {
+		return nil
+	}
+	list, err := m.callresolve.List(context.Background(), repo, pr)
+	if err != nil {
+		return nil
+	}
+	stored := make(map[string]string, len(list))
+	for _, e := range list {
+		stored[e.CallerID+"\x1f"+e.CallKey] = e.Status
+	}
+	return stored
+}
+
+// resolveCallAttempts counts, per (callerId, callKey) pair, HOW OFTEN that pair
+// has been submitted to a resolve_call Execution for pr, regardless of those
+// Executions' current status — durable, since it reads the workflow event
 // history (via engine.Runs()/Input()), not the callresolve read-model's own
-// status column. That distinction is load-bearing: UpsertGo resets a
-// 'notfound' row back to 'unresolved' on every rebuild that doesn't touch
-// that call (it only protects 'searching'/'found', see its own doc comment),
-// so a snapshot of the DB's status would only tell "already attempted" apart
-// from "genuinely new" for the very next rebuild — not for one further down
-// the line, since nothing writes the DB row back to 'notfound' in between.
+// status column. That distinction is load-bearing: a read-model status can be
+// rewritten by a rebuild (UpsertGo used to drop an answered 'notfound' back to
+// 'unresolved' on every rebuild — narrowed since, see its own doc comment), so
+// a snapshot of the DB's status could never tell "already attempted" apart from
+// "genuinely new" past the very next rebuild. The history never forgets.
+//
+// It is a COUNT rather than a bool because groupUnresolvedCalls grants each
+// pair one extra retry round (maxResolveCallAttempts, resolve_call.go) and
+// needs the pair's generation to build the retry's own Run ID. A pair the
+// history has never seen is absent from the map, which reads as 0 — the
+// first-pass generation, whose Run ID is byte-identical to what it always was.
 // Mirrors RunsForPR's own "decode every run's stored input" pattern.
-func (m *TaskManager) resolveCallAttempted(pr int) map[string]bool {
+func (m *TaskManager) resolveCallAttempts(pr int) map[string]int {
 	runs, err := m.engine.Runs()
 	if err != nil {
 		return nil
 	}
-	attempted := map[string]bool{}
+	attempts := map[string]int{}
 	for _, r := range runs {
 		if r.Workflow != WorkflowResolveCall {
 			continue
@@ -3791,10 +3834,10 @@ func (m *TaskManager) resolveCallAttempted(pr int) map[string]bool {
 			continue
 		}
 		for _, c := range in.Calls {
-			attempted[in.CallerID+"\x1f"+c] = true
+			attempts[in.CallerID+"\x1f"+c]++
 		}
 	}
-	return attempted
+	return attempts
 }
 
 // explainCodeWorkflow generates the footer's AI description of a unit's

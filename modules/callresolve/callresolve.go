@@ -197,6 +197,21 @@ func now() string { return time.Now().UTC().Format(time.RFC3339) }
 // PR. It does NOT clobber a row already owned by the LLM (status searching or
 // found) — a Go rebuild must not wipe an expensive LLM resolution. WRITE —
 // workflow-Activity-only. Idempotent per (pr, caller_id, call_key).
+//
+// A `notfound` row is protected too, but only NARROWLY: an incoming
+// `unresolved` (the Go resolver still can't pin this call) leaves it alone,
+// while an incoming `resolved` (the rebuild CAN pin it now — the code changed)
+// still wins. Without that protection an answered "the LLM found nothing"
+// silently fell back to `unresolved` on every rebuild, which (a) made the
+// frontend's "zoeken…" pill sit there forever with nothing running, since both
+// search triggers correctly refuse to re-ask the same call (the deterministic
+// resolve_call Run ID plus resolveCallAttempts' durable history), and (b) did
+// re-spend real LLM budget whenever a rebuild happened to shift a caller's
+// unresolved set, because that yields a different Run ID. Reported against
+// PR 13431; see .claude/docs/workflows-analysis.md. testcovers.UpsertGo
+// protects `notfound` unconditionally — deliberately different: there the
+// Go scan has no "resolved" answer to improve on for a class-level-only
+// annotation.
 func (m *Module) UpsertGo(ctx context.Context, entries []Entry) error {
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -219,7 +234,8 @@ ON CONFLICT(pr, caller_id, call_key) DO UPDATE SET
   model        = excluded.model,
   confidence   = excluded.confidence,
   updated_at   = excluded.updated_at
-WHERE call_resolutions.status NOT IN ('searching','found')`)
+WHERE call_resolutions.status NOT IN ('searching','found')
+  AND NOT (call_resolutions.status = 'notfound' AND excluded.status = 'unresolved')`)
 	if err != nil {
 		return err
 	}
