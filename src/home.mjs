@@ -50,6 +50,7 @@ import RelatedPanel, {
   startPrWideComment,
   isPrWideComposing,
   startClaudeChat,
+  sendClaudeChatText,
   startRangeComment,
   startRangeChat,
   createComment,
@@ -11007,8 +11008,12 @@ function resolveCommandsInner(query) {
     // the start of a comment, so chatting is the default and "Comment op deze
     // regel" sits right below it. Deliberately still only on NO match — with
     // matches present the palette's own commands keep the field.
-    // Both items only PREFILL their composer (claude-chat-compose resp.
-    // comment-compose); neither sends or places anything on its own.
+    // "Comment op deze regel" only PREFILLS its composer (comment-compose) —
+    // placing a comment is a real GitHub-visible action, so it stays a
+    // deliberate second step. "Chat over deze regel" is different: reviewer
+    // request — typed text there should SEND immediately as the
+    // conversation's first turn (sendClaudeChatText, reusing the composer's
+    // own send path), not just sit prefilled waiting for a second Enter.
     return [
       {
         id: 'make-claude-chat',
@@ -11016,12 +11021,11 @@ function resolveCommandsInner(query) {
         hint: 'claude',
         run: () => {
           startClaudeChat(commentTarget)
+          // requestAnimationFrame: ensureClaudeAnchorForNew (RelatedPanel.mjs)
+          // reads the just-mounted comment-compose textarea, so wait one
+          // frame for it, same as every other post-navigation DOM read here.
           requestAnimationFrame(() => {
-            const el = document.querySelector('[data-testid=claude-chat-compose]')
-            if (el) {
-              el.value = q
-              el.focus()
-            }
+            sendClaudeChatText(state, commentTarget, q)
           })
         },
       },

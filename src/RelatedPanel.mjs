@@ -3536,6 +3536,16 @@ export function startClaudeChat(commentTargetFn) {
   enterClaudeChatFromNew()
 }
 
+// sendClaudeChatText sends `text` as the conversation's actual turn, reusing
+// the exact send path the composer's own Enter/"Stuur" uses
+// (sendClaudeMessageFromNew) — the counterpart to selectHighlightedClaudeOption
+// above, for a caller that already has the text in hand (the no-match palette
+// fallback's "Chat over deze regel" item, home.mjs) instead of reading it off
+// the DOM. Call it once the composer is already entered (startClaudeChat).
+export function sendClaudeChatText(state, commentTarget, text) {
+  return sendClaudeMessageFromNew(state, commentTarget, text)
+}
+
 // startRangeComment is startComment's twin for a Shift-arrow multi-row
 // selection in the index/methodes-kolom — "Plaats comment over dit bereik"
 // (rangeCommandsFor, home.mjs). It anchors on the CURSOR's own block/method,

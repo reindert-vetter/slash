@@ -175,7 +175,7 @@ test.describe('PR Review Tree — command palette', () => {
     expect(posted.label).toBeTruthy()
   })
 
-  test('no match: the default fallback item "Chat over deze regel" pre-fills the Claude composer', async ({
+  test('no match: the default fallback item "Chat over deze regel" sends the typed text immediately', async ({
     page,
   }) => {
     await page.goto('/pr/12903')
@@ -189,16 +189,38 @@ test.describe('PR Review Tree — command palette', () => {
     await expect(rows).toHaveCount(2)
 
     // The chat item is the DEFAULT (first row), so a bare Enter runs it — the
-    // menu closes and the Claude composer opens with the typed text already in
-    // the textarea, focused, ready to keep typing. Nothing is sent until the
-    // reviewer presses Enter/"Stuur" in that composer.
+    // menu closes, the Claude composer opens, and the typed text is sent right
+    // away as the conversation's first turn (sendClaudeChatText) — reviewer
+    // request: no second Enter needed to actually start the chat.
     await expect(rows.first()).toContainText('Chat over deze regel')
-    await page.keyboard.press('Enter')
-    await expect(page.getByTestId('command-menu')).not.toBeVisible()
-    const composer = page.getByTestId('claude-chat-compose')
-    await expect(composer).toBeVisible()
-    await expect(composer).toHaveValue('dit klopt niet helemaal')
-    await expect(composer).toBeFocused()
+    const [createRes, firstMsgReq] = await Promise.all([
+      page.waitForResponse(
+        (res) => res.url().includes('/api/workflows/task_code_comment') && res.request().method() === 'POST',
+      ),
+      page.waitForRequest((req) => req.url().includes('/signals/message') && req.method() === 'POST'),
+      page.keyboard.press('Enter'),
+    ])
+    const runId = (await createRes.json()).runId
+    expect(runId).toBeTruthy()
+
+    try {
+      await expect(page.getByTestId('command-menu')).not.toBeVisible()
+      expect(firstMsgReq.postDataJSON().body).toBe('dit klopt niet helemaal')
+      const composer = page.getByTestId('claude-chat-compose')
+      await expect(composer).toBeVisible()
+      await expect(composer).toHaveValue('')
+      // Sending lazily created the ONE backing comment, same as every other
+      // unanchored-Claude-chat entry point.
+      const item = page.getByTestId('comment-item')
+      await expect(item).toHaveCount(1)
+      await expect(item).toContainText('Claude gesprek')
+    } finally {
+      // Never leave this real, non-mocked comment behind on the shared PR
+      // 12903 fixture (see place-comment-return-focus.spec.mjs).
+      await page.request.post('/api/workflows/' + runId + '/signals/delete', {
+        data: { author: 'reviewer' },
+      })
+    }
   })
 
   // The comment-kind menu: Enter (or the send button) on a filled composer opens

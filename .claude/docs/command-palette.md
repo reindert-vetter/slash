@@ -342,16 +342,19 @@ and repositions). `ms.sub` holds the open child list; `resolveCommands` filters
 that instead of the root list (without the comment fallback).
 
 If filtering yields **nothing** for a non-empty query, the menu falls back to
-**two** items, both prefilling their own composer with the typed text instead
-of running anything immediately: **"Chat over deze regel"** (default, first —
-opens the Claude composer via `startClaudeChat`, prefilling
-`claude-chat-compose`) and **"Comment op deze regel"** (opens the comment
-composer via `startComment`, `comment-compose`, same target as the ordinary
-`comment` row in `COMMANDS`). Neither posts/sends on its own — placing the
-comment still goes through the ordinary compose flow (`createComment` from
-`RelatedPanel.mjs` → `POST /api/workflows/task_code_comment`, within the write
-boundary), and the Claude composer only sends once the reviewer presses
-Enter/"Stuur" there. This is a **plain array, not `withClose`** — so index 0
+**two** items: **"Chat over deze regel"** (default, first — opens the Claude
+composer via `startClaudeChat` and then immediately **sends** the typed text as
+the conversation's first turn, via `sendClaudeChatText`, the exported wrapper
+around `sendClaudeMessageFromNew` — the same send path the composer's own
+Enter/"Stuur" uses) and **"Comment op deze regel"** (opens the comment composer
+via `startComment` and only **prefills** it, `comment-compose`, same target as
+the ordinary `comment` row in `COMMANDS`). Reviewer request: typed text that
+matches nothing is far more often a question meant for Claude than a comment
+draft, so it should reach Claude right away instead of sitting prefilled for a
+second Enter — placing a comment stays a deliberate second step since it's a
+real, GitHub-visible action (`createComment` from `RelatedPanel.mjs` →
+`POST /api/workflows/task_code_comment`, within the write boundary), while a
+chat message is not. This is a **plain array, not `withClose`** — so index 0
 (not index 1 via `defaultSel`) is the default Enter action, which is why the
 CHAT item must stay first.
 
