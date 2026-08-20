@@ -96,6 +96,43 @@ carry a single one-row change group each — so entering either one's diff now
 starts at `'unified'` by default, which is why so many otherwise-unrelated
 specs anchored on that fixture needed the "force split back" step above.
 
+### A second, independent trigger: a `modified` block whose diff is additions only
+
+Reviewer request (2026-08-20, screenshot of
+`modules/Statistics/Config/config.php`): "als er alleen dingen zijn
+toegevoegd... wil ik de unified diff zien." The block's own `status` was
+`modified` (real old+new source on disk), but its diff added a whole new
+config section with no removed/replaced line anywhere — `'split'` still
+rendered its usual two equal-width panes, so the left/old pane sat empty
+from the very first changed row on while every added line on the right ran
+off the edge of its half-width column. `allChangesAreSingleLine` doesn't
+cover this: a run of several new lines is one multi-row `changeGroups` unit,
+not several single-row ones.
+
+`allChangesAreAdditionsOnly(b)` (`home.mjs`, next to `allChangesAreSingleLine`)
+answers this directly off `diffStat(blockRows(b))` — `{add, del}` — instead of
+`changeGroups`: `add > 0 && del === 0`, i.e. at least one inserted line and
+NO removed/replaced line anywhere in the block's diff. Guarded by
+`!singleSide(b)` first: an `added`/`removed`-status block already renders
+single-pane in every stand via `effectiveOnly` (`codeDiff`, `Block.mjs`), so
+there is nothing to fix there and the function returns `false` before even
+touching `blockRows`.
+
+**Shares the exact same watch, the exact same `autoUnifiedForBlockRef` guard,
+and the exact same trade-offs as the single-line trigger above** — the
+landing watch's condition is simply
+`allChangesAreSingleLine(b) || allChangesAreAdditionsOnly(b)`. So: INITIAL
+stand only (the reviewer can still cycle away with `a`/the indicator and it
+sticks for that block), one shared global `state.diffViewMode` (landing on
+EITHER kind of block marks it "already decided" the same way and can leave
+`'unified'` active for an ordinary block visited afterward too), and the same
+known "code still loading" race. Test:
+`tests/diffview-additions-only.spec.mjs` (fixture PR 123,
+`materializeAdditionsOnlyWorktrees` in `tests/_setup.mjs` +
+`tests/fixtures/additionsonly-blocks.json` — a `modified` block whose one
+change GROUP spans 4 lines, deliberately not single-line, so the test can
+only pass via this second trigger).
+
 ## What decides the width: `widthCls`
 
 **Reviewer request, explicitly confirmed:** all three `a` stands get the same

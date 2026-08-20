@@ -65,6 +65,7 @@ export default function globalSetup() {
   materializeBlockMoveWorktrees()
   materializeSettings()
   materializeOpsRepoWorktrees()
+  materializeAdditionsOnlyWorktrees()
 }
 
 // materializeBlockMoveWorktrees writes the base/head worktrees for the
@@ -1420,4 +1421,52 @@ class DupTargetAction
   const write = worktreeWriter(122)
   write('base', 'app/Actions/DupTargetAction.php', action('null', 'null'))
   write('head', 'app/Actions/DupTargetAction.php', action('app(SomeRepo::class)->find()', 'app(OtherRepo::class)->handle()'))
+}
+
+// materializeAdditionsOnlyWorktrees writes the synthetic PR 123 fixture
+// worktree for diffview-additions-only.spec.mjs: a genuinely two-sided
+// (`modified`) block whose diff has no removed/replaced line anywhere — every
+// changed row is a pure insertion (diffStat's del === 0) — the exact shape
+// reported live on modules/Statistics/Config/config.php (see
+// .claude/docs/diff-card.md's "additions-only auto-jump" section). The base
+// version keeps every existing line untouched; the head version only adds a
+// new block of code after it, so `changeGroups`/`diffStat` see zero deletions
+// and at least one insertion.
+function materializeAdditionsOnlyWorktrees() {
+  const base = `<?php
+
+namespace App\\Actions;
+
+class AdditionsOnlyAction
+{
+    public function run()
+    {
+        $value = 1;
+
+        return $value;
+    }
+}
+`
+  const head = `<?php
+
+namespace App\\Actions;
+
+class AdditionsOnlyAction
+{
+    public function run()
+    {
+        $value = 1;
+
+        // A newly added block of lines, appended after the existing body —
+        // nothing above this point changed at all.
+        $extra = 2;
+        $more = 3;
+
+        return $value;
+    }
+}
+`
+  const write = worktreeWriter(123)
+  write('base', 'app/Actions/AdditionsOnlyAction.php', base)
+  write('head', 'app/Actions/AdditionsOnlyAction.php', head)
 }

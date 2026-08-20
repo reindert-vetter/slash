@@ -1,0 +1,13 @@
+[
+  {
+    "pr": 123,
+    "file": "app/Actions/AdditionsOnlyAction.php",
+    "class": "AdditionsOnlyAction",
+    "name": "run",
+    "category": "ACTION",
+    "line": 7,
+    "endLine": 17,
+    "status": "modified",
+    "side": "new"
+  }
+]

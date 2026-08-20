@@ -534,6 +534,15 @@ function seed(db) {
     ],
     { stdio: 'ignore', env: SEED_ENV },
   )
+  // Additions-only diff-view fixture (PR 123,
+  // diffview-additions-only.spec.mjs): one `modified` block whose diff has no
+  // removed/replaced line at all (worktrees materialized in _setup.mjs,
+  // materializeAdditionsOnlyWorktrees) — home.mjs's allChangesAreAdditionsOnly
+  // auto-jumps such a block's INITIAL diff-view stand to 'unified' instead of
+  // the default 'split', which used to waste its entire empty old/left pane.
+  execFileSync(BIN, ['seed', '-db', db, '-from', 'tests/fixtures/additionsonly-blocks.json'], {
+    stdio: 'ignore',
+  })
 }
 
 function canConnect(port) {

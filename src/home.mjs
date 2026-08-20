@@ -868,9 +868,32 @@ function allChangesAreSingleLine(b) {
   return groups.length > 0 && groups.every((g) => g.start === g.end)
 }
 
+// allChangesAreAdditionsOnly reports whether a genuinely two-sided block's
+// diff has no removed/replaced line anywhere (diffStat's del === 0) but at
+// least one added one — i.e. every change is a pure insertion. singleSide(b)
+// already forces such a block single-pane in EVERY stand (including split)
+// when its status is added/removed, via effectiveOnly in Block.mjs's
+// codeDiff — nothing to fix there, hence the singleSide(b) guard below.
+// It's a 'modified'-status block (real old+new source, but zero deleted
+// lines within the diff itself) where 'split' otherwise wastes its entire
+// left/old pane (empty from the first changed row on) while the right/new
+// pane runs the full width of every added line off the edge of its half.
+function allChangesAreAdditionsOnly(b) {
+  if (singleSide(b)) return false
+  const rows = blockRows(b)
+  if (!rows.length) return false
+  const { add, del } = diffStat(rows)
+  return add > 0 && del === 0
+}
+
 // Reviewer request: "als er in een blok elke keer maar 1 regel is aangepast,
 // laat dan gelijk de -/+ view zien niet de side-by-side" — landing on such a
-// block jumps state.diffViewMode to 'unified' as its INITIAL stand only
+// block jumps state.diffViewMode to 'unified' as its INITIAL stand only.
+// Second, independent trigger (2026-08-20, screenshot of
+// Statistics\Config\config.php): "als er alleen dingen zijn toegevoegd wil
+// ik de unified diff zien" — allChangesAreAdditionsOnly above covers this;
+// it shares the exact same autoUnifiedForBlockRef guard/trade-offs, so
+// landing on EITHER kind of block marks it "already decided" the same way.
 // (explicitly confirmed option: not a permanent override — the reviewer can
 // still cycle away with `a`/the indicator exactly as before, and it stays
 // away for as long as this same block is selected). Scoped to the TOP-LEVEL
@@ -915,7 +938,7 @@ watch(
     const ref = row ? row.id : `${b.file}:${b.line}`
     if (ref === autoUnifiedForBlockRef) return
     autoUnifiedForBlockRef = ref
-    if (allChangesAreSingleLine(b)) applyDiffViewMode('unified')
+    if (allChangesAreSingleLine(b) || allChangesAreAdditionsOnly(b)) applyDiffViewMode('unified')
   },
 )
 
