@@ -1173,6 +1173,22 @@ bindUrlState(state, [
   { key: 'drillChange', param: 'dchg', parse: num(0), default: 0 },
   { key: 'drillCursorRef', param: 'dcur', default: '' },
   { key: 'testMethodRef', param: 'tmethod', default: '' },
+  // `?tcol=1` mirrors ONLY a real stop-2b focus (state.testColumnFocused, the
+  // methodes-kolom — see .claude/docs/test-class-grouping.md), so a refresh
+  // hands ↑/↓ straight back to that column instead of silently to the
+  // pr-index. Deliberately its own param rather than being inferred from
+  // `?tmethod=`: that one is written for EVERY selected test_class row (the
+  // mirror watch below always records which method is active), so treating it
+  // as "the column had focus" would take ↑/↓ away from the index after every
+  // refresh on a test class. default:false keeps it out of the URL entirely
+  // until the reviewer actually steps into the column.
+  {
+    key: 'testColumnFocused',
+    param: 'tcol',
+    parse: (raw) => raw === '1',
+    format: (v) => (v ? '1' : ''),
+    default: false,
+  },
 ])
 
 // restoredBlockRef snapshots whatever bindUrlState just restored into
@@ -1204,6 +1220,16 @@ const hadInitialSelParam = blockRefPending != null
 // applyBlockRefRestore's own `testclass:` branch (methods are already part of
 // the loaded block, no separate async fetch needed, unlike a drilled child).
 let testMethodRefPending = state.testMethodRef || null
+
+// testColumnPending mirrors testMethodRefPending for `?tcol=1` (a real stop-2b
+// focus, see the bindUrlState entry above). Snapshotted here because
+// state.testColumnFocused is reset to false by every path that lands a
+// selection (loadBlocks' own clamp, selectRow, clampSelectedToVisible) — all of
+// which run BEFORE the restored `?sel=testclass:…` is resolved, so the value
+// bindUrlState just restored would be wiped before it ever means anything.
+// Applied by applyTestClassRefRestore, next to state.classMethodSel; null
+// afterwards so it never hijacks later navigation.
+let testColumnPending = state.testColumnFocused || null
 
 // drillRefPending mirrors blockRefPending for the drill path restored from
 // `?drill=id1>id2>...` — snapshotted before the state.drill mirror watch below
@@ -1486,6 +1512,13 @@ function applyTestClassRefRestore() {
     : -1
   state.classMethodSel = mIdx >= 0 ? mIdx : 0
   testMethodRefPending = null
+  // `?tcol=1` — the reviewer really had the methodes-kolom focused when this
+  // URL was written, so give it the keyboard back (↑/↓ walk the methods
+  // immediately, no `→` first). Absent → stays false and the pr-index keeps
+  // ↑/↓, exactly like any other restored selection. See the bindUrlState entry
+  // for why this can't be derived from `?tmethod=`.
+  if (testColumnPending) state.testColumnFocused = true
+  testColumnPending = null
 }
 
 // applyCommentRefRestore resolves a `?sel=comment:<id>` restored at load time
@@ -8582,7 +8615,21 @@ function focusedColumnEl(level = state.focusLevel) {
 // frame so a freshly-pushed drill column exists in the DOM first.
 function scrollFocusIntoView(level = state.focusLevel) {
   requestAnimationFrame(() => {
-    const el = focusedColumnEl(level)
+    // Stop 2b (the methodes-kolom, see .claude/docs/test-class-grouping.md) is
+    // the block-column's LEFT neighbour whenever it exists, so aligning on the
+    // block-column would scroll it out of view — which is exactly what
+    // happened on a restored `?sel=testclass:…` link: the relatedActive/
+    // codeVersion watch below calls this on every code load, leaving <main>
+    // scrolled one column width right with stop 2b hidden behind the pr-index
+    // (reported bug: "I see 52/116 in the index but nothing else to approve in
+    // the diff, and I can't navigate into it"). Targeting it instead puts
+    // <main> back at its real rest position (both columns visible) and also
+    // brings the column into view when `→` focuses it while <main> is
+    // scrolled. A plain DOM query is enough: this column only renders in list
+    // mode on a selected test_class row (see DetailPanel), and it can never
+    // exist for a drilled level (level > 0).
+    const el =
+      (level === 0 && document.querySelector('[data-testid="test-methods-column"]')) || focusedColumnEl(level)
     // Always align to the *left* edge of the viewport: the top-level block
     // column is the leftmost column, and a freshly-focused drilled column
     // should land flush against <main>'s left edge too (rather than its right
@@ -14982,7 +15029,16 @@ TopLoadingBar(state, topLoadingActive)(app)
 // here would contradict that (see "act as if the PR-summary block is
 // selected" in keyboard-navigation.md). A restored `?sel=` keeps the
 // existing convenience unchanged.
-if (state.mode === 'list' && hadInitialSelParam) requestAnimationFrame(focusSearchBox)
+// ALSO skipped for a `?tcol=1` restore (testColumnPending, see the
+// bindUrlState entry above): that URL says the reviewer had the methodes-kolom
+// focused, and onKeydown's searchActive branch owns ↑/↓ while the box holds the
+// keyboard (searchStepSelection walks the INDEX) — so grabbing focus here would
+// silently undo the very thing tcol restores. Read via the pending snapshot,
+// not state.testColumnFocused: the flag itself is only applied later, by
+// applyTestClassRefRestore after loadBlocks lands, while this rAF is scheduled
+// now.
+if (state.mode === 'list' && hadInitialSelParam && !testColumnPending)
+  requestAnimationFrame(focusSearchBox)
 
 // Kick off the initial load.
 loadBlocks()

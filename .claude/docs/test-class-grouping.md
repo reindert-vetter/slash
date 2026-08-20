@@ -61,6 +61,21 @@ Rendered by `TestMethodsColumn.mjs` directly in `<main>`'s column flow, to the
   drilling), but **hidden in diff mode**: `→` into the active method's diff
   removes the column exactly like the pr-index slides away, and `←` brings it
   straight back (`state.testColumnFocused` survives the transition).
+- **It is the block-column's LEFT neighbour, so it defines `<main>`'s horizontal
+  rest position.** `scrollFocusIntoView` (`home.mjs`) therefore targets
+  `[data-testid=test-methods-column]` whenever it exists at `focusLevel === 0`,
+  instead of the block-column: aligning on the block-column (`inline:'start'`)
+  scrolled this column exactly one column width out of view, hidden behind the
+  pr-index. That was a real reported bug on a restored `?sel=testclass:…` link
+  — the `relatedActive()`/`codeVersion` watch calls that helper on **every**
+  code load, so the column was rendered, focusable and stepping correctly while
+  being entirely off-screen; the reviewer saw a class pill of `52/116` next to a
+  single fully-approved method and concluded there was nothing left to approve
+  and no way in. Same call now also brings the column into view when `→`
+  focuses it while `<main>` happens to be scrolled. A plain DOM query is enough
+  (no extra state read): the column only renders in list mode on a selected
+  `test_class` row, and never for a drilled level. Test:
+  `tests/testclass-column-visible.spec.mjs`.
 - Focusing the column with the first `→` also slides the **pr-index** away
   (`BlockList.mjs`'s translate ternary gained a `state.testColumnFocused` branch
   next to `mode==='diff'`, and `<main>`'s left ternary moves to `left-0` in
@@ -174,6 +189,13 @@ conflict:
   branch sums the FULL `Σ subtreeApproveCount(method)` — mathematically identical
   to the pre-grouping sum (grouping changes only how the terms are iterated).
 
+Both numbers cover **every** method of the class, including the ones not on
+screen: only the active method's diff renders next to the column, so a pill like
+`52/116` legitimately counts 8 methods' rows while the diff beside it says
+`9/9`. That is the class pill answering "how much is left in this class", not
+"in this card" — the methodes-kolom is what makes the rest reachable, which is
+why its visibility (above) matters so much.
+
 The one watch that fills both stores the **narrow** value into
 `approvalSummaries[row.id]` for display while adding the **full** value into the
 running `done`/`total` sum — two numbers computed side by side in the same loop
@@ -216,6 +238,35 @@ method, and clears them again").
 (`state.testMethodRef`, resolved in the same restore call). Not found
 (stale/shared link) → the same silent not-found fallback as every other restore
 path.
+
+**`?tcol=1` mirrors a real stop-2b FOCUS** (`state.testColumnFocused`, bound
+straight through `bindUrlState` with `parse: raw === '1'` /
+`format: v ? '1' : ''` / `default: false`), so a refresh hands `↑`/`↓` back to
+the methodes-kolom instead of silently to the pr-index — reviewer request. Two
+things make it work, and both are load-bearing:
+
+- **It is its own param, deliberately not derived from `?tmethod=`.** That one
+  is written for *every* selected `test_class` row (the mirror watch always
+  records which method is active), so reading it as "the column had focus"
+  would take `↑`/`↓` away from the index after **every** refresh on a test
+  class. With `default: false` the param stays out of the URL until the
+  reviewer really steps into the column.
+- **The load-time search-box focus is skipped for such a restore.** `home.mjs`
+  focuses `#block-search` from a `requestAnimationFrame` on load (a list-mode
+  convenience), and `onKeydown`'s `searchActive` branch owns `↑`/`↓` while that
+  box holds the keyboard (`searchStepSelection` walks the INDEX) — so without
+  this gate `tcol=1` restored the focus ring but the very next `↓` still stepped
+  the index. The gate reads the **pending snapshot** (`testColumnPending`, the
+  same pattern as `blockRefPending`/`testMethodRefPending`) rather than
+  `state.testColumnFocused`: every path that lands a selection
+  (`loadBlocks`' clamp, `selectRow`, `clampSelectedToVisible`) resets that flag,
+  and all of them run before `applyTestClassRefRestore` applies the restored
+  value. Outside this restore the two are mutually exclusive anyway — the first
+  `→` out of the search box calls `exitSearch()` before `enterDiff()` focuses
+  the column.
+
+Test: `tests/testclass-column-visible.spec.mjs` (with the param `↓` walks the
+methods; without it the index keeps `↑`/`↓`).
 
 **A `mode=diff` restore onto an already-partly-approved method used to show
 the active-row cursor for a split second, then lose it permanently, with no

@@ -82,6 +82,14 @@ complete example including the async-clobber solution below.
   reapply them **once, clamped**, once the data is in (at the end of the
   load functions). Only restore a position if its target really exists, and
   clear the snapshot afterward so later navigation isn't hijacked.
+- **A load-time side effect must consult the PENDING snapshot, not the state.**
+  If something else runs on load and would contradict the restore (e.g.
+  `home.mjs` grabs real DOM focus into the search box, whose keydown branch
+  then owns `↑`/`↓`), gate it on the snapshot — the state key itself is
+  typically already reset by then by whatever lands the selection, and the
+  restored value only reappears when the pending value is applied. See
+  `testColumnPending`/`?tcol=1` in `home.mjs`
+  (`.claude/docs/test-class-grouping.md`).
 - **Bare keys don't react as attribute values** — this is state sync, not
   arrow's attribute binding; arrow.js's regular rules still apply elsewhere
   in the templates.

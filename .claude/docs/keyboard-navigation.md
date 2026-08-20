@@ -47,7 +47,15 @@ code).
      index and step exactly ONE visible row further (clamped when there is
      none); `Enter` opens the ordinary block palette (not the diff — only `→`
      does that), since `curBlock()` already resolves to the active method;
-     `f`/`d`/`s`/`a` are a no-op, same as stop 1.
+     `f`/`d`/`s`/`a` are a no-op, same as stop 1. Two things this stop needs
+     that no other stop does: `scrollFocusIntoView` targets **this** column at
+     `focusLevel === 0` whenever it exists (it is the block-column's left
+     neighbour, so aligning on the block-column scrolled it off-screen behind
+     the pr-index), and a real focus here is the one stop-2b state mirrored in
+     the URL (`?tcol=1`), which also **suppresses the load-time search-box
+     focus** — otherwise `onKeydown`'s `searchActive` branch would keep `↑`/`↓`
+     on the index after a refresh. Both in
+     `.claude/docs/test-class-grouping.md`.
 3. **Block with diff** (`state.mode==='diff'`, `state.focusLevel===0`).
 4. **Drilled columns** (`state.drill`/`focusLevel>0`) — a **side branch**, not a
    strict stop: reachable only via Enter/click on an Underlying-code child (see

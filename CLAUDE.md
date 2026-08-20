@@ -154,10 +154,13 @@ the URL into the reactive `state` and afterwards writes back every change via
 `history.replaceState` (an arrow.js `watch`, so no history spam). `home.mjs`
 binds the main navigation (`blockRef`→`sel`, `mode`, `change`→`chg`,
 `gran`→`gran`, `drillRef`→`drill`, `drillGran`→`dgran`, `drillChange`→`dchg`,
-`drillCursorRef`→`dcur`); the **PR lives in the path** (`/pr/<id>`, see
+`drillCursorRef`→`dcur`, `testMethodRef`→`tmethod`,
+`testColumnFocused`→`tcol`); the **PR lives in the path** (`/pr/<id>`, see
 `.claude/docs/pages-and-routing.md`), not in the query. A `default` value is
 omitted from the URL so it stays short/canonical (so `gran` only appears for
-`line`/`call`, not for the default `group`; `drill`/`dgran`/`dchg`/`dcur` only
+`line`/`call`, not for the default `group`; `tcol` only while the methodes-kolom
+really has the keyboard, see `.claude/docs/test-class-grouping.md`;
+`drill`/`dgran`/`dchg`/`dcur` only
 while something is actually drilled into).
 `sel` encodes the **block reference** `${file}:${line}` — not the raw index in
 `state.blocks` — because that index shifts whenever the left-hand list
