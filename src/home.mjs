@@ -13862,7 +13862,16 @@ function DetailPanel(state) {
           )
         })
       }}
-      <div class="flex min-h-0 shrink-0 flex-col gap-3" data-testid="comments-and-related">
+      ${
+        // ml-2 on top of <main>'s own gap-4: a little extra breathing room
+        // specifically between the diff card (or the last open drill
+        // column) and this comments/Onderliggende-code column, requested
+        // so the purple call-arrow overlay isn't pinched against the
+        // comment card's border. Static class, not reactive — no arrow.js
+        // whole-value-attribute concern.
+        ''
+      }
+      <div class="flex min-h-0 shrink-0 flex-col gap-3 ml-2" data-testid="comments-and-related">
         <div
           class="${() =>
             // Hidden (not unmounted!) while neither InlineComments/
