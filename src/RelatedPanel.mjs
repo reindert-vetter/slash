@@ -24,6 +24,9 @@ import { labelForWorkflow } from './workflowLabels.mjs'
 // failed-run note (failedRunNote below) so both name a file the same way.
 import { baseName } from './problems.mjs'
 import { repoParam, repoField } from './prContext.mjs'
+// autoWarn gates the automatic comment_titles request below, exactly as it
+// gates code_warning and the footer's explain_code — see autowarn.mjs.
+import { autoWarn } from './autowarn.mjs'
 import { claudeChatColumn, claudeStatusText } from './ClaudeChat.mjs'
 import { codePreviewColumn } from './CodePreview.mjs'
 import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
@@ -3934,6 +3937,82 @@ function commentAuthors(list) {
   return out
 }
 
+// ── Comment titles (the comment_titles workflow) ─────────────────────────────
+// A long, multi sentence comment used to show its own first lines as if they
+// were a heading — an AI-controle finding of three sentences filled the whole
+// card and a comment column could not be scanned at all. The comment_titles
+// workflow (see comment_titles.go, .claude/docs/workflows-analysis.md) writes a
+// short Dutch title of at most 6 words onto the comment, which
+// commentTitleLine below renders above the (then clamped) body.
+//
+// The request is lazy and made from here, mirroring explain_code's own
+// frontend-driven start: whatever is on screen gets a title, nothing else, and
+// comments that existed long before this feature are covered by the very same
+// path — so there is no backfill migration anywhere.
+
+// TITLE_MIN_BODY — below this many characters a comment IS its own title
+// already; asking a model to shorten "typo hier" gains nothing and costs a
+// call.
+const TITLE_MIN_BODY = 90
+
+// commentBodyLen counts code POINTS, matching the Go side's len([]rune(body)) — an
+// emoji must not make the two disagree and re-request forever.
+function commentBodyLen(c) {
+  return [...(c.body || '')].length
+}
+
+// commentTitleOf returns the title to show for a comment, or '' — empty while
+// none was ever generated AND when the stored one describes an older version of
+// the body (the reviewer edited it, see comments.Comment.TitleBodyLen).
+export function commentTitleOf(c) {
+  if (!c || !c.title) return ''
+  return c.titleBodyLen === commentBodyLen(c) ? c.title : ''
+}
+
+// needsTitle — this comment deserves a title and doesn't have a usable one yet.
+// A terminal 'failed' for this exact body is deliberately never retried (same
+// rule as explain_code's failed row): the deterministic Run ID would dedup it
+// anyway, and re-asking on every poll would be a call per tick.
+function needsTitle(c) {
+  if (!c || commentTitleOf(c)) return false
+  if (isChatAnchorPlaceholder(c)) return false
+  if (commentBodyLen(c) <= TITLE_MIN_BODY) return false
+  if (c.titleStatus === 'searching') return false
+  if (c.titleStatus === 'failed' && c.titleBodyLen === commentBodyLen(c)) return false
+  return true
+}
+
+// lastTitleRunKey — the batch we last POSTed. The deterministic Run ID already
+// makes a repeat a server-side no-op, but loadComments runs every 5s and a
+// pointless request per tick is still a request per tick (same guard idea as
+// home.mjs' lastFiredSelectionRef).
+let lastTitleRunKey = ''
+
+// requestCommentTitles starts (idempotently) one comment_titles Execution for
+// every comment in the freshly loaded list that still needs a title. Gated on
+// the "Live AI assistent" switch: this is automatic, unasked-for Claude work,
+// exactly like the AI risk check and the footer description (see autowarn.mjs).
+function requestCommentTitles(pr, list) {
+  if (pr == null || !autoWarn.enabled) return
+  const items = list
+    .filter(needsTitle)
+    .map((c) => ({ id: c.id, bodyLen: commentBodyLen(c) }))
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  if (items.length === 0) return
+  const key = pr + '|' + items.map((it) => it.id + ':' + it.bodyLen).join('|')
+  if (key === lastTitleRunKey) return
+  lastTitleRunKey = key
+  fetch('/api/workflows/comment_titles', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pr, ...repoField(), items }),
+  }).catch(() => {
+    // Best-effort: on a transient failure the next poll simply tries again
+    // (the guard key is reset so it isn't skipped as "already sent").
+    lastTitleRunKey = ''
+  })
+}
+
 async function loadComments(pr) {
   if (pr == null) return
   try {
@@ -3960,6 +4039,9 @@ async function loadComments(pr) {
       await ensureNames(commentAuthors(list))
       cs.list = list
       recomputeView()
+      // Ask for a short title for every long comment that still lacks one —
+      // idempotent, gated on the AI switch, see requestCommentTitles.
+      requestCommentTitles(pr, list)
       // Which comments already carry a Claude conversation decides whether the
       // chat column exists at all (claudeChatVisible), so it is refreshed on the
       // same cadence as the comments themselves — one extra read-only GET per
@@ -5559,6 +5641,33 @@ function chatAnchorAuthorLine() {
   `
 }
 
+// commentTitleLine — the comment's short generated heading (commentTitleOf),
+// or nothing at all. Deliberately plain text, not markdown: it is one short
+// sentence and a half-rendered `**` in a truncated heading looks worse than
+// none (same reasoning as the other truncate/line-clamp title contexts, see
+// conventions.md). Nothing is rendered while a run is still in flight either —
+// a "titel genereren…" placeholder would only add a second layout jump.
+function commentTitleLine(c) {
+  const title = commentTitleOf(c)
+  if (!title) return ''
+  return html`<span
+    class="truncate text-xs font-semibold leading-5 text-slate-900 dark:text-zinc-100"
+    data-testid="comment-title"
+    >${title}</span
+  >`
+}
+
+// titleKeyOf feeds the comment card's .key() so a title that lands LATER (the
+// workflow needs a couple of seconds; the 5s poll then replaces cs.list with
+// fresh objects) really rebuilds the card. Without it arrow.js reuses the
+// mounted node and its bindings keep reading the OLD comment object, which
+// never gains a title — the same reason the block card's key encodes
+// load/code/err, see .claude/rules/arrowjs-pitfalls.md.
+function titleKeyOf(c) {
+  const title = commentTitleOf(c)
+  return title ? 't' + title.length : c.titleStatus || '-'
+}
+
 function compactConversation(c, i, full, openCommentMenu) {
   const who = identityOf(c.source, c.author, c.avatarUrl)
   return html`
@@ -5609,8 +5718,9 @@ function compactConversation(c, i, full, openCommentMenu) {
                   ${() => sendFailedBadge('reply:' + c.id)}
                 </span>
               `}
+        ${() => commentTitleLine(c)}
         <span
-          class="${full
+          class="${full && !commentTitleOf(c)
             ? '[overflow-wrap:anywhere] text-xs font-medium text-slate-800 dark:text-zinc-200'
             : 'line-clamp-3 [overflow-wrap:anywhere] text-xs font-medium text-slate-800 dark:text-zinc-200'}"
           .innerHTML="${commentBody(c, threadFenceStartIndexes(c).get('origin:' + c.id) ?? 0)}"
@@ -6058,7 +6168,9 @@ export function InlineComments(state, commentTarget, openCompose, openCommentMen
         const list = visibleComments()
         const cards = []
         for (let i = hidden; i < list.length; i++) {
-          cards.push(commentCard(list[i], i, openCommentMenu).key('comment:' + list[i].id))
+          // titleKeyOf: a later-arriving comment title must rebuild the card,
+          // see its own doc comment.
+          cards.push(commentCard(list[i], i, openCommentMenu).key('comment:' + list[i].id + ':' + titleKeyOf(list[i])))
         }
         return cards
       }}
@@ -6772,6 +6884,8 @@ const WORKFLOW_STATUS_NOTE = {
   'explain_code:completed': 'omschrijving gegenereerd',
   'summarize_chat:running': 'chat-samenvatting genereren…',
   'summarize_chat:completed': 'chat-samenvatting gegenereerd',
+  'comment_titles:running': 'comment-titels genereren…',
+  'comment_titles:completed': 'comment-titels gegenereerd',
   'approve:waiting': 'wacht op goedkeuringen',
   'pr_inbox:running': 'houdt de PR-inbox bij',
   'pr_inbox:waiting': 'houdt de PR-inbox bij',
@@ -7995,6 +8109,7 @@ export function commentDetailCard(c, opts) {
         ${() => sendFailedBadge('reply:' + c.id)}
         ${() => (preview ? '' : commentMenuButton(opts && opts.openMenu))}
       </div>
+      ${() => commentTitleLine(c)}
       <div
         class="${() =>
           'flex max-h-[70vh] flex-col gap-2.5 overflow-auto rounded-lg ' +

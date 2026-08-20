@@ -324,6 +324,14 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		if s := os.Getenv("SLASH_CLAUDE_CHAT_SUMMARY"); s != "" {
 			fake.SetOutputForPrompt(claude.ModelHaiku, claude.ChatSummarySystemPrompt, s)
 		}
+		// SLASH_CLAUDE_COMMENT_TITLES does the same for the comment_titles
+		// workflow's Haiku call: the raw JSON array the model is supposed to
+		// answer with ([{"n":1,"title":"…"}]), so a Playwright spec can drive
+		// the real workflow end to end. Keyed by CommentTitleSystemPrompt for
+		// the same reason as the summary above.
+		if s := os.Getenv("SLASH_CLAUDE_COMMENT_TITLES"); s != "" {
+			fake.SetOutputForPrompt(claude.ModelHaiku, claude.CommentTitleSystemPrompt, s)
+		}
 		cl = fake
 	}
 	// Under SLASH_JIRA=off the Jira bridge never shells out (offline/tests): an
@@ -702,6 +710,11 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// count) a short-summary execution for one embedded Claude conversation —
 	// the "Comment hiervan maken" prefill (RelatedPanel.mjs).
 	mux.HandleFunc("/api/workflows/summarize_chat", s.handleSummarizeChat)
+	// POST /api/workflows/comment_titles {pr,items:[{id,bodyLen}]} → start
+	// (idempotently, via a deterministic Run ID keyed on the whole set) one
+	// batch title run for the comments the frontend found without a title —
+	// see comment_titles.go and .claude/docs/comments-panel.md.
+	mux.HandleFunc("/api/workflows/comment_titles", s.handleCommentTitles)
 	// POST /api/workflows/pr_status {pr} → ensure the per-PR lifecycle tracker
 	// (its start fetches the PR's metadata into the prmeta read-model).
 	mux.HandleFunc("/api/workflows/pr_status", s.handlePRStatusStart)
@@ -1003,7 +1016,7 @@ func (s *server) handleRetryRun(w http.ResponseWriter, r *http.Request) {
 // /api/workflows/{runID}/signals/{signalName} (POST signal).
 func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/workflows/")
-	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "remove_reviewer" || rest == "code_warning" || rest == "task_snooze" || rest == "ignore_comment" || rest == "task_inbox" || rest == "cleanup" || rest == "claude_chat" || rest == "auto_warn" || rest == "comment_batch" || rest == "retry" {
+	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "remove_reviewer" || rest == "code_warning" || rest == "task_snooze" || rest == "ignore_comment" || rest == "task_inbox" || rest == "cleanup" || rest == "claude_chat" || rest == "auto_warn" || rest == "comment_batch" || rest == "comment_titles" || rest == "retry" {
 		http.NotFound(w, r)
 		return
 	}
@@ -1489,6 +1502,42 @@ func (s *server) handleSummarizeChat(w http.ResponseWriter, r *http.Request) {
 	}
 	in := SummarizeChatInput{Repo: body.Repo, PR: body.PR, CommentID: body.CommentID}
 	runID, err := s.tasks.manager.StartSummarizeChat(in, body.MsgCount)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
+}
+
+// handleCommentTitles starts a comment_titles Workflow Execution (POST) — the
+// sanctioned UI write path for giving a batch of long review comments a short
+// Dutch heading. The workflow asks Haiku (context-only, one call for the whole
+// batch) for a title of at most 6 words per comment and writes them onto the
+// comments read-model, which the UI already polls. Idempotent per (PR, set of
+// comment id + body length) via StartWorkflowID, so the frontend may fire this
+// on every comment poll: only a genuinely new/edited comment yields a new set,
+// and therefore a new Execution.
+func (s *server) handleCommentTitles(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Repo  string            `json:"repo,omitempty"`
+		PR    int               `json:"pr"`
+		Items []commentTitleRef `json:"items"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.PR <= 0 || len(body.Items) == 0 {
+		http.Error(w, "invalid comment titles request", http.StatusBadRequest)
+		return
+	}
+	for _, it := range body.Items {
+		if it.ID == "" {
+			http.Error(w, "invalid comment titles request", http.StatusBadRequest)
+			return
+		}
+	}
+	runID, err := s.tasks.manager.StartCommentTitles(CommentTitlesInput{Repo: body.Repo, PR: body.PR, Items: body.Items})
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return

@@ -20,6 +20,7 @@ export const WORKFLOW_LABELS = {
   resolve_test_covers: 'Testdekking',
   explain_code: 'AI-omschrijving',
   summarize_chat: 'Chat-samenvatting',
+  comment_titles: 'Comment-titels',
   approve: 'Goedkeuring',
   pr_inbox: 'Inbox',
   code_warning: 'Risicocontrole',

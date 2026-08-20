@@ -283,3 +283,47 @@ func TestDeleteUnknownIDIsNoop(t *testing.T) {
 		t.Fatalf("delete unknown id: %v", err)
 	}
 }
+
+// The comment_titles columns survive a save → title → read round trip, and a
+// re-Save of the comment (an ingest refresh re-storing the same row) must not
+// wipe the title that was generated for it in between.
+func TestTitleRoundTrip(t *testing.T) {
+	m := openTest(t)
+	ctx := context.Background()
+	base := Comment{ID: "c1", RunID: "c1", PR: 9, File: "a.php", Line: 3, Author: "AI check", Body: "Een lange melding over een risico."}
+	if err := m.Save(ctx, base); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SaveTitlesSearching(ctx, []string{"c1"}); err != nil {
+		t.Fatal(err)
+	}
+	c, _, err := m.Get(ctx, "c1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.TitleStatus != TitleStatusSearching || c.Title != "" {
+		t.Fatalf("after SaveTitlesSearching: %+v", c)
+	}
+	if err := m.SaveTitles(ctx, []TitleResult{{ID: "c1", Title: "Vault case wist settings", Status: TitleStatusDone, BodyLen: 34}}); err != nil {
+		t.Fatal(err)
+	}
+	c, _, err = m.Get(ctx, "c1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Title != "Vault case wist settings" || c.TitleStatus != TitleStatusDone || c.TitleBodyLen != 34 {
+		t.Fatalf("after SaveTitles: %+v", c)
+	}
+	// Save is an INSERT OR REPLACE: re-storing the same comment must keep the
+	// title it got in between (see Save's own doc comment).
+	if err := m.Save(ctx, base); err != nil {
+		t.Fatal(err)
+	}
+	c, _, err = m.Get(ctx, "c1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Title != "Vault case wist settings" || c.TitleStatus != TitleStatusDone || c.TitleBodyLen != 34 {
+		t.Fatalf("re-save wiped the title: %+v", c)
+	}
+}

@@ -427,8 +427,10 @@ used by both pages.
   `autoWarnToggleButton` (`src/autowarn.mjs`, `data-testid=auto-warn-toggle`),
   labelled **"Live AI assistent aan/uit"** — it turns off *every* automatic
   Claude call the review tree makes on its own: the AI risk check
-  (`code_warning`) **and** the footer's AI description (`explain_code`, hidden
-  as well as unrequested — see `.claude/docs/footer.md`). Deliberately NOT
+  (`code_warning`), the footer's AI description (`explain_code`, hidden
+  as well as unrequested — see `.claude/docs/footer.md`) **and** the short
+  title a long comment gets (`comment_titles`, see
+  `.claude/docs/comments-panel.md`). Deliberately NOT
   `resolve_call`/`resolve_test_covers`: those build the navigation structure
   rather than describing anything, so switching them off would break the tree
   instead of quietening it; a manual "Diepgravend onderzoek" is never gated

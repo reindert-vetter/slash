@@ -29,6 +29,7 @@ which the UI then signals. A **one-shot** type runs synchronously to completion
 | `/api/workflows/resolve_call` | `{pr, callerId, callerFile, callerClass, callerName, calls}` | one-shot | Idempotent Run ID per request. |
 | `/api/workflows/resolve_test_covers` | `{pr, testId, testFile, testClass, testName, classes}` | one-shot | |
 | `/api/workflows/explain_code` | `{pr, blockId, file, label, gran, unitKey, codeHash, code, context}` | one-shot | Idempotent Run ID (`explainRunID`). |
+| `/api/workflows/comment_titles` | `{pr, items:[{id, bodyLen}]}` | one-shot | Gives a BATCH of long comments a 6-word Dutch heading. Idempotent Run ID over the whole set (`commentTitlesRunID`), so the frontend fires it on every comment poll; the batch is capped at 25 server-side. 400 on a non-positive pr, an empty `items`, or an item without an id. Read side is the ordinary `GET /api/comments` (the title lands on the comment row) — see "Short titles for review comments" in `.claude/docs/workflows-analysis.md`. |
 | `/api/workflows/code_warning` | `{pr}` | one-shot | Manual "Diepgravend onderzoek"; re-running supersedes. |
 | `/api/workflows/submit_review` | `{pr, event, body}` | one-shot | 400 on invalid input *before* any `gh` call (`validateSubmitReview`; a `REQUEST_CHANGES` needs a body), 502 if the submit itself fails. |
 | `/api/workflows/ready_for_review` | `{pr, reviewers?}` | one-shot | 400 on a non-positive pr or invalid login (`validateReadyForReview`, which also trims+dedups). |

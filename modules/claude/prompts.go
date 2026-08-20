@@ -51,6 +51,18 @@ var SinceReviewSystemPrompt string
 //go:embed prompts/chat_summary.md
 var ChatSummarySystemPrompt string
 
+// CommentTitleSystemPrompt frames the sixth context-only Haiku action: give a
+// batch of review comments a short Dutch title of at most 6 words each — the
+// heading a long, multi sentence comment shows above its (clamped) body, so
+// the reviewer can scan a comment column without reading every wall of text
+// (see .claude/docs/comments-panel.md). Its call-specific content is the
+// numbered comment bodies themselves (commentTitlesPrompt, comment_titles.go);
+// the numbering, rather than the comment ids, is what the model echoes back —
+// an index is far more reliable to reproduce than an id.
+//
+//go:embed prompts/comment_title.md
+var CommentTitleSystemPrompt string
+
 // CodeWarningSystemPrompt is the static instruction block for the
 // code_warning workflow's one agentic Sonnet call: unlike the three above,
 // this is NOT a context-only completion — Sonnet is given Read/Grep/Glob and

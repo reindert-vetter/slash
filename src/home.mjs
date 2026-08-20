@@ -122,6 +122,7 @@ import RelatedPanel, {
   localReplyCount,
   publishThreadOnly,
   CodePreviewPanel,
+  commentTitleOf,
 } from './RelatedPanel.mjs'
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { CallArrowsHost, setCallArrows, resettleCallArrows } from './callArrows.mjs'
@@ -2972,7 +2973,11 @@ watch(
 // comments-panel.md.
 function commentBlockItem(comments) {
   const c = comments[0]
-  const snippet = (c.body || '').trim().replace(/\s+/g, ' ').slice(0, 60)
+  // The generated short title (comment_titles, see commentTitleOf in
+  // RelatedPanel.mjs) when there is a fresh one — it says in 6 words what the
+  // 60-character body snippet below could only start to say. Falls back to that
+  // snippet for a comment that has (or needs) no title.
+  const snippet = commentTitleOf(c) || (c.body || '').trim().replace(/\s+/g, ' ').slice(0, 60)
   // An orphan is a block comment that lost its block (a commit renamed/removed
   // the symbol — see reanchor.go): it gets a row here instead of vanishing, and
   // its fallback label names the block it USED to hang on, so the reviewer can
@@ -14020,7 +14025,17 @@ function DetailPanel(state) {
               openMenu: (opts) => openMenu('prComment', opts),
             })
             const card = html`<div class="contents" data-testid="detail-card">${inner}</div>`.key(
-              'detail:' + (i === sel ? 'sel' : 'prev') + ':comment:' + b.id + ':' + (b.comment && b.comment.status),
+              'detail:' +
+                (i === sel ? 'sel' : 'prev') +
+                ':comment:' +
+                b.id +
+                ':' +
+                (b.comment && b.comment.status) +
+                // A title arriving later must rebuild this card too — the
+                // comment object it captured is replaced wholesale by the
+                // comment poll (see titleKeyOf/arrowjs-pitfalls.md).
+                ':' +
+                (b.comment && commentTitleOf(b.comment) ? 't' : '-'),
             )
             out.push(card)
             return

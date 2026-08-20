@@ -3,12 +3,15 @@
 // theme toggle in prInfoCard's pr-info-theme-row (see
 // .claude/rules/conventions.md, "Theme" — same slot, same style).
 //
-// Two consumers, both automatic and both unasked-for:
+// Three consumers, all automatic and all unasked-for:
 //
 //   1. the AI risk check (code_warning), fired from build_relations/pr_status
 //      on real new code — see .claude/docs/workflows-analysis.md;
 //   2. the footer's AI description of the focused unit (explain_code), fired
 //      by home.mjs's footer watch — see .claude/docs/footer.md.
+//   3. the short title a long comment gets (comment_titles), fired by
+//      loadComments in RelatedPanel.mjs — see .claude/docs/comments-panel.md
+//      ("A long comment gets a generated title").
 //
 // Off means neither fires, so no Claude call happens without the reviewer
 // asking for one. What stays ON deliberately: resolve_call and

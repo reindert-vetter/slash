@@ -1227,6 +1227,50 @@ reply textarea — those only appear once the card is genuinely selected
 and there is no underlying code" / "the clamp comes back once a third comment
 lands on the same unit").
 
+### A long comment gets a generated title
+
+A comment of more than ~90 characters shows a **heading**: one Dutch sentence of
+at most 6 words, above its own body. Reviewer request, from a screenshot of an
+AI-controle finding (`code_warning`) whose three sentences filled the whole card:
+its first lines read as if they were a title while they were really the middle of
+a paragraph, and a column of such cards could not be scanned at all.
+
+- **Where it comes from:** the `comment_titles` workflow (Haiku, batched, one
+  Execution per set of untitled comments) writes `title`/`titleStatus`/
+  `titleBodyLen` onto the comment itself, so it arrives through the ordinary
+  `/api/comments` poll. Mechanism, determinism, the staleness fingerprint and
+  the "no backfill" reasoning: "Short titles for review comments" in
+  `.claude/docs/workflows-analysis.md`.
+- **`commentTitleOf(c)`** (`RelatedPanel.mjs`, exported) is the single place that
+  answers "is there a title to show" — `''` when there is none **and** when
+  `titleBodyLen` no longer matches the current body (the reviewer edited the
+  comment, so the stored title describes text that is gone).
+- **Three render points**, all reading that one helper:
+  `commentTitleLine(c)` above the body in `compactConversation` and in
+  `commentDetailCard` (`data-testid=comment-title`, a `truncate` line), and
+  `commentBlockItem`'s index-row `label` (`home.mjs`), which now shows the title
+  instead of the first 60 characters of the body. Deliberately **plain text, no
+  `renderMarkdown`** — same reasoning as the other `truncate`/`line-clamp` title
+  contexts (see `.claude/rules/conventions.md`): a half-rendered `**` in a cut-off
+  heading looks worse than none.
+- **A title re-imposes the 3-line clamp.** `autoExpandLoneComment`'s
+  full-body state (the section above) only applies while there is **no** title:
+  once a heading says what the comment is about, the wall of text underneath can
+  go back to `line-clamp-3` (explicit reviewer decision). Everything else about
+  that third card state is unchanged.
+- **Nothing renders while `titleStatus === 'searching'`** — a "titel
+  genereren…" placeholder would only add a second layout jump for a heading that
+  lands a few seconds later anyway.
+- **arrow.js: the card's `.key()` must encode the title.** A title arrives on a
+  LATER poll, which replaces `cs.list` with fresh objects, so the mounted card
+  keeps reading the old comment object and its bindings never re-run (see
+  `.claude/rules/arrowjs-pitfalls.md`, "A keyed node is reused without re-running
+  its bindings"). `titleKeyOf(c)` therefore rides along in `commentCard`'s key,
+  and the comment-index detail card's own key in `home.mjs`'s `DetailPanel` gains
+  the same `t`/`-` suffix. `tests/comment-title.spec.mjs` covers exactly this
+  (removing either suffix fails that test).
+- Tests: `tests/comment-title.spec.mjs`.
+
 ### The focused comment's range gets a bar along the right edge of the diff
 
 Once the keyboard sits **in** a comment, the diff draws a thin vertical bar over

@@ -190,6 +190,16 @@ const (
 	// second LLM call; it completes when done (no signals). Haiku,
 	// context-only — no escalation, mirroring explain_code/pr_status's summary.
 	WorkflowSummarizeChat = "summarize_chat"
+	// WorkflowCommentTitles is the Workflow Type that gives a BATCH of review
+	// comments a short Dutch title (at most 6 words each) — the heading a long,
+	// multi sentence comment shows above its clamped body, so a comment column
+	// stays scannable. One Execution per (PR, set of untitled comments),
+	// started idempotently via a deterministic Run ID (see commentTitlesRunID)
+	// so the frontend may fire it on every comment poll without ever
+	// triggering a second LLM call for the same set; it completes when done (no
+	// signals). Haiku, context-only, one call for the whole batch — see
+	// comment_titles.go and .claude/docs/workflows-analysis.md.
+	WorkflowCommentTitles = "comment_titles"
 	// SignalReply is the Signal Name a reaction is delivered under.
 	SignalReply = "reply"
 	// SignalPRState is the Signal Name the poller delivers an observed PR state
@@ -620,6 +630,22 @@ type SummarizeChatInput struct {
 	Repo      string `json:"repo,omitempty"`
 	PR        int    `json:"pr"`
 	CommentID string `json:"commentId"`
+}
+
+// CommentTitlesInput starts a comment_titles Execution: it asks Haiku
+// (context-only, no tools) for a short Dutch title per comment, for the batch
+// of comments named in Items. Like SummarizeChatInput it carries only
+// identities — the workflow reads the bodies themselves through an Activity
+// (comments.Module.List), the read-model being the durable record of them —
+// while each Item's BodyLen pins the version being titled, so an edited
+// comment yields a different Run ID (commentTitlesRunID) instead of a deduped
+// no-op that would keep the stale title forever.
+type CommentTitlesInput struct {
+	// Repo is the canonical repo string this PR belongs to: "" (absent) for the
+	// primary repo. See repos.go.
+	Repo  string            `json:"repo,omitempty"`
+	PR    int               `json:"pr"`
+	Items []commentTitleRef `json:"items"`
 }
 
 // IngestInput starts an ingest Workflow Execution for one PR.
@@ -1812,6 +1838,96 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return nil, m.chat.SaveSummary(ctx, arg.CommentID, arg.Status, arg.Text)
 	})
 
+	// Activity: mark a batch of comments as "a title is being generated" (write,
+	// workflow-driven) — mirrors markChatSummarySearching above, for
+	// comment_titles.
+	engine.RegisterActivity("markCommentTitlesSearching", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg CommentTitlesInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.comments == nil {
+			return nil, nil
+		}
+		ids := make([]string, 0, len(arg.Items))
+		for _, it := range sortCommentTitleRefs(arg.Items) {
+			ids = append(ids, it.ID)
+		}
+		return nil, m.comments.SaveTitlesSearching(ctx, ids)
+	})
+	// Activity: ask Haiku (context-only, no tools) for a short Dutch title per
+	// comment in the batch — ONE call for the whole batch, keyed by index (see
+	// comment_titles.go). Shells out to the claude CLI, hence an Activity.
+	// Best-effort: a Claude hiccup yields no titles (the workflow then records
+	// every comment in the batch as failed) rather than sinking the run.
+	//
+	// The bodies come from the comments read-model here rather than from the
+	// input, so a stale replay titles what is stored now; the Run ID already
+	// pins the batch to the body LENGTHS it was started for.
+	engine.RegisterActivity("generateCommentTitles", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg CommentTitlesInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		items := sortCommentTitleRefs(arg.Items)
+		out := struct {
+			Titles  map[string]string `json:"titles"`
+			BodyLen map[string]int    `json:"bodyLen"`
+		}{Titles: map[string]string{}, BodyLen: map[string]int{}}
+		if m.comments == nil || m.claude == nil || len(items) == 0 {
+			return json.Marshal(out)
+		}
+		bodies := make([]string, 0, len(items))
+		kept := make([]commentTitleRef, 0, len(items))
+		for _, it := range items {
+			c, ok, err := m.comments.Get(ctx, it.ID)
+			if err != nil {
+				return nil, err
+			}
+			if !ok || strings.TrimSpace(c.Body) == "" {
+				// Deleted (or emptied) between the start and this Activity —
+				// nothing to title, and no row left to write to either.
+				continue
+			}
+			bodies = append(bodies, c.Body)
+			kept = append(kept, commentTitleRef{ID: it.ID, BodyLen: len([]rune(c.Body))})
+		}
+		if len(kept) == 0 {
+			return json.Marshal(out)
+		}
+		raw, err := m.claude.Run(ctx, claude.RunRequest{
+			Prompt:       commentTitlesPrompt(bodies),
+			Model:        claude.ModelHaiku,
+			SystemPrompt: claude.CommentTitleSystemPrompt,
+		})
+		if err != nil {
+			m.logf("comment_titles: generate pr=%d comments=%d skipped: %v", arg.PR, len(kept), err)
+			raw = ""
+		}
+		titles := parseCommentTitles(raw, len(kept))
+		for i, ref := range kept {
+			out.BodyLen[ref.ID] = ref.BodyLen
+			if t := titles[i+1]; t != "" {
+				out.Titles[ref.ID] = t
+			}
+		}
+		return json.Marshal(out)
+	})
+	// Activity: persist the finished batch (a title per comment, or "failed" for
+	// one the model skipped) (write, workflow-driven).
+	engine.RegisterActivity("saveCommentTitles", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			Results []comments.TitleResult `json:"results"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.comments == nil {
+			return nil, nil
+		}
+		return nil, m.comments.SaveTitles(ctx, arg.Results)
+	})
+
 	// Activity: stage 1 of the pr_status tracker — fetch the PR's basics (title,
 	// URL, body, author, diff-stats, head ref) from GitHub, derive a Jira key from
 	// the title and fetch that issue (best-effort), then store all of it in the
@@ -2719,6 +2835,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowChatMerge, chatMergeQueueWorkflow)
 	engine.RegisterWorkflow(WorkflowCommentBatch, commentBatchWorkflow)
 	engine.RegisterWorkflow(WorkflowSummarizeChat, summarizeChatWorkflow)
+	engine.RegisterWorkflow(WorkflowCommentTitles, commentTitlesWorkflow)
 
 	// The LLM-heavy workflows make many/long claude calls (resolve_call runs one
 	// claude call per unresolved call in the block; code_warning a whole agentic
@@ -2731,6 +2848,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.SetWorkflowPriority(WorkflowResolveTestCovers, tembed.PriorityLow)
 	engine.SetWorkflowPriority(WorkflowExplainCode, tembed.PriorityLow)
 	engine.SetWorkflowPriority(WorkflowSummarizeChat, tembed.PriorityLow)
+	engine.SetWorkflowPriority(WorkflowCommentTitles, tembed.PriorityLow)
 	engine.SetWorkflowPriority(WorkflowCodeWarning, tembed.PriorityLow)
 	// Every claude_chat turn is a real claude subprocess call (see
 	// runOneClaudeTurn) — same reasoning as the LLM-heavy workflows above: an
@@ -3770,6 +3888,79 @@ func summarizeChatWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 // sanctioned UI write path.
 func (m *TaskManager) StartSummarizeChat(in SummarizeChatInput, msgCount int) (string, error) {
 	return m.engine.StartWorkflowID(chatSummaryRunID(in.CommentID, msgCount), WorkflowSummarizeChat, in)
+}
+
+// commentTitlesWorkflow gives a batch of review comments a short Dutch title
+// (see comment_titles.go). Deterministic: the LLM call is a single Activity,
+// the per-comment done/failed decision reads that Activity's recorded result
+// (history), the batch is sorted by id before anything iterates it, and the
+// Activity order/count is fixed — mark searching, generate, save. Mirrors
+// summarizeChatWorkflow, one call for a whole batch instead of one thing.
+func commentTitlesWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
+	var in CommentTitlesInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return nil, err
+	}
+	items := sortCommentTitleRefs(in.Items)
+	if len(items) == 0 {
+		return json.Marshal(map[string]int{"titled": 0})
+	}
+	if err := w.ExecuteActivity("markCommentTitlesSearching", in, nil); err != nil {
+		return nil, fmt.Errorf("mark searching: %w", err)
+	}
+	var gen struct {
+		Titles  map[string]string `json:"titles"`
+		BodyLen map[string]int    `json:"bodyLen"`
+	}
+	if err := w.ExecuteActivity("generateCommentTitles", in, &gen); err != nil {
+		return nil, fmt.Errorf("generate titles: %w", err)
+	}
+	// Built by walking the SORTED batch, never gen.Titles' own map order (a map
+	// range would make the history order depend on Go's randomized iteration —
+	// see .claude/rules/workflow-determinism.md).
+	results := make([]comments.TitleResult, 0, len(items))
+	titled := 0
+	for _, it := range items {
+		bodyLen, ok := gen.BodyLen[it.ID]
+		if !ok {
+			// The comment disappeared before it could be titled (deleted mid
+			// run): no row left to write, so nothing to record either.
+			continue
+		}
+		r := comments.TitleResult{ID: it.ID, BodyLen: bodyLen, Status: comments.TitleStatusFailed}
+		if t := gen.Titles[it.ID]; t != "" {
+			// Offline (claude.Fake) or a Claude hiccup leaves this empty, which
+			// records a terminal "failed" status so the frontend never
+			// re-requests this exact comment+body (the deterministic Run ID
+			// already dedups).
+			r.Title, r.Status = t, comments.TitleStatusDone
+			titled++
+		}
+		results = append(results, r)
+	}
+	if err := w.ExecuteActivity("saveCommentTitles", map[string]any{"results": results}, nil); err != nil {
+		return nil, fmt.Errorf("save titles: %w", err)
+	}
+	return json.Marshal(map[string]int{"titled": titled})
+}
+
+// StartCommentTitles launches a comment_titles Execution under its
+// deterministic Run ID (commentTitlesRunID) — StartWorkflowID makes a repeated
+// request for the same set of comments an idempotent no-op reuse, so the UI can
+// fire on every comment poll without duplicating an LLM call. The batch is
+// capped at maxCommentTitleBatch here (after sorting, so which comments make
+// the cut is itself deterministic); whatever is left over rides along on the
+// next request, whose untitled set — and therefore Run ID — differs. Starting
+// an Execution is the sanctioned UI write path.
+func (m *TaskManager) StartCommentTitles(in CommentTitlesInput) (string, error) {
+	in.Items = sortCommentTitleRefs(in.Items)
+	if len(in.Items) > maxCommentTitleBatch {
+		in.Items = in.Items[:maxCommentTitleBatch]
+	}
+	if len(in.Items) == 0 {
+		return "", fmt.Errorf("comment_titles: no comments given")
+	}
+	return m.engine.StartWorkflowID(commentTitlesRunID(in.PR, in.Items), WorkflowCommentTitles, in)
 }
 
 // resolveTestCoversWorkflow resolves a test's class-level-only coverage
