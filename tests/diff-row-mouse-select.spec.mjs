@@ -219,27 +219,14 @@ test.describe('PR Review Tree — mouse line selection (click, native selection)
     expect(after.text).toBe(expected)
   })
 
-  test('clicking a row on the non-focused look-ahead preview focuses it like a key would', async ({ page }) => {
-    await page.goto('/pr/102')
-    await leaveSearchBox(page)
-
-    await page.keyboard.press('ArrowRight') // execute is selected + focused
-    await expect(page.locator('[data-idx="0"]')).toHaveClass(/bg-indigo-50/)
-
-    // `other` renders to the right as the dimmed look-ahead preview (i===sel+1).
-    const preview = page.getByTestId('detail-card').nth(1)
-    const previewRow = preview.locator('[data-pane="new"] [data-changed="1"]').first()
-    await expect(previewRow).toBeVisible()
-    await previewRow.click()
-
-    // Focusing `other` moves the sidebar selection (stepBlock, same-file
-    // neighbour) and the click lands the diff cursor on its one changed line.
-    await expect(page.locator('[data-idx="1"]')).toHaveClass(/bg-indigo-50/)
-    await expect(page.locator('[data-idx="0"]')).not.toHaveClass(/bg-indigo-50/)
-    const nowFocused = page.getByTestId('detail-card').first()
-    await expect(nowFocused.locator('div[class*="#b9f5d9"]')).toHaveCount(1)
-    await expect(nowFocused.locator('div[class*="#b9f5d9"]')).toContainText('$x')
-  })
+  // REMOVED: 'clicking a row on the non-focused look-ahead preview focuses it
+  // like a key would'. The look-ahead preview now ALWAYS collapses to just its
+  // header + meta row — it renders no diff body at all, by explicit reviewer
+  // request (see "The look-ahead preview always collapses to just its header"
+  // in .claude/docs/diff-card.md, covered by
+  // tests/preview-collapse-when-active-tall.spec.mjs). There is therefore no
+  // preview row left to click, so the gesture this test pinned no longer
+  // exists; a click on the already-focused card is still covered above.
 })
 
 // A single click landing INSIDE a real call-segment selects that exact
