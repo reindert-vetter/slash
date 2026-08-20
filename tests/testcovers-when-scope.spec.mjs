@@ -61,4 +61,48 @@ test.describe('a class-level #[CoversMethod] covers child scopes to the test\'s 
     await expect(items).toHaveCount(1)
     await expect(items.nth(0)).toContainText('WhenScopeSubject::compute')
   })
+
+  // Same rule one granularity finer, on reviewer request (live PR 13431, the
+  // `getJson(...)` line of an added test method): the per-line badge
+  // (lineChildSummaries) already anchors such a covers child on every
+  // "// When" STATEMENT row, so the panel must agree when the cursor sits on
+  // exactly that row — it used to say "Geen onderliggende code." there,
+  // because 'line'/'call' scoping dropped every covers child outright.
+  // lineAnchoredTestCoverChildren (home.mjs) is the one exception; see
+  // "A covers child stays visible at gran='line' on its own anchor row" in
+  // .claude/docs/underlying-code.md.
+  //
+  // The line-unit indices come from the same 24-row layout the group test
+  // above walks (this method is entirely `added`, so every row is its own
+  // line unit): 8 = the first "// When" COMMENT, 9 = its statement,
+  // 14 = the second "// When" comment, 15 = its statement.
+  test('shown at gran=line on a // When statement row, hidden on the comment row and other lines', async ({
+    page,
+  }) => {
+    const LINE = BASE + '&gran=line'
+
+    // The first "// When" statement row — the covers child shows, exactly as
+    // its per-line badge on that same row promises.
+    await page.goto(LINE + '&chg=9')
+    const items = page.getByTestId('related-item')
+    await expect(items).toHaveCount(1)
+    await expect(items.nth(0)).toContainText('WhenScopeSubject::compute')
+
+    // The SECOND "// When" statement row too — whenSectionRows unions every
+    // occurrence at this granularity as well, not only the first.
+    await page.goto(LINE + '&chg=15')
+    await expect(page.getByTestId('related-item')).toHaveCount(1)
+
+    // The "// When" comment row itself stays empty ("cursor op de
+    // comment-regel zelf toont de kaart niet").
+    await page.goto(LINE + '&chg=8')
+    await expect(page.getByTestId('block-column')).toBeVisible()
+    await expect(page.getByTestId('related-item')).toHaveCount(0)
+
+    // An ordinary Given line stays empty as well — this is an anchor-row
+    // exception, not a return to "always visible".
+    await page.goto(LINE + '&chg=5')
+    await expect(page.getByTestId('block-column')).toBeVisible()
+    await expect(page.getByTestId('related-item')).toHaveCount(0)
+  })
 })

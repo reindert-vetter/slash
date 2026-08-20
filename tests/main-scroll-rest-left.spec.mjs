@@ -32,7 +32,14 @@ test.beforeEach(async ({ page }) => {
 test('<main> hides its horizontal scrollbar and snaps back to flush-left at rest', async ({ page }) => {
   // Narrow viewport so <main>'s content genuinely overflows and a scrollbar
   // would show if not suppressed.
-  await page.setViewportSize({ width: 1300, height: 900 })
+  // 900px, not the original 1300: with an EMPTY Onderliggende-code column now
+  // taking a flat narrow width instead of the 42rem/40rem clamp floor
+  // (RELATED_EMPTY_WIDTH_CLS, RelatedPanel.mjs — see "An empty column is
+  // narrow" in .claude/docs/underlying-code.md), this fixture's whole column
+  // flow fits exactly at 1300 (measured: scrollWidth === clientWidth === 1252)
+  // and there is no overflow left to test. 900 keeps it genuinely overflowing
+  // (56px collapsed block rail + 595px drilled column + 288px panel).
+  await page.setViewportSize({ width: 900, height: 900 })
   await page.goto('/pr/12903')
 
   const main = page.locator('main')

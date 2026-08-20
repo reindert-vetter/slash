@@ -418,6 +418,61 @@ sitting side by side in `comments-and-related`'s first row — see
 "The embedded Claude chat column" in `.claude/docs/detail-layout.md` and
 `.claude/docs/comments-panel.md`.
 
+### An empty column is narrow, and only while nothing sits above it
+
+The clamp above has a **floor** (42rem / 49.2rem, 40rem below the narrow
+breakpoint) that it never drops below — however little there is to show. For a
+column holding literally nothing but the sentence "Geen onderliggende code."
+that floor is dead space, and it is not harmless: measured on a live PR (13431,
+`StatisticsActivitiesIndexTest::it_gives_amount_obligation_…` at
+`gran=line`, viewport 2000px) the column claimed **787px** next to a 1429px
+diff card inside a 1952px `<main>`. The moment the keyboard moved into the
+panel (`?rel.foc=code` → `scrollRelatedIntoView`, see
+`.claude/docs/detail-layout.md`), `<main>` scrolled to its own maximum and cut
+**240px off the diff card's LEFT edge** — and since nearly every line of that
+test method is short, the remaining visible slice of the card held no text at
+all. Reported as "de kaart is enorm hoog en vrijwel volledig lege groene
+vlakte", with the card's title starting mid-word. (The card itself was fine:
+976px tall for 51 rows, no internal scroll anywhere — only `<main>`'s own
+horizontal scroll.)
+
+**`RELATED_EMPTY_WIDTH_CLS`** (`w-[18rem]`, `RelatedPanel.mjs`) replaces the
+whole clamp when **`relatedColumnIsEmpty()`** holds. One flat token, no
+`narrow:`/`2xl:` variants — it already sits well below every one of those
+floors, exactly like `NARROW_FIXED_WIDTH_CLS` in `Block.mjs` — and still
+parseable by `parseAutoWidthPx`'s bare-rem branch, so a drag on this column
+keeps snapping back correctly (`.claude/docs/column-resize.md`).
+
+"Empty" is deliberately strict, four terms:
+
+- `rc.children.length === 0` — no child cards at all.
+- `!rc.warning` — the "Dekking niet te bepalen" line keeps the normal width,
+  it is real content.
+- `!claudeChatVisible() && !hasCommentClaudeFooter()` — **the gate.** These
+  two are exactly the expression `home.mjs`'s `comment-claude-row` uses for
+  its own `hidden` class, so the narrow width can only ever apply while that
+  row is hidden (measured: 0px wide). That keeps the documented invariant
+  `commentColumnWidthCls() + connector + claudeColumnWidthCls() ===
+  relatedColumnWidthCls()` intact — those two siblings keep deriving from the
+  unchanged clamp, and there is simply nothing above the column to line up
+  with. Both sides are covered by tests:
+  `tests/related-code-grow.spec.mjs` (empty → narrow) and
+  `tests/comment-claude-column-widths.spec.mjs` (row visible → clamp width,
+  sum exact).
+
+**Deliberately NOT gated on the "zoeken…" pill** (`searching()`/`pending()`):
+an unresolved call whose LLM search is still running is the normal state for a
+test method full of framework calls, and waiting for it would keep the dead
+787px for as long as the search takes. If the search does land a child, the
+column simply widens then — the same content-driven behaviour it always had.
+
+**What this does NOT fix:** once the column legitimately HAS content, a focused
+panel next to a wide diff card still scrolls `<main>` right and leaves the card
+partly off the left edge (measured in the same state after the covers child
+became visible again: 1429px card + 1010px column in a 1952px `<main>` → 463px
+cut). That is `scrollRelatedIntoView`'s ordinary `inline:'nearest'` behaviour
+plus the left-edge chevron hint, not this bug.
+
 ### Narrow viewport (< 1400px)
 
 A hard Tailwind cutoff, not a vw-scaling formula: `index.html`'s
@@ -640,7 +695,10 @@ diff segment it sits on.
   `[unit.start, unit.end]`.
 - **`line`/`call` are a hard filter (hiding)** — you never see a call, listener,
   `covers`/`covered_by` child of a line you did *not* select
-  (`relatedChildren`'s `scoped` flag).
+  (`relatedChildren`'s `scoped` flag). **One exception, at `line` only:** a
+  `covers` child whose own anchor row IS the selected row stays visible — see
+  "A `covers` child stays visible at `gran='line'` on its own anchor row"
+  below.
 - **List mode** (no diff) shows **all** resolved calls of the block.
 - **A Shift+arrow range widens `[unit.start, unit.end]` to the merged range**
   (`state.rangeAnchor`/`rangeUnit`, see "Shift+↑/↓" in
@@ -758,6 +816,36 @@ of leaving `Line` at 0, see 121be8d) or the coincidentally wrong row that bug
 produced. A real per-method annotation (`Line` truthy) is untouched — it
 keeps its own `groupTierForLine` scoping on the annotation's own line, as
 before. Test: `tests/testcovers-when-scope.spec.mjs`.
+
+### A `covers` child stays visible at `gran='line'` on its own anchor row
+
+`line`/`call` scoping used to drop **every** `covers` child (`relatedChildren`'s
+`scoped` flag), which contradicted the per-line badge on one and the same row:
+reported on live PR 13431, the `getJson(...)` line of
+`StatisticsActivitiesIndexTest::it_gives_amount_obligation_…` showed a
+`✓ 2/2` "onderliggende code" badge while stepping onto that very line with `d`
+made the panel say "Geen onderliggende code." — the badge and the panel
+disagreeing about the same child. (The reviewer read that as "is the underlying
+block not found yet?"; it was found — `GET /api/testcovers` had a `resolved`
+row for `ActivityReader::read`. The `getJson` call itself is a genuinely
+`unresolved` callresolve row and always will be: it is Laravel's own test
+helper in `vendor/`, outside the scanned repo, and the real target behind the
+URL is a route, not a method call.)
+
+**`lineAnchoredTestCoverChildren`** (`home.mjs`) is the exception:
+at `gran==='line'` it keeps exactly those `covers` rows whose **anchor row**
+falls inside the selected line unit (a Shift-range included, since it reads
+`focusedActiveUnit()`), and resolves that anchor with the **identical rule
+`lineChildSummaries` uses for the badge** — `newLineToRowOf(r.line)` for a row
+with a real recorded line, `whenSectionRows` for one with `Line === 0` — so the
+two cannot drift apart again. It passes that as a row filter into
+`resolvedTestCoverChildren`'s new optional `rowFilter` param; every other
+caller is unchanged.
+
+**`gran==='call'` deliberately keeps the old behaviour** (call-site children
+only): a call segment is FINER than a row, and a `covers` target is not the
+target of that one call. Test: the `gran=line` case in
+`tests/testcovers-when-scope.spec.mjs`.
 
 **Inline comment blocks are unaffected by all of this** —
 `InlineComments`/`commentUnder` already hard-filter by aligned-row range at *every*

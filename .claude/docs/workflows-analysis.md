@@ -802,7 +802,11 @@ likewise carries the full child descriptor + code text.
   `gran==='group'`, scoped to the covering test's own `// When` section
   instead of shown unconditionally — see "A class-level `#[CoversMethod]`/
   found-escalated `covers` child scopes to `// When`" in
-  `.claude/docs/underlying-code.md`. `directChildBlocks`/`nestedPrBlocks`
+  `.claude/docs/underlying-code.md`. At `gran==='line'` a `covers` child is
+  kept when its own ANCHOR ROW is the selected row (the same anchoring the
+  per-line badge uses) instead of dropping out with the rest — see "A `covers`
+  child stays visible at `gran='line'` on its own anchor row" in that same
+  file. `directChildBlocks`/`nestedPrBlocks`
   include **only direction 1**, to avoid a method↔test cycle in the recursive
   approval rollup. **Test coverage hides no block from the left list** — neither
   side: a tested method that is a PR block is always changed, primary reviewable

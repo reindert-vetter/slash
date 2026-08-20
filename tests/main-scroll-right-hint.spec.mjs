@@ -50,7 +50,14 @@ test('a right-edge hint appears while <main> overflows and scrolls one column at
   // overflow, and reset scroll to a known position (0) — the resize alone
   // (no scroll) must already flip the hint on, since the sentinel's
   // IntersectionObserver reacts to the root's own geometry changing too.
-  await page.setViewportSize({ width: 1300, height: 900 })
+  // 900px, not the original 1300: with an EMPTY Onderliggende-code column now
+  // taking a flat narrow width instead of the 42rem/40rem clamp floor
+  // (RELATED_EMPTY_WIDTH_CLS, RelatedPanel.mjs — see "An empty column is
+  // narrow" in .claude/docs/underlying-code.md), this fixture's whole column
+  // flow fits exactly at 1300 (measured: scrollWidth === clientWidth === 1252)
+  // and there is no overflow left to test. 900 keeps it genuinely overflowing
+  // (56px collapsed block rail + 595px drilled column + 288px panel).
+  await page.setViewportSize({ width: 900, height: 900 })
   await main.evaluate((el) => {
     el.scrollLeft = 0
   })

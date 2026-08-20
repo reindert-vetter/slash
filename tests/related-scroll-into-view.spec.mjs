@@ -87,7 +87,17 @@ test('a cold restore of rel.foc still scrolls into view once the delayed diff fi
     await route.fallback()
   })
 
-  await page.setViewportSize({ width: 1300, height: 900 })
+  // 1100px, not the original 1300: this fixture's Onderliggende-code panel is
+  // EMPTY ("Geen onderliggende code.") and such a panel now takes a flat
+  // narrow width instead of the 42rem clamp floor (RELATED_EMPTY_WIDTH_CLS,
+  // RelatedPanel.mjs — see "An empty column is narrow" in
+  // .claude/docs/underlying-code.md). At 1300 the whole column flow therefore
+  // fits exactly (measured: scrollWidth === clientWidth === 1252), so there is
+  // nothing left to scroll and this test's own premise — the panel being
+  // clipped until the delayed code lands — no longer exists there. 1100 keeps
+  // the flow genuinely overflowing (926px card + 288px panel), so the
+  // overflow-observer path under test still runs.
+  await page.setViewportSize({ width: 1100, height: 900 })
   // Block 1 (CreatePaymentAction::execute) — same fixture as the test above,
   // restored straight from the URL with the related panel already focused on
   // Onderliggende code (rel.foc=code), diff mode, change group 0.

@@ -65,4 +65,35 @@ test.describe('PR Review Tree — Onderliggende code column grows with long code
       .poll(async () => (await related.boundingBox()).width)
       .toBeCloseTo(commentBox.width, 0)
   })
+
+  // An Onderliggende-code column with genuinely nothing in it used to reserve
+  // the full clamp FLOOR (42rem/49.2rem, 40rem below the narrow breakpoint)
+  // for the single sentence "Geen onderliggende code." — measured on a live PR
+  // at a 2000px viewport: 787px of dead column next to a 1429px diff card in a
+  // 1952px <main>, so focusing the panel (?rel.foc=code) scrolled <main> to its
+  // maximum and cut 240px off the diff card's LEFT edge, which (most lines
+  // being short) read as a tall, almost entirely empty card whose title
+  // started mid-word. RELATED_EMPTY_WIDTH_CLS (RelatedPanel.mjs) gives that
+  // case a flat narrow width instead; see "An empty column is narrow" in
+  // .claude/docs/underlying-code.md.
+  test('an empty column drops below the narrow floor instead of reserving it', async ({ page }) => {
+    // PR 12903 block 1 in diff mode: no relations, no resolved calls, no
+    // covers rows — and no comments either, so the comment/Claude row above
+    // this column is hidden. That second half is the GATE (the documented
+    // comment + connector + Claude === related invariant may not break):
+    // tests/comment-claude-column-widths.spec.mjs covers the other side of
+    // it, a visible row with the ordinary clamp width still summing exactly.
+    await page.goto('/pr/12903?sel=app%2FActions%2FCreatePaymentAction.php%3A1&mode=diff&chg=0')
+
+    const related = page.getByTestId('related-code')
+    await expect(related).toContainText('Geen onderliggende code.')
+    await expect(page.getByTestId('related-item')).toHaveCount(0)
+    await expect(page.getByTestId('claude-chat-column')).toBeHidden()
+
+    await expect(related).toHaveClass(/w-\[18rem\]/)
+    const box = await related.boundingBox()
+    // Comfortably under the 40rem (640px) narrow-breakpoint floor it used to
+    // sit on at this viewport — a relative bound, not an exact px assertion.
+    expect(box.width).toBeLessThan(640 * 0.6)
+  })
 })

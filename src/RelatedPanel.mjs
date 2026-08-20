@@ -6680,7 +6680,54 @@ function relatedWidthCls(chars, scale, subtractRem = 0) {
   return `w-[${segment(42, 56)}] narrow:w-[${segment(40, 48)}] 2xl:w-[${segment(49.2, 65)}]`
 }
 
+// RELATED_EMPTY_WIDTH_CLS / relatedColumnIsEmpty — an Onderliggende-code
+// column with genuinely NOTHING in it gets a flat, narrow width instead of
+// the 42rem/49.2rem clamp FLOOR (relatedWidthCls above, which never goes
+// below it however little content there is). Reported by the reviewer as a
+// diff card that looked "enormous and almost entirely empty" (live PR 13431,
+// a test method's `getJson(...)` line): measured at a 2000px viewport, the
+// card was 1429px and this column claimed 787px for the single sentence
+// "Geen onderliggende code." — 2216px of column flow in a 1952px <main>, so
+// the moment the keyboard moved into the panel (?rel.foc=code,
+// scrollRelatedIntoView) <main> scrolled to its own maximum and cut 240px off
+// the card's LEFT edge. Since almost every line of that method is short, the
+// remaining visible slice held no text at all: the card read as a tall empty
+// green field with one long line in it, and its title started mid-word. At
+// 18rem the whole flow fits and <main> stays at scrollLeft 0.
+//
+// "Empty" is deliberately strict, and the last two terms are what keep the
+// documented width invariant intact (commentColumnWidthCls() + connector +
+// claudeColumnWidthCls() === relatedColumnWidthCls(), see those functions'
+// own doc comment): those two siblings keep deriving from the unchanged
+// clamp, so narrowing this column may only happen while the comment/Claude
+// row above it has nothing to align with in the first place — which is
+// exactly `!claudeChatVisible() && !hasCommentClaudeFooter()`, the very
+// expression home.mjs's comment-claude-row uses for its own `hidden` class
+// (measured: that row is then 0px wide).
+//
+// Deliberately NOT gated on the "zoeken…" pill (searching()/pending() in
+// RelatedPanel below): an unresolved call whose LLM search is still running is
+// the normal state for a test method full of framework calls, and waiting for
+// it would keep the dead 787px for as long as the search takes. If the search
+// does land a child, the column simply widens then — the same content-driven
+// behaviour it always had. One flat token (no narrow:/2xl: variants) since
+// it's already well below every one of those floors, mirroring
+// NARROW_FIXED_WIDTH_CLS in Block.mjs; `w-[18rem]` also stays parseable by
+// parseAutoWidthPx's bare-rem branch, so a drag on this column still snaps
+// back correctly.
+const RELATED_EMPTY_WIDTH_CLS = 'w-[18rem]'
+
+function relatedColumnIsEmpty() {
+  return (
+    rc.children.length === 0 &&
+    !rc.warning &&
+    !claudeChatVisible() &&
+    !hasCommentClaudeFooter()
+  )
+}
+
 export function relatedColumnWidthCls() {
+  if (relatedColumnIsEmpty()) return RELATED_EMPTY_WIDTH_CLS
   return relatedWidthCls(relatedGrowthChars(), 1)
 }
 

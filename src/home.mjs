@@ -4780,6 +4780,44 @@ function testCoverGroupTier(b, rows, range, line) {
   return 1
 }
 
+// lineAnchoredTestCoverChildren — the ONE exception to "'line'/'call' scoping
+// drops every covers child outright" (relatedChildren's `scoped` flag below):
+// at gran==='line', a covers child whose own ANCHOR ROW is the selected row
+// stays visible. Reported by the reviewer as a contradiction on one and the
+// same row (live PR 13431, the `getJson(...)` line of
+// StatisticsActivitiesIndexTest::it_gives_amount_obligation_…): the row's own
+// per-line badge (lineChildSummaries, the "✓ 2/2" pill) promised underlying
+// code there, while stepping onto that very line with `d` made the panel say
+// "Geen onderliggende code." — the badge and the panel disagreed about the
+// same child.
+//
+// The anchor is resolved with the IDENTICAL rule lineChildSummaries uses for
+// the badge, so the two can't drift apart again: a row with a real recorded
+// line (testcovers.Entry.Line truthy) anchors on newLineToRowOf(line); a row
+// with none (Line === 0 — a class-level #[CoversMethod]/found-escalated row,
+// see "A class-level #[CoversMethod]/found-escalated covers child scopes to
+// `// When`" in .claude/docs/underlying-code.md) anchors on the covering
+// test's own `// When` statement rows (whenSectionRows).
+//
+// Deliberately gran==='line' only, NOT 'call': a call segment is FINER than a
+// row (see keyboard-navigation.md's f/d/s chain), and a covers target isn't
+// the target of that one call — at 'call' the panel keeps showing the call's
+// own resolved method and nothing else, unchanged.
+function lineAnchoredTestCoverChildren(b, rows, range) {
+  if (focusedGranCursor().gran !== 'line') return []
+  const unit = focusedActiveUnit()
+  if (!unit) return []
+  const inUnit = (row) => row != null && row >= unit.start && row <= unit.end
+  const whenRows = whenSectionRows(rows)
+  const onWhenRow = () => {
+    for (let i = unit.start; i <= unit.end; i++) if (whenRows.has(i)) return true
+    return false
+  }
+  return resolvedTestCoverChildren(b, range, (r) =>
+    r.line ? inUnit(newLineToRowOf(rows, r.line)) : onWhenRow(),
+  )
+}
+
 // relatedChildren describes the selected block's children for the RelatedPanel:
 // the resolved method calls it makes (coupled to the call in the diff) plus the
 // event listeners it is linked to. It lazily loads any child block's code and
@@ -4791,10 +4829,13 @@ function testCoverGroupTier(b, rows, range, line) {
 // granularity — 'call'/'line'/'group' now all HIDE a child outright that
 // falls outside the active unit, per groupTierForLine's rule above:
 //  - 'call'/'line': only children whose site sits under the active call/line
-//    remain (see callScopeMethods for method-call children; a relation/covers
-//    child has no site *within* that fine a unit at all, so it drops out
-//    entirely — "onderliggende code van die line/call", not the whole
-//    block's).
+//    remain (see callScopeMethods for method-call children; a relation child
+//    has no site *within* that fine a unit at all, so it drops out entirely —
+//    "onderliggende code van die line/call", not the whole block's). ONE
+//    exception, at 'line' only: a covers child whose own anchor ROW is the
+//    selected row stays visible, resolved with the exact same anchoring rule
+//    the per-line badge uses — see lineAnchoredTestCoverChildren above for
+//    the reported badge-vs-panel contradiction that closed.
 //  - 'group': a child whose site (childrenOf's line / a `covers` row's
 //    testcovers.Entry.Line) falls inside the selected group's line range is
 //    kept (groupTier 0); one that falls OUTSIDE it is now HIDDEN too
@@ -4894,7 +4935,9 @@ function relatedChildren(b) {
   // diff line/call, so they're dropped at the same line/call scoping as the
   // listeners: b → the method(s) it covers (if b is a test), and the test(s)
   // that cover b (if b is a production method).
-  const covers = scoped ? [] : resolvedTestCoverChildren(b, range)
+  const covers = scoped
+    ? lineAnchoredTestCoverChildren(b, rows, range)
+    : resolvedTestCoverChildren(b, range)
   const coveredBy = scoped ? [] : coveredByChildren(b)
   // Sort by groupTier first (see the scoping doc above), then priority
   // (0 = also-changed child block, 1 = call on a changed line, 2 = unchanged
@@ -5331,9 +5374,14 @@ function coveredChildId(r) {
 // annotation, or a Go-`resolved` row whose #[CoversMethod]/#[CoversClass]
 // sits above the class instead) falls back to testCoverGroupTier's
 // whenSectionRows scoping — see that function's own doc comment.
-function resolvedTestCoverChildren(b, range) {
+function resolvedTestCoverChildren(b, range, rowFilter = null) {
   if (!b) return []
-  const resolved = testCoverRows(b).filter((r) => r.status === 'resolved' || r.status === 'found')
+  const resolved = testCoverRows(b).filter(
+    // rowFilter — only ever passed by lineAnchoredTestCoverChildren above, to
+    // keep the one covers row whose anchor is the selected LINE; absent (every
+    // other caller) means no extra filtering, exactly as before.
+    (r) => (r.status === 'resolved' || r.status === 'found') && (!rowFilter || rowFilter(r)),
+  )
   if (resolved.length === 0) return []
   const rows = blockRows(b)
   const byId = allBlocksById()
