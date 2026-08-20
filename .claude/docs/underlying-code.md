@@ -88,6 +88,15 @@ Each child is one card (`data-testid=related-item`). It follows
   `<class-header>` card); **list mode is unaffected** (no active cursor to
   scope by, same as every other call type) and keeps showing the full
   reference list. Test: `tests/related-class-member-scope.spec.mjs` (PR 115).
+- A **`config('file.key.path')` call** — the value declared in
+  `config/<file>.php` (`kind=config_value`), plus an optional **`.env.example`**
+  sibling (`kind=env_example`) shown only when that value reads a static
+  `env('VAR', ...)` AND that exact `VAR=` line in `.env.example` was itself
+  changed/added by this PR (not "the file changed somewhere" — gated on the
+  specific line). Same read-only-leaf shape as `translation`/`const_ref` (no PR
+  block, no diff stat, no approval, no drill-hint chips, never a row of their
+  own in the block index), badges `config`/`.env.example`. See "Config values +
+  `.env.example`" in `.claude/docs/workflows-analysis.md`.
 - The **entry points of a referenced class** — next to the `<class-header>`
   card a bare `Foo::class` already produced, its `__construct`
   (`class_ctor`, badge "constructor") and its first other method

@@ -3795,6 +3795,14 @@ function resolvedCallTargetIds() {
     // TRANSLATION block from the left list — both stay visible (the block in the
     // list, the key value as a child), like test coverage.
     if (r.kind === 'translation') continue
+    // A config('file.key.path')/.env.example child (resolveConfigCalls) never
+    // has a childClass/childMethod that could compose into a real block id in
+    // practice (a config file's own PR block, if this PR also edits it
+    // directly, is a CONFIG-category wholeFileBlock keyed by its filename, not
+    // by an empty childMethod) — excluded anyway, same defensive precedent as
+    // translation above, so such a legitimately-changed config file never gets
+    // hidden from the left list by accident.
+    if (r.kind === 'config_value' || r.kind === 'env_example') continue
     // A class-member child (a property/constant declaration, see
     // CLASS_MEMBER_KINDS) is never a block at all — it must neither gain a row
     // in the index nor hide one. Its composed id could only ever collide with a
@@ -4309,6 +4317,13 @@ function findCallSites(rows, name) {
     if (name.startsWith('translation:')) {
       const escKey = name.replace(/^translation:[^:]*:/, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
       re = new RegExp("['\"]" + escKey + "['\"]", 'g')
+    } else if (name.startsWith('config:') || name.startsWith('config_env:')) {
+      // config:<file.key.path> / config_env:<file.key.path> (resolveConfigCalls,
+      // callresolve_analysis.go): both siblings couple to the SAME literal — the
+      // key string inside the caller's own config('file.key.path') call — since
+      // the env var name itself never appears in the caller's PHP source at all.
+      const escKey = name.replace(/^config(_env)?:/, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      re = new RegExp("['\"]" + escKey + "['\"]", 'g')
     } else if (isCommand) {
       re = new RegExp("command\\s*\\(\\s*['\"]" + esc + "(?=[\\s'\"])", 'g')
     } else {
@@ -4738,6 +4753,34 @@ function resolvedCallChildren(b) {
           kind: 'translation',
           transKey: key,
           locale,
+          category: '',
+          code: r.childCode || '',
+          loading: false,
+          size: codeSize(r.childCode || ''),
+          source: '',
+          approve: null,
+          commentActivity: null,
+          diff: null,
+          prio: 2,
+          groupTier: scope == null || hideOutOfScope ? 0 : scope.has(r.callKey) ? 0 : 1,
+          nested: [],
+          nestedSig: nestedSigOf([]),
+        }
+      }
+      // A config('file.key.path') child (resolveConfigCalls, callresolve_analysis.go)
+      // and its optional .env.example sibling are, like a translation child,
+      // always read-only leaves — never a drillable PR block, no diff/approval/
+      // nested chips. callKey is config:<key> / config_env:<key>; the env sibling
+      // shares the same key (only the kind/prefix differs, see UpsertGo's PK).
+      if (r.kind === 'config_value' || r.kind === 'env_example') {
+        const key = r.callKey.replace(/^config(_env)?:/, '')
+        return {
+          id: b.id + '::' + r.callKey,
+          blockId: '',
+          label: r.kind === 'env_example' ? `.env.example · ${r.childMethod}` : key,
+          file: r.childFile,
+          line: r.childLine,
+          kind: r.kind,
           category: '',
           code: r.childCode || '',
           loading: false,

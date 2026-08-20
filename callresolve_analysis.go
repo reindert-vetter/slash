@@ -581,6 +581,17 @@ var (
 	// reLangReturn locates a Laravel lang file's top-level `return [ ... ]`
 	// array — see sliceLangKey.
 	reLangReturn = regexp.MustCompile(`\breturn\s*\[`)
+
+	// reConfigSingle/reConfigDouble match a `config('file.key.path')` call with
+	// a STATIC, single/double-quoted first argument — see resolveConfigCalls.
+	// Mirrors reTransSingle/reTransDouble; a dynamic/concatenated argument (or
+	// the `config(['key' => value])` array-set form, which never opens with a
+	// quote) simply matches neither and is silently skipped.
+	reConfigSingle = regexp.MustCompile(`\bconfig\(\s*'((?:\\.|[^'\\])*)'`)
+	reConfigDouble = regexp.MustCompile(`\bconfig\(\s*"((?:\\.|[^"\\])*)"`)
+	// reEnvKey matches a static `env('VAR', ...)` call's first argument inside a
+	// resolved config value's source text — see resolveConfigCalls.
+	reEnvKey = regexp.MustCompile(`\benv\(\s*['"]([A-Za-z0-9_]+)['"]`)
 )
 
 // resolveCalls scans every changed new-side block for method calls and resolves
@@ -1456,6 +1467,167 @@ func resolveTranslations(dataDir string, pr int, blocks []Block) []callresolve.E
 		}
 	}
 	return out
+}
+
+// configKeysIn scans a changed-lines excerpt for every recognized
+// `config('file.key.path')`/`config("file.key.path")` call and returns the
+// captured (unescaped) key strings — the `config(['key' => value])` array-set
+// form never matches (its first token is `[`, not a quote), and a dynamic/
+// concatenated argument matches neither regex, mirroring
+// translationKeysIn's own reasoning.
+func configKeysIn(scan string) []string {
+	var keys []string
+	push := func(re *regexp.Regexp, quote byte) {
+		for _, m := range re.FindAllStringSubmatchIndex(scan, -1) {
+			if strings.HasPrefix(strings.TrimLeft(scan[m[1]:], " \t\r\n"), ".") {
+				continue // concatenation follows — key is dynamic, not fully static
+			}
+			keys = append(keys, unescapePHPQuoted(scan[m[2]:m[3]], quote))
+		}
+	}
+	push(reConfigSingle, '\'')
+	push(reConfigDouble, '"')
+	return keys
+}
+
+// resolveConfigCalls links a `config('file.key.path')` call on a CHANGED line
+// to (1) the value declared in `config/<file>.php` and (2), only when that
+// value reads a static `env('VAR', ...)`, the matching `VAR=` line in
+// `.env.example` — but ONLY when that EXACT line was itself changed or added
+// by this PR (Reindert, request: "als ik een config( code zie, wil ik als
+// onderliggende blok zowel de config file/regel zien & .env.example zien (als
+// dat is aangepast)" — clarified to mean the specific env line, not merely
+// "the file changed somewhere").
+//
+// Deliberately a callresolve rule, not a relations detector: it points at
+// (almost always) unchanged files. Go-only, no LLM fallback — a key with no
+// dot (`config('app')`, a whole-file reference), a dynamic/concatenated
+// argument, a config file that doesn't exist, or a key path that can't be
+// found inside it simply produces no entry at all, never "unresolved" —
+// mirrors resolveTranslations' own "silently nothing" cases (this rule does
+// NOT mirror resolveTranslations' "missing key still gets a row" behavior:
+// there is only one config file per fileSeg here, not one per locale, so a
+// missing key is just noise, not a per-locale comparison point).
+//
+// Config-file location assumption: the standard flat Laravel layout,
+// `config/<fileSeg>.php` directly under the worktree root — matches the
+// `config('statistics.session_flow...')` shape this rule was requested for.
+func resolveConfigCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
+	baseDir, headDir := worktreeDirs(dataDir, blocksRepo(blocks), pr)
+	diffByFile := map[string]*fileChangeSet{}
+	configCache := map[string]string{} // fileSeg -> file text ("" = tried and missing)
+	configTried := map[string]bool{}
+	var envFC *fileChangeSet // .env.example's own changed-line set, loaded once per PR
+
+	var out []callresolve.Entry
+	for _, b := range blocks {
+		if b.Side == SideOld {
+			continue
+		}
+		src := extractBlockSource(filepath.Join(headDir, b.File), b.File, b.Class, b.Name)
+		if src.Text == "" {
+			continue
+		}
+		fc, ok := diffByFile[b.File]
+		if !ok {
+			fc = changedNewLines(baseDir, headDir, b.File)
+			diffByFile[b.File] = fc
+		}
+		scan := fc.keepChanged(src)
+		if scan == "" {
+			continue // the block's change is old-side only (pure deletions)
+		}
+
+		callerID := b.ID()
+		seen := map[string]bool{} // call keys (config:<key>) already emitted
+
+		for _, key := range configKeysIn(scan) {
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+
+			dot := strings.Index(key, ".")
+			if dot < 0 {
+				continue // whole-file reference (no key) — out of v1 scope
+			}
+			fileSeg := key[:dot]
+			keyPath := strings.Split(key[dot+1:], ".")
+
+			fileText, tried := configCache[fileSeg]
+			if !tried {
+				configTried[fileSeg] = true
+				if data, err := os.ReadFile(filepath.Join(headDir, "config", fileSeg+".php")); err == nil {
+					fileText = string(data)
+				}
+				configCache[fileSeg] = fileText
+			}
+			if fileText == "" {
+				continue // config file not found — silently nothing
+			}
+
+			valueText, line, found := sliceLangKey(fileText, keyPath)
+			if !found {
+				continue // key not present in the config file — silently nothing
+			}
+
+			callKey := "config:" + key
+			out = append(out, callresolve.Entry{
+				PR: pr, CallerID: callerID, CallKey: callKey,
+				Status: callresolve.StatusResolved, Kind: callresolve.KindConfigValue,
+				ChildFile: "config/" + fileSeg + ".php", ChildClass: "", ChildMethod: "",
+				ChildLine: line, ChildCode: valueText,
+			})
+
+			envMatch := reEnvKey.FindStringSubmatch(valueText)
+			if envMatch == nil {
+				continue // no env('VAR', ...) inside this value — no .env.example sibling
+			}
+			envVar := envMatch[1]
+
+			if envFC == nil {
+				envFC = changedNewLines(baseDir, headDir, ".env.example")
+			}
+			envText, err := os.ReadFile(filepath.Join(headDir, ".env.example"))
+			if err != nil {
+				continue // no .env.example at all
+			}
+			envLine, envLineText, envFound := findEnvExampleLine(string(envText), envVar)
+			if !envFound {
+				continue // VAR not declared in .env.example — silently nothing
+			}
+			// Gate on the EXACT line, not "the file changed somewhere": restrict=false
+			// means the whole file counts as changed (added file / no base worktree),
+			// so only a real changed-lines set (restrict=true) can exclude a line —
+			// and only when that line isn't in it.
+			if envFC.restrict && !envFC.set[envLine] {
+				continue
+			}
+
+			out = append(out, callresolve.Entry{
+				PR: pr, CallerID: callerID, CallKey: "config_env:" + key,
+				Status: callresolve.StatusResolved, Kind: callresolve.KindEnvExample,
+				ChildFile: ".env.example", ChildClass: "", ChildMethod: envVar,
+				ChildLine: envLine, ChildCode: envLineText,
+			})
+		}
+	}
+	return out
+}
+
+// findEnvExampleLine scans a .env.example file's plain `KEY=value` lines (not
+// a PHP array, unlike sliceLangKey's target) for one declaring name, and
+// returns its 1-based line number and full line text. found=false when name
+// is never declared (a commented-out `# NAME=...` line does not count — the
+// leading `#` never matches the exact-prefix check below).
+func findEnvExampleLine(fileText, name string) (line int, lineText string, found bool) {
+	prefix := name + "="
+	for i, l := range strings.Split(fileText, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(l), prefix) {
+			return i + 1, l, true
+		}
+	}
+	return 0, "", false
 }
 
 // resolveClassMembers breaks a <class-header> block's declared members —

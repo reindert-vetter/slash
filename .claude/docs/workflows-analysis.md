@@ -440,6 +440,36 @@ unmappable case yields **silently nothing**, never `unresolved`, never a search:
   `findCallSites` couples it via the key **string literal** (the same literal
   for every locale) and `resolvedCallTargetIds` skips `translation` so a changed
   lang file's own block stays in the left list.
+- **Config values + `.env.example` (`resolveConfigCalls`).** Reviewer request:
+  "als ik een `config(` code zie, wil ik als onderliggende blok zowel de config
+  file/regel zien & .env.example zien (als dat is aangepast)". A
+  `config('file.key.path')` call on a **changed line** surfaces the value
+  declared in `config/<file>.php` (assumes the standard flat Laravel layout,
+  `config/<fileSeg>.php` directly under the worktree root — reuses
+  `sliceLangKey`, which despite its name/doc is fully generic: it only walks a
+  `return [ ... ]` array, so a config file's bare values/`env(...)` calls parse
+  the same way a lang file's quoted scalars do). Key `config:<key>`, `Kind
+  config_value`, no locale concept (one config file per key, not one per
+  locale) so — unlike `resolveTranslations` — a missing key produces **no**
+  entry at all, same "silently nothing" as a missing config file. A dynamic/
+  concatenated argument or the `config(['key' => value])` array-set form is
+  skipped, mirroring `resolveTranslations`' own decoys.
+  **`.env.example` sibling:** only emitted when the resolved config value
+  itself reads a static `env('VAR', ...)` call **AND that EXACT `VAR=` line in
+  `.env.example` was changed or added by this PR** — gated on the specific
+  line via `changedNewLines`, not "the file changed somewhere" (explicit
+  clarification from Reindert after the first draft of this rule gated on the
+  whole file). `findEnvExampleLine` scans `.env.example` as plain `KEY=value`
+  lines (not a PHP array, unlike the config file itself). Key
+  `config_env:<key>` — must differ from the `config:<key>` sibling's own key
+  since both share the same `(pr, caller_id, call_key)` primary key — `Kind
+  env_example`, `ChildMethod` = the env var name. Frontend: both kinds are
+  read-only **leaves** like `translation`/`const_ref` (`KIND_LABEL` words
+  `config`/`.env.example`, no diffstat — not in `DIFFSTAT_KINDS`, since neither
+  is ever itself a call target that "changed" or "didn't"), `findCallSites`
+  couples both to the SAME literal (the quoted key string inside the caller's
+  `config(...)` call — the env var name itself never appears in the caller's
+  PHP source at all), and `resolvedCallTargetIds` skips both.
 
 All of these are **merged** into the one `UpsertGo`/`Prune` call in the
 `buildRelations` Activity (and in the headless `slash relations` twin), so they

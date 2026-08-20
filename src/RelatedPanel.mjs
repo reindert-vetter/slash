@@ -5909,6 +5909,12 @@ const KIND_LABEL = {
   class_constant_changed: 'constante',
   class_constant: 'constante',
   const_ref: 'constante',
+  // A config('file.key.path') call → the value declared in config/<file>.php,
+  // and its optional .env.example sibling (resolveConfigCalls, see
+  // .claude/docs/workflows-analysis.md) — both pure reference material, like
+  // translation/const_ref: no diff/approval, current value only.
+  config_value: 'config',
+  env_example: '.env.example',
 }
 
 // diffStatBadge shows, for a called method (or a test's covered method), how

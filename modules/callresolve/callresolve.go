@@ -124,6 +124,16 @@ const (
 	// any other call into an unchanged file.
 	KindClassCtor        = "class_ctor"
 	KindClassFirstMethod = "class_first_method"
+	// KindConfigValue is a config('file.key.path') call resolved to the value
+	// declared in config/<file>.php — read-only reference material, like
+	// KindTranslation/KindConstRef (see resolveConfigCalls,
+	// callresolve_analysis.go).
+	KindConfigValue = "config_value"
+	// KindEnvExample is the .env.example sibling of a KindConfigValue entry,
+	// shown only when the config value reads an env('VAR', ...) AND that exact
+	// VAR= line in .env.example was itself changed/added by this PR
+	// (resolveConfigCalls).
+	KindEnvExample = "env_example"
 )
 
 // Entry is one call-site → definition resolution.

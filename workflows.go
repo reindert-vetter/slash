@@ -1513,6 +1513,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		calls = append(calls, resolveDataProviders(m.dataDir, input.PR, blocks)...)
 		calls = append(calls, resolveTranslations(m.dataDir, input.PR, blocks)...)
 		calls = append(calls, resolveClassMembers(m.dataDir, input.PR, blocks)...)
+		calls = append(calls, resolveConfigCalls(m.dataDir, input.PR, blocks)...)
 		// An interface method that already got a concrete "A" parent — either
 		// the both-changed interfaceImplementationDetector edge above (rels)
 		// or any resolved/found call above (calls, e.g. resolveCalls' rule

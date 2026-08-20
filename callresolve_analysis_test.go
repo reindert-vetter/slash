@@ -2518,6 +2518,185 @@ return [
 	}
 }
 
+// TestResolveConfigCalls: a config('file.key.path') call on a changed line
+// resolves to the value declared in config/<file>.php, and — because that
+// value reads a static env('VAR', ...) AND the exact `VAR=` line in
+// .env.example was itself changed by this PR — also to the .env.example
+// sibling. See TestResolveConfigCallsEnvLineUnchanged for the "file changed,
+// but not this line" case, which must NOT produce the .env.example entry.
+func TestResolveConfigCalls(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 91
+	baseDir, headDir := worktreeDirs(dataDir, "", pr)
+
+	callerBase := `<?php
+namespace App\Services;
+class StatisticsService {
+    public function build() {
+        return [];
+    }
+}
+`
+	callerHead := `<?php
+namespace App\Services;
+class StatisticsService {
+    public function build() {
+        $timeout = (int) config('statistics.session_flow.session_timeout_minutes') * 60;
+        $dyn = config($dynamic);
+        $whole = config('app');
+        return $timeout;
+    }
+}
+`
+	for dir, body := range map[string]string{baseDir: callerBase, headDir: callerHead} {
+		p := filepath.Join(dir, "app/Services/StatisticsService.php")
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	configPHP := `<?php
+
+return [
+    'session_flow' => [
+        'session_timeout_minutes' => env('SESSION_TIMEOUT_MINUTES', 30),
+    ],
+];
+`
+	configPath := filepath.Join(headDir, "config/statistics.php")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte(configPHP), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	envBase := "APP_NAME=Laravel\n"
+	envHead := "APP_NAME=Laravel\nSESSION_TIMEOUT_MINUTES=30\n"
+	for dir, body := range map[string]string{baseDir: envBase, headDir: envHead} {
+		if err := os.WriteFile(filepath.Join(dir, ".env.example"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	caller := Block{PR: pr, File: "app/Services/StatisticsService.php", Class: "StatisticsService", Name: "build", Side: SideNew, Status: StatusModified}
+	entries := resolveConfigCalls(dataDir, pr, []Block{caller})
+
+	e, ok := findCallresolveEntry(entries, caller.ID(), "config:statistics.session_flow.session_timeout_minutes")
+	if !ok {
+		t.Fatalf("no config_value entry, got %+v", entries)
+	}
+	if e.Status != callresolve.StatusResolved || e.Kind != callresolve.KindConfigValue {
+		t.Errorf("status/kind = %q/%q, want resolved/%q", e.Status, e.Kind, callresolve.KindConfigValue)
+	}
+	if e.ChildFile != "config/statistics.php" {
+		t.Errorf("ChildFile = %q, want config/statistics.php", e.ChildFile)
+	}
+	if !strings.Contains(e.ChildCode, "SESSION_TIMEOUT_MINUTES") {
+		t.Errorf("ChildCode = %q, missing env() call", e.ChildCode)
+	}
+	if e.ChildLine <= 0 {
+		t.Errorf("ChildLine = %d, want > 0", e.ChildLine)
+	}
+
+	eEnv, ok := findCallresolveEntry(entries, caller.ID(), "config_env:statistics.session_flow.session_timeout_minutes")
+	if !ok {
+		t.Fatalf("no env_example entry (the SESSION_TIMEOUT_MINUTES line was added in this PR), got %+v", entries)
+	}
+	if eEnv.Status != callresolve.StatusResolved || eEnv.Kind != callresolve.KindEnvExample {
+		t.Errorf("status/kind = %q/%q, want resolved/%q", eEnv.Status, eEnv.Kind, callresolve.KindEnvExample)
+	}
+	if eEnv.ChildFile != ".env.example" || eEnv.ChildMethod != "SESSION_TIMEOUT_MINUTES" {
+		t.Errorf("child = %q/%q, want .env.example/SESSION_TIMEOUT_MINUTES", eEnv.ChildFile, eEnv.ChildMethod)
+	}
+	if !strings.Contains(eEnv.ChildCode, "SESSION_TIMEOUT_MINUTES=30") {
+		t.Errorf("ChildCode = %q, want the SESSION_TIMEOUT_MINUTES= line", eEnv.ChildCode)
+	}
+
+	// Decoys: a dynamic argument and a bare whole-file reference must never
+	// produce an entry.
+	for _, ck := range []string{"config:dynamic", "config:app"} {
+		for _, e := range entries {
+			if e.CallKey == ck {
+				t.Errorf("unexpected entry for decoy %q: %+v", ck, e)
+			}
+		}
+	}
+}
+
+// TestResolveConfigCallsEnvLineUnchanged: .env.example DID change in this PR,
+// but not the specific `VAR=` line the resolved config value reads — the
+// .env.example sibling must NOT appear (gated on the exact line, not "the
+// file changed somewhere" — Reindert, explicit clarification).
+func TestResolveConfigCallsEnvLineUnchanged(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 92
+	baseDir, headDir := worktreeDirs(dataDir, "", pr)
+
+	callerBase := `<?php
+class StatisticsService {
+    public function build() {
+        return [];
+    }
+}
+`
+	callerHead := `<?php
+class StatisticsService {
+    public function build() {
+        return (int) config('statistics.session_flow.session_timeout_minutes') * 60;
+    }
+}
+`
+	for dir, body := range map[string]string{baseDir: callerBase, headDir: callerHead} {
+		p := filepath.Join(dir, "app/Services/StatisticsService.php")
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	configPHP := `<?php
+
+return [
+    'session_flow' => [
+        'session_timeout_minutes' => env('SESSION_TIMEOUT_MINUTES', 30),
+    ],
+];
+`
+	configPath := filepath.Join(headDir, "config/statistics.php")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte(configPHP), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// .env.example changed in this PR — but only an unrelated line, the
+	// SESSION_TIMEOUT_MINUTES line itself stays byte-for-byte identical.
+	envBase := "APP_NAME=Laravel\nSESSION_TIMEOUT_MINUTES=30\n"
+	envHead := "APP_NAME=Laravel\nSESSION_TIMEOUT_MINUTES=30\nOTHER_VAR=1\n"
+	for dir, body := range map[string]string{baseDir: envBase, headDir: envHead} {
+		if err := os.WriteFile(filepath.Join(dir, ".env.example"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	caller := Block{PR: pr, File: "app/Services/StatisticsService.php", Class: "StatisticsService", Name: "build", Side: SideNew, Status: StatusModified}
+	entries := resolveConfigCalls(dataDir, pr, []Block{caller})
+
+	if _, ok := findCallresolveEntry(entries, caller.ID(), "config:statistics.session_flow.session_timeout_minutes"); !ok {
+		t.Fatalf("no config_value entry, got %+v", entries)
+	}
+	if e, ok := findCallresolveEntry(entries, caller.ID(), "config_env:statistics.session_flow.session_timeout_minutes"); ok {
+		t.Errorf("unexpected env_example entry (SESSION_TIMEOUT_MINUTES line itself is unchanged): %+v", e)
+	}
+}
+
 // TestResolveCallsResourceToArray: a controller instantiating an API Resource
 // on a changed line (new AffiliateResource($affiliate)) surfaces that
 // Resource's toArray() as underlying code, even though the Resource class
