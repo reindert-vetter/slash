@@ -210,7 +210,13 @@ test.describe('PR Review Tree — inline comment blocks', () => {
     await expect(marker).toBeHidden({ timeout: 15000 })
   })
 
-  test('multiple conversations on the same unit each get their own card; only the focused one expands', async ({
+  // Also covers the "hide what is above" rule: selecting a conversation drops
+  // every card ABOVE it from the column (they pushed the expanded card and its
+  // reply field below the fold) and replaces them with the clickable
+  // `▲ N hierboven` hint, which is the only mouse route back — see "The
+  // selected conversation hides the ones above it" in
+  // .claude/docs/comments-panel.md.
+  test('multiple conversations on the same unit each get their own card; only the focused one expands, and the ones above it hide', async ({
     page,
   }) => {
     await page.goto('/pr/12903')
@@ -235,14 +241,22 @@ test.describe('PR Review Tree — inline comment blocks', () => {
     await expect(items.nth(0)).toHaveAttribute('data-expanded', 'false')
     await expect(items.nth(1)).toHaveAttribute('data-expanded', 'false')
 
-    // Clicking the second expands only that one; the first stays compact.
-    await items.nth(1).click()
-    await expect(items.nth(0)).toHaveAttribute('data-expanded', 'false')
-    await expect(items.nth(1)).toHaveAttribute('data-expanded', 'true')
-    await expect(items.nth(1).getByTestId('comment-thread')).toContainText('tweede conversatie')
+    const hint = page.getByTestId('comment-more-above')
+    await expect(hint).toHaveCount(0)
 
-    // Clicking the first expands it instead and collapses the second again.
-    await items.nth(0).click()
+    // Clicking the second expands it — and the first one, sitting above it, is
+    // gone from the column: one card left, plus the "1 hierboven" hint.
+    await items.nth(1).click()
+    await expect(items).toHaveCount(1)
+    await expect(items.nth(0)).toHaveAttribute('data-expanded', 'true')
+    await expect(items.nth(0).getByTestId('comment-thread')).toContainText('tweede conversatie')
+    await expect(hint).toContainText('1 hierboven')
+
+    // The hint is the mouse route back: it selects the conversation above, so
+    // that one expands and nothing is hidden any more.
+    await hint.click()
+    await expect(items).toHaveCount(2)
+    await expect(hint).toHaveCount(0)
     await expect(items.nth(0)).toHaveAttribute('data-expanded', 'true')
     await expect(items.nth(1)).toHaveAttribute('data-expanded', 'false')
     await expect(items.nth(0).getByTestId('comment-thread')).toContainText('eerste conversatie')

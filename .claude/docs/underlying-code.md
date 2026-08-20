@@ -341,9 +341,12 @@ container's top (only ever scrolling DOWN to reach that alignment, clamped at
 rule in `.claude/rules/arrowjs-pitfalls.md` still holds). The sticky "▲ N
 hierboven" hint (`moreAboveHint`) this used to pair with is **gone** for this
 list — now redundant, since the collapsed cards above already show what's
-there without a separate count. `InlineComments` still uses `moreAboveHint`
-for stacked comment cards (`comment-more-above`) unchanged — comment cards have
-no equivalent collapse — see `.claude/docs/comments-panel.md`.
+there without a separate count. `InlineComments` is `moreAboveHint`'s only
+caller left (`comment-more-above`), and there it does more than hint: comment
+cards have no equivalent collapse, so the ones above the expanded card are not
+rendered at all and the (now clickable) hint is the only way back — see "The
+selected conversation hides the ones above it" in
+`.claude/docs/comments-panel.md`.
 Test: `tests/related-more-above-hint.spec.mjs`.
 
 **Refresh restore of the panel cursor:** `cs.focus`/`codeSel`/`sel`/`threadPos`

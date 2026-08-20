@@ -1351,18 +1351,75 @@ never need telling apart, since they point at two different panels.
 
 Test: `tests/comment-arrows.spec.mjs`.
 
-### The selected conversation is pulled to the top, with a "hierboven" hint
+### The selected conversation hides the ones above it, behind a clickable "▲ N hierboven"
 
-Stacked comment cards follow the Onderliggende-code column exactly:
-`scrollCommentIntoView` aligns the selected card to the top of its vertical
-scroller (`alignToTopVertical`) and a slim `▲ N hierboven` header
-(`moreAboveHint`, `data-testid=comment-more-above`) appears while `cs.focus` is
-`'comment'`/`'thread'` and `selI() > 0`. Full mechanism, and why the count comes
-from the cursor index rather than a scroll measurement: "The selected child is
-pulled to the TOP" in `.claude/docs/underlying-code.md`. Note the column itself
-usually doesn't scroll (it has no scroller of its own), in which case
-`alignToTopVertical` finds no vertical scroller and is a no-op — the hint still
-tells the reviewer there is something above.
+Reviewer request: "als je een comment selecteert hebt, dan wil ik de
+bovenstaande comments hiden, je mag een pijltje (wat je vaker ergens gebruikt
+als iets buiten beeld is) gebruiken om aan te geven dat er meer comments boven
+staan". With four threads on one line the expanded card — and its reply field —
+was pushed below the fold, exactly the state the reviewer screenshotted.
+
+`InlineComments` therefore **does not render** the cards above the expanded one
+at all: its `.map()` starts at `hiddenAboveCount()` instead of at 0, and the
+slim `▲ N hierboven` header (`moreAboveHint`,
+`data-testid=comment-more-above`) is the only trace of them. Per the colourblind
+rule the WORD (the count + "hierboven") plus the `▲` SHAPE carry it; there is no
+colour involved. Cards BELOW stay visible, untouched.
+
+- **`hiddenAboveCount()` = `max(0, expandedCommentIndex())`** is the single
+  source both the card loop and the hint read, so "what is hidden" and "what
+  the hint claims" cannot drift apart.
+- **`expandedCommentIndex()` mirrors `commentCard`'s own expand predicate**, in
+  the same order: `selI()` while `cs.focus` is `'comment'`/`'thread'`, else the
+  index of `chatAnchorComment()` while `cs.focus === 'claude'` (looked up by
+  **id** — that fallback can point outside the selection index, see its own doc
+  comment), else `-1` (nothing hidden: the keyboard is on the diff, on `'code'`,
+  or in the new-comment composer). Deliberately keyed on the **expanded card**
+  rather than on the cursor (explicit reviewer answer): the card stays expanded
+  once `→` moves the keyboard on into the Claude column, and re-showing the
+  cards above at that moment would jump the whole column.
+- **`hiddenAboveCount()` is read unconditionally at the top of that binding**,
+  never inside a `.filter()` callback — an empty list would never call the
+  callback, leaving `cs.sel`/`cs.focus` out of the binding's crystallized
+  dependency set so it would never re-run on a selection change (measured: the
+  first cut did exactly this and hid nothing). Same rule as `watch`'s inline
+  deps in `.claude/rules/arrowjs-pitfalls.md`. The loop yields a **shorter
+  keyed array**, not a per-item template↔`''` toggle (the "bare toggling
+  expression" pitfall in that same file), and `i` stays the comment's REAL index
+  in the visible list, so `commentCard`'s `cs.sel = i` click and its
+  `selI() === i` check need no change.
+- **The hint is a real `<button>`** (`onUp`): hiding removes the only MOUSE
+  route to a hidden conversation, so a click selects the last comment above the
+  expanded one — the same step `handleRelatedKey`'s ArrowUp takes once it walks
+  past a thread's oldest message, per `.claude/docs/mouse-navigation.md`. It
+  computes that target from `hiddenAboveCount() - 1` rather than `cs.sel - 1`,
+  so it stays right when the expanded card is the Claude anchor instead of the
+  cursor.
+- **`moreAboveHint` had to move to module scope.** It sat nested inside
+  `RelatedCode`'s component body, so `InlineComments`' call site threw
+  `moreAboveHint is not defined` on every render — which is why this hint was
+  never actually visible in the comment column (it had no test of its own; the
+  Onderliggende-code list, its other caller, had already dropped it).
+- **Two index-based DOM lookups became id-based**, since DOM position and list
+  index now disagree: `scrollCommentIntoView` (`commentItemEl(selComment())`,
+  `[data-comment-id]`) and `menuAnchor`'s `'comment'`/`'replyPublish'` branches
+  in `home.mjs`, which now call the exported **`focusedCommentEl()`** instead of
+  the removed `commentSelIndex()`. Same "snapshot by stable ID, never by raw
+  array index" rule as `.claude/rules/conventions.md`.
+- **The comment-arrow overlay needs nothing:** `buildArrowPaths` already skips a
+  pair whose card element is missing (`src/callArrows.mjs`), so a hidden comment
+  simply gets no arrow — the same "missing information ⇒ no arrow" rule it
+  applies to a scrolled-out row.
+
+`scrollCommentIntoView` still aligns the expanded card to the top of its
+vertical scroller (`alignToTopVertical`); with the cards above gone that is
+mostly moot, and the column usually has no scroller of its own anyway (then it
+is a no-op). Full mechanism of that alignment: "The selected child is pulled to
+the TOP" in `.claude/docs/underlying-code.md`.
+
+Tests: `tests/inline-comments.spec.mjs` (hide + hint + the click back),
+`tests/comment-resolved-skip.spec.mjs` and `tests/claude-chat-panel.spec.mjs`
+(both reach a later comment and now assert the earlier one is hidden).
 
 ### One card per conversation, only the focused (or Claude-anchored) one expands
 

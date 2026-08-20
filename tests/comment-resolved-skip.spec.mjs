@@ -59,7 +59,12 @@ test.describe('PR Review Tree — → skips an already-resolved default comment'
     await page.keyboard.press('ArrowRight') // diff → the comment stop
 
     const inlineComments = page.getByTestId('inline-comments')
-    await expect(inlineComments.getByTestId('comment-item')).toHaveCount(2)
+    // Only ONE card is rendered: the landing comment B, with the resolved
+    // comment A above it hidden behind the "1 hierboven" hint (see "The
+    // selected conversation hides the ones above it" in
+    // .claude/docs/comments-panel.md).
+    await expect(inlineComments.getByTestId('comment-item')).toHaveCount(1)
+    await expect(page.getByTestId('comment-more-above')).toContainText('1 hierboven')
     // The expanded card is comment B's — comment A (resolved, index 0) was
     // skipped straight past.
     const expandedCard = inlineComments.locator('[data-testid="comment-item"][data-expanded="true"]')

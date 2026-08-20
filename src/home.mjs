@@ -64,7 +64,7 @@ import RelatedPanel, {
   isCodeFocused,
   isCommentOrThreadFocused,
   commentReplyEmpty,
-  commentSelIndex,
+  focusedCommentEl,
   deleteFocusedComment,
   resolveFocusedComment,
   unresolveFocusedComment,
@@ -12588,10 +12588,7 @@ function menuAnchor() {
     )
   }
   if (ms.mode === 'comment') {
-    return (
-      document.querySelectorAll('[data-testid="comment-item"]')[commentSelIndex()] ||
-      document.querySelector('[data-testid="inline-comments"]')
-    )
+    return focusedCommentEl() || document.querySelector('[data-testid="inline-comments"]')
   }
   // The publish-choice menu ('replyPublish', opened after a reply on a thread
   // that has never touched GitHub — see pendingPublishInfo/openPublishMenu in
@@ -12606,10 +12603,7 @@ function menuAnchor() {
     if ((pendingPublishInfo() || {}).kind === 'prwide') {
       return document.querySelector('[data-testid="comment-detail-card"]') || focusedColumnEl()
     }
-    return (
-      document.querySelectorAll('[data-testid="comment-item"]')[commentSelIndex()] ||
-      document.querySelector('[data-testid="inline-comments"]')
-    )
+    return focusedCommentEl() || document.querySelector('[data-testid="inline-comments"]')
   }
   // The Claude-column menu ('claude') anchors on the chat card itself — unlike
   // every mode below this, it must NOT fall back to the selected block's diff

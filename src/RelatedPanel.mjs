@@ -393,6 +393,40 @@ function selComment() {
   return visibleComments()[selI()]
 }
 
+// expandedCommentIndex is the index (within visibleComments()) of the ONE card
+// that currently renders expanded — the exact same predicate commentCard uses
+// below, in the same order, so the two can never disagree. -1 while nothing is
+// expanded (the keyboard is on the diff, on 'code', or in the new-comment
+// composer).
+//
+// Compared by id for the 'claude' case, not by index: chatAnchorComment() has
+// its own fallback (an orphan/PR-wide comment whose conversation already has
+// turns) that can point outside the current selection index — see its own doc
+// comment.
+function expandedCommentIndex() {
+  if (cs.focus === 'comment' || cs.focus === 'thread') return selComment() ? selI() : -1
+  if (cs.focus === 'claude') {
+    const a = chatAnchorComment()
+    return a ? visibleComments().findIndex((c) => c.id === a.id) : -1
+  }
+  return -1
+}
+
+// hiddenAboveCount — how many comment cards InlineComments leaves out above
+// the expanded one. Reviewer request: "als je een comment selecteert hebt, dan
+// wil ik de bovenstaande comments hiden, je mag een pijltje gebruiken om aan
+// te geven dat er meer comments boven staan". This is the SINGLE source both
+// the card filter and the ▲ hint read, so "what is hidden" and "what the hint
+// claims" cannot drift apart.
+//
+// Deliberately derived from the EXPANDED card, not from the cursor: the card
+// stays expanded once the keyboard moves on into the Claude column
+// (cs.focus === 'claude', see commentCard), and re-showing the cards above at
+// that moment would jump the whole column.
+function hiddenAboveCount() {
+  return Math.max(0, expandedCommentIndex())
+}
+
 // commentRowSet returns the aligned-diff rows of block b that carry a comment, so
 // Block can mark them with a 💬 (presence only — the count doesn't matter, and
 // only an *open* comment counts: a resolved one is done, so it no longer marks
@@ -1233,6 +1267,13 @@ function reactionCount() {
   return threadMessages(selComment()).length
 }
 
+// commentItemEl finds a comment's own rendered card by id — see
+// hiddenAboveCount for why an index into the comment-item NodeList is wrong.
+function commentItemEl(c) {
+  if (!c) return null
+  return document.querySelector('[data-testid=comment-item][data-comment-id="' + CSS.escape(String(c.id)) + '"]')
+}
+
 // scrollCommentIntoView / scrollReactionIntoView keep the active row / bubble in
 // view while walking with the arrows (deferred a frame so the DOM has the new
 // highlight class first), mirroring scrollSelectedIntoView in home.mjs.
@@ -1243,7 +1284,11 @@ function reactionCount() {
 // says how many items sit above.
 function scrollCommentIntoView() {
   requestAnimationFrame(() => {
-    const el = document.querySelectorAll('[data-testid=comment-item]')[selI()]
+    // By id, never by index into the NodeList: the cards ABOVE the expanded
+    // one are not rendered at all (hiddenAboveCount), so the n-th DOM node is
+    // not the n-th comment — the same "snapshot by stable ID, never by raw
+    // array index" rule as .claude/rules/conventions.md.
+    const el = commentItemEl(selComment())
     // Deliberately alignToTopVertical, not el.scrollIntoView({block:'nearest'}):
     // the latter also drags <main>'s horizontal scroll along (the axis rule in
     // .claude/rules/arrowjs-pitfalls.md) — this call site predates that rule.
@@ -3671,10 +3716,14 @@ export function commentReplyEmpty() {
   return !el || el.value.trim() === ''
 }
 
-// commentSelIndex is the index of the focused comment row, for anchoring the
-// delete menu under the right element (home.mjs has no access to cs directly).
-export function commentSelIndex() {
-  return selI()
+// focusedCommentEl is the focused comment row's own DOM node, for anchoring the
+// delete/publish menu under the right element (home.mjs has no access to cs
+// directly). Used to be a bare INDEX (commentSelIndex) home.mjs looked up in
+// the comment-item NodeList — wrong since the cards above the expanded one
+// stopped being rendered (hiddenAboveCount), which makes DOM position and list
+// index disagree.
+export function focusedCommentEl() {
+  return commentItemEl(selComment())
 }
 
 // focusedCommentGithubId returns the focused comment's GitHub review-comment
@@ -5781,6 +5830,49 @@ function newCommentComposer(state, commentTarget, openCompose) {
   `
 }
 
+// moreAboveHint is the "er staat nog iets boven" cue that belongs with
+// alignToTopVertical: since the selected card is scrolled to the TOP of its
+// column, the items before it are off-screen above and the list would
+// otherwise read as if it started here. A slim sticky header naming how many
+// there are (`▲ N hierboven`), so ↑ is an obvious thing to press.
+//
+// Colorblind rule: the meaning sits in the WORD (the count + "hierboven") and
+// in the ▲ SHAPE — there is no colour carrying anything here.
+//
+// `n` is the cursor's own index (hiddenAboveCount()), not a scroll
+// measurement: deterministic, reactive for free, and it can't disagree with
+// what ↑ would actually do.
+//
+// Only used for stacked comment cards (InlineComments' comment-more-above)
+// now — the Onderliggende-code list dropped its own call site once its cards
+// above the cursor started collapsing to just their header (relatedCard's
+// `collapsed`), which already shows what's above without a separate hint.
+//
+// MODULE scope, deliberately: this used to sit nested INSIDE RelatedCode's
+// component body, so InlineComments' own call site below threw
+// "moreAboveHint is not defined" on every render — which is why the hint was
+// never actually visible in the comment column (it has no test of its own).
+//
+// `onUp` makes it a real button: for comments the cards above are not merely
+// scrolled out of view but not rendered at all (hiddenAboveCount), so without
+// this the hidden conversations would have no MOUSE route back at all. The
+// click runs the same step the ArrowUp key runs (see the call site), per
+// .claude/docs/mouse-navigation.md.
+function moreAboveHint(n, testid, onUp) {
+  return html`
+    <button
+      type="button"
+      class="sticky top-0 z-10 -mt-1 mb-1 flex shrink-0 items-center gap-1 rounded-md border border-slate-200 dark:border-zinc-700 bg-white/95 dark:bg-zinc-900/95 px-2 py-1 text-[11px] text-slate-500 dark:text-zinc-400 hover:border-indigo-300 dark:hover:border-indigo-500/40"
+      title="Ga naar de comment hierboven"
+      data-testid="${testid}"
+      @click="${() => onUp && onUp()}"
+    >
+      <span aria-hidden="true">▲</span>
+      <span>${n} hierboven</span>
+    </button>
+  `
+}
+
 // InlineComments — the exported block home.mjs mounts directly above the
 // Onderliggende-code card (see DetailPanel): the new-comment composer, once
 // opened via the command palette (see newCommentComposer above), then one
@@ -5843,8 +5935,17 @@ export function InlineComments(state, commentTarget, openCompose, openCommentMen
             )
           : ''}
       ${() =>
-        (cs.focus === 'comment' || cs.focus === 'thread') && selI() > 0
-          ? moreAboveHint(selI(), 'comment-more-above')
+        hiddenAboveCount() > 0
+          ? moreAboveHint(hiddenAboveCount(), 'comment-more-above', () => {
+              // Select the last comment ABOVE the expanded one — exactly the
+              // card this hint points at, and the same step handleRelatedKey's
+              // ArrowUp takes once it walks past a thread's oldest message.
+              // Deliberately computed from hiddenAboveCount() rather than
+              // `cs.sel - 1`, so it stays correct when the expanded card is
+              // the Claude anchor rather than the cursor.
+              cs.sel = Math.max(0, hiddenAboveCount() - 1)
+              toComment()
+            })
           : ''}
       ${newCommentComposer(state, commentTarget, openCompose)}
       <div class="contents">
@@ -5853,7 +5954,30 @@ export function InlineComments(state, commentTarget, openCompose, openCommentMen
           return p ? pendingCommentBubble(p) : ''
         }}
       </div>
-      ${() => visibleComments().map((c, i) => commentCard(c, i, openCommentMenu).key('comment:' + c.id))}
+      ${() => {
+        // The cards above the expanded one are left out entirely
+        // (hiddenAboveCount) — they pushed the expanded card, and its reply
+        // field, below the fold. `i` stays the comment's REAL index in the
+        // visible list, so commentCard's own `cs.sel = i` click and its
+        // `selI() === i` expand check are unaffected by the filtering, and the
+        // result is a shorter KEYED array rather than a per-item template↔''
+        // toggle (the "bare toggling expression" pitfall in
+        // .claude/rules/arrowjs-pitfalls.md).
+        //
+        // hiddenAboveCount() is read UNCONDITIONALLY, before the loop, not
+        // inside a .filter() callback: an empty list would never call that
+        // callback, so cs.sel/cs.focus would be missing from this binding's
+        // crystallized dependency set and it would never re-run on a
+        // selection change (same rule as watch()'s inline deps, see
+        // .claude/rules/arrowjs-pitfalls.md).
+        const hidden = hiddenAboveCount()
+        const list = visibleComments()
+        const cards = []
+        for (let i = hidden; i < list.length; i++) {
+          cards.push(commentCard(list[i], i, openCommentMenu).key('comment:' + list[i].id))
+        }
+        return cards
+      }}
     </div>
   `
 }
@@ -7077,35 +7201,6 @@ export default function RelatedPanel(state, commentTarget, search) {
       </p>
     `
   }
-  // moreAboveHint is the "er staat nog iets boven" cue that belongs with
-// alignToTopVertical: since the selected card is scrolled to the TOP of its
-// column, the items before it are off-screen above and the list would
-// otherwise read as if it started here. A slim sticky header naming how many
-// there are (`▲ N hierboven`), so ↑ is an obvious thing to press.
-//
-// Colorblind rule: the meaning sits in the WORD (the count + "hierboven") and
-// in the ▲ SHAPE — there is no colour carrying anything here.
-//
-// `n` is the cursor's own index (cs.codeSel / selI()), not a scroll
-// measurement: deterministic, reactive for free, and it can't disagree with
-// what ↑ would actually do.
-//
-// Only used for stacked comment cards (InlineComments' comment-more-above)
-// now — the Onderliggende-code list dropped its own call site once its cards
-// above the cursor started collapsing to just their header (relatedCard's
-// `collapsed`), which already shows what's above without a separate hint.
-function moreAboveHint(n, testid) {
-  return html`
-    <div
-      class="sticky top-0 z-10 -mt-1 mb-1 flex shrink-0 items-center gap-1 rounded-md border border-slate-200 dark:border-zinc-700 bg-white/95 dark:bg-zinc-900/95 px-2 py-1 text-[11px] text-slate-500 dark:text-zinc-400"
-      data-testid="${testid}"
-    >
-      <span aria-hidden="true">▲</span>
-      <span>${n} hierboven</span>
-    </div>
-  `
-}
-
 // Clicking a child drills into it as its own diff column — the same path Enter
   // takes on a focused child (drillIntoChild in home.mjs), just mouse-driven.
   const drill = (r) => search && search.drill && search.drill(r)

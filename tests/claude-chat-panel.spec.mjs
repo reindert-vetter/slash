@@ -351,9 +351,14 @@ test('the Claude column follows the selected comment: blanks for one with no con
   await expect(page.getByTestId('claude-message')).toHaveCount(0)
   expect(claudeChatStarted).toBe(false)
 
-  // Clicking back onto the first comment reloads its real transcript
-  // read-only (no fresh "Wis Claude-gesprek"-worthy Execution start either).
-  await first.click()
+  // Back onto the first comment reloads its real transcript read-only (no fresh
+  // "Wis Claude-gesprek"-worthy Execution start either). It sits ABOVE the
+  // selected one, so it is not rendered any more — the "1 hierboven" hint is
+  // the mouse route back (see "The selected conversation hides the ones above
+  // it" in .claude/docs/comments-panel.md).
+  await expect(page.getByTestId('comment-more-above')).toContainText('1 hierboven')
+  await page.getByTestId('comment-more-above').click()
+  await expect(first).toHaveAttribute('data-expanded', 'true')
   await expect(page.getByTestId('claude-message')).toHaveCount(2)
   await expect(page.getByTestId('claude-message-body').last()).toContainText('Ik heb naar de code gekeken')
   expect(claudeChatStarted).toBe(false)
