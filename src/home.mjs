@@ -12523,10 +12523,13 @@ function onKeydown(e) {
   }
 
   // A selected comment-index item's thread (entered via → below, see
-  // enterPrCommentThread) owns ↑/↓/← while focused — the sidebar counterpart
-  // of the block-scoped inline-comment thread's own ↑/↓/← handling
+  // enterPrCommentThread) owns ↑/↓/←/→ while focused — the sidebar counterpart
+  // of the block-scoped inline-comment thread's own ↑/↓/←/→ handling
   // (handleRelatedKey's 'thread' branch): ↑/↓ walk the thread's messages, ←
-  // steps back out to the index. Checked before the generic list-mode arrows
+  // steps back out to the index, and → steps ONE level further into the
+  // Claude column already standing next to the item (stop 5b, the same
+  // enterClaudeChat that branch's own → reaches — see
+  // handlePrCommentThreadKey). Checked before the generic list-mode arrows
   // below so it wins for this item; Enter still opens the action menu
   // regardless (see the Enter branch above), untouched by this.
   // ↓ at the newest message FALLS THROUGH instead of clamping —
@@ -12538,7 +12541,7 @@ function onKeydown(e) {
   if (
     focusedListComment &&
     isPrCommentThreadFocused(focusedListComment) &&
-    (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft')
+    (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight')
   ) {
     e.preventDefault()
     if (handlePrCommentThreadKey(focusedListComment, e.key)) return
@@ -12600,7 +12603,10 @@ function onKeydown(e) {
     //   unchanged — steps into the comment's own thread message history
     //   (its own separate pct/enterPrCommentThread cursor, RelatedPanel.mjs —
     //   NOT the block-scoped cs.focus/'thread' state machine, which reaches
-    //   'thread' only via ↑, see .claude/docs/claude-chat-panel.md).
+    //   'thread' only via ↑, see .claude/docs/claude-chat-panel.md). A SECOND
+    //   → from there continues into the Claude column standing next to the
+    //   item (stop 5b) — handled by the pct branch above, so this line only
+    //   ever runs for the very first →.
     const sc = selectedComment()
     if (sc) {
       const anchor = commentAnchorBlock(sc)

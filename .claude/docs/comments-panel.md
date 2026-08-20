@@ -997,6 +997,14 @@ Onderliggende-code panel, so it falls through to the next **index row**. `←`
 change also resets it, mirroring how the same watch resets
 `picm`/`cancelPrCommentReply`. `Enter` still opens the menu regardless.
 
+`→` from that thread steps **one level further, into the Claude chat** column
+already standing next to the item (`handlePrCommentThreadKey`'s own
+`ArrowRight`: release `pct`, then `enterClaudeChat`) — the mirror of the
+block-scoped `'thread'` + `→`, and `←` from the chat comes straight back here
+(`handleRelatedKey`'s `isPrCommentScope()` branch, since the `'comment'` level
+in between does not exist for such an item). Full walk and the reviewer
+request: "Comment-index items" in `.claude/docs/keyboard-navigation.md`.
+
 **Typing a query that matches none of the menu's own labels falls back to
 "Chat over deze comment"/"Beantwoorden met deze tekst"** instead of a dead-end
 "Geen commando's." — see "A no-match query falls back to Chat/Beantwoorden,

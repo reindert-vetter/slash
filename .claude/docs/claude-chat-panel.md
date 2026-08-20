@@ -609,10 +609,19 @@ The "Embedded Claude conversation" section owns:
 `ClaudeChatPanel`/`comment-claude-row` above is strictly the **block-scoped**
 chat — a comment-index item (`commentDetailCard`, see "The detail card, in
 place of a `Block` diff card" in `.claude/docs/comments-panel.md`) has no diff
-and no `→` chain to reach it through, so until this feature it had no way to
-chat with Claude at all. **"Chat met Claude"** (`prCommentCommandsFor`'s own
-command, `home.mjs`) fixes that by opening the SAME `claude_chat` conversation
-directly under the item's own detail card instead.
+of its own, so until this feature it had no way to chat with Claude at all.
+**"Chat met Claude"** (`prCommentCommandsFor`'s own command, `home.mjs`) fixed
+that by opening the SAME `claude_chat` conversation for it.
+
+**It IS on the `→` chain now** (it wasn't when this section was written — an
+earlier version of this line said such an item has "no `→` chain to reach it
+through"): the item's own thread cursor (`pct`) grew the same `→` the
+block-scoped `'thread'` level has, so the walk is `index row → thread →
+Claude chat`, with `←` stepping back into that thread (never onto the
+`'comment'` level, which does not exist for an unanchored item). Full
+mechanism and the reviewer request behind it: "Comment-index items" in
+`.claude/docs/keyboard-navigation.md`. The menu command stays as the
+mouse/palette equivalent.
 
 - **`chatAnchorComment()` grew a third branch.** `home.mjs`'s `commentScope()`
   already returns a sentinel `{ none: true }` scope while a comment-index item
@@ -639,7 +648,7 @@ directly under the item's own detail card instead.
   command ran — one chat, one surface, one set of testids. Don't reintroduce
   it. Full write-up: "An unanchored item shows the ordinary Claude column, on
   the right" in `.claude/docs/comments-panel.md`.
-- **`startPrCommentChat(c)`** therefore only `await`s
+- **`startPrCommentChat(c)`** is the MENU path only, and therefore only `await`s
   `ensureAndLoadChat(cs.pr, c.id)` (the same idempotent
   `POST /api/workflows/claude_chat` call `enterClaudeChat` makes) **before**
   focusing the composer — mirroring `enterClaudeChat`'s own ordering. Skipping

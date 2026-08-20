@@ -196,3 +196,60 @@ test('a stale block-scoped cs.focus does not hijack Enter in the PR-comment Clau
     await deleteCommentBestEffort(page, prWideRunId)
   }
 })
+
+// The → chain reaches that same column: reviewer request "ik wil hier naar
+// rechts kunnen drukken, dan moet ik naar de chat kunnen gaan" — a selected
+// comment-index item used to dead-end after ONE → (into its own thread, the
+// pct cursor), because home.mjs only routed ↑/↓/← there and the generic
+// ArrowRight branch's own `!isPrCommentThreadFocused(sc)` guard then made the
+// second → a silent no-op. Now the second → steps into the Claude column
+// (stop 5b), exactly like the block-scoped 'thread' + → does, and ← steps
+// straight back into the thread (never via the 'comment' level, which does
+// not exist for such an item — its comment column is `hidden`). See
+// handlePrCommentThreadKey / handleRelatedKey's 'claude' branch.
+test('→ steps from a PR-comment item into its thread and on into the Claude chat, ← comes back', async ({
+  page,
+}, testInfo) => {
+  const pr = seededPr(testInfo)
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: {
+      pr,
+      file: 'app/Http/Controllers/Api/ContractController.php',
+      line: 0,
+      author: 'AI check',
+      body: 'Dit endpoint valideert de invoer niet.',
+      kind: 'ai_warning',
+      source: 'ai',
+      local: true,
+    },
+  })
+  expect((await start.json()).runId).toBeTruthy()
+
+  await page.goto('/pr/' + pr)
+  await leaveSearchBox(page)
+  await expect(page.getByTestId('comment-detail-card')).toBeVisible()
+
+  const thread = page.getByTestId('comment-detail-thread')
+  const compose = page.getByTestId('claude-chat-compose')
+
+  // First → : into the item's own thread (the ring on the thread container is
+  // the only visible signal at the rest position pct.pos === 0).
+  await page.keyboard.press('ArrowRight')
+  await expect(thread).toHaveClass(/ring-2/)
+  await expect(compose).not.toBeFocused()
+
+  // Second → : on into the Claude column, and the thread ring hands off so
+  // only one thing reads as focused.
+  await page.keyboard.press('ArrowRight')
+  await expect(compose).toBeFocused()
+  await expect(thread).not.toHaveClass(/ring-2/)
+
+  // ← : straight back into the thread, not onto an invisible 'comment' level.
+  await page.keyboard.press('ArrowLeft')
+  await expect(thread).toHaveClass(/ring-2/)
+  await expect(compose).not.toBeFocused()
+
+  // ...and → still works from there, so the two are a real round trip.
+  await page.keyboard.press('ArrowRight')
+  await expect(compose).toBeFocused()
+})

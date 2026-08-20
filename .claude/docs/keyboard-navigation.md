@@ -422,8 +422,8 @@ thread** — deliberately NOT the same action (changed on request so `→` mirro
 `prCommentCommandsFor` — see `.claude/docs/command-palette.md`.
 
 This section covers the **unanchored** case (a genuine PR-wide/orphan
-comment, nothing to drill into) — one `→` steps straight into its own thread,
-as below. A comment-index item that DOES resolve to a real block instead
+comment, nothing to drill into) — one `→` steps straight into its own thread
+and a second one into the Claude chat, as below. A comment-index item that DOES resolve to a real block instead
 takes **two** `→` presses (first reveals the anchored diff's active-row
 highlight, second steps into its comments) — see "Only one thing reads as
 selected at a time" in `.claude/docs/comments-panel.md`.
@@ -441,6 +441,31 @@ own ephemeral, non-URL-bound cursor (`pct`, see
   has no Underlying-code panel to fall into, so it falls through to the next
   index row.
 - `←` steps back out to the index (the same row).
+- **`→` steps one level further, into the embedded Claude chat** (stop 5b) —
+  the exact mirror of the block-scoped `'thread'` + `→`
+  (`handleRelatedKey` → `enterClaudeChat`). The column is already on screen
+  for such an item (`isPrCommentScope()` is one of `claudeChatVisible()`'s
+  reasons, see `.claude/docs/claude-chat-panel.md`) and `cc` is already
+  anchored on it (`chatAnchorComment`'s `s.none` branch +
+  `syncClaudeAnchorForSelection`), so this only hands the keyboard over:
+  `handlePrCommentThreadKey` releases the `pct` cursor first (never two
+  focused things at once — the thread-container ring is the rest position's
+  only signal) and then calls `enterClaudeChat`. Reviewer request: "ik wil
+  hier naar rechts kunnen drukken, dan moet ik naar de chat kunnen gaan" —
+  before this, a second `→` was a silent no-op (the `pct` branch in
+  `onKeydown` routed only `↑`/`↓`/`←`, and the generic `ArrowRight` branch's
+  own `!isPrCommentThreadFocused(sc)` guard then did nothing), so the chat was
+  reachable only through the `Enter` menu's "Chat met Claude". So the whole
+  walk is: index row → (`→`) its thread → (`→`) the Claude chat.
+- **`←` out of that chat steps straight back into the thread**, not onto stop
+  5's `'comment'` level: for an unanchored item that level does not exist
+  (`cs.view` is empty by design and the comment column is even `hidden`), so
+  `handleRelatedKey`'s `'claude'` `ArrowLeft` has an `isPrCommentScope()`
+  branch (`exitRelated()` + `enterPrCommentThread`) ahead of its ordinary
+  `toComment()`. `Escape` is unchanged and releases the panel to the index.
+  From there on the chat behaves exactly as stop 5b does everywhere else
+  (`↑`/`↓` through the transcript, `↓` past the bottom advancing to the next
+  block). Test: `tests/pr-comment-claude-chat.spec.mjs`.
 - `Enter` always opens the menu, whether or not the thread is focused.
 
 ## `'list'` mode

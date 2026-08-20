@@ -3365,7 +3365,10 @@ function applyRelRestore() {
 //    to 'thread' — mirrors 'comment'.ArrowRight reaching 'claude' directly) —
 //    OR, when this conversation has no anchor yet (cc.commentId == null, see
 //    enterClaudeChatFromNew), back to the still-open composer ('new',
-//    toNewFocus) instead, since there is no comment to land 'comment' on. →
+//    toNewFocus) instead, since there is no comment to land 'comment' on —
+//    and, for an unanchored comment-index item (isPrCommentScope), back into
+//    that item's OWN thread (the pct cursor, enterPrCommentThread), which is
+//    the → this conversation was entered through there. →
 //    and ↑/↓ elsewhere in the chain reach 'claude' via enterClaudeChat/
 //    enterClaudeChatFromNew, not via a case here — see their own doc comments.
 export function handleRelatedKey(key) {
@@ -3431,7 +3434,18 @@ export function handleRelatedKey(key) {
       }
       focusClaudeComposer()
     } else if (key === 'ArrowLeft') {
-      if (cc.commentId == null) {
+      if (isPrCommentScope()) {
+        // Reached via → out of a comment-index item's own thread
+        // (handlePrCommentThreadKey's ArrowRight, the pct cursor) — the
+        // 'comment' level below does not exist here: cs.view is empty for
+        // such an item by design (recomputeView) and its comment column is
+        // even `hidden`, so toComment() would land the keyboard on nothing
+        // and ← would need a second press to get anywhere visible. Step
+        // straight back into that same thread instead, the exact mirror of
+        // the → that got here.
+        exitRelated()
+        enterPrCommentThread(cs.scope.prComment)
+      } else if (cc.commentId == null) {
         // Reached via enterClaudeChatFromNew — there is no comment yet to
         // land 'comment' on, so go back to the still-open composer instead.
         toNewFocus()
@@ -7761,7 +7775,7 @@ export function exitPrCommentThread() {
   pct.pos = 0
 }
 
-// handlePrCommentThreadKey drives ↑/↓/← while comment `c`'s thread owns the
+// handlePrCommentThreadKey drives ↑/↓/←/→ while comment `c`'s thread owns the
 // keyboard (see isPrCommentThreadFocused) — ↑ steps to an older message,
 // clamped at the top (no fall-through: mirrors the block-scoped
 // handleRelatedKey's 'thread' branch, where ↑ also just clamps). ↓ steps to
@@ -7771,8 +7785,17 @@ export function exitPrCommentThread() {
 // the sidebar cursor to the next comment/block, mirroring the block-scoped
 // panel's own `advanceFromComment` "↓ loopt door" convention (see
 // detail-layout.md, "Inline comment blocks"). ← steps back out to the
-// index (same row, not the next one). Returns `true` when the key was fully
-// handled here, `false` only for the ↓-falls-through case above.
+// index (same row, not the next one). → steps ONE level further, into the
+// Claude column that is already on screen next to this item — the exact
+// mirror of the block-scoped handleRelatedKey's 'thread' + → branch
+// (enterClaudeChat), so a comment-index item reaches stop 5b through the
+// ordinary → chain instead of only through the "Chat met Claude" command
+// (startPrCommentChat). The pct cursor is released first: the keyboard is in
+// the chat from there on, and leaving pct.commentId set would keep this
+// item's own thread ring lit alongside it (never two focused things at once,
+// see keyboard-navigation.md's "Focus highlight per stop"). Returns `true`
+// when the key was fully handled here, `false` only for the ↓-falls-through
+// case above.
 export function handlePrCommentThreadKey(c, key) {
   if (key === 'ArrowUp') {
     pct.pos = Math.min(pct.pos + 1, threadMessages(c).length)
@@ -7784,6 +7807,15 @@ export function handlePrCommentThreadKey(c, key) {
     pct.pos -= 1
   } else if (key === 'ArrowLeft') {
     exitPrCommentThread()
+  } else if (key === 'ArrowRight') {
+    // No Claude column (an "algemene" comment being composed, see
+    // claudeColumnVisible) ⇒ a plain no-op, still fully handled here: falling
+    // through would make → advance the sidebar cursor, which is the ↓
+    // meaning, not the → one.
+    if (claudeColumnVisible()) {
+      exitPrCommentThread()
+      enterClaudeChat(cs.pr)
+    }
   }
   return true
 }
