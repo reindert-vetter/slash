@@ -9,7 +9,7 @@ import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 // keeps exactly one row per target, ranked: a real Go-resolved call beats a
 // Go-resolved entry point, and any Go resolution beats an LLM-found row.
 //
-// PR 122 (materializeDupTargetWorktrees, tests/_setup.mjs, seeded via
+// PR 124 (materializeDupTargetWorktrees, tests/_setup.mjs, seeded via
 // duptarget-blocks.json/duptarget-callresolve.json) seeds both branches at once:
 // SomeRepo::find is covered by an entry point + an LLM row, OtherRepo::handle by
 // an entry point + a Go-resolved call.
@@ -17,7 +17,7 @@ const BLOCK = 'DupTargetAction::run'
 
 test.describe('one card per resolved call target', () => {
   test('an entry point and the real call to the same method collapse to one card', async ({ page }) => {
-    await page.goto('/pr/122')
+    await page.goto('/pr/124')
     await page.getByTestId('block-row').filter({ hasText: BLOCK }).click()
     await leaveSearchBox(page)
 
@@ -29,7 +29,7 @@ test.describe('one card per resolved call target', () => {
   })
 
   test('the Go-resolved row wins from the LLM row for the same target', async ({ page }) => {
-    await page.goto('/pr/122')
+    await page.goto('/pr/124')
     await page.getByTestId('block-row').filter({ hasText: BLOCK }).click()
     await leaveSearchBox(page)
 
@@ -40,7 +40,7 @@ test.describe('one card per resolved call target', () => {
   })
 
   test('the real call wins from the entry point pointing at the same method', async ({ page }) => {
-    await page.goto('/pr/122')
+    await page.goto('/pr/124')
     await page.getByTestId('block-row').filter({ hasText: BLOCK }).click()
     await leaveSearchBox(page)
 

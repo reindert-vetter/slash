@@ -515,7 +515,7 @@ function seed(db) {
     ],
     { stdio: 'ignore', env: SEED_ENV },
   )
-  // Duplicate-call-target fixture (PR 122, related-duplicate-call-target.spec.mjs):
+  // Duplicate-call-target fixture (PR 124, related-duplicate-call-target.spec.mjs):
   // two different call keys of one caller resolving to the very same definition —
   // rule 6c-bis's `class_method:Foo` entry point next to the real `->m()` call —
   // once with the real call resolved by Go and once only by an LLM, so both

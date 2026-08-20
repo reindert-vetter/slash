@@ -120,6 +120,20 @@ allocator plus a check rather than a convention:
   data at all (`970099`, a mocked `/api/problems` payload) — never to silence a
   spec that seeds at runtime.
 
+## The small fixture numbers collide silently too — check before claiming one
+
+`seededPr` only guards the synthetic `97xxxx` range. The low, hand-written
+fixture numbers (90-123, materialized in `_setup.mjs` + seeded in
+`_fixtures.mjs`) are claimed by hand, and `slash seed` **replaces** a PR's
+blocks rather than appending to them — so a second fixture on the same number
+simply erases the first, and only the spec that is seeded EARLIER loses. That
+happened to PR 122: the duplicate-call-target fixture claimed the number the
+moved/renamed-block fixture already used, silently failing two of
+`block-moved.spec.mjs`'s tests (the page rendered `DupTargetAction` instead)
+until the full suite was run again. The duptarget fixture moved to 124.
+**Before claiming a number, grep `worktreeWriter(` in `_setup.mjs` and `"pr":`
+in `tests/fixtures/*.json` and take the next free one.**
+
 A block-fixture-backed PR is the one case that cannot use `seededPr` (the number
 is baked into the JSON): such a spec must clean up after itself in-test, the way
 `underlying-comment-activity.spec.mjs` resolves the comments it places.

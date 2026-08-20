@@ -1397,7 +1397,7 @@ class ScopeClassRefAction
   write('head', 'app/Actions/ScopeClassRefAction.php', action(1, 'app(SomeRepo::class)'))
 }
 
-// materializeDupTargetWorktrees writes the synthetic PR 122 fixture worktree for
+// materializeDupTargetWorktrees writes the synthetic PR 124 fixture worktree for
 // related-duplicate-call-target.spec.mjs: one changed group holding two
 // `app(Foo::class)->m()` calls, so two DIFFERENT call keys of the same caller
 // resolve to the same definition and would otherwise render the same
@@ -1418,7 +1418,7 @@ class DupTargetAction
     }
 }
 `
-  const write = worktreeWriter(122)
+  const write = worktreeWriter(124)
   write('base', 'app/Actions/DupTargetAction.php', action('null', 'null'))
   write('head', 'app/Actions/DupTargetAction.php', action('app(SomeRepo::class)->find()', 'app(OtherRepo::class)->handle()'))
 }
