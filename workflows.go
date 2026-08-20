@@ -4073,7 +4073,14 @@ const maxSinceFactLines = 8
 // change is the one a returning reviewer cares about) and the files they
 // touched, as a Markdown list. It doubles as the prompt for the Haiku
 // explanation stacked above it, so the AI never sees facts the reviewer can't
-// check for themselves.
+// check for themselves. That newest-first order is load-bearing for that
+// prompt: prompts/since_review.md asks for the TOP commit only ("wat er als
+// laatst is aangepast"), with the rest as context.
+//
+// The two `**…**` heading lines are what the UI splits this blob on to give
+// each list its own navigable block in the PR-info column (sinceReviewSections,
+// home.mjs) — that split scans for the bold heading, not for any Dutch word, so
+// rewording a heading here is safe; dropping the `**…**` shape is not.
 func sinceReviewFacts(commits []github.SinceCommit, files []string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "**%s** sinds jouw laatste review:\n\n", plural(len(commits), "nieuwe commit", "nieuwe commits"))

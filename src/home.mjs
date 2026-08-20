@@ -246,6 +246,12 @@ const state = reactive({
   // See stepTaskFocus and "Walking into the Taken block" in
   // .claude/docs/keyboard-navigation.md.
   taskFocus: '',
+  // sinceExpanded — the KEYS of the "Aanpassingen sinds jouw review" blocks the
+  // reviewer opened up to read in full (Enter on the focused block, or a click
+  // on it): each block is capped with a fade until then, see SINCE_TRUNCATE_AT
+  // and sinceReviewSections. Ephemeral UI state like state.descriptionExpanded,
+  // deliberately not in the URL.
+  sinceExpanded: [],
   // blocks — the top-level blocks shown in the sidebar and walked by the
   // navigation: the full set minus any block that is a child in a relation
   // (those are nested under their parent in the RelatedPanel instead). allBlocks
@@ -4050,7 +4056,7 @@ const PR_META_POLL_MS = 1500
 const PR_META_MAX_POLLS = 20
 
 // refreshSinceReview asks this PR's pr_status tracker to re-derive "what
-// changed since MY last review" (the sky block under "Doel", sinceReviewBlock).
+// changed since MY last review" (the sky blocks under "Doel", sinceReviewBlocks).
 // Its two stages only ever ran once, when the tracker was first started, while
 // the tracker itself is reused for the PR's whole lifetime — so without this
 // the block stayed empty/stale even though the PR overview's own "nieuw sinds
@@ -11881,6 +11887,16 @@ function onKeydown(e) {
     // clicking it (openTaskRowMenu). Same shape as the push-todo row's own
     // Enter, and it re-resolves the cursor key against the current list, so a
     // row that vanished under a poll falls through to the 'pr' menu.
+    // Enter on a focused, capped since-review block opens it up to its full
+    // text instead of a menu (reviewer: "je mag het afkappen, maar als ik enter
+    // druk op z'n blok dan wil ik de volledige omschrijving lezen"). A block
+    // that is short enough to show in full has nothing to open, so it falls
+    // through to the PR-wide menu as before.
+    const sinceSec = state.showDescription ? focusedSinceSection() : null
+    if (sinceSec && sinceCollapsible(sinceSec)) {
+      toggleSinceExpanded(sinceSec)
+      return
+    }
     const taskRow = state.showDescription ? focusedTaskRowFromState() : null
     if (taskRow) {
       openTaskRowMenu(taskRow, null)
@@ -12881,59 +12897,185 @@ const DESC_TRUNCATE_AT = 280
 // jiraDesc keep getting set, only nothing reads them here anymore), as does
 // the jiraKey pill next to the title (data-testid="pr-info-jira-key",
 // a link, not the "explanation").
-// sinceReviewBlock — the sky block directly under "Doel": what changed on this
-// PR since the reviewer's OWN last review/comment. Three deliberate details:
+// SINCE_TRUNCATE_AT is the character length past which ONE since-review block
+// collapses to a fixed height with a fade, plus a "meer… (Enter)" affordance.
+// Same idea and the same deterministic character count as DESC_TRUNCATE_AT
+// above (no DOM measurement, no reactive layout read): it only gates whether
+// the affordance EXISTS, so a short block never gets a misleading toggle.
+// Reviewer: "je mag het afkappen, maar als ik enter druk op z'n blok dan wil ik
+// de volledige omschrijving lezen" — hence a fade in the column plus Enter (or
+// a click) on the focused block to read all of it, rather than a taller card.
+const SINCE_TRUNCATE_AT = 200
+
+// sinceReviewSections splits "what changed since your last review" into the
+// separate, individually navigable blocks the reviewer asked for ("dit blok in
+// meerdere blokken verdelen zonder het af te kappen, ik moet met mijn keys naar
+// beneden kunnen navigeren"):
 //
-//  1. Its first line repeats the PR overview's own line VERBATIM ("Bijgewerkt
-//     … geleden · nieuw sinds jouw review"), reusing the same shared
-//     relativeTime and the same wording as `newSinceMark` (overview.mjs), and
-//     the moment behind it is literally the same one the overview marks —
-//     inbox.go's myLastActivity, carried here through prmeta rather than
-//     recomputed (see .claude/docs/workflows-trackers.md, stage 3/4).
-//  2. It renders NOTHING when there is nothing new, or when this reviewer
-//     never reviewed this PR at all (`newSinceKind` empty) — explicit answer,
-//     the same silence the overview keeps. `sinceFacts` empty means the same,
-//     since the backend clears both halves in that case.
-//  3. The meaning is carried by the WORDS ("Sinds jouw laatste review" plus
-//     the facts themselves); the sky tint is decoration only (colourblind
-//     rule). The AI explanation on top is best-effort and simply absent when
-//     Haiku didn't produce one — the deterministic list below it always
-//     stands on its own.
+//  1. The STORY block — the PR overview's own line VERBATIM ("Bijgewerkt …
+//     geleden · nieuw sinds jouw review", same shared relativeTime and the same
+//     wording as `newSinceMark` in overview.mjs, off literally the same moment
+//     the overview marks — inbox.go's myLastActivity, carried here through
+//     prmeta rather than recomputed, see .claude/docs/workflows-trackers.md
+//     stage 3/4) plus the Haiku explanation, and NOTHING else: on request the
+//     facts no longer sit in this block. Its heading is "Aanpassingen sinds
+//     jouw review" and the explanation itself now describes only the most
+//     recent change (see prompts/since_review.md).
+//  2. One block per section of the deterministic fact list (`meta.sinceFacts`):
+//     the new commits, and the files they touch.
 //
-// A stable `contents` root, with the toggle INSIDE it, per the "never key a
-// template whose entire body is one toggling expression" pitfall.
-function sinceReviewBlock(state) {
-  return html`<div class="contents">${() => {
-    const meta = state.prMeta || {}
-    if (!meta.newSinceKind || !meta.sinceFacts) return ''
-    const kindWord = meta.newSinceKind === 'review' ? 'nieuw sinds jouw review' : 'nieuw sinds jouw comment'
-    const updated = relativeTime(meta.ghUpdatedAt)
-    return html`
-      <div class="rounded-lg bg-sky-50 dark:bg-sky-500/15 p-2.5" data-testid="pr-info-since-review">
-        <div class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500">
-          Sinds jouw laatste review
-        </div>
-        <div class="mb-1.5 text-[12px] font-medium text-slate-600 dark:text-zinc-300" data-testid="pr-info-since-line">
-          ${updated ? 'Bijgewerkt ' + updated + ' · ' + kindWord : kindWord}
-        </div>
-        ${() =>
-          meta.sinceSummary
-            ? html`<div
-                class="markdown-body mb-1.5 text-[13px] leading-relaxed text-slate-700 dark:text-zinc-300"
-                data-testid="pr-info-since-summary"
-                .innerHTML="${() => renderMarkdown(meta.sinceSummary)}"
-              ></div>`
-            : ''}
-        <div
-          class="markdown-body text-[12.5px] leading-relaxed text-slate-600 dark:text-zinc-400"
-          data-testid="pr-info-since-facts"
-          .innerHTML="${() => renderMarkdown(meta.sinceFacts)}"
-        ></div>
-      </div>
-    `
-  }}</div>`
+// The split is a plain scan for the `**…**` heading lines sinceReviewFacts
+// (workflows.go) emits — never a Dutch word, so a reworded backend keeps
+// working, and a fact blob without any such line degrades to ONE block holding
+// everything, i.e. exactly the old rendering. Returns [] when there is nothing
+// new at all, or when this reviewer never reviewed this PR (`newSinceKind`
+// empty): the same silence the overview keeps. `sinceFacts` empty means the
+// same, since the backend clears both halves in that case.
+//
+// The meaning is carried by the WORDS (the headings plus the facts themselves);
+// the sky tint is decoration only (colourblind rule). The AI explanation is
+// best-effort and simply absent when Haiku didn't produce one — the
+// deterministic blocks below it always stand on their own.
+function sinceReviewSections(meta) {
+  if (!meta || !meta.newSinceKind || !meta.sinceFacts) return []
+  const kindWord = meta.newSinceKind === 'review' ? 'nieuw sinds jouw review' : 'nieuw sinds jouw comment'
+  const updated = relativeTime(meta.ghUpdatedAt)
+  const out = [
+    {
+      key: 'since:story',
+      story: true,
+      title: 'Aanpassingen sinds jouw review',
+      line: updated ? 'Bijgewerkt ' + updated + ' · ' + kindWord : kindWord,
+      body: (meta.sinceSummary || '').trim(),
+    },
+  ]
+  let cur = null
+  for (const raw of String(meta.sinceFacts).split('\n')) {
+    const line = raw.trim()
+    if (line.startsWith('**')) {
+      cur = { key: 'since:facts:' + out.length, title: sinceFactTitle(line), body: '' }
+      out.push(cur)
+      continue
+    }
+    if (!cur) {
+      if (line === '') continue
+      cur = { key: 'since:facts:' + out.length, title: 'Sinds jouw laatste review', body: '' }
+      out.push(cur)
+    }
+    cur.body += raw + '\n'
+  }
+  return out.filter((s) => s.story || s.body.trim() !== '')
 }
 
+// sinceFactTitle turns a fact section's own heading line ("**4 nieuwe commits**
+// sinds jouw laatste review:") into the small-caps block heading the rest of
+// the PR-info column already uses (DOEL/WEERGAVE/OMSCHRIJVING): the bold
+// markers and the trailing colon go, the words stay verbatim — the count still
+// leads, so it reads as a heading without needing bold inside it.
+function sinceFactTitle(line) {
+  return line.replace(/\*\*/g, '').replace(/:\s*$/, '').trim()
+}
+
+// sinceCollapsible / sinceExpanded — is this block long enough to be worth
+// collapsing, and is it currently open? Expanded keys live in
+// state.sinceExpanded (ephemeral UI state, deliberately not in the URL, like
+// state.descriptionExpanded).
+function sinceCollapsible(s) {
+  return s.body.length > SINCE_TRUNCATE_AT
+}
+
+// toggleSinceExpanded is what BOTH Enter on the focused block and a click on it
+// run — same function for key and mouse (see .claude/docs/mouse-navigation.md).
+// A click also lands the stop-1 cursor on the block it acted on, exactly like
+// openTaskRowMenu does for a Taken row. Reassigns the array (never mutates it
+// in place) so the reactive bindings reading it re-run.
+function toggleSinceExpanded(s, { focus = false } = {}) {
+  if (focus && state.showDescription) state.taskFocus = s.key
+  if (!sinceCollapsible(s)) return
+  const open = state.sinceExpanded.includes(s.key)
+  state.sinceExpanded = open ? state.sinceExpanded.filter((k) => k !== s.key) : [...state.sinceExpanded, s.key]
+}
+
+// focusedSinceSection re-resolves state.taskFocus against the CURRENT sections —
+// what Enter acts on. Same key-not-index discipline as focusedTaskRowFromState:
+// a section that vanished under a poll simply isn't found and Enter falls
+// through to the PR-wide menu.
+function focusedSinceSection() {
+  if (!state.taskFocus || !state.taskFocus.startsWith('since:')) return null
+  return sinceReviewSections(state.prMeta || {}).find((s) => s.key === state.taskFocus) || null
+}
+
+// sinceReviewBlocks renders the sections as separate sibling blocks inside the
+// PR-info card. A stable `contents` root with the list INSIDE it, per the
+// "never key a template whose entire body is one toggling expression" pitfall,
+// and the slot always returns an ARRAY (empty when there is nothing new) so it
+// never switches between a single element and a keyed list.
+function sinceReviewBlocks(state) {
+  return html`<div class="contents">${() =>
+    sinceReviewSections(state.prMeta || {}).map((s) => sinceReviewBlock(state, s).key(s.key))}</div>`
+}
+
+// sinceReviewBlock is one such block: heading, the overview line (story block
+// only), and the collapsible body. The focus ring is the same one a focused
+// Taken row wears (ring-2 ring-inset ring-indigo-400), so exactly one thing in
+// stop 1 ever looks focused — prInfoCard's own ring drops as soon as
+// state.taskFocus is set.
+function sinceReviewBlock(state, s) {
+  const focused = () => state.taskFocus === s.key
+  const collapsible = sinceCollapsible(s)
+  const open = () => !collapsible || state.sinceExpanded.includes(s.key)
+  return html`
+    <div
+      class="${() =>
+        'shrink-0 rounded-lg bg-sky-50 dark:bg-sky-500/15 p-2.5 ' +
+        (focused() ? 'ring-2 ring-inset ring-indigo-400 dark:ring-indigo-500' : '')}"
+      data-testid="${s.story ? 'pr-info-since-review' : 'pr-info-since-block'}"
+      data-since-key="${s.key}"
+      data-since-focused="${() => (focused() ? 'true' : 'false')}"
+      data-since-collapsed="${() => (collapsible && !open() ? 'true' : 'false')}"
+      @click="${() => toggleSinceExpanded(s, { focus: true })}"
+    >
+      <div class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500">${s.title}</div>
+      ${() =>
+        s.story
+          ? html`<div class="mb-1.5 text-[12px] font-medium text-slate-600 dark:text-zinc-300" data-testid="pr-info-since-line">
+              ${s.line}
+            </div>`
+          : ''}
+      ${() =>
+        s.body
+          ? html`<div class="relative">
+              <div
+                class="${() =>
+                  'markdown-body leading-relaxed ' +
+                  (s.story ? 'text-[13px] text-slate-700 dark:text-zinc-300 ' : 'text-[12.5px] text-slate-600 dark:text-zinc-400 ') +
+                  (open() ? '' : 'max-h-[4.5rem] overflow-hidden code-fence-fade-bottom')}"
+                data-testid="${s.story ? 'pr-info-since-summary' : 'pr-info-since-facts'}"
+                .innerHTML="${() => renderMarkdown(s.body)}"
+              ></div>
+              ${() =>
+                collapsible
+                  ? html`<button
+                      type="button"
+                      data-testid="pr-info-since-toggle"
+                      @click="${(e) => {
+                        // stopPropagation FIRST, before the state mutation that
+                        // re-renders this button's own ancestor — see the
+                        // nested-@click rule in arrowjs-pitfalls.md. Without it
+                        // the block's own @click would toggle it straight back.
+                        if (e && e.stopPropagation) e.stopPropagation()
+                        toggleSinceExpanded(s, { focus: true })
+                      }}"
+                      class="mt-1 text-[11px] font-medium text-indigo-600 dark:text-indigo-400 hover:underline"
+                    >
+                      ${() => (open() ? 'Inklappen' : 'meer… (Enter)')}
+                    </button>`
+                  : ''}
+            </div>`
+          : ''}
+    </div>
+  `
+}
 // prMenuButton — the mouse entry point into the PR-wide command palette
 // (PR_COMMANDS): "PR keuren"/"Algemene comment plaatsen"/the Jira submenu/
 // "Alle goedkeuringen intrekken" — same openMenu('pr') the '/'-key and Enter
@@ -13057,7 +13199,7 @@ function prInfoCard(state) {
               ></div>`
             : html`<p class="text-[13px] italic text-slate-400 dark:text-zinc-500">samenvatting genereren…</p>`}
       </div>
-      ${sinceReviewBlock(state)}
+      ${sinceReviewBlocks(state)}
       <div
         class="${() =>
           'flex min-h-0 flex-col ' +
@@ -13184,7 +13326,7 @@ async function retryFailedRun(runId) {
 // Returns false when there is nothing to walk into at all (no rows), so the
 // caller can leave the keypress a plain no-op, exactly as it was before.
 function stepTaskFocus(dir) {
-  const rows = buildTaskRows(state)
+  const rows = buildStopOneRows(state)
   if (rows.length === 0) {
     state.taskFocus = ''
     return false
@@ -13195,7 +13337,7 @@ function stepTaskFocus(dir) {
     // nothing (there is nothing above stop 1's own card).
     if (dir < 0) return false
     state.taskFocus = rows[0].key
-    scrollTaskRowIntoView(rows[0].key)
+    scrollStopOneRowIntoView(rows[0].key)
     return true
   }
   const next = at + dir
@@ -13205,8 +13347,39 @@ function stepTaskFocus(dir) {
   }
   if (next >= rows.length) return true // already on the last row: stay put
   state.taskFocus = rows[next].key
-  scrollTaskRowIntoView(rows[next].key)
+  scrollStopOneRowIntoView(rows[next].key)
   return true
+}
+
+// buildStopOneRows — everything the stop-1 cursor (state.taskFocus) can land
+// on, top to bottom: first the "Aanpassingen sinds jouw review" blocks inside
+// the description card (see sinceReviewSections — this is what makes them
+// readable at all, since the card scrolls and the last one used to run off its
+// bottom edge), then the merged "Taken" rows below it. One flat list, so
+// stepTaskFocus needs no special cases and a key is re-resolved against the
+// CURRENT list on every step (see "Snapshot a selection by stable ID" in
+// .claude/rules/conventions.md).
+function buildStopOneRows(state) {
+  const since = sinceReviewSections(state.prMeta || {}).map((s) => ({ key: s.key, since: true }))
+  return since.concat(buildTaskRows(state))
+}
+
+// scrollStopOneRowIntoView scrolls whichever kind of stop-1 row just took the
+// cursor into view — a since-review block or a Taken row.
+function scrollStopOneRowIntoView(key) {
+  if (String(key).startsWith('since:')) return scrollSinceBlockIntoView(key)
+  return scrollTaskRowIntoView(key)
+}
+
+// scrollSinceBlockIntoView keeps the focused since-review block inside the
+// scrolling PR-info card. scrollIntoViewVertical, never bare scrollIntoView —
+// this card sits inside <main>'s horizontally scrolling column flow, see the
+// axis rule in .claude/rules/arrowjs-pitfalls.md.
+function scrollSinceBlockIntoView(key) {
+  requestAnimationFrame(() => {
+    const el = document.querySelector(`[data-since-key="${key}"]`)
+    if (el) scrollIntoViewVertical(el)
+  })
 }
 
 // scrollTaskRowIntoView keeps the focused row visible inside the block's own

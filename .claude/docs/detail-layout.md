@@ -370,12 +370,11 @@ The card reads **exclusively** `state.prMeta`/`state.pr`/`state.prUrl`/
 diff render (the "stuck on loading" pitfall,
 `.claude/rules/arrowjs-pitfalls.md`).
 
-### "Sinds jouw laatste review" (the sky block under Doel)
+### "Aanpassingen sinds jouw review" (the sky blocks under Doel)
 
-`sinceReviewBlock(state)` (`home.mjs`, `data-testid=pr-info-since-review`)
-renders directly BELOW the green "Doel" box: what landed on this PR after the
-reviewer's OWN last review/comment. Reviewer request, with three parts that are
-each load-bearing:
+`sinceReviewBlocks(state)` (`home.mjs`) renders directly BELOW the green "Doel"
+box: what landed on this PR after the reviewer's OWN last review/comment.
+Reviewer request, with these parts each load-bearing:
 
 - **Its first line is the PR overview's line, verbatim** —
   `Bijgewerkt <relatief> · nieuw sinds jouw review` (or `… jouw comment`),
@@ -389,11 +388,36 @@ each load-bearing:
   (`combineSinceMoment`) — needed for this exact block to behave correctly on
   your own PR (PPTD-948, see "A third variant of the same Signal" in
   `.claude/docs/approval.md`).
-- **Two stacked halves**: Haiku's short explanation (`sinceSummary`,
-  `pr-info-since-summary`) above the deterministic commit/file list
-  (`sinceFacts`, `pr-info-since-facts`), both through `renderMarkdown`. The AI
-  half is best-effort and simply absent when the call failed; the facts always
-  stand on their own.
+- **Several blocks, not one** (`sinceReviewSections`): the last of them used to
+  run off the bottom edge of the scrolling card, unreachable — *"dit blok in
+  meerdere blokken verdelen zonder het af te kappen, ik moet met mijn keys naar
+  beneden kunnen navigeren"*. Block 1 is the **story**
+  (`data-testid=pr-info-since-review`): the overview line plus Haiku's short
+  explanation (`sinceSummary`, `pr-info-since-summary`) and **nothing else** —
+  on request the facts left this block. Then **one block per section of
+  `sinceFacts`** (`pr-info-since-block`, body `pr-info-since-facts`): the new
+  commits, and the files they touch. The split scans for the `**…**` heading
+  lines `sinceReviewFacts` (`workflows.go`) emits — never a Dutch word, so a
+  reworded backend keeps working and a blob without such a line degrades to ONE
+  block holding everything (the old rendering). The heading becomes the block's
+  own small-caps title (`**` and the trailing `:` stripped), so it reads like
+  DOEL/WEERGAVE/OMSCHRIJVING. The AI half is best-effort and simply absent when
+  the call failed; the fact blocks always stand on their own.
+- **The explanation describes only the LAST change**, not everything since the
+  review (`prompts/since_review.md`, explicit request). That is why
+  `sinceReviewFacts`' newest-first commit order is load-bearing: the prompt
+  asks for the top commit, with the older ones as context only.
+- **Each block is its own keyboard stop and is capped, not stretched.** A body
+  longer than `SINCE_TRUNCATE_AT` (200 chars) collapses to `max-h-[4.5rem]`
+  with the shared `code-fence-fade-bottom` mask (`data-since-collapsed=true`)
+  plus a `meer… (Enter)`/`Inklappen` affordance — *"je mag het afkappen, maar
+  als ik enter druk op z'n blok dan wil ik de volledige omschrijving lezen"*.
+  `Enter` on the focused block (or a click anywhere on it) toggles
+  `state.sinceExpanded` (a list of keys, ephemeral, outside the URL); a block
+  short enough to show in full has nothing to open, so `Enter` there falls
+  through to the PR-wide menu as before. `↓`/`↑` walk these blocks before the
+  "Taken" rows — see "Walking into the Taken block" in
+  `.claude/docs/keyboard-navigation.md`.
 - **Absent entirely** when `newSinceKind`/`sinceFacts` are empty — nothing new,
   or a PR this reviewer never reviewed. Explicit answer: no "je bent bij"
   placeholder, the same silence the overview keeps.

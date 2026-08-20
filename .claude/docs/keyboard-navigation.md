@@ -108,15 +108,23 @@ code).
    `↓` out of the chat (stop 5b) no longer reaches this stop at all — it jumps
    straight to the next block instead (see stop 5b above).
 
-### Walking into the Taken block
+### Walking into the since-review blocks and the Taken block
 
-The "Taken" block under the PR-description card (see
-`.claude/docs/detail-layout.md`) **is** reachable by keyboard — it used to be
+The "Aanpassingen sinds jouw review" blocks inside the PR-description card and
+the "Taken" block under it (see `.claude/docs/detail-layout.md`) **are**
+reachable by keyboard — it used to be
 click-only, and stop 1 swallowed `↑`/`↓` entirely. Reviewer: *"ik wil met mijn
 down key naar beneden en daar kunnen navigeren, ik moet ook naar rechts kunnen,
 naar de diff, en naar boven terug naar pr description."* It is a cursor WITHIN
 stop 1, not a stop of its own in the `→` chain:
 
+- **One flat cursor list** (`buildStopOneRows`): the since-review blocks first
+  (keys `since:story`/`since:facts:N`, `sinceReviewSections`), then the merged
+  "Taken" rows. Reaching those blocks by keyboard is the whole point — the card
+  scrolls and the last block used to sit below its bottom edge. `Enter` on a
+  focused, capped since block opens it to its full text instead of opening a
+  menu (`toggleSinceExpanded`; a short, uncapped block falls through to the
+  `'pr'` menu).
 - **`state.taskFocus`** holds the focused row's **key**, or `''` when the
   description card itself has the cursor (which is also what makes
   `prInfoCard`'s own focus ring drop — exactly one of the two looks focused).
@@ -125,8 +133,9 @@ stop 1, not a stop of its own in the `→` chain:
   `stepTaskFocus(dir)` re-resolves the cursor against the CURRENT list on every
   step and a row that disappeared simply leaves index -1 (`↓` then starts at the
   top again).
-- **`↓`** enters the list at the top row, then walks down and stops on the last
-  row. **`↑`** walks up and, from the FIRST row, releases the cursor back to the
+- **`↓`** enters the list at the top (the first since block, or the first Taken
+  row when there is nothing new since the review), then walks down and stops on
+  the last row. **`↑`** walks up and, from the FIRST row, releases the cursor back to the
   description card instead of getting stuck. The focused row scrolls itself into
   the block's 3,5-row window via `scrollIntoViewVertical` — never bare
   `scrollIntoView`, see the axis rule in `.claude/rules/arrowjs-pitfalls.md`.

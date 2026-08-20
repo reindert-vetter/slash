@@ -74,7 +74,11 @@
          full-size preview card stacked below the comment/Claude column (see
          "A full-size code-preview column" in claude-chat-panel.md). Applied to
          the <pre> only when it actually shows a truncated fence
-         (`code-fence-fade-bottom`, always paired with `data-fence-truncated`);
+         (`code-fence-fade-bottom`, always paired with `data-fence-truncated`).
+         Also reused, deliberately, by a collapsed "Aanpassingen sinds jouw
+         review" block in the PR-info column (home.mjs's sinceReviewBlock,
+         paired with `data-since-collapsed`) — the mask is generic, only the
+         name recalls its first caller;
          the em unit is relative to that <pre>'s own font-size, so it fades
          roughly the height of its last visible line regardless of the
          surrounding bubble's text size. A plain alpha mask, not colour, so no

@@ -27,10 +27,13 @@ var ExplainCodeSystemPrompt string
 var PRSummarySystemPrompt string
 
 // SinceReviewSystemPrompt frames the fourth context-only Haiku action: explain,
-// in a couple of sentences, what changed on a PR since the reviewer's own last
-// review. Its call-specific content is the very same deterministic fact list
-// the UI renders underneath the explanation (sinceReviewFacts, workflows.go),
-// so the AI never asserts anything the reviewer can't check right below it.
+// in a sentence or two, what was changed LAST on a PR since the reviewer's own
+// last review — only the newest commit, on explicit request, with the older
+// ones present purely as context (the reviewer reads this to know where to look
+// again, and the deterministic commit list sits in its own block right below
+// it). Its call-specific content is the very same deterministic fact list the
+// UI renders underneath the explanation (sinceReviewFacts, workflows.go), so
+// the AI never asserts anything the reviewer can't check right below it.
 //
 //go:embed prompts/since_review.md
 var SinceReviewSystemPrompt string
