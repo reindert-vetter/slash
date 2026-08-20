@@ -1590,6 +1590,10 @@ func (s *server) handlePRStatusStart(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
+	// Opening the review tree also runs the ingest-refresh check immediately
+	// (fire-and-forget), instead of waiting for pollIngestRefresh's own next
+	// tick — see TriggerIngestRefreshCheck.
+	s.tasks.manager.TriggerIngestRefreshCheck(runID, in.Repo, in.PR)
 	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
 }
 

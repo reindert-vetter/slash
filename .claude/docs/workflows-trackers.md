@@ -138,6 +138,20 @@ request.
   `.claude/docs/pending-push.md`. The per-thread comment heartbeat only fires with a thread open, so
   `home.mjs` separately pings the `pr_status` Run ID every 60s while the PR page
   is visible+focused (operational, no state).
+  - **The check itself is shared, not duplicated.** `pollIngestRefresh`'s
+    per-tick body is `checkIngestRefreshOnce(ctx, prRunID, repo, pr)` — read the
+    meta, load the stored SHAs, decide via `ingestRefreshNeeded`, signal if
+    needed. `TriggerIngestRefreshCheck(prRunID, repo, pr)` runs that exact same
+    check **once, in the background**, and `handlePRStatusStart` (the endpoint
+    `home.mjs`'s `loadPRMeta()` hits on every page load) calls it right after
+    `EnsurePRStatus` — so **opening the review tree** surfaces a PR whose head
+    already moved immediately, instead of waiting for `pollIngestRefresh`'s next
+    tick (up to `m.interval`/`m.idle` after its last one). Same `runtimeReady`
+    gate as `pollIngestRefresh`'s own spawn (a no-op for a one-shot CLI caller).
+    A stray double-check this way (the ticker and the on-open trigger landing
+    close together) is harmless for the same reason a duplicate Signal already
+    was — see the "stray/duplicate signal" note two paragraphs down. Test:
+    `TestTriggerIngestRefreshCheckFiresImmediately` (`workflows_test.go`).
 - **`refreshIngestDelta` Activity** (`ingest.go`) diffs the **previously
   stored** head SHA against the new one (`changedFileNames`) and rescans only
   those files, writing via **`upsertPRFileBlocks`** (a DELETE+INSERT scoped to

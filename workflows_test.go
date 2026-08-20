@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1539,4 +1540,82 @@ func activityCount(t *testing.T, m *TaskManager, runID, name string) int {
 		}
 	}
 	return n
+}
+
+// signalReceivedCount counts how often a run's history recorded a Signal of
+// the given name, so a test can assert "one more Signal landed" without
+// caring about its payload.
+func signalReceivedCount(t *testing.T, m *TaskManager, runID, name string) int {
+	t.Helper()
+	hist, err := m.engine.History(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, ev := range hist {
+		if ev.Type == tembed.EventSignalReceived && ev.Name == name {
+			n++
+		}
+	}
+	return n
+}
+
+// TestTriggerIngestRefreshCheckFiresImmediately pins the fix for "opening a
+// review tree should check for new commits right away, not wait for
+// pollIngestRefresh's own next tick": handlePRStatusStart now calls
+// TriggerIngestRefreshCheck on every page load. This drives that call
+// directly and asserts the ingest-refresh Signal lands in the pr_status
+// tracker's history — with pollIngestRefresh's own ticker parked an hour out,
+// so the only way the Signal can appear within the test's timeout is via the
+// immediate, on-open check under test. checkIngestRefreshOnce's
+// fetchPRMeta/ingestRefreshNeeded have no offline fake (see
+// TestIngestWorkflowEndToEnd), so this needs real gh/git access and skips
+// itself when that isn't available, exactly like that test.
+func TestTriggerIngestRefreshCheckFiresImmediately(t *testing.T) {
+	if _, err := exec.Command("gh", "pr", "view", "12903", "--repo", repoSlug, "--json", "number").Output(); err != nil {
+		t.Skipf("gh not reachable, skipping: %v", err)
+	}
+	t.Setenv("SLASH_GITHUB", "off") // fetchPRBasics/generatePRSummary/fetchPRStatuses stay offline
+
+	dataDir := t.TempDir()
+	db, err := openDB(filepath.Join(dataDir, "graph.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	engine := tembed.New(tembed.NewMemoryStore())
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, db, dataDir, repoSlug)
+	// Park pollIngestRefresh's own ticker far in the future: any refresh
+	// Signal observed within the test window must come from
+	// TriggerIngestRefreshCheck, never a coincidental regular tick.
+	m.interval = time.Hour
+	m.idle = time.Hour
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.SetRuntime(ctx, true)
+
+	const pr = 12903
+	prRunID, err := m.ensurePRStatus("", pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		st, _ := m.engine.Status(prRunID)
+		return st == tembed.StatusWaiting
+	})
+
+	// Seed a stale recorded head SHA so ingestRefreshNeeded reports "refresh
+	// needed" regardless of the PR's real current head.
+	if err := saveIngestSHAs(db, "", pr, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "0000000000000000000000000000000000dead"); err != nil {
+		t.Fatal(err)
+	}
+	before := signalReceivedCount(t, m, prRunID, SignalPRState)
+
+	m.TriggerIngestRefreshCheck(prRunID, "", pr)
+
+	waitFor(t, func() bool {
+		return signalReceivedCount(t, m, prRunID, SignalPRState) > before
+	})
 }

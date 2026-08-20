@@ -5407,29 +5407,58 @@ func (m *TaskManager) pollIngestRefresh(ctx context.Context, prRunID string, rep
 		}
 		lastPoll = time.Now()
 
-		status, err := m.engine.Status(prRunID)
-		if err != nil || status == tembed.StatusCompleted || status == tembed.StatusFailed {
+		if !m.checkIngestRefreshOnce(ctx, prRunID, repo, pr) {
 			return
 		}
-
-		meta, err := fetchPRMeta(ctx, repo, pr)
-		if err != nil {
-			m.logf("pr_status: ingest refresh check pr=%d: %v", pr, err)
-			continue
-		}
-		_, head, ok, err := loadIngestSHAs(m.db, repo, pr)
-		if err != nil {
-			m.logf("pr_status: load ingest state pr=%d: %v", pr, err)
-			continue
-		}
-		if !ok || !ingestRefreshNeeded(ctx, meta.HeadRefOid, head) {
-			continue // no prior ingest yet, nothing new since, or already ahead
-		}
-		sig := PRStateSignal{BaseSHA: meta.BaseRefOid, HeadSHA: meta.HeadRefOid}
-		if err := m.engine.SignalWorkflow(prRunID, SignalPRState, sig); err != nil {
-			m.logf("pr_status: signal ingest refresh pr=%d: %v", pr, err)
-		}
 	}
+}
+
+// checkIngestRefreshOnce runs a single ingest-refresh check: it signals the
+// pr_status tracker (SignalPRState) if the PR's live head SHA has moved past
+// what was last ingested. Shared by pollIngestRefresh's own ticker and
+// TriggerIngestRefreshCheck's immediate on-open check — see the latter for why
+// that second caller exists. Returns false once the tracker itself is done
+// (merged/closed), the same shutdown signal pollIngestRefresh's loop used to
+// detect inline; true otherwise (including "nothing to do" and error cases,
+// which only log and keep the tracker alive for the next check).
+func (m *TaskManager) checkIngestRefreshOnce(ctx context.Context, prRunID string, repo string, pr int) bool {
+	status, err := m.engine.Status(prRunID)
+	if err != nil || status == tembed.StatusCompleted || status == tembed.StatusFailed {
+		return false
+	}
+
+	meta, err := fetchPRMeta(ctx, repo, pr)
+	if err != nil {
+		m.logf("pr_status: ingest refresh check pr=%d: %v", pr, err)
+		return true
+	}
+	_, head, ok, err := loadIngestSHAs(m.db, repo, pr)
+	if err != nil {
+		m.logf("pr_status: load ingest state pr=%d: %v", pr, err)
+		return true
+	}
+	if !ok || !ingestRefreshNeeded(ctx, meta.HeadRefOid, head) {
+		return true // no prior ingest yet, nothing new since, or already ahead
+	}
+	sig := PRStateSignal{BaseSHA: meta.BaseRefOid, HeadSHA: meta.HeadRefOid}
+	if err := m.engine.SignalWorkflow(prRunID, SignalPRState, sig); err != nil {
+		m.logf("pr_status: signal ingest refresh pr=%d: %v", pr, err)
+	}
+	return true
+}
+
+// TriggerIngestRefreshCheck runs one checkIngestRefreshOnce immediately, in the
+// background, instead of waiting for pollIngestRefresh's own ticker (up to
+// m.interval/m.idle after its last check). handlePRStatusStart calls this on
+// every "open a review tree" page load, so a PR head that moved since the last
+// check is picked up the moment the tree is opened, not on the next tick. A
+// no-op when background pollers aren't running (SetRuntime/runtimeReady) —
+// mirrors the same gate ensurePRStatus uses before spawning pollIngestRefresh.
+func (m *TaskManager) TriggerIngestRefreshCheck(prRunID, repo string, pr int) {
+	if !m.runtimeReady {
+		return
+	}
+	go m.checkIngestRefreshOnce(m.baseCtx, prRunID, repo, pr)
 }
 
 // pollImportComments imports existing GitHub comments (review-diff threads and
