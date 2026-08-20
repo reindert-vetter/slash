@@ -6609,11 +6609,18 @@ function nestedChipColumn(ancestors, kids, drill, path, cardIdx) {
 // ceiling well short of the full diff-block-column width
 // (w-[56rem] 2xl:w-[65rem] — a lower ceiling than the block column itself, so
 // this card never eats up "half the screen" the way a single very wide
-// method's card could before). Uses the CSS `ch` unit (the exact advance
-// width of a monospace glyph) rather than a hand-picked px-per-char ratio —
-// still zero live measurement, `ch` is resolved by the browser's layout
-// engine from the char count we already computed, not from reading back a
-// rendered node's size. `clamp()` handles the "no code yet / all comment"
+// method's card could before). Uses the CSS `ch` unit rather than a
+// hand-picked px-per-char ratio — still zero live measurement, `ch` is
+// resolved by the browser's layout engine from the char count we already
+// computed, not from reading back a rendered node's size. NOTE (2026-08-20):
+// `ch` is NOT "one monospace glyph" as this comment used to claim — it is
+// one glyph of the font of the element carrying the class, here the page's
+// proportional ui-sans-serif at 16px, roughly 1.5× the code panes' own
+// monospace advance (see CODE_CHAR_PX in Block.mjs, where a diff card's own
+// width was moved off `ch` for exactly that reason). Deliberately left as
+// `ch` here: this column is clamped between a floor and a ceiling either
+// way, so the only effect is that it reaches its ceiling at a lower char
+// count — no line gets clipped and nothing grows past the ceiling. `clamp()` handles the "no code yet / all comment"
 // case for free (calc() then evaluates below the floor). Reads only
 // rc.children — a plain snapshot pushed by setRelated, never the selected
 // block's own `b.code` — so this cannot co-subscribe with the diff render

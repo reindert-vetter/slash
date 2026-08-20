@@ -83,8 +83,13 @@ test.describe('a mouse click into a diff only hides a left column that no longer
     await expect(page).toHaveURL(/mode=diff/)
 
     // Shrink until only one of the two can stay — the description (left-most)
-    // goes first, the index survives longer.
-    await page.setViewportSize({ width: 2600, height: 900 })
+    // goes first, the index survives longer. The threshold moved down with
+    // the diff cards themselves: a card's width is now measured in the CODE
+    // font's own character advance instead of the card's inherited
+    // proportional `ch`, making every content-driven card ~1/3 narrower (see
+    // "The chars → px conversion" in .claude/docs/diff-card.md), so at the
+    // old 2600px both left columns still fit.
+    await page.setViewportSize({ width: 2000, height: 900 })
     await page.waitForTimeout(400)
     await expect(page.getByTestId('pr-info-column')).toHaveCount(0)
     await expect(page.getByTestId('pr-index')).toBeVisible()

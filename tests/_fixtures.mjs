@@ -1045,3 +1045,28 @@ export async function openNewComment(page) {
   await page.keyboard.press('Enter')
   await page.getByTestId('command-row').filter({ hasText: 'Comment op deze regel' }).click()
 }
+
+// widthPx(page, chars) — the pixel width Block.mjs's contentWidthCls builds
+// for a given chars-count, and widthClsRe(px) the matching class-name
+// pattern. A diff card's width class used to spell out its chars-count
+// (`w-[calc(80ch_+_2rem)]`), so a spec could assert on it directly; it is now
+// a plain pixel value, because `ch` resolved against the card's own
+// PROPORTIONAL font instead of the code panes' monospace one and made every
+// card ~34% too wide (see CODE_CHAR_PX in Block.mjs). Both helpers ask
+// Block.mjs itself, so a spec keeps expressing its expectation in
+// CHARACTERS and no pixel number gets hardcoded into a spec.
+export async function widthPx(page, chars) {
+  return page.evaluate(async (c) => (await import('/src/Block.mjs')).contentWidthPx(c), chars)
+}
+
+export function widthClsRe(px) {
+  return new RegExp('w-\\[' + px + 'px\\]')
+}
+
+// widthCharsOf(page, clsString) — the reverse: the chars-count behind a card's
+// own width class, or null when that class isn't a content-driven one.
+export async function widthCharsOf(page, clsString) {
+  const m = /w-\[(\d+)px\]/.exec(clsString || '')
+  if (!m) return null
+  return page.evaluate(async (px) => (await import('/src/Block.mjs')).contentWidthChars(px), Number(m[1]))
+}

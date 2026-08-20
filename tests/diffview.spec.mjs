@@ -1,4 +1,4 @@
-import { test, expect, evaluateSettled, appReady } from './_fixtures.mjs'
+import { test, expect, evaluateSettled, appReady, widthPx, widthClsRe, widthCharsOf } from './_fixtures.mjs'
 
 // `a` cycles the global diff-pane view (state.diffViewMode, see
 // keyboard-navigation.md "`a` — diff-weergave toggelen") through THREE stands
@@ -68,7 +68,7 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     // under the 80-char floor) the combined 'split' total (min(80,29)+29=58)
     // still floors to the flat 80-character minimum, same as before.
     await expect(panes).toHaveCount(2)
-    await expect(card).toHaveClass(/w-\[calc\(80ch_\+_2rem\)\]/)
+    await expect(card).toHaveClass(widthClsRe(await widthPx(page, 80)))
 
     // Flip to unified: a single column remains — both the old (-) and the
     // new (+) line of the changed row, stacked instead of side by side. The
@@ -78,7 +78,7 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
       window.__vm.mode = 'unified'
     })
     await expect(panes).toHaveCount(1)
-    await expect(card).toHaveClass(/w-\[calc\(80ch_\+_2rem\)\]/)
+    await expect(card).toHaveClass(widthClsRe(await widthPx(page, 80)))
     // The unified column really shows BOTH a "-" (old, rose) and a "+" (new,
     // emerald) gutter line for each of the two changed rows (the return
     // type and the return value) — proof it's a stacked old-above-new
@@ -99,14 +99,14 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     // whole point of the request ("the 3rd option must not show old code").
     await expect(panes.first()).not.toContainText('return 1;')
     await expect(panes.first()).toContainText('return 2;')
-    await expect(card).toHaveClass(/w-\[calc\(80ch_\+_2rem\)\]/)
+    await expect(card).toHaveClass(widthClsRe(await widthPx(page, 80)))
 
     // Flip back: side by side again, same content-driven width.
     await page.evaluate(() => {
       window.__vm.mode = 'split'
     })
     await expect(panes).toHaveCount(2)
-    await expect(card).toHaveClass(/w-\[calc\(80ch_\+_2rem\)\]/)
+    await expect(card).toHaveClass(widthClsRe(await widthPx(page, 80)))
   })
 
   // Direct-mount unit test: in 'fit', a card with a genuinely wide NEW-side
@@ -172,17 +172,21 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     })
 
     const card = page.locator('#fit-wide-host article')
-    await expect(card).toHaveClass(/w-\[calc\(\d+ch_\+_2rem\)\]/)
+    await expect(card).toHaveClass(/w-\[\d+px\]/)
     const floorWidth = await page
       .locator('#fit-floor-host article')
       .evaluate((el) => el.getBoundingClientRect().width)
     const width = await card.evaluate((el) => el.getBoundingClientRect().width)
     // Comfortably past the 80-character floor for this deliberately widened
     // line, and comfortably under the extreme-length test's own threshold
-    // (>1120px, see the next test) — proves contentWidthCls is actually
-    // proportional to the content, not just resolving to the floor.
+    // (the 130-character width, see the next test) — proves contentWidthCls
+    // is actually proportional to the content, not just resolving to the
+    // floor. Both bounds are asked of Block.mjs itself (widthPx) rather than
+    // hardcoded in px, since a card's width now scales with the CODE font's
+    // own character advance (CODE_CHAR_PX) instead of the card's inherited
+    // proportional `ch`.
     expect(width).toBeGreaterThan(floorWidth + 10)
-    expect(width).toBeLessThan(1120)
+    expect(width).toBeLessThan(await widthPx(page, 130))
   })
 
   // Direct-mount unit test: the OTHER end of the spectrum — a genuinely very
@@ -229,10 +233,11 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
 
     const card = page.locator('#fit-verywide-host article')
     const width = await card.evaluate((el) => el.getBoundingClientRect().width)
-    // Genuinely wider than the full split width (70rem = 1120px) — 'fit' no
-    // longer caps at 'split's width; the whole point is that the widest real
+    // Genuinely wider than a 130-character card (the previous test's own
+    // upper bound) — 'fit' no longer caps at 'split's width; the whole point
+    // is that the widest real
     // line must never be cut off, even if that means 'fit' > 'split'.
-    expect(width).toBeGreaterThan(1120)
+    expect(width).toBeGreaterThan(await widthPx(page, 130))
   })
 
   // Direct-mount unit test: the card now sizes off a WINDOW around the
@@ -311,11 +316,11 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
 
     // Without an active unit the card still follows the block's true longest
     // line (unchanged existing behavior) — comfortably past the 80-char floor.
-    expect(wholeBlockWidth).toBeGreaterThan(1000)
+    expect(wholeBlockWidth).toBeGreaterThan(await widthPx(page, 100))
     // With the short line selected, the long line sits outside the ±2
     // changed-row window, so the card shrinks back down near the flat
     // 80-character floor — nowhere near the long line's own width.
-    expect(selectedLineWidth).toBeLessThan(wholeBlockWidth - 200)
+    expect(selectedLineWidth).toBeLessThan(wholeBlockWidth - 130)
   })
 
   // Direct-mount unit test: a cursor row deep inside a multi-row old-side-only
@@ -405,11 +410,11 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
 
     // Without an active unit the card still follows the block's true longest
     // (unchanged) line — comfortably past the 80-char floor.
-    expect(noUnitWidth).toBeGreaterThan(1000)
+    expect(noUnitWidth).toBeGreaterThan(await widthPx(page, 100))
     // With the middle deletion row selected, nothing measurable is directly
     // adjacent, so the card floors down near MIN_CONTENT_WIDTH_CHARS — far
     // below the global max, not equal to it.
-    expect(midDeletionWidth).toBeLessThan(noUnitWidth - 400)
+    expect(midDeletionWidth).toBeLessThan(noUnitWidth - 260)
   })
 
   // Direct-mount unit test: the look-ahead preview's 'fit'-stand cap
@@ -602,14 +607,14 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     // Narrow by default — one pane, content-driven width lands on the flat
     // 80-character floor for this short fixture, in every stand.
     await expect(panes).toHaveCount(1)
-    await expect(card).toHaveClass(/w-\[calc\(80ch_\+_2rem\)\]/)
+    await expect(card).toHaveClass(widthClsRe(await widthPx(page, 80)))
 
     await page.evaluate(() => {
       window.__addedVm.mode = 'unified'
     })
     // `a` on: still one pane, still narrow — no change for a one-sided block.
     await expect(panes).toHaveCount(1)
-    await expect(card).toHaveClass(/w-\[calc\(80ch_\+_2rem\)\]/)
+    await expect(card).toHaveClass(widthClsRe(await widthPx(page, 80)))
 
     await page.evaluate(() => {
       window.__addedVm.mode = 'fit'
@@ -618,13 +623,13 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     // see contentWidthCls), and this fixture's short code lands on the same
     // flat 80-character floor.
     await expect(panes).toHaveCount(1)
-    await expect(card).toHaveClass(/w-\[calc\(80ch_\+_2rem\)\]/)
+    await expect(card).toHaveClass(widthClsRe(await widthPx(page, 80)))
 
     await page.evaluate(() => {
       window.__addedVm.mode = 'split'
     })
     // Flipped back to split: a one-sided block stays narrow regardless.
-    await expect(card).toHaveClass(/w-\[calc\(80ch_\+_2rem\)\]/)
+    await expect(card).toHaveClass(widthClsRe(await widthPx(page, 80)))
   })
 
   // Same as above but for a removed block — the other one-sided status, to
@@ -665,13 +670,13 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     // Narrow by default — one pane, content-driven width lands on the flat
     // 80-character floor for this short fixture.
     await expect(panes).toHaveCount(1)
-    await expect(card).toHaveClass(/w-\[calc\(80ch_\+_2rem\)\]/)
+    await expect(card).toHaveClass(widthClsRe(await widthPx(page, 80)))
 
     await page.evaluate(() => {
       window.__removedVm.mode = 'unified'
     })
     await expect(panes).toHaveCount(1)
-    await expect(card).toHaveClass(/w-\[calc\(80ch_\+_2rem\)\]/)
+    await expect(card).toHaveClass(widthClsRe(await widthPx(page, 80)))
 
     await page.evaluate(() => {
       window.__removedVm.mode = 'fit'
@@ -683,7 +688,7 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     // showing here too — hiding it would leave nothing to review (fitOnly in
     // Block.mjs falls back to singleSide(b) first).
     await expect(panes).toHaveCount(1)
-    await expect(card).toHaveClass(/w-\[calc\(80ch_\+_2rem\)\]/)
+    await expect(card).toHaveClass(widthClsRe(await widthPx(page, 80)))
   })
 
   // End-to-end: pressing `a` in the real app cycles the visible block's diff
@@ -956,11 +961,11 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
 
     const card = page.locator('#unified-old-wide-host article')
     const cls = await card.getAttribute('class')
-    const match = /w-\[calc\((\d+)ch_\+_2rem\)\]/.exec(cls)
+    const chars = await widthCharsOf(page, cls)
     // The old-only line is ~100 characters — comfortably past the short
     // new/right side's own content and past the 80-char floor, proving the
     // old side was actually measured for 'unified'.
-    expect(Number(match[1])).toBeGreaterThan(90)
+    expect(chars).toBeGreaterThan(90)
   })
 
   // Direct-mount unit test: since 2026-08-18, 'split' no longer measures the
@@ -1025,12 +1030,12 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
 
     const card = page.locator('#split-neighbor-canonical-side-host article')
     const cls = await card.getAttribute('class')
-    const match = /w-\[calc\((\d+)ch_\+_2rem\)\]/.exec(cls)
+    const chars = await widthCharsOf(page, cls)
     // 81 (the selected row's own canonical chars) + 80 (the non-canonical
     // pane's fixed floor) = 161 — proof the 126-character neighbor (canonical
     // side, directly adjacent, NOT part of the selection) never entered the
     // window at all; picking it up would have produced 126+80=206 instead.
-    expect(Number(match[1])).toBe(161)
+    expect(chars).toBe(161)
   })
 
   // Direct-mount unit test: reviewer decision (option 2 of 3 offered) — a
@@ -1079,10 +1084,10 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
 
     const card = page.locator('#group-interior-cap-host article')
     const cls = await card.getAttribute('class')
-    const match = /w-\[calc\((\d+)ch_\+_2rem\)\]/.exec(cls)
+    const chars = await widthCharsOf(page, cls)
     // The buried line is ~100 characters — if it were still measured, the
     // card would be comfortably past 90ch. Instead it floors, since it's
     // nowhere near either edge of the (now edge-restricted) group.
-    expect(Number(match[1])).toBe(80)
+    expect(chars).toBe(80)
   })
 })

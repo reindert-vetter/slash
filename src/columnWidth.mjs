@@ -118,43 +118,18 @@ export function resetColumnWidth(state, key) {
 //    token unconditionally made a small drag at a wide viewport compare
 //    against the WRONG (narrower) auto width and commit an override instead
 //    of snapping back.
-// 2. `w-[calc(Nch_+_Mrem)]` (Block.mjs's contentWidthCls, a PHP file, every
-//    stand) — `ch` resolves against `el`'s OWN font (the card `<article>`,
-//    passed in by startColumnResize as the same root element the drag
-//    already scopes to). Measured via a throwaway, off-screen probe element
-//    (`width: 100ch`, divided back down) rather than a canvas
-//    `measureText` approximation — a canvas font string never quite matched
-//    the browser's own `ch` resolution closely enough for the 10px
-//    snap-back window (a first attempt landed ~25px off). This DOES force a
-//    layout, but only of a detached, empty probe — never the card's own
-//    content — so it doesn't race the render it feeds, unlike measuring the
-//    card itself would. `el` is optional (absent for every non-Block.mjs
-//    caller, which never emits this shape) — returns null without it, same
-//    as an unrecognized class string.
-function chPxFor(el) {
-  const cs = getComputedStyle(el)
-  const probe = document.createElement('span')
-  probe.style.position = 'absolute'
-  probe.style.visibility = 'hidden'
-  probe.style.whiteSpace = 'nowrap'
-  probe.style.fontFamily = cs.fontFamily
-  probe.style.fontSize = cs.fontSize
-  probe.style.fontWeight = cs.fontWeight
-  probe.style.fontStyle = cs.fontStyle
-  probe.style.width = '100ch'
-  document.body.appendChild(probe)
-  const px = probe.getBoundingClientRect().width / 100
-  document.body.removeChild(probe)
-  return px || 8
-}
-
-export function parseAutoWidthPx(clsString, el) {
-  const calc = /w-\[calc\(([\d.]+)ch_\+_([\d.]+)rem\)\]/.exec(clsString)
-  if (calc) {
-    if (!el) return null
-    const remPx = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
-    return parseFloat(calc[1]) * chPxFor(el) + parseFloat(calc[2]) * remPx
-  }
+// 2. `w-[Npx]` (Block.mjs's contentWidthCls/NARROW_FIXED_WIDTH_CLS, a PHP
+//    file, every stand) — already an absolute pixel value, so it needs no
+//    conversion and no element at all. This used to be a
+//    `w-[calc(Nch_+_Mrem)]` shape whose `ch` had to be resolved against the
+//    card <article>'s OWN font through a throwaway off-screen probe
+//    element; Block.mjs now converts its chars-count to px itself (against
+//    the CODE font's real advance width, see CODE_CHAR_PX there), so both
+//    that probe and the `el` parameter are gone. `el` was the only reason
+//    this function ever touched the DOM.
+export function parseAutoWidthPx(clsString) {
+  const px = /(?:^|\s)w-\[([\d.]+)px\]/.exec(clsString)
+  if (px) return parseFloat(px[1])
   const bare = /(?:^|\s)w-\[([\d.]+)rem\]/.exec(clsString)
   if (!bare) return null
   const narrow = /narrow:w-\[([\d.]+)rem\]/.exec(clsString)

@@ -367,10 +367,19 @@ binding on `<section data-testid=related-code>` instead of a static string. It
 takes a **representative non-comment** code line across all currently shown
 top-level cards (`rc.children`, excluding the `tests_group` bar — nested chips and
 the drill-preview column keep their own fixed `w-72`) and turns that character
-count into `clamp(min, calc(Nch + 2rem), max)`: the `ch` unit is exactly one
-monospace glyph, so this is **purely arithmetic on an already-known character
-count** — no live DOM measurement (`scrollWidth`/`getBoundingClientRect`) that
-could race a layout pass.
+count into `clamp(min, calc(Nch + 2rem), max)` — **purely arithmetic on an
+already-known character count**, no live DOM measurement
+(`scrollWidth`/`getBoundingClientRect`) that could race a layout pass.
+
+**`ch` here is NOT one monospace glyph** (this file used to claim it was): it
+is one glyph of the font of the element carrying the class — the page's
+proportional `ui-sans-serif` at 16px, ~1.5× the code panes' own monospace
+advance. A diff CARD's width was moved off `ch` for exactly that reason (see
+"The chars → px conversion" in `.claude/docs/diff-card.md`); this column
+deliberately keeps `ch`, because it is `clamp()`ed between a floor and a
+ceiling either way — the only effect is that it reaches its ceiling at a
+lower character count, never a clipped line and never a column past the
+ceiling.
 
 - `min` = the default floor `42rem`/`49.2rem` (matching a one-sided/`a`-narrowed
   block, see `.claude/docs/detail-layout.md`).

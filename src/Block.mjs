@@ -571,18 +571,81 @@ function boundedWrapWidthCls() {
 // tiers with one flat, character-based minimum shared by every stand.
 const MIN_CONTENT_WIDTH_CHARS = 80
 
+// CODE_CHAR_PX — how wide ONE character of the code panes' own font really
+// is, in CSS px. Every chars-count in this file used to be turned into a
+// width with the CSS `ch` unit (`w-[calc(<chars>ch_+_2rem)]`), but `ch`
+// resolves against the font of the element carrying the class — the card's
+// own <article>, which inherits the page's PROPORTIONAL ui-sans-serif at
+// 16px (measured: 10.08px per `ch`) — while the code itself renders in
+// `font-mono text-[11px]` (measured: 6.62px per character, i.e. 34% less
+// per card). Reported by the reviewer as a diff card that filled nearly the
+// whole screen with ~730px of empty space to the right of its longest line:
+// "dit mag ongeveer 25% kleiner. de rechterkant van de blok moet rechts
+// aansluiten aan de laatste character."
+//
+// So the number of characters is measured exactly as before (nothing about
+// selectionWindowLineChars/windowCharsForMode/the caps changed) — only this
+// last step, chars → CSS width, now uses the CODE font's own advance width:
+// the fixed `text-[11px]` font-size times 0.6023, the advance ratio of the
+// monospace stack the panes use (measured 0.6020 for macOS ui-monospace/SF
+// Mono; Menlo/DejaVu Sans Mono sit at 0.6023, Courier New at 0.60,
+// Consolas at 0.55). Deliberately rounded UP rather than down: a narrower
+// font than assumed only leaves a hair of unused slack, while a wider one
+// would clip the longest line behind an invisible horizontal scroll — the
+// exact bug the "floor but no ceiling" rule exists to prevent. Still a pure
+// arithmetic constant, never a live DOM measurement (see this file's own
+// module doc / diff-card.md).
+const CODE_CHAR_PX = 11 * 0.6023
+
+// CARD_CHROME_PX — everything in a content-driven card's width that is NOT
+// code: the code rows' own horizontal padding (`px-3`, 2 × 12px) plus the
+// card's 2 × 1px border — 26px — plus room for the absolutely-positioned
+// per-row chip at the right edge of a diff row (lineSummaryBadge, the
+// "onderliggende code" ✓ n/n pill). Without that reserve, sizing the card
+// flush to the last character puts the chip straight on top of the longest
+// line's tail. 4rem (reviewer-approved number) leaves ~38px, which fully
+// clears the plain approve-fraction chip; a chip that also carries comment
+// avatars (measured up to 62px) can still overlay the tail of the single
+// longest line in view, which is the same designed-for overlay
+// lineSummaryBadge's own translucent pill background has always handled
+// (every row outside the measured window can already be longer than the
+// card).
+const CARD_CHROME_PX = 64
+
+// contentWidthPx — the one chars → px conversion, shared by every
+// content-driven width below so they can never drift apart. Exported (with
+// its inverse, contentWidthChars) so a Playwright spec can keep expressing
+// its expectations in CHARACTERS — what this file's whole width mechanism is
+// actually about — instead of hardcoding pixel numbers that would silently
+// rot the next time CODE_CHAR_PX/CARD_CHROME_PX moves (they used to read the
+// chars-count straight out of the `w-[calc(<chars>ch_+_2rem)]` class, which
+// no longer carries it). See tests/_fixtures.mjs's widthPx/widthCharsOf.
+export function contentWidthPx(chars) {
+  return Math.ceil(chars * CODE_CHAR_PX + CARD_CHROME_PX)
+}
+
+// contentWidthChars — contentWidthPx's inverse (exact, since contentWidthPx
+// only rounds up by less than a whole character).
+export function contentWidthChars(px) {
+  return Math.round((px - CARD_CHROME_PX) / CODE_CHAR_PX)
+}
+
 // NARROW_FIXED_WIDTH_CLS — the top-level look-ahead preview's own fixed
 // width (widthCls's `narrowFixed` short-circuit above): exactly
-// MIN_CONTENT_WIDTH_CHARS plus the same `+2rem` chrome every content-driven
-// card already uses, so it visually matches the floor width of an ordinary
+// MIN_CONTENT_WIDTH_CHARS plus the same chrome every content-driven card
+// already uses, so it visually matches the floor width of an ordinary
 // narrow card — just never grows past it, regardless of file type or
 // content.
-const NARROW_FIXED_WIDTH_CLS = `w-[calc(${MIN_CONTENT_WIDTH_CHARS}ch_+_2rem)] `
+const NARROW_FIXED_WIDTH_CLS = `w-[${contentWidthPx(MIN_CONTENT_WIDTH_CHARS)}px] `
 
 // SPLIT_LEFT_PANE_WIDTH_CLS — the non-canonical (old/left, for a modified
 // block) pane's own width in the 'split' stand: `w-1/2` (the ORIGINAL,
 // pre-existing mechanism — half the flex row, same as this pane always
-// used) PLUS a static `max-w-[calc(80ch_+_1rem)]` cap. This reproduces
+// used) PLUS a static `max-w-[<80 code characters + 1rem>px]` cap (built
+// once from MIN_CONTENT_WIDTH_CHARS × CODE_CHAR_PX, so it can never drift
+// from the card's own width formula — it used to be a literal
+// `max-w-[calc(80ch_+_1rem)]`, in the same wrong `ch` unit, see
+// CODE_CHAR_PX). This reproduces
 // windowCharsForMode's `Math.min(MIN_CONTENT_WIDTH_CHARS, canonicalChars) +
 // canonicalChars` split-mode total EXACTLY, using only static CSS: whenever
 // canonicalChars <= MIN_CONTENT_WIDTH_CHARS (the common case), that total is
@@ -613,7 +676,7 @@ const NARROW_FIXED_WIDTH_CLS = `w-[calc(${MIN_CONTENT_WIDTH_CHARS}ch_+_2rem)] `
 // an unresized card's `style` attribute is exactly `''`. `w-1/2` + a static
 // `max-w` needs neither: both are plain, unconditional, content-independent
 // Tailwind utilities.
-const SPLIT_LEFT_PANE_WIDTH_CLS = 'w-1/2 max-w-[calc(80ch_+_1rem)] shrink-0'
+const SPLIT_LEFT_PANE_WIDTH_CLS = `w-1/2 max-w-[${Math.ceil(MIN_CONTENT_WIDTH_CHARS * CODE_CHAR_PX + 16)}px] shrink-0`
 
 // contentWidthCls — the card width for a PHP file, for EVERY `a`-cycle stand
 // ('split'/'unified'/'fit' alike — see widthCls above): make the card as
@@ -695,7 +758,7 @@ function contentWidthCls(b, capFitChars, activeGroup, viewMode) {
   const cap = capFitChars && capFitChars()
   const clamped = typeof cap === 'number' && isFinite(cap) ? Math.min(chars, cap) : chars
   const floored = Math.max(MIN_CONTENT_WIDTH_CHARS, clamped)
-  return `w-[calc(${floored}ch_+_2rem)] `
+  return `w-[${contentWidthPx(floored)}px] `
 }
 
 // windowOrFallbackChars — selectionWindowLineChars for one side, with the
@@ -1193,7 +1256,7 @@ export default function Block(b, opts = {}) {
         // enough to break a same-position (+3px) drag's snap-back.
         !preview
           ? resizeHandle(
-              (e) => onResizeStart(e, (root) => parseAutoWidthPx(widthCls(b, viewModeFn, capFitChars, activeGroup, narrowFixedFn), root)),
+              (e) => onResizeStart(e, () => parseAutoWidthPx(widthCls(b, viewModeFn, capFitChars, activeGroup, narrowFixedFn))),
               () => onResizeReset(),
             )
           : ''}
@@ -1861,7 +1924,7 @@ function codeDiff(
   // The two panes are no longer both plain 'w-1/2' — on reviewer decision
   // (2026-08-18) the non-canonical (old/left) pane gets
   // SPLIT_LEFT_PANE_WIDTH_CLS ('w-1/2' capped at a static
-  // `max-w-[calc(80ch_+_1rem)]`, see its own doc comment for why this
+  // MIN_CONTENT_WIDTH_CHARS-capped `max-w`, see its own doc comment for why this
   // reproduces the card's new total width formula using only static CSS),
   // and the canonical (new/right) pane gets `flex-1` — it simply fills
   // whatever space the capped left pane doesn't claim, which the card's own

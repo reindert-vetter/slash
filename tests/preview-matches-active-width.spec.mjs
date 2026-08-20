@@ -1,4 +1,4 @@
-import { test, expect, appReady, evaluateSettled } from './_fixtures.mjs'
+import { test, expect, appReady, evaluateSettled, widthPx, widthClsRe, widthCharsOf } from './_fixtures.mjs'
 
 // Task 29: a look-ahead preview card must never be WIDER than the ACTIVE
 // (selected) card it's stacked next to. PR 105
@@ -40,7 +40,7 @@ test.describe('PR Review Tree — look-ahead preview matches a one-sided active 
     // sanity baseline for the width comparison below. Width is content-driven
     // now (contentWidthCls, Block.mjs), so for this short fixture it lands on
     // the flat 80-character floor.
-    await expect(active).toHaveClass(/w-\[calc\(80ch_\+_2rem\)\]/)
+    await expect(active).toHaveClass(widthClsRe(await widthPx(page, 80)))
 
     // The preview always collapses to just its header (see diff-card.md) —
     // no pane of any kind renders, since there's no diff body at all.
@@ -289,13 +289,12 @@ test.describe('PR Review Tree — look-ahead preview matches a one-sided active 
       }
     })
 
-    expect(cls.fixed).toMatch(/w-\[calc\(80ch_\+_2rem\)\]/)
+    expect(cls.fixed).toMatch(widthClsRe(await widthPx(page, 80)))
     // The content-driven card, given the exact same wide line, grows well
     // past the flat 80-character floor — proof narrowFixed is what's
     // actually suppressing the growth above, not some property of the
     // fixture itself.
-    const contentDrivenMatch = /w-\[calc\((\d+)ch_\+_2rem\)\]/.exec(cls.contentDriven)
-    expect(Number(contentDrivenMatch[1])).toBeGreaterThan(80)
+    expect(await widthCharsOf(page, cls.contentDriven)).toBeGreaterThan(80)
   })
 
   // Regression (2026-08-19, live PR 13392, FillStats::handle's drilled-in
@@ -353,6 +352,6 @@ test.describe('PR Review Tree — look-ahead preview matches a one-sided active 
     })
 
     // Capped at NO_CHANGE_MAX_WIDTH_CHARS (100), not the ~110+-char raw line.
-    expect(cls.className).toMatch(/w-\[calc\(100ch_\+_2rem\)\]/)
+    expect(cls.className).toMatch(widthClsRe(await widthPx(page, 100)))
   })
 })

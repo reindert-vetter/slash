@@ -320,7 +320,9 @@ exception.
 
 **`SPLIT_LEFT_PANE_WIDTH_CLS` reproduces that formula using only STATIC
 CSS**, deliberately not a per-render `${() => ...}` computation on the pane
-itself: `'w-1/2 max-w-[calc(80ch_+_1rem)] shrink-0'` — plain `w-1/2` (the
+itself: `'w-1/2 max-w-[<80 * CODE_CHAR_PX + 16>px] shrink-0'` (it was a
+literal `max-w-[calc(80ch_+_1rem)]` until the `ch` unit was replaced, see
+"The chars → px conversion" below) — plain `w-1/2` (the
 original mechanism) capped at a static `max-w`. Since the card's own total is
 `2 * canonicalChars` whenever `canonicalChars <= 80`, `w-1/2` alone already
 equals `canonicalChars` and the cap never engages; only once the total grows
@@ -367,7 +369,7 @@ doubling above made that gap large enough to break a same-position (+3px)
 drag's snap-back (`tests/column-resize.spec.mjs`).
 
 ```
-w-[calc(<chars>ch_+_2rem)]
+w-[<contentWidthPx(chars)>px]     // chars * CODE_CHAR_PX + CARD_CHROME_PX
 ```
 
 `<chars>` is `selectionWindowLineChars` (see above), falling back to
@@ -376,10 +378,70 @@ on whichever side `fitOnly(b)` renders — only when there is no active unit at
 all (a preview/collapsed card, list mode without changes, or a caller that
 doesn't pass `activeGroup`); a present unit with nothing measurable nearby
 instead yields `0`, which the same `Math.max(MIN_CONTENT_WIDTH_CHARS, …)` call
-floors to the plain 80-character minimum. The `ch` unit is exactly one glyph
-of whichever font the card's own `<article>` happens to inherit, so this is
-arithmetic on the already-loaded source string — never a live measurement of
-the rendered text itself.
+floors to the plain 80-character minimum. It stays arithmetic on the
+already-loaded source string — never a live measurement of the rendered text
+itself.
+
+### The chars → px conversion: `CODE_CHAR_PX`, not the CSS `ch` unit
+
+**Superseded (2026-08-20):** the class used to be
+`w-[calc(<chars>ch_+_2rem)]`. CSS `ch` is one glyph of whichever font the
+element carrying the class has — here the card's own `<article>`, which
+inherits the page's PROPORTIONAL `ui-sans-serif` at 16px, **measured 10.08px
+per `ch`** — while the code it is sizing for renders in `font-mono
+text-[11px]`, **measured 6.62px per character**. Every card was therefore
+~34% wider than its own content. Reported with a screenshot of a test method
+whose card filled nearly the whole screen: "dit mag ongeveer 25% kleiner. de
+rechterkant van de blok moet rechts aansluiten aan de laatste character."
+Measured on that exact card (PR 13431, a 206-char selection window): 2108px
+wide with **731px of empty space** to the right of its last character.
+
+`contentWidthPx(chars)` (`Block.mjs`, exported) is now the single chars → px
+conversion every content-driven width goes through:
+
+- **`CODE_CHAR_PX`** = `11 * 0.6023` ≈ 6.63px — the code panes' fixed
+  `text-[11px]` font-size times the advance ratio of the monospace stack they
+  use (measured 0.6020 for macOS `ui-monospace`/SF Mono; Menlo/DejaVu Sans
+  Mono 0.6023, Courier New 0.60, Consolas 0.55). Deliberately rounded **up**:
+  a narrower real font only leaves a hair of slack, a wider one would clip
+  the longest line behind an invisible horizontal scroll — exactly what the
+  "floor but no ceiling" rule exists to prevent. Still a pure arithmetic
+  constant, never a live DOM measurement.
+- **`CARD_CHROME_PX`** = 64 (4rem), replacing the old `+2rem`: 26px of real
+  chrome (the rows' own `px-3` padding, 2 × 12px, plus the card's 2 × 1px
+  border) plus ~38px reserved for the absolutely-positioned per-row chip at
+  the right edge of a diff row (`lineSummaryBadge`, the "onderliggende code"
+  ✓ n/n pill). Without that reserve, a card sized flush to the last
+  character puts the chip straight on top of the longest line's tail.
+  Reviewer-approved number; a chip that also carries comment avatars
+  (measured up to 62px) can still overlay the tail of the single longest line
+  in view, which is the same designed-for overlay its own translucent pill
+  background has always handled (any row outside the measured window can
+  already be longer than the card). **Deliberately unconditional**, not "only
+  when this block actually has chips": the presence of a chip per row is only
+  known from `home.mjs`'s `lineChildSummaries` (a full pass over the block's
+  rows + call sites), and reading that from the card's own `class` binding
+  would both couple the width to comment/approval state (the card jumping 2rem
+  when a relation lands) and re-run that pass on every navigation step.
+
+Measured result on the reported card: **2108px → 1429px (−32%)**, with the
+last character 52px from the card's right edge — i.e. exactly the reserved
+chrome. Walking 22 navigation steps through PR 13431, every step where the
+selected unit owns the block's longest visible line lands on that same 51-52px
+slack, and the selected unit's own last character is never clipped
+(`unitSlack >= 51` at every step). The 80-character floor moved with it (a
+floor of "80 characters" now really is 80 code characters): a minimum card is
+**838px → 595px**, an explicit reviewer decision ("alles krimpt mee"), which
+also shrinks the collapsed look-ahead preview (`NARROW_FIXED_WIDTH_CLS`) and
+the `'split'` left-pane cap in lockstep.
+
+Because the chars-count no longer appears in the class, a Playwright spec
+can't read it off the DOM any more. `contentWidthPx`/`contentWidthChars` are
+exported for exactly that, and `tests/_fixtures.mjs`'s
+`widthPx`/`widthClsRe`/`widthCharsOf` wrap them, so a spec keeps expressing
+its expectation in CHARACTERS instead of hardcoding a pixel number that would
+rot the next time either constant moves (`tests/diffview.spec.mjs`,
+`tests/preview-matches-active-width.spec.mjs`).
 
 **The card genuinely grows/shrinks live as the reviewer navigates** — explicit
 reviewer request/confirmation ("de blok mag groter en kleiner worden ... de
@@ -582,9 +644,10 @@ keeps its existing content-driven-but-capped width unchanged (see
 always collapses to just its header anyway (above — no diff body ever
 renders, so its own longest line is never even visible), there's no reason
 for its width to follow its own content at all any more. It now gets a flat
-`MIN_CONTENT_WIDTH_CHARS` (80) + the same `+2rem` chrome every content-driven
-card uses — `w-[calc(80ch_+_2rem)]` — for every file type, regardless of
-content or of the active card's own width.
+`MIN_CONTENT_WIDTH_CHARS` (80) + the same `CARD_CHROME_PX` chrome every
+content-driven card uses — `w-[<contentWidthPx(80)>px]`, 595px at the current
+constants — for every file type, regardless of content or of the active
+card's own width.
 
 `Block()`'s **`narrowFixed`** opt drives this: a `() => boolean`, checked
 FIRST in `widthCls` (`Block.mjs`), before the `isPhpFile`/`contentWidthCls`/
