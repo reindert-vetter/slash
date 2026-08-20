@@ -86,12 +86,17 @@ code).
      keyboard summary: `↑`/`↓` walk the transcript on its own `cs.claudePos`
      cursor (exactly as `'thread'` walks reactions on `cs.threadPos` — 0 = the
      composer, 1..n = the n-th turn from the bottom, clamped at the oldest);
-     `↓` at `claudePos === 0` releases the panel focus entirely and jumps
-     straight to the **next visible block's diff**, skipping stop 6 (explicit
-     request — landing in Underlying code read as an unwanted extra "menu" in
-     the way of continuing the review; see `advanceToNextBlockFromClaudeChat`,
-     `home.mjs`) — unchanged even when reached via the still-unplaced `'new'`
-     composer, since its draft text lives in `composeDrafts`, untouched by
+     `↓` at `claudePos === 0` first walks the chat's own **code blocks** —
+     the code-preview cards stacked below the merged row, on their own
+     `cs.previewPos` cursor (1..n counted from the TOP, `↑` walks back up into
+     the composer; see "`↓` walks the chat's own code blocks" in
+     `.claude/docs/claude-chat-panel.md`) — and only `↓` past the last card
+     (or `↓` at rest when there are none) releases the panel focus entirely
+     and jumps straight to the **next visible block's diff**, still skipping
+     stop 6 (explicit request — landing in Underlying code read as an unwanted
+     extra "menu" in the way of continuing the review; see
+     `advanceToNextBlockFromClaudeChat`, `home.mjs`) — unchanged even when
+     reached via the still-unplaced `'new'` composer, since its draft text lives in `composeDrafts`, untouched by
      leaving; `←`/`Escape` step back directly to `'comment'` (not to
      `'thread'`) — or, reached via the composer (no anchor comment exists yet,
      `cc.commentId == null`), back to the still-open `'new'` composer instead,

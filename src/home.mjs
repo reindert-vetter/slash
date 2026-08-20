@@ -6334,8 +6334,10 @@ function enterDiff() {
 }
 
 // advanceToNextBlockFromClaudeChat is what ↓ at the bottom of the embedded
-// Claude conversation (cs.claudePos === 0) does instead of falling into the
-// Onderliggende-code panel (see handleRelatedKey's 'advance' sentinel,
+// Claude conversation does instead of falling into the Onderliggende-code
+// panel — "the bottom" being the rest position (cs.claudePos === 0) with no
+// code-preview cards left below it either (cs.previewPos walks those first,
+// see handleRelatedKey's 'advance' sentinel,
 // RelatedPanel.mjs) — explicit request: reviewing a unit's chat/comments
 // shouldn't dead-end into another panel before moving on. handleRelatedKey has
 // already released the panel focus (exitRelated), so this only needs to move
@@ -11766,10 +11768,12 @@ function onKeydown(e) {
     ) {
       e.preventDefault()
       const relatedResult = handleRelatedKey(e.key)
-      // ↓ at the bottom of the embedded Claude conversation (claudePos === 0)
-      // returns this sentinel instead of falling into the Onderliggende-code
-      // panel (explicit request — see handleRelatedKey's own doc comment):
-      // advance straight to the next visible block's diff.
+      // ↓ at the bottom of the embedded Claude conversation — the rest
+      // position (claudePos === 0) with the chat's own code blocks
+      // (cs.previewPos) already walked through — returns this sentinel instead
+      // of falling into the Onderliggende-code panel (explicit request — see
+      // handleRelatedKey's own doc comment): advance straight to the next
+      // visible block's diff.
       if (relatedResult === 'advance') {
         advanceToNextBlockFromClaudeChat()
         return

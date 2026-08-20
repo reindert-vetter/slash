@@ -62,14 +62,29 @@ function pane(titleText, code, lang) {
 // `${() => ...}` binding on `it`'s fields themselves; only the Prism
 // highlighting (via `pane`) is wrapped reactively, mirroring the previous
 // single-item version.
-function previewCard(it) {
+//
+// `active` is the ONE exception to that plain-snapshot rule: it is a getter
+// (`() => cs.previewPos === i + 1`, see RelatedPanel.mjs's own preview cursor)
+// wired into whole-value `class`/`data-active` bindings, so walking the cards
+// with ↓/↑ only re-applies those attribute slots instead of re-keying (and
+// thereby re-Prism-highlighting) the whole card on every step. The cursor is
+// deliberately NOT part of `.key(it.key)` for exactly that reason. Same
+// border/ring pair as every other selected card in this file
+// (`related-item`), plus a leading ▸ glyph on the title so the state is
+// carried by a SHAPE, not only by colour (colourblind rule).
+function previewCard(it, active) {
   return html`
     <div
-      class="flex flex-col gap-2 rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-3 ring-1 ring-black/5"
+      class="${() =>
+        'flex flex-col gap-2 rounded-xl border bg-white dark:bg-zinc-900 p-3 ' +
+        (active()
+          ? 'border-indigo-300 dark:border-indigo-500 ring-2 ring-indigo-200 dark:ring-indigo-500/30'
+          : 'border-slate-300 dark:border-zinc-700 ring-1 ring-black/5')}"
       data-testid="code-preview-card"
+      data-active="${() => (active() ? 'true' : 'false')}"
     >
       <span class="truncate text-[11px] font-medium text-slate-500 dark:text-zinc-500" data-testid="code-preview-title">
-        ${it.title}
+        ${() => (active() ? '▸ ' : '')}${it.title}
       </span>
       <div class="flex flex-col gap-2" data-testid="code-preview-body">
         ${() => (it.oldCode != null ? pane('Huidig (PR)', it.oldCode, it.lang) : '')}
@@ -86,10 +101,16 @@ function previewCard(it) {
 // content changing while a Claude turn streams, navigating to a different
 // block) always repaints, never freezing on the first-computed set (the
 // static chunk-reuse pitfall in arrowjs-pitfalls.md).
-export function codePreviewColumn(getItems) {
+//
+// `isActive(i)` answers "does the keyboard cursor sit on the i-th card"
+// (RelatedPanel.mjs's cs.previewPos, reached with ↓ from the bottom of the
+// Claude chat — see "↓ walks the chat's own code blocks" in
+// claude-chat-panel.md). Defaulted so a future caller that has no cursor of
+// its own can keep passing one argument.
+export function codePreviewColumn(getItems, isActive = () => false) {
   return html`
     <div class="flex w-full shrink-0 flex-col gap-3" data-testid="code-preview-column">
-      ${() => getItems().map((it) => previewCard(it))}
+      ${() => getItems().map((it, i) => previewCard(it, () => isActive(i)))}
     </div>
   `
 }

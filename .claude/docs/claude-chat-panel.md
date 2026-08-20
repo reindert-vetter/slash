@@ -279,8 +279,12 @@ from either `'comment'` or `'thread'`, and one `←` returns directly to
 - **`↑`/`↓` on `cs.focus === 'claude'`**: walk the transcript exactly like
   `'thread'` walks reactions, via its own `cs.claudePos` cursor (mirrors
   `cs.threadPos`, 0 = composer, 1..n = the n-th turn from the bottom).
-- **`↓` at `cs.claudePos === 0`** (nothing further to walk): **explicit
-  request, deliberately NOT** the "↓ loopt door" convention
+- **`↓` at `cs.claudePos === 0`** steps into the chat's **own code blocks**
+  first (`cs.previewPos`, see "`↓` walks the chat's own code blocks" below) —
+  only once those are walked through (or when there are none) does the
+  "advance to the next block" behaviour below take over.
+- **`↓` past the last code block** (nothing further to walk at all):
+  **explicit request, deliberately NOT** the "↓ loopt door" convention
   `advanceFromComment` uses at the bottom of a comment thread — falling into
   the Onderliggende-code panel read as an unwanted extra "menu" in the way of
   continuing the review. `handleRelatedKey` instead calls `exitRelated()`
@@ -2373,6 +2377,64 @@ Test: `tests/code-fence-preview.spec.mjs` updated — asserts
 sibling to its right any more) and that a `suggestion` fence now also gets a
 preview card (title "Codeblok", same as
 any other unlabeled fence), alongside the plain fence's existing preview.
+
+### `↓` walks the chat's own code blocks
+
+Reviewer request: *"als vanuit een claude chat, andere blokken zijn die te
+maken hebben met de chat, dan wil ik daar doorheen kunnen gaan met mijn keys
+naar beneden en naar boven"* — those "other blocks" are exactly the
+code-preview cards stacked below the merged comment/Claude row, which until
+now had no keyboard cursor at all (the earlier write-up above explicitly noted
+one didn't exist anywhere in this app).
+
+- **`cs.previewPos`** (`RelatedPanel.mjs`) is that cursor: `0` = not in the
+  cards, `1..n` = the n-th card counted from the **TOP**, i.e. in
+  reading/document order. Every other cursor in this panel
+  (`threadPos`/`claudePos`/`claudeOptionSel`) counts from the bottom because
+  those chains are walked UPWARD out of the composer; this one is walked
+  DOWNWARD out of it, so counting from the top is the mirror-image of the same
+  rule — `1` is in both cases the rung closest to the composer.
+- **It is one continuous chain with the rest**, not a separate mode: `↓` at
+  the rest position (`claudePos === 0 && claudeOptionSel === 0`) lands on card
+  1, `↓` walks down, `↑` walks back up and hands the composer its caret
+  back at `previewPos === 0`. `handleRelatedKey`'s `'claude'` branch handles
+  both keys **before** the existing options/transcript rungs, so nothing about
+  those changed.
+- **This overrides the "no tussenstop" decision above**, on the reviewer's own
+  explicit say-so: `↓` at `claudePos === 0` no longer advances to the next
+  block immediately, it advances only once the cards are walked through. The
+  reasoning behind the original decision is untouched — the
+  **Onderliggende-code** panel is still skipped entirely; only the chat's own
+  code blocks were added, and they sit visually right below the chat anyway.
+- **The highlighted card blurs the composer** (`focusPreviewCard`, the
+  counterpart of `focusClaudeComposer`) so the CARD reads as focused, exactly
+  like the options/transcript rungs already do, and scrolls it into view with
+  `scrollIntoViewVertical` (never `scrollIntoView` itself — the axis rule in
+  `.claude/rules/arrowjs-pitfalls.md`).
+- **Rendering** (`CodePreview.mjs`): `previewCard(it, active)` takes the cursor
+  as a **getter** and uses it in whole-value `class`/`data-active` bindings —
+  deliberately NOT in `.key(it.key)`, which would tear down and re-Prism-
+  highlight the whole card on every step. The active card gets the same
+  `border-indigo-300`/`ring` pair as every other selected card plus a leading
+  **▸** glyph on its title, so the state is carried by a shape, not only by
+  colour (colourblind rule).
+- **`cs.previewPos` is deliberately NOT bound to the URL**, unlike
+  `cs.claudePos` (`rel.cpos`) and like `cs.claudeOptionSel`/`cs.chipPath`:
+  `cp.items` is derived from the **rendered DOM**
+  (`recomputeCodePreviews`' `MutationObserver`), not from loaded data, so a
+  restore would need its own re-apply pass in `applyRelRestore` for what is a
+  purely ephemeral highlight. `recomputeCodePreviews` does **clamp** it to the
+  recomputed item count, so a fence disappearing under the cursor can never
+  leave it pointing at nothing.
+- **Only reachable from `'claude'`.** A fence inside a comment body gets its
+  preview card exactly as before, but the cursor is scoped to the chat
+  (`CodePreviewPanel` passes `cs.focus === 'claude' && …`) — the request was
+  about the chat, and `'comment'`/`'thread'` keep their own `↓` meaning
+  (`advanceFromComment`). `Enter` on a highlighted card does nothing (there is
+  no action to run on one).
+
+Test: the "↓/↑ at the bottom of the Claude chat walk the code-preview cards"
+case in `tests/code-fence-preview.spec.mjs`.
 
 ## "Huidig (PR)" only for a `suggestion` fence (sharpening D4)
 

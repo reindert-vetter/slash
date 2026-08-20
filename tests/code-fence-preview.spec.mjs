@@ -237,3 +237,78 @@ test('a >2-line fence renders truncated + faded inline, full code stays in the p
   await expect(previewBody).toContainText('$a = 1;')
   await expect(previewBody).toContainText('$d = 4;')
 })
+
+// ↓ at the bottom of the Claude chat walks the chat's own code blocks before
+// advancing to the next block (reviewer request, see "↓ walks the chat's own
+// code blocks" in .claude/docs/claude-chat-panel.md): cs.previewPos 1..n, top
+// to bottom, ↑ back up into the composer, and only ↓ past the LAST card still
+// releases the panel. Same two-fence seed as the first test above, so this one
+// only asserts the cursor, not what the cards contain.
+test('↓/↑ at the bottom of the Claude chat walk the code-preview cards', async ({ page }, testInfo) => {
+  const pr = seededPr(testInfo)
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: {
+      pr,
+      file: 'test.php',
+      line: 1,
+      author: 'reviewer',
+      body:
+        'kijk hier eens naar:\n```php\n$first = 1;\n```\n' +
+        'en dit ook nog:\n```php\n$second = 2;\n```',
+      code: '$order->total();',
+      gran: 'call',
+      label: 'Order::total',
+    },
+  })
+  expect((await start.json()).runId).toBeTruthy()
+
+  await page.goto('/pr/' + pr)
+  await leaveSearchBox(page)
+  const item = page.getByTestId('comment-item').first()
+  await expect(item).toBeVisible()
+  await item.click() // -> cs.focus = 'comment'
+
+  const cards = page.getByTestId('code-preview-card')
+  await expect(cards).toHaveCount(2)
+  // No cursor while the comment (not the chat) owns the keyboard.
+  await expect(cards.nth(0)).toHaveAttribute('data-active', 'false')
+
+  await page.keyboard.press('ArrowRight') // comment -> claude
+  await expect(page.getByTestId('claude-chat-compose')).toBeFocused()
+
+  // ↓ from the composer's rest position lands on the FIRST card (reading
+  // order), blurring the composer — the highlighted card reads as focused.
+  await page.keyboard.press('ArrowDown')
+  await expect(cards.nth(0)).toHaveAttribute('data-active', 'true')
+  await expect(cards.nth(1)).toHaveAttribute('data-active', 'false')
+  await expect(page.getByTestId('claude-chat-compose')).not.toBeFocused()
+  // The word/shape carries the state, not only the ring colour.
+  await expect(page.getByTestId('code-preview-title').first()).toContainText('▸')
+
+  await page.keyboard.press('ArrowDown')
+  await expect(cards.nth(1)).toHaveAttribute('data-active', 'true')
+  await expect(cards.nth(0)).toHaveAttribute('data-active', 'false')
+
+  // ↑ walks them back up and hands the composer its caret back.
+  await page.keyboard.press('ArrowUp')
+  await expect(cards.nth(0)).toHaveAttribute('data-active', 'true')
+  await page.keyboard.press('ArrowUp')
+  await expect(cards.nth(0)).toHaveAttribute('data-active', 'false')
+  await expect(cards.nth(1)).toHaveAttribute('data-active', 'false')
+  await expect(page.getByTestId('claude-chat-compose')).toBeFocused()
+
+  // ↓ past the LAST card still releases the panel entirely (the 'advance'
+  // sentinel): the keyboard goes back to the diff, so the Claude card loses
+  // its focused border and no card keeps the cursor. This synthetic PR has no
+  // ingested blocks to advance onto, so the exit itself is all there is to
+  // assert here.
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('ArrowDown')
+  await expect(cards.nth(1)).toHaveAttribute('data-active', 'true')
+  await page.keyboard.press('ArrowDown')
+  await expect(page.getByTestId('claude-chat-card')).not.toHaveClass(/border-indigo-300/)
+  // Counted, not read per card: releasing the panel collapses the comment
+  // card again, so whether the cards themselves are still rendered at that
+  // moment is exactly the kind of transient state a spec must not assert.
+  await expect(page.locator('[data-testid=code-preview-card][data-active=true]')).toHaveCount(0)
+})

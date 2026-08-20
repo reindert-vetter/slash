@@ -151,6 +151,23 @@ const cs = reactive({
   // keyboard highlight, like state.rangeAnchor, not a navigation position
   // worth restoring after a refresh.
   claudeOptionSel: 0,
+  // previewPos is the keyboard cursor over the code-preview cards stacked
+  // BELOW the comment/Claude row (cp.items / CodePreview.mjs): 0 = not in
+  // them (the composer/transcript owns the cursor), 1..n = the n-th card
+  // counted from the TOP, i.e. in reading/document order. Counting from the
+  // top instead of from the bottom (threadPos/claudePos/claudeOptionSel all
+  // count from the bottom) is the mirror-correct choice here: those chains
+  // are walked UPWARD out of the composer, this one DOWNWARD out of it, so
+  // "1" is in both cases the rung closest to the composer. Only meaningful
+  // while cs.focus === 'claude' (reviewer request: "als vanuit een claude
+  // chat andere blokken zijn die te maken hebben met de chat, dan wil ik
+  // daar doorheen kunnen gaan met mijn keys naar beneden en naar boven") —
+  // see handleRelatedKey's 'claude' branch. Deliberately NOT bound to the
+  // URL, like claudeOptionSel/chipPath above: cp.items is derived from the
+  // rendered DOM (recomputeCodePreviews' MutationObserver) rather than from
+  // loaded data, so restoring this would need its own re-apply pass in
+  // applyRelRestore for a purely ephemeral highlight.
+  previewPos: 0,
   // claudePinned is threadPinned's twin for the embedded Claude chat pane —
   // see threadPinned's own doc comment just above. Reset to true whenever the
   // conversation is (re)entered at rest (enterClaudeChat/toNewFocus/a fresh
@@ -763,6 +780,7 @@ function exitRelated() {
   cs.rangeCompose = false
   rangeComposeItems = []
   cs.claudeOptionSel = 0
+  cs.previewPos = 0
   releaseFocus() // a focus request still in flight must not land after this
   const el = document.activeElement
   if (el && el.blur) el.blur()
@@ -1013,6 +1031,7 @@ function toNew(commentTargetFn) {
 function toNewFocus() {
   cs.focus = 'new'
   cs.claudeOptionSel = 0
+  cs.previewPos = 0
   focusEl('[data-testid=comment-compose]')
   const draft = composeDrafts.get(composeDraftKey)
   if (draft) prefillField('[data-testid=comment-compose]', draft)
@@ -1038,6 +1057,7 @@ function toComment(focusInput = true) {
   cs.threadPos = 0
   cs.threadPinned = true
   cs.claudeOptionSel = 0
+  cs.previewPos = 0
   scrollCommentIntoView()
   scrollCommentThreadToBottom()
   if (focusInput) {
@@ -2005,6 +2025,7 @@ export async function clearClaudeChat() {
   cs.claudePos = 0
   cs.claudePinned = true
   cs.claudeOptionSel = 0
+  cs.previewPos = 0
   const anchor = cc.commentId != null ? commentById(cc.commentId) : null
   if (anchor && anchor.body === CLAUDE_ANCHOR_PLACEHOLDER) {
     await deleteComment(anchor)
@@ -2343,6 +2364,7 @@ export async function enterClaudeChat(pr) {
   cs.claudePos = 0
   cs.claudePinned = true
   cs.claudeOptionSel = 0
+  cs.previewPos = 0
   await ensureAndLoadChat(pr, c.id)
   if (token !== focusToken) return
   ensureChatEvents(pr)
@@ -2372,6 +2394,7 @@ function enterClaudeChatFromNew() {
   cs.claudePos = 0
   cs.claudePinned = true
   cs.claudeOptionSel = 0
+  cs.previewPos = 0
   focusClaudeComposer()
 }
 
@@ -2479,6 +2502,24 @@ function scrollClaudeMessageIntoView() {
   requestAnimationFrame(() => {
     const j = cc.messages.length - cs.claudePos
     const el = document.querySelectorAll('[data-testid=claude-message]')[j]
+    if (el) scrollIntoViewVertical(el)
+  })
+}
+// focusPreviewCard is focusClaudeComposer's counterpart for the code-preview
+// cursor (cs.previewPos, see its own doc comment): it blurs the composer — the
+// highlighted CARD, not the empty text field, should read as focused, exactly
+// like the options/transcript rungs above — and keeps the card in view.
+// scrollIntoViewVertical, never scrollIntoView itself: the cards sit inside
+// <main>'s horizontally scrolling column flow (the axis rule in
+// arrowjs-pitfalls.md).
+function focusPreviewCard() {
+  releaseFocus()
+  const want = focusToken
+  requestAnimationFrame(() => {
+    if (want !== focusToken) return
+    const input = document.querySelector('[data-testid=claude-chat-compose]')
+    if (input && document.activeElement === input) input.blur()
+    const el = document.querySelectorAll('[data-testid=code-preview-card]')[cs.previewPos - 1]
     if (el) scrollIntoViewVertical(el)
   })
 }
@@ -3023,6 +3064,13 @@ export function ClaudeChatPanel(state, commentTarget) {
 // `view` getters).
 const cp = reactive({ items: [] })
 
+// codePreviewCount — how many code-preview cards the reviewer can currently
+// walk with ↓/↑ from the bottom of the Claude chat (cs.previewPos, see its own
+// doc comment and handleRelatedKey's 'claude' branch).
+function codePreviewCount() {
+  return cp.items.length
+}
+
 // getCommentTarget is set once by CodePreviewPanel (see below) to the same
 // live-cursor getter InlineComments/ClaudeChatPanel already receive from
 // home.mjs — recomputeCodePreviews needs it every time it reruns (a
@@ -3117,6 +3165,11 @@ function recomputeCodePreviews() {
         it.oldCode === cp.items[i].oldCode,
     )
   if (!unchanged) cp.items = next
+  // Keep the ↓/↑ cursor inside the (possibly shrunk, possibly emptied) set —
+  // a fence disappearing while the keyboard sits on its card must not leave
+  // the cursor pointing at nothing. Clamped rather than reset, so an unrelated
+  // fence vanishing above/below keeps the reviewer in the cards.
+  if (cs.previewPos > next.length) cs.previewPos = next.length
 }
 
 // scheduleRecomputeCodePreviews coalesces a burst of mutations (e.g. every
@@ -3167,7 +3220,19 @@ function ensureCodePreviewObserver() {
 export function CodePreviewPanel(commentTarget) {
   getCommentTarget = commentTarget
   ensureCodePreviewObserver()
-  return html`<div class="contents">${() => (cp.items.length ? codePreviewColumn(() => cp.items) : '')}</div>`
+  // The second argument is the keyboard cursor (cs.previewPos, only ever
+  // non-zero while the chat itself owns the keyboard) — a getter per card, so
+  // walking with ↓/↑ only re-applies that card's own class/data-active slots,
+  // see previewCard in CodePreview.mjs.
+  return html`<div class="contents">
+    ${() =>
+      cp.items.length
+        ? codePreviewColumn(
+            () => cp.items,
+            (i) => cs.focus === 'claude' && cs.previewPos === i + 1,
+          )
+        : ''}
+  </div>`
 }
 
 // applyRelRestore re-applies the URL-restored panel cursor (restorePending, set at
@@ -3278,13 +3343,17 @@ function applyRelRestore() {
 //    turn) → older turns (claudePos 2..). ↑/↓ walk this ONE continuous chain
 //    in both directions (reviewer request — not two disjoint modes); Enter
 //    while an option is highlighted sends it (selectHighlightedClaudeOption,
-//    home.mjs), exactly like clicking it. ↓ at the very bottom
-//    (claudePos === 0 && claudeOptionSel === 0) does NOT fall into the
-//    Onderliggende-code panel
-//    any more (explicit request: that read as an unwanted extra "menu" in the
-//    way of continuing to review) — it releases the panel focus and returns
-//    the 'advance' sentinel so home.mjs's onKeydown can select the next
-//    visible block and step straight into its diff (see
+//    home.mjs), exactly like clicking it. BELOW the composer the same chain
+//    continues DOWNWARD through the chat's own code blocks: ↓ at the rest
+//    position (claudePos === 0 && claudeOptionSel === 0) steps onto the first
+//    code-preview card (cs.previewPos 1..n, top to bottom — the cards stacked
+//    under this row, see CodePreviewPanel/CodePreview.mjs), ↑ walks them back
+//    up into the composer. Only ↓ past the LAST card (or ↓ at rest when there
+//    are no code blocks at all) still does NOT fall into the
+//    Onderliggende-code panel (explicit request: that read as an unwanted
+//    extra "menu" in the way of continuing to review) — it releases the panel
+//    focus and returns the 'advance' sentinel so home.mjs's onKeydown can
+//    select the next visible block and step straight into its diff (see
 //    advanceToNextBlockFromClaudeChat, home.mjs) — UNCHANGED even when this
 //    conversation has no anchor comment yet (reached via enterClaudeChatFromNew
 //    below): the still-open composer's typed text stays put in composeDrafts
@@ -3306,6 +3375,28 @@ export function handleRelatedKey(key) {
     return 'exit'
   }
   if (cs.focus === 'claude') {
+    if (key === 'ArrowUp' && cs.previewPos > 0) {
+      // Walking the code-preview cards back up, toward the composer (0 = the
+      // composer itself again, see cs.previewPos).
+      cs.previewPos -= 1
+      if (cs.previewPos === 0) focusClaudeComposer()
+      else focusPreviewCard()
+      return true
+    }
+    if (key === 'ArrowDown' && (cs.previewPos > 0 || (cs.claudePos === 0 && cs.claudeOptionSel === 0))) {
+      // The chat's own code blocks are the last rung below the composer: ↓
+      // walks them top to bottom, and only past the LAST one does the
+      // "advance to the next block" exit below take over (see the doc
+      // comment above).
+      if (cs.previewPos < codePreviewCount()) {
+        cs.previewPos += 1
+        focusPreviewCard()
+        return true
+      }
+      cs.previewPos = 0
+      exitRelated()
+      return 'advance'
+    }
     if (key === 'ArrowUp') {
       const q = cs.claudePos === 0 ? pendingClaudeQuestion() : null
       if (q) {
@@ -3326,13 +3417,6 @@ export function handleRelatedKey(key) {
       if (cs.claudePos === 0 && cs.claudeOptionSel > 0) {
         // Walking the options back down, toward the composer.
         cs.claudeOptionSel -= 1
-      } else if (cs.claudePos === 0) {
-        // Nothing further within this unit's own chain any more (no
-        // Onderliggende-code detour, per the explicit request above) —
-        // release the panel focus and let home.mjs advance to the next
-        // visible block's diff.
-        exitRelated()
-        return 'advance'
       } else if (cs.claudePos === 1 && pendingClaudeQuestion()) {
         // Leaving the question bubble back down re-enters its own options,
         // starting from the topmost one (mirrors the ArrowUp path above).
