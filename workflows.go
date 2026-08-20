@@ -1983,7 +1983,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if len(files) == 0 {
 			files, _ = changedFilesFor(m.db, arg.PR)
 		}
-		facts := sinceReviewFacts(changes.Commits, files)
+		facts := sinceReviewFacts(changes.Commits)
 		// Nothing moved since the last generation. sinceReviewFacts is a pure
 		// function of the commits + files, so an identical rendering means an
 		// identical answer — skip the Haiku call and the write entirely. This
@@ -1996,7 +1996,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		summary := ""
 		if m.claude != nil {
 			out, err := m.claude.Run(ctx, claude.RunRequest{
-				Prompt:       facts,
+				Prompt:       sinceReviewPrompt(facts, files),
 				Model:        claude.ModelHaiku,
 				SystemPrompt: claude.SinceReviewSystemPrompt,
 			})
@@ -4062,26 +4062,30 @@ func prSummaryPrompt(meta prmeta.Meta, files []string) string {
 	return b.String()
 }
 
-// maxSinceFactLines caps both lists in sinceReviewFacts: the block sits inside
-// the PR-info column, not on a page of its own, and a reviewer who has been
-// away for 40 commits is served by "en 32 meer" plus the AI explanation above
-// it, not by 40 bullet lines.
+// maxSinceFactLines caps the commit list in sinceReviewFacts and the file list
+// in sinceReviewPrompt: the block sits inside the PR-info column, not on a page
+// of its own, and a reviewer who has been away for 40 commits is served by
+// "en 32 meer" plus the AI explanation above it, not by 40 bullet lines.
 const maxSinceFactLines = 8
 
 // sinceReviewFacts renders the deterministic half of the "sinds jouw laatste
-// review" block: the commits that landed since (newest first — the most recent
-// change is the one a returning reviewer cares about) and the files they
-// touched, as a Markdown list. It doubles as the prompt for the Haiku
-// explanation stacked above it, so the AI never sees facts the reviewer can't
-// check for themselves. That newest-first order is load-bearing for that
-// prompt: prompts/since_review.md asks for the TOP commit only ("wat er als
-// laatst is aangepast"), with the rest as context.
+// review" block: the commits that landed since, newest first — the most recent
+// change is the one a returning reviewer cares about — as a Markdown list.
+// That order is load-bearing for the Haiku prompt below: prompts/since_review.md
+// asks for the TOP commit only ("wat er als laatst is aangepast"), with the rest
+// as context.
 //
-// The two `**…**` heading lines are what the UI splits this blob on to give
-// each list its own navigable block in the PR-info column (sinceReviewSections,
+// The `**…**` heading line is what the UI splits this blob on to give each list
+// its own navigable block in the PR-info column (sinceReviewSections,
 // home.mjs) — that split scans for the bold heading, not for any Dutch word, so
 // rewording a heading here is safe; dropping the `**…**` shape is not.
-func sinceReviewFacts(commits []github.SinceCommit, files []string) string {
+//
+// The touched-file list is deliberately NOT part of this: it was a block of its
+// own in the column and the reviewer had it removed ("het 211 bestanden
+// geraakt-blok mag weg") — a 200-file list said nothing a returning reviewer
+// could act on. It is still handed to the AI, which is what sinceReviewPrompt
+// is for, so the explanation keeps that context without the column showing it.
+func sinceReviewFacts(commits []github.SinceCommit) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "**%s** sinds jouw laatste review:\n\n", plural(len(commits), "nieuwe commit", "nieuwe commits"))
 	for i := len(commits) - 1; i >= 0; i-- {
@@ -4096,15 +4100,27 @@ func sinceReviewFacts(commits []github.SinceCommit, files []string) string {
 		}
 		fmt.Fprintln(&b, line)
 	}
-	if len(files) > 0 {
-		fmt.Fprintf(&b, "\n**%s** geraakt:\n\n", plural(len(files), "bestand", "bestanden"))
-		for i, f := range files {
-			if i >= maxSinceFactLines {
-				fmt.Fprintf(&b, "- en %d meer\n", len(files)-i)
-				break
-			}
-			fmt.Fprintf(&b, "- `%s`\n", f)
+	return b.String()
+}
+
+// sinceReviewPrompt is what the Haiku explanation is asked about: the very same
+// facts the UI renders (so the AI never asserts anything the reviewer can't
+// check right below it) PLUS the files those commits touched, which the column
+// itself no longer shows. The files are context for naming the change, never a
+// claim of their own.
+func sinceReviewPrompt(facts string, files []string) string {
+	if len(files) == 0 {
+		return facts
+	}
+	var b strings.Builder
+	b.WriteString(facts)
+	fmt.Fprintf(&b, "\n**%s** geraakt:\n\n", plural(len(files), "bestand", "bestanden"))
+	for i, f := range files {
+		if i >= maxSinceFactLines {
+			fmt.Fprintf(&b, "- en %d meer\n", len(files)-i)
+			break
 		}
+		fmt.Fprintf(&b, "- `%s`\n", f)
 	}
 	return b.String()
 }

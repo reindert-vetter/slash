@@ -1441,15 +1441,16 @@ func TestRunsForPR(t *testing.T) {
 
 // TestSinceReviewFacts pins the deterministic half of the "sinds jouw laatste
 // review" block: newest commit first (that's what a returning reviewer looks
-// for), both lists capped with an "en N meer" tail, and the counts leading
-// each heading.
+// for), the list capped with an "en N meer" tail, and the count leading the
+// heading. The touched files are deliberately absent from what the column
+// renders and present only in the Haiku prompt — see sinceReviewPrompt.
 func TestSinceReviewFacts(t *testing.T) {
 	commits := []github.SinceCommit{
 		{Headline: "oudste", Author: "alice"},
 		{Headline: "middelste", Author: "bob"},
 		{Headline: "nieuwste"},
 	}
-	got := sinceReviewFacts(commits, []string{"a.php", "b.php"})
+	got := sinceReviewFacts(commits)
 	if !strings.Contains(got, "**3 nieuwe commits** sinds jouw laatste review:") {
 		t.Errorf("missing commit heading in:\n%s", got)
 	}
@@ -1461,22 +1462,34 @@ func TestSinceReviewFacts(t *testing.T) {
 	if !strings.Contains(got, "- middelste (bob)") {
 		t.Errorf("author not rendered, got:\n%s", got)
 	}
-	if !strings.Contains(got, "**2 bestanden** geraakt:") || !strings.Contains(got, "- `a.php`") {
-		t.Errorf("missing file list in:\n%s", got)
+	// The file list left the column entirely (reviewer: "het 211 bestanden
+	// geraakt-blok mag weg") but still reaches the AI as context.
+	if strings.Contains(got, "geraakt:") || strings.Contains(got, "a.php") {
+		t.Errorf("file list should not be rendered any more, got:\n%s", got)
+	}
+	prompt := sinceReviewPrompt(got, []string{"a.php", "b.php"})
+	if !strings.Contains(prompt, "**2 bestanden** geraakt:") || !strings.Contains(prompt, "- `a.php`") {
+		t.Errorf("missing file list in the prompt:\n%s", prompt)
+	}
+	if !strings.HasPrefix(prompt, got) {
+		t.Errorf("prompt should start with the rendered facts:\n%s", prompt)
+	}
+	if bare := sinceReviewPrompt(got, nil); bare != got {
+		t.Errorf("no files means prompt == facts, got:\n%s", bare)
 	}
 
 	many := make([]github.SinceCommit, 0, 12)
 	for i := 0; i < 12; i++ {
 		many = append(many, github.SinceCommit{Headline: fmt.Sprintf("c%d", i)})
 	}
-	got = sinceReviewFacts(many, nil)
+	got = sinceReviewFacts(many)
 	if !strings.Contains(got, "- en 4 meer") {
 		t.Errorf("long commit list not capped, got:\n%s", got)
 	}
 	if strings.Contains(got, "1 nieuwe commits") {
 		t.Errorf("plural leaked into a single-count heading:\n%s", got)
 	}
-	if one := sinceReviewFacts(commits[:1], nil); !strings.Contains(one, "**1 nieuwe commit** sinds") {
+	if one := sinceReviewFacts(commits[:1]); !strings.Contains(one, "**1 nieuwe commit** sinds") {
 		t.Errorf("singular heading wrong: %s", one)
 	}
 }

@@ -689,7 +689,7 @@ function verticalScroller(el) {
 // clamped at 0, so selecting the first item never yanks the panel past its own
 // top, and (unlike scrollIntoView) it never touches the horizontal axis — same
 // axis rule as above.
-function alignToTopVertical(el) {
+export function alignToTopVertical(el) {
   const node = verticalScroller(el)
   if (!node) return
   const cRect = node.getBoundingClientRect()

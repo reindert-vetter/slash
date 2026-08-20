@@ -32,8 +32,10 @@ var PRSummarySystemPrompt string
 // ones present purely as context (the reviewer reads this to know where to look
 // again, and the deterministic commit list sits in its own block right below
 // it). Its call-specific content is the very same deterministic fact list the
-// UI renders underneath the explanation (sinceReviewFacts, workflows.go), so
-// the AI never asserts anything the reviewer can't check right below it.
+// UI renders underneath the explanation (sinceReviewFacts, workflows.go) plus
+// the files those commits touched (sinceReviewPrompt) — the column no longer
+// shows that file list, but it stays useful context for naming the change. So
+// every claim about a commit is one the reviewer can check right below it.
 //
 //go:embed prompts/since_review.md
 var SinceReviewSystemPrompt string

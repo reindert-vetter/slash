@@ -118,13 +118,18 @@ down key naar beneden en daar kunnen navigeren, ik moet ook naar rechts kunnen,
 naar de diff, en naar boven terug naar pr description."* It is a cursor WITHIN
 stop 1, not a stop of its own in the `→` chain:
 
-- **One flat cursor list** (`buildStopOneRows`): the since-review blocks first
-  (keys `since:story`/`since:facts:N`, `sinceReviewSections`), then the merged
-  "Taken" rows. Reaching those blocks by keyboard is the whole point — the card
-  scrolls and the last block used to sit below its bottom edge. `Enter` on a
-  focused, capped since block opens it to its full text instead of opening a
-  menu (`toggleSinceExpanded`; a short, uncapped block falls through to the
-  `'pr'` menu).
+- **One flat cursor list** (`buildStopOneRows`), in on-screen order: the
+  since-review blocks (keys `since:story`/`since:facts:N`,
+  `sinceReviewSections`), then the **`Omschrijving`** block
+  (`DESC_FOCUS_KEY = 'desc:body'`, only when the PR has a description), then the
+  merged "Taken" rows. Reaching those in-card blocks by keyboard is the whole
+  point — the card scrolls, and both the last since block and the description
+  used to sit below its bottom edge with no way to get there (*"ik kan niet naar
+  omschrijving"*). `Enter` on a focused, capped block opens it to its full text
+  instead of opening a menu (`toggleSinceExpanded` /
+  `toggleDescriptionExpanded`; a short, uncapped block falls through to the
+  `'pr'` menu). Both kinds carry `data-stop-one-key`, so one selector scrolls
+  whichever one took the cursor into view.
 - **`state.taskFocus`** holds the focused row's **key**, or `''` when the
   description card itself has the cursor (which is also what makes
   `prInfoCard`'s own focus ring drop — exactly one of the two looks focused).

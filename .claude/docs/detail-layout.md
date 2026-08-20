@@ -399,8 +399,9 @@ Reviewer request, with these parts each load-bearing:
   (`data-testid=pr-info-since-review`): the overview line plus Haiku's short
   explanation (`sinceSummary`, `pr-info-since-summary`) and **nothing else** —
   on request the facts left this block. Then **one block per section of
-  `sinceFacts`** (`pr-info-since-block`, body `pr-info-since-facts`): the new
-  commits, and the files they touch. The split scans for the `**…**` heading
+  `sinceFacts`** (`pr-info-since-block`, body `pr-info-since-facts`) — in
+  practice that is the new-commits list, since the backend emits exactly one
+  section (see the next bullet). The split scans for the `**…**` heading
   lines `sinceReviewFacts` (`workflows.go`) emits — never a Dutch word, so a
   reworded backend keeps working and a blob without such a line degrades to ONE
   block holding everything (the old rendering). The heading becomes the block's
@@ -411,6 +412,13 @@ Reviewer request, with these parts each load-bearing:
   review (`prompts/since_review.md`, explicit request). That is why
   `sinceReviewFacts`' newest-first commit order is load-bearing: the prompt
   asks for the top commit, with the older ones as context only.
+- **The touched-file list is gone from the column** — *"het 211 bestanden
+  geraakt-blok mag weg"*: a 200-file bullet list said nothing a returning
+  reviewer could act on. `sinceReviewFacts` (`workflows.go`) no longer renders
+  it; the files still reach the AI through `sinceReviewPrompt`, which appends
+  them (capped at `maxSinceFactLines`) to those same facts for the Haiku call
+  only. The frontend split stayed generic on purpose, so a future second
+  section needs no frontend change.
 - **Each block is its own keyboard stop and is capped, not stretched.** A body
   longer than `SINCE_TRUNCATE_AT` (200 chars) collapses to `max-h-[4.5rem]`
   with the shared `code-fence-fade-bottom` mask (`data-since-collapsed=true`)
@@ -420,7 +428,8 @@ Reviewer request, with these parts each load-bearing:
   `state.sinceExpanded` (a list of keys, ephemeral, outside the URL); a block
   short enough to show in full has nothing to open, so `Enter` there falls
   through to the PR-wide menu as before. `↓`/`↑` walk these blocks before the
-  "Taken" rows — see "Walking into the Taken block" in
+  "Omschrijving" block and the "Taken" rows — see "Walking into the
+  since-review blocks and the Taken block" in
   `.claude/docs/keyboard-navigation.md`.
 - **Absent entirely** when `newSinceKind`/`sinceFacts` are empty — nothing new,
   or a PR this reviewer never reviewed. Explicit answer: no "je bent bij"
@@ -462,7 +471,22 @@ nothing to reveal — pre-existing, not worth real overflow detection.
 
 The same flag is toggled by the PR menu item **"Show full description" /
 "Collapse description"** (`PR_COMMANDS`, see
-`.claude/docs/command-palette.md`), so click and menu stay in lockstep. The
+`.claude/docs/command-palette.md`), so click and menu stay in lockstep.
+
+**The block is also a keyboard stop** (`DESC_FOCUS_KEY = 'desc:body'`,
+`data-stop-one-key`/`data-desc-focused`) between the since-review blocks and the
+"Taken" rows: with those blocks above it, `Omschrijving` sat below the scrolling
+card's bottom edge and there was no way to get there at all (*"ik kan niet naar
+omschrijving"*). `↓`/`↑` land on it and scroll it into view, `Enter` (or a click
+anywhere on the block) toggles the same `state.descriptionExpanded` through
+`toggleDescriptionExpanded`, and a body short enough to render in full has
+nothing to open so `Enter` falls through to the PR-wide menu — identical rules
+to a since block. The block therefore also wears the shared focus ring, which
+is why it gained `rounded-lg p-2.5` (the ring is `ring-inset` and would
+otherwise sit against the text). The `pr-info-body-toggle` button stops
+propagation FIRST, before mutating, or the block's own `@click` would toggle it
+straight back (see the nested-`@click` rule in
+`.claude/rules/arrowjs-pitfalls.md`). The
 class strings of the body/toggle (and of `pr-info-body`/`pr-info-body-wrap`) are
 **whole-value** function bindings. Test: `tests/pr-description-expand.spec.mjs`
 (also asserts the collapsed wrap's bounding-box height, guarding against a

@@ -95,6 +95,7 @@ import RelatedPanel, {
   exitPrCommentThread,
   handlePrCommentThreadKey,
   scrollIntoViewVertical,
+  alignToTopVertical,
   isOwnMessage,
   startEditMessage,
   focusedThreadMessage,
@@ -11916,6 +11917,13 @@ function onKeydown(e) {
       toggleSinceExpanded(sinceSec)
       return
     }
+    // Same deal for the focused "Omschrijving" block: Enter reads it in full
+    // instead of opening a menu, and a description short enough to be shown
+    // whole falls through to the PR-wide menu as before.
+    if (state.showDescription && state.taskFocus === DESC_FOCUS_KEY && descCollapsible(state)) {
+      toggleDescriptionExpanded()
+      return
+    }
     const taskRow = state.showDescription ? focusedTaskRowFromState() : null
     if (taskRow) {
       openTaskRowMenu(taskRow, null)
@@ -13007,6 +13015,7 @@ function toggleSinceExpanded(s, { focus = false } = {}) {
   if (!sinceCollapsible(s)) return
   const open = state.sinceExpanded.includes(s.key)
   state.sinceExpanded = open ? state.sinceExpanded.filter((k) => k !== s.key) : [...state.sinceExpanded, s.key]
+  if (!open) alignStopOneBlockTop(s.key)
 }
 
 // focusedSinceSection re-resolves state.taskFocus against the CURRENT sections —
@@ -13043,7 +13052,7 @@ function sinceReviewBlock(state, s) {
         'shrink-0 rounded-lg bg-sky-50 dark:bg-sky-500/15 p-2.5 ' +
         (focused() ? 'ring-2 ring-inset ring-indigo-400 dark:ring-indigo-500' : '')}"
       data-testid="${s.story ? 'pr-info-since-review' : 'pr-info-since-block'}"
-      data-since-key="${s.key}"
+      data-stop-one-key="${s.key}"
       data-since-focused="${() => (focused() ? 'true' : 'false')}"
       data-since-collapsed="${() => (collapsible && !open() ? 'true' : 'false')}"
       @click="${() => toggleSinceExpanded(s, { focus: true })}"
@@ -13215,14 +13224,28 @@ function prInfoCard(state) {
       ${sinceReviewBlocks(state)}
       <div
         class="${() =>
-          'flex min-h-0 flex-col ' +
+          'flex min-h-0 flex-col rounded-lg p-2.5 ' +
           // Only claim the card's leftover vertical space while there's
           // actually something being collapsed — a short/empty body, or an
           // already-expanded long one, stays at its natural content height
           // (unchanged from before), so it never steals room from the Jira
           // box/pills that isn't needed. See DESC_TRUNCATE_AT above.
-          (state.prMeta.body && state.prMeta.body.length > DESC_TRUNCATE_AT && !state.descriptionExpanded ? 'flex-1' : '')}"
+          // …and `shrink-0` the rest of the time, so an EXPANDED body really
+          // claims its natural height and the card scrolls (which is what the
+          // comment above always claimed): as a plain flex item with min-h-0 it
+          // was squeezed to ~20px and its text painted straight over the status
+          // pills below it. Surfaced by making this block a keyboard stop —
+          // reaching it with ↓ and pressing Enter is now the normal way to read
+          // it in full.
+          (state.prMeta.body && state.prMeta.body.length > DESC_TRUNCATE_AT && !state.descriptionExpanded ? 'flex-1 ' : 'shrink-0 ') +
+          // The same focus ring a since block / a Taken row wears while the
+          // stop-1 cursor is on it — prInfoCard's own ring drops as soon as
+          // state.taskFocus is set, so exactly one thing looks focused.
+          (state.taskFocus === DESC_FOCUS_KEY ? 'ring-2 ring-inset ring-indigo-400 dark:ring-indigo-500' : '')}"
         data-testid="pr-info-body"
+        data-stop-one-key="${DESC_FOCUS_KEY}"
+        data-desc-focused="${() => (state.taskFocus === DESC_FOCUS_KEY ? 'true' : 'false')}"
+        @click="${() => toggleDescriptionExpanded({ focus: true })}"
       >
         <div class="mb-1 shrink-0 text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500">Omschrijving</div>
         ${() =>
@@ -13251,7 +13274,14 @@ function prInfoCard(state) {
                   <button
                     type="button"
                     data-testid="pr-info-body-toggle"
-                    @click="${() => (state.descriptionExpanded = !state.descriptionExpanded)}"
+                    @click="${(e) => {
+                      // stopPropagation FIRST, before the state mutation that
+                      // re-renders this button's own ancestor — see the
+                      // nested-@click rule in arrowjs-pitfalls.md. Without it
+                      // the block's own @click toggles it straight back.
+                      if (e && e.stopPropagation) e.stopPropagation()
+                      toggleDescriptionExpanded({ focus: true })
+                    }}"
                     class="${() =>
                       state.descriptionExpanded
                         ? 'mt-1 text-[11px] font-medium text-indigo-600 dark:text-indigo-400 hover:underline'
@@ -13364,34 +13394,78 @@ function stepTaskFocus(dir) {
   return true
 }
 
+// DESC_FOCUS_KEY is the stop-1 cursor key of the "Omschrijving" block. A
+// constant, because three places have to agree on it (buildStopOneRows, the
+// block's own focus binding and the Enter branch).
+const DESC_FOCUS_KEY = 'desc:body'
+
 // buildStopOneRows — everything the stop-1 cursor (state.taskFocus) can land
-// on, top to bottom: first the "Aanpassingen sinds jouw review" blocks inside
-// the description card (see sinceReviewSections — this is what makes them
-// readable at all, since the card scrolls and the last one used to run off its
-// bottom edge), then the merged "Taken" rows below it. One flat list, so
-// stepTaskFocus needs no special cases and a key is re-resolved against the
-// CURRENT list on every step (see "Snapshot a selection by stable ID" in
-// .claude/rules/conventions.md).
+// on, in the order they sit on screen: the "Aanpassingen sinds jouw review"
+// blocks (see sinceReviewSections), then the "Omschrijving" block, then the
+// merged "Taken" rows below the card. One flat list, so stepTaskFocus needs no
+// special cases and a key is re-resolved against the CURRENT list on every step
+// (see "Snapshot a selection by stable ID" in .claude/rules/conventions.md).
+//
+// Reaching those in-card blocks by keyboard is the whole point of this list:
+// the card scrolls, and with the since blocks above it the description sat
+// below its bottom edge with no way to get there ("ik kan niet naar
+// omschrijving"). A PR without a description contributes no stop, exactly like
+// an empty fact section.
 function buildStopOneRows(state) {
   const since = sinceReviewSections(state.prMeta || {}).map((s) => ({ key: s.key, since: true }))
-  return since.concat(buildTaskRows(state))
+  const desc = (state.prMeta || {}).body ? [{ key: DESC_FOCUS_KEY, desc: true }] : []
+  return since.concat(desc, buildTaskRows(state))
+}
+
+// descCollapsible — is the description long enough to have something to open?
+// Same deterministic character count that decides whether the "meer…"
+// affordance exists at all (DESC_TRUNCATE_AT), so Enter and the affordance can
+// never disagree.
+function descCollapsible(state) {
+  const body = (state.prMeta || {}).body || ''
+  return body.length > DESC_TRUNCATE_AT
+}
+
+// toggleDescriptionExpanded is what BOTH Enter on the focused Omschrijving
+// block and a click on it run — same function for key and mouse, see
+// .claude/docs/mouse-navigation.md. A click also lands the stop-1 cursor on the
+// block, exactly like a since block or a Taken row.
+function toggleDescriptionExpanded({ focus = false } = {}) {
+  if (focus && state.showDescription) state.taskFocus = DESC_FOCUS_KEY
+  if (!descCollapsible(state)) return
+  state.descriptionExpanded = !state.descriptionExpanded
+  if (state.descriptionExpanded) alignStopOneBlockTop(DESC_FOCUS_KEY)
 }
 
 // scrollStopOneRowIntoView scrolls whichever kind of stop-1 row just took the
-// cursor into view — a since-review block or a Taken row.
+// cursor into view — a block inside the PR-info card, or a Taken row.
 function scrollStopOneRowIntoView(key) {
-  if (String(key).startsWith('since:')) return scrollSinceBlockIntoView(key)
+  if (String(key).startsWith('since:') || key === DESC_FOCUS_KEY) return scrollCardBlockIntoView(key)
   return scrollTaskRowIntoView(key)
 }
 
-// scrollSinceBlockIntoView keeps the focused since-review block inside the
-// scrolling PR-info card. scrollIntoViewVertical, never bare scrollIntoView —
-// this card sits inside <main>'s horizontally scrolling column flow, see the
-// axis rule in .claude/rules/arrowjs-pitfalls.md.
-function scrollSinceBlockIntoView(key) {
+// scrollCardBlockIntoView keeps the focused block (a since-review block or the
+// Omschrijving block, both carrying data-stop-one-key) inside the scrolling
+// PR-info card. scrollIntoViewVertical, never bare scrollIntoView — this card
+// sits inside <main>'s horizontally scrolling column flow, see the axis rule in
+// .claude/rules/arrowjs-pitfalls.md.
+function scrollCardBlockIntoView(key) {
   requestAnimationFrame(() => {
-    const el = document.querySelector(`[data-since-key="${key}"]`)
+    const el = document.querySelector(`[data-stop-one-key="${key}"]`)
     if (el) scrollIntoViewVertical(el)
+  })
+}
+
+// alignStopOneBlockTop brings a block the reviewer JUST opened up to the top of
+// the scrolling card, so a long text reads from its first line instead of
+// staying half below the card's bottom edge. alignToTopVertical, not
+// scrollIntoViewVertical: the latter aligns the BOTTOM of an overflowing block,
+// which would push the first line out of sight — the opposite of what pressing
+// Enter on it was for. Only on opening; collapsing leaves the scroll alone.
+function alignStopOneBlockTop(key) {
+  requestAnimationFrame(() => {
+    const el = document.querySelector(`[data-stop-one-key="${key}"]`)
+    if (el) alignToTopVertical(el)
   })
 }
 
