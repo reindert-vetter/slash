@@ -5569,7 +5569,7 @@ function compactConversation(c, i, full, openCommentMenu) {
         // button used to touch the shared card's left/right border directly.
         'mx-1 flex items-start gap-2 rounded-xl border border-slate-300 dark:border-zinc-700 px-2.5 py-2 text-left ring-1 ring-black/5 transition ' +
         (c.status === 'resolved'
-          ? 'bg-slate-50/60 dark:bg-zinc-800/40 hover:border-indigo-200 dark:hover:border-indigo-500/40'
+          ? 'bg-emerald-50 dark:bg-emerald-500/15 hover:border-indigo-200 dark:hover:border-indigo-500/40'
           : 'bg-white dark:bg-zinc-900 hover:bg-slate-50 dark:hover:bg-zinc-800/60')}"
       data-testid="comment-item"
       data-comment-id="${c.id}"
@@ -5672,7 +5672,7 @@ function expandedConversation(c, openCommentMenu) {
           ? 'border-indigo-300 dark:border-indigo-500/40'
           : 'border-transparent') +
         ' ' +
-        (c.status === 'resolved' ? 'bg-slate-50/60 dark:bg-zinc-800/40' : 'bg-white dark:bg-zinc-900')}"
+        (c.status === 'resolved' ? 'bg-emerald-50 dark:bg-emerald-500/15' : 'bg-white dark:bg-zinc-900')}"
       data-testid="comment-item"
       data-comment-id="${c.id}"
       data-expanded="true"
@@ -7966,7 +7966,7 @@ export function commentDetailCard(c, opts) {
         (preview
           ? 'border-slate-300 dark:border-zinc-700 opacity-60 '
           : 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30 ') +
-        (c.status === 'resolved' ? 'bg-slate-50/60 dark:bg-zinc-800/40 ' : 'bg-white dark:bg-zinc-900 ')}"
+        (c.status === 'resolved' ? 'bg-emerald-50 dark:bg-emerald-500/15 ' : 'bg-white dark:bg-zinc-900 ')}"
       data-testid="comment-detail-card"
       @contextmenu="${(e) => {
         // Right-click anywhere on this card = the same click commentMenuButton
