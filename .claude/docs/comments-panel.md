@@ -189,7 +189,9 @@ the mechanism `Enter` on an Onderliggende-code child uses (`drillIntoChild`)
 — but **without leaving list mode**. That one difference is deliberate and
 is the whole point: `BlockList` only hides the blokken-index in
 `state.mode === 'diff'`, so it stays visible next to the expanded diff
-(reviewer request: "ook met de blokken index zichtbaar"), and
+**while the index is still being walked with `↑`/`↓`** (reviewer request:
+"ook met de blokken index zichtbaar") — from the first `→` onward it does
+collapse after all, see "The first `→`" below — and
 `state.selected` is never touched, so the sidebar highlight stays on the
 comment row itself rather than jumping to the block. The top-level
 block-column (which would otherwise render the comment's own
@@ -321,6 +323,25 @@ sidebar was still just being walked with `↑`/`↓`.
   `.claude/docs/keyboard-navigation.md`), but the keyboard stays on the
   sidebar list — `↑`/`↓` keep walking the index exactly as before, and the row
   stays the ordinary indigo "selected" look, not yet handed off.
+  **That same step now also collapses the blokken-index** — reviewer request:
+  "als ik naar rechts ga uit een comment op regel blokken index lijst, dan
+  mag je eerste blok wegschuiven net zoals je doet als je een code blok
+  selecteert uit de blokken index". `state.commentAnchorEntered` is a fourth
+  collapse case in `BlockList.mjs`'s `<aside>` class binding, next to diff
+  mode / the methodes-kolom / a PR-wide compose (see
+  `.claude/docs/detail-layout.md`), because this view deliberately stays in
+  list mode and would otherwise never trigger the diff-mode collapse ordinary
+  code navigation gets. `←` flips the flag back and the index returns.
+  Accepted consequence (explicit reviewer call): `↑`/`↓` keep walking that
+  now zero-width index until the second `→` hands the keyboard on.
+  A **mouse** entry gets the same treatment: clicking straight into the
+  comment/Claude/Onderliggende-code column never passes through this
+  ArrowRight branch, so the `state.indexHandedOff` watch (`home.mjs`) sets
+  `commentAnchorEntered` itself whenever that hand-off becomes true — one
+  watch instead of per-click-handler wiring, per "a click runs the same
+  function a key runs" (`.claude/docs/mouse-navigation.md`). It writes only on
+  the real transition (guarded on the current value), since the vendored proxy
+  notifies on every assignment (`.claude/rules/arrowjs-pitfalls.md`).
 - **The second `→`** (`commentAnchorEntered` already `true`) hands the
   keyboard IN via `enterCommentsOrRelated`, unchanged from before this split.
   Only THEN does the sidebar row switch to a grey, arrow-less "handed off"

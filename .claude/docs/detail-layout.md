@@ -59,8 +59,12 @@ gives its own layout space back rather than merely being covered.
   to `w-0 opacity-0 pointer-events-none` (instead of the old
   `-translate-x-[28rem] opacity-0`) whenever it should get out of the way
   (diff mode **unless `state.keepIndexInDiff` says it still fits**, the
-  methodes-kolom owning the keyboard **while still in list mode**, or an
-  "algemene" PR-wide compose — see `BlockList.mjs`'s own class comment).
+  methodes-kolom owning the keyboard **while still in list mode**, an
+  "algemene" PR-wide compose, or `state.commentAnchorEntered` — the first `→`
+  out of an anchored comment-index item, whose own column stays in list mode
+  and would otherwise never collapse this index at all, see "The first `→`"
+  in `.claude/docs/comments-panel.md` — see `BlockList.mjs`'s own class
+  comment).
   `state.testColumnFocused` (stop 2b owning the keyboard, see
   `test-class-grouping.md`) only forces the collapse in list mode; once
   `state.mode === 'diff'` — including a test class's active method's diff —

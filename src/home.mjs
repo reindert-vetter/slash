@@ -705,6 +705,11 @@ const state = reactive({
   // regardless of whether relatedActive() has since become true too — see
   // commentAnchorAwaitingEntry. Ephemeral, like indexHandedOff, not bound to
   // the URL: a refresh re-requires the first →.
+  // Second consumer: BlockList.mjs collapses the pr-index while this is true,
+  // so stepping right out of a comment-index item slides that index away just
+  // like entering an ordinary block's diff does (list mode never triggers its
+  // own collapse) — set on a mouse entry too, via the state.indexHandedOff
+  // watch below.
   commentAnchorEntered: false,
   // descriptionExpanded — whether the PR description (Omschrijving) in the
   // PR-info column is shown in full or truncated (the default). Toggled by both
@@ -2774,7 +2779,21 @@ function commentAnchorAwaitingEntry(level) {
 watch(
   () => [relatedActive(), state.selected, state.blocks, state.drill],
   () => {
-    state.indexHandedOff = relatedActive() && isCommentAnchorDrillActive(1)
+    const handedOff = relatedActive() && isCommentAnchorDrillActive(1)
+    state.indexHandedOff = handedOff
+    // A MOUSE click straight into that column (a comment card, the Claude
+    // column, an Onderliggende-code chip) never passes through onKeydown's
+    // ArrowRight branch, so it used to leave state.commentAnchorEntered
+    // false: no active-row highlight, no blue card border, and (since that
+    // same flag now collapses the pr-index, see BlockList.mjs) an index
+    // still standing where the keyboard path slides it away. Catching up
+    // here rather than at each click site keeps the mouse rule of
+    // .claude/docs/mouse-navigation.md — a click does what a key does — with
+    // one watch instead of per-handler wiring. Guarded on the current value
+    // so this writes only on the real transition: the vendored proxy
+    // notifies on every assignment, unchanged value or not (see
+    // .claude/rules/arrowjs-pitfalls.md).
+    if (handedOff && !state.commentAnchorEntered) state.commentAnchorEntered = true
   },
 )
 

@@ -99,7 +99,8 @@ export default function BlockList(state, isPrWideComposing = () => false) {
         'flex h-full shrink-0 flex-col overflow-hidden rounded-xl bg-white dark:bg-zinc-900 transition-all duration-200 ease-out ' +
         ((state.mode === 'diff' && !state.keepIndexInDiff) ||
         (state.mode !== 'diff' && state.testColumnFocused) ||
-        isPrWideComposing()
+        isPrWideComposing() ||
+        state.commentAnchorEntered
           ? // Collapses to width 0 (not just hidden via translate/opacity) so
             // it genuinely gives its space back to <main> instead of merely
             // sliding out of view while still claiming a flex slot — the fix
@@ -128,6 +129,21 @@ export default function BlockList(state, isPrWideComposing = () => false) {
             // beside an index and a diff it has nothing to do with — ←
             // closes the composer and brings this straight back (see
             // comments-panel.md/detail-layout.md).
+            //
+            // Fourth case: state.commentAnchorEntered — an anchored
+            // comment-index item whose own column the reviewer has stepped
+            // into with the first → (or reached with a mouse click, see the
+            // state.indexHandedOff watch in home.mjs). Reviewer request:
+            // "als ik naar rechts ga uit een comment op regel blokken index
+            // lijst, dan mag je eerste blok wegschuiven net zoals je doet als
+            // je een code blok selecteert uit de blokken index" — that view
+            // deliberately stays in list mode (openCommentAnchorDrill), so
+            // the diff-mode case above never fires for it and this index used
+            // to stay put where ordinary code navigation slides it away. ←
+            // flips the flag back and brings this straight back, exactly like
+            // the PR-wide compose case above. Accepted consequence (explicit
+            // reviewer call): ↑/↓ keep walking this now zero-width index
+            // until the second → hands the keyboard on.
             //
             // state.keepIndexInDiff is the one exception to the diff-mode
             // collapse: after a MOUSE click into a diff (an ordinary block's

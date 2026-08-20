@@ -6,8 +6,9 @@ import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 // openCommentAnchorDrill opens it as a drilled column automatically while
 // merely walking ↑/↓ through the index (reviewer request: "als ik door
 // blokken index langs ga, wil ik dat het al uitgeklapt is"), WITHOUT leaving
-// list mode: the blokken-index stays visible (unlike an ordinary → into a
-// block's own diff, which hides it), the sidebar highlight stays on the
+// list mode: the blokken-index stays visible while it is still being walked
+// with ↑/↓ (it does slide away from the first → onward, see the dedicated test
+// below), the sidebar highlight stays on the
 // comment row itself, and the expanded view defaults to Unified —
 // independent of the reviewer's own global diffViewMode preference.
 // Deliberately does NOT move the keyboard/focus in — no comment card is
@@ -296,5 +297,74 @@ test.describe('a comment-index item anchored to a real block', () => {
     await expect(page.getByTestId('drill-column')).toHaveCount(0)
     await expect(page.getByTestId('block-collapsed')).toHaveCount(0)
     await expect(page.getByTestId('pr-index')).toBeVisible()
+  })
+
+  // Reviewer request: "als ik naar rechts ga uit een comment op regel blokken
+  // index lijst, dan mag je eerste blok wegschuiven net zoals je doet als je
+  // een code blok selecteert uit de blokken index" — this view stays in list
+  // mode on purpose (openCommentAnchorDrill), so BlockList's own diff-mode
+  // collapse never fired for it and the pr-index stayed put where ordinary
+  // code navigation slides it away. state.commentAnchorEntered is now a
+  // fourth collapse case (BlockList.mjs), so the FIRST → hides it and ←
+  // (which undoes exactly that one step) brings it back.
+  test('the first ArrowRight slides the blokken-index away, ArrowLeft brings it back', async ({ page }) => {
+    await mockAnchoredComment(page, {
+      id: 'anchor-changed',
+      file: 'app/Actions/CreatePaymentAction.php',
+      label: 'CreatePaymentAction::execute',
+      body: 'rename this argument',
+    })
+    await page.goto('/pr/12903')
+    await leaveSearchBox(page)
+
+    const index = page.getByTestId('pr-index')
+    await page.locator('[data-idx]').filter({ hasText: 'rename this argument' }).click()
+    await expect(page.getByTestId('drill-column')).toBeVisible()
+    // Still fully there while merely walking the index with ↑/↓.
+    await expect(index).toBeVisible()
+
+    // First → ("selecteer code"): collapsed to a real zero width, giving its
+    // space back to <main> — not merely translated out of view.
+    await page.keyboard.press('ArrowRight')
+    await expect(index).toHaveJSProperty('clientWidth', 0)
+
+    // Second → only hands the keyboard on; the index stays gone.
+    await page.keyboard.press('ArrowRight')
+    await expect(index).toHaveJSProperty('clientWidth', 0)
+
+    // Two ← mirror the two → (see the border test above), and the index is
+    // back at the stop where only the sidebar row reads as selected.
+    await page.keyboard.press('ArrowLeft')
+    await expect(index).toHaveJSProperty('clientWidth', 0)
+    await page.keyboard.press('ArrowLeft')
+    await expect(index).toBeVisible()
+    await expect(index).not.toHaveJSProperty('clientWidth', 0)
+  })
+
+  // A MOUSE click into the comment column skips onKeydown's ArrowRight branch
+  // entirely, so it used to leave commentAnchorEntered false: no highlight, no
+  // blue border, and an index still standing. The state.indexHandedOff watch
+  // (home.mjs) catches up, per "a click runs the same function a key runs"
+  // (mouse-navigation.md).
+  test('clicking straight into the comment column collapses the index too', async ({ page }) => {
+    await mockAnchoredComment(page, {
+      id: 'anchor-changed',
+      file: 'app/Actions/CreatePaymentAction.php',
+      label: 'CreatePaymentAction::execute',
+      body: 'rename this argument',
+    })
+    await page.goto('/pr/12903')
+    await leaveSearchBox(page)
+
+    const index = page.getByTestId('pr-index')
+    await page.locator('[data-idx]').filter({ hasText: 'rename this argument' }).click()
+    const drillColumn = page.getByTestId('drill-column')
+    await expect(drillColumn).toBeVisible()
+    await expect(index).toBeVisible()
+
+    await page.getByTestId('comment-item').first().click()
+    await expect(index).toHaveJSProperty('clientWidth', 0)
+    // The same flag also reveals the diff's own "entered" look.
+    await expect(drillColumn.locator('[data-change-active]').first()).toBeVisible()
   })
 })
