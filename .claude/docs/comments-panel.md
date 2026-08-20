@@ -1700,9 +1700,14 @@ is set by `convertWarningToComment(c)` and consumed by `placeComment` (both the
 composer header/`composeTargetHint` and the eventual `createComment` prefer it
 over `commentTarget()`). Every ordinary composer-open entry point
 (`toNew`/`startComment`/"Annuleer") clears it first, so a stale override can't
-leak into an unrelated comment. The reviewer edits freely, then picks "Plaats
-comment" from the usual comment-kind menu (`COMPOSE_COMMANDS`,
-`.claude/docs/command-palette.md`). **Only once the
+leak into an unrelated comment. `isConvertingAiWarning()` (`!!warningOverride`)
+is exactly what keeps `Enter`/the composer's "Plaats…" button routed through
+the comment-kind menu here (`COMPOSE_COMMANDS`,
+`.claude/docs/command-palette.md`) instead of posting straight away — the one
+case that still gets that extra step, reviewer request: converting an AI
+finding into a public comment deserves one more look, an ordinary new comment
+does not (see "The compose (comment-kind) menu" there). The reviewer edits
+freely, then picks "Plaats comment". **Only once the
 replacement is confirmed placed** (`createComment` returns `res.ok`) does
 `placeComment` delete the original via the same `delete` Signal
 (`deleteComment(c)`, factored out to target a specific comment) — a failed

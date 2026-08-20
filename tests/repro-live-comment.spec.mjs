@@ -8,8 +8,7 @@ async function place(page, body) {
     await openNewComment(page)
   }
   await page.getByTestId('comment-compose').fill(body)
-  await page.getByTestId('comment-send').click()
-  await page.getByTestId('command-row').filter({ hasText: 'Plaats comment' }).click()
+  await page.getByTestId('comment-send').click() // posts directly — an ordinary composer, no comment-kind menu
 }
 function item(page, body) {
   return page.getByTestId('inline-comments').getByTestId('comment-item').filter({ hasText: body })

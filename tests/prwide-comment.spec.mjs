@@ -38,9 +38,7 @@ test('the `/` menu places a real PR-wide comment, which then shows in the block 
   await page.getByTestId('comment-compose').fill('Algemene opmerking over deze hele PR')
 
   const postPromise = page.waitForRequest('**/api/workflows/task_code_comment')
-  await page.keyboard.press('Enter') // opens the compose-kind menu
-  await expect(page.getByTestId('command-menu')).toBeVisible()
-  await page.keyboard.press('Enter') // runs the default "Plaats comment"
+  await page.keyboard.press('Enter') // posts directly — an ordinary composer, no comment-kind menu
 
   // Kind "issue" with no anchor at all — that Kind is exactly what makes it a
   // navigable index row instead of an invisible line comment.

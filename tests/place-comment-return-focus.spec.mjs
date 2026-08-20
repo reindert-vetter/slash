@@ -45,10 +45,8 @@ test('placing a comment returns the keyboard to the diff before the save resolve
   await expect(blockCard).not.toHaveClass(/border-indigo-300/)
   await composer.fill('terug naar de code')
 
-  await page.keyboard.press('Enter') // opens the compose-kind menu
-  await expect(page.getByTestId('command-menu')).toBeVisible()
-  await page.keyboard.press('Enter') // "Plaats comment" (default, 2nd item — after the pinned "Sluit menu")
-  await expect(page.getByTestId('command-menu')).not.toBeVisible()
+  await page.keyboard.press('Enter') // posts directly — an ordinary composer, no comment-kind menu
+  await expect(page.getByTestId('command-menu')).toHaveCount(0)
 
   // The keyboard is already back on the diff — the mocked POST above is
   // still deliberately held open (routeGate), so this proves the exit is

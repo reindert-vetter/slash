@@ -158,13 +158,12 @@ test.describe('PR Review Tree — command palette', () => {
     await expect(composer).toBeFocused()
     expect(posted).toBeNull()
 
-    // Finishing now opens the comment-kind menu (the send button no longer
-    // places directly); the default row, "Plaats comment", posts the
-    // (possibly extended) text publicly.
+    // Finishing now posts directly (the send button, an ordinary composer, no
+    // longer opens the comment-kind menu — see "The compose (comment-kind)
+    // menu" in .claude/docs/command-palette.md).
     await composer.type(' extra.')
     await page.getByTestId('comment-send').click()
-    await expect(page.getByTestId('command-menu')).toBeVisible()
-    await page.getByTestId('command-row').filter({ hasText: 'Plaats comment' }).click()
+    await expect(page.getByTestId('command-menu')).toHaveCount(0)
     await expect.poll(() => posted && posted.body).toBe('dit klopt niet helemaal extra.')
     expect(posted.pr).toBe(12903)
     expect(posted.file).toBeTruthy()
@@ -223,17 +222,46 @@ test.describe('PR Review Tree — command palette', () => {
     }
   })
 
-  // The comment-kind menu: Enter (or the send button) on a filled composer opens
-  // a menu to choose what to do with the comment — "Plaats comment" (the
-  // default action), a Claude command / git-commit (both placeholders), or
-  // Jira (a submenu). Reuses the CommandMenu overlay via menu mode 'compose'.
-  // See COMPOSE_COMMANDS in home.mjs.
-  test('Enter on a filled composer opens the comment-kind menu (with a Jira submenu)', async ({
+  // The comment-kind menu: Enter (or the send button) on a composer that is
+  // CONVERTING an AI-controle finding ("Comment hiervan maken",
+  // isConvertingAiWarning — RelatedPanel.mjs's warningOverride) opens a menu
+  // to choose what to do with the comment — "Plaats comment" (the default
+  // action), a Claude command / git-commit (both placeholders), or Jira (a
+  // submenu). Reuses the CommandMenu overlay via menu mode 'compose'. See
+  // COMPOSE_COMMANDS in home.mjs. An ORDINARY composer (not converting a
+  // finding) instead posts straight away — see compose-place-comment.spec.mjs.
+  test('Enter on a composer converting an AI finding opens the comment-kind menu (with a Jira submenu)', async ({
     page,
   }) => {
     await page.goto('/pr/12903')
     await expect(page.getByTestId('block-column')).toBeVisible()
     await leaveSearchBox(page)
+
+    const card = page.getByTestId('block-column').locator('article').first()
+    await expect(card).toBeVisible()
+    const label = (await card.locator('h2').first().innerText()).trim()
+    const fileLine = (await card.locator('.font-mono.text-slate-500').first().innerText()).trim()
+    const file = fileLine.split(':')[0]
+
+    const aiBody = 'dit is een notitie van de AI-controle'
+    const seeded = await page.request.post('/api/workflows/task_code_comment', {
+      data: {
+        pr: 12903,
+        file,
+        line: 1,
+        author: 'AI check',
+        body: aiBody,
+        source: 'ai',
+        local: true,
+        label,
+        gran: 'group',
+        rowStart: 0,
+        rowEnd: 0,
+      },
+    })
+    expect(seeded.ok()).toBeTruthy()
+    const { runId } = await seeded.json()
+    expect(runId).toBeTruthy()
 
     let posted = null
     await page.route('**/api/workflows/task_code_comment', async (route) => {
@@ -241,23 +269,24 @@ test.describe('PR Review Tree — command palette', () => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' })
     })
 
-    // Open the composer via the command palette's comment action and type text.
+    await page.goto('/pr/12903?sel=' + encodeURIComponent(fileLine))
+    await expect(card.locator('h2').first()).toHaveText(label)
+
+    const row = page.getByTestId('inline-comments').getByTestId('comment-item').filter({ hasText: aiBody })
+    await expect(row).toBeVisible()
+    await row.click()
+    await expect(page.getByTestId('reaction-compose')).toBeFocused()
     await page.keyboard.press('Enter')
-    await page.getByTestId('command-input').fill('comment')
-    await page.getByTestId('command-row').filter({ hasText: 'Comment op deze regel' }).first().click()
+    await page.getByTestId('command-row').filter({ hasText: 'Comment hiervan maken' }).click()
+
     const composer = page.getByTestId('comment-compose')
     await expect(composer).toBeVisible()
-    // The palette's "Comment op deze regel" hands the keyboard focus to the
-    // composer directly (startComment mirrors toNew()): the reviewer can type
-    // right away, the inline composer card replaces the "+ Comment op deze
-    // regel" trigger. Onderliggende code (inline, next to the diff) is
-    // unaffected.
-    await expect(composer).toBeFocused()
-    await expect(page.getByTestId('comment-composer')).toBeVisible()
-    await composer.fill('dit is een notitie')
+    await expect(composer).toHaveValue(aiBody)
+    await expect(page.getByTestId('comment-composer')).toContainText('Comment van AI-controle')
 
-    // Enter opens the kind-menu (not a newline, not a direct place).
-    await composer.focus()
+    // Enter opens the kind-menu (not a newline, not a direct place) — because
+    // this composer is CONVERTING the AI finding above.
+    await composer.fill('dit is een notitie')
     await page.keyboard.press('Enter')
     const menu = page.getByTestId('command-menu')
     await expect(menu).toBeVisible()

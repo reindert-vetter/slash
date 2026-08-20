@@ -97,10 +97,8 @@ test.describe('A failed save surfaces a badge and keeps the typed text', () => {
     await expect(composer).toBeFocused()
     await composer.fill('dit gaat niet lukken')
 
-    await page.keyboard.press('Enter') // opens the compose-kind menu
-    await expect(page.getByTestId('command-menu')).toBeVisible()
-    await page.keyboard.press('Enter') // "Plaats comment"
-    await expect(page.getByTestId('command-menu')).not.toBeVisible()
+    await page.keyboard.press('Enter') // posts directly — an ordinary composer, no comment-kind menu
+    await expect(page.getByTestId('command-menu')).toHaveCount(0)
 
     // The composer already closed (optimistic exit) before the mocked 500
     // response is even processed.

@@ -40,16 +40,11 @@ test('a stale placeComment tail must not clobber a later, unrelated Onderliggend
   await expect(composer).toBeFocused()
   await composer.fill('stale-tail-repro')
 
-  await page.keyboard.press('Enter') // opens the compose-kind menu
-  await expect(page.getByTestId('command-menu')).toBeVisible()
-  await page.keyboard.press('Enter') // "Plaats comment" (default, 2nd item) — fires
-  // placeComment's async tail WITHOUT awaiting it (runCommand); the mocked
-  // POST above is still 800ms away from resolving at this point.
-  await expect(page.getByTestId('command-menu')).not.toBeVisible()
-  // runCommand defers cmd.run() by one requestAnimationFrame — give it a
-  // moment to actually start (and thus read the still-mounted composer)
-  // before navigating away closes/unmounts it.
-  await page.waitForTimeout(60)
+  await page.keyboard.press('Enter') // posts directly — an ordinary composer, no comment-kind menu
+  // placeComment's async tail is fired WITHOUT being awaited (runComposePost,
+  // home.mjs); the mocked POST above is still 800ms away from resolving at
+  // this point.
+  await expect(page.getByTestId('command-menu')).toHaveCount(0)
 
   // The reviewer immediately leaves the (still-open, per the fire-and-forget
   // run()) composer — a legitimate, user-driven exit, distinct from the stale

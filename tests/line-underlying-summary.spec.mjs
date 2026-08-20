@@ -120,9 +120,7 @@ test.describe('PR Review Tree — per-line onderliggende-code badge', () => {
     const composer = page.getByTestId('comment-compose')
     await expect(composer).toBeFocused()
     await composer.fill('is dit nodig?')
-    await page.keyboard.press('Enter') // opens the compose-kind menu
-    await expect(page.getByTestId('command-menu')).toBeVisible()
-    await page.keyboard.press('Enter') // default: "Plaats comment"
+    await page.keyboard.press('Enter') // posts directly — an ordinary composer, no comment-kind menu
 
     const badge = flagRow.getByTestId('line-underlying-summary')
     await expect(badge).toBeVisible()
@@ -178,9 +176,7 @@ test.describe('PR Review Tree — per-line onderliggende-code badge', () => {
     const composer = page.getByTestId('comment-compose')
     await expect(composer).toBeFocused()
     await composer.fill('even bij mezelf checken')
-    await page.keyboard.press('Enter') // opens the compose-kind menu
-    await expect(page.getByTestId('command-menu')).toBeVisible()
-    await page.keyboard.press('Enter') // default: "Plaats comment" (rewritten to local:true above)
+    await page.keyboard.press('Enter') // posts directly (rewritten to local:true above) — no comment-kind menu
 
     // Located BY the glyph rather than by row text, so this holds whichever
     // row the step landed on — and the count doubles as the "a private note
@@ -261,13 +257,11 @@ test.describe('PR Review Tree — per-line onderliggende-code badge — AI warni
     const composer = page.getByTestId('comment-compose')
     await expect(composer).toBeFocused()
     await composer.fill('referentie voor de rij-anchor')
-    await page.keyboard.press('Enter') // opens the compose-kind menu
-    await expect(page.getByTestId('command-menu')).toBeVisible()
     const [createRes] = await Promise.all([
       page.waitForResponse(
         (res) => res.url().includes('/api/workflows/task_code_comment') && res.request().method() === 'POST',
       ),
-      page.keyboard.press('Enter'), // "Plaats comment" (default, 2nd item)
+      page.keyboard.press('Enter'), // posts directly — an ordinary composer, no comment-kind menu
     ])
     const refRunId = (await createRes.json()).runId
     expect(refRunId).toBeTruthy()

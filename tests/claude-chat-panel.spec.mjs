@@ -598,13 +598,11 @@ test('composing a new comment: the Claude column shows before it is placed, and 
     expect(secondMsgReq.postDataJSON().context).toBeFalsy()
 
     // "Plaats…" must not start a SECOND comment next to it — it updates the
-    // existing anchor via a reply instead.
+    // existing anchor via a reply instead. An ordinary composer posts
+    // directly (no comment-kind menu).
     await composer.fill('Kun je dit uitleggen?')
     await page.getByTestId('comment-send').click()
-    const menu = page.getByTestId('command-menu')
-    await expect(menu).toBeVisible()
-    await page.getByTestId('command-row').filter({ hasText: 'Plaats comment' }).click()
-    await expect(menu).toBeHidden()
+    await expect(page.getByTestId('command-menu')).toHaveCount(0)
 
     await expect(item).toHaveCount(1) // still exactly one comment
     await item.click()

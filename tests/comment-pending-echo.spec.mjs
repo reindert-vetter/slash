@@ -40,10 +40,8 @@ test('placing a comment shows the typed text immediately, before the save resolv
   await expect(composer).toBeFocused()
   await composer.fill('mijn zojuist verstuurde comment')
 
-  await page.keyboard.press('Enter') // opens the compose-kind menu
-  await expect(page.getByTestId('command-menu')).toBeVisible()
-  await page.keyboard.press('Enter') // "Plaats comment" (default)
-  await expect(page.getByTestId('command-menu')).not.toBeVisible()
+  await page.keyboard.press('Enter') // posts directly — an ordinary composer, no comment-kind menu
+  await expect(page.getByTestId('command-menu')).toHaveCount(0)
 
   // The keyboard is already back on the diff (optimistic exit, unaffected by
   // this feature) — the mocked POST is still deliberately held open.

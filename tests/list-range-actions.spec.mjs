@@ -32,17 +32,12 @@ test('"Plaats comment over dit bereik" anchors on the cursor block and lists eve
   await expect(composer).toBeFocused()
   await composer.fill('graag deze drie samen bekijken')
 
-  await page.keyboard.press('Enter') // opens the compose-kind menu (COMPOSE_COMMANDS)
-  const composeMenu = page.getByTestId('command-menu')
-  await expect(composeMenu).toBeVisible()
-  await expect(composeMenu.getByTestId('command-row').nth(1)).toHaveText(/Plaats comment/)
-
   const [createRes, postReq] = await Promise.all([
     page.waitForResponse(
       (res) => res.url().includes('/api/workflows/task_code_comment') && res.request().method() === 'POST',
     ),
     page.waitForRequest((req) => req.url().includes('/api/workflows/task_code_comment') && req.method() === 'POST'),
-    page.keyboard.press('Enter'), // "Plaats comment" is the compose menu's default item
+    page.keyboard.press('Enter'), // posts directly — an ordinary composer, no comment-kind menu
   ])
   const runId = (await createRes.json()).runId
   expect(runId).toBeTruthy()

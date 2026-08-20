@@ -1,21 +1,19 @@
 import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
-// The compose-kind menu (Enter/"Plaats…" on a filled composer, menu mode
-// 'compose', COMPOSE_COMMANDS in home.mjs) used to offer no way to place a
-// normal, public comment — only placeholders (plus, at the time, "Alleen voor
-// mijzelf", a private note that never reached GitHub — since removed on
-// request, "dat gebruik ik niet meer", see the doc comment above
-// COMPOSE_COMMANDS in home.mjs). That left the reviewer with no keyboard/click
-// path to actually post a comment. "Plaats comment" is the default item — the
-// 2nd row, right after the pinned "Sluit menu" (withClose) — and the menu
-// opens selected there (defaultSel), so "type, Enter, Enter" places a normal
-// comment again. It also refreshes the Taken column (pollWorkflows) right
-// after placing, instead of waiting for the next WORKFLOWS_POLL_MS (2.5s)
-// tick — see detail-layout.md / keyboard-navigation.md.
+// An ORDINARY new-comment composer (not converting an AI-controle finding, see
+// convert-warning-to-comment.spec.mjs for that path) posts straight away on
+// Enter/the "Plaats…" button — no comment-kind menu — reviewer request: only
+// turning an AI finding into a public comment deserves that extra look, a
+// plain new comment should just post. runComposePost (home.mjs) is the shared
+// implementation both the composer's own "Plaats comment" menu item (used by
+// convertWarningToComment's flow) and this direct shortcut call. See "The
+// compose (comment-kind) menu" in .claude/docs/command-palette.md.
+//
+// It also refreshes the Taken column (pollWorkflows) right after placing,
+// instead of waiting for the next WORKFLOWS_POLL_MS (2.5s) tick — see
+// detail-layout.md / keyboard-navigation.md.
 
-test('Enter on a filled composer defaults to "Plaats comment" (public) and refreshes Taken immediately', async ({
-  page,
-}) => {
+test('Enter on a filled ordinary composer posts directly, with no comment-kind menu', async ({ page }) => {
   await page.goto('/pr/12903')
   await expect(page.getByTestId('block-column')).toBeVisible()
   await leaveSearchBox(page)
@@ -27,23 +25,7 @@ test('Enter on a filled composer defaults to "Plaats comment" (public) and refre
   await page.getByTestId('command-row').filter({ hasText: 'Comment op deze regel' }).click()
   const composer = page.getByTestId('comment-compose')
   await expect(composer).toBeFocused()
-  await composer.fill('publieke comment via het compose-menu')
-
-  await page.keyboard.press('Enter') // opens the compose-kind menu
-  const menu = page.getByTestId('command-menu')
-  await expect(menu).toBeVisible()
-  const rows = page.getByTestId('command-row')
-
-  // "Sluit menu" is the pinned first row; "Plaats comment" is the 2nd row and
-  // starts selected (defaultSel) — the same ring-highlight CommandMenu gives
-  // any selected row.
-  await expect(rows.first()).toHaveText(/Sluit menu/)
-  const defaultRow = rows.nth(1)
-  await expect(defaultRow).toHaveText(/Plaats comment/)
-  await expect(defaultRow).toHaveClass(/ring-indigo-200/)
-  // The other choices (placeholders + Jira) are still there, just no longer
-  // the only real action — and "Alleen voor mijzelf" stays gone (removed).
-  await expect(rows.filter({ hasText: 'Alleen voor mijzelf' })).toHaveCount(0)
+  await composer.fill('publieke comment zonder menu')
 
   const postPromise = page.waitForRequest('**/api/workflows/task_code_comment')
   // The Taken column (workflows-panel) polls GET /api/workflows every 2.5s
@@ -56,23 +38,44 @@ test('Enter on a filled composer defaults to "Plaats comment" (public) and refre
     { timeout: 1000 }
   )
 
-  await page.keyboard.press('Enter') // run the default ("Plaats comment") item
+  await page.keyboard.press('Enter') // posts directly — no menu in between
+
+  // The comment-kind menu never appears for an ordinary composer.
+  await expect(page.getByTestId('command-menu')).toHaveCount(0)
 
   const postReq = await postPromise
   const posted = postReq.postDataJSON()
-  expect(posted.body).toBe('publieke comment via het compose-menu')
-  // The whole point: "Plaats comment" posts publicly, never local.
+  expect(posted.body).toBe('publieke comment zonder menu')
+  // Always a normal, public comment — never local.
   expect(posted.local).toBeFalsy()
 
-  await expect(menu).not.toBeVisible()
   await refreshPromise
 
   // The comment shows up as an inline card right away (loadComments already
   // ran as part of createComment/placeComment).
   await expect(
-    page
-      .getByTestId('inline-comments')
-      .getByTestId('comment-item')
-      .filter({ hasText: 'publieke comment via het compose-menu' })
+    page.getByTestId('inline-comments').getByTestId('comment-item').filter({ hasText: 'publieke comment zonder menu' })
   ).toHaveCount(1)
+})
+
+test('the composer\'s own "Plaats…" button posts directly too (a click runs the same function as Enter)', async ({
+  page,
+}) => {
+  await page.goto('/pr/12903')
+  await expect(page.getByTestId('block-column')).toBeVisible()
+  await leaveSearchBox(page)
+  await page.keyboard.press('ArrowRight')
+
+  await page.keyboard.press('Enter')
+  await page.getByTestId('command-row').filter({ hasText: 'Comment op deze regel' }).click()
+  const composer = page.getByTestId('comment-compose')
+  await expect(composer).toBeFocused()
+  await composer.fill('publieke comment via de knop')
+
+  const postPromise = page.waitForRequest('**/api/workflows/task_code_comment')
+  await page.getByTestId('comment-send').click()
+
+  await expect(page.getByTestId('command-menu')).toHaveCount(0)
+  const postReq = await postPromise
+  expect(postReq.postDataJSON().body).toBe('publieke comment via de knop')
 })

@@ -57,6 +57,7 @@ import RelatedPanel, {
   placeComment,
   isComposeOpen,
   composeHasText,
+  isConvertingAiWarning,
   relatedActive,
   leaveRelated,
   handleRelatedKey,
@@ -6894,10 +6895,12 @@ function toggleIgnoreComment(c) {
 }
 
 // COMPOSE_COMMANDS — shown when Enter (or the composer button) is pressed on a
-// filled new-comment composer (menu mode 'compose'): choose what to do with the
-// typed text. "Sluit menu" is pinned first (withClose); the menu opens on the
-// 2nd item (defaultSel), where "Plaats comment" (the default action, and now
-// the only real "place it" item) posts a normal, public comment (the plain
+// filled new-comment composer that is CONVERTING an AI-controle finding
+// (isConvertingAiWarning() — the composer opened via "Comment hiervan maken",
+// RelatedPanel.mjs's warningOverride): choose what to do with the typed text.
+// "Sluit menu" is pinned first (withClose); the menu opens on the 2nd item
+// (defaultSel), where "Plaats comment" (the default action, and now the only
+// real "place it" item) posts a normal, public comment (the plain
 // placeComment path, no opts.local) so the plain "type, Enter, Enter" flow
 // still places a real comment. The Claude/Git/Jira items are placeholders
 // (like the Jira items in PR_COMMANDS). "Plaats comment" refreshes the Taken
@@ -6905,6 +6908,13 @@ function toggleIgnoreComment(c) {
 // workflow run per comment, and this is more immediate than waiting for the
 // next WORKFLOWS_POLL_MS tick. The Git label names the current selection unit
 // (groep/regel/call) via granNoun.
+//
+// An ORDINARY composer (not converting a finding) skips this menu entirely —
+// Enter/the "Plaats…" button call runComposePost() straight away, see the
+// Enter branch in onKeydown and the InlineComments openCompose callback
+// below. Reviewer request: only a conversion is worth the extra look before
+// it becomes public; a plain new comment — even one on a line that happens
+// to already carry an unrelated AI warning — should just post.
 //
 // There used to be a second real item here, "compose-self"/"Alleen voor
 // mijzelf" (placeComment(..., {local:true}) — a private note the workflow
@@ -6921,20 +6931,28 @@ function toggleIgnoreComment(c) {
 // for a while, but has since been removed too, on the same kind of request —
 // see that function's own doc comment. See "The compose (comment-kind) menu"
 // in .claude/docs/command-palette.md.
+// runComposePost places the typed comment and refreshes/re-aligns the UI
+// after — the one real "post it" action, shared by COMPOSE_COMMANDS' own
+// "Plaats comment" item and the Enter/"Plaats…"-button shortcut below that
+// skips the menu outright for an ordinary (non-conversion) composer. Keeping
+// this as a single function is what makes "a click runs the same function a
+// key runs" hold here too (see .claude/docs/mouse-navigation.md).
+async function runComposePost() {
+  await placeComment(state, commentTarget)
+  pollWorkflows()
+  // placeComment (RelatedPanel.mjs) already handed the keyboard back to
+  // the diff (exitRelated) — re-align <main> on it, mirroring the same
+  // scrollFocusIntoView() call onKeydown makes right after an ← exit out
+  // of the sidebar (see the relatedActive() branch above).
+  scrollFocusIntoView()
+}
+
 const COMPOSE_COMMANDS = withClose([
   {
     id: 'compose-post',
     label: 'Plaats comment',
     hint: 'post',
-    run: async () => {
-      await placeComment(state, commentTarget)
-      pollWorkflows()
-      // placeComment (RelatedPanel.mjs) already handed the keyboard back to
-      // the diff (exitRelated) — re-align <main> on it, mirroring the same
-      // scrollFocusIntoView() call onKeydown makes right after an ← exit out
-      // of the sidebar (see the relatedActive() branch above).
-      scrollFocusIntoView()
-    },
+    run: runComposePost,
   },
   {
     id: 'compose-claude',
@@ -11359,6 +11377,12 @@ function contextMenuMode() {
 // reasoning the send-status button next to "Stuur" already uses).
 function rightClickMenuMode() {
   if (isEditableFocused()) return null // a real text field keeps its native Cut/Copy/Paste/spellcheck menu
+  // Deliberately NOT mirroring Enter's own isConvertingAiWarning() split here:
+  // Enter/the "Plaats…" button skip the menu for an ordinary composer because
+  // that's an unambiguous "post it" request, but a right-click is itself an
+  // explicit request to SEE the available commands (mouse-navigation.md's "a
+  // click may be more permissive than the key") — so it always opens the
+  // comment-kind menu, conversion or not.
   if (isComposeOpen() && composeHasText()) return 'compose'
   if (relatedActive()) {
     if (isCommentOrThreadFocused()) return 'comment'
@@ -11514,14 +11538,24 @@ function onKeydown(e) {
     return
   }
 
-  // Enter on a filled new-comment composer opens the comment-kind menu (Claude /
-  // Git / private / Jira) instead of placing directly. Handled before the
+  // Enter on a filled new-comment composer that is CONVERTING an AI-controle
+  // finding ("Comment hiervan maken", isConvertingAiWarning — see
+  // RelatedPanel.mjs's warningOverride) opens the comment-kind menu (Claude /
+  // Git / private / Jira) instead of placing directly — worth one more look
+  // before an AI finding becomes a public comment. An ORDINARY composer posts
+  // straight away (runComposePost, the same action "Plaats comment" in that
+  // menu runs) — reviewer request: only the conversion flow deserves the
+  // extra step; a plain new comment, even on a line that already carries an
+  // unrelated AI warning, should just post. Handled before the
   // relatedActive() branch so it works whether the composer was opened via the
   // keyboard (cs.focus==='new') or the button (focus null). Shift+Enter is left
   // alone (newline for a multi-line comment); an empty composer does nothing.
   if (e.key === 'Enter' && !e.shiftKey && isComposeOpen()) {
     e.preventDefault()
-    if (composeHasText()) openMenu('compose')
+    if (composeHasText()) {
+      if (isConvertingAiWarning()) openMenu('compose')
+      else runComposePost()
+    }
     return
   }
 
@@ -14091,8 +14125,15 @@ function DetailPanel(state) {
               InlineComments(
                 state,
                 commentTarget,
+                // Mirrors the Enter branch in onKeydown above (a click runs the
+                // same function a key runs): only a conversion of an AI-controle
+                // finding still goes through the comment-kind menu, an ordinary
+                // composer posts straight away via runComposePost.
                 () => {
-                  if (composeHasText()) openMenu('compose')
+                  if (composeHasText()) {
+                    if (isConvertingAiWarning()) openMenu('compose')
+                    else runComposePost()
+                  }
                 },
                 // Mouse-only equivalent of Enter on a focused, empty-reply comment
                 // (isCommentOrThreadFocused() && commentReplyEmpty(), see onKeydown below) —

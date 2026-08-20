@@ -162,9 +162,7 @@ test.describe('TRANSLATION block — per-key navigation/approve/comment', () => 
     await composer.fill('deze vertaling klopt niet')
 
     const postPromise = page.waitForRequest('**/api/workflows/task_code_comment')
-    await page.keyboard.press('Enter') // opens the compose-kind menu
-    await expect(page.getByTestId('command-menu')).toBeVisible()
-    await page.keyboard.press('Enter') // default: "Plaats comment"
+    await page.keyboard.press('Enter') // posts directly — an ordinary composer, no comment-kind menu
 
     const posted = (await postPromise).postDataJSON()
     expect(posted.body).toBe('deze vertaling klopt niet')

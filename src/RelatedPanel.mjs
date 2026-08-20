@@ -3629,6 +3629,20 @@ export function composeHasText() {
   return !!el && el.value.trim() !== ''
 }
 
+// isConvertingAiWarning reports whether the currently open composer was
+// opened via convertWarningToComment ("Comment hiervan maken" on an AI-
+// controle finding, see warningOverride above) rather than an ordinary
+// "+ Nieuwe comment"/startComment/startRangeComment open. home.mjs's Enter
+// (and the composer's own "Plaats…" button) use this to decide whether a
+// filled composer still goes through the comment-kind menu (true — the
+// reviewer is turning an AI finding into a real comment, worth one more
+// look before it becomes public) or posts straight away (false — an
+// ordinary comment, even one on a line that happens to already carry an
+// unrelated AI warning, per Reindert's explicit narrowing of this rule).
+export function isConvertingAiWarning() {
+  return !!warningOverride
+}
+
 // isCommentFocused reports whether a placed comment's row currently owns the
 // keyboard (landed on via ↑/↓ or a click, reply field focused but not yet
 // stepped into the thread). home.mjs uses this to decide whether Enter should

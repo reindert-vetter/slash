@@ -34,13 +34,11 @@ test('a comment wider than the selected unit shows on its own start row only', a
   const composer = page.getByTestId('comment-compose')
   await expect(composer).toBeFocused()
   await composer.fill('referentie voor de rij-anchor')
-  await page.keyboard.press('Enter') // opens the compose-kind menu
-  await expect(page.getByTestId('command-menu')).toBeVisible()
   const [createRes] = await Promise.all([
     page.waitForResponse(
       (res) => res.url().includes('/api/workflows/task_code_comment') && res.request().method() === 'POST',
     ),
-    page.keyboard.press('Enter'), // "Plaats comment" (the compose menu's default)
+    page.keyboard.press('Enter'), // posts directly — an ordinary composer, no comment-kind menu
   ])
   const refRunId = (await createRes.json()).runId
   expect(refRunId).toBeTruthy()

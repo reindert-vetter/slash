@@ -52,11 +52,7 @@ test('typing a first real comment on a line that only has a Claude conversation 
   await composer.fill('Dit moet echt anders.')
   const [replyRes] = await Promise.all([
     page.waitForRequest((req) => req.url().includes('/signals/reply') && req.method() === 'POST'),
-    (async () => {
-      await page.keyboard.press('Enter') // opens the compose-kind menu
-      await expect(page.getByTestId('command-menu')).toBeVisible()
-      await page.keyboard.press('Enter') // "Plaats comment" (default)
-    })(),
+    page.keyboard.press('Enter'), // posts directly — an ordinary composer, no comment-kind menu
   ])
   expect(replyRes.postDataJSON().body).toBe('Dit moet echt anders.')
 

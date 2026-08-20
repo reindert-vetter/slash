@@ -39,13 +39,11 @@ test('a block-wide-anchored AI finding shows its "hele blok" label on the group 
   const composer = page.getByTestId('comment-compose')
   await expect(composer).toBeFocused()
   await composer.fill('referentie voor de rij-anchor')
-  await page.keyboard.press('Enter') // opens the compose-kind menu
-  await expect(page.getByTestId('command-menu')).toBeVisible()
   const [createRes] = await Promise.all([
     page.waitForResponse(
       (res) => res.url().includes('/api/workflows/task_code_comment') && res.request().method() === 'POST',
     ),
-    page.keyboard.press('Enter'), // "Plaats comment" (default, 2nd item)
+    page.keyboard.press('Enter'), // posts directly — an ordinary composer, no comment-kind menu
   ])
   const refRunId = (await createRes.json()).runId
   expect(refRunId).toBeTruthy()

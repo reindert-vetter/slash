@@ -913,20 +913,41 @@ fallback targets the item's own existing composer entry points instead. Test:
 
 ## The compose (comment-kind) menu (`compose`, `COMPOSE_COMMANDS`)
 
-If the composer is open and text has been typed, `Enter` (and the composer's
-own **"Plaats…"** button, via `RelatedPanel`'s `openCompose` prop) opens this
-menu instead of placing the comment immediately. Five rows: **"Sluit menu"**
-(pinned), **"Plaats comment"** (default, 2nd — so "type, Enter, Enter" still
-places it directly), *Claude command* (placeholder), *Let Claude implement this
-(group/line/call)* (placeholder, label names the unit via `granNoun()` from
-`commentTarget()`), and *Jira* (a submenu of three placeholders).
+**Only while the open composer is CONVERTING an AI-controle finding**
+(`isConvertingAiWarning()`, `RelatedPanel.mjs` — true exactly while
+`warningOverride` is set, i.e. the composer was opened via "Comment hiervan
+maken", see `.claude/docs/comments-panel.md`), does `Enter` (and the
+composer's own **"Plaats…"** button, via `RelatedPanel`'s `openCompose` prop)
+open this menu instead of placing the comment immediately. Five rows:
+**"Sluit menu"** (pinned), **"Plaats comment"** (default, 2nd — so "type,
+Enter, Enter" still places it directly), *Claude command* (placeholder), *Let
+Claude implement this (group/line/call)* (placeholder, label names the unit
+via `granNoun()` from `commentTarget()`), and *Jira* (a submenu of three
+placeholders).
 
-**"Plaats comment"** → `placeComment(state, commentTarget)` posts a normal
-public comment. It's `async` and calls `pollWorkflows()` after a successful
-place, so the new `task_code_comment` run shows in the "Taken" card
-immediately instead of at the next `WORKFLOWS_POLL_MS` tick. Placing a comment
-leaves the approval of the unit it hangs on **untouched** — see
-`.claude/docs/approval.md`.
+**An ORDINARY composer (not converting a finding) skips this menu entirely —
+Enter/"Plaats…" call `runComposePost()` straight away**, posting the comment
+with no extra step. Reviewer request: only a conversion of an AI finding into
+a real, public comment deserves one more look before it becomes public; a
+plain new comment should just post — even one on a line that happens to
+already carry an unrelated (not-being-converted) AI warning. `runComposePost`
+(`home.mjs`, extracted so the menu item and the direct-post shortcut share one
+implementation — "a click runs the same function a key runs",
+`.claude/docs/mouse-navigation.md`) is exactly what **"Plaats comment"**'s own
+`run` calls too.
+
+**"Plaats comment"** / `runComposePost()` → `placeComment(state,
+commentTarget)` posts a normal public comment. It's `async` and calls
+`pollWorkflows()` after a successful place, so the new `task_code_comment` run
+shows in the "Taken" card immediately instead of at the next
+`WORKFLOWS_POLL_MS` tick. Placing a comment leaves the approval of the unit it
+hangs on **untouched** — see `.claude/docs/approval.md`.
+
+**A right-click on the composer still always opens this menu, conversion or
+not** — `rightClickMenuMode()` deliberately does NOT mirror the
+`isConvertingAiWarning()` split: a right-click is itself an explicit request
+to see the available commands, unlike Enter/a plain click, which are
+unambiguous "post it" requests. See "The right-click context menu" above.
 
 **There used to be a sixth row, "Alleen voor mijzelf"** (`placeComment(…,
 { local: true })`, storing a private note that never reaches GitHub — see the
