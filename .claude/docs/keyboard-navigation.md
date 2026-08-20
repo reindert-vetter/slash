@@ -576,12 +576,67 @@ returning to the list. If the neighbour's code is still loading, `pendingLast`
 remembers that you want the last change and `ensureCode` resolves it once the
 rows are known.
 
+### The block description is an extra ↑ stop above the first change
+
+The card's description strip (`Block.mjs`'s `block-description`, a PHPDoc/AI
+description above the diff) is **capped at 2 visual lines** (`line-clamp-2`, so
+also after wrapping — a long docblock used to push the diff itself off screen)
+and is its own cursor **within stop 3**, not a stop in the `←`/`→` chain.
+Reviewer request: *"omschrijving boven blok moet maximaal uit 2 regels zijn (ook
+na wrapped). het moet niet gelijk geselecteerd zijn als ik een blok open, maar
+ik moet naar boven kunnen en dat moet dan een extra stap zijn ... dan wil ik het
+kunnen uitklappen, dan wil ik ook weer naar beneden kunnen."*
+
+- **Not selected on arrival:** `enterDiff` clears it, so stepping into a block
+  lands on a change unit exactly as before.
+- **`↑` off the first unit** (`state.change === 0`) lands on the strip when the
+  block has a description — **one extra step** in the same walk. A second `↑`
+  then continues into the previous same-file block (or clamps at a file
+  boundary) exactly as it always did, so the strip is never a dead end.
+- **`↓`** goes back down onto the block's first change.
+- **`Enter`** toggles the 2-line cap open/closed (`toggleBlockDescExpanded`)
+  instead of opening the block palette — same shape as `Enter` on stop 1's
+  since-review/Omschrijving blocks, and there is no unit context to build a
+  palette for while the strip owns the cursor. A description short enough to fit
+  in full has nothing to open (`blockDescCollapsible`, a character count exactly
+  like `descCollapsible`'s, so the "meer… (Enter)" hint and `Enter` can never
+  disagree) and `Enter` is a no-op there.
+- **`←`/`→`** release the strip and then do what they do from the diff itself
+  (back to the list resp. on to the comments/Underlying code).
+- **`f`/`d`/`s`/`a`/Space are no-ops** while the strip owns the cursor, same
+  reasoning as stop 1 and the methodes-kolom: no unit to zoom or approve.
+- **A click on the strip** does both halves of that `Enter`: it focuses the
+  strip AND toggles the cap (`toggleBlockDescExpanded({focus:true})`), the same
+  key/mouse pairing `toggleSinceExpanded` has at stop 1.
+- **State:** `state.descFocusId` (the block **id** whose strip has the cursor)
+  and `state.descExpanded` (ids opened out) — both ephemeral, deliberately NOT
+  in the URL (a cursor/disclosure position, like `descriptionExpanded`), and
+  both keyed by id rather than index per "Snapshot a selection by stable ID" in
+  `.claude/rules/conventions.md`. `Block.mjs`'s two strip bindings read **only**
+  these two, never `state.selected`/`change`: a binding that depended on the
+  diff cursor would re-set the strip's `class` on every ordinary step, which
+  `tests/navigate.spec.mjs` asserts never happens. The focus is released
+  explicitly by every path that moves the cursor by itself
+  (`clearBlockDescFocus` in `stepBlock`/`nextChange`/`prevChange`/`enterDiff`/
+  `leaveDiffToList`/`selectRow`/`ensureTopLevelDiffFocus`) rather than by a
+  `watch` — a `watch` on `state.selected` also fires on a same-value reassign
+  from the 5s comment poll and would close what the reviewer just opened (see
+  that pitfall in `.claude/rules/arrowjs-pitfalls.md`).
+- **Deliberate scope limit:** top level only (`focusLevel === 0`). A drilled
+  Onderliggende-code column keeps its own `{change, gran}` cursor and has no
+  description stop.
+
+Test: `tests/block-description-stop.spec.mjs`.
+
 **Two different chevrons, deliberately distinct:**
 
 - **Grey, _outside_ the block card** (`stepChevron`/`canStep(delta)`,
   `home.mjs`, rendered in the block column): shown on the last (resp. first)
   change when a same-file neighbour exists — "the arrow will take you to the
-  next block". Hidden at a file boundary. Its toggling slot
+  next block". Hidden at a file boundary. The **up** chevron additionally waits
+  for the description stop above (see the section right above): while the strip
+  is still the next thing `↑` reaches it would promise the wrong destination, so
+  it only appears once the strip itself has the cursor. Its toggling slot
   (`stepChevronSlot`) must keep its **stable element root** (a static
   `display:contents` wrapper) — a bare keyed `${…}` wrapper made the chunk
   `ref` go stale and corrupted the block column's keyed reconcile; see the

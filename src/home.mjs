@@ -33,6 +33,7 @@ import Block, {
   sweepBracketOnlyForward,
   translationRowUnits,
   fitCapCharsFor,
+  blockDescCollapsible,
 } from './Block.mjs'
 import RelatedPanel, {
   InlineComments,
@@ -718,6 +719,25 @@ const state = reactive({
   // the in-card "meer…"/"Inklappen" affordance — one flag, so they stay in
   // lockstep. Ephemeral UI state, NOT bound to the URL (like showDescription).
   descriptionExpanded: false,
+  // descFocusId / descExpanded — the BLOCK description strip (Block.mjs's
+  // `block-description`), which is its own keyboard stop inside stop 3: ↑ from
+  // the block's first change lands here (one extra step) instead of flowing
+  // straight into the previous same-file block, Enter opens the 2-line cap to
+  // the full text and ↓ goes back to the first change. See "The block
+  // description is an extra ↑ stop above the first change" in
+  // .claude/docs/keyboard-navigation.md.
+  //
+  // descFocusId holds the BLOCK ID whose strip has the cursor ('' = none), and
+  // descExpanded the ids that are currently opened out — ids, never an index
+  // (see "Snapshot a selection by stable ID" in .claude/rules/conventions.md),
+  // and deliberately also never `state.selected`: Block.mjs's two strip
+  // bindings must depend on nothing that an ordinary ↑/↓/f step changes, or
+  // every diff step would re-set that strip's class attribute (which
+  // tests/navigate.spec.mjs asserts never happens). Both ephemeral, NOT bound
+  // to the URL — a cursor/disclosure position, like descriptionExpanded and
+  // sinceExpanded above it.
+  descFocusId: '',
+  descExpanded: [],
   // diffViewMode — the global diff-pane preference, cycled everywhere with `a`
   // (onKeydown, DIFF_VIEW_CYCLE below): 'split' (default, old+new side by
   // side) → 'unified' (a genuinely two-sided block collapses to ONE column,
@@ -2006,6 +2026,7 @@ function stepBlock(delta) {
   if (!sameFileNeighbour(delta)) return false
   const next = state.selected + delta
   state.selected = next
+  clearBlockDescFocus()
   clearRangeAnchor(0)
   // Flowing on to another block supersedes enterDiff's still-pending
   // "land on the first unapproved unit" landing (its code may only arrive
@@ -2096,6 +2117,7 @@ function nextChange() {
     if (curTestClassRow()) stepTestMethodChange(1)
     else stepBlock(1)
   } else {
+    clearBlockDescFocus()
     clearRangeAnchor(0)
     state.change = state.change + 1
     scrollChangeIntoView()
@@ -2107,10 +2129,90 @@ function prevChange() {
     if (curTestClassRow()) stepTestMethodChange(-1)
     else stepBlock(-1)
   } else {
+    clearBlockDescFocus()
     clearRangeAnchor(0)
     state.change = state.change - 1
     scrollChangeIntoView()
   }
+}
+
+// ---------------------------------------------------------------------------
+// The block-description stop (see state.descFocusId's own comment above)
+// ---------------------------------------------------------------------------
+
+// blockDescStopAvailable — does the block the keyboard is on have a description
+// strip to step onto at all? Only at the top level (focusLevel === 0): a
+// drilled Onderliggende-code column keeps its own {change, gran} cursor with no
+// description stop of its own (deliberate scope limit, see
+// .claude/docs/keyboard-navigation.md).
+function blockDescStopAvailable() {
+  if (state.mode !== 'diff' || state.focusLevel > 0) return false
+  const b = curBlock()
+  return !!(b && b.description)
+}
+
+// blockDescFocused — does the description strip currently OWN the keyboard? A
+// stale id (the reviewer navigated to another block without a clear running)
+// never counts, because it is re-resolved against the block the cursor is on.
+function blockDescFocused() {
+  const b = curBlock()
+  return !!(state.descFocusId && b && b.id === state.descFocusId && blockDescStopAvailable())
+}
+
+// clearBlockDescFocus releases the strip, called from every path that moves the
+// diff cursor or the block selection by itself (stepBlock/nextChange/prevChange/
+// enterDiff/leaveDiffToList/selectRow/the mouse entry point) — the same
+// discipline clearRangeAnchor/clearListAnchor already follow one level up.
+function clearBlockDescFocus() {
+  if (state.descFocusId) state.descFocusId = ''
+}
+
+// blockDescExpanded / toggleBlockDescExpanded — is this block's strip opened out
+// past its 2-line cap, and the toggle BOTH Enter on the focused strip and a
+// click on it run (same function for key and mouse, see
+// .claude/docs/mouse-navigation.md). A click also lands the cursor on the strip,
+// exactly like toggleSinceExpanded/toggleDescriptionExpanded do at stop 1.
+// Reassigns the array instead of mutating it, so the reactive bindings reading
+// it re-run.
+function blockDescExpanded(b) {
+  return !!b && state.descExpanded.includes(b.id)
+}
+
+function toggleBlockDescExpanded({ focus = false } = {}) {
+  const b = curBlock()
+  if (!b || !b.description) return
+  if (focus) state.descFocusId = b.id
+  if (!blockDescCollapsible(b)) return
+  state.descExpanded = blockDescExpanded(b)
+    ? state.descExpanded.filter((id) => id !== b.id)
+    : [...state.descExpanded, b.id]
+}
+
+// focusBlockDesc / leaveBlockDesc — the ↑ onto the strip from the block's first
+// change, and the ↓ back off it onto that same first change.
+function focusBlockDesc() {
+  const b = curBlock()
+  if (!b) return false
+  state.descFocusId = b.id
+  scrollBlockDescIntoView()
+  return true
+}
+
+function leaveBlockDesc() {
+  clearBlockDescFocus()
+  state.change = 0
+  scrollChangeIntoView()
+}
+
+// scrollBlockDescIntoView keeps the strip in view when the cursor lands on it —
+// vertical axis only (scrollIntoViewVertical), never a bare scrollIntoView: the
+// card sits inside <main>'s horizontally scrolling column flow, see the axis
+// rule in .claude/rules/arrowjs-pitfalls.md.
+function scrollBlockDescIntoView() {
+  requestAnimationFrame(() => {
+    const el = document.querySelector('[data-testid="block-description-strip"][data-desc-focused="true"]')
+    if (el) scrollIntoViewVertical(el)
+  })
 }
 
 // fKey — zoom in. From the list it steps into the diff first. Inside the diff it
@@ -3232,6 +3334,9 @@ function selectRow(idx) {
   state.selected = idx
   state.classMethodSel = 0
   state.testColumnFocused = false
+  // Another block's diff never inherits the previous block's description-strip
+  // cursor (see clearBlockDescFocus).
+  clearBlockDescFocus()
   // A plain (non-shift) selection change supersedes a Shift+arrow multi-row
   // selection, exactly as clearRangeAnchor does one level down in the diff.
   clearListAnchor()
@@ -6145,6 +6250,10 @@ function enterDiff() {
     if (!b.methods.length) return
   }
   state.mode = 'diff'
+  // Stepping in never lands ON the description strip — it is only reachable
+  // with a deliberate ↑ from the block's first change (reviewer: "het moet niet
+  // gelijk geselecteerd zijn als ik een blok open").
+  clearBlockDescFocus()
   // Entering a diff always takes the keyboard out of stop 1 and, by default,
   // gives the pr-index' width back to the diff — the nav-chain behaviour the
   // KEYBOARD has always had. A mouse click can hand either column back
@@ -7867,7 +7976,12 @@ function ensureTopLevelDiffFocus(i) {
   else if (relatedActive()) leaveRelated()
   if (i === state.selected) {
     if (state.mode !== 'diff') enterDiff()
-    else clearRangeAnchor(0)
+    else {
+      // A click straight into the code releases the description strip, exactly
+      // like ↓ off it does (see clearBlockDescFocus).
+      clearBlockDescFocus()
+      clearRangeAnchor(0)
+    }
     scheduleDiffColumnFit()
     return
   }
@@ -8724,6 +8838,7 @@ function leaveDiffToList() {
   state.mode = 'list'
   state.drill = []
   state.drillCursor = []
+  clearBlockDescFocus()
   clearRangeAnchor(0)
   resetMainScroll()
   scrollSelectedIntoView()
@@ -11912,6 +12027,17 @@ function onKeydown(e) {
     // druk op z'n blok dan wil ik de volledige omschrijving lezen"). A block
     // that is short enough to show in full has nothing to open, so it falls
     // through to the PR-wide menu as before.
+    // Enter on the focused BLOCK-description strip (stop 3's own extra ↑ stop,
+    // see blockDescFocused) opens its 2-line cap to the full text instead of
+    // opening the block palette — the same shape stop 1's since blocks and its
+    // Omschrijving block already have. There is no unit context while the strip
+    // owns the cursor, so a palette would be wrong here anyway; a description
+    // short enough to fit in full has nothing to open and Enter is a no-op
+    // (toggleBlockDescExpanded's own blockDescCollapsible guard).
+    if (blockDescFocused()) {
+      toggleBlockDescExpanded()
+      return
+    }
     const sinceSec = state.showDescription ? focusedSinceSection() : null
     if (sinceSec && sinceCollapsible(sinceSec)) {
       toggleSinceExpanded(sinceSec)
@@ -12017,6 +12143,17 @@ function onKeydown(e) {
   // their own dedicated block further below, before the generic list-mode
   // arrows.
   if (isTestColumnActive() && !isModifiedKey(e) && ['f', 'd', 's', 'a'].includes(e.key)) {
+    e.preventDefault()
+    return
+  }
+
+  // The BLOCK-description strip (stop 3's own extra ↑ stop, see
+  // blockDescFocused) has no unit context either, so f/d/s/a/Space are the same
+  // deliberate no-op there as on stop 1 and in the methodes-kolom above —
+  // approving or zooming a description makes no sense, and letting them fall
+  // through would silently move the diff cursor underneath the strip. ↑/↓/←/→
+  // and Enter are handled in the diff-mode block resp. the Enter branch above.
+  if (blockDescFocused() && !isModifiedKey(e) && ['f', 'd', 's', 'a', ' '].includes(e.key)) {
     e.preventDefault()
     return
   }
@@ -12137,6 +12274,31 @@ function onKeydown(e) {
   }
 
   if (state.mode === 'diff') {
+    // The description strip owns ↑/↓/←/→ while the cursor sits on it (see
+    // blockDescFocused): ↓ drops back onto the block's first change, ↑ leaves
+    // the block entirely the way it always did (the same-file neighbour, or
+    // clamp at a file boundary — so the strip really is ONE extra step in that
+    // walk, not a dead end), and ←/→ release it and then do exactly what they
+    // do from the diff itself. Shift is ignored here: a range selection needs a
+    // unit, which a description isn't.
+    if (blockDescFocused() && ['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+      e.preventDefault()
+      if (e.key === 'ArrowDown') {
+        leaveBlockDesc()
+      } else if (e.key === 'ArrowUp') {
+        clearBlockDescFocus()
+        if (curTestClassRow()) stepTestMethodChange(-1)
+        else stepBlock(-1)
+      } else if (e.key === 'ArrowLeft') {
+        clearBlockDescFocus()
+        leaveDiffToList()
+      } else {
+        clearBlockDescFocus()
+        clearRangeAnchor()
+        enterCommentsOrRelated(state.pr)
+      }
+      return
+    }
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       if (e.shiftKey) {
@@ -12150,6 +12312,12 @@ function onKeydown(e) {
         if (state.focusLevel > 0) drillExtendRange(state.focusLevel, -1)
         else extendRange(-1)
       } else if (state.focusLevel > 0) drillPrevChange()
+      // ↑ off the block's FIRST unit lands on the description strip first (one
+      // extra step) when this block has one, instead of flowing straight into
+      // the previous same-file block — reviewer request: "ik moet naar boven
+      // kunnen en dat moet dan een extra stap zijn". A second ↑ then continues
+      // that flow, see the blockDescFocused branch at the top of this block.
+      else if (state.change <= 0 && blockDescStopAvailable()) focusBlockDesc()
       else prevChange()
     } else if (e.key === 'ArrowLeft') {
       e.preventDefault()
@@ -12349,7 +12517,12 @@ function canStep(delta) {
   const groups = unitsOf(curBlock())
   if (!groups.length) return false
   const atEdge = delta > 0 ? state.change >= groups.length - 1 : state.change <= 0
-  if (!atEdge) return false
+  if (!atEdge && !(delta < 0 && blockDescFocused())) return false
+  // Going UP off the first unit reaches the block's description strip first
+  // when it has one (see focusBlockDesc), so the chevron would promise the
+  // wrong destination: it only appears once the strip itself has the cursor
+  // (whereupon ↑ really does leave the block).
+  if (delta < 0 && blockDescStopAvailable() && !blockDescFocused()) return false
   return curTestClassRow() ? canStepTestMethod(delta) : sameFileNeighbour(delta)
 }
 
@@ -13905,6 +14078,29 @@ function DetailPanel(state) {
             // Out-of-view change hints belong only to the block being stepped
             // through: the selected card, in diff mode, with the keyboard on it.
             hintsEnabled: () => isActiveCard(b) && state.mode === 'diff' && state.focusLevel === 0,
+            // The description strip's own cursor/disclosure state (see
+            // state.descFocusId). Deliberately keyed on b.id — NOT via
+            // isActiveCard()/`i` like the bindings around it: these two feed a
+            // reactive class attribute on the strip, and depending on
+            // state.selected/change would re-set that attribute on every
+            // ordinary diff step (tests/navigate.spec.mjs asserts a same-block
+            // step only mutates `class` on the <article> cards). A stale id can
+            // never light up the wrong card, because there is exactly one
+            // descFocusId and it is cleared on every navigation
+            // (clearBlockDescFocus).
+            descFocused: () => state.descFocusId === b.id,
+            descExpanded: () => state.descExpanded.includes(b.id),
+            // Mouse twin of Enter on the strip: focus it AND toggle the cap,
+            // exactly like clicking a since block/the Omschrijving block at
+            // stop 1 (see .claude/docs/mouse-navigation.md). Only wired up for
+            // the card the keyboard can actually be on.
+            onDescriptionClick:
+              i === sel
+                ? () => {
+                    ensureTopLevelDiffFocus(i)
+                    toggleBlockDescExpanded({ focus: true })
+                  }
+                : undefined,
             // Light-blue border while the keyboard drives this block's diff
             // (selected card, diff mode) — mirrors the selected comment-index row.
             // Drops once the reviewer steps → into the related panel

@@ -903,6 +903,19 @@ function blockMenuButton(onOpenMenu) {
 //
 // Each paragraph still goes through renderMarkdown, so the escaping/XSS layer,
 // the inline-code styling and the link sanitizing are unchanged.
+// BLOCK_DESC_TRUNCATE_AT / blockDescCollapsible — is a block's description long
+// enough to have something to open? A deterministic character count, exactly
+// like descCollapsible's own DESC_TRUNCATE_AT for the PR description (home.mjs):
+// the real question ("does it overflow the 2-line cap?") can only be answered by
+// measuring the laid-out DOM, and both the "meer… (Enter)" hint here and the
+// Enter branch in home.mjs must agree without a layout read. Exported because
+// home.mjs's Enter/↑ handling needs the same answer.
+const BLOCK_DESC_TRUNCATE_AT = 120
+
+export function blockDescCollapsible(b) {
+  return !!b && String(b.description || '').length > BLOCK_DESC_TRUNCATE_AT
+}
+
 function descriptionHtml(text) {
   return String(text || '')
     .split(/\n{2,}/)
@@ -978,6 +991,24 @@ export default function Block(b, opts = {}) {
   // activeGroup/hintsEnabled) for parity with the rest of Block()'s reactive
   // opts. Defaults to never collapsing for every non-preview card.
   const collapsedFn = opts.collapsed || (() => false)
+  // descFocused / descExpanded / onDescriptionClick — the description strip
+  // below the meta row is its own keyboard stop above the block's first change
+  // (↑ from unit 0, see "The block description is an extra ↑ stop" in
+  // .claude/docs/keyboard-navigation.md). descFocused() says the cursor sits on
+  // it (focus ring + the "meer…" affordance), descExpanded() whether it shows
+  // its full text instead of the 2-line cap, and onDescriptionClick() is the
+  // mouse twin of Enter there (same function for key and mouse, see
+  // .claude/docs/mouse-navigation.md).
+  //
+  // Both predicates must depend ONLY on state that changes when the strip
+  // itself changes (home.mjs passes state.descFocusId/state.descExpanded, both
+  // keyed by block id) — never on state.selected/state.change. Otherwise every
+  // ordinary ↑/↓/f step would re-set this strip's class attribute, which
+  // tests/navigate.spec.mjs asserts never happens (a same-block step may only
+  // mutate `class` on the <article> cards themselves).
+  const descFocused = opts.descFocused || (() => false)
+  const descExpanded = opts.descExpanded || (() => false)
+  const onDescriptionClick = opts.onDescriptionClick || null
   // activeGroup is a function returning the currently-navigated change group
   // ({ start, end } row indices) for this block, or null. It's a function (not a
   // value) so the pane's .innerHTML binding re-runs when the navigation state it
@@ -1341,13 +1372,45 @@ export default function Block(b, opts = {}) {
         //
         // A <div> root, not the <p> this was: it now contains block-level
         // elements of its own.
+        //
+        // Capped at 2 visual lines (line-clamp-2, so also after wrapping; plus
+        // [&>p]:my-0 while capped, because .markdown-body's own paragraph
+        // margins ride along inside the clamp box and would otherwise make the
+        // "2 lines" a good half line taller than two lines)
+        // unless descExpanded() — a long docblock/AI description used to push
+        // the diff itself off screen. The reviewer opens it from its own
+        // keyboard stop (↑ from the block's first change, then Enter) or by
+        // clicking the strip; the trailing ellipsis plus the "meer…" hint carry
+        // the collapsed state, never colour alone.
         collapsedFn() || !b.description
           ? ''
           : html`<div
-              class="markdown-body border-t border-slate-100 dark:border-zinc-800/60 px-4 py-3 text-sm leading-relaxed text-slate-600 dark:text-zinc-400"
-              data-testid="block-description"
-              .innerHTML="${() => descriptionHtml(b.description)}"
-            ></div>`}
+              class="${() =>
+                'border-t border-slate-100 dark:border-zinc-800/60 px-4 py-3 ' +
+                (onDescriptionClick ? 'cursor-pointer ' : '') +
+                (descFocused() ? 'ring-2 ring-inset ring-indigo-400 dark:ring-indigo-500' : '')}"
+              data-testid="block-description-strip"
+              data-desc-focused="${() => (descFocused() ? 'true' : 'false')}"
+              data-desc-collapsed="${() => (descExpanded() ? 'false' : 'true')}"
+              @click="${() => onDescriptionClick && onDescriptionClick()}"
+            >
+              <div
+                class="${() =>
+                  'markdown-body text-sm leading-relaxed text-slate-600 dark:text-zinc-400 ' +
+                  (descExpanded() ? '' : 'line-clamp-2 [&>p]:my-0')}"
+                data-testid="block-description"
+                .innerHTML="${() => descriptionHtml(b.description)}"
+              ></div>
+              ${() =>
+                blockDescCollapsible(b)
+                  ? html`<div
+                      class="mt-1 text-[11px] font-medium text-indigo-600 dark:text-indigo-400"
+                      data-testid="block-description-toggle"
+                    >
+                      ${() => (descExpanded() ? 'Inklappen' : 'meer… (Enter)')}
+                    </div>`
+                  : ''}
+            </div>`}
       ${() =>
         collapsedFn()
           ? ''
@@ -1829,8 +1892,9 @@ function codeDiff(
 // diffFloorCls gives the code-diff body a VIEWPORT-RELATIVE minimum height
 // (a vh unit, not a fixed px value) — but only once the block is genuinely
 // long enough to plausibly want that much room. A long PHPDoc/AI description
-// above the diff (Block()'s `block-description` strip, no cap of its own —
-// see .claude/docs/diff-card.md) used to squeeze an unrelated diff's own
+// above the diff (Block()'s `block-description` strip — capped at 2 lines
+// unless the reviewer opens it from its own keyboard stop, see
+// .claude/docs/diff-card.md) used to squeeze an unrelated diff's own
 // `flex-1` body down to a sliver, regardless of how much code it actually
 // held; a bare fixed-px floor would fix that but also stretch a genuinely
 // short diff (a one-line getter) into a mostly-empty box. So this floor only

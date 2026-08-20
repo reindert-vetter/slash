@@ -604,12 +604,16 @@ unchanged.
 
 ## A big-enough diff body gets a viewport-relative minimum height
 
-`Block()`'s description strip (`block-description`, above the diff) has no
-height cap of its own — a long PHPDoc/AI-generated docblock used to squeeze
-the diff body's `flex-1` share of the card down to a sliver (a handful of
-visible rows behind a `scrollHint`), even though the diff itself held far more
-code than that. Reported: a 25-row diff rendered ~9 rows tall under a long
-description.
+`Block()`'s description strip (`block-description`, above the diff) is now
+capped at **2 visual lines** (`line-clamp-2`) unless the reviewer opens it from
+its own keyboard stop — see "The block description is an extra ↑ stop above the
+first change" in `.claude/docs/keyboard-navigation.md`. It used to have no
+height cap at all, and a long PHPDoc/AI-generated docblock then squeezed the
+diff body's `flex-1` share of the card down to a sliver (a handful of visible
+rows behind a `scrollHint`), even though the diff itself held far more code than
+that. Reported: a 25-row diff rendered ~9 rows tall under a long description.
+The floor below stays load-bearing regardless — an **expanded** strip can still
+be arbitrarily tall.
 
 **`diffFloorCls(rowCount)`** (`Block.mjs`, one shared helper used by all five
 `data-testid="code-diff"` wrapper `<div>`s — the two single-pane branches, the
