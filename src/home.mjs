@@ -997,6 +997,30 @@ function isModifiedKey(e) {
   return e.metaKey || e.ctrlKey
 }
 
+// isNativeTextEditKey reports whether this keydown is a Cmd/Ctrl-modified key
+// pressed while DOM focus really sits in a text field — i.e. a NATIVE caret /
+// selection / editing command the app must never hijack: Cmd+←/→ (start/end of
+// the line on Mac), Cmd+↑/↓ (start/end of the field), their Shift+ selecting
+// variants, and macOS's emacs-style Ctrl+←/→. Reviewer report: "als ik in een
+// textarea zit, dan kan ik niet cmd + left drukken, dan moet het werken zoals
+// normaal". `onKeydown` returns on it before any other branch, so this is one
+// guard for EVERY text field (comment composer/reply, Claude chat, the search
+// box, the palette query) instead of a per-branch exception — the
+// isEditableFocused() fallback further down already lets an unmodified,
+// unclaimed key flow into the field; only relatedActive()'s and
+// state.searchActive's own arrow branches sat in front of it and swallowed a
+// modified arrow as navigation.
+//
+// `!e.navRemap` is the one exemption: the Cmd+[ / Cmd+] remap at the top of
+// onKeydown recurses with a synthetic event carrying that marker (plus the
+// original metaKey/ctrlKey, which several branches below still read), and that
+// chord must keep driving the nav chain even mid-text — a native Cmd+[/] is
+// history back/forward, never a caret move. See "Cmd+[ / Cmd+]" in
+// .claude/docs/keyboard-navigation.md.
+function isNativeTextEditKey(e) {
+  return isModifiedKey(e) && !e.navRemap && isEditableFocused()
+}
+
 // editableCaretCanMoveLeft reports whether a focused text field's caret sits
 // strictly past the very start (there's a character — or a selection — to its
 // left), meaning a plain/Option ArrowLeft has somewhere to go *within* the
@@ -11571,12 +11595,24 @@ function onKeydown(e) {
       shiftKey: e.shiftKey,
       metaKey: e.metaKey,
       ctrlKey: e.ctrlKey,
+      // Marks this as the remap's own synthetic event, exempting it from the
+      // isNativeTextEditKey() guard right below — without it the recursed
+      // call would be treated as a native in-field Cmd chord and returned,
+      // and Cmd+[ would stop exiting a composer mid-text.
+      navRemap: true,
       target: e.target,
       preventDefault: () => {},
       stopPropagation: () => e.stopPropagation(),
     })
     return
   }
+
+  // A Cmd/Ctrl chord while a text field holds DOM focus is a native caret /
+  // selection / editing command — leave it to the browser, whatever the
+  // review tree binds that key to. Checked here, right after the Cmd+[/]
+  // remap (whose synthetic event is exempt, see navRemap above) and before
+  // every other branch, so no individual branch has to repeat it.
+  if (isNativeTextEditKey(e)) return
 
   // While the image lightbox is open it owns the keyboard completely — →/←
   // walk the other screenshots from the same Markdown body, Escape closes —
@@ -11751,11 +11787,13 @@ function onKeydown(e) {
       // caret has nowhere left to go on that side (empty/at the start resp.
       // at the end, e.g. a freshly opened composer — that keeps its
       // long-standing nav meaning). `isModifiedKey(e)` short-circuits this
-      // exception: it's only ever true here for the Cmd+[/Cmd+] remap above
-      // (a plain ArrowLeft/ArrowRight from the keyboard never carries a
-      // modifier down this path), and Cmd+[/] is no native caret-move
-      // shortcut in a text field, so it must always hit the nav-chain
-      // instead of moving/word-jumping the caret.
+      // exception: it is only ever true here for the Cmd+[/Cmd+] remap above,
+      // since a really-pressed Cmd/Ctrl+arrow in a focused field never gets
+      // this far (isNativeTextEditKey returns it at the top of onKeydown —
+      // before that guard existed, a real Cmd+← DID land here and was
+      // wrongly treated as navigation instead of "caret to start of line").
+      // Cmd+[/] is no native caret-move shortcut in a text field, so it must
+      // always hit the nav chain instead of moving/word-jumping the caret.
       !(e.key === 'ArrowLeft' && editableCaretCanMoveLeft() && !isModifiedKey(e)) &&
       !(e.key === 'ArrowRight' && editableCaretCanMoveRight() && !isModifiedKey(e)) &&
       // ArrowUp/ArrowDown get the exact same treatment on the vertical axis —

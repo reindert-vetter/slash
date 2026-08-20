@@ -234,8 +234,42 @@ caret (`editableCaretCanMoveLeft`/`Right` in `relatedActive()`'s branch) —
 history back/forward, never to caret movement, so there is no existing
 in-field meaning to preserve; `isModifiedKey(e)` (still true on the recursed
 object, since it carries the original `metaKey`/`ctrlKey`) short-circuits that
-one exception, so the chord always drives the nav chain, even mid-text. Test:
-`tests/cmd-bracket-nav.spec.mjs`.
+one exception, so the chord always drives the nav chain, even mid-text. The
+recursed object additionally carries **`navRemap: true`**, which exempts it
+from the in-field Cmd guard described right below — without that marker the
+guard would return on the recursed call and `Cmd+[` would stop exiting a
+composer mid-text. Test: `tests/cmd-bracket-nav.spec.mjs`.
+
+### A Cmd/Ctrl chord inside a text field stays native
+
+Reviewer report: "als ik in een textarea zit, dan kan ik niet cmd + left
+drukken, dan moet het werken zoals normaal". A Cmd/Ctrl-modified key pressed
+while DOM focus really sits in an `INPUT`/`TEXTAREA` is a **native caret /
+selection / editing command** — `Cmd+←`/`→` (start/end of the line on Mac),
+`Cmd+↑`/`↓`, their `Shift+` selecting variants, macOS's emacs-style
+`Ctrl+←`/`→` — and the review tree must never bind over it. `onKeydown`
+(`home.mjs`) therefore returns on `isNativeTextEditKey(e)`
+(`isModifiedKey(e) && !e.navRemap && isEditableFocused()`) **immediately after
+the `Cmd+[`/`Cmd+]` remap block and before every other branch**, so no
+individual branch has to repeat the check.
+
+**Why one early guard and not a per-branch exception:** the
+`isEditableFocused()` fallback further down already lets any unclaimed key flow
+into the field; only two branches sit in front of it and could swallow a
+modified arrow as navigation — `relatedActive()`'s arrow branch (which
+short-circuited its own `editableCaretCanMoveLeft`/`Right` caret exception on
+`isModifiedKey(e)`, a condition written for the `Cmd+[`/`]` remap but which a
+genuinely pressed `Cmd+←` also satisfied, so it exited the composer instead of
+moving the caret) and `state.searchActive`'s unconditional `ArrowLeft`
+(`exitSearch()`). The guard fixes both, plus the palette query input, in one
+place. `relatedActive()`'s `!isModifiedKey(e)` is deliberately left as-is: with
+this guard in front, the remap really is the only modified arrow that can still
+reach it.
+
+**Deliberately Cmd/Ctrl only, not a Shift-only chord.** `Shift+←`/`→` already
+behaves natively via the caret exceptions, and `Shift+↑` on a textarea's first
+visual line keeps its existing range-selection meaning (see "Shift+↑/↓
+ranges"). Test: `tests/text-field-modifier-keys.spec.mjs`.
 
 ### Focus highlight per stop
 
