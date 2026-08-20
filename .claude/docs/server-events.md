@@ -159,6 +159,21 @@ nothing told the tab that was already open.
   It feeds the todo row at the bottom of the index and the per-block "ongepusht"
   marking at once. See `.claude/docs/pending-push.md`.
 
+### PR metadata (`prmeta.changed`)
+
+- **Server** (`eventbus.go`'s `publishPRMetaChanged`, called from
+  `workflows.go`'s `generateSinceReviewSummary`): after that Activity re-derived
+  the "Sinds jouw laatste review" block — a fresh facts+summary pair, or a clear
+  that had something to clear. PR-wide, no `key`, no payload.
+- **Client** (`src/home.mjs`): `onEvent('prmeta.changed', …)` calls
+  `fetchPRMetaOnce()`, one refetch of `GET /api/pr`.
+- **Why it exists:** `pollPRMeta` stops as soon as the review/checks stage
+  landed, while the block's Haiku explanation arrives seconds later — and the
+  refresh itself is triggered per page load by `refreshSinceReview` (see
+  "Stages 3+4 also re-run on demand" in `.claude/docs/workflows-trackers.md`),
+  i.e. well after that poll gave up. Ordinary "refetch me" contract, so a
+  dropped frame costs one stale column until the next reload.
+
 ### new commits in the tree (`blocks.changed`) — the one event that does NOT refetch
 
 - **Server** (`eventbus.go`'s `publishBlocksChanged`, called from

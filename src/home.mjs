@@ -3984,6 +3984,26 @@ async function loadRelations() {
 const PR_META_POLL_MS = 1500
 const PR_META_MAX_POLLS = 20
 
+// refreshSinceReview asks this PR's pr_status tracker to re-derive "what
+// changed since MY last review" (the sky block under "Doel", sinceReviewBlock).
+// Its two stages only ever ran once, when the tracker was first started, while
+// the tracker itself is reused for the PR's whole lifetime — so without this
+// the block stayed empty/stale even though the PR overview's own "nieuw sinds
+// jouw review" line (computed live) already said there was something new. A
+// Signal is a sanctioned UI write path (start/signal only, see
+// .claude/rules/workflows-write-boundary.md); the backend skips the LLM call
+// when the facts are unchanged, so one signal per page load is cheap.
+// Fire-and-forget: the result arrives via pollPRMeta or 'prmeta.changed'.
+function refreshSinceReview(runId) {
+  fetch('/api/workflows/' + encodeURIComponent(runId) + '/signals/state', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refreshSince: true }),
+  }).catch(() => {
+    /* offline — the block just keeps whatever the read-model already had */
+  })
+}
+
 // loadPRMeta ensures the per-PR pr_status tracker is running (its start fetches
 // the PR's title/summary/statuses into the prmeta read-model, in 3 stages) and
 // starts polling that read-model into state.prMeta so the PR-info column reveals
@@ -4004,6 +4024,7 @@ function loadPRMeta() {
       if (body && body.runId) {
         state.prStatusRunId = body.runId
         startPRStatusHeartbeat()
+        refreshSinceReview(body.runId)
       }
     })
     .catch(() => {
@@ -4042,25 +4063,30 @@ function startPRStatusHeartbeat() {
   document.addEventListener('visibilitychange', sendPRStatusHeartbeat)
 }
 
+// fetchPRMetaOnce reads the prmeta read-model once into state.prMeta and
+// returns whether the review/checks stage has landed. Shared by pollPRMeta's
+// progressive load and the 'prmeta.changed' event handler below (which needs
+// exactly one refetch, not a new poll loop). Read-only; a failure leaves the
+// last-known data in place.
+async function fetchPRMetaOnce() {
+  const res = await fetch(`/api/pr?pr=${state.pr}${repoQuery}`)
+  if (!res.ok) return false
+  const meta = await res.json()
+  if (!meta || !meta.ok) return false
+  state.prMeta = meta
+  state.title = meta.title || ''
+  if (state.title) {
+    document.title = `${state.title} · PR Review Tree`
+  }
+  state.prUrl = meta.url || ''
+  const m = state.title.match(/\b([A-Z][A-Z0-9]+-\d+)\b/)
+  state.jiraKey = m ? m[1] : ''
+  return meta.reviewDecision !== '' || (Array.isArray(meta.reviewers) && meta.reviewers.length > 0) || meta.checksTotal > 0
+}
+
 async function pollPRMeta(count) {
   try {
-    const res = await fetch(`/api/pr?pr=${state.pr}${repoQuery}`)
-    if (res.ok) {
-      const meta = await res.json()
-      if (meta && meta.ok) {
-        state.prMeta = meta
-        state.title = meta.title || ''
-        if (state.title) {
-          document.title = `${state.title} · PR Review Tree`
-        }
-        state.prUrl = meta.url || ''
-        const m = state.title.match(/\b([A-Z][A-Z0-9]+-\d+)\b/)
-        state.jiraKey = m ? m[1] : ''
-        const statusesIn =
-          meta.reviewDecision !== '' || (Array.isArray(meta.reviewers) && meta.reviewers.length > 0) || meta.checksTotal > 0
-        if (statusesIn) return
-      }
-    }
+    if (await fetchPRMetaOnce()) return
   } catch (_) {
     /* transient — keep polling until PR_META_MAX_POLLS */
   }
@@ -14236,6 +14262,15 @@ onEvent('testcovers.changed', () => loadTestCovers())
 // bottom of the index and the per-block "ongepusht" marking both read that one
 // read model, so one refetch covers both.
 onEvent('pendingpush.changed', () => loadPendingPush())
+// The pr_status tracker re-derived the PR-info column's data (typically the
+// "Sinds jouw laatste review" block, whose Haiku explanation lands seconds
+// after pollPRMeta already stopped) — one refetch, per the event-bus contract
+// that an event is never the truth. See .claude/docs/server-events.md.
+onEvent('prmeta.changed', () => {
+  fetchPRMetaOnce().catch(() => {
+    /* transient — the next event or a reload picks it up */
+  })
+})
 // New commits were ingested while this tab was open (a colleague pushed, or a
 // chat edit landed). loadBlocks() runs exactly once, at page load, so without
 // this the tree silently stays a version behind — the PR 13255 symptom, where

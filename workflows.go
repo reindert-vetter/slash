@@ -403,15 +403,24 @@ type PRStatusInput struct {
 
 // PRStateSignal drives the pr_status tracker via SignalPRState. It carries
 // either an observed PR lifecycle state ("merged"/"closed", State != "") from
-// the comment/inbox pollers, or an ingest-refresh request (State == "" &&
+// the comment/inbox pollers, an ingest-refresh request (State == "" &&
 // HeadSHA != "") from pollIngestRefresh, when it observes a head SHA newer
-// than what was last ingested. Both ride the same signal name because a
-// workflow can only WaitSignal on one name at a time (mirrors
-// ReactionSignal.Action / ApprovalSignal.Viewed).
+// than what was last ingested, or a "re-derive what changed since my own last
+// review" request (RefreshSince) from the review tree at page load. All ride
+// the same signal name because a workflow can only WaitSignal on one name at a
+// time (mirrors ReactionSignal.Action / ApprovalSignal.Viewed).
 type PRStateSignal struct {
 	State   string `json:"state,omitempty"`
 	BaseSHA string `json:"baseSHA,omitempty"` // ingest-refresh: newly observed base SHA
 	HeadSHA string `json:"headSHA,omitempty"` // ingest-refresh: newly observed head SHA
+	// RefreshSince re-runs stages 3+4 (fetchPRStatuses +
+	// generateSinceReviewSummary). Those two only ever ran ONCE, at Execution
+	// start, while the tracker is reused for the PR's whole lifetime — so the
+	// review tree's "Sinds jouw laatste review" block was a snapshot of
+	// whenever the tracker happened to start and stayed empty/stale forever
+	// after, even though the PR overview's own "nieuw sinds jouw review" line
+	// (computed live per poll, inbox.go) already said there was something new.
+	RefreshSince bool `json:"refreshSince,omitempty"`
 }
 
 // PRInboxInput starts the pr_inbox Workflow Execution for a repo.
@@ -1947,6 +1956,9 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			if err := m.prmeta.SaveSinceReview(ctx, arg.Repo, arg.PR, "", ""); err != nil {
 				return nil, fmt.Errorf("clear since review: %w", err)
 			}
+			if meta.SinceFacts != "" || meta.SinceSummary != "" {
+				publishPRMetaChanged(arg.Repo, arg.PR)
+			}
 			return nil, nil
 		}
 		changes, err := m.ghFor(arg.Repo).ChangesSince(ctx, arg.PR, meta.NewSinceAt)
@@ -1958,6 +1970,9 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			if err := m.prmeta.SaveSinceReview(ctx, arg.Repo, arg.PR, "", ""); err != nil {
 				return nil, fmt.Errorf("clear since review: %w", err)
 			}
+			if meta.SinceFacts != "" || meta.SinceSummary != "" {
+				publishPRMetaChanged(arg.Repo, arg.PR)
+			}
 			return nil, nil
 		}
 		// The moment predates every commit of this PR: the "files touched
@@ -1968,6 +1983,15 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			files, _ = changedFilesFor(m.db, arg.PR)
 		}
 		facts := sinceReviewFacts(changes.Commits, files)
+		// Nothing moved since the last generation. sinceReviewFacts is a pure
+		// function of the commits + files, so an identical rendering means an
+		// identical answer — skip the Haiku call and the write entirely. This
+		// is what makes the RefreshSince signal (sent on every review-tree page
+		// load) cheap: one gh query, no LLM, unless there is genuinely
+		// something new to explain.
+		if facts == meta.SinceFacts && meta.SinceSummary != "" {
+			return nil, nil
+		}
 		summary := ""
 		if m.claude != nil {
 			out, err := m.claude.Run(ctx, claude.RunRequest{
@@ -1984,6 +2008,11 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if err := m.prmeta.SaveSinceReview(ctx, arg.Repo, arg.PR, facts, summary); err != nil {
 			return nil, fmt.Errorf("save since review: %w", err)
 		}
+		// Nudge every open tab on this PR to refetch GET /api/pr: pollPRMeta
+		// stops as soon as the statuses stage landed, so a block generated a
+		// few seconds later (the Haiku call) would otherwise only appear after
+		// a manual reload.
+		publishPRMetaChanged(arg.Repo, arg.PR)
 		return nil, nil
 	})
 
@@ -3909,6 +3938,23 @@ func prStatusWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		w.WaitSignal(SignalPRState, &s)
 		if s.State == "merged" || s.State == "closed" {
 			return json.Marshal(map[string]any{"pr": in.PR, "state": s.State})
+		}
+		// Re-derive "what changed since MY last review" (the review tree's sky
+		// block). Its own branch, deliberately not folded into the HeadSHA
+		// branch below: tembed matches an activity against history purely by
+		// POSITION (nthOf(actIdx), no name check), so adding activities to a
+		// branch an existing Execution already took would silently misalign
+		// every later step of that history. A branch no past signal could take
+		// (refreshSince was absent, so false) replays as the empty branch it
+		// always was. Stage 3 first — stage 4 reads the "since" moment it
+		// stores, exactly as at Execution start.
+		if s.RefreshSince {
+			if err := w.ExecuteActivity("fetchPRStatuses", in, nil); err != nil {
+				return nil, fmt.Errorf("refresh pr statuses: %w", err)
+			}
+			if err := w.ExecuteActivity("generateSinceReviewSummary", in, nil); err != nil {
+				return nil, fmt.Errorf("refresh since review summary: %w", err)
+			}
 		}
 		// An ingest-refresh request (pollIngestRefresh observed a newer head
 		// SHA than what was last ingested): refresh the delta, then re-derive

@@ -1049,6 +1049,27 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]string{"status": "rebuilding"})
 			return
 		}
+		// The pr_status "state" signal, restricted to its RefreshSince half:
+		// the review tree asks its own tracker to re-derive "what changed since
+		// my last review" on page load. A lifecycle state ("merged"/"closed")
+		// and an ingest-refresh SHA pair are the server pollers' own business,
+		// so they are deliberately NOT accepted from the outside — whatever the
+		// body says, only refreshSince is forwarded.
+		if parts[2] == SignalPRState {
+			var body struct {
+				RefreshSince bool `json:"refreshSince"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || !body.RefreshSince {
+				http.Error(w, "invalid state signal", http.StatusBadRequest)
+				return
+			}
+			if err := s.tasks.engine.SignalWorkflow(runID, SignalPRState, PRStateSignal{RefreshSince: true}); err != nil {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"status": "refreshing"})
+			return
+		}
 		// The "set" signal carries a block's full approved state (rows + call
 		// segments) to the per-PR approve tracker — the UI write path for approval.
 		if parts[2] == SignalSet {

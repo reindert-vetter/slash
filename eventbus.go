@@ -76,6 +76,15 @@ const (
 	// a notice the reviewer clicks, because reloading the tree mid-review would
 	// swap blocks out from under an active cursor. See .claude/docs/server-events.md.
 	eventBlocksChanged = "blocks.changed"
+	// eventPRMetaChanged says a PR's prmeta read-model changed (no Key —
+	// PR-wide, no payload): the pr_status tracker re-derived what changed since
+	// the reviewer's OWN last review (stages 3+4, re-run on a RefreshSince
+	// signal). Needed because pollPRMeta (src/home.mjs) stops polling as soon
+	// as the statuses stage landed, while that block's Haiku explanation
+	// arrives seconds later. Same rule as every "…changed" event: the client
+	// refetches GET /api/pr, so a dropped frame costs a refetch, never
+	// correctness.
+	eventPRMetaChanged = "prmeta.changed"
 	// eventCommentBatchProgress carries a volatile commentBatchProgress snapshot
 	// of a running comment_batch run (no Key — the payload is PR-wide and carries
 	// its own per-comment items). Unlike every "…changed" event above there is no
@@ -110,6 +119,11 @@ func publishPendingPushChanged(repo string, pr int) {
 // Same rule as every other event: it carries nothing and is never the truth —
 // GET /api/blocks stays the read, so a dropped frame costs at most one notice.
 func publishBlocksChanged(repo string, pr int) { events.publish(eventBlocksChanged, repo, pr, "", nil) }
+
+// publishPRMetaChanged nudges every tab watching this PR to refetch
+// GET /api/pr (the PR-info column, incl. the "Sinds jouw laatste review"
+// block). Carries nothing — the read model stays the only truth.
+func publishPRMetaChanged(repo string, pr int) { events.publish(eventPRMetaChanged, repo, pr, "", nil) }
 
 // busEvent is one multiplexed message. Data is pre-marshalled at publish time
 // so the hub never holds a live pointer into a caller's struct (which the

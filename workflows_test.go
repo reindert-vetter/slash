@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1476,4 +1478,65 @@ func TestSinceReviewFacts(t *testing.T) {
 	if one := sinceReviewFacts(commits[:1], nil); !strings.Contains(one, "**1 nieuwe commit** sinds") {
 		t.Errorf("singular heading wrong: %s", one)
 	}
+}
+
+// The review tree's "Sinds jouw laatste review" block is fed by pr_status
+// stages 3+4, which used to run ONLY at Execution start while the tracker is
+// reused for the PR's whole lifetime — so the block stayed empty/stale forever
+// after, even though the PR overview's own live "nieuw sinds jouw review" line
+// already said there was something new. This pins the refresh path end to end:
+// the "state" signal reaches handleWorkflows' dispatcher (a missing case there
+// is exactly how TestHandleWorkflowsPushSignal's bug went unnoticed), only its
+// refreshSince half is accepted from the outside, and the branch really re-runs
+// both stages.
+func TestRefreshSinceSignalRerunsStagesThreeAndFour(t *testing.T) {
+	m, _, _ := newTestManager(t)
+	s := &server{tasks: &tasks{manager: m, engine: m.engine}}
+
+	prRunID, err := m.ensurePRStatus("", 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		st, _ := m.engine.Status(prRunID)
+		return st == tembed.StatusWaiting
+	})
+	before := activityCount(t, m, prRunID, "fetchPRStatuses")
+
+	// A lifecycle state / ingest-refresh SHA is the server pollers' own
+	// business and must not be accepted from the outside.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/workflows/"+prRunID+"/signals/state", strings.NewReader(`{"state":"merged"}`))
+	s.handleWorkflows(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("lifecycle state from the UI: status = %d, want %d (%s)", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/workflows/"+prRunID+"/signals/state", strings.NewReader(`{"refreshSince":true}`))
+	s.handleWorkflows(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("refreshSince: status = %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	waitFor(t, func() bool {
+		return activityCount(t, m, prRunID, "fetchPRStatuses") > before &&
+			activityCount(t, m, prRunID, "generateSinceReviewSummary") > 1
+	})
+	if st, _ := m.engine.Status(prRunID); st != tembed.StatusWaiting && st != tembed.StatusRunning {
+		t.Fatalf("tracker = %q, want it still parked on its signal loop", st)
+	}
+}
+
+// activityCount counts completed runs of one activity in a run's history.
+func activityCount(t *testing.T, m *TaskManager, runID, name string) int {
+	t.Helper()
+	hist, _ := m.engine.History(runID)
+	n := 0
+	for _, ev := range hist {
+		if ev.Type == tembed.EventActivityCompleted && ev.Name == name {
+			n++
+		}
+	}
+	return n
 }

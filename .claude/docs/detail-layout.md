@@ -397,6 +397,13 @@ each load-bearing:
 - **Absent entirely** when `newSinceKind`/`sinceFacts` are empty — nothing new,
   or a PR this reviewer never reviewed. Explicit answer: no "je bent bij"
   placeholder, the same silence the overview keeps.
+- **Its data is refreshed on every page load**, not once per tracker: the two
+  Activities behind it only ran at the `pr_status` Execution's start, so the
+  block used to sit empty for exactly the reviewer who came back to a PR that
+  moved on (reported: the overview row said "nieuw sinds jouw review", this
+  block showed nothing). `refreshSinceReview` (`home.mjs`) signals the tracker
+  once per load and `prmeta.changed` pushes the result in — see "Stages 3+4 also
+  re-run on demand" in `.claude/docs/workflows-trackers.md`.
 
 Colourblind rule: the sky tint is decoration, the heading word plus the facts
 carry the meaning. `relativeTime` moved out of `overview.mjs` into the shared

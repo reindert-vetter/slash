@@ -88,6 +88,37 @@ everything (see "Progressive loading" in `.claude/docs/detail-layout.md`):
    stored as an empty pair, which is what makes a stale block disappear rather
    than linger.
 
+**Stages 3+4 also re-run on demand** — they have to, because "on start" means
+once ever: one tracker serves a PR for its whole lifetime (reused across
+restarts, see `ensurePRStatus`), so the since-review block used to freeze on
+whatever was true when the tracker happened to start, and typically stayed empty
+while `/pr-overview` — which recomputes the same signal LIVE on every poll
+(`myLastActivity`, `inbox.go`) — did show "nieuw sinds jouw review" on the same
+row. `PRStateSignal.RefreshSince` re-runs both stages, in that order; the review
+tree sends it once per page load (`refreshSinceReview`, `src/home.mjs`, via the
+generic `.../signals/state` route, which accepts **only** that half of the
+signal — a lifecycle `State` or an ingest-refresh SHA pair from the outside is a
+400, those belong to the server's own pollers).
+
+Two details keep that cheap and safe:
+
+- **It is its own branch in the loop, deliberately not folded into the
+  `HeadSHA` branch.** tembed matches an activity against the history purely by
+  POSITION (`nthOf(actIdx)`, no name check), so adding activities to a branch an
+  existing Execution already took would silently misalign every later step of
+  that history. A branch no past signal could take (`refreshSince` absent →
+  `false`) replays as the empty branch it always was.
+- **`generateSinceReviewSummary` skips the LLM when nothing moved.**
+  `sinceReviewFacts` is a pure function of the commits + files, so an identical
+  rendering means an identical answer: the Activity returns before the Haiku
+  call and writes nothing. One `gh` query per page load, an LLM call only when
+  there is genuinely something new. When it does write, it publishes
+  `prmeta.changed` (`.claude/docs/server-events.md`) — `pollPRMeta` stops as
+  soon as the statuses stage lands, so a block finished seconds later would
+  otherwise wait for a manual reload.
+
+Test: `TestRefreshSinceSignalRerunsStagesThreeAndFour` (`workflows_test.go`).
+
 ### Ingest refresh (pulling in new commits automatically)
 
 The same `state`-Signal loop also processes **new commits**, so a reviewer
