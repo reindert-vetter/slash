@@ -1700,6 +1700,28 @@ seeds a second comment thread on the exact same file+label before entering the
 chat, and asserts the first turn's intercepted `context` contains both
 bodies, in creation order, with the later one tagged `meest recent`.
 
+### Emitting a fence at all is a PROMPT rule, not a rendering one
+
+Reported symptom: "hoe ziet ActivityConverted eruit?" came back as one long
+paragraph of prose with dozens of inline-code pills (field names, paths) and
+not a single fenced block, even though the answer literally is a piece of
+code. Nothing was wrong with the rendering — the chat bubble has rendered
+fences as code cards all along (see the numbering section below and the
+code-preview column further down). The three chat system prompts
+(`modules/claude/prompts/chat.md`, `chat_readonly.md`, `chat_shell.md`) only
+said that a code example does not count toward the ~700-character cap, never
+that one is expected, so "kort en to the point" won and the code got
+flattened into prose.
+
+They now carry one shared paragraph requiring a ` ``` ` block whenever the
+answer shows what a piece of code looks like (class, DTO, signature, payload,
+config, example usage), stated broadly on purpose: as soon as more than a few
+fields or lines are enumerated, they belong in a fence rather than in a row of
+backticked names. Deliberately only those three files — the other prompts
+(`chat_conflict.md`, `comment_batch.md`, `explain_code.md`, …) are not
+conversational answers. If a future session wants fewer/more code blocks in
+chat answers, this paragraph is the knob; no frontend change is involved.
+
 ### Codeblok numbering must match what Claude sees — the ONLY mechanism for acting on a fenced code block/suggestion
 
 A fenced code block (` ``` `) or a GitHub `` ```suggestion `` block in a

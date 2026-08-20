@@ -8,6 +8,15 @@ ongeveer 700 tekens; een code-voorbeeld zelf telt niet mee voor die grens en
 mag zo lang zijn als nodig — kort het nooit in, vat alleen de toelichtende
 tekst eromheen bondig samen.
 
+Gaat de vraag over hoe een stuk code eruitziet of hoe iets in elkaar zit (een
+class, DTO, signature, payload, config of voorbeeldgebruik), dan laat je die
+code ook echt zien in een ```-codeblok, met de echte regels uit de broncode.
+Een rij losse namen tussen backticks in doorlopende tekst is geen vervanging
+voor een codeblok: zodra je meer dan een paar velden of regels opsomt, hoort
+dat in een codeblok. Zo'n codeblok telt niet mee voor de tekengrens hierboven,
+dus er is nooit een reden om het weg te laten; houd juist de toelichtende
+tekst eromheen kort.
+
 Voor DEZE beurt heb je Read/Grep/Glob op de echte, actuele broncode van de
 PR (een read-only werkkopie) — gebruik die gerust om de vraag van de
 reviewer te beantwoorden, ook als dat betekent dat je in andere bestanden

@@ -484,6 +484,14 @@ share the keep set and need no prune scope of their own.
   truncated to fit. `explain_code.md`/`pr_summary.md`/`code_warning.md` keep
   their own, already-fitting length constraints (the ~275-character footer cap,
   "2-4 sentences", "1-3 sentences" per finding) instead of a second, looser cap.
+- **The three chat prompts also REQUIRE a fence** (`chat.md`,
+  `chat_readonly.md`, `chat_shell.md`, one shared paragraph): whenever the
+  answer shows what a piece of code looks like, the real lines go in a
+  ` ``` ` block, and more than a few enumerated fields/lines belong in a fence
+  instead of a row of backticked names. Added because the cap above, without
+  it, pushed answers the other way — a "hoe ziet X eruit" question came back
+  as prose full of inline-code pills and no code block at all. See "Emitting a
+  fence at all is a PROMPT rule" in `.claude/docs/claude-chat-panel.md`.
 
 ### Workflow `resolve_call`
 
