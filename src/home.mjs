@@ -2747,6 +2747,38 @@ watch(
   },
 )
 
+// Scroll the comment/composer/Claude-chat/Onderliggende-code column fully
+// into view when the reviewer steps the keyboard/mouse into it, and restore
+// the diff to its own flush-left rest position on the way back out — one
+// watch on the transition covers every entry point (keyboard `→`, clicking
+// a comment icon, "Nieuwe comment", a comment-index row's auto-drill, ...)
+// instead of patching each call site individually. `scrollFocusIntoView()` on
+// the false-transition duplicates the existing manual call in onKeydown's own
+// ArrowLeft/Escape branch (harmless: same rAF-scheduled scroll to the same
+// place). Deps enumerated inline per the watch rule in
+// .claude/rules/arrowjs-pitfalls.md; relatedActive() is a single
+// unconditional read of RelatedPanel's own cs.focus, same pattern the
+// indexHandedOff watch above already relies on.
+//
+// `state.codeVersion` is ALSO listed as a dep: a fresh page load restoring
+// ?rel.foc=... from the URL can own the keyboard before the selected block's
+// own (lazily-loaded) diff has finished rendering, so <main> may not overflow
+// yet — or may only reach its FINAL width over several code-load steps — at
+// the moment relatedActive() itself first becomes true. codeVersion bumps
+// every time any block's code arrives (see the codeVersion doc comment on
+// `state` above), so re-running scrollRelatedIntoView() on every bump while
+// still active keeps re-measuring against <main>'s real, settling width
+// instead of only getting one shot at a possibly-too-early layout. Harmless
+// while inactive: the false-branch just re-calls scrollFocusIntoView(), the
+// same idempotent rest-position scroll.
+watch(
+  () => [relatedActive(), state.codeVersion],
+  ([active]) => {
+    if (active) scrollRelatedIntoView()
+    else scrollFocusIntoView()
+  },
+)
+
 // commentBlockItem now takes a GROUP of one or more comments that all sit on
 // the exact same source line (see commentGroupKeyOf/recomputeLeftList —
 // reviewer request: "comments in de blokken index moeten gegroepeerd worden
@@ -8304,6 +8336,57 @@ function scrollFocusIntoView(level = state.focusLevel) {
   })
 }
 
+// scrollRelatedIntoView is scrollFocusIntoView's mirror for the comment/
+// composer/Claude-chat/Onderliggende-code column to the RIGHT of the diff
+// (comment-claude-row + related-code, see .claude/docs/detail-layout.md's
+// "The embedded Claude chat column"): reviewer request — a wide split-diff
+// block leaves the composer's send button and/or the whole Claude column
+// clipped off the right edge of the viewport once the reviewer steps the
+// keyboard/mouse into that panel (relatedActive() true). Deferred a frame
+// like every other scroll helper here, so a freshly mounted target (e.g. the
+// composer opening for the first time) exists in the DOM first. Also called
+// from setupMainOverflowObserver below whenever <main>'s real content width
+// changes while the panel is already active — a fresh page load restoring
+// ?rel.foc=… from the URL can own the keyboard before the diff/code it sits
+// next to has actually finished rendering, so the overflow this scroll reacts
+// to only appears once that later render lands, after the one-time
+// relatedActive() transition already fired.
+function scrollRelatedIntoView(tries = 10) {
+  requestAnimationFrame(() => {
+    // The transition into relatedActive() can fire before the panel's own
+    // content has actually mounted (e.g. a fresh page load restoring
+    // ?rel.foc=new/comment/thread/claude/code from the URL, still awaiting
+    // the block's code/comments to load) — retry a few frames, the same
+    // pattern scrollChangeIntoView above uses for its own lazily-rendered
+    // anchor. Bail if the reviewer has already left the panel again by the
+    // time a retry runs.
+    if (!relatedActive()) return
+    // Onderliggende code ('code') is its own row below comment-claude-row —
+    // target it directly. Every other focus ('new'/'comment'/'thread'/
+    // 'claude') targets the WHOLE merged comment+Claude card
+    // (comment-claude-row), not just the comment or Claude half on its own:
+    // the two columns sit side by side in one card (see "One merged card, not
+    // two" in .claude/docs/detail-layout.md), and while composing a brand-new
+    // comment (cs.focus === 'new') the Claude column already shows
+    // optimistically right next to the composer — exactly the reported case
+    // (screenshot: the composer's own send button fit, but the Claude column
+    // beside it stayed clipped off the right edge).
+    const el = isCodeFocused()
+      ? document.querySelector('[data-testid="related-code"]')
+      : document.querySelector('[data-testid="comment-claude-row"]')
+    if (!el) {
+      if (tries > 0) scrollRelatedIntoView(tries - 1)
+      return
+    }
+    // 'nearest', not 'start'/'end': scroll only the minimum needed to make the
+    // whole target visible (none at all if it already fits on a wide
+    // monitor) — see the scrollIntoView-axis rule in
+    // .claude/rules/arrowjs-pitfalls.md for why `block: 'nearest'` is
+    // required here too, so this never fights <main>'s own vertical scroll.
+    el.scrollIntoView({ inline: 'nearest', block: 'nearest' })
+  })
+}
+
 // resetMainScroll snaps <main>'s horizontal scroll hard back to 0. Called only
 // at the "rest position" transitions — entering list-mode, or popping all the
 // way back out of every drilled column (focusLevel===0 && drill.length===0) —
@@ -8464,6 +8547,16 @@ function setupMainOverflowObserver() {
       // it never creates more.
       if (!entry.isIntersecting && (state.keepIndexInDiff || state.descriptionPinned)) {
         applyDiffColumnFit()
+      }
+      // Same reasoning for scrollRelatedIntoView (see its own doc comment):
+      // the related panel can already own the keyboard (e.g. a fresh page
+      // load restoring ?rel.foc=…) before the diff/code it sits next to has
+      // actually finished rendering, so the overflow this scroll reacts to
+      // only appears LATER — after the one-time relatedActive() transition
+      // already fired. This observer already re-fires on that exact content-
+      // width change, so it doubles as the retry trigger too.
+      if (!entry.isIntersecting && relatedActive()) {
+        scrollRelatedIntoView()
       }
     },
     { root: main, threshold: 0 },

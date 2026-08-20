@@ -601,6 +601,85 @@ narrow enough, and close enough, to share a row instead of each claiming a full
   test: `tests/inline-comments.spec.mjs` ("a fresh composer with no earlier
   comments/Claude chat still gets a visible, non-zero-height row").
 
+### Entering the comment/Claude/Onderliggende-code panel scrolls it fully into view
+
+Reviewer request ("als ik in comment/chat blok zit, dan wil ik dat volledig
+zien, schuif linkerkant dan naar links op, als ik naar links ga, moet het weer
+hersteld worden") — reported with a screenshot of a wide split-diff block
+leaving the composer's send button, and the whole Claude-chat column beside
+it, clipped off the right edge of the viewport: `relatedActive()` owning the
+keyboard used to change nothing about `<main>`'s own `scrollLeft`, so a diff
+wide enough to already fill the viewport left the panel to its right
+partially or fully off-screen.
+
+- **`scrollRelatedIntoView()`** (`home.mjs`, next to `scrollFocusIntoView`)
+  targets `[data-testid="related-code"]` while `isCodeFocused()` (Onderliggende
+  code, its own row below), otherwise `[data-testid="comment-claude-row"]` —
+  the WHOLE merged card, not just the comment or Claude half on its own: the
+  two columns sit side by side in one card (see "One merged card, not two"
+  above), and while composing a brand-new comment (`cs.focus === 'new'`) the
+  Claude column already shows optimistically right next to the composer —
+  exactly the reported case. It scrolls with
+  `{ inline: 'nearest', block: 'nearest' }` — `'nearest'`, not `'start'`/`'end'`,
+  so it moves `<main>` only the minimum needed to make the whole target
+  visible (nothing at all if it already fits on a wide monitor); `block:
+  'nearest'` per the `scrollIntoView`-axis rule in
+  `.claude/rules/arrowjs-pitfalls.md`, so it never also fights `<main>`'s own
+  vertical scroll.
+- **One watch covers every entry point.** `watch(() => relatedActive(), (active)
+  => active ? scrollRelatedIntoView() : scrollFocusIntoView())` fires on the
+  transition itself — keyboard `→` into the panel, clicking a comment icon,
+  "Nieuwe comment" from the palette, a comment-index row's auto-drill, … — so
+  no individual call site needed patching. The `false`-transition reuses the
+  existing `scrollFocusIntoView()` (already called manually on the keyboard
+  exit path in `onKeydown`'s `relatedActive()` branch — that manual call stays,
+  now a harmless duplicate of the same rAF-scheduled scroll) to restore
+  `<main>` to the focused diff column's own flush-left rest position — the
+  "hersteld" half of the request.
+- Reads `relatedActive()` — a single, unconditional read of RelatedPanel's own
+  `cs.focus` — inside the watch getter, the same established pattern the
+  `state.indexHandedOff` watch above already relies on (deps enumerated
+  inline per the watch rule in `.claude/rules/arrowjs-pitfalls.md`).
+- **Walking deeper inside an already-open panel does not re-scroll.** The
+  watch only fires on the true/false transition of `relatedActive()` itself,
+  not on every keystroke inside it — stepping through Onderliggende-code's own
+  chip tree (`cs.focus` staying `'code'` throughout) keeps using
+  `scrollIntoViewVertical`/`scrollChipIntoView`'s existing vertical-only
+  scroll, unaffected. Test: `tests/scroll-focus-vertical-only.spec.mjs`'s own
+  baseline is captured right after entering the panel for exactly this
+  reason — that single entry scroll is expected, only a *further* scroll
+  while descending chips would be a regression.
+- **A late-arriving overflow gets re-measured via `state.codeVersion`.** The
+  `relatedActive()` transition can fire before the selected block's own
+  (lazily-loaded) diff has actually finished rendering — concretely, a fresh
+  page load restoring `?rel.foc=new/comment/thread/claude/code` from the URL
+  owns the keyboard before the block's code has loaded, so `<main>` may not
+  overflow yet — or may only reach its FINAL width over several code-load
+  steps — at the moment the watch first fires, and (being a one-time
+  transition) never gets a second look on its own. The watch above therefore
+  also lists `state.codeVersion` as a dependency (it bumps on every code
+  load, see the doc comment on `state.codeVersion` itself) and re-runs
+  `scrollRelatedIntoView()` on every bump while still active, so it keeps
+  re-measuring against `<main>`'s real, settling width instead of trusting a
+  possibly-too-early layout — the exact scenario the reported screenshot's
+  URL (`?rel.foc=new` on first load) reproduces.
+  `scrollRelatedIntoView` itself also retries a few frames if its target isn't
+  mounted in the DOM at all yet (same pattern as `scrollChangeIntoView`'s own
+  retry), and bails early if the reviewer already left the panel again before
+  a retry/re-run happens.
+- **`setupMainOverflowObserver`'s own `IntersectionObserver` (see "A mouse way
+  to reach content overflowing to the right" above) also calls
+  `scrollRelatedIntoView()`** whenever it re-fires with `relatedActive()`
+  still true — a belt-and-braces second trigger for a content-width change
+  NOT caused by a code load (a resize, a drilled column opening/closing, a
+  manual column-width resize), which `codeVersion` alone wouldn't catch. Note
+  its crossing-only semantics (it only fires when `<main>` crosses the
+  fits/overflows threshold, not on every further width change while already
+  overflowing) — `codeVersion` is the mechanism actually relied on for the
+  "diff keeps growing after the panel is already focused" case above.
+
+Test: `tests/related-scroll-into-view.spec.mjs`.
+
 ## `<main>`'s own offsets
 
 `<main>` itself carries no positional classes at all any more (see "Columns

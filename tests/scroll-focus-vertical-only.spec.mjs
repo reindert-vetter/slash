@@ -18,6 +18,16 @@ import { test, expect } from './_fixtures.mjs'
 // relations execute → findOrCreateCustomer → handle → billingAddress) purely
 // for its two-level-deep chip tree — this test only cares about scroll
 // geometry, not chip content.
+//
+// Since scrollRelatedIntoView (home.mjs, see .claude/docs/detail-layout.md)
+// was added, the SECOND → below (entering Onderliggende code, cs.focus ===
+// 'code') deliberately DOES scroll <main> once, right then — reviewer
+// request: the Onderliggende-code card must be fully visible the moment the
+// keyboard steps into it, same as the comment/Claude card. That single,
+// intentional scroll is captured as the new baseline right after entering;
+// this test's own guarantee — walking DEEPER into the chip tree afterwards
+// must never add any FURTHER horizontal scroll — is unaffected and still
+// asserted below.
 const EXECUTE_ID = '12903:app/Actions/CreatePaymentAction.php:CreatePaymentAction::execute'
 const FIND_ID = '12903:app/Actions/CreatePaymentAction.php:CreatePaymentAction::findOrCreateCustomer'
 const HANDLE_ID = '12903:app/Actions/ProcessCartAction.php:ProcessCartAction::handle'
@@ -71,15 +81,16 @@ test('walking deeper into the Onderliggende-code chip tree never scrolls <main> 
   await page.keyboard.press('ArrowRight') // enter related panel (codeSel 0 = findOrCreateCustomer)
   await page.waitForTimeout(200)
 
+  // Baseline captured AFTER entering the related panel: scrollRelatedIntoView
+  // may already have scrolled <main> once, right here, to show Onderliggende
+  // code fully (see the doc comment above) — that single scroll is not what
+  // this test guards against.
   const scrollLeftBefore = await main.evaluate((el) => el.scrollLeft)
-  const focusedLeftBefore = await blockArticle.evaluate((el) => el.getBoundingClientRect().left)
-  const mainLeftBefore = await main.evaluate((el) => el.getBoundingClientRect().left)
-  // Sanity: the focused diff column starts out fully in view.
-  expect(focusedLeftBefore).toBeGreaterThanOrEqual(mainLeftBefore - 1)
 
   // Descend two chip levels (→ → ): handle, then its own billingAddress
   // sub-chip. Each step used to risk an implicit horizontal 'nearest' scroll
-  // via scrollChipIntoView.
+  // via scrollChipIntoView — cs.focus stays 'code' throughout, so
+  // scrollRelatedIntoView's own watch does not refire either.
   await page.keyboard.press('ArrowRight')
   await page.waitForTimeout(200)
   await page.keyboard.press('ArrowRight')
@@ -88,15 +99,10 @@ test('walking deeper into the Onderliggende-code chip tree never scrolls <main> 
   const scrollLeftDeep = await main.evaluate((el) => el.scrollLeft)
   expect(scrollLeftDeep).toBe(scrollLeftBefore)
 
-  // The originally-focused diff column (top-level block, focusLevel still 0 —
-  // we never drilled, just navigated the panel) must still be fully in view.
-  const focusedLeftDeep = await blockArticle.evaluate((el) => el.getBoundingClientRect().left)
-  const mainLeftDeep = await main.evaluate((el) => el.getBoundingClientRect().left)
-  expect(focusedLeftDeep).toBeGreaterThanOrEqual(mainLeftDeep - 1)
-
   // Climb back out of the chips (← ←) and finally out of the panel entirely
-  // (←) — the diff column must still be exactly where it started, and own
-  // the keyboard again.
+  // (←) — leaving the related panel (cs.focus back to null) restores <main>
+  // to its flush-left rest position (scrollFocusIntoView, the exit half of
+  // the same mechanism), and the diff column owns the keyboard again.
   await page.keyboard.press('ArrowLeft')
   await page.waitForTimeout(150)
   await page.keyboard.press('ArrowLeft')
@@ -105,6 +111,7 @@ test('walking deeper into the Onderliggende-code chip tree never scrolls <main> 
   await page.waitForTimeout(200)
 
   await expect(blockArticle).toHaveClass(/border-indigo-300/)
+  const mainLeftAfter = await main.evaluate((el) => el.getBoundingClientRect().left)
   const focusedLeftAfter = await blockArticle.evaluate((el) => el.getBoundingClientRect().left)
-  expect(focusedLeftAfter).toBeGreaterThanOrEqual(mainLeftDeep - 1)
+  expect(focusedLeftAfter).toBeGreaterThanOrEqual(mainLeftAfter - 1)
 })
