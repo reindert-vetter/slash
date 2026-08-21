@@ -454,7 +454,12 @@ function claudeNoShellPill(msg) {
 // since that is the one whose input the workflow still holds — offers
 // "Opnieuw proberen" (`onRetry`, the chatActionRetry Signal). A 'retrying'
 // bubble deliberately does not: another attempt is already on its way.
-function claudeBubble(msg, i, total, claudePos, optionSel, anchorHint, onSend, onRetry, busy) {
+// `readOnly` (see "Read-only, not a rail" in .claude/docs/comments-panel.md)
+// drops the question-option buttons and the retry button entirely, and
+// makes the message body's own links/mentions/images/code-fence triggers
+// inert (pointer-events-none) — the click that reaches the card's OUTER root
+// instead (claudeChatColumn below) is what hands the keyboard back.
+function claudeBubble(msg, i, total, claudePos, optionSel, anchorHint, onSend, onRetry, busy, readOnly) {
   const mine = msg.role === 'user'
   const isError = msg.kind === 'error'
   const isRetrying = msg.kind === 'retrying'
@@ -499,6 +504,7 @@ function claudeBubble(msg, i, total, claudePos, optionSel, anchorHint, onSend, o
           )
         }}"
         data-testid="claude-message-body"
+        style="${() => (readOnly ? 'pointer-events:none' : '')}"
         .innerHTML="${claudeMessageBody(msg)}"
       ></div>
       ${() =>
@@ -506,9 +512,11 @@ function claudeBubble(msg, i, total, claudePos, optionSel, anchorHint, onSend, o
           ? html`<span class="pl-1 text-[11px] text-slate-500 dark:text-zinc-500" data-testid="claude-question-answer"
               >→ ${msg.answer}</span
             >`
-          : claudeQuestionOptions(msg, onSend, optionSel)}
+          : readOnly
+            ? ''
+            : claudeQuestionOptions(msg, onSend, optionSel)}
       ${() =>
-        canRetry
+        canRetry && !readOnly
           ? html`<button
               class="mt-0.5 inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-300 dark:hover:bg-zinc-800"
               data-testid="claude-retry"
@@ -695,19 +703,38 @@ function claudeMenuButton(onOpenMenu) {
   `
 }
 
-export function claudeChatColumn(view, callbacks) {
+// `readOnly`/`onEnterReadOnly` implement "Read-only, not a rail" (see
+// .claude/docs/comments-panel.md): while true, this whole card drops its
+// composer, its top-right menu button, and every per-message control
+// (claudeBubble's own readOnly branch) — the ONE thing it still reacts to is
+// a click anywhere on the card, which hands the keyboard back
+// (onEnterReadOnly, RelatedPanel.mjs's enterClaudeChat/enterClaudeChatFromNew
+// — the same → hand-off the keyboard already uses). Scrolling the thread
+// stays free and does NOT count as "entering" — only the click does.
+export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly) {
   return html`
     <div
       class="${() =>
         'flex min-h-0 flex-1 flex-col gap-2 rounded-xl border p-3 ' +
         (view.focused() ? 'border-indigo-300 dark:border-indigo-500/40' : 'border-transparent')}"
       data-testid="claude-chat-card"
+      data-readonly="${readOnly ? 'true' : 'false'}"
+      @click="${() => {
+        // The one gesture a read-only card reacts to (see this function's
+        // own doc comment); a no-op otherwise — the composer/buttons already
+        // handle their own clicks, and this must never steal focus from a
+        // field the reviewer is actively using.
+        if (readOnly) onEnterReadOnly()
+      }}"
       @contextmenu="${(e) => {
         // Right-click anywhere on this card = the same click claudeMenuButton
         // already runs, native-styled at the cursor — except inside the
         // composer textarea itself, which keeps its native Cut/Copy/Paste/
         // spellcheck menu. See "The right-click context menu" in
-        // command-palette.md.
+        // command-palette.md. Suppressed entirely while read-only — there is
+        // no menu button here to mirror, and "niets klikbaar" includes the
+        // right-click menu.
+        if (readOnly) return
         if (e.target.closest && e.target.closest('textarea, input')) return
         if (!callbacks.onOpenMenu) return
         e.preventDefault()
@@ -719,7 +746,7 @@ export function claudeChatColumn(view, callbacks) {
         <p class="text-[11px] font-medium text-slate-500 dark:text-zinc-500" data-testid="claude-chat-header">
           ${claudeMention}
         </p>
-        ${claudeMenuButton(callbacks.onOpenMenu)}
+        ${() => (readOnly ? '' : claudeMenuButton(callbacks.onOpenMenu))}
       </div>
       <div class="relative min-h-0 flex-1">
         <div
@@ -758,8 +785,9 @@ export function claudeChatColumn(view, callbacks) {
               callbacks.onSend,
               callbacks.onRetry,
               view.busy,
+              readOnly,
             ).key(
-              'claude-msg:' + m.id,
+              'claude-msg:' + m.id + ':' + (readOnly ? 'ro' : 'rw'),
             ),
           )
         }}
@@ -773,8 +801,12 @@ export function claudeChatColumn(view, callbacks) {
               : ''}
         </div>
       </div>
-      ${() => claudeSendError(view)}
-      <div class="flex items-end gap-2 border-t border-slate-100 dark:border-zinc-800/60 pt-2">
+      ${() =>
+        readOnly
+          ? ''
+          : html`<div class="contents">
+              ${() => claudeSendError(view)}
+              <div class="flex items-end gap-2 border-t border-slate-100 dark:border-zinc-800/60 pt-2">
         <textarea
           rows="1"
           class="min-h-[2.25rem] flex-1 resize-none rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 px-2.5 py-1.5 text-xs leading-6 text-slate-700 dark:text-zinc-300 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-300 dark:focus:ring-indigo-500/40"
@@ -832,7 +864,8 @@ export function claudeChatColumn(view, callbacks) {
         >
           Stuur
         </button>
-      </div>
+              </div>
+            </div>`}
     </div>
   `
 }

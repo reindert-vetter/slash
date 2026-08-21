@@ -28,7 +28,6 @@ import { repoParam, repoField } from './prContext.mjs'
 // gates code_warning and the footer's explain_code — see autowarn.mjs.
 import { autoWarn } from './autowarn.mjs'
 import { claudeChatColumn, claudeStatusText } from './ClaudeChat.mjs'
-import { railButtonHTML } from './collapsedRail.mjs'
 import { codePreviewColumn } from './CodePreview.mjs'
 import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
 import { syncCommentBatch, batchProgressFor, batchNoteFor } from './commentBatch.mjs'
@@ -2681,33 +2680,42 @@ export function claudeColumnVisible() {
 // commentSideFocused — "is the keyboard currently on the LEFT (comment)
 // half of the merged comment-claude-row": an existing conversation's
 // 'comment'/'thread' cursor, or the still-open, not-yet-placed 'new'
-// composer. Drives the rail-collapse below (Claude collapses while this is
-// true) together with its mirror, isClaudeChatFocused() (already exported
-// above) for the comment side's own collapse. Reviewer's own words, and
-// explicitly confirmed to include 'new': "als ik in de selectie zit van een
-// comment, laat dan de claude chat verticaal inklappen" — see "Vertical
-// inklappen = the rail idiom" in .claude/docs/comments-panel.md for why this
-// reuses collapsedColumnHTML's own idiom (railButtonHTML,
-// src/collapsedRail.mjs) rather than a height cap.
+// composer. Drives the read-only shrink below (Claude goes read-only/1/3
+// while this is true) together with its mirror, isClaudeChatFocused()
+// (already exported above) for the comment side's own read-only shrink.
+// Reviewer's own words, and explicitly confirmed to include 'new': "als ik
+// in de selectie zit van een comment, laat dan de claude chat ... " — see
+// "Read-only, not a rail" in .claude/docs/comments-panel.md for the current
+// shape of this feature (superseding an earlier rail-collapse cut).
 function commentSideFocused() {
   return cs.focus === 'comment' || cs.focus === 'thread' || cs.focus === 'new'
 }
 
-// claudeColumnCollapsedToRail / commentColumnCollapsedToRail — only true
-// below this row's OWN width threshold (state.commentClaudeNarrow,
-// COMMENT_CLAUDE_WIDE_BREAKPOINT_PX in home.mjs — a DELIBERATELY separate,
-// wider cutoff than Tailwind's app-wide `narrow` screen, 1399px; see
-// state.commentClaudeNarrow's own doc comment in home.mjs for why the two
-// must not be merged) AND only while the SIBLING half owns the keyboard.
+// claudeColumnReadOnly / commentColumnReadOnly — only true below this row's
+// OWN width threshold (state.commentClaudeNarrow, COMMENT_CLAUDE_WIDE_BREAKPOINT_PX
+// in home.mjs — a DELIBERATELY separate, wider cutoff than Tailwind's
+// app-wide `narrow` screen, 1399px; see state.commentClaudeNarrow's own doc
+// comment in home.mjs for why the two must not be merged) AND only while the
+// SIBLING half owns the keyboard. Answers TWO questions at once, since they
+// always coincide for this feature: does this half shrink to 1/3 width
+// (columnPairScale below), and does it render its read-only content instead
+// of its interactive one (ClaudeChatPanel/InlineComments below) — no
+// separate "collapsed" concept any more, this half still shows everything
+// that was said, just without any composer/button/in-body-link
+// interactivity (see "Read-only, not a rail" in
+// .claude/docs/comments-panel.md — this superseded an earlier cut that
+// collapsed the sibling to a bare rail, `railButtonHTML`/`RAIL_WIDTH_REM`;
+// that idiom is unchanged and still used elsewhere, see
+// src/collapsedRail.mjs's own doc comment, just no longer for this pair).
 // Exported so home.mjs's own `.key(...)` calls for these two columns can
-// fold the collapsed/expanded state into the key (a keyed node that
+// fold the read-only/interactive state into the key (a keyed node that
 // silently switches shape without a fresh key is the "keyed node reused
 // without re-running its bindings" pitfall, see
 // .claude/rules/arrowjs-pitfalls.md).
-export function claudeColumnCollapsedToRail(state) {
+export function claudeColumnReadOnly(state) {
   return !!(state && state.commentClaudeNarrow) && commentSideFocused()
 }
-export function commentColumnCollapsedToRail(state) {
+export function commentColumnReadOnly(state) {
   return !!(state && state.commentClaudeNarrow) && isClaudeChatFocused()
 }
 
@@ -3293,28 +3301,19 @@ export function ClaudeChatPanel(state, commentTarget) {
   const view = claudeChatView()
   const callbacks = claudeChatCallbacks(state, commentTarget)
   const widthKey = () => colWidthKeyFor('claude', commentTarget)
+  // enterFromReadOnly is the SAME → hand-off the keyboard already uses from
+  // 'comment'/'thread'/'new' (enterClaudeChat/enterClaudeChatFromNew) —
+  // "a click runs the same function a key runs" — now reached by clicking
+  // ANYWHERE on the read-only card itself (claudeChatColumn's own root, see
+  // ClaudeChat.mjs), the one exception to "nothing in it is clickable" per
+  // "Read-only, not a rail" in .claude/docs/comments-panel.md.
+  const enterFromReadOnly = () => (cs.focus === 'new' ? enterClaudeChatFromNew() : enterClaudeChat(state.pr))
   return html`
     <div class="contents">
       ${() =>
         !claudeColumnVisible()
           ? ''
-          : claudeColumnCollapsedToRail(state)
-            ? // Vertical inklappen (rail idiom, not a height cap — see
-              // "Vertical inklappen = the rail idiom" in
-              // .claude/docs/comments-panel.md): the comment side owns the
-              // keyboard, so the Claude half gives up its width to a click-
-              // to-expand rail, same visual idiom as home.mjs's
-              // collapsedColumnHTML. Click mirrors the → hand-off the
-              // keyboard already uses from 'comment'/'thread'/'new'
-              // (enterClaudeChat/enterClaudeChatFromNew) — "a click runs the
-              // same function a key runs".
-              railButtonHTML({
-                label: 'Claude',
-                title: 'Claude-gesprek',
-                testid: 'claude-chat-rail',
-                onClick: () => (cs.focus === 'new' ? enterClaudeChatFromNew() : enterClaudeChat(state.pr)),
-              })
-            : html`<div
+          : html`<div
               class="${() => 'relative flex min-h-0 flex-col shrink-0 ' + claudeColumnWidthCls(state)}"
               style="${() => colWidthStyle(state, widthKey())}"
               data-testid="claude-chat-column"
@@ -3328,7 +3327,10 @@ export function ClaudeChatPanel(state, commentTarget) {
                       () => resetColumnWidth(state, widthKey()),
                     )
                   : ''}
-              ${claudeChatColumn(view, callbacks)}
+              ${() =>
+                claudeChatColumn(view, callbacks, claudeColumnReadOnly(state), enterFromReadOnly).key(
+                  'claude-chat-column:' + (claudeColumnReadOnly(state) ? 'ro' : 'rw'),
+                )}
             </div>`}
     </div>
   `
@@ -5740,11 +5742,17 @@ function editingBubble(c, msg) {
 // second time inside its own box. The edit pencil (own messages only) stays
 // reachable regardless — editing your own root comment must not silently
 // disappear along with the chrome.
-function reactionBubble(c, r, i, total, isActive, bare) {
-  return html`<div class="contents">${() => (isEditingMessage(c, r) ? editingBubble(c, r) : viewingBubble(c, r, i, total, isActive, bare))}</div>`
+// `readOnly` (see expandedConversation's own doc comment) drops the edit
+// pencil and makes the body's own links/mentions/images/code-fence
+// triggers inert (pointer-events-none) — the click that reaches the OUTER
+// card instead (per hit-testing rules, an ancestor's own click handler still
+// fires once a descendant opts out of pointer events) is what hands the
+// keyboard back, not anything inside this bubble.
+function reactionBubble(c, r, i, total, isActive, bare, readOnly) {
+  return html`<div class="contents">${() => (isEditingMessage(c, r) ? editingBubble(c, r) : viewingBubble(c, r, i, total, isActive, bare, readOnly))}</div>`
 }
 
-function viewingBubble(c, r, i, total, isActive, bare) {
+function viewingBubble(c, r, i, total, isActive, bare, readOnly) {
   const mine = r.source === 'ui'
   // A state-change message ("/resolve", "/reopen") is not a chat message: it
   // renders as a plain status line (see threadStatusSentinel/commentBody), so
@@ -5805,7 +5813,7 @@ function viewingBubble(c, r, i, total, isActive, bare) {
                   </span>
                 `}
         ${() =>
-          isOwnMessage(r) && !status
+          isOwnMessage(r) && !status && !readOnly
             ? html`<button
                 type="button"
                 class="text-slate-400 hover:text-indigo-600 dark:text-zinc-600 dark:hover:text-indigo-400"
@@ -5844,6 +5852,7 @@ function viewingBubble(c, r, i, total, isActive, bare) {
           )
         }}"
         data-testid="reaction-bubble"
+        style="${() => (readOnly ? 'pointer-events:none' : '')}"
         .innerHTML="${commentBody(r, threadFenceStartIndexes(c).get(r.id) ?? 0)}"
       ></div>
     </div>
@@ -6134,7 +6143,18 @@ function commentReactionStatusLine(c) {
 // mirrors how the composer's own "Plaats…" button already opens its command
 // menu via a click callback). Still disabled while cs.busy, so a reply/
 // resolve/delete in flight can't be interrupted by opening the menu.
-function expandedConversation(c, openCommentMenu) {
+// `readOnly` (see "Read-only, not a rail" in .claude/docs/comments-panel.md)
+// is true for exactly one case: Claude owns the keyboard, this comment is
+// Claude's own anchor, and the screen is narrow enough that this half has
+// shrunk to 1/3 (commentColumnReadOnly(state), passed down via commentCard).
+// The thread stays fully visible and scrollable — "ik wil het wel zien wat
+// er is verteld" — but every control disappears: the composer row entirely,
+// the edit pencil on each bubble (reactionBubble's own readOnly param), and
+// any in-body link/mention/image click (pointer-events-none on the bubble's
+// own markdown body, see reactionBubble). The one remaining gesture is a
+// click ANYWHERE on this card, which hands the keyboard back — the read-only
+// equivalent of the click a focused card's own composer already had.
+function expandedConversation(c, openCommentMenu, readOnly) {
   return html`
     <div
       class="${() =>
@@ -6154,6 +6174,16 @@ function expandedConversation(c, openCommentMenu) {
       data-testid="comment-item"
       data-comment-id="${c.id}"
       data-expanded="true"
+      data-readonly="${readOnly ? 'true' : 'false'}"
+      @click="${() => {
+        // The one click this read-only card DOES react to — hands the
+        // keyboard back, mirroring the ←/Escape hand-off already used from
+        // 'claude' (toComment()/toNewFocus(), see handleRelatedKey). A no-op
+        // when not read-only: this card's own composer already handles its
+        // own clicks, and this outer handler must never steal focus away
+        // from an interactive field the reviewer is already typing in.
+        if (readOnly) (cc.commentId == null ? toNewFocus() : toComment())
+      }}"
       @contextmenu="${(e) => {
         // Right-click anywhere on this (already-focused) thread card = the
         // same click reaction-status already runs, native-styled at the
@@ -6161,6 +6191,9 @@ function expandedConversation(c, openCommentMenu) {
         // native Cut/Copy/Paste/spellcheck menu (mirrors the "an unchanged
         // diff line keeps the native menu" rule for editable surfaces in
         // general). See "The right-click context menu" in command-palette.md.
+        // Suppressed entirely while read-only — there is no menu button here
+        // to mirror, and "niets klikbaar" includes the right-click menu.
+        if (readOnly) return
         if (e.target.closest && e.target.closest('textarea, input')) return
         if (!openCommentMenu) return
         e.preventDefault()
@@ -6181,7 +6214,8 @@ function expandedConversation(c, openCommentMenu) {
             updateCommentThreadPinned(e.target)
           }}"
         >
-          ${() => threadMessages(c).map((r, i, arr) => reactionBubble(c, r, i, arr.length).key('msg:' + r.id))}
+          ${() =>
+            threadMessages(c).map((r, i, arr) => reactionBubble(c, r, i, arr.length, undefined, false, readOnly).key('msg:' + r.id))}
         </div>
         <div class="contents">
           ${() =>
@@ -6190,7 +6224,10 @@ function expandedConversation(c, openCommentMenu) {
               : ''}
         </div>
       </div>
-      <div class="flex items-end gap-2 border-t border-slate-100 dark:border-zinc-800/60 pt-2">
+      ${() =>
+        readOnly
+          ? ''
+          : html`<div class="flex items-end gap-2 border-t border-slate-100 dark:border-zinc-800/60 pt-2">
         <textarea
           rows="1"
           class="min-h-[2.25rem] flex-1 resize-none rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 px-3 py-1.5 text-xs leading-6 text-slate-700 dark:text-zinc-300 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-300 dark:focus:ring-indigo-500/40"
@@ -6257,7 +6294,7 @@ function expandedConversation(c, openCommentMenu) {
             data-testid="reaction-status-icon"
           ><circle cx="12" cy="12" r="1"></circle><circle cx="19" cy="12" r="1"></circle><circle cx="5" cy="12" r="1"></circle></svg>
         </button>
-      </div>
+      </div>`}
     </div>
   `
 }
@@ -6278,14 +6315,20 @@ function expandedConversation(c, openCommentMenu) {
 // by id, not selI() === i, because chatAnchorComment() has its own fallback
 // (an orphan/PR-wide comment whose conversation already has turns) that can
 // point elsewhere than the current selection index.
-function commentCard(c, i, openCommentMenu) {
+//
+// `readOnly` (from InlineComments, computed via commentColumnReadOnly(state))
+// only ever applies to that SECOND branch — the comment side never goes
+// read-only while it itself owns the keyboard, only while Claude does — see
+// "Read-only, not a rail" in .claude/docs/comments-panel.md.
+function commentCard(c, i, openCommentMenu, readOnly) {
   return html`
     <div class="contents">
       ${() =>
-        (selI() === i && (cs.focus === 'comment' || cs.focus === 'thread')) ||
-        (cs.focus === 'claude' && chatAnchorComment() && chatAnchorComment().id === c.id)
-          ? expandedConversation(c, openCommentMenu)
-          : compactConversation(c, i, autoExpandLoneComment(), openCommentMenu)}
+        selI() === i && (cs.focus === 'comment' || cs.focus === 'thread')
+          ? expandedConversation(c, openCommentMenu, false)
+          : cs.focus === 'claude' && chatAnchorComment() && chatAnchorComment().id === c.id
+            ? expandedConversation(c, openCommentMenu, readOnly)
+            : compactConversation(c, i, autoExpandLoneComment(), openCommentMenu)}
     </div>
   `
 }
@@ -6445,43 +6488,15 @@ function moreAboveHint(n, testid, onUp) {
 // `openCommentMenu` (the ordinary block-scoped 'comment' menu) since the two
 // modes build a different command list (home.mjs's openMenu('comment') vs
 // openMenu('prComment')).
-// InlineComments is the exported entry home.mjs mounts; it only decides
-// between the rail (collapsed, see claudeColumnCollapsedToRail/
-// commentColumnCollapsedToRail's own doc comment above — "Vertical
-// inklappen = the rail idiom" in .claude/docs/comments-panel.md) and the
-// ordinary card (inlineCommentsCardHTML below, everything this function used
-// to be before the collapse feature). Wrapped in a stable `<div
-// class="contents">` root with the toggle INSIDE it — the documented safe
-// pattern for a slot whose shape changes (.claude/rules/arrowjs-pitfalls.md,
-// "never key a template whose entire body is one toggling expression") —
-// rather than returning two differently-shaped top-level templates under the
-// SAME outer `.key('inline-comments')` home.mjs uses, which would hit the
-// sibling "a keyed node is reused without re-running its bindings" pitfall
-// instead.
+// InlineComments is the exported entry home.mjs mounts. It used to decide
+// between a collapsed rail and the ordinary card (see "Read-only, not a
+// rail" in .claude/docs/comments-panel.md — superseded that idiom for this
+// pair) — now it's a thin pass-through: inlineCommentsCardHTML below always
+// renders, and decides FOR ITSELF, per comment, whether it's interactive or
+// read-only (commentColumnReadOnly(state), threaded down to commentCard).
 export function InlineComments(state, commentTarget, openCompose, openCommentMenu, openPrCommentMenu) {
-  // Always called, collapsed or not: syncComments starts the comment poll's
-  // module-level setInterval timers (guarded on refreshTimer/heartbeatTimer
-  // already being set) — moving this into the card-only branch below would
-  // mean a page that loads with a restored `?rel.foc=claude` (comment side
-  // already rail-collapsed on the very FIRST render) never starts the poll
-  // at all, since inlineCommentsCardHTML would then never run once.
   syncComments(state ? state.pr : null)
-  return html`
-    <div class="contents">
-      ${() =>
-        commentColumnCollapsedToRail(state)
-          ? railButtonHTML({
-              label: 'Comment',
-              title: 'Comment',
-              testid: 'comment-claude-rail',
-              // Mirrors the ←/Escape hand-off already used from 'claude'
-              // (toComment()/toNewFocus() — see handleRelatedKey): a click
-              // runs the same function a key runs.
-              onClick: () => (cc.commentId == null ? toNewFocus() : toComment()),
-            })
-          : inlineCommentsCardHTML(state, commentTarget, openCompose, openCommentMenu, openPrCommentMenu)}
-    </div>
-  `
+  return inlineCommentsCardHTML(state, commentTarget, openCompose, openCommentMenu, openPrCommentMenu)
 }
 
 function inlineCommentsCardHTML(state, commentTarget, openCompose, openCommentMenu, openPrCommentMenu) {
@@ -6550,18 +6565,32 @@ function inlineCommentsCardHTML(state, commentTarget, openCompose, openCommentMe
           // card renders. See "The comment-detail card moved into the
           // merged comment-claude-row" in comments-panel.md.
           isPrCommentScope()
-            ? commentDetailCard(cs.scope.prComment, { merged: true, preview: false, openMenu: openPrCommentMenu }).key(
+            ? commentDetailCard(cs.scope.prComment, {
+                merged: true,
+                preview: false,
+                openMenu: openPrCommentMenu,
+                // Same read-only shrink as an ordinary block-scoped
+                // conversation (commentColumnReadOnly(state)) — this variant
+                // gets the identical treatment for consistency, see "Read-only,
+                // not a rail" in .claude/docs/comments-panel.md.
+                readOnly: commentColumnReadOnly(state),
+              }).key(
                 // Forces a fresh card whenever the SELECTED comment-index
                 // item changes (never reuse the previous comment's mounted
                 // node/bindings), plus its own status/title, mirroring the
                 // rekey-on-status/title-change reasoning the block-column's
                 // own comment-detail-card key used before this moved here.
+                // readOnly rides along too — a composer appearing/disappearing
+                // is a real shape change (same reasoning as commentCard's own
+                // key).
                 'pr-comment-detail:' +
                   cs.scope.prComment.id +
                   ':' +
                   cs.scope.prComment.status +
                   ':' +
-                  (commentTitleOf(cs.scope.prComment) ? 't' : '-'),
+                  (commentTitleOf(cs.scope.prComment) ? 't' : '-') +
+                  ':' +
+                  (commentColumnReadOnly(state) ? 'ro' : 'rw'),
               )
             : ''}
       </div>
@@ -6603,11 +6632,18 @@ function inlineCommentsCardHTML(state, commentTarget, openCompose, openCommentMe
         // .claude/rules/arrowjs-pitfalls.md).
         const hidden = hiddenAboveCount()
         const list = visibleComments()
+        const readOnly = commentColumnReadOnly(state)
         const cards = []
         for (let i = hidden; i < list.length; i++) {
           // titleKeyOf: a later-arriving comment title must rebuild the card,
-          // see its own doc comment.
-          cards.push(commentCard(list[i], i, openCommentMenu).key('comment:' + list[i].id + ':' + titleKeyOf(list[i])))
+          // see its own doc comment. readOnly rides along in the key too —
+          // its own doc comment on commentCard explains why (a composer
+          // appearing/disappearing is a real shape change).
+          cards.push(
+            commentCard(list[i], i, openCommentMenu, readOnly).key(
+              'comment:' + list[i].id + ':' + titleKeyOf(list[i]) + ':' + (readOnly ? 'ro' : 'rw'),
+            ),
+          )
         }
         return cards
       }}
@@ -7178,94 +7214,56 @@ export function relatedColumnWidthCls() {
 // around it (mirrors nestedChipColumn's own connector, which also has none).
 const COMMENT_CLAUDE_CONNECTOR_REM = 0.75
 
-// RAIL_WIDTH_REM — the fixed width of the collapsed-sibling rail
-// (`railButtonHTML`'s own `w-14`, src/collapsedRail.mjs). Kept as its own
-// named constant rather than a bare `3.5` because commentColumnWidthCls/
-// claudeColumnWidthCls below subtract it explicitly (see their own doc
-// comment) — if `railButtonHTML`'s width class ever changes, this must
-// change with it (no automatic link between the two; a Tailwind class
-// string can't be read back into a number at build time here).
-const RAIL_WIDTH_REM = 3.5
-
 // columnPairScale — the shared "how much of relatedColumnWidthCls()'s own
 // clamp does THIS half get" read behind commentColumnWidthCls/
-// claudeColumnWidthCls below. `siblingCollapsedToRail` is the SIBLING's own
-// collapse question (claudeColumnCollapsedToRail for the comment side's
-// scale, commentColumnCollapsedToRail for the Claude side's) — never this
-// side's own, a column collapsed to a rail doesn't read its own width class
-// at all (see the ClaudeChatPanel/InlineComments early-return below).
+// claudeColumnWidthCls below. `thisSideFocused`/`siblingFocused` (mutually
+// exclusive, but both can be false at once — the rest state) answer "does
+// THIS half own the keyboard" / "does the SIBLING own the keyboard".
 //
-// scale is 1 (the FULL clamp, same as relatedColumnWidthCls itself) in two
-// cases: a wide (`!state.commentClaudeNarrow`, at/above
-// COMMENT_CLAUDE_WIDE_BREAKPOINT_PX — home.mjs) screen — reviewer request:
-// "maak de chat blokken 2x zo breed (dan past alles heel goed)" on a screen
-// with room to spare, so BOTH halves double from the halved split below —
-// or a narrow screen where the sibling has actually collapsed to its rail.
-// Otherwise (narrow screen, neither side focused, "zoals nu") scale stays
-// 1/2 — the original, documented halved split.
-function columnPairScale(state, siblingCollapsedToRail) {
+// scale is 1 (the FULL clamp, same as relatedColumnWidthCls itself) on a
+// wide screen (`!state.commentClaudeNarrow`, at/above
+// COMMENT_CLAUDE_WIDE_BREAKPOINT_PX — home.mjs) — reviewer request: "maak de
+// chat blokken 2x zo breed (dan past alles heel goed)" on a screen with room
+// to spare, so BOTH halves double from the halved split below, and nothing
+// ever shrinks there. On a narrow screen: 2/3 for the focused half, 1/3 for
+// the unfocused-but-still-visible one (reviewer request, replacing an
+// earlier cut that collapsed the unfocused half to a bare rail — see
+// "Read-only, not a rail" in .claude/docs/comments-panel.md), or 1/2 for
+// both in the rest state (neither side focused, "zoals nu").
+function columnPairScale(state, thisSideFocused, siblingFocused) {
   if (!state || !state.commentClaudeNarrow) return 1
-  if (siblingCollapsedToRail) return 1
+  if (thisSideFocused) return 2 / 3
+  if (siblingFocused) return 1 / 3
   return 1 / 2
-}
-
-// The TOTAL width of comment-claude-row (this half + connector + the
-// other half, whether that other half is itself rendered via the width
-// formula or as a fixed-width rail) must stay IDENTICAL to the rest state's
-// own total — reviewer report, with a screenshot: on a laptop, focusing the
-// comment side correctly collapsed Claude to its rail, but the whole block
-// then read as WIDER than it is at rest, because the expanded side used to
-// simply reclaim ALL the freed width (scale 1, the same as the wide-screen
-// case) instead of only the sliver the rail actually gave up.
-//
-// So a collapsed sibling must subtract BOTH pieces its own rail markup no
-// longer accounts for: the connector (0.75rem — in the rest/wide state one
-// side's own formula call already subtracts this once, see below, but a
-// collapsed sibling contributes NOTHING via the formula any more, so
-// whichever side is left expanding has to carry the full connector cost
-// itself) AND the rail's own fixed width (RAIL_WIDTH_REM). This holds for
-// EITHER side collapsing — the subtraction is the same regardless of which
-// half is currently the rail, which is why both branches below add the same
-// pair of terms.
-function railReclaimSubtractRem(siblingCollapsedToRail) {
-  return siblingCollapsedToRail ? COMMENT_CLAUDE_CONNECTOR_REM + RAIL_WIDTH_REM : 0
 }
 
 // commentColumnWidthCls / claudeColumnWidthCls — read the SAME chars
 // snapshot so both split evenly as the code grows, not just at the
 // extremes — the two blocks read as one merged card (see home.mjs's
-// comment-claude-row) and must therefore stay the same width as each other
-// WHENEVER they are both actually shown at column width (i.e. whenever
-// neither is collapsed to a rail, see claudeColumnCollapsedToRail/
-// commentColumnCollapsedToRail above). The connector's own 0.75rem comes
-// off the comment side's own base subtraction (below) in every state; a
-// collapsed sibling additionally piles the connector + the rail's own width
-// onto whichever side is left expanding (railReclaimSubtractRem above), so
-// the row's TOTAL width is the SAME invariant in every state, not just the
-// original one:
-//   (this half's width) + 0.75rem(connector) + (the other half's width, or
-//   RAIL_WIDTH_REM if it's a rail) === relatedColumnWidthCls()
-// — true in the rest state (both scale 1/2, clean split), the wide-screen
-// state (both scale 1, no rail ever renders), AND the collapsed-sibling
-// state (this half's own subtraction absorbs exactly the rail's width plus
-// the connector, so growing to scale 1 does NOT also grow the row's total —
-// see railReclaimSubtractRem's own doc comment for the "why" of that exact
-// pair of terms).
+// comment-claude-row). The connector's own 0.75rem comes off the comment
+// side's own subtraction, always, regardless of the split — exactly as
+// before this feature existed. That single fact is also why the row's TOTAL
+// width stays invariant across every state without any extra correction
+// term (unlike an earlier cut of this feature, which collapsed the
+// unfocused half to a fixed-width rail and needed one): both halves are
+// STILL rendered via this same clamp formula, at whatever scale, and
+// `relatedWidthCls(chars,a,d1) + relatedWidthCls(chars,b,d2) ===
+// relatedWidthCls(chars,a+b,d1+d2)` exactly (clamp scales homogeneously and
+// shifts additively — relatedWidthCls's own doc comment) for ANY `a+b=1`,
+// not just `1/2+1/2` — so `2/3+1/3` (the new focused/unfocused split) keeps
+// the exact same total, `relatedColumnWidthCls()`, as `1/2+1/2` (rest) and
+// `1+1` (wide screen) already did. Verified numerically too, across several
+// `chars` values, not just by this algebraic argument.
 export function commentColumnWidthCls(state) {
-  const siblingCollapsed = claudeColumnCollapsedToRail(state)
-  const subtractRem = siblingCollapsed
-    ? railReclaimSubtractRem(siblingCollapsed)
-    : COMMENT_CLAUDE_CONNECTOR_REM
-  return relatedWidthCls(relatedGrowthChars(), columnPairScale(state, siblingCollapsed), subtractRem)
+  return relatedWidthCls(
+    relatedGrowthChars(),
+    columnPairScale(state, commentSideFocused(), isClaudeChatFocused()),
+    COMMENT_CLAUDE_CONNECTOR_REM,
+  )
 }
 
 export function claudeColumnWidthCls(state) {
-  const siblingCollapsed = commentColumnCollapsedToRail(state)
-  return relatedWidthCls(
-    relatedGrowthChars(),
-    columnPairScale(state, siblingCollapsed),
-    railReclaimSubtractRem(siblingCollapsed),
-  )
+  return relatedWidthCls(relatedGrowthChars(), columnPairScale(state, isClaudeChatFocused(), commentSideFocused()))
 }
 
 // relatedCard renders one child block: a header (label + file:line + relation
@@ -8718,6 +8716,12 @@ export function commentDetailCard(c, opts) {
   // own fixed width/shrink-0 here, it would otherwise fight the parent's
   // width instead of filling it.
   const merged = !!(opts && opts.merged)
+  // readOnly mirrors commentColumnReadOnly(state) from the ONE call site
+  // that ever passes it (InlineComments' isPrCommentScope branch) — see
+  // "Read-only, not a rail" in .claude/docs/comments-panel.md. The other
+  // call site (an anchored comment-index item's own detail card,
+  // home.mjs) never passes it, so this stays false — unaffected — there.
+  const readOnly = !!(opts && opts.readOnly)
   return html`
     <div
       class="${() =>
@@ -8740,12 +8744,20 @@ export function commentDetailCard(c, opts) {
           : 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30 ') +
         (c.status === 'resolved' ? 'bg-emerald-50 dark:bg-emerald-500/15 ' : 'bg-white dark:bg-zinc-900 ')}"
       data-testid="comment-detail-card"
+      data-readonly="${readOnly ? 'true' : 'false'}"
+      @click="${() => {
+        // The one gesture a read-only card reacts to — hands the keyboard
+        // back, mirroring the ←/Escape hand-off already used from 'claude'.
+        if (readOnly) (cc.commentId == null ? toNewFocus() : toComment())
+      }}"
       @contextmenu="${(e) => {
         // Right-click anywhere on this card = the same click commentMenuButton
         // already runs, native-styled and positioned at the cursor — mirrors
         // pr-info-card's own wiring. No landing step needed: this card is
         // only ever shown for the already-selected comment-index item. See
-        // "The right-click context menu" in command-palette.md.
+        // "The right-click context menu" in command-palette.md. Suppressed
+        // entirely while read-only, same as expandedConversation's own.
+        if (readOnly) return
         const openMenu = opts && opts.openMenu
         if (!openMenu || preview) return
         e.preventDefault()
@@ -8765,7 +8777,7 @@ export function commentDetailCard(c, opts) {
         >
         ${() => sourceBadge(c)} ${() => aiWarningBadge(c)} ${() => staleAnchorBadge(c)}
         ${() => sendFailedBadge('reply:' + c.id)}
-        ${() => (preview ? '' : commentMenuButton(opts && opts.openMenu))}
+        ${() => (preview || readOnly ? '' : commentMenuButton(opts && opts.openMenu))}
       </div>
       ${() => commentTitleLine(c)}
       <div
@@ -8788,7 +8800,8 @@ export function commentDetailCard(c, opts) {
               arr.length,
               () => !preview && pct.commentId === c.id && pct.pos === arr.length - ti,
               ti === 0,
-            ).key('detail-msg:' + r.id),
+              readOnly,
+            ).key('detail-msg:' + r.id + ':' + (readOnly ? 'ro' : 'rw')),
           )}
       </div>
       <div
@@ -8809,7 +8822,7 @@ export function commentDetailCard(c, opts) {
       </div>
       <div class="contents">
         ${() =>
-          picm.replying && picm.commentId === c.id
+          !readOnly && picm.replying && picm.commentId === c.id
             ? html`<div class="flex items-end gap-2 border-t border-slate-100 dark:border-zinc-800/60 pt-3">
                 <textarea
                   rows="1"

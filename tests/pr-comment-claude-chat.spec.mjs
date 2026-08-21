@@ -243,13 +243,14 @@ test('→ steps from a PR-comment item into its thread and on into the Claude ch
 
   // Second → : on into the Claude column, and the thread ring hands off so
   // only one thing reads as focused — at this (default, narrow) viewport the
-  // comment half rail-collapses entirely once Claude owns the keyboard (see
-  // "Vertical inklappen" in .claude/docs/comments-panel.md), so the thread
-  // isn't merely unhighlighted, it's not rendered at all; that is an even
-  // stronger form of "only one thing reads as focused".
+  // comment half goes READ-ONLY once Claude owns the keyboard (see
+  // "Read-only, not a rail" in .claude/docs/comments-panel.md): the thread
+  // stays visible (still readable), it just no longer carries the ring/
+  // focus styling, and its card is marked data-readonly="true".
   await page.keyboard.press('ArrowRight')
   await expect(compose).toBeFocused()
-  await expect(thread).toHaveCount(0)
+  await expect(thread).not.toHaveClass(/ring-2/)
+  await expect(page.getByTestId('comment-detail-card')).toHaveAttribute('data-readonly', 'true')
 
   // ← : straight back into the thread, not onto an invisible 'comment' level.
   await page.keyboard.press('ArrowLeft')

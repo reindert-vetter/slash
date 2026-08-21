@@ -718,11 +718,14 @@ The "Embedded Claude conversation" section owns:
   content-driven computation of its own; the transcript wraps
   (`ClaudeChat.mjs`'s `claude-chat-actions` button row also wraps, rather
   than stretching the column, at this narrower width). **This "exactly half"
-  split, and the always-on `claude-chat-column`, are only the DEFAULT case
-  now**: below the 1400px `narrow` breakpoint, whichever half of this row
-  does NOT own the keyboard collapses to a click-to-expand rail instead (and
-  a wide screen widens both halves past the half-split rather than ever
-  collapsing) — see "Vertical inklappen" in `.claude/docs/comments-panel.md`.
+  split is only the REST-state case now**: below the 1920px
+  `COMMENT_CLAUDE_WIDE_BREAKPOINT_PX` threshold (a deliberately separate,
+  wider cutoff than the app-wide `narrow:` 1399px screen), whichever half of
+  this row owns the keyboard grows to 2/3 while the other shrinks to 1/3 and
+  goes read-only (content stays visible, every control disappears — never a
+  collapsed rail) — a wide screen instead widens BOTH halves past the
+  half-split, with nothing ever going read-only there. See "Read-only, not a
+  rail" in `.claude/docs/comments-panel.md`.
 
 ## A PR-wide comment-index item can also start a conversation
 

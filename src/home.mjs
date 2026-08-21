@@ -842,12 +842,13 @@ const state = reactive({
   // colWidths[key] directly.
   colWidthVersion: 0,
   // commentClaudeNarrow — reactive "is this window too narrow to keep BOTH
-  // halves of comment-claude-row open at once" flag, gating the comment↔
-  // Claude rail-collapse in RelatedPanel.mjs (commentColumnCollapsedToRail/
-  // claudeColumnCollapsedToRail — see "Vertical inklappen = the rail idiom"
-  // in .claude/docs/comments-panel.md): only a genuinely narrow window ever
-  // collapses one side to a rail; a wide window instead widens both halves
-  // (see commentColumnWidthCls/claudeColumnWidthCls). Its threshold is
+  // halves of comment-claude-row fully interactive at once" flag, gating
+  // the comment↔Claude read-only shrink in RelatedPanel.mjs
+  // (commentColumnReadOnly/claudeColumnReadOnly — see "Read-only, not a
+  // rail" in .claude/docs/comments-panel.md): only a genuinely narrow window
+  // ever shrinks the unfocused side to its read-only 1/3; a wide window
+  // instead widens both halves (see commentColumnWidthCls/
+  // claudeColumnWidthCls). Its threshold is
   // COMMENT_CLAUDE_WIDE_BREAKPOINT_PX (below), a DELIBERATELY SEPARATE,
   // wider cutoff from the app-wide `narrow:` Tailwind screen (1399px,
   // index.html's tailwind.config) — confirmed with the reviewer on a real

@@ -29,13 +29,12 @@ test('comment block and Claude block are equally wide, sit beside each other and
   await page.goto('/pr/' + pr)
   const item = page.getByTestId('comment-item').first()
   // Deliberately no click here: this test is about the RESTING split (equal
-  // halves summing to related-code's own width), not about the rail-collapse
-  // feature — clicking the card would call toComment(), which at this
-  // (narrow, default) viewport collapses the Claude half to its rail (see
-  // "comment/Claude rail collapse" below and .claude/docs/comments-panel.md).
-  // The row is already visible without it: hasVisibleComments() only needs
-  // the comment to be in scope of the selected unit, not the keyboard
-  // actually inside it.
+  // halves summing to related-code's own width), not about the read-only
+  // shrink feature — clicking the card would call toComment(), which at this
+  // (narrow, default) viewport shrinks the Claude half to 1/3 (see "Read-only,
+  // not a rail" below and .claude/docs/comments-panel.md). The row is already
+  // visible without it: hasVisibleComments() only needs the comment to be in
+  // scope of the selected unit, not the keyboard actually inside it.
   await expect(item).toBeVisible()
 
   const comments = page.getByTestId('inline-comments')
@@ -73,20 +72,19 @@ test('comment block and Claude block are equally wide, sit beside each other and
   expect(Math.abs(commentsBox.x - relatedBox.x)).toBeLessThan(3)
 })
 
-// "Vertical inklappen" (the rail idiom, not a height cap — see
-// .claude/docs/comments-panel.md): below COMMENT_CLAUDE_WIDE_BREAKPOINT_PX
-// (1920px, home.mjs — its OWN threshold, deliberately separate from
-// Tailwind's app-wide `narrow` screen at 1399px, which stays untouched and
-// keeps governing diff-card widths etc.), whichever half of
-// comment-claude-row does NOT own the keyboard collapses to a narrow,
-// click-to-expand rail (railButtonHTML, src/collapsedRail.mjs — the same
-// idiom home.mjs's collapsedColumnHTML already uses for a non-focused
-// drilled column) so the focused half can reclaim the width. 1690×1054 is
-// the reviewer's OWN real MacBook viewport (1710×1107 screen at DPR 2, minus
-// browser chrome) — the exact case that exposed the first cut's wrong
-// (1399px) threshold: it sits comfortably above 1399px but must still
-// collapse.
-test('at 1690px (the reviewer\'s own MacBook viewport), the unfocused half of comment-claude-row collapses to a rail, click expands it back', async ({
+// "Read-only, not a rail" (see .claude/docs/comments-panel.md): below
+// COMMENT_CLAUDE_WIDE_BREAKPOINT_PX (1920px, home.mjs — its OWN threshold,
+// deliberately separate from Tailwind's app-wide `narrow` screen at 1399px,
+// which stays untouched and keeps governing diff-card widths etc.),
+// whichever half of comment-claude-row does NOT own the keyboard shrinks to
+// 1/3 of the row (the focused half gets 2/3) but keeps showing its full
+// content, read-only — no composer, no "Stuur", no menu button, no
+// question-option/retry buttons, and no working in-body links/mentions/
+// images. 1690×1054 is the reviewer's OWN real MacBook viewport (1710×1107
+// screen at DPR 2, minus browser chrome) — the exact case that exposed the
+// first cut's wrong (1399px) threshold: it sits comfortably above 1399px but
+// must still shrink.
+test('at 1690px (the reviewer\'s own MacBook viewport), the unfocused half shrinks to 1/3 and goes read-only, click hands the keyboard back', async ({
   page,
 }, testInfo) => {
   await page.setViewportSize({ width: 1690, height: 1054 })
@@ -112,7 +110,7 @@ test('at 1690px (the reviewer\'s own MacBook viewport), the unfocused half of co
   // Nothing focused yet in this row: both halves render at full column
   // width, exactly as in the resting-split test above.
   await expect(page.getByTestId('claude-chat-column')).toBeVisible()
-  await expect(page.getByTestId('comment-claude-rail')).toHaveCount(0)
+  await expect(page.getByTestId('claude-chat-compose')).toBeVisible()
   const restCommentBox = await page.getByTestId('inline-comments').boundingBox()
   const restClaudeBox = await page.getByTestId('claude-chat-column').boundingBox()
   const restConnectorBox = await page.getByTestId('comment-claude-connector').boundingBox()
@@ -120,43 +118,48 @@ test('at 1690px (the reviewer\'s own MacBook viewport), the unfocused half of co
   // to whatever the row's own absolute left edge happens to be.
   const restTotal = restCommentBox.width + restConnectorBox.width + restClaudeBox.width
 
-  // Click into the comment/thread — the Claude half collapses to its rail.
+  // Click into the comment/thread — the Claude half shrinks to 1/3 and its
+  // composer/menu button disappear, but the thread itself stays visible.
   await item.click()
-  const claudeRail = page.getByTestId('claude-chat-rail')
-  await expect(claudeRail).toBeVisible()
-  await expect(page.getByTestId('claude-chat-column')).toHaveCount(0)
-  // The comment half grows past its bare half-share (it's the only one
-  // still rendered via the width formula)...
-  const commentsBoxCollapsed = await page.getByTestId('inline-comments').boundingBox()
-  const railBox = await claudeRail.boundingBox()
-  expect(commentsBoxCollapsed.width).toBeGreaterThan(railBox.width * 3)
+  const claudeCard = page.getByTestId('claude-chat-card')
+  await expect(claudeCard).toHaveAttribute('data-readonly', 'true')
+  await expect(page.getByTestId('claude-chat-compose')).toHaveCount(0)
+  await expect(page.getByTestId('claude-chat-thread')).toBeVisible()
+
+  // The comment half is now the 2/3 side, wider than a bare half-share...
+  const commentsBoxFocused = await page.getByTestId('inline-comments').boundingBox()
+  const claudeBoxReadOnly = await page.getByTestId('claude-chat-column').boundingBox()
+  expect(commentsBoxFocused.width).toBeGreaterThan(claudeBoxReadOnly.width)
+
   // ...but the ROW'S TOTAL WIDTH must stay exactly what it was at rest —
-  // reviewer report (screenshot): the comment half used to reclaim ALL the
-  // width the rail gave up (same as the wide-screen "2x" case), leaving the
-  // whole block wider on a laptop than in the unfocused rest state. It may
-  // only grow by exactly (bare half-share − rail width), never more. See
-  // railReclaimSubtractRem's doc comment in RelatedPanel.mjs.
-  const collapsedTotal = commentsBoxCollapsed.width + restConnectorBox.width + railBox.width
-  expect(collapsedTotal).toBeCloseTo(restTotal, 0)
+  // reviewer report (screenshot, on the earlier rail-collapse cut): the
+  // expanded half used to reclaim ALL the width the other side gave up,
+  // leaving the whole block wider on a laptop than in the unfocused rest
+  // state. The 2/3+1/3 split keeps the same invariant automatically (see
+  // columnPairScale's own doc comment in RelatedPanel.mjs).
+  const focusedTotal = commentsBoxFocused.width + restConnectorBox.width + claudeBoxReadOnly.width
+  expect(focusedTotal).toBeCloseTo(restTotal, 0)
 
-  // Clicking the rail hands the keyboard to Claude, which now expands, and
-  // the comment half collapses to ITS rail instead — the mirror direction.
-  await claudeRail.click()
+  // Clicking anywhere on the read-only Claude card hands the keyboard to it
+  // — it now expands to 2/3, and the comment half goes read-only instead
+  // (the mirror direction).
+  await claudeCard.click()
   await expect(page.getByTestId('claude-chat-compose')).toBeVisible()
-  const commentRail = page.getByTestId('comment-claude-rail')
-  await expect(commentRail).toBeVisible()
-  await expect(page.getByTestId('inline-comments')).toHaveCount(0)
+  const commentCard = page.getByTestId('comment-item')
+  await expect(commentCard).toHaveAttribute('data-readonly', 'true')
+  await expect(page.getByTestId('reaction-compose')).toHaveCount(0)
+  await expect(page.getByTestId('comment-thread')).toBeVisible()
 
-  // Clicking that rail hands the keyboard straight back to the comment.
-  await commentRail.click()
+  // Clicking that read-only comment card hands the keyboard straight back.
+  await commentCard.click()
   await expect(page.getByTestId('reaction-compose')).toBeVisible()
-  await expect(page.getByTestId('claude-chat-rail')).toBeVisible()
+  await expect(claudeCard).toHaveAttribute('data-readonly', 'true')
 })
 
 // The cutoff itself, one px below COMMENT_CLAUDE_WIDE_BREAKPOINT_PX: still
-// narrow enough to collapse, so the threshold really sits exactly at 1920px
-// and not, say, 1919 or 1921.
-test('at 1919px (one below the threshold), the unfocused half still collapses to a rail', async ({
+// narrow enough to shrink/go read-only, so the threshold really sits exactly
+// at 1920px and not, say, 1919 or 1921.
+test('at 1919px (one below the threshold), the unfocused half still shrinks and goes read-only', async ({
   page,
 }, testInfo) => {
   await page.setViewportSize({ width: 1919, height: 1080 })
@@ -180,17 +183,18 @@ test('at 1919px (one below the threshold), the unfocused half still collapses to
   await expect(item).toBeVisible()
   await item.click() // enters 'comment' focus
 
-  await expect(page.getByTestId('claude-chat-rail')).toBeVisible()
-  await expect(page.getByTestId('claude-chat-column')).toHaveCount(0)
+  await expect(page.getByTestId('claude-chat-card')).toHaveAttribute('data-readonly', 'true')
+  await expect(page.getByTestId('claude-chat-compose')).toHaveCount(0)
+  await expect(page.getByTestId('claude-chat-thread')).toBeVisible()
 })
 
 // Reviewer request: "doe dit alleen als ik een scherm heb op mijn laptop,
 // maak anders de chat blokken 2x zo breed" — at/above
-// COMMENT_CLAUDE_WIDE_BREAKPOINT_PX (1920px) neither half ever collapses;
-// both instead render at the SAME full clamp relatedColumnWidthCls() itself
-// uses (double the halved split below the breakpoint), even while the
-// keyboard sits inside one of them.
-test('at 1920px (the threshold itself), neither half collapses — both are full width instead (double the halved split)', async ({
+// COMMENT_CLAUDE_WIDE_BREAKPOINT_PX (1920px) neither half ever shrinks or
+// goes read-only; both instead render at the SAME full clamp
+// relatedColumnWidthCls() itself uses (double the halved split below the
+// breakpoint), even while the keyboard sits inside one of them.
+test('at 1920px (the threshold itself), neither half shrinks — both are full width and stay interactive (double the halved split)', async ({
   page,
 }, testInfo) => {
   await page.setViewportSize({ width: 1920, height: 1080 })
@@ -212,10 +216,10 @@ test('at 1920px (the threshold itself), neither half collapses — both are full
   await page.goto('/pr/' + pr)
   const item = page.getByTestId('comment-item').first()
   await expect(item).toBeVisible()
-  await item.click() // enters 'comment' focus — would collapse Claude below 1400px
+  await item.click() // enters 'comment' focus — would shrink/read-only Claude below 1920px
 
-  await expect(page.getByTestId('comment-claude-rail')).toHaveCount(0)
-  await expect(page.getByTestId('claude-chat-rail')).toHaveCount(0)
+  await expect(page.getByTestId('claude-chat-card')).toHaveAttribute('data-readonly', 'false')
+  await expect(page.getByTestId('claude-chat-compose')).toBeVisible()
   const comments = page.getByTestId('inline-comments')
   const claude = page.getByTestId('claude-chat-column')
   const related = page.getByTestId('related-code')

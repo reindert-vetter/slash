@@ -2445,162 +2445,145 @@ though some row was technically highlighted. Fixed to reset to the first row
 applies" already resets to the top rather than clamping a stale index. Test:
 `tests/selection-lost-falls-back-to-first.spec.mjs`.
 
-### Vertical inklappen: below 1400px, the unfocused half of `comment-claude-row` collapses to a rail — the drilling.md idiom, not a height cap
+### Read-only, not a rail: below 1920px, the unfocused half of `comment-claude-row` shrinks to 1/3 but keeps showing its content
 
-Reviewer request: "als ik in de selectie zit van een comment, laat dan de
-claude chat vertical inklappen en andersom, als het niet is geselecteerd, wil
-ik zoals nu" — plus a width caveat below. **"Vertical inklappen" turned out
-to mean the project's existing "collapse to a narrow, click-to-expand rail"
-idiom** (his own words, once asked to disambiguate: "als een kolom, zoals je
-vaker doet bij het inklappen van blokken") — the SAME visual mechanism a
-non-focused drilled column already uses (`collapsedColumnHTML`, `home.mjs`,
-see `.claude/docs/drilling.md`), not a height cap/fade on the unfocused
-column's own content. **Record this explicitly so a future session doesn't
-re-read "verticaal" as a height collapse** — it describes the rail's own
-shape (a slim, full-height, VERTICALLY-labelled button), not the axis being
-collapsed; the width is what actually shrinks.
+Reviewer request, evolving twice: first "als ik in de selectie zit van een
+comment, laat dan de claude chat vertical inklappen en andersom" (read at the
+time as the project's existing "collapse to a rail" idiom, `collapsedColumnHTML`
+in `home.mjs` — see `.claude/docs/drilling.md`), then a follow-up explicitly
+REVERSING that idiom for this one pair: *"dat inklappen, wil je dat toch niet
+zo doen? Ik wil het wel zien wat er is verteld, maar nog zonder input en
+knoppen. en dan 1/3 vergeleken met de andere comment/chat in die blok (voor
+laptop zoals het nu is)"*. **Do not re-introduce the rail for this pair** — the
+unfocused half now stays fully visible (every message, scrollable) at 1/3 of
+the row's width, with the focused half at 2/3; only its CONTROLS disappear.
+This is a genuinely different idiom from the rail, not a variant of it.
 
-`src/collapsedRail.mjs`'s **`railButtonHTML({label, title, testid, onClick,
-dataDrillIdx})`** is the idiom itself, extracted out of
-`collapsedColumnHTML` (which now just forwards to it, verbatim
-markup/classes — behavior-neutral, no existing rail changed) so this feature
-reuses the exact same button instead of a second, inevitably-drifting copy.
+**What "read-only" means exactly, per the reviewer's own two answers to the
+open questions this raised:**
 
-**Gated on screen width, not always-on.** Follow-up from the reviewer: "doe
-dit alleen als ik een scherm heb op mijn laptop, maak anders de chat blokken
-2x zo breed (dan past alles heel goed)".
+- **(a) Nothing in it is clickable, only reading.** Gone entirely: the reply/
+  chat composer, "Stuur", the comment side's kebab menu
+  (`reaction-status`)/Claude's own `claudeMenuButton`, Claude's
+  `claude-question-option` choice buttons and `claude-retry` button, and the
+  edit pencil (`reaction-edit`) on every bubble. Also inert: any in-body
+  clickable thing INSIDE a message — a Markdown link, a mention, an image,
+  a code-fence trigger (`pointer-events:none` on the message body's own
+  `.innerHTML`-bound element, see reactionBubble/claudeBubble below). The
+  read-only status/warning badges (`sourceBadge`/`aiWarningBadge`/
+  `staleAnchorBadge`) stay, exactly as before — they were never interactive.
+- **(b) Click anywhere + free scroll.** A click ANYWHERE on the read-only
+  card hands the keyboard back (the one exception to "nothing clickable" —
+  mirrors the click a rail used to offer). Scrolling the thread does NOT
+  count as entering it and never steals focus — a reviewer can read older
+  messages without switching columns. `←`/`→` stay the PRIMARY way to
+  switch; a click is the secondary, mouse-only shortcut.
 
-**Its own 1920px threshold — deliberately NOT the app-wide `narrow:` 1399px
-one.** The first cut reused the existing `narrow` custom Tailwind screen
-(`max-width: 1399px`, `index.html`'s `tailwind.config`) on the assumption
-that it already answered "does this window have the room". Wrong in
-practice: the reviewer's real MacBook viewport is **1690×1054** (a
-1710×1107 screen at DPR 2, minus browser chrome) — comfortably above
-1399px, so it landed in the "wide screen, double width" branch, while this
-is exactly the cramped laptop-only case that should collapse ("ik zit op
-mac, en het is te breed"). So this pair now has **its own, wider, separate
-constant — `COMMENT_CLAUDE_WIDE_BREAKPOINT_PX = 1920`** (`home.mjs`),
-verified against three viewport widths (see Tests below): 1690px (the
-reviewer's own screen) collapses, 1919px collapses, 1920px does not.
-**`narrow:` (1399px) keeps meaning exactly what it always did — diff-card
-widths, etc. — and must NOT be folded back onto this one**: the two answer
-different questions ("does the OS-level chrome have room at all" vs. "is
-THIS specific side-by-side pair too cramped"), and 1399px was measured
-wrong for the second question once tested against a real device.
+**Still gated on the exact same screen width as before**
+(`state.commentClaudeNarrow`/`COMMENT_CLAUDE_WIDE_BREAKPOINT_PX = 1920`,
+`home.mjs` — see that field's own doc comment for why it stays a
+DELIBERATELY separate, wider cutoff than Tailwind's app-wide `narrow:`
+1399px screen, which keeps governing everything else, e.g. diff-card
+widths). At/above 1920px nothing shrinks or goes read-only at all — both
+halves render at full (doubled) width, exactly as before this whole feature
+existed ("voor laptop zoals het nu is" — the reviewer's own framing: this
+behavior is scoped to the laptop case only).
 
-`home.mjs`'s **`state.commentClaudeNarrow`**
-(`window.innerWidth < COMMENT_CLAUDE_WIDE_BREAKPOINT_PX`, kept live by the
-existing module-level `resize` listener, guarded so it only reassigns on an
-actual flip — see the vendored-proxy-notifies-on-every-set pitfall in
-`.claude/rules/arrowjs-pitfalls.md`) is the one bit of NEW plumbing: nothing
-else in this app needed a reactive mirror of a width breakpoint before,
-because every other width computation here rides on Tailwind's own CSS
-media query (no JS involved) — but swapping rail↔full column swaps real DOM
-shape, which does need a reactive trigger.
-
-**The predicates** (`RelatedPanel.mjs`):
+**The predicates** (`RelatedPanel.mjs`) — same trigger condition as the
+superseded rail cut, renamed to match what they now cause:
 
 - `commentSideFocused()` — `cs.focus === 'comment' || 'thread' || 'new'`.
-  `'new'` counts too (confirmed explicitly): the still-open, not-yet-placed
-  "Comment op deze regel" composer collapses Claude just like an existing
-  thread would.
+  `'new'` counts too: the still-open, not-yet-placed "Comment op deze regel"
+  composer makes Claude read-only just like an existing thread would.
 - `isClaudeChatFocused()` (pre-existing) — `cs.focus === 'claude'`.
-- `claudeColumnCollapsedToRail(state)` = `state.commentClaudeNarrow &&
-  commentSideFocused()`; `commentColumnCollapsedToRail(state)` =
+- `claudeColumnReadOnly(state)` = `state.commentClaudeNarrow &&
+  commentSideFocused()`; `commentColumnReadOnly(state)` =
   `state.commentClaudeNarrow && isClaudeChatFocused()`. Neither side ever
-  collapses while `cs.focus` is `null` (nothing in this row focused) — "zoals
-  nu" — nor on a wide screen (see below).
+  goes read-only while `cs.focus` is `null` (nothing in this row focused,
+  "zoals nu") nor on a wide screen.
 
-**Width — the row's TOTAL stays the same in every state, including a
-collapsed sibling.** An earlier cut of this had the expanded half simply
-RECLAIM the width the collapsed rail gave up (`scale = 1`, same as the
-wide-screen case) — reviewer report, with a screenshot: on a laptop,
-focusing the comment side correctly collapsed Claude to its rail, but the
-whole merged block then read as noticeably WIDER than the same block at
-rest (nothing focused). His own words: "maak in deze situatie het net zo
-breed als dat het niet actief is op een laptop (gaat over totale blok)". The
-row must stay exactly as wide as the rest state, not grow just because one
-half is now a rail.
+**Width — the row's TOTAL stays exactly as wide as the rest state, and this
+needed NO extra correction term (unlike the superseded rail cut).**
+`columnPairScale(state, thisSideFocused, siblingFocused)` (`RelatedPanel.mjs`)
+now returns `2/3` for the focused half, `1/3` for the read-only one, `1/2`
+for both at rest, `1` for both on a wide screen. Both halves are STILL
+rendered through the SAME `relatedWidthCls()` clamp at whatever scale — no
+fixed-width element (like the old rail) sits outside that formula any more
+— and `relatedWidthCls(chars,a,d1) + relatedWidthCls(chars,b,d2) ===
+relatedWidthCls(chars,a+b,d1+d2)` exactly, for ANY `a+b=1` (clamp scales
+homogeneously and shifts additively, `relatedWidthCls`'s own doc comment).
+Since `2/3+1/3=1`, just like `1/2+1/2=1` (rest) and the wide-screen case
+(each half's OWN scale doubling, not summed against a sibling), the SAME
+connector-subtraction convention that already existed
+(`COMMENT_CLAUDE_CONNECTOR_REM` always comes off the comment side's own
+call, never Claude's) keeps the row's total pinned to
+`relatedColumnWidthCls()` automatically — verified both algebraically and
+numerically (several `chars` values, both split directions) with no rail
+correction term needed at all.
 
-`columnPairScale(state, siblingCollapsedToRail)` still decides the SCALE
-(`1/2` at rest, `1` on a wide screen OR whenever the sibling has collapsed
-to its rail — "2x zo breed" is literally double the halved split), but scale
-alone is no longer enough: `railReclaimSubtractRem(siblingCollapsedToRail)`
-(`RelatedPanel.mjs`) additionally subtracts `COMMENT_CLAUDE_CONNECTOR_REM +
-RAIL_WIDTH_REM` (the rail's own fixed `w-14`/3.5rem, named next to the
-connector's own constant) from whichever half is left expanding — the
-collapsed sibling contributes NOTHING toward the connector's cost any more
-(it's a fixed-width rail, not a `relatedWidthCls()` call), so the ONE
-expanding half has to absorb both the connector AND the rail's width, not
-just widen freely. Verified algebraically (clamp scales homogeneously and
-shifts additively, `relatedWidthCls`'s own doc comment) and numerically
-across several `chars` values: `(expanding half) + 0.75rem(connector) +
-RAIL_WIDTH_REM` comes out EXACTLY equal to `relatedColumnWidthCls()` (the
-`scale=1` clamp), which is also exactly the rest state's own total
-(`commentColumnWidthCls() + connector + claudeColumnWidthCls()`, both at
-`scale=1/2`) and the wide-screen total (both at `scale=1`, no rail ever
-renders there). So the documented invariant is now, in every one of the
-three states —
+**What happened to the rail machinery.** `src/collapsedRail.mjs`
+(`railButtonHTML`) and `home.mjs`'s `collapsedColumnHTML` (the drilled/
+top-level column's own non-focused rail) are **completely unchanged** —
+that idiom is still exactly what it was, just no longer used for THIS pair.
+Removed, because they only ever existed to compensate for a fixed-width rail
+sitting outside the clamp formula: `RAIL_WIDTH_REM` and
+`railReclaimSubtractRem` (`RelatedPanel.mjs`), plus the two
+`railButtonHTML({...})` call sites in `ClaudeChatPanel`/`InlineComments` and
+the `claudeColumnCollapsedToRail`/`commentColumnCollapsedToRail` predicates
+(renamed to `claudeColumnReadOnly`/`commentColumnReadOnly`, same trigger
+condition, different consequence).
 
-    (comment half, or RAIL_WIDTH_REM if it's a rail)
-      + 0.75rem(connector)
-      + (Claude half, or RAIL_WIDTH_REM if it's a rail)
-      === relatedColumnWidthCls()
+**Rendering**: no more rail↔full toggle at the OUTER component level —
+`ClaudeChatPanel`/`InlineComments` always render their full component now;
+`InlineComments` is back to a thin pass-through (`syncComments` + delegate to
+`inlineCommentsCardHTML`), since there is no longer a top-level shape to
+toggle there at all. The read-only behavior instead lives in NESTED
+`${() => ...}` toggles inside the components that were already there:
 
-not just in the narrow-and-unfocused default case as an earlier version of
-this section claimed. See `commentColumnWidthCls`/`claudeColumnWidthCls`/
-`columnPairScale`/`railReclaimSubtractRem`'s own doc comments in
-`RelatedPanel.mjs` for the exact terms.
+- **Comment side**: `expandedConversation(c, openCommentMenu, readOnly)` — a
+  new `readOnly` param, threaded down from `commentCard` (which already
+  decides "stay expanded while `cs.focus==='claude'` and this is Claude's own
+  anchor" — that existing branch is EXACTLY when `readOnly` is now also
+  true, gated additionally on `state.commentClaudeNarrow`). Drops its bottom
+  composer row entirely (a nested `${() => readOnly ? '' : composerRow}`
+  toggle, the documented safe pattern for a slot whose shape changes,
+  `.claude/rules/arrowjs-pitfalls.md`) and its `@contextmenu`; the whole card
+  gets a `@click` that hands focus back
+  (`cc.commentId == null ? toNewFocus() : toComment()`) exactly when
+  `readOnly`, a no-op otherwise. `reactionBubble`/`viewingBubble` grew the
+  same `readOnly` param: drops the edit pencil and sets
+  `style="pointer-events:none"` on the message body's own `.innerHTML`-bound
+  div, so a link/mention/image/code-fence trigger inside it is inert — the
+  click still reaches the CARD's own handler instead, because an ancestor
+  hit-tests through an element with `pointer-events:none`.
+- **Claude side**: `claudeChatColumn(view, callbacks, readOnly,
+  onEnterReadOnly)` (`ClaudeChat.mjs`) mirrors this exactly — drops the
+  composer row and `claudeMenuButton`, suppresses `@contextmenu`, adds the
+  same whole-card `@click`, and `claudeBubble(..., readOnly)` drops
+  `claude-question-option`/`claude-retry` and disables the message body's own
+  pointer events. `onEnterReadOnly` is `ClaudeChatPanel`'s own
+  `enterFromReadOnly` — `cs.focus === 'new' ? enterClaudeChatFromNew() :
+  enterClaudeChat(state.pr)`, the same → hand-off the keyboard already uses.
+- **The unanchored/PR-wide-comment variant** (`commentDetailCard`, used via
+  `isPrCommentScope()`) gets the identical treatment through a new
+  `opts.readOnly` — the SAME `commentColumnReadOnly(state)` value, passed
+  only from `InlineComments`' merged call site (the sidebar's own unmerged
+  use of this card, `home.mjs`, never passes it and is unaffected).
 
-**Rendering**: `ClaudeChatPanel`/`InlineComments` (now split into the
-always-called wrapper plus a private `inlineCommentsCardHTML`) each toggle
-rail↔full **inside a stable `<div class="contents">` root** — the documented
-safe pattern for a slot whose shape changes
-(`.claude/rules/arrowjs-pitfalls.md`) — rather than returning two
-differently-shaped top-level templates under the SAME outer `.key(...)`
-`home.mjs` uses for these two components, which would instead hit the sibling
-"a keyed node is reused without re-running its bindings" pitfall.
-`InlineComments`'s always-called wrapper still calls `syncComments` itself
-(unconditionally, before the toggle) — moving it into the card-only branch
-would mean a page that LOADS with the comment half already rail-collapsed
-(e.g. a restored `?rel.foc=claude` deep link) never starts the comment poll
-at all.
+Every one of these read-only toggles rides inside an already-existing
+(or newly matching) `.key(...)` that folds the read-only/interactive state
+into its string — a composer appearing/disappearing is a real shape change,
+so a keyed node must not silently be reused across that flip (the "keyed
+node reused without re-running its bindings" pitfall,
+`.claude/rules/arrowjs-pitfalls.md`).
 
-**Clicking a rail runs the same function the keyboard already runs**
-(mouse-navigation.md's rule): the Claude rail calls
-`enterClaudeChatFromNew()`/`enterClaudeChat(state.pr)` (mirroring `→` from
-`'comment'`/`'thread'`/`'new'`); the comment rail calls
-`toNewFocus()`/`toComment()` (mirroring `←`/Escape from `'claude'`).
-
-**No extra signal beyond the idiom's own shape** — confirmed explicitly ("geen
-chevron of woordje erbij nodig"): the rail's own chevron + vertical label
-(already part of the reused idiom) is the only affordance: the format
-difference (full column vs. slim rail) already carries the meaning, per the
-colourblind rule.
-
-**Applies uniformly to both halves of the merged row**, including the
-unanchored/PR-wide-comment variant (`isPrCommentScope()` — confirmed
-explicitly, "ook de PR-brede/ankerloze variant"): the collapse wraps the
-whole exported column function, independent of what it renders inside, so
-`commentDetailCard` collapses away exactly like an ordinary thread would.
-
-Tests: three dedicated viewport cases in
-`tests/comment-claude-column-widths.spec.mjs` — **1690px** (the reviewer's
-own MacBook viewport: the unfocused half collapses to a rail, click expands
-it back), **1919px** (one px below the threshold: still collapses, so the
-cutoff really sits where it should), and **1920px** (the threshold itself:
-neither half collapses, both render at double width). Several pre-existing
-specs that drive this exact row at the suite's default (narrow, 1280×720)
-viewport needed small follow-up fixes, not because anything about them was
-wrong, but because this is a genuine, approved behavior change:
-`claude-chat-panel.spec.mjs` pins a wide viewport for its whole file
-(`test.use({ viewport: … })`, well above 1920px) since none of its cases are
-actually about the collapse feature — likewise
-`claude-chat-ring-clipped.spec.mjs`, `claude-empty-composer-menu.spec.mjs`,
-`code-fence-preview.spec.mjs`, `comment-anchor-takeover.spec.mjs`,
-`comment-code-fence-badge.spec.mjs` and `mouse-menu-buttons.spec.mjs`;
-`claude-chat-parallel.spec.mjs`, `command-menu.spec.mjs` and
-`pr-comment-claude-chat.spec.mjs` click the `comment-claude-rail`/
-`claude-chat-rail` back open (or assert `toHaveCount(0)` instead of a
-missing CSS class) at the points where the feature now legitimately hides
-an element they used to find directly.
+Tests: `tests/comment-claude-column-widths.spec.mjs` covers the same three
+widths as before (1690px — the reviewer's own MacBook viewport, 1919px,
+1920px), now asserting the 1/3↔2/3 split and read-only content instead of a
+rail. The specs that were adjusted for the rail in earlier commits
+(`claude-chat-panel.spec.mjs` and its wide-viewport siblings,
+`claude-chat-parallel.spec.mjs`, `command-menu.spec.mjs`,
+`pr-comment-claude-chat.spec.mjs`) were only re-touched where they actually
+broke, not preemptively — removing the rail means content is never fully
+hidden behind it any more, so several of their "click the rail open first"
+workarounds became unnecessary.
