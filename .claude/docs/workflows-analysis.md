@@ -157,6 +157,32 @@ Two scoping rules that apply to every rule below:
   this rule for the CURSOR side (`argListSites`, see "Scoping to the navigation
   cursor" in `.claude/docs/underlying-code.md`).
 
+  **The two sides deliberately keep one small difference, investigated and not
+  unified.** `openParenLines` (Go) treats a `#` as a line comment (ending the
+  scan on that line, `#[` is a PHP attribute, not a comment) because it runs
+  over a block's real *source* text, where a genuine `#` comment can appear.
+  `skipToArgListEnd` (JS, `src/home.mjs`) does **not** — it runs over *diff
+  rows*, where a leading `#[Attribute(...)]` on its own promoted-property line
+  is far more likely than a real `#` comment, and a real PHP 8 attribute's own
+  parens are already balanced on one line, so treating `#` as a comment there
+  would gain nothing. Checked against the real app worktrees (`data/worktrees/
+  *-base`, 1400+ PHP files): **zero** genuine `#`-line-comments occur anywhere
+  — every `#` is either `#[Attribute(...)]`, a hex-colour string literal
+  (`'#F97316'`, opaque to both sides' quote-tracking), or a `#`-heading inside a
+  heredoc prompt string (not PHP comment syntax at all, unhandled by both sides
+  equally). Block comments (`/* */`) are untracked by both sides for the same
+  reason: only `/** */` docblocks occur in practice, always *above* a
+  statement, never inside a still-open argument list. So the JS side's choice
+  to never treat `#` as a comment is deliberately the safer failure mode
+  (over-counting: the argument-list scope can run a little too long, never too
+  short) for input that is, in practice, never a real `#` comment — and even in
+  the theoretical case, the two functions feed different systems (Go decides
+  whether a call is scanned into a graph edge at all; JS only narrows which
+  already-resolved child is *shown* for the current cursor), so a divergence
+  between them can widen the UI's scoping, never fabricate or hide a graph
+  edge. Conclusion: no shared implementation is worth the coupling this would
+  add between the Go backend and the frontend `.mjs` — leave both as they are.
+
 Rules, in order:
 
 - **1–2 — plain calls.** `$this->`/`self::`/`static::` (own class);
