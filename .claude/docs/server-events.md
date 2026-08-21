@@ -52,6 +52,25 @@ wrong screen. That is what lets the server drop frames freely under pressure.
 - Keep-alive: a `: ping` comment every `sseKeepAlive` (20s), plus a
   `retry: 3000` hint on connect.
 
+### `chat.progress`/`chat.message` are consumed for EVERY conversation of the PR
+
+Both chat handlers (`ensureChatEvents`, `RelatedPanel.mjs`) used to drop any
+frame whose `key` was not the conversation the panel happened to show. They no
+longer do: a reviewer can have a turn running on code they navigated away from
+(see "Parallel conversations" in `.claude/docs/claude-chat-panel.md`), and that
+turn's progress is exactly what the index pill of its own code reports. The
+"never trust a pushed body" rule is untouched — a `chat.message` still only ever
+makes the conversation **in view** refetch `GET /api/chat`; for any other one it
+just flags "an answer landed here".
+
+Its resync read grew a second, PR-wide form for the same reason:
+`GET /api/chat/progress?pr=N` returns every running turn of that PR, keyed by
+conversation id (`runningChatProgressForPR`), so a tab that reconnects mid-turn
+rebuilds its whole per-conversation picture instead of only the conversation it
+has anchored. Both resync reads yield to a newer pushed event per conversation —
+a reconnecting stream resyncs every few hundred ms, so without that they would
+keep wiping the frames they are catching up on.
+
 ### `commentbatch.progress` — the one event whose payload has no read model at all
 
 Like `chat.progress` it carries a volatile snapshot rather than a "go refetch"

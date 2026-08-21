@@ -31,6 +31,18 @@ import { claudeChatColumn, claudeStatusText } from './ClaudeChat.mjs'
 import { codePreviewColumn } from './CodePreview.mjs'
 import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
 import { syncCommentBatch, batchProgressFor, batchNoteFor } from './commentBatch.mjs'
+import {
+  anyTurnRunning,
+  clearTurnAnswered,
+  isTurnBusy,
+  lastTurnProgressAt,
+  loadRunningTurns,
+  markTurnAnswered,
+  setTurnBusy,
+  setTurnProgress,
+  setTurnScopes,
+  turnProgress,
+} from './claudeTurns.mjs'
 import { colWidthStyle, startColumnResize, resetColumnWidth, resizeHandle, parseAutoWidthPx } from './columnWidth.mjs'
 import { autoGrowTextarea, resetTextareaHeight } from './textareaAutoGrow.mjs'
 import { updateScrollFade } from './scrollFade.mjs'
@@ -1071,8 +1083,10 @@ function toNew(commentTargetFn) {
   cc.messages = []
   cc.runId = null
   cc.status = 'idle'
-  cc.progress = null
   cc.sendError = ''
+  // Deliberately NOT clearing the previous conversation's live turn: it keeps
+  // running server-side and is reported per conversation (claudeTurns.mjs), so
+  // it stays visible as an index pill instead of vanishing with this reset.
 }
 
 // toNewFocus is the mirror of toComment() for the still-open, not-yet-placed
@@ -1589,7 +1603,6 @@ const cc = reactive({
   // workflow / fetching the transcript). A genuinely failed Claude TURN is a
   // normal message with kind 'error' (see chat_workflow.go), not this field.
   status: 'idle',
-  busy: false, // a message/turn is currently in flight (POST .../signals/message)
   // sendError is the reviewer-facing sentence for a Signal POST that was
   // REJECTED or never arrived — '' whenever the last send was accepted. This
   // is deliberately separate from `status` (the panel's own load state) and
@@ -1598,12 +1611,14 @@ const cc = reactive({
   // transcript at all and without this the column is simply inert. See
   // sendClaudeMessage.
   sendError: '',
-  // progress is the VOLATILE snapshot of a turn Claude is running right now
-  // (chat_progress.go): which phase/tool, plus the answer text produced so
-  // far. Pushed over SSE (chat.progress) and refetched on (re)connect from
-  // GET /api/chat/progress; never persisted anywhere, so it is null whenever
-  // no turn is running. The saved transcript (cc.messages) stays the truth.
-  progress: null,
+  // "is a turn running / what is it doing" is deliberately NOT a field here:
+  // it lives per conversation in claudeTurns.mjs (ccBusy/ccProgress below read
+  // this conversation's entry out of it). A reviewer can send a message, walk
+  // to other code and start a second conversation there while the first is
+  // still being answered — with a single slot on `cc` the second send would
+  // queue behind the first one's turn and the first one's progress/answer
+  // would be dropped the moment this panel re-anchored. See "Parallel
+  // conversations" in .claude/docs/claude-chat-panel.md.
   // queued holds the reviewer's NEXT turns, typed while an earlier one is
   // still running ("doorpraten", like the Claude CLI): each entry is
   // {id, body, context, commentId, runId} and is sent as its own ordinary
@@ -1630,6 +1645,25 @@ const cc = reactive({
   summary: '',
   summaryStatus: '',
 })
+
+// ccBusy/ccProgress are "is a turn running for the conversation THIS panel
+// currently shows" — the per-conversation registry (claudeTurns.mjs) narrowed
+// to cc.commentId. Everything in this file that used to read cc.busy/
+// cc.progress goes through these two, so a turn on another selection can never
+// gate this conversation's composer or overwrite its status line.
+function ccBusy() {
+  return isTurnBusy(cc.commentId)
+}
+
+function ccProgress() {
+  return turnProgress(cc.commentId)
+}
+
+// queuedFor scopes the client-side queue to one conversation — each entry
+// already carries the conversation it was typed against (see queueClaudeMessage).
+function queuedFor(commentId) {
+  return cc.queued.filter((q) => q.commentId === commentId)
+}
 
 // pendingClaudeQuestion returns the newest message when it is a still-open
 // question with clickable options (kind 'question', no answer yet, at least
@@ -1698,18 +1732,21 @@ function chatAnchorComment() {
 // conversation the reviewer just started in THIS tab, which briefly made this
 // sync wrongly treat a real, just-created conversation as nonexistent.
 function syncClaudeAnchorForSelection() {
-  // Also skip while a turn is actively running for the anchored conversation
-  // (hasActiveClaudeTurn) — a plain block/comment switch elsewhere must not
-  // re-anchor (and thereby reset/hide) `cc` while it is mid-turn; see
-  // claudeChatVisible()'s own "stay open" comment above.
-  if (cs.focus === 'claude' || cs.focus === 'new' || hasActiveClaudeTurn()) return
+  // A running turn deliberately does NOT hold this sync back (it used to —
+  // see "The chat column is a function of the selected code" in
+  // .claude/docs/claude-chat-panel.md): the panel is purely a function of the
+  // selected code, and the turn itself survives the switch because it is
+  // tracked per conversation (claudeTurns.mjs) instead of on `cc`.
+  if (cs.focus === 'claude' || cs.focus === 'new') return
   const c = chatAnchorComment()
   const nextId = c ? c.id : null
   if (nextId === cc.commentId) return
   cc.commentId = nextId
   cc.messages = []
   cc.runId = null
-  cc.progress = null
+  // Looking at it counts as seeing it: whatever landed here while the reviewer
+  // was elsewhere no longer needs an index pill.
+  clearTurnAnswered(nextId)
   cs.claudePinned = true // a different conversation always starts pinned to its own bottom
   cc.sendError = '' // another conversation, so the previous one's rejection no longer applies
   if (nextId == null) {
@@ -1755,6 +1792,7 @@ async function loadChatConversations(pr) {
 // Switching to a DIFFERENT comment resets cc's transcript first, so a stale
 // message from the previous conversation never flashes under the new one.
 async function ensureAndLoadChat(pr, commentId) {
+  clearTurnAnswered(commentId)
   if (cc.commentId !== commentId) {
     cc.commentId = commentId
     cc.messages = []
@@ -1911,25 +1949,26 @@ async function loadChatProgress(commentId) {
     const res = await fetch('/api/chat/progress?commentId=' + encodeURIComponent(commentId) + repoParam())
     if (!res.ok) return
     const json = await res.json()
-    if (cc.commentId !== commentId) return // stale — a later switch already won
     // A pushed event that landed WHILE this request was in flight is newer than
     // what the response describes, so it must win — otherwise a resync (which
     // runs on every reconnect, right next to the events it is catching up on)
-    // could wipe a fresher snapshot and freeze the status line.
-    if (lastProgressAt > startedAt) return
-    applyChatProgress(json.running && json.progress ? json.progress : null)
+    // could wipe a fresher snapshot and freeze the status line. Per
+    // conversation, since a resync for one says nothing about another.
+    if (lastTurnProgressAt(commentId) > startedAt) return
+    applyChatProgress(commentId, json.running && json.progress ? json.progress : null)
   } catch (_) {
     // a missing snapshot just means "no live turn known" — the transcript stands
   }
 }
 
-// applyChatProgress is the single writer of cc.progress, so "when did we last
-// learn something about the live turn" is tracked in exactly one place.
-let lastProgressAt = 0
-function applyChatProgress(p) {
-  cc.progress = p
-  lastProgressAt = Date.now()
-  scrollClaudeThreadToBottom()
+// applyChatProgress writes one conversation's progress snapshot into the shared
+// per-conversation store (claudeTurns.mjs, which stamps "when did we last learn
+// something about this live turn" itself) and does the two things only the
+// panel can do: keep the thread scrolled to the bottom of the conversation in
+// view, and run the 1s elapsed-counter heartbeat.
+function applyChatProgress(commentId, p) {
+  setTurnProgress(commentId, p)
+  if (commentId === cc.commentId) scrollClaudeThreadToBottom()
   syncChatTicker()
 }
 
@@ -2008,7 +2047,7 @@ async function sendClaudeMessage(text, action = '', context = '', target = null)
   const commentId = target ? target.commentId : cc.commentId
   if (!runId) return
   if (!needsNoText && !trimmed) return
-  cc.busy = true
+  setTurnBusy(commentId, true)
   cc.sendError = ''
   try {
     const res = await fetch('/api/workflows/' + encodeURIComponent(runId) + '/signals/message', {
@@ -2040,8 +2079,9 @@ async function sendClaudeMessage(text, action = '', context = '', target = null)
     // visible in the column.
     cc.sendError = 'Geen verbinding met de server — draait slash nog?'
   } finally {
-    cc.busy = false
-    // Whatever the reviewer typed meanwhile goes out now, one turn at a time.
+    setTurnBusy(commentId, false)
+    // Whatever the reviewer typed meanwhile goes out now, one turn at a time
+    // PER conversation.
     drainClaudeQueue()
   }
 }
@@ -2073,7 +2113,7 @@ let queuedIdSeq = 0
 function queueClaudeMessage(text, context = '') {
   const trimmed = (text || '').trim()
   if (!trimmed) return Promise.resolve()
-  if (!cc.busy) return sendClaudeMessage(trimmed, '', context)
+  if (!ccBusy()) return sendClaudeMessage(trimmed, '', context)
   if (!cc.runId) return Promise.resolve()
   queuedIdSeq += 1
   cc.queued = cc.queued.concat([
@@ -2082,17 +2122,26 @@ function queueClaudeMessage(text, context = '') {
   return Promise.resolve()
 }
 
-// drainClaudeQueue sends the oldest queued turn, if any — called from
-// sendClaudeMessage's own `finally`, so the queue drains itself one turn at a
-// time (each send ends in another drain). Guarded on cc.busy so two overlapping
-// drains can never send the same entry twice; the entry is removed from the
-// queue BEFORE it is sent, which is also what makes its "in de wachtrij"
-// bubble give way to the ordinary user bubble the send itself produces.
+// drainClaudeQueue sends the oldest queued turn of every conversation that has
+// nothing in flight — called from sendClaudeMessage's own `finally`, so each
+// conversation's queue drains itself one turn at a time (each send ends in
+// another drain). Guarded on that conversation's own busy flag so two
+// overlapping drains can never send the same entry twice; the entry is removed
+// from the queue BEFORE it is sent, which is also what makes its "in de
+// wachtrij" bubble give way to the ordinary user bubble the send produces.
 function drainClaudeQueue() {
-  if (cc.busy || !cc.queued.length) return
-  const [next, ...rest] = cc.queued
-  cc.queued = rest
-  sendClaudeMessage(next.body, '', next.context, { runId: next.runId, commentId: next.commentId })
+  const pending = cc.queued
+  const seen = new Set()
+  for (const next of pending) {
+    // One in-flight turn per conversation, FIFO within it — but two different
+    // conversations drain independently, so a queue on one never holds up the
+    // other (see "Parallel conversations" in claude-chat-panel.md).
+    if (seen.has(next.commentId)) continue
+    seen.add(next.commentId)
+    if (isTurnBusy(next.commentId)) continue
+    cc.queued = cc.queued.filter((q) => q.id !== next.id)
+    sendClaudeMessage(next.body, '', next.context, { runId: next.runId, commentId: next.commentId })
+  }
 }
 
 // clearClaudeChat sends the "clear" ChatMessageSignal (chatActionClear in
@@ -2132,7 +2181,7 @@ export async function clearClaudeChat() {
   // Belt-and-braces local reset, same reasoning as sendClaudeMessage's own
   // refetch: chat.message (SSE) already triggers loadChatMessages elsewhere,
   // but the reviewer's OWN action shouldn't wait on that round trip.
-  cc.progress = null
+  setTurnProgress(cc.commentId, null)
   cs.claudePos = 0
   cs.claudePinned = true
   cs.claudeOptionSel = 0
@@ -2437,15 +2486,16 @@ function claudeThreadContextBlock() {
 // Deliberately only when the turn is NOT running: a chat.message also fires for
 // the reviewer's own message at the very start of a turn, and clearing there
 // would blink the status line away again a moment after it appeared.
-function clearFinishedChatProgress() {
-  if (cc.progress && !cc.progress.running) applyChatProgress(null)
+function clearFinishedChatProgress(commentId = cc.commentId) {
+  const p = turnProgress(commentId)
+  if (p && !p.running) applyChatProgress(commentId, null)
 }
 
 // syncChatTicker runs a 1s heartbeat only while a turn is actually running, so
 // the elapsed-seconds counter advances without a permanent timer on the page.
 let chatTickTimer = null
 function syncChatTicker() {
-  const running = !!(cc.progress && cc.progress.running)
+  const running = anyTurnRunning()
   if (running && !chatTickTimer) {
     chatTickTimer = setInterval(() => {
       cc.tick = Date.now()
@@ -2561,17 +2611,17 @@ export function isClaudeChatFocused() {
 function isNewChatUnanchored() {
   return cs.focus === 'new' || (cs.focus === 'claude' && cc.commentId == null)
 }
-// Reviewer request: the opened-out conversation (the actual transcript,
-// including the reviewer's own just-typed message) must stay visible for as
-// long as a turn is running for it — even after navigating away to a
-// different block/comment, or after explicitly closing the panel (←/Escape/
-// the "Sluit" button). hasActiveClaudeTurn() is therefore a THIRD, standalone
-// reason to show the column, independent of hasVisibleComments()/
-// isNewChatUnanchored() — see "Stay open while a Claude turn is running" in
-// claude-chat-panel.md. syncClaudeAnchorForSelection has a matching guard so
-// `cc` itself is never re-anchored/reset out from under a running turn.
+// A RUNNING turn is deliberately NOT a reason to keep this column visible
+// (it was, until the reviewer reversed that: "een comment is gekoppeld aan
+// code, chat aan comment, zo is een chat altijd gekoppeld aan code. laat het
+// alleen in beeld als code is geselecteerd waar die chat over gaat"). The
+// column is purely a function of the selected code; navigating elsewhere hides
+// it as if no conversation existed, and the still-running turn reports itself
+// through the index pill of its OWN code instead (claudeTurns.mjs). See "The
+// chat column is a function of the selected code" in claude-chat-panel.md —
+// don't reintroduce the stay-open branch here.
 export function claudeChatVisible() {
-  return hasVisibleComments() || isPrCommentScope() || isNewChatUnanchored() || hasActiveClaudeTurn()
+  return hasVisibleComments() || isPrCommentScope() || isNewChatUnanchored()
 }
 
 // isPrCommentScope — an unanchored comment-index item (a PR-wide comment, an
@@ -2725,22 +2775,42 @@ function ensureChatEvents(pr) {
   ensureEvents(pr)
   if (chatEventsBound) return
   chatEventsBound = true
+  loadRunningTurns(pr)
+  // Every frame of this PR is accepted, not just the conversation on screen:
+  // a turn running on other code is exactly what the index pill reports (see
+  // claudeTurns.mjs).
   onEvent('chat.progress', (ev) => {
-    if (!cc.commentId || ev.key !== cc.commentId) return
-    applyChatProgress(ev.data || null)
-    if (cc.progress && !cc.progress.running) {
-      // The turn ended. Keep the partial visible for a moment so the bubble
-      // doesn't blink out before the real message has been refetched — the
-      // chat.message right behind this normally clears it within one fetch;
-      // this timer is only the safety net for when that never arrives.
-      setTimeout(clearFinishedChatProgress, 4000)
+    if (!ev.key) return
+    applyChatProgress(ev.key, ev.data || null)
+    const p = turnProgress(ev.key)
+    if (p && !p.running) {
+      if (ev.key === cc.commentId) {
+        // The turn ended. Keep the partial visible for a moment so the bubble
+        // doesn't blink out before the real message has been refetched — the
+        // chat.message right behind this normally clears it within one fetch;
+        // this timer is only the safety net for when that never arrives.
+        setTimeout(() => clearFinishedChatProgress(ev.key), 4000)
+      } else {
+        // Nothing on screen to protect, and the reviewer has an answer waiting
+        // on code they are not looking at — that is what the pill is for.
+        applyChatProgress(ev.key, null)
+        markTurnAnswered(ev.key)
+      }
     }
   })
   onEvent('chat.message', (ev) => {
-    if (!cc.commentId || ev.key !== cc.commentId) return
-    loadChatMessages(cc.commentId).then(clearFinishedChatProgress)
+    if (!ev.key) return
+    if (ev.key === cc.commentId) {
+      loadChatMessages(cc.commentId).then(() => clearFinishedChatProgress(cc.commentId))
+      return
+    }
+    // A transcript change on a conversation we know had a turn going: mark it
+    // so its index pill says an answer landed. Never trusted as content — the
+    // transcript itself is only ever refetched for the conversation in view.
+    if (turnProgress(ev.key) || isTurnBusy(ev.key)) markTurnAnswered(ev.key)
   })
   onEventsResync(() => {
+    loadRunningTurns(cs.pr)
     if (!cc.commentId) return
     loadChatMessages(cc.commentId)
     loadChatProgress(cc.commentId)
@@ -2765,7 +2835,7 @@ function claudeChatView() {
   return {
     messages: () => cc.messages,
     status: () => cc.status,
-    busy: () => cc.busy,
+    busy: () => ccBusy(),
     // The last send that never made it to the workflow — '' when there is
     // none. See sendClaudeMessage/sendErrorText.
     sendError: () => cc.sendError,
@@ -2798,12 +2868,12 @@ function claudeChatView() {
       if (!c || !c.line) return ''
       return (GRAN_LABEL[c.gran] || 'deze context') + ' · regel ' + c.line
     },
-    // The live turn: null when nothing is running. See cc.progress.
-    progress: () => cc.progress,
+    // The live turn: null when nothing is running. See ccProgress.
+    progress: () => ccProgress(),
     // The reviewer's own not-yet-sent turns, oldest first — scoped to the
     // conversation in view, since an entry keeps the one it was typed against
     // (see queueClaudeMessage).
-    queued: () => cc.queued.filter((q) => q.commentId === cc.commentId),
+    queued: () => queuedFor(cc.commentId),
     // Whether the KEYBOARD is actually sitting in this column right now —
     // reuses the same isClaudeChatFocused() predicate the visibility rules
     // above use. Drives claudeChatColumn's own focus border (see its doc
@@ -2815,7 +2885,7 @@ function claudeChatView() {
     // register the reactive dependency that makes this re-render every second
     // (the value itself is irrelevant — the real number comes from the clock).
     elapsed: () => {
-      const p = cc.progress
+      const p = ccProgress()
       if (!p || !p.startedAt) return 0
       void cc.tick
       return Math.max(0, Math.round((Date.now() - p.startedAt) / 1000))
@@ -2984,18 +3054,18 @@ function commentFooterText() {
   return ''
 }
 
-// hasActiveClaudeTurn — true whenever the currently anchored conversation
-// (cc) has a turn in flight: a send/Signal round-trip actually running
-// (cc.busy), a live progress snapshot pushed over SSE (cc.progress), or a
-// reviewer message waiting in the client-side queue (cc.queued, see
-// queueClaudeMessage). Extracted out of what used to be two near-identical
-// local closures (hasCommentClaudeFooter's own check and
-// CommentClaudeFooter's `claudeActive`) so BOTH "should the full,
-// opened-out conversation stay visible" checks below share the exact same
-// definition of "a turn is running" — see "Stay open while a Claude turn is
-// running" in .claude/docs/claude-chat-panel.md.
+// hasActiveClaudeTurn — true whenever the currently ANCHORED conversation has
+// a turn in flight: a send/Signal round-trip actually running, a live progress
+// snapshot pushed over SSE, or a reviewer message waiting in the client-side
+// queue (see queueClaudeMessage). Strictly per conversation: a turn running on
+// another selection is not "active" here — it reports itself through its own
+// index pill (claudeTurns.mjs) — which is also why this no longer decides
+// whether the column stays VISIBLE (see claudeChatVisible below and "The chat
+// column is a function of the selected code" in
+// .claude/docs/claude-chat-panel.md). Its remaining job is the footer's status
+// line.
 export function hasActiveClaudeTurn() {
-  return cc.busy || !!cc.progress || cc.queued.length > 0
+  return ccBusy() || !!ccProgress() || queuedFor(cc.commentId).length > 0
 }
 
 // hasCommentClaudeFooter — true exactly when CommentClaudeFooter itself would
@@ -4236,6 +4306,11 @@ async function loadComments(pr) {
       // identityOf. Cached, so a poll that brings nothing new costs no request.
       await ensureNames(commentAuthors(list))
       cs.list = list
+      // Which code each conversation hangs on, for the index pill of a turn
+      // running on code the reviewer is not looking at (claudeTurns.mjs owns
+      // the turns, this file owns the comments — so the mapping is handed over
+      // here, on the comment poll's own cadence).
+      setTurnScopes(list.filter((c) => !c.kind).map((c) => [c.id, c.file + '|' + c.label]))
       recomputeView()
       // Ask for a short title for every long comment that still lacks one —
       // idempotent, gated on the AI switch, see requestCommentTitles.
@@ -4583,7 +4658,7 @@ async function sendClaudeMessageFromNew(state, commentTarget, text, action) {
   // the conversation's FIRST turn, which is the only one that carries one
   // (claudeContextBlock) — and it would go stale anyway by the time this is
   // actually sent.
-  if (cc.busy && !action) return queueClaudeMessage(text)
+  if (ccBusy() && !action) return queueClaudeMessage(text)
   const c = await ensureClaudeAnchorForNew(state, commentTarget)
   if (c) await ensureAndLoadChat(state.pr, c.id)
   await sendClaudeMessage(text, action, claudeContextBlock(commentTarget))

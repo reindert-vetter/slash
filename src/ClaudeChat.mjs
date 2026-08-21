@@ -147,6 +147,10 @@ function claudeQuestionOptions(msg, onSend, optionSel) {
 // busy with, and the meaning may not depend on colour (see the colourblind
 // rule in .claude/rules/conventions.md).
 const PHASE_LABEL = {
+  // waiting: this turn asked for write access and is queued behind the one
+  // code-turn slot (chat_write_gate.go) — a question-only turn never sees it.
+  // Said in words, because a silent stall is indistinguishable from a hang.
+  waiting: 'Wacht op een andere codewijziging…',
   preparing: 'Werkmap klaarzetten…',
   starting: 'Claude start…',
   thinking: 'Claude denkt na…',
@@ -198,7 +202,7 @@ export function claudeStatusText(p, elapsed) {
 
 // claudePartialBubble — the answer as it is still being written. A THROWAWAY
 // render of throwaway data: it disappears the moment the real, stored message
-// arrives (RelatedPanel.mjs clears cc.progress after refetching the
+// arrives (RelatedPanel.mjs clears the conversation's progress after refetching the
 // transcript), so it deliberately carries no id/key of its own and is never
 // part of the message list.
 function claudePartialBubble(view) {

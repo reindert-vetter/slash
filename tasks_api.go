@@ -798,7 +798,8 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// (see modules/chat; the conversation id IS the comment thread's id, so pr
 	// isn't needed to scope the read).
 	mux.HandleFunc("/api/chat", s.handleChat)
-	// GET /api/chat/progress?commentId=X → the volatile snapshot of a RUNNING
+	// GET /api/chat/progress?commentId=X (one conversation) or ?pr=N (all of a
+	// PR's running turns) → the volatile snapshot of a RUNNING
 	// turn (chat_progress.go): the resync read for the SSE stream below, not a
 	// poll target.
 	mux.HandleFunc("/api/chat/progress", s.handleChatProgress)
@@ -2027,8 +2028,10 @@ func (s *server) handleChat(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleChatProgress serves GET /api/chat/progress?commentId=X — the volatile
-// "what is Claude doing right now" snapshot of a running turn (chat_progress.go).
+// handleChatProgress serves GET /api/chat/progress — the volatile "what is
+// Claude doing right now" snapshot (chat_progress.go), in two forms:
+// ?commentId=X for ONE conversation ({ok, running: bool, progress}) and ?pr=N
+// for every running turn of a PR ({ok, running: {conversationId: snapshot}}).
 // It is the RESYNC read for the SSE stream, not a poll target: a tab that opens
 // or reconnects mid-turn has missed every chat.progress event so far and catches
 // up with this one call. No running turn → {ok:true, running:false}, so the
@@ -2039,8 +2042,21 @@ func (s *server) handleChatProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	commentID := r.URL.Query().Get("commentId")
+	// PR-wide form (?pr=N, no commentId): every RUNNING turn of that PR, keyed
+	// by conversation id. The per-conversation resync above only tells a tab
+	// about the conversation it currently SHOWS, while a reviewer can have a
+	// turn running on a conversation they navigated away from (see "Parallel
+	// conversations" in .claude/docs/claude-chat-panel.md) — this is how the
+	// index pill for such a turn survives a refresh/reconnect.
 	if commentID == "" {
-		http.Error(w, "commentId required", http.StatusBadRequest)
+		pr, _ := strconv.Atoi(r.URL.Query().Get("pr"))
+		if pr <= 0 {
+			http.Error(w, "commentId or pr required", http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok": true, "running": runningChatProgressForPR(queryRepo(r), pr),
+		})
 		return
 	}
 	p, ok := chatProgressFor(commentID)

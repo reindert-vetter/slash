@@ -755,6 +755,24 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 	// reviewer's own original message (already in that session's history).
 	hadShell := false
 	if isNeedWriteDirective(result.Text) {
+		// From here on this turn is going to CHANGE code, and only one such
+		// turn runs at a time (chat_write_gate.go) — a second one waits here
+		// instead of being refused. Everything above this line (the read-only
+		// attempt that answers the large majority of turns) stays unlimited
+		// and fully parallel across conversations.
+		waited := false
+		release := acquireWriteTurnSlot(ctx, func() {
+			waited = true
+			logTurnMilestone("waiting for the code-turn slot after %v", time.Since(t0))
+			advanceChatProgress(arg.Repo, arg.PR, arg.ConversationID, chatPhaseWaiting)
+		})
+		defer release()
+		if waited {
+			// The wait is over; don't leave "Wacht op…" standing until the
+			// first streamed event happens to replace it.
+			logTurnMilestone("got the code-turn slot after %v", time.Since(t0))
+			advanceChatProgress(arg.Repo, arg.PR, arg.ConversationID, chatPhaseStarting)
+		}
 		dir, ok := prepareChatShellWorkDir(ctx, tm, dataDir, arg.Repo, arg.PR, arg.ConversationID)
 		if !ok {
 			msg := chat.Message{

@@ -85,6 +85,34 @@ func TestHandleChatProgress(t *testing.T) {
 	}
 }
 
+// The PR-wide form: every running turn of ONE pr, keyed by conversation id.
+// This is what lets a tab know about a conversation it is not currently
+// showing (a chat still running on another selection) after a reconnect.
+func TestHandleChatProgressPerPR(t *testing.T) {
+	resetChatProgress()
+	defer resetChatProgress()
+	s := &server{}
+
+	startChatProgress("", 7, "c1")
+	startChatProgress("", 7, "c2")
+	startChatProgress("", 8, "other-pr")
+	startChatProgress("owner/name", 7, "other-repo")
+	finishChatProgress("", 7, "c2")
+
+	rr := httptest.NewRecorder()
+	s.handleChatProgress(rr, httptest.NewRequest(http.MethodGet, "/api/chat/progress?pr=7", nil))
+	body := rr.Body.String()
+	if !strings.Contains(body, `"c1"`) {
+		t.Fatalf("running turn of this pr missing: %q", body)
+	}
+	if strings.Contains(body, `"c2"`) {
+		t.Fatalf("finished turn must be gone: %q", body)
+	}
+	if strings.Contains(body, "other-pr") || strings.Contains(body, "other-repo") {
+		t.Fatalf("another pr/repo leaked into the read: %q", body)
+	}
+}
+
 // A connection that fell behind is told to resync rather than silently
 // skipping events (the drop policy in eventbus.go).
 func TestSSEResyncAfterDrop(t *testing.T) {

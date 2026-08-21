@@ -1455,15 +1455,17 @@ test('a just-sent Claude message scrolls into view and stays there once the turn
   await expect.poll(distanceFromBottom).toBeLessThanOrEqual(2)
 })
 
-// "Stay open while a Claude turn is running" (claude-chat-panel.md): a mouse
-// click straight onto a DIFFERENT block — the exact move that otherwise
-// releases the panel entirely (see "a mouse click straight onto a different
-// block releases a stale claude-focused panel" above) — must NOT hide the
-// still-running conversation while a turn is actually in flight. Driven via a
-// mocked chat.progress SSE frame (same technique as
+// "The chat column is a function of the selected code" (claude-chat-panel.md):
+// a chat hangs on a comment and a comment hangs on code, so navigating to
+// OTHER code hides the whole comment+Claude row as if no conversation existed
+// — even while a turn is running for it. This test is the inverted successor of
+// an earlier "stay open while a Claude turn is running" test, which asserted
+// the opposite; the reviewer reversed that rule, and the still-running turn is
+// now reported on the index row of its own code instead (claudeChatPill).
+// Driven via a mocked chat.progress SSE frame (same technique as
 // tests/claude-chat-progress.spec.mjs) rather than a real, slow Claude call,
 // so the "still running" window is deterministic instead of racing a timeout.
-test('the Claude column stays open while a turn is running, even after navigating to a different block', async ({
+test('the Claude column is a function of the selected code: navigating away hides it, the index row keeps reporting the running turn', async ({
   page,
 }) => {
   await page.goto('/pr/12903')
@@ -1513,19 +1515,21 @@ test('the Claude column stays open while a turn is running, even after navigatin
   // reconnect right next to the events it is catching up on) to agree with
   // the pushed frame — otherwise it races the real, unmocked backend (which
   // never actually ran a turn for this fixture) and can occasionally win,
-  // wiping cc.progress the instant a reconnect's resync resolves after its
-  // own chat.progress event was already applied.
-  await page.route('**/api/chat/progress*', (route) =>
-    route.fulfill({
+  // wiping the snapshot the instant a reconnect's resync resolves after its
+  // own chat.progress event was already applied. Both forms are answered: the
+  // per-conversation one (?commentId=) and the PR-wide one (?pr=, which feeds
+  // the index pill of a turn on code that is NOT selected).
+  await page.route('**/api/chat/progress*', (route) => {
+    const running = { running: true, phase: 'thinking', startedAt: Date.now() - 1000, updatedAt: Date.now() }
+    const perPR = new URL(route.request().url()).searchParams.get('commentId') === null
+    return route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({
-        ok: true,
-        running: true,
-        progress: { running: true, phase: 'thinking', startedAt: Date.now() - 1000, updatedAt: Date.now() },
-      }),
-    }),
-  )
+      body: JSON.stringify(
+        perPR ? { ok: true, running: { [conversationId]: running } } : { ok: true, running: true, progress: running },
+      ),
+    })
+  })
 
   try {
     await page.goto('/pr/12903')
@@ -1537,18 +1541,33 @@ test('the Claude column stays open while a turn is running, even after navigatin
     await page.keyboard.press('ArrowRight') // comment -> claude
     await expect(page.getByTestId('claude-chat-status')).toContainText('Claude denkt na')
 
-    // Back to the sidebar and a plain mouse click onto a DIFFERENT block —
-    // never through →/←/Escape or ↓ at claudePos === 0.
+    // Back to the sidebar and a plain mouse click onto a DIFFERENT block.
     await page.keyboard.press('ArrowLeft') // claude -> comment
     await page.keyboard.press('ArrowLeft') // comment -> diff
     await page.keyboard.press('ArrowLeft') // diff -> list
     await page.locator('[data-idx]').filter({ hasText: 'CreatePaymentAction::findOrCreateCustomer' }).first().click()
     await page.keyboard.press('ArrowRight') // list -> diff on block B
 
-    // Block B carries no comment of its own, but the still-running
-    // conversation from block A must keep showing — not just its bare
-    // one-line footer status.
-    await expect(page.getByTestId('claude-chat-column')).toBeVisible()
+    // Block B carries no comment of its own, so the whole comment+Claude row
+    // is gone — as if no conversation existed anywhere. A chat hangs on a
+    // comment and a comment hangs on code, so the column belongs to the code
+    // it is about and to nothing else. This deliberately REPLACES the earlier
+    // "stay open while a turn is running" rule — see "The chat column is a
+    // function of the selected code" in .claude/docs/claude-chat-panel.md.
+    await expect(page.getByTestId('claude-chat-column')).toHaveCount(0)
+    await expect(page.getByTestId('claude-chat-status')).toHaveCount(0)
+
+    // The running turn is not lost, it is reported where it belongs: on the
+    // index row of its OWN code, in words.
+    const pill = page.locator('[data-idx]').filter({ hasText: label }).first().getByTestId('block-row-claude-chat')
+    await expect(pill).toContainText('Claude bezig')
+
+    // And walking back onto that code shows the conversation again, live.
+    await page.keyboard.press('ArrowLeft') // diff -> list
+    await page.locator('[data-idx]').filter({ hasText: label }).first().click()
+    await page.keyboard.press('ArrowRight') // list -> diff
+    await page.keyboard.press('ArrowRight') // diff -> comment
+    await page.keyboard.press('ArrowRight') // comment -> claude
     await expect(page.getByTestId('claude-chat-status')).toContainText('Claude denkt na')
   } finally {
     await page.request.post('/api/workflows/' + conversationId + '/signals/delete', {

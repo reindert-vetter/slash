@@ -463,51 +463,157 @@ Test: the "a mouse click straight onto a different block releases a stale
 claude-focused panel, not just the dedicated exits" case in
 `tests/claude-chat-panel.spec.mjs`.
 
-### Stay open while a Claude turn is running
+### The chat column is a function of the selected code (this REPLACED "stay open while a turn is running")
 
-Reviewer request: while Claude is actively working on a turn, the fully
-opened-out conversation — the transcript with the reviewer's own just-typed
-message and the live status underneath it — must keep showing, even if the
-reviewer navigates away to a different block/comment or explicitly closes the
-panel (`←`/`Escape`, the PR-comment column's own "Sluit" button). Before this,
-every one of those released the panel down to `CommentClaudeFooter`'s bare
-one-line status ("Claude denkt…"), hiding the very message that status is
-about.
+**Read this before "fixing" a running turn that disappears from view — that is
+the intended behaviour, not a bug.**
 
-**`hasActiveClaudeTurn()`** (`RelatedPanel.mjs`, exported) is the one shared
-"a turn is running for the anchored conversation" predicate —
-`cc.busy || !!cc.progress || cc.queued.length > 0` — replacing two
-near-identical local closures that used to live separately in
-`hasCommentClaudeFooter()` and `CommentClaudeFooter()`'s own `claudeActive`.
-Three call sites now use it to stay open, not just to report status:
+There used to be a rule that the fully opened-out conversation stayed visible
+for as long as a turn was running for it, even after navigating to a different
+block/comment or explicitly closing the panel: `hasActiveClaudeTurn()` was a
+third, standalone `||` branch of `claudeChatVisible()`, and
+`syncClaudeAnchorForSelection` skipped its own re-sync while it was true.
 
-- **`claudeChatVisible()`** gained it as a third, independent `||` branch
-  (alongside `hasVisibleComments()`/`isNewChatUnanchored()`) — the block-scoped
-  `comment-claude-row` (comment column + `ClaudeChatPanel`) now also renders
-  while a turn is running, regardless of whether the current block/selection
-  still has a visible comment of its own.
-- **`syncClaudeAnchorForSelection`** skips its own re-sync while
-  `hasActiveClaudeTurn()` is true, next to its existing `cs.focus ===
-  'claude'/'new'` skip — without this, merely navigating to a different block
-  would still re-anchor (and thereby reset/hide) `cc` out from under the
-  running turn the instant `cs.sel`/`cs.list`/`cs.scopeSig` changed, even
-  though `claudeChatVisible()` itself now says to keep showing it.
-- **Historical:** the PR-comment-index item used to render its own embedded
-  copy of the chat (`commentDetailCard`'s `pr-comment-claude-section`, toggled
-  by `pcc.open && pcc.commentId === c.id`), and that toggle had to be widened
-  with `|| (hasActiveClaudeTurn() && cc.commentId === c.id)` for the same
-  "stay open while a turn runs" reason. Both the copy and the toggle are gone —
-  such an item now shows the ordinary column, whose own `claudeChatVisible()`
-  already carries that clause. See "An unanchored item shows the ordinary
-  Claude column, on the right" in `.claude/docs/comments-panel.md`.
+The reviewer reversed that, in his own words: *"een comment is gekoppeld aan
+code, chat aan comment, zo is een chat altijd gekoppeld aan code. laat het
+alleen in beeld als code is geselecteerd waar die chat over gaat. als ik
+navigeer naar andere code, haal het dan helemaal weg alsof er nog geen chat is
+(als daar nog niks aan is gekoppeld)."*
 
-Not extended to the scroll position or to `cs.focus` itself —
-this is purely about the CONTENT staying visible, not about the keyboard
-cursor following it around; `exitRelated()`/`leaveRelated()` still release
-`cs.focus` exactly as before, so a reviewer who explicitly stepped away keeps
-their keyboard on whatever they navigated to, while the still-running
-conversation stays visible (read-only, until they click back into it) wherever
-its own card renders.
+So the column is **purely a function of the selected code**:
+
+- `claudeChatVisible()` is back to `hasVisibleComments() || isPrCommentScope()
+  || isNewChatUnanchored()` — a running turn is **not** a reason to render it.
+  Navigate to code with nothing hanging on it and the whole
+  `comment-claude-row` folds away exactly as if no conversation existed.
+- `syncClaudeAnchorForSelection` no longer skips while a turn runs, so walking
+  back onto that code re-anchors `cc` to its own conversation (and its answer)
+  the ordinary passive way. It still skips for `cs.focus === 'claude'/'new'`,
+  which own `cc` themselves.
+
+That reversal is only affordable because the turn itself no longer lives on
+`cc`: it is tracked per conversation (see "Parallel conversations" below), so
+hiding the column costs nothing, and a turn running on code the reviewer is
+**not** looking at reports itself on that code's own index row
+(`claudeChatPill`). Before, hiding the column really did lose the turn, which
+is what the old rule was working around.
+
+Test: the "the Claude column is a function of the selected code: navigating
+away hides it, the index row keeps reporting the running turn" case in
+`tests/claude-chat-panel.spec.mjs` — the inverted successor of the old
+"stays open" test, same fixture and same mocked frames.
+
+## Parallel conversations: a second chat while the first is still answering
+
+Reviewer report: *"ik wil kunnen chatten en terwijl ik op antwoord wacht, een
+andere chat (op een andere selectie) kunnen starten, nu raak ik die chat weer
+kwijt."*
+
+The backend was never the limitation — every conversation is its own Execution
+with its own Run ID (`chat-<commentID>`) and tembed locks **per run**, each has
+its own shadow worktree, and `chat_progress.go` keys its snapshot per
+conversation. It was entirely this panel: `cc.busy` and `cc.progress` were a
+**single slot** for whichever conversation happened to be in view, which broke
+two different ways at once.
+
+- **`cc.busy` gated the composer of a DIFFERENT conversation.**
+  `queueClaudeMessage` reads "is a turn running", so the very first message of
+  conversation B was appended to `cc.queued` (the "doorpraten" queue, meant for
+  one conversation) and only left the browser once A's turn returned. You could
+  not start a second chat at all — you could only pre-type into it.
+- **A non-anchored conversation's events were dropped on the floor.** Both SSE
+  handlers began with `if (ev.key !== cc.commentId) return`, so A's live
+  status, its streamed answer and its "the transcript changed" event produced
+  nothing anywhere once the panel had moved on.
+
+### `src/claudeTurns.mjs` — one shared, per-conversation registry
+
+A small shared store in the mould of `commentBatch.mjs` (one `reactive()`
+object plus its own read-only fetch, imports no component — which is also what
+keeps `BlockList.mjs` from having to import `RelatedPanel.mjs` back, a cycle,
+since that file already imports `BlockList.mjs`). Per conversation id it holds
+
+- **`progress`** — the volatile snapshot pushed over `chat.progress`, for
+  **every** conversation of this PR, not just the one on screen,
+- **`busy`** — a Signal POST for that conversation is in flight,
+- **`answered`** — a turn FINISHED while the reviewer was looking at other
+  code, so there is something new to go read (a property of this tab, never of
+  the server),
+- plus **`scopes`**: conversation id → the `file|label` of the code its comment
+  hangs on, handed over by `loadComments` on the comment poll's own cadence
+  (`RelatedPanel.mjs` owns the comment list, this store owns the turns).
+
+An entry with nothing left to say is deleted, so the map stays the size of
+"what is happening now". `setTurnProgress` also stamps a non-reactive
+`progressAt` per conversation, which is what lets a resync read yield to a
+newer pushed event (`lastTurnProgressAt`, see below) — the same rule
+`loadChatProgress` already followed, now shared by both readers.
+
+In `RelatedPanel.mjs` every former `cc.busy`/`cc.progress` read goes through
+**`ccBusy()`/`ccProgress()`** — the registry narrowed to `cc.commentId` — so
+the panel keeps behaving exactly as before *for the conversation it shows*,
+and `hasActiveClaudeTurn()` is now strictly about that one conversation (its
+remaining job is the footer status line). `drainClaudeQueue` drains **the
+oldest entry of every conversation that has nothing in flight**, so two
+conversations queue independently while each stays FIFO in itself; entries
+already carried their own `runId`/`commentId`.
+
+Both SSE handlers now accept every key. `chat.progress` for a foreign
+conversation is stored (that is the pill's data); its `running:false` frame
+clears the snapshot immediately — there is no bubble to protect — and marks the
+conversation **answered**. `chat.message` still only ever refetches the
+transcript of the conversation in view (the rule "an event is never the source
+of truth" is unchanged); for a foreign one it only marks `answered`, and only
+when we already knew a turn was happening there, so an unrelated transcript
+write can't raise a pill out of nowhere. Anchoring a conversation
+(`syncClaudeAnchorForSelection`/`ensureAndLoadChat`) clears its `answered`
+mark: looking at it counts as seeing it.
+
+**`GET /api/chat/progress?pr=N`** is the PR-wide resync read
+(`runningChatProgressForPR`, `chat_progress.go` — the snapshot now carries its
+own repo/pr in two unexported fields purely so it can be filtered; the pushed
+frame's shape is unchanged). The per-conversation read only covers the
+conversation in view, so without this a refresh or an SSE reconnect mid-turn
+would silently drop the pill of a turn running on other code. Same in-memory,
+outside-the-write-boundary carve-out as the rest of `chat_progress.go`; it
+yields to newer pushed events per conversation, which matters because a
+reconnecting stream resyncs every few hundred ms (that exact interaction made
+`claude-chat-progress.spec.mjs` flicker until the guard was added).
+
+### Where a turn on OTHER code is visible: the index row, not the footer
+
+`claudeChatPill` (`BlockList.mjs`, `data-testid=block-row-claude-chat`) sits in
+the right-hand zone of the index row, next to `batchPill`/
+`commentActivityPill`/`approvalPill` — explicitly where the reviewer asked for
+it ("In de rechterkant van code, naast avatar en 1/2 approved enzo"), not as an
+extra footer line. Two states, both in **words** with a differing shape (a
+pulsing dot while busy, a ✓ once answered) and colour only as decoration, per
+the colourblind rule: **"Claude bezig"** (a turn is running for a conversation
+on this row's code) and **"✓ Claude antwoordde"** (a turn finished while the
+reviewer was elsewhere). It matches a comment-index row on its own comment id
+and an ordinary code row through `scopes`' `file|label`, and it reads the
+reactive store straight from its own nested slot — no `state.*` rollup and no
+watch of its own, exactly like `batchPill`.
+
+### At most ONE code-generating turn at a time (`chat_write_gate.go`)
+
+Also the reviewer's decision: *"Voor vragen, geen limit, voor het genereren van
+code & aanpassingen maken wel (maximaal 1 per keer, sync)."* The two kinds are
+**not** guessed at send time — `runOneClaudeTurn` already tells them apart for
+an unrelated reason: every turn starts with the cheap read-only attempt and
+only Claude's own `{"type":"need_write"}` directive escalates it to the shadow
+worktree with Edit/Bash. That escalation IS the "this turn will change code"
+signal, so a process-wide semaphore of 1 sits exactly around the second
+attempt. A second code turn **waits** (never refused), and the wait is visible:
+the new `waiting` phase renders as "Wacht op een andere codewijziging…"
+(`PHASE_LABEL`, `ClaudeChat.mjs`) so a queued turn can't be mistaken for a
+hang. Full account: "Two-step tool access" in
+`.claude/docs/workflows-comments.md`.
+
+Tests: `tests/claude-chat-parallel.spec.mjs` (two conversations, the first
+one's Signal POST held open, asserting the second one's message really leaves
+the browser instead of queueing), `chat_write_gate_test.go` and
+`TestHandleChatProgressPerPR` (`events_api_test.go`).
 
 ## `RelatedPanel.mjs`: state, not template
 
@@ -515,10 +621,13 @@ The "Embedded Claude conversation" section owns:
 
 - **`cc`** — this module's own `reactive()` chat state for whichever ONE
   conversation is currently in view: `{ commentId, runId, messages, status,
-  busy, progress, tick, conversations }` (`conversations` is PR-wide — no
+  queued, tick, conversations }` (`conversations` is PR-wide — no
   longer read by `claudeChatVisible()`, only by `chatAnchorComment()`'s
-  internal anchor-resolution fallback, see "Superseded" above;
-  `progress`/`tick` are the live turn, see "Live progress"). `status` is the
+  internal anchor-resolution fallback, see "Superseded" above; `tick` is the
+  1s heartbeat of the elapsed counter, see "Live progress"). **Whether a turn
+  is running, and what it is doing, is deliberately NOT on `cc`** — it lives
+  per conversation in `claudeTurns.mjs`, read here through
+  `ccBusy()`/`ccProgress()`, see "Parallel conversations". `status` is the
   PANEL's own loading/error state (ensuring the
   workflow, fetching the transcript) — a genuinely **failed Claude turn** is
   a normal message with `kind: 'error'` (ladder exhausted) or `'retrying'`
@@ -708,30 +817,38 @@ for the channel itself and its two hard rules. Neither polling loop survived:
 
 - **`chat.progress`** — the volatile snapshot of the running turn
   (`{running, phase, tool, detail, partial, startedAt}`), keyed on the
-  conversation id. Applied to `cc.progress`.
-- **`chat.message`** — "this conversation's transcript changed"; the handler
-  refetches `GET /api/chat` (never trusts a pushed body) and then clears a
-  finished progress snapshot.
-- **the resync** — refetch the transcript **and** `GET /api/chat/progress`,
-  which is the snapshot read for a tab that opened or reconnected **mid-turn**
-  (a refresh at that moment is the normal case: the Activity keeps running
-  server-side, it has no idea a tab went away). Not a poll target.
+  conversation id. Applied per conversation (`claudeTurns.mjs`), for **every**
+  key of this PR — not only the one on screen, see "Parallel conversations".
+- **`chat.message`** — "this conversation's transcript changed"; for the
+  conversation in view the handler refetches `GET /api/chat` (never trusts a
+  pushed body) and then clears a finished progress snapshot; for another one it
+  only marks it as "answered while you were elsewhere".
+- **the resync** — refetch the transcript **and** `GET /api/chat/progress` for
+  the conversation in view, plus the PR-wide `?pr=N` form for every other
+  running turn. That is the snapshot read for a tab that opened or reconnected
+  **mid-turn** (a refresh at that moment is the normal case: the Activity keeps
+  running server-side, it has no idea a tab went away). Not a poll target.
 
 Three details are load-bearing:
 
-- **`applyChatProgress` is the single writer of `cc.progress`** and stamps
-  `lastProgressAt`. `loadChatProgress` compares that against the time its own
-  request started and **yields to a newer pushed event** — a resync runs right
-  next to the events it is catching up on, so without this it could wipe a
-  fresher snapshot and freeze the status line.
-- **A `chat.message` only clears the progress when the turn is NOT running**
+- **`applyChatProgress` is the single writer of a conversation's progress**,
+  and `setTurnProgress` (`claudeTurns.mjs`) stamps when that happened per
+  conversation. Both resync reads — `loadChatProgress` and the PR-wide
+  `loadRunningTurns` — compare that stamp against the time their own request
+  started and **yield to a newer pushed event**: a resync runs right next to
+  the events it is catching up on, so without this it could wipe a fresher
+  snapshot and freeze the status line (with a reconnecting stream, it wipes it
+  over and over — that is what made `claude-chat-progress.spec.mjs` flicker
+  before the PR-wide read got the same guard).
+- **A `chat.message` only clears the progress of the conversation in view, and
+  only when the turn is NOT running**
   (`clearFinishedChatProgress`). That event also fires for the reviewer's *own*
   message at the very start of a turn, and clearing there would blink the
   status line away a moment after it appeared. A 4s timer after a
   `running:false` frame is the safety net for a transcript event that never
   arrives.
-- **`cc.tick`** is a 1s heartbeat that only runs while a turn is running
-  (`syncChatTicker`), purely so "Claude denkt… 12s" advances; the number itself
+- **`cc.tick`** is a 1s heartbeat that only runs while **any** turn is running
+  (`syncChatTicker`/`anyTurnRunning`), purely so "Claude denkt… 12s" advances; the number itself
   comes from the clock, `cc.tick` is read only to register the reactive
   dependency.
 
@@ -1445,12 +1562,15 @@ option), which meant a message typed meanwhile did nothing at all — the text
 just sat in the field. All three gates are gone.
 
 - **`queueClaudeMessage(text)`** (`RelatedPanel.mjs`) is now the single entry
-  point for a composer turn: nothing running → send straight away; a turn
-  running (`cc.busy`) → append to **`cc.queued`** and return. `cc.queued` is
-  reactive and only ever REASSIGNED, never mutated.
+  point for a composer turn: nothing running **for this conversation**
+  (`ccBusy()`) → send straight away; a turn running → append to **`cc.queued`**
+  and return. `cc.queued` is reactive and only ever REASSIGNED, never mutated.
+  The gate is deliberately per conversation, not global: a turn running on
+  another selection must never hold up a message typed here — see "Parallel
+  conversations" above for the bug that was.
 - **`drainClaudeQueue()`** runs from `sendClaudeMessage`'s own `finally`, so the
-  queue drains itself **one turn at a time**, FIFO — each send ends in another
-  drain. The entry is removed from the queue **before** it is sent, which is
+  queue drains itself **one turn at a time per conversation**, FIFO — each send
+  ends in another drain, and two conversations drain independently. The entry is removed from the queue **before** it is sent, which is
   what makes its "in de wachtrij" bubble give way to the ordinary user bubble
   that send produces. Three messages in a row therefore become three separate
   turns in the order they were typed.

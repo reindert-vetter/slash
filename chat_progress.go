@@ -37,6 +37,13 @@ const (
 	chatPhaseThinking  = "thinking"
 	chatPhaseWriting   = "writing"
 	chatPhaseTool      = "tool"
+	// chatPhaseWaiting: this turn asked for write access and is waiting for the
+	// one code-turn slot (chat_write_gate.go). Reviewer request: a turn that
+	// only ANSWERS may run unlimited in parallel, a turn that generates or
+	// changes code runs one at a time — and it waits rather than being
+	// refused, so the wait itself must be visible instead of looking like a
+	// hang.
+	chatPhaseWaiting = "waiting"
 )
 
 // chatProgress is the whole volatile state of one running turn.
@@ -51,6 +58,12 @@ type chatProgress struct {
 	Partial   string `json:"partial,omitempty"`
 	StartedAt int64  `json:"startedAt"` // unix ms
 	UpdatedAt int64  `json:"updatedAt"` // unix ms
+	// repo/pr are unexported on purpose: they exist only so the PR-wide read
+	// (runningChatProgressForPR, GET /api/chat/progress?pr=N) can filter the
+	// map, and encoding/json skips them — the pushed frame's shape is
+	// unchanged, and neither belongs in the snapshot the browser renders.
+	repo string
+	pr   int
 }
 
 var (
@@ -69,7 +82,7 @@ var nowMillis = func() int64 { return time.Now().UnixMilli() }
 // from runOneClaudeTurn right before the claude CLI is invoked.
 func startChatProgress(repo string, pr int, conversationID string) {
 	now := nowMillis()
-	p := chatProgress{Running: true, Phase: chatPhasePreparing, StartedAt: now, UpdatedAt: now}
+	p := chatProgress{Running: true, Phase: chatPhasePreparing, StartedAt: now, UpdatedAt: now, repo: repo, pr: pr}
 	chatProgressMu.Lock()
 	chatProgressByConv[conversationID] = p
 	chatProgressMu.Unlock()
@@ -134,6 +147,25 @@ func chatProgressFor(conversationID string) (chatProgress, bool) {
 	defer chatProgressMu.Unlock()
 	p, ok := chatProgressByConv[conversationID]
 	return p, ok
+}
+
+// runningChatProgressForPR returns every RUNNING turn of one PR, keyed by
+// conversation id — the resync read for a tab that wants to know about the
+// conversations it is NOT currently showing (a chat running on another
+// selection). Per-conversation state, so a tab that reconnects mid-turn can
+// rebuild its whole per-conversation picture in one call instead of only the
+// one conversation it happens to have anchored.
+func runningChatProgressForPR(repo string, pr int) map[string]chatProgress {
+	out := map[string]chatProgress{}
+	chatProgressMu.Lock()
+	defer chatProgressMu.Unlock()
+	for id, p := range chatProgressByConv {
+		if p.pr != pr || p.repo != repo {
+			continue
+		}
+		out[id] = p
+	}
+	return out
 }
 
 // publishChatProgress/publishChatChanged are the two chat publishers. Kept

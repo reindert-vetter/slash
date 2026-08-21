@@ -626,7 +626,10 @@ Reviewer request: "ik zie hier niet de claude chat. ik wil hetzelfde blokje
 zien als normaal rechts. Bij alle algemene comments en ai waarschuwingen."
 
 - **`isPrCommentScope()`** (`RelatedPanel.mjs`) — that sentinel with a real
-  comment on it — is now a fourth reason for `claudeChatVisible()`. The column
+  comment on it — is now a third reason for `claudeChatVisible()` (it was a
+  fourth while a running turn still counted as one; that branch is gone, see
+  "The chat column is a function of the selected code" in
+  `.claude/docs/claude-chat-panel.md`). The column
   is simply there while such an item is selected, anchored by
   `chatAnchorComment`'s pre-existing `s.none` branch plus
   `syncClaudeAnchorForSelection`; no new writer of `cc`.

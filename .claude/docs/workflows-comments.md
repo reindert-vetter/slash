@@ -947,6 +947,25 @@ This is orthogonal to `sig.Action`'s dispatch (`chatActionCommit`/`chatActionCle
 even called) and to the automatic landing described below — a turn escalates
 or not purely based on what Claude itself says on its first, cheap attempt.
 
+**That escalation is also the ONE code-turn-at-a-time gate**
+(`chat_write_gate.go`). Reviewer decision: a turn that only ANSWERS may run
+unlimited in parallel (chatting on another selection while an earlier answer is
+still being written is a feature, see "Parallel conversations" in
+`.claude/docs/claude-chat-panel.md`), but a turn that GENERATES or CHANGES code
+runs one at a time. Nothing is guessed about the reviewer's wording: the
+`{"type":"need_write"}` directive above already IS "this turn is going to change
+code", so a process-wide semaphore of capacity 1 wraps exactly attempt 2 and
+attempt 1 is untouched. A second such turn **waits** — never refused — and says
+so, through the `waiting` progress phase ("Wacht op een andere codewijziging…",
+`chat_progress.go` + `PHASE_LABEL` in `src/ClaudeChat.mjs`), so a queued turn is
+never mistaken for a hang. Deliberately process-wide rather than per PR: one
+agentic edit at a time on this machine is the point (each owns a git worktree
+and may run Bash). It blocks inside an **Activity**, never a workflow body, and
+changes neither the number nor the order of `ExecuteActivity` calls, so replay
+is unaffected. No lock-ordering risk either: a turn only ever takes this
+semaphore and then, inside it, the short `ingestMu` plumbing lock — never the
+reverse. Test: `chat_write_gate_test.go`.
+
 - **Location/identity**: `chatShadowDir(dataDir, pr, conversationId)` →
   `data/worktrees/pr-<n>-chatshadow-<conversationId>`, checked out on local
   branch `chatShadowBranch(conversationId)` = `chat/<conversationId>`. No

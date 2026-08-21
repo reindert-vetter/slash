@@ -8,6 +8,7 @@ import { avatarHTML, identityOf } from './avatar.mjs'
 import { paletteClass } from './blockPath.mjs'
 import { batch, batchItemFor, BATCH_STATE_LABEL, isBatchEligible } from './commentBatch.mjs'
 import { claudeStatusText } from './ClaudeChat.mjs'
+import { claudeTurnFor } from './claudeTurns.mjs'
 
 // Tailwind classes per category tag, so the pills read like the screenshot.
 const CATEGORY_STYLE = {
@@ -1077,7 +1078,7 @@ function row(state, b, i) {
       >
       ${() => removedPill(b)} ${() => movedPill(b)}
       ${() => unpushedPill(state, b)}
-      ${() => batchPill(b)}
+      ${() => batchPill(b)} ${() => claudeChatPill(b)}
       ${() => commentActivityPill(state, b)}
       ${() => approvalPill(state, b)}
       <span class="${() => 'shrink-0 text-xs font-medium ' + st.cls}"
@@ -1168,6 +1169,46 @@ function batchPill(b) {
           ? html`<span class="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-indigo-500"></span>`
           : ''}
       <span>${it.state === 'done' ? '✓ ' : ''}${BATCH_STATE_LABEL[it.state] || it.state}</span>
+    </span>
+  `
+}
+
+// claudeChatPill marks the code a Claude CHAT turn is happening on — the one
+// place a conversation the reviewer navigated away from is still visible. The
+// chat column itself only ever shows the conversation of the SELECTED code
+// (deliberately, see "The chat column is a function of the selected code" in
+// .claude/docs/claude-chat-panel.md), so without this a turn started on other
+// code would be running with nothing on screen saying so.
+//
+// 'busy'     — a turn is running for a conversation on this row's code,
+// 'answered' — a turn FINISHED while the reviewer was looking elsewhere, so
+//              there is something new to go read.
+//
+// The WORD carries the meaning and the shape differs too (a pulsing dot only
+// while busy, a ✓ once answered); the colour is decoration (the reviewer is
+// colourblind, see conventions.md). Same nested-slot shape as the pills above.
+// Reads claudeTurns.mjs directly rather than a state.* rollup, so it needs no
+// watch of its own: this slot is reactive and that store is reactive.
+function claudeChatPill(b) {
+  const st = claudeTurnFor(b)
+  if (!st) return ''
+  const busy = st === 'busy'
+  return html`
+    <span
+      class="${'shrink-0 flex items-center gap-1 rounded px-1 py-0.5 text-[10px] font-semibold ' +
+      (busy
+        ? 'bg-indigo-100 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300'
+        : 'bg-amber-100 dark:bg-amber-500/20 text-amber-800 dark:text-amber-300')}"
+      data-testid="block-row-claude-chat"
+      title="${busy
+        ? 'Claude werkt aan een gesprek over deze code'
+        : 'Claude antwoordde in een gesprek over deze code'}"
+    >
+      ${() =>
+        busy
+          ? html`<span class="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-indigo-500"></span>`
+          : ''}
+      <span>${busy ? 'Claude bezig' : '✓ Claude antwoordde'}</span>
     </span>
   `
 }
