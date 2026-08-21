@@ -4,7 +4,10 @@ import { test, expect, leaveSearchBox, seededPr } from './_fixtures.mjs'
 // src/shortcutHints.mjs) — reviewer request: "onder elke kaart wil ik een
 // lijn met hints wat je op dat moment voor keys kan typen". See "A
 // contextual keyboard-hint line under each card" in
-// .claude/docs/keyboard-navigation.md.
+// .claude/docs/keyboard-navigation.md. `↑`/`↓` and `Shift+↑`/`↓` are
+// deliberately never listed (reviewer follow-up: "hint pijltjes omhoog en
+// naar beneden kan weg, shift met pijltjes mag ook weg" — too obvious/basic
+// to spell out).
 test.describe('Contextual shortcut-hint line', () => {
   test('list mode and diff mode show different hints, and switching back and forth never leaves the OTHER mode\'s text behind', async ({
     page,
@@ -14,8 +17,9 @@ test.describe('Contextual shortcut-hint line', () => {
     await page.locator('[data-idx="1"]').click()
 
     const hints = page.getByTestId('shortcut-hints').first()
-    await expect(hints).toContainText('navigeren')
-    await expect(hints).not.toContainText('regel/groep')
+    await expect(hints).toContainText('PR-menu')
+    await expect(hints).not.toContainText('zoom')
+    await expect(hints).not.toContainText('↑')
 
     // This is the exact bug this test guards against: arrow.js's patch path
     // for a reactive slot that keeps returning a non-empty template (never
@@ -23,12 +27,12 @@ test.describe('Contextual shortcut-hint line', () => {
     // on a plain re-run, leaving the PREVIOUS mode's hint text on screen
     // forever — see ShortcutHintBar's own doc comment for the full story.
     await page.keyboard.press('ArrowRight') // list -> diff
-    await expect(hints).toContainText('regel/groep')
-    await expect(hints).not.toContainText('navigeren')
+    await expect(hints).toContainText('zoom')
+    await expect(hints).not.toContainText('PR-menu')
 
     await page.keyboard.press('ArrowLeft') // diff -> list
-    await expect(hints).toContainText('navigeren')
-    await expect(hints).not.toContainText('regel/groep')
+    await expect(hints).toContainText('PR-menu')
+    await expect(hints).not.toContainText('zoom')
   })
 
   test('only the active card shows a hint line, never the look-ahead preview', async ({ page }) => {
@@ -37,7 +41,7 @@ test.describe('Contextual shortcut-hint line', () => {
     await page.locator('[data-idx="1"]').click()
     await page.keyboard.press('ArrowRight')
 
-    const visible = await page.getByTestId('shortcut-hints').filter({ hasText: 'regel/groep' }).count()
+    const visible = await page.getByTestId('shortcut-hints').filter({ hasText: 'zoom' }).count()
     expect(visible).toBe(1)
   })
 
@@ -54,12 +58,14 @@ test.describe('Contextual shortcut-hint line', () => {
     await expect(row).toBeVisible()
     await row.click()
 
-    const commentHints = page.getByTestId('shortcut-hints').filter({ hasText: 'oudere berichten' })
+    const commentHints = page.getByTestId('shortcut-hints').filter({ hasText: 'Claude' })
     await expect(commentHints).toHaveCount(1)
+    await expect(commentHints).not.toContainText('↑')
 
     await page.keyboard.press('ArrowRight') // comment -> claude
     const claudeHints = page.getByTestId('shortcut-hints').filter({ hasText: 'versturen' })
     await expect(claudeHints).toHaveCount(1)
-    await expect(page.getByTestId('shortcut-hints').filter({ hasText: 'oudere berichten' })).toHaveCount(0)
+    await expect(claudeHints).not.toContainText('↑')
+    await expect(page.getByTestId('shortcut-hints').filter({ hasText: 'Claude' })).toHaveCount(0)
   })
 })

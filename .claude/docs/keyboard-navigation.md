@@ -1409,9 +1409,10 @@ on:
 
 - **`Block.mjs`** takes `opts.shortcutHints` (default `() => []`) and
   renders it at the bottom of the card, inside the `<article>`. `home.mjs`'s
-  `blockShortcutHints()` supplies the list — `↑↓`/`→`/`Enter`/`Space`/`/` in
-  list mode, `↑↓`/`←→`/`f/d/s`/`a`/`Shift+↑↓`/`Space`/`Enter` in diff mode —
-  and both `Block()` call sites (the top-level card, the drilled-column
+  `blockShortcutHints()` supplies the list — `→`/`Enter`/`Space`/`/` in
+  list mode, `←→`/`f/d/s`/`a`/`Space`/`Enter` in diff mode (the `↑`/`↓`
+  and `Shift+↑`/`↓` hints were dropped on request — too obvious/basic to spell
+  out) — and both `Block()` call sites (the top-level card, the drilled-column
   card) gate it on the exact SAME "is this card the one the keyboard is on"
   condition their own `hintsEnabled` opt already uses (`isActiveCard(b) &&
   state.focusLevel === 0` / `state.focusLevel === level`) — a look-ahead

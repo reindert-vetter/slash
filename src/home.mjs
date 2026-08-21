@@ -7810,7 +7810,6 @@ function blockShortcutHints() {
   if (relatedActive()) return []
   if (state.mode === 'list') {
     return [
-      { key: '↑↓', label: 'navigeren' },
       { key: '→', label: 'in diff/thread' },
       { key: 'Enter', label: 'menu' },
       { key: 'Space', label: 'goedkeuren + door' },
@@ -7818,11 +7817,9 @@ function blockShortcutHints() {
     ]
   }
   return [
-    { key: '↑↓', label: 'regel/groep' },
     { key: '←→', label: 'kolom' },
     { key: 'f/d/s', label: 'zoom' },
     { key: 'a', label: 'weergave' },
-    { key: 'Shift+↑↓', label: 'selecteren' },
     { key: 'Space', label: 'goedkeuren + door' },
     { key: 'Enter', label: 'menu' },
   ]

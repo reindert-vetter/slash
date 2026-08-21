@@ -3055,20 +3055,17 @@ export function commentClaudeShortcutHints() {
   switch (cs.focus) {
     case 'comment':
       return [
-        { key: '↑', label: 'oudere berichten' },
         { key: '→', label: 'Claude' },
         { key: 'Enter', label: 'menu' },
       ]
     case 'thread':
       return [
-        { key: '↑↓', label: 'berichten' },
         { key: '→', label: 'Claude' },
         { key: '←', label: 'terug' },
         { key: 'Enter', label: 'menu' },
       ]
     case 'claude':
       return [
-        { key: '↑↓', label: 'gesprek' },
         { key: '←', label: 'terug' },
         { key: 'Enter', label: 'versturen' },
       ]
