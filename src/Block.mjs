@@ -442,15 +442,21 @@ function selectionWindowLineChars(b, unit, side = fitOnly(b) === 'left' ? 'left'
   const restrictInterior = end - start + 1 > SELECTION_UNIT_MAX_SCAN_ROWS
 
   // measurableLen — the row's length on the rendered side, or null when the
-  // row carries nothing worth measuring (blank, or comment-only).
+  // row carries nothing worth measuring (blank). Deliberately does NOT skip
+  // a `//`/`#`/`*`/`/*` line the way nonCommentLineLengths (the whole-block
+  // fallback scan) does: a changed comment row inside the reviewer's own
+  // selection window is real diff content being looked at right now, not
+  // unrelated prose elsewhere in the block — excluding it here made an
+  // active unit consisting only of a long changed comment line report `0`
+  // measurable chars, which floored the card to MIN_CONTENT_WIDTH_CHARS and
+  // clipped both that comment line and any other, unrelated, wider line
+  // still visible in the pane. See "A changed comment line inside the
+  // selection window counts too" in diff-card.md.
   const measurableLen = (i) => {
     const raw = rows[i][side]
     if (raw == null) return null
     const line = raw.replace(/\s+$/, '')
-    const trimmed = line.trim()
-    if (trimmed === '') return null
-    if (trimmed.startsWith('//') || trimmed.startsWith('#') || trimmed.startsWith('*') || trimmed.startsWith('/*'))
-      return null
+    if (line.trim() === '') return null
     return line.length
   }
 

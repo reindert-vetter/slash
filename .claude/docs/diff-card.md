@@ -214,6 +214,33 @@ floors to `MIN_CONTENT_WIDTH_CHARS`, never the block's true global longest
 line (which would reintroduce the original width-spike bug this window
 exists to prevent).
 
+### A changed comment line INSIDE the selection window counts too
+
+Reported (2026-08-20/21, screenshot of `FindSessionStateActivity::run`): the
+reviewer's selected unit was two `// …` comment lines, and both rendered cut
+off at the card's right edge — along with an unrelated, unselected code line
+still visible further down the same (now too-narrow) card. Cause:
+`measurableLen` (the small per-row helper inside `selectionWindowLineChars`)
+used to exclude any row starting with `//`/`#`/`*`/`/*`, mirroring
+`nonCommentLineLengths`'s prose-exclusion — but it applied that exclusion
+even to a row **inside the reviewer's own active unit**. A unit consisting
+only of a long changed comment therefore measured `0` chars (the "nothing
+measurable nearby" case), which floors the whole card to
+`MIN_CONTENT_WIDTH_CHARS` (80) — too narrow for the comment line itself, and
+for any other, unrelated line still rendered in the same pane.
+
+**Fix: `measurableLen` no longer excludes a comment-shaped row.** A changed
+`//`/`#`/`*`-line sitting inside the selection window is real diff content
+the reviewer is looking at right now — not the unrelated, unselected prose
+`nonCommentLineLengths` exists to keep out of the WHOLE-BLOCK fallback scan
+(`codeMaxLineChars`/`codeGrowthChars`/`fallbackCodeMaxLineChars`, used only
+when there's no unit at all or the block has zero changed rows anywhere,
+see `NO_CHANGE_MAX_WIDTH_CHARS` above). That whole-block scan is untouched
+and still skips comments — this fix is scoped to the in-window measurement
+only. Test: `tests/diff-card-comment-line-width.spec.mjs`, asserting directly
+on the exported pure function `fitCapCharsFor` with a synthetic block (no PR
+data, no rendered card needed).
+
 ### The zero-changed-rows fallback is CAPPED, unlike every other "floor but no ceiling" path
 
 Reported bug (2026-08-19, live PR 13392, `FillStats::handle`'s drilled-in
