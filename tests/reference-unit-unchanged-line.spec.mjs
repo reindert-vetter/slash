@@ -9,11 +9,23 @@ import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 // onderliggende code kan gaan (door wederom naar rechts te drukken)."
 // See referenceRows (home.mjs) + withReferenceUnits (Block.mjs).
 //
+// TEST-only, per a later follow-up request ("ik wil alleen navigeren door
+// lines die ik kan goedkeuren, behalve in test bestanden"): navUnitsOf
+// (home.mjs) only actually feeds referenceRows/declarationReferenceRow into a
+// unit list when the CALLER block's own category is 'TEST' — see
+// navUnitsOf's own comment and "Reference units" in
+// .claude/docs/keyboard-navigation.md. Both halves are covered below: the
+// TEST-category positive case (unchanged), and the default, non-TEST negative
+// case.
+//
 // Fixture: CreatePaymentAction::execute (PR 12903) has exactly ONE changed
 // line (the $order->…->update([...]) call, see materializeMainWorktrees in
 // tests/_setup.mjs) and calls self::findOrCreateCustomer($order) — a real PR
 // block of its own — from a line that is identical in base and head. The
-// callresolve row is mocked so that call resolves.
+// callresolve row is mocked so that call resolves. Its own category is
+// 'ACTION' in the shared fixture (tests/fixtures/blocks.json); the positive
+// tests below patch just that one field via /api/blocks so they can reuse the
+// same heavily-shared worktree without touching materializeMainWorktrees.
 const CALLER = '12903:app/Actions/CreatePaymentAction.php:CreatePaymentAction::execute'
 
 async function mockCallResolve(page) {
@@ -36,21 +48,49 @@ async function mockCallResolve(page) {
   })
 }
 
+// mockCallerCategory patches CreatePaymentAction::execute's own `category` in
+// the /api/blocks response, leaving every other field (and every other
+// block) untouched — the smallest way to exercise the TEST-only gate without
+// a second worktree fixture.
+async function mockCallerCategory(page, category) {
+  await page.route('**/api/blocks?pr=12903', async (route) => {
+    const res = await route.fetch()
+    const json = await res.json()
+    for (const b of json) {
+      if (b.class === 'CreatePaymentAction' && b.name === 'execute') b.category = category
+    }
+    await route.fulfill({ response: res, json })
+  })
+}
+
 // activeRow reads the row index the diff cursor sits on.
 async function activeRow(page) {
   return await page.locator('[data-change-active]').first().getAttribute('data-row')
 }
 
-test.describe('PR Review Tree — a call on an unchanged line is selectable', () => {
+// enterTestClassCallerDiff selects the (patched-to-TEST) execute block and
+// steps into its diff. A TEST-category block is grouped into a single
+// synthetic test_class row per class (testClassRowItem, home.mjs) — the row's
+// own label is just the bare class name ("CreatePaymentAction"), and → first
+// lands on the methodes-kolom (stop 2b) before a second → reaches the active
+// method's own diff (see "Stop 2b" in .claude/docs/keyboard-navigation.md).
+// findOrCreateCustomer stays its own ordinary ACTION row (not patched), so
+// filtering on both "TEST" and the class name picks the grouped row uniquely.
+async function enterTestClassCallerDiff(page) {
+  await page.getByTestId('block-row').filter({ hasText: 'TEST' }).filter({ hasText: 'CreatePaymentAction' }).click()
+  await leaveSearchBox(page)
+  await page.keyboard.press('ArrowRight') // into the methodes-kolom
+  await page.keyboard.press('ArrowRight') // into the active method's diff
+}
+
+test.describe('PR Review Tree — a call on an unchanged line is selectable (TEST blocks only)', () => {
   test('↓ reaches the unchanged call line, the palette offers no approve there, and → opens its code', async ({
     page,
   }) => {
     await mockCallResolve(page)
+    await mockCallerCategory(page, 'TEST')
     await page.goto('/pr/12903')
-    await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
-    await leaveSearchBox(page)
-
-    await page.keyboard.press('ArrowRight') // into the diff
+    await enterTestClassCallerDiff(page)
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
     // The block has ONE changed group; the resolved call on the unchanged
@@ -81,10 +121,11 @@ test.describe('PR Review Tree — a call on an unchanged line is selectable', ()
     expect(approvedRows).not.toContain(Number(refRow))
 
     // Back on the reference line, → steps into the Onderliggende-code column,
-    // which is scoped to exactly the call that line makes.
-    await page.keyboard.press('ArrowLeft') // back to the list (Space may have moved on)
-    await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
-    await page.keyboard.press('ArrowRight')
+    // which is scoped to exactly the call that line makes. A fresh page load
+    // re-selects the row from a known state regardless of wherever Space's
+    // own auto-continue left the keyboard.
+    await page.goto('/pr/12903')
+    await enterTestClassCallerDiff(page)
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
     await page.keyboard.press('ArrowUp')
     await expect.poll(() => activeRow(page)).toBe(refRow)
@@ -105,10 +146,9 @@ test.describe('PR Review Tree — a call on an unchanged line is selectable', ()
     page,
   }) => {
     await mockCallResolve(page)
+    await mockCallerCategory(page, 'TEST')
     await page.goto('/pr/12903')
-    await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
-    await leaveSearchBox(page)
-    await page.keyboard.press('ArrowRight')
+    await enterTestClassCallerDiff(page)
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
     await page.keyboard.press('ArrowUp')
     await page.keyboard.press('ArrowRight')
@@ -121,5 +161,33 @@ test.describe('PR Review Tree — a call on an unchanged line is selectable', ()
     await expect(card.getByTestId('related-approval')).toHaveCount(0)
     await expect(card.getByTestId('related-comment-activity')).toHaveCount(0)
     await expect(card.getByTestId('related-view-only')).toBeVisible()
+  })
+})
+
+test.describe('PR Review Tree — outside a TEST block, an unchanged reference line is not a stop', () => {
+  test('↑ off the only approvable unit does not reach the unchanged call line', async ({ page }) => {
+    await mockCallResolve(page)
+    // No mockCallerCategory: CreatePaymentAction::execute keeps its real,
+    // non-TEST fixture category ('ACTION').
+    await page.goto('/pr/12903')
+    await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
+    await leaveSearchBox(page)
+
+    await page.keyboard.press('ArrowRight') // into the diff
+    await expect(page.locator('[data-change-active]').first()).toBeVisible()
+    const changedRow = await activeRow(page)
+
+    // execute is the first block in its file (findOrCreateCustomer is
+    // declared further down), has no description, and — with the reference
+    // unit gone — no unit above its one real change group at all, so ↑ is a
+    // plain no-op here instead of reaching the unchanged call line.
+    await page.keyboard.press('ArrowUp')
+    await expect.poll(() => activeRow(page)).toBe(changedRow)
+
+    // The palette still only reflects the one real, approvable unit.
+    await page.keyboard.press('Enter')
+    const rows = page.getByTestId('command-row')
+    await expect(page.getByTestId('command-menu')).toBeVisible()
+    await expect(rows.filter({ hasText: 'goed' })).toHaveCount(1)
   })
 })

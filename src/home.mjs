@@ -1763,7 +1763,24 @@ function translationNavUnits(b) {
 // ("Translation blocks — per-key navigation").
 function navUnitsOf(b, rows, gran) {
   if (b && b.category === 'TRANSLATION') return translationNavUnits(b)
-  const extra = [...new Set([...declarationReferenceRow(b, rows), ...referenceRows(b, rows)])]
+  // Reference units — landable but never approvable (declarationReferenceRow's
+  // own signature row, and referenceRows' unchanged-but-resolved-call rows) —
+  // are TEST-only. Reviewer request: "ik wil alleen navigeren door lines die
+  // ik kan goedkeuren, behalve in test bestanden" — outside a TEST-category
+  // block ↑/↓/f/d/s (and the Onderliggende-code scoping that rides on the same
+  // unit list, see callScopeMethods) only ever stop on a row that is actually
+  // approvable; a resolved call hanging off an untouched line in production
+  // code becomes unreachable from the diff cursor there (still visible in the
+  // panel while ANOTHER unit is in scope, just never scoped to on its own row)
+  // — accepted, since that is exactly the declutter being asked for. A TEST
+  // block keeps every existing reference-unit behavior unchanged, which is
+  // also the scenario both mechanisms were originally built for (a test
+  // method calling the very production code it exercises from an untouched
+  // line).
+  const extra =
+    b && b.category === 'TEST'
+      ? [...new Set([...declarationReferenceRow(b, rows), ...referenceRows(b, rows)])]
+      : NO_REFERENCE_ROWS
   return unitsFor(rows, gran, extra)
 }
 
@@ -1788,6 +1805,9 @@ function navUnitsOf(b, rows, gran) {
 // to every block would add a landable "look only" stop above the real change
 // in nearly every reviewed function, which nobody asked for and would derail
 // existing "↑ reaches the first real unit" navigation across the whole suite.
+//
+// Only actually fed into navUnitsOf's extraRows for a TEST-category block —
+// see navUnitsOf's own comment.
 function declarationReferenceRow(b, rows) {
   return b && b.status === 'added' && rows && rows.length > 0 && !rowChanged(rows[0]) ? [0] : []
 }
@@ -1799,6 +1819,12 @@ function declarationReferenceRow(b, rows) {
 // production method it exercises from a line the PR never touched, and that
 // call site was unreachable — no unit sat on it, so callScopeMethods could
 // never scope to it and → could never reach that child.
+//
+// Only actually fed into navUnitsOf's extraRows for a TEST-category block —
+// see navUnitsOf's own comment: outside a TEST block the reviewer only wants
+// to walk approvable lines, so this row simply never becomes a stop there
+// (the call it carries stays reachable via the panel while some OTHER unit's
+// scope covers it, just never scoped to on its own untouched row).
 //
 // Deliberately ONLY resolved/found method calls (callRows + findCallSites, the
 // same pair callScopeMethods scopes by), so a reference unit always has

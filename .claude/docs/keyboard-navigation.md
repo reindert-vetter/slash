@@ -854,6 +854,23 @@ method typically calls the very production method it exercises from a line the
 PR never touched: no unit sat on that row, so `callScopeMethods` could never
 scope to it and `→` could never reach that child at all.
 
+**TEST-category blocks only.** Follow-up reviewer request: "ik wil alleen
+navigeren door lines die ik kan goedkeuren, behalve in test bestanden" —
+`navUnitsOf` (`home.mjs`, the single dispatch point every consumer already
+goes through) only actually feeds `referenceRows`/`declarationReferenceRow`
+(below) into `extraRows` when `b.category === 'TEST'`; every other block's
+↑/↓/`f`/`d`/`s` (and Shift+↑/↓ ranging) only ever stop on a row that is
+actually approvable. This is exactly the scenario both mechanisms were
+originally built for — the reviewer's own quote above is literally about a
+test method — so nothing changes for a `TEST` block. Outside one, a resolved
+call hanging off an untouched production line simply has no unit of its own
+any more: `callScopeMethods`' scoping (see "→ into the Underlying-code card"
+below) can then never narrow onto that exact row, so the child also stops
+appearing in the Onderliggende-code panel while some OTHER unit is active —
+accepted, not a separate bug to work around, since "don't show me things I
+can't approve" is exactly what was asked. The child is not deleted from the
+call graph, only unreachable from this block's own diff cursor.
+
 - **Which rows** — `referenceRows(b, rows)` (`home.mjs`): the sites
   `findCallSites` reports for b's own **resolved/found `callRows`**, minus every
   row that is `rowChanged`. Only real resolved method calls, so a reference unit
@@ -918,6 +935,10 @@ function's declaration is almost always unchanged too (only the body
 changed), and turning every one of those into an extra landable stop would
 derail "↑ reaches the first real unit" across virtually every reviewed
 function; only a wholly new function/method gets this treatment.
+**Also TEST-only**, same `navUnitsOf` gate as `referenceRows` above — even
+though this one has nothing to do with calling into other code, it is still a
+landable-but-not-approvable row, so the same "alleen navigeren door lines die
+ik kan goedkeuren, behalve in test bestanden" request covers it too.
 
 **A completely blank (after `trim()`) added/removed line is not a landable unit
 at `'line'`/`'call'` and doesn't count toward the approve counter.** Such a row
