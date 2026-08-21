@@ -33,10 +33,18 @@ import { reactive } from './vendor/arrow.js'
 import { repoParam } from './prContext.mjs'
 
 // byId holds one entry per conversation this tab has seen anything happen on:
-//   progress — the volatile snapshot pushed over SSE (chat.progress), or null
-//   busy     — a Signal POST for this conversation is in flight right now
-//   answered — a turn finished on a conversation that was NOT in view, so the
-//              reviewer still has to go look at it (cleared when they do)
+//   progress  — the volatile snapshot pushed over SSE (chat.progress), or null
+//   busy      — a Signal POST for this conversation is in flight right now
+//   answered  — a turn finished on a conversation that was NOT in view, so the
+//               reviewer still has to go look at it (cleared when they do)
+//   sendError — the reviewer-facing sentence for that conversation's LAST
+//               rejected/failed Signal POST, '' whenever the last send was
+//               accepted. Per-conversation for the same reason as `busy`: a
+//               reviewer sends on conversation A, walks to B before the
+//               rejection arrives — that sentence belongs to A and must still
+//               be there when they walk back, not get attached to whichever
+//               conversation happens to be on screen when the response lands.
+//               See "Parallel conversations" in .claude/docs/claude-chat-panel.md.
 // scopes maps a conversation id onto the `file|label` of the code its comment
 // hangs on, so the index pill can find "the conversations of this block"
 // without importing the comment list itself.
@@ -45,7 +53,7 @@ import { repoParam } from './prContext.mjs'
 // is what re-runs the bindings reading them (see .claude/rules/arrowjs-pitfalls.md).
 const turns = reactive({ byId: {}, scopes: {} })
 
-const EMPTY = { progress: null, busy: false, answered: false }
+const EMPTY = { progress: null, busy: false, answered: false, sendError: '' }
 
 function entryOf(id) {
   return (id != null && turns.byId[id]) || EMPTY
@@ -57,7 +65,7 @@ function patch(id, fields) {
   const merged = { ...entryOf(id), ...fields }
   // Forget an entry that has nothing left to say, so this map stays the size
   // of "what is happening now" instead of growing per conversation visited.
-  if (!merged.progress && !merged.busy && !merged.answered) delete next[id]
+  if (!merged.progress && !merged.busy && !merged.answered && !merged.sendError) delete next[id]
   else next[id] = merged
   turns.byId = next
 }
@@ -71,6 +79,20 @@ export function setTurnBusy(id, on) {
 
 export function isTurnBusy(id) {
   return !!entryOf(id).busy
+}
+
+// setTurnSendError/turnSendError hold ONE conversation's own "last send
+// failed" sentence — see the `sendError` field doc above. Set right before a
+// Signal POST (cleared) and again once the response is known (a sentence, or
+// '' on success), always keyed by the conversation the send was actually FOR
+// (sendClaudeMessage's own `commentId`, not whatever `cc.commentId` happens to
+// be by the time the response arrives).
+export function setTurnSendError(id, text) {
+  patch(id, { sendError: text || '' })
+}
+
+export function turnSendError(id) {
+  return entryOf(id).sendError
 }
 
 // progressAt records WHEN we last learned something about each conversation's

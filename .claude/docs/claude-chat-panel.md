@@ -539,6 +539,10 @@ since that file already imports `BlockList.mjs`). Per conversation id it holds
 - **`answered`** — a turn FINISHED while the reviewer was looking at other
   code, so there is something new to go read (a property of this tab, never of
   the server),
+- **`sendError`** — the reviewer-facing sentence for that conversation's LAST
+  rejected/failed Signal POST, `''` once accepted — added in a follow-up (see
+  "A rejected send must survive navigating away" below); not part of the
+  original `db0e5f7` registry,
 - plus **`scopes`**: conversation id → the `file|label` of the code its comment
   hangs on, handed over by `loadComments` on the comment poll's own cadence
   (`RelatedPanel.mjs` owns the comment list, this store owns the turns).
@@ -549,9 +553,10 @@ An entry with nothing left to say is deleted, so the map stays the size of
 newer pushed event (`lastTurnProgressAt`, see below) — the same rule
 `loadChatProgress` already followed, now shared by both readers.
 
-In `RelatedPanel.mjs` every former `cc.busy`/`cc.progress` read goes through
-**`ccBusy()`/`ccProgress()`** — the registry narrowed to `cc.commentId` — so
-the panel keeps behaving exactly as before *for the conversation it shows*,
+In `RelatedPanel.mjs` every former `cc.busy`/`cc.progress`/`cc.sendError` read
+goes through **`ccBusy()`/`ccProgress()`/`ccSendError()`** — the registry
+narrowed to `cc.commentId` — so the panel keeps behaving exactly as before
+*for the conversation it shows*,
 and `hasActiveClaudeTurn()` is now strictly about that one conversation (its
 remaining job is the footer status line). `drainClaudeQueue` drains **the
 oldest entry of every conversation that has nothing in flight**, so two
@@ -625,9 +630,10 @@ The "Embedded Claude conversation" section owns:
   longer read by `claudeChatVisible()`, only by `chatAnchorComment()`'s
   internal anchor-resolution fallback, see "Superseded" above; `tick` is the
   1s heartbeat of the elapsed counter, see "Live progress"). **Whether a turn
-  is running, and what it is doing, is deliberately NOT on `cc`** — it lives
-  per conversation in `claudeTurns.mjs`, read here through
-  `ccBusy()`/`ccProgress()`, see "Parallel conversations". `status` is the
+  is running, what it is doing, and whether its last send failed are
+  deliberately NOT on `cc`** — they live per conversation in
+  `claudeTurns.mjs`, read here through `ccBusy()`/`ccProgress()`/
+  `ccSendError()`, see "Parallel conversations". `status` is the
   PANEL's own loading/error state (ensuring the
   workflow, fetching the transcript) — a genuinely **failed Claude turn** is
   a normal message with `kind: 'error'` (ladder exhausted) or `'retrying'`
@@ -2016,10 +2022,14 @@ zero feedback and no way to tell it apart from a UI that had simply stopped
 working. The operational fix is a restart; the *code* fix is that the reviewer
 must be told.
 
-- `cc.sendError` holds the reviewer-facing sentence for the LAST send, `''`
-  when it was accepted. Cleared at the start of every send and wherever `cc`
-  itself resets (`toNew`, `syncClaudeAnchorForSelection`), so it never sticks
-  to another conversation.
+- The reviewer-facing sentence for the LAST send lives **per conversation**,
+  `''` when it was accepted — `setTurnSendError`/`turnSendError`
+  (`src/claudeTurns.mjs`), read here through `ccSendError()` (narrowed to
+  `cc.commentId`, same pattern as `ccBusy()`/`ccProgress()`). It used to be a
+  single field `cc.sendError`, cleared at the start of every send and wherever
+  `cc` itself reset (`toNew`, `syncClaudeAnchorForSelection`) — see "A rejected
+  send must survive navigating away" below for why that was wrong, not just
+  incomplete.
 - `sendErrorText(status)` maps the three statuses the endpoint really produces:
   **400** → "de server kent deze actie niet … herstart slash" (the version-skew
   case above — the only one whose fix is not in the browser), **409** →
@@ -2042,6 +2052,59 @@ must be told.
   accepted send clears the line again). The three hand-built `view` stubs in
   `claude-chat-panel.spec.mjs` grew a `sendError: () => ''` along with the
   contract.
+
+### A rejected send must survive navigating away
+
+Follow-up on `db0e5f7` ("Chat with Claude on several selections at once",
+which moved `busy`/`progress` off `cc` into `claudeTurns.mjs` — see "Parallel
+conversations" above): `cc.sendError` itself was left as the one single-slot
+field the commit's own note flagged. Reviewer send on conversation A, walk to
+conversation B before A's rejection arrives → the sentence landed on
+`cc.sendError` regardless of which conversation was on screen by then, so it
+showed under **B**, not A; and `syncClaudeAnchorForSelection`'s unconditional
+`cc.sendError = ''` on every switch meant that even a rejection that DID land
+correctly was wiped the moment you walked back to A to go read it. Fixed by
+giving `sendError` the exact same per-conversation home as `busy`: a
+`sendError` field on `claudeTurns.mjs`'s per-id entry
+(`setTurnSendError`/`turnSendError`), `sendClaudeMessage` keys every write by
+its own already-computed `commentId` (never the live `cc.commentId`, which may
+already point at a different conversation by the time the response arrives),
+and the two stale plain-field resets (`toNew`, `syncClaudeAnchorForSelection`)
+are simply gone — `ccSendError()` narrows to whichever conversation `cc`
+currently shows, so switching naturally reveals that conversation's OWN last
+sentence (or `''` if it never had one) without needing to clear anything by
+hand.
+
+**`status` and `summary`/`summaryStatus` did NOT get the same treatment —
+checked and found to need something narrower, or nothing at all:**
+
+- **`cc.status`** (`'idle'|'loading'|'error'`) is purely the PANEL's own
+  "ensuring the workflow / fetching the transcript" state — it is never shown
+  outside this panel, and `ensureAndLoadChat` reruns it from scratch every time
+  the reviewer re-enters a conversation's chat, so there is nothing to
+  *persist* across a navigation away and back (unlike `sendError`, which
+  reports a fact about a specific past attempt the reviewer would want to see
+  again). The real bug was narrower: `ensureAndLoadChat`'s two `cc.status =
+  'error'` writes (a failed POST, and the `catch`) were the only writes in
+  this area missing the stale-response guard `loadChatMessages` already uses
+  (`if (cc.commentId !== commentId) return`) — so conversation A's ensure
+  failing after the reviewer already switched to B could flip B's, currently
+  visible, status to `'error'` for a failure that was never B's. Fixed with
+  that same existing guard, not a registry move — "werk minimaal": nothing
+  here needs to survive being looked away from, it only must not leak onto
+  whatever conversation is currently on screen.
+- **`cc.summary`/`cc.summaryStatus`** were checked and are already safe, no
+  change: their only writer, `loadChatMessages`, already bails via that exact
+  `if (cc.commentId !== commentId) return` guard before touching them, and
+  their only reader/continuer, `convertClaudeAnchorToComment`/
+  `pollChatSummary`, already checks `want !== focusToken || cc.commentId !==
+  commentId` before using or continuing to poll. No reachable path writes a
+  stale conversation's summary into the currently-shown one. Recorded here so
+  a future pass doesn't have to re-derive this from scratch.
+
+Test: `tests/claude-chat-parallel.spec.mjs` grew a case asserting the rejected
+send's sentence is still there when walking back to that conversation after
+visiting another one in between.
 
 ## "Wis Claude-gesprek" — clearing a conversation (chatActionClear)
 

@@ -41,7 +41,9 @@ import {
   setTurnBusy,
   setTurnProgress,
   setTurnScopes,
+  setTurnSendError,
   turnProgress,
+  turnSendError,
 } from './claudeTurns.mjs'
 import { colWidthStyle, startColumnResize, resetColumnWidth, resizeHandle, parseAutoWidthPx } from './columnWidth.mjs'
 import { autoGrowTextarea, resetTextareaHeight } from './textareaAutoGrow.mjs'
@@ -1083,10 +1085,12 @@ function toNew(commentTargetFn) {
   cc.messages = []
   cc.runId = null
   cc.status = 'idle'
-  cc.sendError = ''
-  // Deliberately NOT clearing the previous conversation's live turn: it keeps
-  // running server-side and is reported per conversation (claudeTurns.mjs), so
-  // it stays visible as an index pill instead of vanishing with this reset.
+  // Deliberately NOT clearing the previous conversation's live turn, busy
+  // state or sendError: they keep living per conversation (claudeTurns.mjs,
+  // keyed by the OLD commentId, not null), so the previous conversation stays
+  // visible as an index pill / keeps its own sentence instead of vanishing
+  // with this reset. ccSendError() below already reads '' for this fresh,
+  // still-unanchored `cc.commentId === null` composer.
 }
 
 // toNewFocus is the mirror of toComment() for the still-open, not-yet-placed
@@ -1603,22 +1607,17 @@ const cc = reactive({
   // workflow / fetching the transcript). A genuinely failed Claude TURN is a
   // normal message with kind 'error' (see chat_workflow.go), not this field.
   status: 'idle',
-  // sendError is the reviewer-facing sentence for a Signal POST that was
-  // REJECTED or never arrived — '' whenever the last send was accepted. This
-  // is deliberately separate from `status` (the panel's own load state) and
-  // from a kind:'error' turn (Claude answered, but the call failed): here the
-  // message never even reached the workflow, so nothing appears in the
-  // transcript at all and without this the column is simply inert. See
-  // sendClaudeMessage.
-  sendError: '',
-  // "is a turn running / what is it doing" is deliberately NOT a field here:
-  // it lives per conversation in claudeTurns.mjs (ccBusy/ccProgress below read
-  // this conversation's entry out of it). A reviewer can send a message, walk
-  // to other code and start a second conversation there while the first is
+  // "is a turn running / what is it doing / did the last send fail" are
+  // deliberately NOT fields here: they live per conversation in
+  // claudeTurns.mjs (ccBusy/ccProgress/ccSendError below read this
+  // conversation's entry out of it). A reviewer can send a message, walk to
+  // other code and start a second conversation there while the first is
   // still being answered — with a single slot on `cc` the second send would
-  // queue behind the first one's turn and the first one's progress/answer
-  // would be dropped the moment this panel re-anchored. See "Parallel
-  // conversations" in .claude/docs/claude-chat-panel.md.
+  // queue behind the first one's turn, the first one's progress/answer would
+  // be dropped the moment this panel re-anchored, and a rejected send's
+  // sentence would attach to whichever conversation happens to be on screen
+  // once the response arrives instead of the one it was actually about. See
+  // "Parallel conversations" in .claude/docs/claude-chat-panel.md.
   // queued holds the reviewer's NEXT turns, typed while an earlier one is
   // still running ("doorpraten", like the Claude CLI): each entry is
   // {id, body, context, commentId, runId} and is sent as its own ordinary
@@ -1646,17 +1645,23 @@ const cc = reactive({
   summaryStatus: '',
 })
 
-// ccBusy/ccProgress are "is a turn running for the conversation THIS panel
-// currently shows" — the per-conversation registry (claudeTurns.mjs) narrowed
-// to cc.commentId. Everything in this file that used to read cc.busy/
-// cc.progress goes through these two, so a turn on another selection can never
-// gate this conversation's composer or overwrite its status line.
+// ccBusy/ccProgress/ccSendError are "is a turn running / what did the last
+// send do for the conversation THIS panel currently shows" — the
+// per-conversation registry (claudeTurns.mjs) narrowed to cc.commentId.
+// Everything in this file that used to read cc.busy/cc.progress/cc.sendError
+// goes through these three, so a turn (or a rejected send) on another
+// selection can never gate this conversation's composer, overwrite its status
+// line, or show up under the wrong conversation.
 function ccBusy() {
   return isTurnBusy(cc.commentId)
 }
 
 function ccProgress() {
   return turnProgress(cc.commentId)
+}
+
+function ccSendError() {
+  return turnSendError(cc.commentId)
 }
 
 // queuedFor scopes the client-side queue to one conversation — each entry
@@ -1748,7 +1753,11 @@ function syncClaudeAnchorForSelection() {
   // was elsewhere no longer needs an index pill.
   clearTurnAnswered(nextId)
   cs.claudePinned = true // a different conversation always starts pinned to its own bottom
-  cc.sendError = '' // another conversation, so the previous one's rejection no longer applies
+  // Deliberately NOT resetting a sendError here: it lives per conversation in
+  // claudeTurns.mjs, and ccSendError() below already narrows to the NEW
+  // cc.commentId — switching naturally shows nextId's own sentence (its last
+  // real rejection, or '' if it never had one) instead of borrowing/discarding
+  // whatever the previous conversation had.
   if (nextId == null) {
     cc.status = 'idle'
     return
@@ -1809,6 +1818,11 @@ async function ensureAndLoadChat(pr, commentId) {
       body: JSON.stringify({ pr, repo: repoField(), commentId }),
     })
     if (!res.ok) {
+      // Stale — the reviewer already switched to a different conversation
+      // while this POST was in flight; that switch already reset cc.status
+      // for whatever it now shows, and this failure was never about that one.
+      // Same guard loadChatMessages already applies to its own late arrivals.
+      if (cc.commentId !== commentId) return
       cc.status = 'error'
       return
     }
@@ -1816,6 +1830,7 @@ async function ensureAndLoadChat(pr, commentId) {
     cc.runId = json.runId
     await loadChatMessages(commentId)
   } catch (_) {
+    if (cc.commentId !== commentId) return
     cc.status = 'error'
   }
 }
@@ -2048,7 +2063,7 @@ async function sendClaudeMessage(text, action = '', context = '', target = null)
   if (!runId) return
   if (!needsNoText && !trimmed) return
   setTurnBusy(commentId, true)
-  cc.sendError = ''
+  setTurnSendError(commentId, '')
   try {
     const res = await fetch('/api/workflows/' + encodeURIComponent(runId) + '/signals/message', {
       method: 'POST',
@@ -2065,7 +2080,7 @@ async function sendClaudeMessage(text, action = '', context = '', target = null)
     // nothing had been sent — the column just sat there, inert. See
     // sendErrorText for the three ways this actually happens.
     if (!res.ok) {
-      cc.sendError = sendErrorText(res.status)
+      setTurnSendError(commentId, sendErrorText(res.status))
       return
     }
     if (commentId === cc.commentId) {
@@ -2077,7 +2092,7 @@ async function sendClaudeMessage(text, action = '', context = '', target = null)
     // down, connection dropped). Previously uncaught, so it escaped as an
     // unhandled rejection out of the click handler — again with nothing
     // visible in the column.
-    cc.sendError = 'Geen verbinding met de server — draait slash nog?'
+    setTurnSendError(commentId, 'Geen verbinding met de server — draait slash nog?')
   } finally {
     setTurnBusy(commentId, false)
     // Whatever the reviewer typed meanwhile goes out now, one turn at a time
@@ -2837,8 +2852,9 @@ function claudeChatView() {
     status: () => cc.status,
     busy: () => ccBusy(),
     // The last send that never made it to the workflow — '' when there is
-    // none. See sendClaudeMessage/sendErrorText.
-    sendError: () => cc.sendError,
+    // none. Per conversation (claudeTurns.mjs), narrowed to cc.commentId. See
+    // sendClaudeMessage/sendErrorText.
+    sendError: () => ccSendError(),
     claudePos: () => cs.claudePos,
     // Whether the reviewer's OWN mouse/wheel scroll still sits at the bottom
     // of claude-chat-thread — see updateClaudeThreadPinned's own doc comment.
