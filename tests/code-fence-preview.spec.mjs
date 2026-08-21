@@ -1,4 +1,4 @@
-import { test, expect, leaveSearchBox, seededPr } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox, seededPr, appReady } from './_fixtures.mjs'
 
 // Verifies the standalone code-preview column showing every fenced code
 // block inside a comment/Claude-chat body full-size (markdown.mjs's
@@ -311,4 +311,165 @@ test('↓/↑ at the bottom of the Claude chat walk the code-preview cards', asy
   // card again, so whether the cards themselves are still rendered at that
   // moment is exactly the kind of transient state a spec must not assert.
   await expect(page.locator('[data-testid=code-preview-card][data-active=true]')).toHaveCount(0)
+})
+
+// ↓ from the BOTTOM OF A COMMENT (not the chat itself) walks the same
+// code-preview cards first, before falling through further — reviewer
+// request: "als ik in een comment naar beneden ga, en er zijn code blocks
+// gegenereerd door de chat, dan wil ik ook eerst door die code blokken heen,
+// net als dat ik vanuit de chat naar beneden ga" (advanceFromComment,
+// RelatedPanel.mjs). Same single-conversation seed as the fixture above —
+// the fence lives directly in the comment's own body, which is enough:
+// recomputeCodePreviews reads every fence in the comment/Claude columns
+// alike, so this only exercises the NEW entry point (↓ from 'comment'), not
+// a new preview mechanism.
+test('↓ from the bottom of a comment thread walks its Claude conversation\'s code blocks before advancing', async ({
+  page,
+}, testInfo) => {
+  const pr = seededPr(testInfo)
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: {
+      pr,
+      file: 'test.php',
+      line: 1,
+      author: 'reviewer',
+      body: 'kijk hier eens naar:\n```php\n$first = 1;\n```',
+      code: '$order->total();',
+      gran: 'call',
+      label: 'Order::total',
+    },
+  })
+  expect((await start.json()).runId).toBeTruthy()
+
+  await page.goto('/pr/' + pr)
+  await leaveSearchBox(page)
+  const item = page.getByTestId('comment-item').first()
+  await expect(item).toBeVisible()
+  await item.click() // -> cs.focus = 'comment'
+
+  const cards = page.getByTestId('code-preview-card')
+  await expect(cards).toHaveCount(1)
+
+  // A bare ↓ from the comment (only one conversation, so this is already
+  // "the bottom") lands directly on the card — no ArrowRight into 'claude'
+  // first.
+  await page.keyboard.press('ArrowDown')
+  await expect(cards.first()).toHaveAttribute('data-active', 'true')
+  await expect(page.getByTestId('claude-chat-compose')).not.toBeFocused()
+
+  // ↑ hands the composer its caret back, exactly like the chat's own rest
+  // position — this only changed the entry point, not what's downstream.
+  await page.keyboard.press('ArrowUp')
+  await expect(cards.first()).toHaveAttribute('data-active', 'false')
+  await expect(page.getByTestId('claude-chat-compose')).toBeFocused()
+})
+
+// ↓ past the last code-preview card INSIDE A DRILLED COLUMN must stay inside
+// that same column's own Onderliggende-code panel (its next sibling child),
+// not jump the top-level sidebar selection — reported bug: it used to land on
+// an unrelated block elsewhere in the PR (home.mjs's advanceToNextBlockFrom-
+// ClaudeChat ignored state.focusLevel/state.drill). Real PR 12903 fixture,
+// same relations mock drill-refresh-multi-level.spec.mjs uses: drill from
+// findOrCreateCustomer into execute, which itself resolves to Order::address.
+test('↓ past a drilled column\'s own Claude code blocks stays inside that column\'s Underlying code, and ↑ returns to the same card', async ({
+  page,
+}) => {
+  await page.route('**/api/relations?pr=12903', async (route) => {
+    await route.fulfill({
+      json: [
+        {
+          pr: 12903,
+          parentId: '12903:app/Actions/CreatePaymentAction.php:CreatePaymentAction::findOrCreateCustomer',
+          childId: '12903:app/Actions/CreatePaymentAction.php:CreatePaymentAction::execute',
+          kind: 'event_listener',
+        },
+        {
+          pr: 12903,
+          parentId: '12903:app/Actions/CreatePaymentAction.php:CreatePaymentAction::execute',
+          childId: '12903:app/Models/Order.php:Order::address',
+          kind: 'event_listener',
+        },
+      ],
+    })
+  })
+
+  await page.goto('/pr/12903')
+  await appReady(page)
+
+  const rows = page.getByTestId('block-row')
+  await rows.filter({ hasText: 'findOrCreateCustomer' }).click()
+  await page.keyboard.press('ArrowRight') // -> diff
+  await expect(page).toHaveURL(/mode=diff/)
+  await page.waitForTimeout(200)
+
+  await page.keyboard.press('ArrowRight') // -> its Onderliggende-code panel
+  await page.waitForTimeout(150)
+  const child1 = page.getByTestId('related-item').first()
+  await expect(child1).toContainText('execute')
+  await child1.click() // drill into execute
+
+  const drillColumn = page.getByTestId('drill-column')
+  await expect(drillColumn).toHaveCount(1)
+  await page.waitForTimeout(300)
+  await expect(drillColumn).toContainText('execute')
+
+  // Place the comment through the real UI flow (the palette's own "Comment
+  // op deze regel", landing it on whichever row/unit the diff is already on
+  // — see enterDiff's firstUnapprovedChange) rather than guessing the row
+  // index blockRows() would assign to execute's one changed line: that index
+  // depends on exactly how many unchanged lines precede it in this fixture's
+  // file, which is exactly the kind of thing "snapshot a selection by stable
+  // ID, never reverse-engineer a raw index" (conventions.md) warns against.
+  await page.keyboard.press('Enter') // block command palette
+  await page.getByTestId('command-row').filter({ hasText: 'Comment op deze regel' }).click()
+  const composer = page.getByTestId('comment-compose')
+  await expect(composer).toBeFocused()
+  await composer.fill('kijk hier eens naar:\n```php\n$sessionTimeout = 7200;\n```')
+  const [createRes] = await Promise.all([
+    page.waitForResponse(
+      (res) => res.url().includes('/api/workflows/task_code_comment') && res.request().method() === 'POST',
+    ),
+    page.getByTestId('comment-send').click(),
+  ])
+  const runId = (await createRes.json()).runId
+  expect(runId).toBeTruthy()
+
+  try {
+    const item = page.getByTestId('comment-item')
+    await expect(item).toHaveCount(1)
+
+    // execute now has its own comment, holding one code fence — the preview
+    // card only appears once that comment card is actually focused/expanded
+    // (see "A preview card only shows for a fence inside the FOCUSED comment
+    // card" in claude-chat-panel.md); placing it does not itself focus it.
+    await item.click() // -> cs.focus = 'comment'
+    const cards = page.getByTestId('code-preview-card')
+    await expect(cards).toHaveCount(1)
+
+    await page.keyboard.press('ArrowDown') // comment (only one) -> its code block
+    await expect(cards.first()).toHaveAttribute('data-active', 'true')
+
+    // ↓ past the last (only) card must land on execute's OWN Underlying-code
+    // child (Order::address) — never move the top-level sidebar selection.
+    await page.keyboard.press('ArrowDown')
+    await page.waitForTimeout(150)
+    await expect(page).toHaveURL(/mode=diff/)
+    await expect(page).toHaveURL(/sel=app%2FActions%2FCreatePaymentAction\.php/)
+    const related = page.getByTestId('related-item').first()
+    await expect(related).toContainText('address')
+    await expect(related).toHaveAttribute('data-active', 'true')
+
+    // ↑ from that first (only) child returns to the exact card just left, not
+    // to some ordinary comment-tail landing.
+    await page.keyboard.press('ArrowUp')
+    await expect(cards.first()).toHaveAttribute('data-active', 'true')
+    await expect(page.getByTestId('claude-chat-compose')).not.toBeFocused()
+  } finally {
+    // Never leave this real, non-mocked comment behind on the shared PR
+    // 12903 fixture (see place-comment-return-focus.spec.mjs/claude-chat-
+    // panel.spec.mjs for the same leftover-state rationale).
+    await page.request.post('/api/workflows/' + runId + '/signals/delete', {
+      data: { author: 'reviewer' },
+    })
+  }
 })

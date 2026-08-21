@@ -2435,15 +2435,86 @@ one didn't exist anywhere in this app).
   purely ephemeral highlight. `recomputeCodePreviews` does **clamp** it to the
   recomputed item count, so a fence disappearing under the cursor can never
   leave it pointing at nothing.
-- **Only reachable from `'claude'`.** A fence inside a comment body gets its
-  preview card exactly as before, but the cursor is scoped to the chat
-  (`CodePreviewPanel` passes `cs.focus === 'claude' && …`) — the request was
-  about the chat, and `'comment'`/`'thread'` keep their own `↓` meaning
-  (`advanceFromComment`). `Enter` on a highlighted card does nothing (there is
-  no action to run on one).
+- **Rendering/cursor scope.** A fence inside a comment body gets its preview
+  card exactly as before, but the cursor itself is scoped to the chat
+  (`CodePreviewPanel` passes `cs.focus === 'claude' && …`) — `Enter` on a
+  highlighted card does nothing (there is no action to run on one).
 
 Test: the "↓/↑ at the bottom of the Claude chat walk the code-preview cards"
 case in `tests/code-fence-preview.spec.mjs`.
+
+### `↓` from the bottom of a COMMENT also walks those same code blocks first
+
+Reviewer follow-up, on the exact same unit's cards as above: *"als ik in een
+comment naar beneden ga, en er zijn code blocks gegenereerd door de chat, dan
+wil ik ook eerst door die code blokken heen, net als dat ik vanuit de chat naar
+beneden ga."* Before this, `advanceFromComment()` (`RelatedPanel.mjs` — `↓` at
+the bottom of the last comment conversation, or at `threadPos === 0`) jumped
+straight to `enterRelated()` (stop 6) whenever there was no next conversation,
+skipping the chat's own code-preview cards entirely — a reviewer had to
+explicitly step `→` into `'claude'` first to reach them.
+
+`advanceFromComment` now checks `codePreviewCount() > 0` in that same spot: if
+the unit's Claude conversation has code-preview cards, it sets `cs.focus =
+'claude'`, `cs.previewPos = 1` and calls `focusPreviewCard()` — landing on the
+FIRST card exactly as `↓` from the chat's own rest position already does.
+Everything downstream is untouched: this only changes the entry point, not the
+chain itself (further `↓`/`↑` inside `'claude'` behaves exactly as documented
+above, including the top-level "skip stop 6, advance to the next block" rule
+once the cards are exhausted). With no code-preview cards, `advanceFromComment`
+falls through to `enterRelated()` exactly as before.
+
+Test: the "↓ from the bottom of a comment thread walks its Claude
+conversation's code blocks before advancing" case in
+`tests/code-fence-preview.spec.mjs`.
+
+### Inside a DRILLED column, `↓` past the last card stays in that column
+
+The top-level "skip stop 6 entirely, advance to the next visible block"
+decision above is explicit and TOP-LEVEL-ONLY. Reported bug, inside a drilled
+column (`state.focusLevel > 0`): exhausting a drilled unit's own code-preview
+cards and pressing `↓` once more jumped the TOP-LEVEL sidebar selection
+(`advanceToNextBlockFromClaudeChat`, `home.mjs`, ignored
+`state.focusLevel`/`state.drill` entirely) — landing on an unrelated block
+elsewhere in the PR instead of the drilled unit's own next Underlying-code
+child (e.g. `FindFirstSessionActivity::run`, rendered right below
+`SessionFlow::run`'s own Claude conversation and code-preview cards, connected
+by the usual drill-hint chip connector).
+
+There is no meaningful "next block in the sidebar" once you're this deep — the
+reviewer is reviewing THIS unit's own call graph — so `home.mjs`'s `'advance'`
+handling now branches on `state.focusLevel`: `0` still calls
+`advanceToNextBlockFromClaudeChat()` unchanged; `> 0` calls
+**`enterRelatedFromClaudeChat()`** (`RelatedPanel.mjs`) instead, which continues
+into that SAME drilled column's own Onderliggende-code panel (`enterRelated()`,
+landing on its first child) rather than touching the top-level selection at
+all.
+
+**`↑` from that first child returns to the exact card just left, not an
+ordinary comment-tail landing.** `enterRelatedFromClaudeChat()` marks a small
+module-local flag, `codeFromClaudeTail` (plain state, not reactive — mirrors
+`rangeComposeItems`'s own shape) — consumed exactly once by the `cs.focus ===
+'code'`, `codeSel === 0` `ArrowUp` branch, which then steps back into
+`'claude'` at its own tail instead of `enterCommentsTail()`/`exitRelated()`.
+
+**The previewPos to restore is captured EAGERLY, at the moment
+`enterRelatedFromClaudeChat()` runs — not re-read later when `↑` is actually
+pressed.** Entering `'code'` collapses the comment card back to its compact
+rendering (`commentCard`'s own expanded-iff-`cs.focus`-is-`comment`/`thread`/
+`claude` rule), which drops its fence(s) out of the DOM — so
+`recomputeCodePreviews`' `MutationObserver` empties `cp.items` shortly after,
+asynchronously, on its own `requestAnimationFrame`. A `codePreviewCount()` read
+made later (once the reviewer has actually walked into Underlying code and
+pressed `↑`) reliably reads `0` by then, which would always send them back to
+the empty composer instead of the card they left. `codeFromClaudeTailPreviewPos`
+is that eager read, taken synchronously inside `enterRelatedFromClaudeChat()`
+itself, before `enterRelated()` flips `cs.focus` away from `'claude'` — same
+synchronous-call-stack ordering trick as everywhere else `cs`/`cc` gets read
+right before a focus transition changes what it means.
+
+Test: the "↓ past a drilled column's own Claude code blocks stays inside that
+column's Underlying code, and ↑ returns to the same card" case in
+`tests/code-fence-preview.spec.mjs`.
 
 ## "Huidig (PR)" only for a `suggestion` fence (sharpening D4)
 

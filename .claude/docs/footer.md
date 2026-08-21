@@ -121,15 +121,17 @@ can never drift apart. The pr-index (`BlockList.mjs`) and the PR-info column
 mode, where the footer never shows, so their old fixed `bottom-[90px]` was dead
 space.
 
-**`<main>`'s own `overflow-y` already resolves to `auto`** even though its class
-list only sets `overflow-x-auto` — one non-`visible` axis forces the other to
-compute as `auto` too (the same CSS rule as the TRANSLATION card's scroll
-container, see `.claude/docs/diff-render.md`). So a block column taller than
-`<main>`'s box already scrolls/clips cleanly within it, and nothing ever renders
-*behind* the footer (`z-20`, above `<main>`'s `z-10`). A too-tall active diff is
-therefore a **space-allocation** question, never a clipping bug — see "The
-look-ahead preview collapses…" in `.claude/docs/diff-card.md`. Tests:
-`tests/footer-height-fits-content.spec.mjs`,
+**Each column scrolls vertically on its own** (`block-column`/
+`comments-and-related`/each `drill-column` carry their own `overflow-y-auto`,
+`<main>` itself is explicitly `overflow-y-hidden`) — see "`<main>` as a
+horizontally scrolling column flow" in `.claude/docs/detail-layout.md` for the
+full mechanism and the CSS axis-coupling quirk it closes off (an earlier
+version of this note wrongly claimed `<main>`'s own inferred `overflow-y:auto`
+already made this safe; a reviewer screenshot proved otherwise — a tall
+comment/Claude-chat/code-preview column really did render partly behind the
+footer). A too-tall active diff is a **space-allocation** question, never a
+clipping bug — see "The look-ahead preview collapses…" in
+`.claude/docs/diff-card.md`. Tests: `tests/footer-height-fits-content.spec.mjs`,
 `tests/footer-explanation.spec.mjs`.
 
 ## Inline diff of the active unit

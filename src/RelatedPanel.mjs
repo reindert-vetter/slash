@@ -226,6 +226,31 @@ const cs = reactive({
 // already-open composer claims to cover.
 let rangeComposeItems = []
 
+// codeFromClaudeTail — plain module state, not reactive — marks that the
+// Onderliggende-code panel ('code') was entered via enterRelatedFromClaudeChat
+// (a drilled column's ↓ exhausting the chat's own code-preview cards, see
+// home.mjs's 'advance' handling) rather than the ordinary → from the diff or
+// ↓ falling through the last comment (advanceFromComment). Consumed exactly
+// once by handleRelatedKey's ↑-on-the-first-child branch, which uses it to
+// step back into 'claude' at its own tail (the same card the reviewer just
+// left) instead of the ordinary enterCommentsTail()/exitRelated() landing.
+// enterRelated() always clears it first, so every other way of reaching
+// 'code' is unaffected.
+//
+// codeFromClaudeTailPreviewPos captures codePreviewCount() at the MOMENT
+// enterRelatedFromClaudeChat runs — not re-read later, when ↑ is actually
+// pressed. This matters: entering 'code' collapses the comment card back to
+// its compact rendering (commentCard's own expanded-iff-cs.focus-is-comment/
+// thread/claude rule), which drops its fence(s) out of the DOM — so
+// recomputeCodePreviews' MutationObserver empties cp.items shortly after
+// (asynchronously, on its own rAF). A later, fresh codePreviewCount() read
+// (once the reviewer has actually pressed ↑) reliably reads 0 by then, which
+// would always send them to the composer instead of back onto the exact card
+// they left. Reading it once, synchronously, right as the drilled column's
+// own code-preview cards are still expanded/rendered avoids that race.
+let codeFromClaudeTail = false
+let codeFromClaudeTailPreviewPos = 0
+
 // The panel cursor survives a browser refresh: focus/codeSel/sel/threadPos live in
 // the URL under their own `rel` namespace, alongside the main navigation (sel/mode/
 // chg/gran) that home.mjs binds. The composer/busy/list/view/scope are transient or
@@ -762,7 +787,28 @@ export function enterRelated() {
   cs.focus = 'code'
   cs.codeSel = 0
   cs.chipPath = []
+  codeFromClaudeTail = false
   scrollCodeIntoView()
+}
+
+// enterRelatedFromClaudeChat is enterRelated's counterpart for a drilled
+// column's own 'advance' sentinel (see handleRelatedKey's 'claude'-focus
+// ArrowDown branch and home.mjs's onKeydown, which calls this instead of
+// advanceToNextBlockFromClaudeChat while state.focusLevel > 0): exhausting a
+// drilled unit's own Claude code-preview cards continues into THAT SAME
+// unit's Onderliggende-code panel (its next sibling child, e.g.
+// FindFirstSessionActivity::run below SessionFlow::run's own Claude
+// conversation) instead of jumping the TOP-LEVEL block selection — reported
+// bug: ↓ there landed on an unrelated block elsewhere in the PR. Marks
+// codeFromClaudeTail so ↑ from the first child returns to the exact card the
+// reviewer left, see that flag's own doc comment. Reads codePreviewCount()
+// FIRST, before enterRelated() flips cs.focus away from 'claude'/'comment' —
+// see codeFromClaudeTailPreviewPos's own doc comment for why that ordering
+// is load-bearing.
+export function enterRelatedFromClaudeChat() {
+  codeFromClaudeTailPreviewPos = codePreviewCount()
+  enterRelated()
+  codeFromClaudeTail = true
 }
 
 // exitRelated releases the keyboard back to the diff and drops any input focus /
@@ -1151,11 +1197,23 @@ export function enterCommentsTail() {
 // (or from the bottom of its thread, threadPos === 0) to the next one — and,
 // once there is no next conversation, continues on into the Onderliggende-
 // code panel instead of clamping (see keyboard-navigation.md: "↓ loopt door
-// naar het onderliggende-code-blok").
+// naar het onderliggende-code-blok"). Reviewer request: when the unit's own
+// Claude conversation has code blocks (cp.items, walked by cs.previewPos —
+// see "↓ walks the chat's own code blocks" in claude-chat-panel.md), walk
+// those FIRST, exactly like ↓ already does from the chat's own rest
+// position — instead of skipping straight to Onderliggende code. This only
+// changes the ENTRY point: once inside 'claude', the existing previewPos/
+// claudePos handling in handleRelatedKey is unchanged (further ↓ keeps
+// walking the cards, then falls through exactly as it already does from
+// there).
 function advanceFromComment() {
   if (selI() < visibleComments().length - 1) {
     cs.sel += 1
     toComment()
+  } else if (codePreviewCount() > 0) {
+    cs.focus = 'claude'
+    cs.previewPos = 1
+    focusPreviewCard()
   } else {
     enterRelated()
   }
@@ -3531,13 +3589,31 @@ export function handleRelatedKey(key) {
           scrollChipIntoView()
         }
       } else if (cs.codeSel === 0) {
-        // Nothing further up in this list — step back to the last comment
-        // conversation of the unit, if there is one, else leave the panel
-        // entirely (there's no trigger stop above it any more — see the
-        // removed enterTrigger). ← (below) is deliberately NOT the mirror of
-        // this: it always exits straight to the diff, regardless of codeSel
-        // or comments — see its own branch below.
-        if (hasVisibleComments()) {
+        // Nothing further up in this list — step back to wherever the
+        // reviewer came from. Reached via enterRelatedFromClaudeChat (a
+        // drilled column's own Claude code-preview cards, exhausted going
+        // down) → land back on the exact card just left, at 'claude''s own
+        // tail, rather than the ordinary comment/exit landing below.
+        // Otherwise: step back to the last comment conversation of the unit,
+        // if there is one, else leave the panel entirely (there's no trigger
+        // stop above it any more — see the removed enterTrigger). ← (below)
+        // is deliberately NOT the mirror of this: it always exits straight
+        // to the diff, regardless of codeSel or comments — see its own
+        // branch below.
+        if (codeFromClaudeTail) {
+          codeFromClaudeTail = false
+          cs.focus = 'claude'
+          // codeFromClaudeTailPreviewPos, not a fresh codePreviewCount() —
+          // see that field's own doc comment: re-reading it here would
+          // already see the now-collapsed comment's empty cp.items.
+          if (codeFromClaudeTailPreviewPos > 0) {
+            cs.previewPos = codeFromClaudeTailPreviewPos
+            focusPreviewCard()
+          } else {
+            cs.previewPos = 0
+            focusClaudeComposer()
+          }
+        } else if (hasVisibleComments()) {
           enterCommentsTail()
         } else {
           exitRelated()

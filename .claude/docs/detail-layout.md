@@ -105,14 +105,39 @@ column back to `focusLevel===0` resp. leave the diff session
 (see "Unfocused columns collapse into a narrow rail" in
 `.claude/docs/drilling.md`). Test: `tests/main-scroll-rest-left.spec.mjs`.
 
-**`<main>`'s own `overflow-y` already resolves to `auto`** even though the class
-list only sets `overflow-x-auto` — per the CSS rule that one non-`visible` axis
-forces the other to compute as `auto` too (same rule as the TRANSLATION card's
-scroll container, `.claude/docs/diff-render.md`). So a too-tall block column
-scrolls/clips cleanly inside `<main>`'s box; nothing ever renders behind the
-footer (`z-20`, above `<main>`'s `z-10`). "My diff doesn't fit" is therefore a
-space-**allocation** question, not a clipping bug — see the preview-collapse
-mechanism in `.claude/docs/diff-card.md`.
+**Each column scrolls vertically on its own, independently of its
+neighbours** (`overflow-y-auto` on `block-column`/`comments-and-related`/each
+`drill-column`, plus an explicit `overflow-y-hidden` on `<main>` itself).
+**This reverses an earlier, actually-buggy assumption** written here: without
+that explicit `overflow-y-hidden`, `<main>`'s own `overflow-y` silently
+resolves to `auto` too — per the CSS rule that one non-`visible` axis forces
+the other to compute as `auto` (same rule as the TRANSLATION card's scroll
+container, `.claude/docs/diff-render.md`) — which made `<main>` itself the
+ONE shared vertical scrollbar for every column at once: scrolling one column
+scrolled all of them together, and a DOM update anywhere in that one shared
+container (a live Claude turn, the comment poll) could reset everyone's
+`scrollTop`. Reviewer report, with a screenshot: a tall comment/Claude-chat/
+code-preview column (`comments-and-related`, see
+`.claude/docs/claude-chat-panel.md`) really did render partly BEHIND the
+footer — contradicting what this doc used to claim ("nothing ever renders
+behind the footer"). Giving each column its own bounded, `h-full
+overflow-y-auto` box (a VISIBLE scrollbar, same reasoning as the Claude chat
+thread's own, `.claude/docs/claude-chat-panel.md`) fixes both: independent
+per-column scroll, and `<main>` itself now has nothing left to scroll (its
+children never overflow its own height any more), so the axis-coupling quirk
+above no longer matters — the explicit `overflow-y-hidden` just forecloses it
+for good. `scrollIntoViewVertical`'s "first ancestor that actually scrolls"
+walk needed no change: it now correctly resolves to the column itself instead
+of `<main>`. **Not given this treatment:** `drill-column`'s own outer `<div>`
+— it hosts the absolutely-positioned `drill-left-hint` chevron
+(`-left-3`, poking outside its own box on purpose, see "Column navigation" in
+`.claude/docs/drilling.md`), and per the same axis-coupling rule giving IT
+`overflow-y-auto` would force its `overflow-x` non-`visible` too and clip that
+chevron. Its own content (the diff card + its look-ahead preview) is small
+enough not to need it; the actually-tall content lives in the separate
+`comments-and-related` column, which does get the fix. "My diff doesn't fit"
+is a space-**allocation** question, not a clipping bug — see the
+preview-collapse mechanism in `.claude/docs/diff-card.md`.
 
 ### A mouse way to reach content overflowing to the right
 

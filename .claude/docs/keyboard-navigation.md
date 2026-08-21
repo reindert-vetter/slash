@@ -98,28 +98,42 @@ code).
      the code-preview cards stacked below the merged row, on their own
      `cs.previewPos` cursor (1..n counted from the TOP, `↑` walks back up into
      the composer; see "`↓` walks the chat's own code blocks" in
-     `.claude/docs/claude-chat-panel.md`) — and only `↓` past the last card
-     (or `↓` at rest when there are none) releases the panel focus entirely
-     and jumps straight to the **next visible block's diff**, still skipping
-     stop 6 (explicit request — landing in Underlying code read as an unwanted
-     extra "menu" in the way of continuing the review; see
-     `advanceToNextBlockFromClaudeChat`, `home.mjs`) — unchanged even when
-     reached via the still-unplaced `'new'` composer, since its draft text lives in `composeDrafts`, untouched by
-     leaving; `←`/`Escape` step back directly to `'comment'` (not to
-     `'thread'`) — or, reached via the composer (no anchor comment exists yet,
-     `cc.commentId == null`), back to the still-open `'new'` composer instead,
-     draft intact; `→` does nothing (there is no stop past it). When the
-     NEWEST turn is a still-open question with clickable options, this same
-     `↑`/`↓` chain grows one extra rung between the composer and that turn —
-     the question's own options, bottom to top — and `Enter` sends whichever
-     one is highlighted; see "↑/↓ walks a still-open question's options
-     before the transcript" in `.claude/docs/claude-chat-panel.md`.
+     `.claude/docs/claude-chat-panel.md`; a bare `↓` from the bottom of a
+     COMMENT — not the chat itself — walks these same cards first too, see
+     "`↓` from the bottom of a COMMENT also walks those same code blocks
+     first" in that same doc) — and only `↓` past the last card (or `↓` at
+     rest when there are none) releases the panel focus entirely. **At the
+     TOP level** (`state.focusLevel === 0`) that jumps straight to the **next
+     visible block's diff**, still skipping stop 6 (explicit request —
+     landing in Underlying code read as an unwanted extra "menu" in the way of
+     continuing the review; see `advanceToNextBlockFromClaudeChat`,
+     `home.mjs`) — unchanged even when reached via the still-unplaced `'new'`
+     composer, since its draft text lives in `composeDrafts`, untouched by
+     leaving. **Inside a DRILLED column** (`state.focusLevel > 0`) it instead
+     continues into that SAME column's own stop 6 (`enterRelatedFromClaudeChat`,
+     `RelatedPanel.mjs`) — there is no "next block in the sidebar" once you're
+     this deep, only that unit's own Underlying code (e.g. a resolved call
+     right below the cards); `↑` from that panel's first child then returns to
+     the exact card just left, not an ordinary comment-tail landing — see
+     "Inside a DRILLED column, `↓` past the last card stays in that column" in
+     `.claude/docs/claude-chat-panel.md`. `←`/`Escape` step back directly to
+     `'comment'` (not to `'thread'`) — or, reached via the composer (no anchor
+     comment exists yet, `cc.commentId == null`), back to the still-open
+     `'new'` composer instead, draft intact; `→` does nothing (there is no stop
+     past it). When the NEWEST turn is a still-open question with clickable
+     options, this same `↑`/`↓` chain grows one extra rung between the
+     composer and that turn — the question's own options, bottom to top — and
+     `Enter` sends whichever one is highlighted; see "↑/↓ walks a still-open
+     question's options before the transcript" in
+     `.claude/docs/claude-chat-panel.md`.
 6. **Underlying code** (`RelatedPanel`, `cs.focus==='code'`) — the last stop of
    the chain reachable via `→`: `→` there leaves the card nowhere to go. Note
    that "last" is about the `→` chain, not the screen — the stop-5b Claude
    column renders to the *right* of it (see `.claude/docs/detail-layout.md`).
-   `↓` out of the chat (stop 5b) no longer reaches this stop at all — it jumps
-   straight to the next block instead (see stop 5b above).
+   `↓` out of the chat (stop 5b) reaches this stop only inside a DRILLED
+   column (`state.focusLevel > 0`, that same column's own panel); at the top
+   level it still jumps straight to the next block instead (see stop 5b
+   above).
 
 ### Walking into the since-review blocks and the Taken block
 

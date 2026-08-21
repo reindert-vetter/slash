@@ -401,6 +401,18 @@ coordinate is viewport-relative and stays positive even for a chevron fully
 hidden behind `<main>`'s clip edge, so a coordinate check can't distinguish
 "visible" from "clipped by an ancestor's `overflow`".
 
+**This is also why `drill-column`'s own outer `<div>` deliberately does NOT
+get its own `overflow-y-auto`** (unlike `block-column`/`comments-and-related`,
+see "`<main>` as a horizontally scrolling column flow" in
+`.claude/docs/detail-layout.md`): the CSS rule that forces the OTHER axis to
+`auto` too the moment one axis isn't `visible` would clip this exact chevron —
+it genuinely renders outside `drill-column`'s own box, on purpose, not just
+near its edge. `drill-column` only ever holds the diff card + its own
+look-ahead preview (`drillPreviewColumns`), never the tall
+comments/Claude-chat/code-preview/Underlying-code stack — that lives in the
+separate, always-once-rendered `comments-and-related` column instead, which
+gets the scroll fix without this conflict.
+
 ## Opening animation (`drill-enter`)
 
 A fresh `drillIntoChild` call (a real drill, or `drillToSibling`'s replacement)

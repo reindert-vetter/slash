@@ -123,6 +123,7 @@ import RelatedPanel, {
   publishThreadOnly,
   CodePreviewPanel,
   commentTitleOf,
+  enterRelatedFromClaudeChat,
 } from './RelatedPanel.mjs'
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { CallArrowsHost, setCallArrows, resettleCallArrows } from './callArrows.mjs'
@@ -11948,12 +11949,20 @@ function onKeydown(e) {
       const relatedResult = handleRelatedKey(e.key)
       // ↓ at the bottom of the embedded Claude conversation — the rest
       // position (claudePos === 0) with the chat's own code blocks
-      // (cs.previewPos) already walked through — returns this sentinel instead
-      // of falling into the Onderliggende-code panel (explicit request — see
-      // handleRelatedKey's own doc comment): advance straight to the next
-      // visible block's diff.
+      // (cs.previewPos) already walked through — returns this sentinel
+      // instead of falling into the Onderliggende-code panel. At the TOP
+      // level (explicit request — see handleRelatedKey's own doc comment)
+      // that advances straight to the next visible block's diff. Inside a
+      // DRILLED column (state.focusLevel > 0) there is no "next block in the
+      // sidebar" to speak of — the reviewer is reviewing THIS unit's own
+      // Underlying code, e.g. a resolved call right below the Claude
+      // conversation — so it continues into that same column's own
+      // Onderliggende-code panel instead (enterRelatedFromClaudeChat).
+      // Reported bug: ↓ there used to jump the top-level sidebar selection to
+      // an unrelated block elsewhere in the PR.
       if (relatedResult === 'advance') {
-        advanceToNextBlockFromClaudeChat()
+        if (state.focusLevel > 0) enterRelatedFromClaudeChat()
+        else advanceToNextBlockFromClaudeChat()
         return
       }
       // Exiting the panel (← / Escape from the code card's first block) just
@@ -14057,10 +14066,21 @@ function testClassPreviewCard(state, row) {
 // in one flex row (AppColumns), <main> simply takes the remaining space
 // (`flex-1 min-w-0`) regardless of which of its neighbours are open/closed —
 // removing the entire magic-number system this file used to document here.
+//
+// `overflow-y-hidden` is explicit, not incidental: per the CSS overflow spec,
+// setting one axis to a non-`visible` value (here `overflow-x-auto`, for the
+// column-to-column scroll) forces the OTHER axis to compute to `auto` too if
+// left at its default `visible` — so without this, <main> itself silently
+// became ONE SHARED vertical scrollbar for every column at once (reviewer
+// report: columns scrolled together, not independently, and a DOM update
+// anywhere in that one shared container could reset the single scrollTop).
+// Each column now scrolls internally on its own instead (see block-column's
+// and drill-column's own `overflow-y-auto` below), so <main> itself has
+// nothing left to scroll vertically.
 function DetailPanel(state) {
   return html`
     <main
-      class="flex h-full min-h-0 min-w-0 flex-1 flex-row gap-4 overflow-x-auto no-scrollbar transition-all duration-200 ease-out"
+      class="flex h-full min-h-0 min-w-0 flex-1 flex-row gap-4 overflow-x-auto overflow-y-hidden no-scrollbar transition-all duration-200 ease-out"
       data-testid="detail-panel"
     >
       ${() => {
@@ -14102,7 +14122,18 @@ function DetailPanel(state) {
           // plus state.drill/focusLevel — none of which a change/gran step
           // inside a card touches, so this still adds no per-step attribute
           // mutation (see navigate.spec.mjs's flicker assertion).
-          'flex min-h-0 shrink-0 flex-col gap-3' +
+          // `overflow-y-auto` (a VISIBLE scrollbar — same reasoning as the
+          // Claude chat thread's own, see claude-chat-panel.md) makes this
+          // column scroll independently of its neighbours: <main>'s own
+          // vertical scroll is now hidden (see DetailPanel's own comment),
+          // and this column already stretches to <main>'s full height as a
+          // flex-row child, so overflow-y-auto caps it there instead of
+          // letting its content (the diff card + its look-ahead preview)
+          // grow the whole row tall — same fix as comments-and-related below
+          // (the comments/Claude chat/code-preview/Onderliggende-code
+          // column), which is where the reviewer-reported tall content
+          // actually stacks.
+          'flex h-full min-h-0 shrink-0 flex-col gap-3 overflow-y-auto' +
           (isPrWideComposing() || commentAnchorColumnHidden() ? ' hidden' : '')}"
         data-testid="block-column"
       >
@@ -14618,6 +14649,17 @@ function DetailPanel(state) {
           // the CSSOM View spec). This div only ever renders while focused
           // (the unfocused branch above returns a collapsed rail instead), so
           // the margin is unconditional, not gated on focusedHere.
+          // Deliberately NOT given its own overflow-y-auto (unlike
+          // block-column/comments-and-related below): this div only ever
+          // holds the diff card + its own look-ahead preview, and the
+          // drill-left-hint chevron right below is absolutely positioned
+          // OUTSIDE its own box (-left-3) — giving this div a non-visible
+          // overflow-y would (per the CSS overflow spec, which forces the
+          // OTHER axis to 'auto' too once one axis isn't 'visible') clip that
+          // chevron. The actual tall content (comments/Claude chat/
+          // code-preview cards/Underlying code) lives in the separate
+          // comments-and-related column below, which gets the scroll fix
+          // instead.
           const drillColumnCls =
             'flex min-h-0 shrink-0 flex-col gap-3 scroll-ml-4' +
             (justOpened ? ' drill-enter' : justReturned ? ' drill-return' : '')
@@ -14753,9 +14795,22 @@ function DetailPanel(state) {
         // so the purple call-arrow overlay isn't pinched against the
         // comment card's border. Static class, not reactive — no arrow.js
         // whole-value-attribute concern.
+        //
+        // The div right below also carries `h-full overflow-y-auto` (a
+        // VISIBLE scrollbar, same reasoning as the Claude chat thread's own
+        // — see claude-chat-panel.md): this ONE column (rendered once, for
+        // whichever block/drilled unit is focused — comment-claude-row + the
+        // code-preview column + the Onderliggende-code panel, in DOM order)
+        // is exactly where the reviewer-reported "code blocks fall out of
+        // view behind the footer" content stacks tall. Independent scroll
+        // here, same as block-column above, so it no longer shares <main>'s
+        // own (now-hidden) vertical scroll with the diff column next to it.
         ''
       }
-      <div class="flex min-h-0 shrink-0 flex-col gap-3 ml-2" data-testid="comments-and-related">
+      <div
+        class="flex h-full min-h-0 shrink-0 flex-col gap-3 overflow-y-auto ml-2"
+        data-testid="comments-and-related"
+      >
         <div
           class="${() =>
             // Hidden (not unmounted!) while neither InlineComments/
