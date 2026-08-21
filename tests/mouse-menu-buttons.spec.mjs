@@ -2,12 +2,12 @@ import { test, expect, seededPr, leaveSearchBox } from './_fixtures.mjs'
 
 // This file is not about the comment↔Claude rail-collapse feature (see
 // "Vertical inklappen" in .claude/docs/comments-panel.md), which only kicks
-// in below the 1400px `narrow` breakpoint and would otherwise collapse
+// in below the comment↔Claude row's own 1920px width threshold and would otherwise collapse
 // whichever half of comment-claude-row these tests aren't currently
 // driving. A wide viewport keeps every half always fully rendered, exactly
 // as before that feature existed — the collapse itself has its own
 // dedicated tests in comment-claude-column-widths.spec.mjs.
-test.use({ viewport: { width: 1600, height: 900 } })
+test.use({ viewport: { width: 2000, height: 1100 } })
 
 // Every command palette used to be reachable only via the keyboard (Enter/`/`)
 // — see the "mouse-navigation audit" that led to this file. Each button below

@@ -2468,20 +2468,35 @@ reuses the exact same button instead of a second, inevitably-drifting copy.
 
 **Gated on screen width, not always-on.** Follow-up from the reviewer: "doe
 dit alleen als ik een scherm heb op mijn laptop, maak anders de chat blokken
-2x zo breed (dan past alles heel goed)". Reused, rather than invented: the
-app's own existing `narrow` custom Tailwind screen (`max-width: 1399px`,
-`index.html`'s `tailwind.config`; the same cutoff `columnWidth.mjs`'s
-`parseAutoWidthPx` already checks in plain JS) is exactly the "does this
-window have the room" threshold this app already treats as the cramped/
-laptop-only case everywhere else — no new number was picked. `home.mjs`'s
-**`state.narrowViewport`** (`window.innerWidth <= 1399`, kept live by the
+2x zo breed (dan past alles heel goed)".
+
+**Its own 1920px threshold — deliberately NOT the app-wide `narrow:` 1399px
+one.** The first cut reused the existing `narrow` custom Tailwind screen
+(`max-width: 1399px`, `index.html`'s `tailwind.config`) on the assumption
+that it already answered "does this window have the room". Wrong in
+practice: the reviewer's real MacBook viewport is **1690×1054** (a
+1710×1107 screen at DPR 2, minus browser chrome) — comfortably above
+1399px, so it landed in the "wide screen, double width" branch, while this
+is exactly the cramped laptop-only case that should collapse ("ik zit op
+mac, en het is te breed"). So this pair now has **its own, wider, separate
+constant — `COMMENT_CLAUDE_WIDE_BREAKPOINT_PX = 1920`** (`home.mjs`),
+verified against three viewport widths (see Tests below): 1690px (the
+reviewer's own screen) collapses, 1919px collapses, 1920px does not.
+**`narrow:` (1399px) keeps meaning exactly what it always did — diff-card
+widths, etc. — and must NOT be folded back onto this one**: the two answer
+different questions ("does the OS-level chrome have room at all" vs. "is
+THIS specific side-by-side pair too cramped"), and 1399px was measured
+wrong for the second question once tested against a real device.
+
+`home.mjs`'s **`state.commentClaudeNarrow`**
+(`window.innerWidth < COMMENT_CLAUDE_WIDE_BREAKPOINT_PX`, kept live by the
 existing module-level `resize` listener, guarded so it only reassigns on an
 actual flip — see the vendored-proxy-notifies-on-every-set pitfall in
 `.claude/rules/arrowjs-pitfalls.md`) is the one bit of NEW plumbing: nothing
-else in this app needed a reactive mirror of that breakpoint before, because
-every other width computation here rides on Tailwind's own CSS media query
-(no JS involved) — but swapping rail↔full column swaps real DOM shape, which
-does need a reactive trigger.
+else in this app needed a reactive mirror of a width breakpoint before,
+because every other width computation here rides on Tailwind's own CSS
+media query (no JS involved) — but swapping rail↔full column swaps real DOM
+shape, which does need a reactive trigger.
 
 **The predicates** (`RelatedPanel.mjs`):
 
@@ -2490,19 +2505,19 @@ does need a reactive trigger.
   "Comment op deze regel" composer collapses Claude just like an existing
   thread would.
 - `isClaudeChatFocused()` (pre-existing) — `cs.focus === 'claude'`.
-- `claudeColumnCollapsedToRail(state)` = `state.narrowViewport &&
+- `claudeColumnCollapsedToRail(state)` = `state.commentClaudeNarrow &&
   commentSideFocused()`; `commentColumnCollapsedToRail(state)` =
-  `state.narrowViewport && isClaudeChatFocused()`. Neither side ever
+  `state.commentClaudeNarrow && isClaudeChatFocused()`. Neither side ever
   collapses while `cs.focus` is `null` (nothing in this row focused) — "zoals
   nu" — nor on a wide screen (see below).
 
 **Width**: `columnPairScale(state, siblingCollapsed)` replaces the old fixed
 `1/2` scale behind `commentColumnWidthCls`/`claudeColumnWidthCls`
 (`RelatedPanel.mjs`) — `scale = 1` (the SAME full clamp `relatedColumnWidthCls`
-itself uses) on a wide screen (`!state.narrowViewport`, for BOTH halves at
-once — "2x zo breed" is literally double the halved split) **or** whenever the
-SIBLING has collapsed to its rail (this half reclaims the freed width, same
-"reclaims horizontal room for the focused column" reasoning
+itself uses) on a wide screen (`!state.commentClaudeNarrow`, for BOTH halves
+at once — "2x zo breed" is literally double the halved split) **or**
+whenever the SIBLING has collapsed to its rail (this half reclaims the freed
+width, same "reclaims horizontal room for the focused column" reasoning
 `collapsedColumnHTML`'s own doc comment already states); `scale = 1/2`
 (unchanged) only in the "narrow screen, neither side focused" default case.
 The documented invariant `commentColumnWidthCls() + connector +
@@ -2542,16 +2557,23 @@ explicitly, "ook de PR-brede/ankerloze variant"): the collapse wraps the
 whole exported column function, independent of what it renders inside, so
 `commentDetailCard` collapses away exactly like an ordinary thread would.
 
-Tests: the two dedicated cases in
-`tests/comment-claude-column-widths.spec.mjs` ("below 1400px, the unfocused
-half … collapses to a rail, click expands it back" / "at/above 1400px,
-neither half collapses"). Several pre-existing specs that drive this exact
-row at the suite's default (narrow) viewport needed small follow-up fixes,
-not because anything about them was wrong, but because this is a genuine,
-approved behavior change: `claude-chat-panel.spec.mjs` pins a wide viewport
-for its whole file (`test.use({ viewport: … })`) since none of its cases are
-actually about the collapse feature; `claude-chat-parallel.spec.mjs`,
-`command-menu.spec.mjs` and `pr-comment-claude-chat.spec.mjs` click the
-`comment-claude-rail`/`claude-chat-rail` back open (or assert `toHaveCount(0)`
-instead of a missing CSS class) at the points where the feature now
-legitimately hides an element they used to find directly.
+Tests: three dedicated viewport cases in
+`tests/comment-claude-column-widths.spec.mjs` — **1690px** (the reviewer's
+own MacBook viewport: the unfocused half collapses to a rail, click expands
+it back), **1919px** (one px below the threshold: still collapses, so the
+cutoff really sits where it should), and **1920px** (the threshold itself:
+neither half collapses, both render at double width). Several pre-existing
+specs that drive this exact row at the suite's default (narrow, 1280×720)
+viewport needed small follow-up fixes, not because anything about them was
+wrong, but because this is a genuine, approved behavior change:
+`claude-chat-panel.spec.mjs` pins a wide viewport for its whole file
+(`test.use({ viewport: … })`, well above 1920px) since none of its cases are
+actually about the collapse feature — likewise
+`claude-chat-ring-clipped.spec.mjs`, `claude-empty-composer-menu.spec.mjs`,
+`code-fence-preview.spec.mjs`, `comment-anchor-takeover.spec.mjs`,
+`comment-code-fence-badge.spec.mjs` and `mouse-menu-buttons.spec.mjs`;
+`claude-chat-parallel.spec.mjs`, `command-menu.spec.mjs` and
+`pr-comment-claude-chat.spec.mjs` click the `comment-claude-rail`/
+`claude-chat-rail` back open (or assert `toHaveCount(0)` instead of a
+missing CSS class) at the points where the feature now legitimately hides
+an element they used to find directly.

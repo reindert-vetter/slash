@@ -74,15 +74,22 @@ test('comment block and Claude block are equally wide, sit beside each other and
 })
 
 // "Vertical inklappen" (the rail idiom, not a height cap — see
-// .claude/docs/comments-panel.md): below the 1400px `narrow` breakpoint,
-// whichever half of comment-claude-row does NOT own the keyboard collapses
-// to a narrow, click-to-expand rail (railButtonHTML, src/collapsedRail.mjs —
-// the same idiom home.mjs's collapsedColumnHTML already uses for a
-// non-focused drilled column) so the focused half can reclaim the width.
-test('below 1400px, the unfocused half of comment-claude-row collapses to a rail, click expands it back', async ({
+// .claude/docs/comments-panel.md): below COMMENT_CLAUDE_WIDE_BREAKPOINT_PX
+// (1920px, home.mjs — its OWN threshold, deliberately separate from
+// Tailwind's app-wide `narrow` screen at 1399px, which stays untouched and
+// keeps governing diff-card widths etc.), whichever half of
+// comment-claude-row does NOT own the keyboard collapses to a narrow,
+// click-to-expand rail (railButtonHTML, src/collapsedRail.mjs — the same
+// idiom home.mjs's collapsedColumnHTML already uses for a non-focused
+// drilled column) so the focused half can reclaim the width. 1690×1054 is
+// the reviewer's OWN real MacBook viewport (1710×1107 screen at DPR 2, minus
+// browser chrome) — the exact case that exposed the first cut's wrong
+// (1399px) threshold: it sits comfortably above 1399px but must still
+// collapse.
+test('at 1690px (the reviewer\'s own MacBook viewport), the unfocused half of comment-claude-row collapses to a rail, click expands it back', async ({
   page,
 }, testInfo) => {
-  await page.setViewportSize({ width: 1280, height: 800 })
+  await page.setViewportSize({ width: 1690, height: 1054 })
   const pr = seededPr(testInfo)
   const start = await page.request.post('/api/workflows/task_code_comment', {
     data: {
@@ -131,12 +138,44 @@ test('below 1400px, the unfocused half of comment-claude-row collapses to a rail
   await expect(page.getByTestId('claude-chat-rail')).toBeVisible()
 })
 
+// The cutoff itself, one px below COMMENT_CLAUDE_WIDE_BREAKPOINT_PX: still
+// narrow enough to collapse, so the threshold really sits exactly at 1920px
+// and not, say, 1919 or 1921.
+test('at 1919px (one below the threshold), the unfocused half still collapses to a rail', async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 1919, height: 1080 })
+  const pr = seededPr(testInfo)
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: {
+      pr,
+      file: 'test.php',
+      line: 1,
+      author: 'reviewer',
+      body: 'even kijken hiernaar',
+      code: '$order->total();',
+      gran: 'call',
+      label: 'Order::total',
+    },
+  })
+  expect((await start.json()).runId).toBeTruthy()
+
+  await page.goto('/pr/' + pr)
+  const item = page.getByTestId('comment-item').first()
+  await expect(item).toBeVisible()
+  await item.click() // enters 'comment' focus
+
+  await expect(page.getByTestId('claude-chat-rail')).toBeVisible()
+  await expect(page.getByTestId('claude-chat-column')).toHaveCount(0)
+})
+
 // Reviewer request: "doe dit alleen als ik een scherm heb op mijn laptop,
-// maak anders de chat blokken 2x zo breed" — at/above the 1400px `narrow`
-// breakpoint neither half ever collapses; both instead render at the SAME
-// full clamp relatedColumnWidthCls() itself uses (double the halved split
-// below the breakpoint), even while the keyboard sits inside one of them.
-test('at/above 1400px, neither half collapses — both are full width instead (double the halved split)', async ({
+// maak anders de chat blokken 2x zo breed" — at/above
+// COMMENT_CLAUDE_WIDE_BREAKPOINT_PX (1920px) neither half ever collapses;
+// both instead render at the SAME full clamp relatedColumnWidthCls() itself
+// uses (double the halved split below the breakpoint), even while the
+// keyboard sits inside one of them.
+test('at 1920px (the threshold itself), neither half collapses — both are full width instead (double the halved split)', async ({
   page,
 }, testInfo) => {
   await page.setViewportSize({ width: 1920, height: 1080 })

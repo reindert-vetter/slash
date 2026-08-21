@@ -131,6 +131,20 @@ import RelatedPanel, {
 } from './RelatedPanel.mjs'
 import { ShortcutHintBar } from './shortcutHints.mjs'
 import { railButtonHTML } from './collapsedRail.mjs'
+
+// COMMENT_CLAUDE_WIDE_BREAKPOINT_PX — the width at/above which
+// comment-claude-row's two halves both render at full (doubled) width
+// instead of ever collapsing one to a rail (state.commentClaudeNarrow's own
+// threshold, see its doc comment). Verified against the reviewer's real
+// MacBook viewport (1690×1054, DPR 2 — a 1710×1107 screen minus the browser
+// chrome): 1690px must still collapse, 1920px must not, 1919px must still
+// collapse — see the three viewport cases in
+// tests/comment-claude-column-widths.spec.mjs. Deliberately NOT the same
+// value as Tailwind's app-wide `narrow` screen (1399px, index.html) — that
+// one keeps governing everything else it always did (diff-card widths,
+// etc.); this is a wider, narrower-scoped cutoff for one specific
+// side-by-side pair. Don't merge the two back together.
+const COMMENT_CLAUDE_WIDE_BREAKPOINT_PX = 1920
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { CallArrowsHost, setCallArrows, resettleCallArrows } from './callArrows.mjs'
 import { setPrRepo } from './prContext.mjs'
@@ -827,21 +841,28 @@ const state = reactive({
   // file), so every reader voids this counter first instead of depending on
   // colWidths[key] directly.
   colWidthVersion: 0,
-  // narrowViewport — reactive mirror of Tailwind's own `narrow` custom
-  // screen (`max-width: 1399px`, index.html's tailwind.config; the same
-  // cutoff columnWidth.mjs's parseAutoWidthPx already checks in plain JS at
-  // drag time). Gates the comment↔Claude rail-collapse in RelatedPanel.mjs
-  // (commentColumnCollapsedToRail/claudeColumnCollapsedToRail — see
-  // "Vertical inklappen = the rail idiom, only below 1400px" in
-  // .claude/docs/comments-panel.md): only a genuinely narrow ("laptop-only")
-  // window ever collapses one side to a rail; a wide window instead widens
-  // both halves (see commentColumnWidthCls/claudeColumnWidthCls). Needed as
-  // its own reactive field because nothing else in this app re-renders
-  // purely because the window resized with no other state change — every
-  // other width computation here rides on Tailwind's own CSS media query,
-  // which needs no JS help, but the rail-vs-full CHOICE swaps real markup
-  // and must therefore be reactive.
-  narrowViewport: window.innerWidth <= 1399,
+  // commentClaudeNarrow — reactive "is this window too narrow to keep BOTH
+  // halves of comment-claude-row open at once" flag, gating the comment↔
+  // Claude rail-collapse in RelatedPanel.mjs (commentColumnCollapsedToRail/
+  // claudeColumnCollapsedToRail — see "Vertical inklappen = the rail idiom"
+  // in .claude/docs/comments-panel.md): only a genuinely narrow window ever
+  // collapses one side to a rail; a wide window instead widens both halves
+  // (see commentColumnWidthCls/claudeColumnWidthCls). Its threshold is
+  // COMMENT_CLAUDE_WIDE_BREAKPOINT_PX (below), a DELIBERATELY SEPARATE,
+  // wider cutoff from the app-wide `narrow:` Tailwind screen (1399px,
+  // index.html's tailwind.config) — confirmed with the reviewer on a real
+  // MacBook viewport (1690×1054) that sat ABOVE 1399px yet still needed to
+  // collapse ("ik zit op mac, en het is te breed"). `narrow:` keeps
+  // governing everything it already did (diff-card widths, etc.) — do NOT
+  // fold this back onto that breakpoint, they answer two different
+  // questions ("does the OS-level chrome have room" vs. "is this specific
+  // side-by-side pair too cramped"). Needed as its own reactive field
+  // because nothing else in this app re-renders purely because the window
+  // resized with no other state change — every other width computation here
+  // rides on Tailwind's own CSS media query, which needs no JS help, but
+  // the rail-vs-full CHOICE swaps real markup and must therefore be
+  // reactive.
+  commentClaudeNarrow: window.innerWidth < COMMENT_CLAUDE_WIDE_BREAKPOINT_PX,
 })
 
 // A narrower window can take away the room a kept-open left column needed
@@ -855,8 +876,8 @@ window.addEventListener('resize', () => {
   // which fires repeatedly while dragging) — the vendored proxy notifies on
   // every assignment regardless of whether the value truly changed, see
   // .claude/rules/arrowjs-pitfalls.md.
-  const narrow = window.innerWidth <= 1399
-  if (state.narrowViewport !== narrow) state.narrowViewport = narrow
+  const narrow = window.innerWidth < COMMENT_CLAUDE_WIDE_BREAKPOINT_PX
+  if (state.commentClaudeNarrow !== narrow) state.commentClaudeNarrow = narrow
 })
 
 // Seed state.colWidths from the cookie set on an earlier visit. Cookies are

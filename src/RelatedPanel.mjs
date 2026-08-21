@@ -2694,18 +2694,21 @@ function commentSideFocused() {
 }
 
 // claudeColumnCollapsedToRail / commentColumnCollapsedToRail — only true
-// below the narrow breakpoint (state.narrowViewport, the SAME 1399px cutoff
-// as Tailwind's `narrow` custom screen, see home.mjs) AND only while the
-// SIBLING half owns the keyboard. Exported so home.mjs's own `.key(...)`
-// calls for these two columns can fold the collapsed/expanded state into the
-// key (a keyed node that silently switches shape without a fresh key is the
-// "keyed node reused without re-running its bindings" pitfall, see
+// below this row's OWN width threshold (state.commentClaudeNarrow,
+// COMMENT_CLAUDE_WIDE_BREAKPOINT_PX in home.mjs — a DELIBERATELY separate,
+// wider cutoff than Tailwind's app-wide `narrow` screen, 1399px; see
+// state.commentClaudeNarrow's own doc comment in home.mjs for why the two
+// must not be merged) AND only while the SIBLING half owns the keyboard.
+// Exported so home.mjs's own `.key(...)` calls for these two columns can
+// fold the collapsed/expanded state into the key (a keyed node that
+// silently switches shape without a fresh key is the "keyed node reused
+// without re-running its bindings" pitfall, see
 // .claude/rules/arrowjs-pitfalls.md).
 export function claudeColumnCollapsedToRail(state) {
-  return !!(state && state.narrowViewport) && commentSideFocused()
+  return !!(state && state.commentClaudeNarrow) && commentSideFocused()
 }
 export function commentColumnCollapsedToRail(state) {
-  return !!(state && state.narrowViewport) && isClaudeChatFocused()
+  return !!(state && state.commentClaudeNarrow) && isClaudeChatFocused()
 }
 
 // focusClaudeComposer/scrollClaudeMessageIntoView mirror focusThread/
@@ -7184,17 +7187,18 @@ const COMMENT_CLAUDE_CONNECTOR_REM = 0.75
 // at all (see the ClaudeChatPanel/InlineComments early-return below).
 //
 // scale is 1 (the FULL clamp, same as relatedColumnWidthCls itself) in two
-// cases: a wide (`!state.narrowViewport`) screen — reviewer request: "maak
-// de chat blokken 2x zo breed (dan past alles heel goed)" on a screen with
-// room to spare, so BOTH halves double from the halved split below rather
-// than ever collapsing one — or a narrow screen where the sibling has
-// actually collapsed to its rail, so this half reclaims the freed width
+// cases: a wide (`!state.commentClaudeNarrow`, at/above
+// COMMENT_CLAUDE_WIDE_BREAKPOINT_PX — home.mjs) screen — reviewer request:
+// "maak de chat blokken 2x zo breed (dan past alles heel goed)" on a screen
+// with room to spare, so BOTH halves double from the halved split below
+// rather than ever collapsing one — or a narrow screen where the sibling
+// has actually collapsed to its rail, so this half reclaims the freed width
 // (same "reclaims horizontal room for the focused column" reasoning
 // collapsedColumnHTML's own doc comment already states for the drilled-
 // column rail, home.mjs). Otherwise (narrow screen, neither side focused,
 // "zoals nu") scale stays 1/2 — the original, documented halved split.
 function columnPairScale(state, sideCollapsedToRail) {
-  if (!state || !state.narrowViewport) return 1
+  if (!state || !state.commentClaudeNarrow) return 1
   if (sideCollapsedToRail) return 1
   return 1 / 2
 }
