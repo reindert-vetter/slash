@@ -23,8 +23,10 @@ Each child is one card (`data-testid=related-item`). It follows
   stat** (`data-testid=related-diffstat`): `+A −R` (green/red, added/removed lines
   of the called definition, via `diffStat` in `Block.mjs`, git-`--stat` style), or
   a gray **`Unchanged`** badge when the call points into a file the PR doesn't
-  change (`r.diff` is `null`). Only calls on **lines the PR changed** get a row;
-  **enum cases** (`AddressType::BILLING`) resolve to their enum declaration. See
+  change (`r.diff` is `null`). Only calls on **lines the PR changed** get a row
+  (plus the call whose argument list a changed line sits inside — see
+  `keepChanged`'s open-paren widening in
+  `.claude/docs/workflows-analysis.md`); **enum cases** (`AddressType::BILLING`) resolve to their enum declaration. See
   "Resolving (also unchanged) called methods" in
   `.claude/docs/workflows-analysis.md`.
 - **Test coverage**, both directions, from `GET /api/testcovers`: `kind=covers`
@@ -713,6 +715,32 @@ diff segment it sits on.
   `covers` child whose own anchor row IS the selected row stays visible — see
   "A `covers` child stays visible at `gran='line'` on its own anchor row"
   below.
+- **A multi-line call's own argument rows count as its site too**
+  (`findCallSites`' `spanArgs` parameter → `argListSites`, `home.mjs`). A call
+  site is one row, but a call is not: selecting only
+  `sessionId: (string) $state['session_id'],` inside a
+  `$instance = new self(` used to scope the `SessionState::__construct` card
+  away, because the `self` site sits on the `new self(` row alone — "ik wil bij
+  `new ` ook de constructor parameters zien. Die wil ik ook zien als ik
+  bijvoorbeeld alleen `sessionId ...` selecteer" (Reindert, 2026-08-21).
+  `argListSites` walks the paren depth on from the matched `(` (strings opaque,
+  `//` ends a row, capped at `ARG_LIST_MAX_ROWS`) and adds every continuation
+  row as an extra site — one per call SEGMENT of that row, so `call`
+  granularity matches whichever argument segment the cursor is on, not just
+  `line`/`group`. Only a real call-open match (`name(`) can have an argument
+  list; the `->prop` / `::CASE` / `Foo::class` alternatives never do.
+  **`spanArgs` is passed by `callScopeMethods` ONLY** (so also by
+  `unresolvedCalls`, which shares it): the primary-site consumers keep pointing
+  at the row carrying the call NAME — `lineChildSummaries`' per-row avatar+N
+  badge, the call-arrow overlay's anchor row, the "does this call sit on a
+  changed row?" ordering heuristic and `referenceRows`' nav stops. Widening
+  those would put a badge and an arrow target on every line of a long argument
+  list, which is noise, not information. The Go resolver has the matching half
+  of this rule for which lines are SCANNED at all (`keepChanged`'s open-paren
+  widening, see "Only the changed lines" in
+  `.claude/docs/workflows-analysis.md`) — together they make a call whose
+  argument line is the only changed line both produce a child and be reachable
+  from the cursor.
 - **List mode** (no diff) shows **all** resolved calls of the block.
 - **A Shift+arrow range widens `[unit.start, unit.end]` to the merged range**
   (`state.rangeAnchor`/`rangeUnit`, see "Shift+↑/↓" in

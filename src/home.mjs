@@ -4558,7 +4558,7 @@ function isBlockLevelCallKey(name) {
 // bare `->name` property access — how an Eloquent magic property
 // ($order->billingAddress) reaches its relationship method — and a `::name`
 // static reference — how an enum case (AddressType::BILLING) reaches its enum.
-function findCallSites(rows, name) {
+function findCallSites(rows, name, spanArgs = false) {
   const sites = []
   let re
   // `class_member:prop:$name` / `class_member:const:NAME` (resolveClassMembers,
@@ -4645,9 +4645,95 @@ function findCallSites(rows, name) {
       if (!segs) segs = rowCallSegments(rows, i)
       const seg = segs.find((s) => m.index >= s.start && m.index < s.end)
       sites.push({ row: i, segStart: seg ? seg.start : 0 })
+      // A call whose argument list runs on over the next rows also "sits on"
+      // those rows, for scoping purposes — see argListSites. Only a real
+      // call-open match (`name(`, so m[0] ends in the paren) can have one;
+      // the `->prop` / `::CASE` / `Foo::class` alternatives never do.
+      if (spanArgs && m[0].endsWith('(')) {
+        for (const site of argListSites(rows, i, m.index + m[0].length - 1)) sites.push(site)
+      }
     }
   }
   return sites
+}
+
+// ARG_LIST_MAX_ROWS caps how far argListSites keeps walking. A miscounted
+// depth (a `(` inside a block comment — see skipToArgListEnd) would otherwise
+// run to the end of the block; a call whose arguments really span more rows
+// than this simply stops being widened past the cap, which only ever costs
+// visibility, never correctness.
+const ARG_LIST_MAX_ROWS = 80
+
+// argListSites lists the rows a multi-line call's argument list CONTINUES onto
+// — the rows after `rows[i]`, whose call opens at char `openIdx`, up to and
+// including the row closing that paren — as extra sites, one per call segment
+// of each such row (so 'call' granularity matches whichever argument segment
+// the cursor is on, and 'line'/'group' match the row).
+//
+// Why: a call site is one row, but a call is not. In
+//
+//   $instance = new self(
+//       sessionId: (string) $state['session_id'],
+//   );
+//
+// the `self` site sits on the `new self(` row only, so selecting just the
+// argument line scoped the SessionState::__construct card away — "ik wil bij
+// `new ` ook de constructor parameters zien. Die wil ik ook zien als ik
+// bijvoorbeeld alleen `sessionId ...` selecteer" (Reindert). Standing inside a
+// call's argument list IS standing on that call.
+//
+// Deliberately only used by callScopeMethods (the cursor→visible-children
+// scope, so also unresolvedCalls' automatic search) — NOT by the primary-site
+// consumers: lineChildSummaries' per-row avatar+N badge, the call-arrow
+// overlay's anchor row and the "does this call sit on a changed row?" ordering
+// heuristic all keep pointing at the row carrying the call NAME. Widening
+// those would put a badge and an arrow target on every line of a long argument
+// list, which is noise, not information.
+function argListSites(rows, i, openIdx) {
+  const first = rows[i].right
+  let depth = skipToArgListEnd(first, openIdx, 0)
+  if (depth <= 0) return [] // the call closes on its own row
+  const out = []
+  const last = Math.min(rows.length - 1, i + ARG_LIST_MAX_ROWS)
+  for (let j = i + 1; j <= last; j++) {
+    const text = rows[j].right
+    if (text == null) continue // an alignment filler row has no new-side text
+    for (const seg of rowCallSegments(rows, j)) out.push({ row: j, segStart: seg.start })
+    depth = skipToArgListEnd(text, 0, depth)
+    if (depth <= 0) break
+  }
+  return out
+}
+
+// skipToArgListEnd counts parens in `text` from char `from`, starting at
+// `depth`, and returns the depth left at the end of the row. Quoted strings are
+// opaque and a `//` line comment ends the row, mirroring openParenLines in
+// callresolve_analysis.go (the Go side of the same "a changed argument line
+// belongs to its call" rule). A `#` is NOT treated as a comment here: this runs
+// on diff rows whose leading `#[Attribute]` / `#` forms are far more likely
+// than a `#` comment inside an argument list, and over-counting is the safer
+// failure (see ARG_LIST_MAX_ROWS).
+function skipToArgListEnd(text, from, depth) {
+  for (let c = from; c < text.length; c++) {
+    const ch = text[c]
+    if (ch === '"' || ch === "'") {
+      for (c++; c < text.length; c++) {
+        if (text[c] === '\\') {
+          c++
+          continue
+        }
+        if (text[c] === ch) break
+      }
+    } else if (ch === '/' && text[c + 1] === '/') {
+      return depth
+    } else if (ch === '(') {
+      depth += 1
+    } else if (ch === ')') {
+      depth -= 1
+      if (depth <= 0) return depth
+    }
+  }
+  return depth
 }
 
 // callScopeMethods returns the set of method names the underlying-code panel is
@@ -4699,7 +4785,10 @@ function callScopeMethods(b, rows) {
       methods.add(r.callKey)
       continue
     }
-    const sites = findCallSites(rows, r.callKey)
+    // spanArgs: a multi-line call's own argument rows count as its site too
+    // (see argListSites) — selecting only `sessionId: …` inside a
+    // `new self(` still shows that constructor.
+    const sites = findCallSites(rows, r.callKey, true)
     const inScope =
       cur.gran === 'call'
         ? sites.some((s) => s.row === unit.start && s.segStart === unit.segStart)

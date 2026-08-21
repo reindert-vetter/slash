@@ -723,13 +723,31 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 		// skipped — there is no definition to point at. An Eloquent model
 		// (app/Models/) is excluded here — rule 2c below points at the model
 		// itself, never its constructor.
+		// `new self(...)`/`new static(...)` construct the CALLER's own class, so
+		// they resolve against b.Class (or, inside an anonymous class, per file
+		// via methodInAnonClass — exactly rule 1's own "own class" handling).
+		// The call KEY stays the literal `self`/`static`, never the resolved
+		// class name: the frontend's findCallSites looks the key up as a
+		// literal in the caller's own text, and `SessionState(` appears nowhere
+		// in `new self(` — keying it by the class would make the card exist but
+		// be scoped away at every diff granularity.
 		for _, m := range reNewObj.FindAllStringSubmatch(scan, -1) {
-			class := shortName(m[1])
+			key := shortName(m[1])
+			class := key
+			if key == "self" || key == "static" {
+				if b.Class == "" {
+					if def := methodInAnonClass(idx, b.File, "__construct"); def != nil {
+						emit(key, def)
+					}
+					continue
+				}
+				class = shortName(b.Class)
+			}
 			if _, isModel := idx.models[class]; isModel {
 				continue
 			}
 			if def := methodOnClass(idx, class, "__construct"); def != nil {
-				emit(class, def)
+				emit(key, def)
 			}
 		}
 		// 2c. new Model(...) / Model::... on an Eloquent model (app/Models/) → the
@@ -2179,17 +2197,85 @@ type fileChangeSet struct {
 
 // keepChanged filters a block's source down to its changed lines (joined by
 // newlines), so the call-scan regexes only ever see code the PR touched.
+//
+// One documented widening on top of that: a changed line sitting INSIDE a call's
+// still-open argument list also pulls in the line(s) that OPENED that call.
+// A multi-line call
+//
+//	$instance = new self(
+//	    sessionId: (string) $state['session_id'],   // only this line changed
+//	);
+//
+// otherwise produced no child at all — the call name itself (`new self(`,
+// `$this->foo(`) lives on a line the PR didn't touch, so the scan never saw it
+// and the reviewer got no underlying code for the very argument he changed.
+// Only the lines carrying a paren that is still OPEN at the changed line are
+// added (openParenLines' stack), never the whole statement: those are exactly
+// the call names the changed argument belongs to, at every nesting level.
 func (fc *fileChangeSet) keepChanged(src codeSide) string {
 	if !fc.restrict {
 		return src.Text
 	}
-	var kept []string
-	for i, line := range strings.Split(src.Text, "\n") {
+	lines := strings.Split(src.Text, "\n")
+	keep := make([]bool, len(lines))
+	var open []int // line index per still-unclosed '(' , outermost first
+	for i, line := range lines {
 		if fc.set[src.Start+i] {
+			keep[i] = true
+			for _, j := range open {
+				keep[j] = true
+			}
+		}
+		open = openParenLines(line, i, open)
+	}
+	var kept []string
+	for i, line := range lines {
+		if keep[i] {
 			kept = append(kept, line)
 		}
 	}
 	return strings.Join(kept, "\n")
+}
+
+// openParenLines updates the stack of "line index this still-unclosed '(' was
+// opened on" with one more source line (index i). Quoted strings are opaque and
+// a `//` / `#` line comment ends the scan, so a paren inside either never counts
+// — `#[` is a PHP 8 attribute, not a comment. Block comments are deliberately
+// not tracked (they don't occur inside an argument list in practice); a
+// miscount can only ever widen or narrow which call-name lines a changed
+// argument line pulls in, never break the scan itself.
+func openParenLines(line string, i int, open []int) []int {
+	for c := 0; c < len(line); c++ {
+		switch ch := line[c]; ch {
+		case '\'', '"':
+			for c++; c < len(line); c++ {
+				if line[c] == '\\' {
+					c++
+					continue
+				}
+				if line[c] == ch {
+					break
+				}
+			}
+		case '/':
+			if c+1 < len(line) && line[c+1] == '/' {
+				return open
+			}
+		case '#':
+			if c+1 < len(line) && line[c+1] == '[' {
+				c++ // PHP attribute, not a comment
+				continue
+			}
+			return open
+		case '(':
+			open = append(open, i)
+		case ')':
+			if len(open) > 0 {
+				open = open[:len(open)-1]
+			}
+		}
+	}
+	return open
 }
 
 // changedNewLines diffs the base and head worktree copies of file (git

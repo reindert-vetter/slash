@@ -138,6 +138,24 @@ Two scoping rules that apply to every rule below:
   per-file base↔head diff; a missing base file → everything counts as changed).
   A call on an unchanged line never produces a child — that used to give
   unrelated "Underlying code". Rule 2d is the one documented exception.
+  **One widening inside `keepChanged` itself:** a changed line sitting inside a
+  call's still-OPEN argument list also pulls in the line(s) that OPENED that
+  call, so a multi-line
+  `$instance = new self(` + `sessionId: (string) $state['session_id'],` gives a
+  child even when only that one argument line changed — the call NAME is on an
+  untouched line, so the scan never used to see it and the reviewer got no
+  underlying code for the very argument he edited (reviewer request,
+  2026-08-21). `openParenLines` keeps a stack of "which line did this
+  still-unclosed `(` open on" (quoted strings opaque, a `//`/`#` line comment
+  ends the line, `#[` is an attribute — block comments deliberately not
+  tracked), and ONLY those lines are added, never the whole statement: they are
+  exactly the call names the changed argument belongs to, at every nesting
+  level. It applies to every `keepChanged` caller (`resolveCalls`,
+  `resolveTranslations`, `resolveConfigCalls`), which is intentional — a
+  translation/config key inside the opening line of a call whose argument
+  changed is the same situation. The frontend has its own, separate half of
+  this rule for the CURSOR side (`argListSites`, see "Scoping to the navigation
+  cursor" in `.claude/docs/underlying-code.md`).
 
 Rules, in order:
 
@@ -191,6 +209,19 @@ Rules, in order:
   fallback, never silence. `parent::` had no rule at all before this — it
   simply matched nothing. Tests: `TestResolveCallsParentMethod`/
   `TestResolveCallsParentMethodUnindexed`.
+- **2b — `new Foo(` → `Foo::__construct`,** keyed by the class short name so
+  distinct constructions never collapse and `findCallSites` can match `Foo(`; a
+  class with no explicit `__construct` gets no card. **`new self(` /
+  `new static(`** resolve against the CALLER's own class (`b.Class`, or
+  `methodInAnonClass` per file inside an anonymous class — exactly rule 1's own
+  "own class" handling); they had no rule at all before 2026-08-21, so a static
+  factory's `$instance = new self(...)` showed no constructor at all. Their call
+  KEY stays the literal `self`/`static`, never the resolved class name: the
+  frontend looks a key up as a literal in the caller's own text and
+  `SessionState(` appears nowhere in `new self(`, so keying it by the class
+  would create a card that is then scoped away at every diff granularity.
+  `new parent(` is not PHP and has no rule. Test:
+  `TestResolveCallsConstructorSelf`.
 - **2b/2c/2d — Eloquent models.** `new Foo(` on a model class explicitly
   **excludes** the constructor even when one exists (the reviewer wants the
   model, not its constructor body). `scanModels` indexes every `app/Models/`

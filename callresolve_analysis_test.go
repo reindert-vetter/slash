@@ -3436,3 +3436,86 @@ final class OtherActivity {
 		t.Errorf("run status=%q, want %q", run.Status, callresolve.StatusUnresolved)
 	}
 }
+
+// TestResolveCallsConstructorSelf: `new self(...)`/`new static(...)` construct
+// the caller's OWN class, so they couple to that class's __construct — the call
+// key stays the literal `self`/`static` (see rule 2b). The head version changes
+// only ONE ARGUMENT LINE of a multi-line `new self(` whose `new self(` line
+// itself is untouched, which is the case keepChanged's open-paren widening
+// exists for: without it the scan never sees the call name and the reviewer gets
+// no underlying code for the very argument he changed.
+func TestResolveCallsConstructorSelf(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 77
+	baseDir, headDir := worktreeDirs(dataDir, "", pr)
+	base := `<?php
+namespace App\Data;
+final class SessionState {
+    public function __construct(
+        private readonly int $tenantId,
+        private readonly string $sessionId,
+    ) {
+    }
+    public static function fromArray(array $state): self
+    {
+        $instance = new self(
+            tenantId : (int) $state['tenant_id'],
+            sessionId: (string) $state['session'],
+        );
+        return $instance;
+    }
+    public static function fresh(int $tenantId): static
+    {
+        return new static($tenantId, '');
+    }
+}
+`
+	// Only the sessionId argument line differs; `new self(` itself is unchanged.
+	head := strings.Replace(base, "$state['session']", "$state['session_id']", 1)
+	for dir, body := range map[string]string{baseDir: base, headDir: head} {
+		p := filepath.Join(dir, "app/Data/SessionState.php")
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	caller := Block{PR: pr, File: "app/Data/SessionState.php", Class: "SessionState", Name: "fromArray", Side: SideNew, Status: StatusModified}
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	e, ok := findEntry(entries, "self")
+	if !ok {
+		t.Fatal("no entry for `new self(` (call key 'self')")
+	}
+	if e.Status != callresolve.StatusResolved {
+		t.Errorf("status = %q, want resolved", e.Status)
+	}
+	if got := e.ChildClass + "::" + e.ChildMethod; got != "SessionState::__construct" {
+		t.Errorf("child = %q, want SessionState::__construct", got)
+	}
+	if e.ChildCode == "" {
+		t.Error("resolved constructor entry has empty child code")
+	}
+
+	// `new static(...)` resolves the same way, keyed by its own literal.
+	fresh := Block{PR: pr, File: "app/Data/SessionState.php", Class: "SessionState", Name: "fresh", Side: SideNew, Status: StatusModified}
+	freshEntries := resolveCalls(dataDir, pr, []Block{fresh})
+	if _, ok := findEntry(freshEntries, "static"); ok {
+		t.Error("`new static(` on an unchanged line should produce no entry")
+	}
+	// Change that line too, and it does.
+	headFresh := strings.Replace(head, "return new static($tenantId, '');", "return new static($tenantId, 'x');", 1)
+	p := filepath.Join(headDir, "app/Data/SessionState.php")
+	if err := os.WriteFile(p, []byte(headFresh), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e2, ok := findEntry(resolveCalls(dataDir, pr, []Block{fresh}), "static")
+	if !ok {
+		t.Fatal("no entry for `new static(` (call key 'static')")
+	}
+	if got := e2.ChildClass + "::" + e2.ChildMethod; got != "SessionState::__construct" {
+		t.Errorf("static child = %q, want SessionState::__construct", got)
+	}
+}
