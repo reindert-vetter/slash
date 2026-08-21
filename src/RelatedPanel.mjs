@@ -6876,7 +6876,12 @@ function nestedChip(ancestors, k, drill, path, cardIdx) {
     <button
       type="button"
       class="${() =>
-        'w-72 shrink-0 rounded-md border bg-slate-50/60 dark:bg-zinc-800/40 px-1.5 py-1 text-left hover:border-indigo-200 dark:hover:border-indigo-500/40 ' +
+        // bg-white (not the old translucent bg-slate-50/60): that translucent
+        // tint sits almost exactly ON the page's own bg-slate-50 in light mode
+        // (see the matching note on relatedCard below), so the chip had no
+        // visible background of its own there — only in dark mode (where
+        // zinc-800/40 reads lighter than the zinc-950 page) did it look right.
+        'w-72 shrink-0 rounded-md border bg-white dark:bg-zinc-800/40 px-1.5 py-1 text-left hover:border-indigo-200 dark:hover:border-indigo-500/40 ' +
         (focused()
           ? 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
           : 'border-slate-300 dark:border-zinc-700')}"
@@ -7140,7 +7145,22 @@ function relatedCard(r, i, drill) {
         // nothing to review), but that distinction is still fully carried by
         // the separate "Unchanged" text badge (diffStatBadge) elsewhere in
         // this card, so dropping it here loses no colourblind-relevant signal.
-        'min-w-0 flex-1 cursor-pointer rounded-lg border bg-slate-50/60 dark:bg-zinc-800/40 hover:border-indigo-200 dark:hover:border-indigo-500/40 ' +
+        // bg-white, not the old translucent bg-slate-50/60: that border rule
+        // was already byte-for-byte identical to Block.mjs's diffActive
+        // border, so a reviewer report that this card "looks fine in dark
+        // mode but not in light mode" was NOT a border-color bug — measured
+        // with a live PR screenshot (light vs dark, forced-selected vs
+        // default), the card was invisible against the page in light mode
+        // specifically because bg-slate-50/60 over the page's own
+        // bg-slate-50 (index.html's <body>) is almost exactly the page
+        // colour itself, so there was no card background to show a border
+        // against. dark:bg-zinc-800/40 stays untouched — over the page's
+        // bg-zinc-950 it already reads visibly lighter, which is why dark
+        // mode looked right. Don't "fix" this again by touching the border
+        // classes — they were never the problem. Same reasoning applies to
+        // nestedChip and testsBar just below/above, which share this exact
+        // background.
+        'min-w-0 flex-1 cursor-pointer rounded-lg border bg-white dark:bg-zinc-800/40 hover:border-indigo-200 dark:hover:border-indigo-500/40 ' +
         (selected()
           ? 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
           : 'border-slate-300 dark:border-zinc-700')}"
@@ -7220,7 +7240,10 @@ function testsBar(r, i, drill) {
   return html`
     <div
       class="${() =>
-        'flex cursor-pointer items-center gap-2 overflow-hidden rounded-lg border bg-slate-50/60 dark:bg-zinc-800/40 px-3 py-2 hover:border-indigo-200 dark:hover:border-indigo-500/40 ' +
+        // bg-white, not the old translucent bg-slate-50/60 — see relatedCard's
+        // own doc comment above for why (it blended into the light-mode page
+        // background; dark mode was already fine and stays untouched).
+        'flex cursor-pointer items-center gap-2 overflow-hidden rounded-lg border bg-white dark:bg-zinc-800/40 px-3 py-2 hover:border-indigo-200 dark:hover:border-indigo-500/40 ' +
         (selected()
           ? 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
           : 'border-slate-300 dark:border-zinc-700')}"

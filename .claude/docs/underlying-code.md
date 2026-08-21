@@ -148,6 +148,31 @@ Each child is one card (`data-testid=related-item`). It follows
   `.claude/docs/keyboard-navigation.md`), and the `Unchanged` **text** badge
   still carries that signal.
 
+### The card looked fine in dark mode but not in light mode — the border rule was never the bug
+
+Reviewer report: this card's selected/unselected border "isn't good" in light
+mode, while dark mode (with the identical border classes) already looked
+right. The border itself was a red herring: `relatedCard`/`nestedChip`/
+`testsBar` already used the exact same `border-indigo-300 …`/`border-slate-300
+…` pair as `Block.mjs`'s `diffActive` border (see above) — byte-for-byte,
+confirmed in source. The actual cause was the card's own **background**:
+`bg-slate-50/60 dark:bg-zinc-800/40`. `index.html`'s `<body>` is
+`bg-slate-50 dark:bg-zinc-950`, so in light mode a translucent `slate-50/60`
+laid over a `slate-50` page is almost exactly the page's own colour — the card
+had no visible background of its own to show a border against, selected or
+not. In dark mode `zinc-800/40` over `zinc-950` reads clearly lighter than the
+page, so the same card had a real background there and looked fine. Confirmed
+with side-by-side screenshots against a live PR (forced-selected vs default,
+light vs dark) before touching anything: switching only the light half to a
+solid `bg-white` (matching `Block.mjs`'s own card background) made the card —
+and its border, unmodified — pop exactly like the dark-mode version, with zero
+change to the border classes. Fixed on all three call sites that share this
+background (`relatedCard`, `nestedChip`, `testsBar`); `dark:bg-zinc-800/40` is
+untouched everywhere. **Don't re-diagnose this as a border-color issue** — the
+border rule is fine and shared app-wide; check a card's own background against
+the page background first when a selection highlight "doesn't show" in one
+theme but not the other.
+
 In the card header the **title (`class::method`) is always visible** (gets the
 first line, truncates only at extreme length); the **file path** sits below it on
 its own line and truncates.
