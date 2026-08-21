@@ -111,19 +111,37 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     await expect(page.getByTestId('inline-comments').getByText('please rename this variable')).toBeVisible()
   })
 
-  test('a fresh open lands on the unresolved comment item, with its thread shown to the right', async ({ page }) => {
+  test('a fresh open lands on the first unapproved ordinary block, not the comment item (reversed 2026-08-20)', async ({
+    page,
+  }) => {
     await mockComments(page)
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
     await expect(page.getByTestId('block-row').first()).toBeVisible()
-    // The PR-wide comment section now sorts right above "Comments op regels"
-    // (rank 2.4, no longer data-idx="0" — see the previous test's own note),
-    // but a fresh open's DEFAULT SELECTION still prioritizes it over an
-    // ordinary block (defaultSelectionRank, home.mjs) — only its own display
-    // position moved, not what a fresh open lands on.
-    const row = page.locator('[data-idx]').filter({ hasText: 'Overall this looks great' })
-    await expect(row).toHaveClass(/bg-indigo-50/)
+    // The PR-wide comment section sorts right above "Comments op regels"
+    // (rank 2.4, DISPLAY position only — recomputeLeftList). That display
+    // rank no longer doubles as the fresh-open SELECTION priority
+    // (defaultSelectionRank, home.mjs): an unapproved ordinary block now
+    // wins over a no-regel comment item — explicit reviewer request,
+    // reversing the earlier "comment wins" behaviour this test used to
+    // assert. See defaultSelectionRank's own doc comment for the reversal
+    // note.
+    const commentRow = page.locator('[data-idx]').filter({ hasText: 'Overall this looks great' })
+    await expect(commentRow).not.toHaveClass(/bg-indigo-50/)
+    await expect(page.getByTestId('comment-detail-card')).toHaveCount(0)
+    // The selected block isn't necessarily the FIRST rendered row — display
+    // order is category rank (recomputeLeftList), while the fresh-open pick's
+    // own tie-break among ordinary blocks is file order (defaultSelectionRank)
+    // — so locate the highlighted row instead of assuming it's row 0.
+    const highlighted = page.locator(
+      '[data-testid="block-row"].bg-indigo-50, [data-testid="block-row"].dark\\:bg-indigo-500\\/15',
+    )
+    await expect(highlighted).toHaveCount(1)
 
+    // Selecting the comment item explicitly still shows its thread to the
+    // right, exactly as before.
+    await commentRow.click()
+    await expect(commentRow).toHaveClass(/bg-indigo-50/)
     const card = page.getByTestId('comment-detail-card').first()
     await expect(card).toBeVisible()
     // The body is shown once, as the first message of the thread (no separate
@@ -131,19 +149,22 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     await expect(card.getByTestId('reaction-bubble').first()).toContainText('Overall this looks great')
   })
 
+  // The fallback case — a fresh open lands on the comment item when there is
+  // no unapproved ordinary block left at all — is covered on the small,
+  // purpose-built PR 108 fixture instead (approving every real block here via
+  // the UI would need many more keystrokes than this spec's own scope):
+  // see tests/fresh-open-default-selection.spec.mjs, "everything approved,
+  // plus an unresolved comment → lands on the comment, not the toggle row".
+
   test('↑/↓ selects it like any other Start row', async ({ page }) => {
     await mockComments(page)
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
     await expect(page.getByTestId('block-row').first()).toBeVisible()
-    // Wait for the comment item to actually BE the selection before stepping.
-    // A block-row being visible only proves /api/blocks landed; the comment
-    // item comes from RelatedPanel's own, independent comment poll, so the
-    // default selection lands on it a moment later (applyCommentRefRestore/
-    // retryDefaultSelectionForComments, home.mjs). Stepping ↓ before that
-    // starts from an ordinary block instead, and the ↑ back then lands on a
-    // block too — the detail card never appears and the assertion below fails
-    // for a reason that has nothing to do with ↑/↓.
+    // A fresh open now lands on an unapproved ORDINARY block instead
+    // (applyDefaultUnapprovedSelection, reversed 2026-08-20) — select the
+    // PR-wide comment item directly first.
+    await page.locator('[data-idx]').filter({ hasText: 'Overall this looks great' }).click()
     await expect(page.getByTestId('comment-detail-card').first()).toBeVisible()
     // The anchored comment now sorts under "Comments op regels" — no longer
     // right next to the PR-wide item at the top — so select it directly by
@@ -173,6 +194,9 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     await mockComments(page)
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
+    // A fresh open lands on an unapproved ordinary block now — select the
+    // comment item directly (reversed 2026-08-20, see defaultSelectionRank).
+    await page.locator('[data-idx]').filter({ hasText: 'Overall this looks great' }).click()
     await expect(page.getByTestId('comment-detail-card').first()).toBeVisible()
 
     await page.keyboard.press('Enter')
@@ -223,6 +247,9 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     )
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
+    // A fresh open lands on an unapproved ordinary block now — select the
+    // comment item directly (reversed 2026-08-20, see defaultSelectionRank).
+    await page.locator('[data-idx]').filter({ hasText: 'a note I left myself on the whole PR' }).click()
     await expect(page.getByTestId('comment-detail-card').first()).toBeVisible()
 
     await page.keyboard.press('Enter')
@@ -272,6 +299,9 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     )
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
+    // A fresh open lands on an unapproved ordinary block now — select the
+    // comment item directly (reversed 2026-08-20, see defaultSelectionRank).
+    await page.locator('[data-idx]').filter({ hasText: 'Overall this looks great' }).click()
     await expect(page.getByTestId('comment-detail-card').first()).toBeVisible()
 
     const bubbles = page.getByTestId('reaction-bubble')
@@ -325,10 +355,12 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     await mockComments(page)
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
-    await expect(page.getByTestId('comment-detail-card').first()).toBeVisible()
-    // No longer data-idx="0" (the PR-comments section now sorts right above
-    // "Comments op regels", rank 2.4) — locate it by content instead.
+    // A fresh open lands on an unapproved ordinary block now — select the
+    // PR-wide comment item directly (reversed 2026-08-20, see
+    // defaultSelectionRank).
     const prWideRow = page.locator('[data-idx]').filter({ hasText: 'Overall this looks great' })
+    await prWideRow.click()
+    await expect(page.getByTestId('comment-detail-card').first()).toBeVisible()
     await expect(prWideRow).toHaveClass(/bg-indigo-50/)
 
     // → steps into the thread — rest position, nothing highlighted yet, but
@@ -366,6 +398,9 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
 
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
+    // A fresh open lands on an unapproved ordinary block now — select the
+    // comment item directly (reversed 2026-08-20, see defaultSelectionRank).
+    await page.locator('[data-idx]').filter({ hasText: 'Overall this looks great' }).click()
     await expect(page.getByTestId('comment-detail-card').first()).toBeVisible()
 
     await page.keyboard.press('Enter')
@@ -407,6 +442,9 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
 
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
+    // A fresh open lands on an unapproved ordinary block now — select the
+    // comment item directly (reversed 2026-08-20, see defaultSelectionRank).
+    await page.locator('[data-idx]').filter({ hasText: 'Overall this looks great' }).click()
     await expect(page.getByTestId('comment-detail-card').first()).toBeVisible()
 
     await page.keyboard.press('Enter')
@@ -440,6 +478,9 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
 
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
+    // A fresh open lands on an unapproved ordinary block now — select the
+    // comment item directly (reversed 2026-08-20, see defaultSelectionRank).
+    await page.locator('[data-idx]').filter({ hasText: 'Overall this looks great' }).click()
     await expect(page.getByTestId('comment-detail-card').first()).toBeVisible()
 
     await page.keyboard.press('Enter')
@@ -558,11 +599,15 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     await leaveSearchBox(page)
     await expect(page.getByTestId('block-row').first()).toBeVisible()
     await expect(page.getByTestId('comment-heading')).toBeVisible()
-    // Two no-regel comment-index rows here: the plain issue comment (index 0,
-    // already selected by default) and the ai_warning finding (index 1) —
-    // right after it, both PR-wide/no-regel items. The anchored comment
-    // mockComments always adds sorts under "Comments op regels" instead (see
-    // the tests above), so it no longer sits between them.
+    // Two no-regel comment-index rows here: the plain issue comment (index 0)
+    // and the ai_warning finding (index 1) — right after it, both PR-wide/
+    // no-regel items. The anchored comment mockComments always adds sorts
+    // under "Comments op regels" instead (see the tests above), so it no
+    // longer sits between them. A fresh open now lands on an unapproved
+    // ordinary block instead of index 0 (reversed 2026-08-20, see
+    // defaultSelectionRank) — select it directly, then step down to the
+    // ai_warning finding.
+    await page.locator('[data-idx]').filter({ hasText: 'Overall this looks great' }).click()
     await page.keyboard.press('ArrowDown')
     const card = page.getByTestId('comment-detail-card').filter({ hasText: 'this call no longer matches' }).first()
     await expect(card).toBeVisible()

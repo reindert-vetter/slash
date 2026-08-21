@@ -3813,7 +3813,7 @@ function revealSelectedIfHidden() {
 // loadApprovals/loadBlockStats have landed (see loadBlocks) — isFullyApproved
 // depends on state.approvalSummaries, which isn't known any earlier.
 //
-// Among ORDINARY blocks (defaultSelectionRank === 1) the tie-break is FILE
+// Among ORDINARY blocks (defaultSelectionRank === 0) the tie-break is FILE
 // ORDER (smallest `(file, line)`), not state.blocks' own array order —
 // reviewer request: "als ik een gegenereerde PR open, wil ik naar eerste
 // aangepaste bestand toe". state.blocks is sorted by recomputeLeftList's
@@ -3822,7 +3822,7 @@ function revealSelectedIfHidden() {
 // DISPLAY grouping, not "where a fresh open should land"; picking the
 // array-order winner used to land on whichever category ranked first (e.g. a
 // CONTROLLER touched near the end of the diff) instead of the first block of
-// the first-changed file. Comment items (rank -1/0/2) are UNAFFECTED — their
+// the first-changed file. Comment items (rank 1/2/3) are UNAFFECTED — their
 // own tie-break stays plain array/display order, exactly as before; see
 // defaultSelectionRank's own comment for why that priority must not move.
 //
@@ -3833,31 +3833,42 @@ function revealSelectedIfHidden() {
 // awaits ensureMe() before pushing cs.list (see avatar.mjs — the reviewer's
 // own GitHub identity lookup), an extra network round trip that can land
 // well after this function's one-shot call in loadBlocks already picked an
-// ordinary block/the toggle row. Without a retry, a comment item that should
-// have won the very first default selection never gets it, and the reviewer
-// silently lands elsewhere. freshDefaultSelectionAt snapshots the picked
-// block's stable id (not its raw index — recomputeLeftList reindexes
-// existing rows by id when the comment watch inserts new items, so
-// the id is what stays stable across that reindex) resp. `true` for the
-// toggle-row pick, so retryDefaultSelectionForComments can tell whether
-// nothing else (a click, an arrow key, a restored ?sel=) has since moved the
-// selection away from that automatic pick.
+// ordinary block/the toggle row. Since a comment item now ranks BELOW an
+// ordinary block (see below), this retry in practice only ever matters when
+// there was no unapproved ordinary block to begin with (the fresh pick then
+// fell through to the toggle row, or to nothing at all) — a comment item
+// arriving late can still claim that empty slot. freshDefaultSelectionAt
+// snapshots the picked block's stable id (not its raw index —
+// recomputeLeftList reindexes existing rows by id when the comment watch
+// inserts new items, so the id is what stays stable across that reindex)
+// resp. `true` for the toggle-row pick, so retryDefaultSelectionForComments
+// can tell whether nothing else (a click, an arrow key, a restored ?sel=)
+// has since moved the selection away from that automatic pick.
 // defaultSelectionRank is a SEPARATE priority order from recomputeLeftList's
 // own display `rank()` above, used only to decide which unapproved item a
-// fresh open auto-selects. The two used to be identical (a comment item's
-// display position doubled as its selection priority), but moving the
-// ordinary "PR-comments" section's DISPLAY rank down to 2.4 (reviewer
-// request: "gooi algemene pr comments net boven Comments op regels") must not
-// also silently change which item wins the fresh-open pick — untouched
-// product behaviour nobody asked to change, and the very thing
-// tests/comment-index-items.spec.mjs's "a fresh open lands on the unresolved
-// comment item" asserts. So a no-regel comment (mentioned or not) still
-// outranks every real block here, exactly like before this reorder; only a
-// line-anchored comment still ranks after blocks (unchanged either way).
+// fresh open auto-selects. The two are deliberately NOT identical: a comment
+// item's display position (rank 2.4, "gooi algemene pr comments net boven
+// Comments op regels") is about where it SHOWS in the list, not about which
+// item wins a fresh open.
+//
+// REVERSED 2026-08-20 (explicit reviewer request, overriding the earlier one
+// below): a fresh open must land on the first not-yet-approved ORDINARY
+// block first — "als ik een gegenereerde PR open, wil ik naar het eerste
+// aangepaste code-item in de blokken-index, als die er niet zijn is het prima
+// om naar het volgende (een comment-item) te gaan". Before this, a no-regel
+// PR-wide comment (mentioned or not) unconditionally outranked every real
+// block, so a fresh open with both an unresolved comment AND unapproved code
+// always landed on the comment — including via retryDefaultSelectionForComments
+// yanking an already-picked block away once the (asynchronous) comment poll
+// landed. That was itself a deliberate, explicit reviewer request at the
+// time (see tests/comment-index-items.spec.mjs's history) — this is a
+// genuine reversal of that earlier decision, not an oversight, and it is not
+// to be "fixed back" by a later session without another explicit request.
+// Do NOT re-introduce "comment outranks block" here.
 function defaultSelectionRank(b) {
-  if (b.kind !== 'comment') return 1
-  if (b.lineAnchored) return 2
-  return b.mentioned ? -1 : 0
+  if (b.kind !== 'comment') return 0
+  if (b.lineAnchored) return 3
+  return b.mentioned ? 1 : 2
 }
 
 function applyDefaultUnapprovedSelection() {
@@ -3875,9 +3886,9 @@ function applyDefaultUnapprovedSelection() {
       idx = i
       return
     }
-    // Same rank: only ordinary blocks (rank 1) re-tie-break by file order —
+    // Same rank: only ordinary blocks (rank 0) re-tie-break by file order —
     // a comment tie keeps array/display order, untouched (see doc above).
-    if (r === bestRank && r === 1 && bestFile != null && (b.file < bestFile || (b.file === bestFile && b.line < bestLine))) {
+    if (r === bestRank && r === 0 && bestFile != null && (b.file < bestFile || (b.file === bestFile && b.line < bestLine))) {
       bestFile = b.file
       bestLine = b.line
       idx = i

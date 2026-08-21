@@ -86,9 +86,10 @@ test('comment-index item detail card shows author + avatar', async ({ page }) =>
   )
 
   await page.goto('/pr/12903')
-  // A fresh, no-?sel= open lands on this not-yet-resolved comment item (see
-  // applyDefaultUnapprovedSelection); its detail card shows to the right of
-  // the index right away.
+  // A fresh, no-?sel= open now lands on an unapproved ORDINARY block instead
+  // (applyDefaultUnapprovedSelection, reversed 2026-08-20) — select this
+  // comment item directly; its detail card then shows to the right.
+  await page.locator('[data-idx]').filter({ hasText: 'a pr-wide comment' }).click()
   const card = page.getByTestId('comment-detail-card')
   await expect(card).toBeVisible()
   await expect(card.getByTestId('comment-detail-author')).toHaveText('octocat')

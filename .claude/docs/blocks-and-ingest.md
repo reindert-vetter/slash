@@ -440,9 +440,11 @@ what a fresh open lands on.** `applyDefaultUnapprovedSelection` (`home.mjs`)
 picks the first not-yet-approved ORDINARY block by `(file, line)` — plain
 file order — rather than by this array's category order, so "open a
 just-generated PR" lands on the first block of the first-changed file, not on
-whichever category (e.g. CONTROLLER) happens to rank first. See that
-function's own doc comment in `home.mjs` for the tie-break and why comment
-items are unaffected.
+whichever category (e.g. CONTROLLER) happens to rank first, and (reversed
+2026-08-20, explicit reviewer request) ahead of any unresolved PR-wide
+comment item too — a comment only wins the fresh-open pick when there is no
+unapproved ordinary block at all. See `defaultSelectionRank`'s own doc
+comment in `home.mjs` for the tie-break and the full reversal note.
 
 ### The HTTP layer matches on `Http/<Dir>/`, not on an `app/` prefix
 

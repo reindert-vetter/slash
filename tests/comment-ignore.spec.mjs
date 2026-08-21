@@ -40,6 +40,10 @@ test.describe('Ignoring a PR-comment index item', () => {
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
     await expect(page.getByTestId('comment-heading')).toBeVisible()
+    // A fresh open now lands on an unapproved ordinary block instead
+    // (applyDefaultUnapprovedSelection, reversed 2026-08-20) — select the
+    // comment item directly.
+    await page.locator('[data-idx]').filter({ hasText: 'Overall this looks great' }).click()
     await expect(page.getByTestId('comment-detail-card')).toBeVisible()
 
     await page.keyboard.press('Enter')

@@ -1,5 +1,40 @@
 import { test, expect } from './_fixtures.mjs'
 
+// mockComments serves one PR-wide, no-regel comment for PR 108 — used only by
+// the "everything approved" fallback test below, to prove a comment item
+// still wins the fresh-open pick once there is no unapproved ORDINary block
+// left (defaultSelectionRank, home.mjs) — the one case where a comment item
+// is still allowed to win. See that reversal's own doc comment in home.mjs
+// for why an unapproved block otherwise now always wins over a comment.
+function mockComments(page) {
+  const now = new Date().toISOString()
+  return page.route('**/api/comments?*', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([
+        {
+          id: 'fresh-open-ci-1',
+          runId: 'run-fresh-open-ci-1',
+          pr: PR,
+          file: '',
+          line: 0,
+          author: 'octocat',
+          body: 'Overall this looks great',
+          createdAt: now,
+          reactionCount: 0,
+          status: 'open',
+          source: 'github',
+          kind: 'issue',
+          reactions: [],
+          rowStart: -1,
+          rowEnd: -1,
+        },
+      ]),
+    }),
+  )
+}
+
 // A fresh open of /pr/<id> with NO `?sel=` at all (e.g. "Open review tree"
 // from /pr-overview without a remembered position — see overviewExitUrl/
 // treeUrl in home.mjs/overview.mjs) should land the reviewer on the first
@@ -226,5 +261,33 @@ test.describe('PR Review Tree — fresh open with no ?sel lands on the first una
     // The section itself stays folded — the toggle still offers to reveal,
     // never "Verberg" (nothing was unfolded to hide A; it's just pinned).
     await expect(page.getByTestId('toggle-approved')).toContainText('Toon')
+  })
+
+  test('everything approved, plus an unresolved comment → lands on the comment, not the toggle row', async ({
+    page,
+  }) => {
+    // Reversed 2026-08-20 (explicit reviewer request, see defaultSelectionRank
+    // in home.mjs): an unapproved ORDINARY block now always outranks a
+    // no-regel PR-wide comment item for the fresh-open pick — but a comment
+    // item must still win when there is genuinely no unapproved block left,
+    // exactly like the "everything approved" test above lands on the toggle
+    // row when there is no comment at all.
+    await mockComments(page)
+    const runId = await resetApprovals(page)
+    await setApproval(page, runId, BLOCK_A_ID, APPROVE_ALL_ROWS)
+    await setApproval(page, runId, BLOCK_B_ID, APPROVE_ALL_ROWS)
+    await waitApproved(page, BLOCK_A_ID, APPROVE_ALL_ROWS.length)
+    await waitApproved(page, BLOCK_B_ID, APPROVE_ALL_ROWS.length)
+
+    await page.goto(`/pr/${PR}`)
+
+    const commentRow = page.locator('[data-idx]').filter({ hasText: 'Overall this looks great' })
+    await expect(commentRow).toHaveClass(/bg-indigo-50|dark:bg-indigo-500\/15/)
+    await expect(page.getByTestId('comment-detail-card').first()).toBeVisible()
+    // Both real blocks stay hidden (still fully approved) — the toggle row
+    // offers to reveal them, but never grabs the keyboard itself here.
+    const toggle = page.getByTestId('toggle-approved')
+    await expect(toggle).toContainText('Toon 2 goedgekeurde blocks')
+    await expect(toggle).not.toHaveClass(/bg-indigo-50|dark:bg-indigo-500\/15/)
   })
 })

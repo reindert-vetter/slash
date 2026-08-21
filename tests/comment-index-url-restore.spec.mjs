@@ -46,9 +46,12 @@ test.describe('Comment-index selection survives a refresh (?sel=comment:<id>)', 
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
 
-    // A fresh open lands on the first unresolved comment item (rank -1, see
-    // applyDefaultUnapprovedSelection) — step down onto the second one.
+    // A fresh open now lands on the first unapproved ORDINARY block instead
+    // (defaultSelectionRank, home.mjs, reversed 2026-08-20) — select the
+    // first comment item directly, then step down onto the second one.
     await expect(page.getByTestId('comment-heading')).toBeVisible()
+    const firstCommentRow = page.locator('[data-idx]').filter({ hasText: 'First PR-wide comment' })
+    await firstCommentRow.click()
     await expect.poll(() => new URL(page.url()).searchParams.get('sel')).toBe('comment:ci-1')
     await page.keyboard.press('ArrowDown')
 

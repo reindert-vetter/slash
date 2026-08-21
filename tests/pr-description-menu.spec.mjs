@@ -92,11 +92,11 @@ test.describe('PR Review Tree — PR-wide menu on the description column (stop 1
 
   // Regression: state.selected can still point at a comment-index item
   // (kind:'comment', see recomputeLeftList/commentBlockItem) while stop 1
-  // owns the keyboard — e.g. a fresh PR-wide comment auto-selects the first
-  // "Start" row, and the reviewer then steps left into the description. Enter
-  // there must open the PR-wide menu, not the comment item's own action menu
-  // ("Beantwoorden"/"Resolve comment"/"Ignore") — see the !state.showDescription
-  // guard on the selectedComment() branch in onKeydown (home.mjs).
+  // owns the keyboard — e.g. a reviewer selects a comment-index "Start" row,
+  // and then steps left into the description. Enter there must open the
+  // PR-wide menu, not the comment item's own action menu ("Beantwoorden"/
+  // "Resolve comment"/"Ignore") — see the !state.showDescription guard on the
+  // selectedComment() branch in onKeydown (home.mjs).
   test('Enter on stop 1 opens the PR-wide menu, not the comment-item menu, when a comment row is selected', async ({
     page,
   }) => {
@@ -128,7 +128,10 @@ test.describe('PR Review Tree — PR-wide menu on the description column (stop 1
     )
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
-    // A fresh open auto-selects the unresolved comment item (rank -1, first).
+    // A fresh open now lands on an unapproved ordinary block instead
+    // (applyDefaultUnapprovedSelection, reversed 2026-08-20) — select the
+    // comment item directly.
+    await page.locator('[data-idx]').filter({ hasText: 'Overall this looks great' }).click()
     await expect(page.getByTestId('comment-detail-card')).toBeVisible()
 
     await page.keyboard.press('ArrowLeft')

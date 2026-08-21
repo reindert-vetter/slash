@@ -197,8 +197,10 @@ test.describe('ArrowRight caret guard in comment inputs', () => {
 
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
-    // A fresh, no-?sel= open lands on the first not-yet-resolved item, which
-    // is this comment (see recomputeLeftList/applyDefaultUnapprovedSelection).
+    // A fresh, no-?sel= open now lands on the first unapproved ORDINARY
+    // block instead (applyDefaultUnapprovedSelection, reversed 2026-08-20) —
+    // select this comment item directly.
+    await page.locator('[data-idx]').filter({ hasText: 'a pr-wide comment' }).click()
     await expect(page.getByTestId('comment-detail-card')).toBeVisible()
 
     // Enter opens the small action menu, default-selected on "Beantwoorden" —

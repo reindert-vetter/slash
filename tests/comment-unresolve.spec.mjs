@@ -105,6 +105,10 @@ test.describe('Unresolving a comment', () => {
 
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
+    // A fresh open now lands on an unapproved ordinary block instead
+    // (applyDefaultUnapprovedSelection, reversed 2026-08-20) — select the
+    // comment item directly.
+    await page.locator('[data-idx]').filter({ hasText: 'Overall this looks great' }).click()
     const card = page.getByTestId('comment-detail-card')
     await expect(card).toBeVisible()
 

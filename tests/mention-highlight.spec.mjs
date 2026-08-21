@@ -86,6 +86,12 @@ test.describe('@mention of the local reviewer', () => {
     await expect(headings).toHaveCount(2)
     await expect(headings.first()).toHaveAttribute('data-testid', 'mention-heading')
 
+    // A fresh open now lands on an unapproved ORDINARY block instead of this
+    // no-regel mention item (defaultSelectionRank, home.mjs, reversed
+    // 2026-08-20 — a mentioned comment's DISPLAY rank -2 is unaffected, only
+    // the fresh-open SELECTION pick changed) — select it directly.
+    await first.click()
+
     // The body highlight: a <mark> around the mention only, in the detail card
     // that opens on the selected (mentioned) comment.
     // Two cards are on screen (the selected one plus the look-ahead preview of
@@ -117,6 +123,10 @@ test.describe('@mention of the local reviewer', () => {
     // The root body mentions someone ELSE — that must not highlight, but the
     // reply's mention still lifts the comment into "Mentioned".
     await expect(page.getByTestId('mention-heading')).toBeVisible()
+    // A fresh open now lands on an unapproved ORDINARY block instead of this
+    // no-regel mention item (defaultSelectionRank, home.mjs, reversed
+    // 2026-08-20) — select it directly.
+    await page.locator('[data-idx]').filter({ hasText: 'Even een aanvulling op' }).click()
     const card = page.getByTestId('comment-detail-card')
     await expect(card).toBeVisible()
     await expect(card.getByText('@Levivb').getByTestId('mention')).toHaveCount(0)
