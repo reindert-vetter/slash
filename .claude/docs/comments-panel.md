@@ -12,9 +12,11 @@ comments, plus a `code_warning` finding that couldn't be pinned to a block,
 block-scoped comments index (`RelatedPanel.mjs`'s `recomputeView` excludes
 `kind !== ''`). `home.mjs` instead turns each one into a **synthetic, fully
 navigable item in the "Start" sidebar** — selected with `↑`/`↓`/click exactly
-like an ordinary PR block, and the block column to the right of the index shows
-its thread instead of a diff. (This replaced the removed `PrWideComments` card,
-see `.claude/docs/detail-layout.md`.)
+like an ordinary PR block. (This replaced the removed `PrWideComments` card,
+see `.claude/docs/detail-layout.md`.) Its thread renders next to the index in
+the SAME merged `comment-claude-row` an ordinary block-scoped comment+Claude
+pair gets — not in the block column, which hides entirely for this case — see
+"The comment-detail card moved into the merged comment-claude-row" below.
 
 ### Every UNRESOLVED comment gets such a row too, not only the PR-wide ones
 
@@ -628,9 +630,10 @@ zien als normaal rechts. Bij alle algemene comments en ai waarschuwingen."
   is simply there while such an item is selected, anchored by
   `chatAnchorComment`'s pre-existing `s.none` branch plus
   `syncClaudeAnchorForSelection`; no new writer of `cc`.
-- **The comments half hides** (`InlineComments`'s own `hidden`, same
-  predicate): its list is empty by design and the thread already renders in the
-  item's `commentDetailCard`, so it would only be a fixed-width gap.
+- **The comments half no longer stays a bare gap** — see "The comment-detail
+  card moved into the merged comment-claude-row" below, which superseded the
+  original "hides, thread stays in the block-column" shape this bullet used
+  to describe.
 - **The embedded copy is gone**, along with the `pcc` reactive, its
   `prCommentClaudeView`/`updatePccThreadPinned`/`jumpToPccThreadBottom`
   helpers, the `pr-comment-claude-section`/`pr-comment-claude-close` markup and
@@ -639,6 +642,72 @@ zien als normaal rechts. Bij alle algemene comments en ai waarschuwingen."
   only ensures the Execution and focuses the column's composer.
 
 Test: `tests/pr-comment-claude-chat.spec.mjs`.
+
+### The comment-detail card moved into the merged comment-claude-row
+
+Reviewer request: "Pr-comments wil ik graag in 1 blok samen met claude chat."
+Until this, an unanchored comment-index item's own `commentDetailCard` (the
+thread: body + reactions) rendered in home.mjs's **block-column** — the
+column that normally holds a `Block()` diff card — while `InlineComments`
+(this module, mounted in `comments-and-related`'s `comment-claude-row`) sat
+`hidden` right next to the Claude column, leaving the two as two visually
+separate boxes with a real `<main>` `gap-4` between them, not the one merged
+card an ordinary block-scoped comment+Claude pair already reads as.
+
+- **`InlineComments` itself now renders the card**, inside a stable
+  `<div class="contents">${() => isPrCommentScope() ? commentDetailCard(...) :
+  ''}</div>` slot (the documented safe pattern for a toggling template, see
+  `.claude/rules/arrowjs-pitfalls.md`) right where the ordinary comment cards
+  would otherwise list — so it sits in the SAME shared-border/bg row as the
+  Claude column (`comment-claude-row`, home.mjs), merged into one visual card
+  exactly like a block-scoped comment+Claude pair already is. The outer
+  `inline-comments` wrapper's own `hidden` toggle for this scope is gone —
+  there is real content to show now, not a bare gap.
+- **`commentDetailCard(c, opts)` grew an `opts.merged` flag**: it drops its
+  own fixed `w-[calc(42rem+50px)] shrink-0` width in favor of `w-full`, since
+  the parent (`InlineComments`'s own wrapper) already carries
+  `commentColumnWidthCls()` — the same half-share width an ordinary block's
+  comment column gets, kept exactly in sync with the Claude column next to it
+  (see `commentColumnWidthCls`/`claudeColumnWidthCls`'s own doc comment,
+  above). Everything else about the card (its own border/rounded-2xl/shadow,
+  the author line, the thread, the meta line, the reply box) is unchanged —
+  it still reads as its own bordered card, the same way `compactConversation`'s
+  bordered pills sit inside the borderless `InlineComments` column for an
+  ordinary block-scoped comment.
+- **The card gets a fresh `.key(...)` per selected comment** (id + status +
+  title-arrived flag) — mirrors the key the block-column's own version used
+  before this moved, for the same rekey-on-status/title-change reasoning
+  (`.claude/rules/arrowjs-pitfalls.md`'s "a keyed node is reused without
+  re-running its bindings").
+- **home.mjs's block-column hides entirely** for this case
+  (`isPrCommentScope()`, exported from `RelatedPanel.mjs` for exactly this),
+  unconditionally — not gated on `state.focusLevel` the way
+  `commentAnchorColumnHidden()` is for an ANCHORED comment-index item (a
+  wholly separate, untouched flow — see "An anchored 'Start' item instead
+  opens its block…" above). There is nothing left to render there: no rail,
+  no `commentDetailCard`, since it now lives in the merged row instead.
+- **A pre-existing `setCommentScope` bug surfaced by this move, and got
+  fixed alongside it.** Every unanchored comment-index item shares the exact
+  same bare `'none'` sentinel signature, so `setCommentScope`'s own
+  redundant-write guard (`if (sig === cs.scopeSig) return`) used to skip
+  reassigning `cs.scope` whenever the reviewer moved from ONE such item
+  straight onto ANOTHER, or when a poll merely updated the SAME item's own
+  fields (a title arriving) — invisible before, because nothing used to read
+  `cs.scope.prComment`'s own identity/content, only the boolean
+  `isPrCommentScope()` (which stayed correctly true either way). Fixed by
+  never deduping the `'none'` case at all (`recomputeView`'s own `s.none`
+  branch is O(1), so there's no real cost) — the redundant-write guard still
+  applies to the real (file/label/gran/…) scope join, where it exists
+  specifically to skip an expensive `cs.list` re-filter on an unrelated tick.
+- **`openPrCommentMenu`** is `InlineComments`'s 5th parameter — the exact
+  same `(opts) => openMenu('prComment', opts)` the removed block-column call
+  site used to pass, so the card's own menu button/right-click still opens
+  `prCommentCommandsFor()`.
+
+Test: the width/merge assertions in `tests/pr-comment-claude-chat.spec.mjs`
+and `tests/comment-index-items.spec.mjs`'s ai_warning-item case (which
+exercises exactly the "step from one unanchored item to another" gap the
+`setCommentScope` fix closes).
 
 ### A bare Claude-chat anchor is not a comment and gets no row
 
@@ -762,9 +831,12 @@ resolves to the very same comment, so it needed no separate branch any more
 reply-Signal path as before: post the reviewer's typed text as a reply,
 never rewrite the root body (there is no "edit body" Signal — a comment's
 body is fixed at Execution start, see `ensureClaudeAnchorForNew`'s own doc
-comment). The origin bubble therefore keeps reading "Claude gesprek" even
-after this — the real, attributed text lives in the reply right below it,
-under the reviewer's own identity, exactly as an ordinary reply always has.
+comment). The reply itself, under the reviewer's own identity, is exactly what
+now gets PROMOTED to read as the ordinary root — see "A taken-over Claude-chat
+anchor reads as an ordinary comment" below, which superseded an earlier
+version of this paragraph that said the origin bubble "keeps reading 'Claude
+gesprek' even after this": that was itself the bug a later reviewer report
+("het is eigenlijk niet een reactie, het is een eerste comment") asked to fix.
 Test: `tests/comment-anchor-takeover.spec.mjs`.
 
 **"Comment hiervan maken" (`convertClaudeAnchorToComment`,
@@ -777,6 +849,79 @@ take-over above only ever fires once the reviewer has ALREADY decided to type
 something themselves — it cannot substitute for "let Claude draft this for
 me", so removing the menu item would be a regression for that path, not a
 simplification.
+
+### A taken-over Claude-chat anchor reads as an ordinary comment, everywhere
+
+The take-over above (typing in "Comment op deze regel") is one of two ways a
+bare Claude-chat anchor's placeholder root stops being displayed as
+"Claude gesprek". The other, reported separately: a reviewer who instead types
+their FIRST reply directly into the existing thread's own reply box
+("Beantwoorden") — mechanically the exact same write (`postThreadReply`'s
+"reply" Signal posts the typed text as a reaction on the placeholder's thread,
+since there is no "edit body" Signal) — kept showing "Claude gesprek · 1
+reactie" even though that one reaction WAS the reviewer's real, and only, first
+comment. Reviewer's own words: "hier is wel al een eigen comment... het is
+eigenlijk niet een reactie, het is een eerste comment (en er was toevallig een
+claude gesprek)."
+
+- **`firstReviewerReplyOnPlaceholder(c)`** (`RelatedPanel.mjs`, exported) is
+  the one predicate: `isChatAnchorPlaceholder(c)` AND at least one reaction
+  that is genuinely the reviewer's own (`isOwnMessage`) and not a
+  `/resolve`/`/reopen` status sentinel (`threadStatusSentinel`) — deliberately
+  never a Claude/foreign message, confirmed scope: only the reviewer's OWN
+  first reply takes an anchor over (a Claude turn lives in the separate chat
+  transcript, not in `c.reactions`, anyway).
+- **`threadMessages(c)` promotes that reply to the front and drops the
+  synthetic placeholder origin** once it exists — the single, root-cause fix
+  every consumer (the thread render loop, `reactionCount()`, the ↑/↓ thread
+  walk, `editTargetId`) gets for free, with no separate "taken over" branch
+  anywhere else. `editTargetId` in particular needed no change: the promoted
+  message keeps its OWN real reaction id, so "Bewerk bericht" on the
+  now-first bubble already edits the right thing.
+- **`commentBody(c, …)`** — the one ROOT-level (as opposed to per-message)
+  call site, `compactConversation`'s own preview line — renders the promoted
+  reply's body instead of `CHAT_ANCHOR_NOTE_HTML` once taken over. Every
+  per-message call (`reactionBubble`'s `commentBody(r, …)`) already read the
+  real reply text on its own, since `r.body` was never the placeholder
+  sentence to begin with.
+- **`compactConversation`'s author-line ternary** only shows
+  `chatAnchorAuthorLine()` (the "Claude gesprek" glyph+label) while STILL
+  bare (`isChatAnchorPlaceholder(c) && !firstReviewerReplyOnPlaceholder(c)`);
+  once taken over it falls through to the ordinary author line, which already
+  reads correctly — the placeholder comment's own `source`/`author` is the
+  reviewer's, same person as the promoted reply.
+- **`commentReactionStatusLine(c)`** subtracts exactly the one promoted
+  reaction from `c.reactionCount` once taken over, so "1 reactie" (the
+  reported symptom) becomes "0 reacties" — the promoted message is the
+  comment now, not a reply counted on top of it.
+- **The index label/snippet and the row itself change too** — the "brede
+  variant", confirmed explicitly (not just the open-thread display):
+  `prWideComments()`/`indexComments()` (`RelatedPanel.mjs`) both skip a bare
+  placeholder as before, but fall through to the ordinary
+  prWide/inBlock/mentioned checks once taken over; `commentBlockItem`
+  (`home.mjs`) reads the promoted reply's own body for its 60-char snippet
+  fallback (`commentTitleOf(c)` still wins first, unaffected — a stale title
+  generated against the placeholder body is a known, accepted gap, not fixed
+  here: `needsTitle`/the backend `comment_titles` workflow are unchanged, so a
+  title that already exists keeps describing the placeholder text until the
+  reviewer edits the body directly or a fresh title run happens to key off the
+  new content).
+- **`commentCommandsFor`'s resolve/unresolve gate** (`home.mjs`) drops its
+  `isChatAnchorPlaceholder` exclusion once taken over — "een chat met alleen
+  een claude gesprek" genuinely has no comment yet and stays delete-only, but
+  a taken-over one now IS an ordinary open comment and gets its Resolve item
+  back.
+- **Deliberately NOT touched**: `claudeAnchorIsPlaceholder()`/"Comment
+  hiervan maken" — that gate reads the comment's own STORED body
+  (`c.body === CLAUDE_ANCHOR_PLACEHOLDER`) directly, which is still literally
+  true underneath (there is no signal to rewrite it) — "Comment hiervan
+  maken" solves the unrelated problem of wanting a Claude-WRITTEN summary as
+  the root, and stays available exactly as before regardless of any reply
+  already on the thread.
+
+Test: `tests/comment-anchor-takeover.spec.mjs`'s final assertions (the reply
+that takes the anchor over reads as an ordinary comment, not "Claude
+gesprek").
 
 ### "Mentioned": an `@`-mention of the local reviewer ranks above everything
 
@@ -875,16 +1020,28 @@ the selection if the comment is already resolved and thus hidden
 (`revealSelectedIfHidden`, generic over the comment branch above). Test:
 `tests/comment-index-url-restore.spec.mjs`.
 
-### The detail card, in place of a `Block` diff card
+### The detail card
 
-`DetailPanel`'s `pair.forEach` loop branches at the top on
-`b.kind === 'comment'`: instead of `ensureCode(b)` + `Block(b, {...})` it renders
-`commentDetailCard(b.comment, { preview })` (`RelatedPanel.mjs`, exported) — a
-read-only thread wrapped in the same `data-testid=detail-card` stable-`contents`
-root as an ordinary card, keyed on `'detail:'+role+':comment:'+id+':'+status`
-(a resolve thus forces a fresh node). Width: `w-[calc(42rem+50px)]` — 50px wider
-than the ordinary block card's `42rem`, room for the wider footer meta line
-below.
+`commentDetailCard(c, opts)` (`RelatedPanel.mjs`, exported) is the read-only
+thread card a comment-index item shows instead of a `Block` diff card.
+**Two call sites, two positions:**
+
+- `home.mjs`'s `DetailPanel`'s `pair.forEach` loop still branches at the top
+  on `b.kind === 'comment'` and renders it, wrapped in the same
+  `data-testid=detail-card` stable-`contents` root as an ordinary card, keyed
+  on `'detail:'+role+':comment:'+id+':'+status` (a resolve thus forces a
+  fresh node) — but ONLY for an ANCHORED comment-index item (before its own
+  drilled column is entered, see "An anchored 'Start' item…" above) or for
+  the look-ahead PREVIEW row (`i !== sel`). At its default (no `opts.merged`)
+  width: `w-[calc(42rem+50px)]` — 50px wider than the ordinary block card's
+  `42rem`, room for the wider footer meta line below.
+- For the SELECTED, genuinely UNANCHORED case, `InlineComments`
+  (`RelatedPanel.mjs`) renders it instead, with `opts.merged: true` (drops
+  the fixed width above for `w-full`, filling the parent's own
+  `commentColumnWidthCls()`) — see "The comment-detail card moved into the
+  merged comment-claude-row" above. `DetailPanel`'s block-column hides
+  entirely for this case (`isPrCommentScope()`), so the two call sites never
+  both fire for the same selection at once.
 
 **Mirrors `compactConversation`'s shape (the block-scoped line-comment card),
 not a bespoke layout of its own** — reviewer request: "ik wil algemene
@@ -1797,6 +1954,55 @@ neither of which works in this vendored arrow.js (see
 PR-wide reply's "Stuur" button keep their own `sendStatusIcon` treatment
 (draft/sending only, untouched by this change); the PR-wide reply has its own
 `picm.sending` flag. Test: `tests/reaction-status-icon.spec.mjs`.
+
+### A reply opens the comment's own menu instead of releasing to the diff
+
+Reviewer request, reversing an earlier deliberate decision: "als ik een
+reactie plaats op een comment, wil ik niet daarna gelijk naar de diff, ik wil
+het menu zien waar ik kan bijvoorbeeld resolven." `postThreadReply` used to
+call `exitRelated()` synchronously (optimistic exit, before the Signal
+POST+GET even start) — releasing `cs.focus` to `null` and handing the keyboard
+back to the diff the instant "Stuur"/Enter fired. That is now instead the
+comment's own action menu (`commentCommandsFor`, the same one `Enter` on an
+empty reply field already opens — see "Enter opens an action menu; → steps
+into the thread" above), opened via the same cross-module downward-injection
+pattern `claudeMenuOpener` already uses (`setCommentMenuOpener`/
+`commentMenuOpener`, `RelatedPanel.mjs` → `home.mjs`'s
+`setCommentMenuOpener(() => openMenu('comment'))`, registered at module load
+next to `setClaudeMenuOpener`).
+
+- **`cs.focus` deliberately stays put** (never reset to `null`) — the field is
+  still cleared/blurred (`el.value=''`, `releaseFocus()`) exactly as before,
+  but the thread itself stays expanded (`data-expanded="true"`), and the menu
+  overlays it the same way it already overlays an empty-field `Enter`. Closing
+  the menu (Escape, or a command that doesn't navigate away) leaves the
+  reviewer right back on this thread, not on the diff.
+- **The same treatment applies to `postPrCommentReply`** (a comment-index
+  item's own reply) via `prCommentMenuOpener`/`setPrCommentMenuOpener` and
+  `openMenu('prComment')` — `cancelPrCommentReply()`/`exitPrCommentThread()`
+  still hide/reset the reply field and thread cursor exactly as before (a
+  comment-index item's reply field, unlike the block-scoped one, always did
+  unmount on send), only now a menu opens right after instead of nothing.
+- **A failed send restores the draft directly into the still-visible field**
+  (`postThreadReply`'s `else` branch now also does `el.value = body;
+  autoGrowTextarea(el)`) — needed because the field no longer unmounts/
+  remounts on a reply (which used to be what picked the draft back up from
+  `replyDrafts` on reopen); `postPrCommentReply`'s field still does unmount on
+  every send (unaffected), so it still recovers the draft via `prReplyDrafts`
+  on the next "Beantwoorden" open, unchanged.
+- **This also fires after a publish-choice flow completes** — reaching
+  `postThreadReply` via `sendPendingReply` (the reviewer picked a GitHub
+  destination in the SEPARATE `'replyPublish'` menu) opens the comment menu
+  right after that menu closes, exactly like a plain send does. Two menus in
+  a row, one after another, is the accepted shape: the first was about WHAT
+  may go public, the second about what to do with the now-sent comment.
+
+Test: `tests/reaction-status-icon.spec.mjs` ("sending a reply opens its action
+menu immediately…"), `tests/comment-delete.spec.mjs` ("Enter with a typed
+reply sends the reply, then opens its own action menu"),
+`tests/comment-send-failed-badge.spec.mjs` (draft recovery on both paths), and
+`tests/reply-publish-local-thread.spec.mjs` (the publish-choice-then-action-menu
+sequencing).
 
 ### Deleting a comment hands the keyboard back to its diff row
 

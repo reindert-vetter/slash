@@ -332,12 +332,22 @@ export function setRelated(children, unresolved, warning) {
 // and "comment-item selected" always triggers a recomputeView(), which is the
 // only place cs.view actually re-derives.
 export function setCommentScope(scope) {
-  const sig = !scope
-    ? ''
-    : scope.none
-      ? 'none'
-      : [scope.file, scope.label, scope.mode, scope.gran, scope.rowStart, scope.rowEnd, scope.seg].join('|')
-  if (sig === cs.scopeSig) return
+  const isNone = !!(scope && scope.none)
+  const sig = !scope ? '' : isNone ? 'none' : [scope.file, scope.label, scope.mode, scope.gran, scope.rowStart, scope.rowEnd, scope.seg].join('|')
+  // The 'none' sentinel is NEVER deduped by signature, unlike the real-scope
+  // join below. Every unanchored comment-index item (PR-wide/orphan/
+  // ai_warning) shares that exact same bare signature regardless of WHICH
+  // comment it carries or whether that comment's own fields (a title
+  // arriving on a later poll, a status change) just changed — so deduping
+  // on it would leave cs.scope.prComment stuck on a stale object, either
+  // across two different such items selected back to back, or across a
+  // poll landing while the reviewer stays on the very same one. Cheap to
+  // always let through: recomputeView's own `s.none` branch is O(1)
+  // (cs.view = []), unlike the real-scope case, where this signature exists
+  // specifically to skip an expensive cs.list re-filter on an unrelated
+  // reactive tick. See "The comment-detail card moved into the merged
+  // comment-claude-row" in comments-panel.md.
+  if (!isNone && sig === cs.scopeSig) return
   cs.scopeSig = sig
   cs.scope = scope
   recomputeView()
@@ -1256,7 +1266,47 @@ function threadMessages(c) {
     avatarUrl: c.avatarUrl,
     body: c.body,
   }
-  return [origin, ...(c.reactions || [])]
+  const reactions = c.reactions || []
+  // A bare Claude-chat anchor (isChatAnchorPlaceholder) whose reviewer has
+  // since replied on its thread is taken over here: reviewer's own words,
+  // "het is eigenlijk niet een reactie, het is een eerste comment (en er was
+  // toevallig een claude gesprek)" — that reply IS the reviewer's real first
+  // comment, not a reply to the synthetic placeholder root. Promoting it to
+  // the front and dropping the placeholder origin means every consumer of
+  // threadMessages (reactionCount, the ↑/↓ thread walk, editTargetId, every
+  // render loop) sees exactly the messages a reviewer actually wrote, with
+  // no separate "taken over" branch anywhere else. See "A taken-over
+  // Claude-chat anchor reads as an ordinary comment" in comments-panel.md.
+  const takeoverIdx = isChatAnchorPlaceholder(c) ? firstReviewerReplyIndex(reactions) : -1
+  if (takeoverIdx === -1) return [origin, ...reactions]
+  return [reactions[takeoverIdx], ...reactions.slice(0, takeoverIdx), ...reactions.slice(takeoverIdx + 1)]
+}
+
+// firstReviewerReplyIndex — the first reaction that is a genuine reviewer-
+// authored reply: not a "/resolve"/"/reopen" status sentinel (threadStatusSentinel),
+// and not a foreign/AI one (isOwnMessage) — confirmed scope: only the
+// reviewer's OWN first reply takes an anchor over, never a Claude message
+// (which lives in the chat transcript, not in c.reactions, anyway) or a
+// GitHub reply from someone else.
+function firstReviewerReplyIndex(reactions) {
+  for (let i = 0; i < reactions.length; i++) {
+    const r = reactions[i]
+    if (threadStatusSentinel(r.body)) continue
+    if (!isOwnMessage(r)) continue
+    return i
+  }
+  return -1
+}
+
+// firstReviewerReplyOnPlaceholder — exported for callers outside the thread
+// itself (the index-row label/snippet, the reaction-count meta line, the
+// resolve/unresolve menu gate) that need to know whether a bare Claude-chat
+// anchor has already been taken over, without re-deriving threadMessages'
+// own reordering.
+export function firstReviewerReplyOnPlaceholder(c) {
+  if (!isChatAnchorPlaceholder(c)) return null
+  const idx = firstReviewerReplyIndex(c.reactions || [])
+  return idx === -1 ? null : c.reactions[idx]
 }
 
 // threadParticipants — every distinct person/bot that has spoken in a thread
@@ -2537,7 +2587,13 @@ export function claudeChatVisible() {
 // This REPLACED an embedded copy inside the item's own detail card that only
 // appeared after the "Chat met Claude" command (the `pcc` toggle); one chat,
 // one surface.
-function isPrCommentScope() {
+//
+// Exported so home.mjs's DetailPanel can hide the top-level block-column
+// entirely for this case too (see "The comment-detail card moved into the
+// merged comment-claude-row" in comments-panel.md) — the same "leading
+// column" treatment isCommentAnchorDrillActive already gets for an ANCHORED
+// comment-index item, just without a drilled column of its own.
+export function isPrCommentScope() {
   const s = cs.scope
   return !!(s && s.none && s.prComment)
 }
@@ -2875,6 +2931,22 @@ export function setClaudeMenuOpener(fn) {
 // .claude/docs/claude-chat-panel.md.
 function openClaudeMenuFromComposer(opts) {
   if (claudeMenuOpener) claudeMenuOpener(opts)
+}
+
+// commentMenuOpener/prCommentMenuOpener — same cross-module pattern as
+// claudeMenuOpener above, for postThreadReply/postPrCommentReply below:
+// after a reply actually lands, the reviewer should see the row's own action
+// menu (Resolve/etc.), not the diff — reviewer report: "als ik een reactie
+// plaats op een comment, wil ik niet daarna gelijk naar de diff, ik wil het
+// menu zien waar ik kan bijvoorbeeld resolven". See "A reply opens the
+// comment's own menu instead of releasing to the diff" in comments-panel.md.
+let commentMenuOpener = null
+export function setCommentMenuOpener(fn) {
+  commentMenuOpener = fn
+}
+let prCommentMenuOpener = null
+export function setPrCommentMenuOpener(fn) {
+  prCommentMenuOpener = fn
 }
 
 // selectHighlightedClaudeOption — the Enter-key counterpart of clicking a
@@ -4986,16 +5058,23 @@ async function sendReaction() {
 // along on the same "reply" Signal (see ReactionSignal.Publish in
 // workflows.go); the ordinary, already-public path passes neither.
 //
-// The keyboard goes back to the diff (exitRelated) IMMEDIATELY, before the
-// Signal POST + GET below even starts — the same optimistic-exit decision as
-// placeComment (see its doc comment), extended to a reply on purpose:
-// Reindert explicitly confirmed the thread should close on every reply now,
-// reversing the earlier deliberate "this thread stays open after a reply"
-// choice (a bare-Enter reply was the one send-status spot where "sent" was
-// actually visible — that reasoning no longer applies). cs.replySent's brief
-// flash still fires: commentFooterText() reads it regardless of cs.focus, so
-// it's still visible in the shared comment/Claude footer for as long as the
-// reviewer happens to still be looking at this unit.
+// A reply opens the comment's own action menu (commentMenuOpener,
+// home.mjs's openMenu('comment')) IMMEDIATELY, instead of releasing the
+// keyboard back to the diff (exitRelated) — reviewer request, reversing the
+// earlier "closes on every reply" decision documented here before: "als ik
+// een reactie plaats op een comment, wil ik niet daarna gelijk naar de diff,
+// ik wil het menu zien waar ik kan bijvoorbeeld resolven". Still the same
+// optimistic-UI shape as before (the field is cleared/blurred and the menu
+// opens before the Signal POST + GET even start, mirroring placeComment's own
+// doc comment) — only WHERE the keyboard lands changed. cs.focus deliberately
+// stays on the thread (never set to null the way exitRelated would): the menu
+// overlays it exactly like the existing "Enter on an empty reply field" menu
+// already does (commentReplyEmpty, home.mjs's onKeydown), so closing the menu
+// (Escape, or a command that doesn't navigate away) leaves the reviewer back
+// on this same thread. cs.replySent's brief flash still fires:
+// commentFooterText() reads it regardless of cs.focus, so it's still visible
+// in the shared comment/Claude footer for as long as the reviewer is still
+// looking at this unit.
 //
 // A failed send marks cs.sendFailed('reply:'+c.id) (see its own doc comment)
 // instead of vanishing silently, and restores the typed text into
@@ -5007,7 +5086,12 @@ async function postThreadReply(c, body, publish, withHistory) {
     el.value = ''
     resetTextareaHeight(el)
   }
-  exitRelated()
+  cs.composing = false
+  cs.claudeOptionSel = 0
+  cs.previewPos = 0
+  releaseFocus() // a focus request still in flight must not land after this
+  if (el && el.blur) el.blur()
+  if (commentMenuOpener) commentMenuOpener()
   cs.busy = true
   try {
     let res
@@ -5038,6 +5122,14 @@ async function postThreadReply(c, body, publish, withHistory) {
     } else {
       markSendFailed('reply:' + c.id)
       replyDrafts.set(c.id, body)
+      // Unlike the old "closes back to the diff" flow, the reply field
+      // never unmounts any more (see the doc comment above) — nothing else
+      // would re-mount it to pick the draft up from replyDrafts, so restore
+      // the failed text into the still-visible field directly.
+      if (el) {
+        el.value = body
+        autoGrowTextarea(el)
+      }
     }
   } finally {
     cs.busy = false
@@ -5793,7 +5885,7 @@ function compactConversation(c, i, full, openCommentMenu) {
       ${() => commentStatusMark(c, 'mt-1')}
       <span class="flex min-w-0 flex-col gap-0.5">
         ${() =>
-          isChatAnchorPlaceholder(c)
+          isChatAnchorPlaceholder(c) && !firstReviewerReplyOnPlaceholder(c)
             ? chatAnchorAuthorLine()
             : html`
                 <span class="flex min-w-0 items-center gap-2" data-testid="comment-author-line">
@@ -5829,7 +5921,16 @@ function compactConversation(c, i, full, openCommentMenu) {
 // wording/shape instead of inventing its own — see "look more like a line
 // comment" in comments-panel.md.
 function commentReactionStatusLine(c) {
-  return c.reactionCount + ' reacties · ' + c.status + lastReplyNote(c)
+  // Once the reviewer's own first reply has taken a bare Claude-chat anchor
+  // over (firstReviewerReplyOnPlaceholder), that reply IS the comment, not a
+  // reply to it — reviewer report: a taken-over anchor kept reading "Claude
+  // gesprek · 1 reactie" even though there was really only ONE comment, no
+  // reply at all. Subtract exactly the one reaction that got promoted (see
+  // threadMessages' own reordering, which drops it from the tail the same
+  // way), so this reads like an ordinary comment with N real replies below it.
+  const taken = firstReviewerReplyOnPlaceholder(c)
+  const count = taken ? Math.max(0, c.reactionCount - 1) : c.reactionCount
+  return count + ' reacties · ' + c.status + lastReplyNote(c)
 }
 
 // expandedConversation — the full thread (every message via threadMessages/
@@ -6161,8 +6262,13 @@ function moreAboveHint(n, testid, onUp) {
 // Onderliggende-code card (see DetailPanel): the new-comment composer, once
 // opened via the command palette (see newCommentComposer above), then one
 // card per conversation already scoped to the selected unit
-// (visibleComments()).
-export function InlineComments(state, commentTarget, openCompose, openCommentMenu) {
+// (visibleComments()). `openPrCommentMenu` is only used for the
+// isPrCommentScope() slot below (an unanchored comment-index item's own
+// menu, prCommentCommandsFor) — kept as a separate callback from
+// `openCommentMenu` (the ordinary block-scoped 'comment' menu) since the two
+// modes build a different command list (home.mjs's openMenu('comment') vs
+// openMenu('prComment')).
+export function InlineComments(state, commentTarget, openCompose, openCommentMenu, openPrCommentMenu) {
   syncComments(state ? state.pr : null)
   // Own explicit, bounded width instead of the earlier "no own width,
   // stretches to the sibling" comment, which never held: a flex-col's
@@ -6200,13 +6306,7 @@ export function InlineComments(state, commentTarget, openCompose, openCommentMen
   return html`
     <div
       class="${() =>
-        // `hidden` for an unanchored comment-index item (isPrCommentScope):
-        // cs.view is empty there by design and the thread itself renders in
-        // the item's own commentDetailCard, so this column would be a bare
-        // fixed-width gap left of the Claude column.
-        (isPrCommentScope() ? 'hidden ' : '') +
-        'relative flex shrink-0 flex-col justify-end gap-2 ' +
-        commentColumnWidthCls()}"
+        'relative flex shrink-0 flex-col justify-end gap-2 ' + commentColumnWidthCls()}"
       style="${() => colWidthStyle(state, widthKey())}"
       data-testid="inline-comments"
       data-col-resize-root
@@ -6218,6 +6318,38 @@ export function InlineComments(state, commentTarget, openCompose, openCommentMen
               () => resetColumnWidth(state, widthKey()),
             )
           : ''}
+      <div class="contents">
+        ${() =>
+          // An unanchored comment-index item (isPrCommentScope) has no code
+          // unit, so cs.view is empty here by design — this used to leave
+          // the whole column a bare fixed-width gap next to the Claude
+          // column, with the item's own thread rendered as a SEPARATE card
+          // in home.mjs's block-column instead (two columns, not one merged
+          // block — reviewer report: "Pr-comments wil ik graag in 1 blok
+          // samen met claude chat"). commentDetailCard now renders HERE
+          // instead — same shared border/bg/items-stretch row as an ordinary
+          // block-scoped comment+Claude pair — with `merged: true` so it
+          // takes this column's own width instead of its usual fixed one.
+          // home.mjs's DetailPanel hides the block-column entirely for this
+          // case (isPrCommentScope), so this is now the ONLY place this
+          // card renders. See "The comment-detail card moved into the
+          // merged comment-claude-row" in comments-panel.md.
+          isPrCommentScope()
+            ? commentDetailCard(cs.scope.prComment, { merged: true, preview: false, openMenu: openPrCommentMenu }).key(
+                // Forces a fresh card whenever the SELECTED comment-index
+                // item changes (never reuse the previous comment's mounted
+                // node/bindings), plus its own status/title, mirroring the
+                // rekey-on-status/title-change reasoning the block-column's
+                // own comment-detail-card key used before this moved here.
+                'pr-comment-detail:' +
+                  cs.scope.prComment.id +
+                  ':' +
+                  cs.scope.prComment.status +
+                  ':' +
+                  (commentTitleOf(cs.scope.prComment) ? 't' : '-'),
+              )
+            : ''}
+      </div>
       ${() =>
         hiddenAboveCount() > 0
           ? moreAboveHint(hiddenAboveCount(), 'comment-more-above', () => {
@@ -7685,7 +7817,14 @@ export function isKiloReview(body) {
 // and start mirroring its replies to GitHub as issue comments.
 export function prWideComments() {
   return cs.list.filter(
-    (c) => (c.kind || c.anchorState === 'orphan') && !isKiloReview(c.body) && !isChatAnchorPlaceholder(c),
+    (c) =>
+      (c.kind || c.anchorState === 'orphan') &&
+      !isKiloReview(c.body) &&
+      // A bare anchor is excluded (see isChatAnchorPlaceholder's own doc
+      // comment) — UNLESS the reviewer already took it over with their own
+      // first reply (firstReviewerReplyOnPlaceholder), in which case it
+      // reads as an ordinary comment everywhere, including here.
+      !(isChatAnchorPlaceholder(c) && !firstReviewerReplyOnPlaceholder(c)),
   )
 }
 
@@ -7723,8 +7862,11 @@ export function indexComments() {
   const out = []
   const seen = new Set()
   for (const c of cs.list) {
-    // A bare Claude-chat anchor never gets a row — see isChatAnchorPlaceholder.
-    if (isChatAnchorPlaceholder(c)) continue
+    // A bare Claude-chat anchor never gets a row (isChatAnchorPlaceholder) —
+    // unless the reviewer already took it over with their own first reply
+    // (firstReviewerReplyOnPlaceholder), in which case it IS a real comment
+    // and falls through to the ordinary prWide/inBlock check below.
+    if (isChatAnchorPlaceholder(c) && !firstReviewerReplyOnPlaceholder(c)) continue
     const prWide = (c.kind || c.anchorState === 'orphan') && !isKiloReview(c.body)
     const inBlock =
       !c.kind &&
@@ -7762,7 +7904,18 @@ export function isOrphanComment(c) {
 export function commentBody(c, startIndex = 0) {
   return () => {
     if (!c) return ''
-    if (isChatAnchorPlaceholder(c)) return CHAT_ANCHOR_NOTE_HTML
+    if (isChatAnchorPlaceholder(c)) {
+      // Taken over by the reviewer's own first reply (see threadMessages'
+      // own doc comment): render THAT text as the body instead of the
+      // "Nog geen eigen comment" note — this is the one root-level
+      // (rather than per-message) commentBody(c, …) call, compactConversation's
+      // own preview line, so it's the one place that still needs this
+      // substitution explicitly; every per-message call (reactionBubble's
+      // commentBody(r, …)) already renders the real reply text on its own.
+      const taken = firstReviewerReplyOnPlaceholder(c)
+      if (taken) return renderMarkdown(taken.body, startIndex, true)
+      return CHAT_ANCHOR_NOTE_HTML
+    }
     const st = threadStatusSentinel(c.body)
     if (st) return statusLineHTML(st)
     return renderMarkdown(c.body, startIndex, true)
@@ -8049,6 +8202,12 @@ export async function sendPrCommentReply(c, body) {
 // exit family as placeComment/postThreadReply; see placeComment's doc
 // comment for the reasoning.
 //
+// It then opens the item's own action menu (prCommentMenuOpener, home.mjs's
+// openMenu('prComment')) right away — the same reviewer request as
+// postThreadReply above ("ik wil het menu zien waar ik kan bijv. resolven"),
+// applied here too since a PR-wide comment's reply has the same "then what"
+// gap.
+//
 // A failed send marks cs.sendFailed('reply:'+c.id) and keeps the typed text
 // recoverable via prReplyDrafts (normally only cleared on success) — see
 // startPrCommentReply, which restores it the next time this item's reply
@@ -8058,6 +8217,7 @@ async function postPrCommentReply(c, body, publish, withHistory) {
   if (!c || !c.runId || !text) return
   cancelPrCommentReply()
   exitPrCommentThread()
+  if (prCommentMenuOpener) prCommentMenuOpener()
   picm.sending = true
   try {
     let res
@@ -8237,6 +8397,16 @@ export function commentDetailCard(c, opts) {
   // visible because it focuses a real reply input (focusThread); this thread
   // has no such input at that point, so without this container ring → looked
   // like it did nothing at all.
+  // merged: rendered inside comments-and-related's own comment-claude-row
+  // (InlineComments, in place of the ordinary inline-comment cards) instead
+  // of home.mjs's block-column — see "The comment-detail card moved into the
+  // merged comment-claude-row" in comments-panel.md. That row already
+  // supplies this card's WIDTH (commentColumnWidthCls(), the same half-share
+  // InlineComments' own cards get, so it lines up with the Claude column
+  // next to it and the resize handle above it) — so this card must drop its
+  // own fixed width/shrink-0 here, it would otherwise fight the parent's
+  // width instead of filling it.
+  const merged = !!(opts && opts.merged)
   return html`
     <div
       class="${() =>
@@ -8250,7 +8420,10 @@ export function commentDetailCard(c, opts) {
         // Widened by 50px on top of the previous 42rem — reviewer request,
         // room for the footer meta line below to stay readable now that it
         // carries the file path that used to sit in its own header pill.
-        'flex w-[calc(42rem+50px)] shrink-0 flex-col gap-3 rounded-2xl border p-4 shadow-sm ' +
+        // Not applied when merged (see above) — the parent already sets the
+        // width there.
+        'flex flex-col gap-3 rounded-2xl border p-4 shadow-sm ' +
+        (merged ? 'w-full ' : 'w-[calc(42rem+50px)] shrink-0 ') +
         (preview
           ? 'border-slate-300 dark:border-zinc-700 opacity-60 '
           : 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30 ') +

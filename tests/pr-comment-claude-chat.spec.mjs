@@ -67,10 +67,13 @@ test('a PR-wide comment-index item shows the ordinary Claude column, and "Chat m
   await expect(page.getByTestId('claude-chat-card')).toBeVisible()
   const compose = page.getByTestId('claude-chat-compose')
   await expect(compose).toBeVisible()
-  // ...and the comments half of that shared card stays out of the way: an
-  // unanchored item has no scoped comment list, its thread lives in the detail
-  // card (isPrCommentScope's `hidden` in InlineComments).
-  await expect(page.getByTestId('inline-comments')).toBeHidden()
+  // ...and the comment-detail card now renders INSIDE this same column
+  // (isPrCommentScope's own slot in InlineComments) instead of a separate
+  // block-column card next to it — the two merge into one visual block, see
+  // "The comment-detail card moved into the merged comment-claude-row" in
+  // comments-panel.md.
+  await expect(page.getByTestId('inline-comments')).toBeVisible()
+  await expect(page.getByTestId('inline-comments').getByTestId('comment-detail-card')).toBeVisible()
 
   // "Chat met Claude" now only ensures the Execution and focuses the composer.
   await page.keyboard.press('Enter')

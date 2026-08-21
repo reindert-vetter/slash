@@ -124,6 +124,10 @@ import RelatedPanel, {
   CodePreviewPanel,
   commentTitleOf,
   enterRelatedFromClaudeChat,
+  isPrCommentScope,
+  firstReviewerReplyOnPlaceholder,
+  setCommentMenuOpener,
+  setPrCommentMenuOpener,
 } from './RelatedPanel.mjs'
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { CallArrowsHost, setCallArrows, resettleCallArrows } from './callArrows.mjs'
@@ -3012,7 +3016,16 @@ function commentBlockItem(comments) {
   // RelatedPanel.mjs) when there is a fresh one — it says in 6 words what the
   // 60-character body snippet below could only start to say. Falls back to that
   // snippet for a comment that has (or needs) no title.
-  const snippet = commentTitleOf(c) || (c.body || '').trim().replace(/\s+/g, ' ').slice(0, 60)
+  // A bare Claude-chat anchor's OWN body is always the fixed
+  // CLAUDE_ANCHOR_PLACEHOLDER sentence — once the reviewer's own first reply
+  // has taken it over (firstReviewerReplyOnPlaceholder), that reply IS the
+  // real comment text and the label must read it, not the placeholder. See
+  // "A taken-over Claude-chat anchor reads as an ordinary comment" in
+  // comments-panel.md.
+  const takenOverReply = firstReviewerReplyOnPlaceholder(c)
+  const snippet =
+    commentTitleOf(c) ||
+    ((takenOverReply ? takenOverReply.body : c.body) || '').trim().replace(/\s+/g, ' ').slice(0, 60)
   // An orphan is a block comment that lost its block (a commit renamed/removed
   // the symbol — see reanchor.go): it gets a row here instead of vanishing, and
   // its fallback label names the block it USED to hang on, so the reviewer can
@@ -6808,7 +6821,12 @@ function isAiComment(c) {
 function commentCommandsFor() {
   const focused = focusedComment()
   const items = []
-  if (!isAiComment(focused) && !isChatAnchorPlaceholder(focused)) {
+  // A still-bare Claude-chat anchor (nothing real behind it yet) has no
+  // resolve/unresolve concept — see isAiComment's own doc comment for the
+  // sibling AI-finding case. Once the reviewer's own first reply has taken
+  // it over (firstReviewerReplyOnPlaceholder), it IS an ordinary open
+  // comment and gets its ordinary Resolve item back.
+  if (!isAiComment(focused) && !(isChatAnchorPlaceholder(focused) && !firstReviewerReplyOnPlaceholder(focused))) {
     items.push(
       isResolvedComment(focused)
         ? {
@@ -11567,6 +11585,14 @@ setReplyPublishMenuOpener(() => openMenu('replyPublish'))
 // (ClaudeChat.mjs) passes {native,x,y} through this exact same opener.
 setClaudeMenuOpener((opts) => openMenu('claude', opts))
 
+// Same downward-injection shape, for postThreadReply/postPrCommentReply
+// (RelatedPanel.mjs): once a reply actually lands, open the row's own action
+// menu instead of leaving the reviewer to navigate there by hand. See "A
+// reply opens the comment's own menu instead of releasing to the diff" in
+// comments-panel.md.
+setCommentMenuOpener(() => openMenu('comment'))
+setPrCommentMenuOpener(() => openMenu('prComment'))
+
 // Same downward-injection shape, for the other direction a comment write needs
 // to reach into this module: a freshly placed PR-wide comment must land the
 // sidebar selection on its own brand-new index row. That row is created by the
@@ -14118,10 +14144,11 @@ function DetailPanel(state) {
           // `hidden` (display:none), not an empty column: an empty flex child
           // would still cost one of <main>'s own gap-4 gaps. Whole-value
           // binding per the arrow.js attribute rule. Its dependencies are
-          // cs.prWideCompose and (via commentAnchorColumnHidden) the SELECTION
-          // plus state.drill/focusLevel — none of which a change/gran step
-          // inside a card touches, so this still adds no per-step attribute
-          // mutation (see navigate.spec.mjs's flicker assertion).
+          // cs.prWideCompose and (via commentAnchorColumnHidden/
+          // isPrCommentScope) the SELECTION plus state.drill/focusLevel —
+          // none of which a change/gran step inside a card touches, so this
+          // still adds no per-step attribute mutation (see navigate.spec.mjs's
+          // flicker assertion).
           // `overflow-y-auto` (a VISIBLE scrollbar — same reasoning as the
           // Claude chat thread's own, see claude-chat-panel.md) makes this
           // column scroll independently of its neighbours: <main>'s own
@@ -14133,8 +14160,17 @@ function DetailPanel(state) {
           // (the comments/Claude chat/code-preview/Onderliggende-code
           // column), which is where the reviewer-reported tall content
           // actually stacks.
+          //
+          // isPrCommentScope() (an UNANCHORED comment-index item — a PR-wide
+          // comment, an orphan, or an ai_warning with no block) hides this
+          // column entirely too, unconditionally (not gated on focusLevel the
+          // way commentAnchorColumnHidden is): its own commentDetailCard now
+          // renders inside comments-and-related's merged comment-claude-row
+          // instead (InlineComments), so there is nothing left to show here —
+          // see "The comment-detail card moved into the merged
+          // comment-claude-row" in comments-panel.md.
           'flex h-full min-h-0 shrink-0 flex-col gap-3 overflow-y-auto' +
-          (isPrWideComposing() || commentAnchorColumnHidden() ? ' hidden' : '')}"
+          (isPrWideComposing() || commentAnchorColumnHidden() || isPrCommentScope() ? ' hidden' : '')}"
         data-testid="block-column"
       >
       ${() => {
@@ -14142,8 +14178,10 @@ function DetailPanel(state) {
         // block/diff to show at all — the composer is about the PR itself.
         // ← closes it and everything comes straight back (exitRelated clears
         // the flag). See "Placing a PR-wide comment yourself" in
-        // comments-panel.md.
-        if (isPrWideComposing()) return []
+        // comments-panel.md. Same for an unanchored comment-index item
+        // (isPrCommentScope) — the wrapper above is already `hidden` for it,
+        // so there is nothing to build here either.
+        if (isPrWideComposing() || isPrCommentScope()) return []
         const sel = state.selected
         // Subscribe this binding to codeVersion so it re-runs when a block's code
         // loads (ensureCode bumps it). That re-run re-reads b.code for each card's
@@ -14887,6 +14925,11 @@ function DetailPanel(state) {
                 // {native,x,y} — see "The right-click context menu" in
                 // command-palette.md), same shape as every other onOpenMenu.
                 (opts) => openMenu('comment', opts),
+                // The merged detail-card slot's own menu (isPrCommentScope,
+                // see InlineComments' own doc comment) — the exact same menu
+                // Enter already opens on this row (selectedComment()'s branch
+                // in onKeydown), a comment-index item is never stop 1.
+                (opts) => openMenu('prComment', opts),
               ).key('inline-comments')}
             ${() =>
               // A vertical dashed separator (not the horizontal connector

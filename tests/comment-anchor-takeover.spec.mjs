@@ -60,7 +60,13 @@ test('typing a first real comment on a line that only has a Claude conversation 
   // anchor's thread, no second, unrelated comment was created next to it.
   await expect(page.getByTestId('comment-item')).toHaveCount(1)
   const item = page.getByTestId('comment-item')
-  await expect(item).toContainText('Claude gesprek')
+  // The reviewer's own reply — the only reaction on this thread — now reads
+  // as an ordinary comment instead of "Claude gesprek": this reply IS the
+  // reviewer's real first comment, not a reply to the placeholder note (see
+  // "A taken-over Claude-chat anchor reads as an ordinary comment" in
+  // comments-panel.md). No stray "Claude gesprek" left anywhere.
+  await expect(item).not.toContainText('Claude gesprek')
+  await expect(item).toContainText('Dit moet echt anders.')
   await item.click()
   await expect(page.getByTestId('reaction-bubble').last()).toContainText('Dit moet echt anders.')
 })

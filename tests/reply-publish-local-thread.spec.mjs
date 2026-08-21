@@ -64,23 +64,47 @@ test.describe('Publish a local comment thread to GitHub', () => {
   }
 
   async function openThread(page, body) {
+    // The thread no longer collapses after a reply (see typeReply's own doc
+    // comment) — once its reply field is already on screen, dismissing the
+    // action menu that opened on top of it (Escape) leaves DOM focus
+    // elsewhere, so re-click the field itself directly rather than the row
+    // (which toComment() would otherwise re-focus, but only on a real
+    // cs.focus transition, and there isn't one here any more).
+    const compose = page.getByTestId('reaction-compose')
+    if (await compose.count()) {
+      await compose.click()
+      await expect(compose).toBeFocused()
+      return
+    }
     const row = page.getByTestId('inline-comments').getByTestId('comment-item').filter({ hasText: body })
     await expect(row).toBeVisible()
     await row.click()
     await expect(page.getByTestId('reaction-compose')).toBeFocused()
   }
 
-  // Types a reply and submits it from the field itself. A reply that actually
-  // sends (not just opens the publish menu — see needsPublishChoice) closes
-  // the thread back to the diff IMMEDIATELY (optimistic exit, see
-  // postThreadReply in RelatedPanel.mjs) — a deliberate, later reversal of
-  // "the thread stays open after a reply". `body` re-opens the thread first
-  // if an earlier send already closed it.
+  // Types a reply and submits it from the field itself. A reply that
+  // actually sends (not just opens the publish menu — see
+  // needsPublishChoice) opens the comment's own action menu IMMEDIATELY
+  // (optimistic exit, see postThreadReply in RelatedPanel.mjs) instead of
+  // releasing to the diff. `body` re-opens the thread first if an earlier
+  // send already closed the field via that same menu's own navigation.
   async function typeReply(page, body, text) {
     if (!(await page.getByTestId('reaction-compose').count())) await openThread(page, body)
     const field = page.getByTestId('reaction-compose')
     await field.fill(text)
     await field.press('Enter')
+  }
+
+  // Once a reply has actually gone out (as opposed to merely opening the
+  // publish-choice menu, which the caller inspects itself), its own action
+  // menu (commentMenuOpener) is on screen — dismiss it before interacting
+  // with the thread again, mirroring how a reviewer would just press
+  // Escape/pick nothing and move on.
+  async function dismissReplyMenu(page) {
+    const menu = page.getByTestId('command-menu')
+    await expect(menu).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(menu).toHaveCount(0)
   }
 
   test('the send asks first (GitHub-only), and stops asking once the thread is on GitHub', async ({ page }) => {
@@ -100,10 +124,10 @@ test.describe('Publish a local comment thread to GitHub', () => {
     await expect(rows.nth(1)).toContainText('Alleen mijn antwoord op GitHub')
     await expect(rows.nth(2)).toContainText('Ook de AI-melding op GitHub')
     // The default (2nd item) publishes just the typed reply as the thread's
-    // new GitHub root — sending it closes the thread immediately (optimistic
-    // exit), so reopen it to verify the reply landed.
+    // new GitHub root — sending it opens the comment's own action menu right
+    // after (dismiss it), then reopen the thread to verify the reply landed.
     await page.keyboard.press('Enter')
-    await expect(menu).toHaveCount(0)
+    await dismissReplyMenu(page)
     await openThread(page, aiBody)
     await expect(page.getByTestId('comment-thread')).toContainText('eerste reactie')
 
@@ -119,10 +143,11 @@ test.describe('Publish a local comment thread to GitHub', () => {
       })
       .toBeGreaterThan(0)
 
-    // So the next reply goes straight out — no menu at all, and it too
-    // closes the thread immediately.
+    // So the next reply goes straight out — no PUBLISH-choice menu at all —
+    // but its own action menu still opens right after, same as any other
+    // reply.
     await typeReply(page, aiBody, 'tweede reactie')
-    await expect(menu).toHaveCount(0)
+    await dismissReplyMenu(page)
     await openThread(page, aiBody)
     await expect(page.getByTestId('comment-thread')).toContainText('tweede reactie')
   })
@@ -148,7 +173,9 @@ test.describe('Publish a local comment thread to GitHub', () => {
     await expect(menu.getByTestId('command-row').nth(1)).toContainText('Zonder de eerdere 1 bericht')
     await expect(menu.getByTestId('command-row').nth(2)).toContainText('Met de eerdere 1 bericht')
     await menu.getByTestId('command-row').nth(2).click()
-    await expect(menu).toHaveCount(0)
+    // The submenu's own selection sends — its own action menu opens right
+    // after, same as any other completed reply.
+    await dismissReplyMenu(page)
     await openThread(page, aiBody)
     await expect(page.getByTestId('comment-thread')).toContainText('eerste lokale reactie')
     await expect(page.getByTestId('comment-thread')).toContainText('tweede reactie, nu publiek')
@@ -192,6 +219,12 @@ test.describe('Publish a local comment thread to GitHub', () => {
     if (pane) expect(a.x).toBeGreaterThanOrEqual(pane.x + pane.width - 10)
 
     await page.keyboard.press('Enter') // publish just the reply, the default
+    // The send completes and opens the comment's own action menu right
+    // after (see "A reply opens the comment's own menu..." in
+    // comments-panel.md) — dismiss it; this test only cares about the
+    // PUBLISH-choice menu's own position, asserted above.
+    await expect(menu).toBeVisible()
+    await page.keyboard.press('Escape')
     await expect(menu).toHaveCount(0)
   })
 

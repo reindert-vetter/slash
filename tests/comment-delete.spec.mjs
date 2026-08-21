@@ -76,7 +76,7 @@ test.describe('PR Review Tree — delete a comment', () => {
       .toBe(false)
   })
 
-  test('Enter with a typed reply sends the reply instead of opening the delete menu', async ({
+  test('Enter with a typed reply sends the reply, then opens its own action menu (not a stray delete)', async ({
     page,
   }, testInfo) => {
     const pr = seededPr(testInfo)
@@ -95,8 +95,16 @@ test.describe('PR Review Tree — delete a comment', () => {
 
     await page.keyboard.press('Enter')
 
-    // No delete menu — the reply field's own Enter handler (sendReaction) ran.
-    await expect(page.getByTestId('command-menu')).not.toBeVisible()
+    // The reply field's own Enter handler (sendReaction) ran — the reply is
+    // sent — and its own action menu opens right away (see "A reply opens
+    // the comment's own menu instead of releasing to the diff" in
+    // comments-panel.md); the top row is "Resolve comment", never a
+    // straight-to-delete action.
+    const menu = page.getByTestId('command-menu')
+    await expect(menu).toBeVisible()
+    // "Sluit menu" pinned first, "Resolve comment" the default (2nd) item —
+    // never a straight-to-delete action.
+    await expect(page.getByTestId('command-row').nth(1)).toContainText('Resolve comment')
     await expect
       .poll(async () => {
         const list = await (await page.request.get('/api/comments?pr=' + pr)).json()
