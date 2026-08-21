@@ -7178,9 +7178,18 @@ export function relatedColumnWidthCls() {
 // around it (mirrors nestedChipColumn's own connector, which also has none).
 const COMMENT_CLAUDE_CONNECTOR_REM = 0.75
 
+// RAIL_WIDTH_REM — the fixed width of the collapsed-sibling rail
+// (`railButtonHTML`'s own `w-14`, src/collapsedRail.mjs). Kept as its own
+// named constant rather than a bare `3.5` because commentColumnWidthCls/
+// claudeColumnWidthCls below subtract it explicitly (see their own doc
+// comment) — if `railButtonHTML`'s width class ever changes, this must
+// change with it (no automatic link between the two; a Tailwind class
+// string can't be read back into a number at build time here).
+const RAIL_WIDTH_REM = 3.5
+
 // columnPairScale — the shared "how much of relatedColumnWidthCls()'s own
 // clamp does THIS half get" read behind commentColumnWidthCls/
-// claudeColumnWidthCls below. `sideCollapsedToRail` is the SIBLING's own
+// claudeColumnWidthCls below. `siblingCollapsedToRail` is the SIBLING's own
 // collapse question (claudeColumnCollapsedToRail for the comment side's
 // scale, commentColumnCollapsedToRail for the Claude side's) — never this
 // side's own, a column collapsed to a rail doesn't read its own width class
@@ -7190,17 +7199,36 @@ const COMMENT_CLAUDE_CONNECTOR_REM = 0.75
 // cases: a wide (`!state.commentClaudeNarrow`, at/above
 // COMMENT_CLAUDE_WIDE_BREAKPOINT_PX — home.mjs) screen — reviewer request:
 // "maak de chat blokken 2x zo breed (dan past alles heel goed)" on a screen
-// with room to spare, so BOTH halves double from the halved split below
-// rather than ever collapsing one — or a narrow screen where the sibling
-// has actually collapsed to its rail, so this half reclaims the freed width
-// (same "reclaims horizontal room for the focused column" reasoning
-// collapsedColumnHTML's own doc comment already states for the drilled-
-// column rail, home.mjs). Otherwise (narrow screen, neither side focused,
-// "zoals nu") scale stays 1/2 — the original, documented halved split.
-function columnPairScale(state, sideCollapsedToRail) {
+// with room to spare, so BOTH halves double from the halved split below —
+// or a narrow screen where the sibling has actually collapsed to its rail.
+// Otherwise (narrow screen, neither side focused, "zoals nu") scale stays
+// 1/2 — the original, documented halved split.
+function columnPairScale(state, siblingCollapsedToRail) {
   if (!state || !state.commentClaudeNarrow) return 1
-  if (sideCollapsedToRail) return 1
+  if (siblingCollapsedToRail) return 1
   return 1 / 2
+}
+
+// The TOTAL width of comment-claude-row (this half + connector + the
+// other half, whether that other half is itself rendered via the width
+// formula or as a fixed-width rail) must stay IDENTICAL to the rest state's
+// own total — reviewer report, with a screenshot: on a laptop, focusing the
+// comment side correctly collapsed Claude to its rail, but the whole block
+// then read as WIDER than it is at rest, because the expanded side used to
+// simply reclaim ALL the freed width (scale 1, the same as the wide-screen
+// case) instead of only the sliver the rail actually gave up.
+//
+// So a collapsed sibling must subtract BOTH pieces its own rail markup no
+// longer accounts for: the connector (0.75rem — in the rest/wide state one
+// side's own formula call already subtracts this once, see below, but a
+// collapsed sibling contributes NOTHING via the formula any more, so
+// whichever side is left expanding has to carry the full connector cost
+// itself) AND the rail's own fixed width (RAIL_WIDTH_REM). This holds for
+// EITHER side collapsing — the subtraction is the same regardless of which
+// half is currently the rail, which is why both branches below add the same
+// pair of terms.
+function railReclaimSubtractRem(siblingCollapsedToRail) {
+  return siblingCollapsedToRail ? COMMENT_CLAUDE_CONNECTOR_REM + RAIL_WIDTH_REM : 0
 }
 
 // commentColumnWidthCls / claudeColumnWidthCls — read the SAME chars
@@ -7209,26 +7237,35 @@ function columnPairScale(state, sideCollapsedToRail) {
 // comment-claude-row) and must therefore stay the same width as each other
 // WHENEVER they are both actually shown at column width (i.e. whenever
 // neither is collapsed to a rail, see claudeColumnCollapsedToRail/
-// commentColumnCollapsedToRail above). The connector's width comes off the
-// comment side only (see the inner row in home.mjs). This keeps the
-// original documented invariant —
-//   commentColumnWidthCls() + 0.75rem(connector) + claudeColumnWidthCls()
-//     === relatedColumnWidthCls()
-// — exactly ONLY in that "neither side focused, narrow screen" default case
-// (both scale 1/2); a wide screen or an active rail-collapse deliberately
-// widen one or both halves past that sum instead (see columnPairScale
-// above) — an approved, documented departure from the original invariant,
-// not a regression of it.
+// commentColumnCollapsedToRail above). The connector's own 0.75rem comes
+// off the comment side's own base subtraction (below) in every state; a
+// collapsed sibling additionally piles the connector + the rail's own width
+// onto whichever side is left expanding (railReclaimSubtractRem above), so
+// the row's TOTAL width is the SAME invariant in every state, not just the
+// original one:
+//   (this half's width) + 0.75rem(connector) + (the other half's width, or
+//   RAIL_WIDTH_REM if it's a rail) === relatedColumnWidthCls()
+// — true in the rest state (both scale 1/2, clean split), the wide-screen
+// state (both scale 1, no rail ever renders), AND the collapsed-sibling
+// state (this half's own subtraction absorbs exactly the rail's width plus
+// the connector, so growing to scale 1 does NOT also grow the row's total —
+// see railReclaimSubtractRem's own doc comment for the "why" of that exact
+// pair of terms).
 export function commentColumnWidthCls(state) {
-  return relatedWidthCls(
-    relatedGrowthChars(),
-    columnPairScale(state, claudeColumnCollapsedToRail(state)),
-    COMMENT_CLAUDE_CONNECTOR_REM,
-  )
+  const siblingCollapsed = claudeColumnCollapsedToRail(state)
+  const subtractRem = siblingCollapsed
+    ? railReclaimSubtractRem(siblingCollapsed)
+    : COMMENT_CLAUDE_CONNECTOR_REM
+  return relatedWidthCls(relatedGrowthChars(), columnPairScale(state, siblingCollapsed), subtractRem)
 }
 
 export function claudeColumnWidthCls(state) {
-  return relatedWidthCls(relatedGrowthChars(), columnPairScale(state, commentColumnCollapsedToRail(state)))
+  const siblingCollapsed = commentColumnCollapsedToRail(state)
+  return relatedWidthCls(
+    relatedGrowthChars(),
+    columnPairScale(state, siblingCollapsed),
+    railReclaimSubtractRem(siblingCollapsed),
+  )
 }
 
 // relatedCard renders one child block: a header (label + file:line + relation

@@ -2511,19 +2511,46 @@ shape, which does need a reactive trigger.
   collapses while `cs.focus` is `null` (nothing in this row focused) — "zoals
   nu" — nor on a wide screen (see below).
 
-**Width**: `columnPairScale(state, siblingCollapsed)` replaces the old fixed
-`1/2` scale behind `commentColumnWidthCls`/`claudeColumnWidthCls`
-(`RelatedPanel.mjs`) — `scale = 1` (the SAME full clamp `relatedColumnWidthCls`
-itself uses) on a wide screen (`!state.commentClaudeNarrow`, for BOTH halves
-at once — "2x zo breed" is literally double the halved split) **or**
-whenever the SIBLING has collapsed to its rail (this half reclaims the freed
-width, same "reclaims horizontal room for the focused column" reasoning
-`collapsedColumnHTML`'s own doc comment already states); `scale = 1/2`
-(unchanged) only in the "narrow screen, neither side focused" default case.
-The documented invariant `commentColumnWidthCls() + connector +
-claudeColumnWidthCls() === relatedColumnWidthCls()` therefore only holds in
-that one default case now — an approved, documented departure elsewhere, not
-a regression of it.
+**Width — the row's TOTAL stays the same in every state, including a
+collapsed sibling.** An earlier cut of this had the expanded half simply
+RECLAIM the width the collapsed rail gave up (`scale = 1`, same as the
+wide-screen case) — reviewer report, with a screenshot: on a laptop,
+focusing the comment side correctly collapsed Claude to its rail, but the
+whole merged block then read as noticeably WIDER than the same block at
+rest (nothing focused). His own words: "maak in deze situatie het net zo
+breed als dat het niet actief is op een laptop (gaat over totale blok)". The
+row must stay exactly as wide as the rest state, not grow just because one
+half is now a rail.
+
+`columnPairScale(state, siblingCollapsedToRail)` still decides the SCALE
+(`1/2` at rest, `1` on a wide screen OR whenever the sibling has collapsed
+to its rail — "2x zo breed" is literally double the halved split), but scale
+alone is no longer enough: `railReclaimSubtractRem(siblingCollapsedToRail)`
+(`RelatedPanel.mjs`) additionally subtracts `COMMENT_CLAUDE_CONNECTOR_REM +
+RAIL_WIDTH_REM` (the rail's own fixed `w-14`/3.5rem, named next to the
+connector's own constant) from whichever half is left expanding — the
+collapsed sibling contributes NOTHING toward the connector's cost any more
+(it's a fixed-width rail, not a `relatedWidthCls()` call), so the ONE
+expanding half has to absorb both the connector AND the rail's width, not
+just widen freely. Verified algebraically (clamp scales homogeneously and
+shifts additively, `relatedWidthCls`'s own doc comment) and numerically
+across several `chars` values: `(expanding half) + 0.75rem(connector) +
+RAIL_WIDTH_REM` comes out EXACTLY equal to `relatedColumnWidthCls()` (the
+`scale=1` clamp), which is also exactly the rest state's own total
+(`commentColumnWidthCls() + connector + claudeColumnWidthCls()`, both at
+`scale=1/2`) and the wide-screen total (both at `scale=1`, no rail ever
+renders there). So the documented invariant is now, in every one of the
+three states —
+
+    (comment half, or RAIL_WIDTH_REM if it's a rail)
+      + 0.75rem(connector)
+      + (Claude half, or RAIL_WIDTH_REM if it's a rail)
+      === relatedColumnWidthCls()
+
+not just in the narrow-and-unfocused default case as an earlier version of
+this section claimed. See `commentColumnWidthCls`/`claudeColumnWidthCls`/
+`columnPairScale`/`railReclaimSubtractRem`'s own doc comments in
+`RelatedPanel.mjs` for the exact terms.
 
 **Rendering**: `ClaudeChatPanel`/`InlineComments` (now split into the
 always-called wrapper plus a private `inlineCommentsCardHTML`) each toggle

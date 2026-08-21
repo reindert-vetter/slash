@@ -113,16 +113,31 @@ test('at 1690px (the reviewer\'s own MacBook viewport), the unfocused half of co
   // width, exactly as in the resting-split test above.
   await expect(page.getByTestId('claude-chat-column')).toBeVisible()
   await expect(page.getByTestId('comment-claude-rail')).toHaveCount(0)
+  const restCommentBox = await page.getByTestId('inline-comments').boundingBox()
+  const restClaudeBox = await page.getByTestId('claude-chat-column').boundingBox()
+  const restConnectorBox = await page.getByTestId('comment-claude-connector').boundingBox()
+  // A span (sum of the three widths), not an x-position subtraction — robust
+  // to whatever the row's own absolute left edge happens to be.
+  const restTotal = restCommentBox.width + restConnectorBox.width + restClaudeBox.width
 
   // Click into the comment/thread — the Claude half collapses to its rail.
   await item.click()
   const claudeRail = page.getByTestId('claude-chat-rail')
   await expect(claudeRail).toBeVisible()
   await expect(page.getByTestId('claude-chat-column')).toHaveCount(0)
-  // The comment half reclaims the freed width instead of staying halved.
+  // The comment half grows past its bare half-share (it's the only one
+  // still rendered via the width formula)...
   const commentsBoxCollapsed = await page.getByTestId('inline-comments').boundingBox()
   const railBox = await claudeRail.boundingBox()
   expect(commentsBoxCollapsed.width).toBeGreaterThan(railBox.width * 3)
+  // ...but the ROW'S TOTAL WIDTH must stay exactly what it was at rest —
+  // reviewer report (screenshot): the comment half used to reclaim ALL the
+  // width the rail gave up (same as the wide-screen "2x" case), leaving the
+  // whole block wider on a laptop than in the unfocused rest state. It may
+  // only grow by exactly (bare half-share − rail width), never more. See
+  // railReclaimSubtractRem's doc comment in RelatedPanel.mjs.
+  const collapsedTotal = commentsBoxCollapsed.width + restConnectorBox.width + railBox.width
+  expect(collapsedTotal).toBeCloseTo(restTotal, 0)
 
   // Clicking the rail hands the keyboard to Claude, which now expands, and
   // the comment half collapses to ITS rail instead — the mirror direction.
