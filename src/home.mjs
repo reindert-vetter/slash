@@ -7847,17 +7847,24 @@ function blockShortcutHints() {
   // sdf... als het een call is, laat dan alleen s, d, f omschrijven, de rest
   // mag dan weg" — so ←→/a/Space/Enter drop out entirely there, and each of
   // s/d/f gets its OWN entry+label ("omschrijf... los van elkaar") instead
-  // of one combined 'f/d/s' key under a single "zoom" label. `d` still only
-  // appears while genuinely usable (dHintUsable, unchanged reasoning/scope).
+  // of one combined 'f/d/s' key under a single "zoom" label. Listed in
+  // KEYBOARD order (reviewer follow-up: "dit moet in volgorde van je
+  // keyboard: s d f") — s, then d, then f — not in "which key does what"
+  // order. `d` still only appears while genuinely usable (dHintUsable,
+  // unchanged reasoning/scope).
   if (currentGran() !== 'group') {
-    const items = [{ key: 'f', label: 'inzoomen' }]
+    const items = [{ key: 's', label: 'uitzoomen' }]
     if (dHintUsable()) items.push({ key: 'd', label: 'terug' })
-    items.push({ key: 's', label: 'uitzoomen' })
+    items.push({ key: 'f', label: 'inzoomen' })
     return items
   }
+  // At 'group', `s` is ALSO a no-op (already the coarsest level — the same
+  // reasoning as `d`'s own dHintUsable gate above) — reviewer follow-up:
+  // "bij een groep mag s weg" — so the combined key drops to just `f`
+  // (still labelled 'zoom': it's the only zoom key left that does anything).
   return [
     { key: '←→', label: 'kolom' },
-    { key: 'f/s', label: 'zoom' },
+    { key: 'f', label: 'zoom' },
     { key: 'a', label: 'weergave' },
     { key: 'Space', label: 'goedkeuren + door' },
     { key: 'Enter', label: 'menu' },

@@ -13,9 +13,14 @@ import { test, expect, leaveSearchBox, seededPr } from './_fixtures.mjs'
 // own entry instead of one combined 'f/d/s' key (reviewer follow-up: "als je
 // line hebt geselecteerd, laat dan niets zien behalve sdf... omschrijf sd, f
 // dan los van elkaar... als het een call is, laat dan alleen s, d, f
-// omschrijven, de rest mag dan weg"). `d` still only shows up while it would
-// actually do something (dHintUsable — never at the coarsest 'group' level,
-// which is the one stand that keeps the fuller ←→/a/Space/Enter set).
+// omschrijven, de rest mag dan weg"), listed in KEYBOARD order — s, d, then f
+// (reviewer follow-up: "dit moet in volgorde van je keyboard: s d f... en bij
+// call moet de volgorde zijn s d f"). `d` still only shows up while it would
+// actually do something (dHintUsable — never at the coarsest 'group' level).
+// At 'group' the combined zoom key drops `s` too (reviewer follow-up: "bij
+// een groep mag s weg" — s is a no-op there, same reasoning as d), leaving
+// only `f` under the 'zoom' label; 'group' is otherwise the one stand that
+// keeps the fuller ←→/a/Space/Enter set.
 test.describe('Contextual shortcut-hint line', () => {
   test('list mode and diff mode show different hints, and switching back and forth never leaves the OTHER mode\'s text behind', async ({
     page,
@@ -37,13 +42,18 @@ test.describe('Contextual shortcut-hint line', () => {
     await page.keyboard.press('ArrowRight') // list -> diff
     await expect(hints).toContainText('zoom')
     await expect(hints).not.toContainText('PR-menu')
+    // 'group' keeps only `f` under the 'zoom' label — `s` dropped, a no-op
+    // at the coarsest level (reviewer follow-up: "bij een groep mag s weg").
+    await expect(hints).not.toContainText('f/s')
 
     await page.keyboard.press('ArrowLeft') // diff -> list
     await expect(hints).toContainText('PR-menu')
     await expect(hints).not.toContainText('zoom')
   })
 
-  test('at line/call granularity only s/d/f show, each its own hint, no other keys', async ({ page }) => {
+  test('at line/call granularity only s/d/f show, each its own hint, no other keys, in keyboard order', async ({
+    page,
+  }) => {
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
     await page.locator('[data-idx="1"]').click()
@@ -60,6 +70,11 @@ test.describe('Contextual shortcut-hint line', () => {
     await expect(hints).toContainText('inzoomen')
     await expect(hints).toContainText('terug')
     await expect(hints).toContainText('uitzoomen')
+
+    // Keyboard order (reviewer follow-up: "dit moet in volgorde van je
+    // keyboard: s d f"), not "which key fires first when zooming in".
+    const visibleHints = hints.locator('[data-testid="shortcut-hint"]:visible kbd')
+    await expect(visibleHints).toHaveText(['s', 'd', 'f'])
   })
 
   test('only the active card shows a hint line, never the look-ahead preview', async ({ page }) => {

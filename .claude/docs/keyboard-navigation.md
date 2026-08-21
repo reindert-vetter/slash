@@ -1465,9 +1465,9 @@ reliable about. Regression test: `tests/shortcut-hints.spec.mjs` (the
 list↔diff round trip, the active-card-only assertion, and the
 comment/Claude column's own hints).
 
-### At `'line'`/`'call'` granularity, s/d/f are the ENTIRE hint line
+### At `'line'`/`'call'` granularity, s/d/f are the ENTIRE hint line, in KEYBOARD order
 
-Reviewer follow-up, in two steps:
+Reviewer follow-up, in three steps:
 
 1. "laat d niet zien als je niet kan gebruiken (als een groep is
    geselecteerd)" — `dKey()` ultimately falls through to `setGran(-1)`/
@@ -1484,23 +1484,29 @@ Reviewer follow-up, in two steps:
    omschrijf sd, f dan los van elkaar... als het een call is, laat dan
    alleen s, d, f omschrijven, de rest mag dan weg" — at `'line'` or
    `'call'` (`currentGran() !== 'group'`), `blockShortcutHints()` returns
-   ONLY `f`/`d`/`s`, each its OWN `{key, label}` entry (`'inzoomen'`/
-   `'terug'`/`'uitzoomen'`) instead of one combined `'f/d/s'` key under a
+   ONLY `s`/`d`/`f`, each its OWN `{key, label}` entry (`'uitzoomen'`/
+   `'terug'`/`'inzoomen'`) instead of one combined `'f/d/s'` key under a
    single "zoom" label — every other hint (`←→` kolom, `a` weergave,
    `Space` goedkeuren, `Enter` menu) drops out entirely at those two
    granularities. `d`'s own entry still only appears while `dHintUsable()`
    holds (in practice always true at `'line'`/`'call'` — `d` is never a
    no-op there, only at `'group'`, see point 1).
+3. "dit moet in volgorde van je keyboard: s d f... en bij call moet de
+   volgorde zijn s d f" — a later follow-up reordered the three entries to
+   match their physical key row (`s`, `d`, `f`, left to right), not the
+   "which one fires first when zooming in" order the code originally used
+   (`f`, `d`, `s`). Same three entries, same conditions (`d` still gated by
+   `dHintUsable()`), only the array order in `blockShortcutHints()` changed.
 
-Only `'group'` keeps the fuller set (`←→`/`f`+`s` combined under `'zoom'`
-— `d` dropped, per point 1 — /`a`/`Space`/`Enter`): the reviewer's request
-was specifically about `'line'`/`'call'`, and `'group'` is the one stand
-where the OTHER actions (switching columns, the view toggle, approving,
-opening the menu) are still exactly as relevant as the zoom keys — nothing
-in the request said to drop those there too. `f` is never a no-op at any
+Only `'group'` keeps the fuller set (`←→`/`a`/`Space`/`Enter`, plus a zoom
+key): `d` is dropped there per point 1, and the reviewer's own further
+follow-up — "bij een groep mag s weg" — extends that SAME no-op reasoning to
+`s`: at `'group'` (the coarsest level) zooming out is a no-op exactly like
+stepping back is, so `s` drops out too, leaving only `f` under the `'zoom'`
+label (previously the combined `'f/s'` key). `f` is never a no-op at any
 granularity (it always refines, or at the finest level steps to/flows into
-the next call) and `s`'s own occasional no-op at `'group'` was never
-flagged, so `s` stays listed unconditionally wherever it appears.
+the next call), which is why it is the one zoom key that survives at every
+stand, alone at `'group'` and reordered to the front at `'line'`/`'call'`.
 
 **Only the active card, confirmed on request** ("ik wil trouwens die hints
 alleen zien als de blok actief/geselecteerd is") — already the design from
