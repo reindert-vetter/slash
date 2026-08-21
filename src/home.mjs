@@ -124,11 +124,12 @@ import RelatedPanel, {
   CodePreviewPanel,
   commentTitleOf,
   enterRelatedFromClaudeChat,
-  isPrCommentScope,
   firstReviewerReplyOnPlaceholder,
   setCommentMenuOpener,
   setPrCommentMenuOpener,
+  commentClaudeShortcutHints,
 } from './RelatedPanel.mjs'
+import { ShortcutHintBar } from './shortcutHints.mjs'
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { CallArrowsHost, setCallArrows, resettleCallArrows } from './callArrows.mjs'
 import { setPrRepo } from './prContext.mjs'
@@ -7780,6 +7781,53 @@ function isActiveCard(b) {
   return b === curBlock()
 }
 
+// unanchoredCommentSelected — this file's OWN mirror of RelatedPanel's
+// isPrCommentScope(), computed directly from focusedBlock() rather than by
+// delegating to it. Deliberately NOT calling isPrCommentScope() here:
+// cs.scope is reassigned on every f/d/s granularity step (the commentScope
+// watch's own deps include state.change/gran, needed so RelatedPanel's
+// comment filtering follows the cursor within an ordinary block) — a DOM
+// class-attribute binding that reactively reads isPrCommentScope() therefore
+// re-writes (and gets flagged as a mutation) on every such step even for an
+// ordinary block, where the boolean itself never actually changes. Regression
+// caught by tests/navigate.spec.mjs's "only patches the highlight, not the
+// whole card" — see .claude/docs/comments-panel.md's own note on this.
+function unanchoredCommentSelected() {
+  const b = focusedBlock()
+  return !!(b && b.kind === 'comment')
+}
+
+// blockShortcutHints — the contextual key-hint line under the active diff
+// card (ShortcutHintBar, Block.mjs) — reviewer request: "onder elke kaart
+// wil ik een lijn met hints wat je op dat moment voor keys kan typen".
+// Deliberately trimmed to the handful of keys most reviewers actually reach
+// for, not an exhaustive transcription of every documented micro-state (see
+// .claude/docs/keyboard-navigation.md for the full picture) — a card this
+// dense would defeat the point of a quick hint line. Empty once the keyboard
+// has moved into the related panel (relatedActive()): that panel shows its
+// own hints instead (see RelatedPanel.mjs's commentClaudeShortcutHints).
+function blockShortcutHints() {
+  if (relatedActive()) return []
+  if (state.mode === 'list') {
+    return [
+      { key: '↑↓', label: 'navigeren' },
+      { key: '→', label: 'in diff/thread' },
+      { key: 'Enter', label: 'menu' },
+      { key: 'Space', label: 'goedkeuren + door' },
+      { key: '/', label: 'PR-menu' },
+    ]
+  }
+  return [
+    { key: '↑↓', label: 'regel/groep' },
+    { key: '←→', label: 'kolom' },
+    { key: 'f/d/s', label: 'zoom' },
+    { key: 'a', label: 'weergave' },
+    { key: 'Shift+↑↓', label: 'selecteren' },
+    { key: 'Space', label: 'goedkeuren + door' },
+    { key: 'Enter', label: 'menu' },
+  ]
+}
+
 // topLoadingActive drives TopLoadingBar (a fixed strip at the very top of the
 // screen): true whenever the currently active top-level card's code hasn't
 // arrived yet (`undefined` = not requested yet, `null` = ensureCode's fetch is
@@ -14170,7 +14218,7 @@ function DetailPanel(state) {
           // see "The comment-detail card moved into the merged
           // comment-claude-row" in comments-panel.md.
           'flex h-full min-h-0 shrink-0 flex-col gap-3 overflow-y-auto' +
-          (isPrWideComposing() || commentAnchorColumnHidden() || isPrCommentScope() ? ' hidden' : '')}"
+          (isPrWideComposing() || commentAnchorColumnHidden() || unanchoredCommentSelected() ? ' hidden' : '')}"
         data-testid="block-column"
       >
       ${() => {
@@ -14181,7 +14229,7 @@ function DetailPanel(state) {
         // comments-panel.md. Same for an unanchored comment-index item
         // (isPrCommentScope) — the wrapper above is already `hidden` for it,
         // so there is nothing to build here either.
-        if (isPrWideComposing() || isPrCommentScope()) return []
+        if (isPrWideComposing() || unanchoredCommentSelected()) return []
         const sel = state.selected
         // Subscribe this binding to codeVersion so it re-runs when a block's code
         // loads (ensureCode bumps it). That re-run re-reads b.code for each card's
@@ -14378,6 +14426,11 @@ function DetailPanel(state) {
             // Out-of-view change hints belong only to the block being stepped
             // through: the selected card, in diff mode, with the keyboard on it.
             hintsEnabled: () => isActiveCard(b) && state.mode === 'diff' && state.focusLevel === 0,
+            // The contextual key-hint line (ShortcutHintBar) — only the card the
+            // keyboard is actually on shows one (mirrors hintsEnabled's own gate,
+            // minus the diff-mode restriction: blockShortcutHints already covers
+            // both list and diff mode itself).
+            shortcutHints: () => (isActiveCard(b) && state.focusLevel === 0 ? blockShortcutHints() : []),
             // The description strip's own cursor/disclosure state (see
             // state.descFocusId). Deliberately keyed on b.id — NOT via
             // isActiveCard()/`i` like the bindings around it: these two feed a
@@ -14743,6 +14796,9 @@ function DetailPanel(state) {
                   hintsEnabled: () => state.focusLevel === level,
                   diffActive: () =>
                     state.focusLevel === level && !relatedActive() && !commentAnchorAwaitingEntry(level),
+                  // Same gate as hintsEnabled above, minus the diff-mode
+                  // restriction (blockShortcutHints covers both modes itself).
+                  shortcutHints: () => (state.focusLevel === level ? blockShortcutHints() : []),
                   approvedRows: () => approvedRowSet(b),
                   approvedCalls: () => approvedCallSet(b),
                   onApprove: (blk) => persistApproval(blk),
@@ -14957,6 +15013,7 @@ function DetailPanel(state) {
             // comment. Renders nothing at all when neither side has anything
             // to report.
             CommentClaudeFooter()}
+          ${ShortcutHintBar(commentClaudeShortcutHints)}
         </div>
         ${() =>
           // The standalone code-preview column — always on, one stacked

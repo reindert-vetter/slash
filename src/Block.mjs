@@ -10,6 +10,7 @@ import { avatarHtmlString } from './avatar.mjs'
 import { renderMarkdown } from './markdown.mjs'
 import { splitBlockPath, paletteClass } from './blockPath.mjs'
 import { parseAutoWidthPx, resizeHandle } from './columnWidth.mjs'
+import { ShortcutHintBar } from './shortcutHints.mjs'
 import Prism from './vendor/prism.js'
 
 // highlight turns raw PHP source into Prism-tokenised HTML (keywords, strings,
@@ -1201,6 +1202,13 @@ export default function Block(b, opts = {}) {
   // .claude/docs/diff-card.md. Defaults to never fixed, for every other
   // card.
   const narrowFixedFn = opts.narrowFixed || (() => false)
+  // shortcutHints — a function returning the contextual key-hint list for
+  // THIS card right now (see shortcutHints.mjs) — only the caller (home.mjs)
+  // knows whether this particular card instance is the one the keyboard is
+  // actually on, so it decides when to pass a real list vs `() => []`.
+  // Defaults to no hints for a caller that never wires it up (every preview/
+  // drilled-preview card, which never owns the keyboard anyway).
+  const shortcutHintsFn = opts.shortcutHints || (() => [])
   return html`
     <article
       class="${() =>
@@ -1508,6 +1516,7 @@ export default function Block(b, opts = {}) {
           : isSvgFile(b)
           ? svgSlot(b)
           : codeDiff(b, activeGroup, hintsEnabled, approvedFn, commentedFn, approvedCallsFn, viewModeFn, lineSummaryFn, diffActive, commentRangeFn)}
+      ${ShortcutHintBar(shortcutHintsFn)}
     </article>
   `
 }

@@ -1388,3 +1388,61 @@ keeps its existing nav meaning there. Note the caret needn't land on character
 column-preserving vertical caret movement can stop anywhere within that row,
 so the guard compares *rows* (marker `offsetTop`), not exact offsets. Test:
 `tests/comment-arrowup-caret.spec.mjs`.
+
+## A contextual keyboard-hint line under each card
+
+Reviewer request: "onder elke kaart wil ik een lijn met hints wat je op dat
+moment voor keys kan typen, shortcuts live wat op dat moment relevant is" —
+a thin, muted line under the card that OWNS the keyboard right now, listing
+exactly the handful of keys that do something in that context. Deliberately
+a trimmed-down subset of everything documented on this page, not an
+exhaustive transcription — a card dense enough to list every micro-state
+above would defeat the point of a quick hint line.
+
+`src/shortcutHints.mjs`'s `ShortcutHintBar(hintsFn)` is the one shared
+component (`data-testid=shortcut-hints`, each pair `data-testid=shortcut-hint`)
+— `hintsFn` is a function (not a plain array) returning `{key, label}` pairs,
+mirroring `Block.mjs`'s own `activeGroup`/`hintsEnabled` convention so it
+stays reactive to whatever navigation state the caller's own hints depend
+on. Two call sites, only ever showing for the card the keyboard is actually
+on:
+
+- **`Block.mjs`** takes `opts.shortcutHints` (default `() => []`) and
+  renders it at the bottom of the card, inside the `<article>`. `home.mjs`'s
+  `blockShortcutHints()` supplies the list — `↑↓`/`→`/`Enter`/`Space`/`/` in
+  list mode, `↑↓`/`←→`/`f/d/s`/`a`/`Shift+↑↓`/`Space`/`Enter` in diff mode —
+  and both `Block()` call sites (the top-level card, the drilled-column
+  card) gate it on the exact SAME "is this card the one the keyboard is on"
+  condition their own `hintsEnabled` opt already uses (`isActiveCard(b) &&
+  state.focusLevel === 0` / `state.focusLevel === level`) — a look-ahead
+  preview card, or a card the keyboard has stepped off (drilled deeper, or
+  into the related panel), never shows a hint line, only the one truly
+  active card does. `blockShortcutHints()` itself returns `[]` whenever
+  `relatedActive()` is true: the related panel shows its own hints instead.
+- **`RelatedPanel.mjs`**'s `commentClaudeShortcutHints()` covers the merged
+  comment-claude-row, switching on `cs.focus` (`'comment'`/`'thread'`/
+  `'claude'`/`'new'`, empty otherwise) — mounted once, right after
+  `CommentClaudeFooter()`, inside `comment-claude-row` (`home.mjs`).
+
+**Implementation note — a fixed set of reactive slots, not a keyed list.**
+`ShortcutHintBar` deliberately does NOT build its line as a keyed `.map()`
+over the (variable-length, variable-content) hints array. A bare reactive
+slot returning a TEMPLATE both times a card's context changes between two
+non-empty hint sets (e.g. list mode → diff mode) never toggles through `''`
+in between, and arrow.js's patch path for such a repeatedly-returned
+template did not reliably re-diff the nested keyed list in that case even
+after giving every item a content-unique key — observed live: switching
+list→diff left every hint reading the OLD (list-mode) text forever, with no
+error. The robust fix: a FIXED number of slots (`MAX_HINTS`, currently 8 —
+bump it if a future caller needs more), each an ordinary, independently
+reactive `${() => ...}` text/attribute binding (key text, label text,
+hidden-when-unused), which is the one shape arrow.js is unambiguously
+reliable about. Regression test: `tests/shortcut-hints.spec.mjs` (the
+list↔diff round trip, the active-card-only assertion, and the
+comment/Claude column's own hints).
+
+**Only the active card, confirmed on request** ("ik wil trouwens die hints
+alleen zien als de blok actief/geselecteerd is") — already the design from
+the start (see the `isActiveCard`/`state.focusLevel` gating above), verified
+live: a look-ahead preview card's own hint bar element is present (so the
+fixed-slot shape stays stable) but carries a `hidden` class, showing nothing.
