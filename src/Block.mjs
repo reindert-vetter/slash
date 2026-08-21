@@ -1219,9 +1219,29 @@ export default function Block(b, opts = {}) {
         widthCls(b, viewModeFn, capFitChars, activeGroup, narrowFixedFn) +
         (preview
           ? 'max-h-72 border-slate-300 dark:border-zinc-700 opacity-50'
-          : diffActive()
-          ? 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
-          : 'border-slate-300 dark:border-zinc-700 ring-1 ring-black/5')}"
+          : // The real (non-preview) card also GROWS to fill whatever height
+            // its column has left, up to the footer — but only once the diff
+            // is big enough to plausibly want that room (the same
+            // DIFF_FLOOR_MIN_ROWS gate diffFloorCls's own min-h-[45vh] floor
+            // already uses below): a short block stays compact, matching the
+            // existing "don't stretch a 3-line diff into empty space" rule.
+            // Reviewer request (2026-08-20/21, screenshot of a drilled
+            // SessionEnricher::utmValues card showing only ~3 lines of a
+            // large function while its column had plenty of room below it):
+            // "ik wil in de hoogte alles zien zolang de footer er niet
+            // overheen gaat". The column itself (block-column / a drilled
+            // column's own wrapper) already stretches to the full available
+            // height bounded by the footer (AppColumns' own bottom offset,
+            // see .claude/docs/detail-layout.md) — this card just never
+            // asked for a SHARE of that height (`flex: 0 1 auto` by
+            // default), so the leftover space sat empty below it instead of
+            // in the diff. `min-h-[45vh]` on code-diff stays as the FLOOR;
+            // this `flex-1` is the "no ceiling" half. See
+            // .claude/docs/diff-card.md.
+            (blockRows(b).length >= DIFF_FLOOR_MIN_ROWS ? 'flex-1 ' : '') +
+            (diffActive()
+              ? 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
+              : 'border-slate-300 dark:border-zinc-700 ring-1 ring-black/5'))}"
       style="${() => colWidthStyleFn()}"
       data-col-resize-root
       data-diff-col-key="${'diff:' + b.id}"
@@ -1976,10 +1996,19 @@ function codeDiff(
 // call), so this can stay a plain, non-reactive class string built inline
 // where each wrapper's class is already assembled — no new reactive slot
 // needed. The vh unit itself is pure CSS and needs no JS viewport tracking
-// at all. `<main>` already scrolls/clips cleanly (diff-card.md), so if this
-// floor ends up taller than what's left of the fixed-height column, the rest
-// of the page (the look-ahead preview card) simply sits further down —
-// exactly the accepted trade-off, not a layout bug.
+// at all.
+//
+// This is a FLOOR only, not a ceiling: the card's own `<article>` (see its
+// class binding above) ALSO gets `flex-1` under this exact same
+// DIFF_FLOOR_MIN_ROWS gate, so a big-enough diff also grows to fill whatever
+// height its column has left, up to the footer (`<main>`'s columns already
+// stretch that far, see .claude/docs/detail-layout.md) — reviewer request,
+// 2026-08-20/21, superseding the earlier "the rest of the page simply sits
+// further down, accepted trade-off" framing that used to live here: the
+// look-ahead preview/connector below the card sitting further down IS now
+// the intended effect of the diff actually using that room, not an
+// incidental side effect of a fixed floor. A diff under the row threshold
+// stays exactly as compact as before — nothing here changes for it.
 const DIFF_FLOOR_VH = 45
 const DIFF_FLOOR_ROW_PX = 18
 // 20 rows: on an 800px-tall viewport (a modest laptop, not an ultrawide),

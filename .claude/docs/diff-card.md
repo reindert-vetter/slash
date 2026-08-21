@@ -730,9 +730,50 @@ attribute-interpolation rule in `.claude/rules/arrowjs-pitfalls.md`).
 
 `<main>` already scrolls/clips cleanly (see "The look-ahead preview always
 collapses…" above), so growing the active card's diff this way simply pushes
-whatever comes after it (the look-ahead preview card) further down the page —
-an accepted, deliberate trade-off, not a layout bug. This floor applies to
-every card that goes through `codeDiff`/`unifiedCodeDiff`/`translationBlockView`,
-selected or preview alike — though every preview already collapses to just its
-header regardless (see above), so this floor only ever visibly stretches the
-active/selected card.
+whatever comes after it (the look-ahead preview card) further down the page.
+This floor applies to every card that goes through
+`codeDiff`/`unifiedCodeDiff`/`translationBlockView`, selected or preview alike
+— though every preview already collapses to just its header regardless (see
+above), so this floor only ever visibly stretches the active/selected card.
+
+### The floor has no ceiling: the card also grows to fill the column, up to the footer
+
+Reviewer request (2026-08-20/21, screenshot of a drilled
+`SessionEnricher::utmValues` card): a big function's diff only ever got the
+fixed `min-h-[45vh]` floor above, even though its column (the top-level
+block-column, or a drilled column's own wrapper) already stretches to the
+full height `<main>` has left above the footer (`AppColumns`' own `bottom`
+offset already accounts for the footer's real height, see
+`.claude/docs/detail-layout.md`) — on a shorter/lower-resolution window, 45vh
+is well under what's actually free, and the leftover room just sat empty
+below the card (eaten by the look-ahead preview/connector) instead of
+showing more of the diff. "Ik wil in de hoogte alles zien zolang de footer er
+niet overheen gaat."
+
+The card itself (`<article>`, its class binding right above the width
+formula) now also gets **`flex-1`**, under the exact same
+`blockRows(b).length >= DIFF_FLOOR_MIN_ROWS` gate `diffFloorCls` already
+uses — never for a preview card (`preview` is always true there, and every
+preview stays collapsed to its header anyway, see above). `min-h-[45vh]` on
+`code-diff` stays as the FLOOR; `flex-1` on the card is the "no ceiling"
+half: it lets the card grow into whatever height its column has left, and
+the already-existing `flex-1` on `code-diff` itself is what actually claims
+that extra height once the card offers it. A diff under the row threshold is
+completely unaffected — it stays exactly as compact as before, per the
+"don't stretch a short diff into empty space" rule two paragraphs up.
+
+For a **drilled** column specifically, the growth has to be threaded through
+one more real box: unlike the top-level card (wrapped in a bare
+`class="contents"` div, which drops out of the layout tree entirely, so the
+card's own `flex-1` reaches the block-column directly), a drilled column
+wraps its card in an actual `<div class="relative flex min-h-0 flex-col">`
+(alongside the absolutely-positioned `drill-left-hint` chevron) — that
+wrapper needed `flex-1` added too, or the card's own `flex-1` would have
+nothing above it to grow into. That wrapper only ever renders while the
+column is focused (the unfocused branch collapses to a rail instead, see
+`.claude/docs/drilling.md`), so the class is unconditional there.
+
+Whatever comes after the now-taller card (the look-ahead preview card, the
+file connector) simply sits further down the column — that is now the
+*intended* effect of the diff actually using the room it has, not merely an
+incidental side effect of a fixed floor.

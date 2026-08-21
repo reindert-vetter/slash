@@ -14612,7 +14612,7 @@ function DetailPanel(state) {
             (justOpened ? ' drill-enter' : justReturned ? ' drill-return' : '')
           return html`
             <div class="${drillColumnCls}" data-testid="drill-column" data-drill-idx="${i}">
-              <div class="relative flex min-h-0 flex-col">
+              <div class="relative flex min-h-0 flex-1 flex-col">
                 ${
                 // The chevron hints at the column this one was drilled FROM —
                 // meaningless when that column isn't there: an anchored
