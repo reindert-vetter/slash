@@ -53,23 +53,29 @@ let raf = 0
 const STROKE = '#6366f1'
 
 // setCallArrows receives the fresh pairs from home.mjs' setRelated watch and
-// schedules a redraw. The extra 250ms settle-draw mirrors openMenu's 220ms
-// re-position: <main>/the cards animate width/position for 200ms (entering the
-// diff, the `a` toggle, the sidebar margin), so one late draw re-measures the
-// settled layout.
+// schedules a redraw, then TRACKS the moving anchors for the duration of the
+// layout transition (scheduleArrowSettle) — <main>/the cards animate width/
+// position for 200ms (entering the diff, the `a` toggle, the sidebar margin,
+// and — the one this replaces a single delayed snap for — an underlying-code
+// card reordering/resizing as the reviewer navigates). Reviewer report: "de
+// pijltjes gaan best traag mee als onderliggende blokken van plek
+// veranderen" — a single re-measure AFTER the transition (the old
+// `setTimeout(…, 250)`) drew the arrow at its stale, pre-move position for
+// the whole 250ms, then snapped once — reading as laggy/stuck rather than
+// following the card. Redrawing every animation frame while the transition
+// runs (see scheduleArrowSettle below) makes the arrow track the move
+// continuously instead.
 export function setCallArrows(next) {
   pairs = Array.isArray(next) ? next : []
-  scheduleArrowDraw()
-  setTimeout(scheduleArrowDraw, 250)
+  scheduleArrowSettle()
 }
 
 // setCommentArrows — the comment-card counterpart, called by
 // RelatedPanel.mjs' recomputeView on every list/scope change. Same
-// schedule (immediate + 250ms settle, for the same width-transition reason).
+// schedule (immediate + tracked settle, for the same width-transition reason).
 export function setCommentArrows(next) {
   commentPairs = Array.isArray(next) ? next : []
-  scheduleArrowDraw()
-  setTimeout(scheduleArrowDraw, 250)
+  scheduleArrowSettle()
 }
 
 // resettleCallArrows redraws the CURRENT pairs (unchanged) after a layout
@@ -77,12 +83,10 @@ export function setCommentArrows(next) {
 // toggle (state.diffViewMode, see home.mjs' toggleDiffView) resizes every pane
 // to 60% width without touching state.selected/mode/gran/change, so the
 // setRelated watch never fires and setCallArrows is never called; without this
-// the arrow stayed drawn at the pre-toggle (wide) coordinates. Same immediate +
-// 250ms-settle schedule as setCallArrows (mirrors the 200ms width transition),
-// just without reassigning `pairs`.
+// the arrow stayed drawn at the pre-toggle (wide) coordinates. Same tracked
+// settle as setCallArrows, just without reassigning `pairs`.
 export function resettleCallArrows() {
-  scheduleArrowDraw()
-  setTimeout(scheduleArrowDraw, 250)
+  scheduleArrowSettle()
 }
 
 // scheduleArrowDraw coalesces any number of triggers (watch fire, scroll,
@@ -94,6 +98,38 @@ export function scheduleArrowDraw() {
     raf = 0
     drawCallArrows()
   })
+}
+
+// SETTLE_MS — comfortably covers every known width/position CSS transition
+// this overlay needs to outlast (the "duration-200" cards/columns use), with
+// a little slack for the transition's own `ease-out` tail and a slow frame.
+const SETTLE_MS = 320
+
+// scheduleArrowSettle redraws on EVERY animation frame for SETTLE_MS instead
+// of once immediately plus once after a flat delay: a single delayed
+// re-measure left the arrow visibly stuck at its pre-move anchor for the
+// whole delay, then snapping — this instead re-measures every frame while
+// the CSS transition is actually running, so the arrow's endpoint moves in
+// step with the card instead of jumping once it's already settled.
+// `scheduleArrowDraw` itself still coalesces each individual frame into one
+// rAF, so this is exactly as cheap as the pre-existing scroll/resize
+// handling, just sustained for SETTLE_MS instead of firing once.
+let settleUntil = 0
+let settling = false
+function scheduleArrowSettle() {
+  scheduleArrowDraw()
+  settleUntil = performance.now() + SETTLE_MS
+  if (settling) return
+  settling = true
+  const tick = () => {
+    scheduleArrowDraw()
+    if (performance.now() < settleUntil) {
+      requestAnimationFrame(tick)
+    } else {
+      settling = false
+    }
+  }
+  requestAnimationFrame(tick)
 }
 
 // buildArrowPaths draws one arrow-set: a { row, id } pair list, the panel

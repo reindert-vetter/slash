@@ -663,15 +663,29 @@ the command menu; `pointer-events:none`). Path `data-testid=call-arrow`, stroke
 pr-index/PR-info/sidebar/footer.
 
 Redraw triggers: rAF-coalesced on the watch itself, `resize`, capture `scroll`
-(including inner scrollers), and a 250ms settle after every push (for the 200ms
-width transitions).
+(including inner scrollers), and — every push (`setCallArrows`/
+`setCommentArrows`/`resettleCallArrows`) — a **tracked settle**
+(`scheduleArrowSettle`, `SETTLE_MS = 320`): instead of one immediate draw plus
+one more after a flat delay, it redraws on **every animation frame** until
+`SETTLE_MS` has elapsed. Reviewer report: "de pijltjes gaan best traag mee als
+onderliggende blokken van plek veranderen" — the earlier immediate+250ms-later
+schedule left the arrow visibly stuck at its pre-move anchor for the whole
+250ms (the card's own 200ms width/position CSS transition), then snapping once
+— reading as laggy rather than following. Redrawing every frame while that
+transition is actually running instead moves the arrow's endpoint in step with
+the card. `scheduleArrowDraw` itself still coalesces each individual frame
+into one rAF (unchanged), so a settle window costs exactly the same per-frame
+work the pre-existing scroll/resize handling already did, just sustained for
+`SETTLE_MS` instead of firing once; a second `scheduleArrowSettle()` call
+while one is still running just extends the window (`settleUntil`), never
+starts a second parallel loop (`settling` guard).
 
 **The `a` toggle needs an explicit resettle.** It touches none of the `setRelated`
 watch's dependencies, so the watch doesn't fire and `setCallArrows` isn't called
 again — while every card's width changes anyway, leaving the arrow drawn at the
 pre-toggle coordinates. `toggleDiffView` (`home.mjs`) therefore calls
-`resettleCallArrows()`: the same immediate + 250ms settle schedule, without
-changing the pairs (only the geometry changed).
+`resettleCallArrows()`: the same tracked-settle schedule, without changing the
+pairs (only the geometry changed).
 
 A call-site row scrolled out of the diff viewport loses its arrow (the same
 visibility rule as `updateHints`); a child card scrolled out internally keeps an
