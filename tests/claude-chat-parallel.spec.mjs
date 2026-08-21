@@ -52,6 +52,13 @@ test('a second conversation can start while the first is still being answered', 
   })
 
   const enterChatOn = async (text) => {
+    // A conversation already in view collapses the comment half to its rail
+    // below the 1400px narrow breakpoint (this test's default viewport) once
+    // the keyboard sits in Claude — see "Vertical inklappen" in
+    // .claude/docs/comments-panel.md. Expand it back before selecting a
+    // DIFFERENT comment item.
+    const rail = page.getByTestId('comment-claude-rail')
+    if (await rail.count()) await rail.click()
     await page.getByTestId('comment-item').filter({ hasText: text }).first().click()
     await page.keyboard.press('ArrowUp')
     await page.keyboard.press('ArrowRight')
@@ -91,7 +98,11 @@ test('a second conversation can start while the first is still being answered', 
     // whole point of the report ("nu raak ik die chat weer kwijt"). Back out
     // of the Claude column, one comment up (an earlier item collapses behind
     // the "1 hierboven" button, so this walks rather than clicks), and in
-    // again: A's own comment and its own composer.
+    // again: A's own comment and its own composer. The comment half is also
+    // rail-collapsed right now (Claude/B owns the keyboard) — expand it back
+    // first.
+    const rail1 = page.getByTestId('comment-claude-rail')
+    if (await rail1.count()) await rail1.click()
     await page.getByTestId('comment-more-above').click() // an earlier comment is collapsed away
     await expect(page.getByTestId('comment-item').first()).toContainText('eerste vraag over total')
     const back = await enterChatOn('eerste vraag over total')
@@ -154,6 +165,13 @@ test('a rejected send on a conversation you navigated away from keeps its own se
   })
 
   const enterChatOn = async (text) => {
+    // A conversation already in view collapses the comment half to its rail
+    // below the 1400px narrow breakpoint (this test's default viewport) once
+    // the keyboard sits in Claude — see "Vertical inklappen" in
+    // .claude/docs/comments-panel.md. Expand it back before selecting a
+    // DIFFERENT comment item.
+    const rail = page.getByTestId('comment-claude-rail')
+    if (await rail.count()) await rail.click()
     await page.getByTestId('comment-item').filter({ hasText: text }).first().click()
     await page.keyboard.press('ArrowUp')
     await page.keyboard.press('ArrowRight')
@@ -187,7 +205,10 @@ test('a rejected send on a conversation you navigated away from keeps its own se
   await expect(page.getByTestId('claude-send-error')).toHaveCount(0)
 
   // Walk back onto A: its own sentence is still there, even though it landed
-  // while the reviewer was looking at B.
+  // while the reviewer was looking at B. Expand the rail-collapsed comment
+  // half first (Claude/B still owns the keyboard).
+  const rail2 = page.getByTestId('comment-claude-rail')
+  if (await rail2.count()) await rail2.click()
   await page.getByTestId('comment-more-above').click() // an earlier comment is collapsed away
   await expect(page.getByTestId('comment-item').first()).toContainText('eerste vraag over total')
   await enterChatOn('eerste vraag over total')

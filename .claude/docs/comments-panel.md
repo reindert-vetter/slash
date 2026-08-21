@@ -2444,3 +2444,114 @@ though some row was technically highlighted. Fixed to reset to the first row
 0` after a filter change, the other place "the old selection no longer
 applies" already resets to the top rather than clamping a stale index. Test:
 `tests/selection-lost-falls-back-to-first.spec.mjs`.
+
+### Vertical inklappen: below 1400px, the unfocused half of `comment-claude-row` collapses to a rail — the drilling.md idiom, not a height cap
+
+Reviewer request: "als ik in de selectie zit van een comment, laat dan de
+claude chat vertical inklappen en andersom, als het niet is geselecteerd, wil
+ik zoals nu" — plus a width caveat below. **"Vertical inklappen" turned out
+to mean the project's existing "collapse to a narrow, click-to-expand rail"
+idiom** (his own words, once asked to disambiguate: "als een kolom, zoals je
+vaker doet bij het inklappen van blokken") — the SAME visual mechanism a
+non-focused drilled column already uses (`collapsedColumnHTML`, `home.mjs`,
+see `.claude/docs/drilling.md`), not a height cap/fade on the unfocused
+column's own content. **Record this explicitly so a future session doesn't
+re-read "verticaal" as a height collapse** — it describes the rail's own
+shape (a slim, full-height, VERTICALLY-labelled button), not the axis being
+collapsed; the width is what actually shrinks.
+
+`src/collapsedRail.mjs`'s **`railButtonHTML({label, title, testid, onClick,
+dataDrillIdx})`** is the idiom itself, extracted out of
+`collapsedColumnHTML` (which now just forwards to it, verbatim
+markup/classes — behavior-neutral, no existing rail changed) so this feature
+reuses the exact same button instead of a second, inevitably-drifting copy.
+
+**Gated on screen width, not always-on.** Follow-up from the reviewer: "doe
+dit alleen als ik een scherm heb op mijn laptop, maak anders de chat blokken
+2x zo breed (dan past alles heel goed)". Reused, rather than invented: the
+app's own existing `narrow` custom Tailwind screen (`max-width: 1399px`,
+`index.html`'s `tailwind.config`; the same cutoff `columnWidth.mjs`'s
+`parseAutoWidthPx` already checks in plain JS) is exactly the "does this
+window have the room" threshold this app already treats as the cramped/
+laptop-only case everywhere else — no new number was picked. `home.mjs`'s
+**`state.narrowViewport`** (`window.innerWidth <= 1399`, kept live by the
+existing module-level `resize` listener, guarded so it only reassigns on an
+actual flip — see the vendored-proxy-notifies-on-every-set pitfall in
+`.claude/rules/arrowjs-pitfalls.md`) is the one bit of NEW plumbing: nothing
+else in this app needed a reactive mirror of that breakpoint before, because
+every other width computation here rides on Tailwind's own CSS media query
+(no JS involved) — but swapping rail↔full column swaps real DOM shape, which
+does need a reactive trigger.
+
+**The predicates** (`RelatedPanel.mjs`):
+
+- `commentSideFocused()` — `cs.focus === 'comment' || 'thread' || 'new'`.
+  `'new'` counts too (confirmed explicitly): the still-open, not-yet-placed
+  "Comment op deze regel" composer collapses Claude just like an existing
+  thread would.
+- `isClaudeChatFocused()` (pre-existing) — `cs.focus === 'claude'`.
+- `claudeColumnCollapsedToRail(state)` = `state.narrowViewport &&
+  commentSideFocused()`; `commentColumnCollapsedToRail(state)` =
+  `state.narrowViewport && isClaudeChatFocused()`. Neither side ever
+  collapses while `cs.focus` is `null` (nothing in this row focused) — "zoals
+  nu" — nor on a wide screen (see below).
+
+**Width**: `columnPairScale(state, siblingCollapsed)` replaces the old fixed
+`1/2` scale behind `commentColumnWidthCls`/`claudeColumnWidthCls`
+(`RelatedPanel.mjs`) — `scale = 1` (the SAME full clamp `relatedColumnWidthCls`
+itself uses) on a wide screen (`!state.narrowViewport`, for BOTH halves at
+once — "2x zo breed" is literally double the halved split) **or** whenever the
+SIBLING has collapsed to its rail (this half reclaims the freed width, same
+"reclaims horizontal room for the focused column" reasoning
+`collapsedColumnHTML`'s own doc comment already states); `scale = 1/2`
+(unchanged) only in the "narrow screen, neither side focused" default case.
+The documented invariant `commentColumnWidthCls() + connector +
+claudeColumnWidthCls() === relatedColumnWidthCls()` therefore only holds in
+that one default case now — an approved, documented departure elsewhere, not
+a regression of it.
+
+**Rendering**: `ClaudeChatPanel`/`InlineComments` (now split into the
+always-called wrapper plus a private `inlineCommentsCardHTML`) each toggle
+rail↔full **inside a stable `<div class="contents">` root** — the documented
+safe pattern for a slot whose shape changes
+(`.claude/rules/arrowjs-pitfalls.md`) — rather than returning two
+differently-shaped top-level templates under the SAME outer `.key(...)`
+`home.mjs` uses for these two components, which would instead hit the sibling
+"a keyed node is reused without re-running its bindings" pitfall.
+`InlineComments`'s always-called wrapper still calls `syncComments` itself
+(unconditionally, before the toggle) — moving it into the card-only branch
+would mean a page that LOADS with the comment half already rail-collapsed
+(e.g. a restored `?rel.foc=claude` deep link) never starts the comment poll
+at all.
+
+**Clicking a rail runs the same function the keyboard already runs**
+(mouse-navigation.md's rule): the Claude rail calls
+`enterClaudeChatFromNew()`/`enterClaudeChat(state.pr)` (mirroring `→` from
+`'comment'`/`'thread'`/`'new'`); the comment rail calls
+`toNewFocus()`/`toComment()` (mirroring `←`/Escape from `'claude'`).
+
+**No extra signal beyond the idiom's own shape** — confirmed explicitly ("geen
+chevron of woordje erbij nodig"): the rail's own chevron + vertical label
+(already part of the reused idiom) is the only affordance: the format
+difference (full column vs. slim rail) already carries the meaning, per the
+colourblind rule.
+
+**Applies uniformly to both halves of the merged row**, including the
+unanchored/PR-wide-comment variant (`isPrCommentScope()` — confirmed
+explicitly, "ook de PR-brede/ankerloze variant"): the collapse wraps the
+whole exported column function, independent of what it renders inside, so
+`commentDetailCard` collapses away exactly like an ordinary thread would.
+
+Tests: the two dedicated cases in
+`tests/comment-claude-column-widths.spec.mjs` ("below 1400px, the unfocused
+half … collapses to a rail, click expands it back" / "at/above 1400px,
+neither half collapses"). Several pre-existing specs that drive this exact
+row at the suite's default (narrow) viewport needed small follow-up fixes,
+not because anything about them was wrong, but because this is a genuine,
+approved behavior change: `claude-chat-panel.spec.mjs` pins a wide viewport
+for its whole file (`test.use({ viewport: … })`) since none of its cases are
+actually about the collapse feature; `claude-chat-parallel.spec.mjs`,
+`command-menu.spec.mjs` and `pr-comment-claude-chat.spec.mjs` click the
+`comment-claude-rail`/`claude-chat-rail` back open (or assert `toHaveCount(0)`
+instead of a missing CSS class) at the points where the feature now
+legitimately hides an element they used to find directly.

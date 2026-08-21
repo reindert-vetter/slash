@@ -209,7 +209,11 @@ test.describe('PR Review Tree — command palette', () => {
       await expect(composer).toBeVisible()
       await expect(composer).toHaveValue('')
       // Sending lazily created the ONE backing comment, same as every other
-      // unanchored-Claude-chat entry point.
+      // unanchored-Claude-chat entry point. The comment half is rail-
+      // collapsed right now (Claude owns the keyboard, this is the default
+      // narrow viewport — see "Vertical inklappen" in
+      // .claude/docs/comments-panel.md) — expand it back to see the item.
+      await page.getByTestId('comment-claude-rail').click()
       const item = page.getByTestId('comment-item')
       await expect(item).toHaveCount(1)
       await expect(item).toContainText('Claude gesprek')

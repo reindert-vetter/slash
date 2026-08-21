@@ -242,10 +242,14 @@ test('→ steps from a PR-comment item into its thread and on into the Claude ch
   await expect(compose).not.toBeFocused()
 
   // Second → : on into the Claude column, and the thread ring hands off so
-  // only one thing reads as focused.
+  // only one thing reads as focused — at this (default, narrow) viewport the
+  // comment half rail-collapses entirely once Claude owns the keyboard (see
+  // "Vertical inklappen" in .claude/docs/comments-panel.md), so the thread
+  // isn't merely unhighlighted, it's not rendered at all; that is an even
+  // stronger form of "only one thing reads as focused".
   await page.keyboard.press('ArrowRight')
   await expect(compose).toBeFocused()
-  await expect(thread).not.toHaveClass(/ring-2/)
+  await expect(thread).toHaveCount(0)
 
   // ← : straight back into the thread, not onto an invisible 'comment' level.
   await page.keyboard.press('ArrowLeft')

@@ -28,6 +28,7 @@ import { repoParam, repoField } from './prContext.mjs'
 // gates code_warning and the footer's explain_code — see autowarn.mjs.
 import { autoWarn } from './autowarn.mjs'
 import { claudeChatColumn, claudeStatusText } from './ClaudeChat.mjs'
+import { railButtonHTML } from './collapsedRail.mjs'
 import { codePreviewColumn } from './CodePreview.mjs'
 import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
 import { syncCommentBatch, batchProgressFor, batchNoteFor } from './commentBatch.mjs'
@@ -2677,6 +2678,36 @@ export function claudeColumnVisible() {
   return !cs.prWideCompose && claudeChatVisible()
 }
 
+// commentSideFocused — "is the keyboard currently on the LEFT (comment)
+// half of the merged comment-claude-row": an existing conversation's
+// 'comment'/'thread' cursor, or the still-open, not-yet-placed 'new'
+// composer. Drives the rail-collapse below (Claude collapses while this is
+// true) together with its mirror, isClaudeChatFocused() (already exported
+// above) for the comment side's own collapse. Reviewer's own words, and
+// explicitly confirmed to include 'new': "als ik in de selectie zit van een
+// comment, laat dan de claude chat verticaal inklappen" — see "Vertical
+// inklappen = the rail idiom" in .claude/docs/comments-panel.md for why this
+// reuses collapsedColumnHTML's own idiom (railButtonHTML,
+// src/collapsedRail.mjs) rather than a height cap.
+function commentSideFocused() {
+  return cs.focus === 'comment' || cs.focus === 'thread' || cs.focus === 'new'
+}
+
+// claudeColumnCollapsedToRail / commentColumnCollapsedToRail — only true
+// below the narrow breakpoint (state.narrowViewport, the SAME 1399px cutoff
+// as Tailwind's `narrow` custom screen, see home.mjs) AND only while the
+// SIBLING half owns the keyboard. Exported so home.mjs's own `.key(...)`
+// calls for these two columns can fold the collapsed/expanded state into the
+// key (a keyed node that silently switches shape without a fresh key is the
+// "keyed node reused without re-running its bindings" pitfall, see
+// .claude/rules/arrowjs-pitfalls.md).
+export function claudeColumnCollapsedToRail(state) {
+  return !!(state && state.narrowViewport) && commentSideFocused()
+}
+export function commentColumnCollapsedToRail(state) {
+  return !!(state && state.narrowViewport) && isClaudeChatFocused()
+}
+
 // focusClaudeComposer/scrollClaudeMessageIntoView mirror focusThread/
 // scrollReactionIntoView exactly, over cc.messages instead of the comment's
 // reactions, and cs.claudePos instead of cs.threadPos.
@@ -3262,9 +3293,26 @@ export function ClaudeChatPanel(state, commentTarget) {
   return html`
     <div class="contents">
       ${() =>
-        claudeColumnVisible()
-          ? html`<div
-              class="${() => 'relative flex min-h-0 flex-col shrink-0 ' + claudeColumnWidthCls()}"
+        !claudeColumnVisible()
+          ? ''
+          : claudeColumnCollapsedToRail(state)
+            ? // Vertical inklappen (rail idiom, not a height cap — see
+              // "Vertical inklappen = the rail idiom" in
+              // .claude/docs/comments-panel.md): the comment side owns the
+              // keyboard, so the Claude half gives up its width to a click-
+              // to-expand rail, same visual idiom as home.mjs's
+              // collapsedColumnHTML. Click mirrors the → hand-off the
+              // keyboard already uses from 'comment'/'thread'/'new'
+              // (enterClaudeChat/enterClaudeChatFromNew) — "a click runs the
+              // same function a key runs".
+              railButtonHTML({
+                label: 'Claude',
+                title: 'Claude-gesprek',
+                testid: 'claude-chat-rail',
+                onClick: () => (cs.focus === 'new' ? enterClaudeChatFromNew() : enterClaudeChat(state.pr)),
+              })
+            : html`<div
+              class="${() => 'relative flex min-h-0 flex-col shrink-0 ' + claudeColumnWidthCls(state)}"
               style="${() => colWidthStyle(state, widthKey())}"
               data-testid="claude-chat-column"
               data-col-resize-root
@@ -3273,13 +3321,12 @@ export function ClaudeChatPanel(state, commentTarget) {
                 widthKey()
                   ? resizeHandle(
                       (e) =>
-                        startColumnResize(e, state, widthKey(), () => parseAutoWidthPx(claudeColumnWidthCls())),
+                        startColumnResize(e, state, widthKey(), () => parseAutoWidthPx(claudeColumnWidthCls(state))),
                       () => resetColumnWidth(state, widthKey()),
                     )
                   : ''}
               ${claudeChatColumn(view, callbacks)}
-            </div>`
-          : ''}
+            </div>`}
     </div>
   `
 }
@@ -6395,8 +6442,46 @@ function moreAboveHint(n, testid, onUp) {
 // `openCommentMenu` (the ordinary block-scoped 'comment' menu) since the two
 // modes build a different command list (home.mjs's openMenu('comment') vs
 // openMenu('prComment')).
+// InlineComments is the exported entry home.mjs mounts; it only decides
+// between the rail (collapsed, see claudeColumnCollapsedToRail/
+// commentColumnCollapsedToRail's own doc comment above — "Vertical
+// inklappen = the rail idiom" in .claude/docs/comments-panel.md) and the
+// ordinary card (inlineCommentsCardHTML below, everything this function used
+// to be before the collapse feature). Wrapped in a stable `<div
+// class="contents">` root with the toggle INSIDE it — the documented safe
+// pattern for a slot whose shape changes (.claude/rules/arrowjs-pitfalls.md,
+// "never key a template whose entire body is one toggling expression") —
+// rather than returning two differently-shaped top-level templates under the
+// SAME outer `.key('inline-comments')` home.mjs uses, which would hit the
+// sibling "a keyed node is reused without re-running its bindings" pitfall
+// instead.
 export function InlineComments(state, commentTarget, openCompose, openCommentMenu, openPrCommentMenu) {
+  // Always called, collapsed or not: syncComments starts the comment poll's
+  // module-level setInterval timers (guarded on refreshTimer/heartbeatTimer
+  // already being set) — moving this into the card-only branch below would
+  // mean a page that loads with a restored `?rel.foc=claude` (comment side
+  // already rail-collapsed on the very FIRST render) never starts the poll
+  // at all, since inlineCommentsCardHTML would then never run once.
   syncComments(state ? state.pr : null)
+  return html`
+    <div class="contents">
+      ${() =>
+        commentColumnCollapsedToRail(state)
+          ? railButtonHTML({
+              label: 'Comment',
+              title: 'Comment',
+              testid: 'comment-claude-rail',
+              // Mirrors the ←/Escape hand-off already used from 'claude'
+              // (toComment()/toNewFocus() — see handleRelatedKey): a click
+              // runs the same function a key runs.
+              onClick: () => (cc.commentId == null ? toNewFocus() : toComment()),
+            })
+          : inlineCommentsCardHTML(state, commentTarget, openCompose, openCommentMenu, openPrCommentMenu)}
+    </div>
+  `
+}
+
+function inlineCommentsCardHTML(state, commentTarget, openCompose, openCommentMenu, openPrCommentMenu) {
   // Own explicit, bounded width instead of the earlier "no own width,
   // stretches to the sibling" comment, which never held: a flex-col's
   // cross-axis stretch only applies to a child whose OWN width is auto, and
@@ -6433,7 +6518,7 @@ export function InlineComments(state, commentTarget, openCompose, openCommentMen
   return html`
     <div
       class="${() =>
-        'relative flex shrink-0 flex-col justify-end gap-2 ' + commentColumnWidthCls()}"
+        'relative flex shrink-0 flex-col justify-end gap-2 ' + commentColumnWidthCls(state)}"
       style="${() => colWidthStyle(state, widthKey())}"
       data-testid="inline-comments"
       data-col-resize-root
@@ -6441,7 +6526,7 @@ export function InlineComments(state, commentTarget, openCompose, openCommentMen
       ${() =>
         widthKey()
           ? resizeHandle(
-              (e) => startColumnResize(e, state, widthKey(), () => parseAutoWidthPx(commentColumnWidthCls())),
+              (e) => startColumnResize(e, state, widthKey(), () => parseAutoWidthPx(commentColumnWidthCls(state))),
               () => resetColumnWidth(state, widthKey()),
             )
           : ''}
@@ -7090,21 +7175,56 @@ export function relatedColumnWidthCls() {
 // around it (mirrors nestedChipColumn's own connector, which also has none).
 const COMMENT_CLAUDE_CONNECTOR_REM = 0.75
 
-// commentColumnWidthCls / claudeColumnWidthCls — equal (1/2 each) halves of
-// relatedColumnWidthCls()'s own clamp, reading the SAME chars snapshot so
-// both split evenly as the code grows, not just at the extremes — the two
-// blocks read as one merged card (see home.mjs's comment-claude-row) and
-// must therefore stay the same width as each other. The connector's width
-// comes off the comment side only (see the inner row in home.mjs), so this
-// holds exactly, for any chars value:
-//   commentColumnWidthCls() + 0.75rem(connector) + claudeColumnWidthCls()
-//     === relatedColumnWidthCls()
-export function commentColumnWidthCls() {
-  return relatedWidthCls(relatedGrowthChars(), 1 / 2, COMMENT_CLAUDE_CONNECTOR_REM)
+// columnPairScale — the shared "how much of relatedColumnWidthCls()'s own
+// clamp does THIS half get" read behind commentColumnWidthCls/
+// claudeColumnWidthCls below. `sideCollapsedToRail` is the SIBLING's own
+// collapse question (claudeColumnCollapsedToRail for the comment side's
+// scale, commentColumnCollapsedToRail for the Claude side's) — never this
+// side's own, a column collapsed to a rail doesn't read its own width class
+// at all (see the ClaudeChatPanel/InlineComments early-return below).
+//
+// scale is 1 (the FULL clamp, same as relatedColumnWidthCls itself) in two
+// cases: a wide (`!state.narrowViewport`) screen — reviewer request: "maak
+// de chat blokken 2x zo breed (dan past alles heel goed)" on a screen with
+// room to spare, so BOTH halves double from the halved split below rather
+// than ever collapsing one — or a narrow screen where the sibling has
+// actually collapsed to its rail, so this half reclaims the freed width
+// (same "reclaims horizontal room for the focused column" reasoning
+// collapsedColumnHTML's own doc comment already states for the drilled-
+// column rail, home.mjs). Otherwise (narrow screen, neither side focused,
+// "zoals nu") scale stays 1/2 — the original, documented halved split.
+function columnPairScale(state, sideCollapsedToRail) {
+  if (!state || !state.narrowViewport) return 1
+  if (sideCollapsedToRail) return 1
+  return 1 / 2
 }
 
-export function claudeColumnWidthCls() {
-  return relatedWidthCls(relatedGrowthChars(), 1 / 2)
+// commentColumnWidthCls / claudeColumnWidthCls — read the SAME chars
+// snapshot so both split evenly as the code grows, not just at the
+// extremes — the two blocks read as one merged card (see home.mjs's
+// comment-claude-row) and must therefore stay the same width as each other
+// WHENEVER they are both actually shown at column width (i.e. whenever
+// neither is collapsed to a rail, see claudeColumnCollapsedToRail/
+// commentColumnCollapsedToRail above). The connector's width comes off the
+// comment side only (see the inner row in home.mjs). This keeps the
+// original documented invariant —
+//   commentColumnWidthCls() + 0.75rem(connector) + claudeColumnWidthCls()
+//     === relatedColumnWidthCls()
+// — exactly ONLY in that "neither side focused, narrow screen" default case
+// (both scale 1/2); a wide screen or an active rail-collapse deliberately
+// widen one or both halves past that sum instead (see columnPairScale
+// above) — an approved, documented departure from the original invariant,
+// not a regression of it.
+export function commentColumnWidthCls(state) {
+  return relatedWidthCls(
+    relatedGrowthChars(),
+    columnPairScale(state, claudeColumnCollapsedToRail(state)),
+    COMMENT_CLAUDE_CONNECTOR_REM,
+  )
+}
+
+export function claudeColumnWidthCls(state) {
+  return relatedWidthCls(relatedGrowthChars(), columnPairScale(state, commentColumnCollapsedToRail(state)))
 }
 
 // relatedCard renders one child block: a header (label + file:line + relation

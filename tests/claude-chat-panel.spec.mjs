@@ -1,5 +1,17 @@
 import { test, expect, seededPr, evaluateSettled, leaveSearchBox } from './_fixtures.mjs'
 
+// This whole file is about the Claude-chat MECHANICS (focus, drafts, sends,
+// live progress) — none of it is about the narrow-viewport rail-collapse
+// feature (see .claude/docs/comments-panel.md, "Vertical inklappen"), which
+// only kicks in below the 1400px `narrow` breakpoint and would otherwise
+// collapse whichever half of comment-claude-row these tests aren't
+// currently driving (e.g. the still-empty Claude composer while 'new' owns
+// the keyboard), hiding the very element several of these tests interact
+// with. A wide viewport keeps every half always fully rendered, exactly as
+// before this feature existed — the collapse itself has its own dedicated
+// tests in comment-claude-column-widths.spec.mjs.
+test.use({ viewport: { width: 1600, height: 900 } })
+
 // The indigo focus border must follow cs.focus, never sit permanently on the
 // comment side while the keyboard is actually in Claude — see "The focus
 // border follows the keyboard, not 'which side is merely shown'" in

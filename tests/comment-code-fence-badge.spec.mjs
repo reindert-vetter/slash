@@ -1,5 +1,14 @@
 import { test, expect, seededPr } from './_fixtures.mjs'
 
+// This file is not about the comment↔Claude rail-collapse feature (see
+// "Vertical inklappen" in .claude/docs/comments-panel.md), which only kicks
+// in below the 1400px `narrow` breakpoint and would otherwise collapse
+// whichever half of comment-claude-row these tests aren't currently
+// driving. A wide viewport keeps every half always fully rendered, exactly
+// as before that feature existed — the collapse itself has its own
+// dedicated tests in comment-claude-column-widths.spec.mjs.
+test.use({ viewport: { width: 1600, height: 900 } })
+
 // Verifies fenced code blocks inside a comment/reply body (markdown.mjs,
 // RelatedPanel.mjs): a language badge + a running "Codeblok N" number, a
 // ```suggestion fence rendering as a visually distinct "Suggestie N" instead

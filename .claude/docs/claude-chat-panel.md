@@ -717,7 +717,14 @@ The "Embedded Claude conversation" section owns:
   floor/ceiling — see `relatedWidthCls`'s doc comment. Not a new
   content-driven computation of its own; the transcript wraps
   (`ClaudeChat.mjs`'s `claude-chat-actions` button row also wraps, rather
-  than stretching the column, at this narrower width).
+  than stretching the column, at this narrower width). **This "exactly half"
+  split, and the always-on `claude-chat-column`, are only the DEFAULT case
+  now**: below the 1400px `narrow` breakpoint, whichever half of this row
+  does NOT own the keyboard collapses to a click-to-expand rail instead (and
+  a wide screen widens both halves past the half-split rather than ever
+  collapsing) — see "Vertical inklappen" in `.claude/docs/comments-panel.md`.
+
+## A PR-wide comment-index item can also start a conversation
 
 ## A PR-wide comment-index item can also start a conversation
 

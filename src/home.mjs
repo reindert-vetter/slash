@@ -130,6 +130,7 @@ import RelatedPanel, {
   commentClaudeShortcutHints,
 } from './RelatedPanel.mjs'
 import { ShortcutHintBar } from './shortcutHints.mjs'
+import { railButtonHTML } from './collapsedRail.mjs'
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { CallArrowsHost, setCallArrows, resettleCallArrows } from './callArrows.mjs'
 import { setPrRepo } from './prContext.mjs'
@@ -826,6 +827,21 @@ const state = reactive({
   // file), so every reader voids this counter first instead of depending on
   // colWidths[key] directly.
   colWidthVersion: 0,
+  // narrowViewport — reactive mirror of Tailwind's own `narrow` custom
+  // screen (`max-width: 1399px`, index.html's tailwind.config; the same
+  // cutoff columnWidth.mjs's parseAutoWidthPx already checks in plain JS at
+  // drag time). Gates the comment↔Claude rail-collapse in RelatedPanel.mjs
+  // (commentColumnCollapsedToRail/claudeColumnCollapsedToRail — see
+  // "Vertical inklappen = the rail idiom, only below 1400px" in
+  // .claude/docs/comments-panel.md): only a genuinely narrow ("laptop-only")
+  // window ever collapses one side to a rail; a wide window instead widens
+  // both halves (see commentColumnWidthCls/claudeColumnWidthCls). Needed as
+  // its own reactive field because nothing else in this app re-renders
+  // purely because the window resized with no other state change — every
+  // other width computation here rides on Tailwind's own CSS media query,
+  // which needs no JS help, but the rail-vs-full CHOICE swaps real markup
+  // and must therefore be reactive.
+  narrowViewport: window.innerWidth <= 1399,
 })
 
 // A narrower window can take away the room a kept-open left column needed
@@ -835,6 +851,12 @@ const state = reactive({
 // column by itself, the reviewer asks for that with a click.
 window.addEventListener('resize', () => {
   if (state.keepIndexInDiff || state.descriptionPinned) applyDiffColumnFit()
+  // Guarded on the actual value (not a bare reassignment every resize tick,
+  // which fires repeatedly while dragging) — the vendored proxy notifies on
+  // every assignment regardless of whether the value truly changed, see
+  // .claude/rules/arrowjs-pitfalls.md.
+  const narrow = window.innerWidth <= 1399
+  if (state.narrowViewport !== narrow) state.narrowViewport = narrow
 })
 
 // Seed state.colWidths from the cookie set on an earlier visit. Cookies are
@@ -9290,31 +9312,13 @@ function canStepMainLeft() {
 // `drillIdx` (drilled columns only, null for the top-level rail) is exposed as
 // data-drill-idx so it lines up with the open drill-column's own attribute.
 function collapsedColumnHTML(b, level, testid, drillIdx = null) {
-  const label = blockLabel(b)
-  return html`
-    <button
-      type="button"
-      class="flex h-full w-14 shrink-0 flex-col items-center justify-center gap-2 rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 ring-1 ring-black/5 text-slate-500 dark:text-zinc-400 hover:bg-slate-50 dark:hover:bg-zinc-800/60 hover:text-indigo-500 dark:hover:text-indigo-400"
-      data-testid="${testid}"
-      data-drill-idx="${drillIdx === null ? '' : drillIdx}"
-      title="${b.label || ''}"
-      @click="${() => expandColumn(level)}"
-    >
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        class="h-4 w-4 shrink-0"
-      ><path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/></svg>
-      <span class="max-h-40 overflow-hidden text-ellipsis text-[10px] font-medium [writing-mode:vertical-rl]"
-        >${label}</span
-      >
-    </button>
-  `
+  return railButtonHTML({
+    label: blockLabel(b),
+    title: b.label || '',
+    testid,
+    dataDrillIdx: drillIdx,
+    onClick: () => expandColumn(level),
+  })
 }
 
 // resolveChildBlock turns an Onderliggende-code child descriptor into the
