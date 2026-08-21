@@ -1410,9 +1410,11 @@ on:
 - **`Block.mjs`** takes `opts.shortcutHints` (default `() => []`) and
   renders it at the bottom of the card, inside the `<article>`. `home.mjs`'s
   `blockShortcutHints()` supplies the list — `→`/`Enter`/`Space`/`/` in
-  list mode, `←→`/`f/d/s`/`a`/`Space`/`Enter` in diff mode (the `↑`/`↓`
-  and `Shift+↑`/`↓` hints were dropped on request — too obvious/basic to spell
-  out) — and both `Block()` call sites (the top-level card, the drilled-column
+  list mode, `←→`/`f/d/s`(or `f/s`)/`a`/`Space`/`Enter` in diff mode (the
+  `↑`/`↓` and `Shift+↑`/`↓` hints were dropped on request — too obvious/basic
+  to spell out; the `d` in `f/d/s` itself only appears while it would
+  actually do something — see `dHintUsable()` below) — and both `Block()`
+  call sites (the top-level card, the drilled-column
   card) gate it on the exact SAME "is this card the one the keyboard is on"
   condition their own `hintsEnabled` opt already uses (`isActiveCard(b) &&
   state.focusLevel === 0` / `state.focusLevel === level`) — a look-ahead
@@ -1441,6 +1443,43 @@ hidden-when-unused), which is the one shape arrow.js is unambiguously
 reliable about. Regression test: `tests/shortcut-hints.spec.mjs` (the
 list↔diff round trip, the active-card-only assertion, and the
 comment/Claude column's own hints).
+
+### At `'line'`/`'call'` granularity, s/d/f are the ENTIRE hint line
+
+Reviewer follow-up, in two steps:
+
+1. "laat d niet zien als je niet kan gebruiken (als een groep is
+   geselecteerd)" — `dKey()` ultimately falls through to `setGran(-1)`/
+   `setDrillGran(level, -1)` whenever it isn't stepping to a previous call,
+   and both of those are a genuine, silent no-op once already at the
+   coarsest `'group'` level (`GRANS.indexOf('group') === 0`, so the delta
+   clamps to the same index) — exactly the case flagged. `home.mjs`'s
+   `dHintUsable()` mirrors that check (read-only, no side effects: not at
+   `'group'` — via the shared `currentGran()` helper, the focused drilled
+   column's own `drillCursor` entry or else top-level `state.gran` — and
+   never for a TRANSLATION block, which has no group/line/call distinction
+   at all).
+2. "als je line hebt geselecteerd, laat dan niets zien behalve sdf... en
+   omschrijf sd, f dan los van elkaar... als het een call is, laat dan
+   alleen s, d, f omschrijven, de rest mag dan weg" — at `'line'` or
+   `'call'` (`currentGran() !== 'group'`), `blockShortcutHints()` returns
+   ONLY `f`/`d`/`s`, each its OWN `{key, label}` entry (`'inzoomen'`/
+   `'terug'`/`'uitzoomen'`) instead of one combined `'f/d/s'` key under a
+   single "zoom" label — every other hint (`←→` kolom, `a` weergave,
+   `Space` goedkeuren, `Enter` menu) drops out entirely at those two
+   granularities. `d`'s own entry still only appears while `dHintUsable()`
+   holds (in practice always true at `'line'`/`'call'` — `d` is never a
+   no-op there, only at `'group'`, see point 1).
+
+Only `'group'` keeps the fuller set (`←→`/`f`+`s` combined under `'zoom'`
+— `d` dropped, per point 1 — /`a`/`Space`/`Enter`): the reviewer's request
+was specifically about `'line'`/`'call'`, and `'group'` is the one stand
+where the OTHER actions (switching columns, the view toggle, approving,
+opening the menu) are still exactly as relevant as the zoom keys — nothing
+in the request said to drop those there too. `f` is never a no-op at any
+granularity (it always refines, or at the finest level steps to/flows into
+the next call) and `s`'s own occasional no-op at `'group'` was never
+flagged, so `s` stays listed unconditionally wherever it appears.
 
 **Only the active card, confirmed on request** ("ik wil trouwens die hints
 alleen zien als de blok actief/geselecteerd is") — already the design from

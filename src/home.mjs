@@ -7816,13 +7816,58 @@ function blockShortcutHints() {
       { key: '/', label: 'PR-menu' },
     ]
   }
+  // At 'line'/'call' the s/d/f zoom keys ARE the whole story — reviewer
+  // request: "als je line hebt geselecteerd, laat dan niets zien behalve
+  // sdf... als het een call is, laat dan alleen s, d, f omschrijven, de rest
+  // mag dan weg" — so ←→/a/Space/Enter drop out entirely there, and each of
+  // s/d/f gets its OWN entry+label ("omschrijf... los van elkaar") instead
+  // of one combined 'f/d/s' key under a single "zoom" label. `d` still only
+  // appears while genuinely usable (dHintUsable, unchanged reasoning/scope).
+  if (currentGran() !== 'group') {
+    const items = [{ key: 'f', label: 'inzoomen' }]
+    if (dHintUsable()) items.push({ key: 'd', label: 'terug' })
+    items.push({ key: 's', label: 'uitzoomen' })
+    return items
+  }
   return [
     { key: '←→', label: 'kolom' },
-    { key: 'f/d/s', label: 'zoom' },
+    { key: 'f/s', label: 'zoom' },
     { key: 'a', label: 'weergave' },
     { key: 'Space', label: 'goedkeuren + door' },
     { key: 'Enter', label: 'menu' },
   ]
+}
+
+// currentGran — the granularity actually in effect right now: the focused
+// drilled column's own drillCursor entry (state.focusLevel > 0), else the
+// top-level state.gran. Shared by blockShortcutHints (which stand shows) and
+// dHintUsable (below) so the two can never read two different notions of
+// "current gran".
+function currentGran() {
+  if (state.focusLevel > 0) {
+    const cur = state.drillCursor[state.focusLevel - 1] || { change: 0, gran: 'group' }
+    return cur.gran
+  }
+  return state.gran
+}
+
+// dHintUsable — mirrors dKey()'s own real no-op cases (read-only, no side
+// effects): reviewer request, "laat d niet zien als je niet kan gebruiken
+// (als een groep is geselecteerd)" — dKey() ultimately calls setGran(-1)/
+// setDrillGran(level,-1) whenever it isn't stepping to a previous call, and
+// both of those are a genuine no-op once already at the coarsest 'group'
+// level (GRANS.indexOf('group') === 0, so `to === from`, see setGran's own
+// doc comment) — the exact scenario the reviewer flagged. A TRANSLATION
+// block (per-key navigation, no group/line/call distinction at all — see
+// setGran's own TRANSLATION guard) never has a usable 'd' either. At any
+// OTHER gran (including 'call', where 'd' either steps to a previous call or
+// still zooms call→line) 'd' always does something, so this only needs to
+// rule out the one genuinely inert case.
+function dHintUsable() {
+  const b = curBlock()
+  if (!b) return false
+  if (state.focusLevel === 0 && b.category === 'TRANSLATION') return false
+  return currentGran() !== 'group'
 }
 
 // topLoadingActive drives TopLoadingBar (a fixed strip at the very top of the

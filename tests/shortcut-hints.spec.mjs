@@ -8,6 +8,14 @@ import { test, expect, leaveSearchBox, seededPr } from './_fixtures.mjs'
 // deliberately never listed (reviewer follow-up: "hint pijltjes omhoog en
 // naar beneden kan weg, shift met pijltjes mag ook weg" — too obvious/basic
 // to spell out).
+// At 'line'/'call' granularity the s/d/f zoom keys ARE the whole hint line —
+// every other hint (←→/a/Space/Enter) drops out, and each of s/d/f gets its
+// own entry instead of one combined 'f/d/s' key (reviewer follow-up: "als je
+// line hebt geselecteerd, laat dan niets zien behalve sdf... omschrijf sd, f
+// dan los van elkaar... als het een call is, laat dan alleen s, d, f
+// omschrijven, de rest mag dan weg"). `d` still only shows up while it would
+// actually do something (dHintUsable — never at the coarsest 'group' level,
+// which is the one stand that keeps the fuller ←→/a/Space/Enter set).
 test.describe('Contextual shortcut-hint line', () => {
   test('list mode and diff mode show different hints, and switching back and forth never leaves the OTHER mode\'s text behind', async ({
     page,
@@ -33,6 +41,25 @@ test.describe('Contextual shortcut-hint line', () => {
     await page.keyboard.press('ArrowLeft') // diff -> list
     await expect(hints).toContainText('PR-menu')
     await expect(hints).not.toContainText('zoom')
+  })
+
+  test('at line/call granularity only s/d/f show, each its own hint, no other keys', async ({ page }) => {
+    await page.goto('/pr/12903')
+    await leaveSearchBox(page)
+    await page.locator('[data-idx="1"]').click()
+    await page.keyboard.press('ArrowRight') // group — the fuller set
+
+    const hints = page.getByTestId('shortcut-hints').first()
+    await expect(hints).toContainText('kolom')
+    await expect(hints).toContainText('menu')
+
+    await page.keyboard.press('f') // zoom in — line (or call on a single-row group)
+    await expect(hints).not.toContainText('kolom')
+    await expect(hints).not.toContainText('weergave')
+    await expect(hints).not.toContainText('goedkeuren')
+    await expect(hints).toContainText('inzoomen')
+    await expect(hints).toContainText('terug')
+    await expect(hints).toContainText('uitzoomen')
   })
 
   test('only the active card shows a hint line, never the look-ahead preview', async ({ page }) => {
