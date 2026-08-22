@@ -999,6 +999,26 @@ local replies — otherwise they stay plain, directly running items rather than
 costing a keypress for a choice with one possible answer. Built fresh at open
 time with plain-string labels, per `snapshotCommands`' rule.
 
+**A bare, still-untaken-over Claude-chat anchor thread never gets the second
+GitHub item.** Starting a Claude conversation before the reviewer has typed a
+comment creates a local placeholder comment
+(`CLAUDE_ANCHOR_PLACEHOLDER`/`ensureClaudeAnchorForNew`, `RelatedPanel.mjs`) —
+its root body is auto-generated, never anything the reviewer wrote. Sending
+the reviewer's first reply on that thread is still `needsPublishChoice`
+(the anchor is local), but `pendingPublishInfo().chatAnchor` (true while
+`isChatAnchorPlaceholder(c) && !firstReviewerReplyOnPlaceholder(c)`) makes
+`replyPublishCommandsFor` drop `"Ook mijn comment op GitHub"` entirely — there
+is no reviewer-authored "eigen comment" to publish, and offering it would post
+the placeholder sentence itself to GitHub if picked. Such a thread's menu
+therefore has only **two** rows: `"Sluit menu"` and `"Alleen mijn antwoord op
+GitHub"` (default). Once that first reply takes the thread over
+(`firstReviewerReplyOnPlaceholder`), `chatAnchor` flips back to `false` and a
+LATER reply's menu regains the second item, since by then there genuinely is a
+reviewer-authored "comment" (that first reply, displayed as the thread's body —
+see `commentBody`) to publish alongside it. Reported bug: the reviewer's very
+first reply on such a thread showed both GitHub items ("ik heb niet al een
+comment, waarom die 2 opties hier?").
+
 It is **not** an `isReviewFollowup` mode: the reply field it belongs to is
 on-screen, so `positionMenu` anchors it normally.
 

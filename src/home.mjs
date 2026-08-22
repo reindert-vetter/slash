@@ -7476,10 +7476,22 @@ const COMPOSE_COMMANDS = withClose([
 // plain string, so nothing that reads live state reaches CommandMenu's own
 // (never disposed) reactive tree — see the disposal-gap note in
 // arrowjs-pitfalls.md.
+//
+// A bare, still-untaken-over Claude-chat anchor thread (info.chatAnchor, see
+// pendingPublishInfo in RelatedPanel.mjs) drops the second GitHub item
+// entirely — its root is only the auto-generated placeholder sentence, never
+// anything the reviewer wrote, so "Ook mijn comment op GitHub" would offer to
+// publish that placeholder as if it were a real comment. Such a thread's menu
+// therefore has only two rows: "Sluit menu" and "Alleen mijn antwoord op
+// GitHub" (still the default Enter action). Reported bug: a reviewer who
+// started a Claude chat and sent their FIRST reply saw both GitHub items even
+// though they "hadn't written a comment yet" — see
+// ".claude/docs/command-palette.md".
 function replyPublishCommandsFor() {
   const info = pendingPublishInfo()
   const n = info ? info.localReplies : 0
   const isAI = !!info && info.source === 'ai'
+  const isChatAnchor = !!info && info.chatAnchor
   const rootLabel = isAI ? 'Ook de AI-melding op GitHub' : 'Ook mijn comment op GitHub'
   const earlier = `de eerdere ${n} bericht${n === 1 ? '' : 'en'}`
   // historyChoice turns one publish mode into its own with/without-the-earlier-
@@ -7507,10 +7519,15 @@ function replyPublishCommandsFor() {
             },
           ]),
         }
-  return withClose([
-    historyChoice('reply-publish-reply', 'Alleen mijn antwoord op GitHub', 'reply'),
-    historyChoice('reply-publish-thread', rootLabel, 'thread'),
-  ])
+  // A bare, un-taken-over Claude-chat anchor (info.chatAnchor) has no
+  // reviewer-authored root text at all — only the auto-generated placeholder
+  // sentence — so "Ook mijn comment op GitHub" is dropped entirely rather
+  // than shown with a misleading label: see pendingPublishInfo's own doc
+  // comment. The reviewer's reply is then the only thing this menu can ever
+  // offer to publish.
+  const items = [historyChoice('reply-publish-reply', 'Alleen mijn antwoord op GitHub', 'reply')]
+  if (!isChatAnchor) items.push(historyChoice('reply-publish-thread', rootLabel, 'thread'))
+  return withClose(items)
 }
 
 // POSTAPPROVE_COMMANDS — shown right after a palette approve action (menu mode

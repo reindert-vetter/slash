@@ -5141,6 +5141,19 @@ export function setCommentSelectRequest(fn) {
 // pendingPublishInfo exposes the waiting send to home.mjs so the menu can
 // name what it is about (an AI finding vs the reviewer's own note, and how
 // many earlier local replies there are).
+//
+// `chatAnchor` is true while the target is still a BARE Claude-chat anchor
+// (isChatAnchorPlaceholder) that the reviewer has never taken over with a
+// real first reply (firstReviewerReplyOnPlaceholder) — i.e. its root body is
+// only the auto-generated CLAUDE_ANCHOR_PLACEHOLDER sentence, never anything
+// the reviewer wrote. replyPublishCommandsFor (home.mjs) reads this to drop
+// the "Ook mijn comment op GitHub" item in that case: there is no reviewer-
+// authored "eigen comment" to publish alongside the reply, so offering that
+// choice is nonsensical (and would, if picked, post the placeholder sentence
+// itself to GitHub). Once the reviewer's own first reply takes the thread
+// over, this flips back to false and the item reappears — see "A bare
+// Claude-chat thread's publish menu never offers ..." in
+// .claude/docs/command-palette.md.
 export function pendingPublishInfo() {
   if (!pendingPublish) return null
   const c = commentById(pendingPublish.commentId)
@@ -5148,6 +5161,7 @@ export function pendingPublishInfo() {
     ...pendingPublish,
     source: c ? c.source || 'ui' : 'ui',
     localReplies: localReplyCount(c),
+    chatAnchor: !!c && isChatAnchorPlaceholder(c) && !firstReviewerReplyOnPlaceholder(c),
   }
 }
 
