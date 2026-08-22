@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Welcome — PR Review Tree</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌳</text></svg>">
+    <script>
+      // Anti-flash: this page is always dark, regardless of the reviewer's
+      // theme.mjs preference (see index.html/overview.html/inbox.html for the
+      // three-state theme it does NOT need — this is a standalone showcase, not
+      // part of the reviewer's ordinary dark/light flow).
+      document.documentElement.classList.add('dark')
+    </script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = { darkMode: 'selector' }
+    </script>
+    <style>
+      /* Scene transition + flair keyframes — plain CSS, no animation library. */
+      @keyframes welcome-fade-in {
+        from {
+          opacity: 0;
+          transform: translateY(12px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+      .welcome-scene-enter {
+        animation: welcome-fade-in 0.6s ease-out both;
+      }
+
+      @keyframes welcome-blob-drift {
+        0% {
+          transform: translate(0, 0) scale(1);
+        }
+        50% {
+          transform: translate(4%, -6%) scale(1.08);
+        }
+        100% {
+          transform: translate(0, 0) scale(1);
+        }
+      }
+      .welcome-blob {
+        animation: welcome-blob-drift 14s ease-in-out infinite;
+      }
+
+      @keyframes welcome-caret-blink {
+        0%,
+        50% {
+          opacity: 1;
+        }
+        50.01%,
+        100% {
+          opacity: 0;
+        }
+      }
+      .welcome-caret {
+        animation: welcome-caret-blink 1s steps(1) infinite;
+      }
+
+      @keyframes welcome-scan {
+        0% {
+          transform: translateY(0);
+        }
+        100% {
+          transform: translateY(100%);
+        }
+      }
+      .welcome-scan-line {
+        animation: welcome-scan 2.4s linear infinite;
+      }
+
+      /* Cinematic per-letter reveal — used for the opening question. */
+      @keyframes welcome-letter-in {
+        from {
+          opacity: 0;
+          transform: translateY(18px) scale(0.7);
+          filter: blur(6px);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+          filter: blur(0);
+        }
+      }
+      .welcome-letter {
+        animation: welcome-letter-in 0.55s cubic-bezier(0.16, 1, 0.3, 1) both;
+      }
+
+      /* Animated gradient text for the biggest line of every scene. */
+      @keyframes welcome-gradient-move {
+        from {
+          background-position: 0% 50%;
+        }
+        to {
+          background-position: 300% 50%;
+        }
+      }
+      .welcome-gradient-text {
+        background-image: linear-gradient(90deg, #818cf8, #f472b6, #34d399, #818cf8);
+        background-size: 300% 100%;
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+        animation: welcome-gradient-move 5s linear infinite;
+      }
+
+      /* A pulsing glow ring, reused on the mock cards and the screenshots so
+         nothing on this page just sits there static. */
+      @keyframes welcome-glow-pulse {
+        0%,
+        100% {
+          box-shadow: 0 0 0 1px rgba(129, 140, 248, 0.25), 0 0 40px -10px rgba(129, 140, 248, 0.45);
+        }
+        50% {
+          box-shadow: 0 0 0 1px rgba(244, 114, 182, 0.35), 0 0 70px -5px rgba(244, 114, 182, 0.55);
+        }
+      }
+      .welcome-glow {
+        animation: welcome-glow-pulse 3.2s ease-in-out infinite;
+      }
+
+      /* A cinematic left-to-right wipe reveal for the two screenshots. */
+      @keyframes welcome-wipe {
+        from {
+          clip-path: inset(0 100% 0 0);
+        }
+        to {
+          clip-path: inset(0 0 0 0);
+        }
+      }
+      .welcome-wipe {
+        animation: welcome-wipe 0.9s cubic-bezier(0.16, 1, 0.3, 1) both;
+      }
+
+      /* Slow-rotating conic wash behind everything, for depth. */
+      @keyframes welcome-conic-spin {
+        from {
+          transform: rotate(0deg);
+        }
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      .welcome-conic {
+        animation: welcome-conic-spin 40s linear infinite;
+      }
+
+      /* A quick camera-flash pulse fired on every scene change. */
+      #welcome-flash {
+        transition: opacity 0.4s ease-out;
+      }
+
+      /* The top progress bar filling up over a scene's own duration. */
+      #welcome-progress-bar {
+        transition: none;
+        width: 0%;
+      }
+    </style>
+  </head>
+  <body class="h-screen overflow-hidden bg-zinc-950 text-zinc-100 antialiased">
+    <div id="app"></div>
+    <script type="module" src="/src/welcome.mjs"></script>
+  </body>
+</html>

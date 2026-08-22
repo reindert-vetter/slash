@@ -13,10 +13,11 @@ review tree and the PR overview.
   identity, keyboard).
 - `.claude/docs/task-inbox-page.md` — the `/inbox` page in full.
 
-## The three routes
+## The routes
 
-All three are static HTML shells with no build step; the Go server (`api.go`,
-`routes`) decides which shell a route gets, via `serveFile(staticDir, name)`.
+Every route is a static HTML shell with no build step; the Go server
+(`api.go`, `routes`) decides which shell a route gets, via
+`serveFile(staticDir, name)`.
 
 - **`/pr/<id>`** — the review page for a single PR (`index.html` →
   `home.mjs`). The PR id comes from the **path**, not the query string:
@@ -33,6 +34,26 @@ All three are static HTML shells with no build step; the Go server (`api.go`,
   reviews, unread comments on your own PRs, and Jira tickets assigned to you
   (`inbox.html` → `src/inbox.mjs`), see
   `.claude/docs/task-inbox-page.md`.
+- **`/welcome`** — a standalone, animated showcase/onboarding page
+  (`welcome.html` → `src/welcome.mjs` + `src/WelcomeScene.mjs`), not linked
+  from any other page yet (a future settings-page button is a separate task —
+  for now it's only reachable by visiting the URL directly). Deliberately its
+  **own** shell and **own** entry module, imported by nothing else and
+  importing nothing from `home.mjs`/`overview.mjs`/`inbox.mjs`, so normal use
+  of the review tree never loads it. A short, linear, auto-advancing sequence
+  of scenes (`WELCOME_SCENES` in `welcome.mjs`) walks through the pitch (why
+  overview matters) into a few hand-built mocks of the review tree's own look
+  (PR description / index / diff / drill) and then two real screenshots (the
+  comment view, the embedded Claude chat with code blocks), copied into the
+  repo under `assets/welcome/` (served by the same catch-all
+  `http.FileServer`, no dedicated endpoint). It deliberately reuses the review
+  tree's **own keys with the same meaning** rather than a bespoke scheme:
+  `→`/`↓`/`Space`/`Enter` move forward (mirroring the left→right nav chain and
+  the "confirm and move on" meaning `Space` has there), `←`/`↑` step back one
+  scene (mirroring `←` always peeling back one stop) — see `onKeydown` in
+  `welcome.mjs`. Every scene also auto-advances on its own timer unless it's
+  the closing scene (`duration: null`), so it plays on its own too. Test:
+  `tests/welcome-page.spec.mjs`.
 - **`/`** redirects (302) to `/pr-overview`; every other path (`/src/*`,
   `/overview.html`, …) is served statically by the `http.FileServer`.
 
