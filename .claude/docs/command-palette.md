@@ -1019,6 +1019,24 @@ see `commentBody`) to publish alongside it. Reported bug: the reviewer's very
 first reply on such a thread showed both GitHub items ("ik heb niet al een
 comment, waarom die 2 opties hier?").
 
+**With the bogus item gone, the menu never opens at all for that first
+reply.** Immediate follow-up in the same session: "als ik eigenlijk maar 1
+optie heb (- sluiten) dan wil ik geen menu zien" — a two-row menu whose only
+real row is the default action isn't a CHOICE, it's just an extra keypress.
+`sendReaction` (`RelatedPanel.mjs`) checks the same
+`isChatAnchorPlaceholder(c) && !firstReviewerReplyOnPlaceholder(c)` condition
+**before** ever calling `openPublishMenu`, and short-circuits straight to
+`postThreadReply(c, body, 'reply', false)` — the same shape as the existing
+pure-Claude-draft shortcut just above it in that function (`publish:'reply'`,
+no history: a bare anchor can never yet hold an earlier local reply either,
+since any earlier reply would already have taken it over). `replyPublish`'s
+own `chatAnchor` branch above is consequently unreachable through this path
+today and is kept only as a defensive fallback, in case some other future
+caller opens `replyPublish` on a still-bare anchor. The comment's own action
+menu (`commentMenuOpener`) still opens right after, unrelated to this —
+`postThreadReply` always does that, see its own doc comment. Test:
+`tests/reply-publish-chat-anchor.spec.mjs`.
+
 It is **not** an `isReviewFollowup` mode: the reply field it belongs to is
 on-screen, so `positionMenu` anchors it normally.
 

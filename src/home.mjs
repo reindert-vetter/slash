@@ -7481,12 +7481,19 @@ const COMPOSE_COMMANDS = withClose([
 // pendingPublishInfo in RelatedPanel.mjs) drops the second GitHub item
 // entirely — its root is only the auto-generated placeholder sentence, never
 // anything the reviewer wrote, so "Ook mijn comment op GitHub" would offer to
-// publish that placeholder as if it were a real comment. Such a thread's menu
-// therefore has only two rows: "Sluit menu" and "Alleen mijn antwoord op
-// GitHub" (still the default Enter action). Reported bug: a reviewer who
-// started a Claude chat and sent their FIRST reply saw both GitHub items even
-// though they "hadn't written a comment yet" — see
-// ".claude/docs/command-palette.md".
+// publish that placeholder as if it were a real comment. Reported bug: a
+// reviewer who started a Claude chat and sent their FIRST reply saw both
+// GitHub items even though they "hadn't written a comment yet".
+//
+// In practice this menu never even OPENS for that case any more:
+// sendReaction (RelatedPanel.mjs) now short-circuits a bare chat-anchor's
+// first reply straight to `postThreadReply(c, body, 'reply', false)` — the
+// immediate reviewer follow-up, "als ik eigenlijk maar 1 optie heb (- sluiten)
+// dan wil ik geen menu zien": with the bogus item gone, only ONE real
+// destination was left next to "Sluit menu", i.e. no actual choice. This
+// branch stays as a defensive fallback (`isChatAnchor` can never be true here
+// while reached only through the ordinary `needsPublishChoice` menu open) —
+// see ".claude/docs/command-palette.md".
 function replyPublishCommandsFor() {
   const info = pendingPublishInfo()
   const n = info ? info.localReplies : 0

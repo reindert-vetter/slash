@@ -1,6 +1,6 @@
 import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
-// Reported bug: "ik heb niet al een comment, waarom die 2 opties hier?" — a
+// Reported bug 1: "ik heb niet al een comment, waarom die 2 opties hier?" — a
 // reviewer who starts a Claude conversation (which lazily creates a LOCAL
 // placeholder comment, see ensureClaudeAnchorForNew/CLAUDE_ANCHOR_PLACEHOLDER
 // in RelatedPanel.mjs, since the backend requires an existing comment to
@@ -8,12 +8,21 @@ import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 // see the ordinary two-item publish menu, including "Ook mijn comment op
 // GitHub" — which implies there is a reviewer-authored root comment to
 // publish alongside the reply. There isn't one: the root is only the
-// auto-generated placeholder sentence. See pendingPublishInfo's `chatAnchor`
-// flag and replyPublishCommandsFor (home.mjs), plus "A bare, still-untaken-
-// over Claude-chat anchor thread..." in .claude/docs/command-palette.md.
+// auto-generated placeholder sentence.
+//
+// Reported bug 2, same session, immediate follow-up once bug 1 was fixed:
+// "als ik eigenlijk maar 1 optie heb (- sluiten) dan wil ik geen menu zien" —
+// with the bogus item gone, the menu was left with exactly one real
+// destination next to the pinned "Sluit menu", i.e. no actual choice to make
+// at all. `sendReaction` (RelatedPanel.mjs) now skips the publish-choice menu
+// entirely for a bare, still-untaken-over chat anchor and sends straight to
+// GitHub as that one destination (`publish:'reply'`), exactly like the
+// existing pure-Claude-draft shortcut just above it. See pendingPublishInfo's
+// `chatAnchor` doc comment and "A bare, still-untaken-over Claude-chat anchor
+// thread..." in .claude/docs/command-palette.md.
 test.use({ viewport: { width: 2000, height: 1100 } })
 
-test('a bare Claude-chat anchor thread only offers "Alleen mijn antwoord op GitHub", not "Ook mijn comment"', async ({
+test('a bare Claude-chat anchor thread\'s first reply posts straight to GitHub, no publish-choice menu', async ({
   page,
 }) => {
   await page.goto('/pr/12903')
@@ -39,21 +48,38 @@ test('a bare Claude-chat anchor thread only offers "Alleen mijn antwoord op GitH
   await expect(page.getByTestId('comment-item')).toContainText('Claude gesprek')
 
   // Open the bare anchor's own thread and send the reviewer's first reply —
-  // this is the exact moment the publish-choice menu opens.
+  // there is no publish-choice menu to click through: it goes straight out.
   await page.getByTestId('comment-item').click()
   const reply = page.getByTestId('reaction-compose')
   await reply.click()
   await expect(reply).toBeFocused()
-  await reply.fill('asdf')
-  await reply.press('Enter')
+  const [replyReq] = await Promise.all([
+    page.waitForRequest((req) => req.url().includes('/signals/reply') && req.method() === 'POST'),
+    reply.fill('asdf'),
+    reply.press('Enter'),
+  ])
+  const payload = replyReq.postDataJSON()
+  expect(payload.body).toBe('asdf')
+  expect(payload.publish).toBe('reply')
 
+  // postThreadReply still opens the comment's OWN action menu right after —
+  // a different menu than the (now skipped) publish-choice one — so this is
+  // not "no menu ever", just no CHOICE menu for a destination with only one
+  // real answer.
   const menu = page.getByTestId('command-menu')
   await expect(menu).toBeVisible()
-  const rows = menu.getByTestId('command-row')
-  // Only "Sluit menu" + "Alleen mijn antwoord op GitHub" — no second,
-  // "Ook mijn comment op GitHub" item, since there is no reviewer-authored
-  // root comment on this thread yet.
-  await expect(rows).toHaveCount(2)
-  await expect(rows.nth(1)).toContainText('Alleen mijn antwoord op GitHub')
+  await expect(menu).not.toContainText('Alleen mijn antwoord op GitHub')
   await expect(menu).not.toContainText('Ook mijn comment op GitHub')
+  await page.keyboard.press('Escape')
+  await expect(menu).toHaveCount(0)
+
+  // The thread is now taken over and public.
+  await expect
+    .poll(async () => {
+      const res = await page.request.get('/api/comments?pr=12903')
+      const list = await res.json()
+      const c = list.find((x) => x.body === 'asdf' || (x.reactions || []).some((r) => r.body === 'asdf'))
+      return (c && c.githubId) || 0
+    })
+    .toBeGreaterThan(0)
 })

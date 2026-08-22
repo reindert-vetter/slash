@@ -5248,6 +5248,23 @@ async function sendReaction() {
     await postThreadReply(c, body, 'reply', false)
     return
   }
+  // A bare, still-untaken-over Claude-chat anchor (see pendingPublishInfo's
+  // own `chatAnchor` doc comment) never has a real CHOICE to ask about: its
+  // root carries no reviewer-authored text to optionally publish alongside
+  // the reply, and (because it's still un-taken-over) it can never yet hold
+  // an earlier local reply either — so the publish menu would only ever show
+  // one real destination next to "Sluit menu". Reviewer request: "als ik
+  // eigenlijk maar 1 optie heb (- sluiten) dan wil ik geen menu zien" — skip
+  // the menu and send straight to GitHub as that one destination
+  // (`publish:'reply'`, no history to bring along), exactly like the pure-
+  // Claude-draft case just above. Once this reply lands, the thread IS taken
+  // over (firstReviewerReplyOnPlaceholder) and a LATER reply goes through the
+  // ordinary flow, menu included, since "Ook mijn comment op GitHub" is a
+  // real choice again by then.
+  if (needsPublishChoice(c) && isChatAnchorPlaceholder(c) && !firstReviewerReplyOnPlaceholder(c)) {
+    await postThreadReply(c, body, 'reply', false)
+    return
+  }
   // A thread that has never touched GitHub asks first what may go public —
   // see openPublishMenu / sendPendingReply.
   if (needsPublishChoice(c)) {
