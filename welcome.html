@@ -123,17 +123,36 @@
         animation: welcome-glow-pulse 3.2s ease-in-out infinite;
       }
 
-      /* A cinematic left-to-right wipe reveal for the two screenshots. */
-      @keyframes welcome-wipe {
+      /* A block popping into place as it connects to the tree. */
+      @keyframes welcome-node-in {
         from {
-          clip-path: inset(0 100% 0 0);
+          opacity: 0;
+          transform: scale(0.6) translateY(10px);
+          filter: blur(4px);
         }
         to {
-          clip-path: inset(0 0 0 0);
+          opacity: 1;
+          transform: none;
+          filter: blur(0);
         }
       }
-      .welcome-wipe {
-        animation: welcome-wipe 0.9s cubic-bezier(0.16, 1, 0.3, 1) both;
+      .welcome-node-in {
+        animation: welcome-node-in 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+      }
+
+      /* The connector arrow growing in right after its block. */
+      @keyframes welcome-connector-in {
+        from {
+          opacity: 0;
+          transform: scaleX(0.2);
+        }
+        to {
+          opacity: 1;
+          transform: scaleX(1);
+        }
+      }
+      .welcome-connector-in {
+        animation: welcome-connector-in 0.35s ease-out 0.15s both;
       }
 
       /* Slow-rotating conic wash behind everything, for depth. */
@@ -149,15 +168,9 @@
         animation: welcome-conic-spin 40s linear infinite;
       }
 
-      /* A quick camera-flash pulse fired on every scene change. */
+      /* A quick camera-flash pulse fired on every build/undo step. */
       #welcome-flash {
         transition: opacity 0.4s ease-out;
-      }
-
-      /* The top progress bar filling up over a scene's own duration. */
-      #welcome-progress-bar {
-        transition: none;
-        width: 0%;
       }
     </style>
   </head>

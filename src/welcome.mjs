@@ -4,125 +4,160 @@
 // inbox.mjs, and importing nothing from them) so normal use of the review
 // tree never loads this module or its component — see the /welcome note in
 // api.go and "Pages & routing" in .claude/docs/pages-and-routing.md.
+//
+// Second revision (this file replaces the earlier slideshow): the reviewer
+// asked for ONE continuously growing tree instead of full-screen scenes —
+// blocks connect to the right of each other, built up one at a time by a
+// right-click (or a key), and a final step zooms out to fit the whole built
+// tree in view. Same interaction the real review tree already has: a
+// right-click runs the exact same thing a key runs (see "The right-click
+// context menu" in .claude/docs/command-palette.md) — reused here 1:1.
 import { reactive, html } from './vendor/arrow.js'
-import WelcomeScene from './WelcomeScene.mjs'
+import WelcomeBlock from './WelcomeBlock.mjs'
 
-// The scene script — a short, linear story, one "stop" at a time. Kept as
-// plain data (like COMMANDS in home.mjs) so WelcomeScene.mjs stays a pure
-// renderer per scene.kind.
-export const WELCOME_SCENES = [
-  { kind: 'question', text: 'What does your future look like?', duration: 3200 },
-  {
-    kind: 'text',
-    lines: ["Soon, you're not just a linter anymore.", "You're the one accountable for what ships."],
-    duration: 3600,
-  },
-  {
-    kind: 'text',
-    lines: ["If you're the one accountable, you need an overview.", 'Fast — but strict.'],
-    duration: 3600,
-  },
-  {
-    kind: 'text',
-    lines: ['Endless scrolling through a GitHub PR, no idea what happened —', 'while you wrote it?'],
-    duration: 3800,
-  },
-  { kind: 'text', lines: ['Get an overview.', 'See how functions actually relate.'], duration: 3200 },
-  { kind: 'mock-pr', duration: 3400 },
-  { kind: 'mock-index', duration: 3200 },
-  { kind: 'mock-diff', duration: 3600 },
-  { kind: 'mock-drill', duration: 3400 },
-  {
-    kind: 'image',
-    src: '/assets/welcome/comment-view.png',
-    caption: 'Drop a comment right where it matters, with the whole review tree still in view.',
-    duration: 5200,
-  },
-  {
-    kind: 'image',
-    src: '/assets/welcome/chat-codeblock.png',
-    caption: "Chat about it — code blocks and all. Ask for a change and it lands straight in the directory you pick.",
-    duration: 5200,
-  },
-  { kind: 'end', text: 'Ready to see it for real?', href: '/pr-overview', linkLabel: '← Back to overview', duration: null },
+// The tree's own nodes, left to right — mirrors the real review tree's own
+// left→right nav chain (description → index → diff → underlying code →
+// comment → chat), see .claude/docs/keyboard-navigation.md. `menu` is the
+// decorative, non-functional right-click-on-this-block action list (the
+// "and you can do things" part of the request).
+export const WELCOME_SEQUENCE = [
+  { kind: 'hook', menu: ['This is the whole idea'] },
+  { kind: 'pr', menu: ['Open PR on GitHub', 'Show all changed files'] },
+  { kind: 'index', menu: ['Jump to a block', 'Filter by category'] },
+  { kind: 'diff', menu: ['Approve this change', 'View full diff'] },
+  { kind: 'drill', menu: ['Open as its own column', 'Back to caller'] },
+  { kind: 'comment', menu: ['Reply', 'Resolve thread'] },
+  { kind: 'chat', menu: ['Ask a follow-up', 'Apply this suggestion'] },
+  { kind: 'code-edit', menu: ['View the commit', 'Open in editor'] },
 ]
 
-const state = reactive({ index: 0 })
+const state = reactive({
+  count: 0, // how many WELCOME_SEQUENCE entries are currently placed
+  zoomed: false, // the final "fit the whole tree in view" step
+  menu: { open: false, x: 0, y: 0, title: '', items: [] },
+})
 
-let timer = null
-
-function clearTimer() {
-  if (timer) {
-    clearTimeout(timer)
-    timer = null
-  }
-}
-
-// A quick camera-flash pulse + the top bar filling up over the scene's own
-// duration — both plain, imperative DOM manipulation on two static nodes
-// (never bound reactively, see the template below), so this can't collide
-// with any arrow.js templating rule; it's just CSS transitions kicked off by
-// hand on every scene change.
+// A quick camera-flash pulse on every step — plain, imperative DOM
+// manipulation on a static, never reactively-bound node (see the template
+// below), exactly like the progress-bar trick in the previous revision, so
+// this can't collide with any arrow.js templating rule.
 function flashScreen() {
   const el = document.getElementById('welcome-flash')
   if (!el) return
   el.style.transition = 'none'
-  el.style.opacity = '0.18'
+  el.style.opacity = '0.16'
   requestAnimationFrame(() => {
     el.style.transition = 'opacity 500ms ease-out'
     el.style.opacity = '0'
   })
 }
 
-function animateProgressBar(duration) {
-  const bar = document.getElementById('welcome-progress-bar')
-  if (!bar) return
-  bar.style.transition = 'none'
-  bar.style.width = '0%'
-  void bar.offsetWidth // force reflow, otherwise the next transition never animates from 0%
-  if (duration == null) {
-    bar.style.width = '100%'
-    return
+// Positions the track: while building, it slides left just enough to keep
+// the newest block comfortably in view (never further than needed); once
+// zoomed, it scales down and centers so the ENTIRE built tree fits inside
+// the viewport at once. Two separate CSS properties (margin-left for
+// position, transform:scale for size) so they never fight over the same
+// `transform` value, and both are set by hand here rather than through an
+// arrow.js binding — this is pure layout math against measured DOM sizes,
+// nothing reactive to track.
+function layoutTrack() {
+  const viewport = document.getElementById('welcome-viewport')
+  const track = document.getElementById('welcome-track')
+  if (!viewport || !track) return
+  const vw = viewport.clientWidth
+  const naturalWidth = track.scrollWidth
+
+  if (!state.zoomed) {
+    track.style.transition = 'margin-left 500ms cubic-bezier(.16,1,.3,1), transform 500ms cubic-bezier(.16,1,.3,1)'
+    track.style.transform = 'scale(1)'
+    const overflow = naturalWidth - vw
+    track.style.marginLeft = (overflow > 0 ? -(overflow + 32) : 0) + 'px'
+  } else {
+    const pad = 48
+    const scale = Math.min(1, (vw - pad * 2) / Math.max(naturalWidth, 1))
+    const centeredLeft = (vw - naturalWidth * scale) / 2
+    track.style.transition = 'margin-left 900ms cubic-bezier(.16,1,.3,1), transform 900ms cubic-bezier(.16,1,.3,1)'
+    track.style.transform = `scale(${scale})`
+    track.style.marginLeft = centeredLeft + 'px'
   }
-  requestAnimationFrame(() => {
-    bar.style.transition = `width ${duration}ms linear`
-    bar.style.width = '100%'
-  })
 }
 
-function scheduleAutoAdvance() {
-  clearTimer()
-  const scene = WELCOME_SCENES[state.index]
-  if (!scene) return
-  flashScreen()
-  animateProgressBar(scene.duration)
-  if (scene.duration == null) return
-  timer = setTimeout(advance, scene.duration)
+function scheduleLayout() {
+  requestAnimationFrame(layoutTrack)
 }
 
+function closeMenu() {
+  if (state.menu.open) state.menu.open = false
+}
+
+function openNodeMenu(e, node) {
+  state.menu = { open: true, x: e.clientX, y: e.clientY, title: node.kind, items: node.menu }
+}
+
+function reset() {
+  state.count = 0
+  state.zoomed = false
+  scheduleLayout()
+}
+
+function zoomOut() {
+  state.zoomed = true
+  scheduleLayout()
+}
+
+function zoomIn() {
+  state.zoomed = false
+  scheduleLayout()
+}
+
+// The one action a right-click on empty canvas, or a forward key, always
+// runs: dismiss a decorative menu first if one is open (a right-click/key
+// while it's open is read as "never mind"), otherwise place the next block,
+// or — once every block is placed — zoom out to reveal the whole tree, or —
+// once already zoomed out — start over so the build can be watched again.
 function advance() {
-  if (state.index >= WELCOME_SCENES.length - 1) {
-    // On the closing scene, forward/confirm keys act like the visible link.
-    location.href = WELCOME_SCENES[state.index].href
+  flashScreen()
+  if (state.menu.open) {
+    closeMenu()
     return
   }
-  state.index++
-  scheduleAutoAdvance()
+  if (!state.zoomed) {
+    if (state.count < WELCOME_SEQUENCE.length) {
+      state.count++
+      scheduleLayout()
+      return
+    }
+    zoomOut()
+    return
+  }
+  reset()
 }
 
+// The reverse: undo one step. Zoomed → un-zoom first (mirrors the forward
+// chain treating the zoom as just the last "stop"), then remove blocks one
+// at a time, same ←/↑ meaning as the review tree's own nav chain (a step
+// back always peels back exactly one stop).
 function back() {
-  if (state.index === 0) return
-  state.index--
-  scheduleAutoAdvance()
+  flashScreen()
+  if (state.menu.open) {
+    closeMenu()
+    return
+  }
+  if (state.zoomed) {
+    zoomIn()
+    return
+  }
+  if (state.count > 0) {
+    state.count--
+    scheduleLayout()
+  }
 }
 
-// Same keys, same meaning as the review tree's own left→right nav chain (see
-// .claude/docs/keyboard-navigation.md): →/↓ and Space move forward through the
-// stops (Space mirrors "confirm this, move to the next one"), ←/↑ step back
-// one stop, Enter acts on the current stop (here: also forward, and on the
-// closing scene it's the same as following the link).
 function onKeydown(e) {
-  if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === ' ' || e.key === 'Enter') {
+  if (e.key === 'Escape' && state.menu.open) {
+    e.preventDefault()
+    closeMenu()
+  } else if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === ' ' || e.key === 'Enter') {
     e.preventDefault()
     advance()
   } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
@@ -131,10 +166,53 @@ function onKeydown(e) {
   }
 }
 
+function hintText() {
+  if (state.menu.open) return 'Right-click again (or Enter) to dismiss'
+  if (state.zoomed) return 'This is the whole tree. Right-click to build it again.'
+  if (state.count === 0) return 'Right-click anywhere (or press Enter) to start building the tree'
+  if (state.count < WELCOME_SEQUENCE.length) return 'Right-click again (or →/Enter) to connect the next block'
+  return 'One more time to zoom out and see the whole tree'
+}
+
+function nodeMenu() {
+  const m = state.menu
+  return html`
+    <div
+      class="welcome-node-in fixed z-40 min-w-40 rounded-lg border border-white/10 bg-zinc-900/95 p-1 text-xs shadow-2xl shadow-black/60"
+      style="${'left:' + m.x + 'px;top:' + m.y + 'px;'}"
+      data-testid="welcome-node-menu"
+    >
+      ${m.items.map((label, i) => html`<div class="rounded px-2 py-1.5 text-zinc-200 hover:bg-white/10">${label}</div>`.key('mi-' + i))}
+    </div>
+  `
+}
+
+function connector(i) {
+  return html`<div class="welcome-connector-in flex w-8 shrink-0 items-center justify-center text-lg text-indigo-400">→</div>`.key(
+    'connector-' + i,
+  )
+}
+
+function trackChildren() {
+  const nodes = WELCOME_SEQUENCE.slice(0, state.count)
+  const children = []
+  nodes.forEach((node, i) => {
+    if (i > 0) children.push(connector(i))
+    children.push(WelcomeBlock(node, openNodeMenu).key('node-' + i))
+  })
+  return children
+}
+
 function mount() {
   const el = document.getElementById('app')
   const template = html`
-    <div class="relative flex h-screen w-screen items-center justify-center overflow-hidden bg-zinc-950 px-6">
+    <div
+      class="relative flex h-screen w-screen flex-col items-center justify-center gap-6 overflow-hidden bg-zinc-950 px-6"
+      @contextmenu="${(e) => {
+        e.preventDefault()
+        advance()
+      }}"
+    >
       <div
         class="welcome-conic pointer-events-none absolute -inset-[20%] opacity-30"
         style="background:conic-gradient(from 0deg, rgba(129,140,248,0.25), rgba(244,114,182,0.2), rgba(52,211,153,0.2), rgba(129,140,248,0.25))"
@@ -142,36 +220,36 @@ function mount() {
       <div class="welcome-blob pointer-events-none absolute -left-32 -top-32 h-96 w-96 rounded-full bg-indigo-600/30 blur-3xl"></div>
       <div class="welcome-blob pointer-events-none absolute -bottom-32 -right-16 h-96 w-96 rounded-full bg-emerald-600/20 blur-3xl"></div>
       <div class="welcome-blob pointer-events-none absolute right-1/3 top-1/4 h-72 w-72 rounded-full bg-fuchsia-600/20 blur-3xl"></div>
-      <div class="pointer-events-none absolute inset-x-0 top-0 z-20 h-1 bg-white/5">
-        <div
-          id="welcome-progress-bar"
-          class="h-full bg-gradient-to-r from-indigo-400 via-fuchsia-400 to-emerald-400"
-        ></div>
-      </div>
       <div id="welcome-flash" class="pointer-events-none absolute inset-0 z-30 bg-white opacity-0"></div>
-      <div class="relative z-10 flex w-full items-center justify-center" data-testid="welcome-scene">
-        ${() => WelcomeScene(WELCOME_SCENES[state.index]).key('scene-' + state.index)}
+
+      <div class="relative z-10 flex w-full max-w-6xl flex-col items-center gap-5">
+        <div id="welcome-viewport" class="relative flex h-[54vh] w-full items-center overflow-hidden" data-testid="welcome-viewport">
+          <div id="welcome-track" class="flex items-center gap-3" style="transform-origin:0% 50%;" data-testid="welcome-track">
+            ${() => trackChildren()}
+          </div>
+        </div>
+        <p class="text-center text-sm text-zinc-400" data-testid="welcome-hint">${() => hintText()}</p>
       </div>
-      <div class="absolute bottom-6 left-1/2 z-10 flex -translate-x-1/2 gap-1.5" data-testid="welcome-progress">
-        ${() =>
-          WELCOME_SCENES.map((_, i) =>
-            html`<span
-              class="${'h-1.5 w-6 rounded-full transition-all duration-300 ' +
-              (i === state.index
-                ? 'scale-110 bg-indigo-400 shadow-[0_0_10px_2px_rgba(129,140,248,0.8)]'
-                : 'bg-white/15')}"
-            ></span>`.key('dot-' + i),
-          )}
-      </div>
+
+      <a
+        href="/pr-overview"
+        class="welcome-glow fixed bottom-6 right-6 z-20 rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium text-white transition-opacity hover:bg-indigo-400"
+        style="${() => 'opacity:' + (state.zoomed ? '1' : '0') + ';pointer-events:' + (state.zoomed ? 'auto' : 'none') + ';'}"
+        data-testid="welcome-back-link"
+      >
+        ← Back to overview
+      </a>
+
+      <div class="contents">${() => (state.menu.open ? nodeMenu() : '')}</div>
     </div>
   `
   template(el)
   document.addEventListener('keydown', onKeydown)
   document.addEventListener('click', (e) => {
-    if (e.target.closest('a')) return // let the closing link navigate normally
-    advance()
+    if (e.target.closest('a')) return // let the back-link navigate normally
+    closeMenu()
   })
-  scheduleAutoAdvance()
+  scheduleLayout()
 }
 
 mount()

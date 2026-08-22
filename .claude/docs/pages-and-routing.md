@@ -35,25 +35,36 @@ Every route is a static HTML shell with no build step; the Go server
   (`inbox.html` → `src/inbox.mjs`), see
   `.claude/docs/task-inbox-page.md`.
 - **`/welcome`** — a standalone, animated showcase/onboarding page
-  (`welcome.html` → `src/welcome.mjs` + `src/WelcomeScene.mjs`), not linked
+  (`welcome.html` → `src/welcome.mjs` + `src/WelcomeBlock.mjs`), not linked
   from any other page yet (a future settings-page button is a separate task —
   for now it's only reachable by visiting the URL directly). Deliberately its
   **own** shell and **own** entry module, imported by nothing else and
   importing nothing from `home.mjs`/`overview.mjs`/`inbox.mjs`, so normal use
-  of the review tree never loads it. A short, linear, auto-advancing sequence
-  of scenes (`WELCOME_SCENES` in `welcome.mjs`) walks through the pitch (why
-  overview matters) into a few hand-built mocks of the review tree's own look
-  (PR description / index / diff / drill) and then two real screenshots (the
-  comment view, the embedded Claude chat with code blocks), copied into the
-  repo under `assets/welcome/` (served by the same catch-all
-  `http.FileServer`, no dedicated endpoint). It deliberately reuses the review
-  tree's **own keys with the same meaning** rather than a bespoke scheme:
-  `→`/`↓`/`Space`/`Enter` move forward (mirroring the left→right nav chain and
-  the "confirm and move on" meaning `Space` has there), `←`/`↑` step back one
-  scene (mirroring `←` always peeling back one stop) — see `onKeydown` in
-  `welcome.mjs`. Every scene also auto-advances on its own timer unless it's
-  the closing scene (`duration: null`), so it plays on its own too. Test:
-  `tests/welcome-page.spec.mjs`.
+  of the review tree never loads it.
+
+  Not a slideshow: ONE continuously growing tree (`WELCOME_SEQUENCE` in
+  `welcome.mjs`) whose blocks connect to the right of each other, one at a
+  time — mirroring the review tree's own left→right nav chain (PR
+  description → index → diff → underlying-code drill → comment → embedded
+  Claude chat, see `.claude/docs/keyboard-navigation.md`), rebuilt as small
+  hand-built mock cards (`WelcomeBlock.mjs`) rather than real screenshots (an
+  earlier revision used two real screenshots under `assets/welcome/`; removed
+  — this revision shows no images at all). A block is added by
+  **right-clicking the empty canvas, or pressing `→`/`↓`/`Space`/`Enter`** —
+  deliberately the exact same 1:1 pairing the real review tree already has
+  ("a right-click opens the exact same menu a key runs", see "The right-click
+  context menu" in `.claude/docs/command-palette.md`). `←`/`↑` undo one block
+  at a time, same "step back one stop" meaning as the real nav chain.
+  Right-clicking an ALREADY-PLACED block instead opens a small decorative,
+  non-functional action menu near the cursor (`state.menu`,
+  `data-testid=welcome-node-menu`) — illustrating "you can do things" with a
+  block without wiring up any real functionality. Once every block is placed,
+  one more forward step zooms the whole track out (`layoutTrack()`'s
+  `state.zoomed` branch: `transform:scale()` + a centering `margin-left`,
+  computed against the measured DOM, not reactive state) to fit the entire
+  built tree in the viewport at once, and reveals a persistent
+  "← Back to overview" link; the step after that restarts the build from
+  scratch. Test: `tests/welcome-page.spec.mjs`.
 - **`/`** redirects (302) to `/pr-overview`; every other path (`/src/*`,
   `/overview.html`, …) is served statically by the `http.FileServer`.
 
