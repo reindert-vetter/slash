@@ -630,13 +630,16 @@ function claudeSendError(view) {
 // No own bg/rounded of its own — the comment block and this Claude block
 // merge into ONE visual card (that styling lives on the shared
 // `comment-claude-row` wrapper in home.mjs instead), separated only by a
-// vertical dashed line (`comment-claude-connector`). It DOES carry its own
-// conditional focus border (`view.focused()`, mirrors expandedConversation's
-// identical rule in RelatedPanel.mjs): indigo while the keyboard is actually
-// in this column (`cs.focus === 'claude'`), `border-transparent` — never a
-// neutral gray — the rest of the time, so exactly one side of the merged
-// card ever shows a border, following cs.focus rather than which side merely
-// happens to be visible. `flex-1` makes this
+// vertical dashed line (`comment-claude-connector`). It used to also carry
+// its own conditional focus border (indigo while `cs.focus === 'claude'`,
+// mirroring `expandedConversation`'s identical rule in RelatedPanel.mjs) —
+// REMOVED (reviewer request): now that both halves already sit inside one
+// shared bordered card, an extra per-side focus border read as a doubled
+// border rather than a useful cue, so neither side shows one any more,
+// regardless of focus. See "No per-side focus border any more" in
+// .claude/docs/comments-panel.md; `expandedConversation`'s OWN conditional
+// border (a comment thread shown standalone, outside this merged row) is
+// untouched. `flex-1` makes this
 // column fill the full height of that shared row (`items-stretch`), so both
 // blocks always end up exactly the same height. It DOES keep its own `p-3`:
 // InlineComments' cards (compactConversation/expandedConversation/
@@ -714,9 +717,7 @@ function claudeMenuButton(onOpenMenu) {
 export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly) {
   return html`
     <div
-      class="${() =>
-        'flex min-h-0 flex-1 flex-col gap-2 rounded-xl border p-3 ' +
-        (view.focused() ? 'border-indigo-300 dark:border-indigo-500/40' : 'border-transparent')}"
+      class="flex min-h-0 flex-1 flex-col gap-2 rounded-xl p-3"
       data-testid="claude-chat-card"
       data-readonly="${readOnly ? 'true' : 'false'}"
       @click="${() => {

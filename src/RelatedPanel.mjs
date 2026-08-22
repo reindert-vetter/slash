@@ -2932,13 +2932,6 @@ function claudeChatView() {
     // conversation in view, since an entry keeps the one it was typed against
     // (see queueClaudeMessage).
     queued: () => queuedFor(cc.commentId),
-    // Whether the KEYBOARD is actually sitting in this column right now —
-    // reuses the same isClaudeChatFocused() predicate the visibility rules
-    // above use. Drives claudeChatColumn's own focus border (see its doc
-    // comment in ClaudeChat.mjs): the border must follow cs.focus, not
-    // "is a conversation merely shown here for context" (expandedConversation
-    // stays expanded while cs.focus === 'claude', but that is NOT this).
-    focused: () => isClaudeChatFocused(),
     // Seconds since the running turn started. cc.tick is read purely to
     // register the reactive dependency that makes this re-render every second
     // (the value itself is irrelevant — the real number comes from the clock).
@@ -4998,6 +4991,20 @@ export function composeTargetHint(target) {
         <span class="truncate font-mono font-semibold">${() => target.label}</span>
       </div>
       ${() =>
+        // The composer's own "file:line" used to sit next to its heading
+        // (see newCommentComposer's removed `target()` helper) — moved here
+        // so it's shown once, right under the gran/label line, for both the
+        // new-comment composer and an expanded existing conversation alike.
+        // Only present when the target actually carries a file (a
+        // PR-wide/`hele PR` compose or an existing-conversation target
+        // built from just {gran,label,code} has none — see
+        // activeComposeTargetHint's second branch).
+        target.file
+          ? html`<p class="mt-0.5 truncate font-mono text-indigo-400 dark:text-indigo-500">
+              ${() => target.file + ':' + (target.startLine || target.line)}
+            </p>`
+          : ''}
+      ${() =>
         target.code
           ? html`<code
               class="language-php mt-1 block max-h-16 overflow-auto no-scrollbar whitespace-pre rounded bg-white/70 dark:bg-zinc-800/70 px-2 py-1 font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300"
@@ -6158,18 +6165,11 @@ function expandedConversation(c, openCommentMenu, readOnly) {
   return html`
     <div
       class="${() =>
-        'flex flex-col gap-2 rounded-xl border p-3 ring-1 ring-black/5 ' +
-        // The indigo focus border follows the KEYBOARD (cs.focus), not merely
-        // "this thread is the one shown here" — this card also stays expanded
-        // while cs.focus === 'claude' (see commentCard's doc comment), and in
-        // that case the reviewer's cursor is actually in the Claude column, so
-        // this side gets NO border at all (never a neutral gray fallback —
-        // explicit reviewer request: only the truly focused column ever shows
-        // a border).
-        (cs.focus === 'comment' || cs.focus === 'thread'
-          ? 'border-indigo-300 dark:border-indigo-500/40'
-          : 'border-transparent') +
-        ' ' +
+        'flex flex-col gap-2 rounded-xl p-3 ring-1 ring-black/5 ' +
+        // No focus border any more (reviewer request, reversing the earlier
+        // "indigo while cs.focus === 'comment'/'thread', border-transparent
+        // otherwise" rule) — see "No per-side focus border any more" in
+        // .claude/docs/comments-panel.md.
         (c.status === 'resolved' ? 'bg-emerald-50 dark:bg-emerald-500/15' : 'bg-white dark:bg-zinc-900')}"
       data-testid="comment-item"
       data-comment-id="${c.id}"
@@ -6352,19 +6352,17 @@ function newCommentComposer(state, commentTarget, openCompose) {
   // slot already re-renders on), and cleared again before the next
   // unrelated open — so a fresh read at render/mount time is never stale.
   const effectiveTarget = () => (warningOverride ? warningOverride.target : commentTarget && commentTarget())
-  const target = () => {
-    // A PR-wide ("algemene") comment hangs on the PR itself, so a file:line
-    // here is not just unknown but meaningless — and reading one off a
-    // selected comment-index item is exactly what printed the reported
-    // "undefined:undefined". See startPrWideComment.
-    if (cs.prWideCompose) return 'hele PR'
-    const t = effectiveTarget()
-    if (t) return t.file + ':' + (t.startLine || t.line)
-    const b = state && state.blocks && state.blocks[state.selected]
-    return b ? b.file + ':' + b.line : 'geen regel geselecteerd'
-  }
+  // The composer used to show its own "file:line" next to the heading (a
+  // local `target()` helper, since removed) — that moved to
+  // composeTargetHint's own "deze regel"/"deze aanroep" card above the whole
+  // merged comment-claude-row, right under the gran/label line, so it isn't
+  // duplicated here any more. See "The shared composeTargetHint header" in
+  // .claude/docs/comments-panel.md. The one exception is `cs.prWideCompose`:
+  // "hele PR" is not a file path (there IS no composeTargetHint for a
+  // PR-wide compose, see activeComposeTargetHint's own doc comment), so that
+  // label stays right here.
   const heading = () => {
-    if (cs.prWideCompose) return 'Nieuwe algemene comment'
+    if (cs.prWideCompose) return 'Nieuwe algemene comment · hele PR'
     return warningOverride ? 'Comment van AI-controle' : 'Nieuwe comment'
   }
   return html`
@@ -6380,11 +6378,11 @@ function newCommentComposer(state, commentTarget, openCompose) {
         isNewChatUnanchored()
           ? html`
               <div
-                class="flex flex-col gap-2 rounded-xl border border-indigo-300 dark:border-indigo-500/40 bg-white dark:bg-zinc-900 p-3 ring-1 ring-black/5"
+                class="flex flex-col gap-2 rounded-xl bg-white dark:bg-zinc-900 p-3 ring-1 ring-black/5"
                 data-testid="comment-composer"
               >
                 <p class="text-[11px] font-medium text-slate-500 dark:text-zinc-500">
-                  ${() => heading() + ' · ' + target()}
+                  ${() => heading()}
                 </p>
                 ${() =>
                   sendFailedBadge(

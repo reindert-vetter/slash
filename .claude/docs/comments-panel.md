@@ -1871,6 +1871,42 @@ never quite right. The wrapper's visibility is gated on the exact same
 gating `comment-claude-connector`), so no empty padded strip shows when
 there's nothing to preview.
 
+`composeTargetHint` also shows the target's own **`file:line`** — a `<p>`
+right below the `gran · label` line, shown only when `target.file` is set
+(the new-comment composer's live cursor/`warningOverride` anchor always has
+one; an expanded existing conversation's anchor, built as just
+`{gran,label,code}`, doesn't, so that case simply shows no path line). This
+used to live in `newCommentComposer`'s own heading (`"Nieuwe comment ·
+modules/…/File.php:65"`) — moved here (reviewer request) so the path sits
+once, at the top of the whole merged card, instead of duplicated per
+composer state.
+
+### No per-side focus border any more
+
+`expandedConversation`, `newCommentComposer`'s card and `claudeChatColumn`'s
+card (`ClaudeChat.mjs`) — every card inside `comment-claude-row` — used to
+each carry their own indigo focus border keyed on `cs.focus`
+(`expandedConversation`/`claudeChatColumn`: indigo while that side actually
+had the keyboard, `border-transparent` otherwise; `newCommentComposer`'s
+`isNewChatUnanchored()` variant: unconditionally indigo, a pre-existing
+inconsistency). See "The focus border follows the keyboard…" in
+`.claude/docs/claude-chat-panel.md` for that earlier fix's full history and
+its reasoning ("helemaal geen rand op de niet-gefocuste kant").
+
+**Removed entirely** (explicit reviewer request, deliberately reversing that
+earlier decision — "nooit meer een losse rand om de comment- of
+Claude-kaart, ook niet bij focus"): now that both halves already sit inside
+one shared bordered `comment-claude-row` card (see above), a per-side focus
+border read as a doubled/duplicate border rather than a useful cue — most
+visible in the "chatting on a brand-new, not-yet-anchored unit" state, where
+the comment side's unconditional border and the Claude side's conditional
+one showed at the same time. None of these three cards takes a
+`border`/focus-border class any more, regardless of `cs.focus`. The
+`tests/claude-chat-panel.spec.mjs` case asserting the border swaps sides was
+removed along with it. `compactConversation`'s/`commentDetailCard`'s own
+*neutral*, non-focus-driven `border-slate-300 dark:border-zinc-700` is
+untouched — that border was never about `cs.focus`.
+
 ### Status mark and the resolved style
 
 `commentStatusMark(c, extraCls)` (`RelatedPanel.mjs`) replaced the former
@@ -1886,10 +1922,11 @@ emerald tint decorates a shape that already carries the meaning. Used via a
 Once `c.status === 'resolved'` those same three cards swap their background from
 `bg-white`/`bg-zinc-900` to the muted `bg-slate-50/60 dark:bg-zinc-800/40` the
 Underlying-code card already uses for an unselected item — a resolved
-conversation is done and should recede like already-reviewed reference code. The
-border stays the neutral `border-slate-300 dark:border-zinc-700` in both states;
-`expandedConversation`'s indigo focus border is untouched (an orthogonal focus
-cue, not a status colour).
+conversation is done and should recede like already-reviewed reference code.
+`compactConversation`/`commentDetailCard` keep their neutral
+`border-slate-300 dark:border-zinc-700` border in both states;
+`expandedConversation` carries no border of its own any more at all (see "No
+per-side focus border any more" above).
 
 ### A state-change message renders as a status line, not as a chat bubble
 

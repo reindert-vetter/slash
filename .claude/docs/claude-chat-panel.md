@@ -1130,42 +1130,33 @@ other comment/reply.
 Claude has no GitHub login/avatar; `avatarHTML(CLAUDE_NAME, '', 'h-5 w-5')`
 falls back to its initials-circle rendering (empty `avatarUrl`).
 
-### The focus border follows the keyboard, not "which side is merely shown"
+### No per-side focus border any more (an earlier decision, reversed)
 
 `comment-claude-row`'s two halves used to give the comment side an
 **unconditional** indigo border (`expandedConversation`) while the Claude side
 had none at all — so the border stayed on the left even once `→` moved the
 keyboard cursor (`cs.focus`) into the Claude column, misleadingly suggesting
-the reviewer was still "in" the comment thread. Fixed: both halves now carry
-the **same conditional border**, keyed on which one actually has `cs.focus`:
+the reviewer was still "in" the comment thread. That was fixed by giving both
+halves a **conditional** border keyed on `cs.focus` — `expandedConversation`
+indigo only while `cs.focus === 'comment'/'thread'`, `claudeChatColumn`'s
+`claude-chat-card` indigo only while `cs.focus === 'claude'`, `border-transparent`
+(never a neutral gray — "helemaal geen rand op de niet-gefocuste kant") the
+rest of the time.
 
-- `expandedConversation` (`RelatedPanel.mjs`) — `border-indigo-300
-  dark:border-indigo-500/40` only while `cs.focus === 'comment' || cs.focus
-  === 'thread'`, else `border-transparent`.
-- `claudeChatColumn`'s `claude-chat-card` (`ClaudeChat.mjs`) — the same
-  indigo pair only while `view.focused()` (`claudeChatView()`'s `focused: ()
-  => isClaudeChatFocused()`, i.e. `cs.focus === 'claude'`), else
-  `border-transparent`.
-
-**Deliberately `border-transparent`, never a neutral gray, on the unfocused
-side** — explicit reviewer correction to an earlier draft of this fix that
-gave the unfocused side a neutral `border-slate-300`/`dark:border-zinc-700`
-fallback (so it would always show *some* border, matching
-`compactConversation`'s resting style). Reindert: "helemaal geen rand op de
-niet-gefocuste kant" — only the column the keyboard is actually in ever shows
-a border; the other side blends into the shared `comment-claude-row` card
-with no border of its own, not even a muted one that could read as "also kind
-of active".
-
-This is a genuinely different condition from `commentCard`'s existing "stay
-expanded while `cs.focus === 'claude'`" rule (see its own doc comment,
-`RelatedPanel.mjs`) — the comment card can be **expanded for context** while
-`cs.focus === 'claude'` and carry **no border**, exactly the case this fix
-targets. Don't collapse the two checks back into one.
-
-Test: the "the focus border follows cs.focus" case in
-`tests/claude-chat-panel.spec.mjs` (navigates comment → claude via `→` and
-asserts the border color swaps sides).
+**That whole mechanism is gone now** (explicit reviewer request, deliberately
+reversing the fix above): once both halves permanently merged into one shared
+bordered `comment-claude-row` card (see "The shared `composeTargetHint`
+header" in `.claude/docs/comments-panel.md`), a per-side focus border read as
+a doubled border rather than a useful cue — most visible in the
+`newCommentComposer`'s `isNewChatUnanchored()` state, whose own indigo border
+was never made conditional in the first place and so stayed alongside
+Claude's own conditional one. Neither `expandedConversation`, the
+`isNewChatUnanchored()` composer card, nor `claudeChatColumn`'s
+`claude-chat-card` carries a `border`/focus-border class any more, regardless
+of `cs.focus`. Full rationale: "No per-side focus border any more" in
+`.claude/docs/comments-panel.md`. The `tests/claude-chat-panel.spec.mjs` case
+that asserted the border swapping sides was removed along with it — nothing
+replaces it, since there is no longer a border to assert on.
 
 ## Testing hook: `SLASH_CLAUDE_CHAT_TURNS`
 

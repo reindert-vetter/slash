@@ -12,14 +12,14 @@ import { test, expect, seededPr, evaluateSettled, leaveSearchBox } from './_fixt
 // tests in comment-claude-column-widths.spec.mjs.
 test.use({ viewport: { width: 2000, height: 1100 } })
 
-// The indigo focus border must follow cs.focus, never sit permanently on the
-// comment side while the keyboard is actually in Claude — see "The focus
-// border follows the keyboard, not 'which side is merely shown'" in
-// .claude/docs/claude-chat-panel.md. Deliberately checks CLASS membership
-// (border-indigo-300 vs border-transparent), not the colourblind-relevant
-// on-screen appearance — this assertion is about the mechanism, not about
-// what a reviewer perceives.
-test('the focus border follows cs.focus: only the column with the keyboard shows an indigo border', async ({
+// Neither the comment card nor the Claude card carries a focus border any
+// more (reviewer request, reversing an earlier "border follows cs.focus"
+// fix — see "No per-side focus border any more" in
+// .claude/docs/claude-chat-panel.md/comments-panel.md). This regression test
+// replaces the former one asserting the border swapped sides: `→` must still
+// move the keyboard into the Claude composer, but neither card should ever
+// gain a `border-indigo-300`/`border-transparent` class doing so.
+test('no focus border on either the comment or Claude card, before or after → moves the keyboard', async ({
   page,
 }, testInfo) => {
   const pr = seededPr(testInfo)
@@ -44,23 +44,22 @@ test('the focus border follows cs.focus: only the column with the keyboard shows
 
   const expandedItem = page.getByTestId('comment-item').first()
   await expect(expandedItem).toHaveAttribute('data-expanded', 'true')
-  await expect(expandedItem).toHaveClass(/border-indigo-300/)
+  await expect(expandedItem).not.toHaveClass(/border-indigo-300/)
+  await expect(expandedItem).not.toHaveClass(/border-transparent/)
 
   const claudeCard = page.getByTestId('claude-chat-card')
   await expect(claudeCard).toBeVisible()
-  await expect(claudeCard).toHaveClass(/border-transparent/)
   await expect(claudeCard).not.toHaveClass(/border-indigo-300/)
+  await expect(claudeCard).not.toHaveClass(/border-transparent/)
 
   await page.keyboard.press('ArrowRight') // comment -> claude
   await expect(page.getByTestId('claude-chat-compose')).toBeFocused()
 
-  await expect(claudeCard).toHaveClass(/border-indigo-300/)
+  await expect(claudeCard).not.toHaveClass(/border-indigo-300/)
   await expect(claudeCard).not.toHaveClass(/border-transparent/)
-  // The comment card stays expanded for context (commentCard's own rule),
-  // but must now show NO border at all — never a neutral fallback.
   await expect(expandedItem).toHaveAttribute('data-expanded', 'true')
-  await expect(expandedItem).toHaveClass(/border-transparent/)
   await expect(expandedItem).not.toHaveClass(/border-indigo-300/)
+  await expect(expandedItem).not.toHaveClass(/border-transparent/)
 })
 
 // Verifies the embedded Claude conversation column (claude_chat workflow,
