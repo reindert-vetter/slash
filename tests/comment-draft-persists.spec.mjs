@@ -52,25 +52,29 @@ test.describe('typed but not yet sent comment text survives leaving and returnin
     await openNewComment(page)
     await expect(page.getByTestId('comment-compose')).toHaveValue('')
 
-    // Cancelling explicitly discards the draft on THIS (fresh) block — and
-    // going back to the FIRST block's composer still remembers its own draft.
-    await page.getByTestId('comment-compose').fill('discard me')
-    await page.getByText('Annuleer').click()
-    // Annuleer only clears cs.composing, not cs.focus — the panel itself
-    // still owns the keyboard afterwards (unaffected by this task's removal
-    // of the trigger row/stop). openNewComment presses Enter to reach the
-    // block-scoped command palette, which only exists while the DIFF itself
-    // (not the comment/Onderliggende-code panel) owns the keyboard — unlike
-    // the removed trigger button, which was reachable by a mouse click
-    // regardless of the panel's own focus state. Escape unconditionally
-    // exits the panel back to the diff first, so this reflects how a
-    // reviewer actually reaches "Comment op deze regel" now.
+    // There is no "Annuleer"/explicit-cancel button any more (see "No more
+    // explicit Annuleer button" in comments-panel.md) — Escape is the only
+    // way to leave a still-open composer, and it no longer discards the
+    // draft: typing here and leaving via Escape must still restore this
+    // (fresh) block's own draft later, same as any other exit.
+    await page.getByTestId('comment-compose').fill('kept even after Escape')
+    await expect(page.getByText('Annuleer')).toHaveCount(0)
     await page.keyboard.press('Escape') // panel -> diff
+
+    // The FIRST block's composer still remembers its own, separate draft.
     await page.keyboard.press('ArrowLeft') // diff -> block index
     await page.keyboard.press('ArrowUp') // back to the original block
     await page.keyboard.press('ArrowRight') // list -> diff
     await openNewComment(page)
     await expect(page.getByTestId('comment-compose')).toHaveValue('this is my draft — continued')
+
+    // And so does the SECOND block, once we return to it.
+    await page.keyboard.press('Escape') // panel -> diff
+    await page.keyboard.press('ArrowLeft') // diff -> block index
+    await page.keyboard.press('ArrowDown') // back to the second block
+    await page.keyboard.press('ArrowRight') // list -> diff
+    await openNewComment(page)
+    await expect(page.getByTestId('comment-compose')).toHaveValue('kept even after Escape')
   })
 
   test('existing thread reply field: restores the draft after leaving and coming back', async ({ page }, testInfo) => {

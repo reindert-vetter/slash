@@ -455,6 +455,87 @@ index past the end is structurally unrenderable — and a stale index still *in*
 range would mark the wrong row, which no bound can catch, only re-anchoring can.
 Same reasoning for `approvedRowSet`.
 
+### No more explicit Annuleer button
+
+`newCommentComposer`'s composer footer used to show two buttons,
+**"Annuleer"** and **"Plaats…"**. The "Annuleer" button is gone (reviewer
+request) — `Escape` was already the equivalent exit (`exitRelated()`, same as
+leaving any other panel level) and is now the only way to leave a still-open,
+not-yet-placed composer without posting it. `exitRelated()` resets
+`cs.focus`/`cs.prWideCompose`/`cs.rangeCompose` exactly like the removed
+button did, so nothing about navigating out of the composer changed — only
+the three things the button did **beyond** that are gone too:
+
+- it no longer explicitly resets `warningOverride` on exit — harmless, because
+  `toNew()`/`startComment()`/`convertWarningToComment()` already reset it on
+  every fresh open, and it is never read while the composer is closed;
+- it no longer explicitly `clearSendFailed`s the composer's failed-send badge
+  — a failed placement's badge now simply stays until the next attempt
+  succeeds (or the reviewer edits the draft and tries again), same as it
+  already does for a comment reply;
+- it no longer explicitly deletes the draft (`composeDrafts`) — leaving via
+  Escape now behaves exactly like leaving via `ArrowLeft`/navigating away
+  always did: the draft is kept for the session and restored the next time the
+  composer reopens on the same unit (see "Typed but not yet sent comment text
+  survives leaving and returning" below). There is no "cancel and discard"
+  action any more — an abandoned draft is never silently deleted.
+
+Test: `tests/comment-draft-persists.spec.mjs`.
+
+### Enter posts directly, Shift+Enter is a newline — a local `@keydown`, not just `home.mjs`'s document-level one
+
+The `comment-compose` textarea used to have **no** `@keydown` of its own —
+Enter/Shift+Enter were caught entirely by `home.mjs`'s document-level
+`onKeydown` (`isComposeOpen() && composeHasText()`), the same generic handler
+that also opens the comment-kind menu for `isConvertingAiWarning()`. That
+mechanism worked, but it depended on a SEPARATE flag (the now-removed
+`cs.composing`, see "`isComposeOpen()` now reads `cs.focus` directly" below)
+staying perfectly in lockstep with `cs.focus` at every one of the half-dozen
+places that used to set either — a class of bug this codebase had already hit
+once before (see `tests/comment-composer-typing-guard.spec.mjs`'s own doc
+comment: "an earlier, buggy bare `cs.composing` toggle that left `cs.focus`
+out of sync with real DOM focus").
+
+The textarea now ALSO has its own local `@keydown` (`newCommentComposer`,
+mirroring the Claude composer's own local handler in `ClaudeChat.mjs` almost
+exactly): a bare `Enter` calls the exact same `openCompose` callback the
+"Plaats…" button's own `@click` already calls (so a key runs the same
+function a click runs, per `.claude/docs/mouse-navigation.md`) — which already
+contains the one exception this composer needs (`isConvertingAiWarning()`
+opens the comment-kind menu instead of posting straight away) — and
+`Shift+Enter` is left untouched so the browser inserts its own newline, same
+as every other composer in this file. `e.stopPropagation()` (only once there
+is text to act on) keeps `home.mjs`'s own `isComposeOpen()` branch from also
+running for the same keypress right after; that branch stays in place as the
+fallback for a still-empty composer (a no-op either way) and for any future
+caller of this same textarea this local handler might miss. The `title`
+attribute (`"Enter plaatst · Shift+Enter nieuwe regel"`) mirrors the Claude
+composer's own tooltip text.
+
+`commentClaudeShortcutHints()` grew a matching `Shift+Enter` → "nieuwe regel"
+entry on every `cs.focus` whose own field has DOM focus at rest —
+`'comment'`/`'thread'` (`reaction-compose`), `'new'` (`comment-compose`) and
+`'claude'` (`claude-chat-compose`) — reviewer request, alongside the key
+already working in all three fields.
+
+### `isComposeOpen()` now reads `cs.focus` directly — the removed `cs.composing` flag
+
+`cs.composing` used to be a SEPARATE boolean, set to `true`/`false` by hand
+at every `cs.focus` transition into or out of `'new'` (`toNew`,
+`convertWarningToComment`, `toComment`, `exitRelated`, `enterRelated`) plus
+one more writer, `postThreadReply` (the EXISTING-thread reply path, which
+reset it unconditionally on every reply send regardless of whether `'new'`
+was even the current focus — a leftover with no purpose of its own, since
+`cs.focus` can never actually be `'new'` while a thread reply is in flight).
+Six independent writers that all have to agree by hand is exactly the kind of
+duplication that drifts — this codebase had already hit that class of bug
+once (see the paragraph above) — so `isComposeOpen()` (`RelatedPanel.mjs`,
+read by `home.mjs`'s `isComposeOpen() && composeHasText()` gates) now simply
+returns `cs.focus === 'new'`: the SAME field `newCommentComposer`'s own
+render already keys its visibility off of (via `isNewChatUnanchored()`), so
+there is no longer a second value that can fall out of step with it. All six
+writers and the field itself are gone; nothing else read `cs.composing`.
+
 ### Placing a PR-wide comment yourself (`startPrWideComment`)
 
 Until this existed, PR-wide comments could only ever *arrive* (the GitHub
@@ -492,8 +573,10 @@ things and nothing else:
   `.claude/docs/approval.md`).
 
 The flag is cleared by every ordinary composer open (`toNew`) and every exit
-(`exitRelated`, "Annuleer"), so it can never leak into the next line comment.
-Ephemeral, not URL-bound, like `cs.composing` itself.
+(`exitRelated`, e.g. Escape — the composer's own "Annuleer" button was removed,
+see "No more explicit Annuleer button" below), so it can never leak into the
+next line comment.
+Ephemeral, not URL-bound, like `cs.focus` itself.
 
 **Landing on the fresh row** (the reported "ik zie hem niet in de index
 lijst"): the row is produced by the comment poll, not by `loadBlocks`, so it may
@@ -2085,7 +2168,7 @@ the live cursor sits on: a module-level `warningOverride` (`{original, target}`)
 is set by `convertWarningToComment(c)` and consumed by `placeComment` (both the
 composer header/`composeTargetHint` and the eventual `createComment` prefer it
 over `commentTarget()`). Every ordinary composer-open entry point
-(`toNew`/`startComment`/"Annuleer") clears it first, so a stale override can't
+(`toNew`/`startComment`/leaving via Escape) clears it first, so a stale override can't
 leak into an unrelated comment. `isConvertingAiWarning()` (`!!warningOverride`)
 is exactly what keeps `Enter`/the composer's "Plaats…" button routed through
 the comment-kind menu here (`COMPOSE_COMMANDS`,
@@ -2259,8 +2342,9 @@ exists anywhere in this codebase (every text field is read/written imperatively)
 and a reactive read of a plain `Map` registers no dependency anyway, so a
 one-shot imperative set is simpler and can't have an unrelated rerender clobber
 live typing/caret. A draft is deleted once consumed: on successful placement
-(`placeComment`), on send (`sendReaction`), and on an explicit "Annuleer". An
-abandoned draft just stays for the session. Test:
+(`placeComment`) or on send (`sendReaction`). There is no explicit "cancel and
+discard" action any more (see "No more explicit Annuleer button" below) — an
+abandoned draft (including one left via Escape) just stays for the session. Test:
 `tests/comment-draft-persists.spec.mjs`.
 
 ### `Shift+Enter` newline + auto-grow height on every composer field
@@ -2363,7 +2447,7 @@ round-trip settles and can open a different comment/composer/panel, possibly
 on a different block — `cs` is a module-level singleton. `createComment`
 snapshots `focusToken` before its `await` and only applies `cs.sel = …` if
 it's still unchanged. Consequence: every function that sets
-`cs.focus`/`cs.composing` directly — `enterRelated`, `toComment`,
+`cs.focus` directly — `enterRelated`, `toComment`,
 `enterClaudeChat`, and the two direct branches in `applyRelRestore` — must
 also call `releaseFocus()` (directly, or via `focusThread`/`toComment`, which
 do it themselves), so a genuine navigation-away is visible to that guard.

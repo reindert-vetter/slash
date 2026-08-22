@@ -1265,11 +1265,12 @@ overlay would sit on top of the gutter text.
 earlier guards (command palette / search box / related panel active), and works
 in both modes. Two extra checks:
 
-- **`isEditableFocused()`** — `relatedActive()` (`cs.focus !== null`) doesn't
-  cover every path where a text field has DOM focus (`startComment()` only sets
-  `cs.composing`), so a literal "a" typed in a composer would be swallowed. The
-  handler therefore also reads `document.activeElement` directly: TEXTAREA/INPUT
-  → the shortcut does nothing and the key flows into the field. Generic and
+- **`isEditableFocused()`** — belt-and-braces alongside `relatedActive()`
+  (`cs.focus !== null`, which by itself already covers every composer/reply/
+  Claude field — `cs.focus` is `'new'`/`'comment'`/`'thread'`/`'claude'` while
+  any of them has DOM focus, see "Generic input-focus guard" below). The
+  handler also reads `document.activeElement` directly: TEXTAREA/INPUT →
+  the shortcut does nothing and the key flows into the field. Generic and
   future-proof, independent of which navigation flag a field tracks.
 - **`isModifiedKey(e)`** (`e.metaKey || e.ctrlKey`, shared with `f`/`d`/`s` and
   with the `state.toggleFocused` swallow list) — `event.key` stays the bare
@@ -1323,8 +1324,10 @@ safety net): `.claude/docs/column-resize.md`.
 ends unconditionally in a `return`, so any key it doesn't explicitly match
 (letters, `/`, unmatched Enter variants) flows through to the focused field. But
 it only works while `cs.focus` stays in lockstep with real DOM focus — which is
-why every path into the composer goes through `toNew()`/`startComment` (both set
-`cs.focus` and `cs.composing` together), never a bare `cs.composing` toggle.
+why every path into the composer goes through `toNew()`/`startComment` (which
+sets `cs.focus` itself; there is no separate flag to keep in sync any more —
+`isComposeOpen()` reads `cs.focus === 'new'` directly, see "`isComposeOpen()`
+now reads `cs.focus` directly" in `.claude/docs/comments-panel.md`).
 
 As an **extra, future-proof layer**, `onKeydown` checks `document.activeElement`
 directly (`isEditableFocused()`, the same helper as the `a` guard) after the
@@ -1333,8 +1336,8 @@ earlier branch claimed the key, no remaining global shortcut (`/`, `f`/`d`/`s`,
 `a`, arrows, the block-palette Enter) does anything.
 
 - **`Escape`** in this fallback is the explicit "get me out of here" key —
-  `leaveRelated()` (blur + `cs.focus = null` + `cs.composing = false`, mirroring
-  `handleRelatedKey`'s own Escape handling).
+  `leaveRelated()` (blur + `cs.focus = null`, mirroring `handleRelatedKey`'s own
+  Escape handling).
 - **`Tab`** deliberately gets no handling: the browser moves focus natively,
   after which the next keystroke doesn't hit this branch anyway.
 - **A control that is an `<input>` but ISN'T meant to hold onto real DOM focus

@@ -104,7 +104,6 @@ const cs = reactive({
   list: [],
   view: [],
   sel: 0,
-  composing: false,
   busy: false,
   // replySent is a brief, ephemeral confirmation flash (mirrors overview.mjs'
   // ui.copiedFor) for the send-status icon next to the reaction "Stuur"
@@ -210,20 +209,21 @@ const cs = reactive({
   // ("algemene") comment instead of one anchored on the current diff unit —
   // set by startPrWideComment (the `/`-menu's "Algemene comment plaatsen"),
   // cleared by every ordinary composer open (toNew) and every composer exit
-  // (exitRelated / "Annuleer"). It changes three things and nothing else:
+  // (exitRelated, e.g. Escape — there is no more explicit "Annuleer" button).
+  // It changes three things and nothing else:
   // the composer header/placeholder (no meaningless file:line — see
   // newCommentComposer), placeComment's write (Kind "issue", no anchor), and
   // the surrounding layout (home.mjs/BlockList.mjs hide the pr-index and the
   // block column while it's true — see detail-layout.md). Reactive so those
-  // bindings repaint; deliberately NOT bound to the URL, like cs.composing
+  // bindings repaint; deliberately NOT bound to the URL, like cs.focus
   // itself.
   prWideCompose: false,
   // rangeCompose marks the composer/Claude chat as opened for a Shift-arrow
   // multi-row selection in the index/methodes-kolom ("Plaats comment over dit
   // bereik" / "Chat met Claude over dit bereik", rangeCommandsFor in
   // home.mjs) — set by startRangeComment/startRangeChat below, cleared by
-  // every ordinary composer open (toNew) and every composer exit (exitRelated
-  // / "Annuleer"), same lifecycle as prWideCompose. Unlike prWideCompose the
+  // every ordinary composer open (toNew) and every composer exit (exitRelated,
+  // e.g. Escape), same lifecycle as prWideCompose. Unlike prWideCompose the
   // anchor stays a REAL block/unit (the cursor's own, via the untouched
   // commentTarget()) — this flag only widens what gets SENT alongside it: see
   // rangeComposeItems below.
@@ -807,7 +807,6 @@ export function focusedChipChain() {
 // code panel in the meantime and skips its own now-irrelevant cleanup.
 export function enterRelated() {
   releaseFocus()
-  cs.composing = false
   cs.focus = 'code'
   cs.codeSel = 0
   cs.chipPath = []
@@ -841,7 +840,6 @@ export function enterRelatedFromClaudeChat() {
 // of landing on its Onderliggende-code panel (see the "Drillen" flow).
 function exitRelated() {
   cs.focus = null
-  cs.composing = false
   // Leaving the composer always ends a PR-wide compose, which is what brings
   // the pr-index/block column back (see cs.prWideCompose) — this is the ←
   // path handleRelatedKey's own 'new' branch ends in.
@@ -1064,7 +1062,6 @@ function toNew(commentTargetFn) {
   // doc comment. draftKeyFor's own unit-scoped compare is a second safety
   // net, this just avoids ever needing it in the common case.
   claudeAutoAnchor = null
-  cs.composing = true
   cs.focus = 'new'
   composeDraftKey = draftKeyFor(commentTargetFn ? commentTargetFn() : null)
   focusEl('[data-testid=comment-compose]')
@@ -1129,7 +1126,6 @@ function toNewFocus() {
 // 'claude') must never leak into that walk.
 function toComment(focusInput = true) {
   releaseFocus()
-  cs.composing = false
   cs.focus = 'comment'
   cs.threadPos = 0
   cs.threadPinned = true
@@ -3173,26 +3169,36 @@ function claudeQueueNote() {
 // keyboard is still on the diff (cs.focus === null) — that side shows its own
 // hints instead.
 export function commentClaudeShortcutHints() {
+  // 'Shift+Enter' -> 'nieuwe regel' is added on every state whose own field
+  // actually has DOM focus at rest (reaction-compose for 'comment'/'thread',
+  // the new-comment composer for 'new', the Claude composer for 'claude') —
+  // reviewer request, alongside the same key already working in the Claude
+  // composer (ClaudeChat.mjs) and, since this task, the comment composer's
+  // own local @keydown too (see newCommentComposer/reaction-compose).
   switch (cs.focus) {
     case 'comment':
       return [
         { key: '→', label: 'Claude' },
         { key: 'Enter', label: 'menu' },
+        { key: 'Shift+Enter', label: 'nieuwe regel' },
       ]
     case 'thread':
       return [
         { key: '→', label: 'Claude' },
         { key: '←', label: 'terug' },
         { key: 'Enter', label: 'menu' },
+        { key: 'Shift+Enter', label: 'nieuwe regel' },
       ]
     case 'claude':
       return [
         { key: '←', label: 'terug' },
         { key: 'Enter', label: 'versturen' },
+        { key: 'Shift+Enter', label: 'nieuwe regel' },
       ]
     case 'new':
       return [
         { key: 'Enter', label: 'plaatsen' },
+        { key: 'Shift+Enter', label: 'nieuwe regel' },
         { key: '→', label: 'naar Claude' },
       ]
     default:
@@ -4066,7 +4072,6 @@ export function convertWarningToComment(c) {
       segment: '',
     },
   }
-  cs.composing = true
   cs.focus = 'new'
   composeDraftKey = draftKeyFor(warningOverride.target)
   // Prefer a draft the reviewer already started editing (e.g. left and came
@@ -4079,7 +4084,7 @@ export function convertWarningToComment(c) {
 // home.mjs's keydown handler can catch Enter on a filled composer and open the
 // comment-kind menu (Claude / Git / private / Jira) instead of placing directly.
 export function isComposeOpen() {
-  return cs.composing
+  return cs.focus === 'new'
 }
 
 // composeHasText reports whether the composer textarea holds non-whitespace text
@@ -5272,7 +5277,6 @@ async function postThreadReply(c, body, publish, withHistory) {
     el.value = ''
     resetTextareaHeight(el)
   }
-  cs.composing = false
   cs.claudeOptionSel = 0
   cs.previewPos = 0
   releaseFocus() // a focus request still in flight must not land after this
@@ -6393,27 +6397,43 @@ function newCommentComposer(state, commentTarget, openCompose) {
                   rows="1"
                   class="min-h-20 resize-none rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 px-3 py-2 text-xs text-slate-700 dark:text-zinc-300 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none"
                   placeholder="${() => (cs.prWideCompose ? 'Je algemene comment op deze PR…' : 'Je comment op deze regel…')}"
+                  title="Enter plaatst · Shift+Enter nieuwe regel"
                   data-testid="comment-compose"
                   @input="${(e) => {
                     composeDrafts.set(composeDraftKey, e.target.value)
                     autoGrowTextarea(e.target)
                   }}"
+                  @keydown="${(e) => {
+                    // Same local, self-contained pattern the Claude composer's
+                    // own @keydown already uses (ClaudeChat.mjs) — Enter posts,
+                    // Shift+Enter is left alone for the browser's own newline.
+                    // Runs the SAME `openCompose` callback the "Plaats…"
+                    // button's @click already runs (a key runs the same
+                    // function a click runs, see mouse-navigation.md) — which
+                    // already contains the one exception this composer needs:
+                    // isConvertingAiWarning() opens the comment-kind menu
+                    // instead of posting straight away (see
+                    // isConvertingAiWarning's own doc comment). Kept alongside
+                    // (not instead of) home.mjs's own isComposeOpen() Enter
+                    // handling below, which still covers this same Enter via
+                    // bubbling for a still-empty field (no-op either way) and
+                    // stays the fallback for any other caller of this
+                    // composer this local handler might miss.
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault()
+                      if (e.target.value.trim()) {
+                        // stopPropagation so this same Enter doesn't also run
+                        // home.mjs's document-level isComposeOpen() branch a
+                        // second time right after — mirrors reaction-compose's
+                        // own guard just below.
+                        e.stopPropagation()
+                        if (openCompose) openCompose()
+                        else placeComment(state, commentTarget)
+                      }
+                    }
+                  }}"
                 ></textarea>
                 <div class="flex items-center justify-end gap-2">
-                  <button
-                    class="rounded-lg px-3 py-1.5 text-xs font-medium text-slate-500 dark:text-zinc-500 hover:text-slate-700 dark:hover:text-zinc-300"
-                    @click="${() => {
-                      warningOverride = null
-                      composeDrafts.delete(composeDraftKey)
-                      clearSendFailed('new:' + composeDraftKey)
-                      cs.composing = false
-                      // Ends a PR-wide compose too, which brings the hidden
-                      // pr-index/block column back (see cs.prWideCompose).
-                      cs.prWideCompose = false
-                    }}"
-                  >
-                    Annuleer
-                  </button>
                   <button
                     class="${() =>
                       'flex items-center gap-1.5 rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white ' +
@@ -8370,7 +8390,7 @@ export function handlePrCommentThreadKey(c, key) {
 
 // picm ("PR-index comment menu") is the ephemeral reply-composer state for
 // whichever comment-index item is currently selected in home.mjs's sidebar —
-// mirrors cs.composing's role, just for this separate, simpler flow. `commentId`
+// mirrors cs.focus === 'new''s role, just for this separate, simpler flow. `commentId`
 // scopes `replying` to ONE specific comment: DetailPanel renders both the
 // selected AND the look-ahead preview card through the very same
 // commentDetailCard, so a bare boolean would reveal the reply field on BOTH
@@ -8378,7 +8398,7 @@ export function handlePrCommentThreadKey(c, key) {
 // chosen for) — see commentDetailCard's own check below. The reply textarea
 // is deliberately hidden until "Beantwoorden" (the menu's first, default
 // item) is actually chosen — see keyboard-navigation.md ("Comment-index
-// items"). Not bound to the URL — ephemeral UI state, like cs.composing/menu
+// items"). Not bound to the URL — ephemeral UI state, like cs.focus/menu
 // elsewhere.
 // sending is this reply's own in-flight flag (mirrors cs.busy for the
 // block-scoped thread) — drives the send-status icon on comment-detail-send.

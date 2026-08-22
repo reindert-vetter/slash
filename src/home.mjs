@@ -11883,7 +11883,7 @@ function enterSubmenu(children) {
 // is deferred a frame: closing the menu unmounts its (keyed) row list in the
 // same reactive flush, and running the command's state changes in that same
 // flush can get dropped if that teardown throws before later-queued effects
-// run (e.g. the composer's cs.composing flip never reaching the DOM). Waiting
+// run (e.g. the composer's cs.focus flip never reaching the DOM). Waiting
 // a frame lets the close finish and flush on its own first.
 function runCommand(cmd) {
   // A parent command opens its submenu instead of acting; keep the palette open.
@@ -12664,7 +12664,7 @@ function onKeydown(e) {
   // split. Placed alongside f/d/s so it's guarded by the same earlier
   // menu/search/related checks above — except
   // those key on cs.focus (relatedActive()), which stays null when the composer
-  // is opened via a path that only flips cs.composing (e.g. the command
+  // is opened via a path that only flips cs.focus to 'new' (e.g. the command
   // palette's "Maak hiermee een comment" fallback, see startComment in
   // RelatedPanel.mjs) without ever routing through the panel's own keyboard
   // navigation. A literal "a" typed there would otherwise be eaten by this

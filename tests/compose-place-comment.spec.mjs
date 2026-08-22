@@ -79,3 +79,59 @@ test('the composer\'s own "Plaats…" button posts directly too (a click runs th
   const postReq = await postPromise
   expect(postReq.postDataJSON().body).toBe('publieke comment via de knop')
 })
+
+// Regression for a suspected race between cs.focus and the now-removed
+// cs.composing flag: → into the still-unanchored Claude composer and back
+// (toNewFocus) used to be the one path that could, in theory, leave the two
+// out of step (see "isComposeOpen() now reads cs.focus directly" in
+// comments-panel.md) — Enter still has to post directly after that round
+// trip, not fall through to the browser's own newline insertion.
+test('Enter still posts directly after -> into the Claude composer and back', async ({ page }) => {
+  await page.goto('/pr/12903')
+  await expect(page.getByTestId('block-column')).toBeVisible()
+  await leaveSearchBox(page)
+  await page.keyboard.press('ArrowRight')
+
+  await page.keyboard.press('Enter')
+  await page.getByTestId('command-row').filter({ hasText: 'Comment op deze regel' }).click()
+  const composer = page.getByTestId('comment-compose')
+  await expect(composer).toBeFocused()
+  await composer.type('overleeft de -> en terug naar Claude')
+
+  const claudeComposer = page.getByTestId('claude-chat-compose')
+  await page.keyboard.press('ArrowRight')
+  await expect(claudeComposer).toBeFocused()
+
+  await page.keyboard.press('ArrowLeft')
+  await expect(composer).toBeFocused()
+  await expect(composer).toHaveValue('overleeft de -> en terug naar Claude')
+
+  const postPromise = page.waitForRequest('**/api/workflows/task_code_comment')
+  await page.keyboard.press('Enter')
+  const postReq = await postPromise
+  expect(postReq.postDataJSON().body).toBe('overleeft de -> en terug naar Claude')
+  // Posted, not left behind with an inserted newline.
+  await expect(composer).toHaveCount(0)
+})
+
+// Shift+Enter must still insert a newline instead of posting, in every place
+// this task touched: the local @keydown on comment-compose (added alongside
+// the removed Annuleer button) must not have turned Enter's own guard into an
+// unconditional post.
+test('Shift+Enter in the ordinary composer inserts a newline instead of posting', async ({ page }) => {
+  await page.goto('/pr/12903')
+  await expect(page.getByTestId('block-column')).toBeVisible()
+  await leaveSearchBox(page)
+  await page.keyboard.press('ArrowRight')
+
+  await page.keyboard.press('Enter')
+  await page.getByTestId('command-row').filter({ hasText: 'Comment op deze regel' }).click()
+  const composer = page.getByTestId('comment-compose')
+  await expect(composer).toBeFocused()
+  await composer.type('regel een')
+  await composer.press('Shift+Enter')
+  await composer.type('regel twee')
+
+  await expect(composer).toHaveValue('regel een\nregel twee')
+  await expect(page.getByTestId('command-menu')).toHaveCount(0)
+})
