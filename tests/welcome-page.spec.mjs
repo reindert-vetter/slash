@@ -9,7 +9,10 @@ import { test, expect } from './_fixtures.mjs'
 // canvas (or a key) — the exact same interaction the real review tree uses
 // for its own right-click context menu ("a right-click opens the exact same
 // menu a key runs", see .claude/docs/command-palette.md) — and a final step
-// zooms out to fit the whole built tree in view.
+// zooms out to fit the whole built tree in view. Every block also carries its
+// own caption+benefit line above it (WelcomeBlock.mjs), and the comment/chat
+// pair is ONE merged node (a dashed divider, not a `→`), mirroring the real
+// comment-claude-row.
 test('welcome page builds its tree one block at a time via right-click/keys, then zooms out to fit it all', async ({ page }) => {
   const errors = []
   page.on('pageerror', (e) => errors.push(e.message))
@@ -20,12 +23,21 @@ test('welcome page builds its tree one block at a time via right-click/keys, the
 
   // Enter drives the same "advance" a right-click on empty canvas does —
   // deterministic regardless of where a block happens to be on screen.
-  const total = 8 // WELCOME_SEQUENCE length
+  const total = 7 // WELCOME_SEQUENCE length (comment+chat merged into one node)
   for (let i = 0; i < total; i++) {
     await page.keyboard.press('Enter')
     await expect(page.getByTestId('welcome-node')).toHaveCount(i + 1)
   }
   await expect(page.getByTestId('welcome-back-link')).toHaveCSS('opacity', '0')
+
+  // Every block carries its own caption+benefit line above it (the reviewer's
+  // pitch, distributed one stage at a time instead of one static paragraph).
+  await expect(page.getByText('Why this tree exists')).toBeVisible()
+  await expect(page.getByText(/not a linter anymore/)).toBeVisible()
+
+  // The comment/chat pair is ONE merged node (a dashed divider inside it, not
+  // a `→` between two separate nodes) — mirrors the real comment-claude-row.
+  await expect(page.locator('[data-testid="welcome-node"][data-kind="comment-chat"]')).toHaveCount(1)
 
   // Right-click ON an already-placed block opens its decorative action menu
   // instead of building the next block — "and you can do things" — and

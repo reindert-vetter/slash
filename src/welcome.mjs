@@ -12,23 +12,69 @@
 // tree in view. Same interaction the real review tree already has: a
 // right-click runs the exact same thing a key runs (see "The right-click
 // context menu" in .claude/docs/command-palette.md) — reused here 1:1.
+//
+// Third revision: each node also carries its own `caption`/`benefit` — a
+// short heading plus one sentence, shown ABOVE that block as it's placed —
+// instead of one static paragraph above the whole canvas. This is where the
+// reviewer's own opening pitch ("je bent straks niet meer een linter, maar
+// jij de eindbaas...") is distributed across the build, one benefit per
+// stage instead of a wall of text up front. The comment+chat pair (formerly
+// two separate nodes) is also merged into ONE node here, because in the real
+// review tree they sit side by side in a single card with a dashed divider
+// (`comment-claude-row`, .claude/docs/detail-layout.md) — not two things
+// connected by a `→`.
 import { reactive, html } from './vendor/arrow.js'
 import WelcomeBlock from './WelcomeBlock.mjs'
 
 // The tree's own nodes, left to right — mirrors the real review tree's own
 // left→right nav chain (description → index → diff → underlying code →
-// comment → chat), see .claude/docs/keyboard-navigation.md. `menu` is the
+// comment+chat), see .claude/docs/keyboard-navigation.md. `menu` is the
 // decorative, non-functional right-click-on-this-block action list (the
-// "and you can do things" part of the request).
+// "and you can do things" part of the request); `caption`/`benefit` render
+// above the block as it's placed (WelcomeBlock.mjs).
 export const WELCOME_SEQUENCE = [
-  { kind: 'hook', menu: ['This is the whole idea'] },
-  { kind: 'pr', menu: ['Open PR on GitHub', 'Show all changed files'] },
-  { kind: 'index', menu: ['Jump to a block', 'Filter by category'] },
-  { kind: 'diff', menu: ['Approve this change', 'View full diff'] },
-  { kind: 'drill', menu: ['Open as its own column', 'Back to caller'] },
-  { kind: 'comment', menu: ['Reply', 'Resolve thread'] },
-  { kind: 'chat', menu: ['Ask a follow-up', 'Apply this suggestion'] },
-  { kind: 'code-edit', menu: ['View the commit', 'Open in editor'] },
+  {
+    kind: 'hook',
+    caption: 'Why this tree exists',
+    benefit: "You're not a linter anymore — you're the one who decides what ships. Right-click to see how.",
+    menu: ['This is the whole idea'],
+  },
+  {
+    kind: 'pr',
+    caption: '1 — The PR, summarized',
+    benefit: 'One screen instead of endless scrolling through a diff you already wrote yourself.',
+    menu: ['Open PR on GitHub', 'Show all changed files'],
+  },
+  {
+    kind: 'index',
+    caption: '2 — Every touched function, indexed',
+    benefit: 'See everything that got generated before you commit to reviewing any single piece of it.',
+    menu: ['Jump to a block', 'Filter by category'],
+  },
+  {
+    kind: 'diff',
+    caption: '3 — The diff, one function at a time',
+    benefit: 'Fast, but strict: approve line by line, not the whole file on faith.',
+    menu: ['Approve this change', 'View full diff'],
+  },
+  {
+    kind: 'drill',
+    caption: '4 — Underlying code',
+    benefit: 'See the connection between functions — what calls this, what this calls next.',
+    menu: ['Open as its own column', 'Back to caller'],
+  },
+  {
+    kind: 'comment-chat',
+    caption: '5 — Comment on the line, Claude right beside it',
+    benefit: 'Ask why, right where the code lives — no separate tab, no lost context.',
+    menu: ['Reply', 'Resolve thread', 'Ask a follow-up', 'Apply this suggestion'],
+  },
+  {
+    kind: 'code-edit',
+    caption: '6 — The edit lands',
+    benefit: 'Applied straight to your branch — still your call, every time.',
+    menu: ['View the commit', 'Open in editor'],
+  },
 ]
 
 const state = reactive({
