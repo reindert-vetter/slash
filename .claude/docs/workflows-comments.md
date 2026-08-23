@@ -879,17 +879,35 @@ PR-scoped module. `model` was added later and therefore also lives in a small
 same shape as `modules/comments`' own — a row written before it exists simply
 reads back as `""`, which the UI treats as "no pill".
 
-### Agentic edits (Phase 3): a per-conversation shadow worktree, never the shared head
+### Agentic edits (Phase 3): the PR's shared local checkout, never the shared head
+
+**SUPERSEDED, read this before the rest of this section.** The disposable,
+per-conversation shadow worktree described below is GONE. A write turn now
+edits a real, standing local git checkout of the REVIEWER's own — resolved
+once per PR (not per conversation) via a selection ladder (an explicit
+`chatCheckoutDirs` list in `settings.json`, else a bounded home-dir scan) and
+remembered for the rest of the review; every conversation of that PR shares
+the same directory and the same real branch. A dirty/ambiguous candidate
+triggers a forceful consult (`chat.KindDirectoryDecision`, answered through
+the same message/Signal round trip as an ordinary `KindQuestion`) before
+anything is touched. See `chat_checkout.go` (the implementation, replacing
+`chat_shadow.go`) and `todo/todo-local-checkout-chat-edits.md` (the design —
+kept local/uncommitted, not part of the repo) for the full mechanism:
+candidate matching/exclusion rules, the dirty-tree/reuse-merged-branch
+decisions, why `chat_write_gate.go`'s existing one-code-turn-at-a-time gate
+already makes this shared checkout safe with no extra locking, and how
+landing now works (a local, network-less `git fetch` of the checkout's new
+commit into the shared clone, then the SAME `refs/slash/pending/...` ref
+advance as before — see "Serializing concurrent commits" below).
+The rest of this section (task 3's two-step tool access, the escalation
+trigger, the write gate) is otherwise UNCHANGED — only WHERE Claude gets
+Edit/Bash access changed, not WHEN.
 
 Every turn — not just a special "edit action" — lets Claude use its **Edit
 tool plus a real Bash shell** on real files, but never against the shared
 `data/worktrees/pr-<n>-head` that `/api/code`, `blockstats.go`, the re-anchor
 pass and the ingest-refresh poller all depend on staying pinned to the exact
-recorded `head_sha`. Instead each conversation gets its own **disposable,
-non-detached** worktree (`chat_shadow.go`) — deliberately a **third**
-worktree, not a repurposed base/head one, and deliberately checked out **on a
-real local branch** rather than detached (unlike `ensureWorktree`'s base/head
-worktrees), so it can be committed and pushed with an ordinary git flow.
+recorded `head_sha`.
 
 **No separate action needed — every turn tries to get real tool access, and
 gracefully degrades when it can't.** `chatActionEdit` itself still exists as a

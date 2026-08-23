@@ -1241,6 +1241,19 @@ a test rather than quietly reappear.
 
 ## Every turn gets a real shell by default — no button, just ask in the message
 
+**The backend half of this section (`chat_shadow.go`, the per-conversation
+disposable shadow worktree) is SUPERSEDED.** A write turn now edits the PR's
+ONE shared, standing local checkout of the reviewer's own — see
+`chat_checkout.go` and `todo/todo-local-checkout-chat-edits.md` (kept local/
+uncommitted), and "Agentic edits" in `.claude/docs/workflows-comments.md`.
+Everything below about the FRONTEND (no buttons, `NoShell`/the "Geen
+bestandstoegang" pill, asking in plain words) is unchanged — only where/how
+the backend gets Edit/Bash access changed. A dirty/ambiguous local checkout
+now surfaces as its own, more forceful `chat.KindDirectoryDecision` turn (see
+"Every turn gets a real shell by default" → `claudeQuestionOptions`/
+`chatKindBadge` in `ClaudeChat.mjs`), answered through the exact same reply
+mechanism as an ordinary question.
+
 Phase 3's backend (a per-conversation shadow worktree + a fast-forward-only
 commit/push — see "claude_chat" → "Agentic edits" in
 `.claude/docs/workflows-comments.md`) used to be reached from this panel via
@@ -2112,14 +2125,19 @@ visiting another one in between.
 A command-palette item, not a header button (explicit product choice).
 It **runs on the first Enter, with no confirmation** — reviewer request ("na
 wis claude gesprek, hoef ik geen bevestiging te zien") — **except** while the
-conversation's shadow worktree still holds pending agentic-edit work, the one
-case where clearing loses something unrecoverable: there it keeps the two-step
-confirm submenu ("dan wel als bevestigingscherm laten in dat geval"), the same
-shape "Keur de HELE PR goed"'s own `REVIEW_APPROVE_CONFIRM_COMMANDS` uses
-unconditionally. Backend mechanics (the `"clear"`
-`ChatMessageSignal.Action`, `clearChatConversation`/`clearChatShadow`) are in
-`.claude/docs/workflows-comments.md`'s `claude_chat` section; this section is
-the frontend/palette half.
+PR's shared local checkout (`chat_checkout.go`, superseding the old
+per-conversation shadow worktree — see "Every turn gets a real shell by
+default" above) still holds pending agentic-edit work: there it keeps the
+two-step confirm submenu ("dan wel als bevestigingscherm laten in dat geval"),
+the same shape "Keur de HELE PR goed"'s own `REVIEW_APPROVE_CONFIRM_COMMANDS`
+uses unconditionally. This warning is now purely INFORMATIONAL, not "will this
+get deleted" — clearing a conversation's own transcript never touches the
+shared checkout at all any more (it is shared with every other conversation
+of this PR), so the confirm step exists only so the reviewer isn't surprised
+by unrelated pending work they'd otherwise only discover later. Backend
+mechanics (the `"clear"` `ChatMessageSignal.Action`, `clearChatConversation`)
+are in `.claude/docs/workflows-comments.md`'s `claude_chat` section; this
+section is the frontend/palette half.
 
 - **Reached via Enter on the Claude column, but only while the composer is
   NOT the focused DOM element** (`home.mjs`'s `onKeydown`, inside the
@@ -2154,8 +2172,9 @@ the frontend/palette half.
   (`RelatedPanel.mjs`) is a fire-and-forget read run from `enterClaudeChat`
   right after entering the chat — it hits the read-only
   `GET /api/chat/shadow-status` (see `workflows-comments.md`) and caches a
-  Dutch warning sentence when the conversation's own agentic-edit shadow
-  worktree still has uncommitted or locally-unpushed work. `home.mjs` reads
+  Dutch warning sentence when the PR's shared local checkout still has
+  uncommitted or locally-unpushed work (PR-scoped now, not per-conversation —
+  `commentId` is accepted but no longer consulted server-side). `home.mjs` reads
   that cache **synchronously** at menu-open time via `claudeChatShadowWarning()`
   — the menu is built by plain, non-reactive code
   (`rootCommandsFor`/`openMenu`) that cannot itself `await` a fetch, the same

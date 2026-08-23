@@ -2,54 +2,72 @@
 
 What happens between "Claude, pas dit aan" and that change being on GitHub.
 
-A reviewer-requested Claude edit is committed in the conversation's shadow
-worktree and then **lands on the PR's branch locally**, not on GitHub. The push
+**The write side changed underneath this file.** A reviewer-requested Claude
+edit used to be committed in a per-conversation, disposable shadow worktree
+(`chat_shadow.go`); it is now committed directly in the PR's ONE shared,
+standing local checkout of the reviewer's own — resolved once per PR and
+remembered for the rest of the review, never a throwaway branch. See
+`chat_checkout.go` and `todo/todo-local-checkout-chat-edits.md` (kept local/
+uncommitted) for the selection ladder and the dirty/ambiguous-checkout
+consult. Nothing in THIS file's own subject — the landing target, its
+visibility, and the push — changed: landing still advances the same
+`refs/slash/pending/pr-<n>/<headRef>` ref, only now via a local, network-less
+`git fetch` of the checkout's new commit INTO the shared clone first
+(`advancePendingRefFromCheckout`), since that ref lives in the shared clone,
+never in the reviewer's own checkout.
+
+A reviewer-requested Claude edit is committed in the PR's shared local
+checkout and then **lands on the PR's branch locally**, not on GitHub. The push
 is a separate, deliberate step the reviewer fires from a **todo row at the very
 bottom of the block index**. In between, the change is fully part of the review
 tree: it is ingested, diffed, approvable, commentable — the reviewer reviews his
-own change before anyone else sees it, and nothing stays behind in a worktree.
+own change before anyone else sees it, and the checkout itself is never touched
+beyond that (no worktree to reclaim any more — it's the reviewer's own,
+permanent clone).
 
 **The landing itself is automatic, not a second reviewer step.** The reviewer
 only ever asks Claude to commit in plain words; Claude's own `git commit` (run
-via Bash in its shadow worktree, see "Two-step tool access"/chat_shell.md in
+via Bash in that checkout, see "Two-step tool access"/chat_shell.md in
 `.claude/docs/workflows-comments.md`) never itself moves anything onto the PR
-branch or touches the worktree afterwards — the `runClaudeTurn` Activity
-notices the shadow has something pending after EVERY turn
-(`chatShadowNeedsLanding`) and lands/merges/reclaims it the same way an
-explicit "commit deze wijziging" always did (see "Automatic landing after a
-shell turn" in that same doc). Push, unlike landing, stays a deliberate,
-reviewer-only step — never automatic, never `--force`.
+branch — the `runClaudeTurn` Activity notices the checkout has something
+pending after EVERY turn (`chatCheckoutNeedsLanding`) and lands/merges it the
+same way an explicit "commit deze wijziging" always did (see "Automatic
+landing after a shell turn" in that same doc). Push, unlike landing, stays a
+deliberate, reviewer-only step — never automatic, never `--force`.
 
-Mechanics of the chat turn itself (shadow worktree, the `chat_merge` queue,
-conflict resolution) live in `.claude/docs/workflows-comments.md`; this file is
-about the landing target, the visibility, and the push.
+Mechanics of the chat turn itself (the shared checkout, the `chat_merge`
+queue, conflict resolution) live in `.claude/docs/workflows-comments.md`; this
+file is about the landing target, the visibility, and the push.
 
 ## The landing target: `refs/slash/pending/pr-<n>/<headRef>`
 
-`prPendingRef` (`chat_shadow.go`). One ref per PR, holding every landed chat
+`prPendingRef` (`chat_checkout.go`). One ref per PR, holding every landed chat
 commit for it.
 
 - **Deliberately NOT `refs/heads/<headRef>`.** The clone `runGit` works in is
-  the developer's OWN checkout, where a branch of that name may already exist
-  and even be checked out. A ref outside `refs/heads` never appears in
-  `git branch`, cannot collide with a checkout, and pushes just as well
-  (`<pendingRef>:refs/heads/<headRef>`).
+  the SHARED ingest clone, where a branch of that name may already exist. A
+  ref outside `refs/heads` never appears in `git branch`, cannot collide with
+  a checkout, and pushes just as well (`<pendingRef>:refs/heads/<headRef>`).
 - **The branch name is part of the ref PATH** so every reader recovers it from
   git alone (`git for-each-ref refs/slash/pending/pr-<n>/`). That is what keeps
   the read model below purely local — no `gh` call on a plain `GET`.
-- **`landAndReclaimChatShadow`** is the only thing that ever moves it, and it
-  only moves it FORWARD: `git push`'s own non-fast-forward refusal is gone
+- **`advancePendingRefFromCheckout`** is the only thing that ever moves it, and
+  it only moves it FORWARD: `git push`'s own non-fast-forward refusal is gone
   together with the push, so containment is checked explicitly
-  (`merge-base --is-ancestor <current> <new>`) before `update-ref`. On success
-  the shadow worktree + its `chat/<id>` branch are removed, so nothing is left
-  behind on disk.
-- **`chatShadowBaseTip`** makes a conversation's shadow start from the pending
-  ref when one exists (else `origin/<headRef>`), so a second conversation
-  **stacks** on the first one's unpushed work instead of trying to rewind it.
-- **`chatShadowMissingTips`** lists, in a fixed order, which of
-  `origin/<headRef>` and the pending ref the shadow's own commit does not
-  contain yet. Empty → a plain fast-forward landing. Non-empty → the
-  `chat_merge` merge path merges each of them (auto-merge; a conflict it cannot
+  (`merge-base --is-ancestor <current> <new>`) before `update-ref`. Since a
+  write turn now commits directly onto the checkout's own real branch (no more
+  disposable `chat/<id>` branch to land FROM), this function first pulls that
+  one commit from the checkout into the shared clone with a local,
+  network-less `git fetch <checkout-dir> <sha>` — the checkout itself is never
+  touched or removed, it is the reviewer's own permanent clone.
+- **A second conversation of the same PR needs no "stacking" of its own any
+  more** — every conversation of a PR shares the exact SAME checkout now
+  (`chat_checkout.go`), so a second conversation's edit is simply the next
+  sequential commit in that one directory, never a divergent branch to
+  reconcile. The only remaining source of a real conflict is origin itself
+  moving (someone pushing straight to the PR branch on GitHub) — see
+  `resolveCheckoutMerge` in `chat_merge.go` (auto-merge against
+  `origin/<headRef>` only now, one tip instead of two; a conflict it cannot
   resolve becomes a consultation message in the conversation itself, see
   `workflows-comments.md`).
 
@@ -151,8 +169,8 @@ event it is never the truth, only "refetch me" (`.claude/docs/server-events.md`)
   `.claude/docs/keyboard-navigation.md`). `Enter` and a click do the same thing:
   open a **one-more-step confirm** menu (`pushTodoCommandsFor` →
   `pushTodoConfirmCommands`, the two-step shape "Keur de HELE PR goed" uses —
-  "Wis Claude-gesprek" only confirms while its shadow worktree has pending
-  work, see `.claude/docs/claude-chat-panel.md`), so
+  "Wis Claude-gesprek" only confirms while the PR's shared checkout has
+  pending work, see `.claude/docs/claude-chat-panel.md`), so
   the first keypress never pushes. Confirming calls `pushPendingWork`, which
   signals the queue.
 - **Per-block marking**: an index row (`unpushedPill`, `BlockList.mjs`) and the
@@ -168,8 +186,10 @@ event it is never the truth, only "refetch me" (`.claude/docs/server-events.md`)
 ## Tests
 
 `pending_push_test.go` (read model, both push outcomes against a throwaway
-bare-repo-as-origin, the queue's Action dispatch), `chat_shadow_test.go`
-(landing on the ref without pushing, a second conversation stacking, a refused
-landing), `ingest_delta_test.go` (`ingestRefreshNeeded` with a local commit),
-`tests/pending-push-todo.spec.mjs` (the row, the confirm flow, the keyboard
-stop, the block marking, the overview badge).
+bare-repo-as-origin, the queue's Action dispatch), `chat_checkout_test.go`
+(landing on the ref without pushing, a refused landing, the selection ladder,
+the submodule-safety guard), `chat_merge_test.go` (two conversations of the
+same PR landing sequentially on the SAME checkout, a real merge conflict
+against origin), `ingest_delta_test.go` (`ingestRefreshNeeded` with a local
+commit), `tests/pending-push-todo.spec.mjs` (the row, the confirm flow, the
+keyboard stop, the block marking, the overview badge).
