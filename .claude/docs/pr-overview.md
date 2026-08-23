@@ -544,6 +544,15 @@ without opening the review tree first. A word plus an arrow glyph, never colour
 alone; `Push mislukt` (rose) when the last attempt was refused. Full mechanism:
 `.claude/docs/pending-push.md`.
 
+**The checkout badge** (`checkoutPill`, backfilled by `kickOffCheckout` from
+`GET /api/chat/checkout`, same `hasGraph`-scoped shape as the two badges
+above) shows the last path segment of the PR's shared local checkout
+(`chat_checkout.go`), if one is assigned — a plain, neutral fact (sky tint,
+folder glyph), not a warning like the unpushed badge. Sits next to it in the
+row. Full mechanism (the chip this mirrors, the checkout-menu Actions):
+`.claude/docs/claude-chat-panel.md`'s "Every turn gets a real shell by
+default" section.
+
 ## Endpoints
 
 | Endpoint | Does |
@@ -551,6 +560,7 @@ alone; `Push mislukt` (rose) when the last attempt was refused. Full mechanism:
 | `GET /api/inbox` | Reads the read model → `{ok,live,repo,generatedFor,updatedAt,runId,sections}`. `runId` = the `pr_inbox` Run ID (for refresh/heartbeat). No snapshot yet → `{ok:false}`. |
 | `GET /api/inbox/status?prs=12,13` | The pills, also from the read-model snapshot (no GitHub call). |
 | `GET /api/pending-push?prs=12,13` | The "Ongepusht" badge — landed-but-unpushed chat edits per PR, read straight from local git refs. See `.claude/docs/pending-push.md`. |
+| `GET /api/chat/checkout?prs=12,13` | The checkout badge — this PR's shared local checkout (dir/branch), a plain in-memory read. See `.claude/docs/claude-chat-panel.md`. |
 | `POST /api/workflows/{runID}/signals/refresh` | Refresh Signal (UI on load). Only starts the fetch Activity. |
 | `POST /api/workflows/{runID}/heartbeat` | Operational ping (poll cadence), no state write. |
 | `GET /api/prs/search?q=…` | **Still a direct** live gh `search` (`inbox_api.go`) — an ephemeral, parameterized read, not a persistent list. A bare number → `<n> in:title`. Also matches by **author name** (not just title/number/login), see below. |

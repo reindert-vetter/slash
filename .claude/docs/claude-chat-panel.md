@@ -1254,6 +1254,30 @@ now surfaces as its own, more forceful `chat.KindDirectoryDecision` turn (see
 `chatKindBadge` in `ClaudeChat.mjs`), answered through the exact same reply
 mechanism as an ordinary question.
 
+**The checkout chip** (`checkoutChip`, next to `autoWarnToggleButton`/
+`themeToggleButton` in `prInfoCard`'s `pr-info-theme-row`, `home.mjs`) is the
+reviewer's own entry point into the same mechanism, outside a chat turn:
+word + glyph state ("Geen directory" / a directory name / "Keuze nodig",
+never colour alone), opening a small command-menu (mode `'checkout'`,
+anchored via `isDescriptionMenu()`) with — dynamically, via
+`checkoutChipCommandsFor()` — either the pending decision's own options
+(answered via the SAME `"checkoutAnswer"` Action `chatCheckoutDecision`
+already uses) or "Andere directory kiezen" (`"checkoutRelist"` — always
+re-lists every eligible candidate, even a single one, never auto-picking:
+see `listAllCheckoutChoices`, chat_checkout.go), plus "Nu terugzetten" while
+a stash is pending (`"checkoutRestoreStash"`) and "Uit" (`"checkoutOff"`).
+All four ride the existing `chat_merge` queue's "merge" Signal as new Action
+values — no new endpoint/workflow — ensured first via
+`POST /api/workflows/chat_merge` (idempotent, needed because the chip is
+reachable before anything has ever landed/relisted for this PR). Read side:
+`GET /api/chat/checkout` (batch-shaped like `/api/pending-push`), refetched
+on the new `checkout.changed` SSE event. The PR-overview's own
+`checkoutPill` (`overview.mjs`) reads the same endpoint for a
+"this PR has a directory assigned" badge next to the unpushed one — see
+`.claude/docs/pr-overview.md`. Test: `tests/checkout-chip.spec.mjs` (the
+frontend contract, fully mocked — the git-plumbing side of these four
+Actions is covered by `chat_checkout_test.go`/`chat_merge_test.go`).
+
 Phase 3's backend (a per-conversation shadow worktree + a fast-forward-only
 commit/push — see "claude_chat" → "Agentic edits" in
 `.claude/docs/workflows-comments.md`) used to be reached from this panel via
