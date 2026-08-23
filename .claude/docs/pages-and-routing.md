@@ -1,6 +1,6 @@
 # Pages & routing
 
-The three routes, their static shells, and the state that travels between the
+The four routes, their static shells, and the state that travels between the
 review tree and the PR overview.
 
 ## Split out of this file
@@ -12,6 +12,9 @@ review tree and the PR overview.
   client (`src/overview.mjs`: stacks, the `hoverEnabled` gate, selection
   identity, keyboard).
 - `.claude/docs/task-inbox-page.md` — the `/inbox` page in full.
+- `.claude/docs/settings-page.md` — the whole `/settings` page: the shared
+  entry buttons, the `?from=` back round trip, the keyboard-navigable row
+  list, and the per-setting source/write-path table.
 
 ## The routes
 
@@ -34,6 +37,10 @@ Every route is a static HTML shell with no build step; the Go server
   reviews, unread comments on your own PRs, and Jira tickets assigned to you
   (`inbox.html` → `src/inbox.mjs`), see
   `.claude/docs/task-inbox-page.md`.
+- **`/settings`** — the one general **settings page** (`settings.html` →
+  `src/settings.mjs`), reached via a gear-icon entry button on both `/pr/<id>`
+  and `/pr-overview`; `←` returns to wherever the reviewer came from via a
+  `?from=` round trip. See `.claude/docs/settings-page.md`.
 - **`/`** redirects (302) to `/pr-overview`; every other path (`/src/*`,
   `/overview.html`, …) is served statically by the `http.FileServer`.
 
