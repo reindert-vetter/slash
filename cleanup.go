@@ -37,14 +37,13 @@ import (
 //     disk win (see the storage breakdown in .claude/docs/tembed-workflows.md).
 //  2. Its workflow runs (the .events.jsonl/.meta.jsonl files + the rows in
 //     workflows.db) — every run whose stored input carries this pr, found the
-//     same way RunsForPR does. A per-repo tracker (pr_inbox/task_inbox/
-//     task_snooze) has no "pr" field in its input and is therefore never
+//     same way RunsForPR does. A per-repo tracker (pr_inbox/auto_warn/
+//     app_settings) has no "pr" field in its input and is therefore never
 //     touched.
 //  3. Its rows in every read-model with a pr column: blocks + pr_ingest
 //     (graph.db) plus comments/approvals/relations/callresolve/testcovers/
 //     prmeta/explanations (each via that module's own Purge). There is no
-//     "ignore" module anymore (removed, replaced by the task-level,
-//     per-repo task_snooze) — nothing to purge there.
+//     "ignore" module anymore (removed) — nothing to purge there.
 
 // cleanupMergedAge is how long after being merged a PR's data becomes
 // eligible for cleanup.
@@ -72,6 +71,13 @@ var retiredWorkflowTypes = map[string]bool{
 	// replaced by the per-repo task_snooze workflow — see "Snoozing a task"
 	// in .claude/docs/tembed-workflows.md. modules/ignore no longer exists.
 	"ignore": true,
+	// The task inbox (task_inbox, aggregation) and its per-repo task_snooze
+	// tracker — the "/inbox" personal to-do list — were removed outright
+	// (not replaced by anything): modules/taskinbox, modules/tasksnooze and
+	// taskinbox_analysis.go no longer exist. Any pre-existing Execution of
+	// either type is a genuine orphan, purged the same way as "ignore" above.
+	"task_inbox":  true,
+	"task_snooze": true,
 }
 
 // CleanupInput starts a cleanup Execution. Cutoff is normally left zero — the
@@ -457,7 +463,7 @@ func removePRWorktrees(ctx context.Context, dataDir string, repo string, pr int)
 
 // deletePRWorkflowRuns removes every workflow run whose stored input carries
 // pr — the same "pr" field RunsForPR (tasks_api.go) matches on, so a
-// per-repo tracker (pr_inbox/task_inbox/task_snooze, no "pr" field) is never
+// per-repo tracker (pr_inbox/auto_warn, no "pr" field) is never
 // touched. Returns the number of runs deleted.
 func deletePRWorkflowRuns(engine *tembed.Engine, pr int) (int, error) {
 	runs, err := engine.Runs()

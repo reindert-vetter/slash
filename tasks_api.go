@@ -30,8 +30,6 @@ import (
 	"slash/modules/prmeta"
 	"slash/modules/relations"
 	"slash/modules/reviewerusage"
-	"slash/modules/taskinbox"
-	"slash/modules/tasksnooze"
 	"slash/modules/testcovers"
 	"slash/modules/warndismiss"
 	"slash/modules/warnreviewed"
@@ -51,9 +49,7 @@ type tasks struct {
 	approvals     *approvals.Module
 	explain       *explanations.Module
 	reviewerusage *reviewerusage.Module
-	tasksnooze    *tasksnooze.Module
 	commentignore *commentignore.Module
-	taskinbox     *taskinbox.Module
 	chat          *chat.Module
 }
 
@@ -160,20 +156,6 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		ex.Close()
 		return nil, nil, err
 	}
-	ts, err := tasksnooze.Open(dataDir + "/tasksnooze.db")
-	if err != nil {
-		sq.Close()
-		cs.Close()
-		ib.Close()
-		rel.Close()
-		pm.Close()
-		cr.Close()
-		tc.Close()
-		ap.Close()
-		ex.Close()
-		ru.Close()
-		return nil, nil, err
-	}
 	ci, err := commentignore.Open(dataDir + "/commentignore.db")
 	if err != nil {
 		sq.Close()
@@ -186,23 +168,6 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		ap.Close()
 		ex.Close()
 		ru.Close()
-		ts.Close()
-		return nil, nil, err
-	}
-	ti, err := taskinbox.Open(dataDir + "/taskinbox.db")
-	if err != nil {
-		sq.Close()
-		cs.Close()
-		ib.Close()
-		rel.Close()
-		pm.Close()
-		cr.Close()
-		tc.Close()
-		ap.Close()
-		ex.Close()
-		ru.Close()
-		ts.Close()
-		ci.Close()
 		return nil, nil, err
 	}
 	ch, err := chat.Open(dataDir + "/chat.db")
@@ -217,9 +182,7 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		ap.Close()
 		ex.Close()
 		ru.Close()
-		ts.Close()
 		ci.Close()
-		ti.Close()
 		return nil, nil, err
 	}
 	aw, err := autowarn.Open(dataDir + "/autowarn.db")
@@ -234,9 +197,7 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		ap.Close()
 		ex.Close()
 		ru.Close()
-		ts.Close()
 		ci.Close()
-		ti.Close()
 		ch.Close()
 		return nil, nil, err
 	}
@@ -252,9 +213,7 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		ap.Close()
 		ex.Close()
 		ru.Close()
-		ts.Close()
 		ci.Close()
-		ti.Close()
 		ch.Close()
 		aw.Close()
 		return nil, nil, err
@@ -271,9 +230,7 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		ap.Close()
 		ex.Close()
 		ru.Close()
-		ts.Close()
 		ci.Close()
-		ti.Close()
 		ch.Close()
 		aw.Close()
 		wd.Close()
@@ -300,12 +257,11 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 	if os.Getenv("SLASH_CLAUDE") == "off" {
 		fake := claude.NewFake()
 		// SLASH_CLAUDE_CHAT_TURNS optionally points at a JSON fixture
-		// ([]string) that programs the Fake's RunChat replies deterministically
-		// — mirrors SLASH_JIRA_ASSIGNED below. Needed so a Playwright spec can
-		// exercise the embedded Claude chat's "question with choices" turn
-		// end-to-end (see the "Embedded Claude chat" section of
-		// comments-panel.md): without it every RunChat call returns "" (see
-		// Fake.RunChat's own doc comment).
+		// ([]string) that programs the Fake's RunChat replies deterministically.
+		// Needed so a Playwright spec can exercise the embedded Claude chat's
+		// "question with choices" turn end-to-end (see the "Embedded Claude
+		// chat" section of comments-panel.md): without it every RunChat call
+		// returns "" (see Fake.RunChat's own doc comment).
 		if path := os.Getenv("SLASH_CLAUDE_CHAT_TURNS"); path != "" {
 			if raw, err := os.ReadFile(path); err == nil {
 				var turns []string
@@ -335,32 +291,16 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		cl = fake
 	}
 	// Under SLASH_JIRA=off the Jira bridge never shells out (offline/tests): an
-	// empty Fake reports no linked issue for every key. SLASH_JIRA_ASSIGNED
-	// optionally points at a JSON fixture ([]jira.Issue) that seeds the Fake's
-	// AssignedToMe result deterministically — mirrors SLASH_INBOX for the
-	// task_inbox workflow's "jira" task source (see
-	// .claude/docs/tembed-workflows.md, task_inbox).
+	// empty Fake reports no linked issue for every key.
 	var jr jira.Client = jira.New()
 	if os.Getenv("SLASH_JIRA") == "off" {
-		fake := &jira.Fake{}
-		if path := os.Getenv("SLASH_JIRA_ASSIGNED"); path != "" {
-			if raw, err := os.ReadFile(path); err == nil {
-				var issues []jira.Issue
-				if json.Unmarshal(raw, &issues) == nil {
-					fake.SetAssigned(issues)
-				}
-			}
-		}
-		jr = fake
+		jr = &jira.Fake{}
 	}
-	mgr := NewTaskManager(engine, gh, cs, ib, rel, pm, cr, tc, ap, ex, ts, cl, jr, db, dataDir, repo)
+	mgr := NewTaskManager(engine, gh, cs, ib, rel, pm, cr, tc, ap, ex, cl, jr, db, dataDir, repo)
 	// Set post-construction (not a constructor param) so every existing
 	// NewTaskManager test call site stays unchanged; a nil store just makes
 	// bumpReviewerUsage a no-op.
 	mgr.reviewerusage = ru
-	// Same pattern for the task-inbox read-model: a nil store makes
-	// refreshTasks a no-op.
-	mgr.taskinbox = ti
 	// Same pattern for the ignore-comment read-model: a nil store makes
 	// saveCommentIgnore a no-op.
 	mgr.commentignore = ci
@@ -409,11 +349,6 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		// Own the PR inbox via the workflow: fetch an initial snapshot into the
 		// read-model and start the refresh poller (the UI reads only the read-model).
 		mgr.EnsureInbox(ctx)
-		// Own the per-repo task-snooze tracker so the UI has a Run ID to signal
-		// snooze/un-snooze to (no poller — it only reacts to UI signals).
-		if _, err := mgr.EnsureTaskSnooze(); err != nil {
-			mgr.logf("tasksnooze: ensure: %v", err)
-		}
 		// Own the per-repo auto-warn tracker so the toggle next to the theme
 		// button has a Run ID to signal to (no poller — it only reacts to UI
 		// signals).
@@ -426,10 +361,6 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		if _, err := mgr.EnsureAppSettings(); err != nil {
 			mgr.logf("app_settings: ensure: %v", err)
 		}
-		// Own the task inbox via the workflow: aggregate an initial snapshot
-		// into the read-model and start the refresh poller (the UI reads only
-		// the read-model). Mirrors EnsureInbox.
-		mgr.EnsureTaskInbox(ctx)
 		// Daily maintenance: purge all data of PRs merged more than
 		// cleanupMergedAge ago. See StartCleanupScheduler for why this is a
 		// plain background ticker rather than a durable in-workflow loop.
@@ -446,8 +377,6 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		_ = ap.Close()
 		_ = ex.Close()
 		_ = ru.Close()
-		_ = ts.Close()
-		_ = ti.Close()
 		_ = ci.Close()
 		_ = ch.Close()
 		_ = aw.Close()
@@ -455,7 +384,7 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		_ = wr.Close()
 		return cs.Close()
 	}
-	return &tasks{engine: engine, manager: mgr, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, testcovers: tc, approvals: ap, explain: ex, reviewerusage: ru, tasksnooze: ts, taskinbox: ti, commentignore: ci, chat: ch}, closeFn, nil
+	return &tasks{engine: engine, manager: mgr, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, testcovers: tc, approvals: ap, explain: ex, reviewerusage: ru, commentignore: ci, chat: ch}, closeFn, nil
 }
 
 // ResumePolling restarts the GitHub poller for every waiting code-comment
@@ -764,13 +693,6 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// GET /api/commentignores?pr=N → read-only ignore-comment read-model (which
 	// PR-wide comments are hidden from the block index) for refresh-restore.
 	mux.HandleFunc("/api/commentignores", s.handleCommentIgnores)
-	// POST /api/workflows/task_snooze {repo?} → ensure the per-repo task-snooze
-	// tracker; the UI then signals snooze/un-snooze to its Run ID via
-	// .../signals/snooze.
-	mux.HandleFunc("/api/workflows/task_snooze", s.handleTaskSnoozeStart)
-	// GET /api/tasksnoozes → read-only task-snooze read-model (which tasks are
-	// hidden, and until when). The UI filters expired entries at read time.
-	mux.HandleFunc("/api/tasksnoozes", s.handleTaskSnoozes)
 	// POST /api/workflows/auto_warn {repo?} → ensure the per-repo auto-warn
 	// tracker; the UI then signals its on/off toggle to its Run ID via
 	// .../signals/autowarn.
@@ -784,14 +706,6 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// The read side reuses the existing GET /api/settings and GET
 	// /api/praisewords — no new read endpoint.
 	mux.HandleFunc("/api/workflows/app_settings", s.handleAppSettingsStart)
-	// POST /api/workflows/task_inbox → ensure the per-repo task-inbox tracker
-	// (its start synchronously aggregates the three task sources into the
-	// taskinbox read-model). The generic .../signals/refresh handler (below)
-	// re-triggers the aggregation on demand.
-	mux.HandleFunc("/api/workflows/task_inbox", s.handleTaskInboxStart)
-	// GET /api/tasks → read-only, derived task-inbox read-model (PR reviews,
-	// unread comments on your own PRs, Jira tickets assigned to you).
-	mux.HandleFunc("/api/tasks", s.handleTasks)
 	// POST /api/workflows/claude_chat {pr, commentId} → ensure the claude_chat
 	// Execution for an existing comment thread (idempotent, Run ID derived from
 	// commentId); the UI then signals reviewer turns to its Run ID via
@@ -1042,7 +956,7 @@ func (s *server) handleRetryRun(w http.ResponseWriter, r *http.Request) {
 // /api/workflows/{runID}/signals/{signalName} (POST signal).
 func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/workflows/")
-	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "remove_reviewer" || rest == "code_warning" || rest == "task_snooze" || rest == "ignore_comment" || rest == "task_inbox" || rest == "cleanup" || rest == "claude_chat" || rest == "auto_warn" || rest == "app_settings" || rest == "comment_batch" || rest == "comment_titles" || rest == "retry" {
+	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "remove_reviewer" || rest == "code_warning" || rest == "ignore_comment" || rest == "cleanup" || rest == "claude_chat" || rest == "auto_warn" || rest == "app_settings" || rest == "comment_batch" || rest == "comment_titles" || rest == "retry" {
 		http.NotFound(w, r)
 		return
 	}
@@ -1137,22 +1051,6 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			writeJSON(w, http.StatusOK, map[string]string{"status": "set"})
-			return
-		}
-		// The snooze signal carries one task id + an absolute expiry (or clear)
-		// to the per-repo task-snooze tracker — the UI write path for
-		// hiding/un-hiding a task.
-		if parts[2] == SignalSnooze {
-			var body SnoozeSignal
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.TaskID == "" {
-				http.Error(w, "invalid snooze", http.StatusBadRequest)
-				return
-			}
-			if err := s.tasks.engine.SignalWorkflow(runID, SignalSnooze, body); err != nil {
-				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
-				return
-			}
-			writeJSON(w, http.StatusOK, map[string]string{"status": "snoozed"})
 			return
 		}
 		// The ignore signal carries one comment id + the desired flag to the
@@ -1823,41 +1721,6 @@ func (s *server) handleCommentIgnores(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "ignored": list})
 }
 
-// handleTaskSnoozeStart starts (or reuses) the per-repo task-snooze tracker and
-// returns its Run ID. Starting an Execution is the sanctioned UI write path;
-// the UI then signals snooze/un-snooze to this Run ID via .../signals/snooze.
-func (s *server) handleTaskSnoozeStart(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	runID, err := s.tasks.manager.EnsureTaskSnooze()
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
-}
-
-// handleTaskSnoozes serves GET /api/tasksnoozes — the read-only task-snooze
-// read-model (which tasks are hidden, and until when). It does not filter
-// expired entries: the UI compares Until against Date.now() at read time.
-func (s *server) handleTaskSnoozes(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	list, err := s.tasks.tasksnooze.List(r.Context())
-	if err != nil {
-		http.Error(w, "query failed", http.StatusInternalServerError)
-		return
-	}
-	if list == nil {
-		list = []tasksnooze.Snooze{}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "snoozes": list})
-}
-
 // handleAutoWarnStart starts (or reuses) the per-repo auto-warn tracker and
 // returns its Run ID. Starting an Execution is the sanctioned UI write path;
 // the UI then signals its on/off toggle to this Run ID via
@@ -1906,48 +1769,6 @@ func (s *server) handleAppSettingsStart(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
-}
-
-// handleTaskInboxStart starts (or reuses) the per-repo task-inbox tracker and
-// returns its Run ID. EnsureTaskInbox is normally already called once at
-// server startup (newTasks); this only calls it again if that hasn't
-// happened yet (e.g. a one-shot CLI process with resumeRuntime=false) —
-// EnsureTaskInbox spawns a poller goroutine, so it must not be called on
-// every request once a Run ID already exists. The UI can then re-trigger the
-// aggregation via the generic .../signals/refresh handler above.
-func (s *server) handleTaskInboxStart(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if s.tasks.manager.TaskInboxRunID() == "" {
-		s.tasks.manager.EnsureTaskInbox(r.Context())
-	}
-	runID := s.tasks.manager.TaskInboxRunID()
-	if runID == "" {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "task inbox not ready"})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
-}
-
-// handleTasks serves GET /api/tasks — the read-only, derived task-inbox
-// read-model (PR reviews, unread comments on your own PRs, Jira tickets
-// assigned to you), aggregated + scored by the task_inbox workflow.
-func (s *server) handleTasks(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	list, err := s.tasks.taskinbox.List(r.Context())
-	if err != nil {
-		http.Error(w, "query failed", http.StatusInternalServerError)
-		return
-	}
-	if list == nil {
-		list = []taskinbox.Task{}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "tasks": list})
 }
 
 // handleClaudeChatStart serves POST /api/workflows/claude_chat {pr, commentId}

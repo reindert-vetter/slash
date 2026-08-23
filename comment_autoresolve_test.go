@@ -114,7 +114,7 @@ func autoResolveManager(t *testing.T, dataDir string, fake *claude.Fake) (*tembe
 		cl = fake
 	}
 	m := NewTaskManager(engine, &github.Fake{}, cs, testInbox(t), testRelations(t), testPRMeta(t),
-		nil, nil, nil, nil, nil, cl, nil, db, dataDir, "test/repo")
+		nil, nil, nil, nil, cl, nil, db, dataDir, "test/repo")
 	return engine, m, cs
 }
 

@@ -15,7 +15,7 @@ func TestRemoveReviewerWorkflow(t *testing.T) {
 	gh.SetCurrentUser(github.Collaborator{Login: "reindert-vetter"})
 
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, gh, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
+	m := NewTaskManager(engine, gh, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
 
 	if _, err := m.StartRemoveReviewer(RemoveReviewerInput{PR: 12888}); err != nil {
 		t.Fatal(err)
@@ -37,7 +37,7 @@ func TestRemoveReviewerWorkflowWithoutCurrentUser(t *testing.T) {
 	gh := &github.Fake{} // no SetCurrentUser: an empty login, like an offline run
 
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, gh, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
+	m := NewTaskManager(engine, gh, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
 
 	if _, err := m.StartRemoveReviewer(RemoveReviewerInput{PR: 12888}); err == nil {
 		t.Fatal("want an error when the authenticated user is unknown")

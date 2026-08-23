@@ -34,7 +34,7 @@ func TestIngestWorkflowEndToEnd(t *testing.T) {
 	defer db.Close()
 
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, db, dataDir, repoSlug)
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, db, dataDir, repoSlug)
 
 	res, err := m.StartIngest(context.Background(), "", pr)
 	if err != nil {
@@ -69,7 +69,7 @@ func TestStartIngestSurfacesRealFailure(t *testing.T) {
 	defer db.Close()
 
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, db, dataDir, repoSlug)
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, db, dataDir, repoSlug)
 
 	const wantCause = "git@github.com: Permission denied (publickey)"
 	engine.RegisterWorkflow(WorkflowIngest, func(w *tembed.Workflow, input []byte) ([]byte, error) {
@@ -108,7 +108,7 @@ func TestIngestEnsuresPRStatus(t *testing.T) {
 	gh := &github.Fake{}
 	gh.SetPRMeta(github.Meta{Title: "PS-999 stub", URL: "https://github.com/x/y/pull/999998"})
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, gh, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, db, dataDir, repoSlug)
+	m := NewTaskManager(engine, gh, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, db, dataDir, repoSlug)
 	engine.RegisterWorkflow(WorkflowIngest, func(w *tembed.Workflow, input []byte) ([]byte, error) {
 		return []byte(`{"stored":0}`), nil
 	})

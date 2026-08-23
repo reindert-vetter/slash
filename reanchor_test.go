@@ -724,7 +724,7 @@ func TestReanchorSignalMovesStoredAnchor(t *testing.T) {
 
 	engine := tembed.New(tembed.NewMemoryStore())
 	m := NewTaskManager(engine, &github.Fake{}, cs, testInbox(t), testRelations(t), testPRMeta(t),
-		nil, nil, nil, nil, nil, nil, nil, nil, dir, "test/repo")
+		nil, nil, nil, nil, nil, nil, nil, dir, "test/repo")
 
 	ctx := context.Background()
 	pr := 940016
@@ -797,7 +797,7 @@ func TestReanchorActivityIsRegistered(t *testing.T) {
 
 	engine := tembed.New(tembed.NewMemoryStore())
 	NewTaskManager(engine, &github.Fake{}, cs, testInbox(t), testRelations(t), testPRMeta(t),
-		nil, nil, nil, nil, nil, nil, nil, nil, dir, "test/repo")
+		nil, nil, nil, nil, nil, nil, nil, dir, "test/repo")
 
 	// A stand-in for the two real call sites, passing the identical argument shape.
 	engine.RegisterWorkflow("test_reanchor_probe", func(w *tembed.Workflow, input []byte) ([]byte, error) {

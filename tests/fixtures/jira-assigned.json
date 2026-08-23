@@ -1,9 +1,0 @@
-[
-  {
-    "key": "BLOG-2001",
-    "title": "Add retry backoff for comment webhook",
-    "description": "The comment webhook should back off exponentially on repeated failures instead of retrying immediately.",
-    "url": "https://plugandpaybv.atlassian.net/browse/BLOG-2001",
-    "status": "In Progress"
-  }
-]

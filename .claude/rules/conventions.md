@@ -148,8 +148,8 @@ attribute is the code-preview card's only data source (see "The INLINE fence is
 capped to ~2 lines, faded" in `.claude/docs/claude-chat-panel.md`). Only
 `commentBody` (`RelatedPanel.mjs`) and `ClaudeChat.mjs`'s bubble renderers pass
 `true` — the two places a fence's full code is already duplicated in a
-full-size preview card stacked below; `prInfoCard`'s PR summary/description and
-`inbox.mjs`'s task description keep the default, untruncated rendering.
+full-size preview card stacked below; `prInfoCard`'s PR summary/description
+keeps the default, untruncated rendering.
 
 It also exports **`hardBreaks(text)`** — single newlines → Markdown hard breaks
 (`  \n`), fenced blocks untouched — which a caller applies **before**
@@ -208,7 +208,7 @@ site, not a per-feature reimplementation. Two pieces:
   own header comment), so two images on consecutive source lines really do
   end up as `<img>(\s*)<img>` in the output.
 - **`src/imageLightbox.mjs`** — one document-level delegated click listener
-  (`initImageLightbox()`, called once from both `home.mjs` and `inbox.mjs`)
+  (`initImageLightbox()`, called once from `home.mjs`)
   reacting to `img[data-md-image]`, scoped to "every other image in the SAME
   rendered Markdown body" via `.closest('.markdown-body')` — the shared class
   every `renderMarkdown` render point already carries (see above), so this
@@ -346,16 +346,14 @@ of logins" in `.claude/docs/pages-and-routing.md`.
 
 `identityOf` resolves the name itself, so every existing call site got real
 first names for free — the comment/reply bubbles, the compact conversation, the
-PR-comment detail card (`RelatedPanel.mjs`), the comment-activity avatars in
-`BlockList.mjs`/`Block.mjs`, and the task-inbox thread (`src/inbox.mjs`). Only
-the places reading a raw `author` field needed touching: `BlockList.mjs`'s
-`categoryOrAvatar`, `RelatedPanel.mjs`'s `lastReplyNote`, and `inbox.mjs`'s
-thread message + `pr_review` meta line. `identityOf` also falls back to
-`avatarUrlOf(author)` when a message carries no avatar of its own, so a comment
-stored before the `avatar_url` column existed — and the task-inbox thread, whose
-messages have no avatar field at all — now shows a real picture. An author that
-isn't a GitHub login (`AI check`, the `reviewer` sentinel) resolves to nothing
-and is shown verbatim.
+PR-comment detail card (`RelatedPanel.mjs`), and the comment-activity avatars in
+`BlockList.mjs`/`Block.mjs`. Only the places reading a raw `author` field
+needed touching: `BlockList.mjs`'s `categoryOrAvatar` and `RelatedPanel.mjs`'s
+`lastReplyNote`. `identityOf` also falls back to `avatarUrlOf(author)` when a
+message carries no avatar of its own, so a comment stored before the
+`avatar_url` column existed now shows a real picture. An author that isn't a
+GitHub login (`AI check`, the `reviewer` sentinel) resolves to nothing and is
+shown verbatim.
 
 ### Timing is load-bearing: await before pushing the rows
 
@@ -364,9 +362,8 @@ reuses a keyed node without re-running its bindings (see
 `.claude/rules/arrowjs-pitfalls.md`), so a late arrival would never repaint.
 Therefore `await` them **before** pushing the rows that render them:
 `loadComments` (`RelatedPanel.mjs`) awaits `ensureMe()` and then
-`ensureNames(commentAuthors(list))` before pushing `cs.list`; `loadTasks`
-(`inbox.mjs`) awaits `ensureNames(taskAuthors(tasks))`. One batched request per
-list, cached afterwards, so the comment poll costs nothing extra. A failed
+`ensureNames(commentAuthors(list))` before pushing `cs.list`. One batched
+request per list, cached afterwards, so the comment poll costs nothing extra. A failed
 lookup (offline, `SLASH_GITHUB=off` → `{ok:false}`) leaves `me`/`names` empty,
 which makes `identityOf` a no-op — an own comment then keeps the initials
 circle, as in every offline test run. Tests:

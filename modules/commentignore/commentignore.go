@@ -10,13 +10,11 @@
 // lifecycle of this data is the PR's: the cleanup workflow purges a
 // long-merged PR by calling Purge(ctx, pr) on every module with a pr column,
 // and a repo-wide key would leave every ignored comment of every purged PR
-// behind forever with no way to find it again. See "Snoozing a task" in
-// .claude/docs/tembed-workflows.md for the per-repo sibling (task_snooze),
-// which has no such cleanup hook.
+// behind forever with no way to find it again. A per-repo tracker (e.g.
+// auto_warn) has no such cleanup hook, since it carries no "pr" field.
 //
-// Deliberately a plain on/off flag with no expiry, unlike tasksnooze's Until:
-// "ignored" belongs with "resolved"/"approved" — reviewer decisions that never
-// lapse by themselves — not with "snoozed", which is temporary by definition.
+// Deliberately a plain on/off flag with no expiry: "ignored" belongs with
+// "resolved"/"approved" — reviewer decisions that never lapse by themselves.
 package commentignore
 
 import (

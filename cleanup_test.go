@@ -212,7 +212,7 @@ func newCleanupTestManager(t *testing.T) *cleanupTestManager {
 	gh := &github.Fake{}
 	store := tembed.NewMemoryStore()
 	engine := tembed.New(store)
-	mgr := NewTaskManager(engine, gh, cs, testInbox(t), rel, pm, cr, tc, ap, ex, nil, nil, nil, graphDB, dataDir, "test/repo")
+	mgr := NewTaskManager(engine, gh, cs, testInbox(t), rel, pm, cr, tc, ap, ex, nil, nil, graphDB, dataDir, "test/repo")
 
 	return &cleanupTestManager{
 		mgr: mgr, gh: gh, store: store, dataDir: dataDir, graphDB: graphDB,

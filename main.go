@@ -127,7 +127,7 @@ func runServe(args []string) {
 
 	// Open the ready gate now: newTasks armed it (see tasks_api.go) so every
 	// background poller/trigger resumed during Recover (pollIngestRefresh,
-	// pollImportComments, the pr_inbox/task_inbox initial fetch, the automatic
+	// pollImportComments, the pr_inbox initial fetch, the automatic
 	// code_warning worker) has been parked behind it since it spawned — the
 	// listener above has already been accepting connections this whole time,
 	// and only now does that possibly large batch of background work (network

@@ -1,7 +1,7 @@
 # Tracker & maintenance workflows
 
 The long-lived per-PR/per-repo trackers (`pr_status`, `pr_inbox`, `approve`,
-`ignore_comment`, `task_snooze`, `task_inbox`) plus the one-shot operational
+`ignore_comment`) plus the one-shot operational
 workflows (`ingest`, `submit_review`, `ready_for_review`, `cleanup`) and how a
 silent background failure still reaches the UI. Engine mechanics live in
 `.claude/docs/tembed-workflows.md`, endpoints in
@@ -69,8 +69,8 @@ everything (see "Progressive loading" in `.claude/docs/detail-layout.md`):
    something new to see, without any special-casing here.
    `statusesFor`/`buildInboxSnapshot` take a `*prmeta.Module` (may be `nil`)
    purely to look this moment up per PR — the same fold applies to
-   `/pr-overview` and `/inbox`, not only the review tree, since all three
-   funnel through `statusFromNode`.
+   `/pr-overview`, not only the review tree, since both funnel through
+   `statusFromNode`.
 4. **`generateSinceReviewSummary`** — what changed since that moment, for the
    review tree's sky "Sinds jouw laatste review" block (see
    `.claude/docs/detail-layout.md`). Runs after stage 3 because it reads the
@@ -308,8 +308,7 @@ the `TaskManager`'s ready gate opens, runs the first refresh and starts
 `pollInbox` — deferred past the HTTP listener binding (see "Serialized +
 deferred past server startup" in `.claude/docs/workflows-analysis.md`'s
 `code_warning` section for the full gate mechanism), traded off against the
-read-model having a snapshot the instant the server starts serving.
-`EnsureTaskInbox` (`task_inbox`, below) is an exact mirror. See
+read-model having a snapshot the instant the server starts serving. See
 `.claude/docs/pr-overview.md`.
 
 ## Persisting reviewer approval (`approve` + `modules/approvals`)
@@ -356,12 +355,10 @@ network, so no `SLASH_*=off` gating.
 - **Keyed per PR, not per repo** — a comment id is globally unique, so either
   would work, but `cleanup` purges a long-merged PR by calling `Purge(ctx, pr)`
   on every module with a `pr` column. A repo-wide key would strand every
-  ignored comment of every purged PR with no way to find it again. This is the
-  one deliberate difference from the otherwise identical `task_snooze` mould,
-  which has no such hook.
-- **A plain on/off flag, no expiry** — unlike `task_snooze`'s `Until`.
-  "Ignored" belongs with "resolved"/"approved" (reviewer decisions that never
-  lapse by themselves), not with "snoozed", which is temporary by definition.
+  ignored comment of every purged PR with no way to find it again. A per-repo
+  tracker (e.g. `auto_warn`) has no such hook, since it carries no `pr` field.
+- **A plain on/off flag, no expiry**: "ignored" belongs with
+  "resolved"/"approved" — reviewer decisions that never lapse by themselves.
 - **Workflow:** a loop on **`ignore`** (`IgnoreCommentSignal{CommentID,
   Ignored}`), one `saveCommentIgnore` Activity per signal. Deterministic — no
   clock, no live state, and the Activity count equals the Signal count. Never
@@ -384,86 +381,6 @@ network, so no `SLASH_*=off` gating.
 - Tests: `modules/commentignore/commentignore_test.go`,
   `ignore_comment_test.go`, `cleanup_test.go` (the purge sweep), and
   `tests/comment-ignore-persists.spec.mjs`.
-
-## Snoozing a task (`task_snooze` + `modules/tasksnooze`)
-
-One Execution per **repo** (mould of `approve`), making "hide this **task** from
-`/inbox`" durable. Purely local — no network, so no `SLASH_*=off` gating. Unlike
-the removed per-PR `ignore` feature this is keyed on a generic **task id**
-(`pr:<n>`/`comment:<runId>`/`jira:<KEY>`), since a task isn't always a PR.
-
-- **`modules/tasksnooze`** (`data/tasksnooze.db`, `snoozes(task_id, until)`):
-  `until` is an **absolute Unix-ms expiry** (`0` = forever). `Set` upserts, or —
-  when **`until < 0`** — deletes the row (un-snooze). `List` does **not** filter
-  on expiry: "is it still snoozed?" is checked at **read time** in the UI
-  (`until === 0 || until > Date.now()`).
-- **Workflow:** a loop on `snooze` (`SnoozeSignal{TaskID, Until, Clear}`), one
-  `saveTaskSnooze` Activity per signal. **Deterministic without a clock:** the
-  UI computes the absolute `Until` (browser-local) and sends it, so the body
-  never reads `w.Now()`. Never completes. `EnsureTaskSnooze()` starts/reuses it
-  at startup; unlike the inbox trackers it has **no poller** — it only ever
-  reacts to UI signals.
-- **Frontend:** see `.claude/docs/task-inbox-page.md`.
-- Tests: `modules/tasksnooze/tasksnooze_test.go`, `task_snooze_test.go`.
-
-## The task inbox: `task_inbox` + `modules/taskinbox` (aggregation)
-
-A "task" is **derived, not stored** — it has no table of its own. Three
-independent sources yield candidates; `buildTaskInbox`
-(`taskinbox_analysis.go`) merges and scores them into one flat list, which the
-`task_inbox` workflow (exact mirror of `pr_inbox`: one Execution per repo, a
-`refresh` Signal drives one Activity, never completes) full-swaps into the
-`taskinbox` read model. The `/inbox` page combines that with the `task_snooze`
-read model to hide snoozed tasks.
-
-- **Source A — `pr_review`** (id `pr:<n>`): open PRs where you're a reviewer.
-  Reuses `pr_inbox`'s existing "Needs your review" section — no separate GitHub
-  query.
-- **Source B — `comment_unread`** (id `comment:<commentID>`): for every
-  **other** open PR you authored (the remaining `author:@me state:open`
-  sections, named in `myOpenPRSectionTitles` — together with source A's they
-  exhaust that query, since `buildInbox`'s cross-section de-dupe puts a PR in
-  only its first matching section), every thread whose **last message** isn't
-  yours and whose status isn't `resolved`. A `comments.Comment` **is** the
-  thread root and its `Reactions` are the replies, so `unreadCommentCandidates`
-  compares the root's author/time against the last reaction's.
-- **Source C — `jira`** (id `jira:<KEY>`): every issue assigned to you,
-  regardless of status, via `jira.AssignedToMe`.
-- **Scoring** (pure, table-driven): each kind has a `baseScore` (pr_review 20,
-  comment_unread 20, jira 10) plus `pointRules` — small
-  `{ID, Kind, Eval(taskSignals)}` entries summed by `computeTaskPoints` into a
-  total + a `[]PointNote` breakdown that always starts with a `"basis"` note, so
-  the base score is never silently hidden. Adding a rule is one table entry.
-  Current rules: `ci_failing` (+10), `pr_aging` (+10, open > 3 days — the same
-  threshold as the `ouder-3-dagen` preset, read from a plain `createdAt` field
-  rather than a gh search qualifier), `changes_requested` (+10),
-  `comment_aging` (+10/day unanswered, capped +30 — day 0 doesn't count, it only
-  just became unread), `jira_active` (+10, status not Backlog/To Do —
-  `isJiraActive` matches on the status **name**, case-insensitively, not the
-  statusCategory key, since that taxonomy differs per project).
-- **`modules/taskinbox`** (`data/taskinbox.db`): `tasks(id, kind, title,
-  subtitle, points, point_notes, pr, url, detail, updated_at)` —
-  `point_notes`/`detail` are opaque JSON whose shape the main package owns per
-  `kind`. `Replace` is a full swap (a derived list, no incremental
-  maintenance); sorting is left to the frontend.
-- **Best-effort per source:** a failed `buildInboxSnapshot` skips A+B for that
-  round (C still runs), a failed Jira/comments read is swallowed — "skip only
-  the failing source" rather than the whole refresh.
-- **Login resolution reuses `snap.GeneratedFor`, never `ghLogin` directly:**
-  `ghLogin` always shells out to the real `gh`, so reading the already-resolved
-  login off the snapshot keeps a `SLASH_GITHUB=off` test from touching `gh` even
-  indirectly.
-- **Open point:** the `acli jira workitem search` invocation was verified
-  interactively against a real, authenticated `acli` (see `AssignedToMe`'s doc
-  comment for the exact call + sample output), so it's confirmed, not guessed.
-  Still open for a differently-configured `acli`: whether the default
-  `order by updated desc` and the `--limit 100` cap need tuning. No test depends
-  on live `acli`.
-- **Frontend:** see `.claude/docs/task-inbox-page.md`.
-- Tests: `modules/jira/jira_test.go`, `modules/taskinbox/taskinbox_test.go`,
-  `taskinbox_analysis_test.go`, `workflows_test.go`'s
-  `TestTaskInboxRefreshPopulatesReadModel`, `tests/inbox-tasks.spec.mjs` — all
-  offline.
 
 ## Ingest pipeline as a workflow (`ingest`)
 
@@ -671,8 +588,8 @@ Signal-less, one Execution per run.
      plus `Purge(ctx, pr)` on every other store with a `pr` column (comments —
      one `DELETE`, relying on the same `reactions` cascade `Delete` already
      trusts —, approvals, relations, callresolve, testcovers, prmeta,
-     explanations). There is no `ignore` module any more (replaced by
-     `task_snooze`), so nothing to purge there.
+     explanations). There is no `ignore` module any more (removed), so
+     nothing to purge there.
   Every dependency may be `nil` (a caller that doesn't wire a store skips it),
   and every delete is unconditional on `pr`/the path, so **re-running cleanup on
   the same PR is always a no-op** — the idempotency the daily trigger relies on.
@@ -689,7 +606,8 @@ Signal-less, one Execution per run.
 - **Also purges orphaned runs of a permanently retired Workflow Type**
   (`purgeRetiredWorkflowRuns` + `retiredWorkflowTypes`), unconditionally, once
   per pass. When a type's registering code is removed (e.g. the old per-PR
-  `ignore`), any still-`running`/`waiting` run becomes a permanent orphan that
+  `ignore`, or `task_inbox`/`task_snooze` when the task-inbox page was removed
+  outright), any still-`running`/`waiting` run becomes a permanent orphan that
   logs `uses unregistered workflow` on **every** start, forever.
   `retiredWorkflowTypes` is a small, **hand-maintained** map of names known to
   be gone — deliberately **not** "whatever is currently unregistered": the

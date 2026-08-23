@@ -72,7 +72,7 @@ func TestMirrorManagerLogsFeedsBuffer(t *testing.T) {
 	resetProblemLog()
 	t.Cleanup(resetProblemLog)
 
-	m := NewTaskManager(tembed.New(tembed.NewMemoryStore()), &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
+	m := NewTaskManager(tembed.New(tembed.NewMemoryStore()), &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
 	var seen []string
 	m.logf = func(format string, args ...any) { seen = append(seen, format) }
 	mirrorManagerLogs(m)
@@ -94,7 +94,7 @@ func TestMirrorManagerLogsFeedsBuffer(t *testing.T) {
 // — the case RunsForPR structurally cannot report.
 func TestFailedRunsReportsOnlyFailures(t *testing.T) {
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
 
 	engine.RegisterWorkflow("test_boom", func(w *tembed.Workflow, input []byte) ([]byte, error) {
 		return nil, errors.New("kaboom in the activity")
@@ -170,7 +170,7 @@ func TestFailedRunsReportsOnlyFailures(t *testing.T) {
 func TestFailedRunsHidesSupersededRun(t *testing.T) {
 	clock := time.Now()
 	engine := tembed.New(tembed.NewMemoryStore(), tembed.WithClock(func() time.Time { return clock }))
-	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
 
 	boom := func(w *tembed.Workflow, input []byte) ([]byte, error) { return nil, errors.New("boom") }
 	fine := func(w *tembed.Workflow, input []byte) ([]byte, error) { return nil, nil }
@@ -236,7 +236,7 @@ func TestFailedRunsHidesSupersededRun(t *testing.T) {
 // comment it was: file/line plus a body snippet, parsed from the run input.
 func TestFailedRunsCarriesCommentRef(t *testing.T) {
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
 	engine.RegisterWorkflow(WorkflowTaskCodeComment, func(w *tembed.Workflow, input []byte) ([]byte, error) {
 		return nil, errors.New("save reaction: database is locked")
 	})
@@ -268,7 +268,7 @@ func TestFailedRunsCarriesCommentRef(t *testing.T) {
 // instead (see retryableWorkflow).
 func TestRetryRunStartsAFreshAttempt(t *testing.T) {
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
 
 	attempts := 0
 	engine.RegisterWorkflow("test_flaky", func(w *tembed.Workflow, input []byte) ([]byte, error) {

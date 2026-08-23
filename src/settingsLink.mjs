@@ -3,10 +3,10 @@
 // settings.mjs itself (for the `?from=` origin it was opened with).
 // Deliberately split out of settings.mjs: that module is a PAGE module (it
 // mounts App() into #app and registers its own window keydown listener at
-// load, exactly like inbox.mjs) — importing it from home.mjs/overview.mjs
-// just to reuse settingsButton would run all of that top-level page code on
-// /pr/<id> and /pr-overview too. This file has no top-level side effect at
-// all, the same shape as theme.mjs/autowarn.mjs.
+// load, exactly like home.mjs/overview.mjs) — importing it from home.mjs or
+// overview.mjs just to reuse settingsButton would run all of that top-level
+// page code on /pr/<id> and /pr-overview too. This file has no top-level
+// side effect at all, the same shape as theme.mjs/autowarn.mjs.
 import { html } from './vendor/arrow.js'
 
 // originFrom/originPr are computed here (not in settings.mjs) so a future

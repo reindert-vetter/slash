@@ -81,12 +81,10 @@ type inboxRow struct {
 	Title     string `json:"title"`
 	Author    string `json:"author"`
 	UpdatedAt string `json:"updatedAt"`
-	// CreatedAt is used by the task-inbox "pr_aging" point rule (see
-	// taskinbox_analysis.go) to tell how long a PR has been open/waiting for
-	// review — the same 3-day threshold the "ouder-3-dagen" filter preset
-	// uses, but read here as a plain field instead of a gh search qualifier.
-	// Empty for an older fixture that predates this field (treated as
-	// "unknown age", never triggers the aging rule).
+	// CreatedAt tells how long a PR has been open/waiting for review — the
+	// same 3-day threshold the "ouder-3-dagen" filter preset uses, but read
+	// here as a plain field instead of a gh search qualifier. Empty for an
+	// older fixture that predates this field (treated as "unknown age").
 	CreatedAt    string `json:"createdAt,omitempty"`
 	URL          string `json:"url"`
 	IsDraft      bool   `json:"isDraft"`

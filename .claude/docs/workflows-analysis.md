@@ -1065,7 +1065,7 @@ a manually triggered, low-frequency action.
   `localStorage` (like the theme preference) or `settings.json` (read once per
   process — see `settings.go`): the toggle gates a **backend** decision that
   must be readable the instant the trigger wants to fire, so it rides the same
-  one-Execution-per-repo Signal pattern as `task_snooze`
+  one-Execution-per-repo Signal pattern as `pr_inbox`
   (`EnsureAutoWarn`/`SignalAutoWarn` → `saveAutoWarnEnabled` Activity →
   `autowarn.SetEnabled`), read via `GET /api/autowarn`
   (`autowarn.Enabled`, defaults to `true`). No numeric token-budget gate was

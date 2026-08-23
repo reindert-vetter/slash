@@ -109,11 +109,10 @@ that set stays small on purpose; a new topic file belongs in `.claude/docs/`.
 
 **Pages & routing**
 
-- `pages-and-routing.md` — the four routes and their static shells, plus the
+- `pages-and-routing.md` — the three routes and their static shells, plus the
   state that travels between the review tree and the PR overview.
 - `pr-overview.md` — the `/pr-overview` GitHub inbox in full (sections, the
   per-row popover, filters, failed tasks, its client).
-- `task-inbox-page.md` — the `/inbox` personal scored to-do list.
 - `settings-page.md` — the `/settings` general settings page: the shared
   gear-icon entry buttons, the `?from=` back-navigation round trip, the
   keyboard-navigable row list, and the per-setting source/write-path table

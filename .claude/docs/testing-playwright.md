@@ -170,7 +170,7 @@ is baked into the JSON): such a spec must clean up after itself in-test, the way
   `GET /api/events` — the multiplexed SSE stream, see
   `.claude/docs/server-events.md` — open for the entire life of the page, so
   idle **never** fires there (measured: 3/3 timeouts on an otherwise idle box),
-  and `/pr-overview`/`/inbox` poll on 800ms…15s cadences whose quiet gap drops
+  and `/pr-overview` polls on 800ms…15s cadences whose quiet gap drops
   below 500ms as soon as 4 workers load the machine. Whether a `/pr` spec
   survived was luck: the stream opens on the first detail-column render, so an
   idle sample taken just before it passed and everything after it burned the

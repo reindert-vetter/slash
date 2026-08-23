@@ -19,7 +19,7 @@ func TestCurrentUserCachesLookup(t *testing.T) {
 	gh := &github.Fake{}
 	gh.SetCurrentUser(github.Collaborator{Login: "reindert-vetter", AvatarURL: "https://avatars.githubusercontent.com/u/1?v=4"})
 
-	m := NewTaskManager(tembed.New(tembed.NewMemoryStore()), gh, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
+	m := NewTaskManager(tembed.New(tembed.NewMemoryStore()), gh, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
 
 	for i := 0; i < 3; i++ {
 		me, err := m.CurrentUser(context.Background())
@@ -52,7 +52,7 @@ func TestHandleMe(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			gh := &github.Fake{}
 			gh.SetCurrentUser(tc.seed)
-			m := NewTaskManager(tembed.New(tembed.NewMemoryStore()), gh, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
+			m := NewTaskManager(tembed.New(tembed.NewMemoryStore()), gh, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
 			s := &server{tasks: &tasks{manager: m}}
 
 			rec := httptest.NewRecorder()

@@ -587,13 +587,11 @@ export const test = base.extend({
           SLASH_GITHUB: 'off',
           SLASH_CLAUDE: 'off',
           SLASH_INBOX: 'tests/fixtures/inbox.json',
-          // Task-inbox (Fase 3, tests/inbox-tasks.spec.mjs) needs a deterministic
-          // Jira source too — SLASH_JIRA=off avoids shelling out to the real
-          // `acli` CLI (not installed in CI, and this must never touch the
-          // network), SLASH_JIRA_ASSIGNED seeds the Fake's AssignedToMe result
-          // (see tasks_api.go).
+          // SLASH_JIRA=off avoids shelling out to the real `acli` CLI (not
+          // installed in CI, and this must never touch the network) for the
+          // pr_status tracker's Jira lookup and the code_warning/prmeta jira
+          // submenu.
           SLASH_JIRA: 'off',
-          SLASH_JIRA_ASSIGNED: 'tests/fixtures/jira-assigned.json',
           // Embedded Claude chat (claude_chat workflow): programs the Fake's
           // RunChat replies so tests/claude-chat-panel.spec.mjs can exercise a
           // plain reply and a "question with choices" turn deterministically.

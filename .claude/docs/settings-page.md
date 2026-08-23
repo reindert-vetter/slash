@@ -11,7 +11,7 @@ editable from the page, which they never were before.
 
 Nothing yet — this is the only doc for the page. If it grows a second
 distinct concern (e.g. a repo registry editor), split it the way
-`pages-and-routing.md` splits into `pr-overview.md`/`task-inbox-page.md`.
+`pages-and-routing.md` splits out `pr-overview.md`.
 
 ## Entry points and the `?from=` round trip
 
@@ -123,7 +123,7 @@ properties:
 **Mechanism** (`workflows.go`, `WorkflowAppSettings = "app_settings"`,
 `SignalAppSettings = "app_settings_update"`): ONE global tracker Execution
 for the whole process — unlike every other tracker (`auto_warn`,
-`task_snooze`, …), there is no repo/PR to scope by, since there is exactly
+`ignore_comment`, …), there is no repo/PR to scope by, since there is exactly
 one data dir per running server. `appSettingsWorkflow` mirrors
 `autoWarnPrefWorkflow`'s infinite `WaitSignal` loop; `AppSettingsSignal`
 carries a `Kind` discriminator (`"aliases"` | `"praiseWords"`) because **a

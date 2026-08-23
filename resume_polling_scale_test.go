@@ -36,7 +36,7 @@ func (s *countingStore) ListRuns() ([]tembed.RunRecord, error) {
 func TestResumePollingDoesNotRescanRunsPerPR(t *testing.T) {
 	store := &countingStore{MemoryStore: tembed.NewMemoryStore()}
 	engine := tembed.New(store)
-	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
 
 	// Replace the real pr_status/task_code_comment workflows with a stub that
 	// just waits forever on a signal nobody sends — cheap way to land the run

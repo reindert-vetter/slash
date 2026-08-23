@@ -453,7 +453,7 @@ func TestResumePollingImportedThread(t *testing.T) {
 	defer cancel()
 
 	e1 := tembed.New(store)
-	NewTaskManager(e1, gh, cs, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
+	NewTaskManager(e1, gh, cs, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
 	in := CodeCommentInput{
 		PR: 42, File: "src/Order.php", Line: 10, Author: "colleague", Body: "root",
 		Side: "RIGHT", RowStart: 1, RowEnd: 1, Source: "github", ImportedRootID: 901,
@@ -470,7 +470,7 @@ func TestResumePollingImportedThread(t *testing.T) {
 	// this imported, still-waiting thread — proving the root ID is recovered from
 	// the input, not from a postGithubComment history event (there is none).
 	e2 := tembed.New(store)
-	m2 := NewTaskManager(e2, gh, cs, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
+	m2 := NewTaskManager(e2, gh, cs, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
 	m2.interval = 3 * time.Millisecond // fast poll for the test
 	m2.idle = 3 * time.Millisecond
 	if err := e2.Recover(); err != nil {
@@ -501,7 +501,7 @@ func TestImportSkipsAvatarBackfillOnFailedRun(t *testing.T) {
 	defer cs.Close()
 	gh := &github.Fake{}
 	engine := tembed.New(store)
-	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
+	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
 	m.interval = 3 * time.Millisecond
 	m.idle = 3 * time.Millisecond
 	ctx, cancel := context.WithCancel(context.Background())

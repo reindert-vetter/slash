@@ -362,7 +362,7 @@ deliberately both shown:
   is only reachable *as* the error `Result` returns). Deliberately
   **repo-wide**, which is why `RunsForPR`/`GET /api/workflows?pr=N` couldn't be
   reused: that filters on the run input's `pr`, so a per-repo tracker
-  (`pr_inbox`/`task_inbox`/`task_snooze`) structurally never appears there;
+  (`pr_inbox`/`auto_warn`) structurally never appears there;
   here it shows with `pr: 0`.
   **Superseded failures are filtered out** (`supersededRuns`/`runIdentity`, see
   the section below) so a task that later succeeded stops showing.

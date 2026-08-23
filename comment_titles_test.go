@@ -23,7 +23,7 @@ func newTitleManager(t *testing.T) (*TaskManager, *comments.Module, *claude.Fake
 	t.Cleanup(func() { cs.Close() })
 	fake := claude.NewFake()
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, &github.Fake{}, cs, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, fake, nil, nil, "", "test/repo")
+	m := NewTaskManager(engine, &github.Fake{}, cs, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, fake, nil, nil, "", "test/repo")
 	return m, cs, fake
 }
 

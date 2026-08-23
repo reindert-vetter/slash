@@ -27,8 +27,6 @@ import (
 	"slash/modules/prmeta"
 	"slash/modules/relations"
 	"slash/modules/reviewerusage"
-	"slash/modules/taskinbox"
-	"slash/modules/tasksnooze"
 	"slash/modules/testcovers"
 	"slash/modules/warndismiss"
 	"slash/modules/warnreviewed"
@@ -122,32 +120,15 @@ const (
 	// Activities sequentially and completes. See
 	// .claude/docs/tembed-workflows.md ("AI-risicocontrole").
 	WorkflowCodeWarning = "code_warning"
-	// WorkflowTaskSnooze is the Workflow Type that persists which tasks the
-	// reviewer chose to snooze (hide from the tasks inbox until a given time):
-	// one Execution per repo. Each "snooze" Signal carries one task id + an
-	// absolute expiry (computed by the UI, so the body needs no clock), which
-	// one Activity writes into the tasksnooze read-model. It never completes —
-	// a long-lived per-repo tracker. Task-level successor of the removed
-	// per-PR ignore feature.
-	WorkflowTaskSnooze = "task_snooze"
 	// WorkflowIgnoreComment is the Workflow Type that persists which PR-wide
 	// comments the reviewer chose to ignore (hide from the block index): one
 	// Execution per PR, mirroring WorkflowApprove. Each "ignore" Signal carries
 	// one comment id + the desired flag, which one Activity writes into the
 	// commentignore read-model. It never completes — a long-lived per-PR
-	// tracker. Per PR rather than per repo (unlike task_snooze) so the cleanup
+	// tracker. Per PR rather than per repo (unlike a repo-wide tracker) so the cleanup
 	// workflow's Purge(ctx, pr) sweep picks these rows up for free; see the
 	// package doc of modules/commentignore.
 	WorkflowIgnoreComment = "ignore_comment"
-	// WorkflowTaskInbox is the Workflow Type that owns the task inbox: one
-	// Execution per repo, mirroring WorkflowPRInbox exactly. Each "refresh"
-	// Signal drives an Activity that aggregates the three task sources (PR
-	// review requests, unread comments on your own PRs, Jira tickets
-	// assigned to you — see buildTaskInbox in taskinbox_analysis.go) and
-	// writes the scored result into the taskinbox read-model. This is the
-	// only path that derives tasks — the HTTP handlers only read the
-	// read-model.
-	WorkflowTaskInbox = "task_inbox"
 	// WorkflowCleanup is the Workflow Type that purges all data of PRs merged
 	// more than cleanupMergedAge ago: worktrees, workflow runs, and every
 	// read-model row keyed on that PR. One Execution per run; it runs its two
@@ -167,7 +148,7 @@ const (
 	WorkflowClaudeChat = "claude_chat"
 	// WorkflowAutoWarn is the Workflow Type that persists the reviewer's on/off
 	// preference for the AUTOMATIC code_warning trigger (see autoStartCodeWarning):
-	// one Execution per repo, mirroring WorkflowTaskSnooze. Each "autowarn" Signal
+	// one Execution per repo, the same per-repo-tracker mould as WorkflowPRInbox. Each "autowarn" Signal
 	// carries the desired enabled flag, which one Activity writes into the
 	// autowarn read-model. It never completes — a long-lived per-repo tracker.
 	// A manual "Diepgravend onderzoek" from the "/" menu never checks this flag —
@@ -230,16 +211,12 @@ const (
 	// comment. It is delivered to the workflow as a ReactionSignal (Action:
 	// "delete") under SignalReply — see ReactionSignal's doc comment.
 	SignalDelete = "delete"
-	// SignalSnooze delivers one task's snooze state to the task_snooze
-	// workflow (from the UI, on "snooze" / un-snooze). It carries an absolute
-	// expiry timestamp the UI computed, so the workflow body needs no clock.
-	SignalSnooze = "snooze"
 	// SignalIgnore delivers one comment's ignored state to the ignore_comment
 	// tracker (from the UI, on the "Ignore"/"Ignore ongedaan maken" action).
 	SignalIgnore = "ignore"
 	// SignalAutoWarn delivers the desired on/off flag to the auto_warn tracker
 	// (from the UI toggle next to the theme button). Deliberately a distinct
-	// literal from SignalSet/SignalSnooze/SignalIgnore: the generic
+	// literal from SignalSet/SignalIgnore: the generic
 	// .../signals/{name} route (tasks_api.go) dispatches purely on this literal,
 	// so it must not collide with an existing one.
 	SignalAutoWarn = "autowarn"
@@ -454,21 +431,6 @@ type PRInboxInput struct {
 	Repo string `json:"repo"`
 }
 
-// TaskInboxInput starts the task_inbox Workflow Execution for a repo —
-// mirrors PRInboxInput exactly.
-type TaskInboxInput struct {
-	Repo string `json:"repo"`
-}
-
-// taskInboxRefreshResult is the small summary the refreshTasks Activity
-// returns — the actual data lives in the taskinbox read-model, so the event
-// history stays compact even though this workflow refreshes indefinitely
-// (mirrors inboxRefreshResult).
-type taskInboxRefreshResult struct {
-	UpdatedAt string `json:"updatedAt"`
-	Tasks     int    `json:"tasks"`
-}
-
 // BuildRelationsInput starts (and re-signals) a build_relations Execution — one
 // per PR.
 type BuildRelationsInput struct {
@@ -520,22 +482,6 @@ type ApprovalSignal struct {
 	// (inbox.go) for what that feeds into. BlockID/Rows/Calls/File/Viewed are
 	// ignored when this is true.
 	FullyApproved bool `json:"fullyApproved,omitempty"`
-}
-
-// TaskSnoozeInput starts a task_snooze Execution — one tracker per repo.
-type TaskSnoozeInput struct {
-	Repo string `json:"repo"`
-}
-
-// SnoozeSignal carries one task's snooze state into the task_snooze tracker
-// (delivered under SignalSnooze). Until is an absolute Unix-ms expiry the UI
-// computed (0 = forever); Clear = true un-snoozes the task (Until is ignored
-// then). Both ride the same Signal because a workflow can only WaitSignal on
-// one name at a time.
-type SnoozeSignal struct {
-	TaskID string `json:"taskId"`
-	Until  int64  `json:"until"`
-	Clear  bool   `json:"clear"`
 }
 
 // AutoWarnInput starts an auto_warn Execution — one tracker per repo.
@@ -808,27 +754,21 @@ type TaskManager struct {
 	// churning every test call site; a nil store makes bumpReviewerUsage a
 	// no-op, like the other module-guarded activities.
 	reviewerusage *reviewerusage.Module
-	tasksnooze    *tasksnooze.Module
-	// taskinbox is the derived task-inbox read-model. Set post-construction in
-	// newTasks (like reviewerusage) rather than as a NewTaskManager param, to
-	// avoid churning every existing test call site; a nil store makes
-	// refreshTasks a no-op, like the other module-guarded activities.
-	taskinbox *taskinbox.Module
 	// commentignore records which PR-wide comments are hidden from the block
-	// index. Set post-construction in newTasks (like reviewerusage/taskinbox)
-	// rather than as a NewTaskManager param, to avoid churning every existing
+	// index. Set post-construction in newTasks (like reviewerusage) rather
+	// than as a NewTaskManager param, to avoid churning every existing
 	// test call site; a nil store makes saveCommentIgnore a no-op, like the
 	// other module-guarded activities.
 	commentignore *commentignore.Module
 	// chat is the claude_chat conversation read-model. Set post-construction in
-	// newTasks (like reviewerusage/taskinbox/commentignore) rather than as a
+	// newTasks (like reviewerusage/commentignore) rather than as a
 	// NewTaskManager param, to avoid churning every existing test call site; a
 	// nil store makes the chat Activities no-ops, like the other
 	// module-guarded activities.
 	chat *chat.Module
 	// autowarn is the on/off preference for the automatic code_warning trigger
 	// (see autoStartCodeWarning). Set post-construction in newTasks (like
-	// reviewerusage/taskinbox/commentignore/chat) rather than as a
+	// reviewerusage/commentignore/chat) rather than as a
 	// NewTaskManager param; a nil store makes AutoWarnEnabled report "enabled"
 	// (the default) and saveAutoWarnEnabled a no-op.
 	autowarn *autowarn.Module
@@ -874,9 +814,9 @@ type TaskManager struct {
 	runtimeReady bool
 
 	// ready gates every background poller/trigger spawned at boot
-	// (pollIngestRefresh, pollImportComments, pollInbox, pollTaskInbox, the
-	// initial EnsureInbox/EnsureTaskInbox refresh, and the automatic
-	// code_warning worker) behind the HTTP listener actually being bound —
+	// (pollIngestRefresh, pollImportComments, pollInbox, the initial
+	// EnsureInbox refresh, and the automatic code_warning worker) behind
+	// the HTTP listener actually being bound —
 	// see waitReady/ArmReadyGate/MarkReady. Defaults to an already-closed
 	// channel (NewTaskManager) so every existing test/CLI caller, which never
 	// arms the gate, behaves exactly as before (no wait at all).
@@ -890,7 +830,7 @@ type TaskManager struct {
 	codeWarnQueue     chan prKey
 	codeWarnWorkerOne sync.Once
 
-	mu       sync.Mutex           // guards lastBeat + prRuns + relRuns + apprRuns + ignRuns + inboxRun + snoozeRun + taskInboxRun + autoWarnRun + importPolled
+	mu       sync.Mutex           // guards lastBeat + prRuns + relRuns + apprRuns + ignRuns + inboxRun + autoWarnRun + importPolled
 	lastBeat map[string]time.Time // code-comment/inbox Run ID → last heartbeat
 	// Keyed by prKey — (repo, number), see repos.go — so a PR 12 in a second
 	// repo can never be handed the primary repo's PR 12 tracker.
@@ -899,8 +839,6 @@ type TaskManager struct {
 	apprRuns       map[prKey]string // PR → approve Run ID
 	ignRuns        map[prKey]string // PR → ignore_comment Run ID
 	inboxRun       string           // pr_inbox Run ID (one per repo/process)
-	snoozeRun      string           // task_snooze Run ID (one per repo/process)
-	taskInboxRun   string           // task_inbox Run ID (one per repo/process)
 	autoWarnRun    string           // auto_warn Run ID (one per repo/process)
 	appSettingsRun string           // app_settings Run ID (one per process, no repo scope)
 	importPolled   map[string]bool  // imported-thread Run ID → poller running (dedup, operational)
@@ -925,11 +863,11 @@ type TaskManager struct {
 }
 
 // NewTaskManager wires the modules onto engine and registers the workflows.
-func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module, ib *inbox.Module, rel *relations.Module, pm *prmeta.Module, cr *callresolve.Module, tc *testcovers.Module, ap *approvals.Module, ex *explanations.Module, ts *tasksnooze.Module, cl claude.Client, jr jira.Client, db *sql.DB, dataDir, repo string) *TaskManager {
+func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module, ib *inbox.Module, rel *relations.Module, pm *prmeta.Module, cr *callresolve.Module, tc *testcovers.Module, ap *approvals.Module, ex *explanations.Module, cl claude.Client, jr jira.Client, db *sql.DB, dataDir, repo string) *TaskManager {
 	closedGate := make(chan struct{})
 	close(closedGate)
 	m := &TaskManager{
-		engine: engine, gh: gh, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, testcovers: tc, approvals: ap, explain: ex, tasksnooze: ts, claude: cl, jira: jr, db: db, dataDir: dataDir, repo: repo,
+		engine: engine, gh: gh, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, testcovers: tc, approvals: ap, explain: ex, claude: cl, jira: jr, db: db, dataDir: dataDir, repo: repo,
 		interval: pollInterval, idle: idlePollInterval,
 		lastBeat: map[string]time.Time{}, prRuns: map[prKey]string{}, relRuns: map[prKey]string{}, apprRuns: map[prKey]string{}, ignRuns: map[prKey]string{},
 		importPolled: map[string]bool{},
@@ -1003,27 +941,6 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			n += len(s.PRs)
 		}
 		return json.Marshal(inboxRefreshResult{UpdatedAt: updatedAt, PRs: n})
-	})
-
-	// Activity: aggregate the three task sources and store the result (write,
-	// workflow-driven). Best-effort per source (see buildTaskInbox) — a
-	// hiccup in one source never fails the whole refresh.
-	engine.RegisterActivity("refreshTasks", func(ctx context.Context, in []byte) ([]byte, error) {
-		if m.taskinbox == nil {
-			return json.Marshal(taskInboxRefreshResult{})
-		}
-		tasks, err := buildTaskInbox(ctx, taskInboxDeps{db: m.db, comments: m.comments, jira: m.jira, prmeta: m.prmeta})
-		if err != nil {
-			m.logf("task_inbox: refresh skipped: %v", err)
-			return json.Marshal(taskInboxRefreshResult{})
-		}
-		if err := m.taskinbox.Replace(ctx, tasks); err != nil {
-			return nil, fmt.Errorf("save tasks: %w", err)
-		}
-		return json.Marshal(taskInboxRefreshResult{
-			UpdatedAt: time.Now().UTC().Format(time.RFC3339),
-			Tasks:     len(tasks),
-		})
 	})
 
 	// Activity: the comments module stores the comment (write, workflow-driven).
@@ -2226,24 +2143,6 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return nil, m.prmeta.SaveFullyApprovedAt(ctx, arg.Repo, arg.PR)
 	})
 
-	// Activity: persist one task's snooze state (write, workflow-driven). The
-	// tasksnooze module is the only writer of the tasksnooze read-model. Until
-	// < 0 (Clear) deletes the row (un-snooze); the workflow computes that from
-	// the signal so this Activity input stays a plain absolute value.
-	engine.RegisterActivity("saveTaskSnooze", func(ctx context.Context, in []byte) ([]byte, error) {
-		var arg struct {
-			TaskID string `json:"taskId"`
-			Until  int64  `json:"until"`
-		}
-		if err := json.Unmarshal(in, &arg); err != nil {
-			return nil, err
-		}
-		if m.tasksnooze == nil {
-			return nil, nil
-		}
-		return nil, m.tasksnooze.Set(ctx, arg.TaskID, arg.Until)
-	})
-
 	// Activity: persist the auto_warn on/off preference (write, workflow-driven).
 	// The autowarn module is the only writer of the autowarn read-model.
 	engine.RegisterActivity("saveAutoWarnEnabled", func(ctx context.Context, in []byte) ([]byte, error) {
@@ -2956,11 +2855,9 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowReadyForReview, readyForReviewWorkflow)
 	engine.RegisterWorkflow(WorkflowRemoveReviewer, removeReviewerWorkflow)
 	engine.RegisterWorkflow(WorkflowCodeWarning, codeWarningWorkflow)
-	engine.RegisterWorkflow(WorkflowTaskSnooze, taskSnoozeWorkflow)
 	engine.RegisterWorkflow(WorkflowAutoWarn, autoWarnPrefWorkflow)
 	engine.RegisterWorkflow(WorkflowAppSettings, appSettingsWorkflow)
 	engine.RegisterWorkflow(WorkflowIgnoreComment, ignoreCommentWorkflow)
-	engine.RegisterWorkflow(WorkflowTaskInbox, taskInboxWorkflow)
 	engine.RegisterWorkflow(WorkflowCleanup, cleanupWorkflow)
 	engine.RegisterWorkflow(WorkflowClaudeChat, claudeChatWorkflow)
 	engine.RegisterWorkflow(WorkflowChatMerge, chatMergeQueueWorkflow)
@@ -3054,7 +2951,7 @@ func (m *TaskManager) appDataDirOrDefault() string {
 // MarkReady is called. newTasks calls this once, only when resumeRuntime is
 // true, right before Recover() — see MarkReady/waitReady for why this exists:
 // a burst of background work (pollImportComments' immediate first import,
-// EnsureInbox/EnsureTaskInbox's initial fetch, the automatic code_warning
+// EnsureInbox's initial fetch, the automatic code_warning
 // trigger) must not compete with — and thereby delay — the synchronous work
 // Recover/ListenAndServe still have to do at startup.
 func (m *TaskManager) ArmReadyGate() {
@@ -3144,22 +3041,6 @@ func prInboxWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		var res inboxRefreshResult
 		if err := w.ExecuteActivity("refreshInbox", PRInboxInput{}, &res); err != nil {
 			return nil, fmt.Errorf("refresh inbox: %w", err)
-		}
-	}
-}
-
-// taskInboxWorkflow owns the task inbox for a repo — an exact mirror of
-// prInboxWorkflow: each "refresh" Signal drives one refreshTasks Activity
-// (the only place that aggregates the three task sources, which writes the
-// read-model). It never completes — a long-lived tracker that re-aggregates
-// whenever signalled.
-func taskInboxWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
-	for {
-		var s json.RawMessage
-		w.WaitSignal(SignalRefresh, &s)
-		var res taskInboxRefreshResult
-		if err := w.ExecuteActivity("refreshTasks", TaskInboxInput{}, &res); err != nil {
-			return nil, fmt.Errorf("refresh tasks: %w", err)
 		}
 	}
 }
@@ -3739,40 +3620,11 @@ func approveWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	}
 }
 
-// taskSnoozeWorkflow persists which tasks are snoozed (hidden from the tasks
-// inbox) for a repo. It is deterministic: the only side effect (the read-model
-// write) is an Activity, the number of Activities is exactly the number of
-// "snooze" Signals in the history, and the expiry is an absolute value carried
-// in the signal (the UI computed it) — the body never reads a clock. It never
-// completes: a long-lived per-repo tracker recording each snooze/un-snooze as
-// it happens.
-func taskSnoozeWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
-	var in TaskSnoozeInput
-	if err := json.Unmarshal(input, &in); err != nil {
-		return nil, err
-	}
-	for {
-		var sig SnoozeSignal
-		w.WaitSignal(SignalSnooze, &sig)
-		until := sig.Until
-		if sig.Clear {
-			until = -1 // Set(...) deletes the row on a negative expiry
-		}
-		arg := struct {
-			TaskID string `json:"taskId"`
-			Until  int64  `json:"until"`
-		}{TaskID: sig.TaskID, Until: until}
-		if err := w.ExecuteActivity("saveTaskSnooze", arg, nil); err != nil {
-			return nil, fmt.Errorf("save task snooze: %w", err)
-		}
-	}
-}
-
 // autoWarnPrefWorkflow persists the reviewer's on/off preference for the
 // automatic code_warning trigger, for one repo. It is deterministic: the only
 // side effect (the read-model write) is an Activity, the number of Activities
 // is exactly the number of "autowarn" Signals in the history. It never
-// completes — a long-lived per-repo tracker, mirrors taskSnoozeWorkflow.
+// completes — a long-lived per-repo tracker.
 func autoWarnPrefWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	var in AutoWarnInput
 	if err := json.Unmarshal(input, &in); err != nil {
@@ -5404,62 +5256,11 @@ func (m *TaskManager) findApproveLocked(repo string, pr int) string {
 	return ""
 }
 
-// EnsureTaskSnooze ensures the single task_snooze tracker for the repo exists
-// (starting one if none is live) and returns its Run ID. The UI calls this on
-// load so it has a Run ID to signal snoozes to; the tracker is reused across
-// restarts (its waiting Execution is re-driven by engine.Recover). Starting/
-// reusing an Execution is the sanctioned UI write path. Per-repo, mirrors
-// EnsureInbox.
-func (m *TaskManager) EnsureTaskSnooze() (string, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.snoozeRun != "" {
-		return m.snoozeRun, nil
-	}
-	if id := m.findTaskSnoozeRunLocked(); id != "" {
-		m.snoozeRun = id
-		return id, nil
-	}
-	id, err := m.engine.StartWorkflow(WorkflowTaskSnooze, TaskSnoozeInput{Repo: m.repo})
-	if err != nil {
-		return "", err
-	}
-	m.snoozeRun = id
-	return id, nil
-}
-
-// findTaskSnoozeRunLocked scans for a running/waiting task_snooze Execution
-// for m.repo. It reads only the engine, so it is safe to call while holding
-// m.mu.
-func (m *TaskManager) findTaskSnoozeRunLocked() string {
-	runs, err := m.engine.Runs()
-	if err != nil {
-		return ""
-	}
-	for _, r := range runs {
-		if r.Workflow != WorkflowTaskSnooze {
-			continue
-		}
-		if r.Status != tembed.StatusRunning && r.Status != tembed.StatusWaiting {
-			continue
-		}
-		in, err := m.engine.Input(r.ID)
-		if err != nil {
-			continue
-		}
-		var pin TaskSnoozeInput
-		if json.Unmarshal(in, &pin) == nil && pin.Repo == m.repo {
-			return r.ID
-		}
-	}
-	return ""
-}
-
 // EnsureAutoWarn ensures the single auto_warn tracker for the repo exists
 // (starting one if none is live) and returns its Run ID. The UI calls this on
 // load so the toggle next to the theme button has a Run ID to signal to; the
 // tracker is reused across restarts. Starting/reusing an Execution is the
-// sanctioned UI write path. Mirrors EnsureTaskSnooze.
+// sanctioned UI write path. Mirrors EnsureInbox.
 func (m *TaskManager) EnsureAutoWarn() (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -5698,115 +5499,6 @@ func (m *TaskManager) pollInbox(ctx context.Context, runID string) {
 		}
 		if err := m.engine.SignalWorkflow(runID, SignalRefresh, json.RawMessage("{}")); err != nil {
 			m.logf("pr_inbox: refresh signal run=%s: %v", runID, err)
-		}
-	}
-}
-
-// EnsureTaskInbox starts (or reuses) the single task_inbox Execution for the
-// repo (a fast, DB-only step, so it returns with the Run ID resolved right
-// away), then — once the ready gate opens (see waitReady; a no-op if it was
-// never armed) — aggregates an initial snapshot and launches the refresh
-// poller. Idempotent across restarts: it reuses an existing running/waiting
-// Execution. Exact mirror of EnsureInbox, including the same startup-bind
-// trade-off (see ArmReadyGate).
-func (m *TaskManager) EnsureTaskInbox(ctx context.Context) {
-	m.mu.Lock()
-	runID := m.taskInboxRun
-	if runID == "" {
-		runID = m.findTaskInboxRunLocked()
-	}
-	m.mu.Unlock()
-
-	if runID == "" {
-		id, err := m.engine.StartWorkflow(WorkflowTaskInbox, TaskInboxInput{Repo: m.repo})
-		if err != nil {
-			m.logf("task_inbox: start: %v", err)
-			return
-		}
-		runID = id
-	}
-	m.mu.Lock()
-	m.taskInboxRun = runID
-	m.mu.Unlock()
-
-	go func() {
-		m.waitReady()
-		// Initial refresh runs the aggregation Activity, so /api/tasks has a
-		// snapshot as soon as the server is actually serving requests.
-		if err := m.engine.SignalWorkflow(runID, SignalRefresh, json.RawMessage("{}")); err != nil {
-			m.logf("task_inbox: initial refresh: %v", err)
-		}
-		m.pollTaskInbox(ctx, runID)
-	}()
-}
-
-// TaskInboxRunID returns the task_inbox Run ID so the UI can signal/heartbeat it.
-func (m *TaskManager) TaskInboxRunID() string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.taskInboxRun
-}
-
-// findTaskInboxRunLocked scans for a running/waiting task_inbox Execution
-// for m.repo. Mirrors findInboxRunLocked.
-func (m *TaskManager) findTaskInboxRunLocked() string {
-	runs, err := m.engine.Runs()
-	if err != nil {
-		return ""
-	}
-	for _, r := range runs {
-		if r.Workflow != WorkflowTaskInbox {
-			continue
-		}
-		if r.Status != tembed.StatusRunning && r.Status != tembed.StatusWaiting {
-			continue
-		}
-		in, err := m.engine.Input(r.ID)
-		if err != nil {
-			continue
-		}
-		var pin TaskInboxInput
-		if json.Unmarshal(in, &pin) == nil && pin.Repo == m.repo {
-			return r.ID
-		}
-	}
-	return ""
-}
-
-// pollTaskInbox signals a "refresh" on the heartbeat-driven cadence: fast
-// (m.interval) while the task inbox is actively viewed (a heartbeat arrived
-// within heartbeatWindow), else slow (m.idle). Mirrors pollInbox exactly.
-func (m *TaskManager) pollTaskInbox(ctx context.Context, runID string) {
-	m.waitReady()
-	ticker := time.NewTicker(m.interval)
-	defer ticker.Stop()
-	var lastPoll time.Time
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-
-		m.mu.Lock()
-		beat := m.lastBeat[runID]
-		m.mu.Unlock()
-		active := !beat.IsZero() && time.Since(beat) < heartbeatWindow
-		want := m.idle
-		if active {
-			want = m.interval
-		}
-		if !lastPoll.IsZero() && time.Since(lastPoll) < want {
-			continue
-		}
-		lastPoll = time.Now()
-
-		status, err := m.engine.Status(runID)
-		if err != nil || status == tembed.StatusFailed || status == tembed.StatusCompleted {
-			return
-		}
-		if err := m.engine.SignalWorkflow(runID, SignalRefresh, json.RawMessage("{}")); err != nil {
-			m.logf("task_inbox: refresh signal run=%s: %v", runID, err)
 		}
 	}
 }

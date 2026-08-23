@@ -1,6 +1,6 @@
 # Pages & routing
 
-The four routes, their static shells, and the state that travels between the
+The three routes, their static shells, and the state that travels between the
 review tree and the PR overview.
 
 ## Split out of this file
@@ -11,7 +11,6 @@ review tree and the PR overview.
   workflow-backed GitHub access, its endpoint table, offline/test mode, and the
   client (`src/overview.mjs`: stacks, the `hoverEnabled` gate, selection
   identity, keyboard).
-- `.claude/docs/task-inbox-page.md` — the `/inbox` page in full.
 - `.claude/docs/settings-page.md` — the whole `/settings` page: the shared
   entry buttons, the `?from=` back round trip, the keyboard-navigable row
   list, and the per-setting source/write-path table.
@@ -33,10 +32,6 @@ Every route is a static HTML shell with no build step; the Go server
   tree". The read-only "recently generated" drawer feeds from
   **`GET /api/prs`** (`handlePRs` → `listPRs`, block/file counts per PR from
   `PRSummary`).
-- **`/inbox`** — the **task inbox**: a personal, scored to-do list across PR
-  reviews, unread comments on your own PRs, and Jira tickets assigned to you
-  (`inbox.html` → `src/inbox.mjs`), see
-  `.claude/docs/task-inbox-page.md`.
 - **`/settings`** — the one general **settings page** (`settings.html` →
   `src/settings.mjs`), reached via a gear-icon entry button on both `/pr/<id>`
   and `/pr-overview`; `←` returns to wherever the reviewer came from via a
@@ -258,7 +253,7 @@ render with logins and the response still lands in the `Map` for the next
 render (the overview re-polls its snapshot anyway). Test:
 `tests/overview-author-name.spec.mjs`.
 
-The same resolver also feeds the **review tree** and the **task inbox** via
+The same resolver also feeds the **review tree** via
 `identityOf` — see the "Shared avatar helper" bullet in
 `.claude/rules/conventions.md` for which call sites that covers automatically
 and which read a raw `author` field and had to be pointed at `identityOf`.

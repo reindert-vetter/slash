@@ -33,17 +33,12 @@ import (
 // values and refer back to this note instead of repeating it.
 var cliTimeout = 20 * time.Second
 
-// Issue is the Jira fields the pr_status tracker (and the task-inbox
-// aggregation, see the "jira" task source in taskinbox_analysis.go) care
-// about. Status is the workitem's status name (e.g. "To Do"/"In Review"/
-// "Done") — used by the task-inbox "jira_active" point rule to tell an
-// actively-worked ticket apart from one still sitting in the backlog.
+// Issue is the Jira fields the pr_status tracker cares about.
 type Issue struct {
 	Key         string `json:"key"`
 	Title       string `json:"title"`
 	Description string `json:"description"` // flattened plain text (ADF extracted)
 	URL         string `json:"url"`
-	Status      string `json:"status"`
 }
 
 // Client is the module's behaviour, so callers (workflows, tests) can depend on
@@ -51,10 +46,6 @@ type Issue struct {
 type Client interface {
 	// Issue fetches a single Jira issue by key (e.g. "INTEG-562").
 	Issue(ctx context.Context, key string) (Issue, error)
-	// AssignedToMe lists every Jira issue assigned to the logged-in user,
-	// regardless of status (the task-inbox "jira" task source wants every
-	// assigned ticket, not just open ones).
-	AssignedToMe(ctx context.Context) ([]Issue, error)
 }
 
 // Module is the production Client: it shells out to `acli jira workitem view`.
@@ -75,19 +66,6 @@ type acliIssue struct {
 	Fields struct {
 		Summary     string          `json:"summary"`
 		Description json.RawMessage `json:"description"`
-	} `json:"fields"`
-}
-
-// acliSearchIssue is the shape of one element of `acli jira workitem search
-// --json` — verified against a real `acli` invocation (see the doc comment
-// on AssignedToMe). Only the fields we actually use are declared.
-type acliSearchIssue struct {
-	Key    string `json:"key"`
-	Fields struct {
-		Summary string `json:"summary"`
-		Status  struct {
-			Name string `json:"name"`
-		} `json:"status"`
 	} `json:"fields"`
 }
 
@@ -124,44 +102,6 @@ func (m *Module) Issue(ctx context.Context, key string) (Issue, error) {
 		Description: adfText(parsed.Fields.Description),
 		URL:         baseURL + key,
 	}, nil
-}
-
-// AssignedToMe lists every Jira issue assigned to the logged-in user (no
-// status filter — the task-inbox "jira" task source wants every assigned
-// ticket, active or not, and applies its own "jira_active" scoring on top),
-// via `acli jira workitem search --jql "assignee = currentUser()" --json`.
-//
-// The exact acli subcommand/flags were verified interactively against a real,
-// authenticated acli install (see the tembed-workflows.md task notes for this
-// change): `acli jira workitem search --jql "<jql>" --fields "key,summary,
-// status" --json --limit <n>` returns a JSON array of issues shaped like
-// acliSearchIssue. No shell string is built from user input — the JQL here is
-// a fixed constant, not built from any request parameter.
-func (m *Module) AssignedToMe(ctx context.Context) ([]Issue, error) {
-	ctx, cancel := context.WithTimeout(ctx, cliTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "acli", "jira", "workitem", "search",
-		"--jql", "assignee = currentUser() order by updated desc",
-		"--fields", "key,summary,status",
-		"--json", "--limit", "100")
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("acli jira workitem search: %w", err)
-	}
-	var parsed []acliSearchIssue
-	if err := json.Unmarshal(out, &parsed); err != nil {
-		return nil, fmt.Errorf("jira: parse search results: %w", err)
-	}
-	out2 := make([]Issue, 0, len(parsed))
-	for _, p := range parsed {
-		out2 = append(out2, Issue{
-			Key:    p.Key,
-			Title:  p.Fields.Summary,
-			Status: p.Fields.Status.Name,
-			URL:    baseURL + p.Key,
-		})
-	}
-	return out2, nil
 }
 
 // adfText extracts the plain text of an ADF document (or node) by recursively

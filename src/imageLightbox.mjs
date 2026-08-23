@@ -24,7 +24,8 @@ const lb = reactive({ open: false, images: [], index: 0 })
 // initImageLightbox wires the one document-level click listener. Idempotent
 // — safe to call once per page from each entry module (home.mjs, inbox.mjs)
 // without double-binding, since a page only ever loads its own module graph
-// once.
+// once. (inbox.mjs was the task-inbox page, since removed; home.mjs is the
+// only surviving call site — the shape still holds for any future page.)
 let initialized = false
 export function initImageLightbox() {
   if (initialized) return
@@ -161,9 +162,9 @@ export function imageLightboxOverlay() {
   `
 }
 
-// ImageLightboxHost — the top-level mount, sibling of MenuHost (home.mjs) /
-// an equivalent top-level mount in inbox.mjs. Same "static chunk-reuse"
-// reasoning as MenuHost's own doc comment: mounted once, toggled via its own
+// ImageLightboxHost — the top-level mount, sibling of MenuHost (home.mjs).
+// Same "static chunk-reuse" reasoning as MenuHost's own doc comment: mounted
+// once, toggled via its own
 // nested `${() => ...}` binding with a stable `<div>` root, per the "bare
 // toggling expression" pitfall in arrowjs-pitfalls.md.
 export default function ImageLightboxHost() {

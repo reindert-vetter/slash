@@ -179,7 +179,7 @@ function removePraiseWord(idx) {
 // ── keyboard: ↑/↓ over the row list, Enter/Space runs that row's primary
 // action (exactly what a click on it runs — mouse-navigation.md), ← goes
 // back to originFrom. Escape, while a text input owns focus, blurs back to
-// row navigation (mirrors inbox.mjs's own input-focus guard). ─────────────
+// row navigation (mirrors home.mjs's own input-focus guard). ─────────────
 
 function focusRowInput(row) {
   const el = document.querySelector('[data-testid="settings-' + row + '-input"]')

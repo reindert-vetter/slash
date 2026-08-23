@@ -35,7 +35,7 @@ func nameManager(t *testing.T, gh github.Client, namesJSON string) (*TaskManager
 	collabLoaded = false
 	collabMu.Unlock()
 
-	m := NewTaskManager(tembed.New(tembed.NewMemoryStore()), gh, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, nil, dir, "test/repo")
+	m := NewTaskManager(tembed.New(tembed.NewMemoryStore()), gh, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, dir, "test/repo")
 	return m, dir
 }
 

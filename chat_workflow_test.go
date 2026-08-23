@@ -53,7 +53,7 @@ func newChatManager(t *testing.T) (*TaskManager, *tembed.Engine, *chat.Module, *
 
 	fake := claude.NewFake()
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, &github.Fake{}, cs, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, fake, nil, nil, "", "test/repo")
+	m := NewTaskManager(engine, &github.Fake{}, cs, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, fake, nil, nil, "", "test/repo")
 	m.chat = cm
 	return m, engine, cm, fake
 }
@@ -80,7 +80,7 @@ func newChatManagerWithStore(t *testing.T) (*TaskManager, *tembed.Engine, tembed
 	fake := claude.NewFake()
 	store := tembed.NewMemoryStore()
 	engine := tembed.New(store)
-	m := NewTaskManager(engine, &github.Fake{}, cs, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, fake, nil, nil, "", "test/repo")
+	m := NewTaskManager(engine, &github.Fake{}, cs, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, fake, nil, nil, "", "test/repo")
 	m.chat = cm
 	return m, engine, store, cm, fake
 }
@@ -1148,7 +1148,7 @@ func TestClaudeChatAutoLandsPendingCheckoutWorkAfterATurn(t *testing.T) {
 	fake := claude.NewFake()
 	engine := tembed.New(tembed.NewMemoryStore())
 	dataDir := t.TempDir()
-	m := NewTaskManager(engine, &github.Fake{}, cs, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, fake, nil, nil, dataDir, "test/repo")
+	m := NewTaskManager(engine, &github.Fake{}, cs, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, fake, nil, nil, dataDir, "test/repo")
 	m.chat = cm
 	ctx := context.Background()
 

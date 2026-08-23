@@ -112,9 +112,9 @@ automation tool, a request that never finishes — so Playwright's
 for its whole life. That is why no spec may wait on `networkidle`; they use
 `appReady(page)` instead. See "Spec-writing rules" in
 `.claude/docs/testing-playwright.md`, and expect the same to apply to
-`/pr-overview`/`/inbox` as soon as their pollers migrate here.
+`/pr-overview` as soon as its pollers migrate here.
 
-"Per tab" is literal here because `/pr/<id>`, `/pr-overview` and `/inbox` are
+"Per tab" is literal here because `/pr/<id>` and `/pr-overview` are
 separate documents (no SPA routing), so one loaded page = one connection.
 
 ## Migrating a poller onto this channel (not done in one sweep)

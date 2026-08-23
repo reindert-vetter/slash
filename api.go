@@ -46,10 +46,6 @@ func (s *server) routes(staticDir string) *http.ServeMux {
 	// from the path (/pr/<id>) and the overview lists the PRs (/pr-overview).
 	mux.HandleFunc("/pr/", serveFile(staticDir, "index.html"))
 	mux.HandleFunc("/pr-overview", serveFile(staticDir, "overview.html"))
-	// /inbox is the task inbox (Fase 3): PR reviews + unread comments + Jira,
-	// aggregated and scored by the task_inbox workflow — a separate shell,
-	// same static-serving pattern as /pr-overview.
-	mux.HandleFunc("/inbox", serveFile(staticDir, "inbox.html"))
 	// /settings is the one general settings page (src/settings.mjs), reached
 	// from a gear-icon entry button next to the theme toggle on both /pr/<id>
 	// and /pr-overview — see .claude/docs/settings-page.md.

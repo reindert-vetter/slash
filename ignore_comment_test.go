@@ -22,7 +22,7 @@ func newIgnoreCommentManager(t *testing.T) (*TaskManager, *tembed.Engine, *comme
 	t.Cleanup(func() { ci.Close() })
 
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
 	m.commentignore = ci
 	return m, engine, ci
 }

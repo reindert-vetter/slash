@@ -1,12 +1,11 @@
 // Package autowarn is the on/off preference for the AUTOMATIC AI risk check
 // (code_warning): one repo-wide flag, "does an ingest/rebuild that finds real
-// new code also auto-start a fresh code_warning run?" It does its own thing
-// with the data, mirrors tasksnooze in shape (one Execution per repo, no PR
-// scope). Its WRITE method (SetEnabled) is driven only by a workflow Activity
-// (per the project rule: only workflows mutate state); its READ method
-// (Enabled) backs the read-only GET /api/autowarn and the auto-trigger check
-// itself. See .claude/rules/workflows-write-boundary.md and the skill
-// add-module.
+// new code also auto-start a fresh code_warning run?" It is one Execution
+// per repo, no PR scope. Its WRITE method (SetEnabled) is driven only by a
+// workflow Activity (per the project rule: only workflows mutate state); its
+// READ method (Enabled) backs the read-only GET /api/autowarn and the
+// auto-trigger check itself. See .claude/rules/workflows-write-boundary.md
+// and the skill add-module.
 //
 // Deliberately NOT localStorage/settings.json: the toggle gates BACKEND
 // behaviour (a workflow Activity decides whether to fire), so the server must

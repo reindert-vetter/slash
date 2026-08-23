@@ -16,7 +16,7 @@ import (
 // doc comments).
 func TestWaitReadyBlocksUntilMarkReady(t *testing.T) {
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, nil, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
+	m := NewTaskManager(engine, nil, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
 	m.ArmReadyGate()
 
 	proceeded := make(chan struct{})
@@ -45,7 +45,7 @@ func TestWaitReadyBlocksUntilMarkReady(t *testing.T) {
 // ArmReadyGate was never called.
 func TestWaitReadyIsNoOpWithoutArm(t *testing.T) {
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, nil, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
+	m := NewTaskManager(engine, nil, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
 
 	done := make(chan struct{})
 	go func() {

@@ -109,8 +109,6 @@ See `.claude/rules/workflows-write-boundary.md` and
 | `pr_inbox` | `.claude/docs/workflows-trackers.md` |
 | `approve` | `.claude/docs/workflows-trackers.md` |
 | `ignore_comment` | `.claude/docs/workflows-trackers.md` |
-| `task_snooze` | `.claude/docs/workflows-trackers.md` |
-| `task_inbox` | `.claude/docs/workflows-trackers.md` |
 | `ingest` | `.claude/docs/workflows-trackers.md` |
 | `submit_review` | `.claude/docs/workflows-trackers.md` |
 | `ready_for_review` | `.claude/docs/workflows-trackers.md` |

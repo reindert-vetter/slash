@@ -106,7 +106,7 @@ func warningManager(t *testing.T, dataDir string, fake claude.Client) (*TaskMana
 	t.Cleanup(func() { db.Close() })
 	gh := &github.Fake{}
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, fake, nil, db, dataDir, "test/repo")
+	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, fake, nil, db, dataDir, "test/repo")
 	// The dismissed-findings store, wired like production (post-construction,
 	// see newTasks): without it a resolved/deleted finding would come straight
 	// back on the next run.
@@ -157,7 +157,7 @@ func warningManagerWithApprovals(t *testing.T, dataDir string, fake *claude.Fake
 	t.Cleanup(func() { db.Close() })
 	gh := &github.Fake{}
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, ap, nil, nil, fake, nil, db, dataDir, "test/repo")
+	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, ap, nil, fake, nil, db, dataDir, "test/repo")
 	return m, cs, ap
 }
 
@@ -943,7 +943,7 @@ func autoWarnTriggerManager(t *testing.T, dataDir string, fake *claude.Fake) (*T
 	}
 	t.Cleanup(func() { db.Close() })
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, &github.Fake{}, cs, testInbox(t), rel, testPRMeta(t), nil, nil, nil, nil, nil, fake, nil, db, dataDir, "test/repo")
+	m := NewTaskManager(engine, &github.Fake{}, cs, testInbox(t), rel, testPRMeta(t), nil, nil, nil, nil, fake, nil, db, dataDir, "test/repo")
 	m.autowarn = aw
 	return m, rel
 }

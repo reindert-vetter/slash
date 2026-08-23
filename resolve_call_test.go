@@ -32,7 +32,7 @@ func resolveCallManager(t *testing.T, dataDir string, fake *claude.Fake) (*TaskM
 	}
 	t.Cleanup(func() { cr.Close() })
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), cr, nil, nil, nil, nil, fake, nil, nil, dataDir, "test/repo")
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), cr, nil, nil, nil, fake, nil, nil, dataDir, "test/repo")
 	return m, cr
 }
 
@@ -494,7 +494,7 @@ func autoResolveCallManager(t *testing.T, dataDir string, fake *claude.Fake) (*T
 	}
 	t.Cleanup(func() { cr.Close() })
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), cr, nil, nil, nil, nil, fake, nil, db, dataDir, "test/repo")
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), cr, nil, nil, nil, fake, nil, db, dataDir, "test/repo")
 	return m, db, cr
 }
 
@@ -747,7 +747,7 @@ func TestHandleResolveCallDoesNotBlockOnTheLLMCall(t *testing.T) {
 
 	slow := &slowConcurrencyClient{delay: 150 * time.Millisecond}
 	engine := tembed.New(tembed.NewMemoryStore())
-	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), cr, nil, nil, nil, nil, slow, nil, nil, dataDir, "test/repo")
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), cr, nil, nil, nil, slow, nil, nil, dataDir, "test/repo")
 	s := &server{tasks: &tasks{manager: m, engine: engine}}
 
 	in := callInput(pr, "handleResolveCallTarget")

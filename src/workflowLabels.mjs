@@ -4,7 +4,7 @@
 // /pr-overview (overview.mjs). Extracted here so the overview page doesn't
 // have to import RelatedPanel.mjs — that module carries the whole review-tree
 // state (comment cursors, url-state bindings, watches) and has no business
-// being loaded on the inbox page.
+// being loaded on the PR-overview page.
 //
 // Deliberately labels only: the status badges and the "why is this run in this
 // status" sentences (STATUS_BADGES/WORKFLOW_STATUS_NOTE) stay in
@@ -28,8 +28,6 @@ export const WORKFLOW_LABELS = {
   submit_review: 'Review insturen',
   ready_for_review: 'Klaar voor review',
   remove_reviewer: 'Mijzelf als reviewer verwijderen',
-  task_inbox: 'Taken-inbox',
-  task_snooze: 'Taken uitstellen',
   cleanup: 'Opruimen',
 }
 
