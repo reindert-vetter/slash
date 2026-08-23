@@ -34,51 +34,6 @@ Every route is a static HTML shell with no build step; the Go server
   reviews, unread comments on your own PRs, and Jira tickets assigned to you
   (`inbox.html` → `src/inbox.mjs`), see
   `.claude/docs/task-inbox-page.md`.
-- **`/welcome`** — a standalone, animated showcase/onboarding page
-  (`welcome.html` → `src/welcome.mjs` + `src/WelcomeBlock.mjs`), not linked
-  from any other page yet (a future settings-page button is a separate task —
-  for now it's only reachable by visiting the URL directly). Deliberately its
-  **own** shell and **own** entry module, imported by nothing else and
-  importing nothing from `home.mjs`/`overview.mjs`/`inbox.mjs`, so normal use
-  of the review tree never loads it.
-
-  Not a slideshow: ONE continuously growing tree (`WELCOME_SEQUENCE` in
-  `welcome.mjs`) whose blocks connect to the right of each other, one at a
-  time — mirroring the review tree's own left→right nav chain (PR
-  description → index → diff → underlying-code drill → comment+chat, see
-  `.claude/docs/keyboard-navigation.md`), rebuilt as small hand-built mock
-  cards (`WelcomeBlock.mjs`) rather than real screenshots (an earlier
-  revision used two real screenshots under `assets/welcome/`; removed — this
-  revision shows no images at all). Each card's own width/min-height and
-  inner layout roughly mirrors its real counterpart's proportions (the
-  PR-info card gets a meta line + a "Doel" box + a review/CI-pill footer, the
-  index card gets a "Comments op regels" sub-section stacked below its rows,
-  the diff card gets a badge+file:line header above the +/- lines) instead of
-  every card sharing one uniform size. **The comment and Claude-chat blocks
-  are ONE merged node**, not two nodes joined by a `→` — two columns side by
-  side in a single card behind a dashed divider, with a code-preview card
-  stacked below it, exactly like the real `comment-claude-row`
-  (`.claude/docs/detail-layout.md`). Every node also carries its own short
-  `caption`/`benefit` line, rendered ABOVE that block as it's placed
-  (`WelcomeBlock.mjs`'s `caption()`) — the reviewer's own opening pitch
-  ("je bent straks niet meer een linter, maar jij de eindbaas...") distributed
-  one stage at a time across the build, rather than one static paragraph
-  above the whole canvas. A block is added by
-  **right-clicking the empty canvas, or pressing `→`/`↓`/`Space`/`Enter`** —
-  deliberately the exact same 1:1 pairing the real review tree already has
-  ("a right-click opens the exact same menu a key runs", see "The right-click
-  context menu" in `.claude/docs/command-palette.md`). `←`/`↑` undo one block
-  at a time, same "step back one stop" meaning as the real nav chain.
-  Right-clicking an ALREADY-PLACED block instead opens a small decorative,
-  non-functional action menu near the cursor (`state.menu`,
-  `data-testid=welcome-node-menu`) — illustrating "you can do things" with a
-  block without wiring up any real functionality. Once every block is placed,
-  one more forward step zooms the whole track out (`layoutTrack()`'s
-  `state.zoomed` branch: `transform:scale()` + a centering `margin-left`,
-  computed against the measured DOM, not reactive state) to fit the entire
-  built tree in the viewport at once, and reveals a persistent
-  "← Back to overview" link; the step after that restarts the build from
-  scratch. Test: `tests/welcome-page.spec.mjs`.
 - **`/`** redirects (302) to `/pr-overview`; every other path (`/src/*`,
   `/overview.html`, …) is served statically by the `http.FileServer`.
 

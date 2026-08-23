@@ -50,12 +50,6 @@ func (s *server) routes(staticDir string) *http.ServeMux {
 	// aggregated and scored by the task_inbox workflow — a separate shell,
 	// same static-serving pattern as /pr-overview.
 	mux.HandleFunc("/inbox", serveFile(staticDir, "inbox.html"))
-	// /welcome is a standalone, animated showcase/onboarding page — its own
-	// shell + its own entry module (src/welcome.mjs), not linked from any other
-	// page yet (that hookup, e.g. a button from a future settings page, is a
-	// separate task). Kept as its own shell so normal use of /pr, /pr-overview
-	// and /inbox never loads welcome.mjs.
-	mux.HandleFunc("/welcome", serveFile(staticDir, "welcome.html"))
 	// Everything else is a static asset (/src/*, /overview.html, …); bare "/"
 	// has no PR, so send it to the overview.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
