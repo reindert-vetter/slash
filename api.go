@@ -50,6 +50,10 @@ func (s *server) routes(staticDir string) *http.ServeMux {
 	// aggregated and scored by the task_inbox workflow — a separate shell,
 	// same static-serving pattern as /pr-overview.
 	mux.HandleFunc("/inbox", serveFile(staticDir, "inbox.html"))
+	// /settings is the one general settings page (src/settings.mjs), reached
+	// from a gear-icon entry button next to the theme toggle on both /pr/<id>
+	// and /pr-overview — see .claude/docs/settings-page.md.
+	mux.HandleFunc("/settings", serveFile(staticDir, "settings.html"))
 	// Everything else is a static asset (/src/*, /overview.html, …); bare "/"
 	// has no PR, so send it to the overview.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

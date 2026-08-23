@@ -154,6 +154,7 @@ import { commentMentionsMe } from './mentions.mjs'
 import ImageLightboxHost, { initImageLightbox, isLightboxOpen, handleLightboxKeydown } from './imageLightbox.mjs'
 import { initTheme, themeToggleButton } from './theme.mjs'
 import { ensureAutoWarn, autoWarnToggleButton, autoWarn } from './autowarn.mjs'
+import { settingsButton } from './settingsLink.mjs'
 import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
 import TestMethodsColumn from './TestMethodsColumn.mjs'
 import { meLogin } from './avatar.mjs'
@@ -14075,6 +14076,7 @@ function prInfoCard(state) {
           ${autoWarnToggleButton()}
           ${checkoutChip()}
           ${themeToggleButton('h-7 w-7 bg-slate-50 dark:bg-zinc-800 ring-1 ring-slate-200 dark:ring-zinc-700')}
+          ${settingsButton('h-7 w-7 bg-slate-50 dark:bg-zinc-800 ring-1 ring-slate-200 dark:ring-zinc-700')}
         </div>
       </div>
       <div class="rounded-lg bg-emerald-50 dark:bg-emerald-500/15 p-2.5" data-testid="pr-info-summary">
