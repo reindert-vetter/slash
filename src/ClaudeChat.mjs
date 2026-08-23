@@ -116,7 +116,18 @@ function claudeMessageBody(msg) {
 // rule — so a keyboard-driven pick reads the same as reactionBubble's own
 // active-turn marker elsewhere in this file.
 function claudeQuestionOptions(msg, onSend, optionSel) {
-  if (msg.kind !== 'question' || msg.answer || !msg.options || !msg.options.length) return ''
+  // 'directory_decision' (chat_checkout.go's KindDirectoryDecision — which
+  // local checkout to use, or what to do with pre-existing changes in it)
+  // answers through the exact same Options/click mechanism as an ordinary
+  // 'question' turn; only chatKindBadge/the bubble tint below make it read
+  // as the more forceful consult it is (see claudeBubble's own doc comment).
+  if (
+    (msg.kind !== 'question' && msg.kind !== 'directory_decision') ||
+    msg.answer ||
+    !msg.options ||
+    !msg.options.length
+  )
+    return ''
   const total = msg.options.length
   return html`
     <div class="flex flex-wrap gap-1.5 pl-7" data-testid="claude-question-options">
@@ -283,6 +294,26 @@ function claudeQueuedBubbles(view) {
 // `${() => chatKindBadge(msg)}` binding (see the file-level doc comment).
 // Same for claudeModelPill below.
 function chatKindBadge(msg) {
+  if (msg.kind === 'directory_decision') {
+    return html`<span
+      class="inline-flex shrink-0 items-center gap-1 rounded-full bg-purple-50 px-1.5 py-0.5 text-[9px] font-medium text-purple-700 dark:bg-purple-500/15 dark:text-purple-300"
+      data-testid="claude-message-directory-decision"
+    >
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        class="h-2.5 w-2.5"
+      >
+        <path d="M3 7a2 2 0 0 1 2-2h3l2 2h9a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"></path>
+      </svg>
+      keuze over lokale checkout nodig</span
+    >`
+  }
   if (msg.kind === 'action') {
     return html`<span
       class="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300"
@@ -463,6 +494,12 @@ function claudeBubble(msg, i, total, claudePos, optionSel, anchorHint, onSend, o
   const mine = msg.role === 'user'
   const isError = msg.kind === 'error'
   const isRetrying = msg.kind === 'retrying'
+  // A directory_decision turn gets its own, more forceful tint (purple,
+  // matching chatKindBadge's own colour) — the reviewer's explicit request:
+  // this is a consult about a real, possibly-in-use local checkout, not an
+  // ordinary inline question, and must read as such even before the badge
+  // text is parsed.
+  const isDirectoryDecision = msg.kind === 'directory_decision' && !msg.answer
   const canRetry = isError && i === total - 1
   // Only the conversation's very first turn ever carried the (invisible)
   // selection context (claudeContextBlock only attaches it on the first turn
@@ -497,9 +534,11 @@ function claudeBubble(msg, i, total, claudePos, optionSel, anchorHint, onSend, o
               ? 'border-rose-300 bg-rose-50 text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-300'
               : isRetrying
                 ? 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-300'
-                : mine
-                ? 'border-indigo-300 bg-indigo-50 text-slate-800 dark:border-indigo-500/30 dark:bg-indigo-500/15 dark:text-zinc-200'
-                : 'border-slate-300 bg-slate-100 text-slate-800 dark:border-zinc-800 dark:bg-zinc-800/60 dark:text-zinc-300') +
+                : isDirectoryDecision
+                  ? 'border-purple-300 bg-purple-50 text-purple-900 dark:border-purple-500/30 dark:bg-purple-500/15 dark:text-purple-200'
+                  : mine
+                    ? 'border-indigo-300 bg-indigo-50 text-slate-800 dark:border-indigo-500/30 dark:bg-indigo-500/15 dark:text-zinc-200'
+                    : 'border-slate-300 bg-slate-100 text-slate-800 dark:border-zinc-800 dark:bg-zinc-800/60 dark:text-zinc-300') +
             (active ? ' ring-2 ring-indigo-400' : '')
           )
         }}"
