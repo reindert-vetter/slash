@@ -2,7 +2,7 @@
 // "commit deze wijziging" pushes across every claude_chat conversation of one
 // PR, so two conversations landing changes around the same time are merged
 // ONE AFTER ANOTHER instead of racing each other's fast-forward-only push (see
-// chat_shadow.go and .claude/docs/tembed-workflows.md, "chat_merge").
+// chat_checkout.go and .claude/docs/tembed-workflows.md, "chat_merge").
 //
 // Serialization is not custom queue code: one Execution per PR, looping on a
 // "merge" Signal, reuses tembed's own per-Run-ID mutex (Engine.SignalWorkflow
@@ -139,7 +139,7 @@ type chatMergeInput struct {
 }
 
 // enqueueChatMerge is the enqueueChatMerge Activity's body — it REPLACES the
-// old direct commitChatShadowEdits call in claudeChatWorkflow's
+// old direct commitCheckoutEditsAt call in claudeChatWorkflow's
 // chatActionCommit branch: ensure the PR's chat_merge queue exists and hand it
 // this conversation's commit request, then return immediately. Best-effort/
 // log-only on failure (mirrors reanchorAfterRefresh's own cross-workflow
@@ -186,15 +186,15 @@ func processChatMerge(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 
 // processChatMergeAt is processChatMerge's body once the PR's head branch
 // name is already known — split out for the same testability reason as
-// ensureChatShadowWorktreeAt/commitChatShadowEditsAt: no gh/network call, so a
+// prepareChatShellWorkDir/commitCheckoutEditsAt: no gh/network call, so a
 // test can exercise the real fast-forward/merge/conflict mechanics against a
 // throwaway local repo.
 //
-// Attempts the conversation's landing via the EXISTING commitChatShadowEditsAt
+// Attempts the conversation's landing via the EXISTING commitCheckoutEditsAt
 // (unchanged — still the sole fast-forward-only path), and only escalates to an
 // automatic merge when that reports the one specific, named outcome "the branch
-// moved on" (chatShadowBranchMovedOnMsg) — never for any other failure (no
-// shadow, the landing failed for an unrelated reason), which are returned to
+// moved on" (checkoutBranchMovedOnMsg) — never for any other failure (no
+// checkout assigned, the landing failed for an unrelated reason), which are returned to
 // the reviewer as-is.
 //
 // A successful landing additionally asks the PR's own tracker to refresh the
@@ -209,15 +209,15 @@ func processChatMerge(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 // deterministic sequence of steps regardless of how much the branch thrashes.
 //
 // Every outcome is recorded as ONE chat.Message under the SAME deterministic
-// id commitChatShadowEditsAt already wrote (chatMessageID(arg.TurnID, "")), so
+// id commitCheckoutEditsAt already wrote (chatMessageID(arg.TurnID, "")), so
 // this function's own follow-up SaveMessage calls simply overwrite that row
 // rather than adding a second one — the reviewer only ever sees the final
 // outcome, never the transient "moved on" text this uses internally as a
 // detection signal.
 func processChatMergeAt(ctx context.Context, tm *TaskManager, cm *chat.Module, cl claude.Client, dataDir string, arg chatMergeInput, headRefName string) chat.Message {
-	msg := commitChatShadowEditsAt(ctx, cm, dataDir, arg.Repo, arg.PR, arg.ConversationID, arg.TurnID, headRefName)
-	if msg.Kind == chat.KindError && msg.Body == chatShadowBranchMovedOnMsg {
-		msg = resolveChatShadowMerge(ctx, cm, cl, dataDir, arg.Repo, arg.PR, arg.ConversationID, arg.TurnID, headRefName)
+	msg := commitCheckoutEditsAt(ctx, cm, dataDir, arg.Repo, arg.PR, arg.ConversationID, arg.TurnID, headRefName)
+	if msg.Kind == chat.KindError && msg.Body == checkoutBranchMovedOnMsg {
+		msg = resolveCheckoutMerge(ctx, cm, cl, arg.Repo, arg.PR, arg.ConversationID, arg.TurnID, headRefName)
 	}
 	if msg.Kind != chat.KindError {
 		refreshTreeAfterLanding(ctx, tm, arg.Repo, arg.PR, headRefName)
@@ -277,16 +277,19 @@ func refreshTreeAfterLanding(ctx context.Context, tm *TaskManager, repo string, 
 // and Claude can redo the change against the current state of the branch. That
 // is why the body has to carry the facts a reply needs: which tip conflicted,
 // which files, and what has already been tried. The merge itself is aborted
-// first (chat_shadow.go's "degrade rather than guess" rule), so nothing is left
+// first (chat_checkout.go's "degrade rather than guess" rule), so nothing is left
 // half-merged while the two of them figure it out.
 //
 // Markdown, like every chat bubble (renderMarkdown, see conventions.md), so the
 // file list reads as a real list.
-func chatMergeConflictConsultMsg(ref, headRefName string, conflicted []string) string {
+func chatMergeConflictConsultMsg(headRefName string, conflicted []string) string {
+	// The only remaining source of a real conflict now that a write turn
+	// commits directly onto the checkout's own real branch (chat_checkout.go):
+	// someone pushed straight to the PR branch on GitHub, outside slash,
+	// while the reviewer was chatting — two of the reviewer's OWN
+	// conversations can no longer diverge from each other, since they share
+	// one checkout and one write-turn-at-a-time gate (chat_write_gate.go).
 	origin := "een andere, inmiddels op GitHub gepushte wijziging"
-	if strings.HasPrefix(ref, "refs/slash/pending/") {
-		origin = "een andere wijziging die al op `" + headRefName + "` staat maar nog niet gepusht is"
-	}
 	var b strings.Builder
 	b.WriteString("**Samenvoegconflict — hier wil ik even met je overleggen.**\n\n")
 	b.WriteString("Jouw wijziging botst met " + origin + ". Ik heb `git merge` geprobeerd en daarna één poging gedaan om het conflict zelf op te lossen; dat is niet gelukt, dus ik heb de merge afgebroken (er staat niets half samengevoegd).\n\n")
@@ -298,16 +301,22 @@ func chatMergeConflictConsultMsg(ref, headRefName string, conflicted []string) s
 	return b.String()
 }
 
-// resolveChatShadowMerge runs once the plain fast-forward attempt reported the
-// PR branch moved on: try an ordinary `git merge` of every tip the landing must
-// contain (origin's — already fetched by commitChatShadowEditsAt — and the PR's
-// pending ref) into the conversation's shadow first — no AI, fully
-// deterministic — and only when that leaves real conflicts, make ONE begrensde
-// Claude attempt to resolve them. Any failure aborts the merge
-// (never leaves the shadow worktree mid-conflict) and degrades to a
-// reviewer-facing message; success lands via the same
-// landAndReclaimChatShadow every fast-forward landing already uses.
-func resolveChatShadowMerge(ctx context.Context, cm *chat.Module, cl claude.Client, dataDir string, repo string, pr int, conversationID, turnID, headRefName string) chat.Message {
+// resolveCheckoutMerge runs once the plain fast-forward attempt reported the
+// PR branch moved on: try an ordinary `git merge origin/<headRef>` in the PR's
+// assigned checkout first — no AI, fully deterministic — and only when that
+// leaves real conflicts, make ONE begrensde Claude attempt to resolve them.
+// Any failure aborts the merge (never leaves the checkout mid-conflict) and
+// degrades to a reviewer-facing message; success lands via the same
+// advancePendingRefFromCheckout every fast-forward landing already uses.
+//
+// Only ONE tip to reconcile against now (origin/<headRef>) — unlike the old
+// per-conversation shadow worktree, which also had to merge the PR's pending
+// ref to stack a second conversation's unpushed edit on top of the first's.
+// That case cannot happen any more: every conversation of this PR shares the
+// SAME checkout and the same write-turn-at-a-time gate (chat_write_gate.go),
+// so two of the reviewer's own conversations never diverge from each other —
+// see chatMergeConflictConsultMsg's own doc comment.
+func resolveCheckoutMerge(ctx context.Context, cm *chat.Module, cl claude.Client, repo string, pr int, conversationID, turnID, headRefName string) chat.Message {
 	newMsg := func(body string, isErr bool) chat.Message {
 		kind := ""
 		if isErr {
@@ -321,109 +330,54 @@ func resolveChatShadowMerge(ctx context.Context, cm *chat.Module, cl claude.Clie
 		return msg
 	}
 
-	dir := chatShadowDir(dataDir, repo, pr, conversationID)
+	a := getCheckoutAssignment(repo, pr)
+	if a == nil || a.Dir == "" {
+		return newMsg(checkoutBranchMovedOnMsg, true)
+	}
+	dir := a.Dir
 
-	// EVERY tip the landing must contain, merged one at a time in
-	// chatShadowMissingTips' own fixed order (origin's tip, then the PR's
-	// pending ref) — both can have moved: someone pushing to GitHub advances
-	// the first, another conversation landing an unpushed edit the second.
-	// Merging both is what makes divergence resolve automatically instead of
-	// leaving the reviewer stuck; deliberately never a rewind of either.
-	//
-	// Determinism is unaffected: this is all INSIDE one Activity, so the
-	// workflow still executes exactly one ExecuteActivity per "merge" Signal
-	// regardless of how many tips turn out to need merging (see the file
-	// header and .claude/rules/workflow-determinism.md).
+	_, mergeErr := runGitIn(ctx, dir, "-c", "submodule.recurse=false", "merge", "origin/"+headRefName, "-m", "Merge origin/"+headRefName+" for chat edit")
+	conflicted, statusErr := checkoutConflictedPaths(ctx, dir)
+	if statusErr != nil {
+		_, _ = runGitIn(ctx, dir, "merge", "--abort")
+		return newMsg(checkoutBranchMovedOnMsg, true)
+	}
+
 	resolvedByClaude := false
-	for _, ref := range chatShadowMissingTips(ctx, dir, repo, pr, headRefName) {
-		_, mergeErr := runGitIn(ctx, dir, "merge", ref, "-m", "Merge "+ref+" for chat edit")
-		conflicted, statusErr := chatShadowConflictedPaths(ctx, dir)
-		if statusErr != nil {
-			_, _ = runGitIn(ctx, dir, "merge", "--abort")
-			return newMsg(chatShadowBranchMovedOnMsg, true)
-		}
-
-		if len(conflicted) == 0 {
-			if mergeErr != nil {
-				// The merge command itself failed for a reason other than a real
-				// conflict — bail out cleanly rather than guessing further.
-				_, _ = runGitIn(ctx, dir, "merge", "--abort")
-				return newMsg(chatShadowBranchMovedOnMsg, true)
-			}
-			// Clean merge: git resolved every changed line on its own (different
-			// files/regions of this conversation's edit vs. the other one) — no
-			// AI needed at all.
-			continue
-		}
-
-		// A real conflict — exactly one begrensde Claude-poging per tip, never
-		// more.
+	if len(conflicted) > 0 {
+		// A real conflict — exactly one begrensde Claude-poging, never more.
 		if !resolveConflictWithClaude(ctx, cl, dir, conversationID, conflicted) {
 			_, _ = runGitIn(ctx, dir, "merge", "--abort")
-			return newMsg(chatMergeConflictConsultMsg(ref, headRefName, conflicted), true)
+			return newMsg(chatMergeConflictConsultMsg(headRefName, conflicted), true)
 		}
 		if _, err := runGitIn(ctx, dir, "add", "-A"); err != nil {
 			_, _ = runGitIn(ctx, dir, "merge", "--abort")
-			return newMsg(chatMergeConflictConsultMsg(ref, headRefName, conflicted), true)
+			return newMsg(chatMergeConflictConsultMsg(headRefName, conflicted), true)
 		}
 		if _, err := runGitIn(ctx, dir, "commit", "--no-edit"); err != nil {
 			_, _ = runGitIn(ctx, dir, "merge", "--abort")
-			return newMsg(chatMergeConflictConsultMsg(ref, headRefName, conflicted), true)
+			return newMsg(chatMergeConflictConsultMsg(headRefName, conflicted), true)
 		}
 		resolvedByClaude = true
+	} else if mergeErr != nil {
+		// The merge command itself failed for a reason other than a real
+		// conflict — bail out cleanly rather than guessing further.
+		_, _ = runGitIn(ctx, dir, "merge", "--abort")
+		return newMsg(checkoutBranchMovedOnMsg, true)
 	}
+	// mergeErr == nil && len(conflicted) == 0: a clean merge — git resolved
+	// every changed line on its own, no AI needed at all.
 
-	if err := landAndReclaimChatShadow(ctx, dir, repo, pr, conversationID, headRefName); err != nil {
+	if err := advancePendingRefFromCheckout(ctx, dir, repo, pr, headRefName); err != nil {
 		// The merge itself is already committed locally at this point (an abort
 		// is no longer possible/meaningful) — a further race is rare enough that
 		// degrading to the ordinary retry message is acceptable; the next
 		// "commit" click re-queues a fresh request that will simply re-merge
 		// against the newer tip.
-		return newMsg(chatShadowBranchMovedOnMsg, true)
+		return newMsg(checkoutBranchMovedOnMsg, true)
 	}
 	if resolvedByClaude {
-		return newMsg(pendingLandedMsg(headRefName)+" (Samenvoegconflict met een andere wijziging automatisch opgelost door Claude.)", false)
+		return newMsg(pendingLandedMsg(headRefName, dir)+" (Samenvoegconflict met een andere wijziging automatisch opgelost door Claude.)", false)
 	}
-	return newMsg(pendingLandedMsg(headRefName)+" (Automatisch samengevoegd met een andere wijziging.)", false)
-}
-
-// resolveConflictWithClaude asks Claude, agentically and read/write-scoped to
-// dir (the conversation's own disposable shadow worktree, never the shared
-// head worktree), to resolve the given conflicted files, and reports whether
-// the working tree is genuinely clean afterwards — it never trusts the
-// model's own claim, only git's own conflict list (chatShadowConflictedPaths).
-// A one-shot Run (not RunChat): this is a mechanical fix, not a turn in the
-// reviewer's own conversation, so it needs no session/context of prior turns.
-func resolveConflictWithClaude(ctx context.Context, cl claude.Client, dir, conversationID string, conflicted []string) bool {
-	if cl == nil {
-		return false
-	}
-	req := claude.RunRequest{
-		Model:        claude.ModelOpus,
-		Prompt:       chatConflictPrompt(conversationID, conflicted),
-		WorkDir:      dir,
-		Tools:        []string{"Read", "Grep", "Glob", "Edit"},
-		SystemPrompt: claude.ChatConflictSystemPrompt,
-	}
-	if _, err := cl.Run(ctx, req); err != nil {
-		return false
-	}
-	remaining, err := chatShadowConflictedPaths(ctx, dir)
-	if err != nil {
-		return false
-	}
-	return len(remaining) == 0
-}
-
-// chatConflictPrompt is the call-specific half of the conflict-resolution
-// prompt (the static instructions live in claude.ChatConflictSystemPrompt) —
-// mirrors every other <action>Prompt function (resolvePrompt/explainPrompt/
-// warningPrompt).
-func chatConflictPrompt(conversationID string, conflicted []string) string {
-	return fmt.Sprintf(
-		"Er is een samenvoegconflict ontstaan tussen de wijziging van chat-conversatie %s en een andere, "+
-			"inmiddels op de PR-branch gepushte wijziging. De volgende bestanden bevatten conflictmarkers "+
-			"(<<<<<<<, =======, >>>>>>>):\n\n%s\n",
-		conversationID, strings.Join(conflicted, "\n"),
-	)
+	return newMsg(pendingLandedMsg(headRefName, dir)+" (Automatisch samengevoegd met een andere wijziging.)", false)
 }

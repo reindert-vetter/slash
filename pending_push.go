@@ -170,7 +170,7 @@ func pushPendingPR(ctx context.Context, tm *TaskManager, repo string, pr int) {
 	publishPendingPushChanged(repo, pr)
 
 	// ingestMu-guarded like every other operation on the shared clone's refs
-	// (see ensureChatShadowWorktreeAt/landAndReclaimChatShadow).
+	// (see prepareChatShellWorkDir/advancePendingRefFromCheckout, chat_checkout.go).
 	ingestMu.Lock()
 	_, err := runGitFor(ctx, repo, "push", "origin", ref+":refs/heads/"+headRef)
 	ingestMu.Unlock()

@@ -18,13 +18,13 @@ import (
 
 // chat_merge_test.go exercises processChatMergeAt (the "...At"-suffixed body
 // once the PR's head branch name is already known — the same testability seam
-// chat_shadow_test.go's own commitChatShadowEditsAt/ensureChatShadowWorktreeAt
+// chat_checkout_test.go's own commitCheckoutEditsAt/prepareChatShellWorkDirAt
 // tests use) against a throwaway local bare repo as "origin", offline: no
 // gh/network call, and claude.Fake never really edits a file (a mechanical
 // property of the fake, not of this feature — see the "Known test boundary"
 // note on the last test below).
 
-// setupChatMergeRepo is setupChatShadowRepo (chat_shadow_test.go) plus a
+// setupChatMergeRepo is setupChatShadowRepo (chat_checkout_test.go) plus a
 // SECOND, independent file, so a test can simulate two chat conversations
 // touching different files (a clean auto-merge, no conflict) as well as the
 // same file (a genuine conflict).
@@ -40,7 +40,7 @@ func setupChatMergeRepo(t *testing.T, headRefName string) (bareDir, cloneDir str
 }
 
 // pushFileToBare pushes a change to ONE named file directly onto the bare
-// origin's headRefName, independent of any shadow worktree — the "someone
+// origin's headRefName, independent of any local checkout — the "someone
 // else's chat conversation already landed a commit" scenario.
 func pushFileToBare(t *testing.T, bareDir, headRefName, file, content string) {
 	t.Helper()
@@ -73,10 +73,8 @@ func TestProcessChatMergeCleanlyAutoMergesNonOverlappingEdit(t *testing.T) {
 	ctx := context.Background()
 	cm := testChatModule(t)
 
-	dir, err := ensureChatShadowWorktreeAt(ctx, dataDir, "", 2001, "conv-x", "feature/x")
-	if err != nil {
-		t.Fatalf("ensure: %v", err)
-	}
+	dir := cloneCheckoutDir(t, bareDir, "feature/x")
+	assignCheckoutForTest(t, "", 2001, dir)
 	// This conversation's own edit touches foo.txt only.
 	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("foo edited by claude\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -98,7 +96,7 @@ func TestProcessChatMergeCleanlyAutoMergesNonOverlappingEdit(t *testing.T) {
 
 	// Both edits must be present on the PR's pending ref afterwards (the
 	// landing target — the push to GitHub is a separate, reviewer-triggered
-	// step, see landAndReclaimChatShadow).
+	// step, see advancePendingRefFromCheckout).
 	if got := pendingFileAt(t, 2001, "feature/x", "foo.txt"); got != "foo edited by claude\n" {
 		t.Fatalf("foo.txt = %q; want the chat conversation's own edit", got)
 	}
@@ -106,35 +104,29 @@ func TestProcessChatMergeCleanlyAutoMergesNonOverlappingEdit(t *testing.T) {
 		t.Fatalf("bar.txt = %q; want the other conversation's edit", got)
 	}
 
-	// The shadow worktree/branch must have been reclaimed, exactly like an
-	// ordinary fast-forward landing (commitChatShadowEditsAt's own reclaim step).
-	if _, err := os.Stat(dir); !os.IsNotExist(err) {
-		t.Fatalf("expected the shadow worktree to be reclaimed, stat err = %v", err)
+	// The checkout itself is never reclaimed — it is the reviewer's own,
+	// permanent clone, unlike the old disposable shadow worktree.
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("expected the checkout to remain on disk, stat err = %v", err)
 	}
 }
 
 func TestProcessChatMergeSerializesTwoConversationsInArrivalOrder(t *testing.T) {
-	// Two conversations both touch DIFFERENT files, and both are asked to
-	// commit in the same order their requests would be queued in — a merge
-	// queue's whole point is that the second one sees the first's already-
-	// landed commit and cleanly merges around it, rather than racing it.
-	setupChatMergeRepo(t, "feature/x")
+	// Two conversations of the SAME PR share ONE checkout now (chat_checkout.go
+	// — no more per-conversation disposable worktree), so this is no longer a
+	// divergence-and-auto-merge scenario: conv-b's edit lands directly on top
+	// of conv-a's already-landed commit, in the very same directory, with no
+	// merge machinery involved at all. That guarantee (two of the reviewer's
+	// OWN conversations never diverge) is exactly what
+	// chatMergeConflictConsultMsg's own doc comment records.
+	bareDir, _ := setupChatMergeRepo(t, "feature/x")
 	dataDir := t.TempDir()
 	ctx := context.Background()
 	cm := testChatModule(t)
 
-	dirA, err := ensureChatShadowWorktreeAt(ctx, dataDir, "", 2002, "conv-a", "feature/x")
-	if err != nil {
-		t.Fatalf("ensure a: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dirA, "foo.txt"), []byte("foo from a\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	dirB, err := ensureChatShadowWorktreeAt(ctx, dataDir, "", 2002, "conv-b", "feature/x")
-	if err != nil {
-		t.Fatalf("ensure b: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dirB, "bar.txt"), []byte("bar from b\n"), 0o644); err != nil {
+	dir := cloneCheckoutDir(t, bareDir, "feature/x")
+	assignCheckoutForTest(t, "", 2002, dir)
+	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("foo from a\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -149,17 +141,19 @@ func TestProcessChatMergeSerializesTwoConversationsInArrivalOrder(t *testing.T) 
 		t.Fatalf("conversation a should be a plain fast-forward, got: %q", msgA.Body)
 	}
 
-	// Request B processed second, AFTER a's commit already landed — this is the
-	// exact race the merge queue exists to serialize instead of both pushes
-	// failing/racing each other.
+	// conv-b's own edit, made in the SAME checkout, AFTER a's commit already
+	// landed there.
+	if err := os.WriteFile(filepath.Join(dir, "bar.txt"), []byte("bar from b\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	msgB := processChatMergeAt(ctx, nil, cm, &claude.Fake{}, dataDir, chatMergeInput{
 		PR: 2002, ConversationID: "conv-b", TurnID: "turn-b",
 	}, "feature/x")
 	if msgB.Kind == chat.KindError {
-		t.Fatalf("conversation b: expected an auto-merge success, got %+v", msgB)
+		t.Fatalf("conversation b: expected success, got %+v", msgB)
 	}
-	if !strings.Contains(msgB.Body, "Automatisch samengevoegd") {
-		t.Fatalf("conversation b: expected the auto-merge wording, got: %q", msgB.Body)
+	if strings.Contains(msgB.Body, "samengevoegd") {
+		t.Fatalf("conversation b should also be a plain fast-forward (same checkout, sequential commits), got: %q", msgB.Body)
 	}
 
 	foo := pendingFileAt(t, 2002, "feature/x", "foo.txt")
@@ -191,11 +185,11 @@ func pendingFileAt(t *testing.T, pr int, headRefName, path string) string {
 // programmed text, see modules/claude's Fake.Run doc comment). So this proves
 // the conflict is genuinely DETECTED, that Claude is genuinely INVOKED, and
 // that a resolution attempt which leaves conflict markers in place is
-// correctly treated as a failure (merge aborted, shadow left clean, the
+// correctly treated as a failure (merge aborted, checkout left clean, the
 // dedicated conflict-failure message shown) — never a forced/partial push.
 //
 // KNOWN TEST BOUNDARY, same category as chatActionEdit's own (see
-// .claude/docs/workflows-comments.md, "Agentic edits" — chat_shadow_test.go's
+// .claude/docs/workflows-comments.md, "Agentic edits" — chat_checkout_test.go's
 // header comment): a real Claude CLI call that actually edits the conflicted
 // file and clears the markers is not exercisable offline, so the "Claude truly
 // resolves it" success path is not covered here — only manually/interactively.
@@ -205,10 +199,8 @@ func TestProcessChatMergeAbortsAndDegradesOnUnresolvedConflict(t *testing.T) {
 	ctx := context.Background()
 	cm := testChatModule(t)
 
-	dir, err := ensureChatShadowWorktreeAt(ctx, dataDir, "", 2003, "conv-c", "feature/x")
-	if err != nil {
-		t.Fatalf("ensure: %v", err)
-	}
+	dir := cloneCheckoutDir(t, bareDir, "feature/x")
+	assignCheckoutForTest(t, "", 2003, dir)
 	// This conversation edits the SAME line another one already pushed —
 	// a genuine, unavoidable conflict.
 	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("foo edited by this conversation\n"), 0o644); err != nil {
@@ -249,12 +241,12 @@ func TestProcessChatMergeAbortsAndDegradesOnUnresolvedConflict(t *testing.T) {
 		t.Fatalf("expected exactly one begrensde Claude attempt, got %d calls", fake.CallCount())
 	}
 
-	// The shadow's own working tree must be clean again (merge aborted) — no
+	// The checkout's own working tree must be clean again (merge aborted) — no
 	// leftover conflict markers, so a later "commit" click starts from a known,
 	// clean state.
-	remaining, err := chatShadowConflictedPaths(ctx, dir)
+	remaining, err := checkoutConflictedPaths(ctx, dir)
 	if err != nil {
-		t.Fatalf("chatShadowConflictedPaths: %v", err)
+		t.Fatalf("checkoutConflictedPaths: %v", err)
 	}
 	if len(remaining) != 0 {
 		t.Fatalf("expected no unmerged paths after the abort, got %v", remaining)

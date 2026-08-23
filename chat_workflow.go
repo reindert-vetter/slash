@@ -46,7 +46,7 @@ type ClaudeChatInput struct {
 // for "delete") — tembed can only WaitSignal on one name at a time, so a
 // second signal name isn't an option. "" is the ordinary turn: runOneClaudeTurn
 // itself already tries to get Claude real shell/file access in the
-// conversation's own shadow worktree (chat_shadow.go/prepareChatShellWorkDir)
+// PR's own shared local checkout (chat_checkout.go/prepareChatShellWorkDir)
 // for EVERY turn, degrading silently to a tool-less completion when git/gh is
 // unreachable — see that function's doc comment. chatActionEdit is kept only
 // as a backward-compatible no-op synonym of ""; chatActionCommit
@@ -76,16 +76,19 @@ type ChatMessageSignal struct {
 // input (workflow-determinism.md).
 const (
 	chatActionEdit   = "edit"   // no-op synonym of "" — every turn already gets shell/Edit access
-	chatActionCommit = "commit" // commit + push the shadow worktree's edits
+	chatActionCommit = "commit" // commit + land the checkout's edits
 	// chatActionClear is "wis gesprek" (the palette's confirm-gated command,
 	// see rootCommandsFor('claude') in home.mjs): wipe the transcript + the
-	// stored claude session, and best-effort remove the conversation's own
-	// agentic-edit shadow worktree (chat_shadow.go's clearChatShadow). The
-	// reviewer already saw a warning about any pending (uncommitted/unpushed)
-	// shadow work before confirming — see the read-only
-	// GET /api/chat/shadow-status endpoint (tasks_api.go) and
-	// chatShadowPendingWarning (RelatedPanel.mjs) — so this proceeds
-	// unconditionally once the Signal arrives.
+	// stored claude session. Deliberately does NOT touch the PR's shared local
+	// checkout any more (chat_checkout.go): unlike the old per-conversation
+	// disposable shadow worktree, that checkout is shared by every conversation
+	// of this PR, so wiping ONE conversation's transcript must never remove or
+	// discard anything a DIFFERENT conversation (or a landing still in
+	// progress) may still be relying on. The reviewer still sees a warning
+	// about any pending (uncommitted/unlanded) work in that shared checkout
+	// before confirming — see the read-only GET /api/chat/shadow-status
+	// endpoint (tasks_api.go) and chatShadowPendingWarning (RelatedPanel.mjs) —
+	// it is purely informational now, not a "will this get deleted" warning.
 	chatActionClear = "clear"
 	// chatActionRetry re-runs the LAST turn that finally failed (the automatic
 	// backoff ladder below gave up on it), reusing that turn's own input —
@@ -258,7 +261,7 @@ func claudeChatWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			continue
 		}
 
-		// "commit deze wijziging": hand this conversation's shadow-worktree edits
+		// "commit deze wijziging": hand this PR's shared-checkout edits
 		// to the PR's own chat_merge queue, which serializes every conversation's
 		// commit request for this PR so two of them landing around the same time
 		// are merged one after another instead of racing each other's
@@ -323,7 +326,10 @@ func claudeChatWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			continue
 		}
 		lastFailedTurn = nil
-		if result.Message.Kind == chat.KindQuestion {
+		// KindDirectoryDecision (chat_checkout.go) is answered through the
+		// exact same reviewer-reply round trip as an ordinary KindQuestion —
+		// no new workflow shape needed, see that Kind's own doc comment.
+		if result.Message.Kind == chat.KindQuestion || result.Message.Kind == chat.KindDirectoryDecision {
 			pendingQuestionID = result.Message.ID
 		}
 
@@ -347,7 +353,7 @@ func claudeChatWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 
 		// Tasks 1+2+4 (see "Automatic landing after a shell turn" in
 		// .claude/docs/workflows-comments.md): whenever this turn's own Activity
-		// result says the shadow worktree has something pending — an uncommitted
+		// result says the PR's shared checkout has something pending — an uncommitted
 		// edit Claude left behind, or a local commit that never made it onto the
 		// PR's pending ref — hand it to the SAME per-PR chat_merge queue the
 		// (now unused-by-the-UI) manual "commit" action already used: it lands
@@ -447,7 +453,7 @@ func runChatTurnWithRetries(w *tembed.Workflow, turn chatTurnInput) (chatTurnRes
 	}
 }
 
-// chatCommitInput is commitChatShadowEdits's own Activity input (chat_shadow.go).
+// chatCommitInput is commitCheckoutEditsAt's own Activity input (chat_checkout.go).
 type chatCommitInput struct {
 	// Repo is the canonical repo string this PR belongs to: "" (absent) for the
 	// primary repo — which is what every Execution started before multi-repo
@@ -504,7 +510,7 @@ func chatActionReactionID(turnID string) string {
 // task_code_comment/ReactionSignal addressing.
 // NeedsLand (tasks 1+2+4) is computed by the runClaudeTurn Activity's own
 // registration in workflows.go, right after runOneClaudeTurn returns, via
-// chatShadowNeedsLanding — never inside runOneClaudeTurn itself, so that
+// chatCheckoutNeedsLanding — never inside runOneClaudeTurn itself, so that
 // function's own (chat.Message, *commentActionDirective) signature and its
 // existing direct-call tests stay unchanged. Kept on this result (not
 // re-derived in the workflow body) for the same determinism reason
@@ -599,7 +605,17 @@ func chatCommentIDNote(conversationID string) string {
 // message (already part of that session's history). Claude's own first-call
 // reply was the bare {"type":"need_write"} directive and carries no content
 // of its own, so this is what actually prompts the second call.
-const chatNeedWriteContinuationPrompt = "Je hebt nu Edit en een echte shell (Bash) beschikbaar, in je eigen wegwerpbare werkkopie. Ga verder met het oorspronkelijke verzoek."
+const chatNeedWriteContinuationPrompt = "Je hebt nu Edit en een echte shell (Bash) beschikbaar, in de lokale checkout van de reviewer. Ga verder met het oorspronkelijke verzoek."
+
+// chatCheckoutResumedPrompt is the synthetic user prompt sent (in the SAME
+// session) once a pending chat.KindDirectoryDecision has just been resolved
+// (chat_checkout.go) — the reviewer's own reply to that decision ("stash,
+// later terugzetten", a chosen directory, ...) is deliberately NEVER sent to
+// Claude as-is (it answers a question about the checkout, not about the
+// review), so this replaces it as the turn's actual prompt. Claude still
+// remembers the reviewer's ORIGINAL request via the resumed CLI session's own
+// history, exactly like chatNeedWriteContinuationPrompt above.
+const chatCheckoutResumedPrompt = "De lokale checkout is nu klaar. Ga verder met het eerder gevraagde verzoek."
 
 // chatFailureMessage words + persists one failed claude CLI call as a visible
 // turn (see chatFailureTurn) — shared by both attempts of runOneClaudeTurn's
@@ -653,14 +669,14 @@ func isNeedWriteDirective(text string) bool {
 //
 //  1. A cheap first attempt with only Read/Grep/Glob, scoped to the PR's
 //     already-ingested, SHARED head worktree (prepareChatReadOnlyWorkDir) — no
-//     shadow worktree, no git fetch, no ingestMu lock. This is enough for the
+//     reviewer's own checkout, no git fetch, no ingestMu lock. This is enough for the
 //     large majority of turns (explaining code, answering a question) and pays
-//     none of the shadow-worktree setup cost.
+//     none of the checkout-resolution cost.
 //  2. ONLY when that first attempt's reply is the strict {"type":"need_write"}
 //     directive (isNeedWriteDirective) — Claude's own signal that the
 //     reviewer's request needs real edits/commands — a second call resumes the
 //     SAME session with full Read/Grep/Glob/Edit/Bash in the conversation's own
-//     disposable shadow worktree (prepareChatShellWorkDir, unchanged from
+//     PR's own shared local checkout (prepareChatShellWorkDir, now resolving from
 //     before this task). That call's reply is what actually gets saved/parsed.
 //
 // Either attempt can fail to get its tools at all (gh/git unreachable, no
@@ -702,6 +718,40 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 	}
 
 	sessionID, _ := cm.GetSession(ctx, arg.ConversationID)
+
+	// If a PREVIOUS turn had to stop and ask something about the local
+	// checkout (chat_checkout.go's chat.KindDirectoryDecision), this turn's
+	// Body is the reviewer's reply to THAT, not real review content — resolve
+	// it here, before calling Claude at all. The reviewer's raw reply is
+	// never forwarded to Claude as-is; a synthetic continuation prompt takes
+	// over (chatCheckoutResumedPrompt), and the resumed CLI session still
+	// remembers the reviewer's ORIGINAL request.
+	effectiveBody := arg.Body
+	if hasPendingCheckoutDecision(arg.Repo, arg.PR) {
+		release := acquireWriteTurnSlot(ctx, nil)
+		_, decision, ok := prepareChatShellWorkDir(ctx, tm, dataDir, arg.Repo, arg.PR, arg.ConversationID, arg.Body)
+		release()
+		switch {
+		case decision != nil:
+			msg := chat.Message{
+				ID: chatMessageID(arg.TurnID, ""), ConversationID: arg.ConversationID, PR: arg.PR,
+				Role: "assistant", Kind: chat.KindDirectoryDecision, Body: decision.Body, Options: decision.Options,
+			}
+			_ = cm.SaveMessage(ctx, msg)
+			return msg, nil
+		case !ok:
+			msg := chat.Message{
+				ID: chatMessageID(arg.TurnID, ""), ConversationID: arg.ConversationID, PR: arg.PR,
+				Role: "assistant", Kind: chat.KindError, NoShell: true,
+				Body: "Kon de lokale checkout niet klaarzetten na je keuze. Probeer het opnieuw.",
+			}
+			_ = cm.SaveMessage(ctx, msg)
+			return msg, nil
+		default:
+			effectiveBody = chatCheckoutResumedPrompt
+		}
+	}
+
 	model := chatModelForAttempt(arg.Attempt)
 	sink := chatProgressSink(arg.Repo, arg.PR, arg.ConversationID)
 	loggedFirstEvent, loggedFirstContent := false, false
@@ -721,7 +771,7 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 	hadReadOnly := false
 	req := claude.RunRequest{
 		Model:        model,
-		Prompt:       buildChatPrompt(arg.Context, arg.Body),
+		Prompt:       buildChatPrompt(arg.Context, effectiveBody),
 		SessionID:    sessionID,
 		SystemPrompt: claude.ChatSystemPrompt,
 		OnEvent:      onEvent,
@@ -773,12 +823,20 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 			logTurnMilestone("got the code-turn slot after %v", time.Since(t0))
 			advanceChatProgress(arg.Repo, arg.PR, arg.ConversationID, chatPhaseStarting)
 		}
-		dir, ok := prepareChatShellWorkDir(ctx, tm, dataDir, arg.Repo, arg.PR, arg.ConversationID)
+		dir, decision, ok := prepareChatShellWorkDir(ctx, tm, dataDir, arg.Repo, arg.PR, arg.ConversationID, arg.Body)
+		if decision != nil {
+			msg := chat.Message{
+				ID: chatMessageID(arg.TurnID, ""), ConversationID: arg.ConversationID, PR: arg.PR,
+				Role: "assistant", Kind: chat.KindDirectoryDecision, Body: decision.Body, Options: decision.Options,
+			}
+			_ = cm.SaveMessage(ctx, msg)
+			return msg, nil
+		}
 		if !ok {
 			msg := chat.Message{
 				ID: chatMessageID(arg.TurnID, ""), ConversationID: arg.ConversationID, PR: arg.PR,
 				Role: "assistant", Model: model, NoShell: true,
-				Body: "Voor dit verzoek heb ik schrijftoegang nodig, maar kon geen werkkopie klaarzetten (gh/git niet bereikbaar). Probeer het straks nog eens.",
+				Body: "Voor dit verzoek heb ik schrijftoegang tot een lokale checkout nodig, maar die is er niet. Voeg een pad toe aan `chatCheckoutDirs` in settings.json of clone de repo lokaal, en vraag het opnieuw.",
 			}
 			_ = cm.SaveMessage(ctx, msg)
 			return msg, nil

@@ -13,9 +13,9 @@
 //     the reviewer decides that afterwards (Space on the comment's index row,
 //     see spaceKey in src/home.mjs). So this workflow signals no comment
 //     thread at all, unlike code_warning which creates comments of its own.
-//  2. NORMAL LANDING ROUTE. The edits are made in the very same per-conversation
-//     shadow worktree a Claude chat turn uses (chat_shadow.go), under the
-//     synthetic conversation id commentBatchConvID(pr), and are landed by the
+//  2. NORMAL LANDING ROUTE. The edits are made in the very same shared local
+//     checkout a Claude chat turn of this PR uses (chat_checkout.go), under
+//     the synthetic conversation id commentBatchConvID(pr), and are landed by the
 //     existing chat_merge queue — so they end up on the PR's local pending ref
 //     and the reviewer pushes them himself from the todo row (see
 //     .claude/docs/pending-push.md). No new git path whatsoever.
@@ -84,14 +84,14 @@ type commentBatchResult struct {
 	NeedsLand bool `json:"needsLand"`
 }
 
-// commentBatchConvID is the synthetic chat-conversation id the run's shadow
-// worktree and its landing messages hang on. One per PR (never per comment): a
+// commentBatchConvID is the synthetic chat-conversation id the run's checkout
+// and its landing messages hang on. One per PR (never per comment): a
 // single agent produces a single set of edits, which must land as one commit
 // via one queue request.
 func commentBatchConvID(pr int) string { return fmt.Sprintf("batch-%d", pr) }
 
 // commentBatchWorkflow is the whole workflow: one agentic run, then — only when
-// it actually left work in the shadow worktree — one hand-off to the PR's
+// it actually left work in the checkout — one hand-off to the PR's
 // chat_merge queue. A fixed, input-independent sequence of at most two
 // Activities, so replay is trivially deterministic.
 func commentBatchWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
@@ -139,7 +139,7 @@ func runCommentBatch(ctx context.Context, tm *TaskManager, cmod *comments.Module
 	defer finishCommentBatchProgress(arg.Repo, arg.PR)
 
 	convID := commentBatchConvID(arg.PR)
-	// The landing path (chat_merge → commitChatShadowEditsAt) records its
+	// The landing path (chat_merge → commitCheckoutEditsAt) records its
 	// outcome as a chat.Message on this conversation, so the row has to exist.
 	if chatMod != nil {
 		if err := chatMod.EnsureConversation(ctx, convID, arg.Repo, arg.PR); err != nil && tm != nil && tm.logf != nil {
@@ -147,9 +147,13 @@ func runCommentBatch(ctx context.Context, tm *TaskManager, cmod *comments.Module
 		}
 	}
 
-	dir, ok := prepareChatShellWorkDir(ctx, tm, dataDir, arg.Repo, arg.PR, convID)
+	dir, decision, ok := prepareChatShellWorkDir(ctx, tm, dataDir, arg.Repo, arg.PR, convID, "")
+	if decision != nil {
+		failCommentBatchProgress(arg.Repo, arg.PR, "Er moet eerst iets over de lokale checkout worden besloten — open de Claude-chat van deze PR om dat af te handelen, en probeer daarna opnieuw.")
+		return commentBatchResult{}
+	}
 	if !ok {
-		failCommentBatchProgress(arg.Repo, arg.PR, "Kon geen werkkopie klaarzetten (gh/git niet bereikbaar).")
+		failCommentBatchProgress(arg.Repo, arg.PR, "Kon geen lokale checkout klaarzetten om in te werken.")
 		return commentBatchResult{}
 	}
 
@@ -189,7 +193,7 @@ func runCommentBatch(ctx context.Context, tm *TaskManager, cmod *comments.Module
 		}
 		markCommentBatchOutcome(arg.Repo, arg.PR, m.CommentID, m.Kind, m.Note)
 	}
-	res.NeedsLand = chatShadowNeedsLanding(ctx, dataDir, arg.Repo, arg.PR, convID)
+	res.NeedsLand = chatCheckoutNeedsLanding(ctx, arg.Repo, arg.PR)
 	return res
 }
 

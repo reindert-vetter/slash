@@ -128,13 +128,13 @@ type CleanupResult struct {
 }
 
 // reWorktreeDir extracts a PR number from a worktrees dir name: "pr-<n>-base"
-// / "pr-<n>-head", or "pr-<n>-chatshadow-<conversationId>" — the per-
-// conversation claude_chat edit worktree (chat_shadow.go). Including the
-// latter here means a PR whose only remaining disk trace is a leftover,
-// never-pushed chat shadow (normally reclaimed immediately after a successful
-// push — see commitChatShadowEdits) still gets picked up as a cleanup
-// candidate, the same self-healing reasoning cleanupCandidatePRs already
-// documents for base/head.
+// / "pr-<n>-head", or "pr-<n>-chatshadow-<conversationId>" — the LEGACY
+// per-conversation claude_chat edit worktree this app used before
+// chat_checkout.go replaced it with a shared local checkout. New PRs never
+// create one of these any more; this pattern only exists so a leftover from
+// before that migration (normally reclaimed immediately after a successful
+// push, back when that concept existed) still gets swept, the same
+// self-healing reasoning cleanupCandidatePRs already documents for base/head.
 var reWorktreeDir = regexp.MustCompile(`^pr-(\d+)-(base|head|chatshadow-.+)$`)
 
 // cleanupRepo scopes the whole retention pass to the PRIMARY repo (see repos.go).
@@ -420,12 +420,13 @@ func removePRWorktrees(ctx context.Context, dataDir string, repo string, pr int)
 		n++
 	}
 
-	// Any per-conversation claude_chat shadow worktree still on disk for this
-	// PR (chat_shadow.go) — normally already reclaimed right after a
-	// successful push, so this only matters for a conversation whose edits
-	// were never committed/pushed, or whose own reclaim step failed. Unlike
-	// base/head there can be any number of these, one per conversation, so a
-	// prefix scan is needed instead of a fixed pair of paths.
+	// LEGACY: any per-conversation claude_chat shadow worktree still on disk
+	// from before chat_checkout.go replaced it with a shared local checkout —
+	// no PR ever creates a new one any more, but an old one left over from
+	// before that migration (never committed/pushed, or whose own reclaim step
+	// failed) is still swept here. Unlike base/head there can be any number of
+	// these, one per conversation, so a prefix scan is needed instead of a
+	// fixed pair of paths.
 	root, err := filepath.Abs(dataDir)
 	if err != nil {
 		root = dataDir
@@ -442,9 +443,9 @@ func removePRWorktrees(ctx context.Context, dataDir string, repo string, pr int)
 		if err := os.RemoveAll(dir); err != nil {
 			return n, fmt.Errorf("remove %s: %w", dir, err)
 		}
-		// Best-effort: also drop the shadow's own local branch (chat/<id> —
-		// see chatShadowBranch), otherwise it dangles in the shared clone
-		// forever for a conversation that never committed/pushed.
+		// Best-effort: also drop the shadow's own local branch (chat/<id>),
+		// otherwise it dangles in the shared clone forever for a conversation
+		// that never committed/pushed, back when this branch shape existed.
 		_, _ = runGitFor(ctx, repo, "branch", "-D", "chat/"+strings.TrimPrefix(e.Name(), prefix))
 		n++
 	}

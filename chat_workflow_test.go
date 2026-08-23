@@ -639,8 +639,9 @@ func TestClaudeChatFailedTurnStoresErrorMessage(t *testing.T) {
 // "wis gesprek" (chatActionClear) wipes the transcript + stored session, and
 // drops any pending question so a message right after a clear is treated as
 // an ordinary NEW turn rather than an "answer" to the question turn that
-// clear just wiped. stubUnreachableGh keeps the shadow-worktree removal
-// (clearChatShadow) a harmless no-op — there is no shadow to remove here.
+// clear just wiped. It never touches the PR's shared local checkout
+// (chat_checkout.go), so stubUnreachableGh here only affects THIS test's own
+// (never-escalating) turns, not the clear itself.
 func TestClaudeChatClearWipesTranscriptAndSession(t *testing.T) {
 	stubUnreachableGh(t)
 	m, engine, cm, fake := newChatManager(t)
@@ -1119,17 +1120,19 @@ func TestClaudeChatManualRetryRerunsFailedTurn(t *testing.T) {
 	}
 }
 
-// TestClaudeChatAutoLandsPendingShadowWorkAfterATurn is tasks 1+2+4's own
+// TestClaudeChatAutoLandsPendingCheckoutWorkAfterATurn is tasks 1+2+4's own
 // end-to-end regression: the reviewer never sends a "commit" action (that
 // button is gone, see .claude/docs/workflows-comments.md) — a plain reviewer
-// message that finds the shadow worktree already holding a local commit
-// (exactly what Claude's own `git commit` in the shadow, per
+// message that finds the PR's assigned checkout already holding a local
+// commit (exactly what Claude's own `git commit` in the checkout, per
 // chat_shell.md, leaves behind) must, by itself, land that commit on the PR's
-// pending ref, refresh the review tree, and reclaim the worktree — with no
-// further reviewer action needed.
-func TestClaudeChatAutoLandsPendingShadowWorkAfterATurn(t *testing.T) {
+// pending ref and refresh the review tree — with no further reviewer action
+// needed. Unlike the old disposable shadow worktree, the checkout itself is
+// never reclaimed/removed (chat_checkout.go): it is the reviewer's own,
+// permanent local clone.
+func TestClaudeChatAutoLandsPendingCheckoutWorkAfterATurn(t *testing.T) {
 	const headRefName = "feature/autoland"
-	_, cloneDir := setupChatShadowRepo(t, headRefName, "v1\n")
+	bareDir, cloneDir := setupChatShadowRepo(t, headRefName, "v1\n")
 	stubReachableGh(t, headRefName)
 
 	cs, err := comments.Open(filepath.Join(t.TempDir(), "comments.db"))
@@ -1151,14 +1154,11 @@ func TestClaudeChatAutoLandsPendingShadowWorkAfterATurn(t *testing.T) {
 
 	const pr, commentID = 970740, "comment-autoland"
 
-	// Simulate what Claude's own `git commit`, run via Bash in a PREVIOUS turn
-	// (or this same turn — the check doesn't care which), leaves behind: a real
-	// local commit in the shadow worktree that never made it onto the PR's
-	// pending ref.
-	dir, err := ensureChatShadowWorktreeAt(ctx, dataDir, "", pr, commentID, headRefName)
-	if err != nil {
-		t.Fatalf("ensure shadow worktree: %v", err)
-	}
+	// Simulate what an EARLIER turn's own `git commit`, run via Bash, already
+	// left behind: a real local commit in the PR's assigned checkout that
+	// never made it onto the PR's pending ref.
+	dir := cloneCheckoutDir(t, bareDir, headRefName)
+	assignCheckoutForTest(t, "", pr, dir)
 	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("edited by claude\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1194,7 +1194,7 @@ func TestClaudeChatAutoLandsPendingShadowWorkAfterATurn(t *testing.T) {
 		if msg.Kind == chat.KindError {
 			t.Fatalf("no message should report an error: %+v", msg)
 		}
-		if strings.Contains(msg.Body, pendingLandedMsg(headRefName)) {
+		if strings.Contains(msg.Body, pendingLandedMsg(headRefName, dir)) {
 			landed = true
 		}
 	}
@@ -1212,10 +1212,11 @@ func TestClaudeChatAutoLandsPendingShadowWorkAfterATurn(t *testing.T) {
 	if err != nil || string(out) != "edited by claude\n" {
 		t.Fatalf("pending ref content = %q, err %v; want the edit", out, err)
 	}
-	// ...and the shadow worktree was reclaimed, exactly like an explicit
-	// "commit deze wijziging" action already did.
-	if _, err := os.Stat(dir); !os.IsNotExist(err) {
-		t.Fatalf("expected the shadow worktree to be reclaimed after landing, got err=%v", err)
+	// ...and the checkout itself is untouched/kept — it is the reviewer's own
+	// permanent clone, never reclaimed (unlike the old disposable shadow
+	// worktree).
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("expected the checkout to remain on disk after landing, got err=%v", err)
 	}
 }
 

@@ -16,8 +16,18 @@
 // the second attempt and nothing about the first one changes.
 //
 // Deliberately process-wide, not per PR: the point is to have one agentic
-// edit run at a time on this machine (each one owns a git worktree and can
-// run Bash), which is a machine-level resource, not a per-PR one.
+// edit run at a time on this machine (each one can run Bash), which is a
+// machine-level resource, not a per-PR one.
+//
+// This global cap also happens to be exactly what makes the shared local
+// checkout (chat_checkout.go — every conversation of a PR now edits the SAME
+// real directory, no more per-conversation disposable worktree) safe against
+// two turns mutating it at once, for free: since this gate already lets at
+// most one code-generating turn run anywhere on the machine, two turns can
+// never race each other's `git add`/commit/checkout/stash in the same (or any
+// other) checkout. See todo/todo-local-checkout-chat-edits.md's "samenloop"
+// chapter — a separate per-directory lock would only add complexity, since
+// this gate already subsumes it.
 //
 // Not a workflow-determinism concern: this blocks inside an Activity, never in
 // a workflow body, and it changes neither the number nor the order of

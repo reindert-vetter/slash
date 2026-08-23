@@ -19,23 +19,31 @@ import (
 
 // pending_push_test.go covers the deferred push: the read model that feeds the
 // todo row, the push Activity itself (both outcomes), and the queue dispatch
-// that gets there. Same offline harness as chat_shadow_test.go — a throwaway
-// bare "origin" plus a local clone SLASH_REPO_DIR points at — so nothing here
-// touches the real developer clone or the network.
+// that gets there. Same offline harness as chat_checkout_test.go — a
+// throwaway bare "origin" plus a local clone SLASH_REPO_DIR points at — so
+// nothing here touches the real developer clone or the network.
 
 // landOneEdit lands one file change on pr's pending ref through the real
-// commit/land path, and returns the shadow dir it used.
+// commit/land path, cloning a fresh checkout for "the reviewer's own local
+// checkout" off the TRUE bare origin — resolved from the shared clone's own
+// "origin" remote (SLASH_REPO_DIR itself may have no local branch matching
+// headRefName at all, only a remote-tracking ref, if headRefName never was
+// the bare repo's default HEAD; a further clone of it would not transfer that
+// remote-tracking ref onward — see cloneCheckoutDir's own doc comment).
 func landOneEdit(t *testing.T, dataDir string, pr int, conversationID, headRefName, file, content string) {
 	t.Helper()
 	ctx := context.Background()
-	dir, err := ensureChatShadowWorktreeAt(ctx, dataDir, "", pr, conversationID, headRefName)
+	out, err := exec.Command("git", "-C", os.Getenv("SLASH_REPO_DIR"), "remote", "get-url", "origin").Output()
 	if err != nil {
-		t.Fatalf("ensure shadow: %v", err)
+		t.Fatalf("resolve shared clone's origin: %v", err)
 	}
+	bareDir := strings.TrimSpace(string(out))
+	dir := cloneCheckoutDir(t, bareDir, headRefName)
+	assignCheckoutForTest(t, "", pr, dir)
 	if err := os.WriteFile(filepath.Join(dir, file), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if msg := commitChatShadowEditsAt(ctx, testChatModule(t), dataDir, "", pr, conversationID, "turn-"+conversationID, headRefName); msg.Kind == chat.KindError {
+	if msg := commitCheckoutEditsAt(ctx, testChatModule(t), dataDir, "", pr, conversationID, "turn-"+conversationID, headRefName); msg.Kind == chat.KindError {
 		t.Fatalf("landing failed: %+v", msg)
 	}
 }
@@ -99,12 +107,12 @@ func TestPushPendingPRPushesAndDropsTheRef(t *testing.T) {
 }
 
 // A non-primary repo's pending ref carries its key as an extra path segment
-// (chat_shadow.go's prPendingRef) — this must be exactly the prefix
+// (chat_checkout.go's prPendingRef) — this must be exactly the prefix
 // pendingPushRefFor/removePendingRefs enumerate, via the single shared
 // pendingRefPrefix, or a second repo's landed edit would never be found (nor
 // swept by cleanup). Regression for a real drift between the two.
 func TestLoadPendingPushFindsANonPrimaryRepo(t *testing.T) {
-	_, cloneDir := setupChatShadowRepo(t, "feature/x", "v1\n")
+	bareDir, cloneDir := setupChatShadowRepo(t, "feature/x", "v1\n")
 	writeSettings(t, `{"repos":[
 		{"slug":"plug-and-pay/plug-and-pay","key":"pap","primary":true},
 		{"slug":"plug-and-pay/plug-and-pay-ops","key":"ops","dir":"`+cloneDir+`","baseBranch":"master"}
@@ -117,14 +125,12 @@ func TestLoadPendingPushFindsANonPrimaryRepo(t *testing.T) {
 		t.Fatalf("expected no pending push before anything landed, got %+v", v)
 	}
 
-	dir, err := ensureChatShadowWorktreeAt(ctx, dataDir, ops, 12, "conv-ops", "feature/x")
-	if err != nil {
-		t.Fatalf("ensure shadow: %v", err)
-	}
+	dir := cloneCheckoutDir(t, bareDir, "feature/x")
+	assignCheckoutForTest(t, ops, 12, dir)
 	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("edited by claude\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if msg := commitChatShadowEditsAt(ctx, testChatModule(t), dataDir, ops, 12, "conv-ops", "turn-ops", "feature/x"); msg.Kind == chat.KindError {
+	if msg := commitCheckoutEditsAt(ctx, testChatModule(t), dataDir, ops, 12, "conv-ops", "turn-ops", "feature/x"); msg.Kind == chat.KindError {
 		t.Fatalf("landing failed: %+v", msg)
 	}
 

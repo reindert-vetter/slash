@@ -14,7 +14,7 @@ import (
 
 // chat_shell_test.go covers runOneClaudeTurn's own decision of whether a turn
 // gets real shell/file access this turn (prepareChatShellWorkDir,
-// chat_shadow.go) — the graceful-degrade half of
+// chat_checkout.go) — the graceful-degrade half of
 // .claude/rules/workflows-write-boundary.md's "Exception: the Claude chat
 // turn may act through a shell". The two tests below exercise the same
 // runOneClaudeTurn call with the ONLY difference being whether gh/git are
@@ -46,15 +46,23 @@ func stubReachableGh(t *testing.T, headRefName string) {
 // reachable — no separate "edit" action needed, per the rule carve-out.
 func TestRunOneClaudeTurnEscalatesToShellOnNeedWrite(t *testing.T) {
 	const headRefName = "feature/shell-turn"
-	setupChatShadowRepo(t, headRefName, "hello\n")
+	bareDir, _ := setupChatShadowRepo(t, headRefName, "hello\n")
 	stubReachableGh(t, headRefName)
 
 	m, _, cm, fake := newChatManager(t)
 	ctx := context.Background()
 	const pr, commentID = 970730, "comment-shell"
 
+	// The reviewer's OWN checkout — registered via settings.json, exactly the
+	// way chat_checkout.go's selection ladder discovers it (see
+	// todo/todo-local-checkout-chat-edits.md; the disposable shadow worktree
+	// is gone).
+	dataDir := t.TempDir()
+	checkoutDir := cloneCheckoutDir(t, bareDir, headRefName)
+	writeCheckoutSettings(t, dataDir, checkoutDir)
+
 	fake.SetChatTurns(`{"type":"need_write"}`, "Ik heb het aangepast.")
-	msg, _ := runOneClaudeTurn(ctx, m, cm, fake, t.TempDir(), chatTurnInput{
+	msg, _ := runOneClaudeTurn(ctx, m, cm, fake, dataDir, chatTurnInput{
 		PR: pr, ConversationID: commentID, Body: "Pas foo.txt aan", TurnID: "msg-shell",
 	})
 
@@ -65,7 +73,7 @@ func TestRunOneClaudeTurnEscalatesToShellOnNeedWrite(t *testing.T) {
 		t.Fatalf("expected the SECOND (shell) call's reply to be saved, got %q", msg.Body)
 	}
 	if msg.NoShell {
-		t.Fatal("expected NoShell=false once the escalated call got the shadow worktree (no 'Geen bestandstoegang' pill)")
+		t.Fatal("expected NoShell=false once the escalated call got the local checkout (no 'Geen bestandstoegang' pill)")
 	}
 	if len(fake.Calls) != 2 {
 		t.Fatalf("expected exactly 2 RunChat calls (read-only, then escalated), got %d", len(fake.Calls))
@@ -78,8 +86,8 @@ func TestRunOneClaudeTurnEscalatesToShellOnNeedWrite(t *testing.T) {
 	if got.SessionID == "" {
 		t.Fatal("expected the escalated call to RESUME the read-only call's own session (a non-empty SessionID), not start a fresh one")
 	}
-	if got.WorkDir == "" {
-		t.Fatal("expected WorkDir to be set to the shadow worktree")
+	if got.WorkDir != checkoutDir {
+		t.Fatalf("expected WorkDir to be the reviewer's registered checkout %q, got %q", checkoutDir, got.WorkDir)
 	}
 	wantTools := map[string]bool{"Read": true, "Grep": true, "Glob": true, "Edit": true, "Bash": true}
 	if len(got.Tools) != len(wantTools) {

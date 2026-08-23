@@ -2689,10 +2689,10 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return nil, nil
 	})
 	// Activity ("wis gesprek" / chatActionClear): wipe the conversation's
-	// transcript + stored claude session, then best-effort remove its
-	// agentic-edit shadow worktree (clearChatShadow, chat_shadow.go) — the
-	// reviewer already confirmed this, including any pending-work warning, on
-	// the frontend (see chat_workflow.go's chatActionClear doc comment).
+	// transcript + stored claude session. Deliberately does NOT touch the PR's
+	// shared local checkout (chat_checkout.go) — see chat_workflow.go's
+	// chatActionClear doc comment for why that would be unsafe now that the
+	// checkout is shared across every conversation of this PR.
 	engine.RegisterActivity("clearChatConversation", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg chatCommitInput
 		if err := json.Unmarshal(in, &arg); err != nil {
@@ -2703,7 +2703,6 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 				return nil, err
 			}
 		}
-		clearChatShadow(ctx, m, m.dataDir, arg.Repo, arg.PR, arg.ConversationID)
 		publishChatChanged(arg.Repo, arg.PR, arg.ConversationID)
 		return nil, nil
 	})
@@ -2744,7 +2743,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		// unchanged and keeps the "should the workflow run a further Activity"
 		// decision a plain, STORED field of this Activity's result (see
 		// chatTurnResult.NeedsLand's own doc comment).
-		needsLand := chatShadowNeedsLanding(ctx, m.dataDir, arg.Repo, arg.PR, arg.ConversationID)
+		needsLand := chatCheckoutNeedsLanding(ctx, arg.Repo, arg.PR)
 		publishChatChanged(arg.Repo, arg.PR, arg.ConversationID)
 		return json.Marshal(chatTurnResult{Message: msg, Action: action, NeedsLand: needsLand})
 	})

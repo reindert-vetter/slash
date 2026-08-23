@@ -79,6 +79,17 @@ type repoConfig struct {
 	// (empty repo string, `/pr/<n>`, historical run IDs). Exactly one repo is
 	// primary; see normalizeRepos.
 	Primary bool `json:"primary"`
+	// ChatCheckoutDirs is the explicit, reviewer-maintained list of local git
+	// checkouts a claude_chat write turn may edit DIRECTLY — the replacement
+	// for the old per-conversation disposable shadow worktree (see
+	// chat_checkout.go and the design in
+	// todo/todo-local-checkout-chat-edits.md, kept local/uncommitted). Each
+	// entry is a real, standing clone of this repo on the reviewer's own
+	// machine (tilde-expanded on use, same as Dir), NOT the shared ingest
+	// clone Dir points at. Deliberately re-read fresh from settings.json on
+	// every resolution (chatCheckoutRegistryDirs), unlike the rest of this
+	// struct — a newly added path must work without a server restart.
+	ChatCheckoutDirs []string `json:"chatCheckoutDirs,omitempty"`
 }
 
 // repoName is the slug's name part — the segment that appears in a URL

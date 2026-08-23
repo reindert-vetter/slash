@@ -2067,36 +2067,30 @@ func (s *server) handleChatProgress(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "running": true, "progress": p})
 }
 
-// handleChatShadowStatus serves GET /api/chat/shadow-status?pr=N&commentId=X —
-// see the route registration above for why this needs no workflow. No shadow
-// worktree at all → {ok:true, exists:false}; otherwise {exists:true, dirty,
-// ahead} from chatShadowLocalPendingState (chat_shadow.go), a purely local
-// git-plumbing read. A read that itself fails is reported as pending (dirty:
-// true) rather than silently "nothing to warn about" — conservative, same
-// "can't tell → don't discard" reasoning ensureChatShadowWorktreeAt already
-// uses.
+// handleChatShadowStatus serves GET /api/chat/shadow-status?pr=N[&commentId=X]
+// — see the route registration above for why this needs no workflow. The
+// PR-scoped, SHARED local checkout (chat_checkout.go) replaced the old
+// per-conversation shadow worktree, so this now reports on that checkout as a
+// whole rather than on one conversation: no checkout assigned at all →
+// {ok:true, exists:false}; otherwise {exists:true, dirty, ahead, dir} from
+// checkoutLocalPendingState, a purely local git-plumbing read. commentId is
+// accepted but no longer required/consulted (kept for backward compatibility
+// with the existing frontend call). A read that itself fails is reported as
+// pending (dirty: true) rather than silently "nothing to warn about" —
+// conservative, same "can't tell → don't discard" reasoning the old shadow
+// worktree already used.
 func (s *server) handleChatShadowStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	pr, _ := strconv.Atoi(r.URL.Query().Get("pr"))
-	commentID := r.URL.Query().Get("commentId")
-	if pr <= 0 || commentID == "" {
-		http.Error(w, "pr and commentId required", http.StatusBadRequest)
+	if pr <= 0 {
+		http.Error(w, "pr required", http.StatusBadRequest)
 		return
 	}
-	dir := chatShadowDir(s.dataDir, queryRepo(r), pr, commentID)
-	if _, err := os.Stat(dir); err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "exists": false})
-		return
-	}
-	dirty, ahead, err := chatShadowLocalPendingState(r.Context(), dir)
-	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "exists": true, "dirty": true, "ahead": 0})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "exists": true, "dirty": dirty, "ahead": ahead})
+	exists, dirty, ahead, dir := checkoutLocalPendingState(r.Context(), queryRepo(r), pr)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "exists": exists, "dirty": dirty, "ahead": ahead, "dir": dir})
 }
 
 // handlePendingPush serves GET /api/pending-push?prs=12,13 — per PR, the landed

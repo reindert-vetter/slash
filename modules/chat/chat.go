@@ -90,6 +90,17 @@ const (
 	// the left thread's own reply composer instead, so only the reviewer's own
 	// edit + explicit send ever posts anything there.
 	KindDraftReply = "draft_reply"
+	// KindDirectoryDecision marks an assistant turn that asks the reviewer to
+	// resolve something about the LOCAL CHECKOUT a write turn edits directly
+	// (chat_checkout.go): which candidate directory to use, whether to reuse
+	// one whose old branch already merged, or what to do with pre-existing,
+	// unrelated changes sitting in it (discard/stash/keep alongside/take
+	// along). Mechanically identical to KindQuestion (Options, answered by
+	// the reviewer's next message via SetAnswer) — kept as its own Kind only
+	// so the frontend can render it as a forceful, distinct control rather
+	// than an ordinary inline question bubble; the impact of getting this
+	// wrong is a real, possibly-in-use checkout, not just a chat answer.
+	KindDirectoryDecision = "directory_decision"
 )
 
 // Message is one turn in a conversation.
