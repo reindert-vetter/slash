@@ -420,6 +420,12 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		if _, err := mgr.EnsureAutoWarn(); err != nil {
 			mgr.logf("autowarn: ensure: %v", err)
 		}
+		// Own the single, global app_settings tracker so the settings page's
+		// aliases/praise-words edits have a Run ID to signal to (no poller — it
+		// only reacts to UI signals). No repo scope, mirrors EnsureAutoWarn.
+		if _, err := mgr.EnsureAppSettings(); err != nil {
+			mgr.logf("app_settings: ensure: %v", err)
+		}
 		// Own the task inbox via the workflow: aggregate an initial snapshot
 		// into the read-model and start the refresh poller (the UI reads only
 		// the read-model). Mirrors EnsureInbox.
@@ -772,6 +778,12 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// GET /api/autowarn → read-only auto-warn preference ({"enabled":bool}),
 	// backing the toggle next to the theme button in prInfoCard.
 	mux.HandleFunc("/api/autowarn", s.handleAutoWarn)
+	// POST /api/workflows/app_settings → ensure the single, global
+	// app_settings tracker; the settings page then signals aliases/
+	// praise-words edits to its Run ID via .../signals/app_settings_update.
+	// The read side reuses the existing GET /api/settings and GET
+	// /api/praisewords — no new read endpoint.
+	mux.HandleFunc("/api/workflows/app_settings", s.handleAppSettingsStart)
 	// POST /api/workflows/task_inbox → ensure the per-repo task-inbox tracker
 	// (its start synchronously aggregates the three task sources into the
 	// taskinbox read-model). The generic .../signals/refresh handler (below)
@@ -1030,7 +1042,7 @@ func (s *server) handleRetryRun(w http.ResponseWriter, r *http.Request) {
 // /api/workflows/{runID}/signals/{signalName} (POST signal).
 func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/workflows/")
-	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "remove_reviewer" || rest == "code_warning" || rest == "task_snooze" || rest == "ignore_comment" || rest == "task_inbox" || rest == "cleanup" || rest == "claude_chat" || rest == "auto_warn" || rest == "comment_batch" || rest == "comment_titles" || rest == "retry" {
+	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "remove_reviewer" || rest == "code_warning" || rest == "task_snooze" || rest == "ignore_comment" || rest == "task_inbox" || rest == "cleanup" || rest == "claude_chat" || rest == "auto_warn" || rest == "app_settings" || rest == "comment_batch" || rest == "comment_titles" || rest == "retry" {
 		http.NotFound(w, r)
 		return
 	}
@@ -1168,6 +1180,42 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if err := s.tasks.engine.SignalWorkflow(runID, SignalAutoWarn, body); err != nil {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"status": "set"})
+			return
+		}
+		// The app_settings signal carries a settings-page edit to the single,
+		// global app_settings tracker: either the extra @mention alias
+		// spellings ("aliases") or the review-clipboard praise-word list
+		// ("praiseWords") — see settings-page.md. Validated here, before the
+		// Signal is even sent: an "aliases" edit may legitimately clear the
+		// list to empty (no extra spellings), but a "praiseWords" edit must
+		// normalize to at least one word — otherwise a reviewer clearing the
+		// box would silently fall back to the built-in defaults with no
+		// visible confirmation.
+		if parts[2] == SignalAppSettings {
+			var body AppSettingsSignal
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "invalid app settings edit", http.StatusBadRequest)
+				return
+			}
+			switch body.Kind {
+			case "aliases":
+				if body.Aliases == nil {
+					body.Aliases = []string{}
+				}
+			case "praiseWords":
+				if len(normalizePraiseWordList(body.PraiseWords)) == 0 {
+					http.Error(w, "at least one praise word is required", http.StatusBadRequest)
+					return
+				}
+			default:
+				http.Error(w, "invalid app settings kind", http.StatusBadRequest)
+				return
+			}
+			if err := s.tasks.engine.SignalWorkflow(runID, SignalAppSettings, body); err != nil {
 				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 				return
 			}
@@ -1841,6 +1889,23 @@ func (s *server) handleAutoWarn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "enabled": enabled})
+}
+
+// handleAppSettingsStart starts (or reuses) the single, global app_settings
+// tracker and returns its Run ID. Starting an Execution is the sanctioned UI
+// write path; the settings page then signals its aliases/praise-words edits
+// to this Run ID via .../signals/app_settings_update.
+func (s *server) handleAppSettingsStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	runID, err := s.tasks.manager.EnsureAppSettings()
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
 }
 
 // handleTaskInboxStart starts (or reuses) the per-repo task-inbox tracker and

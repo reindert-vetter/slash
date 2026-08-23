@@ -174,6 +174,18 @@ const (
 	// only the automatic trigger does. See the "AI risk check" section of
 	// .claude/docs/workflows-analysis.md.
 	WorkflowAutoWarn = "auto_warn"
+	// WorkflowAppSettings is the Workflow Type that persists the two
+	// reviewer-editable pieces of the local settings.json/praise-words.json
+	// files that used to be read-only (settings.go, praisewords.go): the extra
+	// @mention alias spellings under "me", and the praise-word list — both
+	// surfaced on the settings page (.claude/docs/settings-page.md). ONE
+	// Execution total, never repo/PR scoped: there is exactly one data dir per
+	// running process, unlike every other tracker above. Each
+	// "app_settings_update" Signal carries a Kind discriminator (a workflow can
+	// only WaitSignal on one name at a time, see PRStateSignal/
+	// ReactionSignal.Action) selecting which file's Activity runs. It never
+	// completes — a long-lived, single, global tracker.
+	WorkflowAppSettings = "app_settings"
 	// WorkflowCommentBatch is the Workflow Type behind "laat Claude alle
 	// openstaande comments verwerken": ONE agentic Opus run that walks every
 	// open comment of a PR and edits code for it, landing the result through the
@@ -231,6 +243,10 @@ const (
 	// .../signals/{name} route (tasks_api.go) dispatches purely on this literal,
 	// so it must not collide with an existing one.
 	SignalAutoWarn = "autowarn"
+	// SignalAppSettings delivers one settings-page edit to the app_settings
+	// tracker — its Kind field says which of the two writable fields (mention
+	// aliases / praise words) the payload is for.
+	SignalAppSettings = "app_settings_update"
 	// SignalMessage delivers one reviewer turn to the claude_chat workflow.
 	SignalMessage = "message"
 
@@ -533,6 +549,22 @@ type AutoWarnSignal struct {
 	Enabled bool `json:"enabled"`
 }
 
+// AppSettingsInput starts the single, global app_settings Execution. No
+// fields: unlike every other tracker above there is only ever one data dir per
+// process, so there is nothing to scope by.
+type AppSettingsInput struct{}
+
+// AppSettingsSignal carries one settings-page edit into the app_settings
+// tracker (delivered under SignalAppSettings). Kind selects which field —
+// "aliases" or "praiseWords" — the same one-Signal-many-Kinds shape as
+// ReactionSignal.Action/PRStateSignal, because a workflow can only WaitSignal
+// on one name at a time.
+type AppSettingsSignal struct {
+	Kind        string   `json:"kind"` // "aliases" | "praiseWords"
+	Aliases     []string `json:"aliases,omitempty"`
+	PraiseWords []string `json:"praiseWords,omitempty"`
+}
+
 // IgnoreCommentInput starts an ignore_comment Execution — one tracker per PR.
 type IgnoreCommentInput struct {
 	// Repo is the canonical repo string this PR belongs to: "" (absent) for the
@@ -818,10 +850,20 @@ type TaskManager struct {
 	jira         jira.Client
 	db           *sql.DB
 	dataDir      string
-	repo         string
-	interval     time.Duration // fast cadence (reviewer active)
-	idle         time.Duration // slow cadence + PR-state check (reviewer idle)
-	logf         func(string, ...any)
+	// appDataDir is the directory settings.json/praise-words.json live in
+	// (server.dataDir in api.go — the same dir /api/settings, /api/names and
+	// /api/praisewords already read from). NOT the same as dataDir above:
+	// dataDir is the workflow store/worktree dir (next to the DB), and the two
+	// only coincide by default — a test run (or any deployment) that points
+	// -db and -data at different trees needs this to be set explicitly (see
+	// runServe in main.go). Falls back to dataDir when never set (appDataDir()
+	// below), matching every pre-existing call site that only ever had ONE
+	// dataDir to begin with.
+	appDataDir string
+	repo       string
+	interval   time.Duration // fast cadence (reviewer active)
+	idle       time.Duration // slow cadence + PR-state check (reviewer idle)
+	logf       func(string, ...any)
 
 	// baseCtx is the server-lifetime context background pollers spawned outside
 	// a request (e.g. ensurePRStatus's fresh-poller spawn) run under — a
@@ -852,16 +894,17 @@ type TaskManager struct {
 	lastBeat map[string]time.Time // code-comment/inbox Run ID → last heartbeat
 	// Keyed by prKey — (repo, number), see repos.go — so a PR 12 in a second
 	// repo can never be handed the primary repo's PR 12 tracker.
-	prRuns       map[prKey]string // PR → pr_status Run ID
-	relRuns      map[prKey]string // PR → build_relations Run ID
-	apprRuns     map[prKey]string // PR → approve Run ID
-	ignRuns      map[prKey]string // PR → ignore_comment Run ID
-	inboxRun     string           // pr_inbox Run ID (one per repo/process)
-	snoozeRun    string           // task_snooze Run ID (one per repo/process)
-	taskInboxRun string           // task_inbox Run ID (one per repo/process)
-	autoWarnRun  string           // auto_warn Run ID (one per repo/process)
-	importPolled map[string]bool  // imported-thread Run ID → poller running (dedup, operational)
-	avatarTried  map[string]bool  // imported-thread Run ID → avatar backfill attempted (dedup, operational)
+	prRuns         map[prKey]string // PR → pr_status Run ID
+	relRuns        map[prKey]string // PR → build_relations Run ID
+	apprRuns       map[prKey]string // PR → approve Run ID
+	ignRuns        map[prKey]string // PR → ignore_comment Run ID
+	inboxRun       string           // pr_inbox Run ID (one per repo/process)
+	snoozeRun      string           // task_snooze Run ID (one per repo/process)
+	taskInboxRun   string           // task_inbox Run ID (one per repo/process)
+	autoWarnRun    string           // auto_warn Run ID (one per repo/process)
+	appSettingsRun string           // app_settings Run ID (one per process, no repo scope)
+	importPolled   map[string]bool  // imported-thread Run ID → poller running (dedup, operational)
+	avatarTried    map[string]bool  // imported-thread Run ID → avatar backfill attempted (dedup, operational)
 	// polling/pollRestart gate the ONE GitHub reply poller per comment thread
 	// (see beginPolling/endPolling). A thread's poller now stops while the
 	// comment is resolved and is restarted by the reopenComment Activity, so
@@ -2217,6 +2260,30 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return nil, m.autowarn.SetEnabled(ctx, arg.Repo, arg.Enabled)
 	})
 
+	// Activity: persist the settings page's mention-alias edit into
+	// settings.json (write, workflow-driven) — saveMentionAliases (settings.go)
+	// is the only writer of that file's "me.aliases" field.
+	engine.RegisterActivity("saveMentionAliases", func(ctx context.Context, in []byte) ([]byte, error) {
+		var aliases []string
+		if err := json.Unmarshal(in, &aliases); err != nil {
+			return nil, err
+		}
+		_, err := saveMentionAliases(m.appDataDirOrDefault(), aliases)
+		return nil, err
+	})
+
+	// Activity: persist the settings page's praise-word edit into
+	// praise-words.json (write, workflow-driven) — savePraiseWordsFile
+	// (praisewords.go) is the only writer of that file.
+	engine.RegisterActivity("savePraiseWords", func(ctx context.Context, in []byte) ([]byte, error) {
+		var words []string
+		if err := json.Unmarshal(in, &words); err != nil {
+			return nil, err
+		}
+		_, err := savePraiseWordsFile(m.appDataDirOrDefault(), words)
+		return nil, err
+	})
+
 	// Activity: fire-and-forget the automatic code_warning trigger for pr. This
 	// Activity itself does no slow work — it only queues pr onto the single
 	// serial code_warning worker and returns immediately — so
@@ -2891,6 +2958,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowCodeWarning, codeWarningWorkflow)
 	engine.RegisterWorkflow(WorkflowTaskSnooze, taskSnoozeWorkflow)
 	engine.RegisterWorkflow(WorkflowAutoWarn, autoWarnPrefWorkflow)
+	engine.RegisterWorkflow(WorkflowAppSettings, appSettingsWorkflow)
 	engine.RegisterWorkflow(WorkflowIgnoreComment, ignoreCommentWorkflow)
 	engine.RegisterWorkflow(WorkflowTaskInbox, taskInboxWorkflow)
 	engine.RegisterWorkflow(WorkflowCleanup, cleanupWorkflow)
@@ -2959,6 +3027,26 @@ func distinctSortedFiles(blocks []Block) []string {
 func (m *TaskManager) SetRuntime(ctx context.Context, ready bool) {
 	m.baseCtx = ctx
 	m.runtimeReady = ready
+}
+
+// SetAppDataDir records the directory settings.json/praise-words.json live
+// in — see the appDataDir field's own comment for why this can differ from
+// dataDir. Called once from runServe (main.go), which is the only place that
+// has both directories at hand.
+func (m *TaskManager) SetAppDataDir(dir string) {
+	m.appDataDir = dir
+}
+
+// appDataDirOrDefault resolves the settings.json/praise-words.json directory
+// for the two app_settings Activities: SetAppDataDir's value when set,
+// otherwise dataDir — so every existing call site that only ever had one
+// dataDir (every non-serve subcommand, and every pre-existing test that
+// constructs a TaskManager directly) keeps working unchanged.
+func (m *TaskManager) appDataDirOrDefault() string {
+	if m.appDataDir != "" {
+		return m.appDataDir
+	}
+	return m.dataDir
 }
 
 // ArmReadyGate replaces the (default already-open) ready gate with a closed
@@ -3699,6 +3787,30 @@ func autoWarnPrefWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		}{Repo: in.Repo, Enabled: sig.Enabled}
 		if err := w.ExecuteActivity("saveAutoWarnEnabled", arg, nil); err != nil {
 			return nil, fmt.Errorf("save auto warn enabled: %w", err)
+		}
+	}
+}
+
+// appSettingsWorkflow persists the settings-page edits — the mention-alias
+// list and the praise-word list — for the whole process (see
+// AppSettingsInput: there is no per-repo/per-PR scope here). Deterministic:
+// the only side effect is the ONE Activity each Signal's Kind selects, so the
+// number and order of Activities is exactly the order Signals arrived in. It
+// never completes — a single, global, long-lived tracker, mirroring
+// autoWarnPrefWorkflow minus the repo scope.
+func appSettingsWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
+	for {
+		var sig AppSettingsSignal
+		w.WaitSignal(SignalAppSettings, &sig)
+		switch sig.Kind {
+		case "aliases":
+			if err := w.ExecuteActivity("saveMentionAliases", sig.Aliases, nil); err != nil {
+				return nil, fmt.Errorf("save mention aliases: %w", err)
+			}
+		case "praiseWords":
+			if err := w.ExecuteActivity("savePraiseWords", sig.PraiseWords, nil); err != nil {
+				return nil, fmt.Errorf("save praise words: %w", err)
+			}
 		}
 	}
 }
@@ -5388,6 +5500,49 @@ func (m *TaskManager) findAutoWarnRunLocked() string {
 		if json.Unmarshal(in, &pin) == nil && pin.Repo == m.repo {
 			return r.ID
 		}
+	}
+	return ""
+}
+
+// EnsureAppSettings ensures the single, global app_settings tracker exists
+// (starting one if none is live) and returns its Run ID. The settings page
+// calls this on load so its aliases/praise-words edits have a Run ID to
+// signal to; the tracker is reused across restarts. Mirrors EnsureAutoWarn,
+// minus the repo scope — there is only ever one such Execution at all.
+func (m *TaskManager) EnsureAppSettings() (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.appSettingsRun != "" {
+		return m.appSettingsRun, nil
+	}
+	if id := m.findAppSettingsRunLocked(); id != "" {
+		m.appSettingsRun = id
+		return id, nil
+	}
+	id, err := m.engine.StartWorkflow(WorkflowAppSettings, AppSettingsInput{})
+	if err != nil {
+		return "", err
+	}
+	m.appSettingsRun = id
+	return id, nil
+}
+
+// findAppSettingsRunLocked scans for a running/waiting app_settings
+// Execution — no repo filter, since AppSettingsInput carries none and there is
+// only ever one such Execution.
+func (m *TaskManager) findAppSettingsRunLocked() string {
+	runs, err := m.engine.Runs()
+	if err != nil {
+		return ""
+	}
+	for _, r := range runs {
+		if r.Workflow != WorkflowAppSettings {
+			continue
+		}
+		if r.Status != tembed.StatusRunning && r.Status != tembed.StatusWaiting {
+			continue
+		}
+		return r.ID
 	}
 	return ""
 }

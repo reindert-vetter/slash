@@ -108,3 +108,47 @@ func TestPraiseWordsEndpoint(t *testing.T) {
 		t.Fatalf("POST status = %d, want 405", rec.Code)
 	}
 }
+
+// TestSavePraiseWordsFileTakesEffectImmediately pins the settings-page write
+// path's whole point: unlike a hand edit (TestPraiseWordsCachedPerDir), a
+// write through savePraiseWordsFile must be visible on the very next read —
+// no restart — because it updates the in-memory cache in the same locked
+// section as the disk write.
+func TestSavePraiseWordsFileTakesEffectImmediately(t *testing.T) {
+	dir := writePraiseFile(t, `["prima"]`)
+	if got := praiseWords(dir); !reflect.DeepEqual(got, []string{"prima"}) {
+		t.Fatalf("praiseWords = %v, want [prima]", got)
+	}
+	got, err := savePraiseWordsFile(dir, []string{"Nice", "  TOP  ", ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"nice", "top"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("savePraiseWordsFile returned %v, want %v", got, want)
+	}
+	if got := praiseWords(dir); !reflect.DeepEqual(got, want) {
+		t.Fatalf("praiseWords after save = %v, want %v (no restart needed)", got, want)
+	}
+	// The write also landed on disk, not just in the cache.
+	onDisk := loadPraiseWordsFile(filepath.Join(dir, "praise-words.json"))
+	if !reflect.DeepEqual(onDisk, want) {
+		t.Fatalf("on-disk file = %v, want %v", onDisk, want)
+	}
+}
+
+// TestSavePraiseWordsFileEmptyFallsBackToDefaults covers the one place the
+// write path deviates from the read path's own normalization: the HTTP
+// handler (tasks_api.go) rejects an empty list before ever signaling the
+// workflow, but savePraiseWordsFile itself stays defensive (never persists an
+// empty list that would just silently read back as the defaults anyway).
+func TestSavePraiseWordsFileEmptyFallsBackToDefaults(t *testing.T) {
+	dir := writePraiseFile(t, `["prima"]`)
+	got, err := savePraiseWordsFile(dir, []string{"", "   "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, defaultPraiseWords) {
+		t.Fatalf("savePraiseWordsFile([empty]) = %v, want the defaults %v", got, defaultPraiseWords)
+	}
+}

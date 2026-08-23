@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -27,10 +28,23 @@ import (
 // team-wide list): this file is one reviewer's personal vocabulary, and without
 // it the defaults already cover the words that prompted it.
 //
-// WRITE BOUNDARY: a pure read plus a process-lifetime, in-memory cache —
-// nothing durable is written, so it is allowed outside a workflow. Same
+// WRITE BOUNDARY: the READ side (praiseWords/loadPraiseWordsFile/
+// handlePraiseWords) is a pure read plus a process-lifetime, in-memory cache —
+// nothing durable is written there, so it is allowed outside a workflow. Same
 // operational carve-out as /api/names and /api/me; see
 // .claude/rules/workflows-write-boundary.md.
+//
+// Unlike settings.json's "me" block, the FULL list here is genuinely editable
+// from the settings page (.claude/docs/settings-page.md) — there is no
+// GitHub-derived field to defer to. The write goes through the sanctioned
+// path: the app_settings tracker Workflow (workflows.go,
+// WorkflowAppSettings/SignalAppSettings) runs the "savePraiseWords" Activity,
+// which calls savePraiseWordsFile below — the only writer of
+// praise-words.json. Same two requirements as settings.json's write path: an
+// atomic write (temp file + rename) so a hand edit never finds a half-written
+// file, and an immediate praiseByDir cache update in the same locked section
+// as the disk write, so the very next GET /api/praisewords already reflects
+// the change instead of requiring a restart.
 
 // defaultPraiseWords is the built-in list, used whenever there is no readable
 // override file. Lowercase, because matching is case-insensitive.
@@ -70,16 +84,59 @@ func loadPraiseWordsFile(path string) []string {
 	if err := json.Unmarshal(raw, &list); err != nil {
 		return defaultPraiseWords
 	}
+	out := normalizePraiseWordList(list)
+	if len(out) == 0 {
+		return defaultPraiseWords
+	}
+	return out
+}
+
+// normalizePraiseWordList trims, lowercases and drops empties — shared by the
+// read path (loadPraiseWordsFile) and the write path (savePraiseWordsFile) so
+// both apply exactly the same rule. Deliberately no dedup (unlike aliases): a
+// duplicate word is harmless and dedup would silently reorder a
+// hand-maintained list, which the read path's own long-standing behaviour
+// never did either.
+func normalizePraiseWordList(list []string) []string {
 	out := []string{}
 	for _, w := range list {
 		if w = strings.ToLower(strings.TrimSpace(w)); w != "" {
 			out = append(out, w)
 		}
 	}
-	if len(out) == 0 {
-		return defaultPraiseWords
-	}
 	return out
+}
+
+// savePraiseWordsFile persists a new word list to dataDir's praise-words.json,
+// replacing the file wholesale (unlike settings.json there is no OTHER field
+// to preserve — the whole file is this one list). Called only from the
+// "savePraiseWords" workflow Activity (workflows.go), never directly, per the
+// write-boundary rule. words must already be non-empty after normalization —
+// enforced by the HTTP handler (tasks_api.go) before the Signal is even sent,
+// so an accidental "clear everything" can never silently fall back to the
+// built-in defaults without the reviewer seeing why. Returns the normalized
+// list (already updated in the in-memory cache).
+func savePraiseWordsFile(dataDir string, words []string) ([]string, error) {
+	praiseMu.Lock()
+	defer praiseMu.Unlock()
+	norm := normalizePraiseWordList(words)
+	if len(norm) == 0 {
+		norm = defaultPraiseWords
+	}
+	path := filepath.Join(dataDir, "praise-words.json")
+	raw, err := json.MarshalIndent(norm, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, raw, 0o644); err != nil {
+		return nil, fmt.Errorf("praisewords: write temp file: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return nil, fmt.Errorf("praisewords: rename temp file: %w", err)
+	}
+	praiseByDir[dataDir] = norm
+	return norm, nil
 }
 
 // handlePraiseWords serves GET /api/praisewords → {"ok":true,"words":[…]}.

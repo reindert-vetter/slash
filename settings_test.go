@@ -111,3 +111,51 @@ func TestSettingsEndpoint(t *testing.T) {
 		t.Fatalf("POST status = %d, want 405", rec.Code)
 	}
 }
+
+// TestSaveMentionAliasesTakesEffectImmediately mirrors
+// TestSavePraiseWordsFileTakesEffectImmediately: a write through
+// saveMentionAliases must be visible on the very next settings() read, unlike
+// a hand edit (TestSettingsCachedPerDataDir).
+func TestSaveMentionAliasesTakesEffectImmediately(t *testing.T) {
+	dir := writeSettingsFile(t, `{"me": {"login": "reindert-vetter", "aliases": ["reindert"]}}`)
+	got, err := saveMentionAliases(dir, []string{"Reindert", "  rv  ", ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantAliases := []string{"Reindert", "rv"}
+	if !reflect.DeepEqual(got.Me.Aliases, wantAliases) {
+		t.Fatalf("saveMentionAliases returned aliases %v, want %v", got.Me.Aliases, wantAliases)
+	}
+	if got := settings(dir).Me.Aliases; !reflect.DeepEqual(got, wantAliases) {
+		t.Fatalf("settings() after save = %v, want %v (no restart needed)", got, wantAliases)
+	}
+}
+
+// TestSaveMentionAliasesPreservesLoginAndRepos pins the write path's central
+// safety property: it must touch ONLY aliases, never clobber Login (still
+// display-only, sourced from GitHub — settings.go) or Repos (repos.go's own
+// registry) even when those were changed by a hand edit AFTER this process
+// already cached an older copy.
+func TestSaveMentionAliasesPreservesLoginAndRepos(t *testing.T) {
+	dir := writeSettingsFile(t, `{"me": {"login": "old-login"}, "repos": [{"key": "extra", "slug": "o/n"}]}`)
+	// Warm the cache with the original content, then hand-edit the login on
+	// disk — simulating an edit made after this process started.
+	_ = settings(dir)
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"),
+		[]byte(`{"me": {"login": "new-login"}, "repos": [{"key": "extra", "slug": "o/n"}]}`), 0o644); err != nil {
+		t.Fatalf("rewrite settings.json: %v", err)
+	}
+	got, err := saveMentionAliases(dir, []string{"alias1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Me.Login != "new-login" {
+		t.Fatalf("Me.Login = %q, want the on-disk new-login (not clobbered by the stale cache)", got.Me.Login)
+	}
+	if len(got.Repos) != 1 || got.Repos[0].Key != "extra" {
+		t.Fatalf("Repos = %+v, want the on-disk repos entry preserved", got.Repos)
+	}
+	if !reflect.DeepEqual(got.Me.Aliases, []string{"alias1"}) {
+		t.Fatalf("Me.Aliases = %v, want [alias1]", got.Me.Aliases)
+	}
+}

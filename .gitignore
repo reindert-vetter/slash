@@ -37,6 +37,9 @@ data/*.db-*
 # settings.go). One person's identity, so never committed — the template
 # data/settings.example.json is.
 data/settings.json
+# Per-reviewer praise-word list (praisewords.go) — personal vocabulary, never
+# committed, same reasoning as settings.json above.
+data/praise-words.json
 data/worktrees/
 data/workflows/
 node_modules/

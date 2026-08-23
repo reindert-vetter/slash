@@ -116,6 +116,12 @@ func runServe(args []string) {
 		log.Fatalf("init workflows: %v", err)
 	}
 	defer closeTasks()
+	// The app_settings tracker's two Activities (saveMentionAliases,
+	// savePraiseWords, workflows.go) write settings.json/praise-words.json —
+	// resolvedData, NOT the workflow-store dir newTasks was just given above.
+	// Those two dirs only coincide by default (see TaskManager.appDataDir's own
+	// comment); this is the one place that has both at hand.
+	tk.manager.SetAppDataDir(resolvedData)
 
 	srv := &server{db: db, dataDir: resolvedData, tasks: tk, avatars: newAvatarCache()}
 
