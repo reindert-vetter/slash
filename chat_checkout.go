@@ -259,8 +259,8 @@ var chatCheckoutHomeScanSkip = map[string]bool{
 // is what actually narrows this down to the right repo. Only reached when the
 // explicit registry (step 1) yields nothing.
 func chatCheckoutHomeScan() []string {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
+	home := chatCheckoutHomeDir()
+	if home == "" {
 		return nil
 	}
 	var out []string
@@ -290,6 +290,25 @@ func chatCheckoutHomeScan() []string {
 	}
 	walk(home, 0)
 	return out
+}
+
+// chatCheckoutHomeDir is the root chatCheckoutHomeScan walks — the reviewer's
+// real home directory in production, but overridable via
+// SLASH_CHECKOUT_HOME_DIR so a test can point it at an empty/controlled
+// throwaway directory instead of the real machine's home (mirrors
+// SLASH_REPO_DIR's own test-isolation role for repoDirFor). Without this, any
+// test exercising the "no registry configured" fallback path is silently
+// coupled to whatever real checkouts happen to exist on whichever machine
+// runs it.
+func chatCheckoutHomeDir() string {
+	if env := strings.TrimSpace(os.Getenv("SLASH_CHECKOUT_HOME_DIR")); env != "" {
+		return env
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return home
 }
 
 // listCheckoutCandidates runs the full discovery ladder (steps 1-2) and
@@ -377,10 +396,10 @@ func selectCheckoutCandidate(candidates []checkoutCandidate) (dir string, decisi
 // match against Options — free text simply doesn't resolve anything and the
 // same question is asked again).
 type chatCheckoutDecision struct {
-	Stage   string
-	Dir     string // the candidate this decision is about (all stages but chooseDirectory)
-	Body    string
-	Options []string
+	Stage   string   `json:"stage"`
+	Dir     string   `json:"dir,omitempty"` // the candidate this decision is about (all stages but chooseDirectory)
+	Body    string   `json:"body"`
+	Options []string `json:"options,omitempty"`
 }
 
 const (
@@ -441,19 +460,31 @@ func chatCheckoutReuseDecision(c checkoutCandidate, headRef string) *chatCheckou
 // ---------------------------------------------------------------------------
 
 type chatCheckoutAssignment struct {
-	Dir     string
+	Dir string
+	// Branch is the assigned candidate's own branch at the moment it became
+	// ready (mirrors checkoutCandidate.Branch) — cached here purely for the
+	// read-only checkout view (buildCheckoutView) below, which must never
+	// itself shell out to git.
+	Branch  string
 	Pending *chatCheckoutDecision
 	// Excluded is every directory the reviewer explicitly rejected via
-	// checkoutStageReuseMerged's "no" answer, for this PR's lifetime.
+	// checkoutStageReuseMerged's "no" answer, for this PR's lifetime. A
+	// reviewer-triggered relist (relistCheckoutCandidates) always clears this
+	// — an explicit "andere directory kiezen" is a clean slate, not bound by
+	// an earlier rejection.
 	Excluded map[string]bool
 	// KeepSeparatePaths are the paths the reviewer chose to keep OUT of
 	// Claude's own commit ("Los laten") — recorded once, at the moment the
 	// dirty-tree decision was resolved, and consumed by commitCheckoutEditsAt.
 	KeepSeparatePaths []string
-	// StashRef/StashAutoRestore record a stash this resolution created, and
-	// whether it should be popped automatically the next time this PR's
-	// checkout lands a commit (see commitCheckoutEditsAt).
+	// StashRef/StashDir/StashAutoRestore record a stash this resolution
+	// created (StashDir is the directory it was taken FROM — kept separately
+	// from Dir since "uit"/checkoutSetOff clears Dir but must never strand an
+	// unrestored stash with no known location), and whether it should be
+	// popped automatically the next time this PR's checkout lands a commit
+	// (see commitCheckoutEditsAt) — or on demand, via checkoutRestoreStashNow.
 	StashRef         string
+	StashDir         string
 	StashAutoRestore bool
 }
 
@@ -632,6 +663,7 @@ func applyCheckoutDecisionReply(ctx context.Context, a *chatCheckoutAssignment, 
 				return nil, err
 			}
 			a.StashRef = label
+			a.StashDir = d.Dir
 			a.StashAutoRestore = reply == optStashAuto
 		case optKeepSeparate:
 			paths, err := snapshotDirtyPaths(ctx, d.Dir)
@@ -750,6 +782,7 @@ func prepareChatShellWorkDirAt(ctx context.Context, tm *TaskManager, dataDir, re
 					return "", nil, false
 				}
 			}
+			a.Branch = headRef
 			return a.Dir, nil, true
 		}
 
@@ -901,12 +934,17 @@ func commitCheckoutEditsAt(ctx context.Context, cm *chat.Module, dataDir, repo s
 
 	note := ""
 	if a.StashAutoRestore && a.StashRef != "" {
-		if err := popCheckoutStash(ctx, dir, a.StashRef); err != nil {
-			note = " (Kon de eerder opgeslagen stash niet automatisch terugzetten — doe dit zelf met `git stash pop` in " + dir + ".)"
+		stashDir := a.StashDir
+		if stashDir == "" {
+			stashDir = dir
+		}
+		if err := popCheckoutStash(ctx, stashDir, a.StashRef); err != nil {
+			note = " (Kon de eerder opgeslagen stash niet automatisch terugzetten — doe dit zelf met `git stash pop` in " + stashDir + ".)"
 		} else {
 			note = " (De eerder opgeslagen, niet-gerelateerde wijziging is teruggezet.)"
 		}
 		a.StashRef = ""
+		a.StashDir = ""
 		a.StashAutoRestore = false
 	}
 	a.KeepSeparatePaths = nil
@@ -1014,4 +1052,162 @@ func chatConflictPrompt(conversationID string, conflicted []string) string {
 			"(<<<<<<<, =======, >>>>>>>):\n\n%s\n",
 		conversationID, strings.Join(conflicted, "\n"),
 	)
+}
+
+// ---------------------------------------------------------------------------
+// The UI-menu actions (the chip next to "Live AI assistent"/theme in
+// prInfoCard, src/home.mjs, and the PR-overview badge): "andere directory
+// kiezen", "uit", "nu terugzetten" — see
+// todo/todo-local-checkout-chat-edits.md's UI chapter. Each is dispatched
+// from an Action on the existing chat_merge queue's Signal (chat_merge.go),
+// never a direct write, exactly like the existing "push" Action.
+// ---------------------------------------------------------------------------
+
+// listAllCheckoutChoices is selectCheckoutCandidate's counterpart for an
+// EXPLICIT "andere directory kiezen": unlike the ordinary ladder, it never
+// auto-picks even when there is exactly one eligible candidate — the whole
+// point of this menu item is that the reviewer chooses deliberately, per the
+// design's own "toont de volledige lijst geldige kandidaten opnieuw, ook als
+// er nu maar één is". Zero candidates still returns a decision (with no
+// options) so the reviewer sees WHY nothing can be offered, rather than the
+// menu silently doing nothing. Pure and dependency-free, like
+// selectCheckoutCandidate, so it's unit-testable without any real git repo.
+func listAllCheckoutChoices(candidates []checkoutCandidate) *chatCheckoutDecision {
+	if len(candidates) == 0 {
+		return &chatCheckoutDecision{
+			Stage: checkoutStageChooseDirectory,
+			Body:  "Geen lokale directory gevonden voor deze repo. Voeg een pad toe aan chatCheckoutDirs in settings.json of clone de repo lokaal.",
+		}
+	}
+	opts := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		opts = append(opts, c.Dir)
+	}
+	return &chatCheckoutDecision{
+		Stage:   checkoutStageChooseDirectory,
+		Body:    "Kies welke lokale directory Claude voor deze PR gebruikt.",
+		Options: opts,
+	}
+}
+
+// relistCheckoutCandidates is the "andere directory kiezen" Activity body:
+// drops the current assignment AND every earlier rejection (a "schone lei" —
+// explicit reviewer request, unlike the ladder's own automatic exclusions)
+// and re-lists every eligible candidate via listAllCheckoutChoices. The
+// result is stored as the PR's pending decision (skipped when there are no
+// options at all, so a directory becoming available later — "andere
+// directory kiezen" tried again — starts completely fresh rather than being
+// stuck on an empty, un-answerable decision).
+func relistCheckoutCandidates(ctx context.Context, tm *TaskManager, dataDir, repo string, pr int) *chatCheckoutDecision {
+	meta, err := fetchPRMeta(ctx, repo, pr)
+	if err != nil || meta.HeadRefName == "" {
+		if tm != nil && tm.logf != nil {
+			tm.logf("chat_checkout: pr %d: relist: could not resolve head branch: %v", pr, err)
+		}
+		return nil
+	}
+	baseBranch := baseBranchFor(repo)
+	slug := repoSlugFor(repo)
+
+	a := getOrCreateCheckoutAssignment(repo, pr)
+	a.Dir = ""
+	a.Pending = nil
+	a.Excluded = map[string]bool{}
+
+	candidates, lerr := listCheckoutCandidates(ctx, dataDir, slug, meta.HeadRefName, baseBranch, nil)
+	if lerr != nil && tm != nil && tm.logf != nil {
+		tm.logf("chat_checkout: pr %d: relist: listing candidates: %v", pr, lerr)
+	}
+	dec := listAllCheckoutChoices(candidates)
+	if len(dec.Options) > 0 {
+		a.Pending = dec
+	}
+	return dec
+}
+
+// checkoutSetOff is the "uit" Activity body: forgets this PR's assigned
+// checkout and any pending decision/exclusions, WITHOUT any git operation —
+// a future write turn (or "andere directory kiezen") runs the ladder fresh.
+// Deliberately leaves StashRef/StashDir/StashAutoRestore untouched: an
+// unrestored stash must stay discoverable (via "nu terugzetten") even after
+// the reviewer switches this PR off, since it is the ONE record of where
+// that stash lives.
+func checkoutSetOff(repo string, pr int) {
+	a := getOrCreateCheckoutAssignment(repo, pr)
+	a.Dir = ""
+	a.Branch = ""
+	a.Pending = nil
+	a.Excluded = map[string]bool{}
+}
+
+// checkoutRestoreStashNow is the "nu terugzetten" Activity body: pops a
+// pending stash on demand, regardless of whether it was created with
+// "automatisch terugzetten" or "zelf terugzetten" (see
+// applyCheckoutDecisionReply's checkoutStageDirtyTree stash branches) — the
+// reviewer explicitly asked for it right now. A no-op, not an error, when
+// nothing is pending.
+func checkoutRestoreStashNow(ctx context.Context, repo string, pr int) error {
+	a := getOrCreateCheckoutAssignment(repo, pr)
+	if a.StashRef == "" {
+		return nil
+	}
+	dir := a.StashDir
+	if dir == "" {
+		dir = a.Dir
+	}
+	if dir == "" {
+		return fmt.Errorf("no known directory for stash %q", a.StashRef)
+	}
+	if err := popCheckoutStash(ctx, dir, a.StashRef); err != nil {
+		return err
+	}
+	a.StashRef = ""
+	a.StashDir = ""
+	a.StashAutoRestore = false
+	return nil
+}
+
+// checkoutView is the read-only shape behind GET /api/chat/checkout — one PR's
+// current local-checkout state for the chip (src/home.mjs) and the
+// PR-overview badge (src/overview.mjs). A plain, in-memory read: no fetch, no
+// git call, so this stays cheap enough for a page-load batch request.
+type checkoutView struct {
+	PR int `json:"pr"`
+	// RunID is the chat_merge queue's own deterministic Run ID (see
+	// chatMergeQueueRunID) — present unconditionally, like
+	// pendingPushView.PushRunID, so the UI can ensure+signal it without
+	// deriving the id itself. The Execution behind it may not exist yet
+	// (nothing has landed/relisted for this PR) — callers ensure it first via
+	// POST /api/workflows/chat_merge, exactly like autoWarn/claude_chat's own
+	// bootstrap.
+	RunID string `json:"runId"`
+	// Dir/DirName/Branch are empty when nothing is assigned yet.
+	Dir     string `json:"dir,omitempty"`
+	DirName string `json:"dirName,omitempty"`
+	Branch  string `json:"branch,omitempty"`
+	// Decision is set whenever the reviewer must resolve something before a
+	// write turn can proceed — answered via the "checkoutAnswer" Action.
+	Decision *chatCheckoutDecision `json:"decision,omitempty"`
+	// StashPending marks an earlier "stash" choice that hasn't been popped
+	// yet — the chip's "nu terugzetten" row.
+	StashPending bool `json:"stashPending,omitempty"`
+}
+
+// buildCheckoutView reads the in-memory assignment for one PR — never nil,
+// mirroring loadPendingPush's own "nothing yet" shape (an empty view, not an
+// error) so a PR with no checkout activity at all still round-trips cleanly.
+func buildCheckoutView(repo string, pr int) checkoutView {
+	v := checkoutView{PR: pr, RunID: chatMergeQueueRunID(repo, pr)}
+	a := getCheckoutAssignment(repo, pr)
+	if a == nil {
+		return v
+	}
+	if a.Dir != "" {
+		v.Dir = a.Dir
+		v.DirName = filepath.Base(a.Dir)
+		v.Branch = a.Branch
+	}
+	v.Decision = a.Pending
+	v.StashPending = a.StashRef != ""
+	return v
 }

@@ -37,7 +37,7 @@ const WorkflowChatMerge = "chat_merge"
 // chat_merge queue.
 const SignalChatMerge = "merge"
 
-// The two ChatMergeRequest.Action values. A second Signal NAME would need a
+// The ChatMergeRequest.Action values. A second Signal NAME would need a
 // WaitSignal that can wait on either name, which tembed deliberately doesn't
 // have (one name per WaitSignal, no select in a workflow body — see
 // .claude/rules/workflow-determinism.md), so the action rides along as a
@@ -46,6 +46,14 @@ const SignalChatMerge = "merge"
 const (
 	chatMergeActionLand = ""     // land one conversation's edit (the default)
 	chatMergeActionPush = "push" // push the PR's pending ref to GitHub
+	// The four checkout-menu actions (src/home.mjs's checkout chip, the PR
+	// overview badge's nothing-to-signal read side) — see
+	// todo/todo-local-checkout-chat-edits.md's UI chapter and
+	// chat_checkout.go's own doc comment on "The UI-menu actions".
+	chatMergeActionCheckoutRelist       = "checkoutRelist"       // "andere directory kiezen"
+	chatMergeActionCheckoutAnswer       = "checkoutAnswer"       // resolve a pending decision (Reply = the chosen option)
+	chatMergeActionCheckoutOff          = "checkoutOff"          // "uit"
+	chatMergeActionCheckoutRestoreStash = "checkoutRestoreStash" // "nu terugzetten"
 )
 
 // ChatMergeQueueInput starts (or, idempotently, re-ensures) the chat_merge
@@ -68,12 +76,18 @@ type ChatMergeQueueInput struct {
 type ChatMergeRequest struct {
 	ConversationID string `json:"conversationId"`
 	TurnID         string `json:"turnId,omitempty"`
-	// Action selects what this request is (see chatMergeActionLand/Push). Empty
-	// means "land this conversation's edit", so every existing sender keeps
-	// working unchanged. A "push" request carries no conversation at all: it is
-	// about the PR's pending ref, and it comes straight from the reviewer's todo
-	// row rather than from a chat turn.
+	// Action selects what this request is (see the chatMergeAction* consts
+	// above). Empty means "land this conversation's edit", so every existing
+	// sender keeps working unchanged. "push" and the four checkout actions
+	// carry no conversation at all — each is about the PR itself, and each
+	// comes straight from a reviewer-facing control (the todo row / the
+	// checkout chip), never from a chat turn.
 	Action string `json:"action,omitempty"`
+	// Reply is the checkoutAnswer Action's own payload — the reviewer's
+	// chosen option, matched against whatever chatCheckoutDecision is
+	// currently pending for this PR (chat_checkout.go's
+	// applyCheckoutDecisionReply). Unused by every other Action.
+	Reply string `json:"reply,omitempty"`
 }
 
 // chatMergeQueueRunID derives the chat_merge Execution's Run ID from the PR
@@ -118,6 +132,33 @@ func chatMergeQueueWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			}
 			continue
 		}
+		// The four checkout-menu actions: each is exactly one Activity, decided
+		// purely by the Signal's own recorded Action — deterministic under
+		// replay for the same reason the push branch above is.
+		if req.Action == chatMergeActionCheckoutRelist {
+			if err := w.ExecuteActivity("checkoutRelist", chatCheckoutActionInput{Repo: in.Repo, PR: in.PR}, nil); err != nil {
+				return nil, fmt.Errorf("checkout relist: %w", err)
+			}
+			continue
+		}
+		if req.Action == chatMergeActionCheckoutAnswer {
+			if err := w.ExecuteActivity("checkoutAnswer", chatCheckoutActionInput{Repo: in.Repo, PR: in.PR, Reply: req.Reply}, nil); err != nil {
+				return nil, fmt.Errorf("checkout answer: %w", err)
+			}
+			continue
+		}
+		if req.Action == chatMergeActionCheckoutOff {
+			if err := w.ExecuteActivity("checkoutOff", chatCheckoutActionInput{Repo: in.Repo, PR: in.PR}, nil); err != nil {
+				return nil, fmt.Errorf("checkout off: %w", err)
+			}
+			continue
+		}
+		if req.Action == chatMergeActionCheckoutRestoreStash {
+			if err := w.ExecuteActivity("checkoutRestoreStash", chatCheckoutActionInput{Repo: in.Repo, PR: in.PR}, nil); err != nil {
+				return nil, fmt.Errorf("checkout restore stash: %w", err)
+			}
+			continue
+		}
 		if err := w.ExecuteActivity("processChatMerge", chatMergeInput{
 			Repo: in.Repo, PR: in.PR, ConversationID: req.ConversationID, TurnID: req.TurnID,
 		}, nil); err != nil {
@@ -136,6 +177,18 @@ type chatMergeInput struct {
 	PR             int    `json:"pr"`
 	ConversationID string `json:"conversationId"`
 	TurnID         string `json:"turnId,omitempty"`
+}
+
+// chatCheckoutActionInput is the four checkout-menu Activities' own input
+// (checkoutRelist/checkoutAnswer/checkoutOff/checkoutRestoreStash,
+// registered in workflows.go, bodies in chat_checkout.go). No
+// ConversationID/TurnID — these actions are about the PR's shared checkout
+// itself, never about one conversation's own transcript.
+type chatCheckoutActionInput struct {
+	Repo string `json:"repo,omitempty"`
+	PR   int    `json:"pr"`
+	// Reply is only meaningful for checkoutAnswer.
+	Reply string `json:"reply,omitempty"`
 }
 
 // enqueueChatMerge is the enqueueChatMerge Activity's body — it REPLACES the

@@ -149,6 +149,12 @@ func cloneCheckoutDir(t *testing.T, source, branch string) string {
 // so this needs no initRepos call at all.
 func writeCheckoutSettings(t *testing.T, dataDir string, dirs ...string) {
 	t.Helper()
+	// Isolate the home-dir-scan fallback from whatever real checkouts happen
+	// to exist on the machine running this test — every test using this
+	// helper already registers its own explicit candidates, so the scan
+	// should never be reached at all; if it ever is (a bug), it must find
+	// nothing rather than something real.
+	t.Setenv("SLASH_CHECKOUT_HOME_DIR", t.TempDir())
 	body, err := json.Marshal(map[string]any{
 		"repos": []map[string]any{
 			{"slug": repoSlug, "chatCheckoutDirs": dirs},
@@ -622,5 +628,140 @@ func TestFastForwardCheckoutToOriginSurvivesBrokenSubmodule(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(filepath.Join(dir, "foo.txt")); string(got) != "v2\n" {
 		t.Fatalf("checkout content after fast-forward = %q, want v2\\n", got)
+	}
+}
+
+// listAllCheckoutChoices is pure — no git needed — and, unlike
+// selectCheckoutCandidate, never auto-picks even for a single candidate.
+func TestListAllCheckoutChoicesNeverAutoPicks(t *testing.T) {
+	if dec := listAllCheckoutChoices(nil); dec == nil || len(dec.Options) != 0 || dec.Body == "" {
+		t.Fatalf("zero candidates: got %+v, want a decision with an explanatory body and no options", dec)
+	}
+	one := []checkoutCandidate{{Dir: "/a"}}
+	dec := listAllCheckoutChoices(one)
+	if dec == nil || dec.Stage != checkoutStageChooseDirectory || len(dec.Options) != 1 || dec.Options[0] != "/a" {
+		t.Fatalf("one candidate: got %+v, want it still offered as a choice, not auto-picked", dec)
+	}
+	many := []checkoutCandidate{{Dir: "/a"}, {Dir: "/b"}}
+	dec = listAllCheckoutChoices(many)
+	if dec == nil || len(dec.Options) != 2 {
+		t.Fatalf("two candidates: got %+v", dec)
+	}
+}
+
+// relistCheckoutCandidates ("andere directory kiezen") is a clean slate: an
+// earlier explicit rejection (Excluded) of a candidate must be offered again.
+func TestRelistCheckoutCandidatesClearsExclusions(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
+	stubReachableGh(t, "feature/x")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	checkout := cloneCheckoutDir(t, bareDir, "feature/x")
+	writeCheckoutSettings(t, dataDir, checkout)
+
+	a := getOrCreateCheckoutAssignment("", 1011)
+	a.Excluded[checkout] = true
+
+	dec := relistCheckoutCandidates(ctx, nil, dataDir, "", 1011)
+	if dec == nil || len(dec.Options) != 1 || dec.Options[0] != checkout {
+		t.Fatalf("expected the previously-excluded candidate to be offered again, got %+v", dec)
+	}
+	if a.Pending == nil {
+		t.Fatal("expected the relisted decision to be stored as the PR's pending decision")
+	}
+	if len(a.Excluded) != 0 {
+		t.Fatalf("expected exclusions to be cleared by an explicit relist, got %v", a.Excluded)
+	}
+}
+
+// relistCheckoutCandidates with zero candidates does NOT persist a pending
+// decision — so a directory becoming available later starts completely
+// fresh rather than being stuck on an empty, un-answerable one.
+func TestRelistCheckoutCandidatesNoCandidatesLeavesNothingPending(t *testing.T) {
+	setupChatShadowRepo(t, "feature/x", "v1\n")
+	stubReachableGh(t, "feature/x")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	// No chatCheckoutDirs configured, and the home-dir-scan fallback is
+	// isolated to an empty throwaway directory (SLASH_CHECKOUT_HOME_DIR) so
+	// this genuinely exercises the zero-candidate path regardless of what
+	// real checkouts exist on the machine running this test.
+	t.Setenv("SLASH_CHECKOUT_HOME_DIR", t.TempDir())
+	dec := relistCheckoutCandidates(ctx, nil, dataDir, "", 1012)
+	if dec == nil || len(dec.Options) != 0 {
+		t.Fatalf("expected an explanatory, option-less decision, got %+v", dec)
+	}
+	a := getOrCreateCheckoutAssignment("", 1012)
+	if a.Pending != nil {
+		t.Fatalf("expected nothing persisted as pending, got %+v", a.Pending)
+	}
+}
+
+func TestCheckoutSetOffClearsAssignmentButKeepsStashBookkeeping(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
+	dir := cloneCheckoutDir(t, bareDir, "feature/x")
+	a := getOrCreateCheckoutAssignment("", 1013)
+	a.Dir = dir
+	a.Branch = "feature/x"
+	a.Excluded["/somewhere"] = true
+	a.StashRef = "slash-chat-x"
+	a.StashDir = dir
+
+	checkoutSetOff("", 1013)
+
+	if a.Dir != "" || a.Branch != "" || a.Pending != nil || len(a.Excluded) != 0 {
+		t.Fatalf("expected the assignment cleared, got dir=%q branch=%q pending=%+v excluded=%v", a.Dir, a.Branch, a.Pending, a.Excluded)
+	}
+	if a.StashRef == "" || a.StashDir == "" {
+		t.Fatal("expected stash bookkeeping to survive 'uit', so 'nu terugzetten' still works")
+	}
+}
+
+func TestCheckoutRestoreStashNowPopsOnDemand(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
+	ctx := context.Background()
+	dir := cloneCheckoutDir(t, bareDir, "feature/x")
+	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("reviewer's own WIP\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := stashCheckoutDirty(ctx, dir, "slash-chat-test-1014"); err != nil {
+		t.Fatalf("stash: %v", err)
+	}
+	a := getOrCreateCheckoutAssignment("", 1014)
+	a.StashRef = "slash-chat-test-1014"
+	a.StashDir = dir
+
+	if err := checkoutRestoreStashNow(ctx, "", 1014); err != nil {
+		t.Fatalf("restore stash now: %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "foo.txt")); string(got) != "reviewer's own WIP\n" {
+		t.Fatalf("expected the stashed change restored, got %q", got)
+	}
+	if a.StashRef != "" || a.StashDir != "" {
+		t.Fatalf("expected stash bookkeeping cleared after restoring, got StashRef=%q StashDir=%q", a.StashRef, a.StashDir)
+	}
+
+	// A no-op, not an error, when nothing is pending.
+	if err := checkoutRestoreStashNow(ctx, "", 1014); err != nil {
+		t.Fatalf("restore with nothing pending should be a no-op, got: %v", err)
+	}
+}
+
+func TestBuildCheckoutViewShapes(t *testing.T) {
+	empty := buildCheckoutView("", 1015)
+	if empty.Dir != "" || empty.Decision != nil || empty.StashPending {
+		t.Fatalf("expected an empty view for a PR with no checkout activity, got %+v", empty)
+	}
+	if empty.RunID == "" {
+		t.Fatal("expected RunID to always be present (a deterministic string), even with nothing assigned")
+	}
+
+	a := getOrCreateCheckoutAssignment("", 1016)
+	a.Dir = "/home/reindert/dev/plug-and-pay-2"
+	a.Branch = "feature/x"
+	a.StashRef = "slash-chat-y"
+	view := buildCheckoutView("", 1016)
+	if view.Dir != a.Dir || view.DirName != "plug-and-pay-2" || view.Branch != "feature/x" || !view.StashPending {
+		t.Fatalf("unexpected view: %+v", view)
 	}
 }

@@ -64,6 +64,17 @@ const (
 	// GET /api/pending-push, which reads git itself, so a dropped event costs a
 	// refetch and never correctness (see .claude/docs/server-events.md).
 	eventPendingPushChanged = "pendingpush.changed"
+	// eventCheckoutChanged says a PR's shared local checkout state changed:
+	// a directory got assigned/freed, a decision needs answering (or got
+	// answered), or a stash was restored (no Key — PR-wide, no payload).
+	// Fired both by the checkout-menu Activities (checkoutRelist/
+	// checkoutAnswer/checkoutOff/checkoutRestoreStash, workflows.go) AND by an
+	// ordinary chat turn resolving/advancing the assignment on its own
+	// (chat_workflow.go), so the chip/badge stay live either way. Same rule
+	// as every other "…changed" event: the client refetches
+	// GET /api/chat/checkout, so a dropped frame costs a refetch, never
+	// correctness.
+	eventCheckoutChanged = "checkout.changed"
 	// eventBlocksChanged says a PR's blocks table was swapped: new commits were
 	// pulled in by the ingest refresh, or a full (re-)ingest ran (no Key —
 	// PR-wide, no payload). Without this, an already-open review tree keeps
@@ -112,6 +123,12 @@ func publishTestCoversChanged(repo string, pr int) {
 // PR-overview's own "ongepusht" pill).
 func publishPendingPushChanged(repo string, pr int) {
 	events.publish(eventPendingPushChanged, repo, pr, "", nil)
+}
+
+// publishCheckoutChanged nudges every tab watching this PR to refetch
+// GET /api/chat/checkout (the chip in prInfoCard and the PR-overview badge).
+func publishCheckoutChanged(repo string, pr int) {
+	events.publish(eventCheckoutChanged, repo, pr, "", nil)
 }
 
 // publishBlocksChanged nudges every tab watching this PR that its blocks were

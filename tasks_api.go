@@ -811,6 +811,19 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// workflow, no network — the same read-only-side-effect class as
 	// blockstats.go/comment_import.go reading a worktree.
 	mux.HandleFunc("/api/chat/shadow-status", s.handleChatShadowStatus)
+	// POST /api/workflows/chat_merge {pr, repo} → ensure the PR's chat_merge
+	// queue Execution exists (idempotent), returning its Run ID — the same
+	// bootstrap shape as /api/workflows/auto_warn/claude_chat. Needed by the
+	// checkout chip (src/home.mjs) so it can signal a checkout-menu action
+	// (see below) even for a PR where nothing has landed/relisted yet, i.e.
+	// where the queue Execution may not exist.
+	mux.HandleFunc("/api/workflows/chat_merge", s.handleChatMergeStart)
+	// GET /api/chat/checkout?prs=N[,N…] → read-only: this PR's shared local
+	// checkout state for the checkout chip (prInfoCard, src/home.mjs) and the
+	// PR-overview badge — a plain in-memory read (chat_checkout.go's
+	// buildCheckoutView), no git call at all, same batch shape as
+	// /api/pending-push.
+	mux.HandleFunc("/api/chat/checkout", s.handleChatCheckout)
 	// GET /api/pending-push?prs=N[,N…] → read-only: which of these PRs have
 	// landed chat edits that are not pushed to GitHub yet (pending_push.go).
 	// Purely local git reads (for-each-ref/rev-list/diff), no gh call, no
@@ -1162,20 +1175,34 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// The chat-merge queue's "merge" signal, reached here only for the
-		// reviewer-facing "push" Action (src/home.mjs's pushTodoRow): the "land"
-		// Action (empty string) is only ever sent cross-workflow via a direct
-		// engine.SignalWorkflow call from inside another Activity
-		// (enqueueChatMerge, chat_merge.go) — never from the UI/HTTP — so it is
-		// deliberately rejected here rather than accepted with no ConversationID.
+		// reviewer-facing Actions below (the todo row's "push", the checkout
+		// chip's four actions — src/home.mjs): the "land" Action (empty string)
+		// is only ever sent cross-workflow via a direct engine.SignalWorkflow
+		// call from inside another Activity (enqueueChatMerge, chat_merge.go) —
+		// never from the UI/HTTP — so it is deliberately rejected here rather
+		// than accepted with no ConversationID.
 		if parts[2] == SignalChatMerge {
 			var body struct {
 				Action string `json:"action"`
+				Reply  string `json:"reply,omitempty"`
 			}
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Action != chatMergeActionPush {
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				http.Error(w, "invalid action", http.StatusBadRequest)
 				return
 			}
-			if err := s.tasks.engine.SignalWorkflow(runID, SignalChatMerge, ChatMergeRequest{Action: body.Action}); err != nil {
+			switch body.Action {
+			case chatMergeActionPush, chatMergeActionCheckoutRelist, chatMergeActionCheckoutOff, chatMergeActionCheckoutRestoreStash:
+				// no further payload needed
+			case chatMergeActionCheckoutAnswer:
+				if strings.TrimSpace(body.Reply) == "" {
+					http.Error(w, "invalid action", http.StatusBadRequest)
+					return
+				}
+			default:
+				http.Error(w, "invalid action", http.StatusBadRequest)
+				return
+			}
+			if err := s.tasks.engine.SignalWorkflow(runID, SignalChatMerge, ChatMergeRequest{Action: body.Action, Reply: body.Reply}); err != nil {
 				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 				return
 			}
@@ -2101,6 +2128,49 @@ func (s *server) handleChatShadowStatus(w http.ResponseWriter, r *http.Request) 
 // The push itself is NOT here: that is a real write and goes through the PR's
 // chat_merge queue as a "push" Signal, whose Run ID this response carries
 // (pushRunId) so the UI has something to signal.
+// handleChatMergeStart serves POST /api/workflows/chat_merge {pr, repo} →
+// ensures the PR's chat_merge queue Execution exists (idempotent via
+// StartWorkflowID) and returns its Run ID, mirroring handleAutoWarnStart/
+// handleClaudeChatStart's own bootstrap shape.
+func (s *server) handleChatMergeStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var in struct {
+		PR   int    `json:"pr"`
+		Repo string `json:"repo"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.PR <= 0 {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	in.Repo = canonRepo(in.Repo)
+	runID, err := s.tasks.manager.EnsureChatMergeQueue(in.Repo, in.PR)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
+}
+
+// handleChatCheckout serves GET /api/chat/checkout?prs=N[,N…] — the
+// read-only, batch-shaped view of each PR's shared local checkout
+// (chat_checkout.go's buildCheckoutView): a plain in-memory read, no git call,
+// used by both the checkout chip (prInfoCard) and the PR-overview badge.
+func (s *server) handleChatCheckout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	wanted := parseStatusKeyList(r.URL.Query().Get("prs"))
+	out := map[string]checkoutView{}
+	for _, key := range wanted {
+		out[statusKey(key.Repo, key.PR)] = buildCheckoutView(key.Repo, key.PR)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "checkout": out})
+}
+
 func (s *server) handlePendingPush(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

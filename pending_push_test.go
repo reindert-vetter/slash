@@ -274,3 +274,72 @@ func TestHandleWorkflowsPushSignal(t *testing.T) {
 		t.Fatalf("pending ref survived a push routed through handleWorkflows: %+v", v)
 	}
 }
+
+// TestHandleChatMergeStartAndCheckoutRead pins the checkout chip's own two
+// endpoints: POST /api/workflows/chat_merge (ensure the queue Execution even
+// though nothing has landed/relisted for this PR yet) and
+// GET /api/chat/checkout (the batch read the chip/PR-overview badge use) —
+// plus that the checkout-menu Actions on the merge Signal are validated the
+// same way the existing "push" Action already is (TestHandleWorkflowsPushSignal).
+func TestHandleChatMergeStartAndCheckoutRead(t *testing.T) {
+	m, _, _ := newTestManager(t)
+	s := &server{tasks: &tasks{manager: m, engine: m.engine}}
+
+	// Ensure works even for a PR with no prior chat_merge activity at all.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/workflows/chat_merge", strings.NewReader(`{"pr":4001}`))
+	s.handleChatMergeStart(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ensure: status = %d (%s)", rec.Code, rec.Body.String())
+	}
+	var ensureBody struct {
+		RunID string `json:"runId"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &ensureBody); err != nil || ensureBody.RunID == "" {
+		t.Fatalf("ensure response = %s", rec.Body.String())
+	}
+	if ensureBody.RunID != chatMergeQueueRunID("", 4001) {
+		t.Fatalf("runId = %q, want %q", ensureBody.RunID, chatMergeQueueRunID("", 4001))
+	}
+
+	// A checkoutOff Action reaches the now-ensured queue without error, even
+	// with nothing assigned (a no-op, not a failure).
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/workflows/"+ensureBody.RunID+"/signals/merge", strings.NewReader(`{"action":"checkoutOff"}`))
+	s.handleWorkflows(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("checkoutOff: status = %d (%s)", rec.Code, rec.Body.String())
+	}
+
+	// checkoutAnswer with an empty reply is rejected, same "invalid action"
+	// shape as an unrecognized Action string.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/workflows/"+ensureBody.RunID+"/signals/merge", strings.NewReader(`{"action":"checkoutAnswer"}`))
+	s.handleWorkflows(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("checkoutAnswer with no reply: status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+
+	// The read side: GET /api/chat/checkout always returns a (possibly empty)
+	// view, keyed the same way /api/pending-push is.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/chat/checkout?prs=4001", nil)
+	s.handleChatCheckout(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("read: status = %d (%s)", rec.Code, rec.Body.String())
+	}
+	var readBody struct {
+		OK       bool                    `json:"ok"`
+		Checkout map[string]checkoutView `json:"checkout"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &readBody); err != nil {
+		t.Fatalf("decode: %v (%s)", err, rec.Body.String())
+	}
+	view, ok := readBody.Checkout["4001"]
+	if !ok {
+		t.Fatalf("expected a view for pr 4001, got %+v", readBody.Checkout)
+	}
+	if view.RunID != ensureBody.RunID {
+		t.Fatalf("view.RunID = %q, want %q", view.RunID, ensureBody.RunID)
+	}
+}

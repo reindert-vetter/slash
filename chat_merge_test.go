@@ -332,3 +332,59 @@ func TestEnsureChatMergeQueueIsIdempotent(t *testing.T) {
 		t.Fatalf("EnsureChatMergeQueue returned a new run ID %q, want reuse of %q", again, runID)
 	}
 }
+
+// The queue dispatches each checkout-menu Action to its own Activity, in
+// arrival order, alongside the existing land/push dispatch — same
+// determinism guarantee as TestChatMergeQueueProcessesRequestsInArrivalOrder/
+// TestChatMergeQueueDispatchesPushAction, now covering the four Actions the
+// checkout chip (src/home.mjs) sends.
+func TestChatMergeQueueDispatchesCheckoutActions(t *testing.T) {
+	engine := tembed.New(tembed.NewMemoryStore())
+	engine.RegisterWorkflow(WorkflowChatMerge, chatMergeQueueWorkflow)
+
+	var mu sync.Mutex
+	var calls []string
+	var replies []string
+	stub := func(name string) {
+		engine.RegisterActivity(name, func(ctx context.Context, in []byte) ([]byte, error) {
+			var arg chatCheckoutActionInput
+			_ = json.Unmarshal(in, &arg)
+			mu.Lock()
+			calls = append(calls, name)
+			replies = append(replies, arg.Reply)
+			mu.Unlock()
+			return nil, nil
+		})
+	}
+	stub("checkoutRelist")
+	stub("checkoutAnswer")
+	stub("checkoutOff")
+	stub("checkoutRestoreStash")
+
+	runID, err := engine.StartWorkflowID(chatMergeQueueRunID("", 9004), WorkflowChatMerge, ChatMergeQueueInput{PR: 9004})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	send := func(action, reply string) {
+		if err := engine.SignalWorkflow(runID, SignalChatMerge, ChatMergeRequest{Action: action, Reply: reply}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	send(chatMergeActionCheckoutRelist, "")
+	send(chatMergeActionCheckoutAnswer, "/home/reindert/dev/plug-and-pay-2")
+	send(chatMergeActionCheckoutOff, "")
+	send(chatMergeActionCheckoutRestoreStash, "")
+
+	mu.Lock()
+	got := append([]string(nil), calls...)
+	gotReplies := append([]string(nil), replies...)
+	mu.Unlock()
+	want := []string{"checkoutRelist", "checkoutAnswer", "checkoutOff", "checkoutRestoreStash"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("activities = %v, want %v", got, want)
+	}
+	if len(gotReplies) != 4 || gotReplies[1] != "/home/reindert/dev/plug-and-pay-2" {
+		t.Fatalf("checkoutAnswer's own Reply not forwarded correctly, got replies %v", gotReplies)
+	}
+}

@@ -2745,6 +2745,10 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		// chatTurnResult.NeedsLand's own doc comment).
 		needsLand := chatCheckoutNeedsLanding(ctx, arg.Repo, arg.PR)
 		publishChatChanged(arg.Repo, arg.PR, arg.ConversationID)
+		// The turn may have assigned/advanced the PR's shared checkout, or
+		// raised/resolved a chat.KindDirectoryDecision — nudge the checkout
+		// chip/badge too, same low-cost "refetch me" broadcast as above.
+		publishCheckoutChanged(arg.Repo, arg.PR)
 		return json.Marshal(chatTurnResult{Message: msg, Action: action, NeedsLand: needsLand})
 	})
 	// Activity (Phase 4): apply a validated comment_action directive — reply to
@@ -2821,6 +2825,54 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			return nil, err
 		}
 		pushPendingPR(ctx, m, arg.Repo, arg.PR)
+		return nil, nil
+	})
+
+	// The four checkout-menu Activities (the chip next to "Live AI assistent"
+	// in prInfoCard, src/home.mjs — see chat_checkout.go's "The UI-menu
+	// actions" and todo/todo-local-checkout-chat-edits.md). Each publishes
+	// checkoutChanged so every open tab watching this PR refetches
+	// GET /api/chat/checkout, same "an event is never the source of truth"
+	// rule as every other publisher in this file.
+	engine.RegisterActivity("checkoutRelist", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg chatCheckoutActionInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		relistCheckoutCandidates(ctx, m, m.dataDir, arg.Repo, arg.PR)
+		publishCheckoutChanged(arg.Repo, arg.PR)
+		return nil, nil
+	})
+	engine.RegisterActivity("checkoutAnswer", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg chatCheckoutActionInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		// Reuse the exact same resolution path a chat turn's own pending-decision
+		// check uses (chat_workflow.go's runOneClaudeTurn) — a menu-driven answer
+		// and a chat-driven answer share one code path, one set of rules.
+		_, _, _ = prepareChatShellWorkDir(ctx, m, m.dataDir, arg.Repo, arg.PR, "", arg.Reply)
+		publishCheckoutChanged(arg.Repo, arg.PR)
+		return nil, nil
+	})
+	engine.RegisterActivity("checkoutOff", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg chatCheckoutActionInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		checkoutSetOff(arg.Repo, arg.PR)
+		publishCheckoutChanged(arg.Repo, arg.PR)
+		return nil, nil
+	})
+	engine.RegisterActivity("checkoutRestoreStash", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg chatCheckoutActionInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if err := checkoutRestoreStashNow(ctx, arg.Repo, arg.PR); err != nil {
+			m.logf("checkout: restore stash pr %d: %v", arg.PR, err)
+		}
+		publishCheckoutChanged(arg.Repo, arg.PR)
 		return nil, nil
 	})
 
