@@ -31,10 +31,12 @@ import { updateScrollFade } from './scrollFade.mjs'
 const CLAUDE_NAME = 'Claude'
 
 // CLAUDE_MENTIONS — 30 pre-written, informal ways to refer to Claude in the
-// column's own announcement copy (the header label, the empty-state
-// sentence, the composer placeholder — never the per-message author name
-// above, see CLAUDE_NAME). One is picked at random ONCE per page load
-// (claudeMention below) and reused across all three spots so a single
+// column's own announcement copy (the empty-state sentence, the composer
+// placeholder — never the per-message author name above, see CLAUDE_NAME;
+// a third spot, the header label above the thread, used to show this too
+// but was removed on request — the mention now only announces itself once
+// the reviewer starts typing). One is picked at random ONCE per page load
+// (claudeMention below) and reused across both remaining spots so a single
 // column reads consistently; a fresh pick appears on the next reload/visit.
 // Deliberately a fixed, pre-generated list rather than generating text at
 // runtime — cheap, reviewable, and never depends on anything external.
@@ -782,10 +784,7 @@ export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly) {
       }}"
     >
 
-      <div class="flex items-center justify-between gap-2">
-        <p class="text-[11px] font-medium text-slate-500 dark:text-zinc-500" data-testid="claude-chat-header">
-          ${claudeMention}
-        </p>
+      <div class="flex items-center justify-end gap-2">
         ${() => (readOnly ? '' : claudeMenuButton(callbacks.onOpenMenu))}
       </div>
       <div class="relative min-h-0 flex-1">

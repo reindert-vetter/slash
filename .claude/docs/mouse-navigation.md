@@ -139,7 +139,7 @@ implementation):
 | `block-open-menu` | `COMMANDS` (block palette) | `Block.mjs`'s header row, next to `viewModeIndicator` | vertical kebab (⋮) |
 | `pr-menu-button` | `PR_COMMANDS` (PR-wide menu) | `prInfoCard`'s existing `pr-info-theme-row`, next to the theme/auto-warn toggles | shield-check |
 | `comment-detail-menu` | `prCommentCommandsFor()` | `commentDetailCard`'s author line (`RelatedPanel.mjs`) | speech-bubble-with-dots |
-| `claude-chat-menu` | `claudeChatCommandsFor()` | `claude-chat-header` (`ClaudeChat.mjs`), both the block-scoped and the PR-comment-index Claude column | sparkle |
+| `claude-chat-menu` | `claudeChatCommandsFor()` | the card's own top row (`ClaudeChat.mjs`, `justify-end` — the row's header label was removed on reviewer request, see `.claude/docs/claude-chat-panel.md`), both the block-scoped and the PR-comment-index Claude column | sparkle |
 
 Each gets its **own** icon (reviewer request: "per plek een eigen icoon …
 zodat ze visueel te onderscheiden zijn") rather than one repeated kebab, so

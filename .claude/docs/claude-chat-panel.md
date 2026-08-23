@@ -689,8 +689,14 @@ The "Embedded Claude conversation" section owns:
   keeps its own `p-3` (`claudeChatColumn`'s root `<div>`,
   `data-testid=claude-chat-card`) — `InlineComments`' own cards already carry
   that inset via their own borders, so without it this column's content (the
-  "Claude" heading, the composer) sat flush against the shared card's edges,
-  most visibly on the right where "Stuur" touched the border. Its
+  thread, the composer) sat flush against the shared card's edges,
+  most visibly on the right where "Stuur" touched the border. The column's
+  top row used to also carry a small mention-copy header label
+  (`"Claude, je reviewbuddy"`-style text, one of `CLAUDE_MENTIONS`); removed
+  on reviewer request ("bovenin mag weg, in de input mag het blijven") — the
+  row now holds only the sparkle menu button (`claude-chat-menu`, right-
+  aligned, `justify-end`), and the composer placeholder/empty-state sentence
+  still pick the same random mention (`ClaudeChat.mjs`'s `CLAUDE_MENTIONS`). Its
   `claude-chat-thread` message list carries `flex-1` so it absorbs whatever
   vertical space a short/empty conversation leaves over, keeping the composer
   pinned to the bottom of the (`items-stretch`-driven, possibly taller) row
