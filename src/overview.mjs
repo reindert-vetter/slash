@@ -39,6 +39,10 @@ const state = reactive({
   // kickOffPendingPush. Only ingested rows can have any: the edits come from
   // this app's own Claude chat.
   pendingPush: {},
+  // checkout — prUid -> this PR's shared local checkout state ({ dir,
+  // dirName, branch, ... }, see chat_checkout.go's buildCheckoutView),
+  // backfilled async by kickOffCheckout. Only ingested rows can have one.
+  checkout: {},
   query: '',
   searching: false,
   searchResults: null, // null = no active search
@@ -156,6 +160,11 @@ const ICON_PATHS = {
   // with a minus sign). Lucide's own user-minus, same 24x24/stroke-2 set.
   'user-minus':
     '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="22" x2="16" y1="11" y2="11"/>',
+  // 'folder' — the checkoutPill's glyph: this PR has a local checkout
+  // assigned for Claude write turns (chat_checkout.go). Lucide's own folder,
+  // same 24x24/stroke-2 set.
+  folder:
+    '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
 }
 
 // icon renders one outline SVG (24x24 viewBox, stroke=currentColor). The path
@@ -543,6 +552,22 @@ function unpushedPill(pr) {
   ]
 }
 
+// checkoutPill — this PR has a local checkout assigned for Claude write turns
+// (state.checkout, from GET /api/chat/checkout via kickOffCheckout). Shows the
+// directory's own last path segment — a colourless, neutral fact, not a
+// warning like unpushedPill, so it gets its own sky tint rather than reusing
+// amber/rose. Word + glyph, never colour alone, same as every other pill
+// here; returned as a keyed array for the same async-backfill reason.
+function checkoutPill(pr) {
+  const c = pr.hasGraph ? state.checkout[prUid(pr)] : null
+  if (!c || !c.dirName) return []
+  return [
+    chip(c.dirName, 'bg-sky-500/15 text-sky-700 dark:text-sky-300 ring-sky-500/30', 'checkout-badge', 'folder').key(
+      'checkout:' + c.dirName,
+    ),
+  ]
+}
+
 function commentsBit(pr) {
   if (!pr.comments) return null
   return html`<span class="inline-flex items-center gap-1 text-[12px] text-slate-500 dark:text-zinc-500"
@@ -687,7 +712,7 @@ function rowInner(pr, opts) {
     `,
     html`
       <div class="flex shrink-0 items-center gap-3">
-        ${statusArea(pr)} ${() => approvalPill(pr)} ${() => unpushedPill(pr)} ${commentsBit(pr)} ${() => graphChip(pr)} ${chevronFilled('h-4 w-4 text-slate-400 dark:text-zinc-600 group-hover:text-slate-600 dark:group-hover:text-zinc-300')}
+        ${statusArea(pr)} ${() => approvalPill(pr)} ${() => unpushedPill(pr)} ${() => checkoutPill(pr)} ${commentsBit(pr)} ${() => graphChip(pr)} ${chevronFilled('h-4 w-4 text-slate-400 dark:text-zinc-600 group-hover:text-slate-600 dark:group-hover:text-zinc-300')}
       </div>
     `,
   ]
@@ -2112,6 +2137,7 @@ async function loadInbox() {
         kickOffStatuses(gen)
         kickOffApprovals(gen)
         kickOffPendingPush(gen)
+        kickOffCheckout(gen)
         return
       }
     }
@@ -2451,6 +2477,27 @@ async function kickOffPendingPush(gen) {
     }
   } catch (e) {
     // pending-push backfill is best-effort — rows just show no badge
+  }
+}
+
+// kickOffCheckout backfills the checkout badge (GET /api/chat/checkout),
+// mirroring kickOffPendingPush exactly.
+async function kickOffCheckout(gen) {
+  const keys = []
+  state.sections.forEach((sec) => sec.prs.forEach((pr) => pr.hasGraph && keys.push(prUid(pr))))
+  if (!keys.length) return
+  try {
+    const res = await fetch('/api/chat/checkout?prs=' + encodeURIComponent(keys.join(',')))
+    if (!res.ok) return
+    const body = await res.json()
+    if (gen !== loadGen) return // page moved on — drop this response
+    if (body && body.ok && body.checkout) {
+      Object.keys(body.checkout).forEach((k) => {
+        state.checkout[k] = body.checkout[k]
+      })
+    }
+  } catch (e) {
+    // checkout backfill is best-effort — rows just show no badge
   }
 }
 
@@ -3088,6 +3135,7 @@ async function reloadSnapshot() {
       kickOffStatuses(gen)
       kickOffApprovals(gen)
       kickOffPendingPush(gen)
+      kickOffCheckout(gen)
     }
   } catch (e) {
     // keep the current snapshot on a transient failure

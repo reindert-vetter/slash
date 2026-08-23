@@ -578,6 +578,14 @@ const state = reactive({
   // pendingpush.changed SSE event and on every resync. Ephemeral, never in
   // the URL: it describes the repo's state, not a navigation position.
   pendingPush: null,
+  // checkout — this PR's shared local checkout Claude edits directly for a
+  // write turn (chat_checkout.go/todo/todo-local-checkout-chat-edits.md), or
+  // null before the first load. Read from GET /api/chat/checkout:
+  // { pr, runId, dir, dirName, branch, decision, stashPending }. Drives the
+  // checkout chip in prInfoCard's pr-info-theme-row. Refetched on the
+  // checkout.changed SSE event; ephemeral, never in the URL, same reasoning
+  // as pendingPush above.
+  checkout: null,
   // blocksStale — the server swapped this PR's blocks (an ingest refresh pulled
   // in new commits, or a re-ingest ran) AFTER this tab loaded them, so the whole
   // tree below is one version behind. Set by the blocks.changed SSE handler,
@@ -4288,6 +4296,64 @@ function pendingPushFiles() {
   return new Set(p && Array.isArray(p.files) ? p.files : [])
 }
 
+// loadCheckout fetches this PR's shared local-checkout state (the checkout
+// chip in prInfoCard) — GET /api/chat/checkout, chat_checkout.go's
+// buildCheckoutView. Assigns the whole object (or null) rather than mutating
+// it, same reactivity reasoning as loadPendingPush. Best-effort: offline
+// simply keeps whatever we had.
+async function loadCheckout() {
+  try {
+    const res = await fetch(`/api/chat/checkout?prs=${encodeURIComponent(prUidHere())}`)
+    if (!res.ok) return
+    const data = await res.json()
+    const row = data && data.checkout ? data.checkout[prUidHere()] : null
+    state.checkout = row || null
+  } catch (_) {
+    /* offline — keep whatever we have */
+  }
+}
+
+// sendCheckoutAction fires one of the checkout chip's four Actions
+// (checkoutRelist/checkoutAnswer/checkoutOff/checkoutRestoreStash) on the
+// PR's chat_merge queue — never a direct write from here. The queue
+// Execution is ensured FIRST, every time: unlike pushPendingWork (only
+// reachable once something has already landed, which already guarantees the
+// queue exists), the checkout chip is reachable before anything has ever
+// landed/relisted for this PR, so the Execution may genuinely not exist yet.
+// StartWorkflowID is idempotent, so ensuring an already-running queue costs
+// nothing extra.
+//
+// The response only says the Signal was accepted; the outcome arrives as a
+// checkout.changed event (which refetches the read model) — same
+// fire-and-refetch shape as pushPendingWork.
+async function sendCheckoutAction(action, reply) {
+  let runId = state.checkout && state.checkout.runId
+  try {
+    const res = await fetch('/api/workflows/chat_merge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pr: state.pr, repo: state.repo }),
+    })
+    if (res.ok) {
+      const data = await res.json()
+      if (data.runId) runId = data.runId
+    }
+  } catch (_) {
+    /* best-effort */
+  }
+  if (!runId) return
+  try {
+    await fetch(`/api/workflows/${runId}/signals/merge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(reply ? { action, reply } : { action }),
+    })
+  } catch (_) {
+    /* best-effort */
+  }
+  loadCheckout()
+}
+
 // loadExplanations fetches the PR's AI unit-explanations into state (keyed
 // `${blockId}|${unitKey}`). Best-effort: a transient failure just yields no
 // rows. Reassigns the map wholesale so the footer watch re-fires when a
@@ -7128,6 +7194,54 @@ function claudeChatCommandsFor() {
     label: 'Probeer de mislukte turn opnieuw',
     hint: 'opnieuw',
     run: () => retryClaudeTurn(),
+  })
+  return withClose(items)
+}
+
+// checkoutChipCommandsFor — Enter/click on the checkout chip in prInfoCard.
+// Dynamic, built fresh on every open (mirrors pushTodoConfirmCommands): a
+// pending chatCheckoutDecision (whichever stage — chooseDirectory,
+// reuseMerged, dirtyTree, divergedHistory, see chat_checkout.go) offers its
+// own Options as commands, each answered via the SAME "checkoutAnswer"
+// Action a chat-driven answer already uses — one mechanism, two entry
+// points. With nothing pending, the root action is "andere directory
+// kiezen" ("opnieuw zoeken" was dropped: with no cache to bypass, it would
+// do nothing a bare relist doesn't already do). "Nu terugzetten" only
+// appears while a stash is actually waiting; "Uit" is always offered last.
+function checkoutChipCommandsFor() {
+  const c = state.checkout || {}
+  const items = []
+  const decision = c.decision
+  if (decision && Array.isArray(decision.options) && decision.options.length) {
+    decision.options.forEach((opt, i) => {
+      items.push({
+        id: 'checkout-opt-' + i,
+        label: opt,
+        hint: 'kies',
+        run: () => sendCheckoutAction('checkoutAnswer', opt),
+      })
+    })
+  } else {
+    items.push({
+      id: 'checkout-choose',
+      label: 'Andere directory kiezen',
+      hint: 'kies',
+      run: () => sendCheckoutAction('checkoutRelist'),
+    })
+  }
+  if (c.stashPending) {
+    items.push({
+      id: 'checkout-restore-stash',
+      label: 'Nu terugzetten (eerder opgeslagen wijziging)',
+      hint: 'stash',
+      run: () => sendCheckoutAction('checkoutRestoreStash'),
+    })
+  }
+  items.push({
+    id: 'checkout-off',
+    label: 'Uit (geen directory koppelen)',
+    hint: 'uit',
+    run: () => sendCheckoutAction('checkoutOff'),
   })
   return withClose(items)
 }
@@ -11359,6 +11473,7 @@ async function openGithubLine() {
 function rootCommandsFor(mode) {
   if (mode === 'comment') return commentCommandsFor()
   if (mode === 'claude') return claudeChatCommandsFor()
+  if (mode === 'checkout') return checkoutChipCommandsFor()
   if (mode === 'prComment') return prCommentCommandsFor()
   if (mode === 'pushTodo') return pushTodoCommandsFor()
   if (mode === 'task') return taskCommandsFor()
@@ -11569,6 +11684,11 @@ function resolveCommandsInner(query) {
   // shape, just its own small list (one command behind its own confirm
   // submenu, one more conditional on claudeAnchorIsPlaceholder()).
   if (ms.mode === 'claude') return filterCommands(ms.commands, query)
+  // The checkout-chip menu (Enter/click on the chip in prInfoCard — see
+  // checkoutChipCommandsFor): same shape, its own small dynamic list, no
+  // typed-query filtering needed for 2-4 fixed rows, but filterCommands is
+  // harmless to run regardless (an empty query matches everything).
+  if (ms.mode === 'checkout') return filterCommands(ms.commands, query)
   // The comment-INDEX-item menu (Enter on a selected comment row in the
   // sidebar — see selectedComment/prCommentCommandsFor): the fixed action list
   // (Beantwoorden/Resolve/Verwijder/Chat met Claude/...), PLUS its own
@@ -13242,7 +13362,7 @@ let lastIndexRowRect = null
 // pr-info-column only exists in the DOM while showDescription is true, so the
 // selectors below always resolve while this returns true.
 function isDescriptionMenu() {
-  return state.showDescription && ms.mode === 'pr'
+  return state.showDescription && (ms.mode === 'pr' || ms.mode === 'checkout')
 }
 
 function menuAnchor() {
@@ -13781,6 +13901,80 @@ function prMenuButton() {
   `
 }
 
+// checkoutFolderGlyph/checkoutAlertGlyph — the two chip glyphs
+// (checkoutChip below), 24x24 outline SVGs matching prMenuButton's own
+// inline-SVG convention in this file (no shared icon registry here, unlike
+// overview.mjs). Per the colourblind rule the SHAPE (folder vs. triangle)
+// plus the label word carry the meaning — colour is pure decoration.
+function checkoutFolderGlyph() {
+  return html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-3 w-3" aria-hidden="true">
+    <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path>
+  </svg>`
+}
+function checkoutAlertGlyph() {
+  return html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-3 w-3" aria-hidden="true">
+    <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path>
+    <path d="M12 9v4"></path>
+    <path d="M12 17h.01"></path>
+  </svg>`
+}
+
+// checkoutChipLabel/-Title/-Cls: word + glyph carry the state (see the
+// colourblind rule) — "Geen directory" before anything ever loaded/resolved,
+// "Keuze nodig" while chat_checkout.go has a pending chatCheckoutDecision,
+// otherwise the assigned directory's own last path segment.
+function checkoutChipLabel() {
+  const c = state.checkout
+  if (!c) return 'Geen directory'
+  if (c.decision) return 'Keuze nodig'
+  if (c.dirName) return c.dirName
+  return 'Geen directory'
+}
+function checkoutChipTitle() {
+  const c = state.checkout
+  if (!c) return 'Lokale checkout voor Claude-aanpassingen: nog niet geladen'
+  if (c.decision) return c.decision.body || 'Er moet iets over de lokale checkout worden besloten'
+  if (c.dir) return 'Claude werkt in ' + c.dir + (c.branch ? ' (branch ' + c.branch + ')' : '')
+  return 'Geen lokale checkout gekoppeld — klik om een directory te kiezen'
+}
+function checkoutChipCls() {
+  const c = state.checkout
+  const base =
+    'inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[11px] font-medium ring-1 ring-inset transition-colors '
+  if (c && c.decision) {
+    return base + 'text-amber-700 dark:text-amber-400 ring-amber-300 dark:ring-amber-500/40 hover:bg-amber-50 dark:hover:bg-amber-500/10'
+  }
+  if (c && c.dirName) {
+    return base + 'text-sky-700 dark:text-sky-400 ring-sky-200 dark:ring-sky-500/30 hover:bg-sky-50 dark:hover:bg-sky-500/10'
+  }
+  return base + 'text-slate-500 dark:text-zinc-400 ring-slate-200 dark:ring-zinc-700 hover:bg-slate-100 dark:hover:bg-zinc-800'
+}
+
+// checkoutChip — the chip next to autoWarnToggleButton/themeToggleButton in
+// prInfoCard's pr-info-theme-row: which local checkout (if any) a
+// claude_chat write turn edits directly for this PR (chat_checkout.go).
+// Click opens checkoutChipCommandsFor() through the same small command-menu
+// mechanism prMenuButton/autoWarnToggleButton's row already sits in (mode
+// 'checkout', anchored on pr-info-card via isDescriptionMenu — see
+// menuAnchor/menuRegion). The glyph toggle sits behind a STABLE element root
+// (never a bare `${() => cond ? A : B}` as a template's entire body) per the
+// arrow.js pitfall of a keyed/toggling template corrupting a neighbouring
+// binding — see .claude/rules/arrowjs-pitfalls.md, stepChevronSlot's own fix.
+function checkoutChip() {
+  return html`
+    <button
+      type="button"
+      data-testid="checkout-chip"
+      title="${() => checkoutChipTitle()}"
+      class="${() => checkoutChipCls()}"
+      @click="${() => openMenu('checkout')}"
+    >
+      <span class="contents">${() => (state.checkout && state.checkout.decision ? checkoutAlertGlyph() : checkoutFolderGlyph())}</span>
+      <span>${() => checkoutChipLabel()}</span>
+    </button>
+  `
+}
+
 // prInfoCard is built in two layers: everything readable scrolls inside
 // `pr-info-scroll` (which owns the card's `overflow-auto` + `gap-3`), and the
 // status pills sit BELOW that scroller as a fixed card footer
@@ -13879,6 +14073,7 @@ function prInfoCard(state) {
         <div class="flex items-center gap-1.5">
           ${prMenuButton()}
           ${autoWarnToggleButton()}
+          ${checkoutChip()}
           ${themeToggleButton('h-7 w-7 bg-slate-50 dark:bg-zinc-800 ring-1 ring-slate-200 dark:ring-zinc-700')}
         </div>
       </div>
@@ -15514,6 +15709,7 @@ if (state.mode === 'list' && hadInitialSelParam && !testColumnPending)
 loadBlocks()
 loadPRMeta()
 loadPendingPush()
+loadCheckout()
 ensurePraiseWords()
 pollWorkflows()
 setInterval(pollWorkflows, WORKFLOWS_POLL_MS)
@@ -15540,6 +15736,10 @@ onEvent('testcovers.changed', () => loadTestCovers())
 // bottom of the index and the per-block "ongepusht" marking both read that one
 // read model, so one refetch covers both.
 onEvent('pendingpush.changed', () => loadPendingPush())
+// The checkout chip's own state (a directory got assigned/freed, a decision
+// needs answering, a stash got restored) — fired both by the checkout-menu
+// Actions and by an ordinary chat turn resolving it on its own.
+onEvent('checkout.changed', () => loadCheckout())
 // The pr_status tracker re-derived the PR-info column's data (typically the
 // "Sinds jouw laatste review" block, whose Haiku explanation lands seconds
 // after pollPRMeta already stopped) — one refetch, per the event-bus contract
@@ -15574,4 +15774,5 @@ onEventsResync(() => {
   loadCallResolve()
   loadTestCovers()
   loadPendingPush()
+  loadCheckout()
 })
