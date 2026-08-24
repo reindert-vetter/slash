@@ -101,6 +101,29 @@ const (
 	// than an ordinary inline question bubble; the impact of getting this
 	// wrong is a real, possibly-in-use checkout, not just a chat answer.
 	KindDirectoryDecision = "directory_decision"
+	// KindCancelled marks a turn the reviewer deliberately stopped mid-flight
+	// (the "Stop" control next to claude-chat-status, see
+	// .claude/docs/claude-chat-panel.md) — distinct from KindError on purpose:
+	// nothing actually went wrong, so the UI must say "afgebroken", never
+	// "foutmelding". Occupies the SAME row id as the turn it interrupts
+	// (chatMessageID), like KindRetrying does, so a cancelled attempt replaces
+	// its own in-progress placeholder rather than adding a second bubble. Like
+	// KindError, the workflow keeps this turn's input as lastFailedTurn so a
+	// later "Opnieuw proberen" (chatActionRetry) can run it again — but,
+	// unlike KindError, the automatic backoff ladder is skipped immediately:
+	// a deliberate cancel must never quietly restart itself a few seconds
+	// later (see chat_cancel.go and the regression test
+	// TestCancelledTurnDoesNotAutoRetry).
+	KindCancelled = "cancelled"
+	// KindCleanupChoice offers to discard/stash whatever a cancelled shell
+	// attempt left behind in the PR's shared local checkout
+	// (offerCancelCleanupIfDirty, chat_workflow.go) — visually a question
+	// (Options, same rendering as KindQuestion/KindDirectoryDecision), but
+	// answered through its OWN chatActionCleanup Signal action, never through
+	// the ordinary answer/resume round trip: resolving it must never silently
+	// start a new Claude call (see applyCancelCleanup's own doc comment in
+	// chat_checkout.go).
+	KindCleanupChoice = "cleanup_choice"
 )
 
 // Message is one turn in a conversation.

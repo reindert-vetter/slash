@@ -96,6 +96,16 @@ const (
 	// rather than joined by a second copy of the reviewer's message. Carries no
 	// Body of its own, like "commit"/"clear". A no-op when nothing failed.
 	chatActionRetry = "retry"
+	// chatActionCleanup resolves a chat.KindCleanupChoice bubble (the "what do
+	// you want to do with what a cancelled turn left in the checkout?"
+	// follow-up, see offerCancelCleanupIfDirty) — Body carries the reviewer's
+	// chosen option verbatim (optDiscard/optStashManual/optStashAuto/
+	// optKeepSeparate/optKeepCombined, chat_checkout.go). Deliberately its own
+	// action rather than an ordinary reply: unlike chat.KindDirectoryDecision,
+	// resolving this must NEVER resume the original request with a new Claude
+	// call (see applyCancelCleanup's own doc comment) — it only performs the
+	// chosen git housekeeping and reports the outcome.
+	chatActionCleanup = "cleanup"
 )
 
 // chatRetryDelays is the automatic backoff ladder for a failed Claude call:
@@ -279,6 +289,21 @@ func claudeChatWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			continue
 		}
 
+		// Resolve a chat.KindCleanupChoice bubble left by a cancelled shell
+		// attempt (offerCancelCleanupIfDirty) — no Claude call, ever: this only
+		// performs git housekeeping and reports the outcome, on purpose (see
+		// chatActionCleanup's own doc comment for why NOT the ordinary
+		// answer/resume path). Decided purely by sig.Action, part of the
+		// Signal's own recorded input — deterministic under replay.
+		if sig.Action == chatActionCleanup {
+			if err := w.ExecuteActivity("applyCancelCleanup", chatCancelCleanupInput{
+				Repo: in.Repo, PR: in.PR, ConversationID: in.CommentID, Choice: sig.Body,
+			}, nil); err != nil {
+				return nil, fmt.Errorf("apply cancel cleanup: %w", err)
+			}
+			continue
+		}
+
 		// "Opnieuw proberen": re-run the turn whose automatic ladder ran out,
 		// with its OWN recorded input — same TurnID, so its failed bubble is
 		// replaced rather than joined by a second copy of the reviewer's
@@ -317,10 +342,13 @@ func claudeChatWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		// The ladder is exhausted: the turn stands as "mislukt" until the
-		// reviewer asks for it again (chatActionRetry above). Its input is kept
-		// verbatim so that retry is the very same turn.
-		if result.Message.Kind == chat.KindError {
+		// The ladder is exhausted (KindError), or the reviewer cancelled it
+		// (KindCancelled, which deliberately SKIPS the ladder — see
+		// chatCancelledMessage): either way the turn stands as "mislukt"/
+		// "afgebroken" until the reviewer asks for it again (chatActionRetry
+		// above). Its input is kept verbatim so that retry is the very same
+		// turn.
+		if result.Message.Kind == chat.KindError || result.Message.Kind == chat.KindCancelled {
 			failed := turn
 			lastFailedTurn = &failed
 			continue
@@ -633,6 +661,52 @@ func chatFailureMessage(ctx context.Context, cm *chat.Module, arg chatTurnInput,
 	return msg
 }
 
+// chatCancelledMessage words + persists the reviewer's own "Stop" as a
+// terminal turn — the honest counterpart to chatFailureMessage: nothing
+// actually went wrong, the reviewer chose to interrupt it, so both the Kind
+// and the wording must say exactly that, never "foutmelding" (see
+// chat.KindCancelled's own doc comment in modules/chat/chat.go). `ctx` here
+// is always the Activity's ORIGINAL, uncancelled context (never the runCtx
+// that just cancelled) — see runOneClaudeTurn's own doc comment — so the
+// message can still actually be persisted.
+func chatCancelledMessage(ctx context.Context, cm *chat.Module, arg chatTurnInput, model string) chat.Message {
+	msg := chat.Message{
+		ID: chatMessageID(arg.TurnID, ""), ConversationID: arg.ConversationID, PR: arg.PR,
+		Role: "assistant", Kind: chat.KindCancelled, Model: model,
+		Body: "Afgebroken op jouw verzoek.",
+	}
+	_ = cm.SaveMessage(ctx, msg)
+	return msg
+}
+
+// offerCancelCleanupIfDirty saves a follow-up chat.KindCleanupChoice bubble
+// offering to discard/stash whatever a just-cancelled SHELL attempt left
+// behind in dir, ONLY when dir turns out to actually be dirty — "alleen
+// aanbieden als er echt iets is aangepast" (reviewer decision): a cancel that
+// landed before Claude's own Edit/Bash tool calls touched anything leaves
+// nothing to clean up, and this is then a silent no-op.
+//
+// Deliberately its own small mechanism, NOT chat_checkout.go's
+// chatCheckoutDecision/a.Pending machinery (see applyCancelCleanup's own doc
+// comment for why): that machinery's resolution path always resumes the
+// ORIGINAL request with a synthetic continuation prompt
+// (chatCheckoutResumedPrompt), which would turn "clean up after my cancel"
+// into "silently start a brand-new Claude call" — exactly what a cancel must
+// never do.
+func offerCancelCleanupIfDirty(ctx context.Context, cm *chat.Module, arg chatTurnInput, dir string) {
+	dirty, err := checkoutIsDirty(ctx, dir)
+	if err != nil || !dirty {
+		return
+	}
+	msg := chat.Message{
+		ID: chatMessageID(arg.TurnID, "cleanup"), ConversationID: arg.ConversationID, PR: arg.PR,
+		Role: "assistant", Kind: chat.KindCleanupChoice,
+		Body:    fmt.Sprintf("De afgebroken beurt liet niet-gecommitte wijzigingen achter in `%s`. Wat wil je daarmee doen?", dir),
+		Options: []string{optDiscard, optStashManual, optStashAuto, optKeepSeparate, optKeepCombined},
+	}
+	_ = cm.SaveMessage(ctx, msg)
+}
+
 // isNeedWriteDirective reports whether text is exactly the strict
 // {"type":"need_write"} directive (task 3's escalation signal) — the cheap
 // read-only first attempt's way of saying "I need Edit/Bash to do this".
@@ -702,6 +776,20 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 	startChatProgress(arg.Repo, arg.PR, arg.ConversationID)
 	defer finishChatProgress(arg.Repo, arg.PR, arg.ConversationID)
 
+	// runCtx is the ONLY context that ever gets cancelled — by the reviewer's
+	// own "Stop" (POST /api/chat/cancel → cancelChatTurn, chat_cancel.go), via
+	// the CancelFunc registered here for the lifetime of this Activity. It is
+	// used for every piece of OUTBOUND work this turn does (the claude CLI
+	// subprocess, waiting for the write-turn slot, the git/gh checkout prep) —
+	// never for persisting the turn's own outcome, which always uses the
+	// ORIGINAL, uncancelled `ctx` tembed gave this Activity (context.Background(),
+	// see tembed/workflow.go), so a message can still be saved after a cancel.
+	// See chat_cancel.go's own doc comment for why a cancel cannot be a Signal.
+	runCtx, cancel := context.WithCancel(ctx)
+	unregister := registerChatCancel(arg.ConversationID, cancel)
+	defer unregister()
+	defer cancel()
+
 	// t0/logTurnMilestone: a purely operational timing log (server.log), not
 	// reviewer-facing and not persisted anywhere — same carve-out as
 	// chat_progress.go itself. Exists so a slow turn (the claude CLI silently
@@ -728,9 +816,12 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 	// remembers the reviewer's ORIGINAL request.
 	effectiveBody := arg.Body
 	if hasPendingCheckoutDecision(arg.Repo, arg.PR) {
-		release := acquireWriteTurnSlot(ctx, nil)
-		_, decision, ok := prepareChatShellWorkDir(ctx, tm, dataDir, arg.Repo, arg.PR, arg.ConversationID, arg.Body)
+		release := acquireWriteTurnSlot(runCtx, nil)
+		_, decision, ok := prepareChatShellWorkDir(runCtx, tm, dataDir, arg.Repo, arg.PR, arg.ConversationID, arg.Body)
 		release()
+		if runCtx.Err() != nil {
+			return chatCancelledMessage(ctx, cm, arg, chatModelForAttempt(arg.Attempt)), nil
+		}
 		switch {
 		case decision != nil:
 			msg := chat.Message{
@@ -789,9 +880,18 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 	// "Werkmap klaarzetten…" — see chatPhaseStarting/chatPhasePreparing in
 	// chat_progress.go.
 	advanceChatProgress(arg.Repo, arg.PR, arg.ConversationID, chatPhaseStarting)
-	result, err := cl.RunChat(ctx, req)
+	result, err := cl.RunChat(runCtx, req)
 	logTurnMilestone("claude CLI (read-only attempt) returned after %v (err=%v)", time.Since(t0), err)
 	if err != nil {
+		// Checked via runCtx.Err(), never via error-value inspection: exec's own
+		// killed-process error ("signal: killed") does not itself wrap
+		// context.Canceled, so the only reliable signal that THIS was a
+		// deliberate stop (rather than a genuine CLI/process failure) is the
+		// context this Activity itself cancelled. Nothing was editable yet at
+		// this read-only stage, so there is never a checkout to offer stashing.
+		if runCtx.Err() != nil {
+			return chatCancelledMessage(ctx, cm, arg, model), nil
+		}
 		return chatFailureMessage(ctx, cm, arg, model, err), nil
 	}
 	if err := cm.SetSession(ctx, arg.ConversationID, result.SessionID); err != nil {
@@ -811,19 +911,31 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 		// attempt that answers the large majority of turns) stays unlimited
 		// and fully parallel across conversations.
 		waited := false
-		release := acquireWriteTurnSlot(ctx, func() {
+		release := acquireWriteTurnSlot(runCtx, func() {
 			waited = true
 			logTurnMilestone("waiting for the code-turn slot after %v", time.Since(t0))
 			advanceChatProgress(arg.Repo, arg.PR, arg.ConversationID, chatPhaseWaiting)
 		})
 		defer release()
+		// A cancel that arrived while still WAITING for the slot never got to
+		// touch the checkout at all — nothing to offer stashing.
+		if runCtx.Err() != nil {
+			return chatCancelledMessage(ctx, cm, arg, model), nil
+		}
 		if waited {
 			// The wait is over; don't leave "Wacht op…" standing until the
 			// first streamed event happens to replace it.
 			logTurnMilestone("got the code-turn slot after %v", time.Since(t0))
 			advanceChatProgress(arg.Repo, arg.PR, arg.ConversationID, chatPhaseStarting)
 		}
-		dir, decision, ok := prepareChatShellWorkDir(ctx, tm, dataDir, arg.Repo, arg.PR, arg.ConversationID, arg.Body)
+		dir, decision, ok := prepareChatShellWorkDir(runCtx, tm, dataDir, arg.Repo, arg.PR, arg.ConversationID, arg.Body)
+		// A cancel can also land WHILE prepareChatShellWorkDir is resolving the
+		// checkout (a git fetch/checkout/clean can take a moment) — check before
+		// interpreting `decision`/`ok`, which a cancelled context can otherwise
+		// make look like an ordinary "no checkout available" failure.
+		if runCtx.Err() != nil {
+			return chatCancelledMessage(ctx, cm, arg, model), nil
+		}
 		if decision != nil {
 			msg := chat.Message{
 				ID: chatMessageID(arg.TurnID, ""), ConversationID: arg.ConversationID, PR: arg.PR,
@@ -852,9 +964,18 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 			OnEvent:      onEvent,
 		}
 		logTurnMilestone("local prep done after %v, invoking claude CLI (shell attempt)", time.Since(t0))
-		result2, err2 := cl.RunChat(ctx, shellReq)
+		result2, err2 := cl.RunChat(runCtx, shellReq)
 		logTurnMilestone("claude CLI (shell attempt) returned after %v (err=%v)", time.Since(t0), err2)
 		if err2 != nil {
+			if runCtx.Err() != nil {
+				msg := chatCancelledMessage(ctx, cm, arg, model)
+				// The CLI's OWN tool calls (Edit/Bash) may already have touched
+				// `dir` before the kill reached it — offer to clean that up, but
+				// ONLY when there really is something dirty (reviewer decision:
+				// "alleen aanbieden als er echt iets is aangepast").
+				offerCancelCleanupIfDirty(ctx, cm, arg, dir)
+				return msg, nil
+			}
 			return chatFailureMessage(ctx, cm, arg, model, err2), nil
 		}
 		if err := cm.SetSession(ctx, arg.ConversationID, result2.SessionID); err != nil {

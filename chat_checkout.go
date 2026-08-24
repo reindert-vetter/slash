@@ -977,6 +977,100 @@ func chatCheckoutNeedsLanding(ctx context.Context, repo string, pr int) bool {
 	return n > 0
 }
 
+// checkoutIsDirty is the plain "does the working tree have uncommitted
+// changes right now" check offerCancelCleanupIfDirty (chat_workflow.go) and
+// applyCancelCleanup use — deliberately narrower than
+// chatCheckoutNeedsLanding above (that one also counts local commits ahead of
+// origin, which is irrelevant here: a cancelled turn's own tool calls only
+// ever leave uncommitted edits, never a commit).
+func checkoutIsDirty(ctx context.Context, dir string) (bool, error) {
+	out, err := runGitIn(ctx, dir, "status", "--porcelain", "--ignore-submodules=all")
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(string(out)) != "", nil
+}
+
+// chatCancelCleanupInput is applyCancelCleanup's own Activity input —
+// Choice is one of optDiscard/optStashManual/optStashAuto/optKeepSeparate/
+// optKeepCombined, verbatim, as offered on the chat.KindCleanupChoice bubble
+// (offerCancelCleanupIfDirty).
+type chatCancelCleanupInput struct {
+	Repo           string `json:"repo,omitempty"`
+	PR             int    `json:"pr"`
+	ConversationID string `json:"conversationId"`
+	Choice         string `json:"choice"`
+}
+
+// applyCancelCleanup performs the reviewer's chosen cleanup for whatever a
+// cancelled turn's own Edit/Bash tool calls left behind in the PR's shared
+// checkout, and reports the outcome as a plain assistant message in the SAME
+// conversation.
+//
+// Deliberately its OWN small mechanism, NOT chatCheckoutDecision/a.Pending
+// above: that machinery's resolution path (prepareChatShellWorkDirAt's
+// `resolved.Final` branch, chatCheckoutResumedPrompt) exists to let an
+// EARLIER, still-open request continue once the checkout question is
+// answered — so reusing it here would make resolving a post-cancel cleanup
+// choice silently fire a brand-new Claude call, exactly what a reviewer
+// asking to STOP a turn would never expect. This function never touches
+// a.Pending/a.Dir's assignment at all, and never calls prepareChatShellWorkDir
+// — it only runs the chosen git housekeeping against whichever checkout is
+// CURRENTLY assigned to this PR, and re-checks dirtiness itself (the reviewer
+// may take a while to answer, so nothing here is trusted from before).
+func applyCancelCleanup(ctx context.Context, cm *chat.Module, arg chatCancelCleanupInput) {
+	newMsg := func(body string) {
+		msg := chat.Message{
+			ID: "cleanup-" + newUIReactionID(), ConversationID: arg.ConversationID, PR: arg.PR,
+			Role: "assistant", Body: body,
+		}
+		_ = cm.SaveMessage(ctx, msg)
+	}
+	a := getCheckoutAssignment(arg.Repo, arg.PR)
+	if a == nil || a.Dir == "" {
+		newMsg("Er is niets meer om op te ruimen.")
+		return
+	}
+	dir := a.Dir
+	dirty, err := checkoutIsDirty(ctx, dir)
+	if err != nil {
+		newMsg("Kon de status van de checkout niet bepalen.")
+		return
+	}
+	if !dirty {
+		newMsg("Er stond niets meer klaar om op te ruimen.")
+		return
+	}
+	switch arg.Choice {
+	case optDiscard:
+		if err := discardCheckoutDirty(ctx, dir); err != nil {
+			newMsg("Weggooien is mislukt: " + err.Error())
+			return
+		}
+		newMsg("Weggegooid.")
+	case optStashManual, optStashAuto:
+		label := fmt.Sprintf("slash-chat-cancel-%s", time.Now().UTC().Format("20060102-150405"))
+		if err := stashCheckoutDirty(ctx, dir, label); err != nil {
+			newMsg("Stashen is mislukt: " + err.Error())
+			return
+		}
+		a.StashRef = label
+		a.StashDir = dir
+		a.StashAutoRestore = arg.Choice == optStashAuto
+		newMsg("Weggestashed.")
+	case optKeepSeparate:
+		paths, perr := snapshotDirtyPaths(ctx, dir)
+		if perr == nil {
+			a.KeepSeparatePaths = paths
+		}
+		newMsg("Laten staan, buiten een volgende commit gehouden.")
+	case optKeepCombined:
+		newMsg("Laten staan.")
+	default:
+		newMsg("Onbekende keuze — niets gedaan.")
+	}
+}
+
 // checkoutLocalPendingState is the read-only sibling handleChatShadowStatus
 // (tasks_api.go) uses: the PR's ASSIGNED checkout's own dirty/ahead state, no
 // fetch, no resolution attempt, no side effect. exists is false when this PR

@@ -729,6 +729,17 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// turn (chat_progress.go): the resync read for the SSE stream below, not a
 	// poll target.
 	mux.HandleFunc("/api/chat/progress", s.handleChatProgress)
+	// POST /api/chat/cancel {commentId} -> stop the ONE running claude_chat
+	// turn for that conversation right now (chat_cancel.go). Deliberately NOT
+	// a workflow Signal -- Engine.SignalWorkflow would block for exactly as
+	// long as the turn it is trying to interrupt (see chat_cancel.go's own doc
+	// comment) -- so this falls under the same operational,
+	// mutates-no-durable-state carve-out as /heartbeat: it only calls an
+	// in-memory context.CancelFunc, never touches history/module/DB. The
+	// durable outcome (a chat.KindCancelled message) is still written the
+	// ordinary way, by the Activity itself, once its context actually
+	// cancels. See .claude/rules/workflows-write-boundary.md.
+	mux.HandleFunc("/api/chat/cancel", s.handleChatCancel)
 	// GET /api/chat/shadow-status?pr=N&commentId=X → read-only check of whether
 	// a conversation's agentic-edit shadow worktree (chat_shadow.go) has pending
 	// (uncommitted or locally-unpushed) work, so the UI can warn the reviewer
@@ -1202,6 +1213,18 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 				// changed, "clear" wipes the conversation, "retry" re-runs the
 				// turn that finally failed (its body comes from the workflow's own
 				// recorded input, never from here); none of them asks anything new.
+			case chatActionCleanup:
+				// Body must be exactly one of the offered git-housekeeping options
+				// (chat_checkout.go) — this goes straight into a discard/stash git
+				// call (applyCancelCleanup), so it is validated against the known
+				// set here, before it ever reaches that Activity, per the
+				// validate-before-exec rule.
+				switch body.Body {
+				case optDiscard, optStashManual, optStashAuto, optKeepSeparate, optKeepCombined:
+				default:
+					http.Error(w, "invalid cleanup choice", http.StatusBadRequest)
+					return
+				}
 			default:
 				http.Error(w, "invalid action", http.StatusBadRequest)
 				return
@@ -1978,6 +2001,35 @@ func (s *server) handleChatProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "running": true, "progress": p})
+}
+
+// handleChatCancel serves POST /api/chat/cancel {commentId} — see the route
+// registration above for why this is a plain in-memory cancel, never a
+// workflow Signal. commentId is validated as non-empty (per the
+// validate-before-exec rule) and nothing else: cancelChatTurn itself is a
+// no-op, never an error, when nothing is running for it — mirroring
+// handleChatProgress's own "no running turn" non-error shape, so a reviewer
+// clicking "Stop" a moment after the turn already finished on its own sees no
+// error either.
+func (s *server) handleChatCancel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		CommentID string `json:"commentId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	body.CommentID = strings.TrimSpace(body.CommentID)
+	if body.CommentID == "" {
+		http.Error(w, "commentId required", http.StatusBadRequest)
+		return
+	}
+	cancelled := cancelChatTurn(body.CommentID)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "cancelled": cancelled})
 }
 
 // handleChatShadowStatus serves GET /api/chat/shadow-status?pr=N[&commentId=X]

@@ -2764,6 +2764,23 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		enqueueChatMerge(m, arg)
 		return nil, nil
 	})
+	// Activity: resolve a chat.KindCleanupChoice bubble left by a cancelled
+	// shell attempt (offerCancelCleanupIfDirty, chat_workflow.go) — discard/
+	// stash/keep whatever it left in the PR's shared checkout. Deliberately
+	// never calls a Claude client and never resumes the original request; see
+	// applyCancelCleanup's own doc comment (chat_checkout.go).
+	engine.RegisterActivity("applyCancelCleanup", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg chatCancelCleanupInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.chat == nil {
+			return nil, nil
+		}
+		applyCancelCleanup(ctx, m.chat, arg)
+		publishChatChanged(arg.Repo, arg.PR, arg.ConversationID)
+		return nil, nil
+	})
 	// Activity: the chat_merge queue's own per-request work — attempt the
 	// conversation's shadow-worktree push, escalating to an automatic git merge
 	// and, only for a real conflict, one begrensde Claude attempt (write: git

@@ -1278,3 +1278,97 @@ func TestChatFailureTurnUnchangedForAPlainError(t *testing.T) {
 		t.Fatalf("expected the unchanged generic wording, got %q", body)
 	}
 }
+
+// TestCancelledTurnDoesNotAutoRetry is THE regression test for this feature:
+// a reviewer-triggered cancel (POST /api/chat/cancel → cancelChatTurn,
+// chat_cancel.go) must produce a terminal chat.KindCancelled turn and must
+// NEVER fall into the automatic backoff ladder (runChatTurnWithRetries) —
+// unlike an ordinary transient failure, which schedules a durable w.Sleep and
+// silently tries again a few seconds later. If this regressed, a cancelled
+// turn would restart itself behind the reviewer's back, exactly the "grootste
+// val" flagged before building this.
+//
+// SetChatBlockUntilCancel (claude.Fake) makes the turn hang in RunChat until
+// its own ctx is cancelled — the fixture SLASH_CLAUDE_CHAT_TURNS itself
+// cannot express ("still running" has no script entry). Because
+// Engine.SignalWorkflow drives the whole turn INLINE and blocks for as long
+// as it runs (see chat_cancel.go's own doc comment), the Signal is sent on a
+// separate goroutine so the test can call cancelChatTurn from the main one
+// while that Signal call is still blocked.
+func TestCancelledTurnDoesNotAutoRetry(t *testing.T) {
+	stubUnreachableGh(t)
+	m, engine, cm, fake := newChatManager(t)
+	ctx := context.Background()
+	const pr, commentID = 970714, "comment-cancel"
+
+	fake.SetChatBlockUntilCancel(true)
+
+	runID, err := m.StartClaudeChat(ClaudeChatInput{PR: pr, CommentID: commentID})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	signalDone := make(chan error, 1)
+	go func() {
+		signalDone <- engine.SignalWorkflow(runID, SignalMessage, ChatMessageSignal{
+			ID: "msg-1", Author: "reviewer", Body: "Refactor dit hele bestand.",
+		})
+	}()
+
+	// Poll-and-cancel in one step: cancelChatTurn is a no-op (returns false)
+	// until runOneClaudeTurn has actually registered its CancelFunc, and
+	// idempotent once it has, so retrying it is safe.
+	waitFor(t, func() bool { return cancelChatTurn(commentID) })
+
+	select {
+	case err := <-signalDone:
+		if err != nil {
+			t.Fatalf("SignalWorkflow returned an error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancelling the turn did not unblock the blocked Signal call")
+	}
+
+	waitFor(t, func() bool {
+		list, _ := cm.List(ctx, commentID)
+		return len(list) == 2 && list[1].Kind == chat.KindCancelled
+	})
+
+	// The critical assertion: give the workflow's own durable timer every
+	// chance to fire a retry it should never schedule in the first place.
+	// chatRetryDelays[0] is several seconds in production; shrinking it here
+	// would only prove the SHORTENED ladder doesn't fire — the point is that
+	// KindCancelled must skip runChatTurnWithRetries' ladder branch entirely
+	// (chat.KindRetrying is never produced for a cancel), so there is no timer
+	// to wait out at all. A plain, generous real-time wait confirms exactly
+	// that: nothing changes on its own.
+	time.Sleep(150 * time.Millisecond)
+	list, _ := cm.List(ctx, commentID)
+	if len(list) != 2 {
+		t.Fatalf("a cancelled turn must not grow the transcript on its own, got %d rows: %+v", len(list), list)
+	}
+	if list[1].Kind != chat.KindCancelled {
+		t.Fatalf("a cancelled turn auto-changed its own Kind (auto-retried?): %+v", list[1])
+	}
+	if list[1].Body == "" {
+		t.Fatalf("expected a reviewer-facing cancelled message, got empty body")
+	}
+
+	// "Opnieuw proberen" (chatActionRetry) must still work afterwards — a
+	// cancel is not a dead end, just not a SELF-triggered one.
+	fake.SetChatBlockUntilCancel(false)
+	fake.SetChatTurns("Nu wel, in één keer.")
+	if err := engine.SignalWorkflow(runID, SignalMessage, ChatMessageSignal{
+		ID: "msg-2", Author: "reviewer", Action: chatActionRetry,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		list, _ := cm.List(ctx, commentID)
+		return len(list) == 2 && list[1].Kind == ""
+	})
+	list, _ = cm.List(ctx, commentID)
+	if list[1].Body != "Nu wel, in één keer." {
+		t.Fatalf("manual retry after a cancel did not replace the cancelled turn: %+v", list[1])
+	}
+}

@@ -634,6 +634,11 @@ type Fake struct {
 	// real subprocess. Programmed once and reused for every call — a test that
 	// cares about progress drives one turn at a time.
 	chatEvents []ChatEvent
+	// chatBlockUntilCancel makes every RunChat call hang on <-ctx.Done() and
+	// return ctx.Err() instead of consulting chatQueue — the fixture a cancel
+	// test needs (SLASH_CLAUDE_CHAT_TURNS has no way to make a scripted turn
+	// hang until cancelled). See SetChatBlockUntilCancel.
+	chatBlockUntilCancel bool
 }
 
 // NewFake returns an empty Fake.
@@ -735,6 +740,19 @@ func (f *Fake) SetChatModelError(model string, err error) {
 	f.chatModelErrs[model] = err
 }
 
+// SetChatBlockUntilCancel(true) makes every subsequent RunChat call hang
+// until its own ctx is cancelled (returning ctx.Err()), instead of returning
+// the programmed script — a fixture for testing the reviewer-triggered "Stop"
+// (chat_cancel.go): a real Claude turn can be interrupted mid-flight, but
+// nothing in the ordinary chatQueue script can simulate "still running".
+// SetChatBlockUntilCancel(false) reverts to the ordinary script again — e.g.
+// for asserting a manual "Opnieuw proberen" after a cancel actually answers.
+func (f *Fake) SetChatBlockUntilCancel(block bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.chatBlockUntilCancel = block
+}
+
 // SetChatFailures makes the next n RunChat calls fail with err, after which
 // the ordinary programmed script takes over again — a transient outage.
 func (f *Fake) SetChatFailures(n int, err error) {
@@ -753,13 +771,26 @@ func (f *Fake) SetChatFailures(n int, err error) {
 // like Run.
 func (f *Fake) RunChat(ctx context.Context, req RunRequest) (ChatResult, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.Calls = append(f.Calls, req)
 	if req.OnEvent != nil {
 		for _, ev := range f.chatEvents {
 			req.OnEvent(ev)
 		}
 	}
+	block := f.chatBlockUntilCancel
+	f.mu.Unlock()
+	// SetChatBlockUntilCancel's own test hook: block here, past the mutex, so
+	// every other Fake call (progress polling, a second conversation's own
+	// RunChat, CallCount) keeps working normally while this one turn sits
+	// "running" until the test's own ctx is cancelled — exactly what a cancel
+	// test needs, without a real subprocess.
+	if block {
+		<-ctx.Done()
+		return ChatResult{}, ctx.Err()
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.chatErr != nil {
 		return ChatResult{}, f.chatErr
 	}
