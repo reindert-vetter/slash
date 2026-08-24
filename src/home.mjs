@@ -1441,6 +1441,21 @@ watch(
 // immediately. So the baseline is only ever recorded once `b` is truthy, and
 // only a SUBSEQUENT, real block-to-block change may release the panel.
 let lastSelectedBlockRef = undefined
+// visitedCommentSinceOrdinary — true from the moment a comment/comment_group
+// item is selected until the NEXT ordinary block/test_class row is landed on.
+// lastSelectedBlockRef is deliberately never touched while a comment item is
+// selected (see its own comment above — the comment branch is scoped to
+// itself on purpose), so returning to the EXACT SAME ordinary block visited
+// right before that comment reads as `ref === lastSelectedBlockRef` below and
+// used to skip leaveRelated() entirely — even though the comment's own
+// Claude chat (opened via that item's ArrowRight,ArrowRight) had since moved
+// cs.focus to 'claude'. Reported bug: chatting with Claude on block A, then
+// a PR-wide comment elsewhere, then clicking back on A left A's panel stuck
+// showing the comment's stale conversation. This flag widens the ordinary
+// branch's condition to also fire on an unchanged ref whenever a comment was
+// visited in between, without touching the `lastSelectedBlockRef !== undefined`
+// guard itself (still needed for "no baseline yet", see above).
+let visitedCommentSinceOrdinary = false
 // lastFiredSelectionRef guards the whole callback below against a SPURIOUS
 // re-fire: arrow.js's reactive `set` trap notifies subscribers on every
 // assignment, even one that writes back the exact same value (no old!==new
@@ -1516,6 +1531,7 @@ watch(
       // keyboard/focus into it — no comment card gets auto-expanded, only an
       // explicit ArrowRight (onKeydown) hands the keyboard in.
       openCommentAnchorDrill(b)
+      visitedCommentSinceOrdinary = true
       return
     }
     // Landed on anything other than a comment/comment_group item (an
@@ -1524,7 +1540,8 @@ watch(
     closeCommentAnchorDrillIfOwned()
     if (!b) return // state.blocks hasn't loaded yet — nothing to compare
     const ref = b.kind === 'test_class' ? b.id : `${b.file}:${b.line}`
-    if (lastSelectedBlockRef !== undefined && ref !== lastSelectedBlockRef) leaveRelated()
+    if (lastSelectedBlockRef !== undefined && (ref !== lastSelectedBlockRef || visitedCommentSinceOrdinary)) leaveRelated()
+    visitedCommentSinceOrdinary = false
     lastSelectedBlockRef = ref
   },
 )

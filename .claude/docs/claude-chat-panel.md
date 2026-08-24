@@ -463,6 +463,26 @@ Test: the "a mouse click straight onto a different block releases a stale
 claude-focused panel, not just the dedicated exits" case in
 `tests/claude-chat-panel.spec.mjs`.
 
+**Third reported bug in the same family: RETURNING to the exact same
+ordinary block after a comment-index item's own chat left `cs.focus` stuck
+too.** `lastSelectedBlockRef` is deliberately never touched while a
+comment/comment_group item is selected (see "identity-based" above — that
+branch is scoped to itself on purpose), so block A → a PR-wide comment
+elsewhere → chat with ITS conversation → back to block A read as
+`ref === lastSelectedBlockRef` (unchanged) and skipped `leaveRelated()`
+entirely, even though the comment's own chat had since moved `cs.focus` to
+`'claude'`. A real reviewer only hits this returning to the IDENTICAL block
+visited right before the comment — any other block already worked, since its
+`ref` differs. `visitedCommentSinceOrdinary` (plain module state next to
+`lastSelectedBlockRef`) is set whenever the comment branch runs and cleared
+once the ordinary branch runs again; the ordinary branch's condition widened
+from `ref !== lastSelectedBlockRef` to
+`ref !== lastSelectedBlockRef || visitedCommentSinceOrdinary`, so a comment
+visit in between always forces `leaveRelated()` on the next ordinary
+selection, unchanged ref or not — the `lastSelectedBlockRef !== undefined`
+"no baseline yet" guard itself is untouched. Test:
+`tests/related-panel-stale-claude-after-comment.spec.mjs`.
+
 ### The chat column is a function of the selected code (this REPLACED "stay open while a turn is running")
 
 **Read this before "fixing" a running turn that disappears from view — that is
