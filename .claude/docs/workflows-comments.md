@@ -865,6 +865,19 @@ Tests: `TestClaudeChatRetriesTransientFailure`, `TestClaudeChatEscalatesToSonnet
 `TestClaudeChatGivesUpAfterLadder`, `TestClaudeChatManualRetryRerunsFailedTurn`
 (all shrink the ladder to milliseconds via `shrinkChatRetryDelays`).
 
+**A THIRD terminal Kind sits next to `KindRetrying`/`KindError`:
+`chat.KindCancelled`** — the reviewer's own "Stop", not a failure at all. It
+shares `KindError`'s `lastFailedTurn` bookkeeping (so `chatActionRetry` still
+reruns the same turn afterwards) but, unlike `KindError`, is never reached
+THROUGH the ladder — `chatFailureMessage` short-circuits to it (via
+`runCtx.Err()`, never by inspecting the killed subprocess's own error value)
+before `chatFailureTurn`'s retry/backoff decision ever runs, so a cancel can
+never schedule a `w.Sleep` that silently restarts it later. Full mechanism
+(the cancel registry, why it cannot be a Signal, the cleanup-choice follow-up,
+the Stop control, the process-tree kill, the test hook): "Cancelling a running
+turn" in `.claude/docs/claude-chat-panel.md`. Regression test:
+`TestCancelledTurnDoesNotAutoRetry`.
+
 ### `modules/chat` (`data/chat.db`)
 
 `chat_conversations(id, pr, session_id, created_at, updated_at)` +

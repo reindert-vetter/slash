@@ -92,6 +92,25 @@ the comments themselves plus the landed pending ref. It is deliberately KEPT
 after the run finished — see "comment_batch" in
 `.claude/docs/workflows-comments.md`.
 
+Seventh example: `POST /api/chat/cancel` (`chat_cancel.go`, `handleChatCancel`
+in `tasks_api.go`) — stopping the ONE running `claude_chat` turn right now.
+This could NOT be a Signal in the first place: `Engine.SignalWorkflow`
+(`tembed/engine.go`) takes the run's own lock and drives the whole turn
+**inline**, so a Signal aimed at the SAME run would simply block for exactly
+as long as the turn it is trying to interrupt. The endpoint instead calls an
+in-memory `map[conversationID]context.CancelFunc` (`chatCancelByConv`) —
+registered by `runOneClaudeTurn` for the lifetime of its own Activity,
+cancelling only a child context used for the turn's OUTBOUND work (the claude
+CLI subprocess, the write-turn-slot wait, the git/gh checkout prep), never the
+Activity's ability to persist a message. No module, no read-model, no
+workflow-history write, and empty again after a restart — the same shape as
+`chatProgressByConv` right above. Safe because it is not the source of truth
+about anything: the durable outcome of a cancel is the ordinary
+`chat.KindCancelled` message the Activity itself saves once its context
+actually cancels — exactly like any other terminal turn result, written the
+usual way, through the workflow's own Activity, not through this endpoint.
+See "Cancelling a running turn" in `.claude/docs/claude-chat-panel.md`.
+
 ## Exception: the Claude chat turn may act through a shell
 
 Deliberately granted by Reindert, overriding the rule above for this one path.

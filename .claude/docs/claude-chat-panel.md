@@ -2048,6 +2048,158 @@ Fix, `modules/claude/claude.go`:
   and `TestChatFailureTurn*` (three cases — a `Definitive` reason, a
   non-`Definitive` one, and a bare error — `chat_workflow_test.go`).
 
+## Cancelling a running turn (`chat.KindCancelled`, `chat_cancel.go`)
+
+Reviewer request: "ik wil een chat kunnen annuleren als het bezig is met een
+antwoord". The chat itself works exactly as before — this only adds a way to
+stop a turn that is already running.
+
+### Why this cannot be a Signal
+
+`Engine.SignalWorkflow` (`tembed/engine.go`) takes the run's own lock and
+drives the whole turn **inline** before returning — the entire
+`runChatTurnWithRetries`/`runOneClaudeTurn` call happens synchronously inside
+that one call. A "cancel" Signal aimed at the SAME run would therefore simply
+queue up behind the turn it is trying to interrupt and block for exactly as
+long as that turn runs — the opposite of a cancel. See
+`chat_cancel.go`'s own doc comment, and the matching write-boundary carve-out
+in `.claude/rules/workflows-write-boundary.md`.
+
+Instead, `chat_cancel.go` keeps a purely in-memory
+`map[conversationID]context.CancelFunc` (`chatCancelByConv`).
+`runOneClaudeTurn` derives its own `runCtx` (`context.WithCancel(ctx)`) at the
+top of the Activity and registers `cancel` for the conversation's duration;
+`POST /api/chat/cancel {commentId}` (`handleChatCancel`, `tasks_api.go`) just
+looks it up and calls it. `runCtx` is used for every piece of OUTBOUND work
+the turn does — both `cl.RunChat` calls, the write-turn-slot wait
+(`acquireWriteTurnSlot`), and the git/gh checkout prep — **never** for
+persisting the turn's own outcome, which always uses the Activity's
+ORIGINAL, uncancelled `ctx` (tembed always calls an Activity with
+`context.Background()`, see `tembed/workflow.go`), so a `chat.KindCancelled`
+message can still actually be saved after the cancel fires.
+
+Cancellation is detected via `runCtx.Err() != nil` at each of the points that
+context could have made a difference — never by inspecting the error VALUE a
+killed `claude` subprocess returns (`cmd.Wait()`'s own `*exec.ExitError` does
+not itself wrap `context.Canceled`, even though `exec.CommandContext` caused
+the kill).
+
+### `chat.KindCancelled` — a NEW Kind, deliberately not `KindError`
+
+The reviewer was explicit: "afgebroken", not a foutmelding — nothing actually
+went wrong. `chatCancelledMessage` (`chat_workflow.go`) saves this Kind and a
+plain "Afgebroken op jouw verzoek." body. The workflow's own
+`lastFailedTurn`/"Opnieuw proberen" bookkeeping treats `KindCancelled` exactly
+like `KindError` (same TurnID kept, so `chatActionRetry` reruns the very same
+turn) — the ONE deliberate difference is that `runChatTurnWithRetries`'
+automatic backoff ladder is **skipped entirely** for a cancel: a
+`chat.KindCancelled` result is never `chat.KindRetrying`, so there is no
+durable `w.Sleep` scheduled at all, and therefore nothing that could restart
+the turn behind the reviewer's back. (This was flagged up front as the single
+biggest risk of building this feature the naive way — a killed process just
+looks like any other transient failure to the existing ladder — and is the
+one thing `TestCancelledTurnDoesNotAutoRetry` exists to pin down.)
+
+Frontend: `chatKindBadge`/`claudeBubble` (`ClaudeChat.mjs`) give it its OWN
+tint (neutral slate/zinc — deliberately **not** the rose of `KindError` or the
+amber of `KindRetrying`, which already mean something else) plus the badge
+word "afgebroken" and a stop-square glyph — word carries the meaning, per the
+colourblind rule. `canRetry` (the "Opnieuw proberen" button) now also fires on
+`kind === 'cancelled'`, on the same "last message of the transcript" gate as
+`KindError`.
+
+### The Stop control: mouse + keyboard, per `.claude/docs/mouse-navigation.md`
+
+- **Mouse:** a "Stop" button (`data-testid=claude-chat-cancel`) next to
+  `claude-chat-status` in `CommentClaudeFooter` (`RelatedPanel.mjs`), visible
+  exactly while `hasActiveClaudeTurn()` is true. Calls `cancelClaudeTurn()`
+  (`RelatedPanel.mjs`), a plain `POST /api/chat/cancel {commentId: cc.commentId}`.
+- **Keyboard:** "Stop deze Claude-beurt" in `claudeChatCommandsFor()`
+  (`home.mjs`) — same `cancelClaudeTurn()` call. Listed **unconditionally**,
+  same reasoning as "Probeer de mislukte turn opnieuw" right above it: the
+  endpoint is a silent no-op when nothing is running, cheaper than teaching
+  the menu to inspect `chat_progress` state. Deliberately **last** in that
+  menu, never first (the reflexive-Enter rule this file already documents for
+  the retry item).
+- The client-side reviewer-typed **queue** (`cc.queued`/`drainClaudeQueue`,
+  "Doorpraten tijdens een lopende turn" below) is deliberately **untouched**
+  by a cancel — only the currently running turn is interrupted; whatever the
+  reviewer already queued up drains normally right after (the blocked
+  `fetch()` for the cancelled turn's own Signal call finally returns once
+  `SignalWorkflow` unblocks, and `sendClaudeMessage`'s own `finally` calls
+  `drainClaudeQueue()` exactly as it does for an ordinary turn).
+
+### Cleaning up after a cancel: `chat.KindCleanupChoice`
+
+Reviewer decision: if the just-cancelled turn's OWN shell attempt had already
+started editing the PR's shared checkout (its Edit/Bash tool calls run before
+the kill reaches the CLI), offer to discard/stash that — but **only** when
+there really is something dirty. `offerCancelCleanupIfDirty`
+(`chat_workflow.go`) checks `git status --porcelain` on the checkout the shell
+attempt was using right after a cancel is detected on that attempt
+specifically (never on the read-only attempt, which never has file access at
+all) and, only if dirty, saves a second bubble
+(`chat.KindCleanupChoice`, purple tint, same rendering as
+`chat.KindDirectoryDecision`'s option chips) offering the same five choices
+`chat_checkout.go` already has for an unrelated dirty tree (`optDiscard`/
+`optStashManual`/`optStashAuto`/`optKeepSeparate`/`optKeepCombined`).
+
+**Deliberately its own small mechanism, NOT `chatCheckoutDecision`/
+`a.Pending`'s existing answer/resume round trip.** That machinery
+(`prepareChatShellWorkDirAt`'s `hasPendingCheckoutDecision` check at the top of
+`runOneClaudeTurn`) exists so an EARLIER, still-open request can continue once
+a checkout question is answered — its non-`Final` resolutions fall through to
+`effectiveBody = chatCheckoutResumedPrompt`, which calls Claude AGAIN with a
+synthetic "ga verder" prompt. Reusing that for a post-cancel cleanup choice
+would make resolving it **silently start a brand-new Claude call** — exactly
+what a reviewer who just pressed Stop would never expect. So the cleanup
+choice is answered through its own dedicated Signal action instead
+(`chatActionCleanup = "cleanup"`, validated server-side against the five known
+option strings before it ever reaches git, per the validate-before-exec
+rule), handled by its own workflow branch (no Claude call, ever — mirrors
+`chatActionClear`/`chatActionCommit`) and its own Activity
+(`applyCancelCleanup`, `chat_checkout.go`), which re-checks dirtiness fresh
+(the reviewer may take a while to answer) and performs the chosen git
+housekeeping directly against whichever checkout is currently assigned to the
+PR. `resolveCancelCleanup(choice)` (`RelatedPanel.mjs`) is the frontend send
+path; `claudeQuestionOptions` (`ClaudeChat.mjs`) routes a click on a
+`cleanup_choice` bubble's chips through `onCleanup` instead of the ordinary
+`onSend`.
+
+If the reviewer never resolves it (or retries the original request without
+resolving it first), nothing is silently lost: the very next shell attempt
+that reclassifies this same checkout directory
+(`prepareChatShellWorkDirAt`'s ordinary `a.Dir != ""` branch) will find it
+still dirty and raise the SAME kind of "what do you want to do with this"
+question again, through the pre-existing `chatCheckoutDirtyDecision` path —
+this cleanup bubble is a proactive convenience on top of that existing safety
+net, not the only thing standing between a cancel and a silently overwritten
+edit.
+
+### Process-tree cleanup (`killOwnProcessGroup`, `modules/claude/claude.go`)
+
+Both `exec.CommandContext` call sites (`Run`/`RunChat`) now make the `claude`
+process the leader of its own process group (`SysProcAttr{Setpgid: true}`) and
+override `cmd.Cancel` to `kill(-pid, SIGKILL)` the whole group instead of the
+exec package's own default of killing only `cmd.Process`. Without this, an
+agentic turn's own Bash tool calls (real child processes of `claude`, not of
+this Go process) kept running after a cancel — the UI already said
+"afgebroken" while a child process quietly continued. POSIX-only
+(`Setpgid`/negative-pid `kill`), matching every other platform assumption
+already in this codebase.
+
+### Testing: `SetChatBlockUntilCancel` (`modules/claude.Fake`)
+
+`SLASH_CLAUDE_CHAT_TURNS` (see "Testing hook" below) has no way to express
+"this turn is still running" — every scripted entry is a finished answer.
+`Fake.SetChatBlockUntilCancel(true)` makes every subsequent `RunChat` call
+hang on `<-ctx.Done()` and return `ctx.Err()` instead, so a Go test can drive
+the whole cancel path (register → cancel → `chat.KindCancelled` saved → the
+retry ladder never fires) without a real subprocess. See
+`TestCancelledTurnDoesNotAutoRetry` (`chat_workflow_test.go`) — the load-
+bearing regression test for this entire feature, run on a separate goroutine
+from the blocking `SignalWorkflow` call it is cancelling out from under.
+
 ### A rejected Signal must not be silent
 
 `sendClaudeMessage` (`RelatedPanel.mjs`) used to `await fetch(...)` and never
