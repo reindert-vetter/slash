@@ -828,7 +828,7 @@ turn's own (fast, canned) lifecycle — asserting the OTHER conversation's row
 fetches and shows the first sentence of the real message actually sent, not
 the old fallback.
 
-### ↑/↓ walk a tall bubble 10 rendered lines at a time, before stepping to the next one
+### ↑/↓ walk a tall bubble 4 rendered lines at a time, before stepping to the next one
 
 Reviewer request: the thread is deliberately not tall (`max-h-[38vh]`), which
 is fine, but a single long Claude answer (one bubble — e.g. a big bulleted
@@ -845,8 +845,9 @@ untouched). It resolves the DOM node of the CURRENTLY active bubble
 math: `cc.messages.length - cs.claudePos`) and, if that bubble's own edge in
 the requested direction is not yet visible inside `claude-chat-thread` (its
 top for `'up'`, its bottom for `'down'`), scrolls the thread by
-`CLAUDE_BUBBLE_SCROLL_LINES` (10) times the bubble's own computed
-`line-height` — **10 rendered/word-wrapped lines as they sit on screen**,
+`CLAUDE_BUBBLE_SCROLL_LINES` (4, briefly tried at 10 in the same reviewer
+conversation, then corrected back down) times the bubble's own computed
+`line-height` — **4 rendered/word-wrapped lines as they sit on screen**,
 not literal `\n` characters in the markdown. Returns `true` (the keypress is
 consumed, `cs.claudePos` stays put) the moment it actually scrolled; `false`
 the instant the requested edge is already visible, at which point the
@@ -859,24 +860,49 @@ usual. Symmetric in both directions (explicit reviewer answer — not only
 own transcript; `'thread'`'s reaction walk (`cs.threadPos`) is unaffected —
 not asked, and reaction bubbles are typically short.
 
-### The `claude-chat-thread`/`comment-thread`/`comment-detail-thread` top (and bottom) fade got taller
+### `claude-chat-thread`'s top fade sits flush against the card's own edge — the menu button now floats instead of reserving a row
 
 Reviewer follow-up on the same screenshot ("top heeft nog veel ruimte, blur
-kan verder omhoog"): these three panes sit in a card with real unused
-vertical room above their first rendered line, and `scrollHint`'s default
-`h-7` fade (`Block.mjs`) read as an abrupt little bar rather than a real fade
-into that space. `scrollHint(dir, tall)` gained an optional second argument —
-`tall` swaps `h-7` for `h-16` — passed `true` at exactly these three call
-sites (`ClaudeChat.mjs`'s `claude-chat-thread`, `RelatedPanel.mjs`'s
-`comment-thread` and `comment-detail-thread`), both the `'up'` and `'down'`
-hint for each (symmetry, not asked against but no reason to leave the bottom
-one small). The DIFF panes (every other `scrollHint` call site in `Block.mjs`,
-plus `Footer.mjs`'s own) are untouched — they sit flush against their pane
-header/edge with no such spare room, and widening them was never asked for.
-Purely a `class` change: `updateScrollHints`/`updateHints` already position
-each hint off the SCROLLER's own measured edge (`top`/`bottom` inline
-styles), never off this static height, so no positioning logic needed to
-change.
+kan verder omhoog"), then a correction once a first attempt widened the fade
+itself instead ("ik bedoel niet dat het hoger moet, maar meer naar boven,
+tegen de rand aan") — **not** a taller fade (that attempt, `scrollHint(dir,
+tall)` swapping `h-7` for `h-16`, was reverted in full; `scrollHint` is back
+to its original one-argument signature, `h-7` everywhere, including
+`comment-thread`/`comment-detail-thread`), but the existing small fade
+**repositioned** to actually touch the card's true top edge.
+
+**Root cause:** `updateScrollHints` (`scrollFade.mjs`) already anchors the
+"up" hint to the SCROLLER's own measured edge, not its wrapper's — that part
+was always correct. The gap was structural, one level higher: `claude-chat-
+card`'s own top-right menu button (`claudeMenuButton`) used to sit in its OWN
+flex row (`<div class="flex items-center justify-end gap-2">…</div>`), a
+sibling BEFORE the `relative min-h-0 flex-1` wrapper that holds the scroller.
+That row's own height (a `h-6` button) plus the card's `gap-2` between its
+children pushed the scroller — and therefore the fade, which can only ever
+cover the scroller's own box — down by ~32px below the card's real top edge,
+on top of the card's own `p-3` inset. The fade was rendering exactly where it
+was told to; the reserved, mostly-empty row above it was the actual problem.
+
+**Fix:** `claude-chat-card` gained `relative`, and the menu-button row was
+replaced by an absolutely positioned `<div class="absolute right-2 top-2
+z-20">` holding the same `claudeMenuButton` — so it now floats over the top
+of the thread instead of reserving its own row, and the `relative min-h-0
+flex-1` wrapper (and thus the scroller and its fade) becomes the card's
+effectively-first piece of content, right after the card's own `p-3`
+padding. `claude-chat-empty`'s paragraph (the "Nog geen gesprek…" filler,
+the one full-width text that could otherwise wrap underneath the floating
+icon) gained `pr-7` to reserve the icon's own width; every message bubble
+already caps at `max-w-[92%]` and was never at risk. `z-20` keeps the button
+clickable above the fade's own `z-10`. Verified by measuring
+`getBoundingClientRect()` of the card/scroller/hint before and after: the
+scroller's top offset from the card's own top dropped from ~44px to ~12px
+(exactly the card's own `p-3`), and the "up" hint's own inline `top` style
+(set by `updateScrollHints`) is `0` relative to that scroller — i.e. flush,
+no code change needed there. `comment-thread`/`comment-detail-thread` were
+NOT touched this round (their own header row — author, badges, source
+label — is real content, not a reservation to remove) — flag it if the
+identical "much empty room above the fade" complaint ever comes in for
+those two.
 
 ### At most ONE code-generating turn at a time (`chat_write_gate.go`)
 

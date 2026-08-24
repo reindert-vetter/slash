@@ -95,9 +95,9 @@ code).
      cursor (exactly as `'thread'` walks reactions on `cs.threadPos` — 0 = the
      composer, 1..n = the n-th turn from the bottom, clamped at the oldest) —
      before stepping onto a DIFFERENT bubble, `↑`/`↓` first scroll the
-     currently active one by 10 rendered lines in that direction if it's
+     currently active one by 4 rendered lines in that direction if it's
      taller than the thread's own viewport
-     (`scrollClaudeMessageWithinBubble`, see "↑/↓ walk a tall bubble 10
+     (`scrollClaudeMessageWithinBubble`, see "↑/↓ walk a tall bubble 4
      rendered lines at a time" in `.claude/docs/claude-chat-panel.md`), so a
      single long answer reads through in steps instead of one all-or-nothing
      bubble jump. `↓` at `claudePos === 0` first walks the chat's own **code blocks** —

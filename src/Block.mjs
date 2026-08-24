@@ -2073,17 +2073,7 @@ function diffFloorCls(rowCount) {
 // switched on/off — and positioned right below the pane headers / above the
 // bottom edge — imperatively by updateHints on every scroll and refresh. It's
 // pointer-events-none so it never eats a scroll or click.
-//
-// `tall` (default false) swaps the default `h-7` fade for a taller `h-16` —
-// reviewer request ("top heeft nog veel ruimte, blur kan verder omhoog") on
-// `claude-chat-thread`/`comment-thread`/`comment-detail-thread`: those three
-// panes sit in a card with genuine unused vertical room above the first
-// line, and the small default fade read as an abrupt little bar rather than
-// a real fade into that space. The DIFF panes (the other `scrollHint` call
-// sites in this file, plus Footer.mjs's) keep the original `h-7` — they sit
-// flush against their own pane header/edge with no such room, and widening
-// them was never asked for.
-export function scrollHint(dir, tall) {
+export function scrollHint(dir) {
   const down = dir === 'down'
   // A chevron pointing the way you can scroll. Static SVG string, fed through the
   // .innerHTML binding (arrow.js sets the property instead of escaping) — the
@@ -2095,9 +2085,7 @@ export function scrollHint(dir, tall) {
     <div
       data-hint="${dir}"
       style="opacity:0"
-      class="${'pointer-events-none absolute inset-x-0 z-10 flex items-center justify-center transition-opacity duration-150 ' +
-      (tall ? 'h-16' : 'h-7') +
-      ' ' +
+      class="${'pointer-events-none absolute inset-x-0 z-10 flex h-7 items-center justify-center transition-opacity duration-150 ' +
       (down
         ? 'bottom-0 bg-gradient-to-t'
         : 'top-0 bg-gradient-to-b') +

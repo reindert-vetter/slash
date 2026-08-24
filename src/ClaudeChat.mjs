@@ -827,7 +827,7 @@ function claudeMenuButton(onOpenMenu) {
 export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly) {
   return html`
     <div
-      class="flex min-h-0 flex-1 flex-col gap-2 rounded-xl p-3"
+      class="relative flex min-h-0 flex-1 flex-col gap-2 rounded-xl p-3"
       data-testid="claude-chat-card"
       data-readonly="${readOnly ? 'true' : 'false'}"
       @click="${() => {
@@ -853,7 +853,7 @@ export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly) {
       }}"
     >
 
-      <div class="flex items-center justify-end gap-2">
+      <div class="absolute right-2 top-2 z-20">
         ${() => (readOnly ? '' : claudeMenuButton(callbacks.onOpenMenu))}
       </div>
       <div class="relative min-h-0 flex-1">
@@ -878,7 +878,7 @@ export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly) {
           }
           if (total === 0) {
             return [
-              html`<p class="text-xs text-slate-400 dark:text-zinc-500" data-testid="claude-chat-empty">
+              html`<p class="pr-7 text-xs text-slate-400 dark:text-zinc-500" data-testid="claude-chat-empty">
                 Nog geen gesprek — typ hieronder een vraag voor ${claudeMention}.
               </p>`.key('claude:empty'),
             ]
@@ -904,8 +904,8 @@ export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly) {
         ${() => claudePartialBubble(view)}
         ${() => claudeQueuedBubbles(view)}
         </div>
-        ${scrollHint('up', true)}
-        ${scrollHint('down', true)}
+        ${scrollHint('up')}
+        ${scrollHint('down')}
         <div class="contents">
           ${() =>
             view.claudePos() === 0 && !view.pinned()
