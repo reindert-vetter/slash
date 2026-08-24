@@ -286,6 +286,80 @@ test('↑/↓ walks the question options before the transcript, Enter sends the 
   await expect(page.getByTestId('claude-message-body').last()).toHaveClass(/ring-2/)
 })
 
+// Reported bug: a chat.KindDirectoryDecision turn (chat_checkout.go's more
+// forceful "which local checkout should I use" consult) rendered its options
+// as ordinary clickable buttons — claudeQuestionOptions already handles that
+// kind — but ArrowUp/ArrowDown/Enter did nothing on the otherwise-empty,
+// focused composer: pendingClaudeQuestion() only ever recognized kind
+// 'question', so the keyboard chain silently treated the consult as "nothing
+// pending" while the mouse worked fine. Mocks GET /api/chat directly (no real
+// checkout/git plumbing needed) to isolate the frontend keyboard chain from
+// the backend selection ladder, which has its own Go-level tests
+// (chat_checkout_test.go).
+test('↑/↓ + Enter also work on a directory_decision consult, not just an ordinary question', async ({
+  page,
+}, testInfo) => {
+  const pr = seededPr(testInfo)
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: {
+      pr,
+      file: 'test.php',
+      line: 1,
+      author: 'reviewer',
+      body: 'pas dit aan',
+      code: '$order->total();',
+      gran: 'call',
+      label: 'Order::total',
+    },
+  })
+  const conversationId = (await start.json()).runId
+  expect(conversationId).toBeTruthy()
+
+  const decisionBody = '`/home/reindert/dev/plug-and-pay-3` staat nu op `oud-werk`, dat al is gemerged — dus vrij. Gebruiken voor deze PR (branch `feature/x`)?'
+  await page.route('**/api/chat?commentId=' + conversationId, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        messages: [
+          {
+            id: 'decision-1',
+            role: 'assistant',
+            kind: 'directory_decision',
+            body: decisionBody,
+            options: ['Ja, gebruik deze directory voor deze PR', 'Nee, zoek een andere directory'],
+          },
+        ],
+      }),
+    }),
+  )
+
+  await page.goto('/pr/' + pr)
+  const item = page.getByTestId('comment-item').first()
+  await expect(item).toBeVisible()
+  await item.click()
+  await page.keyboard.press('ArrowRight') // comment -> claude, which loads /api/chat (mocked above)
+
+  const composer = page.getByTestId('claude-chat-compose')
+  await expect(composer).toBeFocused()
+  await expect(composer).toHaveValue('')
+
+  const options = page.getByTestId('claude-question-option')
+  await expect(options).toHaveCount(2)
+
+  // The composer is genuinely empty, so ArrowUp must enter the options
+  // straight away rather than being swallowed as "move the caret".
+  await page.keyboard.press('ArrowUp')
+  await expect(options.nth(1)).toHaveAttribute('data-active', 'true')
+  await expect(composer).not.toBeFocused()
+
+  const [msgReq] = await Promise.all([
+    page.waitForRequest((req) => req.url().includes('/signals/message') && req.method() === 'POST'),
+    page.keyboard.press('Enter'),
+  ])
+  expect(msgReq.postDataJSON().body).toBe('Nee, zoek een andere directory')
+})
+
 // The visible Claude column must follow whichever comment is currently
 // selected, even without the keyboard explicitly entering 'claude' — see
 // "The Claude column must follow the browsed comment, not just the

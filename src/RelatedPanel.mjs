@@ -1723,17 +1723,34 @@ function queuedFor(commentId) {
   return cc.queued.filter((q) => q.commentId === commentId)
 }
 
+// PENDING_CLAUDE_QUESTION_KINDS are every message kind claudeQuestionOptions
+// (ClaudeChat.mjs) actually renders clickable option buttons for: an ordinary
+// clarifying question, chat_checkout.go's more forceful directory decision,
+// and a cancelled-turn cleanup choice — all three share the exact same
+// Options/click mechanism (see claudeQuestionOptions' own doc comment), so
+// pendingClaudeQuestion must recognize all three too, not just 'question'.
+const PENDING_CLAUDE_QUESTION_KINDS = new Set(['question', 'directory_decision', 'cleanup_choice'])
+
 // pendingClaudeQuestion returns the newest message when it is a still-open
-// question with clickable options (kind 'question', no answer yet, at least
-// one option) — the one case claudeQuestionOptions (ClaudeChat.mjs) actually
-// renders buttons for — else null. Used by handleRelatedKey's 'claude' branch
-// to fold the options into the ↑/↓ chain (see cs.claudeOptionSel's own doc
-// comment) and by selectHighlightedClaudeOption below.
+// question with clickable options (one of PENDING_CLAUDE_QUESTION_KINDS, no
+// answer yet, at least one option) — else null. Used by handleRelatedKey's
+// 'claude' branch to fold the options into the ↑/↓ chain (see
+// cs.claudeOptionSel's own doc comment) and by selectHighlightedClaudeOption
+// below.
+//
+// Reported bug this widening fixes: a chat.KindDirectoryDecision/
+// KindCleanupChoice turn rendered its options as ordinary clickable buttons
+// (claudeQuestionOptions already handled those kinds) but ↑/↓/Enter did
+// nothing on an otherwise-empty, focused composer — this function used to
+// only ever recognize 'question', so handleRelatedKey's ArrowUp/ArrowDown
+// branch (and selectHighlightedClaudeOption's Enter) silently treated the
+// checkout consult as "nothing pending" and fell through to the ordinary
+// "walk the transcript" behaviour instead of entering the options.
 function pendingClaudeQuestion() {
   const total = cc.messages.length
   if (total === 0) return null
   const m = cc.messages[total - 1]
-  return m && m.kind === 'question' && !m.answer && m.options && m.options.length ? m : null
+  return m && PENDING_CLAUDE_QUESTION_KINDS.has(m.kind) && !m.answer && m.options && m.options.length ? m : null
 }
 
 // chatAnchorComment answers "which comment does a Claude conversation on this
@@ -3164,12 +3181,18 @@ export function setPrCommentMenuOpener(fn) {
 // selectHighlightedClaudeOption — the Enter-key counterpart of clicking a
 // claudeQuestionOption button (see the ↑/↓ chain in handleRelatedKey's
 // 'claude' branch above): sends whichever option cs.claudeOptionSel is
-// currently pointing at, through the exact same path a click already uses
-// (sendClaudeMessageFromNew), and resets the highlight. A no-op — returning
-// false — when nothing is highlighted (cs.claudeOptionSel === 0) or the
-// question the highlight was built against is no longer the pending one
-// (answered/superseded meanwhile), so home.mjs's caller can fall through to
-// whatever Enter would otherwise do in the Claude column.
+// currently pointing at, through the exact same path a click already uses,
+// and resets the highlight. A no-op — returning false — when nothing is
+// highlighted (cs.claudeOptionSel === 0) or the question the highlight was
+// built against is no longer the pending one (answered/superseded
+// meanwhile), so home.mjs's caller can fall through to whatever Enter would
+// otherwise do in the Claude column.
+//
+// A 'cleanup_choice' question routes through resolveCancelCleanup — the
+// dedicated "cleanup" Signal action, NEVER the ordinary answer/resume round
+// trip — exactly like its own click handler (claudeQuestionOptions' onCleanup
+// branch, ClaudeChat.mjs); every other kind ('question'/'directory_decision')
+// goes through sendClaudeMessageFromNew, same as a click's onSend branch.
 export function selectHighlightedClaudeOption(state, commentTarget) {
   if (cs.focus !== 'claude' || cs.claudePos !== 0 || cs.claudeOptionSel === 0) return false
   const q = pendingClaudeQuestion()
@@ -3179,7 +3202,11 @@ export function selectHighlightedClaudeOption(state, commentTarget) {
   if (text == null) return false
   cs.claudeOptionSel = 0
   focusClaudeComposer()
-  sendClaudeMessageFromNew(state, commentTarget, text)
+  if (q.kind === 'cleanup_choice') {
+    resolveCancelCleanup(text)
+  } else {
+    sendClaudeMessageFromNew(state, commentTarget, text)
+  }
   return true
 }
 
