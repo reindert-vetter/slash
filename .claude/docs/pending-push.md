@@ -25,6 +25,14 @@ own change before anyone else sees it, and the checkout itself is never touched
 beyond that (no worktree to reclaim any more — it's the reviewer's own,
 permanent clone).
 
+**Before landing, there is now a live "wordt aangepast" status too.** A file a
+still-running turn is editing shows its own per-block pill immediately — see
+"'Wordt aangepast': a live, per-block status while an edit hasn't landed yet"
+in `.claude/docs/claude-chat-panel.md` (`chat_edit_pending.go`). It is a
+DIFFERENT signal from everything below: this file is about the landed
+change becoming visible/diffable and the separate, deliberate push step;
+"wordt aangepast" is about the time BEFORE that landing has even happened.
+
 **The landing itself is automatic, not a second reviewer step.** The reviewer
 only ever asks Claude to commit in plain words; Claude's own `git commit` (run
 via Bash in that checkout, see "Two-step tool access"/chat_shell.md in

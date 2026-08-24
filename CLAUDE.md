@@ -130,7 +130,9 @@ that set stays small on purpose; a new topic file belongs in `.claude/docs/`.
   Signals, the operational carve-outs, and every read model.
 - `pending-push.md` — a landed chat edit that is not pushed yet: the local
   `refs/slash/pending/…` ref, the immediate ingest refresh at that local SHA,
-  the `"push"` Action, and the todo row at the bottom of the index.
+  the `"push"` Action, and the todo row at the bottom of the index. The
+  live, pre-landing "wordt aangepast" pill lives in `claude-chat-panel.md`
+  instead — a different signal, before this file's own subject even starts.
 - `workflows-comments.md` — `task_code_comment`, the GitHub comment import,
   and `claude_chat`/`chat_merge` (the embedded conversation, its agentic
   edits and their serialized commits).

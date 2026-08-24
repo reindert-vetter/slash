@@ -1284,6 +1284,121 @@ on the new `checkout.changed` SSE event. The PR-overview's own
 frontend contract, fully mocked — the git-plumbing side of these four
 Actions is covered by `chat_checkout_test.go`/`chat_merge_test.go`).
 
+### The selection ladder no longer asks about unpushed local commits, and prefers a directory already on the PR branch
+
+Two follow-up fixes to `chat_checkout.go`'s selection ladder, both reviewer
+decisions:
+
+- **A clean checkout that is already on the PR's own branch, with real local
+  commits origin doesn't have yet, is used straight away — no question.**
+  This used to be `checkoutStageDivergedHistory`, a consult with exactly ONE
+  option ("Doorgaan met de huidige lokale stand"). It is REMOVED, not just
+  reworded: a write turn only ever **commits on top**, never discards or
+  force-overwrites anything, so there was nothing this consult protected
+  against in the first place — reviewer's own words: "je mag hier gewoon op
+  verder bouwen". Its removal also fixed a real, reported bug: a reviewer
+  reply that didn't match the option **byte-for-byte** (e.g. typed free text
+  like "doe het toch" instead of clicking the literal button) never resolved
+  it, so `prepareChatShellWorkDirAt` kept re-issuing the identical decision
+  under a NEW message id forever — an unexplained, apparently-infinite loop.
+  `chatCheckoutDirtyDecision` now only ever returns the genuinely-dirty
+  (`checkoutStageDirtyTree`) consult; a clean-but-not-fast-forwardable
+  candidate falls straight through in `prepareChatShellWorkDirAt`.
+- **Matching a reply against a decision's Options is now trim + case-
+  insensitive** (`matchCheckoutOption`), and a reply that still doesn't match
+  anything gets a re-asked decision with an explicit **"Dat antwoord
+  herkende ik niet als een van de keuzes."** prefix instead of a silent,
+  byte-identical repeat — belt-and-braces on top of the removal above, for
+  the stages that still do require an exact pick
+  (`checkoutStageChooseDirectory`/`checkoutStageReuseMerged`/
+  `checkoutStageDirtyTree`).
+- **A directory already on the PR's own branch always wins over one that is
+  merely on some other, already-merged (hence free) branch** —
+  `prioritizeOnTargetBranch` (`chat_checkout.go`) narrows the classified
+  candidates to the `OnTargetBranch` ones FIRST whenever at least one exists,
+  before `selectCheckoutCandidate` ever decides none/one/many. So a single
+  directory already on the PR branch auto-picks with no question at all, and
+  choosing among several only ever compares directories genuinely already on
+  that branch — a `master`/`develop` checkout only participates when NOTHING
+  is on the target branch yet, exactly as before. Deliberately **not** folded
+  into `listCheckoutCandidates` itself: the explicit "Andere directory
+  kiezen" menu (`listAllCheckoutChoices`/`relistCheckoutCandidates`) keeps
+  showing every eligible candidate unfiltered — that menu IS the reviewer
+  overriding the automatic pick, so narrowing it there too would take away
+  the very choice being asked for.
+
+Tests: `TestPrepareChatShellWorkDirProceedsOnUnpushedLocalCommits`,
+`TestPrepareChatShellWorkDirAsksAboutDirtyCandidate`'s "herkende ik niet"
+assertion, `TestSelectCheckoutCandidatePrioritizesOnTargetBranch`,
+`TestListAllCheckoutChoicesDoesNotPrioritize` (all `chat_checkout_test.go`).
+
+### A push the reviewer asks for IN the conversation is a real push
+
+`modules/claude/prompts/chat_shell.md` used to only say "push when the
+reviewer literally asks — never on your own, never `--force`", with no
+instruction on HOW — and, separately, its own wording still described the
+long-superseded disposable shadow worktree ("een apart, wegwerpbaar
+klonetje"). Reported bug: asked to push, the assistant deflected to the
+review-tree's "not pushed yet" todo row instead of just running the push
+itself, even though a chat turn already has real Bash access to the exact
+checkout that row is about (`.claude/rules/workflows-write-boundary.md`'s
+"Exception: the Claude chat turn may act through a shell"). Fixed by
+rewording the prompt: on an explicit push request, run `git push` yourself
+via Bash in the checkout and report the outcome; never point at the todo row
+as the answer to a push request made in this conversation — that row is
+strictly for the reviewer to push on their own, without involving Claude, not
+a substitute for a request made here. Test:
+`TestChatShellSystemPromptInstructsARealPush` (`modules/claude/prompts_test.go`).
+
+### "Wordt aangepast": a live, per-block status while an edit hasn't landed yet
+
+Reviewer request: see a local Claude edit in the tree **immediately**, tagged
+so it reads as still-in-progress, not with the existing unpushed label (which
+keeps its own, separate meaning — "landed, not yet on GitHub"). Landing itself
+stays post-turn, exactly as `.claude/docs/pending-push.md` describes (no live/
+mid-turn commit) — this is purely a **status pill**, shown WHILE that landing
+hasn't happened yet.
+
+- **`chatProgress.EditedFiles`** (`chat_progress.go`) accumulates every
+  repo-relative path an `Edit`/`Write` tool call touches, for the lifetime of
+  ONE turn — unlike `Tool`/`Detail`, which the next tool call overwrites.
+  `chatProgressSink` (`chat_workflow.go`) turns the tool's absolute
+  `file_path` into a repo-relative one via a `*string` the caller
+  (`runOneClaudeTurn`) points at the shell attempt's own `WorkDir` right
+  before invoking it — empty during the read-only attempt, which never has
+  an Edit/Write tool to begin with.
+- **`chat_edit_pending.go`** is the PR-scoped "still pending" registry:
+  `finishChatProgress` hands a finished turn's `EditedFiles` to
+  `markChatFilesPending` right before the volatile snapshot disappears (the
+  same operational, outside-the-write-boundary carve-out as
+  `chat_progress.go`/`pending_push.go`'s own status maps — nothing here is
+  durable, git is). `clearChatPendingFiles` wipes the WHOLE set for a PR the
+  moment ANY landing for it succeeds (`processChatMergeAt`,
+  `chat_merge.go`) — `commitCheckoutEditsAt` always `git add -A`s the whole
+  checkout, so a successful landing by definition carries every file that
+  was pending; also cleared on a cancelled turn's own "Verwijderen"/stash
+  cleanup (`applyCancelCleanup`), since the edit is gone from the working
+  tree either way.
+- **`checkoutView.PendingFiles`** (`chat_checkout.go`'s `buildCheckoutView`)
+  exposes the registry over the EXISTING `GET /api/chat/checkout` read model
+  — no new endpoint — refetched on the same `checkout.changed` SSE event the
+  checkout chip already reacts to (now also published after a successful
+  landing, alongside the existing `pendingpush.changed`).
+- **Frontend**: `editingPill` (`BlockList.mjs`, per index row) and
+  `opts.editing`/`data-testid=block-editing` (`Block.mjs`, the diff card)
+  mirror `unpushedPill`/`opts.unpushed` exactly (per FILE, not per block,
+  same accepted trade-off) but read `state.checkout.pendingFiles`
+  (`checkoutPendingFiles()`, `home.mjs`) instead of
+  `state.pendingPush.files` — a deliberately different glyph (`✎`) and
+  colour (sky, not amber) from the unpushed pill, so a block that is BOTH
+  mid-edit and separately unpushed shows two distinguishable pills rather
+  than one ambiguous one.
+
+Tests: `TestChatProgressAccumulatesEditedFiles` (`chat_progress_test.go`),
+`TestBuildCheckoutViewReportsPendingFiles` (`chat_checkout_test.go`),
+`TestProcessChatMergeClearsPendingEditedFilesOnSuccess`
+(`chat_merge_test.go`).
+
 Phase 3's backend (a per-conversation shadow worktree + a fast-forward-only
 commit/push — see "claude_chat" → "Agentic edits" in
 `.claude/docs/workflows-comments.md`) used to be reached from this panel via
