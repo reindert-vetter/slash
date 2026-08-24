@@ -24,22 +24,32 @@ test.describe('PR Review Tree — renamed/moved blocks', () => {
     await page.goto('/pr/122')
     await appReady(page)
 
+    // Select the same-file rename explicitly rather than relying on which
+    // block a fresh open happens to land on: applyDefaultUnapprovedSelection
+    // tie-breaks a genuinely fresh open by (file, line) — see "Land a fresh PR
+    // open on the first block of the first-changed file" — so it can pick
+    // either of these two blocks depending on their file paths, independent of
+    // recomputeLeftList's own per-category sidebar order. Clicking the
+    // same-file rename directly makes both which card is "selected" and which
+    // one renders as its look-ahead preview deterministic.
+    await page.locator('[data-testid="block-row"]', { hasText: 'CommissionRepository::getAsPartner' }).first().click()
+
     // Both cards are mounted (the selected block plus its look-ahead preview),
-    // so assert the whole set in file order rather than one card's `.first()`.
-    // Block 0 is the cross-file move (app/Queries/…), block 1 the same-file
-    // rename. The moved one keeps its NAME but changes CLASS, which is exactly
-    // why its old symbol is worth stacking too.
+    // in sidebar order: the same-file rename (selected), then the cross-file
+    // move (app/Queries/…, its look-ahead preview). The moved one keeps its
+    // NAME but changes CLASS, which is exactly why its old symbol is worth
+    // stacking too.
     await expect(page.locator('[data-testid="block-old-label"]')).toHaveText([
-      '- CommissionRepository::movedAway',
       '- CommissionRepository::getIndexCommissionsForPartner',
+      '- CommissionRepository::movedAway',
     ])
     await expect(page.locator('[data-testid="block-old-path"]')).toHaveText([
-      '- app/Repositories/CommissionRepository.php:18',
       '- app/Repositories/CommissionRepository.php:7',
+      '- app/Repositories/CommissionRepository.php:18',
     ])
     await expect(page.locator('[data-testid="block-status-badge"]')).toHaveText([
-      'Verplaatst',
       'Hernoemd',
+      'Verplaatst',
     ])
   })
 
