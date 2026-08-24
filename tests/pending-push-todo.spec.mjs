@@ -114,7 +114,9 @@ test.describe('Push todo at the bottom of the index', () => {
     // untouched, so the marking is not a blanket "this PR has something".
     const index = page.getByTestId('pr-index')
     await expect(index.getByTestId('row-unpushed')).toHaveCount(2)
-    await expect(index.getByTestId('row-unpushed').first()).toContainText('ongepusht')
+    // The index row is icon-only (too little room next to the other pills);
+    // the word still reaches an accessibility tree / hover via the title.
+    await expect(index.getByTestId('row-unpushed').first()).toHaveAttribute('title', /ongepusht/i)
 
     // And the card of such a block says it too, so it also reads in diff mode
     // where the index has slid away.

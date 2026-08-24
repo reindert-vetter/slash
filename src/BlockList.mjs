@@ -585,7 +585,14 @@ function pushTodoRow(state) {
 // PR's branch locally but isn't on GitHub yet (state.pendingPush.files, see
 // loadPendingPush in home.mjs) — the same thing the push-todo row at the bottom
 // is about, but per block, so the reviewer can see WHICH code is still only
-// local while walking the index. A glyph plus a word, never colour alone.
+// local while walking the index. A glyph plus a word, never colour alone —
+// but in this INDEX ROW the word is deliberately dropped from the visible
+// text (reviewer report: with the editing/refreshing pills alongside it, the
+// full "⇧ ongepusht" label ate too much of the row's width) and moved into
+// `title`/`aria-label` instead, so the meaning survives for a screen reader
+// and on hover — the glyph itself already carries a distinct SHAPE (not just
+// colour, per the colourblind rule). The full "⇧ ongepusht" label stays
+// exactly as before on the block card itself (Block.mjs), where there's room.
 //
 // Per FILE, not per block: the read model reports the changed paths of the
 // pending commits, which is as fine-grained as a git diff gets without
@@ -600,9 +607,10 @@ function unpushedPill(state, b) {
   return html`
     <span
       data-testid="row-unpushed"
-      title="Deze wijziging staat lokaal op de PR-branch, maar is nog niet gepusht"
+      title="Ongepusht — deze wijziging staat lokaal op de PR-branch, maar is nog niet gepusht"
+      aria-label="Ongepusht — deze wijziging staat lokaal op de PR-branch, maar is nog niet gepusht"
       class="shrink-0 rounded bg-amber-50 dark:bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300"
-      >⇧ ongepusht</span
+      >⇧</span
     >
   `
 }
