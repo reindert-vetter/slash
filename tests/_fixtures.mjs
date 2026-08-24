@@ -470,6 +470,32 @@ function seed(db) {
     ],
     { stdio: 'ignore', env: SEED_ENV },
   )
+  // Footer-tasks-no-comment-nav fixture (PR 127,
+  // claude-task-footer-no-comment-nav.spec.mjs): a parent block
+  // (FooterTasksParentAction::run) linked via a relation to a child
+  // (FooterTasksChildService::assist), so the parent has a real
+  // "Onderliggende code" card to walk into — no worktree needed (same shape
+  // as the comment-activity fixture below: RelatedPanel renders/keyboard-
+  // navigates a related child regardless of whether real diff content
+  // exists). The parent deliberately carries NO comment of its own, so →→
+  // from it reaches cs.focus==='code' with codeSel===0 directly (no
+  // 'comment'/'claude' stop in between) — the case ↑ from there must still
+  // reach "Ook bezig elders" (enterFooterTasks) whenever another conversation
+  // is running/recently finished elsewhere in the PR. Its own PR number per
+  // the APPROVAL_RESET_PRS note above.
+  execFileSync(
+    BIN,
+    [
+      'seed',
+      '-db',
+      db,
+      '-from',
+      'tests/fixtures/footertasks-blocks.json',
+      '-relations',
+      'tests/fixtures/footertasks-relations.json',
+    ],
+    { stdio: 'ignore', env: SEED_ENV },
+  )
   // <class-header>-swallowed-into-sibling fixture (PR 114,
   // related-class-header-sibling.spec.mjs): a class with a changed header PLUS
   // a changed sibling method (ImportSubscriptionStatsFlow) — the header row

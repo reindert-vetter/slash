@@ -5,13 +5,10 @@ import { test, expect, seededPr, leaveSearchBox } from './_fixtures.mjs'
 // lingers for 2 minutes, clearly marked done"). The sibling feature in that
 // same doc section — reaching this same list with ↑ from Onderliggende code
 // when NO comment exists at all on the current unit (`enterFooterTasks`,
-// `cs.focus === 'tasks'`) — is covered by manual verification only: it needs
-// a REAL, ingested block (PR 12903, the shared read-only worktree fixture)
-// for Onderliggende code to exist at all, and building a reliable,
-// non-flaky fixture for it (distinguishing this test's own seeded comment
-// from whatever else already lives on that shared PR) did not fit this
-// change's time budget — left as a follow-up rather than landing a flaky
-// spec.
+// `cs.focus === 'tasks'`) — is covered by
+// tests/claude-task-footer-no-comment-nav.spec.mjs, on its own PR 127
+// fixture (a relation-only block pair, no worktree needed) rather than the
+// shared PR 12903 worktree fixture originally considered here.
 
 // Reviewer request: a task should not vanish from "Ook bezig elders" the
 // INSTANT it finishes — it should linger for 2 minutes, clearly marked done

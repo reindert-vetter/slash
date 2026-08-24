@@ -1,0 +1,8 @@
+[
+  {
+    "pr": 127,
+    "parentId": "127:app/Actions/FooterTasksParentAction.php:FooterTasksParentAction::run",
+    "childId": "127:app/Services/FooterTasksChildService.php:FooterTasksChildService::assist",
+    "kind": "method_call"
+  }
+]
