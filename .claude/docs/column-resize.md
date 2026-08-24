@@ -209,7 +209,7 @@ which only `Block.mjs` has — plumbing it out to `home.mjs` for this one path
 wasn't worth it, and the double-tap reset already covers "I want to go back to
 auto" explicitly.
 
-### Double-tap detection
+### Double-tap detection — `c` only, not `v`
 
 `startResizeKey`/`stopResizeKey` (`home.mjs`) track, per key (`c` and `v`
 independently — `c` then `v` in a row is NOT a double-tap), whether the last
@@ -223,6 +223,17 @@ double-tap, `startKeyResize`'s handle is `cancel()`ed (not `commit()`ed) and
 `clearColumnWidth` runs directly — the tiny width change the brief tap itself
 already made is simply discarded, exactly like the handle's own dblclick
 reset ignores any drag distance.
+
+**This reset is gated on `key === 'c'` — `v` never resets on a double-tap.**
+Reviewer report: tapping `v` twice in quick succession to grow a column a
+little further ("dubbeld drukken op v, moet de breedte niet resetten") kept
+getting misread as the double-tap-reset gesture instead, discarding both
+taps' width change. `c` (shrink) keeps the original double-tap-to-reset
+behaviour; a short `v` release always just `commit()`s, exactly like a
+genuine hold would — `lastTap.v` is still tracked (for symmetry/possible
+future use) but can never make `isDoubleTap` true. The handle's own
+mouse-drag dblclick reset (`resetColumnWidth`) is unaffected either way — it
+has no `c`/`v` concept at all.
 
 A `keyup` on `c`/`v` ends the hold (`stopResizeKey`); a `window` `blur`
 listener is a safety net for the case a `keyup` never arrives (e.g. Alt-Tab

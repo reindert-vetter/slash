@@ -132,8 +132,10 @@ test('the handle also works in list mode, before entering the diff session', asy
 
 // Keyboard counterpart of the drag handle (see .claude/docs/column-resize.md,
 // "Keyboard resize"): holding `v` grows the FOCUSED column, and two quick
-// taps of the same key reset it back to auto.
-test('holding v grows the focused column, and a double-tap resets it', async ({ page }) => {
+// taps of `c` reset it back to auto — deliberately `c`-only, see "Double-tap
+// detection — c only, not v" in that doc: two quick `v` taps must just grow
+// the column further, never reset it (reviewer report).
+test('holding v grows the focused column, and a double-tap of c resets it', async ({ page }) => {
   await page.goto('/pr/12903')
   await leaveSearchBox(page)
   await page.locator('[data-idx="1"]').click()
@@ -164,4 +166,34 @@ test('holding v grows the focused column, and a double-tap resets it', async ({ 
   await expect(async () => {
     expect(await article.getAttribute('style')).toBe('')
   }).toPass()
+})
+
+test('two quick taps of v never reset the column — it just keeps growing', async ({ page }) => {
+  await page.goto('/pr/12903')
+  await leaveSearchBox(page)
+  await page.locator('[data-idx="1"]').click()
+  await page.keyboard.press('ArrowRight')
+  await expect(page).toHaveURL(/mode=diff/)
+  await page.waitForTimeout(300)
+
+  const article = page.locator('[data-testid="block-column"] article:has([data-testid="col-resize-handle"])')
+  expect(await article.getAttribute('style')).toBe('')
+
+  // A short first tap of v commits a tiny override (no snap-back-on-release
+  // path for the keyboard gesture, see "No snap-back-to-auto on release" in
+  // column-resize.md), which would normally arm the double-tap window.
+  await page.keyboard.down('v')
+  await page.keyboard.up('v')
+  const styleAfterFirstTap = await article.getAttribute('style')
+  expect(styleAfterFirstTap).toMatch(/width:\d+px/)
+  const pxAfterFirstTap = Number(/width:(\d+)px/.exec(styleAfterFirstTap)[1])
+
+  // A second quick tap of v must NOT reset to auto — it must just commit
+  // again (a no-op-sized grow at worst), keeping the inline override.
+  await page.keyboard.down('v')
+  await page.keyboard.up('v')
+  const styleAfterSecondTap = await article.getAttribute('style')
+  expect(styleAfterSecondTap).toMatch(/width:\d+px/)
+  const pxAfterSecondTap = Number(/width:(\d+)px/.exec(styleAfterSecondTap)[1])
+  expect(pxAfterSecondTap).toBeGreaterThanOrEqual(pxAfterFirstTap)
 })
