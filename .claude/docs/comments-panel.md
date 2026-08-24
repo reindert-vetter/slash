@@ -2385,6 +2385,29 @@ Action of the same `reply` Signal, which stores no message — with a
 with/without-the-earlier-messages submenu when, and only when, there are earlier
 local replies.
 
+**After it publishes, the keyboard leaves the thread** — reviewer request:
+"na ai warning, zet op github, laat mij verder navigeren door code (volgens
+mij doe je dat ook al voor andere keren dat we op github het gooien)",
+confirmed to apply to every local thread's own "Zet op GitHub", not just an
+AI finding. This **reverses an earlier, explicitly documented decision**
+("publishThreadOnly never closes the thread") — `publishThreadCommand` now
+takes a `doPublish(withHistory)` callback that wraps `publishThreadOnly` and
+decides where to land next, since a block-scoped thread and a PR-wide
+comment-index item have different rest positions:
+
+- **Block-scoped** (`commentCommandsFor`) → `publishThreadAndSelectRow(c,
+  withHistory)` (`home.mjs`) — same shape as `deleteCommentAndSelectRow`:
+  snapshots `focusedBlock()` before the await (the reload inside
+  `publishThreadOnly` can itself touch `cs.focus`/`cs.sel`), then resolves the
+  thread's own anchor (`c.gran`/`c.rowStart`) to a `{gran, change}` unit on
+  that block, sets it as the top-level or drilled cursor, and calls
+  `leaveRelated()` + `scrollChangeIntoView()`.
+- **PR-wide comment-index item** (`prCommentCommandsFor`) →
+  `publishPrCommentAndExit(c, withHistory)` — there is no diff row to land on
+  for such an item (same reasoning as `deletePrCommentItem`'s own doc
+  comment), so it just calls `exitPrCommentThread()`, mirroring
+  `postPrCommentReply`'s own optimistic exit.
+
 RelatedPanel never imports from `home.mjs`, so the opener is handed down:
 `setReplyPublishMenuOpener(() => openMenu('replyPublish'))`, called once at
 `home.mjs` module scope — the same direction as `InlineComments`' existing
