@@ -65,17 +65,17 @@ test.describe('reaction-status: neutral menu button + shared comment/Claude foot
       .toBe('resolved')
   })
 
-  // A reply now opens the comment's own action menu IMMEDIATELY (optimistic,
-  // see postThreadReply in RelatedPanel.mjs) instead of closing the thread
-  // back to the diff — reviewer request, reversing the earlier "closes on
-  // every reply" decision this test used to cover: "als ik een reactie
-  // plaats op een comment, wil ik niet daarna gelijk naar de diff, ik wil
-  // het menu zien waar ik kan bijvoorbeeld resolven". The thread itself
-  // stays expanded (cs.focus is never reset), so reaction-compose is still
-  // there once the menu closes again; only the shared comment-claude-footer
-  // (which reads cs.busy independent of cs.focus) still reports the
-  // in-flight/sent status underneath the open menu.
-  test('sending a reply opens its action menu immediately; the shared footer still reports busy/sent', async ({
+  // A reply does NOT auto-open the comment's own action menu — an earlier
+  // reviewer request had it open immediately (optimistic, see postThreadReply
+  // in RelatedPanel.mjs), reversing an even earlier "closes on every reply"
+  // decision this test used to cover. Reversed again on a later, more
+  // specific report: "als ik een comment plaat, komt het direct erop (goed),
+  // maar ik zie dan ook gelijk een menu, dat wil ik niet" — the reply landing
+  // immediately is wanted, an uninvited menu on top of it is not. The thread
+  // itself stays expanded (cs.focus is never reset), so reaction-compose is
+  // still there; the shared comment-claude-footer (which reads cs.busy
+  // independent of cs.focus) still reports the in-flight/sent status.
+  test('sending a reply does not open its action menu; the shared footer still reports busy/sent', async ({
     page,
   }, testInfo) => {
     const pr = seededPr(testInfo)
@@ -104,9 +104,8 @@ test.describe('reaction-status: neutral menu button + shared comment/Claude foot
     const sendButton = page.getByTestId('reaction-send')
     await sendButton.click()
 
-    // The action menu opens right away — before the (still held-open) reply
-    // Signal resolves — and the thread stays expanded underneath it.
-    await expect(page.getByTestId('command-menu')).toBeVisible()
+    // No action menu — the thread just stays expanded underneath, no menu.
+    await expect(page.getByTestId('command-menu')).not.toBeVisible()
     const stillExpandedRow = page.getByTestId('comment-item').filter({ hasText: body })
     await expect(stillExpandedRow).toHaveAttribute('data-expanded', 'true')
 
@@ -158,11 +157,10 @@ test.describe('reaction-status: neutral menu button + shared comment/Claude foot
       expect(grownHeight).toBeGreaterThan(startHeight)
     }).toPass()
 
-    // Plain Enter sends — and now opens the comment's own action menu
-    // immediately (optimistic, see postThreadReply), with the thread itself
-    // staying expanded (reaction-compose is still mounted underneath).
+    // Plain Enter sends — no action menu opens, the thread itself just stays
+    // expanded (reaction-compose is still mounted underneath).
     await page.keyboard.press('Enter')
-    await expect(page.getByTestId('command-menu')).toBeVisible()
+    await expect(page.getByTestId('command-menu')).not.toBeVisible()
     await expect(page.getByTestId('reaction-compose')).toHaveCount(1)
     await expect(page.getByTestId('comment-item').filter({ hasText: body })).toHaveAttribute('data-expanded', 'true')
   })

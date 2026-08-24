@@ -5384,20 +5384,18 @@ async function sendReaction() {
 // along on the same "reply" Signal (see ReactionSignal.Publish in
 // workflows.go); the ordinary, already-public path passes neither.
 //
-// A reply opens the comment's own action menu (commentMenuOpener,
-// home.mjs's openMenu('comment')) IMMEDIATELY, instead of releasing the
-// keyboard back to the diff (exitRelated) — reviewer request, reversing the
-// earlier "closes on every reply" decision documented here before: "als ik
-// een reactie plaats op een comment, wil ik niet daarna gelijk naar de diff,
-// ik wil het menu zien waar ik kan bijvoorbeeld resolven". Still the same
-// optimistic-UI shape as before (the field is cleared/blurred and the menu
-// opens before the Signal POST + GET even start, mirroring placeComment's own
-// doc comment) — only WHERE the keyboard lands changed. cs.focus deliberately
-// stays on the thread (never set to null the way exitRelated would): the menu
-// overlays it exactly like the existing "Enter on an empty reply field" menu
-// already does (commentReplyEmpty, home.mjs's onKeydown), so closing the menu
-// (Escape, or a command that doesn't navigate away) leaves the reviewer back
-// on this same thread. cs.replySent's brief flash still fires:
+// A reply keeps the keyboard on the thread (cs.focus is left untouched, never
+// set to null the way exitRelated would) but does NOT open the comment's own
+// action menu anymore. It used to (commentMenuOpener, home.mjs's
+// openMenu('comment')), on an earlier reviewer request ("als ik een reactie
+// plaats op een comment, wil ik niet daarna gelijk naar de diff, ik wil het
+// menu zien waar ik kan bijvoorbeeld resolven") — reversed again on a later
+// one: "als ik een comment plaat, komt het direct erop (goed), maar ik zie
+// dan ook gelijk een menu, dat wil ik niet". The reply still lands
+// immediately (optimistic UI, field cleared/blurred before the Signal POST +
+// GET even start, mirroring placeComment's own doc comment); the reviewer can
+// still open the menu themselves (Enter on the now-empty reply field) if they
+// want to resolve/delete/etc. cs.replySent's brief flash still fires:
 // commentFooterText() reads it regardless of cs.focus, so it's still visible
 // in the shared comment/Claude footer for as long as the reviewer is still
 // looking at this unit.
@@ -5416,7 +5414,6 @@ async function postThreadReply(c, body, publish, withHistory) {
   cs.previewPos = 0
   releaseFocus() // a focus request still in flight must not land after this
   if (el && el.blur) el.blur()
-  if (commentMenuOpener) commentMenuOpener()
   cs.busy = true
   try {
     let res
@@ -8736,11 +8733,11 @@ export async function sendPrCommentReply(c, body) {
 // exit family as placeComment/postThreadReply; see placeComment's doc
 // comment for the reasoning.
 //
-// It then opens the item's own action menu (prCommentMenuOpener, home.mjs's
-// openMenu('prComment')) right away — the same reviewer request as
-// postThreadReply above ("ik wil het menu zien waar ik kan bijv. resolven"),
-// applied here too since a PR-wide comment's reply has the same "then what"
-// gap.
+// It used to also open the item's own action menu (prCommentMenuOpener,
+// home.mjs's openMenu('prComment')) right away, mirroring postThreadReply's
+// own reasoning — reversed for the same later reviewer request: "als ik een
+// comment plaat, komt het direct erop (goed), maar ik zie dan ook gelijk een
+// menu, dat wil ik niet". See postThreadReply's own doc comment above.
 //
 // A failed send marks cs.sendFailed('reply:'+c.id) and keeps the typed text
 // recoverable via prReplyDrafts (normally only cleared on success) — see
@@ -8751,7 +8748,6 @@ async function postPrCommentReply(c, body, publish, withHistory) {
   if (!c || !c.runId || !text) return
   cancelPrCommentReply()
   exitPrCommentThread()
-  if (prCommentMenuOpener) prCommentMenuOpener()
   picm.sending = true
   try {
     let res

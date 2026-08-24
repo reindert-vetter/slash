@@ -11,7 +11,7 @@ import { test, expect, leaveSearchBox, seededPr } from './_fixtures.mjs'
 // via the existing draft maps (composeDrafts/replyDrafts/prReplyDrafts).
 
 test.describe('A failed save surfaces a badge and keeps the typed text', () => {
-  test('a failed reply on a block-scoped thread opens the action menu immediately and keeps the draft', async ({
+  test('a failed reply on a block-scoped thread keeps the thread open and keeps the draft', async ({
     page,
   }, testInfo) => {
     const pr = seededPr(testInfo)
@@ -33,13 +33,11 @@ test.describe('A failed save surfaces a badge and keeps the typed text', () => {
     await reply.fill('dit gaat mislukken')
     await page.keyboard.press('Enter')
 
-    // The action menu opens right away (optimistic, see "A reply opens the
-    // comment's own menu..." in comments-panel.md) — well before the mocked
-    // 500 response is even processed — and the thread stays expanded
-    // underneath it; the failure surfaces right there once the menu is
-    // dismissed again.
-    await expect(page.getByTestId('command-menu')).toBeVisible()
-    await page.keyboard.press('Escape')
+    // The field clears/blurs optimistically (see "A reply no longer
+    // auto-opens the comment's own menu" in comments-panel.md) — well before
+    // the mocked 500 response is even processed — no menu opens, and the
+    // thread stays expanded so the failure can surface right there.
+    await expect(page.getByTestId('command-menu')).not.toBeVisible()
     await expect(item).toHaveAttribute('data-expanded', 'true')
     await expect(item.getByTestId('comment-send-failed')).toBeVisible()
     await expect(item.getByTestId('comment-send-failed')).toContainText('mislukt')
@@ -75,12 +73,11 @@ test.describe('A failed save surfaces a badge and keeps the typed text', () => {
     await page.keyboard.press('Enter')
 
     // The reply field closes immediately (optimistic exit) — back to the
-    // item's rest position, not a diff (a comment-index item has none) —
-    // and its own action menu opens right away too (see "A reply opens the
-    // comment's own menu..." in comments-panel.md).
+    // item's rest position, not a diff (a comment-index item has none) — and
+    // no action menu opens anymore (see "A reply no longer auto-opens the
+    // comment's own menu" in comments-panel.md).
     await expect(page.getByTestId('comment-detail-reply')).toHaveCount(0)
-    await expect(menu).toBeVisible()
-    await page.keyboard.press('Escape')
+    await expect(page.getByTestId('command-menu')).not.toBeVisible()
     await expect(card.getByTestId('comment-send-failed')).toBeVisible()
 
     // Reopening "Beantwoorden" restores the failed text.

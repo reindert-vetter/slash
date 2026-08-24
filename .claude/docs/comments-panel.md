@@ -2168,54 +2168,46 @@ PR-wide reply's "Stuur" button keep their own `sendStatusIcon` treatment
 (draft/sending only, untouched by this change); the PR-wide reply has its own
 `picm.sending` flag. Test: `tests/reaction-status-icon.spec.mjs`.
 
-### A reply opens the comment's own menu instead of releasing to the diff
+### A reply no longer auto-opens the comment's own menu
 
-Reviewer request, reversing an earlier deliberate decision: "als ik een
+This used to open the comment's own action menu (`commentCommandsFor`)
+immediately after a reply landed, on an earlier reviewer request: "als ik een
 reactie plaats op een comment, wil ik niet daarna gelijk naar de diff, ik wil
-het menu zien waar ik kan bijvoorbeeld resolven." `postThreadReply` used to
-call `exitRelated()` synchronously (optimistic exit, before the Signal
-POST+GET even start) — releasing `cs.focus` to `null` and handing the keyboard
-back to the diff the instant "Stuur"/Enter fired. That is now instead the
-comment's own action menu (`commentCommandsFor`, the same one `Enter` on an
-empty reply field already opens — see "Enter opens an action menu; → steps
-into the thread" above), opened via the same cross-module downward-injection
-pattern `claudeMenuOpener` already uses (`setCommentMenuOpener`/
-`commentMenuOpener`, `RelatedPanel.mjs` → `home.mjs`'s
-`setCommentMenuOpener(() => openMenu('comment'))`, registered at module load
-next to `setClaudeMenuOpener`).
+het menu zien waar ik kan bijvoorbeeld resolven." **Reversed again** on a
+later, more specific report — the reply/comment appearing immediately is
+wanted, but the menu popping up uninvited on top of it is not: "als ik een
+comment plaat, komt het direct erop (goed), maar ik zie dan ook gelijk een
+menu, dat wil ik niet."
 
-- **`cs.focus` deliberately stays put** (never reset to `null`) — the field is
-  still cleared/blurred (`el.value=''`, `releaseFocus()`) exactly as before,
-  but the thread itself stays expanded (`data-expanded="true"`), and the menu
-  overlays it the same way it already overlays an empty-field `Enter`. Closing
-  the menu (Escape, or a command that doesn't navigate away) leaves the
-  reviewer right back on this thread, not on the diff.
-- **The same treatment applies to `postPrCommentReply`** (a comment-index
-  item's own reply) via `prCommentMenuOpener`/`setPrCommentMenuOpener` and
-  `openMenu('prComment')` — `cancelPrCommentReply()`/`exitPrCommentThread()`
-  still hide/reset the reply field and thread cursor exactly as before (a
-  comment-index item's reply field, unlike the block-scoped one, always did
-  unmount on send), only now a menu opens right after instead of nothing.
-- **A failed send restores the draft directly into the still-visible field**
-  (`postThreadReply`'s `else` branch now also does `el.value = body;
-  autoGrowTextarea(el)`) — needed because the field no longer unmounts/
-  remounts on a reply (which used to be what picked the draft back up from
-  `replyDrafts` on reopen); `postPrCommentReply`'s field still does unmount on
-  every send (unaffected), so it still recovers the draft via `prReplyDrafts`
-  on the next "Beantwoorden" open, unchanged.
-- **This also fires after a publish-choice flow completes** — reaching
-  `postThreadReply` via `sendPendingReply` (the reviewer picked a GitHub
-  destination in the SEPARATE `'replyPublish'` menu) opens the comment menu
-  right after that menu closes, exactly like a plain send does. Two menus in
-  a row, one after another, is the accepted shape: the first was about WHAT
-  may go public, the second about what to do with the now-sent comment.
+`postThreadReply` (block-scoped thread) and `postPrCommentReply`
+(comment-index item) both dropped their `commentMenuOpener()`/
+`prCommentMenuOpener()` call. `cs.focus` still stays put (never reset to
+`null` the way `exitRelated()` would) — the field is cleared/blurred
+(`el.value=''`, `releaseFocus()`) and the thread stays expanded
+(`data-expanded="true"`), but no menu overlays it anymore. The reviewer can
+still open the same menu themselves — `Enter` on the now-empty reply field
+(`commentReplyEmpty`, `home.mjs`'s `onKeydown`) — exactly as before this
+whole back-and-forth started. The cross-module opener plumbing
+(`setCommentMenuOpener`/`commentMenuOpener`,
+`setPrCommentMenuOpener`/`prCommentMenuOpener`) stays registered (still used
+by that manual `Enter` path) — only the automatic call after a send is gone.
 
-Test: `tests/reaction-status-icon.spec.mjs` ("sending a reply opens its action
-menu immediately…"), `tests/comment-delete.spec.mjs` ("Enter with a typed
-reply sends the reply, then opens its own action menu"),
+- **A failed send still restores the draft directly into the still-visible
+  field** (`postThreadReply`'s `else` branch does `el.value = body;
+  autoGrowTextarea(el)`) — the field no longer unmounts/remounts on a reply,
+  so nothing else would pick the draft back up from `replyDrafts` on reopen;
+  `postPrCommentReply`'s field still does unmount on every send (unaffected),
+  so it still recovers the draft via `prReplyDrafts` on the next
+  "Beantwoorden" open, unchanged.
+- **This also applies after a publish-choice flow completes** — reaching
+  `postThreadReply`/`postPrCommentReply` via `sendPendingReply` (the reviewer
+  picked a GitHub destination in the SEPARATE `'replyPublish'` menu) no
+  longer opens a second menu right after that one closes.
+
+Test: `tests/reaction-status-icon.spec.mjs`, `tests/comment-delete.spec.mjs`,
 `tests/comment-send-failed-badge.spec.mjs` (draft recovery on both paths), and
-`tests/reply-publish-local-thread.spec.mjs` (the publish-choice-then-action-menu
-sequencing).
+`tests/reply-publish-local-thread.spec.mjs` — all updated to assert the menu
+does NOT reopen after a send.
 
 ### Deleting a comment hands the keyboard back to its diff row
 
