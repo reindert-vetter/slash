@@ -600,6 +600,90 @@ and an ordinary code row through `scopes`' `file|label`, and it reads the
 reactive store straight from its own nested slot — no `state.*` rollup and no
 watch of its own, exactly like `batchPill`.
 
+### "Selected: …" plus a navigable list of other running conversations, in the footer
+
+`claudeChatPill` above answers "is a turn running on THIS row's code"; it does
+not say WHICH conversation is currently open, nor let the reviewer reach
+another running one directly from inside the chat they're already in.
+Reviewer request: a line naming the conversation currently in view, plus,
+"als er andere claude dingen bezig zijn", their titles — navigable, Enter to
+jump to one.
+
+Both live in `CommentClaudeFooter` (`RelatedPanel.mjs`), the same shared
+status bar `claude-chat-status` already sits in:
+
+- **`chatTaskTitle(c)`** — "the last comment in that conversation", literally:
+  the newest message of the underlying comment thread this conversation hangs
+  on (`threadMessages(c)`'s own last entry — with zero replies that IS the
+  root comment, since `threadMessages` puts the comment's own body first).
+  Deliberately the raw text, not `commentTitleOf`'s AI-generated title (a
+  reply never gets one) — truncated to one line, same length as
+  `commentBlockItem`'s own index-row snippet.
+- **The "Selected: …" line** (`data-testid=claude-selected-line`) names
+  `chatAnchorComment()` — the conversation currently anchored/shown here,
+  regardless of `cs.focus` (so it also shows while the diff still owns the
+  keyboard and a turn is merely running in the background) — via
+  `chatTaskTitle`. Renders nothing when there is no anchor at all.
+- **`otherRunningClaudeTasks()`** resolves `claudeTurns.mjs`'s
+  `runningTurnIds(excludeId)` (every conversation with `busy || (progress &&
+  progress.running)`, PR-wide, excluding the anchored one) against `cs.list`
+  (the PR-wide comment list this panel already keeps loaded) into real comment
+  objects — an id whose comment hasn't loaded yet is simply skipped, never
+  shown as a blank row. **Deliberately excludes `answered`** (a turn that
+  already finished while the reviewer was elsewhere) — that is
+  `claudeChatPill`'s own job; this list is specifically "busy right now
+  elsewhere", per the reviewer's own wording.
+- **Visibility widened accordingly**: `hasCommentClaudeFooter()` now also
+  returns `true` whenever `otherRunningClaudeTasks().length > 0` — "zodra er
+  iets elders loopt, ook als de huidige conversatie zelf niets aan het doen
+  is" (explicit reviewer answer) — so the footer (and the whole
+  `comment-claude-row` card around it) can show even when the conversation on
+  screen is completely idle.
+- **The list itself** (`data-testid=claude-other-tasks`, rows
+  `data-testid=claude-task-row`) renders each task's title plus its own status
+  word via the existing `claudeStatusText(turnProgress(c.id), 0)` — words, a
+  pulsing dot as decoration only, per the colourblind rule.
+
+**Keyboard: a new nested rung at the END of the existing `'claude'` chain**
+(reviewer's own answer: "een nieuwe geneste stop in de nav-keten, die je
+bereikt na de laatste bestaande stap; daar doen ↑/↓ + Enter hun gewone werk"),
+not a new key or a parallel mode. `cs.claudeTasksPos` (0 = not there, 1..n =
+the n-th other task, top to bottom — mirrors `cs.previewPos`'s own counting)
+is reached by `↓` only once `cs.previewPos` has already walked through every
+code-preview card (or there were none) — i.e. exactly where `handleRelatedKey`
+used to fall straight into `exitRelated()`/`'advance'`. `↑` from
+`claudeTasksPos === 1` walks back onto the last code-preview card (or the
+composer, if there are none); `↓` past the last task still falls through to
+the pre-existing `exitRelated()`/`'advance'` exit — nothing about "↓ never
+dead-ends into Onderliggende code" (see "the chain, key by key" above)
+changes, this rung just sits one step earlier in that same walk. Highlight
+mirrors `claudeQuestionOptions`' own convention exactly: a ring **plus** a
+leading `› ` glyph, never colour alone.
+`selectHighlightedClaudeTask()`/`activateClaudeTask(c)` are Enter's/a click's
+shared action (`home.mjs`'s `onKeydown` calls the former right next to
+`selectHighlightedClaudeOption`, mirroring its own shape) — mouse-
+navigation.md's rule that a click runs the same function a key runs.
+
+**The actual jump needs `state` (block selection) and `jumpToCommentRow`
+(comment-index rows can still be a poll tick away) — both belong to
+`home.mjs`, which `RelatedPanel.mjs` never imports state from.**
+`setClaudeTaskJump(fn)` registers `home.mjs`'s `jumpToClaudeConversation(c)`
+once at module load (the same one-shot wiring shape as `setPrRepo`), so
+`activateClaudeTask` can call it without a new import cycle. A comment
+carrying its own `kind` is a PR-wide/comment-index row, landed via
+`jumpToCommentRow` (same mechanism `startBatchFromRow` uses); anything else is
+an ordinary inline comment anchored to a real block, landed via `openTask`'s
+own file/label lookup (test_class rows included) — then `enterClaudeChat`
+takes the keyboard the rest of the way in both cases. Best-effort throughout,
+like `openTask` itself: a stale/racy jump (the row/comment gone by the time an
+`await` resolves) simply does nothing further.
+
+Test: `tests/claude-chat-other-tasks.spec.mjs` (two PR-wide conversations, the
+first one's Signal POST held open — same trick as
+`claude-chat-parallel.spec.mjs` — asserting the second one's footer names
+itself, lists the first by its own comment text plus a status word, and that
+↓ + Enter jumps back onto it).
+
 ### At most ONE code-generating turn at a time (`chat_write_gate.go`)
 
 Also the reviewer's decision: *"Voor vragen, geen limit, voor het genereren van

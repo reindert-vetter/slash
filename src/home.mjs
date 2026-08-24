@@ -53,6 +53,7 @@ import RelatedPanel, {
   startPrWideComment,
   isPrWideComposing,
   startClaudeChat,
+  enterClaudeChat,
   sendClaudeChatText,
   startRangeComment,
   startRangeChat,
@@ -117,6 +118,8 @@ import RelatedPanel, {
   isChatAnchorPlaceholder,
   setClaudeMenuOpener,
   selectHighlightedClaudeOption,
+  selectHighlightedClaudeTask,
+  setClaudeTaskJump,
   claudeChatShadowWarning,
   sendPendingReply,
   pendingPublishInfo,
@@ -6866,6 +6869,38 @@ async function openTask(run) {
   selectComment(run.runId)
 }
 
+// jumpToClaudeConversation lands the keyboard on a DIFFERENT running Claude
+// conversation's own code/comment and opens it — the Enter (or click) action
+// of the "other running Claude tasks" nested nav stop (see
+// otherRunningClaudeTasks/selectHighlightedClaudeTask, RelatedPanel.mjs, and
+// "Where a turn on OTHER code is visible" in .claude/docs/claude-chat-panel.md
+// for the underlying registry it reads). Registered once via
+// setClaudeTaskJump right below, since RelatedPanel.mjs owns neither `state`
+// (block selection) nor jumpToCommentRow (comment-index rows can still be a
+// poll tick away) — both live here.
+//
+// A comment carrying its own `kind` is a PR-wide/comment-index row (its own
+// synthetic "Start" row, see commentBlockItem below); anything else is an
+// ordinary inline comment anchored to a real block, landed via openTask's own
+// file/label lookup (test_class rows included). Best-effort throughout, same
+// as openTask itself: a stale/racy jump (the comment/row gone by the time an
+// await resolves) simply does nothing further.
+async function jumpToClaudeConversation(c) {
+  if (!c) return
+  if (c.kind) {
+    jumpToCommentRow(c.id)
+    // The row may still be a poll tick away (see jumpToCommentRow's own doc
+    // comment) — give it the couple of microtask turns openTask already
+    // relies on elsewhere before claiming the keyboard.
+    await Promise.resolve()
+    await Promise.resolve()
+  } else {
+    await openTask({ comment: c, runId: c.id })
+  }
+  await enterClaudeChat(state.pr)
+}
+setClaudeTaskJump(jumpToClaudeConversation)
+
 // ── Command palette (`/`) ─────────────────────────────────────────────────────
 // The `/` key opens a searchable command menu overlaid on the next-block preview
 // slot (see DetailPanel). The state is split across two reactives on purpose:
@@ -12616,6 +12651,16 @@ function onKeydown(e) {
     // while an option is highlighted (focusClaudeComposer) and would otherwise
     // match that branch's own DOM-focus check instead.
     if (e.key === 'Enter' && isClaudeChatFocused() && selectHighlightedClaudeOption(state, commentTarget)) {
+      e.preventDefault()
+      return
+    }
+    // Enter while a row of the "other running Claude tasks" nested stop is
+    // highlighted (↓ walked past this chat's own code-preview cards, see
+    // cs.claudeTasksPos/otherRunningClaudeTasks in RelatedPanel.mjs) jumps to
+    // that conversation, exactly like clicking it (jumpToClaudeConversation,
+    // registered via setClaudeTaskJump). Checked for the same reason as the
+    // option branch right above it — this rung also blurs the composer.
+    if (e.key === 'Enter' && isClaudeChatFocused() && selectHighlightedClaudeTask()) {
       e.preventDefault()
       return
     }

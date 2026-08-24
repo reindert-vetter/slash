@@ -169,6 +169,22 @@ export function claudeTurnFor(b) {
   return answered ? 'answered' : ''
 }
 
+// runningTurnIds — every conversation id with a turn RUNNING right now
+// (a Signal POST in flight, or a live `progress.running` snapshot),
+// excluding `excludeId` (the conversation already shown by name elsewhere,
+// e.g. the panel's own "Selected: …" line) — for the "other Claude tasks
+// running elsewhere" nested nav stop (see claude-chat-panel.md). Deliberately
+// NOT `answered`: that is "finished while you were elsewhere", reported via
+// the index pill instead, not "busy right now" — see claudeTurnFor above.
+// Sorted by id so the list (and thus the keyboard cursor walking it) has a
+// stable order across renders, independent of object-key insertion order.
+export function runningTurnIds(excludeId) {
+  const ex = excludeId == null ? null : String(excludeId)
+  return Object.keys(turns.byId)
+    .filter((id) => id !== ex && (turns.byId[id].busy || (turns.byId[id].progress && turns.byId[id].progress.running)))
+    .sort((a, b) => Number(a) - Number(b))
+}
+
 // loadRunningTurns is the PR-wide RESYNC read (GET /api/chat/progress?pr=N):
 // every turn the server has running right now, for every conversation of this
 // PR. The per-conversation read only covers the conversation in view, so

@@ -38,6 +38,7 @@ import {
   lastTurnProgressAt,
   loadRunningTurns,
   markTurnAnswered,
+  runningTurnIds,
   setTurnBusy,
   setTurnProgress,
   setTurnScopes,
@@ -184,6 +185,18 @@ const cs = reactive({
   // loaded data, so restoring this would need its own re-apply pass in
   // applyRelRestore for a purely ephemeral highlight.
   previewPos: 0,
+  // claudeTasksPos is previewPos's own follow-up rung, one level further down
+  // the SAME chain: 0 = not there, 1..n = the n-th OTHER running Claude
+  // conversation in this PR (top to bottom, mirrors previewPos' own
+  // top-to-bottom counting — reached only after previewPos has been walked
+  // through, or immediately if there are no code-preview cards at all — see
+  // handleRelatedKey's 'claude' branch and otherRunningClaudeTasks below).
+  // Enter jumps to that conversation's own code/comment
+  // (selectHighlightedClaudeTask). Deliberately NOT bound to the URL, same
+  // reasoning as previewPos/claudeOptionSel: this walks other people's live,
+  // constantly-changing turns, not a navigation position worth restoring
+  // after a refresh.
+  claudeTasksPos: 0,
   // claudePinned is threadPinned's twin for the embedded Claude chat pane —
   // see threadPinned's own doc comment just above. Reset to true whenever the
   // conversation is (re)entered at rest (enterClaudeChat/toNewFocus/a fresh
@@ -872,6 +885,7 @@ function exitRelated() {
   rangeComposeItems = []
   cs.claudeOptionSel = 0
   cs.previewPos = 0
+  cs.claudeTasksPos = 0
   releaseFocus() // a focus request still in flight must not land after this
   const el = document.activeElement
   if (el && el.blur) el.blur()
@@ -1126,6 +1140,7 @@ function toNewFocus() {
   cs.focus = 'new'
   cs.claudeOptionSel = 0
   cs.previewPos = 0
+  cs.claudeTasksPos = 0
   focusEl('[data-testid=comment-compose]')
   const draft = composeDrafts.get(composeDraftKey)
   if (draft) prefillField('[data-testid=comment-compose]', draft)
@@ -1151,6 +1166,7 @@ function toComment(focusInput = true) {
   cs.threadPinned = true
   cs.claudeOptionSel = 0
   cs.previewPos = 0
+  cs.claudeTasksPos = 0
   scrollCommentIntoView()
   scrollCommentThreadToBottom()
   if (focusInput) {
@@ -2308,6 +2324,7 @@ export async function clearClaudeChat() {
   cs.claudePinned = true
   cs.claudeOptionSel = 0
   cs.previewPos = 0
+  cs.claudeTasksPos = 0
   const anchor = cc.commentId != null ? commentById(cc.commentId) : null
   if (anchor && anchor.body === CLAUDE_ANCHOR_PLACEHOLDER) {
     await deleteComment(anchor)
@@ -2648,6 +2665,7 @@ export async function enterClaudeChat(pr) {
   cs.claudePinned = true
   cs.claudeOptionSel = 0
   cs.previewPos = 0
+  cs.claudeTasksPos = 0
   await ensureAndLoadChat(pr, c.id)
   if (token !== focusToken) return
   ensureChatEvents(pr)
@@ -2678,6 +2696,7 @@ function enterClaudeChatFromNew() {
   cs.claudePinned = true
   cs.claudeOptionSel = 0
   cs.previewPos = 0
+  cs.claudeTasksPos = 0
   focusClaudeComposer()
 }
 
@@ -2851,6 +2870,21 @@ function focusPreviewCard() {
     const input = document.querySelector('[data-testid=claude-chat-compose]')
     if (input && document.activeElement === input) input.blur()
     const el = document.querySelectorAll('[data-testid=code-preview-card]')[cs.previewPos - 1]
+    if (el) scrollIntoViewVertical(el)
+  })
+}
+// focusClaudeTaskRow mirrors focusPreviewCard for the "other running Claude
+// tasks" rung (cs.claudeTasksPos, see its own doc comment): blurs the
+// composer and keeps the highlighted row in view. scrollIntoViewVertical,
+// never scrollIntoView itself — same axis rule as focusPreviewCard.
+function focusClaudeTaskRow() {
+  releaseFocus()
+  const want = focusToken
+  requestAnimationFrame(() => {
+    if (want !== focusToken) return
+    const input = document.querySelector('[data-testid=claude-chat-compose]')
+    if (input && document.activeElement === input) input.blur()
+    const el = document.querySelectorAll('[data-testid=claude-task-row]')[cs.claudeTasksPos - 1]
     if (el) scrollIntoViewVertical(el)
   })
 }
@@ -3237,9 +3271,77 @@ export function hasActiveClaudeTurn() {
   return ccBusy() || !!ccProgress() || queuedFor(cc.commentId).length > 0
 }
 
+// chatTaskTitle — "the last comment in that conversation", literally: the
+// most recent message of the underlying comment thread this conversation
+// hangs on (threadMessages already puts the root comment's own body first,
+// so with zero replies "the last message" IS the root comment). Deliberately
+// the raw text, not commentTitleOf's AI-generated title — a reply never gets
+// one of those, and the reviewer asked for the actual text. One line, same
+// truncation length as commentBlockItem's own index-row snippet (home.mjs),
+// for the same reason: a full comment body would blow up this compact row.
+function chatTaskTitle(c) {
+  if (!c) return ''
+  const msgs = threadMessages(c)
+  const last = msgs.length ? msgs[msgs.length - 1] : c
+  return ((last && last.body) || c.body || '').trim().replace(/\s+/g, ' ').slice(0, 60)
+}
+
+// otherRunningClaudeTasks — every OTHER conversation in this PR with a turn
+// running right now (claudeTurns.mjs' shared, PR-wide registry), excluding
+// the one currently anchored/shown by name (see the "Selected: …" line in
+// CommentClaudeFooter) — reviewer request: "als er andere claude dingen bezig
+// zijn, wil ik daarvan alleen de titels zien en daar doorheen kunnen
+// navigeren". Resolves each running id to its own comment via cs.list (the
+// PR-wide comment list this panel already keeps loaded) so the nested nav
+// stop below can show a title (chatTaskTitle) and jump to it
+// (selectHighlightedClaudeTask); an id whose comment hasn't loaded into
+// cs.list yet (a rare timing gap right after a turn starts elsewhere) is
+// simply skipped, not shown as a blank row.
+function otherRunningClaudeTasks() {
+  const anchor = chatAnchorComment()
+  return runningTurnIds(anchor ? anchor.id : null)
+    .map((id) => cs.list.find((c) => String(c.id) === id))
+    .filter(Boolean)
+}
+
+// claudeTaskJump — the "go there" action for a highlighted row of
+// otherRunningClaudeTasks (Enter, or a click), registered once by home.mjs
+// (setClaudeTaskJump) since it needs to move state.selected/state.mode —
+// state this module never touches directly. See setClaudeTaskJump's own
+// doc comment for why this indirection exists instead of a direct import.
+let claudeTaskJump = null
+export function setClaudeTaskJump(fn) {
+  claudeTaskJump = fn
+}
+
+// selectHighlightedClaudeTask — Enter while the "other running Claude tasks"
+// rung is highlighted (cs.claudeTasksPos > 0, see handleRelatedKey's 'claude'
+// branch above). Mirrors selectHighlightedClaudeOption's own shape: returns
+// false (a no-op) at rest so home.mjs's onKeydown can fall through to the
+// ordinary Claude-column menu Enter right after it.
+export function selectHighlightedClaudeTask() {
+  if (cs.focus !== 'claude' || cs.claudeTasksPos === 0) return false
+  const c = otherRunningClaudeTasks()[cs.claudeTasksPos - 1]
+  activateClaudeTask(c)
+  return true
+}
+
+// activateClaudeTask — the mouse action for one row of otherRunningClaudeTasks,
+// shared with the Enter path above (selectHighlightedClaudeTask): per
+// mouse-navigation.md's rule ("a click runs the same function a key runs"),
+// clicking a row does exactly what walking onto it with ↓ and pressing Enter
+// would.
+export function activateClaudeTask(c) {
+  cs.claudeTasksPos = 0
+  if (c && claudeTaskJump) claudeTaskJump(c)
+}
+
 // hasCommentClaudeFooter — true exactly when CommentClaudeFooter itself would
-// render a status line (comment side busy/replySent, or a Claude turn
-// running/reporting progress). Exported so home.mjs can fold away the whole
+// render something (comment side busy/replySent, a Claude turn running/
+// reporting progress on the conversation shown here, or another conversation
+// running ELSEWHERE in the PR — reviewer request: that last one must show
+// "zodra er iets elders loopt, ook als de huidige conversatie zelf niets aan
+// het doen is"). Exported so home.mjs can fold away the whole
 // comment-claude-row card (border/bg wrapper around InlineComments +
 // ClaudeChatPanel + this footer) when NEITHER a visible conversation/composer
 // (claudeChatVisible()) NOR this footer has anything to show — otherwise that
@@ -3247,7 +3349,7 @@ export function hasActiveClaudeTurn() {
 // comments/Claude chat and nothing in flight, showing as a bare thin gray bar
 // above Onderliggende code (see .claude/docs/comments-panel.md).
 export function hasCommentClaudeFooter() {
-  return !!commentFooterText() || hasActiveClaudeTurn()
+  return !!commentFooterText() || hasActiveClaudeTurn() || otherRunningClaudeTasks().length > 0
 }
 
 // claudeQueueNote — the Claude half's queue suffix ("· nog 2 berichten in de
@@ -3328,6 +3430,37 @@ export function commentClaudeShortcutHints() {
   }
 }
 
+// claudeTaskRow renders one row of otherRunningClaudeTasks: a title (the
+// last comment text, see chatTaskTitle) plus its own status word
+// (claudeStatusText — words, never a bare colour dot, per the colourblind
+// rule; the pulsing dot next to it is decoration on top only). Highlighted
+// state mirrors claudeQuestionOptions' own convention exactly: a ring PLUS a
+// leading "› " glyph, never colour alone.
+function claudeTaskRow(c, i) {
+  const active = () => cs.claudeTasksPos === i + 1
+  return html`
+    <button
+      type="button"
+      class="${() =>
+        'flex w-full items-center gap-1.5 truncate rounded-md border px-1.5 py-1 text-left ' +
+        (active()
+          ? 'border-indigo-300 ring-2 ring-indigo-200 bg-indigo-50 dark:border-indigo-400 dark:ring-indigo-500/40 dark:bg-indigo-500/10'
+          : 'border-slate-200 hover:bg-slate-50 dark:border-zinc-700 dark:hover:bg-zinc-800/50')}"
+      data-testid="claude-task-row"
+      data-active="${() => (active() ? 'true' : 'false')}"
+      @click="${() => activateClaudeTask(c)}"
+    >
+      <span class="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-indigo-400"></span>
+      <span class="truncate font-medium text-slate-600 dark:text-zinc-300">
+        ${() => (active() ? '› ' : '') + (chatTaskTitle(c) || '(leeg comment)')}
+      </span>
+      <span class="shrink-0 truncate text-slate-400 dark:text-zinc-500">
+        ${() => claudeStatusText(turnProgress(c.id), 0)}
+      </span>
+    </button>
+  `.key('claude-task:' + c.id)
+}
+
 export function CommentClaudeFooter(commentId = '') {
   const view = claudeChatView()
   const claudeActive = hasActiveClaudeTurn
@@ -3340,15 +3473,29 @@ export function CommentClaudeFooter(commentId = '') {
     if (p) return claudeStatusText(p, 0)
     return batchNoteFor(commentId)
   }
+  // "Selected: …" — which conversation this footer's own status line/task
+  // list is anchored on, so a reviewer glancing at the "other Claude tasks"
+  // list below never confuses it with the one they're currently looking at.
+  // '' whenever nothing is anchored here at all (no chat ever hung on the
+  // current selection) — the whole line then simply doesn't render.
+  const selectedTitle = () => chatTaskTitle(chatAnchorComment())
   return html`
     <div class="contents">
       ${() =>
-        commentFooterText() || claudeActive() || batchText()
+        commentFooterText() || claudeActive() || batchText() || otherRunningClaudeTasks().length > 0
           ? html`
               <div
-                class="flex w-0 min-w-full flex-wrap items-center gap-x-4 gap-y-1 border-t border-slate-100 dark:border-zinc-800/60 px-3 py-1.5 text-[11px] text-slate-500 dark:text-zinc-500"
+                class="flex w-0 min-w-full flex-col gap-1 border-t border-slate-100 dark:border-zinc-800/60 px-3 py-1.5 text-[11px] text-slate-500 dark:text-zinc-500"
                 data-testid="comment-claude-footer"
               >
+                ${() =>
+                  selectedTitle()
+                    ? html`<span class="truncate" data-testid="claude-selected-line">
+                        <span class="font-medium text-slate-600 dark:text-zinc-400">Selected:</span>
+                        ${() => selectedTitle()}
+                      </span>`
+                    : ''}
+                <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
                 ${() =>
                   commentFooterText()
                     ? html`<span class="flex items-center gap-1.5" data-testid="comment-claude-footer-comment">
@@ -3401,6 +3548,23 @@ export function CommentClaudeFooter(commentId = '') {
                         </span>
                       </span>`
                     : ''}
+                </div>
+                ${() => {
+                  const tasks = otherRunningClaudeTasks()
+                  return tasks.length
+                    ? html`
+                        <div
+                          class="flex flex-col gap-1 border-t border-slate-100 pt-1 dark:border-zinc-800/60"
+                          data-testid="claude-other-tasks"
+                        >
+                          <span class="text-[10px] font-medium text-slate-400 dark:text-zinc-500">
+                            Ook bezig elders in deze PR:
+                          </span>
+                          ${tasks.map((c, i) => claudeTaskRow(c, i))}
+                        </div>
+                      `
+                    : ''
+                }}
               </div>
             `
           : ''}
@@ -3815,25 +3979,47 @@ export function handleRelatedKey(key) {
     return 'exit'
   }
   if (cs.focus === 'claude') {
-    if (key === 'ArrowUp' && cs.previewPos > 0) {
-      // Walking the code-preview cards back up, toward the composer (0 = the
-      // composer itself again, see cs.previewPos).
-      cs.previewPos -= 1
-      if (cs.previewPos === 0) focusClaudeComposer()
-      else focusPreviewCard()
+    if (key === 'ArrowUp' && (cs.previewPos > 0 || cs.claudeTasksPos > 0)) {
+      // Walking the "other running Claude tasks" rung back up first (if we're
+      // in it — see otherRunningClaudeTasks/claudeTasksPos), then the
+      // code-preview cards, toward the composer (0 = the composer itself
+      // again, see cs.previewPos/cs.claudeTasksPos).
+      if (cs.claudeTasksPos > 0) {
+        cs.claudeTasksPos -= 1
+        if (cs.claudeTasksPos > 0) focusClaudeTaskRow()
+        else if (codePreviewCount() > 0) focusPreviewCard()
+        else focusClaudeComposer()
+      } else {
+        cs.previewPos -= 1
+        if (cs.previewPos === 0) focusClaudeComposer()
+        else focusPreviewCard()
+      }
       return true
     }
-    if (key === 'ArrowDown' && (cs.previewPos > 0 || (cs.claudePos === 0 && cs.claudeOptionSel === 0))) {
-      // The chat's own code blocks are the last rung below the composer: ↓
-      // walks them top to bottom, and only past the LAST one does the
-      // "advance to the next block" exit below take over (see the doc
-      // comment above).
+    if (
+      key === 'ArrowDown' &&
+      (cs.previewPos > 0 || cs.claudeTasksPos > 0 || (cs.claudePos === 0 && cs.claudeOptionSel === 0))
+    ) {
+      // The chat's own code blocks are the next rung below the composer: ↓
+      // walks them top to bottom. Past the LAST one, the "other running
+      // Claude tasks" rung (otherRunningClaudeTasks, PR-wide) takes over —
+      // titles only, Enter jumps via selectHighlightedClaudeTask — and only
+      // once THAT is exhausted (or there was nothing to walk there either)
+      // does the "advance to the next block" exit below take over (see the
+      // doc comment above).
       if (cs.previewPos < codePreviewCount()) {
         cs.previewPos += 1
         focusPreviewCard()
         return true
       }
+      const tasks = otherRunningClaudeTasks()
+      if (cs.claudeTasksPos < tasks.length) {
+        cs.claudeTasksPos += 1
+        focusClaudeTaskRow()
+        return true
+      }
       cs.previewPos = 0
+      cs.claudeTasksPos = 0
       exitRelated()
       return 'advance'
     }
@@ -3987,6 +4173,7 @@ export function handleRelatedKey(key) {
             focusPreviewCard()
           } else {
             cs.previewPos = 0
+            cs.claudeTasksPos = 0
             focusClaudeComposer()
           }
         } else if (hasVisibleComments()) {
@@ -5439,6 +5626,7 @@ async function postThreadReply(c, body, publish, withHistory) {
   }
   cs.claudeOptionSel = 0
   cs.previewPos = 0
+  cs.claudeTasksPos = 0
   releaseFocus() // a focus request still in flight must not land after this
   if (el && el.blur) el.blur()
   cs.busy = true
