@@ -685,8 +685,14 @@ reactive `b.code` reader, so no stuck-on-loading race) and pushes them via
 **statically mounted** `position:fixed` `<svg data-testid=call-arrows>` (top-level
 next to `MenuHost`, `z-[15]`: above `<main>`'s z-10, below the sidebar's z-20 and
 the command menu; `pointer-events:none`). Path `data-testid=call-arrow`, stroke
-`#6366f1` at 0.45 opacity + arrowhead marker. The svg is laid exactly over
-`<main>`'s rect on each draw and clips itself, so arrows never draw over the
+`#6366f1` at 0.45 opacity — a bare curve, deliberately **no arrowhead marker**
+(reviewer request: "haal het pijltje weg, het lijntje laten staan" — the line
+alone already identifies which row/card belong together, and a marker-end
+`<marker>` def used to sit in the same `innerHTML` write). Both endpoints
+(`x1`/`x2` in `buildArrowPaths`) get the same small fixed `LINE_SHIFT_X` (4px)
+nudge to the right of the raw pane-edge/card-edge anchor — purely cosmetic,
+the shape/slope is unchanged. The svg is laid exactly over `<main>`'s rect on
+each draw and clips itself, so arrows never draw over the
 pr-index/PR-info/sidebar/footer.
 
 Redraw triggers: rAF-coalesced on the watch itself, `resize`, capture `scroll`

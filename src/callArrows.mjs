@@ -132,6 +132,14 @@ function scheduleArrowSettle() {
   requestAnimationFrame(tick)
 }
 
+// LINE_SHIFT_X nudges the whole line a few px to the right of the raw
+// row-edge/card-edge anchors (reviewer request: the line sat flush against
+// the pane's right edge, "kan iets naar rechts" — a small, fixed cosmetic
+// offset applied identically to both endpoints, so the line's shape/slope is
+// unchanged, only its position). Applied to both x1 and x2 so this is purely
+// visual, not a change in which row/card it points at.
+const LINE_SHIFT_X = 4
+
 // buildArrowPaths draws one arrow-set: a { row, id } pair list, the panel
 // selector it targets and the id attribute that panel's cards carry — shared
 // by both the call-arrow (row → underlying-code card) and the comment-arrow
@@ -150,9 +158,9 @@ function buildArrowPaths(list, idKey, panelSelector, idAttr, testid, main, pane,
     // same visibility rule updateHints uses for the green scroll chevrons).
     if (rRect.bottom <= paneRect.top + 0.5 || rRect.top >= paneRect.bottom - 0.5) continue
     const cRect = childEl.getBoundingClientRect()
-    const x1 = paneRect.right - 6
+    const x1 = paneRect.right - 6 + LINE_SHIFT_X
     const y1 = (rRect.top + rRect.bottom) / 2
-    const x2 = cRect.left - 10
+    const x2 = cRect.left - 10 + LINE_SHIFT_X
     // Aim at the child card's header line; clamp to the panel's visible box so
     // a card scrolled out of the panel keeps a (clamped) arrow pointing at
     // where it went.
@@ -162,10 +170,13 @@ function buildArrowPaths(list, idKey, panelSelector, idAttr, testid, main, pane,
     // Coordinates are svg-local: the overlay sits exactly over <main>.
     const sx = (v) => (v - mainRect.left).toFixed(1)
     const sy = (v) => (v - mainRect.top).toFixed(1)
+    // No arrowhead marker (reviewer request: "haal het pijltje weg, het
+    // lijntje laten staan") — just the bare stroked curve, still identifying
+    // the relationship between row and card on its own.
     parts.push(
       `<path d="M ${sx(x1)} ${sy(y1)} C ${sx(x1 + dx)} ${sy(y1)}, ${sx(x2 - dx)} ${sy(y2)}, ${sx(x2)} ${sy(y2)}"` +
         ` fill="none" stroke="${STROKE}" stroke-opacity="0.45" stroke-width="1.5" stroke-linecap="round"` +
-        ` marker-end="url(#call-arrow-head)" data-testid="${testid}"></path>`,
+        ` data-testid="${testid}"></path>`,
     )
   }
   return parts
@@ -212,11 +223,7 @@ function drawCallArrows() {
   svg.style.left = mainRect.left + 'px'
   svg.style.width = mainRect.width + 'px'
   svg.style.height = mainRect.height + 'px'
-  svg.innerHTML =
-    '<defs><marker id="call-arrow-head" viewBox="0 0 10 10" refX="7.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">' +
-    `<path d="M 1 1.5 L 8 5 L 1 8.5" fill="none" stroke="${STROKE}" stroke-opacity="0.7" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>` +
-    '</marker></defs>' +
-    parts.join('')
+  svg.innerHTML = parts.join('')
 }
 
 // Reposition on resize and on any scroll — capture catches the inner scrollers
