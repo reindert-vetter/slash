@@ -2606,9 +2606,9 @@ open questions this raised:**
 DELIBERATELY separate, wider cutoff than Tailwind's app-wide `narrow:`
 1399px screen, which keeps governing everything else, e.g. diff-card
 widths). At/above 1920px nothing shrinks or goes read-only at all — both
-halves render at full (doubled) width, exactly as before this whole feature
-existed ("voor laptop zoals het nu is" — the reviewer's own framing: this
-behavior is scoped to the laptop case only).
+halves render at the same `COMMENT_CLAUDE_WIDE_SCALE` (see below), exactly
+as before this whole feature existed ("voor laptop zoals het nu is" — the
+reviewer's own framing: this behavior is scoped to the laptop case only).
 
 **The predicates** (`RelatedPanel.mjs`) — same trigger condition as the
 superseded rail cut, renamed to match what they now cause:
@@ -2627,20 +2627,33 @@ superseded rail cut, renamed to match what they now cause:
 needed NO extra correction term (unlike the superseded rail cut).**
 `columnPairScale(state, thisSideFocused, siblingFocused)` (`RelatedPanel.mjs`)
 now returns `2/3` for the focused half, `1/3` for the read-only one, `1/2`
-for both at rest, `1` for both on a wide screen. Both halves are STILL
-rendered through the SAME `relatedWidthCls()` clamp at whatever scale — no
-fixed-width element (like the old rail) sits outside that formula any more
-— and `relatedWidthCls(chars,a,d1) + relatedWidthCls(chars,b,d2) ===
-relatedWidthCls(chars,a+b,d1+d2)` exactly, for ANY `a+b=1` (clamp scales
+for both at rest, `COMMENT_CLAUDE_WIDE_SCALE` for both on a wide screen. Both
+halves are STILL rendered through the SAME `relatedWidthCls()` clamp at
+whatever scale — no fixed-width element (like the old rail) sits outside that
+formula any more — and `relatedWidthCls(chars,a,d1) + relatedWidthCls(chars,b,d2)
+=== relatedWidthCls(chars,a+b,d1+d2)` exactly, for ANY `a+b=1` (clamp scales
 homogeneously and shifts additively, `relatedWidthCls`'s own doc comment).
-Since `2/3+1/3=1`, just like `1/2+1/2=1` (rest) and the wide-screen case
-(each half's OWN scale doubling, not summed against a sibling), the SAME
+Since `2/3+1/3=1`, just like `1/2+1/2=1` (rest), the SAME
 connector-subtraction convention that already existed
 (`COMMENT_CLAUDE_CONNECTOR_REM` always comes off the comment side's own
 call, never Claude's) keeps the row's total pinned to
-`relatedColumnWidthCls()` automatically — verified both algebraically and
-numerically (several `chars` values, both split directions) with no rail
-correction term needed at all.
+`relatedColumnWidthCls()` automatically for those two cases — verified both
+algebraically and numerically (several `chars` values, both split
+directions) with no rail correction term needed at all. **The wide-screen
+case is the one deliberate exception**: each half's OWN scale is
+`COMMENT_CLAUDE_WIDE_SCALE` regardless of the sibling (not summed against
+it), so the row's total there is
+`2 * COMMENT_CLAUDE_WIDE_SCALE * relatedColumnWidthCls()` — wider than
+`relatedColumnWidthCls()` itself by design, ever since this pair started
+doubling on a wide screen at all ("maak de chat blokken 2x zo breed").
+
+**`COMMENT_CLAUDE_WIDE_SCALE`, the wide-screen scale, was lowered from `1` to
+`0.75`** (reviewer report, 2026-08-22, screenshot: "voor een groot scherm heb
+je nu een ander formaat chat, dat mag ~25% kleiner" — confirmed to mean
+exactly this ≥1920px doubling, for both halves, with nothing changing below
+the breakpoint). `0.75` is 25% less than the previous `1`, so each half is
+now `1.5x` (not `2x`) the sub-breakpoint rest-state's `0.5` share — still
+wider than the narrow-screen split, just less extreme than before.
 
 **What happened to the rail machinery.** `src/collapsedRail.mjs`
 (`railButtonHTML`) and `home.mjs`'s `collapsedColumnHTML` (the drilled/

@@ -7310,24 +7310,36 @@ export function relatedColumnWidthCls() {
 // around it (mirrors nestedChipColumn's own connector, which also has none).
 const COMMENT_CLAUDE_CONNECTOR_REM = 0.75
 
+// COMMENT_CLAUDE_WIDE_SCALE — the scale BOTH halves get on a wide screen
+// (see columnPairScale below). Originally 1 (the FULL clamp, same as
+// relatedColumnWidthCls itself — "maak de chat blokken 2x zo breed",
+// see below); lowered to 0.75 on reviewer report (screenshot, 2026-08-22):
+// "voor een groot scherm heb je nu een ander formaat chat, dat mag ~25%
+// kleiner" — confirmed to mean exactly this wide-screen doubling, for BOTH
+// halves, nothing below COMMENT_CLAUDE_WIDE_BREAKPOINT_PX. 0.75 is 25% less
+// than the previous 1, so each half is now 1.5x (rather than 2x) the
+// sub-breakpoint rest-state's 0.5 share.
+const COMMENT_CLAUDE_WIDE_SCALE = 0.75
+
 // columnPairScale — the shared "how much of relatedColumnWidthCls()'s own
 // clamp does THIS half get" read behind commentColumnWidthCls/
 // claudeColumnWidthCls below. `thisSideFocused`/`siblingFocused` (mutually
 // exclusive, but both can be false at once — the rest state) answer "does
 // THIS half own the keyboard" / "does the SIBLING own the keyboard".
 //
-// scale is 1 (the FULL clamp, same as relatedColumnWidthCls itself) on a
-// wide screen (`!state.commentClaudeNarrow`, at/above
-// COMMENT_CLAUDE_WIDE_BREAKPOINT_PX — home.mjs) — reviewer request: "maak de
-// chat blokken 2x zo breed (dan past alles heel goed)" on a screen with room
-// to spare, so BOTH halves double from the halved split below, and nothing
-// ever shrinks there. On a narrow screen: 2/3 for the focused half, 1/3 for
-// the unfocused-but-still-visible one (reviewer request, replacing an
-// earlier cut that collapsed the unfocused half to a bare rail — see
-// "Read-only, not a rail" in .claude/docs/comments-panel.md), or 1/2 for
-// both in the rest state (neither side focused, "zoals nu").
+// scale is COMMENT_CLAUDE_WIDE_SCALE on a wide screen
+// (`!state.commentClaudeNarrow`, at/above COMMENT_CLAUDE_WIDE_BREAKPOINT_PX
+// — home.mjs) — reviewer request: "maak de chat blokken 2x zo breed (dan
+// past alles heel goed)" on a screen with room to spare, so BOTH halves grow
+// from the halved split below (later scaled back 25%, see the constant's own
+// doc comment), and neither ever shrinks below that there. On a narrow
+// screen: 2/3 for the focused half, 1/3 for the unfocused-but-still-visible
+// one (reviewer request, replacing an earlier cut that collapsed the
+// unfocused half to a bare rail — see "Read-only, not a rail" in
+// .claude/docs/comments-panel.md), or 1/2 for both in the rest state (neither
+// side focused, "zoals nu").
 function columnPairScale(state, thisSideFocused, siblingFocused) {
-  if (!state || !state.commentClaudeNarrow) return 1
+  if (!state || !state.commentClaudeNarrow) return COMMENT_CLAUDE_WIDE_SCALE
   if (thisSideFocused) return 2 / 3
   if (siblingFocused) return 1 / 3
   return 1 / 2
@@ -7345,10 +7357,14 @@ function columnPairScale(state, thisSideFocused, siblingFocused) {
 // STILL rendered via this same clamp formula, at whatever scale, and
 // `relatedWidthCls(chars,a,d1) + relatedWidthCls(chars,b,d2) ===
 // relatedWidthCls(chars,a+b,d1+d2)` exactly (clamp scales homogeneously and
-// shifts additively — relatedWidthCls's own doc comment) for ANY `a+b=1`,
-// not just `1/2+1/2` — so `2/3+1/3` (the new focused/unfocused split) keeps
-// the exact same total, `relatedColumnWidthCls()`, as `1/2+1/2` (rest) and
-// `1+1` (wide screen) already did. Verified numerically too, across several
+// shifts additively — relatedWidthCls's own doc comment). This keeps the row's
+// total EXACTLY equal to `relatedColumnWidthCls()` only for `a+b=1` — true for
+// `2/3+1/3` (the focused/unfocused split) and `1/2+1/2` (rest); the wide-screen
+// pair (`COMMENT_CLAUDE_WIDE_SCALE` for both halves, currently 0.75+0.75=1.5)
+// is deliberately NOT `a+b=1` — it was already 1+1=2 before that constant was
+// introduced, i.e. this row was always wider than `relatedColumnWidthCls()` on
+// a wide screen, by design ("maak de chat blokken 2x zo breed", see
+// columnPairScale's own doc comment). Verified numerically too, across several
 // `chars` values, not just by this algebraic argument.
 export function commentColumnWidthCls(state) {
   return relatedWidthCls(

@@ -191,9 +191,10 @@ test('at 1919px (one below the threshold), the unfocused half still shrinks and 
 // Reviewer request: "doe dit alleen als ik een scherm heb op mijn laptop,
 // maak anders de chat blokken 2x zo breed" — at/above
 // COMMENT_CLAUDE_WIDE_BREAKPOINT_PX (1920px) neither half ever shrinks or
-// goes read-only; both instead render at the SAME full clamp
-// relatedColumnWidthCls() itself uses (double the halved split below the
-// breakpoint), even while the keyboard sits inside one of them.
+// goes read-only; both instead render at the SAME COMMENT_CLAUDE_WIDE_SCALE
+// (RelatedPanel.mjs — 0.75, lowered from 1 on a later "~25% kleiner" report),
+// well above the halved rest-state split below the breakpoint, even while
+// the keyboard sits inside one of them.
 test('at 1920px (the threshold itself), neither half shrinks — both are full width and stay interactive (double the halved split)', async ({
   page,
 }, testInfo) => {
@@ -233,7 +234,8 @@ test('at 1920px (the threshold itself), neither half shrinks — both are full w
   // Still equal to each other (same scale for both)...
   expect(commentsBox.width).toBeGreaterThan(claudeBox.width * 0.85)
   expect(commentsBox.width).toBeLessThan(claudeBox.width * 1.15)
-  // ...but each is now roughly as wide as the Onderliggende-code card,
-  // not half of it.
-  expect(commentsBox.width).toBeGreaterThan(relatedBox.width * 0.75)
+  // ...but each is now roughly as wide as the Onderliggende-code card
+  // (COMMENT_CLAUDE_WIDE_SCALE, 0.75, minus the small connector offset on the
+  // comment side), not half of it (0.5).
+  expect(commentsBox.width).toBeGreaterThan(relatedBox.width * 0.65)
 })
