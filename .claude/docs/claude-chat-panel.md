@@ -610,20 +610,35 @@ Reviewer request: a line naming the conversation currently in view, plus,
 jump to one.
 
 Both live in `CommentClaudeFooter` (`RelatedPanel.mjs`), the same shared
-status bar `claude-chat-status` already sits in:
+status bar `claude-chat-status` already sits in. The title source went
+through a second iteration: the FIRST cut used the underlying comment
+thread's own last message (`chatTaskTitle(c)`), which read as unusable the
+moment the anchor was still the auto-created placeholder — "Selected: (Nog
+geen eigen comment getypt — gesprek met Claude gestart." (a real reviewer
+screenshot/report). Replaced by **the reviewer's own last message in the
+Claude conversation itself, one sentence**:
 
-- **`chatTaskTitle(c)`** — "the last comment in that conversation", literally:
-  the newest message of the underlying comment thread this conversation hangs
-  on (`threadMessages(c)`'s own last entry — with zero replies that IS the
-  root comment, since `threadMessages` puts the comment's own body first).
-  Deliberately the raw text, not `commentTitleOf`'s AI-generated title (a
-  reply never gets one) — truncated to one line, same length as
-  `commentBlockItem`'s own index-row snippet.
-- **The "Selected: …" line** (`data-testid=claude-selected-line`) names
-  `chatAnchorComment()` — the conversation currently anchored/shown here,
-  regardless of `cs.focus` (so it also shows while the diff still owns the
-  keyboard and a turn is merely running in the background) — via
-  `chatTaskTitle`. Renders nothing when there is no anchor at all.
+- **`firstSentence(text)`** — a small heuristic, not a real tokenizer: trims,
+  collapses whitespace/newlines, and cuts at the first `.`/`!`/`?` followed by
+  whitespace or the string's end; an 80-char cap is the fallback for a
+  sentence with no punctuation at all.
+- **`ownMessageTitle(messages, c)`** — the newest entry of `messages` with
+  `role === 'user'` (never Claude's own answer), `firstSentence`'d. Falls back
+  to the anchor comment's own text (also `firstSentence`'d) when nothing has
+  been typed into Claude yet but the comment itself is real, i.e. NOT the
+  auto-created anchor placeholder (`isChatAnchorPlaceholder`) — that
+  placeholder sentence is exactly the unusable text from the report above, so
+  it is never shown. Returns `''` when there is genuinely nothing of the
+  reviewer's own to show yet; every caller decides for itself what "nothing"
+  means for that context (see the two bullets right below).
+- **The "Selected: …" line** (`data-testid=claude-selected-line`) is
+  `ownMessageTitle(cc.messages, chatAnchorComment())` — `cc.messages` is
+  already loaded for whichever ONE conversation is currently anchored/shown
+  here, regardless of `cs.focus` (so it also shows while the diff still owns
+  the keyboard and a turn is merely running in the background). **Renders
+  nothing at all** (not the placeholder, not a "nieuw gesprek" filler — an
+  explicit reviewer answer) when `ownMessageTitle` comes back empty; the rest
+  of the footer (the status line, the task list) stays visible regardless.
 - **`otherRunningClaudeTasks()`** resolves `claudeTurns.mjs`'s
   `runningTurnIds(excludeId)` (every conversation with `busy || (progress &&
   progress.running)`, PR-wide, excluding the anchored one) against `cs.list`
@@ -632,7 +647,10 @@ status bar `claude-chat-status` already sits in:
   shown as a blank row. **Deliberately excludes `answered`** (a turn that
   already finished while the reviewer was elsewhere) — that is
   `claudeChatPill`'s own job; this list is specifically "busy right now
-  elsewhere", per the reviewer's own wording.
+  elsewhere", per the reviewer's own wording. It is also the ONE trigger point
+  for `ensureOtherTaskTitle` below — it already runs on every render that
+  needs the list, and that call is self-deduping, so no separate watch/poller
+  exists just to kick fetches off.
 - **Visibility widened accordingly**: `hasCommentClaudeFooter()` now also
   returns `true` whenever `otherRunningClaudeTasks().length > 0` — "zodra er
   iets elders loopt, ook als de huidige conversatie zelf niets aan het doen
@@ -640,9 +658,45 @@ status bar `claude-chat-status` already sits in:
   `comment-claude-row` card around it) can show even when the conversation on
   screen is completely idle.
 - **The list itself** (`data-testid=claude-other-tasks`, rows
-  `data-testid=claude-task-row`) renders each task's title plus its own status
-  word via the existing `claudeStatusText(turnProgress(c.id), 0)` — words, a
-  pulsing dot as decoration only, per the colourblind rule.
+  `data-testid=claude-task-row`) renders each task's title (see
+  `otherTaskTitleFor` below) plus its own status word via the existing
+  `claudeStatusText(turnProgress(c.id), 0)` — words, a pulsing dot as
+  decoration only, per the colourblind rule.
+
+**The task-list title needs a DIFFERENT conversation's `role: 'user'`
+message, which `cc.messages` never holds — the panel only ever keeps ONE
+transcript loaded at a time** (see "Parallel conversations" below). Explicit
+reviewer decision, cost accepted: fetch each running task's own transcript,
+cached and invalidated as cheaply as reasonable, no new heavyweight
+mechanism:
+
+- **`otherTaskTitles`** (`reactive({ byId: {} })`) is a per-conversation
+  title cache, reassigned as a whole object on every update — mirrors
+  `claudeTurns.mjs`'s own `turns.byId` pattern. `undefined` = never fetched;
+  an explicit `''` is itself a valid "fetched, nothing of the reviewer's own"
+  result, told apart from "never fetched" in `ensureOtherTaskTitle`'s own
+  guard.
+- **`ensureOtherTaskTitle(c)`** — a plain (non-reactive) `Set`
+  (`otherTaskTitlesFetching`) de-dupes a repeated call for the same id (which
+  happens on every render, since `otherRunningClaudeTasks()` calls it
+  unconditionally); the actual fetch is the same read-only
+  `GET /api/chat?commentId=` `loadChatMessages` already uses, reduced through
+  `ownMessageTitle`.
+- **Invalidation reuses the existing `chat.message` SSE handler**
+  (`ensureChatEvents`, the branch for a conversation that is NOT the one in
+  view): alongside its existing `markTurnAnswered`, it now also drops
+  `otherTaskTitles.byId[ev.key]` — the next render's `ensureOtherTaskTitle`
+  then refetches on demand. "Alleen opnieuw ophalen als er iets veranderd
+  is" holds without a poller of its own, since `chat.message` fires exactly
+  when that conversation's transcript actually changed.
+- **`otherTaskTitleFor(c)`** — `claudeTaskRow`'s own title getter:
+  `otherTaskTitles.byId[c.id] || chatTaskTitle(c)`. The empty-string case
+  falls through to `chatTaskTitle(c)` (the OLD thread-based title) on
+  purpose — the same as "not fetched yet". This is the **one deliberate
+  asymmetry** with the "Selected: …" line above (which hides entirely on
+  nothing-sensible instead, an explicit reviewer answer): a list row
+  represents a conversation that is genuinely running right now and must
+  always show SOMETHING, unlike a label that can simply not exist.
 
 **Keyboard: a new nested rung at the END of the existing `'claude'` chain**
 (reviewer's own answer: "een nieuwe geneste stop in de nav-keten, die je
@@ -678,11 +732,18 @@ takes the keyboard the rest of the way in both cases. Best-effort throughout,
 like `openTask` itself: a stale/racy jump (the row/comment gone by the time an
 `await` resolves) simply does nothing further.
 
-Test: `tests/claude-chat-other-tasks.spec.mjs` (two PR-wide conversations, the
-first one's Signal POST held open — same trick as
-`claude-chat-parallel.spec.mjs` — asserting the second one's footer names
-itself, lists the first by its own comment text plus a status word, and that
-↓ + Enter jumps back onto it).
+Test: `tests/claude-chat-other-tasks.spec.mjs` — two cases. The first (two
+PR-wide conversations, the first one's Signal POST held open — same trick as
+`claude-chat-parallel.spec.mjs`) asserts the second one's footer names itself,
+lists the first by `ownMessageTitle`'s own fallback (its real comment text,
+since neither has an own Claude message yet) plus a status word, and that
+↓ + Enter jumps back onto it. The second sends a REAL message against the
+offline `claude` stub (a held Signal never reaches the real backend, so it
+can't exercise the genuine fetch path) and keeps that conversation "running"
+purely via a mocked `chat.progress` SSE frame — independent of the real
+turn's own (fast, canned) lifecycle — asserting the OTHER conversation's row
+fetches and shows the first sentence of the real message actually sent, not
+the old fallback.
 
 ### At most ONE code-generating turn at a time (`chat_write_gate.go`)
 

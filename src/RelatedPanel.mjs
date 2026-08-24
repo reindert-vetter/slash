@@ -3018,6 +3018,15 @@ function ensureChatEvents(pr) {
     // so its index pill says an answer landed. Never trusted as content — the
     // transcript itself is only ever refetched for the conversation in view.
     if (turnProgress(ev.key) || isTurnBusy(ev.key)) markTurnAnswered(ev.key)
+    // Drop any cached "other running Claude tasks" title for it too — this
+    // conversation's own last message may have just changed, so the next
+    // render's ensureOtherTaskTitle (otherRunningClaudeTasks) refetches a
+    // fresh one on demand instead of keeping a stale string forever.
+    if (otherTaskTitles.byId[ev.key] !== undefined) {
+      const next = { ...otherTaskTitles.byId }
+      delete next[ev.key]
+      otherTaskTitles.byId = next
+    }
   })
   onEventsResync(() => {
     loadRunningTurns(cs.pr)
@@ -3283,19 +3292,115 @@ export function hasActiveClaudeTurn() {
   return ccBusy() || !!ccProgress() || queuedFor(cc.commentId).length > 0
 }
 
-// chatTaskTitle — "the last comment in that conversation", literally: the
-// most recent message of the underlying comment thread this conversation
-// hangs on (threadMessages already puts the root comment's own body first,
-// so with zero replies "the last message" IS the root comment). Deliberately
-// the raw text, not commentTitleOf's AI-generated title — a reply never gets
-// one of those, and the reviewer asked for the actual text. One line, same
-// truncation length as commentBlockItem's own index-row snippet (home.mjs),
-// for the same reason: a full comment body would blow up this compact row.
+// chatTaskTitle — the OLD, thread-based fallback title: the most recent
+// message of the underlying comment thread a conversation hangs on
+// (threadMessages already puts the root comment's own body first, so with
+// zero replies "the last message" IS the root comment). Superseded as the
+// PRIMARY title by ownMessageTitle below (the reviewer explicitly wants their
+// own last Claude message, not the comment thread) — kept only as the
+// fallback otherTaskTitleFor uses while a row's own fetch hasn't resolved
+// anything better yet (see its own doc comment), so a running task's row is
+// never blank. One line, same truncation length as commentBlockItem's own
+// index-row snippet (home.mjs), for the same reason: a full comment body
+// would blow up this compact row.
 function chatTaskTitle(c) {
   if (!c) return ''
   const msgs = threadMessages(c)
   const last = msgs.length ? msgs[msgs.length - 1] : c
   return ((last && last.body) || c.body || '').trim().replace(/\s+/g, ' ').slice(0, 60)
+}
+
+// firstSentence — one sentence, plain text: trims, collapses newlines/runs of
+// whitespace into single spaces, and cuts at the first `.`/`!`/`?` followed by
+// whitespace or the end of the string (a simple heuristic, not a real
+// sentence tokenizer — good enough for a reviewer's own short chat message).
+// A capped length (80 chars) is the fallback for a sentence with no
+// punctuation at all, so one long run-on message can't blow up the row/line
+// it titles.
+function firstSentence(text) {
+  if (!text) return ''
+  const flat = text.trim().replace(/\s+/g, ' ')
+  const m = flat.match(/^.*?[.!?](?=\s|$)/)
+  return (m ? m[0] : flat).slice(0, 80)
+}
+
+// ownMessageTitle — "the reviewer's own last message in that conversation,
+// first sentence" (explicit reviewer request, replacing the thread-based
+// chatTaskTitle above as the PRIMARY title everywhere it's shown): the newest
+// entry of `messages` with `role === 'user'` — never Claude's own answer.
+// Falls back to the anchor comment's own text when nothing has been typed
+// into Claude yet but the comment itself is real, i.e. not the auto-created
+// anchor placeholder (isChatAnchorPlaceholder) — that placeholder sentence is
+// exactly the unusable text the reviewer reported ("Selected: (Nog geen eigen
+// comment getypt…"). Returns '' when there is genuinely nothing of the
+// reviewer's own to show yet; callers decide what that means for THEM (the
+// "Selected: …" line hides entirely, see CommentClaudeFooter; a task-list row
+// falls back further to chatTaskTitle, see otherTaskTitleFor).
+function ownMessageTitle(messages, c) {
+  const own = (messages || []).filter((m) => m.role === 'user')
+  if (own.length) return firstSentence(own[own.length - 1].body)
+  if (c && !isChatAnchorPlaceholder(c)) return firstSentence(c.body)
+  return ''
+}
+
+// otherTaskTitles — per-conversation cache of ownMessageTitle's result for a
+// conversation that is NOT the one currently anchored/loaded here (`cc` only
+// ever holds ONE conversation's transcript at a time — see "Parallel
+// conversations" in .claude/docs/claude-chat-panel.md — so a task list built
+// from OTHER running conversations has no transcript to read `role: 'user'`
+// from without its own fetch). Reassigned as a whole object on every update
+// (never mutated in place), same pattern as claudeTurns.mjs's own
+// `turns.byId`, so the reactive binding reading it re-renders. `undefined` =
+// never fetched; an explicit `''` is itself a valid "fetched, nothing of the
+// reviewer's own to show" result — both are told apart in ensureOtherTaskTitle's
+// own guard below.
+const otherTaskTitles = reactive({ byId: {} })
+
+// otherTaskTitlesFetching — plain (non-reactive) de-dup guard: otherRunningClaudeTasks
+// calls ensureOtherTaskTitle on every relevant render, so without this a
+// conversation whose fetch is still in flight would fire a second (and third,
+// …) concurrent request for the same id.
+const otherTaskTitlesFetching = new Set()
+
+// ensureOtherTaskTitle lazily fetches `c`'s own transcript (the same
+// read-only GET /api/chat?commentId= loadChatMessages already uses) purely to
+// compute its title, exactly once per id until invalidated. Invalidation is
+// the existing `chat.message` SSE handler (below, in ensureChatEvents) —
+// dropping the cached entry for a FOREIGN conversation the moment its
+// transcript actually changes, so "alleen opnieuw ophalen als er iets
+// veranderd is" holds without a poller of its own. Explicitly accepted cost
+// (the reviewer's own call, given the alternative — the old thread-text
+// title — read as unusable): one extra GET per conversation that is both
+// running AND appears in this list, refetched only on a real transcript
+// change.
+function ensureOtherTaskTitle(c) {
+  if (!c || otherTaskTitles.byId[c.id] !== undefined || otherTaskTitlesFetching.has(c.id)) return
+  otherTaskTitlesFetching.add(c.id)
+  fetch('/api/chat?commentId=' + encodeURIComponent(c.id) + repoParam())
+    .then((res) => (res.ok ? res.json() : null))
+    .then((json) => {
+      const title = ownMessageTitle(json && json.messages, c)
+      otherTaskTitles.byId = { ...otherTaskTitles.byId, [c.id]: title }
+    })
+    .catch(() => {
+      // Left unresolved on a failed fetch — otherTaskTitleFor's own
+      // chatTaskTitle(c) fallback covers it meanwhile, and either a later
+      // render or the next chat.message event tries again.
+    })
+    .finally(() => otherTaskTitlesFetching.delete(c.id))
+}
+
+// otherTaskTitleFor — claudeTaskRow's own title getter: the fetched "own last
+// message" once known (falls through on an explicit '' too — "nothing of the
+// reviewer's own" is exactly when the old fallback earns its keep), otherwise
+// chatTaskTitle(c) — so a row is never blank while its fetch is still in
+// flight or came back with nothing better. This is the one deliberate
+// asymmetry with the "Selected: …" line (which hides entirely instead, see
+// CommentClaudeFooter): a list row represents a conversation that is
+// genuinely running right now and must stay visible, unlike a label that can
+// simply not exist.
+function otherTaskTitleFor(c) {
+  return otherTaskTitles.byId[c.id] || chatTaskTitle(c)
 }
 
 // otherRunningClaudeTasks — every OTHER conversation in this PR with a turn
@@ -3305,15 +3410,20 @@ function chatTaskTitle(c) {
 // zijn, wil ik daarvan alleen de titels zien en daar doorheen kunnen
 // navigeren". Resolves each running id to its own comment via cs.list (the
 // PR-wide comment list this panel already keeps loaded) so the nested nav
-// stop below can show a title (chatTaskTitle) and jump to it
+// stop below can show a title (otherTaskTitleFor) and jump to it
 // (selectHighlightedClaudeTask); an id whose comment hasn't loaded into
 // cs.list yet (a rare timing gap right after a turn starts elsewhere) is
-// simply skipped, not shown as a blank row.
+// simply skipped, not shown as a blank row. Also the ONE trigger point for
+// ensureOtherTaskTitle — this function already runs on every render that
+// needs the list anyway, and the fetch is self-deduping, so no separate
+// watch/poller is needed just to kick it off.
 function otherRunningClaudeTasks() {
   const anchor = chatAnchorComment()
-  return runningTurnIds(anchor ? anchor.id : null)
+  const tasks = runningTurnIds(anchor ? anchor.id : null)
     .map((id) => cs.list.find((c) => String(c.id) === id))
     .filter(Boolean)
+  tasks.forEach(ensureOtherTaskTitle)
+  return tasks
 }
 
 // claudeTaskJump — the "go there" action for a highlighted row of
@@ -3464,7 +3574,7 @@ function claudeTaskRow(c, i) {
     >
       <span class="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-indigo-400"></span>
       <span class="truncate font-medium text-slate-600 dark:text-zinc-300">
-        ${() => (active() ? '› ' : '') + (chatTaskTitle(c) || '(leeg comment)')}
+        ${() => (active() ? '› ' : '') + (otherTaskTitleFor(c) || '(leeg comment)')}
       </span>
       <span class="shrink-0 truncate text-slate-400 dark:text-zinc-500">
         ${() => claudeStatusText(turnProgress(c.id), 0)}
@@ -3485,12 +3595,16 @@ export function CommentClaudeFooter(commentId = '') {
     if (p) return claudeStatusText(p, 0)
     return batchNoteFor(commentId)
   }
-  // "Selected: …" — which conversation this footer's own status line/task
-  // list is anchored on, so a reviewer glancing at the "other Claude tasks"
-  // list below never confuses it with the one they're currently looking at.
-  // '' whenever nothing is anchored here at all (no chat ever hung on the
-  // current selection) — the whole line then simply doesn't render.
-  const selectedTitle = () => chatTaskTitle(chatAnchorComment())
+  // "Selected: …" — the reviewer's own last Claude message in the
+  // conversation currently anchored here (first sentence, see
+  // ownMessageTitle), so a reviewer glancing at the "other Claude tasks" list
+  // below never confuses it with the one they're currently looking at. ''
+  // whenever there is nothing of the reviewer's own to show yet — no anchor
+  // at all, or a bare, still-placeholder anchor with no Claude message sent
+  // either (the unusable placeholder sentence this line used to show) — and
+  // the whole line then simply doesn't render, rather than falling back to
+  // that placeholder text.
+  const selectedTitle = () => ownMessageTitle(cc.messages, chatAnchorComment())
   return html`
     <div class="contents">
       ${() =>
