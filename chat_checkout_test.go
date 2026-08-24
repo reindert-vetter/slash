@@ -910,3 +910,56 @@ func TestBuildCheckoutViewReportsRefreshingFiles(t *testing.T) {
 		t.Fatalf("expected RefreshingFiles cleared, got %v", view.RefreshingFiles)
 	}
 }
+
+// TestChatCheckoutNeedsLandingStopsAfterALandedCommit is the regression for a
+// reviewer report: a pure question turn (no edit at all) triggered the
+// "Wijziging staat op ..." auto-land notice again, on a PR whose checkout had
+// already landed a commit earlier in the conversation. chatCheckoutNeedsLanding
+// used to compare HEAD only against `--not --remotes`, which stays true FOREVER
+// once a commit has landed on the PR's own local pending ref (that ref is never
+// itself a remote, and landing never pushes to GitHub) — so every later turn,
+// including one that never touched the checkout, kept reporting "needs
+// landing". The fix compares HEAD against the pending ref's own SHA once it
+// exists, so a commit already reflected there stops being reported as
+// outstanding.
+func TestChatCheckoutNeedsLandingStopsAfterALandedCommit(t *testing.T) {
+	const headRefName = "feature/needslanding"
+	bareDir, _ := setupChatShadowRepo(t, headRefName, "v1\n")
+	ctx := context.Background()
+	const pr = 970741
+
+	checkout := cloneCheckoutDir(t, bareDir, headRefName)
+	assignCheckoutForTest(t, "", pr, checkout)
+	getOrCreateCheckoutAssignment("", pr).Branch = headRefName
+
+	if chatCheckoutNeedsLanding(ctx, "", pr) {
+		t.Fatal("a freshly cloned, unedited checkout should not need landing")
+	}
+
+	if err := os.WriteFile(filepath.Join(checkout, "foo.txt"), []byte("edited by claude\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", checkout}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
+		}
+	}
+	run("add", "-A")
+	run("commit", "-m", "Claude: reviewer-requested edit")
+
+	if !chatCheckoutNeedsLanding(ctx, "", pr) {
+		t.Fatal("a real, never-landed local commit should need landing")
+	}
+
+	// Simulate the actual landing plumbing (advancePendingRefFromCheckout,
+	// chat_checkout.go) without going through a whole Claude turn.
+	if err := advancePendingRefFromCheckout(ctx, checkout, "", pr, headRefName); err != nil {
+		t.Fatalf("advancePendingRefFromCheckout: %v", err)
+	}
+
+	if chatCheckoutNeedsLanding(ctx, "", pr) {
+		t.Fatal("a commit already mirrored onto the PR's pending ref must not be reported as needing landing again — this is the reported bug")
+	}
+}

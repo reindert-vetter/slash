@@ -1042,6 +1042,21 @@ func commitCheckoutEditsAt(ctx context.Context, cm *chat.Module, dataDir, repo s
 // anything — an uncommitted edit, or a local commit — that hasn't made it
 // onto the PR's pending ref yet? PR-scoped now (there is only ONE shared
 // checkout per PR), unlike the old per-conversation shadow check.
+//
+// Once the PR's pending ref (prPendingRef) already exists, HEAD is compared
+// directly against it: a commit is only "not yet landed" if it differs from
+// what was mirrored there last. This is deliberately NOT the same thing as
+// "ahead of every remote-tracking branch" (the plain rev-list fallback
+// below, used only before any pending ref exists for this PR/branch at
+// all): a commit that already landed on the pending ref stays ahead of
+// origin/<headRef> forever, because landing never pushes to GitHub — that
+// push is the reviewer-gated todo row (pending_push.go), not this check.
+// Without comparing against the pending ref, EVERY later turn of the same
+// PR — including a plain read-only question that never touched the
+// checkout — kept re-triggering the auto-land Activity and re-showing the
+// "Wijziging staat op ..." bubble for a commit that had already been
+// reported once (reviewer report: that notice appeared after a question
+// that changed nothing at all).
 func chatCheckoutNeedsLanding(ctx context.Context, repo string, pr int) bool {
 	a := getCheckoutAssignment(repo, pr)
 	if a == nil || a.Dir == "" {
@@ -1053,6 +1068,15 @@ func chatCheckoutNeedsLanding(ctx context.Context, repo string, pr int) bool {
 	}
 	if strings.TrimSpace(string(statusOut)) != "" {
 		return true
+	}
+	if a.Branch != "" {
+		if landed := pendingRefSHA(ctx, repo, prPendingRef(repo, pr, a.Branch)); landed != "" {
+			headOut, err := runGitIn(ctx, a.Dir, "rev-parse", "HEAD")
+			if err != nil {
+				return false
+			}
+			return strings.TrimSpace(string(headOut)) != landed
+		}
 	}
 	aheadOut, err := runGitIn(ctx, a.Dir, "rev-list", "--count", "HEAD", "--not", "--remotes")
 	if err != nil {

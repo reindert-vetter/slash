@@ -1159,6 +1159,23 @@ reclaimed.
   returns — regardless of whether THIS turn escalated to the shell, since an
   earlier turn may have committed without managing to land — and carries the
   answer on `chatTurnResult.NeedsLand`.
+  **Superseded name, current behaviour lives in `chatCheckoutNeedsLanding`
+  (`chat_checkout.go`)** since the shared, standing local checkout replaced
+  the disposable shadow worktree — same shape (dirty OR unlanded-commit check,
+  called PR-scoped after every turn regardless of whether that turn itself
+  escalated). One bug fixed there: the unlanded-commit half originally compared
+  HEAD against `--not --remotes` (any remote-tracking branch), which stays true
+  FOREVER once a commit has actually landed on the PR's own local pending ref —
+  that ref is never itself a remote, and landing never pushes to GitHub. So
+  every LATER turn of the same PR, including a plain read-only question that
+  never touched the checkout at all, kept reporting "needs landing" and
+  re-triggered the auto-land Activity below, re-showing the "Wijziging staat
+  op ..." notice for a commit already reported once. Fixed by comparing HEAD
+  against the pending ref's own SHA (`prPendingRef`/`pendingRefSHA`) once that
+  ref exists for this PR/branch, falling back to the original
+  `--not --remotes` check only before anything has ever landed for it. Test:
+  `chat_checkout_test.go`'s
+  `TestChatCheckoutNeedsLandingStopsAfterALandedCommit`.
 - **`claudeChatWorkflow`'s own loop** (`chat_workflow.go`), after every
   ordinary (non-error) turn, checks that STORED `result.NeedsLand` field — never
   a live git read of its own, so this stays a deterministic function of the
