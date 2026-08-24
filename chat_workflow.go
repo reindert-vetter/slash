@@ -988,6 +988,29 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 			_ = err
 		}
 		result = result2
+		// Claude already got Edit/Bash on THIS very call, so a second
+		// {"type":"need_write"} reply means it got stuck repeating the
+		// escalation directive instead of acting on the write access it was
+		// just granted — a degenerate model output, not the ordinary "needs
+		// write access" signal any more. Without this, the raw directive JSON
+		// fell through parseAssistantTurn's generic "unknown shape -> plain
+		// text" default and the reviewer saw the literal
+		// `{"type":"need_write"}` string as the bubble's body. This is
+		// deliberately a PLAIN text turn (no Kind, no retry button) rather
+		// than chat.KindError — nothing actually failed in the sense the
+		// existing error/retry flow means (a CLI call that errored out or
+		// exhausted its ladder); it is Claude's own answer, just a confusing
+		// one, so it reads like an ordinary assistant notice the reviewer can
+		// react to by simply typing again.
+		if isNeedWriteDirective(result.Text) {
+			msg := chat.Message{
+				ID: chatMessageID(arg.TurnID, ""), ConversationID: arg.ConversationID, PR: arg.PR,
+				Role: "assistant", Model: model,
+				Body: "Claude had schrijftoegang, maar kwam er niet uit. Formuleer je verzoek iets concreter.",
+			}
+			_ = cm.SaveMessage(ctx, msg)
+			return msg, nil
+		}
 	}
 
 	msg, action := parseAssistantTurn(arg.PR, arg.ConversationID, arg.TurnID, result.Text)

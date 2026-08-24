@@ -106,6 +106,49 @@ func TestRunOneClaudeTurnEscalatesToShellOnNeedWrite(t *testing.T) {
 	}
 }
 
+// TestRunOneClaudeTurnDegeneratesGracefullyOnRepeatedNeedWrite proves that a
+// SECOND, already-shell-enabled call replying with the exact same
+// {"type":"need_write"} directive (Claude getting stuck repeating the
+// escalation signal instead of acting on the write access it was just
+// granted) is surfaced as an ordinary, reviewer-facing notice — not the raw
+// directive JSON verbatim, and not a chat.KindError bubble (nothing in the
+// existing error/retry sense actually failed here, so there must be no
+// "Opnieuw proberen" button on it).
+func TestRunOneClaudeTurnDegeneratesGracefullyOnRepeatedNeedWrite(t *testing.T) {
+	const headRefName = "feature/shell-turn-repeat"
+	bareDir, _ := setupChatShadowRepo(t, headRefName, "hello\n")
+	stubReachableGh(t, headRefName)
+
+	m, _, cm, fake := newChatManager(t)
+	ctx := context.Background()
+	const pr, commentID = 970734, "comment-shell-repeat"
+
+	dataDir := t.TempDir()
+	checkoutDir := cloneCheckoutDir(t, bareDir, headRefName)
+	writeCheckoutSettings(t, dataDir, checkoutDir)
+
+	fake.SetChatTurns(`{"type":"need_write"}`, `{"type":"need_write"}`)
+	msg, action := runOneClaudeTurn(ctx, m, cm, fake, dataDir, chatTurnInput{
+		PR: pr, ConversationID: commentID, Body: "Pas foo.txt aan", TurnID: "msg-shell-repeat",
+	})
+
+	if action != nil {
+		t.Fatalf("unexpected directive: %+v", action)
+	}
+	if msg.Kind == chat.KindError {
+		t.Fatalf("expected a plain notice, not a chat.KindError bubble: %+v", msg)
+	}
+	if msg.Body == `{"type":"need_write"}` {
+		t.Fatal("expected a reviewer-facing sentence, not the raw directive JSON verbatim")
+	}
+	if msg.Body == "" {
+		t.Fatal("expected a non-empty reviewer-facing explanation")
+	}
+	if len(fake.Calls) != 2 {
+		t.Fatalf("expected exactly 2 RunChat calls (read-only, then the escalated one that repeated the directive), got %d", len(fake.Calls))
+	}
+}
+
 // TestRunOneClaudeTurnUsesReadOnlyHeadWorktreeWithoutEscalating proves task
 // 3's whole point: a turn that never asks to write gets ONE cheap call with
 // Read/Grep/Glob against the PR's already-ingested, SHARED head worktree —

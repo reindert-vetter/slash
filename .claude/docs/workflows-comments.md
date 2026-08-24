@@ -959,19 +959,40 @@ instead of committing upfront to full shell access:
    reply is what actually gets saved/parsed; attempt 1's bare directive is not.
 
 Bounded to exactly one escalation, mirroring the "one begrensde Claude attempt"
-shape used elsewhere in this file — no retry loop if the second attempt also
-happens to reply with a directive (it just degrades to plain text, same as any
-malformed directive). Attempt 2 can itself fail to get the shadow worktree
-(gh/git unreachable) — that degrades to a plain, `NoShell: true` reviewer-facing
-explanation rather than an error turn, the same graceful-degrade philosophy as
-attempt 1's own fallback. `chat.Message.NoShell` is therefore true only when
-**neither** attempt got any real tool access at all — a turn that only ever
-needed the read-only pass is not degraded, it simply never asked to escalate.
-Tests: `chat_shell_test.go`'s
+shape used elsewhere in this file — no retry loop against the CLI if the
+second attempt also happens to reply with a directive. Reported bug (a
+reviewer screenshot): that repeated `{"type":"need_write"}` used to fall
+through `parseAssistantTurn`'s generic "unknown JSON shape → plain text"
+default and land in the transcript as the literal raw string
+`{"type":"need_write"}` — Claude getting stuck repeating the escalation
+signal instead of acting on the write access attempt 2 had just handed it.
+`runOneClaudeTurn` now checks `isNeedWriteDirective(result.Text)` again right
+after attempt 2 and, if it still matches, saves a short reviewer-facing
+Dutch sentence instead ("Claude had schrijftoegang, maar kwam er niet uit.
+Formuleer je verzoek iets concreter.") and returns early, never reaching
+`parseAssistantTurn` with the raw directive. Deliberately a **plain** text
+turn — no `Kind` at all, and specifically **not** `chat.KindError`: nothing
+failed in the sense the existing error/retry ladder means (a CLI call that
+errored or ran out of automatic retries), so there is no "Opnieuw proberen"
+button on it; it reads as an ordinary, if confusing, assistant reply the
+reviewer can just respond to by typing again. `parseAssistantTurn`'s own
+generic default is untouched and still applies to every OTHER unrecognized
+JSON shape (a genuinely malformed `comment_action`, for instance) — this fix
+is scoped to exactly the repeated-escalation case, not a broader "any
+JSON-looking body gets prettified" change. Attempt 2 can itself fail to get
+the shadow worktree (gh/git unreachable) — that degrades to a plain,
+`NoShell: true` reviewer-facing explanation rather than an error turn, the
+same graceful-degrade philosophy as attempt 1's own fallback.
+`chat.Message.NoShell` is therefore true only when **neither** attempt got
+any real tool access at all — a turn that only ever needed the read-only
+pass is not degraded, it simply never asked to escalate. Tests:
+`chat_shell_test.go`'s
 `TestRunOneClaudeTurnUsesReadOnlyHeadWorktreeWithoutEscalating` (no gh/git
 round trip at all for a plain question),
 `TestRunOneClaudeTurnEscalatesToShellOnNeedWrite` (the session-resuming
-second call), `TestRunOneClaudeTurnDegradesWhenShellUnavailableAfterEscalating`.
+second call), `TestRunOneClaudeTurnDegradesWhenShellUnavailableAfterEscalating`,
+`TestRunOneClaudeTurnDegeneratesGracefullyOnRepeatedNeedWrite` (the repeated
+directive above).
 
 This is orthogonal to `sig.Action`'s dispatch (`chatActionCommit`/`chatActionClear`/
 `chatActionRetry`, handled by the workflow body before `runOneClaudeTurn` is
