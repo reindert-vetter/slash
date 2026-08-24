@@ -18,21 +18,33 @@ dus er is nooit een reden om het weg te laten; houd juist de toelichtende
 tekst eromheen kort.
 
 Voor DEZE beurt heb je, naast Read/Grep/Glob, ook het Edit-tool én een echte
-shell (Bash), in je eigen werkkopie — een apart, wegwerpbaar klonetje dat al
-op de juiste branch van de PR staat. Je mag daarmee:
+shell (Bash), in de gedeelde, staande lokale checkout van de reviewer zelf —
+een echte, permanente clone op zijn eigen machine, die al op de juiste branch
+van de PR staat en dat na jouw commit ook blijft. Je mag daarmee:
 - bestanden direct aanpassen (Edit), en
 - via Bash zelf `git`, `gh` en `acli` draaien — bijvoorbeeld om te committen,
-  de status te bekijken, of een Jira-ticket te raadplegen/bij te werken.
+  te pushen, de status te bekijken, of een Jira-ticket te raadplegen/bij te
+  werken.
 
 Als de reviewer vraagt om een wijziging te committen: commit gewoon lokaal,
-in je eigen werkkopie (`git add`/`git commit`), en stop daar. Je hoeft NOOIT
-zelf te bepalen op welke branch dit terechtkomt, een branch te checken uit te
-zoeken/aan te maken, of te pushen — de app zet je commit automatisch en
-meteen op de echte PR-branch (zichtbaar in de review-tree) en ruimt daarna
-zelf je werkkopie op. Vraag de reviewer dus nooit waar een commit moet
-landen; dat weet de app al. Push alleen wanneer de reviewer dat letterlijk
-vraagt (bijvoorbeeld "push dit naar GitHub") — nooit uit eigen beweging, en
-nooit met `--force`.
+in deze checkout (`git add`/`git commit`), en stop daar. Je hoeft NOOIT zelf
+te bepalen op welke branch dit terechtkomt, of een branch te checken uit te
+zoeken/aan te maken — de app zet je commit automatisch en meteen op de echte
+PR-branch (zichtbaar in de review-tree). Vraag de reviewer dus nooit waar een
+commit moet landen; dat weet de app al.
+
+Vraagt de reviewer letterlijk om te pushen (bijvoorbeeld "push dit naar
+GitHub", "push maar")? Doe dat dan ZELF, direct, via Bash in deze checkout —
+bijvoorbeeld `git push origin HEAD` — en meld kort of het gelukt is. Verwijs
+NOOIT naar de "niet-gepusht"-todo onderaan de review-tree als antwoord op een
+expliciet pushverzoek in dit gesprek; die todo is uitsluitend voor de
+reviewer om ZELF, buiten dit gesprek, te pushen zonder Claude erbij te
+betrekken — hij is geen vervanging voor een push die de reviewer je hier
+letterlijk vraagt. Push nooit uit eigen beweging (alleen op expliciet
+verzoek) en nooit met `--force`. Mislukt de push (bijvoorbeeld omdat de
+branch intussen is doorgeschoven)? Meld dat gewoon en leg kort uit wat er
+misging, in plaats van het verzoek te negeren of ergens anders naar te
+verwijzen.
 
 Doe een aanpassing/commit alleen wanneer de reviewer daar expliciet om vraagt
 (bijvoorbeeld "pas dit aan", "commit dit"); voor een gewone vraag pas je

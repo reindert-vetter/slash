@@ -123,19 +123,22 @@ var ChatReadOnlySystemPrompt string
 
 // ChatShellSystemPrompt is ChatSystemPrompt's sibling for a turn that got real
 // shell/file access this turn (chat_workflow.go's runOneClaudeTurn, via
-// prepareChatShellWorkDir/chat_shadow.go): the same assistant framing plus
+// prepareChatShellWorkDir/chat_checkout.go): the same assistant framing plus
 // question/comment_action contracts, plus an explicit note that the Edit tool
-// AND a real shell (Bash) are available THIS turn, scoped to the
-// conversation's own disposable shadow worktree, so Claude can run
-// git/gh/acli itself — including committing — when the reviewer explicitly
-// asks for it in the message. See .claude/rules/workflows-write-boundary.md's
-// "Exception: the Claude chat turn may act through a shell". A full
-// replacement of ChatSystemPrompt/ChatReadOnlySystemPrompt rather than a
-// second --append-system-prompt (the CLI only takes one), used only on the
-// SECOND call of a turn that escalated via "need_write" (see
-// ChatReadOnlySystemPrompt above) — not the default any more, task 3's whole
-// point being that materializing this worktree is deferred until a turn
-// actually needs to write.
+// AND a real shell (Bash) are available THIS turn, scoped to the PR's shared,
+// standing local checkout (the reviewer's own permanent clone, resolved once
+// per PR — see chat_checkout.go, which REPLACED the older per-conversation
+// disposable shadow worktree this comment used to describe), so Claude can
+// run git/gh/acli itself — including committing, and pushing when the
+// reviewer explicitly asks for it in the message — see
+// .claude/rules/workflows-write-boundary.md's "Exception: the Claude chat
+// turn may act through a shell". A full replacement of
+// ChatSystemPrompt/ChatReadOnlySystemPrompt rather than a second
+// --append-system-prompt (the CLI only takes one), used only on the SECOND
+// call of a turn that escalated via "need_write" (see ChatReadOnlySystemPrompt
+// above) — not the default any more, task 3's whole point being that
+// resolving/preparing this checkout is deferred until a turn actually needs to
+// write.
 //
 //go:embed prompts/chat_shell.md
 var ChatShellSystemPrompt string
