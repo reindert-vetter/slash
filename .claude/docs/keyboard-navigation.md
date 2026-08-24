@@ -595,23 +595,43 @@ and the reveal would be a no-op.
 `stepVisibleSelected` call in both arrow branches:
 
 ```
-first visible block → … → last visible block
+stale-tree notice (if the tree is out of date)
+  → first visible block → … → last visible block
   → toggle-approved (if any hidden approved blocks exist)
   → toggle-ignored  (if any hidden ignored comments exist)
   → batch-action    (if any comment-index row is eligible for comment_batch)
   → push-todo       (if this PR has landed-but-unpushed chat edits)
   → the search box
-  → back to the first visible block
+  → back to the stale-tree notice / first visible block
 ```
 
-`↑` walks the same loop backwards. Each trailing row is only a stop when
-actually rendered (`toggleRowVisible()`/`ignoreToggleRowVisible()`/
-`batchRowVisible()`/`pushTodoRowVisible()`); the search box is
+`↑` walks the same loop backwards. Each trailing row (and the leading
+stale-tree row) is only a stop when actually rendered
+(`toggleRowVisible()`/`ignoreToggleRowVisible()`/`batchRowVisible()`/
+`pushTodoRowVisible()`/`state.blocksStale`); the search box is
 always the loop's other end. `stepListSelection(1)` first tries
 `stepVisibleSelected` and only when that finds nothing further
 (`next === state.selected`) steps onto the next existing stop —
-`state.selected` stays unchanged while a toggle row owns the keyboard, so a
-toggle row is an extra stop on top of the blocks, not a replacement.
+`state.selected` stays unchanged while a toggle row (or the stale-tree row)
+owns the keyboard, so it is an extra stop on top of the blocks, not a
+replacement.
+
+**The stale-tree notice** (`state.staleRowFocused`, `staleTreeRow` in
+`BlockList.mjs`, see its own doc comment there) sits at the OPPOSITE end of
+the loop from the four rows above — above the first block rather than below
+the last — because that mirrors where it renders (see "staleTreeRow" comment
+in `BlockList.mjs`): `↑` off the topmost visible block reaches it (only while
+`state.blocksStale`), `↓` off it returns to the first visible block, and a
+further `↑` from it continues into the search box, exactly like `pushTodoFocused`
+does at the bottom. `rowIsCursor`/`rowInListRange` (`BlockList.mjs`) exclude it
+the same way they exclude `toggleFocused`/`ignoreToggleFocused`, so the
+underlying block row never ALSO reads as selected while the notice has the
+keyboard. Reviewer request: "als ik hier naarboven key druk, wil ik duidelijk
+[deze] row selecteren en daarop enter kunnen doen" — `Enter` runs the exact
+same `window.location.reload()` as the row's own `@click`, no menu (same shape
+as `toggleRow`/`ignoreToggleRow`'s direct-action `Enter`); `f`/`d`/`s`/`a`/
+`Space`/`ArrowRight` are no-ops there too, same reasoning as every other
+trailing row. Test: `tests/blocks-stale-keyboard.spec.mjs`.
 
 `toggleRow`/`ignoreToggleRow` show the same indigo bg/ring as a selected row via
 `state.toggleFocused`/`state.ignoreToggleFocused`; `rowFocused` dims the

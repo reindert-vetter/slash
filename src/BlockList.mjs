@@ -200,6 +200,7 @@ export default function BlockList(state, isPrWideComposing = () => false) {
             state.searchActive = true
             state.toggleFocused = false
             state.ignoreToggleFocused = false
+            state.staleRowFocused = false
           }}"
           @blur="${() => (state.searchActive = false)}"
         />
@@ -249,7 +250,7 @@ function renderList(state) {
   // yet at page load, the commits landed afterwards), so it survives this early
   // return instead of only appearing next to a populated list.
   if (state.blocks.length === 0) {
-    return state.blocksStale ? [staleTreeRow(), emptyState(state).key('empty')] : [emptyState(state).key('empty')]
+    return state.blocksStale ? [staleTreeRow(state), emptyState(state).key('empty')] : [emptyState(state).key('empty')]
   }
   const approvedCount = state.blocks.filter((b) => isFullyApproved(state, b)).length
   const ignoredCount = state.blocks.filter((b) => isIgnoredComment(state, b)).length
@@ -257,7 +258,7 @@ function renderList(state) {
   // The stale-tree notice goes ABOVE everything, including the comment items:
   // it says the whole list below it is out of date, so it must not sit inside
   // one of the sections it invalidates.
-  if (state.blocksStale) items.push(staleTreeRow())
+  if (state.blocksStale) items.push(staleTreeRow(state))
   let commentHeadingDone = false
   let lineCommentHeadingDone = false
   let underlyingHeadingDone = false
@@ -391,13 +392,27 @@ export function hasPendingPush(state) {
 // reload returns to the same block with a guaranteed-consistent tree, instead of
 // threading a second "load but don't navigate" mode through loadBlocks.
 //
-// The ↻ glyph and the WORDS carry the meaning; the amber tint is decoration
-// only (the colour-blind rule, see pushTodoStatusWord).
-function staleTreeRow() {
+// Also a stop of the sidebar's ↑/↓ loop (state.staleRowFocused, see
+// stepListSelection in home.mjs) — reviewer request: "als ik hier naarboven
+// key druk, wil ik duidelijk deze row selecteren en daarop enter kunnen doen".
+// `Enter` runs the exact same reload as the click. The always-present 1px
+// border (amber in both states, so focusing never shifts row height) gains an
+// indigo border/ring on top while focused — the same two-state border every
+// other row/trailing-row in this index uses (see "Focus highlight per stop" in
+// keyboard-navigation.md) — so the SHAPE of the border, not merely the amber
+// tint, says the keyboard is here.
+//
+// The ↻ glyph and the WORDS carry the "there's a notice" meaning; the amber
+// tint is decoration only (the colour-blind rule, see pushTodoStatusWord).
+function staleTreeRow(state) {
   return html`
     <button
       data-testid="blocks-stale"
-      class="w-full border-b border-amber-200 dark:border-amber-500/30 bg-amber-50 dark:bg-amber-500/15 px-3 py-2 text-left hover:bg-amber-100 dark:hover:bg-amber-500/25"
+      class="${() =>
+        'w-full border px-3 py-2 text-left bg-amber-50 dark:bg-amber-500/15 ' +
+        (state.staleRowFocused
+          ? 'border-indigo-300 dark:border-indigo-500 ring-1 ring-inset ring-indigo-200 dark:ring-indigo-500/30'
+          : 'border-amber-200 dark:border-amber-500/30 hover:bg-amber-100 dark:hover:bg-amber-500/25')}"
       @click="${() => window.location.reload()}"
     >
       <span class="flex items-center gap-2 text-xs font-medium text-amber-800 dark:text-amber-200">
@@ -715,6 +730,7 @@ function toggleRow(state, count) {
         state.showApproved = !state.showApproved
         state.toggleFocused = true
         state.ignoreToggleFocused = false
+        state.staleRowFocused = false
         state.blockIndexEntered = true
       }}"
     >
@@ -745,6 +761,7 @@ function ignoreToggleRow(state, count) {
         state.showIgnored = !state.showIgnored
         state.ignoreToggleFocused = true
         state.toggleFocused = false
+        state.staleRowFocused = false
       }}"
     >
       ${() =>
@@ -878,7 +895,9 @@ function approvalSummaryLine(state) {
 
 // rowFocused reports whether row i currently owns the sidebar's keyboard
 // highlight — not while a toggle row has it (state.toggleFocused/
-// ignoreToggleFocused). Deliberately independent of state.searchActive: a row
+// ignoreToggleFocused), nor while the stale-tree notice above the list does
+// (state.staleRowFocused) — only one row/notice ever reads as selected at a
+// time. Deliberately independent of state.searchActive: a row
 // keeps its highlight while the search box also holds real DOM focus,
 // exactly like the existing "browse the filtered matches while still typing"
 // feature already did before the toggle-ignored/search loop existed (see
@@ -924,7 +943,9 @@ function rowHandedOff(state, i) {
 // (the reviewer is colourblind, see conventions.md).
 function rowIsCursor(state, i) {
   if (state.showDescription && !state.blockIndexEntered) return false
-  return i === state.selected && !state.toggleFocused && !state.ignoreToggleFocused
+  return (
+    i === state.selected && !state.toggleFocused && !state.ignoreToggleFocused && !state.staleRowFocused
+  )
 }
 
 // rowInListRange reports whether row i falls inside an active Shift+arrow
@@ -934,7 +955,7 @@ function rowIsCursor(state, i) {
 function rowInListRange(state, i) {
   if (state.listAnchor == null) return false
   if (state.showDescription && !state.blockIndexEntered) return false
-  if (state.toggleFocused || state.ignoreToggleFocused) return false
+  if (state.toggleFocused || state.ignoreToggleFocused || state.staleRowFocused) return false
   const lo = Math.min(state.listAnchor, state.selected)
   const hi = Math.max(state.listAnchor, state.selected)
   return i >= lo && i <= hi
@@ -1101,6 +1122,7 @@ function row(state, b, i) {
         state.ignoreToggleFocused = false
         state.pushTodoFocused = false
         state.batchRowFocused = false
+        state.staleRowFocused = false
         // A stale "which method"/"is the methodes-kolom focused" from a
         // PREVIOUSLY selected test_class row (see testClassRowItem in
         // home.mjs) must never leak onto whatever gets clicked next — mirrors
@@ -1127,6 +1149,7 @@ function row(state, b, i) {
         state.ignoreToggleFocused = false
         state.pushTodoFocused = false
         state.batchRowFocused = false
+        state.staleRowFocused = false
         state.classMethodSel = 0
         state.testColumnFocused = false
         state.blockIndexEntered = true

@@ -580,6 +580,15 @@ const state = reactive({
   // that's also the row's render position — mirroring toggleFocused's own
   // spot for the row right above it. Ephemeral.
   batchRowFocused: false,
+  // staleRowFocused — the mirror-image stop of toggleFocused/ignoreToggleFocused/
+  // batchRowFocused/pushTodoFocused, but at the TOP of the sidebar's ↑/↓ loop
+  // instead of the bottom: true once the keyboard cursor sits on the
+  // "Nieuwe commits in deze PR" notice (staleTreeRow, BlockList.mjs) instead of
+  // a block. Only ever reachable while state.blocksStale is true (see
+  // stepListSelection) — ↑ off the topmost visible block lands here, ↓ off it
+  // returns to the first block, ↑ again continues into the search box.
+  // Ephemeral, not bound to the URL, like the other four.
+  staleRowFocused: false,
   // pendingPush — the PR's landed-but-unpushed Claude edits, or null when
   // there are none (the normal state). Read from GET /api/pending-push
   // (pending_push.go): { headRef, sha, ahead, files, state, pushRunId, error }.
@@ -652,6 +661,7 @@ const state = reactive({
   onPushTodo: (opts) => {
     state.toggleFocused = false
     state.ignoreToggleFocused = false
+    state.staleRowFocused = false
     state.pushTodoFocused = true
     openMenu('pushTodo', opts)
   },
@@ -663,6 +673,7 @@ const state = reactive({
     state.toggleFocused = false
     state.ignoreToggleFocused = false
     state.pushTodoFocused = false
+    state.staleRowFocused = false
     state.batchRowFocused = true
     startBatchFromRow()
   },
@@ -3762,20 +3773,31 @@ function retractAllApprovalsForPr() {
 }
 
 // stepListSelection is the list-mode ↑/↓ step (dir=+1 down, -1 up) while the
-// keyboard cursor sits on an ordinary block or one of the trailing rows below
-// it — NOT already inside the search box itself (see searchStepSelection for
-// that case). It closes the sidebar into one circular loop:
-//   block0 → … → blockN → toggle-approved? → toggle-ignored? → batch-action? →
-//   push-todo? → search → block0
-// (↑ walks the exact same loop backwards). Each trailing row is only a stop
-// when actually rendered (toggleRowVisible/ignoreToggleRowVisible/
-// batchRowVisible/pushTodoRowVisible); the search box is always the loop's
-// other end, reached via activateSearch() (which also drives real DOM focus,
-// so BlockList's existing searchActive ring lights up) — stepping further
-// from search itself is handled by searchStepSelection once state.searchActive
-// is true. See keyboard-navigation.md.
+// keyboard cursor sits on an ordinary block, the stale-tree notice above them,
+// or one of the trailing rows below them — NOT already inside the search box
+// itself (see searchStepSelection for that case). It closes the sidebar into
+// one circular loop:
+//   stale-tree? → block0 → … → blockN → toggle-approved? → toggle-ignored? →
+//   batch-action? → push-todo? → search → stale-tree?/block0
+// (↑ walks the exact same loop backwards). Each trailing row (and the leading
+// stale-tree stop) is only a stop when actually rendered
+// (toggleRowVisible/ignoreToggleRowVisible/batchRowVisible/pushTodoRowVisible/
+// state.blocksStale for the stale-tree row); the search box is always the
+// loop's other end, reached via activateSearch() (which also drives real DOM
+// focus, so BlockList's existing searchActive ring lights up) — stepping
+// further from search itself is handled by searchStepSelection once
+// state.searchActive is true. See keyboard-navigation.md.
 function stepListSelection(dir) {
   if (dir > 0) {
+    if (state.staleRowFocused) {
+      // The stale-tree notice sits above every block — ↓ off it lands on the
+      // first visible block, exactly like ↓ from the search box does at the
+      // loop's other end.
+      state.staleRowFocused = false
+      const first = firstVisibleIndex()
+      if (first >= 0) selectRow(first)
+      return
+    }
     if (state.pushTodoFocused) {
       // Already the bottom-most block-list stop — continue into the search box.
       state.pushTodoFocused = false
@@ -3841,10 +3863,22 @@ function stepListSelection(dir) {
     state.toggleFocused = false
     return
   }
+  if (state.staleRowFocused) {
+    // Already the top-most block-list stop — continue up into the search box,
+    // mirroring pushTodoFocused's own step further down into it.
+    state.staleRowFocused = false
+    activateSearch()
+    return
+  }
   const prev = stepVisibleSelected(-1)
   if (prev === state.selected) {
-    // Topmost visible block already reached — continue up into the search
+    // Topmost visible block already reached — the stale-tree notice (if any)
+    // is its permanent up-neighbour, else continue straight into the search
     // box (its permanent up-neighbour in the loop above).
+    if (state.blocksStale) {
+      state.staleRowFocused = true
+      return
+    }
     activateSearch()
     return
   }
@@ -4060,6 +4094,7 @@ function applyDefaultUnapprovedSelection() {
     state.toggleFocused = false
     state.pushTodoFocused = false
     state.batchRowFocused = false
+    state.staleRowFocused = false
     scrollSelectedIntoView()
     freshDefaultSelectionAt = { blockId: state.blocks[idx].id }
     return
@@ -4144,6 +4179,7 @@ function setSearch(q) {
   state.toggleFocused = false
   state.pushTodoFocused = false
   state.batchRowFocused = false
+  state.staleRowFocused = false
   // Typing is also a deliberate switch to the "browse while typing" feature
   // (see searchStepSelection): it must win over an earlier, still-pending
   // loop-stop arrival, so the very next ArrowDown/ArrowUp walks the filtered
@@ -6826,6 +6862,7 @@ function enterDiff() {
   state.ignoreToggleFocused = false
   state.batchRowFocused = false
   state.pushTodoFocused = false
+  state.staleRowFocused = false
   // Stepping into a diff leaves the sidebar's own multi-row selection behind.
   clearListAnchor()
   // Stepping in from the list always starts at the coarsest granularity (a whole
@@ -9713,6 +9750,7 @@ function enterDescriptionFromList() {
   state.ignoreToggleFocused = false
   state.batchRowFocused = false
   state.pushTodoFocused = false
+  state.staleRowFocused = false
   state.showDescription = true // step left out of the list into stop 1 (the description)
   state.blockIndexEntered = true
 }
@@ -12371,6 +12409,7 @@ function contextMenuMode() {
     state.toggleFocused ||
     state.ignoreToggleFocused ||
     state.batchRowFocused ||
+    state.staleRowFocused ||
     !curBlock()
   )
     return 'pr'
@@ -12414,7 +12453,8 @@ function rightClickMenuMode() {
     // branch — so a right-click there leaves the native menu alone too.
     return null
   }
-  if (state.toggleFocused || state.ignoreToggleFocused || state.batchRowFocused) return null
+  if (state.toggleFocused || state.ignoreToggleFocused || state.batchRowFocused || state.staleRowFocused)
+    return null
   return contextMenuMode()
 }
 
@@ -12532,6 +12572,7 @@ function onKeydown(e) {
       state.ignoreToggleFocused = false
       state.batchRowFocused = false
       state.pushTodoFocused = false
+      state.staleRowFocused = false
       state.showDescription = true
       state.blockIndexEntered = true
       return
@@ -12616,6 +12657,7 @@ function onKeydown(e) {
     !state.ignoreToggleFocused &&
     !state.batchRowFocused &&
     !state.pushTodoFocused &&
+    !state.staleRowFocused &&
     !isTestColumnActive()
   ) {
     e.preventDefault()
@@ -12898,6 +12940,16 @@ function onKeydown(e) {
     return
   }
 
+  // The stale-tree notice (state.staleRowFocused, see stepListSelection) runs
+  // its own reload directly on Enter — the keyboard twin of its `@click`
+  // (staleTreeRow, BlockList.mjs) — there is no menu for it, same shape as the
+  // two toggle rows above.
+  if (e.key === 'Enter' && state.staleRowFocused) {
+    e.preventDefault()
+    window.location.reload()
+    return
+  }
+
   // Enter on a selected comment-index item (kind:'comment', synthesized from a
   // PR-wide comment into the sidebar — see recomputeLeftList/
   // commentBlockItem) opens its own small action menu ("Beantwoorden" /
@@ -13046,7 +13098,11 @@ function onKeydown(e) {
   // continue, see spaceKey below) joins this list for the same reason — a
   // toggle row is not a PR block, there is nothing there to approve.
   if (
-    (state.toggleFocused || state.ignoreToggleFocused || state.batchRowFocused || state.pushTodoFocused) &&
+    (state.toggleFocused ||
+      state.ignoreToggleFocused ||
+      state.batchRowFocused ||
+      state.pushTodoFocused ||
+      state.staleRowFocused) &&
     !isModifiedKey(e) &&
     ['f', 'd', 's', 'a', ' ', 'ArrowRight'].includes(e.key)
   ) {
