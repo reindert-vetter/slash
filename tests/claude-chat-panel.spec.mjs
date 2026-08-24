@@ -1282,13 +1282,14 @@ test('Claude chat: a pure, unedited Claude draft is select-all\'d and posts stra
   await page.keyboard.press('ArrowLeft')
   await expect(reply).toBeFocused()
   await reply.press('Enter')
-  // The reply's own action menu opens right away (see "A reply opens the
-  // comment's own menu instead of releasing to the diff" in
-  // comments-panel.md) — not the SEPARATE publish-choice menu this comment
-  // ("Enter" and no explicit `publish` argument here) never needed.
-  await expect(page.getByTestId('command-menu')).toBeVisible()
-  await page.keyboard.press('Escape')
-  await expect(page.getByTestId('command-menu')).toHaveCount(0)
+  // No menu opens at all here anymore — deliberate, not a weakened assertion:
+  // a reply used to auto-open the comment's own action menu right away, but
+  // that was reversed (ecf4979, "Stop auto-opening the comment menu right
+  // after a reply is sent") on a later, more specific reviewer report. The
+  // reviewer can still open that menu themselves with another Enter on the
+  // now-empty reply field. See "A reply no longer auto-opens the comment's
+  // own menu" in comments-panel.md.
+  await expect(page.getByTestId('command-menu')).not.toBeVisible()
 
   await expect
     .poll(async () => {

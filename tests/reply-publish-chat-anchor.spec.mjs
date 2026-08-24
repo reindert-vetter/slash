@@ -20,6 +20,14 @@ import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 // existing pure-Claude-draft shortcut just above it. See pendingPublishInfo's
 // `chatAnchor` doc comment and "A bare, still-untaken-over Claude-chat anchor
 // thread..." in .claude/docs/command-palette.md.
+//
+// Separately, ecf4979 ("Stop auto-opening the comment menu right after a
+// reply is sent") removed the comment's OWN action menu that used to open
+// right after any reply landed — deliberate, reviewer-reported reversal, not
+// a regression. So this test no longer expects ANY menu after the reply: not
+// the (already skipped) publish-choice menu, and not the comment's own
+// action menu either. See "A reply no longer auto-opens the comment's own
+// menu" in .claude/docs/comments-panel.md.
 test.use({ viewport: { width: 2000, height: 1100 } })
 
 test('a bare Claude-chat anchor thread\'s first reply posts straight to GitHub, no publish-choice menu', async ({
@@ -62,16 +70,13 @@ test('a bare Claude-chat anchor thread\'s first reply posts straight to GitHub, 
   expect(payload.body).toBe('asdf')
   expect(payload.publish).toBe('reply')
 
-  // postThreadReply still opens the comment's OWN action menu right after —
-  // a different menu than the (now skipped) publish-choice one — so this is
-  // not "no menu ever", just no CHOICE menu for a destination with only one
-  // real answer.
+  // No menu opens at all after this reply: not the (already skipped)
+  // publish-choice menu, and — since ecf4979 — not the comment's own action
+  // menu either (that auto-open was deliberately removed on a later
+  // reviewer report). The reviewer can still open it themselves with Enter
+  // on the now-empty reply field.
   const menu = page.getByTestId('command-menu')
-  await expect(menu).toBeVisible()
-  await expect(menu).not.toContainText('Alleen mijn antwoord op GitHub')
-  await expect(menu).not.toContainText('Ook mijn comment op GitHub')
-  await page.keyboard.press('Escape')
-  await expect(menu).toHaveCount(0)
+  await expect(menu).not.toBeVisible()
 
   // The thread is now taken over and public.
   await expect
