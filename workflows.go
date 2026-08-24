@@ -1335,7 +1335,11 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			return nil, fmt.Errorf("ingest: scan and store blocks: %w", err)
 		}
 		// The blocks table was just fully swapped, so a tab already open on this
-		// PR is showing a stale tree (see eventBlocksChanged, eventbus.go).
+		// PR is showing a stale tree (see eventBlocksChanged, eventbus.go). Also
+		// closes out any "wordt bijgewerkt" pill this PR still had pending — the
+		// tree is now current with everything landed so far, see
+		// chat_refresh_pending.go.
+		clearChatRefreshPendingFiles(arg.Repo, arg.PR)
 		publishBlocksChanged(arg.Repo, arg.PR)
 		return json.Marshal(res)
 	})
@@ -1363,6 +1367,10 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		// or a delta with no changed files) wrote nothing, so nudging the tab
 		// would put a "new commits" notice on screen with nothing behind it.
 		if res != nil && !res.Skipped {
+			// The tree is now current with everything landed so far for this PR —
+			// close out any "wordt bijgewerkt" pill, same as scanAndStoreBlocks
+			// above.
+			clearChatRefreshPendingFiles(arg.Repo, arg.PR)
 			publishBlocksChanged(arg.Repo, arg.PR)
 		}
 		return json.Marshal(res)

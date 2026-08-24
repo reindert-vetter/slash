@@ -114,13 +114,18 @@ func TestProcessChatMergeCleanlyAutoMergesNonOverlappingEdit(t *testing.T) {
 // A successful landing clears the PR's "wordt aangepast" pending-files
 // registry — commitCheckoutEditsAt always `git add -A`s the whole checkout,
 // so every file that was pending is, by definition, part of what just landed
-// (see chat_edit_pending.go's own doc comment).
+// (see chat_edit_pending.go's own doc comment) — and, at the exact same
+// moment, marks those same files as "wordt bijgewerkt" (chat_refresh_pending.go):
+// landed but not yet re-ingested. Only workflows.go's refreshIngestDelta/
+// scanAndStoreBlocks clear THAT registry, once the tree actually catches up —
+// out of scope for this Activity-level test, see ingest_delta_test.go.
 func TestProcessChatMergeClearsPendingEditedFilesOnSuccess(t *testing.T) {
 	bareDir, _ := setupChatShadowRepo(t, "feature/x", "foo v1\n")
 	dataDir := t.TempDir()
 	ctx := context.Background()
 	cm := testChatModule(t)
 	defer clearChatPendingFiles("", 2010)
+	defer clearChatRefreshPendingFiles("", 2010)
 
 	dir := cloneCheckoutDir(t, bareDir, "feature/x")
 	assignCheckoutForTest(t, "", 2010, dir)
@@ -137,6 +142,9 @@ func TestProcessChatMergeClearsPendingEditedFilesOnSuccess(t *testing.T) {
 	}
 	if got := chatPendingEditedFilesFor("", 2010); len(got) != 0 {
 		t.Fatalf("expected the pending-files registry cleared after landing, got %v", got)
+	}
+	if got := chatRefreshPendingFilesFor("", 2010); len(got) != 1 || got[0] != "foo.txt" {
+		t.Fatalf("expected foo.txt marked as awaiting a re-ingest after landing, got %v", got)
 	}
 }
 

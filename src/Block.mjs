@@ -1115,6 +1115,12 @@ export default function Block(b, opts = {}) {
   // per-row twin of this same chip). Defaults to false, same reasoning as
   // unpushed above.
   const editing = opts.editing || (() => false)
+  // refreshing is a function returning whether this block's file was just
+  // landed by a Claude edit but the review tree hasn't re-ingested it yet
+  // (state.checkout.refreshingFiles, see loadCheckout in home.mjs /
+  // refreshingPill in BlockList.mjs for the per-row twin). Defaults to false,
+  // same reasoning as unpushed/editing above.
+  const refreshing = opts.refreshing || (() => false)
   // approvedRows is a function returning the Set of approved row indices for this
   // block, so the panes re-tint (an emerald left bar) as the reviewer approves
   // units. A function (not a value) so the .innerHTML binding re-runs when
@@ -1404,6 +1410,20 @@ export default function Block(b, opts = {}) {
                 data-testid="block-editing"
                 class="rounded bg-sky-50 dark:bg-sky-500/15 px-1.5 py-0.5 text-[11px] font-medium text-sky-700 dark:text-sky-300"
                 >✎ wordt aangepast</span
+              >`
+            : ''}
+        ${() =>
+          // Landed, but the ingest-refresh this landing triggered hasn't
+          // swapped this file into the tree yet — the code shown below may
+          // still be the pre-edit version (or the block may be about to
+          // disappear entirely). home.mjs's `blocks.changed` handler clears
+          // this automatically as soon as the refresh lands, see
+          // refreshBlocksAfterOwnLanding.
+          refreshing()
+            ? html`<span
+                data-testid="block-refreshing"
+                class="rounded bg-violet-50 dark:bg-violet-500/15 px-1.5 py-0.5 text-[11px] font-medium text-violet-700 dark:text-violet-300"
+                >⟳ wordt bijgewerkt</span
               >`
             : ''}
         ${() =>

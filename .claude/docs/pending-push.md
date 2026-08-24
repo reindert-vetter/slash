@@ -104,6 +104,71 @@ does **not** already contain the remote tip:
   contained → the refresh fires and the tree deliberately follows GitHub again
   (the shared truth), until the pending commit is pushed.
 
+## "Wordt bijgewerkt": auto-refreshing the reviewer's OWN landing
+
+Reviewer request: "als claude net een aanpassing heeft gedaan waarom code is
+aangepast/weg is, dan wil ik dat gelijk zien... label 'ongepusht' is niet
+voldoende." Everything above makes the landing itself immediate, but there is
+a real gap between "landed" (visible right away as `ongepusht`) and "the
+block/diff panel actually shows the new code" — that only becomes true once
+the ingest-refresh `refreshTreeAfterLanding` triggered actually completes,
+which can take a few seconds. Until this feature, nothing said so, and the
+one thing that DID exist for a version-mismatch — the `blocks.changed` →
+`staleTreeRow` notice below — is a manual, click-to-reload notice, deliberately
+so a colleague's surprise push never yanks a reviewer's active approve-cursor
+out from under them (see "the notice leaves the selection and the tree
+untouched" in `tests/blocks-stale-notice.spec.mjs`). That same caution doesn't
+apply to the reviewer's OWN just-requested edit — they asked for exactly this
+change, so it's safe to apply the moment it's ready, no click needed.
+
+- **`chat_refresh_pending.go`** is a small PR-scoped in-memory registry, the
+  same operational shape as `chat_edit_pending.go`'s "wordt aangepast" set:
+  `markChatRefreshPendingFiles`/`clearChatRefreshPendingFiles`/
+  `chatRefreshPendingFilesFor`. Populated in `processChatMergeAt`
+  (`chat_merge.go`) the moment a landing succeeds, from the exact file set
+  `chat_edit_pending.go` is about to clear (the files the landed turn's own
+  Edit/Write calls touched) — so a block reads three, not two, possible
+  statuses in sequence: `wordt aangepast` (mid-turn) → `wordt bijgewerkt`
+  (landed, tree not caught up yet) → `ongepusht` (until the reviewer pushes).
+- **Cleared** the moment an ingest-refresh actually swaps the blocks table:
+  both `scanAndStoreBlocks` and `refreshIngestDelta`'s Activities
+  (`workflows.go`) call `clearChatRefreshPendingFiles` right before
+  `publishBlocksChanged` — the same instant the frontend's `blocks.changed`
+  event fires, so the registry and the event go dark together.
+- **Exposed on the existing `GET /api/chat/checkout`** read model
+  (`checkoutView.RefreshingFiles`, `chat_checkout.go`) — no new endpoint,
+  reusing the same poll/SSE cadence (`checkout.changed`, already published
+  right after `PendingFiles` at landing time) the checkout chip already has.
+- **Frontend** (`home.mjs`): `checkoutRefreshingFiles()` mirrors
+  `checkoutPendingFiles()`. `refreshingPill`/`opts.refreshing` (`BlockList.mjs`/
+  `Block.mjs`) render the pill — a THIRD glyph/colour (`⟳`, violet) next to
+  `unpushedPill`'s `⇧` and `editingPill`'s `✎`, so a block that is mid-edit,
+  landed-not-refreshed, AND separately unpushed at once still reads as three
+  distinct things, never colour alone.
+- **The auto-refresh itself**: `onEvent('blocks.changed', ...)` checks
+  `checkoutRefreshingFiles()` BEFORE deciding what to do with the event. Non-empty
+  (this event is this reviewer's own landing catching up) →
+  `refreshBlocksAfterOwnLanding(files)` re-fetches `/api/blocks` + relations and
+  reindexes, then re-fetches the checkout (clears the now-empty
+  `refreshingFiles` locally too) — `state.blocksStale` is never set. Empty (a
+  colleague's push, or this tab's own `checkout.changed` for the landing simply
+  hasn't arrived yet) → the existing manual `staleTreeRow` flow, unchanged.
+- **If the reviewer's selected block itself disappeared** (the edit removed or
+  moved the method/class the cursor was on): `refreshBlocksAfterOwnLanding`
+  first lets `recomputeLeftList`'s ordinary id-preserving reindex run (falls
+  back to index 0 if nothing else applies), then — only when the previously
+  selected id is genuinely gone — looks for another block whose `file` is one
+  of THIS landing's own touched files and selects the first such match in
+  list order (reviewer's own call: "ga dan naar een gerelateerd bestand wat je
+  net hebt aangepast, als dat mogelijk is"). No such candidate → the generic
+  index-0 fallback stands, untouched.
+
+Tests: `TestBuildCheckoutViewReportsRefreshingFiles`
+(`chat_checkout_test.go`), the `RefreshingFiles` assertion in
+`TestProcessChatMergeClearsPendingEditedFilesOnSuccess` (`chat_merge_test.go`),
+`tests/refreshing-pill.spec.mjs` (the pill on both the index row and the diff
+card, and the full auto-refresh-and-follow-selection round trip).
+
 ## The push: a `"push"` Action on the PR's `chat_merge` queue
 
 `pushPendingPR` (`pending_push.go`), reached via

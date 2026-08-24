@@ -1478,6 +1478,15 @@ hasn't happened yet.
   mid-edit and separately unpushed shows two distinguishable pills rather
   than one ambiguous one.
 
+**This pill's own sibling picks up right where it leaves off.** The moment a
+landing succeeds this "wordt aangepast" set is cleared, but the block/diff
+panel doesn't actually show the new code until the ingest-refresh that
+landing triggered finishes — a separate, THIRD status,
+"wordt bijgewerkt" (`⟳`, violet), covered in full in "'Wordt bijgewerkt': auto-
+refreshing the reviewer's OWN landing" in `.claude/docs/pending-push.md`
+(`chat_refresh_pending.go`) — that file, not this one, is where that gap and
+its automatic-refresh fix live.
+
 Tests: `TestChatProgressAccumulatesEditedFiles` (`chat_progress_test.go`),
 `TestBuildCheckoutViewReportsPendingFiles` (`chat_checkout_test.go`),
 `TestProcessChatMergeClearsPendingEditedFilesOnSuccess`

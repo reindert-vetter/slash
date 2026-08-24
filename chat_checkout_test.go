@@ -884,3 +884,29 @@ func TestBuildCheckoutViewReportsPendingFiles(t *testing.T) {
 		t.Fatalf("expected PendingFiles cleared, got %v", view.PendingFiles)
 	}
 }
+
+// checkoutView.RefreshingFiles mirrors chat_refresh_pending.go's own
+// registry — the review tree's "wordt bijgewerkt" pill (and home.mjs's
+// blocks.changed handler telling its own landing apart from a colleague's
+// push) reads it straight off the same read model the checkout chip already
+// polls. See .claude/docs/pending-push.md.
+func TestBuildCheckoutViewReportsRefreshingFiles(t *testing.T) {
+	defer clearChatRefreshPendingFiles("", 1018)
+
+	empty := buildCheckoutView("", 1018)
+	if len(empty.RefreshingFiles) != 0 {
+		t.Fatalf("expected no refreshing files yet, got %v", empty.RefreshingFiles)
+	}
+
+	markChatRefreshPendingFiles("", 1018, []string{"src/Foo.php", "src/Bar.php"})
+	view := buildCheckoutView("", 1018)
+	if len(view.RefreshingFiles) != 2 || view.RefreshingFiles[0] != "src/Bar.php" || view.RefreshingFiles[1] != "src/Foo.php" {
+		t.Fatalf("RefreshingFiles = %v, want the marked files sorted", view.RefreshingFiles)
+	}
+
+	clearChatRefreshPendingFiles("", 1018)
+	view = buildCheckoutView("", 1018)
+	if len(view.RefreshingFiles) != 0 {
+		t.Fatalf("expected RefreshingFiles cleared, got %v", view.RefreshingFiles)
+	}
+}

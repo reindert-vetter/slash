@@ -1384,13 +1384,27 @@ type checkoutView struct {
 	// (BlockList.mjs/Block.mjs), reusing the same read model/poll cadence the
 	// checkout chip already has instead of a dedicated endpoint.
 	PendingFiles []string `json:"pendingFiles,omitempty"`
+	// RefreshingFiles are the repo-relative paths a JUST-LANDED Claude edit
+	// touched, for which the review tree hasn't re-ingested yet
+	// (chat_refresh_pending.go) — the gap between "ongepusht" (landed) and the
+	// diff panel actually showing the new code. Drives the per-block "wordt
+	// bijgewerkt" pill (BlockList.mjs/Block.mjs) and tells home.mjs's
+	// `blocks.changed` handler that the next such event is this reviewer's OWN
+	// landing finishing, not a colleague's push — see
+	// .claude/docs/pending-push.md.
+	RefreshingFiles []string `json:"refreshingFiles,omitempty"`
 }
 
 // buildCheckoutView reads the in-memory assignment for one PR — never nil,
 // mirroring loadPendingPush's own "nothing yet" shape (an empty view, not an
 // error) so a PR with no checkout activity at all still round-trips cleanly.
 func buildCheckoutView(repo string, pr int) checkoutView {
-	v := checkoutView{PR: pr, RunID: chatMergeQueueRunID(repo, pr), PendingFiles: chatPendingEditedFilesFor(repo, pr)}
+	v := checkoutView{
+		PR:              pr,
+		RunID:           chatMergeQueueRunID(repo, pr),
+		PendingFiles:    chatPendingEditedFilesFor(repo, pr),
+		RefreshingFiles: chatRefreshPendingFilesFor(repo, pr),
+	}
 	a := getCheckoutAssignment(repo, pr)
 	if a == nil {
 		return v

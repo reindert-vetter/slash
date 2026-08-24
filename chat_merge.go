@@ -277,6 +277,12 @@ func processChatMergeAt(ctx context.Context, tm *TaskManager, cm *chat.Module, c
 		// The landing created (or advanced) the PR's pending ref, so the todo row
 		// at the bottom of the block index has something new to show.
 		publishPendingPushChanged(arg.Repo, arg.PR)
+		// Those exact files are now landed but the tree hasn't re-ingested them
+		// yet — captured BEFORE clearChatPendingFiles below wipes the set it
+		// reads from. Cleared once the ingest-refresh refreshTreeAfterLanding
+		// just kicked off actually swaps the blocks table (see
+		// chat_refresh_pending.go / publishBlocksChanged's call sites).
+		markChatRefreshPendingFiles(arg.Repo, arg.PR, chatPendingEditedFilesFor(arg.Repo, arg.PR))
 		// Everything that was "wordt aangepast" for this PR just landed —
 		// commitCheckoutEditsAt always `git add -A`s the whole checkout, so a
 		// successful landing by definition carries every file that was

@@ -4367,6 +4367,18 @@ function checkoutPendingFiles() {
   return new Set(c && Array.isArray(c.pendingFiles) ? c.pendingFiles : [])
 }
 
+// checkoutRefreshingFiles is checkoutPendingFiles' twin for the THIRD status:
+// files a Claude edit just LANDED for, that the review tree hasn't
+// re-ingested yet (state.checkout.refreshingFiles, chat_refresh_pending.go
+// via loadCheckout below). Empty set when nothing is pending a refresh or the
+// checkout hasn't loaded yet. Also doubles as the signal the `blocks.changed`
+// handler uses to tell "my own landing just finished refreshing" apart from
+// "a colleague pushed" — see onEvent('blocks.changed', ...) below.
+function checkoutRefreshingFiles() {
+  const c = state.checkout
+  return new Set(c && Array.isArray(c.refreshingFiles) ? c.refreshingFiles : [])
+}
+
 // loadCheckout fetches this PR's shared local-checkout state (the checkout
 // chip in prInfoCard) — GET /api/chat/checkout, chat_checkout.go's
 // buildCheckoutView. Assigns the whole object (or null) rather than mutating
@@ -4382,6 +4394,54 @@ async function loadCheckout() {
   } catch (_) {
     /* offline — keep whatever we have */
   }
+}
+
+// refreshBlocksAfterOwnLanding re-fetches the blocks/relations the moment the
+// ingest-refresh triggered by the REVIEWER'S OWN just-landed Claude edit
+// completes — the `blocks.changed` handler below only calls this when
+// checkoutRefreshingFiles() was non-empty right before the event arrived
+// (i.e. this event is that landing catching up, not a colleague's push,
+// which keeps going through the existing staleTreeRow/state.blocksStale
+// flow untouched). Reviewer request: "als claude net een aanpassing heeft
+// gedaan... dan wil ik dat gelijk zien" — the existing flow required a
+// manual click on the stale-tree notice; this one is safe to do
+// automatically because the reviewer just asked for this exact change
+// themselves; see .claude/docs/pending-push.md.
+//
+// Deliberately NOT the full loadBlocks() (only meant to run once, at page
+// load — it re-derives one-shot restores like ?sel=/?drill= and the
+// fresh-open default-unapproved pick, none of which apply to a mid-session
+// refresh): just the two reads loadBlocks itself starts with
+// (blocks + relations), then recomputeLeftList's existing id-preserving
+// reindex, with one addition — if the CURRENTLY selected block just
+// disappeared because of this exact edit (the method/class it was on got
+// removed or moved out), land on another block from one of the SAME files
+// this landing touched, rather than recomputeLeftList's generic "reset to
+// the first row" fallback. No such candidate → that generic fallback stands,
+// unchanged.
+async function refreshBlocksAfterOwnLanding(touchedFiles) {
+  const prevId = state.blocks[state.selected] ? state.blocks[state.selected].id : null
+  try {
+    const res = await fetch(`/api/blocks?pr=${state.pr}${repoQuery}`)
+    if (!res.ok) return
+    const blocks = await res.json()
+    state.allBlocks = Array.isArray(blocks) ? blocks : []
+    state.relations = await loadRelations()
+  } catch (_) {
+    return // offline — keep whatever we had, the next event/poll retries
+  }
+  recomputeLeftList()
+  const stillThere = prevId != null && state.blocks.some((b) => b.id === prevId)
+  if (prevId != null && !stillThere && Array.isArray(touchedFiles) && touchedFiles.length) {
+    const files = new Set(touchedFiles)
+    const idx = state.blocks.findIndex((b) => b.file && files.has(b.file))
+    if (idx >= 0) state.selected = idx
+  }
+  // The newly landed code can resolve new calls/tests/approval totals — the
+  // same fire-and-forget reads loadBlocks itself kicks off.
+  loadCallResolve()
+  loadTestCovers()
+  loadBlockStats()
 }
 
 // sendCheckoutAction fires one of the checkout chip's four Actions
@@ -15107,6 +15167,9 @@ function DetailPanel(state) {
             // Marks a block whose file a not-yet-landed Claude edit is
             // currently touching (see checkoutPendingFiles/loadCheckout).
             editing: () => checkoutPendingFiles().has(b.file),
+            // Marks a block whose file was just landed but the tree hasn't
+            // re-ingested it yet (see checkoutRefreshingFiles/loadCheckout).
+            refreshing: () => checkoutRefreshingFiles().has(b.file),
             // Dimmed like the look-ahead preview whenever it isn't the selected
             // card, OR the keyboard focus has stepped off it onto a drilled
             // column (state.focusLevel > 0).
@@ -15516,6 +15579,7 @@ function DetailPanel(state) {
                   preview: !focusedHere,
                   unpushed: () => pendingPushFiles().has(b.file),
                   editing: () => checkoutPendingFiles().has(b.file),
+                  refreshing: () => checkoutRefreshingFiles().has(b.file),
                   // Also feeds the 'fit' stand's width the same way the
                   // top-level card's activeGroup does — see
                   // focusedActiveUnit's own doc comment.
@@ -16094,7 +16158,22 @@ onEvent('prmeta.changed', () => {
 // stale tree until the next refresh, which is the same risk the reviewer
 // already had before this existed.
 onEvent('blocks.changed', () => {
-  state.blocksStale = true
+  // A refresh already known to be about MY OWN just-landed edit
+  // (checkoutRefreshingFiles is only non-empty between a landing and the
+  // ingest-refresh it triggered completing, see chat_refresh_pending.go) is
+  // safe to apply automatically — the reviewer just asked for this exact
+  // change themselves. Anything else (a colleague's push, or a refresh whose
+  // own checkout.changed event this tab hasn't processed yet) keeps going
+  // through the existing manual staleTreeRow flow, unchanged.
+  const files = [...checkoutRefreshingFiles()]
+  if (files.length) {
+    refreshBlocksAfterOwnLanding(files)
+    // Picks up the server having cleared refreshingFiles for this refresh, so
+    // the "wordt bijgewerkt" pill disappears along with the stale code.
+    loadCheckout()
+  } else {
+    state.blocksStale = true
+  }
 })
 onEventsResync(() => {
   loadCallResolve()

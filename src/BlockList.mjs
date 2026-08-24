@@ -637,6 +637,37 @@ function editingPill(state, b) {
   `
 }
 
+// refreshingPill marks a row whose file was just LANDED by a Claude edit but
+// the review tree hasn't re-ingested it yet (state.checkout.refreshingFiles,
+// chat_refresh_pending.go via GET /api/chat/checkout — see loadCheckout in
+// home.mjs). Reviewer request: "als claude net een aanpassing heeft gedaan...
+// dan wil ik dat gelijk zien (of juist dat het weg is)" — the existing
+// `ongepusht` pill only says "not on GitHub yet", nothing about whether the
+// CODE shown has caught up. A cycling-arrow glyph plus the word, never colour
+// alone, and a THIRD distinguishable colour/glyph from unpushedPill's ⇧ and
+// editingPill's ✎ — a block can carry all three at once (mid-edit, landed but
+// not yet re-ingested, and unpushed) and each must read on its own.
+//
+// Per FILE, not per block, same accepted trade-off as unpushedPill/
+// editingPill. Deliberately short-lived: home.mjs's own `blocks.changed`
+// handler auto-reloads the tree the moment the server clears this set (see
+// refreshBlocksAfterOwnLanding), so this pill is normally only visible for as
+// long as the ingest-refresh itself takes — a colleague's own push instead
+// keeps going through the existing staleTreeRow, never through this pill.
+function refreshingPill(state, b) {
+  const files =
+    state.checkout && Array.isArray(state.checkout.refreshingFiles) ? state.checkout.refreshingFiles : []
+  if (!b.file || !files.includes(b.file)) return ''
+  return html`
+    <span
+      data-testid="row-refreshing"
+      title="Deze wijziging is geland; de review-tree werkt de code nu bij"
+      class="shrink-0 rounded bg-violet-50 dark:bg-violet-500/15 px-1.5 py-0.5 text-[10px] font-medium text-violet-700 dark:text-violet-300"
+      >⟳ wordt bijgewerkt</span
+    >
+  `
+}
+
 // toggleRow is the bottom button that hides/shows the fully-approved blocks.
 // It's also a stop of the sidebar's keyboard ↑/↓ loop (see stepListSelection/
 // searchStepSelection in home.mjs, which also runs through toggleRow's own
@@ -1109,6 +1140,7 @@ function row(state, b, i) {
       ${() => removedPill(b)} ${() => movedPill(b)}
       ${() => unpushedPill(state, b)}
       ${() => editingPill(state, b)}
+      ${() => refreshingPill(state, b)}
       ${() => batchPill(b)} ${() => claudeChatPill(b)}
       ${() => commentActivityPill(state, b)}
       ${() => approvalPill(state, b)}
