@@ -732,6 +732,89 @@ takes the keyboard the rest of the way in both cases. Best-effort throughout,
 like `openTask` itself: a stale/racy jump (the row/comment gone by the time an
 `await` resolves) simply does nothing further.
 
+**Reachable with NO anchor at all, not just as a nested rung of `'claude'`.**
+Reviewer report: with no comment on the current unit (so `'claude'` cannot
+even be entered — `enterClaudeChat` is a no-op without an anchor, see
+"Product decision" above), the footer-only card still renders whenever
+`otherRunningClaudeTasks().length > 0` (`hasCommentClaudeFooter()`), but `↑`
+from the top of Onderliggende code used to leave the panel immediately —
+there was no way to reach this list at all. Two more panel-top boundaries now
+check `otherRunningClaudeTasks().length > 0` before falling through to their
+existing `exitRelated()`: `'code'`'s own `↑` at `codeSel === 0` (its
+existing fallback chain — `codeFromClaudeTail` → `hasVisibleComments()` →
+exit — gets this as its new last resort) and `'thread'`'s own `↑` past the
+oldest message of the FIRST conversation. Both call **`enterFooterTasks(fromFocus)`**
+(`RelatedPanel.mjs`), a NEW `cs.focus` value, `'tasks'` — deliberately not a
+bare `cs.focus = 'claude'` with no anchor: `claudeChatVisible()`'s own third
+branch would then wrongly render an empty composer/chat column for a unit
+that genuinely has no comment. `enterFooterTasks` lands on the LAST row
+(closest to the boundary just crossed, mirroring `codeFromClaudeTail`'s own
+"land at the tail" convention) and remembers which boundary it came from
+(`tasksFromFocus`, a plain module variable, exactly like
+`codeFromClaudeTail`) so stepping back out (`exitFooterTasks` — `↓` past the
+last task, or `←`) lands exactly where the reviewer left: `'code'` (the
+common case) or `'thread'` at its own oldest message again. `↑` past the
+FIRST task, or `Escape` (handled generically at the top of
+`handleRelatedKey`, unconditionally `exitRelated()`), leaves the panel
+entirely. `selectHighlightedClaudeTask()`'s guard widened from a bare
+`cs.focus === 'claude'` to `cs.focus === 'claude' || cs.focus === 'tasks'`,
+and so did home.mjs's own Enter check (`isClaudeChatFocused() ||
+isFooterTasksFocused()`, a new exported predicate mirroring
+`isClaudeChatFocused`) — both the `'claude'`-nested and the anchor-less path
+share the exact same Enter action. `applyRelRestore` (the `?rel.foc=` refresh
+restore) gained a matching `'tasks'` branch, landing back on `'code'` on
+restore — `cs.claudeTasksPos` itself was already, deliberately, never bound
+to the URL (see its own doc comment: other people's live, constantly
+changing turns aren't worth restoring), so which row was highlighted is not
+preserved either, same as the `'claude'`-nested version of this rung.
+
+### A finished task lingers for 2 minutes, clearly marked done
+
+Reviewer request: a task should not vanish from "Ook bezig elders" the
+INSTANT it finishes — it should stay long enough to actually notice and jump
+to it, marked as done rather than looking like it's still running.
+
+`claudeTurns.mjs` gained a third, non-reactive bookkeeping structure next to
+`turns.byId`/`progressAt`: **`finishedAt`** (a plain `Map`, id → timestamp),
+stamped by **`markFinishedIfJustStopped(id, wasActive, isActiveNow)`** —
+called from both `setTurnBusy` and `setTurnProgress` (the two writers of "is
+this conversation doing something right now") — the instant a conversation
+goes from busy/running to neither, and CLEARED the instant it becomes
+active again (a fresh turn on the same conversation must not inherit an old
+"klaar" mark). **`recentlyFinishedTurnIds(excludeId)`** is `runningTurnIds`'s
+own sibling: every id whose `finishedAt` is less than `FINISHED_LINGER_MS`
+(2 minutes) old and not currently running/busy again, garbage-collecting
+`finishedAt` of any id past that window as it walks it. `otherRunningClaudeTasks()`
+now returns `[...runningTurnIds(anchorId), ...recentlyFinishedTurnIds(anchorId)]`
+— running first, then lingering-finished — and `hasCommentClaudeFooter()`
+picks this up for free (it already gates on `otherRunningClaudeTasks().length
+> 0`), so the footer-only card also stays visible through the linger window.
+`claudeTaskRow` tells the two apart via **`isTurnRecentlyFinished(id)`**
+(exported, the exact same predicate `recentlyFinishedTurnIds` filters
+with) — a done row swaps the pulsing indigo dot for a static check-mark glyph
+in a small emerald circle, and its status word for **"Klaar"** — words plus a
+differing shape, never colour alone (colourblind rule), same convention as
+`claudeChatPill`'s own "✓ Claude antwoordde".
+
+**Deliberately a per-tab heuristic, not a read model**: the server keeps no
+history of when a turn finished (`chat_progress.go` only ever answers "is one
+running right now"), so a conversation that finished while this tab was
+closed or got refreshed never gets a "recently finished" window after the
+fact — only one this tab actually observed finishing live. Accepted per the
+reviewer's own "als dat mogelijk is" — no backend change, no new endpoint.
+
+**Keeping the row alive to actually expire on screen**: `otherRunningClaudeTasks()`
+reads `cc.tick` purely to force a re-evaluation every second while something
+is lingering (the same "read purely to force a re-run" trick the elapsed-
+seconds counter already relies on), and `syncChatTicker`'s own 1s-heartbeat
+condition widened from `anyTurnRunning()` to `anyTurnRunning() ||
+anyRecentlyFinishedTurn()` (a new exported claudeTurns.mjs predicate) — so a
+finished-but-lingering row still ticks down and disappears roughly on time,
+not only on the next unrelated render. `sendClaudeMessage`'s own Signal
+round-trip now also calls `syncChatTicker()` right after `setTurnBusy(...,
+false)` in its `finally` block — a turn that ends via this path (rather than
+an SSE `chat.progress` frame) still needs that nudge.
+
 Test: `tests/claude-chat-other-tasks.spec.mjs` — two cases. The first (two
 PR-wide conversations, the first one's Signal POST held open — same trick as
 `claude-chat-parallel.spec.mjs`) asserts the second one's footer names itself,

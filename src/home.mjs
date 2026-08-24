@@ -110,6 +110,7 @@ import RelatedPanel, {
   hasCommentClaudeFooter,
   hasAnyComments,
   isClaudeChatFocused,
+  isFooterTasksFocused,
   clearClaudeChat,
   retryClaudeTurn,
   cancelClaudeTurn,
@@ -12720,7 +12721,10 @@ function onKeydown(e) {
     // that conversation, exactly like clicking it (jumpToClaudeConversation,
     // registered via setClaudeTaskJump). Checked for the same reason as the
     // option branch right above it — this rung also blurs the composer.
-    if (e.key === 'Enter' && isClaudeChatFocused() && selectHighlightedClaudeTask()) {
+    // isFooterTasksFocused() covers the same rung reached with no anchor at
+    // all (enterFooterTasks, cs.focus === 'tasks') — see
+    // .claude/docs/claude-chat-panel.md.
+    if (e.key === 'Enter' && (isClaudeChatFocused() || isFooterTasksFocused()) && selectHighlightedClaudeTask()) {
       e.preventDefault()
       return
     }

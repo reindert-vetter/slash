@@ -51,6 +51,17 @@ import { repoParam } from './prContext.mjs'
 //
 // Both are plain objects that are only ever REASSIGNED, never mutated — that
 // is what re-runs the bindings reading them (see .claude/rules/arrowjs-pitfalls.md).
+//
+// A THIRD, non-reactive Map (finishedAt, below — mirrors progressAt's own
+// shape) tracks when a conversation's turn most recently stopped
+// running/being busy, purely so recentlyFinishedTurnIds can let a just-
+// finished task linger in "Ook bezig elders" for 2 minutes instead of
+// vanishing the instant it's done. Deliberately a per-tab heuristic, not a
+// read model: the server keeps no history of when a turn finished (only
+// "is one running right now", chat_progress.go), so a conversation that
+// finished while this tab was closed/refreshed never gets a "recently
+// finished" window after the fact — only one this tab actually observed
+// finishing live.
 const turns = reactive({ byId: {}, scopes: {} })
 
 const EMPTY = { progress: null, busy: false, answered: false, sendError: '' }
@@ -59,12 +70,38 @@ function entryOf(id) {
   return (id != null && turns.byId[id]) || EMPTY
 }
 
+// finishedAt — a non-reactive Map (next to progressAt below), stamped the
+// moment a conversation goes from "running/busy" to "not any more". Powers
+// recentlyFinishedTurnIds' 2-minute linger (see its own doc comment):
+// reviewer request — a task should not vanish from "Ook bezig elders" the
+// INSTANT it finishes, it should stick around long enough to actually notice
+// and jump to it, clearly marked as done rather than still "bezig". Plain
+// (not reactive) like progressAt: nothing reads it directly for rendering,
+// only through recentlyFinishedTurnIds/isTurnRecentlyFinished, which compare
+// it against Date.now() at read time.
+const finishedAt = new Map()
+const FINISHED_LINGER_MS = 2 * 60 * 1000
+
+// markFinishedIfJustStopped stamps finishedAt(id) the moment `wasActive`
+// (the running/busy state just before this write) flips to `!isActiveNow` —
+// called from both setTurnProgress and setTurnBusy, the two writers of
+// "is this conversation doing something right now". Clears any stale stamp
+// the instant the conversation becomes active again (a fresh turn on the
+// same conversation must not inherit an old "klaar" mark).
+function markFinishedIfJustStopped(id, wasActive, isActiveNow) {
+  if (isActiveNow) finishedAt.delete(id)
+  else if (wasActive) finishedAt.set(id, Date.now())
+}
+
 function patch(id, fields) {
   if (id == null) return
   const next = { ...turns.byId }
   const merged = { ...entryOf(id), ...fields }
   // Forget an entry that has nothing left to say, so this map stays the size
   // of "what is happening now" instead of growing per conversation visited.
+  // finishedAt is intentionally NOT part of this condition — deleting the
+  // byId entry must not also drop the 2-minute "recently finished" memory,
+  // see recentlyFinishedTurnIds below.
   if (!merged.progress && !merged.busy && !merged.answered && !merged.sendError) delete next[id]
   else next[id] = merged
   turns.byId = next
@@ -74,6 +111,10 @@ function patch(id, fields) {
 // composer gate reads this per conversation, so a message typed on another
 // selection is sent straight away instead of queueing behind this turn.
 export function setTurnBusy(id, on) {
+  if (id != null) {
+    const wasActive = !!(entryOf(id).busy || (entryOf(id).progress && entryOf(id).progress.running))
+    markFinishedIfJustStopped(id, wasActive, !!on)
+  }
   patch(id, { busy: !!on })
 }
 
@@ -108,6 +149,9 @@ const progressAt = new Map()
 export function setTurnProgress(id, p) {
   if (id == null) return
   progressAt.set(id, Date.now())
+  const wasActive = !!(entryOf(id).busy || (entryOf(id).progress && entryOf(id).progress.running))
+  const isActiveNow = !!(entryOf(id).busy || (p && p.running))
+  markFinishedIfJustStopped(id, wasActive, isActiveNow)
   patch(id, { progress: p || null })
 }
 
@@ -183,6 +227,55 @@ export function runningTurnIds(excludeId) {
   return Object.keys(turns.byId)
     .filter((id) => id !== ex && (turns.byId[id].busy || (turns.byId[id].progress && turns.byId[id].progress.running)))
     .sort((a, b) => Number(a) - Number(b))
+}
+
+// anyRecentlyFinishedTurn — true while at least one conversation is still
+// inside its 2-minute "just finished" window. Lets syncChatTicker (
+// RelatedPanel.mjs) keep its 1s heartbeat running long enough for a lingering
+// "Ook bezig elders" row to actually expire on screen, not just on the next
+// unrelated re-render.
+export function anyRecentlyFinishedTurn() {
+  const now = Date.now()
+  for (const at of finishedAt.values()) {
+    if (now - at < FINISHED_LINGER_MS) return true
+  }
+  return false
+}
+
+// isTurnRecentlyFinished — id finished (see markFinishedIfJustStopped) less
+// than FINISHED_LINGER_MS ago and isn't busy/running again since. Used both
+// by recentlyFinishedTurnIds (the list) and by claudeTaskRow (the per-row
+// "Klaar" label) so both read the exact same notion of "still lingering".
+export function isTurnRecentlyFinished(id) {
+  const at = finishedAt.get(id)
+  if (!at) return false
+  if (runningTurnIds(null).includes(String(id))) return false
+  return Date.now() - at < FINISHED_LINGER_MS
+}
+
+// recentlyFinishedTurnIds — every OTHER conversation whose turn finished in
+// the last FINISHED_LINGER_MS (2 minutes), for the SAME "Ook bezig elders"
+// list runningTurnIds feeds (see otherRunningClaudeTasks, RelatedPanel.mjs) —
+// reviewer request: a task should not disappear from that list the instant it
+// finishes, it should stay long enough to actually notice, clearly marked
+// done rather than left looking like it's still running (isTurnRecentlyFinished
+// above is what a row uses to tell the two apart). Also garbage-collects
+// `finishedAt` as it walks it, so a stamp older than the window never lingers
+// in memory forever once nothing reads it any more.
+export function recentlyFinishedTurnIds(excludeId) {
+  const ex = excludeId == null ? null : String(excludeId)
+  const now = Date.now()
+  const ids = []
+  for (const [id, at] of finishedAt) {
+    if (now - at >= FINISHED_LINGER_MS) {
+      finishedAt.delete(id)
+      continue
+    }
+    if (id === ex) continue
+    if (runningTurnIds(null).includes(String(id))) continue // reported as running, not finished
+    ids.push(id)
+  }
+  return ids.sort((a, b) => Number(a) - Number(b))
 }
 
 // loadRunningTurns is the PR-wide RESYNC read (GET /api/chat/progress?pr=N):

@@ -133,7 +133,16 @@ code).
    `↓` out of the chat (stop 5b) reaches this stop only inside a DRILLED
    column (`state.focusLevel > 0`, that same column's own panel); at the top
    level it still jumps straight to the next block instead (see stop 5b
-   above).
+   above). **`↑` from this stop's FIRST child** (`codeSel === 0`) can also
+   land on stop 5b's own "other running Claude tasks" rung
+   (`cs.focus==='tasks'`, `enterFooterTasks`) even with **no comment on this
+   unit at all** — whenever the footer-only card has something to show (a
+   conversation running elsewhere in the PR) — instead of always leaving the
+   panel. Same rung, same predicate (`otherRunningClaudeTasks().length > 0`),
+   from `'thread'`'s own `↑` past the oldest message of the first
+   conversation too. See "Reachable with NO anchor at all…" in
+   `.claude/docs/claude-chat-panel.md` for the full mechanism (the boundary
+   this rung is reached from is remembered, so `↓`/`←` step back to it).
 
 ### Walking into the since-review blocks and the Taken block
 
