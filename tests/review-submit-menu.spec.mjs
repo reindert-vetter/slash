@@ -30,8 +30,9 @@ import { test, expect } from './_fixtures.mjs'
 //
 // Same PR 12903 fixture as postapprove-menu.spec.mjs: only block 1
 // (CreatePaymentAction::execute, index 1) and block 6 (Order::address, index
-// 6) carry a real diff (one single-line group each) — every other block has
-// zero changed rows, so approving both of those two blocks is exactly "alles
+// 5 — see postapprove-menu.spec.mjs for how this index is derived) carry a
+// real diff (one single-line group each) — every other block has zero
+// changed rows, so approving both of those two blocks is exactly "alles
 // goedgekeurd" for this fixture.
 const BLOCK1_SEL = 'app/Actions/CreatePaymentAction.php:26' // CreatePaymentAction::execute
 const BLOCK6_SEL = 'app/Models/Order.php:88' // Order::address
@@ -173,8 +174,9 @@ test.describe('PR Review Tree — review-submit follow-up (Keur de HELE PR goed 
     await expect(page.getByTestId('block-column')).toBeVisible()
     await page.keyboard.press('Escape')
 
-    // Approve block 6 only — block 1 stays open, so the PR isn't fully done.
-    await page.locator('[data-idx="6"]').click()
+    // Approve block 6 (Order::address) only — block 1 stays open, so the PR
+    // isn't fully done.
+    await page.locator('[data-idx="5"]').click()
     await page.keyboard.press('ArrowRight')
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
     await approveViaPalette(page)

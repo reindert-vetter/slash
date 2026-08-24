@@ -67,6 +67,7 @@ export default function globalSetup() {
   materializeOpsRepoWorktrees()
   materializeAdditionsOnlyWorktrees()
   materializeStaleAnchorWorktrees()
+  materializeCategoryOrderWorktrees()
 }
 
 // materializeBlockMoveWorktrees writes the base/head worktrees for the
@@ -1507,4 +1508,88 @@ class AdditionsOnlyAction
   const write = worktreeWriter(123)
   write('base', 'app/Actions/AdditionsOnlyAction.php', base)
   write('head', 'app/Actions/AdditionsOnlyAction.php', head)
+}
+
+// materializeCategoryOrderWorktrees writes the base/head worktrees for the
+// per-category "most left to approve first, TEST always last" ordering
+// fixture (PR 125, tests/index-category-order.spec.mjs — see "de type met de
+// meeste te approven bovenaan" in .claude/docs/blocks-and-ingest.md). Four
+// blocks (tests/fixtures/categoryorder-blocks.json), each a real, fully
+// changed-line diff so /api/blockstats reports an exact, predictable
+// remaining count per category: CONFIG=4, WORKFLOW=3, PROVIDER=1, TEST=6 —
+// deliberately the HIGHEST of the four, to prove TEST still sorts last even
+// though it has the most left to approve of any category here.
+function materializeCategoryOrderWorktrees() {
+  const write = worktreeWriter(125)
+  const config = (a, b, c, d) => `<?php
+
+return [
+    'alpha' => '${a}',
+    'beta' => '${b}',
+    'gamma' => '${c}',
+    'delta' => '${d}',
+];
+`
+  write('base', 'config/settings.php', config('base-alpha', 'base-beta', 'base-gamma', 'base-delta'))
+  write('head', 'config/settings.php', config('head-alpha', 'head-beta', 'head-gamma', 'head-delta'))
+
+  const workflow = (a, b, c) => `<?php
+
+namespace App\\Workflows;
+
+class SyncWorkflow
+{
+    public function run()
+    {
+        $first = '${a}';
+        $second = '${b}';
+        $third = '${c}';
+    }
+}
+`
+  write('base', 'app/Workflows/SyncWorkflow.php', workflow('base-a', 'base-b', 'base-c'))
+  write('head', 'app/Workflows/SyncWorkflow.php', workflow('head-a', 'head-b', 'head-c'))
+
+  const provider = (a) => `<?php
+
+namespace App\\Providers;
+
+class EventServiceProvider
+{
+    public function boot()
+    {
+        $mode = '${a}';
+    }
+}
+`
+  write('base', 'app/Providers/EventServiceProvider.php', provider('base-mode'))
+  write('head', 'app/Providers/EventServiceProvider.php', provider('head-mode'))
+
+  const bigTest = (v1, v2, v3, v4, v5, v6) => `<?php
+
+namespace Tests\\Feature;
+
+class BigTest
+{
+    public function it_does_a_lot()
+    {
+        $v1 = '${v1}';
+        $v2 = '${v2}';
+        $v3 = '${v3}';
+        $v4 = '${v4}';
+        $v5 = '${v5}';
+        $v6 = '${v6}';
+    }
+}
+`
+  write(
+    'base',
+    'tests/Feature/BigTest.php',
+    bigTest('base-1', 'base-2', 'base-3', 'base-4', 'base-5', 'base-6'),
+  )
+  write(
+    'head',
+    'tests/Feature/BigTest.php',
+    bigTest('head-1', 'head-2', 'head-3', 'head-4', 'head-5', 'head-6'),
+  )
 }

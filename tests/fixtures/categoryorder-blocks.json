@@ -1,0 +1,46 @@
+[
+  {
+    "pr": 125,
+    "file": "config/settings.php",
+    "class": "",
+    "name": "settings.php",
+    "category": "CONFIG",
+    "line": 4,
+    "endLine": 7,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 125,
+    "file": "app/Workflows/SyncWorkflow.php",
+    "class": "SyncWorkflow",
+    "name": "run",
+    "category": "WORKFLOW",
+    "line": 9,
+    "endLine": 11,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 125,
+    "file": "app/Providers/EventServiceProvider.php",
+    "class": "EventServiceProvider",
+    "name": "boot",
+    "category": "PROVIDER",
+    "line": 9,
+    "endLine": 9,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 125,
+    "file": "tests/Feature/BigTest.php",
+    "class": "BigTest",
+    "name": "it_does_a_lot",
+    "category": "TEST",
+    "line": 9,
+    "endLine": 14,
+    "status": "modified",
+    "side": "new"
+  }
+]

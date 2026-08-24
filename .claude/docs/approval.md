@@ -558,6 +558,13 @@ were left), which is exactly the number a reviewer reads as "this PR is endless"
 per-row sum; the `state.underlyingIds` skip is not enough, it only covers the
 one case where the shared descendant is itself a top-level index row.
 
+**The same overcounting trap resurfaced one level up, for a per-CATEGORY sum:**
+the "type met de meeste te approven bovenaan" index ordering (`categoryRemaining`
+in `recomputeLeftList`, see "Within the 'everything else' band…" in
+`.claude/docs/blocks-and-ingest.md`) deliberately sums the narrow
+`blockApproveCount` (own rows only) per category rather than the subtree-inclusive
+`subtreeApproveCount`/pill value, for exactly this reason.
+
 `renderList` **always** returns a keyed array (empty state as an array-of-one) to
 avoid the arrow.js single↔array slot pitfall (see
 `.claude/rules/arrowjs-pitfalls.md`). One per-row exception: the block

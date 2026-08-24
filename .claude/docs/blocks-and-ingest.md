@@ -435,6 +435,62 @@ share a category and thus a rank — the stable sort keeps them together.
 `sel`/refresh restore is unaffected (it looks up by block id/`file:line`, not
 index).
 
+### Within the "everything else" band: the category with the most left to approve sorts first, TEST always last
+
+Reviewer request: "behalve test blokken (die moeten altijd laatste staan), wil
+ik de type met de meeste te approven bovenaan hebben." ROUTE/CONTROLLER keep
+their fixed rank 0/1 above this untouched — this only reorders the flat rank-2
+band (everything else) that used to stay in plain ingest order.
+
+`recomputeLeftList` computes this per recompute call, right before building
+`rank`:
+
+- **`categoryRemaining`** sums, per category, `blockApproveCount(b).total -
+  blockApproveCount(b).done` over every row in that rank-2 band (excluding
+  "Onderliggende code" children — rank 3 — and excluding TEST, see below).
+  **Deliberately the OWN-block count (`blockApproveCount`: a block's own
+  rows, or a `test_class` row's own methods — never its Onderliggende-code
+  subtree), never the subtree total shown in the sidebar pill
+  (`subtreeApproveCount`/`state.approvalSummaries`).** A subtree sum can
+  double-count a descendant shared by several top-level rows — exactly the
+  bug that inflated the PR-wide total on PR 13255 (10210/10742 instead of the
+  real 1831/1856, see `prWideApproveTotal`'s own comment and "Combined
+  approval per tree" in `.claude/docs/approval.md`). Summing subtree counts
+  per category here would reintroduce that same overcounting one level up.
+  **Don't "fix" this to the subtree variant.**
+- **`categoryOrder`** sorts those category names descending by
+  `categoryRemaining` — a stable `Array.prototype.sort`, so two categories
+  tied on remaining keep their existing relative order (no alphabetical
+  tie-break).
+- **`midRank(cat)`** maps a rank-2 category onto a fractional value in
+  `(2, 2.3)` — the category with the most left to approve gets the lowest
+  fractional value, so the ascending sort below puts it first — safely below
+  the comment ranks (2.4/2.5) and "Onderliggende code" (3). **`TEST` gets a
+  fixed `2.39`**, i.e. it never competes on its own count and always sorts
+  last among the rank-2 rows, regardless of how much of it is left to
+  approve — the explicit "test blokken altijd laatste" instruction, no longer
+  merely a side effect of `groupTestClasses` partitioning TEST rows to the
+  end of the array before this sort runs.
+- A category with **zero** remaining (fully approved) sorts naturally to the
+  bottom of this band (the lowest `categoryRemaining` value), still **above**
+  TEST — TEST's own count is irrelevant to where it sits, by design.
+
+**This only reshuffles at the existing `recomputeLeftList` trigger points**
+(the initial load, `loadRelations`/`loadCallResolve`/`loadTestCovers`, and the
+`indexComments()` watch — which also fires on the comments panel's own ~5s
+poll tick, see `RelatedPanel.mjs`) — **no new call site was added on the
+approve path**, by explicit reviewer decision: re-sorting on every single
+approve click would reshuffle the index while the reviewer is mid-review, and
+`toggleBlockApproval`/`toggleApprove`/`toggleCallApprove` are exactly where a
+parallel performance investigation (approve while deeply drilled) was active
+at the time this landed. In practice the ambient ~5s comment poll means the
+order still catches up fairly quickly after an approve — that cadence is a
+pre-existing side effect, not something wired to approve specifically. Test:
+`tests/index-category-order.spec.mjs` (PR 125, `materializeCategoryOrderWorktrees`
+in `_setup.mjs` — four blocks with real, exactly-known remaining counts:
+CONFIG=4, WORKFLOW=3, PROVIDER=1, TEST=6, TEST deliberately the highest of the
+four to prove it still sorts last).
+
 **This category order is a display grouping only — it is deliberately NOT
 what a fresh open lands on.** `applyDefaultUnapprovedSelection` (`home.mjs`)
 picks the first not-yet-approved ORDINARY block by `(file, line)` — plain

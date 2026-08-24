@@ -6,7 +6,7 @@ import { test, expect } from './_fixtures.mjs'
 // "Open review-boom", must land back on that same block — not the default
 // first one.
 test.describe('PR overview — ?sel= round-trip keeps the same block selected', () => {
-  test('selecting block 6, exiting via ←←, and reopening the tree restores block 6', async ({ page }) => {
+  test('selecting block 5, exiting via ←←, and reopening the tree restores block 5', async ({ page }) => {
     await page.goto('/pr/12903')
     await expect(page.getByTestId('block-column')).toBeVisible()
 
@@ -16,10 +16,11 @@ test.describe('PR overview — ?sel= round-trip keeps the same block selected', 
     // the first-changed file" — and app/Actions/CreatePaymentAction.php sorts
     // first among this fixture's real changes), so picking it here would let a
     // BROKEN ?sel= restore fall back to the default and still land on the same
-    // block — a false pass. Pick block 6 (Order::address) instead: a
+    // block — a false pass. Pick block 5 (Order::address, see
+    // postapprove-menu.spec.mjs for how this index is derived) instead: a
     // different, later-sorting file, so a broken restore is visibly wrong.
-    await page.locator('[data-idx="6"]').click()
-    await expect(page.locator('[data-testid=block-row].bg-indigo-50')).toHaveAttribute('data-idx', '6')
+    await page.locator('[data-idx="5"]').click()
+    await expect(page.locator('[data-testid=block-row].bg-indigo-50')).toHaveAttribute('data-idx', '5')
     await expect(page).toHaveURL(/sel=app%2FModels%2FOrder\.php%3A88/)
 
     await page.keyboard.press('ArrowLeft') // block-index → stop 1 (description)
@@ -36,7 +37,7 @@ test.describe('PR overview — ?sel= round-trip keeps the same block selected', 
 
     await expect(page).toHaveURL(/\/pr\/12903/)
     await expect(page).toHaveURL(/sel=app%2FModels%2FOrder\.php%3A88/)
-    await expect(page.locator('[data-testid=block-row].bg-indigo-50')).toHaveAttribute('data-idx', '6')
+    await expect(page.locator('[data-testid=block-row].bg-indigo-50')).toHaveAttribute('data-idx', '5')
   })
 
   test('opening an unrelated PR from the overview never carries a stale sel along', async ({ page }) => {

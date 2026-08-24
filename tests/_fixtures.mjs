@@ -40,7 +40,7 @@ const BIN = path.resolve('tests/.tmp/slash')
 // underlying-summary/list-mode-children continuation, see
 // findnextunapproved-list-mode.spec.mjs).
 // Add a PR here as soon as a new spec approves anything on it durably.
-const APPROVAL_RESET_PRS = [95, 102, 106, 107, 108, 110, 112, 12903]
+const APPROVAL_RESET_PRS = [95, 102, 106, 107, 108, 110, 112, 125, 12903]
 
 // seed replicates the seed passes the old webServer command ran: the main
 // blocks fixture (PR 12903), the relations/callresolve fixtures (PR 90/91),
@@ -564,6 +564,12 @@ function seed(db) {
   // auto-jumps such a block's INITIAL diff-view stand to 'unified' instead of
   // the default 'split', which used to waste its entire empty old/left pane.
   execFileSync(BIN, ['seed', '-db', db, '-from', 'tests/fixtures/additionsonly-blocks.json'], {
+    stdio: 'ignore',
+  })
+  // Per-category "most left to approve first, TEST always last" ordering
+  // fixture (PR 125, tests/index-category-order.spec.mjs) — worktrees
+  // materialized in _setup.mjs's materializeCategoryOrderWorktrees.
+  execFileSync(BIN, ['seed', '-db', db, '-from', 'tests/fixtures/categoryorder-blocks.json'], {
     stdio: 'ignore',
   })
 }

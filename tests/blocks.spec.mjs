@@ -1,23 +1,29 @@
 import { test, expect } from './_fixtures.mjs'
 
 // The fixture (tests/fixtures/blocks.json) has 11 blocks. The left list sorts
-// by category priority (ROUTE first, then CONTROLLER, then everything else,
-// stable — see categoryRank in home.mjs); this fixture has no ROUTE block, so
-// the sole CONTROLLER (ContractController::index) moves to the front and
-// everything else keeps its original (file, line) order behind it. Rows 1-2
-// share a file (CreatePaymentAction.php) — that adjacency drives the connector
-// test. The two GroupScopeChild blocks are relation children (see
-// tests/fixtures/relations.json + group-scope.spec.mjs): those stay navigable
-// index rows but sort to the very bottom, under the "Onderliggende code"
-// heading (recomputeLeftList's underlyingIds → BlockList.mjs).
+// by category priority (ROUTE first, then CONTROLLER, then everything else
+// ordered by how much of that category is still left to approve — TEST
+// always last — see categoryRank/categoryRemaining in home.mjs and "Sort
+// order of the left list" in .claude/docs/blocks-and-ingest.md); this fixture
+// has no ROUTE block, so the sole CONTROLLER (ContractController::index)
+// moves to the front. ACTION and MODEL both have exactly 1 row left to
+// approve (CreatePaymentAction::execute, Order::address) and tie — ACTION
+// wins that tie on original ingest order — while ENUM/MIGRATION/TEST all
+// have 0 left, sorting after both, TEST always last of all regardless of its
+// own count. Rows 1-2 share a file (CreatePaymentAction.php) — that adjacency
+// drives the connector test. The two GroupScopeChild blocks are relation
+// children (see tests/fixtures/relations.json + group-scope.spec.mjs): those
+// stay navigable index rows but sort to the very bottom, under the
+// "Onderliggende code" heading (recomputeLeftList's underlyingIds →
+// BlockList.mjs).
 const EXPECTED_LABELS = [
   'ContractController::index',
   'CreatePaymentAction::execute',
   'CreatePaymentAction::findOrCreateCustomer',
   'ProcessCartAction::handle',
-  'AddressType::fromString',
   'Address::billingAddress',
   'Order::address',
+  'AddressType::fromString',
   'up',
   'AddressTypeTest::test_it_casts_type',
   'GroupScopeChildA::run',
@@ -56,9 +62,9 @@ test.describe('PR Review Tree — block list', () => {
     await expect(rows.nth(0)).toContainText('CONTROLLER')
     await expect(rows.nth(0).locator('.text-amber-600')).toHaveText('-/+') // modified
     await expect(rows.nth(1)).toContainText('ACTION')
-    await expect(rows.nth(4)).toContainText('ENUM')
-    await expect(rows.nth(4).locator('.text-emerald-600')).toHaveText('+') // added
-    await expect(rows.nth(6).locator('.text-rose-600')).toHaveText('-') // removed
+    await expect(rows.nth(6)).toContainText('ENUM')
+    await expect(rows.nth(6).locator('.text-emerald-600')).toHaveText('+') // added
+    await expect(rows.nth(5).locator('.text-rose-600')).toHaveText('-') // removed
     await expect(rows.nth(7)).toContainText('MIGRATION')
   })
 

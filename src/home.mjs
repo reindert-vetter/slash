@@ -3290,8 +3290,81 @@ function recomputeLeftList() {
   // top (-2, above every category) under its own "Mentioned" heading —
   // someone is waiting on an answer, so that one must not sit below
   // unrelated feedback; only the ordinary, unmentioned PR-wide section moved.
+  //
+  // A testCallTargetIds row (a test literally calling the production method
+  // it exercises) with a CONFIRMED server-side total of 0 (state.blockTotals,
+  // GET /api/blockstats — see "A block with zero changed rows has nothing to
+  // approve" in .claude/docs/approval.md) has nothing to approve, so it gets
+  // no checkbox on its own card already; giving it its own "Onderliggende
+  // code" index row on top of that is a dead entry with nothing to do
+  // (reported on PR 13392's DeleteTenantSubscriptionsActivity.php — a genuine,
+  // whitespace/trivial-only diff called from a test). Drop it from the index
+  // — it stays in state.allBlocks, so the Onderliggende-code panel and
+  // drilling into it are unaffected, only the standalone index row goes away.
+  // `=== 0` (not falsy/undefined) so "stats not loaded yet" keeps the row
+  // visible until the real number is known.
+  //
+  // Deliberately NOT applied to an ordinary relation child (state.relations):
+  // a relation only exists between two blocks that BOTH changed (see
+  // "Relations between blocks" in .claude/docs/workflows-analysis.md), so a
+  // confirmed-zero relation child should never occur for real ingested data —
+  // and also deliberately not applied to an ordinary top-level block with
+  // total 0 (see the general "zero changed rows" case in
+  // .claude/docs/approval.md), which keeps its own index slot as before.
+  const visibleBlocks = state.allBlocks.filter(
+    (b) => !hidden.has(b.id) && !(testTargetIds.has(b.id) && state.blockTotals[b.id] === 0),
+  )
+  // groupedRows is the non-comment half of the list (real blocks + the
+  // synthetic test_class rows), already TEST-partitioned-last by
+  // groupTestClasses. Computed here, before `rank`, because the "most left
+  // to approve" ordering below needs to scan this exact row set.
+  const groupedRows = groupTestClasses(visibleBlocks)
+  // categoryRemaining/categoryOrder/midRank implement "de type met de meeste
+  // te approven bovenaan" (reviewer request), for the middle band of
+  // categories only — ROUTE/CONTROLLER keep their fixed, documented
+  // Laravel-hierarchy slot (rank 0/1, see categoryRank), and TEST always
+  // sorts last regardless of its own count (explicit reviewer instruction),
+  // so neither participates in this ranking.
+  //
+  // "Most left to approve" is deliberately the OWN-block sum
+  // (blockApproveCount: a block's own rows, or a test_class row's own
+  // methods — never its Onderliggende-code subtree), NOT the subtree total
+  // shown in the sidebar pill (subtreeApproveCount/state.approvalSummaries).
+  // A subtree sum can double-count a descendant shared by several top-level
+  // rows — exactly the bug that inflated the PR-wide total on PR 13255
+  // (10210/10742 instead of the real 1831/1856, see prWideApproveTotal's own
+  // comment and "Combined approval per tree" in .claude/docs/approval.md).
+  // Summing subtree counts per category here would reintroduce that same
+  // overcounting one level up. Don't "fix" this to the subtree variant.
+  const categoryRemaining = {}
+  for (const b of groupedRows) {
+    if (childIds.has(b.id)) continue // "Onderliggende code" — rank 3, not part of this band
+    if (categoryRank(b.category) !== 2) continue // ROUTE/CONTROLLER keep their fixed slot
+    if (b.category === 'TEST') continue // always sorts last, see midRank below
+    const { done, total } = blockApproveCount(b)
+    categoryRemaining[b.category] = (categoryRemaining[b.category] || 0) + (total - done)
+  }
+  const categoryOrder = Object.keys(categoryRemaining).sort((a, b) => categoryRemaining[b] - categoryRemaining[a])
+  // midRank slots a middle-band category between the fixed ROUTE/CONTROLLER
+  // ranks (0/1) and everything that already sorts after rank 2 (orphan/
+  // PR-wide comments at 2.4, line-anchored comments at 2.5, "Onderliggende
+  // code" children at 3): the category with the most still-to-approve rows
+  // gets the lowest fractional value, so the ascending sort below puts it
+  // first. The 0.3 spread keeps every value in (2, 2.3), safely below 2.4.
+  // TEST gets a fixed 2.39 — still inside the old flat rank-2 band, but
+  // always the LAST middle-band category, never competing on its own count.
+  function midRank(cat) {
+    if (cat === 'TEST') return 2.39
+    const idx = categoryOrder.indexOf(cat)
+    if (idx < 0) return 2
+    return 2 + (0.3 * (idx + 1)) / (categoryOrder.length + 1)
+  }
   const rank = (b) => {
-    if (b.kind !== 'comment') return childIds.has(b.id) ? 3 : categoryRank(b.category)
+    if (b.kind !== 'comment') {
+      if (childIds.has(b.id)) return 3
+      const catRank = categoryRank(b.category)
+      return catRank === 2 ? midRank(b.category) : catRank
+    }
     if (b.lineAnchored) return 2.5
     return b.mentioned ? -2 : 2.4
   }
@@ -3321,30 +3394,7 @@ function recomputeLeftList() {
     commentGroups.get(key).push(c)
   }
   const commentItems = [...commentGroups.values()].map(commentBlockItem)
-  // A testCallTargetIds row (a test literally calling the production method
-  // it exercises) with a CONFIRMED server-side total of 0 (state.blockTotals,
-  // GET /api/blockstats — see "A block with zero changed rows has nothing to
-  // approve" in .claude/docs/approval.md) has nothing to approve, so it gets
-  // no checkbox on its own card already; giving it its own "Onderliggende
-  // code" index row on top of that is a dead entry with nothing to do
-  // (reported on PR 13392's DeleteTenantSubscriptionsActivity.php — a genuine,
-  // whitespace/trivial-only diff called from a test). Drop it from the index
-  // — it stays in state.allBlocks, so the Onderliggende-code panel and
-  // drilling into it are unaffected, only the standalone index row goes away.
-  // `=== 0` (not falsy/undefined) so "stats not loaded yet" keeps the row
-  // visible until the real number is known.
-  //
-  // Deliberately NOT applied to an ordinary relation child (state.relations):
-  // a relation only exists between two blocks that BOTH changed (see
-  // "Relations between blocks" in .claude/docs/workflows-analysis.md), so a
-  // confirmed-zero relation child should never occur for real ingested data —
-  // and also deliberately not applied to an ordinary top-level block with
-  // total 0 (see the general "zero changed rows" case in
-  // .claude/docs/approval.md), which keeps its own index slot as before.
-  const visibleBlocks = state.allBlocks.filter(
-    (b) => !hidden.has(b.id) && !(testTargetIds.has(b.id) && state.blockTotals[b.id] === 0),
-  )
-  state.blocks = [...groupTestClasses(visibleBlocks), ...commentItems]
+  state.blocks = [...groupedRows, ...commentItems]
     // The haystack is label + category + FILE PATH (reviewer request: "ik wil
     // ook op bestandsnaam kunnen zoeken") — the path is what you remember when
     // you don't recall the method name, and a comment item simply has no

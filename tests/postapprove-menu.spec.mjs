@@ -14,13 +14,15 @@ import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 // content elsewhere in the PR.
 //
 // The left list sorts by category priority (ROUTE, then CONTROLLER, then the
-// rest — see categoryRank in home.mjs), so ContractController::index (the
-// sole CONTROLLER) sorts to index 0 even though it has no local diff of its
-// own; CreatePaymentAction::execute is index 1. Order::address happens to
-// still land on index 6 (the CONTROLLER moving from its original index 4 to
-// index 0 shifts everything between them by exactly one, and index 6 sits
-// beyond that shifted range) — a coincidence of this fixture's shape, not a
-// guarantee to lean on elsewhere.
+// rest ordered by how much of that category is still left to approve, TEST
+// always last — see categoryRank/categoryRemaining in home.mjs and "Sort
+// order of the left list" in .claude/docs/blocks-and-ingest.md), so
+// ContractController::index (the sole CONTROLLER) sorts to index 0 even
+// though it has no local diff of its own; CreatePaymentAction::execute is
+// index 1 (its ACTION category ties with MODEL at 1 row left to approve, and
+// wins that tie on original ingest order). Order::address happens to land on
+// index 5 (MODEL's own 1-row remaining, right after the ACTION band) — a
+// coincidence of this fixture's shape, not a guarantee to lean on elsewhere.
 //
 // The selected block's identity is asserted via the `?sel=` URL param (see
 // urlState.mjs/bindUrlState) rather than the sidebar's `[data-idx]` rows: a
@@ -203,13 +205,13 @@ test.describe('PR Review Tree — postApprove follow-up menu', () => {
     await expect(page.getByTestId('block-column')).toBeVisible()
     await page.keyboard.press('Escape')
 
-    // Select block 6 (Order::address) directly and step into its diff — it's
-    // the last block in the fixture with any changed rows at all (7 and 8 have
-    // none), so approving it leaves nothing ahead to jump to. Block 1
-    // (CreatePaymentAction::execute) is left un-approved, so the PR overall
-    // isn't fully approved yet.
-    await page.locator('[data-idx="6"]').click()
-    await expect(page.locator('[data-idx="6"]')).toHaveClass(/bg-indigo-50/)
+    // Select block 5 (Order::address) directly and step into its diff — it's
+    // the last block in the fixture with any changed rows at all (the ones
+    // after it have none), so approving it leaves nothing ahead to jump to.
+    // Block 1 (CreatePaymentAction::execute) is left un-approved, so the PR
+    // overall isn't fully approved yet.
+    await page.locator('[data-idx="5"]').click()
+    await expect(page.locator('[data-idx="5"]')).toHaveClass(/bg-indigo-50/)
     await page.keyboard.press('ArrowRight')
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
