@@ -26,6 +26,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -220,6 +221,31 @@ func New(scratchDir string) *Module {
 	return &Module{scratchDir: scratchDir}
 }
 
+// killOwnProcessGroup makes cmd (not yet started) the leader of a fresh
+// process group and, on a context cancellation/timeout, kills that WHOLE
+// group instead of exec.CommandContext's default of only killing cmd.Process
+// itself.
+//
+// This matters specifically for an agentic run (req.Tools includes "Bash"):
+// the claude CLI's own Bash tool calls spawn real child processes (a shell,
+// and whatever that shell runs), which are direct children of `claude`, not
+// of this Go process — killing only `claude` leaves them as orphans that
+// keep running after the reviewer's own "Stop" (see chat_cancel.go) already
+// told the UI the turn is "afgebroken". Setpgid makes `claude` its own group
+// leader (pgid == its own pid), so `kill(-pgid, …)` reaches every descendant
+// it spawned, however deep. POSIX-only (Setpgid/negative-pid kill), matching
+// every other assumption already baked into this codebase (see CLAUDE.md);
+// not attempted on a platform where that would fail to build.
+func killOwnProcessGroup(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+}
+
 // Run invokes `claude -p <prompt> --model <model>` (plus, for agentic runs, a
 // working directory and a read-only tool allowlist, and — for any run whose
 // caller supplied one — a static --append-system-prompt). Output is captured
@@ -251,6 +277,7 @@ func (m *Module) Run(ctx context.Context, req RunRequest) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "claude", args...)
+	killOwnProcessGroup(cmd)
 	switch {
 	case req.WorkDir != "":
 		// Agentic run: the caller needs real file access (Read/Grep/Glob) inside
@@ -319,6 +346,7 @@ func (m *Module) RunChat(ctx context.Context, req RunRequest) (ChatResult, error
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "claude", args...)
+	killOwnProcessGroup(cmd)
 	switch {
 	case req.WorkDir != "":
 		cmd.Dir = req.WorkDir
