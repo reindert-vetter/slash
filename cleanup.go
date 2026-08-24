@@ -49,6 +49,16 @@ import (
 // eligible for cleanup.
 const cleanupMergedAge = 7 * 24 * time.Hour
 
+// testRunResidueAge is how long a test_run run's own leftover residue (git
+// clean candidates recorded on its Activity result, see test_run.go) is left
+// alone before this pass sweeps it. Deliberately independent of
+// cleanupMergedAge/whether the PR itself is merged — the reviewer's own
+// words: "alleen weghalen wat ouder is dan 3 dagen", about the residue only,
+// not about the PR's data as a whole. What is younger than this is only ever
+// REPORTED (test_run.go's own progress panel keeps the checkout-dirty
+// warning visible), never touched by this pass.
+const testRunResidueAge = 3 * 24 * time.Hour
+
 // retiredWorkflowTypes are Workflow Types that used to exist in this codebase
 // but have since been permanently removed — the code that registered them is
 // gone for good, not merely absent from one particular binary (the headless
@@ -131,6 +141,12 @@ type CleanupResult struct {
 	// purgeOrphanCommentRuns) — unconditional, not scoped to any one PR target
 	// or to the merged/age gate above.
 	OrphanCommentRunsDeleted int `json:"orphanCommentRunsDeleted"`
+	// TestRunResidueSwept is the number of test_run runs whose own leftover
+	// residue (git clean candidates older than testRunResidueAge) was removed
+	// this pass — see sweepTestRunResidue. Unconditional, not scoped to any
+	// one PR target or to the merged/age gate above: this is about the AGE of
+	// the residue itself, never about whether a PR is merged.
+	TestRunResidueSwept int `json:"testRunResidueSwept"`
 }
 
 // reWorktreeDir extracts a PR number from a worktrees dir name: "pr-<n>-base"
@@ -593,4 +609,111 @@ func purgeOrphanCommentRuns(ctx context.Context, engine *tembed.Engine, cm *comm
 		n++
 	}
 	return n, nil
+}
+
+// sweepTestRunResidue removes the on-disk residue any old-enough,
+// COMPLETED test_run run left behind (git clean candidates recorded on its
+// own Activity result, see test_run.go's testRunResult), then deletes that
+// run's own history entry — nothing is left to revisit it a second time.
+// Not scoped to one PR (mirrors purgeRetiredWorkflowRuns/
+// purgeOrphanCommentRuns): a test run's checkout is the reviewer's own real
+// local clone, not something cleanup already walks per PR.
+//
+// Only a run whose Status is StatusCompleted (never Running/Waiting — a
+// test_run workflow is signal-less and one-shot, so those statuses mean it's
+// still genuinely in flight) and whose UpdatedAt is older than
+// testRunResidueAge is eligible; the age check protects a run that only just
+// finished from being swept before the reviewer even had a chance to read the
+// "checkout heeft resten" warning.
+//
+// Before removing a recorded path, this re-checks with a FRESH `git clean
+// -ndx` in the same directory and only deletes the intersection: a path this
+// run once flagged that is no longer flagged today (the reviewer git-added
+// it, or removed it themselves) is left alone — this pass only ever removes
+// what it can reconfirm right now, the same "never guess" discipline
+// resolveCleanupTargets/purgeOrphanCommentRuns already follow. A directory
+// that no longer exists, or is no longer a git repo, is simply skipped
+// (best-effort) and its run record is still deleted — there is nothing left
+// to sweep either way.
+//
+// Uses the real wall clock (time.Now()): only ever called from an Activity
+// body, never from inside a Workflow function, so it is exempt from the
+// workflow-determinism rule (see .claude/rules/workflow-determinism.md),
+// exactly like purgeOrphanCommentRuns.
+func sweepTestRunResidue(ctx context.Context, engine *tembed.Engine) (int, error) {
+	runs, err := engine.Runs()
+	if err != nil {
+		return 0, err
+	}
+	now := time.Now()
+	swept := 0
+	for _, r := range runs {
+		if r.Workflow != WorkflowTestRun || r.Status != tembed.StatusCompleted {
+			continue
+		}
+		if now.Sub(r.UpdatedAt) < testRunResidueAge {
+			continue // not stale enough yet — still visible as a "resten" warning
+		}
+		var res testRunResult
+		if err := engine.Result(r.ID, &res); err != nil {
+			continue // uncertain — don't guess, leave it for a later pass
+		}
+		if res.ResidueDir != "" && len(res.ResiduePaths) > 0 {
+			removeConfirmedTestRunResidue(ctx, res.ResidueDir, res.ResiduePaths)
+		}
+		if err := engine.DeleteRun(r.ID); err != nil {
+			return swept, fmt.Errorf("delete test_run run %s: %w", r.ID, err)
+		}
+		swept++
+	}
+	return swept, nil
+}
+
+// removeConfirmedTestRunResidue removes exactly the paths in want that a
+// FRESH `git clean -ndx` in dir still reports right now — see
+// sweepTestRunResidue's own doc comment for why. Best-effort throughout: a
+// git failure (dir gone, no longer a repo) or an individual removal failure
+// is logged and otherwise ignored, never escalated to an Activity error —
+// residue cleanup must never be the reason a whole cleanup pass fails.
+func removeConfirmedTestRunResidue(ctx context.Context, dir string, want []string) {
+	still, err := collectTestRunResidueList(ctx, dir)
+	if err != nil {
+		return
+	}
+	stillSet := make(map[string]bool, len(still))
+	for _, p := range still {
+		stillSet[p] = true
+	}
+	for _, p := range want {
+		if !stillSet[p] {
+			continue
+		}
+		full := filepath.Join(dir, p)
+		if err := os.RemoveAll(full); err != nil {
+			log.Printf("cleanup: test_run residue: remove %s: %v", full, err)
+		}
+	}
+}
+
+// collectTestRunResidueList is the read half of test_run.go's
+// collectTestRunResidue (which also caps/pairs it with a dir), factored out
+// here so removeConfirmedTestRunResidue can re-run the exact same `git clean
+// -ndx` parse without importing test_run.go's Activity-shaped wrapper.
+func collectTestRunResidueList(ctx context.Context, dir string) ([]string, error) {
+	out, err := runGitIn(ctx, dir, "clean", "-ndx")
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		path, ok := strings.CutPrefix(line, "Would remove ")
+		if !ok {
+			continue
+		}
+		if path = strings.TrimSpace(path); path != "" {
+			paths = append(paths, path)
+		}
+	}
+	return paths, nil
 }
