@@ -34,6 +34,21 @@ Gebruik dit ALLEEN wanneer schrijven/uitvoeren echt nodig is; voor een
 gewone vraag (uitleg, opzoeken, "wat doet deze functie") beantwoord je
 gewoon met tekst, zonder dit format.
 
+Bevestigt/keurt de reviewer in plaats daarvan een wijziging goed die je zelf
+al eerder in dit gesprek hebt voorgesteld (bijvoorbeeld "ja", "keur ik goed",
+"doe maar", "ok, pas maar aan")? Dat telt EVEN ZO GOED als een expliciet
+verzoek — antwoord dan ook met UITSLUITEND `{"type":"need_write"}`, precies
+zoals hierboven. Er bestaat in deze app GEEN aparte goedkeurknop of -stap
+voor de reviewer: hij kan een voorstel niet los aanklikken/bevestigen buiten
+dit gesprek om. Stel daarom NOOIT een wijziging voor en vraag vervolgens in
+gewone tekst om bevestiging ("zal ik dit doorvoeren?", "keur je dit goed?")
+— je hebt deze beurt toch geen Edit/Bash, dus zo'n vraag levert alleen een
+doodlopend gesprek op. Wil je iets aanpassen: gebruik altijd meteen
+`{"type":"need_write"}`, dat regelt de echte schrijftoegang automatisch in de
+volgende beurt. Is er echt iets inhoudelijk onduidelijk (welk bestand, welke
+regel, welke van meerdere opties), gebruik dan het `question`-format hieronder
+— nooit een kale "mag ik doorgaan"-vraag in platte tekst.
+
 Als een korte, concrete keuze het gesprek echt vooruit helpt, mag je de
 reviewer een verduidelijkende vraag met een paar opties stellen. Doe dat dan
 door te antwoorden met UITSLUITEND een JSON-object, zonder verdere tekst en

@@ -999,6 +999,37 @@ This is orthogonal to `sig.Action`'s dispatch (`chatActionCommit`/`chatActionCle
 even called) and to the automatic landing described below — a turn escalates
 or not purely based on what Claude itself says on its first, cheap attempt.
 
+**There is deliberately no reviewer-facing "approve this edit" step, so a
+model that invents one gets stuck.** Reported bug (two reviewer
+screenshots): on a plain edit request, Claude's read-only first attempt
+answered in ordinary Dutch prose instead of the bare `{"type":"need_write"}`
+— proposing the diff and asking "Keur je hem goed, dan pas ik dit toe?" —
+and when the reviewer then typed exactly that ("ik keur het goed"), the NEXT
+turn's own read-only attempt again answered in prose ("Edit en Bash zijn in
+deze sessie uitgeschakeld…") instead of emitting the directive. Both replies
+were internally consistent (attempt 1 genuinely has no Edit/Bash) but never
+triggered attempt 2, so the escalation this whole mechanism exists for never
+ran — confirmed NOT a `chat_workflow.go` bug: `TestRunOneClaudeTurnEscalatesToShellOnNeedWrite`
+already proves the Go side escalates correctly whenever the model DOES emit
+the bare directive. The gap is prompt adherence: the model fell back to a
+"propose, then wait for confirmation" habit that this app has no way to
+receive an answer to (no button/key anywhere approves a pending edit — see
+`ClaudeChat.mjs`/`RelatedPanel.mjs`), and did not treat the reviewer's plain
+confirmation of its own earlier proposal as the "explicit request" the
+directive requires. `chat_readonly.md` now says both things outright: there
+is no separate approval step to wait for (so never propose-and-ask-to-confirm
+in plain text — use `{"type":"need_write"}` immediately instead, which
+grants real access automatically on the very next call), and a reviewer's
+reply that approves/confirms a change Claude itself already proposed earlier
+in the SAME conversation ("ja", "keur ik goed", "doe maar") counts as an
+explicit request too, just like "pas dit aan" does. Prompt-only change (no
+`chat_workflow.go`/`chat_shell.md` edit needed, since the escalation mechanics
+were already correct); guarded by
+`TestChatReadOnlySystemPromptCoversConfirmationAndForbidsAskingPermission`
+(`modules/claude/prompts_test.go`) asserting the added wording is present —
+not a live-model regression test, since no fixture can force a real model's
+prose choice.
+
 **That escalation is also the ONE code-turn-at-a-time gate**
 (`chat_write_gate.go`). Reviewer decision: a turn that only ANSWERS may run
 unlimited in parallel (chatting on another selection while an earlier answer is
