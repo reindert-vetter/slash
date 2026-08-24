@@ -3193,6 +3193,35 @@ one didn't exist anywhere in this app).
   purely ephemeral highlight. `recomputeCodePreviews` does **clamp** it to the
   recomputed item count, so a fence disappearing under the cursor can never
   leave it pointing at nothing.
+- **The composer's own blur must happen SYNCHRONOUSLY, not one
+  `requestAnimationFrame` later** — a flaky-test postmortem
+  (`tests/claude-chat-other-tasks.spec.mjs`, "the footer shows which chat is
+  selected…", ~50% failure rate reproduced with `--workers=1 --repeat-each`
+  on plain, unmodified `main`). `focusClaudeComposer`/`focusPreviewCard`/
+  `focusClaudeTaskRow` (`RelatedPanel.mjs`) used to defer their `input.blur()`
+  into `requestAnimationFrame`, purely because the original code queried/blurred
+  inside the same callback that also does the (genuinely render-dependent)
+  `scrollIntoViewVertical`. That left a window — up to one animation frame —
+  in which the composer textarea was STILL the real DOM-focused element even
+  though `cs.claudeTasksPos`/`cs.previewPos`/`cs.claudeOptionSel` had already
+  reactively moved off the rest position. A keypress landing inside that
+  window (Playwright's back-to-back `press()` calls hit it easily; a fast
+  real keystroke can too) is dispatched with the **composer** as `e.target`,
+  so `ClaudeChat.mjs`'s own `@keydown` ran FIRST — for an Enter on the still-
+  empty B composer that meant its "blank field → open the Claude menu"
+  branch (`stopPropagation()` and all), not `home.mjs`'s document-level
+  `selectHighlightedClaudeTask()` the reviewer's `↓` had actually earned.
+  Symptom: Enter right after `↓` into "Ook bezig elders" sometimes opened the
+  wrong menu and the composer never regained focus at all, and it was NOT
+  fixable by asserting a different DOM state — `cs.focus`/`cs.claudeTasksPos`
+  themselves were already correct and stayed so; the bug was purely about
+  which element the keydown DISPATCHED to. Fix: all three functions now blur
+  the composer immediately (synchronously, at call time, right after
+  `releaseFocus()`), and leave only the `scrollIntoViewVertical`/optional
+  re-blur belt-and-braces inside the `requestAnimationFrame`. Verified 12/12
+  clean (`--workers=1`) plus a `--workers=4 --repeat-each=3` pass and the full
+  suite; the one pre-existing unrelated failure (`block-moved.spec.mjs`)
+  reproduces identically with this fix reverted, so it is not this bug.
 - **Rendering/cursor scope.** A fence inside a comment body gets its preview
   card exactly as before, but the cursor itself is scoped to the chat
   (`CodePreviewPanel` passes `cs.focus === 'claude' && …`) — `Enter` on a

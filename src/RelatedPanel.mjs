@@ -2897,6 +2897,10 @@ function scrollClaudeMessageIntoView() {
 function focusPreviewCard() {
   releaseFocus()
   const want = focusToken
+  // Blur synchronously — see the identical comment in focusClaudeComposer
+  // above for why this can't wait for the requestAnimationFrame below.
+  const composeAtCall = document.querySelector('[data-testid=claude-chat-compose]')
+  if (composeAtCall && document.activeElement === composeAtCall) composeAtCall.blur()
   requestAnimationFrame(() => {
     if (want !== focusToken) return
     const input = document.querySelector('[data-testid=claude-chat-compose]')
@@ -2912,6 +2916,10 @@ function focusPreviewCard() {
 function focusClaudeTaskRow() {
   releaseFocus()
   const want = focusToken
+  // Blur synchronously — see the identical comment in focusClaudeComposer
+  // above for why this can't wait for the requestAnimationFrame below.
+  const composeAtCall = document.querySelector('[data-testid=claude-chat-compose]')
+  if (composeAtCall && document.activeElement === composeAtCall) composeAtCall.blur()
   requestAnimationFrame(() => {
     if (want !== focusToken) return
     const input = document.querySelector('[data-testid=claude-chat-compose]')
@@ -2976,6 +2984,24 @@ export function isFooterTasksFocused() {
 function focusClaudeComposer() {
   releaseFocus()
   const want = focusToken
+  // Blur the composer SYNCHRONOUSLY, right here, whenever the cursor is
+  // moving onto a nested rung (an option/task/card — anywhere claudePos/
+  // claudeOptionSel isn't the rest position) — not deferred into the
+  // requestAnimationFrame below. A still-focused composer keeps its own
+  // `@keydown` (ClaudeChat.mjs) as the EVENT TARGET, so a keypress fired in
+  // the up-to-one-frame window before that deferred blur ran (Playwright's
+  // back-to-back key presses easily land inside it; a fast real keystroke
+  // can too) was intercepted by the composer's own Enter handling — treating
+  // it as "send"/"open the menu on an empty field" — instead of ever
+  // reaching home.mjs's document-level handler for the rung the reviewer had
+  // already (per this reactive state) navigated onto. Reported bug: Enter
+  // right after ↓ into "Ook bezig elders" sometimes opened the Claude menu
+  // instead of jumping to the highlighted task. See
+  // tests/claude-chat-other-tasks.spec.mjs.
+  if (!(cs.claudePos === 0 && cs.claudeOptionSel === 0)) {
+    const input = document.querySelector('[data-testid=claude-chat-compose]')
+    if (input && document.activeElement === input) input.blur()
+  }
   requestAnimationFrame(() => {
     if (want !== focusToken) return
     const input = document.querySelector('[data-testid=claude-chat-compose]')
