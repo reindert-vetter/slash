@@ -50,6 +50,7 @@ export default function globalSetup() {
   materializeRangeSelectWorktrees()
   materializePreviewWidthWorktrees()
   materializeDrillLineSkipWorktrees()
+  materializeDrillChurnWorktrees()
   materializeTranslationWorktrees()
   materializeTranslationScrollWorktrees()
   materializeDefaultSelWorktrees()
@@ -1001,6 +1002,77 @@ class TreeChildAction2
   write('head', 'app/Actions/TreeParentAction2.php', parent(2))
   write('base', 'app/Actions/TreeChildAction2.php', child(1, 2))
   write('head', 'app/Actions/TreeChildAction2.php', child(10, 20))
+}
+
+// materializeDrillChurnWorktrees writes the synthetic PR 126 fixture
+// worktrees for drill-listener-array-dispatch.spec.mjs — the regression test
+// for LOCAL PATCH 4 in src/vendor/arrow.js (Gt/emit snapshotting the listener
+// array before iterating it). A parent with one changed line
+// (DrillChurnParent::execute), linked via tests/fixtures/drillchurn-
+// relations.json (same event_listener-kind shape as tree-relations.json) to a
+// child (DrillChurnChild::run) that changes FIVE separate lines, each
+// isolated by at least two unchanged lines — so its own diff has five
+// distinct change groups once drilled into as its own column
+// (state.drillCursor's own {gran:'group', change} cursor). That is the one
+// property (`state.drill`/`state.drillCursor` on a reactive `state` with 2+
+// subscribers — the columns-render effect and the `?drill=`/`?dcur=`
+// URL-mirroring watch, see urlState.mjs) whose listener ARRAY `Gt` used to
+// mutate mid-dispatch: repeatedly stepping `↓` inside a drilled column (never
+// at drill depth 0, see .claude/docs/frontend-memory.md's "The Gt
+// dispatch-array crash" section for the full depth-vs-churn measurements)
+// reliably threw `TypeError: f[d] is not a function` after roughly 10-40
+// presses, unrelated to how many levels are drilled or whether the
+// Onderliggende-code panel is ever opened. Five groups (not just two) give
+// the ↓ walk enough real transitions — including repeatedly clamping at the
+// last group, which still reassigns the SAME cursor value on every press (see
+// "watch fires even when the write reassigns the SAME value" in
+// .claude/rules/arrowjs-pitfalls.md) and so still re-dispatches `Gt` every
+// time — to reproduce the crash inside a single spec run without needing a
+// real, deeply-nested call chain.
+function materializeDrillChurnWorktrees() {
+  const parent = (value) => `<?php
+
+namespace App\Actions;
+
+class DrillChurnParent
+{
+    public function execute()
+    {
+        $value = ${value};
+        return $value;
+    }
+}
+`
+  const child = (a, b, c, d, e) => `<?php
+
+namespace App\Actions;
+
+class DrillChurnChild
+{
+    public function run()
+    {
+        $a = ${a};
+        $u1 = 'unchanged';
+        $u2 = 'unchanged';
+        $b = ${b};
+        $u3 = 'unchanged';
+        $u4 = 'unchanged';
+        $c = ${c};
+        $u5 = 'unchanged';
+        $u6 = 'unchanged';
+        $d = ${d};
+        $u7 = 'unchanged';
+        $u8 = 'unchanged';
+        $e = ${e};
+        return $a + $b + $c + $d + $e;
+    }
+}
+`
+  const write = worktreeWriter(126)
+  write('base', 'app/Actions/DrillChurnParent.php', parent(1))
+  write('head', 'app/Actions/DrillChurnParent.php', parent(2))
+  write('base', 'app/Actions/DrillChurnChild.php', child(1, 2, 3, 4, 5))
+  write('head', 'app/Actions/DrillChurnChild.php', child(10, 20, 30, 40, 50))
 }
 
 // materializeSvgWorktrees writes the synthetic PR 109 fixture worktrees for

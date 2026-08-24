@@ -449,3 +449,136 @@ and `directChildBlocks`' self-time in the profile dropped from ~200-370ms to
 ~12ms. **Don't rebuild one of these Maps inline again** — reuse the shared
 accessor instead, at any new call site that needs an id/caller/parent/test
 lookup into these four arrays.
+
+## The `Gt` dispatch-array crash: "traag" was a silent crash, not a longtask
+
+Reported symptom (PR 13451, real ~300-block PR, a deeply drilled review
+session): "als ik diep zit, dan is de tree traag als ik een regel goedkeur" —
+pressing Space deep inside a drilled Onderliggende-code column appeared to do
+nothing, repeatedly.
+
+**Not a CPU-bound longtask.** A CDP `Profiler` capture around the crashing
+Space press showed under 2ms of actual self-time (`Gt` ~1.3ms, Prism ~1.3ms, a
+`pf` helper ~1.3ms) — nowhere near longtask territory. It was a genuine,
+100%-reproducible **crash**:
+
+```
+TypeError: f[d] is not a function
+    at Gt (src/vendor/arrow.js:170:3332)
+    at Object.set (src/vendor/arrow.js:170:2837)
+    at applyNextUnapproved (src/home.mjs:11022:15)
+    at src/home.mjs:11370:7
+```
+
+`src/home.mjs:11022` is `applyNextUnapproved`'s `state.drill =
+state.drill.slice(0, common)`. `Gt` (upstream `emit`) dispatches every
+listener subscribed to a reactive property by looping over its listener ARRAY
+in place — `state.drill`/`state.drillCursor` normally has 2+ subscribers at
+once (the columns-render effect that maps over `state.drill`, plus the
+`?drill=`/`?dcur=` URL-mirroring watch, see `bindUrlState` in
+`urlState.mjs`/`home.mjs`). One listener's own execution (the render effect,
+rebuilding the drilled-columns list) can synchronously dispose ANOTHER
+subscriber on the SAME property — LOCAL PATCH 2's cascading disposal tearing
+down a drilled column's card as part of that very re-render — and that
+disposal's `Yt` call splices the SAME shared listener array `Gt`'s own loop is
+still mid-iteration over, corrupting the iteration. After the crash,
+`applyNextUnapproved` aborts mid-function (the lines after 11022 —
+`state.drillCursor`, `state.focusLevel`, `state.mode`, the scroll — never
+run), so every subsequent Space press repeats the exact same crash: the
+reviewer's approve-and-continue simply stops working, forever, with no visible
+error (only a console `pageerror`) — which reads as "traag"/stuck, not as a
+crash.
+
+**Isolated to have nothing to do with drill depth.** A depth-vs-churn matrix,
+measured against an isolated copy of PR 13451's real data (see "Re-measuring"
+below for the harness, `SLASH_GITHUB=off SLASH_CLAUDE=off`, its own `-db`/
+`-data`, worktrees symlinked read-only from `data/worktrees/pr-13451-*`):
+
+| scenario | actions | pageerrors |
+|---|---|---|
+| drill depth 0, 80× `ArrowDown` | plain top-level group stepping | **0** |
+| drill depth 1, `→`/`Esc` only, 40×, never `ArrowDown` | open/close the panel, same group | **0** |
+| drill depth 1, only `ArrowDown`, 40×, panel never opened | plain `↓` inside the drilled column | **5** (same stack every time) |
+| drill depth 1, `→`/`Esc`/`↓` mixed, 12-40× | panel + group-step churn | 2 → 35, scaling with rep count |
+| drill depth 1, `→`/`Esc`/`↓`, only 9× | (below the threshold) | 0 — Space even auto-descended to depth 3 via approve-and-continue, working correctly |
+| drill depth 2/3/6, ~9-40× mixed churn | any depth ≥ 1 | crashes reliably |
+| a **fresh page load** restoring the exact same depth-6 state via `?drill=`/`?dcur=` (no interactive churn) | — | **0** — Space just works |
+
+So: plain `↓` (changing a drilled column's own change-group cursor) repeated
+roughly 10-40 times inside **any** drilled column (depth 1 is enough)
+reproduces it, with **zero** Onderliggende-code-panel interaction required;
+the identical repetition count at drill depth 0 never reproduces it. Depth
+itself only matters insofar as reaching a deep drill session naturally
+involves more of this churn (searching through many change groups per level
+while hunting for the next resolved call) — it is not itself the trigger. A
+freshly-loaded page landing directly on the same deep state via URL restore
+never crashes, because it never repeated the churn that mutates the listener
+array mid-dispatch.
+
+**Fix:** LOCAL PATCH 4 in `src/vendor/arrow.js` — `Gt` snapshots the listener
+array with `.slice()` before iterating (mirrors `Vt`'s own
+`const t=J;J=[]`-before-iterating pattern a few lines below, just applied to
+`Gt`'s per-property array instead of the global microtask queue), with a
+`typeof c[d]=="function"` guard in the same defensive style as LOCAL PATCH 1.
+See the LOCAL PATCH 4 entry in `.claude/rules/arrowjs-pitfalls.md` for the
+exact before/after code and the restore instructions.
+
+**Before/after, measured on the isolated PR-13451 harness** (5 runs × 40
+`ArrowDown` presses at drill depth 1, fresh page per run, `pageerror` count):
+
+| | run 1 | run 2 | run 3 | run 4 | run 5 | total |
+|---|---|---|---|---|---|---|
+| before (unpatched) | 4 | 4 | 4 | 4 | 4 | 20 |
+| after (LOCAL PATCH 4) | 0 | 0 | 0 | 0 | 0 | **0** |
+
+End-to-end confirmation on the exact reported repro (drill 6 levels deep along
+`SessionFlow::run → drain → SessionConversion::rows → viewedByConverted →
+ActivityOccurredData::__construct → deriveUtmMedium`, then press Space twice):
+before the patch, every Space press threw and the URL/state never advanced;
+after the patch, zero errors and the URL genuinely progresses (`dcur`'s last
+segment moved from `group:0` to `group:14`, the drill path shrank by one
+level) — the approve-and-continue actually works again.
+
+**Regression test:** `tests/drill-listener-array-dispatch.spec.mjs` — the
+cheap version (drill ONE level deep on the small synthetic PR 126 fixture,
+hammer `ArrowDown` 40×, assert zero `pageerror`s), not a 6-level
+reconstruction. **Important honesty note, so a future session doesn't
+over-trust it:** this exact minimal fixture (2 blocks, one relation) does
+**not** reliably reproduce the crash pre-patch — confirmed by reverting the
+patch and running it (0/5 failures), even after raising the repetition count
+to 150, adding a mocked comment-poll that changes its payload every tick
+(simulating independent background reactive churn), and trying the richer
+existing PR 100 (a real 3-level resolved-call chain: `execute` → `arrowHelper`
+→ `arrowNested`) and PR 12903 (11 blocks) fixtures instead. Whatever makes the
+disposal-triggered unsubscribe collide with `Gt`'s own dispatch loop needs a
+reactive graph considerably denser than any of these — only the real
+~300-block PR 13451 dataset reproduced it, reliably, within 10-40 presses.
+**Don't spend more time trying to shrink the fixture further without new
+evidence of what the missing ingredient is** — the spec is kept as a cheap
+smoke/guard test for this interaction shape (drill one level, hammer `↓`,
+column must survive) rather than as proof the bug reproduces there. The real
+verification is the before/after table above, against the real, isolated
+data.
+
+### The `?dcur=`/`?drill=` "6→1 terugval" — investigated, NOT a bug
+
+While isolating the crash above, replaying the task's own literal repro URL
+(`?drill=...&dcur=group:7>3>1>0>14>...`) against a fresh page load only
+restored 1-2 of its 6 drilled levels, which looked at first like a restore
+mechanism bug (see "Bug found and fixed: a two-level-deep restore could
+silently drop to one level" above — this looked like a deeper version of the
+same class). **It is not.** A **self-consistent round trip** — drill the same
+6 levels interactively, capture the resulting `?drill=`/`?dcur=` from that live
+session, then reload the page with that EXACT URL — restores all 6 levels
+correctly, every time. The literal task URL's group index (`group:7` for the
+`SessionFlow::run → drain` step) simply did not match this dataset's actual
+group index for that call site (found instead at group 8, 11, or 13 by
+scanning) — most likely because PR 13451 has active `claude_chat`/pending-push
+workflow runs (many `chat-gh-*`/`chatmerge-13451` entries in its workflow
+store), so its head worktree content can genuinely move between when a link is
+captured and when it's replayed later. Raw `?dcur=` group indices carry no
+anchor (unlike an approval, see "An approval carries the CODE it approved"
+above) — this is a **known, accepted** limitation of a shared drill link
+against a moving PR, not a defect in `applyDrillRefRestore`'s own logic.
+**Don't re-investigate this from a hand-typed/stale URL** — only distrust the
+restore mechanism itself if a *freshly self-captured* round trip fails.

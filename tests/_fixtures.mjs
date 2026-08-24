@@ -102,6 +102,21 @@ function seed(db) {
     ],
     { stdio: 'ignore', env: SEED_ENV },
   )
+  // PR 101 — drill-listener-array-dispatch.spec.mjs's LOCAL PATCH 4 regression
+  // fixture (see materializeDrillChurnWorktrees, tests/_setup.mjs).
+  execFileSync(
+    BIN,
+    [
+      'seed',
+      '-db',
+      db,
+      '-from',
+      'tests/fixtures/drillchurn-blocks.json',
+      '-relations',
+      'tests/fixtures/drillchurn-relations.json',
+    ],
+    { stdio: 'ignore', env: SEED_ENV },
+  )
   // Footer AI-explanation fixture (PR 97, footer-explanation.spec.mjs): a
   // block whose change introduces an if-statement (worktrees materialized in
   // _setup.mjs) plus pre-seeded explanations, so the footer renders the AI

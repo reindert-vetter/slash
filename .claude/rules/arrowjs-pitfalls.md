@@ -19,12 +19,14 @@ owning keyed node is gone. LOCAL PATCH 1/2/2b (below) address this in the vendor
 file; the "orphan bindings" and "bare toggling expression" entries below are the
 app-level consequences of the same gap.
 
-## LOCAL PATCH 1/2/2b in `src/vendor/arrow.js` — reapply on every upgrade
+## LOCAL PATCH 1/2/2b/4 in `src/vendor/arrow.js` — reapply on every upgrade
 
-Three deliberate changes, each marked with a `LOCAL PATCH` comment in the
-header. **On an arrow.js upgrade all three must be reapplied**; the comment
-blocks in `vendor/arrow.js` hold the original lines and the exact restore
-instructions.
+Four deliberate changes, each marked with a `LOCAL PATCH` comment in the
+header (LOCAL PATCH 3, the separate memory-leak fix, is documented on its own
+further down in this file — different failure mode, see "Arrow's registries,
+before and after"). **On an arrow.js upgrade all four must be reapplied**; the
+comment blocks in `vendor/arrow.js` hold the original lines and the exact
+restore instructions.
 
 - **LOCAL PATCH 1** — the template-expression evaluator `rt` **skips a released
   slot** (`typeof W[t]=="function"` guard) instead of calling it. Without it, a
@@ -57,6 +59,31 @@ instructions.
   owner's own detached fragment. Regression tests:
   `tests/step-preview-stability.spec.mjs`, `tests/diff-code-vs-title.spec.mjs`
   (both walk a ↓/↑ same-file block cycle and assert zero page errors).
+- **LOCAL PATCH 4** — `Gt` (upstream `emit`, the property-write notify
+  dispatcher) now **snapshots the listener array before iterating it**
+  (`const c=f.slice();for(...)typeof c[d]=="function"&&c[d](n,i)`) instead of
+  looping over the live array in place. A property with 2+ subscribers at
+  once (`state.drill`/`state.drillCursor` normally has both the
+  columns-render effect and the `?drill=`/`?dcur=` URL-mirroring watch, see
+  `bindUrlState` in `urlState.mjs`/`home.mjs`) can have one listener's own
+  execution synchronously dispose ANOTHER subscriber on the SAME property
+  (PATCH 2's cascading disposal tearing down a drilled column's card as part
+  of a re-render) — that disposal's `Yt` call splices the shared listener
+  array while `Gt`'s own loop is still mid-iteration over it, corrupting the
+  iteration: `TypeError: f[d] is not a function`. Reported symptom: "als ik
+  diep zit, dan is de tree traag als ik een regel goedkeur" — every
+  subsequent Space press inside a drilled column silently aborted
+  `applyNextUnapproved` at its `state.drill = state.drill.slice(0, common)`
+  line, so the reviewer's approve-and-continue simply stopped working, forever,
+  with no visible error. **Not about drill depth** — isolated to plain `↓`
+  (changing a drilled column's own change-group cursor) repeated ~10-40 times
+  inside ANY drilled column (never at drill depth 0, and not reliably
+  reproducible in a small synthetic fixture — needs a reactive graph as dense
+  as a real, large PR to collide reliably); see "The Gt dispatch-array crash"
+  in `.claude/docs/frontend-memory.md` for the full depth-vs-churn
+  measurements and the before/after numbers. Regression test (a cheap
+  smoke/guard, not a reliable repro — see its own doc comment):
+  `tests/drill-listener-array-dispatch.spec.mjs`.
 
 ## Template syntax rules
 
