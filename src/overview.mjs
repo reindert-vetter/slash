@@ -713,7 +713,11 @@ function rowInner(pr, opts) {
     `,
     html`
       <div class="flex shrink-0 items-center gap-3">
-        ${statusArea(pr)} ${() => approvalPill(pr)} ${() => unpushedPill(pr)} ${() => checkoutPill(pr)} ${commentsBit(pr)} ${() => graphChip(pr)} ${chevronFilled('h-4 w-4 text-slate-400 dark:text-zinc-600 group-hover:text-slate-600 dark:group-hover:text-zinc-300')}
+        ${statusArea(pr)}
+        <div class="flex flex-col items-end gap-1">
+          ${() => checkoutPill(pr)} ${() => unpushedPill(pr)} ${() => approvalPill(pr)}
+        </div>
+        ${commentsBit(pr)} ${() => graphChip(pr)} ${chevronFilled('h-4 w-4 text-slate-400 dark:text-zinc-600 group-hover:text-slate-600 dark:group-hover:text-zinc-300')}
       </div>
     `,
   ]
