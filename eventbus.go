@@ -103,6 +103,12 @@ const (
 	// volatile snapshot (comment_batch_progress.go), which is why the payload
 	// travels along and GET /api/comment-batch is its resync read.
 	eventCommentBatchProgress = "commentbatch.progress"
+	// eventTestRunProgress carries a volatile testRunProgress snapshot of a
+	// running test_run run (no Key — PR-wide, carries its own per-test items),
+	// the exact same shape/reasoning as eventCommentBatchProgress above: a test
+	// run's per-test state exists ONLY in this volatile snapshot
+	// (test_run_progress.go), and GET /api/test-run is its resync read.
+	eventTestRunProgress = "testrun.progress"
 	// eventResync is emitted by the connection itself after it had to drop an
 	// event: "you may have missed something, refetch everything you track".
 	eventResync = "resync"

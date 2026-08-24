@@ -174,6 +174,12 @@ const (
 	// replies to or resolves a comment — see comment_batch.go and
 	// .claude/docs/workflows-comments.md.
 	WorkflowCommentBatch = "comment_batch"
+	// WorkflowTestRun is the Workflow Type behind "Tests laten draaien"
+	// (PR_COMMANDS, src/home.mjs): ONE agentic run that itself decides which
+	// EXISTING tests are relevant to a PR's changes and runs only those — no
+	// Edit tool, no landing step, no fixed per-repo test command. One-shot,
+	// signal-less. See test_run.go.
+	WorkflowTestRun = "test_run"
 	// WorkflowSummarizeChat is the Workflow Type that generates a short Dutch
 	// summary (at most 2 sentences) of an embedded Claude conversation — the
 	// prefill for "Comment hiervan maken" on a still-CLAUDE_ANCHOR_PLACEHOLDER
@@ -2617,6 +2623,18 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		}
 		return json.Marshal(map[string]int{"deleted": n})
 	})
+	// Activity: remove any old-enough test_run run's own leftover residue (git
+	// clean candidates, see test_run.go) plus that run's history entry —
+	// unconditional, run once per cleanup pass, independent of the resolved PR
+	// targets AND of the merged/age gate (this is about the residue's OWN age,
+	// see testRunResidueAge). See sweepTestRunResidue (cleanup.go).
+	engine.RegisterActivity("sweepTestRunResidue", func(ctx context.Context, in []byte) ([]byte, error) {
+		n, err := sweepTestRunResidue(ctx, m.engine)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]int{"swept": n})
+	})
 
 	// Activity: create the chat conversation row if it doesn't exist yet (write,
 	// workflow-driven, idempotent). See chat_workflow.go.
@@ -2750,6 +2768,20 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		}
 		return json.Marshal(runCommentBatch(ctx, m, m.comments, m.chat, m.claude, m.dataDir, arg))
 	})
+	// Activity: the ONE agentic Claude run that decides which existing tests
+	// are relevant to a PR's changes and runs them (side effect: shells out via
+	// claude.Client.RunChat, no Edit tool — see test_run.go). Returns only
+	// counts/plan/summary + a bounded list of leftover residue paths.
+	engine.RegisterActivity("runTestRun", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg testRunArg
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.claude == nil {
+			return json.Marshal(testRunResult{})
+		}
+		return json.Marshal(runTestRun(ctx, m, m.claude, m.dataDir, arg))
+	})
 	// Activity: hand one conversation's "commit deze wijziging" request off to
 	// the PR's own chat_merge queue (write: ensures + signals a DIFFERENT
 	// Workflow Execution — the same cross-workflow Ensure+Signal shape
@@ -2879,6 +2911,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowClaudeChat, claudeChatWorkflow)
 	engine.RegisterWorkflow(WorkflowChatMerge, chatMergeQueueWorkflow)
 	engine.RegisterWorkflow(WorkflowCommentBatch, commentBatchWorkflow)
+	engine.RegisterWorkflow(WorkflowTestRun, testRunWorkflow)
 	engine.RegisterWorkflow(WorkflowSummarizeChat, summarizeChatWorkflow)
 	engine.RegisterWorkflow(WorkflowCommentTitles, commentTitlesWorkflow)
 
@@ -2906,6 +2939,10 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// reasoning, plus this is what makes StartCommentBatch's StartWorkflowDeferLow
 	// hand the run off to the background instead of holding the HTTP request.
 	engine.SetWorkflowPriority(WorkflowCommentBatch, tembed.PriorityLow)
+	// test_run's single Activity IS a long agentic run (minutes) — same
+	// reasoning, plus this is what makes StartTestRun's StartWorkflowDeferLow
+	// hand the run off to the background instead of holding the HTTP request.
+	engine.SetWorkflowPriority(WorkflowTestRun, tembed.PriorityLow)
 
 	// pr_status itself is important (merge/close detection + ingest refresh) and
 	// stays Normal — but its one slow LLM step, generatePRSummary (a Haiku call),
@@ -3169,15 +3206,17 @@ func (m *TaskManager) StartIngest(ctx context.Context, repo string, pr int) (*in
 
 // cleanupWorkflow purges all data of merged-and-old PRs, plus any run of a
 // permanently retired Workflow Type, plus any task_code_comment run whose own
-// comment is gone from comments.db. It is deterministic: the cutoff is read
-// once via w.Now() (recorded through SideEffect, so replay reuses the same
-// value) unless the input already carries one; all side effects (the
-// github/DB/disk reads in resolveCleanupTargets, the worktree/workflow-run/DB
-// removals in purgePR, the retired-run deletions in purgeRetiredWorkflows, the
-// orphan-comment-run deletions in purgeOrphanCommentRuns) live in its
-// Activities. The number of purgePR calls is exactly len(targets.Targets) — a
-// function of the stored resolveCleanupTargets result, so replay-safe;
-// purgeRetiredWorkflows and purgeOrphanCommentRuns each run exactly once,
+// comment is gone from comments.db, plus any old-enough test_run leftover
+// residue. It is deterministic: the cutoff is read once via w.Now() (recorded
+// through SideEffect, so replay reuses the same value) unless the input
+// already carries one; all side effects (the github/DB/disk reads in
+// resolveCleanupTargets, the worktree/workflow-run/DB removals in purgePR,
+// the retired-run deletions in purgeRetiredWorkflows, the orphan-comment-run
+// deletions in purgeOrphanCommentRuns, the test_run residue removal in
+// sweepTestRunResidue) live in its Activities. The number of purgePR calls is
+// exactly len(targets.Targets) — a function of the stored
+// resolveCleanupTargets result, so replay-safe; purgeRetiredWorkflows,
+// purgeOrphanCommentRuns and sweepTestRunResidue each run exactly once,
 // unconditionally. No signals, one Execution per run — mirrors
 // ingestWorkflow/submitReviewWorkflow.
 func cleanupWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
@@ -3203,6 +3242,13 @@ func cleanupWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		return nil, fmt.Errorf("purge orphan comment runs: %w", err)
 	}
 
+	var testRunResidue struct {
+		Swept int `json:"swept"`
+	}
+	if err := w.ExecuteActivity("sweepTestRunResidue", nil, &testRunResidue); err != nil {
+		return nil, fmt.Errorf("sweep test_run residue: %w", err)
+	}
+
 	var targets CleanupTargets
 	if err := w.ExecuteActivity("resolveCleanupTargets", in, &targets); err != nil {
 		return nil, fmt.Errorf("resolve cleanup targets: %w", err)
@@ -3212,6 +3258,7 @@ func cleanupWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		Cutoff:                   in.Cutoff,
 		RetiredRunsDeleted:       retired.Deleted,
 		OrphanCommentRunsDeleted: orphanComments.Deleted,
+		TestRunResidueSwept:      testRunResidue.Swept,
 	}
 	for _, t := range targets.Targets {
 		var purged CleanupPurgeResult

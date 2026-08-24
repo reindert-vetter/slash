@@ -151,6 +151,19 @@ var ChatShellSystemPrompt string
 //go:embed prompts/comment_batch.md
 var CommentBatchSystemPrompt string
 
+// TestRunSystemPrompt is the static instruction block for the test_run
+// workflow's ONE agentic run (test_run.go): Claude itself decides WHAT to run
+// (no fixed per-repo test command, no pre-resolved testcovers list — reviewer
+// decision) and picks a narrow, PR-relevant slice rather than the whole suite.
+// Deliberately no Edit tool at all (see runTestRun's Tools) — this run may
+// only run existing tests and report outcomes, never change code or tests.
+// It fixes the `[slash:plan]`/`[slash:test-start]`/`[slash:test-pass]`/
+// `[slash:test-fail]` marker lines that make per-test progress visible while
+// the run is still going (test_run_progress.go).
+//
+//go:embed prompts/test_run.md
+var TestRunSystemPrompt string
+
 // ChatConflictSystemPrompt is the static instruction block for chat_merge's
 // one begrensde Claude attempt when an automatic `git merge` of two chat
 // conversations' shadow-worktree edits leaves real conflicts. A one-shot,

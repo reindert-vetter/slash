@@ -720,6 +720,20 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// run (comment_batch_progress.go): the resync read for the SSE stream, not a
 	// poll target.
 	mux.HandleFunc("/api/comment-batch", s.handleCommentBatch)
+	// POST /api/workflows/test_run {pr} → ONE agentic Claude run that itself
+	// decides which existing tests are relevant to this PR's changes and runs
+	// them (test_run.go). Signal-less, no Edit tool, no selection from the
+	// reviewer — see PR_COMMANDS' "Tests laten draaien" (src/home.mjs).
+	mux.HandleFunc("/api/workflows/test_run", s.handleTestRunStart)
+	// GET /api/test-run?pr=N → the volatile per-test snapshot of that run
+	// (test_run_progress.go): the resync read for the SSE stream, not a poll
+	// target.
+	mux.HandleFunc("/api/test-run", s.handleTestRun)
+	// POST /api/test-run/cancel {pr} → stop the ONE running test_run for that
+	// PR right now, reusing chat_cancel.go's registry under a synthetic
+	// per-PR id (testRunCancelID) — same reasoning as POST /api/chat/cancel
+	// above: never a workflow Signal, purely an in-memory context.CancelFunc.
+	mux.HandleFunc("/api/test-run/cancel", s.handleTestRunCancel)
 	// GET /api/chat?commentId=X → read-only chat transcript for one conversation
 	// (see modules/chat; the conversation id IS the comment thread's id, so pr
 	// isn't needed to scope the read).
@@ -967,7 +981,7 @@ func (s *server) handleRetryRun(w http.ResponseWriter, r *http.Request) {
 // /api/workflows/{runID}/signals/{signalName} (POST signal).
 func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/workflows/")
-	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "remove_reviewer" || rest == "code_warning" || rest == "ignore_comment" || rest == "cleanup" || rest == "claude_chat" || rest == "auto_warn" || rest == "app_settings" || rest == "comment_batch" || rest == "comment_titles" || rest == "retry" {
+	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "remove_reviewer" || rest == "code_warning" || rest == "ignore_comment" || rest == "cleanup" || rest == "claude_chat" || rest == "auto_warn" || rest == "app_settings" || rest == "comment_batch" || rest == "test_run" || rest == "comment_titles" || rest == "retry" {
 		http.NotFound(w, r)
 		return
 	}
@@ -1907,6 +1921,77 @@ func (s *server) handleCommentBatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "running": p.Running, "progress": p})
+}
+
+// handleTestRunStart starts the test_run Execution: one agentic Claude run
+// that itself decides which existing tests are relevant to this PR and runs
+// them (see test_run.go). A run already going for this PR is refused with
+// 409 rather than started a second time — same reasoning as
+// handleCommentBatchStart: both runs would explore/execute in the same
+// shared checkout at once, and the per-PR progress snapshot can only ever
+// describe one run (test_run.go's file header, point 7).
+func (s *server) handleTestRunStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var in TestRunInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.PR <= 0 {
+		http.Error(w, "invalid test run request", http.StatusBadRequest)
+		return
+	}
+	in.Repo = canonRepo(in.Repo)
+	if testRunRunning(in.Repo, in.PR) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "test run already running"})
+		return
+	}
+	runID, err := s.tasks.manager.StartTestRun(in)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
+}
+
+// handleTestRun serves GET /api/test-run?pr=N — the volatile per-test
+// snapshot of that PR's test run, or {ok:true, running:false} when there
+// never was one (or the server restarted since). Read-only.
+func (s *server) handleTestRun(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	pr, _ := strconv.Atoi(r.URL.Query().Get("pr"))
+	if pr <= 0 {
+		http.Error(w, "pr required", http.StatusBadRequest)
+		return
+	}
+	p, ok := testRunProgressFor(queryRepo(r), pr)
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "running": false})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "running": p.Running, "progress": p})
+}
+
+// handleTestRunCancel serves POST /api/test-run/cancel {pr} — see the route
+// registration above for why this is a plain in-memory cancel, never a
+// workflow Signal. Mirrors handleChatCancel exactly, keyed by
+// testRunCancelID instead of a comment id.
+func (s *server) handleTestRunCancel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		PR int `json:"pr"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.PR <= 0 {
+		http.Error(w, "pr required", http.StatusBadRequest)
+		return
+	}
+	cancelled := cancelChatTurn(testRunCancelID(body.PR))
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "cancelled": cancelled})
 }
 
 // handleChat serves two read-only reads, both GET:
