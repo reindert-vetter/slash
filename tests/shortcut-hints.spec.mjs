@@ -19,7 +19,7 @@ import { test, expect, leaveSearchBox, seededPr } from './_fixtures.mjs'
 // actually do something (dHintUsable — never at the coarsest 'group' level).
 // At 'group' the combined zoom key drops `s` too (reviewer follow-up: "bij
 // een groep mag s weg" — s is a no-op there, same reasoning as d), leaving
-// only `f` under the 'zoom' label; 'group' is otherwise the one stand that
+// only `f` under the 'Ga dieper' label; 'group' is otherwise the one stand that
 // keeps the fuller ←→/a/Space/Enter set.
 test.describe('Contextual shortcut-hint line', () => {
   test('list mode and diff mode show different hints, and switching back and forth never leaves the OTHER mode\'s text behind', async ({
@@ -40,9 +40,9 @@ test.describe('Contextual shortcut-hint line', () => {
     // on a plain re-run, leaving the PREVIOUS mode's hint text on screen
     // forever — see ShortcutHintBar's own doc comment for the full story.
     await page.keyboard.press('ArrowRight') // list -> diff
-    await expect(hints).toContainText('zoom')
+    await expect(hints).toContainText('Ga dieper')
     await expect(hints).not.toContainText('PR-menu')
-    // 'group' keeps only `f` under the 'zoom' label — `s` dropped, a no-op
+    // 'group' keeps only `f` under the 'Ga dieper' label — `s` dropped, a no-op
     // at the coarsest level (reviewer follow-up: "bij een groep mag s weg").
     await expect(hints).not.toContainText('f/s')
 
@@ -83,7 +83,7 @@ test.describe('Contextual shortcut-hint line', () => {
     await page.locator('[data-idx="1"]').click()
     await page.keyboard.press('ArrowRight')
 
-    const visible = await page.getByTestId('shortcut-hints').filter({ hasText: 'zoom' }).count()
+    const visible = await page.getByTestId('shortcut-hints').filter({ hasText: 'Ga dieper' }).count()
     expect(visible).toBe(1)
   })
 

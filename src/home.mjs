@@ -8444,11 +8444,13 @@ function blockShortcutHints() {
   // At 'group', `s` is ALSO a no-op (already the coarsest level — the same
   // reasoning as `d`'s own dHintUsable gate above) — reviewer follow-up:
   // "bij een groep mag s weg" — so the combined key drops to just `f`
-  // (still labelled 'zoom': it's the only zoom key left that does anything).
+  // (labelled "Ga dieper": it's the only zoom key left that does anything).
+  // Order: weergave, Ga dieper, kolom — reviewer follow-up on the ordering
+  // and the label itself.
   return [
-    { key: '←→', label: 'kolom' },
-    { key: 'f', label: 'zoom' },
     { key: 'a', label: 'weergave' },
+    { key: 'f', label: 'Ga dieper' },
+    { key: '←→', label: 'kolom' },
     { key: 'Space', label: 'goedkeuren + door' },
     { key: 'Enter', label: 'menu' },
   ]
