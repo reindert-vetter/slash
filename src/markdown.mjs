@@ -141,10 +141,19 @@ const INLINE_MAX_LINES = 3
 // not the whole message repeated. A few common Markdown decorations
 // (heading `#`, a bullet `-`/`*`, `**`/`` ` ``) are stripped since this is a
 // plain-text hint, not rendered Markdown, and whitespace/newlines collapse to
-// single spaces. Capped at ~80 chars with an ellipsis so the card title stays
-// one short line — the full comment/message text is already visible above
-// the fence in the comment/Claude column itself.
-const FENCE_CONTEXT_MAX = 80
+// single spaces.
+//
+// Deliberately NOT cut to a fixed character count with a manually appended
+// '…' any more (reviewer report: that made the "…" land well short of a wide
+// card's real right edge, or mid-width instead of flush against it). The
+// VISIBLE clipping is CSS `truncate` (CodePreview.mjs's context line),
+// applied only while the card is collapsed — expanded shows this in full —
+// so the cut always lands exactly at the box's own actual edge, whatever
+// that happens to be. `FENCE_CONTEXT_SAFETY_MAX` below is a defensive cap
+// only, against a pathological single-paragraph wall of text with no blank
+// line anywhere above the fence — not the normal truncation mechanism, and
+// deliberately not given its own "…" (CSS still clips it the same way).
+const FENCE_CONTEXT_SAFETY_MAX = 400
 function fenceContext(raw) {
   let t = String(raw || '').trim()
   if (!t) return ''
@@ -158,7 +167,7 @@ function fenceContext(raw) {
     .replace(/\s+/g, ' ')
     .trim()
   if (!t) return ''
-  return t.length > FENCE_CONTEXT_MAX ? t.slice(0, FENCE_CONTEXT_MAX - 1).trimEnd() + '…' : t
+  return t.length > FENCE_CONTEXT_SAFETY_MAX ? t.slice(0, FENCE_CONTEXT_SAFETY_MAX).trimEnd() : t
 }
 
 function extractCodeFences(text, store, startIndex, truncate) {

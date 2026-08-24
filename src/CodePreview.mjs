@@ -224,7 +224,8 @@ function previewCard(it, active, expanded, onToggle) {
       ${() =>
         it.context
           ? html`<span
-              class="truncate text-[11px] text-slate-400 dark:text-zinc-500"
+              class="${() =>
+                'text-[11px] text-slate-400 dark:text-zinc-500 ' + (expanded() ? '' : 'truncate')}"
               data-testid="code-preview-context"
             >
               over: ${it.context}

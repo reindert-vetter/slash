@@ -2906,7 +2906,15 @@ function focusPreviewCard() {
     const input = document.querySelector('[data-testid=claude-chat-compose]')
     if (input && document.activeElement === input) input.blur()
     const el = document.querySelectorAll('[data-testid=code-preview-card]')[cs.previewPos - 1]
-    if (el) scrollIntoViewVertical(el)
+    // alignToTopVertical, not scrollIntoViewVertical: a card can be much
+    // taller than its scroller once expanded (a full pane of code), so
+    // "nearest edge" leaves the OTHER edge — including the card's own
+    // selection border/title, the part that actually answers "where is my
+    // selection" — off-screen depending on which direction the cursor came
+    // from (reported bug: ↑ walked the selection out of view). Same fix as
+    // scrollCommentIntoView/scrollCodeIntoView already apply to comment
+    // cards/Onderliggende-code children for the identical reason.
+    if (el) alignToTopVertical(el)
   })
 }
 // focusClaudeTaskRow mirrors focusPreviewCard for the "other running Claude
@@ -4083,6 +4091,27 @@ function recomputeCodePreviews() {
       oldCode: suggestion && isPhp ? currentCode : null,
       isLast: containers[i] === lastContainer,
     }
+  })
+  // Most-recently-generated message/comment renders at the TOP (reviewer
+  // request: "recente gegenereerde code blokken moeten boven niet recente
+  // staan") — grouped by the SAME container lookup `isLast` already uses,
+  // reordering only whole GROUPS, never the fences within one: a single
+  // message with 2+ fences must keep them in their own authored order (see
+  // the existing "only a suggestion fence…" test, one comment body with a
+  // plain fence followed by a suggestion fence, asserted in that exact
+  // order). `containerOrder` is every distinct container in first-appearance
+  // (i.e. chronological) order; `.sort` is a stable sort (guaranteed since
+  // ES2019), so two items with the same rank never swap.
+  const containerOrder = []
+  containers.forEach((c) => {
+    if (!containerOrder.includes(c)) containerOrder.push(c)
+  })
+  next.forEach((it, i) => {
+    it._groupRank = containerOrder.indexOf(containers[i])
+  })
+  next.sort((a, b) => b._groupRank - a._groupRank)
+  next.forEach((it) => {
+    delete it._groupRank
   })
   const unchanged =
     next.length === cp.items.length &&

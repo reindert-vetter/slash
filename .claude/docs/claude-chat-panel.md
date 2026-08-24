@@ -3054,8 +3054,9 @@ pane) are unchanged.
   `codePreviewColumn` renders ONE `w-[42rem]` column, `previewCard` per fence
   stacked inside it with `flex flex-col gap-3`, each card carrying its own
   title + "Huidig (PR)"/"Voorgesteld (chat)" pane pair (`data-testid=
-  code-preview-card`, keyed `'fence:' + index` — DOM/document order, i.e.
-  comments column first, then the Claude column).
+  code-preview-card`, keyed `'fence:' + index` off the ORIGINAL DOM/document
+  order — the render order itself is recency-grouped, newest message first,
+  see "Default-collapsed cards, a richer title, and per-class labels" below).
 - **DOM-derived, not markdown-reparsed.** `extractCodeFences`
   (`markdown.mjs`) already stamps every non-`suggestion` fence's header with a
   `data-fence-code`/`data-fence-lang` (at the time on a `code-fence-open`
@@ -3155,12 +3156,14 @@ now had no keyboard cursor at all (the earlier write-up above explicitly noted
 one didn't exist anywhere in this app).
 
 - **`cs.previewPos`** (`RelatedPanel.mjs`) is that cursor: `0` = not in the
-  cards, `1..n` = the n-th card counted from the **TOP**, i.e. in
-  reading/document order. Every other cursor in this panel
-  (`threadPos`/`claudePos`/`claudeOptionSel`) counts from the bottom because
-  those chains are walked UPWARD out of the composer; this one is walked
-  DOWNWARD out of it, so counting from the top is the mirror-image of the same
-  rule — `1` is in both cases the rung closest to the composer.
+  cards, `1..n` = the n-th card counted from the **TOP**, i.e. in render
+  order — the recency-grouped order (below), not raw DOM order any more.
+  Every other cursor in this panel (`threadPos`/`claudePos`/`claudeOptionSel`)
+  counts from the bottom because those chains are walked UPWARD out of the
+  composer; this one is walked DOWNWARD out of it, so counting from the top
+  is the mirror-image of the same rule — `1` is in both cases the rung
+  closest to the composer, and (since the reordering below) also the most
+  recently generated card.
 - **It is one continuous chain with the rest**, not a separate mode: `↓` at
   the rest position (`claudePos === 0 && claudeOptionSel === 0`) lands on card
   1, `↓` walks down, `↑` walks back up and hands the composer its caret
@@ -3253,11 +3256,13 @@ changes, all in the same three files (`markdown.mjs`, `RelatedPanel.mjs`'s
   code-preview-context`) — "over: …". `markdown.mjs`'s `extractCodeFences`
   now tracks where the previous fence ended and slices the text in between,
   keeps only the LAST paragraph of that slice (so 2+ fences in one message
-  each get just their own paragraph, not the whole message repeated), strips
-  a few common Markdown decorations, and caps it at ~80 chars. Stored as a
-  new `data-fence-context` attribute on the same `code-fence` wrapper the
+  each get just their own paragraph, not the whole message repeated), and
+  strips a few common Markdown decorations. Stored as a new
+  `data-fence-context` attribute on the same `code-fence` wrapper the
   code/label/lang attributes already live on (empty → attribute omitted, e.g.
-  a fence that opens a message with nothing above it).
+  a fence that opens a message with nothing above it). See "Truncate the
+  context line only when collapsed" below for how (and how much of) it gets
+  visually clipped — that part changed after this section first landed.
 - **A card not belonging to the LAST answer starts collapsed** (title +
   context line only, no code at all — not even a one-line teaser, reviewer's
   explicit choice) — `Enter` on the focused card, or its own "Inklappen"/
@@ -3305,6 +3310,62 @@ changes, all in the same three files (`markdown.mjs`, `RelatedPanel.mjs`'s
   around elsewhere.
 
 Test: `tests/codeblock-card-collapse.spec.mjs`.
+
+### Three follow-up reviewer reports on the cards above: scroll, truncation, order
+
+Screenshots this time, not just typed reports. All three land in
+`RelatedPanel.mjs`/`CodePreview.mjs`/`markdown.mjs`, no other files.
+
+- **The selected card must always stay in view, including on ↑.**
+  `focusPreviewCard()` used to call `scrollIntoViewVertical(el)` — "nearest
+  edge" scrolling, fine for a short row but not for a card that can be much
+  taller than the scroller once expanded (a full pane of code): depending on
+  which direction the cursor came from, the OTHER edge — including the
+  card's own selection border/title, the part that actually shows "where is
+  my selection" — was left off-screen. Switched to `alignToTopVertical(el)`,
+  the exact same fix already applied to comment cards/Onderliggende-code
+  children (`scrollCommentIntoView`/`scrollCodeIntoView`, same file, same
+  "a card selected below the fold otherwise stays half out of sight"
+  reasoning) — it unconditionally scrolls the selected card's TOP to the
+  scroller's top rather than only nudging the nearest edge into view.
+  `focusClaudeTaskRow()` (single-line rows, never tall) is untouched.
+- **Truncate the context line only when collapsed, and only via CSS.**
+  Reviewer report: the `over: …` line was cut off well short of a wide
+  card's actual right edge, and the cut showed even on an EXPANDED card.
+  Root cause: `markdown.mjs`'s `fenceContext()` hard-cut the text at a fixed
+  80 characters and appended its own `'…'` — a character-count cut has no
+  idea how wide the card ends up being, so the `'…'` almost never lands
+  flush against the real edge. That fixed cut (and its own `'…'`) is gone;
+  `fenceContext` now only strips Markdown decoration and keeps the last
+  paragraph, capped at a generous `FENCE_CONTEXT_SAFETY_MAX` (400 chars, no
+  `'…'` of its own) purely as a defensive backstop against a pathological
+  wall of text with no blank line anywhere above the fence — not the design
+  truncation mechanism. The VISIBLE clipping is CSS `truncate`
+  (`text-overflow: ellipsis`) in `CodePreview.mjs`'s context `<span>`, now a
+  whole-value `class="${() => …}"` binding (per the "mixed literal+dynamic
+  attribute value" rule in `arrowjs-pitfalls.md`) that only adds `truncate`
+  while `!expanded()` — an expanded card shows the full text (wrapping
+  normally), so the ellipsis only ever appears on a collapsed card, and
+  always exactly at that card's own real edge.
+- **Most-recently-generated code block renders on TOP, not at the bottom.**
+  Reviewer report: a long conversation buried the newest (and, per the
+  bullet above, the only DEFAULT-EXPANDED) card at the bottom of an
+  ever-growing stack of collapsed older ones. `recomputeCodePreviews` now
+  groups fences by the SAME nearest-container lookup `isLast` already uses
+  (`[data-testid="claude-message"], [data-testid="comment-item"]`), then
+  stable-sorts the GROUPS newest-first — never reordering the fences WITHIN
+  one group, so a single message with 2+ fences (e.g. the existing "only a
+  suggestion fence…" test: one comment body, an ordinary fence followed by a
+  `suggestion` fence) keeps them in their own authored order; only whole
+  messages/comments reorder relative to each other. `cs.previewPos` still
+  counts "1..n from the top" exactly as before — top is now the most
+  recent group instead of the oldest, so `1` (the rung closest to the
+  composer) is also the newest card. `key: 'fence:' + index` still comes
+  from the ORIGINAL (pre-sort) DOM index, so a given fence's identity survives
+  the reorder across recomputes.
+
+Test: the extended scenario in `tests/codeblock-card-collapse.spec.mjs` (now
+also asserting card order and the scroll/truncation behaviour above).
 
 ### `↓` from the bottom of a COMMENT also walks those same code blocks first
 
