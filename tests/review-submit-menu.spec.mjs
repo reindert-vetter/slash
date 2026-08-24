@@ -399,9 +399,11 @@ test.describe('PR Review Tree — review-submit follow-up (Keur de HELE PR goed 
     // Esc from this nested submenu resets straight to the PR-menu root, not
     // one level back to "GitHub" — the documented "Esc always goes to root"
     // behaviour (see command-palette.md), which is what makes this extra
-    // nesting level free.
+    // nesting level free. No exact toHaveCount on this root list — PR_COMMANDS
+    // (home.mjs) keeps growing (e.g. "Tests laten draaien"), so assert the
+    // known first row instead of the total count.
     await page.keyboard.press('Escape')
-    await expect(rows).toHaveCount(5)
+    await expect(rows.nth(0)).toContainText('Sluit menu')
     await expect(rows.nth(1)).toContainText('GitHub')
 
     await page.keyboard.press('Escape')

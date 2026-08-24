@@ -38,15 +38,19 @@ test.describe('PR Review Tree — `/` PR menu', () => {
     await expect(page.getByTestId('command-input')).toHaveValue('')
 
     const rows = page.getByTestId('command-row')
-    // 5 root items: a pinned "Sluit menu" (withClose, always first) plus the
-    // 4 real ones — the description toggle sits before the bulk
-    // retract-all-approvals item (see PR_COMMANDS in home.mjs).
-    await expect(rows).toHaveCount(5)
+    // Root items: a pinned "Sluit menu" (withClose, always first), then the
+    // real ones. Deliberately NOT an exact toHaveCount on this root list —
+    // PR_COMMANDS (home.mjs) keeps growing (e.g. "Tests laten draaien"
+    // landed after this test was written, between the description toggle
+    // and the bulk retract-all item) and a hardcoded count here is exactly
+    // what broke last time; assert each known item's presence/order instead,
+    // which survives a future addition. The submenu counts below stay exact
+    // — those are closed, stable lists.
     await expect(rows.nth(0)).toContainText('Sluit menu')
     await expect(rows.nth(1)).toContainText('GitHub')
     await expect(rows.nth(2)).toContainText('Jira')
-    await expect(rows.nth(3)).toContainText('Toon volledige omschrijving')
-    await expect(rows.nth(4)).toContainText('Alle goedkeuringen intrekken')
+    await expect(rows.filter({ hasText: 'Toon volledige omschrijving' })).toHaveCount(1)
+    await expect(rows.filter({ hasText: 'Alle goedkeuringen intrekken' })).toHaveCount(1)
 
     await page.keyboard.press('Escape')
     await expect(menu).not.toBeVisible()
@@ -80,9 +84,12 @@ test.describe('PR Review Tree — `/` PR menu', () => {
     await expect(rows.nth(3)).toContainText('Algemene comment plaatsen')
 
     // Esc backs out to the root, then Jira → its three children (plus its own
-    // pinned "Sluit menu" first).
+    // pinned "Sluit menu" first). No exact toHaveCount on the root list here
+    // either (see the note above) — just confirm we're really back at root.
     await page.keyboard.press('Escape')
-    await expect(rows).toHaveCount(5) // root: Sluit menu/GitHub/Jira/description/retract-all
+    await expect(rows.nth(0)).toContainText('Sluit menu')
+    await expect(rows.nth(1)).toContainText('GitHub')
+    await expect(rows.nth(2)).toContainText('Jira')
     await page.getByTestId('command-input').fill('jira')
     await expect(rows).toHaveCount(1)
     await page.keyboard.press('Enter')
@@ -148,12 +155,13 @@ test.describe('PR Review Tree — `/` PR menu', () => {
 
     await page.keyboard.press('Enter')
     await expect(menu).toBeVisible()
-    await expect(rows).toHaveCount(5)
+    // No exact toHaveCount on this root list — see the note in the `/`
+    // test above; PR_COMMANDS keeps growing.
     await expect(rows.nth(0)).toContainText('Sluit menu')
     await expect(rows.nth(1)).toContainText('GitHub')
     await expect(rows.nth(2)).toContainText('Jira')
-    await expect(rows.nth(3)).toContainText('Toon volledige omschrijving')
-    await expect(rows.nth(4)).toContainText('Alle goedkeuringen intrekken')
+    await expect(rows.filter({ hasText: 'Toon volledige omschrijving' })).toHaveCount(1)
+    await expect(rows.filter({ hasText: 'Alle goedkeuringen intrekken' })).toHaveCount(1)
   })
 
   // `/` is no longer hardwired to the PR-wide menu: it opens the menu of the

@@ -25,10 +25,12 @@ test.describe('PR Review Tree — PR-wide menu on the description column (stop 1
     await expect(menu).toBeVisible()
     await expect(page.getByTestId('command-input')).toBeFocused()
     const rows = page.getByTestId('command-row')
-    // 5 root items: a pinned "Sluit menu" (withClose, always first) plus the
-    // 4 real ones — the code_warning PR-wide risk check sits before the
-    // description toggle (see PR_COMMANDS in home.mjs).
-    await expect(rows).toHaveCount(5)
+    // Root items: a pinned "Sluit menu" (withClose, always first) plus the
+    // real ones. Deliberately NOT an exact toHaveCount here — PR_COMMANDS
+    // (home.mjs) keeps growing (e.g. "Tests laten draaien" landed after this
+    // test was written) and a hardcoded count on the root list is exactly
+    // what broke last time; assert presence/order of the known first few
+    // items instead, which survives a future addition.
     await expect(rows.nth(0)).toContainText('Sluit menu')
     await expect(rows.nth(1)).toContainText('GitHub')
     await expect(rows.nth(2)).toContainText('Jira')
