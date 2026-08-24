@@ -357,13 +357,51 @@ func listCheckoutCandidates(ctx context.Context, dataDir, repoSlug, headRef, bas
 	return out, firstErr
 }
 
+// prioritizeOnTargetBranch gives a candidate that already has the PR's OWN
+// branch checked out priority over one that is merely on some other,
+// already-merged (hence free) branch: reviewer decision ("...-3 is al op die
+// branch, gebruik die, de andere staat op master/develop en die mag pas
+// meedoen als er niet al een dir is die de branch al heeft"). When at least
+// one candidate is OnTargetBranch, every MergedIntoBase-only candidate is
+// dropped before selectCheckoutCandidate ever sees the list — so a single
+// directory already on the PR branch is auto-picked with no question at all,
+// and a reviewer choosing between several only ever compares directories
+// that are genuinely already on that branch, never a master/develop checkout
+// mixed in. Only when NO candidate is on the target branch do the
+// merged-into-base candidates get to participate, exactly as before.
+//
+// Deliberately NOT folded into listCheckoutCandidates itself: the explicit
+// "andere directory kiezen" menu action (listAllCheckoutChoices/
+// relistCheckoutCandidates) shows every genuinely eligible candidate on
+// purpose, including a merged master/develop checkout even while one is
+// already on the branch — the reviewer asking for that menu is explicitly
+// choosing to override the automatic pick, so narrowing the list there too
+// would take away exactly the choice they asked for. Only the AUTOMATIC first
+// pick (selectCheckoutCandidate, used by prepareChatShellWorkDirAt) applies
+// this priority.
+func prioritizeOnTargetBranch(candidates []checkoutCandidate) []checkoutCandidate {
+	var onTarget []checkoutCandidate
+	for _, c := range candidates {
+		if c.OnTargetBranch {
+			onTarget = append(onTarget, c)
+		}
+	}
+	if len(onTarget) > 0 {
+		return onTarget
+	}
+	return candidates
+}
+
 // selectCheckoutCandidate is the ladder's pure decision step, given already-
 // classified candidates: no candidates -> nothing at all; more than one ->
 // the reviewer always chooses (chooseDirectory); exactly one -> auto-picked
 // (its own dirty/reuse state is resolved by the caller once it becomes the
-// PR's assignment). Kept as a standalone, dependency-free function so it can
-// be unit-tested without any real git repo.
+// PR's assignment). candidates is narrowed via prioritizeOnTargetBranch
+// FIRST, so "more than one" only ever means more than one candidate at the
+// same priority tier. Kept as a standalone, dependency-free function so it
+// can be unit-tested without any real git repo.
 func selectCheckoutCandidate(candidates []checkoutCandidate) (dir string, decision *chatCheckoutDecision) {
+	candidates = prioritizeOnTargetBranch(candidates)
 	if len(candidates) == 0 {
 		return "", nil
 	}
@@ -392,9 +430,13 @@ func selectCheckoutCandidate(candidates []checkoutCandidate) (dir string, decisi
 // (never about the reviewer's actual review content) — which directory to
 // use, whether to reuse a freed one, or what to do with pre-existing, unrelated
 // changes. Stage says which step of the ladder it belongs to, so the reply is
-// interpreted correctly regardless of how the reviewer phrases it (an exact
-// match against Options — free text simply doesn't resolve anything and the
-// same question is asked again).
+// interpreted correctly regardless of how the reviewer phrases it. Matching
+// (matchCheckoutOption below) is trimmed and case-insensitive, but otherwise
+// still requires one of Options verbatim — free text that doesn't match any
+// of them resolves nothing and the SAME decision is asked again, now prefixed
+// with an explicit "I didn't recognize that answer" note (see
+// applyCheckoutDecisionReply's caller in chat_workflow.go) instead of a silent,
+// unexplained repeat.
 type chatCheckoutDecision struct {
 	Stage   string   `json:"stage"`
 	Dir     string   `json:"dir,omitempty"` // the candidate this decision is about (all stages but chooseDirectory)
@@ -406,32 +448,32 @@ const (
 	checkoutStageChooseDirectory = "chooseDirectory"
 	checkoutStageReuseMerged     = "reuseMerged"
 	checkoutStageDirtyTree       = "dirtyTree"
-	checkoutStageDivergedHistory = "divergedHistory"
 )
 
 const (
-	optDiscard         = "Verwijderen"
-	optStashManual     = "Stash (ik zet het later zelf terug)"
-	optStashAuto       = "Stash (automatisch terugzetten zodra dit gesprek de directory weer vrijgeeft)"
-	optKeepSeparate    = "Los laten (buiten Claude's commit houden)"
-	optKeepCombined    = "Meenemen in de commit"
-	optReuseYes        = "Ja, gebruik deze directory voor deze PR"
-	optReuseNo         = "Nee, zoek een andere directory"
-	optProceedDiverged = "Doorgaan met de huidige lokale stand"
+	optDiscard      = "Verwijderen"
+	optStashManual  = "Stash (ik zet het later zelf terug)"
+	optStashAuto    = "Stash (automatisch terugzetten zodra dit gesprek de directory weer vrijgeeft)"
+	optKeepSeparate = "Los laten (buiten Claude's commit houden)"
+	optKeepCombined = "Meenemen in de commit"
+	optReuseYes     = "Ja, gebruik deze directory voor deze PR"
+	optReuseNo      = "Nee, zoek een andere directory"
 )
 
-// chatCheckoutDirtyDecision builds the consult for a candidate that is either
-// genuinely dirty (uncommitted changes) or clean but not fast-forwardable
-// (real local commits origin doesn't have) — two different underlying
-// problems, so two different Stages/option sets.
+// chatCheckoutDirtyDecision builds the consult for a candidate with genuinely
+// dirty (uncommitted) changes — the only case left that still needs a
+// reviewer decision before Claude may touch this directory. A candidate that
+// is merely clean-but-not-fast-forwardable (real local commits origin
+// doesn't have yet) is no longer asked about at all: Claude only ever COMMITS
+// on top, never discards or force-overwrites anything, so there is nothing to
+// protect against — see prepareChatShellWorkDirAt's own handling of that case
+// (reviewer decision: "je mag hier gewoon op verder bouwen"). This also
+// removes the one consult (formerly checkoutStageDivergedHistory, a single
+// "Doorgaan met de huidige lokale stand" option) whose free-text answer could
+// never resolve it byte-exactly, producing an unanswerable, ever-repeating
+// question — see matchCheckoutOption below for the belt-and-braces fix to the
+// matching itself, kept for the stages that remain.
 func chatCheckoutDirtyDecision(c checkoutCandidate) *chatCheckoutDecision {
-	if !c.Dirty {
-		return &chatCheckoutDecision{
-			Stage: checkoutStageDivergedHistory, Dir: c.Dir,
-			Body:    fmt.Sprintf("`%s` staat op branch `%s` met lokale commits die niet op GitHub staan. Ik wil die niet zomaar overschrijven.", c.Dir, c.Branch),
-			Options: []string{optProceedDiverged},
-		}
-	}
 	return &chatCheckoutDecision{
 		Stage: checkoutStageDirtyTree, Dir: c.Dir,
 		Body:    fmt.Sprintf("`%s` heeft nog niet-gerelateerde, niet-gecommitte wijzigingen. Wat moet daarmee gebeuren voordat ik hier iets aanpas?", c.Dir),
@@ -623,19 +665,37 @@ type chatCheckoutResolved struct {
 	Final bool
 }
 
+// matchCheckoutOption resolves reply against options the same forgiving way
+// for every stage: trimmed and case-insensitive, so a stray leading/trailing
+// space or a different letter case is not treated as "the reviewer typed
+// something else" — an actual mismatch (free text that isn't one of the
+// offered choices) still resolves nothing. Returns the OPTION's own
+// canonical text (never the reply's original casing/whitespace) so every
+// switch below can keep comparing against the exported opt* constants.
+func matchCheckoutOption(options []string, reply string) (string, bool) {
+	reply = strings.TrimSpace(reply)
+	for _, opt := range options {
+		if strings.EqualFold(strings.TrimSpace(opt), reply) {
+			return opt, true
+		}
+	}
+	return "", false
+}
+
 func applyCheckoutDecisionReply(ctx context.Context, a *chatCheckoutAssignment, headRef, reply string) (*chatCheckoutResolved, error) {
 	d := a.Pending
-	reply = strings.TrimSpace(reply)
 	switch d.Stage {
 	case checkoutStageChooseDirectory:
-		for _, opt := range d.Options {
-			if opt == reply {
-				return &chatCheckoutResolved{Dir: opt}, nil
-			}
+		if opt, ok := matchCheckoutOption(d.Options, reply); ok {
+			return &chatCheckoutResolved{Dir: opt}, nil
 		}
 		return nil, nil
 	case checkoutStageReuseMerged:
-		switch reply {
+		opt, ok := matchCheckoutOption(d.Options, reply)
+		if !ok {
+			return nil, nil
+		}
+		switch opt {
 		case optReuseYes:
 			if err := checkoutOntoBranch(ctx, d.Dir, headRef); err != nil {
 				return nil, err
@@ -646,13 +706,12 @@ func applyCheckoutDecisionReply(ctx context.Context, a *chatCheckoutAssignment, 
 			return &chatCheckoutResolved{Dir: ""}, nil
 		}
 		return nil, nil
-	case checkoutStageDivergedHistory:
-		if reply == optProceedDiverged {
-			return &chatCheckoutResolved{Dir: d.Dir, Final: true}, nil
-		}
-		return nil, nil
 	case checkoutStageDirtyTree:
-		switch reply {
+		opt, ok := matchCheckoutOption(d.Options, reply)
+		if !ok {
+			return nil, nil
+		}
+		switch opt {
 		case optDiscard:
 			if err := discardCheckoutDirty(ctx, d.Dir); err != nil {
 				return nil, err
@@ -664,7 +723,7 @@ func applyCheckoutDecisionReply(ctx context.Context, a *chatCheckoutAssignment, 
 			}
 			a.StashRef = label
 			a.StashDir = d.Dir
-			a.StashAutoRestore = reply == optStashAuto
+			a.StashAutoRestore = opt == optStashAuto
 		case optKeepSeparate:
 			paths, err := snapshotDirtyPaths(ctx, d.Dir)
 			if err != nil {
@@ -678,8 +737,6 @@ func applyCheckoutDecisionReply(ctx context.Context, a *chatCheckoutAssignment, 
 			// Nothing to do now — the ordinary `git add -A` at commit time
 			// already includes it. Also Final, for the same reason.
 			return &chatCheckoutResolved{Dir: d.Dir, Final: true}, nil
-		default:
-			return nil, nil
 		}
 		return &chatCheckoutResolved{Dir: d.Dir}, nil
 	}
@@ -738,8 +795,19 @@ func prepareChatShellWorkDirAt(ctx context.Context, tm *TaskManager, dataDir, re
 				return "", nil, false
 			}
 			if resolved == nil {
-				// Didn't match any offered option — ask the SAME thing again.
-				return "", a.Pending, false
+				// Didn't match any offered option. Ask the SAME thing again, but
+				// say so explicitly this time (a copy, so a.Pending itself keeps
+				// its clean, canonical Body for the next attempt) — the root
+				// cause of a real reported bug: a silent, unexplained repeat of
+				// the identical question looked like the reviewer's answer had
+				// been swallowed, when in fact it simply hadn't matched any
+				// option byte-for-byte (matchCheckoutOption above is now also
+				// trim/case-insensitive, which resolves the common case of this
+				// on its own; this message is the fallback for a genuine
+				// free-text mismatch).
+				unresolved := *a.Pending
+				unresolved.Body = "Dat antwoord herkende ik niet als een van de keuzes. " + unresolved.Body
+				return "", &unresolved, false
 			}
 			a.Dir = resolved.Dir
 			a.Pending = nil
@@ -770,11 +838,28 @@ func prepareChatShellWorkDirAt(ctx context.Context, tm *TaskManager, dataDir, re
 				a.Pending = chatCheckoutReuseDecision(cand, headRef)
 				return "", a.Pending, false
 			}
-			if cand.Dirty || !cand.FastForwardable {
+			if cand.Dirty {
 				a.Pending = chatCheckoutDirtyDecision(cand)
 				return "", a.Pending, false
 			}
-			if cand.BehindOrigin {
+			// !cand.FastForwardable on its own (a clean working tree, just real
+			// local commits origin doesn't have yet) is deliberately NOT a
+			// question any more (reviewer decision: "je mag hier gewoon op
+			// verder bouwen") — a write turn only ever COMMITS on top, it never
+			// discards or force-overwrites anything, so there is nothing this
+			// candidate's own history could lose by proceeding straight away.
+			// See the removed checkoutStageDivergedHistory consult's own
+			// history in chat_checkout_test.go for the bug this replaced (an
+			// unanswerable loop once the reviewer typed anything other than the
+			// literal button text).
+			//
+			// BehindOrigin is only meaningful (and only fast-forwarded here)
+			// when FastForwardable is also true — ahead>0 together with
+			// behind>0 is a real divergence in both directions, which a plain
+			// `merge --ff-only` cannot resolve anyway; that case is left for
+			// the eventual landing's own merge/conflict handling
+			// (chat_merge.go's resolveCheckoutMerge), not guessed at here.
+			if cand.FastForwardable && cand.BehindOrigin {
 				if err := fastForwardCheckoutToOrigin(ctx, a.Dir, headRef); err != nil {
 					if tm != nil && tm.logf != nil {
 						tm.logf("chat_checkout: pr %d: fast-forward %s: %v", pr, a.Dir, err)
@@ -1047,6 +1132,10 @@ func applyCancelCleanup(ctx context.Context, cm *chat.Module, arg chatCancelClea
 			newMsg("Weggooien is mislukt: " + err.Error())
 			return
 		}
+		// The edit is genuinely gone — no longer "wordt aangepast" for any
+		// block of this PR.
+		clearChatPendingFiles(arg.Repo, arg.PR)
+		publishCheckoutChanged(arg.Repo, arg.PR)
 		newMsg("Weggegooid.")
 	case optStashManual, optStashAuto:
 		label := fmt.Sprintf("slash-chat-cancel-%s", time.Now().UTC().Format("20060102-150405"))
@@ -1057,6 +1146,10 @@ func applyCancelCleanup(ctx context.Context, cm *chat.Module, arg chatCancelClea
 		a.StashRef = label
 		a.StashDir = dir
 		a.StashAutoRestore = arg.Choice == optStashAuto
+		// Out of the working tree until it's popped again — not currently
+		// "being edited" from the review tree's point of view either.
+		clearChatPendingFiles(arg.Repo, arg.PR)
+		publishCheckoutChanged(arg.Repo, arg.PR)
 		newMsg("Weggestashed.")
 	case optKeepSeparate:
 		paths, perr := snapshotDirtyPaths(ctx, dir)
@@ -1285,13 +1378,19 @@ type checkoutView struct {
 	// StashPending marks an earlier "stash" choice that hasn't been popped
 	// yet — the chip's "nu terugzetten" row.
 	StashPending bool `json:"stashPending,omitempty"`
+	// PendingFiles are the repo-relative paths a not-yet-landed Claude edit
+	// touched for this PR (chat_edit_pending.go) — the review-tree's own
+	// per-block "wordt aangepast" status is driven straight off this list
+	// (BlockList.mjs/Block.mjs), reusing the same read model/poll cadence the
+	// checkout chip already has instead of a dedicated endpoint.
+	PendingFiles []string `json:"pendingFiles,omitempty"`
 }
 
 // buildCheckoutView reads the in-memory assignment for one PR — never nil,
 // mirroring loadPendingPush's own "nothing yet" shape (an empty view, not an
 // error) so a PR with no checkout activity at all still round-trips cleanly.
 func buildCheckoutView(repo string, pr int) checkoutView {
-	v := checkoutView{PR: pr, RunID: chatMergeQueueRunID(repo, pr)}
+	v := checkoutView{PR: pr, RunID: chatMergeQueueRunID(repo, pr), PendingFiles: chatPendingEditedFilesFor(repo, pr)}
 	a := getCheckoutAssignment(repo, pr)
 	if a == nil {
 		return v

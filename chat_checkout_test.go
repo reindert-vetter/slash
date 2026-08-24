@@ -233,6 +233,42 @@ func TestPrepareChatShellWorkDirFastForwardsWhenCleanAndBehind(t *testing.T) {
 	}
 }
 
+// A CLEAN checkout that is already on the PR's own branch, with real local
+// commits origin doesn't have yet, is used straight away — no question at
+// all (reviewer decision: "je mag hier gewoon op verder bouwen", the fix for
+// a reported infinite-loop bug: the removed checkoutStageDivergedHistory
+// consult's one option, "Doorgaan met de huidige lokale stand", could never
+// be typed back byte-exactly, so it re-asked itself forever).
+func TestPrepareChatShellWorkDirProceedsOnUnpushedLocalCommits(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	checkout := cloneCheckoutDir(t, bareDir, "feature/x")
+	writeCheckoutSettings(t, dataDir, checkout)
+
+	// A local commit the checkout's own remote-tracking ref doesn't know
+	// about — same shape as a reviewer-requested Claude edit that already
+	// landed in an earlier turn.
+	if err := os.WriteFile(filepath.Join(checkout, "foo.txt"), []byte("local WIP, committed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	commit := exec.Command("git", "-C", checkout, "commit", "-am", "local work not yet on origin")
+	if out, err := commit.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v: %s", err, out)
+	}
+
+	dir, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1013, "conv-diverged", "", "feature/x")
+	if decision != nil {
+		t.Fatalf("expected no decision at all for a clean, merely-ahead checkout, got %+v", decision)
+	}
+	if !ok || dir != checkout {
+		t.Fatalf("expected the checkout ready immediately, dir=%q ok=%v", dir, ok)
+	}
+	if got, _ := os.ReadFile(filepath.Join(checkout, "foo.txt")); string(got) != "local WIP, committed\n" {
+		t.Fatalf("expected the local commit left untouched, got %q", got)
+	}
+}
+
 // A dirty checkout is never silently touched — the reviewer must resolve a
 // chatCheckoutDecision first, and the SAME question is re-asked until a
 // reply matches one of the offered options.
@@ -255,10 +291,16 @@ func TestPrepareChatShellWorkDirAsksAboutDirtyCandidate(t *testing.T) {
 		t.Fatalf("expected a dirtyTree decision, got %+v", decision)
 	}
 
-	// An unrecognized reply re-asks the SAME thing rather than guessing.
+	// An unrecognized reply re-asks the SAME thing rather than guessing — but
+	// now says so explicitly, instead of silently repeating an identical
+	// question (the root cause of a reported infinite loop, see
+	// TestPrepareChatShellWorkDirCaseInsensitiveMatch below).
 	_, decision2, ok2 := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1003, "conv-c", "iets anders", "feature/x")
 	if ok2 || decision2 == nil || decision2.Stage != checkoutStageDirtyTree {
 		t.Fatalf("expected the same dirtyTree decision again, got ok=%v decision=%+v", ok2, decision2)
+	}
+	if !strings.Contains(decision2.Body, "herkende ik niet") {
+		t.Fatalf("expected the repeated decision to explain the mismatch, got body %q", decision2.Body)
 	}
 
 	// "Los laten": the pre-existing change is excluded from Claude's own
@@ -344,6 +386,59 @@ func TestSelectCheckoutCandidate(t *testing.T) {
 	}
 	if len(dec.Options) != 2 || dec.Options[0] != "/a" || dec.Options[1] != "/b" {
 		t.Fatalf("unexpected options: %v", dec.Options)
+	}
+}
+
+// A directory already on the PR's own branch always wins over one that is
+// merely on some other, already-merged (hence free) branch — reviewer
+// decision: "...-3 is al op die branch, gebruik die, de andere staat op
+// master/develop en die mag pas meedoen als er niet al een dir is die de
+// branch al heeft". selectCheckoutCandidate narrows via
+// prioritizeOnTargetBranch before deciding none/one/many, so a single
+// on-target candidate auto-picks even while a merged-base one also exists,
+// and several on-target candidates are offered WITHOUT the merged-base one
+// mixed in.
+func TestSelectCheckoutCandidatePrioritizesOnTargetBranch(t *testing.T) {
+	onTarget := checkoutCandidate{Dir: "/on-target", OnTargetBranch: true}
+	mergedBase := checkoutCandidate{Dir: "/merged-base", MergedIntoBase: true}
+
+	// One on-target + one merged-base: auto-pick the on-target one, no
+	// question at all — this is exactly the screenshot's reported case.
+	dir, dec := selectCheckoutCandidate([]checkoutCandidate{onTarget, mergedBase})
+	if dir != onTarget.Dir || dec != nil {
+		t.Fatalf("expected the on-target candidate auto-picked, got dir=%q dec=%+v", dir, dec)
+	}
+
+	// Two on-target + one merged-base: choose only between the on-target
+	// ones, never offering the merged-base directory alongside them.
+	onTarget2 := checkoutCandidate{Dir: "/on-target-2", OnTargetBranch: true}
+	dir, dec = selectCheckoutCandidate([]checkoutCandidate{onTarget, onTarget2, mergedBase})
+	if dir != "" || dec == nil || dec.Stage != checkoutStageChooseDirectory {
+		t.Fatalf("expected a chooseDirectory decision among the on-target candidates, got dir=%q dec=%+v", dir, dec)
+	}
+	if len(dec.Options) != 2 || dec.Options[0] != onTarget.Dir || dec.Options[1] != onTarget2.Dir {
+		t.Fatalf("expected only the on-target candidates offered, got %v", dec.Options)
+	}
+
+	// No candidate on the target branch at all: the merged-base candidate
+	// still participates exactly as before this change.
+	dir, dec = selectCheckoutCandidate([]checkoutCandidate{mergedBase})
+	if dir != mergedBase.Dir || dec != nil {
+		t.Fatalf("expected the merged-base candidate auto-picked when nothing is on-target, got dir=%q dec=%+v", dir, dec)
+	}
+}
+
+// listAllCheckoutChoices ("andere directory kiezen") is deliberately NOT
+// narrowed by prioritizeOnTargetBranch — the reviewer asking for that menu is
+// explicitly choosing to override the automatic pick, so it must keep
+// offering every eligible candidate, including a merged-base one alongside an
+// on-target one.
+func TestListAllCheckoutChoicesDoesNotPrioritize(t *testing.T) {
+	onTarget := checkoutCandidate{Dir: "/on-target", OnTargetBranch: true}
+	mergedBase := checkoutCandidate{Dir: "/merged-base", MergedIntoBase: true}
+	dec := listAllCheckoutChoices([]checkoutCandidate{onTarget, mergedBase})
+	if dec == nil || len(dec.Options) != 2 {
+		t.Fatalf("expected both candidates offered unfiltered, got %+v", dec)
 	}
 }
 
@@ -763,5 +858,29 @@ func TestBuildCheckoutViewShapes(t *testing.T) {
 	view := buildCheckoutView("", 1016)
 	if view.Dir != a.Dir || view.DirName != "plug-and-pay-2" || view.Branch != "feature/x" || !view.StashPending {
 		t.Fatalf("unexpected view: %+v", view)
+	}
+}
+
+// checkoutView.PendingFiles mirrors chat_edit_pending.go's own registry —
+// the review tree's "wordt aangepast" pill reads it straight off the same
+// read model the checkout chip already polls.
+func TestBuildCheckoutViewReportsPendingFiles(t *testing.T) {
+	defer clearChatPendingFiles("", 1017)
+
+	empty := buildCheckoutView("", 1017)
+	if len(empty.PendingFiles) != 0 {
+		t.Fatalf("expected no pending files yet, got %v", empty.PendingFiles)
+	}
+
+	markChatFilesPending("", 1017, []string{"src/Foo.php", "src/Bar.php"})
+	view := buildCheckoutView("", 1017)
+	if len(view.PendingFiles) != 2 || view.PendingFiles[0] != "src/Bar.php" || view.PendingFiles[1] != "src/Foo.php" {
+		t.Fatalf("PendingFiles = %v, want the marked files sorted", view.PendingFiles)
+	}
+
+	clearChatPendingFiles("", 1017)
+	view = buildCheckoutView("", 1017)
+	if len(view.PendingFiles) != 0 {
+		t.Fatalf("expected PendingFiles cleared, got %v", view.PendingFiles)
 	}
 }
