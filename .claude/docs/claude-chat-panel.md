@@ -3196,10 +3196,86 @@ one didn't exist anywhere in this app).
 - **Rendering/cursor scope.** A fence inside a comment body gets its preview
   card exactly as before, but the cursor itself is scoped to the chat
   (`CodePreviewPanel` passes `cs.focus === 'claude' && …`) — `Enter` on a
-  highlighted card does nothing (there is no action to run on one).
+  highlighted card toggles its in-/uitklappen state, see "Default-collapsed
+  cards, a richer title, and per-class labels" below (it used to do nothing).
 
 Test: the "↓/↑ at the bottom of the Claude chat walk the code-preview cards"
 case in `tests/code-fence-preview.spec.mjs`.
+
+### Default-collapsed cards, a richer title, and per-class labels
+
+Reviewer request, on top of everything above: a bare `Codeblok 1 · PHP`
+header said nothing about what the block actually was, and a long-running
+chat left every past code block permanently full-size, forcing a lot of
+scrolling to find the one still relevant to the current answer. Three
+changes, all in the same three files (`markdown.mjs`, `RelatedPanel.mjs`'s
+`recomputeCodePreviews`, `CodePreview.mjs`):
+
+- **The card title now names the class(es) the snippet declares** instead of
+  the announced language: `titleDetail(code, lang)` (`RelatedPanel.mjs`) runs
+  a top-level `\bclass\s+(\w+)` scan over the fence's own code — zero matches
+  keeps the pre-existing `lang.toUpperCase()` fallback, one match shows that
+  class's name, two or more show every name in source order joined with
+  `", "` (the reviewer explicitly wants the names, not a bare count — the
+  card's own `truncate` class still clips an overlong line). Only classes are
+  scanned, deliberately not traits/interfaces/functions.
+- **A short snippet of the chat text that sat directly above the fence** is
+  shown as a second, muted line under the title (`data-testid=
+  code-preview-context`) — "over: …". `markdown.mjs`'s `extractCodeFences`
+  now tracks where the previous fence ended and slices the text in between,
+  keeps only the LAST paragraph of that slice (so 2+ fences in one message
+  each get just their own paragraph, not the whole message repeated), strips
+  a few common Markdown decorations, and caps it at ~80 chars. Stored as a
+  new `data-fence-context` attribute on the same `code-fence` wrapper the
+  code/label/lang attributes already live on (empty → attribute omitted, e.g.
+  a fence that opens a message with nothing above it).
+- **A card not belonging to the LAST answer starts collapsed** (title +
+  context line only, no code at all — not even a one-line teaser, reviewer's
+  explicit choice) — `Enter` on the focused card, or its own "Inklappen"/
+  "uitklappen (Enter)" button (same wording convention as `prInfoCard`'s
+  `toggleSinceExpanded`), toggles it. "Last answer" is decided per fence's
+  nearest `[data-testid="claude-message"], [data-testid="comment-item"]`
+  ancestor ELEMENT (compared by identity, not by message id) against the very
+  last fence's own ancestor — a fresh Claude reply (or a new/edited comment)
+  containing a fence demotes every older card to collapsed on its next
+  recompute. `RelatedPanel.mjs`'s `cp.expandedOverride` (a plain `key -> bool`
+  map, reassigned wholesale like `cp.items` itself, never mutated in place)
+  holds a manual override so a toggle survives an unrelated recompute;
+  `isPreviewExpanded(it)` falls back to `it.isLast` when there is no override
+  yet. `toggleCodePreviewExpanded(key)` is exported for both the button's
+  `@click` and `home.mjs`'s `Enter` branch (`activeCodePreviewKey()`, reading
+  `cs.previewPos` so home.mjs itself never has to import `cs`).
+- **A snippet spanning 2+ classes gets a label above EACH class's own code**,
+  not just in the title — reviewer's own follow-up, "ook boven elke stukje
+  code (als dat kan)". `CodePreview.mjs`'s `splitCodeByClasses(code)` is a
+  deliberately conservative, best-effort split: a plain top-level
+  `class Name … {` scan with a string-literal-aware brace-depth counter to
+  find each class's own closing `}`. It returns `null` (render as today, one
+  plain pane, no per-segment labels) rather than guess, whenever: fewer than
+  2 top-level classes are found (the title already names the one class);
+  a class's opening brace has no matching close within the snippet (a
+  truncated/partial body); two classes' regions would overlap (a `class`
+  token found INSIDE a previous class's own body — a nested/anonymous class,
+  or a trait/interface sitting between two classes — is silently folded into
+  the surrounding segment instead of getting its own label). PHP heredoc/
+  nowdoc (`<<<EOT … EOT`) is not recognised at all; a stray `{`/`}` inside one
+  most likely trips the "unbalanced" bail rather than mis-segmenting, which
+  is the safe direction but is a known, accepted gap. Applied only to the
+  primary code pane (`it.code`, "Codeblok"/"Voorgesteld (chat)") — not to
+  `it.oldCode`'s "Huidig (PR)" comparison pane, which always comes from one
+  already-known PR unit and is not expected to ever span multiple classes.
+- **Two arrow.js shape rules worth calling out** (see
+  `.claude/rules/arrowjs-pitfalls.md`): `pane()`'s body slot is ALWAYS a keyed
+  array (one entry when there are no class segments, N when there are) —
+  never a bare single element in one case and an array in another, since the
+  SAME `pane()` call site renders both shapes across different fences. Each
+  segment's own class-label toggle (`segmentBlock`) sits inside a stable
+  `<div class="contents">` root as a nested `${() => …}` function binding,
+  never as that node's entire keyed body — the same two pitfalls the
+  "Default-collapsed cards" bullet above and `stepChevronSlot` already work
+  around elsewhere.
+
+Test: `tests/codeblock-card-collapse.spec.mjs`.
 
 ### `↓` from the bottom of a COMMENT also walks those same code blocks first
 

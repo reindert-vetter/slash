@@ -1,5 +1,7 @@
 [
   "Ik heb naar de code gekeken. Zal ik een aanpak voorstellen?",
   "{\"type\":\"question\",\"question\":\"Welke aanpak heeft je voorkeur?\",\"options\":[\"Optie A\",\"Optie B\",\"Optie C\"]}",
-  "Bedankt, ik ga verder met Optie B."
+  "Bedankt, ik ga verder met Optie B.",
+  "Hier is een voorbeeld van de class die dit implementeert:\n```php\nclass FirstExample {\n    public function run() {}\n}\n```",
+  "En dit combineert er twee:\n```php\nclass AlphaClass {\n    public function one() {}\n}\nclass BetaClass {\n    public function two() {}\n}\n```"
 ]

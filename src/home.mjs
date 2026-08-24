@@ -131,6 +131,8 @@ import RelatedPanel, {
   localReplyCount,
   publishThreadOnly,
   CodePreviewPanel,
+  toggleCodePreviewExpanded,
+  activeCodePreviewKey,
   commentTitleOf,
   enterRelatedFromClaudeChat,
   firstReviewerReplyOnPlaceholder,
@@ -12778,6 +12780,22 @@ function onKeydown(e) {
     if (e.key === 'Enter' && (isClaudeChatFocused() || isFooterTasksFocused()) && selectHighlightedClaudeTask()) {
       e.preventDefault()
       return
+    }
+    // Enter while the cursor sits on one of the chat's own code-preview cards
+    // (RelatedPanel.mjs's cs.previewPos > 0, see "Default-collapsed cards" in
+    // claude-chat-panel.md — activeCodePreviewKey() returns null off it, home.mjs
+    // never reads cs directly) toggles that ONE card's in-/uitklappen state
+    // instead of opening the Claude column's menu below — checked BEFORE
+    // that branch for the same reason as the option/task branches above: a
+    // highlighted card also blurs the composer, so it would otherwise match
+    // that branch's own DOM-focus check too.
+    if (e.key === 'Enter' && isClaudeChatFocused()) {
+      const key = activeCodePreviewKey()
+      if (key != null) {
+        e.preventDefault()
+        toggleCodePreviewExpanded(key)
+        return
+      }
     }
     // Enter on the focused Claude column opens its own small menu ("Wis
     // Claude-gesprek" + — while the anchor is still empty, see

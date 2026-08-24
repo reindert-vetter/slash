@@ -145,7 +145,11 @@ fence's INLINE rendering to at most 2 full lines plus one more that fades out
 colour, per the colourblind rule) — `data-fence-code` on the fence's own
 `code-fence` wrapper still always carries the FULL raw code, since that
 attribute is the code-preview card's only data source (see "The INLINE fence is
-capped to ~2 lines, faded" in `.claude/docs/claude-chat-panel.md`). Only
+capped to ~2 lines, faded" in `.claude/docs/claude-chat-panel.md`). The wrapper
+also carries `data-fence-context` — a short snippet of the chat text that sat
+directly above the fence, omitted when empty — which the same code-preview
+card shows as its own "over: …" line (see "Default-collapsed cards, a richer
+title, and per-class labels" in `.claude/docs/claude-chat-panel.md`). Only
 `commentBody` (`RelatedPanel.mjs`) and `ClaudeChat.mjs`'s bubble renderers pass
 `true` — the two places a fence's full code is already duplicated in a
 full-size preview card stacked below; `prInfoCard`'s PR summary/description

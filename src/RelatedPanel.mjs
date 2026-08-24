@@ -3886,7 +3886,7 @@ export function ClaudeChatPanel(state, commentTarget) {
 // set) — the template itself lives in the sibling pure-template file
 // CodePreview.mjs, fed this array through a getter (mirrors ClaudeChat.mjs's
 // `view` getters).
-const cp = reactive({ items: [] })
+const cp = reactive({ items: [], expandedOverride: {} })
 
 // codePreviewCount — how many code-preview cards the reviewer can currently
 // walk with ↓/↑ from the bottom of the Claude chat (cs.previewPos, see its own
@@ -3902,6 +3902,74 @@ function codePreviewCount() {
 // function parameter threaded through like `commentTarget` is everywhere
 // else in this file.
 let getCommentTarget = () => null
+
+// classNamesIn(code) — the class names a code-preview card's snippet
+// declares, top-level only ("\bclass Name" — traits/interfaces/functions are
+// deliberately not counted, since the reviewer asked specifically about
+// classes). Used only to make the card TITLE more informative
+// (`titleDetail`, below); the per-segment in-pane labels this feeds live in
+// CodePreview.mjs (`splitCodeByClasses`), which needs the actual source
+// positions, not just the names — see its own doc comment there.
+function classNamesIn(code) {
+  const re = /\bclass\s+([A-Za-z_][A-Za-z0-9_]*)/g
+  const names = []
+  let m
+  while ((m = re.exec(code || ''))) {
+    if (!names.includes(m[1])) names.push(m[1])
+  }
+  return names
+}
+
+// titleDetail(code, lang) — the " · …" suffix appended to a card's own
+// "Codeblok N"/"Suggestie N" label (reviewer request: a bare "Codeblok 1 ·
+// PHP" said nothing about WHAT the block was). A detected class name is more
+// useful than the announced language, so it takes over that slot entirely
+// rather than stacking both: one class → its name; two or more → every name,
+// in source order, joined with ", " (the reviewer explicitly wants the names
+// themselves, not a bare count) — CodePreview.mjs's `truncate` class still
+// clips the line if that gets long. No class detected at all → falls back to
+// the pre-existing language word.
+function titleDetail(code, lang) {
+  const names = classNamesIn(code)
+  if (names.length) return ' · ' + names.join(', ')
+  return lang ? ' · ' + lang.toUpperCase() : ''
+}
+
+// cp.expandedOverride — a plain (non-`cp.items`) map, `fence key -> bool`,
+// surviving `recomputeCodePreviews`' wholesale item-array reassignment so a
+// manual toggle isn't lost the next time an unrelated fence changes. Default
+// state (no entry yet) is `it.isLast`: only the cards belonging to the most
+// recent chat message/comment start expanded, everything older starts
+// collapsed — reviewer request, "zo kan ik blokken langslopen … maar oudere
+// mogen ingeklapt zijn". `isPreviewExpanded`/`toggleCodePreviewExpanded` are
+// the only things touching it; CodePreview.mjs never reads `cp` directly
+// (mirrors the rest of this split, see the header comment in
+// CodePreview.mjs).
+function isPreviewExpanded(it) {
+  return it.key in cp.expandedOverride ? cp.expandedOverride[it.key] : it.isLast
+}
+export function toggleCodePreviewExpanded(key) {
+  const it = cp.items.find((x) => x.key === key)
+  if (!it) return
+  // Reassign the whole map (never mutate it in place) — same "plain object,
+  // replaced wholesale" discipline as `cp.items` itself, so the reactive
+  // property-set notification (`Gt`, see arrowjs-pitfalls.md) reliably fires
+  // regardless of whether a nested plain object gets deep-proxied.
+  cp.expandedOverride = { ...cp.expandedOverride, [key]: !isPreviewExpanded(it) }
+  // The now-expanded pane mounts a fresh `[data-scroll-body]` host with
+  // nothing yet to measure it (mirrors the same call right after
+  // `cp.items` itself is reassigned, a few lines below).
+  refreshScrollHints()
+}
+// activeCodePreviewKey() — the fence key under the ↓/↑ cursor (cs.previewPos),
+// or null off it. home.mjs's Enter branch (isClaudeChatFocused() &&
+// cs.previewPos > 0) uses this to toggle that ONE card without importing `cp`
+// itself — home.mjs never reads this module's own state directly, same split
+// as everywhere else in this file.
+export function activeCodePreviewKey() {
+  const it = cp.items[cs.previewPos - 1]
+  return it ? it.key : null
+}
 
 // recomputeCodePreviews — the single place that turns "what's currently
 // rendered in the comment/Claude columns" into `cp.items`. Reads the fence
@@ -3965,18 +4033,29 @@ function recomputeCodePreviews() {
     : []
   const t = getCommentTarget()
   const currentCode = t && t.file && t.code ? t.code : null
+  // "belongs to the last answer" (reviewer request, see "Default-collapsed
+  // cards" below): compared by the fence's own nearest message/comment
+  // container element, not by index — a fence keeps its container across an
+  // unrelated re-render, an index wouldn't. `null` (no such ancestor at all)
+  // still compares equal to `null`, so a fence found with no ancestor at all
+  // is never wrongly hidden just because that ancestor lookup came up empty.
+  const containers = fences.map((el) => el.closest('[data-testid="claude-message"], [data-testid="comment-item"]'))
+  const lastContainer = containers.length ? containers[containers.length - 1] : undefined
   const next = fences.map((el, i) => {
     const code = el.dataset.fenceCode || ''
     const lang = el.dataset.fenceLang || ''
     const label = el.dataset.fenceLabel || 'Codeblok'
+    const context = el.dataset.fenceContext || ''
     const isPhp = !lang || lang.toLowerCase() === 'php'
     const suggestion = el.dataset.fenceSuggestion === 'true'
     return {
       key: 'fence:' + i,
-      title: lang ? label + ' · ' + lang.toUpperCase() : label,
+      title: label + titleDetail(code, lang),
+      context,
       lang,
       code,
       oldCode: suggestion && isPhp ? currentCode : null,
+      isLast: containers[i] === lastContainer,
     }
   })
   const unchanged =
@@ -3986,7 +4065,9 @@ function recomputeCodePreviews() {
         it.code === cp.items[i].code &&
         it.lang === cp.items[i].lang &&
         it.title === cp.items[i].title &&
-        it.oldCode === cp.items[i].oldCode,
+        it.context === cp.items[i].context &&
+        it.oldCode === cp.items[i].oldCode &&
+        it.isLast === cp.items[i].isLast,
     )
   if (!unchanged) {
     cp.items = next
@@ -4053,13 +4134,17 @@ export function CodePreviewPanel(commentTarget) {
   // The second argument is the keyboard cursor (cs.previewPos, only ever
   // non-zero while the chat itself owns the keyboard) — a getter per card, so
   // walking with ↓/↑ only re-applies that card's own class/data-active slots,
-  // see previewCard in CodePreview.mjs.
+  // see previewCard in CodePreview.mjs. The third is the collapse/expand
+  // state (isPreviewExpanded, above) — a getter too, per card, for the same
+  // reason: toggling ONE card must not re-key/re-Prism-highlight the rest.
   return html`<div class="contents">
     ${() =>
       cp.items.length
         ? codePreviewColumn(
             () => cp.items,
             (i) => cs.focus === 'claude' && cs.previewPos === i + 1,
+            (i) => isPreviewExpanded(cp.items[i]),
+            toggleCodePreviewExpanded,
           )
         : ''}
   </div>`

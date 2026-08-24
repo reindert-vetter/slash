@@ -38,6 +38,108 @@ import { html } from './vendor/arrow.js'
 import { highlightForLang, scrollHint } from './Block.mjs'
 import { updateScrollHints } from './scrollFade.mjs'
 
+// splitCodeByClasses(code) — best-effort split of a snippet into per-class
+// segments, so a code-preview pane can show WHICH class a piece of code
+// belongs to right above it (reviewer request, on top of the card-title
+// class name(s): "ook boven elke stukje code (als dat kan)"). Deliberately
+// conservative: returns `null` (no segments, render as one plain pane exactly
+// as before) unless it can attribute the WHOLE snippet unambiguously —
+// "don't guess" per the reviewer's own instruction. Returns an array of
+// `{ label, code }` covering the full snippet in order when it succeeds;
+// `label` is `null` for a leading/trailing chunk that isn't inside any class
+// (e.g. a `use` preamble).
+//
+// What this does NOT attempt, on purpose (falls back to `null`, i.e. no
+// per-segment labels, rather than a wrong one):
+// - A class with no matching closing `}` in the snippet (a truncated/partial
+//   body) — bails for the WHOLE snippet, never a partial split.
+// - A `class` token found INSIDE a previous class's own `{ … }` region (a
+//   nested/anonymous class, or a trait/interface between two classes) is
+//   folded into that surrounding segment, not given its own label — the
+//   brace-depth scan below only looks for top-level declarations.
+// - PHP heredoc/nowdoc (`<<<EOT … EOT`) is not recognised, so a `{`/`}`
+//   inside one can throw off the depth count; the likely failure mode is an
+//   unbalanced count at end-of-snippet, which correctly bails to `null`
+//   rather than mis-segmenting.
+// - String literals are skipped char-by-char (single/double quotes, with
+//   `\`-escapes), so a `{`/`}` typed inside a string doesn't affect the count.
+function splitCodeByClasses(code) {
+  if (!code) return null
+  const declRe = /\bclass\s+([A-Za-z_][A-Za-z0-9_]*)\b[^{]*\{/g
+  const decls = []
+  let m
+  while ((m = declRe.exec(code))) {
+    decls.push({ name: m[1], declStart: m.index, braceStart: declRe.lastIndex - 1 })
+  }
+  if (decls.length < 2) return null // one (or zero) class: the title already names it, nothing to add here
+  const segments = []
+  let cursor = 0
+  for (const { name, declStart, braceStart } of decls) {
+    if (declStart < cursor) return null // this decl sits inside the previous segment we already claimed — ambiguous, bail entirely
+    let depth = 0
+    let j = braceStart
+    let inStr = null
+    for (; j < code.length; j++) {
+      const ch = code[j]
+      if (inStr) {
+        if (ch === '\\') {
+          j++
+          continue
+        }
+        if (ch === inStr) inStr = null
+        continue
+      }
+      if (ch === '"' || ch === "'") {
+        inStr = ch
+        continue
+      }
+      if (ch === '{') depth++
+      else if (ch === '}') {
+        depth--
+        if (depth === 0) break
+      }
+    }
+    if (depth !== 0) return null // no matching close brace found — truncated/partial snippet, don't guess
+    if (declStart > cursor) segments.push({ label: null, code: code.slice(cursor, declStart) })
+    segments.push({ label: name, code: code.slice(declStart, j + 1) })
+    cursor = j + 1
+  }
+  if (cursor < code.length) segments.push({ label: null, code: code.slice(cursor) })
+  return segments
+}
+
+function highlightedPre(code, lang) {
+  return html`<pre
+    class="no-scrollbar code m-0 max-h-[40vh] overflow-auto p-2 text-xs leading-relaxed"
+    data-scroll-body
+    @scroll="${(e) => updateScrollHints(e.target)}"
+  ><code class="language-php" .innerHTML="${() => highlightForLang(code, lang)}"></code></pre>`
+}
+
+// segmentBlock — one class-labelled (or label-less) chunk of a multi-class
+// snippet. A STABLE `<div class="contents">` root (never itself the whole
+// toggling body) with the label as a nested `${() => ...}` function binding —
+// both per the "Never key a template whose entire body is one toggling
+// expression" / "A statically interpolated template↔string slot leaks the
+// template function as text" pitfalls in arrowjs-pitfalls.md: this template
+// SHAPE is reused across every segment of every pane, in some instances with
+// a label and in some without, so a bare `cond ? html\`…\` : ''` here (no
+// `()=>`) risks exactly the chunk-reuse corruption those entries describe.
+function segmentBlock(seg, lang) {
+  return html`<div class="contents">
+    ${() =>
+      seg.label
+        ? html`<div
+            class="px-2 py-0.5 text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-500/10 border-b border-indigo-100 dark:border-indigo-500/20"
+            data-testid="code-preview-class-label"
+          >
+            class ${seg.label}
+          </div>`
+        : ''}
+    ${highlightedPre(seg.code, lang)}
+  </div>`
+}
+
 function pane(titleText, code, lang) {
   // The scrollbar is hidden (`no-scrollbar`, reviewer request) and replaced
   // by the same green up/down `scrollHint` chevron pair Block.mjs's diff
@@ -45,6 +147,22 @@ function pane(titleText, code, lang) {
   // discover the cap instead of a visible native scrollbar. The outer `<div>`
   // (not the `<pre>` itself) is the `relative` host the two hints anchor to,
   // same wrapper/scroller split as everywhere else this pattern is used.
+  //
+  // A snippet spanning 2+ classes gets a small sub-header naming each class
+  // directly above its own segment, stacked inside this SAME bordered pane
+  // (no extra card) — see splitCodeByClasses' own doc comment for exactly
+  // when this does/doesn't apply. Each `data-scroll-body` still scrolls (and
+  // gets scroll hints) independently, same as a single-segment pane.
+  //
+  // The body slot is ALWAYS a keyed array (one entry when there are no
+  // segments, N when there are) — never a single element in one case and an
+  // array in another, per the "single↔array slot freezes" pitfall in
+  // arrowjs-pitfalls.md: this same `pane()` call site renders both shapes
+  // across different fences.
+  const segments = splitCodeByClasses(code)
+  const body = segments
+    ? segments.map((seg, i) => segmentBlock(seg, lang).key('seg-' + i))
+    : [highlightedPre(code, lang).key('single')]
   return html`
     <div class="relative rounded border border-slate-200 dark:border-zinc-700 overflow-hidden">
       <div
@@ -52,11 +170,7 @@ function pane(titleText, code, lang) {
       >
         ${titleText}
       </div>
-      <pre
-        class="no-scrollbar code m-0 max-h-[40vh] overflow-auto p-2 text-xs leading-relaxed"
-        data-scroll-body
-        @scroll="${(e) => updateScrollHints(e.target)}"
-      ><code class="language-php" .innerHTML="${() => highlightForLang(code, lang)}"></code></pre>
+      ${body}
       ${scrollHint('up')}
       ${scrollHint('down')}
     </div>
@@ -83,7 +197,16 @@ function pane(titleText, code, lang) {
 // border/ring pair as every other selected card in this file
 // (`related-item`), plus a leading ▸ glyph on the title so the state is
 // carried by a SHAPE, not only by colour (colourblind rule).
-function previewCard(it, active) {
+//
+// `expanded` is the same kind of getter, backed by RelatedPanel.mjs's
+// `cp.expandedOverride` (default: only the last answer's own cards start
+// expanded, see its own doc comment there) — reviewer request, "blokken die
+// niet bij de laatste antwoord horen, ingeklapt … maar uitklappen door er
+// Enter op te drukken". `onToggle(key)` is `toggleCodePreviewExpanded`
+// itself, called both by `Enter` (home.mjs, on the active card) and by this
+// card's own toggle button — mouse-navigation.md's "a click runs the same
+// function a key runs".
+function previewCard(it, active, expanded, onToggle) {
   return html`
     <div
       class="${() =>
@@ -93,13 +216,42 @@ function previewCard(it, active) {
           : 'border-slate-300 dark:border-zinc-700 ring-1 ring-black/5')}"
       data-testid="code-preview-card"
       data-active="${() => (active() ? 'true' : 'false')}"
+      data-expanded="${() => (expanded() ? 'true' : 'false')}"
     >
       <span class="truncate text-[11px] font-medium text-slate-500 dark:text-zinc-500" data-testid="code-preview-title">
         ${() => (active() ? '▸ ' : '')}${it.title}
       </span>
+      ${() =>
+        it.context
+          ? html`<span
+              class="truncate text-[11px] text-slate-400 dark:text-zinc-500"
+              data-testid="code-preview-context"
+            >
+              over: ${it.context}
+            </span>`
+          : ''}
+      <button
+        type="button"
+        data-testid="code-preview-toggle"
+        @click="${(e) => {
+          // stopPropagation FIRST, before the toggle mutates the reactive
+          // state this very button's own ancestor re-renders off — see the
+          // nested-@click ordering rule in arrowjs-pitfalls.md.
+          if (e && e.stopPropagation) e.stopPropagation()
+          onToggle(it.key)
+        }}"
+        class="self-start text-[11px] font-medium text-indigo-600 dark:text-indigo-400 hover:underline"
+      >
+        ${() => (expanded() ? 'Inklappen' : 'uitklappen (Enter)')}
+      </button>
       <div class="flex flex-col gap-2" data-testid="code-preview-body">
-        ${() => (it.oldCode != null ? pane('Huidig (PR)', it.oldCode, it.lang) : '')}
-        ${() => pane(it.oldCode != null ? 'Voorgesteld (chat)' : 'Codeblok', it.code, it.lang)}
+        ${() =>
+          expanded()
+            ? [
+                it.oldCode != null ? pane('Huidig (PR)', it.oldCode, it.lang).key('old') : '',
+                pane(it.oldCode != null ? 'Voorgesteld (chat)' : 'Codeblok', it.code, it.lang).key('new'),
+              ].filter(Boolean)
+            : []}
       </div>
     </div>
   `.key(it.key)
@@ -116,12 +268,14 @@ function previewCard(it, active) {
 // `isActive(i)` answers "does the keyboard cursor sit on the i-th card"
 // (RelatedPanel.mjs's cs.previewPos, reached with ↓ from the bottom of the
 // Claude chat — see "↓ walks the chat's own code blocks" in
-// claude-chat-panel.md). Defaulted so a future caller that has no cursor of
-// its own can keep passing one argument.
-export function codePreviewColumn(getItems, isActive = () => false) {
+// claude-chat-panel.md). `isExpanded(i)`/`onToggle` back the collapse state
+// above (RelatedPanel.mjs's `isPreviewExpanded`/`toggleCodePreviewExpanded`).
+// All defaulted so a future caller with no cursor/collapse state of its own
+// can keep passing fewer arguments.
+export function codePreviewColumn(getItems, isActive = () => false, isExpanded = () => true, onToggle = () => {}) {
   return html`
     <div class="flex w-full shrink-0 flex-col gap-3" data-testid="code-preview-column">
-      ${() => getItems().map((it, i) => previewCard(it, () => isActive(i)))}
+      ${() => getItems().map((it, i) => previewCard(it, () => isActive(i), () => isExpanded(i), onToggle))}
     </div>
   `
 }

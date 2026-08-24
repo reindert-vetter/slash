@@ -109,7 +109,9 @@ function fenceLabel(counter, isSuggestion) {
 // `data-fence-index`/`data-fence-suggestion`/`data-fence-truncated`, plus
 // `data-fence-label` — the very same "Codeblok N"/"Suggestie N" text the
 // header shows (`fenceLabel`), so the preview card below can carry the exact
-// name the reviewer reads on the bubble instead of inventing a second one.
+// name the reviewer reads on the bubble instead of inventing a second one —
+// and `data-fence-context` (`fenceContext`, below), a short snippet of the
+// chat text that sat directly above this fence, omitted when there was none.
 // That is
 // the data source `RelatedPanel.mjs`'s `recomputeCodePreviews` reads off the
 // DOM for every fence currently rendered in the comment/Claude columns — this
@@ -129,12 +131,48 @@ function fenceLabel(counter, isSuggestion) {
 // a reviewer sees a couple of lines' worth of context, never the full block.
 const INLINE_MAX_LINES = 3
 
+// fenceContext(raw) — a short snippet of the chat text that sat directly
+// above a fence, for the code-preview card's title (CodePreview.mjs, see
+// "A full-size code-preview column" in .claude/docs/claude-chat-panel.md):
+// the reviewer asked to see "wat voor tekst erboven stond in de chat" while
+// walking the cards, so each card can say what it was about. Only the LAST
+// paragraph of the preceding text is used (split on a blank line) — with 2+
+// fences in one message, each gets just the paragraph directly above it,
+// not the whole message repeated. A few common Markdown decorations
+// (heading `#`, a bullet `-`/`*`, `**`/`` ` ``) are stripped since this is a
+// plain-text hint, not rendered Markdown, and whitespace/newlines collapse to
+// single spaces. Capped at ~80 chars with an ellipsis so the card title stays
+// one short line — the full comment/message text is already visible above
+// the fence in the comment/Claude column itself.
+const FENCE_CONTEXT_MAX = 80
+function fenceContext(raw) {
+  let t = String(raw || '').trim()
+  if (!t) return ''
+  const paragraphs = t.split(/\n\s*\n/)
+  t = paragraphs[paragraphs.length - 1].trim()
+  t = t
+    .replace(/^#{1,6}\s+/, '')
+    .replace(/^[-*+]\s+/, '')
+    .replace(/\*\*/g, '')
+    .replace(/`/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!t) return ''
+  return t.length > FENCE_CONTEXT_MAX ? t.slice(0, FENCE_CONTEXT_MAX - 1).trimEnd() + '…' : t
+}
+
 function extractCodeFences(text, store, startIndex, truncate) {
   let counter = startIndex
-  return text.replace(CODE_FENCE_RE, (m, lang, code) => {
+  // lastEnd tracks where the PREVIOUS fence (or the start of `text`) ended,
+  // so `fenceContext` below sees only the text between two fences, never text
+  // already attributed to an earlier one — see its own doc comment.
+  let lastEnd = 0
+  return text.replace(CODE_FENCE_RE, (m, lang, code, offset) => {
     counter += 1
     const rawLang = String(lang || '').trim()
     const suggestion = isSuggestionLang(rawLang)
+    const context = fenceContext(text.slice(lastEnd, offset))
+    lastEnd = offset + m.length
     // `truncate` (comment/Claude-chat bodies only, see renderMarkdown's own
     // doc comment) caps the INLINE rendering to a couple of lines — the full
     // code is already shown in full size in the code-preview card stacked
@@ -165,6 +203,7 @@ function extractCodeFences(text, store, startIndex, truncate) {
       `<div class="${wrapperCls}" data-testid="code-fence" data-fence-index="${counter}"` +
       `${suggestion ? ' data-fence-suggestion="true"' : ''}${langWord ? ` data-fence-lang="${escapeHtml(langWord)}"` : ''}` +
       `${isLong ? ' data-fence-truncated="true"' : ''} data-fence-label="${escapeHtml(label)}"` +
+      `${context ? ` data-fence-context="${escapeHtml(context)}"` : ''}` +
       ` data-fence-code="${escapeHtml(code)}">` +
       `<div class="${headerCls}"><span class="flex items-center">${escapeHtml(label)}` +
       (langWord ? `<span class="ml-2 uppercase tracking-wide">${escapeHtml(langWord)}</span>` : '') +
