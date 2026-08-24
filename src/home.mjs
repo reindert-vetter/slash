@@ -11,6 +11,8 @@ import BlockList, {
   toggleBatchChecked,
 } from './BlockList.mjs'
 import { isBatchEligible, startCommentBatch } from './commentBatch.mjs'
+import { testRun, syncTestRun, startTestRun, cancelTestRun, hasTestRunActivity, TEST_RUN_STATE_LABEL } from './testRun.mjs'
+import { claudeStatusText } from './ClaudeChat.mjs'
 import Footer, { footerBoxPx } from './Footer.mjs'
 import ProgressBar, { PROGRESS_BAR_PX } from './ProgressBar.mjs'
 import TopLoadingBar from './TopLoadingBar.mjs'
@@ -2486,6 +2488,10 @@ async function loadBlocks() {
   // open with no sel at all — and only if nothing already moved the selection
   // in the meantime — land on the first not-yet-approved item instead
   // (applyDefaultUnapprovedSelection) — see its own doc comment below.
+  // The test run's volatile snapshot rides along on the same PR (one read +
+  // the SSE push, no poll of its own — see testRun.mjs), same shape as
+  // syncCommentBatch's own call site (RelatedPanel.mjs's syncComments).
+  syncTestRun(state.pr)
   await Promise.all([loadApprovals(), loadBlockStats(), loadIgnoredComments(), ensureAutoWarn()])
   // state.blockTotals only lands here (loadBlockStats), after the FIRST
   // recomputeLeftList() call above already ran without it — re-run so a
@@ -11415,6 +11421,23 @@ const PR_COMMANDS = withClose([
     },
   },
   {
+    id: 'pr-test-run',
+    // "Tests laten draaien" (test_run.go): Claude itself decides which
+    // existing tests are relevant to this PR and runs only those — no
+    // selection step here, unlike "Comments laten verwerken" (batchActionRow)
+    // which needs the reviewer's confirmed comment ids first. Deliberately a
+    // `/`-menu item, not its own bottom action row (reviewer decision: the
+    // sidebar is busy enough) — progress renders in prInfoCard's status
+    // block instead (testRunStatusBlock, testRun.mjs). No confirm step, same
+    // reasoning as the batch action row: nothing here can change code (no
+    // Edit tool at all), so there's nothing destructive to confirm.
+    label: () => (testRun.running ? 'Testrun loopt al…' : 'Tests laten draaien'),
+    hint: 'test',
+    run: () => {
+      if (!testRun.running) startTestRun(state.pr)
+    },
+  },
+  {
     id: 'pr-retract-all-approvals',
     // Bulk-clears every approval in the whole PR in one action (reviewer
     // request). A submenu with a single confirm row rather than a direct
@@ -13977,6 +14000,74 @@ function checkoutChipCls() {
 // (never a bare `${() => cond ? A : B}` as a template's entire body) per the
 // arrow.js pitfall of a keyed/toggling template corrupting a neighbouring
 // binding — see .claude/rules/arrowjs-pitfalls.md, stepChevronSlot's own fix.
+// testRunStatusLine — the one status line for a running/just-finished test
+// run, mirroring claudeStatusText's own phase/tool wording (ClaudeChat.mjs) so
+// the reviewer reads the same vocabulary everywhere Claude is doing agentic
+// work. Word carries the meaning, never a colour alone (colourblind rule).
+function testRunStatusLine() {
+  if (testRun.error) return 'Kon geen tests draaien: ' + testRun.error
+  if (testRun.cancelled) return 'Afgebroken op jouw verzoek.'
+  if (testRun.running) return claudeStatusText({ running: true, phase: testRun.phase, tool: testRun.tool, detail: testRun.detail }, 0)
+  return 'Klaar — ' + testRun.passed + ' geslaagd, ' + testRun.failed + ' mislukt.'
+}
+
+// testRunStatusBlock — the PR-wide "Tests laten draaien" status card in
+// prInfoCard, below the ordinary GitHub status pills. Only rendered at all
+// while hasTestRunActivity() (testRun.mjs) — the card never occupies space
+// for a PR that never ran a test_run. A dedicated bottom action row was
+// deliberately rejected (reviewer decision: the sidebar is busy enough) —
+// this is a `/`-menu action (PR_COMMANDS' "Tests laten draaien") instead, and
+// its progress renders here, next to the other PR-wide status/toggle rows.
+function testRunStatusBlock() {
+  return html`
+    <div
+      class="mt-2 shrink-0 rounded-lg bg-slate-50 dark:bg-zinc-800/60 ring-1 ring-slate-200 dark:ring-zinc-700 p-2.5"
+      data-testid="test-run-status"
+    >
+      <div class="mb-1 flex items-center justify-between">
+        <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500">Tests</span>
+        <span class="contents">${() =>
+          testRun.running
+            ? html`<button
+                type="button"
+                data-testid="test-run-stop"
+                title="Stop deze testrun"
+                class="rounded px-1.5 py-0.5 text-[11px] font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-500/10"
+                @click="${() => cancelTestRun(state.pr)}"
+              >
+                Stop
+              </button>`
+            : ''}</span>
+      </div>
+      ${() => (testRun.plan ? html`<p class="mb-1 text-[12px] italic text-slate-500 dark:text-zinc-400">${testRun.plan}</p>` : '')}
+      <p class="text-[12.5px] text-slate-700 dark:text-zinc-300" data-testid="test-run-status-line">${() => testRunStatusLine()}</p>
+      ${() =>
+        testRun.items.length
+          ? html`<ul class="mt-1.5 max-h-32 space-y-0.5 overflow-y-auto text-[12px]" data-testid="test-run-items">
+              ${testRun.items.map(
+                (it) =>
+                  html`<li class="flex items-center gap-1.5" data-testid="test-run-item">
+                    <span
+                      class="${'shrink-0 font-medium ' +
+                      (it.state === 'pass'
+                        ? 'text-emerald-600 dark:text-emerald-400'
+                        : it.state === 'fail'
+                          ? 'text-rose-600 dark:text-rose-400'
+                          : it.state === 'interrupted'
+                            ? 'text-amber-600 dark:text-amber-400'
+                            : 'text-sky-600 dark:text-sky-400')}"
+                      >${TEST_RUN_STATE_LABEL[it.state] || it.state}</span
+                    >
+                    <span class="truncate text-slate-600 dark:text-zinc-400" title="${it.name}">${it.name}</span>
+                    ${it.note ? html`<span class="truncate text-slate-400 dark:text-zinc-500">— ${it.note}</span>` : ''}
+                  </li>`.key(it.name),
+              )}
+            </ul>`
+          : ''}
+    </div>
+  `
+}
+
 function checkoutChip() {
   return html`
     <button
@@ -14196,6 +14287,7 @@ function prInfoCard(state) {
       >
         ${() => prStatusSlot(state.prMeta)}
       </div>
+      <div class="contents">${() => (hasTestRunActivity() ? testRunStatusBlock() : '')}</div>
     </div>
   `
 }
