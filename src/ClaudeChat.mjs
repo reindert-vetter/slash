@@ -904,8 +904,8 @@ export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly) {
         ${() => claudePartialBubble(view)}
         ${() => claudeQueuedBubbles(view)}
         </div>
-        ${scrollHint('up')}
-        ${scrollHint('down')}
+        ${scrollHint('up', true)}
+        ${scrollHint('down', true)}
         <div class="contents">
           ${() =>
             view.claudePos() === 0 && !view.pinned()

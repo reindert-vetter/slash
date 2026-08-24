@@ -828,6 +828,56 @@ turn's own (fast, canned) lifecycle — asserting the OTHER conversation's row
 fetches and shows the first sentence of the real message actually sent, not
 the old fallback.
 
+### ↑/↓ walk a tall bubble 10 rendered lines at a time, before stepping to the next one
+
+Reviewer request: the thread is deliberately not tall (`max-h-[38vh]`), which
+is fine, but a single long Claude answer (one bubble — e.g. a big bulleted
+explanation, see the reported screenshot) used to be an all-or-nothing jump:
+`cs.claudePos`'s own ↑/↓ only ever steps a WHOLE bubble, so reading through a
+long one required scrolling by hand with the mouse.
+
+**`scrollClaudeMessageWithinBubble(dir)`** (`RelatedPanel.mjs`) is called from
+`handleRelatedKey`'s ordinary `'claude'` `ArrowUp`/`ArrowDown` branch, BEFORE
+it changes `cs.claudePos`/`cs.claudeOptionSel` — only while `cs.claudePos >=
+1` (there is an actually-selected turn; the rest position/options rung is
+untouched). It resolves the DOM node of the CURRENTLY active bubble
+(`activeClaudeBubbleEl`, mirrors `scrollClaudeMessageIntoView`'s own index
+math: `cc.messages.length - cs.claudePos`) and, if that bubble's own edge in
+the requested direction is not yet visible inside `claude-chat-thread` (its
+top for `'up'`, its bottom for `'down'`), scrolls the thread by
+`CLAUDE_BUBBLE_SCROLL_LINES` (10) times the bubble's own computed
+`line-height` — **10 rendered/word-wrapped lines as they sit on screen**,
+not literal `\n` characters in the markdown. Returns `true` (the keypress is
+consumed, `cs.claudePos` stays put) the moment it actually scrolled; `false`
+the instant the requested edge is already visible, at which point the
+ordinary per-bubble step (`cs.claudePos +/- 1`) takes back over exactly as
+before — so a short bubble that already fits entirely keeps behaving exactly
+like before this change, and once a tall bubble has been scrolled all the way
+to its own top/bottom, the very next ↑/↓ steps onto the older/newer bubble as
+usual. Symmetric in both directions (explicit reviewer answer — not only
+↑, which is all the request literally named). Applies only to `'claude'`'s
+own transcript; `'thread'`'s reaction walk (`cs.threadPos`) is unaffected —
+not asked, and reaction bubbles are typically short.
+
+### The `claude-chat-thread`/`comment-thread`/`comment-detail-thread` top (and bottom) fade got taller
+
+Reviewer follow-up on the same screenshot ("top heeft nog veel ruimte, blur
+kan verder omhoog"): these three panes sit in a card with real unused
+vertical room above their first rendered line, and `scrollHint`'s default
+`h-7` fade (`Block.mjs`) read as an abrupt little bar rather than a real fade
+into that space. `scrollHint(dir, tall)` gained an optional second argument —
+`tall` swaps `h-7` for `h-16` — passed `true` at exactly these three call
+sites (`ClaudeChat.mjs`'s `claude-chat-thread`, `RelatedPanel.mjs`'s
+`comment-thread` and `comment-detail-thread`), both the `'up'` and `'down'`
+hint for each (symmetry, not asked against but no reason to leave the bottom
+one small). The DIFF panes (every other `scrollHint` call site in `Block.mjs`,
+plus `Footer.mjs`'s own) are untouched — they sit flush against their pane
+header/edge with no such spare room, and widening them was never asked for.
+Purely a `class` change: `updateScrollHints`/`updateHints` already position
+each hint off the SCROLLER's own measured edge (`top`/`bottom` inline
+styles), never off this static height, so no positioning logic needed to
+change.
+
 ### At most ONE code-generating turn at a time (`chat_write_gate.go`)
 
 Also the reviewer's decision: *"Voor vragen, geen limit, voor het genereren van

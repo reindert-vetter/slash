@@ -3042,6 +3042,58 @@ function scrollClaudeMessageIntoView0Options() {
   })
 }
 
+// CLAUDE_BUBBLE_SCROLL_LINES — reviewer request: "de chat venster is niet
+// heel hoog... als ik naar boven ga, wil ik per 10 line breaks naar boven
+// kunnen drukken" (corrected from an initial "4" to 10 in the same
+// conversation). A long Claude answer is often a SINGLE bubble taller than
+// the `max-h-[38vh]` thread (see the huge bulleted list in the reported
+// screenshot), so before this, ↑/↓ on cs.claudePos could only ever jump a
+// WHOLE bubble at a time — reading it required scrolling by hand with the
+// mouse. "10 regels" means 10 rendered/word-wrapped lines as they sit on
+// screen, not literal `\n` characters — measured off the bubble's own
+// computed line-height.
+const CLAUDE_BUBBLE_SCROLL_LINES = 10
+
+// activeClaudeBubbleEl resolves the DOM node of the bubble cs.claudePos
+// currently points at (the one claudeBubble() renders with `active: true`),
+// or null at the rest position (cs.claudePos === 0, no turn selected — see
+// claudeBubble's own `active = claudePos() === total - i`). Mirrors
+// scrollClaudeMessageIntoView's own index math.
+function activeClaudeBubbleEl() {
+  if (cs.claudePos < 1) return null
+  const j = cc.messages.length - cs.claudePos
+  return document.querySelectorAll('[data-testid=claude-message]')[j] || null
+}
+
+// scrollClaudeMessageWithinBubble scrolls the transcript scroller by
+// CLAUDE_BUBBLE_SCROLL_LINES lines of the ACTIVE bubble's own text, in `dir`
+// ('up' walks earlier text, 'down' walks later text) — called from
+// handleRelatedKey BEFORE it steps cs.claudePos onto a different bubble, so a
+// long bubble is read through 10 lines at a time first. Returns true once it
+// actually moved the scroller (the caller then skips its own cs.claudePos
+// step for this keypress); false the moment the requested edge of the
+// bubble is already visible (its own top for 'up', its own bottom for
+// 'down') — the ordinary per-bubble step then takes back over exactly where
+// it always did. A short bubble that already fits entirely in the thread
+// (the common case, unchanged behaviour) always returns false immediately.
+function scrollClaudeMessageWithinBubble(dir) {
+  const el = activeClaudeBubbleEl()
+  const scroller = el && verticalScroller(el)
+  if (!el || !scroller) return false
+  const eRect = el.getBoundingClientRect()
+  const sRect = scroller.getBoundingClientRect()
+  const lineHeight = parseFloat(getComputedStyle(el).lineHeight) || 18
+  const delta = lineHeight * CLAUDE_BUBBLE_SCROLL_LINES
+  if (dir === 'up') {
+    if (eRect.top >= sRect.top - 0.5) return false
+    scroller.scrollTop = Math.max(0, scroller.scrollTop - delta)
+    return true
+  }
+  if (eRect.bottom <= sRect.bottom + 0.5) return false
+  scroller.scrollTop = scroller.scrollTop + delta
+  return true
+}
+
 // scrollClaudeThreadToBottom keeps the newest turn in view while the
 // reviewer sits at the rest position (cs.claudePos === 0) AND hasn't
 // scrolled the pane itself away from the bottom by hand (cs.claudePinned,
@@ -4316,7 +4368,12 @@ function applyRelRestore() {
 //    level further, into the embedded Claude conversation attached to this
 //    same comment thread ('claude', see enterClaudeChat).
 //  - the embedded Claude conversation ('claude') — ↑/↓ walk older/newer
-//    turns exactly like 'thread' does (its own claudePos cursor). When the
+//    turns exactly like 'thread' does (its own claudePos cursor). Before
+//    stepping onto a DIFFERENT bubble, ↑/↓ first scroll the CURRENTLY active
+//    one by 10 rendered lines in that direction if it is taller than the
+//    thread's own viewport (scrollClaudeMessageWithinBubble) — otherwise a
+//    single long answer was only ever readable a whole bubble at a time. When
+//    the
 //    NEWEST turn is a still-open, unanswered question with clickable options
 //    (pendingClaudeQuestion()), that cursor grows one extra rung: composer
 //    (claudePos 0, claudeOptionSel 0) → the question's own options, bottom to
@@ -4405,6 +4462,11 @@ export function handleRelatedKey(key) {
       return 'advance'
     }
     if (key === 'ArrowUp') {
+      // Read a tall active bubble 10 lines at a time before stepping onto an
+      // OLDER one — see scrollClaudeMessageWithinBubble's own doc comment.
+      // Never intervenes at the rest position (cs.claudePos === 0, no active
+      // bubble at all) or while walking the question options.
+      if (cs.claudePos >= 1 && scrollClaudeMessageWithinBubble('up')) return true
       const q = cs.claudePos === 0 ? pendingClaudeQuestion() : null
       if (q) {
         if (cs.claudeOptionSel < q.options.length) {
@@ -4421,6 +4483,9 @@ export function handleRelatedKey(key) {
       }
       focusClaudeComposer()
     } else if (key === 'ArrowDown') {
+      // Symmetric to the ArrowUp case above — walk a tall active bubble's own
+      // later text 10 lines at a time before stepping onto a NEWER one.
+      if (cs.claudePos >= 1 && scrollClaudeMessageWithinBubble('down')) return true
       if (cs.claudePos === 0 && cs.claudeOptionSel > 0) {
         // Walking the options back down, toward the composer.
         cs.claudeOptionSel -= 1
@@ -7038,8 +7103,8 @@ function expandedConversation(c, openCommentMenu, readOnly) {
           ${() =>
             threadMessages(c).map((r, i, arr) => reactionBubble(c, r, i, arr.length, undefined, false, readOnly).key('msg:' + r.id))}
         </div>
-        ${scrollHint('up')}
-        ${scrollHint('down')}
+        ${scrollHint('up', true)}
+        ${scrollHint('down', true)}
         <div class="contents">
           ${() =>
             cs.threadPos === 0 && !cs.threadPinned
@@ -9671,8 +9736,8 @@ export function commentDetailCard(c, opts) {
               ).key('detail-msg:' + r.id + ':' + (readOnly ? 'ro' : 'rw')),
             )}
         </div>
-        ${scrollHint('up')}
-        ${scrollHint('down')}
+        ${scrollHint('up', true)}
+        ${scrollHint('down', true)}
       </div>
       <div
         class="truncate border-t border-slate-100 pt-2.5 text-[11px] leading-snug text-slate-500 dark:border-zinc-800/60 dark:text-zinc-500"
