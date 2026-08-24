@@ -222,6 +222,32 @@ which have ever had a branch here either), it falls through untouched to the
 focused `command-input`, in every mode including a `native` right-click menu.
 Only `Enter` (no Shift) or a mouse click on a row runs a command.
 
+### The input field grows with its content
+
+`command-input` is a bare `rows="1"` `<textarea>` and does not grow with its
+content on its own — a long typed comment that wraps to a second line used to
+get cut off by the menu's own border instead of the field (and the menu card
+around it) growing taller. Fixed by calling the same shared
+`autoGrowTextarea(el)` (`textareaAutoGrow.mjs`, already used by every other
+composer textarea — the Claude chat composer, the new-comment composer, the
+inline-thread reply, the PR-wide reply) from `command-input`'s own `@input`
+handler in `CommandMenu.mjs`. `CommandMenu` is the single shared component
+behind every menu variant (comment/compose/PR-menu, and the `native`
+right-click context menu), so this fix applies to all of them at once — there
+is no separate per-variant input to patch.
+
+**Known limitation, deliberately left as-is:** `ms.query` is also reset to
+`''` **programmatically**, without going through this `@input` handler, when
+a submenu is entered or the reviewer backs out of one with Esc
+(`enterSubmenu`/the `Escape` branch in `home.mjs`'s `onKeydown`, both do
+`ms.query = ''` while the same `CommandMenu` instance — and its textarea —
+stays mounted). A JS-driven `.value` reset fires no `input` event, so the
+field's already-grown height does not shrink back down until the next
+keystroke; it just stays taller than its (now empty) content until then. Not
+the reported bug (which was about growing, not shrinking) and out of scope
+for a fix scoped to `CommandMenu.mjs` alone — noted here so a future session
+doesn't have to re-discover it.
+
 `positionMenu` anchors it just **below** the selection and gives it the width
 of the right (NEW) pane — half width, over the code you're reviewing:
 

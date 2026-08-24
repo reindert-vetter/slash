@@ -7,6 +7,7 @@
 // drives selection from the global keydown handler, so this stays generic.
 
 import { html, watch } from './vendor/arrow.js'
+import { autoGrowTextarea } from './textareaAutoGrow.mjs'
 
 // labelOf resolves a command's label, which may be a plain string or a function
 // (so a toggle command like approve can show a live label).
@@ -202,6 +203,12 @@ export default function CommandMenu(menu, resolve, onRun, opts = {}) {
           @input="${(e) => {
             menu.query = e.target.value
             menu.sel = 0
+            // A bare rows="1" textarea never grows with its content on its
+            // own — reviewer request: a long typed comment wrapping to a
+            // second line used to get cut off by the menu's own border
+            // instead of the field (and the menu) growing along. Shared with
+            // every other composer textarea, see textareaAutoGrow.mjs.
+            autoGrowTextarea(e.target)
           }}"
         ></textarea>
         <span
