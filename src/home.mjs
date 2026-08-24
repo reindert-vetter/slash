@@ -10531,6 +10531,10 @@ async function requestExplain(req) {
 function updateFooter() {
   computeFooterSnapshots()
   state.footerVisible = !!(state.footerUnit || state.footerExplain)
+  // A new unit/explanation can just as well change footer-diff's own scroll
+  // hints (a multi-row group at/near the FOOTER_MAX_PX cap, or a Shift-range
+  // with no row ceiling of its own) — see refreshHints' own comment.
+  refreshScrollHints()
 }
 
 function computeFooterSnapshots() {

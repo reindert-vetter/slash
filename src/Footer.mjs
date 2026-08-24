@@ -59,8 +59,9 @@
 // state.selected/gran/change read here could not.
 
 import { html } from './vendor/arrow.js'
-import { highlight, markChars, UNDERLINE_CLS } from './Block.mjs'
+import { highlight, markChars, UNDERLINE_CLS, scrollHint } from './Block.mjs'
 import { PROGRESS_BAR_PX } from './ProgressBar.mjs'
+import { updateScrollHints } from './scrollFade.mjs'
 
 // line builds the innerHTML for one footer diff line: a non-selectable +/- gutter
 // followed by the Prism-highlighted PHP, so it reads exactly like a row in the
@@ -176,40 +177,46 @@ export default function Footer(state) {
         >
           ${() => explainText(state)}
         </p>
-        <div
-          class="no-scrollbar min-h-0 flex-1 overflow-auto"
-          data-testid="footer-diff"
-        >
-          <code
-            class="language-php m-0 block font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300"
-            data-testid="code-diff"
-            .innerHTML="${() => {
-              const rows = state.footerUnit
-              if (!rows) return ''
-              // One row for a line/call unit (always single-row), one row per
-              // changed line for a multi-row group — same per-row del/ins markup
-              // as before, just looped over every row the active unit spans.
-              let s = ''
-              for (const r of rows) {
-                // Rebuild the underline Sets from the plain arrays the snapshot
-                // carries (see footerUnitInfo in home.mjs).
-                const ulLeft = r.ulLeft ? new Set(r.ulLeft) : null
-                const ulRight = r.ulRight ? new Set(r.ulRight) : null
-                // A long old/left or new/right line wraps in full (rather than
-                // requiring an invisible no-scrollbar horizontal scroll) so the
-                // reviewer sees the entire line — see the WIDE_AT comment above.
-                if (r.left !== null && r.left !== undefined) {
-                  const leftWrap = r.left.length > WIDE_AT ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'
-                  s += `<div class="block ${leftWrap} bg-rose-100 dark:bg-rose-500/20">${line('del', r.left, ulLeft)}</div>`
+        <div class="relative min-h-0 flex-1">
+          <div
+            class="no-scrollbar min-h-0 h-full overflow-auto"
+            data-testid="footer-diff"
+            data-scroll-body
+            @scroll="${(e) => updateScrollHints(e.target)}"
+          >
+            <code
+              class="language-php m-0 block font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300"
+              data-testid="code-diff"
+              .innerHTML="${() => {
+                const rows = state.footerUnit
+                if (!rows) return ''
+                // One row for a line/call unit (always single-row), one row per
+                // changed line for a multi-row group — same per-row del/ins markup
+                // as before, just looped over every row the active unit spans.
+                let s = ''
+                for (const r of rows) {
+                  // Rebuild the underline Sets from the plain arrays the snapshot
+                  // carries (see footerUnitInfo in home.mjs).
+                  const ulLeft = r.ulLeft ? new Set(r.ulLeft) : null
+                  const ulRight = r.ulRight ? new Set(r.ulRight) : null
+                  // A long old/left or new/right line wraps in full (rather than
+                  // requiring an invisible no-scrollbar horizontal scroll) so the
+                  // reviewer sees the entire line — see the WIDE_AT comment above.
+                  if (r.left !== null && r.left !== undefined) {
+                    const leftWrap = r.left.length > WIDE_AT ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'
+                    s += `<div class="block ${leftWrap} bg-rose-100 dark:bg-rose-500/20">${line('del', r.left, ulLeft)}</div>`
+                  }
+                  if (r.right !== null && r.right !== undefined) {
+                    const rightWrap = r.right.length > WIDE_AT ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'
+                    s += `<div class="block ${rightWrap} bg-emerald-100 dark:bg-emerald-500/20">${line('ins', r.right, ulRight)}</div>`
+                  }
                 }
-                if (r.right !== null && r.right !== undefined) {
-                  const rightWrap = r.right.length > WIDE_AT ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'
-                  s += `<div class="block ${rightWrap} bg-emerald-100 dark:bg-emerald-500/20">${line('ins', r.right, ulRight)}</div>`
-                }
-              }
-              return s
-            }}"
-          ></code>
+                return s
+              }}"
+            ></code>
+          </div>
+          ${scrollHint('up')}
+          ${scrollHint('down')}
         </div>
       </div>
     </footer>

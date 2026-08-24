@@ -141,7 +141,40 @@ navigable unit — `group` included, not just a 1-line `line`/`call`. A multi-li
 group shows one del/ins line pair per aligned row it spans (up to `MAX_GROUP`,
 5 — `Block.mjs`), stacked inside the scrollable `footer-diff` column
 (`no-scrollbar overflow-auto`). The bar grows with the row count up to
-`FOOTER_MAX_PX`; only past that ceiling does a long group scroll internally.
+`FOOTER_MAX_PX`; only past that ceiling does a long group scroll internally —
+and a Shift+↑/↓ range has no row ceiling of its own at all (see "The active
+unit already widens to a Shift+arrow range" below), so it can scroll
+internally well before an ordinary group would.
+
+**`footer-diff` gets the same green up/down `scrollHint` chevron pair
+Block.mjs's diff panes use, via `data-scroll-body` + `updateScrollHints`
+(`src/scrollFade.mjs`)** — the exact same reuse as the four containers
+documented in "A capped, fading thread" in `.claude/docs/comments-panel.md`.
+Unlike those four, `footer-diff` was already `no-scrollbar` from the start (no
+visible scrollbar to remove) — it simply never had ANY "there's more" cue at
+all until now, native scrollbar included. `home.mjs`'s `updateFooter()` calls
+`refreshScrollHints()` right after pushing a fresh `state.footerUnit`/
+`state.footerExplain` snapshot, mirroring `refreshHints()`'s own "cover the
+cases nothing scrolls" role for the diff panes. Test:
+`tests/footer-height-fits-content.spec.mjs`.
+
+**Does the footer ever cover the tail of another scrolling panel behind it?**
+Measured directly (real rendered rects, a 7-row group pushing the footer to
+its `FOOTER_MAX_PX` ceiling): `footer`'s own `top` lands EXACTLY on
+`app-columns`'/`block-column`'s/`comments-and-related`'s own `bottom` — to the
+pixel, every time. This isn't a coincidence to keep re-verifying: `AppColumns`
+(`home.mjs`) — the one `fixed` wrapper around `PrInfoPanel`/`<aside>`/`<main>`
+— sets its own `bottom` to `` bottom-[${footerBoxPx(state) + PROGRESS_BAR_PX}px] ``,
+the exact same `footerBoxPx(state)` the footer itself uses for its `height`
+(see "Height" above) — so every scrolling column inside that wrapper
+(`h-full overflow-y-auto`) structurally stops exactly where the footer begins,
+at ANY footer height, content-driven or not. A fixed margin would have been
+the wrong tool here (the footer's height genuinely varies); this shared
+`footerBoxPx` read is what makes a fixed margin unnecessary. The four
+scroll-hint containers above (`claude-chat-thread` etc.) scroll a second time
+further INSIDE `comments-and-related`, so they inherit this guarantee for
+free — they can never scroll past an ancestor box that itself never reaches
+the footer.
 
 It follows the **focused column and its cursor** — the top-level block
 (`state.gran`/`state.change`) at `focusLevel 0`, or a drilled column's own
