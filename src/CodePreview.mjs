@@ -35,19 +35,30 @@
 // `flex items-start` row with comment-claude-row, so nothing constrains its
 // width but its own content.
 import { html } from './vendor/arrow.js'
-import { highlightForLang } from './Block.mjs'
+import { highlightForLang, scrollHint } from './Block.mjs'
+import { updateScrollHints } from './scrollFade.mjs'
 
 function pane(titleText, code, lang) {
+  // The scrollbar is hidden (`no-scrollbar`, reviewer request) and replaced
+  // by the same green up/down `scrollHint` chevron pair Block.mjs's diff
+  // panes use — `data-scroll-body` + `updateScrollHints` (src/scrollFade.mjs)
+  // discover the cap instead of a visible native scrollbar. The outer `<div>`
+  // (not the `<pre>` itself) is the `relative` host the two hints anchor to,
+  // same wrapper/scroller split as everywhere else this pattern is used.
   return html`
-    <div class="rounded border border-slate-200 dark:border-zinc-700 overflow-hidden">
+    <div class="relative rounded border border-slate-200 dark:border-zinc-700 overflow-hidden">
       <div
         class="px-2 py-1 text-[11px] font-medium text-slate-500 dark:text-zinc-400 bg-slate-50 dark:bg-zinc-800/60 border-b border-slate-200 dark:border-zinc-700"
       >
         ${titleText}
       </div>
       <pre
-        class="code m-0 max-h-[40vh] overflow-auto p-2 text-xs leading-relaxed"
+        class="no-scrollbar code m-0 max-h-[40vh] overflow-auto p-2 text-xs leading-relaxed"
+        data-scroll-body
+        @scroll="${(e) => updateScrollHints(e.target)}"
       ><code class="language-php" .innerHTML="${() => highlightForLang(code, lang)}"></code></pre>
+      ${scrollHint('up')}
+      ${scrollHint('down')}
     </div>
   `
 }

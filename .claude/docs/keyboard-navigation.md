@@ -750,6 +750,23 @@ Test: `tests/block-description-stop.spec.mjs`.
   `.claude/docs/diff-render.md` for the `data-scrollsync`/`data-changed`/
   `data-change-active` wiring). Up vs. down is carried by the chevron's own
   shape, not colour, so it already works for a colourblind reviewer.
+  `updateHints` anchors each hint to the SCROLLABLE PANE's own measured edge
+  (`up.style.top`/`down.style.bottom`, computed from the pane's
+  `getBoundingClientRect()` against the wrapper's), never a static `top-0`/
+  `bottom-0` class — the wrapper (`data-testid=code-diff`) and the pane it
+  wraps are not always the same height (e.g. the diff floor's
+  viewport-relative `min-h-[45vh]`), so a static class could anchor to the
+  wrong edge and float mid-code. The exact same `scrollHint` component (now
+  exported) plus this measure-don't-assume positioning is reused, via
+  `src/scrollFade.mjs`'s `updateScrollHints`, by four more scrollable panes
+  that used to show a plain native scrollbar instead: `claude-chat-thread`
+  (`ClaudeChat.mjs`), `comment-thread`/`comment-detail-thread`
+  (`RelatedPanel.mjs`) and the standalone code-preview `pane()`
+  (`CodePreview.mjs`) — see "A capped, fading thread" in
+  `.claude/docs/comments-panel.md`. Those four answer "more above/below"
+  purely from `scrollTop`/`scrollHeight` (no "changed row" concept to track),
+  so `updateScrollHints` is a separate, smaller function rather than a
+  `Block.mjs`-import of the diff-specific `updateHints`.
 
 When stepping in (`→`), selection jumps to the **first changed line** (added,
 removed or modified); `state.change` is the index. Navigation units come from

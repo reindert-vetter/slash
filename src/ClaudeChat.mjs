@@ -21,7 +21,8 @@ import { html } from './vendor/arrow.js'
 import { avatarHTML } from './avatar.mjs'
 import { renderMarkdown, hardBreaks } from './markdown.mjs'
 import { autoGrowTextarea, resetTextareaHeight } from './textareaAutoGrow.mjs'
-import { updateScrollFade } from './scrollFade.mjs'
+import { updateScrollHints } from './scrollFade.mjs'
+import { scrollHint } from './Block.mjs'
 
 // Claude has no GitHub login/avatar of its own — a fixed, non-photo identity
 // (avatarHTML's own initials-circle fallback, since avatarUrl is empty). Kept
@@ -765,13 +766,17 @@ function claudeSendError(view) {
 // `max-h-[38vh] overflow-y-auto` caps that growth — a long conversation used
 // to stretch this whole column (and, via <main>'s align-items:stretch, the
 // merged comment-claude-row card and its sibling block-diff column too)
-// without bound. A VISIBLE native scrollbar (no `no-scrollbar` here, unlike
-// most other panels in this app) plus the `@scroll`-driven `.scroll-fade-top`
-// class (src/scrollFade.mjs) make the cap discoverable instead of silently
-// truncating. See "A capped, fading thread" in .claude/docs/comments-panel.md
-// (the comment-thread pane in RelatedPanel.mjs mirrors this exactly) and the
-// `scrollClaudeThreadToBottom` calls in RelatedPanel.mjs that keep the newest
-// turn in view at the rest position.
+// without bound. The native scrollbar is hidden (`no-scrollbar`, like most
+// other panels in this app) and replaced by the same green up/down
+// `scrollHint` chevron pair Block.mjs's diff panes use (reviewer request —
+// a visible scrollbar read as visual noise, but the cap still needs to be
+// discoverable) — `data-scroll-body` + `updateScrollHints` (src/scrollFade.mjs)
+// instead of the earlier `.scroll-fade-top` CSS mask, which only ever
+// covered "more above". See "A capped, fading thread" in
+// .claude/docs/comments-panel.md (the comment-thread pane in
+// RelatedPanel.mjs mirrors this exactly) and the `scrollClaudeThreadToBottom`
+// calls in RelatedPanel.mjs that keep the newest turn in view at the rest
+// position.
 //
 // That scroll container carries a 2px `p-0.5` for ONE reason: the selected
 // bubble's highlight is a Tailwind `ring-2` (claudeBubble below), and a ring
@@ -853,10 +858,11 @@ export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly) {
       </div>
       <div class="relative min-h-0 flex-1">
         <div
-          class="flex max-h-[38vh] min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-0.5"
+          class="no-scrollbar flex max-h-[38vh] min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-0.5"
           data-testid="claude-chat-thread"
+          data-scroll-body
           @scroll="${(e) => {
-            updateScrollFade(e.target)
+            updateScrollHints(e.target)
             callbacks.onThreadScroll(e.target)
           }}"
         >
@@ -898,6 +904,8 @@ export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly) {
         ${() => claudePartialBubble(view)}
         ${() => claudeQueuedBubbles(view)}
         </div>
+        ${scrollHint('up')}
+        ${scrollHint('down')}
         <div class="contents">
           ${() =>
             view.claudePos() === 0 && !view.pinned()

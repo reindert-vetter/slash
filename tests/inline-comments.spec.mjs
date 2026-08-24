@@ -308,14 +308,18 @@ test.describe('PR Review Tree — inline comment blocks', () => {
     // mirroring the Claude column's own scrollClaudeThreadToBottom.
     await expect(lastBubble).toBeInViewport()
 
-    // The top fade only appears once something is actually scrolled out of view
-    // above — it must not be a permanent, misleading cue.
-    await expect(thread).toHaveClass(/scroll-fade-top/)
+    // The up scroll hint (the green chevron, see scrollFade.mjs's
+    // updateScrollHints) only appears once something is actually scrolled
+    // out of view above — it must not be a permanent, misleading cue. No
+    // native scrollbar any more either (reviewer request).
+    await expect(thread).toHaveClass(/no-scrollbar/)
+    const upHint = item.locator('[data-hint="up"]')
+    await expect(upHint).toHaveCSS('opacity', '1')
     await thread.evaluate((el) => {
       el.scrollTop = 0
       el.dispatchEvent(new Event('scroll'))
     })
-    await expect(thread).not.toHaveClass(/scroll-fade-top/)
+    await expect(upHint).toHaveCSS('opacity', '0')
   })
 
   // compactConversation's preview used to hard-truncate at 1 line — fine for a

@@ -16,6 +16,7 @@ import { claudeStatusText } from './ClaudeChat.mjs'
 import Footer, { footerBoxPx } from './Footer.mjs'
 import ProgressBar, { PROGRESS_BAR_PX } from './ProgressBar.mjs'
 import TopLoadingBar from './TopLoadingBar.mjs'
+import { refreshScrollHints } from './scrollFade.mjs'
 import Block, {
   blockRows,
   changedRows,
@@ -6629,6 +6630,10 @@ function refreshHints() {
   requestAnimationFrame(() => {
     document.querySelectorAll('[data-testid="code-diff"]').forEach(updateHints)
   })
+  // Same "cover the cases nothing scrolls" role, for the comment/Claude-chat/
+  // code-preview scroll-hint hosts (src/scrollFade.mjs) — a code load or a
+  // resize can just as well change one of those, not only a diff.
+  refreshScrollHints()
 }
 
 window.addEventListener('resize', refreshHints)
@@ -6650,6 +6655,10 @@ function scrollSelectedIntoView() {
     )
     if (el) el.scrollIntoView({ block: 'nearest' })
   })
+  // A newly selected row can bring a fresh comment-detail-thread (a PR-wide
+  // comment index item) into the DOM with no other trigger to re-measure its
+  // scroll hints — see refreshHints' own comment.
+  refreshScrollHints()
 }
 
 // animateScrollTop tweens a scroll container's scrollTop to `to` over a short,

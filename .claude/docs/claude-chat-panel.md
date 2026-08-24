@@ -929,15 +929,17 @@ The "Embedded Claude conversation" section owns:
   vertical space a short/empty conversation leaves over, keeping the composer
   pinned to the bottom of the (`items-stretch`-driven, possibly taller) row
   instead of stranded right under the empty-state text — **and now also
-  `max-h-[38vh] overflow-y-auto`** (a VISIBLE scrollbar, `no-scrollbar` was
-  removed here) so a long conversation scrolls internally instead of
-  stretching this column — and, via `<main>`'s `align-items: stretch`, the
-  whole merged card and its sibling block-diff column — without bound. Same
-  cap, same reasoning, same `.scroll-fade-top` (`src/scrollFade.mjs`) top-fade
-  cue as the comment thread's own `comment-thread` pane — see "A capped,
-  fading thread" in `.claude/docs/comments-panel.md` for the full story
-  (including why this reverses, without repeating, an earlier `max-h-64
-  no-scrollbar` mistake). The composer row
+  `max-h-[38vh] overflow-y-auto`** so a long conversation scrolls internally
+  instead of stretching this column — and, via `<main>`'s `align-items:
+  stretch`, the whole merged card and its sibling block-diff column — without
+  bound. Same cap, same reasoning as the comment thread's own `comment-thread`
+  pane — see "A capped, fading thread" in `.claude/docs/comments-panel.md` for
+  the full story (including why this reverses, without repeating, an earlier
+  `max-h-64 no-scrollbar` mistake). The scrollbar itself is hidden again
+  (`no-scrollbar`, later reviewer request) and replaced by the same green
+  up/down `scrollHint` chevron pair Block.mjs's diff panes use
+  (`data-scroll-body` + `updateScrollHints`, `src/scrollFade.mjs`) — see that
+  same section in `comments-panel.md` for why. The composer row
   itself is `flex items-end gap-2` (textarea + "Stuur" side by side, the same
   pattern as the comment thread's own `reaction-compose`/`reaction-send`),
   not a stacked column with the button below the field. Width is
@@ -3349,11 +3351,11 @@ whole block, since it is fully duplicated in the preview card underneath.
   code is supposed to live).
 - **No "+N regels meer" text.** Explicitly rejected in favour of a purely
   visual cue: the last visible line fades to transparent via a `mask-image`
-  gradient (`code-fence-fade-bottom`, `index.html`, mirrors the existing
-  `.scroll-fade-top` pattern in `src/scrollFade.mjs` — same technique, bottom
-  instead of top, and a static class here rather than JS-toggled since a
-  truncated fence is truncated for its whole lifetime, nothing to react to).
-  This is a shape/mask signal, not colour-only, per the colourblind rule.
+  gradient (`code-fence-fade-bottom`, `index.html`) — a static class here
+  rather than JS-toggled (unlike `src/scrollFade.mjs`'s `updateScrollHints`
+  chevrons) since a truncated fence is truncated for its whole lifetime,
+  nothing to react to. This is a shape/mask signal, not colour-only, per the
+  colourblind rule.
   `isLong` also stamps `data-fence-truncated="true"` on the fence's wrapper
   `<div>` for tests/future tooling to key off, alongside the fade class on the
   `<pre>` itself.

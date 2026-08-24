@@ -2073,7 +2073,7 @@ function diffFloorCls(rowCount) {
 // switched on/off — and positioned right below the pane headers / above the
 // bottom edge — imperatively by updateHints on every scroll and refresh. It's
 // pointer-events-none so it never eats a scroll or click.
-function scrollHint(dir) {
+export function scrollHint(dir) {
   const down = dir === 'down'
   // A chevron pointing the way you can scroll. Static SVG string, fed through the
   // .innerHTML binding (arrow.js sets the property instead of escaping) — the

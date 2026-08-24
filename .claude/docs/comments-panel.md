@@ -1871,12 +1871,19 @@ attempt** — it deliberately does not repeat either mistake that attempt made:
   `max-h-full` bounded-by-`<main>` approach in `.claude/docs/detail-layout.md`
   and `column-resize.md`), not a small fixed pixel value that clips a
   perfectly ordinary conversation.
-- **A VISIBLE native scrollbar** — `overflow-y-auto`, deliberately without
-  `no-scrollbar` on this one container (every other scrollable panel in this
-  app hides its scrollbar chrome) — so the cap is discoverable instead of an
-  invisible truncation. `claude-chat-thread` (`ClaudeChat.mjs`) got the exact
-  same treatment (its own `no-scrollbar` was removed), for the identical
-  reason — a long Claude conversation stretched the row the same way.
+- **Superseded again (reviewer request):** a visible native scrollbar used to
+  be the discoverability cue here, deliberately without `no-scrollbar` on this
+  one container while every other scrollable panel in the app hides its
+  scrollbar chrome. That read as visual noise, so it's gone: `comment-thread`
+  now carries `no-scrollbar` like everywhere else, and the cap is discoverable
+  instead via the same green up/down `scrollHint` chevron pair Block.mjs's
+  diff panes use (`data-scroll-body` + `updateScrollHints`,
+  `src/scrollFade.mjs` — see "Two different chevrons" in
+  `.claude/docs/keyboard-navigation.md`). `claude-chat-thread`
+  (`ClaudeChat.mjs`) mirrors this exactly, and so do two more containers that
+  used to have the same visible-scrollbar treatment: `comment-detail-thread`
+  (the PR-comment-index detail card's own thread, `RelatedPanel.mjs`) and the
+  standalone code-preview `pane()` (`CodePreview.mjs`).
 - **The newest message still stays in view by default**, mirroring how the
   Claude column already behaved: `scrollCommentThreadToBottom()`
   (`RelatedPanel.mjs`, an exact mirror of `scrollClaudeThreadToBottom`) sets
@@ -1885,16 +1892,25 @@ attempt** — it deliberately does not repeat either mistake that attempt made:
   in a new reply on the currently-open thread. A no-op while walking older
   messages via `↑` (`cs.threadPos !== 0`) — that must never be yanked back
   down.
-- **A top fade, not a hard clip, as the "there's more above" cue**
-  (`src/scrollFade.mjs`'s `updateScrollFade`, toggling the `.scroll-fade-top`
-  mask-image class defined in `index.html`) — bound via `@scroll` on the
-  container, plus called directly after every programmatic `scrollTop` write
-  (a JS-driven scrollTop assignment isn't guaranteed to fire a native
-  `'scroll'` event in every browser). Deliberately **not** a permanently
-  applied fade: it only toggles on once `scrollTop > 4`, so a short
-  conversation that fits entirely inside the cap never shows it — the
-  earlier `no-scrollbar` mistake hid the fact that there was more to see at
-  all; this fade only ever appears when that is actually true.
+- **A chevron, not a hard clip or a fade, as the "there's more above/below"
+  cue** (`src/scrollFade.mjs`'s `updateScrollHints`, positioning + toggling the
+  opacity of the two `scrollHint('up')`/`scrollHint('down')` nodes) — bound
+  via `@scroll` on the container, plus called directly after every
+  programmatic `scrollTop` write (a JS-driven scrollTop assignment isn't
+  guaranteed to fire a native `'scroll'` event in every browser), and swept
+  for every scroll-hint host (`refreshScrollHints()`) after a fresh render
+  that nothing else scrolls (a newly selected row, a fresh set of
+  code-preview cards). Deliberately **not** permanently shown in either
+  direction: it only toggles on once there's genuinely something out of view
+  (`scrollTop > 4` resp. `scrollTop + clientHeight < scrollHeight - 4`), so a
+  short conversation that fits entirely inside the cap never shows either
+  chevron — the earlier `no-scrollbar`-with-no-cue mistake hid the fact that
+  there was more to see at all; a chevron only ever appears when that is
+  actually true. This module used to toggle a CSS top-fade
+  (`.scroll-fade-top`) instead — replaced because that approach only ever
+  covered "more above"; "more below" used to rely on the native scrollbar
+  itself being visible, which is exactly the thing this reviewer request
+  removed.
 - **Both containers carry a 2px `p-0.5`, and it is not decoration.** The
   selected bubble's highlight is a Tailwind **`ring-2`** (`reactionBubble`
   here, `claudeBubble` in `ClaudeChat.mjs`), and a ring paints **outside** the

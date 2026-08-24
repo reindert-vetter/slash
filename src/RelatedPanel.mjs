@@ -11,7 +11,7 @@
 
 import { html } from './vendor/arrow.js'
 import { reactive, watch } from './vendor/arrow.js'
-import { highlight, blockLabel, codeGrowthChars } from './Block.mjs'
+import { highlight, blockLabel, codeGrowthChars, scrollHint } from './Block.mjs'
 import { translationValueView } from './translationDiff.mjs'
 import { statusInfo, categoryClass, isLocalAiWarning } from './BlockList.mjs'
 import { bindUrlState, num } from './urlState.mjs'
@@ -51,7 +51,7 @@ import {
 } from './claudeTurns.mjs'
 import { colWidthStyle, startColumnResize, resetColumnWidth, resizeHandle, parseAutoWidthPx } from './columnWidth.mjs'
 import { autoGrowTextarea, resetTextareaHeight } from './textareaAutoGrow.mjs'
-import { updateScrollFade } from './scrollFade.mjs'
+import { updateScrollHints, refreshScrollHints } from './scrollFade.mjs'
 import { setCommentArrows } from './callArrows.mjs'
 
 // colWidthKeyFor — the manual-column-width identity (see columnWidth.mjs /
@@ -1560,7 +1560,7 @@ const PINNED_EDGE_PX = 8
 // independent of threadPos/claudePos, which only track the ↑/↓ KEYBOARD
 // cursor and stay at rest (0) even while the pane's native scrollbar is
 // dragged up by hand. Called from the pane's own @scroll handler, alongside
-// updateScrollFade.
+// updateScrollHints.
 function updateCommentThreadPinned(el) {
   if (!el) return
   cs.threadPinned = el.scrollTop + el.clientHeight >= el.scrollHeight - PINNED_EDGE_PX
@@ -1624,7 +1624,7 @@ function scrollToRecentButton(onClick, testid) {
 // threadPinned, a poll landing a few seconds later silently snapped a
 // manual scroll-up back down (reported bug) — jumpToCommentThreadBottom's
 // own button (rendered while !threadPinned, see expandedConversation) is the
-// explicit way back down instead. Also updates the top-fade class directly,
+// explicit way back down instead. Also updates the scroll hints directly,
 // since a JS-driven scrollTop write isn't guaranteed to fire a native
 // 'scroll' event in every browser.
 function scrollCommentThreadToBottom() {
@@ -1633,9 +1633,9 @@ function scrollCommentThreadToBottom() {
     const el = document.querySelector('[data-testid=comment-thread]')
     if (!el) return
     el.scrollTop = el.scrollHeight
-    updateScrollFade(el)
+    updateScrollHints(el)
     // Same "a JS-driven scrollTop write isn't guaranteed to fire a native
-    // 'scroll' event" reasoning as updateScrollFade just above — without this
+    // 'scroll' event" reasoning as updateScrollHints just above — without this
     // direct call, threadPinned could be left stuck at a stale `false` (e.g.
     // from a transient scroll during layout/focus) with nothing to ever flip
     // it back to true again, permanently suppressing this very function.
@@ -3031,13 +3031,13 @@ function scrollClaudeThreadToBottom() {
     if (!el) return
     el.scrollTop = el.scrollHeight
     // A JS-driven scrollTop write isn't guaranteed to fire a native 'scroll'
-    // event in every browser, so update the top-fade class directly too (see
+    // event in every browser, so update the scroll hints directly too (see
     // scrollFade.mjs / "A capped, fading thread" in comments-panel.md) — and,
     // for the same reason, resync claudePinned directly too: otherwise a
     // stale `false` left over from a transient scroll during layout/focus
     // would have nothing to ever flip it back, permanently suppressing this
     // very function.
-    updateScrollFade(el)
+    updateScrollHints(el)
     updateClaudeThreadPinned(el)
   })
 }
@@ -3988,7 +3988,13 @@ function recomputeCodePreviews() {
         it.title === cp.items[i].title &&
         it.oldCode === cp.items[i].oldCode,
     )
-  if (!unchanged) cp.items = next
+  if (!unchanged) {
+    cp.items = next
+    // A fresh set of preview cards renders on its own next microtask, with
+    // nothing else to re-measure its (new) scroll-hint hosts — see
+    // refreshHints' own comment in home.mjs.
+    refreshScrollHints()
+  }
   // Keep the ↓/↑ cursor inside the (possibly shrunk, possibly emptied) set —
   // a fence disappearing while the keyboard sits on its card must not leave
   // the cursor pointing at nothing. Clamped rather than reset, so an unrelated
@@ -6881,16 +6887,19 @@ function expandedConversation(c, openCommentMenu, readOnly) {
       </div>
       <div class="relative min-h-0">
         <div
-          class="flex max-h-[38vh] min-h-0 flex-col gap-2 overflow-y-auto p-0.5"
+          class="no-scrollbar flex max-h-[38vh] min-h-0 flex-col gap-2 overflow-y-auto p-0.5"
           data-testid="comment-thread"
+          data-scroll-body
           @scroll="${(e) => {
-            updateScrollFade(e.target)
+            updateScrollHints(e.target)
             updateCommentThreadPinned(e.target)
           }}"
         >
           ${() =>
             threadMessages(c).map((r, i, arr) => reactionBubble(c, r, i, arr.length, undefined, false, readOnly).key('msg:' + r.id))}
         </div>
+        ${scrollHint('up')}
+        ${scrollHint('down')}
         <div class="contents">
           ${() =>
             cs.threadPos === 0 && !cs.threadPinned
@@ -9495,29 +9504,35 @@ export function commentDetailCard(c, opts) {
         ${() => (preview || readOnly ? '' : commentMenuButton(opts && opts.openMenu))}
       </div>
       ${() => commentTitleLine(c)}
-      <div
-        class="${() =>
-          'flex max-h-[70vh] flex-col gap-2.5 overflow-auto rounded-lg ' +
-          (!preview && pct.commentId === c.id ? 'ring-2 ring-indigo-200 dark:ring-indigo-500/30' : '')}"
-        data-testid="comment-detail-thread"
-      >
-        ${() =>
-          threadMessages(c).map((r, ti, arr) =>
-            // The origin message (ti===0) passes `bare` — see reactionBubble's
-            // own doc comment: this card's header already shows the
-            // avatar+name once, so the origin drops its own copy plus the
-            // bordered/tinted bubble box, reading as plain text instead
-            // (still keeps its edit pencil and its ↑/↓ ring affordance).
-            reactionBubble(
-              c,
-              r,
-              ti,
-              arr.length,
-              () => !preview && pct.commentId === c.id && pct.pos === arr.length - ti,
-              ti === 0,
-              readOnly,
-            ).key('detail-msg:' + r.id + ':' + (readOnly ? 'ro' : 'rw')),
-          )}
+      <div class="relative min-h-0">
+        <div
+          class="${() =>
+            'no-scrollbar flex max-h-[70vh] flex-col gap-2.5 overflow-auto rounded-lg ' +
+            (!preview && pct.commentId === c.id ? 'ring-2 ring-indigo-200 dark:ring-indigo-500/30' : '')}"
+          data-testid="comment-detail-thread"
+          data-scroll-body
+          @scroll="${(e) => updateScrollHints(e.target)}"
+        >
+          ${() =>
+            threadMessages(c).map((r, ti, arr) =>
+              // The origin message (ti===0) passes `bare` — see reactionBubble's
+              // own doc comment: this card's header already shows the
+              // avatar+name once, so the origin drops its own copy plus the
+              // bordered/tinted bubble box, reading as plain text instead
+              // (still keeps its edit pencil and its ↑/↓ ring affordance).
+              reactionBubble(
+                c,
+                r,
+                ti,
+                arr.length,
+                () => !preview && pct.commentId === c.id && pct.pos === arr.length - ti,
+                ti === 0,
+                readOnly,
+              ).key('detail-msg:' + r.id + ':' + (readOnly ? 'ro' : 'rw')),
+            )}
+        </div>
+        ${scrollHint('up')}
+        ${scrollHint('down')}
       </div>
       <div
         class="truncate border-t border-slate-100 pt-2.5 text-[11px] leading-snug text-slate-500 dark:border-zinc-800/60 dark:text-zinc-500"
