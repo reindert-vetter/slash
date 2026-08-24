@@ -208,12 +208,19 @@ runs the action), `Esc` (close — from a submenu it first steps back to the
 root), and block navigation is suspended. Typed characters flow into the
 focused input (`data-testid=command-input`, two-way bound to `ms.query`).
 
-**`Space` with an empty search field runs the selected item too** — the exact
-same `runCommand(list[ms.sel])` call as `Enter`, no second implementation.
-Gated on `ms.query === ''`: as soon as anything is typed (you can write a
-comment straight into that field, e.g. the no-match "Create a comment with
-this" fallback), Space is a normal character again and falls through
-untouched to the input, same as any other letter.
+**`Space` never runs the selected item — it always just types a space.**
+This used to run `runCommand(list[ms.sel])` (the same call as `Enter`) while
+the search field was still empty, so a right-click on a line and a bare
+Space could silently fire the highlighted action (often "Approve …", the
+default 2nd item) before the reviewer had typed anything. Removed on
+reviewer request: "als ik rechtermuisknop druk op lines of code, wil ik
+gewoon kunnen typen zonder dat er iets gebeurt (spatie moet niet een keuze
+maken) pas als ik enter druk (of met muis een menu item kies)". Space now has
+no branch of its own in `onKeydown`'s `if (menu.open)` block at all — like
+every other plain character (letters, digits, `f`/`d`/`s`/`a`/…, none of
+which have ever had a branch here either), it falls through untouched to the
+focused `command-input`, in every mode including a `native` right-click menu.
+Only `Enter` (no Shift) or a mouse click on a row runs a command.
 
 `positionMenu` anchors it just **below** the selection and gives it the width
 of the right (NEW) pane — half width, over the code you're reviewing:

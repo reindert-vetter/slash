@@ -80,7 +80,7 @@ test.describe('PR Review Tree — command palette', () => {
     await expect(page.locator('[data-idx="1"]')).toHaveCount(0)
   })
 
-  test('Space with an empty search field runs the selected command, like Enter', async ({
+  test('Space with an empty search field just types a space, it does not run the selected command', async ({
     page,
   }) => {
     await page.goto('/pr/12903')
@@ -96,10 +96,13 @@ test.describe('PR Review Tree — command palette', () => {
     const input = page.getByTestId('command-input')
     await expect(input).toHaveValue('')
     // "Sluit menu" is pinned first; defaultSel opens on the 2nd item, the
-    // approve command for this list — pressing Space runs it directly.
+    // approve command for this list — pressing Space must NOT run it, only
+    // type a literal space into the field, exactly like any other letter.
     await page.keyboard.press(' ')
-    await expect(page.getByTestId('command-menu')).not.toBeVisible()
-    await expect(page.locator('[data-idx="1"]')).toHaveCount(0)
+    await expect(page.getByTestId('command-menu')).toBeVisible()
+    await expect(input).toHaveValue(' ')
+    await expect(page.locator('[data-idx="1"]')).toHaveCount(1)
+    await expect(approve).not.toBeChecked()
   })
 
   test('Space with text already typed stays a normal space, not a run', async ({ page }) => {

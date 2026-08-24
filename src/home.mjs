@@ -12398,14 +12398,13 @@ function onKeydown(e) {
     } else if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       if (list[ms.sel]) runCommand(list[ms.sel])
-    } else if (e.key === ' ' && ms.query === '') {
-      // Space with an empty search field runs the selected item, exactly like
-      // Enter — but only while nothing is typed yet: once the field holds
-      // text, Space is a normal character (you can write a comment directly
-      // in it), so this branch must not preventDefault/intercept it then.
-      e.preventDefault()
-      if (list[ms.sel]) runCommand(list[ms.sel])
     }
+    // Space used to run the selected item too, while the search field was
+    // still empty — removed on reviewer request ("spatie moet niet een keuze
+    // maken... pas als ik enter druk"): every other typed character already
+    // falls through untouched (no branch above matches it, so it reaches the
+    // focused command-input natively), and Space is no longer special-cased
+    // either. Only Enter (no Shift) or a mouse click on a row runs a command.
     // Typing filters the list, which changes the palette's height — reposition a
     // frame later (once re-rendered) so it stays snug under the selection, even
     // when flipped above it.
