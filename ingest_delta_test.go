@@ -386,5 +386,5 @@ func TestIngestRefreshNeededIgnoresALandedLocalCommit(t *testing.T) {
 // delta on, it must quietly do nothing rather than panic or signal nonsense.
 func TestRefreshTreeAfterLandingNoOpsWithoutPriorIngest(t *testing.T) {
 	setupChatShadowRepo(t, "feature/x", "v1\n")
-	refreshTreeAfterLanding(context.Background(), nil, "", 4242, "feature/x")
+	refreshTreeAfterLanding(context.Background(), nil, "", 4242, "feature/x", nil)
 }

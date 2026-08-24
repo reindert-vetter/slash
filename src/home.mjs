@@ -16244,19 +16244,26 @@ onEvent('prmeta.changed', () => {
 // up, a server restart). A genuinely missed blocks.changed costs at most one
 // stale tree until the next refresh, which is the same risk the reviewer
 // already had before this existed.
-onEvent('blocks.changed', () => {
-  // A refresh already known to be about MY OWN just-landed edit
-  // (checkoutRefreshingFiles is only non-empty between a landing and the
-  // ingest-refresh it triggered completing, see chat_refresh_pending.go) is
-  // safe to apply automatically — the reviewer just asked for this exact
-  // change themselves. Anything else (a colleague's push, or a refresh whose
-  // own checkout.changed event this tab hasn't processed yet) keeps going
-  // through the existing manual staleTreeRow flow, unchanged.
-  const files = [...checkoutRefreshingFiles()]
+onEvent('blocks.changed', (ev) => {
+  // ev.data.landedFiles: which files (if any) a REVIEWER'S OWN just-landed
+  // chat edit touched — set by refreshIngestDelta (workflows.go) directly in
+  // this event's own payload, computed atomically in the SAME Activity call
+  // that swapped the blocks table (see blocksChangedPayload, eventbus.go, and
+  // "Wordt bijgewerkt" in .claude/docs/pending-push.md). Reading it straight
+  // off the event is deliberate: state.checkout.refreshingFiles (a SEPARATELY
+  // fetched read model) cannot be trusted for this decision — tembed drives a
+  // landing's whole ingest-refresh fully inline/synchronously, so blocks.changed
+  // can reach this tab before any fetch of that other read model would ever
+  // see it non-empty. Still only a ROUTING hint, never the truth: either
+  // branch below still does a real read (refreshBlocksAfterOwnLanding fetches
+  // GET /api/blocks for real; the manual path re-reads on the reviewer's own
+  // reload) — a missing/dropped frame simply falls back to the existing
+  // manual staleTreeRow path, exactly as before this feature existed.
+  const files = ev && ev.data && Array.isArray(ev.data.landedFiles) ? ev.data.landedFiles : []
   if (files.length) {
     refreshBlocksAfterOwnLanding(files)
-    // Picks up the server having cleared refreshingFiles for this refresh, so
-    // the "wordt bijgewerkt" pill disappears along with the stale code.
+    // Best-effort refresh of the (purely cosmetic) "wordt bijgewerkt" pill —
+    // unrelated to the decision above, which never depends on this read model.
     loadCheckout()
   } else {
     state.blocksStale = true

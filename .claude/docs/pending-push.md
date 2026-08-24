@@ -111,48 +111,109 @@ aangepast/weg is, dan wil ik dat gelijk zien... label 'ongepusht' is niet
 voldoende." Everything above makes the landing itself immediate, but there is
 a real gap between "landed" (visible right away as `ongepusht`) and "the
 block/diff panel actually shows the new code" — that only becomes true once
-the ingest-refresh `refreshTreeAfterLanding` triggered actually completes,
-which can take a few seconds. Until this feature, nothing said so, and the
-one thing that DID exist for a version-mismatch — the `blocks.changed` →
-`staleTreeRow` notice below — is a manual, click-to-reload notice, deliberately
-so a colleague's surprise push never yanks a reviewer's active approve-cursor
-out from under them (see "the notice leaves the selection and the tree
-untouched" in `tests/blocks-stale-notice.spec.mjs`). That same caution doesn't
-apply to the reviewer's OWN just-requested edit — they asked for exactly this
-change, so it's safe to apply the moment it's ready, no click needed.
+the ingest-refresh `refreshTreeAfterLanding` triggered actually completes.
+Until this feature, nothing said so, and the one thing that DID exist for a
+version-mismatch — the `blocks.changed` → `staleTreeRow` notice below — is a
+manual, click-to-reload notice, deliberately so a colleague's surprise push
+never yanks a reviewer's active approve-cursor out from under them (see "the
+notice leaves the selection and the tree untouched" in
+`tests/blocks-stale-notice.spec.mjs`). That same caution doesn't apply to the
+reviewer's OWN just-requested edit — they asked for exactly this change, so
+it's safe to apply the moment it's ready, no click needed.
+
+### The ordering trap: this refresh is NOT actually async — don't design as if it were
+
+`refreshTreeAfterLanding` (`chat_merge.go`) signals the PR's `pr_status`
+tracker (`tm.engine.SignalWorkflow`). tembed's `Engine.SignalWorkflow`
+(`tembed/engine.go`) drives that signal **fully inline**: it calls `advance()`
+synchronously, which replays `prStatusWorkflow`'s body and, for any Activity
+not yet in history, calls the registered Go function **directly**
+(`Workflow.ExecuteActivity`, `tembed/workflow.go`) — no queue, no goroutine
+dispatch. So by the time `refreshTreeAfterLanding` **returns**, the ENTIRE
+ingest-refresh it triggered — `refreshIngestDelta`, the re-anchor pass,
+`buildRelations`, kicking off `autoStartCodeWarning` — has already run to
+completion, all inside that one call.
+
+A first version of this feature got this wrong: it called
+`markChatRefreshPendingFiles(...)` (the "wordt bijgewerkt" registry, below)
+**after** `refreshTreeAfterLanding(...)` returned, reasoning that the refresh
+would still be "in flight" at that point and a later `blocks.changed` could be
+correlated against it. Because the refresh had, in fact, ALREADY completed
+(including clearing that very registry from inside the nested Activity call)
+before that line ever ran, the mark always landed on an already-emptied
+registry — permanently stuck, and `blocks.changed` always reached the browser
+before this tab had any chance to see the registry non-empty, so it
+**always** fell back to the manual `staleTreeRow` path. **Symptom**: the
+reviewer reported the auto-refresh feature simply didn't do anything —
+confirmed by tracing the exact synchronous call chain, not by guessing.
+**Lesson for any future change here**: never assume there is a wall-clock gap
+between "landed" and "the tree caught up" for a chat-triggered refresh — there
+isn't one, by design of this engine. A registry populated/read via a
+SEPARATELY fetched read model (a second `GET`, even one triggered by its own
+SSE event) can never reliably be checked against another event fired from
+inside that same synchronous call — there is no ordering guarantee between two
+independent fetches racing a single inline call chain. The fix below embeds
+the answer directly in the event that matters, computed atomically at the
+exact point of publish, so there is nothing left to race.
 
 - **`chat_refresh_pending.go`** is a small PR-scoped in-memory registry, the
   same operational shape as `chat_edit_pending.go`'s "wordt aangepast" set:
   `markChatRefreshPendingFiles`/`clearChatRefreshPendingFiles`/
   `chatRefreshPendingFilesFor`. Populated in `processChatMergeAt`
-  (`chat_merge.go`) the moment a landing succeeds, from the exact file set
-  `chat_edit_pending.go` is about to clear (the files the landed turn's own
-  Edit/Write calls touched) — so a block reads three, not two, possible
-  statuses in sequence: `wordt aangepast` (mid-turn) → `wordt bijgewerkt`
-  (landed, tree not caught up yet) → `ongepusht` (until the reviewer pushes).
+  (`chat_merge.go`) **before** `refreshTreeAfterLanding` is even called (see
+  the ordering trap above), from the exact file set `chat_edit_pending.go` is
+  about to clear (the files the landed turn's own Edit/Write calls touched) —
+  so a block reads three, not two, possible statuses in sequence: `wordt
+  aangepast` (mid-turn) → `wordt bijgewerkt` (landed, tree not caught up yet)
+  → `ongepusht` (until the reviewer pushes).
 - **Cleared** the moment an ingest-refresh actually swaps the blocks table:
   both `scanAndStoreBlocks` and `refreshIngestDelta`'s Activities
   (`workflows.go`) call `clearChatRefreshPendingFiles` right before
-  `publishBlocksChanged` — the same instant the frontend's `blocks.changed`
-  event fires, so the registry and the event go dark together.
+  `publishBlocksChanged`.
 - **Exposed on the existing `GET /api/chat/checkout`** read model
   (`checkoutView.RefreshingFiles`, `chat_checkout.go`) — no new endpoint,
   reusing the same poll/SSE cadence (`checkout.changed`, already published
   right after `PendingFiles` at landing time) the checkout chip already has.
+  **This registry (and the pill it drives) is now PURELY COSMETIC** — see the
+  race-free auto-refresh trigger below, which deliberately does not read it.
 - **Frontend** (`home.mjs`): `checkoutRefreshingFiles()` mirrors
   `checkoutPendingFiles()`. `refreshingPill`/`opts.refreshing` (`BlockList.mjs`/
   `Block.mjs`) render the pill — a THIRD glyph/colour (`⟳`, violet) next to
   `unpushedPill`'s `⇧` and `editingPill`'s `✎`, so a block that is mid-edit,
   landed-not-refreshed, AND separately unpushed at once still reads as three
   distinct things, never colour alone.
-- **The auto-refresh itself**: `onEvent('blocks.changed', ...)` checks
-  `checkoutRefreshingFiles()` BEFORE deciding what to do with the event. Non-empty
-  (this event is this reviewer's own landing catching up) →
-  `refreshBlocksAfterOwnLanding(files)` re-fetches `/api/blocks` + relations and
-  reindexes, then re-fetches the checkout (clears the now-empty
-  `refreshingFiles` locally too) — `state.blocksStale` is never set. Empty (a
-  colleague's push, or this tab's own `checkout.changed` for the landing simply
-  hasn't arrived yet) → the existing manual `staleTreeRow` flow, unchanged.
+
+### The auto-refresh trigger: embedded in the `blocks.changed` payload, not correlated against a second read model
+
+Race-free by construction: `PRStateSignal` (`workflows.go`) carries a
+`LandedFiles []string` field, set only by `refreshTreeAfterLanding` (empty for
+the ordinary colleague-push poller, `pollIngestRefresh`). It travels — exactly
+like `BaseSHA`/`HeadSHA` already did — through the recorded Signal payload into
+`prStatusWorkflow`'s `HeadSHA != ""` branch, into the `refreshIngestDelta`
+Activity's own input (`arg.LandedFiles`), which — in the SAME Activity call
+that swaps the blocks table — publishes `blocks.changed` with those files
+embedded directly in the event's own payload (`blocksChangedPayload`,
+`eventbus.go`): `publishBlocksChanged(repo, pr, arg.LandedFiles)`. Nothing here
+is a NEW Activity call or a change in call order, so replay stays deterministic
+(`.claude/rules/workflow-determinism.md`) exactly like `BaseSHA`/`HeadSHA`
+already were.
+
+`home.mjs`'s `onEvent('blocks.changed', (ev) => ...)` reads `ev.data.landedFiles`
+directly — **never** `state.checkout.refreshingFiles` (the registry above) —
+to decide: non-empty → `refreshBlocksAfterOwnLanding(files)` (this reviewer's
+own landing, safe to auto-apply); empty/absent → the existing manual
+`staleTreeRow` flow (`state.blocksStale = true`), completely unchanged from
+before this feature existed.
+
+**Still just a routing hint, never the source of truth**
+(`.claude/docs/server-events.md`): `refreshBlocksAfterOwnLanding` always does a
+REAL `GET /api/blocks` fetch regardless of the payload; nothing is rendered
+straight from the event. A dropped/missed `blocks.changed` frame (a resync, a
+brief disconnect) simply falls back to whatever the NEXT `blocks.changed`
+brings — worst case, the tab shows the ordinary manual notice one refresh
+later, exactly the pre-existing, already-tested fallback. No workflow decision
+anywhere depends on whether this frame ever reaches a browser.
+
 - **If the reviewer's selected block itself disappeared** (the edit removed or
   moved the method/class the cursor was on): `refreshBlocksAfterOwnLanding`
   first lets `recomputeLeftList`'s ordinary id-preserving reindex run (falls
@@ -166,8 +227,14 @@ change, so it's safe to apply the moment it's ready, no click needed.
 Tests: `TestBuildCheckoutViewReportsRefreshingFiles`
 (`chat_checkout_test.go`), the `RefreshingFiles` assertion in
 `TestProcessChatMergeClearsPendingEditedFilesOnSuccess` (`chat_merge_test.go`),
-`tests/refreshing-pill.spec.mjs` (the pill on both the index row and the diff
-card, and the full auto-refresh-and-follow-selection round trip).
+`TestPublishBlocksChangedCarriesLandedFiles` (`eventbus_test.go`),
+`TestRefreshTreeAfterLandingPublishesLandedFilesThroughTheRealSignalChain`
+(`chat_merge_test.go` — drives the REAL synchronous
+`Engine.SignalWorkflow`/`ExecuteActivity` chain end to end against a throwaway
+local git repo, the regression test for the ordering trap above — a
+choreographed mock event would not have caught it), `tests/refreshing-pill.spec.mjs`
+(the pill, the payload-driven auto-refresh-and-follow-selection round trip,
+and the manual-fallback case with no `landedFiles` payload).
 
 ## The push: a `"push"` Action on the PR's `chat_merge` queue
 

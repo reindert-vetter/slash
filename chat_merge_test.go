@@ -10,10 +10,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/reindert-vetter/tembed"
 	"slash/modules/chat"
 	"slash/modules/claude"
+	"slash/modules/github"
 )
 
 // chat_merge_test.go exercises processChatMergeAt (the "...At"-suffixed body
@@ -145,6 +147,121 @@ func TestProcessChatMergeClearsPendingEditedFilesOnSuccess(t *testing.T) {
 	}
 	if got := chatRefreshPendingFilesFor("", 2010); len(got) != 1 || got[0] != "foo.txt" {
 		t.Fatalf("expected foo.txt marked as awaiting a re-ingest after landing, got %v", got)
+	}
+}
+
+// TestRefreshTreeAfterLandingPublishesLandedFilesThroughTheRealSignalChain
+// pins the race-free fix for the "wordt bijgewerkt" ordering bug: it drives
+// the ACTUAL synchronous chain responsible for the original bug —
+// Engine.SignalWorkflow -> advance() -> prStatusWorkflow's body ->
+// ExecuteActivity("refreshIngestDelta", ...) really calling the REGISTERED
+// closure in workflows.go — end to end against a real (local-only) git repo,
+// instead of a hand-choreographed mock event. It asserts the published
+// blocks.changed event's OWN payload carries landedFiles, computed and sent
+// atomically in that one Activity call — see blocksChangedPayload
+// (eventbus.go) and "Wordt bijgewerkt" in .claude/docs/pending-push.md.
+//
+// No gh/network access: SLASH_REPO_DIR points at a throwaway local repo (same
+// trick chat_checkout_test.go's own checkout tests use), so ensureCommits'
+// best-effort `git fetch origin` simply fails silently — every commit already
+// exists locally, exactly like commitExists needs.
+func TestRefreshTreeAfterLandingPublishesLandedFilesThroughTheRealSignalChain(t *testing.T) {
+	t.Setenv("SLASH_GITHUB", "off") // fetchPRStatuses (pr_status start) shells to gh directly
+	pr := 2020
+	headRefName := "feature/x"
+	dataDir := t.TempDir()
+	repoDir := t.TempDir()
+
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", repoDir}, args...)...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
+		}
+	}
+	commit := func(content, msg string) string {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(repoDir, "Foo.php"), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		run("add", "-A")
+		run("commit", "-m", msg)
+		out, err := exec.Command("git", "-C", repoDir, "rev-parse", "HEAD").Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+
+	run("init")
+	run("config", "user.email", "test@example.com")
+	run("config", "user.name", "test")
+	baseSHA := commit("<?php\nclass Foo {\n    public function bar() { return 1; }\n}\n", "base")
+	prevHeadSHA := commit("<?php\nclass Foo {\n    public function bar() { return 2; }\n}\n", "already ingested")
+	landedHeadSHA := commit("<?php\nclass Foo {\n    public function bar() { return 3; }\n}\n", "reviewer's own landed edit")
+
+	t.Setenv("SLASH_REPO_DIR", repoDir)
+	// The pending ref a real landing (advancePendingRefFromCheckout) would have
+	// created/advanced onto the reviewer's just-landed commit.
+	run("update-ref", prPendingRef("", pr, headRefName), landedHeadSHA)
+
+	ctx := context.Background()
+	dbPath := filepath.Join(dataDir, "graph.db")
+	db, err := openDB(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// Pre-existing worktrees + a recorded prior ingest at prevHeadSHA — as if
+	// an earlier full ingest had already run.
+	baseDir, headDir := worktreeDirs(dataDir, "", pr)
+	if err := ensureWorktree(ctx, "", baseDir, baseSHA); err != nil {
+		t.Fatalf("seed base worktree: %v", err)
+	}
+	if err := ensureWorktree(ctx, "", headDir, prevHeadSHA); err != nil {
+		t.Fatalf("seed head worktree: %v", err)
+	}
+	if err := saveIngestSHAs(db, "", pr, baseSHA, prevHeadSHA); err != nil {
+		t.Fatalf("saveIngestSHAs: %v", err)
+	}
+
+	gh := &github.Fake{}
+	gh.SetPRMeta(github.Meta{Title: "PS-2020 stub", URL: "https://github.com/x/y/pull/2020"})
+	engine := tembed.New(tembed.NewMemoryStore())
+	m := NewTaskManager(engine, gh, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, db, dataDir, "")
+
+	if _, err := m.EnsurePRStatus("", pr); err != nil {
+		t.Fatalf("EnsurePRStatus: %v", err)
+	}
+
+	id, sub := events.subscribe(statusKey("", pr))
+	defer events.unsubscribe(id)
+
+	// The exact call processChatMergeAt makes right after a successful landing
+	// — this is the function under test.
+	refreshTreeAfterLanding(ctx, m, "", pr, headRefName, []string{"Foo.php"})
+
+	select {
+	case ev := <-sub.ch:
+		if ev.Type != eventBlocksChanged {
+			t.Fatalf("expected a blocks.changed event, got %q", ev.Type)
+		}
+		var payload blocksChangedPayload
+		if err := json.Unmarshal(ev.Data, &payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		if len(payload.LandedFiles) != 1 || payload.LandedFiles[0] != "Foo.php" {
+			t.Fatalf("landedFiles = %v, want [\"Foo.php\"] — threaded through the REAL Signal chain", payload.LandedFiles)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("no blocks.changed event published — refreshTreeAfterLanding's synchronous Signal chain never reached refreshIngestDelta")
+	}
+
+	_, head, ok, err := loadIngestSHAs(db, "", pr)
+	if err != nil || !ok || head != landedHeadSHA {
+		t.Fatalf("loadIngestSHAs after refresh = head=%q ok=%v err=%v, want %q/true", head, ok, err, landedHeadSHA)
 	}
 }
 

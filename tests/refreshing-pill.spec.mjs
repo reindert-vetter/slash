@@ -41,7 +41,7 @@ test('the pill shows on the index row and the diff card while a landed edit awai
   await expect(page.getByTestId('block-refreshing').first()).toContainText('wordt bijgewerkt')
 })
 
-test('a blocks.changed event for the reviewer\'s own landing refreshes automatically and follows the selection to a sibling in the same file', async ({
+test('a blocks.changed event carrying landedFiles in its OWN payload refreshes automatically and follows the selection to a sibling in the same file — even when the (purely cosmetic) checkout read model never caught up', async ({
   page,
 }) => {
   let release
@@ -75,21 +75,34 @@ test('a blocks.changed event for the reviewer\'s own landing refreshes automatic
       ],
     })
   })
-  await mockCheckout(page, () => (landed ? [] : ['app/Actions/RangeSelectAction.php']))
+  // Deliberately ALWAYS empty: this is the exact race the server-side ordering
+  // bug produced (blocks.changed reaching the tab before this separately
+  // polled read model ever reflected the landing). The auto-refresh below must
+  // not depend on it at all — only on the event's own payload.
+  await mockCheckout(page, () => [])
   await page.route('**/api/events*', async (route) => {
     await released // never resolves until the test says so
     landed = true
     await route.fulfill({
       status: 200,
       headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' },
-      body: 'retry: 300\n\n' + `data: ${JSON.stringify({ type: 'blocks.changed', pr: 102, seq: 1 })}\n\n`,
+      body:
+        'retry: 300\n\n' +
+        `data: ${JSON.stringify({
+          type: 'blocks.changed',
+          pr: 102,
+          seq: 1,
+          data: { landedFiles: ['app/Actions/RangeSelectAction.php'] },
+        })}\n\n`,
     })
   })
 
   await page.goto('/pr/102')
   const execute = page.getByTestId('block-row').filter({ hasText: 'RangeSelectAction::execute' })
   await execute.click()
-  await expect(page.getByTestId('row-refreshing').first()).toBeVisible()
+  // No pill either — the checkout read model never reported anything pending,
+  // by design of this test. The auto-refresh below must fire regardless.
+  await expect(page.getByTestId('row-refreshing')).toHaveCount(0)
 
   release()
 
@@ -101,6 +114,29 @@ test('a blocks.changed event for the reviewer\'s own landing refreshes automatic
   const other = page.getByTestId('block-row').filter({ hasText: 'RangeSelectAction::other' })
   await expect(other).toHaveCount(1)
   await expect(other).toHaveClass(/bg-indigo-50/)
-  // The pill is gone along with the stale code — the refresh actually landed.
-  await expect(page.getByTestId('row-refreshing')).toHaveCount(0)
+})
+
+test('a plain blocks.changed with no landedFiles payload still falls back to the manual stale-tree notice (a colleague\'s push)', async ({
+  page,
+}) => {
+  let release
+  const released = new Promise((r) => (release = r))
+
+  await mockCheckout(page, () => [])
+  await page.route('**/api/events*', async (route) => {
+    await released
+    await route.fulfill({
+      status: 200,
+      headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' },
+      body: 'retry: 300\n\n' + `data: ${JSON.stringify({ type: 'blocks.changed', pr: 102, seq: 1 })}\n\n`,
+    })
+  })
+
+  await page.goto('/pr/102')
+  await expect(page.getByTestId('block-row').first()).toBeVisible()
+  await expect(page.getByTestId('blocks-stale')).toHaveCount(0)
+
+  release()
+
+  await expect(page.getByTestId('blocks-stale')).toHaveCount(1)
 })

@@ -430,6 +430,17 @@ type PRStateSignal struct {
 	// after, even though the PR overview's own "nieuw sinds jouw review" line
 	// (computed live per poll, inbox.go) already said there was something new.
 	RefreshSince bool `json:"refreshSince,omitempty"`
+	// LandedFiles are the repo-relative paths a reviewer's own chat edit just
+	// landed on the PR's branch, threaded through from refreshTreeAfterLanding
+	// (chat_merge.go) so the refreshIngestDelta Activity below can embed them
+	// directly in the blocks.changed event it publishes — see
+	// chat_refresh_pending.go and .claude/docs/pending-push.md ("Wordt
+	// bijgewerkt"). Empty for the ordinary colleague-push poller
+	// (pollIngestRefresh), which never knows which files a landing touched.
+	// Purely a UI-routing hint carried alongside already-recorded Signal
+	// input — never re-derived live inside the workflow body, so this stays
+	// replay-safe exactly like BaseSHA/HeadSHA above.
+	LandedFiles []string `json:"landedFiles,omitempty"`
 }
 
 // PRInboxInput starts the pr_inbox Workflow Execution for a repo.
@@ -1338,9 +1349,12 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		// PR is showing a stale tree (see eventBlocksChanged, eventbus.go). Also
 		// closes out any "wordt bijgewerkt" pill this PR still had pending — the
 		// tree is now current with everything landed so far, see
-		// chat_refresh_pending.go.
+		// chat_refresh_pending.go. A full (re-)ingest is never itself the result
+		// of a reviewer's own chat landing (that always goes through the delta
+		// path below), so this publishes with no LandedFiles — a fresh tab
+		// always takes the ordinary manual staleTreeRow path.
 		clearChatRefreshPendingFiles(arg.Repo, arg.PR)
-		publishBlocksChanged(arg.Repo, arg.PR)
+		publishBlocksChanged(arg.Repo, arg.PR, nil)
 		return json.Marshal(res)
 	})
 
@@ -1351,10 +1365,16 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// poller's cadence (pollIngestRefresh).
 	engine.RegisterActivity("refreshIngestDelta", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg struct {
-			Repo    string `json:"repo,omitempty"`
-			PR      int    `json:"pr"`
-			BaseSHA string `json:"baseSHA"`
-			HeadSHA string `json:"headSHA"`
+			Repo    string   `json:"repo,omitempty"`
+			PR      int      `json:"pr"`
+			BaseSHA string   `json:"baseSHA"`
+			HeadSHA string   `json:"headSHA"`
+			// LandedFiles: only set by refreshTreeAfterLanding (a reviewer's own
+			// just-landed chat edit) via PRStateSignal.LandedFiles — see its own
+			// doc comment. Empty for the ordinary colleague-push poller
+			// (pollIngestRefresh), which builds a PRStateSignal with no such
+			// files at all.
+			LandedFiles []string `json:"landedFiles,omitempty"`
 		}
 		if err := json.Unmarshal(in, &arg); err != nil {
 			return nil, err
@@ -1371,7 +1391,16 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			// close out any "wordt bijgewerkt" pill, same as scanAndStoreBlocks
 			// above.
 			clearChatRefreshPendingFiles(arg.Repo, arg.PR)
-			publishBlocksChanged(arg.Repo, arg.PR)
+			// arg.LandedFiles travels straight into the published event's own
+			// payload — computed and sent atomically, in the SAME Activity call
+			// that just swapped the blocks table, so the frontend never has to
+			// correlate this against a separately-fetched, race-prone read model
+			// (see the "wordt bijgewerkt" ordering bug in
+			// .claude/docs/pending-push.md). Still purely a UI-routing hint: the
+			// frontend always re-fetches GET /api/blocks for real before acting on
+			// it — an event is never the source of truth
+			// (.claude/docs/server-events.md).
+			publishBlocksChanged(arg.Repo, arg.PR, arg.LandedFiles)
 		}
 		return json.Marshal(res)
 	})
@@ -4288,10 +4317,11 @@ func prStatusWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		if s.HeadSHA != "" {
 			var res ingestResult
 			arg := struct {
-				PR      int    `json:"pr"`
-				BaseSHA string `json:"baseSHA"`
-				HeadSHA string `json:"headSHA"`
-			}{PR: in.PR, BaseSHA: s.BaseSHA, HeadSHA: s.HeadSHA}
+				PR          int      `json:"pr"`
+				BaseSHA     string   `json:"baseSHA"`
+				HeadSHA     string   `json:"headSHA"`
+				LandedFiles []string `json:"landedFiles,omitempty"`
+			}{PR: in.PR, BaseSHA: s.BaseSHA, HeadSHA: s.HeadSHA, LandedFiles: s.LandedFiles}
 			if err := w.ExecuteActivity("refreshIngestDelta", arg, &res); err != nil {
 				return nil, fmt.Errorf("refresh ingest delta: %w", err)
 			}

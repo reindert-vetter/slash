@@ -137,11 +137,33 @@ func publishCheckoutChanged(repo string, pr int) {
 	events.publish(eventCheckoutChanged, repo, pr, "", nil)
 }
 
+// blocksChangedPayload is publishBlocksChanged's OPTIONAL payload: which files
+// (if any) a REVIEWER'S OWN just-landed chat edit touched, when this refresh
+// followed refreshTreeAfterLanding (chat_merge.go) rather than the ordinary
+// colleague-push poller (pollIngestRefresh). Computed and published in the
+// SAME Activity call that swapped the blocks table (refreshIngestDelta,
+// workflows.go) — atomic, no separate fetch to race against. Still only a
+// UI-ROUTING hint, never the truth: home.mjs's blocks.changed handler uses it
+// purely to pick "auto-apply" vs. "show the manual staleTreeRow", and always
+// re-fetches GET /api/blocks for real either way — see
+// .claude/docs/pending-push.md ("Wordt bijgewerkt").
+type blocksChangedPayload struct {
+	LandedFiles []string `json:"landedFiles,omitempty"`
+}
+
 // publishBlocksChanged nudges every tab watching this PR that its blocks were
 // swapped (an ingest refresh pulled in new commits, or a full re-ingest ran).
-// Same rule as every other event: it carries nothing and is never the truth —
-// GET /api/blocks stays the read, so a dropped frame costs at most one notice.
-func publishBlocksChanged(repo string, pr int) { events.publish(eventBlocksChanged, repo, pr, "", nil) }
+// Same rule as every other event: GET /api/blocks stays the read, so a dropped
+// frame costs at most one notice — landedFiles (nil for a colleague's push or
+// a full re-ingest) is an optimization on TOP of that same always-correct
+// fallback, never a replacement for it.
+func publishBlocksChanged(repo string, pr int, landedFiles []string) {
+	var data any
+	if len(landedFiles) > 0 {
+		data = blocksChangedPayload{LandedFiles: landedFiles}
+	}
+	events.publish(eventBlocksChanged, repo, pr, "", data)
+}
 
 // publishPRMetaChanged nudges every tab watching this PR to refetch
 // GET /api/pr (the PR-info column, incl. the "Sinds jouw laatste review"

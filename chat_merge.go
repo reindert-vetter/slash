@@ -273,16 +273,39 @@ func processChatMergeAt(ctx context.Context, tm *TaskManager, cm *chat.Module, c
 		msg = resolveCheckoutMerge(ctx, cm, cl, arg.Repo, arg.PR, arg.ConversationID, arg.TurnID, headRefName)
 	}
 	if msg.Kind != chat.KindError {
-		refreshTreeAfterLanding(ctx, tm, arg.Repo, arg.PR, headRefName)
+		// Those exact files are now landed but the tree hasn't re-ingested them
+		// yet — captured BEFORE clearChatPendingFiles below wipes the set it
+		// reads from.
+		//
+		// Marked and threaded through BEFORE refreshTreeAfterLanding is even
+		// called — NOT after (that was an ordering bug: tembed's
+		// Engine.SignalWorkflow drives a Signal fully INLINE — advance() calls
+		// ExecuteActivity, which invokes the registered Go function directly,
+		// no queueing, no goroutine dispatch — so by the time
+		// refreshTreeAfterLanding returns, the WHOLE ingest-refresh it
+		// triggered (refreshIngestDelta, including clearChatRefreshPendingFiles
+		// and publishBlocksChanged) has ALREADY run. Marking afterwards meant
+		// this registry was always populated only after already being cleared —
+		// permanently stuck, and blocks.changed always arrived at the frontend
+		// before it had any chance to see this PR's own landing reflected, so
+		// it always fell back to the manual staleTreeRow path. See "Wordt
+		// bijgewerkt" in .claude/docs/pending-push.md.
+		//
+		// The race-free part of the fix is separate: refreshTreeAfterLanding
+		// ALSO threads landedFiles into the pr_status Signal, so the
+		// refreshIngestDelta Activity it triggers can embed them directly in
+		// the blocks.changed event's own payload — computed and published
+		// atomically in that one Activity call, nothing for the frontend to
+		// correlate against a separately-fetched read model at all. This
+		// mark/clear registry (the "wordt bijgewerkt" pill) is a best-effort,
+		// PURELY COSMETIC companion to that — the frontend's actual
+		// auto-refresh decision no longer depends on it.
+		landedFiles := chatPendingEditedFilesFor(arg.Repo, arg.PR)
+		markChatRefreshPendingFiles(arg.Repo, arg.PR, landedFiles)
+		refreshTreeAfterLanding(ctx, tm, arg.Repo, arg.PR, headRefName, landedFiles)
 		// The landing created (or advanced) the PR's pending ref, so the todo row
 		// at the bottom of the block index has something new to show.
 		publishPendingPushChanged(arg.Repo, arg.PR)
-		// Those exact files are now landed but the tree hasn't re-ingested them
-		// yet — captured BEFORE clearChatPendingFiles below wipes the set it
-		// reads from. Cleared once the ingest-refresh refreshTreeAfterLanding
-		// just kicked off actually swaps the blocks table (see
-		// chat_refresh_pending.go / publishBlocksChanged's call sites).
-		markChatRefreshPendingFiles(arg.Repo, arg.PR, chatPendingEditedFilesFor(arg.Repo, arg.PR))
 		// Everything that was "wordt aangepast" for this PR just landed —
 		// commitCheckoutEditsAt always `git add -A`s the whole checkout, so a
 		// successful landing by definition carries every file that was
@@ -310,7 +333,7 @@ func processChatMergeAt(ctx context.Context, tm *TaskManager, cm *chat.Module, c
 // refresh stays an incremental delta instead of falling back to a full ingest
 // (refreshIngestDelta compares the two). No prior ingest at all → nothing to
 // refresh yet, so this is a no-op.
-func refreshTreeAfterLanding(ctx context.Context, tm *TaskManager, repo string, pr int, headRefName string) {
+func refreshTreeAfterLanding(ctx context.Context, tm *TaskManager, repo string, pr int, headRefName string, landedFiles []string) {
 	if tm == nil || tm.engine == nil || tm.db == nil {
 		return // tests / a manager without an engine or graph DB
 	}
@@ -327,7 +350,12 @@ func refreshTreeAfterLanding(ctx context.Context, tm *TaskManager, repo string, 
 		tm.logf("chat_merge: no pr_status tracker for pr %d: %v", pr, err)
 		return
 	}
-	if err := tm.engine.SignalWorkflow(runID, SignalPRState, PRStateSignal{BaseSHA: base, HeadSHA: sha}); err != nil {
+	// landedFiles rides along on the Signal payload (itself recorded in
+	// pr_status's own event history, replay-safe exactly like BaseSHA/HeadSHA)
+	// so prStatusWorkflow can thread it into refreshIngestDelta's Activity
+	// input, which embeds it directly in the blocks.changed event it
+	// publishes — see PRStateSignal.LandedFiles's own doc comment.
+	if err := tm.engine.SignalWorkflow(runID, SignalPRState, PRStateSignal{BaseSHA: base, HeadSHA: sha, LandedFiles: landedFiles}); err != nil {
 		tm.logf("chat_merge: signal ingest refresh after landing pr %d: %v", pr, err)
 	}
 }

@@ -87,14 +87,15 @@ func TestEventHubUnsubscribe(t *testing.T) {
 
 // publishBlocksChanged emits a PR-scoped, payload-less "refetch me" frame on
 // the process-wide hub — the nudge an already-open review tree needs after an
-// ingest refresh swapped its blocks (see .claude/docs/server-events.md).
+// ingest refresh swapped its blocks (see .claude/docs/server-events.md) — when
+// nothing was passed for landedFiles (a colleague's push, or a full re-ingest).
 func TestPublishBlocksChangedIsPRScopedAndEmpty(t *testing.T) {
 	id1, sub := events.subscribe("13255")
 	defer events.unsubscribe(id1)
 	id2, other := events.subscribe("13263")
 	defer events.unsubscribe(id2)
 
-	publishBlocksChanged("", 13255)
+	publishBlocksChanged("", 13255, nil)
 
 	select {
 	case ev := <-sub.ch:
@@ -117,5 +118,32 @@ func TestPublishBlocksChangedIsPRScopedAndEmpty(t *testing.T) {
 	case ev := <-other.ch:
 		t.Fatalf("a tab on another PR got %+v", ev)
 	default:
+	}
+}
+
+// A landedFiles list travels in the event's own payload (blocksChangedPayload)
+// — the race-free "was this refresh MY OWN just-landed edit" signal home.mjs's
+// blocks.changed handler reads directly, instead of correlating against a
+// separately-fetched, race-prone read model. Still just a routing hint: the
+// event carries no other block data, so a consumer must still refetch
+// GET /api/blocks for real (see .claude/docs/pending-push.md, "Wordt
+// bijgewerkt").
+func TestPublishBlocksChangedCarriesLandedFiles(t *testing.T) {
+	id, sub := events.subscribe("13270")
+	defer events.unsubscribe(id)
+
+	publishBlocksChanged("", 13270, []string{"app/Actions/FooAction.php"})
+
+	select {
+	case ev := <-sub.ch:
+		var payload blocksChangedPayload
+		if err := json.Unmarshal(ev.Data, &payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		if len(payload.LandedFiles) != 1 || payload.LandedFiles[0] != "app/Actions/FooAction.php" {
+			t.Fatalf("landedFiles = %v, want the one landed file", payload.LandedFiles)
+		}
+	default:
+		t.Fatal("expected a blocks.changed event")
 	}
 }
