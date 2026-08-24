@@ -117,14 +117,21 @@ function claudeMessageBody(msg) {
 // a ring PLUS a leading glyph (›), never a colour/ring alone — the colorblind
 // rule — so a keyboard-driven pick reads the same as reactionBubble's own
 // active-turn marker elsewhere in this file.
-function claudeQuestionOptions(msg, onSend, optionSel) {
+function claudeQuestionOptions(msg, onSend, optionSel, onCleanup) {
   // 'directory_decision' (chat_checkout.go's KindDirectoryDecision — which
   // local checkout to use, or what to do with pre-existing changes in it)
   // answers through the exact same Options/click mechanism as an ordinary
   // 'question' turn; only chatKindBadge/the bubble tint below make it read
   // as the more forceful consult it is (see claudeBubble's own doc comment).
+  // 'cleanup_choice' (offerCancelCleanupIfDirty, chat_workflow.go — "what do
+  // you want to do with what a cancelled turn left behind?") renders the
+  // SAME chip row, but a click there must go through onCleanup (the
+  // dedicated chatActionCleanup Signal), never onSend/the ordinary
+  // answer/resume round trip — see resolveCancelCleanup's own doc comment
+  // (RelatedPanel.mjs) for why.
+  const isCleanup = msg.kind === 'cleanup_choice'
   if (
-    (msg.kind !== 'question' && msg.kind !== 'directory_decision') ||
+    (msg.kind !== 'question' && msg.kind !== 'directory_decision' && !isCleanup) ||
     msg.answer ||
     !msg.options ||
     !msg.options.length
@@ -144,7 +151,7 @@ function claudeQuestionOptions(msg, onSend, optionSel) {
                 : 'border-indigo-300 dark:border-indigo-500/40 text-indigo-600 dark:text-indigo-300')}"
             data-testid="claude-question-option"
             data-active="${() => (optionSel() > 0 && total - optionSel() === i ? 'true' : 'false')}"
-            @click="${() => onSend(opt)}"
+            @click="${() => (isCleanup ? onCleanup(opt) : onSend(opt))}"
           >
             ${() => (optionSel() > 0 && total - optionSel() === i ? '› ' : '')}${opt}
           </button>
@@ -401,6 +408,54 @@ function chatKindBadge(msg) {
       foutmelding</span
     >`
   }
+  if (msg.kind === 'cancelled') {
+    // Deliberately its OWN, neutral tint — never rose (that already means
+    // "foutmelding") or amber (that already means "nieuwe poging komt") —
+    // per the reviewer's own request: nothing went wrong here, the reviewer
+    // chose to stop it, so this must never read as a failure. The WORD
+    // "afgebroken" carries the meaning; the glyph (a stop square) and the
+    // tint are decoration on top, per the colourblind rule.
+    return html`<span
+      class="inline-flex shrink-0 items-center gap-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-medium text-slate-600 dark:bg-zinc-700/60 dark:text-zinc-300"
+      data-testid="claude-message-cancelled"
+    >
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        class="h-2.5 w-2.5"
+      >
+        <rect x="6" y="6" width="12" height="12" rx="1"></rect>
+      </svg>
+      afgebroken</span
+    >`
+  }
+  if (msg.kind === 'cleanup_choice') {
+    return html`<span
+      class="inline-flex shrink-0 items-center gap-1 rounded-full bg-purple-50 px-1.5 py-0.5 text-[9px] font-medium text-purple-700 dark:bg-purple-500/15 dark:text-purple-300"
+      data-testid="claude-message-cleanup-choice"
+    >
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        class="h-2.5 w-2.5"
+      >
+        <path d="M3 6h18"></path>
+        <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"></path>
+        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
+      </svg>
+      opruimen na afbreken</span
+    >`
+  }
   return ''
 }
 
@@ -483,26 +538,33 @@ function claudeNoShellPill(msg) {
 // chatKindBadge's word+glyph, since the tint alone never carries the meaning,
 // per the colorblind rule.
 //
-// Only a finally-failed turn — and only the LAST message of the transcript,
-// since that is the one whose input the workflow still holds — offers
-// "Opnieuw proberen" (`onRetry`, the chatActionRetry Signal). A 'retrying'
-// bubble deliberately does not: another attempt is already on its way.
-// `readOnly` (see "Read-only, not a rail" in .claude/docs/comments-panel.md)
-// drops the question-option buttons and the retry button entirely, and
-// makes the message body's own links/mentions/images/code-fence triggers
-// inert (pointer-events-none) — the click that reaches the card's OUTER root
-// instead (claudeChatColumn below) is what hands the keyboard back.
-function claudeBubble(msg, i, total, claudePos, optionSel, anchorHint, onSend, onRetry, busy, readOnly) {
+// Only a finally-failed OR cancelled turn — and only the LAST message of the
+// transcript, since that is the one whose input the workflow still holds —
+// offers "Opnieuw proberen" (`onRetry`, the chatActionRetry Signal). A
+// 'retrying' bubble deliberately does not: another attempt is already on its
+// way. `readOnly` (see "Read-only, not a rail" in
+// .claude/docs/comments-panel.md) drops the question-option buttons and the
+// retry button entirely, and makes the message body's own links/mentions/
+// images/code-fence triggers inert (pointer-events-none) — the click that
+// reaches the card's OUTER root instead (claudeChatColumn below) is what
+// hands the keyboard back.
+function claudeBubble(msg, i, total, claudePos, optionSel, anchorHint, onSend, onRetry, busy, readOnly, onCleanup) {
   const mine = msg.role === 'user'
   const isError = msg.kind === 'error'
   const isRetrying = msg.kind === 'retrying'
+  // 'cancelled' (chat.KindCancelled — the reviewer's own "Stop", see
+  // chat_cancel.go) is deliberately NOT tinted like isError/isRetrying: it is
+  // its own, neutral state — nothing went wrong. Still offers "Opnieuw
+  // proberen" (canRetry below), same as an exhausted ladder.
+  const isCancelled = msg.kind === 'cancelled'
+  const isCleanupChoice = msg.kind === 'cleanup_choice' && !msg.answer
   // A directory_decision turn gets its own, more forceful tint (purple,
   // matching chatKindBadge's own colour) — the reviewer's explicit request:
   // this is a consult about a real, possibly-in-use local checkout, not an
   // ordinary inline question, and must read as such even before the badge
-  // text is parsed.
-  const isDirectoryDecision = msg.kind === 'directory_decision' && !msg.answer
-  const canRetry = isError && i === total - 1
+  // text is parsed. cleanup_choice shares that same tint/purpose.
+  const isDirectoryDecision = (msg.kind === 'directory_decision' || isCleanupChoice) && !msg.answer
+  const canRetry = (isError || isCancelled) && i === total - 1
   // Only the conversation's very first turn ever carried the (invisible)
   // selection context (claudeContextBlock only attaches it on the first turn
   // — see RelatedPanel.mjs), so this is the one bubble a visible reminder of
@@ -538,9 +600,11 @@ function claudeBubble(msg, i, total, claudePos, optionSel, anchorHint, onSend, o
                 ? 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-300'
                 : isDirectoryDecision
                   ? 'border-purple-300 bg-purple-50 text-purple-900 dark:border-purple-500/30 dark:bg-purple-500/15 dark:text-purple-200'
-                  : mine
-                    ? 'border-indigo-300 bg-indigo-50 text-slate-800 dark:border-indigo-500/30 dark:bg-indigo-500/15 dark:text-zinc-200'
-                    : 'border-slate-300 bg-slate-100 text-slate-800 dark:border-zinc-800 dark:bg-zinc-800/60 dark:text-zinc-300') +
+                  : isCancelled
+                    ? 'border-slate-300 bg-slate-50 text-slate-600 dark:border-zinc-700 dark:bg-zinc-800/40 dark:text-zinc-400'
+                    : mine
+                      ? 'border-indigo-300 bg-indigo-50 text-slate-800 dark:border-indigo-500/30 dark:bg-indigo-500/15 dark:text-zinc-200'
+                      : 'border-slate-300 bg-slate-100 text-slate-800 dark:border-zinc-800 dark:bg-zinc-800/60 dark:text-zinc-300') +
             (active ? ' ring-2 ring-indigo-400' : '')
           )
         }}"
@@ -555,7 +619,7 @@ function claudeBubble(msg, i, total, claudePos, optionSel, anchorHint, onSend, o
             >`
           : readOnly
             ? ''
-            : claudeQuestionOptions(msg, onSend, optionSel)}
+            : claudeQuestionOptions(msg, onSend, optionSel, onCleanup)}
       ${() =>
         canRetry && !readOnly
           ? html`<button
@@ -825,6 +889,7 @@ export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly) {
               callbacks.onRetry,
               view.busy,
               readOnly,
+              callbacks.onCleanup,
             ).key(
               'claude-msg:' + m.id + ':' + (readOnly ? 'ro' : 'rw'),
             ),

@@ -2179,6 +2179,43 @@ export async function retryClaudeTurn() {
   await sendClaudeMessage('', 'retry')
 }
 
+// cancelClaudeTurn stops the ONE running turn on the currently anchored
+// conversation right now — POST /api/chat/cancel (chat_cancel.go), never a
+// workflow Signal (see that file's own doc comment for why a cancel cannot
+// be one: SignalWorkflow would block for exactly as long as the turn it is
+// trying to interrupt). Two entry points, one function, per
+// .claude/docs/mouse-navigation.md: the "Stop" control next to
+// claude-chat-status (RelatedPanel.mjs's CommentClaudeFooter) and the
+// Enter-palette item (claudeChatCommandsFor in home.mjs). A no-op, silently,
+// when nothing is running — mirrors retryClaudeTurn's own "nothing to do"
+// tolerance, since the workflow/endpoint already degrade the same way.
+export async function cancelClaudeTurn() {
+  if (!cc.commentId) return
+  try {
+    await fetch('/api/chat/cancel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ commentId: cc.commentId }),
+    })
+  } catch (_) {
+    // Best-effort: the reviewer already sees the turn's OWN outcome bubble
+    // once the cancel actually lands (chat.message, SSE); a dropped request
+    // here just means "Stop" itself silently did nothing, same class of
+    // failure as any other network hiccup in this panel.
+  }
+}
+
+// resolveCancelCleanup answers a chat.KindCleanupChoice bubble (the "what do
+// you want to do with what a cancelled turn left in the checkout?" follow-up,
+// offerCancelCleanupIfDirty in chat_workflow.go) with the reviewer's chosen
+// option — the dedicated "cleanup" Signal action (chatActionCleanup), NEVER
+// the ordinary answer/resume round trip a ‘question’/‘directory_decision’
+// turn uses: resolving THIS must never silently start a new Claude call (see
+// applyCancelCleanup's own doc comment, chat_checkout.go).
+export async function resolveCancelCleanup(choice) {
+  await sendClaudeMessage(choice, 'cleanup')
+}
+
 // clearClaudeChat wipes the conversation AND — reviewer request — its
 // backing comment when that comment counts as "empty": still exactly
 // CLAUDE_ANCHOR_PLACEHOLDER, never replaced with the reviewer's own text
@@ -3005,6 +3042,7 @@ function claudeChatCallbacks(state, commentTarget) {
   return {
     onSend: (text) => sendClaudeMessageFromNew(state, commentTarget, text),
     onRetry: () => retryClaudeTurn(),
+    onCleanup: (choice) => resolveCancelCleanup(choice),
     onFocus: () => onClaudeComposeFocus(),
     onEmptyEnter: () => openClaudeMenuFromComposer(),
     // The pane's own @scroll handler (see updateClaudeThreadPinned) and its
@@ -3249,6 +3287,15 @@ export function CommentClaudeFooter(commentId = '') {
                         >
                           ${() => claudeStatusText(view.progress(), view.elapsed()) + claudeQueueNote()}
                         </span>
+                        <button
+                          type="button"
+                          class="shrink-0 rounded-md border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-600 hover:bg-slate-50 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                          data-testid="claude-chat-cancel"
+                          title="Stop deze Claude-beurt"
+                          @click="${() => cancelClaudeTurn()}"
+                        >
+                          Stop
+                        </button>
                       </span>`
                     : ''}
                 ${() =>

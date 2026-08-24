@@ -108,6 +108,7 @@ import RelatedPanel, {
   isClaudeChatFocused,
   clearClaudeChat,
   retryClaudeTurn,
+  cancelClaudeTurn,
   claudeAnchorIsPlaceholder,
   convertClaudeAnchorToComment,
   isChatAnchorPlaceholder,
@@ -7195,6 +7196,21 @@ function claudeChatCommandsFor() {
     label: 'Probeer de mislukte turn opnieuw',
     hint: 'opnieuw',
     run: () => retryClaudeTurn(),
+  })
+  // "Stop deze Claude-beurt" — keyboard twin of the Stop button next to
+  // claude-chat-status (CommentClaudeFooter, RelatedPanel.mjs), same
+  // cancelClaudeTurn() call either way, per
+  // .claude/docs/mouse-navigation.md. Listed unconditionally, same
+  // reasoning as "retry-claude-turn" right above it: POST /api/chat/cancel
+  // is a silent no-op when nothing is running, cheaper than teaching this
+  // menu to inspect chat_progress state. Deliberately LAST, never first —
+  // defaultSel starts on the first real item and a reflexive Enter must
+  // never land on "stop" while nothing is running.
+  items.push({
+    id: 'cancel-claude-turn',
+    label: 'Stop deze Claude-beurt',
+    hint: 'stop',
+    run: () => cancelClaudeTurn(),
   })
   return withClose(items)
 }
