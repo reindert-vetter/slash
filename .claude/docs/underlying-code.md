@@ -41,7 +41,11 @@ Each child is one card (`data-testid=related-item`). It follows
 - A **class member** — the declared properties/constants of a `<class-header>`
   block, broken out of that one coarse blob into a card each (kinds
   `class_property`/`class_constant_changed`/`class_constant`), plus a
-  `Foo::MAX_TRIES` reference resolved to its declaration (`const_ref`). All four
+  `Foo::MAX_TRIES` reference resolved to its declaration (`const_ref`) — which
+  also covers a reference to the caller's **own** class (`self::ATTRIBUTES` in
+  a migration's anonymous class, which has no `<class-header>` block for the
+  member cards to come from; see rule 6b-bis in
+  `.claude/docs/workflows-analysis.md`). All four
   are read-only **leaves**, like `translation`: no PR block, so no diff stat, no
   approval, no drill-hint chips, and — load-bearing, on explicit request —
   **never a row of their own in the block index** (`resolvedCallTargetIds` skips

@@ -623,6 +623,16 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 	// same file collides (last assignment in the file wins) — same trade-off
 	// interfaceVarsByFile already accepts.
 	activityStubVarsByFile := map[string]map[string]string{}
+	// memberHostFiles records every file+class whose <class-header> block is
+	// itself part of this PR — exactly the set resolveClassMembers (rule 9)
+	// already emits a card per constant/property for. Rule 6b-bis below skips
+	// those, so one declaration never gets two cards.
+	memberHostFiles := map[string]bool{}
+	for _, hb := range blocks {
+		if hb.Side != SideOld && hb.Name == classHeaderSentinel {
+			memberHostFiles[hb.File+"\x00"+hb.Class] = true
+		}
+	}
 
 	var out []callresolve.Entry
 	for _, b := range blocks {
@@ -1125,11 +1135,31 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 				// would be a wall of unrelated methods. Go-only and silent on
 				// ambiguity, like the enum branch above.
 				//
-				// A reference to the caller's OWN class is skipped: on a
-				// <class-header> block resolveClassMembers already emits that
-				// very constant as its own card, and two cards for one
-				// declaration is worse than none.
-				if shortName(recv) == shortName(b.Class) {
+				// 6b-bis. A reference to the caller's OWN class —
+				// self::NAME, static::NAME, or the caller's own class name.
+				// When this PR also changed that class's <class-header>,
+				// resolveClassMembers (rule 9) already emits that very
+				// constant as its own card, so this rule stays out of the way:
+				// two cards for one declaration is worse than none. Without
+				// such a header block there is no rule 9 card at all, and the
+				// declaration used to resolve to silently nothing — the common
+				// shape being a Laravel migration's ANONYMOUS class
+				// (`return new class extends Migration`), which never gets a
+				// <class-header> block (phpscan.go's headerEligible) and whose
+				// Class is empty, so `self` matches no indexed class either.
+				if recv == "self" || recv == "static" || shortName(recv) == shortName(b.Class) {
+					if memberHostFiles[b.File+"\x00"+b.Class] {
+						continue
+					}
+					if cm, cok := ownClassConstDecl(headDir, b.File, b.Class, key); cok {
+						seen[key] = true
+						out = append(out, callresolve.Entry{
+							PR: pr, CallerID: callerID, CallKey: key,
+							Status: callresolve.StatusResolved, Kind: callresolve.KindConstRef,
+							ChildFile: b.File, ChildClass: b.Class, ChildMethod: key,
+							ChildLine: cm.Line, ChildCode: cm.Text,
+						})
+					}
 					continue
 				}
 				if cfile, cm, cok := classConstDecl(headDir, idx, recv, key); cok {
@@ -1808,6 +1838,60 @@ func classConstDecl(headDir string, idx *symbolIndex, class, name string) (file 
 		}
 	}
 	return file, m, ok
+}
+
+// ownClassConstDecl finds constant `name` declared in the caller's OWN class
+// (`class`, matched by short name — "" meaning an ANONYMOUS class) in the head
+// worktree, for resolveCalls' rule 6b-bis (a self::/static::/own-class-name
+// reference).
+//
+// It deliberately does NOT go through the symbol index like classConstDecl
+// does: the case this exists for is precisely an anonymous class — every
+// Laravel migration's `return new class extends Migration` — which has no
+// class name to look up and no <class-header> block to slice (see
+// idx.anonMethods and phpscan.go's headerEligible). Instead it walks to the
+// class body's opening brace with phpscan's own classHeaderName and hands the
+// body to the same scanClassMembers every other member rule uses; that scan
+// stops by itself at the closing brace (its own depth<0 guard), so a second
+// class further down the file is never mixed in.
+//
+// Two declarations of the same constant name (two classes in one file) stay
+// SILENT — no entry, no "unresolved" row — like every other Go-only rule here.
+func ownClassConstDecl(headDir, file, class, name string) (m classMember, ok bool) {
+	raw, err := os.ReadFile(filepath.Join(headDir, file))
+	if err != nil {
+		return classMember{}, false
+	}
+	s := string(raw)
+	for i := 0; i < len(s); i++ {
+		if s[i] != 'c' || !strings.HasPrefix(s[i:], "class") || !isWordBoundary(s, i) {
+			continue
+		}
+		// `Foo::class` is a class REFERENCE, not a declaration — its trailing
+		// `{` would otherwise be some later method's body.
+		if i > 0 && s[i-1] == ':' {
+			continue
+		}
+		w, next := readWord(s, i)
+		if w != "class" {
+			continue
+		}
+		cname, bodyAt := classHeaderName(s, next)
+		if bodyAt < 0 || shortName(cname) != shortName(class) {
+			continue
+		}
+		bodyLine := 1 + strings.Count(s[:bodyAt], "\n")
+		for _, cm := range scanClassMembers(s[bodyAt+1:], bodyLine) {
+			if cm.Kind != "const" || cm.Name != name {
+				continue
+			}
+			if ok {
+				return classMember{}, false // ambiguous — stay silent
+			}
+			m, ok = cm, true
+		}
+	}
+	return m, ok
 }
 
 // classHeaderBlockFor returns a single block spanning the whole class body

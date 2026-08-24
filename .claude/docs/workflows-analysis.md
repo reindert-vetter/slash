@@ -344,9 +344,29 @@ Rules, in order:
   wall of unrelated methods. Kind `const_ref`, call key the bare constant name
   (a real literal, so it stays scoped to the line it's used on, unlike the
   `class_member:` keys below). Two files declaring the same short class name
-  with that constant → **silently nothing**, never `unresolved`. A reference to
-  the caller's **own** class is skipped: rule 9 already emits that declaration
-  as its own card, and two cards for one declaration is worse than none.
+  with that constant → **silently nothing**, never `unresolved`.
+- **6b-bis — a constant on the caller's OWN class** (`self::NAME`,
+  `static::NAME`, or the caller's own class name). Rule 9 emits that
+  declaration as its own member card — but **only** when this PR also changed
+  the class's `<class-header>` block, so the own-class reference used to be
+  skipped outright and resolved to silently nothing whenever there was no such
+  block. The shape that made this visible is a Laravel migration's
+  **anonymous** class (`return new class extends Migration`): it never gets a
+  `<class-header>` block at all (`phpscan.go`'s `headerEligible`) and its
+  `Block.Class` is empty, so `self` matched no indexed class either and
+  `foreach (self::ATTRIBUTES as ...)` showed no underlying code.
+  `ownClassConstDecl` therefore reads the caller's **own file**, walks to its
+  class body's opening brace with phpscan's own `classHeaderName` (matching the
+  class by short name, `""` meaning the anonymous one) and hands that body to
+  the same `scanClassMembers` every other member rule uses — deliberately not
+  via the symbol index, which by design cannot key an anonymous class. Same
+  kind `const_ref`, same bare-constant call key, so the frontend needed no
+  change and the card scopes to the `::NAME` line like any other reference.
+  **Skipped whenever a `<class-header>` block for that same file+class IS in
+  the PR** (`memberHostFiles`): rule 9 owns the declaration there, and two
+  cards for one declaration is worse than none. Two classes in one file
+  declaring the same constant → **silently nothing**, like every other Go-only
+  rule here. Test: `TestResolveCallsOwnClassConstRef`.
 - **6c — bare `Foo::class`.** The generic sibling of 3a2: a plain class
   reference with no call, no `$var` assignment, no `$casts` entry — e.g. a
   Temporal workflow's `'activities' => [FooActivity::class, ...]` array, which

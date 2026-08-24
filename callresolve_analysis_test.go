@@ -3320,6 +3320,94 @@ class Ambiguous
 	}
 }
 
+// TestResolveCallsOwnClassConstRef covers rule 6b-bis: a self::/static:: (or
+// own-class-name) constant reference resolves to its own declaration in the
+// caller's file, including inside a Laravel migration's ANONYMOUS class — which
+// has no class name and no <class-header> block, so both rule 6b's symbol-index
+// lookup and rule 9's member cards used to leave it silently unresolved.
+func TestResolveCallsOwnClassConstRef(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 74
+	_, headDir := worktreeDirs(dataDir, "", pr)
+	writeWorktreeFiles(t, headDir, map[string]string{
+		"database/migrations/2026_08_21_120000_register.php": `<?php
+
+use Illuminate\Database\Migrations\Migration;
+
+return new class extends Migration
+{
+    private const ATTRIBUTES = [
+        'PaymentId' => 'keyword',
+        'TenantId' => 'int',
+    ];
+
+    public function up(): void
+    {
+        foreach (self::ATTRIBUTES as $name => $type) {
+            $this->add($name, $type);
+        }
+    }
+};
+`,
+		"app/Services/Retry.php": `<?php
+namespace App\Services;
+
+class Retry
+{
+    public const MAX_TRIES = 5;
+
+    public function attempt()
+    {
+        return static::MAX_TRIES + Retry::MAX_TRIES;
+    }
+}
+`,
+	})
+
+	// An anonymous migration class: Class is empty, so `self` matches nothing
+	// in the symbol index and there is no <class-header> block either.
+	anon := Block{PR: pr, File: "database/migrations/2026_08_21_120000_register.php", Class: "", Name: "up", Side: SideNew, Status: StatusAdded}
+	entries := resolveCalls(dataDir, pr, []Block{anon})
+	e, ok := findEntry(entries, "ATTRIBUTES")
+	if !ok {
+		t.Fatalf("no entry for the self::ATTRIBUTES reference, got %+v", entries)
+	}
+	if e.Kind != callresolve.KindConstRef || e.Status != callresolve.StatusResolved {
+		t.Errorf("ATTRIBUTES kind=%q status=%q, want %q/resolved", e.Kind, e.Status, callresolve.KindConstRef)
+	}
+	if !strings.Contains(e.ChildCode, "const ATTRIBUTES") || !strings.Contains(e.ChildCode, "'TenantId' => 'int'") {
+		t.Errorf("ATTRIBUTES ChildCode=%q, want the whole constant declaration", e.ChildCode)
+	}
+	if strings.Contains(e.ChildCode, "public function up") {
+		t.Errorf("ATTRIBUTES ChildCode must be the declaration only, not the method: %q", e.ChildCode)
+	}
+	if e.ChildFile != anon.File {
+		t.Errorf("ATTRIBUTES ChildFile=%q, want %q", e.ChildFile, anon.File)
+	}
+
+	// A NAMED class whose <class-header> this PR did not change: same gap, so
+	// static::MAX_TRIES / Retry::MAX_TRIES resolve here too — once, not twice.
+	named := Block{PR: pr, File: "app/Services/Retry.php", Class: "Retry", Name: "attempt", Side: SideNew, Status: StatusModified}
+	entries = resolveCalls(dataDir, pr, []Block{named})
+	n := 0
+	for _, e := range entries {
+		if e.CallKey == "MAX_TRIES" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("want exactly one MAX_TRIES entry, got %d: %+v", n, entries)
+	}
+
+	// With the <class-header> itself in the PR, rule 9 owns that declaration
+	// and 6b-bis must stay out of the way — no second card.
+	header := Block{PR: pr, File: "app/Services/Retry.php", Class: "Retry", Name: classHeaderSentinel, Side: SideNew, Status: StatusModified}
+	entries = resolveCalls(dataDir, pr, []Block{named, header})
+	if _, ok := findEntry(entries, "MAX_TRIES"); ok {
+		t.Errorf("a changed <class-header> already emits the member card; 6b-bis must not add one: %+v", entries)
+	}
+}
+
 // TestResolveCallsAppClassReceiver covers rule 4a: `app(Foo::class)->run(...)`
 // names its own class literally, so the call resolves deterministically even
 // though the bare method name `run` is ambiguous app-wide. Before this rule the
