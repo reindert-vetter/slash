@@ -18,6 +18,7 @@
 // `state`).
 
 import { html } from './vendor/arrow.js'
+import { suspendCallArrows, resumeCallArrows } from './callArrows.mjs'
 
 const COOKIE_NAME = 'slash_colw'
 const MAX_AGE_S = 60 * 60 * 24 * 30 // 30 days — the reviewer's explicit choice
@@ -151,12 +152,21 @@ export function parseAutoWidthPx(clsString) {
 // `autoWidthPxFn` is supplied by the caller (each kind knows its own
 // width-class function) and is only read once, on mouseup, to decide the
 // snap-back.
+//
+// The call/comment-arrow overlay (callArrows.mjs) points at fixed anchors —
+// the pane's right edge, an Onderliggende-code card's own edge — that this
+// drag moves continuously. Nothing else in this gesture touches
+// setRelated/scroll/resize, so left alone the line would just sit drawn at
+// its pre-drag position throughout: suspendCallArrows hides it as soon as
+// the drag starts, resumeCallArrows brings it back (tracking the settled
+// new width) once the drag ends, whichever way it ends.
 export function startColumnResize(e, state, key, autoWidthPxFn) {
   if (!key) return
   e.preventDefault()
   e.stopPropagation()
   const root = e.currentTarget.closest('[data-col-resize-root]')
   if (!root) return
+  suspendCallArrows()
   const startWidth = root.getBoundingClientRect().width
   const startX = e.clientX
   const onMove = (ev) => {
@@ -168,10 +178,11 @@ export function startColumnResize(e, state, key, autoWidthPxFn) {
     document.removeEventListener('mousemove', onMove)
     document.removeEventListener('mouseup', onUp)
     const current = state.colWidths[key]
-    if (current == null) return
+    if (current == null) return resumeCallArrows()
     const autoPx = autoWidthPxFn(root)
     if (autoPx != null && Math.abs(current - autoPx) <= SNAP_BACK_PX) clearColumnWidth(state, key)
     else setColumnWidth(state, key, current)
+    resumeCallArrows()
   }
   document.addEventListener('mousemove', onMove)
   document.addEventListener('mouseup', onUp)
@@ -207,6 +218,7 @@ const KEY_RESIZE_PX_PER_SEC = 420
 //     has — see MIN_COL_PX's neighbour parseAutoWidthPx and the doc-comment
 //     in column-resize.md on why the keyboard path skips it).
 export function startKeyResize(state, key, root, dir) {
+  suspendCallArrows() // see the doc comment on startColumnResize above
   const startWidth = getColumnWidth(state, key) || root.getBoundingClientRect().width
   state.colWidths[key] = startWidth
   state.colWidthVersion++
@@ -225,11 +237,13 @@ export function startKeyResize(state, key, root, dir) {
   return {
     cancel() {
       if (raf != null) cancelAnimationFrame(raf)
+      resumeCallArrows()
     },
     commit() {
       if (raf != null) cancelAnimationFrame(raf)
       const current = state.colWidths[key]
       if (current != null) setColumnWidth(state, key, current)
+      resumeCallArrows()
     },
   }
 }

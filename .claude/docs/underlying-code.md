@@ -693,11 +693,24 @@ the command menu; `pointer-events:none`). Path `data-testid=call-arrow`, stroke
 (reviewer request: "haal het pijltje weg, het lijntje laten staan" — the line
 alone already identifies which row/card belong together, and a marker-end
 `<marker>` def used to sit in the same `innerHTML` write). Both endpoints
-(`x1`/`x2` in `buildArrowPaths`) get the same small fixed `LINE_SHIFT_X` (4px)
-nudge to the right of the raw pane-edge/card-edge anchor — purely cosmetic,
-the shape/slope is unchanged. The svg is laid exactly over `<main>`'s rect on
+(`x1`/`x2` in `buildArrowPaths`) get the same small fixed `LINE_SHIFT_X`
+(8px, bumped from 4px on 2026-08-24 — "het moet net linkerblok en rechterblok
+aanraken") nudge to the right of the raw pane-edge/card-edge anchor — purely
+cosmetic, the shape/slope is unchanged; `x1`/`x2`'s own base offsets (-6/-10)
+differ, so one shared shift can't make both ends touch exactly, but 8 gets
+both close. The svg is laid exactly over `<main>`'s rect on
 each draw and clips itself, so arrows never draw over the
 pr-index/PR-info/sidebar/footer.
+
+**Suspended for the duration of a column resize.** A drag on any column's
+resize handle, or a held `c`/`v` keyboard resize (`.claude/docs/column-resize.md`),
+moves the very anchors this overlay measures — the pane's right edge, a
+card's own edge — continuously, without touching any of this module's normal
+redraw triggers. `suspendCallArrows()`/`resumeCallArrows()` (`callArrows.mjs`)
+hide the overlay the instant such a gesture starts and bring it back via the
+ordinary tracked-settle schedule once it ends, so the line never sits stuck
+at a stale, pre-resize position; `columnWidth.mjs`'s `startColumnResize`/
+`startKeyResize` are the only callers.
 
 Redraw triggers: rAF-coalesced on the watch itself, `resize`, capture `scroll`
 (including inner scrollers), and — every push (`setCallArrows`/

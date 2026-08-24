@@ -163,6 +163,23 @@ this was caught. `right-0` keeps the handle inside the clipped box.
   `resetColumnWidth`/`clearColumnWidth` directly, independent of any drag
   distance.
 
+## The call/comment-arrow overlay is suspended for the duration of a resize
+
+The Underlying-code call-arrow overlay (`.claude/docs/underlying-code.md`)
+points at fixed DOM anchors — the diff pane's own right edge, an
+Onderliggende-code card's edge — that a column resize moves continuously.
+Nothing else in a resize gesture touches `setRelated`/`setCallArrows`/
+`scroll`/`resize`, so left alone the line stayed drawn at its pre-drag
+coordinates throughout the drag and only snapped to the right place on some
+later, unrelated redraw. `startColumnResize`/`startKeyResize`
+(`columnWidth.mjs`) now call `suspendCallArrows()` (`callArrows.mjs`) as
+soon as the gesture starts — hides the overlay immediately — and
+`resumeCallArrows()` once it ends (drag `mouseup`, or either `cancel()`/
+`commit()` of a held `c`/`v` keyboard resize) — clears the flag and redraws
+through the existing tracked-settle schedule, so the line reappears already
+tracking the new (possibly still CSS-transitioning) width instead of
+snapping from a stale position.
+
 ## Keyboard resize: hold `c`/`v` on the FOCUSED column, double-tap to reset
 
 The drag handle has a keyboard counterpart, next to `f`/`d`/`s`/`a` in

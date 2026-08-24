@@ -48,6 +48,31 @@ let pairs = []
 let commentPairs = []
 let raf = 0
 
+// suspended — set while a column-resize gesture (drag or held c/v, see
+// columnWidth.mjs) is in progress. Neither pairs list changes during a
+// resize, but the anchors they point at (the pane's right edge, the panel's
+// cards) move continuously as the column's own width changes — and nothing
+// in that gesture touches setRelated/setCallArrows/scroll/resize, so without
+// this the arrow just sat drawn at its pre-drag coordinates throughout.
+// suspendCallArrows hides the overlay immediately; resumeCallArrows clears
+// the flag and redraws via the existing tracked settle, so the line
+// reappears already tracking the column's new (still-transitioning) width.
+let suspended = false
+
+export function suspendCallArrows() {
+  suspended = true
+  const svg = document.querySelector('[data-testid="call-arrows"]')
+  if (svg) {
+    svg.style.display = 'none'
+    svg.innerHTML = ''
+  }
+}
+
+export function resumeCallArrows() {
+  suspended = false
+  scheduleArrowSettle()
+}
+
 // ARROW is the shared stroke style: the call-underline indigo (#6366f1),
 // half-transparent, matching the panel's existing accent language.
 const STROKE = '#6366f1'
@@ -137,8 +162,13 @@ function scheduleArrowSettle() {
 // the pane's right edge, "kan iets naar rechts" — a small, fixed cosmetic
 // offset applied identically to both endpoints, so the line's shape/slope is
 // unchanged, only its position). Applied to both x1 and x2 so this is purely
-// visual, not a change in which row/card it points at.
-const LINE_SHIFT_X = 4
+// visual, not a change in which row/card it points at. Bumped 4→8
+// (2026-08-24, "het moet net linkerblok en rechterblok aanraken"): x1/x2's
+// own base offsets (-6/-10) differ, so a single shared shift can't make both
+// ends touch exactly — 8 gets both close (x1 lands ~2px past the pane's own
+// right edge, x2 ~2px short of the card's left edge) without reworking those
+// per-endpoint constants for a purely cosmetic ask.
+const LINE_SHIFT_X = 8
 
 // buildArrowPaths draws one arrow-set: a { row, id } pair list, the panel
 // selector it targets and the id attribute that panel's cards carry — shared
@@ -191,6 +221,7 @@ function drawCallArrows() {
     svg.style.display = 'none'
     svg.innerHTML = ''
   }
+  if (suspended) return hide()
   if (pairs.length === 0 && commentPairs.length === 0) return hide()
   const main = document.querySelector('[data-testid="detail-panel"]')
   if (!main) return hide()
