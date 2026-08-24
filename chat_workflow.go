@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -844,7 +845,11 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 	}
 
 	model := chatModelForAttempt(arg.Attempt)
-	sink := chatProgressSink(arg.Repo, arg.PR, arg.ConversationID)
+	// checkoutDir starts empty (the read-only attempt below never edits
+	// anything) and is set right before the shell attempt's own RunChat call,
+	// once its WorkDir is known — see chatProgressSink's own doc comment.
+	var checkoutDir string
+	sink := chatProgressSink(arg.Repo, arg.PR, arg.ConversationID, &checkoutDir)
 	loggedFirstEvent, loggedFirstContent := false, false
 	onEvent := func(ev claude.ChatEvent) {
 		if !loggedFirstEvent {
@@ -954,6 +959,7 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 			return msg, nil
 		}
 		hadShell = true
+		checkoutDir = dir // so an Edit/Write tool event below records a repo-relative path
 		shellReq := claude.RunRequest{
 			Model:        model,
 			Prompt:       chatNeedWriteContinuationPrompt,
@@ -1056,7 +1062,14 @@ const chatProgressThrottle = 120 * time.Millisecond
 // streamed ChatEvents onto the conversation's volatile progress snapshot and
 // pushes it out. Called serially from RunChat's own single reader goroutine
 // (see RunRequest.OnEvent), so the captured lastPublish needs no lock.
-func chatProgressSink(repo string, pr int, conversationID string) func(claude.ChatEvent) {
+// chatProgressSink builds the OnEvent callback that maps modules/claude's
+// streamed ChatEvents onto the conversation's volatile progress snapshot and
+// pushes it out. checkoutDir is a pointer the CALLER updates once the shell
+// attempt's own working directory is resolved (see runOneClaudeTurn) — it
+// starts empty (the read-only attempt never edits anything) and is read here
+// only to turn an Edit/Write tool's absolute file_path into the repo-relative
+// path EditedFiles/the "wordt aangepast" pill actually compares against.
+func chatProgressSink(repo string, pr int, conversationID string, checkoutDir *string) func(claude.ChatEvent) {
 	var lastPublish time.Time
 	return func(ev claude.ChatEvent) {
 		snap, ok := mutateChatProgress(conversationID, func(p *chatProgress) {
@@ -1075,6 +1088,9 @@ func chatProgressSink(repo string, pr int, conversationID string) func(claude.Ch
 				if ev.Detail != "" {
 					p.Detail = ev.Detail
 				}
+				if (ev.Tool == "Edit" || ev.Tool == "Write") && ev.Detail != "" {
+					addEditedFile(p, relativeToCheckout(*checkoutDir, ev.Detail))
+				}
 			case claude.ChatEventText:
 				p.Phase = chatPhaseWriting
 				p.Tool, p.Detail = "", ""
@@ -1090,6 +1106,40 @@ func chatProgressSink(repo string, pr int, conversationID string) func(claude.Ch
 		lastPublish = time.Now()
 		publishChatProgress(repo, pr, conversationID, snap)
 	}
+}
+
+// addEditedFile appends path to p.EditedFiles, skipping an already-present
+// or empty path — a turn commonly re-opens the same file across several
+// Edit calls, and the "wordt aangepast" pill only needs to know WHICH files,
+// not how many times each was touched.
+func addEditedFile(p *chatProgress, path string) {
+	if path == "" {
+		return
+	}
+	for _, f := range p.EditedFiles {
+		if f == path {
+			return
+		}
+	}
+	p.EditedFiles = append(p.EditedFiles, path)
+}
+
+// relativeToCheckout turns an Edit/Write tool's absolute file_path (Claude's
+// own working directory is the checkout itself, see prepareChatShellWorkDir)
+// into the repo-relative path a block's own File field uses. Falls back to
+// the raw path unchanged when dir is still empty (checkoutDir not resolved
+// yet — never true for a real Edit/Write event, which can only ever fire
+// once the shell attempt's WorkDir is set) or when path doesn't actually sit
+// under dir (defensive; should not happen in practice).
+func relativeToCheckout(dir, path string) string {
+	if dir == "" {
+		return path
+	}
+	rel, err := filepath.Rel(dir, path)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return path
+	}
+	return rel
 }
 
 // parseAssistantTurn turns the model's raw text into a chat.Message: a

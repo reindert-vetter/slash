@@ -277,6 +277,12 @@ func processChatMergeAt(ctx context.Context, tm *TaskManager, cm *chat.Module, c
 		// The landing created (or advanced) the PR's pending ref, so the todo row
 		// at the bottom of the block index has something new to show.
 		publishPendingPushChanged(arg.Repo, arg.PR)
+		// Everything that was "wordt aangepast" for this PR just landed —
+		// commitCheckoutEditsAt always `git add -A`s the whole checkout, so a
+		// successful landing by definition carries every file that was
+		// pending (see chat_edit_pending.go's own doc comment).
+		clearChatPendingFiles(arg.Repo, arg.PR)
+		publishCheckoutChanged(arg.Repo, arg.PR)
 	}
 	return msg
 }

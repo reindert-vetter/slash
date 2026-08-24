@@ -111,6 +111,35 @@ func TestProcessChatMergeCleanlyAutoMergesNonOverlappingEdit(t *testing.T) {
 	}
 }
 
+// A successful landing clears the PR's "wordt aangepast" pending-files
+// registry — commitCheckoutEditsAt always `git add -A`s the whole checkout,
+// so every file that was pending is, by definition, part of what just landed
+// (see chat_edit_pending.go's own doc comment).
+func TestProcessChatMergeClearsPendingEditedFilesOnSuccess(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "foo v1\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	cm := testChatModule(t)
+	defer clearChatPendingFiles("", 2010)
+
+	dir := cloneCheckoutDir(t, bareDir, "feature/x")
+	assignCheckoutForTest(t, "", 2010, dir)
+	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("foo edited by claude\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	markChatFilesPending("", 2010, []string{"foo.txt"})
+
+	msg := processChatMergeAt(ctx, nil, cm, &claude.Fake{}, dataDir, chatMergeInput{
+		PR: 2010, ConversationID: "conv-pending", TurnID: "turn-pending",
+	}, "feature/x")
+	if msg.Kind == chat.KindError {
+		t.Fatalf("expected a successful landing, got error: %+v", msg)
+	}
+	if got := chatPendingEditedFilesFor("", 2010); len(got) != 0 {
+		t.Fatalf("expected the pending-files registry cleared after landing, got %v", got)
+	}
+}
+
 func TestProcessChatMergeSerializesTwoConversationsInArrivalOrder(t *testing.T) {
 	// Two conversations of the SAME PR share ONE checkout now (chat_checkout.go
 	// — no more per-conversation disposable worktree), so this is no longer a

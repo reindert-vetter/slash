@@ -39,7 +39,8 @@ func TestChatProgressLifecycle(t *testing.T) {
 		t.Fatalf("after advanceChatProgress: %+v", p)
 	}
 
-	sink := chatProgressSink("", 5, "conv")
+	var checkoutDir string
+	sink := chatProgressSink("", 5, "conv", &checkoutDir)
 	sink(claude.ChatEvent{Kind: claude.ChatEventThinking})
 	sink(claude.ChatEvent{Kind: claude.ChatEventTool, Tool: "Read"})
 	sink(claude.ChatEvent{Kind: claude.ChatEventTool, Tool: "Read", Detail: "src/Foo.php"})
@@ -82,7 +83,8 @@ func TestChatProgressPublishesFinalFrame(t *testing.T) {
 	defer events.unsubscribe(id)
 
 	startChatProgress("", 9, "conv-f")
-	chatProgressSink("", 9, "conv-f")(claude.ChatEvent{Kind: claude.ChatEventText, TextDelta: "bijna"})
+	var checkoutDir string
+	chatProgressSink("", 9, "conv-f", &checkoutDir)(claude.ChatEvent{Kind: claude.ChatEventText, TextDelta: "bijna"})
 	finishChatProgress("", 9, "conv-f")
 
 	var last busEvent
@@ -94,5 +96,46 @@ func TestChatProgressPublishesFinalFrame(t *testing.T) {
 	}
 	if !strings.Contains(string(last.Data), `"running":false`) || !strings.Contains(string(last.Data), `"partial":"bijna"`) {
 		t.Fatalf("final frame should report a finished turn with its partial text: %s", last.Data)
+	}
+}
+
+// An Edit/Write tool event accumulates a repo-relative path into
+// EditedFiles (never overwritten by the next tool call, unlike Tool/Detail),
+// a repeat of the same path is not duplicated, and a Read/Grep/Glob event
+// never counts at all — the review tree's own per-block "wordt aangepast"
+// pill is driven off exactly this list (see chat_edit_pending.go).
+func TestChatProgressAccumulatesEditedFiles(t *testing.T) {
+	resetChatProgress()
+	defer resetChatProgress()
+	defer clearChatPendingFiles("", 21)
+
+	startChatProgress("", 21, "conv-edit")
+	var checkoutDir string
+	sink := chatProgressSink("", 21, "conv-edit", &checkoutDir)
+
+	// Before the shell attempt resolves its own WorkDir, checkoutDir is still
+	// empty — a Read here (the cheap read-only attempt) must never be
+	// recorded as an edit.
+	sink(claude.ChatEvent{Kind: claude.ChatEventTool, Tool: "Read", Detail: "/checkout/src/Foo.php"})
+	p, _ := chatProgressFor("conv-edit")
+	if len(p.EditedFiles) != 0 {
+		t.Fatalf("a Read must never be recorded as an edit, got %v", p.EditedFiles)
+	}
+
+	// The shell attempt starts: the caller (runOneClaudeTurn) sets the
+	// checkout dir right before invoking it.
+	checkoutDir = "/checkout"
+	sink(claude.ChatEvent{Kind: claude.ChatEventTool, Tool: "Edit", Detail: "/checkout/src/Foo.php"})
+	sink(claude.ChatEvent{Kind: claude.ChatEventTool, Tool: "Edit", Detail: "/checkout/src/Foo.php"}) // same file again
+	sink(claude.ChatEvent{Kind: claude.ChatEventTool, Tool: "Write", Detail: "/checkout/src/Bar.php"})
+	p, _ = chatProgressFor("conv-edit")
+	if len(p.EditedFiles) != 2 || p.EditedFiles[0] != "src/Foo.php" || p.EditedFiles[1] != "src/Bar.php" {
+		t.Fatalf("EditedFiles = %v, want [src/Foo.php src/Bar.php] (relative, de-duplicated)", p.EditedFiles)
+	}
+
+	finishChatProgress("", 21, "conv-edit")
+	pending := chatPendingEditedFilesFor("", 21)
+	if len(pending) != 2 || pending[0] != "src/Bar.php" || pending[1] != "src/Foo.php" {
+		t.Fatalf("pending files after finish = %v, want the turn's own edited files (sorted)", pending)
 	}
 }

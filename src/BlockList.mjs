@@ -607,6 +607,36 @@ function unpushedPill(state, b) {
   `
 }
 
+// editingPill marks a row whose file is currently being touched by a
+// not-yet-landed Claude edit (state.checkout.pendingFiles, chat_edit_pending.go
+// via GET /api/chat/checkout — see loadCheckout in home.mjs) — reviewer
+// request: "wil alle lokale aanpassingen gelijk zichtbaar zien in de tree,
+// met een status dat het bezig is met een aanpassing, die weer weg moet
+// zodra het is aangepast". A pencil glyph plus the word "wordt aangepast",
+// never colour alone (the colourblind rule) — deliberately a DIFFERENT glyph
+// and colour from unpushedPill's ⇧, so a block that is BOTH mid-edit (this
+// turn) AND separately unpushed (an earlier landed-but-unpushed commit) shows
+// two distinguishable pills rather than one ambiguous one.
+//
+// Per FILE, not per block, same accepted trade-off as unpushedPill: this is
+// cleared as a whole for the PR the moment ANY landing succeeds
+// (chat_merge.go), which is exactly when the block's own diff catches up via
+// the ordinary ingest-refresh — so the pill's lifetime tracks "not yet
+// visible in the diff", not merely "the turn is still running".
+function editingPill(state, b) {
+  const files =
+    state.checkout && Array.isArray(state.checkout.pendingFiles) ? state.checkout.pendingFiles : []
+  if (!b.file || !files.includes(b.file)) return ''
+  return html`
+    <span
+      data-testid="row-editing"
+      title="Claude past dit bestand nu aan; nog niet geland in de review-tree"
+      class="shrink-0 rounded bg-sky-50 dark:bg-sky-500/15 px-1.5 py-0.5 text-[10px] font-medium text-sky-700 dark:text-sky-300"
+      >✎ wordt aangepast</span
+    >
+  `
+}
+
 // toggleRow is the bottom button that hides/shows the fully-approved blocks.
 // It's also a stop of the sidebar's keyboard ↑/↓ loop (see stepListSelection/
 // searchStepSelection in home.mjs, which also runs through toggleRow's own
@@ -1078,6 +1108,7 @@ function row(state, b, i) {
       >
       ${() => removedPill(b)} ${() => movedPill(b)}
       ${() => unpushedPill(state, b)}
+      ${() => editingPill(state, b)}
       ${() => batchPill(b)} ${() => claudeChatPill(b)}
       ${() => commentActivityPill(state, b)}
       ${() => approvalPill(state, b)}

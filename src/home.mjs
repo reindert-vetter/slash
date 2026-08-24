@@ -4305,6 +4305,15 @@ function pendingPushFiles() {
   return new Set(p && Array.isArray(p.files) ? p.files : [])
 }
 
+// checkoutPendingFiles is pendingPushFiles' twin for the OTHER, earlier
+// status: files a not-yet-landed Claude edit is touching right now
+// (state.checkout.pendingFiles, chat_edit_pending.go via loadCheckout below).
+// Empty set when nothing is pending or the checkout hasn't loaded yet.
+function checkoutPendingFiles() {
+  const c = state.checkout
+  return new Set(c && Array.isArray(c.pendingFiles) ? c.pendingFiles : [])
+}
+
 // loadCheckout fetches this PR's shared local-checkout state (the checkout
 // chip in prInfoCard) — GET /api/chat/checkout, chat_checkout.go's
 // buildCheckoutView. Assigns the whole object (or null) rather than mutating
@@ -6994,16 +7003,25 @@ async function deleteCommentAndSelectRow() {
 // exactly like the replyPublish menu's own GitHub items; without any it is a
 // plain item, since there would be only one possible answer. Both labels are
 // plain strings built here, at open time.
-function publishThreadCommand(c) {
+//
+// `doPublish(withHistory)` fully replaces the plain `publishThreadOnly(c,
+// withHistory)` call — the caller decides where the keyboard lands next (see
+// `publishThreadAndSelectRow`/`publishPrCommentAndExit` below), since a
+// block-scoped thread and a PR-wide comment-index item have different rest
+// positions to return to (mirroring the same split between
+// `deleteCommentAndSelectRow` and `deletePrCommentItem`). Defaults to the bare
+// call for any future caller that doesn't care.
+function publishThreadCommand(c, doPublish) {
   const n = localReplyCount(c)
   const isAI = (c.source || 'ui') === 'ai'
   const rootNoun = isAI ? 'de AI-melding' : 'mijn comment'
+  const publish = doPublish || ((withHistory) => publishThreadOnly(c, withHistory))
   if (n === 0) {
     return {
       id: 'comment-publish',
       label: 'Zet op GitHub',
       hint: 'github',
-      run: () => publishThreadOnly(c, false),
+      run: () => publish(false),
     }
   }
   return {
@@ -7015,16 +7033,58 @@ function publishThreadCommand(c) {
         id: 'comment-publish-root',
         label: `Alleen ${rootNoun}`,
         hint: 'alleen dit',
-        run: () => publishThreadOnly(c, false),
+        run: () => publish(false),
       },
       {
         id: 'comment-publish-history',
         label: `Met de eerdere ${n} bericht${n === 1 ? '' : 'en'}`,
         hint: 'hele gesprek',
-        run: () => publishThreadOnly(c, true),
+        run: () => publish(true),
       },
     ]),
   }
+}
+
+// publishThreadAndSelectRow — after "Zet op GitHub" publishes a block-scoped
+// local thread, hand the keyboard back to the diff row it was anchored to,
+// exactly like `deleteCommentAndSelectRow` does for a delete. Reviewer
+// request: "na ai warning, zet op github, laat mij verder navigeren door
+// code (volgens mij doe je dat ook al voor andere keren dat we op github het
+// gooien)" — confirmed to apply to every local thread's own "Zet op GitHub",
+// not just an AI finding, since `publishThreadOnly` is the one shared
+// function both use. This REVERSES an earlier, explicitly documented decision
+// ("publishThreadOnly never closes the thread", see
+// tests/reply-publish-local-thread.spec.mjs) — snapshots the focused block
+// BEFORE the await, same reasoning as `deleteCommentAndSelectRow`: the reload
+// inside `publishThreadOnly` can itself touch `cs.focus`/`cs.sel`.
+async function publishThreadAndSelectRow(c, withHistory) {
+  const b = focusedBlock()
+  await publishThreadOnly(c, withHistory)
+  if (!b) return
+  const rows = blockRows(b)
+  const gran = c.gran || 'group'
+  const units = navUnitsOf(b, rows, gran)
+  const anchorRow = c.rowStart >= 0 ? c.rowStart : 0
+  const change = units.length ? unitAtRow(units, anchorRow) : 0
+  clearRangeAnchor()
+  if (state.focusLevel > 0) {
+    state.drillCursor = state.drillCursor.map((cur, i) => (i === state.focusLevel - 1 ? { gran, change } : cur))
+  } else {
+    state.gran = gran
+    state.change = change
+  }
+  leaveRelated()
+  scrollChangeIntoView()
+}
+
+// publishPrCommentAndExit — the PR-wide comment-index counterpart: there is
+// no diff row to land on for such an item (same reasoning as
+// `deletePrCommentItem`'s own doc comment), so this just releases the thread
+// cursor back to the item's rest position, mirroring `postPrCommentReply`'s
+// own optimistic exit.
+async function publishPrCommentAndExit(c, withHistory) {
+  await publishThreadOnly(c, withHistory)
+  exitPrCommentThread()
 }
 
 // isResolvedComment — whether a comment thread is currently resolved, i.e.
@@ -7106,7 +7166,8 @@ function commentCommandsFor() {
       run: () => convertWarningToComment(c),
     })
   }
-  if (needsPublishChoice(c)) items.push(publishThreadCommand(c))
+  if (needsPublishChoice(c))
+    items.push(publishThreadCommand(c, (withHistory) => publishThreadAndSelectRow(c, withHistory)))
   const githubId = focusedCommentGithubId()
   if (githubId) {
     items.push({
@@ -7464,7 +7525,8 @@ function prCommentCommandsFor() {
     hint: 'claude',
     run: () => startPrCommentChat(selectedComment()),
   })
-  if (needsPublishChoice(c)) items.push(publishThreadCommand(c))
+  if (needsPublishChoice(c))
+    items.push(publishThreadCommand(c, (withHistory) => publishPrCommentAndExit(c, withHistory)))
   items.push({
     id: 'pr-comment-ignore',
     // Label is a function so it names the current state (resolveLabel/
@@ -8318,7 +8380,13 @@ function stopResizeKey(key) {
   const now = performance.now()
   const heldMs = now - pressStart
   const isShortTap = heldMs <= KEY_RESIZE_TAP_MAX_MS
-  const isDoubleTap = isShortTap && lastTap[key].short && now - lastTap[key].time <= KEY_RESIZE_DOUBLE_TAP_MS
+  // Double-tap-to-reset is deliberately `c`-only — reviewer report: growing a
+  // column by tapping `v` twice in quick succession (meaning "grow it some
+  // more") kept getting misread as the double-tap reset instead, wiping out
+  // both taps' width change. `c` (shrink) keeps the double-tap reset
+  // unchanged; a `v` release always just commits, like a genuine hold would.
+  const isDoubleTap =
+    key === 'c' && isShortTap && lastTap[key].short && now - lastTap[key].time <= KEY_RESIZE_DOUBLE_TAP_MS
   lastTap[key] = { time: now, short: isShortTap }
   if (isDoubleTap) {
     handle.cancel()
@@ -14900,6 +14968,9 @@ function DetailPanel(state) {
             // pendingPushFiles/loadPendingPush). Its own nested slot inside
             // Block, so a push landing repaints the chip and nothing else.
             unpushed: () => pendingPushFiles().has(b.file),
+            // Marks a block whose file a not-yet-landed Claude edit is
+            // currently touching (see checkoutPendingFiles/loadCheckout).
+            editing: () => checkoutPendingFiles().has(b.file),
             // Dimmed like the look-ahead preview whenever it isn't the selected
             // card, OR the keyboard focus has stepped off it onto a drilled
             // column (state.focusLevel > 0).
@@ -15308,6 +15379,7 @@ function DetailPanel(state) {
                 ${Block(b, {
                   preview: !focusedHere,
                   unpushed: () => pendingPushFiles().has(b.file),
+                  editing: () => checkoutPendingFiles().has(b.file),
                   // Also feeds the 'fit' stand's width the same way the
                   // top-level card's activeGroup does — see
                   // focusedActiveUnit's own doc comment.

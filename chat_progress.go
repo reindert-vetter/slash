@@ -55,9 +55,19 @@ type chatProgress struct {
 	// Partial is the answer text produced so far this turn — what makes the
 	// reply visibly stream in. Never persisted: the saved message is written
 	// once, at the end, from the CLI's own final result.
-	Partial   string `json:"partial,omitempty"`
-	StartedAt int64  `json:"startedAt"` // unix ms
-	UpdatedAt int64  `json:"updatedAt"` // unix ms
+	Partial string `json:"partial,omitempty"`
+	// EditedFiles accumulates every repo-relative path an Edit/Write tool call
+	// touched THIS turn (chatProgressSink) — unlike Tool/Detail, which are
+	// overwritten by the next tool call, this list only grows for the
+	// lifetime of the turn (reset by startChatProgress at the next turn). It
+	// is what finishChatProgress hands to markChatFilesPending (chat_edit_
+	// pending.go) right before the snapshot itself is cleared — the review
+	// tree's own "wordt aangepast" status per block (reviewer request: "mag
+	// er een status bij elk blok uit dat bestand met dat het bezig met een
+	// aanpassing, dat moet weg als het is aangepast").
+	EditedFiles []string `json:"editedFiles,omitempty"`
+	StartedAt   int64    `json:"startedAt"` // unix ms
+	UpdatedAt   int64    `json:"updatedAt"` // unix ms
 	// repo/pr are unexported on purpose: they exist only so the PR-wide read
 	// (runningChatProgressForPR, GET /api/chat/progress?pr=N) can filter the
 	// map, and encoding/json skips them — the pushed frame's shape is
@@ -135,6 +145,12 @@ func finishChatProgress(repo string, pr int, conversationID string) {
 	chatProgressMu.Unlock()
 	if !ok {
 		return
+	}
+	// Hand off whatever files this turn touched to the PR-scoped "still
+	// pending" registry BEFORE the snapshot itself disappears — see
+	// chat_edit_pending.go and EditedFiles' own doc comment.
+	if len(p.EditedFiles) > 0 {
+		markChatFilesPending(repo, pr, p.EditedFiles)
 	}
 	p.Running = false
 	p.UpdatedAt = nowMillis()

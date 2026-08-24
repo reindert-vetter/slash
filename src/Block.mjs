@@ -1109,6 +1109,12 @@ export default function Block(b, opts = {}) {
   // card. Defaults to false, so a caller that doesn't know about it (the drill
   // preview) simply never shows the chip.
   const unpushed = opts.unpushed || (() => false)
+  // editing is a function returning whether this block's file is currently
+  // being touched by a not-yet-landed Claude edit (state.checkout.pendingFiles,
+  // see loadCheckout in home.mjs / editingPill in BlockList.mjs for the
+  // per-row twin of this same chip). Defaults to false, same reasoning as
+  // unpushed above.
+  const editing = opts.editing || (() => false)
   // approvedRows is a function returning the Set of approved row indices for this
   // block, so the panes re-tint (an emerald left bar) as the reviewer approves
   // units. A function (not a value) so the .innerHTML binding re-runs when
@@ -1386,6 +1392,18 @@ export default function Block(b, opts = {}) {
                 data-testid="block-unpushed"
                 class="rounded bg-amber-50 dark:bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300"
                 >⇧ ongepusht</span
+              >`
+            : ''}
+        ${() =>
+          // A not-yet-landed Claude edit is touching this file right now
+          // (state.checkout.pendingFiles, chat_edit_pending.go) — a
+          // deliberately different glyph/colour from unpushed() above, so
+          // the two never read as the same status.
+          editing()
+            ? html`<span
+                data-testid="block-editing"
+                class="rounded bg-sky-50 dark:bg-sky-500/15 px-1.5 py-0.5 text-[11px] font-medium text-sky-700 dark:text-sky-300"
+                >✎ wordt aangepast</span
               >`
             : ''}
         ${() =>
