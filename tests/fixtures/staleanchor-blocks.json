@@ -1,0 +1,13 @@
+[
+  {
+    "pr": 970601,
+    "file": "app/Actions/StaleAnchorAction.php",
+    "class": "StaleAnchorAction",
+    "name": "execute",
+    "category": "ACTION",
+    "line": 7,
+    "endLine": 17,
+    "status": "modified",
+    "side": "new"
+  }
+]

@@ -107,6 +107,7 @@ import RelatedPanel, {
   composeTargetHint,
   CommentClaudeFooter,
   hasCommentClaudeFooter,
+  hasAnyComments,
   isClaudeChatFocused,
   clearClaudeChat,
   retryClaudeTurn,
@@ -15456,7 +15457,14 @@ function DetailPanel(state) {
             // border/rounding/padding that never touches this row's own
             // edge, so dropping `overflow-hidden` here costs nothing
             // visually.
-            (!claudeChatVisible() && !hasCommentClaudeFooter()
+            //
+            // `!hasAnyComments()` (not folded away by hiddenAboveCount) is a
+            // fourth condition: a unit whose only comment is a stale
+            // (unpinned) one still has the "N hierboven" hint to show —
+            // hiding this whole row would make that hint's own promised
+            // navigation route unreachable. See "A stale (unpinned) comment
+            // is always folded..." in comments-panel.md.
+            (!claudeChatVisible() && !hasCommentClaudeFooter() && !hasAnyComments()
               ? 'hidden'
               : 'flex flex-col rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 ring-1 ring-black/5')}"
           data-testid="comment-claude-row"

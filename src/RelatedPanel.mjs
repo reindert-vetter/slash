@@ -492,8 +492,28 @@ function expandedCommentIndex() {
 // stays expanded once the keyboard moves on into the Claude column
 // (cs.focus === 'claude', see commentCard), and re-showing the cards above at
 // that moment would jump the whole column.
+//
+// While NOTHING is expanded yet (the diff still owns the keyboard, or the
+// new-comment composer is open), a LEADING run of stale (isStaleAnchor)
+// comments is folded too — reviewer request: "een verouderde comment mag
+// nooit standaard zichtbaar zijn naast de diff, ook niet als ik nog niet
+// naar de comments genavigeerd ben; hij mag alleen verscholen zitten achter
+// het bestaande 'N hierboven'-label". An unpinned comment's row is unknown
+// (see reanchor.go), so commentUnder keeps it reachable from EVERY unit of
+// its block (see commentUnder's own doc comment) — without this fold it would
+// sit there in full, at rest, on a line that has nothing to do with it (the
+// reported bug). Only a LEADING run: a stale comment that isn't first in
+// visibleComments() already sits below whatever real comment came before it
+// and keeps rendering as an ordinary (if field-reduced, see
+// compactConversation) card — see "A stale (unpinned) comment is always
+// folded..." in comments-panel.md for why a full reorder wasn't needed.
 function hiddenAboveCount() {
-  return Math.max(0, expandedCommentIndex())
+  const exp = expandedCommentIndex()
+  if (exp >= 0) return exp
+  const list = visibleComments()
+  let n = 0
+  while (n < list.length && isStaleAnchor(list[n])) n++
+  return n
 }
 
 // commentRowSet returns the aligned-diff rows of block b that carry a comment, so
@@ -1145,10 +1165,32 @@ function toComment(focusInput = true) {
 }
 
 // hasVisibleComments reports whether the currently selected unit carries at
-// least one comment conversation — the gate home.mjs' → (from the diff) uses
-// before entering the inline comment block: it's only a REACHABLE stop via →
-// when it actually has something to show (see keyboard-navigation.md).
+// least one comment conversation that is actually REACHABLE right now — the
+// gate home.mjs' → (from the diff) uses before entering the inline comment
+// block: it's only a REACHABLE stop via → when it actually has something to
+// show (see keyboard-navigation.md). Deliberately `> hiddenAboveCount()`, not
+// `> 0`: a unit whose only comment(s) are a stale, folded-away leading run
+// (see hiddenAboveCount) has nothing AT REST to show either — → and the
+// embedded Claude column (claudeChatVisible()) both skip straight past it,
+// same as a genuinely comment-less unit; the stale comment stays reachable
+// only through the "N hierboven" hint's own click handler, never through the
+// ordinary ←/→/↑/↓ chain. See "A stale (unpinned) comment is always folded
+// behind the ▲ hierboven hint" in comments-panel.md.
 export function hasVisibleComments() {
+  return visibleComments().length > hiddenAboveCount()
+}
+
+// hasAnyComments — unlike hasVisibleComments() above, this counts a comment
+// EVEN WHILE it sits folded behind the "N hierboven" hint (hiddenAboveCount):
+// "is there anything for InlineComments to render here at all", not "is
+// something reachable at rest". A fully-stale (isStaleAnchor) unit still has
+// exactly that hint to show — home.mjs's comment-claude-row wrapper and
+// relatedColumnIsEmpty() (this file) both need this broader question, or the
+// whole row (hint included) would hide itself as "nothing to show" the
+// moment the only comment in scope became unreachable at rest, making the
+// hint's own promised navigation route dead. See "A stale (unpinned)
+// comment is always folded..." in comments-panel.md.
+export function hasAnyComments() {
   return visibleComments().length > 0
 }
 
@@ -1178,28 +1220,43 @@ export function enterCommentsHead() {
 // on it via the unaffected branch below (enterCommentsHead() always starts
 // at 0, unconditionally) — this function changes nothing for that case, it
 // only ever fires the skip when index 0 itself is resolved.
+//
+// A STALE (unpinned, isStaleAnchor) index-0 comment gets the exact same
+// treatment, for the same reason: hasVisibleComments() only asks whether
+// something is reachable AT ALL (it already excludes a unit whose comments
+// are *entirely* a stale leading run, see hasVisibleComments' own doc
+// comment) — it does NOT guarantee list[0] itself isn't stale, since a
+// stale comment mixed in ahead of a real one on the SAME unit still sits at
+// index 0 of visibleComments() even though hiddenAboveCount() folds it out
+// of the at-rest rendering. Without this, → would land the reviewer
+// straight on the very card the fold is meant to hide. Reviewer request:
+// "als ik naar rechts ga, wil ik niet dat een verouderde comment gelijk
+// geselecteerd is, selecteer eerst een comment eronder of een onderliggend
+// codeblok" — see "A stale (unpinned) comment is always folded..." in
+// comments-panel.md.
 export function enterCommentsOrRelated(pr) {
   if (hasVisibleComments()) {
     const list = visibleComments()
-    if (list[0].status !== 'resolved') {
+    if (list[0].status !== 'resolved' && !isStaleAnchor(list[0])) {
       enterCommentsHead()
       return
     }
-    // The default landing comment is resolved — skip to the next still-open
-    // one if this unit has one (not necessarily adjacent: a run of several
-    // resolved comments ahead of it is skipped in one step).
-    const next = list.findIndex((c) => c.status !== 'resolved')
+    // The default landing comment is resolved or stale — skip to the next
+    // still-open, non-stale one if this unit has one (not necessarily
+    // adjacent: a run of several resolved/stale comments ahead of it is
+    // skipped in one step).
+    const next = list.findIndex((c) => c.status !== 'resolved' && !isStaleAnchor(c))
     if (next >= 0) {
       cs.sel = next
       toComment()
       return
     }
-    // Every comment on this unit is resolved — try Underlying code instead.
+    // Every comment on this unit is resolved/stale — try Underlying code instead.
     if (rc.children.length > 0) {
       enterRelated()
       return
     }
-    // Nothing else to land on: show the resolved comment anyway.
+    // Nothing else to land on: show the resolved/stale comment anyway.
     enterCommentsHead()
     return
   }
@@ -5558,6 +5615,21 @@ function aiWarningBadge(c) {
   >`
 }
 
+// isStaleAnchor — a comment whose exact row could no longer be re-found by the
+// re-anchor pass (reanchor.go's AnchorUnpinned, "verouderd — regel gewijzigd";
+// see staleAnchorBadge). Deliberately NOT the 'orphan' case too: an orphan's
+// whole block is gone, so it never resolves into this block-scoped list at all
+// (recomputeView's own `anchored` filter excludes it) — this predicate only
+// ever matters for a comment that DOES still render here. Used by
+// hiddenAboveCount/hasVisibleComments (fold it behind the "N hierboven" hint
+// instead of showing it at rest) and enterCommentsOrRelated (→ skips it as a
+// default landing, same as an already-resolved comment) — see "A stale
+// (unpinned) comment is always folded behind the ▲ hierboven hint" in
+// comments-panel.md.
+function isStaleAnchor(c) {
+  return !!c && c.anchorState === 'unpinned'
+}
+
 // staleAnchorBadge marks a comment whose code the PR has since moved out from
 // under it — either the whole symbol is gone ('orphan') or only the exact rows
 // could no longer be found ('unpinned'), see reanchor.go. Without it such a
@@ -5570,7 +5642,7 @@ function aiWarningBadge(c) {
 function staleAnchorBadge(c) {
   if (!c) return ''
   const label = c.anchorState === 'orphan' ? 'verouderd — code verdwenen' : ''
-  const unpinned = c.anchorState === 'unpinned' ? 'verouderd — regel gewijzigd' : ''
+  const unpinned = isStaleAnchor(c) ? 'verouderd — regel gewijzigd' : ''
   const text = label || unpinned
   if (!text) return ''
   return html`<span
@@ -6125,8 +6197,30 @@ function titleKeyOf(c) {
   return title ? 't' + title.length : c.titleStatus || '-'
 }
 
+// stale (isStaleAnchor(c)) reduces this card to exactly avatar + name + the
+// staleAnchorBadge label + the title, everything else omitted (the status
+// mark, the source/AI-warning/block-wide/send-failed badges, the body
+// preview, the file:line/reactions meta line). Reviewer request: "als er
+// staat 'verouderd - regel gewijzigd', laat dan alleen avatar, naam, label en
+// titel zien" — the stored snippet/body no longer describes anything the
+// reviewer can still see in the diff, so showing it in full reads as
+// misleading detail about code that has moved. Only `compactConversation`
+// (the at-rest card): `expandedConversation` — reached deliberately, via the
+// "N hierboven" hint or an explicit ↑/click — is left exactly as it always
+// was, so the reviewer can still read the full thread once they choose to.
+// See "A stale (unpinned) comment is always folded..." in comments-panel.md.
+// `stale` is a plain (non-reactive) value fixed for this component's whole
+// lifetime — the caller's `.key()` includes `c.anchorState` precisely so a
+// later transition rebuilds this card instead of reusing a stale binding
+// (arrowjs-pitfalls.md's "a keyed node is reused without re-running its
+// bindings"). Every toggle below still goes through a `${() => …}` function
+// slot regardless, not a bare ternary — the "statically interpolated
+// template↔string" pitfall in arrowjs-pitfalls.md applies across DIFFERENT
+// instances of this same template shape (one per comment), not just re-runs
+// of one instance.
 function compactConversation(c, i, full, openCommentMenu) {
   const who = identityOf(c.source, c.author, c.avatarUrl)
+  const stale = isStaleAnchor(c)
   return html`
     <button
       class="${() =>
@@ -6140,6 +6234,7 @@ function compactConversation(c, i, full, openCommentMenu) {
       data-testid="comment-item"
       data-comment-id="${c.id}"
       data-expanded="false"
+      data-stale-anchor="${stale ? 'true' : 'false'}"
       @click="${() => {
         cs.sel = i
         toComment()
@@ -6157,7 +6252,7 @@ function compactConversation(c, i, full, openCommentMenu) {
         openCommentMenu({ native: true, x: e.clientX, y: e.clientY })
       }}"
     >
-      ${() => commentStatusMark(c, 'mt-1')}
+      ${() => (stale ? '' : commentStatusMark(c, 'mt-1'))}
       <span class="flex min-w-0 flex-col gap-0.5">
         ${() =>
           isChatAnchorPlaceholder(c) && !firstReviewerReplyOnPlaceholder(c)
@@ -6168,23 +6263,29 @@ function compactConversation(c, i, full, openCommentMenu) {
                   <span class="truncate text-[11px] font-medium leading-5 text-slate-600 dark:text-zinc-400" data-testid="comment-author"
                     >${who.name || 'onbekend'}</span
                   >
-                  ${() => sourceBadge(c)}
-                  ${() => aiWarningBadge(c)}
-                  ${() => blockWideBadge(c)}
+                  ${() => (stale ? '' : sourceBadge(c))}
+                  ${() => (stale ? '' : aiWarningBadge(c))}
+                  ${() => (stale ? '' : blockWideBadge(c))}
                   ${() => staleAnchorBadge(c)}
-                  ${() => sendFailedBadge('reply:' + c.id)}
+                  ${() => (stale ? '' : sendFailedBadge('reply:' + c.id))}
                 </span>
               `}
         ${() => commentTitleLine(c)}
-        <span
-          class="${full && !commentTitleOf(c)
-            ? '[overflow-wrap:anywhere] text-xs font-medium text-slate-800 dark:text-zinc-200'
-            : 'line-clamp-3 [overflow-wrap:anywhere] text-xs font-medium text-slate-800 dark:text-zinc-200'}"
-          .innerHTML="${commentBody(c, threadFenceStartIndexes(c).get('origin:' + c.id) ?? 0)}"
-        ></span>
-        <span class="truncate text-[11px] leading-snug text-slate-500 dark:text-zinc-500" data-testid="comment-meta"
-          >${() => truncateMiddle(c.file) + ':' + c.line + ' · ' + commentReactionStatusLine(c)}</span
-        >
+        ${() =>
+          stale
+            ? ''
+            : html`<span
+                class="${full && !commentTitleOf(c)
+                  ? '[overflow-wrap:anywhere] text-xs font-medium text-slate-800 dark:text-zinc-200'
+                  : 'line-clamp-3 [overflow-wrap:anywhere] text-xs font-medium text-slate-800 dark:text-zinc-200'}"
+                .innerHTML="${commentBody(c, threadFenceStartIndexes(c).get('origin:' + c.id) ?? 0)}"
+              ></span>`}
+        ${() =>
+          stale
+            ? ''
+            : html`<span class="truncate text-[11px] leading-snug text-slate-500 dark:text-zinc-500" data-testid="comment-meta"
+                >${() => truncateMiddle(c.file) + ':' + c.line + ' · ' + commentReactionStatusLine(c)}</span
+              >`}
       </span>
     </button>
   `
@@ -6734,10 +6835,16 @@ function inlineCommentsCardHTML(state, commentTarget, openCompose, openCommentMe
           // titleKeyOf: a later-arriving comment title must rebuild the card,
           // see its own doc comment. readOnly rides along in the key too —
           // its own doc comment on commentCard explains why (a composer
-          // appearing/disappearing is a real shape change).
+          // appearing/disappearing is a real shape change). anchorState too:
+          // a re-anchor pass landing on the SAME comment id (a poll turning a
+          // pinned comment 'unpinned', or re-pinning it later) must rebuild
+          // compactConversation's stale-reduced fields — a keyed-node reuse
+          // would otherwise keep rendering the OLD anchorState forever, see
+          // "A keyed node is reused without re-running its bindings" in
+          // .claude/rules/arrowjs-pitfalls.md.
           cards.push(
             commentCard(list[i], i, openCommentMenu, readOnly).key(
-              'comment:' + list[i].id + ':' + titleKeyOf(list[i]) + ':' + (readOnly ? 'ro' : 'rw'),
+              'comment:' + list[i].id + ':' + titleKeyOf(list[i]) + ':' + (readOnly ? 'ro' : 'rw') + ':' + (list[i].anchorState || '-'),
             ),
           )
         }
@@ -7275,9 +7382,9 @@ function relatedWidthCls(chars, scale, subtractRem = 0) {
 // own doc comment): those two siblings keep deriving from the unchanged
 // clamp, so narrowing this column may only happen while the comment/Claude
 // row above it has nothing to align with in the first place — which is
-// exactly `!claudeChatVisible() && !hasCommentClaudeFooter()`, the very
-// expression home.mjs's comment-claude-row uses for its own `hidden` class
-// (measured: that row is then 0px wide).
+// exactly `!claudeChatVisible() && !hasCommentClaudeFooter() &&
+// !hasAnyComments()`, the very expression home.mjs's comment-claude-row uses
+// for its own `hidden` class (measured: that row is then 0px wide).
 //
 // Deliberately NOT gated on the "zoeken…" pill (searching() in
 // RelatedPanel below): an unresolved call whose LLM search is still running is
@@ -7289,6 +7396,11 @@ function relatedWidthCls(chars, scale, subtractRem = 0) {
 // NARROW_FIXED_WIDTH_CLS in Block.mjs; `w-[18rem]` also stays parseable by
 // parseAutoWidthPx's bare-rem branch, so a drag on this column still snaps
 // back correctly.
+//
+// `!hasAnyComments()` (not hasVisibleComments()) is deliberate here too: a
+// unit whose only comment is a stale one folded behind the "N hierboven"
+// hint still has that hint to align with, same reasoning as home.mjs's
+// comment-claude-row hidden class right below this comment's own reference.
 const RELATED_EMPTY_WIDTH_CLS = 'w-[18rem]'
 
 function relatedColumnIsEmpty() {
@@ -7296,7 +7408,8 @@ function relatedColumnIsEmpty() {
     rc.children.length === 0 &&
     !rc.warning &&
     !claudeChatVisible() &&
-    !hasCommentClaudeFooter()
+    !hasCommentClaudeFooter() &&
+    !hasAnyComments()
   )
 }
 

@@ -163,6 +163,29 @@ function seed(db) {
     ],
     { stdio: 'ignore', env: SEED_ENV },
   )
+  // Stale-anchor (unpinned) fixture (PR 970601,
+  // comment-stale-anchor-fold.spec.mjs): one block with three separate
+  // change groups (worktree materialized in _setup.mjs,
+  // materializeStaleAnchorWorktrees) plus one seeded comment marked
+  // anchorState 'unpinned' — the row it hung on could no longer be
+  // re-found by the re-anchor pass (reanchor.go), same reasoning as the
+  // orphan fixture above for why this is seeded rather than driven through
+  // the API. Its own PR number, separate from 970600, so this spec's
+  // comment count/hint assertions can't be disturbed by the orphan fixture's
+  // comments or vice versa.
+  execFileSync(
+    BIN,
+    [
+      'seed',
+      '-db',
+      db,
+      '-from',
+      'tests/fixtures/staleanchor-blocks.json',
+      '-comments',
+      'tests/fixtures/staleanchor-comments.json',
+    ],
+    { stdio: 'ignore', env: SEED_ENV },
+  )
   // Empty-code fixture (PR 96, related-empty-code.spec.mjs): a resolved call
   // whose embedded childCode is empty — must render "geen code gevonden"
   // immediately, never "code laden…".

@@ -66,6 +66,7 @@ export default function globalSetup() {
   materializeSettings()
   materializeOpsRepoWorktrees()
   materializeAdditionsOnlyWorktrees()
+  materializeStaleAnchorWorktrees()
 }
 
 // materializeBlockMoveWorktrees writes the base/head worktrees for the
@@ -1227,6 +1228,43 @@ class ExplainRangeAction
   const write = worktreeWriter(116)
   write('base', 'app/Actions/ExplainRangeAction.php', file(0, 0, 0, 0, 0, 0))
   write('head', 'app/Actions/ExplainRangeAction.php', file(1, 2, 3, 4, 5, 6))
+}
+
+// materializeStaleAnchorWorktrees writes the synthetic PR 970601 fixture
+// worktrees for comment-stale-anchor-fold.spec.mjs: one method with THREE
+// separate single-line change groups ($a/$b/$c, each split from its
+// neighbours by two unchanged filler rows, same shape as
+// materializeExplainRangeWorktrees above) — so the spec can walk ↓ through
+// three DIFFERENT units of the same block while a single seeded 'unpinned'
+// comment (tests/fixtures/staleanchor-comments.json, anchorState 'unpinned' —
+// anchor_state is unreachable from the UI, same reasoning as the orphan
+// fixture in orphan-comments.json) stays reachable from every one of them
+// (commentUnder's "unknown anchor" leniency, RelatedPanel.mjs) while a REAL
+// comment the spec places itself through the composer only matches its own
+// group ($b).
+function materializeStaleAnchorWorktrees() {
+  const file = (a, b, c) => `<?php
+
+namespace App\\Actions;
+
+class StaleAnchorAction
+{
+    public function execute()
+    {
+        $a = ${a};
+        $pad1 = 0;
+        $pad2 = 0;
+        $b = ${b};
+        $pad3 = 0;
+        $pad4 = 0;
+        $c = ${c};
+        return $a + $b + $c;
+    }
+}
+`
+  const write = worktreeWriter(970601)
+  write('base', 'app/Actions/StaleAnchorAction.php', file(0, 0, 0))
+  write('head', 'app/Actions/StaleAnchorAction.php', file(1, 2, 3))
 }
 
 // materializeWhenScopeWorktrees writes the synthetic PR 119 fixture worktrees

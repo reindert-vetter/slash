@@ -455,6 +455,96 @@ index past the end is structurally unrenderable — and a stale index still *in*
 range would mark the wrong row, which no bound can catch, only re-anchoring can.
 Same reasoning for `approvedRowSet`.
 
+### A stale (unpinned) comment is always folded behind the ▲ hierboven hint
+
+Reviewer report (screenshot): standing on a diff line that has nothing to do
+with any comment still showed two "verouderd — regel gewijzigd" cards plus
+their Claude conversation, left over from an earlier unit — "ik sta hier op
+een regel zonder comment, laat dan ook niks zien, ook al was ik net wel bij
+een nadere line met een comment." The root cause is `commentUnder`'s own
+deliberate leniency two sections up ("A comment with an unknown anchor…
+always shown within its block"): an **`unpinned`** comment's row is
+literally unknown (`rowStart`/`rowEnd` both `-1`, see reanchor.go), so it
+matched every unit of its block, not just the one it once hung on.
+
+That leniency is still needed — an unpinned comment must stay reachable
+*somewhere* — so the fix does not remove it. Instead it reuses the **existing**
+"cards above the cursor are hidden behind a hint" mechanism
+(`hiddenAboveCount`/`moreAboveHint`, "The selected conversation hides the ones
+above it" elsewhere in this file) rather than inventing a second UI: a stale
+comment is now ALSO always counted as folded, even while nothing in the panel
+is focused yet (the diff still owns the keyboard). Reviewer's explicit framing:
+"altijd weg, verscholen achter een bestaande label met comments die boven
+aanwezig zijn buiten beeld — daar kan je dan wel naartoe navigeren."
+
+- **`isStaleAnchor(c)`** (`RelatedPanel.mjs`) — `c.anchorState === 'unpinned'`.
+  Deliberately **not** `orphan` too: an orphan's whole block is gone, so it
+  never reaches this block-scoped list at all (`recomputeView`'s own
+  `anchored` filter excludes it, see the section above) — this predicate only
+  ever needs to matter for a comment that DOES still render here.
+- **`hiddenAboveCount()`** grew a second source of folding on top of its
+  existing "cards above the EXPANDED one" rule: while nothing is expanded yet
+  (`expandedCommentIndex() === -1`), it now also folds a **leading run** of
+  `isStaleAnchor` comments in `visibleComments()`. Only a leading run, not an
+  arbitrary reorder — a stale comment does not jump ahead of a real one that
+  already sorts before it (`cs.list`'s own `created_at` order, unchanged); it
+  is simply never the FIRST thing shown while nothing has been entered yet.
+  When a unit's only comment(s) are entirely stale, this folds every one of
+  them, and the render loop (`InlineComments`) then draws nothing — exactly
+  the reported "toon niks" case.
+- **`hasVisibleComments()`** changed from `visibleComments().length > 0` to
+  `visibleComments().length > hiddenAboveCount()` — "is at least one comment
+  reachable AT REST", not merely "does one exist somewhere in scope". This is
+  the → gate (`enterCommentsOrRelated`'s outer `if`) and, via
+  `claudeChatVisible()`, what makes the embedded Claude column disappear too:
+  a unit whose only comment is a folded stale one has nothing to hang a
+  conversation on at rest, so → and the Claude column both skip straight past
+  it to Underlying code, same as a genuinely comment-less unit.
+- **`hasAnyComments()`** is the DELIBERATELY UNCHANGED old question
+  (`visibleComments().length > 0`) under a new name, still needed because
+  `hasVisibleComments()` above no longer answers it: home.mjs's
+  `comment-claude-row` wrapper and `relatedColumnIsEmpty()` (both gate on
+  `!claudeChatVisible() && !hasCommentClaudeFooter()`) must NOT also hide the
+  whole row while a fold hint is the only thing left to show — that would make
+  the hint's own promised navigation route dead. Both call sites grew a third
+  `&& !hasAnyComments()` term.
+- **`enterCommentsOrRelated`'s existing resolved-skip** (see "→ skips an
+  already-resolved default comment" above) grew a second skip condition,
+  `isStaleAnchor(list[0])`, checked the exact same way: skip to the first
+  comment that is neither resolved nor stale, else to Underlying code, else
+  show `list[0]` anyway. Still a real scenario even though a fully-stale unit
+  never reaches this far (`hasVisibleComments()` is false for it, see above):
+  a unit with BOTH a stale comment (sorted first, per `cs.list`'s
+  `created_at` order) and a real one still has `list[0]` pointing at the
+  stale one — `hiddenAboveCount()` only changes where the render loop STARTS,
+  it never reorders or removes anything from `visibleComments()` itself.
+  Reviewer's own words: "als ik naar rechts ga, wil ik niet dat die gelijk
+  geselecteerd is, selecteer eerst een comment eronder of een onderliggend
+  codeblok."
+- **`compactConversation`** reduces to exactly avatar + name +
+  `staleAnchorBadge` (the "label") + `commentTitleLine` (the "titel") when
+  `isStaleAnchor(c)` — everything else (`commentStatusMark`, `sourceBadge`,
+  `aiWarningBadge`, `blockWideBadge`, `sendFailedBadge`, the body preview, the
+  `bestand:regel · N reacties · status` meta line) is omitted. Reviewer's own
+  words: "laat dan alleen avatar, naam, label en titel zien." This is the one
+  place a stale comment still renders as an ordinary (if field-reduced) card
+  at rest — only reachable when it sits BELOW a real comment on the same
+  unit, since the leading-run fold above never touches anything past the
+  first non-stale entry. `expandedConversation` (reached via the hint, or an
+  explicit ↑ once inside the panel) is deliberately **untouched** — the full
+  thread is exactly as readable as any other comment's once the reviewer
+  chooses to open it; only the passive, unopened default view is reduced.
+  Each card's `.key()` grew `c.anchorState`, so a live transition into/out of
+  `unpinned` (the re-anchor pass landing on an already-mounted card) rebuilds
+  it instead of reusing stale bindings (`data-stale-anchor` on the card marks
+  the state for tests, per the colorblind rule the word/omission of fields
+  still carries the meaning, not a colour).
+
+Test: `tests/comment-stale-anchor-fold.spec.mjs` (fixture PR 970601,
+`materializeStaleAnchorWorktrees`/`staleanchor-comments.json` — `anchorState`
+is unreachable from the UI, same reasoning as the orphan fixture above, so
+this one is seeded too).
+
 ### No more explicit Annuleer button
 
 `newCommentComposer`'s composer footer used to show two buttons,

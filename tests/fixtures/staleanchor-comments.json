@@ -1,0 +1,21 @@
+[
+  {
+    "id": "stale-1",
+    "runId": "stale-1",
+    "pr": 970601,
+    "file": "app/Actions/StaleAnchorAction.php",
+    "line": 9,
+    "author": "colleague",
+    "body": "Dit verwijst naar een regel die inmiddels is verschoven.",
+    "createdAt": "2027-01-05T09:00:00Z",
+    "status": "open",
+    "code": "        $b = 0;",
+    "gran": "line",
+    "label": "StaleAnchorAction::execute",
+    "rowStart": -1,
+    "rowEnd": -1,
+    "anchorState": "unpinned",
+    "path": "/pr-970601/app/Actions/StaleAnchorAction.php/StaleAnchorAction::execute/unpinned/comment-stale-1",
+    "source": "github"
+  }
+]

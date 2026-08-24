@@ -206,11 +206,14 @@ Transitions, and how they differ from the older per-mechanism behaviour:
 - **Stop 2 ↔ 3 / 3 ↔ 4:** see the `'list'`/`'diff'` sections below resp.
   "Column navigation" in `.claude/docs/drilling.md`.
 - **Stop 3/4 ↔ 5 ↔ 5b ↔ 6:** `→` from the diff lands on stop 5 (the first
-  conversation) when the unit has one and it isn't already resolved
-  (`enterCommentsOrRelated()`, RelatedPanel.mjs — an already-resolved first
-  conversation instead skips straight to the next open one, or to stop 6,
-  see "→ skips an already-resolved default comment" in
-  `.claude/docs/comments-panel.md`), else straight on to **stop 5b**, the
+  conversation) when the unit has one, it isn't already resolved, and it
+  isn't a stale (unpinned) anchor either (`enterCommentsOrRelated()`,
+  RelatedPanel.mjs — an already-resolved OR stale first conversation instead
+  skips straight to the next open, non-stale one, or to stop 6, see "→ skips
+  an already-resolved default comment" and "A stale (unpinned) comment is
+  always folded…" in `.claude/docs/comments-panel.md`; a unit whose comments
+  are ENTIRELY stale has no stop 5 at all — `hasVisibleComments()` is false
+  for it), else straight on to **stop 5b**, the
   embedded Claude chat (`enterClaudeChat()`) — it no longer
   goes to stop 6 from here. `↓` on the last conversation (or at the bottom of an
   open thread) falls through to stop 6 instead of clamping; `↓` at the bottom
