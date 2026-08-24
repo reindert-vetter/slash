@@ -7893,6 +7893,38 @@ function copySelectionCommand(text) {
   }
 }
 
+// dedentCode strips the leading whitespace SHARED by every non-empty line of
+// a copied unit's code — reviewer request: "de geselecteerde regel kunnen
+// kopiëren... zonder de leidende spaties". A single line simply loses its
+// own indentation; a multi-line `group` unit keeps its RELATIVE nesting
+// (only the common prefix goes), so a nested `if` inside the copied group
+// doesn't get flattened onto the same column as its parent.
+function dedentCode(code) {
+  const lines = code.split('\n')
+  let min = Infinity
+  for (const line of lines) {
+    if (!line.trim()) continue
+    const leading = /^[ \t]*/.exec(line)[0].length
+    if (leading < min) min = leading
+  }
+  if (!isFinite(min)) min = 0
+  return lines.map((line) => line.slice(Math.min(min, line.length))).join('\n')
+}
+
+// copySelectedCode — "Kopieer deze regel" (COMMANDS): copies the source code
+// of whichever navigation unit is currently focused (commentTarget's own
+// gran/rowStart-scoped `code`, the same text "Comment op deze regel"/"Chat
+// over deze regel" anchor to), minus its shared leading indentation
+// (dedentCode) — reusing copyReviewSummary's existing clipboard mechanism,
+// same as copySelectionCommand above. A codeless target (a block with no
+// navigable unit, commentTarget's own `code: ''` fallback) is a no-op —
+// there is nothing to copy.
+async function copySelectedCode() {
+  const t = commentTarget()
+  if (!t || !t.code) return
+  await copyReviewSummary(dedentCode(t.code))
+}
+
 // submitReview posts a real GitHub PR-level review via the submit_review
 // Workflow (POST /api/workflows/submit_review — the sanctioned write path,
 // see .claude/rules/workflows-write-boundary.md; the backend itself is out
@@ -11374,6 +11406,16 @@ const COMMANDS = withClose([
     label: 'Chat over deze regel',
     hint: 'claude',
     run: () => startClaudeChat(commentTarget),
+  },
+  {
+    id: 'copy-line',
+    // Reviewer request: copy the currently focused unit's code, without its
+    // shared leading indentation (dedentCode) — same clipboard mechanism as
+    // the native right-click menu's "Kopieer selectie", just for the current
+    // navigation unit instead of a dragged text selection.
+    label: 'Kopieer deze regel',
+    hint: 'copy kopieer',
+    run: () => copySelectedCode(),
   },
   {
     id: 'github',

@@ -373,7 +373,18 @@ the field. Filter + fallback both live in `resolveCommands(query)`.
 Block actions only: toggle approve, comment on this line (`startComment` from
 `RelatedPanel.mjs`), **"Chat over deze regel"** (`startClaudeChat` — opens the
 Claude composer directly, with no comment written/placed first; see
-"`Enter` → 'Chat over deze regel'" in `.claude/docs/claude-chat-panel.md`), and
+"`Enter` → 'Chat over deze regel'" in `.claude/docs/claude-chat-panel.md`),
+**"Kopieer deze regel"** (`copySelectedCode` — copies the focused unit's own
+code, from `commentTarget().code`, minus its shared leading indentation via
+`dedentCode`; reviewer request — "de geselecteerde regel kunnen kopiëren...
+zonder de leidende spaties". `dedentCode` strips only the whitespace common to
+every line, so a multi-line `group` unit keeps its relative nesting instead of
+flattening it. Reuses the same clipboard mechanism as the native right-click
+menu's own "Kopieer selectie" (`copyReviewSummary`/`copySelectionCommand`
+above) — just for the current navigation unit rather than a dragged text
+selection. A no-op when the target has no code at all, e.g. a block with no
+navigable unit. Deliberately out of scope so far: an equivalent bulk copy for
+a Shift+↑/↓ multi-selection — `rangeCommandsFor` gets no matching item), and
 **Open GitHub**. Deliberately **no** navigation items (step in diff / next /
 previous) — that's what the arrows and `f`/`d`/`s` are for.
 
