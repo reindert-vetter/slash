@@ -1959,8 +1959,15 @@ const pureChatDraftReplyIds = new Set()
 //   2. The text is ALWAYS written into replyDrafts (so it's there next time the
 //      reviewer opens this thread, even if it isn't mounted right now), but the
 //      DOM focus only moves onto the field when the reviewer is NOT currently
-//      typing in the Claude composer — never steal the keyboard out from under
-//      an in-progress follow-up message.
+//      MID-TYPING an unsent follow-up in the Claude composer — never steal the
+//      keyboard out from under an in-progress message. A merely-focused but
+//      EMPTY Claude composer does not count as "in progress": the reviewer's
+//      own send already clears that field (see ClaudeChat.mjs's Enter/"Stuur"
+//      handlers) without blurring it, so right after sending, DOM focus still
+//      sits there with nothing left to protect — and the reviewer explicitly
+//      wants the focus to land in the comment field the moment this draft
+//      arrives (see "Focus after placing a draft" in
+//      .claude/docs/claude-chat-panel.md).
 //   3. An already-typed reviewer draft is never overwritten or discarded —
 //      Claude's text is appended UNDERNEATH it (blank line separator), so both
 //      survive.
@@ -2003,8 +2010,13 @@ function applyPendingDraftReplies(commentId) {
   el.value = merged
   autoGrowTextarea(el) // .value= fires no input event, so the auto-grow needs an explicit nudge
   const active = document.activeElement
-  const typingInClaude = !!(active && active.matches && active.matches('[data-testid=claude-chat-compose]'))
-  if (typingInClaude) return // never steal the keyboard out from under an in-progress follow-up message
+  const typingInClaude = !!(
+    active &&
+    active.matches &&
+    active.matches('[data-testid=claude-chat-compose]') &&
+    active.value.trim()
+  )
+  if (typingInClaude) return // never steal the keyboard out from under an in-progress, UNSENT follow-up message
   el.focus()
   if (pure) el.select()
   else el.setSelectionRange(el.value.length, el.value.length)

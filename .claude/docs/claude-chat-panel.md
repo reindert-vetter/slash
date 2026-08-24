@@ -1676,21 +1676,39 @@ resync, never re-appends the same text twice):
    die input overschreven/samengevoegd worden door vervolg chat met claude"
    (Reindert's own words).
 2. **Focus only moves onto `reaction-compose` when the reviewer is NOT
-   currently typing in the Claude composer** (`document.activeElement` checked
-   against `[data-testid=claude-chat-compose]`) — the text is written into
-   `replyDrafts` (and the mounted field, if any) unconditionally either way,
-   only the caret-steal is conditional. Deliberately a plain, synchronous
-   `document.querySelector` + `.value=`/`.focus()`, NOT `prefillField`'s rAF +
-   `focusToken`-gated wait: that mechanism exists for a field that is only
-   ABOUT to mount because of the very state change that requested the focus,
-   and entering/leaving the Claude column in between can bump `focusToken`
-   before the deferred write lands — which silently dropped the draft in an
-   early version of this feature. `reaction-compose` is (per "One card per
-   conversation, only the focused... expands" in `.claude/docs/comments-panel.md`)
-   already mounted whenever `applyPendingDraftReplies` runs, or genuinely not
-   part of the current view at all (then only `replyDrafts` gets the write,
-   picked up next time `toComment` opens this thread) — either way a
-   synchronous read settles it with no race.
+   currently MID-TYPING an unsent follow-up in the Claude composer**
+   (`document.activeElement` checked against
+   `[data-testid=claude-chat-compose]` **and** that field's own `.value` is
+   non-empty) — the text is written into `replyDrafts` (and the mounted
+   field, if any) unconditionally either way, only the caret-steal is
+   conditional. Deliberately a plain, synchronous `document.querySelector` +
+   `.value=`/`.focus()`, NOT `prefillField`'s rAF + `focusToken`-gated wait:
+   that mechanism exists for a field that is only ABOUT to mount because of
+   the very state change that requested the focus, and entering/leaving the
+   Claude column in between can bump `focusToken` before the deferred write
+   lands — which silently dropped the draft in an early version of this
+   feature. `reaction-compose` is (per "One card per conversation, only the
+   focused... expands" in `.claude/docs/comments-panel.md`) already mounted
+   whenever `applyPendingDraftReplies` runs, or genuinely not part of the
+   current view at all (then only `replyDrafts` gets the write, picked up
+   next time `toComment` opens this thread) — either way a synchronous read
+   settles it with no race.
+
+   **Focus after placing a draft — the empty-vs-non-empty refinement.**
+   Reviewer request: "hierna wil ik gelijk een focus hebben in de
+   comment-input" (right after sending "maak hier een comment van" and
+   seeing the "concept in comment-veld gezet" badge, the caret stayed in the
+   now-empty, but still-focused, Claude composer instead of jumping into the
+   comment field). `ClaudeChat.mjs`'s Enter/"Stuur" handlers clear
+   `claude-chat-compose`'s value on send but never blur it, so
+   `document.activeElement` still matches it the moment the response (and its
+   `draft_reply` turn) lands — the original bare
+   `active.matches('[data-testid=claude-chat-compose]')` check therefore also
+   suppressed the steal for this, by far the most common, case. Requiring
+   `active.value.trim()` too fixes exactly that: an empty, merely-still-focused
+   composer no longer counts as "in progress", so the focus now lands on
+   `reaction-compose` right after the send completes, while a GENUINELY
+   mid-typed (non-empty) follow-up still keeps the keyboard, unchanged.
 3. **An already-typed reviewer draft is never overwritten or discarded** —
    Claude's text is appended UNDERNEATH it (`existing + '\n\n' + body`), so
    both survive; a reviewer composing their own reply while Claude is
@@ -1709,9 +1727,10 @@ merged in from an earlier reviewer draft.
 - **`applyPendingDraftReplies`** tracks this per comment id in
   `pureChatDraftReplyIds` (a plain `Set`, mirrors `appliedDraftReplyIds`'s
   session-only shape) and, when it does focus the field (rule 2's "not
-  currently typing in Claude" gate still applies), calls `el.select()` instead
-  of placing the caret at the end — so a bare Enter sends it as-is, and typing
-  anything replaces the whole draft in one go rather than appending after it.
+  mid-typing an unsent follow-up in Claude" gate still applies), calls
+  `el.select()` instead of placing the caret at the end — so a bare Enter
+  sends it as-is, and typing anything replaces the whole draft in one go
+  rather than appending after it.
 - **The mark is cleared by the FIRST edit**: `reaction-compose`'s own `@input`
   handler deletes the comment's id from `pureChatDraftReplyIds` the moment the
   reviewer changes so much as one character — from then on this is ordinary
@@ -3241,11 +3260,15 @@ no new observer config needed.
   composer — a page navigation away loses an unsent, half-typed message. Not
   requested; flagging as a known gap mirroring the existing comment
   composer's own draft feature.
-- `applyPendingDraftReplies`'s "focus stays put while the reviewer is typing
-  in the Claude composer" rule (see "A `reply` directive only drafts, never
-  posts" above) has no Playwright coverage — driving a second, LATER draft
-  turn to arrive precisely while a real keystroke sits in
-  `claude-chat-compose` would need the same SSE-reconnect timing
-  `claude-chat-progress.spec.mjs` relies on, without that spec's luxury of a
-  steady state to poll for. The merge/append/never-auto-post behavior itself
-  IS covered (see above).
+- `applyPendingDraftReplies`'s "focus stays put while the reviewer is
+  GENUINELY mid-typing an unsent follow-up in the Claude composer" half (see
+  "Focus after placing a draft" above) still has no Playwright coverage —
+  driving a second, LATER draft turn to arrive precisely while a real
+  keystroke sits in `claude-chat-compose` would need the same SSE-reconnect
+  timing `claude-chat-progress.spec.mjs` relies on, without that spec's
+  luxury of a steady state to poll for. The far more common counterpart — the
+  composer is EMPTY but still focused right after the reviewer's own send —
+  IS covered: "Claude chat: focus lands in the comment field right after
+  sending, once the composer is empty" in `tests/claude-chat-panel.spec.mjs`.
+  The merge/append/never-auto-post behavior itself is also covered (see
+  above).

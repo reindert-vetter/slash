@@ -1223,6 +1223,77 @@ test('Claude chat: clicking straight into the composer of an already-anchored co
   await expect(page.getByTestId('reaction-compose')).toHaveValue(draftBody)
 })
 
+// Reviewer request: "hierna wil ik gelijk een focus hebben in de
+// comment-input" — right after sending a message like "maak hier een comment
+// van" and getting a drafted reply back, the caret should land in the comment
+// field, not stay behind in the now-empty Claude composer. ClaudeChat.mjs's
+// own Enter handler clears claude-chat-compose's value on send but never
+// blurs it, so document.activeElement still matched it the moment the
+// response landed — applyPendingDraftReplies' focus-steal guard originally
+// only checked `document.activeElement`, not whether that field still held
+// unsent text, and wrongly treated this as "reviewer mid-typing a follow-up".
+// See "Focus after placing a draft" in claude-chat-panel.md.
+test('Claude chat: focus lands in the comment field right after sending, once the composer is empty', async ({
+  page,
+}, testInfo) => {
+  const pr = seededPr(testInfo)
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: {
+      pr,
+      file: 'test.php',
+      line: 1,
+      author: 'reviewer',
+      body: 'is dit nog in gebruik?',
+      code: '$order->total();',
+      gran: 'call',
+      label: 'Order::total',
+    },
+  })
+  const conversationId = (await start.json()).runId
+  expect(conversationId).toBeTruthy()
+
+  // The Signal itself is mocked (never touches the real claude CLI) — this
+  // test is purely about the DOM-focus consequence of a send, not about the
+  // conversation content. The draft only becomes visible on the transcript
+  // AFTER the Signal fires — mirroring the real turn — so
+  // applyPendingDraftReplies genuinely runs as a consequence of THIS send,
+  // not already during the earlier ArrowRight anchor-load (which would apply
+  // it, and focus reaction-compose, before the reviewer typed anything at
+  // all — the exact ordering bug this test must not paper over).
+  let sent = false
+  await page.route('**/signals/message', (route) => {
+    sent = true
+    route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
+  })
+
+  const draftBody = 'Concept van Claude: maak hiervan een comment.'
+  await page.route('**/api/chat?commentId=' + conversationId, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        messages: sent ? [{ id: 'draft-1', role: 'assistant', kind: 'draft_reply', body: draftBody }] : [],
+      }),
+    }),
+  )
+
+  await page.goto('/pr/' + pr)
+  const item = page.getByTestId('comment-item').first()
+  await expect(item).toBeVisible()
+  await item.click()
+  await page.keyboard.press('ArrowRight') // comment -> claude
+
+  const composer = page.getByTestId('claude-chat-compose')
+  await expect(composer).toBeFocused()
+  await composer.fill('maak hier een comment van')
+  await composer.press('Enter') // clears composer's value, but leaves it focused
+
+  const reply = page.getByTestId('reaction-compose')
+  await expect(reply).toHaveValue(draftBody)
+  await expect(reply).toBeFocused()
+  await expect(composer).toHaveValue('')
+})
+
 // A pure, still-unedited Claude draft (the reply field was genuinely EMPTY
 // when it landed, unlike the merge case above) gets select-all'd, and a bare
 // Enter posts it straight to GitHub — no publish-choice menu — see "A pure
