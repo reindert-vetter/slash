@@ -134,6 +134,10 @@ that set stays small on purpose; a new topic file belongs in `.claude/docs/`.
 - `workflows-comments.md` — `task_code_comment`, the GitHub comment import,
   and `claude_chat`/`chat_merge` (the embedded conversation, its agentic
   edits and their serialized commits).
+- `workflows-test-run.md` — `test_run` ("Tests laten draaien"): Claude itself
+  picks which existing tests are relevant, no Edit tool, the shared
+  `chat_write_gate.go` slot, cancel via `chat_cancel.go`, and the age-based
+  residue sweep in the `cleanup` workflow.
 - `workflows-analysis.md` — the workflows deriving the review tree
   (`build_relations`, `resolve_call`, `resolve_test_covers`) and the two
   LLM passes (`explain_code`, `code_warning`).

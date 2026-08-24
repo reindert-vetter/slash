@@ -1075,7 +1075,7 @@ request above; the specs (`tests/pr-menu.spec.mjs`,
 
 ## The PR-wide menu itself (`pr`, `PR_COMMANDS`)
 
-The same overlay, with actions on the **whole PR**. Five root items:
+The same overlay, with actions on the **whole PR**. Six root items:
 
 1. **"Sluit menu"** (pinned).
 2. **"GitHub"** (submenu, thus the default item — a submenu rather than a
@@ -1100,7 +1100,18 @@ The same overlay, with actions on the **whole PR**. Five root items:
    "more…" affordance (see `.claude/docs/detail-layout.md`). The label is
    snapshotted at open time by `snapshotCommands`, so no reactive binding leaks
    into the `CommandMenu` tree.
-5. **"Alle goedkeuringen intrekken"** (submenu, one confirm row — same
+5. **"Tests laten draaien"** (`test_run.go`, see
+   `.claude/docs/workflows-test-run.md`) — starts the one agentic `test_run`
+   run: Claude itself picks which EXISTING tests are relevant to this PR and
+   runs only those (no Edit tool, so nothing here can change code — hence no
+   confirm step, same reasoning as the batch action row). The label is a
+   function reading `testRun.running` ("Testrun loopt al…" while one is
+   already going, same snapshotted-at-open-time pattern as item 4's label).
+   Deliberately a `/`-menu item, not its own bottom action row like
+   `comment_batch`'s `batchActionRow` — reviewer decision: the sidebar is
+   busy enough. Progress renders in `prInfoCard`'s status block
+   (`testRunStatusBlock`, `testRun.mjs`), not here.
+6. **"Alle goedkeuringen intrekken"** (submenu, one confirm row — same
    lightweight "one extra Enter" confirm as "PR keuren" above) — clears every
    approval in the WHOLE PR in one action (`retractAllApprovalsForPr`).
    Walks `state.blocks` exactly like `syncViewedFiles`/the approval rollup
