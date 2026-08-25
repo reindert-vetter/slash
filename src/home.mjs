@@ -13881,6 +13881,22 @@ function menuAnchor() {
   // itself, not the list-mode diff preview beneath it (see
   // .claude/docs/keyboard-navigation.md).
   if (isIndexMenu()) {
+    // Stop 2b (the methodes-kolom) owns the keyboard: the pr-index <aside>
+    // is collapsed to width 0 then (see BlockList.mjs's testColumnFocused
+    // branch), so the generic row/aside lookup below would anchor/size the
+    // menu against a genuinely zero-width element — the reported bug ("ik
+    // zie geen menu, denk buiten beeld"), reproduced for both a single Enter
+    // and a Shift+arrow multi-method selection alike. Anchor on the BOTTOM
+    // row of the active method selection instead — the same "anchor on the
+    // end of the selection" rule the generic branch below already applies to
+    // [data-change-active-end] — falling back to the column itself.
+    if (isTestColumnActive()) {
+      const hi = state.methodAnchor == null ? state.classMethodSel : Math.max(state.methodAnchor, state.classMethodSel)
+      return (
+        document.querySelector(`[data-testid="test-methods-column"] [data-idx="${hi}"]`) ||
+        document.querySelector('[data-testid="test-methods-column"]')
+      )
+    }
     const row = document.querySelector(`[data-idx="${state.selected}"]`)
     if (row) {
       lastIndexRowRect = row.getBoundingClientRect()
@@ -13965,6 +13981,12 @@ function menuRegion() {
     return document.querySelector('[data-testid="comment-detail-card"]') || focusedColumnEl()
   }
   if (isIndexMenu()) {
+    // Same stop-2b exception as menuAnchor above: the methodes-kolom, not
+    // the (collapsed, width-0) pr-index, is what the menu should size itself
+    // against while it owns the keyboard.
+    if (isTestColumnActive()) {
+      return document.querySelector('[data-testid="test-methods-column"]')
+    }
     return document.querySelector('[data-testid="pr-index"]')
   }
   // Stop 1: the palette takes the description column's full left+width

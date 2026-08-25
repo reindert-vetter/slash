@@ -666,6 +666,35 @@ resets the cache on every open that is **not** an approve follow-up
 modes), so a stale position never leaks into an unrelated session. Test:
 `tests/postapprove-menu.spec.mjs`.
 
+### `isIndexMenu()` needs its own branch while the methodes-kolom owns the keyboard
+
+Reviewer report, reproduced both for a plain single `Enter` and for a
+Shift+↑/↓ multi-method selection: "als ik meerdere blokken selecteer in de
+blokken index, zie ik geen menu (buiten beeld denk ik)". `isIndexMenu()` is
+`true` while stop 2b (the methodes-kolom, `isTestColumnActive()`, see
+`.claude/docs/test-class-grouping.md`) owns `Enter` too — it is still
+`state.mode==='list'` and `ms.mode==='block'`/a review follow-up. But the
+pr-index `<aside>` is collapsed to `width:0` exactly then (`BlockList.mjs`'s
+`testColumnFocused` branch, see "Columns instead of independently fixed
+panels" in `.claude/docs/detail-layout.md`), and `positionMenu()` sets the
+whole `command-anchor`'s `style.width` from `menuRegion()`'s rect (see below)
+— so without a dedicated branch the menu rendered at a genuinely ~0px width,
+positioned exactly where the collapsed aside sits: technically "visible" (a
+bare `toBeVisible()` still passed, especially mid-transition, which is why
+the pre-existing `tests/test-class-grouping.spec.mjs` Enter test didn't catch
+this) but practically invisible/off-screen. Both `menuAnchor()` and
+`menuRegion()` now check `isTestColumnActive()` INSIDE their `isIndexMenu()`
+branch, before falling through to the generic sidebar-row/`pr-index` lookup:
+`menuAnchor()` anchors on the bottom-most selected `test-method-row` (`hi =
+max(methodAnchor, classMethodSel)`, the same "anchor on the END of the
+selection" rule the generic branch below already applies via
+`[data-change-active-end]`), and `menuRegion()` sizes the menu against
+`[data-testid="test-methods-column"]` instead of the collapsed `pr-index`.
+Regression test (waits past the 200ms collapse transition before measuring,
+since a plain `toBeVisible()` doesn't catch this): "the command menu stays
+on-screen from the methodes-kolom, once the pr-index collapse settles" in
+`tests/test-class-grouping.spec.mjs`.
+
 ## Review-submit menus: `reviewApprove` / `reviewChoice` / `reviewReject`
 
 When `findNextUnapproved()` returns `null`, `afterApproveAction` opens one of

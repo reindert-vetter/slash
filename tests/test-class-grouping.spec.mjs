@@ -106,6 +106,53 @@ test.describe('test methods group per class', () => {
     await expect(page.getByTestId('detail-card')).toContainText('it_should_index_triggers')
   })
 
+  test('the command menu stays on-screen from the methodes-kolom, once the pr-index collapse settles', async ({
+    page,
+  }) => {
+    // Regression: the pr-index <aside> collapses to width 0 while the
+    // methodes-kolom owns the keyboard (BlockList.mjs's testColumnFocused
+    // branch). menuAnchor/menuRegion (home.mjs) used to still anchor/size
+    // this menu against that (by-then zero-width) <aside> instead of the
+    // methodes-kolom itself, so the palette rendered at ~0px width once its
+    // 200ms collapse transition actually finished — invisible, reported as
+    // "ik zie geen menu (buiten beeld denk ik)". A plain toBeVisible() alone
+    // doesn't catch this (Playwright's actionability wait can run mid-
+    // transition, when the aside/menu still measure a transient non-zero
+    // width) — waiting past the transition and asserting a real width is the
+    // point of this test.
+    await page.goto(`/pr/${PR}`)
+    await page.getByTestId('block-row').filter({ hasText: 'TriggersIndexTest' }).click()
+    await page.keyboard.press('ArrowRight')
+    await expect(page.getByTestId('test-methods-column')).toHaveClass(/border-indigo-300|dark:border-indigo-500/)
+    // Let the pr-index's own 200ms width transition fully settle.
+    await page.waitForTimeout(400)
+    await expect(page.getByTestId('pr-index')).toHaveCSS('width', '0px')
+
+    // A single Enter (no multi-selection) already reproduced this.
+    await page.keyboard.press('Enter')
+    const menu = page.getByTestId('command-menu')
+    await expect(menu).toBeVisible()
+    await page.waitForTimeout(300)
+    const singleBox = await menu.boundingBox()
+    expect(singleBox.width).toBeGreaterThan(100)
+    await page.keyboard.press('Escape')
+    await expect(menu).not.toBeVisible()
+
+    // A Shift+↓ multi-method selection reproduced the same bug, and is the
+    // scenario the reviewer actually reported it in.
+    await page.keyboard.press('Shift+ArrowDown')
+    await page.keyboard.press('Enter')
+    await expect(menu).toBeVisible()
+    await expect(menu).toContainText('Keur deze 2 methodes goed')
+    await page.waitForTimeout(300)
+    const rangeBox = await menu.boundingBox()
+    expect(rangeBox.width).toBeGreaterThan(100)
+    // Also genuinely on-screen, not just non-zero-width off in the margin.
+    const viewport = page.viewportSize()
+    expect(rangeBox.x).toBeGreaterThanOrEqual(0)
+    expect(rangeBox.x + rangeBox.width).toBeLessThanOrEqual(viewport.width)
+  })
+
   test('→ slides the pr-index away; a second → hides the methodes-kolom; ← reverses both', async ({
     page,
   }) => {
