@@ -592,7 +592,7 @@ type ResolveTestCoversInput struct {
 	Classes   []string `json:"classes"`
 }
 
-// ExplainCodeInput starts an explain_code Execution: it asks Opus to describe
+// ExplainCodeInput starts an explain_code Execution: it asks Haiku to describe
 // (in Dutch, 1-2 sentences) one selected navigation unit — any group/line
 // unit the reviewer lands on while navigating a diff, not only one containing
 // an if-statement (the frontend's earlier if-only gate was lifted, see
@@ -1759,7 +1759,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		})
 	})
 
-	// Activity: ask Opus (context-only, no tools — everything it needs travels
+	// Activity: ask Haiku (context-only, no tools — everything it needs travels
 	// in the input) for a short Dutch description of the unit. Shells out to
 	// the claude CLI — a side effect, hence an Activity. Best-effort: a Claude
 	// hiccup yields empty text (the workflow then records "failed") rather than
@@ -1774,7 +1774,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		}
 		text, err := m.claude.Run(ctx, claude.RunRequest{
 			Prompt:       explainPrompt(arg),
-			Model:        claude.ModelOpus,
+			Model:        claude.ModelHaiku,
 			SystemPrompt: claude.ExplainCodeSystemPrompt,
 		})
 		if err != nil {
@@ -3975,7 +3975,7 @@ func explainCodeWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		return nil, fmt.Errorf("generate explanation: %w", err)
 	}
 	status := explanations.StatusDone
-	model := "opus"
+	model := "haiku"
 	if gen.Text == "" {
 		// Offline (claude.Fake) or a Claude hiccup: record a terminal "failed"
 		// row so the frontend stops showing "genereren…" and never re-requests

@@ -35,11 +35,11 @@ func explainInput() ExplainCodeInput {
 	}
 }
 
-// Opus answers → the read-model gets a done row with the Dutch text, and the
+// Haiku answers → the read-model gets a done row with the Dutch text, and the
 // prompt carried the unit code and asked for Dutch.
 func TestExplainCodeGeneratesDescription(t *testing.T) {
 	fake := claude.NewFake()
-	fake.SetOutput(claude.ModelOpus, "Deze conditie controleert of de waarde positief is; alleen dan wordt hij op 2 gezet.")
+	fake.SetOutput(claude.ModelHaiku, "Deze conditie controleert of de waarde positief is; alleen dan wordt hij op 2 gezet.")
 	m, ex := explainManager(t, fake)
 
 	if _, err := m.StartExplainCode(explainInput()); err != nil {
@@ -54,8 +54,8 @@ func TestExplainCodeGeneratesDescription(t *testing.T) {
 		t.Fatalf("explanations has %d rows, want 1: %+v", len(list), list)
 	}
 	e := list[0]
-	if e.Status != explanations.StatusDone || e.Model != "opus" || !strings.Contains(e.Text, "positief") {
-		t.Fatalf("entry = %+v, want done opus row", e)
+	if e.Status != explanations.StatusDone || e.Model != "haiku" || !strings.Contains(e.Text, "positief") {
+		t.Fatalf("entry = %+v, want done haiku row", e)
 	}
 	if e.UnitKey != "line-2" || e.CodeHash != "hash1" {
 		t.Fatalf("entry keyed %s/%s, want line-2/hash1", e.UnitKey, e.CodeHash)
@@ -93,7 +93,7 @@ func TestExplainCodeGeneratesDescription(t *testing.T) {
 // (deterministic Run ID via StartWorkflowID) — no second LLM call.
 func TestExplainCodeIdempotentStart(t *testing.T) {
 	fake := claude.NewFake()
-	fake.SetOutput(claude.ModelOpus, "Uitleg.")
+	fake.SetOutput(claude.ModelHaiku, "Uitleg.")
 	m, ex := explainManager(t, fake)
 
 	id1, err := m.StartExplainCode(explainInput())

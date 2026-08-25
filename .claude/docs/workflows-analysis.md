@@ -924,7 +924,7 @@ likewise carries the full child descriptor + code text.
 
 ## AI description of a code unit (`explain_code` + `modules/explanations`)
 
-Generates the **footer description**: a short Dutch Opus explanation of the
+Generates the **footer description**: a short Dutch Haiku explanation of the
 focused `line`/`group` unit (see `.claude/docs/footer.md`) — **every** such
 unit with real code, not only one containing an if-statement (that earlier
 frontend gate was lifted with "Diepgravend onderzoek"). One Execution per
@@ -947,7 +947,7 @@ frontend gate was lifted with "Diepgravend onderzoek"). One Execution per
   for exactly this kind of change: bumping it invalidates every previously
   generated row with no backend migration — a stale hash simply stops matching
   and the row is lazily regenerated.
-- **Flow:** `markExplainSearching` → `generateExplanation` (Opus, context-only;
+- **Flow:** `markExplainSearching` → `generateExplanation` (Haiku, context-only;
   empty output → `failed`) → `saveExplanation`. The done/failed decision reads
   the **stored** result, so replay-deterministic.
 - **Idempotent start** via `explainRunID` (`expl-` + sha256 over
