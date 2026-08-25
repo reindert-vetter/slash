@@ -2840,9 +2840,9 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		// chatTurnResult.NeedsLand's own doc comment).
 		needsLand := chatCheckoutNeedsLanding(ctx, arg.Repo, arg.PR)
 		publishChatChanged(arg.Repo, arg.PR, arg.ConversationID)
-		// The turn may have assigned/advanced the PR's shared checkout, or
-		// raised/resolved a chat.KindDirectoryDecision — nudge the checkout
-		// chip/badge too, same low-cost "refetch me" broadcast as above.
+		// The turn may have assigned/advanced the PR's shared work directory,
+		// or raised its choice — nudge the chip/badge and the work-directory
+		// overlay too, same low-cost "refetch me" broadcast as above.
 		publishCheckoutChanged(arg.Repo, arg.PR)
 		return json.Marshal(chatTurnResult{Message: msg, Action: action, NeedsLand: needsLand})
 	})
@@ -2977,7 +2977,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		// Reuse the exact same resolution path a chat turn's own pending-decision
 		// check uses (chat_workflow.go's runOneClaudeTurn) — a menu-driven answer
 		// and a chat-driven answer share one code path, one set of rules.
-		_, _, _ = prepareChatShellWorkDir(ctx, m, m.dataDir, arg.Repo, arg.PR, "", arg.Reply)
+		_, _, _ = prepareChatShellWorkDir(ctx, m, m.dataDir, arg.Repo, arg.PR, arg.Reply)
 		publishCheckoutChanged(arg.Repo, arg.PR)
 		return nil, nil
 	})

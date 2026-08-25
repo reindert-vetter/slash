@@ -355,9 +355,10 @@ func claudeChatWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			continue
 		}
 		lastFailedTurn = nil
-		// KindDirectoryDecision (chat_checkout.go) is answered through the
-		// exact same reviewer-reply round trip as an ordinary KindQuestion —
-		// no new workflow shape needed, see that Kind's own doc comment.
+		// chat.KindDirectoryDecision is still accepted here for a turn stored
+		// before the work-directory choice moved out of the chat entirely
+		// (nothing creates one any more) — an old, still-unanswered bubble
+		// keeps its reviewer-reply round trip rather than becoming inert.
 		if result.Message.Kind == chat.KindQuestion || result.Message.Kind == chat.KindDirectoryDecision {
 			pendingQuestionID = result.Message.ID
 		}
@@ -636,16 +637,6 @@ func chatCommentIDNote(conversationID string) string {
 // of its own, so this is what actually prompts the second call.
 const chatNeedWriteContinuationPrompt = "Je hebt nu Edit en een echte shell (Bash) beschikbaar, in de lokale checkout van de reviewer. Ga verder met het oorspronkelijke verzoek."
 
-// chatCheckoutResumedPrompt is the synthetic user prompt sent (in the SAME
-// session) once a pending chat.KindDirectoryDecision has just been resolved
-// (chat_checkout.go) — the reviewer's own reply to that decision ("stash,
-// later terugzetten", a chosen directory, ...) is deliberately NEVER sent to
-// Claude as-is (it answers a question about the checkout, not about the
-// review), so this replaces it as the turn's actual prompt. Claude still
-// remembers the reviewer's ORIGINAL request via the resumed CLI session's own
-// history, exactly like chatNeedWriteContinuationPrompt above.
-const chatCheckoutResumedPrompt = "De lokale checkout is nu klaar. Ga verder met het eerder gevraagde verzoek."
-
 // chatFailureMessage words + persists one failed claude CLI call as a visible
 // turn (see chatFailureTurn) — shared by both attempts of runOneClaudeTurn's
 // two-step call, so a CLI failure on either one degrades the same way.
@@ -689,11 +680,11 @@ func chatCancelledMessage(ctx context.Context, cm *chat.Module, arg chatTurnInpu
 //
 // Deliberately its own small mechanism, NOT chat_checkout.go's
 // chatCheckoutDecision/a.Pending machinery (see applyCancelCleanup's own doc
-// comment for why): that machinery's resolution path always resumes the
-// ORIGINAL request with a synthetic continuation prompt
-// (chatCheckoutResumedPrompt), which would turn "clean up after my cancel"
-// into "silently start a brand-new Claude call" — exactly what a cancel must
-// never do.
+// comment for why): that one is a PR-wide setting answered in its own overlay,
+// while this question is about THIS cancelled turn and belongs exactly where
+// the reviewer cancelled it. Its visible badge says "opruimen na afbreken" —
+// the word "checkout" appears nowhere in it, see the naming rule in
+// .claude/docs/workflows-comments.md.
 func offerCancelCleanupIfDirty(ctx context.Context, cm *chat.Module, arg chatTurnInput, dir string) {
 	dirty, err := checkoutIsDirty(ctx, dir)
 	if err != nil || !dirty {
@@ -808,41 +799,11 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 
 	sessionID, _ := cm.GetSession(ctx, arg.ConversationID)
 
-	// If a PREVIOUS turn had to stop and ask something about the local
-	// checkout (chat_checkout.go's chat.KindDirectoryDecision), this turn's
-	// Body is the reviewer's reply to THAT, not real review content — resolve
-	// it here, before calling Claude at all. The reviewer's raw reply is
-	// never forwarded to Claude as-is; a synthetic continuation prompt takes
-	// over (chatCheckoutResumedPrompt), and the resumed CLI session still
-	// remembers the reviewer's ORIGINAL request.
+	// The work-directory choice is a PR-wide setting, answered in its own
+	// overlay (chat_checkout.go, .claude/docs/command-palette.md) — never a
+	// question inside a conversation. A turn's message is therefore always
+	// ordinary review content; there is nothing to resolve here first.
 	effectiveBody := arg.Body
-	if hasPendingCheckoutDecision(arg.Repo, arg.PR, arg.ConversationID) {
-		release := acquireWriteTurnSlot(runCtx, nil)
-		_, decision, ok := prepareChatShellWorkDir(runCtx, tm, dataDir, arg.Repo, arg.PR, arg.ConversationID, arg.Body)
-		release()
-		if runCtx.Err() != nil {
-			return chatCancelledMessage(ctx, cm, arg, chatModelForAttempt(arg.Attempt)), nil
-		}
-		switch {
-		case decision != nil:
-			msg := chat.Message{
-				ID: chatMessageID(arg.TurnID, ""), ConversationID: arg.ConversationID, PR: arg.PR,
-				Role: "assistant", Kind: chat.KindDirectoryDecision, Body: decision.Body, Options: decision.Options,
-			}
-			_ = cm.SaveMessage(ctx, msg)
-			return msg, nil
-		case !ok:
-			msg := chat.Message{
-				ID: chatMessageID(arg.TurnID, ""), ConversationID: arg.ConversationID, PR: arg.PR,
-				Role: "assistant", Kind: chat.KindError, NoShell: true,
-				Body: "Kon de werkmap niet klaarzetten na je keuze. Probeer het opnieuw.",
-			}
-			_ = cm.SaveMessage(ctx, msg)
-			return msg, nil
-		default:
-			effectiveBody = chatCheckoutResumedPrompt
-		}
-	}
 
 	model := chatModelForAttempt(arg.Attempt)
 	// checkoutDir starts empty (the read-only attempt below never edits
@@ -933,21 +894,16 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 			logTurnMilestone("got the code-turn slot after %v", time.Since(t0))
 			advanceChatProgress(arg.Repo, arg.PR, arg.ConversationID, chatPhaseStarting)
 		}
-		dir, decision, ok := prepareChatShellWorkDir(runCtx, tm, dataDir, arg.Repo, arg.PR, arg.ConversationID, arg.Body)
+		// reviewerReply is deliberately "" — see prepareChatShellWorkDir's own
+		// doc comment: a chat message is never an answer to the
+		// work-directory choice.
+		dir, _, ok := prepareChatShellWorkDir(runCtx, tm, dataDir, arg.Repo, arg.PR, "")
 		// A cancel can also land WHILE prepareChatShellWorkDir is resolving the
-		// checkout (a git fetch/checkout/clean can take a moment) — check before
-		// interpreting `decision`/`ok`, which a cancelled context can otherwise
-		// make look like an ordinary "no checkout available" failure.
+		// work directory (a git fetch/checkout/clean can take a moment) — check
+		// before interpreting `ok`, which a cancelled context can otherwise
+		// make look like an ordinary "no directory available" failure.
 		if runCtx.Err() != nil {
 			return chatCancelledMessage(ctx, cm, arg, model), nil
-		}
-		if decision != nil {
-			msg := chat.Message{
-				ID: chatMessageID(arg.TurnID, ""), ConversationID: arg.ConversationID, PR: arg.PR,
-				Role: "assistant", Kind: chat.KindDirectoryDecision, Body: decision.Body, Options: decision.Options,
-			}
-			_ = cm.SaveMessage(ctx, msg)
-			return msg, nil
 		}
 		if !ok {
 			// Two different dead ends, and they need different words. An open

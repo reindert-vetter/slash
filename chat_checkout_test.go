@@ -180,15 +180,13 @@ func assignCheckoutForTest(t *testing.T, repo string, pr int, dir string) {
 	getOrCreateCheckoutAssignment(repo, pr).Dir = dir
 }
 
-// assignPendingDecisionForTest registers a pending checkout decision owned by
-// conversationID directly — skipping the discovery ladder — for the
-// end-to-end regression test (chat_workflow_test.go) proving a DIFFERENT
-// conversation's ordinary, read-only turn never even touches it.
-func assignPendingDecisionForTest(t *testing.T, repo string, pr int, conversationID string, decision *chatCheckoutDecision) {
+// assignPendingDecisionForTest registers this PR's pending work-directory
+// choice directly — skipping the discovery ladder — for the end-to-end
+// regression test (chat_workflow_test.go) proving an ordinary, read-only chat
+// turn never even touches it.
+func assignPendingDecisionForTest(t *testing.T, repo string, pr int, decision *chatCheckoutDecision) {
 	t.Helper()
-	a := getOrCreateCheckoutAssignment(repo, pr)
-	a.Pending = decision
-	a.PendingConversationID = conversationID
+	getOrCreateCheckoutAssignment(repo, pr).Pending = decision
 }
 
 func TestPrepareChatShellWorkDirPicksSoleRegisteredCandidate(t *testing.T) {
@@ -198,7 +196,7 @@ func TestPrepareChatShellWorkDirPicksSoleRegisteredCandidate(t *testing.T) {
 	checkout := cloneCheckoutDir(t, bareDir, "feature/x")
 	writeCheckoutSettings(t, dataDir, checkout)
 
-	dir, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1001, "conv-a", "", "feature/x")
+	dir, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1001, "", "feature/x")
 	if decision != nil {
 		t.Fatalf("unexpected decision: %+v", decision)
 	}
@@ -220,7 +218,7 @@ func TestPrepareChatShellWorkDirFastForwardsWhenCleanAndBehind(t *testing.T) {
 	checkout := cloneCheckoutDir(t, bareDir, "feature/x")
 	writeCheckoutSettings(t, dataDir, checkout)
 
-	dir, _, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1002, "conv-b", "", "feature/x")
+	dir, _, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1002, "", "feature/x")
 	if !ok {
 		t.Fatal("first resolve: expected ok")
 	}
@@ -229,7 +227,7 @@ func TestPrepareChatShellWorkDirFastForwardsWhenCleanAndBehind(t *testing.T) {
 	// no reviewer decision needed.
 	pushToBare(t, bareDir, "feature/x", "v2\n")
 
-	dir2, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1002, "conv-b", "", "feature/x")
+	dir2, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1002, "", "feature/x")
 	if decision != nil {
 		t.Fatalf("unexpected decision on a clean, behind checkout: %+v", decision)
 	}
@@ -268,7 +266,7 @@ func TestPrepareChatShellWorkDirProceedsOnUnpushedLocalCommits(t *testing.T) {
 		t.Fatalf("git commit: %v: %s", err, out)
 	}
 
-	dir, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1013, "conv-diverged", "", "feature/x")
+	dir, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1013, "", "feature/x")
 	if decision != nil {
 		t.Fatalf("expected no decision at all for a clean, merely-ahead checkout, got %+v", decision)
 	}
@@ -294,7 +292,7 @@ func TestPrepareChatShellWorkDirAsksAboutDirtyCandidate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dir, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1003, "conv-c", "", "feature/x")
+	dir, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1003, "", "feature/x")
 	if ok || dir != "" {
 		t.Fatalf("expected no ready dir for a dirty checkout, got dir=%q ok=%v", dir, ok)
 	}
@@ -306,7 +304,7 @@ func TestPrepareChatShellWorkDirAsksAboutDirtyCandidate(t *testing.T) {
 	// now says so explicitly, instead of silently repeating an identical
 	// question (the root cause of a reported infinite loop, see
 	// TestPrepareChatShellWorkDirCaseInsensitiveMatch below).
-	_, decision2, ok2 := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1003, "conv-c", "iets anders", "feature/x")
+	_, decision2, ok2 := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1003, "iets anders", "feature/x")
 	if ok2 || decision2 == nil || decision2.Stage != checkoutStageDirtyTree {
 		t.Fatalf("expected the same dirtyTree decision again, got ok=%v decision=%+v", ok2, decision2)
 	}
@@ -316,7 +314,7 @@ func TestPrepareChatShellWorkDirAsksAboutDirtyCandidate(t *testing.T) {
 
 	// "Los laten": the pre-existing change is excluded from Claude's own
 	// commit later, and the checkout becomes usable right away.
-	dir3, decision3, ok3 := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1003, "conv-c", optKeepSeparate, "feature/x")
+	dir3, decision3, ok3 := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1003, optKeepSeparate, "feature/x")
 	if decision3 != nil {
 		t.Fatalf("unexpected further decision: %+v", decision3)
 	}
@@ -328,15 +326,19 @@ func TestPrepareChatShellWorkDirAsksAboutDirtyCandidate(t *testing.T) {
 	}
 }
 
-// Reported bug: a checkout decision raised by ONE conversation (write access
-// requested, checkout dirty) leaked into a COMPLETELY UNRELATED conversation
-// of the same PR — that other conversation's very next, purely conversational
-// message got intercepted and misread as an attempted answer, which produced
-// a confusing "Dat antwoord herkende ik niet als een van de keuzes" reply in
-// a conversation that never asked for a code change at all. This is the
-// ownership guard's regression test: the pending decision must stay scoped to
-// the conversation that raised it.
-func TestPrepareChatShellWorkDirDecisionStaysScopedToItsOwnConversation(t *testing.T) {
+// The work-directory choice is a PR-wide setting, not a question inside a
+// conversation: a caller that only needs a directory (a write turn,
+// comment_batch, test_run — all of which pass reviewerReply "") gets the open
+// choice reported back untouched, over and over, and can never accidentally
+// "answer" it. Only the overlay's own answer resolves it.
+//
+// Reported bug this replaced: while one conversation had an open decision,
+// another conversation's turn was handed an unanswerable "Een andere
+// Claude-conversatie wacht nog op een keuze" bubble pointing at a chat the UI
+// cannot even find; before THAT, an unrelated turn's ordinary message was fed
+// in as an attempted answer and came back as "Dat antwoord herkende ik niet
+// als een van de keuzes".
+func TestPrepareChatShellWorkDirChoiceIsNeverAnsweredByACallerThatOnlyNeedsADir(t *testing.T) {
 	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
 	dataDir := t.TempDir()
 	ctx := context.Background()
@@ -347,51 +349,43 @@ func TestPrepareChatShellWorkDirDecisionStaysScopedToItsOwnConversation(t *testi
 		t.Fatal(err)
 	}
 
-	// Conversation X's write turn is the one that discovers the dirty
-	// checkout and raises the decision.
-	_, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 970801, "conv-x", "", "feature/x")
+	// The first write turn discovers the dirty tree and raises the choice.
+	_, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 970801, "", "feature/x")
 	if ok || decision == nil || decision.Stage != checkoutStageDirtyTree {
-		t.Fatalf("expected conv-x to raise a dirtyTree decision, got ok=%v decision=%+v", ok, decision)
-	}
-	if !hasPendingCheckoutDecision("", 970801, "conv-x") {
-		t.Fatal("expected conv-x to be reported as having the pending decision")
-	}
-	if hasPendingCheckoutDecision("", 970801, "conv-y") {
-		t.Fatal("conv-y must not be reported as having conv-x's pending decision")
-	}
-
-	// Conversation Y (a different, unrelated conversation on the same PR)
-	// sends an ordinary message that happens to need write access too. It
-	// must NOT be treated as an attempted reply to conv-x's question, and it
-	// must not get a question of its OWN either: an unanswerable
-	// "another conversation is deciding" bubble in a conversation that never
-	// asked anything about the work directory was a dead end (the reviewer
-	// could not even find that other conversation — nothing lists them). Y
-	// simply gets "no directory right now", and recognizes the reason through
-	// checkoutChoiceOpen. conv-x's own pending decision must be completely
-	// untouched by this.
-	_, blocked, okY := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 970801, "conv-y", "maar hij komt wel in die flow toch?", "feature/x")
-	if okY {
-		t.Fatal("conv-y must not get a ready checkout while conv-x's decision is unresolved")
-	}
-	if blocked != nil {
-		t.Fatalf("conv-y must not be asked anything at all, got %+v", blocked)
+		t.Fatalf("expected a dirtyTree choice to be raised, got ok=%v decision=%+v", ok, decision)
 	}
 	if !checkoutChoiceOpen("", 970801) {
-		t.Fatal("checkoutChoiceOpen must report the still-open choice, so the caller can say WHY there is no directory")
+		t.Fatal("the raised choice must be reported as open")
+	}
+	raised := getCheckoutAssignment("", 970801).Pending
+
+	// Any further "I just need a directory" call reports the SAME open choice
+	// and leaves it byte-for-byte alone — no re-ask, no "herkende ik niet",
+	// no second question of its own.
+	_, again, okAgain := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 970801, "", "feature/x")
+	if okAgain {
+		t.Fatal("no directory may be handed out while the choice is open")
+	}
+	if again != raised {
+		t.Fatalf("expected the very same open choice back, got %+v", again)
+	}
+	if strings.Contains(again.Body, "herkende ik niet") {
+		t.Fatalf("a caller that needs a directory must never be told its answer was unrecognized, got %q", again.Body)
+	}
+	if getCheckoutAssignment("", 970801).Pending != raised {
+		t.Fatal("the open choice must survive untouched")
 	}
 
-	// conv-x's own decision survives untouched, and conv-x can still resolve
-	// it exactly as before.
-	if !hasPendingCheckoutDecision("", 970801, "conv-x") {
-		t.Fatal("conv-x's own pending decision must survive conv-y's unrelated turn")
-	}
-	dir, decision2, ok2 := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 970801, "conv-x", optKeepSeparate, "feature/x")
+	// The overlay's own answer is the one thing that resolves it.
+	dir, decision2, ok2 := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 970801, optKeepSeparate, "feature/x")
 	if decision2 != nil {
-		t.Fatalf("unexpected further decision for conv-x: %+v", decision2)
+		t.Fatalf("unexpected further decision after answering: %+v", decision2)
 	}
 	if !ok2 || dir != checkout {
-		t.Fatalf("expected conv-x to resolve the checkout after answering, dir=%q ok=%v", dir, ok2)
+		t.Fatalf("expected the checkout to resolve after answering, dir=%q ok=%v", dir, ok2)
+	}
+	if checkoutChoiceOpen("", 970801) {
+		t.Fatal("the choice must be closed after it was answered")
 	}
 }
 
@@ -410,12 +404,12 @@ func TestPrepareChatShellWorkDirMenuAnswerBypassesOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 970802, "conv-z", "", "feature/x")
+	_, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 970802, "", "feature/x")
 	if ok || decision == nil || decision.Stage != checkoutStageDirtyTree {
 		t.Fatalf("expected conv-z to raise a dirtyTree decision, got ok=%v decision=%+v", ok, decision)
 	}
 
-	dir, decision2, ok2 := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 970802, "", optKeepSeparate, "feature/x")
+	dir, decision2, ok2 := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 970802, optKeepSeparate, "feature/x")
 	if decision2 != nil {
 		t.Fatalf("unexpected further decision via the menu path: %+v", decision2)
 	}
@@ -440,12 +434,12 @@ func TestPrepareChatShellWorkDirRecognizesNaturalLanguageKeepSeparateReply(t *te
 		t.Fatal(err)
 	}
 
-	_, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1004, "conv-d", "", "feature/x")
+	_, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1004, "", "feature/x")
 	if ok || decision == nil || decision.Stage != checkoutStageDirtyTree {
 		t.Fatalf("expected a dirtyTree decision, got ok=%v decision=%+v", ok, decision)
 	}
 
-	dir, decision2, ok2 := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1004, "conv-d", "gewoon ernaast doen", "feature/x")
+	dir, decision2, ok2 := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1004, "gewoon ernaast doen", "feature/x")
 	if decision2 != nil {
 		t.Fatalf("unexpected further decision: %+v", decision2)
 	}
@@ -469,11 +463,11 @@ func TestPrepareChatShellWorkDirDiscardOnRequest(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(checkout, "foo.txt"), []byte("reviewer's own WIP\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1004, "conv-d", "", "feature/x"); ok {
+	if _, _, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1004, "", "feature/x"); ok {
 		t.Fatal("expected the dirty checkout to need a decision first")
 	}
 
-	dir, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1004, "conv-d", optDiscard, "feature/x")
+	dir, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1004, optDiscard, "feature/x")
 	if decision != nil || !ok || dir != checkout {
 		t.Fatalf("expected the checkout ready after discarding, dir=%q decision=%+v ok=%v", dir, decision, ok)
 	}
@@ -492,7 +486,7 @@ func TestPrepareChatShellWorkDirAsksWhenMultipleCandidates(t *testing.T) {
 	c2 := cloneCheckoutDir(t, bareDir, "feature/x")
 	writeCheckoutSettings(t, dataDir, c1, c2)
 
-	dir, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1005, "conv-e", "", "feature/x")
+	dir, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1005, "", "feature/x")
 	if ok || dir != "" {
 		t.Fatalf("expected no automatic pick among 2 candidates, got dir=%q ok=%v", dir, ok)
 	}
@@ -503,7 +497,7 @@ func TestPrepareChatShellWorkDirAsksWhenMultipleCandidates(t *testing.T) {
 		t.Fatalf("expected 2 options, got %v", decision.Options)
 	}
 
-	dir2, decision2, ok2 := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1005, "conv-e", c2, "feature/x")
+	dir2, decision2, ok2 := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1005, c2, "feature/x")
 	if decision2 != nil || !ok2 || dir2 != c2 {
 		t.Fatalf("expected the chosen candidate %q ready, got dir=%q decision=%+v ok=%v", c2, dir2, decision2, ok2)
 	}
@@ -618,7 +612,7 @@ func TestCheckoutRemoteMatchesSlugRejectsFork(t *testing.T) {
 	if checkoutRemoteMatchesSlug(ctx, fork, repoSlug) {
 		t.Fatal("a fork's remote must never match the repo slug")
 	}
-	_, _, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1006, "conv-f", "", "feature/x")
+	_, _, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1006, "", "feature/x")
 	if ok {
 		t.Fatal("expected no candidate at all when the only registered directory is a fork")
 	}

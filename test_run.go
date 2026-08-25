@@ -259,8 +259,6 @@ func runTestRun(ctx context.Context, tm *TaskManager, cl claude.Client, dataDir 
 	defer unregister()
 	defer cancel()
 
-	convID := testRunConvID(arg.PR)
-
 	// Same shared checkout every chat turn/comment_batch run uses, and the same
 	// write-gate — see the file header, point 6. A test run never edits
 	// anything, but it still needs the checkout to stay put WHILE it runs.
@@ -277,7 +275,7 @@ func runTestRun(ctx context.Context, tm *TaskManager, cl claude.Client, dataDir 
 		advanceTestRunProgress(arg.Repo, arg.PR, chatPhaseStarting)
 	}
 
-	dir, decision, ok := prepareChatShellWorkDir(runCtx, tm, dataDir, arg.Repo, arg.PR, convID, "")
+	dir, decision, ok := prepareChatShellWorkDir(runCtx, tm, dataDir, arg.Repo, arg.PR, "")
 	if runCtx.Err() != nil {
 		return testRunResult{Cancelled: true}
 	}

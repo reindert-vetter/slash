@@ -147,7 +147,7 @@ func runCommentBatch(ctx context.Context, tm *TaskManager, cmod *comments.Module
 		}
 	}
 
-	dir, decision, ok := prepareChatShellWorkDir(ctx, tm, dataDir, arg.Repo, arg.PR, convID, "")
+	dir, decision, ok := prepareChatShellWorkDir(ctx, tm, dataDir, arg.Repo, arg.PR, "")
 	if decision != nil || checkoutChoiceOpen(arg.Repo, arg.PR) {
 		failCommentBatchProgress(arg.Repo, arg.PR, "Er staat nog een keuze open over de werkmap van deze PR. Maak die keuze en probeer het daarna opnieuw.")
 		return commentBatchResult{}

@@ -535,19 +535,16 @@ type chatCheckoutAssignment struct {
 	// ready (mirrors checkoutCandidate.Branch) — cached here purely for the
 	// read-only checkout view (buildCheckoutView) below, which must never
 	// itself shell out to git.
-	Branch  string
+	Branch string
+	// Pending is the ONE open work-directory choice of this PR, owned by
+	// nobody: it is a PR-wide setting, not a question inside some
+	// conversation, so it is raised/answered through the work-directory
+	// overlay's own read model (buildCheckoutView -> GET /api/chat/checkout)
+	// and the "checkoutAnswer" Action. It used to carry a
+	// PendingConversationID and be answerable only by the chat turn that
+	// raised it; see "The work-directory choice left the chat" in
+	// .claude/docs/workflows-comments.md for why that is gone.
 	Pending *chatCheckoutDecision
-	// PendingConversationID is the chat conversation that RAISED Pending — ""
-	// for a decision raised through the checkout-menu chip (relistCheckoutCandidates,
-	// conversationID "" throughout this file) rather than a chat turn. Only the
-	// owning conversation (or the menu's own "" round trip) may resolve Pending
-	// as an answer — see prepareChatShellWorkDirAt's own ownership guard and
-	// hasPendingCheckoutDecision below. Without this, ANY other conversation's
-	// very next ordinary message (even one that never asked for a code change)
-	// used to be intercepted and misread as a reply to THIS decision — see the
-	// "Reported bug: a checkout decision leaked into an unrelated conversation"
-	// note in .claude/docs/workflows-comments.md.
-	PendingConversationID string
 	// Excluded is every directory the reviewer explicitly rejected via
 	// checkoutStageReuseMerged's "no" answer, for this PR's lifetime. A
 	// reviewer-triggered relist (relistCheckoutCandidates) always clears this
@@ -592,15 +589,6 @@ func getCheckoutAssignment(repo string, pr int) *chatCheckoutAssignment {
 	chatCheckoutMu.Lock()
 	defer chatCheckoutMu.Unlock()
 	return chatCheckoutByPR[prKey{Repo: repo, PR: pr}]
-}
-
-// hasPendingCheckoutDecision reports whether THIS conversationID is the one
-// waiting on an answer to a checkout decision — not merely "does this PR have
-// one pending", which is what let a decision raised by a DIFFERENT
-// conversation intercept an unrelated turn before Claude was ever called.
-func hasPendingCheckoutDecision(repo string, pr int, conversationID string) bool {
-	a := getCheckoutAssignment(repo, pr)
-	return a != nil && a.Pending != nil && a.PendingConversationID == conversationID
 }
 
 // checkoutChoiceOpen reports whether this PR has an unresolved work-directory
@@ -811,11 +799,12 @@ func applyCheckoutDecisionReply(ctx context.Context, a *chatCheckoutAssignment, 
 // The one entry point runOneClaudeTurn/comment_batch.go call.
 // ---------------------------------------------------------------------------
 
-// prepareChatShellWorkDir resolves the ONE real, local checkout a write turn
-// may edit directly for this PR, running (or continuing) the selection
-// ladder above. reviewerReply is the CURRENT turn's message body, consulted
-// ONLY to resolve an already-pending decision for this PR — ignored
-// otherwise (a fresh resolution never needs it).
+// prepareChatShellWorkDir resolves the ONE real, local work directory a write
+// turn may edit directly for this PR, running (or continuing) the selection
+// ladder above. reviewerReply is the reviewer's ANSWER to an already-pending
+// choice and only ever comes from the work-directory overlay's own
+// "checkoutAnswer" round trip — a chat turn passes "" and can therefore never
+// have its ordinary message misread as an answer.
 //
 // Three outcomes:
 //   - ok, decision == nil: dir is ready to edit right now.
@@ -825,7 +814,7 @@ func applyCheckoutDecisionReply(ctx context.Context, a *chatCheckoutAssignment, 
 //     the caller reports "no directory available" (best-effort/log-only on
 //     the underlying error, mirroring every other degrade-gracefully path in
 //     this file's history).
-func prepareChatShellWorkDir(ctx context.Context, tm *TaskManager, dataDir, repo string, pr int, conversationID, reviewerReply string) (dir string, decision *chatCheckoutDecision, ok bool) {
+func prepareChatShellWorkDir(ctx context.Context, tm *TaskManager, dataDir, repo string, pr int, reviewerReply string) (dir string, decision *chatCheckoutDecision, ok bool) {
 	meta, err := fetchPRMeta(ctx, repo, pr)
 	if err != nil || meta.HeadRefName == "" {
 		if tm != nil && tm.logf != nil {
@@ -833,7 +822,7 @@ func prepareChatShellWorkDir(ctx context.Context, tm *TaskManager, dataDir, repo
 		}
 		return "", nil, false
 	}
-	return prepareChatShellWorkDirAt(ctx, tm, dataDir, repo, pr, conversationID, reviewerReply, meta.HeadRefName)
+	return prepareChatShellWorkDirAt(ctx, tm, dataDir, repo, pr, reviewerReply, meta.HeadRefName)
 }
 
 // prepareChatShellWorkDirAt is prepareChatShellWorkDir's body once the PR's
@@ -842,44 +831,30 @@ func prepareChatShellWorkDir(ctx context.Context, tm *TaskManager, dataDir, repo
 // gh/network call at all, only local/`origin`-remote git plumbing, so a test
 // can exercise the real selection-ladder mechanics against a throwaway local
 // repo.
-func prepareChatShellWorkDirAt(ctx context.Context, tm *TaskManager, dataDir, repo string, pr int, conversationID, reviewerReply, headRef string) (dir string, decision *chatCheckoutDecision, ok bool) {
+func prepareChatShellWorkDirAt(ctx context.Context, tm *TaskManager, dataDir, repo string, pr int, reviewerReply, headRef string) (dir string, decision *chatCheckoutDecision, ok bool) {
 	baseBranch := baseBranchFor(repo)
 	slug := repoSlugFor(repo)
 
 	a := getOrCreateCheckoutAssignment(repo, pr)
 
-	// Ownership guard: a pending decision may only be resolved by the
-	// conversation that raised it (PendingConversationID), or through the
-	// checkout-menu chip's own round trip (conversationID == "", see
-	// checkoutAnswer in workflows.go) — never by an unrelated conversation's
-	// ordinary next turn. Without this, conversation Y's plain message used to
-	// be fed to applyCheckoutDecisionReply as if it were an attempt to answer
-	// conversation X's still-open question: it never matches, so the SAME
-	// question got re-asked and re-saved under Y's own conversation id — the
-	// leak reported in .claude/docs/workflows-comments.md's "The pending
-	// checkout decision is scoped to the conversation that raised it" note.
-	// Returned WITHOUT touching a.Pending/a.PendingConversationID, so X's own
-	// decision is left completely untouched for X to resolve.
-	//
-	// A plain "not available right now" (no decision), never a decision of its
-	// own: an unanswerable question in a conversation that never asked
-	// anything about the work directory is a dead end — the caller tells the
-	// reviewer in plain words that a choice is still open (it recognizes this
-	// case through checkoutChoiceOpen below) and leaves the choice itself
-	// where it belongs.
-	if conversationID != "" && a.Pending != nil && a.PendingConversationID != conversationID {
-		return "", nil, false
-	}
-
 	for attempt := 0; attempt < 4; attempt++ {
 		if a.Pending != nil {
+			if reviewerReply == "" {
+				// An open choice and nothing to apply: this caller is a write
+				// turn (or comment_batch/test_run) that just needs a
+				// directory, not an answer. It gets the open choice back and
+				// tells the reviewer in words; the answer itself only ever
+				// arrives through the overlay's own "checkoutAnswer" round
+				// trip. Feeding a chat message in here is exactly the
+				// mix-up this whole mechanism was moved out of the chat for.
+				return "", a.Pending, false
+			}
 			resolved, applyErr := applyCheckoutDecisionReply(ctx, a, headRef, reviewerReply)
 			if applyErr != nil {
 				if tm != nil && tm.logf != nil {
 					tm.logf("chat_checkout: pr %d: applying decision reply: %v", pr, applyErr)
 				}
 				a.Pending = nil
-				a.PendingConversationID = ""
 				return "", nil, false
 			}
 			if resolved == nil {
@@ -899,7 +874,6 @@ func prepareChatShellWorkDirAt(ctx context.Context, tm *TaskManager, dataDir, re
 			}
 			a.Dir = resolved.Dir
 			a.Pending = nil
-			a.PendingConversationID = ""
 			reviewerReply = "" // already consumed; never re-apply it below
 			if resolved.Final {
 				// Deliberately skip re-classification — see chatCheckoutResolved's
@@ -925,12 +899,12 @@ func prepareChatShellWorkDirAt(ctx context.Context, tm *TaskManager, dataDir, re
 			}
 			if !cand.OnTargetBranch {
 				a.Pending = chatCheckoutReuseDecision(cand, headRef)
-				a.PendingConversationID = conversationID
+				publishCheckoutChanged(repo, pr)
 				return "", a.Pending, false
 			}
 			if cand.Dirty {
 				a.Pending = chatCheckoutDirtyDecision(cand)
-				a.PendingConversationID = conversationID
+				publishCheckoutChanged(repo, pr)
 				return "", a.Pending, false
 			}
 			// !cand.FastForwardable on its own (a clean working tree, just real
@@ -973,7 +947,7 @@ func prepareChatShellWorkDirAt(ctx context.Context, tm *TaskManager, dataDir, re
 			continue
 		case dec != nil:
 			a.Pending = dec
-			a.PendingConversationID = conversationID
+			publishCheckoutChanged(repo, pr)
 			return "", dec, false
 		default:
 			return "", nil, false
@@ -1415,7 +1389,6 @@ func relistCheckoutCandidates(ctx context.Context, tm *TaskManager, dataDir, rep
 	a := getOrCreateCheckoutAssignment(repo, pr)
 	a.Dir = ""
 	a.Pending = nil
-	a.PendingConversationID = ""
 	a.Excluded = map[string]bool{}
 
 	candidates, lerr := listCheckoutCandidates(ctx, dataDir, slug, meta.HeadRefName, baseBranch, nil)
@@ -1424,12 +1397,7 @@ func relistCheckoutCandidates(ctx context.Context, tm *TaskManager, dataDir, rep
 	}
 	dec := listAllCheckoutChoices(candidates)
 	if len(dec.Options) > 0 {
-		// Raised through the checkout-menu chip, not any one conversation — the
-		// zero-value "" owner, resolvable only through checkoutAnswer's own
-		// conversationID == "" round trip (or, per the ownership guard above,
-		// by nobody's ordinary chat turn).
 		a.Pending = dec
-		a.PendingConversationID = ""
 	}
 	return dec
 }
@@ -1446,7 +1414,6 @@ func checkoutSetOff(repo string, pr int) {
 	a.Dir = ""
 	a.Branch = ""
 	a.Pending = nil
-	a.PendingConversationID = ""
 	a.Excluded = map[string]bool{}
 }
 

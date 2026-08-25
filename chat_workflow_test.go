@@ -164,31 +164,31 @@ func TestClaudeChatWorkflowRoundTrip(t *testing.T) {
 	}
 }
 
-// Reported bug, end to end through the real workflow: a checkout decision
-// pending for one conversation (write access requested, checkout dirty) used
-// to intercept a COMPLETELY UNRELATED conversation's very next message —
-// even a plain, read-only question that never asked for a code change at all
-// — turning it into a bogus "Dat antwoord herkende ik niet als een van de
-// keuzes" reply. This proves BOTH halves of the fix: the question never
-// leaks into the unrelated conversation's transcript, AND a plain question
-// never triggers the checkout/write machinery in the first place (still only
-// the cheap read-only RunChat attempt, per task 3's two-step access).
-func TestClaudeChatPlainQuestionNeverTouchesAnotherConversationsCheckoutDecision(t *testing.T) {
+// Reported bug, end to end through the real workflow: this PR's open
+// work-directory choice used to intercept a conversation's very next message
+// — even a plain, read-only question that never asked for a code change at
+// all — turning it into a bogus "Dat antwoord herkende ik niet als een van de
+// keuzes" reply, and later into an unanswerable "een andere Claude-conversatie
+// wacht nog op een keuze" bubble. This proves BOTH halves of the fix: the
+// choice never surfaces in a conversation's transcript, AND a plain question
+// never triggers the write machinery in the first place (still only the cheap
+// read-only RunChat attempt, per task 3's two-step access).
+func TestClaudeChatPlainQuestionNeverTouchesThePendingWorkDirChoice(t *testing.T) {
 	m, engine, cm, fake := newChatManager(t)
 	ctx := context.Background()
 	const pr = 970750
-	const ownerConvID, otherCommentID = "chat-owner-comment", "comment-simple"
+	const otherCommentID = "comment-simple"
 
-	// Conversation X already has an unresolved dirty-tree checkout decision —
-	// set up directly, mirroring how a real write-needing turn would have left
-	// it (chat_checkout_test.go's own assignPendingDecisionForTest).
+	// The PR already has an unresolved dirty-tree work-directory choice — set
+	// up directly, mirroring how a real write-needing turn would have left it
+	// (chat_checkout_test.go's own assignPendingDecisionForTest).
 	owned := &chatCheckoutDecision{
 		Stage:   checkoutStageDirtyTree,
 		Dir:     "/some/other/checkout",
 		Body:    "`/some/other/checkout` heeft nog niet-gerelateerde, niet-gecommitte wijzigingen. Wat moet daarmee gebeuren voordat ik hier iets aanpas?",
 		Options: []string{optDiscard, optStashManual, optStashAuto, optKeepSeparate, optKeepCombined},
 	}
-	assignPendingDecisionForTest(t, "", pr, ownerConvID, owned)
+	assignPendingDecisionForTest(t, "", pr, owned)
 
 	// A completely unrelated, brand-new conversation on the SAME PR: a plain,
 	// purely conversational question — no request to change any code.
@@ -213,10 +213,10 @@ func TestClaudeChatPlainQuestionNeverTouchesAnotherConversationsCheckoutDecision
 	}
 	for _, msg := range list {
 		if msg.Kind == chat.KindDirectoryDecision {
-			t.Fatalf("the other conversation's checkout decision must never surface here, got %+v", msg)
+			t.Fatalf("the PR's work-directory choice must never surface as a chat bubble, got %+v", msg)
 		}
 		if strings.Contains(msg.Body, "herkende ik niet") {
-			t.Fatalf("this conversation's own message must never be read as an unrecognized answer to someone else's question, got %+v", msg)
+			t.Fatalf("this conversation's own message must never be read as an answer to the work-directory choice, got %+v", msg)
 		}
 	}
 	if list[1].Role != "assistant" || list[1].Body != "Ja, die zit in diezelfde flow." || list[1].Kind != "" {
@@ -229,14 +229,14 @@ func TestClaudeChatPlainQuestionNeverTouchesAnotherConversationsCheckoutDecision
 		t.Fatalf("expected exactly 1 RunChat call (the read-only attempt only), got %d: %+v", len(fake.Calls), fake.Calls)
 	}
 
-	// The OTHER conversation's own pending decision is completely untouched —
-	// still there, still owned by it, ready to be resolved by it.
-	if !hasPendingCheckoutDecision("", pr, ownerConvID) {
-		t.Fatal("the owning conversation's pending decision must survive the unrelated conversation's turn")
+	// The open choice is completely untouched — still there, still waiting for
+	// its answer in the overlay.
+	if !checkoutChoiceOpen("", pr) {
+		t.Fatal("the PR's open work-directory choice must survive an unrelated conversation's turn")
 	}
 	a := getCheckoutAssignment("", pr)
 	if a == nil || a.Pending != owned {
-		t.Fatalf("the owning conversation's pending decision must be the exact same, untouched object, got %+v", a)
+		t.Fatalf("the open choice must be the exact same, untouched object, got %+v", a)
 	}
 }
 

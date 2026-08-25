@@ -1054,6 +1054,51 @@ resolution:
   words that a choice is still open, instead of asking an unanswerable
   question. Where the reviewer makes that choice: the work-directory overlay
   (`.claude/docs/command-palette.md`).
+#### The work-directory choice left the chat: it is a PR-wide setting
+
+Reviewer decision, in his own words: *"vraag alleen stellen in de chat waar het
+over gaat. niet blokkeren voor chats die alleen vragen stellen. het gebruik
+maken van een directory is een algemene instellingen en mag als een popup
+overlay worden getoond."*
+
+So **no chat turn ever creates a `chat.KindDirectoryDecision` any more.** A
+turn that needs write access and finds an open (or newly raised) choice saves
+one plain, `NoShell` sentence — "er staat nog een keuze open over de werkmap
+van deze PR" — and stops; `comment_batch`/`test_run` say the same thing through
+their own progress-failure text. The choice itself lives in the read model
+(`buildCheckoutView` → `GET /api/chat/checkout`) and is answered in the
+work-directory overlay or through the chip, both via the existing
+`checkoutAnswer` Action. What that removed:
+
+- **`chatCheckoutAssignment.PendingConversationID` and
+  `hasPendingCheckoutDecision`** — with nobody owning the choice there is
+  nothing to scope and no ownership guard to write. `Pending` is now simply
+  "this PR's one open choice", read by **`checkoutChoiceOpen(repo, pr)`**.
+- **`prepareChatShellWorkDir`'s `conversationID` parameter**, for the same
+  reason.
+- **The pre-Claude "does this turn's body answer a pending decision" step** in
+  `runOneClaudeTurn`, and with it `chatCheckoutResumedPrompt`. A chat turn now
+  passes `reviewerReply: ""`, and `prepareChatShellWorkDirAt` returns an open
+  choice **untouched** when the reply is empty — so a reviewer's ordinary
+  message can never be misread as an answer, which is what produced both
+  reported bugs (first "Dat antwoord herkende ik niet als een van de keuzes",
+  then the unanswerable "een andere Claude-conversatie wacht nog op een
+  keuze").
+- **`publishCheckoutChanged`** is now also fired at the three sites that RAISE
+  a choice (`prepareChatShellWorkDirAt`), not only by the menu Actions —
+  otherwise the overlay would not open until the next refresh.
+
+**Accepted consequence:** the turn that ran into the choice is finished, so
+after answering it the reviewer sends their request again. There is
+deliberately no "resume where you were" mechanism; that is what the removed
+`chatCheckoutResumedPrompt` used to be, and it is exactly the coupling between
+"a choice about a directory" and "a conversation's turn" that this change
+undoes.
+
+**`chat.KindDirectoryDecision` itself stays** — as a Kind, for bubbles already
+in stored history, which still render and still accept a reviewer reply
+through the ordinary `pendingQuestionID` round trip. Nothing creates a new one.
+
 #### Visible wording: it is a "werkmap", never a "checkout"
 
 Reviewer request. Everything the reviewer READS about the one local directory
