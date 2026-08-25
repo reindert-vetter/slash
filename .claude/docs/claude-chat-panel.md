@@ -1658,6 +1658,26 @@ Tests: `TestPrepareChatShellWorkDirProceedsOnUnpushedLocalCommits`,
 assertion, `TestSelectCheckoutCandidatePrioritizesOnTargetBranch`,
 `TestListAllCheckoutChoicesDoesNotPrioritize` (all `chat_checkout_test.go`).
 
+**Follow-up: a short natural-language stand-in for an option is also
+recognized**, not just its byte-for-byte (case/whitespace-insensitive) text.
+Reported bug: typing "gewoon ernaast doen" instead of clicking the
+`optKeepSeparate` button ("Los laten (buiten Claude's commit houden)") kept
+coming back "Dat antwoord herkende ik niet als een van de keuzes" forever —
+the exact same unanswerable-loop shape the byte-for-byte fix above already
+covers for a genuine mismatch, but this reply was never really a mismatch,
+just a paraphrase. `matchCheckoutOption` now falls back to
+`checkoutOptionAliases`, a small `map[string][]string` (`chat_checkout.go`) of
+short, distinctive phrases that only ever mean ONE offered option — checked as
+a substring of the (lowercased) reply, only once no option matched
+byte-for-byte. Deliberately narrow: only `optKeepSeparate` has aliases today
+("ernaast", "naast elkaar", "los laten", "apart houden", "laat maar staan") —
+a generic word that could plausibly mean several options is never added, since
+a wrong match here would silently run the wrong git operation. Extend the map
+rather than adding a second matching mechanism if another option turns out to
+need this. Test:
+`TestPrepareChatShellWorkDirRecognizesNaturalLanguageKeepSeparateReply`
+(`chat_checkout_test.go`).
+
 ### A push the reviewer asks for IN the conversation is a real push
 
 `modules/claude/prompts/chat_shell.md` used to only say "push when the

@@ -317,6 +317,39 @@ func TestPrepareChatShellWorkDirAsksAboutDirtyCandidate(t *testing.T) {
 	}
 }
 
+// A free-text reply that means "los laten" ("gewoon ernaast doen", never
+// clicking the exact "Los laten (buiten Claude's commit houden)" button)
+// must resolve exactly like the canonical option text — the reported bug:
+// this kept coming back as "Dat antwoord herkende ik niet als een van de
+// keuzes", forever.
+func TestPrepareChatShellWorkDirRecognizesNaturalLanguageKeepSeparateReply(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	checkout := cloneCheckoutDir(t, bareDir, "feature/x")
+	writeCheckoutSettings(t, dataDir, checkout)
+
+	if err := os.WriteFile(filepath.Join(checkout, "foo.txt"), []byte("reviewer's own WIP\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1004, "conv-d", "", "feature/x")
+	if ok || decision == nil || decision.Stage != checkoutStageDirtyTree {
+		t.Fatalf("expected a dirtyTree decision, got ok=%v decision=%+v", ok, decision)
+	}
+
+	dir, decision2, ok2 := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1004, "conv-d", "gewoon ernaast doen", "feature/x")
+	if decision2 != nil {
+		t.Fatalf("unexpected further decision: %+v", decision2)
+	}
+	if !ok2 || dir != checkout {
+		t.Fatalf("expected the checkout ready after a natural-language 'los laten' reply, dir=%q ok=%v", dir, ok2)
+	}
+	if got, _ := os.ReadFile(filepath.Join(checkout, "foo.txt")); string(got) != "reviewer's own WIP\n" {
+		t.Fatalf("'los laten' must not touch the working tree, got %q", got)
+	}
+}
+
 // The reviewer choosing "Verwijderen" actually discards the pre-existing
 // change, after which the checkout resolves cleanly.
 func TestPrepareChatShellWorkDirDiscardOnRequest(t *testing.T) {

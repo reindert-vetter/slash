@@ -460,6 +460,34 @@ const (
 	optReuseNo      = "Nee, zoek een andere directory"
 )
 
+// checkoutOptionAliases are natural-language stand-ins for an option's own
+// (deliberately explicit, full-sentence) canonical text, consulted by
+// matchCheckoutOption ONLY when no option matched byte-exactly. Reported bug:
+// a reviewer who types "gewoon ernaast doen" instead of clicking the
+// "Los laten (buiten Claude's commit houden)" button got "Dat antwoord
+// herkende ik niet als een van de keuzes" forever — an unanswerable,
+// ever-repeating question, exactly the failure mode chatCheckoutDirtyDecision's
+// own doc comment already calls out for a DIFFERENT stage (the removed
+// checkoutStageDivergedHistory). Kept small and specific on purpose: each
+// alias is a distinctive word/phrase that only ever means ONE of the offered
+// options, never a generic word that could plausibly mean several (a wrong
+// match here would silently do the wrong git operation).
+var checkoutOptionAliases = map[string][]string{
+	optKeepSeparate: {"ernaast", "naast elkaar", "los laten", "apart houden", "laat maar staan"},
+}
+
+// matchCheckoutReplyAlias reports whether reply's own words contain one of
+// opt's aliases — a plain substring check on the lowercased, trimmed reply,
+// which is enough for the short, distinctive phrases above.
+func matchCheckoutReplyAlias(opt, lowerReply string) bool {
+	for _, alias := range checkoutOptionAliases[opt] {
+		if strings.Contains(lowerReply, alias) {
+			return true
+		}
+	}
+	return false
+}
+
 // chatCheckoutDirtyDecision builds the consult for a candidate with genuinely
 // dirty (uncommitted) changes — the only case left that still needs a
 // reviewer decision before Claude may touch this directory. A candidate that
@@ -668,14 +696,23 @@ type chatCheckoutResolved struct {
 // matchCheckoutOption resolves reply against options the same forgiving way
 // for every stage: trimmed and case-insensitive, so a stray leading/trailing
 // space or a different letter case is not treated as "the reviewer typed
-// something else" — an actual mismatch (free text that isn't one of the
-// offered choices) still resolves nothing. Returns the OPTION's own
-// canonical text (never the reply's original casing/whitespace) so every
-// switch below can keep comparing against the exported opt* constants.
+// something else". Falling back to checkoutOptionAliases (see its own doc
+// comment) also recognizes a short natural-language stand-in for one of the
+// OFFERED options — an actual mismatch (free text that matches none of the
+// offered choices, verbatim or via an alias) still resolves nothing. Returns
+// the OPTION's own canonical text (never the reply's original
+// casing/whitespace) so every switch below can keep comparing against the
+// exported opt* constants.
 func matchCheckoutOption(options []string, reply string) (string, bool) {
 	reply = strings.TrimSpace(reply)
 	for _, opt := range options {
 		if strings.EqualFold(strings.TrimSpace(opt), reply) {
+			return opt, true
+		}
+	}
+	lowerReply := strings.ToLower(reply)
+	for _, opt := range options {
+		if matchCheckoutReplyAlias(opt, lowerReply) {
 			return opt, true
 		}
 	}
