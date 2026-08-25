@@ -82,7 +82,7 @@ export function statusInfo(status) {
 // RelatedPanel.mjs: RelatedPanel already imports THIS module (statusInfo/
 // categoryClass), so importing it back would make the two modules circular for
 // one boolean. Optional, so every existing caller/test keeps working.
-export default function BlockList(state, isPrWideComposing = () => false) {
+export default function BlockList(state, isPrWideComposing = () => false, onRevealApproved = () => (state.showApproved = !state.showApproved)) {
   return html`
     <aside
       data-testid="pr-index"
@@ -207,7 +207,7 @@ export default function BlockList(state, isPrWideComposing = () => false) {
       </header>
 
       <div class="no-scrollbar min-h-0 flex-1 overflow-y-auto" id="block-scroll">
-        ${() => renderList(state)}
+        ${() => renderList(state, onRevealApproved)}
       </div>
     </aside>
   `
@@ -245,7 +245,7 @@ export function isIgnoredComment(state, b) {
 // ALWAYS returns a keyed array (never a bare element), so arrow.js never
 // freezes on a single↔array slot-shape switch (see conventions.md): the empty
 // state is wrapped as an array of one keyed element.
-function renderList(state) {
+function renderList(state, onRevealApproved) {
   // An empty tree is exactly when the notice matters most (nothing was ingested
   // yet at page load, the commits landed afterwards), so it survives this early
   // return instead of only appearing next to a populated list.
@@ -327,7 +327,7 @@ function renderList(state) {
     }
     items.push(row(state, b, i))
   })
-  if (approvedCount > 0) items.push(toggleRow(state, approvedCount))
+  if (approvedCount > 0) items.push(toggleRow(state, approvedCount, onRevealApproved))
   if (ignoredCount > 0) items.push(ignoreToggleRow(state, ignoredCount))
   // The batch action row sits below both toggle rows but above the push-todo
   // section: it acts on comments that ARE in this list (see
@@ -711,7 +711,7 @@ function refreshingPill(state, b) {
 // hits 0 here (approved blocks stay in state.blocks; only this render's own
 // display loop below hides them), so that guard was never the culprit; the
 // toggle-row ArrowRight-exclusion guard in onKeydown was.
-function toggleRow(state, count) {
+function toggleRow(state, count, onRevealApproved) {
   return html`
     <button
       data-testid="toggle-approved"
@@ -727,7 +727,14 @@ function toggleRow(state, count) {
           ? 'border-indigo-300 dark:border-indigo-500 bg-indigo-50 dark:bg-indigo-500/15 ring-1 ring-inset ring-indigo-200 dark:ring-indigo-500/30 text-indigo-700 dark:text-indigo-300'
           : 'border-slate-300 dark:border-zinc-700 text-slate-500 dark:text-zinc-500 hover:bg-slate-50 dark:hover:bg-zinc-800/60')}"
       @click="${() => {
-        state.showApproved = !state.showApproved
+        // Turning the section ON jumps straight to the first now-visible
+        // approved block (onRevealApproved, home.mjs) — reviewer request,
+        // see its own doc comment. Turning it back OFF (hiding) stays a
+        // plain flip that keeps the keyboard on this row, like every other
+        // toggle-row click.
+        const turningOn = !state.showApproved
+        onRevealApproved()
+        if (turningOn) return
         state.toggleFocused = true
         state.ignoreToggleFocused = false
         state.staleRowFocused = false

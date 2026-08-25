@@ -4010,6 +4010,36 @@ function revealSelectedIfHidden() {
   scrollSelectedIntoView()
 }
 
+// revealApprovedBlocks is what a click/Enter/ArrowRight on the toggle-approved
+// row runs (mirrors toggleRow's own @click in BlockList.mjs, threaded in as
+// the onRevealApproved callback — BlockList.mjs can't import selectRow/
+// scrollSelectedIntoView itself, since home.mjs already imports BlockList.mjs).
+// Reviewer request: "toon x goedgekeurde blok, moet gelijk naar de index item
+// gaan met een goedgekeurde blok" — clicking "Toon N goedgekeurde blocks" used
+// to only flip state.showApproved and leave the keyboard/selection sitting on
+// the toggle row itself, so the reviewer had to walk ↑ manually into the
+// section that just unfolded. Turning the section ON now jumps straight to
+// the FIRST now-visible approved block (in list order, i.e. state.blocks'
+// own order — approved blocks sit inline where they always belonged, not
+// bunched below the toggle row, see renderList in BlockList.mjs). Turning it
+// back OFF (hiding) stays a plain flip: there's no "index item" to land on
+// when collapsing a section.
+function revealApprovedBlocks() {
+  const turningOn = !state.showApproved
+  state.showApproved = !state.showApproved
+  if (!turningOn) return
+  const idx = state.blocks.findIndex((b) => isFullyApproved(state, b))
+  if (idx < 0) return
+  selectRow(idx)
+  state.toggleFocused = false
+  state.ignoreToggleFocused = false
+  state.batchRowFocused = false
+  state.pushTodoFocused = false
+  state.staleRowFocused = false
+  state.blockIndexEntered = true
+  scrollSelectedIntoView()
+}
+
 // applyDefaultUnapprovedSelection lands a genuinely fresh open (no ?sel=
 // restored at all — see hadSelParam in loadBlocks) on the first not-yet-
 // fully-approved item in state.blocks. Deliberately no distinction between a
@@ -12624,7 +12654,7 @@ function onKeydown(e) {
     } else if (e.key === 'ArrowRight' || e.key === 'Enter') {
       e.preventDefault()
       if (state.toggleFocused) {
-        state.showApproved = !state.showApproved
+        revealApprovedBlocks()
         return
       }
       if (state.ignoreToggleFocused) {
@@ -12961,7 +12991,7 @@ function onKeydown(e) {
   // Enter-opens-menu branch right below.
   if (e.key === 'Enter' && state.toggleFocused) {
     e.preventDefault()
-    state.showApproved = !state.showApproved
+    revealApprovedBlocks()
     return
   }
 
@@ -16156,7 +16186,7 @@ function AppColumns(state) {
         (!state.footerVisible ? 'bottom-6' : `bottom-[${footerBoxPx(state) + PROGRESS_BAR_PX}px]`)}"
       data-testid="app-columns"
     >
-      ${PrInfoPanel(state)} ${BlockList(state, isPrWideComposing)} ${DetailPanel(state)}
+      ${PrInfoPanel(state)} ${BlockList(state, isPrWideComposing, revealApprovedBlocks)} ${DetailPanel(state)}
     </div>
   `
 }

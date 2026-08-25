@@ -649,6 +649,29 @@ opening the menu resp. entering the diff, and **`f`/`d`/`s`/`a`** are no-ops
 (no block/diff context). A click on a regular row, or typing in the search box,
 always resets both toggle flags.
 
+**Turning `toggle-approved` ON jumps straight to the revealed block, not just
+unfolding the section.** Reviewer request: "toon x goedgekeurde blok, moet
+gelijk naar de index item gaan met een goedgekeurde blok" — a click/`Enter`/`→`
+on `toggle-approved` used to only flip `state.showApproved`, leaving the
+keyboard/selection sitting on the toggle row itself; the reviewer then had to
+walk `↑` manually into the section that just unfolded. `revealApprovedBlocks`
+(`home.mjs`) now does the flip AND, only while turning the section ON, selects
+the FIRST now-visible approved block (`state.blocks.findIndex(isFullyApproved)`
+— approved blocks sort inline at their own position, see `renderList` in
+`BlockList.mjs`, not bunched below the toggle row) and clears
+`toggleFocused`/the other trailing-row flags, mirroring `selectRow`. Turning it
+back OFF (hiding) stays a plain flip that keeps the keyboard on the toggle row,
+like every other toggle-row click — there is no "index item" to land on when
+collapsing a section. `toggle-ignored`/the batch/push-todo rows are
+deliberately unaffected — this is specific to the approved-blocks reveal.
+Because `BlockList.mjs` cannot import back into `home.mjs` (the reverse import
+already exists), the jump is threaded in as an `onRevealApproved` callback:
+`BlockList(state, isPrWideComposing, onRevealApproved)` → `renderList` →
+`toggleRow`'s own `@click`; the two `home.mjs`-side trigger paths (the plain
+`Enter` handler and the search-active `→`/`Enter` handler) call
+`revealApprovedBlocks()` directly. Test:
+`tests/toggle-approved-reveal-jump.spec.mjs`.
+
 **The batch action row** (`state.batchRowFocused`, between `toggle-ignored` and
 `push-todo` because that is also its render position, see
 `.claude/docs/comments-panel.md`'s "The comment_batch checkboxes and the
