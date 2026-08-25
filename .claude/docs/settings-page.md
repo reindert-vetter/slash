@@ -54,8 +54,8 @@ module `const`s (mirrors `originPr`/`originSel` in `overview.mjs`):
 
 ## Row list and keyboard
 
-`src/settings.mjs`'s `ROWS = ['theme', 'autowarn', 'checkout', 'aliases',
-'praisewords']` is simultaneously the `↑`/`↓` nav order and the DOM render
+`src/settings.mjs`'s `ROWS = ['theme', 'autowarn', 'autoingestpref', 'checkout',
+'aliases', 'praisewords']` is simultaneously the `↑`/`↓` nav order and the DOM render
 order, kept as one array so the two can never drift apart. A platt
 `window.addEventListener('keydown', …)` (mirrors `inbox.mjs`, not the
 `/pr/<id>` nav chain's `Cmd+[`/`Cmd+]` remap — this page has no per-stop
@@ -80,6 +80,7 @@ granularity to remap onto):
 |---|---|---|---|
 | Thema | `localStorage['theme']` (`theme.mjs`) | same, via `cycleTheme()` | Yes — reuses `themeToggleButton()` unchanged |
 | Live AI assistent | `GET /api/autowarn` (`autowarn.mjs`) | `POST /api/workflows/auto_warn` + `.../signals/autowarn` (existing `auto_warn` tracker) | Yes — reuses `autoWarnToggleButton()` unchanged |
+| Automatisch review-boom genereren (off/own/all) | `GET /api/autoingestpref` (`autoingestpref.mjs`) | `POST /api/workflows/auto_ingest_pref` + `.../signals/auto_ingest_pref` (new `auto_ingest_pref` tracker) | Yes — reuses `autoIngestPrefToggleButton()` unchanged, also shown next to the gear icon in `/pr-overview`'s header |
 | Checkout-directory | `GET /api/chat/checkout?prs=<originPr>` | *(unchanged — see below)* | **Read-only on this page** |
 | Wie ben ik — GitHub-login | `GET /api/me` (`avatar.mjs`'s `ensureMe`/`meLogin`) | — | No, by explicit reviewer decision: "wie ben ik moet uit GitHub komen" |
 | Wie ben ik — extra @mention-aliassen | `GET /api/settings` (`me.aliases`) | new `app_settings` tracker, Kind `"aliases"` (see below) | Yes — new |

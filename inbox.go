@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"slash/modules/autoingestpref"
 	"slash/modules/prmeta"
 )
 
@@ -1024,4 +1025,58 @@ func buildInboxSnapshot(ctx context.Context, db *sql.DB, pm *prmeta.Module) (*sn
 		Sections:     sections,
 		Statuses:     statuses,
 	}, nil
+}
+
+// autoIngestOwnSections lists which of the reviewer's own-PR sections
+// (the inboxSections entries whose query is author:@me) participate in the
+// "own" auto-ingest mode — a deliberate, confirmed subset, not "every
+// own-PR section": "Ready to merge" is excluded (nothing left to review
+// there, a tree adds no value at that point); "Needs action",
+// "Waiting for review or checks" and "Your drafts" are included, drafts
+// deliberately too (the reviewer's own explicit choice — a draft still
+// benefits from having a tree ready the moment it becomes real work).
+var autoIngestOwnSections = map[string]bool{
+	"Needs action":                 true,
+	"Waiting for review or checks": true,
+	"Your drafts":                  true,
+}
+
+// eligibleAutoIngestPRs picks every PR that autoIngestOwnPRs (workflows.go)
+// should generate a review tree for, given the reviewer's auto_ingest_pref
+// mode. Entirely deterministic and free of side effects — StartIngest etc.
+// happen in autoIngestOwnPRs, not here — so it is directly unit-testable
+// without a live engine/gh/claude.
+//
+//   - autoingestpref.ModeOff — nothing, ever.
+//   - autoingestpref.ModeOwn — PRs authored by myLogin, restricted to
+//     autoIngestOwnSections (see its own doc comment for exactly which
+//     sections and why).
+//   - autoingestpref.ModeAll — every PR in the inbox, from every section,
+//     regardless of author — including PRs the reviewer did not author
+//     (e.g. "Needs your review"), so a tree is ready before the reviewer
+//     even opens it.
+//
+// A PR that already hasGraph is never returned, in any mode. An unknown mode
+// string is treated like ModeOff (nothing) rather than guessed at.
+func eligibleAutoIngestPRs(mode string, myLogin string, sections []inboxSection) []prKey {
+	var out []prKey
+	for _, s := range sections {
+		for _, pr := range s.PRs {
+			if pr.HasGraph {
+				continue
+			}
+			switch mode {
+			case autoingestpref.ModeAll:
+				// every PR, every section
+			case autoingestpref.ModeOwn:
+				if myLogin == "" || pr.Author != myLogin || !autoIngestOwnSections[s.Title] {
+					continue
+				}
+			default:
+				continue
+			}
+			out = append(out, prKey{canonRepo(pr.Repo), pr.Number})
+		}
+	}
+	return out
 }

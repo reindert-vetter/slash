@@ -17,6 +17,7 @@ import (
 
 	"github.com/reindert-vetter/tembed"
 	"slash/modules/approvals"
+	"slash/modules/autoingestpref"
 	"slash/modules/autowarn"
 	"slash/modules/callresolve"
 	"slash/modules/chat"
@@ -201,6 +202,23 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		ch.Close()
 		return nil, nil, err
 	}
+	aip, err := autoingestpref.Open(dataDir + "/autoingestpref.db")
+	if err != nil {
+		sq.Close()
+		cs.Close()
+		ib.Close()
+		rel.Close()
+		pm.Close()
+		cr.Close()
+		tc.Close()
+		ap.Close()
+		ex.Close()
+		ru.Close()
+		ci.Close()
+		ch.Close()
+		aw.Close()
+		return nil, nil, err
+	}
 	wd, err := warndismiss.Open(dataDir + "/warndismiss.db")
 	if err != nil {
 		sq.Close()
@@ -216,6 +234,7 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		ci.Close()
 		ch.Close()
 		aw.Close()
+		aip.Close()
 		return nil, nil, err
 	}
 	wr, err := warnreviewed.Open(dataDir + "/warnreviewed.db")
@@ -234,6 +253,7 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		ch.Close()
 		aw.Close()
 		wd.Close()
+		aip.Close()
 		return nil, nil, err
 	}
 
@@ -312,6 +332,10 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 	// AutoWarnEnabled report "enabled" (the default) and saveAutoWarnEnabled a
 	// no-op.
 	mgr.autowarn = aw
+	// Same pattern for the auto-ingest preference: a nil store makes
+	// AutoIngestPrefMode report "own" (the default) and
+	// saveAutoIngestPrefMode a no-op.
+	mgr.autoingestpref = aip
 	// Same pattern for the dismissed-findings store: a nil store makes
 	// recordWarningDismissed a no-op and dropDismissedFindings a pass-through.
 	mgr.warndismiss = wd
@@ -355,6 +379,12 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		if _, err := mgr.EnsureAutoWarn(); err != nil {
 			mgr.logf("autowarn: ensure: %v", err)
 		}
+		// Own the per-repo auto-ingest-preference tracker so the toggle (settings
+		// page + /pr-overview header) has a Run ID to signal to (no poller — it
+		// only reacts to UI signals).
+		if _, err := mgr.EnsureAutoIngestPref(); err != nil {
+			mgr.logf("autoingestpref: ensure: %v", err)
+		}
 		// Own the single, global app_settings tracker so the settings page's
 		// aliases/praise-words edits have a Run ID to signal to (no poller — it
 		// only reacts to UI signals). No repo scope, mirrors EnsureAutoWarn.
@@ -380,6 +410,7 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		_ = ci.Close()
 		_ = ch.Close()
 		_ = aw.Close()
+		_ = aip.Close()
 		_ = wd.Close()
 		_ = wr.Close()
 		return cs.Close()
@@ -700,6 +731,14 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// GET /api/autowarn → read-only auto-warn preference ({"enabled":bool}),
 	// backing the toggle next to the theme button in prInfoCard.
 	mux.HandleFunc("/api/autowarn", s.handleAutoWarn)
+	// POST /api/workflows/auto_ingest_pref {repo?} → ensure the per-repo
+	// auto-ingest-preference tracker; the UI then signals its mode
+	// ("off"|"own"|"all") to its Run ID via .../signals/auto_ingest_pref.
+	mux.HandleFunc("/api/workflows/auto_ingest_pref", s.handleAutoIngestPrefStart)
+	// GET /api/autoingestpref → read-only auto-ingest preference
+	// ({"mode":"off"|"own"|"all"}), backing the toggle on /settings and next to
+	// the gear icon in /pr-overview's header.
+	mux.HandleFunc("/api/autoingestpref", s.handleAutoIngestPref)
 	// POST /api/workflows/app_settings → ensure the single, global
 	// app_settings tracker; the settings page then signals aliases/
 	// praise-words edits to its Run ID via .../signals/app_settings_update.
@@ -1103,6 +1142,28 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if err := s.tasks.engine.SignalWorkflow(runID, SignalAutoWarn, body); err != nil {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"status": "set"})
+			return
+		}
+		// The auto_ingest_pref signal carries the desired mode ("off"|"own"|"all")
+		// for automatic review-tree generation (from the toggle on /settings and
+		// in the /pr-overview header).
+		if parts[2] == SignalAutoIngestPref {
+			var body AutoIngestPrefSignal
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "invalid auto_ingest_pref", http.StatusBadRequest)
+				return
+			}
+			switch body.Mode {
+			case autoingestpref.ModeOff, autoingestpref.ModeOwn, autoingestpref.ModeAll:
+			default:
+				http.Error(w, "invalid mode", http.StatusBadRequest)
+				return
+			}
+			if err := s.tasks.engine.SignalWorkflow(runID, SignalAutoIngestPref, body); err != nil {
 				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 				return
 			}
@@ -1789,6 +1850,39 @@ func (s *server) handleAutoWarn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "enabled": enabled})
+}
+
+// handleAutoIngestPrefStart starts (or reuses) the per-repo
+// auto-ingest-preference tracker and returns its Run ID. Starting an
+// Execution is the sanctioned UI write path; the UI then signals its mode to
+// this Run ID via .../signals/auto_ingest_pref.
+func (s *server) handleAutoIngestPrefStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	runID, err := s.tasks.manager.EnsureAutoIngestPref()
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
+}
+
+// handleAutoIngestPref serves GET /api/autoingestpref — the read-only
+// preference ("off"|"own"|"all") for automatic review-tree generation.
+// Defaults to "own" (see modules/autoingestpref.Mode).
+func (s *server) handleAutoIngestPref(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	mode, err := s.tasks.manager.AutoIngestPrefMode(r.Context())
+	if err != nil {
+		http.Error(w, "query failed", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "mode": mode})
 }
 
 // handleAppSettingsStart starts (or reuses) the single, global app_settings

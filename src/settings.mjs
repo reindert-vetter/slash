@@ -10,6 +10,7 @@
 import { reactive, html } from './vendor/arrow.js'
 import { initTheme, themeToggleButton, cycleTheme } from './theme.mjs'
 import { ensureAutoWarn, autoWarnToggleButton, toggleAutoWarn } from './autowarn.mjs'
+import { ensureAutoIngestPref, autoIngestPrefToggleButton, cycleAutoIngestPref } from './autoingestpref.mjs'
 import { ensureMe, meLogin } from './avatar.mjs'
 import { originFrom, originPr } from './settingsLink.mjs'
 
@@ -39,7 +40,7 @@ const state = reactive({
 
 // Row order IS the ↑/↓ nav order, and IS the DOM order rendered below — kept
 // as one array so the two can never drift apart.
-const ROWS = ['theme', 'autowarn', 'checkout', 'aliases', 'praisewords']
+const ROWS = ['theme', 'autowarn', 'autoingestpref', 'checkout', 'aliases', 'praisewords']
 
 // ── data loading ─────────────────────────────────────────────────────────
 
@@ -192,6 +193,8 @@ function activateRow(row) {
     cycleTheme()
   } else if (row === 'autowarn') {
     toggleAutoWarn()
+  } else if (row === 'autoingestpref') {
+    cycleAutoIngestPref()
   } else if (row === 'aliases') {
     state.editing = 'aliases'
     requestAnimationFrame(() => focusRowInput('aliases'))
@@ -264,6 +267,20 @@ function autoWarnRow() {
   return html`<div data-testid="settings-row-autowarn" class="${() => rowCls('autowarn')}" @click="${() => (state.activeRow = ROWS.indexOf('autowarn'))}">
     ${rowLabel('Live AI assistent', 'Automatische risicocontrole en AI-beschrijvingen aan/uit — geldt voor alle PR’s.')}
     ${autoWarnToggleButton()}
+  </div>`
+}
+
+function autoIngestPrefRow() {
+  return html`<div
+    data-testid="settings-row-autoingestpref"
+    class="${() => rowCls('autoingestpref')}"
+    @click="${() => (state.activeRow = ROWS.indexOf('autoingestpref'))}"
+  >
+    ${rowLabel(
+      'Automatisch review-boom genereren',
+      'Uit — nooit; Mijn PR’s — alleen je eigen PR’s (behalve "Ready to merge"); Alle PR’s — ook die van anderen.',
+    )}
+    ${autoIngestPrefToggleButton()}
   </div>`
 }
 
@@ -378,7 +395,7 @@ function App() {
       </header>
       <div class="flex-1 overflow-auto px-6 py-5">
         <div class="mx-auto max-w-xl space-y-3" data-testid="settings-rows">
-          ${themeRow()} ${autoWarnRow()} ${checkoutRow()} ${aliasesRow()} ${praiseWordsRow()}
+          ${themeRow()} ${autoWarnRow()} ${autoIngestPrefRow()} ${checkoutRow()} ${aliasesRow()} ${praiseWordsRow()}
         </div>
         <p class="mx-auto mt-4 max-w-xl text-[12px] text-slate-400 dark:text-zinc-500">
           ↑/↓ om te navigeren, Enter/Space om te wisselen of te bewerken, ← om terug te gaan.
@@ -390,4 +407,5 @@ function App() {
 
 App()(document.getElementById('app'))
 ensureAutoWarn()
+ensureAutoIngestPref()
 init()

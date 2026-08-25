@@ -311,6 +311,76 @@ deferred past server startup" in `.claude/docs/workflows-analysis.md`'s
 read-model having a snapshot the instant the server starts serving. See
 `.claude/docs/pr-overview.md`.
 
+### Automatic review-tree generation (`auto_ingest_pref` + `modules/autoingestpref`)
+
+Reviewer request: "mijn eigen prs, daarvan mogen de trees automatisch worden
+gegenereerd" — the reviewer's own PRs (and, on request, everyone else's too)
+should not need a manual "Generate review tree" click at all.
+
+- **`modules/autoingestpref`** (`data/autoingestpref.db`,
+  `auto_ingest_pref(repo, mode)`) is a 3-state repo-wide preference —
+  `"off"`/`"own"`/`"all"` — the same per-repo-tracker mould as `auto_warn`
+  (mirrors its Module shape, `Mode`/`SetMode` instead of `Enabled`/
+  `SetEnabled`). Default `"own"` when nothing was ever saved: auto-generate
+  the reviewer's own PRs, opt-out rather than opt-in.
+- **Workflow (`WorkflowAutoIngestPref = "auto_ingest_pref"`):** a loop on the
+  `auto_ingest_pref` Signal, one `saveAutoIngestPrefMode` Activity per Signal
+  — deterministic, never completes. `EnsureAutoIngestPref` starts/reuses one
+  per repo, also after a restart, exactly like `EnsureAutoWarn`.
+- **The trigger itself lives inside the `refreshInbox` Activity**, not a
+  separate poller: after building/storing the snapshot, it reads the current
+  mode (`AutoIngestPrefMode`) and — unless `"off"` — calls
+  `eligibleAutoIngestPRs(mode, myLogin, sections)` (`inbox.go`), a pure,
+  side-effect-free selection function (directly unit-testable without gh):
+  - `"own"` — PRs authored by `myLogin`, but **only** from
+    `autoIngestOwnSections` — a deliberate, confirmed subset of the
+    `author:@me` sections: **"Needs action"**, **"Waiting for review or
+    checks"** and **"Your drafts"** (drafts included, on explicit reviewer
+    request) — **not** "Ready to merge", since nothing is left to review
+    there. "Needs your team's review"/"Needs your review" are never
+    `author:@me` sections at all, so they never match in `"own"` mode.
+  - `"all"` — every PR in every section, regardless of author, so a PR the
+    reviewer must review (e.g. "Needs your review") also gets a tree before
+    they open it.
+  - Either mode skips a PR that already `hasGraph`.
+  - `myLogin` is `snap.GeneratedFor` (`ghLogin(ctx)`), with
+    `settings(dataDir).Me.Login` as an override when set — the same
+    precedence `/api/me` vs. `settings.json` documented in
+    `.claude/rules/conventions.md`.
+- **Fire-and-forget per eligible PR** (`autoIngestOwnPRs`/`autoIngestOne`,
+  mirrors `TriggerIngestRefreshCheck`): `refreshInbox` must stay fast — a page
+  load awaits the `refresh` Signal synchronously (`SignalWorkflow` runs the
+  whole Activity inline) — so each PR is handed to its own goroutine under
+  `m.baseCtx`, gated on `m.runtimeReady`, running the exact same pipeline
+  `handleIngest`/the CLI already run: `StartIngest` → `EnsureRelations` →
+  `EnsurePRStatus`.
+- **Dedup is a plain in-memory `map[prKey]bool`** (`m.autoIngestTried`, same
+  operational shape as `lastBeat`/`polling`) so the poll cadence (1-10 min)
+  never starts a second Execution for a PR still mid-ingest; never cleared on
+  failure (a persistently broken PR does not retry every poll — it stays
+  reachable via the manual button, and a failure still surfaces through
+  `GET /api/problems`), and clearing on success would be a no-op anyway since
+  `hasGraph` then excludes it.
+- **A no-op under `SLASH_GITHUB=off`** (`ghDisabled()`): the offline fixture
+  path's `GeneratedFor`/rows are synthetic and must never trigger a real
+  `StartIngest` during a test run — this is also what keeps every existing
+  `tests/fixtures/inbox.json`-based Playwright/Go test unaffected, even though
+  that fixture itself has two `reindert-vetter`-authored, not-yet-ingested
+  rows.
+- **UI: one shared toggle, two homes** (`src/autoingestpref.mjs`, mirrors
+  `autowarn.mjs`'s write path — `POST /api/workflows/auto_ingest_pref` then
+  `.../signals/auto_ingest_pref`; read via `GET /api/autoingestpref`): a row
+  on `/settings` (`ROWS`, right after `autowarn`) and a button next to the
+  gear icon in `/pr-overview`'s header — the reviewer's own explicit request
+  for both, since this preference is both a general setting and something
+  worth seeing while triaging the inbox it affects. Cycle order
+  `own → all → off → own`; word + icon shape both carry the state (never
+  colour alone, per the colourblind rule), same 3-state pattern as
+  `theme.mjs`'s system/light/dark — content unrelated.
+- Tests: `modules/autoingestpref/autoingestpref_test.go`,
+  `TestEligibleAutoIngestPRs*` (`autoingest_pref_test.go`),
+  `tests/auto-ingest-pref.spec.mjs`.
+
 ## Persisting reviewer approval (`approve` + `modules/approvals`)
 
 One Execution per PR, making approval durable across a refresh.

@@ -14,6 +14,7 @@ import (
 
 	"github.com/reindert-vetter/tembed"
 	"slash/modules/approvals"
+	"slash/modules/autoingestpref"
 	"slash/modules/autowarn"
 	"slash/modules/callresolve"
 	"slash/modules/chat"
@@ -155,6 +156,16 @@ const (
 	// only the automatic trigger does. See the "AI risk check" section of
 	// .claude/docs/workflows-analysis.md.
 	WorkflowAutoWarn = "auto_warn"
+	// WorkflowAutoIngestPref is the Workflow Type that persists the reviewer's
+	// repo-wide preference for AUTOMATIC review-tree generation (see
+	// TaskManager.autoIngestOwnPRs): one Execution per repo, the same
+	// per-repo-tracker mould as WorkflowAutoWarn. Each "auto_ingest_pref" Signal
+	// carries the desired mode ("off"|"own"|"all"), which one Activity writes
+	// into the autoingestpref read-model. It never completes — a long-lived
+	// per-repo tracker. Clicking "Generate review tree" by hand is NEVER gated
+	// by this — only the automatic trigger inside refreshInbox checks it. See
+	// the "pr_inbox" section of .claude/docs/workflows-trackers.md.
+	WorkflowAutoIngestPref = "auto_ingest_pref"
 	// WorkflowAppSettings is the Workflow Type that persists the two
 	// reviewer-editable pieces of the local settings.json/praise-words.json
 	// files that used to be read-only (settings.go, praisewords.go): the extra
@@ -226,6 +237,12 @@ const (
 	// .../signals/{name} route (tasks_api.go) dispatches purely on this literal,
 	// so it must not collide with an existing one.
 	SignalAutoWarn = "autowarn"
+	// SignalAutoIngestPref delivers the desired mode ("off"|"own"|"all") to the
+	// auto_ingest_pref tracker (from the UI toggle on /settings and in the
+	// /pr-overview header). Deliberately a distinct literal from the other
+	// Signal names — the generic .../signals/{name} route (tasks_api.go)
+	// dispatches purely on this literal.
+	SignalAutoIngestPref = "auto_ingest_pref"
 	// SignalAppSettings delivers one settings-page edit to the app_settings
 	// tracker — its Kind field says which of the two writable fields (mention
 	// aliases / praise words) the payload is for.
@@ -512,6 +529,18 @@ type AutoWarnSignal struct {
 	Enabled bool `json:"enabled"`
 }
 
+// AutoIngestPrefInput starts an auto_ingest_pref Execution — one tracker per
+// repo.
+type AutoIngestPrefInput struct {
+	Repo string `json:"repo"`
+}
+
+// AutoIngestPrefSignal carries the desired mode into the auto_ingest_pref
+// tracker (delivered under SignalAutoIngestPref).
+type AutoIngestPrefSignal struct {
+	Mode string `json:"mode"` // "off" | "own" | "all"
+}
+
 // AppSettingsInput starts the single, global app_settings Execution. No
 // fields: unlike every other tracker above there is only ever one data dir per
 // process, so there is nothing to scope by.
@@ -789,6 +818,12 @@ type TaskManager struct {
 	// NewTaskManager param; a nil store makes AutoWarnEnabled report "enabled"
 	// (the default) and saveAutoWarnEnabled a no-op.
 	autowarn *autowarn.Module
+	// autoingestpref is the repo-wide preference for AUTOMATIC review-tree
+	// generation ("off"|"own"|"all"), read by autoIngestOwnPRs inside the
+	// refreshInbox Activity. Set post-construction in newTasks like the stores
+	// above; a nil store makes AutoIngestPrefMode report "own" (the default)
+	// and saveAutoIngestPrefMode a no-op.
+	autoingestpref *autoingestpref.Module
 	// warndismiss remembers which AI risk findings the reviewer already
 	// resolved or deleted, so the next code_warning run does not raise them
 	// again. Set post-construction like the stores above; a nil store makes
@@ -851,15 +886,16 @@ type TaskManager struct {
 	lastBeat map[string]time.Time // code-comment/inbox Run ID → last heartbeat
 	// Keyed by prKey — (repo, number), see repos.go — so a PR 12 in a second
 	// repo can never be handed the primary repo's PR 12 tracker.
-	prRuns         map[prKey]string // PR → pr_status Run ID
-	relRuns        map[prKey]string // PR → build_relations Run ID
-	apprRuns       map[prKey]string // PR → approve Run ID
-	ignRuns        map[prKey]string // PR → ignore_comment Run ID
-	inboxRun       string           // pr_inbox Run ID (one per repo/process)
-	autoWarnRun    string           // auto_warn Run ID (one per repo/process)
-	appSettingsRun string           // app_settings Run ID (one per process, no repo scope)
-	importPolled   map[string]bool  // imported-thread Run ID → poller running (dedup, operational)
-	avatarTried    map[string]bool  // imported-thread Run ID → avatar backfill attempted (dedup, operational)
+	prRuns            map[prKey]string // PR → pr_status Run ID
+	relRuns           map[prKey]string // PR → build_relations Run ID
+	apprRuns          map[prKey]string // PR → approve Run ID
+	ignRuns           map[prKey]string // PR → ignore_comment Run ID
+	inboxRun          string           // pr_inbox Run ID (one per repo/process)
+	autoWarnRun       string           // auto_warn Run ID (one per repo/process)
+	autoIngestPrefRun string           // auto_ingest_pref Run ID (one per repo/process)
+	appSettingsRun    string           // app_settings Run ID (one per process, no repo scope)
+	importPolled      map[string]bool  // imported-thread Run ID → poller running (dedup, operational)
+	avatarTried       map[string]bool  // imported-thread Run ID → avatar backfill attempted (dedup, operational)
 	// polling/pollRestart gate the ONE GitHub reply poller per comment thread
 	// (see beginPolling/endPolling). A thread's poller now stops while the
 	// comment is resolved and is restarted by the reopenComment Activity, so
@@ -869,6 +905,15 @@ type TaskManager struct {
 	// like lastBeat.
 	polling     map[string]bool
 	pollRestart map[string]bool
+
+	// autoIngestTried dedups the automatic-ingest trigger (autoIngestOwnPRs):
+	// once a PR has been handed to autoIngestOne, later refreshInbox runs (the
+	// pr_inbox poll cadence, every 1-10 min) must not start a second Execution
+	// for it while the first is still generating. Purely in-memory/operational,
+	// like polling/importPolled above — a restart just loses this memory, which
+	// only means a PR still without a graph may be retried once more; StartIngest
+	// itself is safe to run twice for the same PR.
+	autoIngestTried map[prKey]bool
 
 	// meCache caches the authenticated GitHub user (see CurrentUser) for the
 	// process lifetime: it never changes while the server runs, so one `gh api
@@ -887,12 +932,13 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		engine: engine, gh: gh, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, testcovers: tc, approvals: ap, explain: ex, claude: cl, jira: jr, db: db, dataDir: dataDir, repo: repo,
 		interval: pollInterval, idle: idlePollInterval,
 		lastBeat: map[string]time.Time{}, prRuns: map[prKey]string{}, relRuns: map[prKey]string{}, apprRuns: map[prKey]string{}, ignRuns: map[prKey]string{},
-		importPolled: map[string]bool{},
-		avatarTried:  map[string]bool{},
-		polling:      map[string]bool{},
-		pollRestart:  map[string]bool{},
-		logf:         log.Printf,
-		ready:        closedGate,
+		importPolled:    map[string]bool{},
+		avatarTried:     map[string]bool{},
+		polling:         map[string]bool{},
+		pollRestart:     map[string]bool{},
+		autoIngestTried: map[prKey]bool{},
+		logf:            log.Printf,
+		ready:           closedGate,
 		// Buffered generously: enqueue must never block the deterministic
 		// Activity that calls it. A full queue (extremely unlikely — it would
 		// take hundreds of PRs signalling "new commits" between two drains of
@@ -957,6 +1003,18 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		for _, s := range snap.Sections {
 			n += len(s.PRs)
 		}
+
+		// Automatically generate a review tree for every PR the reviewer's own
+		// auto_ingest_pref preference covers (see autoIngestOwnPRs) — "mijn eigen
+		// prs, daarvan mogen de trees automatisch worden gegenereerd". Fire-and-
+		// forget: never blocks this Activity or the "refresh" Signal a page load
+		// awaits synchronously (SignalWorkflow runs the whole Activity inline).
+		myLogin := snap.GeneratedFor
+		if cfg := settings(m.appDataDirOrDefault()); cfg.Me.Login != "" {
+			myLogin = cfg.Me.Login
+		}
+		m.autoIngestOwnPRs(ctx, myLogin, snap.Sections)
+
 		return json.Marshal(inboxRefreshResult{UpdatedAt: updatedAt, PRs: n})
 	})
 
@@ -1365,10 +1423,10 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// poller's cadence (pollIngestRefresh).
 	engine.RegisterActivity("refreshIngestDelta", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg struct {
-			Repo    string   `json:"repo,omitempty"`
-			PR      int      `json:"pr"`
-			BaseSHA string   `json:"baseSHA"`
-			HeadSHA string   `json:"headSHA"`
+			Repo    string `json:"repo,omitempty"`
+			PR      int    `json:"pr"`
+			BaseSHA string `json:"baseSHA"`
+			HeadSHA string `json:"headSHA"`
 			// LandedFiles: only set by refreshTreeAfterLanding (a reviewer's own
 			// just-landed chat edit) via PRStateSignal.LandedFiles — see its own
 			// doc comment. Empty for the ordinary colleague-push poller
@@ -2202,6 +2260,22 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return nil, m.autowarn.SetEnabled(ctx, arg.Repo, arg.Enabled)
 	})
 
+	// Activity: persist the auto_ingest_pref mode (write, workflow-driven). The
+	// autoingestpref module is the only writer of that read-model.
+	engine.RegisterActivity("saveAutoIngestPrefMode", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			Repo string `json:"repo"`
+			Mode string `json:"mode"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.autoingestpref == nil {
+			return nil, nil
+		}
+		return nil, m.autoingestpref.SetMode(ctx, arg.Repo, arg.Mode)
+	})
+
 	// Activity: persist the settings page's mention-alias edit into
 	// settings.json (write, workflow-driven) — saveMentionAliases (settings.go)
 	// is the only writer of that file's "me.aliases" field.
@@ -2942,6 +3016,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowRemoveReviewer, removeReviewerWorkflow)
 	engine.RegisterWorkflow(WorkflowCodeWarning, codeWarningWorkflow)
 	engine.RegisterWorkflow(WorkflowAutoWarn, autoWarnPrefWorkflow)
+	engine.RegisterWorkflow(WorkflowAutoIngestPref, autoIngestPrefWorkflow)
 	engine.RegisterWorkflow(WorkflowAppSettings, appSettingsWorkflow)
 	engine.RegisterWorkflow(WorkflowIgnoreComment, ignoreCommentWorkflow)
 	engine.RegisterWorkflow(WorkflowCleanup, cleanupWorkflow)
@@ -3740,6 +3815,29 @@ func autoWarnPrefWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		}{Repo: in.Repo, Enabled: sig.Enabled}
 		if err := w.ExecuteActivity("saveAutoWarnEnabled", arg, nil); err != nil {
 			return nil, fmt.Errorf("save auto warn enabled: %w", err)
+		}
+	}
+}
+
+// autoIngestPrefWorkflow persists the reviewer's repo-wide preference for
+// automatic review-tree generation, for one repo. Deterministic: the only
+// side effect (the read-model write) is an Activity, the number of Activities
+// equals the number of "auto_ingest_pref" Signals in the history. It never
+// completes — a long-lived per-repo tracker, mould of autoWarnPrefWorkflow.
+func autoIngestPrefWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
+	var in AutoIngestPrefInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return nil, err
+	}
+	for {
+		var sig AutoIngestPrefSignal
+		w.WaitSignal(SignalAutoIngestPref, &sig)
+		arg := struct {
+			Repo string `json:"repo"`
+			Mode string `json:"mode"`
+		}{Repo: in.Repo, Mode: sig.Mode}
+		if err := w.ExecuteActivity("saveAutoIngestPrefMode", arg, nil); err != nil {
+			return nil, fmt.Errorf("save auto ingest pref mode: %w", err)
 		}
 	}
 }
@@ -5407,6 +5505,68 @@ func (m *TaskManager) findAutoWarnRunLocked() string {
 	return ""
 }
 
+// EnsureAutoIngestPref ensures the single auto_ingest_pref tracker for the
+// repo exists (starting one if none is live) and returns its Run ID. The UI
+// calls this on load so the toggle (settings page + /pr-overview header) has
+// a Run ID to signal to; the tracker is reused across restarts. Mirrors
+// EnsureAutoWarn.
+func (m *TaskManager) EnsureAutoIngestPref() (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.autoIngestPrefRun != "" {
+		return m.autoIngestPrefRun, nil
+	}
+	if id := m.findAutoIngestPrefRunLocked(); id != "" {
+		m.autoIngestPrefRun = id
+		return id, nil
+	}
+	id, err := m.engine.StartWorkflow(WorkflowAutoIngestPref, AutoIngestPrefInput{Repo: m.repo})
+	if err != nil {
+		return "", err
+	}
+	m.autoIngestPrefRun = id
+	return id, nil
+}
+
+// findAutoIngestPrefRunLocked scans for a running/waiting auto_ingest_pref
+// Execution for m.repo. It reads only the engine, so it is safe to call
+// while holding m.mu.
+func (m *TaskManager) findAutoIngestPrefRunLocked() string {
+	runs, err := m.engine.Runs()
+	if err != nil {
+		return ""
+	}
+	for _, r := range runs {
+		if r.Workflow != WorkflowAutoIngestPref {
+			continue
+		}
+		if r.Status != tembed.StatusRunning && r.Status != tembed.StatusWaiting {
+			continue
+		}
+		in, err := m.engine.Input(r.ID)
+		if err != nil {
+			continue
+		}
+		var pin AutoIngestPrefInput
+		if json.Unmarshal(in, &pin) == nil && pin.Repo == m.repo {
+			return r.ID
+		}
+	}
+	return ""
+}
+
+// AutoIngestPrefMode reports the reviewer's current preference for automatic
+// review-tree generation ("off"|"own"|"all") — read-only, backs
+// GET /api/autoingestpref and autoIngestOwnPRs. A nil autoingestpref module
+// (not wired, e.g. some test harnesses) defaults to "own", matching
+// modules/autoingestpref.Mode's own default.
+func (m *TaskManager) AutoIngestPrefMode(ctx context.Context) (string, error) {
+	if m.autoingestpref == nil {
+		return autoingestpref.ModeOwn, nil
+	}
+	return m.autoingestpref.Mode(ctx, m.repo)
+}
+
 // EnsureAppSettings ensures the single, global app_settings tracker exists
 // (starting one if none is live) and returns its Run ID. The settings page
 // calls this on load so its aliases/praise-words edits have a Run ID to
@@ -5486,6 +5646,74 @@ func (m *TaskManager) autoStartCodeWarning(repo string, pr int) {
 	}
 	if _, err := m.StartCodeWarning(CodeWarningInput{PR: pr}); err != nil {
 		m.logf("code_warning: auto-start pr=%d: %v", pr, err)
+	}
+}
+
+// autoIngestOwnPRs kicks off the ingest pipeline for every PR in this
+// snapshot that eligibleAutoIngestPRs (inbox.go) says the reviewer's own
+// auto_ingest_pref preference covers — "mijn eigen prs, daarvan mogen de
+// trees automatisch worden gegenereerd" turned into real triggers. Runs from
+// inside the refreshInbox Activity, i.e. on the pr_inbox tracker's own poll
+// cadence (see pollInbox — 1 min while a reviewer is active, else 10 min), so
+// an eligible PR gets a tree within one poll interval without anyone
+// visiting /pr-overview by hand.
+//
+// Deliberately a no-op offline (ghDisabled): under SLASH_GITHUB=off the
+// snapshot comes from a fixture, not a real repo — the fixture's own
+// "reindert-vetter"-authored rows must never trigger a real StartIngest
+// during a test run.
+//
+// Fire-and-forget per eligible PR (mirrors TriggerIngestRefreshCheck): the
+// ingest pipeline itself can take a while, and this Activity must stay fast —
+// SignalWorkflow runs the whole Activity inline, and the UI awaits the
+// "refresh" Signal synchronously on every /pr-overview page load. Gated on
+// m.runtimeReady like every other background trigger — a one-shot CLI caller
+// never starts this.
+func (m *TaskManager) autoIngestOwnPRs(ctx context.Context, myLogin string, sections []inboxSection) {
+	if !m.runtimeReady || ghDisabled() {
+		return
+	}
+	mode, err := m.AutoIngestPrefMode(ctx)
+	if err != nil {
+		m.logf("pr_inbox: auto-ingest: read pref: %v", err)
+		return
+	}
+	if mode == autoingestpref.ModeOff {
+		return
+	}
+	for _, key := range eligibleAutoIngestPRs(mode, myLogin, sections) {
+		m.mu.Lock()
+		if m.autoIngestTried[key] {
+			m.mu.Unlock()
+			continue
+		}
+		m.autoIngestTried[key] = true
+		m.mu.Unlock()
+		go m.autoIngestOne(m.baseCtx, key.Repo, key.PR)
+	}
+}
+
+// autoIngestOne runs the same pipeline handleIngest/the CLI run does:
+// StartIngest, then EnsureRelations, then EnsurePRStatus, so the new
+// tracker's own pollers (ingest-refresh, comment import) start right away
+// too — see .claude/docs/blocks-and-ingest.md. Best-effort: a failure here is
+// a background trigger, exactly like generatePRSummary or the automatic
+// code_warning worker, and simply leaves the PR to be generated by hand or on
+// a later poll; it still surfaces via GET /api/problems like any other failed
+// run (see run_errors.go). autoIngestTried is deliberately never cleared on
+// failure, so a persistently broken PR does not retry on every single poll —
+// clearing it on success would be a no-op anyway, since a successful ingest's
+// hasGraph then excludes the PR from eligibleAutoIngestPRs.
+func (m *TaskManager) autoIngestOne(ctx context.Context, repo string, pr int) {
+	ctx, cancel := context.WithTimeout(ctx, ingestTimeout)
+	defer cancel()
+	if _, err := m.StartIngest(ctx, repo, pr); err != nil {
+		m.logf("pr_inbox: auto-ingest pr=%d: %v", pr, err)
+		return
+	}
+	m.EnsureRelations(ctx, repo, pr)
+	if _, err := m.EnsurePRStatus(repo, pr); err != nil {
+		m.logf("pr_inbox: auto-ingest ensure pr_status pr=%d: %v", pr, err)
 	}
 }
 

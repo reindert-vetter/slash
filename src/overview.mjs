@@ -10,6 +10,7 @@
 import { reactive, html, watch } from './vendor/arrow.js'
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { initTheme, themeToggleButton } from './theme.mjs'
+import { ensureAutoIngestPref, autoIngestPrefToggleButton } from './autoingestpref.mjs'
 import { settingsButton } from './settingsLink.mjs'
 import { avatarHTML, avatarUrlOf, displayNameOf, ensureMe, ensureNames, fullNameOf, meLogin } from './avatar.mjs'
 import { relativeTime } from './relativeTime.mjs'
@@ -1658,6 +1659,7 @@ function headerBlock() {
             return n + ' PR' + (n === 1 ? '' : 's')
           }}</span
         >
+        ${autoIngestPrefToggleButton()}
         ${themeToggleButton('h-7 w-7')}
         ${settingsButton('h-7 w-7')}
       </div>
@@ -3222,4 +3224,5 @@ App()(document.getElementById('app'))
 loadInbox()
 loadProblems()
 loadRunningCount()
+ensureAutoIngestPref()
 scheduleRepaint()
