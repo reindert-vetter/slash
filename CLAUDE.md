@@ -75,7 +75,9 @@ that set stays small on purpose; a new topic file belongs in `.claude/docs/`.
   same function a key runs, hover carries no state.
 - `command-palette.md` — every menu (`Enter` block palette, `/` PR menu, the
   comment/compose/postApprove/review-submit follow-ups) and
-  `findNextUnapproved`'s walk through the review tree.
+  `findNextUnapproved`'s walk through the review tree, plus the **werkmap
+  overlay** (`workDirOverlay.mjs`) — not a menu, but it owns the keyboard the
+  same way.
 - `detail-layout.md` — `<main>`'s horizontally scrolling column flow, the
   PR-info column (stop 1), the "Taken" block.
 - `diff-card.md` — how wide a diff card gets: the `split`/`unified`/`fit`

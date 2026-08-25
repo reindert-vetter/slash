@@ -1,4 +1,4 @@
-import { test, expect, appReady } from './_fixtures.mjs'
+import { test, expect, appReady, leaveSearchBox } from './_fixtures.mjs'
 
 // The checkout chip in prInfoCard's pr-info-theme-row (which local checkout,
 // if any, a claude_chat write turn edits directly for this PR —
@@ -33,7 +33,7 @@ function mockSignals(page, runId = 'chatmerge-12903') {
 }
 
 test.describe('Checkout chip in prInfoCard', () => {
-  test('shows "Geen directory" with nothing assigned, and offers "Andere directory kiezen"', async ({ page }) => {
+  test('shows "Geen werkmap" with nothing assigned, and offers "Andere werkmap kiezen"', async ({ page }) => {
     await mockCheckout(page, { pr: 12903, runId: 'chatmerge-12903' })
     await page.goto('/pr/12903')
     await appReady(page)
@@ -41,13 +41,13 @@ test.describe('Checkout chip in prInfoCard', () => {
 
     const chip = page.getByTestId('checkout-chip')
     await expect(chip).toBeVisible()
-    await expect(chip).toContainText('Geen directory')
+    await expect(chip).toContainText('Geen werkmap')
 
     await chip.click()
     await expect(page.getByTestId('command-menu')).toBeVisible()
-    await expect(page.getByTestId('command-row').filter({ hasText: 'Andere directory kiezen' })).toHaveCount(1)
+    await expect(page.getByTestId('command-row').filter({ hasText: 'Andere werkmap kiezen' })).toHaveCount(1)
     await expect(page.getByTestId('command-row').filter({ hasText: 'Nu terugzetten' })).toHaveCount(0)
-    await expect(page.getByTestId('command-row').filter({ hasText: 'Uit (geen directory koppelen)' })).toHaveCount(1)
+    await expect(page.getByTestId('command-row').filter({ hasText: 'Uit (geen werkmap koppelen)' })).toHaveCount(1)
   })
 
   test('shows the assigned directory name and branch, and "uit" round-trips through the queue Signal', async ({
@@ -70,7 +70,7 @@ test.describe('Checkout chip in prInfoCard', () => {
     await expect(chip).toHaveAttribute('title', /feature\/x/)
 
     await chip.click()
-    await page.getByTestId('command-row').filter({ hasText: 'Uit (geen directory koppelen)' }).click()
+    await page.getByTestId('command-row').filter({ hasText: 'Uit (geen werkmap koppelen)' }).click()
 
     await expect.poll(() => signals.length).toBe(1)
     expect(signals[0]).toMatchObject({ action: 'checkoutOff' })
@@ -90,8 +90,16 @@ test.describe('Checkout chip in prInfoCard', () => {
       stashPending: true,
     })
     const { signals } = mockSignals(page)
-    await page.goto('/pr/12903')
+    // `?sel=` so the harness's own goto wrapper does not press Escape (which
+    // the werkmap overlay would eat) — see checkout-overlay.spec.mjs's SEL.
+    await page.goto('/pr/12903?sel=' + encodeURIComponent('nothing.php:1'))
     await appReady(page)
+    // An open choice opens the werkmap overlay by itself and it owns the
+    // keyboard (see checkout-overlay.spec.mjs) — dismiss it first to reach the
+    // chip, which is the second entry point to the very same choice.
+    await expect(page.getByTestId('workdir-overlay')).toBeVisible()
+    await page.keyboard.press('Escape')
+    await leaveSearchBox(page)
     await page.keyboard.press('ArrowLeft')
 
     const chip = page.getByTestId('checkout-chip')
@@ -101,8 +109,8 @@ test.describe('Checkout chip in prInfoCard', () => {
     await expect(page.getByTestId('command-row').filter({ hasText: '/home/reindert/dev/a' })).toHaveCount(1)
     await expect(page.getByTestId('command-row').filter({ hasText: '/home/reindert/dev/b' })).toHaveCount(1)
     await expect(page.getByTestId('command-row').filter({ hasText: 'Nu terugzetten' })).toHaveCount(1)
-    // A pending decision replaces the ordinary "Andere directory kiezen" row.
-    await expect(page.getByTestId('command-row').filter({ hasText: 'Andere directory kiezen' })).toHaveCount(0)
+    // A pending decision replaces the ordinary "Andere werkmap kiezen" row.
+    await expect(page.getByTestId('command-row').filter({ hasText: 'Andere werkmap kiezen' })).toHaveCount(0)
 
     await page.getByTestId('command-row').filter({ hasText: '/home/reindert/dev/b' }).click()
     await expect.poll(() => signals.length).toBe(1)

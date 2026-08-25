@@ -286,10 +286,10 @@ function autoIngestPrefRow() {
 
 function checkoutStatusText() {
   const c = state.checkout
-  if (!c) return 'Geen lokale checkout gekoppeld.'
+  if (!c) return 'Geen werkmap gekoppeld.'
   if (c.decision) return 'Keuze nodig — open dit vanuit de PR-pagina.'
   if (c.dirName) return 'Actief: ' + c.dirName + (c.branch ? ' (branch ' + c.branch + ')' : '')
-  return 'Geen lokale checkout gekoppeld.'
+  return 'Geen werkmap gekoppeld.'
 }
 
 function checkoutRow() {
@@ -298,11 +298,11 @@ function checkoutRow() {
     class="${() => rowCls('checkout') + (originPr == null ? ' opacity-50' : '')}"
     @click="${() => (state.activeRow = ROWS.indexOf('checkout'))}"
   >
-    ${rowLabel('Checkout-directory', 'Welke lokale checkout Claude voor deze PR gebruikt — alleen te wijzigen vanuit een PR-pagina.')}
+    ${rowLabel('Werkmap', 'Welke lokale werkmap Claude voor deze PR gebruikt — alleen te wijzigen vanuit een PR-pagina.')}
     <div class="text-[13px] text-slate-600 dark:text-zinc-400" data-testid="settings-checkout-status">
       ${() =>
         originPr == null
-          ? 'Open deze pagina vanuit een PR om de checkout-directory te zien/wijzigen.'
+          ? 'Open deze pagina vanuit een PR om de werkmap te zien/wijzigen.'
           : state.checkoutLoading
             ? 'Laden…'
             : checkoutStatusText()}

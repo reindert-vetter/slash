@@ -81,12 +81,12 @@ granularity to remap onto):
 | Thema | `localStorage['theme']` (`theme.mjs`) | same, via `cycleTheme()` | Yes — reuses `themeToggleButton()` unchanged |
 | Live AI assistent | `GET /api/autowarn` (`autowarn.mjs`) | `POST /api/workflows/auto_warn` + `.../signals/autowarn` (existing `auto_warn` tracker) | Yes — reuses `autoWarnToggleButton()` unchanged |
 | Automatisch review-boom genereren (off/own/all) | `GET /api/autoingestpref` (`autoingestpref.mjs`) | `POST /api/workflows/auto_ingest_pref` + `.../signals/auto_ingest_pref` (new `auto_ingest_pref` tracker) | Yes — reuses `autoIngestPrefToggleButton()` unchanged, also shown next to the gear icon in `/pr-overview`'s header |
-| Checkout-directory | `GET /api/chat/checkout?prs=<originPr>` | *(unchanged — see below)* | **Read-only on this page** |
+| Werkmap (row label "Werkmap", `settings-row-checkout`) | `GET /api/chat/checkout?prs=<originPr>` | *(unchanged — see below)* | **Read-only on this page** |
 | Wie ben ik — GitHub-login | `GET /api/me` (`avatar.mjs`'s `ensureMe`/`meLogin`) | — | No, by explicit reviewer decision: "wie ben ik moet uit GitHub komen" |
 | Wie ben ik — extra @mention-aliassen | `GET /api/settings` (`me.aliases`) | new `app_settings` tracker, Kind `"aliases"` (see below) | Yes — new |
 | Praise-woorden | `GET /api/praisewords` | new `app_settings` tracker, Kind `"praiseWords"` (see below) | Yes — new |
 
-### Checkout-directory: read-only here, by design
+### Werkmap: read-only here, by design
 
 `checkoutChip`/`checkoutChipCommandsFor` (`home.mjs`) are inherently
 **PR-scoped** and driven by a whole command-menu subsystem (`openMenu`,

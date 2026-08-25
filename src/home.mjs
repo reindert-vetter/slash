@@ -163,6 +163,7 @@ import { bindUrlState, num } from './urlState.mjs'
 import { renderMarkdown } from './markdown.mjs'
 import { commentMentionsMe } from './mentions.mjs'
 import ImageLightboxHost, { initImageLightbox, isLightboxOpen, handleLightboxKeydown } from './imageLightbox.mjs'
+import WorkDirOverlayHost, { initWorkDirOverlay, isWorkDirOverlayOpen, handleWorkDirOverlayKeydown } from './workDirOverlay.mjs'
 import { initTheme, themeToggleButton } from './theme.mjs'
 import { ensureAutoWarn, autoWarnToggleButton, autoWarn } from './autowarn.mjs'
 import { settingsButton } from './settingsLink.mjs'
@@ -7557,7 +7558,7 @@ function checkoutChipCommandsFor() {
   } else {
     items.push({
       id: 'checkout-choose',
-      label: 'Andere directory kiezen',
+      label: 'Andere werkmap kiezen',
       hint: 'kies',
       run: () => sendCheckoutAction('checkoutRelist'),
     })
@@ -7572,7 +7573,7 @@ function checkoutChipCommandsFor() {
   }
   items.push({
     id: 'checkout-off',
-    label: 'Uit (geen directory koppelen)',
+    label: 'Uit (geen werkmap koppelen)',
     hint: 'uit',
     run: () => sendCheckoutAction('checkoutOff'),
   })
@@ -12591,6 +12592,15 @@ function onKeydown(e) {
     return
   }
 
+  // Same discipline for the werkmap overlay (workDirOverlay.mjs): while this
+  // PR has an unanswered work-directory choice the overlay is open and owns
+  // the keyboard completely — ↑/↓ pick, Enter confirms, Esc dismisses, every
+  // other key is swallowed so the review tree never navigates underneath it.
+  if (isWorkDirOverlayOpen()) {
+    handleWorkDirOverlayKeydown(e)
+    return
+  }
+
   // While the command palette is open it owns the keyboard: ↑/↓ move the
   // selection, Enter runs it, Esc closes, and any typed characters flow into the
   // focused input (we don't preventDefault those). Block navigation is suspended.
@@ -14410,17 +14420,17 @@ function checkoutAlertGlyph() {
 // otherwise the assigned directory's own last path segment.
 function checkoutChipLabel() {
   const c = state.checkout
-  if (!c) return 'Geen directory'
+  if (!c) return 'Geen werkmap'
   if (c.decision) return 'Keuze nodig'
   if (c.dirName) return c.dirName
-  return 'Geen directory'
+  return 'Geen werkmap'
 }
 function checkoutChipTitle() {
   const c = state.checkout
-  if (!c) return 'Lokale checkout voor Claude-aanpassingen: nog niet geladen'
-  if (c.decision) return c.decision.body || 'Er moet iets over de lokale checkout worden besloten'
+  if (!c) return 'Werkmap voor Claude-aanpassingen: nog niet geladen'
+  if (c.decision) return c.decision.body || 'Er moet iets over de werkmap worden besloten'
   if (c.dir) return 'Claude werkt in ' + c.dir + (c.branch ? ' (branch ' + c.branch + ')' : '')
-  return 'Geen lokale checkout gekoppeld — klik om een directory te kiezen'
+  return 'Geen werkmap gekoppeld — klik om een werkmap te kiezen'
 }
 function checkoutChipCls() {
   const c = state.checkout
@@ -16230,6 +16240,11 @@ MainScrollRightHint(state)(app)
 MainScrollLeftHint(state)(app)
 MenuHost()(app)
 ImageLightboxHost()(app)
+// The werkmap overlay (workDirOverlay.mjs) — top-level like MenuHost, and
+// initialized with the state + the one write path it may use
+// (sendCheckoutAction, which only ever starts/signals the chat_merge queue).
+initWorkDirOverlay(state, sendCheckoutAction)
+WorkDirOverlayHost()(app)
 // The call-arrow overlay: one static fixed <svg> drawn imperatively (see
 // src/callArrows.mjs). Top-level like MenuHost — inside <main> its z-index
 // would be capped at <main>'s own z-10 stacking context.

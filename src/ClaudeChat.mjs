@@ -120,10 +120,12 @@ function claudeMessageBody(msg) {
 // active-turn marker elsewhere in this file.
 function claudeQuestionOptions(msg, onSend, optionSel, onCleanup) {
   // 'directory_decision' (chat_checkout.go's KindDirectoryDecision — which
-  // local checkout to use, or what to do with pre-existing changes in it)
-  // answers through the exact same Options/click mechanism as an ordinary
-  // 'question' turn; only chatKindBadge/the bubble tint below make it read
-  // as the more forceful consult it is (see claudeBubble's own doc comment).
+  // werkmap to use, or what to do with pre-existing changes in it) answers
+  // through the exact same Options/click mechanism as an ordinary 'question'
+  // turn. NOTHING creates such a turn any more — the choice moved out of the
+  // chat into its own overlay (workDirOverlay.mjs, and the backend half in
+  // .claude/docs/workflows-comments.md) — so this branch only ever renders
+  // bubbles already in stored history.
   // 'cleanup_choice' (offerCancelCleanupIfDirty, chat_workflow.go — "what do
   // you want to do with what a cancelled turn left behind?") renders the
   // SAME chip row, but a click there must go through onCleanup (the
@@ -321,7 +323,7 @@ function chatKindBadge(msg) {
       >
         <path d="M3 7a2 2 0 0 1 2-2h3l2 2h9a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"></path>
       </svg>
-      keuze over lokale checkout nodig</span
+      keuze over werkmap nodig</span
     >`
   }
   if (msg.kind === 'action') {

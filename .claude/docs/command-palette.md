@@ -45,6 +45,76 @@ one of these — plus every other surface with a menu of its own — is also
 reachable by right-clicking anywhere on its card, native-styled and
 positioned at the cursor: see "The right-click context menu" below.
 
+## The werkmap overlay: not a menu, but it owns the keyboard the same way
+
+`src/workDirOverlay.mjs` — a fullscreen overlay (mounted top-level next to
+`MenuHost`/`ImageLightboxHost` in `home.mjs`) in which the reviewer answers
+this PR's one open **werkmap** choice: which local directory Claude may edit
+for a write turn, and what to do with changes already sitting in it
+(`chat_checkout.go`'s `chatCheckoutDecision`).
+
+It lives in this file because it follows the same keyboard-ownership rule as
+the palette: `isWorkDirOverlayOpen()`/`handleWorkDirOverlayKeydown(e)` are
+checked in `home.mjs`'s `onKeydown` right after the image lightbox's own pair
+and before every other branch, so while it is open **every** key belongs to it
+— ↑/↓ move the highlight (a ring **plus** a leading `›`, per the colourblind
+rule), Enter runs the highlighted row, Escape dismisses, and anything else is
+swallowed rather than navigating the tree underneath.
+
+**Why it exists.** That choice used to be a `chat.KindDirectoryDecision` bubble
+inside whichever conversation happened to trigger it — and a *second*
+conversation that needed write access got an unanswerable "een andere
+Claude-conversatie wacht nog op een keuze" bubble pointing at a chat nothing in
+the UI can find (there is no PR-wide list of conversations, and a bare chat
+anchor gets no comment-index row). Reviewer's decision, his own words: *"vraag
+alleen stellen in de chat waar het over gaat… het gebruik maken van een
+directory is een algemene instellingen en mag als een popup overlay (nieuw
+iets) worden getoond. dat moet met keys te bedienen zijn."* The backend half
+(no chat bubble any more, no per-conversation ownership) is
+`.claude/docs/workflows-comments.md`, "The work-directory choice left the
+chat".
+
+**Openness is DERIVED from the read model, and deliberately not in the URL.**
+There is no "open" flag: the overlay is open iff `state.checkout.decision`
+exists (`GET /api/chat/checkout` via `loadCheckout`, refetched on the
+`checkout.changed` event — which the backend now also publishes at the moment a
+choice is RAISED, not only when a menu action changes one). So "altijd gelijk
+overlay, ook bij refresh" (reviewer) needs no extra machinery: a reload
+refetches the read model and the overlay is simply there again. A URL param
+would be wrong here — this is not a navigation position and not something to
+share, and it could show an overlay for a choice that no longer exists (or hide
+one that is genuinely open). Same reasoning as `state.showApproved` in
+`CLAUDE.md`'s URL-state section.
+
+**Escape's dismissal is per-choice and ephemeral.** It records the *fingerprint*
+of the choice (its stage plus its own options), so a **different** choice
+arriving later opens the overlay again while a mere refetch of the same one does
+not. Nothing persists it — not `localStorage`, not the URL.
+
+**Accepted consequence, deliberately chosen (do not "fix" it as a bug):** there
+is **no** `/`-menu entry or any other way to reopen the overlay, so after an
+Escape it stays closed until the page is reloaded or a different choice arrives.
+That was an explicit answer ("geen `/`-menu-item — weglaten"). The choice itself
+is never stranded: the **checkout chip** in `prInfoCard` (nav stop 1, unchanged,
+see `checkoutChipCommandsFor`) offers exactly the same options through the same
+`checkoutAnswer` Action.
+
+**Answering does not close it optimistically.** A row's `run` fires the Action
+and shows "Bezig…"; the overlay disappears only when the read model says the
+choice is gone, so what the reviewer sees always matches what the server
+actually stored. Its option list is deliberately a small parallel of
+`checkoutChipCommandsFor` rather than shared with it — that one builds palette
+commands for a different container, and both are three lines over the same read
+model.
+
+**Naming:** everything the reviewer reads says **werkmap**, never "checkout";
+the identifiers keep their `checkout*` names. See the naming rule in
+`.claude/docs/workflows-comments.md`.
+
+Test: `tests/checkout-overlay.spec.mjs` (and note the `?sel=` in both that spec
+and `checkout-chip.spec.mjs`: the harness's own `page.goto` wrapper presses
+Escape on a `/pr/<id>` URL without one, which this overlay would eat).
+
 ## The right-click context menu
 
 Reviewer request: a native right-click (Cmd/Ctrl-less, the ordinary secondary
