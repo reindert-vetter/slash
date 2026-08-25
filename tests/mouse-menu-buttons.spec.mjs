@@ -20,8 +20,9 @@ test.use({ viewport: { width: 2000, height: 1100 } })
 test('block card menu button opens the block palette (COMMANDS)', async ({ page }) => {
   await page.goto('/pr/12903')
   await leaveSearchBox(page)
-  // Select the first real diff block (block 0 has no local diff to preview).
-  await page.locator('[data-idx="1"]').click()
+  // Select a real diff block by label, not by raw index — see "Sort order
+  // of the left list" in blocks-and-ingest.md.
+  await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
   await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
   const menu = page.getByTestId('command-menu')

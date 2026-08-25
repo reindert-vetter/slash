@@ -33,7 +33,9 @@ test.describe('the active diff card grows to fill its column, not just a fixed f
 
     await page.goto('/pr/12903')
     await appReady(page)
-    await page.locator('[data-idx="1"]').click()
+    // By label, not by raw index — see "Sort order of the left list" in
+    // blocks-and-ingest.md. The route mock above only intercepts `name=execute`.
+    await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
 
     const active = page.locator('[data-testid="block-column"] article').nth(0)
     await expect(active.locator('[data-testid="code-diff"]')).toHaveCount(1)
@@ -66,7 +68,9 @@ test.describe('the active diff card grows to fill its column, not just a fixed f
 
     await page.goto('/pr/12903')
     await appReady(page)
-    await page.locator('[data-idx="1"]').click()
+    // By label, not by raw index — see "Sort order of the left list" in
+    // blocks-and-ingest.md. The route mock above only intercepts `name=execute`.
+    await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
 
     const active = page.locator('[data-testid="block-column"] article').nth(0)
     await expect(active.locator('[data-testid="code-diff"]')).toHaveCount(1)

@@ -779,7 +779,9 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     page,
   }) => {
     await page.goto('/pr/12903')
-    await page.locator('[data-idx="1"]').click()
+    // By label, not by raw index — see "Sort order of the left list" in
+    // blocks-and-ingest.md.
+    await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
     await page.keyboard.press('ArrowRight') // step into the diff, lands on the only change
 
     const anchor = page.locator('[data-change-active]').first()

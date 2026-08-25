@@ -105,12 +105,12 @@ test.describe('PR Review Tree — PR inbox', () => {
     // No `sel` param is carried over, so state.selected keeps its default —
     // applyDefaultUnapprovedSelection's own pick, not whatever was selected on
     // a previous visit to this PR (see the nav-chain "eerste blok" plan). That
-    // default is NOT array/display index 0 (ContractController::index, which
-    // has no local diff of its own): it tie-breaks unapproved ordinary blocks
-    // by (file, line) — see "Land a fresh PR open on the first block of the
-    // first-changed file" — and app/Actions/CreatePaymentAction.php (index 1)
-    // sorts first among this fixture's real changes.
-    const defaultRow = page.locator('[data-testid="block-row"][data-idx="1"]')
+    // default is not the sidebar's own display order (see "Sort order of the
+    // left list" in blocks-and-ingest.md): it tie-breaks unapproved ordinary
+    // blocks by (file, line), and app/Actions/CreatePaymentAction.php sorts
+    // first among this fixture's real changes — hence by label, not by raw
+    // index.
+    const defaultRow = page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' })
     await expect(defaultRow).toBeVisible()
     await expect(defaultRow).toHaveClass(/bg-indigo-50/)
   })

@@ -65,10 +65,11 @@ test.describe('PR Review Tree — sidebar ↑/↓ loop through the toggle rows a
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
 
-    // Fully approve block 1 (CreatePaymentAction::execute) so a
-    // toggle-approved row exists (same approach as
+    // Fully approve CreatePaymentAction::execute (by label, not by raw
+    // index — see "Sort order of the left list" in blocks-and-ingest.md) so
+    // a toggle-approved row exists (same approach as
     // tests/selected-reveal-hidden.spec.mjs).
-    await page.locator('[data-idx="1"]').click()
+    await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
     const approve = page.getByTestId('detail-panel').locator('input[type=checkbox]').first()
     await approve.click()
     await expect(approve).toBeChecked()

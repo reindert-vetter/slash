@@ -17,15 +17,14 @@ test.describe('PR Review Tree — related-panel navigation', () => {
     page,
   }) => {
     // The comment index is scoped to the selected block, so seed the comment on
-    // the same block this test will select (block 1, CreatePaymentAction::execute
-    // — block 0, ContractController::index, sorts first as the sole
-    // CONTROLLER, see categoryRank in home.mjs, but carries no local diff) —
-    // read its file/label from the card. An unknown row anchor (rowStart -1)
-    // means "block-level", so it shows for that block whatever unit is
-    // selected. Writes still go through the workflow endpoints (start + reply
-    // signal), so the write-boundary holds.
+    // the same block this test will select (CreatePaymentAction::execute,
+    // selected by label, not by raw index — see "Sort order of the left
+    // list" in blocks-and-ingest.md) — read its file/label from the card. An
+    // unknown row anchor (rowStart -1) means "block-level", so it shows for
+    // that block whatever unit is selected. Writes still go through the
+    // workflow endpoints (start + reply signal), so the write-boundary holds.
     await page.goto('/pr/12903')
-    await page.locator('[data-idx="1"]').click()
+    await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
     const card = page.getByTestId('block-column').locator('article').first()
     await expect(card).toBeVisible()
     const label = (await card.locator('h2').first().innerText()).trim()
@@ -100,10 +99,10 @@ test.describe('PR Review Tree — related-panel navigation', () => {
     page,
   }) => {
     await page.goto('/pr/12903')
-    // Block 0 (ContractController::index, CONTROLLER-first — see categoryRank
-    // in home.mjs) has no local diff to preview; select block 1
-    // (CreatePaymentAction::execute).
-    await page.locator('[data-idx="1"]').click()
+    // By label, not by raw index — see "Sort order of the left list" in
+    // blocks-and-ingest.md. CreatePaymentAction::execute reliably carries a
+    // real changed row.
+    await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
     await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight') // list → diff

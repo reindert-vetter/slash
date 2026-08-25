@@ -20,8 +20,13 @@ test('a left-edge hint steps back one stop per click: diff -> list -> descriptio
   // description column left to reveal, so the hint already shows.
   await expect(hint).toBeVisible()
 
+  // ContractController::index has no local diff of its own, so entering the
+  // diff and stepping back out leaves no stray `[data-change-active]` from a
+  // look-ahead preview to confuse the assertion below (see "Sort order of
+  // the left list" in blocks-and-ingest.md for why a block's sidebar
+  // position says nothing about whether it carries a diff).
   const rows = page.getByTestId('block-row')
-  await rows.first().click()
+  await rows.filter({ hasText: 'ContractController::index' }).click()
   await page.keyboard.press('ArrowRight') // enter the diff (stop 3)
   await page.waitForTimeout(150)
 

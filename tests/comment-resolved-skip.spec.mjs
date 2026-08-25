@@ -10,14 +10,15 @@ import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 // .claude/docs/comments-panel.md.
 //
 // Reuses the shared anchor PR 12903 (its comments are wiped before every
-// test, see _cleanApprovals in _fixtures.mjs) and its two block-level (block
-// index 0, no relation children; block index 1 = CreatePaymentAction::execute,
-// carries the GroupScopeChildA/B relation children — see
-// materializeMainWorktrees/relations.json in _setup.mjs).
+// test, see _cleanApprovals in _fixtures.mjs). Blocks are selected by label,
+// not by raw index — see "Sort order of the left list" in
+// blocks-and-ingest.md: CreatePaymentAction::execute carries the
+// GroupScopeChildA/B relation children, ContractController::index carries
+// none (see materializeMainWorktrees/relations.json in _setup.mjs).
 test.describe('PR Review Tree — → skips an already-resolved default comment', () => {
   test('→ skips a resolved default comment straight to the next open one', async ({ page }) => {
     await page.goto('/pr/12903')
-    await page.locator('[data-idx="1"]').click()
+    await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
     const card = page.getByTestId('block-column').locator('article').first()
     await expect(card).toBeVisible()
     const label = (await card.locator('h2').first().innerText()).trim()
@@ -77,7 +78,7 @@ test.describe('PR Review Tree — → skips an already-resolved default comment'
     page,
   }) => {
     await page.goto('/pr/12903')
-    await page.locator('[data-idx="1"]').click()
+    await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
     const card = page.getByTestId('block-column').locator('article').first()
     await expect(card).toBeVisible()
     const label = (await card.locator('h2').first().innerText()).trim()
@@ -113,7 +114,7 @@ test.describe('PR Review Tree — → skips an already-resolved default comment'
 
   test('→ still lands on a lone resolved comment when there is nothing else to land on', async ({ page }) => {
     await page.goto('/pr/12903')
-    await page.locator('[data-idx="0"]').click()
+    await page.getByTestId('block-row').filter({ hasText: 'ContractController::index' }).click()
     const card = page.getByTestId('block-column').locator('article').first()
     await expect(card).toBeVisible()
     const label = (await card.locator('h2').first().innerText()).trim()

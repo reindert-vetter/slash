@@ -241,7 +241,10 @@ test.describe('PR Review Tree — per-line onderliggende-code badge — per-line
 test.describe('PR Review Tree — per-line onderliggende-code badge — AI warning icon', () => {
   test('a line with both an AI finding and a private note shows both icons, side by side', async ({ page }) => {
     await page.goto('/pr/12903')
-    await page.locator('[data-idx="1"]').click()
+    // By label, not by raw index — see "Sort order of the left list" in
+    // blocks-and-ingest.md. CreatePaymentAction::execute reliably carries a
+    // real changed row.
+    await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
     await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight') // list -> diff, lands on the first change group
 

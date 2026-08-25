@@ -56,7 +56,10 @@ test.describe('PR Review Tree — Space (approve + continue)', () => {
     await clearBlockApproval(page, BLOCK1_ID)
     await clearBlockApproval(page, BLOCK6_ID)
     await page.goto('/pr/12903')
-    await page.locator('[data-idx="1"]').click()
+    // By label, not by raw index — see "Sort order of the left list" in
+    // blocks-and-ingest.md. CreatePaymentAction::execute reliably carries a
+    // real changed row.
+    await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
     await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight')
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
@@ -83,7 +86,10 @@ test.describe('PR Review Tree — Space (approve + continue)', () => {
     await clearBlockApproval(page, BLOCK1_ID)
     await clearBlockApproval(page, BLOCK6_ID)
     await page.goto('/pr/12903')
-    await page.locator('[data-idx="1"]').click()
+    // By label, not by raw index — see "Sort order of the left list" in
+    // blocks-and-ingest.md. CreatePaymentAction::execute reliably carries a
+    // real changed row.
+    await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
     await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight')
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
@@ -112,7 +118,10 @@ test.describe('PR Review Tree — Space (approve + continue)', () => {
     await clearBlockApproval(page, BLOCK1_ID)
     await clearBlockApproval(page, BLOCK6_ID)
     await page.goto('/pr/12903')
-    await page.locator('[data-idx="1"]').click()
+    // By label, not by raw index — see "Sort order of the left list" in
+    // blocks-and-ingest.md. CreatePaymentAction::execute reliably carries a
+    // real changed row.
+    await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
     await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight')
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
@@ -140,7 +149,10 @@ test.describe('PR Review Tree — Space (approve + continue)', () => {
   }) => {
     await clearBlockApproval(page, BLOCK1_ID)
     await page.goto('/pr/12903')
-    await page.locator('[data-idx="1"]').click()
+    // By label, not by raw index — see "Sort order of the left list" in
+    // blocks-and-ingest.md. CreatePaymentAction::execute reliably carries a
+    // real changed row.
+    await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
     await leaveSearchBox(page)
     await page.keyboard.press('ArrowRight')
     await expect(page.locator('[data-change-active]').first()).toBeVisible()

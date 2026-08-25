@@ -48,10 +48,9 @@ test.describe('look-ahead preview always collapses to just its header', () => {
 
     await page.goto('/pr/12903')
     await appReady(page)
-    // Select block 1 (CreatePaymentAction::execute) — see step-preview-
-    // stability.spec.mjs for why block 0 (ContractController::index) isn't
-    // the one to pick here (no local diff of its own).
-    await page.locator('[data-idx="1"]').click()
+    // Select CreatePaymentAction::execute by label, not by raw index — see
+    // "Sort order of the left list" in blocks-and-ingest.md.
+    await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
 
     const cards = page.locator('[data-testid="block-column"] article')
     await expect(cards).toHaveCount(2)
@@ -91,7 +90,9 @@ test.describe('look-ahead preview always collapses to just its header', () => {
 
     await page.goto('/pr/12903')
     await appReady(page)
-    await page.locator('[data-idx="1"]').click()
+    // By label, not by raw index — see "Sort order of the left list" in
+    // blocks-and-ingest.md.
+    await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
 
     const cards = page.locator('[data-testid="block-column"] article')
     await expect(cards).toHaveCount(2)

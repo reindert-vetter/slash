@@ -25,10 +25,12 @@ import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 // looking at hides it immediately (pinnedApprovedId is never set there) —
 // asserted below, before the reload.
 //
-// Same fixture/shape as sidebar-skip-approved.spec.mjs: PR 12903,
-// category-sorted so ContractController::index (CONTROLLER) is index 0 and
-// CreatePaymentAction::execute is index 1 — the same block that spec already
-// durably approves, so this adds no new cross-spec approval state.
+// Same fixture as sidebar-skip-approved.spec.mjs: PR 12903,
+// CreatePaymentAction::execute — the same block that spec already durably
+// approves, so this adds no new cross-spec approval state. Selected by
+// label, not by raw index, since the sidebar's own sort order is a display
+// grouping that doesn't guarantee a particular index (see "Sort order of
+// the left list" in blocks-and-ingest.md).
 const BLOCK1_SEL = 'app/Actions/CreatePaymentAction.php:26' // CreatePaymentAction::execute
 const BLOCK1_ID = '12903:app/Actions/CreatePaymentAction.php:CreatePaymentAction::execute'
 
@@ -64,12 +66,13 @@ test.describe('PR Review Tree — hidden approved selection: pin the restored bl
   }) => {
     await clearBlock1Approval(page)
     await page.goto('/pr/12903')
-    // Select + fully approve block 1 (CreatePaymentAction::execute) via the
-    // top checkbox — a direct toggle that never navigates away (unlike the
+    // Select + fully approve CreatePaymentAction::execute via the top
+    // checkbox — a direct toggle that never navigates away (unlike the
     // command palette's approve action, which since the postApprove-skip
     // change now always jumps straight to the next unapproved block when
     // approving from the blokken-index, see postapprove-menu.spec.mjs).
-    await page.locator('[data-idx="1"]').click()
+    const block1Row = page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' })
+    await block1Row.click()
     await leaveSearchBox(page)
     expect(selParam(page)).toBe(BLOCK1_SEL)
 
@@ -80,7 +83,7 @@ test.describe('PR Review Tree — hidden approved selection: pin the restored bl
     // Block 1 is now fully approved and hidden from the rendered list — but the
     // LIVE flow keeps it selected (the reviewer is still looking at it): no
     // reveal and no clamp fires here.
-    await expect(page.locator('[data-idx="1"]')).toHaveCount(0)
+    await expect(block1Row).toHaveCount(0)
     expect(selParam(page)).toBe(BLOCK1_SEL)
 
     // Wait until the approval durably landed in the read-model — persistApproval
@@ -104,9 +107,9 @@ test.describe('PR Review Tree — hidden approved selection: pin the restored bl
     const highlighted = page.locator(
       '[data-idx].bg-indigo-50, [data-idx].dark\\:bg-indigo-500\\/15',
     )
-    await expect(page.locator('[data-idx="1"]')).toHaveCount(1)
+    await expect(block1Row).toHaveCount(1)
     await expect(highlighted).toHaveCount(1)
-    await expect(highlighted).toHaveAttribute('data-idx', '1')
+    await expect(highlighted).toContainText('CreatePaymentAction::execute')
     expect(selParam(page)).toBe(BLOCK1_SEL)
     await expect(page.getByTestId('block-column')).toContainText('CreatePaymentAction::execute')
     // Nothing was unfolded — the toggle row still says "Toon", never "Verberg".

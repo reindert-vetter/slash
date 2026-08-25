@@ -77,13 +77,17 @@ test.describe('PR Review Tree — Onderliggende code column grows with long code
   // case a flat narrow width instead; see "An empty column is narrow" in
   // .claude/docs/underlying-code.md.
   test('an empty column drops below the narrow floor instead of reserving it', async ({ page }) => {
-    // PR 12903 block 1 in diff mode: no relations, no resolved calls, no
-    // covers rows — and no comments either, so the comment/Claude row above
-    // this column is hidden. That second half is the GATE (the documented
-    // comment + connector + Claude === related invariant may not break):
-    // tests/comment-claude-column-widths.spec.mjs covers the other side of
-    // it, a visible row with the ordinary clamp width still summing exactly.
-    await page.goto('/pr/12903?sel=app%2FActions%2FCreatePaymentAction.php%3A1&mode=diff&chg=0')
+    // PR 12903's ContractController::index in diff mode: no relations, no
+    // resolved calls, no covers rows (see materializeMainWorktrees/
+    // relations.json in _setup.mjs — CreatePaymentAction::execute is the one
+    // that carries the GroupScopeChildA/B relation children, so it must be
+    // avoided here) — and no comments either, so the comment/Claude row
+    // above this column is hidden. That second half is the GATE (the
+    // documented comment + connector + Claude === related invariant may not
+    // break): tests/comment-claude-column-widths.spec.mjs covers the other
+    // side of it, a visible row with the ordinary clamp width still summing
+    // exactly.
+    await page.goto('/pr/12903?sel=app%2FHttp%2FControllers%2FApi%2FContractController.php%3A30&mode=diff&chg=0')
 
     const related = page.getByTestId('related-code')
     await expect(related).toContainText('Geen onderliggende code.')

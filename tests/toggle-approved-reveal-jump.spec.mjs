@@ -13,17 +13,20 @@ test.describe('Toon N goedgekeurde blocks — clicking it jumps to the revealed 
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
 
-    // Fully approve block 1 (CreatePaymentAction::execute) so a
-    // toggle-approved row exists, same setup as list-nav-wrap.spec.mjs.
-    await page.locator('[data-idx="1"]').click()
+    // Fully approve CreatePaymentAction::execute (by label, not by raw
+    // index — see "Sort order of the left list" in blocks-and-ingest.md) so
+    // a toggle-approved row exists, same setup as list-nav-wrap.spec.mjs.
+    const revealed = page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' })
+    await revealed.click()
     const approve = page.getByTestId('detail-panel').locator('input[type=checkbox]').first()
     await approve.click()
     await expect(approve).toBeChecked()
 
     // Select some other, still-visible row first, so the toggle click is the
     // only thing that could move the selection.
-    await page.locator('[data-idx="0"]').click()
-    await expect(page.locator('[data-idx="0"]')).toHaveClass(/bg-indigo-50/)
+    const otherRow = page.getByTestId('block-row').filter({ hasText: 'ContractController::index' })
+    await otherRow.click()
+    await expect(otherRow).toHaveClass(/bg-indigo-50/)
 
     const toggle = page.getByTestId('toggle-approved')
     await toggle.click()
@@ -31,13 +34,12 @@ test.describe('Toon N goedgekeurde blocks — clicking it jumps to the revealed 
 
     // The section is unfolded AND the keyboard/selection jumped straight to
     // the newly revealed block — not left on the toggle row, and not left on
-    // the previously selected row 0 either.
-    const revealed = page.locator('[data-idx="1"]')
+    // the previously selected other row either.
     await expect(revealed).toBeVisible()
     await expect(revealed).toHaveClass(/bg-indigo-50/)
     await expect(revealed).toContainText('CreatePaymentAction::execute')
     await expect(toggle).not.toHaveClass(/bg-indigo-50/)
-    await expect(page.locator('[data-idx="0"]')).not.toHaveClass(/bg-indigo-50/)
+    await expect(otherRow).not.toHaveClass(/bg-indigo-50/)
 
     // Clicking it again (hiding) is a plain flip: it stays on the toggle row,
     // like every other toggle-row click.

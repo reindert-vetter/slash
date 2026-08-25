@@ -260,3 +260,36 @@ is baked into the JSON): such a spec must clean up after itself in-test, the way
   depends on scroll position, so it presents as order-dependent flakiness. When
   a spec's subject is *not* hover, prefer `dispatchEvent('click')` (drives the
   handler without moving the pointer) over `.click()`.
+- **Never click `[data-idx="N"]` on the shared anchor PR (12903) to mean "the
+  block with a diff" — select by label instead.** The block-index's own
+  sidebar position is a *display grouping*, not a stable identity (see "Sort
+  order of the left list" in `blocks-and-ingest.md`): a ranking change (the
+  fixed ROUTE/CONTROLLER-tier removal, 2026-08-25) silently moved
+  `CreatePaymentAction::execute` from `data-idx="1"` to `data-idx="0"` and
+  `Order::address` from `"5"` to `"6"`, breaking ~65 tests across ~35 spec
+  files at once — every one of them had hardcoded the numeric index of "the
+  block that reliably carries a real changed row" instead of selecting it by
+  content. Prefer `page.getByTestId('block-row').filter({ hasText:
+  'CreatePaymentAction::execute' })` (or whichever label the test actually
+  needs) over `page.locator('[data-idx="N"]')` on this fixture. Two related
+  traps found while fixing that breakage, both on the same anchor PR:
+  - **The tie-break order among equally-ranked files is the backend's own
+    `ORDER BY file, line` (plain alphabetical), not JSON/insertion order.**
+    `tests/fixtures/blockmove-blocks.json` (PR 122) lists the same-file
+    rename before the cross-file move, but `app/Queries/…` sorts before
+    `app/Repositories/…` alphabetically, so the cross-file move is actually
+    FIRST in the sidebar — asserting "selected block, then its look-ahead
+    preview" in JSON order looked plausible and was backwards.
+  - **A block with a real diff, once approved from the block-index, only
+    skips the postApprove confirm menu if `findNextUnapproved` finds
+    something — and that search only looks FORWARD from the approved
+    block.** Approving `Order::address` (the last block in file order with
+    any changed rows) opens the review-submit follow-up instead of just
+    hiding its row, even though `CreatePaymentAction::execute` earlier in
+    the list is still unapproved — the search never looks backward. A test
+    that only needs the row to disappear (not the palette's whole
+    approve-and-jump flow) should approve via the **top checkbox**
+    (`toggleBlockApproval`, Block.mjs) instead of the palette's "keur" command
+    — the checkbox is a direct toggle that deliberately never runs
+    `afterApproveAction`/`findNextUnapproved` (see its own doc comment in
+    `home.mjs`).

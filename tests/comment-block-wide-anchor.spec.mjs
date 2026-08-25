@@ -21,7 +21,11 @@ test('a block-wide-anchored AI finding shows its "hele blok" label on the group 
   page,
 }) => {
   await page.goto('/pr/12903')
-  await page.locator('[data-idx="1"]').click()
+  // Select by label, not by raw index — the sidebar order is a display
+  // grouping (see "Sort order of the left list" in blocks-and-ingest.md) and
+  // does not guarantee any particular block sits at a given index.
+  // CreatePaymentAction::execute reliably carries a real changed row.
+  await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
   await leaveSearchBox(page)
   await page.keyboard.press('ArrowRight') // list -> diff, lands on the first change group
 

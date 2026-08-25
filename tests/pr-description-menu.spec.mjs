@@ -67,8 +67,10 @@ test.describe('PR Review Tree — PR-wide menu on the description column (stop 1
   // the stop-1 PR menu asserted above.
   test('`/` outside stop 1 opens the block palette, anchored exactly like Enter', async ({ page }) => {
     await page.goto('/pr/12903')
-    // Block 0 (CONTROLLER-first) has no local diff preview; select block 1.
-    await page.locator('[data-idx="1"]').click()
+    // By label, not by raw index — see "Sort order of the left list" in
+    // blocks-and-ingest.md. CreatePaymentAction::execute reliably carries a
+    // real changed row.
+    await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
     await leaveSearchBox(page)
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 

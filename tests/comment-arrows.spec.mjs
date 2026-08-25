@@ -9,7 +9,10 @@ import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 test('a comment card gets an arrow pointing at its own diff row', async ({ page }) => {
   await page.goto('/pr/12903')
   await leaveSearchBox(page)
-  await page.locator('[data-idx="1"]').click()
+  // By label, not by raw index — see "Sort order of the left list" in
+  // blocks-and-ingest.md. CreatePaymentAction::execute reliably carries a
+  // real changed row.
+  await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
   await page.keyboard.press('ArrowRight') // list -> diff, lands on the first change group
   await expect(page).toHaveURL(/mode=diff/)
   await expect(page.getByTestId('code-diff').first().locator('code.language-php').first()).toBeVisible()

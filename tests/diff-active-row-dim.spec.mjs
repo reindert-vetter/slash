@@ -17,7 +17,9 @@ test('the active-row bar dims to grey (and thinner) when the diff loses keyboard
   page,
 }) => {
   await page.goto('/pr/12903')
-  await page.locator('[data-idx="1"]').click() // CreatePaymentAction::execute — a real diff
+  // By label, not by raw index — see "Sort order of the left list" in
+  // blocks-and-ingest.md.
+  await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click() // a real diff
   const panel = page.getByTestId('detail-panel')
   await expect(panel.locator('code.language-php').first()).toBeVisible()
 

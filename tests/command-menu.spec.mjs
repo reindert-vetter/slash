@@ -50,11 +50,10 @@ test.describe('PR Review Tree — command palette', () => {
 
   test('typing fuzzy-filters and Enter runs the selected command', async ({ page }) => {
     await page.goto('/pr/12903')
-    // Block 0 (ContractController::index, CONTROLLER-first, see categoryRank
-    // in home.mjs) carries no local diff — approving it would be vacuously
-    // checked already (0/0 changed rows). Select block 1
-    // (CreatePaymentAction::execute), which reliably has one changed row.
-    await page.locator('[data-idx="1"]').click()
+    // By label, not by raw index — see "Sort order of the left list" in
+    // blocks-and-ingest.md. CreatePaymentAction::execute reliably has one
+    // changed row.
+    await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
     await leaveSearchBox(page)
     const approve = page.getByTestId('detail-panel').locator('input[type=checkbox]').first()
     await expect(approve).not.toBeChecked()
@@ -73,21 +72,24 @@ test.describe('PR Review Tree — command palette', () => {
     // from the blokken-index skips the postApprove follow-up menu and jumps
     // straight to the next unapproved block (see postapprove-menu.spec.mjs),
     // so `approve` itself (bound to whichever block is CURRENTLY selected)
-    // no longer reliably points at block 1 afterward — assert via the row
-    // disappearing instead (fully approved blocks hide by default).
+    // no longer reliably points at execute afterward — assert via the row
+    // disappearing instead (fully approved blocks hide by default). By label,
+    // not by raw index, so a reshuffled sidebar can't shift a different row
+    // into the checked slot.
     await page.keyboard.press('Enter')
     await expect(page.getByTestId('command-menu')).not.toBeVisible()
-    await expect(page.locator('[data-idx="1"]')).toHaveCount(0)
+    await expect(page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' })).toHaveCount(0)
   })
 
   test('Space with an empty search field just types a space, it does not run the selected command', async ({
     page,
   }) => {
     await page.goto('/pr/12903')
-    // Block 0 (ContractController::index, CONTROLLER-first) carries no local
-    // diff — approving it would be vacuously checked already. Select block 1
-    // (CreatePaymentAction::execute), which reliably has one changed row.
-    await page.locator('[data-idx="1"]').click()
+    // By label, not by raw index — see "Sort order of the left list" in
+    // blocks-and-ingest.md. CreatePaymentAction::execute reliably has one
+    // changed row.
+    const block1Row = page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' })
+    await block1Row.click()
     await leaveSearchBox(page)
     const approve = page.getByTestId('detail-panel').locator('input[type=checkbox]').first()
     await expect(approve).not.toBeChecked()
@@ -101,7 +103,7 @@ test.describe('PR Review Tree — command palette', () => {
     await page.keyboard.press(' ')
     await expect(page.getByTestId('command-menu')).toBeVisible()
     await expect(input).toHaveValue(' ')
-    await expect(page.locator('[data-idx="1"]')).toHaveCount(1)
+    await expect(block1Row).toHaveCount(1)
     await expect(approve).not.toBeChecked()
   })
 
@@ -123,10 +125,10 @@ test.describe('PR Review Tree — command palette', () => {
     page,
   }) => {
     await page.goto('/pr/12903')
-    // Block 0 (ContractController::index, CONTROLLER-first) carries no local
-    // diff, so its comment-target snippet would be empty; select block 1
-    // (CreatePaymentAction::execute), which has a real changed line.
-    await page.locator('[data-idx="1"]').click()
+    // By label, not by raw index — see "Sort order of the left list" in
+    // blocks-and-ingest.md. CreatePaymentAction::execute has a real changed
+    // line, so its comment-target snippet is non-empty.
+    await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
     await leaveSearchBox(page)
 
     // Nothing should be posted yet — the fallback only opens the composer, it
@@ -325,10 +327,11 @@ test.describe('PR Review Tree — command palette', () => {
 
   test('the approve command toggles the selected block', async ({ page }) => {
     await page.goto('/pr/12903')
-    // Block 0 (ContractController::index, CONTROLLER-first) has no changed
-    // rows, so its checkbox would be vacuously checked already; select block 1
-    // (CreatePaymentAction::execute), which has one changed row to approve.
-    await page.locator('[data-idx="1"]').click()
+    // By label, not by raw index — see "Sort order of the left list" in
+    // blocks-and-ingest.md. CreatePaymentAction::execute has one changed
+    // row to approve.
+    const block1Row = page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' })
+    await block1Row.click()
     await leaveSearchBox(page)
     const approve = page.getByTestId('detail-panel').locator('input[type=checkbox]').first()
     await expect(approve).not.toBeChecked()
@@ -340,11 +343,11 @@ test.describe('PR Review Tree — command palette', () => {
     // Approving from the blokken-index skips the postApprove follow-up menu
     // and jumps straight to the next unapproved block (see
     // postapprove-menu.spec.mjs), so `approve` (bound to whichever block is
-    // CURRENTLY selected) no longer reliably points at block 1 afterward —
+    // CURRENTLY selected) no longer reliably points at execute afterward —
     // assert via the row disappearing instead (fully approved blocks hide by
     // default).
     await expect(page.getByTestId('command-menu')).not.toBeVisible()
-    await expect(page.locator('[data-idx="1"]')).toHaveCount(0)
+    await expect(block1Row).toHaveCount(0)
   })
 
   // Approval is granular now: the approve command targets the *current* navigation
@@ -352,9 +355,9 @@ test.describe('PR Review Tree — command palette', () => {
   // the selected lines / line / call at the active granularity.
   test('the approve label follows the selection granularity', async ({ page }) => {
     await page.goto('/pr/12903')
-    // Block 0 (ContractController::index, CONTROLLER-first) has no local diff
-    // to preview; select block 1 (CreatePaymentAction::execute).
-    await page.locator('[data-idx="1"]').click()
+    // By label, not by raw index — see "Sort order of the left list" in
+    // blocks-and-ingest.md.
+    await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
     await leaveSearchBox(page)
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
@@ -459,9 +462,9 @@ test.describe('PR Review Tree — command palette', () => {
 
   test('the menu covers the right (new) pane — half width, right side', async ({ page }) => {
     await page.goto('/pr/12903')
-    // Block 0 (ContractController::index, CONTROLLER-first) has no local diff
-    // to step into; select block 1 (CreatePaymentAction::execute).
-    await page.locator('[data-idx="1"]').click()
+    // By label, not by raw index — see "Sort order of the left list" in
+    // blocks-and-ingest.md.
+    await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
     await leaveSearchBox(page)
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
@@ -510,9 +513,9 @@ test.describe('PR Review Tree — command palette', () => {
     // must move up rather than spill off the bottom. Either way it stays on-screen.
     await page.setViewportSize({ width: 1400, height: 520 })
     await page.goto('/pr/12903')
-    // Block 0 (ContractController::index, CONTROLLER-first) has no local diff
-    // to preview; select block 1 (CreatePaymentAction::execute).
-    await page.locator('[data-idx="1"]').click()
+    // By label, not by raw index — see "Sort order of the left list" in
+    // blocks-and-ingest.md.
+    await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
     await leaveSearchBox(page)
 

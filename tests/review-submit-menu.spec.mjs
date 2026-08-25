@@ -28,12 +28,12 @@ import { test, expect } from './_fixtures.mjs'
 // github.Fake accepts it without touching the network, so no mocking is
 // needed; we only intercept the request here to assert exactly what was sent.
 //
-// Same PR 12903 fixture as postapprove-menu.spec.mjs: only block 1
-// (CreatePaymentAction::execute, index 1) and block 6 (Order::address, index
-// 5 — see postapprove-menu.spec.mjs for how this index is derived) carry a
-// real diff (one single-line group each) — every other block has zero
-// changed rows, so approving both of those two blocks is exactly "alles
-// goedgekeurd" for this fixture.
+// Same PR 12903 fixture as postapprove-menu.spec.mjs: only
+// CreatePaymentAction::execute and Order::address carry a real diff (one
+// single-line group each) — every other block has zero changed rows, so
+// approving both of those two blocks is exactly "alles goedgekeurd" for this
+// fixture. Both are selected by label, not by raw index — see "Sort order
+// of the left list" in .claude/docs/blocks-and-ingest.md.
 const BLOCK1_SEL = 'app/Actions/CreatePaymentAction.php:26' // CreatePaymentAction::execute
 const BLOCK6_SEL = 'app/Models/Order.php:88' // Order::address
 const BLOCK1_ID = '12903:app/Actions/CreatePaymentAction.php:CreatePaymentAction::execute'
@@ -110,7 +110,7 @@ test.describe('PR Review Tree — review-submit follow-up (Keur de HELE PR goed 
     // Approve block 1's only group — this still leaves block 6 open, so it
     // opens the existing postApprove "Ga door" follow-up (unchanged
     // behaviour, see postapprove-menu.spec.mjs).
-    await page.locator('[data-idx="1"]').click()
+    await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
     await page.keyboard.press('ArrowRight')
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
     await approveViaPalette(page)
@@ -176,7 +176,7 @@ test.describe('PR Review Tree — review-submit follow-up (Keur de HELE PR goed 
 
     // Approve block 6 (Order::address) only — block 1 stays open, so the PR
     // isn't fully done.
-    await page.locator('[data-idx="5"]').click()
+    await page.getByTestId('block-row').filter({ hasText: 'Order::address' }).click()
     await page.keyboard.press('ArrowRight')
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
     await approveViaPalette(page)
@@ -254,7 +254,7 @@ test.describe('PR Review Tree — review-submit follow-up (Keur de HELE PR goed 
     await expect(page.getByTestId('block-column')).toBeVisible()
     await page.keyboard.press('Escape')
 
-    await page.locator('[data-idx="1"]').click()
+    await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
     await page.keyboard.press('ArrowRight')
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
     await approveViaPalette(page)
@@ -326,7 +326,7 @@ test.describe('PR Review Tree — review-submit follow-up (Keur de HELE PR goed 
     await expect(page.getByTestId('block-column')).toBeVisible()
     await page.keyboard.press('Escape')
 
-    await page.locator('[data-idx="1"]').click()
+    await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
     await page.keyboard.press('ArrowRight')
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
     await approveViaPalette(page)

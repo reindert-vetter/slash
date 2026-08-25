@@ -17,10 +17,10 @@ import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 test.describe('PR Review Tree — `/` PR menu', () => {
   test('`/` opens the PR-wide tree with GitHub / Jira', async ({ page }) => {
     await page.goto('/pr/12903')
-    // Block 0 (ContractController::index, CONTROLLER-first — see categoryRank
-    // in home.mjs) has no local diff to preview; select block 1
-    // (CreatePaymentAction::execute).
-    await page.locator('[data-idx="1"]').click()
+    const block1Row = page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' })
+    // By label, not by raw index — see "Sort order of the left list" in
+    // blocks-and-ingest.md.
+    await block1Row.click()
     await leaveSearchBox(page)
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
@@ -58,10 +58,10 @@ test.describe('PR Review Tree — `/` PR menu', () => {
 
   test('GitHub opens a submenu (open / comment); Jira opens its three items', async ({ page }) => {
     await page.goto('/pr/12903')
-    // Block 0 (ContractController::index, CONTROLLER-first — see categoryRank
-    // in home.mjs) has no local diff to preview; select block 1
-    // (CreatePaymentAction::execute).
-    await page.locator('[data-idx="1"]').click()
+    const block1Row = page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' })
+    // By label, not by raw index — see "Sort order of the left list" in
+    // blocks-and-ingest.md.
+    await block1Row.click()
     await leaveSearchBox(page)
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
@@ -102,10 +102,10 @@ test.describe('PR Review Tree — `/` PR menu', () => {
 
   test('GitHub → Comment plaatsen opens the line-comment composer', async ({ page }) => {
     await page.goto('/pr/12903')
-    // Block 0 (ContractController::index, CONTROLLER-first — see categoryRank
-    // in home.mjs) has no local diff to preview; select block 1
-    // (CreatePaymentAction::execute).
-    await page.locator('[data-idx="1"]').click()
+    const block1Row = page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' })
+    // By label, not by raw index — see "Sort order of the left list" in
+    // blocks-and-ingest.md.
+    await block1Row.click()
     await leaveSearchBox(page)
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
@@ -130,10 +130,10 @@ test.describe('PR Review Tree — `/` PR menu', () => {
     page,
   }) => {
     await page.goto('/pr/12903')
-    // Block 0 (ContractController::index, CONTROLLER-first — see categoryRank
-    // in home.mjs) has no local diff to preview; select block 1
-    // (CreatePaymentAction::execute).
-    await page.locator('[data-idx="1"]').click()
+    const block1Row = page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' })
+    // By label, not by raw index — see "Sort order of the left list" in
+    // blocks-and-ingest.md.
+    await block1Row.click()
     await leaveSearchBox(page)
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
@@ -174,7 +174,8 @@ test.describe('PR Review Tree — `/` PR menu', () => {
     page,
   }) => {
     await page.goto('/pr/12903')
-    await page.locator('[data-idx="1"]').click()
+    const block1Row = page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' })
+    await block1Row.click()
     await leaveSearchBox(page)
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
 
@@ -246,9 +247,10 @@ test.describe('PR Review Tree — `/` PR menu', () => {
   // keuren") so a stray Enter can't discard review work by accident.
   test('"Alle goedkeuringen intrekken" clears an approved block\'s approval', async ({ page }) => {
     await page.goto('/pr/12903')
+    const block1Row = page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' })
     // Block 1 (CreatePaymentAction::execute) reliably has one changed row —
     // see command-menu.spec.mjs's own note on why block 0 doesn't work here.
-    await page.locator('[data-idx="1"]').click()
+    await block1Row.click()
     await leaveSearchBox(page)
     const approve = page.getByTestId('detail-panel').locator('input[type=checkbox]').first()
     await expect(approve).not.toBeChecked()
@@ -259,7 +261,7 @@ test.describe('PR Review Tree — `/` PR menu', () => {
     await page.getByTestId('command-input').fill('keur')
     await page.keyboard.press('Enter')
     await expect(page.getByTestId('command-menu')).not.toBeVisible()
-    await expect(page.locator('[data-idx="1"]')).toHaveCount(0)
+    await expect(block1Row).toHaveCount(0)
 
     // Step left into stop 1 and open the PR-wide menu, then run the bulk
     // retract via its confirm submenu.
@@ -274,8 +276,8 @@ test.describe('PR Review Tree — `/` PR menu', () => {
     await expect(page.getByTestId('command-menu')).not.toBeVisible()
 
     // The block is no longer fully approved, so it reappears in the list.
-    await expect(page.locator('[data-idx="1"]')).toHaveCount(1)
-    await page.locator('[data-idx="1"]').click()
+    await expect(block1Row).toHaveCount(1)
+    await block1Row.click()
     await expect(approve).not.toBeChecked()
   })
 })

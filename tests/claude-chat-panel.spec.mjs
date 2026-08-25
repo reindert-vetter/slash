@@ -464,7 +464,10 @@ test('a mouse click straight onto a different block releases a stale claude-focu
   page,
 }) => {
   await page.goto('/pr/12903')
-  await page.locator('[data-idx="1"]').click()
+  // By label, not by raw index — see "Sort order of the left list" in
+  // blocks-and-ingest.md. CreatePaymentAction::execute reliably carries a
+  // real changed row.
+  await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
   const card = page.getByTestId('block-column').locator('article').first()
   await expect(card).toBeVisible()
   const label = (await card.locator('h2').first().innerText()).trim()
@@ -537,7 +540,10 @@ test('↓ at the bottom of the Claude chat advances to the next block, and the C
   page,
 }) => {
   await page.goto('/pr/12903')
-  await page.locator('[data-idx="1"]').click()
+  // By label, not by raw index — see "Sort order of the left list" in
+  // blocks-and-ingest.md. CreatePaymentAction::execute reliably carries a
+  // real changed row.
+  await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
   const card = page.getByTestId('block-column').locator('article').first()
   await expect(card).toBeVisible()
   const label = (await card.locator('h2').first().innerText()).trim()
@@ -621,7 +627,10 @@ test('composing a new comment: the Claude column shows before it is placed, and 
   // Block 0 has no local diff to step into (see place-comment-return-focus.
   // spec.mjs) — block 1 does, and (per that same spec + comment-nav-race.
   // spec.mjs, both of which mock the POST) carries no real comment yet.
-  await page.locator('[data-idx="1"]').click()
+  // By label, not by raw index — see "Sort order of the left list" in
+  // blocks-and-ingest.md. CreatePaymentAction::execute reliably carries a
+  // real changed row.
+  await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
   await page.keyboard.press('ArrowRight') // list -> diff
 
   await expect(page.getByTestId('comment-item')).toHaveCount(0)
@@ -926,7 +935,10 @@ test('a new comment on an already-commented line gets its own comment + Claude b
   page,
 }) => {
   await page.goto('/pr/12903')
-  await page.locator('[data-idx="1"]').click()
+  // By label, not by raw index — see "Sort order of the left list" in
+  // blocks-and-ingest.md. CreatePaymentAction::execute reliably carries a
+  // real changed row.
+  await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
   const card = page.getByTestId('block-column').locator('article').first()
   await expect(card).toBeVisible()
   const label = (await card.locator('h2').first().innerText()).trim()
@@ -1626,7 +1638,10 @@ test('the Claude column is a function of the selected code: navigating away hide
   page,
 }) => {
   await page.goto('/pr/12903')
-  await page.locator('[data-idx="1"]').click()
+  // By label, not by raw index — see "Sort order of the left list" in
+  // blocks-and-ingest.md. CreatePaymentAction::execute reliably carries a
+  // real changed row.
+  await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
   const card = page.getByTestId('block-column').locator('article').first()
   await expect(card).toBeVisible()
   const label = (await card.locator('h2').first().innerText()).trim()

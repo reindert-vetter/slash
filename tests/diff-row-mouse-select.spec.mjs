@@ -243,7 +243,9 @@ test('a single click on a call-segment selects exactly that segment, with a whol
   page,
 }) => {
   await page.goto('/pr/12903')
-  await page.locator('[data-idx="1"]').click() // CreatePaymentAction::execute
+  // By label, not by raw index — see "Sort order of the left list" in
+  // blocks-and-ingest.md.
+  await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
   await page.keyboard.press('ArrowRight') // into the diff, default gran 'group'
   await expect(page.locator('[data-change-active]').first()).toBeVisible()
 

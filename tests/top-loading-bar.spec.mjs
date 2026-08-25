@@ -27,16 +27,18 @@ test('top loading bar shows while the selected block\'s code is fetching, and hi
 
   await page.goto('/pr/12903')
   const bar = page.getByTestId('top-loading-bar')
-  // Block 0 (the default selection) isn't delayed, so the bar settles hidden
-  // once the initial page load finishes.
+  // The default selection isn't delayed (it isn't `execute`), so the bar
+  // settles hidden once the initial page load finishes.
   await expect(page.getByTestId('block-row').first()).toBeVisible()
   await expect(bar).toBeHidden()
 
-  await page.locator('[data-idx="1"]').click()
+  // By label, not by raw index — see "Sort order of the left list" in
+  // blocks-and-ingest.md. Its /api/code fetch is the one delayed above.
+  await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
   await leaveSearchBox(page)
   await page.keyboard.press('ArrowRight')
 
-  // Block 1's code fetch is still held open — the top bar is up.
+  // execute's code fetch is still held open — the top bar is up.
   await expect(bar).toBeVisible()
 
   releaseDelay()

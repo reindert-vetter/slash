@@ -109,14 +109,17 @@ test('a PR-wide comment-index item shows the ordinary Claude column, and "Chat m
 // afterwards.
 test('a stale block-scoped cs.focus does not hijack Enter in the PR-comment Claude composer', async ({ page }) => {
   await page.goto('/pr/12903')
-  await page.locator('[data-idx="1"]').click()
+  // By label, not by raw index — see "Sort order of the left list" in
+  // blocks-and-ingest.md. CreatePaymentAction::execute reliably carries a
+  // real changed row.
+  await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
   const card = page.getByTestId('block-column').locator('article').first()
   await expect(card).toBeVisible()
   const label = (await card.locator('h2').first().innerText()).trim()
   const file = (await card.locator('.font-mono.text-slate-500').first().innerText()).trim().split(':')[0]
 
-  // A block-scoped comment on the real block at data-idx="1" — clicking it
-  // sets cs.focus === 'comment'.
+  // A block-scoped comment on the real selected block — clicking it sets
+  // cs.focus === 'comment'.
   const blockComment = await page.request.post('/api/workflows/task_code_comment', {
     data: { pr: 12903, file, line: 1, author: 'reviewer', body: 'kan dit anders?', label, rowStart: -1, rowEnd: -1 },
   })

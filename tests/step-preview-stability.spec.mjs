@@ -26,9 +26,9 @@ test('look-ahead preview survives repeated down/up same-file block steps', async
 
   await page.goto('/pr/12903')
   await appReady(page)
-  // Select block 1 (CreatePaymentAction::execute) instead of the
-  // default-selected block 0 (ContractController::index, no local diff).
-  await page.locator('[data-idx="1"]').click()
+  // Select CreatePaymentAction::execute by label, not by raw index — see
+  // "Sort order of the left list" in blocks-and-ingest.md.
+  await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
 
   const cards = page.locator('[data-testid="block-column"] article')
   // List mode: selected block 1 + look-ahead preview of block 2.

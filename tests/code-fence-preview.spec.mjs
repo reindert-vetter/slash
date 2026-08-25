@@ -136,10 +136,10 @@ test('a collapsed (not yet clicked) comment card shows no preview card', async (
 test('only a suggestion fence gets the "Huidig (PR)" comparison pane', async ({ page }) => {
   await page.goto('/pr/12903')
   await leaveSearchBox(page)
-  // Block 1 (CreatePaymentAction::execute) reliably carries a real changed
-  // group — see materializeMainWorktrees in tests/_setup.mjs — unlike block 0,
-  // which has nothing to preview and would leave commentTarget().code empty.
-  await page.locator('[data-idx="1"]').click()
+  // By label, not by raw index — see "Sort order of the left list" in
+  // blocks-and-ingest.md. CreatePaymentAction::execute reliably carries a
+  // real changed group — see materializeMainWorktrees in tests/_setup.mjs.
+  await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
   await leaveSearchBox(page)
   const card = page.getByTestId('block-column').locator('article').first()
   const label = (await card.locator('h2').first().innerText()).trim()

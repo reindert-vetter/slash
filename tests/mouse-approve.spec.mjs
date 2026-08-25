@@ -17,7 +17,9 @@ import { test, expect } from './_fixtures.mjs'
 test.describe('PR Review Tree — mouse approve (call-segment hover ring)', () => {
   test('a call segment’s hover ring approves exactly that one segment', async ({ page }) => {
     await page.goto('/pr/12903')
-    await page.locator('[data-idx="1"]').click() // CreatePaymentAction::execute
+    // By label, not by raw index — see "Sort order of the left list" in
+    // blocks-and-ingest.md.
+    await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
     await page.keyboard.press('ArrowRight')
     // Block 1's own single (one-row) change group auto-jumps the initial
     // stand to 'unified' once its code arrives (home.mjs's
@@ -57,7 +59,9 @@ test.describe('PR Review Tree — mouse approve (call-segment hover ring)', () =
   // Space" section.
   test('a call-segment click auto-continues the cursor but shows no menu', async ({ page }) => {
     await page.goto('/pr/12903')
-    await page.locator('[data-idx="1"]').click() // CreatePaymentAction::execute
+    // By label, not by raw index — see "Sort order of the left list" in
+    // blocks-and-ingest.md.
+    await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
     await page.keyboard.press('ArrowRight')
     // See the previous test: wait for code, then force 'split' back — the
     // hover-ring approve affordance doesn't exist in the auto-jumped
