@@ -835,7 +835,7 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 			msg := chat.Message{
 				ID: chatMessageID(arg.TurnID, ""), ConversationID: arg.ConversationID, PR: arg.PR,
 				Role: "assistant", Kind: chat.KindError, NoShell: true,
-				Body: "Kon de lokale checkout niet klaarzetten na je keuze. Probeer het opnieuw.",
+				Body: "Kon de werkmap niet klaarzetten na je keuze. Probeer het opnieuw.",
 			}
 			_ = cm.SaveMessage(ctx, msg)
 			return msg, nil
@@ -950,10 +950,21 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 			return msg, nil
 		}
 		if !ok {
+			// Two different dead ends, and they need different words. An open
+			// work-directory choice is something the reviewer can resolve
+			// right now (the overlay opens on it by itself, see
+			// .claude/docs/command-palette.md); a missing checkout needs a
+			// path in settings.json. Saying the latter while the former is
+			// true sent the reviewer looking for a configuration problem that
+			// wasn't there.
+			body := "Voor dit verzoek heb ik schrijftoegang tot een lokale werkmap nodig, maar die is er niet. Voeg een pad toe aan `chatCheckoutDirs` in settings.json of clone de repo lokaal, en vraag het opnieuw."
+			if checkoutChoiceOpen(arg.Repo, arg.PR) {
+				body = "Ik kan nu geen code aanpassen: er staat nog een keuze open over de werkmap van deze PR. Maak die keuze en vraag het daarna opnieuw."
+			}
 			msg := chat.Message{
 				ID: chatMessageID(arg.TurnID, ""), ConversationID: arg.ConversationID, PR: arg.PR,
 				Role: "assistant", Model: model, NoShell: true,
-				Body: "Voor dit verzoek heb ik schrijftoegang tot een lokale checkout nodig, maar die is er niet. Voeg een pad toe aan `chatCheckoutDirs` in settings.json of clone de repo lokaal, en vraag het opnieuw.",
+				Body: body,
 			}
 			_ = cm.SaveMessage(ctx, msg)
 			return msg, nil

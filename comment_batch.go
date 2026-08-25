@@ -148,12 +148,12 @@ func runCommentBatch(ctx context.Context, tm *TaskManager, cmod *comments.Module
 	}
 
 	dir, decision, ok := prepareChatShellWorkDir(ctx, tm, dataDir, arg.Repo, arg.PR, convID, "")
-	if decision != nil {
-		failCommentBatchProgress(arg.Repo, arg.PR, "Er moet eerst iets over de lokale checkout worden besloten — open de Claude-chat van deze PR om dat af te handelen, en probeer daarna opnieuw.")
+	if decision != nil || checkoutChoiceOpen(arg.Repo, arg.PR) {
+		failCommentBatchProgress(arg.Repo, arg.PR, "Er staat nog een keuze open over de werkmap van deze PR. Maak die keuze en probeer het daarna opnieuw.")
 		return commentBatchResult{}
 	}
 	if !ok {
-		failCommentBatchProgress(arg.Repo, arg.PR, "Kon geen lokale checkout klaarzetten om in te werken.")
+		failCommentBatchProgress(arg.Repo, arg.PR, "Kon geen lokale werkmap klaarzetten om in te werken.")
 		return commentBatchResult{}
 	}
 

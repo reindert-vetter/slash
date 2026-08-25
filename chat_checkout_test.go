@@ -362,22 +362,23 @@ func TestPrepareChatShellWorkDirDecisionStaysScopedToItsOwnConversation(t *testi
 
 	// Conversation Y (a different, unrelated conversation on the same PR)
 	// sends an ordinary message that happens to need write access too. It
-	// must NOT be treated as an attempted reply to conv-x's question — it
-	// gets its own distinct "blocked, wait for the other conversation"
-	// decision instead, and conv-x's own pending decision (stage/body/options)
-	// must be completely untouched by this.
+	// must NOT be treated as an attempted reply to conv-x's question, and it
+	// must not get a question of its OWN either: an unanswerable
+	// "another conversation is deciding" bubble in a conversation that never
+	// asked anything about the work directory was a dead end (the reviewer
+	// could not even find that other conversation — nothing lists them). Y
+	// simply gets "no directory right now", and recognizes the reason through
+	// checkoutChoiceOpen. conv-x's own pending decision must be completely
+	// untouched by this.
 	_, blocked, okY := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 970801, "conv-y", "maar hij komt wel in die flow toch?", "feature/x")
 	if okY {
 		t.Fatal("conv-y must not get a ready checkout while conv-x's decision is unresolved")
 	}
-	if blocked == nil || blocked.Stage != checkoutStageBlockedElsewhere {
-		t.Fatalf("expected conv-y to get a blockedElsewhere decision, got %+v", blocked)
+	if blocked != nil {
+		t.Fatalf("conv-y must not be asked anything at all, got %+v", blocked)
 	}
-	if len(blocked.Options) != 0 {
-		t.Fatalf("a blockedElsewhere decision must carry no answerable options, got %+v", blocked.Options)
-	}
-	if strings.Contains(blocked.Body, "herkende ik niet") {
-		t.Fatalf("conv-y's message must never be reported as an unrecognized ANSWER to conv-x's question, got %q", blocked.Body)
+	if !checkoutChoiceOpen("", 970801) {
+		t.Fatal("checkoutChoiceOpen must report the still-open choice, so the caller can say WHY there is no directory")
 	}
 
 	// conv-x's own decision survives untouched, and conv-x can still resolve

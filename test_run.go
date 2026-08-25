@@ -281,12 +281,12 @@ func runTestRun(ctx context.Context, tm *TaskManager, cl claude.Client, dataDir 
 	if runCtx.Err() != nil {
 		return testRunResult{Cancelled: true}
 	}
-	if decision != nil {
-		failTestRunProgress(arg.Repo, arg.PR, "Er moet eerst iets over de lokale checkout worden besloten — open de Claude-chat van deze PR om dat af te handelen, en probeer daarna opnieuw.")
+	if decision != nil || checkoutChoiceOpen(arg.Repo, arg.PR) {
+		failTestRunProgress(arg.Repo, arg.PR, "Er staat nog een keuze open over de werkmap van deze PR. Maak die keuze en probeer het daarna opnieuw.")
 		return testRunResult{}
 	}
 	if !ok {
-		failTestRunProgress(arg.Repo, arg.PR, "Kon geen lokale checkout klaarzetten om tests in te draaien.")
+		failTestRunProgress(arg.Repo, arg.PR, "Kon geen lokale werkmap klaarzetten om tests in te draaien.")
 		return testRunResult{}
 	}
 

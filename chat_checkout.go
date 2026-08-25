@@ -448,12 +448,6 @@ const (
 	checkoutStageChooseDirectory = "chooseDirectory"
 	checkoutStageReuseMerged     = "reuseMerged"
 	checkoutStageDirtyTree       = "dirtyTree"
-	// checkoutStageBlockedElsewhere marks the informational, non-answerable
-	// decision prepareChatShellWorkDirAt's ownership guard returns to a
-	// conversation that is NOT the owner of the currently pending decision —
-	// it carries no Options (matchCheckoutOption can never resolve it) and is
-	// never stored as a.Pending itself.
-	checkoutStageBlockedElsewhere = "blockedElsewhere"
 )
 
 const (
@@ -607,6 +601,18 @@ func getCheckoutAssignment(repo string, pr int) *chatCheckoutAssignment {
 func hasPendingCheckoutDecision(repo string, pr int, conversationID string) bool {
 	a := getCheckoutAssignment(repo, pr)
 	return a != nil && a.Pending != nil && a.PendingConversationID == conversationID
+}
+
+// checkoutChoiceOpen reports whether this PR has an unresolved work-directory
+// choice at all, regardless of who raised it. It is how a caller of
+// prepareChatShellWorkDir tells the ownership guard's "not now" apart from a
+// genuine "there is no usable directory": both come back as (nil, false), but
+// only the first is something the reviewer can act on. Deliberately a plain
+// read of the same in-memory assignment (no signature change on the three
+// callers), mirroring hasPendingCheckoutDecision right above it.
+func checkoutChoiceOpen(repo string, pr int) bool {
+	a := getCheckoutAssignment(repo, pr)
+	return a != nil && a.Pending != nil
 }
 
 // ---------------------------------------------------------------------------
@@ -852,13 +858,17 @@ func prepareChatShellWorkDirAt(ctx context.Context, tm *TaskManager, dataDir, re
 	// question got re-asked and re-saved under Y's own conversation id — the
 	// leak reported in .claude/docs/workflows-comments.md's "The pending
 	// checkout decision is scoped to the conversation that raised it" note.
-	// Returned standalone, WITHOUT touching a.Pending/a.PendingConversationID,
-	// so X's own decision is left completely untouched for X to resolve.
+	// Returned WITHOUT touching a.Pending/a.PendingConversationID, so X's own
+	// decision is left completely untouched for X to resolve.
+	//
+	// A plain "not available right now" (no decision), never a decision of its
+	// own: an unanswerable question in a conversation that never asked
+	// anything about the work directory is a dead end — the caller tells the
+	// reviewer in plain words that a choice is still open (it recognizes this
+	// case through checkoutChoiceOpen below) and leaves the choice itself
+	// where it belongs.
 	if conversationID != "" && a.Pending != nil && a.PendingConversationID != conversationID {
-		return "", &chatCheckoutDecision{
-			Stage: checkoutStageBlockedElsewhere,
-			Body:  "Een andere Claude-conversatie in deze PR wacht nog op een keuze over de lokale checkout. Rond die daar af (of via de checkout-instellingen), en probeer het hier daarna opnieuw.",
-		}, false
+		return "", nil, false
 	}
 
 	for attempt := 0; attempt < 4; attempt++ {

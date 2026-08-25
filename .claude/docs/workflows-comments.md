@@ -1031,15 +1031,48 @@ resolution:
 - **`prepareChatShellWorkDirAt` itself** gained the matching ownership guard,
   for the case where a NON-owning conversation's own turn later needs write
   access too (`isNeedWriteDirective`): rather than treating its reviewer reply
-  as an (inevitably mismatched) answer to someone else's question, it gets its
-  own distinct, non-answerable `checkoutStageBlockedElsewhere` decision ("Een
-  andere Claude-conversatie in deze PR wacht nog op een keuze…") — carrying no
-  `Options`, so it can never accidentally be "resolved" — while the actual
-  owner's `Pending`/`PendingConversationID` are left completely untouched.
-  This also protects `comment_batch.go`'s and `test_run.go`'s own calls
+  as an (inevitably mismatched) answer to someone else's question, it gets a
+  plain "no directory right now" (`nil, false`) while the actual owner's
+  `Pending`/`PendingConversationID` are left completely untouched. This also
+  protects `comment_batch.go`'s and `test_run.go`'s own calls
   (`commentBatchConvID`/`testRunConvID`, one stable id per PR each) from the
-  same misattribution, with no changes needed in either file — both already
-  treat `decision != nil` generically.
+  same misattribution.
+
+  **It used to hand out an unanswerable `checkoutStageBlockedElsewhere`
+  decision of its own instead ("Een andere Claude-conversatie in deze PR
+  wacht nog op een keuze…", no `Options`); that stage is removed.** Reported
+  bug, screenshot: a reviewer asked for an edit, got that bubble with a
+  "keuze over lokale checkout nodig" pill and no buttons, and asked *"waarom
+  zie ik die chat niet onder deze chat staan?"* — rightly, because nothing in
+  the UI can find that other conversation: there is no PR-wide list of Claude
+  conversations (`claudeChatVisible()`, `.claude/docs/claude-chat-panel.md`),
+  and a bare chat anchor deliberately gets no comment-index row either
+  (`isChatAnchorPlaceholder`, `.claude/docs/comments-panel.md`). So the
+  message pointed at something unreachable. Each caller now recognizes the
+  case itself through **`checkoutChoiceOpen(repo, pr)`** — a plain read of the
+  same in-memory assignment, so no call signature changed — and says in
+  words that a choice is still open, instead of asking an unanswerable
+  question. Where the reviewer makes that choice: the work-directory overlay
+  (`.claude/docs/command-palette.md`).
+#### Visible wording: it is a "werkmap", never a "checkout"
+
+Reviewer request. Everything the reviewer READS about the one local directory
+Claude edits says **werkmap** — the word this UI already used for it
+(`PHASE_LABEL.preparing`, *"Werkmap klaarzetten…"*, `ClaudeChat.mjs`) — so the
+chat notices above, the `comment_batch`/`test_run` progress failures, the chip
+label and the overlay all name the same thing the same way. The INTERNAL names
+are deliberately left alone (`chat_checkout.go`, `checkoutView`,
+`chat.KindCleanupChoice`, the `checkout*` Actions, the `checkout.changed`
+event): `kind` values sit in stored chat history, so renaming them would be a
+migration for zero functional gain. When you touch a user-facing string here,
+check it against this rule; when you touch an identifier, leave it.
+
+The cancelled-turn cleanup question (`offerCancelCleanupIfDirty`,
+`chat.KindCleanupChoice`) **stays a chat bubble** — unlike the work-directory
+choice it really is about THAT turn ("de afgebroken beurt liet
+niet-gecommitte wijzigingen achter") — and its badge already reads "opruimen
+na afbreken", with no "checkout" anywhere in it.
+
 - **`conversationID == ""` is the one deliberate exception**: the checkout
   settings chip's own direct answer (`checkoutAnswer`, `workflows.go`) and
   the "andere directory kiezen"/"uit" menu actions
