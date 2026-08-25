@@ -164,6 +164,82 @@ func TestClaudeChatWorkflowRoundTrip(t *testing.T) {
 	}
 }
 
+// Reported bug, end to end through the real workflow: a checkout decision
+// pending for one conversation (write access requested, checkout dirty) used
+// to intercept a COMPLETELY UNRELATED conversation's very next message —
+// even a plain, read-only question that never asked for a code change at all
+// — turning it into a bogus "Dat antwoord herkende ik niet als een van de
+// keuzes" reply. This proves BOTH halves of the fix: the question never
+// leaks into the unrelated conversation's transcript, AND a plain question
+// never triggers the checkout/write machinery in the first place (still only
+// the cheap read-only RunChat attempt, per task 3's two-step access).
+func TestClaudeChatPlainQuestionNeverTouchesAnotherConversationsCheckoutDecision(t *testing.T) {
+	m, engine, cm, fake := newChatManager(t)
+	ctx := context.Background()
+	const pr = 970750
+	const ownerConvID, otherCommentID = "chat-owner-comment", "comment-simple"
+
+	// Conversation X already has an unresolved dirty-tree checkout decision —
+	// set up directly, mirroring how a real write-needing turn would have left
+	// it (chat_checkout_test.go's own assignPendingDecisionForTest).
+	owned := &chatCheckoutDecision{
+		Stage:   checkoutStageDirtyTree,
+		Dir:     "/some/other/checkout",
+		Body:    "`/some/other/checkout` heeft nog niet-gerelateerde, niet-gecommitte wijzigingen. Wat moet daarmee gebeuren voordat ik hier iets aanpas?",
+		Options: []string{optDiscard, optStashManual, optStashAuto, optKeepSeparate, optKeepCombined},
+	}
+	assignPendingDecisionForTest(t, "", pr, ownerConvID, owned)
+
+	// A completely unrelated, brand-new conversation on the SAME PR: a plain,
+	// purely conversational question — no request to change any code.
+	fake.SetChatTurns("Ja, die zit in diezelfde flow.")
+	runID, err := m.StartClaudeChat(ClaudeChatInput{PR: pr, CommentID: otherCommentID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.SignalWorkflow(runID, SignalMessage, ChatMessageSignal{
+		ID: "msg-1", Author: "reviewer", Body: "maar hij komt wel in die flow toch?",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		list, _ := cm.List(ctx, otherCommentID)
+		return len(list) == 2
+	})
+
+	list, err := cm.List(ctx, otherCommentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, msg := range list {
+		if msg.Kind == chat.KindDirectoryDecision {
+			t.Fatalf("the other conversation's checkout decision must never surface here, got %+v", msg)
+		}
+		if strings.Contains(msg.Body, "herkende ik niet") {
+			t.Fatalf("this conversation's own message must never be read as an unrecognized answer to someone else's question, got %+v", msg)
+		}
+	}
+	if list[1].Role != "assistant" || list[1].Body != "Ja, die zit in diezelfde flow." || list[1].Kind != "" {
+		t.Fatalf("expected a plain, ordinary assistant reply, got %+v", list[1])
+	}
+
+	// Only the cheap read-only attempt ran — a plain question never escalates
+	// into the write/checkout machinery at all (task 3's two-step access).
+	if len(fake.Calls) != 1 {
+		t.Fatalf("expected exactly 1 RunChat call (the read-only attempt only), got %d: %+v", len(fake.Calls), fake.Calls)
+	}
+
+	// The OTHER conversation's own pending decision is completely untouched —
+	// still there, still owned by it, ready to be resolved by it.
+	if !hasPendingCheckoutDecision("", pr, ownerConvID) {
+		t.Fatal("the owning conversation's pending decision must survive the unrelated conversation's turn")
+	}
+	a := getCheckoutAssignment("", pr)
+	if a == nil || a.Pending != owned {
+		t.Fatalf("the owning conversation's pending decision must be the exact same, untouched object, got %+v", a)
+	}
+}
+
 // An assistant turn shaped as the strict question directive is stored as a
 // KindQuestion message with its options, and the reviewer's next message
 // (their picked option, or free text) is recorded as that SAME row's Answer —

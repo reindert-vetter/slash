@@ -994,6 +994,72 @@ second call), `TestRunOneClaudeTurnDegradesWhenShellUnavailableAfterEscalating`,
 `TestRunOneClaudeTurnDegeneratesGracefullyOnRepeatedNeedWrite` (the repeated
 directive above).
 
+#### The pending checkout decision is scoped to the conversation that raised it, not the whole PR
+
+Reported bug, screenshot: a reviewer typed a plain, purely conversational
+follow-up ("maar hij komt wel in die flow toch?") in one conversation and got
+back an unrelated, confusing checkout question ("Dat antwoord herkende ik niet
+als een van de keuzes… heeft nog niet-gerelateerde, niet-gecommitte
+wijzigingen") that in fact belonged to a completely DIFFERENT conversation of
+the same PR — one that had genuinely asked for a code change and hit a dirty
+candidate. Two symptoms from one cause: the question leaked into a
+conversation that never raised it, AND a turn that never needed write access
+at all got dragged into the checkout machinery before Claude was even called.
+
+`runOneClaudeTurn`'s very first step, before calling Claude at all, resolves
+"is a PREVIOUS turn still waiting on an answer about the local checkout"
+(`hasPendingCheckoutDecision`) — but `chatCheckoutAssignment.Pending` used to
+be purely PR-scoped, with no record of which conversation raised it. So as
+long as ANY conversation of the PR had an open decision, EVERY other
+conversation's very next message was intercepted and fed to
+`applyCheckoutDecisionReply` as if it were an attempt to answer it — which
+predictably never matched any option, so the exact same question got
+re-asked, now saved under the unrelated conversation's own id.
+
+Fixed with `chatCheckoutAssignment.PendingConversationID` (`chat_checkout.go`),
+set alongside every place a NEW decision is raised from inside a chat turn
+(`prepareChatShellWorkDirAt`'s three raise sites) and cleared alongside every
+resolution:
+
+- **`hasPendingCheckoutDecision(repo, pr, conversationID)`** now answers "does
+  THIS conversation have an open question", not "does this PR" — so
+  `runOneClaudeTurn`'s pre-Claude-call intercept only ever fires for the
+  conversation that actually raised it. Every OTHER conversation's message
+  flows straight into the ordinary two-step read-only/escalate logic above —
+  a plain question never even reaches the checkout code, so it can never
+  generate a checkout decision of its own either.
+- **`prepareChatShellWorkDirAt` itself** gained the matching ownership guard,
+  for the case where a NON-owning conversation's own turn later needs write
+  access too (`isNeedWriteDirective`): rather than treating its reviewer reply
+  as an (inevitably mismatched) answer to someone else's question, it gets its
+  own distinct, non-answerable `checkoutStageBlockedElsewhere` decision ("Een
+  andere Claude-conversatie in deze PR wacht nog op een keuze…") — carrying no
+  `Options`, so it can never accidentally be "resolved" — while the actual
+  owner's `Pending`/`PendingConversationID` are left completely untouched.
+  This also protects `comment_batch.go`'s and `test_run.go`'s own calls
+  (`commentBatchConvID`/`testRunConvID`, one stable id per PR each) from the
+  same misattribution, with no changes needed in either file — both already
+  treat `decision != nil` generically.
+- **`conversationID == ""` is the one deliberate exception**: the checkout
+  settings chip's own direct answer (`checkoutAnswer`, `workflows.go`) and
+  the "andere directory kiezen"/"uit" menu actions
+  (`relistCheckoutCandidates`/`checkoutSetOff`) always pass/leave `""` as the
+  owner — an explicit, reviewer-initiated action through the chip, not a chat
+  message, so it may resolve (or replace) ANY pending decision regardless of
+  which conversation it belongs to, unchanged from before this fix.
+
+Tests: `chat_checkout_test.go`'s
+`TestPrepareChatShellWorkDirDecisionStaysScopedToItsOwnConversation` (the
+ownership guard, and that the owner's own decision survives untouched) and
+`TestPrepareChatShellWorkDirMenuAnswerBypassesOwnership` (the `""` exception);
+`chat_workflow_test.go`'s
+`TestClaudeChatPlainQuestionNeverTouchesAnotherConversationsCheckoutDecision`
+drives this end to end through the real workflow — a plain question in one
+conversation while another conversation's decision is pending, asserting
+**both** halves: the message never leaks in, and exactly one (read-only)
+`RunChat` call happens — proving the plain question never escalates into the
+checkout/write path at all.
+
 This is orthogonal to `sig.Action`'s dispatch (`chatActionCommit`/`chatActionClear`/
 `chatActionRetry`, handled by the workflow body before `runOneClaudeTurn` is
 even called) and to the automatic landing described below — a turn escalates

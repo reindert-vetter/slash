@@ -816,7 +816,7 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 	// over (chatCheckoutResumedPrompt), and the resumed CLI session still
 	// remembers the reviewer's ORIGINAL request.
 	effectiveBody := arg.Body
-	if hasPendingCheckoutDecision(arg.Repo, arg.PR) {
+	if hasPendingCheckoutDecision(arg.Repo, arg.PR, arg.ConversationID) {
 		release := acquireWriteTurnSlot(runCtx, nil)
 		_, decision, ok := prepareChatShellWorkDir(runCtx, tm, dataDir, arg.Repo, arg.PR, arg.ConversationID, arg.Body)
 		release()

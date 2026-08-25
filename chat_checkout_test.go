@@ -180,6 +180,17 @@ func assignCheckoutForTest(t *testing.T, repo string, pr int, dir string) {
 	getOrCreateCheckoutAssignment(repo, pr).Dir = dir
 }
 
+// assignPendingDecisionForTest registers a pending checkout decision owned by
+// conversationID directly — skipping the discovery ladder — for the
+// end-to-end regression test (chat_workflow_test.go) proving a DIFFERENT
+// conversation's ordinary, read-only turn never even touches it.
+func assignPendingDecisionForTest(t *testing.T, repo string, pr int, conversationID string, decision *chatCheckoutDecision) {
+	t.Helper()
+	a := getOrCreateCheckoutAssignment(repo, pr)
+	a.Pending = decision
+	a.PendingConversationID = conversationID
+}
+
 func TestPrepareChatShellWorkDirPicksSoleRegisteredCandidate(t *testing.T) {
 	bareDir, _ := setupChatShadowRepo(t, "feature/x", "hello\n")
 	dataDir := t.TempDir()
@@ -314,6 +325,101 @@ func TestPrepareChatShellWorkDirAsksAboutDirtyCandidate(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(filepath.Join(checkout, "foo.txt")); string(got) != "reviewer's own WIP\n" {
 		t.Fatalf("'los laten' must not touch the working tree, got %q", got)
+	}
+}
+
+// Reported bug: a checkout decision raised by ONE conversation (write access
+// requested, checkout dirty) leaked into a COMPLETELY UNRELATED conversation
+// of the same PR — that other conversation's very next, purely conversational
+// message got intercepted and misread as an attempted answer, which produced
+// a confusing "Dat antwoord herkende ik niet als een van de keuzes" reply in
+// a conversation that never asked for a code change at all. This is the
+// ownership guard's regression test: the pending decision must stay scoped to
+// the conversation that raised it.
+func TestPrepareChatShellWorkDirDecisionStaysScopedToItsOwnConversation(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	checkout := cloneCheckoutDir(t, bareDir, "feature/x")
+	writeCheckoutSettings(t, dataDir, checkout)
+
+	if err := os.WriteFile(filepath.Join(checkout, "foo.txt"), []byte("reviewer's own WIP\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Conversation X's write turn is the one that discovers the dirty
+	// checkout and raises the decision.
+	_, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 970801, "conv-x", "", "feature/x")
+	if ok || decision == nil || decision.Stage != checkoutStageDirtyTree {
+		t.Fatalf("expected conv-x to raise a dirtyTree decision, got ok=%v decision=%+v", ok, decision)
+	}
+	if !hasPendingCheckoutDecision("", 970801, "conv-x") {
+		t.Fatal("expected conv-x to be reported as having the pending decision")
+	}
+	if hasPendingCheckoutDecision("", 970801, "conv-y") {
+		t.Fatal("conv-y must not be reported as having conv-x's pending decision")
+	}
+
+	// Conversation Y (a different, unrelated conversation on the same PR)
+	// sends an ordinary message that happens to need write access too. It
+	// must NOT be treated as an attempted reply to conv-x's question — it
+	// gets its own distinct "blocked, wait for the other conversation"
+	// decision instead, and conv-x's own pending decision (stage/body/options)
+	// must be completely untouched by this.
+	_, blocked, okY := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 970801, "conv-y", "maar hij komt wel in die flow toch?", "feature/x")
+	if okY {
+		t.Fatal("conv-y must not get a ready checkout while conv-x's decision is unresolved")
+	}
+	if blocked == nil || blocked.Stage != checkoutStageBlockedElsewhere {
+		t.Fatalf("expected conv-y to get a blockedElsewhere decision, got %+v", blocked)
+	}
+	if len(blocked.Options) != 0 {
+		t.Fatalf("a blockedElsewhere decision must carry no answerable options, got %+v", blocked.Options)
+	}
+	if strings.Contains(blocked.Body, "herkende ik niet") {
+		t.Fatalf("conv-y's message must never be reported as an unrecognized ANSWER to conv-x's question, got %q", blocked.Body)
+	}
+
+	// conv-x's own decision survives untouched, and conv-x can still resolve
+	// it exactly as before.
+	if !hasPendingCheckoutDecision("", 970801, "conv-x") {
+		t.Fatal("conv-x's own pending decision must survive conv-y's unrelated turn")
+	}
+	dir, decision2, ok2 := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 970801, "conv-x", optKeepSeparate, "feature/x")
+	if decision2 != nil {
+		t.Fatalf("unexpected further decision for conv-x: %+v", decision2)
+	}
+	if !ok2 || dir != checkout {
+		t.Fatalf("expected conv-x to resolve the checkout after answering, dir=%q ok=%v", dir, ok2)
+	}
+}
+
+// The checkout-menu chip answers a pending decision through its own
+// conversationID == "" round trip (workflows.go's checkoutAnswer Activity) —
+// that path must keep working regardless of which conversation (if any)
+// raised the decision.
+func TestPrepareChatShellWorkDirMenuAnswerBypassesOwnership(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	checkout := cloneCheckoutDir(t, bareDir, "feature/x")
+	writeCheckoutSettings(t, dataDir, checkout)
+
+	if err := os.WriteFile(filepath.Join(checkout, "foo.txt"), []byte("reviewer's own WIP\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 970802, "conv-z", "", "feature/x")
+	if ok || decision == nil || decision.Stage != checkoutStageDirtyTree {
+		t.Fatalf("expected conv-z to raise a dirtyTree decision, got ok=%v decision=%+v", ok, decision)
+	}
+
+	dir, decision2, ok2 := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 970802, "", optKeepSeparate, "feature/x")
+	if decision2 != nil {
+		t.Fatalf("unexpected further decision via the menu path: %+v", decision2)
+	}
+	if !ok2 || dir != checkout {
+		t.Fatalf("expected the menu's own conversationID==\"\" round trip to resolve conv-z's decision, dir=%q ok=%v", dir, ok2)
 	}
 }
 
