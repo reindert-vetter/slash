@@ -333,6 +333,9 @@ filters**; each runs a live gh search via `GET /api/prs/filter?preset=<key>`
 routes: query > preset > inbox), with a "← Back to inbox" bar
 (`data-testid=back-to-inbox`, `clearPresetView`).
 
+The whole drawer is **hidden while a search query is active** (see "Searching
+drops EVERY category" below) — as are the two blocks after it.
+
 The queries are **server-side allow-listed** (`filterPresets` in
 `inbox_api.go`) — the UI only sends a fixed `key`, never raw search text to gh
 (`exec` input validation). The four keys: `updated-oud` (`sort:created-asc`),
@@ -374,7 +377,9 @@ deliberately both shown:
 Load-bearing frontend properties:
 
 - **Always present, collapsed, with the count in the button**
-  (`data-testid=problems-count`: "Mislukte taken · 2" / "· geen"). A block that
+  (`data-testid=problems-count`: "Mislukte taken · 2" / "· geen") — except
+  while a search query is active, when this block is hidden along with the two
+  drawers above it (see "Searching drops EVERY category" below). A block that
   only appears when something is wrong isn't findable when you want to confirm
   nothing *is* wrong — hence also loaded on page load (`loadProblems()` next to
   `loadInbox()`), not lazily on open like "Recent gegenereerd".
@@ -563,7 +568,7 @@ default" section.
 | `GET /api/chat/checkout?prs=12,13` | The checkout badge — this PR's shared local checkout (dir/branch), a plain in-memory read. See `.claude/docs/claude-chat-panel.md`. |
 | `POST /api/workflows/{runID}/signals/refresh` | Refresh Signal (UI on load). Only starts the fetch Activity. |
 | `POST /api/workflows/{runID}/heartbeat` | Operational ping (poll cadence), no state write. |
-| `GET /api/prs/search?q=…` | **Still a direct** live gh `search` (`inbox_api.go`) — an ephemeral, parameterized read, not a persistent list. A bare number → `<n> in:title`. Also matches by **author name** (not just title/number/login), see below. |
+| `GET /api/prs/search?q=…` | **Still a direct** live gh `search` (`inbox_api.go`) — an ephemeral, parameterized read, not a persistent list. Open **and** closed/merged PRs, ranked by `sortSearchRows`; a bare number is an exact `pullRequestByNumber` lookup (plus `<n> in:title`). Also matches by **author name** (not just title/number/login), see below. |
 | `GET /api/prs/filter?preset=<key>` | Live gh `search` for a **fixed, allow-listed** preset query (`filterPresets`) — never raw UI text to gh. See "Filter drawer". |
 | `GET /api/reviewers` | Read-only candidate reviewers → `{ok, reviewers:[{login,avatarUrl,count}]}`, most-used-first. |
 | `GET /api/names?logins=a,b` | Login → real name + avatar. See "Real names instead of logins" in `.claude/docs/pages-and-routing.md`. |
@@ -639,6 +644,102 @@ findable by name right away, not only once their name has separately surfaced
 somewhere else in this run (e.g. as a visible PR author). The offline
 (`SLASH_GITHUB=off`) fixture path has no name resolution to warm, but matches
 the author **login** substring directly against `inboxRow.Author`.
+
+### Closed PRs are searched too, ranked below the open ones — and a bare number is an exact lookup
+
+Reviewer request: "ik wil hier ook kunnen zoeken op closed prs en prs van
+andere (wel in een lagere volgorde)", reported against a search for `12112`
+that returned **0** results. Two independent causes, both fixed:
+
+- **`is:open` excluded every closed/merged PR.** `handleSearch` now runs a
+  second search, `is:pr is:closed archived:false <term>` (`is:closed` covers
+  merged and plain-closed alike), merged in through the existing
+  `dedupeRowsByNumber`. A failure of that call is **not** fatal — the open
+  results are still served.
+- **A bare number was searched as TITLE TEXT.** GitHub's search API has no
+  `number:` qualifier, so `isAllDigits(q)` used to become `<n> in:title`, which
+  finds PR #12112 only if "12112" happens to occur in some PR's *title*, and
+  never finds the PR itself. **`pullRequestByNumber`** (`inbox.go`) now does a
+  direct `repository(owner,name){ pullRequest(number:) }` GraphQL lookup per
+  `allRepos()`, state-agnostic, mapped through the same `mapPRNode`. One `gh`
+  call per configured repo (normally one); a repo without that PR contributes
+  nothing and an error on one repo never fails the others. The `in:title` text
+  search stays alongside it — a number can be a genuine title match.
+
+**"PR's van anderen" was never about widening**: the search has always been
+repo-wide and author-agnostic (`repoSearchScope()`), unlike the `@me`-scoped
+inbox sections. What was missing is the **ranking**, which `sortSearchRows`
+(`inbox_api.go`, a plain `sort.SliceStable` over `searchRank`) now applies:
+
+| rank | rows |
+|---|---|
+| 0 | open, mine (`author == ghLogin(ctx)`) |
+| 1 | open, someone else's |
+| 2 | closed/merged, mine |
+| 3 | closed/merged, someone else's |
+
+**Stable** on purpose, so gh's own `sort:updated-desc` ordering survives inside
+each rank. An unknown login (offline, `gh` unauthenticated) collapses 0/1 and
+2/3 into each other and leaves the open-before-closed half intact; a row with
+no `state` at all — every inbox row, every pre-existing fixture/snapshot —
+ranks as **open**.
+
+`inboxRow.State` (GitHub's `OPEN|MERGED|CLOSED`) carries this to the frontend.
+`lightFields` already requested `state` and `ghPRNode.State` already existed;
+only `mapPRNode` dropped it. `json:"state,omitempty"` keeps an inbox row
+byte-identical to what a pre-state build produced.
+
+**Two deliberate limits.** The `matchingLogins` author-name loop stays
+**open-only**: running it against `is:closed` too would double up to
+`matchingLoginsCap` extra `gh` calls per search for little gain, and a closed PR
+is still findable by title, number or author *login*. And searching does not
+clear an active preset filter — `currentView()` simply lets the query win, so
+emptying the box returns to the preset view; pre-existing behaviour, left as is.
+
+Tests: `TestSortSearchRowsRanking` + the two siblings next to it
+(`search_rank_test.go`, pure, no `gh`, no fixture) for the ranking;
+`tests/overview-search-flat.spec.mjs` for the view below.
+
+### Searching drops EVERY category: one flat list
+
+"als je zoekt, wil ik alle categorieen weg hebben". While a query is active the
+content region is **one flat, heading-less list** of rows:
+
+- **The result heading and its count pill are gone** from
+  `searchResultsBlock()` (it used to render `Alle open PR's — "q"` + a count).
+  The zero case is covered by the existing "Geen resultaten voor …" line, so
+  no count was reinstated (agreed explicitly).
+- **The three drawers below it are hidden too** — `filterDrawer()` /
+  `recentDrawer()` / `problemsDrawer()` are *siblings* of `currentView()` in
+  `App()`, so routing alone never hid them (they were visible in the reported
+  screenshot). They now sit in **`drawersSlot()`**, which returns an empty
+  **array** while `state.query.trim()` is truthy. Three things make that
+  arrow.js-safe (see `.claude/rules/arrowjs-pitfalls.md`): a stable wrapper
+  element with a **static** `contents` class (never a keyed template whose
+  whole body *is* the toggling expression), always the same **kind** of
+  returned value (an empty array, not `''` — the single↔array rule), and an own
+  `.key()` per drawer. Their open/closed state lives in
+  `state.filterOpen`/`recentOpen`/`problemsOpen` and survives the unmount;
+  `loadProblems()` keeps running on its own interval regardless.
+- **The inbox sections were already gone** — `currentView()` has always routed
+  a non-empty query away from `mainContent()`. Nothing changed there.
+- The row-set `watch` already lists `state.query` as a dep, so
+  `scheduleRepaint()` fires as these blocks come and go — exactly the
+  scroll-clamp case its `hoverEnabled` disarming exists for (the document
+  height changes without the pointer moving). `currentRows()` reads
+  `[data-nav-row]` from the DOM, so the recent-drawer rows leave the `↓` chain
+  by themselves and `reanchorSelection` releases a selection that stood in one.
+
+**With no headings left, a per-row word marker is load-bearing:**
+`rowStateMark(pr)` (`rowMeta`, `data-testid=row-state-mark`) renders
+**"Samengevoegd"** / **"Gesloten"** plus a glyph on a row whose `state` is not
+`OPEN` — the *only* thing distinguishing a closed hit from an open one now, so
+it is a **word**, never the tint alone (colourblind rule). It uses the same
+static `<span class="contents">` + `${() => …}` shape as its neighbour
+`newSinceMark`: `rowMeta` is one template shape shared by every row and only
+some rows carry a mark, so a statically interpolated template↔`null` slot would
+eventually render the template *function* as text in a reused chunk. A row
+without a `state` field renders nothing, exactly as before.
 
 ## Offline / test mode
 

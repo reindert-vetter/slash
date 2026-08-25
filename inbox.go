@@ -96,6 +96,12 @@ type inboxRow struct {
 	ChangedFiles int    `json:"changedFiles"`
 	Comments     int    `json:"comments"`
 	HasGraph     bool   `json:"hasGraph"`
+	// State is GitHub's own OPEN|MERGED|CLOSED. Only the search endpoint needs
+	// it (it also returns closed/merged PRs, ranked below the open ones — see
+	// sortSearchRows), and `omitempty` keeps every pre-existing fixture and
+	// stored inbox snapshot byte-identical: an inbox row simply omits it, and
+	// the frontend treats a missing state as open.
+	State string `json:"state,omitempty"`
 
 	Mergeable      string     `json:"mergeable,omitempty"`
 	ReviewDecision string     `json:"reviewDecision,omitempty"`
@@ -405,6 +411,59 @@ func runPRSearch(ctx context.Context, expr string, light bool) ([]inboxRow, erro
 	return rows, nil
 }
 
+// pullRequestByNumber looks one PR up by its NUMBER, in every configured repo,
+// regardless of its state. GitHub's search API has no `number:` qualifier, so a
+// bare number typed in the search box used to be turned into a title-text
+// search (`<n> in:title`) — which finds PR #12112 only if "12112" happens to
+// occur in some PR's title, and never finds the PR itself. This walks
+// allRepos() with a direct `repository(...){ pullRequest(number:) }` lookup
+// instead, so a number always resolves to that exact PR whether it is open,
+// merged or closed. One gh call per configured repo (normally one); a repo
+// that has no such PR simply contributes nothing, and an error on one repo
+// never fails the others.
+func pullRequestByNumber(ctx context.Context, number int) []inboxRow {
+	query := fmt.Sprintf(`query ($owner: String!, $name: String!, $n: Int!) {
+		repository(owner: $owner, name: $name) {
+			pullRequest(number: $n) { %s }
+		}
+	}`, lightFields+heavyFields)
+	login := ghLogin(ctx)
+	var out []inboxRow
+	for _, repo := range allRepos() {
+		owner, name, ok := splitSlug(repo.Slug)
+		if !ok {
+			continue
+		}
+		data, err := ghGraphQL(ctx, query,
+			"-f", "owner="+owner, "-f", "name="+name, "-F", "n="+strconv.Itoa(number))
+		if err != nil {
+			continue
+		}
+		var parsed struct {
+			Repository struct {
+				PullRequest *ghPRNode `json:"pullRequest"`
+			} `json:"repository"`
+		}
+		if err := json.Unmarshal(data, &parsed); err != nil || parsed.Repository.PullRequest == nil {
+			continue
+		}
+		node := *parsed.Repository.PullRequest
+		// The lookup is per-repo, so the node carries no repository field of
+		// its own to attribute the row by (unlike a search hit).
+		if node.Repository.NameWithOwner == "" {
+			node.Repository.NameWithOwner = repo.Slug
+		}
+		out = append(out, mapPRNode(node, true, login))
+	}
+	return out
+}
+
+// splitSlug splits an "owner/name" repo slug into its two halves.
+func splitSlug(slug string) (owner, name string, ok bool) {
+	owner, name, ok = strings.Cut(slug, "/")
+	return owner, name, ok && owner != "" && name != ""
+}
+
 // repoSearchScope is the `repo:` prefix of every inbox/search query: one
 // `repo:<slug>` qualifier per configured repo. GitHub search ORs repeated
 // qualifiers of the same kind, so this widens the result set to every reviewed
@@ -471,6 +530,7 @@ func mapPRNode(n ghPRNode, heavy bool, login string) inboxRow {
 		Deletions:    n.Deletions,
 		ChangedFiles: n.ChangedFiles,
 		Comments:     n.Comments.TotalCount,
+		State:        n.State,
 	}
 	if heavy {
 		// "" — mapPRNode (search results) never reads NewSinceKind/NewSinceAt

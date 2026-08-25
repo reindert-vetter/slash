@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -11,7 +12,8 @@ import (
 // inbox_api.go wires the read-only inbox endpoints:
 //   GET /api/inbox               — sectioned live PR list (light rows)
 //   GET /api/inbox/status?prs=…  — heavy status backfill for those PRs
-//   GET /api/prs/search?q=…      — all open PRs matching a query (full rows)
+//   GET /api/prs/search?q=…      — PRs matching a query (full rows): open ones
+//                                  first, closed/merged ones ranked below them
 // All three are read-only. Under SLASH_GITHUB=off they serve the SLASH_INBOX
 // fixture so tests never touch the network.
 
@@ -127,6 +129,9 @@ func (s *server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		overlayGraph(s.db, rows)
+		// A fixture row carries no state, so every row ranks as open here —
+		// the sort still applies the own-vs-someone-else half.
+		sortSearchRows(rows, ghLogin(r.Context()))
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "prs": rows})
 		return
 	}
@@ -139,24 +144,73 @@ func (s *server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if isAllDigits(q) {
 		term = q + " in:title"
 	}
+	// A bare number resolves to that exact PR first, in whatever state it is —
+	// GitHub search has no `number:` qualifier, so this is the only way to find
+	// a PR BY its number (see pullRequestByNumber). Kept alongside the text
+	// search below, because a number can also be a genuine title match.
+	var rows []inboxRow
+	if isAllDigits(q) {
+		if n, err := strconv.Atoi(q); err == nil && n > 0 {
+			rows = append(rows, pullRequestByNumber(r.Context(), n)...)
+		}
+	}
 	// Scope to open PRs of the repo (repo: + sort are added by searchPRs).
-	rows, err := searchPRs(r.Context(), "is:pr is:open archived:false "+term, false)
+	openRows, err := searchPRs(r.Context(), "is:pr is:open archived:false "+term, false)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false})
 		return
 	}
+	rows = append(rows, openRows...)
 	// GitHub's own free-text PR search matches title/body/comments, never the
 	// author's real name — so also search by AUTHOR NAME via every collaborator
 	// login whose login or resolved name matches q, merged in and deduped.
+	// Deliberately OPEN-only: running the same loop against is:closed would
+	// double up to matchingLoginsCap extra gh calls per keystroke for little
+	// gain, and a closed PR is still findable by title/number/author-login.
 	for _, login := range matchingLogins(s.dataDir, q) {
 		extra, err := searchPRs(r.Context(), "is:pr is:open archived:false author:"+login, false)
 		if err == nil {
 			rows = append(rows, extra...)
 		}
 	}
+	// Closed PRs are searched too, but land BELOW every open hit (sortSearchRows).
+	// `is:closed` covers merged and plain-closed alike. A failure here is not
+	// fatal: the open results are still worth serving.
+	if closed, err := searchPRs(r.Context(), "is:pr is:closed archived:false "+term, false); err == nil {
+		rows = append(rows, closed...)
+	}
 	rows = dedupeRowsByNumber(rows)
 	overlayGraph(s.db, rows)
+	sortSearchRows(rows, ghLogin(r.Context()))
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "prs": rows})
+}
+
+// searchRank orders a search result: the reviewer's own open PRs first, then
+// everyone else's open ones, then the same split for closed/merged PRs. The
+// reviewer asked for closed PRs and other people's PRs to be findable "wel in
+// een lagere volgorde" — this is that ordering, and it is the ONLY thing that
+// separates the four groups now that the search view renders one flat,
+// heading-less list.
+//
+// An unknown login (offline, or `gh` not authenticated) collapses ranks 0/1
+// and 2/3 into each other, leaving the open-before-closed half intact.
+func searchRank(row inboxRow, login string) int {
+	rank := 0
+	if row.State != "" && row.State != "OPEN" {
+		rank += 2
+	}
+	if login == "" || row.Author != login {
+		rank++
+	}
+	return rank
+}
+
+// sortSearchRows sorts rows in place by searchRank, STABLY — so gh's own
+// `sort:updated-desc` ordering survives inside each rank.
+func sortSearchRows(rows []inboxRow, login string) {
+	sort.SliceStable(rows, func(i, j int) bool {
+		return searchRank(rows[i], login) < searchRank(rows[j], login)
+	})
 }
 
 // dedupeRowsByNumber drops later duplicates of a PR, keeping the first

@@ -642,7 +642,7 @@ function rowMeta(pr) {
         ${repoBadge(pr)}
         <span class="text-slate-300 dark:text-zinc-700">·</span>
         <span title="${pr.updatedAt || ''}">Bijgewerkt ${relativeTime(pr.updatedAt)}</span>
-        ${newSinceMark(pr)}
+        ${rowStateMark(pr)} ${newSinceMark(pr)}
       </div>
       ${stat || branch
         ? html`<div class="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
@@ -651,6 +651,40 @@ function rowMeta(pr) {
         : null}
     </div>
   `
+}
+
+// rowStateMark — "Gesloten" / "Samengevoegd" on a PR that is no longer open.
+// Only a search result can be non-open (the inbox sections and the presets are
+// all state-scoped, and `state` is omitted from those rows entirely), and the
+// search view has no headings left to group by — so this word IS the only thing
+// that tells a closed hit apart from an open one. Hence a WORD plus a glyph,
+// never the tint alone (the reviewer is colourblind); the slate tint is
+// decoration.
+//
+// A row with no `state` field at all (every inbox row, every pre-existing
+// fixture/snapshot) renders nothing, exactly as before.
+const ROW_STATE_LABELS = { MERGED: 'Samengevoegd', CLOSED: 'Gesloten' }
+
+// Same static `<span class="contents">` + `${() => …}` shape as newSinceMark
+// right below: rowMeta is ONE template shape shared by every row, and only
+// some rows carry a mark, so a statically interpolated template<->null slot
+// would eventually render the template FUNCTION as text in a reused chunk
+// (see "A statically interpolated template↔string slot leaks the template
+// function as text" in .claude/rules/arrowjs-pitfalls.md). The closure reads
+// only the plain, non-reactive `pr.state`, so it registers no dependency.
+function rowStateMark(pr) {
+  return html`<span class="contents">${() => {
+    const label = ROW_STATE_LABELS[pr.state]
+    if (!label) return null
+    return html`
+      <span
+        data-testid="row-state-mark"
+        class="shrink-0 rounded-full bg-slate-200/70 dark:bg-zinc-800 px-2 py-0.5 text-[10.5px] font-medium text-slate-600 dark:text-zinc-300"
+        title="Deze PR is niet meer open"
+        >${pr.state === 'MERGED' ? '⤵' : '✕'} ${label}</span
+      >
+    `
+  }}</span>`
 }
 
 // authorMark — who wrote this PR, at the head of the row: the avatar with the
@@ -1711,7 +1745,7 @@ function searchBox() {
         data-testid="search"
         autocomplete="off"
         spellcheck="false"
-        placeholder="${() => `Zoek in alle open PR's van ${state.repo || ''}… (titel, nummer of auteur)`}"
+        placeholder="${() => `Zoek in alle PR's van ${state.repo || ''}… (titel, nummer of auteur; gesloten onderaan)`}"
         class="w-full rounded-lg border border-slate-300 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-900/60 py-2.5 pl-9 pr-3 text-[13px] text-slate-900 dark:text-zinc-100 outline-none placeholder:text-slate-400 dark:placeholder:text-zinc-600 hover:border-slate-400 dark:hover:border-zinc-600 focus:border-indigo-300 dark:focus:border-indigo-500 focus:ring-1 focus:ring-indigo-200 dark:focus:ring-indigo-500/30"
         @input="${onSearchInput}"
         @keydown="${onSearchKeydown}"
@@ -1720,6 +1754,20 @@ function searchBox() {
   `
 }
 
+// searchResultsBlock — ONE flat, heading-less list of results. Reindert:
+// "als je zoekt, wil ik alle categorieen weg hebben" — while a query is
+// active there are no category headings at all: not the old
+// `Alle open PR's — "q"` heading (and its count pill, which went with it —
+// the empty-state line below covers the zero case), and not the three
+// drawers either (App() hides them, see there). The inbox sections were
+// already gone, since currentView() routes a non-empty query away from
+// mainContent().
+//
+// The server already ordered the rows (own open, other open, own closed,
+// other closed — sortSearchRows in inbox_api.go), so there is no sorting or
+// partitioning here; a closed row is told apart purely by rowStateMark's
+// word (see rowMeta), which is why that marker is load-bearing rather than
+// decorative.
 function searchResultsBlock() {
   return html`
     <div data-testid="search-results">
@@ -1727,11 +1775,7 @@ function searchResultsBlock() {
         if (state.searching) return loadingSkeletonList()
         const results = state.searchResults || []
         return html`
-          <div>
-            <div class="mb-2 mt-6 flex items-center gap-2 first:mt-0">
-              <h2 class="text-[13px] font-semibold text-slate-700 dark:text-zinc-200">Alle open PR's — "${state.query}"</h2>
-              <span class="rounded-full bg-slate-100 dark:bg-zinc-800/80 px-2 py-0.5 text-[11px] text-slate-500 dark:text-zinc-400">${results.length}</span>
-            </div>
+          <div class="mt-6 first:mt-0">
             ${results.length
               ? listBox(results.map((pr) => ({ pr })))
               : html`<p class="py-10 text-center text-sm text-slate-500 dark:text-zinc-500">Geen resultaten voor “${state.query}”.</p>`}
@@ -2112,9 +2156,35 @@ function App() {
   return html`
     <div class="mx-auto max-w-7xl px-6 py-8" data-testid="inbox">
       ${headerBlock()} ${searchBox()}
-      ${() => currentView()} ${filterDrawer()} ${recentDrawer()} ${problemsDrawer()} ${MenuHost()}
+      ${() => currentView()} ${drawersSlot()} ${MenuHost()}
     </div>
   `
+}
+
+// drawersSlot holds the three always-below blocks (Filters / Recent
+// gegenereerd / Mislukte taken) and empties itself while a search query is
+// active — Reindert wants EVERY category gone the moment he searches, and
+// these three are siblings of currentView(), so routing alone never hid them.
+//
+// Three things make this arrow.js-safe (see .claude/rules/arrowjs-pitfalls.md):
+// the wrapper is a stable element with a STATIC class (never a keyed template
+// whose whole body IS the toggling expression), the slot always returns the
+// same KIND of value (an array — empty, not `''` — per the single<->array
+// rule), and each drawer keeps its own `.key()`. Their open/closed state lives
+// in state.filterOpen/recentOpen/problemsOpen, so it survives the unmount;
+// loadProblems() keeps running on its own interval regardless.
+//
+// The row-set watch already lists state.query as a dep, so scheduleRepaint()
+// fires when these blocks come and go — which is exactly the scroll-clamp case
+// its hoverEnabled disarming exists for (the document height changes without
+// the pointer moving).
+function drawersSlot() {
+  return html`<div class="contents">
+    ${() =>
+      state.query.trim()
+        ? []
+        : [filterDrawer().key('drawer:filter'), recentDrawer().key('drawer:recent'), problemsDrawer().key('drawer:problems')]}
+  </div>`
 }
 
 // currentView routes the content region. A non-empty search query always wins
