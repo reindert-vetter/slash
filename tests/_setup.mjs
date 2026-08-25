@@ -1311,10 +1311,12 @@ class ExplainRangeAction
 // three DIFFERENT units of the same block while a single seeded 'unpinned'
 // comment (tests/fixtures/staleanchor-comments.json, anchorState 'unpinned' —
 // anchor_state is unreachable from the UI, same reasoning as the orphan
-// fixture in orphan-comments.json) stays reachable from every one of them
-// (commentUnder's "unknown anchor" leniency, RelatedPanel.mjs) while a REAL
-// comment the spec places itself through the composer only matches its own
-// group ($b).
+// fixture in orphan-comments.json) has a recorded `line` that lands on `$a`'s
+// own line — so it is only ever "in scope" there (folded behind the ▲
+// hierboven hint, or shown reduced below a real comment placed on the same
+// unit), never on `$b`/`$c` — see commentUnder's best-effort line match
+// (RelatedPanel.mjs, "Best-effort line matching for an unpinned comment" in
+// comments-panel.md).
 function materializeStaleAnchorWorktrees() {
   const file = (a, b, c) => `<?php
 

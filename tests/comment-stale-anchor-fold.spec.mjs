@@ -4,30 +4,38 @@ import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 // a comment must show NOTHING next to the diff — not a leftover card from a
 // comment anchored elsewhere in the same block. The concrete trigger was a
 // comment whose exact row the re-anchor pass could no longer re-find
-// (anchorState 'unpinned', "verouderd — regel gewijzigd" — see reanchor.go):
-// commentUnder's "unknown anchor → always shown within this block" leniency
-// (RelatedPanel.mjs) then surfaced it under EVERY unit of the block, not just
-// the one it was originally about.
+// (anchorState 'unpinned', "verouderd — regel gewijzigd" — see reanchor.go).
 //
-// Fix: such a comment is now ALWAYS folded behind the SAME "N hierboven" hint
-// (hiddenAboveCount/moreAboveHint) a real comment above the cursor already
-// gets, reachable only through that hint (or an explicit ↑ once inside the
-// panel) — never shown at rest. → also skips it as a default landing, the
-// same way it already skips an already-resolved comment. The one place it
-// still renders normally (field-reduced: avatar/name/label/title only, never
-// the body/meta line) is compactConversation, when it happens to sit BELOW a
-// real, non-stale comment on the SAME unit — it never reorders ahead of one.
-// The expanded thread (once reached via the hint) is untouched.
+// Fix (part 1): such a comment is now ALWAYS folded behind the SAME
+// "N hierboven" hint (hiddenAboveCount/moreAboveHint) a real comment above the
+// cursor already gets, reachable only through that hint (or an explicit ↑
+// once inside the panel) — never shown at rest. → also skips it as a default
+// landing, the same way it already skips an already-resolved comment. The one
+// place it still renders normally (field-reduced: avatar/name/label/title
+// only, never the body/meta line) is compactConversation, when it happens to
+// sit BELOW a real, non-stale comment on the SAME unit — it never reorders
+// ahead of one. The expanded thread (once reached via the hint) is untouched.
+//
+// Fix (part 2, later, comments-panel.md "Best-effort line matching for an
+// unpinned comment"): commentUnder's original "unknown anchor → always shown
+// within this whole block" leniency turned out too broad on a real PR — it
+// surfaced the hint under EVERY unit of the block, including ones that have
+// nothing to do with the comment. It was narrowed to a best-effort match of
+// the comment's own recorded source `line` against the SELECTED unit's real
+// line range (lineMatchesUnit) — so the comment is now only "in scope" (and
+// thus only foldable/reachable) on the unit whose line range it actually
+// falls in, not on every unit of the block.
 //
 // PR 970601 (materializeStaleAnchorWorktrees, tests/_setup.mjs): one method
 // with three separate single-line change groups, $a/$b/$c. One 'unpinned'
-// comment is pre-seeded (staleanchor-comments.json — anchor_state is
+// comment is pre-seeded (staleanchor-comments.json — anchorState is
 // unreachable from the UI, so it must be seeded, same reasoning as the
-// orphan fixture) with no real row (rowStart/rowEnd -1), so it stays
-// "reachable from every unit" per commentUnder's leniency. The spec places
-// one ordinary, REAL comment on $b's own group through the composer.
+// orphan fixture) with no real row (rowStart/rowEnd -1) but a recorded `line`
+// that lands on $a's own line — so it is only ever "in scope" there, never
+// on $b/$c. The spec places one ordinary, REAL comment on $a's own group
+// (the SAME unit as the stale one) through the composer.
 test.describe('PR Review Tree — a stale (unpinned) comment stays folded behind the ▲ hierboven hint', () => {
-  test('folded at rest on a unit with no real comment, visible (reduced) below a real one, folded again past it', async ({
+  test('folded at rest on its own unit, visible (reduced) below a real one there, absent on unrelated units', async ({
     page,
   }) => {
     test.setTimeout(60000) // a full reload + several navigation steps, comfortably over the 30s default
@@ -48,10 +56,23 @@ test.describe('PR Review Tree — a stale (unpinned) comment stays folded behind
     // → must not land straight on the folded stale comment either.
     await page.keyboard.press('ArrowRight')
     await expect(page.getByTestId('related-code')).toBeVisible() // skipped to Underlying code (none here → the empty-state card)
-    await page.keyboard.press('ArrowLeft') // back to the diff
+    await page.keyboard.press('ArrowLeft') // back to the diff, still on group $a
 
-    // --- Group $b: place a REAL comment through the ordinary composer. ---
-    await page.keyboard.press('ArrowDown') // group $a -> $b
+    // --- Groups $b and $c: unrelated to the stale comment's own line — the
+    // best-effort line match must leave it out of scope entirely there, not
+    // just folded: no hint, no card, nothing to fold in the first place. This
+    // is the part that changed — before, the same "1 hierboven" as on $a
+    // showed here too. ---
+    await page.keyboard.press('ArrowDown') // $a -> $b
+    await expect(inlineComments.getByTestId('comment-item')).toHaveCount(0)
+    await expect(hint).toHaveCount(0)
+    await page.keyboard.press('ArrowDown') // $b -> $c
+    await expect(inlineComments.getByTestId('comment-item')).toHaveCount(0)
+    await expect(hint).toHaveCount(0)
+    await page.keyboard.press('ArrowUp') // $c -> $b
+    await page.keyboard.press('ArrowUp') // $b -> $a, back where the stale comment lives
+
+    // --- Group $a: place a REAL comment on the SAME unit through the ordinary composer. ---
     await page.keyboard.press('Enter') // block command palette
     await page.getByTestId('command-row').filter({ hasText: 'Comment op deze regel' }).click()
     const composer = page.getByTestId('comment-compose')
@@ -73,12 +94,11 @@ test.describe('PR Review Tree — a stale (unpinned) comment stays folded behind
       await page.locator('[data-idx="0"]').click()
       await leaveSearchBox(page)
       await page.keyboard.press('ArrowRight') // list -> diff, group $a again
-      await page.keyboard.press('ArrowDown') // -> group $b
 
       // Both comments are "in scope" (the real one matches the row, the
-      // stale one is always reachable from every unit) — nothing is folded
-      // because the real comment (older) sorts before the stale one, so
-      // there is no LEADING stale run.
+      // stale one best-effort-matches its own recorded line, which is $a's)
+      // — nothing is folded because the real comment (older) sorts before
+      // the stale one, so there is no LEADING stale run.
       const items = inlineComments.getByTestId('comment-item')
       await expect(items).toHaveCount(2)
       await expect(page.getByTestId('comment-more-above')).toHaveCount(0)
@@ -100,16 +120,19 @@ test.describe('PR Review Tree — a stale (unpinned) comment stays folded behind
       await expect(staleCard).not.toContainText('Dit verwijst naar')
       await expect(staleCard).not.toContainText('$b = 0;')
 
-      // --- Group $c: no real comment here — back to fully folded, even
-      // though the reviewer was just standing on $b, which had one visible. ---
-      await page.keyboard.press('ArrowDown') // group $b -> $c
+      // --- Group $b: still fully out of scope — a real comment existing
+      // elsewhere in the block (on $a) must not pull the stale one into scope
+      // here too. ---
+      await page.keyboard.press('ArrowDown') // group $a -> $b
       await expect(inlineComments.getByTestId('comment-item')).toHaveCount(0)
-      await expect(page.getByTestId('comment-more-above')).toContainText('1 hierboven')
+      await expect(page.getByTestId('comment-more-above')).toHaveCount(0)
       await expect(page.getByTestId('claude-chat-column')).toHaveCount(0)
 
-      // The hint is still a real, clickable route to the stale comment — it
-      // expands to the ordinary, UNREDUCED thread once reached this way.
-      await page.getByTestId('comment-more-above').click()
+      // --- Back on group $a: clicking the reduced stale card still expands
+      // it to the ordinary, UNREDUCED thread — the fold only reduces its
+      // AT-REST appearance, never what it shows once actually opened. ---
+      await page.keyboard.press('ArrowUp') // $b -> $a
+      await staleCard.click()
       const expandedCard = inlineComments.locator('[data-testid="comment-item"][data-expanded="true"]')
       await expect(expandedCard).toHaveCount(1)
       await expect(expandedCard).toContainText('Dit verwijst naar een regel die inmiddels is verschoven')

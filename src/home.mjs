@@ -10197,6 +10197,17 @@ function commentScope() {
     rowStart: t.rowStart,
     rowEnd: t.rowEnd,
     seg: t.seg,
+    // The unit's real source line range on BOTH sides (see unitLineRange/
+    // unitBothLineRanges) — RelatedPanel.commentUnder's only way to
+    // best-effort scope an unpinned/never-anchored comment (rowStart -1) to
+    // one specific unit instead of every unit of the block, since its own
+    // aligned row is gone but its recorded `line` (see createComment) still
+    // is not. See "Best-effort line matching for an unpinned comment" in
+    // comments-panel.md.
+    oldStartLine: t.oldStartLine,
+    oldEndLine: t.oldEndLine,
+    newStartLine: t.newStartLine,
+    newEndLine: t.newEndLine,
   }
 }
 

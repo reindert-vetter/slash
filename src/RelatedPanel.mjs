@@ -397,11 +397,27 @@ export function setCommentScope(scope) {
 // same row as t (a group/multi-line comment stays reachable from its own FIRST
 // row, e.g. after narrowing from group to line granularity — its rows all carry
 // a 💬 marker, see commentRowSet, so it must not become unreachable there);
-// and — when BOTH t and c are a single 'call' segment — the same call (seg). A
-// comment with an unknown anchor (rowStart < 0: legacy/seeded) is always shown
-// within its block. Deliberately NOT plain overlap: a wide comment must not
-// surface under every row it happens to span, only under its start row (which
-// is where the reviewer anchored it).
+// and — when BOTH t and c are a single 'call' segment — the same call (seg).
+// Deliberately NOT plain overlap: a wide comment must not surface under every
+// row it happens to span, only under its start row (which is where the
+// reviewer anchored it).
+//
+// A comment with an unknown anchor (rowStart < 0) has no aligned row left to
+// contain, so the containment check above cannot run. Two different cases:
+// - **`isStaleAnchor(c)`** (`anchorState === 'unpinned'`, reanchor.go): it
+//   USED TO have a real row and lost it. It still carries the real source
+//   `line` it once anchored on (see createComment/commentTarget's
+//   startLine), so this falls through to `lineMatchesUnit`, a best-effort
+//   match of that line against unit `t`'s own real line range. Reindert, on
+//   an unpinned comment's "N hierboven" hint showing on every unrelated unit
+//   of the block: "best-effort matchen op regel 157" — see "Best-effort line
+//   matching for an unpinned comment" in comments-panel.md.
+// - Every other rowStart < 0 comment (never anchored to any row in the first
+//   place — a genuinely block-level comment, or a test fixture seeding a
+//   plain `rowStart: -1` placeholder) keeps the ORIGINAL "shown within every
+//   unit of this block" leniency: unlike an unpinned comment, its `line`
+//   never meant "the exact row this was about" to begin with, so there is
+//   nothing to best-effort match against.
 //
 // The seg check is deliberately limited to a comment that is ITSELF anchored on
 // a call segment, because the filter is CONTAINMENT — call ⊂ line ⊂ group (see
@@ -415,10 +431,52 @@ export function setCommentScope(scope) {
 // granularity is exactly where a reviewer lands when approving that call, so
 // this was the one granularity that hid a comment anchored on its own row.
 function commentUnder(c, t) {
-  if (c.rowStart == null || c.rowStart < 0) return true
+  if (c.rowStart == null || c.rowStart < 0) return isStaleAnchor(c) ? lineMatchesUnit(c, t) : true
   if (c.rowStart !== t.rowStart && (c.rowStart < t.rowStart || c.rowEnd > t.rowEnd)) return false
   if (t.gran === 'call' && c.gran === 'call') return c.seg === t.seg
   return true
+}
+
+// LINE_MATCH_SLACK — a small tolerance (in source lines) for lineMatchesUnit
+// below. The comment's own recorded `line` was exact AT THE TIME it was
+// placed; by the time its row can no longer be re-found (isStaleAnchor), the
+// file has moved on, so an EXACT containment check would reject a unit that
+// is still, in practice, "the same spot" (Reindert: "matchen op regel 157
+// (ongeveer)"). 2 is deliberately small — just enough to absorb the kind of
+// off-by-a-line drift a nearby edit causes, not enough to reattach a comment
+// to a genuinely different part of the function.
+const LINE_MATCH_SLACK = 2
+
+// lineMatchesUnit reports whether line `n` falls (within LINE_MATCH_SLACK)
+// inside the [start, end] range — false when the range itself is unknown
+// (0/0, that side has no rows in the unit — see unitBothLineRanges) or `n`
+// isn't a real line number.
+function lineWithin(n, start, end) {
+  return !!n && !!start && !!end && n >= start - LINE_MATCH_SLACK && n <= end + LINE_MATCH_SLACK
+}
+
+// lineMatchesUnit — the best-effort scoping for a comment whose own aligned
+// row is gone (rowStart < 0: unpinned by reanchor.go, or legacy/seeded with
+// none recorded at all). It has no row to contain any more, but it still
+// carries the real source `line` it was placed on (see createComment/
+// commentTarget's startLine) — this matches that line against unit t's own
+// real line range, on EITHER side (t.oldStartLine/oldEndLine or
+// t.newStartLine/newEndLine — c.line's own side isn't recorded, see
+// createComment, so both are tried).
+//
+// Two deliberate escape hatches back to "show at every unit", both matching
+// the PRE-existing behavior for a case this can't meaningfully scope:
+// - `t` carries no line-range info at all (every one of the four fields is
+//   0) — commentTarget's own "block has no navigable unit" fallback, where
+//   there is no real per-unit line range to compare against either.
+// - `c.line` itself is falsy — a genuinely legacy/seeded comment recorded
+//   with no source line at all has nothing to best-effort match against.
+function lineMatchesUnit(c, t) {
+  if (!t.oldStartLine && !t.oldEndLine && !t.newStartLine && !t.newEndLine) return true
+  if (!c.line) return true
+  return (
+    lineWithin(c.line, t.oldStartLine, t.oldEndLine) || lineWithin(c.line, t.newStartLine, t.newEndLine)
+  )
 }
 
 // recomputeView derives the visible list from cs.list + cs.scope and reassigns
@@ -524,10 +582,11 @@ function expandedCommentIndex() {
 // nooit standaard zichtbaar zijn naast de diff, ook niet als ik nog niet
 // naar de comments genavigeerd ben; hij mag alleen verscholen zitten achter
 // het bestaande 'N hierboven'-label". An unpinned comment's row is unknown
-// (see reanchor.go), so commentUnder keeps it reachable from EVERY unit of
-// its block (see commentUnder's own doc comment) — without this fold it would
-// sit there in full, at rest, on a line that has nothing to do with it (the
-// reported bug). Only a LEADING run: a stale comment that isn't first in
+// (see reanchor.go), so commentUnder falls back to a best-effort match on its
+// recorded source line (see lineMatchesUnit) rather than row containment —
+// without this fold it would sit there in full, at rest, on whichever unit
+// that best-effort match happens to land on (the reported bug). Only a
+// LEADING run: a stale comment that isn't first in
 // visibleComments() already sits below whatever real comment came before it
 // and keeps rendering as an ordinary (if field-reduced, see
 // compactConversation) card — see "A stale (unpinned) comment is always

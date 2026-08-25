@@ -468,7 +468,9 @@ literally unknown (`rowStart`/`rowEnd` both `-1`, see reanchor.go), so it
 matched every unit of its block, not just the one it once hung on.
 
 That leniency is still needed — an unpinned comment must stay reachable
-*somewhere* — so the fix does not remove it. Instead it reuses the **existing**
+*somewhere* — so the fix does not remove it (it was narrowed later, from
+"every unit" to a best-effort line match — see "Best-effort line matching for
+an unpinned comment" below). Instead it reuses the **existing**
 "cards above the cursor are hidden behind a hint" mechanism
 (`hiddenAboveCount`/`moreAboveHint`, "The selected conversation hides the ones
 above it" elsewhere in this file) rather than inventing a second UI: a stale
@@ -544,6 +546,63 @@ Test: `tests/comment-stale-anchor-fold.spec.mjs` (fixture PR 970601,
 `materializeStaleAnchorWorktrees`/`staleanchor-comments.json` — `anchorState`
 is unreachable from the UI, same reasoning as the orphan fixture above, so
 this one is seeded too).
+
+### Best-effort line matching for an unpinned comment
+
+The previous section's leniency ("an unpinned comment's row is unknown, so it
+matched every unit of its block") turned out too broad on a real PR (13521):
+an unpinned comment placed on one line of `ImportSubscriptionStatsFlow::run`
+showed its "▲ 1 hierboven" hint on **every** change group of that function,
+including ones with nothing to do with it — reported directly from a
+screenshot. Reindert's own framing of the fix: "best-effort matchen op regel
+157 (ongeveer)" — not "never show an unpinned comment in diff mode" (that
+would make it reachable only via `list` mode, a bigger behavior change than
+asked for) and not "always show it on the first/coarsest group" either.
+
+- **`commentScope()`** (`home.mjs`) now also forwards `commentTarget()`'s
+  `oldStartLine`/`oldEndLine`/`newStartLine`/`newEndLine` — the selected
+  unit's own real source line range on **both** sides (see
+  `unitBothLineRanges`), alongside the existing `rowStart`/`rowEnd`/`seg`
+  triplet. This is the only thing `RelatedPanel` couldn't already derive
+  itself: it only ever receives `cs.scope`, not `home.mjs`'s `state`.
+- **`commentUnder(c, t)`** (`RelatedPanel.mjs`), for a comment with an
+  unknown anchor (`c.rowStart < 0`), **only** narrows to a best-effort line
+  match when the comment is specifically `isStaleAnchor(c)`
+  (`anchorState === 'unpinned'` — it USED TO have a real row and the
+  re-anchor pass lost it). It then falls through to
+  **`lineMatchesUnit(c, t)`**, which compares the comment's own recorded
+  `line` (the real source line it was placed on — see
+  `createComment`/`commentTarget`'s `startLine`, not the aligned-row
+  `rowStart` that went stale) against unit `t`'s line range on **either**
+  side (`c.line`'s own side isn't recorded, so both `old*`/`new*` are tried),
+  within a small `LINE_MATCH_SLACK` (2 lines) — enough to absorb the kind of
+  off-by-a-line drift a nearby edit causes since the comment was placed, not
+  enough to reattach it to a genuinely different part of the function. A
+  `rowStart < 0` comment that is **not** `isStaleAnchor` — never anchored to
+  any row to begin with, e.g. a genuinely block-level comment, or a test
+  fixture directly seeding a bare `rowStart: -1` — keeps the ORIGINAL
+  "shown within every unit of this block" behavior unchanged: it never had a
+  specific row to lose, so there's nothing meaningful to best-effort match
+  its `line` against (unlike an unpinned comment's `line`, which really was
+  once exact).
+- **Two escape hatches back to the old "show everywhere" behavior**, both
+  matching a case this can't meaningfully scope rather than a regression:
+  `t` itself carries no line-range info at all (all four fields `0` — the
+  same "block has no navigable unit" fallback `commentTarget` already
+  returns for a block with nothing to step through), or `c.line` itself is
+  falsy (a genuinely legacy/seeded comment with no source line recorded to
+  match against).
+- `list` mode is unaffected either way: `recomputeView` already bypasses
+  `commentUnder` entirely there (`s.mode !== 'diff'` branch), same as before
+  this change.
+- Unaffected: what happens once the hint IS visible. ↑ or a click on
+  "N hierboven" still expands the comment exactly as before — this only
+  changes on which unit(s) the hint appears in the first place.
+
+Test: extended into `tests/comment-stale-anchor-fold.spec.mjs` (same PR
+970601 fixture — its seeded unpinned comment's recorded `line` lands on
+group `$a`'s own line, so the spec now also asserts it stays OUT of scope
+entirely on `$b`/`$c`, not just folded).
 
 ### No more explicit Annuleer button
 
