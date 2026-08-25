@@ -1585,14 +1585,15 @@ class AdditionsOnlyAction
 }
 
 // materializeCategoryOrderWorktrees writes the base/head worktrees for the
-// per-category "most left to approve first, TEST always last" ordering
-// fixture (PR 125, tests/index-category-order.spec.mjs — see "de type met de
-// meeste te approven bovenaan" in .claude/docs/blocks-and-ingest.md). Four
-// blocks (tests/fixtures/categoryorder-blocks.json), each a real, fully
-// changed-line diff so /api/blockstats reports an exact, predictable
-// remaining count per category: CONFIG=4, WORKFLOW=3, PROVIDER=1, TEST=6 —
-// deliberately the HIGHEST of the four, to prove TEST still sorts last even
-// though it has the most left to approve of any category here.
+// "most underlying blocks first, TEST always last" left-list ordering fixture
+// (PR 125, tests/index-category-order.spec.mjs — see "Sort order of the left
+// list" in .claude/docs/blocks-and-ingest.md). Four top-level blocks
+// (tests/fixtures/categoryorder-blocks.json), each with its own small,
+// distinct number of relation children (tests/fixtures/categoryorder-
+// relations.json, one trivial "Helper<CAT><n>" block per child): WORKFLOW=3,
+// PROVIDER=2, CONFIG=1, TEST=5 — deliberately the HIGHEST of the four, to
+// prove TEST still sorts last even though it has the most underlying blocks
+// of any file here.
 function materializeCategoryOrderWorktrees() {
   const write = worktreeWriter(125)
   const config = (a, b, c, d) => `<?php
@@ -1666,4 +1667,38 @@ class BigTest
     'tests/Feature/BigTest.php',
     bigTest('head-1', 'head-2', 'head-3', 'head-4', 'head-5', 'head-6'),
   )
+
+  // One trivial helper class per relation child (categoryorder-relations.json)
+  // — a real, one-line diff each, just enough for the Onderliggende-code
+  // subtree to resolve; their own content doesn't matter for this fixture.
+  const helper = (cls, v) => `<?php
+
+namespace App\\Support;
+
+class ${cls}
+{
+    public function help()
+    {
+        $v = '${v}';
+    }
+}
+`
+  const helperClasses = [
+    'HelperCONF1',
+    'HelperWORK1',
+    'HelperWORK2',
+    'HelperWORK3',
+    'HelperPROV1',
+    'HelperPROV2',
+    'HelperTEST1',
+    'HelperTEST2',
+    'HelperTEST3',
+    'HelperTEST4',
+    'HelperTEST5',
+  ]
+  for (const cls of helperClasses) {
+    const file = `app/Support/${cls}.php`
+    write('base', file, helper(cls, 'base'))
+    write('head', file, helper(cls, 'head'))
+  }
 }

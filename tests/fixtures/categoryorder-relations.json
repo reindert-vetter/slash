@@ -1,0 +1,68 @@
+[
+  {
+    "pr": 125,
+    "parentId": "125:config/settings.php:::settings.php",
+    "childId": "125:app/Support/HelperCONF1.php:HelperCONF1::help",
+    "kind": "event_listener"
+  },
+  {
+    "pr": 125,
+    "parentId": "125:app/Workflows/SyncWorkflow.php:SyncWorkflow::run",
+    "childId": "125:app/Support/HelperWORK1.php:HelperWORK1::help",
+    "kind": "event_listener"
+  },
+  {
+    "pr": 125,
+    "parentId": "125:app/Workflows/SyncWorkflow.php:SyncWorkflow::run",
+    "childId": "125:app/Support/HelperWORK2.php:HelperWORK2::help",
+    "kind": "event_listener"
+  },
+  {
+    "pr": 125,
+    "parentId": "125:app/Workflows/SyncWorkflow.php:SyncWorkflow::run",
+    "childId": "125:app/Support/HelperWORK3.php:HelperWORK3::help",
+    "kind": "event_listener"
+  },
+  {
+    "pr": 125,
+    "parentId": "125:app/Providers/EventServiceProvider.php:EventServiceProvider::boot",
+    "childId": "125:app/Support/HelperPROV1.php:HelperPROV1::help",
+    "kind": "event_listener"
+  },
+  {
+    "pr": 125,
+    "parentId": "125:app/Providers/EventServiceProvider.php:EventServiceProvider::boot",
+    "childId": "125:app/Support/HelperPROV2.php:HelperPROV2::help",
+    "kind": "event_listener"
+  },
+  {
+    "pr": 125,
+    "parentId": "125:tests/Feature/BigTest.php:BigTest::it_does_a_lot",
+    "childId": "125:app/Support/HelperTEST1.php:HelperTEST1::help",
+    "kind": "event_listener"
+  },
+  {
+    "pr": 125,
+    "parentId": "125:tests/Feature/BigTest.php:BigTest::it_does_a_lot",
+    "childId": "125:app/Support/HelperTEST2.php:HelperTEST2::help",
+    "kind": "event_listener"
+  },
+  {
+    "pr": 125,
+    "parentId": "125:tests/Feature/BigTest.php:BigTest::it_does_a_lot",
+    "childId": "125:app/Support/HelperTEST3.php:HelperTEST3::help",
+    "kind": "event_listener"
+  },
+  {
+    "pr": 125,
+    "parentId": "125:tests/Feature/BigTest.php:BigTest::it_does_a_lot",
+    "childId": "125:app/Support/HelperTEST4.php:HelperTEST4::help",
+    "kind": "event_listener"
+  },
+  {
+    "pr": 125,
+    "parentId": "125:tests/Feature/BigTest.php:BigTest::it_does_a_lot",
+    "childId": "125:app/Support/HelperTEST5.php:HelperTEST5::help",
+    "kind": "event_listener"
+  }
+]

@@ -418,89 +418,100 @@ correct).
 
 ### Sort order of the left list
 
-`categoryRank` in `recomputeLeftList` (`home.mjs`): not ingest/source order but
-category priority — **ROUTE** first (the root of the
-route→controller→request/resource/model hierarchy), then **CONTROLLER**, then
-everything else, and **relation children after everything** (the "Onderliggende
-code" section at the bottom, see `recomputeLeftList`/`state.underlyingIds` in
-`.claude/docs/underlying-code.md`).
+`recomputeLeftList` (`home.mjs`) sorts by `rank(b)`, built right before the
+sort call. Three bands, ascending: ordinary (non-TEST) blocks first — see
+"most underlying blocks first" below — then TEST (fixed `2.39`), then
+**relation children after everything** (rank `3`, the "Onderliggende code"
+section at the bottom, see `recomputeLeftList`/`state.underlyingIds` in
+`.claude/docs/underlying-code.md`). A comment-index item sits in its own
+sub-bands around these (`-2` mentioned, `2.4` orphan/PR-wide, `2.5`
+line-anchored — see `commentBlockItem`'s own doc comment).
 
 The sort happens **after** the existing filters (resolved-call targets, search
-term) and is a **stable** sort, so within a rank the original order stays intact.
-That is what makes it safe for `sameFileNeighbour`/`stepBlock` (the same-file
-connector + `↑`/`↓` flow-through, see `.claude/docs/keyboard-navigation.md`):
-those look only at the direct index neighbour in `state.blocks`, and since
-`classify.go` derives the category from the file path, all blocks from one file
-share a category and thus a rank — the stable sort keeps them together.
-`sel`/refresh restore is unaffected (it looks up by block id/`file:line`, not
-index).
+term) and is a **stable** sort, so within a rank the original order stays
+intact. That is what makes it safe for `sameFileNeighbour`/`stepBlock` (the
+same-file connector + `↑`/`↓` flow-through, see
+`.claude/docs/keyboard-navigation.md`): those look only at the direct index
+neighbour in `state.blocks`, so an ordinary block's rank is deliberately keyed
+on its **file**, never on the block itself — see below. `sel`/refresh restore
+is unaffected (it looks up by block id/`file:line`, not index).
 
-### Within the "everything else" band: the category with the most left to approve sorts first, TEST always last
+**Historical note:** this used to be a fixed Laravel-hierarchy category
+priority (ROUTE first, then CONTROLLER, then everything else ordered by how
+much of that category was still left to approve). Both the fixed
+ROUTE/CONTROLLER tiers and the "most left to approve" heuristic were dropped
+(2026-08-25, reviewer request: "ik wil daar niet meer naar kijken, kijk naar
+de aantal onderliggende blokken") in favor of the ranking below. TEST always
+sorting last is the one part of the old behavior that was kept unchanged.
 
-Reviewer request: "behalve test blokken (die moeten altijd laatste staan), wil
-ik de type met de meeste te approven bovenaan hebben." ROUTE/CONTROLLER keep
-their fixed rank 0/1 above this untouched — this only reorders the flat rank-2
-band (everything else) that used to stay in plain ingest order.
+### Ordinary blocks sort by "most underlying blocks first", per FILE, TEST always last
+
+Reviewer request: "kijk naar het aantal onderliggende blokken. hoe meer, hoe
+verder naar boven" — for every ordinary (non-TEST) block. TEST still always
+sorts last regardless of its own count, unchanged from before.
 
 `recomputeLeftList` computes this per recompute call, right before building
 `rank`:
 
-- **`categoryRemaining`** sums, per category, `blockApproveCount(b).total -
-  blockApproveCount(b).done` over every row in that rank-2 band (excluding
-  "Onderliggende code" children — rank 3 — and excluding TEST, see below).
-  **Deliberately the OWN-block count (`blockApproveCount`: a block's own
-  rows, or a `test_class` row's own methods — never its Onderliggende-code
-  subtree), never the subtree total shown in the sidebar pill
-  (`subtreeApproveCount`/`state.approvalSummaries`).** A subtree sum can
-  double-count a descendant shared by several top-level rows — exactly the
-  bug that inflated the PR-wide total on PR 13255 (10210/10742 instead of the
-  real 1831/1856, see `prWideApproveTotal`'s own comment and "Combined
-  approval per tree" in `.claude/docs/approval.md`). Summing subtree counts
-  per category here would reintroduce that same overcounting one level up.
-  **Don't "fix" this to the subtree variant.**
-- **`categoryOrder`** sorts those category names descending by
-  `categoryRemaining` — a stable `Array.prototype.sort`, so two categories
-  tied on remaining keep their existing relative order (no alphabetical
-  tie-break).
-- **`midRank(cat)`** maps a rank-2 category onto a fractional value in
-  `(2, 2.3)` — the category with the most left to approve gets the lowest
+- **`fileUnderlyingCount`** sums, per **file** (not per block, and not per
+  category — the fixed ROUTE/CONTROLLER tiers are gone), `nestedPrBlocks(b)
+  .length` over every ordinary top-level block in that file (excluding
+  "Onderliggende code" children — rank 3 — and excluding TEST). `nestedPrBlocks`
+  is the same helper `subtreeApproveCount` uses for the sidebar pill: it walks
+  the full recursive "Onderliggende code" subtree (children, their children,
+  …), not just direct children.
+- **Grouped per FILE, not per individual block**, for the same reason the old
+  category grouping kept a file's blocks together: `sameFileNeighbour`/
+  `stepBlock` only look at the immediate index neighbour in `state.blocks`, so
+  ranking every block individually could split one file's own functions apart
+  whenever they differ in underlying-block count — silently breaking that
+  navigation. Summing per file and sorting FILES (blocks within a file keep
+  their existing stable relative order) keeps a file's blocks contiguous.
+- Deliberately **not** deduplicated across files: a descendant shared by
+  several top-level blocks can be counted more than once, in more than one
+  file's sum. Accepted — unlike the old `categoryRemaining`'s own-block-only
+  choice (which existed specifically to avoid inflating a real number shown to
+  the reviewer, see "Combined approval per tree" in `.claude/docs/approval.md`
+  and the PR 13255 overcounting bug referenced there), this only drives a
+  ranking, never a displayed total.
+- **`fileOrder`** sorts those file paths descending by `fileUnderlyingCount` —
+  a stable `Array.prototype.sort`, so two files tied on their count keep their
+  existing relative order (no alphabetical tie-break).
+- **`fileRank(file)`** maps an ordinary file onto a fractional value in
+  `(0, 2.3)` — the file with the most underlying blocks gets the lowest
   fractional value, so the ascending sort below puts it first — safely below
-  the comment ranks (2.4/2.5) and "Onderliggende code" (3). **`TEST` gets a
+  the comment ranks (2.4/2.5) and "Onderliggende code" (3). **TEST gets a
   fixed `2.39`**, i.e. it never competes on its own count and always sorts
-  last among the rank-2 rows, regardless of how much of it is left to
-  approve — the explicit "test blokken altijd laatste" instruction, no longer
-  merely a side effect of `groupTestClasses` partitioning TEST rows to the
-  end of the array before this sort runs.
-- A category with **zero** remaining (fully approved) sorts naturally to the
-  bottom of this band (the lowest `categoryRemaining` value), still **above**
-  TEST — TEST's own count is irrelevant to where it sits, by design.
+  last, regardless of how many underlying blocks it has.
+- A file with **zero** underlying blocks (the common case — most files have
+  no relation children at all) sorts naturally to the bottom of this band,
+  still **above** TEST.
 
 **This only reshuffles at the existing `recomputeLeftList` trigger points**
 (the initial load, `loadRelations`/`loadCallResolve`/`loadTestCovers`, and the
 `indexComments()` watch — which also fires on the comments panel's own ~5s
-poll tick, see `RelatedPanel.mjs`) — **no new call site was added on the
-approve path**, by explicit reviewer decision: re-sorting on every single
-approve click would reshuffle the index while the reviewer is mid-review, and
-`toggleBlockApproval`/`toggleApprove`/`toggleCallApprove` are exactly where a
-parallel performance investigation (approve while deeply drilled) was active
-at the time this landed. In practice the ambient ~5s comment poll means the
-order still catches up fairly quickly after an approve — that cadence is a
-pre-existing side effect, not something wired to approve specifically. Test:
-`tests/index-category-order.spec.mjs` (PR 125, `materializeCategoryOrderWorktrees`
-in `_setup.mjs` — four blocks with real, exactly-known remaining counts:
-CONFIG=4, WORKFLOW=3, PROVIDER=1, TEST=6, TEST deliberately the highest of the
-four to prove it still sorts last).
+poll tick, see `RelatedPanel.mjs`). Since the ranking no longer depends on
+approval state at all, approving a block never moves anything in this band —
+a stronger guarantee than before (the old count-based ranking specifically
+avoided reshuffling on the approve path by not calling `recomputeLeftList`
+there, see `toggleBlockApproval`/`toggleApprove`/`toggleCallApprove`; that
+same omission still holds, it's just no longer load-bearing for this reason).
+Test: `tests/index-category-order.spec.mjs` (PR 125,
+`materializeCategoryOrderWorktrees` in `_setup.mjs` — four top-level blocks,
+each with a known, distinct number of relation children via
+`categoryorder-relations.json`: WORKFLOW=3, PROVIDER=2, CONFIG=1, TEST=5, TEST
+deliberately the highest of the four to prove it still sorts last).
 
-**This category order is a display grouping only — it is deliberately NOT
+**This left-list order is a display grouping only — it is deliberately NOT
 what a fresh open lands on.** `applyDefaultUnapprovedSelection` (`home.mjs`)
 picks the first not-yet-approved ORDINARY block by `(file, line)` — plain
-file order — rather than by this array's category order, so "open a
-just-generated PR" lands on the first block of the first-changed file, not on
-whichever category (e.g. CONTROLLER) happens to rank first, and (reversed
-2026-08-20, explicit reviewer request) ahead of any unresolved PR-wide
-comment item too — a comment only wins the fresh-open pick when there is no
-unapproved ordinary block at all. See `defaultSelectionRank`'s own doc
-comment in `home.mjs` for the tie-break and the full reversal note.
+file order — rather than by this array's order, so "open a just-generated PR"
+lands on the first block of the first-changed file, not on whichever file
+happens to have the most underlying blocks, and (reversed 2026-08-20,
+explicit reviewer request) ahead of any unresolved PR-wide comment item too —
+a comment only wins the fresh-open pick when there is no unapproved ordinary
+block at all. See `defaultSelectionRank`'s own doc comment in `home.mjs` for
+the tie-break and the full reversal note.
 
 ### The HTTP layer matches on `Http/<Dir>/`, not on an `app/` prefix
 
@@ -525,10 +536,11 @@ module's own asset/lang directory, whose lang files must keep reaching the
 plain-module-file ordering guards) and `TestBuildRelationsRouteToModuleController`
 (`relations_test.go`, the whole path → category → edge chain).
 
-Consequence when this landed: a module controller/request/resource block changes
-category, so its badge and its `categoryRank` position in the left list change
-too — but only after a **re-ingest**, since `category` is stored per block row in
-`graph.db`.
+Consequence when this landed: a module controller/request/resource block
+changes category, so its badge changes too — but only after a **re-ingest**,
+since `category` is stored per block row in `graph.db`. (The left-list
+POSITION no longer depends on category at all — see "Sort order of the left
+list" above — only the badge does.)
 
 ### Module / layer / type: three optional labels from one path
 

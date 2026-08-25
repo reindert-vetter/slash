@@ -1,29 +1,27 @@
 import { test, expect } from './_fixtures.mjs'
 
-// The fixture (tests/fixtures/blocks.json) has 11 blocks. The left list sorts
-// by category priority (ROUTE first, then CONTROLLER, then everything else
-// ordered by how much of that category is still left to approve — TEST
-// always last — see categoryRank/categoryRemaining in home.mjs and "Sort
-// order of the left list" in .claude/docs/blocks-and-ingest.md); this fixture
-// has no ROUTE block, so the sole CONTROLLER (ContractController::index)
-// moves to the front. ACTION and MODEL both have exactly 1 row left to
-// approve (CreatePaymentAction::execute, Order::address) and tie — ACTION
-// wins that tie on original ingest order — while ENUM/MIGRATION/TEST all
-// have 0 left, sorting after both, TEST always last of all regardless of its
-// own count. Rows 1-2 share a file (CreatePaymentAction.php) — that adjacency
-// drives the connector test. The two GroupScopeChild blocks are relation
-// children (see tests/fixtures/relations.json + group-scope.spec.mjs): those
-// stay navigable index rows but sort to the very bottom, under the
-// "Onderliggende code" heading (recomputeLeftList's underlyingIds →
-// BlockList.mjs).
+// The fixture (tests/fixtures/blocks.json + relations.json) has 11 blocks.
+// The left list sorts by "most underlying blocks first" per FILE (TEST
+// always last, regardless of its own count — see fileUnderlyingCount/
+// fileOrder/fileRank in home.mjs and "Sort order of the left list" in
+// .claude/docs/blocks-and-ingest.md). Only CreatePaymentAction.php has any
+// relation children here (CreatePaymentAction::execute → the two
+// GroupScopeChild blocks, see tests/fixtures/relations.json +
+// group-scope.spec.mjs), so that file's two blocks (execute,
+// findOrCreateCustomer) sort to the front; every other ordinary file ties at
+// zero underlying blocks and keeps plain ingest order. Rows 0-1 sharing that
+// file drives the connector test. The two GroupScopeChild blocks are
+// themselves relation children: they stay navigable index rows but sort to
+// the very bottom, under the "Onderliggende code" heading
+// (recomputeLeftList's underlyingIds → BlockList.mjs).
 const EXPECTED_LABELS = [
-  'ContractController::index',
   'CreatePaymentAction::execute',
   'CreatePaymentAction::findOrCreateCustomer',
   'ProcessCartAction::handle',
+  'AddressType::fromString',
+  'ContractController::index',
   'Address::billingAddress',
   'Order::address',
-  'AddressType::fromString',
   'up',
   'AddressTypeTest::test_it_casts_type',
   'GroupScopeChildA::run',
@@ -59,12 +57,13 @@ test.describe('PR Review Tree — block list', () => {
     // Category tags and status glyphs show up. The status is rendered as a mark
     // (see BlockList STATUS_STYLE): modified = -/+, added = +, removed = -. The
     // coloured status span is the only element in the row with that status colour.
-    await expect(rows.nth(0)).toContainText('CONTROLLER')
+    await expect(rows.nth(0)).toContainText('ACTION')
     await expect(rows.nth(0).locator('.text-amber-600')).toHaveText('-/+') // modified
-    await expect(rows.nth(1)).toContainText('ACTION')
-    await expect(rows.nth(6)).toContainText('ENUM')
-    await expect(rows.nth(6).locator('.text-emerald-600')).toHaveText('+') // added
-    await expect(rows.nth(5).locator('.text-rose-600')).toHaveText('-') // removed
+    await expect(rows.nth(4)).toContainText('CONTROLLER')
+    await expect(rows.nth(4).locator('.text-amber-600')).toHaveText('-/+') // modified
+    await expect(rows.nth(3)).toContainText('ENUM')
+    await expect(rows.nth(3).locator('.text-emerald-600')).toHaveText('+') // added
+    await expect(rows.nth(6).locator('.text-rose-600')).toHaveText('-') // removed
     await expect(rows.nth(7)).toContainText('MIGRATION')
   })
 
@@ -72,11 +71,12 @@ test.describe('PR Review Tree — block list', () => {
     const rows = page.getByTestId('block-row')
     const highlighted = page.locator('[data-testid="block-row"].bg-indigo-50')
 
-    // Row 0 is not the fresh-open DEFAULT any more (applyDefaultUnapprovedSelection
-    // now tie-breaks by (file, line) — see "Land a fresh PR open on the first
-    // block of the first-changed file" — so CreatePaymentAction::execute, row 1,
-    // wins on this fixture); this test is about ↑/↓ traversal mechanics, not
-    // about the default pick itself, so select row 0 explicitly first.
+    // Row 0 (CreatePaymentAction::execute) happens to already be the
+    // fresh-open default here (applyDefaultUnapprovedSelection tie-breaks by
+    // (file, line) — see "Land a fresh PR open on the first block of the
+    // first-changed file" — and this is also the first-changed file); select
+    // it explicitly anyway, since this test is about ↑/↓ traversal mechanics,
+    // not about the default pick itself.
     await rows.nth(0).click()
     await expect(rows.nth(0)).toHaveClass(/bg-indigo-50/)
 
@@ -120,15 +120,15 @@ test.describe('PR Review Tree — block list', () => {
     const panel = page.getByTestId('detail-panel')
     const cards = panel.locator('article')
 
-    // Row 0 is not the fresh-open default any more (see the same comment in
-    // "arrow keys move the selection through the whole list" above) — select
-    // it explicitly so the pair below is deterministic.
+    // Select row 0 explicitly (see the same comment in "arrow keys move the
+    // selection through the whole list" above) so the pair below is
+    // deterministic.
     await page.getByTestId('block-row').nth(0).click()
 
     // Selected (0) + look-ahead (1) = two cards.
     await expect(cards).toHaveCount(2)
     await expect(cards.nth(0)).toContainText(EXPECTED_LABELS[0])
-    await expect(cards.nth(0)).toContainText('app/Http/Controllers/Api/ContractController.php:30')
+    await expect(cards.nth(0)).toContainText('app/Actions/CreatePaymentAction.php:26')
     await expect(cards.nth(1)).toContainText(EXPECTED_LABELS[1])
     // The look-ahead card is dimmed.
     await expect(cards.nth(1)).toHaveClass(/opacity-50/)
@@ -152,25 +152,20 @@ test.describe('PR Review Tree — block list', () => {
     const panel = page.getByTestId('detail-panel')
     const connector = panel.getByTestId('file-connector')
 
-    // Row 0 is not the fresh-open default any more (see the same comment in
-    // "arrow keys move the selection through the whole list" above) — select
-    // it explicitly.
-    await page.getByTestId('block-row').nth(0).click()
+    // Select row 1 (findOrCreateCustomer) explicitly (see the same comment in
+    // "arrow keys move the selection through the whole list" above).
+    await page.getByTestId('block-row').nth(1).click()
 
-    // Row 0 (ContractController, CONTROLLER-first) and row 1 (CreatePaymentAction
-    // execute) differ → no connector.
+    // Row 1 (findOrCreateCustomer) and row 2 (ProcessCartAction) differ → no
+    // connector.
     await expect(connector).toHaveCount(0)
 
-    // Rows 1 and 2 are both in CreatePaymentAction.php → connector shown.
-    await page.keyboard.press('ArrowDown')
-    await expect(connector).toHaveCount(1)
-
-    // Row 2 (findOrCreateCustomer) and row 3 (ProcessCartAction) differ → none.
-    await page.keyboard.press('ArrowDown')
-    await expect(connector).toHaveCount(0)
-
-    // Back to the same-file pair → connector reappears.
+    // Row 0 and row 1 are both in CreatePaymentAction.php → connector shown.
     await page.keyboard.press('ArrowUp')
     await expect(connector).toHaveCount(1)
+
+    // Back to row 1 (different file as its look-ahead) → connector gone again.
+    await page.keyboard.press('ArrowDown')
+    await expect(connector).toHaveCount(0)
   })
 })

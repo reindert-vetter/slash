@@ -2825,22 +2825,14 @@ function notifyFullyApprovedIfNeeded() {
 // neither side. Selection is preserved by block id so a callResolve/testCovers
 // reload (poll after a search) doesn't jump the cursor.
 //
-// categoryRank orders the left list by Laravel-hierarchy priority: ROUTE first
-// (the tree's root), then CONTROLLER, then everything else — used as a stable
-// sort key below. Blocks that share a category always come from files
-// classified the same way (classify.go derives category from the file path),
-// so blocks from the same file always land in the same rank and — because
-// Array.prototype.sort is a stable sort in modern engines — stay adjacent to
-// each other in their original (ingest/source) order within that rank. That
-// adjacency matters: sameFileNeighbour/stepBlock (the same-file connector
-// hint + ↑/↓ block-to-block flow, see keyboard-navigation.md) only look at
-// the immediate index neighbour, so splitting a file's blocks apart would
+// recomputeLeftList's rank() no longer groups by category at all (that fixed
+// ROUTE/CONTROLLER Laravel-hierarchy priority was dropped in favor of
+// fileRank/fileUnderlyingCount, see recomputeLeftList) — it groups by FILE
+// instead, for the same reason a category grouping used to give it for free:
+// sameFileNeighbour/stepBlock (the same-file connector hint + ↑/↓
+// block-to-block flow, see keyboard-navigation.md) only look at the
+// immediate index neighbour, so splitting one file's blocks apart would
 // silently break that navigation.
-function categoryRank(cat) {
-  if (cat === 'ROUTE') return 0
-  if (cat === 'CONTROLLER') return 1
-  return 2
-}
 
 // commentBlockItem turns a comment that belongs in the index (see
 // RelatedPanel.mjs's indexComments — the PR-wide ones: issue/review/
@@ -3229,7 +3221,7 @@ function testClassRowItem(file, className, methods) {
 // always grouped, even for a class with a single changed method (decision:
 // a predictable flow, no exception for the common "just one method changed"
 // case). Every group keeps its methods in the ORIGINAL relative order (stable
-// partition, mirrors categoryRank's own stable-sort reasoning) so the
+// partition, mirrors fileRank's own stable-sort reasoning) so the
 // existing same-file adjacency assumptions elsewhere are unaffected by this
 // step — grouping happens before the rank sort below, not instead of it.
 function groupTestClasses(blocks) {
@@ -3354,51 +3346,55 @@ function recomputeLeftList() {
   // groupTestClasses. Computed here, before `rank`, because the "most left
   // to approve" ordering below needs to scan this exact row set.
   const groupedRows = groupTestClasses(visibleBlocks)
-  // categoryRemaining/categoryOrder/midRank implement "de type met de meeste
-  // te approven bovenaan" (reviewer request), for the middle band of
-  // categories only — ROUTE/CONTROLLER keep their fixed, documented
-  // Laravel-hierarchy slot (rank 0/1, see categoryRank), and TEST always
-  // sorts last regardless of its own count (explicit reviewer instruction),
-  // so neither participates in this ranking.
+  // fileUnderlyingCount/fileOrder/fileRank implement "hoe meer onderliggende
+  // blokken, hoe verder naar boven" (reviewer request, replacing the earlier
+  // "meeste te approven bovenaan" heuristic AND the fixed ROUTE/CONTROLLER
+  // Laravel-hierarchy tiers — the reviewer no longer wants either as the
+  // ordering signal). TEST always sorts last regardless of its own count
+  // (explicit reviewer instruction), so it doesn't participate in this
+  // ranking.
   //
-  // "Most left to approve" is deliberately the OWN-block sum
-  // (blockApproveCount: a block's own rows, or a test_class row's own
-  // methods — never its Onderliggende-code subtree), NOT the subtree total
-  // shown in the sidebar pill (subtreeApproveCount/state.approvalSummaries).
-  // A subtree sum can double-count a descendant shared by several top-level
-  // rows — exactly the bug that inflated the PR-wide total on PR 13255
-  // (10210/10742 instead of the real 1831/1856, see prWideApproveTotal's own
-  // comment and "Combined approval per tree" in .claude/docs/approval.md).
-  // Summing subtree counts per category here would reintroduce that same
-  // overcounting one level up. Don't "fix" this to the subtree variant.
-  const categoryRemaining = {}
+  // Grouped per FILE, not per individual block: sameFileNeighbour/stepBlock
+  // (the same-file connector + ↑/↓ block-to-block flow, see
+  // keyboard-navigation.md) only look at the immediate index neighbour, so
+  // ranking every block individually could split one file's own functions
+  // apart whenever they differ in underlying-block count. Summing per file
+  // and sorting FILES (blocks within a file keep their existing stable
+  // relative order) keeps a file's blocks contiguous, exactly like the old
+  // per-category grouping did for the same reason.
+  //
+  // "Onderliggende blokken" is the full recursive subtree (nestedPrBlocks —
+  // the same helper subtreeApproveCount uses for the sidebar pill), not just
+  // direct children. A descendant shared by several top-level blocks can
+  // therefore be counted more than once across files — accepted here since
+  // this only drives a ranking, never a number shown to the reviewer
+  // (contrast the old categoryRemaining's own-block-only choice, which
+  // existed specifically to avoid inflating a real displayed total, see
+  // "Combined approval per tree" in .claude/docs/approval.md — that concern
+  // doesn't apply to a ranking).
+  const fileUnderlyingCount = {}
   for (const b of groupedRows) {
     if (childIds.has(b.id)) continue // "Onderliggende code" — rank 3, not part of this band
-    if (categoryRank(b.category) !== 2) continue // ROUTE/CONTROLLER keep their fixed slot
-    if (b.category === 'TEST') continue // always sorts last, see midRank below
-    const { done, total } = blockApproveCount(b)
-    categoryRemaining[b.category] = (categoryRemaining[b.category] || 0) + (total - done)
+    if (b.category === 'TEST') continue // always sorts last, see fileRank below
+    fileUnderlyingCount[b.file] = (fileUnderlyingCount[b.file] || 0) + nestedPrBlocks(b).length
   }
-  const categoryOrder = Object.keys(categoryRemaining).sort((a, b) => categoryRemaining[b] - categoryRemaining[a])
-  // midRank slots a middle-band category between the fixed ROUTE/CONTROLLER
-  // ranks (0/1) and everything that already sorts after rank 2 (orphan/
-  // PR-wide comments at 2.4, line-anchored comments at 2.5, "Onderliggende
-  // code" children at 3): the category with the most still-to-approve rows
-  // gets the lowest fractional value, so the ascending sort below puts it
-  // first. The 0.3 spread keeps every value in (2, 2.3), safely below 2.4.
-  // TEST gets a fixed 2.39 — still inside the old flat rank-2 band, but
-  // always the LAST middle-band category, never competing on its own count.
-  function midRank(cat) {
-    if (cat === 'TEST') return 2.39
-    const idx = categoryOrder.indexOf(cat)
+  const fileOrder = Object.keys(fileUnderlyingCount).sort((a, b) => fileUnderlyingCount[b] - fileUnderlyingCount[a])
+  // fileRank slots an ordinary (non-TEST) file's blocks into a fractional
+  // value in (0, 2.3) — safely below the comment ranks (2.4/2.5) and
+  // "Onderliggende code" (3): the file with the most underlying blocks gets
+  // the lowest fractional value, so the ascending sort below puts it first.
+  // TEST gets a fixed 2.39 — still below "Onderliggende code" (3), but always
+  // the LAST band, never competing on its own count.
+  function fileRank(file) {
+    const idx = fileOrder.indexOf(file)
     if (idx < 0) return 2
-    return 2 + (0.3 * (idx + 1)) / (categoryOrder.length + 1)
+    return (2.3 * (idx + 1)) / (fileOrder.length + 1)
   }
   const rank = (b) => {
     if (b.kind !== 'comment') {
       if (childIds.has(b.id)) return 3
-      const catRank = categoryRank(b.category)
-      return catRank === 2 ? midRank(b.category) : catRank
+      if (b.category === 'TEST') return 2.39
+      return fileRank(b.file)
     }
     if (b.lineAnchored) return 2.5
     return b.mentioned ? -2 : 2.4
@@ -4057,12 +4053,13 @@ function revealApprovedBlocks() {
 // ORDER (smallest `(file, line)`), not state.blocks' own array order —
 // reviewer request: "als ik een gegenereerde PR open, wil ik naar eerste
 // aangepaste bestand toe". state.blocks is sorted by recomputeLeftList's
-// categoryRank (ROUTE, then CONTROLLER, then everything else — see "Sort
-// order of the left list" in .claude/docs/blocks-and-ingest.md), which is a
-// DISPLAY grouping, not "where a fresh open should land"; picking the
-// array-order winner used to land on whichever category ranked first (e.g. a
-// CONTROLLER touched near the end of the diff) instead of the first block of
-// the first-changed file. Comment items (rank 1/2/3) are UNAFFECTED — their
+// fileRank (the file with the most underlying blocks first, TEST always last
+// — see "Sort order of the left list" in .claude/docs/blocks-and-ingest.md),
+// which is a DISPLAY grouping, not "where a fresh open should land"; picking
+// the array-order winner used to land on whichever file ranked first (e.g. a
+// file with many underlying blocks but touched near the end of the diff)
+// instead of the first block of the first-changed file. Comment items (rank
+// 1/2/3) are UNAFFECTED — their
 // own tie-break stays plain array/display order, exactly as before; see
 // defaultSelectionRank's own comment for why that priority must not move.
 //

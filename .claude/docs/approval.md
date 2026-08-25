@@ -558,12 +558,16 @@ were left), which is exactly the number a reviewer reads as "this PR is endless"
 per-row sum; the `state.underlyingIds` skip is not enough, it only covers the
 one case where the shared descendant is itself a top-level index row.
 
-**The same overcounting trap resurfaced one level up, for a per-CATEGORY sum:**
-the "type met de meeste te approven bovenaan" index ordering (`categoryRemaining`
-in `recomputeLeftList`, see "Within the 'everything else' band…" in
-`.claude/docs/blocks-and-ingest.md`) deliberately sums the narrow
-`blockApproveCount` (own rows only) per category rather than the subtree-inclusive
-`subtreeApproveCount`/pill value, for exactly this reason.
+**A related trap, now deliberately accepted instead of avoided, for the
+left-list ordering:** the "most underlying blocks first" index ordering
+(`fileUnderlyingCount` in `recomputeLeftList`, see "Ordinary blocks sort by
+'most underlying blocks first'…" in `.claude/docs/blocks-and-ingest.md`) sums
+`nestedPrBlocks(b).length` per FILE — a genuine subtree walk, the same one
+`subtreeApproveCount` uses — and a descendant shared by several top-level
+blocks CAN be counted more than once, in more than one file's sum. Unlike the
+UNION-based total above, this is fine here: it only drives a ranking, never a
+number shown to the reviewer, so a little imprecision from a shared
+descendant is an accepted trade-off, not a bug to fix.
 
 `renderList` **always** returns a keyed array (empty state as an array-of-one) to
 avoid the arrow.js single↔array slot pitfall (see

@@ -12,12 +12,56 @@
   },
   {
     "pr": 125,
+    "file": "app/Support/HelperCONF1.php",
+    "class": "HelperCONF1",
+    "name": "help",
+    "category": "SUPPORT",
+    "line": 7,
+    "endLine": 7,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 125,
     "file": "app/Workflows/SyncWorkflow.php",
     "class": "SyncWorkflow",
     "name": "run",
     "category": "WORKFLOW",
     "line": 9,
     "endLine": 11,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 125,
+    "file": "app/Support/HelperWORK1.php",
+    "class": "HelperWORK1",
+    "name": "help",
+    "category": "SUPPORT",
+    "line": 7,
+    "endLine": 7,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 125,
+    "file": "app/Support/HelperWORK2.php",
+    "class": "HelperWORK2",
+    "name": "help",
+    "category": "SUPPORT",
+    "line": 7,
+    "endLine": 7,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 125,
+    "file": "app/Support/HelperWORK3.php",
+    "class": "HelperWORK3",
+    "name": "help",
+    "category": "SUPPORT",
+    "line": 7,
+    "endLine": 7,
     "status": "modified",
     "side": "new"
   },
@@ -34,12 +78,89 @@
   },
   {
     "pr": 125,
+    "file": "app/Support/HelperPROV1.php",
+    "class": "HelperPROV1",
+    "name": "help",
+    "category": "SUPPORT",
+    "line": 7,
+    "endLine": 7,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 125,
+    "file": "app/Support/HelperPROV2.php",
+    "class": "HelperPROV2",
+    "name": "help",
+    "category": "SUPPORT",
+    "line": 7,
+    "endLine": 7,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 125,
     "file": "tests/Feature/BigTest.php",
     "class": "BigTest",
     "name": "it_does_a_lot",
     "category": "TEST",
     "line": 9,
     "endLine": 14,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 125,
+    "file": "app/Support/HelperTEST1.php",
+    "class": "HelperTEST1",
+    "name": "help",
+    "category": "SUPPORT",
+    "line": 7,
+    "endLine": 7,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 125,
+    "file": "app/Support/HelperTEST2.php",
+    "class": "HelperTEST2",
+    "name": "help",
+    "category": "SUPPORT",
+    "line": 7,
+    "endLine": 7,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 125,
+    "file": "app/Support/HelperTEST3.php",
+    "class": "HelperTEST3",
+    "name": "help",
+    "category": "SUPPORT",
+    "line": 7,
+    "endLine": 7,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 125,
+    "file": "app/Support/HelperTEST4.php",
+    "class": "HelperTEST4",
+    "name": "help",
+    "category": "SUPPORT",
+    "line": 7,
+    "endLine": 7,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 125,
+    "file": "app/Support/HelperTEST5.php",
+    "class": "HelperTEST5",
+    "name": "help",
+    "category": "SUPPORT",
+    "line": 7,
+    "endLine": 7,
     "status": "modified",
     "side": "new"
   }

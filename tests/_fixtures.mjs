@@ -607,12 +607,22 @@ function seed(db) {
   execFileSync(BIN, ['seed', '-db', db, '-from', 'tests/fixtures/additionsonly-blocks.json'], {
     stdio: 'ignore',
   })
-  // Per-category "most left to approve first, TEST always last" ordering
+  // "Most underlying blocks first, TEST always last" left-list ordering
   // fixture (PR 125, tests/index-category-order.spec.mjs) — worktrees
   // materialized in _setup.mjs's materializeCategoryOrderWorktrees.
-  execFileSync(BIN, ['seed', '-db', db, '-from', 'tests/fixtures/categoryorder-blocks.json'], {
-    stdio: 'ignore',
-  })
+  execFileSync(
+    BIN,
+    [
+      'seed',
+      '-db',
+      db,
+      '-from',
+      'tests/fixtures/categoryorder-blocks.json',
+      '-relations',
+      'tests/fixtures/categoryorder-relations.json',
+    ],
+    { stdio: 'ignore' },
+  )
 }
 
 function canConnect(port) {
