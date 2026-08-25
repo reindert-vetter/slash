@@ -1,0 +1,26 @@
+[
+  {
+    "pr": 128,
+    "callerId": "128:app/Actions/NewObjectFirstMethodAction.php:NewObjectFirstMethodAction::run",
+    "callKey": "MaxLengthWithoutHtml",
+    "status": "resolved",
+    "kind": "method_call",
+    "childFile": "app/Rules/MaxLengthWithoutHtml.php",
+    "childClass": "MaxLengthWithoutHtml",
+    "childMethod": "__construct",
+    "childLine": 5,
+    "childCode": "public function __construct(private int $max)\n{\n}"
+  },
+  {
+    "pr": 128,
+    "callerId": "128:app/Actions/NewObjectFirstMethodAction.php:NewObjectFirstMethodAction::run",
+    "callKey": "class_method:MaxLengthWithoutHtml",
+    "status": "resolved",
+    "kind": "class_first_method",
+    "childFile": "app/Rules/MaxLengthWithoutHtml.php",
+    "childClass": "MaxLengthWithoutHtml",
+    "childMethod": "validate",
+    "childLine": 9,
+    "childCode": "public function validate(string $attribute, mixed $value, \\Closure $fail): void\n{\n}"
+  }
+]

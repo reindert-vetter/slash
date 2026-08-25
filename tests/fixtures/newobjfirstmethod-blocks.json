@@ -1,0 +1,13 @@
+[
+  {
+    "pr": 128,
+    "file": "app/Actions/NewObjectFirstMethodAction.php",
+    "class": "NewObjectFirstMethodAction",
+    "name": "run",
+    "category": "ACTION",
+    "line": 7,
+    "endLine": 12,
+    "status": "modified",
+    "side": "new"
+  }
+]

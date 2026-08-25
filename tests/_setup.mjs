@@ -69,6 +69,39 @@ export default function globalSetup() {
   materializeAdditionsOnlyWorktrees()
   materializeStaleAnchorWorktrees()
   materializeCategoryOrderWorktrees()
+  materializeNewObjectFirstMethodWorktrees()
+}
+
+// materializeNewObjectFirstMethodWorktrees writes the synthetic PR 128
+// fixture worktree for related-new-object-first-method.spec.mjs: rule
+// 2b-bis's `class_method:` entry-point card (a plain `new Foo(...)` with no
+// chained call also shows the class's first OTHER method next to its
+// constructor — the reported Laravel validation-Rule case, see "2b-bis" in
+// .claude/docs/workflows-analysis.md) must scope to the group/line that
+// actually carries the `new Foo(...)` construction, exactly like the
+// `Foo::class` case in materializeScopeClassRefWorktrees above (same
+// two-separate-changed-groups shape): group 0 (`$unrelated`) never mentions
+// the class, group 1 (`$rule = new MaxLengthWithoutHtml(3000)`) does — the
+// unchanged `$filler` line between them splits changeGroups into two
+// independent runs.
+function materializeNewObjectFirstMethodWorktrees() {
+  const action = (unrelated, rule) => `<?php
+
+namespace App\\Actions;
+
+class NewObjectFirstMethodAction
+{
+    public function run()
+    {
+        $unrelated = ${unrelated};
+        $filler = 0;
+        $rule = ${rule};
+    }
+}
+`
+  const write = worktreeWriter(128)
+  write('base', 'app/Actions/NewObjectFirstMethodAction.php', action(0, 'null'))
+  write('head', 'app/Actions/NewObjectFirstMethodAction.php', action(1, 'new MaxLengthWithoutHtml(3000)'))
 }
 
 // materializeBlockMoveWorktrees writes the base/head worktrees for the

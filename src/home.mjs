@@ -4869,6 +4869,10 @@ function childrenOf(b) {
 // treating this as block-level, so callScopeMethods scopes them exactly like
 // an ordinary call/`class_member:`-on-a-sibling. See
 // tests/related-class-ref-entry-points-scope.spec.mjs.
+// `class_method:` alone can ALSO originate from rule 2b-bis (a plain
+// `new Foo(...)` with no chained call, see workflows-analysis.md) — same
+// non-block-level treatment, findCallSites' own `class_ctor:`/`class_method:`
+// branch just matches the `Foo(` literal too in that case.
 function isBlockLevelCallKey(name) {
   return /^(resource|migration_model|data_provider|trait_usage|class_member):/.test(name)
 }
@@ -4903,17 +4907,23 @@ function findCallSites(rows, name, spanArgs = false) {
       : new RegExp('::\\s*' + bare + '\\b', 'g')
   } else if (name.startsWith('class_ctor:') || name.startsWith('class_method:')) {
     // `class_ctor:<Class>` / `class_method:<Class>` (rule 6c-bis, a bare
-    // `Foo::class` reference's constructor/first-other-method entry points):
-    // the key names the CLASS, but that class DOES have a real literal site
-    // in the caller — the very `Foo::class` reference these two cards are
-    // entry points for (rule 6c's own `class_ref` child matches the same
-    // literal, unprefixed, via the generic branch below). Scope them to
-    // wherever that reference actually sits, like an ordinary call —
+    // `Foo::class` reference's constructor/first-other-method entry points —
+    // AND, for `class_method:` alone, rule 2b-bis's own `new Foo(...)`-with-
+    // no-chained-call origin, see workflows-analysis.md): the key names the
+    // CLASS, but that class DOES have a real literal site in the caller —
+    // either the `Foo::class` reference these cards are entry points for
+    // (rule 6c's own `class_ref` child matches the same literal, unprefixed,
+    // via the generic branch below), or a plain `new Foo(` construction
+    // (rule 2b's own constructor card matches `Foo(` the same way, via that
+    // same generic branch). Match BOTH literal forms — a `class_method:` card
+    // can originate from either rule, and a block could even carry both a
+    // `Foo::class` reference and a separate `new Foo(...)` elsewhere. Scope
+    // to wherever either reference actually sits, like an ordinary call —
     // reversed from the earlier "always block-level" exemption (see
     // isBlockLevelCallKey's own doc comment).
     const cls = name.replace(/^(class_ctor|class_method):/, '')
     const esc = cls.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    re = new RegExp('\\b' + esc + '\\s*::\\s*class\\b', 'g')
+    re = new RegExp('\\b' + esc + '\\s*::\\s*class\\b|\\b' + esc + '\\s*\\(', 'g')
   } else if (isBlockLevelCallKey(name)) {
     // A block-level synthetic key (resource:/migration_model:/data_provider:/
     // trait_usage:, see isBlockLevelCallKey) never appears as a literal

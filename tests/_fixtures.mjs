@@ -579,6 +579,24 @@ function seed(db) {
     ],
     { stdio: 'ignore', env: SEED_ENV },
   )
+  // class_method: entry-point scoping fixture for rule 2b-bis's own origin
+  // (PR 128, related-new-object-first-method.spec.mjs): a plain
+  // `new Foo(...)` with no chained call, mirroring the scopeclassref fixture
+  // above but for the `new Foo(` literal instead of `Foo::class` — see
+  // materializeNewObjectFirstMethodWorktrees (tests/_setup.mjs).
+  execFileSync(
+    BIN,
+    [
+      'seed',
+      '-db',
+      db,
+      '-from',
+      'tests/fixtures/newobjfirstmethod-blocks.json',
+      '-callresolve',
+      'tests/fixtures/newobjfirstmethod-callresolve.json',
+    ],
+    { stdio: 'ignore', env: SEED_ENV },
+  )
   // Duplicate-call-target fixture (PR 124, related-duplicate-call-target.spec.mjs):
   // two different call keys of one caller resolving to the very same definition —
   // rule 6c-bis's `class_method:Foo` entry point next to the real `->m()` call —
