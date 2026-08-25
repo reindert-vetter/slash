@@ -248,6 +248,33 @@ Rules, in order:
   would create a card that is then scoped away at every diff granularity.
   `new parent(` is not PHP and has no rule. Test:
   `TestResolveCallsConstructorSelf`.
+- **2b-bis — a `new Foo(...)` with no explicit chained call also shows the
+  class's first OTHER method,** next to its constructor, on explicit request
+  ("validate is de eerste method van MaxLengthWithoutHtml ... ik wil die dus
+  ook als onderliggende blok zien"). The reported case is a Laravel validation
+  Rule object handed straight to a `rules()` array
+  (`new MaxLengthWithoutHtml(3000)`): the framework calls the Rule's real
+  method (`validate`) through the `Rule` interface, so no call site for it
+  ever appears in the caller's own source — only the constructor was ever
+  visible, exactly rule 6c-bis's own reasoning for a bare `Foo::class`
+  reference, now extended to this shape too. Reuses `classEntryPoints`/
+  `KindClassFirstMethod`, key `class_method:<Class>` — same shape and same
+  frontend rendering as 6c-bis, no frontend change beyond scoping (below).
+  **Gated on "no explicit chained call"** (`chainedCallFollows` +
+  `closingParenIndex`, a depth-tracked matching-paren scan mirroring
+  `openParenLines`' char-scanning rules): `(new Foo)->m(` (rule 2, wrapped in
+  parens) and PHP 8's unparenthesized `new Foo()->m(` are excluded — those
+  already name the exact method in play, so a constructor + arbitrary first
+  method beside it would be noise, the same trade-off 6c-bis's own doc comment
+  argues for that shape. Not applied to `new self(`/`new static(` (the
+  caller's own class, already visible in this file) or an Eloquent model
+  (rule 2c owns that shape). Frontend scoping: `findCallSites`'
+  `class_ctor:`/`class_method:` branch (`home.mjs`) now matches **either**
+  the `Foo::class` literal (6c-bis's own origin) **or** the `Foo(`
+  constructor-call literal (this rule's origin), so the card scopes to
+  whichever form is actually in the caller's text. Tests:
+  `TestResolveCallsNewObjectFirstMethod`,
+  `TestResolveCallsNewObjectChainedCallNoFirstMethod`.
 - **2b/2c/2d — Eloquent models.** `new Foo(` on a model class explicitly
   **excludes** the constructor even when one exists (the reviewer wants the
   model, not its constructor body). `scanModels` indexes every `app/Models/`
@@ -398,9 +425,14 @@ Rules, in order:
   method** (deliberately no "then show the first two" fallback). A method the
   PR DID change is shown here anyway and additionally keeps its own row in the
   index (`resolvedCallTargetIds` skips these two kinds, like `translation`).
-  Scoped to this rule ONLY: `new Foo(...)`, model usage and an Activity stub
-  already point at the exact method in play, so a constructor + arbitrary first
-  method beside it would be noise. Both keys contain a `:`, but — reversed on
+  **Scoped to this rule and to 2b-bis's own `new Foo(...)`-with-no-chained-call
+  case (see above) — not to model usage or an Activity stub:** those already
+  point at the exact method (or model) in play, so a constructor + arbitrary
+  first method beside it would be noise. Before 2b-bis this line read "Scoped
+  to this rule ONLY", which was true until a plain `new Foo(...)` reference
+  (no chained call — the framework invokes the real method through an
+  interface, so no call site for it exists anywhere) needed the identical
+  treatment; don't re-read that as still 6c-only. Both keys contain a `:`, but — reversed on
   explicit request, 2026-08-17 — are no longer in the frontend's
   `isBlockLevelCallKey`: the caller's line holds `Foo::class`, never a call to
   the method being shown, but that IS a real literal site (the same one rule

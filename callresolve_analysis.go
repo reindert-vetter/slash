@@ -741,8 +741,31 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 		// literal in the caller's own text, and `SessionState(` appears nowhere
 		// in `new self(` — keying it by the class would make the card exist but
 		// be scoped away at every diff granularity.
-		for _, m := range reNewObj.FindAllStringSubmatch(scan, -1) {
-			key := shortName(m[1])
+		//
+		// 2b-bis. On explicit request ("validate is de eerste method van
+		// MaxLengthWithoutHtml ... ik wil die dus ook als onderliggende blok
+		// zien"): a `new Foo(...)` that is NOT immediately chained into an
+		// explicit `->method(` call also shows the class's first OTHER method
+		// next to its constructor (`class_method:<Class>`, the same
+		// `classEntryPoints`/`KindClassFirstMethod` shape rule 6c-bis uses for a
+		// bare `Foo::class` reference) — e.g. a Laravel validation Rule object
+		// handed straight to a `rules()` array (`new MaxLengthWithoutHtml(3000)`):
+		// the framework calls `validate()` on it through the `Rule` interface,
+		// so no call site for that method ever appears in the caller's own
+		// source at all, and only the constructor would otherwise be shown.
+		// Deliberately gated on "no explicit chained call" via
+		// `chainedCallFollows`/`closingParenIndex`: a construction that IS
+		// immediately chained (`(new Foo)->m(`, handled by rule 2 above; PHP 8's
+		// unparenthesized `new Foo()->m(`) already points at the exact method in
+		// play, so a constructor + arbitrary first method beside it would be
+		// noise, exactly as rule 6c-bis's own doc comment already argues for
+		// that case. Skipped for `self`/`static` (the caller's own class is
+		// already visible in this file, not reference material) and — same as
+		// the ctor emission above — never for an Eloquent model (rule 2c owns
+		// that shape).
+		for _, loc := range reNewObj.FindAllStringSubmatchIndex(scan, -1) {
+			m1 := scan[loc[2]:loc[3]]
+			key := shortName(m1)
 			class := key
 			if key == "self" || key == "static" {
 				if b.Class == "" {
@@ -756,8 +779,20 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 			if _, isModel := idx.models[class]; isModel {
 				continue
 			}
-			if def := methodOnClass(idx, class, "__construct"); def != nil {
-				emit(key, def)
+			def := methodOnClass(idx, class, "__construct")
+			if def == nil {
+				continue
+			}
+			emit(key, def)
+			if key == "self" || key == "static" {
+				continue
+			}
+			openIdx := loc[1] - 1 // the '(' this match ends on
+			if chainedCallFollows(scan, closingParenIndex(scan, openIdx)) {
+				continue
+			}
+			if _, first := classEntryPoints(idx, class, def.File); first != nil {
+				emitKind("class_method:"+class, first, callresolve.KindClassFirstMethod)
 			}
 		}
 		// 2c. new Model(...) / Model::... on an Eloquent model (app/Models/) → the
@@ -1215,10 +1250,15 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 				// its first other method — even though neither is usually
 				// changed by this PR (they are ordinary "unchanged" reference
 				// children, like a resolved call into an untouched file).
-				// Deliberately scoped to THIS rule only (a bare `Foo::class`),
-				// not to `new Foo(...)`/model usage/an Activity stub: those
-				// already point at the exact method being used, so a
-				// constructor + arbitrary first method next to it is noise.
+				// Deliberately scoped to THIS rule (a bare `Foo::class`) and to
+				// rule 2b-bis's own `new Foo(...)` case (a construction with no
+				// explicit chained call), not to model usage or an Activity
+				// stub: those already point at the exact method being used
+				// (or, for a model, at the model itself), so a constructor +
+				// arbitrary first method next to it would be noise. See rule
+				// 2b-bis above for why `new Foo(...)` needed this too — its own
+				// call-site literal can never carry a method name at all, since
+				// nothing in the caller's source calls one.
 				ctor, first := classEntryPoints(idx, class, hb.File)
 				if ctor != nil {
 					emitKind("class_ctor:"+class, ctor, callresolve.KindClassCtor)
@@ -1950,6 +1990,60 @@ func classHeaderBlockFor(idx *symbolIndex, class string) (Block, bool) {
 		return *u, true
 	}
 	return Block{}, false
+}
+
+// closingParenIndex returns the index in s of the ')' that matches the '('
+// at openIdx (depth-tracked, quoted strings opaque, a `//` line comment ends
+// the scan on that line — the same char-scanning rules as openParenLines,
+// applied to characters instead of lines) — used by rule 2b-bis to find what
+// immediately follows a `new Foo(...)` construction. -1 if unterminated
+// within s.
+func closingParenIndex(s string, openIdx int) int {
+	depth := 0
+	for c := openIdx; c < len(s); c++ {
+		switch ch := s[c]; ch {
+		case '\'', '"':
+			for c++; c < len(s); c++ {
+				if s[c] == '\\' {
+					c++
+					continue
+				}
+				if s[c] == ch {
+					break
+				}
+			}
+		case '/':
+			if c+1 < len(s) && s[c+1] == '/' {
+				for c < len(s) && s[c] != '\n' {
+					c++
+				}
+			}
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return c
+			}
+		}
+	}
+	return -1
+}
+
+// reChainedMethodCall matches an explicit `->method(` sitting right (only
+// whitespace between) after a construction's closing paren — the shape rule
+// 2b-bis excludes, since that call already names the exact method in play.
+var reChainedMethodCall = regexp.MustCompile(`^\s*->\s*[A-Za-z_]\w*\s*\(`)
+
+// chainedCallFollows reports whether an explicit method call immediately
+// follows closeIdx (the index of a construction's closing ')', as returned by
+// closingParenIndex; a negative closeIdx — an unterminated paren — is treated
+// as "no", since there is nothing reliable to check.
+func chainedCallFollows(s string, closeIdx int) bool {
+	if closeIdx < 0 || closeIdx+1 > len(s) {
+		return false
+	}
+	return reChainedMethodCall.MatchString(s[closeIdx+1:])
 }
 
 // classEntryPoints returns the two blocks that best introduce a class to a

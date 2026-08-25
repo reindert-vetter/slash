@@ -107,12 +107,25 @@ Each child is one card (`data-testid=related-item`). It follows
   card a bare `Foo::class` already produced, its `__construct`
   (`class_ctor`, badge "constructor") and its first other method
   (`class_first_method`, badge "eerste method"), see "6c-bis" in
-  `.claude/docs/workflows-analysis.md`. Both are shown **even when this PR
-  changed neither** — the header alone says too little about what a class is —
-  and both behave like an ordinary call into an unchanged file (diffstat or
-  `Ongewijzigd` badge, no index row of their own taken away: a method this PR
-  DID change keeps its own row and shows here as well). Test:
-  `tests/related-class-ref-entry-points.spec.mjs`.
+  `.claude/docs/workflows-analysis.md`. **The first-other-method card alone
+  (no `class_ctor` sibling, since rule 2b already shows the constructor)
+  also appears next to a plain `new Foo(...)` construction that has no
+  explicit chained call** — rule "2b-bis" in the same doc, reported case: a
+  Laravel validation Rule object handed straight to a `rules()` array
+  (`new MaxLengthWithoutHtml(3000)`), whose real method (`validate`) is only
+  ever invoked by the framework through the `Rule` interface, never by a
+  visible call in the caller's own source. A `(new Foo)->m(`/PHP 8's
+  unparenthesized `new Foo()->m(` — an explicit chained call — gets no such
+  card, same "already points at the exact method" reasoning as the
+  `Foo::class` case. Both origins are shown **even when this PR changed
+  neither** — the header/constructor alone says too little about what a
+  class is — and both behave like an ordinary call into an unchanged file
+  (diffstat or `Ongewijzigd` badge, no index row of their own taken away: a
+  method this PR DID change keeps its own row and shows here as well). Tests:
+  `tests/related-class-ref-entry-points.spec.mjs`,
+  `TestResolveCallsNewObjectFirstMethod`/
+  `TestResolveCallsNewObjectChainedCallNoFirstMethod`
+  (`callresolve_analysis_test.go`).
   **Scoped to the selected group/line/call like an ordinary call** (reversed
   on explicit request, 2026-08-17): both cards now only show while the
   `Foo::class` reference itself sits within the selected unit — no longer

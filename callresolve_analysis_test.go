@@ -3607,3 +3607,116 @@ final class SessionState {
 		t.Errorf("static child = %q, want SessionState::__construct", got)
 	}
 }
+
+// TestResolveCallsNewObjectFirstMethod covers rule 2b-bis: a `new Foo(...)`
+// with no explicit chained call (a Laravel validation Rule object handed
+// straight to a `rules()` array, the exact reported case) shows the class's
+// first OTHER method next to its constructor, since no call site for that
+// method — invoked only through the `Rule` interface — ever appears in the
+// caller's own source.
+func TestResolveCallsNewObjectFirstMethod(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 88
+	_, headDir := worktreeDirs(dataDir, "", pr)
+	files := map[string]string{
+		"app/Http/Requests/HeaderUpdateRequest.php": `<?php
+namespace App\Http\Requests;
+final class HeaderUpdateRequest {
+    public function rules(): array {
+        return [
+            'description' => ['nullable', 'string', new MaxLengthWithoutHtml(3000)],
+        ];
+    }
+}
+`,
+		"app/Rules/MaxLengthWithoutHtml.php": `<?php
+namespace App\Rules;
+final class MaxLengthWithoutHtml {
+    public function __construct(private int $max) {
+    }
+    public function validate(string $attribute, mixed $value, \Closure $fail): void {
+    }
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	caller := Block{PR: pr, File: "app/Http/Requests/HeaderUpdateRequest.php", Class: "HeaderUpdateRequest", Name: "rules", Side: SideNew, Status: StatusModified}
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	ctor, ok := findEntry(entries, "MaxLengthWithoutHtml")
+	if !ok {
+		t.Fatal("no entry for the constructor (call key 'MaxLengthWithoutHtml')")
+	}
+	if ctor.Kind != callresolve.KindMethodCall || ctor.ChildMethod != "__construct" {
+		t.Errorf("ctor: kind=%q method=%q, want %q/__construct", ctor.Kind, ctor.ChildMethod, callresolve.KindMethodCall)
+	}
+
+	first, ok := findEntry(entries, "class_method:MaxLengthWithoutHtml")
+	if !ok {
+		t.Fatal("no entry for class_method:MaxLengthWithoutHtml")
+	}
+	if first.Kind != callresolve.KindClassFirstMethod || first.ChildMethod != "validate" {
+		t.Errorf("first method: kind=%q method=%q, want %q/validate", first.Kind, first.ChildMethod, callresolve.KindClassFirstMethod)
+	}
+}
+
+// TestResolveCallsNewObjectChainedCallNoFirstMethod covers the exclusion half
+// of rule 2b-bis: a `new Foo(...)` that IS immediately chained into an
+// explicit method call already names the exact method in play, so no
+// `class_method:` entry point is added next to it — same reasoning as rule
+// 6c-bis's own bare-`Foo::class` exclusion for this shape.
+func TestResolveCallsNewObjectChainedCallNoFirstMethod(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 89
+	_, headDir := worktreeDirs(dataDir, "", pr)
+	files := map[string]string{
+		"app/Services/Billing.php": `<?php
+namespace App\Services;
+final class Billing {
+    public function charge(): void {
+        $result = new Invoice(100)->render();
+    }
+}
+`,
+		"app/Services/Invoice.php": `<?php
+namespace App\Services;
+final class Invoice {
+    public function __construct(private int $amount) {
+    }
+    public function render(): string {
+        return '';
+    }
+    public function other(): void {
+    }
+}
+`,
+	}
+	for rel, body := range files {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	caller := Block{PR: pr, File: "app/Services/Billing.php", Class: "Billing", Name: "charge", Side: SideNew, Status: StatusModified}
+	entries := resolveCalls(dataDir, pr, []Block{caller})
+
+	if _, ok := findEntry(entries, "Invoice"); !ok {
+		t.Fatal("no entry for the constructor (call key 'Invoice')")
+	}
+	if _, ok := findEntry(entries, "class_method:Invoice"); ok {
+		t.Error("class_method:Invoice should not be emitted next to an explicitly chained call")
+	}
+}
