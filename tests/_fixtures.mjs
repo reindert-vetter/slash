@@ -496,15 +496,15 @@ function seed(db) {
     ],
     { stdio: 'ignore', env: SEED_ENV },
   )
-  // <class-header>-swallowed-into-sibling fixture (PR 114,
-  // related-class-header-sibling.spec.mjs): a class with a changed header PLUS
-  // a changed sibling method (ImportSubscriptionStatsFlow) — the header row
-  // must hide from the index, its member cards attach to the sibling — versus
-  // a class with ONLY a changed header (LonelyHeaderFlow), which stays
-  // visible with its own member card, unchanged from before. NoCardsFlow is
-  // the third shape: a changed header PLUS a changed sibling but NO
-  // class_member: callresolve row at all, which must ALSO stay visible (see
-  // swallowedClassHeaderIds, home.mjs).
+  // Split-class-header fixture (PR 114, related-class-header-sibling.spec.mjs):
+  // ImportSubscriptionStatsFlow is the main shape — a residual <class-header>
+  // block, a changed method `run`, and BATCH_SIZE as its own member BLOCK
+  // (splitClassHeaderMembers, phpscan.go) that `run` references, so the member
+  // must lose its index row and render as a real block child while the header
+  // keeps its own row. LonelyHeaderFlow is the no-block counterpart: an
+  // UNCHANGED constant, which is no block and stays a read-only leaf card.
+  // NoCardsFlow is a changed header PLUS a changed sibling with NO
+  // class_member: callresolve row at all — a header is never hidden any more.
   execFileSync(
     BIN,
     [

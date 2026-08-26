@@ -35,6 +35,46 @@ func extractBlockSource(path, relFile, class, name string) codeSide {
 	return codeSide{}
 }
 
+// extractBlockSourceRaw is extractBlockSource against the UNSPLIT scan
+// (scanBlocksRaw), so a class's <class-header> block still spans its whole
+// header region — members included — instead of only the residual part left
+// after splitClassHeaderMembers carved each member out into its own block.
+//
+// Only for a caller that deliberately wants that coarse region as one text:
+// the callresolve rules that scan a header for constants/properties. A caller
+// that resolves an ordinary STORED block (a method, or a member block) must
+// use extractBlockSource, or a member block's own symbol won't resolve.
+func extractBlockSourceRaw(path, relFile, class, name string) codeSide {
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return codeSide{}
+	}
+	target := name
+	if class != "" {
+		target = class + "::" + name
+	}
+	for _, b := range scanBlocksRaw(src, relFile) {
+		if b.symbol() == target {
+			return sliceLines(src, b.Line, b.EndLine)
+		}
+	}
+	return codeSide{}
+}
+
+// blockSourceRaw is blockSource against the unsplit scan — see
+// extractBlockSourceRaw.
+func blockSourceRaw(root string, def Block) codeSide {
+	path := filepath.Join(root, def.File)
+	if cs := extractBlockSourceRaw(path, def.File, def.Class, def.Name); cs.Text != "" {
+		return cs
+	}
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return codeSide{}
+	}
+	return sliceLines(src, def.Line, def.EndLine)
+}
+
 // resolveWithinWorktree cleans file (stripping any leading ../ or absolute
 // prefix) and joins it onto dir, then checks that the result both stays inside
 // dir and actually exists. Used to allow reads of files a PR didn't touch

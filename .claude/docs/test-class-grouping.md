@@ -24,7 +24,11 @@ target already does (`hidden = resolvedCallTargetIds()`) but stay untouched in
 (`coveredByChildren`, `resolvedTestCoverChildren`, drilling via `blockId`) needs
 no change. A `<class-header>` sentinel is grouped in too and gets a readable label
 in the methodes-kolom (`methodLabel` in `TestMethodsColumn.mjs`: "Class-header",
-never the raw `<class-header>` name).
+never the raw `<class-header>` name). A test class's **constants/properties** are
+blocks of the same class since `splitClassHeaderMembers` (`phpscan.go`), so they
+group in as well and show under their own name (`TENANT_ID`, `$fixtures`) — no
+special label needed, and a member referenced from a changed method of the same
+class drops out of the column like any other resolved-call target.
 
 ## `curBlock()` resolves through the active method
 

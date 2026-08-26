@@ -389,9 +389,12 @@ Rules, in order:
   via the symbol index, which by design cannot key an anonymous class. Same
   kind `const_ref`, same bare-constant call key, so the frontend needed no
   change and the card scopes to the `::NAME` line like any other reference.
-  **Skipped whenever a `<class-header>` block for that same file+class IS in
-  the PR** (`memberHostFiles`): rule 9 owns the declaration there, and two
-  cards for one declaration is worse than none. Two classes in one file
+  **Skipped whenever that file+class HAS a `<class-header>` region in the head
+  worktree** (`memberHostFiles`): rule 9 owns the declaration there, and two
+  cards for one declaration is worse than none. Deliberately the region in the
+  worktree, not the presence of a `<class-header>` BLOCK in the PR — since
+  `splitClassHeaderMembers` a class whose header holds nothing but members has
+  no such block left, while rule 9 still covers it. Two classes in one file
   declaring the same constant → **silently nothing**, like every other Go-only
   rule here. Test: `TestResolveCallsOwnClassConstRef`.
 - **6c — bare `Foo::class`.** The generic sibling of 3a2: a plain class
@@ -464,27 +467,28 @@ Rules, in order:
   (`{ A::foo insteadof B; }`) is out of v1 scope, as is a `use` after the first
   method (that text falls outside every scanned block). Call key
   `trait_usage:<trait>`; an unindexed name (vendor, typo) → nothing.
-- **9 — class members (`resolveClassMembers`).** A `<class-header>` block is one
-  coarse blob (trait uses, constants, properties — see `phpscan.go`'s
-  `classHeaderSentinel`). This rule breaks its **declared members** out into a
-  card each, so `$listen` or `MAX_TRIES` sits next to the diff as its own unit:
+- **9 — class members (`resolveClassMembers`).** A class's declared members
+  (trait uses aside) used to sit in one coarse `<class-header>` blob; since
+  `splitClassHeaderMembers` (`phpscan.go`, see
+  `.claude/docs/blocks-and-ingest.md`) **each member is a block of its own**.
+  This rule points them at the class's changed **methods** as Onderliggende
+  code, so `$listen` or `MAX_TRIES` sits next to the diff of whatever uses it:
   **every constant**, changed or not (explicitly requested — an untouched
   constant is reference material the reviewer wants to see), and **only a
   changed/added property** (an unchanged one is noise). A **removed** member is
-  never emitted: it doesn't exist on the head side, and the header's own diff
-  already shows the deletion. Changed-ness comes from comparing the same region
-  on the base worktree (`normalizeMemberText`; no base file → everything counts
-  as changed), and rides on the **kind**: `class_property` /
+  never emitted: it doesn't exist on the head side, and its own removed-side
+  block already shows the deletion. Changed-ness comes from comparing the same
+  region on the base worktree (`normalizeMemberText`; no base file → everything
+  counts as changed), and rides on the **kind**: `class_property` /
   `class_constant_changed` / `class_constant`. Call key
   `class_member:const:<NAME>` / `class_member:prop:$<name>`.
   `scanClassMembers` (`phpscan.go`) does the splitting with the same lexer
   primitives as `scanPHP`, so a `;` inside a string/comment/heredoc/bracket pair
   never ends a statement — that is what keeps a multi-line array default one
   member. Silent limits: a grouped declaration (`const A = 1, B = 2;`) is one
-  member named after the first name; a leading PHPDoc/attribute is not folded
-  into the member's text; an unterminated statement is dropped rather than
-  swallowing the rest; an enum `case X = 'x';` and a `use Trait;` match nothing
-  (the latter has rule 8). Same scope boundary rule 8 accepts: only the
+  member named after the first name; an unterminated statement is dropped rather
+  than swallowing the rest; an enum `case X = 'x';` and a `use Trait;` match
+  nothing (the latter has rule 8). Same scope boundary rule 8 accepts: only the
   `<class-header>` region is scanned, so a constant declared **after** the first
   method is silently missed. **Two known, still-open holes (separate task, do
   not assume they are covered by anything above):** a `const` declared after
@@ -493,41 +497,36 @@ Rules, in order:
   `interface` const gets no header block either (`phpscan.go`'s
   `headerEligible` excludes interfaces and anonymous classes) — in both cases
   the change is invisible in the review tree and counts in no approval total.
-  An `enum` const is fine (measured with `scanPHP`). **A member never becomes a block** — no id, no
-  approval, no row in the block index (see `.claude/docs/underlying-code.md`).
-  **The `CallerID` is the header's OWN block whenever the class has no other
-  changed block in this PR (`classSiblingIDs`) OR the header's own members
-  changed (`headerHasOwnChange`)** — only otherwise does every OTHER changed,
-  non-header top-level block of the same file/class become a caller (ALL of
-  them, when several changed, never a single "chosen" one), which is what lets
-  the `<class-header>` block's own top-level row be hidden from the index
-  (`swallowedClassHeaderIds`, `home.mjs`) — see
-  `.claude/docs/underlying-code.md`. That sibling attachment was itself a
-  reversal on explicit request (the header used to always stay visible, with
-  the members as a pure addition), and `headerHasOwnChange` now narrows it
-  back: a header whose own constant/property **changed**, or that lost a
-  member (a **removal**, which is never emitted as a card at all), keeps its
-  cards and therefore stays a visible, approvable block. Reindert: *"als een
-  php constante is aangepast, maar het kan niet als onderliggende code ergens
-  aan gekoppeld worden, laat het dan zien als losse blok wat ik moet
-  goedkeuren"* — a changed constant used only from **unchanged** code showed
-  nowhere in diff mode (the sibling card is scoped to its usage site, see the
-  frontend sharpening below) while the header block holding its one changed row
-  was hidden, so that row sat in no approval counter at all. Deliberately
-  **coarse and kind-agnostic** (constant, property and removal alike; no
-  usage-site or changed-row analysis) — predictability over a tidier index,
-  explicitly chosen over the sharper variant. Practical consequence, recorded
-  so nobody "fixes" it back: **every** header block in the store is by
-  definition a changed block, so the swallow path now rarely triggers — only
-  for a header whose change sits somewhere OTHER than in a member declaration
-  (a changed `use Trait;`, an attribute, a docblock). Measured ceiling for the
-  index noise this adds: +6-14% rows on real PRs (14 of 171 blocks on the
-  worst of the ingested PRs), which is what made the coarse rule acceptable.
-  Tests:
+  An `enum` const is fine (measured with `scanPHP`).
+  **A changed member IS a block**, so its entry composes to a real block id and
+  the panel renders it with its own diff, approval and drill-down while its
+  standalone index row is hidden as an ordinary resolved call target — an
+  unchanged constant still composes to nothing and stays the read-only leaf
+  card it always was (see `.claude/docs/underlying-code.md`).
+  **The `CallerID`s are the class's changed, non-header, non-member top-level
+  blocks — its methods** (`classSiblingIDs`, ALL of them when several changed,
+  never a single "chosen" one). Only with no such sibling do they fall back to
+  the class's own `<class-header>` block, and only if the split left one
+  (`classHeaderBlockIDs`). The rule keys off the class's changed blocks, **not**
+  off a stored `<class-header>` block, and reads the header region with
+  `extractBlockSourceRaw`: a class whose header holds nothing but members has no
+  header block left, and split, the region would only cover the part above the
+  first member.
+  **`headerHasOwnChange` is REMOVED** (with `swallowedClassHeaderIds` in
+  `home.mjs`). It existed because a member card attached to a sibling is scoped
+  to its usage site, so a changed constant referenced only from **unchanged**
+  code showed nowhere in diff mode while the header holding its one changed row
+  was hidden from the index and thus from every approval counter — Reindert:
+  *"als een php constante is aangepast, maar het kan niet als onderliggende
+  code ergens aan gekoppeld worden, laat het dan zien als losse blok wat ik moet
+  goedkeuren"*. The split answers that structurally: an unreferenced member
+  keeps its own visible, approvable index row, so the flag has nothing left to
+  protect, and the +6-14% index noise its coarse "every header stays visible"
+  fallback used to add is gone with it. Tests:
   `TestResolveClassMembers`/`TestResolveClassMembersAddedFile`/
   `TestResolveClassMembersAttachedToSibling`/
   `TestResolveClassMembersAttachedToEverySibling`/
-  `TestResolveClassMembersChangedMemberStaysOnHeader` and
+  `TestResolveClassMembersChangedMemberAttachesToSibling` and
   `TestResolveCallsConstRef` (`callresolve_analysis_test.go`).
   **Frontend-only sharpening (no change to the Go emission above):** attached
   to a sibling, `class_member:` is no longer unconditionally block-level in

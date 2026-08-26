@@ -276,20 +276,55 @@ Tests: `phpscan_test.go` (`TestPHPDocDescriptionCapturedForMethod`,
 `TestPHPDocPullsBlockLineLikeAttribute`, `TestPHPDocAndAttributeBothPullBlockLine`);
 `classify_test.go` (`TestPHPDocOnlyChangeClassifiesAsModified`).
 
-### `scanClassMembers`: properties/constants are NOT blocks
+### `scanClassMembers` + `splitClassHeaderMembers`: every property/constant IS its own block
 
-`phpscan.go` also exports a member splitter — it cuts a class body (in practice
-the `<class-header>` region) into its `;`-terminated property/constant
+`phpscan.go` exports a member splitter — it cuts a class body (in practice the
+`<class-header>` region) into its `;`-terminated property/constant
 declarations, reusing the same lexer primitives as `scanPHP` so a `;` inside a
-string/comment/heredoc/bracket pair never ends a statement. It is used only by
-`callresolve_analysis.go` (rule 9 "class members" and rule 6b "constants on a
-plain class", see `.claude/docs/workflows-analysis.md`).
+string/comment/heredoc/bracket pair never ends a statement. `scanClassMembers`
+also tracks the leading `#[...]` attribute run and `/** ... */` PHPDoc directly
+above each declaration, exactly like `scanPHP` does for a function
+(`pendingAttrLine`/`pendingDocLine`/`pendingDocText`), and reports them as
+`classMember.BlockLine`/`.Doc`.
 
-Deliberately **outside** the block model: a member yields a `classMember`
-value, never a `Block`. It therefore has no id, no category, no approval and no
-row in the block index — it exists only as an "Onderliggende code" card. Making
-a member a block instead would drag classification, ids, approvals and the left
-list along with it, for a unit nobody reviews on its own.
+`splitClassHeaderMembers` then **replaces** every coarse `<class-header>` block
+with one block per member plus, when anything is left above the first of them
+(the class's `use Trait;` statements), a residual `<class-header>` block
+covering just that. So a member is an ordinary `Block`: its own id, category,
+diff, **approval** and row in the block index. Reversed on explicit request —
+"header moet opgedeeld worden in losse blokken die per stuk goedgekeurd moeten
+worden" — after the older "a member never becomes a Block" rule left a changed
+constant unapprovable on its own and, once its cards hung off a sibling method,
+put its changed rows in no approval counter at all.
+
+Each member block spans `BlockLine..EndLine`, so its attributes ride along **as
+code** in its own diff ("attributes moet je ook als code erboven laten zien")
+while the PHPDoc's free text becomes `Block.Description` ("neem description mee
+als blok description") — and is therefore stripped from the displayed code by
+the same `stripLeadingPhpDoc` that already does this for a method.
+
+Deliberate boundaries:
+
+- **No overlap**, so no line is counted or approved twice: the residual header
+  stops one line before the first member block starts. A residual holding only
+  blank lines is dropped, so the common class whose header is nothing BUT
+  constants/properties has **no `<class-header>` row at all** any more.
+- Content between two members that belongs to neither (a blank line, a loose
+  `use Trait;` after the first constant) belongs to no block — the same
+  pre-existing hole as the blank lines between two methods.
+- A member whose `Class::Name` symbol another block in the same file already
+  owns (a method named exactly like a constant — legal PHP, vanishingly rare)
+  is left inside the header instead, because `extractBlockSource`/`blockstats`
+  resolve a block by that symbol and would otherwise read the wrong one.
+- **`scanBlocksRaw` is the unsplit view**, and the callresolve analysis uses it
+  wherever it wants a header region as ONE text: rule 9
+  (`resolveClassMembers`), rule 6b (`classConstDecl`) and the `symbolIndex`
+  itself, so no member block ever enters the call-resolution index. Everything
+  dealing in STORED blocks (the ingest pipeline via `parse_pool.go`,
+  `/api/code`, `blockstats`, `blockmove`) must use `ScanBlocks`, or a member
+  block's own symbol will not resolve. Same split for
+  `extractBlockSource`/`blockSource` vs `extractBlockSourceRaw`/`blockSourceRaw`
+  (`code.go`).
 
 ## `codesig.go`: display transforms on a block's source
 

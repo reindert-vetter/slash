@@ -167,8 +167,13 @@ class SyncOrderFlow {
 
 // providerListenerFixtureBlocks are the changed blocks matching
 // writeProviderListenerFixtureRepo.
+//
+// The provider's block is its "$listen" PROPERTY, not a <class-header>: the
+// fixture's header holds nothing but that property, so splitClassHeaderMembers
+// (phpscan.go) gives it its own block and leaves no header block behind — which
+// is exactly what the ingest pipeline stores for this file.
 func providerListenerFixtureBlocks(pr int) (provider, listener Block) {
-	provider = Block{PR: pr, File: "app/Providers/EventServiceProvider.php", Class: "EventServiceProvider", Name: classHeaderSentinel, Category: "OTHER", Side: SideNew, Status: StatusModified}
+	provider = Block{PR: pr, File: "app/Providers/EventServiceProvider.php", Class: "EventServiceProvider", Name: "$listen", Category: "OTHER", Side: SideNew, Status: StatusModified}
 	listener = Block{PR: pr, File: "app/Listeners/SyncOrderFlow.php", Class: "SyncOrderFlow", Name: "handle", Category: "LISTENER", Side: SideNew, Status: StatusAdded}
 	return
 }

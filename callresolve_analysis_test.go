@@ -3267,7 +3267,13 @@ class ImportSubscriptionStatsFlow
 // Covers all three shapes of "its own member changed" — a changed constant, a
 // changed property, and a REMOVED constant (never emitted as a card at all, so
 // only the header's own diff shows it) — deliberately treated identically.
-func TestResolveClassMembersChangedMemberStaysOnHeader(t *testing.T) {
+// TestResolveClassMembersChangedMemberAttachesToSibling pins the reversal of
+// the old headerHasOwnChange rule: a header whose OWN constant/property changed
+// (or lost one) used to keep its member cards on itself, so the changed row
+// stayed approvable somewhere. Since splitClassHeaderMembers (phpscan.go) every
+// member is a block of its own — approvable whether or not anything references
+// it — so the cards now go to the changed sibling method unconditionally.
+func TestResolveClassMembersChangedMemberAttachesToSibling(t *testing.T) {
 	const file = "app/Flows/ImportSubscriptionStatsFlow.php"
 	cases := []struct {
 		name string
@@ -3376,10 +3382,11 @@ class ImportSubscriptionStatsFlow
 				t.Fatalf("no member entries at all")
 			}
 			for _, e := range entries {
-				if e.CallerID != header.ID() {
-					t.Errorf("entry %s has caller %q, want the header %q", e.CallKey, e.CallerID, header.ID())
+				if e.CallerID != sibling.ID() {
+					t.Errorf("entry %s has caller %q, want the sibling %q", e.CallKey, e.CallerID, sibling.ID())
 				}
 			}
+			_ = header
 		})
 	}
 }
@@ -3523,18 +3530,29 @@ class Retry
 		t.Errorf("ATTRIBUTES ChildFile=%q, want %q", e.ChildFile, anon.File)
 	}
 
-	// A NAMED class whose <class-header> this PR did not change: same gap, so
-	// static::MAX_TRIES / Retry::MAX_TRIES resolve here too — once, not twice.
+	// A NAMED class always has its header region read by rule 9, whether or not
+	// this PR changed a header BLOCK (a header of nothing but constants leaves
+	// no such block at all — splitClassHeaderMembers). So 6b-bis stays out of
+	// the way and rule 9 supplies the one and only card.
 	named := Block{PR: pr, File: "app/Services/Retry.php", Class: "Retry", Name: "attempt", Side: SideNew, Status: StatusModified}
 	entries = resolveCalls(dataDir, pr, []Block{named})
-	n := 0
 	for _, e := range entries {
 		if e.CallKey == "MAX_TRIES" {
+			t.Fatalf("6b-bis must leave a named class's constant to rule 9: %+v", e)
+		}
+	}
+	members := resolveClassMembers(dataDir, pr, []Block{named})
+	n := 0
+	for _, e := range members {
+		if e.CallKey == "class_member:const:MAX_TRIES" {
 			n++
+			if e.CallerID != named.ID() {
+				t.Errorf("MAX_TRIES caller=%q, want the changed method %q", e.CallerID, named.ID())
+			}
 		}
 	}
 	if n != 1 {
-		t.Fatalf("want exactly one MAX_TRIES entry, got %d: %+v", n, entries)
+		t.Fatalf("want exactly one MAX_TRIES member card, got %d: %+v", n, members)
 	}
 
 	// With the <class-header> itself in the PR, rule 9 owns that declaration

@@ -432,29 +432,40 @@ final class ProductGroup extends Model
 	if !hasSymbol(got, "ProductGroup::__construct") || !hasSymbol(got, "ProductGroup::items") {
 		t.Fatalf("expected the methods to still be their own blocks, got %v", symbols(got))
 	}
-	if len(got) != 3 {
-		t.Fatalf("expected exactly 3 blocks, got %d: %v", len(got), symbols(got))
+	// 4, not 3: $fillable is a block of its own (splitClassHeaderMembers), and
+	// the header keeps only what sits above it — the `use HasFactory;` line.
+	if len(got) != 4 {
+		t.Fatalf("expected exactly 4 blocks, got %d: %v", len(got), symbols(got))
 	}
-	var header Block
-	for _, b := range got {
-		if b.symbol() == "ProductGroup::<class-header>" {
-			header = b
+	header := blockBySymbol(t, got, "ProductGroup::<class-header>")
+	fillable := blockBySymbol(t, got, "ProductGroup::$fillable")
+	// Body opens on line 3 ("{"); header content starts line 4
+	// ("use HasFactory;") and now ends just before $fillable's own block.
+	if header.Line != 4 || header.EndLine != fillable.Line-1 {
+		t.Fatalf("expected header Line=4 EndLine=%d, got Line=%d EndLine=%d", fillable.Line-1, header.Line, header.EndLine)
+	}
+	// $fillable spans its declaration up to and including the `];` line, and
+	// stops well before the constructor.
+	ctor := blockBySymbol(t, got, "ProductGroup::__construct")
+	if fillable.Line != 6 || fillable.EndLine != 8 {
+		t.Fatalf("expected $fillable Line=6 EndLine=8, got Line=%d EndLine=%d", fillable.Line, fillable.EndLine)
+	}
+	if fillable.EndLine >= ctor.Line {
+		t.Fatalf("$fillable (EndLine=%d) must end before the ctor (Line=%d)", fillable.EndLine, ctor.Line)
+	}
+}
+
+// blockBySymbol returns the one block with that symbol, failing the test when
+// it is absent.
+func blockBySymbol(t *testing.T, blocks []Block, symbol string) Block {
+	t.Helper()
+	for _, b := range blocks {
+		if b.symbol() == symbol {
+			return b
 		}
 	}
-	// Body opens on line 3 ("{"); header content starts line 4 ("use HasFactory;")
-	// and must end just before the constructor's declaration line.
-	if header.Line != 4 {
-		t.Fatalf("expected header Line=4, got %d", header.Line)
-	}
-	var ctor Block
-	for _, b := range got {
-		if b.symbol() == "ProductGroup::__construct" {
-			ctor = b
-		}
-	}
-	if header.EndLine != ctor.Line-1 {
-		t.Fatalf("expected header EndLine=%d (ctor.Line-1), got %d", ctor.Line-1, header.EndLine)
-	}
+	t.Fatalf("no %s block, got %v", symbol, symbols(blocks))
+	return Block{}
 }
 
 func TestClassHeaderBlockWithoutAnyMethod(t *testing.T) {
@@ -467,13 +478,73 @@ class Config
 }
 `
 	got := ScanBlocks([]byte(src), "app/Models/Config.php")
-	if len(got) != 1 || got[0].symbol() != "Config::<class-header>" {
-		t.Fatalf("expected the whole body to be one class-header block, got %v", symbols(got))
+	// The class never gets a method, so the header region is the whole body —
+	// but VERSION is split out of it into its own block, leaving the header
+	// with just the `use SomeTrait;` line above it.
+	if len(got) != 2 {
+		t.Fatalf("expected the header plus the VERSION block, got %v", symbols(got))
 	}
+	header := blockBySymbol(t, got, "Config::<class-header>")
+	version := blockBySymbol(t, got, "Config::VERSION")
 	// Body opens line 3; the last content line is line 6 (the closing brace is
-	// line 7).
-	if got[0].Line != 4 || got[0].EndLine != 6 {
-		t.Fatalf("expected Line=4 EndLine=6, got Line=%d EndLine=%d", got[0].Line, got[0].EndLine)
+	// line 7). VERSION owns line 6, the header the `use` on line 4.
+	if header.Line != 4 || header.EndLine != 5 {
+		t.Fatalf("expected header Line=4 EndLine=5, got Line=%d EndLine=%d", header.Line, header.EndLine)
+	}
+	if version.Line != 6 || version.EndLine != 6 {
+		t.Fatalf("expected VERSION Line=6 EndLine=6, got Line=%d EndLine=%d", version.Line, version.EndLine)
+	}
+}
+
+// TestClassHeaderMembersSplitOut pins splitClassHeaderMembers on the shape the
+// feature exists for: a class whose header holds NOTHING but constants — no
+// residual header block at all — with a leading PHPDoc becoming the member
+// block's Description and a leading attribute run pulled into its code.
+func TestClassHeaderMembersSplitOut(t *testing.T) {
+	src := `<?php
+final class ActivityV2WriteTest extends TestCase
+{
+    /**
+     * The tenant every row in this test belongs to.
+     */
+    #[Deprecated]
+    private const int TENANT_ID = 42;
+
+    private const string SESSION_ID = 'session-abc';
+
+    public function it_writes(): void
+    {
+    }
+}
+`
+	got := ScanBlocks([]byte(src), "modules/Statistics/Tests/ActivityV2WriteTest.php")
+	if hasSymbol(got, "ActivityV2WriteTest::<class-header>") {
+		t.Fatalf("a header of nothing but members must leave no header block, got %v", symbols(got))
+	}
+	tenant := blockBySymbol(t, got, "ActivityV2WriteTest::TENANT_ID")
+	session := blockBySymbol(t, got, "ActivityV2WriteTest::SESSION_ID")
+	blockBySymbol(t, got, "ActivityV2WriteTest::it_writes")
+
+	// TENANT_ID's block starts at its PHPDoc (line 4), not at the `const` on
+	// line 8, so both the doc and the #[Deprecated] attribute show as code in
+	// its own diff.
+	if tenant.Line != 4 || tenant.EndLine != 8 {
+		t.Fatalf("expected TENANT_ID Line=4 EndLine=8, got Line=%d EndLine=%d", tenant.Line, tenant.EndLine)
+	}
+	if tenant.Description != "The tenant every row in this test belongs to." {
+		t.Fatalf("expected the PHPDoc as the block description, got %q", tenant.Description)
+	}
+	// The second constant has neither, so it starts at its own declaration and
+	// inherits nothing from its predecessor.
+	if session.Line != 10 || session.EndLine != 10 {
+		t.Fatalf("expected SESSION_ID Line=10 EndLine=10, got Line=%d EndLine=%d", session.Line, session.EndLine)
+	}
+	if session.Description != "" {
+		t.Fatalf("expected no description on SESSION_ID, got %q", session.Description)
+	}
+	// No overlap: nothing is counted, or approved, twice.
+	if tenant.EndLine >= session.Line {
+		t.Fatalf("member blocks overlap: TENANT_ID ends %d, SESSION_ID starts %d", tenant.EndLine, session.Line)
 	}
 }
 

@@ -130,7 +130,7 @@ func buildSymbolIndex(headDir string) *symbolIndex {
 		if err != nil {
 			rel = path
 		}
-		fileBlocks := ScanBlocks(src, rel)
+		fileBlocks := scanBlocksRaw(src, rel)
 		for _, b := range fileBlocks {
 			if b.Name == "" {
 				continue
@@ -623,15 +623,25 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 	// same file collides (last assignment in the file wins) — same trade-off
 	// interfaceVarsByFile already accepts.
 	activityStubVarsByFile := map[string]map[string]string{}
-	// memberHostFiles records every file+class whose <class-header> block is
-	// itself part of this PR — exactly the set resolveClassMembers (rule 9)
+	// memberHostFiles records every file+class that HAS a <class-header> region
+	// in the head worktree — exactly the set resolveClassMembers (rule 9)
 	// already emits a card per constant/property for. Rule 6b-bis below skips
 	// those, so one declaration never gets two cards.
+	//
+	// Deliberately the region in the worktree, not the presence of a
+	// <class-header> BLOCK in this PR: since splitClassHeaderMembers
+	// (phpscan.go) a class whose header holds nothing but constants/properties
+	// has no header block left at all, while rule 9 still covers it.
 	memberHostFiles := map[string]bool{}
 	for _, hb := range blocks {
-		if hb.Side != SideOld && hb.Name == classHeaderSentinel {
-			memberHostFiles[hb.File+"\x00"+hb.Class] = true
+		if hb.Side == SideOld || hb.Class == "" {
+			continue
 		}
+		key := hb.File + "\x00" + hb.Class
+		if _, done := memberHostFiles[key]; done {
+			continue
+		}
+		memberHostFiles[key] = extractBlockSourceRaw(filepath.Join(headDir, hb.File), hb.File, hb.Class, classHeaderSentinel).Text != ""
 	}
 
 	var out []callresolve.Entry
@@ -1421,7 +1431,7 @@ func resolveDataProviders(dataDir string, pr int, blocks []Block) []callresolve.
 				cache[b.File] = nil
 				continue
 			}
-			fi = &fileInfo{lines: strings.Split(string(src), "\n"), fileBlocks: ScanBlocks(src, b.File)}
+			fi = &fileInfo{lines: strings.Split(string(src), "\n"), fileBlocks: scanBlocksRaw(src, b.File)}
 			cache[b.File] = fi
 		}
 		if fi == nil {
@@ -1718,27 +1728,46 @@ func findEnvExampleLine(fileText, name string) (line int, lineText string, found
 	return 0, "", false
 }
 
-// resolveClassMembers breaks a <class-header> block's declared members —
-// properties and constants — out of that one coarse block into their own
-// "Onderliggende code" cards, so a reviewer sees `$listen` or `MAX_TRIES` as a
-// separate unit next to the diff instead of only inside the header's single
-// blob (Reindert, request: "alle aangepaste properties en constanten wil ik
-// rechts als onderliggende code zien; ook alle constanten, ook als die niet
-// aangepast zijn").
+// resolveClassMembers points every declared member of a class — its
+// properties and constants — at the changed METHODS of that same class as
+// "Onderliggende code", so a reviewer reading `$listen` or `MAX_TRIES`'s usage
+// site sees the declaration next to the diff (Reindert, request: "alle
+// aangepaste properties en constanten wil ik rechts als onderliggende code
+// zien; ook alle constanten, ook als die niet aangepast zijn").
 //
-// What it emits, per changed <class-header> block:
+// What it emits, per class that has a <class-header> region in the head
+// worktree:
 //   - EVERY constant, changed or not — an unchanged constant is reference
 //     material the reviewer explicitly asked to always see.
 //   - ONLY a changed/added property — an unchanged property is noise.
 //
 // A REMOVED member is deliberately never emitted: it no longer exists on the
-// head side, and the header block's own diff already shows the deletion.
+// head side, and the deletion still shows in its own removed-side block.
 //
-// Deliberately a callresolve rule, not a relations detector or a phpscan
-// block: it points at (possibly) unchanged code, and a member must never
-// become a PR block — no id, no approval, no row in the block index. Go-only,
-// no LLM fallback: an unparsable member simply yields no card, never an
-// "unresolved" row (mirrors resolveMigrationModels/resolveDataProviders).
+// Since splitClassHeaderMembers (phpscan.go) a CHANGED member is ALSO a real
+// PR block of its own, which is what makes this rule's entry a full-fledged
+// child: the composed child id hits that block, so the panel renders it with
+// its own diff, approval and drill-down, and the block's standalone index row
+// is hidden as an ordinary resolved call target (resolvedCallTargetIds,
+// home.mjs). An UNCHANGED constant is no block — it still renders as the
+// read-only leaf card it always was.
+//
+// That split is also why this rule no longer keeps a header whose own member
+// changed as its own caller: the old headerHasOwnChange existed because a
+// changed member attached to a sibling was scoped to its usage site and thus
+// invisible in diff mode, with its rows in no approval counter. A member block
+// now always carries its own approvable rows, whether or not anything
+// references it, so the caller is unconditionally the changed siblings.
+//
+// It keys off the class's changed blocks, NOT off a stored <class-header>
+// block: a class whose header holds nothing but members has no header block
+// left after the split (see splitClassHeaderMembers), and this rule must still
+// run for it. The header REGION is read raw for the same reason — split, it
+// would only cover the part above the first member.
+//
+// Deliberately Go-only, no LLM fallback: an unparsable member simply yields no
+// card, never an "unresolved" row (mirrors resolveMigrationModels/
+// resolveDataProviders).
 //
 // Scope boundary, same one rule 8 (trait usage) already accepts: only the
 // <class-header> region is scanned, so a constant declared AFTER the first
@@ -1752,11 +1781,18 @@ func resolveClassMembers(dataDir string, pr int, blocks []Block) []callresolve.E
 	baseDir, headDir := worktreeDirs(dataDir, blocksRepo(blocks), pr)
 
 	var out []callresolve.Entry
+	seen := map[string]bool{}
 	for _, b := range blocks {
-		if b.Side == SideOld || b.Name != classHeaderSentinel {
+		if b.Side == SideOld || b.Class == "" {
 			continue
 		}
-		head := extractBlockSource(filepath.Join(headDir, b.File), b.File, b.Class, b.Name)
+		key := b.File + "\x00" + b.Class
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+
+		head := extractBlockSourceRaw(filepath.Join(headDir, b.File), b.File, b.Class, classHeaderSentinel)
 		if head.Text == "" {
 			continue
 		}
@@ -1764,7 +1800,7 @@ func resolveClassMembers(dataDir string, pr int, blocks []Block) []callresolve.E
 		// untouched one. A missing base file/class (an added file) leaves the
 		// map empty, so every member counts as changed — which is correct.
 		baseText := map[string]string{}
-		base := extractBlockSource(filepath.Join(baseDir, b.File), b.File, b.Class, b.Name)
+		base := extractBlockSourceRaw(filepath.Join(baseDir, b.File), b.File, b.Class, classHeaderSentinel)
 		if base.Text != "" {
 			for _, m := range scanClassMembers(base.Text, base.Start) {
 				baseText[m.Kind+":"+m.Name] = normalizeMemberText(m.Text)
@@ -1772,23 +1808,17 @@ func resolveClassMembers(dataDir string, pr int, blocks []Block) []callresolve.E
 		}
 
 		headMembers := scanClassMembers(head.Text, head.Start)
+		if len(headMembers) == 0 {
+			continue
+		}
 
-		// A <class-header> block is one coarse blob the reviewer would rather
-		// not review as its own top-level card, ON EXPLICIT REQUEST — but ONLY
-		// when there is somewhere else to hang its members: every OTHER
-		// changed, non-header top-level block of the SAME class (a method that
-		// also changed in this PR). classSiblingIDs is empty for a class whose
-		// ONLY change in this PR is its header — the header then stays its own
-		// caller, exactly as before (the frontend keeps such a header visible,
-		// see swallowedClassHeaderIds in home.mjs). With several changed
-		// siblings, every one of them gets the SAME member cards — no single
-		// "chosen" host, since there is no natural way to pick one.
-		//
-		// A header that itself declares a CHANGED (or removed) member stays its
-		// own caller too, even with siblings — see headerHasOwnChange.
-		callerIDs := classSiblingIDs(blocks, b)
-		if len(callerIDs) == 0 || headerHasOwnChange(headMembers, baseText) {
-			callerIDs = []string{b.ID()}
+		// The callers: every changed, non-header, non-MEMBER top-level block of
+		// this class — all of them, when several changed, since there is no
+		// natural way to pick one host. With no such sibling the members hang
+		// off the class's own header block, when the split left one.
+		callerIDs := classSiblingIDs(blocks, b.File, b.Class, headMembers)
+		if len(callerIDs) == 0 {
+			callerIDs = classHeaderBlockIDs(blocks, b.File, b.Class)
 		}
 		for _, m := range headMembers {
 			was, existed := baseText[m.Kind+":"+m.Name]
@@ -1819,65 +1849,42 @@ func resolveClassMembers(dataDir string, pr int, blocks []Block) []callresolve.E
 	return out
 }
 
-// headerHasOwnChange reports whether a <class-header>'s own declared members
-// changed in this PR — a member whose text differs from the base side, a member
-// that is new, or a member that the base side had and the head side no longer
-// does (a removal).
-//
-// Such a header must stay a reviewable block of its own, so resolveClassMembers
-// keeps it as the caller of its member cards instead of attaching them to a
-// changed sibling method (Reindert, request: "als een php constante is
-// aangepast, maar het kan niet als onderliggende code ergens aan gekoppeld
-// worden, laat het dan zien als losse blok wat ik moet goedkeuren"). Attached to
-// a sibling, a member card is scoped to its usage SITE (callScopeMethods,
-// home.mjs), so a changed constant only referenced from unchanged code showed
-// nowhere in diff mode — and the header block it lives in was hidden from the
-// index (swallowedClassHeaderIds), leaving its one changed row out of every
-// approval counter. A removed member is never emitted as a card at all, so it
-// has nothing but the header's own diff.
-//
-// Deliberately coarse and kind-agnostic (constant, property and removal alike,
-// no usage-site or changed-row analysis): predictability over a tidier index,
-// explicitly chosen. Practical consequence, recorded so nobody "fixes" it back:
-// every header block in the store is by definition a changed block, so the
-// swallow path above now rarely triggers — only for a header whose change sits
-// somewhere OTHER than in a member declaration (a changed `use Trait;`, an
-// attribute, a docblock).
-func headerHasOwnChange(headMembers []classMember, baseText map[string]string) bool {
-	head := make(map[string]bool, len(headMembers))
+// classSiblingIDs returns the block IDs of the changed top-level, new-side
+// blocks of file+class that a member card attaches to: every METHOD, i.e.
+// everything that is neither the <class-header> block itself nor one of the
+// per-member blocks splitClassHeaderMembers carved out of it (those are named
+// after a member in headMembers). Deliberately scoped to the SAME file, not
+// just the same class short name — two same-named classes in different files
+// must never share member cards.
+func classSiblingIDs(blocks []Block, file, class string, headMembers []classMember) []string {
+	isMember := make(map[string]bool, len(headMembers))
 	for _, m := range headMembers {
-		key := m.Kind + ":" + m.Name
-		head[key] = true
-		was, existed := baseText[key]
-		if !existed || was != normalizeMemberText(m.Text) {
-			return true
-		}
+		isMember[m.Name] = true
 	}
-	for key := range baseText {
-		if !head[key] {
-			return true // a member the head side no longer declares
-		}
-	}
-	return false
-}
-
-// classSiblingIDs returns the block IDs of every OTHER top-level, new-side,
-// non-header PR block that shares b's file+class — the changed methods a
-// <class-header>'s own member cards (resolveClassMembers) attach to instead
-// of the header itself, once at least one exists. Deliberately scoped to the
-// SAME file, not just the same class short name — two same-named classes in
-// different files must never share member cards.
-func classSiblingIDs(blocks []Block, header Block) []string {
 	var ids []string
 	for _, sib := range blocks {
-		if sib.Side == SideOld || sib.Name == classHeaderSentinel {
+		if sib.Side == SideOld || sib.Name == classHeaderSentinel || isMember[sib.Name] {
 			continue
 		}
-		if sib.File == header.File && sib.Class == header.Class {
+		if sib.File == file && sib.Class == class {
 			ids = append(ids, sib.ID())
 		}
 	}
 	return ids
+}
+
+// classHeaderBlockIDs returns the id of file+class's own <class-header> block
+// when the PR has one — the fallback caller for a class with no changed method
+// to hang its member cards off. Empty when splitClassHeaderMembers left no
+// header block (a header consisting of nothing but members): the members are
+// then blocks of their own and need no card to be reviewable.
+func classHeaderBlockIDs(blocks []Block, file, class string) []string {
+	for _, b := range blocks {
+		if b.Side != SideOld && b.Name == classHeaderSentinel && b.File == file && b.Class == class {
+			return []string{b.ID()}
+		}
+	}
+	return nil
 }
 
 // normalizeMemberText is the comparison form of a member declaration: trailing
@@ -1910,7 +1917,9 @@ func classConstDecl(headDir string, idx *symbolIndex, class, name string) (file 
 			continue
 		}
 		seenFile[hb.File] = true
-		src := blockSource(headDir, hb)
+		// Raw: the header region as ONE text, members included — the split
+		// per-member blocks would each hold only their own declaration.
+		src := blockSourceRaw(headDir, hb)
 		if src.Text == "" {
 			continue
 		}

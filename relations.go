@@ -144,7 +144,15 @@ func providerListenerDetector(headDir string, pr int, blocks []Block) []relation
 	var out []relations.Relation
 	emit := edgeEmitter(&out, pr, relations.KindEventListener)
 	for _, b := range blocks {
-		if b.Side == SideOld || b.Name != classHeaderSentinel || !strings.HasSuffix(b.File, "ServiceProvider.php") {
+		if b.Side == SideOld || !strings.HasSuffix(b.File, "ServiceProvider.php") {
+			continue
+		}
+		// $listen used to live inside the one coarse <class-header> block;
+		// since splitClassHeaderMembers (phpscan.go) it is a block of its own
+		// (named "$listen"), and for a provider whose header holds nothing but
+		// that property there is no header block left at all. Accept either —
+		// reListenBlock finds the array in whichever of the two carries it.
+		if b.Name != classHeaderSentinel && b.Name != "$listen" {
 			continue
 		}
 		src := blockText(headDir, b)

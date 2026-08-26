@@ -23,6 +23,17 @@
   },
   {
     "pr": 114,
+    "file": "app/Flows/ImportSubscriptionStatsFlow.php",
+    "class": "ImportSubscriptionStatsFlow",
+    "name": "BATCH_SIZE",
+    "category": "OTHER",
+    "line": 3,
+    "endLine": 3,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 114,
     "file": "app/Flows/LonelyHeaderFlow.php",
     "class": "LonelyHeaderFlow",
     "name": "<class-header>",

@@ -16,11 +16,156 @@ func ScanBlocks(src []byte, filename string) []Block {
 	if strings.ToLower(filepath.Ext(filename)) != ".php" || isBladeTemplate(filename) {
 		return []Block{wholeFileBlock(src, filename)}
 	}
+	blocks := scanBlocksRaw(src, filename)
+	return splitClassHeaderMembers(blocks, src)
+}
+
+// scanBlocksRaw is ScanBlocks WITHOUT splitClassHeaderMembers: a class's header
+// region stays the one coarse <class-header> block scanPHP produces.
+//
+// Only the callresolve analysis uses this. Its rules read a class's header
+// region as a whole — rule 6b (classConstDecl: find a constant's declaration),
+// rule 8 (trait usage) and rule 9 (resolveClassMembers: split the region into
+// member cards) — and none of them wants the region already carved up into
+// per-member blocks by the time they see it. Everything that deals in STORED
+// blocks (the ingest pipeline, /api/code, blockstats, blockmove) must use
+// ScanBlocks instead, so a member block's own symbol resolves.
+func scanBlocksRaw(src []byte, filename string) []Block {
+	if strings.ToLower(filepath.Ext(filename)) != ".php" || isBladeTemplate(filename) {
+		return []Block{wholeFileBlock(src, filename)}
+	}
 	blocks, ok := scanPHP(string(src), filename)
 	if !ok || len(blocks) == 0 {
 		return []Block{wholeFileBlock(src, filename)}
 	}
 	return blocks
+}
+
+// splitClassHeaderMembers replaces every coarse <class-header> block with one
+// block PER DECLARED MEMBER (constant/property) plus, if there is anything left
+// above the first of them (the class's `use Trait;` statements), a residual
+// <class-header> block covering just that.
+//
+// On explicit request: "header moet opgedeeld worden in losse blokken die per
+// stuk goedgekeurd moeten worden" — a header used to be one blob whose members
+// only ever existed as read-only callresolve cards (see classMember), so a
+// changed constant could not be approved on its own and, once its cards hung
+// off a sibling method, its changed rows sat in no approval counter at all.
+// Now every member is an ordinary Block: its own id, its own diff, its own
+// approval, its own row in the index — and, once something references it, an
+// ordinary "Onderliggende code" child of the referencing method rather than a
+// synthetic leaf card (see resolvedCallChildren in home.mjs).
+//
+// Each member block spans classMember.BlockLine..EndLine, so a leading
+// `#[...]` attribute run and/or PHPDoc lands in that member's OWN code diff
+// ("attributes moet je ook als code erboven laten zien"), and the PHPDoc's
+// free text becomes the block's Description ("neem description mee als blok
+// description") — exactly how scanPHP already treats a method's own
+// attributes/doc.
+//
+// Deliberate boundaries:
+//   - Line ranges never overlap, so no line is counted (or approved) twice:
+//     the residual header stops one line before the first member block starts.
+//   - Content that sits BETWEEN two members without being part of either (a
+//     blank line, a loose `use Trait;` after the first constant) belongs to no
+//     block — the same, pre-existing hole as the blank lines between two
+//     methods, which no block covers either.
+//   - A member whose Class::Name symbol is already taken by another block in
+//     the same file (a method named exactly like a constant — legal PHP,
+//     vanishingly rare) is left in the header rather than emitted, because
+//     extractBlockSource/blockstats resolve a block by that symbol and would
+//     otherwise read the wrong one.
+//   - A header with no members at all is returned untouched.
+func splitClassHeaderMembers(blocks []Block, src []byte) []Block {
+	hasHeader := false
+	for _, b := range blocks {
+		if b.Name == classHeaderSentinel {
+			hasHeader = true
+			break
+		}
+	}
+	if !hasHeader {
+		return blocks
+	}
+	taken := map[string]bool{}
+	for _, b := range blocks {
+		taken[b.symbol()] = true
+	}
+
+	out := make([]Block, 0, len(blocks))
+	for _, b := range blocks {
+		if b.Name != classHeaderSentinel {
+			out = append(out, b)
+			continue
+		}
+		region := sliceLines(src, b.Line, b.EndLine)
+		var members []classMember
+		prevEnd := b.Line - 1
+		for _, m := range scanClassMembers(region.Text, region.Start) {
+			if m.BlockLine < b.Line || m.EndLine > b.EndLine {
+				continue // defensive: never step outside the header's own range
+			}
+			// Two declarations sharing one physical line (`const A = 1; const
+			// B = 2;`, or a doc comment inline between them) would otherwise
+			// overlap, and an overlapping range means a line counted — and
+			// approved — twice. The later one starts after its predecessor.
+			if m.BlockLine <= prevEnd {
+				m.BlockLine = prevEnd + 1
+			}
+			if m.BlockLine > m.EndLine {
+				continue // nothing left of its own to show
+			}
+			probe := b.Class + "::" + m.Name
+			if b.Class == "" {
+				probe = m.Name
+			}
+			if taken[probe] {
+				continue
+			}
+			taken[probe] = true
+			prevEnd = m.EndLine
+			members = append(members, m)
+		}
+		if len(members) == 0 {
+			out = append(out, b)
+			continue
+		}
+		// The residual header: everything above the first member block. Kept
+		// only when it still holds a non-blank line — for the common class
+		// whose header is nothing BUT constants/properties there is nothing
+		// left to review and the "Class-header" row disappears entirely.
+		if residual := b; members[0].BlockLine > residual.Line {
+			residual.EndLine = members[0].BlockLine - 1
+			if strings.TrimSpace(sliceLines(src, residual.Line, residual.EndLine).Text) != "" {
+				out = append(out, residual)
+			}
+		}
+		for _, m := range members {
+			out = append(out, Block{
+				File:        b.File,
+				Class:       b.Class,
+				Name:        m.Name,
+				Line:        m.BlockLine,
+				EndLine:     m.EndLine,
+				Description: m.Doc,
+				IsTrait:     b.IsTrait,
+			})
+		}
+	}
+	return out
+}
+
+// earliestLine returns the smallest non-zero of the given 1-based line numbers,
+// or 0 when they are all zero. Used to pull a declaration's block start back to
+// its leading attribute/PHPDoc, whichever sits highest.
+func earliestLine(lines ...int) int {
+	best := 0
+	for _, ln := range lines {
+		if ln > 0 && (best == 0 || ln < best) {
+			best = ln
+		}
+	}
+	return best
 }
 
 // isBladeTemplate reports whether the path is a Laravel Blade template
@@ -596,18 +741,31 @@ func phpDocDescription(raw string) string {
 
 // --- class members (properties/constants) ----------------------------------
 
-// classMember is one property or constant declaration inside a class body —
-// the unit the "Onderliggende code" panel shows as its own card for a
-// <class-header> block (see resolveClassMembers in callresolve_analysis.go).
-// Deliberately NOT a Block: a member never becomes a PR block, never gets an
-// id, an approval or a row in the block index; it only ever exists as a
-// callresolve child descriptor.
+// classMember is one property or constant declaration inside a class body.
+//
+// It is BOTH the unit splitClassHeaderMembers turns into a real PR block (its
+// own id, approval and row in the block index — see that function) and the
+// unit resolveClassMembers (callresolve_analysis.go) emits as an
+// "Onderliggende code" child descriptor. It used to be only the latter; the
+// "a member never becomes a Block" rule this comment carried is WITHDRAWN, on
+// explicit request ("header moet opgedeeld worden in losse blokken die per
+// stuk goedgekeurd moeten worden").
 type classMember struct {
 	Kind    string // "const" | "prop"
 	Name    string // "MAX_TRIES" resp. "$listen"
 	Line    int    // absolute 1-based first line of the declaration
 	EndLine int    // absolute 1-based line of its terminating ';'
 	Text    string // the declaration source, verbatim
+	// BlockLine is where this member's own BLOCK starts: normally Line, but
+	// pulled back to a directly-preceding `#[...]` attribute run and/or
+	// `/** ... */` PHPDoc, whichever sits highest — exactly what scanPHP's
+	// declLine does for a function/method (see blocks-and-ingest.md). That is
+	// what puts a member's attributes in its own code diff instead of in the
+	// residual header's.
+	BlockLine int
+	// Doc is the free-text description from a directly-preceding PHPDoc, the
+	// same phpDocDescription a method block's Block.Description comes from.
+	Doc string
 }
 
 // reMemberConst matches a `const NAME =` declaration, with any modifier run
@@ -647,6 +805,14 @@ func scanClassMembers(src string, startLine int) []classMember {
 	depth := 0
 	stmtStart, stmtLine := -1, 0
 	n := len(src)
+	// pendingAttrLine/pendingDocLine/pendingDocText mirror scanPHP's own
+	// trackers of the same name: the leading `#[...]` attribute run and/or
+	// `/** ... */` PHPDoc directly above the NEXT declaration, which become
+	// that member's BlockLine and Doc. Both are reset at the end of every
+	// statement — a member's, but also a non-member's (a `use Trait;`), so a
+	// doc written for one never leaks onto the next.
+	pendingAttrLine, pendingDocLine := 0, 0
+	pendingDocText := ""
 	// begin marks the current position as the statement's first character if
 	// no statement is open yet.
 	begin := func(i int) {
@@ -667,6 +833,9 @@ func scanClassMembers(src string, startLine int) []classMember {
 		case c == '/' && i+1 < n && src[i+1] == '/':
 			i = skipToEOL(src, i)
 		case c == '#' && i+1 < n && src[i+1] == '[':
+			if pendingAttrLine == 0 {
+				pendingAttrLine = line
+			}
 			j, nl, closed := skipAttribute(src, i)
 			if !closed {
 				return out
@@ -676,9 +845,21 @@ func scanClassMembers(src string, startLine int) []classMember {
 		case c == '#':
 			i = skipToEOL(src, i)
 		case c == '/' && i+1 < n && src[i+1] == '*':
+			docStart, docLine := i, line
 			j, nl, closed := skipBlockComment(src, i)
 			if !closed {
 				return out
+			}
+			// Only a real `/** ... */` PHPDoc counts (a plain `/* */` is not a
+			// doc block), and only the FIRST one of a run supplies BlockLine —
+			// same rule as scanPHP's own pendingDocLine.
+			if strings.HasPrefix(src[docStart:j], "/**") {
+				if pendingDocLine == 0 {
+					pendingDocLine = docLine
+				}
+				if text := phpDocDescription(src[docStart:j]); text != "" {
+					pendingDocText = text
+				}
 			}
 			line += nl
 			i = j
@@ -720,10 +901,13 @@ func scanClassMembers(src string, startLine int) []classMember {
 		case c == ';' && depth == 0:
 			if stmtStart >= 0 {
 				if m, ok := classifyMemberStatement(src[stmtStart:i], stmtLine, line); ok {
+					m.BlockLine = earliestLine(pendingAttrLine, pendingDocLine, m.Line)
+					m.Doc = pendingDocText
 					out = append(out, m)
 				}
 			}
 			stmtStart = -1
+			pendingAttrLine, pendingDocLine, pendingDocText = 0, 0, ""
 			i++
 		default:
 			begin(i)

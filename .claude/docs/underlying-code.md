@@ -38,18 +38,26 @@ Each child is one card (`data-testid=related-item`). It follows
   (`data-testid=related-covers-warning`, custom inline SVG + explanation — never
   an AI guess). See "Linking test coverage" in
   `.claude/docs/workflows-analysis.md`.
-- A **class member** — the declared properties/constants of a `<class-header>`
-  block, broken out of that one coarse blob into a card each (kinds
+- A **class member** — a class's declared properties/constants (kinds
   `class_property`/`class_constant_changed`/`class_constant`), plus a
   `Foo::MAX_TRIES` reference resolved to its declaration (`const_ref`) — which
   also covers a reference to the caller's **own** class (`self::ATTRIBUTES` in
-  a migration's anonymous class, which has no `<class-header>` block for the
+  a migration's anonymous class, which has no `<class-header>` region for the
   member cards to come from; see rule 6b-bis in
-  `.claude/docs/workflows-analysis.md`). All four
-  are read-only **leaves**, like `translation`: no PR block, so no diff stat, no
-  approval, no drill-hint chips, and — load-bearing, on explicit request —
-  **never a row of their own in the block index** (`resolvedCallTargetIds` skips
-  them outright, and nothing ever scans a member into a `Block`). Which members
+  `.claude/docs/workflows-analysis.md`).
+  **A member the PR CHANGED is a real PR block** since
+  `splitClassHeaderMembers` (`phpscan.go`, see
+  `.claude/docs/blocks-and-ingest.md`), so such a child is no leaf at all: it
+  falls through to the ordinary call-target branch of `resolvedCallChildren`
+  and carries its own diff, approval, drill-hint chips and drill-down, and its
+  standalone index row is hidden by the ordinary `resolvedCallTargetIds` path
+  once something references it. Only a member that is **not** a block — an
+  UNCHANGED constant, kept as reference material — is still a read-only
+  **leaf** like `translation`: no diff stat, no approval, no drill-hint chips,
+  and no row of its own in the index (it never had one). The old blanket
+  `CLASS_MEMBER_KINDS` skip in `resolvedCallTargetIds` is gone, and the leaf
+  branch in `resolvedCallChildren` now only fires when no PR block matches the
+  composed child id. Which members
   appear (every constant, only changed properties) and why: "9 — class members"
   in `.claude/docs/workflows-analysis.md`.
   Since they sit side by side, each of the three header kinds carries a **word**
@@ -60,34 +68,34 @@ Each child is one card (`data-testid=related-item`). It follows
   the default path (`resolveChildBlock` builds a synthetic read-only frame from
   the embedded code). Test: `tests/related-class-members.spec.mjs` (mocked
   `/api/callresolve` on PR 91, like `callresolve-live-update.spec.mjs`).
-  **The `<class-header>` block itself is a LAST RESORT, not a permanent
-  addition (reversed on explicit request) — but a header whose OWN member
-  changed is exempt and stays a visible, approvable block.**
-  `resolveClassMembers` attaches its member entries to every OTHER changed,
-  non-header top-level block of the SAME class/file in this PR
-  (`classSiblingIDs`, `callresolve_analysis.go`) — several changed siblings all
-  get the SAME member cards, there is no single "chosen" host. It keeps the
-  header as its own caller when a class's ONLY change in this PR is its header
-  (no such sibling exists) **and** whenever the header's own members changed or
-  one was removed (`headerHasOwnChange` — see rule 9 in
-  `.claude/docs/workflows-analysis.md` for the reasoning and the accepted index
-  noise).
-  `swallowedClassHeaderIds` (`home.mjs`, folded into `recomputeLeftList`'s
-  `hidden` set alongside `resolvedCallTargetIds`) hides a header block from the
-  index only on **positive evidence** that its members really landed elsewhere:
-  at least one `class_member:` callresolve row whose `callerId` is one of those
-  siblings. A sibling merely existing is deliberately NOT enough — no rows at
-  all (the `resolve_call`/`build_relations` step hasn't run yet, failed, or the
-  header region wouldn't parse) used to hide a changed block with nothing to
-  show in its place, and its one changed row then sat in **no** approval counter
-  (a swallowed header is not in `state.blocks`, so neither
-  `prWideApproveTotal` nor `findNextUnapproved` can ever reach it). Tests:
+  **The callers are the class's changed METHODS.** `resolveClassMembers`
+  attaches its member entries to every changed, non-header, non-member
+  top-level block of the SAME class/file in this PR (`classSiblingIDs`,
+  `callresolve_analysis.go`) — several changed siblings all get the SAME member
+  cards, there is no single "chosen" host. Only when no such sibling exists do
+  they fall back to the class's own `<class-header>` block, and only if the
+  split left one (`classHeaderBlockIDs`).
+  It keys off the class's changed blocks, **not** off a stored `<class-header>`
+  block: a class whose header holds nothing but members has no header block
+  left at all, and the rule must still run for it.
+  **Two mechanisms this replaced, so nobody reintroduces them:**
+  `headerHasOwnChange` (keep a header whose OWN member changed as its own
+  caller) and `swallowedClassHeaderIds` (hide a header block from the index
+  once its members landed on a sibling) are both **removed**. Both existed for
+  one reason — a changed member attached to a sibling is scoped to its usage
+  site, so a constant used only from unchanged code showed nowhere in diff mode
+  while the header holding its changed row was hidden from every approval
+  counter. A member block now always carries its own approvable rows, whether
+  or not anything references it, so the caller is unconditionally the changed
+  siblings and a `<class-header>` block is never hidden: what is left in it (a
+  class's `use Trait;` statements) is real changed code that keeps its own
+  approvable row. Tests:
   `TestResolveClassMembersAttachedToSibling`/
   `TestResolveClassMembersAttachedToEverySibling`/
-  `TestResolveClassMembersChangedMemberStaysOnHeader`
+  `TestResolveClassMembersChangedMemberAttachesToSibling`
   (`callresolve_analysis_test.go`), `tests/related-class-header-sibling.spec.mjs`
-  (PR 114: a class with a sibling, a header-only class, and a class whose
-  members did not land on its sibling).
+  (PR 114: a referenced member block, an unchanged constant, and a header with
+  no member cards).
   **Attached to a sibling, a member card is now itself scoped to the selected
   group/line/call** — sharpened on explicit request, since attaching to
   *every* changed sibling used to also mean showing on every one of that
@@ -103,11 +111,12 @@ Each child is one card (`data-testid=related-item`). It follows
   constant/static-property access (`::name`/`::$name`) inside that sibling's
   code — and hide/show exactly like an ordinary resolved call at every
   granularity. A member never referenced anywhere in a given sibling
-  disappears there in diff mode entirely (no fallback to the hidden
-  `<class-header>` card) — which is exactly why a CHANGED member is no longer
-  attached to a sibling in the first place (`headerHasOwnChange` above): the
-  same scoping also hid a changed constant whose only usage site sits on
-  unchanged code; **list mode is unaffected** (no active cursor to
+  disappears there in diff mode entirely (no fallback to a
+  `<class-header>` card) — which used to be the reason a CHANGED member was
+  kept off a sibling altogether (`headerHasOwnChange`, removed above): the same
+  scoping hid a changed constant whose only usage site sits on unchanged code.
+  That no longer costs anything, because the member is its own approvable block
+  in the index whenever nothing references it; **list mode is unaffected** (no active cursor to
   scope by, same as every other call type) and keeps showing the full
   reference list. Test: `tests/related-class-member-scope.spec.mjs` (PR 115).
 - A **`config('file.key.path')` call** — the value declared in
@@ -875,9 +884,10 @@ of range". Three exemptions follow:
    met de geselecteerde groep/regel" (Reindert, sharpening the earlier
    always-block-level behaviour). A member never referenced anywhere in that
    sibling's code disappears at every diff granularity for that sibling —
-   there is deliberately no fallback back to the (hidden) `<class-header>`
-   card; list mode still shows the full, unscoped reference list, same as
-   before. The `const_ref` rule is deliberately **not** in the set at all —
+   there is deliberately no fallback back to a `<class-header>` card (which is
+   no longer hidden, but also no longer holds the member — see
+   `splitClassHeaderMembers` in `.claude/docs/blocks-and-ingest.md`); list mode
+   still shows the full, unscoped reference list, same as before. The `const_ref` rule is deliberately **not** in the set at all —
    its key is a real literal on a real line, like any ordinary call, for
    every caller.
 2. **A `covered_by` child** (`coveredByChildren`) never carries a site of its own —

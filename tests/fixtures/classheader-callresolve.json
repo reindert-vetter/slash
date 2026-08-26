@@ -4,7 +4,7 @@
     "callerId": "114:app/Flows/ImportSubscriptionStatsFlow.php:ImportSubscriptionStatsFlow::run",
     "callKey": "class_member:const:BATCH_SIZE",
     "status": "resolved",
-    "kind": "class_constant",
+    "kind": "class_constant_changed",
     "childFile": "app/Flows/ImportSubscriptionStatsFlow.php",
     "childClass": "ImportSubscriptionStatsFlow",
     "childMethod": "BATCH_SIZE",

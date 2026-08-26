@@ -3291,7 +3291,7 @@ function recomputeLeftList() {
   // hidden set the same way a testCoverTargetIds() target is exempt — see
   // resolvedCallTargetIds/testCallTargetIds — so it joins the relation
   // children here instead of vanishing.
-  const hidden = new Set([...resolvedCallTargetIds(), ...swallowedClassHeaderIds()])
+  const hidden = new Set(resolvedCallTargetIds())
   const testTargetIds = testCallTargetIds()
   const childIds = new Set([...state.relations.map((r) => r.childId), ...testTargetIds])
   const selId = state.blocks[state.selected] && state.blocks[state.selected].id
@@ -4335,11 +4335,16 @@ function resolvedCallTargetIds() {
     // hidden from the left list by accident.
     if (r.kind === 'config_value' || r.kind === 'env_example') continue
     // A class-member child (a property/constant declaration, see
-    // CLASS_MEMBER_KINDS) is never a block at all — it must neither gain a row
-    // in the index nor hide one. Its composed id could only ever collide with a
-    // real block by accident (a method named exactly like a constant), so skip
-    // it outright rather than rely on that never happening.
-    if (CLASS_MEMBER_KINDS.has(r.kind)) continue
+    // CLASS_MEMBER_KINDS) used to be skipped here because a member was never a
+    // block. Since splitClassHeaderMembers (phpscan.go) a CHANGED member IS a
+    // PR block of its own, and hiding its standalone index row once it shows as
+    // Onderliggende code under the method that uses it is the whole point of
+    // the split. An UNCHANGED constant still composes to no existing id, so the
+    // prBlockIds test below leaves it alone by itself. The old collision worry
+    // (a method named exactly like a constant) is handled at the source
+    // instead: splitClassHeaderMembers refuses to mint a member block whose
+    // symbol another block in the file already owns.
+
     // A class's constructor / first method shown next to a Foo::class
     // reference (rule 6c-bis) is INCIDENTAL reference material — it is picked
     // because it introduces the class, not because this PR touched it. On the
@@ -4376,53 +4381,15 @@ function testCallTargetIds() {
   return ids
 }
 
-// swallowedClassHeaderIds returns the ids of <class-header> PR blocks whose
-// declared members (resolveClassMembers, backend rule 9) are shown as
-// Onderliggende code under a SIBLING block instead — every other changed,
-// non-header top-level block of that same class/file — rather than under the
-// header's own coarse-diff card. Mirrors resolvedCallTargetIds' "pull it from
-// the index, it surfaces elsewhere" pattern, but only within the SAME class:
-// on explicit request ("laat de headerkaart alleen zien als je het echt niet
-// onder aangepaste code kan plaatsen"), a header with NO sibling stays
-// visible exactly as before (the member cards then still hang off the header
-// itself — resolveClassMembers' own fallback). Every sibling gets the SAME
-// member cards (no single "chosen" host) — also explicit: with several
-// changed methods in one class there is no natural single place to put them.
-//
-// Requires POSITIVE EVIDENCE that the members really did land on a sibling: at
-// least one `class_member:` callresolve row whose callerId IS one of those
-// siblings. A sibling merely existing is not enough — the backend keeps a
-// header whose OWN member changed (or was removed) as its own caller
-// (headerHasOwnChange, callresolve_analysis.go), and no rows at all (the
-// resolve_call workflow hasn't run yet, failed, or the header region wouldn't
-// parse) must never hide a changed block either. Both cases leave the header a
-// normal, approvable index row — Reindert: "als een php constante is
-// aangepast, maar het kan niet als onderliggende code ergens aan gekoppeld
-// worden, laat het dan zien als losse blok wat ik moet goedkeuren". Without
-// this, the header's changed row sat in NO approval counter at all (it is not
-// in state.blocks) while its member card, scoped to its usage site on unchanged
-// code, showed nowhere in diff mode.
-function swallowedClassHeaderIds() {
-  const ids = new Set()
-  const memberCallers = new Set()
-  for (const r of state.callResolve || []) {
-    if (String(r.callKey || '').startsWith('class_member:')) memberCallers.add(r.callerId)
-  }
-  if (!memberCallers.size) return ids
-  const byFileClass = new Map()
-  for (const b of state.allBlocks) {
-    if (b.name === '<class-header>') continue
-    const key = b.file + '::' + (b.class || '')
-    if (!byFileClass.has(key)) byFileClass.set(key, [])
-    byFileClass.get(key).push(b)
-  }
-  for (const b of state.allBlocks) {
-    if (b.name !== '<class-header>') continue
-    const key = b.file + '::' + (b.class || '')
-    if ((byFileClass.get(key) || []).some((sib) => memberCallers.has(sib.id))) ids.add(b.id)
-  }
-  return ids
-}
+// A <class-header> block used to be pulled from the index whenever its members
+// showed as Onderliggende code under a sibling method (swallowedClassHeaderIds,
+// removed). That whole mechanism is gone: since splitClassHeaderMembers
+// (phpscan.go) the members are no longer IN the header block — each is a block
+// of its own, hidden from the index by the ordinary resolvedCallTargetIds path
+// once something references it — and what is left in a <class-header> block
+// (the class's `use Trait;` statements) is real changed code that must keep its
+// own approvable row. A header consisting of nothing but members leaves no
+// block at all, so there is nothing left to swallow either.
 
 // loadCallResolve fetches the PR's call-resolution rows into state. Best-effort:
 // a transient failure just yields no rows. Reassigns the array so arrow.js
@@ -5199,8 +5166,7 @@ function callScopeMethods(b, rows) {
   const methods = new Set()
   // b's own name decides whether a class_member: key stays block-level (see
   // isBlockLevelCallKey's own doc comment) — only true while b IS the
-  // <class-header> block itself (the no-sibling fallback). '<class-header>' is
-  // the same literal swallowedClassHeaderIds compares against.
+  // <class-header> block itself (resolveClassMembers' no-sibling fallback).
   const bIsClassHeader = b.name === '<class-header>'
   for (const r of callRows(b)) {
     // A block-level synthetic key (resource:/migration_model:/data_provider:/
@@ -5658,13 +5624,17 @@ function resolvedCallChildren(b) {
           nestedSig: nestedSigOf([]),
         }
       }
-      // A class-member child — a <class-header> block's own declared property/
-      // constant (resolveClassMembers), or a Foo::MAX_TRIES reference resolved
-      // to its declaration (rule 6b) — is, like a translation child, always a
-      // read-only leaf: it is not a PR block, so it has no diff-stat, no
-      // approval, no drill-hint chips and no row of its own in the block index.
-      // A changed member sorts above the reference material (prio 0 vs 2).
-      if (CLASS_MEMBER_KINDS.has(r.kind)) {
+      // A class-member child — a class's own declared property/constant
+      // (resolveClassMembers), or a Foo::MAX_TRIES reference resolved to its
+      // declaration (rule 6b) — is a read-only leaf ONLY while it is not a PR
+      // block: no diff-stat, no approval, no drill-hint chips, no row of its
+      // own in the index. A member this PR CHANGED is a block since
+      // splitClassHeaderMembers (phpscan.go), so it falls through to the
+      // ordinary call-target branch below and gets its real diff, approval and
+      // drill-down — which is what makes "elke member een eigen, los goed te
+      // keuren blok" reachable from the method that uses it. A changed member
+      // sorts above the reference material (prio 0 vs 2).
+      if (CLASS_MEMBER_KINDS.has(r.kind) && !byId.get(callChildId(r))) {
         const memberChanged = r.kind === 'class_property' || r.kind === 'class_constant_changed'
         return {
           id: b.id + '::' + r.callKey,
