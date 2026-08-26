@@ -3004,6 +3004,21 @@ function isCommentAnchorDrillActive(level) {
   return !!(b && b.kind === 'comment' && commentAnchorDrillFor === b.id)
 }
 
+// commentAnchorOnlyIds — the comment id(s) a "Comments op regels" index item
+// stands for (b.comments, the whole line-group — see "Comment-index rows are
+// grouped per source line" in comments-panel.md; falls back to the single
+// b.comment for a synthetic item with no group array). Feeds
+// commentScope's onlyIds above, so RelatedPanel narrows the visible thread(s)
+// down to exactly this row's own comment(s), not every comment commentUnder
+// would otherwise surface on the same unit. Only ever called while
+// isCommentAnchorDrillActive(1) is true, i.e. curBlock() is genuinely the
+// comment-index item that opened this drill.
+function commentAnchorOnlyIds() {
+  const b = curBlock()
+  const list = (b && (b.comments || (b.comment ? [b.comment] : []))) || []
+  return list.map((c) => c.id)
+}
+
 // commentAnchorColumnHidden reports whether the top-level block-column must
 // disappear ENTIRELY rather than collapse to its usual narrow rail. While an
 // anchored comment-index item's own drilled column owns the keyboard (see
@@ -10308,6 +10323,18 @@ function commentScope() {
     rowStart: t.rowStart,
     rowEnd: t.rowEnd,
     seg: t.seg,
+    // onlyIds — set only while a "Comments op regels" index item's own
+    // drilled anchor column owns the cursor (isCommentAnchorDrillActive):
+    // narrows the block-scoped comment index down to exactly the comment(s)
+    // that row stands for (b.comments, see commentGroupKeyOf), instead of
+    // every comment commentUnder's row-range containment would otherwise
+    // surface on this unit. Reviewer request: "als ik navigeer door comments
+    // op regels wil ik aan de rechterkant alleen die comment en chat zien" —
+    // the diff card and Onderliggende code stay as-is (commentAnchorColumnHidden
+    // is unrelated to this), only OTHER comment threads on the same unit are
+    // suppressed. See "Comments op regels shows only its own comment" in
+    // comments-panel.md.
+    onlyIds: isCommentAnchorDrillActive(1) ? commentAnchorOnlyIds() : null,
     // The unit's real source line range on BOTH sides (see unitLineRange/
     // unitBothLineRanges) — RelatedPanel.commentUnder's only way to
     // best-effort scope an unpinned/never-anchored comment (rowStart -1) to

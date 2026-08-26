@@ -108,6 +108,14 @@ test.describe('a long comment shows a short generated title', () => {
   // card). With a title the body goes back to 3 clamped lines even when the
   // "lone comment, no underlying code" rule would otherwise show it in full
   // (autoExpandLoneComment) — the title now does that job.
+  //
+  // Reached via the ORDINARY block row here, not the "Comments op regels"
+  // index row — selecting THAT row now always forces the full expanded
+  // thread (isAnchorOnlyComment, home.mjs's openCommentAnchorDrill/
+  // cs.scope.onlyIds, see comments-panel.md), so it is not itself a compact
+  // card any more. This test is about the compact-card+title rendering
+  // itself, which still applies to an ordinary drilled-into block's own
+  // inline comment.
   test('the compact card shows the title and clamps the body back to 3 lines', async ({ page }) => {
     const now = new Date().toISOString()
     const anchored = {
@@ -137,7 +145,7 @@ test.describe('a long comment shows a short generated title', () => {
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
 
-    const row = page.locator('[data-idx]').filter({ hasText: 'Vault case wist echte settings rijen' })
+    const row = page.locator('[data-idx]').filter({ hasText: 'ContractController::index' })
     await row.click()
 
     const item = page.getByTestId('comment-item').first()

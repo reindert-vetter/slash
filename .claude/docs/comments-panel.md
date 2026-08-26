@@ -219,40 +219,77 @@ ordinary comment), the Underlying-code panel and the embedded Claude column
 need no further wiring. The drilled cursor is set from the group's PRIMARY
 comment's own unit (`b.comment.gran`/`b.comment.rowStart`, recomputed once
 the anchor's code — and thus its aligned rows — actually arrives, since the
-very first open has to guess against an empty row list). Since
-`commentScope`'s ordinary row-range filtering (`commentUnder`) then shows
-**every** comment that actually falls under that cursor unit — not only the
-ones in this synthetic sidebar group — the reviewer sees the whole line's
-conversation regardless of the group's own boundaries, exactly as any other
-block's inline comments already work; no separate "show the whole group"
-wiring was needed.
+very first open has to guess against an empty row list).
+
+**Only this row's own comment(s) show next to it — a later reviewer request
+narrowed this back down.** `commentScope`'s ordinary row-range filtering
+(`commentUnder`) on its own would show **every** comment that falls under
+that cursor unit, not only the ones in this synthetic sidebar group — fine
+for ordinary code navigation, but not what "alleen die comment en chat zien"
+asks for here: a second, unrelated open comment on the very same unit (both
+commonly have an unknown `rowStart`, which `commentUnder` treats as "matches
+every unit of the block") used to render right next to it. `commentScope`
+(`home.mjs`) therefore adds **`onlyIds`** — the id(s) of this row's own
+group (`commentAnchorOnlyIds()`, `b.comments`/`b.comment`) — whenever
+`isCommentAnchorDrillActive(1)` is true; `recomputeView` (`RelatedPanel.mjs`)
+filters `cs.view` down to exactly those ids on top of its usual
+`commentUnder` pass. The diff card and the Underlying-code panel are
+UNAFFECTED by this — the reviewer explicitly kept those ("hetzelfde zien als
+dat je via de code hebt genavigeerd" still holds for them, see "The anchored
+column IS the leading column" below); only the comment/Claude side is scoped
+down to this one thread. Test: "shows only its own comment, not another
+unrelated one on the same block" in `tests/comment-anchor-expanded-view.spec.mjs`.
 
 **This opens automatically while merely walking ↑/↓ through the index — a
 later reviewer request restored that original behaviour after a brief
 detour where it required an explicit ArrowRight (don't reintroduce that
 detour): "als ik door blokken index langs ga, wil ik dat het al uitgeklapt
-is".** But the keyboard/focus deliberately does NOT follow along: the watch
-calls `leaveRelated()` right before `openCommentAnchorDrill`, and the call
-itself never touches `cs.focus`, so no comment card is ever auto-expanded —
-the row reads "already visible, but not yet selected inside". Only an
-explicit **`→`** hands the keyboard IN, by calling the exact same
-`enterCommentsOrRelated()` (`RelatedPanel.mjs`) the ordinary
-`state.mode === 'diff'` ArrowRight branch already uses (`onKeydown`) — see
-"→ skips an already-resolved default comment" below for what that function
-does. This is what makes the expanded view fully **keyboard-navigable** (a
-separate, still-standing reviewer request) despite `state.mode` staying
+is".** The keyboard/focus itself deliberately does NOT follow along: the
+watch calls `leaveRelated()` right before `openCommentAnchorDrill`, and the
+call itself never touches `cs.focus`, so no comment card ever STEALS the
+keyboard on mere selection — the row reads "already visible, but not yet
+selected inside". Its comment card, however, DOES render fully expanded
+(`expandedConversation`, not the compact preview) from the moment the row is
+selected — reviewer request: "comment en chat moet ook volledig
+opengevouwen zijn (ook met gegenereerde blokken die eronder staan)", i.e.
+both the code-block preview cards a Claude/comment fence generates and the
+Underlying-code children of the anchor unit. `commentCard` (`RelatedPanel.mjs`)
+checks **`isAnchorOnlyComment(c)`** — `cs.scope.onlyIds` includes `c.id` —
+ahead of its ordinary `cs.focus`-driven compact/expanded switch, so this one
+comment renders expanded independent of `cs.focus`; since `onlyIds` already
+narrows `visibleComments()` down to just this row's own comment(s), it can
+never also expand some OTHER, unrelated card. Only an explicit **`→`** hands
+the KEYBOARD IN, by calling the exact same `enterCommentsOrRelated()`
+(`RelatedPanel.mjs`) the ordinary `state.mode === 'diff'` ArrowRight branch
+already uses (`onKeydown`) — see "→ skips an already-resolved default
+comment" below for what that function does, and how it is bypassed for this
+one case. This is what makes the expanded view fully **keyboard-navigable**
+(a separate, still-standing reviewer request) despite `state.mode` staying
 `'list'`: `relatedActive()`'s `↑`/`↓`/`←`/`→` handling in `onKeydown` is
 unconditional on `state.mode` — it only checks `cs.focus` — so once
 `enterCommentsOrRelated()` sets that, the existing generic
 comment/thread/Claude-column walk takes over exactly as it would for any
-other block. "Uitgeklapt, maar niet direct geselecteerd" — the drilled column
-becomes visible the moment the row is selected; only `→` moves the keyboard
-into it.
+other block. "Uitgeklapt, maar niet direct geselecteerd" — the card is
+already expanded the moment the row is selected; only `→` moves the
+KEYBOARD into it.
 
 ### → skips an already-resolved default comment
 
 `enterCommentsOrRelated(pr)` (`RelatedPanel.mjs`) is the single entry point
-both `→` sites above call. `hasVisibleComments()`/`visibleComments()` do not
+both `→` sites above call — **except while `cs.scope.onlyIds` is set**
+(a "Comments op regels" row's own drilled anchor, see above): the function's
+very first check short-circuits straight to `enterCommentsHead()` whenever
+`hasVisibleComments()` is true, skipping every resolved/stale-skip rule
+below entirely. Reviewer request: "als ik dus 2x naar rechts ga, wil ik
+altijd in die comment blok zitten" — for this one row the whole point of `→`
+is landing on THIS comment, never on a sibling or on Underlying code instead
+(the skip logic below exists for ordinary code navigation, where that IS the
+more useful landing). Since `onlyIds` already narrows `visibleComments()`
+down to just this row's own comment(s) — always at least one open one, by
+construction (a row only exists for an unresolved comment/group in the first
+place) — this can never land the keyboard on some unrelated thread.
+
+`hasVisibleComments()`/`visibleComments()` do not
 filter out a resolved comment — `enterCommentsHead()` always lands on index
 0 regardless of its status — so a unit whose only (or first) comment is
 already resolved used to default the keyboard onto a thread that's done.

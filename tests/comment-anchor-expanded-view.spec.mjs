@@ -8,17 +8,23 @@ import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 // blokken index langs ga, wil ik dat het al uitgeklapt is"), WITHOUT leaving
 // list mode: the blokken-index stays visible while it is still being walked
 // with ↑/↓ (it does slide away from the first → onward, see the dedicated test
-// below), the sidebar highlight stays on the
-// comment row itself, and the expanded view defaults to Unified —
-// independent of the reviewer's own global diffViewMode preference.
-// Deliberately does NOT move the keyboard/focus in — no comment card is
-// auto-expanded — only an explicit ArrowRight hands the keyboard into the
-// already-visible expanded comments. See comments-panel.md.
+// below), the sidebar highlight stays on the comment row itself, and the
+// expanded view defaults to Unified — independent of the reviewer's own
+// global diffViewMode preference. Its own comment+chat also render fully
+// expanded (never the compact preview) and scoped to ONLY this row's own
+// comment — see "Comments op regels shows only its own comment" in
+// comments-panel.md. Deliberately does NOT move the keyboard/focus in — no
+// comment card steals the keyboard — only an explicit ArrowRight hands the
+// keyboard into the already-visible expanded comments; a second ArrowRight
+// always lands on this exact comment, never skips to Underlying code. See
+// comments-panel.md.
 
 // `over` overrides the anchor's own fields — a test that needs an anchor block
 // with real changed rows (the default one resolves to a file this PR doesn't
-// touch) passes its own file/label/body.
-function mockAnchoredComment(page, over = {}) {
+// touch) passes its own file/label/body. `extra` appends further comment rows
+// (see the "shows only its own comment" test below, which needs a SECOND,
+// unrelated comment on the same block to prove it stays hidden).
+function mockAnchoredComment(page, over = {}, extra = []) {
   const now = new Date().toISOString()
   return page.route('**/api/comments?*', (route) =>
     route.fulfill({
@@ -44,13 +50,14 @@ function mockAnchoredComment(page, over = {}) {
           rowEnd: -1,
           ...over,
         },
+        ...extra,
       ]),
     }),
   )
 }
 
 test.describe('a comment-index item anchored to a real block', () => {
-  test('opens automatically on selection as the leading column, blokken-index still visible, but the keyboard stays out until ArrowRight', async ({
+  test('opens automatically on selection as the leading column, already fully expanded, blokken-index still visible, but the keyboard stays out until ArrowRight', async ({
     page,
   }) => {
     await mockAnchoredComment(page)
@@ -83,24 +90,71 @@ test.describe('a comment-index item anchored to a real block', () => {
     await expect(drillColumn).toContainText('ContractController::index')
     await expect(drillColumn.getByTestId('drill-left-hint')).toHaveCount(0)
 
-    // The comment already shows next to it, but only COMPACT — nothing
-    // pre-expanded/pre-focused (no comment card auto-expanded, per "dan moet
-    // de diff niet direct geselecteerd zijn").
+    // The comment already shows FULLY EXPANDED (the real thread, not just a
+    // compact preview) the moment the row is selected — reviewer request:
+    // "comment en chat moet ook volledig opengevouwen zijn" — even though
+    // nothing is pre-FOCUSED yet (no comment card steals the keyboard, per
+    // "dan moet de diff niet direct geselecteerd zijn").
     const item = page.getByTestId('comment-item').first()
     await expect(item).toBeVisible()
-    await expect(item).toHaveAttribute('data-expanded', 'false')
+    await expect(item).toHaveAttribute('data-expanded', 'true')
 
     // The sidebar selection itself never moved off the comment row.
     await expect(row).toHaveClass(/bg-indigo-50/)
 
     // A FIRST ArrowRight only reveals the diff as "entered" (see the
-    // dedicated highlight test below) — the keyboard stays on the sidebar
-    // and the comment item is still compact. Only a SECOND ArrowRight hands
-    // the keyboard INTO the already-open, already-visible expanded view.
-    await page.keyboard.press('ArrowRight')
-    await expect(item).toHaveAttribute('data-expanded', 'false')
+    // dedicated highlight test below) — the keyboard stays on the sidebar,
+    // the comment item stays expanded exactly as before. Only a SECOND
+    // ArrowRight hands the keyboard INTO the already-open, already-visible
+    // expanded view.
     await page.keyboard.press('ArrowRight')
     await expect(item).toHaveAttribute('data-expanded', 'true')
+    await page.keyboard.press('ArrowRight')
+    await expect(item).toHaveAttribute('data-expanded', 'true')
+  })
+
+  // Reviewer request: "als ik navigeer door comments op regels wil ik aan de
+  // rechterkant alleen die comment en chat zien" — a SECOND, unrelated open
+  // comment on the exact same block must not also render next to this row's
+  // own drilled anchor, even though it would ordinarily fall under the same
+  // containment check (commentUnder) since both have an unknown rowStart
+  // (-1, matches every unit of the block). Only cs.scope.onlyIds (set by
+  // home.mjs's commentScope while isCommentAnchorDrillActive) narrows it back
+  // down to exactly this row's own comment.
+  test('shows only its own comment, not another unrelated one on the same block', async ({ page }) => {
+    await mockAnchoredComment(page, {}, [
+      {
+        id: 'anchor-2',
+        runId: 'run-anchor-2',
+        pr: 12903,
+        file: 'app/Http/Controllers/Api/ContractController.php',
+        label: 'ContractController::index',
+        line: 42,
+        author: 'reviewer',
+        body: 'a completely different remark',
+        createdAt: new Date().toISOString(),
+        reactionCount: 0,
+        status: 'open',
+        source: 'ui',
+        kind: '',
+        reactions: [],
+        rowStart: -1,
+        rowEnd: -1,
+      },
+    ])
+    await page.goto('/pr/12903')
+    await leaveSearchBox(page)
+
+    await page.locator('[data-idx]').filter({ hasText: 'please rename this variable' }).click()
+
+    const items = page.getByTestId('comment-item')
+    await expect(items).toHaveCount(1)
+    await expect(items.first()).toContainText('please rename this variable')
+    // The second comment is a "Comments op regels" row of its own too (it
+    // sorts into the sidebar independently), so this asserts its absence
+    // scoped to the actual comment-item cards, not the whole page (which
+    // still legitimately shows its snippet in the sidebar list).
+    await expect(items.first()).not.toContainText('a completely different remark')
   })
 
   // Bug report: "als ik een onderliggende code open doordat ik een comment

@@ -510,7 +510,16 @@ function recomputeView() {
     cs.view = anchored
   } else {
     const inBlock = anchored.filter((c) => c.file === s.file && c.label === s.label)
-    cs.view = s.mode !== 'diff' || s.rowStart < 0 ? inBlock : inBlock.filter((c) => commentUnder(c, s))
+    let scoped = s.mode !== 'diff' || s.rowStart < 0 ? inBlock : inBlock.filter((c) => commentUnder(c, s))
+    // s.onlyIds — set only while a "Comments op regels" index item's own
+    // drilled anchor column owns the cursor (home.mjs's commentScope/
+    // isCommentAnchorDrillActive): narrows the view down to exactly that
+    // row's own comment(s), so a DIFFERENT comment thread that happens to
+    // land under the same containment check (commentUnder) never shows next
+    // to it. See "Comments op regels shows only its own comment" in
+    // comments-panel.md.
+    if (s.onlyIds) scoped = scoped.filter((c) => s.onlyIds.includes(c.id))
+    cs.view = scoped
   }
   // One arrow per currently-rendered comment card, row → card — see
   // "Linking a comment card to its diff row" in comments-panel.md. Pushed
@@ -1322,6 +1331,18 @@ export function enterCommentsHead() {
 // codeblok" — see "A stale (unpinned) comment is always folded..." in
 // comments-panel.md.
 export function enterCommentsOrRelated(pr) {
+  // cs.scope.onlyIds — a "Comments op regels" index item's own drilled
+  // anchor column (see commentScope/isCommentAnchorDrillActive in
+  // home.mjs). Reviewer request: "als ik dus 2x naar rechts ga, wil ik
+  // altijd in die comment blok zitten" — the resolved/stale skip logic
+  // below exists for ordinary code navigation, where landing on a DIFFERENT
+  // comment or Underlying code instead is genuinely useful; here the whole
+  // point of the row is this one comment, so → always lands on it
+  // unconditionally, never skips past it.
+  if (cs.scope && cs.scope.onlyIds && hasVisibleComments()) {
+    enterCommentsHead()
+    return
+  }
   if (hasVisibleComments()) {
     const list = visibleComments()
     if (list[0].status !== 'resolved' && !isStaleAnchor(list[0])) {
@@ -7408,6 +7429,21 @@ function expandedConversation(c, openCommentMenu, readOnly) {
 // only ever applies to that SECOND branch — the comment side never goes
 // read-only while it itself owns the keyboard, only while Claude does — see
 // "Read-only, not a rail" in .claude/docs/comments-panel.md.
+// isAnchorOnlyComment — true while this comment is the (only) one a
+// "Comments op regels" index item's drilled anchor column scoped the view
+// down to (cs.scope.onlyIds, set by home.mjs's commentScope while
+// isCommentAnchorDrillActive(1)). Used by commentCard below to force the
+// FULL thread (expandedConversation) for it even before the reviewer has
+// pressed → — reviewer request: "comment en chat moet ook volledig
+// opengevouwen zijn", matching the way the anchor's own diff/Onderliggende
+// code already auto-opens while merely walking ↑/↓ (see
+// openCommentAnchorDrill in home.mjs). Since onlyIds already narrows
+// visibleComments() to just this row's own comment(s), this can never also
+// match some OTHER, unrelated comment.
+function isAnchorOnlyComment(c) {
+  return !!(cs.scope && cs.scope.onlyIds && cs.scope.onlyIds.includes(c.id))
+}
+
 function commentCard(c, i, openCommentMenu, readOnly) {
   return html`
     <div class="contents">
@@ -7416,7 +7452,9 @@ function commentCard(c, i, openCommentMenu, readOnly) {
           ? expandedConversation(c, openCommentMenu, false)
           : cs.focus === 'claude' && chatAnchorComment() && chatAnchorComment().id === c.id
             ? expandedConversation(c, openCommentMenu, readOnly)
-            : compactConversation(c, i, autoExpandLoneComment(), openCommentMenu)}
+            : isAnchorOnlyComment(c)
+              ? expandedConversation(c, openCommentMenu, false)
+              : compactConversation(c, i, autoExpandLoneComment(), openCommentMenu)}
     </div>
   `
 }
