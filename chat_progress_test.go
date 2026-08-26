@@ -139,3 +139,69 @@ func TestChatProgressAccumulatesEditedFiles(t *testing.T) {
 		t.Fatalf("pending files after finish = %v, want the turn's own edited files (sorted)", pending)
 	}
 }
+
+// resetChatProgressPartial clears attempt 1's leftover answer (typically the
+// strict {"type":"need_write"} directive itself, streamed like any other
+// text) before attempt 2 starts writing its own real answer — without this,
+// the two stayed glued together in the live bubble for the rest of the turn.
+func TestChatProgressResetPartialBeforeShellAttempt(t *testing.T) {
+	resetChatProgress()
+	defer resetChatProgress()
+
+	startChatProgress("", 33, "conv-reset")
+	var checkoutDir string
+	sink := chatProgressSink("", 33, "conv-reset", &checkoutDir)
+
+	// Attempt 1: the whole streamed answer is the escalation directive.
+	sink(claude.ChatEvent{Kind: claude.ChatEventText, TextDelta: `{"type":"need_write"}`})
+	p, _ := chatProgressFor("conv-reset")
+	if p.Partial != `{"type":"need_write"}` {
+		t.Fatalf("attempt 1 partial = %q", p.Partial)
+	}
+
+	// runOneClaudeTurn resets right before invoking attempt 2.
+	resetChatProgressPartial("", 33, "conv-reset")
+	p, ok := chatProgressFor("conv-reset")
+	if !ok || p.Partial != "" || p.Tool != "" || p.Detail != "" {
+		t.Fatalf("after reset: %+v ok=%v", p, ok)
+	}
+
+	// Attempt 2's own real answer must not carry attempt 1's leftover text.
+	sink(claude.ChatEvent{Kind: claude.ChatEventText, TextDelta: "Nu de flag toevoegen."})
+	p, _ = chatProgressFor("conv-reset")
+	if p.Partial != "Nu de flag toevoegen." {
+		t.Fatalf("attempt 2 partial = %q, want no leftover directive text", p.Partial)
+	}
+}
+
+// A brand-new text content block starting right after a tool/thinking block
+// gets a blank-line separator from whatever text preceded it — Claude's own
+// deltas never carry a leading space/newline across that gap, so naively
+// appending glued two distinct sentences together with nothing in between
+// (reported: "toevoegen.Nu de Unleash-config...").
+func TestChatProgressSeparatesTextBlocksAfterATool(t *testing.T) {
+	resetChatProgress()
+	defer resetChatProgress()
+
+	startChatProgress("", 34, "conv-sep")
+	var checkoutDir string
+	sink := chatProgressSink("", 34, "conv-sep", &checkoutDir)
+
+	sink(claude.ChatEvent{Kind: claude.ChatEventText, TextDelta: "Nu de flag toevoegen."})
+	sink(claude.ChatEvent{Kind: claude.ChatEventTool, Tool: "Edit", Detail: "src/Foo.php"})
+	sink(claude.ChatEvent{Kind: claude.ChatEventText, TextDelta: "Nu de Unleash-config en de tests."})
+
+	p, _ := chatProgressFor("conv-sep")
+	want := "Nu de flag toevoegen.\n\nNu de Unleash-config en de tests."
+	if p.Partial != want {
+		t.Fatalf("partial = %q, want %q", p.Partial, want)
+	}
+
+	// Two consecutive text deltas of the SAME block (no tool in between) must
+	// stay glued exactly as before — only a real block boundary separates.
+	sink(claude.ChatEvent{Kind: claude.ChatEventText, TextDelta: " Klaar."})
+	p, _ = chatProgressFor("conv-sep")
+	if p.Partial != want+" Klaar." {
+		t.Fatalf("partial after same-block delta = %q", p.Partial)
+	}
+}

@@ -1270,6 +1270,60 @@ not enough" in `.claude/docs/workflows-comments.md`). Momentary by design:
 and there is deliberately no bubble, no stored message and no reviewer-facing
 control for any of it — this brief line is the whole visible surface.
 
+### The live partial bubble: attempt 1's leftover directive, and glued text segments
+
+`p.Partial` (`chatProgress.Partial`, `chat_progress.go`) is the running answer
+text that makes `claudePartialBubble` (`src/ClaudeChat.mjs`,
+`data-testid=claude-partial-body`) stream in — `chatProgressSink`'s
+`ChatEventText` case does `p.Partial += ev.TextDelta` for every streamed
+delta. Two reviewer-reported bugs lived here, both about a two-step turn
+(task 3, see "Attempt 2" above): the live bubble showed the literal raw
+`{"type":"need_write"}` text, directly glued in front of the following
+sentences with no separator at all
+(`{"type":"need_write"}Nu de flag toevoegen.Nu de Unleash-config…`).
+
+- **Attempt 1's own streamed answer stayed in `Partial` across the
+  escalation.** When the cheap read-only attempt's whole answer IS the
+  escalation directive, that text streams into `Partial` exactly like any
+  other answer — and nothing ever cleared it before attempt 2 started
+  writing its own real text right after it. **`resetChatProgressPartial(repo,
+  pr, conversationID)`** (`chat_progress.go`, same mutate+publish pair as
+  `advanceChatProgress`) is called from `runOneClaudeTurn` right before the
+  shell attempt's own `cl.RunChat(...)` call — the earliest point the caller
+  knows a second attempt is really about to write. A no-op if the turn
+  already finished, mirroring `mutateChatProgress`'s own late-event guard.
+- **A brand-new text content block right after a tool/thinking block was
+  glued onto the previous one with no separator.** `modules/claude/claude.go`
+  fires a fresh `content_block_start` per block, and Claude's own deltas
+  never carry a leading space/newline across that gap — so two genuinely
+  distinct sentences (Claude narrating "now I'll do X" before/after a tool
+  call) ran together as one word. `chatProgressSink`'s `ChatEventText` case
+  now inserts a blank-line separator (`"\n\n"`, renders as its own paragraph
+  once through `renderMarkdown`) whenever the phase just before this delta
+  was **not** already `chatPhaseWriting` (a real block boundary) — two
+  consecutive deltas of the SAME block stay glued exactly as before, only a
+  tool/thinking gap in between separates.
+- **The live bubble also renders a labelled icon instead of the raw JSON,
+  as a second, independent safety net.** Even with the reset above, the
+  directive is still genuinely visible for the brief moment attempt 1
+  itself is still streaming it (before the caller even knows whether it
+  will escalate). `claudePartialBubble` checks whether `p.partial`
+  (trimmed) starts with `{"type":"need_write"` — a PREFIX match, since the
+  JSON may still be forming mid-stream — and renders **`claudeNeedWritePill()`**
+  instead of the ordinary markdown div: a lock icon plus the word **"Vraagt
+  schrijftoegang"**, with a matching `title`, same shape as
+  `claudeNoShellPill` below (words carry the meaning, colour is decoration
+  only, per the colourblind rule). Neither of these two lines was ever a
+  concern for an already-STORED message: `isNeedWriteDirective`'s own check
+  (see "Attempt 2" above) already prevented the raw directive from ever
+  landing in a saved `chat.Message.Body` — this whole section is about the
+  ephemeral `Partial` snapshot only, so no existing, persisted message needed
+  any cleanup.
+
+Test: `tests/claude-chat-needwrite-icon.spec.mjs` (the icon pill, mocked
+`chat.progress`), plus `TestChatProgressResetPartialBeforeShellAttempt`/
+`TestChatProgressSeparatesTextBlocksAfterATool` in `chat_progress_test.go`.
+
 **The long-wait suffix is front-end only, deliberately no new backend state.**
 `elapsed` (`RelatedPanel.mjs`'s `elapsed()` getter) already counts seconds
 since `startedAt`, which now marks the start of `preparing` and therefore keeps

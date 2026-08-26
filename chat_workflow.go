@@ -1013,6 +1013,15 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 		}
 		hadShell = true
 		checkoutDir = dir // so an Edit/Write tool event below records a repo-relative path
+		// Attempt 1's own streamed answer — often literally the strict
+		// {"type":"need_write"} directive text itself, since that IS what it
+		// answers when escalating — is still sitting in the live progress
+		// snapshot's Partial field (chatProgressSink accumulates it exactly
+		// like any other answer). Clear it before attempt 2 starts streaming
+		// its own real, reviewer-facing text, or the two end up glued
+		// together with no separator for the rest of the turn. See
+		// resetChatProgressPartial's own doc comment.
+		resetChatProgressPartial(arg.Repo, arg.PR, arg.ConversationID)
 		shellReq := claude.RunRequest{
 			Model:        model,
 			Prompt:       chatNeedWriteContinuationPrompt,
@@ -1168,6 +1177,18 @@ func chatProgressSink(repo string, pr int, conversationID string, checkoutDir *s
 					addEditedFile(p, relativeToCheckout(*checkoutDir, ev.Detail))
 				}
 			case claude.ChatEventText:
+				// A tool/thinking block in between means this delta starts a
+				// BRAND NEW text content block (modules/claude/claude.go
+				// fires a fresh content_block_start per block) — the model
+				// never adds its own leading space/newline across that gap,
+				// so naively appending glues the previous segment's last
+				// word straight onto this one's first ("...toevoegen.Nu de
+				// Unleash-config..."). A blank line separates them into
+				// their own paragraphs once rendered as markdown
+				// (claudePartialBubble, src/ClaudeChat.mjs).
+				if p.Phase != chatPhaseWriting && p.Partial != "" {
+					p.Partial += "\n\n"
+				}
 				p.Phase = chatPhaseWriting
 				p.Tool, p.Detail = "", ""
 				p.Partial += ev.TextDelta

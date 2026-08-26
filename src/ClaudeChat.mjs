@@ -228,6 +228,51 @@ export function claudeStatusText(p, elapsed) {
   return text
 }
 
+// NEED_WRITE_PARTIAL_PREFIX mirrors the backend's own strict directive check
+// (isNeedWriteDirective, chat_workflow.go) — the read-only first attempt's
+// way of asking for Edit/Bash access. This directive is an internal signal,
+// never reviewer-facing content, but it streams into the live partial answer
+// like any other text; resetChatProgressPartial (chat_progress.go) clears it
+// again once the second (shell) attempt starts, so this is normally visible
+// only for the brief moment the first attempt is still forming it — a
+// PREFIX match (not exact), since mid-stream the JSON may still be growing
+// ('{"type":"need_w…') and should already read as the icon below rather than
+// flashing raw JSON fragments.
+const NEED_WRITE_PARTIAL_PREFIX = '{"type":"need_write"'
+const NEED_WRITE_LABEL = 'Vraagt schrijftoegang'
+
+// claudeNeedWritePill — shown INSTEAD of the raw directive JSON while the
+// live partial answer is (still forming into, or already) the strict
+// {"type":"need_write"} directive. A WORD ("Vraagt schrijftoegang"), not just
+// an icon, plus a matching title/aria-label — the reviewer must be able to
+// tell what's happening without relying on colour (colourblind rule), same
+// shape as claudeNoShellPill below.
+function claudeNeedWritePill() {
+  return html`
+    <div
+      class="flex max-w-[92%] items-center gap-1.5 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-zinc-700 dark:bg-zinc-800/40 dark:text-zinc-400"
+      data-testid="claude-partial-need-write"
+      title="${NEED_WRITE_LABEL}"
+    >
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        class="h-3.5 w-3.5 shrink-0"
+        aria-label="${NEED_WRITE_LABEL}"
+      >
+        <rect x="3" y="11" width="18" height="10" rx="2"></rect>
+        <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+      </svg>
+      <span>${NEED_WRITE_LABEL}</span>
+    </div>
+  `
+}
+
 // claudePartialBubble — the answer as it is still being written. A THROWAWAY
 // render of throwaway data: it disappears the moment the real, stored message
 // arrives (RelatedPanel.mjs clears the conversation's progress after refetching the
@@ -236,6 +281,7 @@ export function claudeStatusText(p, elapsed) {
 function claudePartialBubble(view) {
   const p = view.progress()
   if (!p || !p.partial) return ''
+  const needWrite = p.partial.trim().startsWith(NEED_WRITE_PARTIAL_PREFIX)
   return html`
     <div class="flex flex-col items-start gap-0.5" data-testid="claude-partial">
       <div class="flex items-center gap-2 py-0.5">
@@ -244,11 +290,14 @@ function claudePartialBubble(view) {
           ${CLAUDE_NAME}
         </span>
       </div>
-      <div
-        class="markdown-body max-w-[92%] rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-xs leading-relaxed [overflow-wrap:anywhere] text-slate-700 dark:border-zinc-700 dark:bg-zinc-800/40 dark:text-zinc-300"
-        data-testid="claude-partial-body"
-        .innerHTML="${() => renderMarkdown(p.partial, 0, true)}"
-      ></div>
+      ${() =>
+        needWrite
+          ? claudeNeedWritePill()
+          : html`<div
+              class="markdown-body max-w-[92%] rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-xs leading-relaxed [overflow-wrap:anywhere] text-slate-700 dark:border-zinc-700 dark:bg-zinc-800/40 dark:text-zinc-300"
+              data-testid="claude-partial-body"
+              .innerHTML="${() => renderMarkdown(p.partial, 0, true)}"
+            ></div>`}
     </div>
   `
 }

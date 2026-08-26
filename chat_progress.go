@@ -122,6 +122,29 @@ func advanceChatProgress(repo string, pr int, conversationID, phase string) {
 	publishChatProgress(repo, pr, conversationID, snap)
 }
 
+// resetChatProgressPartial clears the accumulated Partial (and any leftover
+// Tool/Detail) of a running turn's snapshot without touching Phase/
+// EditedFiles/StartedAt, then publishes the cleared snapshot immediately —
+// same mutate+publish pair advanceChatProgress uses. Called by
+// runOneClaudeTurn (chat_workflow.go) right before invoking the SECOND
+// (shell) attempt of a two-step turn: without this, the read-only first
+// attempt's own answer — commonly the strict {"type":"need_write"}
+// escalation directive itself, streamed into Partial like any other answer —
+// stayed glued in front of the shell attempt's real text for the rest of the
+// turn (reported: the live bubble showed the raw directive JSON immediately
+// followed by the actual answer, no separator). A no-op if the turn already
+// finished (mirrors mutateChatProgress's own late-event guard).
+func resetChatProgressPartial(repo string, pr int, conversationID string) {
+	snap, ok := mutateChatProgress(conversationID, func(p *chatProgress) {
+		p.Partial = ""
+		p.Tool, p.Detail = "", ""
+	})
+	if !ok {
+		return
+	}
+	publishChatProgress(repo, pr, conversationID, snap)
+}
+
 // mutateChatProgress applies fn to the stored snapshot and returns the result.
 // The second return is false when there is no running turn for that
 // conversation (a late event after the turn finished) — the caller then
