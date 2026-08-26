@@ -108,9 +108,17 @@ function splitCodeByClasses(code) {
   return segments
 }
 
+// `whitespace-pre-wrap break-words` (same fix, same reason, as
+// markdown.mjs's own inline fence <pre> — see its doc comment): without it a
+// long line (a TS type annotation, JSDoc, …) just kept scrolling out of the
+// `overflow-auto` box, and with the native scrollbar hidden (`no-scrollbar`)
+// there was no visible cue that anything was cut off. `overflow-auto` stays
+// (for a snippet many lines/segments tall — see `pane`'s own `max-h-[40vh]`
+// cap above), it just no longer needs to also carry the horizontal case now
+// that a line wraps instead of running off the right edge.
 function highlightedPre(code, lang) {
   return html`<pre
-    class="no-scrollbar code m-0 max-h-[40vh] overflow-auto p-2 text-xs leading-relaxed"
+    class="no-scrollbar code m-0 max-h-[40vh] overflow-auto whitespace-pre-wrap break-words p-2 text-xs leading-relaxed"
     data-scroll-body
     @scroll="${(e) => updateScrollHints(e.target)}"
   ><code class="language-php" .innerHTML="${() => highlightForLang(code, lang)}"></code></pre>`

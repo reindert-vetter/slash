@@ -488,3 +488,69 @@ test('↓ past a drilled column\'s own Claude code blocks stays inside that colu
     })
   }
 })
+
+// A long code LINE wraps instead of being silently clipped — reviewer report
+// on a generated TS block (see "A long code line wraps instead of being
+// silently clipped" in .claude/rules/conventions.md): a line wider than the
+// bubble used to run off the right edge with nothing to show it was cut
+// (the fence wrapper's own `overflow-hidden` inline, an invisible
+// `no-scrollbar` horizontal scroll in the expanded preview card). Not
+// TS-specific — this seeds TWO different extensions (a `ts` fence with a
+// long, space-separated line typical of a type signature, and a `bash`
+// fence with one long UNBROKEN token, so `break-words`' forced mid-token
+// break is exercised too, not just ordinary whitespace wrapping) to prove
+// the fix is general, per the task's own "onderzoek ook andere
+// extensies" instruction.
+test('a long code line wraps in both the inline fence and the expanded preview card, for any extension', async ({
+  page,
+}, testInfo) => {
+  const pr = seededPr(testInfo)
+  const tsLine =
+    'export const firePurchaseEvent = (orderData: OrderSummaryResponse, trackedOrderIds: ReadonlyArray<string>): void => {'
+  const bashLine = '/very/long/unbroken/path/without/any/spaces/that/would/otherwise/overflow/the/narrow/chat/bubble/column/xyz'
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: {
+      pr,
+      file: 'test.php',
+      line: 1,
+      author: 'reviewer',
+      body: 'ts voorbeeld:\n```ts\n' + tsLine + '\n```\nbash voorbeeld:\n```bash\n' + bashLine + '\n```',
+      code: '$order->total();',
+      gran: 'call',
+      label: 'Order::total',
+    },
+  })
+  expect((await start.json()).runId).toBeTruthy()
+
+  await page.goto('/pr/' + pr)
+  await leaveSearchBox(page)
+  const item = page.getByTestId('comment-item').first()
+  await expect(item).toBeVisible()
+  await item.click()
+
+  const inlineFences = page.getByTestId('code-fence')
+  await expect(inlineFences).toHaveCount(2)
+
+  // Neither inline fence's <pre> lets its content scroll past its own box —
+  // whitespace-pre-wrap/break-words wrapped the long line instead of the
+  // wrapper's overflow-hidden silently clipping it.
+  for (let i = 0; i < 2; i++) {
+    const pre = inlineFences.nth(i).locator('pre.code')
+    const overflow = await pre.evaluate((el) => el.scrollWidth - el.clientWidth)
+    expect(overflow).toBeLessThanOrEqual(1)
+    const whiteSpace = await pre.evaluate((el) => getComputedStyle(el).whiteSpace)
+    expect(whiteSpace).toBe('pre-wrap')
+  }
+
+  // The full-size preview cards below show the same, unwrapped-looking-but-
+  // actually-wrapped behaviour once expanded (a lone/last comment starts
+  // expanded by default).
+  const cards = page.getByTestId('code-preview-card')
+  await expect(cards).toHaveCount(2)
+  for (let i = 0; i < 2; i++) {
+    await expect(cards.nth(i)).toHaveAttribute('data-expanded', 'true')
+    const pre = cards.nth(i).locator('pre.code')
+    const overflow = await pre.evaluate((el) => el.scrollWidth - el.clientWidth)
+    expect(overflow).toBeLessThanOrEqual(1)
+  }
+})

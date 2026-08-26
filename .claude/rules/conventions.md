@@ -155,6 +155,22 @@ title, and per-class labels" in `.claude/docs/claude-chat-panel.md`). Only
 full-size preview card stacked below; `prInfoCard`'s PR summary/description
 keeps the default, untruncated rendering.
 
+**A long code line wraps instead of being silently clipped.** Both this
+inline fence's `<pre>` (`extractCodeFences` above) and the full-size
+code-preview card's own `<pre>` (`CodePreview.mjs`'s `highlightedPre`) carry
+`whitespace-pre-wrap break-words` — without it a line wider than the bubble
+(`max-w-[92%]`) just ran off the right edge with no scrollbar and no visual
+cue: hidden by the fence wrapper's own `overflow-hidden` inline, or scrollable
+but invisibly so (`no-scrollbar`) in the preview card. Reviewer report was
+specifically about a TS block, but the clip itself isn't language-specific —
+any grammar's long-enough line (a type annotation, JSDoc, a long import path)
+hits it, TS/JS just gets there sooner than the historically shorter PHP
+snippets this was first built around. Same fix `Footer.mjs`'s `WIDE_AT`
+already applies to its own long diff lines, but unconditional here rather
+than past a length threshold — this pane is already narrow and deliberately
+just a few-line "taste" (see `truncate` above), so a line that already fits
+never wraps and nothing changes for the common case.
+
 It also exports **`hardBreaks(text)`** — single newlines → Markdown hard breaks
 (`  \n`), fenced blocks untouched — which a caller applies **before**
 `renderMarkdown` when the text is a *typed message* rather than authored

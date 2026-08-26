@@ -207,7 +207,20 @@ function extractCodeFences(text, store, startIndex, truncate) {
     // the purely visual "there's more, see the full preview below" cue the
     // reviewer asked for instead of a "+N regels" text line. Shape/mask, not
     // colour, per the colourblind rule.
-    const preCls = 'code m-0' + (isLong ? ' code-fence-fade-bottom' : '')
+    //
+    // `whitespace-pre-wrap break-words` (reviewer report: a TS block's own
+    // long lines — type annotations, JSDoc — ran straight off the right edge
+    // of the bubble and were silently clipped by the wrapper's own
+    // `overflow-hidden`, with no scrollbar and no wrap to show the rest; not
+    // TS-specific, any language's long-enough line hit the same clip, TS
+    // just gets there sooner). Same fix Footer.mjs already uses for its own
+    // long diff lines ("so the entire line is visible without an invisible
+    // (no-scrollbar) horizontal scroll" — WIDE_AT there) — applied here
+    // UNCONDITIONALLY rather than past a length threshold, since this pane is
+    // already narrow (the chat/comment bubble's own `max-w-[92%]`) and
+    // deliberately just a few-line "taste" (see `truncate` above): a line
+    // that already fits never wraps, so nothing changes for the common case.
+    const preCls = 'code m-0 whitespace-pre-wrap break-words' + (isLong ? ' code-fence-fade-bottom' : '')
     const html =
       `<div class="${wrapperCls}" data-testid="code-fence" data-fence-index="${counter}"` +
       `${suggestion ? ' data-fence-suggestion="true"' : ''}${langWord ? ` data-fence-lang="${escapeHtml(langWord)}"` : ''}` +
