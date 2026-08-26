@@ -29,7 +29,7 @@ not json at all
 
 func TestReadChatStreamParsesResultAndEvents(t *testing.T) {
 	var got []ChatEvent
-	res, err := readChatStream(strings.NewReader(sampleStream), func(ev ChatEvent) { got = append(got, ev) })
+	res, err := readChatStream(strings.NewReader(sampleStream), func(ev ChatEvent) { got = append(got, ev) }, nil)
 	if err != nil {
 		t.Fatalf("readChatStream: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestReadChatStreamParsesResultAndEvents(t *testing.T) {
 // Nothing listening must still work (and must not need the partial frames at
 // all) — that is the path every non-chat caller takes.
 func TestReadChatStreamWithoutListener(t *testing.T) {
-	res, err := readChatStream(strings.NewReader(sampleStream), nil)
+	res, err := readChatStream(strings.NewReader(sampleStream), nil, nil)
 	if err != nil {
 		t.Fatalf("readChatStream: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestReadChatStreamWithoutListener(t *testing.T) {
 // would happily persist as an empty assistant message.
 func TestReadChatStreamWithoutResultIsAnError(t *testing.T) {
 	partial := `{"type":"system","subtype":"init","session_id":"s-2"}` + "\n"
-	if _, err := readChatStream(strings.NewReader(partial), nil); err == nil {
+	if _, err := readChatStream(strings.NewReader(partial), nil, nil); err == nil {
 		t.Fatal("expected an error when the stream carries no result frame")
 	}
 }
@@ -86,7 +86,7 @@ func TestReadChatStreamHandlesVeryLongLines(t *testing.T) {
 	stream := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"` + huge + `"}}]}}` + "\n" +
 		`{"type":"result","result":"ok","session_id":"s-3"}` + "\n"
 	var got []ChatEvent
-	res, err := readChatStream(strings.NewReader(stream), func(ev ChatEvent) { got = append(got, ev) })
+	res, err := readChatStream(strings.NewReader(stream), func(ev ChatEvent) { got = append(got, ev) }, nil)
 	if err != nil {
 		t.Fatalf("readChatStream: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestReadChatStreamHandlesVeryLongLines(t *testing.T) {
 // <invalid>` run — see ChatCallError's doc comment in claude.go).
 func TestReadChatStreamParsesIsError(t *testing.T) {
 	stream := `{"type":"result","subtype":"success","is_error":true,"result":"Claude AI usage limit reached.","session_id":"s-4"}` + "\n"
-	res, err := readChatStream(strings.NewReader(stream), nil)
+	res, err := readChatStream(strings.NewReader(stream), nil, nil)
 	if err != nil {
 		t.Fatalf("readChatStream: %v", err)
 	}
@@ -190,5 +190,41 @@ func TestToolInputHintPrefersAStableField(t *testing.T) {
 	}
 	if got := toolInputHint(map[string]any{"query": "a\nb"}); got != "a b" {
 		t.Fatalf("newlines must not reach a one-line label: %q", got)
+	}
+}
+
+// A steered turn can produce a SECOND result frame — a steer message the CLI
+// only got to after the running turn's own answer runs as a follow-up turn.
+// Both halves must survive (joined), not the last one silently winning.
+func TestReadChatStreamJoinsASecondResultFrame(t *testing.T) {
+	stream := `{"type":"result","result":"Eerste antwoord","session_id":"s1"}
+{"type":"result","result":"PINEAPPLE","session_id":"s1"}
+`
+	closed := 0
+	res, err := readChatStream(strings.NewReader(stream), nil, func() { closed++ })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Text != "Eerste antwoord\n\nPINEAPPLE" {
+		t.Fatalf("expected both result frames joined, got %q", res.Text)
+	}
+	// Exactly once: onResult closes the CLI's stdin, which must happen at the
+	// FIRST result frame (that is what lets the process exit at all).
+	if closed != 1 {
+		t.Fatalf("expected onResult to fire once, got %d", closed)
+	}
+}
+
+// The stdin frame shape --input-format stream-json accepts. A change here
+// silently breaks steering (the CLI ignores an unknown frame), so it is
+// pinned.
+func TestWriteUserFrame(t *testing.T) {
+	var buf strings.Builder
+	if err := writeUserFrame(&buf, "kan je het mocken?"); err != nil {
+		t.Fatal(err)
+	}
+	want := `{"message":{"content":[{"text":"kan je het mocken?","type":"text"}],"role":"user"},"type":"user"}` + "\n"
+	if buf.String() != want {
+		t.Fatalf("unexpected stdin frame:\n got %s\nwant %s", buf.String(), want)
 	}
 }

@@ -801,6 +801,16 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// workflow, no network — the same read-only-side-effect class as
 	// blockstats.go/comment_import.go reading a worktree.
 	mux.HandleFunc("/api/chat/shadow-status", s.handleChatShadowStatus)
+	// GET /api/chat/steerable?commentId=X → read-only: is a claude CLI call
+	// running for this conversation RIGHT NOW, i.e. can a message typed now be
+	// handed to it instead of queued (chat_steer.go)? In-memory only, same
+	// class as /api/chat/progress.
+	mux.HandleFunc("/api/chat/steerable", s.handleChatSteerable)
+	// POST /api/workflows/chat_steer {pr, repo, commentId} → ensure this
+	// conversation's chat_steer Execution exists (idempotent), returning its
+	// Run ID, which the UI then signals a mid-turn message to via
+	// .../signals/steer. Same bootstrap shape as /api/workflows/chat_merge.
+	mux.HandleFunc("/api/workflows/chat_steer", s.handleChatSteerStart)
 	// POST /api/workflows/chat_merge {pr, repo} → ensure the PR's chat_merge
 	// queue Execution exists (idempotent), returning its Run ID — the same
 	// bootstrap shape as /api/workflows/auto_warn/claude_chat. Needed by the
@@ -1257,6 +1267,26 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			writeJSON(w, http.StatusOK, map[string]string{"status": "deleting"})
+			return
+		}
+		// The steer signal carries one reviewer message aimed at the turn that
+		// is RUNNING right now, to a conversation's chat_steer Execution (see
+		// chat_steer.go). Real text is required — there is no action variant
+		// here: steering a running turn is the only thing this Signal does.
+		if parts[2] == SignalChatSteer {
+			var body struct {
+				Body string `json:"body"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Body) == "" {
+				http.Error(w, "invalid steer", http.StatusBadRequest)
+				return
+			}
+			sig := ChatSteerRequest{ID: "steer-" + newUIReactionID(), Body: body.Body}
+			if err := s.tasks.engine.SignalWorkflow(runID, SignalChatSteer, sig); err != nil {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"status": "signalled"})
 			return
 		}
 		// The message signal carries one reviewer turn to a claude_chat
@@ -1947,6 +1977,48 @@ func (s *server) handleClaudeChatStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
+}
+
+// handleChatSteerStart serves POST /api/workflows/chat_steer {pr, commentId}
+// → ensures that conversation's chat_steer Execution (idempotent via its
+// deterministic Run ID) and returns its Run ID, which the UI then signals a
+// mid-turn message to via .../signals/steer. Same bootstrap shape as
+// handleChatMergeStart; see chat_steer.go for why steering needs its own
+// Execution instead of the conversation's own (busy) one.
+func (s *server) handleChatSteerStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var in struct {
+		PR        int    `json:"pr"`
+		Repo      string `json:"repo"`
+		CommentID string `json:"commentId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.PR <= 0 || in.CommentID == "" {
+		http.Error(w, "invalid steer request", http.StatusBadRequest)
+		return
+	}
+	in.Repo = canonRepo(in.Repo)
+	runID, err := s.tasks.manager.EnsureChatSteer(in.Repo, in.PR, in.CommentID)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
+}
+
+// handleChatSteerable serves GET /api/chat/steerable?commentId=X — read-only:
+// would a message typed right now reach the RUNNING claude CLI call, or should
+// the frontend fall back to its own queue? A purely in-memory read of
+// chat_steer.go's registry, the same class as GET /api/chat/progress.
+func (s *server) handleChatSteerable(w http.ResponseWriter, r *http.Request) {
+	commentID := r.URL.Query().Get("commentId")
+	if commentID == "" {
+		http.Error(w, "commentId is required", http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "steerable": chatTurnSteerable(commentID)})
 }
 
 // handleCommentBatchStart starts the comment_batch Execution: one agentic Claude

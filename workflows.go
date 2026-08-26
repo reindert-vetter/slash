@@ -2929,6 +2929,33 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		enqueueChatMerge(m, arg)
 		return nil, nil
 	})
+	// Activity: hand one reviewer message to the claude_chat turn that is
+	// RUNNING right now (write: saves that message once it really reached the
+	// live CLI). In-memory delivery, durable decision — see chat_steer.go.
+	engine.RegisterActivity("deliverChatSteer", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg chatSteerActivityInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.chat == nil {
+			return json.Marshal(chatSteerResult{})
+		}
+		return json.Marshal(deliverChatSteer(ctx, m, m.chat, arg))
+	})
+	// Activity: the steer fallback — nothing was running after all, so the
+	// message becomes an ordinary next turn via the conversation's own
+	// claude_chat "message" Signal (write: signals a DIFFERENT Execution, the
+	// same cross-workflow shape enqueueChatMerge uses). Deliberately called
+	// asynchronously by chatSteerWorkflow, since this blocks on the busy
+	// conversation's run lock.
+	engine.RegisterActivity("forwardChatSteerAsMessage", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg chatSteerActivityInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		forwardChatSteerAsMessage(m, arg)
+		return nil, nil
+	})
 	// Activity: resolve a chat.KindCleanupChoice bubble left by a cancelled
 	// shell attempt (offerCancelCleanupIfDirty, chat_workflow.go) — discard/
 	// stash/keep whatever it left in the PR's shared checkout. Deliberately
@@ -3044,6 +3071,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowCleanup, cleanupWorkflow)
 	engine.RegisterWorkflow(WorkflowClaudeChat, claudeChatWorkflow)
 	engine.RegisterWorkflow(WorkflowChatMerge, chatMergeQueueWorkflow)
+	engine.RegisterWorkflow(WorkflowChatSteer, chatSteerWorkflow)
 	engine.RegisterWorkflow(WorkflowCommentBatch, commentBatchWorkflow)
 	engine.RegisterWorkflow(WorkflowTestRun, testRunWorkflow)
 	engine.RegisterWorkflow(WorkflowSummarizeChat, summarizeChatWorkflow)
@@ -3069,6 +3097,11 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// chat_merge's own processChatMerge Activity can, on a real conflict, run one
 	// claude subprocess call (resolveConflictWithClaude) — same reasoning.
 	engine.SetWorkflowPriority(WorkflowChatMerge, tembed.PriorityLow)
+	// chat_steer only hands a message over (in-memory delivery, or one Signal to
+	// the conversation's own run) — no claude call at all — but its fallback
+	// Activity blocks for as long as the running turn holds that run's lock, so
+	// it must not sit on the startup path either.
+	engine.SetWorkflowPriority(WorkflowChatSteer, tembed.PriorityLow)
 	// comment_batch's single Activity IS a long agentic run (minutes) — same
 	// reasoning, plus this is what makes StartCommentBatch's StartWorkflowDeferLow
 	// hand the run off to the background instead of holding the HTTP request.

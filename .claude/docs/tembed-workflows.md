@@ -100,6 +100,7 @@ See `.claude/rules/workflows-write-boundary.md` and
 | `task_code_comment` (+ GitHub comment import) | `.claude/docs/workflows-comments.md` |
 | `claude_chat` (embedded Claude conversation panel) | `.claude/docs/workflows-comments.md` |
 | `chat_merge` (serializes concurrent "commit deze wijziging" pushes per PR) | `.claude/docs/workflows-comments.md` |
+| `chat_steer` (hands a message to the turn that is running RIGHT NOW) | `.claude/docs/claude-chat-panel.md` |
 | `build_relations` | `.claude/docs/workflows-analysis.md` |
 | `resolve_call` | `.claude/docs/workflows-analysis.md` |
 | `resolve_test_covers` | `.claude/docs/workflows-analysis.md` |

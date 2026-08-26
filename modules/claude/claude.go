@@ -89,6 +89,22 @@ type RunRequest struct {
 	// RunChat's own single reading goroutine, so a callback needs no locking of
 	// its own for state it alone touches.
 	OnEvent func(ChatEvent)
+	// Steer, when non-nil, lets the caller hand EXTRA reviewer messages to a
+	// turn that is ALREADY running (RunChat only; Run ignores it). Every text
+	// received on it is written to the CLI's stdin as one more stream-json
+	// user frame, which the CLI picks up at the running turn's next step
+	// boundary — see "Steering a running turn" below. Nil keeps the historical
+	// argv-prompt invocation byte for byte, so a caller that never steers
+	// (comment_batch, test_run) is unaffected.
+	//
+	// Like OnEvent it is deliberately a Go channel rather than data, so it is
+	// structurally impossible for it to end up in a workflow Activity's
+	// recorded input. Unlike OnEvent it is NOT purely observational: a steered
+	// message really does change what this turn answers. That is why the
+	// durable record of such a message is written by the chat_steer workflow
+	// that produced it, never inferred from the turn's own result — see
+	// chat_steer.go and .claude/docs/claude-chat-panel.md.
+	Steer <-chan string
 }
 
 // ChatEventKind labels what a streamed ChatEvent reports. Deliberately a tiny,
@@ -317,7 +333,18 @@ func (m *Module) Run(ctx context.Context, req RunRequest) (string, error) {
 // the answer arrive token by token instead of one block at a time) is only
 // asked for when someone is actually listening.
 func (m *Module) RunChat(ctx context.Context, req RunRequest) (ChatResult, error) {
-	args := []string{"-p", req.Prompt, "--model", req.Model, "--output-format", "stream-json", "--verbose"}
+	args := []string{"-p"}
+	// Steering needs the prompt to travel over stdin (the CLI reads no further
+	// input at all when the prompt sits in argv), so the whole turn switches to
+	// --input-format stream-json. Without a Steer channel nothing changes: the
+	// prompt stays an argv arg, stdin stays unconnected.
+	if req.Steer == nil {
+		args = append(args, req.Prompt)
+	}
+	args = append(args, "--model", req.Model, "--output-format", "stream-json", "--verbose")
+	if req.Steer != nil {
+		args = append(args, "--input-format", "stream-json")
+	}
 	args = append(args, coldStartArgs()...)
 	if req.OnEvent != nil {
 		args = append(args, "--include-partial-messages")
@@ -357,6 +384,12 @@ func (m *Module) RunChat(ctx context.Context, req RunRequest) (ChatResult, error
 	if err != nil {
 		return ChatResult{}, &ChatCallError{Err: fmt.Errorf("claude -p --output-format stream-json (%s): %w", req.Model, err)}
 	}
+	var stdin io.WriteCloser
+	if req.Steer != nil {
+		if stdin, err = cmd.StdinPipe(); err != nil {
+			return ChatResult{}, &ChatCallError{Err: fmt.Errorf("claude -p --output-format stream-json (%s): %w", req.Model, err)}
+		}
+	}
 	// Captured (not discarded) so a failure can carry the CLI's own diagnostic
 	// text when the stream itself never produced a usable `result` frame — see
 	// ChatCallError.
@@ -365,9 +398,49 @@ func (m *Module) RunChat(ctx context.Context, req RunRequest) (ChatResult, error
 	if err := cmd.Start(); err != nil {
 		return ChatResult{}, &ChatCallError{Err: fmt.Errorf("claude -p --output-format stream-json (%s): %w", req.Model, err)}
 	}
+	// Steering: the prompt itself is the first stdin frame, and every later
+	// steer message is one more. stdin MUST be closed again once the turn
+	// produced its result — with it open the CLI keeps waiting for more input
+	// and never exits, so stdout would never reach EOF and cmd.Wait would
+	// block forever. closeStdin is therefore called from readChatStream's own
+	// result callback (and once more, harmlessly, on the way out).
+	var closeStdinOnce sync.Once
+	closeStdin := func() {
+		if stdin == nil {
+			return
+		}
+		closeStdinOnce.Do(func() { _ = stdin.Close() })
+	}
+	defer closeStdin()
+	if req.Steer != nil {
+		if err := writeUserFrame(stdin, req.Prompt); err != nil {
+			closeStdin()
+			_ = cmd.Wait()
+			return ChatResult{}, &ChatCallError{Err: fmt.Errorf("claude -p --input-format stream-json (%s): %w", req.Model, err)}
+		}
+		// One writer goroutine for the whole turn; it ends with the turn (ctx
+		// cancel, or the closed stdin making the write fail) and never outlives
+		// this call in a way that could reach a LATER turn — the channel itself
+		// belongs to this turn's caller.
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case text, ok := <-req.Steer:
+					if !ok {
+						return
+					}
+					if err := writeUserFrame(stdin, text); err != nil {
+						return
+					}
+				}
+			}
+		}()
+	}
 	// Read to EOF first, then Wait — a Wait before the pipe is drained would
 	// close it out from under the reader.
-	res, parseErr := readChatStream(stdout, req.OnEvent)
+	res, parseErr := readChatStream(stdout, req.OnEvent, closeStdin)
 	waitErr := cmd.Wait()
 
 	// The CLI ran to completion and told us, in its own words, that the turn
@@ -430,15 +503,44 @@ type chatStreamLine struct {
 	} `json:"message"`
 }
 
+// writeUserFrame writes one stream-json user message to the CLI's stdin — the
+// only input shape --input-format stream-json accepts. Used for the prompt
+// itself and for every steer message (see RunRequest.Steer).
+func writeUserFrame(w io.Writer, text string) error {
+	frame := map[string]any{
+		"type": "user",
+		"message": map[string]any{
+			"role":    "user",
+			"content": []map[string]any{{"type": "text", "text": text}},
+		},
+	}
+	b, err := json.Marshal(frame)
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(append(b, '\n'))
+	return err
+}
+
 // readChatStream consumes the CLI's newline-delimited JSON output, forwarding
 // each interesting frame to onEvent (when non-nil) and returning the final
 // `result` frame's payload. A line that doesn't parse is skipped rather than
 // fatal — only a stream that never produced a result frame is an error.
 //
+// onResult (when non-nil) fires once, on the FIRST result frame — RunChat uses
+// it to close the CLI's stdin, which is what lets a steered (stream-json input)
+// run terminate at all.
+//
+// A steered run can produce a SECOND result frame: a steer message that
+// arrived too late for the running turn's last step boundary is executed by
+// the CLI as its own follow-up turn (it still does so after stdin closed).
+// Rather than let that overwrite the first answer — or drop it — the texts are
+// joined, so the reviewer sees both halves in the one bubble this turn owns.
+//
 // bufio.Reader, not bufio.Scanner: a single line can be very large (the init
 // frame lists every tool, a thinking signature is a long base64 blob, a tool
 // result can be a whole file) and Scanner has a hard token limit.
-func readChatStream(r io.Reader, onEvent func(ChatEvent)) (ChatResult, error) {
+func readChatStream(r io.Reader, onEvent func(ChatEvent), onResult func()) (ChatResult, error) {
 	br := bufio.NewReader(r)
 	var res ChatResult
 	seenResult := false
@@ -448,7 +550,15 @@ func readChatStream(r io.Reader, onEvent func(ChatEvent)) (ChatResult, error) {
 			var l chatStreamLine
 			if json.Unmarshal([]byte(s), &l) == nil {
 				if l.Type == "result" {
-					res.Text, res.SessionID, res.IsError, seenResult = l.Result, l.SessionID, l.IsError, true
+					if seenResult {
+						res.Text = strings.TrimSpace(res.Text + "\n\n" + l.Result)
+					} else {
+						res.Text = l.Result
+						if onResult != nil {
+							onResult()
+						}
+					}
+					res.SessionID, res.IsError, seenResult = l.SessionID, res.IsError || l.IsError, true
 				} else if onEvent != nil {
 					emitChatEvents(l, onEvent)
 				}
@@ -648,6 +758,9 @@ type Fake struct {
 	// (SessionID == "") call.
 	chatQueue []string
 	chatPos   map[string]int
+	// steered records every RunRequest.Steer message a blocked RunChat call
+	// received — see Steered.
+	steered []string
 	chatErr   error
 	chatSeq   int
 	// chatModelErrs fails RunChat only for the given model ids, and
@@ -796,6 +909,15 @@ func (f *Fake) SetChatBlockUntilCancel(block bool) {
 	f.chatBlockUntilCancel = block
 }
 
+// Steered returns every steer message (RunRequest.Steer) a blocked RunChat
+// call received so far — the Fake's counterpart of the real CLI's stdin, see
+// SetChatBlockUntilCancel.
+func (f *Fake) Steered() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.steered...)
+}
+
 // SetChatFailures makes the next n RunChat calls fail with err, after which
 // the ordinary programmed script takes over again — a transient outage.
 func (f *Fake) SetChatFailures(n int, err error) {
@@ -832,8 +954,23 @@ func (f *Fake) RunChat(ctx context.Context, req RunRequest) (ChatResult, error) 
 	// "running" until the test's own ctx is cancelled — exactly what a cancel
 	// test needs, without a real subprocess.
 	if block {
-		<-ctx.Done()
-		return ChatResult{}, ctx.Err()
+		// Steer messages are recorded while blocked, so a test can assert that a
+		// steer really reached the RUNNING turn (see Steered) — the fake's
+		// stand-in for the real CLI's stdin.
+		for {
+			select {
+			case <-ctx.Done():
+				return ChatResult{}, ctx.Err()
+			case text, ok := <-req.Steer:
+				if !ok {
+					req.Steer = nil
+					continue
+				}
+				f.mu.Lock()
+				f.steered = append(f.steered, text)
+				f.mu.Unlock()
+			}
+		}
 	}
 
 	f.mu.Lock()

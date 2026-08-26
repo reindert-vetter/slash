@@ -938,6 +938,12 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 		req.SystemPrompt = claude.ChatReadOnlySystemPrompt
 	}
 	req.SystemPrompt += chatCommentIDNote(arg.ConversationID)
+	// From here until RunChat returns, a reviewer message typed meanwhile can
+	// still reach THIS call (chat_steer.go). Deliberately opened per CLI call,
+	// not per turn: outside a live call there is nothing to hand it to, and the
+	// chat_steer workflow then falls back to an ordinary next turn.
+	steerCh, unregisterSteer := openSteerSlot(runCtx, arg.ConversationID)
+	req.Steer = steerCh
 	logTurnMilestone("local prep done after %v, invoking claude CLI (read-only attempt)", time.Since(t0))
 	// Local prep is done; the CLI is about to be invoked. This is the "sessie
 	// gestart — wachten op Claude" phase, kept distinct from the preceding
@@ -945,6 +951,7 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 	// chat_progress.go.
 	advanceChatProgress(arg.Repo, arg.PR, arg.ConversationID, chatPhaseStarting)
 	result, err := cl.RunChat(runCtx, req)
+	unregisterSteer()
 	logTurnMilestone("claude CLI (read-only attempt) returned after %v (err=%v)", time.Since(t0), err)
 	if err != nil {
 		// Checked via runCtx.Err(), never via error-value inspection: exec's own
@@ -1060,8 +1067,11 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 			Tools:        []string{"Read", "Grep", "Glob", "Edit", "Bash"},
 			OnEvent:      onEvent,
 		}
+		shellSteerCh, unregisterShellSteer := openSteerSlot(runCtx, arg.ConversationID)
+		shellReq.Steer = shellSteerCh
 		logTurnMilestone("local prep done after %v, invoking claude CLI (shell attempt)", time.Since(t0))
 		result2, err2 := cl.RunChat(runCtx, shellReq)
+		unregisterShellSteer()
 		logTurnMilestone("claude CLI (shell attempt) returned after %v (err=%v)", time.Since(t0), err2)
 		if err2 != nil {
 			if runCtx.Err() != nil {
