@@ -1258,7 +1258,19 @@ same functions — no second approve/continue implementation:
   approve the child and coming back up doesn't send you straight back down;
   only `callRows` count (a relation child or a synthetic block-level call key
   has no segment in this line to stop at), never in list mode, never for a
-  TRANSLATION block. Test: `tests/space-descends-into-call.spec.mjs`.
+  TRANSLATION block. **At `call` granularity a site must sit in the exact
+  segment the cursor covers** (`site.segStart === unit.segStart`), not merely
+  somewhere on the same row — the same rule `callScopeMethods` already applies
+  to the panel's own scoping. A row can hold several call-chain segments
+  (`$this->calc->arrowHelper(2)` splits into `$this` / `->calc` /
+  `->arrowHelper(` / `2);`); without this, Space on a segment with no call of
+  its own (e.g. the bare `$this` prefix) could still descend into a
+  *different* call's unapproved subtree elsewhere on the row, even though the
+  call selection genuinely didn't cover it yet (reviewer report: "per call
+  moet je niet zomaar naar onderliggende blok/code als de call selectie daar
+  nog niet bij past"). `group`/`line` are unaffected — there a unit has no
+  `segStart` and any call site within its row range still counts, as before.
+  Test: `tests/space-descends-into-call.spec.mjs`.
 - **Already approved → only continue:** if the unit under the keyboard is
   already fully approved (`isApproveDone(ctx)`, extracted out of the
   `COMMANDS` 'approve' label so both agree on the same "done" check), `spaceKey`

@@ -11680,16 +11680,32 @@ function callSegmentApproved(b, row, segStart) {
 // line, which a relation child (a line anchor without a segment) and a
 // block-level synthetic call key (resource:/migration_model:/…, no literal
 // site at all — see findCallSites) don't have.
+//
+// At CALL granularity `unit` names one exact segment of its row
+// (`unit.segStart`, the same discriminator changeCalls/referenceUnit set —
+// see callScopeMethods, which applies the identical rule for the panel's own
+// scoping), and a site only counts when it sits in that SAME segment
+// (`site.segStart === unit.segStart`), not merely somewhere on the same row.
+// A row can hold several call-chain segments (`$this->calc->arrowHelper(2)`
+// splits into `$this` / `->calc` / `->arrowHelper(` / `2);`), so without this
+// check Space on a segment that has no call of its own (e.g. `$this` or a
+// bare argument) could still "find" and descend into a DIFFERENT call's
+// unapproved subtree elsewhere on the row — the call selection didn't
+// actually cover that call yet. At `group`/`line` granularity `unit` has no
+// `segStart` and the row-range check below is the whole story, unchanged:
+// there every call anywhere in the wider unit is fair game.
 async function firstUnapprovedCallSiteInUnit(b, unit) {
   const rows = blockRows(b)
   const byId = allBlocksById()
   const sites = []
+  const callGran = typeof unit.segStart === 'number'
   for (const r of callRows(b)) {
     if (r.status !== 'resolved' && r.status !== 'found') continue
     const kid = byId.get(callChildId(r))
     if (!kid || kid.id === b.id) continue
     for (const site of findCallSites(rows, r.callKey)) {
       if (site.row < unit.start || site.row > unit.end) continue
+      if (callGran && site.segStart !== unit.segStart) continue
       if (callSegmentApproved(b, site.row, site.segStart)) continue
       sites.push({ row: site.row, segStart: site.segStart, kid })
     }

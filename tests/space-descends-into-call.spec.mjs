@@ -109,6 +109,43 @@ test('Space approves the unit normally when the calls underneath have nothing op
     .toBeGreaterThan(0)
 })
 
+// Regression: at CALL granularity Space must only descend for the exact
+// segment under the cursor, never for a different call elsewhere on the same
+// row (reviewer report — see the "At call granularity a site must sit in the
+// exact segment" note in .claude/docs/keyboard-navigation.md and
+// firstUnapprovedCallSiteInUnit's own doc comment in home.mjs).
+//
+// `$value = $this->calc->arrowHelper(2);` splits into call-chain segments
+// `$value = $this` / `->calc` / `->arrowHelper(` / `2);` (segmentCalls,
+// Block.mjs). Pressing `f` twice from the group (group -> line -> call, this
+// group spans 2 rows so it doesn't skip straight to call) lands on that
+// row's FIRST call-granularity segment (`unitAtRow`'s deterministic
+// first-match) — `$value = $this`, which has no call of its own at all, NOT
+// the `->arrowHelper(` segment further along the same row.
+test('Space on a call segment with no call of its own does not descend into a DIFFERENT call on the same row', async ({
+  page,
+}) => {
+  await clearApproval(page)
+  await page.goto('/pr/100')
+  await leaveSearchBox(page)
+
+  await page.keyboard.press('ArrowRight')
+  await expect(page.locator('[data-change-active]').first()).toBeVisible()
+  await page.keyboard.press('ArrowDown') // the group with the two call lines
+  await expect(
+    page.locator('[data-testid=related-item][data-child-id*="arrowHelper"]'),
+  ).toBeVisible()
+
+  await page.keyboard.press('f') // group -> line
+  await page.keyboard.press('f') // line -> call, first segment of the row
+
+  await page.keyboard.press(' ')
+
+  // Must NOT have drilled into arrowHelper's still-unapproved subtree: the
+  // cursor's own segment (`$value = $this`) doesn't name that call at all.
+  await expect(page.getByTestId('drill-column')).toHaveCount(0)
+})
+
 // Every approve write carries the code the approved rows pointed at
 // (persistApproval -> approvalAnchors, home.mjs), so the backend can find those
 // rows again after the PR gets new commits instead of re-applying a stale index
