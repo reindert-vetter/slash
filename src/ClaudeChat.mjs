@@ -1014,6 +1014,25 @@ export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly) {
                 e.stopPropagation()
                 callbacks.onEmptyEnter?.()
               }
+            } else if (e.key === 'Escape' && view.active()) {
+              // Reviewer request: cancel the running turn from right inside
+              // the composer, without losing the field. stopPropagation()
+              // FIRST, before triggering the cancel (see the nested-handler
+              // ordering rule in .claude/rules/arrowjs-pitfalls.md) — this
+              // SAME event would otherwise still bubble into home.mjs's
+              // document-level onKeydown, whose isEditableFocused() fallback
+              // treats a bare Escape as "leave the field" (leaveRelated()).
+              // Deliberately only when view.active() is true (mirrors the
+              // visible "Stop" button's own gate, hasActiveClaudeTurn — wider
+              // than busy(), see claudeChatView in RelatedPanel.mjs): with no
+              // turn running, Escape does nothing here and falls through to
+              // that same existing "leave the field" behavior unchanged. The
+              // composer stays focused and its text untouched — a SECOND
+              // Escape (now with view.active() false) leaves the field as
+              // before.
+              e.preventDefault()
+              e.stopPropagation()
+              callbacks.onCancel?.()
             }
           }}"
         ></textarea>

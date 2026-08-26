@@ -3320,6 +3320,13 @@ function claudeChatView() {
     messages: () => cc.messages,
     status: () => cc.status,
     busy: () => ccBusy(),
+    // Whether there is a turn to cancel right now (busy, or still starting
+    // up, or waiting in the queue) — the same gate the visible "Stop" button
+    // (claudeActive/hasActiveClaudeTurn, CommentClaudeFooter above) already
+    // uses, deliberately WIDER than the bare `busy` getter above. The
+    // composer's own Escape-to-cancel branch reads this — see "Cancelling a
+    // running turn" in .claude/docs/claude-chat-panel.md.
+    active: () => hasActiveClaudeTurn(),
     // The last send that never made it to the workflow — '' when there is
     // none. Per conversation (claudeTurns.mjs), narrowed to cc.commentId. See
     // sendClaudeMessage/sendErrorText.
@@ -3437,6 +3444,10 @@ function claudeChatCallbacks(state, commentTarget) {
     onSend: (text) => sendClaudeMessageFromNew(state, commentTarget, text),
     onRetry: () => retryClaudeTurn(),
     onCleanup: (choice) => resolveCancelCleanup(choice),
+    // Escape pressed in the composer while a turn is running (ClaudeChat.mjs's
+    // own @keydown, gated on view.active()) — reuses the exact same
+    // cancelClaudeTurn() the "Stop" button and the Enter-palette item call.
+    onCancel: () => cancelClaudeTurn(),
     onFocus: () => onClaudeComposeFocus(),
     onEmptyEnter: () => openClaudeMenuFromComposer(),
     // The pane's own @scroll handler (see updateClaudeThreadPinned) and its

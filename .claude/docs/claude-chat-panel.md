@@ -2716,6 +2716,22 @@ colourblind rule. `canRetry` (the "Opnieuw proberen" button) now also fires on
   the menu to inspect `chat_progress` state. Deliberately **last** in that
   menu, never first (the reflexive-Enter rule this file already documents for
   the retry item).
+- **Keyboard, from inside the composer itself:** Escape, while the composer
+  textarea (`data-testid=claude-chat-compose`) holds DOM focus and
+  `view.active()` (`hasActiveClaudeTurn()`, exposed on `claudeChatView` next
+  to the narrower `busy()`) is true — the composer's own `@keydown`
+  (`ClaudeChat.mjs`) calls `callbacks.onCancel()` → `cancelClaudeTurn()`, same
+  function as the two entry points above. Reviewer request: cancel without
+  leaving the field, so a `stopPropagation()` (called FIRST, per the
+  nested-handler ordering rule in `.claude/rules/arrowjs-pitfalls.md`) keeps
+  this Escape from also reaching `home.mjs`'s document-level `onKeydown`,
+  whose `isEditableFocused()` fallback would otherwise blur the field
+  (`leaveRelated()`) on the very same keypress. With no turn running
+  (`view.active()` false) this branch does not match at all, so Escape falls
+  through unchanged to that existing "leave the field" behavior — a SECOND
+  Escape, once the turn is gone, still leaves the composer as before. No new
+  visual feedback: this mirrors the Stop button's own "silent until the
+  `chat.KindCancelled` bubble lands" behavior.
 - The client-side reviewer-typed **queue** (`cc.queued`/`drainClaudeQueue`,
   "Doorpraten tijdens een lopende turn" below) is deliberately **untouched**
   by a cancel — only the currently running turn is interrupted; whatever the
