@@ -17,6 +17,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"strconv"
 	"strings"
 	"sync"
@@ -48,6 +49,21 @@ type pendingPushView struct {
 	PushRunID string `json:"pushRunId,omitempty"`
 	// Error is the last push failure's reason, for the row's own detail line.
 	Error string `json:"error,omitempty"`
+	// TreeCaughtUp reports whether the review tree's own ingested head SHA
+	// (pr_ingest, the same row refreshIngestDelta writes) already equals SHA —
+	// i.e. whether the ingest-refresh this landing triggered has actually run,
+	// regardless of whether the blocks.changed SSE frame announcing it ever
+	// reached a particular browser tab. See "the auto-refresh backstop" below
+	// and .claude/docs/pending-push.md's "Wordt bijgewerkt" section: that frame
+	// is deliberately excluded from onEventsResync (a bare reconnect must never
+	// raise a false stale-tree notice), and the ordinary poller
+	// (pollIngestRefresh/ingestRefreshNeeded) can never fill the gap for THIS
+	// case because it only reacts to the PR's REMOTE head moving — a landed,
+	// not-yet-pushed local commit never does that. loadPendingPush is polled
+	// independently of that SSE frame (git-backed, not event-sourced), so a tab
+	// that missed the one frame still eventually observes TreeCaughtUp flip to
+	// true and can catch itself up.
+	TreeCaughtUp bool `json:"treeCaughtUp"`
 }
 
 // pendingPushStatus is the volatile half of the read model: whether a push is
@@ -102,11 +118,31 @@ func pendingPushRefFor(ctx context.Context, repo string, pr int) (ref, headRef s
 	return "", ""
 }
 
+// ingestCaughtUpWithPendingRef reports whether the review tree's own recorded
+// ingest head (pr_ingest.head_sha, written only by scanAndStoreBlocks/
+// refreshIngestDelta) already equals sha — the pending ref's current commit.
+// db may be nil (a caller with no graph DB in hand, e.g. most of
+// pending_push_test.go, which doesn't exercise this field) or there may be no
+// prior ingest at all yet; both report caught-up (true) rather than a false
+// "still behind" that could never resolve — a PR with no full ingest has
+// nothing for a chat edit to land against in the first place.
+func ingestCaughtUpWithPendingRef(db *sql.DB, repo string, pr int, sha string) bool {
+	if db == nil || sha == "" {
+		return true
+	}
+	_, head, ok, err := loadIngestSHAs(db, repo, pr)
+	if err != nil || !ok {
+		return true
+	}
+	return head == sha
+}
+
 // loadPendingPush reads one PR's pending-push state straight out of git, or nil
 // when nothing is waiting to be pushed. Read-only and local-only: three git
-// plumbing reads, no fetch, no gh — cheap enough for a plain GET handler and for
-// the PR-overview list to ask about several PRs at once.
-func loadPendingPush(ctx context.Context, repo string, pr int) *pendingPushView {
+// plumbing reads plus one local DB read, no fetch, no gh — cheap enough for a
+// plain GET handler and for the PR-overview list to ask about several PRs at
+// once.
+func loadPendingPush(ctx context.Context, db *sql.DB, repo string, pr int) *pendingPushView {
 	ref, headRef := pendingPushRefFor(ctx, repo, pr)
 	if ref == "" {
 		// Nothing landed. A "failed" status left over from an earlier attempt is
@@ -118,7 +154,10 @@ func loadPendingPush(ctx context.Context, repo string, pr int) *pendingPushView 
 	if sha == "" {
 		return nil
 	}
-	v := &pendingPushView{PR: pr, HeadRef: headRef, SHA: sha, Ahead: 1, State: pendingPushReady}
+	v := &pendingPushView{
+		PR: pr, HeadRef: headRef, SHA: sha, Ahead: 1, State: pendingPushReady,
+		TreeCaughtUp: ingestCaughtUpWithPendingRef(db, repo, pr, sha),
+	}
 	// origin/<headRef> is whatever the last fetch left behind — deliberately not
 	// refreshed here (a GET must stay cheap and offline-safe), so these two are
 	// a good-enough display count/file list, never a decision input: the push

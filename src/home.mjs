@@ -4406,6 +4406,13 @@ async function loadCallResolve() {
   }
 }
 
+// pendingPushSyncedSha tracks, per this TAB only (never reactive — a plain
+// module variable, same shape as codeRequested/lastFiredSelectionRef), the
+// pending-ref sha this tab's own tree last caught up to. `undefined` means
+// "no baseline yet" (right after page load, before loadPendingPush's first
+// read) — see the backstop below.
+let pendingPushSyncedSha
+
 // loadPendingPush fetches whether this PR has landed-but-unpushed Claude edits
 // (GET /api/pending-push, pending_push.go). Claude's own commits land on a
 // LOCAL ref of the PR's branch so the code is reviewable right away; pushing
@@ -4416,6 +4423,26 @@ async function loadCallResolve() {
 // reader — the todo row, its counter, the per-block "ongepusht" marking — sees
 // the change (see the keyed-node pitfall in arrowjs-pitfalls.md). Best-effort:
 // offline simply keeps whatever we had.
+//
+// Also doubles as the backstop for a MISSED blocks.changed frame (reviewer
+// report: "na een claude aanpassing blijft het zoeken naar nieuwe aanpassing,
+// niet zichtbaar — na handmatig herladen zie ik het wel"). blocks.changed is
+// deliberately excluded from onEventsResync (a bare reconnect must never raise
+// a false stale-tree notice, see server-events.md), and the ordinary
+// ingest-refresh poller can never fill that gap for a landed-but-unpushed
+// commit — it only reacts to the PR's REMOTE head moving, which such a commit
+// never does (see .claude/docs/pending-push.md). This poll is git+DB-backed
+// (row.treeCaughtUp, pending_push.go), not event-sourced, so it eventually
+// observes the truth regardless of any dropped SSE frame.
+//
+// The trigger is deliberately narrow, to hold the hard rule "never on a bare
+// reconnect without pending work": only when row.treeCaughtUp is true AND its
+// sha is one this tab hasn't already caught up to (pendingPushSyncedSha) —
+// i.e. the backend has genuinely finished re-ingesting a landing this tab
+// hasn't shown yet. The very FIRST read after page load only establishes that
+// baseline and never fires — loadBlocks() already handles a fresh page load,
+// and firing here too would refetch on every ordinary open of a PR that
+// happens to have older, already-reviewed unpushed work sitting on it.
 async function loadPendingPush() {
   try {
     const res = await fetch(`/api/pending-push?prs=${encodeURIComponent(prUidHere())}`)
@@ -4426,6 +4453,18 @@ async function loadPendingPush() {
     // The row appears/disappears at the very bottom of the index, so a keyboard
     // cursor parked on it must not be left pointing at nothing.
     if (!state.pendingPush) state.pushTodoFocused = false
+    if (pendingPushSyncedSha === undefined) {
+      pendingPushSyncedSha = row ? row.sha : null
+    } else if (!row) {
+      pendingPushSyncedSha = null
+    } else if (row.treeCaughtUp && row.sha !== pendingPushSyncedSha) {
+      pendingPushSyncedSha = row.sha
+      refreshBlocksAfterOwnLanding(row.files || [])
+    }
+    // row.treeCaughtUp === false: leave pendingPushSyncedSha as-is — nothing
+    // new to show yet, and the ordinary blocks.changed path already handles
+    // the moment the backend's own refresh completes, when that frame does
+    // arrive.
   } catch (_) {
     /* offline — keep whatever we have */
   }
@@ -4546,6 +4585,11 @@ async function refreshBlocksAfterOwnLanding(touchedFiles) {
   loadCallResolve()
   loadTestCovers()
   loadBlockStats()
+  // Whichever path got here first (the ordinary blocks.changed event, or the
+  // loadPendingPush backstop above) — record the sha this tab is now caught up
+  // to, so the OTHER path doesn't redundantly refetch again moments later for
+  // the same landing.
+  if (state.pendingPush && state.pendingPush.sha) pendingPushSyncedSha = state.pendingPush.sha
 }
 
 // sendCheckoutAction fires one of the checkout chip's four Actions

@@ -300,6 +300,58 @@ choreographed mock event would not have caught it), `tests/refreshing-pill.spec.
 (the pill, the payload-driven auto-refresh-and-follow-selection round trip,
 and the manual-fallback case with no `landedFiles` payload).
 
+### The backstop for a MISSED `blocks.changed` frame: `pendingPushView.TreeCaughtUp`
+
+Reviewer report: "na een claude aanpassing, blijft het zoeken naar nieuwe
+aanpassing en is het niet zichtbaar (na 5 minuten nu)" — a real gap, not the
+already-documented ordering trap above (that one is fully synchronous and was
+confirmed unaffected). `blocks.changed` is deliberately excluded from
+`onEventsResync` (see `.claude/docs/server-events.md`, "the one event that
+does NOT refetch" — a bare reconnect must never raise a false stale-tree
+notice), and `pollIngestRefresh`/`ingestRefreshNeeded` can never backstop THIS
+specific case: it only reacts to the PR's **remote** head SHA moving, which a
+landed-but-not-yet-pushed local commit never does. So if the one
+`blocks.changed` frame this landing publishes is dropped on the wire (a full
+64-frame subscriber buffer, or a resync racing the exact moment it fires — see
+`eventbus.go`), a tab has no way back to a fresh tree short of a manual reload
+— indefinitely, even though the backend itself already finished
+(`refreshIngestDelta` is synchronous/inline, see the ordering trap above; it is
+only the SSE **notification** of that completion that can go missing, never
+the underlying ingest work).
+
+`pendingPushView.TreeCaughtUp` (`pending_push.go`,
+`ingestCaughtUpWithPendingRef`) closes this gap with a second, **git+DB-only**
+signal that needs no event to reach the truth: it reports whether
+`pr_ingest.head_sha` (written only by `scanAndStoreBlocks`/`refreshIngestDelta`)
+already equals the pending ref's current commit. `db == nil` or no prior
+ingest recorded at all → `true` (defensively "nothing to catch up to" rather
+than a "still behind" that could never resolve for a PR with no full ingest to
+land against).
+
+**Frontend** (`src/home.mjs`): `loadPendingPush` — already polled by
+`pendingpush.changed` and by the existing resync hook, both independent of the
+`blocks.changed` frame — tracks a plain module variable
+`pendingPushSyncedSha` (never reactive, same shape as `codeRequested`): the
+pending-ref sha this TAB has already caught up to. Only when
+`row.treeCaughtUp` is `true` **and** its sha differs from that tracked value
+does it call the existing `refreshBlocksAfterOwnLanding(row.files)` — the same
+function the ordinary `blocks.changed` handler already uses. This keeps the
+hard rule intact: the very FIRST read after page load only establishes the
+baseline and never fires (a fresh page load already gets a consistent tree
+from `loadBlocks()`, and firing here too would refetch on every ordinary open
+of a PR that happens to have older, already-reviewed unpushed work sitting on
+it) — a bare reconnect with no NEW caught-up sha never triggers anything,
+exactly like `blocks.changed`'s own exclusion from `onEventsResync` demands.
+`refreshBlocksAfterOwnLanding` itself stamps `pendingPushSyncedSha` from
+`state.pendingPush.sha` at the end of its own run too, so whichever of the two
+paths (the SSE frame or this poll-based backstop) gets there first is what
+counts — the other is then a no-op instead of a redundant second refetch.
+
+Test: `TestLoadPendingPushTreeCaughtUpBackstop` (`pending_push_test.go`) pins
+`TreeCaughtUp` purely against `pr_ingest`/the pending ref's git state, with no
+event/workflow involved at all — the exact shape `loadPendingPush`'s polling
+backstop above depends on.
+
 ## The push: a `"push"` Action on the PR's `chat_merge` queue
 
 `pushPendingPR` (`pending_push.go`), reached via

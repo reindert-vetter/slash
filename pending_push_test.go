@@ -56,13 +56,13 @@ func TestLoadPendingPushReportsLandedWork(t *testing.T) {
 	dataDir := t.TempDir()
 	ctx := context.Background()
 
-	if v := loadPendingPush(ctx, "", 3001); v != nil {
+	if v := loadPendingPush(ctx, nil, "", 3001); v != nil {
 		t.Fatalf("expected no pending push before anything landed, got %+v", v)
 	}
 
 	landOneEdit(t, dataDir, 3001, "conv-a", "feature/x", "foo.txt", "edited by claude\n")
 
-	v := loadPendingPush(ctx, "", 3001)
+	v := loadPendingPush(ctx, nil, "", 3001)
 	if v == nil {
 		t.Fatal("expected a pending push after a landing")
 	}
@@ -80,6 +80,75 @@ func TestLoadPendingPushReportsLandedWork(t *testing.T) {
 	}
 	if v.PushRunID != chatMergeQueueRunID("", 3001) {
 		t.Fatalf("pushRunId = %q, want %q", v.PushRunID, chatMergeQueueRunID("", 3001))
+	}
+}
+
+// TestLoadPendingPushTreeCaughtUpBackstop pins the read model's own,
+// git+DB-only view of whether the review tree has actually re-ingested a
+// landed chat edit — TreeCaughtUp — independent of whether the blocks.changed
+// SSE frame announcing that ever reached a browser tab (see
+// .claude/docs/pending-push.md, "Wordt bijgewerkt": that frame is deliberately
+// excluded from onEventsResync, and the ordinary ingest-refresh poller can
+// never backstop a landed-but-unpushed local commit, since it only reacts to
+// the PR's REMOTE head moving). The frontend's own backstop
+// (src/home.mjs's loadPendingPush) polls exactly this field instead — this
+// test is what proves that field tells the truth regardless of any event.
+func TestLoadPendingPushTreeCaughtUpBackstop(t *testing.T) {
+	setupChatShadowRepo(t, "feature/x", "v1\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+
+	db, err := openDB(filepath.Join(dataDir, "graph.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// The shared clone's own HEAD is never checked out to a real branch (see
+	// cloneCheckoutDir's own doc comment on the bare repo's default-branch
+	// quirk) — origin/feature/x is the seed commit landOneEdit below builds on
+	// top of.
+	baseOut, err := exec.Command("git", "-C", os.Getenv("SLASH_REPO_DIR"), "rev-parse", "origin/feature/x").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseSHA := strings.TrimSpace(string(baseOut))
+
+	// No prior ingest recorded at all yet: defensively reports caught-up (true)
+	// rather than a "still behind" that could never resolve.
+	landOneEdit(t, dataDir, 3005, "conv-e", "feature/x", "foo.txt", "edit one\n")
+	v := loadPendingPush(ctx, db, "", 3005)
+	if v == nil {
+		t.Fatal("expected a pending push after landing")
+	}
+	if !v.TreeCaughtUp {
+		t.Fatal("TreeCaughtUp = false with no prior ingest recorded, want true (nothing to backstop yet)")
+	}
+	landedSHA := v.SHA
+
+	// A prior ingest recorded at an OLDER sha (the tree hasn't re-ingested this
+	// landing yet) — the state right after a landing whose refreshIngestDelta
+	// Activity either hasn't run yet or whose own blocks.changed frame got
+	// dropped on the wire; either way TreeCaughtUp must say "not yet" so the
+	// frontend backstop knows to keep waiting rather than treat this as new.
+	if err := saveIngestSHAs(db, "", 3005, baseSHA, baseSHA); err != nil {
+		t.Fatal(err)
+	}
+	v = loadPendingPush(ctx, db, "", 3005)
+	if v.TreeCaughtUp {
+		t.Fatal("TreeCaughtUp = true while pr_ingest still points at the OLD head, want false")
+	}
+
+	// The exact scenario this backstop exists for: refreshIngestDelta actually
+	// ran and wrote the new head (regardless of whether its blocks.changed frame
+	// ever reached a tab) — TreeCaughtUp must flip to true from git+DB state
+	// alone, with no event involved at all.
+	if err := saveIngestSHAs(db, "", 3005, baseSHA, landedSHA); err != nil {
+		t.Fatal(err)
+	}
+	v = loadPendingPush(ctx, db, "", 3005)
+	if !v.TreeCaughtUp {
+		t.Fatal("TreeCaughtUp = false after pr_ingest caught up to the landed sha, want true")
 	}
 }
 
@@ -101,7 +170,7 @@ func TestPushPendingPRPushesAndDropsTheRef(t *testing.T) {
 	if got, _ := os.ReadFile(filepath.Join(verify, "foo.txt")); string(got) != "edited by claude\n" {
 		t.Fatalf("pushed content = %q, want the edit", got)
 	}
-	if v := loadPendingPush(ctx, "", 3002); v != nil {
+	if v := loadPendingPush(ctx, nil, "", 3002); v != nil {
 		t.Fatalf("pending ref survived a successful push: %+v", v)
 	}
 }
@@ -121,7 +190,7 @@ func TestLoadPendingPushFindsANonPrimaryRepo(t *testing.T) {
 	dataDir := t.TempDir()
 	ctx := context.Background()
 
-	if v := loadPendingPush(ctx, ops, 12); v != nil {
+	if v := loadPendingPush(ctx, nil, ops, 12); v != nil {
 		t.Fatalf("expected no pending push before anything landed, got %+v", v)
 	}
 
@@ -134,7 +203,7 @@ func TestLoadPendingPushFindsANonPrimaryRepo(t *testing.T) {
 		t.Fatalf("landing failed: %+v", msg)
 	}
 
-	v := loadPendingPush(ctx, ops, 12)
+	v := loadPendingPush(ctx, nil, ops, 12)
 	if v == nil {
 		t.Fatal("expected a pending push after a landing on the second repo")
 	}
@@ -143,7 +212,7 @@ func TestLoadPendingPushFindsANonPrimaryRepo(t *testing.T) {
 	}
 
 	removePendingRefs(ctx, ops, 12)
-	if v := loadPendingPush(ctx, ops, 12); v != nil {
+	if v := loadPendingPush(ctx, nil, ops, 12); v != nil {
 		t.Fatalf("pending ref survived removePendingRefs: %+v", v)
 	}
 }
@@ -163,7 +232,7 @@ func TestPushPendingPRKeepsRefWhenRefused(t *testing.T) {
 
 	pushPendingPR(ctx, nil, "", 3003)
 
-	v := loadPendingPush(ctx, "", 3003)
+	v := loadPendingPush(ctx, nil, "", 3003)
 	if v == nil {
 		t.Fatal("pending ref was dropped even though the push was refused")
 	}
@@ -270,7 +339,7 @@ func TestHandleWorkflowsPushSignal(t *testing.T) {
 		t.Fatalf("push action: status = %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
 	}
 
-	if v := loadPendingPush(context.Background(), "", 3004); v != nil {
+	if v := loadPendingPush(context.Background(), nil, "", 3004); v != nil {
 		t.Fatalf("pending ref survived a push routed through handleWorkflows: %+v", v)
 	}
 }

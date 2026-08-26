@@ -2299,7 +2299,7 @@ func (s *server) handlePendingPush(w http.ResponseWriter, r *http.Request) {
 	wanted := parseStatusKeyList(r.URL.Query().Get("prs"))
 	out := map[string]*pendingPushView{}
 	for _, key := range wanted {
-		if v := loadPendingPush(r.Context(), key.Repo, key.PR); v != nil {
+		if v := loadPendingPush(r.Context(), s.db, key.Repo, key.PR); v != nil {
 			out[statusKey(key.Repo, key.PR)] = v
 		}
 	}
