@@ -327,6 +327,17 @@ var categoryRules = []categoryRule{
 	{func(p string) bool { return hasSeg(p, "Http/Controllers/") }, "CONTROLLER"},
 	{func(p string) bool { return hasSeg(p, "Http/Requests/") }, "REQUEST"},
 	{func(p string) bool { return hasSeg(p, "Http/Resources/") }, "RESOURCE"},
+	// A Temporal Activity (`#[ActivityMethod]`) always sits in a
+	// `Workflows/Activities/` directory, one level below the plain
+	// `Workflows/` directory that the generic type-directory table below maps
+	// to WORKFLOW. That table only ever looks at the FIRST remaining path
+	// segment (see splitBlockPath), so without this rule every Activity class
+	// falls through to WORKFLOW too, hiding that it is really a Temporal
+	// activity rather than a workflow definition. Same precedence reasoning as
+	// the Http/Controllers|Requests|Resources rules above. Verified against
+	// the real repo: every `#[ActivityMethod]` class lives under this exact
+	// directory, nowhere else.
+	{func(p string) bool { return hasSeg(p, "Workflows/Activities/") }, "ACTIVITY"},
 	// Laravel translation files: resources/lang/<locale>/<file>.php, the older
 	// top-level lang/<locale>/<file>.php, or a module's own
 	// modules/<Name>/Resources/lang/<locale>/<file>.php. Must come before the

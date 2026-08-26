@@ -554,6 +554,27 @@ func TestCategoryForModuleHttpLayer(t *testing.T) {
 	}
 }
 
+// TestCategoryForWorkflowActivity proves a Temporal Activity class (living in
+// a Workflows/Activities/ directory, one level below plain Workflows/) gets
+// its own ACTIVITY category instead of falling through to WORKFLOW — the
+// generic type-directory table only ever inspects the first remaining path
+// segment (Workflows), so this needs its own rule (see categoryRules in
+// classify.go). A plain workflow class right under Workflows/, with no
+// Activities/ segment, must keep classifying as WORKFLOW.
+func TestCategoryForWorkflowActivity(t *testing.T) {
+	cases := map[string]string{
+		"modules/Statistics/Workflows/Activities/FindFirstSessionActivity.php": "ACTIVITY",
+		"modules/Statistics/Workflows/Activities/IsBotActivity.php":            "ACTIVITY",
+		"app/Workflows/Activities/RunCommandActivity.php":                      "ACTIVITY",
+		"modules/Statistics/Workflows/SomeWorkflow.php":                        "WORKFLOW",
+	}
+	for path, want := range cases {
+		if got := categoryFor(path); got != want {
+			t.Errorf("categoryFor(%q) = %q, want %q", path, got, want)
+		}
+	}
+}
+
 // TestCategoryForInterfaceFilenameFallback proves the path-based
 // `*Interface.php` naming-convention fallback in categoryRules: it only
 // matters for the whole-file-scan fallback scenario (a file the scanner
