@@ -2924,8 +2924,33 @@ function isNewChatUnanchored() {
 // through the index pill of its OWN code instead (claudeTurns.mjs). See "The
 // chat column is a function of the selected code" in claude-chat-panel.md —
 // don't reintroduce the stay-open branch here.
+//
+// isActiveAnchorGoneFromView is the one narrow exception, added for a
+// reported bug: `hasVisibleComments()` reads `cs.view`, which recomputeView
+// unconditionally drops an ORPHANED comment from (`isOrphanComment`,
+// re-anchor.go's re-anchor pass — the code its row anchor matched by SNIPPET
+// is no longer findable under the block's current label, e.g. a commit
+// landed elsewhere that renamed it) — the SAME every-5s comment poll
+// (refreshTimer) that keeps `cs.list`/`cs.view` fresh. While the reviewer is
+// mid-conversation (cs.focus === 'claude', cc.commentId already anchored) on
+// the EXACT SAME unit the whole time, that reclassification landing made the
+// entire comment/Claude column (and a half-typed, unsent message with it)
+// vanish out from under them a few seconds after entering it — with no
+// navigation having happened at all. That reads as a bug, not as "navigating
+// elsewhere": `cs.focus` only ever leaves 'claude' via an explicit
+// leaveRelated()/block switch (see lastSelectedBlockRef in home.mjs), so
+// `cs.focus === 'claude'` on its own already proves the reviewer never left
+// this unit — the orphan reclassification is the only thing that changed.
+// `ccAnchorComment()`'s own `cc.commentId != null` branch resolves through
+// the UNFILTERED `cs.list` (see its own doc comment, written for the exact
+// same "don't trust the possibly-stale filtered index while cc.focus is
+// 'claude'" reason), so a merely-orphaned (not actually deleted) comment
+// still resolves here.
+function isActiveAnchorGoneFromView() {
+  return cs.focus === 'claude' && cc.commentId != null && ccAnchorComment() != null
+}
 export function claudeChatVisible() {
-  return hasVisibleComments() || isPrCommentScope() || isNewChatUnanchored()
+  return hasVisibleComments() || isPrCommentScope() || isNewChatUnanchored() || isActiveAnchorGoneFromView()
 }
 
 // isPrCommentScope — an unanchored comment-index item (a PR-wide comment, an

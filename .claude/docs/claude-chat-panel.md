@@ -523,6 +523,30 @@ away hides it, the index row keeps reporting the running turn" case in
 `tests/claude-chat-panel.spec.mjs` — the inverted successor of the old
 "stays open" test, same fixture and same mocked frames.
 
+#### One narrow exception: the re-anchor pass orphaning the OPEN conversation's own anchor, without any navigation
+
+`claudeChatVisible()` (`RelatedPanel.mjs`) got a fourth `||` branch,
+`isActiveAnchorGoneFromView()` — read that function's own doc comment for the
+mechanism and the live PR (13451) it was diagnosed against. Short version:
+`hasVisibleComments()` reads `cs.view`, which `recomputeView` unconditionally
+drops an ORPHANED comment from (`isOrphanComment` — `reanchor.go`'s re-anchor
+pass couldn't re-find the code a comment's row anchor was placed on, e.g. a
+commit elsewhere renamed the method). While the reviewer was mid-conversation
+(`cs.focus === 'claude'`) on the exact SAME unit the whole time — no
+navigation, no `←`/click elsewhere — that reclassification landing via the
+ordinary comment poll made the entire `comment-claude-row` (with a half-typed,
+unsent message in it) vanish a few seconds after entering it, replaced by the
+Underlying-code panel. That does NOT fall under "navigate to code with
+nothing hanging on it, hide it": `cs.focus` only ever leaves `'claude'` via an
+explicit `leaveRelated()`/block switch (`lastSelectedBlockRef`, `home.mjs`),
+so `cs.focus === 'claude'` already proves the reviewer never left. The new
+branch keeps the column visible for exactly this case — `cs.focus ===
+'claude'` and the anchor still resolves through the UNFILTERED `cs.list` (via
+`ccAnchorComment()`, which already exists for the analogous "don't trust the
+possibly-stale filtered index while `cc.focus` is `'claude'`" reason) — and
+for nothing else: navigating away still clears `cs.focus`, so the reversal
+above still holds for every ordinary case.
+
 ## Parallel conversations: a second chat while the first is still answering
 
 Reviewer report: *"ik wil kunnen chatten en terwijl ik op antwoord wacht, een
