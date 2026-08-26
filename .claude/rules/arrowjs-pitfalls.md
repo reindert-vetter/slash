@@ -19,12 +19,12 @@ owning keyed node is gone. LOCAL PATCH 1/2/2b (below) address this in the vendor
 file; the "orphan bindings" and "bare toggling expression" entries below are the
 app-level consequences of the same gap.
 
-## LOCAL PATCH 1/2/2b/4 in `src/vendor/arrow.js` — reapply on every upgrade
+## LOCAL PATCH 1/2/2b/4/5 in `src/vendor/arrow.js` — reapply on every upgrade
 
-Four deliberate changes, each marked with a `LOCAL PATCH` comment in the
+Five deliberate changes, each marked with a `LOCAL PATCH` comment in the
 header (LOCAL PATCH 3, the separate memory-leak fix, is documented on its own
 further down in this file — different failure mode, see "Arrow's registries,
-before and after"). **On an arrow.js upgrade all four must be reapplied**; the
+before and after"). **On an arrow.js upgrade all five must be reapplied**; the
 comment blocks in `vendor/arrow.js` hold the original lines and the exact
 restore instructions.
 
@@ -84,6 +84,58 @@ restore instructions.
   measurements and the before/after numbers. Regression test (a cheap
   smoke/guard, not a reliable repro — see its own doc comment):
   `tests/drill-listener-array-dispatch.spec.mjs`.
+- **LOCAL PATCH 5** — `Vt` (upstream `flush`, the microtask draining the
+  effect queue) wraps **each queued effect and each `nextTick` callback** in
+  its own `try/catch`, and `Gt` does the same around every listener call in
+  **both** of its branches. All four catches only `console.error`. This is the
+  difference between one broken render and a permanently dead page: `ue`
+  (upstream `queue`) marks an effect queued with `e[Ct]=!0` and only ever
+  re-queues one whose flag is false, while `Vt` clears that flag **one effect
+  at a time**, right before invoking it — so an uncaught throw from effect n
+  aborts the loop and leaves every effect from n+1 onward flagged
+  "already queued" with nothing holding it, forever. The trailing
+  `J.length&&queueMicrotask(Vt)` is skipped too. Symptom (PR 12112): stepping
+  through the block index stopped updating the diff column, the card title
+  **and** the `?sel=` URL mirror, while the keydown handler kept writing
+  `state.selected` — not one subscriber ever heard it again. Measured A/B,
+  same fixture and key sequence: unpatched 29 page errors and 1 distinct
+  selection over 6 ↓ presses, patched 7 distinct selections with the queue
+  draining to 0. The throw that exposed it was a duplicate `.key()` (next
+  section), but the patch is deliberately **not** about that one bug: every
+  entry in this file is a way for a render to throw mid-flush, and none of
+  them should be able to take navigation with it. Regression test:
+  `tests/index-row-key-collision.spec.mjs` ("a throwing reactive subscriber").
+
+## Never give two entries of one keyed list the same `.key()`
+
+arrow's keyed reconciler keeps a `_k` → chunk map (`n[R]` in `re`'s array
+branch), so a duplicate key makes it **adopt one chunk for two entries** and
+then insert against a node that has already moved: `Failed to execute 'after'
+on 'CharacterData'`, `insertBefore … is not a child of this node`, or
+`Cannot read properties of null (reading 'after')` — the same error text
+LOCAL PATCH 2b's use-after-free produces, so **check for a duplicate key
+before assuming a disposal bug**.
+
+Real case: `BlockList.mjs` keyed every index row
+`b.file + ':' + b.label + ':' + b.side`, which a **synthetic** item cannot
+fill in. A comment index item (`commentRowItem`, `home.mjs`) has no `file` and
+no `side`, and its `label` is only the first 60 characters of the body — so it
+keyed as `undefined:<snippet>:undefined`, and two such items collided whenever
+their snippet matched: two threads opening with the same ` ```suggestion `
+fence, two identical generated short titles, or simply two empty-bodied PR
+comments both falling back to the literal `'PR-comment'`. Consequences were
+NOT local: one of the two rows silently failed to render, and the throw froze
+the whole reactive graph (LOCAL PATCH 5 above).
+
+**The rule:** key a list row by the item's own **stable id**, never by a
+composite of display fields — `rowKey(b)` (`BlockList.mjs`) returns
+`b.id || file + ':' + label`, plus `':' + (b.side || '')` because a block id
+(`<pr>:<file>:<symbol>`, `model.go`) carries no side. Every item in that list
+already has an id: real blocks from `/api/blocks`, `comment:<id>` and
+`testclass:<file>::<class>` for the synthetic ones. Same reasoning as
+"snapshot a selection by stable ID, never by raw array index" in
+`.claude/rules/conventions.md`, applied to keys. Regression test:
+`tests/index-row-key-collision.spec.mjs`.
 
 ## Template syntax rules
 

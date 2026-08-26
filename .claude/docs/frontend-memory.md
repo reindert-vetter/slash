@@ -582,3 +582,49 @@ above) — this is a **known, accepted** limitation of a shared drill link
 against a moving PR, not a defect in `applyDrillRefRestore`'s own logic.
 **Don't re-investigate this from a hand-typed/stale URL** — only distrust the
 restore mechanism itself if a *freshly self-captured* round trip fails.
+
+## The `Vt` flush-abort freeze: "ik zie het resultaat niet rechts" was a dead reactive graph
+
+Reported symptom (PR 12112, real ~106-block PR): "Ik ben aan het navigeren in
+blokken index … maar ik zie het resultaat niet rechts in code blok diff."
+Sibling of the `Gt` crash above — same "an exception in the reactive dispatch
+path is silent and permanent" family, one level up: not the per-property
+listener array, but the **global microtask flush**.
+
+**Measured, not inferred.** Headless Chromium against the live server, same key
+sequence (`Escape`, `→`, then 6× `↓`), 0-error control PRs alongside:
+
+| build | page errors at load | distinct `?sel=` over 6 ↓ |
+| --- | --- | --- |
+| PR 12112, unpatched | 10-29 (varies with timing) | **1** — frozen |
+| PR 12112, `Vt` hardened | 8, logged only | **7** — normal |
+| PR 12112, both fixes | **0** | 7 |
+| PR 13455 / 13360 (control) | 0 | normal |
+
+**Mechanism.** `ue` (upstream `queue`) marks an effect as queued with
+`e[Ct]=!0` and re-queues only an effect whose flag is false. `Vt` clears that
+flag **one effect at a time**, immediately before invoking it. So one uncaught
+throw aborts `Vt`'s `for` loop and every effect behind it in that batch keeps
+`[Ct] === true` while nothing holds it any more — never queued again, for the
+lifetime of the page. The trailing `J.length&&queueMicrotask(Vt)` is skipped as
+well. That is why the freeze looked like "the diff column doesn't follow" but
+was actually total: the card title, the diff, and the `?sel=` URL mirror all
+stopped, while `state.selected` was still being written on every keypress.
+
+**Two things to take from this when a future symptom looks like this:**
+
+1. **A frozen UI with no visible error is a flush casualty, not a render bug.**
+   Check the browser console for ANY earlier throw — the effect that stopped
+   updating is usually not the one that threw. `J.length` is 0 afterwards
+   (nothing is queued), so an "is the queue stuck?" probe is misleading; the
+   real evidence is the orphaned `[Ct]` flags.
+2. **The trigger was data-dependent, so bisecting on block content lies.**
+   Deleting the non-PHP whole-file blocks, or all TEST blocks, from a COPY of
+   `graph.db` each "fixed" it once and then failed to reproduce with the same
+   set — the throw is a timing race, and only the throw's own cause (a
+   duplicate `.key()`, see `.claude/rules/arrowjs-pitfalls.md`) is
+   deterministic. Bisect on the ERROR, not on the freeze.
+
+Fixed by **LOCAL PATCH 5** (`Vt` + `Gt` per-callback `try/catch`, logging via
+`console.error`) plus the app-level duplicate-key fix in `BlockList.mjs`'s
+`rowKey`. Regression tests: `tests/index-row-key-collision.spec.mjs`.

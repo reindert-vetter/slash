@@ -1186,7 +1186,42 @@ function row(state, b, i) {
         >${st.mark}</span
       >
     </div>
-  `.key(b.file + ':' + b.label + ':' + b.side)
+  `.key(rowKey(b))
+}
+
+// rowKey — every index row's keyed identity. The item's own stable `id` first:
+// a real PR block carries one from /api/blocks (`pr:file:label`), and so does
+// every SYNTHETIC item recomputeLeftList mixes into the same list
+// (`comment:<id>`, `testclass:<file>::<class>` — see commentRowItem/
+// testClassRowItem in home.mjs).
+//
+// It used to be `file + ':' + label + ':' + side`, which a comment item cannot
+// fill in: it has neither `file` nor `side`, and its `label` is only a
+// 60-character body snippet (or the literal fallback 'PR-comment'). So every
+// such row keyed as `undefined:<snippet>:undefined`, and two comment items
+// whose snippet matched — two threads starting with the same ```suggestion
+// fence, two identical short titles, or simply two empty-bodied PR comments
+// both falling back to 'PR-comment' — produced the SAME key twice in one
+// keyed array. arrow.js's keyed reconciler maps `_k` → chunk, so a duplicate
+// key makes it adopt/move one chunk for two entries and then insert against a
+// node that is no longer where it thinks it is: "Failed to execute 'after' on
+// 'CharacterData'" / "insertBefore ... is not a child of this node" /
+// "Cannot read properties of null (reading 'after')".
+//
+// That throw is not cosmetic: it escapes arrow's microtask flush, which is
+// exactly the freeze LOCAL PATCH 5 (src/vendor/arrow.js) hardens against —
+// every effect still queued behind it in that batch stays flagged as
+// "already queued" and is never flushed again, so navigation silently dies
+// (reported as: stepping through the index no longer updates the diff column,
+// PR 12112). Both halves landed together: the duplicate key is the bug, the
+// vendor patch keeps any FUTURE render throw from being fatal.
+// `side` stays appended: a block id is `<pr>:<file>:<symbol>` (model.go's
+// Block.ID) and carries no side, so a removed and an added block sharing one
+// file+symbol would otherwise collapse onto one key — exactly the collision
+// this function exists to prevent. A synthetic item has no side, which simply
+// leaves the suffix empty.
+function rowKey(b) {
+  return (b.id || b.file + ':' + b.label) + ':' + (b.side || '')
 }
 
 // removedPill marks deleted code prominently in the sidebar: a rose pill
