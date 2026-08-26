@@ -154,10 +154,22 @@ its own row, one per comment, exactly as before.
 
 For a comment placed on a whole group or a Shift+↑/↓ range rather than a
 single line, `c.line` is already the range's own FIRST row — every comment is
-created with `line: t.startLine` (`ensureClaudeAnchorForNew` and the plain
-composer, `RelatedPanel.mjs`), never the last or middle row — so
-`commentGroupKeyOf` needs no separate "first row of the range" computation of
-its own.
+created with `line: anchorLineFor(t, b)` (`ensureClaudeAnchorForNew` and the
+plain composer, `RelatedPanel.mjs`), which starts at `t.startLine`, never the
+last or middle row — so `commentGroupKeyOf` needs no separate "first row of the
+range" computation of its own.
+
+**`anchorLineFor(t, b)` falls back to the FOCUSED block's line, not the
+top-level one.** Both call sites used to read `(t && t.startLine) || b.line`,
+and `b` there is `state.blocks[state.selected]` — the top-level block, even
+while a drilled Onderliggende-code column owns the keyboard. A drilled column
+on an UNCHANGED block has no navigable unit, so `t.startLine` is 0
+(`commentTarget`'s own `!unit` branch) and the anchor silently jumped up to the
+parent: a chat started on `SessionEnricher::DEFAULT_UTM_VALUES` (line 29) was
+stored on its `<class-header>` parent (line 28). The helper therefore tries
+`t.startLine` → `t.line` → `b.line`; `t.line` is the focused block's own start
+line, since `commentTarget()` follows `focusedBlock()` (see
+`.claude/docs/drilling.md`).
 
 The resulting item (`kind: 'comment'`, unchanged — no new kind was
 introduced) carries the full group as `comments` alongside the existing

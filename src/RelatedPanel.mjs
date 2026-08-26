@@ -2590,10 +2590,12 @@ export function claudeChatShadowWarning() {
 // `commentTarget()` (home.mjs) — the same object the comment composer already
 // renders against — so it always describes whatever unit/granularity
 // (group/line/call, see keyboard-navigation.md's f/d/s) the reviewer is
-// currently on. Returns '' when there's nothing useful to say (no target, or
-// a block-level target with no real code — see commentTarget's `!unit`
-// fallback), which sendClaudeMessage/sendClaudeMessageFromNew treat as "send
-// nothing extra", identical to today's behaviour.
+// currently on. Returns '' only when there is NO target at all (or a target
+// without a file), which sendClaudeMessage/sendClaudeMessageFromNew treat as
+// "send nothing extra". A target with a file but no code (commentTarget's own
+// `!unit` fallback) still gets a context block of its own — see the second
+// branch below for why that emptiness was the most harmful case, not the
+// least.
 function claudeContextBlock(commentTarget) {
   if (cc.messages.length > 0) return '' // not this conversation's first turn
   const parts = []
@@ -2612,6 +2614,29 @@ function claudeContextBlock(commentTarget) {
         lines.push('Nieuwe regels: ' + t.newStartLine + (t.newEndLine > t.newStartLine ? '-' + t.newEndLine : ''))
       if (t.label) lines.push('Onderdeel: ' + t.label)
       lines.push('Voorbeeldcode:', '```php', t.code, '```')
+      parts.push(lines.join('\n'))
+    } else if (t && t.file) {
+      // A block WITHOUT navigable changes (commentTarget's own `!unit`
+      // branch: code '', startLine 0) — in practice a drilled
+      // Onderliggende-code column on an unchanged block, e.g. a class
+      // member/constant. This used to fall through to '' and send the turn
+      // with NO context at all, so a first message like "waar gebruiken we
+      // dit?" had no referent whatsoever and Claude answered about whatever
+      // the PR happens to be about instead of about the selected symbol
+      // (reported bug, PR 13451 / SessionEnricher::DEFAULT_UTM_VALUES).
+      // Naming the file + symbol is enough: deliberately NO source code, for
+      // the same reason claudeRangeContextBlock sends none — Claude has read
+      // access to this checkout and can open the exact spot itself.
+      const lines = [
+        'Context van de reviewer-selectie (niet door de reviewer getypt):',
+        'Bestand: ' + t.file,
+      ]
+      if (t.label) lines.push('Onderdeel: ' + t.label)
+      if (t.line) lines.push('Regel: ' + t.line)
+      lines.push(
+        'Dit onderdeel heeft in deze PR geen gewijzigde regels, dus er gaat geen voorbeeldcode mee — ' +
+          'open het bestand zelf (je hebt hier leestoegang) als je de code nodig hebt.',
+      )
       parts.push(lines.join('\n'))
     }
   }
@@ -5578,6 +5603,25 @@ export function isChatAnchorPlaceholder(c) {
   return !!c && c.body === CLAUDE_ANCHOR_PLACEHOLDER
 }
 
+// anchorLineFor picks the source line a new comment/Claude anchor hangs on,
+// given the current navigation target `t` (commentTarget(), home.mjs) and the
+// TOP-LEVEL selected block `b`. Order: the unit's own real source line
+// (t.startLine), else the FOCUSED block's own start line (t.line) — which is
+// the drilled column's block whenever one owns the keyboard, since
+// commentTarget() follows focusedBlock() — and only then the top-level
+// block's line as a last resort.
+//
+// That middle step is the whole point: a drilled Underlying-code column on an
+// UNCHANGED block has no navigable unit, so t.startLine is 0 (see
+// commentTarget's own `!unit` branch), and falling straight through to
+// `b.line` anchored the comment on the top-level block instead — e.g. a chat
+// started on `SessionEnricher::DEFAULT_UTM_VALUES` (line 29) landed on its
+// `<class-header>` parent (line 28). `t.line` already describes the block the
+// reviewer is actually looking at.
+function anchorLineFor(t, b) {
+  return (t && (t.startLine || t.line)) || (b && b.line) || 0
+}
+
 // ensureClaudeAnchorForNew lazily creates the ONE backing comment a Claude
 // conversation needs (the backend's own constraint: CommentID must name an
 // EXISTING comment) the moment the reviewer sends Claude a message WHILE
@@ -5628,7 +5672,7 @@ async function ensureClaudeAnchorForNew(state, commentTarget) {
     pr: state.pr,
     repo: repoField(),
     file: (t && t.file) || b.file,
-    line: (t && t.startLine) || b.line,
+    line: anchorLineFor(t, b),
     body: typed || CLAUDE_ANCHOR_PLACEHOLDER,
     code: t ? t.code : '',
     gran: t ? t.gran : '',
@@ -5875,7 +5919,7 @@ export async function placeComment(state, commentTarget, opts = {}) {
     // Prefer the unit's real source line (see home.mjs' commentTarget/
     // unitLineRange) over the block's own start line; falls back to it when
     // there's no navigable unit (t.startLine is 0).
-    line: (t && t.startLine) || b.line,
+    line: anchorLineFor(t, b),
     body,
     code: t ? t.code : '',
     gran: t ? t.gran : '',

@@ -2332,10 +2332,25 @@ own chat bubble must show exactly what they typed, nothing more.
   current unit actually touches), the unit's label, and its code excerpt —
   from `commentTarget()` (`home.mjs`), the exact same object the comment
   composer already renders against, so it reflects whatever granularity
-  (group/line/call, `f`/`d`/`s`) the reviewer is on. Returns `''` when there's
-  nothing useful (no target, or a block-level fallback with no real code — see
-  `commentTarget`'s own `!unit` branch), which is treated as "send nothing
-  extra", unchanged from before this existed.
+  (group/line/call, `f`/`d`/`s`) the reviewer is on. Returns `''` only when
+  there is no target at all (or one without a file), which is treated as "send
+  nothing extra".
+- **A block with no changed lines gets a context block too — code excerpt or
+  not.** `commentTarget()`'s own `!unit` branch (a block with no navigable
+  changes: `code: ''`, `startLine: 0`) used to fall through to `''`, so such a
+  turn was sent with NO context whatsoever. In practice that is exactly the
+  drilled Onderliggende-code column on an UNCHANGED block — a class constant or
+  property — and it is the most harmful emptiness, not the least: the reviewer
+  is looking at one specific symbol, types "waar gebruiken we dit?", and Claude
+  gets a prompt in which "dit" refers to nothing at all, so it answers about
+  whatever the PR as a whole is about. Reported on PR 13451, drilled into
+  `SessionEnricher::DEFAULT_UTM_VALUES`, answered about
+  `TemporalSessionFlow`/`EventServiceProvider`; the stored `message` Signal for
+  that run really did carry no `context` field. The second branch now sends
+  file + `Onderdeel:` + `Regel:` plus one sentence saying this part has no
+  changed lines in this PR, so no sample code is attached. Deliberately **no**
+  source code, same reasoning as `claudeRangeContextBlock` right below it:
+  Claude has read access to the checkout and can open the exact spot itself.
 - **Old + new line ranges, not just one side:** `commentTarget()`'s existing
   `startLine`/`endLine`/`side` (used for GitHub anchoring, see `placeComment`)
   only ever describe ONE side of a unit. `unitBothLineRanges` (`home.mjs`,
