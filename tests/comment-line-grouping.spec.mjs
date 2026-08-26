@@ -129,6 +129,16 @@ test.describe('comment-index rows grouped per line', () => {
     await menu.getByTestId('command-row').filter({ hasText: 'Resolve comment' }).click()
     await expect.poll(() => resolved).toEqual(['grp-1'])
 
+    // afterResolveAction (home.mjs) navigates on right away — grp-1 is the
+    // only comment in view and the group itself is still open (grp-2), and
+    // there is nothing else reachable ahead (the real fixture blocks sort
+    // ahead of this comment, out of the forward-only search's reach), so it
+    // falls back to the same review-submit offer a palette approve would —
+    // close it, it isn't what this test is about.
+    await expect(menu).toBeVisible()
+    await menu.getByTestId('command-row').filter({ hasText: 'Sluit menu' }).click()
+    await expect(menu).not.toBeVisible()
+
     // The read model now reports grp-1 resolved — a resolved, non-mentioning
     // comment drops out of indexComments() entirely (unchanged, pre-existing
     // behavior), so the group's own candidate set shrinks to just grp-2

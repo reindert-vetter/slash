@@ -493,6 +493,17 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     expect(replyBody.done).toBe(true)
     expect(replyBody.body).toBe('/resolve')
 
+    // afterResolveAction (home.mjs) navigates on right away: nothing is left
+    // to approve reachable from here (the real fixture blocks sort ahead of
+    // this comment, out of the forward-only search's reach), so it lands on
+    // the next not-yet-resolved comment-index row instead — the still-open,
+    // block-scoped "anchored-1" comment (see .claude/docs/command-palette.md,
+    // "resolve-comment-navigates-next.spec.mjs"). The selection therefore no
+    // longer sits on "Overall this looks great" by the time of the reload
+    // below — a deliberate change from the old "stays put" behaviour.
+    const selParam = () => new URL(page.url()).searchParams.get('sel')
+    await expect.poll(selParam).toBe('comment:anchored-1')
+
     // The mocked GET /api/comments never actually flips the row to
     // status:'resolved' server-side (it's a static route mock) — serve it as
     // resolved from here on and reload, proving the item folds into the
@@ -519,6 +530,29 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
         rowStart: -1,
         rowEnd: -1,
       },
+      // anchored-1 must survive the swap too — the selection already moved
+      // onto it (see the poll above), and the reload below restores it via
+      // that very same ?sel=comment:anchored-1; dropping it here would leave
+      // the restore with nothing to resolve to and fall back to
+      // applyDefaultUnapprovedSelection instead.
+      {
+        id: 'anchored-1',
+        runId: 'run-anchored-1',
+        pr: 12903,
+        file: 'app/Http/Controllers/Api/ContractController.php',
+        label: 'ContractController::index',
+        line: 1,
+        author: 'reviewer',
+        body: 'please rename this variable',
+        createdAt: now,
+        reactionCount: 0,
+        status: 'open',
+        source: 'ui',
+        kind: '',
+        reactions: [],
+        rowStart: -1,
+        rowEnd: -1,
+      },
     ])
     // Force a fresh comments load (mirrors the poll cycle) via a resolve on a
     // no-op signal — simplest robust trigger here is just to wait for the
@@ -527,14 +561,16 @@ test.describe('Comment-index items ("Start" sidebar)', () => {
     await page.reload()
     await expect(page.getByTestId('toggle-approved')).toBeVisible()
     await expect(page.getByTestId('toggle-approved')).toContainText('1')
-    // A comment selection now survives a refresh (?sel=comment:<id>, see
-    // applyCommentRefRestore/detail-layout.md) — the reviewer's own restored
-    // position on this now-resolved comment stays visible/selected via the
-    // same revealSelectedIfHidden pin an already-approved block gets, instead
-    // of folding away into "Toon N goedgekeurde blocks" like every OTHER
-    // resolved comment still would.
-    await expect(page.getByTestId('comment-heading')).toBeVisible()
-    await expect(page.getByTestId('comment-detail-card').first()).toBeVisible()
+    // "Overall this looks great" now genuinely folds away like any other
+    // resolved comment — nothing pins it any more, since afterResolveAction
+    // already moved the selection off it before the reload even happened.
+    // ?sel=comment:<id> instead restores onto "anchored-1" (still open,
+    // block-scoped — line-anchored, so it opens "as if fully expanded"
+    // rather than the plain PR-wide comment-detail-card, see
+    // "Comment-index rows are grouped per source line" /
+    // "An anchored 'Start' item..." in comments-panel.md).
+    await expect.poll(selParam).toBe('comment:anchored-1')
+    await expect(page.getByTestId('comment-heading')).toHaveCount(0)
   })
 
   // Reviewer report: "Nog geen eigen comment... moet niet in de index, moet

@@ -717,6 +717,50 @@ list mode anyway — it only ever fires at `state.focusLevel > 0`, which implies
 a diff cursor already exists.) Test:
 `tests/findnextunapproved-list-mode.spec.mjs` (PR 110, PR 112).
 
+## Resolving a comment navigates on too — `afterResolveAction`
+
+Reviewer request (2026-08-26): "als ik een comment resolve, ga dan naar het
+volgende wat ik moet approven en anders comment wat nog niet resolved is".
+`afterResolveAction()` (`home.mjs`) is the shared follow-up for both
+"Resolve comment" entry points — `commentCommandsFor`'s block-scoped thread
+item and `prCommentCommandsFor`'s comment-index row item (never after
+"Unresolve comment"/"Verwijder comment" — those aren't a forward step, and
+never scoped by who wrote the comment). Unlike `afterApproveAction`'s
+`postApprove` follow-up, it navigates **directly, with no confirm menu**
+(explicit reviewer decision — resolving is treated as less consequential than
+approving). Three-step order, tried in sequence:
+
+1. **`findNextUnapproved()`** — the exact same forward-only, no-wrap tree walk
+   the approve flow uses (see above). Found → `applyNextUnapproved(...)`
+   straight away, `keepList` mirroring `state.mode !== 'diff'` at call time
+   (same "stay in the list if you resolved from the list" reasoning as
+   `afterApproveAction`'s own `keepList` exception).
+2. **`findNextUnresolvedComment()`** — a comment-only counterpart, forward-only
+   from `state.selected + 1`, no wrap: the first `kind:'comment'` row whose
+   group (`b.comments`, see "Comment-index rows are grouped per source line")
+   still has `done < total` (`blockApproveCount`). `findNextUnapproved` itself
+   can never land ON a comment item (`firstUnapprovedInSubtree` no-ops for
+   `kind:'comment'`), so this is a genuinely separate search, not a fallback
+   inside the same walk.
+3. **`offerReviewSubmitFollowup()`** — the exact same review-submit offer
+   `afterApproveAction`'s own "nothing left ahead" branch opens
+   (`reviewApprove`/`reviewChoice`, based on `state.approvalTotal`, which
+   already includes every comment-index item's own done/total via
+   `prWideApproveTotal`'s `kind==='comment'` branch — see approval.md).
+   Extracted out of `afterApproveAction` into this one shared function so the
+   two follow-ups can't quietly drift apart.
+
+**A comment-index item ranks below every ordinary block** (`rank()` 2.4/2.5
+vs. ≤2, see "Sort order of the left list" in blocks-and-ingest.md) — combined
+with the forward-only/no-wrap contract, this means resolving from deep in the
+comment section will essentially never find an ordinary block via step 1 (it
+already sorts *before* the comment section, out of reach going forward), and
+instead falls straight to step 2 or 3. Not a bug — the same "forward-only,
+never re-suggests something behind you" contract `findNextUnapproved` already
+has, just more often visible from this entry point. Test:
+`tests/resolve-comment-navigates-next.spec.mjs` (all three steps, both entry
+points).
+
 ## `lastIndexRowRect` — keeping a follow-up menu at the same spot
 
 `isIndexMenu()` counts `postApprove` too, so `menuAnchor()` tries

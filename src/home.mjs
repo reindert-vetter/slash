@@ -7402,7 +7402,10 @@ function commentCommandsFor() {
             id: 'resolve-comment',
             label: 'Resolve comment',
             hint: 'resolve',
-            run: () => resolveFocusedComment(),
+            run: async () => {
+              await resolveFocusedComment()
+              await afterResolveAction()
+            },
           },
     )
   }
@@ -7730,9 +7733,11 @@ function prCommentCommandsFor() {
         id: 'pr-comment-resolve',
         label: 'Resolve comment',
         hint: 'resolve',
-        run: () => {
+        run: async () => {
           const sel = selectedComment()
-          if (sel) resolvePrCommentItem(sel)
+          if (!sel) return
+          await resolvePrCommentItem(sel)
+          await afterResolveAction()
         },
       }
   // "Verwijder comment" — the same delete Signal the block-scoped menu has
@@ -11391,21 +11396,29 @@ let postApproveTarget = null
 // The "nothing left ahead" branch is deliberately untouched by `auto`: whether
 // to submit a real GitHub review (or reject it) stays a manual, two-step
 // choice regardless of how the last unit was approved.
+// offerReviewSubmitFollowup opens the same review-submit choice both
+// afterApproveAction (nothing left to approve ahead) and afterResolveAction
+// (nothing left to approve OR to resolve ahead) fall back to — extracted so
+// there is exactly one copy of this "is the whole PR done" check instead of
+// two menus quietly drifting apart. b.approvedRows/approvedCalls (or a
+// comment's status) were just reassigned synchronously by the caller, but
+// state.approvalTotal is filled by a DECOUPLED watch (see its comment near
+// state.approvalSummaries) whose callback runs as a microtask, not
+// synchronously — give it a couple of turns to flush before reading it, same
+// as loadBlocks' identical wait for the same watch.
+async function offerReviewSubmitFollowup() {
+  await Promise.resolve()
+  await Promise.resolve()
+  const allDone = state.approvalTotal.total > 0 && state.approvalTotal.done === state.approvalTotal.total
+  openMenu(allDone ? 'reviewApprove' : 'reviewChoice')
+}
+
 function afterApproveAction(approving, blockId, auto = false) {
   if (!approving) return
   const keepList = state.mode !== 'diff'
   return findNextUnapproved().then(async (target) => {
     if (!target) {
-      // b.approvedRows/approvedCalls were just reassigned synchronously above
-      // (toggleApprove/toggleCallApprove), but state.approvalTotal is filled
-      // by a DECOUPLED watch (see its comment near state.approvalSummaries)
-      // whose callback runs as a microtask, not synchronously — give it a
-      // couple of turns to flush before reading it, same as loadBlocks'
-      // identical wait for the same watch.
-      await Promise.resolve()
-      await Promise.resolve()
-      const allDone = state.approvalTotal.total > 0 && state.approvalTotal.done === state.approvalTotal.total
-      openMenu(allDone ? 'reviewApprove' : 'reviewChoice')
+      await offerReviewSubmitFollowup()
       return
     }
     // The landing block of the plan — the last entry of target.path, or (an
@@ -11445,6 +11458,71 @@ function afterApproveAction(approving, blockId, auto = false) {
     postApproveTarget = { ...target, keepList }
     openMenu('postApprove')
   })
+}
+
+// findNextUnresolvedComment — the comment-side counterpart of
+// findNextUnapproved's own forward-only, no-wrap contract (see its doc
+// comment): walks state.blocks from state.selected + 1 onward for the first
+// kind:'comment' row (see commentBlockItem) whose comment GROUP (b.comments,
+// see "Comment-index rows are grouped per source line" in
+// comments-panel.md) still has at least one comment that isn't resolved yet
+// — reusing blockApproveCount's own done/total count rather than a second
+// per-comment status check, so this agrees with whatever the sidebar pill
+// already shows. Returns the sidebar index, or null if nothing ahead
+// qualifies (same "null doesn't mean done" caveat as findNextUnapproved —
+// afterResolveAction is the only caller and it only reaches this once
+// findNextUnapproved itself already came up empty).
+function findNextUnresolvedComment() {
+  for (let idx = state.selected + 1; idx < state.blocks.length; idx++) {
+    const candidate = state.blocks[idx]
+    if (candidate.kind !== 'comment') continue
+    const { done, total } = blockApproveCount(candidate)
+    if (done < total) return idx
+  }
+  return null
+}
+
+// afterResolveAction runs once a comment has actually been RESOLVED — the
+// shared follow-up for both commentCommandsFor's block-scoped "Resolve
+// comment" and prCommentCommandsFor's comment-index "Resolve comment" (never
+// after "Unresolve comment"/"Verwijder comment" — those aren't a forward
+// step). Reviewer request (2026-08-26): "als ik een comment resolve, ga dan
+// naar het volgende wat ik moet approven en anders naar de eerstvolgende
+// comment die nog niet resolved is" — confirmed to navigate DIRECTLY, with
+// no confirm menu (unlike afterApproveAction's postApprove follow-up, which
+// exists because approving is the more consequential action), to apply to
+// both entry points, to stay forward-only/no-wrap like findNextUnapproved,
+// and not to care who wrote the resolved comment.
+// Three-step order, matching the request literally:
+//   1. The next unit anywhere in the tree that still needs approving
+//      (findNextUnapproved, the exact same walk the approve flow uses) — if
+//      found, jump there straight away via applyNextUnapproved.
+//   2. Otherwise, the next comment-index row that isn't fully resolved yet
+//      (findNextUnresolvedComment above).
+//   3. Otherwise (nothing left to approve AND nothing left to resolve ahead)
+//      the same review-submit offer afterApproveAction falls back to —
+//      offerReviewSubmitFollowup, shared so there's only one copy of it.
+// `keepList` mirrors afterApproveAction's own "approving FROM THE
+// BLOKKEN-INDEX" exception: resolving while state.mode is still 'list'
+// (the ordinary comment-index row's own resting mode) keeps the reviewer in
+// the list — applyNextUnapproved's keepList branch only moves state.selected,
+// never drills into a diff — instead of unexpectedly dropping them into a
+// block's diff/drilled column just because the next unapproved unit happens
+// to live inside one.
+async function afterResolveAction() {
+  const keepList = state.mode !== 'diff'
+  const target = await findNextUnapproved()
+  if (target) {
+    applyNextUnapproved({ ...target, keepList })
+    return
+  }
+  const idx = findNextUnresolvedComment()
+  if (idx != null) {
+    state.selected = idx
+    scrollSelectedIntoView()
+    return
+  }
+  await offerReviewSubmitFollowup()
 }
 
 // isApproveDone tells whether the unit approveContext() currently resolves to
