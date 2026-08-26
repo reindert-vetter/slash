@@ -3313,26 +3313,30 @@ function searchHaystack(b) {
   return (own + ' ' + methods).toLowerCase()
 }
 
-// commentGroupKeyOf groups a comment-index candidate (see recomputeLeftList)
-// with every OTHER comment anchored to the exact same source line, so a line
-// carrying several open threads gets ONE index row instead of N. Only a
-// genuinely block-anchored (`kind === ''`, not orphaned) comment that still
-// resolves to a real block in this tree groups at all — the same
-// `anchoredBlocks` check recomputeLeftList already applies to decide whether
-// the comment gets a row in the first place; `anchoredBlocks` is passed in
-// rather than recomputed here since the caller already built it once for the
-// whole list. Returns null (never groups) for a PR-wide/`ai_warning`/orphan
-// comment — it has no line worth grouping on and keeps its own row.
-// `c.line` already IS the group/range's own FIRST row for a multi-line
-// comment: RelatedPanel.mjs always creates a comment with `line: t.startLine`
-// (see ensureClaudeAnchorForNew and the plain composer), never the last or
-// middle row — so no separate "first row of the range" computation is needed
-// here, per the reviewer's own instruction ("als het een groep of range
-// betreft, moet je eerste regel aanhouden").
+// commentGroupKeyOf USED TO group a comment-index candidate (see
+// recomputeLeftList) with every OTHER comment anchored to the exact same
+// source line, so a line carrying several open threads got ONE index row
+// instead of N ("comments... gegroepeerd worden per line"). That grouping is
+// DELIBERATELY REVERTED (2026-08-27): a reviewer opening a group row that
+// happened to combine a human review comment with an anchored AI-controle
+// finding (`code_warning`, which drops to `kind === ''` once it resolves to a
+// real line — see `anchoredWarning` in `code_warning.go`) saw BOTH cards on
+// the right for a SINGLE left-hand selection, which broke the harder
+// invariant: "what I select on the left must be exactly what I see on the
+// right, nothing else from the same block/selection" — see "Comments op
+// regels shows only its own comment" below, whose `onlyIds` narrowing this
+// grouping fed with more than one id. Rather than special-case the AI/human
+// mix, the reviewer chose to drop grouping altogether, even for two purely
+// human comments on the same line: every comment gets its OWN index row
+// again. **Always returns null on purpose** — do not reintroduce a grouping
+// key here; if line-clutter becomes a problem again, solve it without
+// merging distinct comments into one selectable unit. The rest of the
+// group machinery (`comments`/`onlyIds`/"· +N" in `commentBlockItem`) is
+// left in place, unused for now beyond a group-of-one, since it still is the
+// generic mechanism `commentAnchorOnlyIds` etc. rely on — see
+// "Comment-index rows: grouping reverted" in comments-panel.md.
 function commentGroupKeyOf(c, anchoredBlocks) {
-  if (c.kind || isOrphanComment(c)) return null
-  if (!anchoredBlocks.has(c.file + '|' + c.label)) return null
-  return c.file + '|' + c.label + '|' + (c.line || 0)
+  return null
 }
 
 function recomputeLeftList() {
@@ -3474,14 +3478,12 @@ function recomputeLeftList() {
   const commentCandidates = indexComments().filter(
     (c) => c.kind || isOrphanComment(c) || commentMentionsMe(c) || anchoredBlocks.has(c.file + '|' + c.label),
   )
-  // Group every candidate that resolves to a real anchor (commentGroupKeyOf)
-  // with every OTHER one on the exact same source line into ONE index row
-  // (reviewer request: "comments... gegroepeerd worden per line") — a PR-wide/
-  // orphan comment has no line worth grouping on and keeps its own row, one
-  // per comment, as before (its own unique 'single:'+id key never collides).
-  // Map preserves insertion order, so a group sits at the position of
-  // whichever of its comments appeared FIRST in indexComments()' (i.e.
-  // cs.list's) chronological order — same ordering as before this feature.
+  // commentGroupKeyOf always returns null now (grouping was reverted, see its
+  // own doc comment) — every candidate falls through to its own unique
+  // 'single:'+id key, so this Map always ends up one comment per group. Kept
+  // as a Map (rather than a flat map()) so a future re-introduction of real
+  // grouping has one place to change; insertion order is still what decides a
+  // row's position, same as before.
   const commentGroups = new Map() // key -> comment[]
   for (const c of commentCandidates) {
     const key = commentGroupKeyOf(c, anchoredBlocks) || 'single:' + c.id

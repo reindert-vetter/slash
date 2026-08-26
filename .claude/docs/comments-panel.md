@@ -139,25 +139,46 @@ item's own detail card (`commentDetailCard`, reading `prWideComments()`, not
 `cs.view`) and its own thread cursor (`pct`/`enterPrCommentThread`) are a wholly
 separate mechanism and are unaffected.
 
-### Comment-index rows are grouped per source line
+### Comment-index rows: grouping per source line was reverted — one row per comment, always
 
 `commentGroupKeyOf`/`commentBlockItem` (`home.mjs`, called from
-`recomputeLeftList`) merge every candidate comment that resolves to the same
-real block AND the same source line (`file + '|' + label + '|' + line`) into
-ONE index row instead of one row per comment — reviewer request: several
-open threads on the same line used to clutter the "Start" list with that many
-separate rows. Only a genuinely block-anchored, still-resolvable comment
-groups at all (the same `anchoredBlocks` check `recomputeLeftList` already
-applies to decide whether the comment gets a row in the first place); a
-PR-wide/orphan/`ai_warning` comment has no line worth grouping on and keeps
-its own row, one per comment, exactly as before.
+`recomputeLeftList`) USED TO merge every candidate comment that resolves to
+the same real block AND the same source line (`file + '|' + label + '|' +
+line`) into ONE index row instead of one row per comment — reviewer request:
+several open threads on the same line used to clutter the "Start" list with
+that many separate rows.
 
-For a comment placed on a whole group or a Shift+↑/↓ range rather than a
-single line, `c.line` is already the range's own FIRST row — every comment is
-created with `line: anchorLineFor(t, b)` (`ensureClaudeAnchorForNew` and the
-plain composer, `RelatedPanel.mjs`), which starts at `t.startLine`, never the
-last or middle row — so `commentGroupKeyOf` needs no separate "first row of the
-range" computation of its own.
+**Deliberately reverted (2026-08-27), `commentGroupKeyOf` now always returns
+`null`.** Reported bug: a reviewer selected the ONE row for `SessionFlow::run`
+line 131 and saw TWO comment cards on the right — a human review comment
+(`ricky-imu`, "IsBotActivity check doet waarschijnlijk niets") stacked above
+an unrelated AI-controle risk finding (`code_warning`, "bot workflow id blijft
+sessie"), each with its own reply box. Root cause: an anchored `ai_warning`
+finding drops to `kind === ''` once it resolves to a real line (see
+`anchoredWarning` in `code_warning.go`), so it groups with an ordinary human
+comment on the same line exactly like the grouping was designed to do — the
+`onlyIds` narrowing ("Comments op regels shows only its own comment" below)
+then correctly showed the WHOLE group, which is precisely what broke the
+harder invariant the reviewer actually wants: **selecting one row on the left
+must show exactly one card on the right, never another comment from the same
+block/selection** — even two purely human comments on the same line. Given
+that choice, the reviewer chose to drop the grouping feature entirely rather
+than special-case AI-vs-human within it, explicitly accepting that the
+original clutter complaint (many open threads on one line = many rows) is
+back. **Do not reintroduce a grouping key in `commentGroupKeyOf` — if line
+clutter becomes a problem again, solve it without merging distinct comments
+into one selectable index row/right-hand view.**
+
+The rest of the group machinery (`comments` on a comment-index item,
+`commentAnchorOnlyIds`, the `· +N` label suffix) is left in place — every
+group is now a group of exactly one, and that's the existing "solo comment"
+fallback path described below, not new code. `c.line` (used by the now-inert
+grouping key, kept for that same "first row of a range" reasoning below in
+case grouping ever needs it again) is already the range's own FIRST row for a
+comment placed on a whole group or a Shift+↑/↓ range: every comment is created
+with `line: anchorLineFor(t, b)` (`ensureClaudeAnchorForNew` and the plain
+composer, `RelatedPanel.mjs`), which starts at `t.startLine`, never the last or
+middle row.
 
 **`anchorLineFor(t, b)` falls back to the FOCUSED block's line, not the
 top-level one.** Both call sites used to read `(t && t.startLine) || b.line`,
@@ -182,8 +203,9 @@ whole group) and `spaceKey`'s resolve target (`firstUnresolvedComment`, which
 walks to the first still-open comment in the group instead of getting stuck
 once the primary one happens to already be resolved) look at `comments`. The
 row's own label gets a `· +N` suffix once the group holds more than one
-comment. A solo comment (the common case) is a group of exactly one, so its
-row is unchanged.
+comment — dead code for now since `commentGroupKeyOf` no longer produces a
+group bigger than one (see above), kept only because ripping it out would mean
+re-adding it if grouping ever comes back in some other shape.
 
 ### An anchored "Start" item instead opens its block "as if fully expanded" — automatically, but the keyboard only follows on ArrowRight
 

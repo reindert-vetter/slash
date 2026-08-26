@@ -373,7 +373,24 @@ export function setRelated(children, unresolved, warning) {
 // only place cs.view actually re-derives.
 export function setCommentScope(scope) {
   const isNone = !!(scope && scope.none)
-  const sig = !scope ? '' : isNone ? 'none' : [scope.file, scope.label, scope.mode, scope.gran, scope.rowStart, scope.rowEnd, scope.seg].join('|')
+  // onlyIds is appended to the signature (not just the file/label/gran/row
+  // fields) because two DIFFERENT "Comments op regels" rows anchored to the
+  // exact same source line — now that commentGroupKeyOf no longer merges
+  // them into one row, see "Comment-index rows: grouping per source line was
+  // reverted" in comments-panel.md — resolve to an otherwise IDENTICAL
+  // signature (same file/label/gran/rowStart/rowEnd/seg, since they sit on
+  // the same unit): only onlyIds tells the two selections apart. Without
+  // this, stepping from one such row to the other left cs.view (and thus the
+  // right-hand comment card) stuck on the FIRST comment's id forever, since
+  // the dedup below short-circuited before recomputeView ever re-read the
+  // new onlyIds.
+  const sig = !scope
+    ? ''
+    : isNone
+      ? 'none'
+      : [scope.file, scope.label, scope.mode, scope.gran, scope.rowStart, scope.rowEnd, scope.seg].join('|') +
+        '|' +
+        (scope.onlyIds ? scope.onlyIds.join(',') : '')
   // The 'none' sentinel is NEVER deduped by signature, unlike the real-scope
   // join below. Every unanchored comment-index item (PR-wide/orphan/
   // ai_warning) shares that exact same bare signature regardless of WHICH
@@ -7420,11 +7437,31 @@ function expandedConversation(c, openCommentMenu, readOnly) {
       @click="${() => {
         // The one click this read-only card DOES react to — hands the
         // keyboard back, mirroring the ←/Escape hand-off already used from
-        // 'claude' (toComment()/toNewFocus(), see handleRelatedKey). A no-op
-        // when not read-only: this card's own composer already handles its
-        // own clicks, and this outer handler must never steal focus away
-        // from an interactive field the reviewer is already typing in.
-        if (readOnly) (cc.commentId == null ? toNewFocus() : toComment())
+        // 'claude' (toComment()/toNewFocus(), see handleRelatedKey).
+        if (readOnly) {
+          cc.commentId == null ? toNewFocus() : toComment()
+          return
+        }
+        // Not read-only, but this card can still render fully expanded
+        // BEFORE the keyboard actually owns it — the "Comments op regels"
+        // anchor-only forced expansion (isAnchorOnlyComment, commentCard):
+        // "as if fully expanded" is purely visual, exactly like
+        // openCommentAnchorDrill's own diff/Onderliggende-code column (see
+        // its doc comment in home.mjs), and only an explicit → — or, per
+        // mouse-navigation.md's "a click runs the same function a key runs",
+        // a click — actually hands the keyboard in. Once this conversation
+        // DOES own cs.focus, this is a no-op again: its own composer/reply
+        // field already handles its own clicks, and this outer handler must
+        // never steal focus away from an interactive field the reviewer is
+        // already typing in.
+        const alreadyFocused =
+          (cs.focus === 'comment' || cs.focus === 'thread') && selComment() && selComment().id === c.id
+        if (alreadyFocused) return
+        const vi = cs.view.findIndex((x) => x.id === c.id)
+        if (vi >= 0) {
+          cs.sel = vi
+          toComment()
+        }
       }}"
       @contextmenu="${(e) => {
         // Right-click anywhere on this (already-focused) thread card = the
