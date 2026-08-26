@@ -2696,10 +2696,26 @@ function lineSummaryParts(summary) {
 // already carry the meaning either way. `summary` is one entry of
 // home.mjs's lineChildSummaries Map, or undefined/null when this row has
 // nothing to show.
+//
+// `right-3` (not `right-1.5`): CARD_CHROME_PX's ~38-52px chip reserve (see
+// its own doc comment above) was tuned against the plain avatar+fraction
+// case ("measured up to 62px"). The WIDEST real combo — an AI-warning
+// triangle AND an avatar/note icon AND a "+N" remainder AND a done/total
+// fraction, all at once — measured ~77-93px, which left only ~3-4px of
+// clearance to the card's own right edge on a row near the block's longest
+// line (reported: "het labeltje gaat net over de rechterkant heen" with a
+// screenshot of exactly this 4-part combo). The absolute-positioned pill can
+// never truly cross the card's border (its `right` offset is fixed relative
+// to the row, which fills the card), but a few px of clearance reads as
+// "touching/crossing" once antialiasing blurs the rounded corner next to it.
+// Widening the offset trades a little more overlap onto the code text to its
+// left — already-accepted behavior, see CARD_CHROME_PX's own comment — for
+// comfortable, consistent clearance from the edge regardless of how many
+// segments the pill ends up showing.
 function lineSummaryBadge(summary) {
   const p = lineSummaryParts(summary)
   if (!p) return ''
-  return ` <span class="select-none absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1 rounded bg-white/90 dark:bg-zinc-900/90 px-1 py-0.5 ring-1 ring-slate-200 dark:ring-zinc-700 shadow-sm" data-testid="line-underlying-summary" title="${p.title}">${p.html}</span>`
+  return ` <span class="select-none absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1 rounded bg-white/90 dark:bg-zinc-900/90 px-1 py-0.5 ring-1 ring-slate-200 dark:ring-zinc-700 shadow-sm" data-testid="line-underlying-summary" title="${p.title}">${p.html}</span>`
 }
 
 // translationLineSummaryHtml is lineSummaryBadge's sibling for a TRANSLATION
