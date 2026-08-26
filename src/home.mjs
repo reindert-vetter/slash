@@ -115,6 +115,7 @@ import RelatedPanel, {
   hasAnyComments,
   isClaudeChatFocused,
   isFooterTasksFocused,
+  activeClaudeMessageBody,
   clearClaudeChat,
   retryClaudeTurn,
   cancelClaudeTurn,
@@ -12997,6 +12998,27 @@ function onKeydown(e) {
       else runComposePost()
     }
     return
+  }
+
+  // Cmd+C on a selected Claude chat bubble (cs.claudePos >= 1, walked there
+  // with ↑, see .claude/docs/claude-chat-panel.md) copies that turn's own
+  // raw text to the clipboard instead of doing nothing (there is no native
+  // text selection to copy, since the bubble is only keyboard-highlighted, not
+  // selected) — reviewer request. isNativeTextEditKey (top of onKeydown) already
+  // returns before this for a real Cmd+C in a focused composer/reply field, so
+  // that case never reaches here. The two remaining "let native copy win"
+  // cases are handled inline below: no active turn (activeClaudeMessageBody()
+  // null at the rest position) and an actual DOM text selection (the reviewer
+  // selected real text somewhere — e.g. inside the bubble itself — which a
+  // browser's own Cmd+C should still copy verbatim, not the whole turn).
+  if (e.key === 'c' && isModifiedKey(e) && isClaudeChatFocused()) {
+    const text = activeClaudeMessageBody()
+    const sel = window.getSelection()
+    if (text && (!sel || !sel.toString())) {
+      e.preventDefault()
+      navigator.clipboard.writeText(text).catch((err) => console.error('clipboard write failed:', err))
+      return
+    }
   }
 
   // c/v resize the FOCUSED column (see startResizeKey's own doc comment) —

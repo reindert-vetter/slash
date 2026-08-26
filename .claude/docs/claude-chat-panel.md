@@ -1066,6 +1066,34 @@ can never resolve one; this needs the real anchor PR 12903's own ingested
 tree) and checks the row appears, 2x `→` lands straight in the chat, and the
 icon disappears after the mocked "seen" Signal round-trips.
 
+### Cmd+C on a selected bubble copies that turn's own text
+
+Reviewer request: with a keyboard-selected turn (`cs.claudePos >= 1`, walked
+there with `↑`, see above) there is nothing to select, so a plain Cmd+C did
+nothing — no DOM text selection exists for the browser's native copy to act
+on. `onKeydown` (`home.mjs`) now handles `Cmd/Ctrl+C` explicitly while
+`isClaudeChatFocused()`: it reads the active turn's raw text via
+`activeClaudeMessageBody()` (`RelatedPanel.mjs`, mirrors
+`activeClaudeBubbleEl`'s own index math: `cc.messages.length - cs.claudePos`,
+returning the message's `.body`) and writes it to the clipboard
+(`navigator.clipboard.writeText`, same fire-and-forget pattern as
+`copyReviewSummary`). Two carve-outs let native Cmd+C win instead, per the
+long-standing rule that a real selection/editable field is never hijacked
+(see `isNativeTextEditKey` in `.claude/rules/arrowjs-pitfalls.md`'s
+conventions and `keyboard-navigation.md`):
+
+- **A focused text field** (composer/reply) — `isNativeTextEditKey` at the
+  very top of `onKeydown` already returns before this branch is ever reached.
+- **An actual DOM text selection** — `window.getSelection().toString()`
+  non-empty (e.g. the reviewer selected text inside the bubble by hand) is
+  left alone so the browser copies exactly that selection, not the whole
+  turn.
+
+At the rest position (`cs.claudePos === 0`, no turn selected) or an empty
+list, `activeClaudeMessageBody()` returns `null` and the branch is a no-op —
+Cmd+C then does whatever it would have done anyway (typically nothing, same
+as before this change). Test: `tests/claude-chat-copy-bubble.spec.mjs`.
+
 ### ↑/↓ walk a tall bubble 4 rendered lines at a time, before stepping to the next one
 
 Reviewer request: the thread is deliberately not tall (`max-h-[38vh]`), which

@@ -309,6 +309,17 @@ behaves natively via the caret exceptions, and `Shift+↑` on a textarea's first
 visual line keeps its existing range-selection meaning (see "Shift+↑/↓
 ranges"). Test: `tests/text-field-modifier-keys.spec.mjs`.
 
+### Cmd+C on a selected Claude chat bubble copies its text
+
+One exception copies rather than defers to native: `Cmd/Ctrl+C` while a Claude
+chat turn is keyboard-selected (`isClaudeChatFocused()`, `cs.claudePos >= 1`)
+copies that turn's own raw text to the clipboard — there's nothing for a
+native copy to act on, since the bubble is only highlighted, not selected.
+Still falls through to native Cmd+C the moment there IS a real DOM text
+selection, or DOM focus sits in a text field (the guard above already returns
+before this branch). See "Cmd+C on a selected bubble copies that turn's own
+text" in `.claude/docs/claude-chat-panel.md`.
+
 ### Focus highlight per stop
 
 **One single, app-wide border rule, no per-block exceptions:** every

@@ -3254,6 +3254,18 @@ function activeClaudeBubbleEl() {
   return document.querySelectorAll('[data-testid=claude-message]')[j] || null
 }
 
+// activeClaudeMessageBody mirrors activeClaudeBubbleEl's own index math but
+// returns the active turn's raw text (cc.messages[j].body) instead of its
+// DOM node — used by Cmd+C (home.mjs's onKeydown) to copy the selected
+// bubble's own text without depending on an actual DOM text selection. Same
+// null-at-rest contract as activeClaudeBubbleEl (cs.claudePos < 1).
+export function activeClaudeMessageBody() {
+  if (cs.claudePos < 1) return null
+  const j = cc.messages.length - cs.claudePos
+  const m = cc.messages[j]
+  return (m && m.body) || null
+}
+
 // scrollClaudeMessageWithinBubble scrolls the transcript scroller by
 // CLAUDE_BUBBLE_SCROLL_LINES lines of the ACTIVE bubble's own text, in `dir`
 // ('up' walks earlier text, 'down' walks later text) — called from
