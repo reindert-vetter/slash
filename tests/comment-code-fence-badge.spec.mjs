@@ -17,8 +17,11 @@ test.use({ viewport: { width: 2000, height: 1100 } })
 // Claude conversation's own copy of the context, since that number is the
 // ONLY way a reviewer ever acts on a fenced block/suggestion: there is no
 // accept button or menu action, only "pas codeblok 3 toe: ..." typed into the
-// Claude composer. See "Codeblok numbering must match what Claude sees" in
-// .claude/docs/claude-chat-panel.md.
+// Claude composer. This fixture only ever uses ONE comment thread, so the
+// badge numbering and the chat context numbering coincide here — they no
+// longer necessarily do across SIBLING comment threads on the same
+// block/line, an accepted divergence, see "Codeblok numbering diverges from
+// chat context (on purpose)" in .claude/docs/claude-chat-panel.md.
 //
 // The Claude round-trip is done FIRST, right after entering the column, and
 // the (slower, several-assertions-deep) visible-badge checks come after —

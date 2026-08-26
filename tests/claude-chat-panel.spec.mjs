@@ -93,10 +93,13 @@ test('embedded Claude chat: enter via →, send a message, answer a question', a
   expect((await start.json()).runId).toBeTruthy()
 
   // A SECOND, later comment thread on the exact same unit (same file+label,
-  // same "call" scope) — the context sent on the first Claude turn must fold
-  // in BOTH threads (see claudeThreadContextBlock, RelatedPanel.mjs), ordered
-  // chronologically with this one (created after the first) marked as the
-  // most recent.
+  // same "call" scope) — the context sent on the FIRST comment's Claude turn
+  // must NOT leak this sibling thread's text (see claudeThreadContextBlock,
+  // RelatedPanel.mjs): each comment has its own, separate claude_chat
+  // Execution, and a chat anchored on one comment must not learn what a
+  // reviewer wrote on another, merely because both sit on the same
+  // block/line. See "The already-written comment thread also rides
+  // along..." in claude-chat-panel.md.
   const start2 = await page.request.post('/api/workflows/task_code_comment', {
     data: {
       pr,
@@ -156,10 +159,12 @@ test('embedded Claude chat: enter via →, send a message, answer a question', a
   // .first() is the reviewer's own just-sent message; the assistant's reply
   // is the second bubble (threadMessages ordering: user turn, then reply).
   //
-  // The FIRST turn's invisible context must fold in BOTH already-written
-  // comments on this unit (claudeThreadContextBlock, RelatedPanel.mjs),
-  // chronologically, with the later one ("early return") marked as the most
-  // recent — never dumped unordered, per Reindert's explicit request.
+  // The FIRST turn's invisible context must fold in only THIS conversation's
+  // own anchor comment ("kan dit sneller?", tagged as the most recent since
+  // it's the only message in scope) — never the sibling comment's text
+  // ("early return"), even though both sit on the exact same block/line
+  // (claudeThreadContextBlock, RelatedPanel.mjs; scoped to
+  // chatAnchorComment(), not visibleComments()).
   await composer.fill('Kun je hier iets over zeggen?')
   const [firstMsgReq] = await Promise.all([
     page.waitForRequest((req) => req.url().includes('/signals/message') && req.method() === 'POST'),
@@ -167,9 +172,8 @@ test('embedded Claude chat: enter via →, send a message, answer a question', a
   ])
   const firstContext = firstMsgReq.postDataJSON().context
   expect(firstContext).toContain('kan dit sneller?')
-  expect(firstContext).toContain('graag ook een early return toevoegen')
-  expect(firstContext.indexOf('kan dit sneller?')).toBeLessThan(firstContext.indexOf('graag ook een early return'))
-  expect(firstContext).toMatch(/graag ook een early return toevoegen.*meest recent/s)
+  expect(firstContext).not.toContain('graag ook een early return toevoegen')
+  expect(firstContext).toMatch(/kan dit sneller\?.*meest recent/s)
   await expect(page.getByTestId('claude-message-body').last()).toContainText('Ik heb naar de code gekeken')
 
   // Second turn: a strict "question with choices" directive — renders as up

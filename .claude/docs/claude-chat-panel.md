@@ -2304,17 +2304,31 @@ own chat bubble must show exactly what they typed, nothing more.
   reviewer bubble (`claude-message-body`) shows only that typed text; a second
   send in the same conversation asserts `context` is empty/absent.
 
-### The already-written comment thread(s) on this unit also ride along, chronologically
+### The already-written comment thread also rides along, chronologically — but only THIS conversation's own thread
 
 `claudeContextBlock` also folds in **`claudeThreadContextBlock()`**
 (`RelatedPanel.mjs`, same file, same first-turn-only gate) — every
-already-written comment message scoped to the exact same code block/line: the
-conversation's own anchor thread (opening + every reaction) **plus** any other
-comment thread on that same unit, i.e. exactly `visibleComments()`/`cs.view`,
-the same "under this selection" scope `recomputeView`/`commentUnder` already
-compute for the comment index itself. Deliberately **not** every comment on
-the whole PR — reviewer's explicit choice, "de tussenvorm": own thread plus
-same-unit threads, not PR-wide.
+already-written message on **this conversation's own anchor comment only**
+(`chatAnchorComment()`'s opening body plus every reaction/reply, via
+`threadMessages`). Each comment has its own, separate `claude_chat` Execution
+(Run ID is the comment id, see `.claude/docs/workflows-comments.md`), so a chat
+hanging on comment A must never learn about comment B's text just because a
+reviewer happened to place both on the same block/line.
+
+This was **not** always the scope: an earlier version deliberately widened it
+to "own thread plus any OTHER comment thread on the same unit" (exactly
+`visibleComments()`/`cs.view`, the same "under this selection" scope
+`recomputeView`/`commentUnder` compute for the comment index itself) — "de
+tussenvorm", own thread plus same-unit threads, not PR-wide. That was reversed
+on reviewer report: a chat opened on one comment on a line was picking up the
+TEXT of a sibling comment on the same line, which the reviewer never intended
+that particular chat to see. Each comment's chat is its own conversation; the
+fact that two comments sit on the same selection is a coincidence of where the
+reviewer clicked, not a reason to merge their contexts.
+
+**The still-cross-thread on-screen "Codeblok N" badges are a deliberate,
+accepted divergence from this, not a leftover to "fix" back into sync** — see
+"Codeblok numbering diverges from chat context (on purpose)" below.
 
 ### Chat over een heel bereik (`startRangeChat`, an index-level Shift-selection)
 
@@ -2366,21 +2380,22 @@ prepending a short, capped label list (`rangeCommentPrefix`) to the reviewer's
 own typed text — see `command-palette.md`.
 
 Reviewer's second explicit requirement: it must be unambiguous which remark is
-the standing one to react to, not an unordered dump. So every message
-(comment openings + reactions, across every thread on the unit) is sorted
-**chronologically by `createdAt`** (comments/reactions both carry
-`RFC3339Nano` timestamps, see `modules/comments/comments.go`, so ties across
-near-simultaneous inserts are never actually ambiguous) and the **last** line
-is explicitly tagged `[meest recent — het gesprek gaat hierop verder]`.
-`CLAUDE_ANCHOR_PLACEHOLDER` bodies are filtered out (not a real reviewer
-message, see `ensureClaudeAnchorForNew` above). Same invisibility/determinism
-guarantees as the selection block above: only the `context` Signal field, the
-visible bubble is untouched; no new write path.
+the standing one to react to, not an unordered dump. So the thread's own
+messages (opening + replies) are kept in `threadMessages`' own order — already
+chronological, since a reply is stored after the message it replies to — and
+the **last** line is explicitly tagged `[meest recent — het gesprek gaat
+hierop verder]`. `CLAUDE_ANCHOR_PLACEHOLDER` bodies are filtered out (not a
+real reviewer message, see `ensureClaudeAnchorForNew` above). Same
+invisibility/determinism guarantees as the selection block above: only the
+`context` Signal field, the visible bubble is untouched; no new write path.
 
 Test: the first "embedded Claude chat…" spec in `tests/claude-chat-panel.spec.mjs`
-seeds a second comment thread on the exact same file+label before entering the
-chat, and asserts the first turn's intercepted `context` contains both
-bodies, in creation order, with the later one tagged `meest recent`.
+seeds a SECOND, sibling comment thread on the exact same file+label before
+entering the chat on the first comment, and asserts the first turn's
+intercepted `context` contains only the first comment's own body (tagged
+`meest recent`, since it's the only message in scope) and explicitly does
+**not** contain the sibling thread's text — the regression test for the
+information-leak fix described above.
 
 ### Emitting a fence at all is a PROMPT rule, not a rendering one
 
@@ -2404,7 +2419,7 @@ backticked names. Deliberately only those three files — the other prompts
 conversational answers. If a future session wants fewer/more code blocks in
 chat answers, this paragraph is the knob; no frontend change is involved.
 
-### Codeblok numbering must match what Claude sees — the ONLY mechanism for acting on a fenced code block/suggestion
+### Codeblok numbering diverges from chat context (on purpose) — the mechanism for acting on a fenced code block/suggestion
 
 A fenced code block (` ``` `) or a GitHub `` ```suggestion `` block in a
 comment/reply gets a visible, running **"Codeblok N"**/**"Suggestie N"** badge
@@ -2418,37 +2433,42 @@ codeblok 3 toe: gebruik hier een early return" — and Claude acts on it exactly
 like any other request in the conversation, through its existing Bash/Edit
 tool access in the conversation's own shadow worktree (see "Agentic edits" in
 `.claude/docs/workflows-comments.md`, and the write-boundary carve-out in
-`.claude/rules/workflows-write-boundary.md`). No backend change was needed for
-this at all — only the numbering itself, and getting Claude's own copy of the
-context to carry the same numbers.
+`.claude/rules/workflows-write-boundary.md`).
 
-For that to work, "codeblok 3" must mean the exact same block to the reviewer
-and to Claude, so the numbering used in the visible badges and the numbering
-folded into `claudeThreadContextBlock`'s text (above) share ONE mechanism:
+**Until the fix described in the previous section, the two numbering systems
+below shared one mechanism and always matched.** They no longer do, on
+purpose:
 
-- `markdown.mjs` exports `countCodeFences(text)` (count only, no render) and
-  `annotateFenceNumbers(text, startIndex)` (returns `{text, count}`: the SAME
-  text with a `[Codeblok N]`/`[Suggestie N]` marker line inserted right before
-  each fence, using the same `fenceLabel` wording the visual badge renders) —
-  both driven off the identical fence regex `renderMarkdown`/`extractCodeFences`
-  use, so a "codeblok" can never be counted differently between the three.
-- `RelatedPanel.mjs`'s `orderedThreadMessages()` (the function
-  `claudeThreadContextBlock` already builds, factored out) also backs
-  `threadFenceStartIndexes(c)`: it walks the same chronological, cross-thread
-  message list and assigns each message the running fence-count BEFORE its own
-  fences. `commentBody(c, startIndex)` (see `.claude/rules/conventions.md`)
-  takes that as its numbering offset, so a bubble rendered later in the thread
-  continues the count instead of restarting at 1 — exactly mirroring how
-  `claudeThreadContextBlock` threads its own `running` counter through
-  `annotateFenceNumbers` across the same messages, in the same order.
-- **Scope, same as `claudeThreadContextBlock`'s own:** continuity only holds
-  across `visibleComments()` — the block-scoped case where an embedded Claude
-  conversation actually exists. A PR-wide comment-index item's own
-  `commentDetailCard` thread (which has no Claude chat, see "Scope: one
-  conversation per comment thread" in `.claude/docs/workflows-comments.md`)
-  falls back to numbering continuously within just that one thread instead
-  (`threadFenceStartIndexes`' own `inScope` check) — nothing to keep in sync
-  with there, but still nicer than resetting to 1 in every bubble.
+- `RelatedPanel.mjs`'s `orderedThreadMessages()` still walks the chronological,
+  **cross-thread** message list — every comment thread on the same block/line,
+  i.e. `visibleComments()`/`cs.view` — and backs `threadFenceStartIndexes(c)`:
+  each message gets the running fence-count BEFORE its own fences, so a card
+  rendered later on the SAME line keeps counting on from an earlier card's
+  badges instead of resetting to "Codeblok 1". `commentBody(c, startIndex)`
+  (see `.claude/rules/conventions.md`) takes that as its numbering offset. This
+  is purely a rendering convenience and stays cross-thread.
+- `claudeThreadContextBlock` (the previous section) now only summarizes THIS
+  conversation's own anchor comment (`threadMessages(chatAnchorComment())`),
+  and numbers the fences **within that one thread alone**, starting back at 0.
+
+**Accepted consequence:** the "Codeblok N" badge the reviewer sees on a
+SIBLING comment's card (same block/line, different comment/different Claude
+conversation) no longer corresponds to any number in THIS chat's own context.
+Referencing that sibling's codeblock by number in this chat is not something
+Claude can resolve anymore — it was never shown that comment's text at all.
+Reunifying the two numbering schemes again would require re-widening
+`claudeThreadContextBlock`'s scope back to cross-thread, which is exactly the
+information leak this fix removed (see "The already-written comment thread
+also rides along…" above) — don't "fix" this divergence back without
+re-reading that reasoning first.
+
+`markdown.mjs` still exports `countCodeFences(text)`/`annotateFenceNumbers(text,
+startIndex)` as the one shared low-level primitive (same fence regex as
+`renderMarkdown`/`extractCodeFences`, so a "codeblok" is counted identically
+everywhere) — only the SCOPE each caller feeds it now differs.
+`threadFenceStartIndexes`' own `inScope`/fallback behaviour (numbering
+continuously within just one thread for a PR-wide comment-index item, which has
+no Claude chat/cross-thread scope to match) is unchanged.
 
 ## "Opnieuw proberen" — a failed turn, and which model answered
 
@@ -3590,8 +3610,8 @@ as a before/after.
   with the announced language appended (`Codeblok 3 · SQL`). It used to be just
   the uppercased language or the bare word "Codeblok", so the card and the
   inline badge named the same block differently — and the running number is the
-  ONE handle a reviewer has on a fence (see "Codeblok numbering must match what
-  Claude sees").
+  ONE handle a reviewer has on a fence (see "Codeblok numbering diverges from
+  chat context (on purpose)").
 
 Test: `tests/code-fence-preview.spec.mjs`'s "only a suggestion fence gets the
 \"Huidig (PR)\" comparison pane" — one body with both fence kinds, asserting

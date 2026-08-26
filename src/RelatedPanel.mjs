@@ -2629,15 +2629,23 @@ function claudeRangeContextBlock(items) {
 }
 
 // orderedThreadMessages returns every message across every comment thread on
-// this unit (visibleComments()), chronologically (createdAt) — the exact
-// scope/order claudeThreadContextBlock feeds to Claude, and ALSO the order
-// used to number each message's own fenced code blocks (see
-// threadFenceStartIndexes below), so a "Codeblok N" badge the reviewer sees
-// always names the same block Claude's own copy of the context calls "Codeblok
-// N" — the whole point of the numbering (the reviewer types "pas codeblok 3
-// toe" in the Claude chat instead of a dedicated accept action). Skips
-// CLAUDE_ANCHOR_PLACEHOLDER (see ensureClaudeAnchorForNew) since that is not a
-// real message the reviewer wrote.
+// this unit (visibleComments()), chronologically (createdAt) — the order used
+// to number each message's own fenced code blocks on screen (see
+// threadFenceStartIndexes below): a "Codeblok N" badge the reviewer sees on
+// one comment card keeps counting on from the previous comment card in the
+// same block/line, purely a display convenience.
+//
+// Deliberately NO LONGER what claudeThreadContextBlock sends to Claude (see
+// its own doc comment) — that used to be exactly this cross-thread scope, but
+// each comment has its own, separate claude_chat Execution (Run ID = comment
+// id, see workflows-comments.md), so a chat on comment A must not see
+// comment B's text merely because both sit on the same line. This function
+// itself still stays cross-thread: it is purely a rendering concern now
+// (badge numbering), decoupled on purpose from what a chat is told — see
+// "Codeblok numbering diverges from chat context (on purpose)" in
+// claude-chat-panel.md before "fixing" this back into claudeThreadContextBlock.
+// Skips CLAUDE_ANCHOR_PLACEHOLDER (see ensureClaudeAnchorForNew) since that is
+// not a real message the reviewer wrote.
 function orderedThreadMessages() {
   const threads = visibleComments()
   const msgs = []
@@ -2656,12 +2664,16 @@ function orderedThreadMessages() {
 // the thread's numbering instead of resetting to "Codeblok 1" in every bubble
 // (commentBody's own `startIndex` parameter, see viewingBubble/
 // compactConversation below). Uses the SAME cross-thread, chronological order
-// as `orderedThreadMessages`/claudeThreadContextBlock when `c` is part of that
-// scope (the ordinary block-scoped case, where an embedded Claude chat can
-// reference these numbers) — and falls back to `c`'s own thread in isolation
+// as `orderedThreadMessages` when `c` is part of that scope (the ordinary
+// block-scoped case) — purely a display convenience, so a reviewer scanning
+// several comment cards on the same line sees one continuously numbered
+// sequence of badges. This numbering is deliberately NOT what any one
+// claude_chat conversation is told (see claudeThreadContextBlock and
+// "Codeblok numbering diverges from chat context (on purpose)" in
+// claude-chat-panel.md) — and falls back to `c`'s own thread in isolation
 // otherwise (e.g. a PR-wide comment-index item's detail card, which has no
-// Claude chat/cross-thread scope to match), so numbering is always at least
-// continuous within one thread even there.
+// cross-thread scope to match), so numbering is always at least continuous
+// within one thread even there.
 function threadFenceStartIndexes(c) {
   const crossScope = visibleComments()
   const inScope = c && crossScope.some((x) => x.id === c.id)
@@ -2675,28 +2687,40 @@ function threadFenceStartIndexes(c) {
   return map
 }
 
-// claudeThreadContextBlock summarizes every already-written comment message
-// scoped to this same code block/line — the conversation's own anchor thread
-// (opening + reactions) PLUS any other comment thread on the same unit (i.e.
-// exactly visibleComments()/cs.view, the same "under this selection" scope
-// the comment index itself uses — see recomputeView/commentUnder) — so
-// Claude doesn't need the reviewer to repeat in the chat what's already
-// written right next to it. Deliberately NOT every comment on the whole PR,
-// only this unit's.
+// claudeThreadContextBlock summarizes every already-written message on THIS
+// conversation's own anchor comment only (chatAnchorComment(): its opening
+// body plus every reaction/reply, via threadMessages) — never any OTHER
+// comment thread that happens to sit on the same block/line. Each comment has
+// its own, separate claude_chat Execution (Run ID = comment id, see
+// workflows-comments.md), so a chat hanging on comment A must never learn
+// about comment B's text just because a reviewer placed both on the same
+// selection. Explicit product decision (Reindert, not a guess) — see
+// "Codeblok numbering diverges from chat context (on purpose)" in
+// claude-chat-panel.md for the accepted trade-off this creates against the
+// still-cross-thread on-screen "Codeblok N" badges
+// (threadFenceStartIndexes/orderedThreadMessages above): don't reunify the
+// two scopes without re-reading that note.
 //
-// Ordered chronologically (createdAt) across every thread combined, and the
-// LAST message is explicitly tagged as the most recent one the conversation
-// builds on — an unordered dump left it unclear which remark is the standing
-// one to react to (explicit reviewer request).
+// Ordered exactly as threadMessages(c) returns them (opening, then every
+// reply/reaction in stored order — already chronological, unlike
+// orderedThreadMessages' cross-thread merge, this needs no separate sort),
+// and the LAST message is explicitly tagged as the most recent one the
+// conversation builds on — an unordered dump left it unclear which remark is
+// the standing one to react to (explicit reviewer request).
 //
 // Every fenced code block in every message is also annotated with the same
 // "[Codeblok N]"/"[Suggestie N]" marker its visual badge shows
-// (annotateFenceNumbers, markdown.mjs) — running continuously across every
-// message in this same order — so the reviewer can say "pas codeblok 3 toe:
-// ..." in the Claude composer and Claude's own copy of the context contains
-// that exact same numbering, no separate accept action needed.
+// (annotateFenceNumbers, markdown.mjs), numbered from 0 within this thread
+// alone — which no longer necessarily matches the on-screen badge number for
+// the SAME message when that card's badge continues a cross-thread count from
+// a sibling comment (see threadFenceStartIndexes' own doc comment): a
+// reviewer referencing "codeblok N" from a DIFFERENT comment's thread is no
+// longer something this chat can resolve, an accepted consequence of scoping
+// the context to just this thread.
 function claudeThreadContextBlock() {
-  const msgs = orderedThreadMessages()
+  const msgs = threadMessages(chatAnchorComment()).filter(
+    (m) => m.body && m.body !== CLAUDE_ANCHOR_PLACEHOLDER,
+  )
   if (!msgs.length) return ''
   const lines = ['Al geschreven comments op dit codeblok/deze regel (chronologisch, oud naar nieuw):']
   let running = 0
