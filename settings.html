@@ -33,6 +33,23 @@
       tailwind.config = { darkMode: 'selector' }
     </script>
     <style>
+      /* Native scrollbar colour follows the *used* color-scheme, not
+         background colours or Tailwind's .dark class — unlike the Prism/
+         markdown-body block this page deliberately omits (see the comment
+         below), this one applies here too since every page has a native
+         scrollbar. Same base + @media fallback + data-theme mirror shape as
+         index.html/overview.html. */
+      :root {
+        color-scheme: light;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme='light']) {
+          color-scheme: dark;
+        }
+      }
+      :root[data-theme='dark'] {
+        color-scheme: dark;
+      }
       /* Keep programmatic scrolling (scrollIntoView for keyboard nav) but hide
          the scrollbar chrome — the panels read as clean floating blocks. */
       .no-scrollbar {

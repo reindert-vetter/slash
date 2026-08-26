@@ -45,6 +45,14 @@
       tailwind.config = { darkMode: 'selector', theme: { extend: { screens: { narrow: { max: '1399px' } } } } }
     </script>
     <style>
+      /* Native scrollbar colour follows the *used* color-scheme, not
+         background colours or Tailwind's .dark class — Chromium draws a
+         light scrollbar in a dark UI unless this is set explicitly. Same
+         three-way mechanism as the Prism/markdown-body blocks below (base +
+         @media fallback with the light-override gate + data-theme mirror). */
+      :root {
+        color-scheme: light;
+      }
       /* Keep programmatic scrolling (scrollIntoView for keyboard nav) but hide
          the scrollbar chrome — the panels read as clean floating blocks. */
       .no-scrollbar {
@@ -360,6 +368,9 @@
          category-per-hue mapping as the light palette above); markdown-body
          reuses the zinc/indigo dark palette used across the rest of the app. */
       @media (prefers-color-scheme: dark) {
+        :root:not([data-theme='light']) {
+          color-scheme: dark;
+        }
         :root:not([data-theme='light']) .call-seg.call-seg-hover {
           background-color: #3f3f46; /* zinc-700 */
         }
@@ -442,6 +453,9 @@
       /* Same rules as the @media block above, mirrored for the manual theme
          toggle (src/theme.mjs sets data-theme on <html>) — see the comment
          above the @media block. */
+      :root[data-theme='dark'] {
+        color-scheme: dark;
+      }
       :root[data-theme='dark'] .call-seg.call-seg-hover {
         background-color: #3f3f46; /* zinc-700 */
       }

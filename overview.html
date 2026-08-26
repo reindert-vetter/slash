@@ -32,6 +32,25 @@
       // .claude/rules/conventions.md ("Thema: systeem/licht/donker").
       tailwind.config = { darkMode: 'selector' }
     </script>
+    <style>
+      /* Native scrollbar colour follows the *used* color-scheme, not
+         background colours or Tailwind's .dark class — Chromium draws a
+         light scrollbar in a dark UI unless this is set explicitly. Same
+         base + @media fallback (gated so an explicit light choice wins over
+         an OS on dark) + data-theme mirror shape as index.html/
+         settings.html — this page otherwise has no <style> block at all. */
+      :root {
+        color-scheme: light;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme='light']) {
+          color-scheme: dark;
+        }
+      }
+      :root[data-theme='dark'] {
+        color-scheme: dark;
+      }
+    </style>
   </head>
   <body class="min-h-screen bg-white text-zinc-900 antialiased dark:bg-zinc-950 dark:text-zinc-100">
     <div id="app"></div>

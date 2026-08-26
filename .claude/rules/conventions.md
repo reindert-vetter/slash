@@ -482,6 +482,18 @@ nesting, for maximum browser compatibility — which wins once the manual toggle
 overrides the OS. Both share the same palette (a GitHub-dark-inspired Prism
 palette + the zinc/indigo dark-mode colors).
 
+**The native scrollbar colour is the same category.** `color-scheme` (a CSS
+property, not a Tailwind utility) drives Chromium's choice between a light and
+a dark native scrollbar, independent of background colours or the `.dark`
+class — without it, the scrollbar stays light even in a dark UI. Same
+three-piece shape (`:root { color-scheme: light }` base,
+`:root:not([data-theme='light']) { color-scheme: dark }` inside the `@media`
+block, `:root[data-theme='dark'] { color-scheme: dark }` mirror), but it
+applies on **every** page with a native scrollbar — `index.html`,
+`settings.html` and `overview.html` each carry it in their own `<style>`
+block, even `settings.html`/`overview.html`, which otherwise have no (or a
+much smaller) Prism/markdown block.
+
 **Every selector inside the `@media` block carries a
 `:root:not([data-theme='light'])` gate** (in `index.html` AND `inbox.html` —
 keep it when editing): a media query only sees the OS preference, so without the
