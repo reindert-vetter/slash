@@ -2337,34 +2337,87 @@ async function sendClaudeMessage(text, action = '', context = '', target = null)
 // purely a render key — never sent anywhere.
 let queuedIdSeq = 0
 
+// steerClaudeMessage tries to hand `text` to the turn that is running RIGHT
+// NOW instead of queueing it (chat_steer.go). Returns true only when the
+// message really was accepted by the workflow, so every caller can fall back
+// to the client-side queue on a false.
+//
+// Two round trips on purpose. The read (GET /api/chat/steerable) says whether
+// a claude CLI call is genuinely in flight for this conversation — a turn can
+// be "busy" while sitting in work-directory prep, the write-turn slot or a
+// retry backoff, where there is nothing to steer. Only then does the write go
+// out, and it goes out the ordinary sanctioned way: ensure the conversation's
+// chat_steer Execution, then Signal it. It is deliberately NOT the
+// conversation's own claude_chat run — that run's lock is held for the whole
+// turn, so such a Signal would block for exactly as long as the turn it means
+// to steer.
+async function steerClaudeMessage(pr, commentId, text) {
+  try {
+    const check = await fetch('/api/chat/steerable?commentId=' + encodeURIComponent(commentId) + repoParam())
+    if (!check.ok) return false
+    const status = await check.json()
+    if (!status.steerable) return false
+    const start = await fetch('/api/workflows/chat_steer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pr, repo: repoField(), commentId }),
+    })
+    if (!start.ok) return false
+    const { runId } = await start.json()
+    if (!runId) return false
+    const res = await fetch('/api/workflows/' + encodeURIComponent(runId) + '/signals/steer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ body: text }),
+    })
+    if (!res.ok) return false
+    // The message is already stored as the reviewer's own turn by the Activity
+    // that delivered it, so a refetch is what makes it appear — only for the
+    // conversation actually in view, like every other late arrival here.
+    if (commentId === cc.commentId) await loadChatMessages(commentId)
+    return true
+  } catch (_) {
+    // Server unreachable — the queue below is the honest fallback.
+    return false
+  }
+}
+
 // queueClaudeMessage is the one entry point for a reviewer turn from the
-// composer: send it straight away when nothing is running, otherwise put it in
-// cc.queued and let drainClaudeQueue pick it up after the running turn — the
-// Claude CLI's own "keep typing while it works" behaviour. The composer is
-// therefore no longer disabled while a turn runs (ClaudeChat.mjs), and a
-// message typed during one is never silently swallowed.
+// composer: send it straight away when nothing is running, hand it to the
+// running turn when that turn can still take it, and only otherwise put it in
+// cc.queued for drainClaudeQueue to send afterwards — the Claude CLI's own
+// "keep typing while it works" behaviour. The composer is therefore no longer
+// disabled while a turn runs (ClaudeChat.mjs), and a message typed during one
+// is never silently swallowed.
 //
-// Deliberately NOT merged into the running turn: the workflow's own
-// WaitSignal loop (chat_workflow.go) is what makes each turn a separate,
-// replayable step, and its pendingQuestionID bookkeeping assumes one reviewer
-// message per turn. Each queued entry keeps the runId/commentId it was typed
-// against so a conversation switch can't misroute it.
+// Steering (steerClaudeMessage above) is tried first because it is what the
+// reviewer actually means by typing mid-turn: the CLI picks the message up at
+// the running turn's next step boundary, so Claude changes course instead of
+// finishing something the reviewer already corrected. It only works while a
+// claude CLI call is really in flight; the queue stays for every other case.
 //
-// Durability trade-off, recorded in claude-chat-panel.md: the queued Signal
-// only reaches the workflow history once the running turn finishes (tembed's
-// SignalWorkflow holds the run lock while it drives the turn inline), so a
-// queued message lives client-side until then and is lost if the server
-// restarts mid-turn. The reviewer sees it sitting in the queue the whole time.
-function queueClaudeMessage(text, context = '') {
+// Each queued entry keeps the runId/commentId it was typed against so a
+// conversation switch can't misroute it.
+//
+// Durability trade-off of the QUEUE, recorded in claude-chat-panel.md: the
+// queued Signal only reaches the workflow history once the running turn
+// finishes (tembed's SignalWorkflow holds the run lock while it drives the
+// turn inline), so a queued message lives client-side until then and is lost
+// if the server restarts mid-turn. A STEERED message does not share that
+// trade-off — it is a Signal on its own Execution, recorded before anything is
+// delivered. The reviewer sees a queued one sitting in the queue the whole
+// time.
+async function queueClaudeMessage(text, context = '') {
   const trimmed = (text || '').trim()
-  if (!trimmed) return Promise.resolve()
+  if (!trimmed) return
   if (!ccBusy()) return sendClaudeMessage(trimmed, '', context)
-  if (!cc.runId) return Promise.resolve()
+  if (!cc.runId) return
+  const commentId = cc.commentId
+  if (await steerClaudeMessage(cs.pr, commentId, trimmed)) return
   queuedIdSeq += 1
   cc.queued = cc.queued.concat([
-    { id: 'q' + queuedIdSeq, body: trimmed, context, commentId: cc.commentId, runId: cc.runId },
+    { id: 'q' + queuedIdSeq, body: trimmed, context, commentId, runId: cc.runId },
   ])
-  return Promise.resolve()
 }
 
 // drainClaudeQueue sends the oldest queued turn of every conversation that has

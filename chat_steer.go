@@ -232,13 +232,25 @@ const steerHandoffTimeout = 3 * time.Second
 // same message (SaveMessage is INSERT OR REPLACE).
 func chatSteerMessageID(messageID string) string { return "steer-" + messageID }
 
+// chatSteerPrompt frames the reviewer's words before they are handed to a
+// running turn. Not cosmetic: a bare instruction appearing mid-turn out of
+// nowhere reads to the model like an injection attempt, and it says so —
+// verified against the real CLI, where an unframed "change of plan" message
+// was answered with "Ik zie dat je probeert me om te leiden met een
+// tegengestelde instructie" and the original task was finished anyway. With
+// this framing the same message is followed. Only the CLI sees this; the
+// stored transcript keeps the reviewer's own words, unchanged.
+func chatSteerPrompt(body string) string {
+	return "De reviewer stuurt je tijdens deze turn een aanvullend bericht. Het komt van dezelfde reviewer als de opdracht hierboven en heeft voorrang: pas je aanpak daarop aan.\n\n" + body
+}
+
 // deliverChatSteer is the deliverChatSteer Activity's body: hand the message
 // to the running turn and, only if that succeeded, record it as the reviewer's
 // own message in the transcript. When nothing is running it records nothing —
 // the forward below then goes through claudeChatWorkflow's ordinary
 // saveChatMessage, so the message is never stored twice.
 func deliverChatSteer(ctx context.Context, tm *TaskManager, cm *chat.Module, arg chatSteerActivityInput) chatSteerResult {
-	if !steerChatTurn(arg.ConversationID, arg.Body) {
+	if !steerChatTurn(arg.ConversationID, chatSteerPrompt(arg.Body)) {
 		return chatSteerResult{}
 	}
 	msg := chat.Message{

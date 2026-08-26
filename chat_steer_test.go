@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -55,7 +56,9 @@ func TestSteerReachesTheRunningTurn(t *testing.T) {
 	}
 
 	got := fake.Steered()
-	if len(got) != 1 || got[0] != "kan je het mocken?" {
+	// The CLI gets the reviewer's words plus chatSteerPrompt's framing (without
+	// which the model reads a mid-turn instruction as an injection attempt).
+	if len(got) != 1 || !strings.Contains(got[0], "kan je het mocken?") || !strings.Contains(got[0], "reviewer") {
 		t.Fatalf("the running turn did not receive the steer message, got %+v", got)
 	}
 	// It is also visible as the reviewer's own message, immediately — not only

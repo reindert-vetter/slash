@@ -761,8 +761,8 @@ type Fake struct {
 	// steered records every RunRequest.Steer message a blocked RunChat call
 	// received — see Steered.
 	steered []string
-	chatErr   error
-	chatSeq   int
+	chatErr error
+	chatSeq int
 	// chatModelErrs fails RunChat only for the given model ids, and
 	// chatFailures fails the next N calls whatever the model — the two shapes a
 	// retry/escalation test needs: "this model is unreachable" and "it was down

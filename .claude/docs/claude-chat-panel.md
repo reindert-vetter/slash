@@ -2402,10 +2402,13 @@ already-anchored conversation. Test: "clicking straight into the composer of
 an already-anchored conversation (no → first)…" in
 `tests/claude-chat-panel.spec.mjs`.
 
-## Doorpraten tijdens een lopende turn (de wachtrij)
+## Doorpraten tijdens een lopende turn (steeren, met de wachtrij als vangnet)
 
 Like the Claude CLI, the reviewer can **keep typing while a turn is still
-running**. The composer used to be `disabled` for the whole turn (`view.busy()`
+running** — and, like the CLI's own interactive mode, such a message is handed
+to the **running** turn whenever that is still possible (see "Steeren" below);
+the client-side queue underneath is the fallback for every case where it
+isn't. The composer used to be `disabled` for the whole turn (`view.busy()`
 on the textarea's `@keydown`, on `claude-chat-send` and on every question
 option), which meant a message typed meanwhile did nothing at all — the text
 just sat in the field. All three gates are gone.
@@ -2441,23 +2444,105 @@ just sat in the field. All three gates are gone.
   never the conversation's first turn, and only that one gets a context block
   (see "Invisible selection context" below); it would be stale by send time
   anyway.
-- **Deliberately not merged into the running turn.** The workflow's own
-  `WaitSignal` loop (`chat_workflow.go`) is what makes each turn a separate
-  replayable step, and its `pendingQuestionID` bookkeeping assumes one reviewer
-  message per turn.
+- **The queue is only reached when steering isn't possible** — see the next
+  section. `queueClaudeMessage` tries `steerClaudeMessage` first and only falls
+  through to `cc.queued` on a `false`.
 
-**No backend change was needed, and that is not a coincidence:** tembed's
+**The queue itself needed no backend change, and that is not a coincidence:** tembed's
 `SignalWorkflow` takes the **per-run lock** and drives the turn inline, so a
 second `POST .../signals/message` simply blocks on that lock, then appends its
 own `EventSignalReceived` and the eternal `for { w.WaitSignal(...) }` loop picks
 it up as the next turn. Ordering and determinism are the engine's, not ours.
 
-**Accepted trade-off — a queued message is not crash-durable.** Because the run
+**Accepted trade-off — a QUEUED message is not crash-durable.** Because the run
 lock is held for the whole turn, the queued Signal only reaches the workflow
 history *after* the running turn finishes; until then it lives client-side only,
 so a server restart mid-turn loses it (the reviewer does see it sitting in the
 queue the whole time). Making it durable would mean appending the signal event
-outside the run lock — a tembed change, deliberately not done here.
+outside the run lock — a tembed change, deliberately not done here (and the
+seq-CAS in `AppendEvent` makes it actively unsafe: the running Activity would
+lose the race for its own `ActivityCompleted` seq, `panic(blocked{"concurrent"})`,
+and the whole claude turn would be re-run). A **steered** message does not share
+this trade-off — it is a Signal on its own Execution, recorded before anything
+is delivered.
+
+## Steeren: het bericht gaat naar de turn die NU draait
+
+`claude` accepts more input **during** a turn: with `--input-format
+stream-json` its stdin stays open, and a user frame written to it is picked up
+by the model at the running turn's **next step boundary** — right after a tool
+call. Verified against the real CLI with exactly the flags a chat turn uses
+(`--include-partial-messages`, `--session-id`, `--allowedTools Read,Grep,Glob`):
+the text deltas keep streaming, the turn produces one `result` frame, the
+session id survives, and Claude really changes course mid-turn.
+
+- **`modules/claude`**: `RunRequest.Steer` (a `<-chan string`, `RunChat` only).
+  Nil keeps the historical `-p <prompt>` argv invocation byte for byte, so
+  `comment_batch`/`test_run` are untouched. Non-nil switches that one call to
+  stream-json input: the prompt becomes the first stdin frame, a goroutine
+  writes every steer message as one more, and **stdin is closed again at the
+  first `result` frame** — without that the CLI keeps waiting for input, never
+  exits, and `cmd.Wait` blocks forever.
+- **The step boundary is a real limitation.** A message that arrives while
+  Claude is producing its final text (or during a turn that calls no tool at
+  all) is executed by the CLI as its **own follow-up turn**, with a second
+  `result` frame. `readChatStream` therefore JOINS a second result onto the
+  first instead of letting it overwrite it, so both halves land in the one
+  bubble this turn owns.
+- **`chat_steer.go`**: delivery into a running call is in-memory
+  (`chatSteerByConv`, registered per CLI call by `runOneClaudeTurn`, the same
+  shape as `chatCancelByConv`) — an Activity that has already started is a
+  black box, so a live channel is the only way in. But the reviewer's **action**
+  is not in-memory: it is a `steer` Signal on a real Execution.
+- **A conversation gets a SECOND Execution for this** (`chat_steer`, run id
+  `chatsteer-<commentID>`, one Activity per Signal). It cannot be a `message`
+  Signal on the conversation's own `claude_chat` run: `Engine.SignalWorkflow`
+  takes that run's lock and drives the turn inline, so the Signal would block
+  for exactly as long as the turn it means to steer — the same reason
+  `chat_cancel.go` is not a Signal. Using a second Execution whose lock is free
+  is the shape `chat_merge` already established. **No write-boundary carve-out
+  is added:** the UI only starts/signals a workflow, and only Activities write.
+- **The words are framed before delivery** (`chatSteerPrompt`, `chat_steer.go`).
+  A bare instruction appearing mid-turn out of nowhere reads to the model as an
+  injection attempt, and it says so: verified against the real CLI, an unframed
+  "change of plan" message got *"Ik zie dat je probeert me om te leiden met een
+  tegengestelde instructie"* and the original task was finished anyway. With one
+  line of framing ("de reviewer stuurt je tijdens deze turn een aanvullend
+  bericht … en heeft voorrang") the same message is followed. Only the CLI sees
+  this; the stored transcript keeps the reviewer's own words unchanged. The
+  live check is `TestLiveSteerManual` (`modules/claude`), skipped unless
+  `SLASH_LIVE_CLAUDE=1` — the one test that talks to the real CLI, because this
+  whole feature rests on a CLI contract nothing else can verify.
+- **`deliverChatSteer`** hands the text over and, only when that succeeded,
+  stores the reviewer's message itself (id derived from the Signal's id, so a
+  replay can't duplicate it). **`forwardChatSteerAsMessage`** is the fallback
+  when nothing was running after all (the turn ended in the split second
+  before, or it sits in work-directory prep / the write-turn slot / a retry
+  backoff): it forwards the text as an ordinary `message` Signal, i.e. as the
+  next turn, stored once by the usual `saveChatMessage`. It runs
+  **asynchronously** (`ExecuteActivityAsync`) because it blocks on the busy
+  conversation's run lock — otherwise it would hold up the HTTP request that
+  delivered the steer Signal, and the next steer behind it.
+- **Frontend**: `steerClaudeMessage` (`RelatedPanel.mjs`) first reads
+  `GET /api/chat/steerable?commentId=X` (in-memory, read-only: is a claude CLI
+  call genuinely in flight — "busy" alone isn't enough, a turn can be busy with
+  no live CLI), then ensures the `chat_steer` Execution
+  (`POST /api/workflows/chat_steer`) and signals it. A steered message shows up
+  as an ordinary own bubble via the transcript refetch — no "in de wachtrij"
+  pill, because it isn't waiting for anything. Any failure anywhere falls back
+  to the queue.
+- **Accepted limitation, deliberate:** that a running turn was steered is not
+  visible in the `claude_chat` run's OWN history — only that Activity's final
+  result is recorded there. The reviewer's message and the decision behind it
+  are fully recorded, in the `chat_steer` run. This is the same class as the
+  CLI's `--resume` session state, which an Activity's result already depends on
+  without the history describing it.
+
+Tests: `chat_steer_test.go` (delivery into a running turn, and the fallback),
+`TestLiveSteerManual` (the real CLI, opt-in),
+`tests/claude-chat-steer.spec.mjs` (the frontend's steer-instead-of-queue
+decision), plus the unchanged `tests/claude-chat-queue.spec.mjs` for the
+fallback path end to end.
 
 ## The composer is a `<textarea>`, not an `<input>`
 

@@ -2000,6 +2000,25 @@ func (s *server) handleChatSteerStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.Repo = canonRepo(in.Repo)
+	// Same guard as handleClaudeChatStart: a conversation always hangs off an
+	// existing comment thread, so an unknown id must not mint an Execution of
+	// its own.
+	list, err := s.tasks.comments.List(r.Context(), in.Repo, in.PR)
+	if err != nil {
+		http.Error(w, "query failed", http.StatusInternalServerError)
+		return
+	}
+	found := false
+	for _, c := range list {
+		if c.ID == in.CommentID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		http.Error(w, "unknown comment", http.StatusBadRequest)
+		return
+	}
 	runID, err := s.tasks.manager.EnsureChatSteer(in.Repo, in.PR, in.CommentID)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
