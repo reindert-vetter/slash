@@ -652,7 +652,7 @@ Claude conversation itself, one sentence**:
   reviewer's own to show yet; every caller decides for itself what "nothing"
   means for that context (see the two bullets right below).
 - **The "Selected: …" line** (`data-testid=claude-selected-line`) is
-  `ownMessageTitle(cc.messages, chatAnchorComment())` — `cc.messages` is
+  `ownMessageTitle(cc.messages, ccAnchorComment())` — `cc.messages` is
   already loaded for whichever ONE conversation is currently anchored/shown
   here, regardless of `cs.focus` (so it also shows while the diff still owns
   the keyboard and a turn is merely running in the background). **Renders
@@ -671,6 +671,28 @@ Claude conversation itself, one sentence**:
   for `ensureOtherTaskTitle` below — it already runs on every render that
   needs the list, and that call is self-deduping, so no separate watch/poller
   exists just to kick fetches off.
+- **`ccAnchorComment()` (`RelatedPanel.mjs`), not a bare `chatAnchorComment()`,
+  is what both of the above resolve the excluded/"Selected" id through** —
+  fixed after a reported bug: a running conversation's OWN title/status
+  appeared a second time under "Ook bezig elders in deze PR", right next to
+  the identical "Selected: …" line, with a Jump link that (harmlessly)
+  navigated right back to the same conversation. `chatAnchorComment()`
+  resolves via `selComment()` = `visibleComments()[cs.sel]` — `cs.sel` is a
+  raw **index** into the (block-scoped) comment list (see conventions.md's
+  "Snapshot a selection by stable ID, never by raw array index"), and
+  `syncClaudeAnchorForSelection` deliberately does **not** resync `cc` while
+  `cs.focus === 'claude'` (it must not fight an active conversation — see
+  "Parallel conversations" above). So a comment-poll reorder while the
+  reviewer is mid-chat (a new comment on the same block landing ahead of the
+  one selected, shifting every index) can leave `cs.sel` pointing at a
+  DIFFERENT comment than the one `cc` is still anchored to, without moving
+  `cc` at all — and excluding by that stale, index-derived id failed to
+  exclude the real, still-open conversation. `ccAnchorComment()` instead
+  resolves the comment for the STABLE `cc.commentId` (falling back to
+  `chatAnchorComment()` only while nothing is anchored yet, i.e.
+  `cc.commentId == null` — the ordinary browsing state, where the two
+  reliably agree anyway). Test:
+  `tests/claude-other-tasks-reorder.spec.mjs`.
 - **Visibility widened accordingly**: `hasCommentClaudeFooter()` now also
   returns `true` whenever `otherRunningClaudeTasks().length > 0` — "zodra er
   iets elders loopt, ook als de huidige conversatie zelf niets aan het doen

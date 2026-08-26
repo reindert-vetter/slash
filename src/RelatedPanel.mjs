@@ -1864,6 +1864,29 @@ function chatAnchorComment() {
   return cs.list.find((x) => x.file === s.file && x.label === s.label && hasTurns(x.id)) || null
 }
 
+// ccAnchorComment resolves the comment object for the conversation actually
+// LOADED/SHOWN in the panel (the stable cc.commentId) rather than
+// chatAnchorComment()'s index-based selComment() lookup. The two normally
+// agree — syncClaudeAnchorForSelection keeps cc synced to chatAnchorComment()
+// for every focus except 'claude'/'new', which is exactly when this matters:
+// while cs.focus === 'claude', cs.sel (a raw INDEX into the comment list, see
+// selComment()) can drift out from under an unrelated comment-poll reorder
+// (conventions.md's "Snapshot a selection by stable ID, never by raw array
+// index") without cc moving at all, since cc is deliberately not resynced in
+// that state. Anything describing "the conversation the reviewer is actually
+// looking at right now" (the "Selected: …" line, the otherRunningClaudeTasks
+// exclusion below) must resolve through cc.commentId, not through the
+// possibly-stale index. Falls back to chatAnchorComment() whenever nothing is
+// anchored yet (cc.commentId == null) — the ordinary browsing state, where
+// chatAnchorComment() IS the reliable source (cc simply doesn't exist yet).
+function ccAnchorComment() {
+  if (cc.commentId != null) {
+    const c = cs.list.find((x) => String(x.id) === String(cc.commentId))
+    if (c) return c
+  }
+  return chatAnchorComment()
+}
+
 // syncClaudeAnchorForSelection keeps the VISIBLE Claude column matched to
 // whichever comment is currently selected/scoped — claudeChatVisible() shows
 // the column for ANY visible comment, regardless of cs.focus (browsing with
@@ -3664,16 +3687,27 @@ function otherTaskTitleFor(c) {
 // ensureOtherTaskTitle — this function already runs on every render that
 // needs the list anyway, and the fetch is self-deduping, so no separate
 // watch/poller is needed just to kick it off.
+//
+// The excluded id is resolved via ccAnchorComment() — the conversation
+// actually loaded/shown in the panel (cc.commentId) — rather than a bare
+// chatAnchorComment(), see ccAnchorComment's own doc comment for why the two
+// can diverge while cs.focus === 'claude' (a comment-poll reorder shifting
+// cs.sel, a raw index, out from under an unchanged cc). Excluding by the
+// stale, index-derived id then failed to exclude the REAL open conversation,
+// so it showed up as its own "elders lopend" row — with a title/status that
+// were correct for that id, which is exactly why they matched the
+// "Selected: …" line above: it was the same conversation. Reported bug, not
+// a hypothetical — see .claude/docs/claude-chat-panel.md.
 function otherRunningClaudeTasks() {
-  const anchor = chatAnchorComment()
-  const anchorId = anchor ? anchor.id : null
+  const anchor = ccAnchorComment()
+  const excludeId = anchor ? anchor.id : null
   // cc.tick is read purely to force this to re-evaluate every second while
   // something is lingering (see the chatTickTimer condition below), so a row
   // past its 2-minute window actually disappears instead of only on the next
   // unrelated re-render — same "read purely to force a re-run" trick the
   // elapsed-seconds counter itself already relies on.
   void cc.tick
-  const ids = [...runningTurnIds(anchorId), ...recentlyFinishedTurnIds(anchorId)]
+  const ids = [...runningTurnIds(excludeId), ...recentlyFinishedTurnIds(excludeId)]
   const tasks = ids.map((id) => cs.list.find((c) => String(c.id) === id)).filter(Boolean)
   tasks.forEach(ensureOtherTaskTitle)
   return tasks
@@ -3864,13 +3898,16 @@ export function CommentClaudeFooter(commentId = '') {
   // "Selected: …" — the reviewer's own last Claude message in the
   // conversation currently anchored here (first sentence, see
   // ownMessageTitle), so a reviewer glancing at the "other Claude tasks" list
-  // below never confuses it with the one they're currently looking at. ''
-  // whenever there is nothing of the reviewer's own to show yet — no anchor
-  // at all, or a bare, still-placeholder anchor with no Claude message sent
-  // either (the unusable placeholder sentence this line used to show) — and
-  // the whole line then simply doesn't render, rather than falling back to
+  // below never confuses it with the one they're currently looking at.
+  // Resolved via ccAnchorComment() (cc.commentId, the conversation actually
+  // loaded here), not a bare chatAnchorComment() — see that function's own
+  // doc comment for why the two can diverge mid-chat. '' whenever there is
+  // nothing of the reviewer's own to show yet — no anchor at all, or a bare,
+  // still-placeholder anchor with no Claude message sent either (the
+  // unusable placeholder sentence this line used to show) — and the whole
+  // line then simply doesn't render, rather than falling back to
   // that placeholder text.
-  const selectedTitle = () => ownMessageTitle(cc.messages, chatAnchorComment())
+  const selectedTitle = () => ownMessageTitle(cc.messages, ccAnchorComment())
   return html`
     <div class="contents">
       ${() =>
