@@ -6,22 +6,33 @@ import (
 	"strings"
 )
 
-// ScanBlocks splits a PHP source into blocks (functions/methods). If that fails
-// (not .php, a Blade template, or an imbalance in braces/strings) it returns one
-// whole-file block.
+// ScanBlocks splits a PHP or TypeScript source into blocks (functions/
+// methods). If that fails (not .php/.ts, a Blade template, or an imbalance in
+// braces/strings) it returns one whole-file block.
 //
-// It is a single-pass lexer with contexts (code/comment/string/heredoc) so that
-// braces inside strings, comments and heredocs do not count toward the body span.
+// PHP is a single-pass lexer with contexts (code/comment/string/heredoc) so
+// that braces inside strings, comments and heredocs do not count toward the
+// body span. TypeScript (tsscan.go) is a lighter, v1 "functions only" sibling
+// — see .claude/docs/blocks-and-ingest.md, "tsscan.go: TypeScript function
+// splitting (v1, functions only)".
 func ScanBlocks(src []byte, filename string) []Block {
-	if strings.ToLower(filepath.Ext(filename)) != ".php" || isBladeTemplate(filename) {
+	switch strings.ToLower(filepath.Ext(filename)) {
+	case ".php":
+		if isBladeTemplate(filename) {
+			return []Block{wholeFileBlock(src, filename)}
+		}
+		blocks := scanBlocksRaw(src, filename)
+		return splitClassHeaderMembers(blocks, src)
+	case ".ts":
+		return scanTS(src, filename)
+	default:
 		return []Block{wholeFileBlock(src, filename)}
 	}
-	blocks := scanBlocksRaw(src, filename)
-	return splitClassHeaderMembers(blocks, src)
 }
 
-// scanBlocksRaw is ScanBlocks WITHOUT splitClassHeaderMembers: a class's header
-// region stays the one coarse <class-header> block scanPHP produces.
+// scanBlocksRaw is ScanBlocks' PHP path WITHOUT splitClassHeaderMembers: a
+// class's header region stays the one coarse <class-header> block scanPHP
+// produces.
 //
 // Only the callresolve analysis uses this. Its rules read a class's header
 // region as a whole — rule 6b (classConstDecl: find a constant's declaration),

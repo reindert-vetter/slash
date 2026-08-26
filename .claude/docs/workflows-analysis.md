@@ -645,6 +645,56 @@ All of these are **merged** into the one `UpsertGo`/`Prune` call in the
 `buildRelations` Activity (and in the headless `slash relations` twin), so they
 share the keep set and need no prune scope of their own.
 
+### `resolveTSCalls` (TypeScript, same-file, Go-only)
+
+Everything above this point is PHP: `buildSymbolIndex` walks only `.php`
+files, and every rule's regex is PHP syntax. `resolveTSCalls`
+(`tscallresolve_analysis.go`) is a deliberately much smaller TypeScript
+sibling, added alongside `tsscan.go`'s per-function block splitting (see
+"`tsscan.go`: TypeScript function splitting (v1, functions only)" in
+`.claude/docs/blocks-and-ingest.md`) so a resolved call actually shows up as
+"Onderliggende code" — without it, splitting a `.ts` file into blocks alone
+gets a reviewer nothing more than a shorter list of un-linked cards.
+
+- **File-scoped, not worktree-wide.** No `symbolIndex` equivalent: for each
+  changed/added top-level TS block, it re-scans that block's OWN file with
+  `scanTSFunctions` to get the set of top-level function names declared
+  there, and matches call sites only against THAT set — a call to a function
+  declared in another file (an import) is not resolved. Matches the concrete
+  request this was built for (PR 13538's `firePurchaseEvent`, called from
+  `trackEvents` in the very same file) and keeps the v1 scope narrow, exactly
+  like `tsscan.go`'s own "functions only, one file at a time" framing.
+- **Only the caller's changed lines are scanned** — `changedNewLines` +
+  `fileChangeSet.keepChanged`, the exact same line-scoping mechanism every
+  PHP rule above uses (see the two scoping rules that apply to every rule
+  under "Go resolution rules"), reused unchanged.
+- **A match is `\bname\s*\(` on those changed lines** — the same shape
+  `findCallSites`' generic fallback branch matches on the frontend
+  (`home.mjs`, the bare-identifier regex at the bottom of the `if`/`else`
+  chain), so `CallKey` = the bare function name needs **no frontend change**
+  to scope/show the resulting card at the right group/line/call granularity.
+- **`Kind` is left empty**, normalising to `method_call` on write exactly
+  like every plain PHP call (rules 1-2) — no new `Kind` constant needed, and
+  the frontend's existing `method_call` rendering/diffstat handling applies
+  unchanged.
+- **Go-only, on purpose — never `StatusUnresolved`.** An ambiguous or
+  unmatched call is silently skipped, the same "silently nothing on a miss"
+  precedent as the three rule-based extras just above
+  (`resolveMigrationModels`/`resolveDataProviders`/`resolveTranslations`/
+  `resolveConfigCalls`). This is deliberate, not a missing feature: emitting
+  `StatusUnresolved` would let `autoStartResolveCall`'s automatic search (see
+  below) pick it up and spend a Haiku call trying to resolve TypeScript code
+  with prompts and a symbol index that only understand PHP.
+- **Merged into the same `UpsertGo`/`Prune` call** as every PHP rule, at both
+  call sites (`workflows.go`'s `buildRelations` Activity and the headless
+  `slash relations` twin in `main.go`) — no separate prune scope, same as the
+  rule-based extras.
+
+Tests: `tscallresolve_analysis_test.go` (same-file resolution, an
+expression-bodied arrow — which `tsscan.go` never turns into a block in the
+first place — never appearing as a spurious caller, and a `.php` block never
+reaching this path at all).
+
 ### `modules/claude` — the CLI bridge
 
 `claude -p <prompt> --model <id>`, with a context timeout. Agentic runs get

@@ -449,6 +449,115 @@ trimmed only once; `enrichedCodeSide` with tail trim only, no transform, and fol
 + trim combined to prove the `Start` bump and `End` lowering stay independently
 correct).
 
+## `tsscan.go`: TypeScript function splitting (v1, functions only)
+
+Reviewer request: "ook ts files wil ik opslitsen (net als php) voor nu te
+beginnen met functions" — a `.ts` file used to always go down `ScanBlocks`'
+generic non-`.php` fallback (`wholeFileBlock`), so the whole file was ONE
+block regardless of how many functions it touched (found on PR 13538,
+`modules/Pages/…/google/tag-manager/v2.ts`: 8 changed functions all glued
+into one giant "modified" block). `ScanBlocks` now dispatches `.ts` to
+`scanTS` (`tsscan.go`), a lighter sibling of `phpscan.go` — same pragmatic
+style (regex + brace/paren counting over a source with strings/comments
+blanked out first, not a real parser), deliberately much smaller scope.
+
+### What counts as a block (v1: two shapes, both requiring a `{ ... }` body)
+
+1. `function name(...) { ... }` — optionally `export`/`export default`/
+   `async`, optional generator `*`.
+2. `const|let|var name = (...) => { ... }` — optionally `export`/`async`.
+
+Both must be **top-level** (brace-depth 0 — `scanTSFunctions` walks the whole
+masked file counting `{`/`}`, so a nested top-level region that isn't one of
+these two shapes, e.g. a `declare global { interface Window { ... } } ` block,
+is correctly walked through without derailing the depth count) and must have a
+real **block body**. An **expression-bodied arrow** — `=> x.foo`,
+`=> ({ ... })` — is deliberately **out of v1 scope**: `skipToTSBodyOpen` looks
+for the first `=>` at the declaration's own nesting depth and requires the
+very next non-whitespace character to be `{`; anything else means no block at
+all, silently (same "silently nothing" precedent as several PHP callresolve
+rules) — the file still gets its OTHER, block-bodied functions split out, it's
+only that one expression-bodied function whose diff stays invisible unless a
+sibling change happens to fall inside a block-bodied function's own span.
+Measured on PR 13538: 9 of the file's changed/added top-level functions are
+block-bodied and get their own block (including `firePurchaseEvent` and
+`trackEvents`, see the callresolve section below); `isPaid`,
+`buildPurchaseItems`, `buildPurchaseEvent` (all expression-bodied) don't.
+
+**No JSDoc inclusion** — deliberately different from PHP's PHPDoc-pull
+(`.claude/docs/blocks-and-ingest.md`'s own "PHPDoc description" section
+above): a block's `Line` starts at its own declaration keyword (`export`/
+`function`/`const`), never at a leading `/** ... */` comment above it. This
+side-steps `code.go`'s `enrichedCodeSide`/`stripLeadingPhpDoc` cleanly: that
+transform triggers purely on the generic pattern "the sliced text starts with
+`/** */`" (JSDoc uses the exact same delimiter as PHPDoc) — without a TS-side
+`Description` extraction to catch what it strips, a leading JSDoc comment
+would otherwise silently vanish from the diff with nowhere to land. By simply
+never including it in the block's own span, that transform is a safe no-op
+for every TS block. Accepted trade-off: the JSDoc text itself isn't shown
+anywhere (yet) — narrower than the PHP behavior, not a bug.
+
+**Masking pass (`maskTSStringsAndComments`)**: every `'...'`/`"..."` string,
+`` `...` `` template literal (the ENTIRE run up to the next unescaped
+backtick — including any `${...}` interpolation content, deliberately left
+fully opaque, same simplification PHP's heredoc handling makes) and comment
+(`//`, `/* */`) is replaced with same-length spaces (newlines kept), so a
+brace/paren character inside any of those never confuses the depth counting
+that follows. Byte offsets between the masked copy and the original are
+therefore identical, which is what lets `Block.Line`/`EndLine` be read
+straight off the ORIGINAL source via `tsLineAt`.
+
+**Finding a match's actual body**: after a regex match (which always ends
+right at the parameter list's opening `(`), `matchTSParen` finds the matching
+`)` by simple paren-depth counting (destructured params, default object/array
+values, nested callback-parameter parens don't throw this off — they're just
+more `(`/`)` characters). `skipToTSBodyOpen` then scans forward from there,
+treating `(`/`[`/`<` as one combined "nesting" counter (so a generic return
+type like `Promise<void>` or an array type like `number[]` doesn't hide the
+real `{`/`=>`/`;` sitting at the declaration's own level) until it finds the
+body open (or gives up — see the expression-body case above). `matchTSBrace`
+then finds the matching `}` the same way `matchTSParen` finds its `)`.
+Capped at `tsDeclScanCap` (4000 bytes) past the parameter list — mirrors
+`ARG_LIST_MAX_ROWS`'s reasoning on the frontend (`home.mjs`): a return
+type/annotation this long is pathological, and hitting the cap only ever
+costs a missed block, never a wrong one.
+
+**Deliberate v1 boundaries, not bugs — don't "fix" these without a fresh
+request:**
+
+- No classes/methods at all (a TS class's methods stay inside the file's one
+  whole-file fallback block, exactly like before this feature).
+- No `.tsx`/`.js`/`.mjs` — only `.ts`.
+- No left-side type annotation on a const/let/var arrow
+  (`const x: Handler = (...) => {...}` is not detected — the arrow regex
+  requires only whitespace between the name and `=`).
+- No cross-file anything (see the callresolve section below).
+
+Tests: `tsscan_test.go` (both declaration shapes, the expression-body
+exclusion, a nested function not becoming its own top-level block, an
+unrelated top-level `{ ... }` region like `declare global` not derailing the
+depth count, strings/comments/template literals not confusing brace counting,
+the whole-file fallback when nothing matches, and the `ScanBlocks` dispatch
+itself).
+
+### `resolveTSCalls` (TypeScript, same-file, Go-only) — the "Onderliggende code" link
+
+Splitting the file into blocks alone does not make one call another's
+"Onderliggende code" — that link is `resolve_call`'s job
+(`.claude/docs/workflows-analysis.md`), and that whole machinery
+(`buildSymbolIndex`, every numbered rule) is PHP-only, worktree-wide,
+regex-on-PHP-syntax. `resolveTSCalls` (`tscallresolve_analysis.go`) is a
+small, deliberately narrower TypeScript sibling: it re-scans the CALLER's own
+file with `scanTSFunctions` to get its top-level function names, filters the
+caller's changed lines (`changedNewLines`/`fc.keepChanged`, the same
+line-scoping every PHP rule uses — "only a call on a changed line produces a
+child"), and for every OTHER same-file function whose name appears as
+`\bname\s*\(` on those changed lines, emits a plain `callresolve.Entry`
+(`Status: StatusResolved`, empty `Kind` → normalises to `method_call`,
+`CallKey` = the bare function name). See "Resolving (also unchanged) called
+methods" in `.claude/docs/workflows-analysis.md` for the full mechanism and
+why no frontend change was needed to scope/show it.
+
 ## Classification (`classify.go`)
 
 ### Sort order of the left list

@@ -1606,6 +1606,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		// .claude/docs/tembed-workflows.md, "migration → model") so their rows
 		// are never pruned as stale.
 		calls := resolveCalls(m.dataDir, input.PR, blocks)
+		calls = append(calls, resolveTSCalls(m.dataDir, input.PR, blocks)...)
 		calls = append(calls, resolveMigrationModels(m.dataDir, input.PR, blocks)...)
 		calls = append(calls, resolveDataProviders(m.dataDir, input.PR, blocks)...)
 		calls = append(calls, resolveTranslations(m.dataDir, input.PR, blocks)...)

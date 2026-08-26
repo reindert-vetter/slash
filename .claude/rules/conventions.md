@@ -48,12 +48,25 @@ independently-loaded list can insert itself ahead of the current selection.
 
 Prism 1.29.0 is vendored as a single ES module in `src/vendor/prism.js` (core +
 markup + clike + markup-templating + php, with `window.Prism={manual:true}` so
-it doesn't auto-highlight the page). The code panes in `Block.mjs` highlight PHP
-with `Prism.highlight(...)` and show the result via the `.innerHTML` binding.
-Prism's own container CSS is deliberately omitted; only the token colors live in
-`index.html`'s `<style>`, **scoped to the `.language-php` class** that every code
-fragment carries — so the diff panes, the Underlying-code cards, the comment hint
-(`RelatedPanel.mjs`) and the footer all get the same colors. (Scoping it to
+it doesn't auto-highlight the page). The code panes in `Block.mjs` highlight
+with `Prism.highlight(...)` and show the result via the `.innerHTML` binding —
+`highlight(code, lang = 'php')` defaults to PHP, and `Block.mjs`'s own
+`langForFile(b.file)` picks `'typescript'` for a `.ts` block (see
+`tsscan.go` in `.claude/docs/blocks-and-ingest.md`) so a TS diff gets real
+TypeScript tokens instead of being force-fit into PHP's keyword list; `lang`
+is threaded down through `codeDiff` → `codePane`/`unifiedCodeDiff` →
+`paneHTML`/`unifiedHTML` → `rowCellHTML`/`highlightChanges`, and each pane's
+outer `<code>` class becomes `language-<lang>` (the whole class-attribute
+value is one `${...}` slot, per the arrow.js mixed-literal-and-dynamic rule
+in `arrowjs-pitfalls.md`). Every OTHER Prism call site (the Underlying-code
+cards + comment hint in `RelatedPanel.mjs`, the footer) stays on the plain
+`highlight(code)` PHP default — untouched. Prism's own container CSS is
+deliberately omitted; only the token colors live in `index.html`'s `<style>`,
+**scoped via `:is(.language-php, .language-typescript)`** (three places: the
+light block, the `@media` dark fallback, the `:root[data-theme='dark']`
+mirror) so both grammars share one palette — so the diff panes, the
+Underlying-code cards, the comment hint and the footer all get the same
+colors regardless of which grammar tokenised them. (Scoping it to
 `[data-testid=code-diff]` left everything outside the diff panes colorless.)
 
 ## Markdown rendering

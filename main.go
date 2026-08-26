@@ -241,7 +241,8 @@ func runRelationsCmd(args []string) {
 	// (and PHPUnit data-provider annotations) into the callresolve read-model, so
 	// a headless re-run refreshes the Onderliggende-code panel too (UpsertGo
 	// preserves LLM-owned rows, Prune drops call-sites that fell out of the PR).
-	calls := append(resolveCalls(dataDir, pr, blocks), resolveDataProviders(dataDir, pr, blocks)...)
+	calls := append(resolveCalls(dataDir, pr, blocks), resolveTSCalls(dataDir, pr, blocks)...)
+	calls = append(calls, resolveDataProviders(dataDir, pr, blocks)...)
 	calls = append(calls, resolveTranslations(dataDir, pr, blocks)...)
 	calls = append(calls, resolveEnumValueTranslations(dataDir, pr, blocks)...)
 	calls = append(calls, resolveClassMembers(dataDir, pr, blocks)...)

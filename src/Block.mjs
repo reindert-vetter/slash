@@ -13,13 +13,18 @@ import { parseAutoWidthPx, resizeHandle } from './columnWidth.mjs'
 import { ShortcutHintBar } from './shortcutHints.mjs'
 import Prism from './vendor/prism.js'
 
-// highlight turns raw PHP source into Prism-tokenised HTML (keywords, strings,
+// highlight turns raw source into Prism-tokenised HTML (keywords, strings,
 // variables, …). Prism.highlight escapes the text itself, so the result is safe
-// to feed to .innerHTML. Blocks are usually bare function bodies without a
-// `<?php` tag, which the php grammar still tokenises fine. If the grammar is
-// somehow missing we fall back to an escaped plain string — never raw innerHTML.
-export function highlight(code) {
-  return highlightForLang(code, 'php')
+// to feed to .innerHTML. Blocks are usually bare function/method bodies
+// without a `<?php` tag, which the php grammar still tokenises fine. If the
+// grammar is somehow missing we fall back to an escaped plain string — never
+// raw innerHTML. `lang` defaults to 'php' (the historical, and still the vast
+// majority, case) — the diff render chain threads a block's own
+// `langForFile(b.file)` down to this call so a `.ts` block (tsscan.go) gets
+// real TypeScript tokenisation instead of being force-fit into PHP's keyword
+// list. See .claude/docs/blocks-and-ingest.md.
+export function highlight(code, lang = 'php') {
+  return highlightForLang(code, lang)
 }
 
 // A fenced code block in a comment/reply body (markdown.mjs) announces its own
@@ -64,6 +69,19 @@ export function highlightForLang(code, lang) {
   const grammar = Prism.languages[grammarName]
   if (!grammar) return escapeHtml(code)
   return Prism.highlight(code, grammar, grammarName)
+}
+
+// langForFile picks the Prism grammar (and CSS-scope class, see index.html's
+// `:is(.language-php, .language-typescript)` token-colour rules) for a
+// block's own diff/excerpt, based on its file extension. `.ts` is the only
+// non-PHP case so far (tsscan.go, see .claude/docs/blocks-and-ingest.md);
+// everything else — including `.blade.php`, a whole-file fallback, and every
+// other extension this app doesn't split into blocks yet — keeps the
+// pre-existing 'php' default, since the php grammar still tokenises plain
+// text/JS/YAML/etc. tolerably and every other card (Onderliggende-code,
+// comment hint, footer) stays on 'php' unchanged.
+export function langForFile(file) {
+  return /\.ts$/i.test(file || '') ? 'typescript' : 'php'
 }
 
 function escapeHtml(s) {
@@ -2011,6 +2029,9 @@ function codeDiff(
     </div>`
   }
   const rows = blockRows(b)
+  // See langForFile's own doc comment — picked once per block, threaded down
+  // through every pane/row renderer to the actual highlight(text, lang) call.
+  const lang = langForFile(b.file)
   // TEMP DEBUG instrumentation — remove after investigation. One summarized
   // line per block/render (not one per changed line — that flooded the
   // console and made the tab sluggish), and only logged again when the
@@ -2068,7 +2089,7 @@ function codeDiff(
         data-testid="code-diff"
         data-hints="${() => (hintsEnabled() ? 'on' : 'off')}"
       >
-        ${codePane('new', c.new, rows, 'right', 'border-emerald-100 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn, wrap, lineSummaryFn, diffActive, isYaml, commentRangeFn)}
+        ${codePane('new', c.new, rows, 'right', 'border-emerald-100 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn, wrap, lineSummaryFn, diffActive, isYaml, commentRangeFn, true, lang)}
         ${scrollHint('up')}
         ${scrollHint('down')}
       </div>
@@ -2096,7 +2117,7 @@ function codeDiff(
               : 'Verwijderd — deze code bestaat niet meer'}
         </div>
         <div class="${'relative flex flex-1 overflow-hidden ' + diffFloorCls(rows.length)}">
-          ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn, wrap, lineSummaryFn, diffActive, isYaml, commentRangeFn)}
+          ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn, wrap, lineSummaryFn, diffActive, isYaml, commentRangeFn, true, lang)}
           ${scrollHint('up')}
           ${scrollHint('down')}
         </div>
@@ -2120,6 +2141,7 @@ function codeDiff(
       diffActive,
       isYaml,
       commentRangeFn,
+      lang,
     )
   }
   // Side-by-side (the default 'split' stand). Only the RIGHTMOST pane gets
@@ -2161,9 +2183,9 @@ function codeDiff(
       data-testid="code-diff"
       data-hints="${() => (hintsEnabled() ? 'on' : 'off')}"
     >
-      ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', NO_ACTIVE_GROUP, SPLIT_LEFT_PANE_WIDTH_CLS, approvedFn, commentedFn, approvedCallsFn, false, lineSummaryFn, diffActive, isYaml, undefined, false)}
+      ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', NO_ACTIVE_GROUP, SPLIT_LEFT_PANE_WIDTH_CLS, approvedFn, commentedFn, approvedCallsFn, false, lineSummaryFn, diffActive, isYaml, undefined, false, lang)}
       <div class="w-px shrink-0 bg-slate-100 dark:bg-zinc-800"></div>
-      ${codePane('new', c.new, rows, 'right', 'border-emerald-100 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', activeGroup, 'flex-1 min-w-0', approvedFn, commentedFn, approvedCallsFn, false, lineSummaryFn, diffActive, isYaml, commentRangeFn)}
+      ${codePane('new', c.new, rows, 'right', 'border-emerald-100 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', activeGroup, 'flex-1 min-w-0', approvedFn, commentedFn, approvedCallsFn, false, lineSummaryFn, diffActive, isYaml, commentRangeFn, true, lang)}
       ${scrollHint('up')}
       ${scrollHint('down')}
     </div>
@@ -2353,16 +2375,22 @@ function codePane(
   // (true): a single-pane render (added/removed/'fit', or the split stand's
   // own new/right pane) is always the canonical, metadata-carrying side.
   emitMeta = true,
+  // lang: the Prism grammar/CSS-scope word for this block, from
+  // codeDiff's langForFile(b.file) — 'php' by default. Threaded down to
+  // paneHTML/rowCellHTML/highlight so a .ts block's diff actually gets
+  // TypeScript tokenisation. The whole class value is one slot (never a
+  // literal+dynamic mix) per the arrow.js template rule.
+  lang = 'php',
 ) {
   return html`
     <div class="${'flex min-w-0 min-h-0 flex-col ' + widthCls}" data-pane="${side}">
       <div class="no-scrollbar min-h-0 flex-1 overflow-auto" data-scrollsync @scroll="${syncScroll}">
         <code
-          class="language-php m-0 block py-2 font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300"
+          class="${'language-' + lang + ' m-0 block py-2 font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300'}"
           @click="${(e) => onPaneClick(rows, e)}"
           .innerHTML="${() => {
             disarmRowPairHover()
-            return paneHTML(rows, sideKey, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn(), wrap, diffActive(), lineSummaryFn(), isYaml, commentRangeFn(), emitMeta)
+            return paneHTML(rows, sideKey, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn(), wrap, diffActive(), lineSummaryFn(), isYaml, commentRangeFn(), emitMeta, lang)
           }}"
         ></code>
       </div>
@@ -2424,7 +2452,7 @@ function commentRangeBar(i, commentRange) {
 // same canonical side approveHere below already singles out (the new/right
 // side, or the old/left side when there's no right at all).
 function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, focused = true, opts = {}, lineSummaries = null, segDots = null) {
-  const { gutter = false, emitMeta = true, commentRange = null } = opts
+  const { gutter = false, emitMeta = true, commentRange = null, lang = 'php' } = opts
   const text = sideKey === 'left' ? r.left : r.right
   const mark = sideKey === 'left' ? r.leftMark : r.rightMark
   const ws = wsOnly(r)
@@ -2589,19 +2617,19 @@ function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, focused = 
   const dotsForRender = segDots && segDots.size ? segDots : hoverSegMarks
   let body
   if (text === null) body = '&nbsp;'
-  else if (paired) body = highlightChanges(r, sideKey, ws, underline, dotsForRender, callSegs)
+  else if (paired) body = highlightChanges(r, sideKey, ws, underline, dotsForRender, callSegs, lang)
   else if ((underline && underline.size) || (segDots && segDots.size) || callSegs)
     // A one-sided change (pure add / remove): its whole line is the single
     // edit, so underline it end to end.
     body = markChars(
-      highlight(text),
+      highlight(text, lang),
       (pi) =>
         [underline && underline.has(pi) ? UNDERLINE_CLS : '', segDotCls(pi), callSegCls(pi)]
           .filter(Boolean)
           .join(' '),
       (pi) => segDotAttr(pi) + callSegAttr(pi),
     )
-  else body = highlight(text)
+  else body = highlight(text, lang)
   // A commented row no longer gets its own 💬 marker in the code body — the
   // "onderliggende code" avatar+N badge (lineSummaryHtml below) already marks
   // presence on that same row (it counts a comment placed directly on the
@@ -3331,6 +3359,8 @@ function paneHTML(
   // emitMeta: threaded straight from codePane — see its own doc comment.
   // false ONLY for the split stand's old/left pane.
   emitMeta = true,
+  // lang: threaded straight from codePane — see its own doc comment.
+  lang = 'php',
 ) {
   const parts = []
   const pushRow = (i) => {
@@ -3357,7 +3387,7 @@ function paneHTML(
         commented,
         wrap,
         focused,
-        { commentRange, emitMeta },
+        { commentRange, emitMeta, lang },
         lineSummaries,
         segDots,
       ),
@@ -3396,16 +3426,19 @@ function unifiedRowHTML(
   lineSummaries = null,
   segDots = null,
   commentRange = null,
+  // lang: threaded straight from unifiedHTML/unifiedCodeDiff — see
+  // codePane's own doc comment.
+  lang = 'php',
 ) {
   const paired = r.left != null && r.right != null && !!r.leftMark && !!r.rightMark
   // BOTH lines of a paired row draw the comment-range bar (unlike every other
   // per-row marking here, which is deliberately emitted once): each line is
   // its own box, so leaving the decorative old/upper half out would break the
   // bar into a dashed line instead of the continuous range it must read as.
-  const meta = { gutter: true, emitMeta: true, commentRange }
+  const meta = { gutter: true, emitMeta: true, commentRange, lang }
   if (paired) {
     return (
-      rowCellHTML(r, i, 'left', group, approved, commented, false, focused, { gutter: true, emitMeta: false, commentRange }, lineSummaries) +
+      rowCellHTML(r, i, 'left', group, approved, commented, false, focused, { gutter: true, emitMeta: false, commentRange, lang }, lineSummaries) +
       rowCellHTML(r, i, 'right', group, approved, commented, false, focused, meta, lineSummaries, segDots)
     )
   }
@@ -3436,6 +3469,9 @@ function unifiedHTML(
   lineSummaries = null,
   isYaml = false,
   commentRange = null,
+  // lang: threaded straight from unifiedCodeDiff — see codePane's own doc
+  // comment.
+  lang = 'php',
 ) {
   const parts = []
   const pushRow = (i) => {
@@ -3446,7 +3482,7 @@ function unifiedHTML(
     // row's metadata (emitMeta), see unifiedRowHTML.
     const partial = partialCallApproval(rows, i, approved, approvedCalls)
     const segDots = partial ? segDotMarkers(r.right != null ? r.right : r.left, partial) : null
-    parts.push(unifiedRowHTML(r, i, group, approved, commented, focused, lineSummaries, segDots, commentRange))
+    parts.push(unifiedRowHTML(r, i, group, approved, commented, focused, lineSummaries, segDots, commentRange, lang))
   }
   const plan = collapsePlan(rows, commented)
   if (!plan) {
@@ -3479,6 +3515,9 @@ function unifiedCodeDiff(
   diffActive = () => false,
   isYaml = false,
   commentRangeFn = () => new Set(),
+  // lang: threaded straight from codeDiff's langForFile(b.file) — see
+  // codePane's own doc comment.
+  lang = 'php',
 ) {
   return html`
     <div
@@ -3489,11 +3528,11 @@ function unifiedCodeDiff(
     >
       <div class="no-scrollbar min-h-0 flex-1 overflow-auto" data-pane="new" data-scrollsync @scroll="${syncScroll}">
         <code
-          class="language-php m-0 block py-2 font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300"
+          class="${'language-' + lang + ' m-0 block py-2 font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300'}"
           @click="${(e) => onPaneClick(rows, e)}"
           .innerHTML="${() => {
             disarmRowPairHover()
-            return unifiedHTML(rows, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn(), diffActive(), lineSummaryFn(), isYaml, commentRangeFn())
+            return unifiedHTML(rows, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn(), diffActive(), lineSummaryFn(), isYaml, commentRangeFn(), lang)
           }}"
         ></code>
       </div>
@@ -3672,13 +3711,13 @@ function callSegAt(segs, pi) {
 // `callSegs` (optional, see callSegmentsForRow) wraps each call-chain segment
 // in a hoverable, clickable span (CALL_HOVER_CLS + `data-call-seg`) — null for
 // the old/left side, where a call selection doesn't exist.
-function highlightChanges(r, sideKey, ws, underline, segDots = null, callSegs = null) {
+function highlightChanges(r, sideKey, ws, underline, segDots = null, callSegs = null, lang = 'php') {
   const text = sideKey === 'left' ? r.left : r.right
   const markCls = ws ? (sideKey === 'left' ? 'bg-rose-200 dark:bg-rose-500/30' : 'bg-emerald-200 dark:bg-emerald-500/30') : ''
   const { leftMarked, rightMarked } = ws ? charDiffSides(r.left, r.right) : {}
   const marked = ws ? (sideKey === 'left' ? leftMarked : rightMarked) : null
   return markChars(
-    highlight(text),
+    highlight(text, lang),
     (pi) => {
       const parts = []
       if (marked && marked.has(pi)) parts.push(markCls)
