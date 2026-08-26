@@ -44,6 +44,14 @@ const (
 	// refused, so the wait itself must be visible instead of looking like a
 	// hang.
 	chatPhaseWaiting = "waiting"
+	// chatPhaseEscalating: the read-only first attempt answered in prose that
+	// it cannot write, instead of emitting {"type":"need_write"}, and the turn
+	// is escalating to the shell attempt anyway (looksLikeWriteRefusal,
+	// chat_workflow.go). Reviewer decision: the detection itself stays
+	// invisible ("dat hoeft de gebruiker niet te zien"), but this brief status
+	// line may show — it is momentary, replaced by waiting/starting as soon as
+	// the escalated call really begins.
+	chatPhaseEscalating = "escalating"
 )
 
 // chatProgress is the whole volatile state of one running turn.

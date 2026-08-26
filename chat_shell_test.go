@@ -280,3 +280,94 @@ func TestRunOneClaudeTurnDegradesWhenGhUnreachable(t *testing.T) {
 		t.Fatal("expected the plain (tool-less) system prompt when the shadow worktree is unavailable")
 	}
 }
+
+// TestRunOneClaudeTurnEscalatesOnProseWriteRefusal is the regression test for
+// the reviewer-reported dead end that looksLikeWriteRefusal exists for: the
+// read-only first attempt answers in ordinary prose that it has no Edit/Bash
+// (plus the proposed replacement in a fence) instead of emitting the strict
+// {"type":"need_write"} directive. That reply must never reach the transcript
+// as the turn's answer — the turn escalates to the shell attempt anyway and
+// only THAT reply is saved.
+func TestRunOneClaudeTurnEscalatesOnProseWriteRefusal(t *testing.T) {
+	const headRefName = "feature/shell-turn-prose"
+	bareDir, _ := setupChatShadowRepo(t, headRefName, "hello\n")
+	stubReachableGh(t, headRefName)
+
+	m, _, cm, fake := newChatManager(t)
+	ctx := context.Background()
+	const pr, commentID = 970736, "comment-shell-prose"
+
+	dataDir := t.TempDir()
+	checkoutDir := cloneCheckoutDir(t, bareDir, headRefName)
+	writeCheckoutSettings(t, dataDir, checkoutDir)
+
+	// Verbatim the shape of the reported reply (PR 13451): a refusal sentence
+	// plus the replacement it proposes in a fence.
+	const refusal = "Ik heb deze beurt alsnog geen Edit/Bash, dus ik kan het niet zelf doorvoeren. Dit is de vervanging van regels 63-67:\n\n```php\n// Registering statistics work now goes through this signal.\n```"
+	fake.SetChatTurns(refusal, "Aangepast in één regel.")
+	msg, action := runOneClaudeTurn(ctx, m, cm, fake, dataDir, chatTurnInput{
+		PR: pr, ConversationID: commentID,
+		Body: "Verander in 1 zin dat dit de nieuwe manier is", TurnID: "msg-shell-prose",
+	})
+
+	if action != nil {
+		t.Fatalf("unexpected directive: %+v", action)
+	}
+	if len(fake.Calls) != 2 {
+		t.Fatalf("expected the prose refusal to escalate to a SECOND call, got %d call(s)", len(fake.Calls))
+	}
+	if msg.Body != "Aangepast in één regel." {
+		t.Fatalf("expected the escalated call's reply to be saved, got %q", msg.Body)
+	}
+	got := fake.Calls[1]
+	if got.SessionID == "" {
+		t.Fatal("expected the escalated call to RESUME the read-only call's own session")
+	}
+	if got.WorkDir != checkoutDir {
+		t.Fatalf("expected WorkDir to be the reviewer's registered checkout %q, got %q", checkoutDir, got.WorkDir)
+	}
+	wantTools := map[string]bool{"Read": true, "Grep": true, "Glob": true, "Edit": true, "Bash": true}
+	if len(got.Tools) != len(wantTools) {
+		t.Fatalf("Tools = %v, want exactly %v", got.Tools, wantTools)
+	}
+	for _, tool := range got.Tools {
+		if !wantTools[tool] {
+			t.Fatalf("unexpected tool %q in %v", tool, got.Tools)
+		}
+	}
+	if !strings.HasPrefix(got.SystemPrompt, claude.ChatShellSystemPrompt) {
+		t.Fatal("expected the shell system prompt on the escalated call")
+	}
+}
+
+// TestLooksLikeWriteRefusalStaysNarrow pins the heuristic's boundaries: it
+// must fire on the observed refusal wordings and stay silent on an ordinary
+// answer, on an answer that merely CONTAINS such words inside a code fence,
+// and on Claude's own structured directives.
+func TestLooksLikeWriteRefusalStaysNarrow(t *testing.T) {
+	fire := []string{
+		"Ik heb deze beurt alsnog geen Edit/Bash, dus ik kan het niet zelf doorvoeren.",
+		"Edit en Bash zijn in deze sessie uitgeschakeld, dus dit is de voorgestelde regel.",
+		"Ik heb geen shell om dit te committen.",
+		"Zonder schrijftoegang kan ik niets aanpassen; hier is het voorstel.",
+	}
+	for _, text := range fire {
+		if !looksLikeWriteRefusal(text) {
+			t.Fatalf("expected an escalation for %q", text)
+		}
+	}
+	silent := []string{
+		"Deze functie registreert de statistiek via de bus.",
+		"Ik heb het aangepast en lokaal gecommit.",
+		`{"type":"need_write"}`,
+		`{"type":"question","question":"Welk bestand?","options":["a","b"]}`,
+		// The words only appear INSIDE a fence — source/comment text must
+		// never be able to trigger an escalation.
+		"Zo ziet de regel eruit:\n\n```php\n// geen Edit hier, Bash is uitgeschakeld\n```",
+	}
+	for _, text := range silent {
+		if looksLikeWriteRefusal(text) {
+			t.Fatalf("did not expect an escalation for %q", text)
+		}
+	}
+}

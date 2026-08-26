@@ -174,6 +174,11 @@ const PHASE_LABEL = {
   // code-turn slot (chat_write_gate.go) — a question-only turn never sees it.
   // Said in words, because a silent stall is indistinguishable from a hang.
   waiting: 'Wacht op een andere codewijziging…',
+  // escalating: the read-only attempt said in prose that it cannot write, and
+  // the turn is getting real write access anyway (looksLikeWriteRefusal,
+  // chat_workflow.go). Momentary by design — the reviewer never sees the
+  // detection itself, only this line on its way to waiting/starting.
+  escalating: 'Schrijfrechten ophalen…',
   preparing: 'Werkmap klaarzetten…',
   starting: 'Claude start…',
   thinking: 'Claude denkt na…',

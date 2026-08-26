@@ -1174,6 +1174,47 @@ were already correct); guarded by
 not a live-model regression test, since no fixture can force a real model's
 prose choice.
 
+**The prompt fix above was not enough, so the escalation is now also
+detected mechanically.** Same reviewer, two days later, same conversation
+(PR 13451, stored in `data/chat.db`): a plain "verander in 1 zin dat dit de
+nieuwe manier is" got the prose refusal *"Ik heb deze beurt alsnog geen
+Edit/Bash, dus ik kan het niet zelf doorvoeren"* plus the proposed
+replacement in a fence — again no directive, again no attempt 2. Replaying
+that exact call by hand (the same `chat_readonly.md`, the same message,
+`--allowedTools Read,Grep,Glob` in the PR's head worktree) DID produce the
+bare directive, which settles it: a model's adherence to that instruction is
+probabilistic, and no prompt wording can make it a guarantee.
+`looksLikeWriteRefusal` (`chat_workflow.go`) therefore escalates on the prose
+as well: it strips every ```-fence (a proposed replacement must never be able
+to trigger or suppress an escalation) and scans only the remaining prose for
+a short, explicit list of observed wordings — `writeRefusalPhrases` ("geen
+edit", "geen bash", "geen shell", "geen schrijftoegang", "geen
+schrijfrechten", "kan niets aanpassen") plus the two-clause variant "…Edit en
+Bash… uitgeschakeld". Deliberately a phrase list, exactly like the
+natural-language stand-in for the checkout choice (`chat_checkout.go`), never
+a general "does this sound negative" test: a missed escalation costs one more
+message, a false positive costs the one code-turn slot plus a real git/gh
+work-directory resolve. Known, accepted false positive: a reviewer ASKING
+about write access ("heb je hier Edit?") can escalate a turn that only needed
+to answer.
+
+From attempt 2 on, a prose escalation is indistinguishable from a directive
+one — same session resume, same `chatNeedWriteContinuationPrompt`, same write
+gate, and attempt 1's refusal prose is **never** saved (only attempt 2's
+reply is, exactly as with the directive). **There is deliberately no
+reviewer-facing action for any of this** — no button, key or palette command
+grants write access (reviewer decision: *"zelf automatisch detecteren, dat
+hoeft de gebruiker niet te zien, mag wel heel even als progress in de status
+bar"*, and asked where such a control should live: *"nergens, automatisch"*).
+The only visible trace is one momentary progress line, `chatPhaseEscalating`
+→ "Schrijfrechten ophalen…" (`chat_progress.go` + `PHASE_LABEL` in
+`src/ClaudeChat.mjs`), replaced by `waiting`/`starting` as soon as the
+escalated call really begins. Tests:
+`TestRunOneClaudeTurnEscalatesOnProseWriteRefusal` (the reported reply shape
+costs 2 calls, the second one with `Edit`+`Bash`, and only its reply is
+saved) and `TestLooksLikeWriteRefusalStaysNarrow` (the boundaries, including
+a fence that merely contains those words), both in `chat_shell_test.go`.
+
 **That escalation is also the ONE code-turn-at-a-time gate**
 (`chat_write_gate.go`). Reviewer decision: a turn that only ANSWERS may run
 unlimited in parallel (chatting on another selection while an earlier answer is

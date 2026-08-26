@@ -719,6 +719,81 @@ func isNeedWriteDirective(text string) bool {
 	return d.Type == "need_write"
 }
 
+// writeRefusalPhrases are the literal, lowercased fragments that mean "this
+// reply is Claude saying it cannot write here" — the prose it falls back to
+// instead of emitting {"type":"need_write"} (see looksLikeWriteRefusal). Kept
+// as an explicit, deliberately SHORT list of wordings actually observed in
+// reviewer-reported turns, never a general "does this sound negative" test:
+// a missed escalation only costs the reviewer one more message, while a false
+// positive costs the one code-turn slot (chat_write_gate.go) plus a real
+// git/gh work-directory resolve for a turn that never needed either.
+var writeRefusalPhrases = []string{
+	"geen edit",           // "ik heb deze beurt alsnog geen Edit/Bash", "geen Edit-tool"
+	"geen bash",           // "geen Bash", "geen Bash-tool"
+	"geen shell",          // the read-only prompt's own wording, echoed back
+	"geen schrijftoegang", //
+	"geen schrijfrechten", //
+	"kan niets aanpassen", // "ik kan niets aanpassen, committen of uitvoeren"
+	"kan ik niets aanpassen",
+}
+
+// stripCodeFencesForScan removes every ```-fenced block from text so a phrase
+// scan only ever reads Claude's own PROSE. A write-refusal reply typically
+// carries the proposed replacement as a fence right below it, and that fence
+// holds arbitrary source/comment text that must never be able to trigger (or
+// suppress) an escalation.
+func stripCodeFencesForScan(text string) string {
+	parts := strings.Split(text, "```")
+	var b strings.Builder
+	for i, part := range parts {
+		if i%2 == 0 { // even segments sit OUTSIDE a fence
+			b.WriteString(part)
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
+}
+
+// looksLikeWriteRefusal reports whether an otherwise ordinary prose reply is
+// really Claude saying "I cannot edit/run anything this turn" — the failure
+// mode the strict {"type":"need_write"} directive (isNeedWriteDirective)
+// exists to prevent but cannot enforce.
+//
+// Reported twice by the reviewer, and confirmed against the stored transcript
+// of PR 13451: on a plain edit request ("verander in 1 zin ...") the read-only
+// first attempt answered "Ik heb deze beurt alsnog geen Edit/Bash, dus ik kan
+// het niet zelf doorvoeren" plus the proposed replacement in a fence. That
+// reply is internally consistent (attempt 1 genuinely has no Edit/Bash) but
+// never triggers attempt 2, so the escalation the whole two-step design exists
+// for silently never happens and the reviewer is left with a dead end. The
+// same case was already addressed prompt-only (chat_readonly.md, "er is geen
+// aparte goedkeurknop"), and recurred afterwards anyway — a model's adherence
+// to that instruction is not something the prompt can guarantee, so
+// runOneClaudeTurn escalates on this mechanically instead. Same shape as the
+// natural-language stand-in for the checkout choice (chat_checkout.go): a
+// short, explicit phrase list, not a general sentiment test.
+//
+// Deliberately NOT reviewer-facing: no button, key or palette command grants
+// write access (reviewer decision, "zelf automatisch detecteren, dat hoeft de
+// gebruiker niet te zien"). The only visible trace is the momentary
+// chatPhaseEscalating progress line.
+func looksLikeWriteRefusal(text string) bool {
+	prose := strings.ToLower(stripCodeFencesForScan(text))
+	for _, phrase := range writeRefusalPhrases {
+		if strings.Contains(prose, phrase) {
+			return true
+		}
+	}
+	// "Edit en Bash zijn in deze sessie uitgeschakeld" — the second observed
+	// wording, which names the tools and the absence in separate clauses, so
+	// no single fragment above can catch it.
+	if strings.Contains(prose, "uitgeschakeld") &&
+		(strings.Contains(prose, "edit") || strings.Contains(prose, "bash") || strings.Contains(prose, "shell")) {
+		return true
+	}
+	return false
+}
+
 // runOneClaudeTurn is the runClaudeTurn Activity's body (a plain function so
 // it's directly testable): read the conversation's stored session id, ask
 // claude for the next turn, persist the assistant's reply (parsed into a
@@ -870,7 +945,18 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 	// the SAME session, so it keeps whatever it already learned above, plus the
 	// reviewer's own original message (already in that session's history).
 	hadShell := false
-	if isNeedWriteDirective(result.Text) {
+	// Escalate on Claude's own strict directive OR on the prose it sometimes
+	// falls back to instead (looksLikeWriteRefusal) — the reviewer never has
+	// to ask twice for write access, and never gets a button for it either.
+	escalate := isNeedWriteDirective(result.Text)
+	if !escalate && looksLikeWriteRefusal(result.Text) {
+		escalate = true
+		logTurnMilestone("read-only attempt refused to write in prose after %v, escalating anyway", time.Since(t0))
+		// The one visible trace of this: a momentary status line, no bubble
+		// and no stored message (see looksLikeWriteRefusal's doc comment).
+		advanceChatProgress(arg.Repo, arg.PR, arg.ConversationID, chatPhaseEscalating)
+	}
+	if escalate {
 		// From here on this turn is going to CHANGE code, and only one such
 		// turn runs at a time (chat_write_gate.go) — a second one waits here
 		// instead of being refused. Everything above this line (the read-only

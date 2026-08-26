@@ -1238,6 +1238,16 @@ session started, waiting for its first event". `chatProgressSink`'s existing
 `chatPhaseStarting`, so the label doesn't jump again when the CLI confirms it
 actually started — it was already showing the right thing.
 
+One more phase sits between those two, and only sometimes:
+`chatPhaseEscalating` ("Schrijfrechten ophalen…"). It shows when the cheap
+read-only attempt answered in PROSE that it cannot write instead of emitting
+`{"type":"need_write"}`, and the turn escalates to the shell attempt anyway
+(`looksLikeWriteRefusal`, `chat_workflow.go` — see "The prompt fix above was
+not enough" in `.claude/docs/workflows-comments.md`). Momentary by design:
+`waiting`/`starting` replaces it as soon as the escalated call really begins,
+and there is deliberately no bubble, no stored message and no reviewer-facing
+control for any of it — this brief line is the whole visible surface.
+
 **The long-wait suffix is front-end only, deliberately no new backend state.**
 `elapsed` (`RelatedPanel.mjs`'s `elapsed()` getter) already counts seconds
 since `startedAt`, which now marks the start of `preparing` and therefore keeps
