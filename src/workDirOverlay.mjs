@@ -23,7 +23,7 @@
 // next to MenuHost, its own isOpen/handleKeydown pair that home.mjs's global
 // onKeydown consults FIRST, so the overlay owns the keyboard completely while
 // it is open.
-import { reactive, html } from './vendor/arrow.js'
+import { reactive, html, watch } from './vendor/arrow.js'
 
 // state/sendAction are injected once by home.mjs (initWorkDirOverlay) so the
 // exported isOpen/handleKeydown hooks stay argument-free at the call site,
@@ -39,6 +39,37 @@ const wd = reactive({ dismissed: '', busy: false, sel: 0 })
 export function initWorkDirOverlay(state, sendCheckoutAction) {
   st = state
   sendAction = sendCheckoutAction
+  // This overlay never puts DOM focus on itself (no element in it is ever
+  // .focus()'d), so without this watch a still-focused element from BEFORE
+  // the overlay opened — most commonly the empty Claude-chat composer
+  // (ClaudeChat.mjs, data-testid=claude-chat-compose) — keeps real DOM
+  // focus while the overlay sits visually on top. A keydown always reaches
+  // that element's OWN `@keydown` handler first (normal DOM bubbling, before
+  // the document-level `onKeydown` in home.mjs), and the empty composer's own
+  // Enter handling calls `e.stopPropagation()` before opening the Claude
+  // command palette (see its own doc comment) — so the SAME Enter that was
+  // meant to confirm the highlighted werkmap option never reaches
+  // handleWorkDirOverlayKeydown at all: the palette pops up instead, behind
+  // the still-open overlay, and the overlay's own selection is silently
+  // never confirmed. Reviewer-reported bug, reproduced by tracing exactly
+  // that chain (ClaudeChat.mjs:986-1016 -> home.mjs's window keydown
+  // listener never seeing the event).
+  //
+  // Fix: steal focus back the moment a choice becomes open, so no other
+  // element's own keydown handler can compete with the global listener —
+  // matching this overlay's own "owns the keyboard completely" contract
+  // (see handleWorkDirOverlayKeydown's trailing comment). `watch` fires once
+  // immediately on registration (covers "already open on load/reload") and
+  // again whenever the decision object itself changes (covers a NEW choice
+  // arriving while something else already holds focus).
+  watch(
+    () => state.checkout && state.checkout.decision,
+    () => {
+      if (!isWorkDirOverlayOpen()) return
+      const el = document.activeElement
+      if (el && el !== document.body && typeof el.blur === 'function') el.blur()
+    },
+  )
 }
 
 function decision() {

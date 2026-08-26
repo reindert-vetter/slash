@@ -111,9 +111,30 @@ model.
 the identifiers keep their `checkout*` names. See the naming rule in
 `.claude/docs/workflows-comments.md`.
 
+**It steals DOM focus back the moment a choice opens.** The overlay never
+`.focus()`es anything of its own — its rows are only ever driven by
+`handleWorkDirOverlayKeydown` through the global `onKeydown`. If some other
+element already held real DOM focus when a new choice arrives (most commonly
+the empty Claude-chat composer, `ClaudeChat.mjs`'s
+`data-testid=claude-chat-compose`), a keydown still reaches THAT element's own
+`@keydown` first via ordinary bubbling — before `onKeydown` ever sees it — and
+the empty composer's own Enter handling calls `stopPropagation()` before
+opening the Claude command palette. Reviewer-reported bug: pressing Enter on
+the overlay's highlighted row instead popped the `/`-style Claude menu open
+*behind* the still-open overlay, and the highlighted row was never confirmed.
+Fix: `initWorkDirOverlay` (`workDirOverlay.mjs`) `watch`es
+`state.checkout.decision` and blurs `document.activeElement` as soon as
+`isWorkDirOverlayOpen()` is true — both on the initial fire (an overlay that's
+already open on load/reload) and on every later change (a fresh choice
+arriving while something else has focus) — so no other element's own keydown
+handler can ever compete with the overlay for that same keypress again.
+
 Test: `tests/checkout-overlay.spec.mjs` (and note the `?sel=` in both that spec
 and `checkout-chip.spec.mjs`: the harness's own `page.goto` wrapper presses
-Escape on a `/pr/<id>` URL without one, which this overlay would eat).
+Escape on a `/pr/<id>` URL without one, which this overlay would eat) —
+including "a choice opening while the empty Claude composer holds focus
+steals it back, so Enter still confirms the overlay and never opens the
+Claude menu behind it".
 
 ## The right-click context menu
 

@@ -1,4 +1,4 @@
-import { test, expect, appReady, leaveSearchBox } from './_fixtures.mjs'
+import { test, expect, appReady, leaveSearchBox, seededPr } from './_fixtures.mjs'
 
 // The werkmap overlay (src/workDirOverlay.mjs): the PR-wide "which local work
 // directory may Claude edit" choice, which used to be asked as a chat bubble
@@ -116,5 +116,92 @@ test.describe('Werkmap overlay', () => {
     await appReady(page)
     await expect(page.locator('#block-search')).toHaveCount(1)
     await expect(page.getByTestId('workdir-overlay')).toHaveCount(0)
+  })
+
+  // Reviewer-reported bug: a choice arriving while the empty Claude-chat
+  // composer already holds real DOM focus (e.g. having just stepped into an
+  // embedded conversation) let that composer's own `@keydown` intercept Enter
+  // first — it stopPropagation()s and opens the Claude command menu instead —
+  // so the overlay's own highlighted row silently never got confirmed and the
+  // Claude menu popped up BEHIND the still-open overlay. See "It steals DOM
+  // focus back the moment a choice opens" in .claude/docs/command-palette.md.
+  test('a choice opening while the empty Claude composer holds focus steals it back — Enter still confirms the overlay, not the Claude menu behind it', async ({
+    page,
+  }, testInfo) => {
+    const pr = seededPr(testInfo)
+    const runId = 'chatmerge-' + pr
+    let open = false
+    await page.route(`**/api/chat/checkout?prs=${pr}`, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          checkout: open
+            ? {
+                [pr]: {
+                  pr,
+                  runId,
+                  decision: {
+                    stage: 'chooseDirectory',
+                    body: 'Kies welke lokale werkmap Claude voor deze PR gebruikt.',
+                    options: ['/home/reindert/dev/a', '/home/reindert/dev/b'],
+                  },
+                },
+              }
+            : {},
+        }),
+      }),
+    )
+    const signals = mockSignals(page, runId)
+
+    let release
+    const released = new Promise((r) => (release = r))
+    await page.route('**/api/events*', async (route) => {
+      await released
+      await route.fulfill({
+        status: 200,
+        headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' },
+        body: 'retry: 300\n\n' + `data: ${JSON.stringify({ type: 'checkout.changed', pr, seq: 1 })}\n\n`,
+      })
+    })
+
+    // A real code comment carries its own embedded Claude conversation — no
+    // fake claude turn needed, this test never sends a message.
+    const start = await page.request.post('/api/workflows/task_code_comment', {
+      data: {
+        pr,
+        file: 'test.php',
+        line: 1,
+        author: 'reviewer',
+        body: 'kan dit sneller?',
+        code: '$order->total();',
+        gran: 'call',
+        label: 'Order::total',
+      },
+    })
+    expect((await start.json()).runId).toBeTruthy()
+
+    await page.goto('/pr/' + pr)
+    await expect(page.getByTestId('workdir-overlay')).toHaveCount(0)
+    await page.getByTestId('comment-item').first().click()
+    await page.keyboard.press('ArrowRight') // comment -> claude
+    const composer = page.getByTestId('claude-chat-compose')
+    await expect(composer).toBeFocused()
+    await expect(composer).toHaveValue('')
+
+    // The choice arrives (via the real checkout.changed event) while the
+    // still-empty composer holds focus.
+    open = true
+    release()
+    await expect(page.getByTestId('workdir-overlay')).toBeVisible()
+    await expect(composer).not.toBeFocused()
+
+    await page.keyboard.press('ArrowDown')
+    await page.keyboard.press('Enter')
+    await expect.poll(() => signals.length).toBe(1)
+    expect(signals[0]).toMatchObject({ action: 'checkoutAnswer', reply: '/home/reindert/dev/b' })
+    // The Claude command menu never opened behind the overlay.
+    await expect(page.getByTestId('command-menu')).not.toBeVisible()
   })
 })
