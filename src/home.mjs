@@ -3760,17 +3760,17 @@ async function applyBulkApproval(blocks) {
 
 // retractAllApprovalsForPr clears every reviewer approval across the WHOLE PR
 // in one action — the PR-wide bulk counterpart of toggleApprove/
-// toggleTestClassApproval, reached via the "/" PR menu's "Alle goedkeuringen
-// intrekken" confirm submenu (PR_COMMANDS). Walks state.blocks exactly like
-// syncViewedFiles/the approvalSummaries rollup: an ordinary block's own
-// approvedRows/approvedCalls, plus every method of a test_class row (which
-// carries no approval of its own — see toggleTestClassApproval). Each block
-// is persisted individually through the existing single-block `approve`
-// Signal (persistApproval) — one Signal per block, never a batch write, same
-// write path as toggleRangeApproval/applyBulkApproval; no new backend code.
-// Deliberately unconditional (always clears, never toggles) — reached only
-// through its own confirm submenu, not a repeatable keybinding, so there is
-// no "nothing to do" case worth special-casing.
+// toggleTestClassApproval, reached via the "/" PR menu's "Alles keuren" →
+// "Alle goedkeuringen intrekken" submenu (PR_COMMANDS). Walks state.blocks
+// exactly like syncViewedFiles/the approvalSummaries rollup: an ordinary
+// block's own approvedRows/approvedCalls, plus every method of a test_class
+// row (which carries no approval of its own — see toggleTestClassApproval).
+// Each block is persisted individually through the existing single-block
+// `approve` Signal (persistApproval) — one Signal per block, never a batch
+// write, same write path as toggleRangeApproval/applyBulkApproval; no new
+// backend code. Deliberately unconditional (always clears, never toggles) —
+// reached only through its own submenu, not a repeatable keybinding, so
+// there is no "nothing to do" case worth special-casing.
 function retractAllApprovalsForPr() {
   for (const b of state.blocks) {
     if (b.kind === 'comment') continue
@@ -3783,6 +3783,41 @@ function retractAllApprovalsForPr() {
       continue
     }
     b.approvedRows = []
+    b.approvedCalls = []
+    persistApproval(b)
+  }
+}
+
+// approveAllForPr approves every changed row across the WHOLE PR in one
+// action — the mirror image of retractAllApprovalsForPr, reached via the
+// same "/" PR menu's "Alles keuren" → "Alle code aanpassingen goedkeuren"
+// submenu (PR_COMMANDS). Mirrors applyBulkApproval's own "approve
+// everything" branch: a row-level approval needs the loaded diff to compute
+// changedRows, so every target is ensureCode'd first (in parallel); then
+// approvedRows becomes every changed row and approvedCalls is cleared — a
+// full-row approval already covers whatever call-level detail it would
+// otherwise carry (see toggleCallApprove's own "graduates into
+// b.approvedRows" doc comment). Walks state.blocks exactly like
+// retractAllApprovalsForPr: an ordinary block, plus every method of a
+// test_class row (flattened into one list so both share one ensureCode/
+// persistApproval pass). Each block is persisted individually through the
+// existing single-block `approve` Signal (persistApproval) — one Signal per
+// block, never a batch write; no new backend code. Deliberately
+// unconditional (always approves, never toggles) — reached only through its
+// own submenu, not a repeatable keybinding.
+async function approveAllForPr() {
+  const targets = []
+  for (const b of state.blocks) {
+    if (b.kind === 'comment') continue
+    if (b.kind === 'test_class') {
+      targets.push(...b.methods)
+      continue
+    }
+    targets.push(b)
+  }
+  await Promise.all(targets.map((b) => ensureCode(b)))
+  for (const b of targets) {
+    b.approvedRows = changedRows(blockRows(b))
     b.approvedCalls = []
     persistApproval(b)
   }
@@ -11957,18 +11992,27 @@ const PR_COMMANDS = withClose([
     },
   },
   {
-    id: 'pr-retract-all-approvals',
-    // Bulk-clears every approval in the whole PR in one action (reviewer
-    // request). A submenu with a single confirm row rather than a direct
-    // action — same lightweight "one extra Enter" confirm every other
-    // destructive PR-wide action gets via `children` (e.g. "PR keuren"),
-    // deliberate given how much review work this discards at once.
-    label: 'Alle goedkeuringen intrekken',
-    hint: 'intrekken',
+    id: 'pr-approve-all',
+    // Bulk submenu for the two whole-PR approval actions (reviewer request:
+    // "Alles keuren" met daarna "Alle code aanpassingen goedkeuren" en
+    // "Alle goedkeuringen intrekken"). Groups approveAllForPr and
+    // retractAllApprovalsForPr under one parent instead of two competing
+    // top-level PR_COMMANDS entries. Opening this submenu is itself the
+    // "one extra Enter" confirm step every other destructive PR-wide action
+    // gets via `children` (e.g. "PR keuren"), so neither child needs a
+    // further nested "Ja, ..." confirm row.
+    label: 'Alles keuren',
+    hint: 'keuren',
     children: withClose([
       {
-        id: 'pr-retract-all-approvals-confirm',
-        label: 'Ja, alle goedkeuringen intrekken',
+        id: 'pr-approve-all-rows',
+        label: 'Alle code aanpassingen goedkeuren',
+        hint: 'keuren',
+        run: () => approveAllForPr(),
+      },
+      {
+        id: 'pr-retract-all-approvals',
+        label: 'Alle goedkeuringen intrekken',
         hint: 'intrekken',
         run: () => retractAllApprovalsForPr(),
       },

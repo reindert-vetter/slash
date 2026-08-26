@@ -1319,18 +1319,29 @@ The same overlay, with actions on the **whole PR**. Six root items:
    `comment_batch`'s `batchActionRow` — reviewer decision: the sidebar is
    busy enough. Progress renders in `prInfoCard`'s status block
    (`testRunStatusBlock`, `testRun.mjs`), not here.
-6. **"Alle goedkeuringen intrekken"** (submenu, one confirm row — same
-   lightweight "one extra Enter" confirm as "PR keuren" above) — clears every
-   approval in the WHOLE PR in one action (`retractAllApprovalsForPr`).
-   Walks `state.blocks` exactly like `syncViewedFiles`/the approval rollup
-   (an ordinary block's own `approvedRows`/`approvedCalls`; every method of a
-   `test_class` row, which carries no approval of its own — see
-   `.claude/docs/test-class-grouping.md`), clearing each and persisting it
+6. **"Alles keuren"** (submenu, two items — same lightweight "one extra
+   Enter" confirm as "PR keuren" above: opening the submenu is the confirm
+   step, so neither child needs its own further "Ja, ..." row) — the two
+   whole-PR bulk approval actions, grouped under one parent instead of two
+   competing top-level items:
+   - **"Alle code aanpassingen goedkeuren"** (`approveAllForPr`) approves
+     every changed row in the WHOLE PR in one action. `ensureCode`s every
+     target first (in parallel — a row-level approval needs the loaded diff
+     to compute `changedRows`), then sets `approvedRows` to every changed row
+     and clears `approvedCalls` (a full-row approval already covers whatever
+     call-level detail it would otherwise carry — see `toggleCallApprove`'s
+     own "graduates into `b.approvedRows`" doc comment).
+   - **"Alle goedkeuringen intrekken"** (`retractAllApprovalsForPr`) clears
+     every approval in the WHOLE PR in one action — the bulk opposite, for
+     when a re-review is needed from scratch.
+
+   Both walk `state.blocks` exactly like `syncViewedFiles`/the approval
+   rollup (an ordinary block's own `approvedRows`/`approvedCalls`; every
+   method of a `test_class` row, which carries no approval of its own — see
+   `.claude/docs/test-class-grouping.md`), persisting each block individually
    through the existing single-block `approve` Signal (`persistApproval`) —
    the same write path `toggleRangeApproval`/`applyBulkApproval` already use,
-   one Signal per block, never a batch write. Reviewer request: a bulk
-   opposite of approving everything, for when a re-review is needed from
-   scratch. Test: the last test in `tests/pr-menu.spec.mjs`.
+   one Signal per block, never a batch write. Test: `tests/pr-menu.spec.mjs`.
 
 There used to be a 4th item here, **"Diepgravend onderzoek"**, which manually
 started `code_warning` on Opus. Removed on request ("die wordt toch
