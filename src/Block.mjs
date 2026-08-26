@@ -209,35 +209,50 @@ function fitOnlyText(b) {
 }
 
 
-// isPhpFile — the discriminator between 'fit''s two different behaviors
-// (see contentWidthCls/boundedWrapWidthCls below): a plain `.php` extension
-// check on b.file. PHP code gets the uncapped, max-line-based 'fit' width
-// (a long PHP statement is typically one unbreakable logical line, so it
-// must stay fully visible, unwrapped); everything else (markdown, JSON,
-// config, …) gets a bounded width with wrapping instead — prose/config text
-// reads perfectly fine wrapped, and letting one long line balloon the card
-// (reported: a 336-character markdown bullet grew the card to ~6800px) is
-// exactly what "don't be wider than necessary" rules out.
-function isPhpFile(b) {
-  return !!(b.file && b.file.toLowerCase().endsWith('.php'))
-}
-
-// isSvgFile — a plain `.svg` extension check on b.file, mirrors isPhpFile.
-// Used only to route the card's whole render (see the b.category/isSvgFile
-// dispatch in Block() below) to svgSlot instead of codeDiff — it does NOT
-// change widthCls: an .svg file is by construction never a PHP file, so it
-// already gets the existing non-PHP width treatment (boundedWrapWidthCls in
-// the 'fit' stand) for free, same as markdown/JSON.
+// isSvgFile — a plain `.svg` extension check on b.file. Used to route the
+// card's whole render (see the b.category/isSvgFile dispatch in Block()
+// below) to svgSlot instead of codeDiff, and reused by isProseFile below to
+// keep an .svg card on the bounded, non-content-driven width (its raw
+// source can carry an extremely long `d=` path attribute) even though it
+// never reaches codeDiff/the `wrap` flag at all.
 function isSvgFile(b) {
   return !!(b.file && b.file.toLowerCase().endsWith('.svg'))
 }
 
 // isYamlFile — a plain `.yml`/`.yaml` extension check on b.file, mirrors
-// isPhpFile/isSvgFile. Used only to gate the collapsed-run breadcrumb below
-// (see YAML_KEY_RE) — everything else about a yaml block's rendering is
-// already covered by the existing non-PHP width/wrap treatment.
+// isSvgFile. Used to gate the collapsed-run breadcrumb below (see
+// YAML_KEY_RE) and reused by isProseFile (yaml is a prose/config format,
+// see below).
 function isYamlFile(b) {
   return !!(b.file && /\.ya?ml$/i.test(b.file))
+}
+
+// isProseFile — the discriminator between 'fit''s two different behaviors
+// (see contentWidthCls/boundedWrapWidthCls below): true for a prose/config
+// format (markdown, JSON, YAML/YML, plain text) on b.file, false for
+// anything else (PHP, TypeScript, JavaScript, Go, …). A prose/config file
+// gets a bounded width with wrapping — that kind of text reads perfectly
+// fine wrapped, and letting one long line balloon the card (reported: a
+// 336-character markdown bullet grew the card to ~6800px) is exactly what
+// "don't be wider than necessary" rules out. Everything else is treated as
+// CODE and gets the uncapped, max-line-based width instead (a long
+// statement is typically one unbreakable logical line in any programming
+// language, not just PHP, so it must stay fully visible, unwrapped) —
+// superseded from a PHP-only allowlist (a plain `.php`-extension check,
+// `isPhpFile`) to this prose/config denylist (2026-08-26): a non-PHP code
+// file (e.g. a `.ts`/`.js` test) used to fall through to the fixed,
+// non-growing boundedWrapWidthCls with wrapping OFF outside 'fit', which
+// read as the diff simply being clipped at the card's right edge (no
+// visible scrollbar, see the `no-scrollbar` class on the pane) instead of
+// either wrapping or growing. Also true for an .svg file (isSvgFile): it
+// never reaches codeDiff (svgSlot renders it instead, see Block()'s own
+// dispatch), but its raw XML source can carry an extremely long
+// single-line path `d=` attribute, so widthCls must keep treating it as
+// prose/config rather than uncapped code — the same bounded width every
+// non-PHP file used to get before this split existed. See
+// .claude/docs/diff-card.md.
+function isProseFile(b) {
+  return !!(b.file && /\.(md|markdown|json|txt)$/i.test(b.file)) || isYamlFile(b) || isSvgFile(b)
 }
 
 // nonCommentLineLengths — the shared scan behind codeGrowthChars and
@@ -483,13 +498,13 @@ function selectionWindowLineChars(b, unit, side = fitOnly(b) === 'left' ? 'left'
 
 // fitCapCharsFor — the effective content-driven-width cap another card
 // should never exceed, expressed in the SAME chars unit widthCls builds its
-// own width from: for a PHP file, its own codeMaxLineChars (mirrors
-// contentWidthCls exactly, via the shared fitOnlyText helper); for a non-PHP
-// file there is no chars-based width at all (boundedWrapWidthCls is a fixed
-// floor), so this returns 0 — capping a preview's contentWidthCls at 0 chars
-// collapses it to that same fixed floor via the `max(...)` in
-// contentWidthCls below, which is exactly the width a non-PHP active card
-// renders at.
+// own width from: for a code file (isProseFile false), its own
+// codeMaxLineChars (mirrors contentWidthCls exactly, via the shared
+// fitOnlyText helper); for a prose/config file there is no chars-based
+// width at all (boundedWrapWidthCls is a fixed floor), so this returns 0 —
+// capping a preview's contentWidthCls at 0 chars collapses it to that same
+// fixed floor via the `max(...)` in contentWidthCls below, which is exactly
+// the width a prose/config active card renders at.
 //
 // Used by home.mjs's look-ahead preview call sites (never by a card's own,
 // unconstrained width) to fix the gap in "the preview must never be wider
@@ -497,7 +512,7 @@ function selectionWindowLineChars(b, unit, side = fitOnly(b) === 'left' ? 'left'
 // override only narrows a preview by forcing 'unified', which by itself no
 // longer changes the width formula (every stand is content-driven now) —
 // this cap is what actually keeps a preview from rendering wider than the
-// active card next to it when both are two-sided (modified) PHP files with
+// active card next to it when both are two-sided (modified) code files with
 // a different own longest line.
 //
 // unit — optional, the SAME {start,end} row range the active card's own
@@ -522,19 +537,20 @@ function selectionWindowLineChars(b, unit, side = fitOnly(b) === 'left' ? 'left'
 // guarantee it exists for ("never wider than the active card") without
 // needing to know the active card's current stand at all.
 export function fitCapCharsFor(b, unit) {
-  if (!isPhpFile(b)) return 0
+  if (isProseFile(b)) return 0
   const windowChars = selectionWindowLineChars(b, unit)
   return windowChars != null ? windowChars : fallbackCodeMaxLineChars(b, fitOnlyText(b))
 }
 
-// widthCls picks the card's width class: a PHP file gets the content-driven
-// width (contentWidthCls, below), in EVERY stand ('split'/'unified'/'fit'
-// alike) — any other file gets the fixed, bounded width instead
-// (boundedWrapWidthCls) — see isPhpFile above for why.
+// widthCls picks the card's width class: a code file (isProseFile false)
+// gets the content-driven width (contentWidthCls, below), in EVERY stand
+// ('split'/'unified'/'fit' alike) — a prose/config file gets the fixed,
+// bounded width instead (boundedWrapWidthCls) — see isProseFile above for
+// why.
 //
 // The three stands used to differ here (a fixed 60%-width 'unified' tier, a
 // fixed full-width 'split' tier, only 'fit' content-driven) — on explicit
-// reviewer request that distinction is gone: every stand now sizes a PHP
+// reviewer request that distinction is gone: every stand now sizes a code
 // card off what's actually around the cursor (selectionWindowLineChars),
 // floored at MIN_CONTENT_WIDTH_CHARS (80) characters, uncapped upward. The
 // card genuinely grows/shrinks as the reviewer navigates — see
@@ -551,23 +567,23 @@ export function fitCapCharsFor(b, unit) {
 //
 // `narrowFixed` — a function; when it returns true, short-circuits ALL of
 // the above and returns the flat `NARROW_FIXED_WIDTH_CLS` instead, checked
-// FIRST (before isPhpFile) so it applies to any file type. Only ever true
+// FIRST (before isProseFile) so it applies to any file type. Only ever true
 // for the top-level look-ahead preview (see Block()'s own `narrowFixedFn`
 // doc comment) — reviewer decision: that preview's width no longer follows
 // its own content at all.
 function widthCls(b, viewMode, capFitChars, activeGroup, narrowFixed) {
   if (narrowFixed && narrowFixed()) return NARROW_FIXED_WIDTH_CLS
-  return isPhpFile(b) ? contentWidthCls(b, capFitChars, activeGroup, viewMode) : boundedWrapWidthCls()
+  return isProseFile(b) ? boundedWrapWidthCls() : contentWidthCls(b, capFitChars, activeGroup, viewMode)
 }
 
-// boundedWrapWidthCls — the width for a NON-PHP file (see isPhpFile), in
-// every stand: the same narrow 60%-equivalent width a one-sided added/
-// removed block already used — deliberately NOT content-based. Long lines
-// are made to fit THIS width by wrapping instead (the `wrap` flag on
-// codePane/paneHTML in 'fit'; 'split'/'unified' already wrapped nothing
-// before and still don't, unaffected by this change) — the direct fix for
-// "the diff must not be wider than needed" for non-code (markdown/prose/
-// config) text, where a long line reads perfectly fine wrapped, unlike a PHP
+// boundedWrapWidthCls — the width for a prose/config file (see
+// isProseFile), in every stand: the same narrow 60%-equivalent width a
+// one-sided added/removed block already used — deliberately NOT
+// content-based. Long lines are made to fit THIS width by wrapping instead
+// (the `wrap` flag on codePane/paneHTML in 'fit'; 'split'/'unified' already
+// wrapped nothing before and still don't, unaffected by this change) — the
+// direct fix for "the diff must not be wider than needed" for prose/config
+// text, where a long line reads perfectly fine wrapped, unlike a code
 // statement.
 function boundedWrapWidthCls() {
   return 'w-[42rem] 2xl:w-[49.2rem] '
@@ -685,25 +701,26 @@ const NARROW_FIXED_WIDTH_CLS = `w-[${contentWidthPx(MIN_CONTENT_WIDTH_CHARS)}px]
 // Tailwind utilities.
 const SPLIT_LEFT_PANE_WIDTH_CLS = `w-1/2 max-w-[${Math.ceil(MIN_CONTENT_WIDTH_CHARS * CODE_CHAR_PX + 16)}px] shrink-0`
 
-// contentWidthCls — the card width for a PHP file, for EVERY `a`-cycle stand
-// ('split'/'unified'/'fit' alike — see widthCls above): make the card as
-// wide as the code actually around the cursor needs, instead of a fixed
-// tier. Floored at MIN_CONTENT_WIDTH_CHARS (80) characters, but — on
-// explicit reviewer request — deliberately UNCAPPED upward: unlike
-// codeGrowthChars (the 75th-percentile non-ballooning technique
-// RelatedPanel.mjs's relatedColumnWidthCls still uses), this must guarantee
-// that the widest real PHP code line actually in view is fully visible,
-// without wrapping and without an invisible horizontal scroll. Purely a
-// character-count calculation on the already-loaded source text, no live DOM
-// measurement (`scrollWidth`/`getBoundingClientRect`), per the existing
-// approach and the arrow.js pitfalls in conventions.md.
+// contentWidthCls — the card width for a code file (isProseFile false), for
+// EVERY `a`-cycle stand ('split'/'unified'/'fit' alike — see widthCls
+// above): make the card as wide as the code actually around the cursor
+// needs, instead of a fixed tier. Floored at MIN_CONTENT_WIDTH_CHARS (80)
+// characters, but — on explicit reviewer request — deliberately UNCAPPED
+// upward: unlike codeGrowthChars (the 75th-percentile non-ballooning
+// technique RelatedPanel.mjs's relatedColumnWidthCls still uses), this must
+// guarantee that the widest real code line actually in view is fully
+// visible, without wrapping and without an invisible horizontal scroll.
+// Purely a character-count calculation on the already-loaded source text,
+// no live DOM measurement (`scrollWidth`/`getBoundingClientRect`), per the
+// existing approach and the arrow.js pitfalls in conventions.md.
 //
-// This uncapped guarantee turned out to backfire for a NON-PHP file: a
-// markdown bullet/prose line reads perfectly fine wrapped (unlike a PHP
+// This uncapped guarantee turned out to backfire for a prose/config file: a
+// markdown bullet/prose line reads perfectly fine wrapped (unlike a code
 // statement, which loses nothing by staying on one physical line but reads
 // terribly split mid-expression), so an isolated long prose line ballooned
-// the whole card (reported: 336 characters → ~6800px). Hence the PHP-only
-// scope: a non-PHP file gets boundedWrapWidthCls + wrapping instead.
+// the whole card (reported: 336 characters → ~6800px). Hence the
+// prose/config scope: such a file gets boundedWrapWidthCls + wrapping
+// instead — see isProseFile above.
 //
 // A one-sided block (added/removed, singleSide(b) truthy), and ANY block in
 // 'fit' (which always collapses to one pane — fitOnly, above), is measured
@@ -729,7 +746,7 @@ const SPLIT_LEFT_PANE_WIDTH_CLS = `w-1/2 max-w-[${Math.ceil(MIN_CONTENT_WIDTH_CH
 // when it returns a finite number, this card's own chars are clamped down to
 // it BEFORE the MIN_CONTENT_WIDTH_CHARS floor applies, so a preview can never
 // render wider than the active card it's stacked with even though both are
-// genuinely two-sided PHP blocks with a different longest line. Absent for
+// genuinely two-sided code blocks with a different longest line. Absent for
 // every non-preview card, and a no-op whenever the preview's own chars
 // already happen to be the smaller number. Deliberately still a single,
 // canonical-side number (fitCapCharsFor's own doc comment) even now that a
@@ -1777,10 +1794,11 @@ function svgPreviewPane(labelText, uri) {
 // text-WIDTH concern for 'fit' to solve (that stand exists to control how
 // much code TEXT is shown/how wide a line is) — there's nothing here that
 // needs to change across the three stands, so viewMode is not even read.
-// The card's own width (widthCls) is untouched too: an .svg file is not a
-// PHP file, so it already gets the existing non-PHP width treatment
-// (boundedWrapWidthCls) in every stand, exactly like markdown/JSON — two
-// small preview images simply share whatever width that already gives.
+// The card's own width (widthCls) is untouched too: an .svg file is a
+// prose/config file (isProseFile), so it already gets the existing
+// bounded-width treatment (boundedWrapWidthCls) in every stand, exactly
+// like markdown/JSON — two small preview images simply share whatever width
+// that already gives.
 //
 // No raw-text fallback: there is deliberately no toggle back to the plain
 // text diff for a changed .svg file. The raw SVG source stays reachable via
@@ -1897,15 +1915,16 @@ function codeDiff(
   // removed block has no new side to fall back to, so its old/left pane
   // stays visible in every stand, 'fit' included).
   const effectiveOnly = only || (viewMode() === 'fit' ? 'right' : null)
-  // A non-PHP file in 'fit' wraps its lines within a bounded width instead of
-  // growing the card to fit the longest line (widthCls/boundedWrapWidthCls
-  // pick the matching width; this flag makes the row rendering itself wrap
-  // instead of overflowing on a single `whitespace-pre` line) — see
-  // isPhpFile/contentWidthCls's own doc comment for the full reasoning. Since
-  // 'fit' now always forces a single pane above, this only ever reaches the
-  // single-pane codePane branches below (effectiveOnly === 'right'/'left')
-  // — there is no two-pane wrapping path left to reach.
-  const wrap = viewMode() === 'fit' && !isPhpFile(b)
+  // A prose/config file in 'fit' wraps its lines within a bounded width
+  // instead of growing the card to fit the longest line
+  // (widthCls/boundedWrapWidthCls pick the matching width; this flag makes
+  // the row rendering itself wrap instead of overflowing on a single
+  // `whitespace-pre` line) — see isProseFile/contentWidthCls's own doc
+  // comment for the full reasoning. Since 'fit' now always forces a single
+  // pane above, this only ever reaches the single-pane codePane branches
+  // below (effectiveOnly === 'right'/'left') — there is no two-pane
+  // wrapping path left to reach.
+  const wrap = viewMode() === 'fit' && isProseFile(b)
   // Gates the collapsed-run breadcrumb (see yamlBreadcrumbsForSegs) — only a
   // yaml/yml whole-file fallback block gets the extra key-hierarchy line.
   const isYaml = isYamlFile(b)
@@ -2174,7 +2193,8 @@ function syncScroll(e) {
 // the L-range in the header. The body is the shared aligned `rows`, projected to
 // this side (`left` = old, `right` = new). Both panes render the same number of
 // rows at the same line-height, so they line up vertically without any JS.
-// `wrap` (only ever true for a non-PHP file in 'fit', see isPhpFile/codeDiff)
+// `wrap` (only ever true for a prose/config file in 'fit', see
+// isProseFile/codeDiff)
 // switches every row from `whitespace-pre` to `whitespace-pre-wrap
 // break-words` — safe here because this is the SINGLE-pane path: there's no
 // second pane whose row height needs to stay in lockstep. 'fit' forces a

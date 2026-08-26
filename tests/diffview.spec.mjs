@@ -495,7 +495,7 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
   // 'fit', this genuinely two-sided (modified) block also shows only its
   // new/right pane — old code is gone, not just visually hidden — so there's
   // only ONE (wrapping) pane to size/align, not the old two-pane
-  // row-alignment mechanism. See isPhpFile/fitWidthCls's doc comment.
+  // row-alignment mechanism. See isProseFile/fitWidthCls's doc comment.
   test('viewMode="fit" bounds a non-PHP file at the narrow width, hides old code, and wraps its long line', async ({
     page,
   }) => {

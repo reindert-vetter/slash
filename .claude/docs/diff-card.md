@@ -140,9 +140,12 @@ content-driven width — the earlier fixed 60%/full-split tiers for `split`/
 `unified` are gone. `widthCls(b, viewMode, capFitChars, activeGroup)`
 (`Block.mjs`) is the single entry point; the card's root `<article>`
 concatenates its result into its class string. One branch, by file type: a
-**PHP** file gets the uncapped, content-driven `contentWidthCls(b, ...)`;
-anything else gets the fixed `boundedWrapWidthCls()` (see below for why the
-two differ). `viewMode` no longer affects the WIDTH at all — it only decides
+**code** file (`.php`, `.ts`, `.js`, `.go`, … — anything that isn't a
+prose/config format, see `isProseFile` below) gets the uncapped,
+content-driven `contentWidthCls(b, ...)`; a **prose/config** file
+(markdown, JSON, YAML/YML, plain text, and `.svg` — see below) gets the
+fixed `boundedWrapWidthCls()` (see below for why the two differ). `viewMode`
+no longer affects the WIDTH at all — it only decides
 which/how many panes `codeDiff` renders (`effectiveOnly`, `unifiedCodeDiff`);
 a same-file `a` toggle now changes the pane STRUCTURE (side-by-side → stacked
 → new-only) without the card resizing, unless the underlying selection window
@@ -172,10 +175,10 @@ again. Regression test:
 `tests/preview-matches-active-width.spec.mjs`'s "an unchanged block renders
 single-pane and narrow" test.
 
-## `contentWidthCls` — PHP only, uncapped upward, floored at 80 characters
+## `contentWidthCls` — every code file, uncapped upward, floored at 80 characters
 
 Superseded `fitWidthCls` (the old name only applied to the `fit` stand; the
-same formula now drives every stand for a PHP file). For a one-sided
+same formula now drives every stand for a code file). For a one-sided
 (added/removed) block, or ANY block in `'fit'` (always one pane, see
 `fitOnly`), only that single canonical side is measured, but **not the whole
 block**: only a WINDOW around the current selection. A genuinely two-sided
@@ -515,38 +518,50 @@ which skips blank lines, a leading PHPDoc block, `//`/`#` lines and `*`
 continuations — free-form prose must never drive a width, only real code lines
 may.
 
-### `boundedWrapWidthCls` — everything that is not PHP
+### `boundedWrapWidthCls` — every prose/config file, and `.svg`
 
 A plain `w-[42rem] 2xl:w-[49.2rem]`, i.e. the same 60% tier again, and
-**deliberately not content-based**. The uncapped guarantee backfires for non-code
+**deliberately not content-based**. The uncapped guarantee backfires for prose
 text: a markdown bullet or a prose paragraph reads perfectly fine wrapped, so an
 isolated long line has no business ballooning the card — reported, a
 336-character markdown bullet grew it to roughly 6800px. Instead of growing the
-card, `codeDiff` sets its `wrap` flag (`viewMode() === 'fit' && !isPhpFile(b)`)
+card, `codeDiff` sets its `wrap` flag (`viewMode() === 'fit' && isProseFile(b)`)
 and the rows wrap within this bounded width.
 
-`isPhpFile` is a plain `.php` extension check on `b.file`. A PHP statement loses
-nothing by staying on one physical line but reads terribly split mid-expression;
-prose/config is the opposite — that asymmetry is the entire justification for the
-split.
+**Superseded (2026-08-26):** the discriminator used to be `isPhpFile` (a plain
+`.php` extension **allowlist** — PHP got the content-driven width, literally
+everything else, including every other programming language, got this bounded
+one). Reported live: a `.ts` test file's diff card stayed at this fixed width
+in `split`/`unified` (not just `fit`), where `wrap` was never even enabled (it
+only turns on in `fit`) — so a long `import { ... } from "..."` line just ran
+off the pane's right edge into an invisible `overflow-auto`/`no-scrollbar`
+horizontal scroll, reading as the diff being clipped. `isProseFile` (`Block.mjs`)
+flips this to a **denylist**: `.md`/`.markdown`, `.json`, `.yml`/`.yaml`
+(`isYamlFile`) and `.txt` are prose/config and stay on this bounded, wrapped
+width; **every other extension is treated as code** and gets the uncapped
+`contentWidthCls` instead — a `.ts`/`.js`/`.go`/… statement is exactly as
+unbreakable as a PHP one, and reads exactly as badly split mid-expression.
 
-**Scope, stated so it isn't read as a bug:** only a PHP file's `contentWidthCls`
+**Scope, stated so it isn't read as a bug:** only a code file's `contentWidthCls`
 guarantees a long line is fully visible, and only within its own selection
-window — a non-PHP file's fixed `boundedWrapWidthCls` never grows regardless of
-stand.
+window — a prose/config file's fixed `boundedWrapWidthCls` never grows regardless
+of stand.
 
 An **SVG** block needs nothing of its own here: `svgSlot` replaces the text diff
-with rendered `<img>` previews and never reads `viewMode`, and an `.svg` file is
-by construction not a PHP file, so it already gets `boundedWrapWidthCls` in the
-`fit` stand exactly like markdown/JSON (see "SVG blocks" in
-`.claude/docs/diff-render.md`).
+with rendered `<img>` previews and never reads `viewMode`, but `isProseFile`
+explicitly includes `.svg` (via `isSvgFile`) anyway — its raw XML source can
+carry an extremely long single-line path `d=` attribute, and without the
+explicit inclusion it would fall on the "everything else is code" side of the
+new denylist and get an unwanted uncapped `contentWidthCls`. So it still gets
+`boundedWrapWidthCls` in the `fit` stand exactly like markdown/JSON (see "SVG
+blocks" in `.claude/docs/diff-render.md`).
 
 ## Narrow viewport (`narrow:`, < 1400px) — no longer a `widthCls` concern
 
 `index.html`'s `tailwind.config` still defines the custom **max-width** screen
 `narrow: { max: '1399px' }` (used elsewhere, e.g. `boundedWrapWidthCls`'s
-non-PHP width and the neighbouring Onderliggende-code column — see "Narrow
-viewport (< 1400px)" in `.claude/docs/underlying-code.md`), but a PHP file's
+prose/config width and the neighbouring Onderliggende-code column — see "Narrow
+viewport (< 1400px)" in `.claude/docs/underlying-code.md`), but a code file's
 `contentWidthCls` no longer has a `narrow:`-specific tier: it was always
 content-driven at every viewport once `fit`-only, and now that every stand
 shares that formula, the earlier `70rem`/`82rem` → `42rem` /
@@ -585,7 +600,7 @@ next to it (`ContractsExport::map`), because each card's content-driven width
 is otherwise entirely its own content's business — the longest non-comment
 line in ITS OWN selection window, with no notion of its neighbour. Now that
 every stand shares that formula, the same gap exists in `split`/`unified` too
-whenever both cards are two-sided (`modified`) PHP files with a different
+whenever both cards are two-sided (`modified`) code files with a different
 longest line in view — `fitCapCharsFor` closes it uniformly, not just for
 `fit`.
 
@@ -593,8 +608,8 @@ longest line in view — `fitCapCharsFor` closes it uniformly, not just for
 would `b`'s own content-driven width be capped at" — `selectionWindowLineChars`
 (falling back to `codeMaxLineChars` only when there's no unit at all; a
 present unit with nothing measurable nearby yields `0`, same as below) for a
-PHP file, `0` unconditionally for a non-PHP file (whose width is the fixed
-`boundedWrapWidthCls` floor anyway, so capping a preview at `0` chars
+code file, `0` unconditionally for a prose/config file (whose width is the
+fixed `boundedWrapWidthCls` floor anyway, so capping a preview at `0` chars
 collapses it to that exact same floor via `contentWidthCls`'s own
 `Math.max(MIN_CONTENT_WIDTH_CHARS, …)`).
 `contentWidthCls`/`widthCls` take an optional `capFitChars` — a `() =>
@@ -677,9 +692,9 @@ constants — for every file type, regardless of content or of the active
 card's own width.
 
 `Block()`'s **`narrowFixed`** opt drives this: a `() => boolean`, checked
-FIRST in `widthCls` (`Block.mjs`), before the `isPhpFile`/`contentWidthCls`/
+FIRST in `widthCls` (`Block.mjs`), before the `isProseFile`/`contentWidthCls`/
 `boundedWrapWidthCls` branch — so it short-circuits for any file type, not
-just PHP. Only `DetailPanel`'s `pair.forEach` passes
+just one. Only `DetailPanel`'s `pair.forEach` passes
 `narrowFixed: i !== sel ? () => true : undefined`; every other card
 (including `drillPreviewColumns`') defaults to never-fixed, unaffected.
 
