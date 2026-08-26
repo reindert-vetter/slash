@@ -3688,9 +3688,18 @@ to the RIGHT** of `comment-claude-row` — reversed again, this time to a
   export are all unchanged — only where `home.mjs` mounts it moved.
 - **Width (`CodePreview.mjs`).** `codePreviewColumn`'s root was
   `w-[42rem] shrink-0` (sized to sit narrow, next to `comment-claude-row`);
-  now that it stacks below with nothing beside it, it takes the full width of
-  the row instead (`w-full shrink-0`) — so its cards read as wide as the
-  comment/Claude card above them, not as a narrow strip underneath a wide one.
+  now that it stacks below with nothing beside it, it takes `shrink-0` plus a
+  `getWidthCls()` slot the caller supplies. A bare `w-full` (100% of the
+  unconstrained, shrink-to-fit `comments-and-related` ancestor) turned out not
+  to actually bound the column — an unbounded child (a long unwrapped
+  `previewCard` context line) could still push that ancestor, and thus this
+  "full width" column, wider than `comment-claude-row` itself (reviewer
+  report: the code-preview cards spilled out past the comment/chat card's
+  right edge). `RelatedPanel.mjs`'s `CodePreviewPanel(state, commentTarget)`
+  now passes `commentClaudeRowWidthCls(state)` — the row's own real, bounded
+  width (the same `relatedWidthCls` clamp `commentColumnWidthCls`/
+  `claudeColumnWidthCls` sum to) — so its cards read as wide as, and never
+  wider than, the comment/Claude card above them.
 - **Suggestion fences now also get a preview (`markdown.mjs`).** D4's
   exclusion — a `` ```suggestion ``` `` fence carried no preview data at all,
   so `recomputeCodePreviews` never saw it — is dropped:

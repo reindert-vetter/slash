@@ -29,11 +29,17 @@
 // D3 reversed AGAIN (a later reviewer request, "Always on, stacked BELOW
 // (reversing D3 again)" in claude-chat-panel.md): this used to be a sibling
 // column to the RIGHT of comment-claude-row with its own fixed w-[42rem].
-// It now renders as a row BELOW comment-claude-row (home.mjs), so
-// `codePreviewColumn`'s root takes the FULL width of that row (`w-full`)
-// instead of a narrow fixed column — home.mjs no longer wraps it in a
-// `flex items-start` row with comment-claude-row, so nothing constrains its
-// width but its own content.
+// It now renders as a row BELOW comment-claude-row (home.mjs) — home.mjs no
+// longer wraps it in a `flex items-start` row with comment-claude-row.
+//
+// A plain `w-full` here (100% of the unconstrained, shrink-to-fit
+// `comments-and-related` ancestor) turned out not to bound this column at
+// all: an oversized child (a long unwrapped context line, see previewCard's
+// own doc comment in this file) could still push that ancestor — and thus
+// this "full width" column — wider than comment-claude-row itself, spilling
+// the card out past it (reviewer report, screenshot). `codePreviewColumn`'s
+// root now takes RelatedPanel.mjs's `commentClaudeRowWidthCls(state)` — the
+// row's own real, bounded width — as its width class instead.
 import { html } from './vendor/arrow.js'
 import { highlightForLang, scrollHint } from './Block.mjs'
 import { updateScrollHints } from './scrollFade.mjs'
@@ -296,9 +302,25 @@ function previewCard(it, active, expanded, onToggle) {
 // above (RelatedPanel.mjs's `isPreviewExpanded`/`toggleCodePreviewExpanded`).
 // All defaulted so a future caller with no cursor/collapse state of its own
 // can keep passing fewer arguments.
-export function codePreviewColumn(getItems, isActive = () => false, isExpanded = () => true, onToggle = () => {}) {
+//
+// `getWidthCls` bounds the column's own width — RelatedPanel.mjs's
+// `commentClaudeRowWidthCls(state)` by default caller, so this column can
+// never render wider than comment-claude-row above it (a bare `w-full` is
+// 100% of an UNCONSTRAINED shrink-to-fit ancestor, which does nothing to cap
+// an oversized child's own preferred width — see that function's doc
+// comment). Defaults to the previous literal `w-full` so a caller with
+// nothing better still gets today's behaviour. Read inside the same `${() =>
+// ...}` slot as the class it lives in (whole-value rule, arrowjs-pitfalls.md)
+// so a focus/narrow-breakpoint change re-applies just this class.
+export function codePreviewColumn(
+  getItems,
+  isActive = () => false,
+  isExpanded = () => true,
+  onToggle = () => {},
+  getWidthCls = () => 'w-full',
+) {
   return html`
-    <div class="flex w-full shrink-0 flex-col gap-3" data-testid="code-preview-column">
+    <div class="${() => 'flex shrink-0 flex-col gap-3 ' + getWidthCls()}" data-testid="code-preview-column">
       ${() => getItems().map((it, i) => previewCard(it, () => isActive(i), () => isExpanded(i), onToggle))}
     </div>
   `

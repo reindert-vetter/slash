@@ -16340,9 +16340,10 @@ function DetailPanel(state) {
           // comment/Claude columns (markdown.mjs, suggestion fences
           // included). A sibling ROW below comment-claude-row (not to its
           // right any more, see "Always on, stacked BELOW (reversing D3
-          // again)" in claude-chat-panel.md), taking the same full width as
-          // that row instead of its own fixed narrow column width.
-          CodePreviewPanel(commentTarget)}
+          // again)" in claude-chat-panel.md), bounded to that row's own real
+          // width (commentClaudeRowWidthCls, RelatedPanel.mjs) so it can
+          // never spill wider than comment-claude-row above it.
+          CodePreviewPanel(state, commentTarget)}
         ${() =>
           RelatedPanel(state, commentTarget, { drill: (child) => drillIntoChild(child) }).key('related-panel')}
       </div>

@@ -4581,7 +4581,7 @@ function ensureCodePreviewObserver() {
   scheduleRecomputeCodePreviews()
 }
 
-// CodePreviewPanel(commentTarget) — mounted by home.mjs directly BELOW
+// CodePreviewPanel(state, commentTarget) — mounted by home.mjs directly BELOW
 // comment-claude-row, inside the same comments-and-related stack (see "A
 // full-size code-preview column" in claude-chat-panel.md for exactly where in
 // the layout). Wrapped in a stable
@@ -4590,7 +4590,12 @@ function ensureCodePreviewObserver() {
 // expression" pitfall; the inner list itself is always an array (empty or
 // not), never alternating with a scalar, so the single↔array pitfall in
 // arrowjs-pitfalls.md doesn't apply either.
-export function CodePreviewPanel(commentTarget) {
+//
+// `state` (added alongside `commentTarget`) is only threaded through to
+// `commentClaudeRowWidthCls(state)` — the column's own width bound, see that
+// function's doc comment — so this card can never spill wider than
+// comment-claude-row above it.
+export function CodePreviewPanel(state, commentTarget) {
   getCommentTarget = commentTarget
   ensureCodePreviewObserver()
   // The second argument is the keyboard cursor (cs.previewPos, only ever
@@ -4599,6 +4604,9 @@ export function CodePreviewPanel(commentTarget) {
   // see previewCard in CodePreview.mjs. The third is the collapse/expand
   // state (isPreviewExpanded, above) — a getter too, per card, for the same
   // reason: toggling ONE card must not re-key/re-Prism-highlight the rest.
+  // The fifth (getWidthCls) is a getter too, for the same reason as the
+  // others: a focus/narrow-breakpoint change must re-apply just this class
+  // slot, not rebuild the whole card list.
   return html`<div class="contents">
     ${() =>
       cp.items.length
@@ -4607,6 +4615,7 @@ export function CodePreviewPanel(commentTarget) {
             (i) => cs.focus === 'claude' && cs.previewPos === i + 1,
             (i) => isPreviewExpanded(cp.items[i]),
             toggleCodePreviewExpanded,
+            () => commentClaudeRowWidthCls(state),
           )
         : ''}
   </div>`
@@ -8605,6 +8614,37 @@ export function commentColumnWidthCls(state) {
 
 export function claudeColumnWidthCls(state) {
   return relatedWidthCls(relatedGrowthChars(), columnPairScale(state, isClaudeChatFocused(), commentSideFocused()))
+}
+
+// commentClaudeRowWidthCls — the ACTUAL rendered width of comment-claude-row
+// (home.mjs), for a sibling that must never exceed it (CodePreviewPanel's own
+// code-preview column, below): without a real width bound of its own, an
+// unbounded child (a long "over: …" context line in previewCard, CodePreview.mjs
+// — the same failure mode InlineComments' own doc comment above describes and
+// already fixed for itself) pushes the shared `comments-and-related` ancestor
+// wider than comment-claude-row, so the code-preview cards spill out past the
+// comment/chat card's right edge.
+//
+// Deliberately NOT `relatedColumnWidthCls()` — that clamp uses scale 1, while
+// comment-claude-row's own two halves can together sum to 1.5 on a wide
+// screen (COMMENT_CLAUDE_WIDE_SCALE, see columnPairScale's own doc comment),
+// so relatedColumnWidthCls() alone would be too NARROW and this column would
+// stop lining up under the row above it. Uses the exact same
+// `relatedWidthCls(chars,a,d1) + relatedWidthCls(chars,b,d2) ===
+// relatedWidthCls(chars,a+b,d1+d2)` identity commentColumnWidthCls/
+// claudeColumnWidthCls's own doc comment relies on, so this is the row's
+// real width, not an approximation.
+//
+// When the Claude half isn't mounted at all (`!claudeColumnVisible()` — see
+// its own gate at this module's `${() => !claudeColumnVisible() ? '' : …}`
+// branch), comment-claude-row renders only the comment half, so this returns
+// `commentColumnWidthCls(state)` verbatim rather than the (wrong) sum.
+export function commentClaudeRowWidthCls(state) {
+  if (!claudeColumnVisible()) return commentColumnWidthCls(state)
+  const chars = relatedGrowthChars()
+  const a = columnPairScale(state, commentSideFocused(), isClaudeChatFocused())
+  const b = columnPairScale(state, isClaudeChatFocused(), commentSideFocused())
+  return relatedWidthCls(chars, a + b, COMMENT_CLAUDE_CONNECTOR_REM)
 }
 
 // relatedCard renders one child block: a header (label + file:line + relation
