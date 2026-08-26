@@ -157,6 +157,96 @@ test.describe('a comment-index item anchored to a real block', () => {
     await expect(items.first()).not.toContainText('a completely different remark')
   })
 
+  // Bug report: "ik zie rechts alleen de eerste warning van de 3 [...] als ik
+  // in de blokken index naar de 2e ga, wil ik rechts ook alleen de 2e zien".
+  // Two separate "Comments op regels" rows that resolve to the SAME anchor
+  // block (two AI-controle findings on different lines of one function) used
+  // to keep showing the FIRST one's thread after stepping to the second row:
+  // commentAnchorBlock resolves purely by file+label, so
+  // openCommentAnchorDrill's own "already open on this anchor, leave the
+  // cursor alone" guard fired on the SHARED block instead of on "this exact
+  // row was already selected", and state.drillCursor (which
+  // commentTarget()/commentUnder scope the visible comment down to) never
+  // moved to the second row's own line/unit.
+  //
+  // The anchor's own diff is mocked here (route on /api/code) so the two
+  // pinned rows land on two unambiguous, well-separated 'line' units,
+  // independent of whatever this fixture PR's real diff happens to contain.
+  test('switching between two rows anchored to the SAME block shows the newly selected one, not the first', async ({
+    page,
+  }) => {
+    const file = 'app/Http/Controllers/Api/ContractController.php'
+    const label = 'ContractController::index'
+    const oldText = Array.from({ length: 10 }, (_, i) => `line${i}`).join('\n')
+    const newLines = Array.from({ length: 10 }, (_, i) => `line${i}`)
+    newLines[1] = 'changedLineOne'
+    newLines[8] = 'changedLineTwo'
+    await page.route('**/api/code**', async (route) => {
+      const url = new URL(route.request().url())
+      if (url.searchParams.get('name') !== 'index') {
+        await route.fallback()
+        return
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          file,
+          old: { start: 1, end: 10, text: oldText },
+          new: { start: 1, end: 10, text: newLines.join('\n') },
+        }),
+      })
+    })
+
+    const bodyOne = 'eerste AI-risicowaarschuwing op regel een'
+    const bodyTwo = 'tweede AI-risicowaarschuwing op regel acht'
+    await mockAnchoredComment(
+      page,
+      { id: 'anchor-1', file, label, line: 2, body: bodyOne, source: 'ai', kind: '', gran: 'line', rowStart: 1, rowEnd: 1 },
+      [
+        {
+          id: 'anchor-2',
+          runId: 'run-anchor-2',
+          pr: 12903,
+          file,
+          label,
+          line: 9,
+          author: 'AI check',
+          body: bodyTwo,
+          createdAt: new Date().toISOString(),
+          reactionCount: 0,
+          status: 'open',
+          source: 'ai',
+          kind: '',
+          reactions: [],
+          gran: 'line',
+          rowStart: 8,
+          rowEnd: 8,
+        },
+      ],
+    )
+    await page.goto('/pr/12903')
+    await leaveSearchBox(page)
+
+    const rowOne = page.locator('[data-idx]').filter({ hasText: bodyOne })
+    const rowTwo = page.locator('[data-idx]').filter({ hasText: bodyTwo })
+    await rowOne.click()
+    await expect(page.getByTestId('comment-item').first()).toContainText(bodyOne)
+
+    await rowTwo.click()
+    const items = page.getByTestId('comment-item')
+    await expect(items).toHaveCount(1)
+    await expect(items.first()).toContainText(bodyTwo)
+    await expect(items.first()).not.toContainText(bodyOne)
+
+    // And back the other way, so this isn't just "the last one wins".
+    await rowOne.click()
+    await expect(items).toHaveCount(1)
+    await expect(items.first()).toContainText(bodyOne)
+    await expect(items.first()).not.toContainText(bodyTwo)
+  })
+
+
   // Bug report: "als ik een onderliggende code open doordat ik een comment
   // open dat het menu op de juiste blok zichtbaar is (niet in de parent)".
   // Enter on the comment-index row (still selected, not yet stepped in with

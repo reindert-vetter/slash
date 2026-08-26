@@ -2959,12 +2959,27 @@ function openCommentAnchorDrill(b) {
     closeCommentAnchorDrillIfOwned()
     return
   }
+  // sameComment — this exact comment-index ROW was already the one that
+  // opened the current drill, snapshotted BEFORE commentAnchorDrillFor is
+  // overwritten below. Deliberately not the same check as
+  // `state.drill[0] === anchor`: commentAnchorBlock resolves purely by
+  // file+label, so TWO DIFFERENT rows (two ai_warning findings on separate
+  // lines of the same function, say) resolve to the identical anchor
+  // object. Bug report: stepping from one "Comments op regels" row to a
+  // second row anchored to the same block kept showing the FIRST finding's
+  // thread on the right — `state.drillCursor` (which commentTarget()/
+  // commentUnder scope the visible comment down to) never moved to the
+  // second comment's own line, because the guard below used to fire on the
+  // shared anchor alone and skip the recompute.
+  const sameComment = commentAnchorDrillFor === b.id
   commentAnchorDrillFor = b.id
-  // Already open on this exact anchor (e.g. the comment-poll's 5s tick
+  // Already open on this exact SAME row (e.g. the comment-poll's 5s tick
   // reassigning cs.list, which can retrigger the state.selected watch — see
   // lastFiredSelectionRef above) — leave it alone so a granularity/viewMode
-  // change the reviewer just made inside it survives.
-  if (state.drill.length === 1 && state.drill[0] === anchor) return
+  // change the reviewer just made inside it survives. A different row that
+  // happens to share the same anchor block must still move the cursor (see
+  // sameComment above).
+  if (sameComment && state.drill.length === 1 && state.drill[0] === anchor) return
   state.drill = [anchor]
   state.drillCursor = [commentAnchorCursor(anchor, c)]
   state.focusLevel = 1

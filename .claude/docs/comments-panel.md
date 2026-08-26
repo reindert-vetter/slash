@@ -240,6 +240,28 @@ column IS the leading column" below); only the comment/Claude side is scoped
 down to this one thread. Test: "shows only its own comment, not another
 unrelated one on the same block" in `tests/comment-anchor-expanded-view.spec.mjs`.
 
+**Stepping to a SECOND row anchored to the same block must also move the
+cursor, not just `onlyIds`.** `commentAnchorBlock` resolves the anchor purely
+by `file`+`label`, so two different comment-index rows (two ai_warning
+findings on separate lines of one function is the common real case, see
+`anchoredWarning` in `code_warning.go`) resolve to the exact same anchor
+object. `openCommentAnchorDrill`'s own re-entrancy guard ("already open on
+this anchor, leave `state.drillCursor` alone so an in-progress
+granularity/viewMode change survives" — needed for the comment-poll's 5s tick
+retriggering the `state.selected` watch on the SAME row) used to compare only
+`state.drill[0] === anchor`, so it fired just as readily for a genuinely
+DIFFERENT row that merely shares that block — `state.drillCursor` then never
+moved to the new row's own unit, and `commentTarget()`/`commentUnder` kept
+scoping the panel to the FIRST row's comment forever, no matter which row was
+actually selected (reported: "ik zie rechts alleen de eerste warning van de
+3 [...] als ik naar de 2e ga, wil ik rechts ook de 2e zien"). Fixed by
+snapshotting `sameComment = commentAnchorDrillFor === b.id` **before**
+overwriting `commentAnchorDrillFor`, and gating the guard on `sameComment`
+too — a different row now always recomputes `state.drillCursor` even when it
+shares an anchor with the previously open row. Test: "switching between two
+rows anchored to the SAME block shows the newly selected one, not the first"
+in `tests/comment-anchor-expanded-view.spec.mjs`.
+
 **This opens automatically while merely walking ↑/↓ through the index — a
 later reviewer request restored that original behaviour after a brief
 detour where it required an explicit ArrowRight (don't reintroduce that
