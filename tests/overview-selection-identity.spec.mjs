@@ -80,6 +80,53 @@ test.describe('PR overview — keyboard selection tracks identity, not position'
       .toBe(true)
   })
 
+  test("clicking a row's popover open claims the selection ring, which then persists through a mouse-driven generate", async ({
+    page,
+  }) => {
+    await page.goto('/pr-overview')
+    await appReady(page)
+
+    const isSelected = (loc) => loc.evaluate((el) => el.classList.contains('ring-indigo-500/50'))
+
+    // A plain mouse click never went through move/moveTo, so the ring never
+    // appeared for a mouse-opened popover before this fix — only Enter (which
+    // steps the keyboard selection first) got it. Reviewer request: "laat
+    // item tijdens en na genereren geselecteerd, maar als ik iets anders wil
+    // doen niet".
+    let resolveIngest
+    const ingestDone = new Promise((resolve) => {
+      resolveIngest = resolve
+    })
+    await page.route('**/api/ingest', async (route) => {
+      await ingestDone
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' })
+    })
+
+    const row = page.locator('[data-testid="pr-row"][data-pr="12801"]')
+    await expect.poll(() => isSelected(row)).toBe(false)
+    await row.click()
+    await expect.poll(() => isSelected(row)).toBe(true)
+
+    // It survives the async, non-redirecting generate (the popover's own
+    // "Genereer review-boom" button) — during the busy state...
+    await page.locator('[data-testid="pr-popover"] [data-testid="generate-page"]').click()
+    await expect(page.locator('[data-testid="pr-popover"] [data-testid="generate-page"]')).toBeDisabled()
+    await expect.poll(() => isSelected(row)).toBe(true)
+
+    // ...and after it completes.
+    resolveIngest()
+    await expect(page.locator('[data-testid="pr-popover"] [data-testid="regenerate-page"]')).toBeVisible()
+    await expect.poll(() => isSelected(row)).toBe(true)
+
+    // Clicking a different row moves the ring off it — the "unless I want to
+    // do something else" half, which was already free from the existing
+    // click-a-different-row/hover/keyboard-step mechanisms.
+    const other = page.locator('[data-testid="pr-row"][data-pr="12888"]')
+    await other.click()
+    await expect.poll(() => isSelected(other)).toBe(true)
+    await expect.poll(() => isSelected(row)).toBe(false)
+  })
+
   test('the "Recent gegenereerd" drawer participates in ArrowDown once open, and closing it releases a selection inside it', async ({
     page,
   }) => {

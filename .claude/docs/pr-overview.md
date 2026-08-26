@@ -820,7 +820,21 @@ case.
 Every navigable row (`prRow` and `recentItem`) carries, alongside
 `data-nav-row`/`data-pr`, a stable `data-nav-key` — the same string as that row's
 arrow.js `.key(...)` (`"row:12903"`/`"recent:12903"`). `move`/`moveTo` set both
-`selIndex` and `selKey`; `paintSelection()` always first calls
+`selIndex` and `selKey`; **so does `togglePopover` on every OPEN** (mouse click
+or `Enter`, not just keyboard stepping) — a MOUSE-opened popover used to leave
+`selKey` untouched, so the ring never appeared for a mouse-driven "Genereer
+review-boom", during the busy state or after it finished (reviewer: "laat item
+tijdens en na genereren geselecteerd, maar als ik iets anders wil doen niet").
+`togglePopover` now claims the ring for the row it opens
+(`selKey = 'row:' + uid`), which then simply persists through the async
+`generatePage` — nothing in the generate/ingest-poll path touches `selKey` — and
+is released again for free by the SAME mechanisms that already reassign it: a
+`mouseenter` on a different row, clicking a different row (this same branch
+moves the ring there instead), a keyboard step, or focusing the search box. No
+new "release" logic was needed — only the "claim on open" half was missing.
+Test: `tests/overview-selection-identity.spec.mjs` ("clicking a row's popover
+open claims the selection ring").
+`paintSelection()` always first calls
 `reanchorSelection(rows)`, which **derives `selIndex` from `selKey`** against the
 `currentRows()` present at that moment: still there → the ring follows it to its
 (possibly shifted) position; genuinely gone → the selection is **released**

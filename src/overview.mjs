@@ -780,6 +780,20 @@ function togglePopover(uid) {
   // Enter never merely closes the menu; focusPopoverItem clamps, so a
   // popover with only that one item still focuses it.
   if (opening) {
+    // Claim the keyboard selection ring for the row being opened, exactly
+    // like `Enter` already gets it for free (Enter runs `move`/`moveTo`
+    // before `activateSelected()` clicks the row). Without this a MOUSE
+    // click never painted the ring at all, so a mouse-driven "Genereer
+    // review-boom" gave no visible "this is the row I'm working on" cue
+    // during/after the async ingest (reviewer request: "laat item tijdens
+    // en na genereren geselecteerd"). Nothing else needs to change to keep
+    // it released "as soon as I want to do something else" — hovering a
+    // different row, clicking a different row (this same branch moves the
+    // ring there), a keyboard step, or focusing the search box already
+    // reassign/clear `selKey` (see reanchorSelection/paintSelection below).
+    selKey = 'row:' + uid
+    hoverEnabled = false
+    paintSelection()
     requestAnimationFrame(() => {
       positionPopover(uid)
       focusPopoverItem(1)
