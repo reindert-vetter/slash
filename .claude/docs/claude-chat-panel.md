@@ -279,10 +279,11 @@ from either `'comment'` or `'thread'`, and one `←` returns directly to
 - **`↑`/`↓` on `cs.focus === 'claude'`**: walk the transcript exactly like
   `'thread'` walks reactions, via its own `cs.claudePos` cursor (mirrors
   `cs.threadPos`, 0 = composer, 1..n = the n-th turn from the bottom).
-- **`↓` at `cs.claudePos === 0`** steps into the chat's **own code blocks**
-  first (`cs.previewPos`, see "`↓` walks the chat's own code blocks" below) —
-  only once those are walked through (or when there are none) does the
-  "advance to the next block" behaviour below take over.
+- **`↓` at `cs.claudePos === 0`** steps into the "Ook bezig elders" rung
+  first (`cs.claudeTasksPos`, see the reorder note below), then the chat's
+  **own code blocks** (`cs.previewPos`, see "`↓` walks the chat's own code
+  blocks" below) — only once both are walked through (or when there is
+  neither) does the "advance to the next block" behaviour below take over.
 - **`↓` past the last code block** (nothing further to walk at all):
   **explicit request, deliberately NOT** the "↓ loopt door" convention
   `advanceFromComment` uses at the bottom of a comment thread — falling into
@@ -764,21 +765,59 @@ mechanism:
   represents a conversation that is genuinely running right now and must
   always show SOMETHING, unlike a label that can simply not exist.
 
-**Keyboard: a new nested rung at the END of the existing `'claude'` chain**
-(reviewer's own answer: "een nieuwe geneste stop in de nav-keten, die je
-bereikt na de laatste bestaande stap; daar doen ↑/↓ + Enter hun gewone werk"),
-not a new key or a parallel mode. `cs.claudeTasksPos` (0 = not there, 1..n =
-the n-th other task, top to bottom — mirrors `cs.previewPos`'s own counting)
-is reached by `↓` only once `cs.previewPos` has already walked through every
-code-preview card (or there were none) — i.e. exactly where `handleRelatedKey`
-used to fall straight into `exitRelated()`/`'advance'`. `↑` from
-`claudeTasksPos === 1` walks back onto the last code-preview card (or the
-composer, if there are none); `↓` past the last task still falls through to
-the pre-existing `exitRelated()`/`'advance'` exit — nothing about "↓ never
-dead-ends into Onderliggende code" (see "the chain, key by key" above)
-changes, this rung just sits one step earlier in that same walk. Highlight
-mirrors `claudeQuestionOptions`' own convention exactly: a ring **plus** a
-leading `› ` glyph, never colour alone.
+**Keyboard: a nested rung right below the composer, walked BEFORE the
+code-preview cards** (originally landed as "a new nested rung at the END of
+the existing `'claude'` chain", per the reviewer's own answer at the time:
+"een nieuwe geneste stop in de nav-keten, die je bereikt na de laatste
+bestaande stap; daar doen ↑/↓ + Enter hun gewone werk" — since **reordered**
+on a follow-up reviewer report, see the paragraph right below), not a new key
+or a parallel mode. `cs.claudeTasksPos` (0 = not there, 1..n = the n-th other
+task, top to bottom — mirrors `cs.previewPos`'s own counting) is reached by
+`↓` at the rest position **first**, before `cs.previewPos` starts walking the
+code-preview cards; `↑` from `claudeTasksPos === 1` walks back onto the
+composer (or, if `cs.previewPos` is itself mid-walk, that continues first —
+see the reorder note below). `↓` past the last task moves onto the first
+code-preview card (or, with none, falls through to the pre-existing
+`exitRelated()`/`'advance'` exit) — nothing about "↓ never dead-ends into
+Onderliggende code" (see "the chain, key by key" above) changes, only the
+relative order of these two rungs. Highlight mirrors `claudeQuestionOptions`'
+own convention exactly: a ring **plus** a leading `› ` glyph, never colour
+alone.
+
+**Reordered: "Ook bezig elders" now comes BEFORE the code-preview cards, not
+after.** Originally landed the other way around (`cs.previewPos` walked
+first, `cs.claudeTasksPos` only reachable once every code-preview card had
+been walked past) — reviewer report: *"ook elders bezig kan ik pas selecteren
+nadat ik gegenereerde codeblokken (van chat) naar beneden heb gedrukt. ik wil
+dat na de chat het [Ook bezig elders] geselecteerd [wordt], en pas als ik
+daarna naar beneden ga, het de gegenereerde codeblokken selecteert (en
+daarna onderliggende blokken)"* — i.e. the reachable order must match the
+on-screen order, where "Ook bezig elders" renders **above** the code-preview
+cards (see `CommentClaudeFooter`/`claude-other-tasks` above them in the DOM).
+Fixed by swapping the two `if` branches in `handleRelatedKey`'s `'claude'`
+case for both `ArrowDown` (walk `cs.claudeTasksPos` to completion before
+`cs.previewPos` starts) and, mirrored, `ArrowUp` (walk `cs.previewPos` back
+down to 0 before `cs.claudeTasksPos` starts unwinding — whichever rung `↓`
+visits LAST is the one `↑` leaves FIRST), plus `advanceFromComment`'s own
+entry point (↓ from the bottom of the last comment thread now also checks
+`otherRunningClaudeTasks().length > 0` before `codePreviewCount() > 0`).
+
+**A latent "two things active at once" bug surfaced by this reorder, fixed in
+the same change:** neither cursor was ever reset to 0 when the walk crossed
+from one rung into the other — each card's/row's own `data-active` binding
+(`CodePreviewPanel`'s `cs.previewPos === i + 1`, `claudeTaskRow`'s
+`cs.claudeTasksPos === i + 1`) only checks its OWN cursor, so a stale
+non-zero leftover on the rung just left kept its last item marked active
+too, alongside the newly active item in the other rung. Unnoticed before
+because no existing test combined "a unit with its own code-preview card"
+AND "another conversation running elsewhere in the same PR" in the same walk
+— see `tests/claude-other-tasks-before-codeblocks.spec.mjs`. Fix:
+`cs.claudeTasksPos` is explicitly zeroed the moment `cs.previewPos` starts
+moving (`ArrowDown`), and `cs.claudeTasksPos` is explicitly restored to
+`otherRunningClaudeTasks().length` (not read from a stale leftover) when
+`cs.previewPos` unwinds back past its first card (`ArrowUp`) — mirrors
+`codeFromClaudeTailPreviewPos`'s own "capture/restore explicitly, never trust
+a value you didn't just set" reasoning above.
 `selectHighlightedClaudeTask()`/`activateClaudeTask(c)` are Enter's/a click's
 shared action (`home.mjs`'s `onKeydown` calls the former right next to
 `selectHighlightedClaudeOption`, mirroring its own shape) — mouse-
@@ -3743,10 +3782,21 @@ one didn't exist anywhere in this app).
   those changed.
 - **This overrides the "no tussenstop" decision above**, on the reviewer's own
   explicit say-so: `↓` at `claudePos === 0` no longer advances to the next
-  block immediately, it advances only once the cards are walked through. The
-  reasoning behind the original decision is untouched — the
-  **Onderliggende-code** panel is still skipped entirely; only the chat's own
-  code blocks were added, and they sit visually right below the chat anyway.
+  block immediately, it advances only once the cards (and the tasks rung
+  below, see next bullet) are walked through. The reasoning behind the
+  original decision is untouched — the **Onderliggende-code** panel is still
+  skipped entirely; only the chat's own code blocks were added, and they sit
+  visually right below the chat anyway.
+- **`cs.claudeTasksPos` ("Ook bezig elders") is walked BEFORE `cs.previewPos`,
+  not after** — `↓` at the rest position reaches the "Ook bezig elders" rows
+  first (see "Where a turn on OTHER code is visible" below), then the
+  code-preview cards, matching the on-screen order: that block renders
+  **above** the code-preview cards, not below. It used to be the reverse
+  (cards first, tasks only reachable once every card had been walked past),
+  which read as "ik kan ook elders bezig pas selecteren nadat ik gegenereerde
+  codeblokken naar beneden heb gedrukt" — reported bug, fixed by swapping the
+  two rungs in `handleRelatedKey`'s `'claude'` branch (both `↓` and, mirrored,
+  `↑`) and in `advanceFromComment`'s own entry point.
 - **The highlighted card blurs the composer** (`focusPreviewCard`, the
   counterpart of `focusClaudeComposer`) so the CARD reads as focused, exactly
   like the options/transcript rungs already do, and scrolls it into view with

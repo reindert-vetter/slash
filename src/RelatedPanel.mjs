@@ -183,18 +183,24 @@ const cs = reactive({
   // while cs.focus === 'claude' (reviewer request: "als vanuit een claude
   // chat andere blokken zijn die te maken hebben met de chat, dan wil ik
   // daar doorheen kunnen gaan met mijn keys naar beneden en naar boven") —
-  // see handleRelatedKey's 'claude' branch. Deliberately NOT bound to the
-  // URL, like claudeOptionSel/chipPath above: cp.items is derived from the
-  // rendered DOM (recomputeCodePreviews' MutationObserver) rather than from
-  // loaded data, so restoring this would need its own re-apply pass in
-  // applyRelRestore for a purely ephemeral highlight.
+  // see handleRelatedKey's 'claude' branch. Reached only AFTER
+  // claudeTasksPos below has been walked through (or immediately if there
+  // are no other running tasks to show) — matching the on-screen order,
+  // where the "Ook bezig elders" block renders above these cards. Reviewer
+  // report: ↓ used to reach these cards BEFORE claudeTasksPos, so "Ook bezig
+  // elders" was only reachable after walking past every code block first.
+  // Deliberately NOT bound to the URL, like claudeOptionSel/chipPath above:
+  // cp.items is derived from the rendered DOM (recomputeCodePreviews'
+  // MutationObserver) rather than from loaded data, so restoring this would
+  // need its own re-apply pass in applyRelRestore for a purely ephemeral
+  // highlight.
   previewPos: 0,
-  // claudeTasksPos is previewPos's own follow-up rung, one level further down
-  // the SAME chain: 0 = not there, 1..n = the n-th OTHER running Claude
-  // conversation in this PR (top to bottom, mirrors previewPos' own
-  // top-to-bottom counting — reached only after previewPos has been walked
-  // through, or immediately if there are no code-preview cards at all — see
-  // handleRelatedKey's 'claude' branch and otherRunningClaudeTasks below).
+  // claudeTasksPos is the rung ABOVE previewPos in the SAME chain (↓ from the
+  // composer reaches this one FIRST): 0 = not there, 1..n = the n-th OTHER
+  // running Claude conversation in this PR (top to bottom, mirrors
+  // previewPos' own top-to-bottom counting — walked BEFORE previewPos, or
+  // immediately if there is no anchored comment yet — see handleRelatedKey's
+  // 'claude' branch and otherRunningClaudeTasks below).
   // Enter jumps to that conversation's own code/comment
   // (selectHighlightedClaudeTask). Deliberately NOT bound to the URL, same
   // reasoning as previewPos/claudeOptionSel: this walks other people's live,
@@ -1405,18 +1411,24 @@ export function enterCommentsTail() {
 // once there is no next conversation, continues on into the Onderliggende-
 // code panel instead of clamping (see keyboard-navigation.md: "↓ loopt door
 // naar het onderliggende-code-blok"). Reviewer request: when the unit's own
-// Claude conversation has code blocks (cp.items, walked by cs.previewPos —
-// see "↓ walks the chat's own code blocks" in claude-chat-panel.md), walk
-// those FIRST, exactly like ↓ already does from the chat's own rest
-// position — instead of skipping straight to Onderliggende code. This only
-// changes the ENTRY point: once inside 'claude', the existing previewPos/
-// claudePos handling in handleRelatedKey is unchanged (further ↓ keeps
-// walking the cards, then falls through exactly as it already does from
-// there).
+// Claude conversation has an "other running Claude tasks" rung or code
+// blocks of its own (otherRunningClaudeTasks / cp.items, walked by
+// cs.claudeTasksPos / cs.previewPos — see "↓ walks the chat's own code
+// blocks" in claude-chat-panel.md), walk those FIRST, exactly like ↓ already
+// does from the chat's own rest position (tasks before cards, matching their
+// on-screen order) — instead of skipping straight to Onderliggende code.
+// This only changes the ENTRY point: once inside 'claude', the existing
+// claudeTasksPos/previewPos/claudePos handling in handleRelatedKey is
+// unchanged (further ↓ keeps walking the rest of that chain, then falls
+// through exactly as it already does from there).
 function advanceFromComment() {
   if (selI() < visibleComments().length - 1) {
     cs.sel += 1
     toComment()
+  } else if (otherRunningClaudeTasks().length > 0) {
+    cs.focus = 'claude'
+    cs.claudeTasksPos = 1
+    focusClaudeTaskRow()
   } else if (codePreviewCount() > 0) {
     cs.focus = 'claude'
     cs.previewPos = 1
@@ -4747,12 +4759,16 @@ function applyRelRestore() {
 //    in both directions (reviewer request — not two disjoint modes); Enter
 //    while an option is highlighted sends it (selectHighlightedClaudeOption,
 //    home.mjs), exactly like clicking it. BELOW the composer the same chain
-//    continues DOWNWARD through the chat's own code blocks: ↓ at the rest
-//    position (claudePos === 0 && claudeOptionSel === 0) steps onto the first
-//    code-preview card (cs.previewPos 1..n, top to bottom — the cards stacked
-//    under this row, see CodePreviewPanel/CodePreview.mjs), ↑ walks them back
-//    up into the composer. Only ↓ past the LAST card (or ↓ at rest when there
-//    are no code blocks at all) still does NOT fall into the
+//    continues DOWNWARD through the "other running Claude tasks" rung, then
+//    the chat's own code blocks: ↓ at the rest position (claudePos === 0 &&
+//    claudeOptionSel === 0) first steps onto the "Ook bezig elders" rows
+//    (cs.claudeTasksPos 1..n, otherRunningClaudeTasks — see below), matching
+//    the on-screen order (that block renders ABOVE the code-preview cards),
+//    then onto the first code-preview card (cs.previewPos 1..n, top to
+//    bottom — the cards stacked under this row, see CodePreviewPanel/
+//    CodePreview.mjs); ↑ walks them back up, cards first, into the composer.
+//    Only ↓ past the LAST card (or ↓ at rest when there are neither other
+//    tasks nor code blocks at all) still does NOT fall into the
 //    Onderliggende-code panel (explicit request: that read as an unwanted
 //    extra "menu" in the way of continuing to review) — it releases the panel
 //    focus and returns the 'advance' sentinel so home.mjs's onKeydown can
@@ -4782,19 +4798,34 @@ export function handleRelatedKey(key) {
   }
   if (cs.focus === 'claude') {
     if (key === 'ArrowUp' && (cs.previewPos > 0 || cs.claudeTasksPos > 0)) {
-      // Walking the "other running Claude tasks" rung back up first (if we're
-      // in it — see otherRunningClaudeTasks/claudeTasksPos), then the
-      // code-preview cards, toward the composer (0 = the composer itself
-      // again, see cs.previewPos/cs.claudeTasksPos).
-      if (cs.claudeTasksPos > 0) {
-        cs.claudeTasksPos -= 1
-        if (cs.claudeTasksPos > 0) focusClaudeTaskRow()
-        else if (codePreviewCount() > 0) focusPreviewCard()
-        else focusClaudeComposer()
-      } else {
+      // Walking the code-preview cards back up first (if we're in them — see
+      // cs.previewPos), then the "other running Claude tasks" rung (see
+      // otherRunningClaudeTasks/claudeTasksPos), toward the composer (0 = the
+      // composer itself again). Mirrors the ArrowDown order below: whichever
+      // rung ↓ visits LAST is the one ↑ leaves FIRST. cs.claudeTasksPos is
+      // kept at 0 for the entire time cs.previewPos > 0 (see the ArrowDown
+      // branch's own reset), so leaving the LAST card must explicitly
+      // restore it to the tail of the tasks rung (otherRunningClaudeTasks()
+      // .length) rather than reading a stale value — mirrors
+      // codeFromClaudeTailPreviewPos's own "don't trust a value you didn't
+      // just set" reasoning.
+      if (cs.previewPos > 0) {
         cs.previewPos -= 1
-        if (cs.previewPos === 0) focusClaudeComposer()
-        else focusPreviewCard()
+        if (cs.previewPos > 0) {
+          focusPreviewCard()
+        } else {
+          const tasks = otherRunningClaudeTasks()
+          if (tasks.length > 0) {
+            cs.claudeTasksPos = tasks.length
+            focusClaudeTaskRow()
+          } else {
+            focusClaudeComposer()
+          }
+        }
+      } else {
+        cs.claudeTasksPos -= 1
+        if (cs.claudeTasksPos === 0) focusClaudeComposer()
+        else focusClaudeTaskRow()
       }
       return true
     }
@@ -4802,22 +4833,29 @@ export function handleRelatedKey(key) {
       key === 'ArrowDown' &&
       (cs.previewPos > 0 || cs.claudeTasksPos > 0 || (cs.claudePos === 0 && cs.claudeOptionSel === 0))
     ) {
-      // The chat's own code blocks are the next rung below the composer: ↓
-      // walks them top to bottom. Past the LAST one, the "other running
-      // Claude tasks" rung (otherRunningClaudeTasks, PR-wide) takes over —
-      // titles only, Enter jumps via selectHighlightedClaudeTask — and only
-      // once THAT is exhausted (or there was nothing to walk there either)
-      // does the "advance to the next block" exit below take over (see the
-      // doc comment above).
-      if (cs.previewPos < codePreviewCount()) {
-        cs.previewPos += 1
-        focusPreviewCard()
-        return true
-      }
+      // The "other running Claude tasks" rung is the next rung below the
+      // composer (reviewer request: it should be reachable before the code
+      // blocks, matching its on-screen position ABOVE the code-preview
+      // cards) — ↓ walks it top to bottom. Only once THAT is exhausted (or
+      // there was nothing to walk there at all) does ↓ move onto this chat's
+      // own code-preview cards (cs.previewPos), and only past the LAST one of
+      // those does the "advance to the next block" exit below take over (see
+      // the doc comment above). cs.claudeTasksPos is reset to 0 the moment
+      // cs.previewPos starts moving — the two are mutually exclusive (each
+      // card's/row's own `data-active` binding keys off its OWN cursor being
+      // non-zero, see CodePreviewPanel/claudeTaskRow), so a stale non-zero
+      // leftover would otherwise keep the last task row marked active at the
+      // same time as a code-preview card.
       const tasks = otherRunningClaudeTasks()
       if (cs.claudeTasksPos < tasks.length) {
         cs.claudeTasksPos += 1
         focusClaudeTaskRow()
+        return true
+      }
+      if (cs.previewPos < codePreviewCount()) {
+        cs.claudeTasksPos = 0
+        cs.previewPos += 1
+        focusPreviewCard()
         return true
       }
       cs.previewPos = 0
