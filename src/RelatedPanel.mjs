@@ -8520,7 +8520,16 @@ function relatedCard(r, i, drill) {
           ${() => categoryBadge(r)}
           ${() => leftStatusBadge(r)}
           ${() => memberStatusBadge(r)}
-          <span class="min-w-0 flex-1 truncate font-mono text-xs font-semibold text-slate-700 dark:text-zinc-300">${r.label}</span>
+          <span class="min-w-0 flex-1 truncate font-mono text-xs font-semibold text-slate-700 dark:text-zinc-300">${
+            // A translation leaf's dot-path key now sits once in a shared
+            // heading above the card (see translationKeyHeading below), so
+            // this title only needs the locale word — repeating the key here
+            // too would just duplicate it. Every other kind keeps its usual
+            // label. Plain value, not a function: r is a snapshot descriptor
+            // rebuilt fresh per render (see the card's own .key(...)), not a
+            // reactive object.
+            r.kind === 'translation' ? r.locale || r.label : r.label
+          }</span>
           ${() =>
             KIND_LABEL[r.kind]
               ? html`<span
@@ -8562,6 +8571,62 @@ function relatedCard(r, i, drill) {
                   </p>`}
     </div>
     ${() => (!collapsed() && nested.length ? nestedChipColumn([r], nested, drill, [], i) : '')}
+    </div>
+  `
+}
+
+// relatedCardKey builds the same reuse-safe key relatedCard's own render slot
+// used to build inline — extracted so translationGroupRow (below) can key
+// each half of a paired row identically to a standalone card. See the doc
+// comment at the render loop for why every part of this matters (arrow.js
+// keyed-node-reuse pitfalls).
+function relatedCardKey(r) {
+  return 'related:' + r.id + ':' + (r.code ? 'code' : r.loading ? 'load' : 'empty') + ':n' + (r.nestedSig || '')
+}
+
+// translationKeyHeading renders a translation child's Laravel dot-path
+// (r.transKey, e.g. "includes.orders.billing") ONCE, above its card(s) —
+// see translationGroupRow below. Plain string interpolation: transKey is
+// static per descriptor, not itself reactive.
+function translationKeyHeading(key) {
+  return html`<p
+    class="mb-1 truncate font-mono text-[10px] font-semibold text-slate-500 dark:text-zinc-400"
+    data-testid="related-translation-key"
+    title="${key}"
+  >
+    ${key}
+  </p>`
+}
+
+// translationGroupRow renders every translation child that shares one
+// transKey (`group`, an array of {r, i} — see the render loop below, which
+// only ever calls this for 1+ items) as ONE visual row: the dot-path key
+// once on top (translationKeyHeading), then the card(s) side by side, each
+// taking an even share of the row's width (flex-1 on a plain min-w-0
+// wrapper — relatedCard's own returned root carries no width class of its
+// own) with a dotted vertical divider between them (divide-x divide-dotted —
+// "dot streepjes als verticale verdeler", reviewer request). A lone,
+// unpaired translation child (group.length === 1) still gets the shared
+// heading, just alone at full width — see .claude/docs/underlying-code.md,
+// "Translation children: en/nl paired side by side".
+//
+// Each card keeps its OWN, unchanged index `i` from `ks` (home.mjs already
+// interleaves same-key translation siblings adjacently — see
+// interleaveTranslationSiblings — precisely so this visual left-to-right
+// order matches cs.codeSel's ↓/↑ walk order): selected()/collapsed()/
+// data-active inside relatedCard keep working exactly as for any other card,
+// nothing here renumbers them.
+function translationGroupRow(group, drill) {
+  return html`
+    <div class="contents">
+      ${() => translationKeyHeading(group[0].r.transKey)}
+      <div class="flex items-start divide-x divide-dotted divide-slate-300 dark:divide-zinc-700">
+        ${group.map(({ r, i }) =>
+          html`<div class="min-w-0 flex-1 px-3 first:pl-0 last:pr-0">${() => relatedCard(r, i, drill)}</div>`.key(
+            relatedCardKey(r),
+          ),
+        )}
+      </div>
     </div>
   `
 }
@@ -9228,41 +9293,58 @@ export default function RelatedPanel(state, commentTarget, search) {
       >
         ${() => coversWarning()}
         ${() => {
-          // All children render as one flat vertical list, full width, in order.
+          // All children render as one flat vertical list, full width, in
+          // order — EXCEPT translation children of the same transKey, which
+          // group into a single side-by-side row (translationGroupRow, added
+          // for "de translations blokjes rechts, dat mag de helft smaller
+          // zodat de engelse links kan en rechts de nederlandse van dezelfde
+          // key, gooi daar dot streepjes als verticale verdeler"). home.mjs'
+          // interleaveTranslationSiblings already sorted same-key translation
+          // children adjacently, so grouping only ever needs to look at
+          // immediate neighbours — no lookahead beyond one run.
           const ks = kids()
-          return ks.length === 0
-            ? html`<p class="px-1 py-2 text-[11px] text-slate-400 dark:text-zinc-500">Geen onderliggende code.</p>`
-            : ks.map((r, i) =>
-                // The key encodes the code-load state (load/code/empty) next to
-                // the child id — the block-card precedent from conventions.md:
-                // arrow.js reuses a keyed node via move+patch WITHOUT re-running
-                // its function bindings against the fresh descriptor object, so
-                // without this the "code laden…" → code/"geen code gevonden"
-                // transition can freeze on the old closure. The tests-group bar
-                // key encodes open/closed + the grouped test ids instead, so a
-                // toggle (or a changed test set) always builds a fresh node.
-                // The card key also carries the recursive nested drill-hint
-                // signature (r.nestedSig, precomputed by home.mjs'
-                // nestedChangedKids/nestedSigOf — every id/status/diff/
-                // approval anywhere in the chip subtree, not just the direct
-                // children): any change at any depth must flip the key to
-                // build a fresh node.
-                r.kind === 'tests_group'
-                  ? testsBar(r, i, drill).key(
-                      'tests-group:' +
-                        (r.expanded ? 'open' : 'closed') +
-                        ':' +
-                        r.tests.map((t) => t.id).join('|'),
-                    )
-                  : relatedCard(r, i, drill).key(
-                      'related:' +
-                        r.id +
-                        ':' +
-                        (r.code ? 'code' : r.loading ? 'load' : 'empty') +
-                        ':n' +
-                        (r.nestedSig || ''),
-                    ),
+          if (ks.length === 0)
+            return html`<p class="px-1 py-2 text-[11px] text-slate-400 dark:text-zinc-500">Geen onderliggende code.</p>`
+          const rows = []
+          for (let i = 0; i < ks.length; ) {
+            const r = ks[i]
+            if (r.kind === 'translation') {
+              let j = i + 1
+              while (j < ks.length && ks[j].kind === 'translation' && ks[j].transKey === r.transKey) j++
+              const group = []
+              for (let k = i; k < j; k++) group.push({ r: ks[k], i: k })
+              rows.push(
+                translationGroupRow(group, drill).key(
+                  'related-trans:' + group.map(({ r: gr }) => relatedCardKey(gr)).join('|'),
+                ),
               )
+              i = j
+              continue
+            }
+            // The key encodes the code-load state (load/code/empty) next to
+            // the child id — the block-card precedent from conventions.md:
+            // arrow.js reuses a keyed node via move+patch WITHOUT re-running
+            // its function bindings against the fresh descriptor object, so
+            // without this the "code laden…" → code/"geen code gevonden"
+            // transition can freeze on the old closure. The tests-group bar
+            // key encodes open/closed + the grouped test ids instead, so a
+            // toggle (or a changed test set) always builds a fresh node.
+            // The card key also carries the recursive nested drill-hint
+            // signature (r.nestedSig, precomputed by home.mjs'
+            // nestedChangedKids/nestedSigOf — every id/status/diff/
+            // approval anywhere in the chip subtree, not just the direct
+            // children): any change at any depth must flip the key to
+            // build a fresh node.
+            rows.push(
+              r.kind === 'tests_group'
+                ? testsBar(r, i, drill).key(
+                    'tests-group:' + (r.expanded ? 'open' : 'closed') + ':' + r.tests.map((t) => t.id).join('|'),
+                  )
+                : relatedCard(r, i, drill).key(relatedCardKey(r)),
+            )
+            i++
+          }
+          return rows
         }}
       </div>
     </section>

@@ -995,6 +995,53 @@ changed method purely on source order. A child whose code hasn't arrived counts 
 `size 0` and sinks until it loads; equal prio+size keeps source order (stable
 sort). Block-level listener children drop out at `line`/`call`.
 
+## Translation children: en/nl paired side by side
+
+Reviewer request: "de translations blokjes rechts, dat mag de helft smaller
+zodat de engelse links kan en rechts de nederlandse van dezelfde key, gooi
+daar dot streepjes als verticale verdeler." Every `kind:'translation'` child
+of the same `transKey` (one per locale, `resolvedCallChildren`, `home.mjs`)
+now renders as ONE row instead of stacking as separate full-width cards: the
+Laravel dot-path (`transKey`, e.g. `includes.orders.billing`) sits ONCE in a
+shared heading above (`translationKeyHeading`, `data-testid=
+related-translation-key`) — no longer repeated per card's own title, which
+now shows only the locale word (`en`/`nl`) — and the card(s) sit side by side
+below it, each an even share of the row's width (plain `min-w-0 flex-1`
+wrappers, `relatedCard` itself carries no width class), separated by a
+dotted vertical line (`divide-x divide-dotted`). A key with only one locale
+(no partner found) still gets the shared heading, just alone at full width —
+deliberately consistent rather than a special case. `translationGroupRow`
+(`RelatedPanel.mjs`) builds the row; every other child kind (relation/call/
+covers/class-member/config/…) is completely unaffected.
+
+**Ordering, and why it had to move too:** the resolver/sort above emits
+translation children grouped by LOCALE first (every `en` key, then every
+`nl` key) — fine for a flat vertical stack, wrong once same-key siblings sit
+side by side, because the panel cursor (`cs.codeSel`) still walks `rc.children`
+in that exact array order. `interleaveTranslationSiblings` (`home.mjs`,
+called at the end of `relatedChildren`, right before `groupTestChildren`)
+re-groups translation entries so same-`transKey` siblings become ADJACENT
+(`en` first, other locales alphabetical) — a no-op below 2 translation
+children, and every non-translation child keeps its original position. This
+is what makes `↓`/`↑` land where the reviewer would expect: stepping past the
+`en` card selects the `nl` card drawn right next to it, not a different row's
+sibling further down the list.
+
+**The panel cursor itself needed no change at all.** `RelatedPanel`'s render
+loop (`RelatedPanel.mjs`, the default export) walks `kids()` once and groups
+a RUN of consecutive same-`transKey` translation entries into one
+`translationGroupRow(...)` call — but every card inside keeps its OWN,
+unrenumbered index `i` from that same array, so `selected()`/`collapsed()`/
+`data-active`/`data-child-id` inside `relatedCard` work exactly as for any
+other child: `cs.codeSel` still indexes `rc.children` 1-to-1 (see "The card
+looked fine…" above and `.claude/rules/conventions.md`'s snapshot-by-id
+rule — the reorder happens once, in `home.mjs`, before the list is pushed,
+never as a render-time renumbering). Nested drill-hint chips never apply here
+(a translation leaf's own `nested` is always `[]`), so `nestedChipColumn`
+needed no change.
+
+Tests: `tests/translation.spec.mjs`, `tests/related-translation-enum-scope.spec.mjs`.
+
 ## Reactivity: the list is pushed, not computed in a binding
 
 The child list is computed in a `watch` in `home.mjs` and pushed into the panel via

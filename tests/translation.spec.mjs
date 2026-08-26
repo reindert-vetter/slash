@@ -41,15 +41,38 @@ test.describe('PR Review Tree — translation blocks & trans() children', () => 
     // Two keys × two locales = four translation children.
     await expect(items).toHaveCount(4)
 
-    const nlFoo = items.filter({ hasText: 'nl · checkout.foo' })
+    // The dot-path key now sits once, in a shared heading above each en/nl
+    // pair (translationGroupRow, RelatedPanel.mjs) — not repeated per card.
+    const keyHeadings = page.getByTestId('related-translation-key')
+    await expect(keyHeadings).toHaveCount(2)
+    await expect(keyHeadings.filter({ hasText: 'checkout.foo' })).toHaveCount(1)
+    await expect(keyHeadings.filter({ hasText: 'checkout.only_nl' })).toHaveCount(1)
+
+    // Each card's own title is now just the locale word. Located via
+    // data-child-id (which carries the translation:<locale>:<key> callKey)
+    // rather than hasText: every leaf card's "Alleen bekijken" eye-icon
+    // <title> already contains the substring "en" (bekijk-EN), so a plain
+    // hasText:'en' filter matches BOTH locale cards.
+    const fooRow = keyHeadings.filter({ hasText: 'checkout.foo' }).locator('xpath=following-sibling::div[1]')
+    const nlFoo = fooRow.locator('[data-child-id*="translation:nl:checkout.foo"]')
     await expect(nlFoo).toContainText('nieuw')
     await expect(nlFoo.getByText('vertaling', { exact: true })).toBeVisible()
 
-    const enFoo = items.filter({ hasText: 'en · checkout.foo' })
+    const enFoo = fooRow.locator('[data-child-id*="translation:en:checkout.foo"]')
     await expect(enFoo).toContainText('new-en')
 
     // only_nl exists in nl but not en → the en child renders the missing marker.
-    const enMissing = items.filter({ hasText: 'en · checkout.only_nl' })
+    const onlyNlRow = keyHeadings.filter({ hasText: 'checkout.only_nl' }).locator('xpath=following-sibling::div[1]')
+    const enMissing = onlyNlRow.locator('[data-child-id*="translation:en:checkout.only_nl"]')
     await expect(enMissing.getByTestId('translation-missing')).toContainText('ontbreekt in en')
+
+    // The en/nl pair sits side by side (same row), not stacked — each half
+    // takes roughly the row's width, with a dotted vertical divider between.
+    const fooBox = await fooRow.boundingBox()
+    const nlBox = await nlFoo.boundingBox()
+    const enBox = await enFoo.boundingBox()
+    expect(Math.abs(nlBox.y - enBox.y)).toBeLessThan(5)
+    expect(nlBox.width).toBeLessThan(fooBox.width * 0.6)
+    expect(enBox.width).toBeLessThan(fooBox.width * 0.6)
   })
 })

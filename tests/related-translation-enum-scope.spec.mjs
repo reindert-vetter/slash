@@ -21,10 +21,26 @@ test.describe('a translation child resolved from an enum case still scopes to it
     await expect(items).toHaveCount(4)
     await expect(page.getByText('Geen onderliggende code.')).toHaveCount(0)
 
-    const nlBilling = items.filter({ hasText: 'nl · includes.orders.billing' })
+    // The dot-path key sits once, in a shared heading above each en/nl pair
+    // (translationGroupRow, RelatedPanel.mjs) — not repeated per card.
+    const keyHeadings = page.getByTestId('related-translation-key')
+    await expect(keyHeadings.filter({ hasText: 'includes.orders.billing' })).toHaveCount(1)
+    await expect(keyHeadings.filter({ hasText: 'includes.orders.items' })).toHaveCount(1)
+
+    // Located via data-child-id (translation:<locale>:<key>), not hasText:
+    // every leaf card's "Alleen bekijken" eye-icon <title> already contains
+    // the substring "en" (bekijk-EN), so a plain hasText:'en' filter matches
+    // both locale cards.
+    const billingRow = keyHeadings
+      .filter({ hasText: 'includes.orders.billing' })
+      .locator('xpath=following-sibling::div[1]')
+    const nlBilling = billingRow.locator('[data-child-id*="translation:nl:includes.orders.billing"]')
     await expect(nlBilling).toContainText('Facturatiegegevens')
 
-    const enItems = items.filter({ hasText: 'en · includes.orders.items' })
+    const itemsRow = keyHeadings
+      .filter({ hasText: 'includes.orders.items' })
+      .locator('xpath=following-sibling::div[1]')
+    const enItems = itemsRow.locator('[data-child-id*="translation:en:includes.orders.items"]')
     await expect(enItems).toContainText('Order lines')
   })
 })

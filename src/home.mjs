@@ -5573,7 +5573,56 @@ function relatedChildren(b) {
   // non-'group' granularity, where the call/line hiding above already ran)
   // every groupTier is a no-op 0, so this filter is itself a no-op there.
   if (range) sorted = sorted.filter((c) => (c.groupTier || 0) === 0)
+  sorted = interleaveTranslationSiblings(sorted)
   return groupTestChildren(b, sorted)
+}
+
+// interleaveTranslationSiblings makes the translation children (kind:
+// 'translation', one per locale of the same key, see resolvedCallChildren)
+// of the SAME transKey sit ADJACENT in the list — the resolver/sort above
+// emits them grouped by locale instead (every 'en' key, then every 'nl' key),
+// which used to read fine as a flat vertical stack but is wrong once
+// RelatedPanel renders same-key siblings side by side (see
+// .claude/docs/underlying-code.md, "Translation children: en/nl paired side
+// by side"): the panel cursor (cs.codeSel) walks this SAME array in order, so
+// the visual left/right pairing must match ↓/↑'s own order, or stepping past
+// the last 'en' card would jump to a DIFFERENT row's 'nl' card instead of the
+// one drawn right next to it. Groups by transKey, keeping the first-seen key
+// order; within a group 'en' sorts first, the rest alphabetically by locale
+// (stable otherwise). A no-op (returns `sorted` unchanged) whenever there are
+// fewer than 2 translation children, or none at all.
+function interleaveTranslationSiblings(sorted) {
+  const transIdx = []
+  for (let i = 0; i < sorted.length; i++) if (sorted[i].kind === 'translation') transIdx.push(i)
+  if (transIdx.length < 2) return sorted
+  const byKey = new Map()
+  for (const i of transIdx) {
+    const c = sorted[i]
+    if (!byKey.has(c.transKey)) byKey.set(c.transKey, [])
+    byKey.get(c.transKey).push(c)
+  }
+  const ordered = []
+  for (const items of byKey.values()) {
+    items.sort((a, b) => {
+      if (a.locale === 'en' && b.locale !== 'en') return -1
+      if (b.locale === 'en' && a.locale !== 'en') return 1
+      return (a.locale || '').localeCompare(b.locale || '')
+    })
+    ordered.push(...items)
+  }
+  const result = []
+  let spliced = false
+  for (let i = 0; i < sorted.length; i++) {
+    if (sorted[i].kind === 'translation') {
+      if (!spliced) {
+        result.push(...ordered)
+        spliced = true
+      }
+    } else {
+      result.push(sorted[i])
+    }
+  }
+  return result
 }
 
 // groupTestChildren collapses the covering tests (kind covered_by — the tests
