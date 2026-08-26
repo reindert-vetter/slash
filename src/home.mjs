@@ -1095,16 +1095,12 @@ function isModifiedKey(e) {
 // isEditableFocused() fallback further down already lets an unmodified,
 // unclaimed key flow into the field; only relatedActive()'s and
 // state.searchActive's own arrow branches sat in front of it and swallowed a
-// modified arrow as navigation.
-//
-// `!e.navRemap` is the one exemption: the Cmd+[ / Cmd+] remap at the top of
-// onKeydown recurses with a synthetic event carrying that marker (plus the
-// original metaKey/ctrlKey, which several branches below still read), and that
-// chord must keep driving the nav chain even mid-text — a native Cmd+[/] is
-// history back/forward, never a caret move. See "Cmd+[ / Cmd+]" in
+// modified arrow as navigation. The Cmd+[ / Cmd+] history back/forward chord
+// (top of onKeydown) is checked BEFORE this guard and returns on its own, so
+// it never reaches here regardless of focus — see "Cmd+[ / Cmd+]" in
 // .claude/docs/keyboard-navigation.md.
 function isNativeTextEditKey(e) {
-  return isModifiedKey(e) && !e.navRemap && isEditableFocused()
+  return isModifiedKey(e) && isEditableFocused()
 }
 
 // editableCaretCanMoveLeft reports whether a focused text field's caret sits
@@ -12783,54 +12779,33 @@ function rightClickMenuMode() {
 }
 
 function onKeydown(e) {
-  // Cmd+[ / Cmd+] (reviewer request) are a plain remap onto ArrowLeft/
-  // ArrowRight — checked FIRST, before every other branch, so the rest of
-  // this function (and every helper it calls) never needs to know these keys
-  // exist: build a minimal event-like object with `key` swapped and recurse
-  // into this same function. The remapped object still carries the real
-  // `metaKey`/`ctrlKey`, so `isModifiedKey(e)` — used further down to bypass
-  // the caret-in-text-field exception, see editableCaretCanMoveLeft/Right's
-  // own callers — still reports "modified" for it, which is exactly why
-  // Cmd+[/] always navigates instead of respecting a caret's own position
-  // like a plain ArrowLeft/ArrowRight would. `preventDefault` is a no-op here
-  // (nothing browser-native to cancel for a plain object) — the ORIGINAL
-  // event still gets prevented right below, so the browser's own Cmd+[/]
-  // history-navigation shortcut is suppressed regardless of which nested
-  // branch ends up handling the remapped key.
+  // Cmd+[ / Cmd+] (reviewer request, reversing an earlier remap onto the
+  // custom nav chain) drive REAL browser history back/forward — checked
+  // FIRST, before every other branch, so it works regardless of which
+  // stop/field currently owns the keyboard, same as the browser's own native
+  // binding would. Note the app writes its own navigation position with
+  // `history.replaceState` (see urlState.mjs / the URL-state section of
+  // CLAUDE.md), never `pushState`, so `history.back()` does not step through
+  // the ←/→ nav chain — it jumps to whichever real page load preceded this
+  // one (e.g. back to /pr-overview, or an earlier /pr/<id>), and is a no-op
+  // when there is none. That is deliberate: "the previous URL" means exactly
+  // that, not a step in the in-page nav chain.
   //
-  // `!e.shiftKey` (reviewer request, follow-up): Shift+Cmd+[/] is deliberately
-  // EXCLUDED from this remap and falls straight through — no preventDefault,
-  // no recursion — so the browser's own native Shift+Cmd+[/] (tab-switching in
-  // Chrome/Safari on Mac) keeps working. Before this, the guard didn't check
-  // shift at all, so Shift+Cmd+[/] silently drove the same custom nav as a
-  // kale Cmd+[/] — which, combined with kale Cmd+[/] sometimes being consumed
-  // at the OS/browser level before it reaches this handler (a Safari
-  // history-back quirk that preventDefault can't undo), is why the reviewer
-  // only ever saw the custom nav fire via the shift chord in practice.
+  // `!e.shiftKey`: Shift+Cmd+[/] is deliberately EXCLUDED and falls straight
+  // through — no preventDefault — so the browser's own native Shift+Cmd+[/]
+  // (tab-switching in Chrome/Safari on Mac) keeps working.
   if (isModifiedKey(e) && !e.shiftKey && (e.key === '[' || e.key === ']')) {
     e.preventDefault()
-    onKeydown({
-      key: e.key === '[' ? 'ArrowLeft' : 'ArrowRight',
-      shiftKey: e.shiftKey,
-      metaKey: e.metaKey,
-      ctrlKey: e.ctrlKey,
-      // Marks this as the remap's own synthetic event, exempting it from the
-      // isNativeTextEditKey() guard right below — without it the recursed
-      // call would be treated as a native in-field Cmd chord and returned,
-      // and Cmd+[ would stop exiting a composer mid-text.
-      navRemap: true,
-      target: e.target,
-      preventDefault: () => {},
-      stopPropagation: () => e.stopPropagation(),
-    })
+    if (e.key === '[') history.back()
+    else history.forward()
     return
   }
 
   // A Cmd/Ctrl chord while a text field holds DOM focus is a native caret /
   // selection / editing command — leave it to the browser, whatever the
   // review tree binds that key to. Checked here, right after the Cmd+[/]
-  // remap (whose synthetic event is exempt, see navRemap above) and before
-  // every other branch, so no individual branch has to repeat it.
+  // remap above, and before every other branch, so no individual branch has
+  // to repeat it.
   if (isNativeTextEditKey(e)) return
 
   // While the image lightbox is open it owns the keyboard completely — →/←

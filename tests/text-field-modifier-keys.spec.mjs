@@ -54,6 +54,7 @@ test.describe('Cmd/Ctrl chords stay native inside a text field', () => {
   })
 
   test('a plain ArrowLeft still moves the caret, and Meta+[ still exits mid-text', async ({ page }) => {
+    await page.goto('/pr-overview')
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
     await page.locator('[data-idx="1"]').click()
@@ -67,10 +68,12 @@ test.describe('Cmd/Ctrl chords stay native inside a text field', () => {
     await expect(composer).toBeFocused()
     expect(await composer.evaluate((el) => el.selectionStart)).toBe(10)
 
-    // The navRemap exemption: Cmd+[ carries metaKey too, but it is app
-    // navigation rather than a native editing shortcut, so it must still
-    // leave the composer even with the caret mid-text.
+    // Cmd+[ carries metaKey too, but it drives a real browser history-back
+    // navigation (see .claude/docs/keyboard-navigation.md, "Cmd+[ / Cmd+] ...
+    // real browser back/forward"), checked before isNativeTextEditKey, so it
+    // must still act even with the caret mid-text in the composer.
     await page.keyboard.press('Meta+[')
     await expect(composer).toHaveCount(0)
+    await expect(page).toHaveURL(/\/pr-overview$/)
   })
 })

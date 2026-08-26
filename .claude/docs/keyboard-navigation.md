@@ -251,34 +251,36 @@ Transitions, and how they differ from the older per-mechanism behaviour:
 - `state.showDescription` deliberately lives **outside** the URL — ephemeral
   cursor state, not a navigation position worth restoring.
 
-### `Cmd+[` / `Cmd+]` (Mac) — `Ctrl+[` / `Ctrl+]` elsewhere — remap onto `←`/`→`
+### `Cmd+[` / `Cmd+]` (Mac) — `Ctrl+[` / `Ctrl+]` elsewhere — real browser back/forward
 
-Reviewer request for a chord that works regardless of which stop/field
-currently owns the keyboard. `onKeydown` (`home.mjs`) checks
+Reviewer request, **reversing an earlier version of this chord** that used to
+remap onto the `←`/`→` nav chain. `onKeydown` (`home.mjs`) checks
 `isModifiedKey(e) && !e.shiftKey && (e.key === '[' || e.key === ']')` **first,
-before every other branch**, and recurses into itself with a minimal object
-whose `key` is swapped to `'ArrowLeft'`/`'ArrowRight'` — so it is not a second,
-parallel nav mechanism, it runs the exact same `←`/`→` logic described in this
-whole section, stop for stop.
+before every other branch**, `preventDefault`s the key, and calls
+`history.back()` (`[`) / `history.forward()` (`]`) directly — a real browser
+history navigation, not a step through this section's nav chain.
+
+**Load-bearing consequence, not a bug:** the app writes its own navigation
+position with `history.replaceState` (`urlState.mjs`, see the URL-state
+section of `CLAUDE.md`), never `pushState` — in-page navigation (selecting a
+block, stepping a change group, drilling, …) never adds a browser-history
+entry. So `history.back()` does **not** undo one nav-chain step; it jumps to
+whichever real page load preceded the current one (e.g. back to
+`/pr-overview`, or an earlier `/pr/<id>`), and is a no-op with nothing to
+land on (a bookmarked `/pr/<id>` opened directly, or the first tab of a
+session). That is exactly "the previous URL" the reviewer asked for, as
+opposed to the old nav-chain remap.
 
 **`Shift+Cmd+[` / `Shift+Cmd+]` are deliberately excluded** (reviewer
-follow-up request) and fall straight through this whole function untouched —
-no `preventDefault`, no recursion — so the browser's own native
+follow-up request, unchanged by this reversal) and fall straight through this
+whole function untouched — no `preventDefault` — so the browser's own native
 Shift+Cmd+[/] (tab-switching in Chrome/Safari on Mac) keeps working. Only the
-**kale** `Cmd+[`/`Cmd+]` (no Shift) drives the custom nav now.
+**kale** `Cmd+[`/`Cmd+]` (no Shift) triggers history back/forward.
 
-**One deliberate difference from a plain `←`/`→`:** inside a comment/reply/
-Claude-chat text field, an ordinary `ArrowLeft`/`ArrowRight` defers to the
-caret (`editableCaretCanMoveLeft`/`Right` in `relatedActive()`'s branch) —
-`Cmd+[`/`Cmd+]` never does. Native browsers bind `Cmd+[`/`Cmd+]` to
-history back/forward, never to caret movement, so there is no existing
-in-field meaning to preserve; `isModifiedKey(e)` (still true on the recursed
-object, since it carries the original `metaKey`/`ctrlKey`) short-circuits that
-one exception, so the chord always drives the nav chain, even mid-text. The
-recursed object additionally carries **`navRemap: true`**, which exempts it
-from the in-field Cmd guard described right below — without that marker the
-guard would return on the recursed call and `Cmd+[` would stop exiting a
-composer mid-text. Test: `tests/cmd-bracket-nav.spec.mjs`.
+This chord is checked **before** `isNativeTextEditKey` (below), so it fires
+regardless of which stop/field currently owns the keyboard — including mid-text
+in a comment/reply/Claude-chat composer — same as a native browser Cmd+[/]
+would. Test: `tests/cmd-bracket-nav.spec.mjs`.
 
 ### A Cmd/Ctrl chord inside a text field stays native
 
@@ -289,22 +291,18 @@ selection / editing command** — `Cmd+←`/`→` (start/end of the line on Mac)
 `Cmd+↑`/`↓`, their `Shift+` selecting variants, macOS's emacs-style
 `Ctrl+←`/`→` — and the review tree must never bind over it. `onKeydown`
 (`home.mjs`) therefore returns on `isNativeTextEditKey(e)`
-(`isModifiedKey(e) && !e.navRemap && isEditableFocused()`) **immediately after
-the `Cmd+[`/`Cmd+]` remap block and before every other branch**, so no
-individual branch has to repeat the check.
+(`isModifiedKey(e) && isEditableFocused()`) **immediately after the
+`Cmd+[`/`Cmd+]` history back/forward chord and before every other branch**, so
+no individual branch has to repeat the check.
 
 **Why one early guard and not a per-branch exception:** the
 `isEditableFocused()` fallback further down already lets any unclaimed key flow
 into the field; only two branches sit in front of it and could swallow a
 modified arrow as navigation — `relatedActive()`'s arrow branch (which
 short-circuited its own `editableCaretCanMoveLeft`/`Right` caret exception on
-`isModifiedKey(e)`, a condition written for the `Cmd+[`/`]` remap but which a
-genuinely pressed `Cmd+←` also satisfied, so it exited the composer instead of
-moving the caret) and `state.searchActive`'s unconditional `ArrowLeft`
+`isModifiedKey(e)`) and `state.searchActive`'s unconditional `ArrowLeft`
 (`exitSearch()`). The guard fixes both, plus the palette query input, in one
-place. `relatedActive()`'s `!isModifiedKey(e)` is deliberately left as-is: with
-this guard in front, the remap really is the only modified arrow that can still
-reach it.
+place.
 
 **Deliberately Cmd/Ctrl only, not a Shift-only chord.** `Shift+←`/`→` already
 behaves natively via the caret exceptions, and `Shift+↑` on a textarea's first
