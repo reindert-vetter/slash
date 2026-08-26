@@ -41,7 +41,9 @@ export default function ProgressBar(state) {
         class="${() => {
           const t = state.approvalTotal || { done: 0, total: 0 }
           const pct = t.total > 0 ? Math.min(100, Math.max(0, (t.done / t.total) * 100)) : 0
-          return `h-full bg-indigo-600 dark:bg-indigo-400 w-[${pct.toFixed(2)}%]`
+          const complete = t.total > 0 && t.done >= t.total
+          const colorCls = complete ? 'bg-emerald-600 dark:bg-emerald-400' : 'bg-indigo-600 dark:bg-indigo-400'
+          return `h-full ${colorCls} w-[${pct.toFixed(2)}%]`
         }}"
         data-testid="review-progress-fill"
       ></div>

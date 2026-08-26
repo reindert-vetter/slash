@@ -40,12 +40,14 @@ everywhere the reviewer is, including list mode. It is mounted directly in
 without one (the reviewer is colourblind, see the palette rule in
 `.claude/rules/conventions.md`): the ratio is carried by the **fill length**
 itself (position, not colour), and the empty track (`bg-slate-200`/
-`dark:bg-zinc-800`) vs. the filled portion (`bg-indigo-600`/
-`dark:bg-indigo-400`) differ clearly in **lightness**, not just hue — so even a
-very low, thin sliver of fill still visibly reads as "something is filled"
-without relying on colour discrimination. Hidden entirely at `total === 0`
-(nothing to review yet), mirroring `footerVisible`'s "nothing to show yet"
-pattern. Purely informational: not clickable, no tooltip/breakdown.
+`dark:bg-zinc-800`) vs. the filled portion (`bg-indigo-600`/`dark:bg-indigo-400`
+while `done < total`, switching to `bg-emerald-600`/`dark:bg-emerald-400` once
+`done === total` — decoration layered on top of the already-complete fill-length
+signal, not a substitute for it) differ clearly in **lightness**, not just hue —
+so even a very low, thin sliver of fill still visibly reads as "something is
+filled" without relying on colour discrimination. Hidden entirely at
+`total === 0` (nothing to review yet), mirroring `footerVisible`'s "nothing to
+show yet" pattern. Purely informational: not clickable, no tooltip/breakdown.
 
 ## A separate, animated top loading strip (`src/TopLoadingBar.mjs`)
 
