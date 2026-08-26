@@ -540,7 +540,8 @@ func chatActionReactionID(turnID string) string {
 // task_code_comment/ReactionSignal addressing.
 // NeedsLand (tasks 1+2+4) is computed by the runClaudeTurn Activity's own
 // registration in workflows.go, right after runOneClaudeTurn returns, via
-// chatCheckoutNeedsLanding — never inside runOneClaudeTurn itself, so that
+// turnChangedCheckout + chatCheckoutNeedsLanding — never inside
+// runOneClaudeTurn itself, so that
 // function's own (chat.Message, *commentActionDirective) signature and its
 // existing direct-call tests stay unchanged. Kept on this result (not
 // re-derived in the workflow body) for the same determinism reason
@@ -1013,6 +1014,12 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 		}
 		hadShell = true
 		checkoutDir = dir // so an Edit/Write tool event below records a repo-relative path
+		// Snapshot the checkout as it is RIGHT NOW, before Claude gets to
+		// touch it — the automatic landing after this turn is allowed to run
+		// only if this turn itself changed something (see
+		// turnChangedCheckout, chat_checkout.go). A read-only turn never gets
+		// here and therefore never lands anything.
+		recordTurnCheckoutBaseline(runCtx, arg.ConversationID, dir)
 		// Attempt 1's own streamed answer — often literally the strict
 		// {"type":"need_write"} directive text itself, since that IS what it
 		// answers when escalating — is still sitting in the live progress

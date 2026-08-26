@@ -1253,3 +1253,64 @@ func TestChatCheckoutNeedsLandingStopsAfterALandedCommit(t *testing.T) {
 		t.Fatal("a commit already mirrored onto the PR's pending ref must not be reported as needing landing again — this is the reported bug")
 	}
 }
+
+// TestTurnChangedCheckoutGatesAutoLanding is the regression for a reviewer
+// report: a pure question turn ("bestond dit niet eerder in een data class?"),
+// which never even asks for write access, still produced the "Wijziging staat
+// op ..." bubble — because the automatic landing was decided by the PR-WIDE
+// chatCheckoutNeedsLanding alone, and the shared checkout already held
+// outstanding work of its own (the reviewer's own uncommitted edits, or a
+// local commit from earlier). The gate is now turn-scoped: no baseline (a
+// read-only turn) means no landing, and a baseline that still matches means
+// this turn changed nothing.
+func TestTurnChangedCheckoutGatesAutoLanding(t *testing.T) {
+	const headRefName = "feature/turnscoped"
+	const conv = "conv-turnscoped"
+	bareDir, _ := setupChatShadowRepo(t, headRefName, "v1\n")
+	ctx := context.Background()
+	const pr = 970742
+
+	checkout := cloneCheckoutDir(t, bareDir, headRefName)
+	assignCheckoutForTest(t, "", pr, checkout)
+	getOrCreateCheckoutAssignment("", pr).Branch = headRefName
+
+	// A read-only turn records no baseline at all.
+	if turnChangedCheckout(ctx, "", pr, conv) {
+		t.Fatal("a turn that never got write access must never trigger a landing")
+	}
+
+	// A write turn that ends up changing nothing must not either.
+	recordTurnCheckoutBaseline(ctx, conv, checkout)
+	if turnChangedCheckout(ctx, "", pr, conv) {
+		t.Fatal("a write turn that changed nothing must not trigger a landing")
+	}
+
+	// A write turn that really edits the checkout does.
+	recordTurnCheckoutBaseline(ctx, conv, checkout)
+	if err := os.WriteFile(filepath.Join(checkout, "foo.txt"), []byte("edited by claude\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !turnChangedCheckout(ctx, "", pr, conv) {
+		t.Fatal("a write turn that edited the checkout must trigger a landing")
+	}
+
+	// ... and so does one that only commits (HEAD moves, tree clean again).
+	recordTurnCheckoutBaseline(ctx, conv, checkout)
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", checkout}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
+		}
+	}
+	run("add", "-A")
+	run("commit", "-m", chatEditCommitSubject)
+	if !turnChangedCheckout(ctx, "", pr, conv) {
+		t.Fatal("a write turn that committed must trigger a landing")
+	}
+
+	// The baseline is consumed: a later turn can never re-read this one's.
+	if turnChangedCheckout(ctx, "", pr, conv) {
+		t.Fatal("the baseline must be consumed, so a later turn starts from nothing")
+	}
+}

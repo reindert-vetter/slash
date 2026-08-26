@@ -1247,6 +1247,81 @@ func chatCheckoutNeedsLanding(ctx context.Context, repo string, pr int) bool {
 	return n > 0
 }
 
+// ---------------------------------------------------------------------------
+// The per-TURN baseline: did THIS turn itself change the shared checkout?
+// ---------------------------------------------------------------------------
+
+// checkoutFingerprint is a cheap "what does this checkout look like right
+// now" string: its HEAD sha plus its porcelain status. Two fingerprints
+// differ exactly when a commit was made/rewritten or the working tree
+// changed — which is all a turn-scoped "did anything happen here" check
+// needs. Returns "" (never equal to a real fingerprint, and recorded as "no
+// baseline at all") when the directory cannot be read.
+func checkoutFingerprint(ctx context.Context, dir string) string {
+	headOut, err := runGitIn(ctx, dir, "rev-parse", "HEAD")
+	if err != nil {
+		return ""
+	}
+	statusOut, err := runGitIn(ctx, dir, "status", "--porcelain", "--ignore-submodules=all")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(headOut)) + "\n" + strings.TrimSpace(string(statusOut))
+}
+
+// chatTurnCheckoutBaseline holds, per conversation, the fingerprint of the
+// PR's shared checkout as it was at the moment THIS turn was granted write
+// access — recorded by runOneClaudeTurn right after prepareChatShellWorkDir
+// resolved (and fetched/checked out) the directory. Only one turn per
+// conversation ever runs at a time (the workflow drives them serially), so a
+// plain per-conversation entry is enough.
+//
+// In-memory only, gone after a restart, never the source of truth about
+// anything: git is, and a missing entry only means "no automatic landing for
+// this turn" — the reviewer can always ask for a commit in plain words. Same
+// operational carve-out as chatProgressByConv/chatCancelByConv, see
+// .claude/rules/workflows-write-boundary.md.
+var (
+	chatTurnBaselineMu sync.Mutex
+	chatTurnBaseline   = map[string]string{}
+)
+
+// recordTurnCheckoutBaseline snapshots dir for this conversation's running
+// turn. A read-only turn never calls this, which is exactly what makes
+// turnChangedCheckout below turn-scoped.
+func recordTurnCheckoutBaseline(ctx context.Context, conversationID, dir string) {
+	fp := checkoutFingerprint(ctx, dir)
+	chatTurnBaselineMu.Lock()
+	defer chatTurnBaselineMu.Unlock()
+	chatTurnBaseline[conversationID] = fp
+}
+
+// turnChangedCheckout answers the ONE question the automatic landing is
+// allowed to act on: did the turn that just finished actually change this
+// PR's checkout itself? It consumes the baseline (so a later turn can never
+// re-read this one's), and answers false when there is no baseline at all —
+// a turn that never escalated to write access, which is the reported bug:
+// a pure question turn used to trigger the auto-land Activity and its
+// "Wijziging staat op ..." bubble purely because the SHARED checkout already
+// held something outstanding (the reviewer's own uncommitted work, or a local
+// commit from earlier). Deliberately turn-scoped, not PR-wide: an earlier
+// turn's failed landing is no longer retried by a later, unrelated turn
+// (reviewer decision) — asking for a commit in plain words still works.
+func turnChangedCheckout(ctx context.Context, repo string, pr int, conversationID string) bool {
+	chatTurnBaselineMu.Lock()
+	before, ok := chatTurnBaseline[conversationID]
+	delete(chatTurnBaseline, conversationID)
+	chatTurnBaselineMu.Unlock()
+	if !ok || before == "" {
+		return false
+	}
+	a := getCheckoutAssignment(repo, pr)
+	if a == nil || a.Dir == "" {
+		return false
+	}
+	return checkoutFingerprint(ctx, a.Dir) != before
+}
+
 // checkoutIsDirty is the plain "does the working tree have uncommitted
 // changes right now" check offerCancelCleanupIfDirty (chat_workflow.go) and
 // applyCancelCleanup use — deliberately narrower than

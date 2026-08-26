@@ -38,7 +38,9 @@ only ever asks Claude to commit in plain words; Claude's own `git commit` (run
 via Bash in that checkout, see "Two-step tool access"/chat_shell.md in
 `.claude/docs/workflows-comments.md`) never itself moves anything onto the PR
 branch — the `runClaudeTurn` Activity notices the checkout has something
-pending after EVERY turn (`chatCheckoutNeedsLanding`) and lands/merges it the
+pending after a turn that itself changed it (`turnChangedCheckout` +
+`chatCheckoutNeedsLanding`; a read-only question turn never lands anything,
+not even work the shared checkout already held) and lands/merges it the
 same way an explicit "commit deze wijziging" always did (see "Automatic
 landing after a shell turn" in that same doc). Push, unlike landing, stays a
 deliberate, reviewer-only step — never automatic, never `--force`.

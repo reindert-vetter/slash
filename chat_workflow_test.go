@@ -1198,14 +1198,17 @@ func TestClaudeChatManualRetryRerunsFailedTurn(t *testing.T) {
 
 // TestClaudeChatAutoLandsPendingCheckoutWorkAfterATurn is tasks 1+2+4's own
 // end-to-end regression: the reviewer never sends a "commit" action (that
-// button is gone, see .claude/docs/workflows-comments.md) — a plain reviewer
-// message that finds the PR's assigned checkout already holding a local
-// commit (exactly what Claude's own `git commit` in the checkout, per
-// chat_shell.md, leaves behind) must, by itself, land that commit on the PR's
-// pending ref and refresh the review tree — with no further reviewer action
-// needed. Unlike the old disposable shadow worktree, the checkout itself is
-// never reclaimed/removed (chat_checkout.go): it is the reviewer's own,
-// permanent local clone.
+// button is gone, see .claude/docs/workflows-comments.md) — a turn that
+// escalates to write access and really edits the PR's assigned checkout must,
+// by itself, commit that edit, land it on the PR's pending ref and refresh
+// the review tree, with no further reviewer action needed. Unlike the old
+// disposable shadow worktree, the checkout itself is never reclaimed/removed
+// (chat_checkout.go): it is the reviewer's own, permanent local clone.
+//
+// The second half is the reviewer-reported bug this landing is gated on: a
+// FOLLOW-UP question turn, which never touches the checkout at all, must NOT
+// produce a second "Wijziging staat op ..." notice — see turnChangedCheckout
+// (chat_checkout.go).
 func TestClaudeChatAutoLandsPendingCheckoutWorkAfterATurn(t *testing.T) {
 	const headRefName = "feature/autoland"
 	bareDir, cloneDir := setupChatShadowRepo(t, headRefName, "v1\n")
@@ -1230,22 +1233,22 @@ func TestClaudeChatAutoLandsPendingCheckoutWorkAfterATurn(t *testing.T) {
 
 	const pr, commentID = 970740, "comment-autoland"
 
-	// Simulate what an EARLIER turn's own `git commit`, run via Bash, already
-	// left behind: a real local commit in the PR's assigned checkout that
-	// never made it onto the PR's pending ref.
 	dir := cloneCheckoutDir(t, bareDir, headRefName)
 	assignCheckoutForTest(t, "", pr, dir)
-	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("edited by claude\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if out, err := exec.Command("git", "-C", dir, "add", "-A").CombinedOutput(); err != nil {
-		t.Fatalf("git add: %v: %s", err, out)
-	}
-	if out, err := exec.Command("git", "-C", dir, "commit", "-m", "Claude: reviewer-requested edit").CombinedOutput(); err != nil {
-		t.Fatalf("git commit: %v: %s", err, out)
-	}
 
-	fake.SetChatTurns("Oké, ik heb het aangepast.")
+	// The turn escalates to write access and then really edits the checkout —
+	// the fake's own hook stands in for Claude's Edit/Bash tool calls, since
+	// only a turn that CHANGED the checkout itself may land anything (see
+	// turnChangedCheckout, chat_checkout.go).
+	fake.SetChatTurns(`{"type":"need_write"}`, "Oké, ik heb het aangepast.")
+	fake.SetChatHook(func(req claude.RunRequest) {
+		if req.WorkDir != dir {
+			return // the cheap read-only attempt, which never edits anything
+		}
+		if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("edited by claude\n"), 0o644); err != nil {
+			t.Errorf("simulated edit: %v", err)
+		}
+	})
 	runID, err := m.StartClaudeChat(ClaudeChatInput{PR: pr, CommentID: commentID})
 	if err != nil {
 		t.Fatal(err)
@@ -1293,6 +1296,44 @@ func TestClaudeChatAutoLandsPendingCheckoutWorkAfterATurn(t *testing.T) {
 	// worktree).
 	if _, err := os.Stat(dir); err != nil {
 		t.Fatalf("expected the checkout to remain on disk after landing, got err=%v", err)
+	}
+
+	// The reported bug: a follow-up PURE QUESTION turn changes nothing in the
+	// checkout, so it must add only its own two rows (the reviewer's message
+	// and Claude's answer) — never a second auto-land notice, even though the
+	// shared checkout holds work of its own: an unrelated, uncommitted file
+	// the reviewer is working on themselves. The landing used to fire on that
+	// PR-wide state alone, which both re-showed the notice and swept the
+	// reviewer's own file into Claude's commit.
+	if err := os.WriteFile(filepath.Join(dir, "reviewer-own-work.txt"), []byte("mine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fake.SetChatHook(nil)
+	fake.SetChatTurns("Nee, dat bestond nog niet.")
+	if err := engine.SignalWorkflow(runID, SignalMessage, ChatMessageSignal{
+		ID: "msg-2", Author: "reviewer", Body: "Bestond dit al ergens anders?",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		l, _ := cm.List(ctx, commentID)
+		return len(l) == 5
+	})
+	// Give a wrongly-triggered landing every chance to add a 6th row.
+	time.Sleep(300 * time.Millisecond)
+	after, _ := cm.List(ctx, commentID)
+	if len(after) != 5 {
+		t.Fatalf("a question turn that changed nothing must add no landing notice, got %d rows: %+v", len(after), after)
+	}
+	for _, msg := range after[3:] {
+		if strings.Contains(msg.Body, "Wijziging staat op") {
+			t.Fatalf("a question turn that changed nothing must not report a landing: %+v", msg)
+		}
+	}
+	// The reviewer's own file is still uncommitted, exactly as they left it.
+	statusOut, err := exec.Command("git", "-C", dir, "status", "--porcelain").Output()
+	if err != nil || !strings.Contains(string(statusOut), "reviewer-own-work.txt") {
+		t.Fatalf("the reviewer's own uncommitted file must be left alone, status = %q, err %v", statusOut, err)
 	}
 }
 

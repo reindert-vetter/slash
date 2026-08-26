@@ -1361,6 +1361,36 @@ reclaimed.
   `--not --remotes` check only before anything has ever landed for it. Test:
   `chat_checkout_test.go`'s
   `TestChatCheckoutNeedsLandingStopsAfterALandedCommit`.
+- **`turnChangedCheckout` (`chat_checkout.go`) is the gate in front of it, and
+  it is TURN-scoped** — the fix for the same reviewer report coming back on a
+  different route. `chatCheckoutNeedsLanding` above is PR-WIDE by nature, so
+  its other half (a non-empty `git status`) fired for state that had nothing
+  to do with the turn that just ran: the reviewer's own uncommitted work in
+  their own standing checkout, or a local commit from before a restart wiped
+  the in-memory assignment (`a.Branch == ""` falls back to the coarse
+  `--not --remotes` check). A pure question turn — read-only, never even
+  resolving a work directory — then still produced the "Wijziging staat op
+  ..." bubble, and worse, swept the reviewer's own file into Claude's commit.
+  So `runOneClaudeTurn` now records a **baseline fingerprint** of the checkout
+  (`checkoutFingerprint`: HEAD sha + porcelain status) at the one moment a
+  turn gains write access — right after `prepareChatShellWorkDir` resolved and
+  fetched/checked out the directory — and the `runClaudeTurn` Activity's own
+  registration lands only when `turnChangedCheckout(...) &&
+  chatCheckoutNeedsLanding(...)`. No baseline at all (a read-only turn) means
+  no landing, full stop; a baseline that still matches means this turn changed
+  nothing. The baseline map is in-memory, per conversation, consumed on read —
+  the same operational carve-out as `chatProgressByConv`/`chatCancelByConv`
+  (`.claude/rules/workflows-write-boundary.md`), and never a source of truth:
+  a lost entry only means "no automatic landing for this turn".
+  **Deliberately given up (reviewer decision):** an EARLIER turn's failed
+  landing is no longer retried by a later, unrelated turn — asking for a
+  commit in plain words still works. Tests:
+  `chat_checkout_test.go`'s `TestTurnChangedCheckoutGatesAutoLanding` and the
+  second half of `chat_workflow_test.go`'s
+  `TestClaudeChatAutoLandsPendingCheckoutWorkAfterATurn` (which now drives a
+  real escalating, editing turn via the new `claude.Fake.SetChatHook`, then a
+  follow-up question turn that must add no landing notice and must leave the
+  reviewer's own uncommitted file alone).
 - **`claudeChatWorkflow`'s own loop** (`chat_workflow.go`), after every
   ordinary (non-error) turn, checks that STORED `result.NeedsLand` field — never
   a live git read of its own, so this stays a deterministic function of the

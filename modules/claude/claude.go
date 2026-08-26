@@ -667,6 +667,13 @@ type Fake struct {
 	// test needs (SLASH_CLAUDE_CHAT_TURNS has no way to make a scripted turn
 	// hang until cancelled). See SetChatBlockUntilCancel.
 	chatBlockUntilCancel bool
+	// chatHook, when set, runs on every RunChat call with that call's own
+	// request, before it returns. The only way a test can make a scripted
+	// "turn" really touch its WorkDir — a Fake never edits anything by
+	// itself — e.g. to simulate Claude's own Edit/Bash tool calls in the
+	// checkout. Called without the Fake's own lock held, so the hook may use
+	// the Fake again.
+	chatHook func(RunRequest)
 }
 
 // NewFake returns an empty Fake.
@@ -768,6 +775,14 @@ func (f *Fake) SetChatModelError(model string, err error) {
 	f.chatModelErrs[model] = err
 }
 
+// SetChatHook programs a callback that runs on every RunChat call with that
+// call's own request — see chatHook's own doc comment.
+func (f *Fake) SetChatHook(hook func(RunRequest)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.chatHook = hook
+}
+
 // SetChatBlockUntilCancel(true) makes every subsequent RunChat call hang
 // until its own ctx is cancelled (returning ctx.Err()), instead of returning
 // the programmed script — a fixture for testing the reviewer-triggered "Stop"
@@ -806,7 +821,11 @@ func (f *Fake) RunChat(ctx context.Context, req RunRequest) (ChatResult, error) 
 		}
 	}
 	block := f.chatBlockUntilCancel
+	hook := f.chatHook
 	f.mu.Unlock()
+	if hook != nil {
+		hook(req)
+	}
 	// SetChatBlockUntilCancel's own test hook: block here, past the mutex, so
 	// every other Fake call (progress polling, a second conversation's own
 	// RunChat, CallCount) keeps working normally while this one turn sits

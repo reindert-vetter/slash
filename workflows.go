@@ -2838,7 +2838,15 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		// unchanged and keeps the "should the workflow run a further Activity"
 		// decision a plain, STORED field of this Activity's result (see
 		// chatTurnResult.NeedsLand's own doc comment).
-		needsLand := chatCheckoutNeedsLanding(ctx, arg.Repo, arg.PR)
+		// Turn-scoped on purpose: land only when THIS turn itself got write
+		// access AND actually changed the checkout (turnChangedCheckout,
+		// chat_checkout.go), on top of the PR-wide "is there anything left to
+		// land" check. Without the first half a plain read-only question turn
+		// re-triggered the landing — and its "Wijziging staat op ..." bubble —
+		// purely because the SHARED checkout already held outstanding work
+		// (the reviewer's own uncommitted edits, or an earlier local commit).
+		needsLand := turnChangedCheckout(ctx, arg.Repo, arg.PR, arg.ConversationID) &&
+			chatCheckoutNeedsLanding(ctx, arg.Repo, arg.PR)
 		publishChatChanged(arg.Repo, arg.PR, arg.ConversationID)
 		// The turn may have assigned/advanced the PR's shared work directory,
 		// or raised its choice — nudge the chip/badge and the work-directory
