@@ -1905,11 +1905,16 @@ where the progress lives:
 
 - `batchPill` (`BlockList.mjs`) on the comment's index row — a pulsing dot
   plus the WORD ("Claude bezig" / "verwerkt" / "overgeslagen");
-- the log line in the EXISTING status element `claude-chat-status`
-  (`CommentClaudeFooter`, which `commentDetailCard` now also mounts): while
-  this comment is the current one it shows the same "Claude leest src/x.php"
-  sentence a chat turn shows (`claudeStatusText`, so no second formatter),
-  afterwards its one-line outcome;
+- the log line in the EXISTING status element `comment-batch-status`
+  (`CommentClaudeFooter`, which `commentDetailCard` also mounts —
+  `{ batchOnly: true }`, see "The menu button … and the shared comment/Claude
+  footer" in `.claude/docs/comments-panel.md`): while this comment is the
+  current one it shows the same "Claude leest src/x.php" sentence a chat turn
+  shows (`claudeStatusText`, so no second formatter), afterwards its one-line
+  outcome — the `batchOnly` flag keeps this small per-comment card to just
+  this one line, the live chat-turn status (`claude-chat-status`) stays only
+  in the wide `comment-claude-row` footer, so the two never show the SAME
+  running turn twice;
 - the **bottom action row itself** (`batchRunningLines`, `BlockList.mjs`),
   which is the only PR-WIDE spot: it used to say nothing but "Claude bezig met
   de comments…" for the whole run. On request ("geef meer feedback als claude

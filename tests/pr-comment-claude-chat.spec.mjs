@@ -90,6 +90,88 @@ test('a PR-wide comment-index item shows the ordinary Claude column, and "Chat m
   )
 })
 
+// Regression test for: "status van draaiende chat vraag moet onderin de blok
+// staan, niet onderin de comment blokje" — CommentClaudeFooter's live-turn
+// section ("Selected: …" + "Claude denkt na… · Ns" + Stop) rendered TWICE:
+// once from home.mjs's own call (the wide comment-claude-row footer, below
+// both columns) and once more from commentDetailCard's own internal call
+// (the small PR-comment card itself), because commentDetailCard passed the
+// comment's id into the very same, unrestricted CommentClaudeFooter — whose
+// live-turn section reads the globally anchored conversation regardless of
+// that id. Fixed with a `batchOnly` flag on the commentDetailCard call (see
+// "The menu button … and the shared comment/Claude footer" in
+// .claude/docs/comments-panel.md). Driven via a mocked chat.progress SSE
+// frame, same technique as claude-chat-panel.spec.mjs's own "navigating away
+// hides it" test, so the "still running" window is deterministic.
+test('a running Claude turn on a PR-comment item shows its status once, not also inside the small comment card', async ({
+  page,
+}, testInfo) => {
+  const pr = seededPr(testInfo)
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: {
+      pr,
+      file: 'app/Http/Controllers/Api/ContractController.php',
+      line: 0,
+      author: 'AI check',
+      body: 'Dit endpoint valideert de invoer niet.',
+      kind: 'ai_warning',
+      source: 'ai',
+      local: true,
+    },
+  })
+  const conversationId = (await start.json()).runId
+  expect(conversationId).toBeTruthy()
+
+  const frame = (data) => `data: ${JSON.stringify(data)}\n\n`
+  let connections = 0
+  await page.route('**/api/events*', async (route) => {
+    connections++
+    const body =
+      connections === 1
+        ? 'retry: 300\n\n'
+        : 'retry: 300\n\n' +
+          frame({
+            type: 'chat.progress',
+            pr,
+            key: conversationId,
+            seq: 1,
+            data: { running: true, phase: 'thinking', startedAt: Date.now() - 1000, updatedAt: Date.now() },
+          })
+    await route.fulfill({
+      status: 200,
+      headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' },
+      body,
+    })
+  })
+  await page.route('**/api/chat/progress*', (route) => {
+    const running = { running: true, phase: 'thinking', startedAt: Date.now() - 1000, updatedAt: Date.now() }
+    const perPR = new URL(route.request().url()).searchParams.get('commentId') === null
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(
+        perPR ? { ok: true, running: { [conversationId]: running } } : { ok: true, running: true, progress: running },
+      ),
+    })
+  })
+
+  try {
+    await page.goto('/pr/' + pr)
+    await leaveSearchBox(page)
+    await expect(page.getByTestId('comment-detail-card')).toBeVisible()
+
+    // The live status shows exactly once, in the wide footer below both
+    // columns — never a second time inside the small comment card itself.
+    await expect(page.getByTestId('claude-chat-status')).toHaveCount(1)
+    await expect(page.getByTestId('claude-chat-status')).toContainText('Claude denkt na')
+    await expect(page.getByTestId('comment-detail-card').getByTestId('claude-chat-status')).toHaveCount(0)
+    await expect(page.getByTestId('comment-detail-card').getByTestId('claude-selected-line')).toHaveCount(0)
+    await expect(page.getByTestId('comment-detail-card').getByTestId('comment-claude-footer-claude')).toHaveCount(0)
+  } finally {
+    await deleteCommentBestEffort(page, conversationId)
+  }
+})
+
 // Regression test for: "if I submit to Claude, I get a menu instead of the
 // message being sent — a refresh fixes it". Root cause: a plain mouse click
 // onto this comment-index item (unlike every keyboard-driven way of moving

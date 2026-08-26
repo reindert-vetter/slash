@@ -2306,6 +2306,17 @@ reply, unchanged from before) for the comment-side half
 independently; the whole footer renders **nothing** (not even an empty bar)
 when neither side has anything to report.
 
+`commentDetailCard` (a PR-comment-index item's own small card, see "The
+comment-detail card moved into the merged comment-claude-row" below) also
+calls `CommentClaudeFooter(c.id, { batchOnly: true })` for its own
+`comment_batch` progress line — `batchOnly` drops the "Selected: …"/live-turn/
+"Ook bezig elders" sections from that second call, since those describe the
+globally anchored conversation and already render once in the wide
+`comment-claude-row` footer above (`CommentClaudeFooter()`, no `commentId`);
+without the flag they rendered byte-for-byte a second time inside the small
+card. Reported bug: "status van draaiende chat vraag moet onderin de blok
+staan, niet onderin de comment blokje".
+
 Both buttons (`reaction-send`/`reaction-status`) are disabled while `cs.busy` via
 a plain `disabled="${() => cs.busy}"` — **not** `?disabled=`/`.disabled=`,
 neither of which works in this vendored arrow.js (see

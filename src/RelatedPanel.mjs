@@ -3952,13 +3952,25 @@ function claudeQueueNote() {
 //
 // `commentId` (optional) additionally makes this footer the log line of a
 // COMMENT BATCH run for that one comment (comment_batch.go): while the one agent
-// is working on it, the same `claude-chat-status` element shows the same live
-// "Claude leest src/x.php" sentence a chat turn shows, and afterwards it keeps
-// the one-line outcome ("verwerkt: …" / "overgeslagen: …"). Deliberately this
-// existing element rather than a log spot of its own — a batch run IS Claude
-// doing something to this comment, and the reviewer asked for the place that
-// already exists. Only commentDetailCard passes it (an index/PR-wide comment
-// row, the card the reviewer lands on when a batch starts).
+// is working on it, the same live-status formatter (claudeStatusText) that a
+// chat turn uses renders the same kind of "Claude leest src/x.php" sentence
+// here, and afterwards it keeps the one-line outcome ("verwerkt: …" /
+// "overgeslagen: …") — its OWN span (`comment-batch-status`), not the live
+// chat turn's `claude-chat-status`. Only commentDetailCard passes it (an
+// index/PR-wide comment row, the card the reviewer lands on when a batch
+// starts).
+//
+// `opts.batchOnly` (also only ever passed by commentDetailCard, next to
+// `commentId`) narrows this SAME call down to just that one batch line —
+// dropping the "Selected: …" title, the live-turn `claudeActive()` block and
+// "Ook bezig elders". Those three describe the globally anchored conversation
+// (`cc`/`hasActiveClaudeTurn()`), not anything scoped to `commentId`, so
+// without this flag they render byte-for-byte identically a second time
+// inside commentDetailCard's own small card — the wide comment-claude-row
+// footer (home.mjs, no commentId, batchOnly left off) already shows them
+// once. Reported bug: "status van draaiende chat vraag moet onderin de blok
+// staan, niet onderin de comment blokje" — the running "Claude denkt na…" +
+// Stop button showed twice, once in each of the two footers.
 // commentClaudeShortcutHints — the contextual key-hint line (ShortcutHintBar,
 // shortcutHints.mjs) for whichever half of comment-claude-row currently owns
 // the keyboard. Mirrors home.mjs's own blockShortcutHints for the diff side —
@@ -4048,7 +4060,8 @@ function claudeTaskRow(c, i) {
   `.key('claude-task:' + c.id)
 }
 
-export function CommentClaudeFooter(commentId = '') {
+export function CommentClaudeFooter(commentId = '', opts = {}) {
+  const batchOnly = !!opts.batchOnly
   const view = claudeChatView()
   const claudeActive = hasActiveClaudeTurn
   // The batch half's own text: live while this comment is the current one,
@@ -4076,14 +4089,16 @@ export function CommentClaudeFooter(commentId = '') {
   return html`
     <div class="contents">
       ${() =>
-        commentFooterText() || claudeActive() || batchText() || otherRunningClaudeTasks().length > 0
+        (batchOnly
+          ? !!batchText()
+          : commentFooterText() || claudeActive() || batchText() || otherRunningClaudeTasks().length > 0)
           ? html`
               <div
                 class="flex w-0 min-w-full flex-col gap-1 border-t border-slate-100 dark:border-zinc-800/60 px-3 py-1.5 text-[11px] text-slate-500 dark:text-zinc-500"
                 data-testid="comment-claude-footer"
               >
                 ${() =>
-                  selectedTitle()
+                  !batchOnly && selectedTitle()
                     ? html`<span class="truncate" data-testid="claude-selected-line">
                         <span class="font-medium text-slate-600 dark:text-zinc-400">Selected:</span>
                         ${() => selectedTitle()}
@@ -4091,14 +4106,14 @@ export function CommentClaudeFooter(commentId = '') {
                     : ''}
                 <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
                 ${() =>
-                  commentFooterText()
+                  !batchOnly && commentFooterText()
                     ? html`<span class="flex items-center gap-1.5" data-testid="comment-claude-footer-comment">
                         <span class="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-indigo-400"></span>
                         <span class="truncate">${() => commentFooterText()}</span>
                       </span>`
                     : ''}
                 ${() =>
-                  claudeActive()
+                  !batchOnly && claudeActive()
                     ? html`<span
                         class="flex min-w-0 flex-1 items-start gap-1.5"
                         data-testid="comment-claude-footer-claude"
@@ -4144,6 +4159,7 @@ export function CommentClaudeFooter(commentId = '') {
                     : ''}
                 </div>
                 ${() => {
+                  if (batchOnly) return ''
                   const tasks = otherRunningClaudeTasks()
                   return tasks.length
                     ? html`
@@ -10284,12 +10300,16 @@ export function commentDetailCard(c, opts) {
             : ''}
       </div>
       ${() =>
-        // The SAME status/log line the block-scoped comment card already has
-        // (comment-claude-row in home.mjs) — here it also carries this comment's
-        // own comment_batch state, live while Claude is working on it and as a
-        // one-line outcome afterwards. Renders nothing when there's nothing to
-        // report, so an ordinary comment card is unchanged.
-        CommentClaudeFooter(c.id)}
+        // Only this comment's own comment_batch state (batchOnly: true) — live
+        // while Claude is working on it, and as a one-line outcome afterwards.
+        // Deliberately NOT the "Selected: …"/live-turn/"Ook bezig elders"
+        // sections: those describe the globally anchored conversation, and the
+        // wide comment-claude-row footer (home.mjs, CommentClaudeFooter() with
+        // no commentId) already shows them once, below both columns — showing
+        // them here too duplicated the running "Claude denkt na…" status
+        // byte-for-byte in both places. Renders nothing when there's no batch
+        // activity to report, so an ordinary comment card is unchanged.
+        CommentClaudeFooter(c.id, { batchOnly: true })}
     </div>
   `
 }
