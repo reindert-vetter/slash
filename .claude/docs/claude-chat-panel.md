@@ -3683,7 +3683,7 @@ one didn't exist anywhere in this app).
 Test: the "↓/↑ at the bottom of the Claude chat walk the code-preview cards"
 case in `tests/code-fence-preview.spec.mjs`.
 
-### Default-collapsed cards, a richer title, and per-class labels
+### Default-collapsed cards, a title only when there is something to say, and per-class labels
 
 Reviewer request, on top of everything above: a bare `Codeblok 1 · PHP`
 header said nothing about what the block actually was, and a long-running
@@ -3692,14 +3692,36 @@ scrolling to find the one still relevant to the current answer. Three
 changes, all in the same three files (`markdown.mjs`, `RelatedPanel.mjs`'s
 `recomputeCodePreviews`, `CodePreview.mjs`):
 
-- **The card title now names the class(es) the snippet declares** instead of
-  the announced language: `titleDetail(code, lang)` (`RelatedPanel.mjs`) runs
-  a top-level `\bclass\s+(\w+)` scan over the fence's own code — zero matches
-  keeps the pre-existing `lang.toUpperCase()` fallback, one match shows that
-  class's name, two or more show every name in source order joined with
-  `", "` (the reviewer explicitly wants the names, not a bare count — the
-  card's own `truncate` class still clips an overlong line). Only classes are
-  scanned, deliberately not traits/interfaces/functions.
+- **The card title names the class(es) the snippet declares, and ONLY
+  renders at all when one is detected** — `classDetail(code)`
+  (`RelatedPanel.mjs`, `it.classLabel`) runs a top-level `\bclass\s+(\w+)`
+  scan over the fence's own code: zero matches → `''`, one match → that
+  class's name, two or more → every name in source order joined with `", "`
+  (the reviewer explicitly wants the names, not a bare count — the card's own
+  `truncate` class still clips an overlong line). Only classes are scanned,
+  deliberately not traits/interfaces/functions. **This USED to fall back to a
+  bare `Codeblok N · PHP`/`· <LANG>` header when no class was found** — a
+  LATER reviewer report ("Codeblok 1 · PHP mag weg... description mag net zo
+  duidelijk als in de normale chat text") removed that fallback entirely: the
+  fence's own "Codeblok N"/"Suggestie N" number/word already shows on the
+  SAME fence's inline badge in the chat bubble directly above the card
+  (`markdown.mjs`'s `fenceLabel`/`data-fence-label`), so repeating it here was
+  pure clutter with no information of its own — a card with no detected class
+  now shows no title line at all. The `▸` "this card is under the ↓/↑
+  cursor" marker (colourblind rule: shape, not colour alone — see
+  `tests/code-fence-preview.spec.mjs`) used to live glued to that same title
+  text; it is now its own always-mounted `data-testid=code-preview-
+  active-marker` span next to (not inside) the conditional title, so it
+  still renders even on a title-less card. The "over: …" context line
+  (`data-testid=code-preview-context`, below) also switched from a small
+  muted `text-[11px] text-slate-400` to the SAME size/colour ordinary chat
+  bubble text uses (`text-xs leading-relaxed text-slate-700`/`dark:text-zinc-300`)
+  — same reviewer report, "as clear as normal chat text". The collapse
+  toggle's visible label text ("Inklappen"/"uitklappen (Enter)") is gone too,
+  replaced with a neutral chevron glyph (`▾`/`▸`, same convention as
+  `testsBar`'s expand chevron elsewhere in this file) with the Dutch wording
+  kept only as its `title` tooltip — the click/Enter behaviour itself is
+  unchanged.
 - **A short snippet of the chat text that sat directly above the fence** is
   shown as a second, muted line under the title (`data-testid=
   code-preview-context`) — "over: …". `markdown.mjs`'s `extractCodeFences`
@@ -3714,12 +3736,13 @@ changes, all in the same three files (`markdown.mjs`, `RelatedPanel.mjs`'s
   visually clipped — that part changed after this section first landed.
 - **A card not belonging to the LAST answer starts collapsed** (title +
   context line only, no code at all — not even a one-line teaser, reviewer's
-  explicit choice) — `Enter` on the focused card, or its own "Inklappen"/
-  "uitklappen (Enter)" button (same wording convention as `prInfoCard`'s
-  `toggleSinceExpanded`), toggles it. "Last answer" is decided per fence's
-  nearest `[data-testid="claude-message"], [data-testid="comment-item"]`
-  ancestor ELEMENT (compared by identity, not by message id) against the very
-  last fence's own ancestor — a fresh Claude reply (or a new/edited comment)
+  explicit choice) — `Enter` on the focused card, or its own chevron toggle
+  button (`▾`/`▸`, see above — was a text "Inklappen"/"uitklappen (Enter)"
+  button, same wording convention as `prInfoCard`'s `toggleSinceExpanded`),
+  toggles it. "Last answer" is decided per fence's nearest
+  `[data-testid="claude-message"], [data-testid="comment-item"]` ancestor
+  ELEMENT (compared by identity, not by message id) against the very last
+  fence's own ancestor — a fresh Claude reply (or a new/edited comment)
   containing a fence demotes every older card to collapsed on its next
   recompute. `RelatedPanel.mjs`'s `cp.expandedOverride` (a plain `key -> bool`
   map, reassigned wholesale like `cp.items` itself, never mutated in place)
@@ -3728,6 +3751,23 @@ changes, all in the same three files (`markdown.mjs`, `RelatedPanel.mjs`'s
   yet. `toggleCodePreviewExpanded(key)` is exported for both the button's
   `@click` and `home.mjs`'s `Enter` branch (`activeCodePreviewKey()`, reading
   `cs.previewPos` so home.mjs itself never has to import `cs`).
+  **`key` must be STABLE across a recompute, not the fence's raw position**
+  (bug report: "eerder had ik iets anders ingeklapt, dat moet niet effect
+  hebben op andere blokken" — collapsing one card visibly collapsed a
+  DIFFERENT, unrelated one instead). It used to be the bare loop index
+  (`'fence:' + i`) into `fences` — but `next` is re-sorted right after being
+  built ("most-recently-generated … renders at the TOP", below), so a fresh
+  message/comment with its own fence arriving reshuffles which fence sits at
+  which index; `cp.expandedOverride`, keyed by that same index string, then
+  silently applied to whichever fence happened to land there next, not the
+  one the reviewer actually toggled. Fixed by keying each fence on
+  `containerKey(container) + ':' + localIdx` — the owning message/comment's
+  own stable id (`data-message-id` on `claude-message`, added for this;
+  `data-comment-id` already existed on `comment-item`, prefixed `m`/`c` so
+  the two id spaces can't collide with each other) plus the fence's own
+  position AMONG that container's fences (stable, since one message/comment's
+  body never reorders itself). Falls back to the old index-based key only
+  when no ancestor at all is found (not expected in practice).
 - **A snippet spanning 2+ classes gets a label above EACH class's own code**,
   not just in the title — reviewer's own follow-up, "ook boven elke stukje
   code (als dat kan)". `CodePreview.mjs`'s `splitCodeByClasses(code)` is a

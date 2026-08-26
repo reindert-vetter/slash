@@ -218,14 +218,28 @@ function previewCard(it, active, expanded, onToggle) {
       data-active="${() => (active() ? 'true' : 'false')}"
       data-expanded="${() => (expanded() ? 'true' : 'false')}"
     >
-      <span class="truncate text-[11px] font-medium text-slate-500 dark:text-zinc-500" data-testid="code-preview-title">
-        ${() => (active() ? '▸ ' : '')}${it.title}
-      </span>
+      <div class="flex items-center gap-1">
+        <span
+          class="shrink-0 text-[11px] font-semibold text-indigo-500 dark:text-indigo-400"
+          data-testid="code-preview-active-marker"
+        >
+          ${() => (active() ? '▸' : '')}
+        </span>
+        ${() =>
+          it.classLabel
+            ? html`<span
+                class="truncate text-[11px] font-medium text-slate-500 dark:text-zinc-500"
+                data-testid="code-preview-title"
+              >
+                ${it.classLabel}
+              </span>`
+            : ''}
+      </div>
       ${() =>
         it.context
           ? html`<span
               class="${() =>
-                'text-[11px] text-slate-400 dark:text-zinc-500 ' + (expanded() ? '' : 'truncate')}"
+                'text-xs leading-relaxed text-slate-700 dark:text-zinc-300 ' + (expanded() ? '' : 'truncate')}"
               data-testid="code-preview-context"
             >
               over: ${it.context}
@@ -234,6 +248,7 @@ function previewCard(it, active, expanded, onToggle) {
       <button
         type="button"
         data-testid="code-preview-toggle"
+        title="${() => (expanded() ? 'Inklappen' : 'Uitklappen (Enter)')}"
         @click="${(e) => {
           // stopPropagation FIRST, before the toggle mutates the reactive
           // state this very button's own ancestor re-renders off — see the
@@ -241,9 +256,9 @@ function previewCard(it, active, expanded, onToggle) {
           if (e && e.stopPropagation) e.stopPropagation()
           onToggle(it.key)
         }}"
-        class="self-start text-[11px] font-medium text-indigo-600 dark:text-indigo-400 hover:underline"
+        class="self-start text-slate-400 hover:text-indigo-600 dark:text-zinc-500 dark:hover:text-indigo-400"
       >
-        ${() => (expanded() ? 'Inklappen' : 'uitklappen (Enter)')}
+        ${() => (expanded() ? '▾' : '▸')}
       </button>
       <div class="flex flex-col gap-2" data-testid="code-preview-body">
         ${() =>

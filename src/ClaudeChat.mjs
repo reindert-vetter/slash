@@ -630,7 +630,11 @@ function claudeBubble(msg, i, total, claudePos, optionSel, anchorHint, onSend, o
   // fine; only the hint TEXT itself is read through its own `${() => ...}`.
   const showAnchor = i === 0 && mine
   return html`
-    <div class="${'flex flex-col gap-0.5 ' + (mine ? 'items-end' : 'items-start')}" data-testid="claude-message">
+    <div
+      class="${'flex flex-col gap-0.5 ' + (mine ? 'items-end' : 'items-start')}"
+      data-testid="claude-message"
+      data-message-id="${msg.id}"
+    >
       ${() =>
         showAnchor && anchorHint()
           ? html`<span

@@ -2,7 +2,8 @@ import { test, expect, seededPr, leaveSearchBox } from './_fixtures.mjs'
 
 // Verifies the code-preview-card behaviour on top of the existing mechanism
 // (tests/code-fence-preview.spec.mjs): a richer title (detected class
-// name(s) instead of the bare language), the "over: …" context line (the
+// name(s), shown ONLY when detected — no bare "Codeblok N · PHP" fallback
+// any more), the "over: …" context line (the
 // chat text that sat directly above the fence, CSS-truncated only while
 // collapsed), per-class labels inside a multi-class pane, the
 // default-collapsed/Enter-to-expand behaviour for a card that does NOT
@@ -108,16 +109,20 @@ test('code-preview cards: richer title, collapsed-only truncation, newest on top
   await expect(labels).toHaveCount(2)
   await expect(labels.nth(0)).toContainText('AlphaClass')
   await expect(labels.nth(1)).toContainText('BetaClass')
-  await expect(newestCard.getByTestId('code-preview-toggle')).toContainText('Inklappen')
+  // The visible affordance is a bare chevron now (no "Inklappen" text, see
+  // "Default-collapsed cards…" in .claude/docs/claude-chat-panel.md); the
+  // Dutch wording survives only as the button's `title` tooltip.
+  await expect(newestCard.getByTestId('code-preview-toggle')).toContainText('▾')
+  await expect(newestCard.getByTestId('code-preview-toggle')).toHaveAttribute('title', 'Inklappen')
   await expect(newestCard.getByTestId('code-preview-context')).not.toHaveClass(/truncate/)
 
   // The older card (turn 4) is now collapsed and rendered SECOND (below the
-  // newer one): no code at all, just the title/context and the "uitklappen
-  // (Enter)" affordance — and, being collapsed, its context line IS
-  // CSS-truncated now.
+  // newer one): no code at all, just the title/context and the chevron
+  // toggle — and, being collapsed, its context line IS CSS-truncated now.
   await expect(olderCard).toHaveAttribute('data-expanded', 'false')
   await expect(olderCard.locator('pre.code')).toHaveCount(0)
-  await expect(olderCard.getByTestId('code-preview-toggle')).toContainText('uitklappen')
+  await expect(olderCard.getByTestId('code-preview-toggle')).toContainText('▸')
+  await expect(olderCard.getByTestId('code-preview-toggle')).toHaveAttribute('title', 'Uitklappen (Enter)')
   await expect(olderCard.getByTestId('code-preview-context')).toHaveClass(/truncate/)
 
   // Enter on the focused (collapsed) older card — now the SECOND card, two
@@ -156,4 +161,72 @@ test('code-preview cards: richer title, collapsed-only truncation, newest on top
   const scroller = page.getByTestId('comments-and-related')
   const [cardBox, scrollerBox] = await Promise.all([newestCard.boundingBox(), scroller.boundingBox()])
   expect(Math.abs(cardBox.y - scrollerBox.y)).toBeLessThan(4)
+})
+
+// Regression test for the key-stability bug fixed alongside the header
+// cleanup above (see "A card not belonging to the LAST answer starts
+// collapsed…" in .claude/docs/claude-chat-panel.md). Reviewer report: "eerder
+// had ik iets anders ingeklapt, dat moet niet effect hebben op andere
+// blokken" — manually collapsing one card's preview visibly collapsed a
+// DIFFERENT, unrelated card too. Two separate comment threads, each with its
+// own single fenced code block: switching the focused comment removes the
+// no-longer-focused thread's fence from the DOM (only the focused card
+// renders full-size, see recomputeCodePreviews' own filter) and the other
+// thread's fence takes its place — the exact scenario that used to collide
+// on the fence's raw array position.
+test('collapsing one comment thread\'s code-preview card does not affect a different thread\'s card', async ({
+  page,
+}, testInfo) => {
+  const pr = seededPr(testInfo)
+  for (const [body, label] of [
+    ['eerste toelichting:\n```php\n$a = 1;\n```', 'Order::total'],
+    ['tweede toelichting:\n```php\n$b = 2;\n```', 'Order::lines'],
+  ]) {
+    const res = await page.request.post('/api/workflows/task_code_comment', {
+      data: { pr, file: 'test.php', line: 1, author: 'reviewer', body, gran: 'call', label },
+    })
+    expect((await res.json()).runId).toBeTruthy()
+  }
+
+  await page.goto('/pr/' + pr)
+  await leaveSearchBox(page)
+
+  const itemA = page.getByTestId('comment-item').filter({ hasText: 'eerste toelichting' })
+  const itemB = page.getByTestId('comment-item').filter({ hasText: 'tweede toelichting' })
+  await expect(itemA).toBeVisible()
+  await expect(itemB).toBeVisible()
+
+  // Focus thread A — its single card is the only one rendered, so it starts
+  // expanded by default (isLast is trivially true for a lone item).
+  await itemA.click()
+  let cards = page.getByTestId('code-preview-card')
+  await expect(cards).toHaveCount(1)
+  await expect(cards.first()).toHaveAttribute('data-expanded', 'true')
+
+  // Manually collapse thread A's own card.
+  await cards.first().getByTestId('code-preview-toggle').click()
+  await expect(cards.first()).toHaveAttribute('data-expanded', 'false')
+
+  // Switch focus to thread B — thread A's card (and its fence) disappears
+  // from the DOM, thread B's own fence takes the preview column's only slot.
+  await itemB.click()
+  cards = page.getByTestId('code-preview-card')
+  await expect(cards).toHaveCount(1)
+  await expect(cards.first()).toContainText('$b = 2;')
+  // Thread B never had its own card toggled — it must start expanded on its
+  // own default, not inherit thread A's collapsed override.
+  await expect(cards.first()).toHaveAttribute('data-expanded', 'true')
+
+  // Switching back to thread A: ITS own manual collapse must still hold.
+  // Thread A sits ABOVE the now-expanded thread B, so it is hidden behind
+  // the "N hierboven" hint (InlineComments only renders cards from the
+  // expanded one down, see "The selected conversation hides the ones above
+  // it…" in .claude/docs/comments-panel.md) rather than clickable directly.
+  await page.getByTestId('comment-more-above').click()
+  cards = page.getByTestId('code-preview-card')
+  await expect(cards).toHaveCount(1)
+  // Still collapsed, so no code renders at all (by design) — identify the
+  // card via its context line instead.
+  await expect(cards.first().getByTestId('code-preview-context')).toContainText('eerste toelichting')
+  await expect(cards.first()).toHaveAttribute('data-expanded', 'false')
 })

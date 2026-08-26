@@ -181,14 +181,19 @@ test('only a suggestion fence gets the "Huidig (PR)" comparison pane', async ({ 
 
   // Card 1 — the ordinary ```php fence: its own code, one pane, no comparison
   // against the anchored unit (which has nothing to do with this snippet).
-  await expect(cards.nth(0).getByTestId('code-preview-title')).toContainText('Codeblok 1')
+  // Neither snippet here declares a class, so the card shows no title line
+  // at all any more (the redundant "Codeblok N · PHP" header was removed —
+  // that number/word already shows on the fence's own inline badge in the
+  // chat bubble above, see "Default-collapsed cards…" in
+  // .claude/docs/claude-chat-panel.md).
+  await expect(cards.nth(0).getByTestId('code-preview-title')).toHaveCount(0)
   await expect(cards.nth(0)).not.toContainText('Huidig (PR)')
   await expect(cards.nth(0)).not.toContainText('Voorgesteld (chat)')
   await expect(cards.nth(0)).toContainText('$dit = "een gewoon voorbeeld";')
 
   // Card 2 — the ```suggestion fence: really is a proposed replacement for the
   // unit, so it keeps both panes.
-  await expect(cards.nth(1).getByTestId('code-preview-title')).toContainText('Suggestie 2')
+  await expect(cards.nth(1).getByTestId('code-preview-title')).toHaveCount(0)
   await expect(cards.nth(1)).toContainText('Huidig (PR)')
   await expect(cards.nth(1)).toContainText('Voorgesteld (chat)')
   await expect(cards.nth(1)).toContainText('$hasRestrictions = false;')
@@ -291,8 +296,9 @@ test('↓/↑ at the bottom of the Claude chat walk the code-preview cards', asy
   await expect(cards.nth(0)).toHaveAttribute('data-active', 'true')
   await expect(cards.nth(1)).toHaveAttribute('data-active', 'false')
   await expect(page.getByTestId('claude-chat-compose')).not.toBeFocused()
-  // The word/shape carries the state, not only the ring colour.
-  await expect(page.getByTestId('code-preview-title').first()).toContainText('▸')
+  // The word/shape carries the state, not only the ring colour — its own
+  // always-mounted marker now, independent of the (conditional) title line.
+  await expect(page.getByTestId('code-preview-active-marker').first()).toContainText('▸')
 
   await page.keyboard.press('ArrowDown')
   await expect(cards.nth(1)).toHaveAttribute('data-active', 'true')

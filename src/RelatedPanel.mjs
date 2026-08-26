@@ -4226,19 +4226,21 @@ function classNamesIn(code) {
   return names
 }
 
-// titleDetail(code, lang) — the " · …" suffix appended to a card's own
-// "Codeblok N"/"Suggestie N" label (reviewer request: a bare "Codeblok 1 ·
-// PHP" said nothing about WHAT the block was). A detected class name is more
-// useful than the announced language, so it takes over that slot entirely
-// rather than stacking both: one class → its name; two or more → every name,
+// classDetail(code) — the card's own title text, ONLY when the snippet
+// declares a detected class: one class → its name; two or more → every name,
 // in source order, joined with ", " (the reviewer explicitly wants the names
 // themselves, not a bare count) — CodePreview.mjs's `truncate` class still
-// clips the line if that gets long. No class detected at all → falls back to
-// the pre-existing language word.
-function titleDetail(code, lang) {
+// clips the line if that gets long. No class detected → '' (no title line at
+// all). This USED to fall back to a bare "Codeblok N · PHP"/"· <LANG>"
+// header — dropped on later reviewer request ("Codeblok 1 · PHP mag weg"):
+// that fallback said nothing a reviewer didn't already read off the SAME
+// fence's own inline badge in the chat bubble above (markdown.mjs's
+// `fenceLabel`/`data-fence-label`), so the redundant copy here is gone; only
+// genuinely new information (a detected class name) still earns a title
+// line on this card.
+function classDetail(code) {
   const names = classNamesIn(code)
-  if (names.length) return ' · ' + names.join(', ')
-  return lang ? ' · ' + lang.toUpperCase() : ''
+  return names.length ? names.join(', ') : ''
 }
 
 // cp.expandedOverride — a plain (non-`cp.items`) map, `fence key -> bool`,
@@ -4305,10 +4307,12 @@ export function activeCodePreviewKey() {
 // AND a resolvable current-code unit (oldCode stays `null` for a PR-wide
 // comment, which getCommentTarget() itself already returns null for).
 //
-// `title` is the fence's own "Codeblok N"/"Suggestie N" label
-// (data-fence-label), so the card and the inline badge carry the same name —
-// a reviewer saying "codeblok 3" means one thing on screen. The language word
-// rides along behind it when the fence announced one.
+// `classLabel` is deliberately NOT the fence's "Codeblok N"/"Suggestie N"
+// label any more — that number/word already shows on the SAME fence's own
+// inline badge in the chat bubble above (markdown.mjs's `fenceLabel`/
+// `data-fence-label`), so repeating it here as a card title was pure
+// clutter (reviewer report, see classDetail's own comment). Only a detected
+// class name still earns a title line on this card.
 //
 // Skips the reassignment when the recomputed set is identical to the
 // current one (same length, same code/lang/oldCode per item) — this runs
@@ -4347,16 +4351,49 @@ function recomputeCodePreviews() {
   // is never wrongly hidden just because that ancestor lookup came up empty.
   const containers = fences.map((el) => el.closest('[data-testid="claude-message"], [data-testid="comment-item"]'))
   const lastContainer = containers.length ? containers[containers.length - 1] : undefined
+  // containerKey(c) — a STABLE id for the fence's owning message/comment
+  // (its own `data-message-id`/`data-comment-id`, prefixed so the two id
+  // spaces can never collide with each other), used to build each fence's
+  // `key` below instead of its raw position in `fences`. Bug report: "eerder
+  // had ik iets anders ingeklapt, dat moet niet effect hebben op andere
+  // blokken" — collapsing one card leaked onto an unrelated one. Root cause
+  // was that `key` used to be the bare loop index (`'fence:' + i`), and
+  // `cp.expandedOverride` (below) is keyed by that string — but `next` is
+  // re-SORTED right after this map ("most-recently-generated … renders at
+  // the TOP"), so a fresh message arriving reshuffles which fence sits at
+  // which index. A later recompute's index `0` can end up pointing at a
+  // completely different fence than the one the reviewer actually toggled,
+  // silently inheriting its manual override. A composite key of (which
+  // message/comment, which fence within it) is stable across that reorder,
+  // because a message/comment's OWN body never reorders itself once
+  // rendered. `null` (no matching ancestor at all — not expected in
+  // practice, since every fence sits inside a comment or a Claude bubble,
+  // but kept as a safety net) falls back to the old index-based key, same
+  // as before this fix.
+  const containerKey = (c) => {
+    if (!c) return null
+    if (c.dataset.commentId != null) return 'c' + c.dataset.commentId
+    if (c.dataset.messageId != null) return 'm' + c.dataset.messageId
+    return null
+  }
   const next = fences.map((el, i) => {
     const code = el.dataset.fenceCode || ''
     const lang = el.dataset.fenceLang || ''
-    const label = el.dataset.fenceLabel || 'Codeblok'
     const context = el.dataset.fenceContext || ''
     const isPhp = !lang || lang.toLowerCase() === 'php'
     const suggestion = el.dataset.fenceSuggestion === 'true'
+    const ck = containerKey(containers[i])
+    // The fence's own position AMONG its container's own fences — stable
+    // regardless of where that container itself ends up after the
+    // newest-group-first sort below, unlike the raw loop index `i`.
+    const localIdx = containers[i]
+      ? Array.from(containers[i].querySelectorAll('[data-testid="code-fence"]')).indexOf(el)
+      : i
     return {
-      key: 'fence:' + i,
-      title: label + titleDetail(code, lang),
+      key: ck != null ? 'fence:' + ck + ':' + localIdx : 'fence:' + i,
+      // '' when the snippet declares no detected class — CodePreview.mjs
+      // then renders no title line at all, see classDetail's own comment.
+      classLabel: classDetail(code),
       context,
       lang,
       code,
@@ -4391,7 +4428,7 @@ function recomputeCodePreviews() {
       (it, i) =>
         it.code === cp.items[i].code &&
         it.lang === cp.items[i].lang &&
-        it.title === cp.items[i].title &&
+        it.classLabel === cp.items[i].classLabel &&
         it.context === cp.items[i].context &&
         it.oldCode === cp.items[i].oldCode &&
         it.isLast === cp.items[i].isLast,
