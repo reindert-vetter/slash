@@ -1,0 +1,24 @@
+[
+  {
+    "pr": 130,
+    "file": "public/images/logo.png",
+    "class": "",
+    "name": "logo.png",
+    "category": "OTHER",
+    "line": 1,
+    "endLine": 1,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 130,
+    "file": "public/images/added.png",
+    "class": "",
+    "name": "added.png",
+    "category": "OTHER",
+    "line": 1,
+    "endLine": 1,
+    "status": "added",
+    "side": "new"
+  }
+]

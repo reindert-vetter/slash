@@ -56,6 +56,7 @@ export default function globalSetup() {
   materializeEnumTranslationWorktrees()
   materializeDefaultSelWorktrees()
   materializeSvgWorktrees()
+  materializeImageWorktrees()
   materializeTestClassGroupWorktrees()
   materializeLineSummaryWorktrees()
   materializeClassMemberScopeWorktrees()
@@ -1180,6 +1181,30 @@ function materializeSvgWorktrees() {
   write('head', 'public/icons/logo.svg', icon('#0f0'))
   write('base', 'public/icons/evil.svg', evil)
   write('head', 'public/icons/evil.svg', evil)
+}
+
+// materializeImageWorktrees writes the synthetic PR 130 fixture worktrees for
+// image-preview.spec.mjs: a MODIFIED raster image (genuinely different bytes
+// old vs new) plus an ADDED one that exists only on the head side. Both are
+// real, valid 1x1 PNGs (written as a Buffer — the only binary fixture in this
+// file), so the browser can actually decode them and the spec can assert
+// naturalWidth > 0 instead of just "an <img> tag exists". Drives Block.mjs's
+// imageSlot + the /api/image endpoint (image_asset.go).
+function materializeImageWorktrees() {
+  // A 1x1 PNG, one per colour. Generated once with a PNG encoder and inlined
+  // as base64 — this must stay a decodable image, so don't "simplify" it into
+  // an arbitrary byte string.
+  const png = (b64) => Buffer.from(b64, 'base64')
+  const red = png(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==',
+  )
+  const green = png(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNg+M/wHwAEAQH/cetH5QAAAABJRU5ErkJggg==',
+  )
+  const write = worktreeWriter(130)
+  write('base', 'public/images/logo.png', red)
+  write('head', 'public/images/logo.png', green)
+  write('head', 'public/images/added.png', green)
 }
 
 // materializeTestClassGroupWorktrees writes the synthetic PR 110 fixture

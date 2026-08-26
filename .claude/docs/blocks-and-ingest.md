@@ -714,6 +714,42 @@ real body change stays "modified". Tests: `classify_test.go`
 (`TestBareTestAttributeOnlyChangeIsIgnored`,
 `TestBareTestAttributeChangeStillModifiedWithRealEdit`).
 
+### A changed raster image is detected on BYTES, not on diff hunks
+
+`git diff` reports only `Binary files a/x.png and b/x.png differ` for an image,
+so `fd.changedNew`/`changedOld` are empty and a MODIFIED image's whole-file
+block was dropped as unchanged — a changed `.png`/`.jpg`/… simply never reached
+the review tree (an added/removed one did: `fileAdded`/`fileDeleted` come from
+file existence in the worktrees, not from the diff). `classifyFile` therefore
+also sets `modified` when `binaryImageChanged` — `isImagePath(path)` (the
+`imageContentTypes` allowlist in `image_asset.go`) and the two sides' full
+contents differ, which it already has in hand as `oldSrc`/`newSrc`.
+
+That block deliberately **skips** the bare-`#[Test]` check above: that check
+asks "is every CHANGED line a bare `#[Test]`?", which a file with zero changed
+lines in the diff satisfies vacuously — it would drop the very block
+`binaryImageChanged` just rescued. Tests: `image_asset_test.go`
+(`TestClassifyFileSurfacesModifiedImage`).
+
+### A raster image's "source" is one generated line, not its bytes
+
+`extractBlockSource` (`code.go`) returns `imagePlaceholderSide`
+(`image_asset.go`) for an image extension:
+`binaire afbeelding (PNG, 12.4 kB, sha 1a2b3c4)`. It is the single place both
+`/api/code` and `blockstats` read a side from (see "blockstats" in
+`.claude/docs/approval.md`), so this one substitution keeps the whole row space
+consistent: **one row, one Space to approve a changed image**, instead of the
+hundreds of mojibake rows the raw bytes produced, and the AI passes
+(`explain_code`/`code_warning`, via `blockSource`) get that line rather than
+binary noise. The **sha is load-bearing** — without it both sides would carry
+identical text, `alignRows` would see one unchanged context row and there would
+be nothing to approve.
+
+The image itself is served separately by `GET /api/image` and rendered by
+`Block.mjs`'s `imageSlot`; the full picture (endpoint guards, the three `a`
+stands, the overlay) lives in "IMAGE blocks" in
+`.claude/docs/diff-render.md`.
+
 ## Truly deleted file (`file_deleted`)
 
 "All blocks of this file are `removed`" is not a reliable signal — the blocks

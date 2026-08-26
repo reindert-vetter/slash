@@ -180,6 +180,16 @@ func classifyFile(pr int, path, oldFile string, oldBlocks, newBlocks []Block, fd
 	oldBySym := indexBySymbol(oldBlocks)
 	newBySym := indexBySymbol(newBlocks)
 
+	// A raster image's whole-file block can never be detected as modified from
+	// the diff hunks: `git diff` says only "Binary files a/x.png and b/x.png
+	// differ" for it, so fd.changedNew/changedOld are empty and the block would
+	// be dropped as unchanged — a changed image simply never reached the review
+	// tree. Compare the two versions' bytes instead (oldSrc/newSrc are already
+	// the full contents of both sides, so this costs nothing extra). An
+	// added/removed image needs none of this: fileAdded/fileDeleted come from
+	// file existence, not from the diff. See .claude/docs/blocks-and-ingest.md.
+	binaryImageChanged := isImagePath(path) && oldSrc != newSrc
+
 	// Split once, not per block — only needed for the bare-#[Test]-only check
 	// below, so skip the work entirely when there is no diff to check against.
 	var oldLines, newLines []string
@@ -216,14 +226,19 @@ func classifyFile(pr int, path, oldFile string, oldBlocks, newBlocks []Block, fd
 		}
 		// Present in both: modified if new-lines or old-lines hit the span.
 		ob := oldBySym[sym]
-		modified := fileAdded
+		modified := fileAdded || binaryImageChanged
 		if fd != nil {
 			if fd.intersects(fd.changedNew, nb.Line, nb.EndLine) ||
 				fd.intersects(fd.changedOld, ob.Line, ob.EndLine) {
 				modified = true
 			}
 		}
-		if modified && isBareTestAttributeOnlyChange(fd, oldLines, newLines, ob, nb) {
+		// Never let the bare-#[Test] check reach a binary image: it asks "is
+		// every CHANGED line a bare #[Test] line?", which a file with zero
+		// changed lines in the diff (exactly what git reports for a binary)
+		// satisfies vacuously — it would drop the block binaryImageChanged just
+		// rescued.
+		if modified && !binaryImageChanged && isBareTestAttributeOnlyChange(fd, oldLines, newLines, ob, nb) {
 			// The only lines that changed are a bare `#[Test]` attribute line —
 			// no argument, no other attribute sharing it, nothing else in the
 			// method touched. That carries no reviewable meaning, so drop the

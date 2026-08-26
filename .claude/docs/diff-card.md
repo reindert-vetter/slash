@@ -50,6 +50,16 @@ explicitly as the BROAD reading: every change GROUP in the block spans
 exactly one row — including a block with only ONE such group (not just a
 block with several).
 
+**An IMAGE block is excluded from this jump** (`isImageFile(b)` → the watch
+returns early): its whole diff is ONE generated placeholder line
+(`imagePlaceholderSide`, `image_asset.go`), which satisfies
+`allChangesAreSingleLine` trivially and would flip the GLOBAL stand — for every
+code block visited afterwards too — every time the reviewer merely lands on an
+image. Its own stands mean something different anyway (side by side / overlay
+at 50% / only the new one, see "IMAGE blocks" in
+`.claude/docs/diff-render.md`), so `split` stays its default and `a` still
+cycles by hand.
+
 `allChangesAreSingleLine(b)` (`home.mjs`) is `changeGroups(blockRows(b))`
 every entry of which has `start === end`, and at least one group (an empty
 diff is not "single-line", there's nothing to show either way). A `watch` on
@@ -537,8 +547,8 @@ only turns on in `fit`) — so a long `import { ... } from "..."` line just ran
 off the pane's right edge into an invisible `overflow-auto`/`no-scrollbar`
 horizontal scroll, reading as the diff being clipped. `isProseFile` (`Block.mjs`)
 flips this to a **denylist**: `.md`/`.markdown`, `.json`, `.yml`/`.yaml`
-(`isYamlFile`) and `.txt` are prose/config and stay on this bounded, wrapped
-width; **every other extension is treated as code** and gets the uncapped
+(`isYamlFile`), `.txt`, `.svg` and the raster image extensions (`isImageFile`)
+are prose/config-or-not-text-at-all and stay on this bounded, wrapped width; **every other extension is treated as code** and gets the uncapped
 `contentWidthCls` instead — a `.ts`/`.js`/`.go`/… statement is exactly as
 unbreakable as a PHP one, and reads exactly as badly split mid-expression.
 
@@ -555,6 +565,15 @@ explicit inclusion it would fall on the "everything else is code" side of the
 new denylist and get an unwanted uncapped `contentWidthCls`. So it still gets
 `boundedWrapWidthCls` in the `fit` stand exactly like markdown/JSON (see "SVG
 blocks" in `.claude/docs/diff-render.md`).
+
+A **raster image** (`isImageFile`: png/jpg/jpeg/gif/webp/avif/ico) is in
+`isProseFile` for the mirror-image reason: `imageSlot` replaces the text diff
+with the picture itself, and the block's "source" is a single short generated
+placeholder line (`imagePlaceholderSide`, `image_asset.go`), so a
+content-driven width would shrink the card to that line's length instead of
+giving the preview images room. It DOES read `viewMode` (unlike `svgSlot`), but
+only to pick side-by-side / overlay / new-only — never a width. See "IMAGE
+blocks" in `.claude/docs/diff-render.md`.
 
 ## Narrow viewport (`narrow:`, < 1400px) — no longer a `widthCls` concern
 

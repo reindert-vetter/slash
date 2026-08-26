@@ -19,6 +19,16 @@ type codeSide struct {
 // the block whose symbol matches (class,name). Absent file or block → zero value
 // (Text == "").
 func extractBlockSource(path, relFile, class, name string) codeSide {
+	// A raster image has no text source at all: its bytes would arrive as
+	// mojibake in /api/code, blow up blockstats' row count into hundreds of
+	// meaningless "changed rows" and be fed verbatim to the AI passes. One
+	// descriptive line instead (format, size, short hash) — see
+	// imagePlaceholderSide in image_asset.go for why the hash matters. The
+	// actual image is served separately by /api/image and rendered by
+	// Block.mjs's imageSlot.
+	if isImagePath(relFile) {
+		return imagePlaceholderSide(path)
+	}
 	src, err := os.ReadFile(path)
 	if err != nil {
 		return codeSide{}

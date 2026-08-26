@@ -1331,6 +1331,15 @@ content-driven width** (`contentWidthCls`/`boundedWrapWidthCls`, `Block.mjs`)
 — toggling `a` changes the pane STRUCTURE above, not the card's width; see
 `.claude/docs/diff-card.md`.
 
+**On an IMAGE block the same three stands mean something else**, because there
+is no code text to lay out: `split` = the old and new picture side by side,
+`unified` = the two STACKED with the new one at 50% opacity (the picture
+equivalent of old-above-new with `-`/`+`), `fit` = only the new image. Same
+keys, same indicator; see "IMAGE blocks" in `.claude/docs/diff-render.md`. An
+image block is also excluded from the auto-`unified` jump below (its single
+"row" is a generated placeholder line, not a real one-line edit), so it never
+flips the global stand on its own.
+
 **Landing on a block whose every change spans exactly one row auto-jumps the
 INITIAL stand to `'unified'`** — a one-time default, not a permanent override
 (`a`/the indicator still cycle normally afterward); see "Landing on an

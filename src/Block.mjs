@@ -219,6 +219,27 @@ function isSvgFile(b) {
   return !!(b.file && b.file.toLowerCase().endsWith('.svg'))
 }
 
+// IMAGE_FILE_RE — the raster image extensions the review tree renders as a
+// PICTURE instead of a text diff. Deliberately the same allowlist as the Go
+// side's imageContentTypes (image_asset.go), which is what /api/image will
+// actually serve: taken from an inventory of what plug-and-pay tracks (.png
+// 479, .jpg 23, .ico 6, .gif 4, .avif 1) plus .jpeg/.webp. `.svg` is NOT here
+// — it is text and has its own data-URI preview (isSvgFile/svgSlot above).
+const IMAGE_FILE_RE = /\.(png|jpe?g|gif|webp|avif|ico)$/i
+
+// isImageFile — a raster-image extension check on b.file, mirroring
+// isSvgFile. Routes the card's whole render to imageSlot instead of codeDiff
+// (see the dispatch in Block() below) and is reused by isProseFile, so such a
+// card keeps the bounded width rather than a content-driven one derived from
+// its one-line placeholder source (see imageSlot's own doc comment).
+// Exported because home.mjs must exclude an image block from the
+// "everything changed on one line → jump to 'unified'" auto-stand (that one
+// row is the placeholder line, not a real single-line edit — see
+// allChangesAreSingleLine there).
+export function isImageFile(b) {
+  return !!(b.file && IMAGE_FILE_RE.test(b.file))
+}
+
 // isYamlFile — a plain `.yml`/`.yaml` extension check on b.file, mirrors
 // isSvgFile. Used to gate the collapsed-run breadcrumb below (see
 // YAML_KEY_RE) and reused by isProseFile (yaml is a prose/config format,
@@ -249,10 +270,16 @@ function isYamlFile(b) {
 // dispatch), but its raw XML source can carry an extremely long
 // single-line path `d=` attribute, so widthCls must keep treating it as
 // prose/config rather than uncapped code — the same bounded width every
-// non-PHP file used to get before this split existed. See
-// .claude/docs/diff-card.md.
+// non-PHP file used to get before this split existed. A raster image
+// (isImageFile) is in here for the mirror-image reason: it never reaches
+// codeDiff either (imageSlot renders it), and its "source" is a single short
+// placeholder line (imagePlaceholderSide, image_asset.go), so a
+// content-driven width would shrink the card to that line's length instead of
+// giving the preview images room. See .claude/docs/diff-card.md.
 function isProseFile(b) {
-  return !!(b.file && /\.(md|markdown|json|txt)$/i.test(b.file)) || isYamlFile(b) || isSvgFile(b)
+  return (
+    !!(b.file && /\.(md|markdown|json|txt)$/i.test(b.file)) || isYamlFile(b) || isSvgFile(b) || isImageFile(b)
+  )
 }
 
 // nonCommentLineLengths — the shared scan behind codeGrowthChars and
@@ -1570,6 +1597,8 @@ export default function Block(b, opts = {}) {
           ? translationSlot(b, activeGroup, approvedFn, langSiblingsFn, hintsEnabled, lineSummaryFn, diffActive)
           : isSvgFile(b)
           ? svgSlot(b)
+          : isImageFile(b)
+          ? imageSlot(b, viewModeFn)
           : codeDiff(b, activeGroup, hintsEnabled, approvedFn, commentedFn, approvedCallsFn, viewModeFn, lineSummaryFn, diffActive, commentRangeFn)}
       ${ShortcutHintBar(shortcutHintsFn)}
     </article>
@@ -1761,13 +1790,16 @@ function svgDataUri(text) {
   }
 }
 
-// svgPreviewPane renders one labelled image slot (old or new) of the SVG
+// previewPane renders one labelled image slot (old or new) of a rendered
 // preview — a plain <img>, never an inline <svg> (see svgDataUri above).
 // `uri` empty (missing side, or content that didn't look like SVG) shows a
 // muted "geen preview" placeholder instead of a broken <img>.
-function svgPreviewPane(labelText, uri) {
+// `kind` ('svg'/'image') only picks the data-testid prefix and the alt text,
+// so the two preview slots (svgSlot's data URIs and imageSlot's /api/image
+// URLs) share one pane instead of two near-identical copies.
+function previewPane(labelText, uri, kind = 'svg') {
   return html`
-    <div class="flex min-w-0 flex-1 flex-col gap-1.5" data-testid="${'svg-pane-' + labelText}">
+    <div class="flex min-w-0 flex-1 flex-col gap-1.5" data-testid="${kind + '-pane-' + labelText}">
       <span class="text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500"
         >${labelText}</span
       >
@@ -1776,7 +1808,7 @@ function svgPreviewPane(labelText, uri) {
       >
         ${() =>
           uri
-            ? html`<img src="${uri}" alt="${labelText + ' svg'}" class="max-h-64 max-w-full" />`
+            ? html`<img src="${uri}" alt="${labelText + ' ' + kind}" class="max-h-64 max-w-full" />`
             : html`<span class="text-xs italic text-slate-400 dark:text-zinc-500">geen preview</span>`}
       </div>
     </div>
@@ -1823,8 +1855,102 @@ function svgSlot(b) {
       class="flex flex-wrap gap-4 border-t border-slate-100 dark:border-zinc-800/60 px-4 py-4"
       data-testid="svg-diff"
     >
-      ${() => (only === 'right' ? '' : svgPreviewPane('oud', oldUri))}
-      ${() => (only === 'left' ? '' : svgPreviewPane('nieuw', newUri))}
+      ${() => (only === 'right' ? '' : previewPane('oud', oldUri))}
+      ${() => (only === 'left' ? '' : previewPane('nieuw', newUri))}
+    </div>
+  `
+}
+
+// imageUri builds the /api/image URL for one side of a raster-image block —
+// the endpoint that serves the actual bytes out of the PR's base (old) or
+// head (new) worktree (image_asset.go). b.pr/b.repo come straight off the
+// block (model.go), so this needs no plumbing from home.mjs; b.oldFile
+// redirects the old side to a renamed file's pre-rename path, exactly like
+// /api/code's own oldFile.
+function imageUri(b, side) {
+  const params = new URLSearchParams({ pr: String(b.pr), file: b.file, side })
+  if (b.repo) params.set('repo', b.repo)
+  if (side === 'old' && b.oldFile && b.oldFile !== b.file) params.set('oldFile', b.oldFile)
+  return '/api/image?' + params
+}
+
+// imageOverlayPane renders the 'unified' stand of an image block: the old and
+// the new picture ON TOP OF each other, the new one at 50% opacity, so the
+// difference between two versions of the same graphic is directly visible
+// instead of being spread across two panes you have to look back and forth
+// between. Explicit reviewer request ("ipv code boven elkaar met plusjes en
+// minnetjes, afbeeldingen boven elkaar zien met 50% transparantie als mode").
+//
+// The old image sits in normal flow and therefore sizes the box; the new one
+// is absolutely positioned at the same top-left corner and keeps its OWN
+// natural size (never stretched to the old one's box) — two images of
+// different dimensions must not be silently rescaled into looking identical.
+// A legend spells out which one is the transparent one: per the colorblind
+// rule the WORDS carry that meaning, never the rendering alone.
+function imageOverlayPane(b) {
+  return html`
+    <div class="flex min-w-0 flex-1 flex-col gap-1.5" data-testid="image-pane-overlay">
+      <span class="text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500"
+        >oud + nieuw over elkaar — nieuw 50% doorschijnend</span
+      >
+      <div
+        class="relative flex min-h-[6rem] items-center justify-center rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/40 p-3"
+      >
+        <div class="relative">
+          <img src="${imageUri(b, 'old')}" alt="oud image" class="max-h-64 max-w-full" />
+          <img
+            src="${imageUri(b, 'new')}"
+            alt="nieuw image (50% doorschijnend)"
+            class="absolute left-0 top-0 max-h-64 max-w-full opacity-50"
+            data-testid="image-overlay-new"
+          />
+        </div>
+      </div>
+    </div>
+  `
+}
+
+// imageSlot renders a changed raster image (.png/.jpg/.gif/.webp/.avif/.ico)
+// as the PICTURE itself instead of a text diff — it REPLACES codeDiff
+// entirely for such a file (see the dispatch in Block() above), the same
+// "replace, don't add alongside" precedent as translationSlot/svgSlot. It
+// reads no b.code at all: the bytes come from /api/image (imageUri above),
+// and the block's own "source" is only a one-line placeholder anyway
+// (imagePlaceholderSide, image_asset.go).
+//
+// Unlike svgSlot this DOES honour the `a` split/unified/fit stands — each one
+// gets the image-shaped meaning of what it does for code:
+//
+//   - 'split'   → old and new side by side (what side-by-side code does).
+//   - 'unified' → old and new stacked on top of each other, new at 50%
+//                 opacity (imageOverlayPane above) — the picture equivalent
+//                 of stacking old above new with -/+ marks.
+//   - 'fit'     → only the new image (fitOnly's own reasoning: 'fit' never
+//                 shows the old side of a two-sided block).
+//
+// A one-sided (added/removed) block has nothing to compare in ANY stand, so
+// singleSide(b) wins first and it just shows the side it has — including in
+// 'unified', where an overlay of one image would be meaningless.
+//
+// No raw-text fallback, for the same reason svgSlot has none (see its doc
+// comment): there is nothing readable to fall back TO for a binary file.
+function imageSlot(b, viewModeFn) {
+  const stand = viewModeFn()
+  const only = singleSide(b) || (stand === 'fit' ? 'right' : null)
+  const wrapCls = 'flex flex-wrap gap-4 border-t border-slate-100 dark:border-zinc-800/60 px-4 py-4'
+  if (only) {
+    return html`
+      <div class="${wrapCls}" data-testid="image-diff">
+        ${previewPane(only === 'left' ? 'oud' : 'nieuw', imageUri(b, only === 'left' ? 'old' : 'new'), 'image')}
+      </div>
+    `
+  }
+  if (stand === 'unified') {
+    return html`<div class="${wrapCls}" data-testid="image-diff">${imageOverlayPane(b)}</div>`
+  }
+  return html`
+    <div class="${wrapCls}" data-testid="image-diff">
+      ${previewPane('oud', imageUri(b, 'old'), 'image')} ${previewPane('nieuw', imageUri(b, 'new'), 'image')}
     </div>
   `
 }

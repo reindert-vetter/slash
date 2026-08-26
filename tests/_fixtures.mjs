@@ -438,6 +438,15 @@ function seed(db) {
   execFileSync(BIN, ['seed', '-db', db, '-from', 'tests/fixtures/svg-blocks.json'], {
     stdio: 'ignore',
   })
+  // Image-preview fixture (PR 130, image-preview.spec.mjs): a MODIFIED and an
+  // ADDED raster image (worktrees materialized in _setup.mjs,
+  // materializeImageWorktrees) — drives Block.mjs's imageSlot, which renders
+  // the picture itself (via GET /api/image) instead of a text diff, and gives
+  // the `a` split/unified/fit stands their image-shaped meaning (side by side
+  // / stacked at 50% opacity / only the new one).
+  execFileSync(BIN, ['seed', '-db', db, '-from', 'tests/fixtures/image-blocks.json'], {
+    stdio: 'ignore',
+  })
   // Test-class-grouping fixture (PR 110, test-class-grouping.spec.mjs): two
   // TEST-category classes — TriggersIndexTest (two methods) and
   // SettingsStoreTest (a single method, proving a class is grouped even with

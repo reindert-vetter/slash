@@ -33,6 +33,7 @@ import Block, {
   updateHints,
   blockLabel,
   singleSide,
+  isImageFile,
   sweepBracketOnlyForward,
   translationRowUnits,
   fitCapCharsFor,
@@ -1057,6 +1058,14 @@ watch(
     const ref = row ? row.id : `${b.file}:${b.line}`
     if (ref === autoUnifiedForBlockRef) return
     autoUnifiedForBlockRef = ref
+    // A raster image is never a single-line/additions-only CODE change: its
+    // whole "source" is one generated placeholder line (imagePlaceholderSide,
+    // image_asset.go), which would trivially satisfy allChangesAreSingleLine
+    // and silently flip the GLOBAL stand — for every code block afterwards
+    // too. Its own stands mean something different anyway (imageSlot in
+    // Block.mjs: side by side / overlay at 50% / only the new one), so
+    // landing on one must leave the reviewer's stand alone.
+    if (isImageFile(b)) return
     if (allChangesAreSingleLine(b) || allChangesAreAdditionsOnly(b)) applyDiffViewMode('unified')
   },
 )

@@ -684,3 +684,88 @@ source stays reachable via `GET /api/code` / "Open on GitHub") — that would ne
 new ephemeral or URL state for a narrow case. Test: `tests/svg-preview.spec.mjs`
 (fixture PR 109, `svg-blocks.json` + `materializeSvgWorktrees`, including a
 hostile `<script>`/`onload=` payload that never fires).
+
+## IMAGE blocks (raster: png/jpg/jpeg/gif/webp/avif/ico)
+
+Reviewer request: "afbeeldingen wil ik ook laten zien in de diff". Same
+"replace, don't add alongside" precedent as TRANSLATION/SVG above:
+`isImageFile`/`imageSlot` (`Block.mjs`) render the PICTURE instead of a text
+diff. Unlike an `.svg` (which is text, previewed from a data URI) a raster
+image needs three separate pieces, because its bytes are not source at all:
+
+- **The block has to exist in the first place.** `git diff` reports only
+  `Binary files a/x.png and b/x.png differ` for an image, so
+  `fd.changedNew`/`changedOld` are empty and a MODIFIED image's whole-file
+  block used to be dropped as unchanged — a changed image never reached the
+  review tree at all (an added/removed one did: `fileAdded`/`fileDeleted` come
+  from file existence, not from the diff). `classifyFile` therefore compares
+  the two versions' BYTES (`binaryImageChanged`, `classify.go`), and skips the
+  bare-`#[Test]` check for such a block: that check asks "is every changed line
+  a bare `#[Test]`?", which a file with zero changed lines satisfies vacuously
+  and would drop the block again.
+- **Its "source" is one generated line, not its bytes.**
+  `extractBlockSource` (`code.go`) returns `imagePlaceholderSide`
+  (`image_asset.go`) for an image extension:
+  `binaire afbeelding (PNG, 12.4 kB, sha 1a2b3c4)`. That is the single place
+  both `/api/code` and `blockstats` read a side from, so the reviewer's row
+  space stays one row: **one Space approves a changed image**, instead of the
+  hundreds of mojibake "changed rows" the raw bytes produced. The AI passes
+  (`explain_code`/`code_warning`, which read `blockSource`) get that same line
+  rather than binary noise. The **sha is load-bearing**: without it the old and
+  new placeholder would be identical text, `alignRows` would see one unchanged
+  context row, and the block would have zero rows to approve (two different
+  images can have the same byte size).
+- **The bytes come from their own endpoint.**
+  `GET /api/image?pr=N&file=…&side=old|new[&repo=][&oldFile=]`
+  (`image_asset.go`, read-only) serves one file out of the PR's base/head
+  worktree. Guards: the extension allowlist `imageContentTypes` (which also
+  decides the `Content-Type` — never sniffed from PR-supplied bytes, plus
+  `nosniff`), `resolveWithinWorktree` (confines the path to that worktree and
+  requires it to exist), a 16 MiB cap, and `Cache-Control: no-store` because an
+  ingest refresh re-materializes the worktree behind the same URL. `oldFile`
+  redirects the old side to a renamed file's pre-rename path, like
+  `/api/code`'s own. `.svg` is deliberately NOT in that allowlist — it stays on
+  the text path with its own data-URI preview.
+
+`imageSlot` reads no `b.code` at all (`imageUri` builds the URL from `b.pr`/
+`b.repo`/`b.oldFile`, which every block already carries), so there is no
+"loading" state.
+
+**Unlike `svgSlot` it DOES honour the `a` split/unified/fit stands**, each with
+the image-shaped meaning of what that stand does for code — the second half of
+the same request ("ipv code boven elkaar met plusjes en minnetjes, afbeeldingen
+boven elkaar zien met 50% transparantie als mode"):
+
+| stand | image block |
+| --- | --- |
+| `split` | old and new side by side (`previewPane` twice) |
+| `unified` | old and new STACKED, the new one at 50% opacity (`imageOverlayPane`, `data-testid=image-pane-overlay`) — the picture equivalent of old-above-new with -/+ |
+| `fit` | only the new image (`fitOnly`'s own rule: 'fit' never shows a two-sided block's old side) |
+
+In the overlay the old image sits in normal flow (it sizes the box) and the new
+one is absolutely positioned at the same top-left corner **at its own natural
+size** — two images of different dimensions must not be silently rescaled into
+looking identical. A legend spells out which one is transparent: per the
+colorblind rule the WORDS carry that meaning, not the rendering.
+
+A one-sided (added/removed) block has nothing to compare in ANY stand, so
+`singleSide(b)` wins first and it shows just the side it has — including in
+`unified`, where an overlay of one image would be meaningless.
+
+**An image block never triggers the auto-`unified` jump.** `home.mjs`'s
+"everything changed on one line → show the -/+ view" watch would fire on every
+image (that one row IS the placeholder line) and silently flip the GLOBAL stand
+for every code block afterwards, so it returns early on `isImageFile(b)` —
+`split` stays the default and `a` still cycles by hand.
+
+**Card width:** an image file is in `isProseFile` (`Block.mjs`), so it gets the
+bounded width rather than a content-driven one — otherwise the card would
+shrink to the length of its one placeholder line instead of giving the previews
+room. See `.claude/docs/diff-card.md`.
+
+**No raw-text fallback**, same reasoning as SVG — for a binary file there is
+nothing readable to fall back to. Tests: `tests/image-preview.spec.mjs`
+(fixture PR 130, `image-blocks.json` + `materializeImageWorktrees`, real 1x1
+PNGs so the browser really decodes them) and, on the Go side,
+`image_asset_test.go` (one changed row per changed image, the endpoint's happy
+paths and every refusal, and the classify rescue).

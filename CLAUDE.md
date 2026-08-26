@@ -87,7 +87,9 @@ that set stays small on purpose; a new topic file belongs in `.claude/docs/`.
   override on top of every column's auto width (drag handle, snap-back/
   dblclick reset, the accepted comment/Claude-row alignment trade-off).
 - `diff-render.md` — old/new line alignment, huge-block trim/collapse, char
-  diff, and the two categories that replace the text diff (TRANSLATION, SVG).
+  diff, and the three renders that replace the text diff (TRANSLATION, SVG,
+  and IMAGE — a raster image shown as the picture itself, its three `a`
+  stands, and the `/api/image` endpoint behind it).
 - `drilling.md` — opening an Underlying-code child as its own column
   (`state.drill`/`focusLevel`), rails, the enter/return animations.
 - `underlying-code.md` — the `RelatedPanel` card: which children it shows, the
