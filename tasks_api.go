@@ -1283,11 +1283,12 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 					http.Error(w, "invalid message", http.StatusBadRequest)
 					return
 				}
-			case chatActionCommit, chatActionClear, chatActionRetry:
+			case chatActionCommit, chatActionClear, chatActionRetry, chatActionSeen:
 				// No text required — "commit" pushes whatever Claude already
 				// changed, "clear" wipes the conversation, "retry" re-runs the
 				// turn that finally failed (its body comes from the workflow's own
-				// recorded input, never from here); none of them asks anything new.
+				// recorded input, never from here), "seen" just stamps the
+				// conversation as read; none of them asks anything new.
 			case chatActionCleanup:
 				// Body must be exactly one of the offered git-housekeeping options
 				// (chat_checkout.go) — this goes straight into a discard/stash git
@@ -2114,7 +2115,18 @@ func (s *server) handleChat(w http.ResponseWriter, r *http.Request) {
 		if ids == nil {
 			ids = []string{}
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "conversations": ids})
+		// seenAt (see chat.Module.SeenAt/MarkSeen) — the durable "has the
+		// reviewer opened this conversation since its last message" signal
+		// behind the "Openstaande chats" blue-eye indicator (BlockList.mjs).
+		// Only entries with a real seen_at are included; the frontend treats
+		// a missing id as "never seen". Best-effort: a failed read here must
+		// not break the existing conversations list, so it degrades to an
+		// empty map rather than a 500.
+		seenAt, err := s.tasks.chat.SeenAtForPR(r.Context(), queryRepo(r), pr)
+		if err != nil {
+			seenAt = map[string]string{}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "conversations": ids, "seenAt": seenAt})
 		return
 	}
 	commentID := r.URL.Query().Get("commentId")
@@ -2138,8 +2150,16 @@ func (s *server) handleChat(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "query failed", http.StatusInternalServerError)
 		return
 	}
+	// seenAt for this one conversation — see the ?pr= branch above. Handed
+	// back alongside messages so a caller that already fetches the
+	// transcript (loadChatMessages) gets it for free, without a second
+	// request.
+	seenAt, err := s.tasks.chat.SeenAt(r.Context(), commentID)
+	if err != nil {
+		seenAt = ""
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok": true, "messages": list, "summary": summary, "summaryStatus": summaryStatus,
+		"ok": true, "messages": list, "summary": summary, "summaryStatus": summaryStatus, "seenAt": seenAt,
 	})
 }
 

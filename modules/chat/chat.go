@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS chat_conversations (
   session_id     TEXT NOT NULL DEFAULT '', -- the claude CLI's --session-id/--resume value
   summary        TEXT NOT NULL DEFAULT '', -- the summarize_chat workflow's short Dutch summary
   summary_status TEXT NOT NULL DEFAULT '', -- '' | 'searching' | 'done' | 'failed' (see SummaryStatus*)
+  seen_at        TEXT NOT NULL DEFAULT '', -- see MarkSeen/SeenAt: last time the reviewer opened this conversation
   created_at     TEXT NOT NULL,
   updated_at     TEXT NOT NULL
 );
@@ -206,6 +207,8 @@ func migrate(db *sql.DB) {
 		// summarize_chat's own two columns (see SummaryStatus* / SaveSummary*).
 		`ALTER TABLE chat_conversations ADD COLUMN summary TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE chat_conversations ADD COLUMN summary_status TEXT NOT NULL DEFAULT ''`,
+		// See MarkSeen/SeenAt below.
+		`ALTER TABLE chat_conversations ADD COLUMN seen_at TEXT NOT NULL DEFAULT ''`,
 	} {
 		_, _ = db.Exec(col) // ignore "duplicate column name"
 	}
@@ -291,6 +294,57 @@ func (m *Module) Summary(ctx context.Context, conversationID string) (text, stat
 		return "", "", nil
 	}
 	return text, status, err
+}
+
+// MarkSeen stamps the moment the reviewer actually opened/read this
+// conversation — the durable, server-side counterpart of the frontend's
+// per-tab, session-only "answered" flag (claudeTurns.mjs), which does not
+// survive a refresh. Compared against the LAST message's own created_at (see
+// tasks_api.go's handleChat), never a message count — a count would also
+// have to track deletions/edits to stay meaningful, a timestamp doesn't. A
+// no-op (returns nil) if the conversation row doesn't exist. WRITE —
+// workflow-Activity-only (the claude_chat workflow's own "seen" Signal
+// action, see chat_workflow.go).
+func (m *Module) MarkSeen(ctx context.Context, conversationID string) error {
+	_, err := m.db.ExecContext(ctx,
+		`UPDATE chat_conversations SET seen_at = ?, updated_at = ? WHERE id = ?`,
+		now(), now(), conversationID)
+	return err
+}
+
+// SeenAt returns the conversation's stored seen_at ("" if never marked seen,
+// or the conversation row doesn't exist). READ — safe for the UI/API.
+func (m *Module) SeenAt(ctx context.Context, conversationID string) (string, error) {
+	var seenAt string
+	err := m.db.QueryRowContext(ctx,
+		`SELECT seen_at FROM chat_conversations WHERE id = ?`, conversationID).Scan(&seenAt)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return seenAt, err
+}
+
+// SeenAtForPR returns every conversation's seen_at for pr, keyed by
+// conversation id — the bulk read the "Openstaande chats" index section uses
+// so it doesn't need one round trip per row. Only conversations with a
+// non-empty seen_at are included; a caller treats a missing entry as "never
+// seen". READ — safe for the UI/API.
+func (m *Module) SeenAtForPR(ctx context.Context, repo string, pr int) (map[string]string, error) {
+	rows, err := m.db.QueryContext(ctx,
+		`SELECT id, seen_at FROM chat_conversations WHERE repo = ? AND pr = ? AND seen_at != ''`, repo, pr)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var id, seenAt string
+		if err := rows.Scan(&id, &seenAt); err != nil {
+			return nil, err
+		}
+		out[id] = seenAt
+	}
+	return out, rows.Err()
 }
 
 // SaveMessage persists one turn (idempotent on ID, so a retried Activity never

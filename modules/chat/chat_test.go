@@ -139,6 +139,77 @@ func TestConversationsWithMessages(t *testing.T) {
 	}
 }
 
+// MarkSeen/SeenAt/SeenAtForPR — the durable "has the reviewer opened this
+// conversation" signal behind the "Openstaande chats" blue-eye indicator (see
+// .claude/docs/claude-chat-panel.md). Never marked → "" (no seen_at row at
+// all, not an error); MarkSeen stamps a real timestamp; SeenAtForPR only
+// reports the conversations that HAVE been marked, scoped to repo+pr, and
+// leaves an unmarked one out entirely.
+func TestSeenAt(t *testing.T) {
+	m := testModule(t)
+	ctx := context.Background()
+
+	if err := m.EnsureConversation(ctx, "c-unseen", "", 7); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.EnsureConversation(ctx, "c-seen", "", 7); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.EnsureConversation(ctx, "c-other-pr", "", 8); err != nil {
+		t.Fatal(err)
+	}
+
+	seenAt, err := m.SeenAt(ctx, "c-unseen")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seenAt != "" {
+		t.Fatalf("seenAt = %q before MarkSeen, want empty", seenAt)
+	}
+
+	if err := m.MarkSeen(ctx, "c-seen"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.MarkSeen(ctx, "c-other-pr"); err != nil {
+		t.Fatal(err)
+	}
+
+	seenAt, err = m.SeenAt(ctx, "c-seen")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seenAt == "" {
+		t.Fatal("seenAt still empty after MarkSeen")
+	}
+
+	// A conversation row that never existed at all: still a plain "" (no
+	// error), same "unmarked" answer as one that exists but was never seen.
+	seenAt, err = m.SeenAt(ctx, "does-not-exist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seenAt != "" {
+		t.Fatalf("seenAt = %q for a nonexistent conversation, want empty", seenAt)
+	}
+
+	bulk, err := m.SeenAtForPR(ctx, "", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bulk) != 1 {
+		t.Fatalf("SeenAtForPR(pr=7) = %v, want exactly one entry", bulk)
+	}
+	if _, ok := bulk["c-seen"]; !ok {
+		t.Fatalf("SeenAtForPR(pr=7) = %v, want c-seen", bulk)
+	}
+	if _, ok := bulk["c-unseen"]; ok {
+		t.Fatalf("SeenAtForPR(pr=7) unexpectedly reports the never-seen conversation: %v", bulk)
+	}
+	if _, ok := bulk["c-other-pr"]; ok {
+		t.Fatalf("SeenAtForPR(pr=7) leaked a conversation from a different PR: %v", bulk)
+	}
+}
+
 // Purge removes every conversation + message of a PR and leaves other PRs
 // untouched — the cleanup workflow's per-module contract.
 func TestChatPurge(t *testing.T) {

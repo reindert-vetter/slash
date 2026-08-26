@@ -2801,6 +2801,18 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		publishChatChanged(arg.Repo, arg.PR, arg.ConversationID)
 		return nil, nil
 	})
+	// Activity (chatActionSeen, "Openstaande chats" blue-eye indicator): stamp
+	// the conversation as read up to now (chat.Module.MarkSeen).
+	engine.RegisterActivity("markChatSeen", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg chatCommitInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.chat == nil {
+			return nil, nil
+		}
+		return nil, m.chat.MarkSeen(ctx, arg.ConversationID)
+	})
 	// Activity: record the reviewer's answer to a pending question turn (write,
 	// workflow-driven).
 	engine.RegisterActivity("saveChatAnswer", func(ctx context.Context, in []byte) ([]byte, error) {

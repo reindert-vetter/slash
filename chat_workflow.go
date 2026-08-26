@@ -107,6 +107,14 @@ const (
 	// call (see applyCancelCleanup's own doc comment) — it only performs the
 	// chosen git housekeeping and reports the outcome.
 	chatActionCleanup = "cleanup"
+	// chatActionSeen marks the conversation as read up to its current last
+	// message — sent by the UI the moment the reviewer actually opens a
+	// conversation that has an unseen answer (see chat.Module.MarkSeen and
+	// the "Openstaande chats" blue-eye indicator in
+	// .claude/docs/claude-chat-panel.md). No Claude call, no user/assistant
+	// turn — purely a bookkeeping write via its own Activity, same shape as
+	// chatActionClear/Commit/Cleanup above.
+	chatActionSeen = "seen"
 )
 
 // chatRetryDelays is the automatic backoff ladder for a failed Claude call:
@@ -301,6 +309,20 @@ func claudeChatWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 				Repo: in.Repo, PR: in.PR, ConversationID: in.CommentID, Choice: sig.Body,
 			}, nil); err != nil {
 				return nil, fmt.Errorf("apply cancel cleanup: %w", err)
+			}
+			continue
+		}
+
+		// "Openstaande chats" blue-eye indicator (see chat.Module.MarkSeen's
+		// own doc comment): the reviewer opened this conversation, stamp it as
+		// read up to now. No Claude call, no user/assistant turn. Decided
+		// purely by sig.Action, part of the Signal's own recorded input —
+		// deterministic under replay.
+		if sig.Action == chatActionSeen {
+			if err := w.ExecuteActivity("markChatSeen", chatCommitInput{
+				PR: in.PR, ConversationID: in.CommentID,
+			}, nil); err != nil {
+				return nil, fmt.Errorf("mark chat seen: %w", err)
 			}
 			continue
 		}

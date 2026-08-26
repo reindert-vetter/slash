@@ -9,6 +9,7 @@ import { paletteClass } from './blockPath.mjs'
 import { batch, batchItemFor, BATCH_STATE_LABEL, isBatchEligible } from './commentBatch.mjs'
 import { claudeStatusText } from './ClaudeChat.mjs'
 import { claudeTurnFor } from './claudeTurns.mjs'
+import { isChatUnread, ensureChatUnread } from './chatUnread.mjs'
 
 // Tailwind classes per category tag, so the pills read like the screenshot.
 const CATEGORY_STYLE = {
@@ -261,6 +262,7 @@ function renderList(state, onRevealApproved) {
   if (state.blocksStale) items.push(staleTreeRow(state))
   let commentHeadingDone = false
   let lineCommentHeadingDone = false
+  let openChatsHeadingDone = false
   let underlyingHeadingDone = false
   let hiddenCommentHeadingDone = false
   let mentionHeadingDone = false
@@ -280,6 +282,21 @@ function renderList(state, onRevealApproved) {
       if (!hiddenCommentHeadingDone) {
         items.push(hiddenCommentHeading().key('hidden-comment-heading'))
         hiddenCommentHeadingDone = true
+      }
+      items.push(row(state, b, i))
+      return
+    }
+    // "Openstaande chats" (b.chatOnly, see chatBlockItem/openChatComments in
+    // home.mjs) — a comment with an existing Claude conversation that has no
+    // row anywhere else (already resolved, or a bare "Chat over deze regel"
+    // anchor with no written comment). Checked BEFORE the lineAnchored
+    // section below — chatBlockItem reuses commentBlockItem, so b.lineAnchored
+    // is true for it too, but it gets its own heading/section
+    // (recomputeLeftList's rank 2.55, directly under "Comments op regels").
+    if (b.kind === 'comment' && b.chatOnly) {
+      if (!openChatsHeadingDone) {
+        items.push(openChatsHeading().key('open-chats-heading'))
+        openChatsHeadingDone = true
       }
       items.push(row(state, b, i))
       return
@@ -355,7 +372,13 @@ function renderList(state, onRevealApproved) {
 // came with moving the list into the index, not an oversight.
 export function batchEligibleRows(state) {
   return state.blocks.filter(
-    (b) => b.kind === 'comment' && isBatchEligible(b.comment) && !isIgnoredComment(state, b),
+    // b.chatOnly (see chatBlockItem/openChatComments, home.mjs) is excluded —
+    // its own "comment" is either a bare Claude-chat anchor placeholder (no
+    // real reviewer text to process) or an already-resolved one, neither of
+    // which comment_batch was ever meant to reach; this section only exists
+    // to make an existing conversation navigable again, not to fold into the
+    // bulk-comment-processing action.
+    (b) => b.kind === 'comment' && !b.chatOnly && isBatchEligible(b.comment) && !isIgnoredComment(state, b),
   )
 }
 
@@ -487,6 +510,24 @@ function lineCommentHeading(state) {
       >
         ${() => (state.lineCommentsCollapsed ? '▸' : '▾')}
       </button>
+    </div>
+  `
+}
+
+// openChatsHeading titles the "Openstaande chats" section — a comment with an
+// existing Claude conversation that has no row anywhere else (b.chatOnly, see
+// chatBlockItem/openChatComments in home.mjs), sorted directly under
+// "Comments op regels" (recomputeLeftList's rank 2.55). Reviewer request:
+// "ik wil in de blokken index net als 'Comments op regels' een nieuwe
+// category: openstaande chats". No collapse toggle (unlike
+// lineCommentHeading) — not asked for.
+function openChatsHeading() {
+  return html`
+    <div
+      data-testid="open-chats-heading"
+      class="border-b border-t border-slate-100 dark:border-zinc-800/60 bg-slate-50 dark:bg-zinc-800/40 px-3 py-1.5 text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-zinc-500"
+    >
+      Openstaande chats
     </div>
   `
 }
@@ -1041,10 +1082,11 @@ export function toggleBatchChecked(state, id) {
 // keyboard-navigation.md for why the click handler below ALSO blurs the
 // input immediately.
 function batchCheckbox(state, b) {
-  // Mirrors batchEligibleRows exactly (kind + isBatchEligible + not ignored) —
-  // an ignored row, once revealed via "Toon N verborgen comments", must not
-  // show a checkbox that the action row's own count silently ignores.
-  if (b.kind !== 'comment' || !isBatchEligible(b.comment) || isIgnoredComment(state, b)) return ''
+  // Mirrors batchEligibleRows exactly (kind + !chatOnly + isBatchEligible +
+  // not ignored) — an ignored row, once revealed via "Toon N verborgen
+  // comments", must not show a checkbox that the action row's own count
+  // silently ignores.
+  if (b.kind !== 'comment' || b.chatOnly || !isBatchEligible(b.comment) || isIgnoredComment(state, b)) return ''
   const id = b.comment.id
   return html`
     <input
@@ -1170,6 +1212,7 @@ function row(state, b, i) {
       >
       ${() => batchCheckbox(state, b)}
       ${() => categoryOrAvatar(b)}
+      ${() => chatUnreadIcon(b)}
       <span
         class="flex-1 truncate font-mono text-[13px] text-slate-800 dark:text-zinc-200"
         title="${b.label}"
@@ -1345,6 +1388,45 @@ function claudeChatPill(b) {
           ? html`<span class="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-indigo-500"></span>`
           : ''}
       <span>${busy ? 'Claude bezig' : '✓ Claude antwoordde'}</span>
+    </span>
+  `
+}
+
+// chatUnreadIcon — the blue eye that marks an "Openstaande chats" row
+// (b.chatOnly, see chatBlockItem/openChatComments in home.mjs) whose last
+// Claude answer the reviewer hasn't opened yet (isChatUnread/chatUnread.mjs,
+// backed by the durable chat_conversations.seen_at column — survives a
+// refresh, unlike claudeChatPill's session-only "✓ Claude antwoordde"
+// above). ensureChatUnread(b.comment) is called unconditionally on every
+// render of such a row (same as ensureOtherTaskTitle's own pattern in
+// RelatedPanel.mjs) — it dedupes/caches internally, so this costs nothing
+// beyond the first render and any invalidation. Per the colourblind rule the
+// eye SHAPE plus the title/aria-label carry the meaning; the blue tint is
+// decoration only.
+function chatUnreadIcon(b) {
+  if (!b.chatOnly) return ''
+  ensureChatUnread(b.comment)
+  if (!isChatUnread(b.comment)) return ''
+  return html`
+    <span
+      data-testid="chat-unread-icon"
+      class="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-sky-100 text-sky-700 dark:bg-sky-500/20 dark:text-sky-300"
+      title="Nieuw antwoord van Claude nog niet gezien"
+      aria-label="Nieuw antwoord van Claude nog niet gezien"
+    >
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        class="h-3 w-3"
+      >
+        <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"></path>
+        <circle cx="12" cy="12" r="3"></circle>
+      </svg>
     </span>
   `
 }

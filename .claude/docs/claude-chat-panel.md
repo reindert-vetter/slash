@@ -894,6 +894,178 @@ turn's own (fast, canned) lifecycle — asserting the OTHER conversation's row
 fetches and shows the first sentence of the real message actually sent, not
 the old fallback.
 
+## "Openstaande chats": a comment index row for a chat that has no comment row of its own — and the durable "unseen answer" signal
+
+Reviewer request: *"ik wil in de blokken index net als 'Comments op regels'
+een nieuwe category: openstaande chats. maar alleen als het niet verwijderd
+is natuurlijk. Zet er een blauw oogje als ik het laatste antwoord van claude
+nog niet heb gezien."*
+
+**The gap this closes:** a Claude conversation always hangs off a comment
+(see "Product decision" above), but that comment does not always get its own
+sidebar row — a **bare** "Chat over deze regel" anchor
+(`isChatAnchorPlaceholder`, never taken over by the reviewer's own reply) is
+deliberately excluded from `indexComments()` (comments-panel.md), and an
+ordinary line comment that later gets **resolved** drops out of
+`indexComments()` too. Either way the conversation itself can still be very
+much alive — turns exist, an answer is sitting there — with no way back to
+it from the sidebar once the reviewer navigates away, other than happening to
+reopen the exact same code by hand.
+
+### `openChatComments()` (`RelatedPanel.mjs`)
+
+Every comment with an EXISTING conversation (`cc.conversations` — "here a
+Claude conversation really happened", see `ConversationsWithMessages` in
+`modules/chat`) whose own comment doesn't already get a row anywhere else —
+`indexComments()`'s own output is the exclusion set, dedup on `c.id` — so a
+still-open line comment (already under "Comments op regels") or a PR-wide one
+never gets a SECOND row here. A genuinely **deleted** comment needs no
+explicit check: `comments.Module.Delete` removes the row outright, so `cs.list`
+simply stops carrying it and it can never surface here either — this is what
+"maar alleen als het niet verwijderd is" already gets for free. `chatConversationIds()`
+is a plain, unconditional re-export of `cc.conversations` for `home.mjs`'s own
+`watch` to depend on (the arrow.js `watch` pitfall: `openChatComments()`
+itself has an early `if (!cc.conversations.length) return []`, which is fine
+for the actual filtering call but would make an unreliable, inconsistently-
+shaped watch dependency — see `.claude/rules/arrowjs-pitfalls.md`).
+
+### `chatBlockItem`/rank (`home.mjs`)
+
+`chatBlockItem(c)` reuses `commentBlockItem([c])` (the exact same
+label/`mentioned` computation, a "group" of one) and marks the result
+**`chatOnly: true`** — the one flag that routes it into its own section.
+`recomputeLeftList`'s `rank()` checks `b.chatOnly` **before** `b.lineAnchored`
+(a chat-only item is always also block-anchored — it needs a real code anchor
+to drill into, exactly like a line comment does — so `lineAnchored` is `true`
+for it too, and the check order matters): rank **2.55**, directly under
+"Comments op regels" (2.5) and still above "Onderliggende code" (3). Same
+dead-end-avoidance guard as `commentCandidates`: only a comment whose
+`file`+`label` resolves to a real block still in this tree (`anchoredBlocks`)
+gets a row — a chat with no code left to drill into would be a dead end just
+like an orphaned line comment.
+
+`BlockList.mjs`'s **`openChatsHeading`** (`data-testid=open-chats-heading`)
+titles the section, checked in `renderList` **before** the `b.lineAnchored`
+branch for the same reason as the rank ordering above. No collapse toggle
+(unlike `lineCommentHeading`) — not asked for.
+
+### 2x ArrowRight always lands directly in the chat, never in a comment step
+
+Since `chatBlockItem` reuses `commentBlockItem`'s whole shape (`kind:'comment'`,
+`comment`, `comments`), it gets `openCommentAnchorDrill`/
+`isCommentAnchorDrillActive`/`commentAnchorEntered`'s existing two-step `→`
+mechanism (see "An anchored 'Start' item…" and "Only one thing reads as
+selected at a time" in comments-panel.md) entirely for free — including the
+`onlyIds` scoping from that same section, so a bare placeholder anchor never
+shows some OTHER unrelated comment thread next to it either. The one thing
+that differs: `onKeydown`'s second-`→` branch checks `curBlock().chatOnly`
+and calls **`enterClaudeChat(state.pr)`** directly instead of
+`enterCommentsOrRelated(state.pr)` — reviewer request: *"als ik vanuit de
+blokken index 2x naar rechts ga, en er is geen comment, dan wil ik gelijk in
+de chat belanden"* — even though the anchor comment technically exists (it
+has to, to be an anchor at all), it is either a bare placeholder or a
+resolved/uninteresting thread, so there is no comment-thread step worth
+showing on the way in. `enterClaudeChat` resolves the target via
+`chatAnchorComment()` → `selComment()` = `visibleComments()[cs.sel]`, which
+`onlyIds` has already narrowed to exactly this one comment, so no extra
+`cs.sel` bookkeeping is needed before calling it. "Zonder andere chats" (no
+OTHER conversation shown alongside it) is already the existing invariant —
+the panel only ever loads ONE conversation's transcript into `cc` at a time
+(see "Parallel conversations" above) — and "lopende chats mag je laten staan"
+(a genuinely running OTHER conversation still shows in the footer's "Ook
+bezig elders" list) is unchanged, since that list is driven entirely by
+`claudeTurns.mjs`, untouched by this feature.
+
+### The blue-eye unread indicator: `src/chatUnread.mjs` + the durable `seen_at` column
+
+Reviewer: *"Zet er een blauw oogje als ik het laatste antwoord van claude nog
+niet heb gezien (dat is iets nieuws en moet je bouwen)."* The existing
+`claudeTurns.mjs` `answered` flag already answers a similar-sounding question,
+but it is **session-only** (cleared on refresh, never written anywhere
+durable) — explicitly not enough here, confirmed with the reviewer before
+building: *"BACKEND, niet localStorage. Het moet dus persistent server-side."*
+
+**Backend (`modules/chat/chat.go`):** a new `seen_at TEXT NOT NULL DEFAULT ''`
+column on `chat_conversations`. `MarkSeen(ctx, conversationID)` stamps it to
+now; `SeenAt`/`SeenAtForPR` are the read side. Compared against the
+conversation's own **last ASSISTANT message's `created_at`** (never a message
+count — a count would also have to track deletions to stay meaningful, per
+the reviewer's own instruction: *"seen_at vergelijken met de laatste message
+date"*).
+
+**The write goes through the existing `claude_chat` Workflow Execution, not a
+new one** (`.claude/rules/workflows-write-boundary.md`): a new
+`chatActionSeen = "seen"` `ChatMessageSignal.Action` value
+(`chat_workflow.go`), handled by a new branch in the workflow's `WaitSignal`
+loop — no Claude call, no user/assistant turn, just
+`w.ExecuteActivity("markChatSeen", ...)` → `chat.Module.MarkSeen` — exactly
+the same shape as the existing `chatActionClear`/`Commit`/`Cleanup` branches.
+`tasks_api.go`'s `SignalMessage` handler validates it needs no body, like
+those three. The Run ID is the same deterministic `chatConversationRunID`
+(`"chat-" + commentID`) every other Signal to this conversation already uses,
+so the frontend needs no lookup — `markChatSeenOnServer(commentId)`
+(`chatUnread.mjs`) posts straight to
+`/api/workflows/chat-<commentId>/signals/message`.
+
+**`GET /api/chat`** grew a `seenAt` field on both branches: the `?pr=N` form
+(`ConversationsWithMessages`'s sibling call) returns a `seenAt` MAP keyed by
+conversation id (only entries that HAVE been marked — a caller treats a
+missing id as "never seen"), and the `?commentId=` form returns the single
+value alongside `messages`, so a caller that already fetches the transcript
+(`loadChatMessages`, `ensureOtherTaskTitle`'s own fetch shape) gets it for
+free without a second request. Both reads are best-effort: a failed
+`SeenAtForPR`/`SeenAt` degrades to an empty map/`''` rather than a 500 — this
+is cosmetic bookkeeping, not the source of truth about anything the rest of
+the app depends on.
+
+**`src/chatUnread.mjs`** — a standalone shared module (like `claudeTurns.mjs`/
+`commentBatch.mjs`), not part of `RelatedPanel.mjs`, for the exact same
+reason `claudeTurns.mjs` is standalone: `BlockList.mjs`'s own row
+(`chatUnreadIcon`) needs to read it, and `RelatedPanel.mjs` already imports
+`BlockList.mjs` — a reverse import would close a cycle.
+
+- **`ensureChatUnread(c)`** — lazily fetches `c`'s own transcript+`seenAt`
+  (the same read-only `GET /api/chat?commentId=` `loadChatMessages`/
+  `ensureOtherTaskTitle` already use), exactly once per id until invalidated —
+  same dedupe-Set/cache-object shape as `ensureOtherTaskTitle`. Called
+  unconditionally on every render of a `chatOnly` row
+  (`BlockList.mjs`'s `chatUnreadIcon`), same "costs nothing beyond the first
+  render" pattern.
+- **`isChatUnread(c)`** — the cached boolean; `undefined` (never fetched yet)
+  reads as "not unread" so a row shows no icon until the fetch resolves,
+  rather than flashing one speculatively.
+- **Marking it read**: `RelatedPanel.mjs`'s `loadChatMessages`, in its
+  `applyDrafts === true` branch (i.e. the reviewer is genuinely OPENING the
+  conversation, not the passive preload `syncClaudeAnchorForSelection` uses)
+  — compares the just-loaded transcript's last assistant message against the
+  response's own `seenAt` and calls `markChatSeenOnServer` only when there is
+  actually something newer (avoiding a Signal on every ordinary re-open), and
+  calls **`setChatUnread(commentId, false)`** unconditionally so the icon
+  clears immediately, optimistically, without waiting for the round trip.
+- **Invalidation**: the existing `chat.message` SSE handler
+  (`ensureChatEvents`) drops a FOREIGN conversation's cached entry
+  (`dropChatUnreadCache`) the same way it already drops `otherTaskTitles`' —
+  its transcript just changed, so the next render re-derives unread-ness
+  against the fresh last-message time.
+
+Per the colourblind rule the eye **glyph** plus the `title`/`aria-label`
+carry the meaning (`data-testid=chat-unread-icon`); the blue tint is
+decoration only.
+
+**Test coverage split deliberately across layers** (per the "prefer a quick,
+targeted test over a slow e2e one" rule for novel/regression-sensitive
+signals): the actual `seen_at` round trip through the workflow is a Go test
+(`chat_workflow_test.go`'s `TestClaudeChatSeenSignalStampsSeenAt` — signals
+`chatActionSeen`, asserts `chat.Module.SeenAt` gets stamped and NO extra
+Claude turn/RunChat call happens), plus the plain module round trip
+(`modules/chat/chat_test.go`'s `TestSeenAt`). The one frontend-wiring spec,
+`tests/open-chats-index.spec.mjs`, is fully mocked (same shape as
+`comment-anchor-expanded-view.spec.mjs`'s `mockAnchoredComment` — a bare
+`seededPr` PR has no real ingested blocks at all, so `commentAnchorBlock`
+can never resolve one; this needs the real anchor PR 12903's own ingested
+tree) and checks the row appears, 2x `→` lands straight in the chat, and the
+icon disappears after the mocked "seen" Signal round-trips.
+
 ### ↑/↓ walk a tall bubble 4 rendered lines at a time, before stepping to the next one
 
 Reviewer request: the thread is deliberately not tall (`max-h-[38vh]`), which

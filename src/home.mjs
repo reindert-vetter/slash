@@ -87,6 +87,8 @@ import RelatedPanel, {
   focusedChipChain,
   selectComment,
   indexComments,
+  openChatComments,
+  chatConversationIds,
   isOrphanComment,
   commentDetailCard,
   startPrCommentReply,
@@ -3203,6 +3205,24 @@ function commentBlockItem(comments) {
   }
 }
 
+// chatBlockItem — the "Openstaande chats" index row (see openChatComments,
+// RelatedPanel.mjs): a comment with an existing Claude conversation that
+// otherwise has no row of its own (already resolved, or a bare "Chat over
+// deze regel" anchor with no written comment at all). Reuses
+// commentBlockItem's own label/mentioned computation (a single-comment
+// "group" of one) rather than duplicating it, then marks the result
+// `chatOnly` — the one flag that routes it into its own rank band/heading
+// (recomputeLeftList/BlockList.mjs) and makes a second ArrowRight land
+// straight in the chat instead of the comment thread (home.mjs's onKeydown,
+// see comments-panel.md/claude-chat-panel.md).
+function chatBlockItem(c) {
+  const item = commentBlockItem([c])
+  item.id = 'chat:' + c.id
+  item.category = 'CHAT'
+  item.chatOnly = true
+  return item
+}
+
 // testClassRowItem turns every TEST-category block of one file+class into a
 // single, synthetic state.blocks item (see "Grouping test methods per class"
 // in .claude/docs/detail-layout.md): kind:'test_class' marks it (guarded
@@ -3412,6 +3432,13 @@ function recomputeLeftList() {
       if (b.category === 'TEST') return 2.39
       return fileRank(b.file)
     }
+    // chatOnly (Openstaande chats, see openChatComments) is checked BEFORE
+    // lineAnchored — a chat-only item is always ALSO block-anchored (it
+    // needs a real code anchor to drill into, same as a line comment), so
+    // lineAnchored is true for it too; without this it would sort into
+    // "Comments op regels" instead of its own section. Sits directly under
+    // that section (2.55, still below "Onderliggende code" at 3).
+    if (b.chatOnly) return 2.55
     if (b.lineAnchored) return 2.5
     return b.mentioned ? -2 : 2.4
   }
@@ -3441,7 +3468,14 @@ function recomputeLeftList() {
     commentGroups.get(key).push(c)
   }
   const commentItems = [...commentGroups.values()].map(commentBlockItem)
-  state.blocks = [...groupedRows, ...commentItems]
+  // "Openstaande chats" (see openChatComments/chatBlockItem above) — only for
+  // a comment whose own anchor block is actually in this tree, same
+  // dead-end-avoidance reasoning as commentCandidates above (a row with no
+  // code to drill into would be a dead end).
+  const chatItems = openChatComments()
+    .filter((c) => anchoredBlocks.has(c.file + '|' + c.label))
+    .map(chatBlockItem)
+  state.blocks = [...groupedRows, ...commentItems, ...chatItems]
     // The haystack is label + category + FILE PATH (reviewer request: "ik wil
     // ook op bestandsnaam kunnen zoeken") — the path is what you remember when
     // you don't recall the method name, and a comment item simply has no
@@ -3487,8 +3521,12 @@ function recomputeLeftList() {
 // items only exist in state.blocks once this watch has run at least once
 // with actual data, which may well be later than loadBlocks' own one-shot
 // applyBlockRefRestore/applyDefaultUnapprovedSelection calls.
+// chatConversationIds() is listed alongside indexComments() so a fresh
+// GET /api/chat?pr=N landing (loadChatConversations reassigning
+// cc.conversations) also re-derives "Openstaande chats" (openChatComments,
+// chatBlockItem) — not just a comment-list change.
 watch(
-  () => indexComments(),
+  () => [indexComments(), chatConversationIds()],
   () => {
     recomputeLeftList()
     applyCommentRefRestore()
@@ -13700,7 +13738,15 @@ function onKeydown(e) {
           state.commentAnchorEntered = true
         } else {
           clearRangeAnchor()
-          enterCommentsOrRelated(state.pr)
+          // An "Openstaande chats" row (curBlock().chatOnly, see
+          // recomputeLeftList/openChatComments) always lands the keyboard
+          // directly IN the chat, skipping the comment-thread step
+          // entirely — reviewer request: "als ik vanuit de blokken index
+          // 2x naar rechts ga, en er is geen comment, dan wil ik gelijk in
+          // de chat belanden", even though the anchor comment technically
+          // exists. See .claude/docs/claude-chat-panel.md.
+          if (curBlock().chatOnly) enterClaudeChat(state.pr)
+          else enterCommentsOrRelated(state.pr)
         }
       } else if (!isPrCommentThreadFocused(sc)) enterPrCommentThread(sc)
     } else enterDiff()

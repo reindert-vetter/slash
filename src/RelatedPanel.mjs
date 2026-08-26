@@ -31,6 +31,7 @@ import { claudeChatColumn, claudeStatusText } from './ClaudeChat.mjs'
 import { codePreviewColumn } from './CodePreview.mjs'
 import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
 import { syncCommentBatch, batchProgressFor, batchNoteFor } from './commentBatch.mjs'
+import { lastAssistantMessageAt, setChatUnread, dropChatUnreadCache, markChatSeenOnServer } from './chatUnread.mjs'
 import {
   anyRecentlyFinishedTurn,
   anyTurnRunning,
@@ -2160,7 +2161,18 @@ async function loadChatMessages(commentId, applyDrafts = true) {
     cc.summary = json.summary || ''
     cc.summaryStatus = json.summaryStatus || ''
     cc.status = 'idle'
-    if (applyDrafts) applyPendingDraftReplies(commentId)
+    if (applyDrafts) {
+      applyPendingDraftReplies(commentId)
+      // The reviewer is genuinely OPENING this conversation (applyDrafts is
+      // false for the passive preload in syncClaudeAnchorForSelection) —
+      // "looking at it counts as seeing it" (see clearTurnAnswered's own
+      // session-only counterpart). Only sends the Signal when there is
+      // actually something newer than the stored seen_at, to avoid a Signal
+      // per ordinary re-open. See chatUnread.mjs's own doc comment.
+      const lastAt = lastAssistantMessageAt(cc.messages)
+      if (lastAt && lastAt > (json.seenAt || '')) markChatSeenOnServer(commentId)
+      setChatUnread(commentId, false)
+    }
     scrollClaudeThreadToBottom()
   } catch (_) {
     // keep the last good transcript on a transient error
@@ -3363,6 +3375,11 @@ function ensureChatEvents(pr) {
       delete next[ev.key]
       otherTaskTitles.byId = next
     }
+    // Same drop-and-refetch-on-demand for the unread cache (see
+    // chatUnread.mjs) — a foreign conversation's transcript just changed, so
+    // the next render's ensureChatUnread re-derives it against the fresh
+    // last-message time instead of keeping a stale answer forever.
+    dropChatUnreadCache(ev.key)
   })
   onEventsResync(() => {
     loadRunningTurns(cs.pr)
@@ -3749,6 +3766,7 @@ function ensureOtherTaskTitle(c) {
 function otherTaskTitleFor(c) {
   return otherTaskTitles.byId[c.id] || chatTaskTitle(c)
 }
+
 
 // otherRunningClaudeTasks — every OTHER conversation in this PR with a turn
 // running right now (claudeTurns.mjs' shared, PR-wide registry), PLUS every
@@ -9356,6 +9374,38 @@ export function indexComments() {
     out.push(c)
   }
   return out
+}
+
+// openChatComments — the "Openstaande chats" index section (home.mjs's
+// recomputeLeftList): every comment with an EXISTING Claude conversation
+// (cc.conversations — "here a Claude conversation really happened", see
+// ConversationsWithMessages in modules/chat) whose own comment doesn't
+// already get a row elsewhere (indexComments() — a still-open line comment,
+// a PR-wide/orphan one, …), so a resolved-but-chatted-about comment (or a
+// bare Claude-chat anchor with no written comment at all — reviewer request:
+// "Chat over deze regel" starts exactly such a conversation) becomes
+// reachable again instead of only living inside a block the reviewer happens
+// to reopen on their own. A genuinely DELETED comment is excluded implicitly
+// — cs.list simply no longer carries it (comments.Module.Delete removes the
+// row outright, see comments-panel.md), so it can never surface here.
+// home.mjs additionally requires the comment to resolve to a real block still
+// in this tree (the same "must actually be in this tree" condition
+// indexComments' own unresolved half needs, applied here too) before it gets
+// an index row at all.
+export function openChatComments() {
+  if (!cc.conversations.length) return []
+  const existingIds = new Set(indexComments().map((c) => c.id))
+  return cs.list.filter((c) => cc.conversations.indexOf(c.id) >= 0 && !existingIds.has(c.id))
+}
+
+// chatConversationIds — a plain, unconditional read of cc.conversations for
+// home.mjs's own watch to depend on (see the arrow.js `watch` pitfall in
+// arrowjs-pitfalls.md: a getter must read its deps INLINE, not buried inside
+// a helper with an early return like openChatComments' own `if
+// (!cc.conversations.length) return []` — that guard is fine for the actual
+// filtering call, but would make an unreliable watch dependency).
+export function chatConversationIds() {
+  return cc.conversations
 }
 
 // isOrphanComment reports whether a comment lost the code it was anchored to. Used

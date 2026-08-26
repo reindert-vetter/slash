@@ -785,6 +785,63 @@ func TestClaudeChatClearWipesTranscriptAndSession(t *testing.T) {
 	}
 }
 
+// The "seen" Signal action (chatActionSeen) stamps chat_conversations.seen_at
+// via its own markChatSeen Activity — no Claude call, no user/assistant turn
+// — the durable counterpart of the "Openstaande chats" blue-eye indicator
+// (see modules/chat's own TestSeenAt for the module-level round-trip).
+func TestClaudeChatSeenSignalStampsSeenAt(t *testing.T) {
+	stubUnreachableGh(t)
+	m, engine, cm, fake := newChatManager(t)
+	ctx := context.Background()
+	const pr, commentID = 970730, "comment-seen"
+
+	fake.SetChatTurns(`hallo`)
+
+	runID, err := m.StartClaudeChat(ClaudeChatInput{PR: pr, CommentID: commentID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.SignalWorkflow(runID, SignalMessage, ChatMessageSignal{
+		ID: "msg-1", Author: "reviewer", Body: "hoi",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		list, _ := cm.List(ctx, commentID)
+		return len(list) == 2
+	})
+
+	seenAt, err := cm.SeenAt(ctx, commentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seenAt != "" {
+		t.Fatalf("seenAt = %q before any \"seen\" Signal, want empty", seenAt)
+	}
+
+	if err := engine.SignalWorkflow(runID, SignalMessage, ChatMessageSignal{
+		ID: "msg-seen", Author: "reviewer", Action: chatActionSeen,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		got, _ := cm.SeenAt(ctx, commentID)
+		return got != ""
+	})
+
+	// No extra turn/RunChat call — "seen" is purely bookkeeping.
+	list, err := cm.List(ctx, commentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("expected still exactly 2 messages after a \"seen\" Signal, got %d", len(list))
+	}
+	if len(fake.Calls) != 1 {
+		t.Fatalf("expected exactly 1 RunChat call, got %d", len(fake.Calls))
+	}
+}
+
 // A re-executed Activity must OVERWRITE its assistant turn, never append a
 // second one. An Activity's side effects land before its result is recorded,
 // so a process killed in that window re-runs the whole Activity on recovery —
