@@ -2518,6 +2518,135 @@ return [
 	}
 }
 
+// TestResolveEnumValueTranslations: trans('prefix.' . $this->value) called
+// from a backed enum's own method resolves to the translation key EVERY case
+// of that enum produces at runtime, one entry per (case x locale) — the
+// reported case (OrderSummaryInclude::getLabel) that showed no underlying
+// code at all before this rule existed, because the concatenation makes the
+// key dynamic and resolveTranslations itself deliberately skips it.
+func TestResolveEnumValueTranslations(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 91
+	_, headDir := worktreeDirs(dataDir, "", pr)
+
+	enumHead := `<?php
+namespace App\Enums\Includes;
+
+enum OrderSummaryInclude: string
+{
+    case BILLING = 'billing';
+    case ITEMS = 'items';
+
+    public function getLabel(): string
+    {
+        return trans('includes.orders.' . $this->value);
+    }
+}
+`
+	enumPath := filepath.Join(headDir, "app/Enums/Includes/OrderSummaryInclude.php")
+	if err := os.MkdirAll(filepath.Dir(enumPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(enumPath, []byte(enumHead), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	nlLang := `<?php
+
+return [
+    'orders' => [
+        'billing' => 'Facturatiegegevens',
+        'items'   => 'Bestel regels',
+    ],
+];
+`
+	enLang := `<?php
+
+return [
+    'orders' => [
+        'billing' => 'Billing details',
+        'items'   => 'Order lines',
+    ],
+];
+`
+	for rel, body := range map[string]string{
+		"resources/lang/nl/includes.php": nlLang,
+		"resources/lang/en/includes.php": enLang,
+	} {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	caller := Block{
+		PR: pr, File: "app/Enums/Includes/OrderSummaryInclude.php", Class: "OrderSummaryInclude",
+		Name: "getLabel", Category: "ENUM", Side: SideNew, Status: StatusAdded,
+	}
+	entries := resolveEnumValueTranslations(dataDir, pr, []Block{caller})
+
+	if len(entries) != 4 {
+		t.Fatalf("got %d entries, want 4 (2 cases x 2 locales): %+v", len(entries), entries)
+	}
+
+	e, ok := findCallresolveEntry(entries, caller.ID(), "translation:nl:includes.orders.billing")
+	if !ok {
+		t.Fatalf("no entry for translation:nl:includes.orders.billing, got %+v", entries)
+	}
+	if e.Status != callresolve.StatusResolved || e.Kind != callresolve.KindTranslation {
+		t.Errorf("status/kind = %q/%q, want resolved/%q", e.Status, e.Kind, callresolve.KindTranslation)
+	}
+	if !strings.Contains(e.ChildCode, "Facturatiegegevens") {
+		t.Errorf("ChildCode = %q, missing nl value", e.ChildCode)
+	}
+
+	eEn, ok := findCallresolveEntry(entries, caller.ID(), "translation:en:includes.orders.items")
+	if !ok {
+		t.Fatalf("no entry for translation:en:includes.orders.items, got %+v", entries)
+	}
+	if !strings.Contains(eEn.ChildCode, "Order lines") {
+		t.Errorf("ChildCode = %q, missing en value", eEn.ChildCode)
+	}
+}
+
+// TestResolveEnumValueTranslationsNonEnumSkipped: the exact same dynamic
+// trans() shape on a block that is NOT categorized ENUM produces no entry —
+// this rule must never fabricate a key outside a backed enum's own method.
+func TestResolveEnumValueTranslationsNonEnumSkipped(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 92
+	_, headDir := worktreeDirs(dataDir, "", pr)
+
+	classHead := `<?php
+namespace App\Http\Controllers;
+class NotAnEnum {
+    public function getLabel(): string
+    {
+        return trans('includes.orders.' . $this->value);
+    }
+}
+`
+	p := filepath.Join(headDir, "app/Http/Controllers/NotAnEnum.php")
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(classHead), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	caller := Block{
+		PR: pr, File: "app/Http/Controllers/NotAnEnum.php", Class: "NotAnEnum",
+		Name: "getLabel", Category: "CONTROLLER", Side: SideNew, Status: StatusAdded,
+	}
+	entries := resolveEnumValueTranslations(dataDir, pr, []Block{caller})
+	if len(entries) != 0 {
+		t.Fatalf("got %d entries, want 0 (non-ENUM block): %+v", len(entries), entries)
+	}
+}
+
 // TestResolveConfigCalls: a config('file.key.path') call on a changed line
 // resolves to the value declared in config/<file>.php, and — because that
 // value reads a static env('VAR', ...) AND the exact `VAR=` line in

@@ -582,6 +582,34 @@ unmappable case yields **silently nothing**, never `unresolved`, never a search:
   `findCallSites` couples it via the key **string literal** (the same literal
   for every locale) and `resolvedCallTargetIds` skips `translation` so a changed
   lang file's own block stays in the left list.
+  **One dynamic-key shape IS resolved** — a sibling rule,
+  `resolveEnumValueTranslations`, links `trans('prefix.' . $this->value)` /
+  the `__()` alias, called from a block classified `ENUM`, to the key EVERY
+  case of that BACKED enum resolves to at runtime: it reads the enum's own
+  `case NAME = 'value';` declarations (`enumCaseValues`, a whole-file text
+  scan — plug-and-pay convention is one enum per file, same simplification
+  `resolveMigrationModels`/`resolveDataProviders` already make) and, for each
+  case, appends its value to the static prefix and resolves that key exactly
+  like `resolveTranslations` — via the shared `emitTranslationChildren`
+  helper both now call — one child per (case × locale). Reported case:
+  `OrderSummaryInclude::getLabel` returning
+  `trans('includes.orders.' . $this->value)` showed "Geen onderliggende
+  code." even though every case's key existed in both lang files. Deliberately
+  narrow: only PHP's own backed-enum `$this->value` (not a custom accessor),
+  only a static leading literal with no further concatenation, only
+  `trans()`/`__()` (not `trans_choice`/`@lang` — no reported case needs
+  them). **A resolved key from this rule has no literal for its FULL string
+  anywhere in the caller** — only the static PREFIX is actually quoted in the
+  source (the case's own value is never written out) — so `findCallSites`'
+  `translation:` branch (`home.mjs`) matches EITHER the full key OR that
+  prefix (the key with its last dot-segment stripped back to the trailing
+  `.`), or `callScopeMethods`' `hideOutOfScope` filter would hide such a
+  child at every diff granularity, reading exactly like the reported bug.
+  Tests: `TestResolveEnumValueTranslations`/
+  `TestResolveEnumValueTranslationsNonEnumSkipped`
+  (`callresolve_analysis_test.go`), `tests/related-translation-enum-scope.spec.mjs`
+  (fixture PR 129, `enumtranslation-*.json` +
+  `materializeEnumTranslationWorktrees`) for the frontend prefix-matching fix.
 - **Config values + `.env.example` (`resolveConfigCalls`).** Reviewer request:
   "als ik een `config(` code zie, wil ik als onderliggende blok zowel de config
   file/regel zien & .env.example zien (als dat is aangepast)". A

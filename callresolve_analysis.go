@@ -592,6 +592,17 @@ var (
 	// reEnvKey matches a static `env('VAR', ...)` call's first argument inside a
 	// resolved config value's source text — see resolveConfigCalls.
 	reEnvKey = regexp.MustCompile(`\benv\(\s*['"]([A-Za-z0-9_]+)['"]`)
+
+	// reTransDynEnumValueSingle/Double match trans('prefix.' . $this->value) /
+	// the __() alias — the one dynamic-key shape resolveEnumValueTranslations
+	// resolves. Captures the static prefix only; the enum case's own value is
+	// appended by the caller, one case at a time.
+	reTransDynEnumValueSingle = regexp.MustCompile(`\b(?:trans|__)\(\s*'((?:\\.|[^'\\])*)'\s*\.\s*\$this->value\b`)
+	reTransDynEnumValueDouble = regexp.MustCompile(`\b(?:trans|__)\(\s*"((?:\\.|[^"\\])*)"\s*\.\s*\$this->value\b`)
+	// reEnumCaseSingle/Double match a backed enum case declaration
+	// ("case NAME = 'value';" or the double-quoted form) — see enumCaseValues.
+	reEnumCaseSingle = regexp.MustCompile(`\bcase\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*'((?:\\.|[^'\\])*)'`)
+	reEnumCaseDouble = regexp.MustCompile(`\bcase\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"((?:\\.|[^"\\])*)"`)
 )
 
 // resolveCalls scans every changed new-side block for method calls and resolves
@@ -1492,6 +1503,11 @@ type langLocaleFile struct {
 // vendor/package translation (contains "::"), or that has no "file.key" form
 // (a bare whole-file reference) simply produces no entry — never an
 // "unresolved" row, mirroring resolveMigrationModels/resolveDataProviders.
+// One dynamic-key shape — a static prefix concatenated with a backed enum's
+// own `$this->value` — IS resolved, by the sibling rule
+// resolveEnumValueTranslations below, which reuses emitTranslationChildren
+// (the per-key/per-locale body extracted below) rather than duplicating it;
+// every other dynamic key stays out of v1 scope.
 //
 // A key that's missing in a given locale's file still produces an entry (so
 // the reviewer sees "missing in <locale>" instead of nothing) — with an empty
@@ -1524,45 +1540,160 @@ func resolveTranslations(dataDir string, pr int, blocks []Block) []callresolve.E
 		seen := map[string]bool{} // call keys (translation:<locale>:<key>) already emitted
 
 		for _, key := range translationKeysIn(scan) {
-			if strings.Contains(key, "::") {
-				continue // vendor/namespaced package translation — out of v1 scope
-			}
-			dot := strings.Index(key, ".")
-			if dot < 0 {
-				continue // whole-file reference (no key) — out of v1 scope
-			}
-			fileSeg := key[:dot]
-			keyPath := strings.Split(key[dot+1:], ".")
+			out = emitTranslationChildren(out, headDir, pr, callerID, key, langCache, seen)
+		}
+	}
+	return out
+}
 
-			locales, cached := langCache[fileSeg]
-			if !cached {
-				locales = localesForLangFile(headDir, fileSeg)
-				langCache[fileSeg] = locales
-			}
-			for _, loc := range locales {
-				callKey := "translation:" + loc.locale + ":" + key
-				if seen[callKey] {
-					continue
-				}
-				seen[callKey] = true
+// emitTranslationChildren resolves ONE translation key ("<fileSeg>.<path...>")
+// to every locale's lang file and appends the resulting callresolve.Entry rows
+// to out — the per-key/per-locale body shared by resolveTranslations (a
+// static key straight off the call site) and resolveEnumValueTranslations (a
+// key assembled from a static prefix + one backed-enum case's own value). A
+// key naming a vendor/package translation (contains "::") or with no
+// "file.key" form (a bare whole-file reference) produces no entry — never an
+// "unresolved" row, same "silently nothing" convention as every rule-based
+// resolver in this file. Dedup is via seen (keyed on the resulting callKey),
+// shared by the caller across every key/prefix it tries in one block so two
+// different sources can never double-emit the same child.
+func emitTranslationChildren(out []callresolve.Entry, headDir string, pr int, callerID, key string, langCache map[string][]langLocaleFile, seen map[string]bool) []callresolve.Entry {
+	if strings.Contains(key, "::") {
+		return out // vendor/namespaced package translation — out of v1 scope
+	}
+	dot := strings.Index(key, ".")
+	if dot < 0 {
+		return out // whole-file reference (no key) — out of v1 scope
+	}
+	fileSeg := key[:dot]
+	keyPath := strings.Split(key[dot+1:], ".")
 
-				fileText, err := os.ReadFile(filepath.Join(headDir, loc.file))
-				if err != nil {
-					continue
-				}
-				valueText, line, found := sliceLangKey(string(fileText), keyPath)
-				childLine := 1
-				if found {
-					childLine = line
-				}
-				out = append(out, callresolve.Entry{
-					PR: pr, CallerID: callerID, CallKey: callKey,
-					Status: callresolve.StatusResolved, Kind: callresolve.KindTranslation,
-					ChildFile: loc.file, ChildClass: loc.locale, ChildMethod: "",
-					ChildLine: childLine, ChildCode: valueText,
-				})
+	locales, cached := langCache[fileSeg]
+	if !cached {
+		locales = localesForLangFile(headDir, fileSeg)
+		langCache[fileSeg] = locales
+	}
+	for _, loc := range locales {
+		callKey := "translation:" + loc.locale + ":" + key
+		if seen[callKey] {
+			continue
+		}
+		seen[callKey] = true
+
+		fileText, err := os.ReadFile(filepath.Join(headDir, loc.file))
+		if err != nil {
+			continue
+		}
+		valueText, line, found := sliceLangKey(string(fileText), keyPath)
+		childLine := 1
+		if found {
+			childLine = line
+		}
+		out = append(out, callresolve.Entry{
+			PR: pr, CallerID: callerID, CallKey: callKey,
+			Status: callresolve.StatusResolved, Kind: callresolve.KindTranslation,
+			ChildFile: loc.file, ChildClass: loc.locale, ChildMethod: "",
+			ChildLine: childLine, ChildCode: valueText,
+		})
+	}
+	return out
+}
+
+// resolveEnumValueTranslations links trans('prefix.' . $this->value) / the
+// __() alias, called from a backed enum's own method, to the translation key
+// EVERY case of that enum resolves to at runtime — one child per (case ×
+// locale), via emitTranslationChildren above, the exact same read-only-leaf
+// shape as resolveTranslations' own static keys. Reported case:
+// OrderSummaryInclude::getLabel returning
+// trans('includes.orders.' . $this->value) showed no underlying code at all,
+// because the concatenation makes the key dynamic and resolveTranslations
+// silently skips it (its own "v1 scope" comment) — this rule covers exactly
+// that one shape instead of trying to resolve an arbitrary dynamic key.
+//
+// Deliberately narrow: only PHP's own backed-enum `$this->value` property
+// (not a custom accessor), only a STATIC leading string literal with no
+// further concatenation, only `trans()`/`__()` (not `trans_choice`/`@lang` —
+// no reported case needs them, and `trans_choice` additionally requires a
+// count argument this shape doesn't have), and only inside a block classified
+// ENUM (Category, set by classify.go's path rule) — a false match elsewhere
+// would fabricate keys that don't exist. Go-only, no LLM fallback, same
+// "silently nothing" shape as every other rule-based resolver in this file:
+// no dynamic match, no enum cases found in the file, produces no entry.
+func resolveEnumValueTranslations(dataDir string, pr int, blocks []Block) []callresolve.Entry {
+	baseDir, headDir := worktreeDirs(dataDir, blocksRepo(blocks), pr)
+	diffByFile := map[string]*fileChangeSet{}
+	langCache := map[string][]langLocaleFile{}
+	enumCasesByFile := map[string][][2]string{} // file → [(caseName, value)], cached per file
+
+	var out []callresolve.Entry
+	for _, b := range blocks {
+		if b.Side == SideOld || b.Category != "ENUM" {
+			continue
+		}
+		src := extractBlockSource(filepath.Join(headDir, b.File), b.File, b.Class, b.Name)
+		if src.Text == "" {
+			continue
+		}
+		fc, ok := diffByFile[b.File]
+		if !ok {
+			fc = changedNewLines(baseDir, headDir, b.File)
+			diffByFile[b.File] = fc
+		}
+		scan := fc.keepChanged(src)
+		if scan == "" {
+			continue // the block's change is old-side only (pure deletions)
+		}
+
+		var prefixes []string
+		for _, m := range reTransDynEnumValueSingle.FindAllStringSubmatch(scan, -1) {
+			prefixes = append(prefixes, unescapePHPQuoted(m[1], '\''))
+		}
+		for _, m := range reTransDynEnumValueDouble.FindAllStringSubmatch(scan, -1) {
+			prefixes = append(prefixes, unescapePHPQuoted(m[1], '"'))
+		}
+		if len(prefixes) == 0 {
+			continue
+		}
+
+		cases, cached := enumCasesByFile[b.File]
+		if !cached {
+			cases = enumCaseValues(filepath.Join(headDir, b.File))
+			enumCasesByFile[b.File] = cases
+		}
+		if len(cases) == 0 {
+			continue
+		}
+
+		callerID := b.ID()
+		seen := map[string]bool{}
+		for _, prefix := range prefixes {
+			for _, c := range cases {
+				out = emitTranslationChildren(out, headDir, pr, callerID, prefix+c[1], langCache, seen)
 			}
 		}
+	}
+	return out
+}
+
+// enumCaseValues scans a single PHP file for every backed-enum case
+// declaration ("case NAME = 'value';" or the double-quoted form) and returns
+// their (name, value) pairs, in source order — used by
+// resolveEnumValueTranslations. Whole-file text scan, not scoped to a class
+// body: plug-and-pay convention is one enum per file (mirrors
+// resolveMigrationModels'/resolveDataProviders' own simplifications
+// elsewhere in this file), so this is deliberately not a real PHP parse.
+func enumCaseValues(path string) [][2]string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	text := string(data)
+	var out [][2]string
+	for _, m := range reEnumCaseSingle.FindAllStringSubmatch(text, -1) {
+		out = append(out, [2]string{m[1], unescapePHPQuoted(m[2], '\'')})
+	}
+	for _, m := range reEnumCaseDouble.FindAllStringSubmatch(text, -1) {
+		out = append(out, [2]string{m[1], unescapePHPQuoted(m[2], '"')})
 	}
 	return out
 }

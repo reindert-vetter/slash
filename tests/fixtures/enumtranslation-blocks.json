@@ -1,0 +1,13 @@
+[
+  {
+    "pr": 129,
+    "file": "app/Enums/Includes/OrderSummaryInclude.php",
+    "class": "OrderSummaryInclude",
+    "name": "getLabel",
+    "category": "ENUM",
+    "line": 10,
+    "endLine": 13,
+    "status": "added",
+    "side": "new"
+  }
+]

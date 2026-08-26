@@ -53,6 +53,7 @@ export default function globalSetup() {
   materializeDrillChurnWorktrees()
   materializeTranslationWorktrees()
   materializeTranslationScrollWorktrees()
+  materializeEnumTranslationWorktrees()
   materializeDefaultSelWorktrees()
   materializeSvgWorktrees()
   materializeTestClassGroupWorktrees()
@@ -678,6 +679,54 @@ class CheckoutRequest
     'app/Http/Requests/CheckoutRequest.php',
     caller("\n            'x' => trans('checkout.foo'),\n            'y' => __('checkout.only_nl'),\n        "),
   )
+}
+
+// materializeEnumTranslationWorktrees writes the synthetic PR 129 fixture
+// worktree for related-translation-enum-scope.spec.mjs: a backed enum
+// (OrderSummaryInclude, category ENUM) whose one method returns
+// trans('includes.orders.' . $this->value) — the dynamic-key shape
+// resolveEnumValueTranslations resolves (callresolve_analysis.go) — plus its
+// nl/en lang files. The blocks/callresolve rows themselves are pre-baked
+// fixtures (enumtranslation-blocks.json/enumtranslation-callresolve.json,
+// _fixtures.mjs) rather than a real backend resolve, exactly like
+// materializeTranslationWorktrees above; only the WORKTREE SOURCE matters
+// here, since the spec is really about the FRONTEND scoping fix
+// (findCallSites' translation: branch, home.mjs) that couples a resolved
+// key whose full literal never appears in the caller — only its static
+// PREFIX does — to that one trans() call instead of hiding it as
+// "out of scope".
+function materializeEnumTranslationWorktrees() {
+  const enumBody = (value) => `<?php
+
+namespace App\\Enums\\Includes;
+
+enum OrderSummaryInclude: string
+{
+    case BILLING = 'billing';
+    case ITEMS = 'items';
+
+    public function getLabel(): string
+    {
+        return trans('includes.orders.' . ${value});
+    }
+}
+`
+  const lang = (billing, items) => `<?php
+
+return [
+    'orders' => [
+        'billing' => '${billing}',
+        'items' => '${items}',
+    ],
+];
+`
+  const write = worktreeWriter(129)
+  write('base', 'app/Enums/Includes/OrderSummaryInclude.php', enumBody('null'))
+  write('head', 'app/Enums/Includes/OrderSummaryInclude.php', enumBody('$this->value'))
+  write('base', 'resources/lang/nl/includes.php', lang('', ''))
+  write('head', 'resources/lang/nl/includes.php', lang('Facturatiegegevens', 'Bestel regels'))
+  write('base', 'resources/lang/en/includes.php', lang('', ''))
+  write('head', 'resources/lang/en/includes.php', lang('Billing details', 'Order lines'))
 }
 
 // materializeTranslationScrollWorktrees writes the synthetic PR 111 fixture

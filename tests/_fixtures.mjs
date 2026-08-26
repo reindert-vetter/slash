@@ -318,6 +318,26 @@ function seed(db) {
     ['seed', '-db', db, '-from', 'tests/fixtures/translationscroll-blocks.json'],
     { stdio: 'ignore', env: SEED_ENV },
   )
+  // Enum-value translation fixture (PR 129,
+  // related-translation-enum-scope.spec.mjs): a backed enum method whose
+  // trans('includes.orders.' . $this->value) call resolves (via
+  // resolveEnumValueTranslations, callresolve_analysis.go) to a translation
+  // child whose FULL key never appears literally in the caller — only its
+  // static prefix does. Worktree materialized in _setup.mjs
+  // (materializeEnumTranslationWorktrees).
+  execFileSync(
+    BIN,
+    [
+      'seed',
+      '-db',
+      db,
+      '-from',
+      'tests/fixtures/enumtranslation-blocks.json',
+      '-callresolve',
+      'tests/fixtures/enumtranslation-callresolve.json',
+    ],
+    { stdio: 'ignore', env: SEED_ENV },
+  )
   // Deleted-file fixture (PR 98, removed-file.spec.mjs): one block whose whole
   // file was deleted by the PR (fileDeleted: true) plus a loose removed method
   // in a file that still exists — drives the "Verwijderd bestand"/"Verwijderd"

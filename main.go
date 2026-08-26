@@ -243,6 +243,7 @@ func runRelationsCmd(args []string) {
 	// preserves LLM-owned rows, Prune drops call-sites that fell out of the PR).
 	calls := append(resolveCalls(dataDir, pr, blocks), resolveDataProviders(dataDir, pr, blocks)...)
 	calls = append(calls, resolveTranslations(dataDir, pr, blocks)...)
+	calls = append(calls, resolveEnumValueTranslations(dataDir, pr, blocks)...)
 	calls = append(calls, resolveClassMembers(dataDir, pr, blocks)...)
 	calls = append(calls, resolveConfigCalls(dataDir, pr, blocks)...)
 	cr, err := callresolve.Open(filepath.Join(dataDir, "callresolve.db"))

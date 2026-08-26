@@ -5066,8 +5066,22 @@ function findCallSites(rows, name, spanArgs = false) {
     const isCommand = /[^\w]/.test(name)
     const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     if (name.startsWith('translation:')) {
-      const escKey = name.replace(/^translation:[^:]*:/, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-      re = new RegExp("['\"]" + escKey + "['\"]", 'g')
+      const key = name.replace(/^translation:[^:]*:/, '')
+      const escKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      // A key resolved from a STATIC literal (resolveTranslations) has that
+      // exact string quoted in the caller — matched above. A key resolved by
+      // resolveEnumValueTranslations (callresolve_analysis.go) — a static
+      // prefix concatenated with a backed enum's own $this->value, e.g.
+      // trans('includes.orders.' . $this->value) — has NO literal for the
+      // full resolved key at all: only its PREFIX (the key with its last
+      // dot-segment, the enum case's own value, stripped back to the
+      // trailing dot) is actually quoted in the source. Matching both keeps
+      // every ordinary static key scoped exactly as before, and additionally
+      // scopes an enum-value-derived child to the one trans()/__() call it
+      // came from instead of it being hidden as "out of scope" everywhere.
+      const prefix = key.replace(/\.[^.]*$/, '.')
+      const escPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      re = escPrefix === escKey ? new RegExp("['\"]" + escKey + "['\"]", 'g') : new RegExp("['\"](?:" + escKey + '|' + escPrefix + ")['\"]", 'g')
     } else if (name.startsWith('config:') || name.startsWith('config_env:')) {
       // config:<file.key.path> / config_env:<file.key.path> (resolveConfigCalls,
       // callresolve_analysis.go): both siblings couple to the SAME literal — the

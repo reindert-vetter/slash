@@ -1,0 +1,50 @@
+[
+  {
+    "pr": 129,
+    "callerId": "129:app/Enums/Includes/OrderSummaryInclude.php:OrderSummaryInclude::getLabel",
+    "callKey": "translation:nl:includes.orders.billing",
+    "status": "resolved",
+    "kind": "translation",
+    "childFile": "resources/lang/nl/includes.php",
+    "childClass": "nl",
+    "childMethod": "",
+    "childLine": 3,
+    "childCode": "'Facturatiegegevens'"
+  },
+  {
+    "pr": 129,
+    "callerId": "129:app/Enums/Includes/OrderSummaryInclude.php:OrderSummaryInclude::getLabel",
+    "callKey": "translation:en:includes.orders.billing",
+    "status": "resolved",
+    "kind": "translation",
+    "childFile": "resources/lang/en/includes.php",
+    "childClass": "en",
+    "childMethod": "",
+    "childLine": 3,
+    "childCode": "'Billing details'"
+  },
+  {
+    "pr": 129,
+    "callerId": "129:app/Enums/Includes/OrderSummaryInclude.php:OrderSummaryInclude::getLabel",
+    "callKey": "translation:nl:includes.orders.items",
+    "status": "resolved",
+    "kind": "translation",
+    "childFile": "resources/lang/nl/includes.php",
+    "childClass": "nl",
+    "childMethod": "",
+    "childLine": 4,
+    "childCode": "'Bestel regels'"
+  },
+  {
+    "pr": 129,
+    "callerId": "129:app/Enums/Includes/OrderSummaryInclude.php:OrderSummaryInclude::getLabel",
+    "callKey": "translation:en:includes.orders.items",
+    "status": "resolved",
+    "kind": "translation",
+    "childFile": "resources/lang/en/includes.php",
+    "childClass": "en",
+    "childMethod": "",
+    "childLine": 4,
+    "childCode": "'Order lines'"
+  }
+]
