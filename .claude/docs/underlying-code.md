@@ -61,20 +61,33 @@ Each child is one card (`data-testid=related-item`). It follows
   the embedded code). Test: `tests/related-class-members.spec.mjs` (mocked
   `/api/callresolve` on PR 91, like `callresolve-live-update.spec.mjs`).
   **The `<class-header>` block itself is a LAST RESORT, not a permanent
-  addition (reversed on explicit request).** `resolveClassMembers` attaches its
-  member entries to every OTHER changed, non-header top-level block of the
-  SAME class/file in this PR (`classSiblingIDs`, `callresolve_analysis.go`) —
-  several changed siblings all get the SAME member cards, there is no single
-  "chosen" host. Only when a class's ONLY change in this PR is its header (no
-  such sibling exists) does the header stay its own caller, exactly as before.
+  addition (reversed on explicit request) — but a header whose OWN member
+  changed is exempt and stays a visible, approvable block.**
+  `resolveClassMembers` attaches its member entries to every OTHER changed,
+  non-header top-level block of the SAME class/file in this PR
+  (`classSiblingIDs`, `callresolve_analysis.go`) — several changed siblings all
+  get the SAME member cards, there is no single "chosen" host. It keeps the
+  header as its own caller when a class's ONLY change in this PR is its header
+  (no such sibling exists) **and** whenever the header's own members changed or
+  one was removed (`headerHasOwnChange` — see rule 9 in
+  `.claude/docs/workflows-analysis.md` for the reasoning and the accepted index
+  noise).
   `swallowedClassHeaderIds` (`home.mjs`, folded into `recomputeLeftList`'s
   `hidden` set alongside `resolvedCallTargetIds`) hides a header block from the
-  index whenever a sibling exists — its raw diff is then only reviewable via
-  the member cards, never as its own coarse-blob card. Tests:
+  index only on **positive evidence** that its members really landed elsewhere:
+  at least one `class_member:` callresolve row whose `callerId` is one of those
+  siblings. A sibling merely existing is deliberately NOT enough — no rows at
+  all (the `resolve_call`/`build_relations` step hasn't run yet, failed, or the
+  header region wouldn't parse) used to hide a changed block with nothing to
+  show in its place, and its one changed row then sat in **no** approval counter
+  (a swallowed header is not in `state.blocks`, so neither
+  `prWideApproveTotal` nor `findNextUnapproved` can ever reach it). Tests:
   `TestResolveClassMembersAttachedToSibling`/
-  `TestResolveClassMembersAttachedToEverySibling`
+  `TestResolveClassMembersAttachedToEverySibling`/
+  `TestResolveClassMembersChangedMemberStaysOnHeader`
   (`callresolve_analysis_test.go`), `tests/related-class-header-sibling.spec.mjs`
-  (PR 114: a class with a sibling vs. a header-only class).
+  (PR 114: a class with a sibling, a header-only class, and a class whose
+  members did not land on its sibling).
   **Attached to a sibling, a member card is now itself scoped to the selected
   group/line/call** — sharpened on explicit request, since attaching to
   *every* changed sibling used to also mean showing on every one of that
@@ -91,7 +104,10 @@ Each child is one card (`data-testid=related-item`). It follows
   code — and hide/show exactly like an ordinary resolved call at every
   granularity. A member never referenced anywhere in a given sibling
   disappears there in diff mode entirely (no fallback to the hidden
-  `<class-header>` card); **list mode is unaffected** (no active cursor to
+  `<class-header>` card) — which is exactly why a CHANGED member is no longer
+  attached to a sibling in the first place (`headerHasOwnChange` above): the
+  same scoping also hid a changed constant whose only usage site sits on
+  unchanged code; **list mode is unaffected** (no active cursor to
   scope by, same as every other call type) and keeps showing the full
   reference list. Test: `tests/related-class-member-scope.spec.mjs` (PR 115).
 - A **`config('file.key.path')` call** — the value declared in

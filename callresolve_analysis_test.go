@@ -3156,18 +3156,22 @@ class Fresh
 }
 
 // TestResolveClassMembersAttachedToSibling: with another changed, non-header
-// top-level block of the SAME class in this PR, the header's member cards
-// attach to that sibling's CallerID instead of the header's own — on
-// explicit request, so the reviewer can hide the <class-header> block from
-// the index entirely once its content is reachable via a sibling (see
-// swallowedClassHeaderIds, home.mjs). The header itself, if also passed in,
-// gets NO member entries of its own in this case.
+// top-level block of the SAME class in this PR — and NO change in the header's
+// own members — the header's member cards attach to that sibling's CallerID
+// instead of the header's own — on explicit request, so the reviewer can hide
+// the <class-header> block from the index entirely once its content is
+// reachable via a sibling (see swallowedClassHeaderIds, home.mjs). The header
+// itself, if also passed in, gets NO member entries of its own in this case.
+//
+// Both sides therefore declare the SAME constant: a CHANGED member keeps the
+// header as its own caller instead, see
+// TestResolveClassMembersChangedMemberStaysOnHeader.
 func TestResolveClassMembersAttachedToSibling(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 74
-	_, headDir := worktreeDirs(dataDir, "", pr)
+	baseDir, headDir := worktreeDirs(dataDir, "", pr)
 	const file = "app/Flows/ImportSubscriptionStatsFlow.php"
-	writeWorktreeFiles(t, headDir, map[string]string{file: `<?php
+	const src = `<?php
 namespace App\Flows;
 
 class ImportSubscriptionStatsFlow
@@ -3178,7 +3182,9 @@ class ImportSubscriptionStatsFlow
     {
     }
 }
-`})
+`
+	writeWorktreeFiles(t, baseDir, map[string]string{file: src})
+	writeWorktreeFiles(t, headDir, map[string]string{file: src})
 
 	header := Block{PR: pr, File: file, Class: "ImportSubscriptionStatsFlow", Name: classHeaderSentinel, Side: SideNew, Status: StatusModified}
 	sibling := Block{PR: pr, File: file, Class: "ImportSubscriptionStatsFlow", Name: "run", Side: SideNew, Status: StatusModified}
@@ -3209,9 +3215,11 @@ class ImportSubscriptionStatsFlow
 func TestResolveClassMembersAttachedToEverySibling(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 75
-	_, headDir := worktreeDirs(dataDir, "", pr)
+	baseDir, headDir := worktreeDirs(dataDir, "", pr)
 	const file = "app/Flows/ImportSubscriptionStatsFlow.php"
-	writeWorktreeFiles(t, headDir, map[string]string{file: `<?php
+	// Same constant on both sides — an UNCHANGED member is what makes the
+	// sibling attachment apply at all (see headerHasOwnChange).
+	const src = `<?php
 namespace App\Flows;
 
 class ImportSubscriptionStatsFlow
@@ -3226,7 +3234,9 @@ class ImportSubscriptionStatsFlow
     {
     }
 }
-`})
+`
+	writeWorktreeFiles(t, baseDir, map[string]string{file: src})
+	writeWorktreeFiles(t, headDir, map[string]string{file: src})
 
 	header := Block{PR: pr, File: file, Class: "ImportSubscriptionStatsFlow", Name: classHeaderSentinel, Side: SideNew, Status: StatusModified}
 	run := Block{PR: pr, File: file, Class: "ImportSubscriptionStatsFlow", Name: "run", Side: SideNew, Status: StatusModified}
@@ -3243,6 +3253,134 @@ class ImportSubscriptionStatsFlow
 		if !found {
 			t.Errorf("no BATCH_SIZE entry for sibling %q, got %+v", want.ID(), entries)
 		}
+	}
+}
+
+// TestResolveClassMembersChangedMemberStaysOnHeader: a header whose OWN member
+// changed keeps its member cards on the header itself, even with a changed
+// sibling in the same class — so the <class-header> block stays a visible,
+// approvable row in the index instead of being swallowed (headerHasOwnChange;
+// swallowedClassHeaderIds, home.mjs). Reindert: "als een php constante is
+// aangepast, maar het kan niet als onderliggende code ergens aan gekoppeld
+// worden, laat het dan zien als losse blok wat ik moet goedkeuren."
+//
+// Covers all three shapes of "its own member changed" — a changed constant, a
+// changed property, and a REMOVED constant (never emitted as a card at all, so
+// only the header's own diff shows it) — deliberately treated identically.
+func TestResolveClassMembersChangedMemberStaysOnHeader(t *testing.T) {
+	const file = "app/Flows/ImportSubscriptionStatsFlow.php"
+	cases := []struct {
+		name string
+		pr   int
+		base string
+		head string
+	}{
+		{
+			name: "changed constant",
+			pr:   76,
+			base: `<?php
+
+class ImportSubscriptionStatsFlow
+{
+    private const int HEARTBEAT_TIMEOUT_MINUTES = 2;
+
+    public function run()
+    {
+    }
+}
+`,
+			head: `<?php
+
+class ImportSubscriptionStatsFlow
+{
+    private const int HEARTBEAT_TIMEOUT_MINUTES = 20;
+
+    public function run()
+    {
+    }
+}
+`,
+		},
+		{
+			name: "changed property",
+			pr:   77,
+			base: `<?php
+
+class ImportSubscriptionStatsFlow
+{
+    private const int BATCH_SIZE = 100;
+
+    protected $queue = 'default';
+
+    public function run()
+    {
+    }
+}
+`,
+			head: `<?php
+
+class ImportSubscriptionStatsFlow
+{
+    private const int BATCH_SIZE = 100;
+
+    protected $queue = 'stats';
+
+    public function run()
+    {
+    }
+}
+`,
+		},
+		{
+			name: "removed constant",
+			pr:   78,
+			base: `<?php
+
+class ImportSubscriptionStatsFlow
+{
+    private const int BATCH_SIZE = 100;
+
+    private const int OLD_LIMIT = 5;
+
+    public function run()
+    {
+    }
+}
+`,
+			head: `<?php
+
+class ImportSubscriptionStatsFlow
+{
+    private const int BATCH_SIZE = 100;
+
+    public function run()
+    {
+    }
+}
+`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dataDir := t.TempDir()
+			baseDir, headDir := worktreeDirs(dataDir, "", tc.pr)
+			writeWorktreeFiles(t, baseDir, map[string]string{file: tc.base})
+			writeWorktreeFiles(t, headDir, map[string]string{file: tc.head})
+
+			header := Block{PR: tc.pr, File: file, Class: "ImportSubscriptionStatsFlow", Name: classHeaderSentinel, Side: SideNew, Status: StatusModified}
+			sibling := Block{PR: tc.pr, File: file, Class: "ImportSubscriptionStatsFlow", Name: "run", Side: SideNew, Status: StatusModified}
+			entries := resolveClassMembers(dataDir, tc.pr, []Block{header, sibling})
+
+			if len(entries) == 0 {
+				t.Fatalf("no member entries at all")
+			}
+			for _, e := range entries {
+				if e.CallerID != header.ID() {
+					t.Errorf("entry %s has caller %q, want the header %q", e.CallKey, e.CallerID, header.ID())
+				}
+			}
+		})
 	}
 }
 

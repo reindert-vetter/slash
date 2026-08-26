@@ -486,22 +486,49 @@ Rules, in order:
   swallowing the rest; an enum `case X = 'x';` and a `use Trait;` match nothing
   (the latter has rule 8). Same scope boundary rule 8 accepts: only the
   `<class-header>` region is scanned, so a constant declared **after** the first
-  method is silently missed. **A member never becomes a block** — no id, no
+  method is silently missed. **Two known, still-open holes (separate task, do
+  not assume they are covered by anything above):** a `const` declared after
+  the first method belongs to **no block at all** (the header region ends at
+  the first `function`, and methods only cover their own spans), and an
+  `interface` const gets no header block either (`phpscan.go`'s
+  `headerEligible` excludes interfaces and anonymous classes) — in both cases
+  the change is invisible in the review tree and counts in no approval total.
+  An `enum` const is fine (measured with `scanPHP`). **A member never becomes a block** — no id, no
   approval, no row in the block index (see `.claude/docs/underlying-code.md`).
-  **The `CallerID` is the header's OWN block only when the class has no other
-  changed block in this PR** (`classSiblingIDs`) — otherwise every OTHER
-  changed, non-header top-level block of the same file/class becomes a caller
-  (ALL of them, when several changed, never a single "chosen" one), so the
-  `<class-header>` block's own top-level row can be hidden from the index
-  entirely (`swallowedClassHeaderIds`, `home.mjs`) — see
-  `.claude/docs/underlying-code.md`. Reversed on explicit request: the header
-  used to always stay visible, with the members as a pure addition; a header
-  with no sibling at all still behaves exactly like before, since there is
-  nowhere else to hang its members. Tests:
+  **The `CallerID` is the header's OWN block whenever the class has no other
+  changed block in this PR (`classSiblingIDs`) OR the header's own members
+  changed (`headerHasOwnChange`)** — only otherwise does every OTHER changed,
+  non-header top-level block of the same file/class become a caller (ALL of
+  them, when several changed, never a single "chosen" one), which is what lets
+  the `<class-header>` block's own top-level row be hidden from the index
+  (`swallowedClassHeaderIds`, `home.mjs`) — see
+  `.claude/docs/underlying-code.md`. That sibling attachment was itself a
+  reversal on explicit request (the header used to always stay visible, with
+  the members as a pure addition), and `headerHasOwnChange` now narrows it
+  back: a header whose own constant/property **changed**, or that lost a
+  member (a **removal**, which is never emitted as a card at all), keeps its
+  cards and therefore stays a visible, approvable block. Reindert: *"als een
+  php constante is aangepast, maar het kan niet als onderliggende code ergens
+  aan gekoppeld worden, laat het dan zien als losse blok wat ik moet
+  goedkeuren"* — a changed constant used only from **unchanged** code showed
+  nowhere in diff mode (the sibling card is scoped to its usage site, see the
+  frontend sharpening below) while the header block holding its one changed row
+  was hidden, so that row sat in no approval counter at all. Deliberately
+  **coarse and kind-agnostic** (constant, property and removal alike; no
+  usage-site or changed-row analysis) — predictability over a tidier index,
+  explicitly chosen over the sharper variant. Practical consequence, recorded
+  so nobody "fixes" it back: **every** header block in the store is by
+  definition a changed block, so the swallow path now rarely triggers — only
+  for a header whose change sits somewhere OTHER than in a member declaration
+  (a changed `use Trait;`, an attribute, a docblock). Measured ceiling for the
+  index noise this adds: +6-14% rows on real PRs (14 of 171 blocks on the
+  worst of the ingested PRs), which is what made the coarse rule acceptable.
+  Tests:
   `TestResolveClassMembers`/`TestResolveClassMembersAddedFile`/
   `TestResolveClassMembersAttachedToSibling`/
-  `TestResolveClassMembersAttachedToEverySibling` and `TestResolveCallsConstRef`
-  (`callresolve_analysis_test.go`).
+  `TestResolveClassMembersAttachedToEverySibling`/
+  `TestResolveClassMembersChangedMemberStaysOnHeader` and
+  `TestResolveCallsConstRef` (`callresolve_analysis_test.go`).
   **Frontend-only sharpening (no change to the Go emission above):** attached
   to a sibling, `class_member:` is no longer unconditionally block-level in
   `home.mjs` — `callScopeMethods`/`findCallSites` treat it that way only while

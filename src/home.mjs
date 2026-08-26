@@ -4353,8 +4353,27 @@ function testCallTargetIds() {
 // itself — resolveClassMembers' own fallback). Every sibling gets the SAME
 // member cards (no single "chosen" host) — also explicit: with several
 // changed methods in one class there is no natural single place to put them.
+//
+// Requires POSITIVE EVIDENCE that the members really did land on a sibling: at
+// least one `class_member:` callresolve row whose callerId IS one of those
+// siblings. A sibling merely existing is not enough — the backend keeps a
+// header whose OWN member changed (or was removed) as its own caller
+// (headerHasOwnChange, callresolve_analysis.go), and no rows at all (the
+// resolve_call workflow hasn't run yet, failed, or the header region wouldn't
+// parse) must never hide a changed block either. Both cases leave the header a
+// normal, approvable index row — Reindert: "als een php constante is
+// aangepast, maar het kan niet als onderliggende code ergens aan gekoppeld
+// worden, laat het dan zien als losse blok wat ik moet goedkeuren". Without
+// this, the header's changed row sat in NO approval counter at all (it is not
+// in state.blocks) while its member card, scoped to its usage site on unchanged
+// code, showed nowhere in diff mode.
 function swallowedClassHeaderIds() {
   const ids = new Set()
+  const memberCallers = new Set()
+  for (const r of state.callResolve || []) {
+    if (String(r.callKey || '').startsWith('class_member:')) memberCallers.add(r.callerId)
+  }
+  if (!memberCallers.size) return ids
   const byFileClass = new Map()
   for (const b of state.allBlocks) {
     if (b.name === '<class-header>') continue
@@ -4365,7 +4384,7 @@ function swallowedClassHeaderIds() {
   for (const b of state.allBlocks) {
     if (b.name !== '<class-header>') continue
     const key = b.file + '::' + (b.class || '')
-    if ((byFileClass.get(key) || []).length > 0) ids.add(b.id)
+    if ((byFileClass.get(key) || []).some((sib) => memberCallers.has(sib.id))) ids.add(b.id)
   }
   return ids
 }

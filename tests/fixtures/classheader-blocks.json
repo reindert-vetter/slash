@@ -31,5 +31,27 @@
     "endLine": 4,
     "status": "modified",
     "side": "new"
+  },
+  {
+    "pr": 114,
+    "file": "app/Flows/NoCardsFlow.php",
+    "class": "NoCardsFlow",
+    "name": "<class-header>",
+    "category": "OTHER",
+    "line": 1,
+    "endLine": 4,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 114,
+    "file": "app/Flows/NoCardsFlow.php",
+    "class": "NoCardsFlow",
+    "name": "run",
+    "category": "ACTION",
+    "line": 6,
+    "endLine": 12,
+    "status": "modified",
+    "side": "new"
   }
 ]

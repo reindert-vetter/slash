@@ -1771,6 +1771,8 @@ func resolveClassMembers(dataDir string, pr int, blocks []Block) []callresolve.E
 			}
 		}
 
+		headMembers := scanClassMembers(head.Text, head.Start)
+
 		// A <class-header> block is one coarse blob the reviewer would rather
 		// not review as its own top-level card, ON EXPLICIT REQUEST — but ONLY
 		// when there is somewhere else to hang its members: every OTHER
@@ -1781,11 +1783,14 @@ func resolveClassMembers(dataDir string, pr int, blocks []Block) []callresolve.E
 		// see swallowedClassHeaderIds in home.mjs). With several changed
 		// siblings, every one of them gets the SAME member cards — no single
 		// "chosen" host, since there is no natural way to pick one.
+		//
+		// A header that itself declares a CHANGED (or removed) member stays its
+		// own caller too, even with siblings — see headerHasOwnChange.
 		callerIDs := classSiblingIDs(blocks, b)
-		if len(callerIDs) == 0 {
+		if len(callerIDs) == 0 || headerHasOwnChange(headMembers, baseText) {
 			callerIDs = []string{b.ID()}
 		}
-		for _, m := range scanClassMembers(head.Text, head.Start) {
+		for _, m := range headMembers {
 			was, existed := baseText[m.Kind+":"+m.Name]
 			changed := !existed || was != normalizeMemberText(m.Text)
 
@@ -1812,6 +1817,48 @@ func resolveClassMembers(dataDir string, pr int, blocks []Block) []callresolve.E
 		}
 	}
 	return out
+}
+
+// headerHasOwnChange reports whether a <class-header>'s own declared members
+// changed in this PR — a member whose text differs from the base side, a member
+// that is new, or a member that the base side had and the head side no longer
+// does (a removal).
+//
+// Such a header must stay a reviewable block of its own, so resolveClassMembers
+// keeps it as the caller of its member cards instead of attaching them to a
+// changed sibling method (Reindert, request: "als een php constante is
+// aangepast, maar het kan niet als onderliggende code ergens aan gekoppeld
+// worden, laat het dan zien als losse blok wat ik moet goedkeuren"). Attached to
+// a sibling, a member card is scoped to its usage SITE (callScopeMethods,
+// home.mjs), so a changed constant only referenced from unchanged code showed
+// nowhere in diff mode — and the header block it lives in was hidden from the
+// index (swallowedClassHeaderIds), leaving its one changed row out of every
+// approval counter. A removed member is never emitted as a card at all, so it
+// has nothing but the header's own diff.
+//
+// Deliberately coarse and kind-agnostic (constant, property and removal alike,
+// no usage-site or changed-row analysis): predictability over a tidier index,
+// explicitly chosen. Practical consequence, recorded so nobody "fixes" it back:
+// every header block in the store is by definition a changed block, so the
+// swallow path above now rarely triggers — only for a header whose change sits
+// somewhere OTHER than in a member declaration (a changed `use Trait;`, an
+// attribute, a docblock).
+func headerHasOwnChange(headMembers []classMember, baseText map[string]string) bool {
+	head := make(map[string]bool, len(headMembers))
+	for _, m := range headMembers {
+		key := m.Kind + ":" + m.Name
+		head[key] = true
+		was, existed := baseText[key]
+		if !existed || was != normalizeMemberText(m.Text) {
+			return true
+		}
+	}
+	for key := range baseText {
+		if !head[key] {
+			return true // a member the head side no longer declares
+		}
+	}
+	return false
 }
 
 // classSiblingIDs returns the block IDs of every OTHER top-level, new-side,

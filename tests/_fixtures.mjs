@@ -501,7 +501,10 @@ function seed(db) {
   // a changed sibling method (ImportSubscriptionStatsFlow) — the header row
   // must hide from the index, its member cards attach to the sibling — versus
   // a class with ONLY a changed header (LonelyHeaderFlow), which stays
-  // visible with its own member card, unchanged from before.
+  // visible with its own member card, unchanged from before. NoCardsFlow is
+  // the third shape: a changed header PLUS a changed sibling but NO
+  // class_member: callresolve row at all, which must ALSO stay visible (see
+  // swallowedClassHeaderIds, home.mjs).
   execFileSync(
     BIN,
     [

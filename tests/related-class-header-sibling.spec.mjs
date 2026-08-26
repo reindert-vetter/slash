@@ -45,3 +45,18 @@ test('a class-header with NO changed sibling stays visible with its own member c
   await expect(item).toContainText('LonelyHeaderFlow::NAME')
   await expect(item).toContainText("NAME = 'lonely'")
 })
+
+// The swallow needs POSITIVE evidence that the members really landed on a
+// sibling: at least one class_member: callresolve row on that sibling. A class
+// with a changed header AND a changed sibling but NO such row (the resolve_call
+// workflow hasn't run yet, failed, or the backend deliberately kept the header
+// as its own caller because its own member changed — headerHasOwnChange,
+// callresolve_analysis.go) keeps its header as a normal, approvable index row.
+test('a class-header whose members did NOT land on a sibling stays in the index', async ({ page }) => {
+  await page.goto('/pr/114')
+
+  await expect(page.getByTestId('block-row').filter({ hasText: 'NoCardsFlow::run' })).toHaveCount(1)
+  await expect(
+    page.getByTestId('block-row').filter({ hasText: 'NoCardsFlow' }).filter({ hasText: 'Class-header' }),
+  ).toHaveCount(1)
+})
