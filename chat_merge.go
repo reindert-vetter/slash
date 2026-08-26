@@ -461,7 +461,7 @@ func resolveCheckoutMerge(ctx context.Context, cm *chat.Module, cl claude.Client
 	// mergeErr == nil && len(conflicted) == 0: a clean merge — git resolved
 	// every changed line on its own, no AI needed at all.
 
-	if err := advancePendingRefFromCheckout(ctx, dir, repo, pr, headRefName); err != nil {
+	if err := advancePendingRefFromCheckout(ctx, dir, repo, pr, headRefName, false); err != nil {
 		// The merge itself is already committed locally at this point (an abort
 		// is no longer possible/meaningful) — a further race is rare enough that
 		// degrading to the ordinary retry message is acceptable; the next

@@ -79,6 +79,70 @@ commit for it.
   resolve becomes a consultation message in the conversation itself, see
   `workflows-comments.md`).
 
+## Amending a chain of chat commits (`commitCheckoutEditsAt`)
+
+Reviewer request: several "commit deze wijziging" landings in a row, before a
+push, should end up as ONE commit rather than a growing stack — easier to
+review/push/revert as a single unit. Scoped deliberately narrow:
+
+- **Only `commitCheckoutEditsAt`'s OWN commit** (the "commit deze wijziging"
+  Activity's `git commit`, see below) is ever a candidate to amend. Claude's
+  own free-text `git commit` run via Bash during a shell turn
+  (`.claude/docs/workflows-comments.md`, "Two-step tool access") is
+  deliberately **out of scope** — it has no fixed message convention, so there
+  is no safe, positive way to recognize it (a heuristic like "not obviously
+  manual" could just as easily match the reviewer's own commit in this same
+  shared checkout). No prompt change, no required tag for that path.
+- **Recognition is positive, not "not manual"**: `commitCheckoutEditsAt`'s own
+  commits always carry the exact subject line `chatEditCommitSubject`
+  ("Claude: reviewer-requested edit", `chat_checkout.go`) with the body as a
+  bullet list of the conversation ids that landed into it (see the message
+  format below). `amendableChatCommit` (`chat_checkout.go`) only treats HEAD
+  as a candidate when ALL of:
+  1. its subject is EXACTLY that string;
+  2. it has exactly one parent (never a merge commit — see
+     `resolveCheckoutMerge`'s own `git commit --no-edit` after a real
+     conflict);
+  3. it is **not already reachable from a freshly fetched
+     `origin/<headRefName>`** — the hard "never rewrite a pushed commit"
+     check, done with the checkout's own up-to-date fetch, not the coarser
+     branch-wide ahead/behind count further down in `commitCheckoutEditsAt`.
+- **PR-wide, not per-conversation**: the checkout is shared by every
+  conversation of a PR (see the file header), so the "previous commit" being
+  amended into may belong to a *different* chat thread than the one landing
+  now — deliberate, two unrelated reviewer requests can end up folded into one
+  commit.
+- **Message format**: `chatEditCommitMessage(conversationID)` builds the
+  FIRST landing's message (subject, blank line, one `- <conversationId>`
+  bullet); `appendChatEditCommitMessage(existing, conversationID)` adds one
+  more bullet to an existing message on every amend — so the message always
+  shows every request that went into the commit, in landing order, never just
+  the latest one silently replacing the rest.
+- **The pending ref then has to move non-fast-forward.** An amend rewrites
+  HEAD rather than extending it (same parent, new SHA), so
+  `advancePendingRefFromCheckout` gained an `allowAmend` parameter: only
+  `commitCheckoutEditsAt` ever passes `true`, and only right after it actually
+  ran `git commit --amend` — every other caller (the ordinary landing path,
+  `resolveCheckoutMerge`'s conflict-resolution landing) still passes `false`
+  and keeps the strict fast-forward-only check. This is deliberately not a
+  general non-fast-forward escape hatch: the one authoritative "was this ever
+  pushed" check already happened, against a fresh fetch, in
+  `amendableChatCommit` just before the amend, and nothing else can move the
+  ref in between because `chat_merge`'s queue serializes this PR's landings
+  one at a time.
+- **The ingest-refresh SHA changes underneath it, as expected**: after an
+  amend the old SHA is gone; `refreshTreeAfterLanding` re-reads the pending
+  ref (now pointing at the new, amended SHA) same as any other landing, so
+  nothing extra was needed there — the pre-existing re-anchor pass already
+  covers a SHA change.
+- Tests: `TestCommitCheckoutEditsAmendsIntoPreviousUnpushedChatCommit` (folds
+  a second, different-conversation landing into the first, pending ref
+  follows the new SHA, both conversation ids end up in the message),
+  `TestCommitCheckoutEditsDoesNotAmendAfterAPush` (a push in between forces a
+  new commit), `TestAmendableChatCommitRejectsAMergeCommit`,
+  `TestAmendableChatCommitRejectsAManualCommit` — all in
+  `chat_checkout_test.go`.
+
 ## Visible immediately: the refresh at a local SHA
 
 `refreshTreeAfterLanding` (`chat_merge.go`) signals the PR's own `pr_status`

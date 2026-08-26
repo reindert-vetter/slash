@@ -742,6 +742,162 @@ func TestCommitCheckoutEditsNothingToCommit(t *testing.T) {
 	}
 }
 
+// A second landing on the same PR, before the first has been pushed, folds
+// into the first commit via `git commit --amend` instead of stacking a new
+// one — PR-wide, so a different conversation's earlier landing still counts.
+// See .claude/docs/pending-push.md, "Amending a chain of chat commits".
+func TestCommitCheckoutEditsAmendsIntoPreviousUnpushedChatCommit(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	cm := testChatModule(t)
+
+	dir := cloneCheckoutDir(t, bareDir, "feature/x")
+	assignCheckoutForTest(t, "", 1020, dir)
+
+	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("edit one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if msg := commitCheckoutEditsAt(ctx, cm, dataDir, "", 1020, "conv-first", "turn-1", "feature/x"); msg.Kind == chat.KindError {
+		t.Fatalf("first landing reported an error: %+v", msg)
+	}
+	firstSHA := pendingRefSHA(ctx, "", prPendingRef("", 1020, "feature/x"))
+	if firstSHA == "" {
+		t.Fatal("expected a pending ref after the first landing")
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("edit two\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A different conversation of the same PR — the amend is PR-wide.
+	if msg := commitCheckoutEditsAt(ctx, cm, dataDir, "", 1020, "conv-second", "turn-2", "feature/x"); msg.Kind == chat.KindError {
+		t.Fatalf("second landing reported an error: %+v", msg)
+	}
+	secondSHA := pendingRefSHA(ctx, "", prPendingRef("", 1020, "feature/x"))
+	if secondSHA == "" || secondSHA == firstSHA {
+		t.Fatalf("expected the pending ref to follow the new (amended) sha, got %s (was %s)", secondSHA, firstSHA)
+	}
+
+	aheadOut, err := exec.Command("git", "-C", dir, "rev-list", "--count", "origin/feature/x..HEAD").CombinedOutput()
+	if err != nil {
+		t.Fatalf("rev-list: %v: %s", err, aheadOut)
+	}
+	if got := strings.TrimSpace(string(aheadOut)); got != "1" {
+		t.Fatalf("expected exactly ONE commit ahead of origin after amending, got %s", got)
+	}
+
+	bodyOut, err := exec.Command("git", "-C", dir, "log", "-1", "--format=%B", "HEAD").CombinedOutput()
+	if err != nil {
+		t.Fatalf("log: %v: %s", err, bodyOut)
+	}
+	body := string(bodyOut)
+	if !strings.Contains(body, "conv-first") || !strings.Contains(body, "conv-second") {
+		t.Fatalf("expected the amended commit message to carry both conversation ids, got: %s", body)
+	}
+}
+
+// Once a chat commit has actually been pushed, a further edit must create a
+// NEW commit, never amend the already-pushed one — the hard "not yet pushed"
+// safety check.
+func TestCommitCheckoutEditsDoesNotAmendAfterAPush(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	cm := testChatModule(t)
+
+	dir := cloneCheckoutDir(t, bareDir, "feature/x")
+	assignCheckoutForTest(t, "", 1021, dir)
+
+	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("edit one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if msg := commitCheckoutEditsAt(ctx, cm, dataDir, "", 1021, "conv-a", "turn-a", "feature/x"); msg.Kind == chat.KindError {
+		t.Fatalf("first landing reported an error: %+v", msg)
+	}
+
+	// The reviewer pushes via the todo row — simulated directly here, this
+	// test is about commitCheckoutEditsAt's own amend decision, not the push
+	// path itself (see pending_push_test.go for that).
+	if out, err := exec.Command("git", "-C", dir, "push", "origin", "feature/x").CombinedOutput(); err != nil {
+		t.Fatalf("push: %v: %s", err, out)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("edit two\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if msg := commitCheckoutEditsAt(ctx, cm, dataDir, "", 1021, "conv-b", "turn-b", "feature/x"); msg.Kind == chat.KindError {
+		t.Fatalf("second landing reported an error: %+v", msg)
+	}
+
+	aheadOut, err := exec.Command("git", "-C", dir, "rev-list", "--count", "origin/feature/x..HEAD").CombinedOutput()
+	if err != nil {
+		t.Fatalf("rev-list: %v: %s", err, aheadOut)
+	}
+	if got := strings.TrimSpace(string(aheadOut)); got != "1" {
+		t.Fatalf("expected exactly one NEW commit (not amended) after a push, got %s ahead of origin", got)
+	}
+	bodyOut, _ := exec.Command("git", "-C", dir, "log", "-1", "--format=%B", "HEAD").CombinedOutput()
+	if strings.Contains(string(bodyOut), "conv-a") {
+		t.Fatalf("must never rewrite an already-pushed commit, message = %s", bodyOut)
+	}
+}
+
+// A merge commit — even one carrying the exact chat-edit subject line — must
+// never be amended: only its parent count decides this, not the subject.
+func TestAmendableChatCommitRejectsAMergeCommit(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
+	ctx := context.Background()
+	dir := cloneCheckoutDir(t, bareDir, "feature/x")
+
+	run := func(args ...string) {
+		t.Helper()
+		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
+		}
+	}
+	run("checkout", "-b", "side")
+	if err := os.WriteFile(filepath.Join(dir, "bar.txt"), []byte("side\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "-A")
+	run("commit", "-m", "side change")
+	run("checkout", "feature/x")
+	if err := os.WriteFile(filepath.Join(dir, "baz.txt"), []byte("main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "-A")
+	run("commit", "-m", "main change")
+	run("merge", "side", "--no-ff", "-m", chatEditCommitSubject)
+
+	if _, ok := amendableChatCommit(ctx, dir, "feature/x"); ok {
+		t.Fatal("a merge commit must never be reported as amendable, regardless of its subject")
+	}
+}
+
+// A reviewer's own manual commit in the same shared checkout — with a
+// different subject line — must never be mistaken for a chat commit.
+func TestAmendableChatCommitRejectsAManualCommit(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
+	ctx := context.Background()
+	dir := cloneCheckoutDir(t, bareDir, "feature/x")
+
+	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("manual edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) {
+		t.Helper()
+		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
+		}
+	}
+	run("add", "-A")
+	run("commit", "-m", "reviewer's own unrelated fix")
+
+	if _, ok := amendableChatCommit(ctx, dir, "feature/x"); ok {
+		t.Fatal("a manual, non-chat commit must never be reported as amendable")
+	}
+}
+
 // testChatModule returns a throwaway chat.Module backed by an in-memory-ish
 // SQLite file under t.TempDir(), for tests that need commitCheckoutEditsAt's
 // message-saving side effect but don't care about its content.
@@ -1089,7 +1245,7 @@ func TestChatCheckoutNeedsLandingStopsAfterALandedCommit(t *testing.T) {
 
 	// Simulate the actual landing plumbing (advancePendingRefFromCheckout,
 	// chat_checkout.go) without going through a whole Claude turn.
-	if err := advancePendingRefFromCheckout(ctx, checkout, "", pr, headRefName); err != nil {
+	if err := advancePendingRefFromCheckout(ctx, checkout, "", pr, headRefName, false); err != nil {
 		t.Fatalf("advancePendingRefFromCheckout: %v", err)
 	}
 

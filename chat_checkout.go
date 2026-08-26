@@ -977,15 +977,29 @@ func pendingLandedMsg(headRefName, dir string) string {
 
 // advancePendingRefFromCheckout fetches dir's current HEAD into the shared
 // clone (a local, network-less fetch using dir itself as the "remote") and
-// advances the PR's pending ref to it — fast-forward only. This is the ONLY
-// function that ever moves that ref forward now that a write turn commits
-// directly onto the checkout's own real branch: there is nothing left to
-// "reclaim" (dir is the reviewer's own, permanent checkout, not a disposable
-// worktree), only the shared clone's read-model mirror to update.
+// advances the PR's pending ref to it — fast-forward only, UNLESS allowAmend
+// is set. This is the ONLY function that ever moves that ref forward now that
+// a write turn commits directly onto the checkout's own real branch: there is
+// nothing left to "reclaim" (dir is the reviewer's own, permanent checkout,
+// not a disposable worktree), only the shared clone's read-model mirror to
+// update.
+//
+// allowAmend is true from exactly one call site — commitCheckoutEditsAt,
+// right after it ran `git commit --amend` on a commit amendableChatCommit
+// already confirmed was unpushed — and lets the move skip the fast-forward
+// check for that one, deliberate case: an amend rewrites the ref's current
+// target rather than extending it, so the ordinary ancestor check would
+// always (correctly, but wrongly here) refuse it. No other caller may pass
+// true — that would turn this into a general non-fast-forward escape hatch,
+// which is exactly what this function otherwise exists to prevent. The
+// authoritative "was this commit ever pushed" check already happened, with a
+// freshly fetched origin/<headRefName>, in amendableChatCommit just before
+// the amend; nothing can move the ref in between because chat_merge's queue
+// serializes this PR's landings one at a time.
 //
 // ingestMu-guarded: fetch/update-ref touch the shared clone's own refs, the
 // same reason the old shadow-worktree plumbing took this lock.
-func advancePendingRefFromCheckout(ctx context.Context, dir, repo string, pr int, headRefName string) error {
+func advancePendingRefFromCheckout(ctx context.Context, dir, repo string, pr int, headRefName string, allowAmend bool) error {
 	ingestMu.Lock()
 	defer ingestMu.Unlock()
 
@@ -1001,7 +1015,7 @@ func advancePendingRefFromCheckout(ctx context.Context, dir, repo string, pr int
 
 	ref := prPendingRef(repo, pr, headRefName)
 	if cur := pendingRefSHA(ctx, repo, ref); cur != "" && cur != sha {
-		if _, err := runGitFor(ctx, repo, "merge-base", "--is-ancestor", cur, sha); err != nil {
+		if _, err := runGitFor(ctx, repo, "merge-base", "--is-ancestor", cur, sha); err != nil && !allowAmend {
 			return fmt.Errorf("landing %s would not be a fast-forward of %s", short(sha), short(cur))
 		}
 	}
@@ -1009,6 +1023,69 @@ func advancePendingRefFromCheckout(ctx context.Context, dir, repo string, pr int
 		return fmt.Errorf("update pending ref: %w", err)
 	}
 	return nil
+}
+
+// chatEditCommitSubject is the fixed subject line commitCheckoutEditsAt gives
+// its OWN commits — never Claude's own free-text `git commit` run via Bash in
+// a shell turn (chat_shell.md), which stays deliberately out of scope for
+// amending: there is no fixed convention to recognize those by, and telling
+// one apart from the reviewer's own manual commit in this same shared
+// checkout would mean guessing. Recognition below matches ONLY this exact
+// subject — positively, never "anything that isn't obviously manual".
+const chatEditCommitSubject = "Claude: reviewer-requested edit"
+
+// chatEditCommitMessage is the message for a brand-new chat-edit commit (no
+// eligible previous chat commit to fold into) — subject line plus one bullet
+// for this landing's conversation.
+func chatEditCommitMessage(conversationID string) string {
+	return chatEditCommitSubject + "\n\n- " + conversationID
+}
+
+// appendChatEditCommitMessage extends an existing chat-edit commit message
+// with one more bullet, so amending several unpushed chat landings into one
+// commit still shows every request that went into it — the reviewer picked
+// "merge both messages" over silently keeping only the latest.
+func appendChatEditCommitMessage(existing, conversationID string) string {
+	return strings.TrimRight(existing, "\n") + "\n- " + conversationID
+}
+
+// amendableChatCommit reports whether dir's current HEAD is a safe target to
+// fold a new chat edit into via `git commit --amend`, instead of stacking a
+// new commit. All three must hold:
+//
+//  1. HEAD's subject is EXACTLY chatEditCommitSubject — so this only ever
+//     matches a commit commitCheckoutEditsAt itself made, never Claude's own
+//     free-text Bash commit and never a reviewer's manual commit in this same
+//     checkout.
+//  2. HEAD has exactly one parent — never fold into a merge commit (e.g. the
+//     one resolveCheckoutMerge/chat_merge.go makes while resolving a real
+//     conflict).
+//  3. HEAD is NOT already reachable from origin/<headRefName> — a commit
+//     that's already been pushed must never be rewritten. This is the
+//     authoritative check (uses a fetch the caller already ran just before),
+//     not the coarser branch-wide ahead/behind check further down.
+//
+// Returns HEAD's own current full message on success, so the caller can
+// extend it with appendChatEditCommitMessage.
+func amendableChatCommit(ctx context.Context, dir, headRefName string) (string, bool) {
+	subjOut, err := runGitIn(ctx, dir, "log", "-1", "--format=%s", "HEAD")
+	if err != nil || strings.TrimSpace(string(subjOut)) != chatEditCommitSubject {
+		return "", false
+	}
+	parentsOut, err := runGitIn(ctx, dir, "rev-list", "--parents", "-n", "1", "HEAD")
+	if err != nil || len(strings.Fields(strings.TrimSpace(string(parentsOut)))) != 2 {
+		return "", false // 2 = the commit's own sha + exactly one parent
+	}
+	// merge-base --is-ancestor exits 0 exactly when HEAD is already reachable
+	// from origin/<headRefName> — i.e. already pushed. That must refuse.
+	if _, err := runGitIn(ctx, dir, "merge-base", "--is-ancestor", "HEAD", "origin/"+headRefName); err == nil {
+		return "", false
+	}
+	msgOut, err := runGitIn(ctx, dir, "log", "-1", "--format=%B", "HEAD")
+	if err != nil {
+		return "", false
+	}
+	return strings.TrimRight(string(msgOut), "\n"), true
 }
 
 // commitCheckoutEditsAt is the "commit deze wijziging" Activity body once the
@@ -1019,6 +1096,13 @@ func advancePendingRefFromCheckout(ctx context.Context, dir, repo string, pr int
 // moved on" outcome is expected, normal behaviour — never a Go error — only a
 // genuinely unexpected git/gh failure would be, and even those are reported
 // to the reviewer as a message rather than failing the workflow.
+//
+// If the checkout's current HEAD is itself still-unpushed, non-merge commit
+// this same function made earlier (amendableChatCommit) — PR-wide, so this
+// may be a different chat conversation's earlier landing — this edit is
+// folded into it via `git commit --amend` instead of stacking a new commit,
+// and the pending ref is moved onto the new (rewritten) SHA. See "Amending a
+// chain of chat commits" in .claude/docs/pending-push.md.
 func commitCheckoutEditsAt(ctx context.Context, cm *chat.Module, dataDir, repo string, pr int, conversationID, turnID, headRefName string) chat.Message {
 	newMsg := func(body string, isErr bool) chat.Message {
 		kind := ""
@@ -1039,10 +1123,22 @@ func commitCheckoutEditsAt(ctx context.Context, cm *chat.Module, dataDir, repo s
 	}
 	dir := a.Dir
 
+	// Fetched BEFORE the commit/amend decision below: amendableChatCommit
+	// needs an up-to-date origin/<headRefName> to tell "still unpushed" from
+	// "already pushed" — deciding that against a stale ref would risk
+	// rewriting a commit GitHub already has.
+	ingestMu.Lock()
+	_, fetchErr := runGitIn(ctx, dir, "-c", "submodule.recurse=false", "fetch", "origin", headRefName)
+	ingestMu.Unlock()
+	if fetchErr != nil {
+		return newMsg("Kon de laatste stand van de branch niet ophalen.", true)
+	}
+
 	statusOut, err := runGitIn(ctx, dir, "status", "--porcelain")
 	if err != nil {
 		return newMsg("Kon de status van de wijziging niet bepalen.", true)
 	}
+	amended := false
 	if strings.TrimSpace(string(statusOut)) != "" {
 		if _, err := runGitIn(ctx, dir, "add", "-A"); err != nil {
 			return newMsg("Kon de wijziging niet stagen.", true)
@@ -1052,19 +1148,18 @@ func commitCheckoutEditsAt(ctx context.Context, cm *chat.Module, dataDir, repo s
 		for _, p := range a.KeepSeparatePaths {
 			_, _ = runGitIn(ctx, dir, "restore", "--staged", "--", p)
 		}
-		if _, err := runGitIn(ctx, dir, "commit", "-m", "Claude: reviewer-requested edit ("+conversationID+")"); err != nil {
+		if prevMsg, ok := amendableChatCommit(ctx, dir, headRefName); ok {
+			if _, err := runGitIn(ctx, dir, "commit", "--amend", "-m", appendChatEditCommitMessage(prevMsg, conversationID)); err != nil {
+				return newMsg("Kon de wijziging niet aan de vorige, nog niet gepushte commit toevoegen.", true)
+			}
+			amended = true
+		} else if _, err := runGitIn(ctx, dir, "commit", "-m", chatEditCommitMessage(conversationID)); err != nil {
 			return newMsg("Kon de wijziging niet committen.", true)
 		}
 	}
 	// Else: nothing new to stage — but an earlier attempt may already have
 	// committed locally without managing to land, so it's still worth trying.
 
-	ingestMu.Lock()
-	_, fetchErr := runGitIn(ctx, dir, "-c", "submodule.recurse=false", "fetch", "origin", headRefName)
-	ingestMu.Unlock()
-	if fetchErr != nil {
-		return newMsg("Kon de laatste stand van de branch niet ophalen.", true)
-	}
 	aheadOut, err := runGitIn(ctx, dir, "rev-list", "--count", "origin/"+headRefName+"..HEAD")
 	if err != nil {
 		return newMsg("Kon de status van de branch niet bepalen.", true)
@@ -1079,7 +1174,7 @@ func commitCheckoutEditsAt(ctx context.Context, cm *chat.Module, dataDir, repo s
 		return newMsg(checkoutBranchMovedOnMsg, true)
 	}
 
-	if err := advancePendingRefFromCheckout(ctx, dir, repo, pr, headRefName); err != nil {
+	if err := advancePendingRefFromCheckout(ctx, dir, repo, pr, headRefName, amended); err != nil {
 		return newMsg("De wijziging kon niet op de PR-branch worden gezet.", true)
 	}
 
