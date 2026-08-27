@@ -623,4 +623,68 @@ test.describe('a comment-index item anchored to a real block', () => {
     await expect(row).toHaveClass(/bg-indigo-50/)
     await expect(drillColumn).toContainText('findOrCreateCustomer')
   })
+
+  // Follow-up reported bug, same debug-log session: "ik kan vervolgens niet
+  // meer op enter drukken op wat ik dan heb geselecteerd" — Enter on the same
+  // deep-drilled child (focusLevel > 1) used to reopen the comment ROW's own
+  // menu ("Beantwoorden"/"Resolve comment", via selectedComment() staying
+  // truthy — openCommentAnchorDrill never touches state.selected) instead of
+  // the ordinary block palette that already targets the drilled child + its
+  // active line-range. See "A child drilled from inside the anchor's own
+  // panel must own ↑/↓ too" (Enter/`/` addendum) in
+  // .claude/docs/comments-panel.md.
+  test('Enter on a child drilled from inside the anchor panel opens the block palette, not the comment menu', async ({
+    page,
+  }) => {
+    await page.route('**/api/relations?pr=12903', async (route) => {
+      await route.fulfill({
+        json: [
+          {
+            pr: 12903,
+            parentId: '12903:app/Actions/CreatePaymentAction.php:CreatePaymentAction::execute',
+            childId: '12903:app/Actions/CreatePaymentAction.php:CreatePaymentAction::findOrCreateCustomer',
+            kind: 'event_listener',
+          },
+        ],
+      })
+    })
+    await mockAnchoredComment(page, {
+      id: 'anchor-deep-2',
+      file: 'app/Actions/CreatePaymentAction.php',
+      label: 'CreatePaymentAction::execute',
+      body: 'rename this argument too',
+    })
+    await page.goto('/pr/12903')
+    await leaveSearchBox(page)
+
+    const row = page.locator('[data-idx]').filter({ hasText: 'rename this argument too' })
+    await row.click()
+    const drillColumn = page.getByTestId('drill-column')
+    await expect(drillColumn).toBeVisible()
+
+    await page.keyboard.press('ArrowRight')
+    await page.keyboard.press('ArrowRight')
+    await page.keyboard.press('ArrowDown')
+
+    const child = page.getByTestId('related-item').filter({ hasText: 'findOrCreateCustomer' })
+    await expect(child).toBeVisible()
+    await child.click()
+    await expect(drillColumn).toContainText('findOrCreateCustomer')
+
+    // Extend the child's own line range one step, exactly like the debug-log
+    // reproduction, then Enter.
+    await page.keyboard.down('Shift')
+    await page.keyboard.press('ArrowDown')
+    await page.keyboard.up('Shift')
+    await page.keyboard.press('Enter')
+
+    const menu = page.getByTestId('command-menu')
+    await expect(menu).toBeVisible()
+    // The ordinary block palette's default (2nd, right after "Sluit menu")
+    // item is an approve action on the selected line(s) — never the comment
+    // row's own "Beantwoorden"/"Resolve comment".
+    await expect(menu).not.toContainText('Beantwoorden')
+    await expect(menu).not.toContainText('Resolve comment')
+    await expect(page.getByTestId('command-row').nth(1)).toContainText('Keur')
+  })
 })

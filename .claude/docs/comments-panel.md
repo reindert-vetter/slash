@@ -378,6 +378,28 @@ this one comment-anchor flow — an ordinary drill always runs inside
 this depth is not covered by this fix (not part of the reported bug) and
 still falls through to the generic list-mode `ArrowLeft` branch.
 
+**`Enter`/`/` had the exact same gap, one level up.** Both `onKeydown`'s
+`Enter` branch and its mirrored `/`-key twin `contextMenuMode()` open the
+comment row's own `'prComment'` menu ("Beantwoorden"/"Resolve comment")
+whenever `selectedComment()` resolves AND no SIDEBAR-level multi-selection is
+active (`!hasMultiSelection()`, which only ever looks at `state.listAnchor` —
+a different, block-index-only range concept, unrelated to a drilled column's
+own `drillCursor[level].rangeAnchor`). `openCommentAnchorDrill` never touches
+`state.selected`, so `selectedComment()` stays truthy even once the keyboard
+has drilled to `focusLevel > 1` — both branches then reopened the comment's
+own thread menu instead of the ordinary block palette, which already targets
+the focused drilled column and its active line-range regardless of depth
+(`approveContext()` hardcodes `mode:'diff'` once `state.focusLevel > 0`, and
+`commentTarget()` follows `focusedBlock()` the same way — see
+`.claude/docs/drilling.md`'s "Approve follows focusLevel too"). Reported bug:
+"ik kan vervolgens niet meer op enter drukken op wat ik dan heb geselecteerd"
+— reproduced via the debug log: the same deep-drill sequence above, then
+`Shift+↓` to extend the child's own line range, then `Enter` opened
+"Beantwoorden" (and running it a second time actually posted a reply)
+instead of a palette acting on the selected lines. Fixed with the same
+`&& state.focusLevel <= 1` guard on both branches — once past the anchor's
+own level, `Enter`/`/` fall through to the ordinary block palette.
+
 ### → skips an already-resolved default comment
 
 `enterCommentsOrRelated(pr)` (`RelatedPanel.mjs`) is the single entry point

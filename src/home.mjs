@@ -13149,7 +13149,10 @@ function contextMenuMode() {
   // Same hasMultiSelection() carve-out as the Enter branch below — an active
   // range whose cursor sits on a comment row still gets the range palette via
   // the 'block' mode fallthrough (blockCommands() -> rangeCommandsFor()).
-  if (!state.showDescription && !hasMultiSelection() && selectedComment()) return 'prComment'
+  // ALSO gated on state.focusLevel <= 1 — see the matching guard on the Enter
+  // branch below for why a column drilled from INSIDE the anchor's own panel
+  // (focusLevel > 1) must not reopen this comment-row menu either.
+  if (!state.showDescription && !hasMultiSelection() && selectedComment() && state.focusLevel <= 1) return 'prComment'
   // Stop 1 (the PR description), the two toggle rows and the batch action row
   // have no block context; so does a PR whose blocks aren't loaded (or a
   // genuinely block-less one). The batch row has no menu of its own — Enter
@@ -13751,7 +13754,19 @@ function onKeydown(e) {
   // (rangeCommandsFor, below) — the whole point of "Ignore N comments in dit
   // bereik" is reachable regardless of which row the cursor ended up on, see
   // command-palette.md.
-  if (e.key === 'Enter' && !state.showDescription && !hasMultiSelection() && selectedComment()) {
+  // ALSO gated on state.focusLevel <= 1: a child drilled from INSIDE the
+  // anchor's own Underlying-code panel (state.focusLevel > 1, see
+  // drillIntoChild/openCommentAnchorDrill and the matching ArrowUp/ArrowDown
+  // fix above) has nothing to do with this comment's own thread any more —
+  // state.selected still points at the sidebar comment row (openCommentAnchorDrill
+  // never touches it), so selectedComment() stayed truthy and this branch
+  // wrongly reopened "Beantwoorden"/"Resolve comment" instead of the ordinary
+  // block palette that already targets that drilled child + its own active
+  // line-range (approveContext()/commentTarget() already generalize via
+  // focusLevel — see "A child drilled from inside the anchor's own panel
+  // must own ↑/↓ too" in comments-panel.md). Reported bug: "ik kan
+  // vervolgens niet meer op enter drukken op wat ik dan heb geselecteerd".
+  if (e.key === 'Enter' && !state.showDescription && !hasMultiSelection() && selectedComment() && state.focusLevel <= 1) {
     e.preventDefault()
     openMenu('prComment')
     return
