@@ -455,9 +455,32 @@ export function setCommentScope(scope) {
 // reviewer saw the marker and could not reach the comment. `s`/call
 // granularity is exactly where a reviewer lands when approving that call, so
 // this was the one granularity that hid a comment anchored on its own row.
+//
+// A comment that still fails all of the above (a real anchor, elsewhere in
+// this block) gets one more, narrow fallback: shown while the selected unit
+// is exactly the block's own first changed group. See the "pin to the first
+// changed row" paragraph in comments-panel.md.
 function commentUnder(c, t) {
   if (c.rowStart == null || c.rowStart < 0) return isStaleAnchor(c) ? lineMatchesUnit(c, t) : true
-  if (c.rowStart !== t.rowStart && (c.rowStart < t.rowStart || c.rowEnd > t.rowEnd)) return false
+  if (c.rowStart !== t.rowStart && (c.rowStart < t.rowStart || c.rowEnd > t.rowEnd)) {
+    // Fallback: a comment that is fully DISJOINT from the selected unit (it
+    // sits on a genuinely different group of this block, no row overlap at
+    // all) is still shown while the selection is exactly the block's own
+    // FIRST changed group — the point most reviewers land on right after
+    // stepping into the diff — so it doesn't simply vanish the moment scoping
+    // narrows past its own real row. Deliberately does NOT follow any
+    // further: a different (non-first) group, or narrowing this same first
+    // group to line/call granularity, both fall through to the ordinary
+    // `false` below. Reindert: "op de eerste aangepaste regel plaatsen,
+    // dieper moet niet mee". Deliberately NOT for a comment that merely
+    // OVERLAPS the unit without starting on it (c.rowEnd >= t.rowStart &&
+    // c.rowStart <= t.rowEnd) — that is the pre-existing, deliberate
+    // start-row-only exclusion above (see comment-range-first-row.spec.mjs),
+    // and this fallback must not quietly override it just because the
+    // overlapping unit happens to be the first group.
+    const disjoint = c.rowEnd < t.rowStart || c.rowStart > t.rowEnd
+    return disjoint && t.gran === 'group' && t.firstGroupRowStart != null && t.rowStart === t.firstGroupRowStart
+  }
   if (t.gran === 'call' && c.gran === 'call') return c.seg === t.seg
   return true
 }

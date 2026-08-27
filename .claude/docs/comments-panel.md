@@ -1722,6 +1722,51 @@ one granularity where a comment on the cursor's *own* row could disappear, and
 call granularity is exactly where a reviewer stands to approve that call. Test:
 `tests/comment-call-gran-scope.spec.mjs`.
 
+### A comment on a DIFFERENT row of the same block is pinned to the block's first changed group
+
+Everything above still hides a comment anchored elsewhere in the block once the
+cursor narrows onto a unit that doesn't contain it — reported as a real
+confusion: selecting a big block from the index shows every one of its
+comments (the `s.mode !== 'diff'` "not narrowed yet" branch below), but the
+moment `→` actually steps the keyboard into the diff (landing, by default, on
+the block's own first changed group), a comment sitting further down the same
+block disappeared entirely — no marker, no card, nothing to reach it with,
+even though nothing about the reviewer's own navigation choice ("just entered
+the diff") had anything to do with that particular comment's row.
+
+`commentUnder`'s containment check now has one more fallback: if a comment
+with a real anchor fails ordinary containment AND is fully **disjoint** from
+the selected unit (no row overlap at all — `c.rowEnd < t.rowStart ||
+c.rowStart > t.rowEnd`, i.e. a genuinely different group), it is still shown
+while the selected unit is **exactly the block's own first changed group**
+(`t.gran === 'group' && t.rowStart === t.firstGroupRowStart`).
+`firstGroupRowStart` (`commentScope`, `home.mjs`) is `groupsFor(b)[0].start` —
+the same source the list-mode preview already uses for "the block's first
+group" — computed fresh off the focused block, independent of whatever
+granularity/change index the cursor actually sits at.
+
+**The disjoint check matters — don't drop it.** A comment that merely
+OVERLAPS the selected unit without starting exactly on it (e.g. it starts one
+row earlier and runs past the unit's own end) is the pre-existing, deliberate
+start-row-only exclusion (see the "Plus its own START ROW" paragraph above,
+`comment-range-first-row.spec.mjs`): such a comment must stay hidden even
+while sitting on the first group, precisely because the first group IS the
+overlapping unit in that test's fixture. Without the disjoint guard, this
+fallback would silently re-show it the moment the cursor happens to rest on
+the first group, defeating that already-tested exclusion.
+
+**Deliberately narrow, on explicit request** ("op de eerste aangepaste regel
+plaatsen, dieper moet niet mee", Reindert): the pin does **not** follow the
+reviewer any further. Stepping to a different group, or narrowing (`f`/`s`)
+the very same first group down to `line`/`call` granularity, both fall through
+to the ordinary `false` — the comment disappears again exactly like before
+this fallback existed. It only reappears for real once the cursor actually
+reaches the comment's own real row/group, via the ordinary containment check
+above (untouched). Purely additive: a comment that already matches its own
+anchor is unaffected, as is every existing escape hatch (the start-row
+exception, the call-`seg` check, `lineMatchesUnit`/`isStaleAnchor`) and list
+mode. Test: `tests/comment-first-group-fallback.spec.mjs`.
+
 ### The marker layer and the index must agree about what exists
 
 Two layers answer "is there a comment here": the **markers** (`commentRowSet`'s

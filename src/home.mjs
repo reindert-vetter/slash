@@ -10663,6 +10663,12 @@ function commentScope() {
     rowStart: t.rowStart,
     rowEnd: t.rowEnd,
     seg: t.seg,
+    // firstGroupRowStart — the aligned-row start of THIS block's own first
+    // changed group (groupsFor(b)[0], the same source the list-mode preview
+    // uses), independent of the currently selected granularity/change index.
+    // RelatedPanel.commentUnder's only use is the "pin to the first changed
+    // row" fallback below — see comments-panel.md.
+    firstGroupRowStart: (groupsFor(b)[0] || {}).start ?? -1,
     // onlyIds — set only while a "Comments op regels" index item's own
     // drilled anchor column owns the cursor (isCommentAnchorDrillActive):
     // narrows the block-scoped comment index down to exactly the comment(s)
