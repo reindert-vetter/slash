@@ -1099,6 +1099,50 @@ undoes.
 in stored history, which still render and still accept a reviewer reply
 through the ordinary `pendingQuestionID` round trip. Nothing creates a new one.
 
+#### A "leave it dirty" answer stays answered (DirtyAcceptedDir/DirtyAcceptedPaths)
+
+Reported bug, two screenshots: the reviewer answered the dirty-tree question
+with **"Meenemen in de commit"**, asked Claude for a change (`retry`), and got
+`"Ik kan nu geen code aanpassen: er staat nog een keuze open over de werkmap
+van deze PR"` back — with the overlay reopening on the byte-identical
+question. Forever, several stacked bubbles deep.
+
+Cause: `chatCheckoutResolved.Final` only skips the re-classification **inside
+the call that resolved the choice**. The two options that deliberately LEAVE
+the working tree dirty (`optKeepSeparate`, `optKeepCombined`) recorded nothing
+about that acceptance, so the NEXT caller (a write turn, `comment_batch`,
+`test_run` — all passing `reviewerReply ""`) walked
+`prepareChatShellWorkDirAt`'s `a.Dir != ""` branch, found `cand.Dirty` still
+true, and raised `chatCheckoutDirtyDecision` all over again. Every answer was
+applied correctly; it just never stuck.
+
+`chatCheckoutAssignment` therefore records **`DirtyAcceptedDir` +
+`DirtyAcceptedPaths`** — which directory the reviewer accepted a dirty tree
+for, and exactly which paths were dirty at that moment — set by both Final
+options and cleared by `optDiscard`/the two stash options (which leave a
+genuinely clean tree, so an older acceptance must not linger) and by
+`checkoutSetOff`. The dirty question is then gated on
+`!dirtyAlreadyAccepted(ctx, a)`.
+
+Two deliberate details:
+
+- **A subset check, not equality.** `dirtyAlreadyAccepted` asks whether every
+  path `git status` reports RIGHT NOW is covered by the accepted set: accepted
+  work that has since been committed/reverted simply drops off the list (still
+  accepted), while genuinely new, never-discussed changes bring the question
+  back. An unreadable status answers `false` — asking again is the
+  conservative side, like every other degrade path in `chat_checkout.go`.
+- **Separate from `KeepSeparatePaths`**, which `commitCheckoutEditsAt` clears
+  after a landing. Those paths are still dirty afterwards, so reusing that
+  field would start asking again right after the first landing.
+
+Still in-memory only, gone after a restart (the whole assignment is), so the
+choice is asked once more after a server restart and then sticks. Tests:
+`TestPrepareChatShellWorkDirKeepsAnAcceptedDirtyTreeResolved` (including the
+"new dirty work asks again" half) and
+`TestPrepareChatShellWorkDirKeepsKeepSeparateResolved`
+(`chat_checkout_test.go`).
+
 #### Visible wording: it is a "werkmap", never a "checkout"
 
 Reviewer request. Everything the reviewer READS about the one local directory

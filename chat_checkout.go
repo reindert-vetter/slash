@@ -555,6 +555,20 @@ type chatCheckoutAssignment struct {
 	// Claude's own commit ("Los laten") — recorded once, at the moment the
 	// dirty-tree decision was resolved, and consumed by commitCheckoutEditsAt.
 	KeepSeparatePaths []string
+	// DirtyAcceptedDir/DirtyAcceptedPaths record a resolved dirty-tree choice
+	// that deliberately LEFT the working tree dirty ("Los laten"/"Meenemen in
+	// de commit"): which directory it was about, and exactly which paths were
+	// dirty at that moment. Without it every LATER write turn re-classified
+	// the same still-dirty directory and raised the identical dirtyTree
+	// question again — reported bug: answering "Meenemen in de commit" and
+	// then asking Claude for a change kept coming back as "er staat nog een
+	// keuze open over de werkmap van deze PR", forever (chatCheckoutResolved's
+	// Final only skips re-classification WITHIN the call that resolved it).
+	// Deliberately separate from KeepSeparatePaths above, which
+	// commitCheckoutEditsAt clears after a landing — those paths are still
+	// dirty afterwards and must not start asking again.
+	DirtyAcceptedDir   string
+	DirtyAcceptedPaths []string
 	// StashRef/StashDir/StashAutoRestore record a stash this resolution
 	// created (StashDir is the directory it was taken FROM — kept separately
 	// from Dir since "uit"/checkoutSetOff clears Dir but must never strand an
@@ -734,6 +748,48 @@ func matchCheckoutOption(options []string, reply string) (string, bool) {
 	return "", false
 }
 
+// acceptDirty/clearDirtyAccepted/dirtyAlreadyAccepted are the three halves of
+// "the reviewer already said what should happen with the changes sitting in
+// this work directory". See DirtyAcceptedDir's own doc comment for the bug
+// they fix.
+func (a *chatCheckoutAssignment) acceptDirty(dir string, paths []string) {
+	a.DirtyAcceptedDir = dir
+	a.DirtyAcceptedPaths = paths
+}
+
+func (a *chatCheckoutAssignment) clearDirtyAccepted() {
+	a.DirtyAcceptedDir = ""
+	a.DirtyAcceptedPaths = nil
+}
+
+// dirtyAlreadyAccepted reports whether every path git currently reports dirty
+// in a.Dir was already covered by the reviewer's own earlier "leave it"
+// choice for that SAME directory. Deliberately a subset check rather than an
+// equality one: work that was accepted and has since been committed/reverted
+// simply disappears from the list (still accepted), while genuinely NEW,
+// never-discussed changes make the question come back. An unreadable status
+// answers false — asking again is the conservative side, matching every other
+// degrade path in this file.
+func dirtyAlreadyAccepted(ctx context.Context, a *chatCheckoutAssignment) bool {
+	if a.DirtyAcceptedDir == "" || a.DirtyAcceptedDir != a.Dir {
+		return false
+	}
+	current, err := snapshotDirtyPaths(ctx, a.Dir)
+	if err != nil {
+		return false
+	}
+	accepted := make(map[string]bool, len(a.DirtyAcceptedPaths))
+	for _, p := range a.DirtyAcceptedPaths {
+		accepted[p] = true
+	}
+	for _, p := range current {
+		if !accepted[p] {
+			return false
+		}
+	}
+	return true
+}
+
 func applyCheckoutDecisionReply(ctx context.Context, a *chatCheckoutAssignment, headRef, reply string) (*chatCheckoutResolved, error) {
 	d := a.Pending
 	switch d.Stage {
@@ -768,6 +824,10 @@ func applyCheckoutDecisionReply(ctx context.Context, a *chatCheckoutAssignment, 
 			if err := discardCheckoutDirty(ctx, d.Dir); err != nil {
 				return nil, err
 			}
+			// The tree is genuinely clean again — no accepted-dirty state to
+			// remember (and an older one must not linger, or a future dirty
+			// tree in the same directory would be waved through).
+			a.clearDirtyAccepted()
 		case optStashManual, optStashAuto:
 			label := fmt.Sprintf("slash-chat-%s", time.Now().UTC().Format("20060102-150405"))
 			if err := stashCheckoutDirty(ctx, d.Dir, label); err != nil {
@@ -776,6 +836,7 @@ func applyCheckoutDecisionReply(ctx context.Context, a *chatCheckoutAssignment, 
 			a.StashRef = label
 			a.StashDir = d.Dir
 			a.StashAutoRestore = opt == optStashAuto
+			a.clearDirtyAccepted() // clean tree again, same as optDiscard above
 		case optKeepSeparate:
 			paths, err := snapshotDirtyPaths(ctx, d.Dir)
 			if err != nil {
@@ -783,11 +844,19 @@ func applyCheckoutDecisionReply(ctx context.Context, a *chatCheckoutAssignment, 
 			}
 			a.KeepSeparatePaths = paths
 			// The working tree is DELIBERATELY left dirty — Final, see the
-			// type's own doc comment.
+			// type's own doc comment — so record that the reviewer accepted
+			// exactly these paths, or the next turn asks all over again.
+			a.acceptDirty(d.Dir, paths)
 			return &chatCheckoutResolved{Dir: d.Dir, Final: true}, nil
 		case optKeepCombined:
 			// Nothing to do now — the ordinary `git add -A` at commit time
-			// already includes it. Also Final, for the same reason.
+			// already includes it. Also Final, for the same reason, and the
+			// same accepted-dirty bookkeeping (best-effort: an unreadable
+			// status just means the question can come back).
+			paths, err := snapshotDirtyPaths(ctx, d.Dir)
+			if err == nil {
+				a.acceptDirty(d.Dir, paths)
+			}
 			return &chatCheckoutResolved{Dir: d.Dir, Final: true}, nil
 		}
 		return &chatCheckoutResolved{Dir: d.Dir}, nil
@@ -902,7 +971,10 @@ func prepareChatShellWorkDirAt(ctx context.Context, tm *TaskManager, dataDir, re
 				publishCheckoutChanged(repo, pr)
 				return "", a.Pending, false
 			}
-			if cand.Dirty {
+			// A dirty tree the reviewer already decided about ("los laten"/
+			// "meenemen in de commit") is not a question any more — see
+			// dirtyAlreadyAccepted just above applyCheckoutDecisionReply.
+			if cand.Dirty && !dirtyAlreadyAccepted(ctx, a) {
 				a.Pending = chatCheckoutDirtyDecision(cand)
 				publishCheckoutChanged(repo, pr)
 				return "", a.Pending, false
@@ -1585,6 +1657,7 @@ func checkoutSetOff(repo string, pr int) {
 	a.Branch = ""
 	a.Pending = nil
 	a.Excluded = map[string]bool{}
+	a.clearDirtyAccepted() // nothing is assigned any more, so nothing is accepted
 }
 
 // checkoutRestoreStashNow is the "nu terugzetten" Activity body: pops a

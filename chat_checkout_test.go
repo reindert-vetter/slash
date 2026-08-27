@@ -326,6 +326,86 @@ func TestPrepareChatShellWorkDirAsksAboutDirtyCandidate(t *testing.T) {
 	}
 }
 
+// A dirty-tree choice that deliberately LEAVES the tree dirty ("Meenemen in
+// de commit"/"Los laten") must stay resolved for every LATER turn too.
+// Reported bug, two screenshots: the reviewer answered "Meenemen in de commit"
+// in the werkmap overlay, asked Claude for a change ("retry"), and got
+// "Ik kan nu geen code aanpassen: er staat nog een keuze open over de werkmap
+// van deze PR" again — and the overlay reopened on the identical question,
+// forever. Cause: chatCheckoutResolved.Final only skips re-classification
+// inside the call that resolved the choice, so the next call re-classified the
+// still-dirty directory and raised chatCheckoutDirtyDecision all over again.
+func TestPrepareChatShellWorkDirKeepsAnAcceptedDirtyTreeResolved(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	checkout := cloneCheckoutDir(t, bareDir, "feature/x")
+	writeCheckoutSettings(t, dataDir, checkout)
+
+	if err := os.WriteFile(filepath.Join(checkout, "foo.txt"), []byte("reviewer's own WIP\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 970803, "", "feature/x"); ok || decision == nil || decision.Stage != checkoutStageDirtyTree {
+		t.Fatalf("expected a dirtyTree decision first, got ok=%v decision=%+v", ok, decision)
+	}
+	if dir, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 970803, optKeepCombined, "feature/x"); !ok || dir != checkout || decision != nil {
+		t.Fatalf("expected the checkout ready after 'meenemen', dir=%q decision=%+v ok=%v", dir, decision, ok)
+	}
+
+	// The next turn (a write turn, comment_batch, test_run — all pass "")
+	// must simply get the directory, with no open choice anywhere.
+	dir, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 970803, "", "feature/x")
+	if !ok || dir != checkout || decision != nil {
+		t.Fatalf("expected the accepted dirty tree to stay resolved, dir=%q decision=%+v ok=%v", dir, decision, ok)
+	}
+	if checkoutChoiceOpen("", 970803) {
+		t.Fatal("expected no open work-directory choice after 'meenemen'")
+	}
+	if got, _ := os.ReadFile(filepath.Join(checkout, "foo.txt")); string(got) != "reviewer's own WIP\n" {
+		t.Fatalf("'meenemen' must not touch the working tree, got %q", got)
+	}
+
+	// A genuinely NEW, never-discussed change in the same directory DOES ask
+	// again — the acceptance covers the paths it was given, not the directory
+	// forever.
+	if err := os.WriteFile(filepath.Join(checkout, "bar.txt"), []byte("something else entirely\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 970803, "", "feature/x"); ok || decision == nil || decision.Stage != checkoutStageDirtyTree {
+		t.Fatalf("expected a fresh dirtyTree decision for new dirty work, got ok=%v decision=%+v", ok, decision)
+	}
+}
+
+// Same guarantee for "Los laten" — the other choice that leaves the tree
+// dirty on purpose (and whose KeepSeparatePaths a landing clears, which is
+// exactly why the acceptance is recorded separately).
+func TestPrepareChatShellWorkDirKeepsKeepSeparateResolved(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	checkout := cloneCheckoutDir(t, bareDir, "feature/x")
+	writeCheckoutSettings(t, dataDir, checkout)
+
+	if err := os.WriteFile(filepath.Join(checkout, "foo.txt"), []byte("reviewer's own WIP\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 970804, "", "feature/x"); ok {
+		t.Fatal("expected the dirty checkout to need a decision first")
+	}
+	if _, _, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 970804, optKeepSeparate, "feature/x"); !ok {
+		t.Fatal("expected the checkout ready after 'los laten'")
+	}
+	// Simulate a landing, which clears KeepSeparatePaths (commitCheckoutEditsAt)
+	// — the acceptance itself must survive that.
+	getOrCreateCheckoutAssignment("", 970804).KeepSeparatePaths = nil
+
+	dir, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 970804, "", "feature/x")
+	if !ok || dir != checkout || decision != nil {
+		t.Fatalf("expected 'los laten' to stay resolved after a landing, dir=%q decision=%+v ok=%v", dir, decision, ok)
+	}
+}
+
 // The work-directory choice is a PR-wide setting, not a question inside a
 // conversation: a caller that only needs a directory (a write turn,
 // comment_batch, test_run — all of which pass reviewerReply "") gets the open
