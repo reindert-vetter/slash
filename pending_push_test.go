@@ -175,6 +175,37 @@ func TestPushPendingPRPushesAndDropsTheRef(t *testing.T) {
 	}
 }
 
+// A pending ref whose commits are ALREADY on the branch — pushed outside the
+// app, or pushed by the app after which dropping the ref failed — is not
+// pending work: reporting it kept a stale "ongepusht" pill on every touched
+// block forever (reviewer report). The ref may survive; the read model must
+// not report it.
+func TestLoadPendingPushIgnoresARefAlreadyOnTheBranch(t *testing.T) {
+	setupChatShadowRepo(t, "feature/x", "v1\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+
+	landOneEdit(t, dataDir, 3005, "conv-e", "feature/x", "foo.txt", "edited by claude\n")
+	if loadPendingPush(ctx, nil, "", 3005) == nil {
+		t.Fatal("expected a pending push right after the landing")
+	}
+
+	// Push it the way the reviewer would from his own checkout: the commit
+	// lands on the branch (and origin/feature/x moves with it), but the app's
+	// own pending ref is left exactly where it was.
+	ref, _ := pendingPushRefFor(ctx, "", 3005)
+	if out, err := runGitFor(ctx, "", "push", "origin", ref+":refs/heads/feature/x"); err != nil {
+		t.Fatalf("push outside the app: %v: %s", err, out)
+	}
+	if sha := pendingRefSHA(ctx, "", ref); sha == "" {
+		t.Fatal("test setup: the pending ref should still exist")
+	}
+
+	if v := loadPendingPush(ctx, nil, "", 3005); v != nil {
+		t.Fatalf("read model still reports an already-pushed ref: %+v", v)
+	}
+}
+
 // A non-primary repo's pending ref carries its key as an extra path segment
 // (chat_checkout.go's prPendingRef) — this must be exactly the prefix
 // pendingPushRefFor/removePendingRefs enumerate, via the single shared

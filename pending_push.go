@@ -165,7 +165,25 @@ func loadPendingPush(ctx context.Context, db *sql.DB, repo string, pr int) *pend
 	base := "origin/" + headRef
 	if pendingRefSHA(ctx, repo, base) != "" {
 		if out, err := runGitFor(ctx, repo, "rev-list", "--count", base+".."+ref); err == nil {
-			if n, err := strconv.Atoi(strings.TrimSpace(string(out))); err == nil && n > 0 {
+			if n, err := strconv.Atoi(strings.TrimSpace(string(out))); err == nil {
+				if n == 0 {
+					// The pending ref is already contained in the last known
+					// origin/<headRef>: these commits ARE on GitHub, whether the
+					// app pushed them (and then failed to drop the ref) or the
+					// reviewer pushed the branch himself from his own checkout.
+					// Reporting them keeps a stale "ongepusht" pill on every
+					// touched block forever — the reviewer's own report. A count
+					// of 0 is the only value that proves this; anything else
+					// (origin/<headRef> unknown, or the read failing) stays
+					// pending, since "unknown" must never hide real work.
+					// The orphaned ref itself is deliberately NOT deleted here:
+					// this is a polled GET, and a git write on every tick — next
+					// to a landing that may be in flight for the same PR — buys
+					// nothing. It is swept with the PR (removePendingRefs,
+					// cleanup.go).
+					setPendingPushState(repo, pr, "", "")
+					return nil
+				}
 				v.Ahead = n
 			}
 		}

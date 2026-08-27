@@ -461,6 +461,20 @@ shape as `state.approveRunId`) and `error`.
 left behind: good enough for display, and never a decision input — the push
 itself re-checks against the real remote.
 
+**A ref whose commits are already on the branch reports nothing at all.** If
+`rev-list --count origin/<headRef>..<pendingRef>` comes back exactly `0`, the
+landed commits ARE on GitHub — the reviewer pushed the branch himself from his
+own checkout, or the app pushed and then failed to drop the ref — so
+`loadPendingPush` returns `nil` and clears the volatile status. Only a count of
+`0` proves this; an unknown `origin/<headRef>` or a failed read keeps the
+default `ahead: 1`, because "unknown" must never hide real work. Without this
+the default `ahead: 1` survived a zero count and left a stale "⇧ ongepusht"
+pill on every touched block, forever (reviewer report; regression test
+`TestLoadPendingPushIgnoresARefAlreadyOnTheBranch`). The orphaned ref itself is
+deliberately NOT deleted from this polled `GET` — a git write on every tick,
+possibly next to an in-flight landing for the same PR, buys nothing; it is
+swept with the PR (`removePendingRefs`, `cleanup.go`).
+
 **The `pushing`/`failed` status is in-memory only** (`pendingPushStatus`), gone
 after a restart, no read-model or workflow-history write — the same operational
 carve-out as `chat_progress.go` (see
