@@ -360,6 +360,33 @@ function claudeQueuedBubbles(view) {
 // `${() => chatKindBadge(msg)}` binding (see the file-level doc comment).
 // Same for claudeModelPill below.
 function chatKindBadge(msg) {
+  // chat.KindAutoCheck (chat_workflow.go's chatActionAutoCheck): the first
+  // turn of a kilo-code review comment's automatic verification chat
+  // (autoStartKiloCheck, workflows.go) — a "user"-role message the reviewer
+  // never typed. The bubble otherwise renders exactly like any other own
+  // message (tint, "Jij" label); this badge is the only thing that tells it
+  // apart, per the colorblind rule (word + glyph, not colour alone).
+  if (msg.kind === 'auto_check') {
+    return html`<span
+      class="inline-flex shrink-0 items-center gap-1 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[9px] font-medium text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300"
+      data-testid="claude-message-auto-check"
+    >
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        class="h-2.5 w-2.5"
+      >
+        <circle cx="11" cy="11" r="7"></circle>
+        <path d="m21 21-4.3-4.3"></path>
+      </svg>
+      automatische controle van kilo-opmerking</span
+    >`
+  }
   if (msg.kind === 'directory_decision') {
     return html`<span
       class="inline-flex shrink-0 items-center gap-1 rounded-full bg-purple-50 px-1.5 py-0.5 text-[9px] font-medium text-purple-700 dark:bg-purple-500/15 dark:text-purple-300"

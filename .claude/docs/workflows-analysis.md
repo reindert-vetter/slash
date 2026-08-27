@@ -1217,7 +1217,11 @@ a manually triggered, low-frequency action.
   live descriptions toevoegen aan geselecteerde dingen"), which is why it is
   named for the assistant rather than for the risk check. Deliberately NOT
   `resolve_call`/`resolve_test_covers`: those derive the navigation structure,
-  not a description. See `.claude/docs/footer.md` and `src/autowarn.mjs`. Deliberately **not**
+  not a description. Also gates `autoStartKiloCheck` (`workflows.go`) — the
+  automatic `claude_chat` conversation started on a freshly imported kilo-code
+  review comment, see "A kilo-code finding gets an automatic verification
+  chat" in `.claude/docs/workflows-comments.md`. See `.claude/docs/footer.md`
+  and `src/autowarn.mjs`. Deliberately **not**
   `localStorage` (like the theme preference) or `settings.json` (read once per
   process — see `settings.go`): the toggle gates a **backend** decision that
   must be readable the instant the trigger wants to fire, so it rides the same

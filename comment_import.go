@@ -206,6 +206,21 @@ func isKiloReview(body string) bool {
 	return strings.Contains(body, "<!-- kilo-review -->") && strings.Contains(body, "Code Review Summary")
 }
 
+// kiloBotAuthor is the GitHub login of the kilo-code review bot (exact match,
+// mirrors isKiloReview's own "matched on a fixed marker" reasoning — see
+// autoStartKiloCheck in workflows.go, which gates the automatic
+// claude_chat verification turn on this).
+const kiloBotAuthor = "kilo-code-bot[bot]"
+
+// isKiloComment reports whether an imported comment's author is the kilo-code
+// review bot. Unlike isKiloReview this matches every individual finding kilo
+// posts (a normal review-comment thread), not just its PR-wide summary — the
+// summary never reaches this check at all, since importPRComments skips it
+// via isKiloReview before a thread is ever started for it.
+func isKiloComment(author string) bool {
+	return author == kiloBotAuthor
+}
+
 // importedRunID is the deterministic Run ID an imported GitHub comment's thread
 // gets, so a repeated import (a re-poll, a restart) is a no-op reuse via
 // StartWorkflowID rather than a duplicate Execution.

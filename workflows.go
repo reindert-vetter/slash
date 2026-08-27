@@ -5788,6 +5788,69 @@ func (m *TaskManager) autoStartCodeWarning(repo string, pr int) {
 	}
 }
 
+// autoStartKiloCheck fires a claude_chat conversation automatically on a
+// freshly imported kilo-code review comment (see isKiloComment,
+// comment_import.go), gated by the SAME "Live AI assistent" toggle as
+// autoStartCodeWarning/explain_code/comment_titles (see CLAUDE.md's "A second,
+// unrelated toggle…" section) — reviewer request: verify whether kilo's own
+// finding actually holds against the real code and give a clearer, shorter
+// summary, with an optional fix proposal. Claude gets its usual shell access
+// for the turn (runOneClaudeTurn tries this for every turn), so it can read
+// the real code itself rather than trusting the snippet in the prompt.
+//
+// Fire-and-forget, its own goroutine (see importPRComments) — the import loop
+// must not block on a Claude call. commentRunID is the task_code_comment
+// thread's own Run ID, already started by the caller; StartClaudeChat derives
+// the chat's Run ID from it and makes the chat a child of that thread.
+//
+// Only fires for a NEWLY imported thread (see the call site) — no backfill for
+// a kilo comment imported before this existed, by explicit product decision.
+func (m *TaskManager) autoStartKiloCheck(repo string, pr int, commentRunID string, in CodeCommentInput) {
+	enabled, err := m.AutoWarnEnabled(context.Background())
+	if err != nil {
+		m.logf("kilo check: auto-start pr=%d comment=%s: check enabled: %v", pr, commentRunID, err)
+		return
+	}
+	if !enabled {
+		return
+	}
+	chatRunID, err := m.StartClaudeChat(ClaudeChatInput{Repo: repo, PR: pr, CommentID: commentRunID})
+	if err != nil {
+		m.logf("kilo check: auto-start pr=%d comment=%s: start chat: %v", pr, commentRunID, err)
+		return
+	}
+	sig := ChatMessageSignal{
+		ID:     "sys-" + newUIReactionID(),
+		Author: "reviewer",
+		Body:   kiloCheckPrompt(in),
+		Action: chatActionAutoCheck,
+	}
+	if err := m.engine.SignalWorkflow(chatRunID, SignalMessage, sig); err != nil {
+		m.logf("kilo check: auto-start pr=%d comment=%s: send prompt: %v", pr, commentRunID, err)
+	}
+}
+
+// kiloCheckPrompt builds the automatic first turn for autoStartKiloCheck —
+// Dutch, matching every other reviewer-facing prompt/label in this app. Kilo's
+// own wording is quoted verbatim (as a Markdown blockquote) so Claude — and
+// the reviewer reading the resulting bubble — can tell kilo's claim apart from
+// Claude's own answer.
+func kiloCheckPrompt(in CodeCommentInput) string {
+	var b strings.Builder
+	b.WriteString("Kilo (de geautomatiseerde code-review bot) heeft hier een opmerking geplaatst")
+	if in.File != "" {
+		fmt.Fprintf(&b, " in `%s`", in.File)
+		if in.Line > 0 {
+			fmt.Fprintf(&b, ", regel %d", in.Line)
+		}
+	}
+	b.WriteString(":\n\n> ")
+	b.WriteString(strings.ReplaceAll(strings.TrimSpace(in.Body), "\n", "\n> "))
+	b.WriteString("\n\nControleer aan de hand van de echte code of kilo hier gelijk heeft. Geef daarna een korte, ")
+	b.WriteString("duidelijkere samenvatting dan kilo's eigen tekst. Als je een concrete verbetering ziet, mag je die ook voorstellen.")
+	return b.String()
+}
+
 // autoIngestOwnPRs kicks off the ingest pipeline for every PR in this
 // snapshot that eligibleAutoIngestPRs (inbox.go) says the reviewer's own
 // auto_ingest_pref preference covers — "mijn eigen prs, daarvan mogen de
@@ -6236,6 +6299,15 @@ func (m *TaskManager) importPRComments(ctx context.Context, repo string, pr int)
 		if _, err := m.engine.StartWorkflowID(runID, WorkflowTaskCodeComment, in); err != nil {
 			m.logf("import comments: start run=%s pr=%d: %v", runID, pr, err)
 			continue
+		}
+		// A freshly imported kilo-code finding gets an automatic claude_chat
+		// verification turn — see autoStartKiloCheck's own doc comment. Only
+		// reaches here for a NEW thread (a re-import of a known comment
+		// `continue`s above), so this never re-fires for a comment already
+		// seen — no backfill for threads imported before this existed, by
+		// product decision.
+		if isKiloComment(in.Author) {
+			go m.autoStartKiloCheck(repo, pr, runID, in)
 		}
 		// Start the reply poller once per thread. Only imported review-diff
 		// threads have a live GitHub thread to poll; a PR-wide (Kind != "")

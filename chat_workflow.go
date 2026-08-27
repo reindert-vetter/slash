@@ -115,6 +115,15 @@ const (
 	// turn — purely a bookkeeping write via its own Activity, same shape as
 	// chatActionClear/Commit/Cleanup above.
 	chatActionSeen = "seen"
+	// chatActionAutoCheck marks the automatic first turn autoStartKiloCheck
+	// (workflows.go) sends right after importing a kilo-code review comment —
+	// never sent by the UI/HTTP handler, only by that server-side trigger.
+	// Runs through the SAME path as an ordinary "" turn (saved as a user
+	// message, a real Claude call with shell access) — it exists purely so the
+	// saved chat.Message can carry chat.KindAutoCheck, which the frontend
+	// badges as "automatische controle" instead of an ordinary typed message
+	// (see claudeBubble/chatKindBadge, ClaudeChat.mjs).
+	chatActionAutoCheck = "auto_check"
 )
 
 // chatRetryDelays is the automatic backoff ladder for a failed Claude call:
@@ -354,8 +363,12 @@ func claudeChatWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 				pendingQuestionID = ""
 			}
 
+			userKind := ""
+			if sig.Action == chatActionAutoCheck {
+				userKind = chat.KindAutoCheck
+			}
 			if err := w.ExecuteActivity("saveChatMessage", chat.Message{
-				ID: sig.ID, ConversationID: in.CommentID, PR: in.PR, Role: "user", Body: sig.Body,
+				ID: sig.ID, ConversationID: in.CommentID, PR: in.PR, Role: "user", Body: sig.Body, Kind: userKind,
 			}, nil); err != nil {
 				return nil, fmt.Errorf("save chat user message: %w", err)
 			}

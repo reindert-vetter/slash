@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   repo            TEXT NOT NULL DEFAULT '',
   pr              INTEGER NOT NULL,
   role            TEXT NOT NULL,           -- 'user' | 'assistant'
-  kind            TEXT NOT NULL DEFAULT '', -- '' (plain text) | 'question' | 'error' | 'retrying' | 'action' | 'draft_reply'
+  kind            TEXT NOT NULL DEFAULT '', -- '' (plain text) | 'question' | 'error' | 'retrying' | 'action' | 'draft_reply' | 'cleanup_choice' | 'auto_check'
   body            TEXT NOT NULL,
   options_json    TEXT NOT NULL DEFAULT '', -- JSON array of up to a few option strings ('question' only)
   answer          TEXT NOT NULL DEFAULT '', -- filled once the reviewer responds to a 'question' turn
@@ -125,6 +125,14 @@ const (
 	// start a new Claude call (see applyCancelCleanup's own doc comment in
 	// chat_checkout.go).
 	KindCleanupChoice = "cleanup_choice"
+	// KindAutoCheck marks a "user"-role turn as the automatic first message
+	// autoStartKiloCheck (workflows.go) sends right after a kilo-code review
+	// comment is imported — never typed by the reviewer. The turn itself runs
+	// through the ordinary Claude call/reply flow; this Kind only tells the
+	// frontend to badge the bubble as "automatische controle" instead of
+	// rendering it like any other reviewer-typed message (see
+	// claudeBubble/chatKindBadge, src/ClaudeChat.mjs).
+	KindAutoCheck = "auto_check"
 )
 
 // Message is one turn in a conversation.

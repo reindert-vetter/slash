@@ -448,6 +448,63 @@ change for a one-off backlog.
 - Tests: `comment_import_test.go`, `modules/comments/comments_test.go`,
   `tembed/engine_test.go` (`StartWorkflowID` idempotency).
 
+### A kilo-code finding gets an automatic verification chat
+
+Reviewer request: for every individual finding the `kilo-code-bot[bot]` review
+posts, automatically find out whether kilo is actually right and get a
+shorter, clearer summary than kilo's own wording — with an optional fix
+proposal — without having to open the chat and ask by hand. Deliberately
+narrow to kilo's own per-line findings, not its PR-wide summary comment
+(`<!-- kilo-review -->`, see `isKiloReview` above), which is never imported at
+all and therefore never reaches this either.
+
+- **Trigger:** `isKiloComment(in.Author)` (`comment_import.go`, an exact match
+  on `kilo-code-bot[bot]`) is checked right after `importPRComments` starts a
+  **brand-new** thread for an imported comment (never for a re-import — the
+  `known[in.ImportedRootID]` dedup above `continue`s before this point on
+  every later poll). On a match it spawns `autoStartKiloCheck` in its own
+  goroutine, same fire-and-forget shape as `autoStartCodeWarning`/the avatar
+  backfill, so the import loop never blocks on a Claude call.
+- **Gated by the SAME "Live AI assistent" toggle as `code_warning`/
+  `explain_code`/`comment_titles`** (`AutoWarnEnabled`, see "Reviewer on/off
+  switch" in `.claude/docs/workflows-analysis.md`) — this is exactly the kind
+  of automatic, unasked-for Claude call that switch exists to gate. A manual
+  chat the reviewer starts themselves is never gated by it, same as every
+  other automatic trigger this toggle covers.
+- **`autoStartKiloCheck` (`workflows.go`)** calls the ordinary
+  `StartClaudeChat(ClaudeChatInput{Repo, PR, CommentID: commentRunID})` — so
+  the resulting conversation is an ordinary child of that comment thread, with
+  no special-cased Run ID or storage — then sends ONE `message` Signal
+  straight via `engine.SignalWorkflow` (server-side glue, never the HTTP
+  handler/`tasks_api.go`'s validation switch, which this path never touches)
+  carrying a new `Action` value, `chatActionAutoCheck` (`"auto_check"`,
+  `chat_workflow.go`). That Action runs through the exact same path as an
+  ordinary `""` turn (saved as a `role: "user"` message, a real Claude call
+  with the usual shell access) — it exists purely so the saved message can
+  carry `chat.KindAutoCheck`, which `chatKindBadge` (`src/ClaudeChat.mjs`)
+  turns into a small "automatische controle van kilo-opmerking" badge next to
+  the ordinary "Jij" bubble, so the reviewer can tell apart a message they
+  never typed from one they did (colorblind rule: word + glyph, not colour
+  alone — the bubble itself keeps its ordinary "mine" tint).
+- **The prompt (`kiloCheckPrompt`, `workflows.go`)** is built server-side, in
+  Dutch like every other reviewer-facing prompt/label: kilo's own body is
+  quoted as a Markdown blockquote (so Claude and the reviewer can tell kilo's
+  claim apart from Claude's own answer), prefixed with the file/line when
+  known (`in.File`/`in.Line`, from the same `CodeCommentInput` the thread
+  itself was started from), and closes by asking Claude to verify the claim
+  against the real code, summarize it more clearly than kilo did, and
+  optionally propose a fix. No code excerpt is embedded — the turn already
+  gets its usual Read/Grep/Glob/Bash access to the shadow worktree
+  (`runOneClaudeTurn` tries this for every turn), so Claude looks the real
+  code up itself rather than trusting a snippet in the prompt.
+- **No backfill, by explicit product decision** ("vanaf nu is genoeg") — a
+  kilo comment imported before this existed keeps whatever chat state it had
+  (usually none); only a comment imported from this point on gets the
+  automatic turn.
+- Tests: `TestImportKiloCommentAutoStartsVerificationChat`,
+  `TestImportKiloCommentSkipsAutoChatWhenAutoWarnDisabled`,
+  `TestImportNonKiloCommentNeverAutoStartsChat` (`comment_import_test.go`).
+
 ## `claude_chat` (`chat_workflow.go` + `modules/chat` + `modules/claude`'s `RunChat`)
 
 An embedded, multi-turn Claude conversation next to a review comment thread —

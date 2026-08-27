@@ -2253,6 +2253,26 @@ fixture file loads — see the test's own comment; the backend's
 KindAction/KindDraftReply/KindError decisions are already covered end-to-end
 by `chat_workflow_test.go`).
 
+### `chat.KindAutoCheck`: badging a turn the reviewer never typed
+
+A different case of the same `chatKindBadge` mechanism, but on a **`role:
+"user"`** message rather than an assistant one: `autoStartKiloCheck`
+(`workflows.go`) sends the automatic first turn of a kilo-code finding's
+verification chat with `Action: chatActionAutoCheck`, which
+`claudeChatWorkflow` (`chat_workflow.go`) turns into
+`Kind: chat.KindAutoCheck` on the saved message — see "A kilo-code finding
+gets an automatic verification chat" in `.claude/docs/workflows-comments.md`
+for the trigger/gate/prompt. The bubble itself still renders exactly like any
+other own message (indigo tint, "Jij" label) — `chatKindBadge` adds an extra
+indigo pill, "automatische controle van kilo-opmerking" with a magnifying-glass
+glyph (`data-testid=claude-message-auto-check`), which is the ONLY thing that
+tells a reviewer this specific message was never typed by them. Deliberately
+not a bigger visual departure (a different name/avatar, a system-style bubble):
+the turn genuinely runs through the ordinary reviewer-turn path (a real Claude
+call with shell access, a real reply bubble underneath), so a badge next to
+the existing rendering was enough, rather than inventing a third bubble shape
+next to "mine"/"Claude's".
+
 ### A `reply` directive only drafts, never posts
 
 Explicit correction to the paragraph above, from Reindert: "Claude mag namens

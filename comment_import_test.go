@@ -11,6 +11,9 @@ import (
 
 	"github.com/reindert-vetter/tembed"
 
+	"slash/modules/autowarn"
+	"slash/modules/chat"
+	"slash/modules/claude"
 	"slash/modules/comments"
 	"slash/modules/github"
 )
@@ -616,5 +619,159 @@ func TestImportAppliesGithubResolvedState(t *testing.T) {
 		if c.ReactionCount != 1 {
 			t.Fatalf("gh-100 reactionCount = %d, want exactly 1 (/resolve trace)", c.ReactionCount)
 		}
+	}
+}
+
+// kiloCheckTestManager wires the comments + chat stores plus a real autowarn
+// module (post-construction, like autoWarnTriggerManager in
+// code_warning_test.go) so the "Live AI assistent" toggle can be flipped from
+// the test, and a claude.Fake so autoStartKiloCheck's turn actually produces a
+// reply instead of hitting a real subprocess.
+func kiloCheckTestManager(t *testing.T) (*TaskManager, *github.Fake, *comments.Module, *chat.Module, *claude.Fake) {
+	t.Helper()
+	dataDir := t.TempDir()
+	cs, err := comments.Open(filepath.Join(dataDir, "comments.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cs.Close() })
+	cm, err := chat.Open(filepath.Join(dataDir, "chat.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cm.Close() })
+	aw, err := autowarn.Open(filepath.Join(dataDir, "autowarn.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { aw.Close() })
+
+	gh := &github.Fake{}
+	fake := claude.NewFake()
+	fake.SetChatTurns("Kilo heeft hier gedeeltelijk gelijk: de check ontbreekt inderdaad.")
+	engine := tembed.New(tembed.NewMemoryStore())
+	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, fake, nil, nil, "", "test/repo")
+	m.chat = cm
+	m.autowarn = aw
+	m.interval = 3 * time.Millisecond
+	m.idle = 3 * time.Millisecond
+	return m, gh, cs, cm, fake
+}
+
+// waitForChatMessages polls (autoStartKiloCheck fires from its own goroutine,
+// so nothing guarantees it already ran the instant importPRComments returns)
+// for up to 2s until conversationID has at least one stored message.
+func waitForChatMessages(t *testing.T, cm *chat.Module, conversationID string) []chat.Message {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		msgs, err := cm.List(context.Background(), conversationID)
+		if err == nil && len(msgs) > 0 {
+			return msgs
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no chat messages for %s within deadline (err=%v)", conversationID, err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// A freshly imported kilo-code review comment automatically gets a
+// claude_chat conversation, with an auto_check first turn that quotes kilo's
+// own finding and asks Claude to verify it against the real code — while
+// "Live AI assistent" is on (the default).
+func TestImportKiloCommentAutoStartsVerificationChat(t *testing.T) {
+	m, gh, cs, cm, _ := kiloCheckTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pr := 42
+
+	gh.SetReviewComments([]github.ReviewComment{
+		{ID: 900, Author: "kilo-code-bot[bot]", Body: "Deze functie valideert de input niet.",
+			Path: "src/Order.php", Line: 10, Side: "RIGHT"},
+	})
+
+	m.importPRComments(ctx, "", pr)
+
+	list, _ := cs.List(ctx, "", pr)
+	if len(list) != 1 || list[0].ID != "gh-900" {
+		t.Fatalf("imported comments = %+v, want exactly gh-900", list)
+	}
+
+	msgs := waitForChatMessages(t, cm, "gh-900")
+	if msgs[0].Role != "user" || msgs[0].Kind != chat.KindAutoCheck {
+		t.Fatalf("first message = role=%q kind=%q, want role=user kind=%q", msgs[0].Role, msgs[0].Kind, chat.KindAutoCheck)
+	}
+	if !strings.Contains(msgs[0].Body, "Deze functie valideert de input niet.") {
+		t.Fatalf("auto-check prompt = %q, want it to quote kilo's own finding", msgs[0].Body)
+	}
+	if !strings.Contains(msgs[0].Body, "src/Order.php") {
+		t.Fatalf("auto-check prompt = %q, want the file path", msgs[0].Body)
+	}
+}
+
+// Same import, but with "Live AI assistent" turned off: no claude_chat
+// Execution is started for the kilo comment at all.
+func TestImportKiloCommentSkipsAutoChatWhenAutoWarnDisabled(t *testing.T) {
+	m, gh, cs, cm, _ := kiloCheckTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pr := 42
+
+	if err := m.autowarn.SetEnabled(ctx, "test/repo", false); err != nil {
+		t.Fatal(err)
+	}
+
+	gh.SetReviewComments([]github.ReviewComment{
+		{ID: 901, Author: "kilo-code-bot[bot]", Body: "Mogelijke null pointer.",
+			Path: "src/Order.php", Line: 10, Side: "RIGHT"},
+	})
+
+	m.importPRComments(ctx, "", pr)
+
+	list, _ := cs.List(ctx, "", pr)
+	if len(list) != 1 || list[0].ID != "gh-901" {
+		t.Fatalf("imported comments = %+v, want exactly gh-901", list)
+	}
+
+	// Give the fire-and-forget goroutine a moment to (not) run, then confirm no
+	// conversation/messages ever showed up.
+	time.Sleep(50 * time.Millisecond)
+	msgs, err := cm.List(ctx, "gh-901")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("chat messages = %+v, want none (autowarn disabled)", msgs)
+	}
+}
+
+// A review comment from an ordinary (non-kilo) author never gets an automatic
+// chat, even with "Live AI assistent" on.
+func TestImportNonKiloCommentNeverAutoStartsChat(t *testing.T) {
+	m, gh, cs, cm, _ := kiloCheckTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pr := 42
+
+	gh.SetReviewComments([]github.ReviewComment{
+		{ID: 902, Author: "colleague", Body: "why not use a DTO here?",
+			Path: "src/Order.php", Line: 10, Side: "RIGHT"},
+	})
+
+	m.importPRComments(ctx, "", pr)
+
+	list, _ := cs.List(ctx, "", pr)
+	if len(list) != 1 || list[0].ID != "gh-902" {
+		t.Fatalf("imported comments = %+v, want exactly gh-902", list)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	msgs, err := cm.List(ctx, "gh-902")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("chat messages = %+v, want none (author is not kilo)", msgs)
 	}
 }
