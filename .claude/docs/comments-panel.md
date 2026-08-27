@@ -343,6 +343,41 @@ timeout well under the 5s comment-poll interval — that poll also happens to
 call `scrollCommentThreadToBottom()` on every tick and would otherwise mask a
 regression here a few seconds late instead of failing).
 
+### A child drilled from inside the anchor's own panel must own ↑/↓ too
+
+The level-1 "sidebar still walks ↑/↓ until the second `→`"
+design above is deliberately scoped to `state.drill.length === 1` — the
+anchor block itself. From inside that anchor's Underlying-code panel
+(`cs.focus==='code'`, reached via the second `→`), Enter/Space on a resolved
+child calls the ordinary `drillIntoChild` (`.claude/docs/drilling.md`) exactly
+as it would for any other block: it pushes a **second** `state.drill` entry,
+bumps `state.focusLevel` to `2`, and calls `leaveRelated()` (so
+`relatedActive()` is false again). `state.mode` never flips to `'diff'` for
+this whole flow (`openCommentAnchorDrill`'s own exception), so
+`onKeydown`'s `state.mode === 'diff'` branch — which is where an ordinary
+drilled column's `focusLevel > 0` handling for `ArrowUp`/`ArrowDown` lives —
+never runs either. Without a dedicated check, `↑`/`↓` (with or without Shift)
+fell through all the way to the generic list-mode branch and moved the
+**sidebar** selection instead (`stepListSelection`/`extendListRange`),
+discarding the deep drill and jumping to a completely different comment/
+block — reported bug: "als ik een onderliggende kaart open van een comment,
+kan ik daarna niet meer naar beneden drukken want dan selecteert het de
+blokken index" (reproduced via the debug log: select a comment → `→` `→`
+(into its Underlying-code panel) → `↓`/`Enter` on a child (drills to level 2)
+→ Shift+`↓` — moved to a wholly unrelated comment two rows down instead of
+extending the drilled child's own line range).
+
+Fixed with a branch in `onKeydown` guarded on `state.focusLevel > 1` (not
+`> 0` — that would reopen the level-1 sidebar-walk design right above, which
+stays untouched) that calls `drillNextChange`/`drillPrevChange`/
+`drillExtendRange` exactly like `state.mode === 'diff'`'s own branch does,
+just reached from `'list'` mode. Safe precisely because the ONLY way
+`state.focusLevel` can exceed `1` while `state.mode` is still `'list'` is
+this one comment-anchor flow — an ordinary drill always runs inside
+`state.mode === 'diff'`, which already claims the key first. `ArrowLeft` at
+this depth is not covered by this fix (not part of the reported bug) and
+still falls through to the generic list-mode `ArrowLeft` branch.
+
 ### → skips an already-resolved default comment
 
 `enterCommentsOrRelated(pr)` (`RelatedPanel.mjs`) is the single entry point

@@ -14141,6 +14141,39 @@ function onKeydown(e) {
     return
   }
 
+  // A comment-index item anchored to a real block can be drilled ONE level
+  // DEEPER still: from inside its own Underlying-code panel (reached via a
+  // second ArrowRight, cs.focus==='code') Enter/Space on a resolved child
+  // calls the ordinary drillIntoChild — exactly as it would for any other
+  // block — pushing a SECOND (or deeper) state.drill entry and bumping
+  // state.focusLevel past 1. drillIntoChild also calls leaveRelated(), so
+  // relatedActive() is false again and the branch above no longer claims the
+  // key. Unlike the level-1 "comment row still walks the sidebar until the
+  // second →" design (state.commentAnchorEntered, an explicit, documented
+  // reviewer decision — see "Only one thing reads as selected at a time" in
+  // .claude/docs/comments-panel.md — deliberately UNTOUCHED here, hence
+  // `> 1` and not `> 0`), a genuinely deeper drilled column has no sidebar
+  // meaning left at all: state.mode simply never flips to 'diff' for this
+  // one flow (openCommentAnchorDrill's own exception, see drilling.md), so
+  // without this branch ↓/↑ fell through to the generic list-mode handling
+  // below and silently moved the SIDEBAR selection (or, with Shift, jumped a
+  // whole different comment/block into view) instead of walking the open
+  // drilled column — reported bug: "als ik een onderliggende kaart open van
+  // een comment, kan ik daarna niet meer naar beneden drukken want dan
+  // selecteert het de blokken index". This mirrors state.mode==='diff''s own
+  // focusLevel > 0 handling below verbatim, just reached from 'list' mode.
+  if (state.focusLevel > 1 && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+    e.preventDefault()
+    if (e.key === 'ArrowDown') {
+      if (e.shiftKey) drillExtendRange(state.focusLevel, 1)
+      else drillNextChange()
+    } else {
+      if (e.shiftKey) drillExtendRange(state.focusLevel, -1)
+      else drillPrevChange()
+    }
+    return
+  }
+
   if (e.key === 'ArrowDown') {
     e.preventDefault()
     // Shift extends a multi-ROW selection in the index instead of moving the

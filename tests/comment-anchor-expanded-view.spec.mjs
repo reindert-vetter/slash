@@ -549,4 +549,78 @@ test.describe('a comment-index item anchored to a real block', () => {
       )
       .toBe(true)
   })
+
+  // Reported bug: "als ik een onderliggende kaart open van een comment, kan
+  // ik daarna niet meer naar beneden drukken want dan selecteert het de
+  // blokken index". Reproduces the exact sequence from the reviewer's own
+  // debug-log recording: select the anchored comment row → ArrowRight (enter,
+  // still on the sidebar) → ArrowRight (into the comment thread) → ArrowDown
+  // (advances to the anchor's own Underlying-code panel) → open a resolved
+  // child from there (drillIntoChild, a SECOND state.drill entry,
+  // state.focusLevel=2) → Shift+ArrowDown. That last key used to fall
+  // through to the generic list-mode branch and jump the SIDEBAR selection
+  // to a different row, discarding the child's own drilled diff — see "A
+  // child drilled from inside the anchor's own panel must own ↑/↓ too" in
+  // .claude/docs/comments-panel.md.
+  test('a child drilled from inside the anchor panel keeps ↓/Shift+↓ on its own diff, not the sidebar', async ({
+    page,
+  }) => {
+    await page.route('**/api/relations?pr=12903', async (route) => {
+      await route.fulfill({
+        json: [
+          {
+            pr: 12903,
+            parentId: '12903:app/Actions/CreatePaymentAction.php:CreatePaymentAction::execute',
+            childId: '12903:app/Actions/CreatePaymentAction.php:CreatePaymentAction::findOrCreateCustomer',
+            kind: 'event_listener',
+          },
+        ],
+      })
+    })
+    await mockAnchoredComment(page, {
+      id: 'anchor-deep',
+      file: 'app/Actions/CreatePaymentAction.php',
+      label: 'CreatePaymentAction::execute',
+      body: 'rename this argument',
+    })
+    await page.goto('/pr/12903')
+    await leaveSearchBox(page)
+
+    const row = page.locator('[data-idx]').filter({ hasText: 'rename this argument' })
+    await row.click()
+    const drillColumn = page.getByTestId('drill-column')
+    await expect(drillColumn).toBeVisible()
+
+    // First → enters (still on the sidebar), second → steps into the
+    // comment thread, ↓ from there advances into the Underlying-code panel
+    // (advanceFromComment → enterRelated, no other comment/task to land on
+    // first).
+    await page.keyboard.press('ArrowRight')
+    await page.keyboard.press('ArrowRight')
+    await page.keyboard.press('ArrowDown')
+
+    const child = page.getByTestId('related-item').filter({ hasText: 'findOrCreateCustomer' })
+    await expect(child).toBeVisible()
+    await child.click()
+
+    // The anchor collapsed to a rail, the child is now the sole focused
+    // drilled column.
+    await expect(page.getByTestId('drill-collapsed')).toBeVisible()
+    await expect(drillColumn).toContainText('findOrCreateCustomer')
+
+    await expect(row).toHaveClass(/bg-indigo-50/)
+    await page.keyboard.down('Shift')
+    await page.keyboard.press('ArrowDown')
+    await page.keyboard.up('Shift')
+
+    // The sidebar selection (and thus the drilled child) must not have moved.
+    await expect(row).toHaveClass(/bg-indigo-50/)
+    await expect(drillColumn).toContainText('findOrCreateCustomer')
+    await expect(page.getByTestId('drill-collapsed')).toBeVisible()
+
+    // A plain ↓ (no Shift) must walk the child's own change groups too.
+    await page.keyboard.press('ArrowDown')
+    await expect(row).toHaveClass(/bg-indigo-50/)
+    await expect(drillColumn).toContainText('findOrCreateCustomer')
+  })
 })
