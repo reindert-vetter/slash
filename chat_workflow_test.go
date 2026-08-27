@@ -555,6 +555,57 @@ func TestParseAssistantTurnStripsEmDashFromReplyBody(t *testing.T) {
 	}
 }
 
+// One reviewer message may ask for BOTH a code change and a reply on the
+// comment thread ("pas dit aan en reageer kort op de comment"). The write turn
+// then answers with its ordinary prose plus the comment_action directive on its
+// own last line, and parseAssistantTurn returns both: the explanation as a
+// visible turn, the reply as a drafted comment reply.
+func TestParseAssistantTurnAcceptsProseWithTrailingCommentAction(t *testing.T) {
+	raw := "De test bestond nog niet; hij staat er nu en is groen.\n" +
+		`{"type":"comment_action","action":"reply","commentId":"c1","body":"Toegevoegd, met een data provider."}`
+	msg, action := parseAssistantTurn(1, "c1", "turn-1", raw)
+	if action == nil {
+		t.Fatal("expected the trailing comment_action directive to be picked up")
+	}
+	if action.Body != "Toegevoegd, met een data provider." {
+		t.Fatalf("directive body = %q", action.Body)
+	}
+	if msg.Body != "De test bestond nog niet; hij staat er nu en is groen." {
+		t.Fatalf("expected the prose to stay as the visible turn, got %q", msg.Body)
+	}
+	if msg.ID == "" || msg.Kind != "" {
+		t.Fatalf("expected an ordinary text turn, got %+v", msg)
+	}
+}
+
+// Same, but the model wrapped the trailing directive in a markdown fence — the
+// one deviation from the prompt worth tolerating. The fence must not end up in
+// the visible prose.
+func TestParseAssistantTurnAcceptsAFencedTrailingCommentAction(t *testing.T) {
+	raw := "Aangepast in `Foo.php`.\n\n```json\n" +
+		`{"type":"comment_action","action":"resolve","commentId":"c1"}` + "\n```\n"
+	msg, action := parseAssistantTurn(1, "c1", "turn-1", raw)
+	if action == nil || action.Action != "resolve" {
+		t.Fatalf("expected a resolve directive, got %+v", action)
+	}
+	if msg.Body != "Aangepast in `Foo.php`." {
+		t.Fatalf("prose = %q, want the fence stripped", msg.Body)
+	}
+}
+
+// Prose that merely ENDS on some other JSON-ish line stays plain text — the
+// trailing-directive path may never swallow part of an ordinary answer.
+func TestParseAssistantTurnKeepsProseWithAnUnrelatedTrailingJSON(t *testing.T) {
+	raw := "De config ziet er zo uit:\n" + `{"type":"config","foo":1}`
+	msg, action := parseAssistantTurn(1, "c1", "turn-1", raw)
+	if action != nil {
+		t.Fatalf("expected no directive, got %+v", action)
+	}
+	if msg.Body != raw {
+		t.Fatalf("expected the raw text verbatim, got %q", msg.Body)
+	}
+}
+
 // A chat on a live comment thread is started as a CHILD of that thread's own
 // task_code_comment Execution (via its "chat" Action Signal), keeping the
 // derived chat-<commentID> Run ID — and starting it twice adds no second child.

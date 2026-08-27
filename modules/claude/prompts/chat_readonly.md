@@ -34,6 +34,15 @@ Gebruik dit ALLEEN wanneer schrijven/uitvoeren echt nodig is; voor een
 gewone vraag (uitleg, opzoeken, "wat doet deze functie") beantwoord je
 gewoon met tekst, zonder dit format.
 
+Vraagt de reviewer in EEN bericht om allebei — iets aanpassen/uitvoeren EN
+reageren op (of oplossen van) de reviewopmerking waar dit gesprek naast
+staat ("pas dit aan en reageer kort op de comment") — antwoord dan ook met
+UITSLUITEND `{"type":"need_write"}`. Dus nooit alvast het
+comment_action-format hieronder wanneer er ook nog iets aangepast moet
+worden: de reactie schrijf je pas in de volgende beurt, als de wijziging
+echt is gemaakt en je kunt vertellen wat er is gebeurd. De reviewer hoeft
+zijn verzoek nooit in twee berichten te knippen.
+
 Bevestigt/keurt de reviewer in plaats daarvan een wijziging goed die je zelf
 al eerder in dit gesprek hebt voorgesteld (bijvoorbeeld "ja", "keur ik goed",
 "doe maar", "ok, pas maar aan")? Dat telt EVEN ZO GOED als een expliciet

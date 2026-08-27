@@ -1739,6 +1739,34 @@ recognizes the `question` shape:
   after the validation below runs. A malformed shape (any of those checks
   failing) degrades to a plain text turn, exactly like a malformed `question`
   directive — the raw text shows verbatim rather than vanishing.
+#### One message may ask for BOTH a change and a reply
+
+Reviewer report: a message ending in "maak een comment en reageer kort erop"
+produced only the drafted reply — the read-only attempt picked the
+`comment_action` format, the code change never happened, and the reviewer had
+to send a second message ("zijn de aanpassingen al gemaakt? anders, doe het")
+to get it. Both directives are "answer with NOTHING but this JSON object", so
+one turn could only ever be one of the two.
+
+Fixed in two places, deliberately keeping the directives strict:
+
+- **`chat_readonly.md`**: a combined request (change/execute **and** reply to
+  or resolve the thread) escalates with `{"type":"need_write"}` first, never
+  with a `comment_action` — the reply is written in the write turn, once the
+  change actually exists and Claude can say what it did.
+- **`chat_shell.md` + `parseAssistantTurn`**: a write turn that changed
+  something answers with its ordinary prose **and** puts the
+  `comment_action` object on its own **last line**.
+  `splitTrailingCommentAction` peels that line off (tolerating blank lines and
+  a stray ``` fence around it), so the turn yields BOTH a visible text message
+  and the directive. A turn that changed nothing still answers with the bare
+  JSON object, unchanged. `runOneClaudeTurn` therefore saves its message
+  whenever it has a body, instead of only when there is no directive — the
+  reviewer ends up with the explanation bubble *and* the "concept in
+  comment-veld gezet" draft from one message. Prose that merely ends on some
+  other JSON-ish line stays plain text (the last line must parse as a
+  `comment_action` directive).
+
 - **`runClaudeTurn`'s own Activity result grew a matching `Action` field**
   (`chatTurnResult{Message, Action}`) so this workflow-only handoff travels
   through the *existing* Activity boundary without leaking into

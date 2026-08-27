@@ -49,3 +49,25 @@ func TestChatReadOnlySystemPromptCoversConfirmationAndForbidsAskingPermission(t 
 		t.Fatal("expected the need_write directive to still be documented")
 	}
 }
+
+// TestPromptsAllowOneMessageToAskForBothAChangeAndAReply guards the reviewer
+// report that a single message asking for both ("maak een comment en reageer
+// kort erop") only produced the drafted reply: the read-only attempt picked
+// the comment_action format and the code change never happened, so the
+// reviewer had to send a second message. The read-only prompt must escalate
+// with need_write on such a combined request, and the shell prompt must allow
+// the prose answer plus the directive on its own last line — the shape
+// parseAssistantTurn (chat_workflow.go) now parses.
+func TestPromptsAllowOneMessageToAskForBothAChangeAndAReply(t *testing.T) {
+	ro := strings.ToLower(ChatReadOnlySystemPrompt)
+	if !strings.Contains(ro, "in een bericht om allebei") {
+		t.Fatal("expected the read-only prompt to cover a combined change+reply request")
+	}
+	if !strings.Contains(ro, "nooit alvast het") {
+		t.Fatal("expected the read-only prompt to forbid a comment_action while a change is still pending")
+	}
+	sh := strings.ToLower(ChatShellSystemPrompt)
+	if !strings.Contains(sh, "eigen, laatste regel") {
+		t.Fatal("expected the shell prompt to allow prose plus a trailing comment_action line")
+	}
+}

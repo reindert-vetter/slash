@@ -1139,7 +1139,11 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 	// escalate). See prepareChatReadOnlyWorkDir/prepareChatShellWorkDir's own
 	// doc comments for why either can legitimately fail.
 	msg.NoShell = !(hadReadOnly || hadShell)
-	if action == nil {
+	// A pure directive turn has no visible message of its own (applyChatCommentAction
+	// records its outcome instead), but a COMBINED turn — prose plus a trailing
+	// comment_action, see parseAssistantTurn — does: the reviewer gets both the
+	// explanation of what changed and the drafted reply.
+	if action == nil || strings.TrimSpace(msg.Body) != "" {
 		_ = cm.SaveMessage(ctx, msg)
 	}
 	return msg, action
@@ -1298,7 +1302,10 @@ func relativeToCheckout(dir, path string) string {
 // it is a validated "comment_action" directive, otherwise a plain text turn
 // (the raw text verbatim — including when it happens to start with "{" but
 // doesn't parse as a recognized directive, so a stray/malformed directive
-// degrades to plain text rather than vanishing).
+// degrades to plain text rather than vanishing), and a (text message,
+// directive) PAIR when the answer is prose that ENDS with a comment_action
+// directive on its own last line — one reviewer message may ask for both a
+// code change and a reply on the comment thread.
 // stripEmDash replaces every em dash ("—") with a plain hyphen. Used only on a
 // comment_action "reply" body (see parseAssistantTurn) — the reviewer never
 // wants that character in a Claude-drafted comment reply, and a system-prompt
@@ -1313,49 +1320,105 @@ func parseAssistantTurn(pr int, conversationID, turnID, text string) (chat.Messa
 		Role: "assistant", Body: text,
 	}
 	trimmed := strings.TrimSpace(text)
-	if !strings.HasPrefix(trimmed, "{") {
-		return msg, nil
+	if strings.HasPrefix(trimmed, "{") {
+		var d assistantDirective
+		if err := json.Unmarshal([]byte(trimmed), &d); err == nil {
+			switch d.Type {
+			case "question":
+				if strings.TrimSpace(d.Question) == "" {
+					return msg, nil
+				}
+				opts := d.Options
+				if len(opts) > maxChatQuestionOptions {
+					opts = opts[:maxChatQuestionOptions]
+				}
+				msg.Kind = chat.KindQuestion
+				msg.Body = d.Question
+				msg.Options = opts
+				return msg, nil
+			case "comment_action":
+				if action := validateCommentAction(d); action != nil {
+					return chat.Message{}, action
+				}
+			}
+			// Unknown/malformed directive -> plain text, per the rule above.
+			return msg, nil
+		}
+	}
+	// A combined answer: ordinary prose (what Claude just changed) with the
+	// comment_action directive on its own last line. This is what lets ONE
+	// reviewer message ask for both a code change and a reply on the comment
+	// thread — see "One message may ask for both" in
+	// .claude/docs/workflows-comments.md.
+	if prose, d := splitTrailingCommentAction(text); d != nil && strings.TrimSpace(prose) != "" {
+		if action := validateCommentAction(*d); action != nil {
+			msg.Body = prose
+			return msg, action
+		}
+	}
+	return msg, nil
+}
+
+// validateCommentAction turns a parsed "comment_action" directive into the
+// applicable form, or nil when it fails any of the checks (unknown action, an
+// empty reply body, no comment id) — the caller then degrades the whole turn
+// to plain text rather than letting a malformed directive vanish.
+func validateCommentAction(d assistantDirective) *commentActionDirective {
+	if d.Action != "reply" && d.Action != "resolve" {
+		return nil
+	}
+	if d.Action == "reply" && strings.TrimSpace(d.Body) == "" {
+		return nil
+	}
+	if strings.TrimSpace(d.CommentID) == "" {
+		return nil
+	}
+	body := d.Body
+	if d.Action == "reply" {
+		// The reviewer never wants an em dash in a Claude-drafted reply — this
+		// body lands verbatim in the comment composer via saveChatDraftReply, so
+		// sanitize it once here rather than trust the system prompt's wording
+		// alone. "resolve" carries no reviewable body (always "/resolve", set by
+		// applyChatCommentAction), so it needs no sanitizing.
+		body = stripEmDash(body)
+	}
+	return &commentActionDirective{CommentID: d.CommentID, Action: d.Action, Body: body}
+}
+
+// splitTrailingCommentAction splits an answer that ENDS with a comment_action
+// directive on its own last line into the prose before it and that directive.
+// Blank lines and a stray markdown fence around the directive are tolerated
+// (the system prompt asks for a bare line, but a fence is the one deviation
+// models reach for); anything else returns the text unchanged and a nil
+// directive.
+func splitTrailingCommentAction(text string) (string, *assistantDirective) {
+	lines := strings.Split(text, "\n")
+	i := len(lines) - 1
+	for i >= 0 {
+		l := strings.TrimSpace(lines[i])
+		if l != "" && l != "```" {
+			break
+		}
+		i--
+	}
+	if i < 0 {
+		return text, nil
 	}
 	var d assistantDirective
-	if err := json.Unmarshal([]byte(trimmed), &d); err != nil {
-		return msg, nil
+	if err := json.Unmarshal([]byte(strings.TrimSpace(lines[i])), &d); err != nil || d.Type != "comment_action" {
+		return text, nil
 	}
-	switch d.Type {
-	case "question":
-		if strings.TrimSpace(d.Question) == "" {
-			return msg, nil
+	prose := lines[:i]
+	// Drop the fence opener the directive line sat inside, if there was one.
+	for len(prose) > 0 {
+		l := strings.TrimSpace(prose[len(prose)-1])
+		if l == "" || strings.HasPrefix(l, "```") {
+			prose = prose[:len(prose)-1]
+			continue
 		}
-		opts := d.Options
-		if len(opts) > maxChatQuestionOptions {
-			opts = opts[:maxChatQuestionOptions]
-		}
-		msg.Kind = chat.KindQuestion
-		msg.Body = d.Question
-		msg.Options = opts
-		return msg, nil
-	case "comment_action":
-		if d.Action != "reply" && d.Action != "resolve" {
-			return msg, nil // malformed -> degrade to plain text, per the rule above
-		}
-		if d.Action == "reply" && strings.TrimSpace(d.Body) == "" {
-			return msg, nil
-		}
-		if strings.TrimSpace(d.CommentID) == "" {
-			return msg, nil
-		}
-		body := d.Body
-		if d.Action == "reply" {
-			// The reviewer never wants an em dash in a Claude-drafted reply — this
-			// body lands verbatim in the comment composer via saveChatDraftReply, so
-			// sanitize it once here rather than trust the system prompt's wording
-			// alone. "resolve" carries no reviewable body (always "/resolve", set by
-			// applyChatCommentAction), so it needs no sanitizing.
-			body = stripEmDash(body)
-		}
-		return chat.Message{}, &commentActionDirective{CommentID: d.CommentID, Action: d.Action, Body: body}
-	default:
-		return msg, nil
+		break
 	}
+	return strings.TrimSpace(strings.Join(prose, "\n")), &d
 }
 
 // applyChatCommentAction is the applyChatCommentAction Activity's body (a
