@@ -17,15 +17,20 @@
 //     ingest_progress.go (see .claude/rules/workflows-write-boundary.md).
 //
 //  2. A SLOW SUBSCRIBER NEVER BLOCKS A PUBLISHER. publish does a non-blocking
-//     send; a full buffer drops the event and flags the subscriber, and the
-//     connection's own writer then sends one eventResync frame instead, which
-//     tells that tab to refetch. Publishers run inside Activities (a Claude
-//     turn streaming tokens), and an Activity must never be held up by a tab
-//     that stopped reading.
+//     send; a full buffer drops the event, flags the subscriber and WAKES its
+//     connection, whose writer then sends one eventResync frame, which tells
+//     that tab to refetch. Publishers run inside Activities (a Claude turn
+//     streaming tokens), and an Activity must never be held up by a tab that
+//     stopped reading.
+//
+//     A drop is the one failure mode of this hub that a reviewer can actually
+//     notice ("a landed change only showed up after a manual reload"), so it
+//     is never silent: hub.drops counts them and each one logs a line.
 package main
 
 import (
 	"encoding/json"
+	"log"
 	"sync"
 	"sync/atomic"
 )
@@ -196,6 +201,15 @@ type eventSub struct {
 	scope   string
 	ch      chan busEvent
 	dropped atomic.Bool
+	// wake is tapped (non-blocking, buffered 1) when this subscriber's buffer
+	// was full and an event had to be dropped, so its own writer can send the
+	// eventResync frame IMMEDIATELY. Without it, the flag was only ever read on
+	// the next real event or on the 20s keepalive tick — i.e. a tab that fell
+	// behind stayed silently out of date for up to 20 seconds, which is exactly
+	// the window in which a landed chat edit "only became visible after a
+	// manual refresh". A separate channel rather than pushing eventResync into
+	// ch itself: ch is full, which is the whole problem.
+	wake chan struct{}
 }
 
 type eventHub struct {
@@ -203,6 +217,10 @@ type eventHub struct {
 	seq  uint64
 	next int
 	subs map[int]*eventSub
+	// drops counts every event this hub could not hand to a subscriber. Purely
+	// diagnostic — a drop costs a resync, never correctness — but it must be
+	// countable: before this existed, a full buffer left no trace anywhere.
+	drops atomic.Uint64
 }
 
 func newEventHub() *eventHub { return &eventHub{subs: map[int]*eventSub{}} }
@@ -218,7 +236,7 @@ func (h *eventHub) subscribe(scope string) (int, *eventSub) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.next++
-	sub := &eventSub{scope: scope, ch: make(chan busEvent, eventSubBuffer)}
+	sub := &eventSub{scope: scope, ch: make(chan busEvent, eventSubBuffer), wake: make(chan struct{}, 1)}
 	h.subs[h.next] = sub
 	return h.next, sub
 }
@@ -264,9 +282,22 @@ func (h *eventHub) publish(typ string, repo string, pr int, key string, data any
 		case sub.ch <- ev:
 		default:
 			sub.dropped.Store(true)
+			n := h.drops.Add(1)
+			// Wake the connection so it can resync now instead of on its next
+			// frame/keepalive tick. Non-blocking: a tap already pending says the
+			// same thing.
+			select {
+			case sub.wake <- struct{}{}:
+			default:
+			}
+			log.Printf("eventbus: subscriber buffer full (scope %q), dropped %s — telling it to resync (drops so far: %d)", sub.scope, typ, n)
 		}
 	}
 }
+
+// dropCount is the number of events this hub had to drop since startup (see
+// eventHub.drops). Read by tests and nothing else.
+func (h *eventHub) dropCount() uint64 { return h.drops.Load() }
 
 // subscriberCount is used by tests (and nothing else) to assert that a closed
 // connection really unregistered itself.

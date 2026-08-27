@@ -2517,6 +2517,18 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			}
 			writeSSE(w, ev)
 			flusher.Flush()
+		case <-sub.wake:
+			// This connection fell behind and the hub had to drop at least one
+			// event for it (eventbus.go). Say so RIGHT NOW instead of waiting for
+			// the next real frame or the 20s keepalive below: until this lands,
+			// the tab believes it saw everything, and blocks.changed in
+			// particular has no other vangnet (home.mjs keeps it out of
+			// onEventsResync on purpose) — so a dropped one stays invisible until
+			// a manual reload.
+			if sub.dropped.Swap(false) {
+				writeSSE(w, busEvent{Type: eventResync})
+				flusher.Flush()
+			}
 		case <-ticker.C:
 			if sub.dropped.Swap(false) {
 				writeSSE(w, busEvent{Type: eventResync})

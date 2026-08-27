@@ -41,10 +41,24 @@ wrong screen. That is what lets the server drop frames freely under pressure.
 - `publish(type, pr, key, data)` marshals `data` **at publish time**, so the
   hub never holds a live pointer into a struct the caller keeps mutating.
 - **A slow subscriber never blocks a publisher.** The send is non-blocking; a
-  full buffer (`eventSubBuffer`, 64) drops the frame and flags the subscriber,
-  and its connection then writes one `resync` frame instead. Publishers run
-  inside Activities (a Claude turn streaming tokens) and must never be held up
-  by a tab that stopped reading.
+  full buffer (`eventSubBuffer`, 64) drops the frame, flags the subscriber and
+  **wakes its connection** (`eventSub.wake`, a buffered-1 channel the writer
+  loop selects on next to `sub.ch` and the keepalive ticker), so the `resync`
+  frame goes out **immediately** instead of only with the subscriber's next
+  real frame or its next 20s tick. Publishers run inside Activities (a Claude
+  turn streaming tokens) and must never be held up by a tab that stopped
+  reading — hence a separate channel: `sub.ch` being full is the whole problem.
+- **A drop is never silent.** `eventHub.drops` counts every dropped frame
+  (`dropCount()`, tests only) and each drop logs one line naming the
+  subscriber's scope and the event type. It stays purely diagnostic — a drop
+  costs a refetch, never correctness — but before this it left no trace at all,
+  which made "a landed change only appeared after a manual reload" impossible
+  to tell apart from a frame that was never published. Note that a drop implies
+  64 frames already queued for that connection, so a single lost
+  `blocks.changed` is a poor explanation for such a report; check the log line
+  before assuming it.
+  Tests: `TestEventHubWakesAndCountsOnDrop` (`eventbus_test.go`),
+  `TestHandleEventsResyncsImmediatelyOnDrop` (`events_api_test.go`).
 - `?pr=` narrows a connection to one PR (plus PR-less events). Finer filtering
   ("which conversation") is client-side on the event's `key`. `EventSource`
   cannot renegotiate after connecting, so a scope change is simply a reconnect

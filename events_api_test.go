@@ -129,3 +129,50 @@ func TestSSEResyncAfterDrop(t *testing.T) {
 		t.Fatalf("expected a resync frame, got %q", out.String())
 	}
 }
+
+// A woken connection sends its resync frame straight away — with no further
+// event queued for it and long before the 20s keepalive tick. Before this, the
+// dropped flag was only ever read on the next real frame or that tick, so a
+// tab that fell behind could believe it was up to date for another 20 seconds
+// (and blocks.changed, which home.mjs deliberately keeps out of
+// onEventsResync, has no other vangnet at all).
+func TestHandleEventsResyncsImmediatelyOnDrop(t *testing.T) {
+	s := &server{}
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/api/events?pr=4242", nil).WithContext(ctx)
+	rr := httptest.NewRecorder()
+
+	before := events.subscriberCount()
+	done := make(chan struct{})
+	go func() {
+		s.handleEvents(rr, req)
+		close(done)
+	}()
+	waitFor(t, func() bool { return events.subscriberCount() == before+1 })
+
+	// The subscriber this connection registered for itself; the hub taps exactly
+	// this pair (flag + wake) when it has to drop an event for it.
+	sub := subByScope(t, statusKey("", 4242))
+	sub.dropped.Store(true)
+	sub.wake <- struct{}{}
+
+	waitFor(t, func() bool { return strings.Contains(rr.Body.String(), `"type":"resync"`) })
+	cancel()
+	<-done
+}
+
+// subByScope returns the one subscriber watching this scope. Test-only reach
+// into the hub: the SSE handler owns its subscriber, so there is no other way
+// to exercise the writer's wake branch in isolation.
+func subByScope(t *testing.T, scope string) *eventSub {
+	t.Helper()
+	events.mu.Lock()
+	defer events.mu.Unlock()
+	for _, sub := range events.subs {
+		if sub.scope == scope {
+			return sub
+		}
+	}
+	t.Fatalf("no subscriber for scope %q", scope)
+	return nil
+}

@@ -147,3 +147,44 @@ func TestPublishBlocksChangedCarriesLandedFiles(t *testing.T) {
 		t.Fatal("expected a blocks.changed event")
 	}
 }
+
+// A dropped event does more than flag the subscriber: it WAKES the connection
+// (so its writer can send the resync frame without waiting for the next real
+// event or the 20s keepalive tick) and it is counted, so a drop is never
+// silent. See eventbus.go's file header.
+func TestEventHubWakesAndCountsOnDrop(t *testing.T) {
+	h := newEventHub()
+	_, sub := h.subscribe("")
+	for i := 0; i < eventSubBuffer; i++ {
+		h.publish(eventChatMessage, "", 1, "conv", nil)
+	}
+	if h.dropCount() != 0 {
+		t.Fatalf("dropCount = %d before the buffer was full, want 0", h.dropCount())
+	}
+	select {
+	case <-sub.wake:
+		t.Fatal("woken without a drop")
+	default:
+	}
+
+	h.publish(eventChatMessage, "", 1, "conv", nil) // one too many
+	if !sub.dropped.Load() {
+		t.Fatal("expected the subscriber to be flagged as dropped")
+	}
+	if got := h.dropCount(); got != 1 {
+		t.Fatalf("dropCount = %d, want 1", got)
+	}
+	select {
+	case <-sub.wake:
+	default:
+		t.Fatal("expected the connection to be woken so it can resync now")
+	}
+
+	// A second drop while the first tap is still pending must not block the
+	// publisher (an Activity is never held up by a tab that stopped reading).
+	h.publish(eventChatMessage, "", 1, "conv", nil)
+	h.publish(eventChatMessage, "", 1, "conv", nil)
+	if got := h.dropCount(); got != 3 {
+		t.Fatalf("dropCount = %d, want 3", got)
+	}
+}
