@@ -4529,6 +4529,19 @@ let pendingPushSyncedSha
 // (row.treeCaughtUp, pending_push.go), not event-sourced, so it eventually
 // observes the truth regardless of any dropped SSE frame.
 //
+// Because it is git+DB-backed rather than event-sourced, this same read is
+// ALSO run on a slow timer (PENDING_PUSH_POLL_MS below), not only on the
+// pendingpush.changed frame and the resync hook. Reviewer report: "ik zie de
+// aanpassing niet verschijnen, ook na 10 seconden niet, als ik dan refresh
+// wel... ik heb dit vaker meegemaakt" — with a landing whose blocks.changed
+// AND pendingpush.changed frames both go missing (a full subscriber buffer, a
+// stream that died between the two), nothing else in the tab ever asks again:
+// blocks.changed is excluded from onEventsResync by design, and the server
+// only re-offers a `resync` on the next event or its 20s keepalive tick. The
+// timer makes the recovery unconditional and bounded instead of "whenever the
+// next frame happens to arrive", without adding a second source of truth —
+// it is the exact same read, and the guard below is what keeps it a no-op.
+//
 // The trigger is deliberately narrow, to hold the hard rule "never on a bare
 // reconnect without pending work": only when row.treeCaughtUp is true AND its
 // sha is one this tab hasn't already caught up to (pendingPushSyncedSha) —
@@ -4563,6 +4576,15 @@ async function loadPendingPush() {
     /* offline — keep whatever we have */
   }
 }
+
+// PENDING_PUSH_POLL_MS is the cadence of loadPendingPush's own timer (see its
+// doc comment): a local-only read (for-each-ref + rev-list --count + diff
+// --name-only, no network, no gh), so it is cheap enough to run unconditionally
+// — the same shape as pollWorkflows/pollProblems above. Slow on purpose: it
+// exists to bound how long a MISSED event can hide a finished landing, not to
+// be the primary path (the ordinary blocks.changed frame still gets there
+// first and makes this tick a no-op via pendingPushSyncedSha).
+const PENDING_PUSH_POLL_MS = 10_000
 
 // pushPendingWork fires the actual push: a "push" Action on the PR's chat_merge
 // queue (the same queue that serializes landings, see chat_merge.go), never a
@@ -4662,6 +4684,13 @@ async function refreshBlocksAfterOwnLanding(touchedFiles) {
     const res = await fetch(`/api/blocks?pr=${state.pr}${repoQuery}`)
     if (!res.ok) return
     const blocks = await res.json()
+    // The fresh block objects carry no `b.code` (GET /api/blocks never does),
+    // so drop the per-block "already fetched" marks for the files this landing
+    // touched BEFORE they are mounted — otherwise ensureCode's own cache guard
+    // returns immediately for every one of them and the diff column keeps
+    // showing the pre-landing source (or nothing at all). See
+    // invalidateCodeCache's own comment.
+    invalidateCodeCache(touchedFiles)
     state.allBlocks = Array.isArray(blocks) ? blocks : []
     state.relations = await loadRelations()
   } catch (_) {
@@ -4674,11 +4703,41 @@ async function refreshBlocksAfterOwnLanding(touchedFiles) {
     const idx = state.blocks.findIndex((b) => b.file && files.has(b.file))
     if (idx >= 0) state.selected = idx
   }
+  // An OPEN drilled column (state.drill) still holds the block objects from
+  // before the refresh — stale code, and stale approvals once loadApprovals
+  // above has only touched the fresh ones. Re-point every level at the new
+  // object with the same id (a synthetic drill frame carries its source
+  // inline and has no stored block, so it stays exactly as it is; an id that
+  // no longer exists keeps its old object rather than collapsing the column).
+  // Reassigned only when something really moved, so the ?drill= mirror and the
+  // columns render are not nudged for nothing; the cursor state
+  // (state.drillCursor, per level) is index-based and unaffected.
+  if (state.drill.length) {
+    const byId = new Map(state.allBlocks.map((b) => [b.id, b]))
+    const next = state.drill.map((d) => (d && !d.synthetic && byId.get(d.id)) || d)
+    if (next.some((d, i) => d !== state.drill[i])) state.drill = next
+  }
   // The newly landed code can resolve new calls/tests/approval totals — the
   // same fire-and-forget reads loadBlocks itself kicks off.
   loadCallResolve()
   loadTestCovers()
-  loadBlockStats()
+  // The reviewer's per-row approvals live ON the block objects
+  // (b.approvedRows/b.approvedCalls, see loadApprovals), which the fresh ones
+  // above do not have — without re-reading them the checkmarks and the
+  // "approve N/M" counter simply vanished from every refreshed block until a
+  // page reload.
+  //
+  // Ordered exactly like loadBlocks: recomputeLeftList FIRST, then this pair,
+  // then one more recompute (state.blockTotals only lands here, and a block
+  // that is now fully approved has to drop out of the visible list). Running
+  // loadApprovals BEFORE that first recompute instead wedged the selected
+  // card's diff completely — it reassigns state.allBlocks wholesale, which
+  // mid-swap collides with the card's own keyed rebuild (the co-subscriber /
+  // keyed-node pitfalls in .claude/rules/arrowjs-pitfalls.md): the code was
+  // fetched and codeDiff even ran, but its DOM never mounted, leaving a
+  // header-only card. Reproduced and fixed in tests/refreshing-pill.spec.mjs.
+  await Promise.all([loadApprovals(), loadBlockStats()])
+  recomputeLeftList()
   // Whichever path got here first (the ordinary blocks.changed event, or the
   // loadPendingPush backstop above) — record the sha this tab is now caught up
   // to, so the OTHER path doesn't redundantly refetch again moments later for
@@ -6810,6 +6869,37 @@ async function startCallSearch(b) {
 // asked for. Kept outside the reactive state so reading it never creates a
 // dependency (which would loop with the b.code writes below).
 const codeRequested = new Set()
+
+// invalidateCodeCache forgets the "already fetched" marks for the files given,
+// so ensureCode/ensureLangSiblings really re-read them the next time a card
+// renders. Needed because GET /api/blocks carries NO source at all (model.go
+// has no code field) while GET /api/code serves it LIVE out of the head
+// worktree (code.go's extractBlockSource → os.ReadFile) — a worktree an
+// ingest refresh has already moved to the new commit. So after a refresh the
+// server would happily hand out the new source, but this cache pinned every
+// touched block to the source it had BEFORE the landing, permanently: the
+// reviewer saw pre-edit code (or, once the fresh block objects had replaced
+// the old ones, no diff at all) until a full page reload dropped this Set with
+// the rest of the module. Reviewer report: "ik zie de aanpassing niet
+// verschijnen, ook na 10 seconden niet, als ik dan refresh wel."
+//
+// Keys are `file|label|side` (ensureCode) and the block id (ensureLangSiblings,
+// `<pr>:<file>:<symbol>` — so it embeds its own file path), hence the two
+// different matches. No files given → clear both wholesale; the
+// only cost of over-invalidating is one extra fetch per visible card.
+function invalidateCodeCache(files) {
+  const list = Array.isArray(files) ? files.filter(Boolean) : []
+  if (!list.length) {
+    codeRequested.clear()
+    langSiblingRequested.clear()
+    return
+  }
+  for (const f of list) {
+    const prefix = f + '|'
+    for (const key of [...codeRequested]) if (key.startsWith(prefix)) codeRequested.delete(key)
+    for (const id of [...langSiblingRequested]) if (String(id).includes(f)) langSiblingRequested.delete(id)
+  }
+}
 
 // ensureCode lazily fetches the old/new source of a block and stashes it on the
 // block as `b.code` (reactive → the Block card re-renders). `b.code` is null
@@ -16862,6 +16952,11 @@ pollWorkflows()
 setInterval(pollWorkflows, WORKFLOWS_POLL_MS)
 pollProblems()
 setInterval(pollProblems, PROBLEMS_POLL_MS)
+// The git+DB-backed "has the tree caught up with a landed chat edit" backstop
+// (loadPendingPush) runs on its own slow timer too, so a missed
+// blocks.changed/pendingpush.changed frame can only delay a landing becoming
+// visible by one tick instead of until a manual reload — see loadPendingPush.
+setInterval(loadPendingPush, PENDING_PUSH_POLL_MS)
 
 // callresolve/testcovers' LLM search keeps running server-side well after
 // loadBlocks' own one-shot fetch above (resolve_call/resolve_test_covers are

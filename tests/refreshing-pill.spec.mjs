@@ -140,3 +140,133 @@ test('a plain blocks.changed with no landedFiles payload still falls back to the
 
   await expect(page.getByTestId('blocks-stale')).toHaveCount(1)
 })
+
+// PR 102's head worktree holds `$a = 1;` in RangeSelectAction::execute (see
+// materializeRangeSelectWorktrees, tests/_setup.mjs). Patching the LIVE
+// /api/code response is how these two tests simulate "the ingest refresh moved
+// the head worktree to the landed commit": GET /api/code always reads that
+// worktree straight off disk (code.go), so the server has the new source the
+// moment the refresh completes — the only thing that ever kept it off screen
+// was home.mjs's own per-block codeRequested cache.
+function mockLandedCode(page, landed) {
+  return page.route('**/api/code?*', async (route) => {
+    const res = await route.fetch()
+    const json = await res.json()
+    if (landed() && json && json.new && typeof json.new.text === 'string') {
+      json.new.text = json.new.text.replace('$a = 1;', '$a = 4242;')
+    }
+    await route.fulfill({ response: res, json })
+  })
+}
+
+// The currently-selected card, like diff-code-vs-title.spec.mjs does it: there
+// are several elements carrying data-testid=code-diff on the page at once (the
+// pane container plus each side's own <code>, in the selected card AND in the
+// look-ahead preview below it), so a bare .first() silently walks to a
+// different card as soon as the refresh re-renders the column.
+const selectedCard = (page) => page.locator('[data-testid="block-column"] article').first()
+
+const EXECUTE_ID = '102:app/Actions/RangeSelectAction.php:RangeSelectAction::execute'
+
+// Two of ::execute's four changed rows pre-approved ($a/$b, rows 2 and 3 of the
+// block — see materializeRangeSelectWorktrees), so the refresh has something to
+// lose: b.approvedRows lives ON the block object, and the refresh replaces every
+// one of those objects with a fresh copy from /api/blocks.
+function mockApprovals(page) {
+  return page.route('**/api/approvals?pr=102*', (route) =>
+    route.fulfill({ json: [{ blockId: EXECUTE_ID, rows: [2, 3], calls: [] }] }),
+  )
+}
+
+test('the auto-refresh really re-reads the source of the touched files, and keeps the approvals', async ({
+  page,
+}) => {
+  let release
+  const released = new Promise((r) => (release = r))
+  let landed = false
+
+  await mockCheckout(page, () => [])
+  await mockApprovals(page)
+  await mockLandedCode(page, () => landed)
+  await page.route('**/api/events*', async (route) => {
+    await released
+    landed = true
+    await route.fulfill({
+      status: 200,
+      headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' },
+      body:
+        'retry: 300\n\n' +
+        `data: ${JSON.stringify({
+          type: 'blocks.changed',
+          pr: 102,
+          seq: 1,
+          data: { landedFiles: ['app/Actions/RangeSelectAction.php'] },
+        })}\n\n`,
+    })
+  })
+
+  await page.goto('/pr/102')
+  const row = page.getByTestId('block-row').filter({ hasText: 'RangeSelectAction::execute' })
+  await row.click()
+  const diff = selectedCard(page)
+  await expect(diff).toContainText('$a = 1;')
+  const approval = row.getByTestId('block-approval')
+  const approvedBefore = await approval.innerText()
+  expect(approvedBefore).toContain('2/4')
+
+  release()
+
+  // The landed source, without any manual reload: before this fix the
+  // codeRequested cache made ensureCode a no-op for this block forever, so the
+  // fresh (code-less) block objects left the card with no diff at all.
+  await expect(diff).toContainText('$a = 4242;')
+  await expect(diff).not.toContainText('$a = 1;')
+  // ...and the reviewer's own approvals are still there (loadApprovals is
+  // re-run against the fresh objects).
+  await expect(approval).toHaveText(approvedBefore)
+})
+
+test('a landing whose SSE frames never arrive is still picked up by the treeCaughtUp poll', async ({
+  page,
+}) => {
+  let reads = 0
+  let landed = false
+
+  await mockCheckout(page, () => [])
+  await mockApprovals(page)
+  await mockLandedCode(page, () => landed)
+  // No events at all: this connection simply never delivers anything, which is
+  // what a dropped blocks.changed/pendingpush.changed pair looks like from the
+  // tab's side. Only loadPendingPush's own timer can recover from that.
+  await page.route('**/api/events*', () => {})
+  await page.route('**/api/pending-push?*', async (route) => {
+    reads++
+    if (reads > 1) landed = true
+    await route.fulfill({
+      json: {
+        ok: true,
+        pending: {
+          102: {
+            headRef: 'feature/range',
+            sha: reads > 1 ? 'bbbbbbbb' : 'aaaaaaaa',
+            ahead: 1,
+            files: ['app/Actions/RangeSelectAction.php'],
+            state: 'ready',
+            treeCaughtUp: true,
+          },
+        },
+      },
+    })
+  })
+
+  await page.goto('/pr/102')
+  const row = page.getByTestId('block-row').filter({ hasText: 'RangeSelectAction::execute' })
+  await row.click()
+  const diff = selectedCard(page)
+  // The FIRST read only establishes the baseline sha — it must never refresh.
+  await expect(diff).toContainText('$a = 1;')
+
+  // The next timer tick sees a new caught-up sha and applies it by itself
+  // (PENDING_PUSH_POLL_MS, home.mjs).
+  await expect(diff).toContainText('$a = 4242;', { timeout: 25000 })
+})

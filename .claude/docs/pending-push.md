@@ -290,6 +290,46 @@ anywhere depends on whether this frame ever reaches a browser.
   net hebt aangepast, als dat mogelijk is"). No such candidate → the generic
   index-0 fallback stands, untouched.
 
+#### Refreshing the blocks is not enough: the CODE and the approvals live outside them
+
+Reviewer report: "ik zie de aanpassing niet verschijnen, ook na 10 seconden
+niet, als ik dan refresh wel. ik heb ik vaker meegemaakt." Three separate
+things had to be re-read, because `GET /api/blocks` carries neither of them and
+the refresh replaces every block OBJECT with a fresh copy:
+
+- **The source.** `b.code` is fetched lazily per block (`ensureCode`,
+  `home.mjs`) and deduped in the module-level `codeRequested` Set (key
+  `file|label|side`), which nothing ever cleared. `GET /api/code` reads the head
+  worktree LIVE off disk (`code.go`'s `extractBlockSource`), and the
+  ingest-refresh has already moved that worktree to the landed commit — so the
+  server had the new source all along and only this Set kept it off screen,
+  until a full page reload dropped the whole module. `invalidateCodeCache(files)`
+  now drops the marks for the landing's own files (also
+  `langSiblingRequested`, keyed by block id) BEFORE the fresh blocks are
+  mounted. Symptom without it: the pre-landing code (the fresh objects had not
+  been mounted yet) and then, once they were, a header-only card with no diff at
+  all — never the new code.
+- **The per-row approvals.** `b.approvedRows`/`b.approvedCalls` also live on the
+  block object, so `loadApprovals()` is re-run (paired with the pre-existing
+  `loadBlockStats()`), otherwise every checkmark and the "approve N/M" counter
+  vanished from the refreshed blocks.
+- **An open drilled column.** `state.drill` holds its own block objects; each
+  level is re-pointed at the new object with the same `id` (a `synthetic` frame
+  carries its source inline and is left alone), so a drilled column gets the new
+  code and the fresh approvals too instead of silently staying on the
+  pre-landing ones.
+
+**Ordering matters, and the trap is the same one `loadBlocks` already avoids:**
+`recomputeLeftList()` runs FIRST, and only then
+`await Promise.all([loadApprovals(), loadBlockStats()])` + one more
+`recomputeLeftList()`. Awaiting `loadApprovals` BEFORE that first recompute
+wedged the selected card completely — it reassigns `state.allBlocks` wholesale,
+which mid-swap collides with the card's own keyed rebuild (the co-subscriber /
+keyed-node pitfalls in `.claude/rules/arrowjs-pitfalls.md`): the code was
+fetched and `codeDiff` even ran, but its DOM never mounted, leaving a
+header-only card forever. Measured/reproduced in
+`tests/refreshing-pill.spec.mjs` — keep that order.
+
 Tests: `TestBuildCheckoutViewReportsRefreshingFiles`
 (`chat_checkout_test.go`), the `RefreshingFiles` assertion in
 `TestProcessChatMergeClearsPendingEditedFilesOnSuccess` (`chat_merge_test.go`),
@@ -348,6 +388,25 @@ exactly like `blocks.changed`'s own exclusion from `onEventsResync` demands.
 `state.pendingPush.sha` at the end of its own run too, so whichever of the two
 paths (the SSE frame or this poll-based backstop) gets there first is what
 counts — the other is then a no-op instead of a redundant second refetch.
+
+**And that backstop no longer waits for an event either.** `loadPendingPush`
+also runs on its own slow timer (`PENDING_PUSH_POLL_MS`, 10s, `src/home.mjs`,
+alongside the existing `pollWorkflows`/`pollProblems` intervals). The reviewer
+hit the case where BOTH frames of a landing went missing — `blocks.changed` AND
+`pendingpush.changed` — after which nothing in the tab ever asked again:
+`blocks.changed` is excluded from `onEventsResync` by design, and the server
+only re-offers a `resync` on the next event or its 20s keepalive tick
+(`sseKeepAlive`, `tasks_api.go`). The timer is deliberately the exact same
+read, not a new source of truth: it is local-only (`for-each-ref` +
+`rev-list --count` + `diff --name-only`, no network, no `gh`), and the
+`treeCaughtUp && sha !== pendingPushSyncedSha` guard is what keeps every
+ordinary tick a no-op — the ordinary `blocks.changed` frame still gets there
+first whenever it arrives. Test: the "a landing whose SSE frames never arrive"
+case in `tests/refreshing-pill.spec.mjs` (no events at all, only the poll).
+**Why the frames go missing in the first place is a separate, still-open
+question** (a full 64-frame subscriber buffer, a stream that died between the
+two publishes): this only bounds the damage to one tick instead of "until a
+manual reload".
 
 Test: `TestLoadPendingPushTreeCaughtUpBackstop` (`pending_push_test.go`) pins
 `TreeCaughtUp` purely against `pr_ingest`/the pending ref's git state, with no
