@@ -3343,7 +3343,13 @@ section is the frontend/palette half.
 - **`clearClaudeChat()`** (`RelatedPanel.mjs`) sends the `"clear"` Signal and
   resets `cc.progress`/`cs.claudePos` locally — belt-and-braces on top of the
   `chat.message` SSE event's own refetch, same reasoning as `sendClaudeMessage`'s
-  own post-send refetch.
+  own post-send refetch. It **returns** whether the backing comment/index row
+  was actually removed (`true` only for the still-`CLAUDE_ANCHOR_PLACEHOLDER`
+  branch — a chat hanging off a REAL reviewer comment leaves that row in
+  place). `home.mjs`'s `runClearClaudeChat()` (both entry points below call
+  this, not `clearClaudeChat` directly) uses that return value to decide
+  whether to navigate on to the next comment/chat "Start" row — see "Narrowed
+  the next day…" in `.claude/docs/command-palette.md`.
 - Tests: `tests/claude-chat-panel.spec.mjs` has both halves — the ordinary
   case clears on a single Enter, and a second case routes
   `GET /api/chat/shadow-status` to report pending work and asserts the confirm

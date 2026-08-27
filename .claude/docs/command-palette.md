@@ -785,6 +785,88 @@ has, just more often visible from this entry point. Test:
 `tests/resolve-comment-navigates-next.spec.mjs` (all three steps, both entry
 points).
 
+### Narrowed the next day: resolving/deleting FROM the comment/chat row itself skips step 1 — `afterCommentRowRemoved`
+
+Reviewer follow-up (2026-08-27), asked to clarify whether resolve itself
+should change: *"ook bij resolve, maar alleen als ik in de blokken index bezig
+ben onder 'Comment onder regels' of comment of chat category. als ik gewoon
+bezig ben met code en daar een comment resolve, dan moet je gewoon handelen
+zoals je normaal doet."* Followed by a second clarification, on what counts as
+"deleting" a chat: *"alleen als de rij verdwijnt."*
+
+**The gate: `isCommentIndexRowActive()`** (`home.mjs`) — `curBlock().kind ===
+'comment'`, i.e. the sidebar cursor (`state.selected`) itself sits on a
+comment/chat "Start" row: a "Comments op regels" item, a PR-wide comment, an
+AI finding, or a bare Claude-chat anchor — whether or not its
+thread/anchor has been entered/drilled open. Deliberately `curBlock()`, not
+`focusedBlock()`: `openCommentAnchorDrill` never touches `state.selected` (see
+"Only one thing reads as selected at a time" above), so a resolve/delete
+reached from INSIDE a drilled "Comments op regels" anchor's own entered
+thread must still count — but `focusedBlock()` there resolves to the drilled
+REAL code block (`kind !== 'comment'`), not the sidebar item that opened it.
+Resolving/deleting an ordinary block-scoped comment while the keyboard is
+just navigating regular code (`curBlock()` is a real code block) is
+completely unaffected — the three-step order above runs exactly as before.
+
+**Must be snapshotted BEFORE the resolve/delete write, never read fresh
+after.** A resolved *block-anchored* comment is dropped from
+`indexComments()` entirely — it only ever had a row because it was
+unresolved, see "Every UNRESOLVED comment gets such a row too" in
+comments-panel.md — so by the time the write's own `await` resolves, the row
+is already gone from `state.blocks` and `recomputeLeftList`'s id-preserving
+reindex has already reset `state.selected` to **0** (its "genuinely gone"
+fallback, see that function's own doc comment), not to some nearby position.
+Reading `isCommentIndexRowActive()`/`state.selected` fresh at that point
+would misread the situation entirely — reported as: resolving a "Comments op
+regels" row whose own anchor block still had an unapproved group jumped
+straight into that block's diff instead of the next comment (the exact old,
+tree-first behavior, silently reappearing because the gate read `false`).
+Every call site therefore snapshots `const wasCommentIndexRow =
+isCommentIndexRowActive(); const beforeIdx = state.selected` immediately
+before its own resolve/delete call, and passes both through.
+
+**`afterCommentRowRemoved(startIdx)`** is the shared "skip step 1" landing:
+`findNextUnresolvedCommentFrom(startIdx)` (the same scan
+`findNextUnresolvedComment` wraps, factored out so it can take an explicit
+start) → `state.selected = idx` if found, else `offerReviewSubmitFollowup()`
+— never `findNextUnapproved()`. `startIdx` is always the caller's own
+`beforeIdx` snapshot (inclusive, not `+ 1`): removing `state.blocks[beforeIdx]`
+shifts every later row up one slot, so "the next remaining row" is whatever
+now sits at the just-removed row's OLD index.
+
+**Wired into four places**, each gated the same way:
+
+- `afterResolveAction(wasCommentIndexRow, beforeIdx)` — both existing
+  "Resolve comment" call sites now pass their own pre-write snapshot; the
+  function itself no longer reads either value fresh (see above). `true` →
+  `afterCommentRowRemoved(beforeIdx)` directly, skipping `findNextUnapproved`
+  entirely; `false` → the original three-step order, unchanged.
+- `deleteCommentAndSelectRow()` (block-scoped "Verwijder comment", the
+  default item for an AI finding/bare chat-anchor placeholder, which never
+  gets a Resolve slot) — `true` → `afterCommentRowRemoved(beforeIdx)` instead
+  of its old fallback (landing the cursor back on the diff row/unit the
+  comment was anchored to); `false` keeps that old fallback, unchanged.
+- `prCommentCommandsFor`'s "Verwijder comment" (comment-index row) — always
+  reached with a comment-index row selected, so always
+  `afterCommentRowRemoved(beforeIdx)`; used to have no follow-up navigation
+  at all.
+- `runClearClaudeChat()` — wraps `clearClaudeChat()` for BOTH "Wis
+  Claude-gesprek" entry points (the direct Enter and the shadow-work confirm
+  submenu). `clearClaudeChat` now **returns** whether it actually deleted the
+  backing comment (`true` only for the still-`CLAUDE_ANCHOR_PLACEHOLDER`
+  branch — see "clearClaudeChat" in claude-chat-panel.md) — the "alleen als
+  de rij verdwijnt" answer: navigating only fires when BOTH the row was a
+  comment/chat index row (`wasCommentIndexRow`, snapshotted before the
+  clear) AND that row's own removal is what just happened. Clearing a chat
+  that hangs off a REAL reviewer comment leaves that row in place, so nothing
+  navigates away from it — same as before this change.
+
+Test: `tests/resolve-comment-navigates-next.spec.mjs`'s second `describe`
+block — one test proving the differentiator (resolving from a "Comments op
+regels" row skips straight to the next comment even though its own anchor
+block is still unapproved, which the old order would have jumped into
+instead) and one for the delete path.
+
 ## `lastIndexRowRect` — keeping a follow-up menu at the same spot
 
 `isIndexMenu()` counts `postApprove` too, so `menuAnchor()` tries

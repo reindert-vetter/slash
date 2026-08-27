@@ -7439,10 +7439,28 @@ function defaultSel(list, native) {
 // Falls back to row 0 for an unpinned/never-anchored comment (rowStart < 0,
 // see the re-anchor-pass doc in tembed-workflows.md) — the same fallback
 // openTask already uses for exactly that case, not a new judgment call.
+//
+// EXCEPT while the sidebar cursor sits on the comment/chat "Start" row this
+// thread belongs to (isCommentIndexRowActive — a "Comments op regels"
+// anchor's own entered thread; see afterResolveAction's matching gate,
+// 2026-08-27): landing back on a diff row makes no sense once that whole row
+// is about to disappear from the blokken-index, so this jumps straight to
+// afterCommentRowRemoved (the next still-open comment/chat row) instead. The
+// beforeIdx snapshot (state.selected, taken before the delete) is needed
+// because deleteFocusedComment's own reload can already reindex/clamp
+// state.selected by the time this resumes — findNextUnresolvedCommentFrom
+// must resume scanning from the deleted row's OLD position, not from
+// whatever state.selected happens to be afterward.
 async function deleteCommentAndSelectRow() {
   const c = focusedComment()
   const b = focusedBlock()
+  const wasCommentIndexRow = isCommentIndexRowActive()
+  const beforeIdx = state.selected
   await deleteFocusedComment()
+  if (wasCommentIndexRow) {
+    await afterCommentRowRemoved(beforeIdx)
+    return
+  }
   if (!c || !b) return
   const rows = blockRows(b)
   const gran = c.gran || 'group'
@@ -7650,8 +7668,10 @@ function commentCommandsFor() {
             label: 'Resolve comment',
             hint: 'resolve',
             run: async () => {
+              const wasCommentIndexRow = isCommentIndexRowActive()
+              const beforeIdx = state.selected
               await resolveFocusedComment()
-              await afterResolveAction()
+              await afterResolveAction(wasCommentIndexRow, beforeIdx)
             },
           },
     )
@@ -7720,9 +7740,28 @@ function claudeChatClearConfirmCommandsFor(warning) {
       id: 'clear-claude-chat-confirm',
       label: 'Ja, toch wissen — ' + warning,
       hint: 'bevestig',
-      run: () => clearClaudeChat(),
+      run: () => runClearClaudeChat(),
     },
   ])
+}
+
+// runClearClaudeChat wraps clearClaudeChat with the same "in de blokken
+// index bezig" navigation gate as afterResolveAction/deleteCommentAndSelectRow
+// (reviewer request, 2026-08-27: "alleen als de rij verdwijnt"). Only when
+// BOTH hold — the cursor sits on the comment/chat row this chat hangs off
+// (isCommentIndexRowActive), snapshotted before clearClaudeChat runs since it
+// can call exitRelated() itself, AND clearClaudeChat itself reports the
+// backing comment/index row was actually deleted (the bare-placeholder
+// branch — a chat hanging off a REAL reviewer comment leaves that row in
+// place, so nothing should navigate away from it) — jump to
+// afterCommentRowRemoved. One shared wrapper for both entry points below
+// (the direct "Wis Claude-gesprek" Enter and this confirm submenu's own
+// item), same reasoning as every other run/click pairing in this file.
+async function runClearClaudeChat() {
+  const wasCommentIndexRow = isCommentIndexRowActive()
+  const beforeIdx = state.selected
+  const removed = await clearClaudeChat()
+  if (removed && wasCommentIndexRow) await afterCommentRowRemoved(beforeIdx)
 }
 
 // claudeChatCommandsFor — the root list for Enter on the Claude column (see
@@ -7766,7 +7805,7 @@ function claudeChatCommandsFor() {
       hint: 'wis',
       ...(shadowWarning
         ? { children: claudeChatClearConfirmCommandsFor(shadowWarning) }
-        : { run: () => clearClaudeChat() }),
+        : { run: () => runClearClaudeChat() }),
     },
   ]
   if (claudeAnchorIsPlaceholder()) {
@@ -7983,8 +8022,10 @@ function prCommentCommandsFor() {
         run: async () => {
           const sel = selectedComment()
           if (!sel) return
+          const wasCommentIndexRow = isCommentIndexRowActive()
+          const beforeIdx = state.selected
           await resolvePrCommentItem(sel)
-          await afterResolveAction()
+          await afterResolveAction(wasCommentIndexRow, beforeIdx)
         },
       }
   // "Verwijder comment" — the same delete Signal the block-scoped menu has
@@ -7998,9 +8039,16 @@ function prCommentCommandsFor() {
     id: 'pr-comment-delete',
     label: 'Verwijder comment',
     hint: 'delete',
-    run: () => {
+    // This menu is only ever reached with a comment-index row selected (Enter
+    // directly on the row) — always afterCommentRowRemoved, never the
+    // ordinary-code fallback, same "in de blokken index bezig" reasoning as
+    // deleteCommentAndSelectRow's own gate.
+    run: async () => {
       const sel = selectedComment()
-      if (sel) deletePrCommentItem(sel)
+      if (!sel) return
+      const beforeIdx = state.selected
+      await deletePrCommentItem(sel)
+      await afterCommentRowRemoved(beforeIdx)
     },
   }
   // An AI finding (isAiComment) gets NO resolve/unresolve item at all — see
@@ -11731,14 +11779,84 @@ function afterApproveAction(approving, blockId, auto = false) {
 // qualifies (same "null doesn't mean done" caveat as findNextUnapproved —
 // afterResolveAction is the only caller and it only reaches this once
 // findNextUnapproved itself already came up empty).
-function findNextUnresolvedComment() {
-  for (let idx = state.selected + 1; idx < state.blocks.length; idx++) {
+// findNextUnresolvedCommentFrom is the shared scan findNextUnresolvedComment
+// (below, the ordinary-code fallback step of afterResolveAction) wraps with
+// the current state.selected + 1. afterCommentRowRemoved's callers
+// (resolving/deleting FROM the row itself) always pass a snapshot taken
+// BEFORE their own write instead: removing state.blocks[beforeIdx] shifts
+// every later row up one slot, and recomputeLeftList's own id-preserving
+// reindex (see its own doc comment) already reset state.selected to 0 by the
+// time the caller's own await resumes — reading state.selected fresh here
+// would restart the scan from the wrong place entirely (0, not "just past
+// the removed row"). "The next remaining row" is whatever now sits at the
+// removed row's OLD index, i.e. beforeIdx itself, so the scan must start
+// there (inclusive), not at beforeIdx + 1.
+function findNextUnresolvedCommentFrom(startIdx) {
+  for (let idx = startIdx; idx < state.blocks.length; idx++) {
     const candidate = state.blocks[idx]
     if (candidate.kind !== 'comment') continue
     const { done, total } = blockApproveCount(candidate)
     if (done < total) return idx
   }
   return null
+}
+
+function findNextUnresolvedComment() {
+  return findNextUnresolvedCommentFrom(state.selected + 1)
+}
+
+// isCommentIndexRowActive — true while the sidebar cursor (state.selected,
+// i.e. curBlock()) itself sits on a comment/chat "Start" row (kind:'comment':
+// a "Comments op regels" item, a PR-wide comment, an AI finding, or a bare
+// Claude-chat anchor) — whether or not its thread/anchor has been
+// entered/drilled open. Deliberately curBlock(), not focusedBlock():
+// openCommentAnchorDrill never touches state.selected (see
+// comments-panel.md's "Only one thing reads as selected at a time"), so a
+// resolve/delete reached from INSIDE a drilled "Comments op regels" anchor's
+// own thread must still count here — but focusedBlock() there resolves to
+// the drilled REAL code block (kind !== 'comment'), not the sidebar item
+// that opened it. Gates afterResolveAction/afterCommentRowRemoved's callers
+// (reviewer request, 2026-08-27): "ook bij resolve, maar alleen als ik in de
+// blokken index bezig ben onder 'Comment onder regels' of comment of chat
+// category. als ik gewoon bezig ben met code en daar een comment resolve,
+// dan moet je gewoon handelen zoals je normaal doet."
+//
+// MUST be called (and its result snapshotted) BEFORE the resolve/delete
+// write itself, never read fresh afterward — see afterResolveAction's own
+// doc comment for why a resolved/deleted row's disappearance from
+// state.blocks makes a later read of this unreliable.
+function isCommentIndexRowActive() {
+  const b = curBlock()
+  return !!(b && b.kind === 'comment')
+}
+
+// afterCommentRowRemoved is the comment/chat-index counterpart of
+// afterResolveAction/afterApproveAction's own "nothing left" fallback, for
+// the two actions that can make a blokken-index comment/chat row disappear
+// while the reviewer was working FROM that row (isCommentIndexRowActive,
+// snapshotted by the CALLER before its own write — see that function's doc
+// comment) — resolving it, or deleting it (including "Wis Claude-gesprek"
+// clearing a bare chat placeholder, which deletes its own backing comment
+// too, see clearClaudeChat's return value in RelatedPanel.mjs). Deliberately
+// skips findNextUnapproved's tree walk entirely — reviewer request: "niet
+// eerst dieper de tree in naar het volgende niet-goedgekeurde item" — and
+// lands directly on the next still-open comment/chat row, falling back to
+// the same review-submit offer afterApproveAction/afterResolveAction share.
+// `startIdx` is always the CALLER's own state.selected snapshot taken before
+// its write (never read fresh in here either — see
+// findNextUnresolvedCommentFrom's own doc comment for why). Resolving or
+// deleting a comment while just working through ordinary code (not from
+// this row) is UNAFFECTED — see each call site's own isCommentIndexRowActive
+// gate; afterApproveAction (the ordinary approve flow) never calls this at
+// all.
+async function afterCommentRowRemoved(startIdx) {
+  const idx = findNextUnresolvedCommentFrom(startIdx)
+  if (idx != null) {
+    state.selected = idx
+    scrollSelectedIntoView()
+    return
+  }
+  await offerReviewSubmitFollowup()
 }
 
 // afterResolveAction runs once a comment has actually been RESOLVED — the
@@ -11752,7 +11870,34 @@ function findNextUnresolvedComment() {
 // exists because approving is the more consequential action), to apply to
 // both entry points, to stay forward-only/no-wrap like findNextUnapproved,
 // and not to care who wrote the resolved comment.
-// Three-step order, matching the request literally:
+//
+// Narrowed the next day (2026-08-27): "ook bij resolve, maar alleen als ik
+// in de blokken index bezig ben onder 'Comment onder regels' of comment of
+// chat category. als ik gewoon bezig ben met code en daar een comment
+// resolve, dan moet je gewoon handelen zoals je normaal doet." While the
+// sidebar cursor sat on that comment/chat row (wasCommentIndexRow — covers a
+// directly-selected comment-index item AND its own drilled "Comments op
+// regels" thread once entered), skip straight to afterCommentRowRemoved:
+// never dive into findNextUnapproved's tree walk first. Resolving an
+// ordinary block-scoped comment while the keyboard is just navigating
+// regular code (curBlock() was a real code block, not the comment item)
+// keeps the original three-step order below unchanged.
+//
+// `wasCommentIndexRow`/`beforeIdx` MUST be snapshotted by the caller BEFORE
+// its own resolve call (isCommentIndexRowActive()/state.selected at that
+// point), never read fresh in here: a resolved BLOCK-ANCHORED comment is
+// dropped from indexComments() entirely (see recomputeLeftList's own doc
+// comment — it only ever existed in the index because it was unresolved),
+// so by the time this function runs the row is already gone from
+// state.blocks and state.selected has already been reset to 0 — reading
+// either fresh here would silently fall through to the ordinary-code branch
+// even when the reviewer really was on that row (reported: resolving from
+// an anchored row with its own block still unapproved jumped straight into
+// that block's diff instead of the next comment). `beforeIdx` is also the
+// correct scan start for the fallback below, for the same reason
+// deleteCommentAndSelectRow's own beforeIdx snapshot exists.
+// Three-step order for the ordinary-code case, matching the original
+// request literally:
 //   1. The next unit anywhere in the tree that still needs approving
 //      (findNextUnapproved, the exact same walk the approve flow uses) — if
 //      found, jump there straight away via applyNextUnapproved.
@@ -11768,7 +11913,11 @@ function findNextUnresolvedComment() {
 // never drills into a diff — instead of unexpectedly dropping them into a
 // block's diff/drilled column just because the next unapproved unit happens
 // to live inside one.
-async function afterResolveAction() {
+async function afterResolveAction(wasCommentIndexRow, beforeIdx) {
+  if (wasCommentIndexRow) {
+    await afterCommentRowRemoved(beforeIdx)
+    return
+  }
   const keepList = state.mode !== 'diff'
   const target = await findNextUnapproved()
   if (target) {

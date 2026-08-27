@@ -2540,6 +2540,13 @@ export async function resolveCancelCleanup(choice) {
 // CONTENT, not on which menu/gate the reviewer used to reach "Wis
 // Claude-gesprek" — a comment that already carries real reviewer text always
 // survives, regardless of entry point.
+//
+// Returns whether the backing comment/index row was actually removed
+// (true only for the placeholder branch) — home.mjs's callers use this to
+// decide whether a blokken-index comment/chat row just disappeared and
+// therefore whether to navigate on to the next one (afterCommentRowRemoved,
+// see comments-panel.md): clearing a chat that hangs off a REAL reviewer
+// comment leaves that row in place, so nothing should navigate away from it.
 export async function clearClaudeChat() {
   await sendClaudeMessage('', 'clear')
   // Belt-and-braces local reset, same reasoning as sendClaudeMessage's own
@@ -2556,7 +2563,9 @@ export async function clearClaudeChat() {
     await deleteComment(anchor)
     await loadComments(cs.pr)
     exitRelated() // nothing left to focus — hand the keyboard back to the diff
+    return true
   }
+  return false
 }
 
 // claudeAnchorIsPlaceholder reports whether the CURRENTLY OPEN conversation's

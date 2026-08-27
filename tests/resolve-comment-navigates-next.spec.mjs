@@ -268,3 +268,109 @@ test.describe('PR Review Tree — resolving a comment navigates to the next thin
     expect(list.find((c) => c.runId === runId).status).toBe('resolved')
   })
 })
+
+// Narrowed the next day (2026-08-27, see afterResolveAction's own doc
+// comment): the tree-walk-first order above is now ONLY for resolving/
+// deleting an ordinary block-scoped comment while the sidebar cursor sits on
+// a normal code block. While the cursor sits on the comment/chat "Start" row
+// itself (isCommentIndexRowActive — a "Comments op regels" row, selected or
+// with its own thread entered), resolving OR deleting it must skip
+// findNextUnapproved entirely and land directly on the next still-open
+// comment/chat row, even when the anchor block it lived on (or a sibling
+// block) still has real unapproved work ahead — that's the one thing the
+// tests below prove differently from the step-1 test above, which leaves
+// both blocks unapproved but resolves from INSIDE the block's own diff, not
+// from its comment-index row.
+test.describe('PR Review Tree — resolving/deleting FROM a comment-index row skips straight to the next row', () => {
+  test('resolving from a "Comments op regels" row skips findNextUnapproved, even though its own anchor block is still unapproved', async ({
+    page,
+  }) => {
+    await clearBlockApproval(page, BLOCK1_ID)
+    await clearBlockApproval(page, BLOCK6_ID)
+
+    await page.goto('/pr/12903')
+    await leaveSearchBox(page)
+    const execute = await blockIdentity(page, 'CreatePaymentAction::execute')
+    const runIdA = await seedComment(page, { ...execute, line: 1, body: 'comment A (on an unapproved block)' })
+    const address = await blockIdentity(page, 'Order::address')
+    const runIdB = await seedComment(page, { ...address, line: 1, body: 'comment B (still open)' })
+    let idA, idB
+    await expect
+      .poll(async () => {
+        const list = await (await page.request.get('/api/comments?pr=12903')).json()
+        idA = list.find((c) => c.runId === runIdA)?.id
+        idB = list.find((c) => c.runId === runIdB)?.id
+        return idA && idB ? 2 : 0
+      })
+      .toBe(2)
+
+    await page.goto('/pr/12903')
+    await leaveSearchBox(page)
+    await page.locator('[data-idx]').filter({ hasText: 'comment A' }).first().click()
+    // Auto-drilled open "as if fully expanded" (openCommentAnchorDrill), same
+    // as the step-2 test above — the sidebar cursor (curBlock()) stays on
+    // this comment-index row, never on `execute` itself, even though its
+    // anchor block IS `execute` and that block still has one unapproved
+    // group of its own.
+    await expect.poll(() => selParam(page)).toBe('comment:' + idA)
+
+    await page.keyboard.press('Enter')
+    const menu = page.getByTestId('command-menu')
+    await expect(menu).toBeVisible()
+    await page.getByTestId('command-row').filter({ hasText: 'Resolve comment' }).click()
+    await expect(menu).not.toBeVisible()
+
+    // Old (tree-first) behavior would land inside execute's OWN still-open
+    // diff group instead — this must skip straight to comment B's row.
+    await expect.poll(() => selParam(page)).toBe('comment:' + idB)
+    await expect(page).not.toHaveURL(/mode=diff/)
+
+    const list = await (await page.request.get('/api/comments?pr=12903')).json()
+    expect(list.find((c) => c.runId === runIdA).status).toBe('resolved')
+    expect(list.find((c) => c.runId === runIdB).status).not.toBe('resolved')
+  })
+
+  test('deleting a comment-index row (Verwijder comment) also skips straight to the next row', async ({ page }) => {
+    await clearBlockApproval(page, BLOCK1_ID)
+    await clearBlockApproval(page, BLOCK6_ID)
+
+    await page.goto('/pr/12903')
+    await leaveSearchBox(page)
+    const execute = await blockIdentity(page, 'CreatePaymentAction::execute')
+    const runIdA = await seedComment(page, { ...execute, line: 1, body: 'comment A (to be deleted)' })
+    const address = await blockIdentity(page, 'Order::address')
+    const runIdB = await seedComment(page, { ...address, line: 1, body: 'comment B (still open)' })
+    let idA, idB
+    await expect
+      .poll(async () => {
+        const list = await (await page.request.get('/api/comments?pr=12903')).json()
+        idA = list.find((c) => c.runId === runIdA)?.id
+        idB = list.find((c) => c.runId === runIdB)?.id
+        return idA && idB ? 2 : 0
+      })
+      .toBe(2)
+
+    await page.goto('/pr/12903')
+    await leaveSearchBox(page)
+    await page.locator('[data-idx]').filter({ hasText: 'comment A' }).first().click()
+    await expect.poll(() => selParam(page)).toBe('comment:' + idA)
+
+    await page.keyboard.press('Enter')
+    const menu = page.getByTestId('command-menu')
+    await expect(menu).toBeVisible()
+    // isOwnComment sorts [Resolve comment, Beantwoorden, Verwijder comment] —
+    // "Verwijder comment" is always last, never the default item.
+    await page.getByTestId('command-row').filter({ hasText: 'Verwijder comment' }).click()
+    await expect(menu).not.toBeVisible()
+
+    // Old behavior had no navigation at all here — the row just vanished and
+    // whatever recomputeLeftList's own clamp landed on stayed selected. This
+    // must instead jump forward to comment B's own row.
+    await expect.poll(() => selParam(page)).toBe('comment:' + idB)
+    await expect(page).not.toHaveURL(/mode=diff/)
+
+    const list = await (await page.request.get('/api/comments?pr=12903')).json()
+    expect(list.find((c) => c.runId === runIdA)).toBeUndefined()
+    expect(list.find((c) => c.runId === runIdB)?.status).not.toBe('resolved')
+  })
+})
