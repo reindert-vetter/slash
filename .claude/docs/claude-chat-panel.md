@@ -3890,10 +3890,19 @@ changes, all in the same three files (`markdown.mjs`, `RelatedPanel.mjs`'s
   bubble text uses (`text-xs leading-relaxed text-slate-700`/`dark:text-zinc-300`)
   — same reviewer report, "as clear as normal chat text". The collapse
   toggle's visible label text ("Inklappen"/"uitklappen (Enter)") is gone too,
-  replaced with a neutral chevron glyph (`▾`/`▸`, same convention as
-  `testsBar`'s expand chevron elsewhere in this file) with the Dutch wording
-  kept only as its `title` tooltip — the click/Enter behaviour itself is
-  unchanged.
+  first replaced with a neutral chevron glyph (`▾`/`▸`, same convention as
+  `testsBar`'s expand chevron elsewhere in this file), and later — a further
+  reviewer follow-up ("uitklap ding... kan helemaal weg") — the glyph itself
+  removed too: there is no visible collapse affordance left at all. The click
+  target moved from that small button onto the card's own header row (the
+  active-marker + title + context block, still `data-testid=
+  code-preview-toggle`, `cursor-pointer`), with the Dutch wording surviving
+  only as its `title` tooltip. This click had to keep working, not just stay
+  as a convenience alongside `Enter`: a fence embedded in a plain PR-comment
+  thread (`cs.focus === 'comment'`) has NO keyboard route to a code-preview
+  card at all — `cs.previewPos` only ever moves while `cs.focus === 'claude'`
+  (`handleRelatedKey`, `RelatedPanel.mjs`) — so for that case the header click
+  is the ONLY way to reach the other state.
 - **A short snippet of the chat text that sat directly above the fence** is
   shown as a second, muted line under the title (`data-testid=
   code-preview-context`) — "over: …". `markdown.mjs`'s `extractCodeFences`
@@ -3908,10 +3917,11 @@ changes, all in the same three files (`markdown.mjs`, `RelatedPanel.mjs`'s
   visually clipped — that part changed after this section first landed.
 - **A card not belonging to the LAST answer starts collapsed** (title +
   context line only, no code at all — not even a one-line teaser, reviewer's
-  explicit choice) — `Enter` on the focused card, or its own chevron toggle
-  button (`▾`/`▸`, see above — was a text "Inklappen"/"uitklappen (Enter)"
-  button, same wording convention as `prInfoCard`'s `toggleSinceExpanded`),
-  toggles it. "Last answer" is decided per fence's nearest
+  explicit choice) — `Enter` on the focused card, or a click on its own
+  header row (`data-testid=code-preview-toggle`, see above — was a text
+  "Inklappen"/"uitklappen (Enter)" button, then a bare chevron button, same
+  wording convention as `prInfoCard`'s `toggleSinceExpanded`), toggles it.
+  "Last answer" is decided per fence's nearest
   `[data-testid="claude-message"], [data-testid="comment-item"]` ancestor
   ELEMENT (compared by identity, not by message id) against the very last
   fence's own ancestor — a fresh Claude reply (or a new/edited comment)
@@ -3920,7 +3930,7 @@ changes, all in the same three files (`markdown.mjs`, `RelatedPanel.mjs`'s
   map, reassigned wholesale like `cp.items` itself, never mutated in place)
   holds a manual override so a toggle survives an unrelated recompute;
   `isPreviewExpanded(it)` falls back to `it.isLast` when there is no override
-  yet. `toggleCodePreviewExpanded(key)` is exported for both the button's
+  yet. `toggleCodePreviewExpanded(key)` is exported for both the header row's
   `@click` and `home.mjs`'s `Enter` branch (`activeCodePreviewKey()`, reading
   `cs.previewPos` so home.mjs itself never has to import `cs`).
   **`key` must be STABLE across a recompute, not the fence's raw position**

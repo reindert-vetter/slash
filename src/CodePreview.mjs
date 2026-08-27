@@ -217,9 +217,17 @@ function pane(titleText, code, lang) {
 // expanded, see its own doc comment there) — reviewer request, "blokken die
 // niet bij de laatste antwoord horen, ingeklapt … maar uitklappen door er
 // Enter op te drukken". `onToggle(key)` is `toggleCodePreviewExpanded`
-// itself, called both by `Enter` (home.mjs, on the active card) and by this
-// card's own toggle button — mouse-navigation.md's "a click runs the same
-// function a key runs".
+// itself, called both by `Enter` (home.mjs, on the active card) and by a
+// click on the card's own header row (title/context) below — reviewer
+// follow-up ("uitklap ding... kan helemaal weg"): the small ▾/▸ chevron
+// button is gone, but the click-to-toggle affordance itself had to survive,
+// because a fence embedded in a plain PR-comment thread (cs.focus ===
+// 'comment') has NO keyboard route to this card at all — cs.previewPos only
+// ever moves while cs.focus === 'claude' (see handleRelatedKey in
+// RelatedPanel.mjs), so for that case a click is the ONLY way to reach the
+// other state, not just a convenience alongside Enter. Same
+// mouse-navigation.md rule as before ("a click runs the same function a key
+// runs"), just on a bigger, glyph-less target instead of a dedicated button.
 function previewCard(it, active, expanded, onToggle) {
   return html`
     <div
@@ -232,35 +240,8 @@ function previewCard(it, active, expanded, onToggle) {
       data-active="${() => (active() ? 'true' : 'false')}"
       data-expanded="${() => (expanded() ? 'true' : 'false')}"
     >
-      <div class="flex items-center gap-1">
-        <span
-          class="shrink-0 text-[11px] font-semibold text-indigo-500 dark:text-indigo-400"
-          data-testid="code-preview-active-marker"
-        >
-          ${() => (active() ? '▸' : '')}
-        </span>
-        ${() =>
-          it.classLabel
-            ? html`<span
-                class="truncate text-[11px] font-medium text-slate-500 dark:text-zinc-500"
-                data-testid="code-preview-title"
-              >
-                ${it.classLabel}
-              </span>`
-            : ''}
-      </div>
-      ${() =>
-        it.context
-          ? html`<span
-              class="${() =>
-                'text-xs leading-relaxed text-slate-700 dark:text-zinc-300 ' + (expanded() ? '' : 'truncate')}"
-              data-testid="code-preview-context"
-            >
-              over: ${it.context}
-            </span>`
-          : ''}
-      <button
-        type="button"
+      <div
+        class="flex flex-col gap-1 cursor-pointer"
         data-testid="code-preview-toggle"
         title="${() => (expanded() ? 'Inklappen' : 'Uitklappen (Enter)')}"
         @click="${(e) => {
@@ -270,10 +251,35 @@ function previewCard(it, active, expanded, onToggle) {
           if (e && e.stopPropagation) e.stopPropagation()
           onToggle(it.key)
         }}"
-        class="self-start text-slate-400 hover:text-indigo-600 dark:text-zinc-500 dark:hover:text-indigo-400"
       >
-        ${() => (expanded() ? '▾' : '▸')}
-      </button>
+        <div class="flex items-center gap-1">
+          <span
+            class="shrink-0 text-[11px] font-semibold text-indigo-500 dark:text-indigo-400"
+            data-testid="code-preview-active-marker"
+          >
+            ${() => (active() ? '▸' : '')}
+          </span>
+          ${() =>
+            it.classLabel
+              ? html`<span
+                  class="truncate text-[11px] font-medium text-slate-500 dark:text-zinc-500"
+                  data-testid="code-preview-title"
+                >
+                  ${it.classLabel}
+                </span>`
+              : ''}
+        </div>
+        ${() =>
+          it.context
+            ? html`<span
+                class="${() =>
+                  'text-xs leading-relaxed text-slate-700 dark:text-zinc-300 ' + (expanded() ? '' : 'truncate')}"
+                data-testid="code-preview-context"
+              >
+                over: ${it.context}
+              </span>`
+            : ''}
+      </div>
       <div class="flex flex-col gap-2" data-testid="code-preview-body">
         ${() =>
           expanded()

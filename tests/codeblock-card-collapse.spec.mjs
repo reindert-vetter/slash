@@ -109,19 +109,19 @@ test('code-preview cards: richer title, collapsed-only truncation, newest on top
   await expect(labels).toHaveCount(2)
   await expect(labels.nth(0)).toContainText('AlphaClass')
   await expect(labels.nth(1)).toContainText('BetaClass')
-  // The visible affordance is a bare chevron now (no "Inklappen" text, see
-  // "Default-collapsed cards…" in .claude/docs/claude-chat-panel.md); the
-  // Dutch wording survives only as the button's `title` tooltip.
-  await expect(newestCard.getByTestId('code-preview-toggle')).toContainText('▾')
+  // No visible chevron glyph any more (reviewer request, "uitklap ding...
+  // kan helemaal weg") — the whole header row is the click target instead,
+  // see "Default-collapsed cards…" in .claude/docs/claude-chat-panel.md. The
+  // Dutch wording survives only as its `title` tooltip.
   await expect(newestCard.getByTestId('code-preview-toggle')).toHaveAttribute('title', 'Inklappen')
   await expect(newestCard.getByTestId('code-preview-context')).not.toHaveClass(/truncate/)
 
   // The older card (turn 4) is now collapsed and rendered SECOND (below the
-  // newer one): no code at all, just the title/context and the chevron
-  // toggle — and, being collapsed, its context line IS CSS-truncated now.
+  // newer one): no code at all, just the title/context header (itself the
+  // click target) — and, being collapsed, its context line IS CSS-truncated
+  // now.
   await expect(olderCard).toHaveAttribute('data-expanded', 'false')
   await expect(olderCard.locator('pre.code')).toHaveCount(0)
-  await expect(olderCard.getByTestId('code-preview-toggle')).toContainText('▸')
   await expect(olderCard.getByTestId('code-preview-toggle')).toHaveAttribute('title', 'Uitklappen (Enter)')
   await expect(olderCard.getByTestId('code-preview-context')).toHaveClass(/truncate/)
 
