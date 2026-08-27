@@ -109,6 +109,7 @@ export const EN = {
   'Huidig (PR)': 'Current (PR)',
   'Voorgesteld (chat)': 'Suggested (chat)',
   Codeblok: 'Code block',
+  'Aanpassingen van Claude': "Claude's edits",
 
   // ── src/CommandMenu.mjs ─────────────────────────────────────────────────
   'Kies wat er met je comment gebeurt…': 'Choose what happens with your comment…',

@@ -196,6 +196,19 @@ const cs = reactive({
   // need its own re-apply pass in applyRelRestore for a purely ephemeral
   // highlight.
   previewPos: 0,
+  // editLinkSel is a NESTED cursor, only meaningful while cs.previewPos points
+  // at the pending-edits card (combinedPreviewItems()[0].kind === 'edits', see
+  // pendingEditsItem below) AND that card is expanded: 0 = the card itself is
+  // highlighted (↑ leaves it, per the ordinary previewPos rules), 1..n = the
+  // n-th link inside it, top to bottom. Reviewer request: "eerst als 1 blok,
+  // als ik enter druk, moet ik door de linkjes heen kunnen naar boven en naar
+  // beneden" — Enter/toggleCodePreviewExpanded only expands the card (the
+  // generic previewPos toggle, unchanged); ↓/↑ then walk editLinkSel BEFORE
+  // falling through to the ordinary previewPos step (see handleRelatedKey's
+  // 'claude' branch). Reset to 0 whenever previewPos itself moves off the
+  // pending-edits card, same as claudeTasksPos is reset when previewPos starts
+  // moving. Deliberately NOT bound to the URL, same reasoning as previewPos.
+  editLinkSel: 0,
   // claudeTasksPos is the rung ABOVE previewPos in the SAME chain (↓ from the
   // composer reaches this one FIRST): 0 = not there, 1..n = the n-th OTHER
   // running Claude conversation in this PR (top to bottom, mirrors
@@ -1014,6 +1027,7 @@ function exitRelated() {
   cs.claudeOptionSel = 0
   cs.previewPos = 0
   cs.claudeTasksPos = 0
+  cs.editLinkSel = 0
   releaseFocus() // a focus request still in flight must not land after this
   const el = document.activeElement
   if (el && el.blur) el.blur()
@@ -1269,6 +1283,7 @@ function toNewFocus() {
   cs.claudeOptionSel = 0
   cs.previewPos = 0
   cs.claudeTasksPos = 0
+  cs.editLinkSel = 0
   focusEl('[data-testid=comment-compose]')
   const draft = composeDrafts.get(composeDraftKey)
   if (draft) prefillField('[data-testid=comment-compose]', draft)
@@ -1295,6 +1310,7 @@ function toComment(focusInput = true) {
   cs.claudeOptionSel = 0
   cs.previewPos = 0
   cs.claudeTasksPos = 0
+  cs.editLinkSel = 0
   scrollCommentIntoView()
   scrollCommentThreadToBottom()
   if (focusInput) {
@@ -2607,6 +2623,7 @@ export async function clearClaudeChat() {
   cs.claudeOptionSel = 0
   cs.previewPos = 0
   cs.claudeTasksPos = 0
+  cs.editLinkSel = 0
   const anchor = cc.commentId != null ? commentById(cc.commentId) : null
   if (anchor && anchor.body === CLAUDE_ANCHOR_PLACEHOLDER) {
     await deleteComment(anchor)
@@ -3004,6 +3021,7 @@ export async function enterClaudeChat(pr) {
   cs.claudeOptionSel = 0
   cs.previewPos = 0
   cs.claudeTasksPos = 0
+  cs.editLinkSel = 0
   await ensureAndLoadChat(pr, c.id)
   if (token !== focusToken) return
   ensureChatEvents(pr)
@@ -3035,6 +3053,7 @@ function enterClaudeChatFromNew() {
   cs.claudeOptionSel = 0
   cs.previewPos = 0
   cs.claudeTasksPos = 0
+  cs.editLinkSel = 0
   focusClaudeComposer()
 }
 
@@ -4364,11 +4383,69 @@ export function ClaudeChatPanel(state, commentTarget) {
 // `view` getters).
 const cp = reactive({ items: [], expandedOverride: {} })
 
+// editsStateRef is the shared top-level `state` object (home.mjs), captured
+// once by CodePreviewPanel(state, commentTarget) below — pendingEditsItem
+// needs state.pendingPush/state.blocks and is called from plain (non-
+// template) code (codePreviewCount, handleRelatedKey), which can't receive it
+// as a function parameter the way a template call site can. Same shape as
+// getCommentTarget just below.
+let editsStateRef = null
+let editsJumpCallback = null
+// setEditsJumpCallback — registered once by home.mjs (mirrors setClaudeTaskJump)
+// so Enter/click on a pending-edits link can select the matching block in the
+// main tree without this module importing home.mjs.
+export function setEditsJumpCallback(fn) {
+  editsJumpCallback = fn
+}
+
+// pendingEditsItem() — the "Aanpassingen van Claude" summary card prepended
+// to the code-preview cards, one per PR (never one per fence): links to every
+// block whose file is part of the LATEST, not-yet-pushed chat edit
+// (state.pendingPush.files — see pendingPushFiles() in home.mjs; the same
+// file set the "⇧ ongepusht" pill already reads). Reviewer request: "als je
+// iets hebt aangepast doordat de chat dat doet met claude, laat een blok
+// eronder zien met linkjes naar de plekken wat is aangepast" — scoped to the
+// latest/unpushed change only, not the whole conversation history (explicit
+// reviewer answer). Computed fresh on every read rather than cached in
+// cp.items: it depends on state.pendingPush/state.blocks, neither of which
+// recomputeCodePreviews' DOM MutationObserver would ever notice change.
+// null when there is nothing pending (no card at all — arrow.js template
+// stays a stable empty array either way, see combinedPreviewItems).
+function pendingEditsItem() {
+  const state = editsStateRef
+  const files = state && state.pendingPush && Array.isArray(state.pendingPush.files) ? state.pendingPush.files : []
+  if (!files.length) return null
+  const blocks = Array.isArray(state.blocks) ? state.blocks : []
+  const links = []
+  for (const file of files) {
+    const matches = blocks.filter((b) => b.file === file)
+    if (matches.length) {
+      for (const b of matches) links.push({ file, blockId: b.id, label: b.label || file })
+    } else {
+      // No block in the currently loaded tree matches this file (outside the
+      // reviewed scope, or not ingested yet) — shown as plain text, no
+      // navigation target (explicit reviewer answer).
+      links.push({ file, blockId: null, label: file })
+    }
+  }
+  return { key: 'pending-edits', kind: 'edits', links }
+}
+
+// combinedPreviewItems() — pendingEditsItem() (if any) prepended to cp.items,
+// the single list cs.previewPos actually counts over: "1" is the
+// pending-edits card when present, otherwise the first fence card — matching
+// the on-screen order (the pending-edits card renders ABOVE the fence cards,
+// reviewer's own placement answer: "boven andere blokken … zelfde werking").
+function combinedPreviewItems() {
+  const editsItem = pendingEditsItem()
+  return editsItem ? [editsItem, ...cp.items] : cp.items
+}
+
 // codePreviewCount — how many code-preview cards the reviewer can currently
 // walk with ↓/↑ from the bottom of the Claude chat (cs.previewPos, see its own
 // doc comment and handleRelatedKey's 'claude' branch).
 function codePreviewCount() {
-  return cp.items.length
+  return combinedPreviewItems().length
 }
 
 // getCommentTarget is set once by CodePreviewPanel (see below) to the same
@@ -4427,7 +4504,7 @@ function isPreviewExpanded(it) {
   return it.key in cp.expandedOverride ? cp.expandedOverride[it.key] : it.isLast
 }
 export function toggleCodePreviewExpanded(key) {
-  const it = cp.items.find((x) => x.key === key)
+  const it = combinedPreviewItems().find((x) => x.key === key)
   if (!it) return
   // Reassign the whole map (never mutate it in place) — same "plain object,
   // replaced wholesale" discipline as `cp.items` itself, so the reactive
@@ -4445,8 +4522,28 @@ export function toggleCodePreviewExpanded(key) {
 // itself — home.mjs never reads this module's own state directly, same split
 // as everywhere else in this file.
 export function activeCodePreviewKey() {
-  const it = cp.items[cs.previewPos - 1]
+  const it = combinedPreviewItems()[cs.previewPos - 1]
   return it ? it.key : null
+}
+
+// selectHighlightedEditLink — Enter while a pending-edits link is highlighted
+// (cs.editLinkSel > 0, only possible while cs.previewPos sits on the
+// pending-edits card and it is expanded — see handleRelatedKey's ArrowUp/
+// ArrowDown handling) jumps to that link's block, exactly like clicking it.
+// Checked in home.mjs BEFORE the generic code-preview toggle branch, same
+// shape as selectHighlightedClaudeTask/selectHighlightedClaudeOption — a
+// highlighted link also blurs the composer, so it would otherwise match that
+// branch's DOM-focus check too. Returns false (never consumes the keypress)
+// when no link is highlighted or it has no block (a plain, non-clickable
+// entry) — the generic toggle still runs in that case.
+export function selectHighlightedEditLink() {
+  if (cs.editLinkSel === 0) return false
+  const editsItem = combinedPreviewItems()[0]
+  if (!editsItem || editsItem.kind !== 'edits') return false
+  const link = editsItem.links[cs.editLinkSel - 1]
+  if (!link || !link.blockId) return false
+  if (editsJumpCallback) editsJumpCallback(link.blockId)
+  return true
 }
 
 // recomputeCodePreviews — the single place that turns "what's currently
@@ -4669,6 +4766,7 @@ function ensureCodePreviewObserver() {
 // comment-claude-row above it.
 export function CodePreviewPanel(state, commentTarget) {
   getCommentTarget = commentTarget
+  editsStateRef = state
   ensureCodePreviewObserver()
   // The second argument is the keyboard cursor (cs.previewPos, only ever
   // non-zero while the chat itself owns the keyboard) — a getter per card, so
@@ -4678,16 +4776,22 @@ export function CodePreviewPanel(state, commentTarget) {
   // reason: toggling ONE card must not re-key/re-Prism-highlight the rest.
   // The fifth (getWidthCls) is a getter too, for the same reason as the
   // others: a focus/narrow-breakpoint change must re-apply just this class
-  // slot, not rebuild the whole card list.
+  // slot, not rebuild the whole card list. The sixth/seventh
+  // (getLinkSel/onJumpToBlock) only matter for the pending-edits card (see
+  // pendingEditsItem above) — ignored by an ordinary fence card.
   return html`<div class="contents">
     ${() =>
-      cp.items.length
+      combinedPreviewItems().length
         ? codePreviewColumn(
-            () => cp.items,
+            () => combinedPreviewItems(),
             (i) => cs.focus === 'claude' && cs.previewPos === i + 1,
-            (i) => isPreviewExpanded(cp.items[i]),
+            (i) => isPreviewExpanded(combinedPreviewItems()[i]),
             toggleCodePreviewExpanded,
             () => commentClaudeRowWidthCls(state),
+            (i) => (combinedPreviewItems()[i] && combinedPreviewItems()[i].kind === 'edits' ? cs.editLinkSel : 0),
+            (blockId) => {
+              if (editsJumpCallback) editsJumpCallback(blockId)
+            },
           )
         : ''}
   </div>`
@@ -4858,6 +4962,14 @@ export function handleRelatedKey(key) {
   }
   if (cs.focus === 'claude') {
     if (key === 'ArrowUp' && (cs.previewPos > 0 || cs.claudeTasksPos > 0)) {
+      // If the cursor sits on the (expanded) pending-edits card, ↑ first
+      // walks its own links back up — see editLinkSel's own doc comment —
+      // before falling through to the ordinary "leave this card" step below.
+      if (cs.editLinkSel > 0) {
+        cs.editLinkSel -= 1
+        focusPreviewCard()
+        return true
+      }
       // Walking the code-preview cards back up first (if we're in them — see
       // cs.previewPos), then the "other running Claude tasks" rung (see
       // otherRunningClaudeTasks/claudeTasksPos), toward the composer (0 = the
@@ -4893,6 +5005,16 @@ export function handleRelatedKey(key) {
       key === 'ArrowDown' &&
       (cs.previewPos > 0 || cs.claudeTasksPos > 0 || (cs.claudePos === 0 && cs.claudeOptionSel === 0))
     ) {
+      // If the cursor sits on the (expanded) pending-edits card, ↓ first
+      // walks its own links top to bottom — see editLinkSel's own doc
+      // comment — before falling through to the ordinary "advance past this
+      // card" step below.
+      const editsItem = combinedPreviewItems()[cs.previewPos - 1]
+      if (editsItem && editsItem.kind === 'edits' && isPreviewExpanded(editsItem) && cs.editLinkSel < editsItem.links.length) {
+        cs.editLinkSel += 1
+        focusPreviewCard()
+        return true
+      }
       // The "other running Claude tasks" rung is the next rung below the
       // composer (reviewer request: it should be reachable before the code
       // blocks, matching its on-screen position ABOVE the code-preview
@@ -4915,11 +5037,13 @@ export function handleRelatedKey(key) {
       if (cs.previewPos < codePreviewCount()) {
         cs.claudeTasksPos = 0
         cs.previewPos += 1
+        cs.editLinkSel = 0
         focusPreviewCard()
         return true
       }
       cs.previewPos = 0
       cs.claudeTasksPos = 0
+      cs.editLinkSel = 0
       exitRelated()
       return 'advance'
     }
@@ -5115,10 +5239,12 @@ export function handleRelatedKey(key) {
           // already see the now-collapsed comment's empty cp.items.
           if (codeFromClaudeTailPreviewPos > 0) {
             cs.previewPos = codeFromClaudeTailPreviewPos
+            cs.editLinkSel = 0
             focusPreviewCard()
           } else {
             cs.previewPos = 0
             cs.claudeTasksPos = 0
+            cs.editLinkSel = 0
             focusClaudeComposer()
           }
         } else if (hasVisibleComments()) {
@@ -6600,6 +6726,7 @@ async function postThreadReply(c, body, publish, withHistory) {
   cs.claudeOptionSel = 0
   cs.previewPos = 0
   cs.claudeTasksPos = 0
+  cs.editLinkSel = 0
   releaseFocus() // a focus request still in flight must not land after this
   if (el && el.blur) el.blur()
   cs.busy = true

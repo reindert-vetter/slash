@@ -229,7 +229,63 @@ function pane(titleText, code, lang) {
 // other state, not just a convenience alongside Enter. Same
 // mouse-navigation.md rule as before ("a click runs the same function a key
 // runs"), just on a bigger, glyph-less target instead of a dedicated button.
-function previewCard(it, active, expanded, onToggle) {
+// pendingEditLink — one row inside the pending-edits card's expanded body: a
+// clickable link when the touched file matched a block in the currently
+// loaded tree (it.blockId set), a plain, non-clickable line otherwise
+// (reviewer's own answer: "wel tonen, als platte tekst zonder
+// navigatiedoel"). `active` mirrors previewCard's own getter shape — a
+// nested cursor (RelatedPanel.mjs's cs.editLinkSel), not part of `.key()` for
+// the same reason active/expanded aren't: walking it must not re-render the
+// whole list.
+function pendingEditLink(link, i, active, onJump) {
+  if (!link.blockId) {
+    return html`<div
+      class="truncate rounded px-2 py-1 text-xs text-slate-400 dark:text-zinc-500"
+      data-testid="pending-edit-link"
+    >
+      ${link.label}
+    </div>`.key('edit-' + i)
+  }
+  return html`
+    <button
+      type="button"
+      class="${() =>
+        'flex items-center gap-1 truncate rounded px-2 py-1 text-left text-xs ' +
+        (active()
+          ? 'bg-indigo-50 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
+          : 'text-slate-600 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800')}"
+      data-testid="pending-edit-link"
+      data-active="${() => (active() ? 'true' : 'false')}"
+      @click="${(e) => {
+        if (e && e.stopPropagation) e.stopPropagation()
+        onJump(link.blockId)
+      }}"
+    >
+      <span class="shrink-0 text-indigo-500 dark:text-indigo-400">${() => (active() ? '▸' : '')}</span>
+      ${link.label}
+    </button>
+  `.key('edit-' + i)
+}
+
+// pendingEditLinks — the pending-edits card's body while expanded: one
+// pendingEditLink per touched file/block, `linkSel` (1-based, 0 = none) the
+// nested keyboard cursor (RelatedPanel.mjs's cs.editLinkSel — see
+// "↓ walks the chat's own code blocks, PLUS a pending-edits card" in
+// claude-chat-panel.md).
+function pendingEditLinks(links, linkSel, onJump) {
+  return links.map((l, i) => pendingEditLink(l, i, () => linkSel() === i + 1, onJump))
+}
+
+// previewCard renders ONE card in the stack below the chat: either an
+// ordinary fence's "Huidig (PR)"/"Voorgesteld (chat)" pair (it.kind is unset)
+// or the pending-edits summary card (it.kind === 'edits', see
+// RelatedPanel.mjs's pendingEditsItem) — same shell (border/ring, active
+// marker, click-to-toggle header, collapse/expand), different body. `active`/
+// `expanded` are getters, same reasoning as before: walking/toggling must not
+// re-key (and thereby re-Prism-highlight) the rest of the stack. `linkSel`/
+// `onJump` only matter for the edits-kind card — an ordinary fence card
+// ignores them (its default no-ops).
+function previewCard(it, active, expanded, onToggle, linkSel = () => 0, onJump = () => {}) {
   return html`
     <div
       class="${() =>
@@ -238,6 +294,7 @@ function previewCard(it, active, expanded, onToggle) {
           ? 'border-indigo-300 dark:border-indigo-500 ring-2 ring-indigo-200 dark:ring-indigo-500/30'
           : 'border-slate-300 dark:border-zinc-700 ring-1 ring-black/5')}"
       data-testid="code-preview-card"
+      data-kind="${it.kind || 'fence'}"
       data-active="${() => (active() ? 'true' : 'false')}"
       data-expanded="${() => (expanded() ? 'true' : 'false')}"
     >
@@ -261,17 +318,24 @@ function previewCard(it, active, expanded, onToggle) {
             ${() => (active() ? '▸' : '')}
           </span>
           ${() =>
-            it.classLabel
+            it.kind === 'edits'
               ? html`<span
                   class="truncate text-[11px] font-medium text-slate-500 dark:text-zinc-500"
                   data-testid="code-preview-title"
                 >
-                  ${it.classLabel}
+                  ✎ ${t('Aanpassingen van Claude')} · ${it.links.length}
                 </span>`
-              : ''}
+              : it.classLabel
+                ? html`<span
+                    class="truncate text-[11px] font-medium text-slate-500 dark:text-zinc-500"
+                    data-testid="code-preview-title"
+                  >
+                    ${it.classLabel}
+                  </span>`
+                : ''}
         </div>
         ${() =>
-          it.context
+          it.kind !== 'edits' && it.context
             ? html`<span
                 class="${() =>
                   'text-xs leading-relaxed text-slate-700 dark:text-zinc-300 ' + (expanded() ? '' : 'truncate')}"
@@ -284,10 +348,12 @@ function previewCard(it, active, expanded, onToggle) {
       <div class="flex flex-col gap-2" data-testid="code-preview-body">
         ${() =>
           expanded()
-            ? [
-                it.oldCode != null ? pane(t('Huidig (PR)'), it.oldCode, it.lang).key('old') : '',
-                pane(t(it.oldCode != null ? 'Voorgesteld (chat)' : 'Codeblok'), it.code, it.lang).key('new'),
-              ].filter(Boolean)
+            ? it.kind === 'edits'
+              ? pendingEditLinks(it.links, linkSel, onJump)
+              : [
+                  it.oldCode != null ? pane(t('Huidig (PR)'), it.oldCode, it.lang).key('old') : '',
+                  pane(t(it.oldCode != null ? 'Voorgesteld (chat)' : 'Codeblok'), it.code, it.lang).key('new'),
+                ].filter(Boolean)
             : []}
       </div>
     </div>
@@ -325,10 +391,22 @@ export function codePreviewColumn(
   isExpanded = () => true,
   onToggle = () => {},
   getWidthCls = () => 'w-full',
+  getLinkSel = () => 0,
+  onJumpToBlock = () => {},
 ) {
   return html`
     <div class="${() => 'flex shrink-0 flex-col gap-3 ' + getWidthCls()}" data-testid="code-preview-column">
-      ${() => getItems().map((it, i) => previewCard(it, () => isActive(i), () => isExpanded(i), onToggle))}
+      ${() =>
+        getItems().map((it, i) =>
+          previewCard(
+            it,
+            () => isActive(i),
+            () => isExpanded(i),
+            onToggle,
+            () => getLinkSel(i),
+            onJumpToBlock,
+          ),
+        )}
     </div>
   `
 }

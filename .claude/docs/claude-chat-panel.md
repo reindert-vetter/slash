@@ -4008,6 +4008,87 @@ changes, all in the same three files (`markdown.mjs`, `RelatedPanel.mjs`'s
 
 Test: `tests/codeblock-card-collapse.spec.mjs`.
 
+### A pending-edits card: links to what the latest chat-driven edit touched
+
+Reviewer request: *"als je iets hebt aangepast doordat de chat dat doet met
+claude, laat een blok eronder zien met linkjes naar de plekken wat is
+aangepast … eerst als 1 blok, als ik enter druk, moet ik door de linkjes heen
+kunnen naar boven en naar beneden"* — placement/mechanism per the reviewer's
+own follow-up answer: "boven andere blokken, gewoon net als als gegeneerde
+blokken uit de chat (zelfde werking)", i.e. reusing the code-preview-cards
+mechanism above, not a new component. Scoped to the LATEST, not-yet-pushed
+edit only (reviewer's own answer) — not the whole conversation history.
+
+- **No new backend at all.** The file set is the exact one `.claude/docs/
+  pending-push.md`'s "⇧ ongepusht" pill already reads
+  (`state.pendingPush.files`, `pendingPushFiles()` in `home.mjs`) — a landed,
+  not-yet-pushed chat edit is by definition the latest one, since a push
+  clears the pending ref entirely. No new DB column, no new endpoint.
+- **`pendingEditsItem()`** (`RelatedPanel.mjs`) turns that file list into
+  `{ key: 'pending-edits', kind: 'edits', links }`, one `link` per file: every
+  block in the currently loaded `state.blocks` whose `.file` matches gets its
+  own `{ file, blockId: b.id, label: b.label }` (a file can touch several
+  blocks — each gets its own link, reviewer's own answer to "meerdere blokken
+  per bestand"); a file with **no** matching block (outside the reviewed
+  scope, or not ingested yet) gets `{ file, blockId: null, label: file }` —
+  shown as plain, non-clickable text (reviewer's own answer). `null` when
+  there is nothing pending — no card at all. Computed fresh on every read
+  (never cached like `cp.items`), since it depends on `state.pendingPush`/
+  `state.blocks`, neither of which the fence-scanning `MutationObserver`
+  (`recomputeCodePreviews`) would ever notice change.
+- **`combinedPreviewItems()`** prepends this one item (when present) to
+  `cp.items` — THE single list `cs.previewPos` counts over: "1" is the
+  pending-edits card when present, otherwise the first fence card, matching
+  the on-screen order (this card renders above the fence cards).
+  `codePreviewCount()`/`activeCodePreviewKey()`/`toggleCodePreviewExpanded`
+  all read this combined list instead of `cp.items` directly — the rest of
+  the existing rung mechanics (exclusivity with `cs.claudeTasksPos`, the
+  URL-unbound cursor, `focusPreviewCard()`'s DOM query by
+  `[data-testid=code-preview-card]` index) needed **no** change, since the
+  card renders through the exact same `previewCard`/`code-preview-card`
+  component as an ordinary fence card (`it.kind === 'edits'` only swaps the
+  title line and the body — see `CodePreview.mjs`).
+- **The nested link cursor, `cs.editLinkSel`** (`RelatedPanel.mjs`): only
+  meaningful while `cs.previewPos` sits on the pending-edits card AND it is
+  expanded (the ordinary `Enter`-toggle, unchanged, via
+  `toggleCodePreviewExpanded` — `isPreviewExpanded` defaults an edits card to
+  collapsed, same as any card with no `isLast`, which satisfies "eerst als 1
+  blok" for free). `0` = the card itself is highlighted (an ordinary `↑`
+  leaves it, per the pre-existing rung rules); `1..n` = the n-th link, top to
+  bottom. `handleRelatedKey`'s `ArrowUp`/`ArrowDown` branches check this
+  FIRST, before their own `cs.previewPos`/`cs.claudeTasksPos` step: `↓` walks
+  the links to the end before falling through to "advance past this card",
+  `↑` walks them back to `0` before falling through to "leave this card" — so
+  the reviewer's own wording ("eerst als 1 blok … dan naar boven en beneden
+  door de linkjes") is literally the keyboard behaviour, not just the visual
+  default. Reset to `0` everywhere `cs.previewPos` is reset/stepped away from
+  this card (the same ~9 reset sites `cs.claudeTasksPos` already had), so a
+  stale non-zero value can never survive onto an unrelated card/rung.
+- **`selectHighlightedEditLink()`** (`RelatedPanel.mjs`) — `Enter` while a
+  link is highlighted (`cs.editLinkSel > 0`) jumps to that link's block
+  instead of re-toggling the card, checked in `home.mjs` before the generic
+  code-preview toggle branch (same shape as
+  `selectHighlightedClaudeTask`/`selectHighlightedClaudeOption` — a
+  highlighted link also blurs the composer, so it would otherwise match that
+  branch's own DOM-focus check). Returns `false` (never consumes the
+  keypress) for a plain, blockless entry, so nothing happens on `Enter` for
+  those — clicking one does nothing either (`CodePreview.mjs`'s
+  `pendingEditLink` renders it as a bare `<div>`, not a `<button>`).
+- **`jumpToPendingEditBlock(blockId)`** (`home.mjs`, registered once via
+  `setEditsJumpCallback` — mirrors `setClaudeTaskJump`/
+  `jumpToClaudeConversation`) selects that block (`state.selected`), switches
+  to `'diff'` mode and clears any open drill/range-anchor, exactly like an
+  ordinary sidebar click — RelatedPanel.mjs owns neither `state.blocks` nor
+  `state.selected`, so it can't do this itself.
+
+Files: `RelatedPanel.mjs` (`pendingEditsItem`/`combinedPreviewItems`/
+`cs.editLinkSel`/`selectHighlightedEditLink`/`setEditsJumpCallback`),
+`CodePreview.mjs` (`previewCard`'s `kind === 'edits'` branch,
+`pendingEditLink`/`pendingEditLinks`, `codePreviewColumn`'s extra
+`getLinkSel`/`onJumpToBlock` params), `home.mjs` (`jumpToPendingEditBlock`,
+the `selectHighlightedEditLink` Enter branch). Test:
+`tests/pending-edits-card.spec.mjs`.
+
 ### Three follow-up reviewer reports on the cards above: scroll, truncation, order
 
 Screenshots this time, not just typed reports. All three land in
