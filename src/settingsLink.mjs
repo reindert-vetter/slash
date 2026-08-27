@@ -8,6 +8,7 @@
 // page code on /pr/<id> and /pr-overview too. This file has no top-level
 // side effect at all, the same shape as theme.mjs/autowarn.mjs.
 import { html } from './vendor/arrow.js'
+import { t } from './i18n.mjs'
 
 // originFrom/originPr are computed here (not in settings.mjs) so a future
 // caller other than settings.mjs could read them too, and so settings.mjs's
@@ -42,7 +43,7 @@ export function settingsButton(cls = '') {
     <button
       type="button"
       data-testid="settings-button"
-      title="Instellingen"
+      title="${t('Instellingen')}"
       class="${() =>
         'inline-flex items-center justify-center rounded-full text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200 transition-colors ' +
         cls}"
@@ -59,7 +60,7 @@ export function settingsButton(cls = '') {
         stroke-linejoin="round"
         class="h-4 w-4"
         aria-hidden="true"
-        aria-label="Instellingen"
+        aria-label="${t('Instellingen')}"
       >
         <circle cx="12" cy="12" r="3"></circle>
         <path

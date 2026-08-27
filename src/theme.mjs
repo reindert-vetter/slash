@@ -17,6 +17,7 @@
 // existing `@media (prefers-color-scheme: dark)` block (kept as a fallback
 // for the instant before this module has run).
 import { reactive, html, watch } from './vendor/arrow.js'
+import { t } from './i18n.mjs'
 
 const STORAGE_KEY = 'theme'
 const ORDER = ['system', 'light', 'dark']
@@ -97,7 +98,7 @@ export function themeToggleButton(cls = '') {
     <button
       type="button"
       data-testid="theme-toggle"
-      title="${() => 'Thema: ' + LABELS[theme.pref] + ' (klik om te wisselen)'}"
+      title="${() => t('Thema: {label} (klik om te wisselen)', { label: t(LABELS[theme.pref]) })}"
       class="${() =>
         'inline-flex items-center justify-center rounded-full text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200 transition-colors ' +
         cls}"

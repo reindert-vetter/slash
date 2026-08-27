@@ -45,6 +45,7 @@ import (
 	"slash/modules/chat"
 	"slash/modules/claude"
 	"slash/modules/comments"
+	"slash/modules/langpref"
 )
 
 // CommentBatchInput is POST /api/workflows/comment_batch's body: the PR plus
@@ -161,7 +162,7 @@ func runCommentBatch(ctx context.Context, tm *TaskManager, cmod *comments.Module
 	result, err := cl.RunChat(ctx, claude.RunRequest{
 		Model:        claude.ModelOpus,
 		Prompt:       commentBatchPrompt(items),
-		SystemPrompt: claude.CommentBatchSystemPrompt,
+		SystemPrompt: claude.CommentBatchSystemPrompt + explainLangTail(langFor(ctx, tm, langpref.KindExplain)),
 		WorkDir:      dir,
 		Tools:        []string{"Read", "Grep", "Glob", "Edit", "Bash"},
 		OnEvent:      commentBatchProgressSink(arg.Repo, arg.PR, ids),

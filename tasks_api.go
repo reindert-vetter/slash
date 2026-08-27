@@ -28,6 +28,7 @@ import (
 	"slash/modules/github"
 	"slash/modules/inbox"
 	"slash/modules/jira"
+	"slash/modules/langpref"
 	"slash/modules/prmeta"
 	"slash/modules/relations"
 	"slash/modules/reviewerusage"
@@ -219,6 +220,24 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		aw.Close()
 		return nil, nil, err
 	}
+	lp, err := langpref.Open(dataDir + "/langpref.db")
+	if err != nil {
+		sq.Close()
+		cs.Close()
+		ib.Close()
+		rel.Close()
+		pm.Close()
+		cr.Close()
+		tc.Close()
+		ap.Close()
+		ex.Close()
+		ru.Close()
+		ci.Close()
+		ch.Close()
+		aw.Close()
+		aip.Close()
+		return nil, nil, err
+	}
 	wd, err := warndismiss.Open(dataDir + "/warndismiss.db")
 	if err != nil {
 		sq.Close()
@@ -235,6 +254,7 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		ch.Close()
 		aw.Close()
 		aip.Close()
+		lp.Close()
 		return nil, nil, err
 	}
 	wr, err := warnreviewed.Open(dataDir + "/warnreviewed.db")
@@ -254,6 +274,7 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		aw.Close()
 		wd.Close()
 		aip.Close()
+		lp.Close()
 		return nil, nil, err
 	}
 
@@ -336,6 +357,10 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 	// AutoIngestPrefMode report "own" (the default) and
 	// saveAutoIngestPrefMode a no-op.
 	mgr.autoingestpref = aip
+	// Same pattern for the per-type language preference: a nil store makes
+	// LangFor report "nl" (the default) and saveLangPref a no-op, i.e. the
+	// pre-existing all-Dutch behaviour.
+	mgr.langpref = lp
 	// Same pattern for the dismissed-findings store: a nil store makes
 	// recordWarningDismissed a no-op and dropDismissedFindings a pass-through.
 	mgr.warndismiss = wd
@@ -385,6 +410,12 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		if _, err := mgr.EnsureAutoIngestPref(); err != nil {
 			mgr.logf("autoingestpref: ensure: %v", err)
 		}
+		// Own the per-repo language-preference tracker so the settings page's
+		// three language toggles have a Run ID to signal to (no poller — it
+		// only reacts to UI signals).
+		if _, err := mgr.EnsureLangPref(); err != nil {
+			mgr.logf("langpref: ensure: %v", err)
+		}
 		// Own the single, global app_settings tracker so the settings page's
 		// aliases/praise-words edits have a Run ID to signal to (no poller — it
 		// only reacts to UI signals). No repo scope, mirrors EnsureAutoWarn.
@@ -411,6 +442,7 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		_ = ch.Close()
 		_ = aw.Close()
 		_ = aip.Close()
+		_ = lp.Close()
 		_ = wd.Close()
 		_ = wr.Close()
 		return cs.Close()
@@ -739,6 +771,14 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// ({"mode":"off"|"own"|"all"}), backing the toggle on /settings and next to
 	// the gear icon in /pr-overview's header.
 	mux.HandleFunc("/api/autoingestpref", s.handleAutoIngestPref)
+	// POST /api/workflows/lang_pref {repo?} → ensure the per-repo
+	// language-preference tracker; the settings page then signals one
+	// {kind, lang} pair to its Run ID via .../signals/lang_pref.
+	mux.HandleFunc("/api/workflows/lang_pref", s.handleLangPrefStart)
+	// GET /api/langpref → read-only language preference per output type
+	// ({"ui":"nl","explain":"nl","reply":"nl"}), backing the three toggles on
+	// /settings and src/i18n.mjs's own interface language.
+	mux.HandleFunc("/api/langpref", s.handleLangPref)
 	// POST /api/workflows/app_settings → ensure the single, global
 	// app_settings tracker; the settings page then signals aliases/
 	// praise-words edits to its Run ID via .../signals/app_settings_update.
@@ -1036,7 +1076,7 @@ func (s *server) handleRetryRun(w http.ResponseWriter, r *http.Request) {
 // /api/workflows/{runID}/signals/{signalName} (POST signal).
 func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/workflows/")
-	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "remove_reviewer" || rest == "code_warning" || rest == "ignore_comment" || rest == "cleanup" || rest == "claude_chat" || rest == "auto_warn" || rest == "app_settings" || rest == "comment_batch" || rest == "test_run" || rest == "comment_titles" || rest == "retry" {
+	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "remove_reviewer" || rest == "code_warning" || rest == "ignore_comment" || rest == "cleanup" || rest == "claude_chat" || rest == "auto_warn" || rest == "lang_pref" || rest == "app_settings" || rest == "comment_batch" || rest == "test_run" || rest == "comment_titles" || rest == "retry" {
 		http.NotFound(w, r)
 		return
 	}
@@ -1180,6 +1220,30 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if err := s.tasks.engine.SignalWorkflow(runID, SignalAutoIngestPref, body); err != nil {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"status": "set"})
+			return
+		}
+		// The lang_pref signal carries ONE {kind, lang} language choice
+		// ("ui"|"explain"|"reply" x "nl"|"en") from the settings page. One
+		// signal name with a Kind discriminator, like app_settings_update.
+		if parts[2] == SignalLangPref {
+			var body LangPrefSignal
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "invalid lang_pref", http.StatusBadRequest)
+				return
+			}
+			if !langpref.ValidKind(body.Kind) {
+				http.Error(w, "invalid kind", http.StatusBadRequest)
+				return
+			}
+			if !langpref.ValidLang(body.Lang) {
+				http.Error(w, "invalid lang", http.StatusBadRequest)
+				return
+			}
+			if err := s.tasks.engine.SignalWorkflow(runID, SignalLangPref, body); err != nil {
 				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 				return
 			}
@@ -1920,6 +1984,43 @@ func (s *server) handleAutoIngestPref(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "mode": mode})
+}
+
+// handleLangPrefStart starts (or reuses) the per-repo language-preference
+// tracker and returns its Run ID. Starting an Execution is the sanctioned UI
+// write path; the settings page then signals one {kind, lang} pair to this
+// Run ID via .../signals/lang_pref.
+func (s *server) handleLangPrefStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	runID, err := s.tasks.manager.EnsureLangPref()
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
+}
+
+// handleLangPref serves GET /api/langpref — the read-only language preference
+// per output type. Every kind is always present; "nl" is the default (see
+// modules/langpref).
+func (s *server) handleLangPref(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	langs, err := s.tasks.manager.LangPrefAll(r.Context())
+	if err != nil {
+		http.Error(w, "query failed", http.StatusInternalServerError)
+		return
+	}
+	out := map[string]any{"ok": true}
+	for k, v := range langs {
+		out[k] = v
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // handleAppSettingsStart starts (or reuses) the single, global app_settings

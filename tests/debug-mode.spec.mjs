@@ -79,10 +79,9 @@ test.describe('debug mode', () => {
 
   test('Enter on the debug row toggles it, same as clicking the switch', async ({ page }) => {
     await page.goto('/settings')
-    // ROWS order: theme, autowarn, autoingestpref, debug — three ↓ from the top.
-    await page.keyboard.press('ArrowDown')
-    await page.keyboard.press('ArrowDown')
-    await page.keyboard.press('ArrowDown')
+    // ROWS order: theme, langui, langexplain, langreply, langcommit, autowarn,
+    // autoingestpref, debug — seven ↓ from the top (see settings-page.md).
+    for (let i = 0; i < 7; i++) await page.keyboard.press('ArrowDown')
     await page.keyboard.press('Enter')
     await expect(page.getByTestId('debug-mode-toggle')).toHaveText(/Debug mode aan/)
     await page.keyboard.press('Enter')

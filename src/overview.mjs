@@ -8,6 +8,7 @@
 // /data/inbox.json snapshot when the live endpoint is unreachable.
 
 import { reactive, html, watch } from './vendor/arrow.js'
+import { t, syncUiLang } from './i18n.mjs'
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { initTheme, themeToggleButton } from './theme.mjs'
 import { initDebugLog } from './debugLog.mjs'
@@ -18,6 +19,9 @@ import { relativeTime } from './relativeTime.mjs'
 import { fetchProblems, problemRunRow, problemLogRow } from './problems.mjs'
 
 initTheme()
+// Reconcile the cached interface language with the server's own preference
+// (GET /api/langpref) once per page load — see src/i18n.mjs.
+syncUiLang()
 // Debug mode: records this page load and every following key/click when the
 // reviewer has it on (src/debugLog.mjs). A reproduction often starts here —
 // opening the overview and then a PR's review tree.
@@ -250,12 +254,12 @@ const STATE_LABEL = {
 }
 
 function reviewChip(pr, status) {
-  if (pr.isDraft) return chip('Concept', 'bg-slate-100 dark:bg-zinc-500/15 text-slate-500 dark:text-zinc-400 ring-slate-300/50 dark:ring-zinc-500/30', 'review-chip', 'git-pull-request')
+  if (pr.isDraft) return chip(t('Concept'), 'bg-slate-100 dark:bg-zinc-500/15 text-slate-500 dark:text-zinc-400 ring-slate-300/50 dark:ring-zinc-500/30', 'review-chip', 'git-pull-request')
   const d = status.reviewDecision
-  if (d === 'APPROVED') return chip('Goedgekeurd', 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 ring-emerald-500/30', 'review-chip', 'check')
+  if (d === 'APPROVED') return chip(t('Goedgekeurd'), 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 ring-emerald-500/30', 'review-chip', 'check')
   if (d === 'CHANGES_REQUESTED')
-    return chip('Wijzigingen gevraagd', 'bg-rose-500/15 text-rose-700 dark:text-rose-300 ring-rose-500/30', 'review-chip', 'x')
-  return chip('Wacht op review', 'bg-red-500/15 text-red-700 dark:text-red-300 ring-red-500/30', 'review-chip', 'clock')
+    return chip(t('Wijzigingen gevraagd'), 'bg-rose-500/15 text-rose-700 dark:text-rose-300 ring-rose-500/30', 'review-chip', 'x')
+  return chip(t('Wacht op review'), 'bg-red-500/15 text-red-700 dark:text-red-300 ring-red-500/30', 'review-chip', 'clock')
 }
 
 // checksChip deliberately does NOT show a count anymore — GitHub's rollup
@@ -270,18 +274,18 @@ function checksChip(status) {
   if (!status.checksTotal) return null
   const s = status.checksState
   if (s === 'FAILURE' || s === 'ERROR')
-    return chip('Checks gefaald', 'bg-rose-500/10 text-rose-700 dark:text-rose-300 ring-rose-500/30', 'checks-chip', 'x')
+    return chip(t('Checks gefaald'), 'bg-rose-500/10 text-rose-700 dark:text-rose-300 ring-rose-500/30', 'checks-chip', 'x')
   if (s === 'PENDING' || s === 'EXPECTED')
-    return chip('Checks bezig', 'bg-red-500/10 text-red-700 dark:text-red-300 ring-red-500/30', 'checks-chip', 'clock')
+    return chip(t('Checks bezig'), 'bg-red-500/10 text-red-700 dark:text-red-300 ring-red-500/30', 'checks-chip', 'clock')
   if (s === 'SUCCESS')
-    return chip('Checks geslaagd', 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 ring-emerald-500/30', 'checks-chip', 'check')
-  return chip('Checks', 'bg-slate-100 dark:bg-zinc-500/10 text-slate-500 dark:text-zinc-400 ring-slate-300/50 dark:ring-zinc-500/30', 'checks-chip', 'clock')
+    return chip(t('Checks geslaagd'), 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 ring-emerald-500/30', 'checks-chip', 'check')
+  return chip(t('Checks'), 'bg-slate-100 dark:bg-zinc-500/10 text-slate-500 dark:text-zinc-400 ring-slate-300/50 dark:ring-zinc-500/30', 'checks-chip', 'clock')
 }
 
 function reviewerAvatar(r) {
   const login = r.login || '?'
   const pending = r.state !== 'APPROVED' && r.state !== 'CHANGES_REQUESTED' && r.state !== 'COMMENTED'
-  const label = STATE_LABEL[r.state] || r.state || ''
+  const label = t(STATE_LABEL[r.state] || r.state || '')
   // Precompute per the branch avatarHTML takes internally (image vs
   // initials-fallback), so the pending-dimming keeps looking exactly like it
   // did before this circle was extracted into the shared avatarHTML helper.
@@ -447,7 +451,7 @@ function newSinceMark(pr) {
     const status = statusFor(pr)
     const kind = status && status.newSinceKind
     if (!kind) return null
-    const label = kind === 'review' ? 'nieuw sinds jouw review' : 'nieuw sinds jouw comment'
+    const label = t(kind === 'review' ? 'nieuw sinds jouw review' : 'nieuw sinds jouw comment')
     return html`
       <span class="inline-flex items-center gap-2" data-testid="new-since-mark">
         <span class="text-slate-300 dark:text-zinc-700">·</span>
@@ -509,8 +513,8 @@ function statusArea(pr) {
 }
 
 function graphChip(pr) {
-  if (pr.hasGraph) return iconChip('sparkles', 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 ring-emerald-500/30', 'graph-chip', 'Gegenereerd')
-  return iconChip('tree', 'bg-sky-500/15 text-sky-700 dark:text-sky-300 ring-sky-500/30', 'graph-chip', 'Op GitHub')
+  if (pr.hasGraph) return iconChip('sparkles', 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 ring-emerald-500/30', 'graph-chip', t('Gegenereerd'))
+  return iconChip('tree', 'bg-sky-500/15 text-sky-700 dark:text-sky-300 ring-sky-500/30', 'graph-chip', t('Op GitHub'))
 }
 
 // openOrGenerate's guard: a row whose repo has no local clone configured can
@@ -549,7 +553,7 @@ function approvalPill(pr) {
 function unpushedPill(pr) {
   const p = pr.hasGraph ? state.pendingPush[prUid(pr)] : null
   if (!p || !p.ahead) return []
-  const label = p.state === 'failed' ? 'Push mislukt' : 'Ongepusht ' + p.ahead
+  const label = p.state === 'failed' ? t('Push mislukt') : t('Ongepusht {n}', { n: p.ahead })
   const cls =
     p.state === 'failed'
       ? 'bg-rose-500/15 text-rose-700 dark:text-rose-300 ring-rose-500/30'
@@ -616,7 +620,7 @@ function branchFragment(pr) {
   return html`
     <span
       class="inline-flex min-w-0 items-center gap-1 font-mono text-[11px] text-sky-600/90 dark:text-sky-400/90"
-      title="Huidige branch"
+      title="${t('Huidige branch')}"
     >
       ${icon('git-branch', 'h-3 w-3')}<span class="truncate">${pr.headRefName}</span>
     </span>
@@ -646,7 +650,7 @@ function rowMeta(pr) {
         <span class="font-mono">${() => rowRepoSlug(pr)}#${pr.number}</span>
         ${repoBadge(pr)}
         <span class="text-slate-300 dark:text-zinc-700">·</span>
-        <span title="${pr.updatedAt || ''}">Bijgewerkt ${relativeTime(pr.updatedAt)}</span>
+        <span title="${pr.updatedAt || ''}">${t('Bijgewerkt {time}', { time: relativeTime(pr.updatedAt) })}</span>
         ${rowStateMark(pr)} ${newSinceMark(pr)}
       </div>
       ${stat || branch
@@ -685,8 +689,8 @@ function rowStateMark(pr) {
       <span
         data-testid="row-state-mark"
         class="shrink-0 rounded-full bg-slate-200/70 dark:bg-zinc-800 px-2 py-0.5 text-[10.5px] font-medium text-slate-600 dark:text-zinc-300"
-        title="Deze PR is niet meer open"
-        >${pr.state === 'MERGED' ? '⤵' : '✕'} ${label}</span
+        title="${t('Deze PR is niet meer open')}"
+        >${pr.state === 'MERGED' ? '⤵' : '✕'} ${t(label)}</span
       >
     `
   }}</span>`
@@ -726,7 +730,7 @@ function authorMark(pr) {
 function sectionBadge(label) {
   return html`<span
     class="shrink-0 rounded-full bg-slate-100 dark:bg-zinc-800/80 px-2 py-0.5 text-[10.5px] font-medium text-slate-500 dark:text-zinc-400"
-    title="Hoort normaal in deze sectie"
+    title="${t('Hoort normaal in deze sectie')}"
     >${label}</span
   >`
 }
@@ -872,9 +876,9 @@ function positionPopover(uid) {
 const ingestPollTimers = new Map()
 
 function stopIngestPoll(uid) {
-  const t = ingestPollTimers.get(uid)
-  if (t) {
-    clearInterval(t)
+  const timer = ingestPollTimers.get(uid)
+  if (timer) {
+    clearInterval(timer)
     ingestPollTimers.delete(uid)
   }
 }
@@ -911,7 +915,7 @@ async function generatePage(pr, { redirect = true } = {}) {
     })
     if (!res.ok) {
       const body = await res.json().catch(() => null)
-      throw new Error((body && body.error) || 'Genereren mislukt (' + res.status + ')')
+      throw new Error((body && body.error) || t('Genereren mislukt ({status})', { status: res.status }))
     }
     if (redirect) {
       location.href = treeUrl(pr)
@@ -928,7 +932,7 @@ async function generatePage(pr, { redirect = true } = {}) {
     }
   } catch (e) {
     ui.ingestingByPr[uid] = false
-    ui.ingestError = e.message || 'Genereren mislukt'
+    ui.ingestError = t(e.message) || t('Genereren mislukt')
     ui.ingestErrorFor = uid
   } finally {
     stopIngestPoll(uid)
@@ -1055,7 +1059,7 @@ function ingestBusy(pr) {
 }
 
 function ingestLabel(pr, idleLabel) {
-  return ingestBusy(pr) ? INGEST_STAGE_LABELS[ui.ingestStageByPr[prUid(pr)]] || 'Bezig met genereren…' : idleLabel
+  return ingestBusy(pr) ? t(INGEST_STAGE_LABELS[ui.ingestStageByPr[prUid(pr)]] || 'Bezig met genereren…') : t(idleLabel)
 }
 
 // The idle glyph is the TREE, not the sparkles: this row BUILDS the review
@@ -1131,7 +1135,7 @@ function ingestedActions(pr) {
       class="${popoverRowCls()}"
       @click="${() => (location.href = treeUrl(pr))}"
     >
-      ${icon('sparkles', 'h-3.5 w-3.5')} Open review-boom
+      ${icon('sparkles', 'h-3.5 w-3.5')} ${t('Open review-boom')}
     </button>
     <button
       type="button"
@@ -1214,7 +1218,7 @@ async function removeSelfAsReviewer(pr) {
     scheduleRepaint()
     reloadSnapshot()
   } catch (e) {
-    ui.removeReviewerError = 'Verwijderen mislukt'
+    ui.removeReviewerError = t('Verwijderen mislukt')
   } finally {
     ui.removingReviewer = null
   }
@@ -1239,7 +1243,7 @@ function removeReviewerAction(pr) {
         @click="${() => removeSelfAsReviewer(pr)}"
       >
         ${() => (ui.removingReviewer === prUid(pr) ? icon('loader', 'h-3.5 w-3.5 animate-spin') : icon('user-minus', 'h-3.5 w-3.5'))}
-        ${() => (ui.removingReviewer === prUid(pr) ? 'Bezig…' : 'Verwijder mij als reviewer')}
+        ${() => t(ui.removingReviewer === prUid(pr) ? 'Bezig…' : 'Verwijder mij als reviewer')}
       </button>
       ${() =>
         ui.removeReviewerError
@@ -1298,7 +1302,7 @@ async function openReadyPicker(pr) {
     const body = await res.json()
     ui.reviewers = (body && body.reviewers) || []
   } catch (e) {
-    ui.reviewersError = 'Kon reviewers niet laden'
+    ui.reviewersError = t('Kon reviewers niet laden')
     ui.reviewers = []
   } finally {
     ui.reviewersLoading = false
@@ -1333,7 +1337,7 @@ async function submitReady(pr) {
     closePopover()
     reloadSnapshot()
   } catch (e) {
-    ui.reviewersError = 'Omzetten mislukt'
+    ui.reviewersError = t('Omzetten mislukt')
   } finally {
     ui.readySubmitting = false
   }
@@ -1355,14 +1359,14 @@ function readyForReviewSection(pr) {
             class="${popoverRowCls()}"
             @click="${() => openReadyPicker(pr)}"
           >
-            ${icon('git-pull-request', 'h-3.5 w-3.5')} Klaar voor review
+            ${icon('git-pull-request', 'h-3.5 w-3.5')} ${t('Klaar voor review')}
           </button>`.key('ready-open'),
         ]
       }
       return [
         html`<div data-testid="ready-picker">
-          <p class="px-2.5 py-1 text-[10.5px] font-medium uppercase tracking-wide text-slate-400 dark:text-zinc-500">Kies reviewers</p>
-          ${() => (ui.reviewersLoading ? html`<p class="px-2.5 py-1 text-[11px] text-slate-500 dark:text-zinc-400">Laden…</p>` : '')}
+          <p class="px-2.5 py-1 text-[10.5px] font-medium uppercase tracking-wide text-slate-400 dark:text-zinc-500">${t('Kies reviewers')}</p>
+          ${() => (ui.reviewersLoading ? html`<p class="px-2.5 py-1 text-[11px] text-slate-500 dark:text-zinc-400">${t('Laden…')}</p>` : '')}
           ${() => (ui.reviewersError ? html`<p class="px-2.5 py-1 text-[11px] text-rose-600 dark:text-rose-400" data-testid="ready-error">${ui.reviewersError}</p>` : '')}
           <div class="max-h-48 overflow-auto">
             ${() =>
@@ -1398,7 +1402,7 @@ function readyForReviewSection(pr) {
               (ui.readySubmitting ? 'cursor-not-allowed opacity-60' : '')}"
             @click="${() => submitReady(pr)}"
           >
-            ${icon('check', 'h-3.5 w-3.5')} ${() => (ui.readySubmitting ? 'Bezig…' : 'Zet om naar review')}
+            ${icon('check', 'h-3.5 w-3.5')} ${() => t(ui.readySubmitting ? 'Bezig…' : 'Zet om naar review')}
           </button>
         </div>`.key('ready-picker'),
       ]
@@ -1471,7 +1475,7 @@ function popover(pr) {
           closePopover()
         }}"
       >
-        ${icon('x', 'h-3.5 w-3.5')}<span class="flex-1 truncate">Sluit menu</span
+        ${icon('x', 'h-3.5 w-3.5')}<span class="flex-1 truncate">${t('Sluit menu')}</span
         ><span class="shrink-0 rounded bg-slate-100 dark:bg-zinc-800 px-1.5 py-0.5 font-mono text-[10px] text-slate-400 dark:text-zinc-500"
           >esc</span
         >
@@ -1480,16 +1484,16 @@ function popover(pr) {
         ? html`<div class="contents">
             ${() => (treeSupported(pr) ? (pr.hasGraph ? ingestedActions(pr) : generateAction(pr)) : '')}
             <a href="${pr.url}" target="_blank" rel="noreferrer" class="${popoverRowCls()}">
-              ${icon('external-link', 'h-3.5 w-3.5')} Open op GitHub
+              ${icon('external-link', 'h-3.5 w-3.5')} ${t('Open op GitHub')}
             </a>
             <button type="button" data-testid="copy-url" class="${popoverRowCls()}" @click="${() => copyGithubUrl(pr)}">
               ${() => (ui.copiedFor === prUid(pr) ? icon('check', 'h-3.5 w-3.5') : icon('copy', 'h-3.5 w-3.5'))}
-              ${() => (ui.copiedFor === prUid(pr) ? 'Gekopieerd!' : 'Kopieer GitHub URL')}
+              ${() => t(ui.copiedFor === prUid(pr) ? 'Gekopieerd!' : 'Kopieer GitHub URL')}
             </button>
             ${() =>
               m
                 ? html`<a href="${JIRA_BASE + m[1]}" target="_blank" rel="noreferrer" class="${popoverRowCls()}">
-                    ${icon('external-link', 'h-3.5 w-3.5')} Open Jira-ticket
+                    ${icon('external-link', 'h-3.5 w-3.5')} ${t('Open Jira-ticket')}
                   </a>`
                 : ''}
             ${() => (canRemoveSelf(pr) ? removeReviewerAction(pr) : '')}
@@ -1510,7 +1514,7 @@ function popover(pr) {
 function repoUnavailableAction() {
   return html`
     <button type="button" data-testid="repo-unavailable" disabled class="${popoverRowCls('cursor-not-allowed opacity-60')}">
-      Repo is niet beschikbaar
+      ${t('Repo is niet beschikbaar')}
     </button>
   `
 }
@@ -1630,11 +1634,10 @@ function stackGroup(nodes, sectionOf) {
     <div data-testid="stack">
       <div class="mb-2 mt-10 flex items-center gap-2 first:mt-0">
         <span class="text-slate-500 dark:text-zinc-500">${icon('git-pull-request', 'h-3.5 w-3.5')}</span>
-        <h2 class="text-[13px] font-semibold text-slate-700 dark:text-zinc-200">Gestapelde PR's</h2>
+        <h2 class="text-[13px] font-semibold text-slate-700 dark:text-zinc-200">${t("Gestapelde PR's")}</h2>
         <span class="rounded-full bg-slate-100 dark:bg-zinc-800/80 px-2 py-0.5 text-[11px] text-slate-500 dark:text-zinc-400">${nodes.length}</span>
         <span class="truncate text-[11.5px] text-slate-500 dark:text-zinc-500"
-          >bouwt op <span class="font-mono text-slate-500 dark:text-zinc-400">${root.baseRefName || '?'}</span> — merge van onder naar
-          boven</span
+          >${t('bouwt op')} <span class="font-mono text-slate-500 dark:text-zinc-400">${root.baseRefName || '?'}</span> ${t('— merge van onder naar boven')}</span
         >
       </div>
       ${listBox(nodes.map(({ pr, depth }) => ({ pr, opts: { depth, badge: sectionOf.get(prUid(pr)) } })))}
@@ -1690,9 +1693,10 @@ function headerBlock() {
         <h1 class="text-xl font-semibold text-slate-900 dark:text-zinc-100">Needs your review</h1>
         <p class="mt-1 text-sm text-slate-500 dark:text-zinc-500">
           ${() =>
-            'Pull requests die je aandacht nodig hebben — ' +
-            (state.repo || '…') +
-            (state.generatedFor ? ' · voor ' + state.generatedFor : '')}
+            t('Pull requests die je aandacht nodig hebben — {repo}{forPart}', {
+              repo: state.repo || '…',
+              forPart: state.generatedFor ? t(' · voor {name}', { name: state.generatedFor }) : '',
+            })}
         </p>
       </div>
       <div class="flex items-center gap-2">
@@ -1704,7 +1708,7 @@ function headerBlock() {
             class="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-indigo-400"
             data-testid="running-count-dot"
           ></span>
-          <span>${() => state.runningCount + ' actief'}</span>
+          <span>${() => t('{n} actief', { n: state.runningCount })}</span>
         </span>
         <span class="rounded-full bg-slate-100 dark:bg-zinc-800/80 px-2.5 py-1 text-xs text-slate-500 dark:text-zinc-400"
           >${() => {
@@ -1764,7 +1768,7 @@ function searchBox() {
         data-testid="search"
         autocomplete="off"
         spellcheck="false"
-        placeholder="${() => `Zoek in alle PR's van ${state.repo || ''}… (titel, nummer of auteur; gesloten onderaan)`}"
+        placeholder="${() => t(`Zoek in alle PR's van {repo}… (titel, nummer of auteur; gesloten onderaan)`, { repo: state.repo || '' })}"
         class="w-full rounded-lg border border-slate-300 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-900/60 py-2.5 pl-9 pr-3 text-[13px] text-slate-900 dark:text-zinc-100 outline-none placeholder:text-slate-400 dark:placeholder:text-zinc-600 hover:border-slate-400 dark:hover:border-zinc-600 focus:border-indigo-300 dark:focus:border-indigo-500 focus:ring-1 focus:ring-indigo-200 dark:focus:ring-indigo-500/30"
         @input="${onSearchInput}"
         @keydown="${onSearchKeydown}"
@@ -1797,7 +1801,7 @@ function searchResultsBlock() {
           <div class="mt-6 first:mt-0">
             ${results.length
               ? listBox(results.map((pr) => ({ pr })))
-              : html`<p class="py-10 text-center text-sm text-slate-500 dark:text-zinc-500">Geen resultaten voor “${state.query}”.</p>`}
+              : html`<p class="py-10 text-center text-sm text-slate-500 dark:text-zinc-500">${t('Geen resultaten voor “{query}”.', { query: state.query })}</p>`}
           </div>
         `
       }}
@@ -1823,9 +1827,9 @@ function backToInboxBar(label) {
         class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800"
         @click="${clearPresetView}"
       >
-        ← Terug naar inbox
+        ← ${t('Terug naar inbox')}
       </button>
-      <h2 class="text-[13px] font-semibold text-slate-700 dark:text-zinc-200">${label}</h2>
+      <h2 class="text-[13px] font-semibold text-slate-700 dark:text-zinc-200">${t(label)}</h2>
     </div>
   `
 }
@@ -1865,7 +1869,7 @@ function presetResultsBlock() {
         if (state.presetLoading) return loadingSkeletonList()
         const results = state.presetResults || []
         if (!results.length)
-          return html`<p class="py-10 text-center text-sm text-slate-500 dark:text-zinc-500">Geen PR's voor dit filter.</p>`
+          return html`<p class="py-10 text-center text-sm text-slate-500 dark:text-zinc-500">${t("Geen PR's voor dit filter.")}</p>`
         if (state.activePreset === 'ouder-3-dagen') {
           return html`<div>${authorGroups(results).map((g) => authorGroupBlock(g))}</div>`
         }
@@ -1886,7 +1890,7 @@ function filterMenuButton(key, label) {
     class="flex w-full items-center gap-2 px-4 py-2.5 text-left text-[13px] text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800/40"
     @click="${() => runPreset(key)}"
   >
-    ${icon('git-pull-request', 'h-4 w-4 text-slate-500 dark:text-zinc-500')} ${label}
+    ${icon('git-pull-request', 'h-4 w-4 text-slate-500 dark:text-zinc-500')} ${t(label)}
   </button>`
 }
 
@@ -1901,7 +1905,7 @@ function filterDrawer() {
         <span class="${() => 'inline-flex shrink-0 transition-transform ' + (state.filterOpen ? 'rotate-90' : '')}"
           >${chevronFilled('h-4 w-4 text-slate-500 dark:text-zinc-500')}</span
         >
-        <span class="text-[13px] font-semibold text-slate-700 dark:text-zinc-200">Filters</span>
+        <span class="text-[13px] font-semibold text-slate-700 dark:text-zinc-200">${t('Filters')}</span>
       </button>
       ${() => {
         if (!state.filterOpen) return [html`<span class="hidden"></span>`.key('filter:closed')]
@@ -1959,7 +1963,7 @@ function mainContent() {
         })
         if (!chains.length && state.sections.every((s) => s.prs.length === 0)) {
           out.push(
-            html`<p class="py-10 text-center text-sm text-slate-500 dark:text-zinc-500">Even geen open pull requests.</p>`.key('empty'),
+            html`<p class="py-10 text-center text-sm text-slate-500 dark:text-zinc-500">${t('Even geen open pull requests.')}</p>`.key('empty'),
           )
         }
         return out
@@ -2008,10 +2012,10 @@ function recentItemMeta(r) {
       <div class="flex flex-wrap items-center gap-x-2 gap-y-0.5">
         <span class="font-mono">#${r.pr}</span>
         <span class="text-slate-300 dark:text-zinc-700">·</span>
-        <span>${r.blocks} ${r.blocks === 1 ? 'blok' : 'blokken'} · ${r.files} ${r.files === 1 ? 'bestand' : 'bestanden'}</span>
+        <span>${t(r.blocks === 1 ? '{n} blok' : '{n} blokken', { n: r.blocks })} · ${t(r.files === 1 ? '{n} bestand' : '{n} bestanden', { n: r.files })}</span>
         ${r.updatedAt
           ? html`<span class="text-slate-300 dark:text-zinc-700">·</span
-              ><span title="${r.updatedAt}">Bijgewerkt ${relativeTime(r.updatedAt)}</span>`
+              ><span title="${r.updatedAt}">${t('Bijgewerkt {time}', { time: relativeTime(r.updatedAt) })}</span>`
           : null}
       </div>
       ${stat || branch
@@ -2055,7 +2059,7 @@ function recentItem(r) {
         <h3 class="truncate text-[13.5px] font-semibold text-slate-900 dark:text-zinc-100 group-hover:text-black dark:group-hover:text-white">${r.title || '#' + r.pr}</h3>
         ${recentItemMeta(r)}
       </div>
-      ${chip('open boom', 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 ring-emerald-500/30', '', 'sparkles')}
+      ${chip(t('open boom'), 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 ring-emerald-500/30', '', 'sparkles')}
       ${chevronFilled('h-4 w-4 text-slate-400 dark:text-zinc-600 group-hover:text-slate-600 dark:group-hover:text-zinc-300')}
     </a>
   `.key('recent:' + recentUid(r))
@@ -2072,7 +2076,7 @@ function recentDrawer() {
         <span class="${() => 'inline-flex shrink-0 transition-transform ' + (state.recentOpen ? 'rotate-90' : '')}"
           >${chevronFilled('h-4 w-4 text-slate-500 dark:text-zinc-500')}</span
         >
-        <span class="text-[13px] font-semibold text-slate-700 dark:text-zinc-200">Recent gegenereerd</span>
+        <span class="text-[13px] font-semibold text-slate-700 dark:text-zinc-200">${t('Recent gegenereerd')}</span>
       </button>
       ${() => {
         // Always return a keyed array with a distinct key per branch. The
@@ -2086,7 +2090,7 @@ function recentDrawer() {
         if (state.recentPrs.length === 0)
           return [
             html`<div class="mt-2 rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-900/60 px-4 py-3 text-[12px] text-slate-500 dark:text-zinc-500">
-              Nog niets gegenereerd.
+              ${t('Nog niets gegenereerd.')}
             </div>`.key('recent:empty'),
           ]
         return [
@@ -2120,9 +2124,9 @@ function problemCount() {
 // (never colour alone: the count and the word carry the meaning).
 function problemsToggleText() {
   const n = problemCount()
-  if (!state.problemsLoaded) return 'Mislukte taken'
-  if (n === 0) return 'Mislukte taken · geen'
-  return 'Mislukte taken · ' + n
+  if (!state.problemsLoaded) return t('Mislukte taken')
+  if (n === 0) return t('Mislukte taken · geen')
+  return t('Mislukte taken · {n}', { n })
 }
 
 // problemMark/PROBLEM_ROW_CLASS/problemPrChip/problemCommentLine/baseName/
@@ -2157,7 +2161,7 @@ function problemsDrawer() {
               data-testid="problems-empty"
               class="mt-2 rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-900/60 px-4 py-3 text-[12px] text-slate-500 dark:text-zinc-500"
             >
-              Geen mislukte taken sinds de server startte.
+              ${t('Geen mislukte taken sinds de server startte.')}
             </div>`.key('problems:empty'),
           ]
         return [
@@ -2254,7 +2258,7 @@ async function loadInbox() {
     // both sources failed — show the error card below
   }
   if (gen !== loadGen) return
-  state.error = 'Kan de inbox niet laden — probeer het later opnieuw.'
+  state.error = t('Kan de inbox niet laden — probeer het later opnieuw.')
   state.loading = false
 }
 
@@ -2950,7 +2954,7 @@ let omenu = reactive({ query: '', sel: 0, sub: null, mode: 'overview', commands:
 const OVERVIEW_COMMANDS = []
 
 function overviewCommands() {
-  return [{ id: 'close-menu', label: 'Sluit menu', hint: 'esc', run: () => closeMenu() }, ...OVERVIEW_COMMANDS]
+  return [{ id: 'close-menu', label: t('Sluit menu'), hint: 'esc', run: () => closeMenu() }, ...OVERVIEW_COMMANDS]
 }
 
 function resolveOverviewCommands(query) {

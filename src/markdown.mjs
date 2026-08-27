@@ -32,6 +32,7 @@
 import snarkdown from './vendor/snarkdown.js'
 import { highlightForLang } from './Block.mjs'
 import { highlightMentions } from './mentions.mjs'
+import { t } from './i18n.mjs'
 
 function escapeHtml(str) {
   return String(str)
@@ -79,7 +80,7 @@ function isSuggestionLang(lang) {
 // `annotateFenceNumbers` puts in front of the same fence for Claude's own
 // copy of the context — so the two can never drift apart in wording.
 function fenceLabel(counter, isSuggestion) {
-  return isSuggestion ? `Suggestie ${counter}` : `Codeblok ${counter}`
+  return isSuggestion ? t('Suggestie {n}', { n: counter }) : t('Codeblok {n}', { n: counter })
 }
 
 // extractCodeFences renders each fence to a small card: a slim header with

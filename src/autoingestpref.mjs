@@ -32,6 +32,7 @@
 // GET /api/autoingestpref — a plain read of the same module, never a direct
 // write from here.
 import { reactive, html } from './vendor/arrow.js'
+import { t } from './i18n.mjs'
 
 export const autoIngestPref = reactive({ mode: 'own', runId: null })
 
@@ -115,7 +116,7 @@ export function autoIngestPrefToggleButton(cls = '') {
     <button
       type="button"
       data-testid="auto-ingest-pref-toggle"
-      title="${() => MODE_LABEL[autoIngestPref.mode] + ' (klik om te wisselen)'}"
+      title="${() => t('{label} (klik om te wisselen)', { label: t(MODE_LABEL[autoIngestPref.mode]) })}"
       class="${() =>
         'inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[11px] font-medium ring-1 ring-inset transition-colors ' +
         (autoIngestPref.mode === 'off'
@@ -139,7 +140,7 @@ export function autoIngestPrefToggleButton(cls = '') {
       >
         <path d="${() => MODE_ICON[autoIngestPref.mode]}"></path>
       </svg>
-      <span>${() => MODE_LABEL[autoIngestPref.mode]}</span>
+      <span>${() => t(MODE_LABEL[autoIngestPref.mode])}</span>
     </button>
   `
 }

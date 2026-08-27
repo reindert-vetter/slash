@@ -29,6 +29,7 @@
 // "zero attribute mutations per navigation step" contract of
 // tests/navigate.spec.mjs is unaffected.
 import { reactive, html } from './vendor/arrow.js'
+import { t } from './i18n.mjs'
 
 const STORAGE_KEY = 'debugMode'
 
@@ -259,9 +260,9 @@ export function debugModeToggleButton(cls = '') {
       type="button"
       data-testid="debug-mode-toggle"
       title="${() =>
-        'Debug mode: ' +
-        (debugMode.enabled ? 'aan' : 'uit') +
-        ' — legt navigatie en acties vast in data/debug-log.jsonl (klik om te wisselen)'}"
+        t('Debug mode: {state} — legt navigatie en acties vast in data/debug-log.jsonl (klik om te wisselen)', {
+          state: t(debugMode.enabled ? 'aan' : 'uit'),
+        })}"
       class="${() =>
         'inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[11px] font-medium ring-1 ring-inset transition-colors ' +
         (debugMode.enabled
@@ -277,7 +278,7 @@ export function debugModeToggleButton(cls = '') {
           'inline-block h-2 w-2 shrink-0 rounded-full ' +
           (debugMode.enabled ? 'bg-amber-500' : 'border border-slate-400 dark:border-zinc-500')}"
       ></span>
-      <span>${() => (debugMode.enabled ? 'Debug mode aan' : 'Debug mode uit')}</span>
+      <span>${() => t(debugMode.enabled ? 'Debug mode aan' : 'Debug mode uit')}</span>
     </button>
   `
 }

@@ -130,6 +130,9 @@ that set stays small on purpose; a new topic file belongs in `.claude/docs/`.
   keyboard-navigable row list, and the per-setting source/write-path table
   (including the new `app_settings` tracker for mention aliases and
   praise-words).
+  Also the **per-type language settings** (`lang_pref` tracker: interface,
+  AI explanations, GitHub replies — code/commits are always English) and the
+  `t()` interface-language layer (`src/i18n.mjs`, `src/i18n/en.mjs`).
 
 **Go backend**
 

@@ -24,6 +24,7 @@
 // onKeydown consults FIRST, so the overlay owns the keyboard completely while
 // it is open.
 import { reactive, html, watch } from './vendor/arrow.js'
+import { t } from './i18n.mjs'
 
 // state/sendAction are injected once by home.mjs (initWorkDirOverlay) so the
 // exported isOpen/handleKeydown hooks stay argument-free at the call site,
@@ -120,12 +121,12 @@ function rows() {
   if (st && st.checkout && st.checkout.stashPending) {
     out.push({
       key: 'restore',
-      label: 'Nu terugzetten (eerder opgeslagen wijziging)',
+      label: t('Nu terugzetten (eerder opgeslagen wijziging)'),
       run: () => act('checkoutRestoreStash'),
     })
   }
-  out.push({ key: 'choose', label: 'Andere werkmap kiezen', run: () => act('checkoutRelist') })
-  out.push({ key: 'off', label: 'Uit (geen werkmap koppelen)', run: () => act('checkoutOff') })
+  out.push({ key: 'choose', label: t('Andere werkmap kiezen'), run: () => act('checkoutRelist') })
+  out.push({ key: 'off', label: t('Uit (geen werkmap koppelen)'), run: () => act('checkoutOff') })
   return out
 }
 
@@ -193,8 +194,10 @@ export function handleWorkDirOverlayKeydown(e) {
 // else". Always a string (never a template), so the slot's shape is stable.
 function currentDirLine() {
   const c = st && st.checkout
-  if (!c || !c.dir) return 'Nog geen werkmap gekoppeld.'
-  return 'Nu: ' + c.dir + (c.branch ? ' (branch ' + c.branch + ')' : '')
+  if (!c || !c.dir) return t('Nog geen werkmap gekoppeld.')
+  return c.branch
+    ? t('Nu: {dir} (branch {branch})', { dir: c.dir, branch: c.branch })
+    : t('Nu: {dir}', { dir: c.dir })
 }
 
 function overlayPanel() {
@@ -209,7 +212,7 @@ function overlayPanel() {
         @click="${(e) => e && e.stopPropagation()}"
       >
         <div class="border-b border-slate-100 dark:border-zinc-800 px-4 py-3">
-          <p class="text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500">Werkmap voor deze PR</p>
+          <p class="text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500">${t('Werkmap voor deze PR')}</p>
           <p class="mt-1 text-[13px] text-slate-700 dark:text-zinc-300" data-testid="workdir-overlay-body">
             ${() => (decision() ? decision().body || '' : '')}
           </p>
@@ -241,8 +244,8 @@ function overlayPanel() {
             )}
         </ul>
         <div class="flex items-center justify-between border-t border-slate-100 dark:border-zinc-800 px-4 py-2 text-[11px] text-slate-500 dark:text-zinc-400">
-          <span data-testid="workdir-overlay-hint">↑↓ kiezen · Enter bevestigen · Esc sluiten</span>
-          <span data-testid="workdir-overlay-status">${() => (wd.busy ? 'Bezig…' : '')}</span>
+          <span data-testid="workdir-overlay-hint">${t('↑↓ kiezen · Enter bevestigen · Esc sluiten')}</span>
+          <span data-testid="workdir-overlay-status">${() => (wd.busy ? t('Bezig…') : '')}</span>
         </div>
       </div>
     </div>

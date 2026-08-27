@@ -23,6 +23,7 @@ import { renderMarkdown, hardBreaks } from './markdown.mjs'
 import { autoGrowTextarea, resetTextareaHeight } from './textareaAutoGrow.mjs'
 import { updateScrollHints } from './scrollFade.mjs'
 import { scrollHint } from './Block.mjs'
+import { t } from './i18n.mjs'
 
 // Claude has no GitHub login/avatar of its own — a fixed, non-photo identity
 // (avatarHTML's own initials-circle fallback, since avatarUrl is empty). Kept
@@ -82,7 +83,7 @@ const CLAUDE_MENTIONS = [
 // header, empty-state text and placeholder of one column all agree, and a
 // re-render (e.g. a new message arriving) never makes the label jump around
 // mid-conversation.
-const claudeMention = CLAUDE_MENTIONS[Math.floor(Math.random() * CLAUDE_MENTIONS.length)]
+const claudeMention = t(CLAUDE_MENTIONS[Math.floor(Math.random() * CLAUDE_MENTIONS.length)])
 
 // claudeMessageBody mirrors RelatedPanel.mjs's commentBody: a getter of a
 // safe HTML string (via the same renderMarkdown used for comment bodies/the
@@ -203,7 +204,7 @@ const TOOL_VERB = {
 // slow. Only for chatPhaseStarting (waiting on the CLI/API): chatPhasePreparing
 // is local prep bounded to a few seconds and never needs this.
 const LONG_WAIT_SECONDS = 30
-const LONG_WAIT_SUFFIX = 'het is nu druk, hij blijft proberen'
+const LONG_WAIT_SUFFIX = t('het is nu druk, hij blijft proberen')
 
 // claudeStatusText — the one status line. `p` is null while a turn is in
 // flight but no event has landed yet (the very first moment after sending),
@@ -212,15 +213,15 @@ const LONG_WAIT_SUFFIX = 'het is nu druk, hij blijft proberen'
 // shared comment+Claude footer instead (see CommentClaudeFooter in
 // RelatedPanel.mjs) — same text/testid (`claude-chat-status`), just relocated.
 export function claudeStatusText(p, elapsed) {
-  if (!p) return 'Claude denkt…'
+  if (!p) return t('Claude denkt…')
   let base
   if (p.phase === 'tool' && p.tool) {
-    const verb = TOOL_VERB[p.tool] || ('gebruikt ' + p.tool)
-    base = 'Claude ' + verb + (p.detail ? ' ' + p.detail : '')
+    const verb = TOOL_VERB[p.tool] ? t(TOOL_VERB[p.tool]) : t('gebruikt {tool}', { tool: p.tool })
+    base = t('Claude {verb}{detail}', { verb, detail: p.detail ? ' ' + p.detail : '' })
   } else {
-    base = PHASE_LABEL[p.phase] || 'Claude denkt…'
+    base = t(PHASE_LABEL[p.phase] || 'Claude denkt…')
   }
-  if (!p.running) base = 'Claude is klaar — bezig met opslaan…'
+  if (!p.running) base = t('Claude is klaar — bezig met opslaan…')
   let text = elapsed > 0 ? base + ' · ' + elapsed + 's' : base
   if (p.running && p.phase === 'starting' && elapsed >= LONG_WAIT_SECONDS) {
     text += ' · ' + LONG_WAIT_SUFFIX
@@ -239,7 +240,7 @@ export function claudeStatusText(p, elapsed) {
 // ('{"type":"need_w…') and should already read as the icon below rather than
 // flashing raw JSON fragments.
 const NEED_WRITE_PARTIAL_PREFIX = '{"type":"need_write"'
-const NEED_WRITE_LABEL = 'Vraagt schrijftoegang'
+const NEED_WRITE_LABEL = t('Vraagt schrijftoegang')
 
 // claudeNeedWritePill — shown INSTEAD of the raw directive JSON while the
 // live partial answer is (still forming into, or already) the strict
@@ -320,12 +321,12 @@ function claudeQueuedBubbles(view) {
       <div class="flex flex-col items-end gap-0.5" data-testid="claude-queued">
         <div class="flex items-center gap-2 py-0.5">
           <span class="whitespace-nowrap text-[11px] font-medium leading-5 text-slate-600 dark:text-zinc-400">
-            Jij
+            ${t('Jij')}
           </span>
           <span
             class="inline-flex shrink-0 items-center gap-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-medium text-slate-600 dark:bg-zinc-800 dark:text-zinc-300"
             data-testid="claude-queued-badge"
-            >⏳ in de wachtrij</span
+            >⏳ ${t('in de wachtrij')}</span
           >
         </div>
         <div
@@ -384,7 +385,7 @@ function chatKindBadge(msg) {
         <circle cx="11" cy="11" r="7"></circle>
         <path d="m21 21-4.3-4.3"></path>
       </svg>
-      automatische controle van kilo-opmerking</span
+      ${t('automatische controle van kilo-opmerking')}</span
     >`
   }
   if (msg.kind === 'directory_decision') {
@@ -404,7 +405,7 @@ function chatKindBadge(msg) {
       >
         <path d="M3 7a2 2 0 0 1 2-2h3l2 2h9a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"></path>
       </svg>
-      keuze over werkmap nodig</span
+      ${t('keuze over werkmap nodig')}</span
     >`
   }
   if (msg.kind === 'action') {
@@ -424,7 +425,7 @@ function chatKindBadge(msg) {
       >
         <path d="M20 6 9 17l-5-5"></path>
       </svg>
-      actie in commentthread</span
+      ${t('actie in commentthread')}</span
     >`
   }
   if (msg.kind === 'draft_reply') {
@@ -444,7 +445,7 @@ function chatKindBadge(msg) {
       >
         <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"></path>
       </svg>
-      concept in comment-veld gezet</span
+      ${t('concept in comment-veld gezet')}</span
     >`
   }
   if (msg.kind === 'retrying') {
@@ -467,7 +468,7 @@ function chatKindBadge(msg) {
         <path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path>
         <path d="M3 21v-5h5"></path>
       </svg>
-      nieuwe poging</span
+      ${t('nieuwe poging')}</span
     >`
   }
   if (msg.kind === 'error') {
@@ -489,7 +490,7 @@ function chatKindBadge(msg) {
         <line x1="12" y1="9" x2="12" y2="13"></line>
         <line x1="12" y1="17" x2="12.01" y2="17"></line>
       </svg>
-      foutmelding</span
+      ${t('foutmelding')}</span
     >`
   }
   if (msg.kind === 'cancelled') {
@@ -515,7 +516,7 @@ function chatKindBadge(msg) {
       >
         <rect x="6" y="6" width="12" height="12" rx="1"></rect>
       </svg>
-      afgebroken</span
+      ${t('afgebroken')}</span
     >`
   }
   if (msg.kind === 'cleanup_choice') {
@@ -537,7 +538,7 @@ function chatKindBadge(msg) {
         <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"></path>
         <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
       </svg>
-      opruimen na afbreken</span
+      ${t('opruimen na afbreken')}</span
     >`
   }
   return ''
@@ -608,7 +609,7 @@ function claudeNoShellPill(msg) {
       <circle cx="12" cy="12" r="10"></circle>
       <path d="m4.9 4.9 14.2 14.2"></path>
     </svg>
-    Geen bestandstoegang</span
+    ${t('Geen bestandstoegang')}</span
   >`
 }
 
@@ -673,7 +674,7 @@ function claudeBubble(msg, i, total, claudePos, optionSel, anchorHint, onSend, o
       <div class="flex items-center gap-2 py-0.5">
         ${mine ? '' : avatarHTML(CLAUDE_NAME, '', 'h-5 w-5')}
         <span class="whitespace-nowrap text-[11px] font-medium leading-5 text-slate-600 dark:text-zinc-400">
-          ${mine ? 'Jij' : CLAUDE_NAME}
+          ${mine ? t('Jij') : CLAUDE_NAME}
         </span>
         ${() => chatKindBadge(msg)} ${() => claudeModelPill(msg)} ${() => claudeNoShellPill(msg)}
       </div>
@@ -731,7 +732,7 @@ function claudeBubble(msg, i, total, claudePos, optionSel, anchorHint, onSend, o
                 <path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path>
                 <path d="M3 21v-5h5"></path>
               </svg>
-              Opnieuw proberen
+              ${t('Opnieuw proberen')}
             </button>`
           : ''}
     </div>
@@ -762,7 +763,7 @@ function claudeBubble(msg, i, total, claudePos, optionSel, anchorHint, onSend, o
 // label, but a title/aria-label names it), shown by claudeChatColumn while
 // view.claudePos() === 0 && !view.pinned(). `onClick` is
 // callbacks.onJumpToBottom (RelatedPanel.mjs's jumpToClaudeThreadBottom).
-const CLAUDE_SCROLL_TO_BOTTOM_TITLE = 'Naar recente berichten'
+const CLAUDE_SCROLL_TO_BOTTOM_TITLE = t('Naar recente berichten')
 function claudeScrollToRecentButton(onClick) {
   return html`
     <button
@@ -800,7 +801,7 @@ function claudeSendError(view) {
         <line x1="12" y1="9" x2="12" y2="13"></line>
         <line x1="12" y1="17" x2="12.01" y2="17"></line>
       </svg>
-      <span><span class="font-semibold">Niet verstuurd</span> — ${text}</span>
+      <span><span class="font-semibold">${t('Niet verstuurd')}</span> — ${text}</span>
     </p>
   `
 }
@@ -887,7 +888,7 @@ function claudeMenuButton(onOpenMenu) {
   return html`
     <button
       type="button"
-      title="Claude-menu"
+      title="${t('Claude-menu')}"
       data-testid="claude-chat-menu"
       class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-indigo-600 dark:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-indigo-400"
       @click="${(e) => {
@@ -959,14 +960,14 @@ export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly) {
           if (view.status() === 'error') {
             return [
               html`<p class="text-xs text-rose-600 dark:text-rose-400" data-testid="claude-chat-error">
-                Kon geen Claude-gesprek starten. Probeer het opnieuw.
+                ${t('Kon geen Claude-gesprek starten. Probeer het opnieuw.')}
               </p>`.key('claude:error'),
             ]
           }
           if (total === 0) {
             return [
               html`<p class="pr-7 text-xs text-slate-400 dark:text-zinc-500" data-testid="claude-chat-empty">
-                Nog geen gesprek — typ hieronder een vraag voor ${claudeMention}.
+                ${t('Nog geen gesprek — typ hieronder een vraag voor {mention}.', { mention: claudeMention })}
               </p>`.key('claude:empty'),
             ]
           }
@@ -1010,7 +1011,7 @@ export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly) {
           rows="1"
           class="min-h-[2.25rem] flex-1 resize-none rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 px-2.5 py-1.5 text-xs leading-6 text-slate-700 dark:text-zinc-300 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-300 dark:focus:ring-indigo-500/40"
           placeholder="${claudeMention + '…'}"
-          title="Enter verstuurt · Shift+Enter nieuwe regel"
+          title="${t('Enter verstuurt · Shift+Enter nieuwe regel')}"
           data-testid="claude-chat-compose"
           @focus="${() => callbacks.onFocus()}"
           @input="${(e) => autoGrowTextarea(e.target)}"
@@ -1080,7 +1081,7 @@ export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly) {
             }
           }}"
         >
-          Stuur
+          ${t('Stuur')}
         </button>
               </div>
             </div>`}

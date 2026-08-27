@@ -11,6 +11,7 @@
 
 import { html } from './vendor/arrow.js'
 import { reactive, watch } from './vendor/arrow.js'
+import { t } from './i18n.mjs'
 import { highlight, blockLabel, codeGrowthChars, scrollHint } from './Block.mjs'
 import { translationValueView } from './translationDiff.mjs'
 import { statusInfo, categoryClass, isLocalAiWarning } from './BlockList.mjs'
@@ -1598,7 +1599,7 @@ function lastReplyNote(c) {
   if (!last || !last.author || last.author === 'reviewer') return ''
   // Their real first name once known, the login otherwise — same rule as every
   // other author line (see identityOf/displayNameOf in avatar.mjs).
-  return ' · ' + displayNameOf(last.author) + ' reageerde'
+  return t(' · {name} reageerde', { name: displayNameOf(last.author) })
 }
 
 // reactionCount is the number of bubbles the thread renders (opening + reactions)
@@ -1728,7 +1729,7 @@ export function jumpToClaudeThreadBottom() {
 // copy of this component for claude-chat-thread — kept file-local rather
 // than shared, since ClaudeChat.mjs deliberately never imports this file
 // back (see its own header comment).
-const SCROLL_TO_BOTTOM_TITLE = 'Naar recente berichten'
+const SCROLL_TO_BOTTOM_TITLE = t('Naar recente berichten')
 function scrollToRecentButton(onClick, testid) {
   return html`
     <button
@@ -2320,12 +2321,14 @@ function applyChatProgress(commentId, p) {
 // colourblind rule in .claude/rules/conventions.md.
 function sendErrorText(status) {
   if (status === 400) {
-    return 'Versturen geweigerd — de server kent deze actie niet. Herstart slash (de server draait een oudere versie dan deze pagina) en laad opnieuw.'
+    return t(
+      'Versturen geweigerd — de server kent deze actie niet. Herstart slash (de server draait een oudere versie dan deze pagina) en laad opnieuw.',
+    )
   }
   if (status === 409) {
-    return 'Dit gesprek is op de server afgesloten en neemt geen berichten meer aan. Wis het gesprek en begin opnieuw.'
+    return t('Dit gesprek is op de server afgesloten en neemt geen berichten meer aan. Wis het gesprek en begin opnieuw.')
   }
-  return 'Versturen mislukt (HTTP ' + status + '). Probeer het opnieuw.'
+  return t('Versturen mislukt (HTTP {status}). Probeer het opnieuw.', { status })
 }
 
 async function sendClaudeMessage(text, action = '', context = '', target = null) {
@@ -2369,7 +2372,7 @@ async function sendClaudeMessage(text, action = '', context = '', target = null)
     // down, connection dropped). Previously uncaught, so it escaped as an
     // unhandled rejection out of the click handler — again with nothing
     // visible in the column.
-    setTurnSendError(commentId, 'Geen verbinding met de server — draait slash nog?')
+    setTurnSendError(commentId, t('Geen verbinding met de server — draait slash nog?'))
   } finally {
     setTurnBusy(commentId, false)
     // Also nudges the ticker on: a turn that ends via this Signal round-trip
@@ -2668,12 +2671,13 @@ export async function convertClaudeAnchorToComment() {
     prefillField('[data-testid=message-edit-compose]', cc.summary)
     return
   }
-  prefillField('[data-testid=message-edit-compose]', 'Claude schrijft een samenvatting…')
+  const summarizingPlaceholder = t('Claude schrijft een samenvatting…')
+  prefillField('[data-testid=message-edit-compose]', summarizingPlaceholder)
   await requestChatSummary(c.id, cc.messages.length)
   await pollChatSummary(c.id, want)
   if (want !== focusToken) return
   const el = document.querySelector('[data-testid=message-edit-compose]')
-  if (!el || el.value.trim() !== 'Claude schrijft een samenvatting…') return // reviewer already started typing
+  if (!el || el.value.trim() !== summarizingPlaceholder) return // reviewer already started typing
   if (cc.summaryStatus === 'done' && cc.summary) {
     prefillField('[data-testid=message-edit-compose]', cc.summary)
   } else {
@@ -2713,8 +2717,9 @@ async function refreshChatShadowWarning(pr, commentId) {
     const json = await res.json()
     if (cc.commentId !== commentId) return // stale — the reviewer switched conversations meanwhile
     if (json.exists && (json.dirty || json.ahead)) {
-      shadowWarning =
-        'Let op: er staat nog niet-gepushte Claude-code in de shadow-worktree van dit gesprek — die gaat verloren bij het wissen.'
+      shadowWarning = t(
+        'Let op: er staat nog niet-gepushte Claude-code in de shadow-worktree van dit gesprek — die gaat verloren bij het wissen.',
+      )
     }
   } catch (_) {
     // keep '' — a failed check just means no extra warning line
@@ -3572,7 +3577,7 @@ function claudeChatView() {
     anchorHint: () => {
       const c = cs.list.find((x) => x.id === cc.commentId)
       if (!c || !c.line) return ''
-      return (GRAN_LABEL[c.gran] || 'deze context') + ' · regel ' + c.line
+      return t('{label} · regel {n}', { label: t(GRAN_LABEL[c.gran] || 'deze context'), n: c.line })
     },
     // The live turn: null when nothing is running. See ccProgress.
     progress: () => ccProgress(),
@@ -3763,8 +3768,8 @@ export function selectHighlightedClaudeOption(state, commentTarget) {
 // such. Returns '' when there is nothing to report — the caller hides the
 // whole footer in that case.
 function commentFooterText() {
-  if (cs.busy) return 'Bezig…'
-  if (cs.replySent) return 'Verstuurd'
+  if (cs.busy) return t('Bezig…')
+  if (cs.replySent) return t('Verstuurd')
   return ''
 }
 
@@ -3995,7 +4000,7 @@ export function hasCommentClaudeFooter() {
 function claudeQueueNote() {
   const n = claudeChatView().queued().length
   if (n === 0) return ''
-  return ' · nog ' + n + (n === 1 ? ' bericht' : ' berichten') + ' in de wachtrij'
+  return n === 1 ? t(' · nog 1 bericht in de wachtrij') : t(' · nog {n} berichten in de wachtrij', { n })
 }
 
 // CommentClaudeFooter — ONE shared status line below both the comment and
@@ -4050,28 +4055,28 @@ export function commentClaudeShortcutHints() {
   switch (cs.focus) {
     case 'comment':
       return [
-        { key: '→', label: 'Claude' },
-        { key: 'Enter', label: 'menu' },
-        { key: 'Shift+Enter', label: 'nieuwe regel' },
+        { key: '→', label: t('Claude') },
+        { key: 'Enter', label: t('menu') },
+        { key: 'Shift+Enter', label: t('nieuwe regel') },
       ]
     case 'thread':
       return [
-        { key: '→', label: 'Claude' },
-        { key: '←', label: 'terug' },
-        { key: 'Enter', label: 'menu' },
-        { key: 'Shift+Enter', label: 'nieuwe regel' },
+        { key: '→', label: t('Claude') },
+        { key: '←', label: t('terug') },
+        { key: 'Enter', label: t('menu') },
+        { key: 'Shift+Enter', label: t('nieuwe regel') },
       ]
     case 'claude':
       return [
-        { key: '←', label: 'terug' },
-        { key: 'Enter', label: 'versturen' },
-        { key: 'Shift+Enter', label: 'nieuwe regel' },
+        { key: '←', label: t('terug') },
+        { key: 'Enter', label: t('versturen') },
+        { key: 'Shift+Enter', label: t('nieuwe regel') },
       ]
     case 'new':
       return [
-        { key: 'Enter', label: 'plaatsen' },
-        { key: 'Shift+Enter', label: 'nieuwe regel' },
-        { key: '→', label: 'naar Claude' },
+        { key: 'Enter', label: t('plaatsen') },
+        { key: 'Shift+Enter', label: t('nieuwe regel') },
+        { key: '→', label: t('naar Claude') },
       ]
     default:
       return []
@@ -4112,10 +4117,10 @@ function claudeTaskRow(c, i) {
         >${() => (done() ? '✓' : '')}</span
       >
       <span class="truncate font-medium text-slate-600 dark:text-zinc-300">
-        ${() => (active() ? '› ' : '') + (otherTaskTitleFor(c) || '(leeg comment)')}
+        ${() => (active() ? '› ' : '') + (otherTaskTitleFor(c) || t('(leeg comment)'))}
       </span>
       <span class="shrink-0 truncate text-slate-400 dark:text-zinc-500">
-        ${() => (done() ? 'Klaar' : claudeStatusText(turnProgress(c.id), 0))}
+        ${() => (done() ? t('Klaar') : claudeStatusText(turnProgress(c.id), 0))}
       </span>
     </button>
   `.key('claude-task:' + c.id)
@@ -4192,10 +4197,10 @@ export function CommentClaudeFooter(commentId = '', opts = {}) {
                           type="button"
                           class="shrink-0 rounded-md border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-600 hover:bg-slate-50 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-300 dark:hover:bg-zinc-800"
                           data-testid="claude-chat-cancel"
-                          title="Stop deze Claude-beurt"
+                          title="${t('Stop deze Claude-beurt')}"
                           @click="${() => cancelClaudeTurn()}"
                         >
-                          Stop
+                          ${t('Stop')}
                         </button>
                       </span>`
                     : ''}
@@ -4229,7 +4234,7 @@ export function CommentClaudeFooter(commentId = '', opts = {}) {
                           data-testid="claude-other-tasks"
                         >
                           <span class="text-[10px] font-medium text-slate-400 dark:text-zinc-500">
-                            Ook bezig elders in deze PR:
+                            ${() => t('Ook bezig elders in deze PR:')}
                           </span>
                           ${tasks.map((c, i) => claudeTaskRow(c, i))}
                         </div>
@@ -6041,8 +6046,10 @@ function rangeCommentPrefix(items) {
   const MAX_LISTED = 5
   const names = items.slice(0, MAX_LISTED).map((b) => b.label || b.file || '?')
   let list = names.join(', ')
-  if (items.length > MAX_LISTED) list += ` en ${items.length - MAX_LISTED} meer`
-  return `_Comment over ${items.length} ${items.length === 1 ? 'blok' : 'blokken'}: ${list}_\n\n`
+  if (items.length > MAX_LISTED) list += t(' en {n} meer', { n: items.length - MAX_LISTED })
+  return items.length === 1
+    ? t('_Comment over {n} blok: {list}_\n\n', { n: items.length, list })
+    : t('_Comment over {n} blokken: {list}_\n\n', { n: items.length, list })
 }
 export async function placeComment(state, commentTarget, opts = {}) {
   const b = state && state.blocks && state.blocks[state.selected]
@@ -6252,7 +6259,7 @@ export function composeTargetHint(target) {
       data-testid="comment-target"
     >
       <div class="flex items-center gap-1.5 text-indigo-600 dark:text-indigo-400">
-        <span class="font-medium">${() => GRAN_LABEL[target.gran] || target.gran}</span>
+        <span class="font-medium">${() => t(GRAN_LABEL[target.gran] || target.gran)}</span>
         <span class="text-indigo-300 dark:text-indigo-500">·</span>
         <span class="truncate font-mono font-semibold">${() => target.label}</span>
       </div>
@@ -6699,7 +6706,7 @@ function blockWideBadge(c) {
       <rect x="3" y="14" width="7" height="7"></rect>
       <rect x="14" y="14" width="7" height="7"></rect>
     </svg>
-    Geldt voor het hele blok</span
+    ${t('Geldt voor het hele blok')}</span
   >`
 }
 
@@ -6721,7 +6728,7 @@ function commentStatusMark(c, extraCls) {
   return html`<span
     class="${'shrink-0 text-xs font-bold leading-none text-emerald-600 dark:text-emerald-400 ' + (extraCls || '')}"
     data-testid="comment-resolved-mark"
-    title="Opgelost"
+    title="${t('Opgelost')}"
     >✓</span
   >`
 }
@@ -6735,7 +6742,7 @@ function sourceBadge(c) {
   return html`<span
     class="shrink-0 rounded-full bg-slate-200/70 px-1.5 py-0.5 text-[9px] font-medium text-slate-600 dark:bg-zinc-800 dark:text-zinc-400"
     data-testid="comment-source"
-    >bron: github</span
+    >${t('bron: github')}</span
   >`
 }
 
@@ -6766,7 +6773,7 @@ function aiWarningBadge(c) {
       <line x1="12" y1="9" x2="12" y2="13"></line>
       <line x1="12" y1="17" x2="12.01" y2="17"></line>
     </svg>
-    AI-risicowaarschuwing</span
+    ${t('AI-risicowaarschuwing')}</span
   >`
 }
 
@@ -6796,8 +6803,8 @@ function isStaleAnchor(c) {
 // top) — same rule as the ✓ status mark, see conventions.md.
 function staleAnchorBadge(c) {
   if (!c) return ''
-  const label = c.anchorState === 'orphan' ? 'verouderd — code verdwenen' : ''
-  const unpinned = isStaleAnchor(c) ? 'verouderd — regel gewijzigd' : ''
+  const label = c.anchorState === 'orphan' ? t('verouderd — code verdwenen') : ''
+  const unpinned = isStaleAnchor(c) ? t('verouderd — regel gewijzigd') : ''
   const text = label || unpinned
   if (!text) return ''
   return html`<span
@@ -6831,7 +6838,7 @@ function sendFailedBadge(key, label) {
   return html`<span
     class="inline-flex shrink-0 items-center rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-700 dark:bg-amber-500/15 dark:text-amber-300"
     data-testid="comment-send-failed"
-    >${label || 'verzenden mislukt — probeer opnieuw'}</span
+    >${label || t('verzenden mislukt — probeer opnieuw')}</span
   >`
 }
 
@@ -7025,7 +7032,7 @@ function editingBubble(c, msg) {
           disabled="${() => editState.busy}"
           @click="${() => sendMessageEdit(c)}"
         >
-          Opslaan
+          ${t('Opslaan')}
         </button>
         <button
           type="button"
@@ -7033,7 +7040,7 @@ function editingBubble(c, msg) {
           data-testid="message-edit-cancel"
           @click="${() => cancelEditMessage()}"
         >
-          Annuleer
+          ${t('Annuleer')}
         </button>
       </div>
     </div>
@@ -7114,7 +7121,7 @@ function viewingBubble(c, r, i, total, isActive, bare, readOnly) {
                     <span
                       class="whitespace-nowrap text-[11px] font-medium italic leading-5 text-slate-500 dark:text-zinc-400"
                       data-testid="reaction-author"
-                      >Claude gesprek</span
+                      >${t('Claude gesprek')}</span
                     >
                   </span>
                 `
@@ -7124,7 +7131,7 @@ function viewingBubble(c, r, i, total, isActive, bare, readOnly) {
                     <span
                       class="whitespace-nowrap text-[11px] font-medium leading-5 text-slate-600 dark:text-zinc-400"
                       data-testid="reaction-author"
-                      >${who.name || 'onbekend'}</span
+                      >${who.name || t('onbekend')}</span
                     >
                   </span>
                 `}
@@ -7134,7 +7141,7 @@ function viewingBubble(c, r, i, total, isActive, bare, readOnly) {
                 type="button"
                 class="text-slate-400 hover:text-indigo-600 dark:text-zinc-600 dark:hover:text-indigo-400"
                 data-testid="reaction-edit"
-                title="Bewerk bericht"
+                title="${t('Bewerk bericht')}"
                 @click="${() => startEditMessage(c, r)}"
               >
                 ${editPencilIcon()}
@@ -7258,14 +7265,14 @@ function pendingCommentBubble(p) {
       class="mx-1 flex items-start gap-2 rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50/70 dark:bg-zinc-800/40 px-2.5 py-2 opacity-80"
       data-testid="comment-item-pending"
     >
-      <span class="mt-1.5 h-2 w-2 shrink-0 animate-pulse rounded-full bg-indigo-400" aria-hidden="true" title="Bezig met plaatsen…"></span>
+      <span class="mt-1.5 h-2 w-2 shrink-0 animate-pulse rounded-full bg-indigo-400" aria-hidden="true" title="${t('Bezig met plaatsen…')}"></span>
       <span class="flex min-w-0 flex-col gap-0.5">
         <span class="flex min-w-0 items-center gap-2">
           ${avatarHTML(who.name, who.avatarUrl, 'h-4 w-4')}
-          <span class="truncate text-[11px] font-medium leading-5 text-slate-600 dark:text-zinc-400">${who.name || 'Jij'}</span>
+          <span class="truncate text-[11px] font-medium leading-5 text-slate-600 dark:text-zinc-400">${who.name || t('Jij')}</span>
         </span>
         <span class="line-clamp-3 [overflow-wrap:anywhere] text-xs font-medium text-slate-800 dark:text-zinc-200">${p.body}</span>
-        <span class="text-[11px] leading-snug text-slate-500 dark:text-zinc-500">Bezig met plaatsen…</span>
+        <span class="text-[11px] leading-snug text-slate-500 dark:text-zinc-500">${t('Bezig met plaatsen…')}</span>
       </span>
     </div>
   `
@@ -7319,7 +7326,7 @@ function chatAnchorAuthorLine() {
       <span
         class="truncate text-[11px] font-medium italic leading-5 text-slate-500 dark:text-zinc-400"
         data-testid="comment-author"
-        >Claude gesprek</span
+        >${t('Claude gesprek')}</span
       >
     </span>
   `
@@ -7416,7 +7423,7 @@ function compactConversation(c, i, full, openCommentMenu) {
                 <span class="flex min-w-0 items-center gap-2" data-testid="comment-author-line">
                   ${authorAvatarStack(c, who)}
                   <span class="truncate text-[11px] font-medium leading-5 text-slate-600 dark:text-zinc-400" data-testid="comment-author"
-                    >${who.name || 'onbekend'}</span
+                    >${who.name || t('onbekend')}</span
                   >
                   ${() => (stale ? '' : sourceBadge(c))}
                   ${() => (stale ? '' : aiWarningBadge(c))}
@@ -7461,7 +7468,7 @@ function commentReactionStatusLine(c) {
   // way), so this reads like an ordinary comment with N real replies below it.
   const taken = firstReviewerReplyOnPlaceholder(c)
   const count = taken ? Math.max(0, c.reactionCount - 1) : c.reactionCount
-  return count + ' reacties · ' + c.status + lastReplyNote(c)
+  return t('{n} reacties', { n: count }) + ' · ' + t(c.status) + lastReplyNote(c)
 }
 
 // expandedConversation — the full thread (every message via threadMessages/
@@ -7592,7 +7599,7 @@ function expandedConversation(c, openCommentMenu, readOnly) {
         <textarea
           rows="1"
           class="min-h-[2.25rem] flex-1 resize-none rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 px-3 py-1.5 text-xs leading-6 text-slate-700 dark:text-zinc-300 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-300 dark:focus:ring-indigo-500/40"
-          placeholder="Reageer op deze comment…"
+          placeholder="${t('Reageer op deze comment…')}"
           data-testid="reaction-compose"
           @input="${(e) => {
             if (c) replyDrafts.set(c.id, e.target.value)
@@ -7629,7 +7636,7 @@ function expandedConversation(c, openCommentMenu, readOnly) {
           disabled="${() => cs.busy}"
           @click="${() => sendReaction()}"
         >
-          Stuur
+          ${t('Stuur')}
         </button>
         <button
           type="button"
@@ -7639,7 +7646,7 @@ function expandedConversation(c, openCommentMenu, readOnly) {
               ? 'cursor-not-allowed border-slate-200 text-slate-400 dark:border-zinc-800 dark:text-zinc-600'
               : 'border-slate-200 text-slate-500 hover:border-indigo-300 hover:text-indigo-600 dark:border-zinc-800 dark:text-zinc-400 dark:hover:border-indigo-500/40 dark:hover:text-indigo-400')}"
           data-testid="reaction-status"
-          title="Resolve/verwijder via het menu"
+          title="${t('Resolve/verwijder via het menu')}"
           disabled="${() => cs.busy}"
           @click="${() => openCommentMenu && openCommentMenu()}"
         >
@@ -7740,8 +7747,8 @@ function newCommentComposer(state, commentTarget, openCompose) {
   // PR-wide compose, see activeComposeTargetHint's own doc comment), so that
   // label stays right here.
   const heading = () => {
-    if (cs.prWideCompose) return 'Nieuwe algemene comment · hele PR'
-    return warningOverride ? 'Comment van AI-controle' : 'Nieuwe comment'
+    if (cs.prWideCompose) return t('Nieuwe algemene comment · hele PR')
+    return warningOverride ? t('Comment van AI-controle') : t('Nieuwe comment')
   }
   return html`
     <div class="contents">
@@ -7765,13 +7772,13 @@ function newCommentComposer(state, commentTarget, openCompose) {
                 ${() =>
                   sendFailedBadge(
                     'new:' + (cs.prWideCompose ? PRWIDE_DRAFT_KEY : draftKeyFor(effectiveTarget())),
-                    'plaatsen mislukt — probeer opnieuw',
+                    t('plaatsen mislukt — probeer opnieuw'),
                   )}
                 <textarea
                   rows="1"
                   class="min-h-20 resize-none rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 px-3 py-2 text-xs text-slate-700 dark:text-zinc-300 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none"
-                  placeholder="${() => (cs.prWideCompose ? 'Je algemene comment op deze PR…' : 'Je comment op deze regel…')}"
-                  title="Enter plaatst · Shift+Enter nieuwe regel"
+                  placeholder="${() => (cs.prWideCompose ? t('Je algemene comment op deze PR…') : t('Je comment op deze regel…'))}"
+                  title="${t('Enter plaatst · Shift+Enter nieuwe regel')}"
                   data-testid="comment-compose"
                   @input="${(e) => {
                     composeDrafts.set(composeDraftKey, e.target.value)
@@ -7817,7 +7824,7 @@ function newCommentComposer(state, commentTarget, openCompose) {
                     @click="${() => (openCompose ? openCompose() : placeComment(state, commentTarget))}"
                   >
                     ${() => sendStatusIcon(cs.busy ? 'sending' : 'draft')}
-                    Plaats…
+                    ${t('Plaats…')}
                   </button>
                 </div>
               </div>
@@ -7860,12 +7867,12 @@ function moreAboveHint(n, testid, onUp) {
     <button
       type="button"
       class="sticky top-0 z-10 -mt-1 mb-1 flex shrink-0 items-center gap-1 rounded-md border border-slate-200 dark:border-zinc-700 bg-white/95 dark:bg-zinc-900/95 px-2 py-1 text-[11px] text-slate-500 dark:text-zinc-400 hover:border-indigo-300 dark:hover:border-indigo-500/40"
-      title="Ga naar de comment hierboven"
+      title="${t('Ga naar de comment hierboven')}"
       data-testid="${testid}"
       @click="${() => onUp && onUp()}"
     >
       <span aria-hidden="true">▲</span>
-      <span>${n} hierboven</span>
+      <span>${t('{n} hierboven', { n })}</span>
     </button>
   `
 }
@@ -8147,7 +8154,7 @@ function diffStatBadge(r) {
     <span
       class="shrink-0 rounded-full bg-slate-100 dark:bg-zinc-800 px-1.5 py-0.5 text-[9px] font-semibold tabular-nums"
       data-testid="related-diffstat"
-      title="Toegevoegde / verwijderde regels in de aangeroepen definitie"
+      title="${t('Toegevoegde / verwijderde regels in de aangeroepen definitie')}"
     >
       <span class="text-emerald-600 dark:text-emerald-400">+${() => r.diff.add}</span>
       <span class="text-rose-500 dark:text-rose-400">&#8722;${() => r.diff.del}</span>
@@ -8170,8 +8177,8 @@ function leftStatusBadge(r) {
     <span
       class="shrink-0 rounded-full bg-slate-100 dark:bg-zinc-800 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-slate-400 dark:text-zinc-500"
       data-testid="related-diffstat"
-      title="Aangeroepen definitie is niet gewijzigd in deze PR"
-      >Ongewijzigd</span
+      title="${t('Aangeroepen definitie is niet gewijzigd in deze PR')}"
+      >${t('Ongewijzigd')}</span
     >
   `
 }
@@ -8196,8 +8203,8 @@ function memberStatusBadge(r) {
         ? 'bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
         : 'bg-slate-100 dark:bg-zinc-800 text-slate-400 dark:text-zinc-500')}"
       data-testid="related-member-status"
-      title="${changed ? 'Deze PR wijzigt deze declaratie' : 'Deze PR wijzigt deze declaratie niet'}"
-      >${changed ? 'Gewijzigd' : 'Ongewijzigd'}</span
+      title="${changed ? t('Deze PR wijzigt deze declaratie') : t('Deze PR wijzigt deze declaratie niet')}"
+      >${changed ? t('Gewijzigd') : t('Ongewijzigd')}</span
     >
   `
 }
@@ -8228,7 +8235,7 @@ function approvalBadge(a) {
       class="${'shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-semibold tabular-nums ' +
       (done ? 'bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300' : 'bg-slate-100 dark:bg-zinc-800 text-slate-500 dark:text-zinc-500')}"
       data-testid="related-approval"
-      title="Goedgekeurde regels"
+      title="${t('Goedgekeurde regels')}"
       >${done ? '✓ ' : ''}${a.done}/${a.total}</span
     >
   `
@@ -8261,7 +8268,7 @@ function viewOnlyBadge(r) {
       class="h-3.5 w-3.5 shrink-0 text-slate-400 dark:text-zinc-500"
       data-testid="related-view-only"
     >
-      <title>Alleen bekijken — hier valt niets goed te keuren</title>
+      <title>${t('Alleen bekijken — hier valt niets goed te keuren')}</title>
       <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"></path>
       <circle cx="12" cy="12" r="3"></circle>
     </svg>
@@ -8284,7 +8291,9 @@ function commentActivityBadge(s) {
     <span
       class="shrink-0 flex items-center gap-0.5"
       data-testid="related-comment-activity"
-      title="${s.count + (s.count === 1 ? ' open reactie' : ' open reacties') + ' (dit block + onderliggende code)'}"
+      title="${s.count === 1
+        ? t('{count} open reactie (dit block + onderliggende code)', { count: s.count })
+        : t('{count} open reacties (dit block + onderliggende code)', { count: s.count })}"
     >
       ${avatarHTML(s.last.name, s.last.avatarUrl, 'h-4 w-4')}
       ${() =>
@@ -8423,7 +8432,7 @@ function nestedChip(ancestors, k, drill, path, cardIdx) {
           >${k.status}</span
         >
         ${() => nestedDiffStat(k)}
-        <span class="${k.approveCls}" data-testid="related-nested-approval" title="Goedgekeurde regels">${k.approveText}</span>
+        <span class="${k.approveCls}" data-testid="related-nested-approval" title="${t('Goedgekeurde regels')}">${k.approveText}</span>
       </span>
     </button>
     ${() =>
@@ -8460,7 +8469,7 @@ function nestedChipColumn(ancestors, kids, drill, path, cardIdx) {
         ${() =>
           more > 0
             ? html`<span class="px-1 text-[9px] text-slate-400 dark:text-zinc-500" data-testid="related-nested-more"
-                >+${more} meer</span
+                >${t('+{n} meer', { n: more })}</span
               >`
             : ''}
       </div>
@@ -8799,15 +8808,15 @@ function relatedCard(r, i, drill) {
             KIND_LABEL[r.kind]
               ? html`<span
                   class="shrink-0 rounded-full bg-indigo-50 dark:bg-indigo-500/15 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-indigo-500 dark:text-indigo-400"
-                  >${KIND_LABEL[r.kind]}</span
+                  >${t(KIND_LABEL[r.kind])}</span
                 >`
               : ''}
           ${() =>
             r.source
               ? html`<span
                   class="shrink-0 rounded-full bg-amber-50 dark:bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-amber-600 dark:text-amber-400"
-                  title="Gevonden door een LLM"
-                  >bron: ${r.source}</span
+                  title="${t('Gevonden door een LLM')}"
+                  >${t('bron: {source}', { source: r.source })}</span
                 >`
               : ''}
           ${() => diffStatBadge(r)}
@@ -8830,9 +8839,9 @@ function relatedCard(r, i, drill) {
                   .innerHTML="${() => highlight(r.code)}"
                 ></code>`
               : r.loading
-                ? html`<p class="px-3 py-2 text-[11px] text-slate-400 dark:text-zinc-500">code laden…</p>`
+                ? html`<p class="px-3 py-2 text-[11px] text-slate-400 dark:text-zinc-500">${t('code laden…')}</p>`
                 : html`<p class="px-3 py-2 text-[11px] text-slate-400 dark:text-zinc-500" data-testid="related-empty">
-                    geen code gevonden
+                    ${t('geen code gevonden')}
                   </p>`}
     </div>
     ${() => (!collapsed() && nested.length ? nestedChipColumn([r], nested, drill, [], i) : '')}
@@ -8925,13 +8934,13 @@ function testsBar(r, i, drill) {
       data-testid="related-tests-bar"
       data-active="${() => (selected() ? 'true' : 'false')}"
       data-expanded="${r.expanded ? 'true' : 'false'}"
-      title="${r.expanded ? 'Tests inklappen' : 'Tests uitklappen'}"
+      title="${r.expanded ? t('Tests inklappen') : t('Tests uitklappen')}"
       @click="${() => drill && drill(r)}"
     >
       <span class="shrink-0 text-[10px] text-slate-400 dark:text-zinc-500">${r.expanded ? '▾' : '▸'}</span>
       <span
         class="shrink-0 rounded-full bg-indigo-50 dark:bg-indigo-500/15 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-indigo-500 dark:text-indigo-400"
-        >${r.count === 1 ? '1 test' : r.count + ' tests'}</span
+        >${r.count === 1 ? t('1 test') : t('{n} tests', { n: r.count })}</span
       >
       ${r.tests.map((t) =>
         html`<span
@@ -9017,16 +9026,16 @@ function buildRelationsSummary(state) {
 // that status actually is.
 function relTime(iso) {
   if (!iso) return ''
-  const t = new Date(iso).getTime()
-  if (Number.isNaN(t)) return ''
-  const diffSec = Math.max(0, Math.floor((Date.now() - t) / 1000))
-  if (diffSec < 60) return 'net nu'
+  const ts = new Date(iso).getTime()
+  if (Number.isNaN(ts)) return ''
+  const diffSec = Math.max(0, Math.floor((Date.now() - ts) / 1000))
+  if (diffSec < 60) return t('net nu')
   const diffMin = Math.floor(diffSec / 60)
-  if (diffMin < 60) return diffMin + ' min geleden'
+  if (diffMin < 60) return t('{n} min geleden', { n: diffMin })
   const diffHour = Math.floor(diffMin / 60)
-  if (diffHour < 24) return diffHour + ' uur geleden'
+  if (diffHour < 24) return t('{n} uur geleden', { n: diffHour })
   const diffDay = Math.floor(diffHour / 24)
-  return diffDay + ' dag' + (diffDay === 1 ? '' : 'en') + ' geleden'
+  return diffDay === 1 ? t('{n} dag geleden', { n: diffDay }) : t('{n} dagen geleden', { n: diffDay })
 }
 
 // workflowNote builds the small description line under a run's label + status
@@ -9043,14 +9052,14 @@ function workflowNote(run, state) {
   const c = run.comment
   if (c) {
     const parts = [c.label]
-    if (c.line) parts.push('regel ' + c.line)
+    if (c.line) parts.push(t('regel {n}', { n: c.line }))
     if (c.snippet) parts.push('"' + c.snippet + '"')
     return parts.filter(Boolean).join(' · ')
   }
-  if (run.status === 'failed') return 'mislukt'
+  if (run.status === 'failed') return t('mislukt')
   if (run.workflow === 'build_relations' && run.status === 'waiting') {
     const summary = buildRelationsSummary(state)
-    if (summary) return summary + ' — wacht op wijzigingen'
+    if (summary) return summary + t(' — wacht op wijzigingen')
   }
   // code_warning's own "waiting/actively working" note never suggests
   // active work while there's nothing left to say — a completed run reports
@@ -9059,11 +9068,11 @@ function workflowNote(run, state) {
   // falling through to a generic "completed" status word.
   if (run.workflow === 'code_warning' && run.status === 'completed') {
     const n = run.warningsFound
-    if (n === 0) return "geen risico's gevonden"
-    if (n === 1) return '1 risico gevonden'
-    if (typeof n === 'number') return n + " risico's gevonden"
+    if (n === 0) return t("geen risico's gevonden")
+    if (n === 1) return t('1 risico gevonden')
+    if (typeof n === 'number') return t("{n} risico's gevonden", { n })
   }
-  return WORKFLOW_STATUS_NOTE[run.workflow + ':' + run.status] || run.status
+  return t(WORKFLOW_STATUS_NOTE[run.workflow + ':' + run.status] || run.status)
 }
 
 // TASK_STALE_MS — a run older than this (by its own updatedAt) without being
@@ -9188,7 +9197,7 @@ function failedRunNote(run) {
     const where = baseName(c.file) + (c.line ? ':' + c.line : '')
     parts.push(where + (c.snippet ? ' · “' + c.snippet + '”' : ''))
   }
-  parts.push(run.error || 'geen foutmelding vastgelegd')
+  parts.push(run.error || t('geen foutmelding vastgelegd'))
   return parts.join(' — ')
 }
 
@@ -9215,14 +9224,14 @@ export function buildTaskRows(state) {
       problem: true,
       key: (retrying ? 'retrying:' : 'failed:') + run.runId,
       at: new Date(run.updatedAt).getTime() || 0,
-      word: retrying ? '↻ opnieuw gestart' : '⚠ mislukt',
+      word: retrying ? t('↻ opnieuw gestart') : t('⚠ mislukt'),
       wordCls: retrying ? RETRYING_WORD_CLS : PROBLEM_WORD_CLS,
       status: retrying ? 'retrying' : 'failed',
       retrying,
       runId: run.runId,
       label: labelForWorkflow(run.workflow),
-      note: retrying ? 'opnieuw gestart — bezig…' : failedRunNote(run),
-      when: retrying ? 'net nu' : relTime(run.updatedAt),
+      note: retrying ? t('opnieuw gestart — bezig…') : failedRunNote(run),
+      when: retrying ? t('net nu') : relTime(run.updatedAt),
       error: run.error || '',
       comment: run.comment || null,
       retryable: !!run.retryable,
@@ -9235,11 +9244,11 @@ export function buildTaskRows(state) {
       problem: true,
       key: logRowKey(entry),
       at: new Date(entry.at).getTime() || 0,
-      word: '⚠ overgeslagen',
+      word: t('⚠ overgeslagen'),
       wordCls: PROBLEM_WORD_CLS,
       status: 'skipped',
       runId: '',
-      label: entry.scope || 'Achtergrondtaak',
+      label: entry.scope || t('Achtergrondtaak'),
       note: entry.message || '',
       when: relTime(entry.at),
       error: entry.message || '',
@@ -9262,7 +9271,7 @@ export function buildTaskRows(state) {
         problem: false,
         key: 'run:' + run.runId + ':' + run.status,
         at: new Date(run.updatedAt).getTime() || 0,
-        word: badge.label,
+        word: t(badge.label),
         wordCls: TASK_WORD_BASE + badge.cls,
         status: run.status,
         runId: run.runId,
@@ -9373,8 +9382,8 @@ function tasksRefreshButton(actions) {
         'shrink-0 rounded-md border border-slate-200 dark:border-zinc-700 px-2 py-1 text-[14px] leading-none text-slate-500 dark:text-zinc-400 hover:bg-slate-50 dark:hover:bg-zinc-800 ' +
         (taskUi.busy ? 'opacity-50' : '')}"
       data-testid="tasks-refresh"
-      title="Taken verversen"
-      aria-label="Taken verversen"
+      title="${t('Taken verversen')}"
+      aria-label="${t('Taken verversen')}"
       disabled="${() => taskUi.busy || !refresh}"
       @click="${(e) => {
         if (!e) return
@@ -9407,8 +9416,8 @@ export function TasksPanel(state, actions = {}) {
     >
       <div class="flex items-start gap-2 border-b border-slate-100 dark:border-zinc-800/60 px-3 py-2.5">
         <div class="min-w-0 flex-1">
-          <h2 class="text-sm font-semibold text-slate-800 dark:text-zinc-200">Taken</h2>
-          <p class="text-[11px] text-slate-400 dark:text-zinc-500">workflow-runs · deze PR</p>
+          <h2 class="text-sm font-semibold text-slate-800 dark:text-zinc-200">${t('Taken')}</h2>
+          <p class="text-[11px] text-slate-400 dark:text-zinc-500">${t('workflow-runs · deze PR')}</p>
         </div>
         ${tasksRefreshButton(actions)}
       </div>
@@ -9423,7 +9432,7 @@ export function TasksPanel(state, actions = {}) {
           // array can freeze empty after the first empty render.
           const rows = buildTaskRows(state)
           return rows.length === 0
-            ? [html`<p class="px-3 py-3 text-[11px] text-slate-400 dark:text-zinc-500">Geen taken.</p>`.key('no-workflows')]
+            ? [html`<p class="px-3 py-3 text-[11px] text-slate-400 dark:text-zinc-500">${t('Geen taken.')}</p>`.key('no-workflows')]
             : // The key carries the row's status (see the block-card-key
               // convention in conventions.md): arrow.js only re-runs a keyed
               // node's own bindings when its key changes, and a row whose
@@ -9440,7 +9449,7 @@ export function TasksPanel(state, actions = {}) {
                 class="border-t border-slate-100 dark:border-zinc-800/60 px-3 py-1.5 text-[11px] text-slate-400 dark:text-zinc-500"
                 data-testid="tasks-more"
               >
-                nog ${hidden} meer — scroll voor de rest
+                ${t('nog {n} meer — scroll voor de rest', { n: hidden })}
               </p>`
             : ''
         }}
@@ -9482,9 +9491,8 @@ export default function RelatedPanel(state, commentTarget, search) {
   // could not pin a specific method. Both share the same icon/testid, only
   // the wording differs.
   const COVERS_WARNING_TEXT = {
-    unannotated: 'Dekking niet te bepalen — geen #[CoversMethod]/@covers gevonden op deze test.',
-    notfound:
-      'Dekking niet te bepalen — #[CoversClass] gevonden, maar geen specifieke methode kunnen vaststellen.',
+    unannotated: t('Dekking niet te bepalen — geen #[CoversMethod]/@covers gevonden op deze test.'),
+    notfound: t('Dekking niet te bepalen — #[CoversClass] gevonden, maar geen specifieke methode kunnen vaststellen.'),
   }
   const coversWarning = () => {
     const kind = rc.warning
@@ -9508,7 +9516,7 @@ export default function RelatedPanel(state, commentTarget, search) {
           <line x1="12" y1="9" x2="12" y2="13"></line>
           <line x1="12" y1="17" x2="12.01" y2="17"></line>
         </svg>
-        <span>${COVERS_WARNING_TEXT[kind] || 'Dekking niet te bepalen.'}</span>
+        <span>${COVERS_WARNING_TEXT[kind] || t('Dekking niet te bepalen.')}</span>
       </p>
     `
   }
@@ -9535,7 +9543,7 @@ export default function RelatedPanel(state, commentTarget, search) {
           ? html`<span
               class="absolute right-2 top-2 z-10 shrink-0 rounded-md border border-slate-200 dark:border-zinc-800 bg-white/90 dark:bg-zinc-900/90 px-2 py-1 text-[11px] text-slate-400 dark:text-zinc-500"
               data-testid="related-searching"
-              >zoeken…</span
+              >${t('zoeken…')}</span
             >`
           : ''}
       <div
@@ -9569,7 +9577,7 @@ export default function RelatedPanel(state, commentTarget, search) {
           // immediate neighbours — no lookahead beyond one run.
           const ks = kids()
           if (ks.length === 0)
-            return html`<p class="px-1 py-2 text-[11px] text-slate-400 dark:text-zinc-500">Geen onderliggende code.</p>`
+            return html`<p class="px-1 py-2 text-[11px] text-slate-400 dark:text-zinc-500">${t('Geen onderliggende code.')}</p>`
           const rows = []
           for (let i = 0; i < ks.length; ) {
             const r = ks[i]
@@ -9807,7 +9815,7 @@ export function commentBody(c, startIndex = 0) {
 // conversation", never as a message from the reviewer.
 const CHAT_ANCHOR_NOTE_HTML =
   '<span class="italic text-slate-400 dark:text-zinc-500" data-testid="chat-anchor-note">' +
-  'Nog geen eigen comment — bekijk het gesprek hiernaast.' +
+  t('Nog geen eigen comment — bekijk het gesprek hiernaast.') +
   '</span>'
 
 // THREAD_STATUS_SENTINELS — the two command-like reply bodies the backend
@@ -9823,8 +9831,8 @@ const CHAT_ANCHOR_NOTE_HTML =
 // redundant cue and colour carries nothing at all (colorblind rule,
 // conventions.md).
 const THREAD_STATUS_SENTINELS = {
-  '/resolve': { icon: '✓', text: 'Thread opgelost' },
-  '/reopen': { icon: '↩', text: 'Thread heropend' },
+  '/resolve': { icon: '✓', text: t('Thread opgelost') },
+  '/reopen': { icon: '↩', text: t('Thread heropend') },
 }
 
 // threadStatusSentinel maps a message body onto its status line, or null for an
@@ -10217,7 +10225,7 @@ function commentMenuButton(openMenu) {
   return html`
     <button
       type="button"
-      title="Menu voor deze comment"
+      title="${t('Menu voor deze comment')}"
       data-testid="comment-detail-menu"
       class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-indigo-600 dark:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-indigo-400"
       @click="${(e) => {
@@ -10337,7 +10345,7 @@ export function commentDetailCard(c, opts) {
         <span
           class="mr-0.5 whitespace-nowrap text-sm font-semibold leading-6 text-slate-800 dark:text-zinc-200"
           data-testid="comment-detail-author"
-          >${detailWho.name || 'onbekend'}</span
+          >${detailWho.name || t('onbekend')}</span
         >
         ${() => sourceBadge(c)} ${() => aiWarningBadge(c)} ${() => staleAnchorBadge(c)}
         ${() => sendFailedBadge('reply:' + c.id)}
@@ -10397,7 +10405,7 @@ export function commentDetailCard(c, opts) {
                 <textarea
                   rows="1"
                   class="min-h-[2.25rem] flex-1 resize-none rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/60 px-2 py-1 text-xs leading-[1.625rem] text-slate-700 dark:text-zinc-300 placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none"
-                  placeholder="${() => (picm.mode === 'convert' ? 'Nieuwe comment op basis van deze melding…' : 'Reageer…')}"
+                  placeholder="${() => (picm.mode === 'convert' ? t('Nieuwe comment op basis van deze melding…') : t('Reageer…'))}"
                   data-testid="comment-detail-reply"
                   @input="${(e) => {
                     if (picm.mode === 'reply' && c) prReplyDrafts.set(c.id, e.target.value)
@@ -10441,7 +10449,7 @@ export function commentDetailCard(c, opts) {
                   }}"
                 >
                   ${() => sendStatusIcon(picm.sending ? 'sending' : 'draft')}
-                  ${() => (picm.mode === 'convert' ? 'Plaats' : 'Stuur')}
+                  ${() => (picm.mode === 'convert' ? t('Plaats') : t('Stuur'))}
                 </button>
               </div>`
             : ''}

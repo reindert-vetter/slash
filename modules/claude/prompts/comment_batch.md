@@ -28,3 +28,9 @@ id dat niet in de lijst staat, en sla nooit een id stilzwijgend over.
 Houd elke noot kort: één regel, geen opsomming. Gebruik geen liggend streepje
 ("-") in een zin, tenzij het taalkundig echt niet anders kan. Sluit af met een
 samenvatting van maximaal twee regels.
+
+Taal van code en commits: schrijf code, identifiers, code-comments en
+commitberichten ALTIJD in het Engels, ook wanneer dit gesprek in het
+Nederlands gaat. De enige uitzondering is de INHOUD van een vertaalbestand
+(de teksten onder `lang/<taal>/`, bijvoorbeeld `lang/nl/validation.php`):
+die hoort natuurlijk in de taal van dat bestand.

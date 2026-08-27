@@ -12,6 +12,7 @@
 import { html } from './vendor/arrow.js'
 import { labelForWorkflow } from './workflowLabels.mjs'
 import { relativeTime } from './relativeTime.mjs'
+import { t } from './i18n.mjs'
 
 // fetchProblems — thin read-only wrapper around GET /api/problems. Always
 // resolves (never throws) with non-null arrays/object, so a caller never has
@@ -86,7 +87,7 @@ export function baseName(path) {
 export function problemRunRow(run, prTitles, { showPr = true } = {}) {
   return html`
     <div data-testid="problem-run" class="${PROBLEM_ROW_CLASS}">
-      ${problemMark('mislukt')}
+      ${problemMark(t('mislukt'))}
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-2">
           <span class="shrink-0 text-[13px] font-semibold text-slate-900 dark:text-zinc-100">${labelForWorkflow(run.workflow)}</span>
@@ -94,7 +95,7 @@ export function problemRunRow(run, prTitles, { showPr = true } = {}) {
           <span class="shrink-0 text-[11px] text-slate-400 dark:text-zinc-600">${relativeTime(run.updatedAt)}</span>
         </div>
         <div class="contents">${() => (run.comment ? problemCommentLine(run.comment) : '')}</div>
-        <p class="line-clamp-2 text-[12px] text-slate-500 dark:text-zinc-500" title="${run.error || ''}">${run.error || 'geen foutmelding vastgelegd'}</p>
+        <p class="line-clamp-2 text-[12px] text-slate-500 dark:text-zinc-500" title="${run.error || ''}">${run.error || t('geen foutmelding vastgelegd')}</p>
       </div>
     </div>
   `.key('problem-run:' + run.runId)
@@ -107,10 +108,10 @@ export function problemRunRow(run, prTitles, { showPr = true } = {}) {
 export function problemLogRow(entry, i, prTitles, { showPr = true } = {}) {
   return html`
     <div data-testid="problem-log" class="${PROBLEM_ROW_CLASS}">
-      ${problemMark('overgeslagen')}
+      ${problemMark(t('overgeslagen'))}
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-2">
-          <span class="shrink-0 truncate text-[13px] font-semibold text-slate-900 dark:text-zinc-100">${entry.scope || 'Achtergrondtaak'}</span>
+          <span class="shrink-0 truncate text-[13px] font-semibold text-slate-900 dark:text-zinc-100">${entry.scope || t('Achtergrondtaak')}</span>
           ${() => (showPr ? problemPrChip(entry.pr, prTitles) : '')}
           <span class="shrink-0 text-[11px] text-slate-400 dark:text-zinc-600">${relativeTime(entry.at)}</span>
         </div>

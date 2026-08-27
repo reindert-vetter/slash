@@ -18,6 +18,7 @@ import (
 	"github.com/reindert-vetter/tembed"
 	"slash/modules/chat"
 	"slash/modules/claude"
+	"slash/modules/langpref"
 )
 
 // ClaudeChatInput starts (or, idempotently, re-ensures) a claude_chat
@@ -950,7 +951,7 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 		req.Tools = []string{"Read", "Grep", "Glob"}
 		req.SystemPrompt = claude.ChatReadOnlySystemPrompt
 	}
-	req.SystemPrompt += chatCommentIDNote(arg.ConversationID)
+	req.SystemPrompt += chatCommentIDNote(arg.ConversationID) + chatLangTail(langFor(ctx, tm, langpref.KindReply))
 	// From here until RunChat returns, a reviewer message typed meanwhile can
 	// still reach THIS call (chat_steer.go). Deliberately opened per CLI call,
 	// not per turn: outside a live call there is nothing to hand it to, and the
@@ -1075,7 +1076,7 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 			Model:        model,
 			Prompt:       chatNeedWriteContinuationPrompt,
 			SessionID:    result.SessionID,
-			SystemPrompt: claude.ChatShellSystemPrompt + chatCommentIDNote(arg.ConversationID),
+			SystemPrompt: claude.ChatShellSystemPrompt + chatCommentIDNote(arg.ConversationID) + chatLangTail(langFor(ctx, tm, langpref.KindReply)),
 			WorkDir:      dir,
 			Tools:        []string{"Read", "Grep", "Glob", "Edit", "Bash"},
 			OnEvent:      onEvent,

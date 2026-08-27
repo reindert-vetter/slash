@@ -18,6 +18,7 @@
 // RelatedPanel.mjs's `recomputeCodePreviews` already reads data straight off
 // that same kind of raw-HTML DOM instead of re-parsing the source text.
 import { reactive, html } from './vendor/arrow.js'
+import { t } from './i18n.mjs'
 
 const lb = reactive({ open: false, images: [], index: 0 })
 
@@ -95,8 +96,8 @@ export function imageLightboxOverlay() {
         type="button"
         class="absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20"
         data-testid="image-lightbox-close"
-        title="Sluiten"
-        aria-label="Sluiten"
+        title="${t('Sluiten')}"
+        aria-label="${t('Sluiten')}"
         @click="${(e) => {
           e.stopPropagation()
           closeLightbox()
@@ -111,8 +112,8 @@ export function imageLightboxOverlay() {
                 type="button"
                 class="absolute left-4 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20"
                 data-testid="image-lightbox-prev"
-                title="Vorige afbeelding"
-                aria-label="Vorige afbeelding"
+                title="${t('Vorige afbeelding')}"
+                aria-label="${t('Vorige afbeelding')}"
                 @click="${(e) => {
                   e.stopPropagation()
                   stepLightbox(-1)
@@ -136,8 +137,8 @@ export function imageLightboxOverlay() {
                 type="button"
                 class="absolute right-4 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20"
                 data-testid="image-lightbox-next"
-                title="Volgende afbeelding"
-                aria-label="Volgende afbeelding"
+                title="${t('Volgende afbeelding')}"
+                aria-label="${t('Volgende afbeelding')}"
                 @click="${(e) => {
                   e.stopPropagation()
                   stepLightbox(1)

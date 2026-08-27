@@ -4,6 +4,7 @@
 // other place that needs to show "who" (comments, replies, PR-wide items) gets
 // the exact same look instead of re-deriving initials/classes locally.
 import { html } from './vendor/arrow.js'
+import { t } from './i18n.mjs'
 
 // initialsOf mirrors the PR-list's reviewer-avatar fallback: the first two
 // characters of the name/login, uppercased. GitHub logins never contain
@@ -174,7 +175,7 @@ function proxiedAvatarUrl(avatarUrl) {
 // opacity/grayscale treatment, which is specific to that call site.
 export function avatarHTML(name, avatarUrl, sizeCls = 'h-6 w-6', extraCls = '') {
   const initials = initialsOf(name)
-  const title = name || 'onbekend'
+  const title = name || t('onbekend')
   if (!avatarUrl) {
     return html`<span class="${FALLBACK_CLS + ' ' + sizeCls + ' ' + extraCls}" title="${title}" data-testid="avatar-fallback">${initials}</span>`
   }
@@ -219,7 +220,7 @@ function escapeAttr(str) {
 // escaping instead of relying on arrow.js's.
 export function avatarHtmlString(name, avatarUrl, sizeCls = 'h-6 w-6', extraCls = '') {
   const initials = escapeAttr(initialsOf(name))
-  const title = escapeAttr(name || 'onbekend')
+  const title = escapeAttr(name || t('onbekend'))
   if (!avatarUrl) {
     return `<span class="${FALLBACK_CLS + ' ' + sizeCls + ' ' + extraCls}" title="${title}" data-testid="avatar-fallback">${initials}</span>`
   }

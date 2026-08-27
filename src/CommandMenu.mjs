@@ -8,6 +8,7 @@
 
 import { html, watch } from './vendor/arrow.js'
 import { autoGrowTextarea } from './textareaAutoGrow.mjs'
+import { t } from './i18n.mjs'
 
 // labelOf resolves a command's label, which may be a plain string or a function
 // (so a toggle command like approve can show a live label).
@@ -187,17 +188,19 @@ export default function CommandMenu(menu, resolve, onRun, opts = {}) {
             // the generic placeholder gets cut off mid-sentence without an
             // ellipsis (a textarea placeholder wraps out of view instead of
             // truncating) — so that mode gets a shorter prompt that fits.
-            menu.mode === 'compose'
-              ? 'Kies wat er met je comment gebeurt…'
-              : // reviewReject (home.mjs) has no static command list — the
-                // textarea itself IS the rejection-reason input, and
-                // resolveCommands only offers a "submit" row once it's
-                // non-blank (GitHub/the backend reject an empty
-                // REQUEST_CHANGES body). The placeholder doubles as the
-                // instruction, since there's no other label for this step.
-                menu.mode === 'reviewReject'
-                ? 'Typ de reden voor afwijzing (verplicht)…'
-                : 'Zoek een commando of schrijf direct een comment…'}"
+            t(
+              menu.mode === 'compose'
+                ? 'Kies wat er met je comment gebeurt…'
+                : // reviewReject (home.mjs) has no static command list — the
+                  // textarea itself IS the rejection-reason input, and
+                  // resolveCommands only offers a "submit" row once it's
+                  // non-blank (GitHub/the backend reject an empty
+                  // REQUEST_CHANGES body). The placeholder doubles as the
+                  // instruction, since there's no other label for this step.
+                  menu.mode === 'reviewReject'
+                  ? 'Typ de reden voor afwijzing (verplicht)…'
+                  : 'Zoek een commando of schrijf direct een comment…',
+            )}"
           data-testid="command-input"
           value="${() => menu.query}"
           @input="${(e) => {
@@ -233,7 +236,7 @@ export default function CommandMenu(menu, resolve, onRun, opts = {}) {
             // that switches between a single element and a keyed array
             // freezes" in arrowjs-pitfalls.md.
             return [
-              html`<p class="px-2.5 py-3 text-[11px] text-slate-400 dark:text-zinc-500">Geen commando's.</p>`.key(
+              html`<p class="px-2.5 py-3 text-[11px] text-slate-400 dark:text-zinc-500">${t("Geen commando's.")}</p>`.key(
                 'no-commands',
               ),
             ]

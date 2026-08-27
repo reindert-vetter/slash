@@ -170,6 +170,7 @@ import { commentMentionsMe } from './mentions.mjs'
 import ImageLightboxHost, { initImageLightbox, isLightboxOpen, handleLightboxKeydown } from './imageLightbox.mjs'
 import WorkDirOverlayHost, { initWorkDirOverlay, isWorkDirOverlayOpen, handleWorkDirOverlayKeydown } from './workDirOverlay.mjs'
 import { initTheme, themeToggleButton } from './theme.mjs'
+import { t, syncUiLang } from './i18n.mjs'
 import { ensureAutoWarn, autoWarnToggleButton, autoWarn } from './autowarn.mjs'
 import { settingsButton } from './settingsLink.mjs'
 import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
@@ -192,6 +193,7 @@ import {
 } from './columnWidth.mjs'
 
 initTheme()
+syncUiLang()
 initImageLightbox()
 // Debug mode (off unless the reviewer switched it on, see src/debugLog.mjs):
 // records this page load plus every following key/click, so Claude can replay a
@@ -3201,13 +3203,13 @@ function commentBlockItem(comments) {
   // its fallback label names the block it USED to hang on, so the reviewer can
   // still tell what it was about when the body itself is empty.
   const fallback = isOrphanComment(c)
-    ? c.label || 'Verdwenen code'
+    ? c.label || t('Verdwenen code')
     : c.kind === 'ai_warning'
-      ? 'AI-risico'
+      ? t('AI-risico')
       : // A block-anchored (kind === '') comment only gets an index item when it
         // mentions me (see indexComments); with an empty body, naming the block
         // it hangs on says far more than the generic "PR-comment" would.
-        (!c.kind && c.label) || 'PR-comment'
+        (!c.kind && c.label) || t('PR-comment')
   const base = snippet || fallback
   const extra = comments.length - 1
   return {
@@ -7511,7 +7513,7 @@ let ms = reactive({ query: '', sel: 0, sub: null, mode: 'block', commands: [], n
 // actions where a pinned close item (plus defaultSel below skipping to a
 // non-existent 2nd item) would break "type, Enter" straight through.
 function withClose(list, onClose) {
-  return [{ id: 'close-menu', label: 'Sluit menu', hint: 'sluit', run: onClose || (() => {}) }, ...list]
+  return [{ id: 'close-menu', label: t('Sluit menu'), hint: 'sluit', run: onClose || (() => {}) }, ...list]
 }
 
 // defaultSel picks the initial selection for a freshly opened menu/submenu:
@@ -7653,30 +7655,30 @@ async function deleteCommentAndSelectRow() {
 function publishThreadCommand(c, doPublish) {
   const n = localReplyCount(c)
   const isAI = (c.source || 'ui') === 'ai'
-  const rootNoun = isAI ? 'de AI-melding' : 'mijn comment'
+  const rootNoun = isAI ? t('de AI-melding') : t('mijn comment')
   const publish = doPublish || ((withHistory) => publishThreadOnly(c, withHistory))
   if (n === 0) {
     return {
       id: 'comment-publish',
-      label: 'Zet op GitHub',
+      label: t('Zet op GitHub'),
       hint: 'github',
       run: () => publish(false),
     }
   }
   return {
     id: 'comment-publish',
-    label: 'Zet op GitHub',
+    label: t('Zet op GitHub'),
     hint: 'github',
     children: withClose([
       {
         id: 'comment-publish-root',
-        label: `Alleen ${rootNoun}`,
+        label: t('Alleen {noun}', { noun: rootNoun }),
         hint: 'alleen dit',
         run: () => publish(false),
       },
       {
         id: 'comment-publish-history',
-        label: `Met de eerdere ${n} bericht${n === 1 ? '' : 'en'}`,
+        label: t(n === 1 ? 'Met de eerdere {n} bericht' : 'Met de eerdere {n} berichten', { n }),
         hint: 'hele gesprek',
         run: () => publish(true),
       },
@@ -7765,13 +7767,13 @@ function commentCommandsFor() {
       isResolvedComment(focused)
         ? {
             id: 'unresolve-comment',
-            label: 'Unresolve comment',
+            label: t('Unresolve comment'),
             hint: 'heropen',
             run: () => unresolveFocusedComment(),
           }
         : {
             id: 'resolve-comment',
-            label: 'Resolve comment',
+            label: t('Resolve comment'),
             hint: 'resolve',
             run: async () => {
               const wasCommentIndexRow = isCommentIndexRowActive()
@@ -7784,7 +7786,7 @@ function commentCommandsFor() {
   }
   items.push({
     id: 'delete-comment',
-    label: 'Verwijder comment',
+    label: t('Verwijder comment'),
     hint: 'delete',
     run: () => deleteCommentAndSelectRow(),
   })
@@ -7797,7 +7799,7 @@ function commentCommandsFor() {
   if (isOwnMessage(msg)) {
     items.push({
       id: 'comment-edit',
-      label: 'Bewerk bericht',
+      label: t('Bewerk bericht'),
       hint: 'edit',
       run: () => startEditMessage(c, msg),
     })
@@ -7805,7 +7807,7 @@ function commentCommandsFor() {
   if (c && c.source === 'ai') {
     items.push({
       id: 'comment-from-warning',
-      label: 'Comment hiervan maken',
+      label: t('Comment hiervan maken'),
       hint: 'convert',
       run: () => convertWarningToComment(c),
     })
@@ -7816,7 +7818,7 @@ function commentCommandsFor() {
   if (githubId) {
     items.push({
       id: 'comment-github',
-      label: 'Open op GitHub',
+      label: t('Open op GitHub'),
       hint: 'github',
       run: () => window.open((state.prUrl || GITHUB_PR) + '#discussion_r' + githubId, '_blank'),
     })
@@ -7844,7 +7846,7 @@ function claudeChatClearConfirmCommandsFor(warning) {
   return withClose([
     {
       id: 'clear-claude-chat-confirm',
-      label: 'Ja, toch wissen — ' + warning,
+      label: t('Ja, toch wissen — {warning}', { warning }),
       hint: 'bevestig',
       run: () => runClearClaudeChat(),
     },
@@ -7907,7 +7909,7 @@ function claudeChatCommandsFor() {
   const items = [
     {
       id: 'clear-claude-chat',
-      label: 'Wis Claude-gesprek',
+      label: t('Wis Claude-gesprek'),
       hint: 'wis',
       ...(shadowWarning
         ? { children: claudeChatClearConfirmCommandsFor(shadowWarning) }
@@ -7917,14 +7919,14 @@ function claudeChatCommandsFor() {
   if (claudeAnchorIsPlaceholder()) {
     items.push({
       id: 'convert-claude-anchor',
-      label: 'Comment hiervan maken',
+      label: t('Comment hiervan maken'),
       hint: 'comment',
       run: () => convertClaudeAnchorToComment(),
     })
   }
   items.push({
     id: 'retry-claude-turn',
-    label: 'Probeer de mislukte turn opnieuw',
+    label: t('Probeer de mislukte turn opnieuw'),
     hint: 'opnieuw',
     run: () => retryClaudeTurn(),
   })
@@ -7939,7 +7941,7 @@ function claudeChatCommandsFor() {
   // never land on "stop" while nothing is running.
   items.push({
     id: 'cancel-claude-turn',
-    label: 'Stop deze Claude-beurt',
+    label: t('Stop deze Claude-beurt'),
     hint: 'stop',
     run: () => cancelClaudeTurn(),
   })
@@ -7972,7 +7974,7 @@ function checkoutChipCommandsFor() {
   } else {
     items.push({
       id: 'checkout-choose',
-      label: 'Andere werkmap kiezen',
+      label: t('Andere werkmap kiezen'),
       hint: 'kies',
       run: () => sendCheckoutAction('checkoutRelist'),
     })
@@ -7980,14 +7982,14 @@ function checkoutChipCommandsFor() {
   if (c.stashPending) {
     items.push({
       id: 'checkout-restore-stash',
-      label: 'Nu terugzetten (eerder opgeslagen wijziging)',
+      label: t('Nu terugzetten (eerder opgeslagen wijziging)'),
       hint: 'stash',
       run: () => sendCheckoutAction('checkoutRestoreStash'),
     })
   }
   items.push({
     id: 'checkout-off',
-    label: 'Uit (geen werkmap koppelen)',
+    label: t('Uit (geen werkmap koppelen)'),
     hint: 'uit',
     run: () => sendCheckoutAction('checkoutOff'),
   })
@@ -8002,10 +8004,11 @@ function checkoutChipCommandsFor() {
 function pushTodoConfirmCommands() {
   const p = state.pendingPush || {}
   const n = p.ahead || 0
+  const branch = p.headRef || t('de PR-branch')
   return withClose([
     {
       id: 'push-pending-confirm',
-      label: `Ja, push ${n} commit${n === 1 ? '' : 's'} naar ${p.headRef || 'de PR-branch'}`,
+      label: t(n === 1 ? 'Ja, push {n} commit naar {branch}' : 'Ja, push {n} commits naar {branch}', { n, branch }),
       hint: 'bevestig',
       run: () => pushPendingWork(),
     },
@@ -8022,7 +8025,7 @@ function pushTodoCommandsFor() {
   return withClose([
     {
       id: 'push-pending',
-      label: retry ? 'Push opnieuw naar GitHub' : 'Push naar GitHub',
+      label: retry ? t('Push opnieuw naar GitHub') : t('Push naar GitHub'),
       hint: 'push',
       children: pushTodoConfirmCommands(),
     },
@@ -8107,14 +8110,14 @@ function prCommentCommandsFor() {
   const c = selectedComment()
   const replyItem = {
     id: 'pr-comment-reply',
-    label: 'Beantwoorden',
+    label: t('Beantwoorden'),
     hint: 'reply',
     run: () => startPrCommentReply(selectedComment()),
   }
   const resolveItem = isResolvedComment(c)
     ? {
         id: 'pr-comment-unresolve',
-        label: 'Unresolve comment',
+        label: t('Unresolve comment'),
         hint: 'heropen',
         run: () => {
           const sel = selectedComment()
@@ -8123,7 +8126,7 @@ function prCommentCommandsFor() {
       }
     : {
         id: 'pr-comment-resolve',
-        label: 'Resolve comment',
+        label: t('Resolve comment'),
         hint: 'resolve',
         run: async () => {
           const sel = selectedComment()
@@ -8143,7 +8146,7 @@ function prCommentCommandsFor() {
   // and Resolve/Beantwoorden stay the likely first action.
   const deleteItem = {
     id: 'pr-comment-delete',
-    label: 'Verwijder comment',
+    label: t('Verwijder comment'),
     hint: 'delete',
     // This menu is only ever reached with a comment-index row selected (Enter
     // directly on the row) — always afterCommentRowRemoved, never the
@@ -8173,7 +8176,7 @@ function prCommentCommandsFor() {
   if (isOwnMessage(msg)) {
     items.push({
       id: 'pr-comment-edit',
-      label: 'Bewerk bericht',
+      label: t('Bewerk bericht'),
       hint: 'edit',
       run: () => startEditMessage(selectedComment(), msg),
     })
@@ -8181,7 +8184,7 @@ function prCommentCommandsFor() {
   if (c && c.source === 'ai') {
     items.push({
       id: 'pr-comment-from-warning',
-      label: 'Comment hiervan maken',
+      label: t('Comment hiervan maken'),
       hint: 'convert',
       run: () => (c.kind ? convertPrWideWarningToComment(c) : convertWarningToComment(c)),
     })
@@ -8195,7 +8198,7 @@ function prCommentCommandsFor() {
   // there's nothing here that would make chatting inappropriate.
   items.push({
     id: 'pr-comment-claude-chat',
-    label: 'Chat met Claude',
+    label: t('Chat met Claude'),
     hint: 'claude',
     run: () => startPrCommentChat(selectedComment()),
   })
@@ -8206,7 +8209,7 @@ function prCommentCommandsFor() {
     // Label is a function so it names the current state (resolveLabel/
     // snapshotCommands read it ONCE, right now, when the menu opens — see
     // that comment for why this must never become a live binding).
-    label: () => (isIgnoredComment(state, curBlock()) ? 'Ignore ongedaan maken' : 'Ignore'),
+    label: () => (isIgnoredComment(state, curBlock()) ? t('Ignore ongedaan maken') : 'Ignore'),
     hint: 'ignore',
     run: () => toggleIgnoreComment(selectedComment()),
   })
@@ -8290,20 +8293,20 @@ async function runComposePost() {
 const COMPOSE_COMMANDS = withClose([
   {
     id: 'compose-post',
-    label: 'Plaats comment',
+    label: t('Plaats comment'),
     hint: 'post',
     run: runComposePost,
   },
   {
     id: 'compose-claude',
-    label: 'Claude commando',
+    label: t('Claude commando'),
     hint: 'todo',
     // Placeholder — no Claude command integration yet.
     run: () => {},
   },
   {
     id: 'compose-commit',
-    label: () => `Laat Claude dit implementeren (${granNoun()})`,
+    label: () => t('Laat Claude dit implementeren ({noun})', { noun: t(granNoun()) }),
     hint: 'commit',
     // Placeholder — no git-commit/implement integration yet. The label refers to
     // the unit (group/line/call) the comment is scoped to.
@@ -8311,13 +8314,13 @@ const COMPOSE_COMMANDS = withClose([
   },
   {
     id: 'compose-jira',
-    label: 'Jira',
+    label: t('Jira'),
     hint: 'jira',
     // A submenu (see runCommand). All three are placeholders — no Jira write yet.
     children: withClose([
-      { id: 'compose-jira-comment', label: 'Comment op ticket', hint: 'todo', run: () => {} },
-      { id: 'compose-jira-subtask', label: 'Subtaak aanmaken', hint: 'todo', run: () => {} },
-      { id: 'compose-jira-task', label: 'Nieuwe taak aanmaken', hint: 'todo', run: () => {} },
+      { id: 'compose-jira-comment', label: t('Comment op ticket'), hint: 'todo', run: () => {} },
+      { id: 'compose-jira-subtask', label: t('Subtaak aanmaken'), hint: 'todo', run: () => {} },
+      { id: 'compose-jira-task', label: t('Nieuwe taak aanmaken'), hint: 'todo', run: () => {} },
     ]),
   },
 ])
@@ -8373,8 +8376,8 @@ function replyPublishCommandsFor() {
   const n = info ? info.localReplies : 0
   const isAI = !!info && info.source === 'ai'
   const isChatAnchor = !!info && info.chatAnchor
-  const rootLabel = isAI ? 'Ook de AI-melding op GitHub' : 'Ook mijn comment op GitHub'
-  const earlier = `de eerdere ${n} bericht${n === 1 ? '' : 'en'}`
+  const rootLabel = isAI ? t('Ook de AI-melding op GitHub') : t('Ook mijn comment op GitHub')
+  const earlier = t(n === 1 ? 'de eerdere {n} bericht' : 'de eerdere {n} berichten', { n })
   // historyChoice turns one publish mode into its own with/without-the-earlier-
   // messages submenu; without earlier messages it stays a plain, directly
   // running item.
@@ -8388,13 +8391,13 @@ function replyPublishCommandsFor() {
           children: withClose([
             {
               id: id + '-without-history',
-              label: `Zonder ${earlier}`,
+              label: t('Zonder {earlier}', { earlier }),
               hint: 'alleen dit',
               run: () => sendPendingReply(publish, false),
             },
             {
               id: id + '-with-history',
-              label: `Met ${earlier}`,
+              label: t('Met {earlier}', { earlier }),
               hint: 'hele gesprek',
               run: () => sendPendingReply(publish, true),
             },
@@ -8406,7 +8409,7 @@ function replyPublishCommandsFor() {
   // than shown with a misleading label: see pendingPublishInfo's own doc
   // comment. The reviewer's reply is then the only thing this menu can ever
   // offer to publish.
-  const items = [historyChoice('reply-publish-reply', 'Alleen mijn antwoord op GitHub', 'reply')]
+  const items = [historyChoice('reply-publish-reply', t('Alleen mijn antwoord op GitHub'), 'reply')]
   if (!isChatAnchor) items.push(historyChoice('reply-publish-thread', rootLabel, 'thread'))
   return withClose(items)
 }
@@ -8438,7 +8441,7 @@ const POSTAPPROVE_COMMANDS = withClose(
       // column's whole subtree and this jumps back UP to an unapproved
       // ancestor, not forward to something new — otherwise the existing
       // "Ga door" wording for every other (forward) plan.
-      label: () => (postApproveTarget && postApproveTarget.isReturn ? 'Ga terug' : 'Ga door'),
+      label: () => (postApproveTarget && postApproveTarget.isReturn ? t('Ga terug') : t('Ga door')),
       hint: 'volgende',
       run: () => {
         if (postApproveTarget) applyNextUnapproved(postApproveTarget)
@@ -8534,11 +8537,11 @@ function buildReviewClipboardText(event, body) {
     // stay short/pasteable, so only whitespace is normalized, the text itself
     // is never summarized or truncated.
     const reason = body.replace(/\s+/g, ' ').trim()
-    return `${link} met nog een paar aanpassingen: ${reason}`
+    return t('{link} met nog een paar aanpassingen: {reason}', { link, reason })
   }
   const n = ownOpenCommentCount()
-  if (n === 0) return `${link} ✅`
-  return `${link} ✅ met ${n} comment${n === 1 ? '' : 's'}`
+  if (n === 0) return t('{link} ✅', { link })
+  return t(n === 1 ? '{link} ✅ met {n} comment' : '{link} ✅ met {n} comments', { link, n })
 }
 
 // copyReviewSummary puts the text on the clipboard. Same minimal error
@@ -8561,7 +8564,7 @@ async function copyReviewSummary(text) {
 function copySelectionCommand(text) {
   return {
     id: 'copy-selection',
-    label: 'Kopieer selectie',
+    label: t('Kopieer selectie'),
     hint: 'copy kopieer',
     run: () => copyReviewSummary(text),
   }
@@ -8660,7 +8663,7 @@ async function submitReview(event, body = '') {
 const REVIEW_APPROVE_CONFIRM_COMMANDS = withClose([
   {
     id: 'review-approve-confirm-overview',
-    label: 'Goedkeuren en ga naar overzicht',
+    label: t('Goedkeuren en ga naar overzicht'),
     hint: 'overzicht',
     icon: 'approve-pr',
     run: async () => {
@@ -8670,7 +8673,7 @@ const REVIEW_APPROVE_CONFIRM_COMMANDS = withClose([
   },
   {
     id: 'review-approve-confirm-close',
-    label: 'Goedkeuren en sluiten',
+    label: t('Goedkeuren en sluiten'),
     hint: 'bevestig',
     icon: 'approve-pr',
     run: () => submitReview('APPROVE'),
@@ -8728,7 +8731,7 @@ function jumpToCommentRow(commentId) {
 const REVIEW_APPROVE_COMMANDS = withClose([
   {
     id: 'review-approve-pr',
-    label: 'Keur de HELE PR goed',
+    label: t('Keur de HELE PR goed'),
     hint: 'approve',
     icon: 'approve-pr',
     children: REVIEW_APPROVE_CONFIRM_COMMANDS,
@@ -8755,14 +8758,14 @@ const REVIEW_APPROVE_COMMANDS = withClose([
 const REVIEW_CHOICE_COMMANDS = withClose([
   {
     id: 'review-choice-approve',
-    label: 'Keur de HELE PR goed',
+    label: t('Keur de HELE PR goed'),
     hint: 'approve',
     icon: 'approve-pr',
     children: REVIEW_APPROVE_CONFIRM_COMMANDS,
   },
   {
     id: 'review-choice-reject',
-    label: 'Wijs de PR af',
+    label: t('Wijs de PR af'),
     hint: 'reject',
     icon: 'reject-pr',
     run: () => openMenu('reviewReject'),
@@ -8901,7 +8904,7 @@ function blockShortcutHints() {
     return [
       { key: '→', label: 'in diff/thread' },
       { key: 'Enter', label: 'menu' },
-      { key: 'Space', label: 'goedkeuren + door' },
+      { key: 'Space', label: t('goedkeuren + door') },
       { key: '/', label: 'PR-menu' },
     ]
   }
@@ -8916,9 +8919,9 @@ function blockShortcutHints() {
   // order. `d` still only appears while genuinely usable (dHintUsable,
   // unchanged reasoning/scope).
   if (currentGran() !== 'group') {
-    const items = [{ key: 's', label: 'uitzoomen' }]
-    if (dHintUsable()) items.push({ key: 'd', label: 'terug' })
-    items.push({ key: 'f', label: 'inzoomen' })
+    const items = [{ key: 's', label: t('uitzoomen') }]
+    if (dHintUsable()) items.push({ key: 'd', label: t('terug') })
+    items.push({ key: 'f', label: t('inzoomen') })
     return items
   }
   // At 'group', `s` is ALSO a no-op (already the coarsest level — the same
@@ -8928,10 +8931,10 @@ function blockShortcutHints() {
   // Order: weergave, Ga dieper, kolom — reviewer follow-up on the ordering
   // and the label itself.
   return [
-    { key: 'a', label: 'weergave' },
-    { key: 'f', label: 'Ga dieper' },
-    { key: '←→', label: 'kolom' },
-    { key: 'Space', label: 'goedkeuren + door' },
+    { key: 'a', label: t('weergave') },
+    { key: 'f', label: t('Ga dieper') },
+    { key: '←→', label: t('kolom') },
+    { key: 'Space', label: t('goedkeuren + door') },
     { key: 'Enter', label: 'menu' },
   ]
 }
@@ -11260,14 +11263,15 @@ function approveContext() {
 // COMMANDS label, which also needs it for the done/undone check) doesn't
 // re-derive it.
 function approveNoun(ctx = approveContext()) {
-  if (ctx.mode !== 'diff') return 'dit block'
-  if (ctx.b && ctx.b.category === 'TRANSLATION') return 'deze vertaling'
-  if (ctx.gran === 'call') return 'deze call'
+  if (ctx.mode !== 'diff') return t('dit block')
+  if (ctx.b && ctx.b.category === 'TRANSLATION') return t('deze vertaling')
+  if (ctx.gran === 'call') return t('deze call')
   if (ctx.gran === 'line') {
-    if (ctx.anchor != null && ctx.anchor !== ctx.change) return `deze ${Math.abs(ctx.change - ctx.anchor) + 1} regels`
-    return 'deze regel'
+    if (ctx.anchor != null && ctx.anchor !== ctx.change)
+      return t('deze {n} regels', { n: Math.abs(ctx.change - ctx.anchor) + 1 })
+    return t('deze regel')
   }
-  return 'deze regels'
+  return t('deze regels')
 }
 
 // approveTargetRows returns the changed row indices an approve action covers now:
@@ -12279,14 +12283,14 @@ const COMMANDS = withClose([
     label: () => {
       const ctx = approveContext()
       const noun = approveNoun(ctx)
-      return isApproveDone(ctx) ? `Trek goedkeuring van ${noun} in` : `Keur ${noun} goed`
+      return isApproveDone(ctx) ? t('Trek goedkeuring van {noun} in', { noun }) : t('Keur {noun} goed', { noun })
     },
     hint: 'approve',
     run: () => toggleApprove(),
   },
   {
     id: 'comment',
-    label: 'Comment op deze regel',
+    label: t('Comment op deze regel'),
     hint: 'task',
     run: () => startComment(commentTarget),
   },
@@ -12297,7 +12301,7 @@ const COMMANDS = withClose([
     // opens the same brand-new composer state as "Comment op deze regel" and
     // immediately steps the keyboard into the Claude composer, exactly as if
     // → had been pressed from that still-open field.
-    label: 'Chat over deze regel',
+    label: t('Chat over deze regel'),
     hint: 'claude',
     run: () => startClaudeChat(commentTarget),
   },
@@ -12307,13 +12311,13 @@ const COMMANDS = withClose([
     // shared leading indentation (dedentCode) — same clipboard mechanism as
     // the native right-click menu's "Kopieer selectie", just for the current
     // navigation unit instead of a dragged text selection.
-    label: 'Kopieer deze regel',
+    label: t('Kopieer deze regel'),
     hint: 'copy kopieer',
     run: () => copySelectedCode(),
   },
   {
     id: 'github',
-    label: 'Open GitHub',
+    label: t('Open GitHub'),
     hint: 'github',
     // A parent command: choosing it opens a submenu of the two targets rather
     // than acting directly (see runCommand). "Sluit menu" is pinned first
@@ -12321,13 +12325,13 @@ const COMMANDS = withClose([
     children: withClose([
       {
         id: 'github-line',
-        label: 'Regel in Files changed',
+        label: t('Regel in Files changed'),
         hint: 'github',
         run: () => openGithubLine(),
       },
       {
         id: 'github-pr',
-        label: 'PR-pagina',
+        label: t('PR-pagina'),
         hint: 'github',
         run: () => window.open(state.prUrl || GITHUB_PR, '_blank'),
       },
@@ -12353,12 +12357,12 @@ const COMMANDS = withClose([
 const PR_COMMANDS = withClose([
   {
     id: 'pr-github',
-    label: 'GitHub',
+    label: t('GitHub'),
     hint: 'github',
     children: withClose([
       {
         id: 'pr-github-open',
-        label: 'Open op GitHub',
+        label: t('Open op GitHub'),
         hint: 'github',
         run: () => window.open(state.prUrl || GITHUB_PR, '_blank'),
       },
@@ -12367,7 +12371,7 @@ const PR_COMMANDS = withClose([
         // Manual entry point into the exact same approve/reject flow as the
         // automatic postApprove follow-up (see REVIEW_CHOICE_COMMANDS above) —
         // reachable at any time, not only after approving the last unit.
-        label: 'PR keuren',
+        label: t('PR keuren'),
         hint: 'review',
         icon: 'approve-pr',
         children: REVIEW_CHOICE_COMMANDS,
@@ -12380,7 +12384,7 @@ const PR_COMMANDS = withClose([
         // startComment — the line-comment composer — which meant this item
         // either placed an ordinary line comment or (with a PR-comment index
         // row selected) did nothing at all. See startPrWideComment.
-        label: 'Algemene comment plaatsen',
+        label: t('Algemene comment plaatsen'),
         hint: 'comment',
         run: () => startPrWideComment(),
       },
@@ -12388,26 +12392,26 @@ const PR_COMMANDS = withClose([
   },
   {
     id: 'pr-jira',
-    label: 'Jira',
+    label: t('Jira'),
     hint: 'jira',
     children: withClose([
       {
         id: 'pr-jira-open',
         // Label names the ticket once we know it (title carried a KEY-123).
-        label: () => (state.jiraKey ? `Openen in nieuw tab (${state.jiraKey})` : 'Openen in nieuw tab'),
+        label: () => (state.jiraKey ? t('Openen in nieuw tab ({key})', { key: state.jiraKey }) : t('Openen in nieuw tab')),
         hint: 'jira',
         run: () => window.open(state.jiraKey ? JIRA_BASE + state.jiraKey : JIRA_BASE, '_blank'),
       },
       {
         id: 'pr-jira-comment',
-        label: 'Comment plaatsen',
+        label: t('Comment plaatsen'),
         hint: 'todo',
         // Placeholder — no Jira write integration yet (see CLAUDE.md).
         run: () => {},
       },
       {
         id: 'pr-jira-subtask',
-        label: 'Subtask maken',
+        label: t('Subtask maken'),
         hint: 'todo',
         // Placeholder — no Jira subtask creation yet.
         run: () => {},
@@ -12419,7 +12423,7 @@ const PR_COMMANDS = withClose([
     // Label is a function so it names the current action; snapshotCommands reads
     // it once (non-reactively) at open, so it never leaks a reactive binding into
     // the CommandMenu tree (see the label-function note in conventions.md).
-    label: () => (state.descriptionExpanded ? 'Omschrijving inklappen' : 'Toon volledige omschrijving'),
+    label: () => (state.descriptionExpanded ? t('Omschrijving inklappen') : t('Toon volledige omschrijving')),
     hint: 'omschrijving',
     run: () => {
       state.descriptionExpanded = !state.descriptionExpanded
@@ -12436,7 +12440,7 @@ const PR_COMMANDS = withClose([
     // block instead (testRunStatusBlock, testRun.mjs). No confirm step, same
     // reasoning as the batch action row: nothing here can change code (no
     // Edit tool at all), so there's nothing destructive to confirm.
-    label: () => (testRun.running ? 'Testrun loopt al…' : 'Tests laten draaien'),
+    label: () => (testRun.running ? t('Testrun loopt al…') : t('Tests laten draaien')),
     hint: 'test',
     run: () => {
       if (!testRun.running) startTestRun(state.pr)
@@ -12452,18 +12456,18 @@ const PR_COMMANDS = withClose([
     // "one extra Enter" confirm step every other destructive PR-wide action
     // gets via `children` (e.g. "PR keuren"), so neither child needs a
     // further nested "Ja, ..." confirm row.
-    label: 'Alles keuren',
+    label: t('Alles keuren'),
     hint: 'keuren',
     children: withClose([
       {
         id: 'pr-approve-all-rows',
-        label: 'Alle code aanpassingen goedkeuren',
+        label: t('Alle code aanpassingen goedkeuren'),
         hint: 'keuren',
         run: () => approveAllForPr(),
       },
       {
         id: 'pr-retract-all-approvals',
-        label: 'Alle goedkeuringen intrekken',
+        label: t('Alle goedkeuringen intrekken'),
         hint: 'intrekken',
         run: () => retractAllApprovalsForPr(),
       },
@@ -12561,8 +12565,9 @@ function blockCommands() {
 // selectionNoun names what a multi-row selection covers, for the labels: N
 // methods inside the methodes-kolom, N blocks in the index.
 function selectionNoun() {
-  if (isTestColumnActive()) return `deze ${methodRangeIndices(curTestClassRow()).length} methodes`
-  return `deze ${listRangeIndices().length} blokken`
+  if (isTestColumnActive())
+    return t('deze {n} methodes', { n: methodRangeIndices(curTestClassRow()).length })
+  return t('deze {n} blokken', { n: listRangeIndices().length })
 }
 
 // selectionApproveDone reports whether EVERY row of the current multi-row
@@ -12660,8 +12665,8 @@ function rangeCommandsFor() {
       id: 'range-approve',
       label: () =>
         selectionApproveDone()
-          ? `Trek goedkeuring van ${selectionNoun()} in`
-          : `Keur ${selectionNoun()} goed`,
+          ? t('Trek goedkeuring van {noun} in', { noun: selectionNoun() })
+          : t('Keur {noun} goed', { noun: selectionNoun() }),
       hint: 'approve',
       run: () => toggleRangeApproval(),
     },
@@ -12670,13 +12675,13 @@ function rangeCommandsFor() {
     items.push(
       {
         id: 'range-comment',
-        label: () => `Plaats comment over ${selectionNoun()}`,
+        label: () => t('Plaats comment over {noun}', { noun: selectionNoun() }),
         hint: 'task',
         run: () => startRangeComment(commentTarget, rangeBlocks()),
       },
       {
         id: 'range-claude',
-        label: () => `Chat met Claude over ${selectionNoun()}`,
+        label: () => t('Chat met Claude over {noun}', { noun: selectionNoun() }),
         hint: 'claude',
         run: () => startRangeChat(commentTarget, rangeBlocks()),
       },
@@ -12687,8 +12692,8 @@ function rangeCommandsFor() {
       id: 'range-ignore',
       label: () =>
         rangeIgnoreDone()
-          ? `Ignore ongedaan maken voor ${rangeIgnorableComments().length} comments`
-          : `Ignore ${rangeIgnorableComments().length} comments in dit bereik`,
+          ? t('Ignore ongedaan maken voor {n} comments', { n: rangeIgnorableComments().length })
+          : t('Ignore {n} comments in dit bereik', { n: rangeIgnorableComments().length }),
       hint: 'ignore',
       run: () => toggleRangeIgnore(),
     })
@@ -12764,7 +12769,7 @@ function resolveCommandsInner(query) {
       return [
         {
           id: 'make-pr-comment-claude-chat',
-          label: 'Chat over deze comment',
+          label: t('Chat over deze comment'),
           hint: 'claude',
           run: () => {
             startPrCommentChat(selectedComment())
@@ -12779,7 +12784,7 @@ function resolveCommandsInner(query) {
         },
         {
           id: 'make-pr-comment-reply',
-          label: 'Beantwoorden met deze tekst',
+          label: t('Beantwoorden met deze tekst'),
           hint: 'reply',
           run: () => {
             startPrCommentReply(selectedComment())
@@ -12829,7 +12834,7 @@ function resolveCommandsInner(query) {
     return [
       {
         id: 'review-reject-submit',
-        label: 'Wijs de PR af met deze reden',
+        label: t('Wijs de PR af met deze reden'),
         hint: 'verstuur',
         run: () => submitReview('REQUEST_CHANGES', reason),
       },
@@ -12863,7 +12868,7 @@ function resolveCommandsInner(query) {
     return [
       {
         id: 'make-claude-chat',
-        label: 'Chat over deze regel',
+        label: t('Chat over deze regel'),
         hint: 'claude',
         run: () => {
           startClaudeChat(commentTarget)
@@ -12877,7 +12882,7 @@ function resolveCommandsInner(query) {
       },
       {
         id: 'make-comment',
-        label: 'Comment op deze regel',
+        label: t('Comment op deze regel'),
         hint: 'comment',
         run: () => {
           startComment(commentTarget)
@@ -14784,9 +14789,9 @@ function prPill(text, cls) {
 
 function prReviewPill(meta) {
   const d = meta.reviewDecision
-  if (d === 'APPROVED') return prPill('Goedgekeurd', 'bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 ring-emerald-200 dark:ring-emerald-500/30')
-  if (d === 'CHANGES_REQUESTED') return prPill('Wijzigingen gevraagd', 'bg-rose-50 dark:bg-rose-500/15 text-rose-700 dark:text-rose-300 ring-rose-200 dark:ring-rose-500/30')
-  return prPill('Wacht op review', 'bg-amber-50 dark:bg-amber-500/15 text-amber-700 dark:text-amber-300 ring-amber-200 dark:ring-amber-500/30')
+  if (d === 'APPROVED') return prPill(t('Goedgekeurd'), 'bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 ring-emerald-200 dark:ring-emerald-500/30')
+  if (d === 'CHANGES_REQUESTED') return prPill(t('Wijzigingen gevraagd'), 'bg-rose-50 dark:bg-rose-500/15 text-rose-700 dark:text-rose-300 ring-rose-200 dark:ring-rose-500/30')
+  return prPill(t('Wacht op review'), 'bg-amber-50 dark:bg-amber-500/15 text-amber-700 dark:text-amber-300 ring-amber-200 dark:ring-amber-500/30')
 }
 
 function prChecksPill(meta) {
@@ -14883,14 +14888,14 @@ const SINCE_TRUNCATE_AT = 200
 // deterministic blocks below it always stand on their own.
 function sinceReviewSections(meta) {
   if (!meta || !meta.newSinceKind || !meta.sinceFacts) return []
-  const kindWord = meta.newSinceKind === 'review' ? 'nieuw sinds jouw review' : 'nieuw sinds jouw comment'
+  const kindWord = meta.newSinceKind === 'review' ? t('nieuw sinds jouw review') : t('nieuw sinds jouw comment')
   const updated = relativeTime(meta.ghUpdatedAt)
   const out = [
     {
       key: 'since:story',
       story: true,
-      title: 'Aanpassingen sinds jouw review',
-      line: updated ? 'Bijgewerkt ' + updated + ' · ' + kindWord : kindWord,
+      title: t('Aanpassingen sinds jouw review'),
+      line: updated ? t('Bijgewerkt {updated} · {kindWord}', { updated, kindWord }) : kindWord,
       body: (meta.sinceSummary || '').trim(),
     },
   ]
@@ -14904,7 +14909,7 @@ function sinceReviewSections(meta) {
     }
     if (!cur) {
       if (line === '') continue
-      cur = { key: 'since:facts:' + out.length, title: 'Sinds jouw laatste review', body: '' }
+      cur = { key: 'since:facts:' + out.length, title: t('Sinds jouw laatste review'), body: '' }
       out.push(cur)
     }
     cur.body += raw + '\n'
@@ -15014,7 +15019,7 @@ function sinceReviewBlock(state, s) {
                       }}"
                       class="mt-1 text-[11px] font-medium text-indigo-600 dark:text-indigo-400 hover:underline"
                     >
-                      ${() => (open() ? 'Inklappen' : 'meer… (Enter)')}
+                      ${() => (open() ? t('Inklappen') : t('meer… (Enter)'))}
                     </button>`
                   : ''}
             </div>`
@@ -15034,7 +15039,7 @@ function prMenuButton() {
   return html`
     <button
       type="button"
-      title="PR-menu (keuren, comment plaatsen, Jira, …)"
+      title="${t('PR-menu (keuren, comment plaatsen, Jira, …)')}"
       data-testid="pr-menu-button"
       class="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-50 dark:bg-zinc-800 text-slate-500 dark:text-zinc-400 ring-1 ring-slate-200 dark:ring-zinc-700 hover:text-indigo-600 dark:hover:text-indigo-400"
       @click="${() => openMenu('pr')}"
@@ -15071,17 +15076,17 @@ function checkoutAlertGlyph() {
 // otherwise the assigned directory's own last path segment.
 function checkoutChipLabel() {
   const c = state.checkout
-  if (!c) return 'Geen werkmap'
-  if (c.decision) return 'Keuze nodig'
+  if (!c) return t('Geen werkmap')
+  if (c.decision) return t('Keuze nodig')
   if (c.dirName) return c.dirName
-  return 'Geen werkmap'
+  return t('Geen werkmap')
 }
 function checkoutChipTitle() {
   const c = state.checkout
-  if (!c) return 'Werkmap voor Claude-aanpassingen: nog niet geladen'
-  if (c.decision) return c.decision.body || 'Er moet iets over de werkmap worden besloten'
-  if (c.dir) return 'Claude werkt in ' + c.dir + (c.branch ? ' (branch ' + c.branch + ')' : '')
-  return 'Geen werkmap gekoppeld — klik om een werkmap te kiezen'
+  if (!c) return t('Werkmap voor Claude-aanpassingen: nog niet geladen')
+  if (c.decision) return c.decision.body || t('Er moet iets over de werkmap worden besloten')
+  if (c.dir) return c.branch ? t('Claude werkt in {dir} (branch {branch})', { dir: c.dir, branch: c.branch }) : t('Claude werkt in {dir}', { dir: c.dir })
+  return t('Geen werkmap gekoppeld — klik om een werkmap te kiezen')
 }
 function checkoutChipCls() {
   const c = state.checkout
@@ -15111,10 +15116,10 @@ function checkoutChipCls() {
 // the reviewer reads the same vocabulary everywhere Claude is doing agentic
 // work. Word carries the meaning, never a colour alone (colourblind rule).
 function testRunStatusLine() {
-  if (testRun.error) return 'Kon geen tests draaien: ' + testRun.error
-  if (testRun.cancelled) return 'Afgebroken op jouw verzoek.'
+  if (testRun.error) return t('Kon geen tests draaien: {error}', { error: testRun.error })
+  if (testRun.cancelled) return t('Afgebroken op jouw verzoek.')
   if (testRun.running) return claudeStatusText({ running: true, phase: testRun.phase, tool: testRun.tool, detail: testRun.detail }, 0)
-  return 'Klaar — ' + testRun.passed + ' geslaagd, ' + testRun.failed + ' mislukt.'
+  return t('Klaar — {passed} geslaagd, {failed} mislukt.', { passed: testRun.passed, failed: testRun.failed })
 }
 
 // testRunStatusBlock — the PR-wide "Tests laten draaien" status card in
@@ -15137,7 +15142,7 @@ function testRunStatusBlock() {
             ? html`<button
                 type="button"
                 data-testid="test-run-stop"
-                title="Stop deze testrun"
+                title="${t('Stop deze testrun')}"
                 class="rounded px-1.5 py-0.5 text-[11px] font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-500/10"
                 @click="${() => cancelTestRun(state.pr)}"
               >
@@ -15268,22 +15273,22 @@ function prInfoCard(state) {
               >`
             : ''}
         ${() => (state.prMeta.changedFiles ? html`<span class="text-slate-300 dark:text-zinc-600">·</span>` : '')}
-        ${() => (state.prMeta.changedFiles ? html`<span>${state.prMeta.changedFiles} bestanden</span>` : '')}
+        ${() => (state.prMeta.changedFiles ? html`<span>${t('{n} bestanden', { n: state.prMeta.changedFiles })}</span>` : '')}
         ${() => (state.prMeta.headRef ? html`<span class="text-slate-300 dark:text-zinc-600">·</span>` : '')}
         ${() =>
           state.prMeta.headRef
-            ? html`<span class="truncate font-mono text-sky-600 dark:text-sky-400" title="Huidige branch">${state.prMeta.headRef}</span>`
+            ? html`<span class="truncate font-mono text-sky-600 dark:text-sky-400" title="${t('Huidige branch')}">${state.prMeta.headRef}</span>`
             : ''}
         ${() => (state.prUrl ? html`<span class="text-slate-300 dark:text-zinc-600">·</span>` : '')}
         ${() =>
           state.prUrl
             ? html`<a href="${state.prUrl}" target="_blank" rel="noreferrer" class="text-indigo-600 dark:text-indigo-400 hover:underline"
-                >op GitHub ›</a
+                >${t('op GitHub ›')}</a
               >`
             : ''}
       </div>
       <div class="flex items-center justify-between" data-testid="pr-info-theme-row">
-        <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500">Weergave</span>
+        <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500">${t('Weergave')}</span>
         <div class="flex items-center gap-1.5">
           ${prMenuButton()}
           ${autoWarnToggleButton()}
@@ -15293,14 +15298,14 @@ function prInfoCard(state) {
         </div>
       </div>
       <div class="rounded-lg bg-emerald-50 dark:bg-emerald-500/15 p-2.5" data-testid="pr-info-summary">
-        <div class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500">Doel</div>
+        <div class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500">${t('Doel')}</div>
         ${() =>
           state.prMeta.summary
             ? html`<div
                 class="markdown-body text-[13px] leading-relaxed text-slate-700 dark:text-zinc-300"
                 .innerHTML="${() => renderMarkdown(state.prMeta.summary)}"
               ></div>`
-            : html`<p class="text-[13px] italic text-slate-400 dark:text-zinc-500">samenvatting genereren…</p>`}
+            : html`<p class="text-[13px] italic text-slate-400 dark:text-zinc-500">${t('samenvatting genereren…')}</p>`}
       </div>
       ${sinceReviewBlocks(state)}
       <div
@@ -15337,7 +15342,7 @@ function prInfoCard(state) {
         data-desc-focused="${() => (state.taskFocus === DESC_FOCUS_KEY ? 'true' : 'false')}"
         @click="${() => toggleDescriptionExpanded({ focus: true })}"
       >
-        <div class="mb-1 shrink-0 text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500">Omschrijving</div>
+        <div class="mb-1 shrink-0 text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500">${t('Omschrijving')}</div>
         ${() =>
           state.prMeta.body
             ? state.prMeta.body.length > DESC_TRUNCATE_AT
@@ -15377,14 +15382,14 @@ function prInfoCard(state) {
                         ? 'mt-1 text-[11px] font-medium text-indigo-600 dark:text-indigo-400 hover:underline'
                         : 'absolute inset-x-0 bottom-0 flex h-10 cursor-pointer items-end justify-center bg-gradient-to-t from-white via-white/85 to-transparent text-[11px] font-medium text-indigo-600 hover:text-indigo-700 dark:from-zinc-900 dark:via-zinc-900/85 dark:text-indigo-400 dark:hover:text-indigo-300'}"
                   >
-                    ${() => (state.descriptionExpanded ? 'Inklappen' : 'meer…')}
+                    ${() => (state.descriptionExpanded ? t('Inklappen') : t('meer…'))}
                   </button>
                 </div>`
               : html`<div
                   class="shrink-0 markdown-body text-[13px] leading-relaxed text-slate-700 dark:text-zinc-300"
                   .innerHTML="${() => renderMarkdown(state.prMeta.body)}"
                 ></div>`
-            : html`<p class="shrink-0 text-[13px] text-slate-400 dark:text-zinc-500">geen omschrijving</p>`}
+            : html`<p class="shrink-0 text-[13px] text-slate-400 dark:text-zinc-500">${t('geen omschrijving')}</p>`}
       </div>
       </div>
       <div
@@ -15650,31 +15655,31 @@ function taskCommandsFor() {
   if (!row) return withClose([])
   const items = []
   if (row.comment) {
-    items.push({ id: 'task-open-comment', label: 'Open de comment', hint: 'open comment', run: () => openTask(row.run) })
+    items.push({ id: 'task-open-comment', label: t('Open de comment'), hint: 'open comment', run: () => openTask(row.run) })
   }
   if (row.problem && row.kind === 'run' && !row.retrying) {
     if (row.retryable) {
-      items.push({ id: 'task-retry', label: 'Opnieuw proberen', hint: 'opnieuw retry', run: () => retryFailedRun(row.runId) })
+      items.push({ id: 'task-retry', label: t('Opnieuw proberen'), hint: 'opnieuw retry', run: () => retryFailedRun(row.runId) })
     } else {
       items.push({
         id: 'task-retry-blocked',
-        label: 'Kan niet opnieuw proberen — deze taak start alleen bij de bron',
+        label: t('Kan niet opnieuw proberen — deze taak start alleen bij de bron'),
         hint: 'opnieuw retry',
         run: () => {},
       })
     }
   }
   if (row.error) {
-    items.push({ id: 'task-copy-error', label: 'Kopieer foutmelding', hint: 'copy kopieer', run: () => copyReviewSummary(row.error) })
+    items.push({ id: 'task-copy-error', label: t('Kopieer foutmelding'), hint: 'copy kopieer', run: () => copyReviewSummary(row.error) })
   }
   if (row.kind === 'log') {
-    items.push({ id: 'task-hide-log', label: 'Verberg deze melding', hint: 'verberg', run: () => hideTaskLogLine(row.key) })
+    items.push({ id: 'task-hide-log', label: t('Verberg deze melding'), hint: 'verberg', run: () => hideTaskLogLine(row.key) })
   }
   // "Verversen", not "Taken verversen": next to "Opnieuw proberen" a second
   // long item read as the same action twice (reviewer feedback). The ⟳ button
   // in the card header does exactly this too — the item exists so a row that
   // offers nothing else still does something useful.
-  items.push({ id: 'task-refresh', label: 'Verversen', hint: 'refresh verversen', run: () => refreshTasks() })
+  items.push({ id: 'task-refresh', label: t('Verversen'), hint: 'refresh verversen', run: () => refreshTasks() })
   return withClose(items)
 }
 
@@ -15742,7 +15747,7 @@ function testClassPreviewCard(state, row) {
           <span class="truncate text-sm font-medium text-slate-700 dark:text-zinc-300">${row.label}</span>
         </div>
         <p class="text-xs text-slate-400 dark:text-zinc-500">
-          ${row.methods.length} ${row.methods.length === 1 ? 'methode' : 'methodes'}${s && s.total
+          ${row.methods.length} ${t(row.methods.length === 1 ? 'methode' : 'methodes')}${s && s.total
             ? ` · ${s.done}/${s.total}`
             : ''}
         </p>
@@ -16710,7 +16715,7 @@ function MainScrollRightHint(state) {
               >
                 <button
                   type="button"
-                  title="Meer naar rechts"
+                  title="${t('Meer naar rechts')}"
                   data-testid="main-scroll-right-button"
                   class="flex h-7 w-7 shrink-0 items-center justify-center rounded text-slate-500 transition hover:bg-slate-100 hover:text-indigo-600 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-indigo-400"
                   @click="${(e) => {
@@ -16831,7 +16836,7 @@ function MainScrollLeftHint(state) {
                 >
                   <button
                     type="button"
-                    title="Terug (één stap)"
+                    title="${t('Terug (één stap)')}"
                     data-testid="main-scroll-left-button"
                     class="flex h-7 w-7 shrink-0 items-center justify-center rounded text-slate-500 transition hover:bg-slate-100 hover:text-indigo-600 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-indigo-400"
                     @click="${(e) => {

@@ -10,6 +10,7 @@ import { batch, batchItemFor, BATCH_STATE_LABEL, isBatchEligible } from './comme
 import { claudeStatusText } from './ClaudeChat.mjs'
 import { claudeTurnFor } from './claudeTurns.mjs'
 import { isChatUnread, ensureChatUnread } from './chatUnread.mjs'
+import { t } from './i18n.mjs'
 
 // Tailwind classes per category tag, so the pills read like the screenshot.
 const CATEGORY_STYLE = {
@@ -173,22 +174,21 @@ export default function BlockList(state, isPrWideComposing = () => false, onReve
             >START</span
           >
           <h1 class="text-sm font-semibold text-slate-800 dark:text-zinc-200">
-            Start — waar wil je beginnen?
+            ${t('Start — waar wil je beginnen?')}
           </h1>
         </div>
         <p class="mt-1 text-xs text-slate-500 dark:text-zinc-500">
           <span class="font-medium text-slate-700 dark:text-zinc-300"
             >${() => state.blocks.length}</span
           >
-          startpunten &nbsp;·&nbsp; ↑ ↓ om te kiezen · → om de diff in te stappen ·
-          ← om te zoeken
+          ${t('startpunten')} &nbsp;·&nbsp; ${t('↑ ↓ om te kiezen · → om de diff in te stappen · ← om te zoeken')}
         </p>
         ${() => approvalSummaryLine(state)}
         <input
           id="block-search"
           data-testid="block-search"
           type="text"
-          placeholder="Zoek startpunten…"
+          placeholder="${t('Zoek startpunten…')}"
           autocomplete="off"
           spellcheck="false"
           class="${() =>
@@ -440,10 +440,10 @@ function staleTreeRow(state) {
     >
       <span class="flex items-center gap-2 text-xs font-medium text-amber-800 dark:text-amber-200">
         <span aria-hidden="true">↻</span>
-        <span data-testid="blocks-stale-title">Nieuwe commits in deze PR</span>
+        <span data-testid="blocks-stale-title">${t('Nieuwe commits in deze PR')}</span>
       </span>
       <span class="mt-0.5 block text-[11px] text-amber-700 dark:text-amber-300"
-        >herlaad de boom om ze te zien</span
+        >${t('herlaad de boom om ze te zien')}</span
       >
     </button>
   `.key('blocks-stale')
@@ -459,7 +459,7 @@ function commentHeading() {
       data-testid="comment-heading"
       class="border-b border-slate-100 dark:border-zinc-800/60 bg-slate-50 dark:bg-zinc-800/40 px-3 py-1.5 text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-zinc-500"
     >
-      PR-comments
+      ${t('PR-comments')}
     </div>
   `
 }
@@ -499,11 +499,11 @@ function lineCommentHeading(state) {
       data-testid="line-comment-heading"
       class="flex items-center justify-between border-b border-t border-slate-100 dark:border-zinc-800/60 bg-slate-50 dark:bg-zinc-800/40 px-3 py-1.5"
     >
-      <span class="text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-zinc-500">Comments op regels</span>
+      <span class="text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-zinc-500">${t('Comments op regels')}</span>
       <button
         data-testid="line-comment-toggle"
         class="text-[11px] font-medium text-slate-500 dark:text-zinc-500 hover:text-slate-700 dark:hover:text-zinc-300"
-        title="${() => (state.lineCommentsCollapsed ? 'Toon comments op regels' : 'Verberg comments op regels')}"
+        title="${() => (state.lineCommentsCollapsed ? t('Toon comments op regels') : t('Verberg comments op regels'))}"
         @click="${() => {
           state.lineCommentsCollapsed = !state.lineCommentsCollapsed
         }}"
@@ -527,7 +527,7 @@ function openChatsHeading() {
       data-testid="open-chats-heading"
       class="border-b border-t border-slate-100 dark:border-zinc-800/60 bg-slate-50 dark:bg-zinc-800/40 px-3 py-1.5 text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-zinc-500"
     >
-      Openstaande chats
+      ${t('Openstaande chats')}
     </div>
   `
 }
@@ -542,7 +542,7 @@ function hiddenCommentHeading() {
       data-testid="hidden-comment-heading"
       class="border-b border-slate-100 dark:border-zinc-800/60 bg-slate-50 dark:bg-zinc-800/40 px-3 py-1.5 text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-zinc-500"
     >
-      Verborgen comments
+      ${t('Verborgen comments')}
     </div>
   `
 }
@@ -557,7 +557,7 @@ function underlyingHeading() {
       data-testid="underlying-heading"
       class="border-b border-t border-slate-100 dark:border-zinc-800/60 bg-slate-50 dark:bg-zinc-800/40 px-3 py-1.5 text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-zinc-500"
     >
-      Onderliggende code
+      ${t('Onderliggende code')}
     </div>
   `
 }
@@ -571,7 +571,7 @@ function pushTodoHeading() {
       data-testid="push-todo-heading"
       class="border-b border-t border-slate-100 dark:border-zinc-800/60 bg-slate-50 dark:bg-zinc-800/40 px-3 py-1.5 text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-zinc-500"
     >
-      Aan het einde
+      ${t('Aan het einde')}
     </div>
   `
 }
@@ -581,9 +581,9 @@ function pushTodoHeading() {
 // above for the same reasoning). The ⇧ glyph in the row's title carries the
 // "there is something to send upstream" meaning next to it.
 function pushTodoStatusWord(p) {
-  if (p.state === 'pushing') return 'pushen…'
-  if (p.state === 'failed') return 'push mislukt — Enter probeert opnieuw'
-  return 'klaar om te pushen — Enter'
+  if (p.state === 'pushing') return t('pushen…')
+  if (p.state === 'failed') return t('push mislukt — Enter probeert opnieuw')
+  return t('klaar om te pushen — Enter')
 }
 
 // pushTodoRow is the todo at the very bottom of the index: Claude's landed
@@ -624,8 +624,11 @@ function pushTodoRow(state) {
       <span class="flex items-center gap-2 text-xs font-medium text-slate-700 dark:text-zinc-300">
         <span aria-hidden="true">⇧</span>
         <span data-testid="push-todo-title"
-          >${n} commit${n === 1 ? '' : 's'} nog niet gepusht naar
-          ${p.headRef || 'de PR-branch'}</span
+          >${t('{n} commit{plural} nog niet gepusht naar {ref}', {
+            n,
+            plural: n === 1 ? '' : 's',
+            ref: p.headRef || t('de PR-branch'),
+          })}</span
         >
       </span>
       <span
@@ -663,8 +666,8 @@ function unpushedPill(state, b) {
   return html`
     <span
       data-testid="row-unpushed"
-      title="Ongepusht — deze wijziging staat lokaal op de PR-branch, maar is nog niet gepusht"
-      aria-label="Ongepusht — deze wijziging staat lokaal op de PR-branch, maar is nog niet gepusht"
+      title="${t('Ongepusht — deze wijziging staat lokaal op de PR-branch, maar is nog niet gepusht')}"
+      aria-label="${t('Ongepusht — deze wijziging staat lokaal op de PR-branch, maar is nog niet gepusht')}"
       class="shrink-0 rounded bg-amber-50 dark:bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300"
       >⇧</span
     >
@@ -694,9 +697,9 @@ function editingPill(state, b) {
   return html`
     <span
       data-testid="row-editing"
-      title="Claude past dit bestand nu aan; nog niet geland in de review-tree"
+      title="${t('Claude past dit bestand nu aan; nog niet geland in de review-tree')}"
       class="shrink-0 rounded bg-sky-50 dark:bg-sky-500/15 px-1.5 py-0.5 text-[10px] font-medium text-sky-700 dark:text-sky-300"
-      >✎ wordt aangepast</span
+      >✎ ${t('wordt aangepast')}</span
     >
   `
 }
@@ -725,9 +728,9 @@ function refreshingPill(state, b) {
   return html`
     <span
       data-testid="row-refreshing"
-      title="Deze wijziging is geland; de review-tree werkt de code nu bij"
+      title="${t('Deze wijziging is geland; de review-tree werkt de code nu bij')}"
       class="shrink-0 rounded bg-violet-50 dark:bg-violet-500/15 px-1.5 py-0.5 text-[10px] font-medium text-violet-700 dark:text-violet-300"
-      >⟳ wordt bijgewerkt</span
+      >⟳ ${t('wordt bijgewerkt')}</span
     >
   `
 }
@@ -784,8 +787,8 @@ function toggleRow(state, count, onRevealApproved) {
     >
       ${() =>
         state.showApproved
-          ? `Verberg ${count} goedgekeurde ${count === 1 ? 'block' : 'blocks'}`
-          : `Toon ${count} goedgekeurde ${count === 1 ? 'block' : 'blocks'}`}
+          ? t('Verberg {count} goedgekeurde {plural}', { count, plural: count === 1 ? 'block' : 'blocks' })
+          : t('Toon {count} goedgekeurde {plural}', { count, plural: count === 1 ? 'block' : 'blocks' })}
     </button>
   `.key('toggle-approved')
 }
@@ -814,8 +817,8 @@ function ignoreToggleRow(state, count) {
     >
       ${() =>
         state.showIgnored
-          ? `Verberg ${count} verborgen ${count === 1 ? 'comment' : 'comments'}`
-          : `Toon ${count} verborgen ${count === 1 ? 'comment' : 'comments'}`}
+          ? t('Verberg {count} verborgen {plural}', { count, plural: count === 1 ? 'comment' : 'comments' })
+          : t('Toon {count} verborgen {plural}', { count, plural: count === 1 ? 'comment' : 'comments' })}
     </button>
   `.key('toggle-ignored')
 }
@@ -845,7 +848,7 @@ function batchActionRow(state) {
       ${() =>
         running
           ? batchRunningLines(state)
-          : 'Verwerk ' + n + (n === 1 ? ' comment' : ' comments') + ' met Claude (Opus 5)'}
+          : t('Verwerk {n} {plural} met Claude (Opus 5)', { n, plural: n === 1 ? 'comment' : 'comments' })}
     </button>
   `.key('batch-action-row-' + (running ? 'busy' : 'idle') + '-' + n)
 }
@@ -875,13 +878,13 @@ function batchActionRow(state) {
 function batchRunningLines(state) {
   const total = batch.total
   const handled = batch.done + batch.skipped
-  let counter = 'Claude verwerkt comments · ' + handled + ' van ' + total
-  if (batch.skipped > 0) counter += ' · ' + batch.skipped + ' overgeslagen'
+  let counter = t('Claude verwerkt comments · {handled} van {total}', { handled, total })
+  if (batch.skipped > 0) counter += ' · ' + t('{n} overgeslagen', { n: batch.skipped })
   const current = batchCurrentLabel(state)
   // An error replaces the activity line: a run that could not start says why
   // instead of pretending Claude is still thinking.
   const activity = batch.error
-    ? batch.error
+    ? t(batch.error)
     : claudeStatusText(
         { running: true, phase: batch.phase || 'starting', tool: batch.tool, detail: batch.detail },
         0,
@@ -890,7 +893,7 @@ function batchRunningLines(state) {
     <span class="block">
       <span class="block tabular-nums">${counter}</span>
       <span class="block truncate font-normal text-[11px] text-slate-500 dark:text-zinc-400"
-        >${current ? 'Bezig met: ' + current : ''}</span
+        >${current ? t('Bezig met: {current}', { current }) : ''}</span
       >
       <span class="block truncate font-normal text-[11px] text-slate-500 dark:text-zinc-400"
         >${activity}</span
@@ -920,22 +923,22 @@ function batchCurrentLabel(state) {
 // fed by the server-backed total (state.approvalTotal). Hidden until there's
 // anything to approve.
 function approvalSummaryLine(state) {
-  const t = state.approvalTotal
-  if (!t || t.total === 0) return ''
-  const done = t.done === t.total
-  const remaining = t.total - t.done
+  const at = state.approvalTotal
+  if (!at || at.total === 0) return ''
+  const done = at.done === at.total
+  const remaining = at.total - at.done
   return html`
     <p class="mt-1 text-xs" data-testid="approval-summary">
       <span
         class="${'rounded px-1.5 py-0.5 font-semibold tabular-nums ' +
         (done ? 'bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300' : 'bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400')}"
-        >${done ? '✓ ' : ''}${t.done}/${t.total} goedgekeurd</span
+        >${done ? '✓ ' : ''}${t('{done}/{total} goedgekeurd', { done: at.done, total: at.total })}</span
       >
       ${() =>
         done
           ? ''
           : html`<span class="ml-1 text-slate-500 dark:text-zinc-500"
-              >· ${remaining} nog te reviewen</span
+              >· ${t('{remaining} nog te reviewen', { remaining })}</span
             >`}
     </p>
   `
@@ -1040,8 +1043,8 @@ function aiWarningIcon() {
     <span
       data-testid="block-row-ai-warning"
       class="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300"
-      title="AI-risicowaarschuwing"
-      aria-label="AI-risicowaarschuwing"
+      title="${t('AI-risicowaarschuwing')}"
+      aria-label="${t('AI-risicowaarschuwing')}"
     >
       <svg
         xmlns="http://www.w3.org/2000/svg"
@@ -1316,7 +1319,7 @@ function approvalPill(state, b) {
       class="${'shrink-0 rounded px-1 py-0.5 text-[10px] font-semibold tabular-nums ' +
       (done ? 'bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300' : 'bg-slate-100 dark:bg-zinc-800 text-slate-500 dark:text-zinc-500')}"
       data-testid="block-approval"
-      title="Goedgekeurde regels (dit block + onderliggende code)"
+      title="${t('Goedgekeurde regels (dit block + onderliggende code)')}"
       >${done ? '✓ ' : ''}${s.done}/${s.total}</span
     >
   `
@@ -1341,13 +1344,13 @@ function batchPill(b) {
         ? 'bg-indigo-100 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300'
         : 'bg-slate-100 dark:bg-zinc-800 text-slate-500 dark:text-zinc-400')}"
       data-testid="block-row-batch"
-      title="${it.note || BATCH_STATE_LABEL[it.state] || it.state}"
+      title="${it.note || t(BATCH_STATE_LABEL[it.state] || it.state)}"
     >
       ${() =>
         busy
           ? html`<span class="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-indigo-500"></span>`
           : ''}
-      <span>${it.state === 'done' ? '✓ ' : ''}${BATCH_STATE_LABEL[it.state] || it.state}</span>
+      <span>${it.state === 'done' ? '✓ ' : ''}${t(BATCH_STATE_LABEL[it.state] || it.state)}</span>
     </span>
   `
 }
@@ -1380,14 +1383,14 @@ function claudeChatPill(b) {
         : 'bg-amber-100 dark:bg-amber-500/20 text-amber-800 dark:text-amber-300')}"
       data-testid="block-row-claude-chat"
       title="${busy
-        ? 'Claude werkt aan een gesprek over deze code'
-        : 'Claude antwoordde in een gesprek over deze code'}"
+        ? t('Claude werkt aan een gesprek over deze code')
+        : t('Claude antwoordde in een gesprek over deze code')}"
     >
       ${() =>
         busy
           ? html`<span class="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-indigo-500"></span>`
           : ''}
-      <span>${busy ? 'Claude bezig' : '✓ Claude antwoordde'}</span>
+      <span>${busy ? t('Claude bezig') : '✓ ' + t('Claude antwoordde')}</span>
     </span>
   `
 }
@@ -1411,8 +1414,8 @@ function chatUnreadIcon(b) {
     <span
       data-testid="chat-unread-icon"
       class="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-sky-100 text-sky-700 dark:bg-sky-500/20 dark:text-sky-300"
-      title="Nieuw antwoord van Claude nog niet gezien"
-      aria-label="Nieuw antwoord van Claude nog niet gezien"
+      title="${t('Nieuw antwoord van Claude nog niet gezien')}"
+      aria-label="${t('Nieuw antwoord van Claude nog niet gezien')}"
     >
       <svg
         xmlns="http://www.w3.org/2000/svg"
@@ -1456,7 +1459,7 @@ export function commentActivityPill(state, b) {
     <span
       class="shrink-0 flex items-center gap-0.5"
       data-testid="block-comment-activity"
-      title="${s.count + (s.count === 1 ? ' open reactie' : ' open reacties') + ' (dit block + onderliggende code)'}"
+      title="${t(s.count === 1 ? '{count} open reactie (dit block + onderliggende code)' : '{count} open reacties (dit block + onderliggende code)', { count: s.count })}"
     >
       ${avatarHTML(s.last.name, s.last.avatarUrl, 'h-4 w-4')}
       ${() =>

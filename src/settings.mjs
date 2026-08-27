@@ -13,6 +13,8 @@ import { ensureAutoWarn, autoWarnToggleButton, toggleAutoWarn } from './autowarn
 import { ensureAutoIngestPref, autoIngestPrefToggleButton, cycleAutoIngestPref } from './autoingestpref.mjs'
 import { ensureMe, meLogin } from './avatar.mjs'
 import { initDebugLog, debugModeToggleButton, toggleDebugMode, clearDebugLog, debugLogCount } from './debugLog.mjs'
+import { ensureLangPref, langToggleButton, toggleLang } from './langpref.mjs'
+import { t, syncUiLang } from './i18n.mjs'
 import { originFrom, originPr } from './settingsLink.mjs'
 
 initTheme()
@@ -45,7 +47,19 @@ const state = reactive({
 
 // Row order IS the ↑/↓ nav order, and IS the DOM order rendered below — kept
 // as one array so the two can never drift apart.
-const ROWS = ['theme', 'autowarn', 'autoingestpref', 'debug', 'checkout', 'aliases', 'praisewords']
+const ROWS = [
+  'theme',
+  'langui',
+  'langexplain',
+  'langreply',
+  'langcommit',
+  'autowarn',
+  'autoingestpref',
+  'debug',
+  'checkout',
+  'aliases',
+  'praisewords',
+]
 
 // ── data loading ─────────────────────────────────────────────────────────
 
@@ -208,6 +222,12 @@ function activateRow(row) {
   if (row === 'theme') {
     // Same function a click on themeToggleButton runs.
     cycleTheme()
+  } else if (row === 'langui') {
+    toggleLang('ui')
+  } else if (row === 'langexplain') {
+    toggleLang('explain')
+  } else if (row === 'langreply') {
+    toggleLang('reply')
   } else if (row === 'autowarn') {
     toggleAutoWarn()
   } else if (row === 'autoingestpref') {
@@ -222,7 +242,9 @@ function activateRow(row) {
     state.editing = 'praisewords'
     requestAnimationFrame(() => focusRowInput('praisewords'))
   }
-  // 'checkout' is read-only on this page (see checkoutRow) — no action.
+  // 'checkout' is read-only on this page (see checkoutRow) — no action, and
+  // neither is 'langcommit': code/commits are always English by rule, so that
+  // row has nothing to toggle (see langCommitRow).
 }
 
 function moveRow(delta) {
@@ -278,14 +300,48 @@ function rowLabel(title, sub) {
 
 function themeRow() {
   return html`<div data-testid="settings-row-theme" class="${() => rowCls('theme')}" @click="${() => (state.activeRow = ROWS.indexOf('theme'))}">
-    ${rowLabel('Thema', 'Systeem / licht / donker — opgeslagen in deze browser.')}
+    ${rowLabel(t('Thema'), t('Systeem / licht / donker — opgeslagen in deze browser.'))}
     <div class="flex items-center gap-2">${themeToggleButton('h-8 w-8 bg-slate-50 dark:bg-zinc-800 ring-1 ring-slate-200 dark:ring-zinc-700')}</div>
+  </div>`
+}
+
+// One row per translatable output type — the reviewer's "je moet per type
+// kunnen vertalen". Each row's Enter/Space runs exactly the function its own
+// button's click runs (see activateRow), per the mouse-navigation convention.
+function langRow(row, kind, title, sub) {
+  return html`<div data-testid="${'settings-row-' + row}" class="${() => rowCls(row)}" @click="${() => (state.activeRow = ROWS.indexOf(row))}">
+    ${rowLabel(t(title), t(sub))} ${langToggleButton(kind)}
+  </div>`
+}
+
+// The commit language is deliberately NOT a setting: code, identifiers, code
+// comments and commit messages are always English, enforced in the prompts
+// (modules/claude/prompts/chat_shell.md, comment_batch.md). The row exists so
+// the reviewer can SEE that rule next to the three that are choices — same
+// reasoning as the read-only werkmap row below.
+function langCommitRow() {
+  return html`<div
+    data-testid="settings-row-langcommit"
+    class="${() => rowCls('langcommit')}"
+    @click="${() => (state.activeRow = ROWS.indexOf('langcommit'))}"
+  >
+    ${rowLabel(
+      t('Taal van code en commits'),
+      t(
+        'Altijd Engels, dit is geen keuze: code, identifiers, code-comments en commitberichten. Alleen de inhoud van een vertaalbestand (lang/<taal>/) houdt zijn eigen taal.',
+      ),
+    )}
+    <span
+      data-testid="lang-commit-fixed"
+      class="inline-flex items-center rounded-full px-2 py-1 text-[11px] font-medium text-slate-500 dark:text-zinc-400 ring-1 ring-inset ring-slate-200 dark:ring-zinc-700"
+      >${() => t('Altijd Engels')}</span
+    >
   </div>`
 }
 
 function autoWarnRow() {
   return html`<div data-testid="settings-row-autowarn" class="${() => rowCls('autowarn')}" @click="${() => (state.activeRow = ROWS.indexOf('autowarn'))}">
-    ${rowLabel('Live AI assistent', 'Automatische risicocontrole en AI-beschrijvingen aan/uit — geldt voor alle PR’s.')}
+    ${rowLabel(t('Live AI assistent'), t('Automatische risicocontrole en AI-beschrijvingen aan/uit — geldt voor alle PR’s.'))}
     ${autoWarnToggleButton()}
   </div>`
 }
@@ -297,8 +353,8 @@ function autoIngestPrefRow() {
     @click="${() => (state.activeRow = ROWS.indexOf('autoingestpref'))}"
   >
     ${rowLabel(
-      'Automatisch review-boom genereren',
-      'Uit — nooit; Mijn PR’s — alleen je eigen PR’s (behalve "Ready to merge"); Alle PR’s — ook die van anderen.',
+      t('Automatisch review-boom genereren'),
+      t('Uit — nooit; Mijn PR’s — alleen je eigen PR’s (behalve "Ready to merge"); Alle PR’s — ook die van anderen.'),
     )}
     ${autoIngestPrefToggleButton()}
   </div>`
@@ -307,25 +363,27 @@ function autoIngestPrefRow() {
 function debugRow() {
   return html`<div data-testid="settings-row-debug" class="${() => rowCls('debug')}" @click="${() => (state.activeRow = ROWS.indexOf('debug'))}">
     ${rowLabel(
-      'Debug mode',
-      'Legt je navigatie en acties vast in data/debug-log.jsonl, zodat Claude een bug kan naspelen. Elke sessie begint met de pagina die je opent.',
+      t('Debug mode'),
+      t(
+        'Legt je navigatie en acties vast in data/debug-log.jsonl, zodat Claude een bug kan naspelen. Elke sessie begint met de pagina die je opent.',
+      ),
     )}
     <div class="flex flex-wrap items-center gap-2">
       ${debugModeToggleButton()}
       <button
         type="button"
         data-testid="settings-debug-clear"
-        title="Wis de opgenomen log"
+        title="${t('Wis de opgenomen log')}"
         class="rounded-full px-2 py-1 text-[11px] font-medium text-slate-600 dark:text-zinc-300 ring-1 ring-inset ring-slate-200 dark:ring-zinc-700 hover:bg-slate-100 dark:hover:bg-zinc-800"
         @click="${(e) => {
           e.stopPropagation()
           clearLog()
         }}"
       >
-        Log wissen
+        ${t('Log wissen')}
       </button>
       <span class="text-[12px] text-slate-500 dark:text-zinc-500" data-testid="settings-debug-count">
-        ${() => state.debugCount + ' gebeurtenissen opgenomen'}
+        ${() => t('{n} gebeurtenissen opgenomen', { n: state.debugCount })}
       </span>
     </div>
   </div>`
@@ -333,10 +391,14 @@ function debugRow() {
 
 function checkoutStatusText() {
   const c = state.checkout
-  if (!c) return 'Geen werkmap gekoppeld.'
-  if (c.decision) return 'Keuze nodig — open dit vanuit de PR-pagina.'
-  if (c.dirName) return 'Actief: ' + c.dirName + (c.branch ? ' (branch ' + c.branch + ')' : '')
-  return 'Geen werkmap gekoppeld.'
+  if (!c) return t('Geen werkmap gekoppeld.')
+  if (c.decision) return t('Keuze nodig — open dit vanuit de PR-pagina.')
+  if (c.dirName) {
+    return c.branch
+      ? t('Actief: {dir} (branch {branch})', { dir: c.dirName, branch: c.branch })
+      : t('Actief: {dir}', { dir: c.dirName })
+  }
+  return t('Geen werkmap gekoppeld.')
 }
 
 function checkoutRow() {
@@ -345,13 +407,13 @@ function checkoutRow() {
     class="${() => rowCls('checkout') + (originPr == null ? ' opacity-50' : '')}"
     @click="${() => (state.activeRow = ROWS.indexOf('checkout'))}"
   >
-    ${rowLabel('Werkmap', 'Welke lokale werkmap Claude voor deze PR gebruikt — alleen te wijzigen vanuit een PR-pagina.')}
+    ${rowLabel(t('Werkmap'), t('Welke lokale werkmap Claude voor deze PR gebruikt — alleen te wijzigen vanuit een PR-pagina.'))}
     <div class="text-[13px] text-slate-600 dark:text-zinc-400" data-testid="settings-checkout-status">
       ${() =>
         originPr == null
-          ? 'Open deze pagina vanuit een PR om de werkmap te zien/wijzigen.'
+          ? t('Open deze pagina vanuit een PR om de werkmap te zien/wijzigen.')
           : state.checkoutLoading
-            ? 'Laden…'
+            ? t('Laden…')
             : checkoutStatusText()}
     </div>
   </div>`
@@ -364,7 +426,7 @@ function chip(text, onRemove, disabled) {
     <span>${text}</span>
     <button
       type="button"
-      title="${disabled ? 'Minstens één woord vereist' : 'Verwijderen'}"
+      title="${disabled ? t('Minstens één woord vereist') : t('Verwijderen')}"
       disabled="${() => !!disabled}"
       class="${disabled ? 'text-slate-300 dark:text-zinc-600' : 'text-slate-400 hover:text-rose-600 dark:text-zinc-500 dark:hover:text-rose-400'}"
       @click="${onRemove}"
@@ -376,9 +438,9 @@ function chip(text, onRemove, disabled) {
 
 function aliasesRow() {
   return html`<div data-testid="settings-row-aliases" class="${() => rowCls('aliases')}" @click="${() => (state.activeRow = ROWS.indexOf('aliases'))}">
-    ${rowLabel('Wie ben ik', 'De login komt uit GitHub; alleen de extra @mention-spellingen hieronder zijn aanpasbaar.')}
+    ${rowLabel(t('Wie ben ik'), t('De login komt uit GitHub; alleen de extra @mention-spellingen hieronder zijn aanpasbaar.'))}
     <div class="mb-2 text-[13px] text-slate-600 dark:text-zinc-400" data-testid="settings-github-login">
-      ${() => 'GitHub-login: ' + (state.githubLogin || '…')}
+      ${() => t('GitHub-login: {login}', { login: state.githubLogin || '…' })}
     </div>
     <div class="mb-2 flex flex-wrap gap-1.5" data-testid="settings-alias-chips">
       ${() => state.aliases.map((a, i) => chip(a, () => removeAlias(i), false))}
@@ -386,7 +448,7 @@ function aliasesRow() {
     <input
       type="text"
       data-testid="settings-aliases-input"
-      placeholder="Extra @mention-spelling toevoegen…"
+      placeholder="${t('Extra @mention-spelling toevoegen…')}"
       class="w-full rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-2.5 py-1.5 text-[13px] text-slate-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-indigo-300 dark:focus:ring-indigo-500/40"
       @keydown="${(e) => {
         if (e.key === 'Enter') {
@@ -405,14 +467,14 @@ function praiseWordsRow() {
     class="${() => rowCls('praisewords')}"
     @click="${() => (state.activeRow = ROWS.indexOf('praisewords'))}"
   >
-    ${rowLabel('Praise-woorden', 'Woorden die de review-samenvatting niet als open punt telt (bv. "nice", "top").')}
+    ${rowLabel(t('Praise-woorden'), t('Woorden die de review-samenvatting niet als open punt telt (bv. "nice", "top").'))}
     <div class="mb-2 flex flex-wrap gap-1.5" data-testid="settings-praise-chips">
       ${() => state.praiseWords.map((w, i) => chip(w, () => removePraiseWord(i), state.praiseWords.length <= 1))}
     </div>
     <input
       type="text"
       data-testid="settings-praisewords-input"
-      placeholder="Woord toevoegen…"
+      placeholder="${t('Woord toevoegen…')}"
       class="w-full rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-2.5 py-1.5 text-[13px] text-slate-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-indigo-300 dark:focus:ring-indigo-500/40"
       @keydown="${(e) => {
         if (e.key === 'Enter') {
@@ -432,28 +494,53 @@ function App() {
         <button
           type="button"
           data-testid="settings-back"
-          title="Terug"
+          title="${t('Terug')}"
           class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-sm text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-800"
           @click="${goBack}"
         >
-          ← Terug
+          ← ${t('Terug')}
         </button>
-        <h1 class="text-lg font-semibold text-slate-900 dark:text-zinc-100">Instellingen</h1>
+        <h1 class="text-lg font-semibold text-slate-900 dark:text-zinc-100">${t('Instellingen')}</h1>
       </header>
       <div class="flex-1 overflow-auto px-6 py-5">
         <div class="mx-auto max-w-xl space-y-3" data-testid="settings-rows">
-          ${themeRow()} ${autoWarnRow()} ${autoIngestPrefRow()} ${debugRow()} ${checkoutRow()} ${aliasesRow()}
+          ${themeRow()}
+          ${langRow(
+            'langui',
+            'ui',
+            'Taal van de interface',
+            'Alle titels, omschrijvingen en labels in deze app. Wisselen herlaadt de pagina.',
+          )}
+          ${langRow(
+            'langexplain',
+            'explain',
+            'Taal van AI-uitleg',
+            'De AI-omschrijving, de risicocheck, de PR-samenvatting, comment-titels en het testrapport. Een antwoord in een gesprek volgt altijd de taal van je eigen bericht.',
+          )}
+          ${langRow(
+            'langreply',
+            'reply',
+            'Taal van reacties op GitHub',
+            'De tekst die Claude voor je opschrijft als reactie op een reviewopmerking, en die onder jouw naam op GitHub komt.',
+          )}
+          ${langCommitRow()} ${autoWarnRow()} ${autoIngestPrefRow()} ${debugRow()} ${checkoutRow()} ${aliasesRow()}
           ${praiseWordsRow()}
         </div>
         <p class="mx-auto mt-4 max-w-xl text-[12px] text-slate-400 dark:text-zinc-500">
-          ↑/↓ om te navigeren, Enter/Space om te wisselen of te bewerken, ← om terug te gaan.
+          ${t('↑/↓ om te navigeren, Enter/Space om te wisselen of te bewerken, ← om terug te gaan.')}
         </p>
       </div>
     </div>
   `
 }
 
+// The shell's own <title> is Dutch (settings.html), so translate it here — a
+// static HTML file cannot call t().
+document.title = t('Instellingen') + ' — PR Review Tree'
+
 App()(document.getElementById('app'))
 ensureAutoWarn()
 ensureAutoIngestPref()
+ensureLangPref()
+syncUiLang()
 init()

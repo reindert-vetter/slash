@@ -16,6 +16,7 @@
 import { html } from './vendor/arrow.js'
 import { blockRows, changedRows, approvedRowSet } from './Block.mjs'
 import { categoryClass, statusInfo, commentActivityPill } from './BlockList.mjs'
+import { t } from './i18n.mjs'
 
 // methodApproveCount mirrors home.mjs's blockApproveCount for a single real
 // PR block (own changed rows only, no nested subtree — a method row's pill
@@ -181,7 +182,7 @@ export default function TestMethodsColumn(state, row, onApproveClass) {
                   ? 'bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300'
                   : 'bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400')}"
                 data-testid="test-class-approval"
-                >${done ? '✓ ' : ''}${s.done}/${s.total} methodes</span
+                >${done ? '✓ ' : ''}${s.done}/${s.total} ${t('methodes')}</span
               >
             </label>
           `

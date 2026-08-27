@@ -25,6 +25,7 @@ import (
 	"slash/modules/github"
 	"slash/modules/inbox"
 	"slash/modules/jira"
+	"slash/modules/langpref"
 	"slash/modules/prmeta"
 	"slash/modules/relations"
 	"slash/modules/reviewerusage"
@@ -166,6 +167,14 @@ const (
 	// by this — only the automatic trigger inside refreshInbox checks it. See
 	// the "pr_inbox" section of .claude/docs/workflows-trackers.md.
 	WorkflowAutoIngestPref = "auto_ingest_pref"
+	// WorkflowLangPref is the Workflow Type that persists the reviewer's
+	// repo-wide LANGUAGE preference per output type (see modules/langpref):
+	// one Execution per repo, the same per-repo-tracker mould as
+	// WorkflowAutoIngestPref. Each "lang_pref" Signal carries one
+	// {kind, lang} pair ("ui"|"explain"|"reply" x "nl"|"en"), which one
+	// Activity writes into the langpref read-model. It never completes — a
+	// long-lived per-repo tracker. See .claude/docs/settings-page.md.
+	WorkflowLangPref = "lang_pref"
 	// WorkflowAppSettings is the Workflow Type that persists the two
 	// reviewer-editable pieces of the local settings.json/praise-words.json
 	// files that used to be read-only (settings.go, praisewords.go): the extra
@@ -254,6 +263,11 @@ const (
 	// Signal names — the generic .../signals/{name} route (tasks_api.go)
 	// dispatches purely on this literal.
 	SignalAutoIngestPref = "auto_ingest_pref"
+	// SignalLangPref delivers one {kind, lang} language choice to the
+	// lang_pref tracker (from the three toggles on /settings). One Signal name
+	// with a Kind discriminator, exactly like SignalAppSettings: a workflow can
+	// only WaitSignal on one name at a time.
+	SignalLangPref = "lang_pref"
 	// SignalAppSettings delivers one settings-page edit to the app_settings
 	// tracker — its Kind field says which of the two writable fields (mention
 	// aliases / praise words) the payload is for.
@@ -552,6 +566,19 @@ type AutoIngestPrefSignal struct {
 	Mode string `json:"mode"` // "off" | "own" | "all"
 }
 
+// LangPrefInput starts a lang_pref Execution — one tracker per repo.
+type LangPrefInput struct {
+	Repo string `json:"repo"`
+}
+
+// LangPrefSignal carries one language choice into the lang_pref tracker
+// (delivered under SignalLangPref). Kind is the output type
+// ("ui"|"explain"|"reply"), Lang the language ("nl"|"en").
+type LangPrefSignal struct {
+	Kind string `json:"kind"`
+	Lang string `json:"lang"`
+}
+
 // AppSettingsInput starts the single, global app_settings Execution. No
 // fields: unlike every other tracker above there is only ever one data dir per
 // process, so there is nothing to scope by.
@@ -835,6 +862,12 @@ type TaskManager struct {
 	// above; a nil store makes AutoIngestPrefMode report "own" (the default)
 	// and saveAutoIngestPrefMode a no-op.
 	autoingestpref *autoingestpref.Module
+	// langpref is the repo-wide LANGUAGE preference per output type
+	// ("ui"|"explain"|"reply"), read by LangFor while an Activity builds a
+	// Claude prompt and by GET /api/langpref. Set post-construction like the
+	// stores above; a nil store makes LangFor report "nl" (the default) and
+	// saveLangPref a no-op — i.e. exactly the pre-existing behaviour.
+	langpref *langpref.Module
 	// warndismiss remembers which AI risk findings the reviewer already
 	// resolved or deleted, so the next code_warning run does not raise them
 	// again. Set post-construction like the stores above; a nil store makes
@@ -904,6 +937,7 @@ type TaskManager struct {
 	inboxRun          string           // pr_inbox Run ID (one per repo/process)
 	autoWarnRun       string           // auto_warn Run ID (one per repo/process)
 	autoIngestPrefRun string           // auto_ingest_pref Run ID (one per repo/process)
+	langPrefRun       string           // lang_pref Run ID (one per repo/process)
 	appSettingsRun    string           // app_settings Run ID (one per process, no repo scope)
 	importPolled      map[string]bool  // imported-thread Run ID → poller running (dedup, operational)
 	avatarTried       map[string]bool  // imported-thread Run ID → avatar backfill attempted (dedup, operational)
@@ -1846,7 +1880,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		text, err := m.claude.Run(ctx, claude.RunRequest{
 			Prompt:       explainPrompt(arg),
 			Model:        claude.ModelHaiku,
-			SystemPrompt: claude.ExplainCodeSystemPrompt,
+			SystemPrompt: claude.ExplainCodeSystemPrompt + explainLangTail(m.LangFor(ctx, langpref.KindExplain)),
 		})
 		if err != nil {
 			m.logf("explain_code: generate pr=%d %s/%s skipped: %v", arg.PR, arg.BlockID, arg.UnitKey, err)
@@ -1899,7 +1933,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		text, err := m.claude.Run(ctx, claude.RunRequest{
 			Prompt:       chatSummaryPrompt(msgs),
 			Model:        claude.ModelHaiku,
-			SystemPrompt: claude.ChatSummarySystemPrompt,
+			SystemPrompt: claude.ChatSummarySystemPrompt + explainLangTail(m.LangFor(ctx, langpref.KindExplain)),
 		})
 		if err != nil {
 			m.logf("summarize_chat: generate pr=%d comment=%s skipped: %v", arg.PR, arg.CommentID, err)
@@ -1984,7 +2018,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		raw, err := m.claude.Run(ctx, claude.RunRequest{
 			Prompt:       commentTitlesPrompt(bodies),
 			Model:        claude.ModelHaiku,
-			SystemPrompt: claude.CommentTitleSystemPrompt,
+			SystemPrompt: claude.CommentTitleSystemPrompt + explainLangTail(m.LangFor(ctx, langpref.KindExplain)),
 		})
 		if err != nil {
 			m.logf("comment_titles: generate pr=%d comments=%d skipped: %v", arg.PR, len(kept), err)
@@ -2074,7 +2108,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		summary, err := m.claude.Run(ctx, claude.RunRequest{
 			Prompt:       prompt,
 			Model:        claude.ModelHaiku,
-			SystemPrompt: claude.PRSummarySystemPrompt,
+			SystemPrompt: claude.PRSummarySystemPrompt + explainLangTail(m.LangFor(ctx, langpref.KindExplain)),
 		})
 		if err != nil {
 			m.logf("pr_status: summary pr=%d skipped: %v", arg.PR, err)
@@ -2200,7 +2234,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			out, err := m.claude.Run(ctx, claude.RunRequest{
 				Prompt:       sinceReviewPrompt(facts, files),
 				Model:        claude.ModelHaiku,
-				SystemPrompt: claude.SinceReviewSystemPrompt,
+				SystemPrompt: claude.SinceReviewSystemPrompt + explainLangTail(m.LangFor(ctx, langpref.KindExplain)),
 			})
 			if err != nil {
 				m.logf("pr_status: since-review summary pr=%d skipped: %v", arg.PR, err)
@@ -2287,6 +2321,23 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			return nil, nil
 		}
 		return nil, m.autoingestpref.SetMode(ctx, arg.Repo, arg.Mode)
+	})
+
+	// Activity: persist one language preference (write, workflow-driven). The
+	// langpref module is the only writer of that read-model.
+	engine.RegisterActivity("saveLangPref", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			Repo string `json:"repo"`
+			Kind string `json:"kind"`
+			Lang string `json:"lang"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.langpref == nil {
+			return nil, nil
+		}
+		return nil, m.langpref.SetLang(ctx, arg.Repo, arg.Kind, arg.Lang)
 	})
 
 	// Activity: persist the settings page's mention-alias edit into
@@ -2666,6 +2717,11 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 				arg.PastDismissed = dismissedFindingsInScope(dismissed, arg.Files)
 			}
 		}
+		// The language of the findings' own text: read HERE, inside the
+		// Activity, not in the workflow body — reading a preference store is a
+		// side effect and the workflow body must stay deterministic (see
+		// .claude/rules/workflow-determinism.md).
+		arg.Lang = m.LangFor(ctx, langpref.KindExplain)
 		findings, ok := runCodeWarningReview(ctx, m.claude, m.dataDir, arg)
 		// Record every file the model was actually asked to review as
 		// "reviewed at this hash" (modules/warnreviewed), so the next run can
@@ -3109,6 +3165,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowCodeWarning, codeWarningWorkflow)
 	engine.RegisterWorkflow(WorkflowAutoWarn, autoWarnPrefWorkflow)
 	engine.RegisterWorkflow(WorkflowAutoIngestPref, autoIngestPrefWorkflow)
+	engine.RegisterWorkflow(WorkflowLangPref, langPrefWorkflow)
 	engine.RegisterWorkflow(WorkflowAppSettings, appSettingsWorkflow)
 	engine.RegisterWorkflow(WorkflowDebugLog, debugLogWorkflow)
 	engine.RegisterWorkflow(WorkflowIgnoreComment, ignoreCommentWorkflow)
@@ -3945,6 +4002,30 @@ func autoIngestPrefWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		}{Repo: in.Repo, Mode: sig.Mode}
 		if err := w.ExecuteActivity("saveAutoIngestPrefMode", arg, nil); err != nil {
 			return nil, fmt.Errorf("save auto ingest pref mode: %w", err)
+		}
+	}
+}
+
+// langPrefWorkflow persists the reviewer's per-type language preference, for
+// one repo. Deterministic: the only side effect (the read-model write) is an
+// Activity, and the number of Activities equals the number of "lang_pref"
+// Signals in the history. It never completes — a long-lived per-repo tracker,
+// mould of autoIngestPrefWorkflow.
+func langPrefWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
+	var in LangPrefInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return nil, err
+	}
+	for {
+		var sig LangPrefSignal
+		w.WaitSignal(SignalLangPref, &sig)
+		arg := struct {
+			Repo string `json:"repo"`
+			Kind string `json:"kind"`
+			Lang string `json:"lang"`
+		}{Repo: in.Repo, Kind: sig.Kind, Lang: sig.Lang}
+		if err := w.ExecuteActivity("saveLangPref", arg, nil); err != nil {
+			return nil, fmt.Errorf("save lang pref: %w", err)
 		}
 	}
 }
@@ -5694,6 +5775,83 @@ func (m *TaskManager) AutoIngestPrefMode(ctx context.Context) (string, error) {
 		return autoingestpref.ModeOwn, nil
 	}
 	return m.autoingestpref.Mode(ctx, m.repo)
+}
+
+// EnsureLangPref ensures the single lang_pref tracker for the repo exists
+// (starting one if none is live) and returns its Run ID. The settings page
+// calls this on load so its three language toggles have a Run ID to signal
+// to; the tracker is reused across restarts. Mirrors EnsureAutoIngestPref.
+func (m *TaskManager) EnsureLangPref() (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.langPrefRun != "" {
+		return m.langPrefRun, nil
+	}
+	if id := m.findLangPrefRunLocked(); id != "" {
+		m.langPrefRun = id
+		return id, nil
+	}
+	id, err := m.engine.StartWorkflow(WorkflowLangPref, LangPrefInput{Repo: m.repo})
+	if err != nil {
+		return "", err
+	}
+	m.langPrefRun = id
+	return id, nil
+}
+
+// findLangPrefRunLocked scans for a running/waiting lang_pref Execution for
+// m.repo. It reads only the engine, so it is safe to call while holding m.mu.
+func (m *TaskManager) findLangPrefRunLocked() string {
+	runs, err := m.engine.Runs()
+	if err != nil {
+		return ""
+	}
+	for _, r := range runs {
+		if r.Workflow != WorkflowLangPref {
+			continue
+		}
+		if r.Status != tembed.StatusRunning && r.Status != tembed.StatusWaiting {
+			continue
+		}
+		in, err := m.engine.Input(r.ID)
+		if err != nil {
+			continue
+		}
+		var pin LangPrefInput
+		if json.Unmarshal(in, &pin) == nil && pin.Repo == m.repo {
+			return r.ID
+		}
+	}
+	return ""
+}
+
+// LangFor reports the language for one output type ("ui"|"explain"|"reply") —
+// read-only, called from GET /api/langpref and from the Activities that build
+// a Claude prompt (see langDirective in explain.go). A nil langpref module
+// (not wired, e.g. a test harness) defaults to Dutch, matching
+// modules/langpref.Lang's own default, so nothing about an existing prompt
+// changes unless a reviewer really picked English.
+func (m *TaskManager) LangFor(ctx context.Context, kind string) string {
+	if m == nil || m.langpref == nil {
+		return langpref.LangNL
+	}
+	lang, err := m.langpref.Lang(ctx, m.repo, kind)
+	if err != nil || !langpref.ValidLang(lang) {
+		return langpref.LangNL
+	}
+	return lang
+}
+
+// LangPrefAll reports every output type's language — backs GET /api/langpref.
+func (m *TaskManager) LangPrefAll(ctx context.Context) (map[string]string, error) {
+	if m.langpref == nil {
+		out := map[string]string{}
+		for _, k := range langpref.Kinds {
+			out[k] = langpref.LangNL
+		}
+		return out, nil
+	}
+	return m.langpref.All(ctx, m.repo)
 }
 
 // EnsureAppSettings ensures the single, global app_settings tracker exists

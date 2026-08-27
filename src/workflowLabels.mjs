@@ -11,6 +11,8 @@
 // RelatedPanel.mjs — they describe runs that are still in progress, while the
 // overview block only ever shows runs that already failed.
 
+import { t } from './i18n.mjs'
+
 // An unknown type falls back to its raw name (see labelForWorkflow).
 export const WORKFLOW_LABELS = {
   task_code_comment: 'Comment',
@@ -35,5 +37,5 @@ export const WORKFLOW_LABELS = {
 // for anything not in the map (a newly added workflow shows its own name
 // rather than nothing at all).
 export function labelForWorkflow(workflow) {
-  return WORKFLOW_LABELS[workflow] || workflow || 'Taak'
+  return WORKFLOW_LABELS[workflow] ? t(WORKFLOW_LABELS[workflow]) : workflow || t('Taak')
 }

@@ -12,6 +12,7 @@ import { splitBlockPath, paletteClass } from './blockPath.mjs'
 import { parseAutoWidthPx, resizeHandle } from './columnWidth.mjs'
 import { ShortcutHintBar } from './shortcutHints.mjs'
 import Prism from './vendor/prism.js'
+import { t } from './i18n.mjs'
 
 // highlight turns raw source into Prism-tokenised HTML (keywords, strings,
 // variables, …). Prism.highlight escapes the text itself, so the result is safe
@@ -108,8 +109,8 @@ function statusColor(status) {
 // removed block in a file that still exists reads "Verwijderd". Null for
 // every other block — the caller falls back to the plain status word.
 export function removedLabel(b) {
-  if (b.fileDeleted) return 'Verwijderd bestand'
-  if (b.status === 'removed') return 'Verwijderd'
+  if (b.fileDeleted) return t('Verwijderd bestand')
+  if (b.status === 'removed') return t('Verwijderd')
   return null
 }
 
@@ -123,7 +124,7 @@ export function removedLabel(b) {
 // colour is decoration (the reviewer is colourblind, see conventions.md).
 export function movedLabel(b) {
   if (!b || !b.oldName) return null
-  return b.oldName !== b.name ? 'Hernoemd' : 'Verplaatst'
+  return b.oldName !== b.name ? t('Hernoemd') : t('Verplaatst')
 }
 
 // blockOldLabel is the pre-move `Class::method` of a renamed/moved block — the
@@ -885,17 +886,17 @@ function windowCharsForMode(b, unit, mode) {
 const VIEW_MODE_META = [
   {
     mode: 'split',
-    label: 'Split-weergave (oud + nieuw naast elkaar)',
+    label: t('Split-weergave (oud + nieuw naast elkaar)'),
     svg: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="2" width="6" height="12" rx="1"/><rect x="9" y="2" width="6" height="12" rx="1"/></svg>',
   },
   {
     mode: 'unified',
-    label: 'Unified diff (oud boven nieuw, 60% breed)',
+    label: t('Unified diff (oud boven nieuw, 60% breed)'),
     svg: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="2" width="14" height="5" rx="1" stroke-dasharray="1.4 1.4" opacity="0.5"/><rect x="1" y="9" width="14" height="5" rx="1" fill="currentColor" stroke="none"/></svg>',
   },
   {
     mode: 'fit',
-    label: 'Alleen nieuwe code, breedte volgt de code',
+    label: t('Alleen nieuwe code, breedte volgt de code'),
     svg: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="2" width="10" height="12" rx="1"/><path d="M1 8h1.6M14.4 8H16" stroke-linecap="round"/></svg>',
   },
 ]
@@ -962,7 +963,7 @@ function blockCloseColumnButton(onCloseColumn) {
   return html`<div class="contents">
     <button
       type="button"
-      title="Sluit deze kolom"
+      title="${t('Sluit deze kolom')}"
       data-testid="block-close-column"
       class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-400 transition hover:bg-slate-100 hover:text-indigo-600 dark:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-indigo-400"
       @click="${(e) => {
@@ -1002,7 +1003,7 @@ function blockMenuButton(onOpenMenu) {
   return html`<div class="contents">
     <button
       type="button"
-      title="Menu voor dit blok"
+      title="${t('Menu voor dit blok')}"
       data-testid="block-open-menu"
       class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-400 opacity-0 transition group-hover:opacity-100 focus-visible:opacity-100 hover:bg-slate-100 hover:text-indigo-600 dark:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-indigo-400"
       @click="${(e) => {
@@ -1739,7 +1740,7 @@ function translationSlot(
 ) {
   const c = b.code
   if (c === undefined || c === null) {
-    return html`<p class="px-4 py-3 text-sm text-slate-400 dark:text-zinc-500">code laden…</p>`
+    return html`<p class="px-4 py-3 text-sm text-slate-400 dark:text-zinc-500">${t('code laden…')}</p>`
   }
   if (c.error) {
     return html`<p class="px-4 py-3 text-sm text-rose-500 dark:text-rose-400">${c.error}</p>`
@@ -1819,15 +1820,15 @@ function previewPane(labelText, uri, kind = 'svg') {
   return html`
     <div class="flex min-w-0 flex-1 flex-col gap-1.5" data-testid="${kind + '-pane-' + labelText}">
       <span class="text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500"
-        >${labelText}</span
+        >${t(labelText)}</span
       >
       <div
         class="flex min-h-[6rem] items-center justify-center rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/40 p-3"
       >
         ${() =>
           uri
-            ? html`<img src="${uri}" alt="${labelText + ' ' + kind}" class="max-h-64 max-w-full" />`
-            : html`<span class="text-xs italic text-slate-400 dark:text-zinc-500">geen preview</span>`}
+            ? html`<img src="${uri}" alt="${t(labelText) + ' ' + kind}" class="max-h-64 max-w-full" />`
+            : html`<span class="text-xs italic text-slate-400 dark:text-zinc-500">${t('geen preview')}</span>`}
       </div>
     </div>
   `
@@ -1860,7 +1861,7 @@ function previewPane(labelText, uri, kind = 'svg') {
 function svgSlot(b) {
   const c = b.code
   if (c === undefined || c === null) {
-    return html`<p class="px-4 py-3 text-sm text-slate-400 dark:text-zinc-500">code laden…</p>`
+    return html`<p class="px-4 py-3 text-sm text-slate-400 dark:text-zinc-500">${t('code laden…')}</p>`
   }
   if (c.error) {
     return html`<p class="px-4 py-3 text-sm text-rose-500 dark:text-rose-400">${c.error}</p>`
@@ -1909,16 +1910,16 @@ function imageOverlayPane(b) {
   return html`
     <div class="flex min-w-0 flex-1 flex-col gap-1.5" data-testid="image-pane-overlay">
       <span class="text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500"
-        >oud + nieuw over elkaar — nieuw 50% doorschijnend</span
+        >${t('oud + nieuw over elkaar — nieuw 50% doorschijnend')}</span
       >
       <div
         class="relative flex min-h-[6rem] items-center justify-center rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/40 p-3"
       >
         <div class="relative">
-          <img src="${imageUri(b, 'old')}" alt="oud image" class="max-h-64 max-w-full" />
+          <img src="${imageUri(b, 'old')}" alt="${t('oud image')}" class="max-h-64 max-w-full" />
           <img
             src="${imageUri(b, 'new')}"
-            alt="nieuw image (50% doorschijnend)"
+            alt="${t('nieuw image (50% doorschijnend)')}"
             class="absolute left-0 top-0 max-h-64 max-w-full opacity-50"
             data-testid="image-overlay-new"
           />
@@ -2113,8 +2114,8 @@ function codeDiff(
         >
           ${() =>
             b.fileDeleted
-              ? 'Verwijderd bestand — deze code bestaat niet meer'
-              : 'Verwijderd — deze code bestaat niet meer'}
+              ? t('Verwijderd bestand — deze code bestaat niet meer')
+              : t('Verwijderd — deze code bestaat niet meer')}
         </div>
         <div class="${'relative flex flex-1 overflow-hidden ' + diffFloorCls(rows.length)}">
           ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn, wrap, lineSummaryFn, diffActive, isYaml, commentRangeFn, true, lang)}
@@ -2424,7 +2425,9 @@ function commentRangeBar(i, commentRange) {
     cap +
     '" data-testid="comment-range-bar" data-comment-range="' +
     i +
-    '" title="De open comment gaat over deze regels"></span>'
+    '" title="' +
+    t('De open comment gaat over deze regels') +
+    '"></span>'
   )
 }
 
@@ -2675,7 +2678,9 @@ function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, focused = 
   // unified stand — there the checkmark rides along inside gutterHtml instead.
   const check =
     !gutter && isApproved && approveHere
-      ? '<span class="absolute left-1.5 top-1/2 -translate-y-1/2 text-[11px] font-bold leading-none text-emerald-600 dark:text-emerald-400" title="Goedgekeurd">✓</span>'
+      ? '<span class="absolute left-1.5 top-1/2 -translate-y-1/2 text-[11px] font-bold leading-none text-emerald-600 dark:text-emerald-400" title="' +
+        t('Goedgekeurd') +
+        '">✓</span>'
       : ''
   // data-row carries the aligned-row index: the DOM child index can't be used
   // to find a row (a collapsed run renders one spacer for many rows), and only
@@ -2725,7 +2730,7 @@ function pathPills(b) {
       html`<span
         data-testid="block-module-pill"
         class="${'shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wide ' + paletteClass(module)}"
-        title="${'Module: ' + module}"
+        title="${t('Module: {module}', { module })}"
         >${module}</span
       >`.key('mod:' + module),
     )
@@ -2735,7 +2740,7 @@ function pathPills(b) {
       html`<span
         data-testid="block-layer-pill"
         class="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-slate-600 dark:text-zinc-300 ring-1 ring-inset ring-slate-300 dark:ring-zinc-600"
-        title="${'Laag: ' + layer}"
+        title="${t('Laag: {layer}', { layer })}"
         >${layer}</span
       >`.key('layer:' + layer),
     )
@@ -2839,25 +2844,20 @@ function lineSummaryParts(summary) {
   }
   const activityWords = []
   if (commentActivity && commentActivity.hasAiWarning) {
-    activityWords.push(
-      commentActivity.aiCount + (commentActivity.aiCount === 1 ? ' AI-risicowaarschuwing' : ' AI-risicowaarschuwingen'),
-    )
+    const n = commentActivity.aiCount
+    activityWords.push(t(n === 1 ? '{n} AI-risicowaarschuwing' : '{n} AI-risicowaarschuwingen', { n }))
   }
   if (commentActivity && commentActivity.otherCount > 0) {
+    const n = commentActivity.otherCount
     activityWords.push(
-      commentActivity.otherCount +
-        (commentActivity.local
-          ? commentActivity.otherCount === 1
-            ? ' eigen notitie'
-            : ' eigen notities'
-          : commentActivity.otherCount === 1
-            ? ' open reactie'
-            : ' open reacties'),
+      commentActivity.local
+        ? t(n === 1 ? '{n} eigen notitie' : '{n} eigen notities', { n })
+        : t(n === 1 ? '{n} open reactie' : '{n} open reacties', { n }),
     )
   }
   const title =
-    'Onderliggende code' +
-    (hasApprove ? ' — ' + approve.done + '/' + approve.total + ' regels goedgekeurd' : '') +
+    t('Onderliggende code') +
+    (hasApprove ? ' — ' + t('{done}/{total} regels goedgekeurd', { done: approve.done, total: approve.total }) : '') +
     (activityWords.length ? ' — ' + activityWords.join(' + ') : '')
   return { html: parts.join(''), title }
 }
@@ -2921,7 +2921,7 @@ function gutterSpan(mark, approvedMark) {
       ? 'text-emerald-500'
       : 'text-slate-300 dark:text-zinc-700'
   const check = approvedMark
-    ? '<span class="text-emerald-600 dark:text-emerald-400" title="Goedgekeurd">✓</span>'
+    ? '<span class="text-emerald-600 dark:text-emerald-400" title="' + t('Goedgekeurd') + '">✓</span>'
     : ' '
   return (
     `<span class="select-none ${color}">${ch} </span>` +
@@ -3257,8 +3257,8 @@ function collapsedRunHTML(start, end, breadcrumb) {
   const n = end - start + 1
   return (
     `<div class="block cursor-pointer select-none whitespace-pre border-y border-slate-100 dark:border-zinc-800/60 bg-slate-50 dark:bg-zinc-800/40 px-3 text-center text-[10px] leading-relaxed text-slate-400 dark:text-zinc-500 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-zinc-800/70 dark:hover:text-zinc-300"` +
-    ` data-collapsed-run="${start}-${end}" data-testid="collapsed-run" title="Klik om deze regels te tonen">` +
-    `⋯ ${n} ongewijzigde regels` +
+    ` data-collapsed-run="${start}-${end}" data-testid="collapsed-run" title="${t('Klik om deze regels te tonen')}">` +
+    t('⋯ {n} ongewijzigde regels', { n }) +
     (breadcrumb
       ? `<div data-testid="collapsed-run-breadcrumb" class="mt-0.5 truncate text-slate-400 dark:text-zinc-500">${escapeHtml(breadcrumb)}</div>`
       : '') +

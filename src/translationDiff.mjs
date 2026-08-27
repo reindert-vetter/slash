@@ -26,6 +26,7 @@
 // with string keys). Values are returned unescaped so they read as plain text.
 
 import { html } from './vendor/arrow.js'
+import { t } from './i18n.mjs'
 
 // skipTrivia advances i past whitespace and //, #, /* */ comments.
 function skipTrivia(s, i) {
@@ -331,7 +332,7 @@ function siblingColumnHTML(sib, key) {
     <span class="${SIBLING_LOCALE_BADGE_CLS}">${sib.locale}</span>
     ${has
       ? html`<p class="mt-1 whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700 dark:text-zinc-300">${map.get(key)}</p>`
-      : html`<p class="mt-1 text-sm font-medium text-rose-500 dark:text-rose-400">ontbreekt in ${sib.locale}</p>`}
+      : html`<p class="mt-1 text-sm font-medium text-rose-500 dark:text-rose-400">${t('ontbreekt in {locale}', { locale: sib.locale })}</p>`}
   </div>`.key(sib.locale)
 }
 
@@ -436,17 +437,17 @@ export function translationBlockView(units, opts = {}) {
           <span class="block font-mono text-[11px] text-slate-500 dark:text-zinc-400">${u.key}</span>
           <span class="flex shrink-0 items-center gap-1">
             <span .innerHTML="${() => lineSummaryFor(u.row)}"></span>
-            <span class="${'shrink-0 rounded px-1 py-0.5 text-[9px] font-bold uppercase tracking-wide ' + KIND_BADGE_CLS[u.kind]}">${KIND_BADGE[u.kind]}</span>
+            <span class="${'shrink-0 rounded px-1 py-0.5 text-[9px] font-bold uppercase tracking-wide ' + KIND_BADGE_CLS[u.kind]}">${t(KIND_BADGE[u.kind])}</span>
           </span>
         </div>
         ${valueEls}
-        <span class="mt-1 block text-[11px] font-bold text-emerald-600 dark:text-emerald-400" title="Goedgekeurd">${() => (isApproved() ? '✓' : '')}</span>
+        <span class="mt-1 block text-[11px] font-bold text-emerald-600 dark:text-emerald-400" title="${t('Goedgekeurd')}">${() => (isApproved() ? '✓' : '')}</span>
       </div>
       ${siblingCols}
     </div>`.key('u:' + u.kind + ':' + u.key + ':' + siblingLocaleSig)
   })
   if (rows.length === 0) {
-    rows.push(html`<p class="px-4 py-3 text-sm italic text-slate-400 dark:text-zinc-500">geen sleutelwijzigingen</p>`.key('none'))
+    rows.push(html`<p class="px-4 py-3 text-sm italic text-slate-400 dark:text-zinc-500">${t('geen sleutelwijzigingen')}</p>`.key('none'))
   }
   // This div is the block's ACTUAL scroll container for a lang file with many
   // changed keys — `overflow-auto` (both axes) makes that deliberate/explicit
@@ -483,7 +484,7 @@ export function translationValueView(code, key, locale) {
   const v = parseLangValue(code)
   if (v.empty) {
     return html`<p data-testid="translation-missing" class="px-3 py-2 text-[11px] font-medium text-rose-500 dark:text-rose-400">
-      ontbreekt in ${locale}
+      ${t('ontbreekt in {locale}', { locale })}
     </p>`
   }
   if (v.scalar != null) {
@@ -499,7 +500,7 @@ export function translationValueView(code, key, locale) {
   )
   if (rows.length === 0) {
     rows.push(
-      html`<p data-testid="translation-missing" class="px-3 py-2 text-[11px] font-medium text-rose-500 dark:text-rose-400">ontbreekt in ${locale}</p>`.key(
+      html`<p data-testid="translation-missing" class="px-3 py-2 text-[11px] font-medium text-rose-500 dark:text-rose-400">${t('ontbreekt in {locale}', { locale })}</p>`.key(
         'none',
       ),
     )

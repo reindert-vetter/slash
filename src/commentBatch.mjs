@@ -20,6 +20,7 @@
 import { reactive } from './vendor/arrow.js'
 import { repoParam, repoField } from './prContext.mjs'
 import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
+import { t } from './i18n.mjs'
 
 // The per-comment states the server reports; the WORD carries the meaning in
 // every render spot, never a colour on its own (colourblind rule, see
@@ -163,9 +164,9 @@ export function batchProgressFor(commentId) {
 export function batchNoteFor(commentId) {
   const it = batchItemFor(commentId)
   if (!it) return ''
-  const label = BATCH_STATE_LABEL[it.state] || it.state
+  const label = t(BATCH_STATE_LABEL[it.state] || it.state)
   if (it.state === 'busy' || it.state === 'open') return batch.running ? label : ''
-  return it.note ? label + ': ' + it.note : label
+  return it.note ? t('{label}: {note}', { label, note: it.note }) : label
 }
 
 // startCommentBatch confirms the run: POST the exact ids the reviewer just saw.

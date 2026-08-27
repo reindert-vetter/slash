@@ -54,8 +54,9 @@ module `const`s (mirrors `originPr`/`originSel` in `overview.mjs`):
 
 ## Row list and keyboard
 
-`src/settings.mjs`'s `ROWS = ['theme', 'autowarn', 'autoingestpref', 'debug',
-'checkout', 'aliases', 'praisewords']` is simultaneously the `↑`/`↓` nav order and the DOM render
+`src/settings.mjs`'s `ROWS = ['theme', 'langui', 'langexplain', 'langreply',
+'langcommit', 'autowarn', 'autoingestpref', 'debug', 'checkout', 'aliases',
+'praisewords']` is simultaneously the `↑`/`↓` nav order and the DOM render
 order, kept as one array so the two can never drift apart. A platt
 `window.addEventListener('keydown', …)` (mirrors `inbox.mjs`, not the
 `/pr/<id>` nav chain's `Cmd+[`/`Cmd+]` remap — this page has no per-stop
@@ -70,8 +71,9 @@ granularity to remap onto):
 - `Enter`/`Space` run `activateRow(ROWS[activeRow])` — **exactly the same
   function a click on that row's own control runs** (mouse-navigation
   convention): `cycleTheme()`, `toggleAutoWarn()`, or focusing the
-  aliases/praise-words text input. The checkout row is read-only here (see
-  below), so its activation is a no-op.
+  aliases/praise-words text input, or `toggleLang('ui'|'explain'|'reply')`.
+  The checkout row is read-only here (see below), so its activation is a
+  no-op, and so is the `langcommit` row (always English, by rule).
 - `←` calls the same `goBack()` the "← Terug" button's click runs.
 
 ## Per-setting source and write path
@@ -81,6 +83,10 @@ granularity to remap onto):
 | Thema | `localStorage['theme']` (`theme.mjs`) | same, via `cycleTheme()` | Yes — reuses `themeToggleButton()` unchanged |
 | Live AI assistent | `GET /api/autowarn` (`autowarn.mjs`) | `POST /api/workflows/auto_warn` + `.../signals/autowarn` (existing `auto_warn` tracker) | Yes — reuses `autoWarnToggleButton()` unchanged |
 | Automatisch review-boom genereren (off/own/all) | `GET /api/autoingestpref` (`autoingestpref.mjs`) | `POST /api/workflows/auto_ingest_pref` + `.../signals/auto_ingest_pref` (new `auto_ingest_pref` tracker) | Yes — reuses `autoIngestPrefToggleButton()` unchanged, also shown next to the gear icon in `/pr-overview`'s header |
+| Taal van de interface (`settings-row-langui`) | `GET /api/langpref` (`ui`) + the `uiLang` localStorage paint cache (`i18n.mjs`) | `POST /api/workflows/lang_pref` + `.../signals/lang_pref` (new `lang_pref` tracker) | Yes — `langToggleButton('ui')`, and applying it reloads the page |
+| Taal van AI-uitleg (`settings-row-langexplain`) | `GET /api/langpref` (`explain`) | same Signal, `kind:"explain"` | Yes |
+| Taal van reacties op GitHub (`settings-row-langreply`) | `GET /api/langpref` (`reply`) | same Signal, `kind:"reply"` | Yes |
+| Taal van code en commits (`settings-row-langcommit`) | — (a fixed rule in the prompts) | — | **No, by design** — always English, see below |
 | Debug mode (`settings-row-debug`) | `localStorage['debugMode']` (`debugLog.mjs`) | same, via `toggleDebugMode()`; the recorded log itself is written by the one-shot `debug_log` workflow — see `.claude/docs/debug-mode.md` | Yes — plus a "Log wissen" button and a recorded-event counter (`GET /api/debug/log`) |
 | Werkmap (row label "Werkmap", `settings-row-checkout`) | `GET /api/chat/checkout?prs=<originPr>` | *(unchanged — see below)* | **Read-only on this page** |
 | Wie ben ik — GitHub-login | `GET /api/me` (`avatar.mjs`'s `ensureMe`/`meLogin`) | — | No, by explicit reviewer decision: "wie ben ik moet uit GitHub komen" |
@@ -184,9 +190,98 @@ needs to read/write `settings.json`/`praise-words.json`/`names.json` must go
 through `appDataDirOrDefault()`, never `m.dataDir` directly** — this is easy
 to get wrong again in exactly the same way.
 
+### Language per output type: the `lang_pref` tracker
+
+"Je moet per type kunnen vertalen" — so the language is not one global switch
+but one setting per KIND of output, stored in `modules/langpref`
+(`lang_pref(repo, kind, lang)`, default `nl` for every kind) behind the same
+per-repo-tracker write path as `autowarn`/`autoingestpref`:
+`WorkflowLangPref`/`SignalLangPref` (`workflows.go`) → the `saveLangPref`
+Activity → `POST /api/workflows/lang_pref` + `.../signals/lang_pref
+{kind, lang}` (`tasks_api.go`), read back through the read-only
+`GET /api/langpref`. One signal name with a `Kind` discriminator, exactly like
+`SignalAppSettings` — a workflow can only `WaitSignal` on one name at a time.
+
+Four types, and the two that are deliberately NOT settings matter as much as
+the two that are:
+
+- **`ui`** — every static interface string, through `t()` (see below).
+- **`explain`** — the AI prose the reviewer reads ABOUT the code:
+  `explain_code`, `code_warning`, `pr_summary`, `since_review`,
+  `chat_summary`, `comment_titles`, `test_run`, `comment_batch`.
+- **`reply`** — only the `body` of a drafted `comment_action` reply, i.e. the
+  text that lands on GitHub under the reviewer's own name (see "A `reply`
+  directive only drafts, never posts" in `.claude/docs/claude-chat-panel.md`).
+  Its own setting because its audience is the PR's other readers, not the
+  reviewer.
+- **A chat ANSWER has no setting at all** — it mirrors the language the
+  reviewer typed in ("antwoorden moet reageren in dezelfde taal als de
+  vraag"), which is now what `prompts/chat.md`/`chat_readonly.md`/
+  `chat_shell.md` say in their first paragraph, replacing the older
+  "Nederlands tenzij…" framing.
+- **Code, identifiers, code comments and commit messages are ALWAYS English**,
+  never a choice. Fixed in `prompts/chat_shell.md` and
+  `prompts/comment_batch.md`, with the one exception the reviewer named: the
+  CONTENTS of a translation file (`lang/<taal>/…`, the same `TRANSLATION`
+  notion `classify.go` already uses) keep their own language. The settings
+  page shows this as a read-only row (`lang-commit-fixed`) so the rule is
+  visible next to the choices.
+
+**How a language reaches Claude: one appended tail, never a translated prompt
+file** (`langdirective.go`). `explainLangTail(lang)` returns **the empty
+string for `nl`**, so an install that never touched the setting sends
+byte-identical prompts — which is also why every existing test keying
+`claude.Fake` on `model+SystemPrompt` (e.g. `comment_titles_test.go`) still
+matches. For `en` it appends a short LANGUAGE OVERRIDE block after the Dutch
+instruction block. `chatLangTail(replyLang)` is appended in BOTH languages,
+because it says two different things at once (answer = the reviewer's
+language, `comment_action` body = the `reply` setting). The preference is read
+**inside the Activity** that builds the prompt (`m.LangFor` /
+`langFor(ctx, tm, kind)`, and `warningReviewArg.Lang` for `code_warning`),
+never in a workflow body — reading a store is a side effect, see
+`.claude/rules/workflow-determinism.md`.
+
+Deliberately untranslated: the machine-read prompts whose answer nobody reads
+as prose (`resolve_call`, `comment_removal`, `chat_conflict`).
+
+### The interface language: `t()` over a Dutch-keyed dictionary
+
+`src/i18n.mjs` is the whole frontend layer: `t(dutchText, vars?)` looks the
+Dutch source string up in `src/i18n/en.mjs`'s `EN` map and falls back to the
+key itself. Three consequences worth keeping:
+
+- **The Dutch text IS the key**, so there is no key catalogue to invent or
+  keep in sync, the templates stay readable, and every Playwright spec
+  asserting Dutch copy keeps passing untouched (Dutch is the default and
+  returns the key verbatim). Never "fix" a Dutch source string without
+  updating its dictionary entry — they are one unit.
+- **`t()` is synchronous and the language is fixed for the page's lifetime.**
+  The choice is mirrored into `localStorage['uiLang']` exactly like the
+  theme's anti-flash script, so the first paint already has it; switching
+  language **reloads** (`setUiLang`) instead of re-rendering, because arrow.js
+  reuses a keyed node without re-running its bindings (see
+  `.claude/rules/arrowjs-pitfalls.md`) — a live swap would mean turning every
+  label into a reactive binding. `syncUiLang()` reconciles the cache with
+  `GET /api/langpref` once per page load and reloads if they disagree (another
+  tab/browser changed it).
+- **A fixed Dutch phrase that arrives from Go is translated at its RENDER
+  site** through the same dictionary (`t(backendMessage)` is a pass-through
+  when the phrase is unknown), which is why no Go-side i18n exists. Accepted
+  limitation: a Go message that interpolates a value (`fmt.Sprintf`) has no
+  stable key and therefore stays Dutch.
+
+A sentence with a number/name stays ONE translatable unit via placeholders —
+`t('{n} gebeurtenissen opgenomen', { n })` — never concatenated fragments.
+
 ## Tests
 
 The debug row has its own spec (`tests/debug-mode.spec.mjs`), not this one.
+
+`tests/langpref.spec.mjs` — the three language rows and the read-only commit
+row, plus a `ui` switch reloading into English. Backend:
+`modules/langpref/langpref_test.go` (defaults, per-kind/per-repo isolation,
+`All`) and `langdirective_test.go` (the empty tail for Dutch, the override for
+English, the chat tail naming both rules).
 
 `tests/settings-page.spec.mjs` — both entry buttons + the `?from=` round trip
 (including the open-redirect fallback), `↑`/`↓`/`Enter`/`Space` row

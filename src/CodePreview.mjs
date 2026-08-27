@@ -43,6 +43,7 @@
 import { html } from './vendor/arrow.js'
 import { highlightForLang, scrollHint } from './Block.mjs'
 import { updateScrollHints } from './scrollFade.mjs'
+import { t } from './i18n.mjs'
 
 // splitCodeByClasses(code) — best-effort split of a snippet into per-class
 // segments, so a code-preview pane can show WHICH class a piece of code
@@ -243,7 +244,7 @@ function previewCard(it, active, expanded, onToggle) {
       <div
         class="flex flex-col gap-1 cursor-pointer"
         data-testid="code-preview-toggle"
-        title="${() => (expanded() ? 'Inklappen' : 'Uitklappen (Enter)')}"
+        title="${() => t(expanded() ? 'Inklappen' : 'Uitklappen (Enter)')}"
         @click="${(e) => {
           // stopPropagation FIRST, before the toggle mutates the reactive
           // state this very button's own ancestor re-renders off — see the
@@ -276,7 +277,7 @@ function previewCard(it, active, expanded, onToggle) {
                   'text-xs leading-relaxed text-slate-700 dark:text-zinc-300 ' + (expanded() ? '' : 'truncate')}"
                 data-testid="code-preview-context"
               >
-                over: ${it.context}
+                ${t('over')}: ${it.context}
               </span>`
             : ''}
       </div>
@@ -284,8 +285,8 @@ function previewCard(it, active, expanded, onToggle) {
         ${() =>
           expanded()
             ? [
-                it.oldCode != null ? pane('Huidig (PR)', it.oldCode, it.lang).key('old') : '',
-                pane(it.oldCode != null ? 'Voorgesteld (chat)' : 'Codeblok', it.code, it.lang).key('new'),
+                it.oldCode != null ? pane(t('Huidig (PR)'), it.oldCode, it.lang).key('old') : '',
+                pane(t(it.oldCode != null ? 'Voorgesteld (chat)' : 'Codeblok'), it.code, it.lang).key('new'),
               ].filter(Boolean)
             : []}
       </div>

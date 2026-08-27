@@ -38,6 +38,7 @@
 // workflows.go, WorkflowAutoWarn/SignalAutoWarn). Read side: GET /api/autowarn
 // — a plain read of the same autowarn module, never a direct write from here.
 import { reactive, html } from './vendor/arrow.js'
+import { t } from './i18n.mjs'
 
 export const autoWarn = reactive({ enabled: true, runId: null })
 
@@ -109,9 +110,9 @@ export function autoWarnToggleButton(cls = '') {
       type="button"
       data-testid="auto-warn-toggle"
       title="${() =>
-        'Live AI assistent: ' +
-        (autoWarn.enabled ? 'aan' : 'uit') +
-        ' — automatische risicocontrole en beschrijvingen (klik om te wisselen)'}"
+        t('Live AI assistent: {state} — automatische risicocontrole en beschrijvingen (klik om te wisselen)', {
+          state: t(autoWarn.enabled ? 'aan' : 'uit'),
+        })}"
       class="${() =>
         'inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[11px] font-medium ring-1 ring-inset transition-colors ' +
         (autoWarn.enabled
@@ -127,7 +128,7 @@ export function autoWarnToggleButton(cls = '') {
           'inline-block h-2 w-2 shrink-0 rounded-full ' +
           (autoWarn.enabled ? 'bg-emerald-500' : 'border border-slate-400 dark:border-zinc-500')}"
       ></span>
-      <span>${() => (autoWarn.enabled ? 'Live AI assistent aan' : 'Live AI assistent uit')}</span>
+      <span>${() => t(autoWarn.enabled ? 'Live AI assistent aan' : 'Live AI assistent uit')}</span>
     </button>
   `
 }

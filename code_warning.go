@@ -39,6 +39,14 @@ type warningReviewArg struct {
 	Files       []string `json:"files"`
 	BlockCount  int      `json:"blockCount"`
 	MaxFindings int      `json:"maxFindings"`
+	// Lang is the reviewer's language preference for the findings' own text
+	// ("nl"|"en", modules/langpref), turned into the system-prompt tail by
+	// explainLangTail (langdirective.go). Filled in by the runAgenticReview
+	// Activity (workflows.go) rather than by the workflow body: reading a
+	// preference store is a side effect, so it may only happen inside an
+	// Activity (see .claude/rules/workflow-determinism.md). A run that
+	// predates this field simply carries "", i.e. Dutch.
+	Lang string `json:"lang,omitempty"`
 	// Title/Description/JiraDescription carry the PR's own stated intent (from
 	// prmeta, see warningScope): the reviewer often explains there WHY a choice
 	// was made, and a "risk" the description already accounts for is noise. The
@@ -129,7 +137,7 @@ func runCodeWarningReview(ctx context.Context, cl claude.Client, dataDir string,
 	req := claude.RunRequest{
 		Model:        claude.ModelOpus,
 		Prompt:       warningPrompt(arg, changed),
-		SystemPrompt: claude.CodeWarningSystemPrompt,
+		SystemPrompt: claude.CodeWarningSystemPrompt + explainLangTail(arg.Lang),
 		WorkDir:      headDir,
 		Tools:        []string{"Read", "Grep", "Glob"},
 	}

@@ -64,6 +64,7 @@ import (
 	"github.com/reindert-vetter/tembed"
 
 	"slash/modules/claude"
+	"slash/modules/langpref"
 )
 
 // TestRunInput is POST /api/workflows/test_run's body: just the PR. No
@@ -292,7 +293,7 @@ func runTestRun(ctx context.Context, tm *TaskManager, cl claude.Client, dataDir 
 	result, err := cl.RunChat(runCtx, claude.RunRequest{
 		Model:        claude.ModelOpus,
 		Prompt:       "Bepaal en draai de relevante tests voor deze PR.",
-		SystemPrompt: claude.TestRunSystemPrompt,
+		SystemPrompt: claude.TestRunSystemPrompt + explainLangTail(langFor(runCtx, tm, langpref.KindExplain)),
 		WorkDir:      dir,
 		// Deliberately NO Edit — see the file header, point 1.
 		Tools:   []string{"Read", "Grep", "Glob", "Bash"},
