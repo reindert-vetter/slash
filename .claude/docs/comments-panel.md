@@ -400,6 +400,32 @@ instead of a palette acting on the selected lines. Fixed with the same
 `&& state.focusLevel <= 1` guard on both branches — once past the anchor's
 own level, `Enter`/`/` fall through to the ordinary block palette.
 
+**That fallthrough alone still opened an invisible menu — `isIndexMenu()`
+needed the same guard.** Both `menuAnchor()` and `menuRegion()` (`home.mjs`)
+decide "this is the plain sidebar Enter-menu, anchor/size it against
+`pr-index`" via one shared `isIndexMenu()` (`state.mode === 'list' &&
+(ms.mode === 'block' || isReviewFollowup(ms.mode))`). Once `Enter`/`/` fell
+through to `ms.mode = 'block'` for a child drilled from inside the anchor's
+panel (`state.focusLevel > 1`), `isIndexMenu()` still matched too —
+`state.mode` never leaves `'list'` in this whole flow — so the palette kept
+anchoring/sizing itself against `pr-index`, which `state.commentAnchorEntered`
+keeps collapsed to `width: 0` at ANY drill depth, not just the anchor's own
+level 1. The menu genuinely mounted (its own input even took DOM focus) but
+rendered as an unusable ~2px-wide sliver pinned to the far-left edge —
+reported bug: "als ik enter druk, zie ik het menu niet" (confirmed by
+measuring the live DOM: `pr-index` box `width: 0`, `command-menu` box
+`{ width: 2, height: 287.75 }`, both before the fix; `width: 593` after).
+Fixed with the same `&& state.focusLevel <= 1` guard, this time added
+directly to `isIndexMenu()` itself — the single function both `menuAnchor()`
+and `menuRegion()` already shared, so one change fixes both consistently.
+Once past the anchor's own level, both fall through to their generic,
+already-`focusLevel`-aware fallback (`[data-change-active-end]`/
+`[data-pane="new"]`, the same path an ordinary drilled column's own palette
+already uses in `state.mode === 'diff'`). Test:
+`tests/comment-anchor-expanded-view.spec.mjs` (asserts the menu's own
+bounding-box width, not just its text content — the earlier test only
+checked text and so did not catch this).
+
 ### → skips an already-resolved default comment
 
 `enterCommentsOrRelated(pr)` (`RelatedPanel.mjs`) is the single entry point

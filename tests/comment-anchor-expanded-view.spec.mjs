@@ -686,5 +686,14 @@ test.describe('a comment-index item anchored to a real block', () => {
     await expect(menu).not.toContainText('Beantwoorden')
     await expect(menu).not.toContainText('Resolve comment')
     await expect(page.getByTestId('command-row').nth(1)).toContainText('Keur')
+
+    // Bug found AFTER the above landed: menuAnchor()/menuRegion() still
+    // anchored/sized the menu against pr-index (isIndexMenu(), unaware of
+    // state.focusLevel) — collapsed to width 0 at this depth
+    // (state.commentAnchorEntered), so the menu rendered as an unusable ~2px
+    // sliver despite passing every text-only assertion above. Assert a real
+    // width so this class of regression fails loudly instead of silently.
+    const box = await menu.boundingBox()
+    expect(box.width).toBeGreaterThan(100)
   })
 })

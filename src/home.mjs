@@ -14552,8 +14552,23 @@ function isReviewFollowup(mode) {
 // FIRST row) stays reserved for scrollChangeIntoView, which centres on the
 // top of the selection, not the menu. Always something on-screen so the menu
 // opens under whatever is selected.
+// ALSO gated on state.focusLevel <= 1: a child drilled from INSIDE the
+// comment anchor's own Underlying-code panel (state.focusLevel > 1, see
+// drillIntoChild/openCommentAnchorDrill and the matching ArrowUp/ArrowDown/
+// Enter fixes elsewhere in this file) keeps state.mode === 'list' the whole
+// time, so without this the 'block'/postApprove palette for THAT drilled
+// child still misidentified itself as the plain sidebar case and anchored/
+// sized itself against pr-index — which state.commentAnchorEntered keeps
+// collapsed to width 0 at any drill depth, not just at the anchor's own
+// level 1. The menu then genuinely mounted (its input even took focus) but
+// rendered as an unusable ~2px-wide sliver pinned to the far-left edge —
+// reported bug: "als ik enter druk, zie ik het menu niet" (confirmed live:
+// pr-index box width 0, command-menu box { width: 2, height: 287.75 }).
+// Reachable at focusLevel > 1 only through this one comment-anchor flow — an
+// ordinary drill always runs inside state.mode === 'diff', which already
+// claims Enter/`/` first (see the state.mode === 'diff' branch in onKeydown).
 function isIndexMenu() {
-  return state.mode === 'list' && (ms.mode === 'block' || isReviewFollowup(ms.mode))
+  return state.mode === 'list' && (ms.mode === 'block' || isReviewFollowup(ms.mode)) && state.focusLevel <= 1
 }
 
 // lastIndexRowRect caches the selected sidebar row's bounding rect while it's
