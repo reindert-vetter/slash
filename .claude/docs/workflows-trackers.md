@@ -686,6 +686,13 @@ Signal-less, one Execution per run.
   register its type. A name belongs in the map only once its registering code is
   deleted. Since cleanup itself only runs in the server, the CLI never runs this
   purge either.
+- **Also deletes the completed `debug_log` one-shots** (`sweepDebugLogRuns`,
+  `cleanup.go`), unconditionally, once per pass and older than
+  `debugLogRunAge` (1 hour). Debug mode starts one such Execution per flushed
+  batch of recorded events, so a debugging session leaves hundreds of run rows
+  whose content is worthless the moment the lines are on disk. The log FILE is
+  deliberately never touched, and a **failed** run is left in place so it stays
+  visible in "Mislukte taken". See `.claude/docs/debug-mode.md`.
 - **Also purges orphaned `task_code_comment` runs whose own comment is gone**
   (`purgeOrphanCommentRuns`, `cleanup.go`), unconditionally, once per pass —
   not scoped to the merged/age gate above or to any resolved PR target,

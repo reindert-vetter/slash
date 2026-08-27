@@ -40,6 +40,12 @@ func (s *server) routes(staticDir string) *http.ServeMux {
 	// praise" rule (see praisewords.go). Registered here rather than in
 	// routesTasks: it reads a file next to the DBs, not the workflow engine.
 	mux.HandleFunc("/api/praisewords", s.handlePraiseWords)
+	// GET /api/debug/log → the recorded debug-mode navigation/action log
+	// (debug_log.go). Registered here rather than in routesTasks for the same
+	// reason as /api/praisewords: it reads a file next to the DBs, not the
+	// workflow engine. Read-only — the WRITE side is a workflow
+	// (POST /api/workflows/debug_log), because the file is durable.
+	mux.HandleFunc("/api/debug/log", s.handleDebugLog)
 	if s.tasks != nil {
 		s.routesTasks(mux)
 	}

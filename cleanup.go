@@ -59,6 +59,12 @@ const cleanupMergedAge = 7 * 24 * time.Hour
 // warning visible), never touched by this pass.
 const testRunResidueAge = 3 * 24 * time.Hour
 
+// debugLogRunAge is how long a COMPLETED debug_log one-shot's run record is
+// kept before sweepDebugLogRuns deletes it. Short on purpose: the record has
+// no value once the batch is on disk, and a debugging session can produce
+// hundreds of them. Only the runs are swept — never debug-log.jsonl itself.
+const debugLogRunAge = time.Hour
+
 // retiredWorkflowTypes are Workflow Types that used to exist in this codebase
 // but have since been permanently removed — the code that registered them is
 // gone for good, not merely absent from one particular binary (the headless
@@ -141,6 +147,10 @@ type CleanupResult struct {
 	// purgeOrphanCommentRuns) — unconditional, not scoped to any one PR target
 	// or to the merged/age gate above.
 	OrphanCommentRunsDeleted int `json:"orphanCommentRunsDeleted"`
+	// DebugLogRunsDeleted is the number of completed debug_log one-shots whose
+	// run record was removed this pass (see sweepDebugLogRuns) — the appended
+	// debug-log.jsonl lines themselves are deliberately kept.
+	DebugLogRunsDeleted int `json:"debugLogRunsDeleted"`
 	// TestRunResidueSwept is the number of test_run runs whose own leftover
 	// residue (git clean candidates older than testRunResidueAge) was removed
 	// this pass — see sweepTestRunResidue. Unconditional, not scoped to any
@@ -609,6 +619,43 @@ func purgeOrphanCommentRuns(ctx context.Context, engine *tembed.Engine, cm *comm
 		n++
 	}
 	return n, nil
+}
+
+// sweepDebugLogRuns deletes the run history of every COMPLETED debug_log
+// one-shot older than debugLogRunAge. Debug mode starts one such Execution per
+// flushed batch of recorded events (see debug_log.go), and once it has
+// completed the whole point of it — the appended lines — lives in
+// debug-log.jsonl, which this sweep deliberately never touches. Without this
+// the run table would grow for the whole length of a debugging session and
+// never shrink.
+//
+// Only StatusCompleted is eligible; a Running/Waiting one-shot is either still
+// in flight or a genuine failure worth keeping visible in "Mislukte taken"
+// (the failed runs GET /api/problems reports are read straight from the store,
+// so a failed log write is never swept here either).
+//
+// Uses the real wall clock (time.Now()): only ever called from an Activity
+// body, exempt from the determinism rule exactly like purgeOrphanCommentRuns.
+func sweepDebugLogRuns(engine *tembed.Engine) (int, error) {
+	runs, err := engine.Runs()
+	if err != nil {
+		return 0, err
+	}
+	now := time.Now()
+	deleted := 0
+	for _, r := range runs {
+		if r.Workflow != WorkflowDebugLog || r.Status != tembed.StatusCompleted {
+			continue
+		}
+		if now.Sub(r.UpdatedAt) < debugLogRunAge {
+			continue
+		}
+		if err := engine.DeleteRun(r.ID); err != nil {
+			return deleted, fmt.Errorf("delete debug_log run %s: %w", r.ID, err)
+		}
+		deleted++
+	}
+	return deleted, nil
 }
 
 // sweepTestRunResidue removes the on-disk residue any old-enough,

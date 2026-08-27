@@ -745,6 +745,12 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// The read side reuses the existing GET /api/settings and GET
 	// /api/praisewords — no new read endpoint.
 	mux.HandleFunc("/api/workflows/app_settings", s.handleAppSettingsStart)
+	// POST /api/workflows/debug_log {kind,session,page,events} → append one
+	// batch of recorded debug-mode events to debug-log.jsonl (or clear it).
+	// One-shot per batch, deliberately not a tracker — see WorkflowDebugLog
+	// (workflows.go) and .claude/docs/debug-mode.md. The matching read is the
+	// plain GET /api/debug/log, registered in api.go next to /api/praisewords.
+	mux.HandleFunc("/api/workflows/debug_log", s.handleDebugLogStart)
 	// POST /api/workflows/claude_chat {pr, commentId} → ensure the claude_chat
 	// Execution for an existing comment thread (idempotent, Run ID derived from
 	// commentId); the UI then signals reviewer turns to its Run ID via
@@ -1926,6 +1932,34 @@ func (s *server) handleAppSettingsStart(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	runID, err := s.tasks.manager.EnsureAppSettings()
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
+}
+
+// handleDebugLogStart serves POST /api/workflows/debug_log — the only write
+// path into the debug log, since the file is durable and must therefore go
+// through a workflow (see .claude/rules/workflows-write-boundary.md). The
+// batch is validated HERE, before an Execution is even started, the same
+// discipline as the app_settings signal branch above: an unknown kind or event
+// type, an empty or oversized batch, is a 400 rather than a stored surprise.
+func (s *server) handleDebugLogStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var in DebugLogInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, "invalid debug log batch", http.StatusBadRequest)
+		return
+	}
+	if err := validateDebugLogInput(&in); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	runID, err := s.tasks.manager.StartDebugLog(in)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return

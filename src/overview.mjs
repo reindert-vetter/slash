@@ -10,6 +10,7 @@
 import { reactive, html, watch } from './vendor/arrow.js'
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { initTheme, themeToggleButton } from './theme.mjs'
+import { initDebugLog } from './debugLog.mjs'
 import { ensureAutoIngestPref, autoIngestPrefToggleButton } from './autoingestpref.mjs'
 import { settingsButton } from './settingsLink.mjs'
 import { avatarHTML, avatarUrlOf, displayNameOf, ensureMe, ensureNames, fullNameOf, meLogin } from './avatar.mjs'
@@ -17,6 +18,10 @@ import { relativeTime } from './relativeTime.mjs'
 import { fetchProblems, problemRunRow, problemLogRow } from './problems.mjs'
 
 initTheme()
+// Debug mode: records this page load and every following key/click when the
+// reviewer has it on (src/debugLog.mjs). A reproduction often starts here —
+// opening the overview and then a PR's review tree.
+initDebugLog()
 
 // Configure this to your Jira instance — used only to build the "Open
 // Jira-ticket" popover link when a PR title contains a KEY-123-style key.

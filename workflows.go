@@ -178,6 +178,17 @@ const (
 	// ReactionSignal.Action) selecting which file's Activity runs. It never
 	// completes — a long-lived, single, global tracker.
 	WorkflowAppSettings = "app_settings"
+	// WorkflowDebugLog is the Workflow Type that appends one batch of recorded
+	// navigation/action events to <dataDir>/debug-log.jsonl, or clears that
+	// file — the durable half of "Debug mode" (see debug_log.go and
+	// .claude/docs/debug-mode.md). ONE-SHOT: one Execution per flushed batch,
+	// signal-less, completing after its single Activity. Deliberately NOT a
+	// long-lived tracker like app_settings above: tembed replays a workflow
+	// from the beginning at every step, so a WaitSignal loop would replay
+	// every earlier batch on every new one (quadratic, and inline under the
+	// run lock). The completed runs carry nothing worth keeping — the file
+	// does — so the cleanup workflow sweeps them (sweepDebugLogRuns).
+	WorkflowDebugLog = "debug_log"
 	// WorkflowCommentBatch is the Workflow Type behind "laat Claude alle
 	// openstaande comments verwerken": ONE agentic Opus run that walks every
 	// open comment of a PR and edits code for it, landing the result through the
@@ -2302,6 +2313,26 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return nil, err
 	})
 
+	// Activity: append one batch of debug-mode events to debug-log.jsonl
+	// (write, workflow-driven) — appendDebugLogFile (debug_log.go) is one of
+	// that file's only two writers. appDataDirOrDefault(), never m.dataDir:
+	// that is the settings.json/praise-words.json directory, and this file
+	// lives next to them (see .claude/docs/settings-page.md's warning).
+	engine.RegisterActivity("appendDebugLog", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg DebugLogInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		_, err := appendDebugLogFile(m.appDataDirOrDefault(), arg)
+		return nil, err
+	})
+
+	// Activity: empty debug-log.jsonl — the settings page's "Log wissen", so
+	// the reviewer can start a clean reproduction.
+	engine.RegisterActivity("clearDebugLog", func(ctx context.Context, in []byte) ([]byte, error) {
+		return nil, clearDebugLogFile(m.appDataDirOrDefault())
+	})
+
 	// Activity: fire-and-forget the automatic code_warning trigger for pr. This
 	// Activity itself does no slow work — it only queues pr onto the single
 	// serial code_warning worker and returns immediately — so
@@ -2749,6 +2780,18 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return json.Marshal(map[string]int{"swept": n})
 	})
 
+	// Activity: delete the completed one-shot debug_log runs (see
+	// sweepDebugLogRuns, cleanup.go). The debug log itself lives in a file and
+	// is deliberately kept — only the run rows those one-shots leave behind
+	// are swept.
+	engine.RegisterActivity("sweepDebugLogRuns", func(ctx context.Context, in []byte) ([]byte, error) {
+		n, err := sweepDebugLogRuns(m.engine)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]int{"deleted": n})
+	})
+
 	// Activity: create the chat conversation row if it doesn't exist yet (write,
 	// workflow-driven, idempotent). See chat_workflow.go.
 	engine.RegisterActivity("ensureChatConversation", func(ctx context.Context, in []byte) ([]byte, error) {
@@ -3067,6 +3110,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowAutoWarn, autoWarnPrefWorkflow)
 	engine.RegisterWorkflow(WorkflowAutoIngestPref, autoIngestPrefWorkflow)
 	engine.RegisterWorkflow(WorkflowAppSettings, appSettingsWorkflow)
+	engine.RegisterWorkflow(WorkflowDebugLog, debugLogWorkflow)
 	engine.RegisterWorkflow(WorkflowIgnoreComment, ignoreCommentWorkflow)
 	engine.RegisterWorkflow(WorkflowCleanup, cleanupWorkflow)
 	engine.RegisterWorkflow(WorkflowClaudeChat, claudeChatWorkflow)
@@ -3416,6 +3460,13 @@ func cleanupWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		return nil, fmt.Errorf("sweep test_run residue: %w", err)
 	}
 
+	var debugLogRuns struct {
+		Deleted int `json:"deleted"`
+	}
+	if err := w.ExecuteActivity("sweepDebugLogRuns", nil, &debugLogRuns); err != nil {
+		return nil, fmt.Errorf("sweep debug_log runs: %w", err)
+	}
+
 	var targets CleanupTargets
 	if err := w.ExecuteActivity("resolveCleanupTargets", in, &targets); err != nil {
 		return nil, fmt.Errorf("resolve cleanup targets: %w", err)
@@ -3426,6 +3477,7 @@ func cleanupWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		RetiredRunsDeleted:       retired.Deleted,
 		OrphanCommentRunsDeleted: orphanComments.Deleted,
 		TestRunResidueSwept:      testRunResidue.Swept,
+		DebugLogRunsDeleted:      debugLogRuns.Deleted,
 	}
 	for _, t := range targets.Targets {
 		var purged CleanupPurgeResult
@@ -3919,6 +3971,28 @@ func appSettingsWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			}
 		}
 	}
+}
+
+// debugLogWorkflow persists ONE batch of debug-mode events (or clears the
+// log). One-shot and deterministic in the strictest sense: exactly one
+// Activity, chosen by the input's Kind, which the HTTP handler already
+// validated — no signals, no clock, no loop. See WorkflowDebugLog above for
+// why this is a one-shot rather than a tracker.
+func debugLogWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
+	var in DebugLogInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return nil, err
+	}
+	if in.Kind == "clear" {
+		if err := w.ExecuteActivity("clearDebugLog", nil, nil); err != nil {
+			return nil, fmt.Errorf("clear debug log: %w", err)
+		}
+		return nil, nil
+	}
+	if err := w.ExecuteActivity("appendDebugLog", in, nil); err != nil {
+		return nil, fmt.Errorf("append debug log: %w", err)
+	}
+	return nil, nil
 }
 
 // ignoreCommentWorkflow persists which PR-wide comments the reviewer hid from
@@ -5643,6 +5717,16 @@ func (m *TaskManager) EnsureAppSettings() (string, error) {
 	}
 	m.appSettingsRun = id
 	return id, nil
+}
+
+// StartDebugLog starts ONE debug_log Execution for one already-validated
+// batch (or a clear). No dedup and no reuse: every batch is its own one-shot
+// Execution — see WorkflowDebugLog for why this is not a tracker.
+func (m *TaskManager) StartDebugLog(in DebugLogInput) (string, error) {
+	if m.engine == nil {
+		return "", fmt.Errorf("no engine")
+	}
+	return m.engine.StartWorkflow(WorkflowDebugLog, in)
 }
 
 // findAppSettingsRunLocked scans for a running/waiting app_settings

@@ -12,9 +12,11 @@ import { initTheme, themeToggleButton, cycleTheme } from './theme.mjs'
 import { ensureAutoWarn, autoWarnToggleButton, toggleAutoWarn } from './autowarn.mjs'
 import { ensureAutoIngestPref, autoIngestPrefToggleButton, cycleAutoIngestPref } from './autoingestpref.mjs'
 import { ensureMe, meLogin } from './avatar.mjs'
+import { initDebugLog, debugModeToggleButton, toggleDebugMode, clearDebugLog, debugLogCount } from './debugLog.mjs'
 import { originFrom, originPr } from './settingsLink.mjs'
 
 initTheme()
+initDebugLog()
 
 function goBack() {
   location.href = originFrom
@@ -36,11 +38,14 @@ const state = reactive({
   // (see "Timing is load-bearing" in conventions.md). Mirrored into this
   // reactive field once ensureMe() resolves, in init() below.
   githubLogin: '',
+  // How many lines the debug recording currently holds (GET /api/debug/log) —
+  // shown on the debug row so the reviewer can see it really is recording.
+  debugCount: 0,
 })
 
 // Row order IS the ↑/↓ nav order, and IS the DOM order rendered below — kept
 // as one array so the two can never drift apart.
-const ROWS = ['theme', 'autowarn', 'autoingestpref', 'checkout', 'aliases', 'praisewords']
+const ROWS = ['theme', 'autowarn', 'autoingestpref', 'debug', 'checkout', 'aliases', 'praisewords']
 
 // ── data loading ─────────────────────────────────────────────────────────
 
@@ -98,11 +103,23 @@ async function loadCheckout() {
   }
 }
 
+async function refreshDebugCount() {
+  state.debugCount = await debugLogCount()
+}
+
 async function init() {
   await ensureMe()
   state.githubLogin = meLogin()
-  await Promise.all([loadAliases(), loadPraiseWords(), loadCheckout()])
+  await Promise.all([loadAliases(), loadPraiseWords(), loadCheckout(), refreshDebugCount()])
   state.loading = false
+}
+
+// clearLog empties the recording through the same one-shot debug_log workflow
+// the recording itself uses — never a direct write. Awaits the count refresh so
+// the row reflects the truth rather than an optimistic 0.
+async function clearLog() {
+  await clearDebugLog()
+  await refreshDebugCount()
 }
 
 // ── write paths ───────────────────────────────────────────────────────────
@@ -195,6 +212,9 @@ function activateRow(row) {
     toggleAutoWarn()
   } else if (row === 'autoingestpref') {
     cycleAutoIngestPref()
+  } else if (row === 'debug') {
+    // Same function a click on debugModeToggleButton runs.
+    toggleDebugMode()
   } else if (row === 'aliases') {
     state.editing = 'aliases'
     requestAnimationFrame(() => focusRowInput('aliases'))
@@ -281,6 +301,33 @@ function autoIngestPrefRow() {
       'Uit — nooit; Mijn PR’s — alleen je eigen PR’s (behalve "Ready to merge"); Alle PR’s — ook die van anderen.',
     )}
     ${autoIngestPrefToggleButton()}
+  </div>`
+}
+
+function debugRow() {
+  return html`<div data-testid="settings-row-debug" class="${() => rowCls('debug')}" @click="${() => (state.activeRow = ROWS.indexOf('debug'))}">
+    ${rowLabel(
+      'Debug mode',
+      'Legt je navigatie en acties vast in data/debug-log.jsonl, zodat Claude een bug kan naspelen. Elke sessie begint met de pagina die je opent.',
+    )}
+    <div class="flex flex-wrap items-center gap-2">
+      ${debugModeToggleButton()}
+      <button
+        type="button"
+        data-testid="settings-debug-clear"
+        title="Wis de opgenomen log"
+        class="rounded-full px-2 py-1 text-[11px] font-medium text-slate-600 dark:text-zinc-300 ring-1 ring-inset ring-slate-200 dark:ring-zinc-700 hover:bg-slate-100 dark:hover:bg-zinc-800"
+        @click="${(e) => {
+          e.stopPropagation()
+          clearLog()
+        }}"
+      >
+        Log wissen
+      </button>
+      <span class="text-[12px] text-slate-500 dark:text-zinc-500" data-testid="settings-debug-count">
+        ${() => state.debugCount + ' gebeurtenissen opgenomen'}
+      </span>
+    </div>
   </div>`
 }
 
@@ -395,7 +442,8 @@ function App() {
       </header>
       <div class="flex-1 overflow-auto px-6 py-5">
         <div class="mx-auto max-w-xl space-y-3" data-testid="settings-rows">
-          ${themeRow()} ${autoWarnRow()} ${autoIngestPrefRow()} ${checkoutRow()} ${aliasesRow()} ${praiseWordsRow()}
+          ${themeRow()} ${autoWarnRow()} ${autoIngestPrefRow()} ${debugRow()} ${checkoutRow()} ${aliasesRow()}
+          ${praiseWordsRow()}
         </div>
         <p class="mx-auto mt-4 max-w-xl text-[12px] text-slate-400 dark:text-zinc-500">
           ↑/↓ om te navigeren, Enter/Space om te wisselen of te bewerken, ← om terug te gaan.

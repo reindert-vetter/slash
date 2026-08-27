@@ -40,6 +40,10 @@ data/settings.json
 # Per-reviewer praise-word list (praisewords.go) — personal vocabulary, never
 # committed, same reasoning as settings.json above.
 data/praise-words.json
+# Per-reviewer debug-mode recording (debug_log.go) — one reviewer's own
+# navigation/click history, only exists while Debug mode is on, same reasoning
+# as the two files above.
+data/debug-log.jsonl
 data/worktrees/
 data/workflows/
 node_modules/

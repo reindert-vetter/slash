@@ -180,6 +180,7 @@ import { relativeTime } from './relativeTime.mjs'
 // problems card of our own — see "The Taken block" in
 // .claude/docs/detail-layout.md.
 import { fetchProblems } from './problems.mjs'
+import { initDebugLog, logAction } from './debugLog.mjs'
 import {
   loadColumnWidths,
   colWidthStyle,
@@ -191,6 +192,11 @@ import {
 
 initTheme()
 initImageLightbox()
+// Debug mode (off unless the reviewer switched it on, see src/debugLog.mjs):
+// records this page load plus every following key/click, so Claude can replay a
+// reported bug. It installs its own listeners — nothing in the nav chain below
+// knows about it.
+initDebugLog()
 
 // The PR under review comes from the path. Two shapes, and the first one is the
 // historical one, unchanged:
@@ -12978,6 +12984,13 @@ function enterSubmenu(children) {
 // run (e.g. the composer's cs.focus flip never reaching the DOM). Waiting
 // a frame lets the close finish and flush on its own first.
 function runCommand(cmd) {
+  // The ONE place debug mode is instrumented by hand: which command an Enter
+  // actually ran cannot be read back from the recorded keystroke (see
+  // .claude/docs/debug-mode.md). A no-op while debug mode is off.
+  // cmd.label is already a plain string by the time it gets here
+  // (snapshotCommands resolves every label function up front), so this reads
+  // no reactive state and calls nothing.
+  logAction('command', (cmd && (cmd.id || (typeof cmd.label === 'string' ? cmd.label : ''))) || '')
   // A parent command opens its submenu instead of acting; keep the palette open.
   if (cmd && cmd.children) {
     enterSubmenu(cmd.children)

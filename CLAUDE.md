@@ -120,6 +120,11 @@ that set stays small on purpose; a new topic file belongs in `.claude/docs/`.
   state that travels between the review tree and the PR overview.
 - `pr-overview.md` — the `/pr-overview` GitHub inbox in full (sections, the
   per-row popover, filters, failed tasks, its client).
+- `debug-mode.md` — the settings-page "Debug mode" switch: it records every
+  navigation/click (starting with the page you open) into
+  `data/debug-log.jsonl` so a later Claude session can replay a reported bug,
+  why the preference is localStorage but the log a workflow write, and why the
+  write is a one-shot Execution per batch instead of a tracker.
 - `settings-page.md` — the `/settings` general settings page: the shared
   gear-icon entry buttons, the `?from=` back-navigation round trip, the
   keyboard-navigable row list, and the per-setting source/write-path table
