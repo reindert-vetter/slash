@@ -511,4 +511,42 @@ test.describe('a comment-index item anchored to a real block', () => {
     // The same flag also reveals the diff's own "entered" look.
     await expect(drillColumn.locator('[data-change-active]').first()).toBeVisible()
   })
+
+  // Reported bug: "als ik resolve en ik naar een andere comment, dan zie ik
+  // nu bovenin de chat ipv onderin". This auto-expanded
+  // thread (isAnchorOnlyComment) never gets the keyboard (see the doc comment
+  // above), so it never went through toComment()'s own scroll-to-bottom — the
+  // freshly mounted [data-testid=comment-thread] kept its DOM-default
+  // scrollTop (the TOP) instead of showing the newest reply. Fixed via
+  // primeAnchorThreadScroll (RelatedPanel.mjs), called from
+  // openCommentAnchorDrill (home.mjs). A long run of replies is needed to
+  // actually overflow the thread's own max-h-[38vh] scroller.
+  test('the auto-expanded thread lands scrolled to its newest reply, not the top', async ({ page }) => {
+    const reactions = Array.from({ length: 20 }, (_, i) => ({
+      id: 'r-' + i,
+      author: 'reviewer',
+      source: 'ui',
+      body: 'reply number ' + i + ' — '.repeat(20),
+    }))
+    await mockAnchoredComment(page, { body: 'please rename this variable', reactions })
+    await page.goto('/pr/12903')
+    await leaveSearchBox(page)
+
+    await page.locator('[data-idx]').filter({ hasText: 'please rename this variable' }).click()
+    const thread = page.getByTestId('comment-thread')
+    await expect(thread).toBeVisible()
+    await expect(thread.locator('[data-testid=reaction-bubble]').last()).toBeVisible()
+    // Give the deferred (requestAnimationFrame) scroll-to-bottom a moment —
+    // but bounded well UNDER the 5s comment-poll interval (loadComments'
+    // refreshTimer, RelatedPanel.mjs), which also happens to call
+    // scrollCommentThreadToBottom() on every tick and would otherwise mask a
+    // regression here a few seconds late instead of failing.
+    await expect
+      .poll(
+        () =>
+          thread.evaluate((el) => (el.scrollHeight > el.clientHeight ? el.scrollTop + el.clientHeight >= el.scrollHeight - 2 : null)),
+        { timeout: 1500 },
+      )
+      .toBe(true)
+  })
 })

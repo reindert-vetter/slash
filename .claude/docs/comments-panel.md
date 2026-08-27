@@ -317,6 +317,32 @@ other block. "Uitgeklapt, maar niet direct geselecteerd" — the card is
 already expanded the moment the row is selected; only `→` moves the
 KEYBOARD into it.
 
+**But it must still land scrolled to the newest reply, even without owning the
+keyboard.** Only `toComment()` used to reset `cs.threadPos = 0` and scroll the
+thread div to its bottom (`scrollCommentThreadToBottom`) — this auto-expand
+path never calls `toComment()` at all (see above: no card ever steals the
+keyboard on mere selection), so the freshly mounted
+`[data-testid=comment-thread]` kept its DOM-default `scrollTop` (the TOP) the
+moment a row with a long thread got auto-expanded, instead of showing the
+newest message. Reported bug: "als ik resolve en ik naar een andere comment,
+dan zie ik naar beneden i.p.v. bovenin de chat" — resolving a comment jumps
+`state.selected` straight to the next unresolved one
+(`afterResolveAction`/`afterCommentRowRemoved`, `home.mjs`), which drives this
+exact same `state.selected` watch → `openCommentAnchorDrill`; plain `↑`/`↓`
+through the index hits the identical gap, just less noticeably since a
+shorter thread never overflows its `max-h-[38vh]` scroller in the first
+place. Fixed by `openCommentAnchorDrill` also calling
+**`primeAnchorThreadScroll()`** (`RelatedPanel.mjs`, exported next to
+`jumpToCommentThreadBottom` — resets `cs.threadPos` to 0, then re-pins and
+scrolls) right after `state.drillCursor` is (re)computed — but NOT from the
+`sameComment` early-return branch just above it, so an idempotent comment-poll
+retrigger on the SAME row never yanks a manual scroll-up back down. Test: "the
+auto-expanded thread lands scrolled to its newest reply, not the top" in
+`tests/comment-anchor-expanded-view.spec.mjs` (deliberately polls with a
+timeout well under the 5s comment-poll interval — that poll also happens to
+call `scrollCommentThreadToBottom()` on every tick and would otherwise mask a
+regression here a few seconds late instead of failing).
+
 ### → skips an already-resolved default comment
 
 `enterCommentsOrRelated(pr)` (`RelatedPanel.mjs`) is the single entry point

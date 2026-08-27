@@ -1689,6 +1689,29 @@ export function jumpToCommentThreadBottom() {
   cs.threadPinned = true
   scrollCommentThreadToBottom()
 }
+
+// primeAnchorThreadScroll — home.mjs's openCommentAnchorDrill calls this right
+// after it auto-expands a "Comments op regels" anchor's own thread
+// (isAnchorOnlyComment in commentCard below), WITHOUT ever handing the
+// keyboard into it (see openCommentAnchorDrill's own doc comment: "as if
+// fully expanded", but no focus). Only toComment() used to reset
+// threadPos/scroll the thread to its newest message — this auto-expand path
+// never went through toComment() at all, so the freshly mounted
+// [data-testid=comment-thread] div kept its DOM-default scrollTop (0, the
+// TOP) instead of showing the newest reply. Reported bug: resolving a
+// comment and landing on the next one (afterResolveAction/
+// afterCommentRowRemoved, home.mjs) showed the top of a long thread instead
+// of the bottom — the same gap exists for plain ↓/↑ through the blokken-index
+// onto a comment row, since both go through this one function.
+// threadPos is reset here too (not just re-pinned, unlike
+// jumpToCommentThreadBottom) — a leftover threadPos from whichever OTHER
+// thread the reviewer last had the keyboard in must never leak into this
+// merely-auto-expanded one; the keyboard is never in it, so 0 (rest) is
+// always the right value.
+export function primeAnchorThreadScroll() {
+  cs.threadPos = 0
+  jumpToCommentThreadBottom()
+}
 export function jumpToClaudeThreadBottom() {
   cs.claudePinned = true
   scrollClaudeThreadToBottom()

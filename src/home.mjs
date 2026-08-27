@@ -143,6 +143,7 @@ import RelatedPanel, {
   setCommentMenuOpener,
   setPrCommentMenuOpener,
   commentClaudeShortcutHints,
+  primeAnchorThreadScroll,
 } from './RelatedPanel.mjs'
 import { ShortcutHintBar } from './shortcutHints.mjs'
 import { railButtonHTML } from './collapsedRail.mjs'
@@ -2990,6 +2991,15 @@ function openCommentAnchorDrill(b) {
   state.drillCursor = [commentAnchorCursor(anchor, c)]
   state.focusLevel = 1
   scrollFocusIntoView()
+  // The thread auto-expands (isAnchorOnlyComment, RelatedPanel.mjs) but never
+  // gets the keyboard, so it never goes through toComment()'s own
+  // scroll-to-bottom — without this it silently kept its DOM-default
+  // scrollTop (the TOP of the thread) instead of showing the newest reply.
+  // Reported bug: resolving a comment and landing on the next one showed the
+  // top of a long thread instead of the bottom. Deliberately not called from
+  // the `sameComment` early-return above — an idempotent poll retrigger on
+  // the SAME row must not yank a manual scroll-up back down.
+  primeAnchorThreadScroll()
   // commentAnchorCursor's row lookup needs the anchor's own aligned diff rows
   // (blockRows), which aren't there yet on this block's very first open — it
   // silently fell back to {change:0}. Recompute once the code (and thus the
