@@ -669,7 +669,10 @@ the "Ga terug" wording instead of "Ga door".
    order the panel shows, excluding `covered_by` to avoid the method↔test
    cycle), depth-first per child (`firstUnapprovedInSubtree`, cycle-safe via a
    `seen` set): the child itself from its first `'group'` unit, otherwise its
-   own children, and so on. See `.claude/docs/underlying-code.md`.
+   own children, and so on. That panel order now sorts a still-pending child
+   BEFORE a fully-done sibling ("Pending sorts first" in
+   `.claude/docs/underlying-code.md`), so the card Space lands on is also the
+   one showing at the top — see `.claude/docs/underlying-code.md`.
 3. **Return to an unapproved ancestor** (reviewer request — "als ik een
    onderliggende code goedkeur, dan wil ik terug naar de bovenliggende code
    als dat nog niet is goedgekeurd"): only once the focused column's whole

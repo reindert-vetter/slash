@@ -5548,6 +5548,15 @@ function relatedChildren(b) {
           loading: !kid.code,
           size: codeSize(code),
           prio: 0,
+          // pending is subtree-wide (subtreeApproveCount, not blockApproveCount):
+          // a card whose own rows are done but that still has an unapproved
+          // nested chip underneath (e.g. SessionState::remember at 7/7 with an
+          // unapproved SessionState::carry) must still sort/land as "not done" —
+          // see "pending sorts first" in .claude/docs/underlying-code.md.
+          pending: (() => {
+            const c = subtreeApproveCount(kid)
+            return c.done < c.total
+          })(),
           approve: blockApproveCount(kid),
           // Same "open comment somewhere in this block's own subtree"
           // indicator as the sidebar pill (commentActivityPill,
@@ -5571,20 +5580,35 @@ function relatedChildren(b) {
     ? lineAnchoredTestCoverChildren(b, rows, range)
     : resolvedTestCoverChildren(b, range)
   const coveredBy = scoped ? [] : coveredByChildren(b)
-  // Sort by groupTier first (see the scoping doc above), then priority
-  // (0 = also-changed child block, 1 = call on a changed line, 2 = unchanged
-  // call), then — within a priority — biggest child first, so the substantial
-  // modified code the reviewer cares about leads while trivial one-liners
-  // (e.g. Eloquent relation accessors, which are also `added` PR blocks and
-  // thus tie at prio 0) drop below it. `size` is the child's line count
-  // (embedded childCode for calls, loaded code for listeners); a child whose
-  // code hasn't arrived yet is size 0 and sinks until it loads. Ties keep the
-  // resolver-emit (source) order (Array.prototype.sort is stable).
+  // Sort by groupTier first (see the scoping doc above), then whether the
+  // child still has ANY approval work pending anywhere in its own subtree
+  // (`pending`, computed per branch above via subtreeApproveCount — not just
+  // the card's own rows: SessionState::remember can read 7/7 on its own rows
+  // and still carry an unapproved SessionState::carry underneath, and that
+  // still has to sort/land first). Reviewer request: "laat de blok bovenaan
+  // zien die nog niet zijn goedgekeurd" — Space already walks to the first
+  // unapproved unit depth-first (findNextUnapproved), so this makes the
+  // panel's own top-to-bottom order agree with where Space actually lands.
+  // Only THEN priority (0 = also-changed child block, 1 = call on a changed
+  // line, 2 = unchanged call), then — within a priority — biggest child
+  // first, so the substantial modified code the reviewer cares about leads
+  // while trivial one-liners (e.g. Eloquent relation accessors, which are
+  // also `added` PR blocks and thus tie at prio 0) drop below it. `size` is
+  // the child's line count (embedded childCode for calls, loaded code for
+  // listeners); a child whose code hasn't arrived yet is size 0 and sinks
+  // until it loads. Ties keep the resolver-emit (source) order
+  // (Array.prototype.sort is stable).
   let sorted = evt
     .concat(covers)
     .concat(coveredBy)
     .concat(calls)
-    .sort((x, y) => (x.groupTier || 0) - (y.groupTier || 0) || x.prio - y.prio || y.size - x.size)
+    .sort(
+      (x, y) =>
+        (x.groupTier || 0) - (y.groupTier || 0) ||
+        (x.pending ? 0 : 1) - (y.pending ? 0 : 1) ||
+        x.prio - y.prio ||
+        y.size - x.size,
+    )
   // 'group'-diff-mode HARD FILTER: drop anything groupTierForLine scored as
   // out-of-range (see relatedChildren's own scoping doc above). Only applies
   // while `range` is actually active — outside that (list mode, or a
@@ -5730,6 +5754,9 @@ function resolvedCallChildren(b) {
           commentActivity: null,
           diff: null,
           prio: 2,
+          // Never a PR block, never anything to approve — always "done" for
+          // pending-first sort purposes.
+          pending: false,
           groupTier: scope == null || hideOutOfScope ? 0 : scope.has(r.callKey) ? 0 : 1,
           nested: [],
           nestedSig: nestedSigOf([]),
@@ -5758,6 +5785,7 @@ function resolvedCallChildren(b) {
           commentActivity: null,
           diff: null,
           prio: 2,
+          pending: false,
           groupTier: scope == null || hideOutOfScope ? 0 : scope.has(r.callKey) ? 0 : 1,
           nested: [],
           nestedSig: nestedSigOf([]),
@@ -5791,6 +5819,9 @@ function resolvedCallChildren(b) {
           commentActivity: null,
           diff: null,
           prio: memberChanged ? 0 : 2,
+          // Not a PR block (the `!byId.get(...)` guard above), so nothing to
+          // approve here either way.
+          pending: false,
           groupTier: scope == null || hideOutOfScope ? 0 : scope.has(r.callKey) ? 0 : 1,
           nested: [],
           nestedSig: nestedSigOf([]),
@@ -5840,6 +5871,14 @@ function resolvedCallChildren(b) {
         // Approval count only for a call whose definition is itself a PR block
         // (it has changed rows to approve); a call into an unchanged file has none.
         approve: prBlock ? blockApproveCount(prBlock) : null,
+        // Subtree-wide, like the evt branch above — an unchanged/synthetic
+        // target has no subtree, so nothing pending there.
+        pending: prBlock
+          ? (() => {
+              const c = subtreeApproveCount(prBlock)
+              return c.done < c.total
+            })()
+          : false,
         // Same subtree rollup as the sidebar's commentActivityPill, only for a
         // call whose definition is itself a PR block — an unchanged/synthetic
         // target has no subtree to roll up.
@@ -6093,6 +6132,12 @@ function resolvedTestCoverChildren(b, range, rowFilter = null) {
       size: codeSize(r.coveredCode || ''),
       source: r.status === 'found' ? r.model : '',
       approve: prBlock ? blockApproveCount(prBlock) : null,
+      pending: prBlock
+        ? (() => {
+            const c = subtreeApproveCount(prBlock)
+            return c.done < c.total
+          })()
+        : false,
       commentActivity: prBlock ? commentActivitySummary(commentScopeKeys(prBlock)) : null,
       diff: prBlock ? diffStat(blockRows(prBlock)) : null,
       // A covered method isn't tied to a specific diff line the way a method
@@ -6154,6 +6199,10 @@ function coveredByChildren(b) {
       size: codeSize(code),
       source: r.status === 'found' ? r.model : '',
       approve: blockApproveCount(test),
+      pending: (() => {
+        const sc = subtreeApproveCount(test)
+        return sc.done < sc.total
+      })(),
       commentActivity: commentActivitySummary(commentScopeKeys(test)),
       diff: diffStat(blockRows(test)),
       prio: 0,
@@ -6289,7 +6338,17 @@ function nestedChangedKids(prBlock, parentId, seen = new Set(), depth = 0) {
   if (!prBlock || depth >= NESTED_DEPTH) return []
   seen.add(prBlock.id)
   const out = []
-  for (const kid of directChildBlocks(prBlock)) {
+  // Same pending-first rule as relatedChildren's own sort (subtree-wide, via
+  // subtreeApproveCount): a still-open chip must lead, not sit behind a
+  // fully-approved sibling chip.
+  const kids = [...directChildBlocks(prBlock)].sort((x, y) => {
+    const cx = subtreeApproveCount(x)
+    const cy = subtreeApproveCount(y)
+    const px = cx.done < cx.total ? 0 : 1
+    const py = cy.done < cy.total ? 0 : 1
+    return px - py
+  })
+  for (const kid of kids) {
     if (kid.id === parentId || seen.has(kid.id)) continue
     const approve = blockApproveCount(kid)
     if (!approve.total && kid.status === 'unchanged') continue

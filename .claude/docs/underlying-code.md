@@ -982,6 +982,8 @@ granularity, `group` included.
 
 ## Ordering within a tier
 
+0. **Pending sorts first** (see its own section right below) — checked
+   BEFORE the priority tiers.
 1. A call whose definition itself changes in this PR (a real child block) — `prio 0`.
 2. A call on a recently changed line — `prio 1`.
 3. The rest — `prio 2`.
@@ -994,6 +996,43 @@ because relation accessors (e.g. a 3-line Eloquent `MorphOne`) are **also**
 changed method purely on source order. A child whose code hasn't arrived counts as
 `size 0` and sinks until it loads; equal prio+size keeps source order (stable
 sort). Block-level listener children drop out at `line`/`call`.
+
+### Pending sorts first
+
+Reviewer request: "laat de blok bovenaan zien die nog niet zijn goedgekeurd —
+als ik spatie druk moet ik naar de eerste onderliggend blok [gaan]". `Space`
+already walked to the first not-yet-approved unit depth-first
+(`findNextUnapproved`, see "`findNextUnapproved()` — walking the review tree"
+in `.claude/docs/command-palette.md`) — this only fixes the panel's own
+top-to-bottom order to agree with where it actually lands, so the reviewer no
+longer has to hunt for which card Space just jumped to.
+
+`relatedChildren` (`home.mjs`) computes a `pending` flag per child descriptor —
+`true` when `subtreeApproveCount(...)` (its OWN rows **plus every PR block
+nested under it**, not just `blockApproveCount`) has `done < total` — and sorts
+by `groupTier` → **`pending` (unapproved first)** → the existing `prio` → `size`.
+Subtree-wide is load-bearing: a card can show a fully-done own total (e.g.
+`7/7`) while a nested drill-hint chip underneath it is still open, and that
+card must still sort/lead as "not done" — the reviewer would otherwise have to
+notice a chip buried under an already-green card. A leaf that is never a real
+PR block (a translation/config-value/env-example/unchanged class-member card,
+`approve: null`) is always `pending: false` — there is nothing there to
+approve, ever.
+
+**`nestedChangedKids`** (the recursive drill-hint-chip builder, same file)
+applies the identical rule to its own `directChildBlocks(prBlock)` list before
+building the chip descriptors — so a still-open chip leads a fully-approved
+sibling chip too, at every nesting depth, not only among the panel's top-level
+cards.
+
+Test: `tests/related-pending-first.spec.mjs` (top-level card order); the
+existing sibling-walk/preview-column fixtures
+(`tests/drill-sibling-walk.spec.mjs`, `tests/drill-preview.spec.mjs`) were
+updated to enter via the now-first (still-pending) sibling instead of the
+previously-first one, since `←`/`→`'s own sibling-stepping (`drillNextChange`/
+`drillPrevChange`) reuses this same `orderedChildBlocks` ranking and therefore
+changed order too — a deliberate, not incidental, side effect: walking
+forward through siblings now also visits the unapproved one first.
 
 ## Translation children: en/nl paired side by side
 

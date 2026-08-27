@@ -10,15 +10,19 @@ import { test, expect } from './_fixtures.mjs'
 // Parent: CreatePaymentAction::execute, with two SIBLING children (both direct
 // relations of execute, not chained): CreatePaymentAction::findOrCreateCustomer
 // (a real PR block whose own body has NO changed lines — old === new — so it
-// has zero navigable change groups, meaning drilling into it overflows on the
-// very first ArrowDown) and Order::address (a real single-line change —
-// morphOne(...) → billingAddress() — exactly ONE group unit, the same fixture
-// drill-focus.spec.mjs's f/d/s test uses; its fixture status is 'removed',
-// patched to 'modified' here so both panes render, same trick as that test).
-// Entering via findOrCreateCustomer (targeted by its label text, not list
-// position — relatedChildren's prio/size sort can re-order once each child's
-// code has loaded, so an index-based locator would race that reorder) gives a
-// deterministic, single-keypress overflow: it has zero groups of its own.
+// has zero navigable change groups AND nothing left to approve, meaning
+// drilling into it overflows on the very first ArrowDown) and Order::address
+// (a real single-line change — morphOne(...) → billingAddress() — exactly ONE
+// group unit, still unapproved, the same fixture drill-focus.spec.mjs's f/d/s
+// test uses; its fixture status is 'removed', patched to 'modified' here so
+// both panes render, same trick as that test).
+// Entering via address (targeted by its label text, not list position —
+// relatedChildren sorts a still-unapproved sibling BEFORE a fully-done one, see
+// "pending sorts first" in underlying-code.md, so address — the one with an
+// open group — is first regardless, and an index-based locator would still
+// race a prio/size reorder within either bucket) gives a deterministic,
+// single-keypress overflow: it has exactly one group of its own, already the
+// active unit on entry.
 test('running off the end of a drilled column steps sideways to the next sibling (and back with ↑)', async ({
   page,
 }) => {
@@ -61,34 +65,32 @@ test('running off the end of a drilled column steps sideways to the next sibling
 
   const items = page.getByTestId('related-item')
   await expect(items).toHaveCount(2)
-  // Target children by their known label text, not list position — the two
-  // siblings tie on relatedChildren's prio/groupTier sort key at first (both
-  // start at size 0 before their code has loaded) and can re-sort once
-  // ensureCode resolves, so an index-based locator would race against that
-  // reorder. Enter via findOrCreateCustomer (0 groups — old === new — so the
-  // very first ArrowDown overflows immediately) and expect Order::address next.
-  const enterItem = items.filter({ hasText: 'findOrCreateCustomer' })
+  // Target children by their known label text, not list position. Enter via
+  // address (still unapproved — pending-first, see underlying-code.md — so it
+  // sorts first) and expect findOrCreateCustomer (fully done, nothing to
+  // approve) next.
+  const enterItem = items.filter({ hasText: 'address' })
   await enterItem.click()
 
   const drillColumn = page.getByTestId('drill-column')
   await expect(drillColumn).toHaveCount(1)
   await page.waitForTimeout(300)
-  await expect(drillColumn).toContainText('findOrCreateCustomer')
+  await expect(drillColumn).toContainText('Order')
 
-  // ↓ past the drilled column's own last unit (immediately — it has zero
-  // change groups of its own) steps sideways to the OTHER sibling, replacing
-  // this column at the same depth — still exactly one drill-column.
+  // ↓ past the drilled column's own last (and only) unit steps sideways to
+  // the OTHER sibling, replacing this column at the same depth — still
+  // exactly one drill-column.
   await page.keyboard.press('ArrowDown')
   await page.waitForTimeout(200)
   await expect(drillColumn).toHaveCount(1)
-  await expect(drillColumn).toContainText('address')
+  await expect(drillColumn).toContainText('findOrCreateCustomer')
 
   // ↑ from the freshly-entered sibling's first (and only) unit steps back —
   // the symmetric direction, same replace-at-the-same-level behaviour.
   await page.keyboard.press('ArrowUp')
   await page.waitForTimeout(200)
   await expect(drillColumn).toHaveCount(1)
-  await expect(drillColumn).toContainText('findOrCreateCustomer')
+  await expect(drillColumn).toContainText('Order')
 })
 
 // Verifies there's no wrap-around: at the last sibling, running off the end
