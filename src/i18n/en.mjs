@@ -592,6 +592,7 @@ export const EN = {
   'Tests laten draaien': 'Run tests',
   'Alles keuren': 'Approve everything',
   'Alle code aanpassingen goedkeuren': 'Approve all code changes',
+  'Alle code aanpassingen goedkeuren + warnings weghalen': 'Approve all code changes + remove all warnings',
   'Alle goedkeuringen intrekken': 'Retract all approvals',
   'Chat over deze comment': 'Chat about this comment',
   'Beantwoorden met deze tekst': 'Reply with this text',

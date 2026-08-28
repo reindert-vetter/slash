@@ -5606,6 +5606,45 @@ export async function deleteFocusedComment() {
   }
 }
 
+// deleteAllAiWarnings deletes EVERY code_warning finding of the current PR in
+// one action — the "warnings weghalen" half of the "/" PR menu's "Alle code
+// aanpassingen goedkeuren + warnings weghalen" (home.mjs's PR_COMMANDS).
+// Which comments count is isAiComment's own rule (home.mjs), duplicated here
+// rather than imported to keep the module dependency one-way: an anchored
+// finding carries Source "ai" (code_warning.go), an unanchored one
+// additionally Kind "ai_warning".
+//
+// DELETE, not resolve, deliberately: resolving is a conversation concept that
+// does not apply to a machine finding, and both comment menus already drop
+// their resolve/unresolve slot entirely for one ("ai comments wil ik niet
+// resolven, maar wil ik verwijderen") — see isAiComment. Reuses the ordinary
+// per-comment delete Signal (deleteComment above), one Signal per finding,
+// never a batch write — the same shape as approveAllForPr's one-Signal-per-
+// block persistence, and no new backend code. Sequential rather than
+// parallel: each Signal drives its own Execution inline in the engine, so
+// firing them all at once buys nothing and only makes a partial failure
+// harder to read.
+//
+// Consequence, explicitly agreed with the reviewer: a delete by the reviewer
+// (Source not "ai") records the finding as DISMISSED for good
+// (recordWarningDismissed → modules/warndismiss, workflows.go), so a later
+// code_warning run will not raise the same remark again. "Weghalen" means
+// permanently gone here, not "hide until the next commit".
+//
+// One reload at the end, not per delete: loadComments is the panel's only
+// refresh path and re-clamps cs.sel/cs.focus itself.
+export async function deleteAllAiWarnings() {
+  const targets = commentListSnapshot().filter((c) => c && ((c.source || '') === 'ai' || c.kind === 'ai_warning'))
+  if (!targets.length) return
+  cs.busy = true
+  try {
+    for (const c of targets) await deleteComment(c)
+    await loadComments(cs.pr)
+  } finally {
+    cs.busy = false
+  }
+}
+
 // resolveFocusedComment resolves the focused comment's thread. It reuses the
 // same "reply" Signal as a thread reply (done:true, an empty "/resolve" body):
 // the workflow flips the read-model status to "resolved" and, for a review-diff

@@ -630,3 +630,14 @@ with. Left as-is pending a decision on where such a block should actually sit
 in the list (the reported symptom this section opened with — "it sits forever
 in the 12 nog-te-reviewen count" — is a real UX rough edge, but the review
 tree's existing same-file-neighbour navigation is the incumbent here).
+
+**One place DOES skip a confirmed-zero block outright:** `approveAllForPr`
+(the `/` PR menu's "Alles keuren" → "Alle code aanpassingen goedkeuren", see
+`.claude/docs/command-palette.md`) filters `state.blockTotals[b.id] === 0` out
+of its target set. That is safe for the same reason the checkbox-hiding fix
+is: it only ever drops a block that has nothing to approve anyway, and it
+saves one `ensureCode` fetch per block — which matters because that action
+now walks `state.allBlocks` (so it also approves the panel-only
+"Onderliggende code" blocks the index hides), and that is exactly where most
+zero-total reference blocks live. It changes nothing about where such a block
+sits in the list.

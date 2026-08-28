@@ -1404,29 +1404,56 @@ The same overlay, with actions on the **whole PR**. Six root items:
    `comment_batch`'s `batchActionRow` — reviewer decision: the sidebar is
    busy enough. Progress renders in `prInfoCard`'s status block
    (`testRunStatusBlock`, `testRun.mjs`), not here.
-6. **"Alles keuren"** (submenu, two items — same lightweight "one extra
+6. **"Alles keuren"** (submenu, three items — same lightweight "one extra
    Enter" confirm as "PR keuren" above: opening the submenu is the confirm
-   step, so neither child needs its own further "Ja, ..." row) — the two
-   whole-PR bulk approval actions, grouped under one parent instead of two
-   competing top-level items:
+   step, so no child needs its own further "Ja, ..." row) — the whole-PR
+   bulk approval actions, grouped under one parent instead of competing
+   top-level items:
    - **"Alle code aanpassingen goedkeuren"** (`approveAllForPr`) approves
      every changed row in the WHOLE PR in one action. `ensureCode`s every
      target first (in parallel — a row-level approval needs the loaded diff
      to compute `changedRows`), then sets `approvedRows` to every changed row
      and clears `approvedCalls` (a full-row approval already covers whatever
      call-level detail it would otherwise carry — see `toggleCallApprove`'s
-     own "graduates into `b.approvedRows`" doc comment).
+     own "graduates into `b.approvedRows`" doc comment). A block with a
+     CONFIRMED server-side total of 0 changed rows
+     (`state.blockTotals[b.id] === 0`) is skipped — nothing to approve, and
+     it saves one `ensureCode` fetch per block, which matters now the target
+     set includes every panel-only reference block.
+   - **"Alle code aanpassingen goedkeuren + warnings weghalen"** — the same
+     approve, then `deleteAllAiWarnings` (`RelatedPanel.mjs`) throws away
+     EVERY `code_warning` finding of the PR (`source: 'ai'` or
+     `kind: 'ai_warning'`, `isAiComment`'s own rule) through the ordinary
+     per-comment `delete` Signal, one Signal per finding, then one
+     `loadComments`. Deliberately **delete**, not resolve: resolving is a
+     conversation concept both comment menus already drop for an AI finding
+     ("ai comments wil ik niet resolven, maar wil ik verwijderen"). A
+     reviewer delete records the finding as dismissed for good
+     (`recordWarningDismissed` → `modules/warndismiss`, see
+     `.claude/docs/workflows-analysis.md`), so a later `code_warning` run
+     will not raise it again — explicitly agreed, "weghalen" means
+     permanently gone. Kept as a SEPARATE item precisely because of that
+     irreversibility: approving without touching the warnings stays
+     available.
    - **"Alle goedkeuringen intrekken"** (`retractAllApprovalsForPr`) clears
      every approval in the WHOLE PR in one action — the bulk opposite, for
      when a re-review is needed from scratch.
 
-   Both walk `state.blocks` exactly like `syncViewedFiles`/the approval
-   rollup (an ordinary block's own `approvedRows`/`approvedCalls`; every
-   method of a `test_class` row, which carries no approval of its own — see
-   `.claude/docs/test-class-grouping.md`), persisting each block individually
-   through the existing single-block `approve` Signal (`persistApproval`) —
-   the same write path `toggleRangeApproval`/`applyBulkApproval` already use,
-   one Signal per block, never a batch write. Test: `tests/pr-menu.spec.mjs`.
+   Both approval halves walk `bulkApprovalTargets()` — **`state.allBlocks`,
+   not `state.blocks`**. The left list deliberately hides the resolved-call
+   targets (`recomputeLeftList`'s `hidden` set: the panel-only
+   "Onderliggende code" reference blocks, see
+   `.claude/docs/underlying-code.md`), but the approval ROLLUP does count
+   them (`directChildBlocks` resolves through `allBlocksById`), so walking
+   the left list left the PR unfinishable after an "approve everything" —
+   `findNextUnapproved` kept landing on underlying code the action never
+   touched. Reported: *"dat moet ook onderliggende code keuren"*. Walking
+   the flat `/api/blocks` list also removes the old `test_class` branch:
+   those index rows are synthetic and their methods are ordinary blocks
+   already in there. Each block is persisted individually through the
+   existing single-block `approve` Signal (`persistApproval`) — the same
+   write path `toggleRangeApproval`/`applyBulkApproval` already use, one
+   Signal per block, never a batch write. Test: `tests/pr-menu.spec.mjs`.
 
 There used to be a 4th item here, **"Diepgravend onderzoek"**, which manually
 started `code_warning` on Opus. Removed on request ("die wordt toch

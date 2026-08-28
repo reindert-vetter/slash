@@ -276,7 +276,7 @@ test.describe('PR Review Tree — `/` PR menu', () => {
     await page.getByTestId('command-input').fill('alles keuren')
     await expect(page.getByTestId('command-row')).toHaveCount(1)
     await page.keyboard.press('Enter') // into the "Alles keuren" submenu
-    await expect(page.getByTestId('command-row')).toHaveCount(3) // pinned "Sluit menu" + the two bulk actions
+    await expect(page.getByTestId('command-row')).toHaveCount(4) // pinned "Sluit menu" + the three bulk actions
     await page.getByTestId('command-row').filter({ hasText: 'Alle goedkeuringen intrekken' }).click()
     await expect(page.getByTestId('command-menu')).not.toBeVisible()
 
@@ -308,11 +308,69 @@ test.describe('PR Review Tree — `/` PR menu', () => {
     await page.getByTestId('command-input').fill('alles keuren')
     await expect(page.getByTestId('command-row')).toHaveCount(1)
     await page.keyboard.press('Enter') // into the "Alles keuren" submenu
-    await expect(page.getByTestId('command-row')).toHaveCount(3) // pinned "Sluit menu" + the two bulk actions
-    await page.getByTestId('command-row').filter({ hasText: 'Alle code aanpassingen goedkeuren' }).click()
+    await expect(page.getByTestId('command-row')).toHaveCount(4) // pinned "Sluit menu" + the three bulk actions
+    // hasNotText keeps this off the sibling "… + warnings weghalen" row, whose
+    // label contains this one's label as a prefix.
+    await page
+      .getByTestId('command-row')
+      .filter({ hasText: 'Alle code aanpassingen goedkeuren', hasNotText: 'warnings' })
+      .click()
     await expect(page.getByTestId('command-menu')).not.toBeVisible()
 
     // The block is now fully approved, so it hides from the "Start" list.
     await expect(block1Row).toHaveCount(0)
+  })
+
+  // The combined variant also throws every code_warning finding away
+  // (deleteAllAiWarnings, RelatedPanel.mjs). Worth its own test because the
+  // delete is PERMANENT (recordWarningDismissed → modules/warndismiss, see
+  // .claude/docs/command-palette.md) and because the filter must hit ONLY AI
+  // findings: an ordinary human comment on the same PR has to survive.
+  test('"Alle code aanpassingen goedkeuren + warnings weghalen" removes AI findings but keeps human comments', async ({
+    page,
+  }) => {
+    const warn = await page.request.post('/api/workflows/task_code_comment', {
+      data: {
+        pr: 12903,
+        file: 'app/Foo.php',
+        author: 'AI-controle',
+        body: 'AI-bevinding die weg moet',
+        kind: 'ai_warning',
+        source: 'ai',
+        local: true,
+      },
+    })
+    const warnRunId = (await warn.json()).runId
+    const human = await page.request.post('/api/workflows/task_code_comment', {
+      data: { pr: 12903, file: 'app/Foo.php', author: 'reviewer', body: 'Gewone opmerking blijft', kind: 'issue', local: true },
+    })
+    const humanRunId = (await human.json()).runId
+
+    try {
+      await page.goto('/pr/12903')
+      await leaveSearchBox(page)
+      const warnRow = page.getByTestId('block-row').filter({ hasText: 'AI-bevinding die weg moet' })
+      const humanRow = page.getByTestId('block-row').filter({ hasText: 'Gewone opmerking blijft' })
+      await expect(warnRow).toHaveCount(1)
+      await expect(humanRow).toHaveCount(1)
+
+      await page.keyboard.press('ArrowLeft')
+      await expect(page.getByTestId('pr-info-column')).toBeVisible()
+      await page.keyboard.press('/')
+      await page.getByTestId('command-input').fill('alles keuren')
+      await expect(page.getByTestId('command-row')).toHaveCount(1)
+      await page.keyboard.press('Enter') // into the "Alles keuren" submenu
+      await page.getByTestId('command-row').filter({ hasText: 'warnings weghalen' }).click()
+      await expect(page.getByTestId('command-menu')).not.toBeVisible()
+
+      // The AI finding is gone for good; the human comment is untouched (it is
+      // not resolved, so it also does not fold into the approved section).
+      await expect(warnRow).toHaveCount(0)
+      await expect(humanRow).toHaveCount(1)
+    } finally {
+      for (const id of [warnRunId, humanRunId]) {
+        await page.request.post('/api/workflows/' + id + '/signals/delete', { data: { author: 'reviewer' } })
+      }
+    }
   })
 })
