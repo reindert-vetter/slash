@@ -388,6 +388,43 @@ frozen `i` — correct regardless of which render's closure ends up being the
 one that stays mounted. Regression test:
 `tests/testclass-restore-reindex.spec.mjs`.
 
+**Fourth variant — this pattern has now reoccurred three times, don't
+add a fourth.** `CodePreview.mjs`'s `codePreviewColumn`/`previewCard`
+(the Claude-chat/PR-comment code-preview stack, `RelatedPanel.mjs`'s
+`CodePreviewPanel`) took `isExpanded(i)`/`getLinkSel(i)` as INDEX-based
+getters, and `RelatedPanel.mjs` re-derived the actual item on every call via
+`combinedPreviewItems()[i]`. Once that list shrank or reordered (a fence
+appearing/disappearing while a Claude turn streams, the pending-edits card
+coming and going), a card whose keyed chunk was reused kept its FIRST-mount
+`i`, which could point past the new, shorter array —
+`combinedPreviewItems()[i]` came back `undefined`, and
+`isPreviewExpanded(undefined)` threw reading `it.key`. Same underlying cause
+as the first two variants (a reused keyed node's bindings never re-run), same
+"only visible via debug mode" shape as the third: LOCAL PATCH 4/5 (see
+"LOCAL PATCH 4/5" above) caught the throw and only `console.error`'d it,
+never rethrew — so it was invisible to `window.onerror`, and because the
+closure is frozen, EVERY subsequent trigger re-threw the identical error,
+forever, for that one card (832 caught throws over ~7 minutes in the real
+session that surfaced this, found via the debug-mode `console.error` hook —
+see `.claude/docs/debug-mode.md`). Read as "the browser is frozen", even
+though the rest of the reactive graph kept updating. Fixed the same way as
+variant three, one step more direct: pass the already-available `it` (this
+map iteration's own array element, guaranteed non-`undefined`) into
+`isExpanded`/`getLinkSel` instead of re-deriving it via a captured index — no
+identity comparison needed here, just no index at all. `isActive(i)` stays
+index-based on purpose: `cs.previewPos` is a POSITION (a keyboard cursor), not
+an item identity, so a stale `i` can only compare wrong, never dereference
+anything. See the "MEASURED CRASH" comment above `CodePreview.mjs`'s
+`previewCard`.
+**Unrelated aside worth remembering:** the bug report that led here gave a
+URL selecting a `test_class` row (`?sel=testclass:...&tcol=1`,
+`.claude/docs/test-class-grouping.md`) — that column was NOT the cause. The
+reviewer had a Claude-chat/PR-comment panel open alongside it, which is where
+this card actually lives. A future "frozen" report carrying a similar
+`testclass`/`tcol` URL should not be assumed to be a test-class-grouping bug
+on that basis alone — check `data/debug-log.jsonl`'s `error` lines first,
+they name the real file/line.
+
 ## A `state.x` read inside an outer array-building closure couples the WHOLE closure
 
 Reading `state.x` synchronously inside an outer array-building

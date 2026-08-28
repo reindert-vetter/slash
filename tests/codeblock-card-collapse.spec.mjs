@@ -230,3 +230,111 @@ test('collapsing one comment thread\'s code-preview card does not affect a diffe
   await expect(cards.first().getByTestId('code-preview-context')).toContainText('eerste toelichting')
   await expect(cards.first()).toHaveAttribute('data-expanded', 'false')
 })
+
+// Regression/guard test for the "MEASURED CRASH" documented above
+// CodePreview.mjs's previewCard (and the 4th "keyed node reused" variant in
+// .claude/rules/arrowjs-pitfalls.md): a code-preview card's collapse/expand
+// binding used to be wired to a captured ARRAY INDEX into
+// combinedPreviewItems() rather than to the item itself, and on the real PR
+// this crashed once the item count changed (832 identical caught throws in
+// one session, "Cannot read properties of undefined (reading 'key')" —
+// caught by LOCAL PATCH 4/5, console.error'd, never rethrown, so invisible
+// without debug mode's console.error hook, see .claude/docs/debug-mode.md).
+//
+// Honesty note, same as tests/drill-listener-array-dispatch.spec.mjs's own:
+// this exact synthetic shape (2 cards -> 1, via the pending-edits card
+// disappearing) does NOT reproduce the crash against the PRE-fix code either
+// — confirmed by reverting src/CodePreview.mjs/src/RelatedPanel.mjs and
+// running this test (it still passed). Whatever made arrow.js's keyed-list
+// diff actually hit the stale-closure path on the real PR needs a richer
+// reactive graph than this two-card fixture provides — the same conclusion
+// the drill-crash spec already reached for a structurally similar bug. Kept
+// anyway as a cheap guard for the ITEM-vs-INDEX contract itself (asserting
+// the surviving card's collapse state and its ability to still be toggled
+// afterward, not just "zero errors") — if a future change reintroduces an
+// index-based getter here, this at least proves the shrink case still
+// resolves to the right item.
+test('a code-preview card surviving the pending-edits card\'s disappearance keeps its own collapse state, no thrown errors', async ({
+  page,
+}, testInfo) => {
+  const pr = seededPr(testInfo)
+
+  // A mutable response so the SAME route keeps answering the poll — no need
+  // to re-register it — but the content can flip mid-test.
+  const pendingPushFiles = { value: ['app/Actions/CreatePaymentAction.php'] }
+  await page.route('**/api/pending-push?*', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        pending: pendingPushFiles.value.length
+          ? {
+              [String(pr)]: {
+                pr,
+                headRef: 'feature/x',
+                sha: 'abc1234',
+                ahead: 1,
+                files: pendingPushFiles.value,
+                state: 'ready',
+                pushRunId: 'chatmerge-' + pr,
+              },
+            }
+          : {},
+      }),
+    }),
+  )
+
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: {
+      pr,
+      file: 'test.php',
+      line: 1,
+      author: 'reviewer',
+      body: 'toelichting:\n```php\n$order->total();\n```',
+      gran: 'call',
+      label: 'Order::total',
+    },
+  })
+  expect((await start.json()).runId).toBeTruthy()
+
+  const errors = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+
+  await page.goto('/pr/' + pr)
+  await leaveSearchBox(page)
+
+  const item = page.getByTestId('comment-item').first()
+  await expect(item).toBeVisible()
+  await item.click()
+
+  // Two cards: the pending-edits summary (index 0) and this thread's own
+  // fence card (index 1). Manually collapse the fence card — it starts
+  // expanded by default (isLast, trivially true for the only cp.items entry).
+  let cards = page.getByTestId('code-preview-card')
+  await expect(cards).toHaveCount(2)
+  const fenceCard = cards.filter({ hasText: 'toelichting' }) // the context line, present whether expanded or not
+  await expect(fenceCard).toHaveAttribute('data-expanded', 'true')
+  await fenceCard.getByTestId('code-preview-toggle').click()
+  await expect(fenceCard).toHaveAttribute('data-expanded', 'false')
+
+  // The pending-edits card disappears (its underlying files list goes empty)
+  // — combinedPreviewItems() shrinks from 2 to 1, and the fence card's own
+  // keyed chunk (index 1 at first mount) is reused as the new, sole index-0
+  // item. PENDING_PUSH_POLL_MS is 10s (home.mjs); give it room.
+  pendingPushFiles.value = []
+  await expect(page.getByTestId('code-preview-card')).toHaveCount(1, { timeout: 15000 })
+
+  // The surviving card is still the SAME fence card, still collapsed — never
+  // undefined, never re-defaulted to expanded.
+  cards = page.getByTestId('code-preview-card')
+  await expect(cards).toHaveAttribute('data-kind', 'fence')
+  await expect(cards).toHaveAttribute('data-expanded', 'false')
+
+  // Re-expanding it still works — the binding is alive, not wedged.
+  await cards.getByTestId('code-preview-toggle').click()
+  await expect(cards).toHaveAttribute('data-expanded', 'true')
+  await expect(cards).toContainText('$order->total()')
+
+  expect(errors, 'no page errors from the index-shift').toEqual([])
+})

@@ -4785,10 +4785,16 @@ export function CodePreviewPanel(state, commentTarget) {
         ? codePreviewColumn(
             () => combinedPreviewItems(),
             (i) => cs.focus === 'claude' && cs.previewPos === i + 1,
-            (i) => isPreviewExpanded(combinedPreviewItems()[i]),
+            // `it`, not a re-derived `combinedPreviewItems()[i]` — see the
+            // "MEASURED CRASH" note above CodePreview.mjs's previewCard: a
+            // reused keyed card's closure freezes its captured index forever,
+            // and once the list shrinks/reorders that index can point past
+            // the end, which crashed on every re-render (832 caught arrow.js
+            // throws in one real session, .claude/rules/arrowjs-pitfalls.md).
+            (it) => isPreviewExpanded(it),
             toggleCodePreviewExpanded,
             () => commentClaudeRowWidthCls(state),
-            (i) => (combinedPreviewItems()[i] && combinedPreviewItems()[i].kind === 'edits' ? cs.editLinkSel : 0),
+            (it) => (it && it.kind === 'edits' ? cs.editLinkSel : 0),
             (blockId) => {
               if (editsJumpCallback) editsJumpCallback(blockId)
             },

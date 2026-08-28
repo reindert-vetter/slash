@@ -285,6 +285,42 @@ function pendingEditLinks(links, linkSel, onJump) {
 // re-key (and thereby re-Prism-highlight) the rest of the stack. `linkSel`/
 // `onJump` only matter for the edits-kind card — an ordinary fence card
 // ignores them (its default no-ops).
+//
+// MEASURED CRASH (PR 13535, 2026-08-28, found via debug mode's console.error
+// hook — see .claude/docs/debug-mode.md): this card is `.key(it.key)`'d, and
+// per arrowjs-pitfalls.md's "keyed node reused without re-running its
+// bindings", a reused chunk's inner `${() => ...}` bindings stay wired to
+// whichever closure was passed the FIRST time this key was ever mounted —
+// they are never re-created on a later render. `codePreviewColumn` used to
+// pass `expanded`/`linkSel` as `() => isExpanded(i)`/`() => getLinkSel(i)`,
+// closures over a captured array INDEX; RelatedPanel.mjs's `isExpanded`/
+// `getLinkSel` then re-derived the item via `combinedPreviewItems()[i]`. Once
+// `combinedPreviewItems()` shrank or reordered (a fence arriving/leaving
+// while a Claude turn streams, the pending-edits card appearing/
+// disappearing) — the reused card's frozen `i` could point past the new,
+// shorter array: `combinedPreviewItems()[i]` came back `undefined`, and
+// `isPreviewExpanded(undefined)` threw on `it.key`. LOCAL PATCH 4/5 in
+// vendor/arrow.js caught it (console.error, never rethrown — see the
+// "arrow.js's own CAUGHT throws" section in debug-mode.md), but the binding
+// never recovers: since the closure is frozen, EVERY subsequent reactive
+// trigger re-threw the same error, forever, for that one card — 832 error
+// lines over ~7 minutes in the reported session, reading as "the browser is
+// frozen" even though the rest of the reactive graph kept working. Fixed by
+// passing the already-available `it` (this map iteration's own array
+// element, guaranteed non-undefined) into `isExpanded`/`getLinkSel` instead
+// of re-deriving via a captured index — see `codePreviewColumn` below.
+// `isActive` stays index-based on purpose: cs.previewPos is a POSITION, not
+// an item identity, and comparing a stale `i` can never throw.
+//
+// Aside for whoever finds this via a similarly-shaped freeze report: the
+// bug report that led here gave a URL selecting a `test_class` row
+// (`?sel=testclass:...&tcol=1`) — but that column is unrelated to this
+// crash. The reviewer very likely had a Claude-chat/PR-comment panel open
+// alongside the test-methods column (this card lives in
+// CodePreviewPanel/comment-claude-row), and THAT is where the repeatedly
+// re-thrown error actually was. Don't assume a similar report is a
+// test-class-grouping bug just because the URL mentions one — check
+// data/debug-log.jsonl's `error` lines first; they name the real file/line.
 function previewCard(it, active, expanded, onToggle, linkSel = () => 0, onJump = () => {}) {
   return html`
     <div
@@ -371,8 +407,14 @@ function previewCard(it, active, expanded, onToggle, linkSel = () => 0, onJump =
 // `isActive(i)` answers "does the keyboard cursor sit on the i-th card"
 // (RelatedPanel.mjs's cs.previewPos, reached with ↓ from the bottom of the
 // Claude chat — see "↓ walks the chat's own code blocks" in
-// claude-chat-panel.md). `isExpanded(i)`/`onToggle` back the collapse state
-// above (RelatedPanel.mjs's `isPreviewExpanded`/`toggleCodePreviewExpanded`).
+// claude-chat-panel.md). It stays index-based on purpose: cs.previewPos IS a
+// position, not an item identity, and a stale captured `i` merely compares
+// wrong — it can never dereference anything.
+//
+// `isExpanded(it)`/`getLinkSel(it)`/`onToggle` back the collapse state above
+// (RelatedPanel.mjs's `isPreviewExpanded`/`toggleCodePreviewExpanded`) and
+// are DELIBERATELY item-based, not index-based — see the "measured crash"
+// paragraph right below `previewCard`'s own `.key(it.key)` line for why.
 // All defaulted so a future caller with no cursor/collapse state of its own
 // can keep passing fewer arguments.
 //
@@ -401,9 +443,18 @@ export function codePreviewColumn(
           previewCard(
             it,
             () => isActive(i),
-            () => isExpanded(i),
+            // `it`, not `i` — see the "measured crash" note above `previewCard`'s
+            // .key(it.key) line: a keyed card's inner bindings freeze on the
+            // closure captured at first mount (arrowjs-pitfalls.md's "keyed node
+            // reused without re-running its bindings"), so re-deriving via a
+            // captured INDEX into a list that can since have shrunk/reordered
+            // (`combinedPreviewItems()[i]`) reads past the end and throws. `it`
+            // is the guaranteed-valid object from THIS map iteration — it can
+            // never be undefined, only (rarely) stale in value, which is the
+            // same accepted trade-off every other keyed-reuse case already has.
+            () => isExpanded(it),
             onToggle,
-            () => getLinkSel(i),
+            () => getLinkSel(it),
             onJumpToBlock,
           ),
         )}
