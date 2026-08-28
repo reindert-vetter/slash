@@ -587,14 +587,33 @@ test.describe('a comment-index item anchored to a real block', () => {
   test('a child drilled from inside the anchor panel keeps ↓/Shift+↓ on its own diff, not the sidebar', async ({
     page,
   }) => {
-    await page.route('**/api/relations?pr=12903', async (route) => {
+    // A RESOLVED-CALL target, deliberately NOT a relation child: Psp is never
+    // one of this PR's own changed files (see tests/_setup.mjs), so
+    // Psp::createPayment resolves to a synthetic frame with no row of its
+    // own in state.blocks — it stays nested under the anchor exactly like
+    // before handleRelatedDrill's jump-vs-nest split (see
+    // comments-panel.md's "A child with its own place in the blokken-index
+    // jumps there instead of nesting" — a relation child WITH its own
+    // state.blocks row, findOrCreateCustomer, now jumps away instead of
+    // nesting, which is exactly what this test must NOT trigger, so it
+    // switched fixtures rather than assert stale behavior).
+    await page.route('**/api/callresolve?pr=12903', async (route) => {
       await route.fulfill({
         json: [
           {
             pr: 12903,
-            parentId: '12903:app/Actions/CreatePaymentAction.php:CreatePaymentAction::execute',
-            childId: '12903:app/Actions/CreatePaymentAction.php:CreatePaymentAction::findOrCreateCustomer',
-            kind: 'event_listener',
+            callerId: '12903:app/Actions/CreatePaymentAction.php:CreatePaymentAction::execute',
+            callKey: 'createPayment',
+            status: 'resolved',
+            kind: 'method_call',
+            childFile: 'app/Support/Psp.php',
+            childClass: 'Psp',
+            childMethod: 'createPayment',
+            childLine: 12,
+            childCode: 'function createPayment($input) {}',
+            model: '',
+            confidence: '',
+            updatedAt: new Date().toISOString(),
           },
         ],
       })
@@ -621,14 +640,14 @@ test.describe('a comment-index item anchored to a real block', () => {
     await page.keyboard.press('ArrowRight')
     await page.keyboard.press('ArrowDown')
 
-    const child = page.getByTestId('related-item').filter({ hasText: 'findOrCreateCustomer' })
+    const child = page.getByTestId('related-item').filter({ hasText: 'Psp::createPayment' })
     await expect(child).toBeVisible()
     await child.click()
 
     // The anchor collapsed to a rail, the child is now the sole focused
     // drilled column.
     await expect(page.getByTestId('drill-collapsed')).toBeVisible()
-    await expect(drillColumn).toContainText('findOrCreateCustomer')
+    await expect(drillColumn).toContainText('Psp::createPayment')
 
     await expect(row).toHaveClass(/bg-indigo-50/)
     await page.keyboard.down('Shift')
@@ -637,13 +656,13 @@ test.describe('a comment-index item anchored to a real block', () => {
 
     // The sidebar selection (and thus the drilled child) must not have moved.
     await expect(row).toHaveClass(/bg-indigo-50/)
-    await expect(drillColumn).toContainText('findOrCreateCustomer')
+    await expect(drillColumn).toContainText('Psp::createPayment')
     await expect(page.getByTestId('drill-collapsed')).toBeVisible()
 
     // A plain ↓ (no Shift) must walk the child's own change groups too.
     await page.keyboard.press('ArrowDown')
     await expect(row).toHaveClass(/bg-indigo-50/)
-    await expect(drillColumn).toContainText('findOrCreateCustomer')
+    await expect(drillColumn).toContainText('Psp::createPayment')
   })
 
   // Follow-up reported bug, same debug-log session: "ik kan vervolgens niet
@@ -658,14 +677,33 @@ test.describe('a comment-index item anchored to a real block', () => {
   test('Enter on a child drilled from inside the anchor panel opens the block palette, not the comment menu', async ({
     page,
   }) => {
-    await page.route('**/api/relations?pr=12903', async (route) => {
+    // A RESOLVED-CALL target, deliberately NOT a relation child: Psp is never
+    // one of this PR's own changed files (see tests/_setup.mjs), so
+    // Psp::createPayment resolves to a synthetic frame with no row of its
+    // own in state.blocks — it stays nested under the anchor exactly like
+    // before handleRelatedDrill's jump-vs-nest split (see
+    // comments-panel.md's "A child with its own place in the blokken-index
+    // jumps there instead of nesting" — a relation child WITH its own
+    // state.blocks row, findOrCreateCustomer, now jumps away instead of
+    // nesting, which is exactly what this test must NOT trigger, so it
+    // switched fixtures rather than assert stale behavior).
+    await page.route('**/api/callresolve?pr=12903', async (route) => {
       await route.fulfill({
         json: [
           {
             pr: 12903,
-            parentId: '12903:app/Actions/CreatePaymentAction.php:CreatePaymentAction::execute',
-            childId: '12903:app/Actions/CreatePaymentAction.php:CreatePaymentAction::findOrCreateCustomer',
-            kind: 'event_listener',
+            callerId: '12903:app/Actions/CreatePaymentAction.php:CreatePaymentAction::execute',
+            callKey: 'createPayment',
+            status: 'resolved',
+            kind: 'method_call',
+            childFile: 'app/Support/Psp.php',
+            childClass: 'Psp',
+            childMethod: 'createPayment',
+            childLine: 12,
+            childCode: 'function createPayment($input) {}',
+            model: '',
+            confidence: '',
+            updatedAt: new Date().toISOString(),
           },
         ],
       })
@@ -688,10 +726,10 @@ test.describe('a comment-index item anchored to a real block', () => {
     await page.keyboard.press('ArrowRight')
     await page.keyboard.press('ArrowDown')
 
-    const child = page.getByTestId('related-item').filter({ hasText: 'findOrCreateCustomer' })
+    const child = page.getByTestId('related-item').filter({ hasText: 'Psp::createPayment' })
     await expect(child).toBeVisible()
     await child.click()
-    await expect(drillColumn).toContainText('findOrCreateCustomer')
+    await expect(drillColumn).toContainText('Psp::createPayment')
 
     // Extend the child's own line range one step, exactly like the debug-log
     // reproduction, then Enter.
@@ -717,5 +755,208 @@ test.describe('a comment-index item anchored to a real block', () => {
     // width so this class of regression fails loudly instead of silently.
     const box = await menu.boundingBox()
     expect(box.width).toBeGreaterThan(100)
+  })
+
+  // Reviewer request: "als ik klik om een onderliggende kaart van een blok
+  // van een comment op regel (of chat op regel ofzo), dan moet ik naar de
+  // plek toe waar die ook onderliggende code is, maar dan naar de normale
+  // plek met die aangepaste code waar alle comments enzo bij staan." A child
+  // clicked from inside the anchor's OWN Underlying-code panel that ALSO has
+  // its own ordinary row in state.blocks (a relation child, per
+  // recomputeLeftList's own doc comment — unlike a resolved-call target's
+  // definition, which stays excluded even when it's a real, changed PR
+  // block) jumps to that ordinary place instead of nesting as yet another
+  // drilled column under the special comment-anchor sub-view. See
+  // "A child with its own place in the blokken-index jumps there instead of
+  // nesting" in comments-panel.md.
+  test('a child with its own place in the blokken-index jumps there instead of nesting, on click', async ({
+    page,
+  }) => {
+    await page.route('**/api/relations?pr=12903', async (route) => {
+      await route.fulfill({
+        json: [
+          {
+            pr: 12903,
+            parentId: '12903:app/Actions/CreatePaymentAction.php:CreatePaymentAction::execute',
+            childId: '12903:app/Actions/CreatePaymentAction.php:CreatePaymentAction::findOrCreateCustomer',
+            kind: 'event_listener',
+          },
+        ],
+      })
+    })
+    await mockAnchoredComment(page, {
+      id: 'anchor-jump',
+      file: 'app/Actions/CreatePaymentAction.php',
+      label: 'CreatePaymentAction::execute',
+      body: 'jump to the real place',
+    })
+    await page.goto('/pr/12903')
+    await leaveSearchBox(page)
+
+    const row = page.locator('[data-idx]').filter({ hasText: 'jump to the real place' })
+    await row.click()
+    const drillColumn = page.getByTestId('drill-column')
+    await expect(drillColumn).toBeVisible()
+
+    await page.keyboard.press('ArrowRight')
+    await page.keyboard.press('ArrowRight')
+    await page.keyboard.press('ArrowDown')
+
+    // findOrCreateCustomer IS a real, changed PR block in this fixture — it
+    // keeps its own row in the blokken-index (a relation child stays in
+    // state.blocks, unlike a resolved-call target's definition).
+    const child = page.getByTestId('related-item').filter({ hasText: 'findOrCreateCustomer' })
+    await expect(child).toBeVisible()
+    await child.click()
+
+    // The whole comment-anchor sub-view is gone — no drilled column at all —
+    // and the ordinary top-level block-column is back, showing the CHILD,
+    // not the anchor.
+    await expect(page.getByTestId('drill-column')).toHaveCount(0)
+    await expect(page.getByTestId('drill-collapsed')).toHaveCount(0)
+    const blockColumn = page.getByTestId('block-column')
+    await expect(blockColumn).toBeVisible()
+    await expect(blockColumn).toContainText('findOrCreateCustomer')
+
+    // The sidebar itself now highlights findOrCreateCustomer's own row, not
+    // the comment row that was selected before.
+    const targetRow = page.locator('[data-idx]').filter({ hasText: 'CreatePaymentAction::findOrCreateCustomer' })
+    await expect(targetRow).toHaveClass(/bg-indigo-50/)
+  })
+
+  // Same scenario, via Enter instead of a click — mouse-navigation.md's rule
+  // 1: a click never becomes a second, diverging implementation of what a
+  // key already does, so handleRelatedDrill is the SAME function for both.
+  test('a child with its own place in the blokken-index jumps there instead of nesting, on Enter', async ({
+    page,
+  }) => {
+    await page.route('**/api/relations?pr=12903', async (route) => {
+      await route.fulfill({
+        json: [
+          {
+            pr: 12903,
+            parentId: '12903:app/Actions/CreatePaymentAction.php:CreatePaymentAction::execute',
+            childId: '12903:app/Actions/CreatePaymentAction.php:CreatePaymentAction::findOrCreateCustomer',
+            kind: 'event_listener',
+          },
+        ],
+      })
+    })
+    await mockAnchoredComment(page, {
+      id: 'anchor-jump-enter',
+      file: 'app/Actions/CreatePaymentAction.php',
+      label: 'CreatePaymentAction::execute',
+      body: 'jump to the real place via enter',
+    })
+    await page.goto('/pr/12903')
+    await leaveSearchBox(page)
+
+    const row = page.locator('[data-idx]').filter({ hasText: 'jump to the real place via enter' })
+    await row.click()
+    const drillColumn = page.getByTestId('drill-column')
+    await expect(drillColumn).toBeVisible()
+
+    await page.keyboard.press('ArrowRight')
+    await page.keyboard.press('ArrowRight')
+    await page.keyboard.press('ArrowDown')
+
+    const child = page.getByTestId('related-item').filter({ hasText: 'findOrCreateCustomer' })
+    await expect(child).toBeVisible()
+    await expect(child).toHaveAttribute('data-active', 'true')
+    await page.keyboard.press('Enter')
+
+    await expect(page.getByTestId('drill-column')).toHaveCount(0)
+    await expect(page.getByTestId('drill-collapsed')).toHaveCount(0)
+    const blockColumn = page.getByTestId('block-column')
+    await expect(blockColumn).toBeVisible()
+    await expect(blockColumn).toContainText('findOrCreateCustomer')
+  })
+
+  // The jump is scoped to EXACTLY the anchor's own first-level panel
+  // (state.focusLevel === 1) — a child clicked from a column already
+  // drilled a SECOND level deep from the anchor still nests, even when that
+  // child also has its own state.blocks row. Without the focusLevel guard,
+  // isCommentAnchorDrillActive(1) alone stays true at any depth (curBlock()
+  // never leaves the comment row throughout this whole flow — see
+  // openCommentAnchorDrill's own doc comment), so this would have
+  // incorrectly jumped too.
+  test('a child two levels deep from the anchor still nests, never jumps', async ({ page }) => {
+    await page.route('**/api/callresolve?pr=12903', async (route) => {
+      await route.fulfill({
+        json: [
+          {
+            pr: 12903,
+            callerId: '12903:app/Actions/CreatePaymentAction.php:CreatePaymentAction::execute',
+            callKey: 'createPayment',
+            status: 'resolved',
+            kind: 'method_call',
+            childFile: 'app/Support/Psp.php',
+            childClass: 'Psp',
+            childMethod: 'createPayment',
+            childLine: 12,
+            childCode: 'function createPayment($input) {}',
+            model: '',
+            confidence: '',
+            updatedAt: new Date().toISOString(),
+          },
+        ],
+      })
+    })
+    // The level-2 edge: Psp::createPayment (the synthetic frame drilled from
+    // the anchor) "calls" findOrCreateCustomer — a real PR block WITH its
+    // own state.blocks row, so this is exactly the shape that jumps when
+    // clicked at focusLevel===1, and must NOT when clicked at focusLevel===2.
+    // A synthetic frame's own id is caller-scoped (b.id + '::' + callKey,
+    // see resolveChildBlock's own doc comment) — computed here to match.
+    await page.route('**/api/relations?pr=12903', async (route) => {
+      await route.fulfill({
+        json: [
+          {
+            pr: 12903,
+            parentId: '12903:app/Actions/CreatePaymentAction.php:CreatePaymentAction::execute::createPayment',
+            childId: '12903:app/Actions/CreatePaymentAction.php:CreatePaymentAction::findOrCreateCustomer',
+            kind: 'event_listener',
+          },
+        ],
+      })
+    })
+    await mockAnchoredComment(page, {
+      id: 'anchor-two-deep',
+      file: 'app/Actions/CreatePaymentAction.php',
+      label: 'CreatePaymentAction::execute',
+      body: 'stays nested two levels deep',
+    })
+    await page.goto('/pr/12903')
+    await leaveSearchBox(page)
+
+    const row = page.locator('[data-idx]').filter({ hasText: 'stays nested two levels deep' })
+    await row.click()
+    const drillColumn = page.getByTestId('drill-column')
+    await expect(drillColumn).toBeVisible()
+
+    await page.keyboard.press('ArrowRight')
+    await page.keyboard.press('ArrowRight')
+    await page.keyboard.press('ArrowDown')
+
+    // Level 1: drill into the synthetic Psp::createPayment child (no
+    // state.blocks row of its own — nests exactly as before this change).
+    const level1Child = page.getByTestId('related-item').filter({ hasText: 'Psp::createPayment' })
+    await expect(level1Child).toBeVisible()
+    await level1Child.click()
+    await expect(drillColumn).toContainText('Psp::createPayment')
+    await expect(page.getByTestId('drill-collapsed')).toHaveCount(1)
+
+    // Open ITS OWN Underlying-code panel and click findOrCreateCustomer —
+    // even though IT has its own state.blocks row, focusLevel is now 2, so
+    // this must nest as a THIRD column, not jump away.
+    await page.keyboard.press('ArrowRight')
+    const level2Child = page.getByTestId('related-item').filter({ hasText: 'findOrCreateCustomer' })
+    await expect(level2Child).toBeVisible()
+    await level2Child.click()
+
+    await expect(drillColumn).toContainText('findOrCreateCustomer')
+    // Two collapsed rails now: the anchor (level 1) and Psp::createPayment
+    // (level 2), with findOrCreateCustomer the sole focused column at level 3.
+    await expect(page.getByTestId('drill-collapsed')).toHaveCount(2)
   })
 })

@@ -11,7 +11,15 @@ child or a resolved method call — `isCodeFocused`/`focusedRelatedChild` in
 `data-testid=related-item`, via the `drill` callback `home.mjs` passes to
 `RelatedPanel`) opens that child as a full diff column to the right of the
 existing columns (between the diff and `RelatedPanel`) instead of just the flat
-excerpt. All three go through the same `drillIntoChild(child)`.
+excerpt. All three go through the same shared dispatcher, **`handleRelatedDrill(child)`**
+(`home.mjs`) — which itself just calls `drillIntoChild(child)`, EXCEPT for the one
+narrower case below (a plain child card clicked/Enter'd from inside a
+comment/chat-op-regel anchor's own panel, with its own place in the blokken-index)
+where it jumps instead. A drill-hint chip chain (`focusedChipChain`) and
+`drillToSibling`'s sideways walk both call `drillIntoChild` directly, not
+through this dispatcher — see "A child WITH its own place in the blokken-index
+jumps there instead of nesting" below for exactly why those two stay
+untouched.
 
 `home.mjs` keeps a **stack**, `state.drill`: every `drillIntoChild` pushes one
 entry plus a matching cursor entry onto `state.drillCursor` (`{change:0}`) and
@@ -32,6 +40,76 @@ outright instead of collapsing to a rail (and its `drill-left-hint` chevron
 with it), so the anchored column sits exactly where an ordinary block card
 would — `commentAnchorColumnHidden`, see "The anchored column IS the leading
 column" in `.claude/docs/comments-panel.md`.
+
+### A child WITH its own place in the blokken-index jumps there instead of nesting
+
+A second, narrower exception to "drilling always nests": a plain child card
+(NOT a drill-hint chip, NOT the tests_group bar) clicked or Enter'd from
+**exactly** the comment/chat-op-regel anchor's own first-level panel
+(`state.focusLevel === 1 && isCommentAnchorDrillActive(1)`) jumps to that
+child's own ordinary row in `state.blocks` instead of nesting it as yet
+another drilled column under the special anchor sub-view — reviewer request:
+"moet ik naar de normale plek toe... waar alle comments enzo bij staan".
+`handleRelatedDrill` looks the child up by `child.blockId || child.id` (the
+exact resolution `resolveChildBlock` already uses) in **`state.blocks`**, not
+`state.allBlocks`: `recomputeLeftList`'s own doc comment (`home.mjs`) is the
+precise boundary this reuses — a relation child **stays** in `state.blocks`
+(sorted under an "Onderliggende code" heading), while a resolved-method-call
+TARGET is deliberately excluded from it even when it's a real, changed PR
+block ("already shown in the Onderliggende code panel"). So a relation child
+jumps; a resolved-call target (real PR block or a synthetic frame into a file
+this PR doesn't touch) has no ordinary place to jump to and keeps nesting,
+unchanged — no separate fallback logic, the lookup simply fails and falls
+through to the ordinary `drillIntoChild(child)`. Same reasoning covers the
+`tests_group` toggle bar for free (its descriptor id never matches a real
+block id).
+
+`jumpToBlockOwnPlace(idx)` (`home.mjs`) does the landing: closes the whole
+comment-anchor sub-view via the existing `closeCommentAnchorDrillIfOwned()`
+(SYNCHRONOUSLY, before `state.selected` changes — no in-between tick where
+selection and drill/focusLevel disagree), then mirrors `openTask`'s own
+"jump to a block and enter its diff" shape — a direct `state.mode='diff'`
+(not the fuller `enterDiff()`, whose `showDescription`/`keepIndexInDiff`
+side effects are for stepping FROM list mode's own `→` and don't apply
+here), `resetMainScroll()`, best-effort `ensureCode`. Unlike `openTask`
+there's no specific comment/unit to land on (the click is on the CHILD,
+which may carry no comment of its own), so it lands on the block's plain
+default first group, same as an ordinary fresh sidebar selection. The
+child's own comment scope is therefore completely ordinary too — the
+anchor's `onlyIds` narrowing (see comments-panel.md) only ever applies to
+the anchor's OWN comment at `focusLevel===1`, never to whatever the reviewer
+jumps to.
+
+**The `focusLevel===1` gate is load-bearing, not `isCommentAnchorDrillActive(1)`
+alone.** `curBlock()` never leaves the comment-index item throughout this
+whole flow (`openCommentAnchorDrill` never touches `state.selected`), so
+`isCommentAnchorDrillActive(1)` stays true even after drilling a SECOND level
+deep from inside the anchor's own panel. Without the explicit `focusLevel===1`
+check, a child clicked two levels deep would wrongly jump too — the gate pins
+this to exactly "looking at the anchor's own, first-level panel".
+
+**Click and Enter share the one dispatcher, per `.claude/docs/mouse-navigation.md`'s
+rule 1** — `handleRelatedDrill` is passed as `RelatedPanel`'s `drill` prop AND
+called from `onKeydown`'s Enter/Space branch, so neither path can drift.
+
+**Two existing tests needed a fixture swap, not new coverage, when this
+landed:** `tests/comment-anchor-expanded-view.spec.mjs`'s
+"a child drilled from inside the anchor panel keeps ↓/Shift+↓ on its own
+diff, not the sidebar" and "Enter on a child drilled from inside the anchor
+panel opens the block palette, not the comment menu" (from the three commits
+right before this feature, about `focusLevel>1` arrow-key/Enter routing) used
+to drill `CreatePaymentAction::findOrCreateCustomer` via a plain `/api/relations`
+edge — which turns out to be exactly the shape that now JUMPS instead of
+nesting, since it's a relation child with its own `state.blocks` row. Both
+tests are really about routing once a child IS nested, so they switched their
+fixture to a resolved-call target instead (`Psp::createPayment`, a class this
+PR never touches, mocked via `/api/callresolve`) — guaranteed absent from
+`state.blocks`, so they keep nesting and keep testing exactly what they were
+written for, unaffected by this change. Test:
+`tests/comment-anchor-expanded-view.spec.mjs` — "a child with its own place
+in the blokken-index jumps there instead of nesting, on click"/"...on Enter"
+(the new behavior) and "a child two levels deep from the anchor still nests,
+never jumps" (the `focusLevel===1` gate).
 
 A drill entry is **one of two forms**:
 

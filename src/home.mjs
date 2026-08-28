@@ -10470,6 +10470,80 @@ function drillIntoChild(child) {
   scrollChangeIntoView(false)
 }
 
+// handleRelatedDrill is the click/Enter action for an Underlying-code child
+// card (relatedCard/testsBar) or drill-hint chip. Everywhere it just calls
+// drillIntoChild (nest the child as its own drilled column, see above) — ONE
+// exception: a plain child card clicked (or Enter'd) from INSIDE the
+// comment/chat-op-regel anchor's OWN Underlying-code panel
+// (state.focusLevel === 1 && isCommentAnchorDrillActive(1) — the anchor
+// itself, not a column drilled deeper from it, see openCommentAnchorDrill's
+// own doc comment for why curBlock() stays the comment item at any depth)
+// that ALSO has its own ordinary row in the blokken-index (state.blocks, as
+// opposed to state.allBlocks — see jumpToBlockOwnPlace below for that
+// distinction) jumps there instead of nesting. Reviewer request: "moet ik
+// naar de normale plek toe... waar alle comments enzo bij staan" — the
+// child's own place shows its full diff and its own, UNRESTRICTED comment
+// scope (the anchor's onlyIds narrowing, see comments-panel.md, only ever
+// applies at focusLevel===1 for the anchor's OWN comment — a jumped-to child
+// is a completely ordinary top-level selection). A child with no such place
+// (a resolved-method-call target — deliberately excluded from state.blocks
+// even when it's a real, changed PR block, see recomputeLeftList's own doc
+// comment — or a synthetic frame into a file this PR doesn't touch) has
+// nowhere to jump to, so it keeps the existing nested-drill behavior
+// unchanged; so does the tests_group toggle bar (its descriptor id never
+// matches a real block id, so the lookup below simply fails for it) and a
+// drill-hint chip chain (focusedChipChain in onKeydown calls drillIntoChild
+// directly, not this function — chips already drill several levels in one
+// go, a different shape from "open this one card").
+//
+// Deliberately the SAME function for both the click callback (RelatedPanel's
+// drill prop) and Enter/Space in onKeydown — mouse-navigation.md's rule 1: a
+// click never becomes a second, diverging implementation of what a key
+// already does.
+function handleRelatedDrill(child) {
+  if (child && state.focusLevel === 1 && isCommentAnchorDrillActive(1)) {
+    const idx = state.blocks.findIndex((b) => b.id === (child.blockId || child.id))
+    if (idx >= 0) {
+      jumpToBlockOwnPlace(idx)
+      return
+    }
+  }
+  drillIntoChild(child)
+}
+
+// jumpToBlockOwnPlace closes the comment-anchor sub-view (see
+// handleRelatedDrill above) and lands on a plain top-level block at `idx` in
+// state.blocks exactly as if the reviewer had selected it from the sidebar
+// and stepped in — mode:'diff', focusLevel:0, no drill stack, its first
+// change group. Mirrors two existing precedents rather than inventing a
+// third shape:
+// - closeCommentAnchorDrillIfOwned() (already resets state.drill/
+//   drillCursor/focusLevel and clears commentAnchorDrillFor/
+//   commentAnchorEntered) runs SYNCHRONOUSLY before state.selected changes,
+//   so there is no in-between tick where state.selected already points at
+//   the new block while state.drill/focusLevel still reflect the old anchor.
+// - The rest mirrors openTask (the "Taken" row's own jump-to-a-block action):
+//   a direct state.mode='diff' (not the fuller enterDiff(), whose
+//   showDescription/keepIndexInDiff side effects are for stepping FROM list
+//   mode's own → and don't apply here), resetMainScroll(), best-effort
+//   ensureCode. Unlike openTask there is no specific comment/unit to land
+//   on — the click is on the CHILD, which may carry no comment of its own —
+//   so this lands on the block's plain default first group, same as any
+//   other fresh block selection.
+function jumpToBlockOwnPlace(idx) {
+  const target = state.blocks[idx]
+  closeCommentAnchorDrillIfOwned()
+  leaveRelated()
+  state.selected = idx
+  state.mode = 'diff'
+  state.rangeAnchor = null
+  state.gran = 'group'
+  state.change = 0
+  resetMainScroll()
+  if (target && !target.code) ensureCode(target)
+  scrollChangeIntoView(false)
+}
+
 // commentTarget describes what a comment started *right now* would attach to —
 // the current navigation unit at the current granularity: a whole change 'group',
 // one 'line', or one 'call' segment (with the block's class::method and the unit's
@@ -13664,7 +13738,7 @@ function onKeydown(e) {
         for (const target of chain) drillIntoChild(target)
       } else {
         const child = focusedRelatedChild()
-        if (child) drillIntoChild(child)
+        if (child) handleRelatedDrill(child)
       }
     }
     return
@@ -16818,7 +16892,7 @@ function DetailPanel(state) {
           // never spill wider than comment-claude-row above it.
           CodePreviewPanel(state, commentTarget)}
         ${() =>
-          RelatedPanel(state, commentTarget, { drill: (child) => drillIntoChild(child) }).key('related-panel')}
+          RelatedPanel(state, commentTarget, { drill: handleRelatedDrill }).key('related-panel')}
       </div>
       <div class="-ml-4 h-1 w-px shrink-0" data-testid="main-overflow-sentinel"></div>
     </main>

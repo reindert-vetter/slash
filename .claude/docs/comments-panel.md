@@ -426,6 +426,28 @@ already uses in `state.mode === 'diff'`). Test:
 bounding-box width, not just its text content — the earlier test only
 checked text and so did not catch this).
 
+### A child WITH its own place in the blokken-index jumps there instead of nesting
+
+A DIFFERENT reviewer request, about the SAME anchor panel but the opposite
+depth: "als ik klik om een onderliggende kaart van een blok van een comment op
+regel (of chat op regel ofzo), dan moet ik naar de plek toe waar die ook
+onderliggende code is, maar dan naar de normale plek met die aangepaste code
+waar alle comments enzo bij staan." A plain child card (not a chip, not the
+tests_group bar) clicked or Enter'd from **exactly** the anchor's own
+first-level panel (`state.focusLevel === 1 && isCommentAnchorDrillActive(1)`
+— NOT the `focusLevel > 1` case the section above is about) now jumps to that
+child's own ordinary place in the blokken-index instead of nesting it as
+another drilled column under this special sub-view, whenever it has one.
+
+Full mechanism (`handleRelatedDrill`/`jumpToBlockOwnPlace`, the
+`state.blocks`-vs-`state.allBlocks` boundary that decides jump-vs-nest, why
+the `focusLevel===1` gate is load-bearing and not
+`isCommentAnchorDrillActive(1)` alone, and the fixture swap two pre-existing
+tests from the section above needed once a relation child started jumping
+instead of nesting): "A child WITH its own place in the blokken-index jumps
+there instead of nesting" in `.claude/docs/drilling.md`. Test:
+`tests/comment-anchor-expanded-view.spec.mjs`.
+
 ### → skips an already-resolved default comment
 
 `enterCommentsOrRelated(pr)` (`RelatedPanel.mjs`) is the single entry point
