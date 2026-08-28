@@ -8887,7 +8887,7 @@ export function claudeColumnWidthCls(state) {
 // commentClaudeRowWidthCls — the ACTUAL rendered width of comment-claude-row
 // (home.mjs), for a sibling that must never exceed it (CodePreviewPanel's own
 // code-preview column, below): without a real width bound of its own, an
-// unbounded child (a long "over: …" context line in previewCard, CodePreview.mjs
+// unbounded child (a long context line in previewCard, CodePreview.mjs
 // — the same failure mode InlineComments' own doc comment above describes and
 // already fixed for itself) pushes the shared `comments-and-related` ancestor
 // wider than comment-claude-row, so the code-preview cards spill out past the

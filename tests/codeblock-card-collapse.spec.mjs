@@ -3,7 +3,7 @@ import { test, expect, seededPr, leaveSearchBox } from './_fixtures.mjs'
 // Verifies the code-preview-card behaviour on top of the existing mechanism
 // (tests/code-fence-preview.spec.mjs): a richer title (detected class
 // name(s), shown ONLY when detected — no bare "Codeblok N · PHP" fallback
-// any more), the "over: …" context line (the
+// any more), the context line (the
 // chat text that sat directly above the fence, CSS-truncated only while
 // collapsed), per-class labels inside a multi-class pane, the
 // default-collapsed/Enter-to-expand behaviour for a card that does NOT

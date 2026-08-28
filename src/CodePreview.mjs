@@ -341,7 +341,7 @@ function previewCard(it, active, expanded, onToggle, linkSel = () => 0, onJump =
                   'text-xs leading-relaxed text-slate-700 dark:text-zinc-300 ' + (expanded() ? '' : 'truncate')}"
                 data-testid="code-preview-context"
               >
-                ${t('over')}: ${it.context}
+                ${it.context}
               </span>`
             : ''}
       </div>
