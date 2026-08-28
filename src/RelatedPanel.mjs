@@ -29,6 +29,7 @@ import { repoParam, repoField } from './prContext.mjs'
 // gates code_warning and the footer's explain_code — see autowarn.mjs.
 import { autoWarn } from './autowarn.mjs'
 import { claudeChatColumn, claudeStatusText } from './ClaudeChat.mjs'
+import { loadDraft, saveDraft, clearDraft } from './draftStorage.mjs'
 import { codePreviewColumn } from './CodePreview.mjs'
 import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
 import { syncCommentBatch, batchProgressFor, batchNoteFor } from './commentBatch.mjs'
@@ -1194,6 +1195,140 @@ function draftKeyFor(t) {
   return (t.file || '') + '|' + (t.label || '') + '|' + (t.gran || '') + '|' + t.rowStart + '-' + t.rowEnd + '|' + (t.seg || '')
 }
 
+// dsKey builds the localStorage key for one of the draft kinds below —
+// prefixed with cs.pr (draftKeyFor/a comment id alone carry no PR identity,
+// so two different PR's happening to share a file+label could otherwise
+// collide) — see draftStorage.mjs's own doc comment for why localStorage and
+// not the URL.
+function dsKey(kind, id) {
+  return kind + ':' + cs.pr + ':' + id
+}
+
+// getComposeDraft/setComposeDraft/deleteComposeDraft (and their reply/
+// prReplyDraft/claudeDraft siblings below) are composeDrafts/replyDrafts/
+// prReplyDrafts/claudeDrafts' only access points from here on — they keep
+// the existing in-memory Map (same-session, instant) as the primary read,
+// and fall back to the persisted localStorage copy (draftStorage.mjs) only
+// when the Map itself has nothing, which is exactly the "just refreshed the
+// page" case. A value found in storage is written back into the Map too, so
+// the rest of this file's existing Map-based logic (never touched below)
+// keeps working unchanged for the remainder of the session.
+function getComposeDraft(key) {
+  let v = composeDrafts.get(key)
+  if (v == null) {
+    v = loadDraft(dsKey('new', key))
+    if (v) composeDrafts.set(key, v)
+  }
+  return v
+}
+function setComposeDraft(key, text) {
+  composeDrafts.set(key, text)
+  saveDraft(dsKey('new', key), text)
+}
+function deleteComposeDraft(key) {
+  composeDrafts.delete(key)
+  clearDraft(dsKey('new', key))
+}
+
+function getReplyDraft(id) {
+  let v = replyDrafts.get(id)
+  if (v == null) {
+    v = loadDraft(dsKey('reply', id))
+    if (v) replyDrafts.set(id, v)
+  }
+  return v
+}
+function setReplyDraft(id, text) {
+  replyDrafts.set(id, text)
+  saveDraft(dsKey('reply', id), text)
+}
+function deleteReplyDraft(id) {
+  replyDrafts.delete(id)
+  clearDraft(dsKey('reply', id))
+}
+
+function getPrReplyDraft(id) {
+  let v = prReplyDrafts.get(id)
+  if (v == null) {
+    v = loadDraft(dsKey('prreply', id))
+    if (v) prReplyDrafts.set(id, v)
+  }
+  return v
+}
+function setPrReplyDraft(id, text) {
+  prReplyDrafts.set(id, text)
+  saveDraft(dsKey('prreply', id), text)
+}
+function deletePrReplyDraft(id) {
+  prReplyDrafts.delete(id)
+  clearDraft(dsKey('prreply', id))
+}
+
+// claudeDrafts mirrors composeDrafts/replyDrafts for the SEPARATE embedded
+// Claude chat composer (claude-chat-compose, ClaudeChat.mjs) — a field that,
+// unlike every other composer here, is NOT anchor-keyed in its own DOM node:
+// its mounted card is keyed only on read-only/read-write
+// ('claude-chat-column:ro'/'rw', see ClaudeChatPanel), never on
+// cc.commentId, so switching between two already-anchored conversations
+// reuses the very same <textarea> instead of remounting a fresh, empty one.
+// claudeChatDraftKey() is therefore read fresh on every restore rather than
+// tracked in a variable like composeDraftKey: it mirrors whichever identity
+// is authoritative right now — the real comment id once a conversation is
+// anchored (cc.commentId), else the same composeDraftKey-style anchor
+// identity a not-yet-anchored "chat before placing a comment" draft uses
+// (see enterClaudeChatFromNew) — so a restore always resolves the SAME key
+// composeDraftKey/cc.commentId would.
+const claudeDrafts = new Map()
+function claudeChatDraftKey() {
+  return cc.commentId != null ? 'id:' + cc.commentId : 'new:' + composeDraftKey
+}
+function getClaudeDraft(key) {
+  let v = claudeDrafts.get(key)
+  if (v == null) {
+    v = loadDraft(dsKey('claude', key))
+    if (v) claudeDrafts.set(key, v)
+  }
+  return v
+}
+function setClaudeDraft(key, text) {
+  claudeDrafts.set(key, text)
+  saveDraft(dsKey('claude', key), text)
+}
+function deleteClaudeDraft(key) {
+  claudeDrafts.delete(key)
+  clearDraft(dsKey('claude', key))
+}
+
+// restoreClaudeComposerDraft writes whatever draft matches the CURRENT
+// claudeChatDraftKey() into the composer field — unlike every other
+// composer's own "only prefill when there IS a draft" convention, this one
+// must also actively CLEAR the field to '' when there is none, precisely
+// because (per claudeDrafts' own doc comment) the DOM node is reused across
+// conversations rather than remounted: without an explicit clear, switching
+// from a conversation with unsent text to one with none would leave the
+// PREVIOUS conversation's text sitting in the field — exactly the "must not
+// travel to a different block" rule this feature exists to uphold, just one
+// level deeper (a different Claude conversation instead of a different
+// block/URL). retryLeft mirrors prefillField's own mount-not-ready retry
+// (the composer may not be in the DOM yet on the very same tick this is
+// called, e.g. right as the column first becomes visible) but — unlike
+// prefillField — never calls .focus(): this fires on ordinary ↑/↓
+// navigation, long before the reviewer has chosen to enter the Claude
+// column at all, and must not steal the keyboard.
+function restoreClaudeComposerDraft(retryLeft = FOCUS_FRAMES) {
+  requestAnimationFrame(() => {
+    const el = document.querySelector('[data-testid=claude-chat-compose]')
+    if (!el) {
+      if (retryLeft > 0) restoreClaudeComposerDraft(retryLeft - 1)
+      return
+    }
+    const text = getClaudeDraft(claudeChatDraftKey()) || ''
+    if (el.value === text) return
+    el.value = text
+    autoGrowTextarea(el)
+  })
+}
+
 // placeholderAnchorFor finds an EXISTING chat-anchor placeholder comment
 // (see isChatAnchorPlaceholder) whose own anchor identity matches the given
 // draftKey — i.e. draftKeyFor(c) === draftKey, reusing that same function
@@ -1241,7 +1376,7 @@ function toNew(commentTargetFn) {
   cs.focus = 'new'
   composeDraftKey = draftKeyFor(commentTargetFn ? commentTargetFn() : null)
   focusEl('[data-testid=comment-compose]')
-  const draft = composeDrafts.get(composeDraftKey)
+  const draft = getComposeDraft(composeDraftKey)
   if (draft) prefillField('[data-testid=comment-compose]', draft)
   // A brand-new, not-yet-placed comment always starts its own fresh Claude
   // block — always reset, never keep showing whatever conversation happened
@@ -1264,6 +1399,13 @@ function toNew(commentTargetFn) {
   // visible as an index pill / keeps its own sentence instead of vanishing
   // with this reset. ccSendError() below already reads '' for this fresh,
   // still-unanchored `cc.commentId === null` composer.
+  // The embedded Claude composer's own draft (see claudeDrafts' doc
+  // comment) must be resynced too, right here — the field can already be
+  // visible (isNewChatUnanchored()) while cc.commentId was JUST reset to
+  // null above, and its DOM node is reused across anchors rather than
+  // remounted, so it would otherwise keep showing whatever the PREVIOUS
+  // unit's Claude draft was.
+  restoreClaudeComposerDraft()
 }
 
 // toNewFocus is the mirror of toComment() for the still-open, not-yet-placed
@@ -1285,7 +1427,7 @@ function toNewFocus() {
   cs.claudeTasksPos = 0
   cs.editLinkSel = 0
   focusEl('[data-testid=comment-compose]')
-  const draft = composeDrafts.get(composeDraftKey)
+  const draft = getComposeDraft(composeDraftKey)
   if (draft) prefillField('[data-testid=comment-compose]', draft)
 }
 
@@ -1319,7 +1461,7 @@ function toComment(focusInput = true) {
     // before navigating away (see replyDrafts above) — same mechanism/
     // reasoning as the new-comment composer's own composeDrafts.
     const c = selComment()
-    const draft = c && replyDrafts.get(c.id)
+    const draft = c && getReplyDraft(c.id)
     if (draft) prefillField('[data-testid=reaction-compose]', draft)
   }
 }
@@ -2043,6 +2185,12 @@ function syncClaudeAnchorForSelection() {
   cc.commentId = nextId
   cc.messages = []
   cc.runId = null
+  // The embedded Claude composer's own draft — see claudeDrafts' doc comment
+  // for why this can't just rely on the field remounting (it doesn't, its
+  // DOM node is reused across conversations). Resync right here, on every
+  // real anchor change, so plain ↑/↓ navigation never leaves a PREVIOUS
+  // conversation's unsent text sitting in the field for the new one.
+  restoreClaudeComposerDraft()
   // Looking at it counts as seeing it: whatever landed here while the reviewer
   // was elsewhere no longer needs an index pill.
   clearTurnAnswered(nextId)
@@ -2204,15 +2352,15 @@ function applyPendingDraftReplies(commentId) {
   for (const m of cc.messages) {
     if (m.kind !== 'draft_reply' || appliedDraftReplyIds.has(m.id)) continue
     appliedDraftReplyIds.add(m.id)
-    const existing = replyDrafts.get(commentId) || ''
-    replyDrafts.set(commentId, existing ? existing + '\n\n' + m.body : m.body)
+    const existing = getReplyDraft(commentId) || ''
+    setReplyDraft(commentId, existing ? existing + '\n\n' + m.body : m.body)
     appended = true
     pure = !existing
   }
   if (!appended) return
   if (pure) pureChatDraftReplyIds.add(commentId)
   else pureChatDraftReplyIds.delete(commentId)
-  const merged = replyDrafts.get(commentId)
+  const merged = getReplyDraft(commentId)
   const el = document.querySelector('[data-testid=reaction-compose]')
   if (!el) return // not currently mounted — replyDrafts already holds it for the next time this thread opens
   el.value = merged
@@ -3026,6 +3174,7 @@ export async function enterClaudeChat(pr) {
   if (token !== focusToken) return
   ensureChatEvents(pr)
   loadChatProgress(c.id)
+  restoreClaudeComposerDraft()
   focusClaudeComposer()
   // Fire-and-forget: the "Wis Claude-gesprek" palette command's confirm gate
   // (claudeChatShadowWarning) reads this cache synchronously at open time —
@@ -3054,6 +3203,7 @@ function enterClaudeChatFromNew() {
   cs.previewPos = 0
   cs.claudeTasksPos = 0
   cs.editLinkSel = 0
+  restoreClaudeComposerDraft()
   focusClaudeComposer()
 }
 
@@ -3711,6 +3861,13 @@ function claudeChatCallbacks(state, commentTarget) {
     onCancel: () => cancelClaudeTurn(),
     onFocus: () => onClaudeComposeFocus(),
     onEmptyEnter: () => openClaudeMenuFromComposer(),
+    // The composer's own draft (claudeDrafts, see its doc comment) — kept in
+    // sync per keystroke exactly like every other composer's own @input
+    // handler in this file, and cleared once the typed text actually goes
+    // out as a real turn (ClaudeChat.mjs calls this right after it clears
+    // the field on send).
+    onInput: (text) => setClaudeDraft(claudeChatDraftKey(), text),
+    onSent: () => deleteClaudeDraft(claudeChatDraftKey()),
     // The pane's own @scroll handler (see updateClaudeThreadPinned) and its
     // "scroll to recent" button's click handler — both live here, never in
     // ClaudeChat.mjs itself, since that file never imports this one back.
@@ -4803,6 +4960,35 @@ export function CodePreviewPanel(state, commentTarget) {
   </div>`
 }
 
+// reapplyNewComposerDraftOnceTargetReady — a refresh that restores straight
+// onto the still-open "Comment op deze regel" composer (applyRelRestore's own
+// 'new' branch below) runs `toNew()` before `getCommentTarget()` (the live
+// cursor CodePreviewPanel registers — see its own doc comment) necessarily
+// resolves to a real unit yet: `commentTarget()` (home.mjs) depends on the
+// selected block's diff/change-group data, which can still be loading at this
+// exact synchronous moment, unlike rc.children/cs.list (what applyRelRestore's
+// OTHER branches already gate on). `toNew()` therefore first opens with
+// `composeDraftKey` falling back to `draftKeyFor(null)` ('__none__') — right
+// away, so the composer itself isn't delayed — and this poll (same
+// few-frames-then-give-up shape as prefillField's own DOM-not-mounted retry)
+// re-resolves the REAL key and re-applies the correct draft the moment
+// `getCommentTarget()` stops returning null, without repeating `toNew()`'s
+// broader cc/claude reset a second time.
+function reapplyNewComposerDraftOnceTargetReady(retryLeft = FOCUS_FRAMES) {
+  const t = getCommentTarget()
+  if (!t) {
+    if (retryLeft > 0) requestAnimationFrame(() => reapplyNewComposerDraftOnceTargetReady(retryLeft - 1))
+    return
+  }
+  composeDraftKey = draftKeyFor(t)
+  const draft = getComposeDraft(composeDraftKey)
+  if (draft) prefillField('[data-testid=comment-compose]', draft)
+  // The embedded Claude composer's own (unanchored) draft key is derived
+  // from the very same composeDraftKey when cc.commentId is still null — see
+  // claudeChatDraftKey()'s own doc comment — so it needs the same resync.
+  restoreClaudeComposerDraft()
+}
+
 // applyRelRestore re-applies the URL-restored panel cursor (restorePending, set at
 // module load) once the data it points at has actually loaded — children arrive via
 // setRelated, comments via loadComments, and either can win the race. It gates on
@@ -4840,7 +5026,15 @@ function applyRelRestore() {
     cs.focus = 'code'
     scrollCodeIntoView()
   } else if (want.focus === 'new') {
+    // getCommentTarget() (the same live-cursor getter CodePreviewPanel
+    // registered, see its own doc comment) — without it toNew() falls back
+    // to draftKeyFor(null), which resolves to a shared '__none__' draft
+    // instead of this unit's own one. Harmless before drafts survived a
+    // refresh (both reads were the transient session-only Map), but a
+    // restore reaching here IS always a fresh page load — the one case that
+    // now needs the real per-unit key to find the persisted draft again.
     toNew()
+    reapplyNewComposerDraftOnceTargetReady()
   } else if (want.focus === 'thread') {
     releaseFocus()
     cs.focus = 'thread'
@@ -5372,7 +5566,7 @@ export function startPrWideComment() {
   // line-comment composer opened with no resolvable target also uses, and the
   // two drafts have nothing to do with each other.
   composeDraftKey = PRWIDE_DRAFT_KEY
-  const draft = composeDrafts.get(PRWIDE_DRAFT_KEY)
+  const draft = getComposeDraft(PRWIDE_DRAFT_KEY)
   if (draft) prefillField('[data-testid=comment-compose]', draft)
 }
 
@@ -5479,7 +5673,7 @@ export function convertWarningToComment(c) {
   // Prefer a draft the reviewer already started editing (e.g. left and came
   // back to the SAME conversion via the menu again) over the finding's
   // original body — see composeDrafts above.
-  prefillField('[data-testid=comment-compose]', composeDrafts.get(composeDraftKey) || c.body || '')
+  prefillField('[data-testid=comment-compose]', getComposeDraft(composeDraftKey) || c.body || '')
 }
 
 // isComposeOpen reports whether the new-comment composer is currently open, so
@@ -6283,7 +6477,7 @@ export async function placeComment(state, commentTarget, opts = {}) {
       local: !!opts.local,
     })
     if (ok) {
-      composeDrafts.delete(PRWIDE_DRAFT_KEY)
+      deleteComposeDraft(PRWIDE_DRAFT_KEY)
       clearSendFailed(key)
       // Land the sidebar selection on the brand-new index row. It is
       // populated by the comment list, not by loadBlocks, so it may not exist
@@ -6293,7 +6487,7 @@ export async function placeComment(state, commentTarget, opts = {}) {
       if (lastCreatedCommentId && commentSelectRequest) commentSelectRequest(lastCreatedCommentId)
     } else {
       markSendFailed(key)
-      composeDrafts.set(PRWIDE_DRAFT_KEY, body)
+      setComposeDraft(PRWIDE_DRAFT_KEY, body)
     }
     return
   }
@@ -6341,7 +6535,7 @@ export async function placeComment(state, commentTarget, opts = {}) {
   if (placeholderAnchor) {
     const c = placeholderAnchor
     if (c.runId) {
-      composeDrafts.delete(draftKey)
+      deleteComposeDraft(draftKey)
       el.value = ''
       exitRelated()
       cs.busy = true
@@ -6361,7 +6555,7 @@ export async function placeComment(state, commentTarget, opts = {}) {
           await loadComments(state.pr)
         } else {
           markSendFailed('reply:' + c.id)
-          replyDrafts.set(c.id, body)
+          setReplyDraft(c.id, body)
         }
       } finally {
         cs.busy = false
@@ -6418,7 +6612,7 @@ export async function placeComment(state, commentTarget, opts = {}) {
   // A failed placement instead marks cs.sendFailed and KEEPS the draft, so
   // the reviewer can reopen the composer on this unit and retry.
   if (ok) {
-    composeDrafts.delete(draftKey)
+    deleteComposeDraft(draftKey)
     clearSendFailed('new:' + draftKey)
   } else {
     markSendFailed('new:' + draftKey)
@@ -6794,7 +6988,7 @@ async function postThreadReply(c, body, publish, withHistory) {
     if (res && res.ok) {
       // The typed reply went out — the draft standing in for it (see
       // replyDrafts above) has nothing left to hold.
-      replyDrafts.delete(c.id)
+      deleteReplyDraft(c.id)
       clearSendFailed('reply:' + c.id)
       cs.replySent = true
       setTimeout(() => {
@@ -6803,7 +6997,7 @@ async function postThreadReply(c, body, publish, withHistory) {
       await loadComments(cs.pr)
     } else {
       markSendFailed('reply:' + c.id)
-      replyDrafts.set(c.id, body)
+      setReplyDraft(c.id, body)
       // Unlike the old "closes back to the diff" flow, the reply field
       // never unmounts any more (see the doc comment above) — nothing else
       // would re-mount it to pick the draft up from replyDrafts, so restore
@@ -7797,7 +7991,7 @@ function expandedConversation(c, openCommentMenu, readOnly) {
           placeholder="${t('Reageer op deze comment…')}"
           data-testid="reaction-compose"
           @input="${(e) => {
-            if (c) replyDrafts.set(c.id, e.target.value)
+            if (c) setReplyDraft(c.id, e.target.value)
             // Any reviewer edit — even selecting-all-then-retyping — means the
             // field is no longer PURELY Claude's unedited draft, so the
             // select-all-on-arrival/auto-post-on-Enter treatment stops
@@ -7976,7 +8170,7 @@ function newCommentComposer(state, commentTarget, openCompose) {
                   title="${t('Enter plaatst · Shift+Enter nieuwe regel')}"
                   data-testid="comment-compose"
                   @input="${(e) => {
-                    composeDrafts.set(composeDraftKey, e.target.value)
+                    setComposeDraft(composeDraftKey, e.target.value)
                     autoGrowTextarea(e.target)
                   }}"
                   @keydown="${(e) => {
@@ -10179,7 +10373,7 @@ export function startPrCommentReply(c) {
   picm.commentId = c ? c.id : null
   picm.mode = 'reply'
   focusEl('[data-testid=comment-detail-reply]')
-  const draft = c && prReplyDrafts.get(c.id)
+  const draft = c && getPrReplyDraft(c.id)
   if (draft) prefillField('[data-testid=comment-detail-reply]', draft)
 }
 
@@ -10247,6 +10441,7 @@ export async function startPrCommentChat(c) {
   if (!c) return
   await ensureAndLoadChat(cs.pr, c.id)
   ensureChatEvents(cs.pr)
+  restoreClaudeComposerDraft()
   focusEl('[data-testid=claude-chat-compose]')
 }
 
@@ -10312,12 +10507,12 @@ async function postPrCommentReply(c, body, publish, withHistory) {
       res = null
     }
     if (res && res.ok) {
-      prReplyDrafts.delete(c.id)
+      deletePrReplyDraft(c.id)
       clearSendFailed('reply:' + c.id)
       await loadComments(cs.pr)
     } else {
       markSendFailed('reply:' + c.id)
-      prReplyDrafts.set(c.id, text)
+      setPrReplyDraft(c.id, text)
     }
   } finally {
     picm.sending = false
@@ -10603,7 +10798,7 @@ export function commentDetailCard(c, opts) {
                   placeholder="${() => (picm.mode === 'convert' ? t('Nieuwe comment op basis van deze melding…') : t('Reageer…'))}"
                   data-testid="comment-detail-reply"
                   @input="${(e) => {
-                    if (picm.mode === 'reply' && c) prReplyDrafts.set(c.id, e.target.value)
+                    if (picm.mode === 'reply' && c) setPrReplyDraft(c.id, e.target.value)
                     autoGrowTextarea(e.target)
                   }}"
                   @keydown="${(e) => {

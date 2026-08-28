@@ -2832,6 +2832,54 @@ discard" action any more (see "No more explicit Annuleer button" below) — an
 abandoned draft (including one left via Escape) just stays for the session. Test:
 `tests/comment-draft-persists.spec.mjs`.
 
+**A draft also survives a real page refresh, per-anchor — `src/draftStorage.mjs`.**
+Reviewer request: "als ik iets type in de comment/chat input, en ik refresh,
+dan wil ik bij die ene comment/chat input dezelfde tekst zien. als ik een url
+open en/of een andere blok selecteer, dan wil ik die tekst niet zien." The
+in-memory `Map`s above already satisfy the second half for free — a different
+block/URL is simply a different key — but they're wiped by a reload. Every
+read/write/delete on `composeDrafts`/`replyDrafts`/`prReplyDrafts` now goes
+through a thin wrapper (`getComposeDraft`/`setComposeDraft`/`deleteComposeDraft`
+and its `reply`/`prReply` siblings, `RelatedPanel.mjs`) that mirrors the same
+call into `localStorage` via `draftStorage.mjs`'s
+`loadDraft`/`saveDraft`/`clearDraft` — a small try/catch wrapper, same shape as
+`theme.mjs`/`debugLog.mjs` (a pure frontend cache, not a workflow write, see
+`.claude/rules/workflows-write-boundary.md`; not the URL either — a shared
+link must never carry someone else's draft). The storage key
+(`dsKey(kind, id)`) prepends `cs.pr`, since neither `draftKeyFor`'s own
+identity nor a comment id carries a PR number — without it two PRs that
+happen to touch the same file+function could otherwise collide. A getter
+checks the in-memory `Map` first and only falls back to `localStorage` when
+the `Map` has nothing (exactly "just refreshed"), writing the result back
+into the `Map` so the rest of the session keeps using the fast path unchanged.
+
+**The embedded Claude chat composer (`claude-chat-compose`, `ClaudeChat.mjs`)
+gets the exact same treatment, via its own `claudeDrafts` map — but needed one
+extra piece, because unlike the fields above it is NOT anchor-keyed in its own
+DOM node.** `ClaudeChatPanel`'s mounted card keys only on read-only/read-write
+(`'claude-chat-column:ro'/'rw'`), never on `cc.commentId`, so switching
+between two already-anchored conversations reuses the very same `<textarea>`
+instead of remounting an empty one. `claudeChatDraftKey()` therefore has no
+own tracked variable (unlike `composeDraftKey`) — it's read fresh every time,
+mirroring whichever identity is authoritative right now: `cc.commentId` once
+anchored, else the same `composeDraftKey`-style identity a not-yet-anchored
+"chat before placing a comment" draft uses (`enterClaudeChatFromNew`).
+`restoreClaudeComposerDraft()` is the one place that differs from the
+"only prefill when a draft exists" convention above: it always writes the
+field, clearing it to `''` when there is none, precisely because the reused
+DOM node would otherwise keep showing the PREVIOUS conversation's unsent text
+— the same "must not travel to a different block" rule, one level deeper (a
+different Claude conversation instead of a different block/URL). It's called
+from every place that changes which conversation the composer belongs to:
+`syncClaudeAnchorForSelection`'s own anchor-change branch (plain `↑`/`↓`
+between blocks/comments), `enterClaudeChat`/`enterClaudeChatFromNew`/
+`startPrCommentChat` (entering the column), and `toNew` (a fresh "Comment op
+deze regel" composer, which can already show the Claude column before
+anything is placed). `ClaudeChat.mjs`'s own `@input` calls a new
+`onInput` callback (mirrors every other composer's own `@input`), and its
+Enter/"Stuur" send paths call a new `onSent` callback right after clearing
+the field, so a sent message doesn't leave its own now-stale draft behind.
+
 ### `Shift+Enter` newline + auto-grow height on every composer field
 
 All four text-composing fields in this file (`comment-compose`,

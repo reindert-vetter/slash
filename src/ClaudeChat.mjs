@@ -1014,7 +1014,14 @@ export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly) {
           title="${t('Enter verstuurt · Shift+Enter nieuwe regel')}"
           data-testid="claude-chat-compose"
           @focus="${() => callbacks.onFocus()}"
-          @input="${(e) => autoGrowTextarea(e.target)}"
+          @input="${(e) => {
+            autoGrowTextarea(e.target)
+            // Keeps the composer's own draft (RelatedPanel.mjs's claudeDrafts)
+            // in sync per keystroke, so it survives a refresh — see
+            // "als ik iets type in de comment/chat input, en ik refresh..."
+            // in comments-panel.md.
+            callbacks.onInput?.(e.target.value)
+          }}"
           @keydown="${(e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault()
@@ -1026,6 +1033,7 @@ export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly) {
                 callbacks.onSend(e.target.value)
                 e.target.value = ''
                 resetTextareaHeight(e.target)
+                callbacks.onSent?.()
               } else {
                 // A blank field has nothing to send — open the Claude-column
                 // menu instead of the old silent no-op (reviewer request; see
@@ -1078,6 +1086,7 @@ export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly) {
               callbacks.onSend(text)
               el.value = ''
               resetTextareaHeight(el)
+              callbacks.onSent?.()
             }
           }}"
         >
