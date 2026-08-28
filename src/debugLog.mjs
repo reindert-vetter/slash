@@ -166,8 +166,20 @@ export function logAction(name, detail) {
   record({ type: 'action', key: name, detail: detail ? String(detail) : '', url: location.href })
 }
 
+// heapKB reads performance.memory.usedJSHeapSize where available (Chrome
+// only — Firefox/Safari expose nothing equivalent) as a cheap, ad-hoc vantage
+// point on the leak measured in .claude/docs/frontend-memory.md: piggy-backed
+// onto session/nav lines rather than its own event, so a growing trend is
+// visible in the ordinary timeline for free. Not a replacement for that
+// harness's forced-GC methodology — just enough to say "was the heap already
+// huge by the time this froze".
+function heapKB() {
+  const m = performance.memory
+  return m ? Math.round(m.usedJSHeapSize / 1024) : 0
+}
+
 function logSession(note) {
-  record({ type: 'session', url: location.href, detail: note || document.referrer || '' })
+  record({ type: 'session', url: location.href, detail: note || document.referrer || '', heapKB: heapKB() })
   lastUrl = location.href
   flush() // the first line of a reproduction should never sit in a buffer
 }
@@ -205,8 +217,104 @@ function noteUrlChange() {
     if (!debugMode.enabled) return
     if (location.href === lastUrl) return
     lastUrl = location.href
-    record({ type: 'nav', url: location.href })
+    record({ type: 'nav', url: location.href, heapKB: heapKB() })
   }, 0)
+}
+
+// ── errors & longtasks ───────────────────────────────────────────────────
+// Both of the documented silent-freeze mechanisms in
+// .claude/docs/frontend-memory.md (the Vt flush-abort, the Gt dispatch-array
+// crash) throw exactly one uncaught error and then go quiet — the UI stops
+// updating with no other trace. Until now debug mode recorded navigation and
+// input, but never the one line that would have told us WHICH of those (or a
+// new one) actually fired. A reported "the browser is frozen" is otherwise
+// unfalsifiable after the fact.
+//
+// STACK_MAX is generous (2000) compared to debugLogMaxField (600, debug_log.go)
+// on purpose: the server re-clamps at the door anyway (see debug_log.go), but
+// a JS stack's most useful frames are often past 600 chars in a minified
+// bundle, so trim less aggressively here and let the server have the final
+// say.
+const STACK_MAX = 2000
+
+function onError(e) {
+  if (!debugMode.enabled) return
+  record({
+    type: 'error',
+    message: String(e.message || e.error || 'error').slice(0, 300),
+    stack: e.error && e.error.stack ? String(e.error.stack).slice(0, STACK_MAX) : '',
+    url: location.href,
+  })
+  flush() // the whole point: never let this sit in a buffer that pagehide can't reach if the tab is truly wedged
+}
+
+function onUnhandledRejection(e) {
+  if (!debugMode.enabled) return
+  const reason = e.reason
+  record({
+    type: 'error',
+    message: 'unhandledrejection: ' + String((reason && reason.message) || reason).slice(0, 280),
+    stack: reason && reason.stack ? String(reason.stack).slice(0, STACK_MAX) : '',
+    url: location.href,
+  })
+  flush()
+}
+
+// LOCAL PATCH 4/5 in src/vendor/arrow.js (see .claude/rules/arrowjs-pitfalls.md)
+// deliberately CATCH a throwing reactive effect/listener so one bad render
+// can no longer take the whole reactive graph down — but the four catches
+// only `console.error`, they never rethrow. That means such a throw is
+// INVISIBLE to window.addEventListener('error'): onError above only ever
+// sees an uncaught exception, and this one is, by design, caught. A reactive
+// binding that throws on every re-render (rather than a page-load-time,
+// one-off throw) reads exactly like "the URL updates but nothing visible
+// does" — the URL-mirroring watch is a DIFFERENT subscriber on the same
+// property and keeps succeeding, while the one binding whose own effect
+// always throws never gets to write its DOM update. So this module also
+// wraps console.error itself, filtered to arrow's own three prefixes
+// ("arrow: reactive effect threw" / "arrow: nextTick callback threw" /
+// "arrow: listener threw") — anything else logged via console.error (a
+// failed fetch, an app-level warning) is deliberately left alone, both to
+// avoid noise and because those already have their own handling.
+const ARROW_ERROR_PREFIX = 'arrow: '
+let origConsoleError = null
+function installConsoleErrorHook() {
+  if (origConsoleError) return
+  origConsoleError = console.error.bind(console)
+  console.error = (...args) => {
+    origConsoleError(...args)
+    if (!debugMode.enabled) return
+    const first = args[0]
+    if (typeof first !== 'string' || !first.startsWith(ARROW_ERROR_PREFIX)) return
+    const errArg = args.find((a) => a instanceof Error)
+    record({
+      type: 'error',
+      message: first.slice(0, 300),
+      stack: errArg && errArg.stack ? String(errArg.stack).slice(0, STACK_MAX) : errArg ? String(errArg).slice(0, STACK_MAX) : '',
+      url: location.href,
+    })
+    flush() // same urgency as onError — this is the caught-throw counterpart
+  }
+}
+
+// A main-thread task over 50ms — the CPU-stall shape documented as "Space
+// felt traag" in frontend-memory.md, distinct from a silent crash. Buffered
+// normally (not urgent like an error): a longtask alone doesn't mean the tab
+// is stuck, so it doesn't need the same flush-immediately treatment.
+let longtaskObserver = null
+function installLongtaskObserver() {
+  if (longtaskObserver || typeof PerformanceObserver === 'undefined') return
+  try {
+    longtaskObserver = new PerformanceObserver((list) => {
+      if (!debugMode.enabled) return
+      for (const entry of list.getEntries()) {
+        record({ type: 'longtask', detail: entry.name || '', url: location.href, durationMs: Math.round(entry.duration) })
+      }
+    })
+    longtaskObserver.observe({ entryTypes: ['longtask'] })
+  } catch {
+    /* longtask entries aren't supported everywhere (Firefox/Safari) — silently skip */
+  }
 }
 
 function onKey(e) {
@@ -236,6 +344,10 @@ function installListeners() {
   // module never stops or prevents anything itself.
   window.addEventListener('keydown', onKey, true)
   document.addEventListener('click', onClick, true)
+  window.addEventListener('error', onError)
+  window.addEventListener('unhandledrejection', onUnhandledRejection)
+  installConsoleErrorHook()
+  installLongtaskObserver()
   window.addEventListener('pagehide', () => flush(true))
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') flush(true)

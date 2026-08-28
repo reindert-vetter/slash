@@ -34,16 +34,74 @@ timestamp), `session` and `page`; the rest comes from the client:
 | Field | Meaning |
 |---|---|
 | `t` | client clock in ms — the *gap* between two events is what matters, and only the client sees it accurately |
-| `type` | `session` \| `nav` \| `key` \| `click` \| `action` (a whitelist, `debugLogKinds`) |
-| `url` | the full URL (`session`/`nav`/`click`) |
+| `type` | `session` \| `nav` \| `key` \| `click` \| `action` \| `error` \| `longtask` (a whitelist, `debugLogKinds`) |
+| `url` | the full URL (`session`/`nav`/`click`/`error`/`longtask`) |
 | `key` / `mods` | the pressed key and `cmd+shift`-style modifiers |
 | `target` | the `data-testid` of the element (or its nearest ancestor that has one) — the same handle the Playwright specs use — else the tag name |
-| `detail` | free-form: a click's short text, an action's argument, `in-text-field` for a key typed into an input |
+| `detail` | free-form: a click's short text, an action's argument, `in-text-field` for a key typed into an input, a longtask entry's `name` |
+| `message` / `stack` | an `error` event's text (`window.onerror`/`unhandledrejection`, or a caught arrow.js reactive throw — see below) |
+| `durationMs` | a `longtask` event's `PerformanceObserver` duration |
+| `heapKB` | an optional `performance.memory.usedJSHeapSize` sample, piggy-backed onto `session`/`nav` (Chrome only, 0/absent elsewhere) |
 
 A `nav` line is the one that makes a recording *replayable*: the whole
 navigation position lives in the query string (`bindUrlState`, see `CLAUDE.md`),
 so opening a `nav` URL puts you exactly where the reviewer was. It is logged on
 the next macrotask after a key/click, only when the URL really changed.
+
+## `error`/`longtask`: the freeze itself, not just the navigation around it
+
+Added after a reported "browser is frozen" turned out to be unfalsifiable
+after the fact: debug mode recorded every navigation and keystroke around such
+a freeze but never the one line that says *why* — a reviewer's "it's frozen"
+and a Claude session reading the log back could only guess which known
+mechanism (or a new one) actually fired.
+
+- **`error`, uncaught** — `window.addEventListener('error', …)` and
+  `unhandledrejection` (an unawaited rejected promise), both flushed
+  **immediately** like a `session` line (`flush()` right after `record()`) —
+  the same reasoning as `sendBeacon` on `pagehide`: if the tab is genuinely
+  wedged afterward, this may be the last thing that ever reaches the buffer,
+  so it must not sit there waiting for the normal 25-event/1.5s cadence.
+  `message` is the error text (or `'unhandledrejection: ' + reason`); `stack`
+  is trimmed client-side to 2000 chars (`STACK_MAX`, `src/debugLog.mjs` — more
+  generous than the 600-char `debugLogMaxField` other fields get, because a
+  minified bundle's useful frames often sit past 600; the server re-clamps at
+  the door regardless, see `debug_log.go`).
+- **`error`, arrow.js's own CAUGHT throws — the more likely signal today.**
+  LOCAL PATCH 4/5 (`src/vendor/arrow.js`, see
+  `.claude/rules/arrowjs-pitfalls.md`) already wrap every reactive
+  effect/listener call in a `try/catch` so one bad render can no longer take
+  the whole reactive graph down — but all four catches only `console.error`,
+  they deliberately never rethrow. That makes such a throw **invisible** to
+  `window.addEventListener('error')`, which only ever sees a genuinely
+  uncaught exception. A binding whose effect throws on *every* re-render
+  (rather than once, at load) reads exactly like "the URL updates but nothing
+  visible does": a separate subscriber on the same reactive property (e.g. the
+  `bindUrlState` mirror watch) keeps succeeding and writing
+  `history.replaceState`, while the one binding whose effect always throws
+  never gets to apply its own DOM update — a real, reported symptom this gap
+  could not have explained before. `installConsoleErrorHook`
+  (`src/debugLog.mjs`) therefore wraps `console.error` itself, filtered to
+  arrow's own three message prefixes (`"arrow: reactive effect threw"` /
+  `"arrow: nextTick callback threw"` / `"arrow: listener threw"`) — any other
+  `console.error` call (a failed fetch, an app-level warning) is deliberately
+  left alone, both to avoid noise and because those already have their own
+  handling. Same immediate-flush urgency as the uncaught-throw path above.
+- **`longtask`** — a `PerformanceObserver({entryTypes:['longtask']})` entry
+  (main-thread task >50ms), the CPU-stall shape documented as "Space felt
+  traag" in `frontend-memory.md` — a *different* symptom from the two crashes
+  above (busy, not dead), buffered on the normal cadence since one longtask
+  alone doesn't mean the tab is stuck. Not supported in every browser
+  (Firefox/Safari lack the `longtask` entry type) — `installLongtaskObserver`
+  silently no-ops there via a `try/catch`.
+- **`heapKB`** — a cheap, ad-hoc `performance.memory.usedJSHeapSize` sample
+  piggy-backed onto every `session`/`nav` line (no dedicated event, to avoid a
+  timer of its own) so a reviewer's own session shows whether the heap was
+  already large by the time something froze. This is intentionally **not** a
+  replacement for the forced-GC, isolated-server measurement methodology in
+  `frontend-memory.md` — it is one uncontrolled number per navigation step, a
+  vantage point for "was this anywhere near the measured leak's territory",
+  nothing more precise than that.
 
 ## Instrumentation: own listeners, not per-page nav code
 

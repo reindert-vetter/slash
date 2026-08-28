@@ -77,6 +77,85 @@ test.describe('debug mode', () => {
     expect(await readLog(page)).toEqual([])
   })
 
+  test('an uncaught error while recording lands as an error line with a stack, flushed immediately', async ({
+    page,
+  }) => {
+    await page.goto('/settings')
+    const toggle = page.getByTestId('debug-mode-toggle')
+    await clearLog(page)
+    await toggle.click()
+    await expect(toggle).toHaveText(/Debug mode aan/)
+
+    await page.goto('/pr/12903')
+    await expect(page.getByTestId('pr-index')).toBeVisible()
+
+    // Simulate the "one uncaught throw" shape documented in
+    // .claude/docs/frontend-memory.md (Vt flush-abort / Gt dispatch crash):
+    // debugLog.mjs's own `window.addEventListener('error', ...)` must catch
+    // this regardless of where it originates.
+    page.evaluate(() => {
+      setTimeout(() => {
+        throw new Error('synthetic-debug-log-test-error')
+      }, 0)
+    })
+
+    // Deliberately NOT waitForTimeout-ing on the flush cadence: onError calls
+    // flush() right away, so this should land fast — proving the "never sits
+    // in a buffer" claim, not just that it eventually arrives.
+    await expect
+      .poll(async () => (await readLog(page)).some((e) => e.type === 'error' && e.message.includes('synthetic-debug-log-test-error')))
+      .toBe(true)
+
+    const events = await readLog(page)
+    const err = events.find((e) => e.type === 'error' && e.message.includes('synthetic-debug-log-test-error'))
+    expect(err.stack, 'a stack trace was captured').toBeTruthy()
+    expect(err.page).toBe('/pr/12903')
+
+    await page.goto('/settings')
+    await expect(page.getByTestId('settings-rows')).toBeVisible()
+    await page.getByTestId('debug-mode-toggle').click()
+  })
+
+  test('a caught arrow.js reactive throw (console.error, not an uncaught exception) still lands as an error line', async ({
+    page,
+  }) => {
+    // LOCAL PATCH 4/5 in src/vendor/arrow.js catch every reactive
+    // effect/listener throw and only console.error it — never rethrow — so
+    // this is a DIFFERENT path than the uncaught-throw test above
+    // (installConsoleErrorHook, not window.onerror). See "arrow.js's own
+    // CAUGHT throws" in .claude/docs/debug-mode.md.
+    await page.goto('/settings')
+    const toggle = page.getByTestId('debug-mode-toggle')
+    await clearLog(page)
+    await toggle.click()
+    await expect(toggle).toHaveText(/Debug mode aan/)
+
+    await page.goto('/pr/12903')
+    await expect(page.getByTestId('pr-index')).toBeVisible()
+
+    page.evaluate(() => {
+      console.error('arrow: reactive effect threw', new Error('synthetic-arrow-caught-throw'))
+      // An unrelated console.error must NOT be recorded — only arrow's own
+      // prefixed messages are.
+      console.error('some unrelated app warning, not from arrow.js')
+    })
+
+    await expect
+      .poll(async () => (await readLog(page)).some((e) => e.type === 'error' && e.message.startsWith('arrow: reactive effect threw')))
+      .toBe(true)
+
+    const events = await readLog(page)
+    const err = events.find((e) => e.type === 'error' && e.message.startsWith('arrow: reactive effect threw'))
+    expect(err.stack, 'the Error object passed to console.error was captured as a stack').toContain('synthetic-arrow-caught-throw')
+    expect(events.some((e) => e.type === 'error' && e.message.includes('unrelated app warning')), 'a non-arrow console.error is not recorded').toBe(
+      false,
+    )
+
+    await page.goto('/settings')
+    await expect(page.getByTestId('settings-rows')).toBeVisible()
+    await page.getByTestId('debug-mode-toggle').click()
+  })
+
   test('Enter on the debug row toggles it, same as clicking the switch', async ({ page }) => {
     await page.goto('/settings')
     // ROWS order: theme, langui, langexplain, langreply, langcommit, autowarn,

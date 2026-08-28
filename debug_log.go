@@ -68,11 +68,13 @@ const (
 // rather than a free-form string: this file is read back by a tool, so an
 // unknown type is a bug to surface at the door, not something to store.
 var debugLogKinds = map[string]bool{
-	"session": true, // a page load — the START of a reproduction
-	"nav":     true, // the URL changed (the whole nav position lives in it)
-	"key":     true,
-	"click":   true,
-	"action":  true, // a named command/action (see logAction, src/debugLog.mjs)
+	"session":  true, // a page load — the START of a reproduction
+	"nav":      true, // the URL changed (the whole nav position lives in it)
+	"key":      true,
+	"click":    true,
+	"action":   true, // a named command/action (see logAction, src/debugLog.mjs)
+	"error":    true, // an uncaught throw or unhandled rejection — see src/debugLog.mjs
+	"longtask": true, // a main-thread task >50ms (PerformanceObserver), see src/debugLog.mjs
 }
 
 // DebugLogEvent is one recorded step. Everything is optional except Type: a
@@ -88,6 +90,19 @@ type DebugLogEvent struct {
 	Mods   string `json:"mods,omitempty"`   // e.g. "cmd+shift"
 	Target string `json:"target,omitempty"` // data-testid (or tag) of the element
 	Detail string `json:"detail,omitempty"`
+	// Message/Stack carry an "error" event's uncaught-exception/rejection text
+	// (window.onerror / unhandledrejection). Stack is truncated client-side
+	// already (see src/debugLog.mjs) but re-clamped here too, at the door.
+	Message string `json:"message,omitempty"`
+	Stack   string `json:"stack,omitempty"`
+	// DurationMs carries a "longtask" event's PerformanceObserver duration.
+	DurationMs float64 `json:"durationMs,omitempty"`
+	// HeapKB is an optional heap-size sample (performance.memory, Chrome
+	// only) piggy-backed onto a "nav"/"session" event so a growing trend is
+	// visible in the ordinary timeline without a dedicated event per sample.
+	// See ".claude/docs/frontend-memory.md" for the measured leak this is a
+	// cheap, ad-hoc vantage point on — not a replacement for that harness.
+	HeapKB int64 `json:"heapKB,omitempty"`
 }
 
 // DebugLogInput is one debug_log Execution's whole input: a batch to append,
@@ -146,6 +161,14 @@ func validateDebugLogInput(in *DebugLogInput) error {
 		e.Mods = clampDebugField(e.Mods)
 		e.Target = clampDebugField(e.Target)
 		e.Detail = clampDebugField(e.Detail)
+		e.Message = clampDebugField(e.Message)
+		e.Stack = clampDebugField(e.Stack)
+		if e.DurationMs < 0 {
+			e.DurationMs = 0
+		}
+		if e.HeapKB < 0 {
+			e.HeapKB = 0
+		}
 	}
 	return nil
 }
