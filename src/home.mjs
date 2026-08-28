@@ -2992,6 +2992,18 @@ function openCommentAnchorDrill(b) {
   // happens to share the same anchor block must still move the cursor (see
   // sameComment above).
   if (sameComment && state.drill.length === 1 && state.drill[0] === anchor) return
+  // Reviewer request: a comment-op-regel/chat-op-regel anchor should default
+  // to 'fit' ("Alleen nieuwe code, breedte volgt de code") — mirrors the
+  // existing allChangesAreSingleLine/allChangesAreAdditionsOnly auto-jump in
+  // diff-card.md: an INITIAL stand only, via the shared state.diffViewMode
+  // (no private field, see "No private diff stand" below), not a permanent
+  // override — the reviewer can still cycle away with `a`/the indicator and
+  // it sticks for as long as this exact row stays selected (the sameComment
+  // guard above already skips this line on every retrigger of the SAME row,
+  // e.g. the comment-poll's 5s tick). Landing on a genuinely different row
+  // (or this row again after navigating away) re-applies 'fit'. applyDiffViewMode
+  // itself is a no-op when 'fit' is already active.
+  applyDiffViewMode('fit')
   state.drill = [anchor]
   state.drillCursor = [commentAnchorCursor(anchor, c)]
   state.focusLevel = 1

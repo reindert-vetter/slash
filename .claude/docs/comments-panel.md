@@ -482,15 +482,37 @@ navigated to, and both are gone:
   **Gated on `state.focusLevel > 0`**, so stepping the keyboard back OUT with
   `←` still shows the comment's own `commentDetailCard` here instead of an
   empty column.
-- **No private diff stand.** This view used to default to **Unified** via its
-  own `state.commentAnchorViewMode` field (distinct from the global
+- **No private diff-stand FIELD, but a fresh open still gets an initial
+  default.** This view used to default to **Unified** via its own
+  `state.commentAnchorViewMode` field (distinct from the global
   `state.diffViewMode`, reset on every fresh open), which `viewMode`/
   `setViewMode` picked via `isCommentAnchorDrillActive(level)`. That field is
   removed: the anchored column reads and writes `state.diffViewMode` like
   every other column, so the `a` cycle carries over in both directions and a
-  stand picked here survives navigating away and back.
+  stand picked here survives navigating away and back **while the same row
+  stays selected**.
   `isCommentAnchorDrillActive` itself stays — it is what
   `commentAnchorColumnHidden`/the chevron gate are built on.
+
+  **A later, separate reviewer request reintroduced a default — as an
+  INITIAL stand only, not a private field.** "wil ik mode 'Alleen nieuwe
+  code, breedte volgt de code' zien, ook als ik vervolgens naar rechts druk":
+  `openCommentAnchorDrill` now calls `applyDiffViewMode('fit')` right after
+  its own `sameComment` early-return guard — so it fires exactly once per
+  genuinely NEW open of a comment-op-regel/chat-op-regel anchor (never on a
+  retrigger of the SAME row, e.g. the comment-poll's 5s tick reassigning
+  `cs.list`), writing the ordinary SHARED `state.diffViewMode`. This mirrors
+  the existing `allChangesAreSingleLine`/`allChangesAreAdditionsOnly`
+  auto-jump-to-`'unified'` in `.claude/docs/diff-card.md` exactly: an initial
+  stand, not a permanent override — the reviewer can still cycle away with
+  `a`/the indicator and it sticks for as long as this exact row stays
+  selected; navigating to a different row (or back to this same row later,
+  since `commentAnchorDrillFor` is reset by `closeCommentAnchorDrillIfOwned`
+  the moment the selection moves elsewhere) re-applies `'fit'`. `→` itself
+  never touches `state.diffViewMode`, so the stand naturally survives
+  stepping the keyboard in. Test: "the anchored column defaults to fit on
+  every fresh open, but a manual pick survives while the row stays selected"
+  in `tests/comment-anchor-expanded-view.spec.mjs`.
 
 ### Only one thing reads as selected at a time
 
@@ -602,13 +624,16 @@ selected — greying it there broke `tests/list-range-select.spec.mjs`. Every
 other `→` enters diff mode and hides the index outright. Test:
 `tests/comment-anchor-expanded-view.spec.mjs`.
 
-Accepted consequence, not a bug: dropping the forced Unified means the
-anchored column is usually **wider** now (`'split'` measures
-`min(80, canonical) + canonical` against `'unified'`'s
-`max(canonical, other)`, see `.claude/docs/diff-card.md`), wide enough that
-`positionMenu` can clamp the `prComment` palette narrower than the column it
-is sized against — `tests/comment-anchor-expanded-view.spec.mjs` therefore
-asserts the menu width as an upper bound rather than an exact match.
+**Superseded:** this used to note that dropping the forced Unified made the
+anchored column usually WIDER (comparing `'split'`'s width formula against
+`'unified'`'s). Since the `'fit'` auto-default above landed, a fresh open is
+now usually the OPPOSITE — `'fit'` always forces a single, content-driven
+pane (see `.claude/docs/diff-card.md`), typically narrower than a two-sided
+`'split'`/`'unified'` card. The underlying reason the width can still vary
+either way (a manual stand pick sticking per row, `positionMenu` clamping the
+`prComment` palette narrower than the column it's sized against) is unchanged,
+so `tests/comment-anchor-expanded-view.spec.mjs` still asserts the menu width
+as an upper bound rather than an exact match.
 
 **Stays open until the sidebar selection moves to a DIFFERENT item** — not on
 any ←/Escape inside it (explicit reviewer decision: no extra close gesture was

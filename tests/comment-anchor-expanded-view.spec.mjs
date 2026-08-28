@@ -9,8 +9,9 @@ import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 // list mode: the blokken-index stays visible while it is still being walked
 // with ↑/↓ (it does slide away from the first → onward, see the dedicated test
 // below), the sidebar highlight stays on the comment row itself, and the
-// expanded view defaults to Unified — independent of the reviewer's own
-// global diffViewMode preference. Its own comment+chat also render fully
+// expanded view writes/reads the SHARED global diffViewMode (no private
+// stand), defaulting to 'fit' on every fresh open — see "the anchored column
+// defaults to fit on every fresh open" below. Its own comment+chat also render fully
 // expanded (never the compact preview) and scoped to ONLY this row's own
 // comment — see "Comments op regels shows only its own comment" in
 // comments-panel.md. Deliberately does NOT move the keyboard/focus in — no
@@ -289,8 +290,17 @@ test.describe('a comment-index item anchored to a real block', () => {
   // This view used to force its own Unified stand (state.commentAnchorViewMode,
   // a field independent of the global state.diffViewMode). Dropped on reviewer
   // request — "hetzelfde zien als dat je via de code hebt genavigeerd" — so the
-  // anchored column now follows whatever stand the reviewer picked elsewhere.
-  test('the anchored column keeps the shared diff stand instead of forcing Unified', async ({ page }) => {
+  // anchored column writes/reads the SHARED state.diffViewMode, not a private
+  // field. A later, separate reviewer request ("wil ik mode 'Alleen nieuwe
+  // code, breedte volgt de code' zien, ook als ik naar rechts druk")
+  // reintroduced a default — but as an INITIAL stand only, mirroring the
+  // allChangesAreSingleLine/allChangesAreAdditionsOnly auto-jump-to-'unified'
+  // in diff-card.md: every FRESH open of a comment/chat-op-regel anchor jumps
+  // to 'fit', but a manual pick made while that exact row stays selected
+  // survives (↑/↓/→ never re-trigger it, only a genuinely new selection).
+  test('the anchored column defaults to fit on every fresh open, but a manual pick survives while the row stays selected', async ({
+    page,
+  }) => {
     await mockAnchoredComment(page)
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
@@ -305,13 +315,25 @@ test.describe('a comment-index item anchored to a real block', () => {
     // first ArrowRight reveals it, still without handing the keyboard in.
     await page.keyboard.press('ArrowRight')
 
-    // Pick a stand inside the anchored column itself — it writes the SHARED
-    // state.diffViewMode now, not a private field of this one view.
-    await drillColumn.getByTestId('diffview-fit').click()
+    // Fresh open, nothing picked yet: defaults to 'fit' (the global
+    // state.diffViewMode's own default is 'split', so this proves the
+    // anchor's own auto-jump fired, not just an unrelated default).
     await expect(drillColumn.getByTestId('diffview-fit')).toHaveClass(/bg-indigo-100/)
 
-    // Step away and back: the stand survives. It used to be reset to Unified
-    // on every fresh open of this view (state.commentAnchorViewMode).
+    // Pick a different stand inside the anchored column itself — it writes
+    // the SHARED state.diffViewMode, not a private field of this one view —
+    // and it survives a re-render while this exact row stays selected (the
+    // indicator itself only renders while diffActive() is true — i.e. before
+    // the SECOND ArrowRight hands the keyboard into the comments/Claude
+    // column, an orthogonal, pre-existing gate — so this checks the pick
+    // sticks across an ordinary reactive re-render, not across handing the
+    // keyboard further in).
+    await drillColumn.getByTestId('diffview-split').click()
+    await expect(drillColumn.getByTestId('diffview-split')).toHaveClass(/bg-indigo-100/)
+    await expect(drillColumn.getByTestId('diffview-fit')).not.toHaveClass(/bg-indigo-100/)
+
+    // Step away and back: a genuinely NEW open of this same row re-applies
+    // the 'fit' default — it is an initial stand, not a permanent override.
     await page.keyboard.press('ArrowDown')
     await expect(page.getByTestId('drill-column')).toHaveCount(0)
     await row.click()
