@@ -251,36 +251,77 @@ Transitions, and how they differ from the older per-mechanism behaviour:
 - `state.showDescription` deliberately lives **outside** the URL — ephemeral
   cursor state, not a navigation position worth restoring.
 
-### `Cmd+[` / `Cmd+]` (Mac) — `Ctrl+[` / `Ctrl+]` elsewhere — real browser back/forward
+### `Cmd+[` / `Cmd+]` (Mac) — `Ctrl+[` / `Ctrl+]` elsewhere — a "previous selected block" stack
 
-Reviewer request, **reversing an earlier version of this chord** that used to
-remap onto the `←`/`→` nav chain. `onKeydown` (`home.mjs`) checks
+**This is a SECOND reversal of this chord's mechanism — read this before
+touching it again.** History: (1) originally a remap onto the `←`/`→` nav
+chain (group/line/call granularity included), (2) reversed to real browser
+`history.back()`/`history.forward()` (`c2acbc7`) because the app only ever
+writes its own navigation position with `history.replaceState` (never
+`pushState`), so that real-history version could only ever jump between real
+PAGE loads (`/pr-overview` ↔ `/pr/<id>`), never between two blocks visited on
+the SAME page — and (3) **this current version**, reverting (2): a reviewer
+follow-up asked for "het vorige blok waar ik iets had geselecteerd… niet per
+groep,line,call terug, maar voor de rest waar ik net/daarvoor was", i.e.
+exactly the per-page block-to-block step (2) could never provide. **Do not
+flip this back to real browser history again** — that was already tried and
+explicitly reversed for the reason above; if a future request wants
+something in between, treat it as a fourth, deliberate decision, not a
+default reversion.
+
+`onKeydown` (`home.mjs`) checks
 `isModifiedKey(e) && !e.shiftKey && (e.key === '[' || e.key === ']')` **first,
 before every other branch**, `preventDefault`s the key, and calls
-`history.back()` (`[`) / `history.forward()` (`]`) directly — a real browser
-history navigation, not a step through this section's nav chain.
+`goToPreviousBlock()` (`[`) / `goToNextBlock()` (`]`) — an in-app stack of
+top-level `state.selected` changes, plain module state in `home.mjs`
+(`blockHistoryStack`/`blockForwardStack`/`navigatingViaHistory`).
 
-**Load-bearing consequence, not a bug:** the app writes its own navigation
-position with `history.replaceState` (`urlState.mjs`, see the URL-state
-section of `CLAUDE.md`), never `pushState` — in-page navigation (selecting a
-block, stepping a change group, drilling, …) never adds a browser-history
-entry. So `history.back()` does **not** undo one nav-chain step; it jumps to
-whichever real page load preceded the current one (e.g. back to
-`/pr-overview`, or an earlier `/pr/<id>`), and is a no-op with nothing to
-land on (a bookmarked `/pr/<id>` opened directly, or the first tab of a
-session). That is exactly "the previous URL" the reviewer asked for, as
-opposed to the old nav-chain remap.
+**What counts as a step, and what deliberately doesn't.** A push happens in
+the SAME `watch(() => state.selected, ...)` that already maintains
+`lastFiredSelectionRef`/`lastSelectedBlockRef` for other reasons (reindex
+safety, `leaveRelated()` timing) — it pushes the ref being LEFT whenever
+`state.selected` genuinely changes to a different top-level row (an ordinary
+block, a comment-index row, or a test_class row — anything with its own
+`blockRef`-shaped identity), and clears the forward stack (a fresh move
+discards any redo history). Crucially, a **group/line/call granularity
+step, a Shift+↑/↓ range, drilling into Underlying code, or entering a
+comment thread/Claude chat never touch `state.selected` at all** — so none of
+those push, automatically, with no extra gating needed: exactly "niet per
+groep,line,call terug" as asked. `navigatingViaHistory` is set for the
+duration of a `goToPreviousBlock`/`goToNextBlock`-driven change so that same
+watch doesn't record ITS OWN step as a new move (which would otherwise also
+wipe the other stack).
+
+**An empty stack falls through to `/pr-overview`** (`location.href =
+'/pr-overview'`, a real page navigation — this app has no client-side router
+between the two pages, see `pages-and-routing.md`) — "en anders terug naar pr
+overzicht", the reviewer's own words. An empty FORWARD stack, by contrast, is
+an ordinary no-op: there is no "go forward past the start" destination.
+`resolveRefToIndex` mirrors `applyBlockRefRestore`'s own per-kind lookup to
+turn a stored ref back into a live index, and both `goToPreviousBlock`/
+`goToNextBlock` skip (pop further) any entry that no longer resolves — the
+tree can change (a re-ingest, a resolved comment dropping out of the index)
+between recording a step and undoing it.
+
+**The stack does NOT survive a refresh — explicit reviewer answer** ("de
+stack hoeft een refresh niet te overleven"): both arrays are plain,
+non-persisted module state, the same ephemeral category as
+`commentAnchorDrillFor`/`visitedCommentSinceOrdinary` right above them in
+`home.mjs` — never mirrored to the URL or any storage. A reload always starts
+both empty again, so `Cmd+[` right after a refresh goes straight to
+`/pr-overview`.
 
 **`Shift+Cmd+[` / `Shift+Cmd+]` are deliberately excluded** (reviewer
-follow-up request, unchanged by this reversal) and fall straight through this
-whole function untouched — no `preventDefault` — so the browser's own native
-Shift+Cmd+[/] (tab-switching in Chrome/Safari on Mac) keeps working. Only the
-**kale** `Cmd+[`/`Cmd+]` (no Shift) triggers history back/forward.
+follow-up request, unchanged across all three reversals above) and fall
+straight through this whole function untouched — no `preventDefault` — so the
+browser's own native Shift+Cmd+[/] (tab-switching in Chrome/Safari on Mac)
+keeps working. Only the **kale** `Cmd+[`/`Cmd+]` (no Shift) drives this stack.
 
 This chord is checked **before** `isNativeTextEditKey` (below), so it fires
-regardless of which stop/field currently owns the keyboard — including mid-text
-in a comment/reply/Claude-chat composer — same as a native browser Cmd+[/]
-would. Test: `tests/cmd-bracket-nav.spec.mjs`.
+regardless of which stop/field currently owns the keyboard — including
+mid-text in a comment/reply/Claude-chat composer — same as a native browser
+Cmd+[/] would (there is no native in-field meaning for this chord to
+preserve). Test: `tests/cmd-bracket-nav.spec.mjs`.
 
 ### A Cmd/Ctrl chord inside a text field stays native
 
@@ -292,7 +333,7 @@ selection / editing command** — `Cmd+←`/`→` (start/end of the line on Mac)
 `Ctrl+←`/`→` — and the review tree must never bind over it. `onKeydown`
 (`home.mjs`) therefore returns on `isNativeTextEditKey(e)`
 (`isModifiedKey(e) && isEditableFocused()`) **immediately after the
-`Cmd+[`/`Cmd+]` history back/forward chord and before every other branch**, so
+`Cmd+[`/`Cmd+]` block-history chord and before every other branch**, so
 no individual branch has to repeat the check.
 
 **Why one early guard and not a per-branch exception:** the

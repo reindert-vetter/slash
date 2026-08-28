@@ -57,6 +57,10 @@ test.describe('Cmd/Ctrl chords stay native inside a text field', () => {
     await page.goto('/pr-overview')
     await page.goto('/pr/12903')
     await leaveSearchBox(page)
+    // Selecting block 1 is itself the FIRST recorded step of the block-
+    // history stack (whatever was selected by default, e.g. block 0, is what
+    // Meta+[ steps back to below — see "Cmd+[ / Cmd+] ... a previous
+    // selected block stack" in keyboard-navigation.md).
     await page.locator('[data-idx="1"]').click()
     await page.keyboard.press('ArrowRight')
 
@@ -68,12 +72,12 @@ test.describe('Cmd/Ctrl chords stay native inside a text field', () => {
     await expect(composer).toBeFocused()
     expect(await composer.evaluate((el) => el.selectionStart)).toBe(10)
 
-    // Cmd+[ carries metaKey too, but it drives a real browser history-back
-    // navigation (see .claude/docs/keyboard-navigation.md, "Cmd+[ / Cmd+] ...
-    // real browser back/forward"), checked before isNativeTextEditKey, so it
-    // must still act even with the caret mid-text in the composer.
+    // Cmd+[ carries metaKey too, but it drives this app's own block-history
+    // stack (checked before isNativeTextEditKey), so it must still act even
+    // with the caret mid-text in the composer — stepping back to whichever
+    // block was selected right before this one.
     await page.keyboard.press('Meta+[')
     await expect(composer).toHaveCount(0)
-    await expect(page).toHaveURL(/\/pr-overview$/)
+    await expect(page).toHaveURL(/\/pr\/12903\?sel=/)
   })
 })

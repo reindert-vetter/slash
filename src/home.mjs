@@ -1117,7 +1117,7 @@ function isModifiedKey(e) {
 // isEditableFocused() fallback further down already lets an unmodified,
 // unclaimed key flow into the field; only relatedActive()'s and
 // state.searchActive's own arrow branches sat in front of it and swallowed a
-// modified arrow as navigation. The Cmd+[ / Cmd+] history back/forward chord
+// modified arrow as navigation. The Cmd+[ / Cmd+] block-history chord
 // (top of onKeydown) is checked BEFORE this guard and returns on its own, so
 // it never reaches here regardless of focus — see "Cmd+[ / Cmd+]" in
 // .claude/docs/keyboard-navigation.md.
@@ -1524,12 +1524,96 @@ function closeCommentAnchorDrillIfOwned() {
   commentAnchorDrillFor = null
   state.commentAnchorEntered = false
 }
+// blockHistoryStack/blockForwardStack/navigatingViaHistory — Cmd+[ / Cmd+]'s
+// own "previous selected block" stack. SECOND reversal of this chord's
+// mechanism (nav-chain remap -> real browser history in c2acbc7 -> this
+// stack, reviewer-driven each time — see the "Cmd+[ / Cmd+]" section in
+// keyboard-navigation.md, do not flip this back to real browser history
+// again). Ephemeral, plain module state, deliberately NOT mirrored to the
+// URL or any storage — explicit reviewer answer: "de stack hoeft een
+// refresh niet te overleven", so a reload always starts both stacks empty
+// again (same category as commentAnchorDrillFor/visitedCommentSinceOrdinary
+// above). blockHistoryStack/blockForwardStack hold refs in the exact shape
+// state.blockRef/lastFiredSelectionRef already use (file:line /
+// comment:<id> / testclass:<file>::<class>); navigatingViaHistory is set
+// for the duration of a goToPreviousBlock/goToNextBlock-driven
+// state.selected change so the watch above doesn't record its OWN step as a
+// new move (which would also wrongly wipe the other stack).
+let blockHistoryStack = []
+let blockForwardStack = []
+let navigatingViaHistory = false
+
+// resolveRefToIndex mirrors applyBlockRefRestore/applyCommentRefRestore/
+// applyTestClassRefRestore's own per-kind lookup, reused here to resolve a
+// stack entry back to a live index — a stack entry can point at a block
+// that no longer exists any more (a re-ingest, a comment that got resolved
+// and dropped out of the index) by the time Cmd+[/] is pressed, so callers
+// must be ready for -1.
+function resolveRefToIndex(ref) {
+  if (ref.startsWith('comment:')) return state.blocks.findIndex((b) => b.kind === 'comment' && b.id === ref)
+  if (ref.startsWith('testclass:')) return state.blocks.findIndex((b) => b.kind === 'test_class' && b.id === ref)
+  return state.blocks.findIndex((b) => b.kind !== 'comment' && b.kind !== 'test_class' && `${b.file}:${b.line}` === ref)
+}
+
+// goToPreviousBlock / goToNextBlock — Cmd+[ / Cmd+]'s own action (onKeydown
+// below). "Vorige blok waar ik iets had geselecteerd" — a stack of TOP-LEVEL
+// selections only (state.selected moving to a different row), never a
+// group/line/call granularity step within the same block, a drilled column,
+// or a comment thread/Claude focus — see the push site in the
+// state.selected watch above for why that's automatic (none of those touch
+// state.selected). An EMPTY stack means nothing has been visited yet this
+// session (a fresh load, or every recorded step already undone) — falls
+// through to a real navigation to /pr-overview (this app has no
+// client-side router between the two pages, see pages-and-routing.md), not
+// a no-op; an empty FORWARD stack, by contrast, is an ordinary no-op — there
+// is no equivalent "go forward past the start" destination.
+function goToPreviousBlock() {
+  while (blockHistoryStack.length) {
+    const ref = blockHistoryStack.pop()
+    const idx = resolveRefToIndex(ref)
+    if (idx < 0) continue // the tree changed since this was recorded — try the next one back
+    if (lastFiredSelectionRef != null) blockForwardStack.push(lastFiredSelectionRef)
+    navigatingViaHistory = true
+    state.selected = idx
+    return
+  }
+  location.href = '/pr-overview'
+}
+function goToNextBlock() {
+  while (blockForwardStack.length) {
+    const ref = blockForwardStack.pop()
+    const idx = resolveRefToIndex(ref)
+    if (idx < 0) continue
+    if (lastFiredSelectionRef != null) blockHistoryStack.push(lastFiredSelectionRef)
+    navigatingViaHistory = true
+    state.selected = idx
+    return
+  }
+  // Nothing to redo — a plain no-op, mirroring a real browser's own Cmd+]
+  // with an empty forward history.
+}
+
+
 watch(
   () => state.selected,
   () => {
     const b = state.blocks[state.selected]
     const fireRef = b ? (b.kind === 'comment' || b.kind === 'test_class' ? b.id : `${b.file}:${b.line}`) : null
     if (fireRef !== null && fireRef === lastFiredSelectionRef) return
+    // Cmd+[ / Cmd+]'s own selection-history stack (goToPreviousBlock/
+    // goToNextBlock below) — push the ref being LEFT onto blockHistoryStack,
+    // but only for a genuinely NEW move: this watch already guarantees "a
+    // top-level selection change" (a same-block granularity/drill/thread
+    // change never touches state.selected at all, see the doc comments
+    // above), and navigatingViaHistory (set by goToPreviousBlock/
+    // goToNextBlock themselves) tells a back/forward step apart from an
+    // ordinary one so undoing a step never re-records itself.
+    if (navigatingViaHistory) {
+      navigatingViaHistory = false
+    } else if (fireRef !== null && lastFiredSelectionRef != null) {
+      blockHistoryStack.push(lastFiredSelectionRef)
+      blockForwardStack = [] // a genuinely new move discards any redo history
+    }
     lastFiredSelectionRef = fireRef
     cancelPrCommentReply()
     exitPrCommentThread()
@@ -13332,25 +13416,25 @@ function rightClickMenuMode() {
 }
 
 function onKeydown(e) {
-  // Cmd+[ / Cmd+] (reviewer request, reversing an earlier remap onto the
-  // custom nav chain) drive REAL browser history back/forward — checked
-  // FIRST, before every other branch, so it works regardless of which
-  // stop/field currently owns the keyboard, same as the browser's own native
-  // binding would. Note the app writes its own navigation position with
-  // `history.replaceState` (see urlState.mjs / the URL-state section of
-  // CLAUDE.md), never `pushState`, so `history.back()` does not step through
-  // the ←/→ nav chain — it jumps to whichever real page load preceded this
-  // one (e.g. back to /pr-overview, or an earlier /pr/<id>), and is a no-op
-  // when there is none. That is deliberate: "the previous URL" means exactly
-  // that, not a step in the in-page nav chain.
+  // Cmd+[ / Cmd+] — a "previous/next selected block" stack (SECOND reversal
+  // of this chord's mechanism, reviewer-driven again: nav-chain remap ->
+  // real browser history (c2acbc7) -> this stack. See "Cmd+[ / Cmd+]" in
+  // keyboard-navigation.md — do not flip this back to real browser history
+  // again). Checked FIRST, before every other branch, so it works regardless
+  // of which stop/field currently owns the keyboard. `Cmd+[` steps to the
+  // previously SELECTED top-level block (never a group/line/call
+  // granularity step within the same block — goToPreviousBlock/
+  // goToNextBlock above only ever record a real state.selected change), with
+  // an empty stack falling through to /pr-overview; `Cmd+]` mirrors it
+  // forward, ordinary no-op when there's nothing to redo.
   //
   // `!e.shiftKey`: Shift+Cmd+[/] is deliberately EXCLUDED and falls straight
   // through — no preventDefault — so the browser's own native Shift+Cmd+[/]
   // (tab-switching in Chrome/Safari on Mac) keeps working.
   if (isModifiedKey(e) && !e.shiftKey && (e.key === '[' || e.key === ']')) {
     e.preventDefault()
-    if (e.key === '[') history.back()
-    else history.forward()
+    if (e.key === '[') goToPreviousBlock()
+    else goToNextBlock()
     return
   }
 
