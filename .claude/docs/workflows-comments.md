@@ -973,6 +973,68 @@ The rest of this section (task 3's two-step tool access, the escalation
 trigger, the write gate) is otherwise UNCHANGED — only WHERE Claude gets
 Edit/Bash access changed, not WHEN.
 
+#### An unreachable `origin` never costs the reviewer their work directory
+
+`classifyCheckoutCandidate` (`chat_checkout.go`) refreshes a candidate's
+remote-tracking refs with `git fetch origin <branch>` before it decides
+ahead/behind and merged-into-base. That fetch used to be **fatal**: an error
+made the whole candidate return an error, `listCheckoutCandidates` dropped it,
+and with every candidate dropped the write turn told the reviewer
+*"Voeg een pad toe aan `chatCheckoutDirs` in settings.json"* — a configuration
+problem that did not exist. Reported on a machine where the correct checkout
+was sitting there, already on the PR's own branch; the real cause was an
+ssh-agent with **no identities loaded**, so every `git fetch` came back
+`Permission denied (publickey)`. Same failure shape offline, on a dropped VPN,
+or with an expired token — i.e. it hit any user, any directory, at any moment,
+and it presented as a permanent misconfiguration.
+
+The fetch is now a **refresh, never a gate**. Every answer this classification
+gives comes from refs that are already on disk, so an unreachable origin
+degrades to "decide from what we have" and only sets `SyncUnknown`:
+
+- On the PR's own branch with a local `refs/remotes/origin/<headRef>`:
+  ahead/behind are still computed from it, but `BehindOrigin` is forced false
+  — "behind" measured against a ref we could not refresh says nothing, and
+  acting on it (`fastForwardCheckoutToOrigin`) would just re-run the fetch
+  that already failed.
+- On the PR's own branch with **no** such ref at all: still usable
+  (`FastForwardable`, never `BehindOrigin`). A write turn only ever COMMITS on
+  top; it never discards or force-overwrites, so there is nothing to lose.
+- On another branch: `merge-base --is-ancestor <branch> origin/<base>` runs
+  against the local base ref whenever one exists, instead of being skipped
+  entirely when the fetch failed.
+
+`checkoutOntoBranch`/`fastForwardCheckoutToOrigin` follow the same rule: a
+failed fetch is only a real error when the checkout has no local
+`origin/<headRef>` to work from either.
+
+The **landing** (`commitCheckoutEditsAt`) had the identical bug one step
+later, and it bit right after the first fix: Claude made the edit, said so,
+and the next bubble was a red *"Kon de laatste stand van de branch niet
+ophalen."* — a finished edit left uncommitted. Its fetch exists for ONE
+decision, `amendableChatCommit`'s "is HEAD already pushed?", where a stale
+`origin/<headRef>` really would risk rewriting a commit GitHub already has. So
+a failed fetch now sets `staleOrigin`, which **suppresses the amend** and
+stacks an ordinary new commit instead — never destructive — while the landing
+itself stays fast-forward-only as always. Only a checkout with no local
+`origin/<headRef>` at all still refuses, and says so in those words (plus
+where the change is sitting), because without any reference point there is
+nothing to measure "what is new here" against.
+
+#### A dead end says what was actually in the way
+
+`listCheckoutCandidates` returns a `checkoutDiscovery` alongside the
+candidates — how many local checkouts of **this** repo it saw, which were
+rejected as busy (on someone else's not-yet-merged branch), and which failed
+classification outright. `checkoutDiscovery.reason()` turns that into one
+reviewer-facing sentence, stored on the PR's assignment as `LastReason` and
+read back by `chat_workflow.go` (via `checkoutFailureReason`) and by the
+"andere directory kiezen" menu (`listAllCheckoutChoices`). Only a genuinely
+empty discovery — no checkout of this repo anywhere — keeps the original
+"configure or clone one" wording, which is the one case it is true for.
+`LastReason` is cleared as soon as a directory resolves or a choice is raised,
+so it can never outlive the failure it describes.
+
 Every turn — not just a special "edit action" — lets Claude use its **Edit
 tool plus a real Bash shell** on real files, but never against the shared
 `data/worktrees/pr-<n>-head` that `/api/code`, `blockstats.go`, the re-anchor

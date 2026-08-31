@@ -137,11 +137,48 @@ type checkoutCandidate struct {
 	// current branch is already merged into the repo's base branch, i.e. it
 	// is genuinely FREE rather than someone's unfinished, unrelated work.
 	MergedIntoBase bool
+	// SyncUnknown: `origin` could not be reached while classifying (no
+	// network, no credentials, an ssh-agent without the key loaded), so
+	// everything above was decided from the remote-tracking refs already on
+	// disk. Never a reason to drop the candidate — see
+	// classifyCheckoutCandidate — only a reason not to trust "behind origin".
+	SyncUnknown bool
+}
+
+// fetchOriginBranch refreshes dir's own remote-tracking ref for branch.
+// Returns the error for the CALLER to weigh; no caller in this file treats it
+// as fatal on its own any more (see classifyCheckoutCandidate).
+func fetchOriginBranch(ctx context.Context, dir, branch string) error {
+	_, err := runGitIn(ctx, dir, "-c", "submodule.recurse=false", "fetch", "origin", branch)
+	return err
+}
+
+// originRefExists reports whether dir already has a local remote-tracking ref
+// for origin/<branch> — i.e. whether a failed fetch still leaves something
+// (possibly stale, never wrong) to compare against.
+func originRefExists(ctx context.Context, dir, branch string) bool {
+	_, err := runGitIn(ctx, dir, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+branch+"^{commit}")
+	return err == nil
 }
 
 // classifyCheckoutCandidate reads (and, via `git fetch`, refreshes the
 // remote-tracking refs of) dir's current state. Never mutates the working
 // tree or the checked-out branch itself.
+//
+// A FAILING FETCH IS NOT AN ERROR HERE. It used to be, and that made the
+// whole feature depend on the server process having working GitHub
+// credentials at that exact moment: an ssh-agent with no key loaded, a VPN
+// hiccup or plain offline work made every `git fetch` fail, every candidate
+// return an error, the candidate list come back empty, and the write turn
+// tell the reviewer "add a path to chatCheckoutDirs in settings.json" — a
+// configuration problem that did not exist, on a machine where the correct
+// checkout was sitting right there, already on the PR's branch. Reaching
+// origin only ever REFRESHES what we compare against; the answers this
+// function gives (which branch, dirty or not, ahead/behind, merged into base)
+// all come from refs that are already on disk. So an unreachable origin
+// degrades to "decide from what we have" and marks the candidate SyncUnknown,
+// which only suppresses the one action that genuinely needs fresh data (the
+// fast-forward in prepareChatShellWorkDirAt).
 func classifyCheckoutCandidate(ctx context.Context, dir, headRef, baseBranch string) (checkoutCandidate, error) {
 	branchOut, err := runGitIn(ctx, dir, "symbolic-ref", "--short", "-q", "HEAD")
 	if err != nil {
@@ -160,8 +197,16 @@ func classifyCheckoutCandidate(ctx context.Context, dir, headRef, baseBranch str
 	}
 
 	if c.OnTargetBranch {
-		if _, err := runGitIn(ctx, dir, "-c", "submodule.recurse=false", "fetch", "origin", headRef); err != nil {
-			return checkoutCandidate{}, fmt.Errorf("fetch %s in %s: %w", headRef, dir, err)
+		c.SyncUnknown = fetchOriginBranch(ctx, dir, headRef) != nil
+		if !originRefExists(ctx, dir, headRef) {
+			// Nothing local to compare against either (a branch this checkout
+			// has never seen from origin). Committing on top is still safe —
+			// that is all a write turn ever does — so treat it as usable and
+			// simply never fast-forward it.
+			c.SyncUnknown = true
+			c.FastForwardable = true
+			c.BehindOrigin = false
+			return c, nil
 		}
 		aheadOut, err := runGitIn(ctx, dir, "rev-list", "--count", "origin/"+headRef+"..HEAD")
 		if err != nil {
@@ -174,13 +219,21 @@ func classifyCheckoutCandidate(ctx context.Context, dir, headRef, baseBranch str
 		}
 		behind, _ := strconv.Atoi(strings.TrimSpace(string(behindOut)))
 		c.FastForwardable = ahead == 0
-		c.BehindOrigin = behind > 0
+		// "Behind" measured against a ref we could not refresh says nothing
+		// about origin's real state, and acting on it (fastForwardCheckoutToOrigin)
+		// would re-run the very fetch that just failed.
+		c.BehindOrigin = behind > 0 && !c.SyncUnknown
 		return c, nil
 	}
 
 	// A different branch is only ever a candidate at all when it is already
-	// merged into the base branch — see the package doc comment.
-	if _, err := runGitIn(ctx, dir, "-c", "submodule.recurse=false", "fetch", "origin", baseBranch); err == nil {
+	// merged into the base branch — see the package doc comment. Same
+	// degrade-gracefully rule as above: the fetch is a refresh, the answer
+	// comes from the local refs/remotes/origin/<base> either way.
+	if err := fetchOriginBranch(ctx, dir, baseBranch); err != nil {
+		c.SyncUnknown = true
+	}
+	if originRefExists(ctx, dir, baseBranch) {
 		if _, err := runGitIn(ctx, dir, "merge-base", "--is-ancestor", branch, "origin/"+baseBranch); err == nil {
 			c.MergedIntoBase = true
 		}
@@ -311,15 +364,51 @@ func chatCheckoutHomeDir() string {
 	return home
 }
 
+// checkoutDiscovery is what the ladder SAW while looking for a work
+// directory, kept so a dead end can say why instead of always blaming the
+// configuration. Reported bug: the write turn's only wording was "add a path
+// to `chatCheckoutDirs` in settings.json", which sent the reviewer looking
+// for a missing setting on a machine where the right checkout existed and was
+// already on the PR's branch — the real cause was a failing `git fetch` (see
+// classifyCheckoutCandidate). Every field counts DIRECTORIES OF THIS REPO
+// only; a scan full of unrelated checkouts leaves all of them zero.
+type checkoutDiscovery struct {
+	// Matched: local checkouts whose remote is exactly this repo.
+	Matched int
+	// Busy: matched checkouts rejected only because they sit on someone
+	// else's branch that is not merged into the base branch yet.
+	Busy []string
+	// Broken: matched checkouts whose classification failed outright.
+	Broken []string
+	// Err is the first classification error, verbatim, for the log.
+	Err error
+}
+
+// reason is the reviewer-facing half of a dead end: one sentence naming what
+// was actually in the way, or "" when nothing about this repo was found at
+// all (the case the caller's own "configure or clone one" wording is right
+// for).
+func (d checkoutDiscovery) reason() string {
+	switch {
+	case len(d.Broken) > 0:
+		return fmt.Sprintf("Ik vond %d lokale map(pen) van deze repo (%s), maar kon de git-status er niet van lezen — bijvoorbeeld omdat `git fetch` naar origin niet lukt (geen netwerk, of geen ssh-sleutel geladen).",
+			len(d.Broken), strings.Join(d.Broken, ", "))
+	case len(d.Busy) > 0:
+		return fmt.Sprintf("Ik vond %d lokale map(pen) van deze repo (%s), maar die staan op een andere branch die nog niet is gemerged — die pak ik nooit zomaar af.",
+			len(d.Busy), strings.Join(d.Busy, ", "))
+	}
+	return ""
+}
+
 // listCheckoutCandidates runs the full discovery ladder (steps 1-2) and
 // classifies every directory that survives the "wrong repo" and "someone
 // else's unfinished, unmerged branch" filters. excluded names directories the
 // reviewer already explicitly rejected for this PR (see
 // checkoutStageReuseMerged's "no" answer) so they are never offered again.
-func listCheckoutCandidates(ctx context.Context, dataDir, repoSlug, headRef, baseBranch string, excluded map[string]bool) ([]checkoutCandidate, error) {
+func listCheckoutCandidates(ctx context.Context, dataDir, repoSlug, headRef, baseBranch string, excluded map[string]bool) ([]checkoutCandidate, checkoutDiscovery) {
 	seen := map[string]bool{}
 	var out []checkoutCandidate
-	var firstErr error
+	var diag checkoutDiscovery
 
 	add := func(rawDir string) {
 		dir := expandTilde(strings.TrimSpace(rawDir))
@@ -333,14 +422,17 @@ func listCheckoutCandidates(ctx context.Context, dataDir, repoSlug, headRef, bas
 		if !checkoutRemoteMatchesSlug(ctx, dir, repoSlug) {
 			return // wrong repo, or a fork
 		}
+		diag.Matched++
 		cand, err := classifyCheckoutCandidate(ctx, dir, headRef, baseBranch)
 		if err != nil {
-			if firstErr == nil {
-				firstErr = err
+			diag.Broken = append(diag.Broken, dir)
+			if diag.Err == nil {
+				diag.Err = err
 			}
 			return
 		}
 		if !cand.OnTargetBranch && !cand.MergedIntoBase {
+			diag.Busy = append(diag.Busy, dir)
 			return // someone else's unfinished, unrelated work — never offered
 		}
 		out = append(out, cand)
@@ -354,7 +446,7 @@ func listCheckoutCandidates(ctx context.Context, dataDir, repoSlug, headRef, bas
 			add(d)
 		}
 	}
-	return out, firstErr
+	return out, diag
 }
 
 // prioritizeOnTargetBranch gives a candidate that already has the PR's OWN
@@ -587,6 +679,11 @@ type chatCheckoutAssignment struct {
 	StashRef         string
 	StashDir         string
 	StashAutoRestore bool
+	// LastReason is the last dead end's own explanation (checkoutDiscovery.
+	// reason()), so the write turn can tell the reviewer what was actually in
+	// the way instead of always pointing at settings.json. Empty means "no
+	// checkout of this repo found at all", which IS the configuration case.
+	LastReason string
 }
 
 var (
@@ -660,6 +757,19 @@ func checkoutChoiceOpen(dataDir, repo string, pr int) bool {
 	return a != nil && a.Pending != nil
 }
 
+// checkoutFailureReason is the reviewer-facing explanation of this PR's last
+// failed work-directory resolution, or "" when there simply is no local
+// checkout of this repo (or none has been attempted). Same plain in-memory
+// read as checkoutChoiceOpen right above it, for the same reason: it keeps
+// the three callers of prepareChatShellWorkDir on their existing signature.
+func checkoutFailureReason(dataDir, repo string, pr int) string {
+	a := getCheckoutAssignment(dataDir, repo, pr)
+	if a == nil {
+		return ""
+	}
+	return a.LastReason
+}
+
 // ---------------------------------------------------------------------------
 // Git housekeeping the reviewer's decision drives.
 //
@@ -731,8 +841,14 @@ func snapshotDirtyPaths(ctx context.Context, dir string) ([]string, error) {
 	return paths, nil
 }
 
+// checkoutOntoBranch switches dir onto the PR's own branch. Like
+// classifyCheckoutCandidate, an unreachable origin only costs freshness: as
+// long as this checkout already has a refs/remotes/origin/<headRef> on disk,
+// the branch can be created from it and a later landing/push reconciles the
+// rest. Only a failed fetch AND no local ref at all is a genuine dead end,
+// and then the fetch error is the useful one to report.
 func checkoutOntoBranch(ctx context.Context, dir, headRef string) error {
-	if _, err := runGitIn(ctx, dir, "-c", "submodule.recurse=false", "fetch", "origin", headRef); err != nil {
+	if err := fetchOriginBranch(ctx, dir, headRef); err != nil && !originRefExists(ctx, dir, headRef) {
 		return err
 	}
 	_, err := runGitIn(ctx, dir, "-c", "submodule.recurse=false", "checkout", "-B", headRef, "origin/"+headRef)
@@ -740,7 +856,7 @@ func checkoutOntoBranch(ctx context.Context, dir, headRef string) error {
 }
 
 func fastForwardCheckoutToOrigin(ctx context.Context, dir, headRef string) error {
-	if _, err := runGitIn(ctx, dir, "-c", "submodule.recurse=false", "fetch", "origin", headRef); err != nil {
+	if err := fetchOriginBranch(ctx, dir, headRef); err != nil && !originRefExists(ctx, dir, headRef) {
 		return err
 	}
 	_, err := runGitIn(ctx, dir, "-c", "submodule.recurse=false", "merge", "--ff-only", "origin/"+headRef)
@@ -1055,20 +1171,23 @@ func prepareChatShellWorkDirAt(ctx context.Context, tm *TaskManager, dataDir, re
 			return a.Dir, nil, true
 		}
 
-		candidates, lerr := listCheckoutCandidates(ctx, dataDir, slug, headRef, baseBranch, a.Excluded)
-		if lerr != nil && tm != nil && tm.logf != nil {
-			tm.logf("chat_checkout: pr %d: listing candidates: %v", pr, lerr)
+		candidates, diag := listCheckoutCandidates(ctx, dataDir, slug, headRef, baseBranch, a.Excluded)
+		if diag.Err != nil && tm != nil && tm.logf != nil {
+			tm.logf("chat_checkout: pr %d: listing candidates: %v", pr, diag.Err)
 		}
 		ready, dec := selectCheckoutCandidate(candidates)
 		switch {
 		case ready != "":
 			a.Dir = ready
+			a.LastReason = ""
 			continue
 		case dec != nil:
 			a.Pending = dec
+			a.LastReason = ""
 			publishCheckoutChanged(repo, pr)
 			return "", dec, false
 		default:
+			a.LastReason = diag.reason()
 			return "", nil, false
 		}
 	}
@@ -1246,11 +1365,25 @@ func commitCheckoutEditsAt(ctx context.Context, cm *chat.Module, dataDir, repo s
 	// needs an up-to-date origin/<headRefName> to tell "still unpushed" from
 	// "already pushed" — deciding that against a stale ref would risk
 	// rewriting a commit GitHub already has.
+	//
+	// An unreachable origin (no network, no credentials, an ssh-agent without
+	// the key loaded) used to end the landing right here with "Kon de laatste
+	// stand van de branch niet ophalen", throwing away an edit Claude had just
+	// made — the same over-strict treatment of a REFRESH that cost the
+	// reviewer their work directory one step earlier (see
+	// classifyCheckoutCandidate). It degrades instead, but strictly on the
+	// safe side: the ONE decision that genuinely needs fresh data is amending,
+	// so a stale origin simply never amends and stacks an ordinary new commit.
+	// That is never destructive, and the landing itself stays fast-forward-only
+	// either way (advancePendingRefFromCheckout). Only a checkout that has no
+	// local origin/<headRefName> at all is a real dead end: without any
+	// reference point there is nothing to measure "what is new here" against.
 	ingestMu.Lock()
 	_, fetchErr := runGitIn(ctx, dir, "-c", "submodule.recurse=false", "fetch", "origin", headRefName)
 	ingestMu.Unlock()
-	if fetchErr != nil {
-		return newMsg("Kon de laatste stand van de branch niet ophalen.", true)
+	staleOrigin := fetchErr != nil
+	if staleOrigin && !originRefExists(ctx, dir, headRefName) {
+		return newMsg("Kon de laatste stand van `"+headRefName+"` niet ophalen (geen verbinding met origin), en deze werkmap kent die branch ook lokaal nog niet. De wijziging staat wel in `"+dir+"`.", true)
 	}
 
 	statusOut, err := runGitIn(ctx, dir, "status", "--porcelain")
@@ -1267,7 +1400,10 @@ func commitCheckoutEditsAt(ctx context.Context, cm *chat.Module, dataDir, repo s
 		for _, p := range a.KeepSeparatePaths {
 			_, _ = runGitIn(ctx, dir, "restore", "--staged", "--", p)
 		}
-		if prevMsg, ok := amendableChatCommit(ctx, dir, headRefName); ok {
+		// staleOrigin: see the fetch above — "is this commit already pushed?"
+		// cannot be answered against a ref we could not refresh, so don't
+		// rewrite history on a guess.
+		if prevMsg, ok := amendableChatCommit(ctx, dir, headRefName); ok && !staleOrigin {
 			if _, err := runGitIn(ctx, dir, "commit", "--amend", "-m", appendChatEditCommitMessage(prevMsg, conversationID)); err != nil {
 				return newMsg("Kon de wijziging niet aan de vorige, nog niet gepushte commit toevoegen.", true)
 			}
@@ -1638,11 +1774,15 @@ func chatConflictPrompt(conversationID string, conflicted []string) string {
 // options) so the reviewer sees WHY nothing can be offered, rather than the
 // menu silently doing nothing. Pure and dependency-free, like
 // selectCheckoutCandidate, so it's unit-testable without any real git repo.
-func listAllCheckoutChoices(candidates []checkoutCandidate) *chatCheckoutDecision {
+func listAllCheckoutChoices(candidates []checkoutCandidate, diag checkoutDiscovery) *chatCheckoutDecision {
 	if len(candidates) == 0 {
+		body := "Geen lokale directory gevonden voor deze repo. Voeg een pad toe aan chatCheckoutDirs in settings.json of clone de repo lokaal."
+		if r := diag.reason(); r != "" {
+			body = r + " Los dat op, of voeg een pad toe aan chatCheckoutDirs in settings.json."
+		}
 		return &chatCheckoutDecision{
 			Stage: checkoutStageChooseDirectory,
-			Body:  "Geen lokale directory gevonden voor deze repo. Voeg een pad toe aan chatCheckoutDirs in settings.json of clone de repo lokaal.",
+			Body:  body,
 		}
 	}
 	opts := make([]string, 0, len(candidates))
@@ -1682,11 +1822,12 @@ func relistCheckoutCandidates(ctx context.Context, tm *TaskManager, dataDir, rep
 	a.Excluded = map[string]bool{}
 	persistCheckoutAssignment(dataDir, repo, pr, a)
 
-	candidates, lerr := listCheckoutCandidates(ctx, dataDir, slug, meta.HeadRefName, baseBranch, nil)
-	if lerr != nil && tm != nil && tm.logf != nil {
-		tm.logf("chat_checkout: pr %d: relist: listing candidates: %v", pr, lerr)
+	candidates, diag := listCheckoutCandidates(ctx, dataDir, slug, meta.HeadRefName, baseBranch, nil)
+	if diag.Err != nil && tm != nil && tm.logf != nil {
+		tm.logf("chat_checkout: pr %d: relist: listing candidates: %v", pr, diag.Err)
 	}
-	dec := listAllCheckoutChoices(candidates)
+	a.LastReason = diag.reason()
+	dec := listAllCheckoutChoices(candidates, diag)
 	if len(dec.Options) > 0 {
 		a.Pending = dec
 	}

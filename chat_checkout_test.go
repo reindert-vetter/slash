@@ -752,7 +752,7 @@ func TestSelectCheckoutCandidatePrioritizesOnTargetBranch(t *testing.T) {
 func TestListAllCheckoutChoicesDoesNotPrioritize(t *testing.T) {
 	onTarget := checkoutCandidate{Dir: "/on-target", OnTargetBranch: true}
 	mergedBase := checkoutCandidate{Dir: "/merged-base", MergedIntoBase: true}
-	dec := listAllCheckoutChoices([]checkoutCandidate{onTarget, mergedBase})
+	dec := listAllCheckoutChoices([]checkoutCandidate{onTarget, mergedBase}, checkoutDiscovery{})
 	if dec == nil || len(dec.Options) != 2 {
 		t.Fatalf("expected both candidates offered unfiltered, got %+v", dec)
 	}
@@ -1201,16 +1201,16 @@ func TestFastForwardCheckoutToOriginSurvivesBrokenSubmodule(t *testing.T) {
 // listAllCheckoutChoices is pure — no git needed — and, unlike
 // selectCheckoutCandidate, never auto-picks even for a single candidate.
 func TestListAllCheckoutChoicesNeverAutoPicks(t *testing.T) {
-	if dec := listAllCheckoutChoices(nil); dec == nil || len(dec.Options) != 0 || dec.Body == "" {
+	if dec := listAllCheckoutChoices(nil, checkoutDiscovery{}); dec == nil || len(dec.Options) != 0 || dec.Body == "" {
 		t.Fatalf("zero candidates: got %+v, want a decision with an explanatory body and no options", dec)
 	}
 	one := []checkoutCandidate{{Dir: "/a"}}
-	dec := listAllCheckoutChoices(one)
+	dec := listAllCheckoutChoices(one, checkoutDiscovery{})
 	if dec == nil || dec.Stage != checkoutStageChooseDirectory || len(dec.Options) != 1 || dec.Options[0] != "/a" {
 		t.Fatalf("one candidate: got %+v, want it still offered as a choice, not auto-picked", dec)
 	}
 	many := []checkoutCandidate{{Dir: "/a"}, {Dir: "/b"}}
-	dec = listAllCheckoutChoices(many)
+	dec = listAllCheckoutChoices(many, checkoutDiscovery{})
 	if dec == nil || len(dec.Options) != 2 {
 		t.Fatalf("two candidates: got %+v", dec)
 	}
@@ -1494,5 +1494,138 @@ func TestTurnChangedCheckoutGatesAutoLanding(t *testing.T) {
 	// The baseline is consumed: a later turn can never re-read this one's.
 	if turnChangedCheckout(ctx, "", "", pr, conv) {
 		t.Fatal("the baseline must be consumed, so a later turn starts from nothing")
+	}
+}
+
+// breakOrigin points dir's "origin" at a path that does not exist, so every
+// `git fetch origin …` from that checkout fails the way an ssh-agent without
+// a loaded key, an expired token or plain offline work fails on a real
+// machine. The remote-tracking refs the clone already has stay untouched —
+// exactly the state classifyCheckoutCandidate has to keep working from.
+func breakOrigin(t *testing.T, dir string) {
+	t.Helper()
+	gone := filepath.Join(t.TempDir(), "no-such-remote.git")
+	cmd := exec.Command("git", "-C", dir, "remote", "set-url", "origin", gone)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git remote set-url: %v: %s", err, out)
+	}
+}
+
+// An unreachable origin must NOT cost the reviewer their work directory.
+// Reported bug: `git fetch` failed for every candidate (the ssh-agent had no
+// identities loaded), classifyCheckoutCandidate turned that into an error,
+// every candidate was dropped, and the write turn answered "add a path to
+// chatCheckoutDirs in settings.json" — while the correct checkout sat right
+// there, already on the PR's own branch. Committing on top never needs
+// origin; only the fast-forward does, and that is what SyncUnknown suppresses.
+func TestPrepareChatShellWorkDirSurvivesUnreachableOrigin(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	checkout := cloneCheckoutDir(t, bareDir, "feature/x")
+	writeCheckoutSettings(t, dataDir, checkout)
+	breakOrigin(t, checkout)
+
+	dir, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 970901, "", "feature/x")
+	if decision != nil {
+		t.Fatalf("unexpected decision with an unreachable origin: %+v", decision)
+	}
+	if !ok || dir != checkout {
+		t.Fatalf("dir = %q, ok = %v; want %q, true", dir, ok, checkout)
+	}
+	if r := checkoutFailureReason("", "", 970901); r != "" {
+		t.Fatalf("resolved fine but kept a failure reason: %q", r)
+	}
+}
+
+// Same, one step harsher: the checkout has never seen this branch from origin
+// at all, so there is not even a stale remote-tracking ref to compare with.
+// Still usable — a write turn only ever commits on top — and still never
+// fast-forwarded.
+func TestClassifyCandidateWithoutAnyOriginRef(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
+	ctx := context.Background()
+	checkout := cloneCheckoutDir(t, bareDir, "feature/x")
+	if out, err := exec.Command("git", "-C", checkout, "update-ref", "-d", "refs/remotes/origin/feature/x").CombinedOutput(); err != nil {
+		t.Fatalf("drop remote-tracking ref: %v: %s", err, out)
+	}
+	breakOrigin(t, checkout)
+
+	c, err := classifyCheckoutCandidate(ctx, checkout, "feature/x", "master")
+	if err != nil {
+		t.Fatalf("classify: %v", err)
+	}
+	if !c.OnTargetBranch || !c.SyncUnknown || c.BehindOrigin {
+		t.Fatalf("candidate = %+v; want OnTargetBranch and SyncUnknown, never BehindOrigin", c)
+	}
+}
+
+// A dead end must say what was actually in the way. Every checkout of this
+// repo being on someone else's unmerged branch is a different problem from
+// "no checkout configured", and the reviewer-facing text has to tell them
+// apart — see checkoutDiscovery.reason.
+func TestCheckoutDiscoveryReasonNamesTheRealObstacle(t *testing.T) {
+	if r := (checkoutDiscovery{}).reason(); r != "" {
+		t.Fatalf("nothing found should stay silent (the settings.json wording is right there), got %q", r)
+	}
+	busy := checkoutDiscovery{Matched: 1, Busy: []string{"/dev/pap-2"}}.reason()
+	if !strings.Contains(busy, "/dev/pap-2") || !strings.Contains(busy, "gemerged") {
+		t.Fatalf("busy reason = %q", busy)
+	}
+	broken := checkoutDiscovery{Matched: 1, Broken: []string{"/dev/pap-3"}}.reason()
+	if !strings.Contains(broken, "/dev/pap-3") || !strings.Contains(broken, "git fetch") {
+		t.Fatalf("broken reason = %q", broken)
+	}
+}
+
+// The landing must survive the same unreachable origin the selection ladder
+// now survives (TestPrepareChatShellWorkDirSurvivesUnreachableOrigin).
+// Reported bug: Claude made the edit, said so, and the very next bubble was a
+// red "Kon de laatste stand van de branch niet ophalen." — the fetch before
+// the commit was fatal, so a finished edit was left uncommitted with no way
+// forward. It lands on a new commit instead, never an amend (that is the one
+// decision a stale origin cannot answer safely).
+func TestCommitCheckoutEditsLandsWithUnreachableOrigin(t *testing.T) {
+	bareDir, cloneDir := setupChatShadowRepo(t, "feature/x", "v1\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	cm := testChatModule(t)
+
+	dir := cloneCheckoutDir(t, bareDir, "feature/x")
+	assignCheckoutForTest(t, "", 970902, dir)
+	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("edited by claude\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	breakOrigin(t, dir)
+
+	msg := commitCheckoutEditsAt(ctx, cm, dataDir, "", 970902, "conv-offline", "turn-offline", "feature/x")
+	if msg.Kind == chat.KindError {
+		t.Fatalf("landing reported an error with an unreachable origin: %+v", msg)
+	}
+	sha := pendingRefSHA(ctx, "", prPendingRef("", 970902, "feature/x"))
+	if sha == "" {
+		t.Fatal("no pending ref after landing with an unreachable origin")
+	}
+	out, err := exec.Command("git", "-C", cloneDir, "show", sha+":foo.txt").Output()
+	if err != nil || string(out) != "edited by claude\n" {
+		t.Fatalf("pending ref content = %q, err %v; want the edit", out, err)
+	}
+
+	// A SECOND edit in the same state must stack a new commit rather than
+	// amend the first one: "is that commit already pushed?" is exactly what a
+	// stale origin cannot answer.
+	before, _ := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
+	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("edited again\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if msg := commitCheckoutEditsAt(ctx, cm, dataDir, "", 970902, "conv-offline", "turn-offline-2", "feature/x"); msg.Kind == chat.KindError {
+		t.Fatalf("second landing reported an error: %+v", msg)
+	}
+	parent, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD^").Output()
+	if err != nil {
+		t.Fatalf("git rev-parse HEAD^: %v", err)
+	}
+	if strings.TrimSpace(string(parent)) != strings.TrimSpace(string(before)) {
+		t.Fatalf("second commit's parent = %q, want the first commit %q (a stale origin must never amend)", parent, before)
 	}
 }
