@@ -3462,7 +3462,7 @@ func (m *TaskManager) StartIngest(ctx context.Context, repo string, pr int) (*in
 		// the reviewer sees the real cause in the /pr-overview popover instead
 		// of just a run ID they'd have to look up in the workflow history.
 		if resErr := m.engine.Result(runID, nil); resErr != nil {
-			return nil, fmt.Errorf("ingest failed (run %s): %w", runID, resErr)
+			return nil, ingestFailureError(runID, resErr)
 		}
 		return nil, fmt.Errorf("ingest failed (run %s)", runID)
 	}
@@ -3471,6 +3471,34 @@ func (m *TaskManager) StartIngest(ctx context.Context, repo string, pr int) (*in
 		return nil, err
 	}
 	return &res, nil
+}
+
+// ingestFailureError wraps a failed ingest run's real cause (see StartIngest
+// above) with a friendly, actionable line on top for a git-auth failure
+// (the server process's SSH key can't read the repo) — the raw git/tembed
+// text alone ("exit status 128: git@github.com: Permission denied
+// (publickey). fatal: Could not read from remote repository. …") reads as
+// opaque noise to a reviewer, who can't do anything with a run ID or an SSH
+// error either way. The technical detail stays in the message (via %w), it
+// doesn't replace it — TestStartIngestSurfacesRealFailure still asserts the
+// real cause text is present, and a future debugging session still needs it.
+// Every other failure keeps the original "ingest failed (run …): …" text
+// unchanged.
+func ingestFailureError(runID string, cause error) error {
+	if isGitAuthFailure(cause) {
+		return fmt.Errorf("We kunnen geen `git pull` draaien. Doe dit handmatig in de terminal en typ je wachtwoord.\n\ningest failed (run %s): %w", runID, cause)
+	}
+	return fmt.Errorf("ingest failed (run %s): %w", runID, cause)
+}
+
+// isGitAuthFailure recognizes the handful of git stderr phrasings a rejected
+// SSH key produces (publickey rejected, or the same rejection surfacing as
+// "repository not found" because git can't tell "no access" from "doesn't
+// exist" for a private repo over SSH).
+func isGitAuthFailure(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "Permission denied (publickey)") ||
+		strings.Contains(msg, "Could not read from remote repository")
 }
 
 // cleanupWorkflow purges all data of merged-and-old PRs, plus any run of a

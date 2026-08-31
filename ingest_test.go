@@ -85,6 +85,41 @@ func TestStartIngestSurfacesRealFailure(t *testing.T) {
 	}
 }
 
+// TestStartIngestFriendlyMessageForAuthFailure asserts a git-auth failure
+// (a rejected SSH key) gets a friendly, actionable line ON TOP of the raw
+// technical text — not instead of it, see ingestFailureError. Same stub
+// approach as TestStartIngestSurfacesRealFailure above.
+func TestStartIngestFriendlyMessageForAuthFailure(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 999998
+
+	db, err := openDB(filepath.Join(dataDir, "graph.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	engine := tembed.New(tembed.NewMemoryStore())
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, db, dataDir, repoSlug)
+
+	const wantCause = "git@github.com: Permission denied (publickey). fatal: Could not read from remote repository."
+	engine.RegisterWorkflow(WorkflowIngest, func(w *tembed.Workflow, input []byte) ([]byte, error) {
+		return nil, fmt.Errorf("prepare worktrees: ingest: prepare worktrees: cannot fetch commit fa183319: exit status 128: %s", wantCause)
+	})
+
+	_, err = m.StartIngest(context.Background(), "", pr)
+	if err == nil {
+		t.Fatal("expected StartIngest to fail")
+	}
+	const wantFriendly = "We kunnen geen `git pull` draaien. Doe dit handmatig in de terminal en typ je wachtwoord."
+	if !strings.Contains(err.Error(), wantFriendly) {
+		t.Fatalf("StartIngest error is missing the friendly message: %v", err)
+	}
+	if !strings.Contains(err.Error(), wantCause) {
+		t.Fatalf("StartIngest error dropped the real cause: %v", err)
+	}
+}
+
 // TestIngestEnsuresPRStatus asserts that handleIngest's (and the `slash
 // ingest` CLI's) own follow-up sequence — StartIngest, then EnsureRelations,
 // then EnsurePRStatus — actually creates the pr_status tracker, so an ingest
