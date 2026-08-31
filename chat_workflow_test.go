@@ -231,10 +231,10 @@ func TestClaudeChatPlainQuestionNeverTouchesThePendingWorkDirChoice(t *testing.T
 
 	// The open choice is completely untouched — still there, still waiting for
 	// its answer in the overlay.
-	if !checkoutChoiceOpen("", pr) {
+	if !checkoutChoiceOpen("", "", pr) {
 		t.Fatal("the PR's open work-directory choice must survive an unrelated conversation's turn")
 	}
-	a := getCheckoutAssignment("", pr)
+	a := getCheckoutAssignment("", "", pr)
 	if a == nil || a.Pending != owned {
 		t.Fatalf("the open choice must be the exact same, untouched object, got %+v", a)
 	}

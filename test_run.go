@@ -280,7 +280,7 @@ func runTestRun(ctx context.Context, tm *TaskManager, cl claude.Client, dataDir 
 	if runCtx.Err() != nil {
 		return testRunResult{Cancelled: true}
 	}
-	if decision != nil || checkoutChoiceOpen(arg.Repo, arg.PR) {
+	if decision != nil || checkoutChoiceOpen(dataDir, arg.Repo, arg.PR) {
 		failTestRunProgress(arg.Repo, arg.PR, "Er staat nog een keuze open over de werkmap van deze PR. Maak die keuze en probeer het daarna opnieuw.")
 		return testRunResult{}
 	}

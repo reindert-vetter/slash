@@ -177,7 +177,7 @@ func writeCheckoutSettings(t *testing.T, dataDir string, dirs ...string) {
 // number for the same reason the old per-conversation worktree tests did).
 func assignCheckoutForTest(t *testing.T, repo string, pr int, dir string) {
 	t.Helper()
-	getOrCreateCheckoutAssignment(repo, pr).Dir = dir
+	getOrCreateCheckoutAssignment("", repo, pr).Dir = dir
 }
 
 // assignPendingDecisionForTest registers this PR's pending work-directory
@@ -186,7 +186,7 @@ func assignCheckoutForTest(t *testing.T, repo string, pr int, dir string) {
 // turn never even touches it.
 func assignPendingDecisionForTest(t *testing.T, repo string, pr int, decision *chatCheckoutDecision) {
 	t.Helper()
-	getOrCreateCheckoutAssignment(repo, pr).Pending = decision
+	getOrCreateCheckoutAssignment("", repo, pr).Pending = decision
 }
 
 func TestPrepareChatShellWorkDirPicksSoleRegisteredCandidate(t *testing.T) {
@@ -239,6 +239,108 @@ func TestPrepareChatShellWorkDirFastForwardsWhenCleanAndBehind(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(filepath.Join(dir, "foo.txt")); string(got) != "v2\n" {
 		t.Fatalf("checkout content after fast-forward = %q, want v2\\n", got)
+	}
+}
+
+// resetInMemoryCheckoutAssignments simulates a server restart: the process-
+// global chatCheckoutByPR map (chat_checkout.go) is gone, but nothing on disk
+// (the git checkout, or the durable chat_checkout.db mirror) is touched.
+func resetInMemoryCheckoutAssignments(t *testing.T) {
+	t.Helper()
+	chatCheckoutMu.Lock()
+	chatCheckoutByPR = map[prKey]*chatCheckoutAssignment{}
+	chatCheckoutMu.Unlock()
+}
+
+// A restart must not lose which directory a PR was already using — the
+// reported bug: GET /api/chat/checkout came back with no dir/dirName for a
+// PR whose chat had long since shown landed edits, because the in-memory
+// chatCheckoutByPR map (the only thing buildCheckoutView read) is empty right
+// after a restart. This drives the exact same fix at the level the bug was
+// actually reported: prepareChatShellWorkDirAt itself must resolve to the
+// SAME directory a second time, from the durable mirror alone, without
+// re-running the discovery ladder (proven by removing the settings.json entry
+// discovery depends on before the "restart").
+func TestPrepareChatShellWorkDirSurvivesARestart(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "hello\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	checkout := cloneCheckoutDir(t, bareDir, "feature/x")
+	writeCheckoutSettings(t, dataDir, checkout)
+
+	dir, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1050, "", "feature/x")
+	if decision != nil {
+		t.Fatalf("unexpected decision: %+v", decision)
+	}
+	if !ok || dir != checkout {
+		t.Fatalf("first resolve: dir=%q ok=%v, want %q true", dir, ok, checkout)
+	}
+
+	// Simulate the restart, and remove the ONLY way the ladder could otherwise
+	// rediscover this checkout (the settings.json registration) — if the
+	// persisted dir is not picked up, this PR now has no candidate at all.
+	resetInMemoryCheckoutAssignments(t)
+	writeCheckoutSettings(t, dataDir /* no dirs */)
+
+	dir2, decision2, ok2 := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1050, "", "feature/x")
+	if decision2 != nil {
+		t.Fatalf("unexpected decision after restart: %+v", decision2)
+	}
+	if !ok2 {
+		t.Fatal("second resolve after restart: expected ok, the persisted dir should have been reused")
+	}
+	if dir2 != checkout {
+		t.Fatalf("dir after restart = %q, want %q", dir2, checkout)
+	}
+}
+
+// The read-only side of the same fix: buildCheckoutView (GET
+// /api/chat/checkout's read model) must show the persisted dir/branch right
+// after a restart too, even before any write turn re-touches this PR.
+func TestBuildCheckoutViewSurvivesARestart(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "hello\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	checkout := cloneCheckoutDir(t, bareDir, "feature/x")
+	writeCheckoutSettings(t, dataDir, checkout)
+
+	if _, _, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1051, "", "feature/x"); !ok {
+		t.Fatal("setup: expected a ready checkout")
+	}
+
+	resetInMemoryCheckoutAssignments(t)
+
+	view := buildCheckoutView(dataDir, "", 1051)
+	if view.Dir != checkout {
+		t.Fatalf("Dir after restart = %q, want %q", view.Dir, checkout)
+	}
+	if view.DirName != filepath.Base(checkout) {
+		t.Fatalf("DirName after restart = %q, want %q", view.DirName, filepath.Base(checkout))
+	}
+	if view.Branch != "feature/x" {
+		t.Fatalf("Branch after restart = %q, want %q", view.Branch, "feature/x")
+	}
+}
+
+// A restart must also not resurrect a PR the reviewer explicitly turned off —
+// checkoutSetOff's clear has to reach the durable mirror too, not just the
+// in-memory assignment.
+func TestCheckoutSetOffClearPersistsAcrossARestart(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "hello\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	checkout := cloneCheckoutDir(t, bareDir, "feature/x")
+	writeCheckoutSettings(t, dataDir, checkout)
+
+	if _, _, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1052, "", "feature/x"); !ok {
+		t.Fatal("setup: expected a ready checkout")
+	}
+	checkoutSetOff(dataDir, "", 1052)
+	resetInMemoryCheckoutAssignments(t)
+
+	view := buildCheckoutView(dataDir, "", 1052)
+	if view.Dir != "" {
+		t.Fatalf("Dir after restart following checkoutSetOff = %q, want empty", view.Dir)
 	}
 }
 
@@ -359,7 +461,7 @@ func TestPrepareChatShellWorkDirKeepsAnAcceptedDirtyTreeResolved(t *testing.T) {
 	if !ok || dir != checkout || decision != nil {
 		t.Fatalf("expected the accepted dirty tree to stay resolved, dir=%q decision=%+v ok=%v", dir, decision, ok)
 	}
-	if checkoutChoiceOpen("", 970803) {
+	if checkoutChoiceOpen("", "", 970803) {
 		t.Fatal("expected no open work-directory choice after 'meenemen'")
 	}
 	if got, _ := os.ReadFile(filepath.Join(checkout, "foo.txt")); string(got) != "reviewer's own WIP\n" {
@@ -398,7 +500,7 @@ func TestPrepareChatShellWorkDirKeepsKeepSeparateResolved(t *testing.T) {
 	}
 	// Simulate a landing, which clears KeepSeparatePaths (commitCheckoutEditsAt)
 	// — the acceptance itself must survive that.
-	getOrCreateCheckoutAssignment("", 970804).KeepSeparatePaths = nil
+	getOrCreateCheckoutAssignment("", "", 970804).KeepSeparatePaths = nil
 
 	dir, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 970804, "", "feature/x")
 	if !ok || dir != checkout || decision != nil {
@@ -434,10 +536,10 @@ func TestPrepareChatShellWorkDirChoiceIsNeverAnsweredByACallerThatOnlyNeedsADir(
 	if ok || decision == nil || decision.Stage != checkoutStageDirtyTree {
 		t.Fatalf("expected a dirtyTree choice to be raised, got ok=%v decision=%+v", ok, decision)
 	}
-	if !checkoutChoiceOpen("", 970801) {
+	if !checkoutChoiceOpen("", "", 970801) {
 		t.Fatal("the raised choice must be reported as open")
 	}
-	raised := getCheckoutAssignment("", 970801).Pending
+	raised := getCheckoutAssignment("", "", 970801).Pending
 
 	// Any further "I just need a directory" call reports the SAME open choice
 	// and leaves it byte-for-byte alone — no re-ask, no "herkende ik niet",
@@ -452,7 +554,7 @@ func TestPrepareChatShellWorkDirChoiceIsNeverAnsweredByACallerThatOnlyNeedsADir(
 	if strings.Contains(again.Body, "herkende ik niet") {
 		t.Fatalf("a caller that needs a directory must never be told its answer was unrecognized, got %q", again.Body)
 	}
-	if getCheckoutAssignment("", 970801).Pending != raised {
+	if getCheckoutAssignment("", "", 970801).Pending != raised {
 		t.Fatal("the open choice must survive untouched")
 	}
 
@@ -464,7 +566,7 @@ func TestPrepareChatShellWorkDirChoiceIsNeverAnsweredByACallerThatOnlyNeedsADir(
 	if !ok2 || dir != checkout {
 		t.Fatalf("expected the checkout to resolve after answering, dir=%q ok=%v", dir, ok2)
 	}
-	if checkoutChoiceOpen("", 970801) {
+	if checkoutChoiceOpen("", "", 970801) {
 		t.Fatal("the choice must be closed after it was answered")
 	}
 }
@@ -704,14 +806,14 @@ func TestCheckoutLocalPendingStateDetectsDirtyAndAhead(t *testing.T) {
 	dir := cloneCheckoutDir(t, bareDir, "feature/x")
 	assignCheckoutForTest(t, "", 1007, dir)
 
-	if exists, dirty, ahead, _ := checkoutLocalPendingState(ctx, "", 1007); !exists || dirty || ahead != 0 {
+	if exists, dirty, ahead, _ := checkoutLocalPendingState(ctx, "", "", 1007); !exists || dirty || ahead != 0 {
 		t.Fatalf("clean checkout reported exists=%v dirty=%v ahead=%d, want true/false/0", exists, dirty, ahead)
 	}
 
 	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("claude was here\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, dirty, _, _ := checkoutLocalPendingState(ctx, "", 1007); !dirty {
+	if _, dirty, _, _ := checkoutLocalPendingState(ctx, "", "", 1007); !dirty {
 		t.Fatal("expected dirty=true for an uncommitted edit")
 	}
 
@@ -724,7 +826,7 @@ func TestCheckoutLocalPendingStateDetectsDirtyAndAhead(t *testing.T) {
 	}
 	run("add", "-A")
 	run("commit", "-m", "local only")
-	if _, dirty, ahead, _ := checkoutLocalPendingState(ctx, "", 1007); dirty || ahead != 1 {
+	if _, dirty, ahead, _ := checkoutLocalPendingState(ctx, "", "", 1007); dirty || ahead != 1 {
 		t.Fatalf("committed-but-unlanded checkout reported dirty=%v ahead=%d, want false/1", dirty, ahead)
 	}
 }
@@ -1124,7 +1226,7 @@ func TestRelistCheckoutCandidatesClearsExclusions(t *testing.T) {
 	checkout := cloneCheckoutDir(t, bareDir, "feature/x")
 	writeCheckoutSettings(t, dataDir, checkout)
 
-	a := getOrCreateCheckoutAssignment("", 1011)
+	a := getOrCreateCheckoutAssignment("", "", 1011)
 	a.Excluded[checkout] = true
 
 	dec := relistCheckoutCandidates(ctx, nil, dataDir, "", 1011)
@@ -1156,7 +1258,7 @@ func TestRelistCheckoutCandidatesNoCandidatesLeavesNothingPending(t *testing.T) 
 	if dec == nil || len(dec.Options) != 0 {
 		t.Fatalf("expected an explanatory, option-less decision, got %+v", dec)
 	}
-	a := getOrCreateCheckoutAssignment("", 1012)
+	a := getOrCreateCheckoutAssignment("", "", 1012)
 	if a.Pending != nil {
 		t.Fatalf("expected nothing persisted as pending, got %+v", a.Pending)
 	}
@@ -1165,14 +1267,14 @@ func TestRelistCheckoutCandidatesNoCandidatesLeavesNothingPending(t *testing.T) 
 func TestCheckoutSetOffClearsAssignmentButKeepsStashBookkeeping(t *testing.T) {
 	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
 	dir := cloneCheckoutDir(t, bareDir, "feature/x")
-	a := getOrCreateCheckoutAssignment("", 1013)
+	a := getOrCreateCheckoutAssignment("", "", 1013)
 	a.Dir = dir
 	a.Branch = "feature/x"
 	a.Excluded["/somewhere"] = true
 	a.StashRef = "slash-chat-x"
 	a.StashDir = dir
 
-	checkoutSetOff("", 1013)
+	checkoutSetOff("", "", 1013)
 
 	if a.Dir != "" || a.Branch != "" || a.Pending != nil || len(a.Excluded) != 0 {
 		t.Fatalf("expected the assignment cleared, got dir=%q branch=%q pending=%+v excluded=%v", a.Dir, a.Branch, a.Pending, a.Excluded)
@@ -1192,11 +1294,11 @@ func TestCheckoutRestoreStashNowPopsOnDemand(t *testing.T) {
 	if err := stashCheckoutDirty(ctx, dir, "slash-chat-test-1014"); err != nil {
 		t.Fatalf("stash: %v", err)
 	}
-	a := getOrCreateCheckoutAssignment("", 1014)
+	a := getOrCreateCheckoutAssignment("", "", 1014)
 	a.StashRef = "slash-chat-test-1014"
 	a.StashDir = dir
 
-	if err := checkoutRestoreStashNow(ctx, "", 1014); err != nil {
+	if err := checkoutRestoreStashNow(ctx, "", "", 1014); err != nil {
 		t.Fatalf("restore stash now: %v", err)
 	}
 	if got, _ := os.ReadFile(filepath.Join(dir, "foo.txt")); string(got) != "reviewer's own WIP\n" {
@@ -1207,13 +1309,13 @@ func TestCheckoutRestoreStashNowPopsOnDemand(t *testing.T) {
 	}
 
 	// A no-op, not an error, when nothing is pending.
-	if err := checkoutRestoreStashNow(ctx, "", 1014); err != nil {
+	if err := checkoutRestoreStashNow(ctx, "", "", 1014); err != nil {
 		t.Fatalf("restore with nothing pending should be a no-op, got: %v", err)
 	}
 }
 
 func TestBuildCheckoutViewShapes(t *testing.T) {
-	empty := buildCheckoutView("", 1015)
+	empty := buildCheckoutView("", "", 1015)
 	if empty.Dir != "" || empty.Decision != nil || empty.StashPending {
 		t.Fatalf("expected an empty view for a PR with no checkout activity, got %+v", empty)
 	}
@@ -1221,11 +1323,11 @@ func TestBuildCheckoutViewShapes(t *testing.T) {
 		t.Fatal("expected RunID to always be present (a deterministic string), even with nothing assigned")
 	}
 
-	a := getOrCreateCheckoutAssignment("", 1016)
+	a := getOrCreateCheckoutAssignment("", "", 1016)
 	a.Dir = "/home/reindert/dev/plug-and-pay-2"
 	a.Branch = "feature/x"
 	a.StashRef = "slash-chat-y"
-	view := buildCheckoutView("", 1016)
+	view := buildCheckoutView("", "", 1016)
 	if view.Dir != a.Dir || view.DirName != "plug-and-pay-2" || view.Branch != "feature/x" || !view.StashPending {
 		t.Fatalf("unexpected view: %+v", view)
 	}
@@ -1237,19 +1339,19 @@ func TestBuildCheckoutViewShapes(t *testing.T) {
 func TestBuildCheckoutViewReportsPendingFiles(t *testing.T) {
 	defer clearChatPendingFiles("", 1017)
 
-	empty := buildCheckoutView("", 1017)
+	empty := buildCheckoutView("", "", 1017)
 	if len(empty.PendingFiles) != 0 {
 		t.Fatalf("expected no pending files yet, got %v", empty.PendingFiles)
 	}
 
 	markChatFilesPending("", 1017, []string{"src/Foo.php", "src/Bar.php"})
-	view := buildCheckoutView("", 1017)
+	view := buildCheckoutView("", "", 1017)
 	if len(view.PendingFiles) != 2 || view.PendingFiles[0] != "src/Bar.php" || view.PendingFiles[1] != "src/Foo.php" {
 		t.Fatalf("PendingFiles = %v, want the marked files sorted", view.PendingFiles)
 	}
 
 	clearChatPendingFiles("", 1017)
-	view = buildCheckoutView("", 1017)
+	view = buildCheckoutView("", "", 1017)
 	if len(view.PendingFiles) != 0 {
 		t.Fatalf("expected PendingFiles cleared, got %v", view.PendingFiles)
 	}
@@ -1263,19 +1365,19 @@ func TestBuildCheckoutViewReportsPendingFiles(t *testing.T) {
 func TestBuildCheckoutViewReportsRefreshingFiles(t *testing.T) {
 	defer clearChatRefreshPendingFiles("", 1018)
 
-	empty := buildCheckoutView("", 1018)
+	empty := buildCheckoutView("", "", 1018)
 	if len(empty.RefreshingFiles) != 0 {
 		t.Fatalf("expected no refreshing files yet, got %v", empty.RefreshingFiles)
 	}
 
 	markChatRefreshPendingFiles("", 1018, []string{"src/Foo.php", "src/Bar.php"})
-	view := buildCheckoutView("", 1018)
+	view := buildCheckoutView("", "", 1018)
 	if len(view.RefreshingFiles) != 2 || view.RefreshingFiles[0] != "src/Bar.php" || view.RefreshingFiles[1] != "src/Foo.php" {
 		t.Fatalf("RefreshingFiles = %v, want the marked files sorted", view.RefreshingFiles)
 	}
 
 	clearChatRefreshPendingFiles("", 1018)
-	view = buildCheckoutView("", 1018)
+	view = buildCheckoutView("", "", 1018)
 	if len(view.RefreshingFiles) != 0 {
 		t.Fatalf("expected RefreshingFiles cleared, got %v", view.RefreshingFiles)
 	}
@@ -1300,9 +1402,9 @@ func TestChatCheckoutNeedsLandingStopsAfterALandedCommit(t *testing.T) {
 
 	checkout := cloneCheckoutDir(t, bareDir, headRefName)
 	assignCheckoutForTest(t, "", pr, checkout)
-	getOrCreateCheckoutAssignment("", pr).Branch = headRefName
+	getOrCreateCheckoutAssignment("", "", pr).Branch = headRefName
 
-	if chatCheckoutNeedsLanding(ctx, "", pr) {
+	if chatCheckoutNeedsLanding(ctx, "", "", pr) {
 		t.Fatal("a freshly cloned, unedited checkout should not need landing")
 	}
 
@@ -1319,7 +1421,7 @@ func TestChatCheckoutNeedsLandingStopsAfterALandedCommit(t *testing.T) {
 	run("add", "-A")
 	run("commit", "-m", "Claude: reviewer-requested edit")
 
-	if !chatCheckoutNeedsLanding(ctx, "", pr) {
+	if !chatCheckoutNeedsLanding(ctx, "", "", pr) {
 		t.Fatal("a real, never-landed local commit should need landing")
 	}
 
@@ -1329,7 +1431,7 @@ func TestChatCheckoutNeedsLandingStopsAfterALandedCommit(t *testing.T) {
 		t.Fatalf("advancePendingRefFromCheckout: %v", err)
 	}
 
-	if chatCheckoutNeedsLanding(ctx, "", pr) {
+	if chatCheckoutNeedsLanding(ctx, "", "", pr) {
 		t.Fatal("a commit already mirrored onto the PR's pending ref must not be reported as needing landing again — this is the reported bug")
 	}
 }
@@ -1352,16 +1454,16 @@ func TestTurnChangedCheckoutGatesAutoLanding(t *testing.T) {
 
 	checkout := cloneCheckoutDir(t, bareDir, headRefName)
 	assignCheckoutForTest(t, "", pr, checkout)
-	getOrCreateCheckoutAssignment("", pr).Branch = headRefName
+	getOrCreateCheckoutAssignment("", "", pr).Branch = headRefName
 
 	// A read-only turn records no baseline at all.
-	if turnChangedCheckout(ctx, "", pr, conv) {
+	if turnChangedCheckout(ctx, "", "", pr, conv) {
 		t.Fatal("a turn that never got write access must never trigger a landing")
 	}
 
 	// A write turn that ends up changing nothing must not either.
 	recordTurnCheckoutBaseline(ctx, conv, checkout)
-	if turnChangedCheckout(ctx, "", pr, conv) {
+	if turnChangedCheckout(ctx, "", "", pr, conv) {
 		t.Fatal("a write turn that changed nothing must not trigger a landing")
 	}
 
@@ -1370,7 +1472,7 @@ func TestTurnChangedCheckoutGatesAutoLanding(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(checkout, "foo.txt"), []byte("edited by claude\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if !turnChangedCheckout(ctx, "", pr, conv) {
+	if !turnChangedCheckout(ctx, "", "", pr, conv) {
 		t.Fatal("a write turn that edited the checkout must trigger a landing")
 	}
 
@@ -1385,12 +1487,12 @@ func TestTurnChangedCheckoutGatesAutoLanding(t *testing.T) {
 	}
 	run("add", "-A")
 	run("commit", "-m", chatEditCommitSubject)
-	if !turnChangedCheckout(ctx, "", pr, conv) {
+	if !turnChangedCheckout(ctx, "", "", pr, conv) {
 		t.Fatal("a write turn that committed must trigger a landing")
 	}
 
 	// The baseline is consumed: a later turn can never re-read this one's.
-	if turnChangedCheckout(ctx, "", pr, conv) {
+	if turnChangedCheckout(ctx, "", "", pr, conv) {
 		t.Fatal("the baseline must be consumed, so a later turn starts from nothing")
 	}
 }

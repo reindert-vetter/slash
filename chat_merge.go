@@ -270,7 +270,7 @@ func processChatMerge(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 func processChatMergeAt(ctx context.Context, tm *TaskManager, cm *chat.Module, cl claude.Client, dataDir string, arg chatMergeInput, headRefName string) chat.Message {
 	msg := commitCheckoutEditsAt(ctx, cm, dataDir, arg.Repo, arg.PR, arg.ConversationID, arg.TurnID, headRefName)
 	if msg.Kind == chat.KindError && msg.Body == checkoutBranchMovedOnMsg {
-		msg = resolveCheckoutMerge(ctx, cm, cl, arg.Repo, arg.PR, arg.ConversationID, arg.TurnID, headRefName)
+		msg = resolveCheckoutMerge(ctx, cm, cl, dataDir, arg.Repo, arg.PR, arg.ConversationID, arg.TurnID, headRefName)
 	}
 	if msg.Kind != chat.KindError {
 		// Those exact files are now landed but the tree hasn't re-ingested them
@@ -409,7 +409,7 @@ func chatMergeConflictConsultMsg(headRefName string, conflicted []string) string
 // SAME checkout and the same write-turn-at-a-time gate (chat_write_gate.go),
 // so two of the reviewer's own conversations never diverge from each other —
 // see chatMergeConflictConsultMsg's own doc comment.
-func resolveCheckoutMerge(ctx context.Context, cm *chat.Module, cl claude.Client, repo string, pr int, conversationID, turnID, headRefName string) chat.Message {
+func resolveCheckoutMerge(ctx context.Context, cm *chat.Module, cl claude.Client, dataDir, repo string, pr int, conversationID, turnID, headRefName string) chat.Message {
 	newMsg := func(body string, isErr bool) chat.Message {
 		kind := ""
 		if isErr {
@@ -423,7 +423,7 @@ func resolveCheckoutMerge(ctx context.Context, cm *chat.Module, cl claude.Client
 		return msg
 	}
 
-	a := getCheckoutAssignment(repo, pr)
+	a := getCheckoutAssignment(dataDir, repo, pr)
 	if a == nil || a.Dir == "" {
 		return newMsg(checkoutBranchMovedOnMsg, true)
 	}

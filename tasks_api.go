@@ -2479,7 +2479,7 @@ func (s *server) handleChatShadowStatus(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "pr required", http.StatusBadRequest)
 		return
 	}
-	exists, dirty, ahead, dir := checkoutLocalPendingState(r.Context(), queryRepo(r), pr)
+	exists, dirty, ahead, dir := checkoutLocalPendingState(r.Context(), s.tasks.manager.dataDir, queryRepo(r), pr)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "exists": exists, "dirty": dirty, "ahead": ahead, "dir": dir})
 }
 
@@ -2529,7 +2529,7 @@ func (s *server) handleChatCheckout(w http.ResponseWriter, r *http.Request) {
 	wanted := parseStatusKeyList(r.URL.Query().Get("prs"))
 	out := map[string]checkoutView{}
 	for _, key := range wanted {
-		out[statusKey(key.Repo, key.PR)] = buildCheckoutView(key.Repo, key.PR)
+		out[statusKey(key.Repo, key.PR)] = buildCheckoutView(s.tasks.manager.dataDir, key.Repo, key.PR)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "checkout": out})
 }

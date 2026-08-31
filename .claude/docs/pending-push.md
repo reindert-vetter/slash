@@ -49,6 +49,51 @@ Mechanics of the chat turn itself (the shared checkout, the `chat_merge`
 queue, conflict resolution) live in `.claude/docs/workflows-comments.md`; this
 file is about the landing target, the visibility, and the push.
 
+## Durable checkout dir/branch: which directory survives a restart
+
+`chatCheckoutAssignment` (`chat_checkout.go`) — which local directory a PR's
+checkout resolved to — used to live ONLY in the package-level, in-memory
+`chatCheckoutByPR` map. A server restart cleared that map, and
+`buildCheckoutView` (the read behind `GET /api/chat/checkout`, i.e. the
+checkout chip/PR-overview badge) read nothing else — so right after a
+restart the chip showed "Geen werkmap" for a PR whose chat already displayed
+landed edits, even though the git checkout (with its landed, unpushed commit)
+was still sitting on disk untouched. Reported bug, confirmed live: `GET
+/api/chat/checkout?prs=<pr>` came back with no `dir`/`dirName` for a PR
+that had long since committed a chat edit.
+
+Fix: `Dir`/`Branch` (only those two fields — not `Pending`, `Excluded`, or the
+dirty/stash bookkeeping, which all stay in-memory-only, gone after a restart
+same as before) are now ALSO mirrored into a small SQLite table,
+`chat_checkout_store.go`'s `chat_checkout.db` (`repo, pr` primary key). This is
+a **direct, synchronous write outside any workflow Activity** — the same
+operational carve-out as `pendingPushStatus`/`comment_batch_progress` (see
+`.claude/rules/workflows-write-boundary.md`), just backed by disk instead of
+only memory: the durable TRUTH is still the git checkout itself (which
+directory is on which branch, in what state) — `classifyCheckoutCandidate`
+re-verifies that on every real use before a write turn commits anything. This
+table is only a CACHE HINT for which directory to look at first; losing or
+corrupting a row costs nothing but re-running the selection ladder once, which
+is exactly why this is not a workflow write.
+
+`getOrCreateCheckoutAssignment`/`getCheckoutAssignment` both seed a freshly
+created in-memory entry from `loadPersistedCheckout` on first touch within a
+process's lifetime — so a plain READ (`buildCheckoutView`) reflects a PR's
+last known checkout immediately after a restart, without waiting for a write
+turn to re-touch it first. `persistCheckoutAssignment` mirrors the final
+`Dir`/`Branch` back out: once via a single `defer` in
+`prepareChatShellWorkDirAt` (so every one of its several return points
+persists the loop's FINAL state, not an intermediate one), and directly in
+`relistCheckoutCandidates`/`checkoutSetOff` (which don't loop). `dir == ""`
+deletes the row rather than storing an empty string, so `checkoutSetOff`'s
+"uit" durably un-assigns a PR too, not just in-memory. Tests:
+`TestPrepareChatShellWorkDirSurvivesARestart`,
+`TestBuildCheckoutViewSurvivesARestart`,
+`TestCheckoutSetOffClearPersistsAcrossARestart` (`chat_checkout_test.go`) —
+each resolves a real checkout, wipes the in-memory map directly
+(`resetInMemoryCheckoutAssignments`, simulating a restart without touching
+disk), and asserts the durable mirror alone is enough.
+
 ## The landing target: `refs/slash/pending/pr-<n>/<headRef>`
 
 `prPendingRef` (`chat_checkout.go`). One ref per PR, holding every landed chat

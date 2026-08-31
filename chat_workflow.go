@@ -1044,7 +1044,7 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 			// true sent the reviewer looking for a configuration problem that
 			// wasn't there.
 			body := "Voor dit verzoek heb ik schrijftoegang tot een lokale werkmap nodig, maar die is er niet. Voeg een pad toe aan `chatCheckoutDirs` in settings.json of clone de repo lokaal, en vraag het opnieuw."
-			if checkoutChoiceOpen(arg.Repo, arg.PR) {
+			if checkoutChoiceOpen(dataDir, arg.Repo, arg.PR) {
 				body = "Ik kan nu geen code aanpassen: er staat nog een keuze open over de werkmap van deze PR. Maak die keuze en vraag het daarna opnieuw."
 			}
 			msg := chat.Message{

@@ -522,11 +522,20 @@ func chatCheckoutReuseDecision(c checkoutCandidate, headRef string) *chatCheckou
 
 // ---------------------------------------------------------------------------
 // The PR-scoped assignment: which checkout this PR is using, and what has
-// already been decided about it. In-memory only, gone after a restart — the
-// durable truth is git itself (which directory is on which branch, in what
-// state), so losing this only costs re-running the ladder once. Same
-// operational carve-out as pendingPushStatus (see
-// .claude/rules/workflows-write-boundary.md).
+// already been decided about it. The durable truth is always git itself
+// (which directory is on which branch, in what state), so losing any of this
+// only costs re-running the ladder once — the same operational carve-out as
+// pendingPushStatus (see .claude/rules/workflows-write-boundary.md).
+//
+// Dir/Branch specifically are ALSO mirrored into a tiny durable SQLite table
+// (chat_checkout_store.go) — everything else on this struct (Pending,
+// Excluded, the dirty/stash bookkeeping) stays in-memory only, gone after a
+// restart. Without that mirror, a restart made buildCheckoutView (the read
+// behind the checkout chip) forget which directory a PR was using, even
+// though the git checkout — commit and all — was still sitting right there
+// on disk: reported bug, "Geen werkmap" next to a chat that already showed
+// landed edits. See "Durable checkout dir/branch" in
+// .claude/docs/pending-push.md.
 // ---------------------------------------------------------------------------
 
 type chatCheckoutAssignment struct {
@@ -585,24 +594,58 @@ var (
 	chatCheckoutByPR = map[prKey]*chatCheckoutAssignment{}
 )
 
-func getOrCreateCheckoutAssignment(repo string, pr int) *chatCheckoutAssignment {
+// getOrCreateCheckoutAssignment returns this PR's in-memory assignment,
+// creating it on first touch. A fresh one is seeded from the durable
+// dir/branch persisted in chat_checkout_store.go (a process restart clears
+// chatCheckoutByPR, not that table) — the selection ladder's own
+// re-classification (prepareChatShellWorkDirAt's `a.Dir != ""` branch) then
+// verifies it is still usable before anything relies on it, exactly as it
+// already does for a dir that survived within the same process.
+func getOrCreateCheckoutAssignment(dataDir, repo string, pr int) *chatCheckoutAssignment {
 	key := prKey{Repo: repo, PR: pr}
 	chatCheckoutMu.Lock()
 	defer chatCheckoutMu.Unlock()
 	a := chatCheckoutByPR[key]
 	if a == nil {
 		a = &chatCheckoutAssignment{Excluded: map[string]bool{}}
+		if dir, branch, ok := loadPersistedCheckout(dataDir, repo, pr); ok {
+			a.Dir, a.Branch = dir, branch
+		}
 		chatCheckoutByPR[key] = a
 	}
 	return a
 }
 
 // getCheckoutAssignment is the read-only lookup — nil when this PR has never
-// resolved a checkout at all (never creates one, unlike the function above).
-func getCheckoutAssignment(repo string, pr int) *chatCheckoutAssignment {
+// resolved a checkout at all, neither in this process nor durably (never
+// creates a genuinely empty entry, unlike the function above). Same durable
+// seed-on-first-touch as getOrCreateCheckoutAssignment, so a read (e.g.
+// buildCheckoutView, behind the checkout chip) reflects a PR's last known
+// checkout immediately after a restart, without waiting for a write turn to
+// re-touch it first.
+func getCheckoutAssignment(dataDir, repo string, pr int) *chatCheckoutAssignment {
+	key := prKey{Repo: repo, PR: pr}
 	chatCheckoutMu.Lock()
 	defer chatCheckoutMu.Unlock()
-	return chatCheckoutByPR[prKey{Repo: repo, PR: pr}]
+	a := chatCheckoutByPR[key]
+	if a != nil {
+		return a
+	}
+	if dir, branch, ok := loadPersistedCheckout(dataDir, repo, pr); ok {
+		a = &chatCheckoutAssignment{Excluded: map[string]bool{}, Dir: dir, Branch: branch}
+		chatCheckoutByPR[key] = a
+	}
+	return a
+}
+
+// persistCheckoutAssignment durably mirrors a's current Dir/Branch for
+// repo/pr (see chat_checkout_store.go for why this is a direct write rather
+// than a workflow one). Called after every point that can change a.Dir:
+// deferred once in prepareChatShellWorkDirAt (so every return path, however
+// many loop iterations it took, persists the FINAL state) and directly in
+// relistCheckoutCandidates/checkoutSetOff, which don't loop.
+func persistCheckoutAssignment(dataDir, repo string, pr int, a *chatCheckoutAssignment) {
+	savePersistedCheckout(dataDir, repo, pr, a.Dir, a.Branch)
 }
 
 // checkoutChoiceOpen reports whether this PR has an unresolved work-directory
@@ -612,8 +655,8 @@ func getCheckoutAssignment(repo string, pr int) *chatCheckoutAssignment {
 // only the first is something the reviewer can act on. Deliberately a plain
 // read of the same in-memory assignment (no signature change on the three
 // callers), mirroring hasPendingCheckoutDecision right above it.
-func checkoutChoiceOpen(repo string, pr int) bool {
-	a := getCheckoutAssignment(repo, pr)
+func checkoutChoiceOpen(dataDir, repo string, pr int) bool {
+	a := getCheckoutAssignment(dataDir, repo, pr)
 	return a != nil && a.Pending != nil
 }
 
@@ -904,7 +947,11 @@ func prepareChatShellWorkDirAt(ctx context.Context, tm *TaskManager, dataDir, re
 	baseBranch := baseBranchFor(repo)
 	slug := repoSlugFor(repo)
 
-	a := getOrCreateCheckoutAssignment(repo, pr)
+	a := getOrCreateCheckoutAssignment(dataDir, repo, pr)
+	// Persist whichever a.Dir/a.Branch the loop below ends up leaving behind,
+	// regardless of which of its several return points fires — see
+	// persistCheckoutAssignment's own doc comment.
+	defer persistCheckoutAssignment(dataDir, repo, pr, a)
 
 	for attempt := 0; attempt < 4; attempt++ {
 		if a.Pending != nil {
@@ -1189,7 +1236,7 @@ func commitCheckoutEditsAt(ctx context.Context, cm *chat.Module, dataDir, repo s
 		return msg
 	}
 
-	a := getCheckoutAssignment(repo, pr)
+	a := getCheckoutAssignment(dataDir, repo, pr)
 	if a == nil || a.Dir == "" {
 		return newMsg("Er is nog geen Claude-wijziging klaargezet om te committen.", true)
 	}
@@ -1290,8 +1337,8 @@ func commitCheckoutEditsAt(ctx context.Context, cm *chat.Module, dataDir, repo s
 // "Wijziging staat op ..." bubble for a commit that had already been
 // reported once (reviewer report: that notice appeared after a question
 // that changed nothing at all).
-func chatCheckoutNeedsLanding(ctx context.Context, repo string, pr int) bool {
-	a := getCheckoutAssignment(repo, pr)
+func chatCheckoutNeedsLanding(ctx context.Context, dataDir, repo string, pr int) bool {
+	a := getCheckoutAssignment(dataDir, repo, pr)
 	if a == nil || a.Dir == "" {
 		return false
 	}
@@ -1379,7 +1426,7 @@ func recordTurnCheckoutBaseline(ctx context.Context, conversationID, dir string)
 // commit from earlier). Deliberately turn-scoped, not PR-wide: an earlier
 // turn's failed landing is no longer retried by a later, unrelated turn
 // (reviewer decision) — asking for a commit in plain words still works.
-func turnChangedCheckout(ctx context.Context, repo string, pr int, conversationID string) bool {
+func turnChangedCheckout(ctx context.Context, dataDir, repo string, pr int, conversationID string) bool {
 	chatTurnBaselineMu.Lock()
 	before, ok := chatTurnBaseline[conversationID]
 	delete(chatTurnBaseline, conversationID)
@@ -1387,7 +1434,7 @@ func turnChangedCheckout(ctx context.Context, repo string, pr int, conversationI
 	if !ok || before == "" {
 		return false
 	}
-	a := getCheckoutAssignment(repo, pr)
+	a := getCheckoutAssignment(dataDir, repo, pr)
 	if a == nil || a.Dir == "" {
 		return false
 	}
@@ -1435,7 +1482,7 @@ type chatCancelCleanupInput struct {
 // — it only runs the chosen git housekeeping against whichever checkout is
 // CURRENTLY assigned to this PR, and re-checks dirtiness itself (the reviewer
 // may take a while to answer, so nothing here is trusted from before).
-func applyCancelCleanup(ctx context.Context, cm *chat.Module, arg chatCancelCleanupInput) {
+func applyCancelCleanup(ctx context.Context, cm *chat.Module, dataDir string, arg chatCancelCleanupInput) {
 	newMsg := func(body string) {
 		msg := chat.Message{
 			ID: "cleanup-" + newUIReactionID(), ConversationID: arg.ConversationID, PR: arg.PR,
@@ -1443,7 +1490,7 @@ func applyCancelCleanup(ctx context.Context, cm *chat.Module, arg chatCancelClea
 		}
 		_ = cm.SaveMessage(ctx, msg)
 	}
-	a := getCheckoutAssignment(arg.Repo, arg.PR)
+	a := getCheckoutAssignment(dataDir, arg.Repo, arg.PR)
 	if a == nil || a.Dir == "" {
 		newMsg("Er is niets meer om op te ruimen.")
 		return
@@ -1500,8 +1547,8 @@ func applyCancelCleanup(ctx context.Context, cm *chat.Module, arg chatCancelClea
 // (tasks_api.go) uses: the PR's ASSIGNED checkout's own dirty/ahead state, no
 // fetch, no resolution attempt, no side effect. exists is false when this PR
 // never resolved a checkout at all.
-func checkoutLocalPendingState(ctx context.Context, repo string, pr int) (exists, dirty bool, ahead int, dir string) {
-	a := getCheckoutAssignment(repo, pr)
+func checkoutLocalPendingState(ctx context.Context, dataDir, repo string, pr int) (exists, dirty bool, ahead int, dir string) {
+	a := getCheckoutAssignment(dataDir, repo, pr)
 	if a == nil || a.Dir == "" {
 		return false, false, 0, ""
 	}
@@ -1628,10 +1675,12 @@ func relistCheckoutCandidates(ctx context.Context, tm *TaskManager, dataDir, rep
 	baseBranch := baseBranchFor(repo)
 	slug := repoSlugFor(repo)
 
-	a := getOrCreateCheckoutAssignment(repo, pr)
+	a := getOrCreateCheckoutAssignment(dataDir, repo, pr)
 	a.Dir = ""
+	a.Branch = ""
 	a.Pending = nil
 	a.Excluded = map[string]bool{}
+	persistCheckoutAssignment(dataDir, repo, pr, a)
 
 	candidates, lerr := listCheckoutCandidates(ctx, dataDir, slug, meta.HeadRefName, baseBranch, nil)
 	if lerr != nil && tm != nil && tm.logf != nil {
@@ -1651,13 +1700,14 @@ func relistCheckoutCandidates(ctx context.Context, tm *TaskManager, dataDir, rep
 // unrestored stash must stay discoverable (via "nu terugzetten") even after
 // the reviewer switches this PR off, since it is the ONE record of where
 // that stash lives.
-func checkoutSetOff(repo string, pr int) {
-	a := getOrCreateCheckoutAssignment(repo, pr)
+func checkoutSetOff(dataDir, repo string, pr int) {
+	a := getOrCreateCheckoutAssignment(dataDir, repo, pr)
 	a.Dir = ""
 	a.Branch = ""
 	a.Pending = nil
 	a.Excluded = map[string]bool{}
 	a.clearDirtyAccepted() // nothing is assigned any more, so nothing is accepted
+	persistCheckoutAssignment(dataDir, repo, pr, a)
 }
 
 // checkoutRestoreStashNow is the "nu terugzetten" Activity body: pops a
@@ -1666,8 +1716,8 @@ func checkoutSetOff(repo string, pr int) {
 // applyCheckoutDecisionReply's checkoutStageDirtyTree stash branches) — the
 // reviewer explicitly asked for it right now. A no-op, not an error, when
 // nothing is pending.
-func checkoutRestoreStashNow(ctx context.Context, repo string, pr int) error {
-	a := getOrCreateCheckoutAssignment(repo, pr)
+func checkoutRestoreStashNow(ctx context.Context, dataDir, repo string, pr int) error {
+	a := getOrCreateCheckoutAssignment(dataDir, repo, pr)
 	if a.StashRef == "" {
 		return nil
 	}
@@ -1728,17 +1778,19 @@ type checkoutView struct {
 	RefreshingFiles []string `json:"refreshingFiles,omitempty"`
 }
 
-// buildCheckoutView reads the in-memory assignment for one PR — never nil,
-// mirroring loadPendingPush's own "nothing yet" shape (an empty view, not an
-// error) so a PR with no checkout activity at all still round-trips cleanly.
-func buildCheckoutView(repo string, pr int) checkoutView {
+// buildCheckoutView reads this PR's assignment (in-memory, seeded from the
+// durable dir/branch on first touch since a restart — see
+// getCheckoutAssignment/chat_checkout_store.go) — never nil, mirroring
+// loadPendingPush's own "nothing yet" shape (an empty view, not an error) so
+// a PR with no checkout activity at all still round-trips cleanly.
+func buildCheckoutView(dataDir, repo string, pr int) checkoutView {
 	v := checkoutView{
 		PR:              pr,
 		RunID:           chatMergeQueueRunID(repo, pr),
 		PendingFiles:    chatPendingEditedFilesFor(repo, pr),
 		RefreshingFiles: chatRefreshPendingFilesFor(repo, pr),
 	}
-	a := getCheckoutAssignment(repo, pr)
+	a := getCheckoutAssignment(dataDir, repo, pr)
 	if a == nil {
 		return v
 	}

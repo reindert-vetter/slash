@@ -2958,8 +2958,8 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		// re-triggered the landing — and its "Wijziging staat op ..." bubble —
 		// purely because the SHARED checkout already held outstanding work
 		// (the reviewer's own uncommitted edits, or an earlier local commit).
-		needsLand := turnChangedCheckout(ctx, arg.Repo, arg.PR, arg.ConversationID) &&
-			chatCheckoutNeedsLanding(ctx, arg.Repo, arg.PR)
+		needsLand := turnChangedCheckout(ctx, m.dataDir, arg.Repo, arg.PR, arg.ConversationID) &&
+			chatCheckoutNeedsLanding(ctx, m.dataDir, arg.Repo, arg.PR)
 		publishChatChanged(arg.Repo, arg.PR, arg.ConversationID)
 		// The turn may have assigned/advanced the PR's shared work directory,
 		// or raised its choice — nudge the chip/badge and the work-directory
@@ -3068,7 +3068,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if m.chat == nil {
 			return nil, nil
 		}
-		applyCancelCleanup(ctx, m.chat, arg)
+		applyCancelCleanup(ctx, m.chat, m.dataDir, arg)
 		publishChatChanged(arg.Repo, arg.PR, arg.ConversationID)
 		return nil, nil
 	})
@@ -3134,7 +3134,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if err := json.Unmarshal(in, &arg); err != nil {
 			return nil, err
 		}
-		checkoutSetOff(arg.Repo, arg.PR)
+		checkoutSetOff(m.dataDir, arg.Repo, arg.PR)
 		publishCheckoutChanged(arg.Repo, arg.PR)
 		return nil, nil
 	})
@@ -3143,7 +3143,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if err := json.Unmarshal(in, &arg); err != nil {
 			return nil, err
 		}
-		if err := checkoutRestoreStashNow(ctx, arg.Repo, arg.PR); err != nil {
+		if err := checkoutRestoreStashNow(ctx, m.dataDir, arg.Repo, arg.PR); err != nil {
 			m.logf("checkout: restore stash pr %d: %v", arg.PR, err)
 		}
 		publishCheckoutChanged(arg.Repo, arg.PR)
