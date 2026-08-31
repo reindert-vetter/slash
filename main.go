@@ -245,6 +245,7 @@ func runRelationsCmd(args []string) {
 	calls = append(calls, resolveDataProviders(dataDir, pr, blocks)...)
 	calls = append(calls, resolveTranslations(dataDir, pr, blocks)...)
 	calls = append(calls, resolveEnumValueTranslations(dataDir, pr, blocks)...)
+	calls = append(calls, resolveVueTranslations(dataDir, pr, blocks)...)
 	calls = append(calls, resolveClassMembers(dataDir, pr, blocks)...)
 	calls = append(calls, resolveConfigCalls(dataDir, pr, blocks)...)
 	cr, err := callresolve.Open(filepath.Join(dataDir, "callresolve.db"))

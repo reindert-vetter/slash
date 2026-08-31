@@ -610,6 +610,33 @@ unmappable case yields **silently nothing**, never `unresolved`, never a search:
   (`callresolve_analysis_test.go`), `tests/related-translation-enum-scope.spec.mjs`
   (fixture PR 129, `enumtranslation-*.json` +
   `materializeEnumTranslationWorktrees`) for the frontend prefix-matching fix.
+- **Vue-i18n keys (`resolveVueTranslations`, `vuetranslations.go`).** The
+  Vue-side sibling of `resolveTranslations`: a `$t('a.b.c')`/`$tc('a.b.c')`
+  call on a changed line of a `.vue` block emits the **identical** shape —
+  `CallKey translation:<locale>:<key>`, `Kind translation`, `ChildClass` =
+  locale — so the frontend needs no change at all. Deliberately **only**
+  `$t`/`$tc` (Vue's global "magic" helpers); a bare `t(...)` (the name
+  `const { t } = useI18n()` returns) is out of scope — too common a short
+  identifier to scan for safely. Two structural differences from the PHP rule,
+  both because a Vue-i18n key carries no file information of its own (unlike
+  `trans('file.key')`, where the first segment names the lang file): (1) the
+  key is a plain dot-path straight into **one** big per-locale JSON blob
+  (`sliceJSONKey`/`findKeyInJSONObjectBody` mirror `sliceLangKey`/
+  `findKeyInArrayBody`, swapped to JSON syntax, and don't restrict the leaf's
+  type — an array leaf, e.g. a pluralization form, is returned as its raw
+  source text same as a string); (2) which JSON file to read depends on where
+  the CALLING `.vue` file lives, not on the key — `candidateVueLocaleDirs`
+  walks every ancestor directory of the `.vue` file up to the worktree root
+  and collects **every** `locales`/`lang` subdirectory found (nearest first),
+  because some app "domains" (e.g. `admin/src/domains/MediaLibrary`) ship
+  their own `locales/{locale}.json` that gets `mergeLocaleMessage`'d into the
+  app-wide instance at runtime — so a key can live in the domain's own file OR
+  fall back to the app-wide one; `emitVueTranslationChildren` tries the
+  candidates nearest-first per locale. A file with no reachable locales
+  directory, or a key that's dynamic (a template literal, or followed by JS's
+  `+` concatenation), silently produces no entry. Tests:
+  `TestVueTranslationKeysIn`, `TestSliceJSONKey`,
+  `TestCandidateVueLocaleDirsNearestWinsWithFallback` (`vuetranslations_test.go`).
 - **Config values + `.env.example` (`resolveConfigCalls`).** Reviewer request:
   "als ik een `config(` code zie, wil ik als onderliggende blok zowel de config
   file/regel zien & .env.example zien (als dat is aangepast)". A
