@@ -525,6 +525,20 @@ test.describe('PR Review Tree — PR inbox', () => {
     await expect(page).toHaveURL(/\/pr-overview$/)
   })
 
+  // A mouse double-click on a row is the click-equivalent of ArrowRight: it
+  // calls the same openOrGenerate(pr) (src/overview.mjs) rather than only
+  // toggling the popover twice — on an already-generated row it jumps
+  // straight into the tree.
+  test('double-clicking an already-generated row navigates straight into it', async ({ page }) => {
+    await page.goto('/pr-overview')
+    await appReady(page)
+
+    await page.locator('[data-testid="pr-row"][data-pr$="12903"]').dblclick()
+
+    await expect(page).toHaveURL(/\/pr\/12903$/)
+    await expect(page.locator('[data-testid="pr-popover"]')).toHaveCount(0)
+  })
+
   // ArrowRight deliberately diverges from Enter: it's the "act now" key
   // (mirrors the → convention on /pr/<id>, see .claude/docs/keyboard-
   // navigation.md), not "open the menu". On an already-generated row it

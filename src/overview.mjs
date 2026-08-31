@@ -1544,6 +1544,7 @@ function prRow(pr, opts = {}) {
       class="${'relative ' + ROW_CLASS}"
       style="${indentStyle(opts)}"
       @click="${() => togglePopover(prUid(pr))}"
+      @dblclick="${() => openOrGenerate(pr)}"
     >
       ${rowInner(pr, opts)} ${() => (ui.openPopover === prUid(pr) ? popover(pr) : null)}
     </div>
