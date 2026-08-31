@@ -992,10 +992,24 @@ function rowHandedOff(state, i) {
 // selection (rowInListRange below) the reviewer can still see WHICH row the
 // arrows will move from. Shape vs. tint, never two shades of the same colour
 // (the reviewer is colourblind, see conventions.md).
+//
+// Must exclude EVERY trailing-row focus flag stepListSelection's loop can set
+// (home.mjs: toggle-approved, toggle-ignored, batch-action, push-todo, and
+// the leading stale-tree notice) — state.selected still points at whichever
+// block/comment row was last the cursor while the keyboard sits on one of
+// those rows, so missing even one here highlights that stale row AND the
+// trailing row at once. Reported bug: stepping `↓` from the last comment row
+// onto the push-todo row left both highlighted simultaneously, because
+// batchRowFocused/pushTodoFocused were missing from this list.
 function rowIsCursor(state, i) {
   if (state.showDescription && !state.blockIndexEntered) return false
   return (
-    i === state.selected && !state.toggleFocused && !state.ignoreToggleFocused && !state.staleRowFocused
+    i === state.selected &&
+    !state.toggleFocused &&
+    !state.ignoreToggleFocused &&
+    !state.staleRowFocused &&
+    !state.batchRowFocused &&
+    !state.pushTodoFocused
   )
 }
 
@@ -1006,7 +1020,14 @@ function rowIsCursor(state, i) {
 function rowInListRange(state, i) {
   if (state.listAnchor == null) return false
   if (state.showDescription && !state.blockIndexEntered) return false
-  if (state.toggleFocused || state.ignoreToggleFocused || state.staleRowFocused) return false
+  if (
+    state.toggleFocused ||
+    state.ignoreToggleFocused ||
+    state.staleRowFocused ||
+    state.batchRowFocused ||
+    state.pushTodoFocused
+  )
+    return false
   const lo = Math.min(state.listAnchor, state.selected)
   const hi = Math.max(state.listAnchor, state.selected)
   return i >= lo && i <= hi

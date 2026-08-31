@@ -91,6 +91,32 @@ test.describe('Push todo at the bottom of the index', () => {
     await expect(row).toHaveClass(focused)
   })
 
+  // Regression: rowIsCursor/rowInListRange (BlockList.mjs) used to only
+  // exclude toggleFocused/ignoreToggleFocused/staleRowFocused, so stepping
+  // onto this trailing row left the PREVIOUSLY selected block-row highlighted
+  // too — two rows reading as "selected" at once.
+  test('highlighting the push-todo row drops the previous block row highlight', async ({
+    page,
+  }) => {
+    await mockPendingPush(page, ready)
+    await page.goto('/pr/12903')
+    await leaveSearchBox(page)
+
+    const row = page.getByTestId('push-todo')
+    const focused = /bg-indigo-50/
+    for (let i = 0; i < 40; i++) {
+      const cls = (await row.getAttribute('class')) || ''
+      if (focused.test(cls)) break
+      await page.keyboard.press('ArrowDown')
+    }
+    await expect(row).toHaveClass(focused)
+
+    // Exactly one row in the whole index reads as selected while the
+    // keyboard sits on the push-todo row — not the block row it came from.
+    const index = page.getByTestId('pr-index')
+    await expect(index.locator('[data-testid=block-row].bg-indigo-50')).toHaveCount(0)
+  })
+
   test('a failed push keeps the row, with a retry wording', async ({ page }) => {
     await mockPendingPush(page, {
       ...ready,
