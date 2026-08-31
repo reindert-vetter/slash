@@ -62,6 +62,28 @@ test.describe('PR Review Tree — the right-click context menu', () => {
     await expect(activeRows).toHaveCount(1)
   })
 
+  // Reviewer request scoped Space's "run the highlighted item on an empty
+  // search field" behavior (see "Space" in command-palette.md) to the
+  // ordinary `/`/Enter palette only — the native right-click menu keeps the
+  // original "type freely, Space is just a space" behavior, even before
+  // anything has been typed, per the original right-click complaint.
+  test('Space on the native right-click menu with an empty search field still just types a space', async ({
+    page,
+  }) => {
+    await page.goto('/pr/102')
+    await leaveSearchBox(page)
+
+    const card = page.getByTestId('detail-card').first()
+    const rowA = card.locator('[data-pane="new"] [data-changed="1"]').filter({ hasText: '$a' })
+    await rowA.click({ button: 'right' })
+
+    const input = page.getByTestId('command-input')
+    await expect(input).toHaveValue('')
+    await page.keyboard.press(' ')
+    await expect(page.getByTestId('command-overlay')).toBeVisible()
+    await expect(input).toHaveValue(' ')
+  })
+
   test('right-clicking an unchanged line leaves the native browser menu in place', async ({ page }) => {
     await page.goto('/pr/102')
     await leaveSearchBox(page)

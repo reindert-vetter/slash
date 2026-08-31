@@ -81,9 +81,7 @@ test.describe('PR Review Tree — command palette', () => {
     await expect(page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' })).toHaveCount(0)
   })
 
-  test('Space with an empty search field just types a space, it does not run the selected command', async ({
-    page,
-  }) => {
+  test('Space with an empty search field runs the highlighted command, like Enter', async ({ page }) => {
     await page.goto('/pr/12903')
     // By label, not by raw index — see "Sort order of the left list" in
     // blocks-and-ingest.md. CreatePaymentAction::execute reliably has one
@@ -98,13 +96,12 @@ test.describe('PR Review Tree — command palette', () => {
     const input = page.getByTestId('command-input')
     await expect(input).toHaveValue('')
     // "Sluit menu" is pinned first; defaultSel opens on the 2nd item, the
-    // approve command for this list — pressing Space must NOT run it, only
-    // type a literal space into the field, exactly like any other letter.
+    // approve command for this list — reviewer request: pressing Space while
+    // nothing has been typed yet runs it, exactly like Enter. See "Space" in
+    // .claude/docs/command-palette.md.
     await page.keyboard.press(' ')
-    await expect(page.getByTestId('command-menu')).toBeVisible()
-    await expect(input).toHaveValue(' ')
-    await expect(block1Row).toHaveCount(1)
-    await expect(approve).not.toBeChecked()
+    await expect(page.getByTestId('command-menu')).not.toBeVisible()
+    await expect(block1Row).toHaveCount(0)
   })
 
   test('Space with text already typed stays a normal space, not a run', async ({ page }) => {

@@ -299,19 +299,37 @@ runs the action), `Esc` (close — from a submenu it first steps back to the
 root), and block navigation is suspended. Typed characters flow into the
 focused input (`data-testid=command-input`, two-way bound to `ms.query`).
 
-**`Space` never runs the selected item — it always just types a space.**
-This used to run `runCommand(list[ms.sel])` (the same call as `Enter`) while
+**`Space` runs the highlighted item, but only in the ordinary `/`/Enter
+palette and only while the search field is still empty.** This used to run
+`runCommand(list[ms.sel])` (the same call as `Enter`) unconditionally while
 the search field was still empty, so a right-click on a line and a bare
 Space could silently fire the highlighted action (often "Approve …", the
 default 2nd item) before the reviewer had typed anything. Removed on
 reviewer request: "als ik rechtermuisknop druk op lines of code, wil ik
 gewoon kunnen typen zonder dat er iets gebeurt (spatie moet niet een keuze
-maken) pas als ik enter druk (of met muis een menu item kies)". Space now has
-no branch of its own in `onKeydown`'s `if (menu.open)` block at all — like
-every other plain character (letters, digits, `f`/`d`/`s`/`a`/…, none of
-which have ever had a branch here either), it falls through untouched to the
-focused `command-input`, in every mode including a `native` right-click menu.
-Only `Enter` (no Shift) or a mouse click on a row runs a command.
+maken) pas als ik enter druk (of met muis een menu item kies)" — at that
+point Space had no branch of its own in `onKeydown`'s `if (menu.open)` block
+at all and fell through untouched to the focused `command-input`, in every
+mode.
+
+**Reinstated, narrower, on a later reviewer request** ("als ik in het menu
+nog niks heb getyped (search), dan wil ik bij een spatie ook menu item
+selecteren"): `onKeydown` now has an explicit `e.key === ' ' && ms.query ===
+'' && !ms.native` branch that runs `list[ms.sel]` exactly like `Enter`. The
+`!ms.native` guard keeps the right-click menu on the ORIGINAL behavior —
+confirmed explicitly when this was reinstated ("alleen in het gewone
+`/`/Enter-menu. In het `native` rechtermuisklik-menu blijft Space altijd een
+gewone spatie, ook bij een leeg zoekveld") — because that's the exact
+scenario the first request was about: typing freely right after a
+right-click, before anything is typed. In both menus, as soon as `ms.query`
+is non-empty, Space falls through untouched to the focused `command-input`,
+like every other plain character (letters, digits, `f`/`d`/`s`/`a`/…). Only
+`Enter` (no Shift), Space under the conditions above, or a mouse click on a
+row runs a command. Tests: `tests/command-menu.spec.mjs` ("Space with an
+empty search field runs the highlighted command, like Enter", "Space with
+text already typed stays a normal space, not a run"),
+`tests/selection-menu.spec.mjs` ("Space on the native right-click menu with
+an empty search field still just types a space").
 
 ### The input field grows with its content
 

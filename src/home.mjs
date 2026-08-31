@@ -13488,13 +13488,21 @@ function onKeydown(e) {
     } else if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       if (list[ms.sel]) runCommand(list[ms.sel])
+    } else if (e.key === ' ' && ms.query === '' && !ms.native) {
+      // Space used to run the selected item too, while the search field was
+      // still empty — removed on reviewer request ("spatie moet niet een keuze
+      // maken... pas als ik enter druk"), then reinstated, but narrower: only
+      // for the ordinary `/`/Enter palette, and only while nothing has been
+      // typed yet ("als ik in het menu nog niks heb getyped, dan wil ik bij
+      // een spatie ook menu item selecteren"). The `native` right-click menu
+      // deliberately keeps the old behavior — Space always just types a space
+      // there, even on an empty search field, per the original complaint about
+      // typing freely right after a right-click. Once something is typed in
+      // either menu, this branch no longer matches and Space falls through
+      // untouched to the focused command-input, same as any other letter.
+      e.preventDefault()
+      if (list[ms.sel]) runCommand(list[ms.sel])
     }
-    // Space used to run the selected item too, while the search field was
-    // still empty — removed on reviewer request ("spatie moet niet een keuze
-    // maken... pas als ik enter druk"): every other typed character already
-    // falls through untouched (no branch above matches it, so it reaches the
-    // focused command-input natively), and Space is no longer special-cased
-    // either. Only Enter (no Shift) or a mouse click on a row runs a command.
     // Typing filters the list, which changes the palette's height — reposition a
     // frame later (once re-rendered) so it stays snug under the selection, even
     // when flipped above it.
