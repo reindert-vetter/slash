@@ -575,9 +575,17 @@ unmappable case yields **silently nothing**, never `unresolved`, never a search:
   source (a quoted scalar or a nested `[...]`). Key
   `translation:<locale>:<key>` (unique per locale), `Kind translation`,
   `ChildClass` = the locale; an **absent** key still emits a row with empty code
-  so the UI can mark "ontbreekt in <locale>". **v1 boundaries, silently
-  skipped:** a dynamic key, a namespaced/vendor key (`pkg::file.key`), and a
-  bare whole-file reference. Frontend: always a **leaf value view**
+  so the UI can mark "ontbreekt in <locale>". A **namespaced key**
+  (`rules::translations.foo`, Laravel-modules' own package namespace)
+  resolves too, via `moduleAliasToDir` matching the namespace against a real
+  module's `module.json` "alias" and reading its own
+  `modules/<Dir>/Internal/Resources/lang` (this repo's `config/modules.php`
+  path-generator convention) — reported case: `RetryActionHistoryRequest::
+  withValidator`'s `trans('rules::translations.validation.action_history_not_latest')`
+  showed "Geen onderliggende code." for the whole block. **v1 boundaries,
+  silently skipped:** a dynamic key, a namespace that matches no known module
+  (a genuine third-party vendor key, e.g. `pkg::file.key`), and a bare
+  whole-file reference. Frontend: always a **leaf value view**
   (`translationValueView`, current value per locale, no diff), never drillable;
   `findCallSites` couples it via the key **string literal** (the same literal
   for every locale) and `resolvedCallTargetIds` skips `translation` so a changed

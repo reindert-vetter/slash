@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -1515,7 +1516,8 @@ type langLocaleFile struct {
 func resolveTranslations(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 	baseDir, headDir := worktreeDirs(dataDir, blocksRepo(blocks), pr)
 	diffByFile := map[string]*fileChangeSet{}
-	langCache := map[string][]langLocaleFile{} // fileSeg → locales that have <fileSeg>.php
+	langCache := map[string][]langLocaleFile{} // fileSeg (or "<ns>::<fileSeg>") → locales that have <fileSeg>.php
+	moduleAliases := moduleAliasToDir(headDir)
 
 	var out []callresolve.Entry
 	for _, b := range blocks {
@@ -1540,38 +1542,61 @@ func resolveTranslations(dataDir string, pr int, blocks []Block) []callresolve.E
 		seen := map[string]bool{} // call keys (translation:<locale>:<key>) already emitted
 
 		for _, key := range translationKeysIn(scan) {
-			out = emitTranslationChildren(out, headDir, pr, callerID, key, langCache, seen)
+			out = emitTranslationChildren(out, headDir, pr, callerID, key, moduleAliases, langCache, seen)
 		}
 	}
 	return out
 }
 
-// emitTranslationChildren resolves ONE translation key ("<fileSeg>.<path...>")
-// to every locale's lang file and appends the resulting callresolve.Entry rows
-// to out — the per-key/per-locale body shared by resolveTranslations (a
-// static key straight off the call site) and resolveEnumValueTranslations (a
-// key assembled from a static prefix + one backed-enum case's own value). A
-// key naming a vendor/package translation (contains "::") or with no
-// "file.key" form (a bare whole-file reference) produces no entry — never an
-// "unresolved" row, same "silently nothing" convention as every rule-based
-// resolver in this file. Dedup is via seen (keyed on the resulting callKey),
-// shared by the caller across every key/prefix it tries in one block so two
-// different sources can never double-emit the same child.
-func emitTranslationChildren(out []callresolve.Entry, headDir string, pr int, callerID, key string, langCache map[string][]langLocaleFile, seen map[string]bool) []callresolve.Entry {
-	if strings.Contains(key, "::") {
-		return out // vendor/namespaced package translation — out of v1 scope
+// emitTranslationChildren resolves ONE translation key ("<fileSeg>.<path...>",
+// optionally prefixed "<namespace>::") to every locale's lang file and appends
+// the resulting callresolve.Entry rows to out — the per-key/per-locale body
+// shared by resolveTranslations (a static key straight off the call site) and
+// resolveEnumValueTranslations (a key assembled from a static prefix + one
+// backed-enum case's own value). A key with no "file.key" form (a bare
+// whole-file reference) produces no entry — never an "unresolved" row, same
+// "silently nothing" convention as every rule-based resolver in this file. A
+// namespaced key (`rules::translations.foo`) resolves against the matching
+// Laravel-modules package (see moduleAliasToDir) when its namespace is one of
+// this repo's OWN modules (config/modules.php ships every module's lang files
+// at "modules/<Dir>/Internal/Resources/lang") — a namespace that doesn't
+// match any module (a genuine third-party vendor package, e.g. "pkg::x.y")
+// still produces no entry, same as before. Dedup is via seen (keyed on the
+// resulting callKey), shared by the caller across every key/prefix it tries
+// in one block so two different sources can never double-emit the same
+// child.
+func emitTranslationChildren(out []callresolve.Entry, headDir string, pr int, callerID, key string, moduleAliases map[string]string, langCache map[string][]langLocaleFile, seen map[string]bool) []callresolve.Entry {
+	namespace, rest := "", key
+	if idx := strings.Index(key, "::"); idx >= 0 {
+		namespace, rest = key[:idx], key[idx+2:]
 	}
-	dot := strings.Index(key, ".")
+	dot := strings.Index(rest, ".")
 	if dot < 0 {
 		return out // whole-file reference (no key) — out of v1 scope
 	}
-	fileSeg := key[:dot]
-	keyPath := strings.Split(key[dot+1:], ".")
+	fileSeg := rest[:dot]
+	keyPath := strings.Split(rest[dot+1:], ".")
 
-	locales, cached := langCache[fileSeg]
-	if !cached {
-		locales = localesForLangFile(headDir, fileSeg)
-		langCache[fileSeg] = locales
+	cacheKey := fileSeg
+	var locales []langLocaleFile
+	var cached bool
+	if namespace == "" {
+		locales, cached = langCache[cacheKey]
+		if !cached {
+			locales = localesForLangFile(headDir, fileSeg)
+			langCache[cacheKey] = locales
+		}
+	} else {
+		moduleDir, ok := moduleAliases[namespace]
+		if !ok {
+			return out // not one of our own modules — genuine vendor package, out of v1 scope
+		}
+		cacheKey = namespace + "::" + fileSeg
+		locales, cached = langCache[cacheKey]
+		if !cached {
+			locales = localesForModuleLangFile(headDir, moduleDir, fileSeg)
+			langCache[cacheKey] = locales
+		}
 	}
 	for _, loc := range locales {
 		callKey := "translation:" + loc.locale + ":" + key
@@ -1623,6 +1648,7 @@ func resolveEnumValueTranslations(dataDir string, pr int, blocks []Block) []call
 	baseDir, headDir := worktreeDirs(dataDir, blocksRepo(blocks), pr)
 	diffByFile := map[string]*fileChangeSet{}
 	langCache := map[string][]langLocaleFile{}
+	moduleAliases := moduleAliasToDir(headDir)
 	enumCasesByFile := map[string][][2]string{} // file → [(caseName, value)], cached per file
 
 	var out []callresolve.Entry
@@ -1668,7 +1694,7 @@ func resolveEnumValueTranslations(dataDir string, pr int, blocks []Block) []call
 		seen := map[string]bool{}
 		for _, prefix := range prefixes {
 			for _, c := range cases {
-				out = emitTranslationChildren(out, headDir, pr, callerID, prefix+c[1], langCache, seen)
+				out = emitTranslationChildren(out, headDir, pr, callerID, prefix+c[1], moduleAliases, langCache, seen)
 			}
 		}
 	}
@@ -2326,6 +2352,25 @@ func localesForLangFile(headDir, fileSeg string) []langLocaleFile {
 	if root == "" {
 		return nil
 	}
+	return localesInRootForFile(headDir, root, fileSeg)
+}
+
+// localesForModuleLangFile is localesForLangFile's Laravel-modules
+// counterpart: instead of the app-wide resources/lang root, it looks under
+// one module's own lang directory — config/modules.php ships every module's
+// translations at "modules/<moduleDir>/Internal/Resources/lang" (this repo's
+// path-generator config, applies to every module the same way). Used for a
+// namespaced key ("<alias>::file.key") whose namespace resolves to a real
+// module via moduleAliasToDir.
+func localesForModuleLangFile(headDir, moduleDir, fileSeg string) []langLocaleFile {
+	root := "modules/" + moduleDir + "/Internal/Resources/lang"
+	return localesInRootForFile(headDir, root, fileSeg)
+}
+
+// localesInRootForFile lists every immediate locale subdirectory of root
+// (relative to headDir) that contains <fileSeg>.php, sorted for determinism —
+// the shared body of localesForLangFile/localesForModuleLangFile.
+func localesInRootForFile(headDir, root, fileSeg string) []langLocaleFile {
 	entries, err := os.ReadDir(filepath.Join(headDir, root))
 	if err != nil {
 		return nil
@@ -2362,6 +2407,41 @@ func langRoot(headDir string) string {
 func isDir(p string) bool {
 	fi, err := os.Stat(p)
 	return err == nil && fi.IsDir()
+}
+
+// moduleAliasToDir maps every Laravel-modules (nwidart/laravel-modules)
+// package's own translation namespace alias (module.json's "alias" field,
+// e.g. "rules") to its module directory name (e.g. "Rules") — used by
+// emitTranslationChildren to resolve a namespaced `trans('rules::file.key')`
+// call against modules/Rules/Internal/Resources/lang instead of silently
+// treating it like an unresolvable third-party vendor package. Built once per
+// resolveTranslations/resolveEnumValueTranslations call (a directory listing
+// across ~30 modules plus one small JSON read each is cheap) rather than per
+// key. Returns an empty map, never nil, when "modules" doesn't exist (repos
+// without Laravel-modules) or is unreadable.
+func moduleAliasToDir(headDir string) map[string]string {
+	out := map[string]string{}
+	entries, err := os.ReadDir(filepath.Join(headDir, "modules"))
+	if err != nil {
+		return out
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(headDir, "modules", e.Name(), "module.json"))
+		if err != nil {
+			continue
+		}
+		var mj struct {
+			Alias string `json:"alias"`
+		}
+		if json.Unmarshal(data, &mj) != nil || mj.Alias == "" {
+			continue
+		}
+		out[mj.Alias] = e.Name()
+	}
+	return out
 }
 
 // sliceLangKey walks a Laravel lang file's top-level `return [ ... ]` array

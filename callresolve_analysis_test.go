@@ -2518,6 +2518,109 @@ return [
 	}
 }
 
+// TestResolveTranslationsModuleNamespace: a namespaced key
+// (`rules::translations.foo`) resolves against the matching Laravel-modules
+// package's OWN lang directory (modules/<Dir>/Internal/Resources/lang, per
+// config/modules.php's path-generator convention) instead of being silently
+// skipped like a genuine third-party vendor key — reported case:
+// RetryActionHistoryRequest::withValidator's
+// trans('rules::translations.validation.action_history_not_latest') showed
+// "Geen onderliggende code." for the whole block.
+func TestResolveTranslationsModuleNamespace(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 91
+	baseDir, headDir := worktreeDirs(dataDir, "", pr)
+
+	callerBase := `<?php
+namespace Modules\Rules\Internal\Http\Requests;
+class RetryActionHistoryRequest {
+    public function withValidator($validator) {
+    }
+}
+`
+	callerHead := `<?php
+namespace Modules\Rules\Internal\Http\Requests;
+class RetryActionHistoryRequest {
+    public function withValidator($validator) {
+        $validator->errors()->add('action_history', trans('rules::translations.validation.action_history_not_latest'));
+    }
+}
+`
+	for dir, body := range map[string]string{baseDir: callerBase, headDir: callerHead} {
+		p := filepath.Join(dir, "modules/Rules/Internal/Http/Requests/RetryActionHistoryRequest.php")
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	moduleJSON := `{"name": "Rules", "alias": "rules"}`
+	if err := os.MkdirAll(filepath.Join(headDir, "modules/Rules"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(headDir, "modules/Rules/module.json"), []byte(moduleJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	nlLang := `<?php
+
+return [
+    'validation' => [
+        'action_history_not_latest' => 'Deze uitgevoerde regel is al opnieuw geprobeerd.',
+    ],
+];
+`
+	enLang := `<?php
+
+return [
+    'validation' => [
+        'action_history_not_latest' => 'This action history has already been retried.',
+    ],
+];
+`
+	for rel, body := range map[string]string{
+		"modules/Rules/Internal/Resources/lang/nl/translations.php": nlLang,
+		"modules/Rules/Internal/Resources/lang/en/translations.php": enLang,
+	} {
+		p := filepath.Join(headDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	caller := Block{PR: pr, File: "modules/Rules/Internal/Http/Requests/RetryActionHistoryRequest.php", Class: "RetryActionHistoryRequest", Name: "withValidator", Side: SideNew, Status: StatusModified}
+	entries := resolveTranslations(dataDir, pr, []Block{caller})
+
+	if len(entries) != 2 {
+		t.Fatalf("got %d entries, want 2 (1 key x 2 locales): %+v", len(entries), entries)
+	}
+
+	wantKey := "rules::translations.validation.action_history_not_latest"
+	eNl, ok := findCallresolveEntry(entries, caller.ID(), "translation:nl:"+wantKey)
+	if !ok {
+		t.Fatalf("no entry for translation:nl:%s, got %+v", wantKey, entries)
+	}
+	if eNl.ChildFile != "modules/Rules/Internal/Resources/lang/nl/translations.php" {
+		t.Errorf("ChildFile = %q, want modules/Rules/Internal/Resources/lang/nl/translations.php", eNl.ChildFile)
+	}
+	if !strings.Contains(eNl.ChildCode, "al opnieuw geprobeerd") {
+		t.Errorf("ChildCode = %q, missing nl value", eNl.ChildCode)
+	}
+
+	eEn, ok := findCallresolveEntry(entries, caller.ID(), "translation:en:"+wantKey)
+	if !ok {
+		t.Fatalf("no entry for translation:en:%s, got %+v", wantKey, entries)
+	}
+	if !strings.Contains(eEn.ChildCode, "already been retried") {
+		t.Errorf("ChildCode = %q, missing en value", eEn.ChildCode)
+	}
+}
+
 // TestResolveEnumValueTranslations: trans('prefix.' . $this->value) called
 // from a backed enum's own method resolves to the translation key EVERY case
 // of that enum produces at runtime, one entry per (case x locale) — the
