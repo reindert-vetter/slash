@@ -33,9 +33,50 @@ let st = null
 let sendAction = null
 
 // dismissed holds the fingerprint of the choice the reviewer pressed Escape
-// on; busy is true while an answer is in flight. Deliberately NOT persisted
-// anywhere: not in localStorage, not in the URL (see openness rules below).
-const wd = reactive({ dismissed: '', busy: false, sel: 0 })
+// on; busyKey holds the key (see rows() below) of the row currently running,
+// '' while idle — used both to lock the rest of the list and to say WHICH
+// option is in flight, not just a bare "Bezig…". steps mirrors the real git
+// commands that option is running server-side (checkout_progress.go),
+// polled while busyKey is set. Deliberately NOT persisted anywhere: not in
+// localStorage, not in the URL (see openness rules below).
+const wd = reactive({ dismissed: '', busyKey: '', steps: [], sel: 0 })
+
+// progressTimer drives the poll loop below — a plain module variable, not
+// reactive state, exactly like the other timer/handle module lets in this
+// codebase (e.g. RelatedPanel.mjs's refreshTimer).
+let progressTimer = null
+
+// startProgressPolling/stopProgressPolling: GET /api/chat/checkout/progress
+// is a plain in-memory read (see checkout_progress.go) of the real `git`
+// commands the in-flight checkout-menu Activity is running — polled only
+// while an answer is actually in flight, stopped the moment it settles (act()
+// below), so this never runs idly while the overlay is just sitting open.
+function stopProgressPolling() {
+  if (progressTimer) {
+    clearInterval(progressTimer)
+    progressTimer = null
+  }
+}
+
+function startProgressPolling() {
+  stopProgressPolling()
+  wd.steps = []
+  const pr = st && st.pr
+  if (!pr) return
+  const repoParam = st && st.repo ? '&repo=' + encodeURIComponent(st.repo) : ''
+  const poll = async () => {
+    try {
+      const res = await fetch(`/api/chat/checkout/progress?pr=${pr}${repoParam}`)
+      if (!res.ok) return
+      const data = await res.json()
+      if (Array.isArray(data.steps)) wd.steps = data.steps
+    } catch (_) {
+      /* best-effort, same as every other poll in this app */
+    }
+  }
+  poll()
+  progressTimer = setInterval(poll, 350)
+}
 
 export function initWorkDirOverlay(state, sendCheckoutAction) {
   st = state
@@ -116,18 +157,29 @@ function rows() {
   const d = decision()
   const out = []
   if (d && Array.isArray(d.options)) {
-    d.options.forEach((opt) => out.push({ key: 'opt:' + opt, label: opt, run: () => answer(opt) }))
+    d.options.forEach((opt) => {
+      const key = 'opt:' + opt
+      out.push({ key, label: opt, run: () => act('checkoutAnswer', opt, key) })
+    })
   }
   if (st && st.checkout && st.checkout.stashPending) {
     out.push({
       key: 'restore',
       label: t('Nu terugzetten (eerder opgeslagen wijziging)'),
-      run: () => act('checkoutRestoreStash'),
+      run: () => act('checkoutRestoreStash', undefined, 'restore'),
     })
   }
-  out.push({ key: 'choose', label: t('Andere werkmap kiezen'), run: () => act('checkoutRelist') })
-  out.push({ key: 'off', label: t('Uit (geen werkmap koppelen)'), run: () => act('checkoutOff') })
+  out.push({ key: 'choose', label: t('Andere werkmap kiezen'), run: () => act('checkoutRelist', undefined, 'choose') })
+  out.push({ key: 'off', label: t('Uit (geen werkmap koppelen)'), run: () => act('checkoutOff', undefined, 'off') })
   return out
+}
+
+// busyRow/busyLabel — the ONE row currently in flight, if any. Read by both
+// the footer status and the row template below, so they never name two
+// different actions.
+function busyRow() {
+  if (!wd.busyKey) return null
+  return rows().find((row) => row.key === wd.busyKey) || null
 }
 
 // selIndex clamps rather than resetting on every change: a new choice can have
@@ -140,21 +192,26 @@ function selIndex() {
   return Math.min(Math.max(wd.sel, 0), n - 1)
 }
 
-async function answer(opt) {
-  await act('checkoutAnswer', opt)
-}
-
 // act does NOT close the overlay itself. The answer's real outcome arrives as
 // checkout.changed -> loadCheckout -> no decision left -> isOpen() false, so
 // what the reviewer sees always matches what the server actually stored; an
 // optimistic close would hide a failed answer until the next refresh.
-async function act(action, reply) {
-  if (!sendAction || wd.busy) return
-  wd.busy = true
+//
+// key identifies WHICH row this call is for (rows() above always passes its
+// own key) — recorded on wd.busyKey so the template can single out that one
+// row instead of a generic "something is happening" state, and used to poll
+// GET /api/chat/checkout/progress for that same action's real git commands
+// (checkout_progress.go) for the duration of the request.
+async function act(action, reply, key) {
+  if (!sendAction || wd.busyKey) return
+  wd.busyKey = key || action
+  startProgressPolling()
   try {
     await sendAction(action, reply)
   } finally {
-    wd.busy = false
+    stopProgressPolling()
+    wd.busyKey = ''
+    wd.steps = []
   }
 }
 
@@ -167,6 +224,13 @@ export function handleWorkDirOverlayKeydown(e) {
   if (e.key === 'Escape') {
     e.preventDefault()
     dismiss()
+    return
+  }
+  // While an answer is in flight the list is locked (see the busyKey guard in
+  // act() above) — swallow navigation/confirm too, so ↑/↓/Enter can't queue
+  // up a second row against a menu that visually shows only one is running.
+  if (wd.busyKey) {
+    e.preventDefault()
     return
   }
   if (e.key === 'ArrowDown') {
@@ -200,6 +264,60 @@ function currentDirLine() {
     : t('Nu: {dir}', { dir: c.dir })
 }
 
+// rowClass — the whole class-attribute value for one option button, computed
+// outside the template (the arrow.js "an attribute value with ANY ${...}
+// must be the whole value" rule, .claude/rules/arrowjs-pitfalls.md): the busy
+// row itself keeps the normal "selected" look (plus its own spinner/label
+// suffix in the template below), every OTHER row visibly dims and stops
+// accepting clicks while something is running, and the ordinary
+// selected/unselected split applies only while idle.
+function rowClass(row, i) {
+  const base = 'flex w-full items-start gap-1.5 rounded-lg px-3 py-2 text-left text-[13px] '
+  if (wd.busyKey === row.key) {
+    return base + 'bg-indigo-50 dark:bg-indigo-500/15 text-indigo-800 dark:text-indigo-200 ring-1 ring-indigo-300 dark:ring-indigo-500/40'
+  }
+  if (wd.busyKey) {
+    return base + 'opacity-40 text-slate-400 dark:text-zinc-600'
+  }
+  return (
+    base +
+    (selIndex() === i
+      ? 'bg-indigo-50 dark:bg-indigo-500/15 text-indigo-800 dark:text-indigo-200 ring-1 ring-indigo-300 dark:ring-indigo-500/40'
+      : 'text-slate-700 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800')
+  )
+}
+
+// progressPanel — the live log of real git commands the in-flight action is
+// running (checkout_progress.go via GET /api/chat/checkout/progress), the
+// answer to "laten zien wat het echt doet": not just a label repeated, the
+// actual `git stash push …`/`git add -A`/… lines and whether each one
+// succeeded. Rendered only while there is at least one step (see its stable
+// `<div class="contents">` wrapper below — the toggling-template pitfall in
+// .claude/rules/arrowjs-pitfalls.md), most recent last, capped to the last 6
+// so a long-running relist doesn't grow the overlay unbounded. Keyed by each
+// step's own position in the FULL log (assigned before slicing) rather than
+// its timestamp — two git calls can legitimately land in the same
+// millisecond.
+function progressPanel() {
+  const recent = wd.steps.map((step, i) => ({ step, i })).slice(-6)
+  return html`
+    <div class="border-t border-slate-100 dark:border-zinc-800 px-4 py-2" data-testid="workdir-overlay-progress">
+      <ul class="max-h-28 overflow-y-auto space-y-0.5 font-mono text-[11px] text-slate-500 dark:text-zinc-400">
+        ${recent.map(
+          ({ step, i }) =>
+            html`<li
+              data-testid="workdir-overlay-progress-step"
+              data-ok="${step.ok ? 'true' : 'false'}"
+              class="${step.ok ? 'truncate' : 'truncate text-rose-600 dark:text-rose-400'}"
+            >
+              <span aria-hidden="true">${step.ok ? '✓' : '✗'}</span> ${step.cmd}
+            </li>`.key('workdir-step:' + i),
+        )}
+      </ul>
+    </div>
+  `
+}
+
 function overlayPanel() {
   return html`
     <div
@@ -226,26 +344,25 @@ function overlayPanel() {
                   type="button"
                   data-testid="workdir-overlay-option"
                   data-active="${() => (selIndex() === i ? 'true' : 'false')}"
-                  class="${() =>
-                    'flex w-full items-start gap-1.5 rounded-lg px-3 py-2 text-left text-[13px] ' +
-                    (selIndex() === i
-                      ? 'bg-indigo-50 dark:bg-indigo-500/15 text-indigo-800 dark:text-indigo-200 ring-1 ring-indigo-300 dark:ring-indigo-500/40'
-                      : 'text-slate-700 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800')}"
+                  data-busy="${() => (wd.busyKey === row.key ? 'true' : 'false')}"
+                  disabled="${() => wd.busyKey !== ''}"
+                  class="${() => rowClass(row, i)}"
                   @click="${(e) => {
                     if (e) e.stopPropagation()
                     wd.sel = i
                     row.run()
                   }}"
                 >
-                  <span class="w-3 shrink-0" aria-hidden="true">${() => (selIndex() === i ? '›' : '')}</span>
-                  <span>${row.label}</span>
+                  <span class="w-3 shrink-0" aria-hidden="true">${() => (wd.busyKey === row.key ? '⟳' : selIndex() === i ? '›' : '')}</span>
+                  <span>${() => (wd.busyKey === row.key ? row.label + '…' : row.label)}</span>
                 </button>
               </li>`.key('workdir-row:' + row.key),
             )}
         </ul>
+        <div class="contents">${() => (wd.steps.length ? progressPanel().key('workdir-progress') : '')}</div>
         <div class="flex items-center justify-between border-t border-slate-100 dark:border-zinc-800 px-4 py-2 text-[11px] text-slate-500 dark:text-zinc-400">
           <span data-testid="workdir-overlay-hint">${t('↑↓ kiezen · Enter bevestigen · Esc sluiten')}</span>
-          <span data-testid="workdir-overlay-status">${() => (wd.busy ? t('Bezig…') : '')}</span>
+          <span data-testid="workdir-overlay-status">${() => (busyRow() ? t('Bezig: {label}…', { label: busyRow().label }) : '')}</span>
         </div>
       </div>
     </div>

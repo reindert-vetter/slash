@@ -3114,6 +3114,11 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if err := json.Unmarshal(in, &arg); err != nil {
 			return nil, err
 		}
+		// clearCheckoutProgress + withCheckoutProgress: every runGitIn call this
+		// Activity makes from here on is recorded for the werkmap overlay's live
+		// progress panel (checkout_progress.go) — see its own doc comment.
+		clearCheckoutProgress(arg.Repo, arg.PR)
+		ctx = withCheckoutProgress(ctx, arg.Repo, arg.PR)
 		relistCheckoutCandidates(ctx, m, m.dataDir, arg.Repo, arg.PR)
 		publishCheckoutChanged(arg.Repo, arg.PR)
 		return nil, nil
@@ -3123,6 +3128,8 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if err := json.Unmarshal(in, &arg); err != nil {
 			return nil, err
 		}
+		clearCheckoutProgress(arg.Repo, arg.PR)
+		ctx = withCheckoutProgress(ctx, arg.Repo, arg.PR)
 		// Reuse the exact same resolution path a chat turn's own pending-decision
 		// check uses (chat_workflow.go's runOneClaudeTurn) — a menu-driven answer
 		// and a chat-driven answer share one code path, one set of rules.
@@ -3135,6 +3142,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if err := json.Unmarshal(in, &arg); err != nil {
 			return nil, err
 		}
+		clearCheckoutProgress(arg.Repo, arg.PR)
 		checkoutSetOff(m.dataDir, arg.Repo, arg.PR)
 		publishCheckoutChanged(arg.Repo, arg.PR)
 		return nil, nil
@@ -3144,6 +3152,8 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if err := json.Unmarshal(in, &arg); err != nil {
 			return nil, err
 		}
+		clearCheckoutProgress(arg.Repo, arg.PR)
+		ctx = withCheckoutProgress(ctx, arg.Repo, arg.PR)
 		if err := checkoutRestoreStashNow(ctx, m.dataDir, arg.Repo, arg.PR); err != nil {
 			m.logf("checkout: restore stash pr %d: %v", arg.PR, err)
 		}

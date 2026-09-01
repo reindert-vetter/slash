@@ -159,6 +159,10 @@ func runGitIn(ctx context.Context, dir string, args ...string) ([]byte, error) {
 	full := append([]string{"-C", dir}, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
 	out, err := cmd.CombinedOutput()
+	// Feeds the werkmap overlay's live progress panel (checkout_progress.go) —
+	// a no-op unless ctx was wrapped via withCheckoutProgress, which only the
+	// four checkout-menu Activities (workflows.go) do.
+	recordCheckoutProgressGit(ctx, args, out, err)
 	if err != nil {
 		return out, fmt.Errorf("git %s (in %s): %w: %s", strings.Join(args, " "), dir, err, strings.TrimSpace(string(out)))
 	}

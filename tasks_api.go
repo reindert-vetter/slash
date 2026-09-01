@@ -870,6 +870,12 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// buildCheckoutView), no git call at all, same batch shape as
 	// /api/pending-push.
 	mux.HandleFunc("/api/chat/checkout", s.handleChatCheckout)
+	// GET /api/chat/checkout/progress?pr=N → read-only: the real `git`
+	// commands one of the four checkout-menu Activities is currently
+	// running/just ran for this PR (checkout_progress.go), polled by the
+	// werkmap overlay while its own answer is in flight — purely cosmetic,
+	// same carve-out as /api/ingest/progress.
+	mux.HandleFunc("/api/chat/checkout/progress", s.handleCheckoutProgress)
 	// GET /api/pending-push?prs=N[,N…] → read-only: which of these PRs have
 	// landed chat edits that are not pushed to GitHub yet (pending_push.go).
 	// Purely local git reads (for-each-ref/rev-list/diff), no gh call, no
@@ -2532,6 +2538,26 @@ func (s *server) handleChatCheckout(w http.ResponseWriter, r *http.Request) {
 		out[statusKey(key.Repo, key.PR)] = buildCheckoutView(s.tasks.manager.dataDir, key.Repo, key.PR)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "checkout": out})
+}
+
+// handleCheckoutProgress serves GET /api/chat/checkout/progress?pr=N — a
+// purely in-memory, ephemeral read of the real `git` commands one of the four
+// checkout-menu Activities is currently running/just ran for pr
+// (checkout_progress.go), polled by the werkmap overlay
+// (src/workDirOverlay.mjs) while its own answer is in flight. Not a
+// read-model: see checkout_progress.go for why this falls outside the
+// write-boundary rule, same carve-out as GET /api/ingest/progress.
+func (s *server) handleCheckoutProgress(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	pr, err := strconv.Atoi(r.URL.Query().Get("pr"))
+	if err != nil || pr <= 0 {
+		http.Error(w, "invalid pr", http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "pr": pr, "steps": checkoutProgressSteps(queryRepo(r), pr)})
 }
 
 func (s *server) handlePendingPush(w http.ResponseWriter, r *http.Request) {

@@ -99,13 +99,50 @@ is never stranded: the **checkout chip** in `prInfoCard` (nav stop 1, unchanged,
 see `checkoutChipCommandsFor`) offers exactly the same options through the same
 `checkoutAnswer` Action.
 
-**Answering does not close it optimistically.** A row's `run` fires the Action
-and shows "Bezig…"; the overlay disappears only when the read model says the
-choice is gone, so what the reviewer sees always matches what the server
-actually stored. Its option list is deliberately a small parallel of
-`checkoutChipCommandsFor` rather than shared with it — that one builds palette
-commands for a different container, and both are three lines over the same read
-model.
+**Answering does not close it optimistically.** A row's `run` fires the Action;
+the overlay disappears only when the read model says the choice is gone, so
+what the reviewer sees always matches what the server actually stored. Its
+option list is deliberately a small parallel of `checkoutChipCommandsFor`
+rather than shared with it — that one builds palette commands for a different
+container, and both are three lines over the same read model.
+
+**The busy state names the running option and streams its real git
+commands, not a bare "Bezig…".** Reviewer request: "moet meer feedback geven
+en laten zien wat het echt doet voor commando's" — a generic corner label said
+nothing about WHICH of the seven rows was running or what it was actually
+doing. `wd.busyKey` (`workDirOverlay.mjs`) records the key of the row `run`
+was called on: that row's own label gets a spinner glyph (`⟳`) and an
+appended "…", every OTHER row visibly dims and gets the real `disabled`
+attribute (the plain-name-with-function-binding form, see
+`.claude/rules/arrowjs-pitfalls.md` — `?disabled=`/`.disabled=` do not
+toggle in this vendored build), `↑`/`↓`/`Enter` are swallowed by
+`handleWorkDirOverlayKeydown` while `wd.busyKey` is set (Escape still works —
+dismissal is independent of the in-flight request), and the footer status
+names the same row (`t('Bezig: {label}…', …)`).
+
+On top of the label, a live panel (`progressPanel()`, `data-testid=
+workdir-overlay-progress`) shows the actual `git` commands the in-flight
+Activity is running server-side — e.g. `✓ git stash push -u -m
+slash-chat-…`, `✗ git checkout -- .` — polled every 350ms from
+`GET /api/chat/checkout/progress?pr=N` while `wd.busyKey` is set, stopped the
+moment the request settles. The backend half is `checkout_progress.go`: an
+in-memory-only step log per PR (same write-boundary carve-out as
+`ingest_progress.go`/`comment_batch_progress.go`, see
+`.claude/rules/workflows-write-boundary.md` — no module, no read-model, no
+workflow-history write, gone on a restart), fed by `runGitIn` (`gh.go`)
+itself. `runGitIn` records a step **only** when its `ctx` carries the marker
+`withCheckoutProgress(ctx, repo, pr)` sets — every one of its MANY other call
+sites across `chat_checkout.go` (`discardCheckoutDirty`, `stashCheckoutDirty`,
+`classifyCheckoutCandidate`, `commitCheckoutEditsAt`, …) needed no change at
+all, since the marker rides along on the same `ctx` those functions already
+thread through; only the four checkout-menu Activities themselves
+(`checkoutRelist`/`checkoutAnswer`/`checkoutOff`/`checkoutRestoreStash`,
+`workflows.go`) wrap their `ctx` once, right after `clearCheckoutProgress`
+resets the previous answer's log so it never bleeds into a new one. Capped at
+30 steps/400 chars of output — a backstop, not a real limit any single
+Activity run gets near. Test: `tests/checkout-overlay.spec.mjs` ("answering
+shows which option is busy, locks the rest, and streams the real git commands
+it runs"); backend wiring: `checkout_progress_test.go`.
 
 **Naming:** everything the reviewer reads says **werkmap**, never "checkout";
 the identifiers keep their `checkout*` names. See the naming rule in

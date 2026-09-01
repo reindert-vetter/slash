@@ -126,6 +126,7 @@ export const EN = {
   'Werkmap voor deze PR': 'Working directory for this PR',
   '↑↓ kiezen · Enter bevestigen · Esc sluiten': '↑↓ select · Enter confirm · Esc close',
   'Bezig…': 'Working…',
+  'Bezig: {label}…': 'Working: {label}…',
 
   // ── src/markdown.mjs ────────────────────────────────────────────────────
   'Suggestie {n}': 'Suggestion {n}',

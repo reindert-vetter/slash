@@ -118,6 +118,75 @@ test.describe('Werkmap overlay', () => {
     await expect(page.getByTestId('workdir-overlay')).toHaveCount(0)
   })
 
+  // Reviewer request: "meer feedback geven en laten zien wat het echt doet
+  // voor commando's" — a bare "Bezig…" in the corner named neither which
+  // option was running nor what it was actually doing. The busy row now
+  // names itself, every other row locks, and a live panel
+  // (GET /api/chat/checkout/progress, checkout_progress.go) shows the real
+  // git commands the in-flight Activity is running.
+  test('answering shows which option is busy, locks the rest, and streams the real git commands it runs', async ({ page }) => {
+    await mockCheckout(page, DECISION)
+
+    let release
+    const released = new Promise((r) => (release = r))
+    const signals = []
+    await page.route(`**/api/workflows/chatmerge-12903/signals/merge`, async (route) => {
+      signals.push(route.request().postDataJSON())
+      await released
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{"status":"signalled"}' })
+    })
+    await page.route('**/api/chat/checkout/progress?*', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          pr: 12903,
+          steps: [
+            { cmd: 'git stash push -u -m slash-chat-20260901-120000', ok: true, output: '', at: 1 },
+            { cmd: 'git status --porcelain', ok: true, output: '', at: 2 },
+          ],
+        }),
+      }),
+    )
+
+    await page.goto('/pr/12903' + SEL)
+    await appReady(page)
+
+    const rows = page.getByTestId('workdir-overlay-option')
+    await page.keyboard.press('ArrowDown') // select the second option ("…/b")
+    await page.keyboard.press('Enter')
+
+    // The chosen row names itself — not a bare repeat of "Bezig…" — and every
+    // other row locks (both visually and for real: `disabled`).
+    await expect(rows.nth(1)).toHaveAttribute('data-busy', 'true')
+    await expect(rows.nth(1)).toContainText('/home/reindert/dev/b…')
+    await expect(rows.nth(0)).toBeDisabled()
+    await expect(rows.nth(1)).toBeDisabled()
+    await expect(rows.nth(2)).toBeDisabled()
+    await expect(page.getByTestId('workdir-overlay-status')).toContainText('Bezig: /home/reindert/dev/b…')
+
+    // The live panel shows the REAL git commands the Activity is running —
+    // not just the chosen option's own label repeated.
+    const steps = page.getByTestId('workdir-overlay-progress-step')
+    await expect(steps).toHaveCount(2)
+    await expect(steps.nth(0)).toContainText('git stash push -u -m slash-chat-20260901-120000')
+    await expect(steps.nth(1)).toContainText('git status --porcelain')
+
+    // ↑/↓/Enter are swallowed while an answer is in flight — a stray keypress
+    // must not queue up a second action against a locked menu.
+    await page.keyboard.press('ArrowUp')
+    await page.keyboard.press('Enter')
+    await expect.poll(() => signals.length).toBe(1)
+
+    // Releasing the answer clears the busy/progress state again.
+    release()
+    await expect.poll(() => signals.length).toBe(1)
+    await expect(rows.nth(0)).toBeEnabled()
+    await expect(page.getByTestId('workdir-overlay-status')).toHaveText('')
+    await expect(page.getByTestId('workdir-overlay-progress')).toHaveCount(0)
+  })
+
   // Reviewer-reported bug: a choice arriving while the empty Claude-chat
   // composer already holds real DOM focus (e.g. having just stepped into an
   // embedded conversation) let that composer's own `@keydown` intercept Enter
