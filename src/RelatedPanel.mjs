@@ -265,6 +265,13 @@ const cs = reactive({
   // bindings repaint; deliberately NOT bound to the URL, like cs.focus
   // itself.
   prWideCompose: false,
+  // generalOverlay — true while the general-chat overlay (generalChatOverlay.mjs)
+  // is showing this PR's general conversation full-screen. Reactive because the
+  // tree's own Claude column hides on it: the overlay renders the SAME `cc`, so
+  // both at once is a visible duplicate behind a partly transparent overlay.
+  // Set through setGeneralChatOverlayVisible below (the overlay imports this
+  // module, never the other way round).
+  generalOverlay: false,
   // rangeCompose marks the composer/Claude chat as opened for a Shift-arrow
   // multi-row selection in the index/methodes-kolom ("Plaats comment over dit
   // bereik" / "Chat met Claude over dit bereik", rangeCommandsFor in
@@ -3332,7 +3339,18 @@ export function isPrCommentScope() {
 // (which silently swallows its focus, too — a display:none element can't take
 // DOM focus at all).
 export function claudeColumnVisible() {
-  return !cs.prWideCompose && claudeChatVisible()
+  return !cs.prWideCompose && !cs.generalOverlay && claudeChatVisible()
+}
+
+// setGeneralChatOverlayVisible — called by generalChatOverlay.mjs on open and
+// close. Deliberately routed through the column's OWN existing visibility gate
+// rather than toggling ClaudeChatPanel at its mount site in home.mjs: that
+// turned the mount into a keyed-template <-> '' toggling slot, which silently
+// broke the column's event bindings (Escape-to-cancel stopped reaching the
+// composer) — the disposal hazard described in
+// .claude/rules/arrowjs-pitfalls.md.
+export function setGeneralChatOverlayVisible(v) {
+  cs.generalOverlay = !!v
 }
 
 // commentSideFocused — "is the keyboard currently on the LEFT (comment)
@@ -4921,10 +4939,17 @@ function ensureCodePreviewObserver() {
 // `commentClaudeRowWidthCls(state)` — the column's own width bound, see that
 // function's doc comment — so this card can never spill wider than
 // comment-claude-row above it.
-export function CodePreviewPanel(state, commentTarget) {
+// `opts.inOverlay` marks the copy the general-chat overlay mounts
+// (generalChatOverlay.mjs). The tree's own copy renders nothing while that
+// overlay is up — it would be the same fences twice, once behind a partly
+// transparent overlay. Toggled INSIDE the existing `contents` root rather
+// than at the mount site, for the reason spelled out on
+// setGeneralChatOverlayVisible above.
+export function CodePreviewPanel(state, commentTarget, opts = {}) {
   getCommentTarget = commentTarget
   editsStateRef = state
   ensureCodePreviewObserver()
+  const hidden = () => cs.generalOverlay && !opts.inOverlay
   // The second argument is the keyboard cursor (cs.previewPos, only ever
   // non-zero while the chat itself owns the keyboard) — a getter per card, so
   // walking with ↓/↑ only re-applies that card's own class/data-active slots,
@@ -4938,7 +4963,7 @@ export function CodePreviewPanel(state, commentTarget) {
   // pendingEditsItem above) — ignored by an ordinary fence card.
   return html`<div class="contents">
     ${() =>
-      combinedPreviewItems().length
+      combinedPreviewItems().length && !hidden()
         ? codePreviewColumn(
             () => combinedPreviewItems(),
             (i) => cs.focus === 'claude' && cs.previewPos === i + 1,
@@ -5597,6 +5622,85 @@ export function isPrWideComposing() {
 export function startClaudeChat(commentTargetFn) {
   toNew(commentTargetFn)
   enterClaudeChatFromNew()
+}
+
+// ── The general (PR-wide, code-less) chat ───────────────────────────────────
+// Reviewer request: "hier wil ik een algemene chat kunnen starten, net zo
+// werken als chat op regel. het moet dan ook los in de blokken index komen
+// zonder dat het gekoppeld is aan code" — plus, later: "Eén per PR,
+// hergebruiken … ik vind het mooi als die chat een overlay is over alles
+// heen, rechts daarvan mag je gegeneerde blokken uit de chat tonen. esc moet
+// alles weer hidden".
+//
+// A conversation always needs a comment to hang on (the backend's own
+// constraint, see "Product decision" in claude-chat-panel.md), so a general
+// chat reuses the PR-WIDE comment shape (kind 'issue', no file/line — the
+// same thing startPrWideComment/placeComment already write) with the existing
+// CLAUDE_ANCHOR_PLACEHOLDER body and always `local: true`. That combination
+// is deliberate: isChatAnchorPlaceholder already excludes such a comment from
+// indexComments/"Zet op GitHub"/every title fallback, so the anchor stays
+// invisible AS A COMMENT and only ever shows up as its own "Openstaande
+// chats" row (openChatComments above). Nothing is posted to GitHub, ever.
+
+// isGeneralChatAnchor — that exact comment: PR-wide (no code anchor) AND
+// still nothing but the placeholder body. One definition, used by
+// openChatComments here and by home.mjs's index row/label.
+export function isGeneralChatAnchor(c) {
+  return !!c && !!c.kind && isChatAnchorPlaceholder(c)
+}
+
+// generalChatAnchor — the ONE general chat of this PR, if it already exists.
+// "Eén per PR, hergebruiken": startPrGeneralChat never creates a second one.
+export function generalChatAnchor() {
+  return cs.list.find(isGeneralChatAnchor) || null
+}
+
+// startPrGeneralChat opens (creating it only the first time) this PR's one
+// general conversation and leaves the keyboard in its composer. `text`, when
+// given, is sent straight away as the first turn — the `/`-menu's no-match
+// fallback behaves exactly like the block palette's own "Chat over deze
+// regel" there (reviewer: direct versturen).
+//
+// cs.focus = 'claude' is load-bearing, not cosmetic: syncClaudeAnchorForSelection
+// (the passive "the chat column is a function of the selected code" sync)
+// returns early on that focus, so the overlay's transcript is never re-anchored
+// out from under it by an unrelated comment poll while it sits open.
+export async function startPrGeneralChat(state, text) {
+  if (!state) return null
+  let c = generalChatAnchor()
+  if (!c) {
+    const ok = await createComment({
+      pr: state.pr,
+      repo: repoField(),
+      file: '',
+      line: 0,
+      body: CLAUDE_ANCHOR_PLACEHOLDER,
+      kind: 'issue',
+      local: true,
+    })
+    if (!ok) return null
+    c = generalChatAnchor()
+    if (!c) return null
+  }
+  cs.focus = 'claude'
+  cs.claudePos = 0
+  await ensureAndLoadChat(state.pr, c.id)
+  ensureChatEvents(state.pr)
+  restoreClaudeComposerDraft()
+  focusEl('[data-testid=claude-chat-compose]')
+  if (text) await sendClaudeChatText(state, () => null, text)
+  return c
+}
+
+// GeneralChatCard renders the SAME chat card the tree's own Claude column
+// renders (claudeChatColumn, ClaudeChat.mjs — identical view/callbacks, so
+// identical streaming, werkmap choice, menu and send path), just without
+// ClaudeChatPanel's claudeColumnVisible()/width/resize wrapper: inside the
+// overlay the column IS the surface, its visibility is the overlay's own
+// open flag, and there is no neighbouring tree column to resize against.
+export function GeneralChatCard(state) {
+  ensureChatEvents(state.pr)
+  return claudeChatColumn(claudeChatView(), claudeChatCallbacks(state, () => null), false, () => {})
 }
 
 // sendClaudeChatText sends `text` as the conversation's actual turn, reusing
@@ -10137,9 +10241,17 @@ export function indexComments() {
 // indexComments' own unresolved half needs, applied here too) before it gets
 // an index row at all.
 export function openChatComments() {
-  if (!cc.conversations.length) return []
   const existingIds = new Set(indexComments().map((c) => c.id))
-  return cs.list.filter((c) => cc.conversations.indexOf(c.id) >= 0 && !existingIds.has(c.id))
+  // A general chat (isGeneralChatAnchor — the PR-wide, code-less anchor the
+  // `/`-menu's "Chat met Claude over deze PR" creates) gets its row from the
+  // moment it EXISTS, not only once it has turns: it is the one thing this
+  // section is the sole surface for, and cc.conversations only lists
+  // conversations that already have messages — so without this the row (and
+  // with it the way back into the overlay) would be missing for exactly as
+  // long as the reviewer has not sent anything yet.
+  return cs.list.filter(
+    (c) => (cc.conversations.indexOf(c.id) >= 0 || isGeneralChatAnchor(c)) && !existingIds.has(c.id),
+  )
 }
 
 // chatConversationIds — a plain, unconditional read of cc.conversations for

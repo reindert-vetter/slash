@@ -173,6 +173,37 @@ including "a choice opening while the empty Claude composer holds focus
 steals it back, so Enter still confirms the overlay and never opens the
 Claude menu behind it".
 
+## The general-chat overlay: the third thing that owns the keyboard
+
+`src/generalChatOverlay.mjs` — a fullscreen overlay holding this PR's ONE
+general Claude conversation (chat card left, the existing code-preview column
+to its right). Same top-level mount and same ownership discipline as the
+werkmap overlay above: `isGeneralChatOverlayOpen()`/
+`handleGeneralChatOverlayKeydown(e)` sit in `home.mjs`'s `onKeydown` right
+after the werkmap pair, so no tree-navigation branch runs while it is open.
+
+The one deliberate difference: it swallows **nothing but Escape**. The
+reviewer is typing in a real composer inside it, so characters, Enter and
+caret movement must keep reaching that field exactly as in the tree's own
+Claude column. And Escape is handled on the **capture** phase (registered in
+`initGeneralChatOverlay`), not through the global listener: the chat
+composer's own bubble-phase `@keydown` swallows Escape while a turn is
+running (it cancels that turn), which is precisely when the reviewer most
+wants out — capturing wins that race by construction, and cancelling stays
+available through the card's own "Stop" button and the Claude menu.
+Reviewer's rule, absolute: *"esc moet alles weer hidden"*.
+
+Closing also calls `leaveRelated()` — `startPrGeneralChat` takes
+`cs.focus = 'claude'`, and leaving it set would keep the tree's keyboard
+routed into a now-hidden composer (`relatedActive()` is checked before every
+navigation branch, so even a plain `/` would arrive there as a character).
+
+Everything the overlay renders is reused, not reimplemented:
+`GeneralChatCard`/`CodePreviewPanel` (`RelatedPanel.mjs`). While it is open,
+`home.mjs` renders **neither** of those in the tree itself — same `cc`, so
+they would be a visible duplicate behind the overlay. Full mechanism:
+"The general chat" in `.claude/docs/claude-chat-panel.md`.
+
 ## The right-click context menu
 
 Reviewer request: a native right-click (Cmd/Ctrl-less, the ordinary secondary
@@ -1388,44 +1419,65 @@ menu (`commentMenuOpener`) still opens right after, unrelated to this —
 It is **not** an `isReviewFollowup` mode: the reply field it belongs to is
 on-screen, so `positionMenu` anchors it normally.
 
-## `/` opens the menu of the CURRENT STOP (`contextMenuMode`)
+## `/` always opens the PR menu (and `contextMenuMode` is now the right-click's)
 
-`/` used to be hardwired to `openMenu('pr')`. It now opens whatever menu
-belongs to the stop that owns the keyboard — `contextMenuMode()` (`home.mjs`),
-mirroring the Enter branches further down in `onKeydown`:
+`/` opens `openMenu('pr')`, wherever the keyboard is — a selected code line,
+a comment-index row, the push-todo row, stop 1, anywhere.
 
-| stop | mode |
-|---|---|
-| the push-todo row | `pushTodo` |
-| a comment-index row | `prComment` |
-| stop 1 (description), a toggle row, no block loaded | `pr` |
-| anything else (a selected block / a diff / stop 2b) | `block` |
+**This deliberately reverses the shorter-lived "`/` opens the menu of the
+current stop" rule**, which routed `/` through `contextMenuMode()` (push-todo
+row → `pushTodo`, comment-index row → `prComment`, stop 1/toggle rows → `pr`,
+anything else → `block`). Reviewer decision, in his own words: *"/ wordt altijd
+het PR-menu"*. The reason is the general chat below: it has to be startable
+from every stop, and typing a question the PR menu doesn't match now falls back
+to **"Chat over deze PR"** instead of the block palette's "Chat over deze
+regel". Nothing was lost — every stop-specific menu is still exactly one
+`Enter` away, which is where it always came from.
 
-Reviewer request: "als ik `/` typ, wil ik chatten met claude. Als dat betekent
-dat ik een code line heb geselecteerd, wil ik het menu zien dat al bestaat …
-als er geen menu is, laat dan in pr tree het algemene menu zien." The chat part
-follows for free: with the block palette open, typing a question nobody's
-command matches lands on **"Chat over deze regel"**, the default no-match
-fallback (above). So `/`, type, Enter is one flow.
+`contextMenuMode()` itself stays, unchanged, with one remaining caller:
+`rightClickMenuMode()` (see "The right-click context menu" above), which still
+needs "which menu would `Enter` open right here". `compose`/`comment`/`claude`
+remain unreachable from `/` for the same reason as before — those stops sit
+behind the `isComposeOpen()`/`relatedActive()`/`isEditableFocused()` branches,
+which return before `/` is ever looked at, so a `/` typed into a composer
+reaches the field as a character.
 
-`compose`/`comment`/`claude` are deliberately **absent** from that table: those
-stops all sit behind the `isComposeOpen()`/`relatedActive()`/`isEditableFocused()`
-branches, which return before `/` is ever looked at — a `/` typed into a
-composer must reach the field as a character. They are still reachable exactly
-as before, via `Enter`.
+**Positioning followed the change:** `isIndexMenu()` (`home.mjs`) now covers
+`ms.mode === 'pr'` too, so a `/` pressed from the block index anchors the PR
+menu on the index like every other menu opened there, instead of floating over
+the diff region far to the right. Explicitly **not** at stop 1
+(`&& !state.showDescription`): `isIndexMenu()` is checked before
+`isDescriptionMenu()` and `state.mode` is `'list'` there as well, so without
+that guard the description column's own anchor would never be reached.
 
-**Accepted consequence, stated so it isn't mistaken for a regression:** the
-PR-wide menu (and thus "PR keuren", "Diepgravend onderzoek", "Algemene comment
-plaatsen") is no longer one keypress away from a selected block — it now takes
-`←` into stop 1 first, or `Enter` there. That is the direct implication of the
-request above; the specs (`tests/pr-menu.spec.mjs`,
-`tests/prwide-comment.spec.mjs`) walk that extra step.
+### The general chat: `/`'s no-match fallback and its own PR_COMMANDS item
+
+Typing something no PR command matches (the reported case: `fix tests in pr`
+→ a bare "Geen commando's.") now falls back to ONE item, **"Chat over deze
+PR"**, which opens this PR's general conversation and **sends the typed text
+straight away** as its first turn — the same shape (and the same
+`sendClaudeChatText` send path) the block palette's "Chat over deze regel"
+already had. Deliberately a single item: placing a PR-wide comment is a real,
+GitHub-visible action and stays a deliberate menu choice, never a fallback.
+
+`PR_COMMANDS`' own first real item — **"Chat met Claude over deze PR"**, thus
+`defaultSel`'s default `Enter` action — is the same thing without typed text.
+Both run `openGeneralChat(text)` (`home.mjs`), which shows the overlay and
+then lets `startPrGeneralChat` (`RelatedPanel.mjs`) create-or-reuse the anchor.
+Full mechanism (one chat per PR, the invisible PR-wide anchor, the
+"Openstaande chats" row, the overlay's keyboard rules): "The general chat" in
+`.claude/docs/claude-chat-panel.md`.
 
 ## The PR-wide menu itself (`pr`, `PR_COMMANDS`)
 
-The same overlay, with actions on the **whole PR**. Six root items:
+The same overlay, with actions on the **whole PR** — and what `/` now always
+opens (see the section above). Seven root items:
 
 1. **"Sluit menu"** (pinned).
+1b. **"Chat met Claude over deze PR"** — the general chat (see the section
+   above and `.claude/docs/claude-chat-panel.md`). Deliberately the first
+   REAL item, i.e. the default `Enter` action, since `/`'s whole reason for
+   becoming unconditional was "als ik `/` typ, wil ik chatten met claude".
 2. **"GitHub"** (submenu, thus the default item — a submenu rather than a
    direct action, deliberately left as-is): *Open on GitHub*, **"PR keuren"**
    and **"Algemene comment plaatsen"** (`startPrWideComment` — a PR-WIDE issue

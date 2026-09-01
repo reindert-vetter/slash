@@ -96,6 +96,8 @@ import RelatedPanel, {
   startPrCommentReply,
   cancelPrCommentReply,
   startPrCommentChat,
+  startPrGeneralChat,
+  isGeneralChatAnchor,
   resolvePrCommentItem,
   deletePrCommentItem,
   unresolvePrCommentItem,
@@ -172,6 +174,12 @@ import { renderMarkdown } from './markdown.mjs'
 import { commentMentionsMe } from './mentions.mjs'
 import ImageLightboxHost, { initImageLightbox, isLightboxOpen, handleLightboxKeydown } from './imageLightbox.mjs'
 import WorkDirOverlayHost, { initWorkDirOverlay, isWorkDirOverlayOpen, handleWorkDirOverlayKeydown } from './workDirOverlay.mjs'
+import GeneralChatOverlayHost, {
+  initGeneralChatOverlay,
+  isGeneralChatOverlayOpen,
+  handleGeneralChatOverlayKeydown,
+  openGeneralChatOverlay,
+} from './generalChatOverlay.mjs'
 import { initTheme, themeToggleButton } from './theme.mjs'
 import { t, syncUiLang } from './i18n.mjs'
 import { ensureAutoWarn, autoWarnToggleButton, autoWarn } from './autowarn.mjs'
@@ -3358,6 +3366,13 @@ function chatBlockItem(c) {
   item.id = 'chat:' + c.id
   item.category = 'CHAT'
   item.chatOnly = true
+  // A general chat has no comment text to name it by — its anchor body is
+  // only ever CLAUDE_ANCHOR_PLACEHOLDER (see isGeneralChatAnchor) — so it
+  // says what it is instead of showing that placeholder sentence.
+  if (isGeneralChatAnchor(c)) {
+    item.label = t('Algemene chat')
+    item.generalChat = true
+  }
   return item
 }
 
@@ -3612,8 +3627,13 @@ function recomputeLeftList() {
   // a comment whose own anchor block is actually in this tree, same
   // dead-end-avoidance reasoning as commentCandidates above (a row with no
   // code to drill into would be a dead end).
+  // A general chat (isGeneralChatAnchor — PR-wide, code-less) is exempt from
+  // that condition by definition: it has no anchor block, and its row is not
+  // a dead end either — it opens the general-chat overlay instead of drilling
+  // into code. Same `c.kind ||` carve-out commentCandidates above already
+  // makes for a PR-wide comment.
   const chatItems = openChatComments()
-    .filter((c) => anchoredBlocks.has(c.file + '|' + c.label))
+    .filter((c) => isGeneralChatAnchor(c) || anchoredBlocks.has(c.file + '|' + c.label))
     .map(chatBlockItem)
   state.blocks = [...groupedRows, ...commentItems, ...chatItems]
     // The haystack is label + category + FILE PATH (reviewer request: "ik wil
@@ -12567,7 +12587,31 @@ const COMMANDS = withClose([
 // /pr-overview via overviewExitUrl); it was removed since the ← nav-chain
 // exit (stop 1, state.showDescription) already reaches the same destination
 // with the same params — see overviewExitUrl above.
+// openGeneralChat — the ONE entry point into this PR's general conversation,
+// shared by the PR menu's own item, its no-match fallback and the `→` on the
+// "Openstaande chats" row. Shows the overlay FIRST (so the reviewer sees
+// something the same frame, even while the very first anchor comment is still
+// being created) and then lets RelatedPanel create/reuse the anchor, load the
+// conversation and focus its composer. `text`, when given, is sent straight
+// away as the first turn.
+function openGeneralChat(text) {
+  openGeneralChatOverlay()
+  startPrGeneralChat(state, text)
+}
+
 const PR_COMMANDS = withClose([
+  {
+    id: 'pr-general-chat',
+    // The general (PR-wide, code-less) chat — startPrGeneralChat creates or
+    // reuses this PR's ONE general conversation and shows it in the overlay
+    // (generalChatOverlay.mjs). Deliberately the FIRST real item, i.e.
+    // defaultSel's default Enter action: `/` is now always this menu
+    // (see onKeydown's `/` branch) and the reviewer's own reason for that
+    // was "als ik `/` typ, wil ik chatten met claude".
+    label: t('Chat met Claude over deze PR'),
+    hint: 'claude',
+    run: () => openGeneralChat(),
+  },
   {
     id: 'pr-github',
     label: t('GitHub'),
@@ -13073,9 +13117,30 @@ function resolveCommandsInner(query) {
     ]
   }
   // (ms.sub itself is handled once, at the top of this function.)
-  // The PR-wide tree menu (opened with `/`) is a plain command list too — no
-  // block actions, no comment fallback.
-  if (ms.mode === 'pr') return filterCommands(ms.commands, query)
+  // The PR-wide tree menu — now what `/` ALWAYS opens (see onKeydown's `/`
+  // branch). Its own no-match fallback mirrors the block palette's below:
+  // typing a question no PR command matches ("fix tests in pr", the reported
+  // case) used to collapse to CommandMenu's bare "Geen commando's.", a dead
+  // end. It now becomes the general chat, with the typed text SENT straight
+  // away as the conversation's first turn — exactly what "Chat over deze
+  // regel" does for a code line (reviewer: direct versturen). Only one item:
+  // a PR-wide comment ("Algemene comment plaatsen") is a real, GitHub-visible
+  // action and stays a deliberate menu choice, never a fallback.
+  if (ms.mode === 'pr') {
+    const list = filterCommands(ms.commands, query)
+    const q = (query || '').trim()
+    if (list.length === 0 && q) {
+      return [
+        {
+          id: 'make-general-chat',
+          label: t('Chat over deze PR'),
+          hint: 'claude',
+          run: () => openGeneralChat(q),
+        },
+      ]
+    }
+    return list
+  }
   // The comment-kind menu (Enter/button on a filled composer): choose Claude /
   // Git / private / Jira. The ms.sub check above already handles its Jira
   // submenu, so we only reach here at the root list.
@@ -13337,16 +13402,21 @@ function runCommand(cmd) {
   if (cmd && cmd.run) requestAnimationFrame(() => cmd.run())
 }
 
-// contextMenuMode picks the palette mode for a `/` press: the menu belonging to
-// the stop that currently owns the keyboard, else the general PR-wide one.
-// Deliberately mirrors — rather than replaces — the Enter branches further down
-// in onKeydown, which are ordered the same way; `/` is only ever evaluated at
-// one single point in that handler, so this is the whole decision it needs.
+// contextMenuMode picks the palette mode belonging to the stop that currently
+// owns the keyboard, else the general PR-wide one. Deliberately mirrors —
+// rather than replaces — the Enter branches further down in onKeydown, which
+// are ordered the same way.
 //
-// The modes NOT listed here are unreachable at that point by construction:
-// 'compose'/'comment'/'claude' all sit behind the isComposeOpen()/
-// relatedActive()/isEditableFocused() branches, which return before `/` is ever
-// looked at (a `/` typed in a composer must reach the field as a character).
+// It used to be `/`'s own resolver; `/` is now unconditionally the PR menu
+// (reviewer: "/ wordt altijd het PR-menu", see that branch in onKeydown), so
+// its ONLY remaining caller is rightClickMenuMode below, which still needs
+// exactly this "which menu would Enter open right here" answer.
+//
+// The modes NOT listed here are unreachable through Enter at that point by
+// construction: 'compose'/'comment'/'claude' all sit behind the
+// isComposeOpen()/relatedActive()/isEditableFocused() branches (a `/` typed in
+// a composer must reach the field as a character) — a right-click can land
+// there directly, which is why rightClickMenuMode covers them itself.
 function contextMenuMode() {
   if (state.pushTodoFocused) return 'pushTodo'
   // Same hasMultiSelection() carve-out as the Enter branch below — an active
@@ -13460,6 +13530,16 @@ function onKeydown(e) {
   // other key is swallowed so the review tree never navigates underneath it.
   if (isWorkDirOverlayOpen()) {
     handleWorkDirOverlayKeydown(e)
+    return
+  }
+
+  // The general-chat overlay (generalChatOverlay.mjs) owns the keyboard the
+  // same way — but in the opposite direction: it deliberately swallows
+  // NOTHING except Escape (which hides it again), because the reviewer is
+  // typing in a real composer inside it. Returning here is the whole point:
+  // no tree-navigation branch below runs while it is open.
+  if (isGeneralChatOverlayOpen()) {
+    handleGeneralChatOverlayKeydown(e)
     return
   }
 
@@ -13882,23 +13962,21 @@ function onKeydown(e) {
     return
   }
 
-  // `/` opens the menu that belongs to WHERE THE KEYBOARD IS — the same
-  // contextual choice Enter makes at this point in the chain (see
-  // contextMenuMode), falling back to the general PR-wide tree menu when the
-  // current stop has no menu of its own. Reviewer request: "als ik `/` typ,
-  // wil ik chatten met claude. Als dat betekent dat ik een code line heb
-  // geselecteerd, wil ik het menu zien dat al bestaat … als er geen menu is,
-  // laat dan in pr tree het algemene menu zien" — with the block palette open,
-  // typing straight into it reaches "Chat over deze regel" (the default
-  // no-match fallback, see resolveCommands). Like Enter it's handled before
-  // the empty-blocks guard so it works while loading. A focused input (the
-  // comment composer/reply) is already handled by the relatedActive() branch,
-  // or by the isEditableFocused() fallback just above, so a typed `/` there
-  // never reaches here — and that also bounds which modes are reachable from
-  // here at all (see contextMenuMode).
+  // `/` ALWAYS opens the general PR-wide menu, wherever the keyboard is.
+  //
+  // This deliberately REVERSES the earlier "`/` opens the menu of the current
+  // stop" rule (contextMenuMode, still used by the right-click menu below):
+  // reviewer decision — "/ wordt altijd het PR-menu". The general chat has to
+  // be startable from every stop, including a selected code line, and typing
+  // a question the PR menu doesn't match now falls back to "Chat over deze PR"
+  // (see resolveCommands). "Chat over deze regel" is unchanged but reachable
+  // through `Enter` only. Like Enter it's handled before the empty-blocks
+  // guard so it works while loading; a focused input (composer/reply) is
+  // already caught by the relatedActive()/isEditableFocused() branches above,
+  // so a typed `/` there still reaches the field as a character.
   if (e.key === '/') {
     e.preventDefault()
-    openMenu(contextMenuMode())
+    openMenu('pr')
     return
   }
 
@@ -14474,6 +14552,15 @@ function onKeydown(e) {
           if (curBlock().chatOnly) enterClaudeChat(state.pr)
           else enterCommentsOrRelated(state.pr)
         }
+      } else if (curBlock() && curBlock().generalChat) {
+        // The general chat's own row (chatBlockItem/isGeneralChatAnchor) has
+        // no anchor block AND no comment thread worth stepping into — its
+        // anchor is an invisible placeholder. → therefore opens the overlay
+        // straight away, the same single surface the `/`-menu opens
+        // (reviewer: "als ik vanuit de blokken index 2x naar rechts ga, en er
+        // is geen comment, dan wil ik gelijk in de chat belanden", here even
+        // in one step since there is nothing to drill into first).
+        openGeneralChat()
       } else if (!isPrCommentThreadFocused(sc)) enterPrCommentThread(sc)
     } else enterDiff()
   } else if (e.key === 'ArrowLeft') {
@@ -14779,7 +14866,19 @@ function isReviewFollowup(mode) {
 // ordinary drill always runs inside state.mode === 'diff', which already
 // claims Enter/`/` first (see the state.mode === 'diff' branch in onKeydown).
 function isIndexMenu() {
-  return state.mode === 'list' && (ms.mode === 'block' || isReviewFollowup(ms.mode)) && state.focusLevel <= 1
+  // 'pr' is in this list because `/` now ALWAYS opens the PR menu (see its
+  // branch in onKeydown): pressed from the index it must appear next to the
+  // index like every other menu opened there, not over the diff region far
+  // to the right. Explicitly NOT at stop 1 — this check runs before
+  // isDescriptionMenu below and state.mode is 'list' there too, so without
+  // the guard the description column's own anchor would never be reached.
+  // In diff mode this whole branch is skipped, so the PR menu keeps its
+  // default positioning there.
+  return (
+    state.mode === 'list' &&
+    (ms.mode === 'block' || (ms.mode === 'pr' && !state.showDescription) || isReviewFollowup(ms.mode)) &&
+    state.focusLevel <= 1
+  )
 }
 
 // lastIndexRowRect caches the selected sidebar row's bounding rect while it's
@@ -16982,6 +17081,10 @@ function DetailPanel(state) {
           // again)" in claude-chat-panel.md), bounded to that row's own real
           // width (commentClaudeRowWidthCls, RelatedPanel.mjs) so it can
           // never spill wider than comment-claude-row above it.
+          // It renders nothing while the general-chat overlay is up (that
+          // overlay mounts its own copy, next to the same conversation's chat
+          // card) — gated inside CodePreviewPanel itself, see its `inOverlay`
+          // option and setGeneralChatOverlayVisible (RelatedPanel.mjs).
           CodePreviewPanel(state, commentTarget)}
         ${() =>
           RelatedPanel(state, commentTarget, { drill: handleRelatedDrill }).key('related-panel')}
@@ -17215,6 +17318,10 @@ ImageLightboxHost()(app)
 // (sendCheckoutAction, which only ever starts/signals the chat_merge queue).
 initWorkDirOverlay(state, sendCheckoutAction)
 WorkDirOverlayHost()(app)
+// The general-chat overlay (generalChatOverlay.mjs) — same top-level mount,
+// same "owns the keyboard while open" contract; see onKeydown.
+initGeneralChatOverlay(state)
+GeneralChatOverlayHost()(app)
 // The call-arrow overlay: one static fixed <svg> drawn imperatively (see
 // src/callArrows.mjs). Top-level like MenuHost — inside <main> its z-index
 // would be capped at <main>'s own z-10 stacking context.

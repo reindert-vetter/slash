@@ -32,8 +32,8 @@ test.describe('PR Review Tree — PR-wide menu on the description column (stop 1
     // what broke last time; assert presence/order of the known first few
     // items instead, which survives a future addition.
     await expect(rows.nth(0)).toContainText('Sluit menu')
-    await expect(rows.nth(1)).toContainText('GitHub')
-    await expect(rows.nth(2)).toContainText('Jira')
+    await expect(rows.nth(1)).toContainText('Chat met Claude over deze PR')
+    await expect(rows.nth(2)).toContainText('GitHub')
 
     // Positioning: the palette takes the description column's left + width
     // (26rem) — so it floats over/near the description, not at the diff
@@ -61,11 +61,11 @@ test.describe('PR Review Tree — PR-wide menu on the description column (stop 1
     await expect(menu).not.toBeVisible()
   })
 
-  // Outside stop 1, `/` no longer opens the PR-wide menu at all — it opens the
-  // menu of the current stop (contextMenuMode, home.mjs), here the block
-  // palette — so it is positioned exactly like Enter's own palette, not like
-  // the stop-1 PR menu asserted above.
-  test('`/` outside stop 1 opens the block palette, anchored exactly like Enter', async ({ page }) => {
+  // Outside stop 1, `/` opens the PR-wide menu (it always does now — see
+  // "`/` always opens the PR menu" in command-palette.md), but from the index
+  // it is anchored on the index exactly like Enter's own block palette
+  // (isIndexMenu covers 'pr' there too), not on the description column.
+  test('`/` outside stop 1 is anchored exactly like Enter', async ({ page }) => {
     await page.goto('/pr/12903')
     // By label, not by raw index — see "Sort order of the left list" in
     // blocks-and-ingest.md. CreatePaymentAction::execute reliably carries a

@@ -406,7 +406,7 @@ test.describe('PR Review Tree — review-submit follow-up (Keur de HELE PR goed 
     // known first row instead of the total count.
     await page.keyboard.press('Escape')
     await expect(rows.nth(0)).toContainText('Sluit menu')
-    await expect(rows.nth(1)).toContainText('GitHub')
+    await expect(rows.nth(1)).toContainText('Chat met Claude over deze PR')
 
     await page.keyboard.press('Escape')
     await expect(menu).not.toBeVisible()

@@ -1212,13 +1212,14 @@ changed rows within the range.
   `tests/range-select-related-scope.spec.mjs`,
   `tests/footer-explanation-range.spec.mjs`.
 
-## `/` — the menu of the current stop
+## `/` — always the PR menu
 
-`/` is no longer "the PR menu key": it opens whichever palette belongs to the
-stop that owns the keyboard (`contextMenuMode`, `home.mjs`) and only falls back
-to the PR-wide menu on a stop with no menu of its own. Full table + the
-consequence for reaching `PR_COMMANDS`: "`/` opens the menu of the CURRENT
-STOP" in `.claude/docs/command-palette.md`.
+`/` opens `PR_COMMANDS`, wherever the keyboard is. It briefly opened the menu
+of the current stop instead (`contextMenuMode`); that was reversed on the
+reviewer's own decision ("/ wordt altijd het PR-menu") so the general chat is
+startable from every stop — typing a question no PR command matches falls back
+to "Chat over deze PR". Every stop-specific menu stays one `Enter` away. See
+"`/` always opens the PR menu" in `.claude/docs/command-palette.md`.
 
 ## Shift+↑/↓ in the INDEX — selecting several rows at once
 

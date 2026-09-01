@@ -378,8 +378,10 @@ this one comment-anchor flow — an ordinary drill always runs inside
 this depth is not covered by this fix (not part of the reported bug) and
 still falls through to the generic list-mode `ArrowLeft` branch.
 
-**`Enter`/`/` had the exact same gap, one level up.** Both `onKeydown`'s
-`Enter` branch and its mirrored `/`-key twin `contextMenuMode()` open the
+**`Enter` had the exact same gap, one level up.** (So did `/` while it was
+routed through `contextMenuMode()` — it no longer is, see "`/` always opens
+the PR menu" in command-palette.md.) `onKeydown`'s `Enter` branch and
+`contextMenuMode()`, still the right-click's resolver, open the
 comment row's own `'prComment'` menu ("Beantwoorden"/"Resolve comment")
 whenever `selectedComment()` resolves AND no SIDEBAR-level multi-selection is
 active (`!hasMultiSelection()`, which only ever looks at `state.listAnchor` —

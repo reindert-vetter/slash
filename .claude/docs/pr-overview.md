@@ -14,7 +14,7 @@ module/table (per `.claude/rules/workflows-write-boundary.md`).
 `/` used to focus the search box. It now opens a **general command menu**
 (`menu`/`omenu`/`MenuHost` in `src/overview.mjs`) built on the **shared
 `CommandMenu.mjs` component** — the same palette `/pr/<id>` opens on every stop
-(see "`/` opens the menu of the CURRENT STOP" in
+(see "`/` always opens the PR menu" in
 `.claude/docs/command-palette.md`), so `/` means the same thing on both pages.
 The search box stays reachable with `↑` from the first row and with the mouse.
 

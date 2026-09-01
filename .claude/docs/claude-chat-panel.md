@@ -953,6 +953,10 @@ reopen the exact same code by hand.
 
 ### `openChatComments()` (`RelatedPanel.mjs`)
 
+(The PR's one **general chat** lands in this same section — with one carve-out,
+since it must get its row before it has any turns. See "The general chat"
+below.)
+
 Every comment with an EXISTING conversation (`cc.conversations` — "here a
 Claude conversation really happened", see `ConversationsWithMessages` in
 `modules/chat`) whose own comment doesn't already get a row anywhere else —
@@ -1104,6 +1108,86 @@ Claude turn/RunChat call happens), plus the plain module round trip
 can never resolve one; this needs the real anchor PR 12903's own ingested
 tree) and checks the row appears, 2x `→` lands straight in the chat, and the
 icon disappears after the mocked "seen" Signal round-trips.
+
+## The general chat: one PR-wide, code-less conversation in an overlay
+
+Reviewer request, from the `/`-menu screenshot where a typed "fix tests in pr"
+collapsed to "Geen commando's.": *"hier wil ik een algemene chat kunnen
+starten, net zo werken als chat op regel. het moet dan ook los in de blokken
+index komen zonder dat het gekoppeld is aan code"* — and, on the follow-up
+questions: **one per PR, reused**; `/` always shows the general menu; the chat
+itself *"een overlay over alles heen, rechts daarvan mag je gegeneerde blokken
+uit de chat tonen. esc moet alles weer hidden"*.
+
+Nothing about the conversation itself is new: it is an ordinary `claude_chat`
+Execution with the same rights/werkmap choice as any other. Only three things
+are: WHAT it hangs on, WHERE it shows, and HOW it is reached.
+
+### The anchor: a PR-wide comment nobody ever sees as a comment
+
+A conversation still needs a comment (the backend's own constraint, see
+"Product decision" above). A general chat reuses the **PR-wide** comment shape
+`startPrWideComment`/`placeComment` already write — `kind: 'issue'`, no
+`file`/`line` — with the existing `CLAUDE_ANCHOR_PLACEHOLDER` body and always
+`local: true`.
+
+That combination is the whole trick, and it is deliberate: because
+`isChatAnchorPlaceholder(c)` already holds for it, every existing exclusion
+applies unchanged — `indexComments()` gives it no row, "Zet op GitHub" never
+offers it, no title fallback ever prints its body — so the anchor is invisible
+AS A COMMENT and nothing is ever posted to GitHub. `isGeneralChatAnchor(c)`
+(`!!c.kind && isChatAnchorPlaceholder(c)`) names exactly this comment;
+`generalChatAnchor()` is the "does this PR already have one" lookup that makes
+`startPrGeneralChat` reuse rather than create a second.
+
+`startPrGeneralChat(state, text)` (`RelatedPanel.mjs`) creates-or-reuses it,
+sets `cs.focus = 'claude'`, loads the Execution (`ensureAndLoadChat`, the same
+idempotent call `enterClaudeChat`/`startPrCommentChat` make), focuses the
+composer and — when `text` is given — sends it straight away through the
+ordinary `sendClaudeChatText`. **`cs.focus = 'claude'` is load-bearing, not
+cosmetic:** `syncClaudeAnchorForSelection` returns early on that focus, so a
+comment poll can never re-anchor `cc` out from under an open overlay.
+
+### The index row
+
+The anchor gets its row from **"Openstaande chats"** (`openChatComments` +
+`chatBlockItem`, rank 2.55) — the section that already exists for "a chat with
+no comment row of its own". Two small widenings were needed:
+
+- `openChatComments()` includes a general-chat anchor **even with no turns
+  yet**, unlike every other entry (which must appear in `cc.conversations`,
+  i.e. must already have messages). This section is the general chat's ONLY
+  way back, and the row has to exist from the moment the chat does.
+- `recomputeLeftList`'s chat filter exempts it from "must resolve to a real
+  block in this tree" (`isGeneralChatAnchor(c) || anchoredBlocks.has(...)`) —
+  the same `c.kind ||` carve-out `commentCandidates` already makes. That guard
+  exists to avoid dead-end rows; this row is not a dead end, it opens the
+  overlay instead of drilling into code.
+
+`chatBlockItem` labels it **"Algemene chat"** and marks it `generalChat: true`
+(the placeholder sentence would be a nonsense label). A single `→` on it opens
+the overlay directly — there is no anchor block to drill into and no comment
+thread worth a step, so the two-step `→` an ordinary chat row has does not
+apply.
+
+### The overlay
+
+`src/generalChatOverlay.mjs`, mounted top-level next to `MenuHost`/the werkmap
+overlay. Its keyboard rules, the capture-phase Escape and why the tree's own
+Claude/preview columns are not rendered while it is open: "The general-chat
+overlay" in `.claude/docs/command-palette.md`. The card itself is
+`GeneralChatCard(state)` (`RelatedPanel.mjs`) — `claudeChatColumn` with the
+exact same view/callbacks the tree's column uses, minus `ClaudeChatPanel`'s
+`claudeColumnVisible()`/width/resize wrapper, because inside the overlay the
+column IS the surface and there is no neighbouring column to resize against.
+To its right sits the unchanged `CodePreviewPanel`, so the code blocks Claude
+produces show full size ("rechts daarvan mag je gegeneerde blokken uit de chat
+tonen") with no second implementation.
+
+Test: `tests/general-chat.spec.mjs` (real writes against the per-worker
+server/DB, like `prwide-comment.spec.mjs`: it pins the anchor's PR-wide/local
+shape, the overlay, the sent first turn, Escape, the index row, `→` back in,
+and that a second start reuses the same one).
 
 ### Cmd+C on a selected bubble copies that turn's own text
 
