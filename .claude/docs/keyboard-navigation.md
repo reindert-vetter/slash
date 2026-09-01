@@ -1580,6 +1580,12 @@ stays reactive to whatever navigation state the caller's own hints depend
 on. Two call sites, only ever showing for the card the keyboard is actually
 on:
 
+The whole bar can be switched off — `src/keyboardHints.mjs`'s
+`keyboardHints.enabled` (localStorage `'keyboardHints'`, default **on**),
+toggled from the settings page (`settings-row-keyboardhints`,
+`.claude/docs/settings-page.md`). `ShortcutHintBar` itself gates on it, so
+both call sites below need no change of their own.
+
 - **`Block.mjs`** takes `opts.shortcutHints` (default `() => []`) and
   renders it at the bottom of the card, inside the `<article>`. `home.mjs`'s
   `blockShortcutHints()` supplies the list — `→`/`Enter`/`Space`/`/` in

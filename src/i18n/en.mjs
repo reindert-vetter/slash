@@ -635,6 +635,13 @@ export const EN = {
   'Terug (één stap)': 'Back (one step)',
 
   // ── settings page rows + strays picked up in review ────────────────────
+  'Keyboard hints': 'Keyboard hints',
+  'De hintregel met sneltoetsen onder elke kaart, aan/uit — standaard aan.':
+    'The shortcut-hint line under each card, on/off — on by default.',
+  'Keyboard hints: {state} — de hintregel met sneltoetsen onder elke kaart (klik om te wisselen)':
+    'Keyboard hints: {state} — the shortcut-hint line under each card (click to toggle)',
+  'Keyboard hints aan': 'Keyboard hints on',
+  'Keyboard hints uit': 'Keyboard hints off',
   'Systeem / licht / donker — opgeslagen in deze browser.': 'System / light / dark — stored in this browser.',
   'Automatische risicocontrole en AI-beschrijvingen aan/uit — geldt voor alle PR’s.':
     'Automatic risk check and AI descriptions on/off — applies to every PR.',

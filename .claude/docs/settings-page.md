@@ -54,9 +54,9 @@ module `const`s (mirrors `originPr`/`originSel` in `overview.mjs`):
 
 ## Row list and keyboard
 
-`src/settings.mjs`'s `ROWS = ['theme', 'langui', 'langexplain', 'langreply',
-'langcommit', 'autowarn', 'autoingestpref', 'debug', 'checkout', 'aliases',
-'praisewords']` is simultaneously the `↑`/`↓` nav order and the DOM render
+`src/settings.mjs`'s `ROWS = ['theme', 'keyboardhints', 'langui', 'langexplain',
+'langreply', 'langcommit', 'autowarn', 'autoingestpref', 'debug', 'checkout',
+'aliases', 'praisewords']` is simultaneously the `↑`/`↓` nav order and the DOM render
 order, kept as one array so the two can never drift apart. A platt
 `window.addEventListener('keydown', …)` (mirrors `inbox.mjs`, not the
 `/pr/<id>` nav chain's `Cmd+[`/`Cmd+]` remap — this page has no per-stop
@@ -81,6 +81,7 @@ granularity to remap onto):
 | Setting | Read from | Write path | Editable here? |
 |---|---|---|---|
 | Thema | `localStorage['theme']` (`theme.mjs`) | same, via `cycleTheme()` | Yes — reuses `themeToggleButton()` unchanged |
+| Keyboard hints (de contextuele hintregel met sneltoetsen onder elke kaart, `src/shortcutHints.mjs`) | `localStorage['keyboardHints']` (`keyboardHints.mjs`, default on) | same, via `toggleKeyboardHints()` | Yes — reuses `keyboardHintsToggleButton()` unchanged |
 | Live AI assistent | `GET /api/autowarn` (`autowarn.mjs`) | `POST /api/workflows/auto_warn` + `.../signals/autowarn` (existing `auto_warn` tracker) | Yes — reuses `autoWarnToggleButton()` unchanged |
 | Automatisch review-boom genereren (off/own/all) | `GET /api/autoingestpref` (`autoingestpref.mjs`) | `POST /api/workflows/auto_ingest_pref` + `.../signals/auto_ingest_pref` (new `auto_ingest_pref` tracker) | Yes — reuses `autoIngestPrefToggleButton()` unchanged, also shown next to the gear icon in `/pr-overview`'s header |
 | Taal van de interface (`settings-row-langui`) | `GET /api/langpref` (`ui`) + the `uiLang` localStorage paint cache (`i18n.mjs`) | `POST /api/workflows/lang_pref` + `.../signals/lang_pref` (new `lang_pref` tracker) | Yes — `langToggleButton('ui')`, and applying it reloads the page |

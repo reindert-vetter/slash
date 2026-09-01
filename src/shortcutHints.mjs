@@ -1,4 +1,5 @@
 import { html } from './vendor/arrow.js'
+import { keyboardHints } from './keyboardHints.mjs'
 
 // MAX_HINTS — the highest number of hints any caller currently builds (see
 // home.mjs's blockShortcutHints/RelatedPanel.mjs's commentClaudeShortcutHints).
@@ -28,7 +29,10 @@ const MAX_HINTS = 8
 // each compute their own hint list from state they already own, this
 // component only renders it.
 export function ShortcutHintBar(hintsFn) {
-  const hints = () => (hintsFn ? hintsFn() : []) || []
+  // Gated on the reviewer's keyboardHints preference (settings-row-keyboardhints,
+  // src/settings.mjs) — default on. Disabling it just makes this return an
+  // empty list, which hasAny() below turns into hiding the whole bar.
+  const hints = () => (hintsFn && keyboardHints.enabled ? hintsFn() : []) || []
   const hasAny = () => hints().length > 0
   const slots = Array.from({ length: MAX_HINTS }, (_, i) => i)
   return html`

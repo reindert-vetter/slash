@@ -10,6 +10,7 @@
 import { reactive, html } from './vendor/arrow.js'
 import { initTheme, themeToggleButton, cycleTheme } from './theme.mjs'
 import { ensureAutoWarn, autoWarnToggleButton, toggleAutoWarn } from './autowarn.mjs'
+import { keyboardHintsToggleButton, toggleKeyboardHints } from './keyboardHints.mjs'
 import { ensureAutoIngestPref, autoIngestPrefToggleButton, cycleAutoIngestPref } from './autoingestpref.mjs'
 import { ensureMe, meLogin } from './avatar.mjs'
 import { initDebugLog, debugModeToggleButton, toggleDebugMode, clearDebugLog, debugLogCount } from './debugLog.mjs'
@@ -49,6 +50,7 @@ const state = reactive({
 // as one array so the two can never drift apart.
 const ROWS = [
   'theme',
+  'keyboardhints',
   'langui',
   'langexplain',
   'langreply',
@@ -228,6 +230,8 @@ function activateRow(row) {
     toggleLang('explain')
   } else if (row === 'langreply') {
     toggleLang('reply')
+  } else if (row === 'keyboardhints') {
+    toggleKeyboardHints()
   } else if (row === 'autowarn') {
     toggleAutoWarn()
   } else if (row === 'autoingestpref') {
@@ -302,6 +306,17 @@ function themeRow() {
   return html`<div data-testid="settings-row-theme" class="${() => rowCls('theme')}" @click="${() => (state.activeRow = ROWS.indexOf('theme'))}">
     ${rowLabel(t('Thema'), t('Systeem / licht / donker — opgeslagen in deze browser.'))}
     <div class="flex items-center gap-2">${themeToggleButton('h-8 w-8 bg-slate-50 dark:bg-zinc-800 ring-1 ring-slate-200 dark:ring-zinc-700')}</div>
+  </div>`
+}
+
+function keyboardHintsRow() {
+  return html`<div
+    data-testid="settings-row-keyboardhints"
+    class="${() => rowCls('keyboardhints')}"
+    @click="${() => (state.activeRow = ROWS.indexOf('keyboardhints'))}"
+  >
+    ${rowLabel(t('Keyboard hints'), t('De hintregel met sneltoetsen onder elke kaart, aan/uit — standaard aan.'))}
+    ${keyboardHintsToggleButton()}
   </div>`
 }
 
@@ -504,7 +519,7 @@ function App() {
       </header>
       <div class="flex-1 overflow-auto px-6 py-5">
         <div class="mx-auto max-w-xl space-y-3" data-testid="settings-rows">
-          ${themeRow()}
+          ${themeRow()} ${keyboardHintsRow()}
           ${langRow(
             'langui',
             'ui',

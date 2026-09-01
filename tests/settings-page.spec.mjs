@@ -59,8 +59,8 @@ test.describe('settings page — keyboard row navigation', () => {
     await page.keyboard.press('Enter') // row 0 = theme, cycles system -> light
     await expect.poll(stored).toBe('light')
 
-    // theme -> langui -> langexplain -> langreply -> langcommit -> autowarn
-    for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowDown')
+    // theme -> keyboardhints -> langui -> langexplain -> langreply -> langcommit -> autowarn
+    for (let i = 0; i < 6; i++) await page.keyboard.press('ArrowDown')
     await expect(autoWarnRow).toHaveAttribute('data-testid', 'settings-row-autowarn')
     const autoWarnLabel = () => page.getByTestId('auto-warn-toggle').innerText()
     const before = await autoWarnLabel()
