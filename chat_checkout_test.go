@@ -434,6 +434,69 @@ func TestPrepareChatShellWorkDirAsksAboutDirtyCandidate(t *testing.T) {
 	}
 }
 
+// An open choice is put to the reviewer AGAIN on the next write turn, but
+// only after checking that it is still a real question. Reported bug, in the
+// reviewer's own words: "geef die keuze opnieuw als het nodig is, want alles
+// is al gecommit" — he had committed the dirty tree himself, outside slash,
+// and every following turn still refused with "Geen bestandstoegang: er staat
+// nog een keuze open over de werkmap van deze PR". The stale dirtyTree choice
+// must be dropped and the turn must simply carry on.
+func TestPrepareChatShellWorkDirDropsAStaleDirtyChoice(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	checkout := cloneCheckoutDir(t, bareDir, "feature/x")
+	writeCheckoutSettings(t, dataDir, checkout)
+
+	if err := os.WriteFile(filepath.Join(checkout, "foo.txt"), []byte("reviewer's own WIP\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 970804, "", "feature/x"); ok || decision == nil || decision.Stage != checkoutStageDirtyTree {
+		t.Fatalf("expected a dirtyTree decision first, got ok=%v decision=%+v", ok, decision)
+	}
+
+	// The reviewer resolves it himself, outside slash: he commits everything.
+	commit := exec.Command("git", "-C", checkout, "commit", "-am", "reviewer committed his own WIP")
+	if out, err := commit.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v: %s", err, out)
+	}
+
+	dir, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 970804, "", "feature/x")
+	if decision != nil {
+		t.Fatalf("expected the stale dirtyTree choice to be gone, got %+v", decision)
+	}
+	if !ok || dir != checkout {
+		t.Fatalf("expected the checkout ready right away, dir=%q ok=%v", dir, ok)
+	}
+	if checkoutChoiceOpen(dataDir, "", 970804) {
+		t.Fatal("expected no open work-directory choice left, so the overlay/chip closes too")
+	}
+}
+
+// The mirror image: a choice that IS still needed keeps being put to the
+// reviewer, unchanged, on every following turn.
+func TestPrepareChatShellWorkDirKeepsAStillNeededDirtyChoice(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	checkout := cloneCheckoutDir(t, bareDir, "feature/x")
+	writeCheckoutSettings(t, dataDir, checkout)
+
+	if err := os.WriteFile(filepath.Join(checkout, "foo.txt"), []byte("reviewer's own WIP\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 970805, "", "feature/x"); ok || decision == nil || decision.Stage != checkoutStageDirtyTree {
+		t.Fatalf("expected a dirtyTree decision first, got ok=%v decision=%+v", ok, decision)
+	}
+	_, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 970805, "", "feature/x")
+	if ok || decision == nil || decision.Stage != checkoutStageDirtyTree {
+		t.Fatalf("expected the same dirtyTree choice again, got ok=%v decision=%+v", ok, decision)
+	}
+	if !checkoutChoiceOpen(dataDir, "", 970805) {
+		t.Fatal("expected the work-directory choice to stay open")
+	}
+}
+
 // A dirty-tree choice that deliberately LEAVES the tree dirty ("Meenemen in
 // de commit"/"Los laten") must stay resolved for every LATER turn too.
 // Reported bug, two screenshots: the reviewer answered "Meenemen in de commit"

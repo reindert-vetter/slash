@@ -757,6 +757,53 @@ func checkoutChoiceOpen(dataDir, repo string, pr int) bool {
 	return a != nil && a.Pending != nil
 }
 
+// checkoutPendingStillNeeded re-derives whether this PR's one open
+// work-directory choice is still a REAL question, right now. A choice is
+// raised once, from whatever the checkout looked like at that moment, and
+// then simply sits there until somebody answers it verbatim — so a reviewer
+// who resolves the situation OUTSIDE slash (the reported case: "geef die
+// keuze opnieuw als het nodig is, want alles is al gecommit") stayed blocked
+// on a question about changes that no longer existed, with every write turn
+// answering "er staat nog een keuze open over de werkmap van deze PR".
+//
+// Only the two stages that are ABOUT a specific directory's state can go
+// stale this way:
+//
+//   - dirtyTree: pointless once that directory is clean again (or once the
+//     reviewer already accepted the dirt, same test the raising site uses).
+//   - reuseMerged: pointless once that directory is on the PR's own branch —
+//     there is nothing left to "take over".
+//
+// chooseDirectory (several eligible candidates) deliberately stays: it does
+// not go stale from committing, and the ladder would only ask the identical
+// thing again one iteration later.
+//
+// A directory that can no longer be classified at all (gone, unreadable) also
+// counts as "not needed": dropping the choice lets the ladder run again and
+// find another candidate, mirroring what prepareChatShellWorkDirAt's own
+// `a.Dir != ""` branch already does with a classification error.
+func checkoutPendingStillNeeded(ctx context.Context, a *chatCheckoutAssignment, headRef, baseBranch string) bool {
+	if a == nil || a.Pending == nil {
+		return false
+	}
+	switch a.Pending.Stage {
+	case checkoutStageDirtyTree, checkoutStageReuseMerged:
+	default:
+		return true
+	}
+	if a.Pending.Dir == "" {
+		return true
+	}
+	cand, err := classifyCheckoutCandidate(ctx, a.Pending.Dir, headRef, baseBranch)
+	if err != nil {
+		return false
+	}
+	if a.Pending.Stage == checkoutStageDirtyTree {
+		return cand.Dirty && !dirtyAlreadyAccepted(ctx, a)
+	}
+	return !cand.OnTargetBranch
+}
+
 // checkoutFailureReason is the reviewer-facing explanation of this PR's last
 // failed work-directory resolution, or "" when there simply is no local
 // checkout of this repo (or none has been attempted). Same plain in-memory
@@ -1074,11 +1121,24 @@ func prepareChatShellWorkDirAt(ctx context.Context, tm *TaskManager, dataDir, re
 			if reviewerReply == "" {
 				// An open choice and nothing to apply: this caller is a write
 				// turn (or comment_batch/test_run) that just needs a
-				// directory, not an answer. It gets the open choice back and
-				// tells the reviewer in words; the answer itself only ever
+				// directory, not an answer. The answer itself only ever
 				// arrives through the overlay's own "checkoutAnswer" round
 				// trip. Feeding a chat message in here is exactly the
 				// mix-up this whole mechanism was moved out of the chat for.
+				//
+				// But ask FIRST whether the choice is still a question at all
+				// (checkoutPendingStillNeeded): if the reviewer resolved it
+				// outside slash — committing the dirty tree, switching the
+				// directory onto the PR's branch — drop it and just carry on
+				// with this very turn instead of blocking it on a question
+				// about a situation that is over.
+				if !checkoutPendingStillNeeded(ctx, a, headRef, baseBranch) {
+					a.Pending = nil
+					publishCheckoutChanged(repo, pr) // close the overlay/chip
+					continue
+				}
+				// Still genuinely open: the reviewer gets the same choice put
+				// to them again, and the turn tells them so in words.
 				return "", a.Pending, false
 			}
 			resolved, applyErr := applyCheckoutDecisionReply(ctx, a, headRef, reviewerReply)

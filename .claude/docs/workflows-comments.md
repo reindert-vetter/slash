@@ -1205,12 +1205,12 @@ work-directory overlay or through the chip, both via the existing
   reason.
 - **The pre-Claude "does this turn's body answer a pending decision" step** in
   `runOneClaudeTurn`, and with it `chatCheckoutResumedPrompt`. A chat turn now
-  passes `reviewerReply: ""`, and `prepareChatShellWorkDirAt` returns an open
-  choice **untouched** when the reply is empty — so a reviewer's ordinary
-  message can never be misread as an answer, which is what produced both
-  reported bugs (first "Dat antwoord herkende ik niet als een van de keuzes",
-  then the unanswerable "een andere Claude-conversatie wacht nog op een
-  keuze").
+  passes `reviewerReply: ""`, and `prepareChatShellWorkDirAt` never APPLIES an
+  open choice when the reply is empty — so a reviewer's ordinary message can
+  never be misread as an answer, which is what produced both reported bugs
+  (first "Dat antwoord herkende ik niet als een van de keuzes", then the
+  unanswerable "een andere Claude-conversatie wacht nog op een keuze"). It
+  does re-**check** the choice first, see the next section.
 - **`publishCheckoutChanged`** is now also fired at the three sites that RAISE
   a choice (`prepareChatShellWorkDirAt`), not only by the menu Actions —
   otherwise the overlay would not open until the next refresh.
@@ -1225,6 +1225,47 @@ undoes.
 **`chat.KindDirectoryDecision` itself stays** — as a Kind, for bubbles already
 in stored history, which still render and still accept a reviewer reply
 through the ordinary `pendingQuestionID` round trip. Nothing creates a new one.
+
+#### An open choice is put again only if it is STILL needed (`checkoutPendingStillNeeded`)
+
+Reviewer report, his own words: *"geef die keuze opnieuw als het nodig is, want
+alles is al gecommit"* — he had answered nothing, resolved the situation
+himself OUTSIDE slash (committing the dirty tree), and every following write
+turn still came back as the `NoShell` "er staat nog een keuze open over de
+werkmap van deze PR". A choice was raised once, from whatever the checkout
+looked like at that moment, and then sat there until someone answered it
+verbatim; nothing ever asked whether it was still a question.
+
+So the empty-reply branch of `prepareChatShellWorkDirAt` now calls
+**`checkoutPendingStillNeeded`** (`chat_checkout.go`, next to
+`checkoutChoiceOpen`) before returning the open choice. It re-classifies the
+choice's own directory (`classifyCheckoutCandidate`) and only the two stages
+that are ABOUT a directory's state can go stale:
+
+- **`dirtyTree`** — still needed only while `cand.Dirty &&
+  !dirtyAlreadyAccepted(...)`, the exact test the raising site uses.
+- **`reuseMerged`** — still needed only while `!cand.OnTargetBranch`: once that
+  directory is on the PR's own branch there is nothing left to take over.
+- **`chooseDirectory`** deliberately never goes stale here — several eligible
+  candidates is not something committing resolves, and the ladder would only
+  re-raise the identical choice one iteration later anyway.
+- A directory that can no longer be classified at all (gone, unreadable) counts
+  as "not needed" too, so the ladder re-runs and can pick another candidate —
+  same degrade as the `a.Dir != ""` branch's own classification error.
+
+Not needed → `a.Pending = nil`, `publishCheckoutChanged` (so the overlay/chip
+closes) and `continue`: the same call then walks its ordinary path and the turn
+just proceeds, no reviewer action at all. Still needed → byte-identical
+behaviour to before, the choice is put again.
+
+The re-check lives on the WRITE path only (so all three callers — the chat
+turn, `comment_batch`, `test_run` — get it from the one shared function).
+`buildCheckoutView`, the read model behind the chip, deliberately still never
+shells out to git, so a stale choice disappears at the moment the reviewer asks
+again — not on a passive refresh.
+
+Tests: `TestPrepareChatShellWorkDirDropsAStaleDirtyChoice` and its mirror
+`...KeepsAStillNeededDirtyChoice` (`chat_checkout_test.go`).
 
 #### A "leave it dirty" answer stays answered (DirtyAcceptedDir/DirtyAcceptedPaths)
 
