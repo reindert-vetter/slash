@@ -1587,6 +1587,20 @@ Test: `tests/claude-chat-needwrite-icon.spec.mjs` (the icon pill, mocked
 `chat.progress`), plus `TestChatProgressResetPartialBeforeShellAttempt`/
 `TestChatProgressSeparatesTextBlocksAfterATool` in `chat_progress_test.go`.
 
+**The same raw-JSON flash also happens for the OTHER internal directives**
+(`{"type":"question",...}`/`{"type":"comment_action",...}`, `chat_workflow.go`)
+while they are still streaming — a reviewer reported seeing a raw `{` followed
+by JSON right before Claude produced a code suggestion via such a directive.
+`claudePartialBubble` (`ClaudeChat.mjs`) therefore checks a second, GENERIC
+prefix (any partial that still starts with `{"`, checked only once the
+specific `need_write` prefix has already been ruled out) and renders
+**`claudeGeneratingPill()`** — a spinner plus the word "Bezig met
+genereren…" — instead of adding a named prefix/pill per directive. Same
+reasoning as need_write: never reviewer-facing content, and
+`isNeedWriteDirective`'s siblings already keep any of these out of a stored
+`chat.Message.Body`, so this is purely about the ephemeral `Partial`
+snapshot. Test: the second case in `tests/claude-chat-needwrite-icon.spec.mjs`.
+
 **The long-wait suffix is front-end only, deliberately no new backend state.**
 `elapsed` (`RelatedPanel.mjs`'s `elapsed()` getter) already counts seconds
 since `startedAt`, which now marks the start of `preparing` and therefore keeps

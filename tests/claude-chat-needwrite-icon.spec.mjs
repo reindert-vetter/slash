@@ -75,3 +75,73 @@ test('the live partial bubble shows a labelled icon, not raw JSON, for the need_
 
   expect(errors).toEqual([])
 })
+
+// A DIFFERENT internal JSON directive ({"type":"comment_action",...},
+// chat_workflow.go) forming mid-stream must get the GENERIC loading pill
+// (claudeGeneratingPill) instead of the need_write-specific one, and instead
+// of the raw JSON leaking into the ordinary markdown partial body.
+test('the live partial bubble shows a generic loading pill, not raw JSON, for another directive', async ({ page }, testInfo) => {
+  const errors = []
+  page.on('pageerror', (err) => errors.push(err.message))
+
+  const pr = seededPr(testInfo)
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: {
+      pr,
+      file: 'test.php',
+      line: 1,
+      author: 'reviewer',
+      body: 'verander dit',
+      code: '$order->total();',
+      gran: 'call',
+      label: 'Order::total',
+    },
+  })
+  const conversationId = (await start.json()).runId
+  expect(conversationId).toBeTruthy()
+
+  const frame = (data) => `data: ${JSON.stringify(data)}\n\n`
+  const progress = (extra) => ({
+    type: 'chat.progress',
+    pr,
+    key: conversationId,
+    seq: 1,
+    data: { running: true, startedAt: Date.now() - 1000, updatedAt: Date.now(), ...extra },
+  })
+
+  const partial = '{"type":"comment_action","action":"reply","commentId":"c1","body":"$order->tot'
+  let connections = 0
+  await page.route('**/api/events*', async (route) => {
+    connections++
+    const body =
+      connections === 1
+        ? 'retry: 300\n\n'
+        : 'retry: 300\n\n' + frame(progress({ phase: 'writing', partial }))
+    await route.fulfill({
+      status: 200,
+      headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' },
+      body,
+    })
+  })
+  await page.route('**/api/chat/progress*', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, running: false }) }),
+  )
+
+  await page.goto('/pr/' + pr)
+  const item = page.getByTestId('comment-item').first()
+  await expect(item).toBeVisible()
+  await item.click()
+  await page.keyboard.press('ArrowRight') // comment -> claude, one step
+  await expect(page.getByTestId('claude-chat-compose')).toBeVisible()
+
+  const pill = page.getByTestId('claude-partial-generating')
+  await expect(pill).toBeVisible()
+  await expect(pill).toContainText('Bezig met genereren')
+  await expect(page.getByTestId('claude-partial-need-write')).toHaveCount(0)
+  await expect(page.getByTestId('claude-partial-body')).toHaveCount(0)
+
+  // The raw directive text must never appear anywhere on screen.
+  await expect(page.getByTestId('claude-partial')).not.toContainText('comment_action')
+
+  expect(errors).toEqual([])
+})

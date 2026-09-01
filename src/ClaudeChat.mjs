@@ -274,6 +274,49 @@ function claudeNeedWritePill() {
   `
 }
 
+// GENERIC_DIRECTIVE_PARTIAL_PREFIX catches every OTHER internal JSON
+// directive the backend can stream into the live partial answer besides
+// need_write — currently {"type":"question",...} and
+// {"type":"comment_action",...} (chat_workflow.go), and any future one added
+// there. None of these are reviewer-facing content either (they get parsed
+// server-side into a proper `kind`/options once the turn is stored — see
+// claudeQuestionOptions above), but while still streaming they are just as
+// visible as raw JSON as need_write briefly was before it got its own pill.
+// Rather than adding a new named prefix/pill per directive, any partial that
+// still LOOKS like a forming JSON object (starts with `{"`) is generic
+// enough to assume "Claude is generating something, not writing prose yet"
+// and gets a plain loading pill instead of a raw-JSON flash.
+const GENERIC_DIRECTIVE_PARTIAL_PREFIX = '{"'
+const GENERATING_LABEL = t('Bezig met genereren…')
+
+// claudeGeneratingPill — the generic sibling of claudeNeedWritePill above,
+// for a partial that is forming into ANY OTHER internal JSON directive. Same
+// word-plus-icon shape (colourblind rule); the icon here is a spinner
+// (mirrors sendStatusIcon's 'sending' spinner in RelatedPanel.mjs) since,
+// unlike need_write, there is no single fixed label that fits every
+// directive this can be.
+function claudeGeneratingPill() {
+  return html`
+    <div
+      class="flex max-w-[92%] items-center gap-1.5 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-zinc-700 dark:bg-zinc-800/40 dark:text-zinc-400"
+      data-testid="claude-partial-generating"
+      title="${GENERATING_LABEL}"
+    >
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        class="h-3.5 w-3.5 shrink-0 animate-spin"
+        aria-label="${GENERATING_LABEL}"
+      ><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>
+      <span>${GENERATING_LABEL}</span>
+    </div>
+  `
+}
+
 // claudePartialBubble — the answer as it is still being written. A THROWAWAY
 // render of throwaway data: it disappears the moment the real, stored message
 // arrives (RelatedPanel.mjs clears the conversation's progress after refetching the
@@ -282,7 +325,9 @@ function claudeNeedWritePill() {
 function claudePartialBubble(view) {
   const p = view.progress()
   if (!p || !p.partial) return ''
-  const needWrite = p.partial.trim().startsWith(NEED_WRITE_PARTIAL_PREFIX)
+  const trimmed = p.partial.trim()
+  const needWrite = trimmed.startsWith(NEED_WRITE_PARTIAL_PREFIX)
+  const generating = !needWrite && trimmed.startsWith(GENERIC_DIRECTIVE_PARTIAL_PREFIX)
   return html`
     <div class="flex flex-col items-start gap-0.5" data-testid="claude-partial">
       <div class="flex items-center gap-2 py-0.5">
@@ -294,11 +339,13 @@ function claudePartialBubble(view) {
       ${() =>
         needWrite
           ? claudeNeedWritePill()
-          : html`<div
-              class="markdown-body max-w-[92%] rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-xs leading-relaxed [overflow-wrap:anywhere] text-slate-700 dark:border-zinc-700 dark:bg-zinc-800/40 dark:text-zinc-300"
-              data-testid="claude-partial-body"
-              .innerHTML="${() => renderMarkdown(p.partial, 0, true)}"
-            ></div>`}
+          : generating
+            ? claudeGeneratingPill()
+            : html`<div
+                class="markdown-body max-w-[92%] rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-xs leading-relaxed [overflow-wrap:anywhere] text-slate-700 dark:border-zinc-700 dark:bg-zinc-800/40 dark:text-zinc-300"
+                data-testid="claude-partial-body"
+                .innerHTML="${() => renderMarkdown(p.partial, 0, true)}"
+              ></div>`}
     </div>
   `
 }
