@@ -69,6 +69,32 @@ instead of `replacePRBlocks`'s full per-PR swap. Every other file's blocks — a
 everything hanging off their **stable** block id in the separate
 comments/approvals/callresolve read models — is left alone.
 
+**A delta may never WIDEN the PR's file set.** The delta is
+`prevHead..headSHA`, so a reviewer merging the **base branch into his own
+branch** (a `Merge remote-tracking branch 'origin/develop'` commit landing on the
+head) makes that diff list every file develop touched meanwhile — hundreds of
+files that are not part of the PR at all, each stored as PR blocks and then
+explained, AI-warned about and waiting to be approved. Measured on PR 13535:
+GitHub reported 15 changed files, the blocks table held **108**, with blocks from
+Accounting/Themes/Notifications the PR never touched. The base-SHA guard below
+does not catch this on its own — `refreshTreeAfterLanding` (`chat_merge.go`)
+deliberately pins the recorded base so a landing stays a fast delta, and the
+poller's own `headSHA == prevHead` skip fires before the base check, so once
+widened a PR stayed widened forever.
+
+`refreshIngestDelta` therefore intersects its file set with the PR's **own**
+changed files as GitHub reports them (`prChangedFilePaths` → `fetchPRMeta`, the
+exact same `meta.Files` a full ingest scans, so the delta can only ever converge
+on what a full ingest would produce) and prunes blocks already stored outside
+that set (`pruneBlocksOutsidePRFiles`, `db.go`), so a widened PR heals itself on
+the next refresh instead of needing a manual "Regenereren". Best-effort in both
+directions: no `gh` (offline, `SLASH_GITHUB=off`) means no filter and no prune
+rather than a failed refresh, and an **empty** file list is treated as "we don't
+know", never as "this PR has no files". Side effect worth knowing: a rename's
+OLD path — which the `--no-renames` delta lists so its stale rows get deleted —
+is not in GitHub's list either, so its blocks are pruned rather than kept as a
+loose removed side; that matches what a full ingest stores for a rename.
+
 **For a re-scanned file, "untouched" is not enough.** A comment's
 `row_start`/`row_end` and an approval's row indices are positions in the block's
 **aligned-row space**, and re-scanning rewrites that space: the rows survive, their

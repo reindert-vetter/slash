@@ -388,3 +388,90 @@ func TestRefreshTreeAfterLandingNoOpsWithoutPriorIngest(t *testing.T) {
 	setupChatShadowRepo(t, "feature/x", "v1\n")
 	refreshTreeAfterLanding(context.Background(), nil, "", 4242, "feature/x", nil)
 }
+
+// TestFilterToPRFilesDropsBaseBranchMergeNoise is the guard behind the bug this
+// filter exists for: merging the base branch into the head makes the
+// prevHead..head delta list every file that branch touched meanwhile, none of
+// which belong to the PR. Only the PR's own files may survive, in order.
+func TestFilterToPRFilesDropsBaseBranchMergeNoise(t *testing.T) {
+	prFiles := []string{
+		"modules/Statistics/Workflows/SessionFlow.php",
+		"modules/Statistics/Enums/StatsTable.php",
+	}
+	delta := []string{
+		"modules/Statistics/Workflows/SessionFlow.php",
+		"modules/Accounting/Tests/Feature/Moneybird/MoneybirdApiTest.php", // came in with the merge
+		"resources/checkout/views/partials/style.blade.php",               // idem
+		"modules/Statistics/Enums/StatsTable.php",
+	}
+	got := filterToPRFiles(delta, prFiles)
+	want := []string{
+		"modules/Statistics/Workflows/SessionFlow.php",
+		"modules/Statistics/Enums/StatsTable.php",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("filterToPRFiles = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("filterToPRFiles = %v, want %v", got, want)
+		}
+	}
+	// An empty PR file list can only mean "we don't know", never "no files".
+	if got := filterToPRFiles(delta, nil); len(got) != 0 {
+		t.Fatalf("filterToPRFiles with no pr files = %v, want empty", got)
+	}
+}
+
+// TestPruneBlocksOutsidePRFiles asserts the self-heal half: blocks a widened
+// delta already stored for files outside the PR are removed, the PR's own
+// blocks and another PR's blocks are untouched, and an empty file list is a
+// no-op rather than a wipe.
+func TestPruneBlocksOutsidePRFiles(t *testing.T) {
+	dataDir := t.TempDir()
+	db, err := openDB(filepath.Join(dataDir, "graph.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	mine := "modules/Statistics/Workflows/SessionFlow.php"
+	noise := "modules/Accounting/Tests/Feature/Moneybird/MoneybirdApiTest.php"
+	blocks := []Block{
+		{PR: 13535, File: mine, Class: "SessionFlow", Name: "write", Line: 10, EndLine: 20, Status: StatusModified, Side: SideNew},
+		{PR: 13535, File: noise, Class: "MoneybirdApiTest", Name: "test_it", Line: 5, EndLine: 9, Status: StatusAdded, Side: SideNew},
+	}
+	if err := replacePRBlocks(db, "", 13535, blocks); err != nil {
+		t.Fatal(err)
+	}
+	other := []Block{{PR: 99, File: noise, Class: "MoneybirdApiTest", Name: "test_it", Line: 5, EndLine: 9, Status: StatusAdded, Side: SideNew}}
+	if err := replacePRBlocks(db, "", 99, other); err != nil {
+		t.Fatal(err)
+	}
+
+	if n, err := pruneBlocksOutsidePRFiles(db, "", 13535, nil); err != nil || n != 0 {
+		t.Fatalf("prune with no pr files = %d, %v; want 0, nil (never a wipe)", n, err)
+	}
+	n, err := pruneBlocksOutsidePRFiles(db, "", 13535, []string{mine})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("pruned %d block(s), want 1", n)
+	}
+
+	var left int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM blocks WHERE pr = 13535`).Scan(&left); err != nil {
+		t.Fatal(err)
+	}
+	if left != 1 {
+		t.Fatalf("pr 13535 has %d block(s) left, want 1", left)
+	}
+	var otherLeft int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM blocks WHERE pr = 99`).Scan(&otherLeft); err != nil {
+		t.Fatal(err)
+	}
+	if otherLeft != 1 {
+		t.Fatalf("pr 99 has %d block(s) left, want 1 (another PR must be untouched)", otherLeft)
+	}
+}

@@ -278,6 +278,38 @@ func refreshIngestDelta(ctx context.Context, db *sql.DB, dataDir string, repo st
 	if err != nil {
 		return nil, fmt.Errorf("changed files: %w", err)
 	}
+
+	// A delta may never WIDEN the PR's file set. deltaFiles is the diff over
+	// prevHead..headSHA, so merging the base branch INTO the head (a reviewer
+	// pulling develop into his feature branch) drags in every file that branch
+	// touched meanwhile — hundreds of files that are not part of this PR at all,
+	// each stored as PR blocks and then explained, warned about and waiting to be
+	// approved. The base-SHA guard above cannot catch that on its own: the caller
+	// may pass a base that has not moved (refreshTreeAfterLanding deliberately
+	// pins the recorded one) while the head has just absorbed that whole branch.
+	//
+	// So the file set is intersected with what GitHub itself reports as the PR's
+	// changed files — the exact same source and thus the exact same set a full
+	// ingest would scan (prepareIngestWorktreesLocked's meta.Files). Best-effort:
+	// no gh (offline, SLASH_GITHUB=off) means no filter, never a failed refresh.
+	if prFiles, ferr := prChangedFilePaths(ctx, repo, pr); ferr != nil {
+		log.Printf("ingest refresh pr %d: pr file list unavailable (%v), delta not filtered", pr, ferr)
+	} else {
+		if kept := filterToPRFiles(deltaFiles, prFiles); len(kept) != len(deltaFiles) {
+			log.Printf("ingest refresh pr %d: %d of %d changed file(s) are outside the PR, skipped",
+				pr, len(deltaFiles)-len(kept), len(deltaFiles))
+			deltaFiles = kept
+		}
+		// Repair a PR whose blocks were already widened by an earlier refresh (or
+		// whose rename left its old path behind), so this heals itself instead of
+		// needing a manual "Regenereren".
+		if n, perr := pruneBlocksOutsidePRFiles(db, repo, pr, prFiles); perr != nil {
+			log.Printf("ingest refresh pr %d: prune blocks outside the PR: %v", pr, perr)
+		} else if n > 0 {
+			log.Printf("ingest refresh pr %d: pruned %d block(s) for files outside the PR", pr, n)
+		}
+	}
+
 	if len(deltaFiles) == 0 {
 		if err := saveIngestSHAs(db, repo, pr, baseSHA, headSHA); err != nil {
 			return nil, fmt.Errorf("save ingest shas: %w", err)
@@ -313,4 +345,38 @@ func refreshIngestDelta(ctx context.Context, db *sql.DB, dataDir string, repo st
 	log.Printf("ingest refresh pr %d: %d file(s) changed since %s, stored %d block(s) (%v)",
 		pr, len(deltaFiles), short(prevHead), res.Stored, res.ByStatus)
 	return res, nil
+}
+
+// prChangedFilePaths is the PR's own changed-file set as GitHub reports it —
+// the same source prepareIngestWorktreesLocked scans, so a delta refresh can
+// hold itself to exactly the files a full ingest would produce blocks for.
+func prChangedFilePaths(ctx context.Context, repo string, pr int) ([]string, error) {
+	meta, err := fetchPRMeta(ctx, repo, pr)
+	if err != nil {
+		return nil, err
+	}
+	paths := make([]string, 0, len(meta.Files))
+	for _, f := range meta.Files {
+		paths = append(paths, f.Path)
+	}
+	if len(paths) == 0 {
+		return nil, fmt.Errorf("pr %d: no changed files in metadata", pr)
+	}
+	return paths, nil
+}
+
+// filterToPRFiles keeps only the delta paths that are part of the PR, in their
+// original order. Pure, so the widening case is unit-testable without gh.
+func filterToPRFiles(delta, prFiles []string) []string {
+	allowed := make(map[string]bool, len(prFiles))
+	for _, f := range prFiles {
+		allowed[f] = true
+	}
+	kept := make([]string, 0, len(delta))
+	for _, f := range delta {
+		if allowed[f] {
+			kept = append(kept, f)
+		}
+	}
+	return kept
 }

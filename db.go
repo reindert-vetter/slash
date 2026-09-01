@@ -418,3 +418,38 @@ func blocksByPR(db *sql.DB, repo string, pr int) ([]Block, error) {
 	}
 	return out, rows.Err()
 }
+
+// pruneBlocksOutsidePRFiles deletes the PR's blocks for every file that is not
+// in files — the set GitHub itself reports as the PR's changed files. It keeps
+// the blocks table's invariant that a PR only ever holds blocks for files the
+// PR actually touches, which a delta refresh can otherwise break: the delta is
+// computed over prevHead..headSHA, so merging the base branch INTO the head
+// pulls in every file that branch touched meanwhile (see refreshIngestDelta).
+//
+// Also the cleanup for a rename's OLD path: gh lists only the new path, so the
+// old one falls outside files and its stale rows go here.
+//
+// A no-op for an empty files list — "GitHub told us nothing" must never be read
+// as "this PR has no files", which would wipe the whole tree.
+func pruneBlocksOutsidePRFiles(db *sql.DB, repo string, pr int, files []string) (int, error) {
+	if len(files) == 0 {
+		return 0, nil
+	}
+	ph := make([]string, len(files))
+	args := make([]any, 0, len(files)+2)
+	args = append(args, repo, pr)
+	for i, f := range files {
+		ph[i] = "?"
+		args = append(args, f)
+	}
+	q := `DELETE FROM blocks WHERE repo = ? AND pr = ? AND file NOT IN (` + strings.Join(ph, ",") + `)`
+	res, err := db.Exec(q, args...)
+	if err != nil {
+		return 0, fmt.Errorf("prune blocks outside pr files: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, nil
+	}
+	return int(n), nil
+}
