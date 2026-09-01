@@ -488,12 +488,20 @@ all and therefore never reaches this either.
   alone — the bubble itself keeps its ordinary "mine" tint).
 - **The prompt (`kiloCheckPrompt`, `workflows.go`)** is built server-side, in
   Dutch like every other reviewer-facing prompt/label: kilo's own body is
-  quoted as a Markdown blockquote (so Claude and the reviewer can tell kilo's
-  claim apart from Claude's own answer), prefixed with the file/line when
+  quoted as a Markdown blockquote, prefixed with the file/line when
   known (`in.File`/`in.Line`, from the same `CodeCommentInput` the thread
   itself was started from), and closes by asking Claude to verify the claim
-  against the real code, summarize it more clearly than kilo did, and
-  optionally propose a fix. No code excerpt is embedded — the turn already
+  against the real code. The quote is there for **Claude**, not for the
+  reviewer: this turn carries no `Context` at all, so it is the only thing
+  saying what the finding was — the reviewer already has kilo's comment open
+  right next to the chat, which is why the frontend renders that blockquote
+  COLLAPSED (see "`chat.KindAutoCheck`" in
+  `.claude/docs/claude-chat-panel.md`). For the same reason the closing
+  instruction explicitly forbids repeating or summarizing kilo's text
+  (reviewer request, "kort en krachtig"): a verdict (klopt / klopt deels /
+  klopt niet), one or two sentences of reasoning, and at most one concrete
+  fix proposal. It used to ask for "a clearer summary than kilo's own text",
+  which produced exactly the duplication above. No code excerpt is embedded — the turn already
   gets its usual Read/Grep/Glob/Bash access to the shadow worktree
   (`runOneClaudeTurn` tries this for every turn), so Claude looks the real
   code up itself rather than trusting a snippet in the prompt.

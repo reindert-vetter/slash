@@ -287,6 +287,7 @@ export const EN = {
   'het is nu druk, hij blijft proberen': "it's busy right now, it keeps retrying",
   'Vraagt schrijftoegang': 'Requesting write access',
   'automatische controle van kilo-opmerking': 'automatic check of kilo comment',
+  'opmerking van kilo': "kilo's comment",
   'keuze over werkmap nodig': 'working directory choice needed',
   'actie in commentthread': 'action in comment thread',
   'concept in comment-veld gezet': 'draft placed in comment field',

@@ -6019,9 +6019,17 @@ func (m *TaskManager) autoStartKiloCheck(repo string, pr int, commentRunID strin
 
 // kiloCheckPrompt builds the automatic first turn for autoStartKiloCheck —
 // Dutch, matching every other reviewer-facing prompt/label in this app. Kilo's
-// own wording is quoted verbatim (as a Markdown blockquote) so Claude — and
-// the reviewer reading the resulting bubble — can tell kilo's claim apart from
-// Claude's own answer.
+// own wording is quoted verbatim (as a Markdown blockquote) because this turn
+// carries NO other context: ChatMessageSignal.Context is empty here, so the
+// quote is the only thing telling Claude what the finding even was. The
+// reviewer, however, already has kilo's comment open right next to this chat,
+// so the frontend renders that blockquote COLLAPSED (see claudeMessageBody /
+// splitAutoCheckQuote in src/ClaudeChat.mjs).
+//
+// The closing instruction therefore explicitly forbids repeating or
+// summarizing kilo's text — reviewer request ("daar hoef je niet de opmerking
+// te herhalen van kilo, maar het kort en krachtig"): a verdict plus a sentence
+// or two of reasoning, optionally one concrete fix.
 func kiloCheckPrompt(in CodeCommentInput) string {
 	var b strings.Builder
 	b.WriteString("Kilo (de geautomatiseerde code-review bot) heeft hier een opmerking geplaatst")
@@ -6033,8 +6041,10 @@ func kiloCheckPrompt(in CodeCommentInput) string {
 	}
 	b.WriteString(":\n\n> ")
 	b.WriteString(strings.ReplaceAll(strings.TrimSpace(in.Body), "\n", "\n> "))
-	b.WriteString("\n\nControleer aan de hand van de echte code of kilo hier gelijk heeft. Geef daarna een korte, ")
-	b.WriteString("duidelijkere samenvatting dan kilo's eigen tekst. Als je een concrete verbetering ziet, mag je die ook voorstellen.")
+	b.WriteString("\n\nControleer aan de hand van de echte code of kilo hier gelijk heeft. Herhaal of vat kilo's ")
+	b.WriteString("opmerking NIET samen — de reviewer heeft die er al naast staan. Antwoord kort en krachtig: begin ")
+	b.WriteString("met je oordeel (klopt / klopt deels / klopt niet), daarna een of twee zinnen waarom. Zie je een ")
+	b.WriteString("concrete verbetering, stel er dan één voor.")
 	return b.String()
 }
 

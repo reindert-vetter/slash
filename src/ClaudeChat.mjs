@@ -96,8 +96,73 @@ const claudeMention = t(CLAUDE_MENTIONS[Math.floor(Math.random() * CLAUDE_MENTIO
 // soft-wrapped source line joining the sentence above it is the intended
 // behaviour.
 function claudeMessageBody(msg) {
+  if (msg.kind === 'auto_check') {
+    const parts = splitAutoCheckQuote(msg.body || '')
+    if (parts) return () => autoCheckHTML(parts)
+  }
   const body = msg.role === 'user' ? hardBreaks(msg.body || '') : msg.body || ''
   return () => renderMarkdown(body, 0, true)
+}
+
+// splitAutoCheckQuote takes an auto_check turn's body apart into the text
+// BEFORE kilo's quoted finding, the quote itself (unprefixed), and the text
+// after it. The body is built server-side by kiloCheckPrompt (workflows.go):
+// one intro line naming file/line, kilo's own wording as ONE contiguous run of
+// Markdown blockquote lines, then the instruction paragraph. Kilo's own blank
+// lines survive as a bare '>' line, so the run really is contiguous — which is
+// why "the first '>' line up to the last consecutive one" is enough here and
+// no real Markdown parse is needed.
+//
+// Returns null when there is no blockquote at all (a body stored before this
+// prompt shape existed, or a future/other shape), and the caller falls back to
+// the ordinary rendering.
+function splitAutoCheckQuote(body) {
+  const lines = body.split('\n')
+  const start = lines.findIndex((l) => l.startsWith('>'))
+  if (start < 0) return null
+  let end = start
+  while (end + 1 < lines.length && lines[end + 1].startsWith('>')) end++
+  return {
+    before: lines.slice(0, start).join('\n').trim(),
+    quote: lines
+      .slice(start, end + 1)
+      .map((l) => l.replace(/^>\s?/, ''))
+      .join('\n')
+      .trim(),
+    after: lines
+      .slice(end + 1)
+      .join('\n')
+      .trim(),
+  }
+}
+
+// autoCheckHTML renders an auto_check turn with kilo's own wording COLLAPSED —
+// reviewer request: the kilo comment this chat verifies is already open right
+// next to it, so repeating it in full inside the bubble is pure noise. Only
+// the intro line (file/regel) and the instruction stay visible; the quote sits
+// behind a native <details>, which needs no reactive state and no keyboard
+// wiring, so this stays one plain HTML string for the existing .innerHTML
+// binding (no arrow.js slot, hence none of the pitfalls in
+// .claude/rules/arrowjs-pitfalls.md apply). The summary carries a WORD, not
+// just the disclosure triangle — colorblind rule, same reasoning as
+// chatKindBadge's own pill.
+//
+// Each part runs through hardBreaks separately (this is a role:'user' message,
+// see claudeMessageBody) so a newline inside kilo's finding still stays a line
+// of its own once the reviewer opens the details.
+function autoCheckHTML({ before, quote, after }) {
+  const section = (text) => (text ? renderMarkdown(hardBreaks(text), 0, true) : '')
+  return (
+    section(before) +
+    '<details class="my-1 rounded-lg border border-indigo-200 px-2 py-1 dark:border-indigo-500/30" data-testid="auto-check-quote">' +
+    '<summary class="cursor-pointer text-[11px] font-medium text-slate-600 dark:text-zinc-400">' +
+    t('opmerking van kilo') +
+    '</summary>' +
+    '<div class="mt-1 border-l-2 border-slate-300 pl-2 dark:border-zinc-700" data-testid="auto-check-quote-body">' +
+    section(quote) +
+    '</div></details>' +
+    section(after)
+  )
 }
 
 // claudeQuestionOptions renders the up-to-3 choice buttons of a still-open

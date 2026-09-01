@@ -1127,6 +1127,75 @@ test('Claude chat: an action turn and an error turn each get their own badge, no
   await expect(plainHost.getByTestId('claude-message-draft-reply')).toHaveCount(0)
 })
 
+// The automatic verification turn of a kilo-code finding (chat.KindAutoCheck,
+// autoStartKiloCheck/kiloCheckPrompt in workflows.go) carries kilo's own
+// wording as a Markdown blockquote — Claude needs it, the reviewer does not:
+// the very comment being verified is already open right next to this chat. So
+// the bubble renders that quote COLLAPSED (splitAutoCheckQuote/autoCheckHTML,
+// ClaudeChat.mjs) while the intro line and the instruction stay visible. Same
+// direct-mount shape as the badge test above, and for the same reason: the
+// conversation's run id is only known once the server has started.
+test('Claude chat: an auto_check turn hides kilo\'s own wording behind a collapsed details', async ({
+  page,
+}) => {
+  await page.goto('/pr/12903')
+  await expect(page.getByTestId('pr-index')).toBeVisible()
+
+  await evaluateSettled(page, async () => {
+    const { claudeChatColumn } = await import('/src/ClaudeChat.mjs')
+    const messages = [
+      {
+        id: 'm1',
+        role: 'user',
+        kind: 'auto_check',
+        body:
+          'Kilo (de geautomatiseerde code-review bot) heeft hier een opmerking geplaatst in `src/Order.php`, regel 10:\n\n' +
+          '> Deze functie valideert de input niet.\n\n' +
+          'Controleer aan de hand van de echte code of kilo hier gelijk heeft.',
+      },
+    ]
+    const view = {
+      messages: () => messages,
+      status: () => 'ready',
+      busy: () => false,
+      sendError: () => '',
+      progress: () => null,
+      elapsed: () => 0,
+      claudePos: () => 0,
+      pinned: () => true,
+      queued: () => [],
+      focused: () => true,
+      // Only read for the FIRST bubble of a role:'user' message (the
+      // selection-context reminder, see claudeBubble) — which is exactly what
+      // this test mounts, unlike the assistant-only mounts above.
+      anchorHint: () => '',
+    }
+    const host = document.createElement('div')
+    host.id = 'claude-chat-autocheck-host'
+    document.body.appendChild(host)
+    claudeChatColumn(view, { onSend: () => {} })(host)
+  })
+
+  const host = page.locator('#claude-chat-autocheck-host')
+  const details = host.getByTestId('auto-check-quote')
+  await expect(details).toBeVisible()
+  await expect(details).toHaveJSProperty('open', false)
+  // Collapsed: kilo's own sentence is not on screen, the intro line and the
+  // instruction are.
+  await expect(host.getByTestId('auto-check-quote-body')).toBeHidden()
+  await expect(host.getByTestId('claude-message')).toContainText('src/Order.php')
+  await expect(host.getByTestId('claude-message')).toContainText('Controleer aan de hand van de echte code')
+  // The summary names what is hidden with a WORD, not just the disclosure
+  // triangle (colourblind rule).
+  await expect(details).toContainText('opmerking van kilo')
+
+  // Opening it reveals kilo's wording. force: true because this host div is
+  // mounted on top of the live app page, whose own cards intercept the hit
+  // test — the click itself is a real one on the summary.
+  await details.locator('summary').click({ force: true })
+  await expect(host.getByTestId('auto-check-quote-body')).toContainText('Deze functie valideert de input niet.')
+})
+
 // A comment_action "reply" directive must land in the LEFT comment thread's
 // own reply composer for the reviewer to edit and send themselves — never
 // post itself. Driving the real claude subprocess would again need the

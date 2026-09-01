@@ -2287,6 +2287,24 @@ call with shell access, a real reply bubble underneath), so a badge next to
 the existing rendering was enough, rather than inventing a third bubble shape
 next to "mine"/"Claude's".
 
+**Kilo's own wording inside that bubble is COLLAPSED.** The stored body still
+contains it verbatim (Claude needs it — the turn carries no other context, see
+`kiloCheckPrompt` in `.claude/docs/workflows-comments.md`), but the reviewer
+has the very comment being verified open right next to this chat, so repeating
+it in full was pure noise. `claudeMessageBody` (`ClaudeChat.mjs`) therefore
+routes an `auto_check` turn through `splitAutoCheckQuote` + `autoCheckHTML`:
+the intro line (file/regel) and the instruction render as usual, the
+contiguous run of `>` lines in between goes behind a **native `<details>`**
+(`data-testid=auto-check-quote`, body `auto-check-quote-body`) whose summary
+names what is hidden with a WORD — "opmerking van kilo" — not just the
+disclosure triangle, per the colorblind rule. Native `<details>` on purpose:
+no reactive state, no keyboard wiring, so the whole thing stays one plain HTML
+string for the existing `.innerHTML` binding and no arrow.js pitfall applies.
+`splitAutoCheckQuote` returns `null` when there is no blockquote at all (a
+body stored before this prompt shape existed), and the bubble falls back to
+the ordinary rendering. Test: the "an auto_check turn hides kilo's own wording
+behind a collapsed details" case in `tests/claude-chat-panel.spec.mjs`.
+
 ### A `reply` directive only drafts, never posts
 
 Explicit correction to the paragraph above, from Reindert: "Claude mag namens
