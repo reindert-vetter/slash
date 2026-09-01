@@ -493,18 +493,56 @@ serializes landings, so a push can never overlap one.
 
 ## The read model: `GET /api/pending-push?prs=N[,N…]`
 
-`handlePendingPush` (`tasks_api.go`) → `loadPendingPush`. Read-only and
-local-only: `for-each-ref` + `rev-list --count` + `diff --name-only`, no fetch,
-no `gh`. Batch-shaped because the PR overview asks about several rows at once.
+`handlePendingPush` (`tasks_api.go`) → `loadPendingPush`. Read-only:
+`for-each-ref` + `rev-list --count` + `diff --name-only`, no fetch, no `gh`,
+plus — only when the local refs cannot already settle it — one throttled
+`git ls-remote` (below). Batch-shaped because the PR overview asks about
+several rows at once.
 
 Per PR: `headRef`, `sha`, `ahead`, `files`, `state`
 (`ready`/`pushing`/`failed`), `pushRunId` (the `chat_merge` queue's own
 deterministic Run ID, so the UI signals without deriving a Go-side id — same
 shape as `state.approveRunId`) and `error`.
 
-`ahead`/`files` are computed against whatever `origin/<headRef>` the last fetch
-left behind: good enough for display, and never a decision input — the push
-itself re-checks against the real remote.
+`ahead`/`files` are computed against a base: the branch's real remote tip when
+that is known and present locally, otherwise whatever `origin/<headRef>` the
+last fetch left behind. Good enough for display, and never a decision input —
+the push itself re-checks against the real remote.
+
+**`origin/<headRef>` lies, and nothing in slash ever refreshes it.** That ref
+only moves when a fetch happens to include that branch, and none does:
+`ensureCommits` (`gh.go`) fetches `refs/pull/<n>/head`, which does not move
+`origin/<branch>`, and the chat checkout fetches in the reviewer's OWN checkout
+(`chat_checkout.go`), not in this clone. So a reviewer who pushes his branch
+himself, from anywhere but this clone, leaves the read model believing his
+commits are still local — forever. Measured on a real PR (13535): the tracking
+ref was six days and 293 commits behind, so the row read "293 commits nog niet
+gepusht" and the "⇧ ongepusht" pill landed on nearly every file in the PR while
+everything had in fact been pushed minutes earlier (reviewer report: "waarom
+staan hier zoveel niet gepusht, terwijl ik alles heb gepusht 5 minuten
+geleden"). The stale base also made `files` the diff over all 293 commits,
+which is why the pill was everywhere rather than merely wrong on one file.
+
+`remoteHeadSHA` (`pending_push.go`) therefore asks the remote itself: one
+`git ls-remote --heads origin <headRef>`, memoized per repo+PR for 60s
+(`remoteHeadTTL`, failures cached too) and bounded by an 8s context, so an
+unreachable origin degrades to "unknown" instead of stalling the handler. If
+the pending ref is that tip, or an ancestor of it (`merge-base --is-ancestor`),
+the work is on GitHub and `loadPendingPush` returns `nil`; otherwise that tip
+becomes the base for `ahead`/`files` when the commit is present locally, and
+`origin/<headRef>` stays the fallback for everything else — the pre-existing
+behaviour, unchanged.
+
+Deliberately `ls-remote` and **not** a fetch: it writes nothing at all — no
+objects, no remote-tracking ref — so a polled `GET` still never mutates the
+reviewer's own clone (a fetch would have needed a carve-out in
+`.claude/rules/workflows-write-boundary.md`; this needs none, beyond the same
+volatile in-memory memo `pendingPushStatus` already is). And it is consulted
+only when `origin/<headRef>` does not already prove containment, which keeps
+the ordinary cases network-free (nothing landed; or the reviewer pushed through
+THIS clone, which moves the tracking ref itself) and means the 60s memo can
+never outvote a fresher local fact. Regression test:
+`TestLoadPendingPushSeesAnOutsidePush`.
 
 **A ref whose commits are already on the branch reports nothing at all.** If
 `rev-list --count origin/<headRef>..<pendingRef>` comes back exactly `0`, the

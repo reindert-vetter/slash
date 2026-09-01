@@ -71,6 +71,12 @@ func setupChatShadowRepo(t *testing.T, headRefName, fileContent string) (bareDir
 	run(cloneDir, "config", "user.name", "test")
 
 	t.Setenv("SLASH_REPO_DIR", cloneDir)
+	// Every fixture gets a fresh clone/origin pair, so any memoized remote head
+	// from an earlier test (remoteHeadSHA, pending_push.go) is about a repo that
+	// no longer exists — and its key (repo + PR number) can legitimately repeat.
+	remoteHeadCache.Lock()
+	remoteHeadCache.byPR = map[prKey]remoteHeadEntry{}
+	remoteHeadCache.Unlock()
 	return bareDir, cloneDir
 }
 

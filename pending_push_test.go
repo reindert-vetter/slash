@@ -443,3 +443,80 @@ func TestHandleChatMergeStartAndCheckoutRead(t *testing.T) {
 		t.Fatalf("view.RunID = %q, want %q", view.RunID, ensureBody.RunID)
 	}
 }
+
+// A landing the reviewer pushed HIMSELF, from outside slash, is not pending any
+// more — even though this clone's own origin/<headRef> knows nothing about it.
+//
+// The regression this pins (reviewer report: "waarom staan hier zoveel niet
+// gepusht, terwijl ik alles heb gepusht 5 minuten geleden"): the read model
+// used to decide purely on origin/<headRef>, and nothing in slash ever
+// refreshes that remote-tracking ref — ensureCommits fetches refs/pull/<n>/head
+// (which does not move it) and the chat checkout fetches in the reviewer's own
+// checkout, not here. On the real PR it was six days and 293 commits behind, so
+// every pushed commit still counted as pending and the "ongepusht" pill landed
+// on nearly every file in the PR. loadPendingPush now asks the remote itself
+// (remoteHeadSHA, a throttled `git ls-remote` that writes nothing).
+func TestLoadPendingPushSeesAnOutsidePush(t *testing.T) {
+	bareDir, cloneDir := setupChatShadowRepo(t, "feature/x", "v1\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+
+	landOneEdit(t, dataDir, 3009, "conv-out", "feature/x", "foo.txt", "edited by claude\n")
+
+	v := loadPendingPush(ctx, nil, "", 3009)
+	if v == nil {
+		t.Fatal("expected a pending push after a landing")
+	}
+	landedSHA := v.SHA
+
+	// The reviewer pushes that exact commit himself, from a checkout of his own
+	// — never through this clone, so its origin/feature/x stays where it was.
+	pushLandedCommitFromElsewhere(t, bareDir, cloneDir, "feature/x", landedSHA)
+
+	stale := staleRemoteTrackingSHA(t, cloneDir, "feature/x")
+	if stale == landedSHA {
+		t.Fatalf("fixture broken: origin/feature/x already moved to the landed commit %s", landedSHA)
+	}
+
+	remoteHeadCache.Lock()
+	remoteHeadCache.byPR = map[prKey]remoteHeadEntry{}
+	remoteHeadCache.Unlock()
+
+	if v := loadPendingPush(ctx, nil, "", 3009); v != nil {
+		t.Fatalf("expected no pending push once the branch was pushed elsewhere, got %+v", v)
+	}
+	if got := staleRemoteTrackingSHA(t, cloneDir, "feature/x"); got != stale {
+		t.Fatalf("origin/feature/x moved to %s: the read model must not write to the clone", got)
+	}
+}
+
+// pushLandedCommitFromElsewhere puts one specific commit — living only on this
+// clone's pending ref — onto the bare origin's branch, without that clone ever
+// being the one pushing (so its own remote-tracking ref stays untouched).
+func pushLandedCommitFromElsewhere(t *testing.T, bareDir, cloneDir, headRefName, sha string) {
+	t.Helper()
+	other := filepath.Join(t.TempDir(), "elsewhere")
+	if out, err := exec.Command("git", "clone", bareDir, other).CombinedOutput(); err != nil {
+		t.Fatalf("clone elsewhere: %v: %s", err, out)
+	}
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", other}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
+		}
+	}
+	run("fetch", cloneDir, sha)
+	run("push", "origin", sha+":refs/heads/"+headRefName)
+}
+
+// staleRemoteTrackingSHA reads the clone's own origin/<branch> — the ref the
+// read model used to trust blindly.
+func staleRemoteTrackingSHA(t *testing.T, cloneDir, headRefName string) string {
+	t.Helper()
+	out, err := exec.Command("git", "-C", cloneDir, "rev-parse", "origin/"+headRefName).Output()
+	if err != nil {
+		t.Fatalf("rev-parse origin/%s: %v", headRefName, err)
+	}
+	return strings.TrimSpace(string(out))
+}

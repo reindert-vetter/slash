@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // pendingPushState values for pendingPushView.State. Deliberately words, not
@@ -137,11 +138,103 @@ func ingestCaughtUpWithPendingRef(db *sql.DB, repo string, pr int, sha string) b
 	return head == sha
 }
 
+// remoteHeadTTL is how long one `git ls-remote` answer is reused. The read
+// model behind it is polled (every 10s per open tab, plus a batch per
+// PR-overview render), so without a cache a network round trip would ride
+// along on every tick; with it, at most one per PR per minute — and only for a
+// PR that actually has landed, not-yet-pushed work.
+const remoteHeadTTL = 60 * time.Second
+
+// remoteHeadTimeout bounds the one network call, so an unreachable origin
+// degrades to "unknown" (and thus to the purely local fallback below) instead
+// of stalling a GET handler.
+const remoteHeadTimeout = 8 * time.Second
+
+// remoteHeadCache is the volatile memo behind remoteHeadSHA: in-memory only,
+// gone after a restart, no module/read-model/workflow-history write — the same
+// operational carve-out as pendingPushStatus right above (see
+// .claude/rules/workflows-write-boundary.md). A failure is cached too (as ""),
+// so an offline machine retries once a minute rather than on every poll.
+var remoteHeadCache = struct {
+	sync.Mutex
+	byPR map[prKey]remoteHeadEntry
+}{byPR: map[prKey]remoteHeadEntry{}}
+
+type remoteHeadEntry struct {
+	sha string
+	at  time.Time
+}
+
+// remoteHeadSHA is the PR head branch's REAL tip on GitHub, or "" when that
+// cannot be established right now (offline, no such branch, git failing).
+//
+// Deliberately `ls-remote` and NOT a fetch: it writes nothing at all — no
+// objects, no remote-tracking ref — so this stays a pure read of somebody
+// else's state, exactly like the rest of loadPendingPush. A fetch would also
+// work, but it would mutate the reviewer's own clone from a polled GET.
+//
+// Why it is needed at all: origin/<headRef> in the shared clone is only ever
+// as fresh as the last fetch that happened to include that branch, and nothing
+// in slash ever does one — ensureCommits (gh.go) fetches refs/pull/<n>/head,
+// which does not move origin/<branch>, and the chat checkout fetches in the
+// reviewer's OWN checkout, not here. So a reviewer who pushes his branch
+// himself leaves this clone believing the pending commits are still local,
+// forever. Measured on a real PR: origin/<headRef> six days and 293 commits
+// behind, which reported "293 commits nog niet gepusht" and marked nearly
+// every file in the PR with the "ongepusht" pill.
+func remoteHeadSHA(ctx context.Context, repo string, pr int, headRef string) string {
+	if headRef == "" {
+		return ""
+	}
+	key := prKey{repo, pr}
+	now := time.Now()
+
+	remoteHeadCache.Lock()
+	if e, ok := remoteHeadCache.byPR[key]; ok && now.Sub(e.at) < remoteHeadTTL {
+		remoteHeadCache.Unlock()
+		return e.sha
+	}
+	remoteHeadCache.Unlock()
+
+	cctx, cancel := context.WithTimeout(ctx, remoteHeadTimeout)
+	defer cancel()
+
+	sha := ""
+	if out, err := runGitFor(cctx, repo, "ls-remote", "--heads", "origin", headRef); err == nil {
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			f := strings.Fields(strings.TrimSpace(line))
+			if len(f) == 2 && f[1] == "refs/heads/"+headRef {
+				sha = f[0]
+				break
+			}
+		}
+	}
+
+	remoteHeadCache.Lock()
+	remoteHeadCache.byPR[key] = remoteHeadEntry{sha: sha, at: now}
+	remoteHeadCache.Unlock()
+	return sha
+}
+
+// commitContains reports whether ancestor is already part of descendant's
+// history. Both commits must be present locally; a missing one makes git fail,
+// which reports false — "unknown" must never hide real work.
+func commitContains(ctx context.Context, repo, ancestor, descendant string) bool {
+	if ancestor == "" || descendant == "" {
+		return false
+	}
+	_, err := runGitFor(ctx, repo, "merge-base", "--is-ancestor", ancestor, descendant)
+	return err == nil
+}
+
 // loadPendingPush reads one PR's pending-push state straight out of git, or nil
-// when nothing is waiting to be pushed. Read-only and local-only: three git
-// plumbing reads plus one local DB read, no fetch, no gh — cheap enough for a
-// plain GET handler and for the PR-overview list to ask about several PRs at
-// once.
+// when nothing is waiting to be pushed. Read-only: a handful of git plumbing
+// reads plus one local DB read, no fetch, no gh — cheap enough for a plain GET
+// handler and for the PR-overview list to ask about several PRs at once. The
+// one thing it is NOT is purely local: it asks the remote for the head
+// branch's tip (remoteHeadSHA above, throttled to once a minute per PR and
+// only for a PR with landed work), because nothing else in this clone ever
+// learns that a branch was pushed from somewhere else.
 func loadPendingPush(ctx context.Context, db *sql.DB, repo string, pr int) *pendingPushView {
 	ref, headRef := pendingPushRefFor(ctx, repo, pr)
 	if ref == "" {
@@ -158,29 +251,48 @@ func loadPendingPush(ctx context.Context, db *sql.DB, repo string, pr int) *pend
 		PR: pr, HeadRef: headRef, SHA: sha, Ahead: 1, State: pendingPushReady,
 		TreeCaughtUp: ingestCaughtUpWithPendingRef(db, repo, pr, sha),
 	}
-	// origin/<headRef> is whatever the last fetch left behind — deliberately not
-	// refreshed here (a GET must stay cheap and offline-safe), so these two are
-	// a good-enough display count/file list, never a decision input: the push
-	// itself re-checks against the real remote.
+	// What the pending commits are measured AGAINST. First choice is the
+	// branch's real remote tip: if the pending ref is already contained in it,
+	// this work IS on GitHub — whether the app pushed it (and then failed to
+	// drop the ref) or the reviewer pushed the branch himself from his own
+	// checkout — and reporting it would keep a stale "ongepusht" pill on every
+	// touched block forever. The orphaned ref itself is deliberately NOT
+	// deleted here: this is a polled GET, and a git write on every tick — next
+	// to a landing that may be in flight for the same PR — buys nothing. It is
+	// swept with the PR (removePendingRefs, cleanup.go).
+	//
+	// Fallback, when the remote cannot be reached or its tip isn't a commit we
+	// have locally: origin/<headRef>, whatever the last fetch left behind. That
+	// is the pre-existing behaviour and is a good-enough display count/file
+	// list, never a decision input — the push itself re-checks against the real
+	// remote.
 	base := "origin/" + headRef
+	// Only ask the remote when the local tracking ref does not already prove the
+	// work is pushed. That keeps the common cases network-free — nothing landed
+	// yet, or the reviewer pushed through THIS clone, which moves
+	// origin/<headRef> itself — and it means remoteHeadSHA's one-minute memo can
+	// never outvote a fresher local fact.
+	if !commitContains(ctx, repo, sha, base) {
+		if remote := remoteHeadSHA(ctx, repo, pr, headRef); remote != "" {
+			if remote == sha || commitContains(ctx, repo, sha, remote) {
+				setPendingPushState(repo, pr, "", "")
+				return nil
+			}
+			if pendingRefSHA(ctx, repo, remote) != "" {
+				base = remote
+			}
+		}
+	}
 	if pendingRefSHA(ctx, repo, base) != "" {
 		if out, err := runGitFor(ctx, repo, "rev-list", "--count", base+".."+ref); err == nil {
 			if n, err := strconv.Atoi(strings.TrimSpace(string(out))); err == nil {
 				if n == 0 {
-					// The pending ref is already contained in the last known
-					// origin/<headRef>: these commits ARE on GitHub, whether the
-					// app pushed them (and then failed to drop the ref) or the
-					// reviewer pushed the branch himself from his own checkout.
-					// Reporting them keeps a stale "ongepusht" pill on every
-					// touched block forever — the reviewer's own report. A count
-					// of 0 is the only value that proves this; anything else
-					// (origin/<headRef> unknown, or the read failing) stays
+					// Same conclusion as the containment check above, reached
+					// from the fallback base: the pending ref is already part of
+					// the last known origin/<headRef>, so these commits are on
+					// GitHub. A count of 0 is the only value that proves it;
+					// anything else (base unknown, or the read failing) stays
 					// pending, since "unknown" must never hide real work.
-					// The orphaned ref itself is deliberately NOT deleted here:
-					// this is a polled GET, and a git write on every tick — next
-					// to a landing that may be in flight for the same PR — buys
-					// nothing. It is swept with the PR (removePendingRefs,
-					// cleanup.go).
 					setPendingPushState(repo, pr, "", "")
 					return nil
 				}
