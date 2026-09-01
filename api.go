@@ -110,7 +110,16 @@ func (s *server) handlePRs(w http.ResponseWriter, r *http.Request) {
 				prs[i].Deletions = meta.Deletions
 				prs[i].ChangedFiles = meta.ChangedFiles
 				prs[i].HeadRefName = meta.HeadRef
-				prs[i].UpdatedAt = meta.UpdatedAt
+				// GhUpdatedAt, never UpdatedAt: the latter is the LOCAL write
+				// time of the prmeta row (see prmeta.Meta), so the drawer read
+				// "Bijgewerkt 17 seconden geleden" for a PR the inbox section
+				// right above it correctly called 4 hours old — same PR, two
+				// different "bijgewerkt" texts on one screen. Fall back to the
+				// local time for a row stored before GhUpdatedAt existed.
+				prs[i].UpdatedAt = meta.GhUpdatedAt
+				if prs[i].UpdatedAt == "" {
+					prs[i].UpdatedAt = meta.UpdatedAt
+				}
 			}
 		}
 	}

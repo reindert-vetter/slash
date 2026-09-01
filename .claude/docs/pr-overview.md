@@ -591,6 +591,13 @@ extra fields ride an already-made read instead of a new one:
   SQLite read, no GitHub call, no second query. A PR whose `pr_status` tracker
   never ran (never opened via `/pr/<id>`) simply keeps these empty/zero — the
   frontend degrades gracefully for it (see below), never a blank/broken row.
+  **`UpdatedAt` maps from `prmeta.Meta.GhUpdatedAt`, not from that struct's own
+  `UpdatedAt`** — the latter is the LOCAL write time of the prmeta row, so the
+  drawer used to say "Bijgewerkt 17 seconden geleden" (the moment a `pr_meta`
+  upsert last ran) for a PR the inbox section right above it correctly called
+  4 hours old: the same PR with two different "bijgewerkt" texts on one screen.
+  A row stored before `GhUpdatedAt` existed falls back to the local time rather
+  than showing nothing.
 - `recentItem` (`src/overview.mjs`) reuses the inbox row's own building blocks
   instead of inventing new ones: `authorMark(r)` (avatar + first name),
   `diffStatFragment(r)` / `branchFragment(r)` (+N −M · files, branch name) and

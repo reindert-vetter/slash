@@ -339,7 +339,10 @@ type PRSummary struct {
 	Deletions    int    `json:"deletions,omitempty"`
 	ChangedFiles int    `json:"changedFiles,omitempty"`
 	HeadRefName  string `json:"headRefName,omitempty"` // mapped from prmeta.Meta.HeadRef, named to match branchFragment's pr.headRefName
-	UpdatedAt    string `json:"updatedAt,omitempty"`
+	// UpdatedAt is the PR's own GitHub updatedAt (prmeta.Meta.GhUpdatedAt), the
+	// same moment the inbox rows show — deliberately NOT prmeta.Meta.UpdatedAt,
+	// which is only the local write time of that row.
+	UpdatedAt string `json:"updatedAt,omitempty"`
 }
 
 // listPRs returns every ingested PR with its block/file counts, newest PR first.
