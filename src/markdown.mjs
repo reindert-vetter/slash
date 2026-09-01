@@ -28,6 +28,12 @@
 // handler). Code-fence content is escaped by Prism's `highlight()` (see
 // Block.mjs), never by us directly. The combined result is safe to feed into
 // arrow.js's `.innerHTML` binding.
+//
+// One deliberate, narrow exception to "all raw HTML is escaped": a literal
+// `<img src alt width height />` tag (GitHub's own drag-and-drop screenshot
+// upload writes this instead of `![]()` syntax) is recognised through a
+// strict attribute allow-list and re-emitted as a plain image — see
+// `extractRawImages` below for the exact safety net.
 
 import snarkdown from './vendor/snarkdown.js'
 import { highlightForLang } from './Block.mjs'
@@ -383,6 +389,65 @@ function sanitizeUrls(html) {
   })
 }
 
+// extractRawImages — a deliberate, narrow exception to "every raw HTML tag in
+// the source is escaped to inert text" (see the XSS header comment at the top
+// of this file), for one reviewer-reported case: GitHub's drag-and-drop
+// screenshot upload writes a literal `<img width height alt src />` tag into
+// the PR body instead of `![]()` Markdown syntax (GitHub itself renders that
+// raw HTML natively; we did not, so it showed up as a wall of escaped tag
+// text — see the screenshot in the task that added this).
+//
+// Runs in the SAME extraction slot as `extractCodeFences` — before
+// `escapeHtml`, using the SAME placeholder `store`/token mechanism — so an
+// `<img>` written *inside* a fenced code block is left alone (already
+// consumed as fence content by then) and every placeholder still survives
+// `escapeHtml`+snarkdown untouched.
+//
+// The safety net is a STRICT allow-list, not a parser: only a double-quoted
+// `src`/`alt`/`width`/`height` attribute is ever read off the tag — anything
+// else (an `onerror=`, an `onload=`, a stray extra attribute) is silently
+// dropped, never carried into the output. `src` additionally goes through the
+// same `UNSAFE_SCHEME_RE` check `sanitizeUrls` uses below. A tag with no
+// recognisable (quoted) `src`, or an unsafe one, is returned UNCHANGED — it
+// then falls through to the ordinary `escapeHtml` pipeline exactly as before,
+// landing as inert text. This is why the existing
+// `<img src=x onerror="alert(1)">` XSS test still passes unchanged: that `src`
+// is unquoted, so it is never recognised here.
+//
+// The tag this function emits is a bare, unstyled `<img src alt width
+// height>` — deliberately the same shape snarkdown's own image renderer
+// produces for `![]()` syntax — so it needs no styling/lightbox logic of its
+// own: `enhanceImages` (below) and `imageLightbox.mjs` see it as an ordinary
+// Markdown image once the placeholder is substituted back in, including the
+// "2+ images with only whitespace between them" grouping for a run of pasted
+// screenshots.
+const RAW_IMG_RE = /<img\b([^>]*)\/?>/gi
+const RAW_IMG_ATTR_RE = /([a-zA-Z-]+)\s*=\s*"([^"]*)"/g
+const RAW_IMG_ALLOWED_ATTRS = ['src', 'alt', 'width', 'height']
+
+function extractRawImages(text, store) {
+  return text.replace(RAW_IMG_RE, (m, attrsStr) => {
+    const attrs = {}
+    let am
+    const attrRe = new RegExp(RAW_IMG_ATTR_RE)
+    while ((am = attrRe.exec(attrsStr))) {
+      const name = am[1].toLowerCase()
+      if (RAW_IMG_ALLOWED_ATTRS.includes(name) && !(name in attrs)) attrs[name] = am[2]
+    }
+    if (!attrs.src) return m
+    const decoded = attrs.src.replace(/&quot;/g, '"').replace(/&amp;/g, '&')
+    if (UNSAFE_SCHEME_RE.test(decoded)) return m
+    let html = `<img src="${escapeHtml(attrs.src)}"`
+    if (attrs.alt) html += ` alt="${escapeHtml(attrs.alt)}"`
+    if (attrs.width) html += ` width="${escapeHtml(attrs.width)}"`
+    if (attrs.height) html += ` height="${escapeHtml(attrs.height)}"`
+    html += '>'
+    const token = ` MD${store.length} `
+    store.push(html)
+    return token
+  })
+}
+
 // enhanceImages — turns snarkdown's bare `<img src alt>` (no styling, no
 // click behaviour at all) into something worth looking at: every image gets
 // a shared border/rounding + `cursor-zoom-in`, and a RUN of 2 or more images
@@ -465,6 +530,7 @@ export function renderMarkdown(text, startIndex = 0, truncate = false) {
   const store = []
   let src = String(text)
   src = extractCodeFences(src, store, startIndex, truncate)
+  src = extractRawImages(src, store)
   src = escapeHtml(src)
   // Keep snarkdown away from the two emphasis cases it gets wrong (an
   // intra-word `_`, an unpairable `**`/`__`) — see the block comment above

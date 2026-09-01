@@ -172,6 +172,74 @@ test.describe('PR Review Tree — Markdown rendering', () => {
     expect(leaked).toBeNull()
   })
 
+  // Reviewer report: GitHub's own drag-and-drop screenshot upload writes a
+  // literal `<img width height alt src />` tag into the PR body instead of
+  // `![]()` syntax, so it used to show up as a wall of escaped tag text (see
+  // the task screenshot). `extractRawImages` (markdown.mjs) recognises this
+  // ONE tag shape via a strict attribute allow-list and re-emits it as a
+  // plain image, which `enhanceImages` then styles/groups exactly like a
+  // Markdown-syntax image — same mechanism, no second implementation.
+  test('renders a raw GitHub-style <img> tag as a real, styled image and groups a run of them', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+
+    await appReady(page)
+
+    await evaluateSettled(page, async () => {
+      const { renderMarkdown } = await import('/src/markdown.mjs')
+      const md =
+        'Some text\n\n' +
+        '<img width="1500" height="950" alt="1-overzicht" src="https://github.com/user-attachments/assets/aaa" /> ' +
+        '<img width="1500" height="950" alt="2-tooltip" src="https://github.com/user-attachments/assets/bbb" />'
+      const host = document.createElement('div')
+      host.id = 'markdown-raw-img-host'
+      host.innerHTML = renderMarkdown(md)
+      document.body.appendChild(host)
+    })
+
+    const host = page.locator('#markdown-raw-img-host')
+    const imgs = host.locator('img[data-md-image]')
+    await expect(imgs).toHaveCount(2)
+    await expect(imgs.first()).toHaveAttribute(
+      'src',
+      'https://github.com/user-attachments/assets/aaa',
+    )
+    await expect(imgs.first()).toHaveAttribute('alt', '1-overzicht')
+    // The two adjacent images (only whitespace between them) are wrapped in
+    // the same grouping row enhanceImages already produces for a Markdown
+    // `![]()` run.
+    const group = host.locator('div:has(> img[data-md-image])').first()
+    await expect(group.locator('img[data-md-image]')).toHaveCount(2)
+  })
+
+  test('drops an unsafe raw <img> tag instead of rendering it live', async ({ page }) => {
+    await page.goto('/pr/12903')
+
+    const alerted = []
+    page.on('dialog', async (d) => {
+      alerted.push(d.message())
+      await d.dismiss()
+    })
+
+    await evaluateSettled(page, async () => {
+      const { renderMarkdown } = await import('/src/markdown.mjs')
+      const md =
+        'Unsafe scheme: <img src="javascript:alert(1)" alt="x" /> ' +
+        'and unquoted with a handler: <img src=x onerror="alert(2)">'
+      const host = document.createElement('div')
+      host.id = 'markdown-raw-img-unsafe-host'
+      host.innerHTML = renderMarkdown(md)
+      document.body.appendChild(host)
+    })
+
+    expect(alerted).toHaveLength(0)
+    const host = page.locator('#markdown-raw-img-unsafe-host')
+    await expect(host.locator('img')).toHaveCount(0)
+    await expect(host).toContainText('<img src="javascript:alert(1)" alt="x" />')
+    await expect(host).toContainText('<img src=x onerror="alert(2)">')
+  })
+
   test('neutralises a javascript: URL scheme on a real Markdown link', async ({ page }) => {
     await page.goto('/pr/12903')
 

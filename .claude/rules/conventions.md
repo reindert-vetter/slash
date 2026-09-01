@@ -258,6 +258,30 @@ Same "the shape carries the meaning" colorblind-rule reasoning as
 `scrollHint`/`stepChevron`: the prev/next buttons are a bare chevron, no text
 label, only a `title`/`aria-label`. Test: `tests/image-lightbox.spec.mjs`.
 
+### A raw `<img>` HTML tag (GitHub's own screenshot paste) is also rendered as an image
+
+Reviewer report: GitHub's drag-and-drop screenshot upload writes a literal
+`<img width height alt src />` tag into the PR body instead of `![]()` syntax
+— which the XSS layer above (point 3, "the **entire** raw Markdown text is
+fully HTML-escaped") turned into a wall of escaped tag text instead of a
+picture. `extractRawImages` (`markdown.mjs`) is a deliberate, narrow exception
+to that rule: it runs in the same extraction slot as `extractCodeFences`
+(before `escapeHtml`, same placeholder/`store` mechanism, so a tag *inside* a
+fenced code block is left alone), and recognises **only** a tag with a
+double-quoted `src` attribute — every attribute is read through a strict
+allow-list (`src`/`alt`/`width`/`height`; anything else, e.g. `onerror=`, is
+silently dropped) and `src` itself passes through the same
+`UNSAFE_SCHEME_RE` check `sanitizeUrls` uses. A tag with no recognisable
+(quoted) `src`, or an unsafe one, is returned **unchanged** and falls through
+to the ordinary `escapeHtml` pipeline — this is why the existing
+`<img src=x onerror="alert(1)">` XSS test still passes unchanged. The emitted
+tag is a bare, unstyled `<img src alt width height>` — the same shape
+snarkdown's own `![]()` renderer produces — so `enhanceImages`/
+`imageLightbox.mjs` above need no change at all: a run of pasted screenshots
+groups side by side exactly like a Markdown-syntax image run. Test:
+`tests/markdown.spec.mjs` ("renders a raw GitHub-style `<img>` tag…", "drops
+an unsafe raw `<img>` tag…").
+
 ## Shared avatar helper (`src/avatar.mjs`)
 
 `avatarHTML(name, avatarUrl, sizeCls, extraCls)` — extracted from
