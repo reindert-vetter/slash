@@ -99,6 +99,22 @@ group-SIGKILL bij context-cancel), doodt een cancel ook automatisch elk
 kindproces dat Claude's Bash-tool startte (phpunit, composer, …), hoe diep ook
 — geen extra werk nodig.
 
+**Elke plek in `runTestRun` waar `runCtx.Err() != nil` de run vroegtijdig
+afkapt, moet ook `markTestRunCancelled` aanroepen — niet alleen de laatste
+(na `cl.RunChat`).** Bug gevonden en gefixt: de twee vroegere checks (na
+`acquireWriteTurnSlot` en na `prepareChatShellWorkDir` — precies het moment
+waarop de kaart nog "Werkmap klaarzetten…" toont) gaven `testRunResult{
+Cancelled: true}` terug aan de workflow-history, maar zetten het **volatiele**
+`testRunProgress.Cancelled`-veld nooit — `finishTestRunProgress`'s eigen
+`defer` zette intussen wel `Running=false`, dus `testRunStatusLine`
+(`home.mjs`) viel terug op "Klaar — 0 geslaagd, 0 mislukt" in plaats van
+"Afgebroken op jouw verzoek": de reviewer zag na een klik op "Stop" geen enkel
+teken dat het gewerkt had. Regressietest:
+`TestRunTestRunCancelWhileWaitingForWriteSlot` (`test_run_test.go`) — houdt de
+write-turn-slot bezet zodat de run in de wacht-fase blijft hangen, annuleert
+de run daarna via `cancelChatTurn`, en controleert zowel het
+Activity-resultaat als de volatiele snapshot.
+
 ## De write-gate: gedeeld met een code-genererende chat-turn, bewuste keuze
 
 Een testrun pakt dezelfde capaciteit-1 slot (`chat_write_gate.go`,
@@ -159,4 +175,6 @@ dan 3 dagen".
 `TestTestRunProgressLifecycle` (geen voorgevulde lijst, `busy` → `interrupted`
 bij afronden zonder uitkomst-marker), `TestSweepTestRunResidueAgeGate` (een
 echte git-checkout met untracked resten; oud genoeg wordt verwijderd + de run
-verdwijnt, vers genoeg blijft allebei met rust).
+verdwijnt, vers genoeg blijft allebei met rust),
+`TestRunTestRunCancelWhileWaitingForWriteSlot` (zie "Cancel" hierboven — een
+"Stop" tijdens de wacht-fase moet ook `markTestRunCancelled` raken).

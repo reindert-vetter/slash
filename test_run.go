@@ -270,6 +270,7 @@ func runTestRun(ctx context.Context, tm *TaskManager, cl claude.Client, dataDir 
 	})
 	defer release()
 	if runCtx.Err() != nil {
+		markTestRunCancelled(arg.Repo, arg.PR)
 		return testRunResult{Cancelled: true}
 	}
 	if waited {
@@ -278,6 +279,7 @@ func runTestRun(ctx context.Context, tm *TaskManager, cl claude.Client, dataDir 
 
 	dir, decision, ok := prepareChatShellWorkDir(runCtx, tm, dataDir, arg.Repo, arg.PR, "")
 	if runCtx.Err() != nil {
+		markTestRunCancelled(arg.Repo, arg.PR)
 		return testRunResult{Cancelled: true}
 	}
 	if decision != nil || checkoutChoiceOpen(dataDir, arg.Repo, arg.PR) {

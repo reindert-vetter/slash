@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/reindert-vetter/tembed"
+
+	"slash/modules/claude"
 )
 
 // TestParseTestRunMarkers covers the marker contract test_run.md fixes: the
@@ -93,6 +95,64 @@ func TestTestRunProgressLifecycle(t *testing.T) {
 	}
 	if paymentState != testRunStateInterrupted {
 		t.Errorf("PaymentTest state = %q, want interrupted (never got a pass/fail marker)", paymentState)
+	}
+}
+
+// TestRunTestRunCancelWhileWaitingForWriteSlot guards a bug where a reviewer's
+// "Stop" click during the very first phase — before the CLI is even
+// invoked, still holding the write-turn slot's onWaiting callback
+// (chatPhaseWaiting, shown as "Werkmap klaarzetten…") — cancelled the run but
+// never marked the volatile snapshot as Cancelled. finishTestRunProgress's
+// defer still ran (Running -> false), so the status line fell through to
+// "Klaar — 0 geslaagd, 0 mislukt" instead of "Afgebroken op jouw verzoek" —
+// indistinguishable from a run that quietly did nothing.
+func TestRunTestRunCancelWhileWaitingForWriteSlot(t *testing.T) {
+	const repo, pr = "", 999002
+	t.Cleanup(func() {
+		testRunMu.Lock()
+		delete(testRunByPR, prKey{repo, pr})
+		testRunMu.Unlock()
+	})
+
+	// Hold the one write-turn slot so runTestRun's own acquireWriteTurnSlot
+	// call has to wait for it, exactly like a concurrent code-editing chat
+	// turn would.
+	release := acquireWriteTurnSlot(context.Background(), nil)
+	defer release()
+
+	done := make(chan testRunResult, 1)
+	go func() {
+		done <- runTestRun(context.Background(), &TaskManager{}, claude.NewFake(), t.TempDir(), testRunArg{Repo: repo, PR: pr})
+	}()
+
+	// Wait until the run actually registered itself as waiting for the slot.
+	waitFor(t, func() bool {
+		snap, ok := testRunProgressFor(repo, pr)
+		return ok && snap.Phase == chatPhaseWaiting
+	})
+
+	if !cancelChatTurn(testRunCancelID(pr)) {
+		t.Fatal("expected a registered cancel func while the run is waiting for the write slot")
+	}
+
+	select {
+	case res := <-done:
+		if !res.Cancelled {
+			t.Fatalf("expected the Activity result to report Cancelled, got %+v", res)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runTestRun never returned after cancel")
+	}
+
+	snap, ok := testRunProgressFor(repo, pr)
+	if !ok {
+		t.Fatal("expected a progress snapshot")
+	}
+	if snap.Running {
+		t.Fatal("expected running=false after the run returned")
+	}
+	if !snap.Cancelled {
+		t.Fatal("expected the volatile snapshot's Cancelled flag to be set — this is what the status line reads")
 	}
 }
 
