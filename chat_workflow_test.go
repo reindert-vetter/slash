@@ -606,6 +606,102 @@ func TestParseAssistantTurnKeepsProseWithAnUnrelatedTrailingJSON(t *testing.T) {
 	}
 }
 
+// A clarifying question buried after an explanation is a real, clickable
+// question — not raw JSON — mirroring the existing trailing comment_action
+// case. Reviewer-reported (screenshot): the general PR-wide chat showed the
+// literal directive text instead of option buttons.
+func TestParseAssistantTurnAcceptsProseWithTrailingQuestion(t *testing.T) {
+	raw := "Ik kan dit niet zomaar posten zonder dat ik weet wat je precies wilt.\n" +
+		`{"type":"question","question":"Hoe wil je de comments op de PR hebben?","options":["Eén PR-comment","Losse comments"]}`
+	msg, action := parseAssistantTurn(1, "c1", "turn-1", raw)
+	if action != nil {
+		t.Fatalf("expected no comment_action directive, got %+v", action)
+	}
+	if msg.Kind != chat.KindQuestion {
+		t.Fatalf("expected a KindQuestion turn, got kind=%q body=%q", msg.Kind, msg.Body)
+	}
+	if len(msg.Options) != 2 || msg.Options[0] != "Eén PR-comment" {
+		t.Fatalf("expected the options to survive, got %+v", msg.Options)
+	}
+	if !strings.Contains(msg.Body, "Ik kan dit niet zomaar posten") || !strings.Contains(msg.Body, "Hoe wil je de comments") {
+		t.Fatalf("expected the body to contain both the prose and the question, got %q", msg.Body)
+	}
+	if strings.Contains(msg.Body, `{"type"`) {
+		t.Fatalf("expected no raw directive JSON left in the body, got %q", msg.Body)
+	}
+}
+
+// A need_write directive only QUOTED inside an explanation (not the whole
+// reply) is scrubbed from the visible text rather than shown as raw JSON —
+// whether or not it also triggers an escalation (see the runOneClaudeTurn
+// tests below for that half).
+func TestParseAssistantTurnScrubsAnEmbeddedNeedWriteMention(t *testing.T) {
+	raw := "Dus: " + `{"type":"need_write"}` + " is precies hoe ik die toegang aanvraag; in de volgende beurt plaats ik de comments echt."
+	msg, action := parseAssistantTurn(1, "c1", "turn-1", raw)
+	if action != nil {
+		t.Fatalf("expected no directive, got %+v", action)
+	}
+	if strings.Contains(msg.Body, `{"type"`) {
+		t.Fatalf("expected the raw need_write JSON to be scrubbed, got %q", msg.Body)
+	}
+	if !strings.Contains(msg.Body, "Dus: dat is precies hoe") {
+		t.Fatalf("expected the JSON replaced with a plain word, got %q", msg.Body)
+	}
+}
+
+// The exact scenario from the reviewer's screenshot: an explanation that
+// quotes need_write mid-sentence, PLUS a genuine trailing question. Both
+// halves get cleaned up in the one visible bubble.
+func TestParseAssistantTurnHandlesEmbeddedNeedWriteAndTrailingQuestionTogether(t *testing.T) {
+	raw := "Dus: " + `{"type":"need_write"}` + " is precies hoe ik die toegang aanvraag.\n" +
+		`{"type":"question","question":"Hoe wil je de comments op de PR hebben?","options":["Eén PR-comment"]}`
+	msg, action := parseAssistantTurn(1, "c1", "turn-1", raw)
+	if action != nil {
+		t.Fatalf("expected no comment_action directive, got %+v", action)
+	}
+	if msg.Kind != chat.KindQuestion {
+		t.Fatalf("expected a KindQuestion turn, got kind=%q body=%q", msg.Kind, msg.Body)
+	}
+	if strings.Contains(msg.Body, `{"type"`) {
+		t.Fatalf("expected no raw directive JSON left in the body, got %q", msg.Body)
+	}
+}
+
+// looksLikeEmbeddedNeedWrite escalates a reply that only quotes the directive
+// mid-prose, same as the existing looksLikeWriteRefusal prose fallback.
+func TestLooksLikeEmbeddedNeedWriteDetectsAQuotedDirective(t *testing.T) {
+	if !looksLikeEmbeddedNeedWrite("Dus: " + `{"type":"need_write"}` + " is precies hoe ik dat vraag.") {
+		t.Fatal("expected an embedded need_write mention to be detected")
+	}
+	if looksLikeEmbeddedNeedWrite("Gewoon een antwoord zonder enige directive.") {
+		t.Fatal("expected no false positive on ordinary prose")
+	}
+	if looksLikeEmbeddedNeedWrite("```\n" + `{"type":"need_write"}` + "\n```\nDit is een voorbeeld van het formaat.") {
+		t.Fatal("expected a fenced code sample to be ignored, same as looksLikeWriteRefusal")
+	}
+}
+
+// shouldEscalateForEmbeddedNeedWrite escalates a bare embedded mention, but
+// NOT when the same reply ends on a real trailing question — the exact
+// screenshot scenario, where escalating would risk acting before the
+// reviewer answered.
+func TestShouldEscalateForEmbeddedNeedWrite(t *testing.T) {
+	bare := "Dus: " + `{"type":"need_write"}` + " is precies hoe ik die toegang aanvraag; in de volgende beurt plaats ik de comments echt."
+	if !shouldEscalateForEmbeddedNeedWrite(bare) {
+		t.Fatal("expected a bare embedded mention to escalate")
+	}
+
+	withQuestion := "Dus: " + `{"type":"need_write"}` + " is precies hoe ik die toegang aanvraag.\n" +
+		`{"type":"question","question":"Hoe wil je de comments op de PR hebben?","options":["Eén PR-comment"]}`
+	if shouldEscalateForEmbeddedNeedWrite(withQuestion) {
+		t.Fatal("expected no escalation when the reply also asks a clarifying question")
+	}
+
+	if shouldEscalateForEmbeddedNeedWrite("Gewoon een antwoord zonder enige directive.") {
+		t.Fatal("expected no escalation without any embedded mention")
+	}
+}
+
 // A chat on a live comment thread is started as a CHILD of that thread's own
 // task_code_comment Execution (via its "chat" Action Signal), keeping the
 // derived chat-<commentID> Run ID — and starting it twice adds no second child.

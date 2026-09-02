@@ -1868,7 +1868,7 @@ Fixed in two places, deliberately keeping the directives strict:
 - **`chat_shell.md` + `parseAssistantTurn`**: a write turn that changed
   something answers with its ordinary prose **and** puts the
   `comment_action` object on its own **last line**.
-  `splitTrailingCommentAction` peels that line off (tolerating blank lines and
+  `splitTrailingDirective` peels that line off (tolerating blank lines and
   a stray ``` fence around it), so the turn yields BOTH a visible text message
   and the directive. A turn that changed nothing still answers with the bare
   JSON object, unchanged. `runOneClaudeTurn` therefore saves its message
@@ -1876,7 +1876,50 @@ Fixed in two places, deliberately keeping the directives strict:
   reviewer ends up with the explanation bubble *and* the "concept in
   comment-veld gezet" draft from one message. Prose that merely ends on some
   other JSON-ish line stays plain text (the last line must parse as a
-  `comment_action` directive).
+  recognized directive).
+
+#### A trailing `question` after prose renders as a real question, not raw JSON
+
+Same `splitTrailingDirective` helper (originally `splitTrailingCommentAction`,
+generalized — any of the reviewer's own two directive types can sit on that
+trailing line), now also accepts a trailing `{"type":"question",...}`.
+Reviewer report (screenshot, the general PR-wide chat, `generalChatOverlay.mjs`):
+asked "waarom heb je schrijftoegang nodig? ik wil dat gewoon een comment plaats
+op pr", Claude answered with an explanation ending on a genuine clarifying
+question — and the reviewer saw the literal
+`{"type":"question","question":"...","options":[...]}` text instead of
+clickable option buttons, because `parseAssistantTurn` only recognized a
+`question` directive when it was the **whole** message. `parseAssistantTurn`
+now merges the prose and the question into ONE `chat.Message` (`Kind =
+KindQuestion`, `Body = prose + "\n\n" + question`, `Options` capped the same
+way as the whole-message case via the shared `capQuestionOptions`) — no
+front-end change needed, `ClaudeChat.mjs`'s question rendering already keys
+only off `msg.kind === 'question'` plus `msg.options`.
+
+#### A `need_write` directive only QUOTED inside prose is cleaned up, and sometimes still escalates
+
+Same report, same reply: it also named `{"type":"need_write"}` **mid-sentence**
+("Dus: `{"type":"need_write"}` is precies hoe ik die toegang aanvraag…") while
+explaining itself, rather than emitting it as the whole reply — the strict,
+whole-message-only `isNeedWriteDirective` never escalates on this, so the raw
+JSON used to sit in the visible prose untouched.
+
+- **`stripEmbeddedNeedWriteMentions`** replaces every occurrence of the literal
+  `{"type":"need_write"}` (backtick-fenced or bare) with the plain word "dat",
+  applied via `cleanedMessage` at every `parseAssistantTurn` exit point — so
+  the reviewer never sees the raw directive, whether or not the turn below
+  actually escalates.
+- **`looksLikeEmbeddedNeedWrite`** (fence-stripped, same reasoning as
+  `looksLikeWriteRefusal`) reports whether the literal directive appears
+  ANYWHERE in the read-only attempt's reply, not just as the whole message.
+  Found ⇒ `runOneClaudeTurn` escalates to the write attempt, same as an
+  `isNeedWriteDirective`/`looksLikeWriteRefusal` match — UNLESS
+  **`shouldEscalateForEmbeddedNeedWrite`** finds the same reply also ends on a
+  real trailing `question` directive (`splitTrailingDirective` again): Claude
+  is then explicitly waiting for the reviewer's answer before doing anything,
+  so silently grabbing write access now could act before that answer ever
+  arrives — exactly the case above, where escalating instead of asking would
+  have skipped straight to guessing at how to format the PR comments.
 
 - **`runClaudeTurn`'s own Activity result grew a matching `Action` field**
   (`chatTurnResult{Message, Action}`) so this workflow-only handoff travels

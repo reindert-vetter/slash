@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -756,6 +757,67 @@ func isNeedWriteDirective(text string) bool {
 	return d.Type == "need_write"
 }
 
+// needWriteDirectiveLiteral is the exact JSON directive text the system
+// prompt tells Claude to emit for an escalation request. Used both by
+// isNeedWriteDirective (whole-message match) and looksLikeEmbeddedNeedWrite
+// (substring match) below.
+const needWriteDirectiveLiteral = `{"type":"need_write"}`
+
+// looksLikeEmbeddedNeedWrite reports whether the strict need_write directive
+// appears ANYWHERE in text, not just as the whole message (isNeedWriteDirective
+// above requires that). Observed case (reviewer report): Claude explained, in
+// ordinary prose, that a plain reply needs write access and quoted the literal
+// directive as part of that explanation instead of emitting it as the whole
+// reply — which used to leave the raw `{"type":"need_write"}` text sitting in
+// the visible bubble (parseAssistantTurn's generic "doesn't parse -> plain
+// text" fallback) instead of triggering the escalation it names, or at least
+// being cleaned out of the reviewer-facing text (see
+// stripEmbeddedNeedWriteMentions). Fence-stripped like looksLikeWriteRefusal,
+// for the same reason: a code sample quoting this JSON shape must never
+// itself trigger anything.
+func looksLikeEmbeddedNeedWrite(text string) bool {
+	return strings.Contains(stripCodeFencesForScan(text), needWriteDirectiveLiteral)
+}
+
+// stripEmbeddedNeedWriteMentions replaces every occurrence of the literal
+// need_write directive (optionally fenced in single backticks, the way a
+// model quotes a JSON snippet inline) with the plain word "dat" ("that") — a
+// generic demonstrative that reads naturally in most of the surrounding
+// sentences Claude composes around it ("Dus: dat is precies hoe ik die
+// toegang aanvraag"). Applied to every visible turn parseAssistantTurn
+// returns, so the reviewer never sees a raw JSON directive as prose, even
+// when it was only quoted/explained rather than actually escalating (see
+// looksLikeEmbeddedNeedWrite's own doc comment for the case where it is NOT
+// escalated because the same reply also asks a clarifying question). A no-op
+// when the literal isn't present.
+var needWriteInlinePattern = regexp.MustCompile("`?" + regexp.QuoteMeta(needWriteDirectiveLiteral) + "`?")
+var repeatedSpacePattern = regexp.MustCompile(`[ 	]{2,}`)
+
+func stripEmbeddedNeedWriteMentions(text string) string {
+	if !strings.Contains(text, needWriteDirectiveLiteral) {
+		return text
+	}
+	cleaned := needWriteInlinePattern.ReplaceAllString(text, "dat")
+	return repeatedSpacePattern.ReplaceAllString(cleaned, " ")
+}
+
+// shouldEscalateForEmbeddedNeedWrite reports whether a reply that only
+// QUOTES the need_write directive inside prose (looksLikeEmbeddedNeedWrite)
+// should actually trigger the second, full-write-access attempt. Deliberately
+// NOT when that same reply ends on a real trailing "question" directive
+// (splitTrailingDirective) — Claude is explicitly waiting for the reviewer's
+// answer before doing anything, so silently grabbing write access now could
+// act before that answer ever arrives. parseAssistantTurn cleans the raw
+// JSON out of whatever text ends up visible either way
+// (stripEmbeddedNeedWriteMentions), independent of this decision.
+func shouldEscalateForEmbeddedNeedWrite(text string) bool {
+	if !looksLikeEmbeddedNeedWrite(text) {
+		return false
+	}
+	_, d := splitTrailingDirective(text)
+	return d == nil || d.Type != "question"
+}
+
 // writeRefusalPhrases are the literal, lowercased fragments that mean "this
 // reply is Claude saying it cannot write here" — the prose it falls back to
 // instead of emitting {"type":"need_write"} (see looksLikeWriteRefusal). Kept
@@ -998,6 +1060,17 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 		logTurnMilestone("read-only attempt refused to write in prose after %v, escalating anyway", time.Since(t0))
 		// The one visible trace of this: a momentary status line, no bubble
 		// and no stored message (see looksLikeWriteRefusal's doc comment).
+		advanceChatProgress(arg.Repo, arg.PR, arg.ConversationID, chatPhaseEscalating)
+	}
+	// Same idea, but for the need_write directive itself when it is only
+	// QUOTED inside otherwise ordinary prose rather than being the whole
+	// reply — reviewer-reported: "waarom heb je schrijftoegang nodig? ik wil
+	// dat gewoon een comment plaats op pr" answered with an explanation that
+	// named the directive mid-sentence. See shouldEscalateForEmbeddedNeedWrite
+	// for why a trailing question suppresses this.
+	if !escalate && shouldEscalateForEmbeddedNeedWrite(result.Text) {
+		escalate = true
+		logTurnMilestone("read-only attempt quoted need_write inline after %v, escalating anyway", time.Since(t0))
 		advanceChatProgress(arg.Repo, arg.PR, arg.ConversationID, chatPhaseEscalating)
 	}
 	if escalate {
@@ -1311,7 +1384,16 @@ func relativeToCheckout(dir, path string) string {
 // degrades to plain text rather than vanishing), and a (text message,
 // directive) PAIR when the answer is prose that ENDS with a comment_action
 // directive on its own last line — one reviewer message may ask for both a
-// code change and a reply on the comment thread.
+// code change and a reply on the comment thread. A KindQuestion turn is
+// likewise produced when the answer is prose that ENDS with a "question"
+// directive on its own last line (splitTrailingDirective, shared with the
+// comment_action case) — the prose and the question are merged into one
+// visible bubble (reviewer report: a clarifying question buried after an
+// explanation used to show up as raw, unclickable JSON). Every returned
+// message's Body is run through stripEmbeddedNeedWriteMentions, so a
+// need_write directive Claude only QUOTED while explaining itself (rather
+// than emitting as the whole reply) never reaches the reviewer as raw JSON
+// either — see looksLikeEmbeddedNeedWrite in runOneClaudeTurn.
 // stripEmDash replaces every em dash ("—") with a plain hyphen. Used only on a
 // comment_action "reply" body (see parseAssistantTurn) — the reviewer never
 // wants that character in a Claude-drafted comment reply, and a system-prompt
@@ -1334,35 +1416,63 @@ func parseAssistantTurn(pr int, conversationID, turnID, text string) (chat.Messa
 				if strings.TrimSpace(d.Question) == "" {
 					return msg, nil
 				}
-				opts := d.Options
-				if len(opts) > maxChatQuestionOptions {
-					opts = opts[:maxChatQuestionOptions]
-				}
 				msg.Kind = chat.KindQuestion
 				msg.Body = d.Question
-				msg.Options = opts
-				return msg, nil
+				msg.Options = capQuestionOptions(d.Options)
+				return cleanedMessage(msg), nil
 			case "comment_action":
 				if action := validateCommentAction(d); action != nil {
 					return chat.Message{}, action
 				}
 			}
 			// Unknown/malformed directive -> plain text, per the rule above.
-			return msg, nil
+			return cleanedMessage(msg), nil
 		}
 	}
-	// A combined answer: ordinary prose (what Claude just changed) with the
-	// comment_action directive on its own last line. This is what lets ONE
-	// reviewer message ask for both a code change and a reply on the comment
-	// thread — see "One message may ask for both" in
-	// .claude/docs/workflows-comments.md.
-	if prose, d := splitTrailingCommentAction(text); d != nil && strings.TrimSpace(prose) != "" {
-		if action := validateCommentAction(*d); action != nil {
-			msg.Body = prose
-			return msg, action
+	// A combined answer: ordinary prose (what Claude just changed/asked) with
+	// a directive on its own last line — comment_action or question. This is
+	// what lets ONE reviewer message ask for both a code change and a reply on
+	// the comment thread (comment_action, see "One message may ask for both"
+	// in .claude/docs/workflows-comments.md) or get a real, clickable question
+	// instead of prose that merely quotes the directive shape.
+	if prose, d := splitTrailingDirective(text); d != nil && strings.TrimSpace(prose) != "" {
+		switch d.Type {
+		case "comment_action":
+			if action := validateCommentAction(*d); action != nil {
+				msg.Body = prose
+				return cleanedMessage(msg), action
+			}
+		case "question":
+			if strings.TrimSpace(d.Question) != "" {
+				msg.Kind = chat.KindQuestion
+				msg.Body = prose + "\n\n" + d.Question
+				msg.Options = capQuestionOptions(d.Options)
+				return cleanedMessage(msg), nil
+			}
 		}
 	}
-	return msg, nil
+	return cleanedMessage(msg), nil
+}
+
+// capQuestionOptions caps a question directive's Options at
+// maxChatQuestionOptions — shared by parseAssistantTurn's whole-message and
+// trailing-directive "question" branches.
+func capQuestionOptions(opts []string) []string {
+	if len(opts) > maxChatQuestionOptions {
+		return opts[:maxChatQuestionOptions]
+	}
+	return opts
+}
+
+// cleanedMessage runs stripEmbeddedNeedWriteMentions over msg.Body — the one
+// place every parseAssistantTurn exit point passes through, so a quoted
+// need_write directive never reaches the reviewer as raw JSON, even in the
+// (common) case where it's just informational prose rather than a real
+// escalation (see looksLikeEmbeddedNeedWrite in runOneClaudeTurn for the
+// companion decision of whether to escalate).
+func cleanedMessage(msg chat.Message) chat.Message {
+	msg.Body = stripEmbeddedNeedWriteMentions(msg.Body)
+	return msg
 }
 
 // validateCommentAction turns a parsed "comment_action" directive into the
@@ -1391,13 +1501,16 @@ func validateCommentAction(d assistantDirective) *commentActionDirective {
 	return &commentActionDirective{CommentID: d.CommentID, Action: d.Action, Body: body}
 }
 
-// splitTrailingCommentAction splits an answer that ENDS with a comment_action
-// directive on its own last line into the prose before it and that directive.
-// Blank lines and a stray markdown fence around the directive are tolerated
-// (the system prompt asks for a bare line, but a fence is the one deviation
-// models reach for); anything else returns the text unchanged and a nil
-// directive.
-func splitTrailingCommentAction(text string) (string, *assistantDirective) {
+// splitTrailingDirective splits an answer that ENDS with an assistantDirective
+// JSON (of ANY type — the caller decides which types it accepts) on its own
+// last line into the prose before it and that directive. Blank lines and a
+// stray markdown fence around the directive are tolerated (the system prompt
+// asks for a bare line, but a fence is the one deviation models reach for);
+// anything else returns the text unchanged and a nil directive. Originally
+// comment_action-only (splitTrailingCommentAction); generalized so a trailing
+// "question" directive after prose gets the same treatment — see
+// parseAssistantTurn.
+func splitTrailingDirective(text string) (string, *assistantDirective) {
 	lines := strings.Split(text, "\n")
 	i := len(lines) - 1
 	for i >= 0 {
@@ -1411,7 +1524,7 @@ func splitTrailingCommentAction(text string) (string, *assistantDirective) {
 		return text, nil
 	}
 	var d assistantDirective
-	if err := json.Unmarshal([]byte(strings.TrimSpace(lines[i])), &d); err != nil || d.Type != "comment_action" {
+	if err := json.Unmarshal([]byte(strings.TrimSpace(lines[i])), &d); err != nil {
 		return text, nil
 	}
 	prose := lines[:i]
