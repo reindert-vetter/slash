@@ -1361,13 +1361,36 @@ The "Embedded Claude conversation" section owns:
   paths: `POST /api/workflows/claude_chat` (idempotent, ensures the
   Execution), `GET /api/chat?commentId=` (read-only transcript),
   `POST /api/workflows/{runId}/signals/message` (one reviewer turn — free
-  text or a clicked question option, same Signal). **No optimistic append**:
-  the Signal round-trip runs the Activities (including the real `claude`
-  subprocess call) **inline** — see "Hard rule: only workflows mutate state"
-  and the `SignalWorkflow`/`advance()` mechanics in `tembed-workflows.md` —
-  so `sendClaudeMessage`'s own `await` genuinely spans the whole turn — but
-  that await is no longer what makes the reply appear (see "Live progress"
-  below); it is the belt-and-braces refetch for the reviewer's own send.
+  text or a clicked question option, same Signal). The Signal round-trip runs
+  the Activities (including the real `claude` subprocess call) **inline** —
+  see "Hard rule: only workflows mutate state" and the
+  `SignalWorkflow`/`advance()` mechanics in `tembed-workflows.md` — so
+  `sendClaudeMessage`'s own `await` genuinely spans the whole turn; that await
+  is not what makes the reply appear (see "Live progress" below), it is the
+  belt-and-braces refetch for the reviewer's own send.
+  **A local optimistic echo of the reviewer's OWN text** (`addPendingOwnMessage`/
+  `removePendingOwnMessage`) is pushed straight into `cc.messages` the instant
+  `sendClaudeMessage` fires, before any of that round trip completes —
+  reported bug: "als ik vanuit het menu een chat start, zie ik mijn bericht
+  niet gelijk in de chat, uiteindelijk wel", most visible starting a BRAND NEW
+  conversation (menu "Chat over deze regel"/"Chat over deze PR"), whose
+  transcript is still empty right up to that point, so the reviewer used to
+  stare at nothing for as long as the save+SSE-push+refetch round trip takes.
+  The entry carries a locally-minted `__pending__N` id (never colliding with a
+  real, server-issued one, see `chatMessageID` in `chat_workflow.go`) and is
+  never itself persisted: the very next `loadChatMessages` — from the
+  `chat.message` SSE push (see "Live progress" below) or this function's own
+  belt-and-braces refetch — **replaces** `cc.messages` wholesale with the real,
+  already-saved transcript (`saveChatMessage` persists the reviewer's turn
+  before the actual claude call even starts), so the pending entry is
+  superseded automatically, never duplicated. Only a failed/unreachable send
+  never reaches that replacement, which is why `sendClaudeMessage` explicitly
+  calls `removePendingOwnMessage` on both its failure paths — otherwise a
+  message that was never actually saved would sit in the transcript forever.
+  `queueClaudeMessage`'s own queued-turn bubble (`cc.queued`/`claudeQueuedRow`,
+  rendered the moment a turn is typed while busy) already worked this way; this
+  extends the same "show it before the network agrees" idea to the ordinary,
+  not-busy send.
 - **`ensureChatEvents`/`loadChatProgress`** — the live channel, see below.
 - **`claudeChatVisible()`** — `hasVisibleComments() || cs.focus === 'new'`, a
   **strict iff** with whatever `InlineComments` itself renders (a visible
@@ -3673,9 +3696,10 @@ scrolling container — unlike every other `scrollIntoViewVertical` call site in
 `RelatedPanel.mjs` (comment reactions, chips, tasks), which walk up to an
 ancestor that scrolls. A newly appended bubble or a growing partial-progress
 bubble never moved this div's own `scrollTop`, so a just-sent message (added
-only once the transcript is refetched — see "No optimistic append" above)
-could land below the fold and stay there even after the turn finished and the
-progress line disappeared again.
+either optimistically by `addPendingOwnMessage` or once the transcript is
+refetched — see "the reviewer's OWN just-sent text" above) could land below
+the fold and stay there even after the turn finished and the progress line
+disappeared again.
 
 **`scrollClaudeThreadToBottom()`** (`RelatedPanel.mjs`, next to
 `scrollClaudeMessageIntoView`) sets `el.scrollTop = el.scrollHeight` directly

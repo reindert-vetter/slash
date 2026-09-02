@@ -2525,6 +2525,36 @@ function sendErrorText(status) {
   return t('Versturen mislukt (HTTP {status}). Probeer het opnieuw.', { status })
 }
 
+// addPendingOwnMessage/removePendingOwnMessage — the reviewer's own
+// just-sent text, shown the instant sendClaudeMessage fires, before the real
+// network round trip (save + the chat.message SSE push, or this function's
+// own belt-and-braces refetch) has a chance to land. Reported bug: "als ik
+// vanuit het menu een chat start, zie ik mijn bericht niet gelijk, uiteindelijk
+// wel" — most visible starting a BRAND NEW conversation (menu "Chat over deze
+// regel"/"Chat over deze PR"), whose transcript is still empty right up to
+// that point, so the reviewer stares at nothing for as long as that round trip
+// takes. This entry is never persisted anywhere and carries a locally-minted
+// id that can never collide with a real, server-issued one (chatMessageID,
+// chat_workflow.go) — the very next loadChatMessages call REPLACES cc.messages
+// wholesale with the real, already-saved transcript (saveChatMessage persists
+// the reviewer's turn before the actual claude call even starts, see
+// chat_workflow.go), so it is superseded automatically, never duplicated.
+// Only a failed/unreachable send never reaches that replacement, which is why
+// sendClaudeMessage explicitly removes it on both failure paths below.
+let pendingOwnMessageSeq = 0
+function addPendingOwnMessage(commentId, body) {
+  if (commentId !== cc.commentId) return null
+  pendingOwnMessageSeq += 1
+  const id = '__pending__' + pendingOwnMessageSeq
+  cc.messages = cc.messages.concat([{ id, role: 'user', kind: '', body }])
+  scrollClaudeThreadToBottom()
+  return id
+}
+function removePendingOwnMessage(commentId, id) {
+  if (!id || commentId !== cc.commentId) return
+  cc.messages = cc.messages.filter((m) => m.id !== id)
+}
+
 async function sendClaudeMessage(text, action = '', context = '', target = null) {
   const trimmed = (text || '').trim()
   // 'commit'/'clear'/'retry' need no typed text — commit pushes whatever
@@ -2538,6 +2568,7 @@ async function sendClaudeMessage(text, action = '', context = '', target = null)
   if (!needsNoText && !trimmed) return
   setTurnBusy(commentId, true)
   setTurnSendError(commentId, '')
+  const pendingId = trimmed ? addPendingOwnMessage(commentId, trimmed) : null
   try {
     const res = await fetch('/api/workflows/' + encodeURIComponent(runId) + '/signals/message', {
       method: 'POST',
@@ -2554,6 +2585,7 @@ async function sendClaudeMessage(text, action = '', context = '', target = null)
     // nothing had been sent — the column just sat there, inert. See
     // sendErrorText for the three ways this actually happens.
     if (!res.ok) {
+      removePendingOwnMessage(commentId, pendingId)
       setTurnSendError(commentId, sendErrorText(res.status))
       return
     }
@@ -2566,6 +2598,7 @@ async function sendClaudeMessage(text, action = '', context = '', target = null)
     // down, connection dropped). Previously uncaught, so it escaped as an
     // unhandled rejection out of the click handler — again with nothing
     // visible in the column.
+    removePendingOwnMessage(commentId, pendingId)
     setTurnSendError(commentId, t('Geen verbinding met de server — draait slash nog?'))
   } finally {
     setTurnBusy(commentId, false)

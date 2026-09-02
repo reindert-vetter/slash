@@ -878,6 +878,108 @@ test('"Chat over deze regel" opens the Claude composer directly, keeps the comme
   }
 })
 
+// The reviewer's own just-sent text used to only appear once the real
+// round trip (save + the chat.message SSE push, or sendClaudeMessage's own
+// belt-and-braces refetch) completed — reported bug: "als ik vanuit het menu
+// vanuit een regel een chat start, zie ik mijn bericht niet gelijk in de
+// chat, uiteindelijk wel". Most visible starting a BRAND NEW conversation
+// (empty transcript), which is exactly the "Chat over deze regel" menu path
+// above. addPendingOwnMessage (RelatedPanel.mjs) now shows it the instant the
+// send fires — proven here by delaying only the BROWSER's own receipt of the
+// /signals/message response (route.fetch() still lets the real request reach
+// the server immediately) and asserting the bubble is already visible well
+// before that artificially delayed response lands.
+test('the reviewer\'s own message shows up immediately when starting a brand-new conversation from the menu, not only once the round trip completes', async ({
+  page,
+}) => {
+  await page.goto('/pr/12903')
+  await expect(page.getByTestId('block-column')).toBeVisible()
+  await leaveSearchBox(page)
+  await page.locator('[data-idx="1"]').click()
+  await page.keyboard.press('ArrowRight') // list -> diff
+
+  await page.keyboard.press('Enter') // block command palette
+  await page.getByTestId('command-input').fill('een vraag die niet matcht')
+  const rows = page.getByTestId('command-row')
+  await expect(rows.first()).toContainText('Chat over deze regel')
+
+  let runId = null
+  await page.route('**/signals/message', async (route) => {
+    const response = await route.fetch()
+    await new Promise((r) => setTimeout(r, 1500))
+    await route.fulfill({ response })
+  })
+  const [createRes] = await Promise.all([
+    page.waitForResponse(
+      (res) => res.url().includes('/api/workflows/task_code_comment') && res.request().method() === 'POST',
+    ),
+    page.keyboard.press('Enter'),
+  ])
+  runId = (await createRes.json()).runId
+  expect(runId).toBeTruthy()
+
+  try {
+    // Well before the artificially delayed 1500ms /signals/message response
+    // can possibly have landed.
+    await expect(page.getByTestId('claude-message-body').first()).toContainText('een vraag die niet matcht', {
+      timeout: 800,
+    })
+    // Still there, unduplicated, once the real round trip actually finishes.
+    await expect(page.getByTestId('claude-message-body')).toHaveCount(2, { timeout: 5000 })
+    await expect(page.getByTestId('claude-message-body').first()).toContainText('een vraag die niet matcht')
+  } finally {
+    await page.unrouteAll({ behavior: 'ignoreErrors' })
+    await page.request.post('/api/workflows/' + runId + '/signals/delete', {
+      data: { author: 'reviewer' },
+    })
+  }
+})
+
+// The optimistic echo above must never outlive a send that actually failed —
+// otherwise a message that was never really saved anywhere would sit in the
+// transcript forever. A 500 from the signal endpoint already shows a
+// send-error banner (see sendErrorText); it must also remove the pending
+// bubble instead of leaving an orphaned one behind.
+test('a failed send removes the optimistic echo instead of leaving an orphaned message', async ({ page }) => {
+  await page.goto('/pr/12903')
+  await expect(page.getByTestId('block-column')).toBeVisible()
+  await leaveSearchBox(page)
+  await page.locator('[data-idx="1"]').click()
+  await page.keyboard.press('ArrowRight') // list -> diff
+
+  await page.keyboard.press('Enter')
+  await page.getByTestId('command-row').filter({ hasText: 'Chat over deze regel' }).click()
+  const claudeComposer = page.getByTestId('claude-chat-compose')
+  await expect(claudeComposer).toBeFocused()
+
+  // The anchor comment (and its claude_chat Execution) is only created on the
+  // FIRST send, not on merely opening the composer — see the "Chat over deze
+  // regel" test above.
+  await page.route('**/signals/message', (route) => route.fulfill({ status: 500, body: 'boom' }))
+  await claudeComposer.fill('dit gaat mislukken')
+  const [createRes] = await Promise.all([
+    page.waitForResponse(
+      (res) => res.url().includes('/api/workflows/task_code_comment') && res.request().method() === 'POST',
+    ),
+    claudeComposer.press('Enter'),
+  ])
+  const runId = (await createRes.json()).runId
+  expect(runId).toBeTruthy()
+
+  try {
+    // Removed again once the send is confirmed to have failed, leaving no
+    // orphaned bubble and a visible send-error instead (the immediate
+    // optimistic-append timing itself is covered by the test above).
+    await expect(page.getByTestId('claude-message-body')).toHaveCount(0)
+    await expect(page.getByTestId('claude-send-error')).toBeVisible()
+  } finally {
+    await page.unrouteAll({ behavior: 'ignoreErrors' })
+    await page.request.post('/api/workflows/' + runId + '/signals/delete', {
+      data: { author: 'reviewer' },
+    })
+  }
+})
+
 // A multi-line Shift+↑/↓ selection left no visible trace of what it was
 // about once sent — the (invisible) `context` field never renders in the
 // transcript, only the reviewer's own typed text does (reported bug, see
