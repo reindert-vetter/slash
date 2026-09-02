@@ -144,6 +144,32 @@ Activity run gets near. Test: `tests/checkout-overlay.spec.mjs` ("answering
 shows which option is busy, locks the rest, and streams the real git commands
 it runs"); backend wiring: `checkout_progress_test.go`.
 
+**Answering a real option also resumes a chat column stuck on the
+"keuze open" dead-end.** Reviewer-reported bug: a write-turn that hits an
+already-pending decision ends with a plain, non-retryable assistant reply
+(`chat_workflow.go`'s "Ik kan nu geen code aanpassen: er staat nog een keuze
+open over de werkmap van deze PR. Maak die keuze en vraag het daarna
+opnieuw.") — making the choice resolved the PR-wide decision, but the chat
+column itself showed nothing new and the turn never continued, so the
+reviewer had to notice this and retype the original request by hand.
+`sendCheckoutAction` (`home.mjs`) — the one funnel both this overlay's option
+rows AND `checkoutChipCommandsFor`'s equivalent menu rows go through — now
+also calls `resumeStuckClaudeAfterCheckout(reply)` (`RelatedPanel.mjs`) right
+after a `checkoutAnswer` Action with a real picked option (never for "Uit"/
+"Andere werkmap kiezen"/"Nu terugzetten", which don't resolve a decision the
+same way). That function looks only at whichever conversation is CURRENTLY
+DISPLAYED (`cc`, the same singleton the embedded per-block panel and the
+general-chat overlay both render through): if its last message is exactly
+that dead-end (`CHECKOUT_CHOICE_OPEN_BODY`, a literal duplicate of the Go
+string — same "duplicate the exact string across the two languages"
+precedent as `ClaudeChat.mjs`'s own `NEED_WRITE_PARTIAL_PREFIX`), it sends a
+synthetic new "Werkmap gekozen: …" turn — a real chat message, so it both
+shows the choice as an ordinary "Jij" bubble and resumes the SAME Claude
+session, letting the turn now succeed. A silent no-op otherwise (answering
+the chip's menu with no chat panel open, or with an unrelated conversation on
+screen). Test: `tests/checkout-overlay.spec.mjs` ("answering the choice also
+resumes a chat column stuck on the "keuze open" dead-end").
+
 **Naming:** everything the reviewer reads says **werkmap**, never "checkout";
 the identifiers keep their `checkout*` names. See the naming rule in
 `.claude/docs/workflows-comments.md`.

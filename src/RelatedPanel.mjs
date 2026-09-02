@@ -2613,6 +2613,49 @@ async function sendClaudeMessage(text, action = '', context = '', target = null)
   }
 }
 
+// CHECKOUT_CHOICE_OPEN_BODY is a literal duplicate of chat_workflow.go's own
+// dead-end reply text (the "er staat nog een keuze open over de werkmap"
+// sentence a write-turn ends with when a chatCheckoutDecision is still
+// pending) — same "duplicate the exact string across the two languages"
+// precedent as ClaudeChat.mjs's own NEED_WRITE_PARTIAL_PREFIX. Keep this in
+// sync with chat_workflow.go's literal if that sentence ever changes.
+const CHECKOUT_CHOICE_OPEN_BODY =
+  'Ik kan nu geen code aanpassen: er staat nog een keuze open over de werkmap van deze PR. Maak die keuze en vraag het daarna opnieuw.'
+
+// resumeStuckClaudeAfterCheckout — called by home.mjs's sendCheckoutAction
+// right after the reviewer answers the werkmap overlay (or the equivalent
+// checkout-chip menu, both funnel through that one function) with a real
+// picked option (`reply`, never for "Uit"/"Andere werkmap kiezen"/"Nu
+// terugzetten", which don't resolve a decision the same way). Reviewer-report:
+// the choice resolved the PR-wide decision, but the chat column that was
+// stuck on CHECKOUT_CHOICE_OPEN_BODY showed nothing new and the turn never
+// continued — the reviewer had to notice this and retype the original
+// request by hand.
+//
+// Scoped to whichever conversation is CURRENTLY DISPLAYED (`cc`, the same
+// singleton the embedded per-block panel and the general-chat overlay both
+// render through) rather than to "the conversation that originally got
+// stuck": there is no id linking a stored dead-end message back to the
+// decision it was about, and the reviewer is, by construction, looking at
+// the very column that showed the dead-end when he makes the choice. If the
+// last message in view isn't that exact dead-end, this is a silent no-op —
+// answering the chip's menu with no chat panel open, or with an unrelated
+// conversation on screen, changes nothing here.
+//
+// Sending a real new "user" turn (rather than some purely local note) is
+// deliberate: it both shows the reviewer's choice as an ordinary "Jij" bubble
+// (via sendClaudeMessage's own addPendingOwnMessage) AND resumes the SAME
+// Claude session, so the turn now succeeds (prepareChatShellWorkDir finds the
+// resolved assignment) and carries on with whatever the reviewer originally
+// asked for — mechanically identical to the reviewer retyping "ik heb de
+// werkmap gekozen, ga verder" by hand.
+export function resumeStuckClaudeAfterCheckout(reply) {
+  if (!reply) return
+  const last = cc.messages[cc.messages.length - 1]
+  if (!last || last.role !== 'assistant' || !last.noShell || last.body !== CHECKOUT_CHOICE_OPEN_BODY) return
+  sendClaudeMessage(t('Werkmap gekozen: {dir}. Ga verder met mijn vorige verzoek.', { dir: reply }))
+}
+
 // queuedIdSeq numbers the client-side queue entries. A queued turn has no
 // Signal id yet (the server mints that, see the message handler in
 // tasks_api.go) but its bubble still needs a stable arrow.js key, so this is

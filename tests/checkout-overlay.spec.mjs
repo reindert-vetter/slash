@@ -274,3 +274,135 @@ test.describe('Werkmap overlay', () => {
     await expect(page.getByTestId('command-menu')).not.toBeVisible()
   })
 })
+
+// Reviewer-reported bug: making the werkmap choice resolved the PR-wide
+// decision, but the Claude chat column that was stuck on the "keuze open
+// over de werkmap" dead-end (chat_workflow.go's own static reply once
+// prepareChatShellWorkDir sees checkoutChoiceOpen) showed nothing new and
+// never continued — the reviewer had to notice this and retype the original
+// request by hand. Answering the option now also resumes that SAME
+// conversation: a synthetic "Werkmap gekozen: …" turn (RelatedPanel.mjs's
+// resumeStuckClaudeAfterCheckout, wired from home.mjs's sendCheckoutAction).
+// The decision only becomes open AFTER the chat column is already showing the
+// dead-end (same "checkout.changed over SSE" gating as the "steals focus"
+// test above) so the overlay's own full-screen backdrop never blocks the
+// earlier click/ArrowRight into that column.
+test('answering the choice also resumes a chat column stuck on the "keuze open" dead-end', async ({ page }, testInfo) => {
+  // `messages` (the conversation transcript GET /api/chat serves) is declared
+  // up front, mutable: once the resend's own message Signal lands, it is
+  // pushed on so the NEXT GET /api/chat re-fetch (loadChatMessages, called
+  // from sendClaudeMessage's own belt-and-braces refetch) already reflects it
+  // — mirrors what a real backend does (chat_workflow.go's saveChatMessage
+  // persists the reviewer's turn before Claude is even asked anything) — or
+  // the optimistic pending bubble it briefly showed gets wiped by the stale
+  // mocked list underneath it.
+  const messages = []
+  // Captured from the start (not via page.waitForRequest AFTER the answer),
+  // because the resend fires synchronously off the SAME merge-signal round
+  // trip the test already waits on below — by the time that wait resolves the
+  // message Signal has usually already completed too, which a waitForRequest
+  // registered afterwards would miss entirely.
+  const messageReqs = []
+  page.on('request', (r) => {
+    if (r.method() !== 'POST' || !r.url().includes('/signals/message')) return
+    const data = r.postDataJSON()
+    messageReqs.push(data)
+    messages.push({ id: 'resend-' + messageReqs.length, role: 'user', kind: '', body: data.body })
+  })
+  const pr = seededPr(testInfo)
+  const runId = 'chatmerge-' + pr
+  let open = false
+  await page.route(`**/api/chat/checkout?prs=${pr}`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        checkout: open
+          ? {
+              [pr]: {
+                pr,
+                runId,
+                decision: {
+                  stage: 'chooseDirectory',
+                  body: 'Kies welke lokale werkmap Claude voor deze PR gebruikt.',
+                  options: ['/home/reindert/dev/a', '/home/reindert/dev/b'],
+                },
+              },
+            }
+          : {},
+      }),
+    }),
+  )
+  const signals = mockSignals(page, runId)
+
+  // Fulfilled exactly once, on the FIRST connection after `release()` — every
+  // reconnect afterwards just hangs. Without this, the mocked stream (which
+  // always immediately has an already-resolved `released` promise once
+  // release() has run) sends the same event, gets torn down, and reconnects
+  // in a tight loop for the rest of the test — real, unnecessary CPU/network
+  // churn alongside the real backend round trips (task_code_comment,
+  // ensureChatConversation, the chat_merge queue) this test already makes.
+  let release
+  const released = new Promise((r) => (release = r))
+  let delivered = false
+  await page.route('**/api/events*', async (route) => {
+    await released
+    if (delivered) return // never resolves — no further reconnect
+    delivered = true
+    await route.fulfill({
+      status: 200,
+      headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' },
+      body: 'retry: 300\n\n' + `data: ${JSON.stringify({ type: 'checkout.changed', pr, seq: 1 })}\n\n`,
+    })
+  })
+
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: {
+      pr,
+      file: 'test.php',
+      line: 1,
+      author: 'reviewer',
+      body: 'pas dit aan',
+      code: '$order->total();',
+      gran: 'call',
+      label: 'Order::total',
+    },
+  })
+  const conversationId = (await start.json()).runId
+  expect(conversationId).toBeTruthy()
+
+  const deadEndBody =
+    'Ik kan nu geen code aanpassen: er staat nog een keuze open over de werkmap van deze PR. Maak die keuze en vraag het daarna opnieuw.'
+  messages.push(
+    { id: 'user-1', role: 'user', kind: '', body: 'pas dit aan' },
+    { id: 'assistant-1', role: 'assistant', kind: '', body: deadEndBody, noShell: true },
+  )
+  await page.route('**/api/chat?commentId=' + conversationId, (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ messages }) }),
+  )
+
+  await page.goto('/pr/' + pr)
+  await expect(page.getByTestId('workdir-overlay')).toHaveCount(0)
+  await page.getByTestId('comment-item').first().click()
+  await page.keyboard.press('ArrowRight') // comment -> claude
+  await expect(page.getByTestId('claude-message-body').last()).toContainText('er staat nog een keuze open')
+
+  // The choice arrives while the reviewer is looking straight at the stuck
+  // conversation.
+  open = true
+  release()
+  await expect(page.getByTestId('workdir-overlay')).toBeVisible()
+
+  // A mouse click on the option row itself, not ArrowDown+Enter: which
+  // element owns real DOM focus at this exact moment is a separate concern
+  // (the composer-vs-overlay focus race the "steals focus" test above
+  // covers), orthogonal to what THIS test is about — resuming the stuck
+  // chat once the choice is answered.
+  await page.getByTestId('workdir-overlay-option').filter({ hasText: '/home/reindert/dev/b' }).click()
+  await expect.poll(() => signals.length).toBe(1)
+  expect(signals[0]).toMatchObject({ action: 'checkoutAnswer', reply: '/home/reindert/dev/b' })
+  await expect(page.getByTestId('claude-message-body').last()).toContainText('Werkmap gekozen: /home/reindert/dev/b')
+  await expect.poll(() => messageReqs.length).toBe(1)
+  expect(messageReqs[0].body).toContain('Werkmap gekozen: /home/reindert/dev/b')
+})

@@ -98,6 +98,7 @@ import RelatedPanel, {
   startPrCommentChat,
   startPrGeneralChat,
   isGeneralChatAnchor,
+  resumeStuckClaudeAfterCheckout,
   resolvePrCommentItem,
   deletePrCommentItem,
   unresolvePrCommentItem,
@@ -4892,6 +4893,14 @@ async function refreshBlocksAfterOwnLanding(touchedFiles) {
 // The response only says the Signal was accepted; the outcome arrives as a
 // checkout.changed event (which refetches the read model) — same
 // fire-and-refetch shape as pushPendingWork.
+//
+// `action === 'checkoutAnswer' && reply` (an actual candidate picked, never
+// "Uit"/"Andere werkmap kiezen"/"Nu terugzetten") also tries to resume a chat
+// column stuck on the "keuze open over de werkmap" dead-end — reviewer-report:
+// making the choice resolved it, but the chat itself showed nothing new and
+// never continued, so the reviewer had to retype the original request by
+// hand. See resumeStuckClaudeAfterCheckout's own doc comment (RelatedPanel.mjs)
+// for why this is scoped to whichever conversation is currently on screen.
 async function sendCheckoutAction(action, reply) {
   let runId = state.checkout && state.checkout.runId
   try {
@@ -4917,6 +4926,7 @@ async function sendCheckoutAction(action, reply) {
   } catch (_) {
     /* best-effort */
   }
+  if (action === 'checkoutAnswer' && reply) resumeStuckClaudeAfterCheckout(reply)
   loadCheckout()
 }
 
