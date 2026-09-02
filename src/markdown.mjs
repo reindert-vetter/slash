@@ -145,10 +145,18 @@ const INLINE_MAX_LINES = 3
 // walking the cards, so each card can say what it was about. Only the LAST
 // paragraph of the preceding text is used (split on a blank line) — with 2+
 // fences in one message, each gets just the paragraph directly above it,
-// not the whole message repeated. A few common Markdown decorations
-// (heading `#`, a bullet `-`/`*`, `**`/`` ` ``) are stripped since this is a
-// plain-text hint, not rendered Markdown, and whitespace/newlines collapse to
-// single spaces.
+// not the whole message repeated. A heading `#` marker and a leading bullet
+// `-`/`*` are stripped (structural decorations that make no sense on a single
+// title line); inline emphasis (`**`/`` ` ``) is deliberately KEPT — see
+// below — and whitespace/newlines collapse to single spaces.
+//
+// KEPT, not stripped (reviewer report, screenshot: the chat bubble above
+// renders `whereHas` etc. as an inline-code pill, but this same text reduced
+// to a plain string below did not): `data-fence-context` used to run through
+// this SAME stripping as a plain-text hint — CodePreview.mjs then rendered it
+// as inert text. The card now runs this string through `renderMarkdown`
+// instead (CodePreview.mjs's `fenceContextHtml`), so it must still carry its
+// original `` ` ``/`**` markers, exactly like the surrounding chat text does.
 //
 // Deliberately NOT cut to a fixed character count with a manually appended
 // '…' any more (reviewer report: that made the "…" land well short of a wide
@@ -159,7 +167,12 @@ const INLINE_MAX_LINES = 3
 // that happens to be. `FENCE_CONTEXT_SAFETY_MAX` below is a defensive cap
 // only, against a pathological single-paragraph wall of text with no blank
 // line anywhere above the fence — not the normal truncation mechanism, and
-// deliberately not given its own "…" (CSS still clips it the same way).
+// deliberately not given its own "…" (CSS still clips it the same way); a cut
+// landing mid-`` ` ``/`**` pair is accepted the same way an unpaired
+// emphasis marker is anywhere else `renderMarkdown` runs on truncated/typed
+// text (see `neutralizeUnpairedEmphasis` in conventions.md) — worst case one
+// dangling marker renders literally instead of as a pill, never breaks the
+// rest of the line.
 const FENCE_CONTEXT_SAFETY_MAX = 400
 function fenceContext(raw) {
   let t = String(raw || '').trim()
@@ -169,8 +182,6 @@ function fenceContext(raw) {
   t = t
     .replace(/^#{1,6}\s+/, '')
     .replace(/^[-*+]\s+/, '')
-    .replace(/\*\*/g, '')
-    .replace(/`/g, '')
     .replace(/\s+/g, ' ')
     .trim()
   if (!t) return ''

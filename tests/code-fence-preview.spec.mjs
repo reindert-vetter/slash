@@ -85,6 +85,56 @@ test('every fenced code block, suggestion included, shows a full-size preview st
   await expect(page.getByTestId('code-preview-close')).toHaveCount(0)
 })
 
+// Reviewer report (screenshot): the chat bubble above renders an inline-code
+// identifier (`` `whereHas` ``) as a styled pill, but the SAME text reduced
+// to a plain string on the preview card below showed no styling at all — and
+// the card's own pane header said the bare word "Codeblok", no number/
+// language, unlike the fence's own header a few lines above it. Both fixed
+// by carrying the fence's raw markdown context through `renderMarkdown`
+// (CodePreview.mjs) instead of a plain-text hint, and reading the SAME
+// `data-fence-label`/`data-fence-lang` markdown.mjs already stamps on the
+// wrapper for the pane title (`fenceTitle`).
+test('the preview card styles its context text the same as the chat, and its pane header carries the fence label + language', async ({
+  page,
+}, testInfo) => {
+  const pr = seededPr(testInfo)
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: {
+      pr,
+      file: 'test.php',
+      line: 1,
+      author: 'reviewer',
+      body:
+        'Voorstel: filter de pauze mee in de `whereHas`-closure van `RetryRateLimitedRules`.\n' +
+        '```php\n$hasRestrictions = $order->products->count() > 0;\n```',
+      code: '$order->total();',
+      gran: 'call',
+      label: 'Order::total',
+    },
+  })
+  expect((await start.json()).runId).toBeTruthy()
+
+  await page.goto('/pr/' + pr)
+  await leaveSearchBox(page)
+  const item = page.getByTestId('comment-item').first()
+  await expect(item).toBeVisible()
+  await item.click()
+
+  const card = page.getByTestId('code-preview-card').first()
+  await expect(card).toBeVisible()
+
+  // The identifiers render as real inline-code pills, exactly like the same
+  // text does in the chat bubble above — not as inert plain text.
+  const context = card.getByTestId('code-preview-context')
+  await expect(context.locator('code')).toHaveText(['whereHas', 'RetryRateLimitedRules'])
+
+  // The pane header shows the fence's own running label AND language word,
+  // matching the inline fence's own header text — not the bare word
+  // "Codeblok" with no number/language.
+  await expect(card.getByTestId('code-preview-body')).toContainText('Codeblok 1')
+  await expect(card.getByTestId('code-preview-body')).toContainText('php')
+})
+
 // A comment index item can be SELECTED (its block auto-expands) without being
 // CLICKED/focused — see "A block-anchored index item auto-expands its block…"
 // in .claude/docs/comments-panel.md. Its card then renders compactConversation

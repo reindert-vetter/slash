@@ -43,6 +43,7 @@
 import { html } from './vendor/arrow.js'
 import { highlightForLang, scrollHint } from './Block.mjs'
 import { updateScrollHints } from './scrollFade.mjs'
+import { renderMarkdown } from './markdown.mjs'
 import { t } from './i18n.mjs'
 
 // splitCodeByClasses(code) — best-effort split of a snippet into per-class
@@ -155,6 +156,18 @@ function segmentBlock(seg, lang) {
   </div>`
 }
 
+// `titleText` is either a plain string ('Huidig (PR)'/'Voorgesteld (chat)')
+// or a small html template carrying the fence's own "Codeblok N" label plus
+// a language badge (`fenceTitle` below, mirroring the SAME header
+// markdown.mjs's `extractCodeFences` renders inline in the chat bubble
+// above) — rendered through a `${() => titleText}` FUNCTION binding rather
+// than a bare `${titleText}` interpolation specifically because the shape
+// can differ between calls sharing this one template (a suggestion fence's
+// "Voorgesteld (chat)" pane can lose its `oldCode` comparison and fall back
+// to the plain-fence title on a later recompute): see "A statically
+// interpolated template↔string slot leaks the template function as text" in
+// arrowjs-pitfalls.md — the function-binding form is the allowed escape
+// hatch, a bare interpolation is not.
 function pane(titleText, code, lang) {
   // The scrollbar is hidden (`no-scrollbar`, reviewer request) and replaced
   // by the same green up/down `scrollHint` chevron pair Block.mjs's diff
@@ -181,9 +194,9 @@ function pane(titleText, code, lang) {
   return html`
     <div class="relative rounded border border-slate-200 dark:border-zinc-700 overflow-hidden">
       <div
-        class="px-2 py-1 text-[11px] font-medium text-slate-500 dark:text-zinc-400 bg-slate-50 dark:bg-zinc-800/60 border-b border-slate-200 dark:border-zinc-700"
+        class="flex items-center px-2 py-1 text-[11px] font-medium text-slate-500 dark:text-zinc-400 bg-slate-50 dark:bg-zinc-800/60 border-b border-slate-200 dark:border-zinc-700"
       >
-        ${titleText}
+        ${() => titleText}
       </div>
       ${body}
       ${scrollHint('up')}
@@ -321,6 +334,22 @@ function pendingEditLinks(links, linkSel, onJump) {
 // re-thrown error actually was. Don't assume a similar report is a
 // test-class-grouping bug just because the URL mentions one — check
 // data/debug-log.jsonl's `error` lines first; they name the real file/line.
+// fenceTitle(it) — the single-pane ("Codeblok") title, mirroring the exact
+// header markdown.mjs's `extractCodeFences` renders inline in the chat
+// bubble above this same fence: the running "Codeblok N"/"Suggestie N" label
+// (`it.label`, `data-fence-label`) plus an uppercase language word (`it.lang`,
+// `data-fence-lang`, empty for a suggestion fence). Reviewer report
+// (screenshot): the preview card below said only the bare word "Codeblok",
+// no number, no language, unlike the fence's own header a few lines above
+// it. Falls back to the plain translated word when a fence carries no label
+// at all (older/defensive case — `data-fence-label` is otherwise always
+// present, see markdown.mjs).
+function fenceTitle(it) {
+  if (!it.label) return t('Codeblok')
+  if (!it.lang) return it.label
+  return html`<span class="flex items-center">${it.label}<span class="ml-2 uppercase tracking-wide">${it.lang}</span></span>`
+}
+
 function previewCard(it, active, expanded, onToggle, linkSel = () => 0, onJump = () => {}) {
   return html`
     <div
@@ -374,11 +403,11 @@ function previewCard(it, active, expanded, onToggle, linkSel = () => 0, onJump =
           it.kind !== 'edits' && it.context
             ? html`<span
                 class="${() =>
-                  'text-xs leading-relaxed text-slate-700 dark:text-zinc-300 ' + (expanded() ? '' : 'truncate')}"
+                  'markdown-body [&_p]:inline text-xs leading-relaxed text-slate-700 dark:text-zinc-300 ' +
+                  (expanded() ? '' : 'truncate')}"
                 data-testid="code-preview-context"
-              >
-                ${it.context}
-              </span>`
+                .innerHTML="${() => renderMarkdown(it.context)}"
+              ></span>`
             : ''}
       </div>
       <div class="flex flex-col gap-2" data-testid="code-preview-body">
@@ -388,7 +417,7 @@ function previewCard(it, active, expanded, onToggle, linkSel = () => 0, onJump =
               ? pendingEditLinks(it.links, linkSel, onJump)
               : [
                   it.oldCode != null ? pane(t('Huidig (PR)'), it.oldCode, it.lang).key('old') : '',
-                  pane(t(it.oldCode != null ? 'Voorgesteld (chat)' : 'Codeblok'), it.code, it.lang).key('new'),
+                  pane(it.oldCode != null ? t('Voorgesteld (chat)') : fenceTitle(it), it.code, it.lang).key('new'),
                 ].filter(Boolean)
             : []}
       </div>

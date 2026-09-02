@@ -4842,9 +4842,17 @@ export function selectHighlightedEditLink() {
 // `classLabel` is deliberately NOT the fence's "Codeblok N"/"Suggestie N"
 // label any more — that number/word already shows on the SAME fence's own
 // inline badge in the chat bubble above (markdown.mjs's `fenceLabel`/
-// `data-fence-label`), so repeating it here as a card title was pure
+// `data-fence-label`), so repeating it here as a SECOND title row was pure
 // clutter (reviewer report, see classDetail's own comment). Only a detected
 // class name still earns a title line on this card.
+//
+// `label` (added later, reviewer report: the bottom preview card's own
+// pane header just said the bare word "Codeblok", no number/language, unlike
+// the exact same fence's header above it in the chat) is that SAME
+// `data-fence-label` text, read straight off the wrapper. This is NOT the
+// clutter the paragraph above is about: it replaces text the pane header
+// already showed unconditionally (`pane()`'s own title bar in
+// CodePreview.mjs), it doesn't add a new row.
 //
 // Skips the reassignment when the recomputed set is identical to the
 // current one (same length, same code/lang/oldCode per item) — this runs
@@ -4912,6 +4920,7 @@ function recomputeCodePreviews() {
     const code = el.dataset.fenceCode || ''
     const lang = el.dataset.fenceLang || ''
     const context = el.dataset.fenceContext || ''
+    const label = el.dataset.fenceLabel || ''
     const isPhp = !lang || lang.toLowerCase() === 'php'
     const suggestion = el.dataset.fenceSuggestion === 'true'
     const ck = containerKey(containers[i])
@@ -4927,6 +4936,7 @@ function recomputeCodePreviews() {
       // then renders no title line at all, see classDetail's own comment.
       classLabel: classDetail(code),
       context,
+      label,
       lang,
       code,
       oldCode: suggestion && isPhp ? currentCode : null,
@@ -4961,6 +4971,7 @@ function recomputeCodePreviews() {
         it.code === cp.items[i].code &&
         it.lang === cp.items[i].lang &&
         it.classLabel === cp.items[i].classLabel &&
+        it.label === cp.items[i].label &&
         it.context === cp.items[i].context &&
         it.oldCode === cp.items[i].oldCode &&
         it.isLast === cp.items[i].isLast,
