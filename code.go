@@ -102,6 +102,18 @@ func resolveWithinWorktree(dir, file string) (full, rel string, ok bool) {
 	return full, rel, true
 }
 
+// worktreeMissing reports whether the base/head worktree PAIR for a PR is
+// gone from disk — as opposed to a single file/symbol legitimately being
+// absent on one side (an added/removed block). ingest always prepares both
+// directories together (prepareWorktrees), so if either is gone the whole
+// pair is treated as missing rather than guessing which side still matters.
+// Used by handleCode to tell "block not on this side" (silent empty text, by
+// design) apart from "the whole worktree disappeared" (worth a real error —
+// see handleCode's own doc comment).
+func worktreeMissing(baseDir, headDir string) bool {
+	return !isDir(baseDir) || !isDir(headDir)
+}
+
 // within reports whether path is inside dir.
 func within(dir, path string) bool {
 	rel, err := filepath.Rel(dir, path)

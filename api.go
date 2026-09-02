@@ -244,6 +244,20 @@ func (s *server) handleCode(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// A stored block whose worktree pair has since disappeared from disk (e.g.
+	// removed outside the app's own cleanup, see .claude/docs/workflows-trackers.md)
+	// used to silently read as an empty old+new diff — os.ReadFile fails inside
+	// extractBlockSource, which by design can't tell "missing worktree" apart
+	// from "block legitimately absent on this side" (added/removed block) and
+	// just returns a zero-value codeSide either way. That left the reviewer
+	// staring at a blank code card with no loading state and no error — nothing
+	// to act on. Caught here instead, once, before either side is read.
+	if worktreeMissing(baseDir, headDir) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"error": "Werkmap ontbreekt — regenereer de review-tree om de code opnieuw te laden.",
+		})
+		return
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"file": file,
