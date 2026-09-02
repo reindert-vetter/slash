@@ -4095,15 +4095,14 @@ changes, all in the same three files (`markdown.mjs`, `RelatedPanel.mjs`'s
 - **A short snippet of the chat text that sat directly above the fence** is
   shown as a second, muted line under the title (`data-testid=
   code-preview-context`) — "over: …". `markdown.mjs`'s `extractCodeFences`
-  now tracks where the previous fence ended and slices the text in between,
-  keeps only the LAST paragraph of that slice (so 2+ fences in one message
-  each get just their own paragraph, not the whole message repeated), and
-  strips a few common Markdown decorations. Stored as a new
-  `data-fence-context` attribute on the same `code-fence` wrapper the
-  code/label/lang attributes already live on (empty → attribute omitted, e.g.
-  a fence that opens a message with nothing above it). See "Truncate the
-  context line only when collapsed" below for how (and how much of) it gets
-  visually clipped — that part changed after this section first landed.
+  tracks where the previous fence ended and slices the text in between.
+  Stored as a new `data-fence-context` attribute on the same `code-fence`
+  wrapper the code/label/lang attributes already live on (empty → attribute
+  omitted, e.g. a fence that opens a message with nothing above it). See
+  "Truncate the context line only when collapsed" below for how (and how much
+  of) it gets visually clipped, and "Every piece of a message's text is
+  reachable from some card" below for the FULL-gap behaviour this grew into
+  later (it originally kept only the last paragraph of that slice).
 - **A card not belonging to the LAST answer starts collapsed** (title +
   context line only, no code at all — not even a one-line teaser, reviewer's
   explicit choice) — `Enter` on the focused card, or a click on its own
@@ -4288,6 +4287,56 @@ Screenshots this time, not just typed reports. All three land in
   while `!expanded()` — an expanded card shows the full text (wrapping
   normally), so the ellipsis only ever appears on a collapsed card, and
   always exactly at that card's own real edge.
+- **Every piece of a message's text is reachable from some card** (reviewer
+  request: "dus alles moet ik terug kunnen vinden in de gegeneerde blokken").
+  Two gaps used to be silently dropped: the text before the FIRST fence of a
+  message was cut to only its last paragraph (`fenceContext` used to
+  `split(/\n\s*\n/)` and keep the last entry, losing everything written
+  earlier in a longer message — reviewer report, screenshot: a card only
+  showed a short "heeft:" instead of the paragraph that led up to it), and
+  the text AFTER the last fence of a message had no card at all, so it was
+  simply never shown anywhere. Fixed by making `fenceContext(raw)` return the
+  FULL (trimmed) text of whatever gap it is given — no paragraph-split, no
+  heading/bullet stripping, no whitespace collapsing (the result goes through
+  `renderMarkdown`, which already understands headings/lists/blank lines, so
+  collapsing them first would only lose structure) — chosen over keeping
+  "last paragraph only" for the gaps BETWEEN two fences: the reviewer's own
+  clarification was that the most literal reading covers every gap, not just
+  the first/last one, so a message with 3+ fences also keeps its full
+  in-between text recoverable, not just a truncated snippet of it.
+  `extractCodeFences` now also computes, for the LAST fence of a message
+  only, the text after it via this same function, stored as a new
+  `data-fence-trailing` attribute (empty → attribute omitted, exactly like
+  `data-fence-context`). `CodePreview.mjs`'s `previewCard` renders
+  `it.trailing` (when present) as one more line below the code pane(s),
+  inside the same card, via `renderMarkdown` — same styling as the context
+  line above the code. `FENCE_CONTEXT_SAFETY_MAX` grew from 400 to 4000
+  chars to match (still a defensive backstop only, not the design mechanism —
+  see "Truncate the context line only when collapsed" above).
+- **Two cards from the SAME message get a dashed divider instead of a gap; a
+  different message keeps the ordinary gap.** Reviewer request: "de blokken
+  die uit dezelfde message komen, moeten … gescheiden worden met een
+  horizontale stippellijn, voor de rest mogen die aan elkaar plakken" — a
+  single message's own 2+ fences (e.g. the "only a suggestion fence…" test's
+  ordinary-fence-then-suggestion-fence body) should visually read as one
+  group, a NEW message should still read as its own separate block, exactly
+  as before. `recomputeCodePreviews` already grouped fences by container for
+  the "most-recently-generated group on top" sort just below; it now also
+  stamps each item with `it.groupWithPrev` (true when the item right before
+  it in the SORTED order shares that same group), computed from the same
+  `_groupRank` the sort itself just assigned, right before that field is
+  discarded. `CodePreview.mjs`'s `codePreviewColumn` dropped its uniform
+  `gap-3` between every card in favour of an explicit `mt-3` per card
+  (skipped when `groupWithPrev`) plus a `groupDivider()` — a bare dashed
+  `border-t` `<div>`, shape not colour, per the colourblind rule — inserted
+  right before a grouped card instead. A fence with no comment-item/
+  claude-message ancestor at all (the pre-existing defensive fallback, not
+  expected in practice) shares one `groupWithPrev` bucket with every other
+  such orphan fence, same as it already shared one sort rank with them.
+  Tests: `tests/code-fence-preview.spec.mjs` ("a message with code examples
+  shows its full leading/middle/trailing text, and a dashed divider between
+  two cards from the same message", "two cards from different messages get
+  no dashed divider between them").
 - **Most-recently-generated code block renders on TOP, not at the bottom.**
   Reviewer report: a long conversation buried the newest (and, per the
   bullet above, the only DEFAULT-EXPANDED) card at the bottom of an

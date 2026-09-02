@@ -604,3 +604,118 @@ test('a long code line wraps in both the inline fence and the expanded preview c
     expect(overflow).toBeLessThanOrEqual(1)
   }
 })
+
+// Reviewer request: "dus alles moet ik terug kunnen vinden in de gegeneerde
+// blokken" — every piece of a message's text that carries a code example
+// must be reachable from SOME card: the FULL text before the first fence
+// (not just its last paragraph, the earlier behaviour), the full text
+// between two fences, and the text after the LAST fence (new
+// `code-preview-trailing`). Two fences in one comment body also get a
+// dashed divider between their two cards (`code-preview-group-divider`) —
+// they came from the same message, so they "stick together" instead of
+// getting the ordinary gap.
+test('a message with code examples shows its full leading/middle/trailing text, and a dashed divider between two cards from the same message', async ({
+  page,
+}, testInfo) => {
+  const pr = seededPr(testInfo)
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: {
+      pr,
+      file: 'test.php',
+      line: 1,
+      author: 'reviewer',
+      body:
+        'Eerste alinea met wat uitleg.\n\n' +
+        'Tweede alinea, vlak boven het eerste voorbeeld.\n' +
+        '```php\n$first = 1;\n```\n' +
+        'Tekst tussen de twee code blokken.\n' +
+        '```php\n$second = 2;\n```\n' +
+        'De afsluitende tekst na de laatste code.',
+      code: '$order->total();',
+      gran: 'call',
+      label: 'Order::total',
+    },
+  })
+  expect((await start.json()).runId).toBeTruthy()
+
+  await page.goto('/pr/' + pr)
+  await leaveSearchBox(page)
+  const item = page.getByTestId('comment-item').first()
+  await expect(item).toBeVisible()
+  await item.click()
+
+  const cards = page.getByTestId('code-preview-card')
+  await expect(cards).toHaveCount(2)
+
+  // Card 1's context carries BOTH paragraphs before the first fence, not
+  // just the last one.
+  const context1 = cards.nth(0).getByTestId('code-preview-context')
+  await expect(context1).toContainText('Eerste alinea met wat uitleg.')
+  await expect(context1).toContainText('Tweede alinea, vlak boven het eerste voorbeeld.')
+
+  // Card 2's context carries the text between the two fences.
+  const context2 = cards.nth(1).getByTestId('code-preview-context')
+  await expect(context2).toContainText('Tekst tussen de twee code blokken.')
+
+  // Card 2 (the LAST fence) also shows the trailing text after it — nothing
+  // typed after the code is silently dropped.
+  await expect(cards.nth(0).getByTestId('code-preview-trailing')).toHaveCount(0)
+  await expect(cards.nth(1).getByTestId('code-preview-trailing')).toContainText(
+    'De afsluitende tekst na de laatste code.',
+  )
+
+  // Both fences came from the SAME message: a dashed divider sits between
+  // their two cards, and there is exactly one (never one per card).
+  await expect(page.getByTestId('code-preview-group-divider')).toHaveCount(1)
+})
+
+// Two fences from TWO DIFFERENT messages (a PR comment and a Claude-chat
+// reply) get the ordinary gap, never a divider — the divider is only for
+// cards that share the SAME message (see the test above).
+test('two cards from different messages get no dashed divider between them', async ({ page }, testInfo) => {
+  const pr = seededPr(testInfo)
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: {
+      pr,
+      file: 'test.php',
+      line: 1,
+      author: 'reviewer',
+      body: 'kijk hier eens naar:\n```php\n$fromComment = 1;\n```',
+      code: '$order->total();',
+      gran: 'call',
+      label: 'Order::total',
+    },
+  })
+  expect((await start.json()).runId).toBeTruthy()
+
+  await page.goto('/pr/' + pr)
+  await leaveSearchBox(page)
+  const item = page.getByTestId('comment-item').first()
+  await expect(item).toBeVisible()
+  await item.click() // -> cs.focus = 'comment', its own fence card appears
+
+  await expect(page.getByTestId('code-preview-card')).toHaveCount(1)
+
+  // Drive the shared Claude-chat turn fixture (tests/fixtures/claude-chat-
+  // turns.json) up to turn 4, which carries its own php fence — same
+  // sequence tests/claude-chat-panel.spec.mjs already uses.
+  await page.keyboard.press('ArrowRight') // comment -> claude
+  const composer = page.getByTestId('claude-chat-compose')
+  await expect(composer).toBeFocused()
+  await composer.fill('Kun je hier iets over zeggen?')
+  await composer.press('Enter')
+  await expect(page.getByTestId('claude-message-body').last()).toContainText('Ik heb naar de code gekeken')
+  await composer.fill('Stel een aanpak voor.')
+  await composer.press('Enter')
+  await page.getByTestId('claude-question-option').nth(1).click()
+  await expect(page.getByTestId('claude-message-body').last()).toContainText('Bedankt, ik ga verder met Optie B.')
+  await composer.fill('Laat een voorbeeld zien.')
+  await composer.press('Enter')
+  await expect(page.getByTestId('claude-message-body').last()).toContainText('class FirstExample')
+
+  // Now two cards: one from the comment, one from the Claude reply — two
+  // different messages, so no divider between them.
+  const cards = page.getByTestId('code-preview-card')
+  await expect(cards).toHaveCount(2)
+  await expect(page.getByTestId('code-preview-group-divider')).toHaveCount(0)
+})

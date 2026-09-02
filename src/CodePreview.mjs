@@ -418,6 +418,17 @@ function previewCard(it, active, expanded, onToggle, linkSel = () => 0, onJump =
               : [
                   it.oldCode != null ? pane(t('Huidig (PR)'), it.oldCode, it.lang).key('old') : '',
                   pane(it.oldCode != null ? t('Voorgesteld (chat)') : fenceTitle(it), it.code, it.lang).key('new'),
+                  // trailing — the chat text after this fence (only set on the
+                  // LAST fence of its message, see markdown.mjs's
+                  // `data-fence-trailing`) — reviewer request: "laat de laatste
+                  // tekst ook zien", so nothing typed after the code is lost.
+                  it.trailing
+                    ? html`<span
+                        class="markdown-body [&_p]:inline text-xs leading-relaxed text-slate-700 dark:text-zinc-300"
+                        data-testid="code-preview-trailing"
+                        .innerHTML="${() => renderMarkdown(it.trailing)}"
+                      ></span>`.key('trailing')
+                    : '',
                 ].filter(Boolean)
             : []}
       </div>
@@ -456,6 +467,20 @@ function previewCard(it, active, expanded, onToggle, linkSel = () => 0, onJump =
 // nothing better still gets today's behaviour. Read inside the same `${() =>
 // ...}` slot as the class it lives in (whole-value rule, arrowjs-pitfalls.md)
 // so a focus/narrow-breakpoint change re-applies just this class.
+// groupDivider — the ONLY visual separator between two cards that came from
+// the SAME chat message (`it.groupWithPrev`, RelatedPanel.mjs's
+// recomputeCodePreviews): a dashed horizontal rule, no surrounding gap, so
+// such cards read as "stuck together" — reviewer request: "de blokken die
+// uit dezelfde message komen, moeten … gescheiden worden met een
+// horizontale stippellijn, voor de rest mogen die aan elkaar plakken". A
+// dashed LINE (shape), never colour alone, per the colourblind rule.
+function groupDivider(key) {
+  return html`<div
+    class="border-t border-dashed border-slate-300 dark:border-zinc-600"
+    data-testid="code-preview-group-divider"
+  ></div>`.key(key)
+}
+
 export function codePreviewColumn(
   getItems,
   isActive = () => false,
@@ -466,10 +491,10 @@ export function codePreviewColumn(
   onJumpToBlock = () => {},
 ) {
   return html`
-    <div class="${() => 'flex shrink-0 flex-col gap-3 ' + getWidthCls()}" data-testid="code-preview-column">
+    <div class="${() => 'flex shrink-0 flex-col ' + getWidthCls()}" data-testid="code-preview-column">
       ${() =>
-        getItems().map((it, i) =>
-          previewCard(
+        getItems().flatMap((it, i) => {
+          const card = previewCard(
             it,
             () => isActive(i),
             // `it`, not `i` — see the "measured crash" note above `previewCard`'s
@@ -485,8 +510,16 @@ export function codePreviewColumn(
             onToggle,
             () => getLinkSel(it),
             onJumpToBlock,
-          ),
-        )}
+          )
+          // Spacing between cards, per pair: two cards from the SAME message
+          // (`groupWithPrev`) get a dashed divider and no gap at all (see
+          // groupDivider above); everything else (including the very first
+          // card) keeps the ordinary vertical gap the column used to apply
+          // uniformly via `gap-3` — replaced here with an explicit `mt-3` per
+          // card so it can be conditionally skipped for a grouped pair.
+          const cardWithMargin = i === 0 ? card : html`<div class="${it.groupWithPrev ? '' : 'mt-3'}">${card}</div>`.key(it.key + ':wrap')
+          return it.groupWithPrev ? [groupDivider(it.key + ':sep'), cardWithMargin] : [cardWithMargin]
+        })}
     </div>
   `
 }

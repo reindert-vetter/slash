@@ -4920,6 +4920,7 @@ function recomputeCodePreviews() {
     const code = el.dataset.fenceCode || ''
     const lang = el.dataset.fenceLang || ''
     const context = el.dataset.fenceContext || ''
+    const trailing = el.dataset.fenceTrailing || ''
     const label = el.dataset.fenceLabel || ''
     const isPhp = !lang || lang.toLowerCase() === 'php'
     const suggestion = el.dataset.fenceSuggestion === 'true'
@@ -4936,6 +4937,10 @@ function recomputeCodePreviews() {
       // then renders no title line at all, see classDetail's own comment.
       classLabel: classDetail(code),
       context,
+      // trailing — the text after the LAST fence of this message (only ever
+      // set on that fence's own item, see markdown.mjs's `data-fence-
+      // trailing`), rendered below the code in CodePreview.mjs.
+      trailing,
       label,
       lang,
       code,
@@ -4961,6 +4966,19 @@ function recomputeCodePreviews() {
     it._groupRank = containerOrder.indexOf(containers[i])
   })
   next.sort((a, b) => b._groupRank - a._groupRank)
+  // groupWithPrev — does this item share its container (i.e. its own chat
+  // message/comment, or the shared `null`/no-ancestor bucket) with the item
+  // right before it in the RENDERED (sorted) order? CodePreview.mjs uses
+  // this to draw a dashed divider (and no gap) between two cards from the
+  // same message, while keeping the normal gap between different messages —
+  // reviewer request: "de blokken die uit dezelfde message komen, moeten …
+  // gescheiden worden met een horizontale stippellijn, voor de rest mogen
+  // die aan elkaar plakken". `_groupRank` (not the raw container reference)
+  // is compared here, since it is still present on every item at this point
+  // and already encodes exactly that same grouping.
+  next.forEach((it, i) => {
+    it.groupWithPrev = i > 0 && next[i - 1]._groupRank === it._groupRank
+  })
   next.forEach((it) => {
     delete it._groupRank
   })
@@ -4973,8 +4991,10 @@ function recomputeCodePreviews() {
         it.classLabel === cp.items[i].classLabel &&
         it.label === cp.items[i].label &&
         it.context === cp.items[i].context &&
+        it.trailing === cp.items[i].trailing &&
         it.oldCode === cp.items[i].oldCode &&
-        it.isLast === cp.items[i].isLast,
+        it.isLast === cp.items[i].isLast &&
+        it.groupWithPrev === cp.items[i].groupWithPrev,
     )
   if (!unchanged) {
     cp.items = next

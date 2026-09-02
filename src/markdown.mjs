@@ -117,9 +117,11 @@ function fenceLabel(counter, isSuggestion) {
 // `data-fence-label` — the very same "Codeblok N"/"Suggestie N" text the
 // header shows (`fenceLabel`), so the preview card below can carry the exact
 // name the reviewer reads on the bubble instead of inventing a second one —
-// and `data-fence-context` (`fenceContext`, below), a short snippet of the
-// chat text that sat directly above this fence, omitted when there was none.
-// That is
+// and `data-fence-context` (`fenceContext`, below), the full chat text since
+// the previous fence (or the message start), omitted when there was none —
+// plus `data-fence-trailing`, the full text after the LAST fence of the
+// message (also `fenceContext`), so a message's text is always reachable
+// from SOME card, never silently dropped. That is
 // the data source `RelatedPanel.mjs`'s `recomputeCodePreviews` reads off the
 // DOM for every fence currently rendered in the comment/Claude columns — this
 // file has no reactive state of its own (a pure string renderer, see the
@@ -138,52 +140,33 @@ function fenceLabel(counter, isSuggestion) {
 // a reviewer sees a couple of lines' worth of context, never the full block.
 const INLINE_MAX_LINES = 3
 
-// fenceContext(raw) — a short snippet of the chat text that sat directly
-// above a fence, for the code-preview card's title (CodePreview.mjs, see
-// "A full-size code-preview column" in .claude/docs/claude-chat-panel.md):
-// the reviewer asked to see "wat voor tekst erboven stond in de chat" while
-// walking the cards, so each card can say what it was about. Only the LAST
-// paragraph of the preceding text is used (split on a blank line) — with 2+
-// fences in one message, each gets just the paragraph directly above it,
-// not the whole message repeated. A heading `#` marker and a leading bullet
-// `-`/`*` are stripped (structural decorations that make no sense on a single
-// title line); inline emphasis (`**`/`` ` ``) is deliberately KEPT — see
-// below — and whitespace/newlines collapse to single spaces.
+// fenceContext(raw) — the chat text that sat between the PREVIOUS fence (or
+// the start of the message, for the first fence) and THIS one, for the
+// code-preview card's title (CodePreview.mjs, see "A full-size code-preview
+// column" in .claude/docs/claude-chat-panel.md) — and, for the LAST fence of
+// a message, `extractCodeFences` below also calls this same function on the
+// text AFTER it (`data-fence-trailing`). Reviewer request:
+// "alles moet ik terug kunnen vinden in de gegeneerde blokken" — every piece
+// of a message's text must be reachable from SOME card, so this is
+// deliberately the FULL text of that gap, not just its last paragraph
+// (an earlier version cut to the last paragraph before a fence, which lost
+// everything written earlier in a longer message — reviewer report,
+// screenshot: the card only showed a short "heeft:" instead of the paragraph
+// that led up to it). Only trimmed at both ends; no paragraph-split, no
+// heading/bullet-marker stripping, no whitespace collapsing — the result
+// renders through `renderMarkdown` (CodePreview.mjs), which already handles
+// headings/lists/blank lines correctly, so collapsing them here would only
+// throw away structure `renderMarkdown` could otherwise show.
 //
-// KEPT, not stripped (reviewer report, screenshot: the chat bubble above
-// renders `whereHas` etc. as an inline-code pill, but this same text reduced
-// to a plain string below did not): `data-fence-context` used to run through
-// this SAME stripping as a plain-text hint — CodePreview.mjs then rendered it
-// as inert text. The card now runs this string through `renderMarkdown`
-// instead (CodePreview.mjs's `fenceContextHtml`), so it must still carry its
-// original `` ` ``/`**` markers, exactly like the surrounding chat text does.
-//
-// Deliberately NOT cut to a fixed character count with a manually appended
-// '…' any more (reviewer report: that made the "…" land well short of a wide
-// card's real right edge, or mid-width instead of flush against it). The
-// VISIBLE clipping is CSS `truncate` (CodePreview.mjs's context line),
-// applied only while the card is collapsed — expanded shows this in full —
-// so the cut always lands exactly at the box's own actual edge, whatever
-// that happens to be. `FENCE_CONTEXT_SAFETY_MAX` below is a defensive cap
-// only, against a pathological single-paragraph wall of text with no blank
-// line anywhere above the fence — not the normal truncation mechanism, and
-// deliberately not given its own "…" (CSS still clips it the same way); a cut
-// landing mid-`` ` ``/`**` pair is accepted the same way an unpaired
-// emphasis marker is anywhere else `renderMarkdown` runs on truncated/typed
-// text (see `neutralizeUnpairedEmphasis` in conventions.md) — worst case one
-// dangling marker renders literally instead of as a pill, never breaks the
-// rest of the line.
-const FENCE_CONTEXT_SAFETY_MAX = 400
+// VISIBLE clipping when the card is collapsed is CSS `truncate`
+// (CodePreview.mjs's context line, one line only) — expanded shows this in
+// full. `FENCE_CONTEXT_SAFETY_MAX` below is a defensive cap only, against a
+// pathological wall of text with no fence anywhere near it — not the normal
+// truncation mechanism, and deliberately not given its own "…" (CSS still
+// clips it the same way).
+const FENCE_CONTEXT_SAFETY_MAX = 4000
 function fenceContext(raw) {
-  let t = String(raw || '').trim()
-  if (!t) return ''
-  const paragraphs = t.split(/\n\s*\n/)
-  t = paragraphs[paragraphs.length - 1].trim()
-  t = t
-    .replace(/^#{1,6}\s+/, '')
-    .replace(/^[-*+]\s+/, '')
-    .replace(/\s+/g, ' ')
-    .trim()
+  const t = String(raw || '').trim()
   if (!t) return ''
   return t.length > FENCE_CONTEXT_SAFETY_MAX ? t.slice(0, FENCE_CONTEXT_SAFETY_MAX).trimEnd() : t
 }
@@ -194,12 +177,20 @@ function extractCodeFences(text, store, startIndex, truncate) {
   // so `fenceContext` below sees only the text between two fences, never text
   // already attributed to an earlier one — see its own doc comment.
   let lastEnd = 0
+  // totalFences lets each match know whether it is the LAST fence of this
+  // `text` — only the last fence carries `data-fence-trailing` (the text
+  // after it, all the way to the end of the message), see fenceContext's own
+  // doc comment above for why this is full text rather than a snippet.
+  const totalFences = countCodeFences(text)
   return text.replace(CODE_FENCE_RE, (m, lang, code, offset) => {
     counter += 1
+    const isLastFence = counter === startIndex + totalFences
     const rawLang = String(lang || '').trim()
     const suggestion = isSuggestionLang(rawLang)
     const context = fenceContext(text.slice(lastEnd, offset))
-    lastEnd = offset + m.length
+    const fenceEnd = offset + m.length
+    const trailing = isLastFence ? fenceContext(text.slice(fenceEnd)) : ''
+    lastEnd = fenceEnd
     // `truncate` (comment/Claude-chat bodies only, see renderMarkdown's own
     // doc comment) caps the INLINE rendering to a couple of lines — the full
     // code is already shown in full size in the code-preview card stacked
@@ -244,6 +235,7 @@ function extractCodeFences(text, store, startIndex, truncate) {
       `${suggestion ? ' data-fence-suggestion="true"' : ''}${langWord ? ` data-fence-lang="${escapeHtml(langWord)}"` : ''}` +
       `${isLong ? ' data-fence-truncated="true"' : ''} data-fence-label="${escapeHtml(label)}"` +
       `${context ? ` data-fence-context="${escapeHtml(context)}"` : ''}` +
+      `${trailing ? ` data-fence-trailing="${escapeHtml(trailing)}"` : ''}` +
       ` data-fence-code="${escapeHtml(code)}">` +
       `<div class="${headerCls}"><span class="flex items-center">${escapeHtml(label)}` +
       (langWord ? `<span class="ml-2 uppercase tracking-wide">${escapeHtml(langWord)}</span>` : '') +
