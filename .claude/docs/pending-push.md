@@ -125,6 +125,23 @@ commit for it.
   `origin/<headRef>` only now, one tip instead of two; a conflict it cannot
   resolve becomes a consultation message in the conversation itself, see
   `workflows-comments.md`).
+- **A refused landing logs and shows the real reason, not a bare generic
+  line.** Found live on PR 13608: something moved the checkout's branch
+  backwards outside slash's own bookkeeping (most likely a `git reset`/similar
+  run through the shell exception in `.claude/rules/workflows-write-boundary.md`),
+  so a later chat edit committed as a SIBLING of the already-landed pending-ref
+  commit (same parent, different SHA) instead of extending it — not an amend
+  (nothing was staged over it), so `allowAmend` was `false` and the
+  fast-forward check in `advancePendingRefFromCheckout` failed. Reconstructing
+  that took walking both the checkout's and the shared clone's git objects by
+  hand, because `commitCheckoutEditsAt` discarded the error entirely behind
+  "De wijziging kon niet op de PR-branch worden gezet." — now it also
+  `log.Printf`s the real `error` and appends it to the chat bubble
+  (`"... (reden: " + err.Error() + ")"`), so the SHAs/fast-forward detail are
+  visible without repeating that archaeology. The fast-forward guard itself is
+  unchanged; recovering a PR stuck this way still means manually moving the
+  pending ref (`git update-ref`) to the checkout's real HEAD once you've
+  confirmed which commit is the intended one.
 
 ## Amending a chain of chat commits (`commitCheckoutEditsAt`)
 

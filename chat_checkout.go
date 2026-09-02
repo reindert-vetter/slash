@@ -35,6 +35,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -1490,7 +1491,11 @@ func commitCheckoutEditsAt(ctx context.Context, cm *chat.Module, dataDir, repo s
 	}
 
 	if err := advancePendingRefFromCheckout(ctx, dir, repo, pr, headRefName, amended); err != nil {
-		return newMsg("De wijziging kon niet op de PR-branch worden gezet.", true)
+		// Logged AND shown: without this the only way to find out why was to
+		// walk the checkout's/shared clone's git objects by hand (see the
+		// PR-13608 case this was found against, .claude/docs/pending-push.md).
+		log.Printf("chat_checkout: pr %d: land %s: %v", pr, dir, err)
+		return newMsg("De wijziging kon niet op de PR-branch worden gezet (reden: "+err.Error()+").", true)
 	}
 
 	note := ""
