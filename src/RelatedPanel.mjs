@@ -4036,6 +4036,20 @@ export function setPrCommentMenuOpener(fn) {
 // trip — exactly like its own click handler (claudeQuestionOptions' onCleanup
 // branch, ClaudeChat.mjs); every other kind ('question'/'directory_decision')
 // goes through sendClaudeMessageFromNew, same as a click's onSend branch.
+// hasHighlightedClaudeOption — true exactly when Enter would hit the branch
+// above (a reviewer-navigated, still-pending inline option), without actually
+// sending anything. Exported so home.mjs's onKeydown can let THIS Enter win
+// over the werkmap overlay (isWorkDirOverlayOpen()), which otherwise owns
+// every keypress unconditionally the moment a PR-wide checkout decision is
+// also open — see "Enter on a keyboard-highlighted inline question option
+// must not be swallowed by an unrelated, PR-wide werkmap overlay" below for
+// the reported bug this guards against. Deliberately the exact same
+// condition as selectHighlightedClaudeOption's own early return (mirrored,
+// not shared, so this stays a pure read with no cs.claudeOptionSel reset).
+export function hasHighlightedClaudeOption() {
+  return cs.focus === 'claude' && cs.claudePos === 0 && cs.claudeOptionSel > 0 && !!pendingClaudeQuestion()
+}
+
 export function selectHighlightedClaudeOption(state, commentTarget) {
   if (cs.focus !== 'claude' || cs.claudePos !== 0 || cs.claudeOptionSel === 0) return false
   const q = pendingClaudeQuestion()

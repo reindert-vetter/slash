@@ -199,6 +199,33 @@ including "a choice opening while the empty Claude composer holds focus
 steals it back, so Enter still confirms the overlay and never opens the
 Claude menu behind it".
 
+**One narrow exception to "owns every keypress": an Enter that would pick a
+keyboard-highlighted INLINE Claude question option wins over the overlay.**
+`isWorkDirOverlayOpen()` is a PR-WIDE read model (`state.checkout.decision`) —
+it can become true because a completely UNRELATED conversation's write
+attempt hit the same dirty checkout (that is exactly what
+`resumeStuckClaudeAfterCheckout` above answers), while the reviewer is
+mid-navigating an inline `question`/`directory_decision`/`cleanup_choice`
+bubble's own option chips in a DIFFERENT, currently open conversation (↑
+walks `cs.claudeOptionSel`, see `claude-chat-panel.md`'s question-options
+section). Since `home.mjs`'s `onKeydown` checked `isWorkDirOverlayOpen()`
+unconditionally, first, that Enter used to be swallowed by the overlay
+instead — confirming (or merely re-opening) the overlay's own, unrelated
+default row rather than sending the reviewer's already-highlighted inline
+choice. Reported as "I press Enter on the highlighted option and a menu opens
+instead of it just being picked".
+
+Fix: `RelatedPanel.mjs` exports `hasHighlightedClaudeOption()` — the exact
+same guard `selectHighlightedClaudeOption` uses, as a pure read (no
+`cs.claudeOptionSel` reset) — and `onKeydown`'s `isWorkDirOverlayOpen()`
+branch skips `handleWorkDirOverlayKeydown` when `e.key === 'Enter' &&
+hasHighlightedClaudeOption()`, letting the key fall through to
+`relatedActive()`'s own Enter handling instead. Every other case is
+untouched: ↑/↓/Escape, and an Enter with nothing inline highlighted, still go
+straight to the overlay exactly as before. Test: `tests/checkout-overlay.spec.mjs`
+("Enter on a keyboard-highlighted inline cleanup_choice option is not
+swallowed by an unrelated, PR-wide werkmap overlay").
+
 ## The general-chat overlay: the third thing that owns the keyboard
 
 `src/generalChatOverlay.mjs` — a fullscreen overlay holding this PR's ONE

@@ -128,6 +128,7 @@ import RelatedPanel, {
   isChatAnchorPlaceholder,
   setClaudeMenuOpener,
   selectHighlightedClaudeOption,
+  hasHighlightedClaudeOption,
   selectHighlightedClaudeTask,
   setClaudeTaskJump,
   claudeChatShadowWarning,
@@ -13588,7 +13589,23 @@ function onKeydown(e) {
   // PR has an unanswered work-directory choice the overlay is open and owns
   // the keyboard completely — ↑/↓ pick, Enter confirms, Esc dismisses, every
   // other key is swallowed so the review tree never navigates underneath it.
-  if (isWorkDirOverlayOpen()) {
+  //
+  // Deliberate exception: an Enter that would otherwise pick a keyboard-
+  // highlighted inline Claude question option (cleanup_choice/question/
+  // directory_decision — see hasHighlightedClaudeOption/
+  // selectHighlightedClaudeOption in RelatedPanel.mjs) is let through instead
+  // of being swallowed here. Reviewer-reported bug: the overlay's own
+  // decision is a PR-WIDE read model that can become "open" because a
+  // completely UNRELATED conversation's write attempt hit the same dirty
+  // checkout (see the "keuze open" dead-end resumeStuckClaudeAfterCheckout
+  // answers) — while that happens, this unconditional check swallowed every
+  // Enter in the whole app, including one the reviewer had already aimed, via
+  // ↑, at an inline option in a DIFFERENT, currently open conversation. The
+  // overlay still owns ↑/↓/Escape and every Enter that has nothing inline
+  // highlighted (its own normal use, including the "no inline option active"
+  // case tested in checkout-overlay.spec.mjs) — only this one narrow case
+  // defers to the conversation the reviewer is actually looking at.
+  if (isWorkDirOverlayOpen() && !(e.key === 'Enter' && hasHighlightedClaudeOption())) {
     handleWorkDirOverlayKeydown(e)
     return
   }

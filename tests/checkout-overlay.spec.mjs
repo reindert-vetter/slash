@@ -406,3 +406,144 @@ test('answering the choice also resumes a chat column stuck on the "keuze open" 
   await expect.poll(() => messageReqs.length).toBe(1)
   expect(messageReqs[0].body).toContain('Werkmap gekozen: /home/reindert/dev/b')
 })
+
+// Reviewer-reported bug: pressing Enter on a keyboard-highlighted inline
+// question option (here a chat.KindCleanupChoice bubble, "opruimen na
+// afbreken" — see claudeQuestionOptions/PENDING_CLAUDE_QUESTION_KINDS in
+// ClaudeChat.mjs/RelatedPanel.mjs) opened the werkmap overlay instead of
+// sending the highlighted option. isWorkDirOverlayOpen() is a PR-WIDE read
+// model (chat_checkout.go's Pending decision, keyed on the PR, not on any one
+// conversation) and home.mjs's onKeydown checked it UNCONDITIONALLY before
+// ever reaching relatedActive()'s own Enter handling — so the moment an
+// UNRELATED write attempt elsewhere in the PR also raised the same "werkmap
+// dirty" question at the overlay level, every Enter in the whole app
+// (including one already aimed, via ↑, at an inline option in a completely
+// different, currently open conversation) got swallowed by the overlay
+// instead. Fixed by hasHighlightedClaudeOption() in RelatedPanel.mjs: Enter
+// on a highlighted inline option now wins over the overlay; the overlay still
+// owns every other key (↑/↓/Escape, or an Enter with nothing inline
+// highlighted — see the tests above).
+test('Enter on a keyboard-highlighted inline cleanup_choice option is not swallowed by an unrelated, PR-wide werkmap overlay', async ({
+  page,
+}, testInfo) => {
+  const pr = seededPr(testInfo)
+  const runId = 'chatmerge-' + pr
+  let open = false
+  await page.route(`**/api/chat/checkout?prs=${pr}`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        checkout: open
+          ? {
+              [pr]: {
+                pr,
+                runId,
+                decision: {
+                  stage: 'chooseDirectory',
+                  body: 'Kies welke lokale werkmap Claude voor deze PR gebruikt.',
+                  options: ['/home/reindert/dev/a', '/home/reindert/dev/b'],
+                },
+              },
+            }
+          : {},
+      }),
+    }),
+  )
+  const overlaySignals = mockSignals(page, runId)
+
+  let release
+  const released = new Promise((r) => (release = r))
+  let delivered = false
+  await page.route('**/api/events*', async (route) => {
+    await released
+    if (delivered) return
+    delivered = true
+    await route.fulfill({
+      status: 200,
+      headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' },
+      body: 'retry: 300\n\n' + `data: ${JSON.stringify({ type: 'checkout.changed', pr, seq: 1 })}\n\n`,
+    })
+  })
+
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: {
+      pr,
+      file: 'test.php',
+      line: 1,
+      author: 'reviewer',
+      body: 'pas dit aan',
+      code: '$order->total();',
+      gran: 'call',
+      label: 'Order::total',
+    },
+  })
+  const conversationId = (await start.json()).runId
+  expect(conversationId).toBeTruthy()
+
+  const cleanupOptions = [
+    'Verwijderen',
+    'Stash (ik zet het later zelf terug)',
+    'Stash (automatisch terugzetten zodra dit gesprek de directory weer vrijgeeft)',
+    "Los laten (buiten Claude's commit houden)",
+    'Meenemen in de commit',
+  ]
+  await page.route('**/api/chat?commentId=' + conversationId, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        messages: [
+          {
+            id: 'cleanup-1',
+            role: 'assistant',
+            kind: 'cleanup_choice',
+            body: 'De afgebroken beurt liet niet-gecommitte wijzigingen achter. Wat wil je daarmee doen?',
+            options: cleanupOptions,
+          },
+        ],
+      }),
+    }),
+  )
+
+  // cc.runId (the id the "message" Signal is actually POSTed to) is minted
+  // by ensureAndLoadChat's own POST /api/workflows/claude_chat call once the
+  // reviewer enters the column — NOT the same id task_code_comment returned
+  // above (that only identifies commentId) — so this listens for the
+  // request rather than routing it by a guessed id, mirroring the "resumes
+  // stuck chat" test above; left unmocked (real backend), same as that test.
+  const messageSignals = []
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && r.url().includes('/signals/message')) messageSignals.push(r.postDataJSON())
+  })
+
+  await page.goto('/pr/' + pr)
+  await expect(page.getByTestId('workdir-overlay')).toHaveCount(0)
+  await page.getByTestId('comment-item').first().click()
+  await page.keyboard.press('ArrowRight') // comment -> claude
+  const options = page.getByTestId('claude-question-option')
+  await expect(options).toHaveCount(5)
+
+  // Walk all the way to the topmost option ("Verwijderen"), exactly like the
+  // reviewer-reported repro.
+  for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowUp')
+  await expect(options.nth(0)).toHaveAttribute('data-active', 'true')
+
+  // An UNRELATED write attempt elsewhere in the PR raises the same "werkmap
+  // dirty" question at the PR-wide overlay level, while the reviewer is still
+  // looking at their own already-highlighted inline option.
+  open = true
+  release()
+  await expect(page.getByTestId('workdir-overlay')).toBeVisible()
+  // The inline highlight is untouched by the overlay's own arrival.
+  await expect(options.nth(0)).toHaveAttribute('data-active', 'true')
+
+  await page.keyboard.press('Enter')
+
+  // The reviewer's highlighted inline option won: the cleanup Signal fired
+  // with the chosen option, not the overlay's own default row.
+  await expect.poll(() => messageSignals.length).toBe(1)
+  expect(messageSignals[0]).toMatchObject({ body: 'Verwijderen', action: 'cleanup' })
+  expect(overlaySignals).toHaveLength(0)
+})
