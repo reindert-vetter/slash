@@ -3569,7 +3569,7 @@ function recomputeLeftList() {
   for (const b of groupedRows) {
     if (childIds.has(b.id)) continue // "Onderliggende code" — rank 3, not part of this band
     if (b.category === 'TEST') continue // always sorts last, see fileRank below
-    fileUnderlyingCount[b.file] = (fileUnderlyingCount[b.file] || 0) + nestedPrBlocks(b).length
+    fileUnderlyingCount[b.file] = (fileUnderlyingCount[b.file] || 0) + nestedPrBlocksCached(b).length
   }
   const fileOrder = Object.keys(fileUnderlyingCount).sort((a, b) => fileUnderlyingCount[b] - fileUnderlyingCount[a])
   // fileRank slots an ordinary (non-TEST) file's blocks into a fractional
@@ -6661,6 +6661,56 @@ function nestedPrBlocks(b, seen = new Set()) {
   return out
 }
 
+// nestedPrBlocksCached memoizes a genuine TOP-LEVEL nestedPrBlocks(b) call
+// (fresh seen=new Set(), i.e. b's own full transitive closure) keyed by
+// b.id, invalidated by reference identity of state.allBlocks/relations/
+// callResolve/testCovers — same shape and same exact invalidation check as
+// allBlocksById/relationsByParentId/callResolveByCallerId/testCoversByTestId
+// above, safe for the same reason: nestedPrBlocks' result depends only on
+// the directChildBlocks graph (those four arrays), never on per-block
+// approval state. Deliberately only wraps the TOP call, never the internal
+// recursive `nestedPrBlocks(kid, seen)` above (which threads an explicit,
+// shared `seen` and must keep its exact per-call cycle/dedup semantics) —
+// this cache only removes the redundancy of calling nestedPrBlocks(b) with
+// the SAME b, from scratch, many times over. That redundancy is real:
+// subtreeApproveCount(kid) (below) is called once per chip in
+// relatedChildren, again inside nestedChangedKids' own sort comparator
+// (called multiple times per element by Array.prototype.sort), and again
+// recursively at every one of nestedChangedKids' NESTED_DEPTH levels — on a
+// real, densely-connected PR (many call sites resolving into a small set of
+// shared helper methods) that re-walked the same shared subtree from
+// scratch dozens of times, which multiplied into a multi-second main-thread
+// stall reported as the tab going fully unresponsive (Chrome's "Page
+// Unresponsive" dialog) while browsing a real PR's Underlying-code panel.
+// Same historical shape as "A separate CPU stall, not a leak" in
+// .claude/docs/frontend-memory.md, a different call chain than the one
+// fixed there (this one runs off relatedChildren/nestedChangedKids, not the
+// sidebar rollup) — don't call nestedPrBlocks(b) directly at a new
+// top-level call site; use this instead.
+let nestedPrBlocksCacheSrc = { allBlocks: null, relations: null, callResolve: null, testCovers: null }
+let nestedPrBlocksTopCache = new Map()
+function nestedPrBlocksCached(b) {
+  if (
+    nestedPrBlocksCacheSrc.allBlocks !== state.allBlocks ||
+    nestedPrBlocksCacheSrc.relations !== state.relations ||
+    nestedPrBlocksCacheSrc.callResolve !== state.callResolve ||
+    nestedPrBlocksCacheSrc.testCovers !== state.testCovers
+  ) {
+    nestedPrBlocksCacheSrc = {
+      allBlocks: state.allBlocks,
+      relations: state.relations,
+      callResolve: state.callResolve,
+      testCovers: state.testCovers,
+    }
+    nestedPrBlocksTopCache = new Map()
+  }
+  const hit = nestedPrBlocksTopCache.get(b.id)
+  if (hit) return hit
+  const out = nestedPrBlocks(b)
+  nestedPrBlocksTopCache.set(b.id, out)
+  return out
+}
+
 // blockApproveCount returns { done, total } for a single block: how many of its
 // changed rows the reviewer has approved out of the total. The total prefers the
 // server-computed count (state.blockTotals, GET /api/blockstats) so it is right
@@ -6756,7 +6806,7 @@ function prWideApproveTotal() {
       return
     }
     add(b)
-    for (const kid of nestedPrBlocks(b)) add(kid)
+    for (const kid of nestedPrBlocksCached(b)) add(kid)
   }
   for (const b of state.blocks) {
     // A relation child ("Onderliggende code" index row) is already counted
@@ -6796,7 +6846,7 @@ function subtreeApproveCount(b) {
   }
   let done = 0
   let total = 0
-  for (const x of [b, ...nestedPrBlocks(b)]) {
+  for (const x of [b, ...nestedPrBlocksCached(b)]) {
     const c = blockApproveCount(x)
     done += c.done
     total += c.total
@@ -11409,7 +11459,7 @@ function commentScopeKeys(b) {
     }
     return keys
   }
-  return new Set([keyOf(b), ...nestedPrBlocks(b).map(keyOf)])
+  return new Set([keyOf(b), ...nestedPrBlocksCached(b).map(keyOf)])
 }
 
 // Bridge comment + code state → per-row comment-activity summaries the

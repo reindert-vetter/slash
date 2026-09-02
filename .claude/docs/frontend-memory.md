@@ -450,6 +450,56 @@ and `directChildBlocks`' self-time in the profile dropped from ~200-370ms to
 accessor instead, at any new call site that needs an id/caller/parent/test
 lookup into these four arrays.
 
+## A second instance of the same shape: `nestedPrBlocks`/`subtreeApproveCount` in the Underlying-code panel
+
+Reported symptom (PR 13613, `ActionMessageService::dispatch`, a call site
+resolving to 14 targets): Chrome's own "Page Unresponsive" dialog — a genuine
+main-thread hang, not a caught error — while browsing `mode=diff` with that
+call selected (`?sel=…ActionMessageService.php:45&mode=diff`), the
+Underlying-code panel open with several cards. `data/debug-log.jsonl` had
+nothing for this session (debug mode wasn't on), so this one was diagnosed
+straight from a reviewer screenshot plus reading the code, not the log.
+
+Same root cause shape as the fix directly above, a different call chain that
+predates it and was never touched: `nestedPrBlocks(b)`
+(`home.mjs`, the transitive PR-block closure under `b`, used to roll up
+`subtreeApproveCount`) was called **from scratch, with a fresh `seen` Set,
+every single time** — once per chip in `relatedChildren`, again inside
+`nestedChangedKids`' own sort comparator (`Array.prototype.sort` calls a
+comparator multiple times per element, so `subtreeApproveCount(x)` re-walked
+`x`'s whole subtree on every comparison it took part in, not once), and again
+recursively at every one of `nestedChangedKids`' `NESTED_DEPTH` (2) levels. On
+a real, densely-connected PR (many call sites resolving into a small set of
+shared helper methods — exactly the "one helper called from twenty blocks"
+case `prWideApproveTotal`'s own comment already calls out) that redundant
+re-walk multiplies badly and reads as the tab freezing solid, not as a
+one-off slow frame.
+
+**Fix:** `nestedPrBlocksCached(b)` (`home.mjs`, next to `nestedPrBlocks`) —
+the same reference-identity cache shape as the four Maps above, keyed by
+`b.id` this time. Safe because `nestedPrBlocks` depends only on the
+`directChildBlocks` graph (those same four arrays), never on per-block
+approval state, so caching its result needs no approval-aware invalidation.
+Deliberately wraps **only** a genuine top-level call (the exported-shape
+`nestedPrBlocks(b)` with the default fresh `seen`); the **internal**
+recursive call `nestedPrBlocks(kid, seen)` inside `nestedPrBlocks` itself is
+untouched, still threads its own explicit `seen`, and keeps its exact
+per-call cycle/dedup semantics — so this cache changes nothing about which
+blocks end up counted, only how many times the same subtree gets re-walked.
+Every existing top-level call site (`recomputeLeftList`'s
+`fileUnderlyingCount`, `prWideApproveTotal`, `subtreeApproveCount`,
+`commentScopeKeys`) now goes through `nestedPrBlocksCached` instead. **Don't
+call `nestedPrBlocks(b)` directly at a new top-level call site** — use
+`nestedPrBlocksCached` the same way the four Maps above are reused rather
+than rebuilt inline.
+
+Verified live against the real PR 13613 server (not a synthetic fixture — the
+freeze is data-shape-dependent, same caveat as the `Gt` crash below):
+replaying the reported navigation (`f` to call granularity, a 20-press Space
+burst, then `→`) with a `PerformanceObserver({entryTypes:['longtask']})` and a
+CDP `Profiler` capture around it showed zero longtasks and a fully responsive
+`page.evaluate` round trip afterwards.
+
 ## The `Gt` dispatch-array crash: "traag" was a silent crash, not a longtask
 
 Reported symptom (PR 13451, real ~300-block PR, a deeply drilled review
