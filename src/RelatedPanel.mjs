@@ -2876,6 +2876,14 @@ export async function resolveCancelCleanup(choice) {
 // therefore whether to navigate on to the next one (afterCommentRowRemoved,
 // see comments-panel.md): clearing a chat that hangs off a REAL reviewer
 // comment leaves that row in place, so nothing should navigate away from it.
+//
+// Focus after clearing (reviewer request): the Claude column itself is now
+// empty, so it's never left as the keyboard's resting place. If the anchor
+// comment SURVIVES (real reviewer/AI text), step onto it (toComment(), same
+// helper the plain ← out of 'claude' already uses — lands on the card and
+// drops the caret in the reply field). If nothing is left to land on — the
+// anchor was a placeholder and got deleted above, or there was no anchor at
+// all — fall back to exitRelated(), same as before.
 export async function clearClaudeChat() {
   await sendClaudeMessage('', 'clear')
   // Belt-and-braces local reset, same reasoning as sendClaudeMessage's own
@@ -2894,6 +2902,11 @@ export async function clearClaudeChat() {
     await loadComments(cs.pr)
     exitRelated() // nothing left to focus — hand the keyboard back to the diff
     return true
+  }
+  if (anchor) {
+    toComment() // the comment survives the clear — step the keyboard onto it
+  } else {
+    exitRelated() // no comment behind this conversation — hand the keyboard back to the diff
   }
   return false
 }
