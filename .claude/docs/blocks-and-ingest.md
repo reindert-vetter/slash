@@ -33,10 +33,37 @@ Several later columns were added as **light migrations** in `openDB`
 
 ## Pipeline
 
-`gh pr view` → `git fetch` (pull-ref + develop, fallback by sha) → two detached
-worktrees under `data/worktrees/pr-<pr>-{base,head}` (**absolute paths**!) →
+`gh pr view` → `git fetch` (pull-ref + develop, fallback by sha) →
+**`git merge-base`** → two detached worktrees under
+`data/worktrees/pr-<pr>-{base,head}` (**absolute paths**!) →
 `git diff --unified=0` → PHP scanner (`phpscan.go`, brace lexer, no external
 parser) → classify (`classify.go`) → store. See skill `ingest-pr`.
+
+#### The base side is the MERGE BASE, not `baseRefOid`
+
+`gh pr view --json baseRefOid` reports the **current tip** of the base branch,
+not the commit the PR branched off. Checking the base worktree out at that tip
+makes the ingest's `git diff base head` a **two-dot** diff, which reports
+everything develop received *after* the branch point — inverted, as a
+**deletion**, because the PR's head simply doesn't have it yet. Reviewer-reported
+symptom (PR 13613, `resources/admin/src/locales/nl.json`): a translation key
+another PR added to develop showed as a red removed line in a PR about something
+else entirely, and Claude could not find that key anywhere in the head worktree.
+Measured on that PR: `git diff --stat baseRefOid..head` said 9 insertions **and 2
+deletions**, `merge-base..head` said 9 insertions and **none**. GitHub's own
+"Files changed" uses the merge base (a three-dot diff), which is why this only
+ever disagreed with the UI over there.
+
+`mergeBaseSHA` (`gh.go`) therefore resolves the base **after** `ensureCommits`
+(the merge base is only computable once both commits are local) in
+`prepareIngestWorktreesLocked`, so the merge base is what the base worktree,
+`detectRenames`, `diffBetweenSHAs`, `saveIngestSHAs` and thus every aligned-row
+space (`reanchor.go`, `blockstats.go`) all see. Best-effort: any git failure
+(unreachable commit, shallow clone) returns the base unchanged rather than
+failing the ingest, and re-resolving is idempotent — the merge base is an
+ancestor of head. Test: `TestMergeBaseSHAPinsTheBranchPoint`
+(`ingest_merge_base_test.go`), which asserts the phantom deletion is present in
+the two-dot diff and gone from the three-dot one.
 
 ### Runs as the `ingest` workflow (write boundary)
 
@@ -44,9 +71,10 @@ The blocks-table write and the git-worktree mutations happen inside a tembed
 **Workflow Execution** (Workflow Type `ingest`, `workflows.go`), not directly from
 an HTTP handler or the CLI. Two Activities:
 
-- **`prepareWorktrees`** — gh fetch + `ensureCommits` + the two `ensureWorktree`
-  calls; returns only the small `worktreeSHAs` summary (base/head SHA + changed
-  file paths), not the worktree contents.
+- **`prepareWorktrees`** — gh fetch + `ensureCommits` + `mergeBaseSHA` + the two
+  `ensureWorktree` calls; returns only the small `worktreeSHAs` summary
+  (base/head SHA + changed file paths), not the worktree contents. The base SHA
+  it reports is the **merge base**, see above.
 - **`scanAndStoreBlocks`** — `git diff` + PHP scan/classification +
   `replacePRBlocks`; returns only the small `ingestResult` summary, so the event
   history stays compact.
@@ -68,6 +96,18 @@ writes them via **`upsertPRFileBlocks`** (a DELETE+INSERT scoped to those files)
 instead of `replacePRBlocks`'s full per-PR swap. Every other file's blocks — and
 everything hanging off their **stable** block id in the separate
 comments/approvals/callresolve read models — is left alone.
+
+The delta's own base is normalized to the **merge base** too
+(`refreshIngestDelta` resolves it right after its `ensureCommits`, before the
+`baseSHA != prevBase` comparison that falls back to a full ingest). It has to
+be: `pollIngestRefresh` signals the raw `baseRefOid`, so without it every commit
+landing on develop would read as a moved base and force a needless full
+re-ingest. With it, that fallback fires only on a real **rebase** or a
+base-branch **merge into the head** — exactly what it is for. Idempotent for the
+caller that already passes the stored (already-resolved) base,
+`refreshTreeAfterLanding` in `chat_merge.go`. A PR ingested before this existed
+still holds a `baseRefOid` in `pr_ingest`, so it takes one full fallback and is
+normalized from then on.
 
 **A delta may never WIDEN the PR's file set.** The delta is
 `prevHead..headSHA`, so a reviewer merging the **base branch into his own

@@ -102,6 +102,14 @@ func prepareIngestWorktreesLocked(ctx context.Context, dataDir string, repo stri
 		return worktreeSHAs{}, err
 	}
 
+	// The base worktree must hold the commit the PR BRANCHED OFF, not the current
+	// tip of the base branch: anything develop received since then is not part of
+	// this PR, and a two-dot diff would report it as a deletion. See mergeBaseSHA.
+	if mb := mergeBaseSHA(ctx, repo, baseSHA, headSHA); mb != baseSHA {
+		log.Printf("ingest pr %d: base -> merge base %s", pr, short(mb))
+		baseSHA = mb
+	}
+
 	baseDir, headDir := worktreeDirs(dataDir, repo, pr)
 	if err := ensureWorktree(ctx, repo, baseDir, baseSHA); err != nil {
 		return worktreeSHAs{}, fmt.Errorf("base worktree: %w", err)
@@ -251,6 +259,15 @@ func refreshIngestDelta(ctx context.Context, db *sql.DB, dataDir string, repo st
 	if err := ensureCommits(ctx, repo, pr, baseSHA, headSHA); err != nil {
 		return nil, fmt.Errorf("ensure commits: %w", err)
 	}
+
+	// Normalize to the merge base BEFORE comparing against prevBase (which is
+	// itself a stored merge base). The pr_status poller signals the raw
+	// baseRefOid, so without this every commit landing on develop would look
+	// like a moved base and force a needless full re-ingest; with it the
+	// fallback below fires only on a real rebase or a base-branch merge INTO
+	// the head — exactly what it is for. Idempotent for the caller that already
+	// passes the stored base (chat_merge.go). See mergeBaseSHA.
+	baseSHA = mergeBaseSHA(ctx, repo, baseSHA, headSHA)
 
 	if baseSHA != prevBase {
 		log.Printf("ingest refresh pr %d: base sha changed (%s -> %s), falling back to full ingest", pr, short(prevBase), short(baseSHA))

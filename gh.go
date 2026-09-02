@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"strconv"
@@ -135,6 +136,37 @@ func ensureCommits(ctx context.Context, repo string, pr int, baseSHA, headSHA st
 		}
 	}
 	return nil
+}
+
+// mergeBaseSHA resolves the commit a PR's diff must actually be taken FROM:
+// the merge base of the base branch and the head, not the current tip of that
+// base branch. `gh pr view --json baseRefOid` reports that tip, so diffing it
+// against the head (a two-dot diff) also reports every change the base branch
+// received AFTER the PR branched off — as a DELETION, because the PR's head
+// simply doesn't have it yet. Reviewer-reported symptom: a translation key
+// added to develop showed up as removed in an unrelated PR touching the same
+// file. GitHub's own "Files changed" uses the merge base (a three-dot diff),
+// which is why this only ever disagreed with the UI over there.
+//
+// Best-effort: any failure (commit not reachable locally, shallow clone) returns
+// baseSHA unchanged, so an ingest never fails harder than it did before. Call it
+// AFTER ensureCommits — the merge base is only computable once both commits are
+// present locally.
+//
+// Idempotent by construction: the merge base is an ancestor of head, so
+// re-resolving an already-resolved base returns it unchanged. refreshIngestDelta
+// relies on that (one of its callers passes the stored, already-resolved base).
+func mergeBaseSHA(ctx context.Context, repo string, baseSHA, headSHA string) string {
+	out, err := runGitFor(ctx, repo, "merge-base", baseSHA, headSHA)
+	if err != nil {
+		log.Printf("merge-base %s %s failed (using base as-is): %v", short(baseSHA), short(headSHA), err)
+		return baseSHA
+	}
+	mb := strings.TrimSpace(string(out))
+	if mb == "" {
+		return baseSHA
+	}
+	return mb
 }
 
 func commitExists(ctx context.Context, repo string, sha string) bool {
