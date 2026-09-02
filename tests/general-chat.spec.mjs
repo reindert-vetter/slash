@@ -1,4 +1,4 @@
-import { test, expect, leaveSearchBox } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox, seededPr } from './_fixtures.mjs'
 
 // The general (PR-wide, code-less) chat — reviewer request: "hier wil ik een
 // algemene chat kunnen starten, net zo werken als chat op regel. het moet dan
@@ -80,4 +80,68 @@ test('`/` + a no-match query starts the one general chat, in an overlay, with it
   await expect(overlay).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('block-row').filter({ hasText: 'Algemene chat' })).toHaveCount(1)
+})
+
+// A running turn must show live progress in the overlay too — the same
+// shared status line the per-line chat shows below its own columns
+// (CommentClaudeFooter, RelatedPanel.mjs). Reported bug: the overlay showed
+// the reviewer's own message and then an empty column down to the composer,
+// with no "Claude denkt na…"/tool status anywhere while a turn was running.
+// Mirrors tests/claude-chat-progress.spec.mjs's mocked-SSE approach exactly,
+// just against the general (PR-wide, code-less) anchor instead of a
+// code-anchored comment.
+test('general chat overlay: a running turn shows the shared live status line', async ({ page }, testInfo) => {
+  const pr = seededPr(testInfo)
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: { pr, file: '', line: 0, author: 'reviewer', body: ANCHOR_BODY, kind: 'issue', local: true },
+  })
+  const conversationId = (await start.json()).runId
+  expect(conversationId).toBeTruthy()
+
+  const frame = (data) => `data: ${JSON.stringify(data)}\n\n`
+  const progress = (extra) => ({
+    type: 'chat.progress',
+    pr,
+    key: conversationId,
+    seq: 1,
+    data: { running: true, startedAt: Date.now() - 3000, updatedAt: Date.now(), ...extra },
+  })
+
+  let connections = 0
+  await page.route('**/api/events*', async (route) => {
+    connections++
+    const body =
+      connections === 1
+        ? 'retry: 300\n\n'
+        : 'retry: 300\n\n' + frame(progress({ phase: 'tool', tool: 'Read', detail: 'src/Order.php' }))
+    await route.fulfill({
+      status: 200,
+      headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' },
+      body,
+    })
+  })
+  await page.route('**/api/chat/progress*', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, running: false }) }),
+  )
+
+  await page.goto('/pr/' + pr)
+  await expect(page.getByTestId('block-row').filter({ hasText: 'Algemene chat' })).toBeVisible()
+  await leaveSearchBox(page)
+
+  await page.keyboard.press('/')
+  await page.getByTestId('command-row').filter({ hasText: 'Chat met Claude over deze PR' }).click()
+
+  const overlay = page.getByTestId('general-chat-overlay')
+  await expect(overlay).toBeVisible()
+
+  // Scoped to the overlay's own card: the same status also shows in the
+  // tree's own (now hidden, but still mounted) comment-claude-row for this
+  // conversation, so a bare page-wide getByTestId matches twice.
+  const status = page.getByTestId('general-chat-card').getByTestId('claude-chat-status')
+  await expect(status).toBeVisible()
+  await expect(status).toContainText('src/Order.php')
+  await expect(status).toContainText(/\d+s/)
+
+  // Stop button lives in the same footer, next to the status text.
+  await expect(page.getByTestId('general-chat-card').getByTestId('claude-chat-cancel')).toBeVisible()
 })

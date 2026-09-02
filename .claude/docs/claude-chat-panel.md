@@ -1184,10 +1184,23 @@ To its right sits the unchanged `CodePreviewPanel`, so the code blocks Claude
 produces show full size ("rechts daarvan mag je gegeneerde blokken uit de chat
 tonen") with no second implementation.
 
+Below the scrollable card (a sibling, outside the `overflow-y-auto` wrapper —
+same placement `home.mjs`'s own `comment-claude-row` uses) sits the same
+shared `CommentClaudeFooter()` (`RelatedPanel.mjs`) the per-line chat renders:
+the live "Claude denkt na…/leest/schrijft… · Xs" status, the Stop button, and
+"Ook bezig elders in deze PR". This used to be missing entirely — a running
+turn in the overlay showed the sent message and then nothing until the answer
+landed, unlike the per-line chat, which always shows progress underneath.
+Called with no `commentId`/`opts`, exactly like `home.mjs`'s own call, since
+`CommentClaudeFooter` already reads the globally anchored `cc` state, which
+`startPrGeneralChat` points at this conversation while the overlay is open.
+
 Test: `tests/general-chat.spec.mjs` (real writes against the per-worker
 server/DB, like `prwide-comment.spec.mjs`: it pins the anchor's PR-wide/local
 shape, the overlay, the sent first turn, Escape, the index row, `→` back in,
-and that a second start reuses the same one).
+and that a second start reuses the same one; a second test mocks a running
+turn's SSE progress the same way `tests/claude-chat-progress.spec.mjs` does,
+to pin that the shared status line/Stop button render inside the overlay).
 
 ### Cmd+C on a selected bubble copies that turn's own text
 

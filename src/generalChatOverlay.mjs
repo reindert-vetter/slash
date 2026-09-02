@@ -20,11 +20,22 @@
 // own GeneralChatCard (i.e. ClaudeChat.mjs's claudeChatColumn with the same
 // view/callbacks/state the tree's Claude column uses) and the blocks to its
 // right are the existing CodePreviewPanel — the very column that already
-// renders the code fences of a Claude conversation full size. Nothing here
-// knows anything about chatting; it only decides WHERE those two render.
+// renders the code fences of a Claude conversation full size. The live
+// status line below the thread ("Claude denkt na… · Xs", Stop, "Ook bezig
+// elders in deze PR") is the SAME shared CommentClaudeFooter the tree's own
+// comment-claude-row renders below its columns (home.mjs) — it used to be
+// missing here entirely, so a running turn in the overlay showed no progress
+// at all where the per-line chat does. Nothing here knows anything about
+// chatting; it only decides WHERE these pieces render.
 import { html, reactive } from './vendor/arrow.js'
 import { t } from './i18n.mjs'
-import { GeneralChatCard, CodePreviewPanel, leaveRelated, setGeneralChatOverlayVisible } from './RelatedPanel.mjs'
+import {
+  GeneralChatCard,
+  CodePreviewPanel,
+  CommentClaudeFooter,
+  leaveRelated,
+  setGeneralChatOverlayVisible,
+} from './RelatedPanel.mjs'
 
 // Ephemeral, like menu.open / the werkmap overlay's own dismissal: not in the
 // URL (this is not a navigation position and not something to share) and not
@@ -129,6 +140,11 @@ function overlayPanel() {
           >
         </div>
         <div class="flex min-h-0 flex-1 flex-col overflow-y-auto p-2">${() => GeneralChatCard(st)}</div>
+        ${() =>
+          // Sits below the scrollable thread, outside it — same placement as
+          // home.mjs's own comment-claude-row footer, so the status line stays
+          // visible instead of scrolling away with the messages.
+          CommentClaudeFooter()}
       </div>
       <div class="flex min-h-0 flex-1 flex-col overflow-y-auto" data-testid="general-chat-previews">
         ${() => CodePreviewPanel(st, () => null, { inOverlay: true })}
