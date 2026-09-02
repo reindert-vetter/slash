@@ -5733,7 +5733,13 @@ export async function startPrGeneralChat(state, text) {
 // open flag, and there is no neighbouring tree column to resize against.
 export function GeneralChatCard(state) {
   ensureChatEvents(state.pr)
-  return claudeChatColumn(claudeChatView(), claudeChatCallbacks(state, () => null), false, () => {})
+  // `{ inOverlay: true }` drops claudeChatColumn's tree-only `max-h-[38vh]`
+  // cap — the overlay already has a real, bounded height, so the thread
+  // should fill it and only scroll on real overflow. See the opts.inOverlay
+  // doc comment above claudeChatColumn (ClaudeChat.mjs).
+  return claudeChatColumn(claudeChatView(), claudeChatCallbacks(state, () => null), false, () => {}, {
+    inOverlay: true,
+  })
 }
 
 // sendClaudeChatText sends `text` as the conversation's actual turn, reusing

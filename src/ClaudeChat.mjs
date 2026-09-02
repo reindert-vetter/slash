@@ -784,7 +784,16 @@ function claudeBubble(msg, i, total, claudePos, optionSel, anchorHint, onSend, o
             >`
           : ''}
       <div class="flex items-center gap-2 py-0.5">
-        ${mine ? '' : avatarHTML(CLAUDE_NAME, '', 'h-5 w-5')}
+        ${() =>
+          // A `${() => ...}` FUNCTION binding, not a bare ternary: avatarHTML
+          // returns an arrow template, so a bare `mine ? '' : avatarHTML(...)`
+          // statically toggles template↔string — the "leaks the template
+          // function as text" pitfall (arrowjs-pitfalls.md). Bit here once a
+          // bubble chunk hydrated on the `mine` (string) branch and a later
+          // reused chunk needed the assistant's avatar template: the minified
+          // template function itself (`i=>je(n,i)`) got written as plain text
+          // next to the "Claude" label instead of rendering the avatar.
+          mine ? '' : avatarHTML(CLAUDE_NAME, '', 'h-5 w-5')}
         <span class="whitespace-nowrap text-[11px] font-medium leading-5 text-slate-600 dark:text-zinc-400">
           ${mine ? t('Jij') : CLAUDE_NAME}
         </span>
@@ -987,6 +996,20 @@ function claudeSendError(view) {
 // padding gives the ring its 2px back on all four sides. Don't remove it, and
 // keep it in sync with the comment thread's own container (RelatedPanel.mjs's
 // `comment-thread`), which mirrors this pane and has the identical ring.
+//
+// `opts.inOverlay` (only `GeneralChatCard`, the general-chat overlay's own
+// caller, passes it) drops the `max-h-[38vh]` cap: reviewer report was a big
+// dead gap between the thread and the composer inside that overlay, because
+// the `max-h` stopped the thread short of the height its own
+// `relative min-h-0 flex-1` parent already grows to fill (the overlay, unlike
+// the tree's narrow column, has a real, viewport-bounded height via
+// `items-stretch`, so nothing needs the 38vh safety cap there). The overlay
+// variant instead sizes the thread as `absolute inset-0` of that same
+// `relative` parent — the same "fill the flex-grown box" trick the
+// `scrollHint` chevrons below already use against that parent — so it fills
+// exactly the available height and only grows its own scrollbar
+// (`overflow-y-auto`, unchanged) once real content overflows it. The tree's
+// own call site passes no `opts`, so its 38vh cap is untouched.
 // claudeMenuButton — the mouse entry point into claudeChatCommandsFor()
 // ("Wis Claude-gesprek", "Comment hiervan maken", "Probeer de mislukte turn
 // opnieuw" — see claude-chat-panel.md), the same menu Enter already opens on
@@ -1024,7 +1047,7 @@ function claudeMenuButton(onOpenMenu) {
 // (onEnterReadOnly, RelatedPanel.mjs's enterClaudeChat/enterClaudeChatFromNew
 // — the same → hand-off the keyboard already uses). Scrolling the thread
 // stays free and does NOT count as "entering" — only the click does.
-export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly) {
+export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly, opts = {}) {
   return html`
     <div
       class="relative flex min-h-0 flex-1 flex-col gap-2 rounded-xl p-3"
@@ -1058,7 +1081,9 @@ export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly) {
       </div>
       <div class="relative min-h-0 flex-1">
         <div
-          class="no-scrollbar flex max-h-[38vh] min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-0.5"
+          class="${opts.inOverlay
+            ? 'no-scrollbar absolute inset-0 flex min-h-0 flex-col gap-2 overflow-y-auto p-0.5'
+            : 'no-scrollbar flex max-h-[38vh] min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-0.5'}"
           data-testid="claude-chat-thread"
           data-scroll-body
           @scroll="${(e) => {

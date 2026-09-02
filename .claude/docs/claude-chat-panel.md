@@ -1182,7 +1182,17 @@ exact same view/callbacks the tree's column uses, minus `ClaudeChatPanel`'s
 column IS the surface and there is no neighbouring column to resize against.
 To its right sits the unchanged `CodePreviewPanel`, so the code blocks Claude
 produces show full size ("rechts daarvan mag je gegeneerde blokken uit de chat
-tonen") with no second implementation.
+tonen") with no second implementation. `GeneralChatCard` passes
+`claudeChatColumn`'s 5th argument, `{ inOverlay: true }` — the tree column's
+own `max-h-[38vh]` cap on the message thread (see the doc comment above
+`claudeChatColumn`, `ClaudeChat.mjs`) doesn't apply here: the overlay already
+has a real, viewport-bounded height (`items-stretch` inside `fixed inset-0`),
+so the thread should fill exactly that instead of stopping short and leaving
+a dead gap above the composer. The `inOverlay` variant sizes the thread as
+`absolute inset-0` of its own `relative` parent (the same trick the
+`scrollHint` chevrons already use against that parent) so it fills the
+available height and only grows a scrollbar once content actually overflows.
+The tree's own call site is untouched.
 
 Below the scrollable card (a sibling, outside the `overflow-y-auto` wrapper —
 same placement `home.mjs`'s own `comment-claude-row` uses) sits the same
