@@ -102,11 +102,16 @@ Rendered by `TestMethodsColumn.mjs` directly in `<main>`'s column flow, to the
 - **`→`** on a selected class row (pr-index, stop 2) first moves focus onto the
   methodes-kolom without changing `state.mode`; a **second** `→` steps into the
   diff of the active method, exactly like `→` on an ordinary block from stop 2.
-- **`Enter` does NOT mirror `→`** — it opens the ordinary block-scoped command
-  palette (see `.claude/docs/command-palette.md`), the same one that opens on
-  `Enter` when the `test_class` row itself is selected: `curBlock()` already
-  resolves to the active method regardless of `testColumnFocused`, so the generic
-  `openMenu('block')` branch just falls through. Only `→` steps into the diff.
+- **A plain `Enter` (no active multi-selection) mirrors `↓`** — reviewer
+  request: "als ik enter druk, wil ik dat de volgende blokken test index blok
+  item wordt geselecteerd, dus dat ik hetzelfde ziet als naar beneden."
+  `stepTestColumnRow(1)` steps to the next method, or — at the class edges —
+  exits back to the index and lands on the next visible row, exactly like a
+  plain `↓` press (same helper, shared with the `ArrowDown`/`ArrowUp`
+  handling). **An active Shift+↓ range still opens the ordinary block-scoped
+  command palette on `Enter`** (see `.claude/docs/command-palette.md`,
+  `hasMultiSelection()`) — "Keur deze N methodes goed", unchanged. Only `→`
+  steps into the diff.
 - **`←`** from that diff steps back onto the methodes-kolom (not all the way to
   the pr-index — `state.testColumnFocused` simply survives the
   `mode: 'diff' → 'list'` transition); a **second** `←` leaves the column.

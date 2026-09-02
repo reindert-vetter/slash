@@ -45,9 +45,11 @@ code).
      mode; `←` from stop 3 comes back here first, a second `←` leaves it;
      `↑`/`↓` walk the class's own methods and at the class edges exit to the
      index and step exactly ONE visible row further (clamped when there is
-     none); `Enter` opens the ordinary block palette (not the diff — only `→`
-     does that), since `curBlock()` already resolves to the active method;
-     `f`/`d`/`s`/`a` are a no-op, same as stop 1. Two things this stop needs
+     none); a plain `Enter` (no active multi-selection) mirrors `↓` — steps to
+     the next method, or exits to the next visible index row at a class edge
+     — instead of opening the block palette; an active Shift+↓ range still
+     opens the palette on `Enter` ("Keur deze N methodes goed"); only `→`
+     steps into the diff; `f`/`d`/`s`/`a` are a no-op, same as stop 1. Two things this stop needs
      that no other stop does: `scrollFocusIntoView` targets **this** column at
      `focusLevel === 0` whenever it exists (it is the block-column's left
      neighbour, so aligning on the block-column scrolled it off-screen behind

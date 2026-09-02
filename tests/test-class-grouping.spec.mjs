@@ -80,7 +80,7 @@ test.describe('test methods group per class', () => {
     await expect(page.getByTestId('pr-index')).toHaveClass(/border-indigo-300|dark:border-indigo-500/)
   })
 
-  test('Enter on the methodes-kolom opens the command menu instead of stepping into the diff; → still steps in', async ({
+  test('Enter on the methodes-kolom mirrors ↓ instead of stepping into the diff; → still steps in', async ({
     page,
   }) => {
     await page.goto(`/pr/${PR}`)
@@ -90,20 +90,20 @@ test.describe('test methods group per class', () => {
     await page.keyboard.press('ArrowRight')
     await expect(page).not.toHaveURL(/mode=diff/)
 
-    // Enter here opens the ordinary block-scoped command palette — the same
-    // one that already opens on Enter when the test_class row itself is
-    // selected, before ever stepping right — instead of mirroring →.
+    // A plain Enter here mirrors ↓ (moves the active method one down) instead
+    // of opening a menu — reviewer request: "als ik enter druk, wil ik dat de
+    // volgende blokken test index blok item wordt geselecteerd, dus dat ik
+    // hetzelfde ziet als naar beneden."
     await page.keyboard.press('Enter')
-    await expect(page.getByTestId('command-menu')).toBeVisible()
-    await expect(page).not.toHaveURL(/mode=diff/)
-
-    await page.keyboard.press('Escape')
     await expect(page.getByTestId('command-menu')).not.toBeVisible()
+    await expect(page).not.toHaveURL(/mode=diff/)
+    const activeRow = page.getByTestId('test-method-row').nth(1)
+    await expect(activeRow).toHaveClass(/bg-indigo-50|dark:bg-indigo-500\/15/)
 
-    // → still steps into the diff of the active (first) method, unchanged.
+    // → still steps into the diff of the now-active (second) method, unchanged.
     await page.keyboard.press('ArrowRight')
     await expect(page).toHaveURL(/mode=diff/)
-    await expect(page.getByTestId('detail-card')).toContainText('it_should_index_triggers')
+    await expect(page.getByTestId('detail-card')).toContainText('it_should_filter_triggers')
   })
 
   test('the command menu stays on-screen from the methodes-kolom, once the pr-index collapse settles', async ({
@@ -128,18 +128,11 @@ test.describe('test methods group per class', () => {
     await page.waitForTimeout(400)
     await expect(page.getByTestId('pr-index')).toHaveCSS('width', '0px')
 
-    // A single Enter (no multi-selection) already reproduced this.
-    await page.keyboard.press('Enter')
+    // A single, plain Enter no longer opens a menu from here (it mirrors ↓
+    // instead — see "Enter on the methodes-kolom mirrors ↓..." above), so
+    // only the Shift+↓ range still reaches this menu-positioning regression —
+    // and is the scenario the reviewer actually reported it in.
     const menu = page.getByTestId('command-menu')
-    await expect(menu).toBeVisible()
-    await page.waitForTimeout(300)
-    const singleBox = await menu.boundingBox()
-    expect(singleBox.width).toBeGreaterThan(100)
-    await page.keyboard.press('Escape')
-    await expect(menu).not.toBeVisible()
-
-    // A Shift+↓ multi-method selection reproduced the same bug, and is the
-    // scenario the reviewer actually reported it in.
     await page.keyboard.press('Shift+ArrowDown')
     await page.keyboard.press('Enter')
     await expect(menu).toBeVisible()

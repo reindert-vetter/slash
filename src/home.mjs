@@ -9042,6 +9042,36 @@ function isTestColumnActive() {
   return state.mode === 'list' && state.testColumnFocused && !!curTestClassRow()
 }
 
+// stepTestColumnRow moves the methodes-kolom cursor by `dir` (1 = down, -1 =
+// up): step within the active class's own methods, or — at the class edges —
+// exit back to the index and land on the next/previous VISIBLE row (never
+// across into a further class's methods, see stepTestMethod's own doc comment
+// above for why the diff-mode flow-through is a deliberately separate
+// mechanism). Shared by the plain ArrowDown/ArrowUp handling below and by a
+// plain Enter with no active multi-selection (see the Enter branch's own
+// isTestColumnActive() case) — reviewer request: "als ik enter druk, wil ik
+// dat de volgende blokken test index blok item wordt geselecteerd, dus dat ik
+// hetzelfde ziet als naar beneden." An active Shift+↓ range still opens
+// "Keur deze N methodes goed" on Enter instead (hasMultiSelection()), so this
+// helper is never called for that case.
+function stepTestColumnRow(dir) {
+  const row = curTestClassRow()
+  const nextMethod = state.classMethodSel + dir
+  if (row && nextMethod >= 0 && nextMethod < row.methods.length) {
+    state.classMethodSel = nextMethod
+    scrollSelectedIntoView()
+    return
+  }
+  const next = stepVisibleSelected(dir)
+  if (next !== state.selected) {
+    // selectRow resets classMethodSel/testColumnFocused, so the index
+    // (stop 2) owns the keyboard again after landing.
+    selectRow(next)
+    scrollSelectedIntoView()
+    scrollChangeIntoView(false)
+  }
+}
+
 // curBlock resolves the top-level selection to the block that actually owns
 // the diff/approve/comment machinery: for an ordinary row that's simply
 // state.blocks[state.selected], but for a test_class row (see
@@ -14143,14 +14173,16 @@ function onKeydown(e) {
   // PR-description column, state.showDescription) there's no block context, so
   // it opens the same PR-wide menu as `/` instead of the block-scoped palette —
   // block 0 in the list is a different stop (showDescription is false there)
-  // and keeps the normal block palette. This also covers stop 2b (the
-  // methodes-kolom, see isTestColumnActive): curBlock() already resolves to
-  // the active method there (state.classMethodSel, see "Grouping test
-  // methods per class" in detail-layout.md), so the same block-scoped
-  // COMMANDS palette naturally targets it — exactly the menu that already
-  // appears when the test_class row itself is selected, before ever
-  // stepping right. Only → (handled further below, isTestColumnActive's own
-  // ArrowRight branch) keeps stepping into that method's diff.
+  // and keeps the normal block palette. Stop 2b (the methodes-kolom, see
+  // isTestColumnActive) is a deliberate exception, handled inside this block
+  // below: a plain Enter there mirrors ↓ (stepTestColumnRow) instead of
+  // opening the palette — reviewer request: "als ik enter druk, wil ik dat de
+  // volgende blokken test index blok item wordt geselecteerd, dus dat ik
+  // hetzelfde ziet als naar beneden." An active Shift+↓ range still opens the
+  // palette on Enter ("Keur deze N methodes goed", hasMultiSelection()), same
+  // as everywhere else in the list. Only → (handled further below,
+  // isTestColumnActive's own ArrowRight branch) keeps stepping into the
+  // active method's diff.
   if (e.key === 'Enter') {
     e.preventDefault()
     // A focused "Taken" row is its own stop within stop 1, so Enter there opens
@@ -14189,6 +14221,15 @@ function onKeydown(e) {
     const taskRow = state.showDescription ? focusedTaskRowFromState() : null
     if (taskRow) {
       openTaskRowMenu(taskRow, null)
+      return
+    }
+    // Stop 2b (the methodes-kolom): a plain Enter mirrors ↓ instead of
+    // opening the block palette — see this branch's own comment above. Gated
+    // on !hasMultiSelection() the same way the comment-index Enter branch
+    // above is, so an active Shift+↓ range still falls through to the
+    // ordinary openMenu('block') -> rangeCommandsFor() palette.
+    if (isTestColumnActive() && !hasMultiSelection()) {
+      stepTestColumnRow(1)
       return
     }
     openMenu(state.showDescription ? 'pr' : 'block')
@@ -14388,21 +14429,7 @@ function onKeydown(e) {
         extendMethodRange(dir)
         return
       }
-      const row = curTestClassRow()
-      const nextMethod = state.classMethodSel + dir
-      if (row && nextMethod >= 0 && nextMethod < row.methods.length) {
-        state.classMethodSel = nextMethod
-        scrollSelectedIntoView()
-      } else {
-        const next = stepVisibleSelected(dir)
-        if (next !== state.selected) {
-          // selectRow resets classMethodSel/testColumnFocused, so the index
-          // (stop 2) owns the keyboard again after landing.
-          selectRow(next)
-          scrollSelectedIntoView()
-          scrollChangeIntoView(false)
-        }
-      }
+      stepTestColumnRow(dir)
     } else if (e.key === 'ArrowRight') {
       e.preventDefault()
       enterDiff()
