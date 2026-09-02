@@ -62,8 +62,9 @@ test.describe('Werkmap overlay', () => {
     const overlay = page.getByTestId('workdir-overlay')
     await expect(overlay).toBeVisible()
     await expect(page.getByTestId('workdir-overlay-body')).toContainText('Kies welke lokale werkmap')
-    // Both options, plus the two always-available escapes.
-    await expect(page.getByTestId('workdir-overlay-option')).toHaveCount(4)
+    // Both options, plus the two always-available escapes, plus the always-
+    // present "Chat pauzeren" row (disabled here, no turn is running).
+    await expect(page.getByTestId('workdir-overlay-option')).toHaveCount(5)
     // The first row is highlighted, and the highlight is a glyph, not only a
     // colour (colourblind rule).
     const rows = page.getByTestId('workdir-overlay-option')
@@ -272,6 +273,131 @@ test.describe('Werkmap overlay', () => {
     expect(signals[0]).toMatchObject({ action: 'checkoutAnswer', reply: '/home/reindert/dev/b' })
     // The Claude command menu never opened behind the overlay.
     await expect(page.getByTestId('command-menu')).not.toBeVisible()
+  })
+
+  // Reviewer request: an option to pause the currently running Claude turn
+  // right from this overlay, without first having to close it and step into
+  // the Claude column's own "Stop" control. Reuses cancelClaudeTurn()
+  // (RelatedPanel.mjs) — the exact same POST /api/chat/cancel the "Stop"
+  // button and "Stop deze Claude-beurt" palette item already call — so it is
+  // NOT one of act()'s checkout Actions: it never locks the rest of the list
+  // and never dismisses the overlay, since it does not answer the werkmap
+  // question at all.
+  test('the "Chat pauzeren" row is disabled and says so when nothing is running', async ({ page }) => {
+    await mockCheckout(page, DECISION)
+    const cancelRequests = []
+    page.on('request', (r) => {
+      if (r.method() === 'POST' && r.url().includes('/api/chat/cancel')) cancelRequests.push(r)
+    })
+    await page.goto('/pr/12903' + SEL)
+    await appReady(page)
+
+    const pauseRow = page.getByTestId('workdir-overlay-option').filter({ hasText: 'Chat pauzeren' })
+    await expect(pauseRow).toHaveCount(1)
+    // The "nothing to stop" state is carried by the WORDING, not only by the
+    // dimmed style — colourblind rule.
+    await expect(pauseRow).toContainText('er loopt nu niets')
+    await expect(pauseRow).toBeDisabled()
+    expect(cancelRequests).toHaveLength(0)
+  })
+
+  // The enabled counterpart: a real turn running on the conversation
+  // currently shown in the tree, with the werkmap overlay opening on top of
+  // it (an unrelated write attempt elsewhere in the PR can raise the same
+  // PR-wide choice at any time, exactly like the "steals focus" test above).
+  test('the "Chat pauzeren" row stops the currently open conversation\'s running turn', async ({ page }, testInfo) => {
+    const pr = seededPr(testInfo)
+    const runId = 'chatmerge-' + pr
+    let open = false
+    await page.route(`**/api/chat/checkout?prs=${pr}`, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          checkout: open
+            ? {
+                [pr]: {
+                  pr,
+                  runId,
+                  decision: {
+                    stage: 'chooseDirectory',
+                    body: 'Kies welke lokale werkmap Claude voor deze PR gebruikt.',
+                    options: ['/home/reindert/dev/a', '/home/reindert/dev/b'],
+                  },
+                },
+              }
+            : {},
+        }),
+      }),
+    )
+
+    let releaseEvents
+    const eventsReleased = new Promise((r) => (releaseEvents = r))
+    let delivered = false
+    await page.route('**/api/events*', async (route) => {
+      await eventsReleased
+      if (delivered) return // never resolves — no further reconnect
+      delivered = true
+      await route.fulfill({
+        status: 200,
+        headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' },
+        body: 'retry: 300\n\n' + `data: ${JSON.stringify({ type: 'checkout.changed', pr, seq: 1 })}\n\n`,
+      })
+    })
+
+    // Hold the reviewer's own message Signal open so the conversation stays
+    // genuinely "busy" for as long as this test needs it to.
+    let releaseMessage
+    const messageReleased = new Promise((r) => (releaseMessage = r))
+    await page.route('**/signals/message', async (route) => {
+      await messageReleased
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{"status":"signalled"}' })
+    })
+    const cancelRequests = []
+    page.on('request', (r) => {
+      if (r.method() === 'POST' && r.url().includes('/api/chat/cancel')) cancelRequests.push(r.postDataJSON())
+    })
+
+    const start = await page.request.post('/api/workflows/task_code_comment', {
+      data: {
+        pr,
+        file: 'test.php',
+        line: 1,
+        author: 'reviewer',
+        body: 'pas dit aan',
+        code: '$order->total();',
+        gran: 'call',
+        label: 'Order::total',
+      },
+    })
+    expect((await start.json()).runId).toBeTruthy()
+
+    await page.goto('/pr/' + pr)
+    await page.getByTestId('comment-item').first().click()
+    await page.keyboard.press('ArrowRight') // comment -> claude
+    const composer = page.getByTestId('claude-chat-compose')
+    await expect(composer).toBeFocused()
+    await composer.fill('doe iets')
+    await page.getByTestId('claude-chat-send').click()
+
+    // The werkmap choice arrives while THIS conversation's own turn is
+    // genuinely in flight.
+    open = true
+    releaseEvents()
+    await expect(page.getByTestId('workdir-overlay')).toBeVisible()
+
+    const pauseRow = page.getByTestId('workdir-overlay-option').filter({ hasText: 'Chat pauzeren' })
+    await expect(pauseRow).toContainText('stopt de lopende beurt')
+    await expect(pauseRow).toBeEnabled()
+
+    await pauseRow.click()
+    await expect.poll(() => cancelRequests.length).toBe(1)
+    // Answering-the-question rows are untouched: this option never sent a
+    // checkoutAnswer/checkoutRelist/checkoutOff Signal, only the cancel.
+    await expect(page.getByTestId('workdir-overlay')).toBeVisible()
+
+    releaseMessage()
   })
 })
 

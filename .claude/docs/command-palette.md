@@ -174,6 +174,28 @@ resumes a chat column stuck on the "keuze open" dead-end").
 the identifiers keep their `checkout*` names. See the naming rule in
 `.claude/docs/workflows-comments.md`.
 
+**The last row, "Chat pauzeren", is not a checkout answer at all.** Reviewer
+request: stop the currently anchored conversation's running turn without
+first closing the overlay and stepping into the Claude column's own "Stop"
+control. It calls `cancelClaudeTurn()` (`RelatedPanel.mjs`) directly — the
+exact same `POST /api/chat/cancel` the Stop button and "Stop deze
+Claude-beurt" palette item already call, see "The Stop control" in
+`.claude/docs/claude-chat-panel.md` — so it deliberately does **not** go
+through `act()`/`sendAction`: it never locks the rest of the list, never
+shows a busy/progress state, and never dismisses the overlay, since it does
+not answer the werkmap question at all (that question can still be open
+afterwards). `hasActiveClaudeTurn()` (also `RelatedPanel.mjs`) is scoped to
+the currently ANCHORED conversation, so this row is very often a no-op — the
+werkmap question is PR-wide and can arrive well after the visible
+conversation's own turn already finished with the "Ik kan nu geen code
+aanpassen" dead-end reply (see above). Per the colourblind rule, that "nothing
+to stop" state is carried by the row's own **label wording**
+("... (er loopt nu niets)" vs. "... (stopt de lopende beurt)") and a real
+`disabled` attribute/dimmed shape — never by colour alone. Test:
+`tests/checkout-overlay.spec.mjs` ("the "Chat pauzeren" row is disabled and
+says so when nothing is running" / "... stops the currently open
+conversation's running turn").
+
 **It steals DOM focus back the moment a choice opens.** The overlay never
 `.focus()`es anything of its own — its rows are only ever driven by
 `handleWorkDirOverlayKeydown` through the global `onKeydown`. If some other

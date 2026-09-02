@@ -25,6 +25,7 @@
 // it is open.
 import { reactive, html, watch } from './vendor/arrow.js'
 import { t } from './i18n.mjs'
+import { cancelClaudeTurn, hasActiveClaudeTurn } from './RelatedPanel.mjs'
 
 // state/sendAction are injected once by home.mjs (initWorkDirOverlay) so the
 // exported isOpen/handleKeydown hooks stay argument-free at the call site,
@@ -171,6 +172,29 @@ function rows() {
   }
   out.push({ key: 'choose', label: t('Andere werkmap kiezen'), run: () => act('checkoutRelist', undefined, 'choose') })
   out.push({ key: 'off', label: t('Uit (geen werkmap koppelen)'), run: () => act('checkoutOff', undefined, 'off') })
+  // "Chat pauzeren" — deliberately last, and deliberately NOT one of the
+  // options above: it does not answer the werkmap question at all, it just
+  // stops the currently anchored conversation's own running turn (the same
+  // cancelClaudeTurn()/POST /api/chat/cancel the "Stop"-button and "Stop deze
+  // Claude-beurt" palette item already call, see .claude/docs/claude-chat-panel.md),
+  // so it never goes through act()/sendAction and never locks/dismisses this
+  // overlay. hasActiveClaudeTurn() is per the currently ANCHORED conversation
+  // (RelatedPanel.mjs), so this can legitimately be a no-op most of the time
+  // — the werkmap question is PR-wide and can arrive while the visible
+  // conversation's own turn already finished (see the "Ik kan nu geen code
+  // aanpassen" dead-end reply). The colourblind rule applies here too: the
+  // "nothing to stop" state is carried by the LABEL WORDING and the real
+  // `disabled` attribute/dimmed shape (see rowClass below), never by colour
+  // alone.
+  const pauseActive = hasActiveClaudeTurn()
+  out.push({
+    key: 'pauseChat',
+    label: pauseActive ? t('Chat pauzeren (stopt de lopende beurt)') : t('Chat pauzeren (er loopt nu niets)'),
+    disabled: !pauseActive,
+    run: () => {
+      if (pauseActive) cancelClaudeTurn()
+    },
+  })
   return out
 }
 
@@ -279,6 +303,13 @@ function rowClass(row, i) {
   if (wd.busyKey) {
     return base + 'opacity-40 text-slate-400 dark:text-zinc-600'
   }
+  // row.disabled — currently only the "Chat pauzeren" row, when there is no
+  // running turn to stop. Same dimmed look as the busyKey-locked branch above
+  // (shape, not colour, carries the "cannot interact" meaning), plus the
+  // wording change in rows() above.
+  if (row.disabled) {
+    return base + 'opacity-40 text-slate-400 dark:text-zinc-600 cursor-not-allowed'
+  }
   return (
     base +
     (selIndex() === i
@@ -345,7 +376,7 @@ function overlayPanel() {
                   data-testid="workdir-overlay-option"
                   data-active="${() => (selIndex() === i ? 'true' : 'false')}"
                   data-busy="${() => (wd.busyKey === row.key ? 'true' : 'false')}"
-                  disabled="${() => wd.busyKey !== ''}"
+                  disabled="${() => wd.busyKey !== '' || !!row.disabled}"
                   class="${() => rowClass(row, i)}"
                   @click="${(e) => {
                     if (e) e.stopPropagation()
