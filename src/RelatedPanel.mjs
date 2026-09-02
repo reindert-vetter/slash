@@ -2225,6 +2225,42 @@ function syncClaudeAnchorForSelection() {
 // the callback via chatAnchorComment()/selComment().
 watch(() => [cs.sel, cs.focus, cs.list, cs.scopeSig], syncClaudeAnchorForSelection)
 
+// chatSeenAtCache — the most recently known server seen_at per conversation,
+// refreshed by every loadChatMessages call regardless of applyDrafts, so the
+// dwell timer below can compare against it without a second fetch.
+const chatSeenAtCache = new Map()
+
+// Marking a conversation "seen" requires the reviewer to have actually looked
+// at it for a few continuous seconds — merely opening it and immediately
+// navigating away (e.g. flicking through comments with ↑/↓) must not
+// mark it read. scheduleChatSeenDwell (re)arms a timer for the CURRENT
+// cs.focus==='claude' + cc.commentId pair; the watch below restarts it on
+// every real focus/conversation change, which also cancels a stale timer for
+// whatever was being viewed before. See "Marking it read" in
+// claude-chat-panel.md.
+const CHAT_SEEN_DWELL_MS = 5000
+let chatSeenDwellTimer = null
+
+function scheduleChatSeenDwell() {
+  if (chatSeenDwellTimer) {
+    clearTimeout(chatSeenDwellTimer)
+    chatSeenDwellTimer = null
+  }
+  if (cs.focus !== 'claude' || cc.commentId == null) return
+  const commentId = cc.commentId
+  chatSeenDwellTimer = setTimeout(() => {
+    chatSeenDwellTimer = null
+    // Still genuinely viewing the SAME conversation after the full dwell?
+    if (cs.focus !== 'claude' || cc.commentId !== commentId) return
+    const lastAt = lastAssistantMessageAt(cc.messages)
+    const seenAt = chatSeenAtCache.get(commentId) || ''
+    if (lastAt && lastAt > seenAt) markChatSeenOnServer(commentId)
+    setChatUnread(commentId, false)
+  }, CHAT_SEEN_DWELL_MS)
+}
+
+watch(() => [cs.focus, cc.commentId], scheduleChatSeenDwell)
+
 // loadChatConversations refreshes cc.conversations for pr — read-only GET, so
 // it rides along with the comment poll (loadComments) rather than owning a
 // timer of its own.
@@ -2408,17 +2444,14 @@ async function loadChatMessages(commentId, applyDrafts = true) {
     cc.summary = json.summary || ''
     cc.summaryStatus = json.summaryStatus || ''
     cc.status = 'idle'
+    // Cache the server's seen_at unconditionally (not just when applyDrafts
+    // is true) so the dwell timer above can read it later without its own
+    // fetch. Marking as seen itself is NOT done here anymore — see
+    // scheduleChatSeenDwell, which only fires after a genuine few-second
+    // dwell on this exact conversation, never on a bare open.
+    chatSeenAtCache.set(commentId, json.seenAt || '')
     if (applyDrafts) {
       applyPendingDraftReplies(commentId)
-      // The reviewer is genuinely OPENING this conversation (applyDrafts is
-      // false for the passive preload in syncClaudeAnchorForSelection) —
-      // "looking at it counts as seeing it" (see clearTurnAnswered's own
-      // session-only counterpart). Only sends the Signal when there is
-      // actually something newer than the stored seen_at, to avoid a Signal
-      // per ordinary re-open. See chatUnread.mjs's own doc comment.
-      const lastAt = lastAssistantMessageAt(cc.messages)
-      if (lastAt && lastAt > (json.seenAt || '')) markChatSeenOnServer(commentId)
-      setChatUnread(commentId, false)
     }
     scrollClaudeThreadToBottom()
   } catch (_) {

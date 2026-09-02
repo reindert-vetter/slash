@@ -1077,14 +1077,23 @@ reason `claudeTurns.mjs` is standalone: `BlockList.mjs`'s own row
 - **`isChatUnread(c)`** — the cached boolean; `undefined` (never fetched yet)
   reads as "not unread" so a row shows no icon until the fetch resolves,
   rather than flashing one speculatively.
-- **Marking it read**: `RelatedPanel.mjs`'s `loadChatMessages`, in its
-  `applyDrafts === true` branch (i.e. the reviewer is genuinely OPENING the
-  conversation, not the passive preload `syncClaudeAnchorForSelection` uses)
-  — compares the just-loaded transcript's last assistant message against the
-  response's own `seenAt` and calls `markChatSeenOnServer` only when there is
-  actually something newer (avoiding a Signal on every ordinary re-open), and
-  calls **`setChatUnread(commentId, false)`** unconditionally so the icon
-  clears immediately, optimistically, without waiting for the round trip.
+- **Marking it read requires a 5-second dwell, not a bare open.** Reviewer
+  report: flicking through comments with ↑/↓ marked each conversation's
+  answer as seen the instant its transcript loaded, even though nothing was
+  actually read. `RelatedPanel.mjs`'s `loadChatMessages` now only CACHES the
+  response's own `seenAt` (`chatSeenAtCache`, keyed by conversation id,
+  refreshed on every load regardless of `applyDrafts`) instead of marking
+  anything read itself. The actual marking is `scheduleChatSeenDwell`, armed
+  by `watch(() => [cs.focus, cc.commentId], scheduleChatSeenDwell)`: any real
+  change of focus or conversation clears a pending timer and — only while
+  `cs.focus === 'claude'` and `cc.commentId` is set — arms a fresh 5s
+  (`CHAT_SEEN_DWELL_MS`) one for that exact pair. When it fires it re-checks
+  the reviewer is STILL on that same conversation (otherwise a no-op), then
+  compares the transcript's last assistant message against the cached
+  `seenAt` and calls `markChatSeenOnServer` only when there is actually
+  something newer (avoiding a Signal on every ordinary re-open), and calls
+  **`setChatUnread(commentId, false)`** so the icon clears — but only after
+  the dwell, never immediately on open.
 - **Invalidation**: the existing `chat.message` SSE handler
   (`ensureChatEvents`) drops a FOREIGN conversation's cached entry
   (`dropChatUnreadCache`) the same way it already drops `otherTaskTitles`' —
