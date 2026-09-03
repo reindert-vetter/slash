@@ -492,7 +492,12 @@ used by both pages.
   **not** `localStorage` like the theme, because it gates backend behaviour
   the server must read at trigger time; see "AI risk check of the whole PR" in
   `.claude/docs/workflows-analysis.md` for the full mechanism. The store,
-  endpoint and workflow keep the original `autowarn` name.
+  endpoint and workflow keep the original `autowarn` name. **The same
+  `autoWarnToggleButton` is reused unchanged in `overview.mjs`'s
+  `headerBlock`** (next to `autoIngestPrefToggleButton`, before the theme
+  icon), so the switch is also reachable from `/pr-overview` without opening a
+  PR first — `ensureAutoWarn()` is called once at that page's own load, same
+  as `home.mjs` already does.
 
 `overview.html` once forced dark mode (`<html class="dark">` +
 `darkMode:'class'`, bare `zinc-*` classes with no `dark:` variant); removed —

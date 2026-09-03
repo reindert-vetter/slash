@@ -13,6 +13,7 @@ import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { initTheme, themeToggleButton } from './theme.mjs'
 import { initDebugLog } from './debugLog.mjs'
 import { ensureAutoIngestPref, autoIngestPrefToggleButton } from './autoingestpref.mjs'
+import { ensureAutoWarn, autoWarnToggleButton } from './autowarn.mjs'
 import { settingsButton } from './settingsLink.mjs'
 import { avatarHTML, avatarUrlOf, displayNameOf, ensureMe, ensureNames, fullNameOf, meLogin } from './avatar.mjs'
 import { relativeTime } from './relativeTime.mjs'
@@ -1783,6 +1784,7 @@ function headerBlock() {
           }}</span
         >
         ${autoIngestPrefToggleButton()}
+        ${autoWarnToggleButton()}
         ${themeToggleButton('h-7 w-7')}
         ${settingsButton('h-7 w-7')}
       </div>
@@ -3389,4 +3391,5 @@ loadInbox()
 loadProblems()
 loadRunningCount()
 ensureAutoIngestPref()
+ensureAutoWarn()
 scheduleRepaint()
