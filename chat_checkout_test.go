@@ -754,6 +754,35 @@ func TestPrepareChatShellWorkDirAsksWhenMultipleCandidates(t *testing.T) {
 	}
 }
 
+// Reported bug: two different open PRs both showed the same local-checkout
+// folder pill on /pr-overview, because the ladder never excluded a directory
+// another PR had already claimed — only a directory the reviewer explicitly
+// rejected (a.Excluded). Here PR 1006 already owns c1; PR 1007's own ladder
+// run, offered the exact same 2 registered candidates, must skip c1 and
+// auto-pick c2 instead of either reusing c1 or asking an ambiguous
+// "choose between c1/c2" question that could still land on c1.
+func TestPrepareChatShellWorkDirNeverReusesAnotherPRsAssignedDir(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	c1 := cloneCheckoutDir(t, bareDir, "feature/x")
+	c2 := cloneCheckoutDir(t, bareDir, "feature/x")
+	writeCheckoutSettings(t, dataDir, c1, c2)
+
+	assignCheckoutForTest(t, "", 1006, c1)
+
+	dir, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1007, "", "feature/x")
+	if decision != nil {
+		t.Fatalf("unexpected decision: %+v", decision)
+	}
+	if !ok {
+		t.Fatal("expected an automatic pick, got !ok")
+	}
+	if dir != c2 {
+		t.Fatalf("dir = %q, want the free candidate %q (never the in-use %q)", dir, c2, c1)
+	}
+}
+
 // selectCheckoutCandidate is a pure function — no git needed at all — so its
 // own decision logic (none/one/many) is tested directly.
 func TestSelectCheckoutCandidate(t *testing.T) {

@@ -808,6 +808,51 @@ func persistCheckoutAssignment(dataDir, repo string, pr int, a *chatCheckoutAssi
 	savePersistedCheckout(dataDir, repo, pr, a.Dir, a.Branch)
 }
 
+// checkoutDirsInUseByOtherPRs returns the directories currently assigned (in
+// this very process) to some OTHER PR of the same repo — so the ladder never
+// hands the same local checkout to two PRs at once. Without this,
+// listCheckoutCandidates only ever excluded a directory the reviewer had
+// explicitly rejected (a.Excluded), never one another PR's own assignment
+// already claims; the reported bug was two different open PRs both showing
+// the same "plug-and-pay-2" folder pill on /pr-overview, because the second
+// PR's ladder run auto-picked (or was offered, via "andere directory
+// kiezen") a directory the first PR was already using — leaving the first
+// PR's own stored assignment silently stale until its next write turn
+// happens to re-classify it (prepareChatShellWorkDirAt's `a.Dir != ""`
+// branch).
+func checkoutDirsInUseByOtherPRs(repo string, pr int) map[string]bool {
+	chatCheckoutMu.Lock()
+	defer chatCheckoutMu.Unlock()
+	inUse := map[string]bool{}
+	for key, a := range chatCheckoutByPR {
+		if key.Repo != repo || key.PR == pr || a == nil || a.Dir == "" {
+			continue
+		}
+		inUse[a.Dir] = true
+	}
+	return inUse
+}
+
+// withExcludedDirsInUseElsewhere unions base (a PR's own explicit rejections)
+// with the directories checkoutDirsInUseByOtherPRs finds, without mutating
+// base itself — base is the PR's own persisted Excluded map and must keep
+// meaning exactly "the reviewer said no to this one", not gain entries that
+// would vanish again once the other PR releases the directory.
+func withExcludedDirsInUseElsewhere(base map[string]bool, repo string, pr int) map[string]bool {
+	inUse := checkoutDirsInUseByOtherPRs(repo, pr)
+	if len(inUse) == 0 {
+		return base
+	}
+	merged := make(map[string]bool, len(base)+len(inUse))
+	for d := range base {
+		merged[d] = true
+	}
+	for d := range inUse {
+		merged[d] = true
+	}
+	return merged
+}
+
 // checkoutChoiceOpen reports whether this PR has an unresolved work-directory
 // choice at all, regardless of who raised it. It is how a caller of
 // prepareChatShellWorkDir tells the ownership guard's "not now" apart from a
@@ -1294,7 +1339,7 @@ func prepareChatShellWorkDirAt(ctx context.Context, tm *TaskManager, dataDir, re
 			return a.Dir, nil, true
 		}
 
-		candidates, diag := listCheckoutCandidates(ctx, dataDir, slug, headRef, baseBranch, a.Excluded)
+		candidates, diag := listCheckoutCandidates(ctx, dataDir, slug, headRef, baseBranch, withExcludedDirsInUseElsewhere(a.Excluded, repo, pr))
 		if diag.Err != nil && tm != nil && tm.logf != nil {
 			tm.logf("chat_checkout: pr %d: listing candidates: %v", pr, diag.Err)
 		}
@@ -1961,7 +2006,7 @@ func relistCheckoutCandidates(ctx context.Context, tm *TaskManager, dataDir, rep
 	a.Excluded = map[string]bool{}
 	persistCheckoutAssignment(dataDir, repo, pr, a)
 
-	candidates, diag := listCheckoutCandidates(ctx, dataDir, slug, meta.HeadRefName, baseBranch, nil)
+	candidates, diag := listCheckoutCandidates(ctx, dataDir, slug, meta.HeadRefName, baseBranch, withExcludedDirsInUseElsewhere(nil, repo, pr))
 	if diag.Err != nil && tm != nil && tm.logf != nil {
 		tm.logf("chat_checkout: pr %d: relist: listing candidates: %v", pr, diag.Err)
 	}
