@@ -6,6 +6,7 @@
 package github
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -1017,8 +1018,13 @@ func (m *Module) api(ctx context.Context, method, endpoint string, args ...strin
 	defer cancel()
 	full := append([]string{"api", "--method", method, endpoint}, args...)
 	cmd := exec.CommandContext(ctx, "gh", full...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return nil, fmt.Errorf("gh api %s %s: %w: %s", method, endpoint, err, msg)
+		}
 		return nil, fmt.Errorf("gh api %s %s: %w", method, endpoint, err)
 	}
 	return out, nil
