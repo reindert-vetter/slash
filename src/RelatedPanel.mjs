@@ -1043,8 +1043,17 @@ function exitRelated() {
   cs.claudeTasksPos = 0
   cs.editLinkSel = 0
   releaseFocus() // a focus request still in flight must not land after this
+  // Only blur a field that actually lives INSIDE the detail panel (the
+  // composer/reply field this function means to drop) — never whatever else
+  // happens to hold DOM focus elsewhere on the page. This watch
+  // (state.selected in home.mjs) also fires when the reviewer TYPES in the
+  // blocks-index search box (setSearch resets state.selected), which made
+  // document.activeElement the search box itself and blurred it after every
+  // single keystroke — reported bug: "ik kan niet in de blokken index search
+  // iets typen, want de focus gaat er gelijk uit als ik type".
   const el = document.activeElement
-  if (el && el.blur) el.blur()
+  const panel = document.querySelector('[data-testid="detail-panel"]')
+  if (el && el.blur && panel && panel.contains(el)) el.blur()
 }
 export { exitRelated as leaveRelated }
 

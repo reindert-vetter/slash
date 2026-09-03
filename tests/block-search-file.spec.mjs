@@ -41,4 +41,19 @@ test.describe('PR Review Tree — searching startpunten by file path', () => {
     await box.fill('')
     await expect(rows).toHaveCount(11)
   })
+
+  // Regression: typing filters the list (setSearch resets state.selected),
+  // which used to fire RelatedPanel's exitRelated() and blur whatever
+  // document.activeElement happened to be — the search box itself — after
+  // every single keystroke. See exitRelated's own doc comment in
+  // RelatedPanel.mjs.
+  test('typing keeps the search box focused and accumulates the whole word', async ({ page }) => {
+    await page.goto('/pr/12903')
+    const box = page.getByTestId('block-search')
+    await box.click()
+    await box.pressSequentially('billingAddress')
+    await expect(box).toBeFocused()
+    await expect(box).toHaveValue('billingAddress')
+    await expect(page.getByTestId('block-row')).toHaveCount(1)
+  })
 })
