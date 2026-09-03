@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"regexp"
@@ -3715,14 +3716,56 @@ func submitReviewWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	return json.Marshal(map[string]any{"pr": in.PR, "event": in.Event})
 }
 
+// rejectSelfReview reports an error when the PR's own author and the
+// authenticated gh user (the identity that will actually run `gh api POST
+// .../reviews` — deliberately NOT the settings.json "me" override, which is
+// only a display/mention-matching convenience, see "Who am I" in
+// conventions.md) are the same login. GitHub itself refuses a review
+// submission in that case, which used to surface as a bare "exit status 1"
+// once it reached gh (see the PR-13535 diagnosis) — this fails fast with a
+// readable message instead of ever starting a workflow that can only fail.
+//
+// Best-effort in the OTHER direction: if the author or the current user
+// can't be determined at all (no prmeta row yet, a gh hiccup), the check is
+// silently skipped and the request proceeds — this is a UX guard against a
+// known-impossible action, not a security boundary, and must never block a
+// legitimate review just because a lookup failed.
+func (m *TaskManager) rejectSelfReview(ctx context.Context, in SubmitReviewInput) error {
+	if m.prmeta == nil {
+		return nil
+	}
+	meta, ok, err := m.prmeta.Get(ctx, in.Repo, in.PR)
+	if err != nil || !ok || meta.Author == "" {
+		return nil
+	}
+	me, err := m.CurrentUser(ctx)
+	if err != nil || me.Login == "" {
+		return nil
+	}
+	if strings.EqualFold(meta.Author, me.Login) {
+		return errSelfReview
+	}
+	return nil
+}
+
+// errSelfReview is rejectSelfReview's sentinel — handleSubmitReview checks it
+// with errors.Is to answer with 400 (a client-side, "this can never work"
+// request) instead of the 502 it uses for a genuine gh/workflow failure.
+var errSelfReview = errors.New("cannot submit a review on your own pull request")
+
 // StartSubmitReview runs the submit_review Workflow Execution for in to
 // completion (StartWorkflow drives a signal-less workflow synchronously) and
 // returns its Run ID. Starting an Execution is the sanctioned write path —
 // this is the only way a real GitHub PR-level review gets submitted. Unlike
 // resolve_call/explain_code (best-effort LLM lookups that never fail the
 // caller), a failed GitHub submission must reach the caller as an error —
-// mirrors StartIngest's status check.
-func (m *TaskManager) StartSubmitReview(in SubmitReviewInput) (string, error) {
+// mirrors StartIngest's status check. rejectSelfReview runs first (a plain
+// read, so it needs no workflow of its own) so a doomed self-review never
+// even creates a failed Execution.
+func (m *TaskManager) StartSubmitReview(ctx context.Context, in SubmitReviewInput) (string, error) {
+	if err := m.rejectSelfReview(ctx, in); err != nil {
+		return "", err
+	}
 	runID, err := m.engine.StartWorkflow(WorkflowSubmitReview, in)
 	if err != nil {
 		return "", err

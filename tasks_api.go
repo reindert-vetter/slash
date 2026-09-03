@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -2845,9 +2846,13 @@ func (s *server) handleSubmitReview(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	runID, err := s.tasks.manager.StartSubmitReview(in)
+	runID, err := s.tasks.manager.StartSubmitReview(r.Context(), in)
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		status := http.StatusBadGateway
+		if errors.Is(err, errSelfReview) {
+			status = http.StatusBadRequest
+		}
+		writeJSON(w, status, map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})

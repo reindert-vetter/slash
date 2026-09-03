@@ -191,7 +191,7 @@ import { ensureAutoWarn, autoWarnToggleButton, autoWarn } from './autowarn.mjs'
 import { settingsButton } from './settingsLink.mjs'
 import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
 import TestMethodsColumn from './TestMethodsColumn.mjs'
-import { meLogin } from './avatar.mjs'
+import { meLogin, ensureMe } from './avatar.mjs'
 import { relativeTime } from './relativeTime.mjs'
 // Only the fetch wrapper is needed here now: the rows themselves are rendered
 // by the merged "Taken" block (TasksPanel, RelatedPanel.mjs), not by a separate
@@ -9043,6 +9043,19 @@ function jumpToCommentRow(commentId) {
   applyCommentRefRestore()
 }
 
+// isOwnPR reports whether the PR's own GitHub author and the locally
+// authenticated gh user are the same login. GitHub itself refuses a review
+// submission (approve OR request-changes) in that case (see rejectSelfReview,
+// workflows.go, the backend's own defense-in-depth for the identical rule) —
+// reported bug: submitting a review on your own PR failed with a bare
+// "exit status 1" in the failed-tasks list. Every caller must `await
+// ensureMe()` first (openReviewMenu below does) — meLogin() reads a plain
+// cached value that is '' until that resolves, which would otherwise read as
+// "not my PR" on a cold page load.
+function isOwnPR() {
+  return !!(state.prMeta.author && meLogin() && state.prMeta.author.toLowerCase() === meLogin().toLowerCase())
+}
+
 // REVIEW_APPROVE_COMMANDS — shown right after a palette approve action leaves
 // the WHOLE PR fully approved (state.approvalTotal.done === total, over every
 // top-level block plus its nested/drilled PR-block children — see
@@ -9065,6 +9078,10 @@ const REVIEW_APPROVE_COMMANDS = withClose([
     hint: 'approve',
     icon: 'approve-pr',
     children: REVIEW_APPROVE_CONFIRM_COMMANDS,
+    // On your own PR this is the ONLY real item here — see isOwnPR — so
+    // hiding it leaves nothing but "Sluit menu"; openReviewMenu below skips
+    // opening this menu entirely in that case rather than showing that.
+    when: () => !isOwnPR(),
   },
 ])
 
@@ -9085,6 +9102,10 @@ const REVIEW_APPROVE_COMMANDS = withClose([
 // (colorblind rule: the tint is decoration on top only). "Sluit menu" is
 // pinned first (withClose); the menu opens on the 2nd item (defaultSel), so
 // "Keur de HELE PR goed" stays the default Enter action.
+// Both real items are gated on !isOwnPR() (see isOwnPR) — GitHub refuses
+// EITHER a self-approve or a self-request-changes, so on your own PR nothing
+// here can ever succeed. openReviewMenu skips opening this menu entirely
+// when that leaves nothing but "Sluit menu" (see its own doc comment).
 const REVIEW_CHOICE_COMMANDS = withClose([
   {
     id: 'review-choice-approve',
@@ -9092,6 +9113,7 @@ const REVIEW_CHOICE_COMMANDS = withClose([
     hint: 'approve',
     icon: 'approve-pr',
     children: REVIEW_APPROVE_CONFIRM_COMMANDS,
+    when: () => !isOwnPR(),
   },
   {
     id: 'review-choice-reject',
@@ -9099,8 +9121,44 @@ const REVIEW_CHOICE_COMMANDS = withClose([
     hint: 'reject',
     icon: 'reject-pr',
     run: () => openMenu('reviewReject'),
+    when: () => !isOwnPR(),
   },
 ])
+
+// hasRealCommands reports whether an already-snapshotted command list (see
+// snapshotCommands — `when` already evaluated) holds anything besides the
+// pinned "Sluit menu" row.
+function hasRealCommands(list) {
+  return list.some((c) => c.id !== 'close-menu')
+}
+
+// openReviewMenu opens the review-submit menu (mode 'reviewApprove' or
+// 'reviewChoice') — unless doing so, after isOwnPR() strips the approve/
+// reject item(s) (see REVIEW_APPROVE_COMMANDS/REVIEW_CHOICE_COMMANDS), would
+// leave nothing but "Sluit menu" to show. In that case (always true for your
+// own PR, since both modes' only real items are gated the same way) the menu
+// is skipped entirely and the reviewer is sent straight to the PR overview
+// instead — reviewer request: "menu overslaan als er geen andere keuzes zijn
+// dan sluiten enzo, ga dan direct naar pr overview". Deliberately
+// `overviewExitUrl()` (keeps `sel`/`drill`), not `overviewExitUrlAfterApprove()`
+// — no review was actually submitted here, so there is nothing to treat as
+// "this PR is now done, drop the context" the way the confirmed-approve path
+// does.
+// Used by the two automatic end-of-review call sites (afterApproveAction's
+// offerReviewSubmitFollowup and the Space-key branch) instead of calling
+// openMenu(mode) directly — the manual "PR keuren" menu item (PR_COMMANDS)
+// reaches the same REVIEW_CHOICE_COMMANDS list through the ordinary
+// `children` submenu mechanism instead, where runCommand's own
+// hasRealCommands check (see there) applies the identical redirect.
+async function openReviewMenu(mode) {
+  await ensureMe()
+  const commands = snapshotCommands(rootCommandsFor(mode))
+  if (!hasRealCommands(commands)) {
+    location.href = overviewExitUrl()
+    return
+  }
+  openMenu(mode)
+}
 
 // resolveLabel/snapshotCommands materialize a command list's labels into plain
 // strings, calling any function label RIGHT NOW instead of leaving it as a live
@@ -12267,7 +12325,7 @@ async function offerReviewSubmitFollowup() {
   await Promise.resolve()
   await Promise.resolve()
   const allDone = state.approvalTotal.total > 0 && state.approvalTotal.done === state.approvalTotal.total
-  openMenu(allDone ? 'reviewApprove' : 'reviewChoice')
+  await openReviewMenu(allDone ? 'reviewApprove' : 'reviewChoice')
 }
 
 function afterApproveAction(approving, blockId, auto = false) {
@@ -12711,7 +12769,7 @@ function spaceKey() {
     await Promise.resolve()
     await Promise.resolve()
     const allDone = state.approvalTotal.total > 0 && state.approvalTotal.done === state.approvalTotal.total
-    openMenu(allDone ? 'reviewApprove' : 'reviewChoice')
+    await openReviewMenu(allDone ? 'reviewApprove' : 'reviewChoice')
   })
 }
 
@@ -12834,7 +12892,11 @@ const PR_COMMANDS = withClose([
         id: 'pr-github-review',
         // Manual entry point into the exact same approve/reject flow as the
         // automatic postApprove follow-up (see REVIEW_CHOICE_COMMANDS above) —
-        // reachable at any time, not only after approving the last unit.
+        // reachable at any time, not only after approving the last unit. On
+        // your own PR REVIEW_CHOICE_COMMANDS filters down to nothing but
+        // "Sluit menu" (see isOwnPR) — runCommand's `children` branch detects
+        // that and redirects to the PR overview instead of entering an
+        // empty submenu.
         label: t('PR keuren'),
         hint: 'review',
         icon: 'approve-pr',
@@ -13602,6 +13664,20 @@ function runCommand(cmd) {
   logAction('command', (cmd && (cmd.id || (typeof cmd.label === 'string' ? cmd.label : ''))) || '')
   // A parent command opens its submenu instead of acting; keep the palette open.
   if (cmd && cmd.children) {
+    // ...unless every real item in it was filtered out by `when` (currently
+    // only REVIEW_APPROVE_COMMANDS/REVIEW_CHOICE_COMMANDS, gated on isOwnPR —
+    // GitHub refuses a review submission on your own PR), leaving nothing but
+    // "Sluit menu" to show. Reviewer request: "menu overslaan als er geen
+    // andere keuzes zijn dan sluiten enzo, ga dan direct naar pr overview" —
+    // deliberately `overviewExitUrl()` (keeps `sel`/`drill`), not
+    // `overviewExitUrlAfterApprove()`, since no review was actually
+    // submitted here. See "PR keuren" (PR_COMMANDS) — the only entry point
+    // this can currently apply to.
+    if (!hasRealCommands(cmd.children)) {
+      closeMenu()
+      location.href = overviewExitUrl()
+      return
+    }
     enterSubmenu(cmd.children)
     return
   }
