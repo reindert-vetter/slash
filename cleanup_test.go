@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -89,7 +90,7 @@ func TestResolveCleanupTargets(t *testing.T) {
 	// PR 4: unparsable mergedAt (defensive) -> skipped, not eligible.
 	gh.SetPRMetaFor(4, github.Meta{MergedAt: "not-a-date"})
 
-	targets, err := resolveCleanupTargets(context.Background(), gh, db, dataDir, CleanupInput{Cutoff: cutoff})
+	targets, err := resolveCleanupTargets(context.Background(), gh, db, dataDir, nil, CleanupInput{Cutoff: cutoff})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +117,7 @@ func TestResolveCleanupTargetsForcePRs(t *testing.T) {
 	// that would simply fail), so it can never pass the ordinary gate.
 	gh.SetPRMetaFor(1, github.Meta{MergedAt: cutoff.Add(-48 * time.Hour).Format(time.RFC3339)})
 
-	targets, err := resolveCleanupTargets(context.Background(), gh, db, dataDir, CleanupInput{
+	targets, err := resolveCleanupTargets(context.Background(), gh, db, dataDir, nil, CleanupInput{
 		Cutoff: cutoff, ForcePRs: []int{1, 970099},
 	})
 	if err != nil {
@@ -134,6 +135,52 @@ func TestResolveCleanupTargetsForcePRs(t *testing.T) {
 	}
 	if len(targets.Targets) != 2 {
 		t.Fatalf("targets = %+v, want exactly 2", targets.Targets)
+	}
+}
+
+// TestResolveCleanupTargetsOrphanRunNotFound proves the orphan-run-only pass
+// (a PR with workflow runs but no blocks/pr_ingest/worktree trace at all,
+// e.g. a synthetic PR number accidentally started against a live server —
+// see "Reserved PR numbers" in .claude/docs/testing-playwright.md) is purged
+// only once gh gives a DEFINITIVE "this PR does not exist" (HTTP 404), never
+// on a PR that genuinely exists but simply hasn't been ingested yet, and
+// never on a transient gh failure.
+func TestResolveCleanupTargetsOrphanRunNotFound(t *testing.T) {
+	ctm := newCleanupTestManager(t)
+	now := time.Date(2024, 1, 20, 0, 0, 0, 0, time.UTC)
+	cutoff := now.Add(-cleanupMergedAge)
+
+	// PR 500: only a task_code_comment run, no blocks/pr_ingest/worktree at
+	// all -> an orphan-run candidate. gh confirms it doesn't exist.
+	startOrphanCandidate(t, ctm, 500)
+	ctm.gh.SetPRMetaErr(500, fmt.Errorf("gh api GET repos/o/r/pulls/500: exit status 1: gh: Not Found (HTTP 404)"))
+
+	// PR 501: same shape, but gh reports it as a real, still-open PR (not yet
+	// ingested) -> must never be purged.
+	startOrphanCandidate(t, ctm, 501)
+	ctm.gh.SetPRMetaFor(501, github.Meta{MergedAt: ""})
+
+	// PR 502: same shape, but gh only fails transiently (no "HTTP 404") ->
+	// must never be purged either.
+	startOrphanCandidate(t, ctm, 502)
+	ctm.gh.SetPRMetaErr(502, fmt.Errorf("gh api GET repos/o/r/pulls/502: exit status 1: network hiccup"))
+
+	targets, err := resolveCleanupTargets(context.Background(), ctm.gh, ctm.graphDB, ctm.dataDir, ctm.mgr.engine, CleanupInput{Cutoff: cutoff})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[int]bool{}
+	for _, target := range targets.Targets {
+		seen[target.PR] = true
+	}
+	if !seen[500] {
+		t.Fatalf("targets = %+v, want pr 500 (confirmed not found)", targets.Targets)
+	}
+	if seen[501] {
+		t.Fatalf("targets = %+v, pr 501 must never be purged (a real, not-yet-ingested PR)", targets.Targets)
+	}
+	if seen[502] {
+		t.Fatalf("targets = %+v, pr 502 must never be purged (a transient gh failure)", targets.Targets)
 	}
 }
 

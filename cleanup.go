@@ -251,6 +251,52 @@ func cleanupCandidatePRs(db *sql.DB, dataDir string) ([]int, error) {
 	return out, nil
 }
 
+// isPRNotFoundErr reports whether err is gh's own DEFINITIVE "this PR number
+// does not exist" response — a REST 404, which `gh api` itself renders as a
+// "gh: Not Found (HTTP 404)"-shaped stderr line (see Module.api's stderr
+// capture in modules/github/github.go). Deliberately narrow: a transient
+// failure (network hiccup, auth issue, rate limit) never contains "HTTP 404"
+// and must never be treated as grounds to purge data.
+func isPRNotFoundErr(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "HTTP 404")
+}
+
+// orphanRunPRs returns every PR number referenced by a workflow run's stored
+// "pr" input field (the same field deletePRWorkflowRuns/RunsForPR match on)
+// that is NOT already in known — i.e. a PR that has trackers/comment-import
+// runs going but was never actually ingested (no blocks/pr_ingest row, no
+// worktree). Typically a synthetic/test PR number that ended up started
+// against a live server by mistake (see "Reserved PR numbers" in
+// .claude/docs/testing-playwright.md) — the daily cleanup pass otherwise
+// never even considers it, since cleanupCandidatePRs has no other way to
+// find it. Read-only.
+func orphanRunPRs(engine *tembed.Engine, known map[int]bool) ([]int, error) {
+	runs, err := engine.Runs()
+	if err != nil {
+		return nil, err
+	}
+	seen := map[int]bool{}
+	for _, r := range runs {
+		in, err := engine.Input(r.ID)
+		if err != nil {
+			continue
+		}
+		var input struct {
+			PR int `json:"pr"`
+		}
+		if json.Unmarshal(in, &input) != nil || input.PR <= 0 || known[input.PR] {
+			continue
+		}
+		seen[input.PR] = true
+	}
+	out := make([]int, 0, len(seen))
+	for pr := range seen {
+		out = append(out, pr)
+	}
+	sort.Ints(out)
+	return out, nil
+}
+
 // resolveCleanupTargets determines which of the currently-stored PRs are
 // really merged (not just closed) and merged before in.Cutoff — read-only
 // (github + DB + disk reads), the cleanup workflow's first Activity. A PR
@@ -258,7 +304,11 @@ func cleanupCandidatePRs(db *sql.DB, dataDir string) ([]int, error) {
 // or whose merge date can't be determined (a transient gh hiccup, or an
 // unparsable timestamp) is simply left out — cleanup only ever removes data
 // it's certain about.
-func resolveCleanupTargets(ctx context.Context, gh github.Client, db *sql.DB, dataDir string, in CleanupInput) (CleanupTargets, error) {
+//
+// engine is used only for the orphan-run-only pass below (see orphanRunPRs);
+// a nil engine (existing callers/tests that don't exercise that pass) simply
+// skips it, exactly as before this pass existed.
+func resolveCleanupTargets(ctx context.Context, gh github.Client, db *sql.DB, dataDir string, engine *tembed.Engine, in CleanupInput) (CleanupTargets, error) {
 	res := CleanupTargets{Cutoff: in.Cutoff}
 
 	// Forced PRs are added unconditionally, before the ordinary candidates are
@@ -298,6 +348,33 @@ func resolveCleanupTargets(ctx context.Context, gh github.Client, db *sql.DB, da
 			continue // merged, but not old enough yet
 		}
 		res.Targets = append(res.Targets, CleanupTarget{PR: pr, MergedAt: mergedAt})
+	}
+
+	// Orphan-run-only candidates: never ingested (no blocks/pr_ingest/worktree
+	// trace), so invisible to cleanupCandidatePRs above, yet still have
+	// workflow runs referencing them. Purged only when gh gives a DEFINITIVE
+	// "this PR number does not exist" (isPRNotFoundErr) — a real PR that
+	// simply hasn't been ingested yet (e.g. its pr_status tracker started but
+	// nobody clicked "Generate review tree") reports no error at all and is
+	// correctly left alone; likewise any transient gh failure.
+	if engine != nil {
+		known := map[int]bool{}
+		for _, pr := range prs {
+			known[pr] = true
+		}
+		for pr := range forced {
+			known[pr] = true
+		}
+		orphanPRs, err := orphanRunPRs(engine, known)
+		if err != nil {
+			return res, fmt.Errorf("orphan run prs: %w", err)
+		}
+		for _, pr := range orphanPRs {
+			if _, err := gh.PRMeta(ctx, pr); !isPRNotFoundErr(err) {
+				continue // exists, or an inconclusive error — never guess
+			}
+			res.Targets = append(res.Targets, CleanupTarget{PR: pr})
+		}
 	}
 	return res, nil
 }

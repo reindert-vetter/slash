@@ -2844,7 +2844,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if err := json.Unmarshal(in, &arg); err != nil {
 			return nil, err
 		}
-		targets, err := resolveCleanupTargets(ctx, m.gh, m.db, m.dataDir, arg)
+		targets, err := resolveCleanupTargets(ctx, m.gh, m.db, m.dataDir, m.engine, arg)
 		if err != nil {
 			return nil, err
 		}

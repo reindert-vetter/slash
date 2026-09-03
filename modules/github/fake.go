@@ -33,6 +33,7 @@ type Fake struct {
 	prState          string               // "" reads as "open"
 	prMeta           Meta                 // returned by PRMeta (SetPRMeta overrides), PR-independent fallback
 	prMetas          map[int]Meta         // per-PR override (SetPRMetaFor), checked first
+	prMetaErrs       map[int]error        // per-PR error override (SetPRMetaErr), checked before prMetas
 	changesSince     map[int]SinceChanges // per-PR ChangesSince stub (SetChangesSince)
 	viewed           map[string]bool      // "pr|path" -> viewed
 
@@ -183,10 +184,25 @@ func (f *Fake) SetPRState(state string) {
 func (f *Fake) PRMeta(_ context.Context, pr int) (Meta, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err, ok := f.prMetaErrs[pr]; ok {
+		return Meta{}, err
+	}
 	if m, ok := f.prMetas[pr]; ok {
 		return m, nil
 	}
 	return f.prMeta, nil
+}
+
+// SetPRMetaErr makes PRMeta(pr) return err instead of a Meta — for simulating
+// a definitive "this PR does not exist" (gh's own "HTTP 404" text) or any
+// other gh failure, checked before SetPRMetaFor/the PR-independent fallback.
+func (f *Fake) SetPRMetaErr(pr int, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.prMetaErrs == nil {
+		f.prMetaErrs = map[int]error{}
+	}
+	f.prMetaErrs[pr] = err
 }
 
 // ChangesSince reports whatever SetChangesSince stored for pr (an empty
