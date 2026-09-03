@@ -1074,6 +1074,26 @@ instead of committing upfront to full shell access:
    falls back to the plain, tool-less `claude.ChatSystemPrompt`. Either way this
    ONE call answers the large majority of turns (explaining code, answering a
    question) at essentially zero extra cost over the old tool-less baseline.
+
+   **One exception, added later: a checkout that is AHEAD wins.** Reviewer
+   report (PR 13606): two conversations of the same PR gave opposite answers
+   to "is dit nu weg in de repo?" — one had escalated and read the PR's own
+   assigned checkout (where Claude's edit was committed), the other answered
+   "nee, hij staat er nog: `<file>:83`" straight out of the head worktree,
+   which still sat on the pre-edit commit because that landing never happened
+   (see "The backstop for a MISSED LANDING" in
+   `.claude/docs/pending-push.md`). `prepareChatReadOnlyWorkDir` therefore
+   takes a `ctx` and first asks `checkoutAheadOfWorktree`: the checkout is
+   used only when it is really on the PR's own head branch AND its HEAD
+   **contains** the commit the worktree was built from (`merge-base
+   --is-ancestor`) — strictly further along, never merely different, because a
+   checkout that was simply never pulled is BEHIND the tree and reading it
+   would make the answers worse. Any git failure, or no assigned checkout at
+   all, falls back to the worktree exactly as before. A dirty tree is fine
+   here: a read commits nothing, and uncommitted work is often precisely what
+   the reviewer is asking about. Test:
+   `TestReadOnlyWorkDirPrefersACheckoutThatIsAhead`
+   (`chat_land_backstop_test.go`).
 2. **Attempt 2 (only on request).** The read-only prompt teaches the model one
    more strict JSON directive, `{"type":"need_write"}` — Claude's own signal
    that the reviewer's request genuinely needs to edit/run something.
@@ -1596,7 +1616,13 @@ reclaimed.
   a lost entry only means "no automatic landing for this turn".
   **Deliberately given up (reviewer decision):** an EARLIER turn's failed
   landing is no longer retried by a later, unrelated turn — asking for a
-  commit in plain words still works. Tests:
+  commit in plain words still works. That gap has since been closed from the
+  OTHER side, by a git-truth backstop rather than by another turn: see "The
+  backstop for a MISSED LANDING" in `.claude/docs/pending-push.md`, which also
+  records why this gate cannot be trusted on its own (both halves answer
+  `false` on any git error — they now at least log why, and the
+  `runClaudeTurn` Activity logs the decision itself whenever a turn did touch
+  the checkout). Tests:
   `chat_checkout_test.go`'s `TestTurnChangedCheckoutGatesAutoLanding` and the
   second half of `chat_workflow_test.go`'s
   `TestClaudeChatAutoLandsPendingCheckoutWorkAfterATurn` (which now drives a

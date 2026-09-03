@@ -231,7 +231,7 @@ func processChatMerge(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 			Role: "assistant", Kind: chat.KindError,
 			Body: "Kon de PR-branch niet bepalen om de wijziging op te landen.",
 		}
-		_ = cm.SaveMessage(ctx, msg)
+		saveChatOutcomeMessage(ctx, cm, msg)
 		return msg
 	}
 	return processChatMergeAt(ctx, tm, cm, cl, dataDir, arg, meta.HeadRefName)
@@ -314,6 +314,20 @@ func processChatMergeAt(ctx context.Context, tm *TaskManager, cm *chat.Module, c
 		publishCheckoutChanged(arg.Repo, arg.PR)
 	}
 	return msg
+}
+
+// saveChatOutcomeMessage persists one landing/merge outcome bubble — unless
+// the request carried no conversation at all, in which case there is nobody
+// to tell: the automatic landing backstop (chat_land_backstop.go) enqueues a
+// landing that no chat turn asked for, and a message with an empty
+// ConversationID would only be an unreachable row in chat_messages. The
+// returned chat.Message is unchanged either way, so processChatMergeAt still
+// branches on its Kind/Body exactly as before.
+func saveChatOutcomeMessage(ctx context.Context, cm *chat.Module, msg chat.Message) {
+	if msg.ConversationID == "" {
+		return
+	}
+	_ = cm.SaveMessage(ctx, msg)
 }
 
 // refreshTreeAfterLanding makes a just-landed chat edit visible in the review
@@ -419,7 +433,7 @@ func resolveCheckoutMerge(ctx context.Context, cm *chat.Module, cl claude.Client
 			ID: chatMessageID(turnID, ""), ConversationID: conversationID, PR: pr,
 			Role: "assistant", Kind: kind, Body: body,
 		}
-		_ = cm.SaveMessage(ctx, msg)
+		saveChatOutcomeMessage(ctx, cm, msg)
 		return msg
 	}
 

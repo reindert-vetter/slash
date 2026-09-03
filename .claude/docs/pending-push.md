@@ -475,6 +475,81 @@ Test: `TestLoadPendingPushTreeCaughtUpBackstop` (`pending_push_test.go`) pins
 event/workflow involved at all — the exact shape `loadPendingPush`'s polling
 backstop above depends on.
 
+### The backstop for a MISSED LANDING: `chat_land_backstop.go`
+
+Everything above starts at "a landing happened". Reviewer report — "ik zie nog
+niet in de diff dat het weg is. het moet het weghalen in de browser" —
+reconstructed end to end on PR 13606: Claude removed an `isPaused()` check and
+committed it **itself** in the reviewer's checkout (the Bash carve-out,
+`.claude/rules/workflows-write-boundary.md`), but the turn's stored
+`runClaudeTurn` result recorded **`needsLand: false`**, so no landing was ever
+enqueued. Consequence: no pending ref, no `refreshTreeAfterLanding`, no
+`blocks.changed`, no `⇧ ongepusht` pill, no `⟳` — `pr_ingest.head_sha` and the
+head worktree stayed on the pre-edit commit **indefinitely**, and nothing in
+the app ever re-checked. Every read model in this file was working correctly
+and had nothing to report. (Evidence trail, for a future session: the
+conversation's own `data/workflows/chat-<conv>.events.jsonl` Activity payload,
+`refs/slash/pending/` in the shared clone, `pr_ingest`, and the file in
+`data/worktrees/pr-<n>-head`.)
+
+The two halves of that gate (`turnChangedCheckout &&
+chatCheckoutNeedsLanding`, `chat_checkout.go`) are turn-scoped, live in an
+in-memory per-turn baseline, and answer `false` on **any** git error — so
+which half failed could not be recovered afterwards at all. Both now log every
+error they swallow, and the `runClaudeTurn` Activity logs the decision itself
+whenever a turn touched the checkout, but the recovery deliberately does not
+depend on that gate being right:
+
+`repairMissedLanding` (`chat_land_backstop.go`) runs as the first, **local-only**
+step of `checkIngestRefreshOnce` (`workflows.go`) — i.e. on the existing
+heartbeat-driven `pollIngestRefresh` cadence plus once on every "open a review
+tree" page load (`TriggerIngestRefreshCheck`), and deliberately BEFORE that
+function's `gh` call, since a landed-but-unpushed commit never moves the remote
+head that function looks at. `unlandedCheckoutCommit` reports the checkout's
+HEAD when, and only when, **all** of:
+
+- the PR has an assigned checkout with a known branch, and it is really
+  checked out on that branch;
+- the working tree is **clean** — `commitCheckoutEditsAt` does `git add -A`, so
+  a dirty tree could sweep the reviewer's own unrelated work into Claude's
+  commit behind his back. A dirty tree is also never silent (the `✎ wordt
+  aangepast` / `⟳ wordt bijgewerkt` pills cover it), so declining costs
+  nothing;
+- HEAD is neither the ingested head nor the pending ref's own tip;
+- `origin/<branch>..HEAD` is non-empty, so the reviewer has not simply pushed
+  it himself.
+
+The repair is then the **ordinary landing**: one bare `merge` Signal on the
+PR's existing `chat_merge` queue, which serializes it against every other
+landing and runs the whole chain already documented above (fetch the commit
+into the shared clone → advance the pending ref → `refreshTreeAfterLanding` →
+`refreshIngestDelta` → `blocks.changed` with `landedFiles` → the tab's own
+auto-refresh, plus the `⇧ ongepusht` pill). No new write path, no new endpoint,
+no new poller, no frontend change at all.
+
+Two guards worth keeping:
+
+- **One attempt per (PR, sha) per process** (`landBackstopTried`, in-memory,
+  the same operational carve-out as `pendingPushStatus`) — a landing that keeps
+  refusing (a non-fast-forward, see `advancePendingRefFromCheckout`) is logged
+  once, not on every tick.
+- **The request carries no conversation**, because no chat turn asked for it,
+  and `saveChatOutcomeMessage` (`chat_merge.go`) therefore skips the outcome
+  bubble for an empty `ConversationID` instead of writing an unreachable
+  `chat_messages` row. Every conversation-driven landing is unchanged.
+
+This deliberately widens the earlier "an EARLIER turn's failed landing is not
+retried by a later, unrelated turn" decision (see
+`.claude/docs/workflows-comments.md`) — but only for a genuinely unlanded
+**commit** on a clean checkout, which is exactly the state that decision's own
+reasoning (don't act on the reviewer's uncommitted work, don't re-post a
+bubble) does not apply to. Automatic, per the reviewer's own call.
+
+Tests: `TestUnlandedCheckoutCommitFindsACommitThatNeverLanded`,
+`TestUnlandedCheckoutCommitDeclinesADirtyOrForeignCheckout`
+(`chat_land_backstop_test.go`) — both purely git, against a throwaway repo, no
+network.
+
 ## The push: a `"push"` Action on the PR's `chat_merge` queue
 
 `pushPendingPR` (`pending_push.go`), reached via

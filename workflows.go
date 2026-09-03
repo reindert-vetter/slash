@@ -2959,8 +2959,20 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		// re-triggered the landing — and its "Wijziging staat op ..." bubble —
 		// purely because the SHARED checkout already held outstanding work
 		// (the reviewer's own uncommitted edits, or an earlier local commit).
-		needsLand := turnChangedCheckout(ctx, m.dataDir, arg.Repo, arg.PR, arg.ConversationID) &&
-			chatCheckoutNeedsLanding(ctx, m.dataDir, arg.Repo, arg.PR)
+		changedCheckout := turnChangedCheckout(ctx, m.dataDir, arg.Repo, arg.PR, arg.ConversationID)
+		needsLand := changedCheckout && chatCheckoutNeedsLanding(ctx, m.dataDir, arg.Repo, arg.PR)
+		// Logged, always: both halves answer false on any git error, and a
+		// false here means the turn's edit is never landed and therefore never
+		// reaches the review tree at all. A reviewer report about exactly that
+		// (PR 13606) could only be traced by reading the stored Activity
+		// result afterwards — see chat_land_backstop.go, which repairs the
+		// state this line now explains.
+		// Only when this turn touched the checkout at all: a read-only turn is
+		// false/false by design and would just be noise.
+		if changedCheckout {
+			m.logf("claude_chat: pr=%d conversation=%s turn changed the checkout, needs landing=%v",
+				arg.PR, arg.ConversationID, needsLand)
+		}
 		publishChatChanged(arg.Repo, arg.PR, arg.ConversationID)
 		// The turn may have assigned/advanced the PR's shared work directory,
 		// or raised its choice — nudge the chip/badge and the work-directory
@@ -6321,6 +6333,13 @@ func (m *TaskManager) checkIngestRefreshOnce(ctx context.Context, prRunID string
 	if err != nil || status == tembed.StatusCompleted || status == tembed.StatusFailed {
 		return false
 	}
+
+	// Local-only, and deliberately BEFORE the gh call below: a chat edit that
+	// was committed in the PR's checkout but never landed on the pending ref
+	// leaves the tree behind forever, and the remote head SHA this function
+	// looks at never moves for such a commit — so nothing else can ever
+	// notice it. See chat_land_backstop.go.
+	m.repairMissedLanding(ctx, repo, pr)
 
 	meta, err := fetchPRMeta(ctx, repo, pr)
 	if err != nil {

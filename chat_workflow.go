@@ -1007,7 +1007,7 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 		SystemPrompt: claude.ChatSystemPrompt,
 		OnEvent:      onEvent,
 	}
-	if dir, ok := prepareChatReadOnlyWorkDir(dataDir, arg.Repo, arg.PR); ok {
+	if dir, ok := prepareChatReadOnlyWorkDir(runCtx, dataDir, arg.Repo, arg.PR); ok {
 		hadReadOnly = true
 		req.WorkDir = dir
 		req.Tools = []string{"Read", "Grep", "Glob"}

@@ -99,18 +99,80 @@ func pendingRefSHA(ctx context.Context, repo, ref string) string {
 
 // prepareChatReadOnlyWorkDir is runOneClaudeTurn's entry point into the CHEAP
 // first attempt of every turn: a plain os.Stat against the PR's already-
-// ingested, shared HEAD worktree (worktreeDirs, ingest.go) — never the
-// reviewer's own checkout. No git fetch, no lock, no gh call at all: this
-// directory is already on disk for any PR a comment (hence a chat) can exist
-// on, and it is read by several other callers (blockstats.go, /api/code)
-// without any locking, so a concurrent Read/Grep/Glob tool call here is no
-// riskier than those.
-func prepareChatReadOnlyWorkDir(dataDir string, repo string, pr int) (string, bool) {
+// ingested, shared HEAD worktree (worktreeDirs, ingest.go). No git fetch, no
+// lock, no gh call at all: this directory is already on disk for any PR a
+// comment (hence a chat) can exist on, and it is read by several other
+// callers (blockstats.go, /api/code) without any locking, so a concurrent
+// Read/Grep/Glob tool call here is no riskier than those.
+//
+// ONE exception, and it is what makes the answers trustworthy: when the PR's
+// own assigned checkout (chat_checkout.go) is further along than that
+// worktree, the read-only turn reads the CHECKOUT instead. Reviewer report
+// (PR 13606): two conversations of the same PR gave opposite answers to "is
+// dit nu weg in de repo?" — one read the checkout (where Claude's edit had
+// been committed) and one read the head worktree, which was still on the
+// pre-edit commit because that landing never happened (see
+// chat_land_backstop.go). Answering "nee, hij staat er nog: <file>:83" from a
+// stale worktree is worse than any locking concern this trades away: it is
+// confidently wrong about the reviewer's own change.
+//
+// Deliberately narrow, so nothing else changes: only a checkout that is
+// really sitting on the PR's own head branch and whose HEAD *contains* the
+// commit the tree was built from (strictly further along, never merely
+// different — a checkout that was simply never pulled is BEHIND the tree).
+// Being dirty is fine here — unlike a
+// landing, a read never commits anything, and uncommitted work is exactly
+// what the reviewer is asking about. Falls back to the worktree whenever
+// git cannot answer.
+func prepareChatReadOnlyWorkDir(ctx context.Context, dataDir string, repo string, pr int) (string, bool) {
 	_, headDir := worktreeDirs(dataDir, repo, pr)
+	if dir, ok := checkoutAheadOfWorktree(ctx, dataDir, repo, pr, headDir); ok {
+		return dir, true
+	}
 	if _, err := os.Stat(headDir); err != nil {
 		return "", false
 	}
 	return headDir, true
+}
+
+// checkoutAheadOfWorktree reports the PR's assigned checkout when it holds a
+// state the ingested head worktree does not have yet — see
+// prepareChatReadOnlyWorkDir for why a read-only turn then prefers it.
+func checkoutAheadOfWorktree(ctx context.Context, dataDir, repo string, pr int, headDir string) (string, bool) {
+	a := getCheckoutAssignment(dataDir, repo, pr)
+	if a == nil || a.Dir == "" || a.Branch == "" {
+		return "", false
+	}
+	branchOut, err := runGitIn(ctx, a.Dir, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil || strings.TrimSpace(string(branchOut)) != a.Branch {
+		return "", false
+	}
+	headOut, err := runGitIn(ctx, a.Dir, "rev-parse", "HEAD")
+	if err != nil {
+		return "", false
+	}
+	head := strings.TrimSpace(string(headOut))
+	if head == "" {
+		return "", false
+	}
+	treeOut, err := runGitIn(ctx, headDir, "rev-parse", "HEAD")
+	if err != nil {
+		return "", false // no usable worktree to compare against
+	}
+	tree := strings.TrimSpace(string(treeOut))
+	if tree == "" || tree == head {
+		return "", false // the tree already shows this exact commit
+	}
+	// "Further along" means STRICTLY that: the checkout must contain the
+	// commit the tree was built from. A checkout that merely differs can just
+	// as easily be BEHIND (a colleague pushed, the tree refreshed, this
+	// directory was never pulled), and reading that would make the answers
+	// worse rather than better. An unknown object errors out here and falls
+	// back to the worktree, same as any other git failure above.
+	if _, err := runGitIn(ctx, a.Dir, "merge-base", "--is-ancestor", tree, head); err != nil {
+		return "", false
+	}
+	return a.Dir, true
 }
 
 // ---------------------------------------------------------------------------
@@ -1412,7 +1474,7 @@ func commitCheckoutEditsAt(ctx context.Context, cm *chat.Module, dataDir, repo s
 			ID: chatMessageID(turnID, ""), ConversationID: conversationID, PR: pr,
 			Role: "assistant", Kind: kind, Body: body,
 		}
-		_ = cm.SaveMessage(ctx, msg)
+		saveChatOutcomeMessage(ctx, cm, msg)
 		return msg
 	}
 
@@ -1545,6 +1607,11 @@ func chatCheckoutNeedsLanding(ctx context.Context, dataDir, repo string, pr int)
 	}
 	statusOut, err := runGitIn(ctx, a.Dir, "status", "--porcelain", "--ignore-submodules=all")
 	if err != nil {
+		// Every git error here answers "nothing to land", which silently skips
+		// the automatic landing altogether — so say so out loud. Reconstructing
+		// one such skip (PR 13606, see chat_land_backstop.go) took walking the
+		// event history and both clones by hand.
+		log.Printf("chat_checkout: pr %d: needs-landing check: status in %s: %v", pr, a.Dir, err)
 		return false
 	}
 	if strings.TrimSpace(string(statusOut)) != "" {
@@ -1554,6 +1621,7 @@ func chatCheckoutNeedsLanding(ctx context.Context, dataDir, repo string, pr int)
 		if landed := pendingRefSHA(ctx, repo, prPendingRef(repo, pr, a.Branch)); landed != "" {
 			headOut, err := runGitIn(ctx, a.Dir, "rev-parse", "HEAD")
 			if err != nil {
+				log.Printf("chat_checkout: pr %d: needs-landing check: head in %s: %v", pr, a.Dir, err)
 				return false
 			}
 			return strings.TrimSpace(string(headOut)) != landed
@@ -1561,6 +1629,7 @@ func chatCheckoutNeedsLanding(ctx context.Context, dataDir, repo string, pr int)
 	}
 	aheadOut, err := runGitIn(ctx, a.Dir, "rev-list", "--count", "HEAD", "--not", "--remotes")
 	if err != nil {
+		log.Printf("chat_checkout: pr %d: needs-landing check: ahead count in %s: %v", pr, a.Dir, err)
 		return false
 	}
 	n, _ := strconv.Atoi(strings.TrimSpace(string(aheadOut)))
@@ -1611,6 +1680,11 @@ var (
 // turnChangedCheckout below turn-scoped.
 func recordTurnCheckoutBaseline(ctx context.Context, conversationID, dir string) {
 	fp := checkoutFingerprint(ctx, dir)
+	if fp == "" {
+		// No baseline means turnChangedCheckout answers false for this turn,
+		// so an edit it makes is never landed automatically — never silent.
+		log.Printf("chat_checkout: conversation %s: no checkout baseline for %s", conversationID, dir)
+	}
 	chatTurnBaselineMu.Lock()
 	defer chatTurnBaselineMu.Unlock()
 	chatTurnBaseline[conversationID] = fp
