@@ -67,11 +67,15 @@ test.describe('PR Review Tree — PRs from a second repository', () => {
 
   // A non-primary repo's ingest/comment/chat pipeline has never actually been
   // run end-to-end (see repoReady in overview.mjs — a deliberately TEMPORARY
-  // gate), so its popover offers no action at all: no generate/open-tree
-  // button, no GitHub/Jira link, no copy-url, no remove-reviewer — only a
-  // single disabled explanation. The → key mirrors a click: it only reveals
-  // that same popover, never navigates anywhere.
-  test('its popover offers no actions, only the disabled "Repo is niet beschikbaar" item', async ({ page }) => {
+  // gate), so its popover offers no ingest-dependent action: no
+  // generate/open-tree button, no Jira link, no copy-url, no remove-reviewer
+  // — only the disabled explanation. The plain "Open op GitHub" link is the
+  // one deliberate exception: it needs no local clone/ingest at all, so the
+  // reviewer always has at least one way to reach the PR (reported: this
+  // popover used to offer nothing but "Sluit menu" and the explanation). The
+  // → key mirrors a click: it only reveals that same popover, never
+  // navigates anywhere.
+  test('its popover offers only the GitHub link and the disabled "Repo is niet beschikbaar" item', async ({ page }) => {
     await page.goto('/pr-overview')
     await appReady(page)
 
@@ -84,10 +88,11 @@ test.describe('PR Review Tree — PRs from a second repository', () => {
     await expect(unavailable).toHaveText('Repo is niet beschikbaar')
     await expect(unavailable).toBeDisabled()
 
+    await expect(popover.locator('a[href*="plug-and-pay-ops/pull/12"]')).toHaveCount(1)
+
     await expect(popover.locator('[data-testid="generate-page"]')).toHaveCount(0)
     await expect(popover.locator('[data-testid="open-tree"]')).toHaveCount(0)
     await expect(popover.locator('[data-testid="copy-url"]')).toHaveCount(0)
-    await expect(popover.locator('a[href*="plug-and-pay-ops/pull/12"]')).toHaveCount(0)
 
     await page.keyboard.press('Escape')
     await expect(popover).toHaveCount(0)

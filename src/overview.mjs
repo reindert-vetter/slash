@@ -438,10 +438,14 @@ function treeSupported(pr) {
 // end-to-end on a real PR. plug-and-pay-ops is already "configured"
 // (state.repos lists it, so treeSupported(pr) is true for it) but the
 // multi-repo work (74d9631..85d0aa8) has never pushed a real PR through the
-// full pipeline for it, so its popover should offer no action at all for
-// now. Deliberately generic — keyed off "is this row's repo non-empty",
-// never the literal "plug-and-pay/plug-and-pay-ops" slug — so it also covers
-// any future repo added to state.repos before ITS pipeline is proven.
+// full pipeline for it, so its popover should offer no ingest-dependent
+// action for now (generate/open tree, copy-url, Jira link, remove-reviewer)
+// — except the plain "Open op GitHub" link (githubLinkAction), which needs
+// no local clone/ingest at all and stays available so the reviewer always
+// has at least one way to reach the PR. Deliberately generic — keyed off "is
+// this row's repo non-empty", never the literal
+// "plug-and-pay/plug-and-pay-ops" slug — so it also covers any future repo
+// added to state.repos before ITS pipeline is proven.
 //
 // TEMPORARY: delete this gate (and repoUnavailableAction/its two call sites
 // in popover()/openOrGenerate()) once a non-primary repo has actually been
@@ -1530,9 +1534,7 @@ function popover(pr) {
       ${repoReady(pr)
         ? html`<div class="contents">
             ${() => (treeSupported(pr) ? (pr.hasGraph ? ingestedActions(pr) : generateAction(pr)) : '')}
-            <a href="${pr.url}" target="_blank" rel="noreferrer" class="${popoverRowCls()}">
-              ${icon('external-link', 'h-3.5 w-3.5')} ${t('Open op GitHub')}
-            </a>
+            ${githubLinkAction(pr)}
             <button type="button" data-testid="copy-url" class="${popoverRowCls()}" @click="${() => copyGithubUrl(pr)}">
               ${() => (ui.copiedFor === prUid(pr) ? icon('check', 'h-3.5 w-3.5') : icon('copy', 'h-3.5 w-3.5'))}
               ${() => t(ui.copiedFor === prUid(pr) ? 'Gekopieerd!' : 'Kopieer GitHub URL')}
@@ -1546,18 +1548,33 @@ function popover(pr) {
             ${() => (canRemoveSelf(pr) ? removeReviewerAction(pr) : '')}
             ${() => (pr.isDraft ? [readyForReviewSection(pr).key('ready-section')] : [])}
           </div>`
-        : repoUnavailableAction()}
+        : html`<div class="contents">${githubLinkAction(pr)} ${repoUnavailableAction()}</div>`}
     </div>
   `
 }
 
-// repoUnavailableAction — the single, non-interactive item a row from a
-// not-yet-proven repo shows instead of every other action (see repoReady
-// above for why and when this goes away). A real `disabled` attribute
-// (static — this item's disabled-ness never changes, so no need for the
-// `disabled="${() => ...}"` function-binding form that a TOGGLING boolean
-// attribute would require, see .claude/rules/arrowjs-pitfalls.md), and the
-// WORD carries the meaning — no colour-only signal (Reindert is colourblind).
+// githubLinkAction — the plain "open this PR on github.com" link. Shared by
+// both branches of popover() above: pr.url comes straight off the stored
+// snapshot/API row and needs no local clone/ingest to resolve, so it stays
+// available even when repoReady(pr) is false and every ingest-dependent
+// action (generate/open tree, copy-url, Jira link, remove-reviewer) is
+// hidden — a not-yet-proven repo shouldn't leave the reviewer with no way at
+// all to reach the PR (reported: the popover for such a row offered nothing
+// but "Sluit menu" and the disabled explanation).
+function githubLinkAction(pr) {
+  return html`<a href="${pr.url}" target="_blank" rel="noreferrer" class="${popoverRowCls()}">
+    ${icon('external-link', 'h-3.5 w-3.5')} ${t('Open op GitHub')}
+  </a>`
+}
+
+// repoUnavailableAction — the explanation shown alongside githubLinkAction
+// (above) for a row from a not-yet-proven repo: every OTHER action is
+// hidden (see repoReady above for why and when this goes away). A real
+// `disabled` attribute (static — this item's disabled-ness never changes, so
+// no need for the `disabled="${() => ...}"` function-binding form that a
+// TOGGLING boolean attribute would require, see
+// .claude/rules/arrowjs-pitfalls.md), and the WORD carries the meaning — no
+// colour-only signal (Reindert is colourblind).
 function repoUnavailableAction() {
   return html`
     <button type="button" data-testid="repo-unavailable" disabled class="${popoverRowCls('cursor-not-allowed opacity-60')}">
