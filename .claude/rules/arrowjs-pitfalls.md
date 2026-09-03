@@ -425,6 +425,44 @@ this card actually lives. A future "frozen" report carrying a similar
 on that basis alone — check `data/debug-log.jsonl`'s `error` lines first,
 they name the real file/line.
 
+**Fifth variant — a keyed list embedded as a STATIC (non-`() =>`) slot inside
+a template that itself only gets rebuilt by an outer toggling `${() => {...}}`
+closure goes stale forever after its first render.** `CommentClaudeFooter`'s
+"Andere chats in deze PR" list (`RelatedPanel.mjs`) used to be built like
+this: `${() => { ...; return tasks.length ? html\`<div>...${tasks.map(c =>
+claudeTaskRow(c))}...</div>\` : '' }}`, with `tasks` a plain local array
+snapshotted once per closure run. The OUTER closure's own dependency tracking
+worked correctly — the reviewer-request filter added to `otherClaudeChatsAll`
+(auto-started / seen-and-answered exclusion, see that function's own doc
+comment) recomputed on every relevant cache update, proven with a temporary
+`console.log` right inside the closure and inside the `.filter()` callback:
+both printed the CORRECT, up-to-date result on every run. But the DOM never
+reflected it once mounted: after the very first hydration (when the wrapping
+`html\`...\`` was freshly created), every LATER re-run of the outer closure
+returned "the same template shape" again, and arrow.js's chunk-reuse path
+patched the existing chunk instead of truly re-diffing it — and that static
+patch path does not re-run the `${tasks.map(...)}` slot at all, because it
+carries no `() =>` of its own; it was just a plain array value baked into the
+template at construction time. One row (an automatically-started chat) DID
+disappear correctly the first time the outer template went from
+zero-then-nonzero items (a genuine template↔`''` toggle, which really does
+remount), which is what made this look at first like ordinary working
+reactivity — the staleness only showed up on a SECOND filtering change
+against an already-mounted, non-empty list.
+
+**Fix, combining two already-documented patterns:** (1) wrap the whole
+toggle in its own stable `<div class="contents">` root (the "Never key a
+template whose entire body is one toggling expression" fix above), and (2)
+turn the list slot itself into its own `${() => otherClaudeChats().map(...)}`
+FUNCTION binding rather than a bare `${tasks.map(...)}` snapshot — so the
+list is reactively diffed on its own, independent of whether the outer
+toggle's chunk gets reused. Regression test:
+`tests/claude-other-tasks-hidden.spec.mjs`. General rule: never interpolate
+a `.map(...)`ed keyed list as a STATIC value inside a template that a
+`${() => cond ? html\`...\` : ''}` closure only conditionally (re)creates —
+give the list its own `() =>` binding, always, even when it sits directly
+inside an already-reactive parent slot.
+
 ## A `state.x` read inside an outer array-building closure couples the WHOLE closure
 
 Reading `state.x` synchronously inside an outer array-building

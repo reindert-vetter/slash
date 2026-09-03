@@ -1003,6 +1003,37 @@ much alive — turns exist, an answer is sitting there — with no way back to
 it from the sidebar once the reviewer navigates away, other than happening to
 reopen the exact same code by hand.
 
+### Two hard exclusions: an auto-started chat, and one already answered-and-viewed
+
+Two more reviewer requests on this same list, both a straight EXCLUSION
+rather than a change to `chatStateOf`'s ranking:
+
+- **"ik wil hier niet de chats zien die automatisch zijn gestart"** — a
+  conversation `autoStartKiloCheck` (`workflows.go`) opens right after
+  importing a kilo-code review comment, never something the reviewer typed.
+  Its very first message carries `chat.KindAutoCheck`/`kind: 'auto_check'`
+  (`chatActionAutoCheck`, `chat_workflow.go`) forever, even if the reviewer
+  later replies inside it — so the check is "does `messages[0]` (the first
+  `role: 'user'` entry) carry `kind === 'auto_check'`", not "has the reviewer
+  ever engaged with it". Excluded unconditionally, regardless of its
+  busy/done/unread/seen state.
+- **"ik wil daar ook niet chats zien die antwoord hebben gegeven en die ik
+  bekeken heb"** — `chatStateOf(c) === 'seen'` alone is NOT enough: a chat
+  nobody has replied to yet also falls into `'seen'` by that function's own
+  fallback, and must stay visible (there's nothing to have "viewed" there).
+  So this only excludes `chatStateOf(c) === 'seen'` **combined with** having
+  a real answer (`lastAssistantMessageAt(messages)` non-empty).
+
+Both facts (`otherTaskAutoStarted`/`otherTaskAnswered`, `RelatedPanel.mjs`)
+are read off the SAME `/api/chat?commentId=…` fetch `ensureOtherTaskTitle`
+already makes for the row's title — no extra request — and cached the same
+way: `undefined` until that fetch resolves, so a row is never hidden
+speculatively before its own fetch actually confirms it qualifies (it can
+flash briefly on a fresh render, same as the title/unread caches already do).
+Applied in `otherClaudeChatsAll()` as a `.filter(...)` right before the
+existing rank sort, so `claudeMoreChatsNote`'s "+n meer" count (which reads
+the same, now-filtered, uncapped list) is correct too.
+
 ### `openChatComments()` (`RelatedPanel.mjs`)
 
 (The PR's one **general chat** lands in this same section — with one carve-out,

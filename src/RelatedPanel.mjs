@@ -4225,6 +4225,21 @@ const otherTaskTitles = reactive({ byId: {} })
 // …) concurrent request for the same id.
 const otherTaskTitlesFetching = new Set()
 
+// otherTaskAutoStarted / otherTaskAnswered — two more facts read off the SAME
+// transcript fetch ensureOtherTaskTitle already does, cached the same way
+// (undefined = not yet known → a row stays visible until its own fetch
+// resolves, never hidden speculatively). Reviewer requests, both about
+// "Andere chats in deze PR": "ik wil hier niet de chats zien die automatisch
+// zijn gestart" (a kilo-code auto-check turn, chat.KindAutoCheck /
+// chatActionAutoCheck in chat_workflow.go — its first user message carries
+// kind 'auto_check') and "ik wil daar ook niet chats zien die antwoord hebben
+// gegeven en die ik bekeken heb" (chatStateOf's existing 'seen' state, but
+// ONLY once there is actually an answer — a chat nobody has replied to yet
+// falls into 'seen' too and must stay visible). See otherClaudeChatsAll's own
+// filter below.
+const otherTaskAutoStarted = reactive({ byId: {} })
+const otherTaskAnswered = reactive({ byId: {} })
+
 // ensureOtherTaskTitle lazily fetches `c`'s own transcript (the same
 // read-only GET /api/chat?commentId= loadChatMessages already uses) purely to
 // compute its title, exactly once per id until invalidated. Invalidation is
@@ -4251,7 +4266,18 @@ function ensureOtherTaskTitle(c) {
       // than through a second, identical GET per row (ensureChatUnread's own
       // fetch). Same cache, same invalidation: the chat.message SSE handler
       // drops both entries together.
-      if (json) setChatUnread(c.id, unreadFromTranscript(json))
+      if (json) {
+        setChatUnread(c.id, unreadFromTranscript(json))
+        const firstUser = (json.messages || []).find((m) => m.role === 'user')
+        otherTaskAutoStarted.byId = {
+          ...otherTaskAutoStarted.byId,
+          [c.id]: !!firstUser && firstUser.kind === 'auto_check',
+        }
+        otherTaskAnswered.byId = {
+          ...otherTaskAnswered.byId,
+          [c.id]: !!lastAssistantMessageAt(json.messages),
+        }
+      }
     })
     .catch(() => {
       // Left unresolved on a failed fetch — otherTaskTitleFor's own
@@ -4303,11 +4329,20 @@ function otherTaskTitleFor(c) {
 // Ordering is by chatStateOf's own rank (bezig → klaar → nieuw → bekeken),
 // which is also what implements the "nog niet 5 seconden bekeken" criterion:
 // a chat the reviewer has genuinely dwelt on (scheduleChatSeenDwell's 5s
-// timer writes the durable seen_at) sinks to the bottom as 'bekeken', while
-// anything with an unseen answer stays up top as 'nieuw'. That REPLACES the
-// old hard 2-minute "recently finished" linger as the inclusion rule — a
-// finished chat no longer vanishes from the list at all, it just changes its
-// word (the linger itself still exists, purely for the "Klaar" state below).
+// timer writes the durable seen_at) sinks to 'bekeken', while anything with
+// an unseen answer stays up top as 'nieuw'. That REPLACES the old hard
+// 2-minute "recently finished" linger as the inclusion rule (the linger
+// itself still exists, purely for the "Klaar" state below).
+//
+// Two more reviewer requests narrow this further, both a hard EXCLUSION
+// rather than a ranking: an automatically started chat (kilo's own
+// auto-check turn, see otherTaskAutoStarted above) never appears here at all,
+// and a chat that reached 'bekeken' AND actually has an answer
+// (otherTaskAnswered) is dropped too — "ik wil hier niet de chats zien die
+// automatisch zijn gestart" / "ik wil daar ook niet chats zien die antwoord
+// hebben gegeven en die ik bekeken heb". A chat nobody has replied to yet is
+// ALSO 'bekeken' by chatStateOf's fallback, but stays visible: only the
+// answered+bekeken combination is filtered. See the `filtered` step below.
 //
 // Resolves each id to its own comment via cs.list (the PR-wide comment list
 // this panel already keeps loaded) so a row can show a title
@@ -4392,10 +4427,22 @@ function otherClaudeChatsAll() {
   // unseen answer must be able to rise into view. Self-deduping and cached
   // per id, so this is one GET per chat once, not per render.
   out.forEach(ensureOtherTaskTitle)
+  // Drop an automatically started chat (kilo's own auto-check turn) — always,
+  // regardless of its state — and a chat that already has an answer AND was
+  // already viewed (chatStateOf === 'seen' backed by the durable seen_at
+  // dwell; a chat with no answer yet stays 'seen' too but must NOT be hidden
+  // by this, so otherTaskAnswered is checked explicitly). Both facts are
+  // `undefined` until ensureOtherTaskTitle's fetch resolves, so a row is never
+  // hidden before it is actually known to qualify.
+  const filtered = out.filter((c) => {
+    if (otherTaskAutoStarted.byId[c.id]) return false
+    if (chatStateOf(c) === 'seen' && otherTaskAnswered.byId[c.id]) return false
+    return true
+  })
   // Stable sort (guaranteed in every browser this app targets), so rows only
   // move when their own state really changes.
-  out.sort((a, b) => CHAT_STATE_RANK[chatStateOf(a)] - CHAT_STATE_RANK[chatStateOf(b)])
-  return out
+  filtered.sort((a, b) => CHAT_STATE_RANK[chatStateOf(a)] - CHAT_STATE_RANK[chatStateOf(b)])
+  return filtered
 }
 
 function otherClaudeChats() {
@@ -4717,30 +4764,29 @@ export function CommentClaudeFooter(commentId = '', opts = {}) {
                       </span>`
                     : ''}
                 </div>
-                ${() => {
-                  if (batchOnly) return ''
-                  const tasks = otherClaudeChats()
-                  return tasks.length
-                    ? html`
-                        <div
-                          class="flex flex-col gap-1 border-t border-slate-100 pt-1 dark:border-zinc-800/60"
-                          data-testid="claude-other-tasks"
-                        >
-                          <span class="text-[10px] font-medium text-slate-400 dark:text-zinc-500">
-                            ${() => t('Andere chats in deze PR ({n}):', { n: otherClaudeChatsAll().length })}
-                          </span>
-                          ${tasks.map((c, i) => claudeTaskRow(c, i))}
-                          <span
-                            class="${() =>
-                              'text-[10px] text-slate-400 dark:text-zinc-500' +
-                              (claudeMoreChatsNote() ? '' : ' hidden')}"
-                            data-testid="claude-more-chats"
-                            >${() => claudeMoreChatsNote()}</span
+                <div class="contents">
+                  ${() =>
+                    !batchOnly && otherClaudeChats().length > 0
+                      ? html`
+                          <div
+                            class="flex flex-col gap-1 border-t border-slate-100 pt-1 dark:border-zinc-800/60"
+                            data-testid="claude-other-tasks"
                           >
-                        </div>
-                      `
-                    : ''
-                }}
+                            <span class="text-[10px] font-medium text-slate-400 dark:text-zinc-500">
+                              ${() => t('Andere chats in deze PR ({n}):', { n: otherClaudeChatsAll().length })}
+                            </span>
+                            ${() => otherClaudeChats().map((c, i) => claudeTaskRow(c, i))}
+                            <span
+                              class="${() =>
+                                'text-[10px] text-slate-400 dark:text-zinc-500' +
+                                (claudeMoreChatsNote() ? '' : ' hidden')}"
+                              data-testid="claude-more-chats"
+                              >${() => claudeMoreChatsNote()}</span
+                            >
+                          </div>
+                        `
+                      : ''}
+                </div>
               </div>
             `
           : ''}
