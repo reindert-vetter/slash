@@ -320,6 +320,36 @@ alike, in every section.
 - Test: `TestMyLastActivity` (`inbox_test.go`), same style as
   `TestMergeReviewersDecisiveFold`.
 
+## A merge conflict is shown as a chip (`conflict-chip`)
+
+Reviewer request ("ik wil het zien als er een merge conflict is in een pr in pr
+overview"). GitHub's `mergeable` (`MERGEABLE|CONFLICTING|UNKNOWN`) was already
+fetched in `heavyFields` and carried all the way into `prStatus.Mergeable` /
+`inboxRow.Mergeable` (`inbox.go`) — so into `state.statuses` / `statusFor(pr)`
+in the client — but nothing ever rendered it: a conflicting PR looked exactly
+like a mergeable one, and since GitHub's own inbox qualifiers don't exclude
+conflicts either, such a PR can even sit in **"Ready to merge"**.
+
+`conflictChip(status)` (`src/overview.mjs`) now renders **"Merge-conflict"**
+(`data-testid=conflict-chip`, the `git-merge-x` glyph: Lucide's git-merge with
+its target circle replaced by a cross) in the same vertical stack as the review
+and checks chips (`statusPills`). Because it hangs off the heavy status, it
+appears with the same skeleton→pills backfill as `checksChip`.
+
+- **Only `CONFLICTING` gets a chip.** `UNKNOWN` means GitHub is still computing
+  the merge state (or gave up) — deliberately shown as *nothing* rather than as
+  an invented signal, the same reasoning as `checksTotal === 0` in `checksChip`.
+- The **word** carries the meaning; icon and rose tint are decoration only
+  (colourblind rule).
+- `statusPills`' stack key gained `status.mergeable`, so the status backfill
+  landing (or a conflict appearing/disappearing) rebuilds the node instead of
+  patching statics. Each branch interpolates only templates that really exist in
+  that branch — no `${maybeTemplate || ''}`, see the statically-interpolated
+  template↔string pitfall in `.claude/rules/arrowjs-pitfalls.md`.
+- **Deliberately not** a filter preset in the filter drawer, and no sorting or
+  section change: this is a per-row signal only. Test:
+  `tests/overview-conflict-chip.spec.mjs`.
+
 ## Filter drawer (preset filters, live gh search)
 
 Next to "Recently generated" sits a second expandable button **"Filters"**

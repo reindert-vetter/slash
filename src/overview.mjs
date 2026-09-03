@@ -171,6 +171,15 @@ const ICON_PATHS = {
   // with a minus sign). Lucide's own user-minus, same 24x24/stroke-2 set.
   'user-minus':
     '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="22" x2="16" y1="11" y2="11"/>',
+  // 'git-merge-x' — the conflictChip's glyph: this PR cannot be merged as it
+  // stands (GitHub's mergeable == CONFLICTING). Lucide's own git-merge, but
+  // with its target circle replaced by a cross — the merge line simply doesn't
+  // arrive. Same 24x24/stroke-2 convention as the rest of this set. The chip's
+  // WORD carries the meaning; this shape only has to be distinguishable from
+  // the check/x/clock glyphs of the neighbouring chips (see
+  // user_colorblind.md).
+  'git-merge-x':
+    '<circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/><path d="m21 15-6 6"/><path d="m15 15 6 6"/>',
   // 'folder' — the checkoutPill's glyph: this PR has a local checkout
   // assigned for Claude write turns (chat_checkout.go). Lucide's own folder,
   // same 24x24/stroke-2 set.
@@ -280,6 +289,27 @@ function checksChip(status) {
   if (s === 'SUCCESS')
     return chip(t('Checks geslaagd'), 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 ring-emerald-500/30', 'checks-chip', 'check')
   return chip(t('Checks'), 'bg-slate-100 dark:bg-zinc-500/10 text-slate-500 dark:text-zinc-400 ring-slate-300/50 dark:ring-zinc-500/30', 'checks-chip', 'clock')
+}
+
+// conflictChip — GitHub says this PR cannot be merged as it stands
+// (prStatus.mergeable === 'CONFLICTING', see inbox.go's heavyFields). The
+// field was already carried all the way to the browser but never rendered, so
+// a conflicting PR looked exactly like a mergeable one — GitHub's own inbox
+// queries don't filter conflicts out either, so such a PR can even sit in
+// "Ready to merge".
+//
+// Only CONFLICTING gets a chip: 'UNKNOWN' means GitHub is still computing the
+// merge state (or has given up), which is deliberately shown as nothing at all
+// rather than as an invented signal. The WORD carries the meaning per the
+// colourblind rule; icon + tint are decoration, exactly like checksChip.
+function conflictChip(status) {
+  if (status.mergeable !== 'CONFLICTING') return null
+  return chip(
+    t('Merge-conflict'),
+    'bg-rose-500/15 text-rose-700 dark:text-rose-300 ring-rose-500/30',
+    'conflict-chip',
+    'git-merge-x',
+  )
 }
 
 function reviewerAvatar(r) {
@@ -487,17 +517,34 @@ function statusPills(pr, status) {
   if (strip) pills.push(strip.key('reviewers'))
   const reviewVariant = pr.isDraft ? 'draft' : status.reviewDecision || 'none'
   const review = reviewChip(pr, status)
+  // Stack the review chip and whatever secondary chips apply (checks, a merge
+  // conflict) vertically (on explicit request) instead of side by side, so
+  // they read as related lines of status rather than a run-on row of pills —
+  // the reviewers-avatar strip stays a sibling, not part of the stack.
+  //
+  // Every branch below interpolates ONLY templates that really exist in that
+  // branch — never `${maybeTemplate || ''}`, which would be a statically
+  // interpolated template↔string slot and can leak the template function as
+  // literal text (see .claude/rules/arrowjs-pitfalls.md). The key encodes the
+  // whole composition (review variant, checks, merge state), so a status
+  // change builds fresh nodes instead of patching statics.
   const checks = checksChip(status)
-  // Stack the review chip and the checks chip vertically (on explicit
-  // request) instead of side by side, so they read as two related lines of
-  // status rather than a run-on row of pills — the reviewers-avatar strip
-  // stays a sibling, not part of the stack.
-  if (checks) {
-    pills.push(
-      html`<div class="flex flex-col items-start gap-1">${review}${checks}</div>`.key(
-        'review-checks:' + reviewVariant + ':' + (status.checksState || '') + ':' + status.checksTotal,
-      ),
-    )
+  const conflict = conflictChip(status)
+  const stackKey =
+    'review-checks:' +
+    reviewVariant +
+    ':' +
+    (status.checksState || '') +
+    ':' +
+    status.checksTotal +
+    ':' +
+    (status.mergeable || '')
+  if (checks && conflict) {
+    pills.push(html`<div class="flex flex-col items-start gap-1">${review}${checks}${conflict}</div>`.key(stackKey))
+  } else if (checks) {
+    pills.push(html`<div class="flex flex-col items-start gap-1">${review}${checks}</div>`.key(stackKey))
+  } else if (conflict) {
+    pills.push(html`<div class="flex flex-col items-start gap-1">${review}${conflict}</div>`.key(stackKey))
   } else {
     pills.push(review.key('review:' + reviewVariant))
   }

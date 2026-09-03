@@ -323,6 +323,7 @@ export const EN = {
   'Checks gefaald': 'Checks failed',
   'Checks bezig': 'Checks running',
   'Checks geslaagd': 'Checks passed',
+  'Merge-conflict': 'Merge conflict',
   Gegenereerd: 'Generated',
   'Op GitHub': 'On GitHub',
   'Push mislukt': 'Push failed',
