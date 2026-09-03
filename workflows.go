@@ -42,6 +42,69 @@ import (
 // Activities. Reactions hook onto a comment as "reply" Signals, delivered from
 // both the UI and a GitHub poller.
 
+// dbLockRetryDelays is the automatic backoff ladder for an Activity that fails
+// with a transient SQLite lock contention error (see isTransientDBLockError):
+// the wait AFTER attempt i, so len(dbLockRetryDelays)+1 attempts in total
+// (~17h15m of waiting). A var, not a const slice, purely so a test can shrink
+// it — nothing else ever writes it. Same shape as chatRetryDelays
+// (chat_workflow.go), including the reasoning: the wait happens through
+// w.Sleep (a durable timer that survives a restart), never a wall-clock sleep
+// inside the workflow body, and the index is the loop counter — so which
+// delay is used follows from the recorded history alone
+// (.claude/rules/workflow-determinism.md).
+//
+// Reviewer report: "save reaction: database is locked (5) (SQLITE_BUSY)"
+// still permanently failed a task_code_comment run under a sustained write
+// burst, even with the 5s busy_timeout pragma (modules/sqlitedsn). Rather than
+// raise that timeout further (still just a race against however long the
+// burst lasts), the run now waits out real quiet periods instead: 15 minutes,
+// 1 hour, 4 hours, 12 hours. After the last attempt still fails, the run ends
+// up StatusFailed exactly as before, surfacing in "Mislukte taken" where it
+// stays manually retryable (RetryRun) — deliberately finite, not an infinite
+// retry loop, so a genuinely stuck/broken write doesn't hide there forever.
+var dbLockRetryDelays = []time.Duration{
+	15 * time.Minute,
+	1 * time.Hour,
+	4 * time.Hour,
+	12 * time.Hour,
+}
+
+// isTransientDBLockError reports whether err looks like SQLite lock
+// contention (SQLITE_BUSY/SQLITE_LOCKED) rather than a genuine failure —
+// the only kind executeActivityWithLockRetry retries. A plain substring match
+// on the driver's own error text (modernc.org/sqlite renders it as e.g.
+// "database is locked (5) (SQLITE_BUSY)"), since neither database/sql nor the
+// activity's wrapping introduces a typed error to match on instead.
+func isTransientDBLockError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "SQLITE_BUSY") || strings.Contains(msg, "database is locked") ||
+		strings.Contains(msg, "SQLITE_LOCKED")
+}
+
+// executeActivityWithLockRetry runs w.ExecuteActivity(name, input, result),
+// and on a transient SQLite lock error (isTransientDBLockError) waits
+// dbLockRetryDelays[attempt] on a durable timer and tries again, up to
+// len(dbLockRetryDelays)+1 attempts total. Any other error — or the final,
+// exhausted attempt — is returned unchanged, so an existing caller's own
+// wrapping (fmt.Errorf("save reaction: %w", err)) still applies. Deterministic
+// for the same reason as runChatTurnWithRetries: the loop bound and delay
+// index follow only from the recorded Activity results and the loop counter.
+func executeActivityWithLockRetry(w *tembed.Workflow, name string, input, result any) error {
+	for attempt := 0; ; attempt++ {
+		err := w.ExecuteActivity(name, input, result)
+		if err == nil {
+			return nil
+		}
+		if attempt >= len(dbLockRetryDelays) || !isTransientDBLockError(err) {
+			return err
+		}
+		w.Sleep(dbLockRetryDelays[attempt])
+	}
+}
+
 const (
 	// WorkflowTaskCodeComment is the Workflow Type; also the endpoint segment
 	// POST /api/workflows/task_code_comment.
@@ -5186,7 +5249,7 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			}, nil); err != nil {
 				return nil, fmt.Errorf("reopen comment: %w", err)
 			}
-			if err := w.ExecuteActivity("saveReaction", comments.Reaction{
+			if err := executeActivityWithLockRetry(w, "saveReaction", comments.Reaction{
 				ID: r.ID, CommentID: runID, Source: r.Source, Author: r.Author,
 				AvatarURL: r.AvatarURL, Body: reopenSentinel,
 			}, nil); err != nil {
@@ -5315,7 +5378,7 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		}
 
 		reactions++
-		if err := w.ExecuteActivity("saveReaction", comments.Reaction{
+		if err := executeActivityWithLockRetry(w, "saveReaction", comments.Reaction{
 			ID: r.ID, CommentID: runID, Source: r.Source, Author: r.Author, AvatarURL: r.AvatarURL,
 			Body: r.Body, Resolves: r.Done,
 		}, nil); err != nil {

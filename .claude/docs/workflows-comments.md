@@ -17,6 +17,32 @@ mirrored to GitHub, and `Done`/`/resolve` resolves the thread — which it can b
 brought back out of again, see "Resolve is reversible" below. Only a **delete**
 ends the Execution.
 
+### A `saveReaction` write retries a transient SQLite lock, durably
+
+`executeActivityWithLockRetry` (`workflows.go`) wraps both `saveReaction`
+call sites (an ordinary reply/reaction, and the reopen-sentinel reaction on
+`unresolve`) instead of a bare `w.ExecuteActivity`. Reviewer report: "save
+reaction: database is locked (5) (SQLITE_BUSY)" still permanently failed a
+run under a sustained write burst, even with `modules/sqlitedsn`'s 5s
+`busy_timeout` pragma (see that package's own doc comment — that fix is a
+*connection-level* wait, not a retry, and 5s isn't always enough to ride out a
+real burst).
+
+`isTransientDBLockError` matches the driver's own error text
+(`SQLITE_BUSY`/`SQLITE_LOCKED`/"database is locked") — only THAT kind of
+failure is retried; anything else (a genuine bug) still fails the run on the
+spot, unchanged. On a match, `executeActivityWithLockRetry` waits out
+`dbLockRetryDelays` — **15 minutes, 1 hour, 4 hours, 12 hours** — via
+`w.Sleep` (a durable timer, survives a restart) before trying again, same
+shape as `chatRetryDelays` in `chat_workflow.go`, including the determinism
+reasoning (`.claude/rules/workflow-determinism.md`): the loop
+bound and delay index follow only from the recorded Activity results and the
+loop counter, never a live clock read. Deliberately **finite**: once every
+rung is spent the run ends up `StatusFailed` exactly as before, surfacing in
+"Mislukte taken" where it stays manually retryable (`RetryRun`) — not an
+infinite retry loop, so a genuinely stuck/broken write doesn't hide there
+forever. Tests: `save_reaction_retry_test.go`.
+
 ### The three modules it drives
 
 - **`modules/comments`** (`data/comments.db`, tables `comments`/`reactions`):
