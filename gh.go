@@ -113,7 +113,62 @@ func fetchPRMeta(ctx context.Context, repo string, pr int) (*prMeta, error) {
 	if err := json.Unmarshal(out, &m); err != nil {
 		return nil, fmt.Errorf("parse pr meta: %w", err)
 	}
+	if len(m.Files) >= ghFilesPageSize {
+		// `gh pr view --json files` stops at ONE page (100 files) and says
+		// nothing about it, so a big PR silently ingested only its first 100
+		// changed files — every block in file 101+ was simply missing from the
+		// review tree, with no error anywhere. Only pay for the extra call
+		// when the list is exactly page-sized, i.e. when it may be truncated.
+		if files, err := fetchPRFilesPaged(ctx, repo, pr); err == nil && len(files) > len(m.Files) {
+			m.Files = files
+		}
+	}
 	return &m, nil
+}
+
+// ghFilesPageSize is GitHub's per-page cap for a PR's changed-file list, and
+// therefore the count at which `gh pr view --json files` may be truncated.
+const ghFilesPageSize = 100
+
+// fetchPRFilesPaged reads a PR's COMPLETE changed-file list through the REST
+// API, which — unlike `gh pr view` — paginates. The REST field names differ
+// (`filename` instead of `path`), so this cannot reuse prFile's own tags.
+func fetchPRFilesPaged(ctx context.Context, repo string, pr int) ([]prFile, error) {
+	cmd := exec.CommandContext(ctx, "gh", "api", "--paginate", "--slurp",
+		fmt.Sprintf("repos/%s/pulls/%d/files?per_page=%d", repoSlugFor(repo), pr, ghFilesPageSize))
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return nil, fmt.Errorf("gh api pulls/%d/files%s: %w: %s", pr, repoTag(repo), err, msg)
+		}
+		return nil, fmt.Errorf("gh api pulls/%d/files%s: %w", pr, repoTag(repo), err)
+	}
+	return parsePRFilesPages(out)
+}
+
+// parsePRFilesPages turns `gh api --paginate --slurp` output into prFiles.
+// --slurp wraps every page's own array in one outer array, and the REST field
+// names differ from `gh pr view`'s (`filename`, not `path`), so this cannot
+// reuse prFile's own json tags. Split out of fetchPRFilesPaged so it is
+// testable without gh.
+func parsePRFilesPages(out []byte) ([]prFile, error) {
+	var pages [][]struct {
+		Filename  string `json:"filename"`
+		Additions int    `json:"additions"`
+		Deletions int    `json:"deletions"`
+	}
+	if err := json.Unmarshal(out, &pages); err != nil {
+		return nil, fmt.Errorf("parse pr files: %w", err)
+	}
+	var files []prFile
+	for _, page := range pages {
+		for _, f := range page {
+			files = append(files, prFile{Path: f.Filename, Additions: f.Additions, Deletions: f.Deletions})
+		}
+	}
+	return files, nil
 }
 
 // ensureCommits makes sure both the base and head SHA are present locally.
