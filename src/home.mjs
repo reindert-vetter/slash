@@ -1518,6 +1518,15 @@ let lastFiredSelectionRef = undefined
 // alone" — see that cleanup branch's own doc comment for why an
 // unconditional clear there is wrong.
 let commentAnchorDrillFor = null
+// otherPlaceAnchorId — plain (non-reactive) bookkeeping mirroring
+// commentAnchorDrillFor above: the id of the anchor block currently forced
+// open as state.drill[0] by openTaskDrilledAnchor (below), or null. Declared
+// here (ahead of the state.selected watch, which reads/clears it on its very
+// first, immediate run) rather than next to isOtherPlaceAnchorActive/
+// openTaskDrilledAnchor further down — a `let` there would still be in its
+// temporal dead zone at that first synchronous call (measured: "Cannot
+// access 'otherPlaceAnchorId' before initialization").
+let otherPlaceAnchorId = null
 // closeCommentAnchorDrillIfOwned closes a comment-anchor drill left open by a
 // PREVIOUSLY selected item, but ONLY if THIS feature is the one that opened
 // it (commentAnchorDrillFor) — never an ordinary, unrelated drill another
@@ -1614,6 +1623,11 @@ watch(
     const b = state.blocks[state.selected]
     const fireRef = b ? (b.kind === 'comment' || b.kind === 'test_class' ? b.id : `${b.file}:${b.line}`) : null
     if (fireRef !== null && fireRef === lastFiredSelectionRef) return
+    // A genuinely NEW top-level selection invalidates any drilled anchor
+    // openTaskDrilledAnchor forced open (see otherPlaceAnchorId/
+    // commentAnchorColumnHidden above) — that jump never touches
+    // state.selected itself, so this is the only place it gets cleared.
+    otherPlaceAnchorId = null
     // Cmd+[ / Cmd+]'s own selection-history stack (goToPreviousBlock/
     // goToNextBlock below) — push the ref being LEFT onto blockHistoryStack,
     // but only for a genuinely NEW move: this watch already guarantees "a
@@ -3188,8 +3202,24 @@ function commentAnchorOnlyIds() {
 // Gated on focusLevel > 0: stepping the keyboard back OUT of the drilled
 // column (←) must still show the comment's own commentDetailCard here, never
 // an empty column.
+//
+// Also hides for otherPlaceAnchorId (openTaskDrilledAnchor's own bookkeeping,
+// see its own doc comment above) — the equivalent case reached via a "Taken"
+// row/an "Andere chats in deze PR" jump rather than selecting a comment-index
+// item: there is no comment row to hang the drilled anchor off, so hiding an
+// otherwise-unrelated top rail matters just as much.
 function commentAnchorColumnHidden() {
-  return state.focusLevel > 0 && isCommentAnchorDrillActive(1)
+  return state.focusLevel > 0 && (isCommentAnchorDrillActive(1) || isOtherPlaceAnchorActive(1))
+}
+
+// isOtherPlaceAnchorActive checks otherPlaceAnchorId (declared up near
+// commentAnchorDrillFor — the state.selected watch reads/clears it
+// synchronously on its very first, immediate run, same TDZ constraint that
+// var already has to respect).
+function isOtherPlaceAnchorActive(level) {
+  return (
+    level === 1 && otherPlaceAnchorId != null && state.drill.length === 1 && state.drill[0] && state.drill[0].id === otherPlaceAnchorId
+  )
 }
 
 // commentAnchorAwaitingEntry — an anchored comment-index item's column is open
@@ -7573,7 +7603,18 @@ async function openTask(run) {
     idx = state.blocks.findIndex(
       (row) => row.kind === 'test_class' && row.methods.some((m) => m.file === c.file && m.label === c.label),
     )
-    if (idx < 0) return
+    if (idx < 0) {
+      // Neither a top-level row nor a folded test method matches this
+      // comment's file+label — its anchor may still be a real, changed PR
+      // block that only shows up NESTED, as an Onderliggende-code child (a
+      // resolved method call, a covering test — the same "no own place"
+      // case jumpToBlockOwnPlace's own doc comment names). Falls through to
+      // the drilled-anchor trick instead of giving up, so this jump still
+      // lands on the right code/thread even though there is no top-level row
+      // to select.
+      await openTaskDrilledAnchor(c, run.runId)
+      return
+    }
     const row = state.blocks[idx]
     const mIdx = row.methods.findIndex((m) => m.file === c.file && m.label === c.label)
     state.classMethodSel = mIdx
@@ -7604,6 +7645,58 @@ async function openTask(run) {
   selectComment(run.runId)
 }
 
+// openTaskDrilledAnchor is openTask's fallback for a comment whose anchor
+// block (commentAnchorBlock, keyed off state.allBlocks — the flat, complete
+// list, unlike state.blocks) exists as a real, changed PR block but has no
+// place of its own in state.blocks/a test_class row — mirrors
+// openCommentAnchorDrill (same state.drill/drillCursor/focusLevel shape,
+// same lazy ensureCode-then-recompute-cursor retry), minus that function's
+// own "leave state.selected on the comment row" trick: there is no
+// comment-index row to select here, this is reached directly from a "Taken"
+// row or an "Andere chats in deze PR" jump. otherPlaceAnchorId takes over
+// commentAnchorColumnHidden's job of hiding the (otherwise unrelated) top
+// rail — whatever block happened to be selected before this jump — instead.
+//
+// Deliberately does NOT resolve a "synthetic frame" (a call into a file this
+// PR doesn't touch, resolveChildBlock's `synthetic: true` branch): such a
+// frame was never ingested as a real PR block, so it has no entry in
+// state.allBlocks either, and commentAnchorBlock returns null for it — the
+// exact same, already-accepted limitation openCommentAnchorDrill has for a
+// comment-index item anchored to one. Best-effort throughout, like openTask
+// itself: a comment whose anchor is genuinely gone leaves the view
+// unchanged.
+async function openTaskDrilledAnchor(c, runId) {
+  const anchor = commentAnchorBlock(c)
+  if (!anchor) return
+  closeCommentAnchorDrillIfOwned()
+  leaveRelated()
+  state.mode = 'diff'
+  state.drill = [anchor]
+  state.drillCursor = [commentAnchorCursor(anchor, c)]
+  state.focusLevel = 1
+  otherPlaceAnchorId = anchor.id
+  resetMainScroll()
+  scrollFocusIntoView()
+  // commentAnchorCursor's row lookup needs the anchor's own aligned diff rows
+  // (blockRows), which aren't there yet on this block's very first open —
+  // ensureCode, then recompute the cursor against the real rows, mirroring
+  // openCommentAnchorDrill's identical retry.
+  if (!anchor.code) {
+    await ensureCode(anchor)
+    if (state.drill.length === 1 && state.drill[0] === anchor && state.focusLevel === 1) {
+      state.drillCursor = [commentAnchorCursor(anchor, c)]
+    }
+  }
+  scrollChangeIntoView(false)
+  // Give arrow.js a couple of microtask turns to flush the setCommentScope
+  // watch the drill above just queued, so RelatedPanel's comment index
+  // (cs.view) is scoped to this unit before selectComment looks the id up in
+  // it — same wait openTask's own tail relies on.
+  await Promise.resolve()
+  await Promise.resolve()
+  selectComment(runId)
+}
+
 // jumpToClaudeConversation lands the keyboard on a DIFFERENT running Claude
 // conversation's own code/comment and opens it — the Enter (or click) action
 // of the "other running Claude tasks" nested nav stop (see
@@ -7614,14 +7707,33 @@ async function openTask(run) {
 // (block selection) nor jumpToCommentRow (comment-index rows can still be a
 // poll tick away) — both live here.
 //
-// A comment carrying its own `kind` is a PR-wide/comment-index row (its own
-// synthetic "Start" row, see commentBlockItem below); anything else is an
-// ordinary inline comment anchored to a real block, landed via openTask's own
-// file/label lookup (test_class rows included). Best-effort throughout, same
-// as openTask itself: a stale/racy jump (the comment/row gone by the time an
+// The general chat (isGeneralChatAnchor) is checked FIRST, ahead of the
+// `c.kind` branch below — its anchor comment also carries a truthy `kind`
+// ('issue', reusing the plain PR-wide comment shape, see
+// openChatComments/isGeneralChatAnchor in RelatedPanel.mjs), but it is
+// deliberately EXCLUDED from indexComments/commentBlockItem
+// (isChatAnchorPlaceholder), so it never gets a 'comment:'-prefixed index
+// row — only a 'chat:'-prefixed one (chatBlockItem). jumpToCommentRow always
+// builds a 'comment:' ref, which can never match that row: without this
+// branch, clicking "Algemene chat" under "Andere chats in deze PR" silently
+// did nothing (blockRefPending stayed set, never resolved). openGeneralChat
+// is the ONE existing entry point into that PR-wide overlay (the `/`-menu
+// item, the "Openstaande chats" row's own → already use it too).
+//
+// A comment carrying its own `kind` (and not the general chat above) is an
+// ordinary PR-wide/comment-index row (its own synthetic "Start" row, see
+// commentBlockItem below); anything else is an ordinary inline comment
+// anchored to a real block, landed via openTask's own file/label lookup
+// (test_class rows, and — see openTaskDrilledAnchor — a block reachable only
+// as an Onderliggende-code child, included). Best-effort throughout, same as
+// openTask itself: a stale/racy jump (the comment/row gone by the time an
 // await resolves) simply does nothing further.
 async function jumpToClaudeConversation(c) {
   if (!c) return
+  if (isGeneralChatAnchor(c)) {
+    openGeneralChat()
+    return
+  }
   if (c.kind) {
     jumpToCommentRow(c.id)
     // The row may still be a poll tick away (see jumpToCommentRow's own doc

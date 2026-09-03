@@ -877,14 +877,89 @@ navigation.md's rule that a click runs the same function a key runs.
 `home.mjs`, which `RelatedPanel.mjs` never imports state from.**
 `setClaudeTaskJump(fn)` registers `home.mjs`'s `jumpToClaudeConversation(c)`
 once at module load (the same one-shot wiring shape as `setPrRepo`), so
-`activateClaudeTask` can call it without a new import cycle. A comment
-carrying its own `kind` is a PR-wide/comment-index row, landed via
-`jumpToCommentRow` (same mechanism `startBatchFromRow` uses); anything else is
-an ordinary inline comment anchored to a real block, landed via `openTask`'s
-own file/label lookup (test_class rows included) — then `enterClaudeChat`
-takes the keyboard the rest of the way in both cases. Best-effort throughout,
-like `openTask` itself: a stale/racy jump (the row/comment gone by the time an
+`activateClaudeTask` can call it without a new import cycle. The general chat
+(`isGeneralChatAnchor`) is checked FIRST — see "Two more origins the jump used
+to silently drop" below. A comment carrying its own `kind` (and not the
+general chat) is a PR-wide/comment-index row, landed via `jumpToCommentRow`
+(same mechanism `startBatchFromRow` uses); anything else is an ordinary
+inline comment anchored to a real block, landed via `openTask`'s own
+file/label lookup (test_class rows, and — see below — a block reachable only
+as an Onderliggende-code child, included) — then `enterClaudeChat` takes the
+keyboard the rest of the way in both cases. Best-effort throughout, like
+`openTask` itself: a stale/racy jump (the row/comment gone by the time an
 `await` resolves) simply does nothing further.
+
+### Two more origins the jump used to silently drop
+
+A reviewer-driven audit of every place a chat can be started from ("test dat
+onderwerp goed door") found two dead ends in `jumpToClaudeConversation` — the
+row rendered, was clickable, and did nothing.
+
+- **The general chat.** Its anchor comment carries a truthy `kind` ('issue',
+  the plain PR-wide comment shape — see `isGeneralChatAnchor`/
+  `openChatComments` above), which used to route it into the ordinary
+  `jumpToCommentRow('comment:' + id)` branch. But a general-chat anchor is
+  deliberately EXCLUDED from `indexComments`/`commentBlockItem`
+  (`isChatAnchorPlaceholder`, see "Product decision" above) — it only ever
+  gets a `'chat:'`-prefixed row (`chatBlockItem`, "Openstaande chats" below),
+  never a `'comment:'`-prefixed one, so that ref could never resolve.
+  `jumpToClaudeConversation` now checks `isGeneralChatAnchor(c)` FIRST and
+  calls `openGeneralChat()` — the same one entry point the `/`-menu item and
+  the "Openstaande chats" row's own `→` already use — instead of falling
+  through to the ordinary branch.
+- **A comment anchored to a real, changed PR block that has no place of its
+  own in `state.blocks`** — a resolved-method-call target or a covering test,
+  reachable only by drilling into Onderliggende code from some ancestor (see
+  `jumpToBlockOwnPlace`'s own doc comment in `drilling.md` for "no own
+  place"). `openTask` only ever searched `state.blocks`/a `test_class` row's
+  methods, so it silently gave up (`idx < 0 → return`) for exactly this case.
+  **`openTaskDrilledAnchor(c, runId)`** (`home.mjs`) is `openTask`'s fallback
+  for that dead end: it resolves the anchor via `commentAnchorBlock(c)`
+  (`state.allBlocks`, not `state.blocks`) and, once found, applies the exact
+  same drilled-anchor trick `openCommentAnchorDrill` already uses for a
+  comment-index item anchored to such a block — `state.drill = [anchor]`,
+  a cursor from `commentAnchorCursor`, `state.focusLevel = 1` — minus that
+  function's own "leave `state.selected` on the comment row" trick: there is
+  no comment-index row here, this is reached directly from a "Taken" row or
+  an "Andere chats" jump. **`otherPlaceAnchorId`** (a plain, non-reactive id,
+  declared next to `commentAnchorDrillFor` in `home.mjs` — before the
+  `state.selected` watch, which reads/clears it on its own first, immediate,
+  synchronous run; declaring it further down hits the exact TDZ crash
+  `commentAnchorDrillFor` already had to avoid) takes over
+  `commentAnchorColumnHidden`'s job of hiding the otherwise-unrelated top
+  rail (whatever block happened to be selected before the jump) for this
+  case too — `commentAnchorColumnHidden` now also checks
+  `isOtherPlaceAnchorActive(1)` alongside `isCommentAnchorDrillActive(1)`.
+  Cleared by the very next genuine `state.selected` change (the jump itself
+  never touches `state.selected`). Deliberately does **not** resolve a
+  "synthetic frame" (a call into a file this PR doesn't touch,
+  `resolveChildBlock`'s `synthetic: true` branch, `drilling.md`) — such a
+  frame was never ingested as a real PR block, so `commentAnchorBlock`
+  returns `null` for it too, the same already-accepted limitation
+  `openCommentAnchorDrill` has. Test:
+  `tests/claude-other-tasks-jump-origins.spec.mjs`.
+
+**"A triple-nested toggle can wedge the innermost keyed list empty" — found
+while writing that test, NOT a bug in the fix above.** Building the general
+chat's row through several chained LIVE UI actions (post a comment through
+the composer, open/close the general-chat overlay, enter Claude) —
+`comment-claude-footer`'s own visibility toggle, `claude-other-tasks`' own
+toggle nested inside it, and the row-list `${() => otherClaudeChats().map(...)}`
+nested inside THAT — made the innermost list render permanently empty even
+though the exact same reactive expression, logged in place, kept computing a
+correct length-1 array on every subsequent tick (confirmed by temporary
+instrumentation, since reverted). Matches the LOCAL PATCH 2b family of
+symptoms (arrowjs-pitfalls.md) — a nested reconciler surviving several ancestor
+toggle flips in quick succession appears to be able to end up wedged, mounting
+into a detached fragment forever after — but this was not chased down to a
+root cause in `vendor/arrow.js` itself; treat it as a reproducible SYMPTOM, not
+a proven mechanism. **Workaround, not a fix**: seed both conversations through
+the workflow API directly and settle in ONE `page.goto` (the same shape every
+other passing "Andere chats" test already uses), so the toggle only ever makes
+one clean 0→1 transition. If a future test needs to chain several live state
+changes in front of this list and hits the same "row list stays empty despite
+a non-empty computed value", re-open this investigation instead of assuming a
+new, unrelated bug.
 
 **Reachable with NO anchor at all, not just as a nested rung of `'claude'`.**
 Reviewer report: with no comment on the current unit (so `'claude'` cannot
