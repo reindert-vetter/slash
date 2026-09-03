@@ -202,6 +202,12 @@ func TestRefreshTreeAfterLandingPublishesLandedFilesThroughTheRealSignalChain(t 
 	landedHeadSHA := commit("<?php\nclass Foo {\n    public function bar() { return 3; }\n}\n", "reviewer's own landed edit")
 
 	t.Setenv("SLASH_REPO_DIR", repoDir)
+	// No network: refreshIngestDelta intersects its delta with the PR's own
+	// GitHub file list, and this fixture's PR number exists for real in the
+	// primary repo — without this the live list (which of course never holds
+	// this test's Foo.php) filtered the delta away and the refresh published
+	// nothing.
+	t.Setenv("SLASH_GITHUB", "off")
 	// The pending ref a real landing (advancePendingRefFromCheckout) would have
 	// created/advanced onto the reviewer's just-landed commit.
 	run("update-ref", prPendingRef("", pr, headRefName), landedHeadSHA)

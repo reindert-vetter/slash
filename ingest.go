@@ -368,6 +368,14 @@ func refreshIngestDelta(ctx context.Context, db *sql.DB, dataDir string, repo st
 // the same source prepareIngestWorktreesLocked scans, so a delta refresh can
 // hold itself to exactly the files a full ingest would produce blocks for.
 func prChangedFilePaths(ctx context.Context, repo string, pr int) ([]string, error) {
+	if ghDisabled() {
+		// The caller treats an error as "no filter", which is exactly the
+		// documented offline behaviour. Without this, SLASH_GITHUB=off still
+		// shelled out to the real gh: on a machine logged in to the primary
+		// repo that returned the LIVE file list of a same-numbered PR, and a
+		// test's own landed file was then filtered away as "outside the PR".
+		return nil, fmt.Errorf("pr %d: gh disabled", pr)
+	}
 	meta, err := fetchPRMeta(ctx, repo, pr)
 	if err != nil {
 		return nil, err
