@@ -14978,9 +14978,24 @@ function isIndexMenu() {
   // the guard the description column's own anchor would never be reached.
   // In diff mode this whole branch is skipped, so the PR menu keeps its
   // default positioning there.
+  //
+  // 'pushTodo' is in this list for the same reason: Enter/click on the
+  // push-todo row at the very bottom of the index (BlockList.mjs's
+  // pushTodoRow) opens a confirm menu via openMenu('pushTodo', ...), and
+  // this row was missing here entirely — the generic fallback below then
+  // anchored/sized the menu against whatever block/diff-pane happened to be
+  // selected, which is very often scrolled far out of view by the time the
+  // reviewer has scrolled all the way down to "Aan het einde". Reported bug:
+  // "menu is niet zichtbaar als ik wil pushen vanuit blokken index" — the
+  // menu wasn't actually invisible, it rendered clamped into the viewport
+  // but positioned over the diff pane on the right, nowhere near the
+  // push-todo row the reviewer was looking at.
   return (
     state.mode === 'list' &&
-    (ms.mode === 'block' || (ms.mode === 'pr' && !state.showDescription) || isReviewFollowup(ms.mode)) &&
+    (ms.mode === 'block' ||
+      (ms.mode === 'pr' && !state.showDescription) ||
+      ms.mode === 'pushTodo' ||
+      isReviewFollowup(ms.mode)) &&
     state.focusLevel <= 1
   )
 }
@@ -15073,6 +15088,22 @@ function menuAnchor() {
   // itself, not the list-mode diff preview beneath it (see
   // .claude/docs/keyboard-navigation.md).
   if (isIndexMenu()) {
+    // The push-todo row (BlockList.mjs's pushTodoRow) has no [data-idx] of
+    // its own — it isn't a block/comment row — so it needs its own lookup
+    // before the generic data-idx one below, which would silently resolve
+    // to an unrelated (often scrolled-out-of-view) blokrij instead. Same
+    // lastIndexRowRect fallback shape as the generic row lookup, since a
+    // push in flight can make the row's own state (and thus its key) change
+    // while this menu is still open.
+    if (ms.mode === 'pushTodo') {
+      const row = document.querySelector('[data-testid="push-todo"]')
+      if (row) {
+        lastIndexRowRect = row.getBoundingClientRect()
+        return row
+      }
+      if (lastIndexRowRect) return { getBoundingClientRect: () => lastIndexRowRect }
+      return document.querySelector('[data-testid="pr-index"]')
+    }
     // Stop 2b (the methodes-kolom) owns the keyboard: the pr-index <aside>
     // is collapsed to width 0 then (see BlockList.mjs's testColumnFocused
     // branch), so the generic row/aside lookup below would anchor/size the

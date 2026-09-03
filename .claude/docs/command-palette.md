@@ -1076,6 +1076,38 @@ since a plain `toBeVisible()` doesn't catch this): "the command menu stays
 on-screen from the methodes-kolom, once the pr-index collapse settles" in
 `tests/test-class-grouping.spec.mjs`.
 
+### `pushTodo` was missing from `isIndexMenu()` entirely
+
+The push-todo row at the very bottom of the index (`pushTodoRow`,
+`BlockList.mjs` — see "The UI" in `.claude/docs/pending-push.md`) opens its
+confirm menu via `openMenu('pushTodo', ...)`, but `isIndexMenu()` never
+listed `ms.mode === 'pushTodo'` at all — unlike the methodes-kolom case
+above, this wasn't a wrong sub-branch, the mode fell all the way through to
+the generic default (`[data-change-active-end]`/whatever block happens to sit
+at `state.selected`, sized against the diff pane's `[data-pane="new"]`).
+`positionMenu()` still clamps the box into the viewport, so a bare
+`toBeVisible()` kept passing — same trap as the methodes-kolom case, and
+exactly why the small `tests/pending-push-todo.spec.mjs` fixture (a short
+list, `state.selected` at index 0, always on-screen) never caught it. Reported
+live on a real, longer PR: after scrolling all the way down to "Aan het
+einde" (`state.selected` still pointing at whatever block was picked earlier,
+now scrolled out of view), the menu rendered clamped near the top of the
+screen, over the right-hand diff column — nowhere near the push-todo row the
+reviewer was actually looking at ("menu is niet zichtbaar als ik wil pushen
+vanuit blokken index").
+
+Fix, same shape as the two branches above: `isIndexMenu()` now also counts
+`ms.mode === 'pushTodo'`, and `menuAnchor()`'s `isIndexMenu()` branch gets its
+own `ms.mode === 'pushTodo'` sub-branch (checked before the generic
+`[data-idx=...]` lookup, since the push-todo row carries no `data-idx` of its
+own) anchoring on `[data-testid="push-todo"]`, with the same `lastIndexRowRect`
+fallback shape the generic row lookup already uses. `menuRegion()` needed no
+new branch — its `isIndexMenu()` case already falls through to the whole
+`pr-index` region for anything that isn't the methodes-kolom, which is exactly
+right here. Regression test: "opens its confirm menu positioned over the
+index, not the diff pane, even with an off-screen selected block" in
+`tests/pending-push-todo.spec.mjs`.
+
 ## Review-submit menus: `reviewApprove` / `reviewChoice` / `reviewReject`
 
 When `findNextUnapproved()` returns `null`, `afterApproveAction` opens one of

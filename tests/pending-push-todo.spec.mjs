@@ -150,6 +150,50 @@ test.describe('Push todo at the bottom of the index', () => {
     await expect(page.getByTestId('block-unpushed').first()).toContainText('ongepusht')
   })
 
+  // Regression: isIndexMenu() (home.mjs) never listed ms.mode === 'pushTodo',
+  // so menuAnchor()/menuRegion() fell through to the generic diff-pane
+  // default instead of the sidebar — the menu still rendered somewhere
+  // on-screen (positionMenu() clamps into the viewport, so a bare
+  // toBeVisible() kept passing), just over the right-hand diff column
+  // instead of the index/push-todo row the reviewer was actually looking
+  // at. Reported: "menu is niet zichtbaar als ik wil pushen vanuit blokken
+  // index". See "pushTodo was missing from isIndexMenu() entirely" in
+  // .claude/docs/command-palette.md.
+  test('opens its confirm menu positioned over the index, not the diff pane', async ({ page }) => {
+    await mockPendingPush(page, ready)
+    await page.goto('/pr/12903')
+    await leaveSearchBox(page)
+
+    // Select a real block first, same as any ordinary review session, so
+    // state.selected points at a genuine diff/block row (not the push-todo
+    // row itself) by the time the push-todo menu opens.
+    await page.getByTestId('block-row').first().click()
+
+    const row = page.getByTestId('push-todo')
+    const focused = /bg-indigo-50/
+    for (let i = 0; i < 40; i++) {
+      const cls = (await row.getAttribute('class')) || ''
+      if (focused.test(cls)) break
+      await page.keyboard.press('ArrowDown')
+    }
+    await expect(row).toHaveClass(focused)
+
+    await page.keyboard.press('Enter')
+    const menu = page.getByTestId('command-menu')
+    await expect(menu).toBeVisible()
+    await expect(menu).toContainText('Push naar GitHub')
+    // Let positionMenu()'s own reposition-after-render settle.
+    await page.waitForTimeout(300)
+
+    const menuBox = await menu.boundingBox()
+    const indexBox = await page.getByTestId('pr-index').boundingBox()
+    // The menu sits over the sidebar/its own row (menuRegion's pr-index),
+    // not off in the diff pane on the right — a few px of slack for the
+    // viewport clamp in positionMenu().
+    expect(menuBox.x).toBeGreaterThanOrEqual(indexBox.x - 5)
+    expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(indexBox.x + indexBox.width + 5)
+  })
+
   test('no row at all when there is nothing to push', async ({ page }) => {
     await mockPendingPush(page, null)
     await page.goto('/pr/12903')
