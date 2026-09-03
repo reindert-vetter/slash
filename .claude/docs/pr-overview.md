@@ -494,11 +494,14 @@ read (the run itself is still in the tembed store, and still purged by
   (`perItemRunID`: `task_code_comment`, `resolve_call`, `explain_code`,
   `claude_chat`, `chat_merge`; identity is the Run ID itself). Two reasons, both
   required: a PR has many comment threads, so a succeeded one must not hide a
-  failed sibling on the same PR; and `startWorkflowID` is **idempotent**, so a
-  retry is a no-op returning that same failed run — such a failure is
-  permanently open work and *must* keep showing. Hand-maintained list, like
-  `retiredWorkflowTypes`: extend it when a new workflow adopts a deterministic
-  Run ID.
+  failed sibling on the same PR; and `startWorkflowID` is **idempotent**, so
+  *starting* such a run again is a no-op returning that same failed run — such
+  a failure is permanently open work and *must* keep showing. Hand-maintained
+  list, like `retiredWorkflowTypes`: extend it when a new workflow adopts a
+  deterministic Run ID. (That second reason no longer makes those rows
+  **unretryable** — a retry RESUMES the failed run instead of starting a new
+  one, see the section below — but it still governs supersession, which is what
+  `perItemRunID` is consulted for here.)
 
 Not covered by this: the `logErrors` half. Those are no runs, have no status and
 no identity, so there is nothing to supersede them with; they still only clear
@@ -508,11 +511,77 @@ on a restart or by ageing out of the ring buffer. Tests:
 
 ⚠ **Deliberately not in v1: the rows aren't clickable** — a click target would
 make them navigation elements, with the keyboard/popover consequences above. No
-dismiss/retry either (a restart already clears the buffer; "retry" means
-something different per workflow type). Test:
+dismiss/retry from THIS drawer either; a retry is offered in the review tree's
+"Taken" row menu and in bulk in the global dialog below. Test:
 `tests/overview-problems.spec.mjs`, whose populated rendering is driven through
 `page.route`: every real failure path is best-effort or needs a live gh hiccup,
 so it isn't deterministic in a worker (backend side: `run_errors_test.go`).
+
+## The global failed-tasks dialog (every page), and the four-day window
+
+Reviewer request: "als er ergens een mislukte taak is, geef een popup met de
+error melding lijst, over alle prs heen, overal tonen waar ik ook zou zijn. ik
+moet het voor 5 minuten kunnen negeren, ook alles retryen vanaf de laatste keer
+dat dezelfde taak goed is gegaan", refined to "ik wil bovenaan van 4 dagen zien
+(dit mag weg zoals het nu is) en dan wil ik alles kunnen retrien van de laatste
+4 dagen, toon maximaal 3 items met een toon meer knop". The drawer above stays
+exactly as it is; this is a second, **push** surface on top of it.
+
+**`src/failedTasks.mjs`** is one shared module, mounted on **all three pages**
+(`home.mjs`, `overview.mjs`, `settings.mjs`): `FailedTasksHost()` next to
+`MenuHost`/`ImageLightboxHost`, plus `initFailedTasksPopup()` (a 30s poll of the
+same read-only `GET /api/problems`).
+
+- **It is a real modal** — backdrop, centered, and it **owns the keyboard**:
+  every page checks `isFailedTasksOpen()` FIRST in its own global keydown
+  handler and hands the event to `handleFailedTasksKeydown`, the same contract
+  the command palette and `imageLightbox.mjs` already have. Escape dismisses;
+  every other key is swallowed, so nothing navigates behind the backdrop.
+- **Three rows, then "Toon meer"** (`data-testid=failed-tasks-more`, showing the
+  hidden count). The title always names the FULL count, so the cap never hides
+  how much is wrong.
+- **"Negeer 5 minuten"** (also Escape, also a backdrop click) writes an epoch-ms
+  deadline to `localStorage` under `failedTasksSnoozeUntil` and schedules its own
+  return, so the dialog comes back without a reload. `localStorage` for the same
+  reason as the theme: a per-browser UI convenience, not durable state, so it is
+  outside the workflow write boundary.
+- **"Alles opnieuw proberen"** POSTs `/api/workflows/retry-all` and reports
+  `{retried, skipped}` in words next to the button — see
+  `.claude/docs/tembed-endpoints.md`.
+- **The rows are `problems.mjs`'s own** (`problemRunRow`), a third call site
+  next to this drawer and the review tree's "Taken" block, not a third
+  implementation.
+- **Only the `failedRuns` half, never `logErrors`.** A mirrored glue-log line is
+  deliberately labelled "overgeslagen", not "mislukt" — best-effort work its own
+  poller will retry — and in practice most of them are plain informational lines
+  ("`task_code_comment: pr #100 merged — stop polling`"), dozens of them after
+  every restart. A modal that blocks the whole screen may only fire on something
+  that really went wrong, and it is also the only half "alles opnieuw proberen"
+  can act on: a log line is no run, so there is nothing to resume. Measured on
+  the live server right after this landed: 55 rows in the window, of which 1 was
+  a real failed run — a dialog over both halves would have been permanently up
+  and never about a failure. **This drawer keeps showing both, unchanged.**
+
+**The four-day window lives in the BACKEND** (`problemWindow`, `run_errors.go`),
+applied to both halves of `GET /api/problems`. So the dialog, this drawer and
+the review tree's Taken block all agree on one window, and "alles opnieuw
+proberen" means exactly the rows on screen — no client-side date filter that
+could drift from the endpoint. It is applied to the OUTPUT only: `supersededRuns`
+still weighs every run in the store, so an old successful attempt keeps hiding
+its failed predecessor. The pre-existing, unbounded list had grown to 130 rows of
+weeks-old failures on long-merged PRs, which is not a list anybody acts on
+("dit mag weg zoals het nu is").
+
+**Test-harness consequence:** the dialog would otherwise open over nearly every
+Playwright spec (with `SLASH_GITHUB=off` a worker's own store easily holds a
+failure, on top of the specs that stub `/api/problems` on purpose), so the
+`page` fixture **pre-snoozes it suite-wide** via `addInitScript`, with
+`enableFailedTasksPopup(page)` as the opt-out — one default plus an opt-out,
+exactly like the `keepDescription` goto wrapper next to it. Note that that same
+wrapper presses **Escape** on a `/pr/<id>` open (to leave the search box), which
+this dialog legitimately reads as a snooze — a spec exercising the dialog on the
+review tree must pass `{ keepDescription: true }`. Test:
+`tests/failed-tasks-popup.spec.mjs`.
 
 ## GitHub access runs through a workflow (never direct)
 
@@ -604,7 +673,8 @@ default" section.
 | `GET /api/names?logins=a,b` | Login → real name + avatar. See "Real names instead of logins" in `.claude/docs/pages-and-routing.md`. |
 | `POST /api/workflows/ready_for_review` | `{pr, reviewers?}` → flip a draft to ready + request reviewers. 400 on an invalid pr/login. |
 | `POST /api/workflows/remove_reviewer` | `{pr}` → drop **myself** from that PR's requested reviewers. No login in the request (resolved server-side). 400 on a non-positive pr. |
-| `GET /api/problems` | Read-only → `{ok, failedRuns:[{runId,workflow,pr,updatedAt,error,comment?}], logErrors:[{at,scope,pr,message}], prTitles:{"<pr>":"<title>"}}`. Feeds "Mislukte taken"; superseded failures are already filtered out. |
+| `GET /api/problems` | Read-only → `{ok, failedRuns:[{runId,workflow,pr,updatedAt,error,comment?,retryable}], logErrors:[{at,scope,pr,message}], prTitles:{"<pr>":"<title>"}}`. Feeds "Mislukte taken" and the global dialog; superseded failures are already filtered out, and both halves are limited to the last `problemWindow` (four days). |
+| `POST /api/workflows/retry-all` | Resume every failure of that window (`{ok, retried, skipped}`) — see `.claude/docs/tembed-endpoints.md`. |
 | `GET /api/prs` | (existing) ingested PRs + counts, for the recent drawer. |
 
 ### "Recent gegenereerd" rows are enriched from the SAME local prmeta read, no extra request

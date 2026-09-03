@@ -571,12 +571,18 @@ server was started from. Two categories, both surfaced:
   readable form, so the row keeps `err.Error()` as its text. Deliberately
   **repo-wide**, which is why `RunsForPR` couldn't be reused: that filters on
   the input's `pr`, so a per-repo tracker structurally never appears there; here
-  it shows with `pr: 0`. Capped at 50, newest-updated first. A failure that a
+  it shows with `pr: 0`. Capped at 50, newest-updated first, and limited to the
+  last `problemWindow` (**four days**) — everything older is dropped from both
+  halves, see "The global failed-tasks dialog (every page), and the four-day
+  window" in `.claude/docs/pr-overview.md`. A failure that a
   **later attempt at the same task** took over is filtered out first
   (`supersededRuns`/`runIdentity`) — a tracker that failed and was replaced by a
   fresh `running`/`waiting` one is no longer news. Exception: a per-item
   deterministic Run ID (`perItemRunID`) is never superseded, because
-  `startWorkflowID` is idempotent so it can never be retried at all. Full rules:
+  `startWorkflowID` is idempotent so a succeeded sibling must not hide it. (Such
+  a run CAN be retried — a retry resumes it in place rather than starting a new
+  Execution, see `Engine.ResumeFailed` in
+  `.claude/docs/tembed-workflows.md`.) Full rules:
   "A failure that was later retried successfully drops out of the list" in
   `.claude/docs/pr-overview.md`.
   Historically the single most common entry here was

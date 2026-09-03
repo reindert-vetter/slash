@@ -307,6 +307,17 @@ export const EN = {
   'Enter verstuurt · Shift+Enter nieuwe regel': 'Enter sends · Shift+Enter new line',
   Stuur: 'Send',
 
+  // ── src/failedTasks.mjs ──────────────────────────────────────────────────
+  'Mislukte taken van de laatste 4 dagen': 'Failed tasks of the last 4 days',
+  'Opnieuw proberen gaat verder vanaf de laatste stap die wél lukte.':
+    'Trying again continues from the last step that did succeed.',
+  'Toon meer': 'Show more',
+  'Alles opnieuw proberen': 'Try all again',
+  'Negeer 5 minuten': 'Ignore for 5 minutes',
+  'Bezig met opnieuw proberen…': 'Trying again…',
+  'Opnieuw proberen is niet gelukt.': 'Trying again failed.',
+  '{n} hervat, {s} overgeslagen.': '{n} resumed, {s} skipped.',
+
   // ── src/overview.mjs ─────────────────────────────────────────────────────
   'Werktrees voorbereiden…': 'Preparing worktrees…',
   'Blocks scannen…': 'Scanning blocks…',

@@ -127,6 +127,60 @@ func (s *JSONLStore) ListRuns() ([]RunRecord, error) {
 	return out, nil
 }
 
+// TruncateEvents rewrites runID's events file without the events from
+// fromSeq onwards. This is the one place the JSONL store is NOT append-only:
+// a suffix cut cannot be expressed as an appended line, so the file is
+// rewritten via a temp file + rename (atomic, so a crash mid-write leaves
+// either the old or the new history, never a half one). A missing file is a
+// no-op. See Store.
+func (s *JSONLStore) TruncateEvents(runID string, fromSeq int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	path := s.eventsPath(runID)
+	lines, err := readLines(path)
+	if err != nil {
+		return err
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	kept := make([][]byte, 0, len(lines))
+	for _, l := range lines {
+		var e Event
+		if err := json.Unmarshal(l, &e); err != nil {
+			return err
+		}
+		if e.Seq < fromSeq {
+			kept = append(kept, l)
+		}
+	}
+	if len(kept) == len(lines) {
+		return nil // nothing to cut
+	}
+	tmp := path + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	for _, l := range kept {
+		if _, err := f.Write(append(l, '\n')); err != nil {
+			f.Close()
+			os.Remove(tmp)
+			return err
+		}
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
 // DeleteRun removes runID's meta and events files. Missing files are not an
 // error (idempotent — a repeated delete, or one racing a run that was never
 // created, is a no-op).

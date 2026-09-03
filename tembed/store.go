@@ -55,6 +55,19 @@ type Store interface {
 	LoadRun(runID string) (RunRecord, []Event, error)
 	// ListRuns returns every run's metadata (for crash recovery).
 	ListRuns() ([]RunRecord, error)
+	// TruncateEvents removes every event of runID whose Seq is >= fromSeq,
+	// leaving the run's metadata untouched. It exists for exactly one caller,
+	// Engine.ResumeFailed: dropping a failed run's failure tail so a replay
+	// re-reaches the step that failed instead of reading its recorded failure
+	// back out of the history. Truncating a run that does not exist, or a
+	// fromSeq past the end of the history, is a no-op (not an error) — the
+	// same idempotence DeleteRun promises.
+	//
+	// This is the ONLY method that removes events from a live run, and it is
+	// deliberately narrow: it can only ever cut a SUFFIX, so every event a
+	// replay still reads keeps its original seq and the history stays a
+	// prefix of what it was.
+	TruncateEvents(runID string, fromSeq int) error
 	// DeleteRun permanently removes a run's metadata and full event history.
 	// Deleting a run that does not exist is a no-op (not an error) — this
 	// keeps a caller that retries/repeats a delete (e.g. a daily cleanup pass)
@@ -134,6 +147,21 @@ func (m *MemoryStore) ListRuns() ([]RunRecord, error) {
 	return out, nil
 }
 
+// TruncateEvents drops every event with Seq >= fromSeq. See Store.
+func (m *MemoryStore) TruncateEvents(runID string, fromSeq int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	evs := m.events[runID]
+	kept := evs[:0:0]
+	for _, e := range evs {
+		if e.Seq < fromSeq {
+			kept = append(kept, e)
+		}
+	}
+	m.events[runID] = kept
+	return nil
+}
+
 // DeleteRun removes runID's metadata and events. A missing run is a no-op.
 func (m *MemoryStore) DeleteRun(runID string) error {
 	m.mu.Lock()
@@ -200,6 +228,17 @@ func (s *MultiStore) LoadRun(runID string) (RunRecord, []Event, error) {
 }
 
 func (s *MultiStore) ListRuns() ([]RunRecord, error) { return s.stores[0].ListRuns() }
+
+// TruncateEvents fans the truncation out to every wrapped store, so a
+// SQLite-plus-JSONL pair stays in sync. See Store.
+func (s *MultiStore) TruncateEvents(runID string, fromSeq int) error {
+	for _, st := range s.stores {
+		if err := st.TruncateEvents(runID, fromSeq); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // DeleteRun removes runID from every wrapped store. Continues past a "not
 // found"-shaped no-op in any one store (each store's own DeleteRun is

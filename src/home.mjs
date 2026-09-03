@@ -175,6 +175,9 @@ import { bindUrlState, num } from './urlState.mjs'
 import { renderMarkdown } from './markdown.mjs'
 import { commentMentionsMe } from './mentions.mjs'
 import ImageLightboxHost, { initImageLightbox, isLightboxOpen, handleLightboxKeydown } from './imageLightbox.mjs'
+// The global failed-tasks dialog (failedTasks.mjs) — same top-level-mount +
+// owns-the-keyboard contract as the lightbox above.
+import FailedTasksHost, { initFailedTasksPopup, isFailedTasksOpen, handleFailedTasksKeydown } from './failedTasks.mjs'
 import WorkDirOverlayHost, { initWorkDirOverlay, isWorkDirOverlayOpen, handleWorkDirOverlayKeydown } from './workDirOverlay.mjs'
 import GeneralChatOverlayHost, {
   initGeneralChatOverlay,
@@ -208,6 +211,7 @@ import {
 initTheme()
 syncUiLang()
 initImageLightbox()
+initFailedTasksPopup()
 // Debug mode (off unless the reviewer switched it on, see src/debugLog.mjs):
 // records this page load plus every following key/click, so Claude can replay a
 // reported bug. It installs its own listeners — nothing in the nav chain below
@@ -13606,6 +13610,16 @@ function onKeydown(e) {
   // to repeat it.
   if (isNativeTextEditKey(e)) return
 
+  // While a background task has failed the global dialog (failedTasks.mjs) is
+  // up, and it owns the keyboard completely — Escape snoozes it for five
+  // minutes, everything else is swallowed so the tree never navigates behind
+  // a modal backdrop. Checked before the lightbox/palette guards below for
+  // the same reason those come first.
+  if (isFailedTasksOpen()) {
+    handleFailedTasksKeydown(e)
+    return
+  }
+
   // While the image lightbox is open it owns the keyboard completely — →/←
   // walk the other screenshots from the same Markdown body, Escape closes —
   // checked FIRST, mirroring the command palette's own `menu.open` guard
@@ -17448,6 +17462,7 @@ MainScrollRightHint(state)(app)
 MainScrollLeftHint(state)(app)
 MenuHost()(app)
 ImageLightboxHost()(app)
+FailedTasksHost()(app)
 // The werkmap overlay (workDirOverlay.mjs) — top-level like MenuHost, and
 // initialized with the state + the one write path it may use
 // (sendCheckoutAction, which only ever starts/signals the chat_merge queue).

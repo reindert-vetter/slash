@@ -765,6 +765,23 @@ export const test = base.extend({
   // ignored. Installed via addInitScript so it is in place before any module
   // script runs, on every document the test navigates to.
   page: async ({ page }, use) => {
+    // The global failed-tasks dialog (src/failedTasks.mjs) opens over ANY page
+    // as soon as GET /api/problems reports a failure in the last four days —
+    // and with SLASH_GITHUB=off a worker's own store can easily hold one, on
+    // top of the specs that stub that endpoint on purpose. A modal backdrop
+    // would then swallow the keyboard of nearly every spec in the suite, so
+    // it is pre-snoozed here (the same localStorage key its own "Negeer 5
+    // minuten" button writes) — one suite-wide default with an opt-out,
+    // exactly like the keepDescription wrapper below. A spec that means to
+    // exercise the dialog itself calls enableFailedTasksPopup(page) before
+    // navigating.
+    await page.addInitScript(() => {
+      try {
+        localStorage.setItem('failedTasksSnoozeUntil', String(Date.now() + 60 * 60 * 1000))
+      } catch (err) {
+        // storage blocked — nothing to suppress, and nothing to do about it
+      }
+    })
     await page.addInitScript(() => {
       window.__pendingFetches = 0
       const orig = window.fetch
@@ -1073,6 +1090,20 @@ export async function appReady(page) {
 // some load a page in diff mode, where home.mjs' load-time focus is guarded off
 // entirely. Requiring the focus would fail there for no reason — the postcondition
 // ("the box is not holding the keyboard") is what every caller actually needs.
+// enableFailedTasksPopup lifts the suite-wide pre-snooze the `page` fixture
+// installs (see its comment), so the global failed-tasks dialog really opens.
+// Call it BEFORE page.goto — it works by clearing the localStorage key on
+// every fresh document.
+export async function enableFailedTasksPopup(page) {
+  await page.addInitScript(() => {
+    try {
+      localStorage.removeItem('failedTasksSnoozeUntil')
+    } catch (err) {
+      // storage blocked — the dialog shows anyway
+    }
+  })
+}
+
 export async function leaveSearchBox(page) {
   const box = page.locator('#block-search')
   await expect(box).toHaveCount(1)

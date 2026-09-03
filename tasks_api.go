@@ -898,6 +898,10 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// in the review tree's "Taken" row menu). A start, so it stays inside the
 	// workflow write-boundary; see TaskManager.RetryRun.
 	mux.HandleFunc("/api/workflows/retry", s.handleRetryRun)
+	// POST /api/workflows/retry-all → resume EVERY failure GET /api/problems
+	// currently reports (so within problemWindow), one after another. Same
+	// sanctioned write as /api/workflows/retry; see TaskManager.RetryAllFailed.
+	mux.HandleFunc("/api/workflows/retry-all", s.handleRetryAllRuns)
 	// GET /api/running-count → read-only: how many workflow runs are
 	// tembed.StatusRunning RIGHT NOW, repo-wide. Feeds the live badge next to
 	// the PR count on /pr-overview. A separate top-level path, not
@@ -1053,11 +1057,12 @@ func (s *server) handleProblems(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "failedRuns": failed, "logErrors": logs, "prTitles": titles})
 }
 
-// handleRetryRun serves POST /api/workflows/retry {"runId":"…"} — start the
-// failed run's own Workflow Type over with its stored input. 400 for a run that
-// cannot be retried at all (unknown, not failed, per-item Run ID or a retired
-// type — see retryableWorkflow), which is exactly what the row menu already
-// tells the reviewer before they click.
+// handleRetryRun serves POST /api/workflows/retry {"runId":"…"} — resume the
+// failed run from its last successful step (see TaskManager.RetryRun); the
+// returned runId is that same run, not a new one. 400 for a run that cannot be
+// retried at all (unknown, not failed, or a retired type — see
+// retryableWorkflow), which is exactly what the row menu already tells the
+// reviewer before they click.
 func (s *server) handleRetryRun(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1078,11 +1083,25 @@ func (s *server) handleRetryRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "runId": runID})
 }
 
+// handleRetryAllRuns serves POST /api/workflows/retry-all — resume every
+// failed run currently on the list (the last problemWindow, see
+// TaskManager.RetryAllFailed), which is exactly what the reviewer sees in the
+// global failed-tasks popup. Reports how many were resumed and how many could
+// not be, so the popup can say something truthful instead of just closing.
+func (s *server) handleRetryAllRuns(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	retried, skipped := s.tasks.manager.RetryAllFailed()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "retried": retried, "skipped": skipped})
+}
+
 // handleWorkflows routes /api/workflows/{runID} (GET status) and
 // /api/workflows/{runID}/signals/{signalName} (POST signal).
 func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/workflows/")
-	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "remove_reviewer" || rest == "code_warning" || rest == "ignore_comment" || rest == "cleanup" || rest == "claude_chat" || rest == "auto_warn" || rest == "lang_pref" || rest == "app_settings" || rest == "comment_batch" || rest == "test_run" || rest == "comment_titles" || rest == "retry" {
+	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "remove_reviewer" || rest == "code_warning" || rest == "ignore_comment" || rest == "cleanup" || rest == "claude_chat" || rest == "auto_warn" || rest == "lang_pref" || rest == "app_settings" || rest == "comment_batch" || rest == "test_run" || rest == "comment_titles" || rest == "retry" || rest == "retry-all" {
 		http.NotFound(w, r)
 		return
 	}

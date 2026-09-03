@@ -180,6 +180,13 @@ func (s *SQLiteStore) ListRuns() ([]RunRecord, error) {
 	return out, rows.Err()
 }
 
+// TruncateEvents deletes runID's events from fromSeq onwards. One statement;
+// affecting 0 rows is not an error (idempotent). See Store.
+func (s *SQLiteStore) TruncateEvents(runID string, fromSeq int) error {
+	_, err := s.db.Exec(`DELETE FROM events WHERE run_id = ? AND seq >= ?`, runID, fromSeq)
+	return err
+}
+
 // DeleteRun removes runID's row and all its events. Explicit two-statement
 // delete (rather than relying on the events.run_id ON DELETE CASCADE) because
 // SQLite's `PRAGMA foreign_keys = ON` is a per-connection setting and

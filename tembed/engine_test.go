@@ -3,6 +3,7 @@ package tembed
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -509,3 +510,97 @@ func TestEngineDeleteRun(t *testing.T) {
 		t.Fatalf("DeleteRun of an unknown id: %v", err)
 	}
 }
+
+// TestResumeFailedContinuesFromLastGoodStep covers Engine.ResumeFailed against
+// the real production store combination (SQLite + JSONL through a MultiStore),
+// so the new TruncateEvents implementations are exercised, not just the
+// in-memory one: the failure tail is cut, the activity that already succeeded
+// is replayed from the history instead of re-run, and only the step that
+// failed executes a second time.
+func TestResumeFailedContinuesFromLastGoodStep(t *testing.T) {
+	dir := t.TempDir()
+	sq, err := NewSQLiteStore(filepath.Join(dir, "wf.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sq.Close()
+	jl, err := NewJSONLStore(filepath.Join(dir, "jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := New(NewMultiStore(sq, jl))
+
+	var good, flaky int32
+	e.RegisterActivity("good", func(_ context.Context, in []byte) ([]byte, error) {
+		atomic.AddInt32(&good, 1)
+		return []byte(`"ok"`), nil
+	})
+	e.RegisterActivity("flaky", func(_ context.Context, in []byte) ([]byte, error) {
+		if atomic.AddInt32(&flaky, 1) == 1 {
+			return nil, errUnavailable
+		}
+		return nil, nil
+	})
+	e.RegisterWorkflow("two_steps", func(w *Workflow, input []byte) ([]byte, error) {
+		var out string
+		if err := w.ExecuteActivity("good", nil, &out); err != nil {
+			return nil, err
+		}
+		if err := w.ExecuteActivity("flaky", nil, nil); err != nil {
+			return nil, err
+		}
+		return []byte(`"done"`), nil
+	})
+
+	runID, err := e.StartWorkflow("two_steps", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := e.Status(runID); st != StatusFailed {
+		t.Fatalf("status = %q, want failed", st)
+	}
+	beforeHist, _ := e.History(runID)
+	if beforeHist[len(beforeHist)-1].Type != EventWorkflowFailed {
+		t.Fatalf("history does not end in WorkflowFailed: %+v", beforeHist)
+	}
+
+	if err := e.ResumeFailed(runID); err != nil {
+		t.Fatalf("ResumeFailed: %v", err)
+	}
+	if st, _ := e.Status(runID); st != StatusCompleted {
+		t.Fatalf("status after resume = %q, want completed", st)
+	}
+	if got := atomic.LoadInt32(&good); got != 1 {
+		t.Fatalf("the successful activity ran %d times, want 1 (replayed from history)", got)
+	}
+	if got := atomic.LoadInt32(&flaky); got != 2 {
+		t.Fatalf("the failed activity ran %d times, want 2", got)
+	}
+	// The truncation really landed in BOTH stores: the JSONL events file is
+	// rewritten, so reading it back must not resurrect the old failure tail.
+	_, jlHist, err := jl.LoadRun(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ev := range jlHist {
+		if ev.Type == EventWorkflowFailed || ev.Type == EventActivityFailed {
+			t.Fatalf("JSONL history still holds a failure event: %+v", jlHist)
+		}
+	}
+	if jlHist[len(jlHist)-1].Type != EventWorkflowCompleted {
+		t.Fatalf("JSONL history does not end in WorkflowCompleted: %+v", jlHist)
+	}
+	// Seqs stay a gapless prefix + the new tail.
+	for i, ev := range jlHist {
+		if ev.Seq != i {
+			t.Fatalf("event %d has seq %d; the history must stay gapless: %+v", i, ev.Seq, jlHist)
+		}
+	}
+
+	// Resuming a run that is not failed is refused.
+	if err := e.ResumeFailed(runID); err == nil {
+		t.Fatal("ResumeFailed accepted a completed run; want an error")
+	}
+}
+
+var errUnavailable = errors.New("temporarily unavailable")

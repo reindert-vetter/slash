@@ -17,6 +17,7 @@ import { settingsButton } from './settingsLink.mjs'
 import { avatarHTML, avatarUrlOf, displayNameOf, ensureMe, ensureNames, fullNameOf, meLogin } from './avatar.mjs'
 import { relativeTime } from './relativeTime.mjs'
 import { fetchProblems, problemRunRow, problemLogRow } from './problems.mjs'
+import FailedTasksHost, { initFailedTasksPopup, isFailedTasksOpen, handleFailedTasksKeydown } from './failedTasks.mjs'
 
 initTheme()
 // Reconcile the cached interface language with the server's own preference
@@ -3122,6 +3123,9 @@ let kbHandler = null
 function setupKeyboard() {
   if (kbHandler) window.removeEventListener('keydown', kbHandler, true)
   kbHandler = (e) => {
+    // The global failed-tasks dialog owns the keyboard while it is up — same
+    // "checked first" contract as home.mjs's own guard (failedTasks.mjs).
+    if (isFailedTasksOpen()) return handleFailedTasksKeydown(e)
     // The open menu owns the keyboard — checked before everything else,
     // mirroring home.mjs's own menu branch (and the popover branch below).
     if (menu.open) return handleMenuKey(e)
@@ -3379,6 +3383,8 @@ function startLiveSync() {
 }
 
 App()(document.getElementById('app'))
+FailedTasksHost()(document.getElementById('app'))
+initFailedTasksPopup()
 loadInbox()
 loadProblems()
 loadRunningCount()

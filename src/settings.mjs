@@ -17,6 +17,7 @@ import { initDebugLog, debugModeToggleButton, toggleDebugMode, clearDebugLog, de
 import { ensureLangPref, langToggleButton, toggleLang } from './langpref.mjs'
 import { t, syncUiLang } from './i18n.mjs'
 import { originFrom, originPr } from './settingsLink.mjs'
+import FailedTasksHost, { initFailedTasksPopup, isFailedTasksOpen, handleFailedTasksKeydown } from './failedTasks.mjs'
 
 initTheme()
 initDebugLog()
@@ -260,6 +261,9 @@ function moveRow(delta) {
 }
 
 window.addEventListener('keydown', (e) => {
+  // The global failed-tasks dialog owns the keyboard while it is up — same
+  // "checked first" contract as home.mjs's own guard (failedTasks.mjs).
+  if (isFailedTasksOpen()) return handleFailedTasksKeydown(e)
   const active = document.activeElement
   if (active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT')) {
     if (e.key === 'Escape') {
@@ -554,6 +558,8 @@ function App() {
 document.title = t('Instellingen') + ' — PR Review Tree'
 
 App()(document.getElementById('app'))
+FailedTasksHost()(document.getElementById('app'))
+initFailedTasksPopup()
 ensureAutoWarn()
 ensureAutoIngestPref()
 ensureLangPref()

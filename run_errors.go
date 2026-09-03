@@ -44,6 +44,20 @@ const problemLogCap = 100
 // updated first).
 const failedRunCap = 50
 
+// problemWindow is how far back GET /api/problems looks. Reviewer request:
+// "ik wil bovenaan van 4 dagen zien (dit mag weg zoals het nu is) en dan wil
+// ik alles kunnen retrien van de laatste 4 dagen" — the earlier, unbounded
+// list grew to 130 rows of weeks-old failures on PRs that were long since
+// merged, which is not a list anybody acts on. Everything older is dropped
+// from BOTH halves (failed runs and mirrored log lines), so the popup, the
+// /pr-overview drawer and the review tree's own Taken block all agree on one
+// window, and "alles opnieuw proberen" means exactly the rows on screen.
+//
+// The window is applied to the OUTPUT only: supersededRuns still weighs every
+// run in the store, so an old successful attempt keeps hiding its failed
+// predecessor.
+const problemWindow = 4 * 24 * time.Hour
+
 // LogProblem is one mirrored log line.
 type LogProblem struct {
 	At time.Time `json:"at"`
@@ -77,36 +91,44 @@ type FailedRun struct {
 	Retryable bool `json:"retryable"`
 }
 
-// retryableWorkflow answers "does starting this Workflow Type over with the
-// same input actually run it again?" — the gate behind RetryRun and the
-// Retryable field above.
+// retryableWorkflow answers "can this failed run be retried at all?" — the
+// gate behind RetryRun and the Retryable field above.
 //
-// Two kinds are excluded, and for both a retry would be a lie rather than a
-// failure:
+// Since RetryRun RESUMES a failed run in place (see Engine.ResumeFailed) rather
+// than starting a fresh Execution, a per-item deterministic Run ID
+// (perItemRunID) is no longer an obstacle: there is nothing to start, the very
+// same run is driven on from its last successful step. That is what made the
+// bulk of the list — the failed comment threads — retryable at all.
 //
-//   - a per-ITEM deterministic Run ID (perItemRunID): startWorkflowID is
-//     idempotent, so a second start returns the very same failed run and
-//     nothing happens at all;
-//   - a retired Workflow Type (retiredWorkflowTypes, cleanup.go): its
-//     registering code is gone, so the engine rejects the start outright.
-//
-// Everything else has a workflow+pr identity (runIdentity), where a fresh run
-// supersedes the failed one (supersededRuns) and the failure drops off the
-// list by itself.
+// One kind is still excluded, and for it a retry would be a lie rather than a
+// failure: a retired Workflow Type (retiredWorkflowTypes, cleanup.go). Its
+// registering code is gone, so the engine has no function to replay against.
 func retryableWorkflow(workflow string) bool {
-	return workflow != "" && !perItemRunID[workflow] && !retiredWorkflowTypes[workflow]
+	return workflow != "" && !retiredWorkflowTypes[workflow]
 }
 
-// RetryRun starts a FRESH Execution of the failed run's own Workflow Type with
-// that run's stored input — the "Opnieuw proberen" item in the review tree's
-// "Taken" row menu (see .claude/docs/detail-layout.md). It returns the new Run
-// ID.
+// RetryRun resumes the failed run FROM ITS LAST SUCCESSFUL STEP and returns
+// its Run ID (the same one — there is no new run). Reviewer request: "ook
+// alles retryen vanaf de laatste keer dat dezelfde taak goed is gegaan".
 //
-// This is a write, and it is the sanctioned one: starting an Execution is
-// exactly what .claude/rules/workflows-write-boundary.md allows an endpoint to
-// do. It deliberately does NOT delete or touch the failed run — supersededRuns
-// already hides a failure once a later attempt at the same identity exists, so
-// the old attempt stays in the store as history until cleanup collects it.
+// It used to start a fresh Execution with the run's stored input. Two problems
+// with that, both fixed by resuming instead:
+//
+//   - work that already succeeded was redone from scratch, so a task that
+//     failed on its last step repeated every step before it;
+//   - for a per-item deterministic Run ID (perItemRunID) — the failed comment
+//     threads, i.e. most of the list — starting over was an idempotent no-op
+//     that returned the very same failed run, so those rows could not be
+//     retried at all.
+//
+// Engine.ResumeFailed cuts the failure tail off the run's history, puts it back
+// to `running` and advances it, so replay reuses every recorded activity result
+// and only the step that failed runs live again. That step must be idempotent,
+// which is the standing assumption for every Activity anyway.
+//
+// This is a write, and it is the sanctioned kind: driving a workflow Execution
+// is exactly what .claude/rules/workflows-write-boundary.md allows an endpoint
+// to do — the run's own Activities still do every actual mutation.
 func (m *TaskManager) RetryRun(runID string) (string, error) {
 	runs, err := m.engine.Runs()
 	if err != nil {
@@ -126,13 +148,38 @@ func (m *TaskManager) RetryRun(runID string) (string, error) {
 		return "", fmt.Errorf("retry: run %q is %s, not failed", runID, rec.Status)
 	}
 	if !retryableWorkflow(rec.Workflow) {
-		return "", fmt.Errorf("retry: workflow %q cannot be started over", rec.Workflow)
+		return "", fmt.Errorf("retry: workflow %q cannot be retried", rec.Workflow)
 	}
-	in, err := m.engine.Input(runID)
-	if err != nil {
-		return "", fmt.Errorf("retry: read input: %w", err)
+	if err := m.engine.ResumeFailed(runID); err != nil {
+		return "", fmt.Errorf("retry: %w", err)
 	}
-	return m.engine.StartWorkflow(rec.Workflow, json.RawMessage(in))
+	return runID, nil
+}
+
+// RetryAllFailed retries every failure currently on the list — i.e. exactly
+// the rows GET /api/problems shows, so within problemWindow — and reports how
+// many were resumed and how many could not be (a retired Workflow Type, or a
+// run that failed again straight away). Behind the "Alles opnieuw proberen"
+// button of the global failed-tasks popup.
+//
+// Serially, deliberately: each RetryRun drives its run inline (through the
+// engine's own per-run lock), and firing dozens of side-effecting Activities at
+// once is exactly the SQLITE_BUSY storm that produced most of these failures in
+// the first place.
+func (m *TaskManager) RetryAllFailed() (retried int, skipped int) {
+	for _, f := range m.FailedRuns(0) {
+		if !f.Retryable {
+			skipped++
+			continue
+		}
+		if _, err := m.RetryRun(f.RunID); err != nil {
+			m.logf("retry all: run %s: %v", f.RunID, err)
+			skipped++
+			continue
+		}
+		retried++
+	}
+	return retried, skipped
 }
 
 // perItemRunID lists the Workflow Types started through StartWorkflowID with a
@@ -211,12 +258,18 @@ func problemScope(msg string) string {
 	return head
 }
 
-// loggedProblems returns the mirrored log lines, newest first.
+// loggedProblems returns the mirrored log lines from the last problemWindow,
+// newest first. Older lines stay in the buffer (they cost nothing and a
+// startup failure is still worth finding), they just don't reach the UI.
 func loggedProblems() []LogProblem {
+	cutoff := time.Now().Add(-problemWindow)
 	problemMu.Lock()
 	defer problemMu.Unlock()
 	out := make([]LogProblem, 0, len(problemLog))
 	for i := len(problemLog) - 1; i >= 0; i-- {
+		if problemLog[i].At.Before(cutoff) {
+			continue
+		}
 		out = append(out, problemLog[i])
 	}
 	return out
@@ -297,8 +350,9 @@ func supersededRuns(runs []tembed.RunRecord, prOf func(string) int) map[string]t
 	return alive
 }
 
-// FailedRuns lists, newest-updated first, up to limit workflow runs that ended
-// in tembed.StatusFailed and have NOT been superseded by a later attempt at the
+// FailedRuns lists, newest-updated first, up to limit workflow runs (limit <= 0
+// means all of them) that failed within the last problemWindow, ended in
+// tembed.StatusFailed and have NOT been superseded by a later attempt at the
 // same task (see supersededRuns) — repo-wide, so a per-repo tracker (no "pr" in
 // its input, hence PR 0) is included too. Read-only: it only inspects
 // engine.Runs()/Input()/Result(), it never starts, signals, or deletes
@@ -322,10 +376,14 @@ func (m *TaskManager) FailedRuns(limit int) []FailedRun {
 	}
 	alive := supersededRuns(runs, prOf)
 
+	cutoff := time.Now().Add(-problemWindow)
 	out := make([]FailedRun, 0, len(runs))
 	for _, r := range runs {
 		if r.Status != tembed.StatusFailed {
 			continue
+		}
+		if r.UpdatedAt.Before(cutoff) {
+			continue // older than problemWindow — not a list anybody acts on
 		}
 		pr := prOf(r.ID)
 		if t, ok := alive[runIdentity(r.Workflow, r.ID, pr)]; ok && t.After(r.CreatedAt) {

@@ -1059,21 +1059,34 @@ failure it belongs to; only a failed POST calls `clearTaskRetrying` so the row
 honestly returns to "mislukt". While the mark is set the menu drops its retry
 item, so one click can't queue two Executions.
 
-**"Opnieuw proberen" = start the same Workflow Type over with the stored input.**
+**"Opnieuw proberen" = RESUME the failed run from its last successful step.**
 `POST /api/workflows/retry {runId}` → `handleRetryRun` (`tasks_api.go`) →
-`TaskManager.RetryRun` (`run_errors.go`): read the failed run's own input, then
-`engine.StartWorkflow(sameType, sameInput)`. A **start**, so it stays inside
-`.claude/rules/workflows-write-boundary.md`; the failed run itself is
-deliberately left alone — `supersededRuns` hides it as soon as a newer attempt
-at the same identity exists, and `cleanup` collects it later.
+`TaskManager.RetryRun` (`run_errors.go`) → `Engine.ResumeFailed`
+(`tembed/engine.go`): the run's **failure tail** (the terminal
+`WorkflowFailed` plus the contiguous failure events before it) is cut off its
+history, the run goes back to `running` and is advanced. Every surviving event
+keeps its seq, so replay reuses every recorded activity result — no side effect
+is repeated — and only the step that failed is reached live again (which is why
+an Activity has to be idempotent, the standing assumption anyway). The
+response's `runId` is that SAME run: there is no new Execution. Driving an
+Execution is still inside `.claude/rules/workflows-write-boundary.md` — the
+run's own Activities do every mutation.
 
-Not every failure can be retried, and the menu says so instead of pretending:
-`retryableWorkflow` (`run_errors.go`) excludes a **per-item deterministic Run
-ID** (`perItemRunID` — a comment thread, a chat, an explain/resolve key: a
-second start is idempotent and returns the very same failed run) and a
-**retired Workflow Type** (`retiredWorkflowTypes`, whose registering code is
-gone). `FailedRun.retryable` carries that to the UI, which then shows "Kan niet
+It used to **start a fresh Execution** with the stored input
+(`engine.StartWorkflow(sameType, sameInput)`), which redid work that had already
+succeeded and — for a **per-item deterministic Run ID** (`perItemRunID`: a
+comment thread, a chat, an explain/resolve key) — did nothing at all, because
+`startWorkflowID` is idempotent and simply returned the very same failed run.
+Those types are the bulk of the failure list, and resuming needs no start, so
+they are **retryable now**. `retryableWorkflow` (`run_errors.go`) still excludes
+one kind: a **retired Workflow Type** (`retiredWorkflowTypes`), whose
+registering code is gone, so there is no function to replay against.
+`FailedRun.retryable` carries that to the UI, which then shows "Kan niet
 opnieuw proberen — deze taak start alleen bij de bron".
+
+Bulk twin: **"Alles opnieuw proberen"** in the global failed-tasks dialog
+(`POST /api/workflows/retry-all`, every failure of the last four days) — see
+"The global failed-tasks dialog" in `.claude/docs/pr-overview.md`.
 
 Test: `tests/pr-page-problems.spec.mjs` (a failure scoped to the open PR shows
 in the Taken list, one for a different PR is filtered out, no PR chip; the

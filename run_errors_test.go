@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"strconv"
 	"strings"
@@ -260,24 +262,38 @@ func TestFailedRunsCarriesCommentRef(t *testing.T) {
 	}
 }
 
-// TestRetryRunStartsAFreshAttempt covers the "Probeer opnieuw" path behind
-// POST /api/workflows/retry: a failed run's own Workflow Type is started again
-// with its stored input, which supersedes the failure (so it drops out of
-// FailedRuns), while a per-item deterministic-Run-ID type is refused outright —
-// starting that one over would be an idempotent no-op, so the row menu says so
-// instead (see retryableWorkflow).
-func TestRetryRunStartsAFreshAttempt(t *testing.T) {
+// TestRetryRunResumesFromLastGoodStep covers the "Opnieuw proberen" path
+// behind POST /api/workflows/retry after it changed from "start a fresh
+// Execution" to "resume the failed run from its last successful step"
+// (Engine.ResumeFailed): the run keeps its own ID, the activities that already
+// succeeded are NOT re-executed, and a per-item deterministic Run ID — which
+// could not be retried at all before — now works too.
+func TestRetryRunResumesFromLastGoodStep(t *testing.T) {
 	engine := tembed.New(tembed.NewMemoryStore())
 	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
 
-	attempts := 0
-	engine.RegisterWorkflow("test_flaky", func(w *tembed.Workflow, input []byte) ([]byte, error) {
-		attempts++
-		if attempts == 1 {
-			return nil, errors.New("first attempt boom")
+	firstRuns, secondRuns := 0, 0
+	engine.RegisterActivity("stepOne", func(ctx context.Context, in []byte) ([]byte, error) {
+		firstRuns++
+		return nil, nil
+	})
+	engine.RegisterActivity("stepTwo", func(ctx context.Context, in []byte) ([]byte, error) {
+		secondRuns++
+		if secondRuns == 1 {
+			return nil, errors.New("save reaction: database is locked")
 		}
 		return nil, nil
 	})
+	flaky := func(w *tembed.Workflow, input []byte) ([]byte, error) {
+		if err := w.ExecuteActivity("stepOne", nil, nil); err != nil {
+			return nil, err
+		}
+		if err := w.ExecuteActivity("stepTwo", nil, nil); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+	engine.RegisterWorkflow("test_flaky", flaky)
 
 	failedID, _ := engine.StartWorkflow("test_flaky", struct {
 		PR int `json:"pr"`
@@ -285,44 +301,131 @@ func TestRetryRunStartsAFreshAttempt(t *testing.T) {
 	if got := m.FailedRuns(failedRunCap); len(got) != 1 || !got[0].Retryable {
 		t.Fatalf("FailedRuns = %+v, want exactly one retryable failure", got)
 	}
+	if firstRuns != 1 || secondRuns != 1 {
+		t.Fatalf("activity runs = %d/%d, want 1/1 before the retry", firstRuns, secondRuns)
+	}
 
-	newID, err := m.RetryRun(failedID)
+	sameID, err := m.RetryRun(failedID)
 	if err != nil {
 		t.Fatalf("RetryRun: %v", err)
 	}
-	if newID == failedID {
-		t.Fatal("RetryRun reused the failed run's ID; it must start a fresh Execution")
+	if sameID != failedID {
+		t.Fatalf("RetryRun returned %q, want the same run %q — it resumes, it does not start a new run", sameID, failedID)
 	}
-	if attempts != 2 {
-		t.Fatalf("workflow ran %d times, want 2 (the retry must actually run it)", attempts)
+	if status, _ := engine.Status(failedID); status != tembed.StatusCompleted {
+		t.Fatalf("run status after the retry = %q, want completed", status)
 	}
-	// The fresh attempt succeeded, so the failure is superseded and no longer
-	// something the reviewer has to act on.
+	// The whole point: the step that already succeeded was replayed from the
+	// history, not executed again; only the failed one ran a second time.
+	if firstRuns != 1 {
+		t.Fatalf("stepOne ran %d times, want 1 — a resumed run must not redo work that succeeded", firstRuns)
+	}
+	if secondRuns != 2 {
+		t.Fatalf("stepTwo ran %d times, want 2 (the failed step must run again)", secondRuns)
+	}
 	if got := m.FailedRuns(failedRunCap); len(got) != 0 {
 		t.Fatalf("FailedRuns after a successful retry = %+v, want none", got)
 	}
-	// The input travelled along verbatim — the retry is the same task, not a
-	// blank one.
-	in, err := engine.Input(newID)
-	if err != nil || !strings.Contains(string(in), "12903") {
-		t.Fatalf("retry input = %q (err %v), want the original input", in, err)
-	}
 
-	// A per-item Run ID cannot be retried at all.
+	// A per-item deterministic Run ID is retryable now — resuming needs no
+	// start, so the idempotence of StartWorkflowID is no longer in the way.
+	commentRuns := 0
 	engine.RegisterWorkflow(WorkflowTaskCodeComment, func(w *tembed.Workflow, input []byte) ([]byte, error) {
-		return nil, errors.New("comment boom")
+		commentRuns++
+		if commentRuns == 1 {
+			return nil, errors.New("comment boom")
+		}
+		return nil, nil
 	})
 	perItemID, _ := engine.StartWorkflowID("comment-1", WorkflowTaskCodeComment, struct {
 		PR int `json:"pr"`
 	}{PR: 12903})
-	if retryableWorkflow(WorkflowTaskCodeComment) {
-		t.Fatal("retryableWorkflow says a per-item Run ID can be retried")
+	if !retryableWorkflow(WorkflowTaskCodeComment) {
+		t.Fatal("retryableWorkflow says a per-item Run ID cannot be retried; resuming needs no fresh start")
 	}
-	if _, err := m.RetryRun(perItemID); err == nil {
-		t.Fatal("RetryRun accepted a per-item Run ID; want an error")
+	if _, err := m.RetryRun(perItemID); err != nil {
+		t.Fatalf("RetryRun on a per-item Run ID: %v", err)
 	}
-	// And neither can a run that isn't failed at all.
+	if status, _ := engine.Status(perItemID); status != tembed.StatusCompleted {
+		t.Fatalf("per-item run status after the retry = %q, want completed", status)
+	}
+
+	// A run that isn't failed at all, and an unknown one, are still refused.
+	if _, err := m.RetryRun(failedID); err == nil {
+		t.Fatal("RetryRun accepted an already completed run; want an error")
+	}
 	if _, err := m.RetryRun("nope"); err == nil {
 		t.Fatal("RetryRun accepted an unknown run ID; want an error")
+	}
+}
+
+// TestRetryAllFailedResumesEveryRow covers the "Alles opnieuw proberen" button
+// of the global failed-tasks popup (POST /api/workflows/retry-all): every row
+// currently on the list is resumed, and the count reported back is what the
+// popup shows.
+func TestRetryAllFailedResumesEveryRow(t *testing.T) {
+	engine := tembed.New(tembed.NewMemoryStore())
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
+
+	attempts := map[string]int{}
+	engine.RegisterWorkflow(WorkflowTaskCodeComment, func(w *tembed.Workflow, input []byte) ([]byte, error) {
+		var in struct {
+			File string `json:"file"`
+		}
+		_ = json.Unmarshal(input, &in)
+		attempts[in.File]++
+		if attempts[in.File] == 1 {
+			return nil, errors.New("save reaction: database is locked")
+		}
+		return nil, nil
+	})
+	for _, f := range []string{"a.php", "b.php", "c.php"} {
+		if _, err := engine.StartWorkflowID("comment-"+f, WorkflowTaskCodeComment, CodeCommentInput{PR: 13098, File: f, Line: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := m.FailedRuns(0); len(got) != 3 {
+		t.Fatalf("FailedRuns = %d, want 3", len(got))
+	}
+
+	retried, skipped := m.RetryAllFailed()
+	if retried != 3 || skipped != 0 {
+		t.Fatalf("RetryAllFailed = %d retried / %d skipped, want 3/0", retried, skipped)
+	}
+	if got := m.FailedRuns(0); len(got) != 0 {
+		t.Fatalf("FailedRuns after retrying everything = %+v, want none", got)
+	}
+}
+
+// TestFailedRunsDropsRunsOlderThanTheWindow covers problemWindow: a failure
+// from beyond the last four days no longer reaches the UI at all (reviewer:
+// "ik wil bovenaan van 4 dagen zien"), so it is also not part of "alles
+// opnieuw proberen".
+func TestFailedRunsDropsRunsOlderThanTheWindow(t *testing.T) {
+	clock := time.Now()
+	engine := tembed.New(tembed.NewMemoryStore(), tembed.WithClock(func() time.Time { return clock }))
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
+	engine.RegisterWorkflow("test_boom", func(w *tembed.Workflow, input []byte) ([]byte, error) {
+		return nil, errors.New("boom")
+	})
+
+	clock = time.Now().Add(-problemWindow - time.Hour)
+	old, _ := engine.StartWorkflow("test_boom", struct {
+		PR int `json:"pr"`
+	}{PR: 1})
+	clock = time.Now().Add(-time.Hour)
+	recent, _ := engine.StartWorkflow("test_boom", struct {
+		PR int `json:"pr"`
+	}{PR: 2})
+
+	got := map[string]bool{}
+	for _, f := range m.FailedRuns(0) {
+		got[f.RunID] = true
+	}
+	if got[old] {
+		t.Errorf("a failure older than problemWindow is still listed: %v", got)
+	}
+	if !got[recent] {
+		t.Errorf("a failure within problemWindow is missing: %v", got)
 	}
 }

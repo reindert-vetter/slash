@@ -36,6 +36,24 @@ about PRs, blocks, or gh; keep it that way.
 - **`Engine.DeleteRun(runID)`** removes a run (events + meta) from every store;
   deleting an unknown id is a **no-op, not an error** — the idempotency the
   `cleanup` pass relies on. It also drops any pending timer for that run.
+- **`Engine.ResumeFailed(runID)`** restarts a **failed** run from the last step
+  that actually succeeded — the only way a terminal run ever moves again. It
+  cuts the run's **failure tail** (the terminal `WorkflowFailed` plus the
+  contiguous `ActivityFailed`/`AsyncActivityFailed`/`ChildWorkflowFailed` events
+  right before it, `failureTailStart`) off the history, sets the run back to
+  `running`, relaunches any async activity whose result was cut away (the same
+  `resumePendingAsync` pass `Recover` uses) and advances. Necessary because a
+  plain replay would read the *recorded* activity failure straight back out of
+  the history and fail identically, having re-executed nothing. Every surviving
+  event keeps its seq, so the history stays a prefix of what it was and every
+  recorded result is reused — only the failed step runs live again, so it must
+  be idempotent. Refuses an unknown run, a run that is not `failed`, an
+  unregistered Workflow Type, and a history with no failure tail. Backs
+  slash's `POST /api/workflows/retry`/`retry-all`; the suffix cut itself is
+  `Store.TruncateEvents`, the ONE method that removes events from a live run
+  (implemented in all four stores; the JSONL one rewrites its events file via
+  temp+rename, the single place that store is not append-only). Test:
+  `TestResumeFailedContinuesFromLastGoodStep`.
 - **Storage** via `Store`: `MemoryStore`, `JSONLStore` (one readable file per
   run), `SQLiteStore` (pure-Go `modernc.org/sqlite`), and `MultiStore` to
   combine them. slash runs `MultiStore(SQLite data/workflows.db, JSONL

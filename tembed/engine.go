@@ -771,6 +771,96 @@ func (e *Engine) DeleteRun(runID string) error {
 	return err
 }
 
+// ResumeFailed restarts a FAILED run from the last step that actually
+// succeeded, instead of starting a fresh Execution from scratch.
+//
+// Why this exists: a failed run's history records the failure itself (an
+// EventActivityFailed plus the terminal EventWorkflowFailed), so a plain
+// replay would deterministically read that recorded failure back out and fail
+// again in exactly the same place, having re-executed nothing. And a fresh
+// start is not an option for every run: a workflow started through
+// StartWorkflowID with a per-item deterministic Run ID (one comment thread,
+// one chat conversation) is idempotent by construction, so "start it over"
+// returns the very same failed run and nothing happens at all.
+//
+// So ResumeFailed cuts the run's FAILURE TAIL — the terminal
+// EventWorkflowFailed and the contiguous run of failure events right before
+// it — off the history, puts the run back to `running`, and advances it. Every
+// event that survives is untouched and keeps its seq, so replay reuses every
+// recorded activity result exactly as before (no side effect is repeated) and
+// only the step that failed is reached live again. That step must therefore be
+// idempotent, which is the standing assumption for every Activity anyway.
+//
+// An async activity (ExecuteActivityAsync) whose result was cut away is
+// relaunched through the same resumePendingAsync pass Recover uses, so its
+// completion event gets recorded and re-drives the run.
+//
+// Errors: an unknown run, a run that is not `failed`, a workflow type that is
+// no longer registered, or a history with no failure tail to cut.
+func (e *Engine) ResumeFailed(runID string) error {
+	l := e.runLock(runID)
+	l.Lock()
+	defer l.Unlock()
+
+	rec, hist, err := e.store.LoadRun(runID)
+	if err != nil {
+		return err
+	}
+	if rec.Status != StatusFailed {
+		return fmt.Errorf("tembed: run %s is %s, not failed", runID, rec.Status)
+	}
+	e.mu.Lock()
+	fn := e.workflows[rec.Workflow]
+	e.mu.Unlock()
+	if fn == nil {
+		return fmt.Errorf("tembed: run %s uses unregistered workflow %q", runID, rec.Workflow)
+	}
+	cut := failureTailStart(hist)
+	if cut <= 0 {
+		// cut == 0 would take EventWorkflowStarted (and thus the run's input)
+		// with it; cut < 0 means there is no failure tail at all.
+		return fmt.Errorf("tembed: run %s has no failure to resume from", runID)
+	}
+	if err := e.store.TruncateEvents(runID, hist[cut].Seq); err != nil {
+		return fmt.Errorf("tembed: truncate %s: %w", runID, err)
+	}
+	e.setStatus(runID, StatusRunning)
+	if _, fresh, err := e.store.LoadRun(runID); err == nil {
+		e.resumePendingAsync(runID, fresh)
+	}
+	e.advance(runID)
+	return nil
+}
+
+// failureTailStart returns the index of the first event of hist's trailing
+// failure tail — the terminal EventWorkflowFailed plus the contiguous failure
+// events immediately before it — or -1 when hist does not end in a failure.
+//
+// Contiguous, deliberately: a run may fail with several failed activities in a
+// row (a retry loop inside the workflow), and all of them are "the step that
+// went wrong", while anything before them is real, completed work that must
+// stay in the history.
+func failureTailStart(hist []Event) int {
+	if len(hist) == 0 || hist[len(hist)-1].Type != EventWorkflowFailed {
+		return -1
+	}
+	i := len(hist) - 1
+	for i > 0 && isFailureEvent(hist[i-1].Type) {
+		i--
+	}
+	return i
+}
+
+// isFailureEvent reports whether t records something that went wrong (as
+// opposed to a completed step), for failureTailStart's backwards walk.
+func isFailureEvent(t EventType) bool {
+	switch t {
+	case EventWorkflowFailed, EventActivityFailed, EventAsyncActivityFailed, EventChildWorkflowFailed:
+		return true
+	}
+	return false
+}
+
 // Input returns the JSON-encoded input a run was started with.
 func (e *Engine) Input(runID string) ([]byte, error) {
 	_, hist, err := e.store.LoadRun(runID)

@@ -228,6 +228,18 @@ is baked into the JSON): such a spec must clean up after itself in-test, the way
   spec that means to exercise stop 1 itself (or the fresh-open behaviour
   itself, see `tests/fresh-open-shows-description.spec.mjs`) opts out with
   `page.goto(url, { keepDescription: true })`.
+- **The global failed-tasks dialog is pre-snoozed suite-wide.**
+  `src/failedTasks.mjs` opens a modal over ANY page as soon as
+  `GET /api/problems` reports a failure of the last four days — and with
+  `SLASH_GITHUB=off` a worker's own store easily holds one, on top of the specs
+  that stub that endpoint on purpose. Its backdrop would swallow the keyboard of
+  nearly every spec, so the `page` fixture writes the dialog's own
+  `failedTasksSnoozeUntil` localStorage key via `addInitScript`. Opt out with
+  `await enableFailedTasksPopup(page)` **before** `page.goto` (exported from
+  `_fixtures.mjs`) — and note that the `goto` wrapper above presses `Escape` on
+  a `/pr/<id>` open, which this dialog legitimately reads as a snooze, so such a
+  spec also needs `{ keepDescription: true }`. See
+  `tests/failed-tasks-popup.spec.mjs`.
 - **Open a `/pr/<id>` spec with `await leaveSearchBox(page)`** (exported from
   `tests/_fixtures.mjs`), never a bare `page.keyboard.press('Escape')`.
   `home.mjs` focuses the sidebar search box from a
