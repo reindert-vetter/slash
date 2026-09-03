@@ -650,6 +650,34 @@ deliberately NOT deleted from this polled `GET` — a git write on every tick,
 possibly next to an in-flight landing for the same PR, buys nothing; it is
 swept with the PR (`removePendingRefs`, `cleanup.go`).
 
+**A pending merge whose real content is superseded by a SEPARATE remote merge
+also reports nothing at all.** The count==0 check above only fires when the
+pending ref itself becomes an ancestor of the base — but a merge commit's SHA
+is never reused by git, so if the branch on GitHub is *independently* updated
+with its own later merge of the same mainline branch (e.g. via GitHub's
+"Update branch" button, or another `git merge origin/develop` chat turn run
+from a different clone), the app's own pending merge can NEVER become an
+ancestor of the new remote tip and the `rev-list --count` can never reach `0`
+on its own — a permanently stuck "ongepusht" pill even though the reviewer's
+own work has long since reached GitHub (real case: PR 13628, INTEG-467 — the
+first parent, the reviewer's actual authored work, was already an ancestor of
+the GitHub tip; only the merge SHA itself never would be).
+`mergeCommitSupersededByRemote` (`pending_push.go`) covers exactly this: for a
+pending-ref commit that is a genuine **two-parent merge** (never a
+single-parent commit — that always carries its own authored content and is
+never waved off, no matter how many of its ancestors are on the remote), if
+**both** parents are independently confirmed ancestors of the base (the
+branch's real remote tip, resolved the same way as everywhere else in this
+file), the merge itself cannot hold anything the remote doesn't already have —
+that's the definition of a merge, no third input — so `loadPendingPush`
+returns `nil` even though the merge SHA itself will never be `0` commits
+ahead. Checked right before the `rev-list --count` call, using the same `base`
+that call would use. Regression test:
+`TestLoadPendingPushIgnoresAMergeSupersededByASeparateRemoteMerge`. Same
+"unknown must never hide real work" discipline as the count==0 case: a missing
+local object, a non-merge commit, or an unproven parent leaves the ref
+reported as pending.
+
 **The `pushing`/`failed` status is in-memory only** (`pendingPushStatus`), gone
 after a restart, no read-model or workflow-history write — the same operational
 carve-out as `chat_progress.go` (see

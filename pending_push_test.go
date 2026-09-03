@@ -520,3 +520,147 @@ func staleRemoteTrackingSHA(t *testing.T, cloneDir, headRefName string) string {
 	}
 	return strings.TrimSpace(string(out))
 }
+
+// TestLoadPendingPushIgnoresAMergeSupersededByASeparateRemoteMerge covers a
+// merge-only pending commit (e.g. a chat turn running `git merge
+// origin/develop` through the Bash carve-out) whose real content already
+// reached the remote through a DIFFERENT, later merge of the same mainline
+// branch — real case found live on PR 13628 (INTEG-467): the reviewer's own
+// work had long since reached GitHub, but GitHub's branch was separately
+// updated with its own merge of develop (e.g. via the "Update branch"
+// button), so the pending merge could never become an ancestor of the new
+// remote tip (git never reuses another merge's SHA) and the ahead-count could
+// never reach 0 on its own — a permanently stuck "ongepusht" pill despite
+// nothing real left to push.
+func TestLoadPendingPushIgnoresAMergeSupersededByASeparateRemoteMerge(t *testing.T) {
+	bareDir, cloneDir := setupChatShadowRepo(t, "feature/x", "v1\n")
+	ctx := context.Background()
+
+	developSHA := addBranchCommit(t, bareDir, "feature/x", "develop", "dev.txt", "from develop\n")
+
+	// The pending commit: locally merge origin/develop into feature/x — the
+	// shape a `git merge origin/develop` chat turn produces — landed directly
+	// on the pending ref (the ordinary landing path only ever commits a plain
+	// edit, never a merge, so this bypasses it on purpose).
+	mergeSHA := mergeBranchIntoClone(t, cloneDir, "feature/x", "develop")
+	pendingRef := prPendingRef("", 3628, "feature/x")
+	runInDir(t, cloneDir, "update-ref", pendingRef, mergeSHA)
+
+	if v := loadPendingPush(ctx, nil, "", 3628); v == nil {
+		t.Fatal("expected a pending push right after landing the merge")
+	}
+
+	// GitHub gets the SAME two ingredients (the branch's own tip and develop's
+	// tip) merged in independently — a different commit, since git never
+	// reuses another merge's SHA.
+	supersedingSHA := pushSupersedingMerge(t, bareDir, "feature/x", developSHA)
+	// The read model only trusts a remote SHA it can resolve LOCALLY
+	// (pendingRefSHA(remote)) — in production that object is already present
+	// because ensureCommits (gh.go) fetches the PR's current head by SHA on
+	// every ingest, well before a reviewer ever looks at the pending-push row.
+	// Mirror that here explicitly, since this fixture's ingest never runs.
+	runInDir(t, cloneDir, "fetch", "origin", supersedingSHA)
+
+	remoteHeadCache.Lock()
+	remoteHeadCache.byPR = map[prKey]remoteHeadEntry{}
+	remoteHeadCache.Unlock()
+
+	if v := loadPendingPush(ctx, nil, "", 3628); v != nil {
+		t.Fatalf("expected the superseded merge to report nothing pending, got %+v", v)
+	}
+}
+
+// addBranchCommit creates a new branch off fromRefName's current tip, adds
+// one commit to it, and pushes it — a throwaway "develop" diverging from the
+// same seed commit setupChatShadowRepo already pushed on fromRefName.
+// Returns the new branch tip's SHA.
+func addBranchCommit(t *testing.T, bareDir, fromRefName, branchName, file, content string) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "seed-"+branchName)
+	run := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %s (in %s): %v: %s", strings.Join(args, " "), dir, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	if _, err := exec.Command("git", "clone", "--branch", fromRefName, bareDir, dir).CombinedOutput(); err != nil {
+		t.Fatalf("clone: %v", err)
+	}
+	run("config", "user.email", "test@example.com")
+	run("config", "user.name", "test")
+	run("checkout", "-b", branchName)
+	if err := os.WriteFile(filepath.Join(dir, file), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", file)
+	run("commit", "-m", "on "+branchName)
+	run("push", "origin", branchName)
+	return run("rev-parse", "HEAD")
+}
+
+// mergeBranchIntoClone fetches otherBranch into the shared clone and merges
+// it (--no-ff, so a real two-parent merge commit results) into headRefName.
+// Returns the merge commit's SHA. Checks out headRefName from
+// origin/headRefName first — the bare repo's own default HEAD need not be
+// headRefName (see TestLoadPendingPushTreeCaughtUpBackstop's own doc comment
+// on that quirk), so the clone's HEAD after a plain `git clone` can otherwise
+// be an unborn branch with nothing to merge into.
+func mergeBranchIntoClone(t *testing.T, cloneDir, headRefName, otherBranch string) string {
+	t.Helper()
+	run := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", cloneDir}, args...)...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %s (in %s): %v: %s", strings.Join(args, " "), cloneDir, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	run("checkout", "-B", headRefName, "origin/"+headRefName)
+	run("fetch", "origin", otherBranch)
+	run("merge", "--no-ff", "-m", "Merge origin/"+otherBranch, "origin/"+otherBranch)
+	return run("rev-parse", "HEAD")
+}
+
+// pushSupersedingMerge pushes an INDEPENDENT merge of otherBranch's SHA into
+// headRefName straight onto the bare origin, from a throwaway third clone —
+// standing in for "GitHub's own Update-branch merge", never touching the
+// shared clone this test's pending ref lives in.
+func pushSupersedingMerge(t *testing.T, bareDir, headRefName, otherSHA string) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "github-update-branch")
+	run := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %s (in %s): %v: %s", strings.Join(args, " "), dir, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	if _, err := exec.Command("git", "clone", "--branch", headRefName, bareDir, dir).CombinedOutput(); err != nil {
+		t.Fatalf("clone: %v", err)
+	}
+	run("config", "user.email", "test@example.com")
+	run("config", "user.name", "test")
+	run("fetch", "origin", otherSHA)
+	run("merge", "--no-ff", "-m", "Merge remote-tracking branch into "+headRefName, otherSHA)
+	run("push", "origin", headRefName)
+	return run("rev-parse", "HEAD")
+}
+
+// runInDir runs one git command in dir, failing the test on error — the
+// generic version of the ad hoc `run` closures every other helper in this
+// file defines, used where the caller only needs a single command.
+func runInDir(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s (in %s): %v: %s", strings.Join(args, " "), dir, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}

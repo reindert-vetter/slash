@@ -227,6 +227,48 @@ func commitContains(ctx context.Context, repo, ancestor, descendant string) bool
 	return err == nil
 }
 
+// commitParents returns sha's own parent SHAs, in order. Empty on any git
+// error (a missing/unreadable sha) or for a root commit with none.
+func commitParents(ctx context.Context, repo, sha string) []string {
+	out, err := runGitFor(ctx, repo, "log", "-1", "--format=%P", sha)
+	if err != nil {
+		return nil
+	}
+	return strings.Fields(strings.TrimSpace(string(out)))
+}
+
+// mergeCommitSupersededByRemote reports whether sha is a plain merge commit
+// (exactly two parents — never a single-parent commit, which always carries
+// its OWN authored content and is never safe to wave off) whose BOTH parents
+// are already ancestors of base.
+//
+// Real case this covers (PR 13628, INTEG-467): a reviewer-requested chat turn
+// ran `git merge origin/develop` and landed it as
+// refs/slash/pending/pr-<n>/<headRef>. The branch's own real work (the
+// merge's first parent) was already on GitHub. Afterwards the branch was
+// updated on GitHub itself with a SEPARATE, later merge of develop (e.g. via
+// GitHub's "Update branch" button) — a different commit, since git never
+// reuses another merge's SHA, so the pending ref could never become an
+// ancestor of the new remote tip and the ahead-count could never reach 0 (see
+// the count==0 case above): a permanently stuck "ongepusht" pill on a PR that
+// really had nothing left to push, contradicting the reviewer's own claim.
+//
+// A merge commit contributes nothing beyond what its two parents already
+// carry — that's the definition of a merge (no third input). So once BOTH
+// parents are independently confirmed to already be on the remote, the merge
+// itself cannot hold anything the remote doesn't also already have, even
+// though the merge SHA itself never will be. This only applies to a genuine
+// two-parent merge commit; a single-parent commit (real authored work) is
+// never treated this way, no matter how many of its own ancestors are on the
+// remote.
+func mergeCommitSupersededByRemote(ctx context.Context, repo, sha, base string) bool {
+	parents := commitParents(ctx, repo, sha)
+	if len(parents) != 2 {
+		return false
+	}
+	return commitContains(ctx, repo, parents[0], base) && commitContains(ctx, repo, parents[1], base)
+}
+
 // loadPendingPush reads one PR's pending-push state straight out of git, or nil
 // when nothing is waiting to be pushed. Read-only: a handful of git plumbing
 // reads plus one local DB read, no fetch, no gh — cheap enough for a plain GET
@@ -284,6 +326,14 @@ func loadPendingPush(ctx context.Context, db *sql.DB, repo string, pr int) *pend
 		}
 	}
 	if pendingRefSHA(ctx, repo, base) != "" {
+		// A merge commit that only reincorporates the mainline branch (no
+		// unique authored content of its own) and whose two parents are BOTH
+		// already on the remote is superseded, not unpushed — see
+		// mergeCommitSupersededByRemote's own doc comment (PR 13628).
+		if mergeCommitSupersededByRemote(ctx, repo, sha, base) {
+			setPendingPushState(repo, pr, "", "")
+			return nil
+		}
 		if out, err := runGitFor(ctx, repo, "rev-list", "--count", base+".."+ref); err == nil {
 			if n, err := strconv.Atoi(strings.TrimSpace(string(out))); err == nil {
 				if n == 0 {
