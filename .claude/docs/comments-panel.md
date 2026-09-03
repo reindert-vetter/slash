@@ -2535,7 +2535,7 @@ when neither side has anything to report.
 comment-detail card moved into the merged comment-claude-row" below) also
 calls `CommentClaudeFooter(c.id, { batchOnly: true })` for its own
 `comment_batch` progress line — `batchOnly` drops the "Selected: …"/live-turn/
-"Ook bezig elders" sections from that second call, since those describe the
+"Andere chats in deze PR" sections from that second call, since those describe the
 globally anchored conversation and already render once in the wide
 `comment-claude-row` footer above (`CommentClaudeFooter()`, no `commentId`);
 without the flag they rendered byte-for-byte a second time inside the small

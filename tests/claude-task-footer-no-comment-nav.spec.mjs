@@ -21,7 +21,7 @@ import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 // the offline `claude` stub — same reliable mechanism as
 // claude-task-footer-no-anchor-and-linger.spec.mjs: the busy→not-busy
 // transition that round trip stamps `finishedAt` with is exactly what keeps
-// otherRunningClaudeTasks().length > 0 (the 2-minute linger window), with no
+// otherClaudeChats().length > 0 (the 2-minute linger window), with no
 // held/mocked POST needed.
 //
 // The child row (FooterTasksChildService::assist) is selected FIRST, before

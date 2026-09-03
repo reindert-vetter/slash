@@ -1,6 +1,6 @@
 import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
-// Regression: otherRunningClaudeTasks() (RelatedPanel.mjs) used to exclude the
+// Regression: otherClaudeChats() (RelatedPanel.mjs) used to exclude the
 // currently open conversation via chatAnchorComment() -> selComment() =
 // visibleComments()[cs.sel] — a raw INDEX into the (block-scoped) comment
 // list — instead of the stable cc.commentId the panel is actually anchored
@@ -25,7 +25,7 @@ test('a comment-list reorder while chatting must not list the open conversation 
   // Block idx 1 has a real local diff (see comment-nav-race.spec.mjs) — place
   // a genuine inline comment on it so it lands in cs.view's block-scoped,
   // INDEX-based list. A PR-wide/`kind` comment never does (see
-  // otherRunningClaudeTasks' own doc comment) — the bug is specific to an
+  // otherClaudeChats' own doc comment) — the bug is specific to an
   // ordinary, block-anchored conversation.
   await page.locator('[data-idx="1"]').click()
   await page.keyboard.press('ArrowRight') // list -> diff

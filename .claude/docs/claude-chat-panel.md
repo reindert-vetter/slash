@@ -279,7 +279,7 @@ from either `'comment'` or `'thread'`, and one `←` returns directly to
 - **`↑`/`↓` on `cs.focus === 'claude'`**: walk the transcript exactly like
   `'thread'` walks reactions, via its own `cs.claudePos` cursor (mirrors
   `cs.threadPos`, 0 = composer, 1..n = the n-th turn from the bottom).
-- **`↓` at `cs.claudePos === 0`** steps into the "Ook bezig elders" rung
+- **`↓` at `cs.claudePos === 0`** steps into the "Andere chats in deze PR" rung
   first (`cs.claudeTasksPos`, see the reorder note below), then the chat's
   **own code blocks** (`cs.previewPos`, see "`↓` walks the chat's own code
   blocks" below) — only once both are walked through (or when there is
@@ -684,22 +684,64 @@ Claude conversation itself, one sentence**:
   nothing at all** (not the placeholder, not a "nieuw gesprek" filler — an
   explicit reviewer answer) when `ownMessageTitle` comes back empty; the rest
   of the footer (the status line, the task list) stays visible regardless.
-- **`otherRunningClaudeTasks()`** resolves `claudeTurns.mjs`'s
-  `runningTurnIds(excludeId)` (every conversation with `busy || (progress &&
-  progress.running)`, PR-wide, excluding the anchored one) against `cs.list`
-  (the PR-wide comment list this panel already keeps loaded) into real comment
-  objects — an id whose comment hasn't loaded yet is simply skipped, never
-  shown as a blank row. **Deliberately excludes `answered`** (a turn that
-  already finished while the reviewer was elsewhere) — that is
-  `claudeChatPill`'s own job; this list is specifically "busy right now
-  elsewhere", per the reviewer's own wording. It is also the ONE trigger point
-  for `ensureOtherTaskTitle` below — it already runs on every render that
-  needs the list, and that call is self-deduping, so no separate watch/poller
-  exists just to kick fetches off.
+- **`otherClaudeChats()`** is **every OTHER chat of this PR**, not only the
+  ones with a turn running right now. Reviewer report on the earlier,
+  running-only behaviour: *"ik zie maar 1 andere chat, maar er zijn veel meer
+  chats bezig op dat moment ... laat een hele lijst zien van alle chats"*,
+  answered with *"alle chats van deze pr en chats die ik nog niet x seconden
+  heb bekeken (ik denk 5 seconden)"*. So the sources are, in this order:
+  `runningTurnIds(excludeId)` (a turn running right now, PR-wide),
+  `recentlyFinishedTurnIds(excludeId)` (one that just stopped — both of these
+  first so a turn is never missed while `cc.conversations` is still catching
+  up on the comment poll's own cadence), then **every conversation of this
+  PR**: `cc.conversations` (the durable "here a Claude conversation really
+  happened" set, `ConversationsWithMessages`) plus this PR's own
+  `isGeneralChatAnchor` — exactly the source `openChatComments`' index section
+  already uses. Each id is resolved against `cs.list` into a real comment
+  object; an id whose comment hasn't loaded yet is simply skipped, never shown
+  as a blank row. The anchored conversation (the "Selected: …" line) is
+  excluded. It is also the ONE trigger point for `ensureOtherTaskTitle` below
+  — it already runs on every render that needs the list, and that call is
+  self-deduping, so no separate watch/poller exists just to kick fetches off.
+- **`chatStateOf(c)` is both the row's own word and the list's sort order**:
+  `'busy'` (a Signal POST in flight, or `progress.running`) → `'done'` (inside
+  `isTurnRecentlyFinished`'s 2-minute window) → `'unread'` (there is an answer
+  the reviewer has NOT dwelt on for the full 5s yet, `isChatUnread`) →
+  `'seen'`. `CHAT_STATE_RANK` sorts by exactly that (a stable sort, so a row
+  only moves when its own state really changes). **This is what implements the
+  "nog niet x seconden bekeken" criterion**: the 5s dwell
+  (`scheduleChatSeenDwell` → the durable `seen_at`, see "Marking it read")
+  is what sinks a chat to the bottom as `'bekeken'`; anything with an unseen
+  answer stays up top as `'nieuw'`. It also REPLACED the old hard 2-minute
+  linger as the *inclusion* rule — a finished chat no longer vanishes from the
+  list at all, it only changes its word (see "A finished task lingers for 2
+  minutes" below, which now only owns the `'done'` word).
+- **`MAX_CHAT_ROWS` (12) caps the rendered rows**, with the remainder as one
+  plain, non-navigable "+n meer" line (`claudeMoreChatsNote`,
+  `data-testid=claude-more-chats`) — the cap is applied AFTER the sort, so a
+  chat with an unseen answer can rise into view, and
+  `ensureOtherTaskTitle`/the unread state are therefore ensured for the WHOLE
+  list, not only the visible slice. A PR-wide list has no natural bound any
+  more now that it isn't limited to running turns, and both the footer height
+  and the ↓/↑ rung walking these rows have to stay usable.
+- **The unread flag rides along on the title fetch, not a second GET**:
+  `ensureOtherTaskTitle`'s own `GET /api/chat?commentId=` payload already
+  carries `messages` + `seenAt`, so it calls `setChatUnread(c.id,
+  unreadFromTranscript(json))` from the same response instead of letting
+  `ensureChatUnread` (`chatUnread.mjs`) fetch the identical transcript again.
+  Same cache, same invalidation: the `chat.message` SSE handler already drops
+  both entries together.
+- **One extra resync so a chat busy in ANOTHER tab shows up**:
+  `loadRunningTurns(pr)` used to run only on SSE (re)connect, so a turn
+  started elsewhere (or one whose `chat.progress` frame this tab missed) stayed
+  invisible until the next reconnect — part of the same "er zijn veel meer
+  chats bezig dan ik zie" report. It now also rides along with `loadComments`'
+  own 5s poll, next to `loadChatConversations(pr)`: one extra read-only,
+  in-memory-backed GET per poll (see `.claude/docs/server-events.md`).
 - **`ccAnchorComment()` (`RelatedPanel.mjs`), not a bare `chatAnchorComment()`,
   is what both of the above resolve the excluded/"Selected" id through** —
   fixed after a reported bug: a running conversation's OWN title/status
-  appeared a second time under "Ook bezig elders in deze PR", right next to
+  appeared a second time under "Andere chats in deze PR", right next to
   the identical "Selected: …" line, with a Jump link that (harmlessly)
   navigated right back to the same conversation. `chatAnchorComment()`
   resolves via `selComment()` = `visibleComments()[cs.sel]` — `cs.sel` is a
@@ -719,16 +761,23 @@ Claude conversation itself, one sentence**:
   reliably agree anyway). Test:
   `tests/claude-other-tasks-reorder.spec.mjs`.
 - **Visibility widened accordingly**: `hasCommentClaudeFooter()` now also
-  returns `true` whenever `otherRunningClaudeTasks().length > 0` — "zodra er
+  returns `true` whenever `otherClaudeChats().length > 0` — "zodra er
   iets elders loopt, ook als de huidige conversatie zelf niets aan het doen
   is" (explicit reviewer answer) — so the footer (and the whole
   `comment-claude-row` card around it) can show even when the conversation on
   screen is completely idle.
-- **The list itself** (`data-testid=claude-other-tasks`, rows
-  `data-testid=claude-task-row`) renders each task's title (see
-  `otherTaskTitleFor` below) plus its own status word via the existing
-  `claudeStatusText(turnProgress(c.id), 0)` — words, a pulsing dot as
-  decoration only, per the colourblind rule.
+- **The list itself** (`data-testid=claude-other-tasks`, header *"Andere chats
+  in deze PR (n):"*, rows `data-testid=claude-task-row` carrying
+  `data-state`) renders each chat's title (see `otherTaskTitleFor` below) plus
+  its own state as a WORD — the live `claudeStatusText(turnProgress(c.id), 0)`
+  for `'busy'`, otherwise "Klaar"/"nieuw"/"bekeken" — each with its own glyph
+  (a pulsing dot, ✓, !, ○), per the colourblind rule.
+- **Layout, reported bug**: the state text used to be `shrink-0` while the
+  title could shrink, so a long status ("Claude leest &lt;full worktree
+  path&gt;") pushed the title to zero width and the row read as a bare path
+  with no idea which chat it was. The title now takes the flexible half
+  (`min-w-0 flex-1 truncate`) and the state text is the one that truncates,
+  capped at `max-w-[45%]`.
 
 **The task-list title needs a DIFFERENT conversation's `role: 'user'`
 message, which `cc.messages` never holds — the panel only ever keeps ONE
@@ -745,7 +794,7 @@ mechanism:
   guard.
 - **`ensureOtherTaskTitle(c)`** — a plain (non-reactive) `Set`
   (`otherTaskTitlesFetching`) de-dupes a repeated call for the same id (which
-  happens on every render, since `otherRunningClaudeTasks()` calls it
+  happens on every render, since `otherClaudeChats()` calls it
   unconditionally); the actual fetch is the same read-only
   `GET /api/chat?commentId=` `loadChatMessages` already uses, reduced through
   `ownMessageTitle`.
@@ -784,15 +833,15 @@ relative order of these two rungs. Highlight mirrors `claudeQuestionOptions`'
 own convention exactly: a ring **plus** a leading `› ` glyph, never colour
 alone.
 
-**Reordered: "Ook bezig elders" now comes BEFORE the code-preview cards, not
+**Reordered: "Andere chats in deze PR" now comes BEFORE the code-preview cards, not
 after.** Originally landed the other way around (`cs.previewPos` walked
 first, `cs.claudeTasksPos` only reachable once every code-preview card had
 been walked past) — reviewer report: *"ook elders bezig kan ik pas selecteren
 nadat ik gegenereerde codeblokken (van chat) naar beneden heb gedrukt. ik wil
-dat na de chat het [Ook bezig elders] geselecteerd [wordt], en pas als ik
+dat na de chat het [Andere chats in deze PR] geselecteerd [wordt], en pas als ik
 daarna naar beneden ga, het de gegenereerde codeblokken selecteert (en
 daarna onderliggende blokken)"* — i.e. the reachable order must match the
-on-screen order, where "Ook bezig elders" renders **above** the code-preview
+on-screen order, where "Andere chats in deze PR" renders **above** the code-preview
 cards (see `CommentClaudeFooter`/`claude-other-tasks` above them in the DOM).
 Fixed by swapping the two `if` branches in `handleRelatedKey`'s `'claude'`
 case for both `ArrowDown` (walk `cs.claudeTasksPos` to completion before
@@ -800,7 +849,7 @@ case for both `ArrowDown` (walk `cs.claudeTasksPos` to completion before
 down to 0 before `cs.claudeTasksPos` starts unwinding — whichever rung `↓`
 visits LAST is the one `↑` leaves FIRST), plus `advanceFromComment`'s own
 entry point (↓ from the bottom of the last comment thread now also checks
-`otherRunningClaudeTasks().length > 0` before `codePreviewCount() > 0`).
+`otherClaudeChats().length > 0` before `codePreviewCount() > 0`).
 
 **A latent "two things active at once" bug surfaced by this reorder, fixed in
 the same change:** neither cursor was ever reset to 0 when the walk crossed
@@ -814,7 +863,7 @@ AND "another conversation running elsewhere in the same PR" in the same walk
 — see `tests/claude-other-tasks-before-codeblocks.spec.mjs`. Fix:
 `cs.claudeTasksPos` is explicitly zeroed the moment `cs.previewPos` starts
 moving (`ArrowDown`), and `cs.claudeTasksPos` is explicitly restored to
-`otherRunningClaudeTasks().length` (not read from a stale leftover) when
+`otherClaudeChats().length` (not read from a stale leftover) when
 `cs.previewPos` unwinds back past its first card (`ArrowUp`) — mirrors
 `codeFromClaudeTailPreviewPos`'s own "capture/restore explicitly, never trust
 a value you didn't just set" reasoning above.
@@ -841,10 +890,10 @@ like `openTask` itself: a stale/racy jump (the row/comment gone by the time an
 Reviewer report: with no comment on the current unit (so `'claude'` cannot
 even be entered — `enterClaudeChat` is a no-op without an anchor, see
 "Product decision" above), the footer-only card still renders whenever
-`otherRunningClaudeTasks().length > 0` (`hasCommentClaudeFooter()`), but `↑`
+`otherClaudeChats().length > 0` (`hasCommentClaudeFooter()`), but `↑`
 from the top of Onderliggende code used to leave the panel immediately —
 there was no way to reach this list at all. Two more panel-top boundaries now
-check `otherRunningClaudeTasks().length > 0` before falling through to their
+check `otherClaudeChats().length > 0` before falling through to their
 existing `exitRelated()`: `'code'`'s own `↑` at `codeSel === 0` (its
 existing fallback chain — `codeFromClaudeTail` → `hasVisibleComments()` →
 exit — gets this as its new last resort) and `'thread'`'s own `↑` past the
@@ -875,7 +924,7 @@ preserved either, same as the `'claude'`-nested version of this rung.
 
 ### A finished task lingers for 2 minutes, clearly marked done
 
-Reviewer request: a task should not vanish from "Ook bezig elders" the
+Reviewer request: a task should not vanish from "Andere chats in deze PR" the
 INSTANT it finishes — it should stay long enough to actually notice and jump
 to it, marked as done rather than looking like it's still running.
 
@@ -888,12 +937,15 @@ goes from busy/running to neither, and CLEARED the instant it becomes
 active again (a fresh turn on the same conversation must not inherit an old
 "klaar" mark). **`recentlyFinishedTurnIds(excludeId)`** is `runningTurnIds`'s
 own sibling: every id whose `finishedAt` is less than `FINISHED_LINGER_MS`
-(2 minutes) old and not currently running/busy again, garbage-collecting
-`finishedAt` of any id past that window as it walks it. `otherRunningClaudeTasks()`
-now returns `[...runningTurnIds(anchorId), ...recentlyFinishedTurnIds(anchorId)]`
-— running first, then lingering-finished — and `hasCommentClaudeFooter()`
-picks this up for free (it already gates on `otherRunningClaudeTasks().length
-> 0`), so the footer-only card also stays visible through the linger window.
+(2 minutes) old and not currently running/busy again (the garbage collection
+of an expired stamp now sits in `isTurnRecentlyFinished` itself, which walks
+past it anyway). **Since the list became "every chat of this PR" (see
+`otherClaudeChats` above), this window no longer decides whether a row EXISTS
+— only what it SAYS** (`chatStateOf`'s `'done'`). `recentlyFinishedTurnIds` is
+still a list source, for one narrow reason: the list resolves its ids through
+`cc.conversations`, which is only refreshed on the comment poll's cadence, so
+a just-finished chat would otherwise enter the list up to a poll late — long
+after the reviewer's eyes (and the ↓/↑ cursor) went looking for it.
 `claudeTaskRow` tells the two apart via **`isTurnRecentlyFinished(id)`**
 (exported, the exact same predicate `recentlyFinishedTurnIds` filters
 with) — a done row swaps the pulsing indigo dot for a static check-mark glyph
@@ -908,7 +960,7 @@ closed or got refreshed never gets a "recently finished" window after the
 fact — only one this tab actually observed finishing live. Accepted per the
 reviewer's own "als dat mogelijk is" — no backend change, no new endpoint.
 
-**Keeping the row alive to actually expire on screen**: `otherRunningClaudeTasks()`
+**Keeping the row alive to actually expire on screen**: `otherClaudeChats()`
 reads `cc.tick` purely to force a re-evaluation every second while something
 is lingering (the same "read purely to force a re-run" trick the elapsed-
 seconds counter already relies on), and `syncChatTicker`'s own 1s-heartbeat
@@ -1207,7 +1259,7 @@ Below the scrollable card (a sibling, outside the `overflow-y-auto` wrapper —
 same placement `home.mjs`'s own `comment-claude-row` uses) sits the same
 shared `CommentClaudeFooter()` (`RelatedPanel.mjs`) the per-line chat renders:
 the live "Claude denkt na…/leest/schrijft… · Xs" status, the Stop button, and
-"Ook bezig elders in deze PR". This used to be missing entirely — a running
+"Andere chats in deze PR". This used to be missing entirely — a running
 turn in the overlay showed the sent message and then nothing until the answer
 landed, unlike the per-line chat, which always shows progress underneath.
 Called with no `commentId`/`opts`, exactly like `home.mjs`'s own call, since
@@ -3985,8 +4037,8 @@ one didn't exist anywhere in this app).
   original decision is untouched — the **Onderliggende-code** panel is still
   skipped entirely; only the chat's own code blocks were added, and they sit
   visually right below the chat anyway.
-- **`cs.claudeTasksPos` ("Ook bezig elders") is walked BEFORE `cs.previewPos`,
-  not after** — `↓` at the rest position reaches the "Ook bezig elders" rows
+- **`cs.claudeTasksPos` ("Andere chats in deze PR") is walked BEFORE `cs.previewPos`,
+  not after** — `↓` at the rest position reaches the "Andere chats in deze PR" rows
   first (see "Where a turn on OTHER code is visible" below), then the
   code-preview cards, matching the on-screen order: that block renders
   **above** the code-preview cards, not below. It used to be the reverse
@@ -4033,7 +4085,7 @@ one didn't exist anywhere in this app).
   empty B composer that meant its "blank field → open the Claude menu"
   branch (`stopPropagation()` and all), not `home.mjs`'s document-level
   `selectHighlightedClaudeTask()` the reviewer's `↓` had actually earned.
-  Symptom: Enter right after `↓` into "Ook bezig elders" sometimes opened the
+  Symptom: Enter right after `↓` into "Andere chats in deze PR" sometimes opened the
   wrong menu and the composer never regained focus at all, and it was NOT
   fixable by asserting a different DOM state — `cs.focus`/`cs.claudeTasksPos`
   themselves were already correct and stayed so; the bug was purely about

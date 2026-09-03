@@ -33,7 +33,13 @@ import { loadDraft, saveDraft, clearDraft } from './draftStorage.mjs'
 import { codePreviewColumn } from './CodePreview.mjs'
 import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
 import { syncCommentBatch, batchProgressFor, batchNoteFor } from './commentBatch.mjs'
-import { lastAssistantMessageAt, setChatUnread, dropChatUnreadCache, markChatSeenOnServer } from './chatUnread.mjs'
+import {
+  isChatUnread,
+  lastAssistantMessageAt,
+  setChatUnread,
+  dropChatUnreadCache,
+  markChatSeenOnServer,
+} from './chatUnread.mjs'
 import {
   anyRecentlyFinishedTurn,
   anyTurnRunning,
@@ -188,7 +194,7 @@ const cs = reactive({
   // see handleRelatedKey's 'claude' branch. Reached only AFTER
   // claudeTasksPos below has been walked through (or immediately if there
   // are no other running tasks to show) — matching the on-screen order,
-  // where the "Ook bezig elders" block renders above these cards. Reviewer
+  // where the "Andere chats in deze PR" block renders above these cards. Reviewer
   // report: ↓ used to reach these cards BEFORE claudeTasksPos, so "Ook bezig
   // elders" was only reachable after walking past every code block first.
   // Deliberately NOT bound to the URL, like claudeOptionSel/chipPath above:
@@ -215,7 +221,7 @@ const cs = reactive({
   // running Claude conversation in this PR (top to bottom, mirrors
   // previewPos' own top-to-bottom counting — walked BEFORE previewPos, or
   // immediately if there is no anchored comment yet — see handleRelatedKey's
-  // 'claude' branch and otherRunningClaudeTasks below).
+  // 'claude' branch and otherClaudeChats below).
   // Enter jumps to that conversation's own code/comment
   // (selectHighlightedClaudeTask). Deliberately NOT bound to the URL, same
   // reasoning as previewPos/claudeOptionSel: this walks other people's live,
@@ -1600,8 +1606,8 @@ export function enterCommentsTail() {
 // once there is no next conversation, continues on into the Onderliggende-
 // code panel instead of clamping (see keyboard-navigation.md: "↓ loopt door
 // naar het onderliggende-code-blok"). Reviewer request: when the unit's own
-// Claude conversation has an "other running Claude tasks" rung or code
-// blocks of its own (otherRunningClaudeTasks / cp.items, walked by
+// Claude conversation has an "andere chats in deze PR" rung or code
+// blocks of its own (otherClaudeChats / cp.items, walked by
 // cs.claudeTasksPos / cs.previewPos — see "↓ walks the chat's own code
 // blocks" in claude-chat-panel.md), walk those FIRST, exactly like ↓ already
 // does from the chat's own rest position (tasks before cards, matching their
@@ -1614,7 +1620,7 @@ function advanceFromComment() {
   if (selI() < visibleComments().length - 1) {
     cs.sel += 1
     toComment()
-  } else if (otherRunningClaudeTasks().length > 0) {
+  } else if (otherClaudeChats().length > 0) {
     cs.focus = 'claude'
     cs.claudeTasksPos = 1
     focusClaudeTaskRow()
@@ -2137,7 +2143,7 @@ function chatAnchorComment() {
 // (conventions.md's "Snapshot a selection by stable ID, never by raw array
 // index") without cc moving at all, since cc is deliberately not resynced in
 // that state. Anything describing "the conversation the reviewer is actually
-// looking at right now" (the "Selected: …" line, the otherRunningClaudeTasks
+// looking at right now" (the "Selected: …" line, the otherClaudeChats
 // exclusion below) must resolve through cc.commentId, not through the
 // possibly-stale index. Falls back to chatAnchorComment() whenever nothing is
 // anchored yet (cc.commentId == null) — the ordinary browsing state, where
@@ -3261,8 +3267,8 @@ function clearFinishedChatProgress(commentId = cc.commentId) {
 
 // syncChatTicker runs a 1s heartbeat only while a turn is actually running OR
 // something is still inside its "recently finished" linger window (see
-// anyRecentlyFinishedTurn/otherRunningClaudeTasks), so the elapsed-seconds
-// counter advances AND a lingering "Ook bezig elders" row actually expires on
+// anyRecentlyFinishedTurn/otherClaudeChats), so the elapsed-seconds
+// counter advances AND a lingering "Andere chats in deze PR" row actually expires on
 // screen, without a permanent timer on the page.
 let chatTickTimer = null
 function syncChatTicker() {
@@ -3578,7 +3584,7 @@ function focusClaudeTaskRow() {
 }
 
 // tasksFromFocus remembers which panel boundary the reviewer entered the
-// footer's "other running Claude tasks" rung from ('code' or 'thread', see
+// footer's "andere chats in deze PR" rung from ('code' or 'thread', see
 // enterFooterTasks/exitFooterTasks below) — a plain module variable in the
 // same vein as codeFromClaudeTail (Onderliggende-code's own "remember where
 // I came from" flag), so stepping back out lands exactly where the reviewer
@@ -3586,7 +3592,7 @@ function focusClaudeTaskRow() {
 let tasksFromFocus = 'code'
 
 // enterFooterTasks lands the keyboard on CommentClaudeFooter's own
-// otherRunningClaudeTasks list with NO comment/claude column open beneath
+// otherClaudeChats list with NO comment/claude column open beneath
 // it — the footer-only card (hasCommentClaudeFooter() true,
 // claudeChatVisible() false: no anchor exists for the current unit at all,
 // but another conversation is running elsewhere in the PR). Deliberately its
@@ -3600,7 +3606,7 @@ let tasksFromFocus = 'code'
 function enterFooterTasks(fromFocus) {
   tasksFromFocus = fromFocus
   cs.focus = 'tasks'
-  cs.claudeTasksPos = otherRunningClaudeTasks().length
+  cs.claudeTasksPos = otherClaudeChats().length
   focusClaudeTaskRow()
 }
 
@@ -3643,7 +3649,7 @@ function focusClaudeComposer() {
   // it as "send"/"open the menu on an empty field" — instead of ever
   // reaching home.mjs's document-level handler for the rung the reviewer had
   // already (per this reactive state) navigated onto. Reported bug: Enter
-  // right after ↓ into "Ook bezig elders" sometimes opened the Claude menu
+  // right after ↓ into "Andere chats in deze PR" sometimes opened the Claude menu
   // instead of jumping to the highlighted task. See
   // tests/claude-chat-other-tasks.spec.mjs.
   if (!(cs.claudePos === 0 && cs.claudeOptionSel === 0)) {
@@ -3829,9 +3835,9 @@ function ensureChatEvents(pr) {
     // so its index pill says an answer landed. Never trusted as content — the
     // transcript itself is only ever refetched for the conversation in view.
     if (turnProgress(ev.key) || isTurnBusy(ev.key)) markTurnAnswered(ev.key)
-    // Drop any cached "other running Claude tasks" title for it too — this
+    // Drop any cached "andere chats in deze PR" title for it too — this
     // conversation's own last message may have just changed, so the next
-    // render's ensureOtherTaskTitle (otherRunningClaudeTasks) refetches a
+    // render's ensureOtherTaskTitle (otherClaudeChats) refetches a
     // fresh one on demand instead of keeping a stale string forever.
     if (otherTaskTitles.byId[ev.key] !== undefined) {
       const next = { ...otherTaskTitles.byId }
@@ -4204,7 +4210,7 @@ function ownMessageTitle(messages, c) {
 // own guard below.
 const otherTaskTitles = reactive({ byId: {} })
 
-// otherTaskTitlesFetching — plain (non-reactive) de-dup guard: otherRunningClaudeTasks
+// otherTaskTitlesFetching — plain (non-reactive) de-dup guard: otherClaudeChats
 // calls ensureOtherTaskTitle on every relevant render, so without this a
 // conversation whose fetch is still in flight would fire a second (and third,
 // …) concurrent request for the same id.
@@ -4229,6 +4235,14 @@ function ensureOtherTaskTitle(c) {
     .then((json) => {
       const title = ownMessageTitle(json && json.messages, c)
       otherTaskTitles.byId = { ...otherTaskTitles.byId, [c.id]: title }
+      // The very same payload already answers "has this chat an answer the
+      // reviewer hasn't looked at for the full 5s dwell yet" (seen_at vs the
+      // newest assistant turn, see chatUnread.mjs), which chatStateOf reads
+      // for its own 'nieuw' state word — so it is filled in from here rather
+      // than through a second, identical GET per row (ensureChatUnread's own
+      // fetch). Same cache, same invalidation: the chat.message SSE handler
+      // drops both entries together.
+      if (json) setChatUnread(c.id, unreadFromTranscript(json))
     })
     .catch(() => {
       // Left unresolved on a failed fetch — otherTaskTitleFor's own
@@ -4236,6 +4250,16 @@ function ensureOtherTaskTitle(c) {
       // render or the next chat.message event tries again.
     })
     .finally(() => otherTaskTitlesFetching.delete(c.id))
+}
+
+// unreadFromTranscript — "not yet viewed for the full dwell": the newest
+// assistant turn is newer than the durable seen_at the 5s dwell writes
+// (scheduleChatSeenDwell → the chat 'seen' Signal). Same expression
+// ensureChatUnread uses, lifted out so ensureOtherTaskTitle can reuse the
+// transcript it already fetched instead of asking for it twice.
+function unreadFromTranscript(json) {
+  const lastAt = lastAssistantMessageAt(json.messages)
+  return !!lastAt && lastAt > (json.seenAt || '')
 }
 
 // otherTaskTitleFor — claudeTaskRow's own title getter: the fetched "own last
@@ -4252,25 +4276,37 @@ function otherTaskTitleFor(c) {
 }
 
 
-// otherRunningClaudeTasks — every OTHER conversation in this PR with a turn
-// running right now (claudeTurns.mjs' shared, PR-wide registry), PLUS every
-// one that finished in the last 2 minutes (recentlyFinishedTurnIds — reviewer
-// request: a task should not vanish from this list the INSTANT it finishes,
-// it should linger long enough to actually notice and jump to, clearly
-// marked done — see isTaskDone/claudeTaskRow below), excluding the one
-// currently anchored/shown by name (see the "Selected: …" line in
-// CommentClaudeFooter) — reviewer request: "als er andere claude dingen bezig
-// zijn, wil ik daarvan alleen de titels zien en daar doorheen kunnen
-// navigeren". Running tasks sort first (still actionable), then the
-// recently-finished ones. Resolves each id to its own comment via cs.list (the
-// PR-wide comment list this panel already keeps loaded) so the nested nav
-// stop below can show a title (otherTaskTitleFor) and jump to it
-// (selectHighlightedClaudeTask); an id whose comment hasn't loaded into
-// cs.list yet (a rare timing gap right after a turn starts elsewhere) is
-// simply skipped, not shown as a blank row. Also the ONE trigger point for
-// ensureOtherTaskTitle — this function already runs on every render that
-// needs the list anyway, and the fetch is self-deduping, so no separate
-// watch/poller is needed just to kick it off.
+// otherClaudeChats — EVERY other Claude conversation of this PR, not just the
+// ones with a turn running right now. Reviewer report on the old behaviour:
+// "ik zie maar 1 andere chat, maar er zijn veel meer chats bezig op dat
+// moment ... laat een hele lijst zien van alle chats", answered with "alle
+// chats van deze pr en chats die ik nog niet x seconden heb bekeken (ik denk
+// 5 seconden)". So the list is now:
+//
+//   - every conversation of this PR (cc.conversations — "here a Claude
+//     conversation really happened" — plus this PR's own general-chat anchor,
+//     exactly the source openChatComments' index section already uses), PLUS
+//   - any conversation with a turn running right now, even one whose comment
+//     hasn't landed in cs.list yet,
+//   - minus the conversation currently anchored/shown by name (the
+//     "Selected: …" line in CommentClaudeFooter).
+//
+// Ordering is by chatStateOf's own rank (bezig → klaar → nieuw → bekeken),
+// which is also what implements the "nog niet 5 seconden bekeken" criterion:
+// a chat the reviewer has genuinely dwelt on (scheduleChatSeenDwell's 5s
+// timer writes the durable seen_at) sinks to the bottom as 'bekeken', while
+// anything with an unseen answer stays up top as 'nieuw'. That REPLACES the
+// old hard 2-minute "recently finished" linger as the inclusion rule — a
+// finished chat no longer vanishes from the list at all, it just changes its
+// word (the linger itself still exists, purely for the "Klaar" state below).
+//
+// Resolves each id to its own comment via cs.list (the PR-wide comment list
+// this panel already keeps loaded) so a row can show a title
+// (otherTaskTitleFor) and jump to it (selectHighlightedClaudeTask); an id
+// whose comment hasn't loaded yet is simply skipped, not shown as a blank
+// row. Also the ONE trigger point for ensureOtherTaskTitle — this function
+// already runs on every render that needs the list anyway, and the fetch is
+// self-deduping, so no separate watch/poller is needed just to kick it off.
 //
 // The excluded id is resolved via ccAnchorComment() — the conversation
 // actually loaded/shown in the panel (cc.commentId) — rather than a bare
@@ -4282,23 +4318,91 @@ function otherTaskTitleFor(c) {
 // were correct for that id, which is exactly why they matched the
 // "Selected: …" line above: it was the same conversation. Reported bug, not
 // a hypothetical — see .claude/docs/claude-chat-panel.md.
-function otherRunningClaudeTasks() {
+
+// MAX_CHAT_ROWS caps how many rows actually render; the rest is reported as
+// one plain "+n meer" line (claudeMoreChatsNote). A PR-wide list has no
+// natural bound any more now that it is not limited to running turns, and
+// both the footer height and the ↓/↑ rung walking these rows have to stay
+// usable.
+const MAX_CHAT_ROWS = 12
+
+// chatStateOf — one row's own state, in priority order. 'busy' wins (it is
+// the newest fact), then the 2-minute "just finished" window, then "has an
+// answer you have not looked at for the full 5s dwell yet" (isChatUnread,
+// chatUnread.mjs), otherwise 'seen'. Every state renders as a WORD plus its
+// own glyph in claudeTaskRow — never a bare colour, per the colourblind rule.
+function chatStateOf(c) {
+  if (!c) return 'seen'
+  const id = String(c.id)
+  const p = turnProgress(c.id)
+  if (isTurnBusy(c.id) || (p && p.running)) return 'busy'
+  if (isTurnRecentlyFinished(c.id)) return 'done'
+  if (isChatUnread(c)) return 'unread'
+  return 'seen'
+}
+
+const CHAT_STATE_RANK = { busy: 0, done: 1, unread: 2, seen: 3 }
+
+// otherClaudeChatsAll is the uncapped list; otherClaudeChats (below) is what
+// renders. Kept apart so the "+n meer" line can name the difference without
+// a second, differently-filtered walk.
+function otherClaudeChatsAll() {
   const anchor = ccAnchorComment()
-  const excludeId = anchor ? anchor.id : null
-  // cc.tick is read purely to force this to re-evaluate every second while
-  // something is lingering (see the chatTickTimer condition below), so a row
-  // past its 2-minute window actually disappears instead of only on the next
-  // unrelated re-render — same "read purely to force a re-run" trick the
-  // elapsed-seconds counter itself already relies on.
+  const excludeId = anchor ? String(anchor.id) : null
+  // cc.tick is read purely to force this to re-evaluate every second while a
+  // turn runs or something is still inside its "Klaar" window, so a row's own
+  // word changes on screen instead of only on the next unrelated re-render —
+  // same "read purely to force a re-run" trick the elapsed-seconds counter
+  // itself already relies on.
   void cc.tick
-  const ids = [...runningTurnIds(excludeId), ...recentlyFinishedTurnIds(excludeId)]
-  const tasks = ids.map((id) => cs.list.find((c) => String(c.id) === id)).filter(Boolean)
-  tasks.forEach(ensureOtherTaskTitle)
-  return tasks
+  const seen = new Set()
+  const out = []
+  const add = (c) => {
+    if (!c) return
+    const id = String(c.id)
+    if (id === excludeId || seen.has(id)) return
+    seen.add(id)
+    out.push(c)
+  }
+  // Running turns first, so a turn whose comment IS in cs.list can never be
+  // missed even if cc.conversations hasn't caught up with it yet (that set is
+  // refreshed on the comment poll's cadence, a turn can start between two
+  // polls).
+  runningTurnIds(excludeId).forEach((id) => add(cs.list.find((c) => String(c.id) === id)))
+  // Same reason for a chat that JUST finished: cc.conversations below is only
+  // refreshed on the comment poll's cadence, so without this a finished chat
+  // would enter the list up to a poll late — long enough for the ↓/↑ cursor
+  // to have looked for it already (see recentlyFinishedTurnIds).
+  recentlyFinishedTurnIds(excludeId).forEach((id) => add(cs.list.find((c) => String(c.id) === id)))
+  cs.list.forEach((c) => {
+    if (cc.conversations.indexOf(c.id) >= 0 || isGeneralChatAnchor(c)) add(c)
+  })
+  // Titles (and, from the same payload, the unread state chatStateOf sorts
+  // on) are ensured for the WHOLE list, not only the rows that survive
+  // MAX_CHAT_ROWS: the cap is applied AFTER the sort, so a chat with an
+  // unseen answer must be able to rise into view. Self-deduping and cached
+  // per id, so this is one GET per chat once, not per render.
+  out.forEach(ensureOtherTaskTitle)
+  // Stable sort (guaranteed in every browser this app targets), so rows only
+  // move when their own state really changes.
+  out.sort((a, b) => CHAT_STATE_RANK[chatStateOf(a)] - CHAT_STATE_RANK[chatStateOf(b)])
+  return out
+}
+
+function otherClaudeChats() {
+  return otherClaudeChatsAll().slice(0, MAX_CHAT_ROWS)
+}
+
+// claudeMoreChatsNote — the plain "+n meer" text for whatever MAX_CHAT_ROWS
+// cut off, '' when nothing was. Deliberately not a row: it is not navigable
+// and must not shift the ↓/↑ cursor's own indexing.
+function claudeMoreChatsNote() {
+  const hidden = otherClaudeChatsAll().length - MAX_CHAT_ROWS
+  return hidden > 0 ? '+' + hidden + ' ' + t('meer') : ''
 }
 
 // claudeTaskJump — the "go there" action for a highlighted row of
-// otherRunningClaudeTasks (Enter, or a click), registered once by home.mjs
+// otherClaudeChats (Enter, or a click), registered once by home.mjs
 // (setClaudeTaskJump) since it needs to move state.selected/state.mode —
 // state this module never touches directly. See setClaudeTaskJump's own
 // doc comment for why this indirection exists instead of a direct import.
@@ -4307,7 +4411,7 @@ export function setClaudeTaskJump(fn) {
   claudeTaskJump = fn
 }
 
-// selectHighlightedClaudeTask — Enter while the "other running Claude tasks"
+// selectHighlightedClaudeTask — Enter while the "andere chats in deze PR"
 // rung is highlighted (cs.claudeTasksPos > 0, see handleRelatedKey's 'claude'
 // branch above, or the 'tasks' branch/enterFooterTasks for the no-anchor
 // case). Mirrors selectHighlightedClaudeOption's own shape: returns false (a
@@ -4315,12 +4419,12 @@ export function setClaudeTaskJump(fn) {
 // Claude-column menu Enter right after it.
 export function selectHighlightedClaudeTask() {
   if ((cs.focus !== 'claude' && cs.focus !== 'tasks') || cs.claudeTasksPos === 0) return false
-  const c = otherRunningClaudeTasks()[cs.claudeTasksPos - 1]
+  const c = otherClaudeChats()[cs.claudeTasksPos - 1]
   activateClaudeTask(c)
   return true
 }
 
-// activateClaudeTask — the mouse action for one row of otherRunningClaudeTasks,
+// activateClaudeTask — the mouse action for one row of otherClaudeChats,
 // shared with the Enter path above (selectHighlightedClaudeTask): per
 // mouse-navigation.md's rule ("a click runs the same function a key runs"),
 // clicking a row does exactly what walking onto it with ↓ and pressing Enter
@@ -4343,7 +4447,7 @@ export function activateClaudeTask(c) {
 // comments/Claude chat and nothing in flight, showing as a bare thin gray bar
 // above Onderliggende code (see .claude/docs/comments-panel.md).
 export function hasCommentClaudeFooter() {
-  return !!commentFooterText() || hasActiveClaudeTurn() || otherRunningClaudeTasks().length > 0
+  return !!commentFooterText() || hasActiveClaudeTurn() || otherClaudeChats().length > 0
 }
 
 // claudeQueueNote — the Claude half's queue suffix ("· nog 2 berichten in de
@@ -4382,7 +4486,7 @@ function claudeQueueNote() {
 // `opts.batchOnly` (also only ever passed by commentDetailCard, next to
 // `commentId`) narrows this SAME call down to just that one batch line —
 // dropping the "Selected: …" title, the live-turn `claudeActive()` block and
-// "Ook bezig elders". Those three describe the globally anchored conversation
+// "Andere chats in deze PR". Those three describe the globally anchored conversation
 // (`cc`/`hasActiveClaudeTurn()`), not anything scoped to `commentId`, so
 // without this flag they render byte-for-byte identically a second time
 // inside commentDetailCard's own small card — the wide comment-claude-row
@@ -4436,44 +4540,71 @@ export function commentClaudeShortcutHints() {
   }
 }
 
-// claudeTaskRow renders one row of otherRunningClaudeTasks: a title (the
-// last comment text, see chatTaskTitle) plus its own status word
-// (claudeStatusText — words, never a bare colour dot, per the colourblind
-// rule; the pulsing dot next to it is decoration on top only). Highlighted
-// state mirrors claudeQuestionOptions' own convention exactly: a ring PLUS a
-// leading "› " glyph, never colour alone.
+// claudeTaskRow renders one row of otherClaudeChats: a title (the reviewer's
+// own last message, see otherTaskTitleFor/chatTaskTitle) plus its own state
+// as a WORD — 'bezig' (the live claudeStatusText line), 'Klaar', 'nieuw'
+// (there is an answer the reviewer hasn't dwelt on for the full 5s yet) or
+// 'bekeken' — with a glyph next to it, never a bare colour, per the
+// colourblind rule (the pulsing dot on a running row is decoration on top
+// only). Highlighted state mirrors claudeQuestionOptions' own convention
+// exactly: a ring PLUS a leading "› " glyph, never colour alone.
+//
+// LAYOUT, reported bug: the state text used to be `shrink-0` while the title
+// could shrink, so a long status ("Claude leest <full worktree path>") pushed
+// the title to zero width and the row read as a bare path with no idea which
+// chat it was. The title now takes the flexible half (`min-w-0 flex-1`) and
+// the state text is the one that truncates, capped at 45% of the row.
 function claudeTaskRow(c, i) {
   const active = () => cs.claudeTasksPos === i + 1
-  // done — this conversation isn't running/busy any more but finished inside
-  // the last 2 minutes (see isTurnRecentlyFinished/otherRunningClaudeTasks'
-  // own doc comment) — rendered with a word ("Klaar") plus a check-mark glyph
-  // instead of the pulsing "bezig" dot, never colour alone (colourblind rule).
-  const done = () => isTurnRecentlyFinished(c.id)
+  // state — see chatStateOf: 'busy' | 'done' | 'unread' | 'seen'. 'done' is
+  // the 2-minute window after a turn stopped (isTurnRecentlyFinished); it no
+  // longer decides whether the row EXISTS, only what it says.
+  const state = () => chatStateOf(c)
+  const done = () => state() === 'done'
+  const glyph = () => (done() ? '✓' : state() === 'unread' ? '!' : state() === 'seen' ? '○' : '')
+  const stateText = () => {
+    switch (state()) {
+      case 'done':
+        return t('Klaar')
+      case 'unread':
+        return t('nieuw')
+      case 'seen':
+        return t('bekeken')
+      default:
+        return claudeStatusText(turnProgress(c.id), 0)
+    }
+  }
   return html`
     <button
       type="button"
       class="${() =>
-        'flex w-full items-center gap-1.5 truncate rounded-md border px-1.5 py-1 text-left ' +
+        'flex w-full items-center gap-1.5 rounded-md border px-1.5 py-1 text-left ' +
         (active()
           ? 'border-indigo-300 ring-2 ring-indigo-200 bg-indigo-50 dark:border-indigo-400 dark:ring-indigo-500/40 dark:bg-indigo-500/10'
           : 'border-slate-200 hover:bg-slate-50 dark:border-zinc-700 dark:hover:bg-zinc-800/50')}"
       data-testid="claude-task-row"
       data-active="${() => (active() ? 'true' : 'false')}"
       data-done="${() => (done() ? 'true' : 'false')}"
+      data-state="${() => state()}"
       @click="${() => activateClaudeTask(c)}"
     >
       <span
         class="${() =>
-          done()
-            ? 'inline-flex h-3 w-3 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-[8px] font-bold leading-none text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400'
-            : 'inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-indigo-400'}"
-        >${() => (done() ? '✓' : '')}</span
+          state() === 'busy'
+            ? 'inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-indigo-400'
+            : 'inline-flex h-3 w-3 shrink-0 items-center justify-center rounded-full text-[8px] font-bold leading-none ' +
+              (done()
+                ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400'
+                : state() === 'unread'
+                  ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300'
+                  : 'bg-slate-100 text-slate-500 dark:bg-zinc-800 dark:text-zinc-500')}"
+        >${() => glyph()}</span
       >
-      <span class="truncate font-medium text-slate-600 dark:text-zinc-300">
+      <span class="min-w-0 flex-1 truncate font-medium text-slate-600 dark:text-zinc-300">
         ${() => (active() ? '› ' : '') + (otherTaskTitleFor(c) || t('(leeg comment)'))}
       </span>
-      <span class="shrink-0 truncate text-slate-400 dark:text-zinc-500">
-        ${() => (done() ? t('Klaar') : claudeStatusText(turnProgress(c.id), 0))}
+      <span class="min-w-0 max-w-[45%] truncate text-right text-slate-400 dark:text-zinc-500">
+        ${() => stateText()}
       </span>
     </button>
   `.key('claude-task:' + c.id)
@@ -4494,7 +4625,7 @@ export function CommentClaudeFooter(commentId = '', opts = {}) {
   }
   // "Selected: …" — the reviewer's own last Claude message in the
   // conversation currently anchored here (first sentence, see
-  // ownMessageTitle), so a reviewer glancing at the "other Claude tasks" list
+  // ownMessageTitle), so a reviewer glancing at the "andere chats in deze PR" list
   // below never confuses it with the one they're currently looking at.
   // Resolved via ccAnchorComment() (cc.commentId, the conversation actually
   // loaded here), not a bare chatAnchorComment() — see that function's own
@@ -4510,7 +4641,7 @@ export function CommentClaudeFooter(commentId = '', opts = {}) {
       ${() =>
         (batchOnly
           ? !!batchText()
-          : commentFooterText() || claudeActive() || batchText() || otherRunningClaudeTasks().length > 0)
+          : commentFooterText() || claudeActive() || batchText() || otherClaudeChats().length > 0)
           ? html`
               <div
                 class="flex w-0 min-w-full flex-col gap-1 border-t border-slate-100 dark:border-zinc-800/60 px-3 py-1.5 text-[11px] text-slate-500 dark:text-zinc-500"
@@ -4579,7 +4710,7 @@ export function CommentClaudeFooter(commentId = '', opts = {}) {
                 </div>
                 ${() => {
                   if (batchOnly) return ''
-                  const tasks = otherRunningClaudeTasks()
+                  const tasks = otherClaudeChats()
                   return tasks.length
                     ? html`
                         <div
@@ -4587,9 +4718,16 @@ export function CommentClaudeFooter(commentId = '', opts = {}) {
                           data-testid="claude-other-tasks"
                         >
                           <span class="text-[10px] font-medium text-slate-400 dark:text-zinc-500">
-                            ${() => t('Ook bezig elders in deze PR:')}
+                            ${() => t('Andere chats in deze PR ({n}):', { n: otherClaudeChatsAll().length })}
                           </span>
                           ${tasks.map((c, i) => claudeTaskRow(c, i))}
+                          <span
+                            class="${() =>
+                              'text-[10px] text-slate-400 dark:text-zinc-500' +
+                              (claudeMoreChatsNote() ? '' : ' hidden')}"
+                            data-testid="claude-more-chats"
+                            >${() => claudeMoreChatsNote()}</span
+                          >
                         </div>
                       `
                     : ''
@@ -5315,10 +5453,10 @@ function applyRelRestore() {
 //    in both directions (reviewer request — not two disjoint modes); Enter
 //    while an option is highlighted sends it (selectHighlightedClaudeOption,
 //    home.mjs), exactly like clicking it. BELOW the composer the same chain
-//    continues DOWNWARD through the "other running Claude tasks" rung, then
+//    continues DOWNWARD through the "andere chats in deze PR" rung, then
 //    the chat's own code blocks: ↓ at the rest position (claudePos === 0 &&
-//    claudeOptionSel === 0) first steps onto the "Ook bezig elders" rows
-//    (cs.claudeTasksPos 1..n, otherRunningClaudeTasks — see below), matching
+//    claudeOptionSel === 0) first steps onto the "Andere chats in deze PR" rows
+//    (cs.claudeTasksPos 1..n, otherClaudeChats — see below), matching
 //    the on-screen order (that block renders ABOVE the code-preview cards),
 //    then onto the first code-preview card (cs.previewPos 1..n, top to
 //    bottom — the cards stacked under this row, see CodePreviewPanel/
@@ -5363,13 +5501,13 @@ export function handleRelatedKey(key) {
         return true
       }
       // Walking the code-preview cards back up first (if we're in them — see
-      // cs.previewPos), then the "other running Claude tasks" rung (see
-      // otherRunningClaudeTasks/claudeTasksPos), toward the composer (0 = the
+      // cs.previewPos), then the "andere chats in deze PR" rung (see
+      // otherClaudeChats/claudeTasksPos), toward the composer (0 = the
       // composer itself again). Mirrors the ArrowDown order below: whichever
       // rung ↓ visits LAST is the one ↑ leaves FIRST. cs.claudeTasksPos is
       // kept at 0 for the entire time cs.previewPos > 0 (see the ArrowDown
       // branch's own reset), so leaving the LAST card must explicitly
-      // restore it to the tail of the tasks rung (otherRunningClaudeTasks()
+      // restore it to the tail of the tasks rung (otherClaudeChats()
       // .length) rather than reading a stale value — mirrors
       // codeFromClaudeTailPreviewPos's own "don't trust a value you didn't
       // just set" reasoning.
@@ -5378,7 +5516,7 @@ export function handleRelatedKey(key) {
         if (cs.previewPos > 0) {
           focusPreviewCard()
         } else {
-          const tasks = otherRunningClaudeTasks()
+          const tasks = otherClaudeChats()
           if (tasks.length > 0) {
             cs.claudeTasksPos = tasks.length
             focusClaudeTaskRow()
@@ -5407,7 +5545,7 @@ export function handleRelatedKey(key) {
         focusPreviewCard()
         return true
       }
-      // The "other running Claude tasks" rung is the next rung below the
+      // The "andere chats in deze PR" rung is the next rung below the
       // composer (reviewer request: it should be reachable before the code
       // blocks, matching its on-screen position ABOVE the code-preview
       // cards) — ↓ walks it top to bottom. Only once THAT is exhausted (or
@@ -5420,7 +5558,7 @@ export function handleRelatedKey(key) {
       // non-zero, see CodePreviewPanel/claudeTaskRow), so a stale non-zero
       // leftover would otherwise keep the last task row marked active at the
       // same time as a code-preview card.
-      const tasks = otherRunningClaudeTasks()
+      const tasks = otherClaudeChats()
       if (cs.claudeTasksPos < tasks.length) {
         cs.claudeTasksPos += 1
         focusClaudeTaskRow()
@@ -5504,7 +5642,7 @@ export function handleRelatedKey(key) {
     return true
   }
   if (cs.focus === 'tasks') {
-    // The footer's "other running Claude tasks" rung, reached from the
+    // The footer's "andere chats in deze PR" rung, reached from the
     // panel's own top boundary with NO anchor at all (see enterFooterTasks) —
     // ↑/↓ walk it exactly like the 'claude'-anchored version of this same
     // rung (cs.claudeTasksPos, top to bottom), and ↓ past the last row / ←
@@ -5521,7 +5659,7 @@ export function handleRelatedKey(key) {
         return 'exit'
       }
     } else if (key === 'ArrowDown') {
-      const tasks = otherRunningClaudeTasks()
+      const tasks = otherClaudeChats()
       if (cs.claudeTasksPos < tasks.length) {
         cs.claudeTasksPos += 1
         focusClaudeTaskRow()
@@ -5544,7 +5682,7 @@ export function handleRelatedKey(key) {
         // running Claude tasks" rung (see enterFooterTasks) may still have
         // something to show (a different conversation running elsewhere in
         // this PR) — reachable from here too, not just from 'code''s own top.
-        if (otherRunningClaudeTasks().length > 0) {
+        if (otherClaudeChats().length > 0) {
           enterFooterTasks('thread')
         } else {
           exitRelated()
@@ -5641,7 +5779,7 @@ export function handleRelatedKey(key) {
           }
         } else if (hasVisibleComments()) {
           enterCommentsTail()
-        } else if (otherRunningClaudeTasks().length > 0) {
+        } else if (otherClaudeChats().length > 0) {
           // No comment on this unit at all (no 'claude'/'comment' stop to
           // return to), but another conversation is running elsewhere in
           // this PR — the footer-only card (CommentClaudeFooter) shows that
@@ -6299,6 +6437,14 @@ async function loadComments(pr) {
       // poll, no bodies. Not awaited: the column simply appears a moment later
       // if this lands after the comment rows, since cc.conversations is reactive.
       loadChatConversations(pr)
+      // Same cadence, same reason, for WHICH of those conversations has a turn
+      // running right now: a turn started in ANOTHER tab (or one whose
+      // chat.progress frame this tab missed) was otherwise invisible until the
+      // next SSE (re)connect, since loadRunningTurns only ran on connect/
+      // resync — reported as "er zijn veel meer chats bezig dan ik zie". One
+      // extra read-only, in-memory-backed GET per poll (see
+      // .claude/docs/server-events.md).
+      loadRunningTurns(pr)
       // A delete (or a shrinking list generally) can leave cs.sel pointing past
       // the end, or the focused/threaded row can vanish entirely — clamp back
       // onto the list and drop out of a now-dangling focus/thread.
@@ -11132,7 +11278,7 @@ export function commentDetailCard(c, opts) {
       ${() =>
         // Only this comment's own comment_batch state (batchOnly: true) — live
         // while Claude is working on it, and as a one-line outcome afterwards.
-        // Deliberately NOT the "Selected: …"/live-turn/"Ook bezig elders"
+        // Deliberately NOT the "Selected: …"/live-turn/"Andere chats in deze PR"
         // sections: those describe the globally anchored conversation, and the
         // wide comment-claude-row footer (home.mjs, CommentClaudeFooter() with
         // no commentId) already shows them once, below both columns — showing

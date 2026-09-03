@@ -142,11 +142,11 @@ code).
    column (`state.focusLevel > 0`, that same column's own panel); at the top
    level it still jumps straight to the next block instead (see stop 5b
    above). **`↑` from this stop's FIRST child** (`codeSel === 0`) can also
-   land on stop 5b's own "other running Claude tasks" rung
+   land on stop 5b's own "Andere chats in deze PR" rung
    (`cs.focus==='tasks'`, `enterFooterTasks`) even with **no comment on this
-   unit at all** — whenever the footer-only card has something to show (a
-   conversation running elsewhere in the PR) — instead of always leaving the
-   panel. Same rung, same predicate (`otherRunningClaudeTasks().length > 0`),
+   unit at all** — whenever the footer-only card has something to show (any
+   other chat of this PR, running or not) — instead of always leaving the
+   panel. Same rung, same predicate (`otherClaudeChats().length > 0`),
    from `'thread'`'s own `↑` past the oldest message of the first
    conversation too. See "Reachable with NO anchor at all…" in
    `.claude/docs/claude-chat-panel.md` for the full mechanism (the boundary

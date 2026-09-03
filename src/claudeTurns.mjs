@@ -54,9 +54,9 @@ import { repoParam } from './prContext.mjs'
 //
 // A THIRD, non-reactive Map (finishedAt, below — mirrors progressAt's own
 // shape) tracks when a conversation's turn most recently stopped
-// running/being busy, purely so recentlyFinishedTurnIds can let a just-
-// finished task linger in "Ook bezig elders" for 2 minutes instead of
-// vanishing the instant it's done. Deliberately a per-tab heuristic, not a
+// running/being busy, purely so isTurnRecentlyFinished can mark a just-
+// finished chat "Klaar" for 2 minutes instead of letting it read as still
+// running the instant it's done. Deliberately a per-tab heuristic, not a
 // read model: the server keeps no history of when a turn finished (only
 // "is one running right now", chat_progress.go), so a conversation that
 // finished while this tab was closed/refreshed never gets a "recently
@@ -72,13 +72,13 @@ function entryOf(id) {
 
 // finishedAt — a non-reactive Map (next to progressAt below), stamped the
 // moment a conversation goes from "running/busy" to "not any more". Powers
-// recentlyFinishedTurnIds' 2-minute linger (see its own doc comment):
-// reviewer request — a task should not vanish from "Ook bezig elders" the
-// INSTANT it finishes, it should stick around long enough to actually notice
-// and jump to it, clearly marked as done rather than still "bezig". Plain
+// isTurnRecentlyFinished' 2-minute window (see its own doc comment):
+// reviewer request — a finished task should be clearly marked as done for
+// long enough to actually notice, rather than reading as still "bezig".
+// Plain
 // (not reactive) like progressAt: nothing reads it directly for rendering,
-// only through recentlyFinishedTurnIds/isTurnRecentlyFinished, which compare
-// it against Date.now() at read time.
+// only through isTurnRecentlyFinished, which compares it against Date.now()
+// at read time.
 const finishedAt = new Map()
 const FINISHED_LINGER_MS = 2 * 60 * 1000
 
@@ -101,7 +101,7 @@ function patch(id, fields) {
   // of "what is happening now" instead of growing per conversation visited.
   // finishedAt is intentionally NOT part of this condition — deleting the
   // byId entry must not also drop the 2-minute "recently finished" memory,
-  // see recentlyFinishedTurnIds below.
+  // see isTurnRecentlyFinished below.
   if (!merged.progress && !merged.busy && !merged.answered && !merged.sendError) delete next[id]
   else next[id] = merged
   turns.byId = next
@@ -216,8 +216,9 @@ export function claudeTurnFor(b) {
 // runningTurnIds — every conversation id with a turn RUNNING right now
 // (a Signal POST in flight, or a live `progress.running` snapshot),
 // excluding `excludeId` (the conversation already shown by name elsewhere,
-// e.g. the panel's own "Selected: …" line) — for the "other Claude tasks
-// running elsewhere" nested nav stop (see claude-chat-panel.md). Deliberately
+// e.g. the panel's own "Selected: …" line) — one of the sources of the
+// "andere chats in deze PR" nested nav stop (see claude-chat-panel.md).
+// Deliberately
 // NOT `answered`: that is "finished while you were elsewhere", reported via
 // the index pill instead, not "busy right now" — see claudeTurnFor above.
 // Sorted by id so the list (and thus the keyboard cursor walking it) has a
@@ -232,7 +233,7 @@ export function runningTurnIds(excludeId) {
 // anyRecentlyFinishedTurn — true while at least one conversation is still
 // inside its 2-minute "just finished" window. Lets syncChatTicker (
 // RelatedPanel.mjs) keep its 1s heartbeat running long enough for a lingering
-// "Ook bezig elders" row to actually expire on screen, not just on the next
+// "Andere chats in deze PR" row to actually expire on screen, not just on the next
 // unrelated re-render.
 export function anyRecentlyFinishedTurn() {
   const now = Date.now()
@@ -243,39 +244,40 @@ export function anyRecentlyFinishedTurn() {
 }
 
 // isTurnRecentlyFinished — id finished (see markFinishedIfJustStopped) less
-// than FINISHED_LINGER_MS ago and isn't busy/running again since. Used both
-// by recentlyFinishedTurnIds (the list) and by claudeTaskRow (the per-row
-// "Klaar" label) so both read the exact same notion of "still lingering".
+// than FINISHED_LINGER_MS ago and isn't busy/running again since. Read by
+// chatStateOf/claudeTaskRow (RelatedPanel.mjs) for the per-row "Klaar" word,
+// and by anyRecentlyFinishedTurn for the 1s ticker.
 export function isTurnRecentlyFinished(id) {
   const at = finishedAt.get(id)
   if (!at) return false
   if (runningTurnIds(null).includes(String(id))) return false
-  return Date.now() - at < FINISHED_LINGER_MS
+  if (Date.now() - at >= FINISHED_LINGER_MS) {
+    // Garbage-collect the stamp as we walk past it, so an expired one never
+    // lingers in memory forever once nothing reads it any more. This used to
+    // happen inside recentlyFinishedTurnIds, which was the list's inclusion
+    // rule until the list became "every chat of this PR" (see
+    // otherClaudeChats in RelatedPanel.mjs) and disappeared with it.
+    finishedAt.delete(id)
+    return false
+  }
+  return true
 }
 
-// recentlyFinishedTurnIds — every OTHER conversation whose turn finished in
-// the last FINISHED_LINGER_MS (2 minutes), for the SAME "Ook bezig elders"
-// list runningTurnIds feeds (see otherRunningClaudeTasks, RelatedPanel.mjs) —
-// reviewer request: a task should not disappear from that list the instant it
-// finishes, it should stay long enough to actually notice, clearly marked
-// done rather than left looking like it's still running (isTurnRecentlyFinished
-// above is what a row uses to tell the two apart). Also garbage-collects
-// `finishedAt` as it walks it, so a stamp older than the window never lingers
-// in memory forever once nothing reads it any more.
+// recentlyFinishedTurnIds — every OTHER conversation whose turn finished
+// inside the FINISHED_LINGER_MS window (isTurnRecentlyFinished, which also
+// garbage-collects an expired stamp as it walks past it). This is NOT the
+// inclusion rule of the "Andere chats in deze PR" list any more (that list is
+// every conversation of the PR, see otherClaudeChats in RelatedPanel.mjs) —
+// it exists because that list resolves its ids through cc.conversations,
+// which is only refreshed on the comment poll's own cadence: a chat that just
+// finished would otherwise pop into the list up to a poll later, long after
+// the reviewer's eyes (and the ↓/↑ cursor) already went looking for it.
 export function recentlyFinishedTurnIds(excludeId) {
   const ex = excludeId == null ? null : String(excludeId)
-  const now = Date.now()
-  const ids = []
-  for (const [id, at] of finishedAt) {
-    if (now - at >= FINISHED_LINGER_MS) {
-      finishedAt.delete(id)
-      continue
-    }
-    if (id === ex) continue
-    if (runningTurnIds(null).includes(String(id))) continue // reported as running, not finished
-    ids.push(id)
-  }
-  return ids.sort((a, b) => Number(a) - Number(b))
+  return Object.keys(turns.byId)
+    .concat([...finishedAt.keys()].map(String))
+    .filter((id, i, all) => all.indexOf(id) === i && id !== ex && isTurnRecentlyFinished(id))
+    .sort((a, b) => String(a).localeCompare(String(b)))
 }
 
 // loadRunningTurns is the PR-wide RESYNC read (GET /api/chat/progress?pr=N):

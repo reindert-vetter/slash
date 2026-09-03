@@ -7603,7 +7603,7 @@ async function openTask(run) {
 // jumpToClaudeConversation lands the keyboard on a DIFFERENT running Claude
 // conversation's own code/comment and opens it — the Enter (or click) action
 // of the "other running Claude tasks" nested nav stop (see
-// otherRunningClaudeTasks/selectHighlightedClaudeTask, RelatedPanel.mjs, and
+// otherClaudeChats/selectHighlightedClaudeTask, RelatedPanel.mjs, and
 // "Where a turn on OTHER code is visible" in .claude/docs/claude-chat-panel.md
 // for the underlying registry it reads). Registered once via
 // setClaudeTaskJump right below, since RelatedPanel.mjs owns neither `state`
@@ -13929,7 +13929,7 @@ function onKeydown(e) {
     }
     // Enter while a row of the "other running Claude tasks" nested stop is
     // highlighted (↓ walked past this chat's own code-preview cards, see
-    // cs.claudeTasksPos/otherRunningClaudeTasks in RelatedPanel.mjs) jumps to
+    // cs.claudeTasksPos/otherClaudeChats in RelatedPanel.mjs) jumps to
     // that conversation, exactly like clicking it (jumpToClaudeConversation,
     // registered via setClaudeTaskJump). Checked for the same reason as the
     // option branch right above it — this rung also blurs the composer.

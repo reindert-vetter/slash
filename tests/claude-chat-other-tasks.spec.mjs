@@ -113,7 +113,7 @@ test('the footer shows which chat is selected, and lets you jump to another one 
 // and keeps A "running" for the rest of the test purely via a mocked
 // `chat.progress` SSE frame (same trick as claude-chat-progress.spec.mjs) —
 // entirely independent of whether the real turn itself has already finished.
-// otherRunningClaudeTasks' own fetch (ensureOtherTaskTitle, RelatedPanel.mjs)
+// otherClaudeChats' own fetch (ensureOtherTaskTitle, RelatedPanel.mjs)
 // then hits A's REAL (unmocked) transcript once B is in view, so the row
 // must show the first sentence of what was actually typed, not the old
 // comment-text fallback.
