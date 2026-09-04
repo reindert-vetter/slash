@@ -435,6 +435,58 @@ func TestPrepareChatShellWorkDirAsksAboutDirtyCandidate(t *testing.T) {
 	}
 }
 
+// A "dirty" tree that consists ENTIRELY of another conversation's own
+// not-yet-landed edit is never put to the reviewer as a dirtyTree decision —
+// it is not the reviewer's own unrelated work at all, just a turn whose
+// commit hasn't reached this checkout yet (the write-turn slot is released
+// before the automatic post-turn landing, chat_write_gate.go). Reported bug:
+// two conversations on the same PR, one still landing its own edit while the
+// other escalated to write, kept re-raising "er zijn niet-gerelateerde
+// wijzigingen" forever.
+func TestPrepareChatShellWorkDirSkipsDirtyDecisionForOwnPendingEdit(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	checkout := cloneCheckoutDir(t, bareDir, "feature/x")
+	writeCheckoutSettings(t, dataDir, checkout)
+
+	const repo, pr = "", 1004
+	if err := os.WriteFile(filepath.Join(checkout, "foo.txt"), []byte("another conversation's own edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Records "foo.txt" as a known, not-yet-landed edit for this PR — exactly
+	// what finishChatProgress (chat_progress.go) does right before a write
+	// turn's own progress snapshot is cleared.
+	markChatFilesPending(repo, pr, []string{"foo.txt"})
+	t.Cleanup(func() { clearChatPendingFiles(repo, pr) })
+
+	dir, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, repo, pr, "", "feature/x")
+	if ok || dir != "" {
+		t.Fatalf("expected the checkout not ready yet, got dir=%q ok=%v", dir, ok)
+	}
+	if decision != nil {
+		t.Fatalf("expected NO decision for a dirty tree that is only another conversation's pending edit, got %+v", decision)
+	}
+	if checkoutChoiceOpen(dataDir, repo, pr) {
+		t.Fatal("expected no open work-directory choice to be raised at all")
+	}
+
+	// An EXTRA, genuinely unrelated dirty file alongside the pending one still
+	// raises the ordinary dirtyTree question — this must not silently wave
+	// through real reviewer changes just because ONE other file happens to be
+	// pending.
+	if err := os.WriteFile(filepath.Join(checkout, "bar.txt"), []byte("reviewer's own unrelated WIP\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir2, decision2, ok2 := prepareChatShellWorkDirAt(ctx, nil, dataDir, repo, pr, "", "feature/x")
+	if ok2 || dir2 != "" {
+		t.Fatalf("expected still not ready, got dir=%q ok=%v", dir2, ok2)
+	}
+	if decision2 == nil || decision2.Stage != checkoutStageDirtyTree {
+		t.Fatalf("expected a dirtyTree decision once a genuinely unrelated file is also dirty, got %+v", decision2)
+	}
+}
+
 // An open choice is put to the reviewer AGAIN on the next write turn, but
 // only after checking that it is still a real question. Reported bug, in the
 // reviewer's own words: "geef die keuze opnieuw als het nodig is, want alles

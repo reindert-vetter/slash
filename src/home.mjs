@@ -15861,11 +15861,19 @@ function checkoutAlertGlyph() {
 // checkoutChipLabel/-Title/-Cls: word + glyph carry the state (see the
 // colourblind rule) — "Geen directory" before anything ever loaded/resolved,
 // "Keuze nodig" while chat_checkout.go has a pending chatCheckoutDecision,
-// otherwise the assigned directory's own last path segment.
+// "Wachten…" while c.waiting (chat_write_gate.go's per-checkout write-slot is
+// held by something else for this PR right now — a running write turn, a
+// test run, another checkout-menu action, or the automatic post-turn
+// landing) and there is no open decision to show instead, otherwise the
+// assigned directory's own last path segment. `waiting` is deliberately
+// checked AFTER `decision`: an open choice is something the reviewer can act
+// on immediately and always takes priority over a plain "something is
+// running" note.
 function checkoutChipLabel() {
   const c = state.checkout
   if (!c) return t('Geen werkmap')
   if (c.decision) return t('Keuze nodig')
+  if (c.waiting) return t('Wachten…')
   if (c.dirName) return c.dirName
   return t('Geen werkmap')
 }
@@ -15873,6 +15881,7 @@ function checkoutChipTitle() {
   const c = state.checkout
   if (!c) return t('Werkmap voor Claude-aanpassingen: nog niet geladen')
   if (c.decision) return c.decision.body || t('Er moet iets over de werkmap worden besloten')
+  if (c.waiting) return t('Een andere chat-bewerking van deze PR gebruikt de werkmap nu — dit wacht tot die klaar is.')
   if (c.dir) return c.branch ? t('Claude werkt in {dir} (branch {branch})', { dir: c.dir, branch: c.branch }) : t('Claude werkt in {dir}', { dir: c.dir })
   return t('Geen werkmap gekoppeld — klik om een werkmap te kiezen')
 }
@@ -15882,6 +15891,9 @@ function checkoutChipCls() {
     'inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[11px] font-medium ring-1 ring-inset transition-colors '
   if (c && c.decision) {
     return base + 'text-amber-700 dark:text-amber-400 ring-amber-300 dark:ring-amber-500/40 hover:bg-amber-50 dark:hover:bg-amber-500/10'
+  }
+  if (c && c.waiting) {
+    return base + 'text-indigo-700 dark:text-indigo-400 ring-indigo-200 dark:ring-indigo-500/30 hover:bg-indigo-50 dark:hover:bg-indigo-500/10'
   }
   if (c && c.dirName) {
     return base + 'text-sky-700 dark:text-sky-400 ring-sky-200 dark:ring-sky-500/30 hover:bg-sky-50 dark:hover:bg-sky-500/10'

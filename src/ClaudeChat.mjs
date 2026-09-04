@@ -313,28 +313,50 @@ const NEED_WRITE_LABEL = t('Vraagt schrijftoegang')
 // an icon, plus a matching title/aria-label — the reviewer must be able to
 // tell what's happening without relying on colour (colourblind rule), same
 // shape as claudeNoShellPill below.
-function claudeNeedWritePill() {
+//
+// `phase` is the SAME live progress phase claudeStatusText already turns into
+// a status line (chat_progress.go's chatPhaseWaiting) — passed in here too
+// because this pill is what the reviewer is actually looking at the moment a
+// turn asks for write access, and reviewer feedback was that the wait itself
+// needs to be visible RIGHT THERE, not only in a separate footer line further
+// down. `p.partial` (hence this whole pill) is deliberately not cleared until
+// the escalated attempt starts streaming (resetChatProgressPartial,
+// chat_progress.go), so it stays mounted for the entire chatPhaseWaiting
+// window — this turn's own wait for the checkout's write-slot
+// (chat_write_gate.go), now per-checkout rather than process-wide. A word,
+// not a colour, carries the extra meaning (colourblind rule).
+function claudeNeedWritePill(phase) {
   return html`
     <div
-      class="flex max-w-[92%] items-center gap-1.5 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-zinc-700 dark:bg-zinc-800/40 dark:text-zinc-400"
+      class="flex max-w-[92%] flex-col gap-1 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-zinc-700 dark:bg-zinc-800/40 dark:text-zinc-400"
       data-testid="claude-partial-need-write"
       title="${NEED_WRITE_LABEL}"
     >
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        class="h-3.5 w-3.5 shrink-0"
-        aria-label="${NEED_WRITE_LABEL}"
-      >
-        <rect x="3" y="11" width="18" height="10" rx="2"></rect>
-        <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-      </svg>
-      <span>${NEED_WRITE_LABEL}</span>
+      <div class="flex items-center gap-1.5">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          class="h-3.5 w-3.5 shrink-0"
+          aria-label="${NEED_WRITE_LABEL}"
+        >
+          <rect x="3" y="11" width="18" height="10" rx="2"></rect>
+          <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+        </svg>
+        <span>${NEED_WRITE_LABEL}</span>
+      </div>
+      <div class="contents">
+        ${() =>
+          phase === 'waiting'
+            ? html`<span class="pl-5 text-[11px] italic text-slate-500 dark:text-zinc-500" data-testid="claude-partial-need-write-waiting">
+                ${PHASE_LABEL.waiting}
+              </span>`
+            : ''}
+      </div>
     </div>
   `
 }
@@ -420,7 +442,7 @@ function claudePartialBubble(view) {
       </div>
       ${() =>
         needWrite
-          ? claudeNeedWritePill()
+          ? claudeNeedWritePill(p.phase)
           : generating
             ? claudeGeneratingPill()
             : html`<div

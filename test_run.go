@@ -34,15 +34,16 @@
 //     a test run also kills whatever test-runner child process (phpunit,
 //     composer, ...) Claude's Bash tool started, however deep.
 //  6. Same write-gate as a code-generating chat turn (chat_write_gate.go,
-//     capacity 1) — a test run WAITS for that one slot rather than getting a
-//     separate one. Deliberate: the shared local checkout is a single mutable
-//     resource, and a concurrent code-edit turn's `git checkout`/`stash`
-//     could otherwise swap the working tree out from under a running test
-//     process (spurious failures) or interpret the test run's own residue as
-//     something to stash/discard. The accepted cost is that a test run and a
-//     code-edit turn now queue behind each other — visible via the existing
-//     chatPhaseWaiting phase, exactly like a code-turn waiting on another
-//     code-turn.
+//     one slot per checkout, see checkoutWriteSlotKey) — a test run WAITS for
+//     THIS PR's own slot rather than getting a separate one, but never queues
+//     behind an unrelated PR's edit. Deliberate: the shared local checkout is
+//     a single mutable resource, and a concurrent code-edit turn's
+//     `git checkout`/`stash` could otherwise swap the working tree out from
+//     under a running test process (spurious failures) or interpret the test
+//     run's own residue as something to stash/discard. The accepted cost is
+//     that a test run and a code-edit turn OF THE SAME PR now queue behind
+//     each other — visible via the existing chatPhaseWaiting phase, exactly
+//     like a code-turn waiting on another code-turn.
 //  7. A second test_run request for the SAME PR while one is already running
 //     is REFUSED (409), not queued — mirrors comment_batch's own
 //     handleCommentBatchStart precedent exactly, for the same two reasons:
@@ -264,7 +265,7 @@ func runTestRun(ctx context.Context, tm *TaskManager, cl claude.Client, dataDir 
 	// write-gate — see the file header, point 6. A test run never edits
 	// anything, but it still needs the checkout to stay put WHILE it runs.
 	waited := false
-	release := acquireWriteTurnSlot(runCtx, func() {
+	release := acquireCheckoutWriteSlot(runCtx, dataDir, arg.Repo, arg.PR, func() {
 		waited = true
 		advanceTestRunProgress(arg.Repo, arg.PR, chatPhaseWaiting)
 	})

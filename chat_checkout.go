@@ -193,6 +193,14 @@ type checkoutCandidate struct {
 	Branch string
 	// Dirty: uncommitted changes in the working tree.
 	Dirty bool
+	// DirtyPaths: the repo-relative paths `git status --porcelain` reported,
+	// parsed once here (from the same status call Dirty is derived from, no
+	// extra `git` invocation) so a caller can tell WHICH paths are dirty
+	// without a second `snapshotDirtyPaths` round trip — see
+	// dirtyIsOnlyPendingEdits, which compares this against
+	// chatPendingEditedFilesFor to tell the reviewer's own unrelated mess
+	// apart from another conversation's not-yet-landed edit.
+	DirtyPaths []string
 	// OnTargetBranch: currently checked out on the PR's own head branch.
 	OnTargetBranch bool
 	// FastForwardable is only meaningful when OnTargetBranch: HEAD is an
@@ -263,6 +271,7 @@ func classifyCheckoutCandidate(ctx context.Context, dir, headRef, baseBranch str
 	c := checkoutCandidate{
 		Dir: dir, Branch: branch,
 		Dirty:          strings.TrimSpace(string(statusOut)) != "",
+		DirtyPaths:     parseGitStatusPaths(statusOut),
 		OnTargetBranch: branch == headRef,
 	}
 
@@ -935,6 +944,27 @@ func getCheckoutAssignment(dataDir, repo string, pr int) *chatCheckoutAssignment
 	return a
 }
 
+// checkoutWriteSlotKey is the key acquireWriteTurnSlot (chat_write_gate.go)
+// serializes on for one PR's checkout-mutating operations (a write turn's
+// Edit/Bash phase, its automatic landing, and the werkmap-overlay's own
+// answer/relist/restore-stash actions).
+//
+// Once this PR has a directory assigned, the key is that DIRECTORY itself
+// (its absolute path) rather than the PR number — deliberately, per the
+// reviewer's own requirement: two PRs that end up sharing one physical
+// checkout (a directory another PR already claims, offered again via the
+// "andere werkmap kiezen" last-resort choice) must still serialize against
+// each other, not just against their own PR number. Before a directory is
+// assigned yet (first resolution for this PR), nothing else can collide with
+// this PR's own still-unknown directory, so a plain per-PR key is exactly as
+// safe and doesn't need a placeholder.
+func checkoutWriteSlotKey(dataDir, repo string, pr int) string {
+	if a := getCheckoutAssignment(dataDir, repo, pr); a != nil && a.Dir != "" {
+		return "dir:" + a.Dir
+	}
+	return fmt.Sprintf("pr:%s:%d", repo, pr)
+}
+
 // persistCheckoutAssignment durably mirrors a's current Dir/Branch for
 // repo/pr (see chat_checkout_store.go for why this is a direct write rather
 // than a workflow one). Called after every point that can change a.Dir:
@@ -1048,7 +1078,12 @@ func checkoutChoiceOpen(dataDir, repo string, pr int) bool {
 // counts as "not needed": dropping the choice lets the ladder run again and
 // find another candidate, mirroring what prepareChatShellWorkDirAt's own
 // `a.Dir != ""` branch already does with a classification error.
-func checkoutPendingStillNeeded(ctx context.Context, a *chatCheckoutAssignment, headRef, baseBranch string) bool {
+//
+// repo/pr are only used for the dirtyTree stage's own
+// dirtyIsOnlyPendingEdits check: a dirty tree that turns out to be entirely
+// another conversation's not-yet-landed edit is also "not needed" — the
+// question was never a real one for the reviewer to begin with.
+func checkoutPendingStillNeeded(ctx context.Context, a *chatCheckoutAssignment, repo string, pr int, headRef, baseBranch string) bool {
 	if a == nil || a.Pending == nil {
 		return false
 	}
@@ -1065,7 +1100,7 @@ func checkoutPendingStillNeeded(ctx context.Context, a *chatCheckoutAssignment, 
 		return false
 	}
 	if a.Pending.Stage == checkoutStageDirtyTree {
-		return cand.Dirty && !dirtyAlreadyAccepted(ctx, a)
+		return cand.Dirty && !dirtyAlreadyAccepted(ctx, a) && !dirtyIsOnlyPendingEdits(cand.DirtyPaths, repo, pr)
 	}
 	return !cand.OnTargetBranch
 }
@@ -1137,6 +1172,15 @@ func snapshotDirtyPaths(ctx context.Context, dir string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	return parseGitStatusPaths(out), nil
+}
+
+// parseGitStatusPaths is `git status --porcelain`'s own output parsed into
+// plain repo-relative paths — factored out of snapshotDirtyPaths so
+// classifyCheckoutCandidate can populate checkoutCandidate.DirtyPaths from
+// the SAME status call it already makes for Dirty, with no second `git`
+// invocation.
+func parseGitStatusPaths(out []byte) []string {
 	var paths []string
 	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
 		if len(line) < 4 {
@@ -1151,7 +1195,7 @@ func snapshotDirtyPaths(ctx context.Context, dir string) ([]string, error) {
 			paths = append(paths, p)
 		}
 	}
-	return paths, nil
+	return paths
 }
 
 // checkoutOntoBranch switches dir onto the PR's own branch. Like
@@ -1256,6 +1300,39 @@ func dirtyAlreadyAccepted(ctx context.Context, a *chatCheckoutAssignment) bool {
 	}
 	for _, p := range current {
 		if !accepted[p] {
+			return false
+		}
+	}
+	return true
+}
+
+// dirtyIsOnlyPendingEdits reports whether EVERY one of paths is already a
+// known, not-yet-landed edit this PR's checkout is holding
+// (chatPendingEditedFilesFor, chat_edit_pending.go) — i.e. this "dirty tree"
+// isn't the reviewer's own unrelated work at all, it's a DIFFERENT
+// conversation's turn whose edit simply hasn't reached its own landing step
+// yet (the write-turn slot is released before the automatic post-turn land,
+// see chat_write_gate.go/chat_workflow.go). Asking the reviewer what to do
+// with it would be asking them to discard/stash another conversation's own
+// in-flight Claude edit — reported bug: two chats on the same PR, one
+// escalating to write while the other's edit was still landing, kept
+// re-raising "er zijn niet-gerelateerde wijzigingen" forever. An empty paths
+// list (or no pending edits recorded at all) answers false — callers only
+// reach here once cand.Dirty is already true.
+func dirtyIsOnlyPendingEdits(paths []string, repo string, pr int) bool {
+	if len(paths) == 0 {
+		return false
+	}
+	pending := chatPendingEditedFilesFor(repo, pr)
+	if len(pending) == 0 {
+		return false
+	}
+	known := make(map[string]bool, len(pending))
+	for _, p := range pending {
+		known[p] = true
+	}
+	for _, p := range paths {
+		if !known[p] {
 			return false
 		}
 	}
@@ -1410,7 +1487,7 @@ func prepareChatShellWorkDirAt(ctx context.Context, tm *TaskManager, dataDir, re
 				// directory onto the PR's branch — drop it and just carry on
 				// with this very turn instead of blocking it on a question
 				// about a situation that is over.
-				if !checkoutPendingStillNeeded(ctx, a, headRef, baseBranch) {
+				if !checkoutPendingStillNeeded(ctx, a, repo, pr, headRef, baseBranch) {
 					a.Pending = nil
 					publishCheckoutChanged(repo, pr) // close the overlay/chip
 					continue
@@ -1477,6 +1554,19 @@ func prepareChatShellWorkDirAt(ctx context.Context, tm *TaskManager, dataDir, re
 			// "meenemen in de commit") is not a question any more — see
 			// dirtyAlreadyAccepted just above applyCheckoutDecisionReply.
 			if cand.Dirty && !dirtyAlreadyAccepted(ctx, a) {
+				if dirtyIsOnlyPendingEdits(cand.DirtyPaths, repo, pr) {
+					// Not the reviewer's own unrelated mess at all — another
+					// conversation's turn already edited these exact files and
+					// simply hasn't landed (committed) them yet (see
+					// dirtyIsOnlyPendingEdits). Nothing to ask: this turn just
+					// isn't ready yet, and will succeed on its own once that
+					// landing completes.
+					a.LastReason = "Een andere Claude-conversatie van deze PR is deze werkmap nog aan het landen. Probeer het zo weer."
+					if tm != nil && tm.logf != nil {
+						tm.logf("chat_checkout: pr %d: %s dirty with only another conversation's pending edit(s), not asking", pr, a.Dir)
+					}
+					return "", nil, false
+				}
 				a.Pending = chatCheckoutDirtyDecision(cand)
 				publishCheckoutChanged(repo, pr)
 				return "", a.Pending, false
@@ -2311,6 +2401,14 @@ type checkoutView struct {
 	// landing finishing, not a colleague's push — see
 	// .claude/docs/pending-push.md.
 	RefreshingFiles []string `json:"refreshingFiles,omitempty"`
+	// Waiting reports whether SOMETHING is queued right now behind this PR's
+	// own checkout write-slot (isCheckoutWaiting, checkout_progress.go) — a
+	// code-editing chat turn, a test run, the werkmap overlay's own answer/
+	// relist/restore-stash, or the automatic post-turn landing. Surfaced on
+	// the checkout chip (src/home.mjs) regardless of whether any of those has
+	// its OWN visible progress line open right now, per the reviewer
+	// requirement that a wait must always be a visible word, never silent.
+	Waiting bool `json:"waiting,omitempty"`
 }
 
 // buildCheckoutView reads this PR's assignment (in-memory, seeded from the
@@ -2324,6 +2422,7 @@ func buildCheckoutView(dataDir, repo string, pr int) checkoutView {
 		RunID:           chatMergeQueueRunID(repo, pr),
 		PendingFiles:    chatPendingEditedFilesFor(repo, pr),
 		RefreshingFiles: chatRefreshPendingFilesFor(repo, pr),
+		Waiting:         isCheckoutWaiting(repo, pr),
 	}
 	a := getCheckoutAssignment(dataDir, repo, pr)
 	if a == nil {

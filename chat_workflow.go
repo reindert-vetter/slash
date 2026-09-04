@@ -1075,12 +1075,14 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 	}
 	if escalate {
 		// From here on this turn is going to CHANGE code, and only one such
-		// turn runs at a time (chat_write_gate.go) — a second one waits here
-		// instead of being refused. Everything above this line (the read-only
+		// turn runs at a time PER CHECKOUT (chat_write_gate.go,
+		// acquireCheckoutWriteSlot) — a second one for the SAME PR waits here
+		// instead of being refused, but a turn for a DIFFERENT PR's checkout is
+		// never held up by it. Everything above this line (the read-only
 		// attempt that answers the large majority of turns) stays unlimited
 		// and fully parallel across conversations.
 		waited := false
-		release := acquireWriteTurnSlot(runCtx, func() {
+		release := acquireCheckoutWriteSlot(runCtx, dataDir, arg.Repo, arg.PR, func() {
 			waited = true
 			logTurnMilestone("waiting for the code-turn slot after %v", time.Since(t0))
 			advanceChatProgress(arg.Repo, arg.PR, arg.ConversationID, chatPhaseWaiting)

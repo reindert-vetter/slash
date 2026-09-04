@@ -1512,24 +1512,58 @@ costs 2 calls, the second one with `Edit`+`Bash`, and only its reply is
 saved) and `TestLooksLikeWriteRefusalStaysNarrow` (the boundaries, including
 a fence that merely contains those words), both in `chat_shell_test.go`.
 
-**That escalation is also the ONE code-turn-at-a-time gate**
+**That escalation is also the ONE code-turn-at-a-time gate, PER CHECKOUT**
 (`chat_write_gate.go`). Reviewer decision: a turn that only ANSWERS may run
 unlimited in parallel (chatting on another selection while an earlier answer is
 still being written is a feature, see "Parallel conversations" in
 `.claude/docs/claude-chat-panel.md`), but a turn that GENERATES or CHANGES code
-runs one at a time. Nothing is guessed about the reviewer's wording: the
+runs one at a time for the checkout it would touch — and never queues behind an
+unrelated PR's own edit (reviewer requirement: *"per pr moet het niet wachten op
+een andere pr"*). Nothing is guessed about the reviewer's wording: the
 `{"type":"need_write"}` directive above already IS "this turn is going to change
-code", so a process-wide semaphore of capacity 1 wraps exactly attempt 2 and
-attempt 1 is untouched. A second such turn **waits** — never refused — and says
-so, through the `waiting` progress phase ("Wacht op een andere codewijziging…",
-`chat_progress.go` + `PHASE_LABEL` in `src/ClaudeChat.mjs`), so a queued turn is
-never mistaken for a hang. Deliberately process-wide rather than per PR: one
-agentic edit at a time on this machine is the point (each owns a git worktree
-and may run Bash). It blocks inside an **Activity**, never a workflow body, and
-changes neither the number nor the order of `ExecuteActivity` calls, so replay
-is unaffected. No lock-ordering risk either: a turn only ever takes this
-semaphore and then, inside it, the short `ingestMu` plumbing lock — never the
-reverse. Test: `chat_write_gate_test.go`.
+code", so `acquireCheckoutWriteSlot` wraps exactly attempt 2 (attempt 1 is
+untouched) with a semaphore of capacity 1 **keyed by `checkoutWriteSlotKey`**
+(`chat_checkout.go`) — the resolved checkout DIRECTORY once this PR has one
+assigned (so two PRs that end up sharing one physical checkout, via the "andere
+werkmap kiezen" last-resort choice, still serialize against each other), or a
+per-PR fallback before that. A second such turn **waits** — never refused — and
+says so, through the `waiting` progress phase ("Wacht op een andere
+codewijziging…", `chat_progress.go` + `PHASE_LABEL` in `src/ClaudeChat.mjs`),
+now shown directly on the live "Vraagt schrijftoegang" pill too
+(`claudeNeedWritePill(phase)`), not only in the separate footer status line —
+so a queued turn is never mistaken for a hang right where the reviewer is
+looking. It blocks inside an **Activity**, never a workflow body, and changes
+neither the number nor the order of `ExecuteActivity` calls, so replay is
+unaffected. No lock-ordering risk either: a turn only ever takes this slot and
+then, inside it, the short `ingestMu` plumbing lock — never the reverse. Tests:
+`chat_write_gate_test.go` (including
+`TestWriteTurnSlotDoesNotSerializeAcrossDifferentKeys`).
+
+**The same per-checkout slot also guards every OTHER checkout-mutating
+operation**, not just a write turn's own Bash/Edit phase: the automatic
+post-turn landing (`processChatMerge`) and the werkmap overlay's own
+answer/relist/restore-stash Activities (`workflows.go`) all take it too, via
+the same `acquireCheckoutWriteSlot` wrapper. Without this, the write-turn slot
+being released right after a turn's edits (but before that same edit is
+committed by the following landing step) left a real window in which another
+conversation of the SAME PR could escalate, see the checkout as "dirty" with
+this turn's own not-yet-landed edit sitting in it, and get asked
+`chatCheckoutDirtyDecision` about work that was never theirs to discard/stash —
+reported bug: two chats on one PR, one stuck re-showing "er staat nog een keuze
+open over de werkmap van deze PR" forever. `dirtyIsOnlyPendingEdits`
+(`chat_checkout.go`) closes the other half of the same gap: a "dirty" tree
+whose paths are ENTIRELY covered by `chatPendingEditedFilesFor` (a not-yet-
+landed edit this SAME PR's checkout is known to be holding) never raises that
+decision at all — it's simply not ready yet, and resolves itself once the
+landing that already owns the slot finishes. Any wait on this shared slot
+(including the checkout-menu Activities and the automatic landing, which have
+no live chat-turn progress line of their own) is also mirrored onto the
+always-visible checkout chip (`isCheckoutWaiting`/`setCheckoutWaiting`,
+`checkout_progress.go` → `checkoutView.Waiting` → `checkoutChipLabel`
+`"Wachten…"` in `src/home.mjs`), so a block is a real word on screen, never a
+silent stall, regardless of which specific panel the reviewer happens to have
+open. Test: `TestPrepareChatShellWorkDirSkipsDirtyDecisionForOwnPendingEdit`
+(`chat_checkout_test.go`).
 
 - **Location/identity**: `chatShadowDir(dataDir, pr, conversationId)` →
   `data/worktrees/pr-<n>-chatshadow-<conversationId>`, checked out on local

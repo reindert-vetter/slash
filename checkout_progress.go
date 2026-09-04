@@ -64,6 +64,66 @@ func checkoutProgressSteps(repo string, pr int) []checkoutProgressStep {
 	return out
 }
 
+// checkoutWaitingBy/setCheckoutWaiting/isCheckoutWaiting — one PR-wide "is
+// SOMETHING queued behind this checkout's own write-slot RIGHT NOW" flag,
+// regardless of which specific Activity is waiting (an escalated chat turn,
+// a test run, or one of the checkout-menu Activities below). Surfaced on the
+// checkout chip (src/home.mjs's checkoutChip, always visible in prInfoCard,
+// not just while the werkmap overlay happens to be open) so a reviewer
+// blocked on ANY of these can always see it, in words, per the reviewer's own
+// requirement ("als iets geblokkeerd raakt, moet dat zichtbaar zijn ... nooit
+// stil wachten") — never just the overlay's own progress log, which only
+// renders while that overlay happens to be open (e.g. never during an
+// automatic post-turn landing). In-memory only, gone on a restart — same
+// operational carve-out as the step log right above (see its own doc
+// comment); losing it only means the chip goes quiet a beat early for a wait
+// that was already in progress, never a correctness issue.
+var (
+	checkoutWaitingMu sync.Mutex
+	checkoutWaitingBy = map[prKey]bool{}
+)
+
+func setCheckoutWaiting(repo string, pr int, waiting bool) {
+	checkoutWaitingMu.Lock()
+	defer checkoutWaitingMu.Unlock()
+	key := prKey{Repo: repo, PR: pr}
+	if waiting {
+		checkoutWaitingBy[key] = true
+	} else {
+		delete(checkoutWaitingBy, key)
+	}
+}
+
+func isCheckoutWaiting(repo string, pr int) bool {
+	checkoutWaitingMu.Lock()
+	defer checkoutWaitingMu.Unlock()
+	return checkoutWaitingBy[prKey{Repo: repo, PR: pr}]
+}
+
+// checkoutWaitingStepCmd is the synthetic step recorded while a
+// checkout-mutating Activity is queued behind THIS SAME PR's own
+// write-turn slot (chat_write_gate.go, now keyed per checkout via
+// checkoutWriteSlotKey) — an active code-editing chat turn or another
+// checkout-menu action already touching this exact checkout. Surfaced
+// through the same step log the overlay's progress panel already polls, so
+// the wait is a real, worded line ("wachten…") instead of a silent stall —
+// the colourblind rule: the word/shape carries the meaning, never colour
+// alone. Deliberately NOT "wachten op een andere PR": this gate is per
+// checkout now, so a wait here always means THIS PR's own concurrent
+// activity, never an unrelated one.
+const checkoutWaitingStepCmd = "(wachten tot de actieve chat-bewerking van deze PR klaar is)"
+
+// appendCheckoutWaitingStep records checkoutWaitingStepCmd for repo/pr — see
+// its own doc comment. Called from a checkout-mutating Activity's own
+// acquireWriteTurnSlot onWaiting callback (workflows.go).
+func appendCheckoutWaitingStep(repo string, pr int) {
+	appendCheckoutProgressStep(repo, pr, checkoutProgressStep{
+		Cmd: checkoutWaitingStepCmd,
+		Ok:  true,
+		At:  time.Now().UnixMilli(),
+	})
+}
+
 func appendCheckoutProgressStep(repo string, pr int, step checkoutProgressStep) {
 	checkoutProgressMu.Lock()
 	defer checkoutProgressMu.Unlock()

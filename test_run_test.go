@@ -114,15 +114,16 @@ func TestRunTestRunCancelWhileWaitingForWriteSlot(t *testing.T) {
 		testRunMu.Unlock()
 	})
 
-	// Hold the one write-turn slot so runTestRun's own acquireWriteTurnSlot
-	// call has to wait for it, exactly like a concurrent code-editing chat
-	// turn would.
-	release := acquireWriteTurnSlot(context.Background(), nil)
+	// Hold this PR's own write-turn slot so runTestRun's own
+	// acquireWriteTurnSlot call has to wait for it, exactly like a concurrent
+	// code-editing chat turn on the SAME PR would.
+	dataDir := t.TempDir()
+	release := acquireWriteTurnSlot(context.Background(), checkoutWriteSlotKey(dataDir, repo, pr), nil)
 	defer release()
 
 	done := make(chan testRunResult, 1)
 	go func() {
-		done <- runTestRun(context.Background(), &TaskManager{}, claude.NewFake(), t.TempDir(), testRunArg{Repo: repo, PR: pr})
+		done <- runTestRun(context.Background(), &TaskManager{}, claude.NewFake(), dataDir, testRunArg{Repo: repo, PR: pr})
 	}()
 
 	// Wait until the run actually registered itself as waiting for the slot.

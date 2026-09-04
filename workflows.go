@@ -3223,6 +3223,29 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if m.chat == nil {
 			return json.Marshal(chat.Message{})
 		}
+		// clearCheckoutProgress + withCheckoutProgress: same live-progress log
+		// the checkout-menu Activities below use — a landing runs real `git`
+		// commands (commitCheckoutEditsAt) too. acquireCheckoutWriteSlot: this
+		// PR's own checkout write-slot (chat_write_gate.go) — a write turn's own
+		// escalated Bash/Edit tools may still be running on this exact checkout
+		// (its own turn released the slot before this landing step started, see
+		// chat_write_gate.go's own doc comment), so this Activity must wait its
+		// turn rather than race it. onWaiting surfaces via the checkout progress
+		// log (visible if the overlay happens to be open), the always-visible
+		// checkout chip (setCheckoutWaiting, inside acquireCheckoutWriteSlot
+		// itself), and, best effort, this conversation's own live chat status
+		// line (a no-op if that turn's progress snapshot has already been
+		// cleared — true for BOTH the automatic post-turn landing and a manual
+		// "commit" request, since neither has a running turn snapshot by the
+		// time this Activity runs; kept anyway as a free win for any future
+		// caller that does).
+		clearCheckoutProgress(arg.Repo, arg.PR)
+		ctx = withCheckoutProgress(ctx, arg.Repo, arg.PR)
+		release := acquireCheckoutWriteSlot(ctx, m.dataDir, arg.Repo, arg.PR, func() {
+			appendCheckoutWaitingStep(arg.Repo, arg.PR)
+			advanceChatProgress(arg.Repo, arg.PR, arg.ConversationID, chatPhaseWaiting)
+		})
+		defer release()
 		msg := processChatMerge(ctx, m, m.chat, m.claude, m.dataDir, arg)
 		publishChatChanged(arg.Repo, arg.PR, arg.ConversationID)
 		return json.Marshal(msg)
@@ -3246,6 +3269,17 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// checkoutChanged so every open tab watching this PR refetches
 	// GET /api/chat/checkout, same "an event is never the source of truth"
 	// rule as every other publisher in this file.
+	//
+	// Each also takes this PR's own checkout write-slot
+	// (acquireCheckoutWriteSlot, chat_write_gate.go) before touching git,
+	// exactly like a code-editing chat turn does: without it, an overlay
+	// answer (e.g. discarding/stashing a "dirty" tree) could run concurrently
+	// with an active turn's own Bash/Edit tools on that same checkout.
+	// onWaiting appends a worded step to the SAME progress log the overlay
+	// already polls (appendCheckoutWaitingStep, checkout_progress.go) and
+	// flips the always-visible checkout chip's own "wachten" state
+	// (setCheckoutWaiting, inside acquireCheckoutWriteSlot), so a wait here is
+	// always a visible word, never a silent stall.
 	engine.RegisterActivity("checkoutRelist", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg chatCheckoutActionInput
 		if err := json.Unmarshal(in, &arg); err != nil {
@@ -3256,6 +3290,10 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		// progress panel (checkout_progress.go) — see its own doc comment.
 		clearCheckoutProgress(arg.Repo, arg.PR)
 		ctx = withCheckoutProgress(ctx, arg.Repo, arg.PR)
+		release := acquireCheckoutWriteSlot(ctx, m.dataDir, arg.Repo, arg.PR, func() {
+			appendCheckoutWaitingStep(arg.Repo, arg.PR)
+		})
+		defer release()
 		relistCheckoutCandidates(ctx, m, m.dataDir, arg.Repo, arg.PR)
 		publishCheckoutChanged(arg.Repo, arg.PR)
 		return nil, nil
@@ -3267,6 +3305,10 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		}
 		clearCheckoutProgress(arg.Repo, arg.PR)
 		ctx = withCheckoutProgress(ctx, arg.Repo, arg.PR)
+		release := acquireCheckoutWriteSlot(ctx, m.dataDir, arg.Repo, arg.PR, func() {
+			appendCheckoutWaitingStep(arg.Repo, arg.PR)
+		})
+		defer release()
 		// Reuse the exact same resolution path a chat turn's own pending-decision
 		// check uses (chat_workflow.go's runOneClaudeTurn) — a menu-driven answer
 		// and a chat-driven answer share one code path, one set of rules.
@@ -3280,6 +3322,10 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			return nil, err
 		}
 		clearCheckoutProgress(arg.Repo, arg.PR)
+		release := acquireCheckoutWriteSlot(ctx, m.dataDir, arg.Repo, arg.PR, func() {
+			appendCheckoutWaitingStep(arg.Repo, arg.PR)
+		})
+		defer release()
 		checkoutSetOff(m.dataDir, arg.Repo, arg.PR)
 		publishCheckoutChanged(arg.Repo, arg.PR)
 		return nil, nil
@@ -3291,6 +3337,10 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		}
 		clearCheckoutProgress(arg.Repo, arg.PR)
 		ctx = withCheckoutProgress(ctx, arg.Repo, arg.PR)
+		release := acquireCheckoutWriteSlot(ctx, m.dataDir, arg.Repo, arg.PR, func() {
+			appendCheckoutWaitingStep(arg.Repo, arg.PR)
+		})
+		defer release()
 		if err := checkoutRestoreStashNow(ctx, m.dataDir, arg.Repo, arg.PR); err != nil {
 			m.logf("checkout: restore stash pr %d: %v", arg.PR, err)
 		}
