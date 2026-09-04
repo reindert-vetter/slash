@@ -753,6 +753,17 @@ aanwezig zijn buiten beeld — daar kan je dan wel naartoe navigeren."
   a unit whose only comment is a folded stale one has nothing to hang a
   conversation on at rest, so → and the Claude column both skip straight past
   it to Underlying code, same as a genuinely comment-less unit.
+- **Exception: `cs.scope.onlyIds` (a "Comments op regels" index item's own
+  anchor drill).** Reviewer report: selecting a stale comment in the blokken
+  index showed only the "1 hierboven" hint, not the comment itself —
+  `hiddenAboveCount()`'s leading-stale-run fold ran even though
+  `commentAnchorOnlyIds` had already narrowed `visibleComments()` down to
+  exactly that row's own comment(s), and `commentCard`'s own
+  `isAnchorOnlyComment` override (which forces a full thread for precisely
+  this case) never got a chance to apply — the render loop starts at
+  `i = hidden`, so a fully-folded scoped list never even builds the card.
+  `hiddenAboveCount()` now returns `0` whenever `cs.scope.onlyIds` is set,
+  before the stale-run fallback runs.
 - **`hasAnyComments()`** is the DELIBERATELY UNCHANGED old question
   (`visibleComments().length > 0`) under a new name, still needed because
   `hasVisibleComments()` above no longer answers it: home.mjs's

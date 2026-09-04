@@ -872,6 +872,32 @@ test.describe('a comment-index item anchored to a real block', () => {
     await expect(blockColumn).toContainText('findOrCreateCustomer')
   })
 
+  // Reviewer request: "als ik een comment in de blokken index selecteer, wil
+  // ik die altijd rechts zien, niet ingeklapt". A comment-index row whose own
+  // comment is stale (anchorState 'unpinned', see comment-stale-anchor-fold.
+  // spec.mjs) used to still fold behind the "N hierboven" hint even here,
+  // because hiddenAboveCount()'s leading-stale-run fallback ran regardless of
+  // cs.scope.onlyIds — even though isAnchorOnlyComment (commentCard,
+  // RelatedPanel.mjs) exists specifically to force this exact row's own
+  // comment fully open. The render loop starts at `i = hidden`, so a
+  // fully-folded scoped list never even built the card for that override to
+  // apply to.
+  test('a stale (unpinned) comment selected via the blokken index shows fully expanded, not folded behind the hint', async ({
+    page,
+  }) => {
+    await mockAnchoredComment(page, { anchorState: 'unpinned', body: 'please rename this variable' })
+    await page.goto('/pr/12903')
+    await leaveSearchBox(page)
+
+    await page.locator('[data-idx]').filter({ hasText: 'please rename this variable' }).click()
+
+    await expect(page.getByTestId('comment-more-above')).toHaveCount(0)
+    const item = page.getByTestId('comment-item')
+    await expect(item).toHaveCount(1)
+    await expect(item).toHaveAttribute('data-expanded', 'true')
+    await expect(item).toContainText('please rename this variable')
+  })
+
   // The jump is scoped to EXACTLY the anchor's own first-level panel
   // (state.focusLevel === 1) — a child clicked from a column already
   // drilled a SECOND level deep from the anchor still nests, even when that

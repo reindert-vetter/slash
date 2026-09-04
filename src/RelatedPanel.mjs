@@ -675,9 +675,23 @@ function expandedCommentIndex() {
 // and keeps rendering as an ordinary (if field-reduced, see
 // compactConversation) card — see "A stale (unpinned) comment is always
 // folded..." in comments-panel.md for why a full reorder wasn't needed.
+//
+// Exception: cs.scope.onlyIds (a "Comments op regels" index item's own
+// anchor drill, see isCommentAnchorDrillActive/commentAnchorOnlyIds in
+// home.mjs) already narrows visibleComments() down to exactly the comment(s)
+// that row stands for, and commentCard's own isAnchorOnlyComment forces a
+// FULL thread for every one of them regardless of staleness — "als ik een
+// comment in de blokken index selecteer, wil ik die altijd rechts zien, niet
+// ingeklapt" (reviewer report). Folding it here anyway, purely because it
+// happens to be stale, hid the very card that override exists to force open
+// — the render loop below never even reaches isAnchorOnlyComment, since it
+// starts at `i = hidden`. So a stale comment only ever folds in the ordinary,
+// unscoped rest-position view, never while onlyIds has already scoped the
+// list down to it on purpose.
 function hiddenAboveCount() {
   const exp = expandedCommentIndex()
   if (exp >= 0) return exp
+  if (cs.scope && cs.scope.onlyIds) return 0
   const list = visibleComments()
   let n = 0
   while (n < list.length && isStaleAnchor(list[n])) n++
