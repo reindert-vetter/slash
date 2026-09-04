@@ -903,6 +903,11 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// currently reports (so within problemWindow), one after another. Same
 	// sanctioned write as /api/workflows/retry; see TaskManager.RetryAllFailed.
 	mux.HandleFunc("/api/workflows/retry-all", s.handleRetryAllRuns)
+	// POST /api/workflows/ignore-runs {runIds:[…]} → permanently delete those
+	// failed runs: the reviewer decided the failures need no action. Starts one
+	// ignore_runs Execution whose own Activity does every deletion, so it stays
+	// inside the workflow write-boundary; see TaskManager.IgnoreFailedRuns.
+	mux.HandleFunc("/api/workflows/ignore-runs", s.handleIgnoreRuns)
 	// GET /api/running-count → read-only: how many workflow runs are
 	// tembed.StatusRunning RIGHT NOW, repo-wide. Feeds the live badge next to
 	// the PR count on /pr-overview. A separate top-level path, not
@@ -1098,11 +1103,48 @@ func (s *server) handleRetryAllRuns(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "retried": retried, "skipped": skipped})
 }
 
+// handleIgnoreRuns serves POST /api/workflows/ignore-runs
+// {"runIds":["…","…"]} — permanently delete those failed runs, the "negeer"
+// half of the global failed-tasks popup ("wil ik ook errors kunnen
+// negeren"). Reports how many were really deleted and how many were skipped
+// (an unknown id, or one that is no longer failed), so the popup can say what
+// it did. An empty list is a 400: nothing to ignore is a caller bug, not a
+// no-op worth starting an Execution for.
+func (s *server) handleIgnoreRuns(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var in struct {
+		RunIDs []string `json:"runIds"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	ids := make([]string, 0, len(in.RunIDs))
+	for _, id := range in.RunIDs {
+		if id = strings.TrimSpace(id); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		http.Error(w, "missing runIds", http.StatusBadRequest)
+		return
+	}
+	res, err := s.tasks.manager.IgnoreFailedRuns(ids)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "ignored": res.Ignored, "skipped": res.Skipped})
+}
+
 // handleWorkflows routes /api/workflows/{runID} (GET status) and
 // /api/workflows/{runID}/signals/{signalName} (POST signal).
 func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/workflows/")
-	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "remove_reviewer" || rest == "code_warning" || rest == "ignore_comment" || rest == "cleanup" || rest == "claude_chat" || rest == "auto_warn" || rest == "lang_pref" || rest == "app_settings" || rest == "comment_batch" || rest == "test_run" || rest == "comment_titles" || rest == "retry" || rest == "retry-all" {
+	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "remove_reviewer" || rest == "code_warning" || rest == "ignore_comment" || rest == "cleanup" || rest == "claude_chat" || rest == "auto_warn" || rest == "lang_pref" || rest == "app_settings" || rest == "comment_batch" || rest == "test_run" || rest == "comment_titles" || rest == "retry" || rest == "retry-all" || rest == "ignore-runs" {
 		http.NotFound(w, r)
 		return
 	}

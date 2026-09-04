@@ -397,6 +397,63 @@ func TestRetryAllFailedResumesEveryRow(t *testing.T) {
 	}
 }
 
+// TestIgnoreFailedRunsDeletesOnlyFailures covers the "Negeer" half of the
+// global failed-tasks popup (POST /api/workflows/ignore-runs): a failure the
+// reviewer decides needs no action is deleted for good, so it leaves every
+// list built on GET /api/problems, while a run that is NOT failed (or an id
+// nobody knows) is reported as skipped instead of being torn out.
+func TestIgnoreFailedRunsDeletesOnlyFailures(t *testing.T) {
+	engine := tembed.New(tembed.NewMemoryStore())
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
+
+	engine.RegisterWorkflow("test_boom", func(w *tembed.Workflow, input []byte) ([]byte, error) {
+		return nil, errors.New("save reaction: database is locked")
+	})
+	engine.RegisterWorkflow("test_fine", func(w *tembed.Workflow, input []byte) ([]byte, error) {
+		return nil, nil
+	})
+	var failed []string
+	for i := 0; i < 2; i++ {
+		// StartWorkflow drives a signal-less workflow inline and records the
+		// failure in its history rather than returning it, exactly as
+		// TestRetryAllFailedResumesEveryRow relies on.
+		id, _ := engine.StartWorkflow("test_boom", struct {
+			PR int `json:"pr"`
+		}{PR: 13535})
+		failed = append(failed, id)
+	}
+	okID, err := engine.StartWorkflow("test_fine", struct {
+		PR int `json:"pr"`
+	}{PR: 13535})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.FailedRuns(0); len(got) != 2 {
+		t.Fatalf("FailedRuns = %d, want 2", len(got))
+	}
+
+	res, err := m.IgnoreFailedRuns([]string{failed[0], failed[1], okID, "nope"})
+	if err != nil {
+		t.Fatalf("IgnoreFailedRuns: %v", err)
+	}
+	if res.Ignored != 2 || res.Skipped != 2 {
+		t.Fatalf("IgnoreFailedRuns = %d ignored / %d skipped, want 2/2", res.Ignored, res.Skipped)
+	}
+	if got := m.FailedRuns(0); len(got) != 0 {
+		t.Fatalf("FailedRuns after ignoring everything = %+v, want none", got)
+	}
+	// The completed run is untouched, and the ignore_runs Execution itself is
+	// no new failure on the list.
+	if status, err := engine.Status(okID); err != nil || status != tembed.StatusCompleted {
+		t.Fatalf("completed run status = %q (%v), want it left alone", status, err)
+	}
+	for _, id := range failed {
+		if _, err := engine.Status(id); err == nil {
+			t.Fatalf("ignored run %s still exists; want it deleted", id)
+		}
+	}
+}
+
 // TestFailedRunsDropsRunsOlderThanTheWindow covers problemWindow: a failure
 // from beyond the last four days no longer reaches the UI at all (reviewer:
 // "ik wil bovenaan van 4 dagen zien"), so it is also not part of "alles

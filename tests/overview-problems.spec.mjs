@@ -99,6 +99,39 @@ test.describe('PR overview — "Mislukte taken" block', () => {
     await expect(page.locator('[data-testid="problem-run"]')).toHaveCount(0)
   })
 
+  test('a row can be ignored, which deletes the failed run', async ({ page }) => {
+    let remaining = PROBLEMS.failedRuns
+    await page.route('**/api/problems', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ...PROBLEMS, failedRuns: remaining }),
+      }),
+    )
+    const ignored = []
+    await page.route('**/api/workflows/ignore-runs', (route) => {
+      const ids = JSON.parse(route.request().postData() || '{}').runIds || []
+      ignored.push(...ids)
+      remaining = remaining.filter((r) => !ids.includes(r.runId))
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ok: true, ignored: ids.length, skipped: 0 }),
+      })
+    })
+    await page.goto('/pr-overview')
+    await appReady(page)
+
+    await page.locator('[data-testid="problems-drawer"]').click()
+    await expect(page.locator('[data-testid="problem-run"]')).toHaveCount(2)
+    await page.locator('[data-testid="problem-ignore"]').first().click()
+    await expect(page.locator('[data-testid="problem-run"]')).toHaveCount(1)
+    expect(ignored).toEqual(['run-boom-1'])
+    // Only the failed RUNS can be ignored — a mirrored log line is no run, so
+    // there is nothing to delete (see problemLogRow).
+    await expect(page.locator('[data-testid="problem-log"] [data-testid="problem-ignore"]')).toHaveCount(0)
+  })
+
   test('its rows never join the keyboard navigation', async ({ page }) => {
     await stubProblems(page, PROBLEMS)
     await page.goto('/pr-overview')

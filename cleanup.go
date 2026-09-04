@@ -698,13 +698,24 @@ func purgeOrphanCommentRuns(ctx context.Context, engine *tembed.Engine, cm *comm
 	return n, nil
 }
 
-// sweepDebugLogRuns deletes the run history of every COMPLETED debug_log
-// one-shot older than debugLogRunAge. Debug mode starts one such Execution per
-// flushed batch of recorded events (see debug_log.go), and once it has
-// completed the whole point of it — the appended lines — lives in
-// debug-log.jsonl, which this sweep deliberately never touches. Without this
-// the run table would grow for the whole length of a debugging session and
-// never shrink.
+// sweptOneShotTypes are the Workflow Types whose COMPLETED one-shot runs
+// carry nothing worth keeping: their whole effect lives somewhere else (the
+// appended debug-log.jsonl lines; the failed runs an ignore_runs Execution
+// deleted), so the run record itself is pure residue. sweepDebugLogRuns
+// below removes them once they are older than debugLogRunAge.
+var sweptOneShotTypes = map[string]bool{
+	WorkflowDebugLog:   true,
+	WorkflowIgnoreRuns: true,
+}
+
+// sweepDebugLogRuns deletes the run history of every COMPLETED one-shot of a
+// sweptOneShotTypes type older than debugLogRunAge. Debug mode starts one such
+// Execution per flushed batch of recorded events (see debug_log.go), and once
+// it has completed the whole point of it — the appended lines — lives in
+// debug-log.jsonl, which this sweep deliberately never touches. Same for an
+// ignore_runs Execution: its effect is the failure it deleted. Without this
+// the run table would grow for the whole length of a debugging session (or
+// with every ignored failure) and never shrink.
 //
 // Only StatusCompleted is eligible; a Running/Waiting one-shot is either still
 // in flight or a genuine failure worth keeping visible in "Mislukte taken"
@@ -721,14 +732,14 @@ func sweepDebugLogRuns(engine *tembed.Engine) (int, error) {
 	now := time.Now()
 	deleted := 0
 	for _, r := range runs {
-		if r.Workflow != WorkflowDebugLog || r.Status != tembed.StatusCompleted {
+		if !sweptOneShotTypes[r.Workflow] || r.Status != tembed.StatusCompleted {
 			continue
 		}
 		if now.Sub(r.UpdatedAt) < debugLogRunAge {
 			continue
 		}
 		if err := engine.DeleteRun(r.ID); err != nil {
-			return deleted, fmt.Errorf("delete debug_log run %s: %w", r.ID, err)
+			return deleted, fmt.Errorf("delete %s run %s: %w", r.Workflow, r.ID, err)
 		}
 		deleted++
 	}

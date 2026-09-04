@@ -548,6 +548,25 @@ same read-only `GET /api/problems`).
 - **"Alles opnieuw proberen"** POSTs `/api/workflows/retry-all` and reports
   `{retried, skipped}` in words next to the button — see
   `.claude/docs/tembed-endpoints.md`.
+- **"Negeer" per row, and "Alles negeren"** — reviewer request: "wil ik ook
+  errors kunnen negeren". A retry is not always the answer: a failure on a PR
+  that has meanwhile been merged, or one that can never succeed (a `gh` call
+  the reviewer has no rights for), is not work any more, and while it sits in
+  the window this modal reopens over every page. Both POST
+  `/api/workflows/ignore-runs` with the run ids, which **permanently deletes**
+  those runs (`WorkflowIgnoreRuns` → `engine.DeleteRun`, see
+  `.claude/docs/tembed-endpoints.md`), so the rows leave the dialog, this
+  drawer and the review tree's Taken block at once. The per-row button
+  (`data-testid=problem-ignore`) lives in `problems.mjs`'s own `problemRunRow`
+  — passed in via its `onIgnore` option, so a call site with nowhere to send
+  that decision simply omits it — and this drawer wires the same option to
+  `ignoreProblemRun`. **"Alles negeren"**
+  (`data-testid=failed-tasks-ignore-all`) takes TWO presses: the label itself
+  becomes "Zeker? Alles negeren" (a word, never a colour), because deleting a
+  whole list of failures the reviewer never read is irreversible; one row needs
+  no such step, that decision is about the failure in front of them. Only the
+  `failedRuns` half can be ignored — a mirrored log line is no run, so there is
+  nothing to delete.
 - **The rows are `problems.mjs`'s own** (`problemRunRow`), a third call site
   next to this drawer and the review tree's "Taken" block, not a third
   implementation.
@@ -675,6 +694,7 @@ default" section.
 | `POST /api/workflows/remove_reviewer` | `{pr}` → drop **myself** from that PR's requested reviewers. No login in the request (resolved server-side). 400 on a non-positive pr. |
 | `GET /api/problems` | Read-only → `{ok, failedRuns:[{runId,workflow,pr,updatedAt,error,comment?,retryable}], logErrors:[{at,scope,pr,message}], prTitles:{"<pr>":"<title>"}}`. Feeds "Mislukte taken" and the global dialog; superseded failures are already filtered out, and both halves are limited to the last `problemWindow` (four days). |
 | `POST /api/workflows/retry-all` | Resume every failure of that window (`{ok, retried, skipped}`) — see `.claude/docs/tembed-endpoints.md`. |
+| `POST /api/workflows/ignore-runs` | `{runIds:[…]}` → permanently delete those failed runs (`{ok, ignored, skipped}`) — see `.claude/docs/tembed-endpoints.md`. |
 | `GET /api/prs` | (existing) ingested PRs + counts, for the recent drawer. |
 
 ### "Recent gegenereerd" rows are enriched from the SAME local prmeta read, no extra request

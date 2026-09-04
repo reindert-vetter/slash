@@ -1037,10 +1037,20 @@ row:
 - **`taskCommandsFor()`** (`home.mjs`, registered as `rootCommandsFor`'s
   `'task'` mode) offers only what follows from the row: "Open de comment" for a
   `comment`-bearing run, **"Opnieuw proberen"** for a retryable failure,
-  "Kopieer foutmelding" when there's a message, "Verberg deze melding" for a
-  log line, and always the short **"Verversen"**. The two action words are
+  **"Negeer deze fout"** for ANY failed run, "Kopieer foutmelding" when there's
+  a message, "Verberg deze melding" for a log line, and always the short
+  **"Verversen"**. The two action words are
   deliberately asymmetric in length: "Opnieuw proberen" next to a second long
   item ("Taken verversen", as it first shipped) read as the same action twice.
+- **Ignoring a failure is durable and irreversible** (`ignoreFailedRun`,
+  `home.mjs` → `POST /api/workflows/ignore-runs`): the run is DELETED, so the
+  row is really gone on the next `refreshTasks()` — no optimistic mark needed,
+  unlike a retry below. Offered even for a run that cannot be retried: that is
+  exactly the kind of failure there is nothing else to do with. Same endpoint,
+  same reasoning and the same two other call sites as the global
+  failed-tasks dialog — see "The global failed-tasks dialog" in
+  `.claude/docs/pr-overview.md` and the endpoint row in
+  `.claude/docs/tembed-endpoints.md`.
 - **Hiding a log line is client-side only** (`hideTaskLogLine`, `taskUi.hiddenLogs`
   in `RelatedPanel.mjs`, keyed on `at|message` so the next poll doesn't bring it
   back): `/api/problems`' buffer is an in-memory log mirror the server rebuilds

@@ -146,6 +146,48 @@ test.describe('review tree — failures inside the merged "Taken" block', () => 
     await expect(row).toContainText('bezig')
   })
 
+  test('"Negeer deze fout" deletes the failed run and the row goes', async ({ page }) => {
+    let failedRuns = [
+      {
+        runId: 'run-status-boom',
+        workflow: 'pr_status',
+        pr: 12903,
+        updatedAt: new Date(Date.now() - 3 * 60_000).toISOString(),
+        error: 'pr_status: gh pr view 12903: exit status 1',
+        retryable: true,
+      },
+    ]
+    await page.route('**/api/problems', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ok: true, failedRuns, logErrors: [], prTitles: {} }),
+      }),
+    )
+    const ignored = []
+    await page.route('**/api/workflows/ignore-runs', (route) => {
+      const ids = JSON.parse(route.request().postData() || '{}').runIds || []
+      ignored.push(...ids)
+      failedRuns = failedRuns.filter((r) => !ids.includes(r.runId))
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ok: true, ignored: ids.length, skipped: 0 }),
+      })
+    })
+
+    await page.goto('/pr/12903')
+    await appReady(page)
+    await openTaken(page)
+
+    await page.locator('[data-testid=workflow-row][data-status=failed]').click()
+    await page.getByTestId('command-row').filter({ hasText: 'Negeer deze fout' }).click()
+
+    await expect.poll(() => ignored).toEqual(['run-status-boom'])
+    // Unlike a retry, the row really is gone — the run itself was deleted.
+    await expect(page.locator('[data-testid=workflow-row][data-status=failed]')).toHaveCount(0)
+  })
+
   test('"Verberg deze melding" drops a log row, and the refresh button is there', async ({ page }) => {
     await stubProblems(page, {
       ok: true,

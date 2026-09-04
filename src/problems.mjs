@@ -80,11 +80,35 @@ export function baseName(path) {
   return i < 0 ? s : s.slice(i + 1)
 }
 
+// problemIgnoreButton — "negeer deze fout": the reviewer decided this failure
+// needs no action, so its run is deleted for good (POST
+// /api/workflows/ignore-runs, see run_errors.go/WorkflowIgnoreRuns) and the
+// row disappears from every list built on GET /api/problems. A WORD, never a
+// colour or an icon alone (the reviewer is colorblind), and it stops its own
+// click from propagating before calling the callback — see the nested-@click
+// ordering rule in .claude/rules/arrowjs-pitfalls.md.
+export function problemIgnoreButton(onIgnore) {
+  return html`<button
+    type="button"
+    data-testid="problem-ignore"
+    title="${t('Negeer deze fout definitief (de taak verdwijnt uit de lijst)')}"
+    class="shrink-0 self-start rounded-lg border border-slate-200 px-2 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800/60"
+    @click="${(e) => {
+      if (!e) return
+      e.stopPropagation()
+      onIgnore()
+    }}"
+  >
+    ${t('Negeer')}
+  </button>`
+}
+
 // problemRunRow — one workflow run that ended in `failed`. showPr (default
 // true) hides the PR chip when the caller already scopes the whole list to one
 // PR (the review-tree page) — the chip would just repeat what the page is
-// already about.
-export function problemRunRow(run, prTitles, { showPr = true } = {}) {
+// already about. onIgnore (default null) adds the per-row "Negeer" button
+// above; a caller that has nowhere to send that decision simply omits it.
+export function problemRunRow(run, prTitles, { showPr = true, onIgnore = null } = {}) {
   return html`
     <div data-testid="problem-run" class="${PROBLEM_ROW_CLASS}">
       ${problemMark(t('mislukt'))}
@@ -97,6 +121,7 @@ export function problemRunRow(run, prTitles, { showPr = true } = {}) {
         <div class="contents">${() => (run.comment ? problemCommentLine(run.comment) : '')}</div>
         <p class="line-clamp-2 text-[12px] text-slate-500 dark:text-zinc-500" title="${run.error || ''}">${run.error || t('geen foutmelding vastgelegd')}</p>
       </div>
+      <div class="contents">${() => (onIgnore ? problemIgnoreButton(() => onIgnore(run)) : '')}</div>
     </div>
   `.key('problem-run:' + run.runId)
 }

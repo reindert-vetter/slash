@@ -58,8 +58,15 @@ const fs = reactive({
   snoozedUntil: readSnooze(),
   busy: false,
   // note: the outcome of the last "alles opnieuw proberen" ("7 hervat, 1
-  // overgeslagen"), so the button says what it did instead of just spinning.
+  // overgeslagen") or "negeren", so the button says what it did instead of
+  // just spinning.
   note: '',
+  // confirmIgnoreAll: "Alles negeren" was pressed once and is waiting for the
+  // second press. Ignoring is irreversible (the runs are deleted, see
+  // WorkflowIgnoreRuns), and doing that to the WHOLE list on one stray click
+  // would throw away failures the reviewer never read. A single row needs no
+  // such step: that decision is about one failure the reviewer is looking at.
+  confirmIgnoreAll: false,
 })
 
 function readSnooze() {
@@ -87,6 +94,7 @@ function snooze() {
   fs.snoozedUntil = until
   fs.expanded = false
   fs.note = ''
+  fs.confirmIgnoreAll = false
   writeSnooze(until)
   setTimeout(() => {
     // Re-read rather than clearing blindly: a later snooze (another tab, or a
@@ -142,6 +150,19 @@ export function handleFailedTasksKeydown(e) {
   return true
 }
 
+// failureReason — WHY a POST from this dialog failed, in as few words as
+// possible: the server's own {"error":…} text when it sent one, otherwise the
+// bare HTTP status. A note that only says "is niet gelukt" is unactionable —
+// the first real report of this was a plain 404 (a server binary started
+// before the endpoint existed), which read exactly like a deletion that
+// really went wrong. Not translated: it is a status code or a server message,
+// not interface text.
+function failureReason(res, body) {
+  const msg = body && typeof body.error === 'string' ? body.error.trim() : ''
+  if (msg) return msg
+  return res ? 'HTTP ' + res.status : 'geen antwoord'
+}
+
 async function retryAll() {
   if (fs.busy) return
   fs.busy = true
@@ -154,12 +175,44 @@ async function retryAll() {
     })
     const body = await res.json().catch(() => null)
     if (!res.ok || !body || !body.ok) {
-      fs.note = t('Opnieuw proberen is niet gelukt.')
+      fs.note = t('Opnieuw proberen is niet gelukt.') + ' (' + failureReason(res, body) + ')'
     } else {
       fs.note = t('{n} hervat, {s} overgeslagen.', { n: body.retried || 0, s: body.skipped || 0 })
     }
   } catch (err) {
-    fs.note = t('Opnieuw proberen is niet gelukt.')
+    fs.note = t('Opnieuw proberen is niet gelukt.') + ' (' + failureReason(null, null) + ')'
+  }
+  fs.busy = false
+  await refreshFailedTasks()
+}
+
+// ignoreRuns permanently deletes the named failed runs — reviewer request:
+// "wil ik ook errors kunnen negeren". A retry is not always the answer: a
+// failure on a PR that has meanwhile been merged, or one that will never
+// succeed (a `gh` call the reviewer has no rights for), is simply not work any
+// more, and while it sits in the list this modal reopens over everything on
+// every page. The sanctioned write path, like retryAll: POST starts an
+// ignore_runs Execution whose own Activity does every deletion (see
+// .claude/rules/workflows-write-boundary.md).
+async function ignoreRuns(runIds) {
+  if (fs.busy || runIds.length === 0) return
+  fs.busy = true
+  fs.confirmIgnoreAll = false
+  fs.note = t('Bezig met negeren…')
+  try {
+    const res = await fetch('/api/workflows/ignore-runs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ runIds }),
+    })
+    const body = await res.json().catch(() => null)
+    if (!res.ok || !body || !body.ok) {
+      fs.note = t('Negeren is niet gelukt.') + ' (' + failureReason(res, body) + ')'
+    } else {
+      fs.note = t('{n} genegeerd, {s} overgeslagen.', { n: body.ignored || 0, s: body.skipped || 0 })
+    }
+  } catch (err) {
+    fs.note = t('Negeren is niet gelukt.') + ' (' + failureReason(null, null) + ')'
   }
   fs.busy = false
   await refreshFailedTasks()
@@ -205,7 +258,7 @@ function dialog() {
         </div>
 
         <div data-testid="failed-tasks-list" class="min-h-0 flex-1 overflow-y-auto">
-          ${() => visibleRows().map((run) => problemRunRow(run, fs.prTitles))}
+          ${() => visibleRows().map((run) => problemRunRow(run, fs.prTitles, { onIgnore: (r) => ignoreRuns([r.runId]) }))}
         </div>
 
         <div class="contents">
@@ -242,6 +295,25 @@ function dialog() {
           </button>
           <button
             type="button"
+            data-testid="failed-tasks-ignore-all"
+            disabled="${() => fs.busy}"
+            title="${t('Verwijder alle mislukte taken uit de lijst zonder ze opnieuw te proberen')}"
+            class="rounded-lg border border-slate-200 px-3 py-1.5 text-[12px] font-semibold text-slate-700 hover:bg-slate-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800/60"
+            @click="${(e) => {
+              if (e) e.stopPropagation()
+              // Two presses, see fs.confirmIgnoreAll. The LABEL says which
+              // press you are on — never a colour-only cue.
+              if (!fs.confirmIgnoreAll) {
+                fs.confirmIgnoreAll = true
+                return
+              }
+              ignoreRuns(fs.rows.map((r) => r.runId))
+            }}"
+          >
+            ${() => (fs.confirmIgnoreAll ? t('Zeker? Alles negeren') : t('Alles negeren'))}
+          </button>
+          <button
+            type="button"
             data-testid="failed-tasks-snooze"
             class="rounded-lg border border-slate-200 px-3 py-1.5 text-[12px] font-semibold text-slate-700 hover:bg-slate-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800/60"
             @click="${(e) => {
@@ -251,7 +323,12 @@ function dialog() {
           >
             ${t('Negeer 5 minuten')}
           </button>
-          <span data-testid="failed-tasks-note" class="min-w-0 flex-1 truncate text-[12px] text-slate-500 dark:text-zinc-500">${() => fs.note}</span>
+          <span
+            data-testid="failed-tasks-note"
+            class="min-w-0 flex-1 truncate text-[12px] text-slate-500 dark:text-zinc-500"
+            title="${() => fs.note}"
+            >${() => fs.note}</span
+          >
         </div>
       </div>
     </div>

@@ -133,6 +133,7 @@ See `.claude/rules/workflows-write-boundary.md` and
 | `ready_for_review` | `.claude/docs/workflows-trackers.md` |
 | `remove_reviewer` | `.claude/docs/workflows-trackers.md` |
 | `cleanup` | `.claude/docs/workflows-trackers.md` |
+| `ignore_runs` (delete the failures the reviewer chose to ignore) | `.claude/docs/tembed-endpoints.md` |
 
 Also in `.claude/docs/workflows-trackers.md`: "Surfacing failures"
 (`run_errors.go` + `GET /api/problems`) — how a best-effort Activity's silent

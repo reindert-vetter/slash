@@ -80,6 +80,51 @@ test.describe('global failed-tasks dialog', () => {
     await expect(page.getByTestId('failed-tasks-dialog')).toHaveCount(0)
   })
 
+  test('ignores one failure, and the whole list after a confirm press', async ({ page }) => {
+    await enableFailedTasksPopup(page)
+    // The stub is mutable: an ignored run really disappears from the next
+    // GET /api/problems, exactly as the deleted run would server-side.
+    let remaining = rows(5)
+    await page.route('**/api/problems', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ...PROBLEMS, failedRuns: remaining }),
+      }),
+    )
+    const ignored = []
+    await page.route('**/api/workflows/ignore-runs', (route) => {
+      const ids = JSON.parse(route.request().postData() || '{}').runIds || []
+      ignored.push(...ids)
+      remaining = remaining.filter((r) => !ids.includes(r.runId))
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ok: true, ignored: ids.length, skipped: 0 }),
+      })
+    })
+    await page.goto('/pr-overview')
+    await appReady(page)
+
+    const dialog = page.getByTestId('failed-tasks-dialog')
+    await dialog.getByTestId('problem-ignore').first().click()
+    await expect(page.getByTestId('failed-tasks-note')).toHaveText('1 genegeerd, 0 overgeslagen.')
+    expect(ignored).toEqual(['run-boom-0'])
+    await expect(page.getByTestId('failed-tasks-title')).toHaveText('Mislukte taken van de laatste 4 dagen · 4')
+
+    // "Alles negeren" needs a second press: the label itself says so, never a
+    // colour alone.
+    const all = page.getByTestId('failed-tasks-ignore-all')
+    await expect(all).toHaveText('Alles negeren')
+    await all.click()
+    await expect(all).toHaveText('Zeker? Alles negeren')
+    expect(ignored).toEqual(['run-boom-0'])
+    await all.click()
+    expect(ignored).toEqual(['run-boom-0', 'run-boom-1', 'run-boom-2', 'run-boom-3', 'run-boom-4'])
+    // Nothing left to fail, so the dialog closes itself.
+    await expect(dialog).toHaveCount(0)
+  })
+
   test('retries every failure of the window in one press', async ({ page }) => {
     await enableFailedTasksPopup(page)
     await stubProblems(page)

@@ -262,6 +262,20 @@ const (
 	// run lock). The completed runs carry nothing worth keeping — the file
 	// does — so the cleanup workflow sweeps them (sweepDebugLogRuns).
 	WorkflowDebugLog = "debug_log"
+	// WorkflowIgnoreRuns is the Workflow Type behind "negeren" in the global
+	// failed-tasks popup: the reviewer decided a failure needs no action, so
+	// its run is permanently deleted from the tembed store and thereby from
+	// every list built on it (the popup, the /pr-overview drawer, the review
+	// tree's Taken block). ONE-SHOT: one Execution per "negeer" press,
+	// signal-less, with exactly one deleteIgnoredRun Activity per named run
+	// id, mirroring debugLogWorkflow above.
+	//
+	// Deleting rather than remembering an "ignored" flag is deliberate: there
+	// is nothing left to ask about an ignored failure (a retry would have to
+	// un-ignore it first), so a new module/read-model would only add a table
+	// nothing ever reads back. engine.DeleteRun is the same durable primitive
+	// the cleanup workflow already uses for a run nobody will act on again.
+	WorkflowIgnoreRuns = "ignore_runs"
 	// WorkflowCommentBatch is the Workflow Type behind "laat Claude alle
 	// openstaande comments verwerken": ONE agentic Opus run that walks every
 	// open comment of a PR and edits code for it, landing the result through the
@@ -677,6 +691,21 @@ type IgnoreCommentInput struct {
 type IgnoreCommentSignal struct {
 	CommentID string `json:"commentId"`
 	Ignored   bool   `json:"ignored"`
+}
+
+// IgnoreRunsInput starts an ignore_runs Execution: the failed runs the
+// reviewer chose to ignore. One Activity per id, in the given order, so the
+// number of Activities is a pure function of the input (replay-safe).
+type IgnoreRunsInput struct {
+	RunIDs []string `json:"runIds"`
+}
+
+// IgnoreRunsResult reports what the Execution did: Ignored counts the runs
+// really deleted, Skipped the ones that were not eligible (an unknown id, or a
+// run that is not `failed` — see the deleteIgnoredRun Activity).
+type IgnoreRunsResult struct {
+	Ignored int `json:"ignored"`
+	Skipped int `json:"skipped"`
 }
 
 // ResolveCallInput starts a resolve_call Execution: it asks the LLM to resolve
@@ -2878,6 +2907,38 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		}
 		return json.Marshal(map[string]int{"deleted": n})
 	})
+	// Activity: permanently delete ONE failed run the reviewer chose to ignore
+	// (write, workflow-driven — engine.DeleteRun, the same primitive the
+	// cleanup Activities use). Only a run that is really tembed.StatusFailed
+	// qualifies: an id that is unknown by now, or a run that has since been
+	// retried and is running/completed again, is reported as skipped instead of
+	// being torn out from under whatever is driving it. Idempotent, so replay
+	// is safe — a second pass simply finds the run gone and skips it.
+	engine.RegisterActivity("deleteIgnoredRun", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			RunID string `json:"runId"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		runs, err := m.engine.Runs()
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range runs {
+			if r.ID != arg.RunID {
+				continue
+			}
+			if r.Status != tembed.StatusFailed {
+				break
+			}
+			if err := m.engine.DeleteRun(r.ID); err != nil {
+				return nil, fmt.Errorf("delete ignored run %s: %w", r.ID, err)
+			}
+			return json.Marshal(map[string]bool{"deleted": true})
+		}
+		return json.Marshal(map[string]bool{"deleted": false})
+	})
 	// Activity: permanently delete any task_code_comment run whose own comment
 	// is gone from comments.db (see purgeOrphanCommentRuns) — unconditional,
 	// run once per cleanup pass regardless of the resolved PR targets.
@@ -3255,6 +3316,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowLangPref, langPrefWorkflow)
 	engine.RegisterWorkflow(WorkflowAppSettings, appSettingsWorkflow)
 	engine.RegisterWorkflow(WorkflowDebugLog, debugLogWorkflow)
+	engine.RegisterWorkflow(WorkflowIgnoreRuns, ignoreRunsWorkflow)
 	engine.RegisterWorkflow(WorkflowIgnoreComment, ignoreCommentWorkflow)
 	engine.RegisterWorkflow(WorkflowCleanup, cleanupWorkflow)
 	engine.RegisterWorkflow(WorkflowClaudeChat, claudeChatWorkflow)
@@ -4231,6 +4293,36 @@ func debugLogWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		return nil, fmt.Errorf("append debug log: %w", err)
 	}
 	return nil, nil
+}
+
+// ignoreRunsWorkflow permanently deletes the failed runs the reviewer chose
+// to ignore. One-shot and deterministic: exactly one Activity per id in
+// IgnoreRunsInput.RunIDs, in that order — no signals, no clock, no loop, and
+// nothing in the body reads live state. See WorkflowIgnoreRuns for why an
+// ignore is a deletion rather than a stored flag.
+func ignoreRunsWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
+	var in IgnoreRunsInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return nil, err
+	}
+	var res IgnoreRunsResult
+	for _, id := range in.RunIDs {
+		var out struct {
+			Deleted bool `json:"deleted"`
+		}
+		arg := struct {
+			RunID string `json:"runId"`
+		}{RunID: id}
+		if err := w.ExecuteActivity("deleteIgnoredRun", arg, &out); err != nil {
+			return nil, fmt.Errorf("ignore run %s: %w", id, err)
+		}
+		if out.Deleted {
+			res.Ignored++
+		} else {
+			res.Skipped++
+		}
+	}
+	return json.Marshal(res)
 }
 
 // ignoreCommentWorkflow persists which PR-wide comments the reviewer hid from
@@ -6042,6 +6134,32 @@ func (m *TaskManager) StartDebugLog(in DebugLogInput) (string, error) {
 		return "", fmt.Errorf("no engine")
 	}
 	return m.engine.StartWorkflow(WorkflowDebugLog, in)
+}
+
+// IgnoreFailedRuns runs ONE ignore_runs Execution to completion (signal-less,
+// so StartWorkflow drives it inline — mirrors startCleanup) and reports how
+// many failures were really deleted. This is the sanctioned write path: the
+// UI only starts the Execution, its own Activity does every deletion.
+func (m *TaskManager) IgnoreFailedRuns(runIDs []string) (*IgnoreRunsResult, error) {
+	if m.engine == nil {
+		return nil, fmt.Errorf("no engine")
+	}
+	runID, err := m.engine.StartWorkflow(WorkflowIgnoreRuns, IgnoreRunsInput{RunIDs: runIDs})
+	if err != nil {
+		return nil, err
+	}
+	status, err := m.engine.Status(runID)
+	if err != nil {
+		return nil, err
+	}
+	if status == tembed.StatusFailed {
+		return nil, fmt.Errorf("ignore runs failed (run %s)", runID)
+	}
+	var res IgnoreRunsResult
+	if err := m.engine.Result(runID, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
 }
 
 // findAppSettingsRunLocked scans for a running/waiting app_settings

@@ -692,12 +692,15 @@ Signal-less, one Execution per run.
   register its type. A name belongs in the map only once its registering code is
   deleted. Since cleanup itself only runs in the server, the CLI never runs this
   purge either.
-- **Also deletes the completed `debug_log` one-shots** (`sweepDebugLogRuns`,
-  `cleanup.go`), unconditionally, once per pass and older than
-  `debugLogRunAge` (1 hour). Debug mode starts one such Execution per flushed
-  batch of recorded events, so a debugging session leaves hundreds of run rows
-  whose content is worthless the moment the lines are on disk. The log FILE is
-  deliberately never touched, and a **failed** run is left in place so it stays
+- **Also deletes the completed one-shots whose whole effect lives elsewhere**
+  (`sweepDebugLogRuns` over `sweptOneShotTypes`, `cleanup.go`),
+  unconditionally, once per pass and older than `debugLogRunAge` (1 hour).
+  Two types are in that set: `debug_log` — debug mode starts one Execution per
+  flushed batch of recorded events, so a debugging session leaves hundreds of
+  run rows whose content is worthless the moment the lines are on disk — and
+  `ignore_runs`, whose effect is the failed run it deleted (see
+  `.claude/docs/tembed-endpoints.md`). The log FILE is deliberately never
+  touched, and a **failed** run of either type is left in place so it stays
   visible in "Mislukte taken". See `.claude/docs/debug-mode.md`.
 - **Also purges orphaned `task_code_comment` runs whose own comment is gone**
   (`purgeOrphanCommentRuns`, `cleanup.go`), unconditionally, once per pass —
