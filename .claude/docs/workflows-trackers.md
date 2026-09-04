@@ -381,6 +381,41 @@ should not need a manual "Generate review tree" click at all.
   `TestEligibleAutoIngestPRs*` (`autoingest_pref_test.go`),
   `tests/auto-ingest-pref.spec.mjs`.
 
+## `jira_inbox` (one per process)
+
+The reviewer's own **Jira notification feed** — the bell menu — as the first
+block of `/pr-overview` (see `.claude/docs/pr-overview.md`). One Execution for
+the whole process, not one per repo: that feed is per-**user**, and a Jira
+notification has no PR at all.
+
+- **One Signal, `jira_notify`, carries both actions**, distinguished by its
+  payload's `kind`: `{"kind":"refresh"}` (the 5-minute poller and the UI on
+  load) drives `refreshJiraNotifications`, `{"kind":"read","id":…}` drives
+  `markJiraNotificationRead`. One name because tembed's `WaitSignal` takes
+  exactly one; branching on a payload that comes straight out of the recorded
+  history stays deterministic.
+- **A fetch failure is a RESULT, not an error.** `refreshJiraNotifications`
+  returns `{configured, stored, error}` rather than failing the Activity: no
+  API token, or a change in the undocumented endpoint it reads
+  (`modules/jira/notifications.go`), must not fail the tracker permanently —
+  it would then never poll again until a restart. The last outcome is kept
+  in-memory only (`TaskManager.jiraStatus`) so `GET /api/jira/notifications`
+  can say "not configured" instead of silently showing an empty list.
+- **Why not fold this into the comment/task workflows**, as asked: those are
+  per-PR, per-comment task state keyed by (repo, pr, comment) and started from
+  a reviewer action on a block. This is a polled, user-wide feed — exactly the
+  mould `pr_inbox` above already provides, so it mirrors that and leaves the
+  comment workflows untouched.
+- **Retention: 30 days**, Reindert's own cap. The `cleanup` workflow gained a
+  `purgeJiraNotifications` Activity (`jiraNotifyRetention`), an age-based sweep
+  next to the `test_run` residue one — unconditional and PR-independent, since
+  a notification belongs to a Jira issue, never to a PR.
+- **`modules/jiranotify`** is the read-model: one row per notification with
+  both the feed's own `feed_unread` and a local `read_at` (set when the
+  reviewer opened it here). Effective unread = both. The local column exists
+  because this app never marks anything read in Jira — without it every row the
+  reviewer opened would come back unread on the very next poll.
+
 ## Persisting reviewer approval (`approve` + `modules/approvals`)
 
 One Execution per PR, making approval durable across a refresh.

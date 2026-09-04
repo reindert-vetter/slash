@@ -329,6 +329,11 @@ export const EN = {
   '{n} genegeerd, {s} overgeslagen.': '{n} ignored, {s} skipped.',
 
   // ── src/overview.mjs ─────────────────────────────────────────────────────
+  // Jira notification feed (the bell menu as rows, above the PR sections).
+  'Alleen ongelezen': 'Only show unread',
+  ongelezen: 'unread',
+  Ongelezen: 'Unread',
+  'Alles gelezen.': 'All caught up.',
   'Werktrees voorbereiden…': 'Preparing worktrees…',
   'Blocks scannen…': 'Scanning blocks…',
   'Relaties opbouwen…': 'Building relations…',

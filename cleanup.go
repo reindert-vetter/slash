@@ -157,6 +157,11 @@ type CleanupResult struct {
 	// one PR target or to the merged/age gate above: this is about the AGE of
 	// the residue itself, never about whether a PR is merged.
 	TestRunResidueSwept int `json:"testRunResidueSwept"`
+	// JiraNotificationsPurged is the number of Jira notifications deleted this
+	// pass because they are older than jiraNotifyRetention (30 days) — see
+	// jira_notifications.go. Unconditional and PR-independent: a notification
+	// belongs to a Jira issue, never to a PR.
+	JiraNotificationsPurged int `json:"jiraNotificationsPurged"`
 }
 
 // reWorktreeDir extracts a PR number from a worktrees dir name: "pr-<n>-base"

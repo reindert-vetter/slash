@@ -26,6 +26,7 @@ import (
 	"slash/modules/github"
 	"slash/modules/inbox"
 	"slash/modules/jira"
+	"slash/modules/jiranotify"
 	"slash/modules/langpref"
 	"slash/modules/prmeta"
 	"slash/modules/relations"
@@ -119,6 +120,12 @@ const (
 	// from GitHub and writes it into the inbox read-model. It is the only path
 	// that reads GitHub for the overview — the HTTP handlers read the read-model.
 	WorkflowPRInbox = "pr_inbox"
+	// WorkflowJiraInbox is the Workflow Type that owns the reviewer's Jira
+	// notification feed (the bell menu): ONE Execution for the whole process,
+	// since that feed is per-user rather than per-repo. Each "jira_notify"
+	// Signal either refreshes the feed into the jiranotify read-model or marks
+	// one notification read. See jira_notifications.go.
+	WorkflowJiraInbox = "jira_inbox"
 	// WorkflowBuildRelations is the Workflow Type that derives block relations
 	// (the call-graph edges): one Execution per PR. It runs a build once on start
 	// and again on each "rebuild" Signal (re-ingest). Designed to be extended with
@@ -335,6 +342,13 @@ const (
 	// .../signals/{name} route (tasks_api.go) dispatches purely on this literal,
 	// so it must not collide with an existing one.
 	SignalAutoWarn = "autowarn"
+	// SignalJiraNotify carries both actions of the jira_inbox tracker — a
+	// refresh (the poller/the UI on load) and a "the reviewer opened this one"
+	// mark-read — distinguished by the payload's `kind`. One name, because
+	// tembed's WaitSignal takes exactly one. Deliberately a distinct literal
+	// from every other Signal name (the generic .../signals/{name} route
+	// dispatches purely on it).
+	SignalJiraNotify = "jira_notify"
 	// SignalAutoIngestPref delivers the desired mode ("off"|"own"|"all") to the
 	// auto_ingest_pref tracker (from the UI toggle on /settings and in the
 	// /pr-overview header). Deliberately a distinct literal from the other
@@ -975,10 +989,15 @@ type TaskManager struct {
 	// scope, i.e. the pre-existing behaviour) and the recording in
 	// runAgenticReview a no-op.
 	warnreviewed *warnreviewed.Module
-	claude       claude.Client
-	jira         jira.Client
-	db           *sql.DB
-	dataDir      string
+	// jiranotify is the read-model of the reviewer's Jira notification feed
+	// (the bell menu), written by the jira_inbox tracker's Activities. Set
+	// post-construction like the stores above; a nil store makes those
+	// Activities no-ops and leaves GET /api/jira/notifications empty.
+	jiranotify *jiranotify.Module
+	claude     claude.Client
+	jira       jira.Client
+	db         *sql.DB
+	dataDir    string
 	// appDataDir is the directory settings.json/praise-words.json live in
 	// (server.dataDir in api.go — the same dir /api/settings, /api/names and
 	// /api/praisewords already read from). NOT the same as dataDir above:
@@ -1028,6 +1047,8 @@ type TaskManager struct {
 	apprRuns          map[prKey]string // PR → approve Run ID
 	ignRuns           map[prKey]string // PR → ignore_comment Run ID
 	inboxRun          string           // pr_inbox Run ID (one per repo/process)
+	jiraRun           string           // jira_inbox Run ID (one per process — the feed is per-user, not per-repo)
+	jiraStatus        jiraNotifyStatus // last refresh outcome, in-memory only (see jira_notifications.go)
 	autoWarnRun       string           // auto_warn Run ID (one per repo/process)
 	autoIngestPrefRun string           // auto_ingest_pref Run ID (one per repo/process)
 	langPrefRun       string           // lang_pref Run ID (one per repo/process)
@@ -2962,6 +2983,25 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return json.Marshal(map[string]int{"swept": n})
 	})
 
+	// Activity: drop Jira notifications older than jiraNotifyRetention (30
+	// days) — the age-based half of the cleanup pass, like the test_run residue
+	// sweep above. Unconditional, unrelated to any PR.
+	engine.RegisterActivity("purgeJiraNotifications", func(ctx context.Context, in []byte) ([]byte, error) {
+		if m.jiranotify == nil {
+			return json.Marshal(map[string]int{"deleted": 0})
+		}
+		var arg CleanupInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		before := arg.Cutoff.Add(cleanupMergedAge - jiraNotifyRetention)
+		n, err := m.jiranotify.Purge(ctx, before)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]int{"deleted": n})
+	})
+
 	// Activity: delete the completed one-shot debug_log runs (see
 	// sweepDebugLogRuns, cleanup.go). The debug log itself lives in a file and
 	// is deliberately kept — only the run rows those one-shots leave behind
@@ -3348,9 +3388,13 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return nil, nil
 	})
 
+	// The Jira-notification tracker's two Activities (see jira_notifications.go).
+	m.registerJiraNotifyActivities(engine)
+
 	engine.RegisterWorkflow(WorkflowTaskCodeComment, taskCodeCommentWorkflow)
 	engine.RegisterWorkflow(WorkflowPRStatus, prStatusWorkflow)
 	engine.RegisterWorkflow(WorkflowPRInbox, prInboxWorkflow)
+	engine.RegisterWorkflow(WorkflowJiraInbox, jiraInboxWorkflow)
 	engine.RegisterWorkflow(WorkflowBuildRelations, buildRelationsWorkflow)
 	engine.RegisterWorkflow(WorkflowIngest, ingestWorkflow)
 	engine.RegisterWorkflow(WorkflowResolveCall, resolveCallWorkflow)
@@ -3751,6 +3795,13 @@ func cleanupWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		return nil, fmt.Errorf("sweep debug_log runs: %w", err)
 	}
 
+	var jiraNotifications struct {
+		Deleted int `json:"deleted"`
+	}
+	if err := w.ExecuteActivity("purgeJiraNotifications", in, &jiraNotifications); err != nil {
+		return nil, fmt.Errorf("purge jira notifications: %w", err)
+	}
+
 	var targets CleanupTargets
 	if err := w.ExecuteActivity("resolveCleanupTargets", in, &targets); err != nil {
 		return nil, fmt.Errorf("resolve cleanup targets: %w", err)
@@ -3762,6 +3813,7 @@ func cleanupWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		OrphanCommentRunsDeleted: orphanComments.Deleted,
 		TestRunResidueSwept:      testRunResidue.Swept,
 		DebugLogRunsDeleted:      debugLogRuns.Deleted,
+		JiraNotificationsPurged:  jiraNotifications.Deleted,
 	}
 	for _, t := range targets.Targets {
 		var purged CleanupPurgeResult

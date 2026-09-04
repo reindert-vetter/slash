@@ -29,6 +29,7 @@ import (
 	"slash/modules/github"
 	"slash/modules/inbox"
 	"slash/modules/jira"
+	"slash/modules/jiranotify"
 	"slash/modules/langpref"
 	"slash/modules/prmeta"
 	"slash/modules/relations"
@@ -278,6 +279,27 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		lp.Close()
 		return nil, nil, err
 	}
+	jn, err := jiranotify.Open(dataDir + "/jiranotify.db")
+	if err != nil {
+		sq.Close()
+		cs.Close()
+		ib.Close()
+		rel.Close()
+		pm.Close()
+		cr.Close()
+		tc.Close()
+		ap.Close()
+		ex.Close()
+		ru.Close()
+		ci.Close()
+		ch.Close()
+		aw.Close()
+		wd.Close()
+		aip.Close()
+		lp.Close()
+		wr.Close()
+		return nil, nil, err
+	}
 
 	// Under test (SLASH_GITHUB=off) use a no-network Fake so runs never touch a
 	// real repo; otherwise talk to GitHub via gh.
@@ -369,6 +391,9 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 	// resolveWarningScope's filter a pass-through and the recording in
 	// runAgenticReview a no-op.
 	mgr.warnreviewed = wr
+	// Same pattern for the Jira-notification read-model: a nil store makes the
+	// jira_inbox Activities no-ops and leaves the feed list empty.
+	mgr.jiranotify = jn
 	// Mirror every glue-level log line (poller/startup errors that are not a
 	// workflow run of their own) into the in-memory problem buffer behind
 	// GET /api/problems — see run_errors.go.
@@ -399,6 +424,11 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		// Own the PR inbox via the workflow: fetch an initial snapshot into the
 		// read-model and start the refresh poller (the UI reads only the read-model).
 		mgr.EnsureInbox(ctx)
+		// Own the Jira notification feed the same way: one process-wide tracker
+		// that refreshes the read-model every 5 minutes (see
+		// jira_notifications.go). Costs nothing when no API token is
+		// configured — the Activity then records "not configured" and stops.
+		mgr.StartJiraInboxPolling(ctx)
 		// Own the per-repo auto-warn tracker so the toggle next to the theme
 		// button has a Run ID to signal to (no poller — it only reacts to UI
 		// signals).
@@ -446,6 +476,7 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		_ = lp.Close()
 		_ = wd.Close()
 		_ = wr.Close()
+		_ = jn.Close()
 		return cs.Close()
 	}
 	return &tasks{engine: engine, manager: mgr, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, testcovers: tc, approvals: ap, explain: ex, reviewerusage: ru, commentignore: ci, chat: ch}, closeFn, nil
@@ -764,6 +795,15 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// GET /api/autowarn → read-only auto-warn preference ({"enabled":bool}),
 	// backing the toggle next to the theme button in prInfoCard.
 	mux.HandleFunc("/api/autowarn", s.handleAutoWarn)
+
+	// GET /api/jira/notifications → the read-only Jira notification feed (the
+	// bell menu) out of the jiranotify read-model, plus the tracker's Run ID so
+	// the UI can signal a "read" to it via .../signals/jira_notify.
+	mux.HandleFunc("/api/jira/notifications", s.handleJiraNotifications)
+	// POST /api/workflows/jira_inbox → start (or reuse) the notification
+	// tracker and return its Run ID. Starting an Execution is the sanctioned UI
+	// write path.
+	mux.HandleFunc("/api/workflows/jira_inbox", s.handleJiraInboxStart)
 	// POST /api/workflows/auto_ingest_pref {repo?} → ensure the per-repo
 	// auto-ingest-preference tracker; the UI then signals its mode
 	// ("off"|"own"|"all") to its Run ID via .../signals/auto_ingest_pref.
@@ -1239,6 +1279,31 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			writeJSON(w, http.StatusOK, map[string]string{"status": "set"})
+			return
+		}
+		// The jira_notify signal carries the reviewer's own action on the Jira
+		// notification feed: "read" marks one notification read (the only write
+		// this page does), anything else is a plain refresh. Only these two
+		// kinds are forwarded, and a "read" without an id is rejected — the
+		// same "whatever the body says, only what the UI may do is passed on"
+		// restriction the pr_status branch above applies.
+		if parts[2] == SignalJiraNotify {
+			var body JiraNotifySignal
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "invalid jira signal", http.StatusBadRequest)
+				return
+			}
+			if body.Kind != "read" {
+				body = JiraNotifySignal{Kind: "refresh"}
+			} else if strings.TrimSpace(body.ID) == "" {
+				http.Error(w, "invalid jira signal", http.StatusBadRequest)
+				return
+			}
+			if err := s.tasks.engine.SignalWorkflow(runID, SignalJiraNotify, body); err != nil {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"status": body.Kind})
 			return
 		}
 		// The ignore signal carries one comment id + the desired flag to the
@@ -2019,6 +2084,53 @@ func (s *server) handleAutoWarn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "enabled": enabled})
+}
+
+// handleJiraInboxStart starts (or reuses) the process-wide jira_inbox tracker
+// and returns its Run ID. The UI then marks a notification read by signalling
+// {"kind":"read","id":…} to .../signals/jira_notify.
+func (s *server) handleJiraInboxStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	runID := s.tasks.manager.EnsureJiraInbox(r.Context())
+	if runID == "" {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "could not start jira_inbox"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
+}
+
+// handleJiraNotifications serves GET /api/jira/notifications — the reviewer's
+// own Jira bell feed, read straight from the read-model (never a live
+// Atlassian call: only the jira_inbox tracker talks to Jira). `configured` is
+// false when no API token is set, which the UI treats as "the feature is off"
+// rather than an error.
+func (s *server) handleJiraNotifications(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	items, err := s.tasks.manager.ListJiraNotifications(r.Context(), 50)
+	if err != nil {
+		http.Error(w, "query failed", http.StatusInternalServerError)
+		return
+	}
+	if items == nil {
+		items = []jiranotify.Item{}
+	}
+	st := s.tasks.manager.JiraNotifyStatus()
+	out := map[string]any{
+		"ok":         true,
+		"configured": st.Configured,
+		"items":      items,
+		"runId":      s.tasks.manager.JiraInboxRunID(),
+	}
+	if st.Error != "" {
+		out["error"] = st.Error
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // handleAutoIngestPrefStart starts (or reuses) the per-repo

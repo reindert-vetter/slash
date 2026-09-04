@@ -9,6 +9,57 @@ diff stats. `overview.html` → `src/overview.mjs`. Routing/shells live in
 It is **fully read-only** in the sense that it never writes directly to a
 module/table (per `.claude/rules/workflows-write-boundary.md`).
 
+## Jira notifications are the FIRST block on the page
+
+Reviewer request: "deze feature van jira wil ik in pr-overview als eerste row
+item zien. elke notification wil ik als pr (net als need action) in een lijst
+zien. filter by ongelezen. een item moet openen in een new venster naar jira
+comment." The screenshot he attached is Jira's own bell panel — "Notifications",
+an "Only show unread" toggle, tabs Direct/Watching.
+
+- **The data is the real bell feed**, not an approximation. Jira has no
+  supported API for it: `acli` has no notifications command and the Jira Cloud
+  platform REST API has no "my notifications" endpoint, so
+  `modules/jira/notifications.go` calls Atlassian's own
+  `…/gateway/api/notification-log/api/3/notifications?category=direct` with an
+  ordinary API token over basic auth. **That endpoint is undocumented and
+  unsupported** — a deliberate, explicit choice by Reindert, recorded in that
+  file's header along with what it costs. Parsing is therefore lenient (every
+  field optional, an entry without a link is skipped): a shape change degrades
+  to "no notifications", never to an error wall.
+- **Credentials come from the environment** (`SLASH_JIRA_EMAIL`,
+  `SLASH_JIRA_TOKEN`, optional `SLASH_JIRA_SITE`, all in the gitignored `.env`
+  — see `.env.example`). Deliberately **not** `data/settings.json`: that file is
+  served verbatim to the browser by `GET /api/settings`, so a token in it would
+  leak to every page. With no token nothing is fetched and the block simply
+  never appears.
+- **The fetching + storing is a tracker**, `jira_inbox` — see
+  `.claude/docs/workflows-trackers.md`. The page itself only reads
+  `GET /api/jira/notifications`, exactly like every other list here.
+- **Rows** (`jiraBlock`/`jiraRow`, `src/overview.mjs`) sit above the stacks and
+  every PR section, styled with the same `ROW_CLASS` as a PR row and carrying
+  `data-nav-row`/`data-nav-key="jira:<id>"`, so ↑/↓/Enter walk them through the
+  existing `currentRows()`/`paintSelection` machinery with no new keyboard code.
+  Each row is a plain `<a href target="_blank">` onto the feed's own deep link,
+  which already carries Jira's `focusedCommentId` — that is what makes it open
+  **on the comment**, in a **new window**.
+- **`activateSelected`/`activateSelectedForward` grew one branch for this**: an
+  `a[href]` with `target="_blank"` is `el.click()`ed instead of assigned to
+  `location.href`, so Enter/→ open the new window AND run the row's own
+  `@click` (mark read). Every other anchor row (the recent drawer) is unchanged.
+- **"Alleen ongelezen" is on by default** (`state.jiraUnreadOnly`), mirroring
+  Jira's own toggle; `jiraUnreadToggle` spells its state out in words
+  ("aan"/"uit") and the unread rows carry a dot **plus** a bold title — per the
+  colourblind rule the shape/word carries the meaning, never the colour.
+- **Opening a row marks it read**, and that is the one write this page does. It
+  goes the sanctioned way (`markJiraRead`): start/reuse the tracker
+  (`POST /api/workflows/jira_inbox`), then Signal it
+  (`…/signals/jira_notify`, `{"kind":"read","id":…}`); the tracker's Activity
+  writes the read-model. The row updates optimistically so the filter reacts at
+  once. Nothing is ever marked read **in Jira** — this app does not write into
+  an undocumented endpoint on the reviewer's behalf, which is exactly why the
+  read-model keeps its own `read_at` (see `modules/jiranotify`).
+
 ## The general `/` command menu
 
 `/` used to focus the search box. It now opens a **general command menu**
@@ -695,6 +746,9 @@ default" section.
 | `GET /api/problems` | Read-only → `{ok, failedRuns:[{runId,workflow,pr,updatedAt,error,comment?,retryable}], logErrors:[{at,scope,pr,message}], prTitles:{"<pr>":"<title>"}}`. Feeds "Mislukte taken" and the global dialog; superseded failures are already filtered out, and both halves are limited to the last `problemWindow` (four days). |
 | `POST /api/workflows/retry-all` | Resume every failure of that window (`{ok, retried, skipped}`) — see `.claude/docs/tembed-endpoints.md`. |
 | `POST /api/workflows/ignore-runs` | `{runIds:[…]}` → permanently delete those failed runs (`{ok, ignored, skipped}`) — see `.claude/docs/tembed-endpoints.md`. |
+| `GET /api/jira/notifications` | Read-only Jira bell feed from the `jiranotify` read-model → `{ok, configured, items, runId, error?}`. `configured:false` = no API token; never a live Atlassian call. |
+| `POST /api/workflows/jira_inbox` | Start/reuse the notification tracker → `{runId}`, so the UI can signal a "read" to it. |
+| `POST /api/workflows/{runID}/signals/jira_notify` | `{"kind":"read","id":…}` marks one notification read; any other kind is forwarded as a plain refresh. |
 | `GET /api/prs` | (existing) ingested PRs + counts, for the recent drawer. |
 
 ### "Recent gegenereerd" rows are enriched from the SAME local prmeta read, no extra request

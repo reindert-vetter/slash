@@ -46,6 +46,8 @@ type Issue struct {
 type Client interface {
 	// Issue fetches a single Jira issue by key (e.g. "INTEG-562").
 	Issue(ctx context.Context, key string) (Issue, error)
+	// Notifications reads the reviewer's own bell feed (see notifications.go).
+	Notifications(ctx context.Context, limit int) ([]Notification, error)
 }
 
 // Module is the production Client: it shells out to `acli jira workitem view`.

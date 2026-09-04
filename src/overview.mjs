@@ -44,6 +44,12 @@ const state = reactive({
   error: '',
   cached: false,
   inboxRunId: '', // pr_inbox workflow Run ID — target for refresh signal + heartbeat
+  // jira — the reviewer's own Jira notification feed (the bell menu), read
+  // from GET /api/jira/notifications (the jira_inbox tracker's read-model).
+  // Rendered as the FIRST block of the page, above every PR section.
+  jira: [],
+  jiraUnreadOnly: true, // mirrors Jira's own "Only show unread" toggle, on by default
+  jiraRunId: '', // jira_inbox Run ID — target for the "read" signal
   sections: [], // [{ title, prs: Row[] }]
   statuses: {}, // prUid -> Status, backfilled async
   approvals: {}, // prUid -> { done, total }, backfilled async (ingested PRs only)
@@ -1990,9 +1996,179 @@ function filterDrawer() {
   `
 }
 
+// ── Jira notifications ────────────────────────────────────────────────────
+// The bell feed from Jira as ordinary rows, above the PR sections (Reindert:
+// "deze feature van jira wil ik in pr-overview als eerste row item zien. elke
+// notification wil ik als pr (net als need action) in een lijst zien"). Every
+// row is a plain <a target="_blank"> straight to the Jira comment, so opening
+// one never leaves the overview. See .claude/docs/pr-overview.md.
+
+// loadJiraNotifications pulls the read-model. Read-only, like every other GET
+// on this page: only the jira_inbox tracker ever talks to Jira itself.
+async function loadJiraNotifications() {
+  try {
+    const res = await fetch('/api/jira/notifications')
+    if (!res.ok) return
+    const body = await res.json()
+    if (!body || !body.ok) return
+    state.jiraRunId = body.runId || ''
+    state.jira = Array.isArray(body.items) ? body.items : []
+  } catch (err) {
+    // Keep whatever we already showed — a transient failure must never blank
+    // the list (same reasoning as loadRunningCount).
+  }
+}
+
+// visibleJiraNotifications applies the "Alleen ongelezen" filter.
+function visibleJiraNotifications() {
+  if (!state.jiraUnreadOnly) return state.jira
+  return state.jira.filter((n) => n.unread)
+}
+
+function jiraUnreadCount() {
+  return state.jira.filter((n) => n.unread).length
+}
+
+// markJiraRead is the ONE write this page does, and it goes the sanctioned
+// way: start (or reuse) the jira_inbox Execution, then Signal it — the
+// tracker's own Activity is what touches the read-model
+// (.claude/rules/workflows-write-boundary.md). The row is updated optimistically
+// so the filter reacts immediately; the next poll confirms it.
+async function markJiraRead(n) {
+  if (!n || !n.unread) return
+  state.jira = state.jira.map((it) => (it.id === n.id ? { ...it, unread: false } : it))
+  try {
+    let runId = state.jiraRunId
+    if (!runId) {
+      const started = await fetch('/api/workflows/jira_inbox', { method: 'POST' })
+      const body = await started.json()
+      runId = (body && body.runId) || ''
+      state.jiraRunId = runId
+    }
+    if (!runId) return
+    await fetch('/api/workflows/' + encodeURIComponent(runId) + '/signals/jira_notify', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'read', id: n.id }),
+    })
+  } catch (err) {
+    console.error('mark jira notification read failed:', err)
+  }
+}
+
+// jiraUnreadMark — the unread signal. Per the colourblind rule the SHAPE and
+// the WORD carry it (a filled dot plus a bold title, see jiraRow), never the
+// colour on its own.
+function jiraUnreadMark(n) {
+  if (!n.unread) return html`<span class="inline-block h-2 w-2 shrink-0"></span>`
+  return html`<span
+    data-testid="jira-unread-dot"
+    title="${t('Ongelezen')}"
+    class="inline-block h-2 w-2 shrink-0 rounded-full bg-indigo-500 dark:bg-indigo-400"
+  ></span>`
+}
+
+// avatarHTML returns an arrow.js TEMPLATE, not an HTML string — so it goes in
+// as an ordinary child slot, never through .innerHTML (which would stringify
+// the template function into the row, see the statically-interpolated-template
+// pitfall in .claude/rules/arrowjs-pitfalls.md). Block.mjs's avatarHtmlString is
+// the variant for real string contexts.
+function jiraAvatarMark(n) {
+  return html`<span class="flex w-8 shrink-0 items-center justify-center"
+    >${() => avatarHTML(n.actor || n.issueKey || '?', n.avatarUrl, 'h-6 w-6')}</span
+  >`
+}
+
+// jiraRow — one notification. An <a target="_blank"> (not a popover row like
+// prRow): the reviewer asked for "openen in een new venster naar jira comment",
+// and the href already carries Jira's own focusedCommentId deep link.
+function jiraRow(n) {
+  return html`
+    <a
+      href="${n.url}"
+      target="_blank"
+      rel="noopener noreferrer"
+      data-testid="jira-row"
+      data-jira-id="${n.id}"
+      data-nav-row
+      data-nav-key="${'jira:' + n.id}"
+      class="${ROW_CLASS}"
+      @click="${() => markJiraRead(n)}"
+    >
+      ${() => jiraUnreadMark(n)} ${() => jiraAvatarMark(n)}
+      <div class="min-w-0 flex-1">
+        <h3
+          class="${'truncate text-[13.5px] text-slate-900 dark:text-zinc-100 group-hover:text-black dark:group-hover:text-white ' +
+          (n.unread ? 'font-semibold' : 'font-normal')}"
+        >
+          ${n.title || n.issueKey || n.url}
+        </h3>
+        <p class="mt-0.5 truncate text-xs text-slate-500 dark:text-zinc-500">
+          ${(n.issueKey ? n.issueKey + ' · ' : '') + (n.actor ? n.actor + ' · ' : '') + relativeTime(n.at)}
+        </p>
+      </div>
+      ${chevronFilled('h-4 w-4 text-slate-400 dark:text-zinc-600 group-hover:text-slate-600 dark:group-hover:text-zinc-300')}
+    </a>
+  `.key('jira:' + n.id)
+}
+
+// jiraUnreadToggle mirrors Jira's own "Only show unread" switch. The state is
+// spelled out in words ("Alleen ongelezen" + aan/uit), not carried by colour.
+function jiraUnreadToggle() {
+  return html`<button
+    data-testid="jira-unread-toggle"
+    class="${'shrink-0 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors ' +
+    (state.jiraUnreadOnly
+      ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-500/40 dark:bg-indigo-500/15 dark:text-indigo-300'
+      : 'border-slate-200 bg-white text-slate-600 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400')}"
+    @click="${() => (state.jiraUnreadOnly = !state.jiraUnreadOnly)}"
+  >
+    ${() => t('Alleen ongelezen') + ': ' + (state.jiraUnreadOnly ? t('aan') : t('uit'))}
+  </button>`
+}
+
+// jiraBlock renders the whole section. Its key encodes the visible row set
+// (same reasoning as sectionBlock: the row list is a static interpolation, so
+// only a changed key re-reconciles it) plus the filter, so toggling it really
+// repaints.
+function jiraBlock() {
+  const rows = visibleJiraNotifications()
+  if (!state.jira.length) return null
+  return html`
+    <section data-testid="jira-section">
+      <div class="mb-3 mt-6 flex items-center gap-2">
+        <h2 class="text-[15px] font-semibold text-slate-900 dark:text-zinc-100">Jira</h2>
+        <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600 dark:bg-zinc-800 dark:text-zinc-400"
+          >${() => jiraUnreadCount() + ' ' + t('ongelezen')}</span
+        >
+        ${jiraUnreadToggle()}
+      </div>
+      ${() =>
+        rows.length
+          ? html`<div class="rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-900/60">
+              ${() => visibleJiraNotifications().map((n) => jiraRow(n))}
+            </div>`.key('jira:list')
+          : html`<p class="rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-900/60 px-4 py-6 text-center text-sm text-slate-500 dark:text-zinc-500">
+              ${t('Alles gelezen.')}
+            </p>`.key('jira:empty')}
+    </section>
+  `.key('jira:' + (state.jiraUnreadOnly ? 'unread' : 'all') + ':' + rows.map((n) => n.id + (n.unread ? '!' : '')).join(','))
+}
+
+// jiraSlot is the toggling wrapper. It sits in its OWN reactive slot with a
+// stable element root (see "Never key a template whose entire body is one
+// toggling expression" in .claude/rules/arrowjs-pitfalls.md), so the Jira feed
+// arriving/changing never re-runs mainContent's own section closure.
+function jiraSlot() {
+  const block = jiraBlock()
+  return block ? [block] : []
+}
+
 function mainContent() {
   return html`
-    <div data-testid="inbox-sections">
+    <div>
+      <div class="contents">${() => jiraSlot()}</div>
+      <div data-testid="inbox-sections">
       ${() => {
         if (state.loading) return loadingSkeletonList()
         if (state.error) return errorCard(state.error)
@@ -2036,6 +2212,7 @@ function mainContent() {
         }
         return out
       }}
+      </div>
     </div>
   `
 }
@@ -2918,6 +3095,13 @@ function activateSelected() {
   const el = rows[selIndex]
   if (!el) return
   if (el.matches('a[href]')) {
+    // A row that opens in a new window (the Jira notifications) must do so
+    // from the keyboard too — and its own @click handler (mark read) has to
+    // run, which location.href would skip. A real click does both.
+    if (el.getAttribute('target') === '_blank') {
+      el.click()
+      return
+    }
     location.href = el.getAttribute('href')
     return
   }
@@ -2989,6 +3173,10 @@ function activateSelectedForward() {
   const el = rows[selIndex]
   if (!el) return
   if (el.matches('a[href]')) {
+    if (el.getAttribute('target') === '_blank') {
+      el.click()
+      return
+    }
     location.href = el.getAttribute('href')
     return
   }
@@ -3253,6 +3441,10 @@ watch(
       state.problemsOpen,
       state.failedRuns.length,
       state.logErrors.length,
+      // The Jira block's rows are navigable too, and both the feed arriving
+      // and the unread filter change how many there are.
+      state.jira.length,
+      state.jiraUnreadOnly,
     ]),
   () => scheduleRepaint(),
 )
@@ -3401,9 +3593,12 @@ function startLiveSync() {
   setInterval(() => {
     if (activeTab()) {
       reloadSnapshot()
-      // Both ride along on the existing cadence — no timer of their own.
+      // These ride along on the existing cadence — no timer of their own. The
+      // Jira read-model itself is refreshed server-side every 5 minutes (see
+      // jira_notifications.go); this only re-reads it.
       loadProblems()
       loadRunningCount()
+      loadJiraNotifications()
     }
   }, RELOAD_MS)
   document.addEventListener('visibilitychange', sendHeartbeat)
@@ -3415,6 +3610,7 @@ initFailedTasksPopup()
 loadInbox()
 loadProblems()
 loadRunningCount()
+loadJiraNotifications()
 ensureAutoIngestPref()
 ensureAutoWarn()
 scheduleRepaint()

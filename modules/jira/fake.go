@@ -11,6 +11,7 @@ import (
 type Fake struct {
 	mu     sync.Mutex
 	issues map[string]Issue
+	notifs []Notification
 	Calls  []string // keys requested, in order
 }
 
@@ -30,4 +31,22 @@ func (f *Fake) Issue(_ context.Context, key string) (Issue, error) {
 	defer f.mu.Unlock()
 	f.Calls = append(f.Calls, key)
 	return f.issues[key], nil
+}
+
+// SetNotifications programs the list Notifications returns.
+func (f *Fake) SetNotifications(list []Notification) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.notifs = list
+}
+
+// Notifications returns the programmed feed (empty by default, so an offline
+// run simply has no Jira notifications rather than an error).
+func (f *Fake) Notifications(_ context.Context, limit int) ([]Notification, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if limit > 0 && limit < len(f.notifs) {
+		return append([]Notification(nil), f.notifs[:limit]...), nil
+	}
+	return append([]Notification(nil), f.notifs...), nil
 }
