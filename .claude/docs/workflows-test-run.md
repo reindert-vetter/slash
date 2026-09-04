@@ -58,6 +58,19 @@ testnaam is vrije tekst die het model verzint — begrensd op lengte
 (`testRunMaxNameLen`), nooit gebruikt om iets te adresseren/schrijven, alleen
 om te tonen.
 
+**Twee markers op één fysieke regel worden apart herkend.** Het model zet
+soms twee markers op dezelfde regel (`[slash:test-pass] X [slash:test-start]
+Y`) i.p.v. twee regels. Eén greedy regex per regel (`(\S.*)$`) at daardoor het
+tweede tag-literaal mee op in de naam/note van de eerste marker — de
+`test-start` van Y verdween spoorloos (waargenomen: een geslaagde test bleef
+als "interrupted" in de lijst staan, 6/6 groen maar 7 items). `test_run.go`
+splitst daarom in twee regexen: `testRunMarkerLineRe` vindt alleen het BEGIN
+van een marker-regel (regel-start blijft verplicht, tegen proza die toevallig
+"[slash:test-start]" noemt), `testRunMarkerTagRe` vindt daarna, alleen
+BINNEN zo'n al bevestigde regel, elke losse tag — waar de payload van elke tag
+eindigt bij de eerstvolgende tag of het regeleinde, wat het eerst komt.
+Regressietest: `TestParseTestRunMarkersTwoOnOneLine` (`test_run_test.go`).
+
 ## Zichtbaarheid: een PR-breed progress-snapshot, naar het `comment_batch`-model
 
 `test_run_progress.go` is het volatiele geheugen-alleen snapshot

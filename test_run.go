@@ -150,11 +150,26 @@ func (m *TaskManager) StartTestRun(in TestRunInput) (string, error) {
 	return m.engine.StartWorkflowDeferLow(WorkflowTestRun, in)
 }
 
-// testRunMarkerRe matches the four marker lines test_run.md fixes. Mirrors
-// commentBatchMarkerRe exactly, plus the "plan" kind, which comment_batch has
-// no equivalent of (comment_batch's targets are already known before the run
-// starts; a test run's plan is the first thing that has to be said OUT LOUD).
-var testRunMarkerRe = regexp.MustCompile(`(?m)^[ \t>*-]*\[slash:(plan|test-start|test-pass|test-fail)\][ \t]+(\S.*)$`)
+// testRunMarkerLineRe matches the START of one of the four marker lines
+// test_run.md fixes — the tag plus its separating whitespace, deliberately
+// NOT the payload (see testRunMarkerTagRe below for why). Mirrors
+// commentBatchMarkerRe's line-start discipline (required so ordinary prose
+// mentioning "[slash:test-start]" mid-sentence is never mistaken for a real
+// marker), plus the "plan" kind, which comment_batch has no equivalent of
+// (comment_batch's targets are already known before the run starts; a test
+// run's plan is the first thing that has to be said OUT LOUD).
+var testRunMarkerLineRe = regexp.MustCompile(`(?m)^[ \t>*-]*\[slash:(plan|test-start|test-pass|test-fail)\][ \t]+`)
+
+// testRunMarkerTagRe matches a bare marker tag anywhere (no line-start
+// requirement) — used only to find a SECOND marker embedded later on a line
+// that testRunMarkerLineRe already confirmed as a real marker line. The
+// model sometimes emits two markers on one physical line, e.g.
+// "[slash:test-pass] OrderTest.php [slash:test-start] PaymentTest.php" —
+// the older single greedy `(\S.*)$` capture swallowed the whole rest of the
+// line, including the second tag's own brackets, into the first marker's
+// name/note, silently losing the second marker entirely (observed as a
+// passed test staying listed as "interrupted").
+var testRunMarkerTagRe = regexp.MustCompile(`\[slash:(plan|test-start|test-pass|test-fail)\][ \t]+`)
 
 // testRunMarker is one parsed progress marker line. Name/Note only really
 // apply to the three test-* kinds; a "plan" marker's whole rest-of-line is its
@@ -184,37 +199,77 @@ var testRunNameNoteRe = regexp.MustCompile(`^(\S+)[ \t]*(.*)$`)
 // rather than a validity check.
 const testRunMaxNameLen = 160
 
+// testRunTagMatch is one located marker tag: its kind, where its own "["
+// starts (tagStart, needed as the NEXT tag's boundary) and where its payload
+// begins (payloadStart, right after the tag and its separating whitespace).
+type testRunTagMatch struct {
+	kind         string
+	tagStart     int
+	payloadStart int
+}
+
 // parseTestRunMarkers extracts every marker from a piece of the answer, in
 // order of appearance. Mirrors parseCommentBatchMarkers.
+//
+// Built around testRunMarkerLineRe/testRunMarkerTagRe (see their own doc
+// comments) rather than one greedy per-line regex: each marker LINE is found
+// first (line-start required), then split into as many tags as actually
+// appear on it — normally one, but a second embedded tag is recognized as
+// its own marker instead of being swallowed into the first one's payload.
 func parseTestRunMarkers(text string) []testRunMarker {
-	matches := testRunMarkerRe.FindAllStringSubmatch(text, -1)
-	out := make([]testRunMarker, 0, len(matches))
-	for _, m := range matches {
-		rest := strings.TrimSpace(m[2])
-		switch m[1] {
-		case "plan":
-			out = append(out, testRunMarker{Kind: testRunMarkerPlan, Note: truncateTestRunText(rest, testRunMaxPlanLen)})
-			continue
+	lineStarts := testRunMarkerLineRe.FindAllStringSubmatchIndex(text, -1)
+	out := make([]testRunMarker, 0, len(lineStarts))
+	for _, s := range lineStarts {
+		lineEnd := len(text)
+		if nl := strings.IndexByte(text[s[1]:], '\n'); nl >= 0 {
+			lineEnd = s[1] + nl
 		}
-		kind := testRunMarkerStart
-		switch m[1] {
-		case "test-pass":
-			kind = testRunMarkerPass
-		case "test-fail":
-			kind = testRunMarkerFail
+		tags := []testRunTagMatch{{kind: text[s[2]:s[3]], tagStart: s[0], payloadStart: s[1]}}
+		for _, e := range testRunMarkerTagRe.FindAllStringSubmatchIndex(text[s[1]:lineEnd], -1) {
+			tags = append(tags, testRunTagMatch{
+				kind:         text[s[1]+e[2] : s[1]+e[3]],
+				tagStart:     s[1] + e[0],
+				payloadStart: s[1] + e[1],
+			})
 		}
-		nm := testRunNameNoteRe.FindStringSubmatch(rest)
-		name, note := rest, ""
-		if nm != nil {
-			name, note = nm[1], strings.TrimSpace(nm[2])
+		for i, tg := range tags {
+			payloadEnd := lineEnd
+			if i+1 < len(tags) {
+				payloadEnd = tags[i+1].tagStart
+			}
+			rest := strings.TrimSpace(text[tg.payloadStart:payloadEnd])
+			if rest == "" {
+				continue
+			}
+			out = append(out, buildTestRunMarker(tg.kind, rest))
 		}
-		out = append(out, testRunMarker{
-			Kind: kind,
-			Name: truncateTestRunText(strings.Trim(name, "`'\"*"), testRunMaxNameLen),
-			Note: truncateTestRunText(note, testRunMaxNoteLen),
-		})
 	}
 	return out
+}
+
+// buildTestRunMarker turns one already-isolated marker's kind + trimmed
+// payload into a testRunMarker.
+func buildTestRunMarker(kindTag, rest string) testRunMarker {
+	if kindTag == "plan" {
+		return testRunMarker{Kind: testRunMarkerPlan, Note: truncateTestRunText(rest, testRunMaxPlanLen)}
+	}
+	kind := testRunMarkerStart
+	switch kindTag {
+	case "test-pass":
+		kind = testRunMarkerPass
+	case "test-fail":
+		kind = testRunMarkerFail
+	}
+	nm := testRunNameNoteRe.FindStringSubmatch(rest)
+	name, note := rest, ""
+	if nm != nil {
+		name, note = nm[1], strings.TrimSpace(nm[2])
+	}
+	return testRunMarker{
+		Kind: kind,
+		Name: truncateTestRunText(strings.Trim(name, "`'\"*"), testRunMaxNameLen),
+		Note: truncateTestRunText(note, testRunMaxNoteLen),
+	}
 }
 
 // testRunMaxPlanLen/testRunMaxNoteLen bound the free-text pieces a marker can
@@ -339,7 +394,10 @@ func runTestRun(ctx context.Context, tm *TaskManager, cl claude.Client, dataDir 
 // the LAST marker line — trimmed and bounded, so the progress panel can show
 // something more useful than a bare pass/fail count once the run is done.
 func testRunSummaryNote(text string) string {
-	matches := testRunMarkerRe.FindAllStringIndex(text, -1)
+	// Only the LINE matters here (not which tag on it is "last" when a line
+	// carries two, see testRunMarkerTagRe), so testRunMarkerLineRe alone is
+	// enough to find where the last marker line ends.
+	matches := testRunMarkerLineRe.FindAllStringIndex(text, -1)
 	tail := text
 	if len(matches) > 0 {
 		last := matches[len(matches)-1]

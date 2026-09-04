@@ -49,6 +49,25 @@ func TestParseTestRunMarkers(t *testing.T) {
 	}
 }
 
+// TestParseTestRunMarkersTwoOnOneLine covers the reported bug: the model
+// sometimes emits two markers on ONE physical line instead of two lines. The
+// old single greedy-capture regex swallowed the second tag's own brackets
+// into the first marker's name/note, silently losing the second marker (a
+// passed test then stayed listed as "interrupted" — 6/6 green but 7 items).
+func TestParseTestRunMarkersTwoOnOneLine(t *testing.T) {
+	text := "[slash:test-pass] tests/OrderTest.php [slash:test-start] tests/PaymentTest::testRefund"
+	got := parseTestRunMarkers(text)
+	if len(got) != 2 {
+		t.Fatalf("want 2 markers, got %d (%+v)", len(got), got)
+	}
+	if got[0].Kind != testRunMarkerPass || got[0].Name != "tests/OrderTest.php" {
+		t.Errorf("pass marker: %+v", got[0])
+	}
+	if got[1].Kind != testRunMarkerStart || got[1].Name != "tests/PaymentTest::testRefund" {
+		t.Errorf("start marker: %+v", got[1])
+	}
+}
+
 // TestTestRunProgressLifecycle covers the parts of test_run_progress.go that
 // differ from comment_batch_progress.go's own precedent: items are NOT
 // pre-seeded (a test's name is only known once Claude announces it), and a
