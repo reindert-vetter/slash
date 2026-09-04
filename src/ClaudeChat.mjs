@@ -784,7 +784,21 @@ function claudeNoShellPill(msg) {
 // images/code-fence triggers inert (pointer-events-none) — the click that
 // reaches the card's OUTER root instead (claudeChatColumn below) is what
 // hands the keyboard back.
-function claudeBubble(msg, i, total, claudePos, optionSel, anchorHint, onSend, onRetry, busy, readOnly, onCleanup) {
+function claudeBubble(
+  msg,
+  i,
+  total,
+  claudePos,
+  optionSel,
+  anchorHint,
+  onSend,
+  onRetry,
+  busy,
+  readOnly,
+  onCleanup,
+  onRetryAll,
+  retryAllBusy,
+) {
   const mine = msg.role === 'user'
   const isError = msg.kind === 'error'
   const isRetrying = msg.kind === 'retrying'
@@ -871,29 +885,56 @@ function claudeBubble(msg, i, total, claudePos, optionSel, anchorHint, onSend, o
             : claudeQuestionOptions(msg, onSend, optionSel, onCleanup)}
       ${() =>
         canRetry && !readOnly
-          ? html`<button
-              class="mt-0.5 inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-300 dark:hover:bg-zinc-800"
-              data-testid="claude-retry"
-              disabled="${() => busy()}"
-              @click="${() => onRetry()}"
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                class="h-3 w-3"
+          ? html`<div class="mt-0.5 flex flex-wrap items-center gap-1.5">
+              <button
+                class="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                data-testid="claude-retry"
+                disabled="${() => busy() || retryAllBusy()}"
+                @click="${() => onRetry()}"
               >
-                <path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path>
-                <path d="M21 3v5h-5"></path>
-                <path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path>
-                <path d="M3 21v-5h5"></path>
-              </svg>
-              ${t('Opnieuw proberen')}
-            </button>`
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  class="h-3 w-3"
+                >
+                  <path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path>
+                  <path d="M21 3v5h-5"></path>
+                  <path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path>
+                  <path d="M3 21v-5h5"></path>
+                </svg>
+                ${t('Opnieuw proberen')}
+              </button>
+              <button
+                class="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                data-testid="claude-retry-all"
+                title="${t('Draai ook elke andere gefaalde Claude-chat van deze PR opnieuw')}"
+                disabled="${() => busy() || retryAllBusy()}"
+                @click="${() => onRetryAll()}"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  class="h-3 w-3"
+                >
+                  <path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path>
+                  <path d="M21 3v5h-5"></path>
+                  <path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path>
+                  <path d="M3 21v-5h5"></path>
+                  <circle cx="12" cy="12" r="2.5"></circle>
+                </svg>
+                ${() => (retryAllBusy() ? t('Bezig…') : t('Ook andere opnieuw proberen'))}
+              </button>
+            </div>`
           : ''}
     </div>
   `
@@ -1160,6 +1201,8 @@ export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly, opt
               view.busy,
               readOnly,
               callbacks.onCleanup,
+              callbacks.onRetryAll,
+              view.retryAllBusy,
             ).key(
               'claude-msg:' + m.id + ':' + (readOnly ? 'ro' : 'rw'),
             ),

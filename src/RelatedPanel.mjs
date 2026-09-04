@@ -2940,6 +2940,96 @@ export async function retryClaudeTurn() {
   await sendClaudeMessage('', 'retry')
 }
 
+// isChatFailureTurn — "does this LAST message mean the turn needs a manual
+// retry?" — the exact same condition claudeBubble's own `canRetry` uses
+// (kind 'error', an exhausted automatic backoff ladder, or 'cancelled', the
+// reviewer's own Stop): both offer "Opnieuw proberen" on that one bubble, so
+// both count as "gefaald" for the bulk action below.
+function isChatFailureTurn(msg) {
+  return !!msg && (msg.kind === 'error' || msg.kind === 'cancelled')
+}
+
+const retryAllState = reactive({ busy: false })
+
+// isRetryingAllFailedClaudeChats — drives "Ook andere opnieuw proberen"'s own
+// disabled state (ClaudeChat.mjs), the same idea as ccBusy/busy() for the
+// per-turn retry button.
+export function isRetryingAllFailedClaudeChats() {
+  return retryAllState.busy
+}
+
+// retryAllFailedClaudeChats — "Ook andere opnieuw proberen", next to the
+// per-turn "Opnieuw proberen" (retryClaudeTurn, which only ever touches the
+// ONE conversation on screen). Reviewer request: retry EVERY failed Claude
+// chat of this PR in one click, including the one currently open.
+//
+// A failed claude_chat turn does NOT fail the workflow itself
+// (chat_workflow.go loops back to WaitSignal on a chat.KindError/
+// KindCancelled message, see runOneClaudeTurn's own doc comment), so this
+// cannot be read off GET /api/problems the way an ordinary task failure can
+// — "failed" here is a property of the TRANSCRIPT's last message, not of the
+// workflow run's status. Nor can it reuse otherClaudeChatsAll(): that list
+// deliberately drops a chat once it is both 'seen' and answered
+// (otherTaskAnswered counts ANY assistant-role message, including a
+// chat.KindError one) — a failed chat the reviewer already looked at once
+// must still be retried here. So this walks prConversationIds() (every
+// conversation of this PR, fetched fresh) the same way
+// resumeStuckClaudeAfterCheckout above does, fetching each transcript
+// (GET /api/chat?commentId=, the same read loadChatMessages uses) and
+// checking only its last message.
+//
+// A conversation with a turn running RIGHT NOW is skipped — nothing to
+// retry, and poking it would only queue behind whatever is already in
+// flight (drainClaudeQueue). The open conversation's own turn goes out
+// first via the already-loaded cc.messages/cc.runId (no extra GET needed,
+// mirrors sendClaudeMessage's own fast path for the displayed chat); every
+// other conversation resumes one at a time, in the PR's own conversation
+// order, via the same idempotent "ensure the run, then signal retry"
+// two-step resumeStuckClaudeAfterCheckout already uses (a conversation not
+// on screen has no runId of its own to signal against).
+export async function retryAllFailedClaudeChats() {
+  if (retryAllState.busy) return
+  retryAllState.busy = true
+  try {
+    if (cc.runId && isChatFailureTurn(cc.messages[cc.messages.length - 1])) {
+      await sendClaudeMessage('', 'retry')
+    }
+    const shown = cc.commentId ? String(cc.commentId) : ''
+    for (const id of await prConversationIds()) {
+      const commentId = String(id)
+      if (commentId === shown) continue
+      if (isTurnBusy(commentId)) continue
+      const p = turnProgress(commentId)
+      if (p && p.running) continue
+      try {
+        const res = await fetch('/api/chat?commentId=' + encodeURIComponent(commentId) + repoParam())
+        if (!res.ok) continue
+        const json = await res.json()
+        const msgs = (json && json.messages) || []
+        if (!isChatFailureTurn(msgs[msgs.length - 1])) continue
+        // Its claude_chat Execution is ensured the ordinary way (idempotent
+        // server-side via StartWorkflowID, see ensureAndLoadChat) purely to
+        // learn the runId a Signal needs — this conversation is not on
+        // screen, so nothing else here has one.
+        const start = await fetch('/api/workflows/claude_chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pr: cs.pr, repo: repoField(), commentId }),
+        })
+        if (!start.ok) continue
+        const { runId } = await start.json()
+        if (!runId) continue
+        await sendClaudeMessage('', 'retry', '', { runId, commentId })
+      } catch (_) {
+        // Best-effort per conversation: one unreachable transcript must not
+        // stop the others from being resumed.
+      }
+    }
+  } finally {
+    retryAllState.busy = false
+  }
+}
+
 // cancelClaudeTurn stops the ONE running turn on the currently anchored
 // conversation right now — POST /api/chat/cancel (chat_cancel.go), never a
 // workflow Signal (see that file's own doc comment for why a cancel cannot
@@ -3987,6 +4077,10 @@ function claudeChatView() {
     messages: () => cc.messages,
     status: () => cc.status,
     busy: () => ccBusy(),
+    // Whether the "Ook andere opnieuw proberen" bulk retry is currently
+    // running — disables both retry buttons while it walks the PR's other
+    // conversations (see retryAllFailedClaudeChats).
+    retryAllBusy: () => isRetryingAllFailedClaudeChats(),
     // Whether there is a turn to cancel right now (busy, or still starting
     // up, or waiting in the queue) — the same gate the visible "Stop" button
     // (claudeActive/hasActiveClaudeTurn, CommentClaudeFooter above) already
@@ -4110,6 +4204,10 @@ function claudeChatCallbacks(state, commentTarget) {
   return {
     onSend: (text) => sendClaudeMessageFromNew(state, commentTarget, text),
     onRetry: () => retryClaudeTurn(),
+    // "Ook andere opnieuw proberen" — see retryAllFailedClaudeChats' own doc
+    // comment for what "gefaald" means here and why it can't reuse
+    // otherClaudeChatsAll().
+    onRetryAll: () => retryAllFailedClaudeChats(),
     onCleanup: (choice) => resolveCancelCleanup(choice),
     // Escape pressed in the composer while a turn is running (ClaudeChat.mjs's
     // own @keydown, gated on view.active()) — reuses the exact same

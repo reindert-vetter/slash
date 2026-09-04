@@ -3296,6 +3296,43 @@ Opus→Sonnet escalation, the `"retry"` Signal) is in
   the pill's mere presence already means "another model answered this one" —
   a word, never a colour.
 
+### "Ook andere opnieuw proberen" — retry every failed chat of the PR in one click
+
+Reviewer request: retrying one conversation at a time after a usage-limit hit
+(the CLI reason above tends to fail *every* running chat of the PR at once,
+not just the one on screen) was tedious. Next to the per-turn button above
+sits a second one, `data-testid=claude-retry-all`, same `canRetry` gate (only
+on the last message of the transcript, hidden while read-only), calling
+`retryAllFailedClaudeChats()` (`RelatedPanel.mjs`) instead of
+`retryClaudeTurn()`. It retries the **open** conversation (via the ordinary
+`sendClaudeMessage('', 'retry')` fast path) **and** every OTHER conversation
+of the PR whose own last message is a `kind: 'error'`/`'cancelled'` one —
+"gefaald" here always means that literal last-message check
+(`isChatFailureTurn`), never a workflow run's `tembed.Status`.
+
+That check is exactly why this can't be a `GET /api/problems` read the way an
+ordinary task retry is (`retryFailedRun`, "Taken" block, `home.mjs`): a
+`claude_chat` workflow never actually fails on a `KindError`/`KindCancelled`
+turn — `chat_workflow.go` loops right back to `WaitSignal` — so such a
+conversation is never `tembed.StatusFailed` and never shows up there at all.
+It also can't reuse `otherClaudeChatsAll()` (the "Andere chats in deze PR"
+list just above): that list deliberately drops a chat once it is both 'seen'
+and answered, and `otherTaskAnswered` counts **any** assistant-role message,
+`KindError` included — a failed chat the reviewer already glanced at once
+must still be retryable here. So `retryAllFailedClaudeChats` does its own
+walk over `prConversationIds()` (every conversation of the PR, fetched
+fresh), skips one with a turn running right now, and otherwise fetches its
+transcript (`GET /api/chat?commentId=`, the same read `loadChatMessages`
+uses) to check only the last message — mirroring
+`resumeStuckClaudeAfterCheckout`'s own PR-wide walk just above it in the same
+file (same "ensure the run via the idempotent `POST /api/workflows/
+claude_chat`, then Signal `retry` against the runId it returns" two-step for
+a conversation that isn't on screen and so has no runId of its own yet).
+Best-effort per conversation (one unreachable transcript must not stop the
+rest), serialized behind its own busy flag (`isRetryingAllFailedClaudeChats`,
+disables both retry buttons while it runs — `view.retryAllBusy` in
+`ClaudeChat.mjs`). Test: `tests/claude-retry-all.spec.mjs`.
+
 ### A failure bubble shows the CLI's own reason when it has one — e.g. a usage limit
 
 Reported bug: a real account usage-limit hit rendered as the exact same
