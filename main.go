@@ -111,7 +111,7 @@ func runServe(args []string) {
 	// use — which is not necessarily the DB's dir (a test run points -db and
 	// -data at different trees).
 	initRepos(resolvedData)
-	tk, closeTasks, err := newTasks(context.Background(), db, filepath.Dir(resolvedDB), repoSlug, true)
+	tk, closeTasks, err := newTasks(context.Background(), db, filepath.Dir(resolvedDB), repoSlugFor(""), true)
 	if err != nil {
 		log.Fatalf("init workflows: %v", err)
 	}
@@ -169,7 +169,7 @@ func runIngestCmd(args []string) {
 	// fetch) just to run the ingest workflow, the sole writer of blocks/worktrees.
 	dataDir := filepath.Dir(resolvedDB)
 	initRepos(dataDirPath("")) // settings.json lives in the data dir, see runServe
-	tk, closeTasks, err := newTasks(context.Background(), db, dataDir, repoSlug, false)
+	tk, closeTasks, err := newTasks(context.Background(), db, dataDir, repoSlugFor(""), false)
 	if err != nil {
 		log.Fatalf("init workflows: %v", err)
 	}
@@ -326,7 +326,7 @@ func runCleanupCmd(args []string) {
 
 	dataDir := filepath.Dir(resolvedDB)
 	initRepos(dataDirPath("")) // settings.json lives in the data dir, see runServe
-	tk, closeTasks, err := newTasks(context.Background(), db, dataDir, repoSlug, false)
+	tk, closeTasks, err := newTasks(context.Background(), db, dataDir, repoSlugFor(""), false)
 	if err != nil {
 		log.Fatalf("init workflows: %v", err)
 	}

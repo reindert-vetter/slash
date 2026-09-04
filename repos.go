@@ -90,6 +90,12 @@ type repoConfig struct {
 	// every resolution (chatCheckoutRegistryDirs), unlike the rest of this
 	// struct — a newly added path must work without a server restart.
 	ChatCheckoutDirs []string `json:"chatCheckoutDirs,omitempty"`
+	// dirWasSet records whether Dir came from an EXPLICIT settings.json entry
+	// (as opposed to the "~/dev/<name>" default filled in by normalizeRepos).
+	// Unexported — never serialized — used only so a live SLASH_REPO_DIR
+	// override (normalizeRepos' elif branch, repoDirFor) never clobbers a
+	// dir the reviewer actually configured; see repoDirFor's own comment.
+	dirWasSet bool
 }
 
 // repoName is the slug's name part — the segment that appears in a URL
@@ -156,6 +162,7 @@ func normalizeRepos(raw []repoConfig) []repoConfig {
 		}
 		seenKey[r.Key] = true
 		r.Dir = strings.TrimSpace(r.Dir)
+		r.dirWasSet = r.Dir != ""
 		if r.Dir == "" {
 			r.Dir = "~/dev/" + r.repoName()
 		}
@@ -169,7 +176,13 @@ func normalizeRepos(raw []repoConfig) []repoConfig {
 	if !seenSlug[strings.ToLower(repoSlug)] {
 		// The built-in repo is always in the registry, as the first entry, so a
 		// settings file listing only a second repo can never orphan it.
+		// Primary is left false here (unlike builtinRepo()'s own default) — the
+		// primary-selection loop below decides that, and picks this repo only
+		// when nothing else claims it. Forcing it true here made the built-in
+		// repo win the "first Primary wins" scan even when the raw settings
+		// explicitly marked a DIFFERENT repo primary further down the list.
 		b := builtinRepo()
+		b.Primary = false
 		if seenKey[b.Key] {
 			b.Key += "x"
 		}
@@ -177,10 +190,13 @@ func normalizeRepos(raw []repoConfig) []repoConfig {
 	} else if len(out) > 0 {
 		// SLASH_REPO_DIR keeps overriding the primary clone even when
 		// settings.json names one — it is how the test harness and a
-		// throwaway checkout point slash at another copy.
+		// throwaway checkout point slash at another copy. But it must never
+		// win over a Dir the reviewer actually configured (dirWasSet) — that
+		// used to be permanent once SLASH_REPO_DIR was set in .env (see
+		// ensureEnvSetup), silently ignoring any later settings.json change.
 		if env := strings.TrimSpace(repoDirEnv()); env != "" {
 			for i := range out {
-				if strings.EqualFold(out[i].Slug, repoSlug) {
+				if strings.EqualFold(out[i].Slug, repoSlug) && !out[i].dirWasSet {
 					out[i].Dir = env
 				}
 			}
@@ -328,12 +344,20 @@ func repoSlugFor(repo string) string { return repoFor(repo).Slug }
 // SLASH_REPO_DIR is honoured HERE, per call, for the primary repo — not only at
 // init: a test (and the Playwright harness) sets that env var around a temp git
 // repo, sometimes after the registry was already built, and a value cached at
-// init would silently point at the real ~/dev clone instead.
+// init would silently point at the real ~/dev clone instead. But only when the
+// registry itself has no EXPLICIT dir for the primary repo (dirWasSet) — an
+// explicitly configured settings.json dir must win, otherwise it could never
+// take effect once SLASH_REPO_DIR is set in .env (ensureEnvSetup writes it on
+// first run, so it is normally set on every later run too).
 func repoDirFor(repo string) string {
 	if repo == "" {
-		if env := strings.TrimSpace(repoDirEnv()); env != "" {
-			return expandTilde(env)
+		r := repoFor(repo)
+		if !r.dirWasSet {
+			if env := strings.TrimSpace(repoDirEnv()); env != "" {
+				return expandTilde(env)
+			}
 		}
+		return expandTilde(r.Dir)
 	}
 	return expandTilde(repoFor(repo).Dir)
 }

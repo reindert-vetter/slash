@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -159,5 +160,47 @@ func TestRegistrySurvivesBadJSON(t *testing.T) {
 
 	if len(allRepos()) != 1 || primarySlug() != repoSlug {
 		t.Fatalf("bad JSON must degrade to the built-in repo, got %+v", allRepos())
+	}
+}
+
+// A repo configured as primary in settings.json, even when it isn't the
+// built-in plug-and-pay, must actually become primary. Before the fix the
+// built-in repo was prepended with Primary forced true, so the "first
+// Primary wins" scan below always found it first — this repo's own
+// "primary":true never got a chance.
+func TestRegistryConfiguredRepoCanBePrimary(t *testing.T) {
+	writeSettings(t, `{"repos":[{"slug":"plug-and-pay/plug-and-pay-ops","key":"ops","primary":true}]}`)
+
+	if primarySlug() != "plug-and-pay/plug-and-pay-ops" {
+		t.Fatalf("primary = %q, want the configured ops repo", primarySlug())
+	}
+	if canonRepo(repoSlug) == "" {
+		t.Fatalf("the built-in repo must still be in the registry, just not primary")
+	}
+}
+
+// An explicit "dir" in settings.json for the primary repo must win over
+// SLASH_REPO_DIR — that env var is also how ensureEnvSetup persists the
+// primary repo's dir on first run (see env.go), so it is normally set on
+// every later run too; without this fix an explicit settings.json change
+// could never take effect.
+func TestRegistryConfiguredPrimaryDirWinsOverEnv(t *testing.T) {
+	t.Setenv("SLASH_REPO_DIR", "/tmp/env-primary-dir")
+	writeSettings(t, fmt.Sprintf(`{"repos":[{"slug":%q,"dir":"/tmp/configured-primary-dir","primary":true}]}`, repoSlug))
+
+	if got := repoDirFor(""); got != "/tmp/configured-primary-dir" {
+		t.Fatalf("repoDirFor(\"\") = %q, want the configured dir", got)
+	}
+}
+
+// Without an explicit dir configured, SLASH_REPO_DIR keeps working as the
+// override — the test harness relies on exactly this (see chat_merge_test.go
+// etc, which set it AFTER the registry may already have been built).
+func TestRegistryUnconfiguredPrimaryDirStillHonoursEnv(t *testing.T) {
+	writeSettings(t, "")
+	t.Setenv("SLASH_REPO_DIR", "/tmp/env-primary-dir")
+
+	if got := repoDirFor(""); got != "/tmp/env-primary-dir" {
+		t.Fatalf("repoDirFor(\"\") = %q, want the env override", got)
 	}
 }
