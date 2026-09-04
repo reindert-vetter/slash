@@ -43,6 +43,9 @@ func TestReadChatStreamParsesResultAndEvents(t *testing.T) {
 		{Kind: ChatEventStatus},
 		{Kind: ChatEventThinking},
 		{Kind: ChatEventTool, Tool: "Read"},
+		// The "assistant" frame fires ChatEventTurn once (one agentic step),
+		// alongside its ordinary ChatEventTool for the same tool_use block.
+		{Kind: ChatEventTurn},
 		{Kind: ChatEventTool, Tool: "Read", Detail: "src/Foo.php"},
 		{Kind: ChatEventText, TextDelta: "Hal"},
 		{Kind: ChatEventText, TextDelta: "lo"},
@@ -93,12 +96,14 @@ func TestReadChatStreamHandlesVeryLongLines(t *testing.T) {
 	if res.Text != "ok" {
 		t.Fatalf("result text = %q", res.Text)
 	}
-	if len(got) != 1 || got[0].Tool != "Bash" {
+	// The "assistant" frame fires ChatEventTurn once, then ChatEventTool for
+	// its one tool_use block.
+	if len(got) != 2 || got[0].Kind != ChatEventTurn || got[1].Tool != "Bash" {
 		t.Fatalf("events = %+v", got)
 	}
 	// The hint is truncated before it ever reaches a status label.
-	if len(got[0].Detail) > maxEventDetail+len("…") {
-		t.Fatalf("detail not truncated: %d chars", len(got[0].Detail))
+	if len(got[1].Detail) > maxEventDetail+len("…") {
+		t.Fatalf("detail not truncated: %d chars", len(got[1].Detail))
 	}
 }
 

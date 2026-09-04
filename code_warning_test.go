@@ -161,6 +161,141 @@ func warningManagerWithApprovals(t *testing.T, dataDir string, fake *claude.Fake
 	return m, cs, ap
 }
 
+// codeWarningTurnCounter sends the stop nudge exactly once, exactly when the
+// turn count reaches the configured limit — never early, never twice (a
+// second send/close would panic on the already-closed channel).
+func TestCodeWarningTurnCounterNudgesAtLimit(t *testing.T) {
+	steer := make(chan string, 1)
+	onEvent, nudged := codeWarningTurnCounter(3, steer)
+
+	for i := 0; i < 2; i++ {
+		onEvent(claude.ChatEvent{Kind: claude.ChatEventTurn})
+	}
+	if *nudged {
+		t.Fatal("nudged too early, before the 3rd turn")
+	}
+	select {
+	case <-steer:
+		t.Fatal("a message was sent before the limit was reached")
+	default:
+	}
+
+	onEvent(claude.ChatEvent{Kind: claude.ChatEventTurn}) // 3rd turn hits the limit
+	if !*nudged {
+		t.Fatal("nudged = false, want true once the limit is reached")
+	}
+	msg, ok := <-steer
+	if !ok || msg != codeWarningStopNudge {
+		t.Fatalf("steer message = %q, ok=%v, want the stop nudge", msg, ok)
+	}
+	if _, ok := <-steer; ok {
+		t.Fatal("steer channel should be closed right after the nudge")
+	}
+
+	// A further turn past the limit must be a no-op, not a second
+	// send/close (which would panic).
+	onEvent(claude.ChatEvent{Kind: claude.ChatEventTurn})
+
+	// A non-turn event must never count.
+	steer2 := make(chan string, 1)
+	onEvent2, nudged2 := codeWarningTurnCounter(1, steer2)
+	onEvent2(claude.ChatEvent{Kind: claude.ChatEventTool, Tool: "Read"})
+	if *nudged2 {
+		t.Fatal("a ChatEventTool must never count as a turn")
+	}
+}
+
+// MaxTurns <= 0 means unlimited: the counter never nudges, however many
+// turns go by.
+func TestCodeWarningTurnCounterUnlimitedNeverNudges(t *testing.T) {
+	steer := make(chan string, 1)
+	onEvent, nudged := codeWarningTurnCounter(0, steer)
+	for i := 0; i < 50; i++ {
+		onEvent(claude.ChatEvent{Kind: claude.ChatEventTurn})
+	}
+	if *nudged {
+		t.Fatal("nudged = true, want false for an unlimited (MaxTurns<=0) budget")
+	}
+}
+
+// codeWarningMaxTurns: the env override, its "unlimited" spellings, and its
+// fallback for an unparsable value.
+func TestCodeWarningMaxTurnsEnvOverride(t *testing.T) {
+	const envKey = "SLASH_CODE_WARNING_MAX_TURNS"
+	prev, hadPrev := os.LookupEnv(envKey)
+	t.Cleanup(func() {
+		if hadPrev {
+			os.Setenv(envKey, prev)
+		} else {
+			os.Unsetenv(envKey)
+		}
+	})
+
+	cases := []struct {
+		env  string
+		want int
+	}{
+		{"", codeWarningDefaultMaxTurns},
+		{"12", 12},
+		{"0", 0},
+		{"unlimited", 0},
+		{"UNLIMITED", 0},
+		{"not-a-number", codeWarningDefaultMaxTurns},
+		{"-5", codeWarningDefaultMaxTurns},
+	}
+	for _, c := range cases {
+		if c.env == "" {
+			os.Unsetenv(envKey)
+		} else {
+			os.Setenv(envKey, c.env)
+		}
+		if got := codeWarningMaxTurns(); got != c.want {
+			t.Errorf("codeWarningMaxTurns() with env %q = %d, want %d", c.env, got, c.want)
+		}
+	}
+}
+
+// A run that hits its configured turn budget still returns whatever findings
+// the model already reported by then, instead of nothing — see
+// codeWarningTurnCounter's nudge. claude.Fake's SetChatEvents replays the
+// programmed events (here: 3 ChatEventTurn) before RunChat returns its
+// scripted text, standing in for a model that took 3 agentic steps before
+// answering.
+func TestCodeWarningReviewReturnsFindingsWhenTurnBudgetHit(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 91
+	writeWarningFixtureRepo(t, dataDir, pr)
+
+	fake := claude.NewFake()
+	fake.SetChatEvents(
+		claude.ChatEvent{Kind: claude.ChatEventTurn},
+		claude.ChatEvent{Kind: claude.ChatEventTurn},
+		claude.ChatEvent{Kind: claude.ChatEventTurn},
+	)
+	fake.SetOutput(claude.ModelOpus, `[{"file":"app/Services/OrderService.php","line":6,"text":"Truncated-but-real finding."}]`)
+
+	arg := warningReviewArg{
+		PR: pr, Files: []string{"app/Services/OrderService.php"}, BlockCount: 1, MaxFindings: 2,
+		MaxTurns: 2, // reached mid-way through the 3 scripted turns
+	}
+	findings, ok := runCodeWarningReview(context.Background(), fake, dataDir, arg)
+	if !ok {
+		t.Fatal("ok = false, want true — the call really ran")
+	}
+	if len(findings) != 1 || findings[0].Text != "Truncated-but-real finding." {
+		t.Fatalf("findings = %+v, want the one scripted finding — a turn-limited run must still return what it found, not nothing", findings)
+	}
+
+	call := fake.Calls[len(fake.Calls)-1]
+	if call.Steer == nil {
+		t.Fatal("the request must wire a Steer channel so the run can be nudged")
+	}
+	msg, ok := <-call.Steer
+	if !ok || msg != codeWarningStopNudge {
+		t.Fatalf("steer message = %q, ok=%v, want the stop nudge to have been sent", msg, ok)
+	}
+}
+
 // A Sonnet finding on a line inside the block's range anchors to it: a
 // normal, block-scoped warning comment (Kind ""), Source "ai", Local true
 // (so it never posts to GitHub even though a github.Fake is wired in).
@@ -1118,8 +1253,14 @@ func (s *scriptedClaude) Run(ctx context.Context, req claude.RunRequest) (string
 	return s.outs[i], nil
 }
 
+// RunChat mirrors Run's own scripted-output logic — runCodeWarningReview
+// calls RunChat (not Run) so it can stream turn events for its turn budget
+// (see codeWarningTurnCounter, code_warning.go); this test double must answer
+// the same way either method is called, and still count only the review
+// pass's own claude.ModelOpus calls the same way Run does.
 func (s *scriptedClaude) RunChat(ctx context.Context, req claude.RunRequest) (claude.ChatResult, error) {
-	return claude.ChatResult{}, nil
+	text, err := s.Run(ctx, req)
+	return claude.ChatResult{Text: text}, err
 }
 
 func (s *scriptedClaude) CallCount() int {

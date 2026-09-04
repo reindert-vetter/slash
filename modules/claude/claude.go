@@ -118,6 +118,15 @@ const (
 	ChatEventThinking ChatEventKind = "thinking" // extended-thinking tokens (content deliberately NOT forwarded)
 	ChatEventText     ChatEventKind = "text"     // one delta of the visible answer (TextDelta)
 	ChatEventTool     ChatEventKind = "tool"     // the model invoked a tool (Tool, plus a short Detail)
+	// ChatEventTurn fires once per model "assistant" frame — i.e. once per
+	// agentic step, matching the CLI's own final `num_turns` count. A step
+	// that also invokes a tool fires both this and ChatEventTool; a step that
+	// only produces text (e.g. the final JSON answer) fires only this one.
+	// Added for code_warning's turn budget (see runCodeWarningReview,
+	// package main) — every existing switch over ChatEventKind has no
+	// default case, so this new kind is silently ignored by every consumer
+	// that doesn't opt in.
+	ChatEventTurn ChatEventKind = "turn"
 )
 
 // ChatEvent is one observation about a turn that is still running. Never
@@ -626,6 +635,7 @@ func emitChatEvents(l chatStreamLine, onEvent func(ChatEvent)) {
 		if l.Message == nil {
 			return
 		}
+		onEvent(ChatEvent{Kind: ChatEventTurn})
 		for _, block := range l.Message.Content {
 			if block.Type == "tool_use" {
 				onEvent(ChatEvent{Kind: ChatEventTool, Tool: block.Name, Detail: toolInputHint(block.Input)})
@@ -994,7 +1004,19 @@ func (f *Fake) RunChat(ctx context.Context, req RunRequest) (ChatResult, error) 
 		f.chatPos = map[string]int{}
 	}
 	var text string
-	if i := f.chatPos[sessionID]; i < len(f.chatQueue) {
+	if len(f.chatQueue) == 0 {
+		// No turn script programmed (SetChatTurns never called): fall back
+		// to the same static per-model/per-prompt outputs Run uses, so a
+		// caller that switched from Run to RunChat (e.g. code_warning's
+		// turn-budget steering) doesn't force every existing SetOutput-based
+		// test to also learn SetChatTurns — same priority Run itself uses,
+		// promptOutputs before the plain model-keyed map.
+		if out, ok := f.promptOutputs[req.Model+"\n"+req.SystemPrompt]; ok {
+			text = out
+		} else {
+			text = f.outputs[req.Model]
+		}
+	} else if i := f.chatPos[sessionID]; i < len(f.chatQueue) {
 		text = f.chatQueue[i]
 	}
 	f.chatPos[sessionID]++

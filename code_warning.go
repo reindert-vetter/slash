@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"slash/modules/claude"
@@ -73,6 +75,14 @@ type warningReviewArg struct {
 	// like Existing above — not a second Go-side hard filter; that hard floor
 	// (dropDismissedFindings) still runs unconditionally after this call.
 	PastDismissed []dismissedFinding `json:"pastDismissed,omitempty"`
+	// MaxTurns bounds the number of agentic steps (the CLI's own num_turns —
+	// see ChatEventTurn) this run may take before it is asked to wrap up
+	// early instead of exploring further. 0 (or unset — an older recorded
+	// run replayed after this field was added) means unlimited: no nudge is
+	// ever sent, the pre-existing behaviour. Filled in by the
+	// runAgenticReview Activity (workflows.go) via codeWarningMaxTurns, not
+	// by the workflow body — see that function's own doc comment for why.
+	MaxTurns int `json:"maxTurns,omitempty"`
 }
 
 // dismissedFinding is one earlier AI finding the reviewer dismissed, scoped
@@ -110,6 +120,91 @@ type warningFinding struct {
 // circle, since these comments never carry an avatar URL).
 const warningAuthor = "AI-controle"
 
+// codeWarningDefaultMaxTurns is the turn budget applied to an agentic
+// code_warning run when SLASH_CODE_WARNING_MAX_TURNS is unset/invalid — see
+// codeWarningMaxTurns. Measured against 106 real runs (week
+// 2026-08-29..09-04, no turn limit existed yet): 15.7 turns/run and 1.70M
+// tokens/run on average, 96% of which is the accumulated prefix resent
+// unchanged on every turn (context grows ~3.5k tokens/turn, turn 1 ≈ 66k,
+// turn 30 ≈ 148k). Turn count does not track PR size (1 file already costs
+// 11.9 turns, 88 files costs 27; Pearson r = 0.16) — nothing was bounding it,
+// so the model simply kept exploring until it judged itself done. Of 406
+// findings sampled, 94% were already anchored to a file the model had
+// touched by the FIRST HALF of its own turns; the second half only
+// reshuffled the list in ~5% of runs while accounting for 58% of the tokens.
+// 8 sits close to that observed halfway point across the sampled runs — see
+// .claude/docs/workflows-analysis.md for the full write-up, including the
+// A/B findings-vs-turns comparison this default was picked from.
+//
+// var, not const, purely for testability (same reasoning as
+// modules/claude/claude.go's contextTimeout/agenticTimeout).
+var codeWarningDefaultMaxTurns = 8
+
+// codeWarningMaxTurns resolves the turn budget for one code_warning run:
+// SLASH_CODE_WARNING_MAX_TURNS when it parses as a positive integer, "0" or
+// "unlimited" (case-insensitive) to explicitly disable the budget (used for
+// the "onbeperkt" measurement baseline), otherwise codeWarningDefaultMaxTurns
+// — including when the env var is set but unparsable, so a typo falls back
+// to a sane bound rather than silently meaning unlimited. Called from inside
+// the runAgenticReview Activity (workflows.go), never from the workflow body
+// itself: reading an environment variable is a side effect, and the
+// workflow body must stay a pure function of (input + history) — see
+// .claude/rules/workflow-determinism.md.
+func codeWarningMaxTurns() int {
+	s := strings.TrimSpace(os.Getenv("SLASH_CODE_WARNING_MAX_TURNS"))
+	if s == "" {
+		return codeWarningDefaultMaxTurns
+	}
+	if s == "0" || strings.EqualFold(s, "unlimited") {
+		return 0
+	}
+	if n, err := strconv.Atoi(s); err == nil && n > 0 {
+		return n
+	}
+	return codeWarningDefaultMaxTurns
+}
+
+// codeWarningStopNudge is the one steer message sent to a running review
+// once it has used up its turn budget (see codeWarningTurnCounter). It asks
+// for exactly the JSON contract claude.CodeWarningSystemPrompt already
+// specifies, so the model's very next step can be its final answer instead
+// of another exploration step — a half-finished list of real findings beats
+// an empty one.
+const codeWarningStopNudge = "You have used up your turn budget for this review. Stop investigating further right now and respond immediately with the JSON array of findings, following the rules in the system prompt, based only on what you found so far. If you found nothing worth flagging yet, respond with an empty array []."
+
+// codeWarningTurnCounter returns a claude.RunRequest.OnEvent callback that
+// counts ChatEventTurn events (one per agentic step — see that constant's
+// own doc comment) and, the FIRST time the count reaches maxTurns, sends
+// codeWarningStopNudge on steer and closes it. maxTurns <= 0 means
+// unlimited: the returned callback still counts (harmlessly) but never
+// sends. The returned *bool reports, after the call, whether the nudge was
+// actually sent — the caller logs that as an expected, non-error outcome.
+//
+// Safe without a mutex: RunChat calls OnEvent serially from its own single
+// stream-reading goroutine (see RunRequest.OnEvent's own doc comment), and
+// this closure's state (turns, nudged) is touched from nowhere else. The
+// send itself is non-blocking into a capacity-1 channel guarded by nudged,
+// so it can never block that same reading goroutine.
+func codeWarningTurnCounter(maxTurns int, steer chan<- string) (func(claude.ChatEvent), *bool) {
+	turns := 0
+	nudged := new(bool)
+	onEvent := func(ev claude.ChatEvent) {
+		if ev.Kind != claude.ChatEventTurn {
+			return
+		}
+		turns++
+		if maxTurns > 0 && turns >= maxTurns && !*nudged {
+			*nudged = true
+			select {
+			case steer <- codeWarningStopNudge:
+			default:
+			}
+			close(steer)
+		}
+	}
+	return onEvent, nudged
+}
+
 // runCodeWarningReview makes the one agentic Opus call and returns the
 // accepted findings — verified against the scope the model was actually
 // given (never a fabricated file), sorted, and capped at arg.MaxFindings.
@@ -134,18 +229,38 @@ func runCodeWarningReview(ctx context.Context, cl claude.Client, dataDir string,
 	// has. Computed once here rather than per finding: it shells out to git
 	// per file.
 	changed := changedLineSets(baseDir, headDir, arg.Files)
+
+	// Turn budget: once arg.MaxTurns agentic steps have gone by, steer the
+	// running turn (see RunRequest.Steer) into wrapping up immediately with
+	// whatever it has found so far, rather than letting it keep exploring —
+	// see codeWarningStopNudge and the package doc comment above for the
+	// measurement this is based on. arg.MaxTurns <= 0 means unlimited: the
+	// channel is still wired (RunChat needs a non-nil Steer to know it may
+	// receive one) but codeWarningTurnCounter never sends on it.
+	steer := make(chan string, 1)
+	onEvent, nudged := codeWarningTurnCounter(arg.MaxTurns, steer)
 	req := claude.RunRequest{
 		Model:        claude.ModelOpus,
 		Prompt:       warningPrompt(arg, changed),
 		SystemPrompt: claude.CodeWarningSystemPrompt + explainLangTail(arg.Lang),
 		WorkDir:      headDir,
 		Tools:        []string{"Read", "Grep", "Glob"},
+		OnEvent:      onEvent,
+		Steer:        steer,
 	}
-	raw, err := cl.Run(ctx, req)
+	res, err := cl.RunChat(ctx, req)
 	if err != nil {
 		return nil, false
 	}
-	findings := parseWarningFindings(raw)
+	if *nudged {
+		// A run cut short like this still counts as having "really happened"
+		// (the caller's ok=true below) — it just answered from a smaller
+		// exploration than an unlimited run would have. Logged, not an
+		// error: this is the intended, expected outcome of a configured
+		// turn budget, not a failure.
+		log.Printf("code_warning: pr %d hit the %d-turn budget, asked to wrap up early", arg.PR, arg.MaxTurns)
+	}
+	findings := parseWarningFindings(res.Text)
 
 	// Hallucination guard: only trust a finding whose file is one we actually
 	// told the model about — never a fabricated path elsewhere in the worktree.
