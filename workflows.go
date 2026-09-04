@@ -3733,7 +3733,7 @@ func ingestWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 // result summary. Starting an Execution is the sanctioned write path — this is
 // the only way blocks/worktrees are written.
 func (m *TaskManager) StartIngest(ctx context.Context, repo string, pr int) (*ingestResult, error) {
-	runID, err := m.engine.StartWorkflow(WorkflowIngest, IngestInput{PR: pr})
+	runID, err := m.engine.StartWorkflow(WorkflowIngest, IngestInput{Repo: repo, PR: pr})
 	if err != nil {
 		return nil, err
 	}

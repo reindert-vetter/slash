@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -159,5 +160,42 @@ func TestIngestEnsuresPRStatus(t *testing.T) {
 
 	if id := m.findPRStatusLocked("", pr); id == "" {
 		t.Fatal("no pr_status tracker found for pr after ingest")
+	}
+}
+
+// TestStartIngestPassesRepoThrough asserts StartIngest forwards its own repo
+// argument into IngestInput — it used to construct IngestInput{PR: pr} only,
+// silently dropping repo, so a PR from a non-primary repo (e.g.
+// plug-and-pay-ops) would ingest the PRIMARY repo's worktrees for that same
+// number instead.
+func TestStartIngestPassesRepoThrough(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 999997
+	const repo = "plug-and-pay/plug-and-pay-ops"
+
+	db, err := openDB(filepath.Join(dataDir, "graph.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	engine := tembed.New(tembed.NewMemoryStore())
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, db, dataDir, repoSlug)
+
+	var gotRepo string
+	engine.RegisterWorkflow(WorkflowIngest, func(w *tembed.Workflow, input []byte) ([]byte, error) {
+		var in IngestInput
+		if err := json.Unmarshal(input, &in); err != nil {
+			t.Fatal(err)
+		}
+		gotRepo = in.Repo
+		return []byte(`{"stored":0}`), nil
+	})
+
+	if _, err := m.StartIngest(context.Background(), repo, pr); err != nil {
+		t.Fatalf("StartIngest: %v", err)
+	}
+	if gotRepo != repo {
+		t.Fatalf("IngestInput.Repo = %q, want %q — StartIngest dropped its repo argument", gotRepo, repo)
 	}
 }
