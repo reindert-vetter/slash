@@ -1285,6 +1285,70 @@ a manually triggered, low-frequency action.
   block", not a fixed number. The model is told the cap, but it is
   **hard-enforced in Go** (sort on `file, line`, truncate), so a model ignoring
   the instruction can't exceed it.
+- **Turn budget (`runCodeWarningReview`'s steer-based cutoff):** measured
+  against 106 real runs (week 2026-08-29..09-04, before this existed): 15.7
+  turns/run and 1.70M tokens/run on average, 96% of which is the accumulated
+  prefix resent unchanged every turn (context grows ~3.5k tokens/turn, turn 1
+  ≈ 66k, turn 30 ≈ 148k) — and turn count does **not** track PR size (1 file
+  already costs 11.9 turns, 88 files costs 27; Pearson r = 0.16), because
+  nothing was bounding it: the model simply explored until it judged itself
+  done. Of 406 sampled findings, 94% were already anchored to a file the
+  model had touched by the FIRST HALF of its own turns; the second half only
+  reshuffled the list in ~5% of runs while accounting for 58% of the tokens.
+  The `claude` CLI has **no `--max-turns` flag** (checked directly,
+  `claude -p --help`), so this could not be a simple invocation flag:
+  - `runCodeWarningReview` switched from `cl.Run` (a single non-streaming
+    call) to `cl.RunChat`, with an `OnEvent` callback
+    (`codeWarningTurnCounter`) that counts a new `claude.ChatEventTurn` event
+    — fired once per agentic step (a CLI "assistant" frame), matching the
+    CLI's own final `num_turns` — and a `Steer` channel wired on every call.
+  - The first time the count reaches `codeWarningMaxTurns()`, the counter
+    sends **one** message on that channel (`codeWarningStopNudge`) and closes
+    it: "stop investigating, answer now with the JSON array based on what you
+    found so far". This is what makes a truncated run still useful — the
+    model's own next step is its real, final answer (parsed exactly like an
+    unbounded run's), not an aborted context cancellation that would return
+    nothing. A context-cancel approach was rejected for exactly that reason:
+    the model only ever produces its JSON answer at the very end, so killing
+    the process mid-exploration would throw away everything, not just the
+    unexplored tail.
+  - **Default 8** (`codeWarningDefaultMaxTurns`, a `var` for testability, same
+    pattern as `modules/claude/claude.go`'s `contextTimeout`/`agenticTimeout`)
+    — close to the observed "half the turns already carry 94% of the
+    findings" point above. **Configurable** via
+    `SLASH_CODE_WARNING_MAX_TURNS` (read inside the `runAgenticReview`
+    Activity, never the workflow body — an env read is a side effect, see
+    `.claude/rules/workflow-determinism.md`): a positive integer overrides
+    the default, `"0"`/`"unlimited"` (case-insensitive) disables the budget
+    entirely, anything unparsable falls back to the default rather than
+    silently meaning unlimited.
+  - **Measured A/B** (own `slash` instance, own port/data dir, PR
+    `reindert-vetter/slash-test#1`, 276 changed files / 601 blocks — a
+    synthetic "every case at once" fixture, deliberately far larger/more
+    spread-out than a typical PR): unlimited took **77 CLI turns, 233s,
+    $1.36, 12 findings**; capped at 12 turns (nudged at turn 13): **54s,
+    $0.34 (25% of the cost), 9 findings (75% of unlimited's)**; capped at 8
+    (nudged at 9): **28s, $0.26, 3 findings**; capped at 5 (nudged
+    immediately): **21s, $0.21, 4 findings**. The one risk every bounded run
+    still caught — `PricingCalculator.withTax()` silently rounding to
+    multiples of 5 before VAT, a real behavioural change — survived down to 5
+    turns; what a smaller budget traded away was a mix of genuinely marginal
+    findings (a stray `.phpunit.result.cache`, an unused method) **and**
+    several legitimate ones (a broken `Dockerfile` build step, a factory/model
+    field mismatch, a frontend/backend pricing-logic duplication bug, a
+    missing API route) — so a tight budget is a real recall trade, not a
+    free lunch, and this fixture's 77-turn unbounded baseline is itself an
+    outlier next to the 15.7-turn population average, meaning a typical PR
+    likely keeps a larger fraction of its findings at the same cap than this
+    stress test shows. 12 turns kept the best ratio (75% of findings for 25%
+    of the cost) even on this worst case; 8 stays the shipped default for the
+    common (much smaller) PR, per the population-level "half the turns, 94%
+    of the findings" measurement above.
+  - Tests: `TestCodeWarningTurnCounterNudgesAtLimit`/
+    `TestCodeWarningTurnCounterUnlimitedNeverNudges` (the counter in
+    isolation), `TestCodeWarningMaxTurnsEnvOverride` (the env parsing),
+    `TestCodeWarningReviewReturnsFindingsWhenTurnBudgetHit` (a truncated run
+    still returns its findings) — all in `code_warning_test.go`.
 - **A file already reviewed at its current content is skipped — no Opus call
   at all** (`modules/warnreviewed`, `data/warnreviewed.db`:
   `reviewed_files(repo, pr, file, hash, reviewed_at)`, same shape as
