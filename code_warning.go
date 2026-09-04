@@ -252,14 +252,14 @@ func runCodeWarningReview(ctx context.Context, cl claude.Client, dataDir string,
 	if err != nil {
 		return nil, false
 	}
-	if *nudged {
-		// A run cut short like this still counts as having "really happened"
-		// (the caller's ok=true below) — it just answered from a smaller
-		// exploration than an unlimited run would have. Logged, not an
-		// error: this is the intended, expected outcome of a configured
-		// turn budget, not a failure.
-		log.Printf("code_warning: pr %d hit the %d-turn budget, asked to wrap up early", arg.PR, arg.MaxTurns)
-	}
+	// Logged unconditionally (not just when nudged): this is the one place
+	// that can compare an unlimited run against a bounded one on real data
+	// (turns/cost/tokens vs. findings kept, once combined with the "found"
+	// count codeWarningWorkflow logs) — see the turn-budget measurement in
+	// .claude/docs/workflows-analysis.md.
+	u := res.Usage
+	log.Printf("code_warning: pr %d review done — maxTurns=%d cliTurns=%d nudged=%v cost=$%.4f tokens(in=%d out=%d cacheRead=%d cacheCreate=%d)",
+		arg.PR, arg.MaxTurns, u.NumTurns, *nudged, u.TotalCostUSD, u.InputTokens, u.OutputTokens, u.CacheReadInputTokens, u.CacheCreationInputTokens)
 	findings := parseWarningFindings(res.Text)
 
 	// Hallucination guard: only trust a finding whose file is one we actually

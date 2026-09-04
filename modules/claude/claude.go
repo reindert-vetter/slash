@@ -159,6 +159,27 @@ type ChatResult struct {
 	// A ChatResult with IsError set is never returned as a "success" by
 	// RunChat — see ChatCallError.
 	IsError bool
+	// Usage mirrors the CLI's own final `result` frame cost/token accounting
+	// (its "num_turns"/"total_cost_usd"/"usage" fields) — zero-valued when
+	// the stream never carried them (e.g. Fake). Added for code_warning's
+	// turn-budget measurement (see the "onbeperkt"/8/5-turn comparison in
+	// .claude/docs/workflows-analysis.md); every existing caller ignores it,
+	// same additive shape as ChatEventTurn.
+	Usage ChatUsage
+}
+
+// ChatUsage is the cost/token accounting the CLI itself reports on a turn's
+// final `result` frame. CacheReadInputTokens/CacheCreationInputTokens are
+// broken out separately from InputTokens because they are typically the bulk
+// of an agentic run's cost (the resent, cached prefix — see
+// codeWarningDefaultMaxTurns' own doc comment in package main).
+type ChatUsage struct {
+	NumTurns                 int
+	TotalCostUSD             float64
+	InputTokens              int
+	OutputTokens             int
+	CacheReadInputTokens     int
+	CacheCreationInputTokens int
 }
 
 // ChatCallError wraps a RunChat failure with, where available, the CLI's OWN
@@ -486,12 +507,20 @@ func (m *Module) RunChat(ctx context.Context, req RunRequest) (ChatResult, error
 // more (hook lifecycle, token estimates, rate-limit info) and a new frame type
 // must never break a turn.
 type chatStreamLine struct {
-	Type      string `json:"type"`
-	Subtype   string `json:"subtype"`
-	Result    string `json:"result"`
-	IsError   bool   `json:"is_error"`
-	SessionID string `json:"session_id"`
-	Event     *struct {
+	Type         string  `json:"type"`
+	Subtype      string  `json:"subtype"`
+	Result       string  `json:"result"`
+	IsError      bool    `json:"is_error"`
+	SessionID    string  `json:"session_id"`
+	NumTurns     int     `json:"num_turns"`
+	TotalCostUSD float64 `json:"total_cost_usd"`
+	Usage        *struct {
+		InputTokens              int `json:"input_tokens"`
+		OutputTokens             int `json:"output_tokens"`
+		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	} `json:"usage"`
+	Event *struct {
 		Type  string `json:"type"`
 		Delta *struct {
 			Type     string `json:"type"`
@@ -568,6 +597,18 @@ func readChatStream(r io.Reader, onEvent func(ChatEvent), onResult func()) (Chat
 						}
 					}
 					res.SessionID, res.IsError, seenResult = l.SessionID, res.IsError || l.IsError, true
+					// Overwritten on a second result frame (a late steer
+					// message executed as its own follow-up turn, see
+					// above) — the CLI reports cumulative usage for the
+					// whole turn so far, so the latest frame's numbers are
+					// the ones that matter.
+					res.Usage.NumTurns, res.Usage.TotalCostUSD = l.NumTurns, l.TotalCostUSD
+					if l.Usage != nil {
+						res.Usage.InputTokens = l.Usage.InputTokens
+						res.Usage.OutputTokens = l.Usage.OutputTokens
+						res.Usage.CacheReadInputTokens = l.Usage.CacheReadInputTokens
+						res.Usage.CacheCreationInputTokens = l.Usage.CacheCreationInputTokens
+					}
 				} else if onEvent != nil {
 					emitChatEvents(l, onEvent)
 				}
