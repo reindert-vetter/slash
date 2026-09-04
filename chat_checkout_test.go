@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -783,6 +784,113 @@ func TestPrepareChatShellWorkDirNeverReusesAnotherPRsAssignedDir(t *testing.T) {
 	}
 }
 
+// With every directory of this repo held back — one claimed by another PR,
+// one the reviewer rejected earlier — the ladder must NOT dead-end on "add a
+// path to chatCheckoutDirs" (reported bug: "er is wel ruimte in ~/dev pp
+// projecten"). It offers all of them as an explicit choice instead, each
+// labelled with the reason it first fell out, plus a way out.
+func TestPrepareChatShellWorkDirOffersEveryHeldBackDirAsALastResort(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	claimed := cloneCheckoutDir(t, bareDir, "feature/x")
+	rejected := cloneCheckoutDir(t, bareDir, "feature/x")
+	writeCheckoutSettings(t, dataDir, claimed, rejected)
+
+	assignCheckoutForTest(t, "", 1030, claimed)
+	getOrCreateCheckoutAssignment(dataDir, "", 1031).Excluded[rejected] = true
+
+	dir, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1031, "", "feature/x")
+	if ok || dir != "" {
+		t.Fatalf("expected a choice, not a silent pick: dir=%q ok=%v", dir, ok)
+	}
+	if decision == nil || decision.Stage != checkoutStageChooseDirectory {
+		t.Fatalf("decision = %+v, want a chooseDirectory choice", decision)
+	}
+	want := []string{
+		claimed + checkoutOptionNoteSep + "in gebruik door PR 1030",
+		rejected + checkoutOptionNoteSep + "eerder door jou afgewezen",
+		optNoneOfThese,
+	}
+	for _, w := range want {
+		if !slices.Contains(decision.Options, w) {
+			t.Fatalf("options = %v, missing %q", decision.Options, w)
+		}
+	}
+	if len(decision.Options) != len(want) {
+		t.Fatalf("options = %v, want exactly %v", decision.Options, want)
+	}
+}
+
+// Answering that last-resort choice with a directory another PR claims takes
+// it over completely: this PR gets it, and the other PR's own assignment is
+// released so the two can never both show the same folder pill.
+func TestPrepareChatShellWorkDirTakesOverAClaimedDirOnAnswer(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	claimed := cloneCheckoutDir(t, bareDir, "feature/x")
+	writeCheckoutSettings(t, dataDir, claimed)
+
+	assignCheckoutForTest(t, "", 1032, claimed)
+
+	_, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1033, "", "feature/x")
+	if ok || decision == nil || len(decision.Options) != 2 {
+		t.Fatalf("expected the claimed dir plus a way out: ok=%v decision=%+v", ok, decision)
+	}
+	dir, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1033, decision.Options[0], "feature/x")
+	if !ok || dir != claimed {
+		t.Fatalf("dir = %q ok = %v decision = %+v, want the claimed dir taken over", dir, ok, decision)
+	}
+	if other := getOrCreateCheckoutAssignment(dataDir, "", 1032); other.Dir != "" {
+		t.Fatalf("PR 1032 still claims %q, want its claim released", other.Dir)
+	}
+}
+
+// "Geen van deze" must END the choice — not ask the identical question again
+// one loop iteration later — and leave the honest dead-end wording behind for
+// the write turn to report.
+func TestPrepareChatShellWorkDirNoneOfTheseEndsTheChoice(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	rejected := cloneCheckoutDir(t, bareDir, "feature/x")
+	writeCheckoutSettings(t, dataDir, rejected)
+
+	a := getOrCreateCheckoutAssignment(dataDir, "", 1034)
+	a.Excluded[rejected] = true
+
+	if _, decision, _ := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1034, "", "feature/x"); decision == nil {
+		t.Fatal("expected the last-resort choice first")
+	}
+	dir, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1034, optNoneOfThese, "feature/x")
+	if ok || dir != "" || decision != nil {
+		t.Fatalf("dir = %q decision = %+v ok = %v, want a plain dead end", dir, decision, ok)
+	}
+	if a.Pending != nil {
+		t.Fatalf("expected the choice to be gone, got %+v", a.Pending)
+	}
+	if !strings.Contains(a.LastReason, rejected) {
+		t.Fatalf("LastReason = %q, want it to name %q instead of blaming settings.json", a.LastReason, rejected)
+	}
+}
+
+// The note on an option is only a LABEL — the answer still resolves to the
+// bare directory.
+func TestCheckoutOptionDirStripsItsNote(t *testing.T) {
+	hold := checkoutHoldback{Claimed: map[string]int{"/dev/pap-4": 13606}}
+	opt := annotateCheckoutOption("/dev/pap-4", hold)
+	if opt != "/dev/pap-4"+checkoutOptionNoteSep+"in gebruik door PR 13606" {
+		t.Fatalf("option = %q", opt)
+	}
+	if got := checkoutOptionDir(opt); got != "/dev/pap-4" {
+		t.Fatalf("checkoutOptionDir(%q) = %q, want the bare path", opt, got)
+	}
+	if got := checkoutOptionDir("/dev/pap-4"); got != "/dev/pap-4" {
+		t.Fatalf("an unannotated option must round-trip unchanged, got %q", got)
+	}
+}
+
 // selectCheckoutCandidate is a pure function — no git needed at all — so its
 // own decision logic (none/one/many) is tested directly.
 func TestSelectCheckoutCandidate(t *testing.T) {
@@ -850,7 +958,7 @@ func TestSelectCheckoutCandidatePrioritizesOnTargetBranch(t *testing.T) {
 func TestListAllCheckoutChoicesDoesNotPrioritize(t *testing.T) {
 	onTarget := checkoutCandidate{Dir: "/on-target", OnTargetBranch: true}
 	mergedBase := checkoutCandidate{Dir: "/merged-base", MergedIntoBase: true}
-	dec := listAllCheckoutChoices([]checkoutCandidate{onTarget, mergedBase}, checkoutDiscovery{})
+	dec := listAllCheckoutChoices([]checkoutCandidate{onTarget, mergedBase}, checkoutDiscovery{}, checkoutHoldback{})
 	if dec == nil || len(dec.Options) != 2 {
 		t.Fatalf("expected both candidates offered unfiltered, got %+v", dec)
 	}
@@ -1299,16 +1407,16 @@ func TestFastForwardCheckoutToOriginSurvivesBrokenSubmodule(t *testing.T) {
 // listAllCheckoutChoices is pure — no git needed — and, unlike
 // selectCheckoutCandidate, never auto-picks even for a single candidate.
 func TestListAllCheckoutChoicesNeverAutoPicks(t *testing.T) {
-	if dec := listAllCheckoutChoices(nil, checkoutDiscovery{}); dec == nil || len(dec.Options) != 0 || dec.Body == "" {
+	if dec := listAllCheckoutChoices(nil, checkoutDiscovery{}, checkoutHoldback{}); dec == nil || len(dec.Options) != 0 || dec.Body == "" {
 		t.Fatalf("zero candidates: got %+v, want a decision with an explanatory body and no options", dec)
 	}
 	one := []checkoutCandidate{{Dir: "/a"}}
-	dec := listAllCheckoutChoices(one, checkoutDiscovery{})
+	dec := listAllCheckoutChoices(one, checkoutDiscovery{}, checkoutHoldback{})
 	if dec == nil || dec.Stage != checkoutStageChooseDirectory || len(dec.Options) != 1 || dec.Options[0] != "/a" {
 		t.Fatalf("one candidate: got %+v, want it still offered as a choice, not auto-picked", dec)
 	}
 	many := []checkoutCandidate{{Dir: "/a"}, {Dir: "/b"}}
-	dec = listAllCheckoutChoices(many, checkoutDiscovery{})
+	dec = listAllCheckoutChoices(many, checkoutDiscovery{}, checkoutHoldback{})
 	if dec == nil || len(dec.Options) != 2 {
 		t.Fatalf("two candidates: got %+v", dec)
 	}
@@ -1673,6 +1781,10 @@ func TestCheckoutDiscoveryReasonNamesTheRealObstacle(t *testing.T) {
 	broken := checkoutDiscovery{Matched: 1, Broken: []string{"/dev/pap-3"}}.reason()
 	if !strings.Contains(broken, "/dev/pap-3") || !strings.Contains(broken, "git fetch") {
 		t.Fatalf("broken reason = %q", broken)
+	}
+	held := checkoutDiscovery{Matched: 1, HeldBack: []string{"/dev/pap-4 — in gebruik door PR 13606"}}.reason()
+	if !strings.Contains(held, "/dev/pap-4") || !strings.Contains(held, "PR 13606") {
+		t.Fatalf("held-back reason = %q, want it to name the directory and its holder", held)
 	}
 }
 

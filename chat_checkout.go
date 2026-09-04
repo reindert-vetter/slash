@@ -15,9 +15,16 @@
 //  2. If that yields nothing usable: a bounded scan of the reviewer's home
 //     directory for any git checkout whose remote matches the repo's slug
 //     EXACTLY (no forks).
-//  3. If still nothing: no candidate at all — the write turn reports that
-//     plainly and asks the reviewer to configure or clone one; there is NO
-//     fallback to a disposable worktree any more.
+//  3. If still nothing, but directories of this repo were merely HELD BACK
+//     (claimed by another PR, or rejected by the reviewer earlier — see
+//     checkoutHoldback): the same ladder runs once more with nothing held
+//     back, and every usable directory is offered as an explicit choice,
+//     each labelled with the reason it first fell out, plus a "Geen van
+//     deze" way out. Never auto-picked.
+//  4. Only if even that finds nothing: no candidate at all — the write turn
+//     reports what it DID see (checkoutDiscovery.reason) and asks the
+//     reviewer to configure or clone one; there is NO fallback to a
+//     disposable worktree any more.
 //
 // A candidate is only eligible when it is ALREADY on the PR's own branch, or
 // on some other branch that is already merged into the repo's base branch
@@ -443,6 +450,14 @@ type checkoutDiscovery struct {
 	Busy []string
 	// Broken: matched checkouts whose classification failed outright.
 	Broken []string
+	// HeldBack: matched checkouts skipped only because of a HOLDBACK — the
+	// reviewer's own earlier "nee, zoek een andere directory", or another PR
+	// of the same repo already claiming that directory. Each entry is already
+	// annotated with its own reason (annotateCheckoutOption), so the wording
+	// below can print it verbatim. This is the case that used to leave every
+	// counter at zero and therefore blamed settings.json — see the last-resort
+	// pass in prepareChatShellWorkDirAt.
+	HeldBack []string
 	// Err is the first classification error, verbatim, for the log.
 	Err error
 }
@@ -459,23 +474,105 @@ func (d checkoutDiscovery) reason() string {
 	case len(d.Busy) > 0:
 		return fmt.Sprintf("Ik vond %d lokale map(pen) van deze repo (%s), maar die staan op een andere branch die nog niet is gemerged — die pak ik nooit zomaar af.",
 			len(d.Busy), strings.Join(d.Busy, ", "))
+	case len(d.HeldBack) > 0:
+		return fmt.Sprintf("Ik vond %d lokale map(pen) van deze repo (%s), maar die vielen allemaal weg. Kies er via de werkmap-keuze alsnog een, of voeg een pad toe aan chatCheckoutDirs in settings.json.",
+			len(d.HeldBack), strings.Join(d.HeldBack, ", "))
 	}
 	return ""
 }
 
+// ---------------------------------------------------------------------------
+// Holdbacks: the two reasons a directory OF THIS REPO, in a perfectly usable
+// git state, is still not offered automatically. Both are soft by design —
+// see the last-resort pass in prepareChatShellWorkDirAt: with nothing free
+// left, the reviewer gets EVERY candidate offered anyway, each labelled with
+// the holdback it fell out on, so a PR can never end up with no way forward
+// at all (reported bug: "er is wel ruimte in ~/dev", while the write turn
+// said there was no local checkout and pointed at settings.json).
+// ---------------------------------------------------------------------------
+
+// checkoutHoldback says which directories are held back from an ordinary
+// ladder pass, and why. A zero value holds nothing back, which is exactly
+// what the last-resort pass (and the explicit "andere directory kiezen"
+// menu) uses.
+type checkoutHoldback struct {
+	// Rejected are the directories the reviewer explicitly said no to for
+	// this PR (checkoutStageReuseMerged's "nee" answer, a.Excluded).
+	Rejected map[string]bool
+	// Claimed maps a directory to the OTHER PR of the same repo currently
+	// assigned to it, so two PRs never silently share one folder.
+	Claimed map[string]int
+}
+
+// holds reports whether dir is held back for either reason.
+func (h checkoutHoldback) holds(dir string) bool {
+	return h.Rejected[dir] || h.Claimed[dir] != 0
+}
+
+// empty reports whether this holdback would skip nothing at all — in which
+// case a second, unfiltered pass over the very same directories can only
+// return the very same result, so the last-resort choice is pointless.
+func (h checkoutHoldback) empty() bool {
+	return len(h.Rejected) == 0 && len(h.Claimed) == 0
+}
+
+// noteFor is the short, reviewer-facing reason dir was held back, or "" when
+// it wasn't. The WORD carries the meaning here (never a colour), same rule as
+// everywhere else in this app.
+func (h checkoutHoldback) noteFor(dir string) string {
+	switch {
+	case h.Claimed[dir] != 0:
+		return fmt.Sprintf("in gebruik door PR %d", h.Claimed[dir])
+	case h.Rejected[dir]:
+		return "eerder door jou afgewezen"
+	}
+	return ""
+}
+
+// checkoutOptionNoteSep separates a directory from its holdback note inside
+// one chooseDirectory option string — the overlay labels every row with the
+// option verbatim (src/workDirOverlay.mjs), so this IS the only place the
+// reviewer can see why a directory had fallen out. checkoutOptionDir maps it
+// back; no real filesystem path contains an em dash surrounded by spaces.
+const checkoutOptionNoteSep = " — "
+
+// annotateCheckoutOption is the option text for one candidate directory:
+// bare when nothing was in the way, "<dir> — <reason>" when it was held back.
+func annotateCheckoutOption(dir string, hold checkoutHoldback) string {
+	if note := hold.noteFor(dir); note != "" {
+		return dir + checkoutOptionNoteSep + note
+	}
+	return dir
+}
+
+// checkoutOptionDir recovers the plain directory from an option that may
+// carry an annotateCheckoutOption note.
+func checkoutOptionDir(opt string) string {
+	if i := strings.Index(opt, checkoutOptionNoteSep); i >= 0 {
+		return strings.TrimSpace(opt[:i])
+	}
+	return strings.TrimSpace(opt)
+}
+
 // listCheckoutCandidates runs the full discovery ladder (steps 1-2) and
 // classifies every directory that survives the "wrong repo" and "someone
-// else's unfinished, unmerged branch" filters. excluded names directories the
-// reviewer already explicitly rejected for this PR (see
-// checkoutStageReuseMerged's "no" answer) so they are never offered again.
-func listCheckoutCandidates(ctx context.Context, dataDir, repoSlug, headRef, baseBranch string, excluded map[string]bool) ([]checkoutCandidate, checkoutDiscovery) {
+// else's unfinished, unmerged branch" filters. hold names the directories
+// this pass must skip and why (see checkoutHoldback); a zero holdback skips
+// nothing, which is what the last-resort pass and the explicit "andere
+// directory kiezen" menu use.
+//
+// A held-back directory is still CLASSIFIED as "a directory of this repo"
+// (diag.Matched/diag.HeldBack) before it is skipped — costing one extra `git
+// remote` call per directory — precisely so a dead end can name it instead of
+// leaving every counter at zero and blaming settings.json.
+func listCheckoutCandidates(ctx context.Context, dataDir, repoSlug, headRef, baseBranch string, hold checkoutHoldback) ([]checkoutCandidate, checkoutDiscovery) {
 	seen := map[string]bool{}
 	var out []checkoutCandidate
 	var diag checkoutDiscovery
 
 	add := func(rawDir string) {
 		dir := expandTilde(strings.TrimSpace(rawDir))
-		if dir == "" || seen[dir] || excluded[dir] {
+		if dir == "" || seen[dir] {
 			return
 		}
 		seen[dir] = true
@@ -486,6 +583,10 @@ func listCheckoutCandidates(ctx context.Context, dataDir, repoSlug, headRef, bas
 			return // wrong repo, or a fork
 		}
 		diag.Matched++
+		if hold.holds(dir) {
+			diag.HeldBack = append(diag.HeldBack, annotateCheckoutOption(dir, hold))
+			return
+		}
 		cand, err := classifyCheckoutCandidate(ctx, dir, headRef, baseBranch)
 		if err != nil {
 			diag.Broken = append(diag.Broken, dir)
@@ -574,6 +675,38 @@ func selectCheckoutCandidate(candidates []checkoutCandidate) (dir string, decisi
 	}
 }
 
+// checkoutLastResortDecision is the ladder's step 3, and the ONE place a
+// held-back directory is ever offered: no directory is free any more, so the
+// reviewer chooses between ALL of them — a directory another PR claims, and a
+// directory they themselves rejected earlier, each labelled with exactly that
+// reason (annotateCheckoutOption; the word carries the meaning, there is no
+// colour involved). Deliberately never auto-picked, not even with a single
+// option left: overruling one's own "nee" or taking a folder off another PR is
+// a decision, never a guess.
+//
+// prioritizeOnTargetBranch is deliberately NOT applied — same reasoning as
+// listAllCheckoutChoices: this list exists so the reviewer can see and pick
+// everything there is.
+//
+// optNoneOfThese keeps the choice answerable in the one direction that would
+// otherwise be a trap: a reviewer who wants none of these gets the honest
+// dead-end wording (checkoutDiscovery.reason) instead of a question that
+// cannot be dismissed. A LATER request runs the ladder again and may ask
+// again — that is a new request, not the same unanswerable loop the removed
+// checkoutStageDivergedHistory consult used to produce.
+func checkoutLastResortDecision(candidates []checkoutCandidate, hold checkoutHoldback) *chatCheckoutDecision {
+	opts := make([]string, 0, len(candidates)+1)
+	for _, c := range candidates {
+		opts = append(opts, annotateCheckoutOption(c.Dir, hold))
+	}
+	opts = append(opts, optNoneOfThese)
+	return &chatCheckoutDecision{
+		Stage:   checkoutStageChooseDirectory,
+		Body:    "Er is geen vrije werkmap meer voor deze PR. Dit zijn alle lokale directories van deze repo die ik alsnog kan gebruiken, met per map waarom hij eerst afviel. Welke mag ik gebruiken?",
+		Options: opts,
+	}
+}
+
 // ---------------------------------------------------------------------------
 // The reviewer consult: forceful, structured, answered via the SAME
 // message/Signal round trip a chat.KindQuestion already uses (see
@@ -613,6 +746,10 @@ const (
 	optKeepCombined = "Meenemen in de commit"
 	optReuseYes     = "Ja, gebruik deze directory voor deze PR"
 	optReuseNo      = "Nee, zoek een andere directory"
+	// optNoneOfThese is only ever offered by checkoutLastResortDecision — the
+	// way out of a choice between directories that all have something against
+	// them.
+	optNoneOfThese = "Geen van deze"
 )
 
 // checkoutOptionAliases are natural-language stand-ins for an option's own
@@ -808,10 +945,12 @@ func persistCheckoutAssignment(dataDir, repo string, pr int, a *chatCheckoutAssi
 	savePersistedCheckout(dataDir, repo, pr, a.Dir, a.Branch)
 }
 
-// checkoutDirsInUseByOtherPRs returns the directories currently assigned (in
-// this very process) to some OTHER PR of the same repo — so the ladder never
-// hands the same local checkout to two PRs at once. Without this,
-// listCheckoutCandidates only ever excluded a directory the reviewer had
+// checkoutDirClaimsByOtherPRs maps every directory currently assigned (in
+// this very process) to some OTHER PR of the same repo onto that PR's own
+// number — so the ladder never hands the same local checkout to two PRs at
+// once, and so the reviewer can SEE which PR is holding a directory when it
+// is offered to them anyway (annotateCheckoutOption). Without the claim at
+// all, listCheckoutCandidates only ever skipped a directory the reviewer had
 // explicitly rejected (a.Excluded), never one another PR's own assignment
 // already claims; the reported bug was two different open PRs both showing
 // the same "plug-and-pay-2" folder pill on /pr-overview, because the second
@@ -819,38 +958,57 @@ func persistCheckoutAssignment(dataDir, repo string, pr int, a *chatCheckoutAssi
 // kiezen") a directory the first PR was already using — leaving the first
 // PR's own stored assignment silently stale until its next write turn
 // happens to re-classify it (prepareChatShellWorkDirAt's `a.Dir != ""`
-// branch).
-func checkoutDirsInUseByOtherPRs(repo string, pr int) map[string]bool {
+// branch). A claim taken over deliberately is released right away, see
+// releaseCheckoutDirFromOtherPRs.
+func checkoutDirClaimsByOtherPRs(repo string, pr int) map[string]int {
 	chatCheckoutMu.Lock()
 	defer chatCheckoutMu.Unlock()
-	inUse := map[string]bool{}
+	claims := map[string]int{}
 	for key, a := range chatCheckoutByPR {
 		if key.Repo != repo || key.PR == pr || a == nil || a.Dir == "" {
 			continue
 		}
-		inUse[a.Dir] = true
+		claims[a.Dir] = key.PR
 	}
-	return inUse
+	return claims
 }
 
-// withExcludedDirsInUseElsewhere unions base (a PR's own explicit rejections)
-// with the directories checkoutDirsInUseByOtherPRs finds, without mutating
-// base itself — base is the PR's own persisted Excluded map and must keep
-// meaning exactly "the reviewer said no to this one", not gain entries that
-// would vanish again once the other PR releases the directory.
-func withExcludedDirsInUseElsewhere(base map[string]bool, repo string, pr int) map[string]bool {
-	inUse := checkoutDirsInUseByOtherPRs(repo, pr)
-	if len(inUse) == 0 {
-		return base
+// checkoutHoldbackFor is the holdback of one ordinary ladder pass: the PR's
+// own explicit rejections plus every directory another PR claims. rejected is
+// the PR's own persisted Excluded map and is used AS IS (never mutated, never
+// unioned into) so it keeps meaning exactly "the reviewer said no to this
+// one" and can be reported separately from a claim.
+func checkoutHoldbackFor(repo string, pr int, rejected map[string]bool) checkoutHoldback {
+	return checkoutHoldback{Rejected: rejected, Claimed: checkoutDirClaimsByOtherPRs(repo, pr)}
+}
+
+// releaseCheckoutDirFromOtherPRs drops dir from every OTHER PR of the same
+// repo that still claims it — called the moment this PR really takes a
+// directory, so the "two PRs showing the same folder pill" bug can never come
+// back through the last-resort choice (which deliberately offers a claimed
+// directory). Only in-memory assignments are found; a claim that lives only
+// in the durable store heals itself on its own next touch, because that PR's
+// re-classification then finds the directory on somebody else's branch and
+// re-runs the ladder (prepareChatShellWorkDirAt's `a.Dir != ""` branch).
+func releaseCheckoutDirFromOtherPRs(dataDir, repo string, pr int, dir string) {
+	if dir == "" {
+		return
 	}
-	merged := make(map[string]bool, len(base)+len(inUse))
-	for d := range base {
-		merged[d] = true
+	var released []int
+	chatCheckoutMu.Lock()
+	for key, a := range chatCheckoutByPR {
+		if key.Repo != repo || key.PR == pr || a == nil || a.Dir != dir {
+			continue
+		}
+		a.Dir = ""
+		a.Branch = ""
+		released = append(released, key.PR)
 	}
-	for d := range inUse {
-		merged[d] = true
+	chatCheckoutMu.Unlock()
+	// Outside the lock: savePersistedCheckout takes its own.
+	for _, other := range released {
+		savePersistedCheckout(dataDir, repo, other, "", "")
 	}
-	return merged
 }
 
 // checkoutChoiceOpen reports whether this PR has an unresolved work-directory
@@ -1108,10 +1266,22 @@ func applyCheckoutDecisionReply(ctx context.Context, a *chatCheckoutAssignment, 
 	d := a.Pending
 	switch d.Stage {
 	case checkoutStageChooseDirectory:
-		if opt, ok := matchCheckoutOption(d.Options, reply); ok {
-			return &chatCheckoutResolved{Dir: opt}, nil
+		opt, ok := matchCheckoutOption(d.Options, reply)
+		if !ok {
+			return nil, nil
 		}
-		return nil, nil
+		if opt == optNoneOfThese {
+			// Final with no directory: the turn dead-ends with the reason the
+			// ladder already recorded, instead of asking the same thing again
+			// one loop iteration later. See checkoutLastResortDecision.
+			return &chatCheckoutResolved{Dir: "", Final: true}, nil
+		}
+		dir := checkoutOptionDir(opt)
+		// A directory the reviewer picks HERE is picked deliberately, so an
+		// earlier "nee, zoek een andere directory" about that same directory
+		// must not immediately veto it again on the next ladder pass.
+		delete(a.Excluded, dir)
+		return &chatCheckoutResolved{Dir: dir}, nil
 	case checkoutStageReuseMerged:
 		opt, ok := matchCheckoutOption(d.Options, reply)
 		if !ok {
@@ -1279,6 +1449,7 @@ func prepareChatShellWorkDirAt(ctx context.Context, tm *TaskManager, dataDir, re
 				// Deliberately skip re-classification — see chatCheckoutResolved's
 				// own doc comment (re-checking now would just re-trigger the exact
 				// same decision, since nothing about the dirty state changed).
+				releaseCheckoutDirFromOtherPRs(dataDir, repo, pr, a.Dir)
 				return a.Dir, nil, a.Dir != ""
 			}
 			continue
@@ -1336,10 +1507,12 @@ func prepareChatShellWorkDirAt(ctx context.Context, tm *TaskManager, dataDir, re
 				}
 			}
 			a.Branch = headRef
+			releaseCheckoutDirFromOtherPRs(dataDir, repo, pr, a.Dir)
 			return a.Dir, nil, true
 		}
 
-		candidates, diag := listCheckoutCandidates(ctx, dataDir, slug, headRef, baseBranch, withExcludedDirsInUseElsewhere(a.Excluded, repo, pr))
+		hold := checkoutHoldbackFor(repo, pr, a.Excluded)
+		candidates, diag := listCheckoutCandidates(ctx, dataDir, slug, headRef, baseBranch, hold)
 		if diag.Err != nil && tm != nil && tm.logf != nil {
 			tm.logf("chat_checkout: pr %d: listing candidates: %v", pr, diag.Err)
 		}
@@ -1354,10 +1527,34 @@ func prepareChatShellWorkDirAt(ctx context.Context, tm *TaskManager, dataDir, re
 			a.LastReason = ""
 			publishCheckoutChanged(repo, pr)
 			return "", dec, false
-		default:
-			a.LastReason = diag.reason()
-			return "", nil, false
 		}
+
+		// Nothing free left. Rather than dead-ending on "there is no local
+		// checkout, add a path to chatCheckoutDirs" — which was simply untrue
+		// on a machine with several checkouts of this repo, all of them merely
+		// held back (reported bug: "er is wel ruimte in ~/dev") — run the
+		// ladder ONE more time with nothing held back at all and let the
+		// reviewer pick from every directory that is usable by its own git
+		// state. Never auto-picked, however few options are left: taking over
+		// another PR's directory, or overruling one's own earlier "nee", is
+		// always an explicit choice (checkoutLastResortDecision).
+		if !hold.empty() {
+			all, allDiag := listCheckoutCandidates(ctx, dataDir, slug, headRef, baseBranch, checkoutHoldback{})
+			if allDiag.Err != nil && tm != nil && tm.logf != nil {
+				tm.logf("chat_checkout: pr %d: listing held-back candidates: %v", pr, allDiag.Err)
+			}
+			if len(all) > 0 {
+				a.Pending = checkoutLastResortDecision(all, hold)
+				// The dead-end wording of the FIRST pass, kept for the moment
+				// the reviewer answers "geen van deze" below.
+				a.LastReason = diag.reason()
+				publishCheckoutChanged(repo, pr)
+				return "", a.Pending, false
+			}
+			diag = allDiag
+		}
+		a.LastReason = diag.reason()
+		return "", nil, false
 	}
 	return "", nil, false
 }
@@ -1958,7 +2155,12 @@ func chatConflictPrompt(conversationID string, conflicted []string) string {
 // options) so the reviewer sees WHY nothing can be offered, rather than the
 // menu silently doing nothing. Pure and dependency-free, like
 // selectCheckoutCandidate, so it's unit-testable without any real git repo.
-func listAllCheckoutChoices(candidates []checkoutCandidate, diag checkoutDiscovery) *chatCheckoutDecision {
+//
+// hold only LABELS the options here (annotateCheckoutOption): the reviewer
+// asking for this menu gets every directory offered regardless, including one
+// another PR claims — with that claim named on the option itself, so the
+// choice is informed rather than blind.
+func listAllCheckoutChoices(candidates []checkoutCandidate, diag checkoutDiscovery, hold checkoutHoldback) *chatCheckoutDecision {
 	if len(candidates) == 0 {
 		body := "Geen lokale directory gevonden voor deze repo. Voeg een pad toe aan chatCheckoutDirs in settings.json of clone de repo lokaal."
 		if r := diag.reason(); r != "" {
@@ -1971,7 +2173,7 @@ func listAllCheckoutChoices(candidates []checkoutCandidate, diag checkoutDiscove
 	}
 	opts := make([]string, 0, len(candidates))
 	for _, c := range candidates {
-		opts = append(opts, c.Dir)
+		opts = append(opts, annotateCheckoutOption(c.Dir, hold))
 	}
 	return &chatCheckoutDecision{
 		Stage:   checkoutStageChooseDirectory,
@@ -2006,12 +2208,20 @@ func relistCheckoutCandidates(ctx context.Context, tm *TaskManager, dataDir, rep
 	a.Excluded = map[string]bool{}
 	persistCheckoutAssignment(dataDir, repo, pr, a)
 
-	candidates, diag := listCheckoutCandidates(ctx, dataDir, slug, meta.HeadRefName, baseBranch, withExcludedDirsInUseElsewhere(nil, repo, pr))
+	// Nothing held BACK here — an explicit "andere directory kiezen" shows
+	// everything, a directory another PR claims included; the claim only ends
+	// up as a label on that option (listAllCheckoutChoices). The claims are
+	// read AFTER a.Dir was cleared above, so this PR's own former directory is
+	// never labelled as somebody else's. Deliberately claims ONLY: the
+	// reviewer's own rejections were just wiped by this very relist, so
+	// labelling a directory with one would contradict the clean slate.
+	hold := checkoutHoldback{Claimed: checkoutDirClaimsByOtherPRs(repo, pr)}
+	candidates, diag := listCheckoutCandidates(ctx, dataDir, slug, meta.HeadRefName, baseBranch, checkoutHoldback{})
 	if diag.Err != nil && tm != nil && tm.logf != nil {
 		tm.logf("chat_checkout: pr %d: relist: listing candidates: %v", pr, diag.Err)
 	}
 	a.LastReason = diag.reason()
-	dec := listAllCheckoutChoices(candidates, diag)
+	dec := listAllCheckoutChoices(candidates, diag, hold)
 	if len(dec.Options) > 0 {
 		a.Pending = dec
 	}

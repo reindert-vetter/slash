@@ -1007,6 +1007,45 @@ The rest of this section (task 3's two-step tool access, the escalation
 trigger, the write gate) is otherwise UNCHANGED — only WHERE Claude gets
 Edit/Bash access changed, not WHEN.
 
+#### A held-back directory is offered anyway rather than dead-ending
+
+Two of the ladder's filters are **soft**, and this is the last step of the
+ladder (step 3, `checkoutLastResortDecision` in `chat_checkout.go`): a
+directory another PR of the same repo currently claims
+(`checkoutDirClaimsByOtherPRs`), and one the reviewer themselves rejected
+earlier via `reuseMerged`'s "nee" (`a.Excluded`). Both are gathered in a
+`checkoutHoldback`. With nothing free left, the ladder runs **once more with
+nothing held back** and offers **every** directory that is usable by its own
+git state as an explicit `chooseDirectory` choice — never auto-picked, however
+few options remain — plus a `"Geen van deze"` way out. Each option carries its
+own reason on the option text itself (`annotateCheckoutOption`, e.g.
+`/Users/…/plug-and-pay-4 — in gebruik door PR 13606`), because
+`workDirOverlay.mjs` labels every row with the option verbatim and shows only
+one shared `body`; `checkoutOptionDir` strips that note again when the answer
+comes back, and answering releases the other PR's claim
+(`releaseCheckoutDirFromOtherPRs`) so two PRs can never show the same folder
+pill. Picking a directory here also clears the reviewer's own earlier
+rejection of it — otherwise their deliberate choice would be vetoed on the
+next pass.
+
+The **hard** filters are untouched, and they are what makes this safe: a
+directory on some other, not-yet-merged branch is real unfinished work
+(`Busy`) and is never offered, so a claimed directory only ever reaches this
+list when it is genuinely free by its git state.
+
+Reported bug: with three of the reviewer's four `plug-and-pay` checkouts
+claimed by other PRs and the fourth rejected earlier in that same PR, a write
+turn said *"Voeg een pad toe aan `chatCheckoutDirs` in settings.json"* — while
+five checkouts of that repo sat in `~/dev` ("er is wel ruimte in ~/dev pp
+projecten"). Both halves of that message were wrong, and the reviewer had no
+way forward either: `relistCheckoutCandidates` ("andere directory kiezen")
+cleared his own rejections but still filtered out every claimed directory, so
+it re-offered the one directory he had just refused. It now holds nothing back
+either (claims only **label** its options). A genuine dead end finally says
+what it saw: `checkoutDiscovery.HeldBack` names those directories, so
+`reason()` reports them instead of pointing at a configuration problem that
+does not exist.
+
 #### An unreachable `origin` never costs the reviewer their work directory
 
 `classifyCheckoutCandidate` (`chat_checkout.go`) refreshes a candidate's
