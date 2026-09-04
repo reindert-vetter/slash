@@ -2684,6 +2684,28 @@ async function sendClaudeMessage(text, action = '', context = '', target = null)
 const CHECKOUT_CHOICE_OPEN_BODY =
   'Ik kan nu geen code aanpassen: er staat nog een keuze open over de werkmap van deze PR. Maak die keuze en vraag het daarna opnieuw.'
 
+// The two OTHER dead ends the very same write-turn branch produces
+// (chat_workflow.go, right after prepareChatShellWorkDir returns !ok): no
+// usable checkout at all, and a checkout whose own discovery reason is known
+// (checkoutFailureReason — a variable sentence, hence a prefix rather than a
+// literal). They are here for the same reason CHECKOUT_CHOICE_OPEN_BODY is:
+// all three mean "this turn wanted to change code and never got a work
+// directory", and assigning one is exactly what answering the werkmap choice
+// does. Keep in sync with chat_workflow.go's own literals.
+const NO_CHECKOUT_BODY =
+  'Voor dit verzoek heb ik schrijftoegang tot een lokale werkmap nodig, maar die is er niet. Voeg een pad toe aan `chatCheckoutDirs` in settings.json of clone de repo lokaal, en vraag het opnieuw.'
+const CHECKOUT_BLOCKED_PREFIX = 'Ik kan nu geen code aanpassen. '
+
+// isCheckoutDeadEnd — "this transcript ends on a write turn that never got a
+// work directory". Deliberately the LAST message only: an older dead-end with
+// a real answer after it is a conversation that already carried on by itself
+// and must not be poked again.
+function isCheckoutDeadEnd(m) {
+  if (!m || m.role !== 'assistant' || !m.noShell) return false
+  const body = m.body || ''
+  return body === CHECKOUT_CHOICE_OPEN_BODY || body === NO_CHECKOUT_BODY || body.startsWith(CHECKOUT_BLOCKED_PREFIX)
+}
+
 // resumeStuckClaudeAfterCheckout — called by home.mjs's sendCheckoutAction
 // right after the reviewer answers the werkmap overlay (or the equivalent
 // checkout-chip menu, both funnel through that one function) with a real
@@ -2694,15 +2716,32 @@ const CHECKOUT_CHOICE_OPEN_BODY =
 // continued — the reviewer had to notice this and retype the original
 // request by hand.
 //
-// Scoped to whichever conversation is CURRENTLY DISPLAYED (`cc`, the same
-// singleton the embedded per-block panel and the general-chat overlay both
-// render through) rather than to "the conversation that originally got
-// stuck": there is no id linking a stored dead-end message back to the
-// decision it was about, and the reviewer is, by construction, looking at
-// the very column that showed the dead-end when he makes the choice. If the
-// last message in view isn't that exact dead-end, this is a silent no-op —
-// answering the chip's menu with no chat panel open, or with an unrelated
-// conversation on screen, changes nothing here.
+// PR-WIDE, not only the conversation on screen. The decision this answers is
+// itself PR-wide (one work directory per PR, see chat_checkout.go), so one
+// open choice dead-ends EVERY write turn of that PR — and a reviewer running
+// several comment chats at once (the "Andere chats in deze PR" list) collects
+// exactly that: one conversation resumed because it happened to be displayed,
+// the rest left sitting on the dead-end forever. Reported on PR 13535, where
+// three of Ricky's comment chats had answered "doe maar"/"retry" into a
+// dead-end that never came back. So every conversation of this PR is checked:
+// its transcript is fetched (the same read-only GET /api/chat?commentId=
+// loadChatMessages uses) and resumed when — and only when — its LAST message
+// is one of the checkout dead ends (isCheckoutDeadEnd). Anything else is left
+// alone, which is what keeps this from turning into "poke every chat of this
+// PR": a conversation that already carried on, is waiting on the reviewer, or
+// never wanted write access at all never matches.
+//
+// A conversation with a turn running RIGHT NOW is skipped as well — its
+// dead-end may already be the message the running turn is replacing, and the
+// resume would only queue behind it (drainClaudeQueue) to say something that
+// is no longer true.
+//
+// The displayed conversation keeps its own fast path off `cc.messages` (in
+// memory already, and only that one can show the optimistic "Jij" bubble, see
+// addPendingOwnMessage). The rest go out one at a time, in the PR's own
+// conversation order: they all want the same per-checkout write slot
+// (acquireCheckoutWriteSlot, chat_write_gate.go) and would only queue on each
+// other anyway.
 //
 // Sending a real new "user" turn (rather than some purely local note) is
 // deliberate: it both shows the reviewer's choice as an ordinary "Jij" bubble
@@ -2711,11 +2750,59 @@ const CHECKOUT_CHOICE_OPEN_BODY =
 // resolved assignment) and carries on with whatever the reviewer originally
 // asked for — mechanically identical to the reviewer retyping "ik heb de
 // werkmap gekozen, ga verder" by hand.
-export function resumeStuckClaudeAfterCheckout(reply) {
+export async function resumeStuckClaudeAfterCheckout(reply) {
   if (!reply) return
-  const last = cc.messages[cc.messages.length - 1]
-  if (!last || last.role !== 'assistant' || !last.noShell || last.body !== CHECKOUT_CHOICE_OPEN_BODY) return
-  sendClaudeMessage(t('Werkmap gekozen: {dir}. Ga verder met mijn vorige verzoek.', { dir: reply }))
+  const body = t('Werkmap gekozen: {dir}. Ga verder met mijn vorige verzoek.', { dir: reply })
+  const shown = cc.commentId ? String(cc.commentId) : ''
+  if (isCheckoutDeadEnd(cc.messages[cc.messages.length - 1])) await sendClaudeMessage(body)
+  for (const id of await prConversationIds()) {
+    const commentId = String(id)
+    if (commentId === shown) continue
+    if (isTurnBusy(commentId)) continue
+    const p = turnProgress(commentId)
+    if (p && p.running) continue
+    try {
+      const res = await fetch('/api/chat?commentId=' + encodeURIComponent(commentId) + repoParam())
+      if (!res.ok) continue
+      const json = await res.json()
+      const msgs = (json && json.messages) || []
+      if (!isCheckoutDeadEnd(msgs[msgs.length - 1])) continue
+      // Its claude_chat Execution is ensured the ordinary way (idempotent
+      // server-side via StartWorkflowID, see ensureAndLoadChat) purely to
+      // learn the runId a Signal needs — this conversation is not on screen,
+      // so nothing else here has one.
+      const start = await fetch('/api/workflows/claude_chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pr: cs.pr, repo: repoField(), commentId }),
+      })
+      if (!start.ok) continue
+      const { runId } = await start.json()
+      if (!runId) continue
+      await sendClaudeMessage(body, '', '', { runId, commentId })
+    } catch (_) {
+      // Best-effort per conversation: one unreachable transcript must not
+      // stop the others from being resumed.
+    }
+  }
+}
+
+// prConversationIds — every conversation of this PR, fetched fresh rather
+// than read off cc.conversations: the checkout chip's own menu can answer the
+// choice with no chat panel ever having been opened (so that set is still
+// empty), and it is only refreshed on the comment poll's cadence anyway.
+// Falls back to whatever cc already has if the read fails.
+async function prConversationIds() {
+  try {
+    const res = await fetch('/api/chat?pr=' + encodeURIComponent(cs.pr) + repoParam())
+    if (res.ok) {
+      const json = await res.json()
+      if (Array.isArray(json && json.conversations)) return json.conversations
+    }
+  } catch (_) {
+    /* fall through to the cached set */
+  }
+  return cc.conversations || []
 }
 
 // queuedIdSeq numbers the client-side queue entries. A queued turn has no

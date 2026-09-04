@@ -4930,12 +4930,14 @@ async function refreshBlocksAfterOwnLanding(touchedFiles) {
 // fire-and-refetch shape as pushPendingWork.
 //
 // `action === 'checkoutAnswer' && reply` (an actual candidate picked, never
-// "Uit"/"Andere werkmap kiezen"/"Nu terugzetten") also tries to resume a chat
-// column stuck on the "keuze open over de werkmap" dead-end — reviewer-report:
-// making the choice resolved it, but the chat itself showed nothing new and
-// never continued, so the reviewer had to retype the original request by
-// hand. See resumeStuckClaudeAfterCheckout's own doc comment (RelatedPanel.mjs)
-// for why this is scoped to whichever conversation is currently on screen.
+// "Uit"/"Andere werkmap kiezen"/"Nu terugzetten") also resumes EVERY chat of
+// this PR that is stuck on a checkout dead-end, not just the column on screen
+// — reviewer-report: making the choice resolved it, but the chats themselves
+// showed nothing new and never continued, so the reviewer had to retype the
+// original request by hand in each one. Deliberately not awaited: it walks
+// the PR's conversations one at a time and loadCheckout below must not wait
+// for that. See resumeStuckClaudeAfterCheckout's own doc comment
+// (RelatedPanel.mjs).
 async function sendCheckoutAction(action, reply) {
   let runId = state.checkout && state.checkout.runId
   try {
@@ -4961,7 +4963,7 @@ async function sendCheckoutAction(action, reply) {
   } catch (_) {
     /* best-effort */
   }
-  if (action === 'checkoutAnswer' && reply) resumeStuckClaudeAfterCheckout(reply)
+  if (action === 'checkoutAnswer' && reply) void resumeStuckClaudeAfterCheckout(reply)
   loadCheckout()
 }
 

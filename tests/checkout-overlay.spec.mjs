@@ -533,6 +533,153 @@ test('answering the choice also resumes a chat column stuck on the "keuze open" 
   expect(messageReqs[0].body).toContain('Werkmap gekozen: /home/reindert/dev/b')
 })
 
+// Reviewer-reported follow-up on the very same bug, PR 13535: the resume above
+// only ever reached the conversation that happened to be ON SCREEN. The
+// decision is PR-wide (one work directory per PR), so one open choice dead-ends
+// every write turn of that PR — with several comment chats running at once,
+// three of them had answered "doe maar"/"retry" into a dead-end that never came
+// back, while the one displayed at answer time carried on fine. Answering now
+// resumes every conversation of the PR whose LAST message is a checkout dead
+// end (isCheckoutDeadEnd, RelatedPanel.mjs), the displayed one included.
+test('answering the choice also resumes the OTHER stuck chats of the same PR', async ({ page }, testInfo) => {
+  const pr = seededPr(testInfo)
+  const runId = 'chatmerge-' + pr
+  const OTHER_ID = 'gh-other-stuck'
+  const OTHER_RUN = 'claudechat-other-stuck'
+  const deadEndBody =
+    'Ik kan nu geen code aanpassen: er staat nog een keuze open over de werkmap van deze PR. Maak die keuze en vraag het daarna opnieuw.'
+
+  // Every message Signal, WITH its target run id — that is the whole point
+  // here: one has to land on the conversation nothing is displaying.
+  const messageReqs = []
+  page.on('request', (r) => {
+    if (r.method() !== 'POST' || !r.url().includes('/signals/message')) return
+    messageReqs.push({ url: r.url(), body: r.postDataJSON() })
+  })
+
+  let open = false
+  await page.route(`**/api/chat/checkout?prs=${pr}`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        checkout: open
+          ? {
+              [pr]: {
+                pr,
+                runId,
+                decision: {
+                  stage: 'chooseDirectory',
+                  body: 'Kies welke lokale werkmap Claude voor deze PR gebruikt.',
+                  options: ['/home/reindert/dev/a', '/home/reindert/dev/b'],
+                },
+              },
+            }
+          : {},
+      }),
+    }),
+  )
+  const signals = mockSignals(page, runId)
+
+  // Same one-shot checkout.changed delivery as the test above: the choice must
+  // only open AFTER the displayed column already shows its dead-end.
+  let release
+  const released = new Promise((r) => (release = r))
+  let delivered = false
+  await page.route('**/api/events*', async (route) => {
+    await released
+    if (delivered) return
+    delivered = true
+    await route.fulfill({
+      status: 200,
+      headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' },
+      body: 'retry: 300\n\n' + `data: ${JSON.stringify({ type: 'checkout.changed', pr, seq: 1 })}\n\n`,
+    })
+  })
+
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: {
+      pr,
+      file: 'test.php',
+      line: 1,
+      author: 'reviewer',
+      body: 'pas dit aan',
+      code: '$order->total();',
+      gran: 'call',
+      label: 'Order::total',
+    },
+  })
+  const conversationId = (await start.json()).runId
+  expect(conversationId).toBeTruthy()
+
+  // The PR has TWO conversations, and only one of them is ever displayed.
+  await page.route('**/api/chat?pr=*', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, conversations: [conversationId, OTHER_ID], seenAt: {} }),
+    }),
+  )
+  await page.route('**/api/chat?commentId=' + conversationId + '*', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        messages: [
+          { id: 'user-1', role: 'user', kind: '', body: 'pas dit aan' },
+          { id: 'assistant-1', role: 'assistant', kind: '', body: deadEndBody, noShell: true },
+        ],
+      }),
+    }),
+  )
+  await page.route('**/api/chat?commentId=' + OTHER_ID + '*', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        messages: [
+          { id: 'other-user-1', role: 'user', kind: '', body: 'doe maar' },
+          { id: 'other-assistant-1', role: 'assistant', kind: '', body: deadEndBody, noShell: true },
+        ],
+      }),
+    }),
+  )
+  // The foreign conversation's claude_chat Execution is ensured purely to
+  // learn its runId; only THAT id is mocked, the displayed conversation's own
+  // ensure still goes to the real backend.
+  await page.route('**/api/workflows/claude_chat', async (route) => {
+    const data = route.request().postDataJSON()
+    if (data && String(data.commentId) === OTHER_ID) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ runId: OTHER_RUN }) })
+      return
+    }
+    await route.continue()
+  })
+  await page.route(`**/api/workflows/${OTHER_RUN}/signals/message`, (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: '{"status":"signalled"}' }),
+  )
+
+  await page.goto('/pr/' + pr)
+  await page.getByTestId('comment-item').first().click()
+  await page.keyboard.press('ArrowRight') // comment -> claude
+  await expect(page.getByTestId('claude-message-body').last()).toContainText('er staat nog een keuze open')
+
+  open = true
+  release()
+  await expect(page.getByTestId('workdir-overlay')).toBeVisible()
+  await page.getByTestId('workdir-overlay-option').filter({ hasText: '/home/reindert/dev/b' }).click()
+  await expect.poll(() => signals.length).toBe(1)
+
+  // Both conversations were resumed: the displayed one, and the one that only
+  // exists in the PR's conversation list.
+  await expect.poll(() => messageReqs.length).toBe(2)
+  const other = messageReqs.find((m) => m.url.includes(OTHER_RUN))
+  expect(other).toBeTruthy()
+  expect(other.body.body).toContain('Werkmap gekozen: /home/reindert/dev/b')
+  expect(messageReqs.some((m) => !m.url.includes(OTHER_RUN))).toBe(true)
+})
+
 // Reviewer-reported bug: pressing Enter on a keyboard-highlighted inline
 // question option (here a chat.KindCleanupChoice bubble, "opruimen na
 // afbreken" — see claudeQuestionOptions/PENDING_CLAUDE_QUESTION_KINDS in

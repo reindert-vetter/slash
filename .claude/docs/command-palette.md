@@ -157,18 +157,39 @@ rows AND `checkoutChipCommandsFor`'s equivalent menu rows go through — now
 also calls `resumeStuckClaudeAfterCheckout(reply)` (`RelatedPanel.mjs`) right
 after a `checkoutAnswer` Action with a real picked option (never for "Uit"/
 "Andere werkmap kiezen"/"Nu terugzetten", which don't resolve a decision the
-same way). That function looks only at whichever conversation is CURRENTLY
-DISPLAYED (`cc`, the same singleton the embedded per-block panel and the
-general-chat overlay both render through): if its last message is exactly
-that dead-end (`CHECKOUT_CHOICE_OPEN_BODY`, a literal duplicate of the Go
-string — same "duplicate the exact string across the two languages"
-precedent as `ClaudeChat.mjs`'s own `NEED_WRITE_PARTIAL_PREFIX`), it sends a
-synthetic new "Werkmap gekozen: …" turn — a real chat message, so it both
-shows the choice as an ordinary "Jij" bubble and resumes the SAME Claude
-session, letting the turn now succeed. A silent no-op otherwise (answering
-the chip's menu with no chat panel open, or with an unrelated conversation on
-screen). Test: `tests/checkout-overlay.spec.mjs` ("answering the choice also
-resumes a chat column stuck on the "keuze open" dead-end").
+same way). It sends a synthetic new "Werkmap gekozen: …" turn — a real chat
+message, so it both shows the choice as an ordinary "Jij" bubble and resumes
+the SAME Claude session, letting the turn now succeed.
+
+That resume is **PR-wide**, not limited to the column on screen. The decision
+is itself PR-wide (one work directory per PR), so one open choice dead-ends
+every write turn of that PR — and a reviewer with several comment chats
+running at once (the "Andere chats in deze PR" list) ended up with exactly
+one of them resumed, the rest sitting on the dead-end forever. Reported on
+PR 13535: three of the same reviewer's comment chats had answered "doe
+maar"/"retry" into a dead-end that never came back. So the displayed
+conversation is handled off `cc.messages` (in memory, and the only one that
+can show the optimistic "Jij" bubble), and every OTHER conversation of the PR
+(`prConversationIds`, a fresh `GET /api/chat?pr=` rather than the
+comment-poll-cadenced `cc.conversations` — the chip's menu can answer the
+choice with no chat panel ever opened) has its transcript fetched and is
+resumed too, one at a time.
+
+What qualifies is deliberately narrow, which is what keeps this from becoming
+"poke every chat of this PR": only a transcript whose **last** message is one
+of the three checkout dead ends the same `chat_workflow.go` branch produces —
+`CHECKOUT_CHOICE_OPEN_BODY`, `NO_CHECKOUT_BODY`, or the variable-reason
+`CHECKOUT_BLOCKED_PREFIX` (all literal duplicates of the Go strings — same
+"duplicate the exact string across the two languages" precedent as
+`ClaudeChat.mjs`'s own `NEED_WRITE_PARTIAL_PREFIX`), see `isCheckoutDeadEnd`.
+All three mean "this turn wanted to change code and never got a work
+directory", which is precisely what the answer supplies. A conversation that
+already carried on by itself, one waiting on the reviewer, one that never
+wanted write access, and one with a turn running right now (its dead-end may
+already be the message that turn is replacing) are all skipped. Tests:
+`tests/checkout-overlay.spec.mjs` ("answering the choice also resumes a chat
+column stuck on the "keuze open" dead-end", "… also resumes the OTHER stuck
+chats of the same PR").
 
 **Naming:** everything the reviewer reads says **werkmap**, never "checkout";
 the identifiers keep their `checkout*` names. See the naming rule in
