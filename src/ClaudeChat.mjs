@@ -387,6 +387,23 @@ function claudeGeneratingPill() {
 // arrives (RelatedPanel.mjs clears the conversation's progress after refetching the
 // transcript), so it deliberately carries no id/key of its own and is never
 // part of the message list.
+//
+// Its mount site (below) wraps this call in a stable `<div class="contents">`
+// root instead of interpolating `${() => claudePartialBubble(view)}` bare —
+// this function's own body IS one toggling expression (`if (!p.partial)
+// return ''`, else a template), exactly the "Never key a template whose
+// entire body is one toggling expression" arrow.js pitfall
+// (arrowjs-pitfalls.md). RelatedPanel.mjs's `recomputeCodePreviews`
+// additionally excludes any fence found inside `[data-testid="claude-partial"]`
+// outright: this bubble is deliberately kept mounted for a moment AFTER the
+// real, complete message has already landed (see the "Keep the partial
+// visible…" comment on the chat.progress handler), so a fence inside a
+// still-streaming answer is, by definition, mid-sentence/truncated — it must
+// never contribute its own code-preview card, which the real message's fence
+// always supersedes anyway. Reviewer report: the code-preview column showed a
+// card whose trailing text abruptly stopped ("Eén ding om te checken vo…")
+// while the chat bubble right above it already showed the full, final
+// answer. Regression test: tests/code-fence-preview.spec.mjs.
 function claudePartialBubble(view) {
   const p = view.progress()
   if (!p || !p.partial) return ''
@@ -1126,7 +1143,7 @@ export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly, opt
             ),
           )
         }}
-        ${() => claudePartialBubble(view)}
+        <div class="contents">${() => claudePartialBubble(view)}</div>
         ${() => claudeQueuedBubbles(view)}
         </div>
         ${scrollHint('up')}

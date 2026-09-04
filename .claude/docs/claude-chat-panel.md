@@ -4723,6 +4723,49 @@ compact and expanded replaces the whole subtree (different templates), which
 is already a `childList` mutation the existing `MutationObserver` picks up —
 no new observer config needed.
 
+## A stale, cut-off card from the live streaming answer
+
+Reviewer report (screenshot): a code-preview card's trailing text abruptly
+stopped mid-sentence ("Eén ding om te checken vo…") even though the chat
+bubble right above it already showed the full, final answer. Root cause: the
+live streaming answer (`claudePartialBubble`, `ClaudeChat.mjs`, `data-testid=
+"claude-partial"`, see "Live progress" above) is deliberately kept mounted
+for a moment AFTER the real, complete message has already landed — "Keep the
+partial visible for a moment so the bubble doesn't blink out before the real
+message has been refetched" (the `chat.progress` handler, `RelatedPanel.mjs`)
+— a genuine overlap window, not a race. A fence inside that partial is, by
+definition, mid-stream and therefore truncated, but `recomputeCodePreviews`
+had no filter against it, so it could contribute its own stale preview card
+— or even take the position the real message's card should have had.
+
+**Fix:** `recomputeCodePreviews` now also excludes any fence whose nearest
+`[data-testid="claude-partial"]` ancestor exists, mirroring the existing
+`comment-item`/expanded filter right above this section. The partial is
+explicitly "a THROWAWAY render of throwaway data… never part of the message
+list" (its own doc comment), so it must never contribute a preview card —
+the real message's fence always supersedes it, and the exclusion is
+unconditional (it doesn't matter whether the turn is still `running`).
+
+Also fixed defensively, matching the established convention in
+`.claude/rules/arrowjs-pitfalls.md` ("Never key a template whose entire body
+is one toggling expression"): `claudePartialBubble`'s mount site
+(`ClaudeChat.mjs`) now wraps the call in a stable `<div class="contents">`
+root instead of interpolating `${() => claudePartialBubble(view)}` bare — the
+function's own body IS one toggling expression (`if (!p.partial) return ''`,
+else a template), the exact shape that pitfall entry warns leaves an
+orphaned/corrupted DOM fragment behind once toggled to `''`.
+
+Test: `tests/code-fence-preview.spec.mjs` ("a truncated streaming partial
+answer never leaves a stale, cut-off code-preview card once the real message
+has landed") reproduces the overlap entirely via mocked network — the real
+transcript GET plus the ONE `GET /api/chat/progress?commentId=` resync read
+`loadChatProgress` fires the moment the conversation opens — deliberately
+NOT via a mocked SSE stream: an earlier version of this test mocked
+`/api/events` instead, and the EventSource's own reconnect timing made the
+extra stale card flap in and out non-deterministically between runs (a
+repeated remount/teardown cycle of the very bug being tested), so the
+one-shot resync read is both simpler and actually deterministic.
+
 ## Open (frontend gaps)
 
 - No draft-persistence (`composeDrafts`/`replyDrafts`-style) for the chat

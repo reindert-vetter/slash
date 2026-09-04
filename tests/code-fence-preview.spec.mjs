@@ -719,3 +719,121 @@ test('two cards from different messages get no dashed divider between them', asy
   await expect(cards).toHaveCount(2)
   await expect(page.getByTestId('code-preview-group-divider')).toHaveCount(0)
 })
+
+// Reviewer report (screenshot): the code-preview card's trailing text
+// abruptly stopped mid-sentence ("Eén ding om te checken vo…") even though
+// the chat bubble right above it already showed the full, final answer.
+// Root cause: `claudePartialBubble` (ClaudeChat.mjs) is deliberately kept
+// mounted for a moment AFTER the real, complete message has already landed
+// (so the bubble doesn't blink out before the transcript refetch) — a
+// genuine overlap window, not a race. Its own fence is necessarily
+// mid-stream/truncated, and `recomputeCodePreviews` used to have no filter
+// against it, so it could contribute a stale card of its own. Reproduced here
+// entirely via mocked network (the real transcript GET and the ONE
+// `GET /api/chat/progress?commentId=` resync read `loadChatProgress` fires the
+// moment the conversation opens — deterministic, unlike the SSE stream's own
+// reconnect timing), so it needs no real Claude turn and stays fast/deterministic.
+test('a truncated streaming partial answer never leaves a stale, cut-off code-preview card once the real message has landed', async ({
+  page,
+}, testInfo) => {
+  const pr = seededPr(testInfo)
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: {
+      pr,
+      file: 'test.php',
+      line: 1,
+      author: 'reviewer',
+      body: 'kan dit sneller?',
+      code: '$order->total();',
+      gran: 'call',
+      label: 'Order::total',
+    },
+  })
+  const conversationId = (await start.json()).runId
+  expect(conversationId).toBeTruthy()
+
+  const FULL_TRAILING =
+    'Eén ding om te checken voor de worker: dit werkt alleen als het build-image de dev-dependencies meeneemt.'
+  const CUT_TRAILING = 'Eén ding om te checken vo'
+
+  // The real, ALREADY-LANDED transcript: one assistant turn with two fences,
+  // the second followed by the full trailing sentence above.
+  await page.route('**/api/chat?commentId=*', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        messages: [
+          {
+            id: 'm1',
+            conversationId,
+            pr,
+            role: 'assistant',
+            body:
+              'Eerste voorbeeld:\n```php\n$first = 1;\n```\n' +
+              'Call site wordt dan:\n```php\n$second = 2;\n```\n' +
+              FULL_TRAILING,
+          },
+        ],
+        summary: '',
+        summaryStatus: '',
+        seenAt: '',
+      }),
+    }),
+  )
+  // loadChatProgress (RelatedPanel.mjs) fetches this ONE resync read the
+  // moment the conversation is opened — deterministic, unlike the SSE
+  // stream's reconnect timing, which made an earlier version of this test
+  // flap between catching and missing the bug depending on exactly when the
+  // partial bubble's own repeated remount cycle (the arrow.js pitfall noted
+  // on claudePartialBubble in ClaudeChat.mjs) happened to land. This single
+  // resync response is enough to reproduce the real overlap: the transcript
+  // above already carries the full, final message, and this snapshot says a
+  // turn is STILL running with an OLDER, truncated answer — exactly the
+  // window where both are mounted at once.
+  await page.route('**/api/chat/progress?commentId=*', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        running: true,
+        progress: {
+          running: true,
+          phase: 'writing',
+          startedAt: Date.now() - 1000,
+          updatedAt: Date.now(),
+          partial:
+            'Eerste voorbeeld:\n```php\n$first = 1;\n```\n' +
+            'Call site wordt dan:\n```php\n$second = 2;\n```\n' +
+            CUT_TRAILING,
+        },
+      }),
+    }),
+  )
+
+  await page.goto('/pr/' + pr)
+  await leaveSearchBox(page)
+  const item = page.getByTestId('comment-item').first()
+  await expect(item).toBeVisible()
+  await item.click()
+  await page.keyboard.press('ArrowRight') // comment -> claude
+
+  // Both the real message (full trailing sentence) and the live partial
+  // bubble (cut off) are visible at once — the deliberate overlap window.
+  await expect(page.getByTestId('claude-message-body').last()).toContainText(FULL_TRAILING)
+  await expect(page.getByTestId('claude-partial-body')).toContainText(CUT_TRAILING)
+
+  // Exactly 2 preview cards — the real message's two fences — never a third
+  // one contributed by the partial bubble, and card 2's trailing text is the
+  // FULL sentence, never cut off. Asserted twice with a pause in between so
+  // a transient pre-recompute tick (recomputeCodePreviews is debounced onto
+  // a MutationObserver + rAF) can't hide a later flip-flop behind a lucky
+  // first poll.
+  const cards = page.getByTestId('code-preview-card')
+  await expect(cards).toHaveCount(2)
+  await page.waitForTimeout(300)
+  await expect(cards).toHaveCount(2)
+  await expect(cards.nth(1).getByTestId('code-preview-trailing')).toContainText(FULL_TRAILING)
+})

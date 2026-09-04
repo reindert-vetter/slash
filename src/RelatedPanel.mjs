@@ -5114,8 +5114,25 @@ function recomputeCodePreviews() {
   // (`expandedConversation`, `data-expanded="true"`) — or one with no
   // `comment-item` ancestor at all, i.e. a Claude chat bubble, which has no
   // compact/expanded state — should get a full-size preview here.
+  //
+  // A fence inside the live streaming answer (`claudePartialBubble`,
+  // ClaudeChat.mjs, `data-testid="claude-partial"`) is ALSO excluded —
+  // reviewer report: the code-preview column below the chat showed a card
+  // whose trailing text abruptly stopped mid-sentence ("Eén ding om te
+  // checken vo…"), even though the chat bubble right above it already showed
+  // the full, final answer. Root cause: that partial bubble is deliberately
+  // kept mounted for a moment AFTER the real, complete message has already
+  // landed (see the "Keep the partial visible…" comment on the chat.progress
+  // handler below) — a genuine, on-purpose overlap window, not a race — so
+  // its own (necessarily mid-stream, therefore truncated) fence was still
+  // discoverable here and could render as its own stale card, or even take
+  // the place the real fence's card should have had. The partial is
+  // explicitly "a THROWAWAY render of throwaway data… never part of the
+  // message list" (see its own doc comment), so it must never contribute a
+  // preview card of its own — the real message's fence always supersedes it.
   const fences = root
     ? Array.from(root.querySelectorAll('[data-testid="code-fence"]')).filter((el) => {
+        if (el.closest('[data-testid="claude-partial"]')) return false
         const card = el.closest('[data-testid="comment-item"]')
         return !card || card.dataset.expanded === 'true'
       })
