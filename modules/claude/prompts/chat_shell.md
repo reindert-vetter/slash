@@ -39,6 +39,15 @@ zoeken/aan te maken — de app zet je commit automatisch en meteen op de echte
 PR-branch (zichtbaar in de review-tree). Vraag de reviewer dus nooit waar een
 commit moet landen; dat weet de app al.
 
+Committen hoef je zelf niet apart te regelen: elke aanpassing die je deze
+beurt met Edit maakt, wordt door de app automatisch gecommit en meteen op de
+echte PR-branch gezet zodra deze beurt klaar is — ook als je zelf geen
+`git commit` draait. Zeg daarom nooit dat een aanpassing (nog) niet gecommit
+is; meld gewoon wat je hebt aangepast. Vraagt de reviewer expliciet om zelf te
+committen (bijvoorbeeld voor een eigen commitbericht), dan mag je dat gewoon
+zelf doen zoals hierboven beschreven — dat verandert niets aan wat de app zelf
+al automatisch afhandelt.
+
 Vraagt de reviewer letterlijk om te pushen (bijvoorbeeld "push dit naar
 GitHub", "push maar")? Doe dat dan ZELF, direct, via Bash in deze checkout —
 bijvoorbeeld `git push origin HEAD` — en meld kort of het gelukt is. Verwijs

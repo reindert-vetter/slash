@@ -1716,6 +1716,19 @@ reclaimed.
   commit in the shadow exactly like Claude's own `git commit` would leave one,
   then asserts an ordinary follow-up turn lands it, refreshes the tree, and
   reclaims the worktree, with no "commit" action ever sent).
+- **The shell prompt must not deny this.** Reported bug: a shell-attempt reply
+  said "Niet gecommit, want daar vroeg je niet om" about its own Edit-tool
+  change, immediately followed (same conversation) by this very auto-land
+  Activity's own outcome bubble reporting the change already landed — a
+  visible contradiction, since the app commits/lands it either way regardless
+  of whether Claude itself ran `git commit`. `chat_shell.md` now says so
+  explicitly, right after its existing "commit only when explicitly asked"
+  instruction: any Edit-tool change gets committed and landed automatically
+  once the turn ends, so the model must never claim a change is "not (yet)
+  committed" — it may still run `git commit` itself when the reviewer
+  explicitly asks for it (e.g. a specific message), unchanged from before.
+  Test: `modules/claude/prompts_test.go`'s
+  `TestChatShellSystemPromptNeverDeniesAutomaticLanding`.
 - **Cleanup:** `cleanup.go`'s `reWorktreeDir`/`removePRWorktrees` were extended
   to also discover/sweep any `pr-<n>-chatshadow-*` directory (plus its
   `chat/<conversationId>` branch) once the PR itself is purged — covers a

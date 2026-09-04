@@ -71,3 +71,21 @@ func TestPromptsAllowOneMessageToAskForBothAChangeAndAReply(t *testing.T) {
 		t.Fatal("expected the shell prompt to allow prose plus a trailing comment_action line")
 	}
 }
+
+// TestChatShellSystemPromptNeverDeniesAutomaticLanding guards against a
+// reported bug: a shell-attempt reply claimed "Niet gecommit, want daar vroeg
+// je niet om" about its own Edit-tool change, directly contradicted moments
+// later by the app's own automatic-landing outcome bubble in the same
+// conversation (see "Automatic landing after a shell turn" in
+// .claude/docs/workflows-comments.md) — the app commits and lands any
+// Edit-tool change regardless of whether Claude itself ran `git commit`. The
+// prompt must say so explicitly, so the model never denies it.
+func TestChatShellSystemPromptNeverDeniesAutomaticLanding(t *testing.T) {
+	p := strings.ToLower(ChatShellSystemPrompt)
+	if !strings.Contains(p, "automatisch gecommit") {
+		t.Fatal("expected the shell prompt to state that an edit is committed automatically by the app")
+	}
+	if !strings.Contains(p, "nooit dat een aanpassing") {
+		t.Fatal("expected the shell prompt to forbid claiming a change is not (yet) committed")
+	}
+}
