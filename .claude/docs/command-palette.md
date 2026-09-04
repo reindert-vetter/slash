@@ -1169,6 +1169,28 @@ All three modes share the `lastIndexRowRect` exception with `postApprove` via
 `isReviewFollowup(mode)`. Tests: `tests/review-submit-menu.spec.mjs`, plus the
 last test in `tests/postapprove-menu.spec.mjs`.
 
+**On your own PR, `openReviewMenu(mode)`** (the wrapper both automatic
+end-of-review call sites — `offerReviewSubmitFollowup`, the Space-key branch —
+use instead of calling `openMenu(mode)` directly) never even opens
+`reviewApprove`/`reviewChoice`: `isOwnPR()` gates every real item in both out
+(GitHub refuses a self-review, see `rejectSelfReview`/`errSelfReview`,
+`workflows.go`), leaving only the pinned "Sluit menu" (`hasRealCommands`).
+**If the PR is genuinely fully approved** (`mode === 'reviewApprove'`) there's
+nothing left to do, so this redirects to `overviewExitUrl()` same as before.
+**If it isn't** (`mode === 'reviewChoice'` — which, given the identical
+gating, can only mean it's your own PR) the reviewer isn't done reviewing at
+all, just out of forward-only ground (`findNextUnapproved` never wraps) —
+reviewer request: "als ik mijn eigen pr nakijk, en ik heb nog niet alles
+gechecked, wil ik niet automatisch naar pr overview, ik wil dan terug naar de
+nog niet goedgekeurde regels". `jumpToFirstUnapprovedForOwnPR` (`home.mjs`)
+resets the drill stack and reuses `applyDefaultUnapprovedSelection` (the same
+"first not-yet-approved item" pick a fresh PR open already makes) plus
+`enterDiff`, landing back on that unapproved line instead of leaving the PR.
+The manual "PR keuren" entry (`PR_COMMANDS`, `runCommand`'s own
+`hasRealCommands` check) is untouched — it always redirects to the overview
+regardless of completion, a deliberate, separate manual action. Test:
+`tests/review-own-pr-skip.spec.mjs`.
+
 **There used to be a fourth item here, `REVIEW_BATCH_COMMENTS_ITEM`**, opening
 a `'bulkComments'` palette mode that listed every open comment before handing
 them to `comment_batch`. Removed on request — the whole feature moved into the

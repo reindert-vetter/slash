@@ -93,6 +93,40 @@ test.describe('PR Review Tree — a review menu is never offered on your own PR'
     await expect(menu).not.toBeVisible()
   })
 
+  test('approving your own PR with an earlier block still open returns to that unapproved block instead of the PR overview', async ({
+    page,
+  }) => {
+    await clearBlockApproval(page, BLOCK1_ID)
+    await clearBlockApproval(page, BLOCK6_ID)
+    await mockOwnPR(page)
+    await page.goto('/pr/12903')
+    await expect(page.getByTestId('block-column')).toBeVisible()
+    await page.keyboard.press('Escape')
+
+    // Approve BLOCK6 (the LATER block) first — BLOCK1 stays unapproved.
+    // findNextUnapproved is forward-only/no-wrap, so from BLOCK6 there's
+    // nothing left AHEAD, even though BLOCK1 (earlier in the list) still
+    // needs approval — this used to fall through to offerReviewSubmitFollowup
+    // -> openReviewMenu('reviewChoice'), whose only real items are filtered
+    // out on your own PR (isOwnPR), sending the reviewer straight to
+    // /pr-overview despite the PR not actually being fully reviewed.
+    await page.getByTestId('block-row').filter({ hasText: 'Order::address' }).click()
+    await page.keyboard.press('ArrowRight')
+    await expect(page.locator('[data-change-active]').first()).toBeVisible()
+    await approveViaPalette(page)
+
+    // No review-submit menu, no navigation away — the reviewer instead lands
+    // back on the still-unapproved BLOCK1's own diff.
+    const menu = page.getByTestId('command-menu')
+    await expect(menu).not.toBeVisible()
+    await expect(page).toHaveURL(/\/pr\/12903/)
+    await expect(page).not.toHaveURL(/\/pr-overview/)
+    await expect(page.locator('[data-change-active]').first()).toBeVisible()
+    await expect(page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' })).toHaveClass(
+      /bg-indigo-50/,
+    )
+  })
+
   test('`/` → GitHub → "PR keuren" redirects straight to the PR overview instead of opening an empty choice', async ({
     page,
   }) => {

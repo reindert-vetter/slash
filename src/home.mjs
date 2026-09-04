@@ -9132,28 +9132,67 @@ function hasRealCommands(list) {
   return list.some((c) => c.id !== 'close-menu')
 }
 
+// jumpToFirstUnapprovedForOwnPR — on your OWN PR nothing can ever be
+// submitted as a real GitHub review (isOwnPR, see openReviewMenu below), so
+// once findNextUnapproved finds nothing left AHEAD but the PR isn't actually
+// fully approved yet (openReviewMenu's `mode === 'reviewChoice'` branch),
+// don't send the reviewer to /pr-overview the way it would for someone
+// else's finished PR — reviewer request: "als ik mijn eigen pr nakijk, en ik
+// heb nog niet alles gechecked, wil ik niet automatisch naar pr overview, ik
+// wil dan terug naar de nog niet goedgekeurde regels". Walk back to the first
+// not-yet-approved item instead, reusing the exact landing pick a fresh PR
+// open already uses (applyDefaultUnapprovedSelection), then step into its
+// diff (enterDiff) so the reviewer actually lands on an unapproved line, not
+// just the block index. The drill stack is reset first — findNextUnapproved
+// searches forward-only from wherever the reviewer currently is, so the
+// unapproved item this walks back to can sit outside (or above) whatever
+// column/child was drilled into when the last approve action ran.
+// `state.toggleFocused` guards the (rare) case where applyDefaultUnapprovedSelection
+// finds no unapproved block at all (e.g. a PR with zero approvable rows) and
+// falls back to focusing the toggle-approved row instead — nothing to step
+// into there.
+function jumpToFirstUnapprovedForOwnPR() {
+  state.drill = []
+  state.drillCursor = []
+  state.focusLevel = 0
+  applyDefaultUnapprovedSelection()
+  if (!state.toggleFocused) enterDiff()
+}
+
 // openReviewMenu opens the review-submit menu (mode 'reviewApprove' or
 // 'reviewChoice') — unless doing so, after isOwnPR() strips the approve/
 // reject item(s) (see REVIEW_APPROVE_COMMANDS/REVIEW_CHOICE_COMMANDS), would
 // leave nothing but "Sluit menu" to show. In that case (always true for your
-// own PR, since both modes' only real items are gated the same way) the menu
-// is skipped entirely and the reviewer is sent straight to the PR overview
-// instead — reviewer request: "menu overslaan als er geen andere keuzes zijn
-// dan sluiten enzo, ga dan direct naar pr overview". Deliberately
-// `overviewExitUrl()` (keeps `sel`/`drill`), not `overviewExitUrlAfterApprove()`
-// — no review was actually submitted here, so there is nothing to treat as
-// "this PR is now done, drop the context" the way the confirmed-approve path
-// does.
+// own PR, since both modes' only real items are gated the same way): if the
+// PR is genuinely fully approved (`mode === 'reviewApprove'`), there's
+// nothing left to return to, so the reviewer is sent straight to the PR
+// overview, same as before — reviewer request: "menu overslaan als er geen
+// andere keuzes zijn dan sluiten enzo, ga dan direct naar pr overview".
+// Deliberately `overviewExitUrl()` (keeps `sel`/`drill`), not
+// `overviewExitUrlAfterApprove()` — no review was actually submitted here, so
+// there is nothing to treat as "this PR is now done, drop the context" the
+// way the confirmed-approve path does. But if the PR is NOT yet fully
+// approved (`mode === 'reviewChoice'`) — which, given the identical gating,
+// can only happen on your own PR, since anyone else would still see real
+// approve/reject choices — the reviewer isn't done reviewing at all, they
+// just ran out of forward-only ground to cover; see
+// jumpToFirstUnapprovedForOwnPR above for that different outcome.
 // Used by the two automatic end-of-review call sites (afterApproveAction's
 // offerReviewSubmitFollowup and the Space-key branch) instead of calling
 // openMenu(mode) directly — the manual "PR keuren" menu item (PR_COMMANDS)
 // reaches the same REVIEW_CHOICE_COMMANDS list through the ordinary
 // `children` submenu mechanism instead, where runCommand's own
-// hasRealCommands check (see there) applies the identical redirect.
+// hasRealCommands check (see there) still always redirects to the PR
+// overview regardless of completion — a deliberate, unchanged manual action,
+// not the automatic end-of-review moment this function is about.
 async function openReviewMenu(mode) {
   await ensureMe()
   const commands = snapshotCommands(rootCommandsFor(mode))
   if (!hasRealCommands(commands)) {
+    if (mode === 'reviewChoice') {
+      jumpToFirstUnapprovedForOwnPR()
+      return
+    }
     location.href = overviewExitUrl()
     return
   }
