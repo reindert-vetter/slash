@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -157,4 +158,103 @@ func writeEnvFile(path string, vals [][2]string) error {
 		fmt.Fprintf(&b, "%s=%s\n", kv[0], kv[1])
 	}
 	return os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
+// saveEnvValues writes KEY=VALUE pairs into the local .env file and applies
+// them to the running process, so a credential edited in the settings page
+// takes effect without a restart (every reader — modules/jira's notifyConfig,
+// auth_status.go — reads os.Getenv lazily, on every call).
+//
+// It is a MERGE, never a rewrite: an existing key is replaced in place (so its
+// surrounding comments and every other variable survive), a commented-out
+// `# KEY=…` template line is replaced by the real one, and an unknown key is
+// appended. The file is written atomically (temp file + rename in the same
+// directory), so a crash mid-write can never leave a half-written .env for the
+// next startup to trip over — the same discipline saveMentionAliases applies
+// to settings.json.
+//
+// WRITE BOUNDARY: this is a durable write and therefore has exactly one
+// caller, the "saveJiraCredentials" Activity of the app_settings tracker
+// (workflows.go). Never call it from an HTTP handler.
+func saveEnvValues(path string, vals map[string]string) error {
+	if len(vals) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(vals))
+	for k := range vals {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys) // deterministic output, whatever the map order was
+
+	var lines []string
+	if raw, err := os.ReadFile(path); err == nil {
+		lines = strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if len(lines) == 1 && strings.TrimSpace(lines[0]) == "" {
+		lines = nil
+	}
+
+	written := map[string]bool{}
+	for i, line := range lines {
+		key := envLineKey(line)
+		if key == "" || written[key] {
+			continue
+		}
+		if val, ok := vals[key]; ok {
+			lines[i] = key + "=" + val
+			written[key] = true
+		}
+	}
+	for _, k := range keys {
+		if !written[k] {
+			lines = append(lines, k+"="+vals[k])
+		}
+	}
+
+	body := strings.Join(lines, "\n") + "\n"
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".env.tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once the rename succeeded
+	if _, err := tmp.WriteString(body); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpName, 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	for _, k := range keys {
+		_ = os.Setenv(k, vals[k])
+	}
+	return nil
+}
+
+// envLineKey returns the variable a .env line assigns to — also for a
+// commented-out `# KEY=value` template line, so writing a value replaces the
+// example instead of leaving a confusing duplicate below it. "" for anything
+// that is not an assignment (a prose comment, a blank line).
+func envLineKey(line string) string {
+	s := strings.TrimSpace(line)
+	s = strings.TrimLeft(s, "#")
+	s = strings.TrimSpace(s)
+	key, _, ok := strings.Cut(s, "=")
+	if !ok {
+		return ""
+	}
+	key = strings.TrimSpace(key)
+	if key == "" || strings.ContainsAny(key, " \t") {
+		return "" // "# copy this to .env and adjust = the values" is prose
+	}
+	return key
 }

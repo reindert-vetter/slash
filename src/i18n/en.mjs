@@ -710,6 +710,39 @@ export const EN = {
   'Wis Claude-gesprek': 'Clear Claude conversation',
   '{n} regels': '{n} lines',
 
+  // ── src/authStatus.mjs + the settings page's auth row ──────────────────
+  'Inloggegevens': 'Credentials',
+  'gh, acli en het Jira API-token. Werkt er één niet, dan slaat slash het werk dat daarop leunt stilzwijgend over.':
+    'gh, acli and the Jira API token. If one of them stops working, slash silently skips the work that depends on it.',
+  'Inloggegevens werken niet meer': 'Credentials no longer work',
+  'Zolang dit zo blijft slaat slash het werk dat hierop leunt stilzwijgend over.':
+    'While this lasts, slash silently skips the work that depends on it.',
+  Werkt: 'Working',
+  'Niet ingelogd': 'Not logged in',
+  Afgekeurd: 'Rejected',
+  'Niet ingesteld': 'Not configured',
+  Uitgeschakeld: 'Disabled',
+  Onbekend: 'Unknown',
+  'Los op met': 'Fix it with',
+  'Waar haal ik dit vandaan?': 'Where do I get this?',
+  'Opnieuw controleren': 'Check again',
+  'Bezig met controleren…': 'Checking…',
+  'Alles werkt weer.': 'Everything works again.',
+  'Naar instellingen': 'Go to settings',
+  'Jira API-token': 'Jira API token',
+  'Nodig voor de notificatiefeed bovenaan het PR-overzicht. Maak een token aan en plak hem hieronder.':
+    'Needed for the notification feed at the top of the PR overview. Create a token and paste it below.',
+  'Token aanmaken op id.atlassian.com': 'Create a token on id.atlassian.com',
+  'Je Atlassian-e-mailadres': 'Your Atlassian e-mail address',
+  'Plak hier je API-token': 'Paste your API token here',
+  'Opgeslagen: {masked} — laat leeg om te behouden': 'Stored: {masked} — leave empty to keep it',
+  'Bezig met opslaan…': 'Saving…',
+  'Opgeslagen — opnieuw aan het controleren…': 'Saved — checking again…',
+  'Opgeslagen.': 'Saved.',
+  'Opslaan is niet gelukt.': 'Saving failed.',
+  'Wordt lokaal opgeslagen in .env (niet in git, niet versleuteld) en is direct actief.':
+    'Stored locally in .env (not in git, not encrypted) and active immediately.',
+
   // ── fixed Dutch phrases that arrive from the Go side ───────────────────
   // Translated at their render site (t(backendMessage) is a pass-through when
   // the phrase is unknown) — see .claude/docs/settings-page.md. Only phrases

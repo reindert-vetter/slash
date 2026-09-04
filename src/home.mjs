@@ -178,6 +178,9 @@ import ImageLightboxHost, { initImageLightbox, isLightboxOpen, handleLightboxKey
 // The global failed-tasks dialog (failedTasks.mjs) — same top-level-mount +
 // owns-the-keyboard contract as the lightbox above.
 import FailedTasksHost, { initFailedTasksPopup, isFailedTasksOpen, handleFailedTasksKeydown } from './failedTasks.mjs'
+// The global auth dialog (authStatus.mjs) — same top-level-mount + keyboard
+// contract as FailedTasksHost, and checked before it.
+import AuthStatusHost, { initAuthStatusPopup, isAuthProblemOpen, handleAuthProblemKeydown } from './authStatus.mjs'
 import WorkDirOverlayHost, { initWorkDirOverlay, isWorkDirOverlayOpen, handleWorkDirOverlayKeydown } from './workDirOverlay.mjs'
 import GeneralChatOverlayHost, {
   initGeneralChatOverlay,
@@ -212,6 +215,7 @@ initTheme()
 syncUiLang()
 initImageLightbox()
 initFailedTasksPopup()
+initAuthStatusPopup()
 // Debug mode (off unless the reviewer switched it on, see src/debugLog.mjs):
 // records this page load plus every following key/click, so Claude can replay a
 // reported bug. It installs its own listeners — nothing in the nav chain below
@@ -13844,6 +13848,14 @@ function onKeydown(e) {
   // minutes, everything else is swallowed so the tree never navigates behind
   // a modal backdrop. Checked before the lightbox/palette guards below for
   // the same reason those come first.
+  // An expired credential (gh, acli, the Jira token) is the one thing that
+  // outranks even that dialog — it is usually why those tasks failed. Same
+  // keyboard contract; see src/authStatus.mjs.
+  if (isAuthProblemOpen()) {
+    handleAuthProblemKeydown(e)
+    return
+  }
+
   if (isFailedTasksOpen()) {
     handleFailedTasksKeydown(e)
     return
@@ -17734,6 +17746,7 @@ MainScrollLeftHint(state)(app)
 MenuHost()(app)
 ImageLightboxHost()(app)
 FailedTasksHost()(app)
+AuthStatusHost()(app)
 // The werkmap overlay (workDirOverlay.mjs) — top-level like MenuHost, and
 // initialized with the state + the one write path it may use
 // (sendCheckoutAction, which only ever starts/signals the chat_merge queue).

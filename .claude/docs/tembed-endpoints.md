@@ -93,6 +93,7 @@ through the API; use `slash seed -comments <json>`.
 | `GET /api/chat/progress?commentId=X` | In-memory snapshot of a RUNNING `claude_chat` turn (phase/tool/partial answer). The resync read for the stream below, not a poll target. |
 | `GET /api/chat/steerable?commentId=X` | In-memory: is a claude CLI call running for this conversation right now, i.e. would a message typed now reach it (`chat_steer.go`) instead of being queued? |
 | `GET /api/comment-batch?pr=N` | In-memory per-comment state of that PR's `comment_batch` run (`open`/`busy`/`done`/`skipped` + the running phase/tool). The resync read for the stream below. Deliberately kept after the run finished — the run leaves no durable per-comment trace — but dropped on restart. |
+| `GET /api/auth/status[?refresh=1]` | Are the local credentials slash runs on still valid — `gh auth status`, `acli jira auth status`, and one minimal live call with the Jira API token? Shells out and caches the verdict in memory for 60s; `?refresh=1` is the UI's "Opnieuw controleren" button. Never returns the token, only a masked tail. See `auth_status.go`. |
 | `GET /api/events?pr=N` | The one multiplexed SSE stream per browser tab (`eventbus.go`). Pushes volatile notifications only; every consumer refetches its ordinary `GET` on (re)connect. See `.claude/docs/server-events.md`. |
 
 Both are carve-outs from the write boundary because they touch nothing durable

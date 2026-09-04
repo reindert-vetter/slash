@@ -774,6 +774,11 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// (<dataDir>/settings.json, gitignored). Today only "who am I" for @mention
 	// detection, which OVERRIDES the login /api/me reports. See settings.go.
 	mux.HandleFunc("/api/settings", s.handleSettings)
+	// GET /api/auth/status[?refresh=1] → read-only: is every local credential
+	// slash runs on (gh, acli, the Jira API token) still valid? Behind the
+	// global auth popup (src/authStatus.mjs) and the settings page's own row.
+	// See auth_status.go for why this is outside the write boundary.
+	mux.HandleFunc("/api/auth/status", s.handleAuthStatus)
 	// POST /api/workflows/code_warning {pr} → start an agentic Opus review of
 	// the whole PR for risks (the "/" menu's "Diepgravend onderzoek"). One
 	// Execution per manual run.
@@ -1406,6 +1411,25 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 			case "praiseWords":
 				if len(normalizePraiseWordList(body.PraiseWords)) == 0 {
 					http.Error(w, "at least one praise word is required", http.StatusBadRequest)
+					return
+				}
+			case "jiraCreds":
+				// The Jira notification feed needs an e-mail address AND a
+				// token; a half-filled form would only produce a failing
+				// credential the auth popup then keeps complaining about. An
+				// empty token is fine when one is already stored (it means
+				// "keep it", see JiraCredsSignal), which is exactly what the
+				// env already tells us here.
+				if body.JiraCreds == nil {
+					http.Error(w, "missing jira credentials", http.StatusBadRequest)
+					return
+				}
+				if strings.TrimSpace(body.JiraCreds.Email) == "" {
+					http.Error(w, "a Jira account e-mail is required", http.StatusBadRequest)
+					return
+				}
+				if _, storedToken, _ := jiraCredsFromEnv(); strings.TrimSpace(body.JiraCreds.Token) == "" && storedToken == "" {
+					http.Error(w, "a Jira API token is required", http.StatusBadRequest)
 					return
 				}
 			default:

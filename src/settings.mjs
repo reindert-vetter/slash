@@ -7,7 +7,7 @@
 // keyboard-navigable row list and a `?from=` round trip back to wherever the
 // reviewer came from. See .claude/docs/settings-page.md for the full
 // mechanism and the per-setting source/write-path table.
-import { reactive, html } from './vendor/arrow.js'
+import { reactive, html, watch } from './vendor/arrow.js'
 import { initTheme, themeToggleButton, cycleTheme } from './theme.mjs'
 import { ensureAutoWarn, autoWarnToggleButton, toggleAutoWarn } from './autowarn.mjs'
 import { keyboardHintsToggleButton, toggleKeyboardHints } from './keyboardHints.mjs'
@@ -18,6 +18,16 @@ import { ensureLangPref, langToggleButton, toggleLang } from './langpref.mjs'
 import { t, syncUiLang } from './i18n.mjs'
 import { originFrom, originPr } from './settingsLink.mjs'
 import FailedTasksHost, { initFailedTasksPopup, isFailedTasksOpen, handleFailedTasksKeydown } from './failedTasks.mjs'
+// The auth row's data comes from the same shared store the global dialog uses
+// — but the dialog itself is SUPPRESSED here (suppressPopup): a modal over the
+// very form you are filling in would be absurd. See src/authStatus.mjs.
+import {
+  as as authState,
+  initAuthStatusPopup,
+  refreshAuthStatus,
+  saveJiraCredentials,
+  authCheckRow,
+} from './authStatus.mjs'
 
 initTheme()
 initDebugLog()
@@ -45,7 +55,29 @@ const state = reactive({
   // How many lines the debug recording currently holds (GET /api/debug/log) —
   // shown on the debug row so the reviewer can see it really is recording.
   debugCount: 0,
+  // The Jira notification-feed credentials, prefilled once from
+  // GET /api/auth/status (authState.jira). The TOKEN is never prefilled — the
+  // server only ever reports a masked tail — so an empty token field means
+  // "keep the stored one" (see JiraCredsSignal, workflows.go).
+  jiraEmail: '',
+  jiraSite: '',
+  jiraToken: '',
 })
+
+// Prefill the credential form once the status has loaded, and never again —
+// re-running it would overwrite what the reviewer is typing on the next poll.
+// Deps are enumerated INLINE, per the watch rule in
+// .claude/rules/arrowjs-pitfalls.md.
+let jiraPrefilled = false
+watch(
+  () => [authState.loaded, authState.jira && authState.jira.email, authState.jira && authState.jira.site],
+  () => {
+    if (jiraPrefilled || !authState.loaded) return
+    jiraPrefilled = true
+    state.jiraEmail = (authState.jira && authState.jira.email) || ''
+    state.jiraSite = (authState.jira && authState.jira.site) || ''
+  },
+)
 
 // Row order IS the ↑/↓ nav order, and IS the DOM order rendered below — kept
 // as one array so the two can never drift apart.
@@ -59,6 +91,7 @@ const ROWS = [
   'autowarn',
   'autoingestpref',
   'debug',
+  'auth',
   'checkout',
   'aliases',
   'praisewords',
@@ -240,6 +273,9 @@ function activateRow(row) {
   } else if (row === 'debug') {
     // Same function a click on debugModeToggleButton runs.
     toggleDebugMode()
+  } else if (row === 'auth') {
+    // Same function a click on the row's own "Opnieuw controleren" runs.
+    refreshAuthStatus(true)
   } else if (row === 'aliases') {
     state.editing = 'aliases'
     requestAnimationFrame(() => focusRowInput('aliases'))
@@ -288,6 +324,17 @@ window.addEventListener('keydown', (e) => {
 })
 
 // ── rendering ─────────────────────────────────────────────────────────────
+
+// FIELD_CLS is the one text-input look this page uses; a static string, so it
+// stays out of arrow.js's reactive attribute path (see the whole-value
+// attribute rule in .claude/rules/arrowjs-pitfalls.md).
+const FIELD_CLS =
+  'w-full rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-2.5 py-1.5 text-[13px] text-slate-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-indigo-300 dark:focus:ring-indigo-500/40'
+
+// Where an Atlassian API token comes from — the same page auth_status.go names
+// in its own fixUrl, kept here too so the row can link to it before any check
+// has loaded.
+const JIRA_TOKEN_URL = 'https://id.atlassian.com/manage-profile/security/api-tokens'
 
 function rowCls(row) {
   const base = 'rounded-xl border p-4 transition-colors '
@@ -404,6 +451,114 @@ function debugRow() {
       <span class="text-[12px] text-slate-500 dark:text-zinc-500" data-testid="settings-debug-count">
         ${() => t('{n} gebeurtenissen opgenomen', { n: state.debugCount })}
       </span>
+    </div>
+  </div>`
+}
+
+// authRow — every credential slash runs on, its state in WORDS (never colour
+// alone), how to repair it, and — for the one credential that is a plain
+// token rather than a CLI login — the fields to fill it in right here. The
+// rows themselves are authStatus.mjs's own authCheckRow, the same component
+// the global dialog renders, so the two can never disagree about a state.
+function authRow() {
+  return html`<div data-testid="settings-row-auth" class="${() => rowCls('auth')}" @click="${() => (state.activeRow = ROWS.indexOf('auth'))}">
+    ${rowLabel(
+      t('Inloggegevens'),
+      t('gh, acli en het Jira API-token. Werkt er één niet, dan slaat slash het werk dat daarop leunt stilzwijgend over.'),
+    )}
+    <div
+      data-testid="settings-auth-checks"
+      class="mb-3 overflow-hidden rounded-lg border border-slate-200 dark:border-zinc-800"
+    >
+      ${() =>
+        authState.loaded
+          ? (authState.checks || []).map((c) => authCheckRow(c).key('authrow:' + c.id))
+          : [html`<p class="px-4 py-3 text-[12px] text-slate-500 dark:text-zinc-500">${t('Bezig met controleren…')}</p>`.key('authrow:loading')]}
+    </div>
+    <div class="mb-3 flex flex-wrap items-center gap-2">
+      <button
+        type="button"
+        data-testid="settings-auth-recheck"
+        disabled="${() => authState.checking}"
+        class="${() =>
+          'rounded-lg px-3 py-1.5 text-[12px] font-semibold text-white ' +
+          (authState.checking ? 'bg-slate-400 dark:bg-zinc-700' : 'bg-indigo-600 hover:bg-indigo-500')}"
+        @click="${(e) => {
+          if (e) e.stopPropagation()
+          refreshAuthStatus(true)
+        }}"
+      >
+        ${() => (authState.checking ? t('Bezig met controleren…') : t('Opnieuw controleren'))}
+      </button>
+      <span data-testid="settings-auth-note" class="min-w-0 flex-1 truncate text-[12px] text-slate-500 dark:text-zinc-500"
+        >${() => authState.note}</span
+      >
+    </div>
+    <div class="rounded-lg border border-slate-200 p-3 dark:border-zinc-800">
+      <p class="text-[13px] font-semibold text-slate-800 dark:text-zinc-100">${t('Jira API-token')}</p>
+      <p class="mt-0.5 text-[12px] text-slate-500 dark:text-zinc-500">
+        ${t('Nodig voor de notificatiefeed bovenaan het PR-overzicht. Maak een token aan en plak hem hieronder.')}
+      </p>
+      <p class="mt-1 text-[12px]">
+        <a
+          href="${JIRA_TOKEN_URL}"
+          target="_blank"
+          rel="noopener"
+          data-testid="settings-auth-token-link"
+          class="font-semibold text-indigo-600 underline dark:text-indigo-300"
+          >${t('Token aanmaken op id.atlassian.com')}</a
+        >
+      </p>
+      <div class="mt-2 space-y-2">
+        <input
+          type="email"
+          data-testid="settings-auth-email-input"
+          placeholder="${t('Je Atlassian-e-mailadres')}"
+          value="${() => state.jiraEmail}"
+          class="${FIELD_CLS}"
+          @input="${(e) => (state.jiraEmail = e.target.value)}"
+          @focus="${() => (state.editing = 'auth')}"
+        />
+        <input
+          type="text"
+          data-testid="settings-auth-site-input"
+          placeholder="plugandpaybv.atlassian.net"
+          value="${() => state.jiraSite}"
+          class="${FIELD_CLS}"
+          @input="${(e) => (state.jiraSite = e.target.value)}"
+          @focus="${() => (state.editing = 'auth')}"
+        />
+        <input
+          type="password"
+          data-testid="settings-auth-token-input"
+          placeholder="${() =>
+            authState.jira && authState.jira.tokenSet
+              ? t('Opgeslagen: {masked} — laat leeg om te behouden', { masked: authState.jira.tokenMasked || '••••' })
+              : t('Plak hier je API-token')}"
+          class="${FIELD_CLS}"
+          @input="${(e) => (state.jiraToken = e.target.value)}"
+          @focus="${() => (state.editing = 'auth')}"
+        />
+      </div>
+      <button
+        type="button"
+        data-testid="settings-auth-save"
+        disabled="${() => authState.saving}"
+        class="${() =>
+          'mt-2 rounded-lg px-3 py-1.5 text-[12px] font-semibold text-white ' +
+          (authState.saving ? 'bg-slate-400 dark:bg-zinc-700' : 'bg-emerald-600 hover:bg-emerald-500')}"
+        @click="${(e) => {
+          if (e) e.stopPropagation()
+          saveJiraCredentials({ email: state.jiraEmail, site: state.jiraSite, token: state.jiraToken }).then((ok) => {
+            if (ok) state.jiraToken = ''
+          })
+        }}"
+      >
+        ${() => (authState.saving ? t('Bezig met opslaan…') : t('Opslaan'))}
+      </button>
+      <p class="mt-2 text-[12px] text-slate-400 dark:text-zinc-500">
+        ${t('Wordt lokaal opgeslagen in .env (niet in git, niet versleuteld) en is direct actief.')}
+      </p>
     </div>
   </div>`
 }
@@ -542,7 +697,8 @@ function App() {
             'Taal van reacties op GitHub',
             'De tekst die Claude voor je opschrijft als reactie op een reviewopmerking, en die onder jouw naam op GitHub komt.',
           )}
-          ${langCommitRow()} ${autoWarnRow()} ${autoIngestPrefRow()} ${debugRow()} ${checkoutRow()} ${aliasesRow()}
+          ${langCommitRow()} ${autoWarnRow()} ${autoIngestPrefRow()} ${debugRow()} ${authRow()} ${checkoutRow()}
+          ${aliasesRow()}
           ${praiseWordsRow()}
         </div>
         <p class="mx-auto mt-4 max-w-xl text-[12px] text-slate-400 dark:text-zinc-500">
@@ -560,6 +716,7 @@ document.title = t('Instellingen') + ' — PR Review Tree'
 App()(document.getElementById('app'))
 FailedTasksHost()(document.getElementById('app'))
 initFailedTasksPopup()
+initAuthStatusPopup({ suppressPopup: true })
 ensureAutoWarn()
 ensureAutoIngestPref()
 ensureLangPref()

@@ -55,7 +55,7 @@ module `const`s (mirrors `originPr`/`originSel` in `overview.mjs`):
 ## Row list and keyboard
 
 `src/settings.mjs`'s `ROWS = ['theme', 'keyboardhints', 'langui', 'langexplain',
-'langreply', 'langcommit', 'autowarn', 'autoingestpref', 'debug', 'checkout',
+'langreply', 'langcommit', 'autowarn', 'autoingestpref', 'debug', 'auth', 'checkout',
 'aliases', 'praisewords']` is simultaneously the `↑`/`↓` nav order and the DOM render
 order, kept as one array so the two can never drift apart. A platt
 `window.addEventListener('keydown', …)` (mirrors `inbox.mjs`, not the
@@ -89,6 +89,7 @@ granularity to remap onto):
 | Taal van reacties op GitHub (`settings-row-langreply`) | `GET /api/langpref` (`reply`) | same Signal, `kind:"reply"` | Yes |
 | Taal van code en commits (`settings-row-langcommit`) | — (a fixed rule in the prompts) | — | **No, by design** — always English, see below |
 | Debug mode (`settings-row-debug`) | `localStorage['debugMode']` (`debugLog.mjs`) | same, via `toggleDebugMode()`; the recorded log itself is written by the one-shot `debug_log` workflow — see `.claude/docs/debug-mode.md` | Yes — plus a "Log wissen" button and a recorded-event counter (`GET /api/debug/log`) |
+| Inloggegevens (`settings-row-auth`) | `GET /api/auth/status` (`authStatus.mjs`'s shared `as` store) | `POST /api/workflows/app_settings` + `.../signals/app_settings_update` with Kind `"jiraCreds"` → `.env` (see below) | Yes, for the Jira API token trio; `gh`/`acli` are repaired in a terminal |
 | Werkmap (row label "Werkmap", `settings-row-checkout`) | `GET /api/chat/checkout?prs=<originPr>` | *(unchanged — see below)* | **Read-only on this page** |
 | Wie ben ik — GitHub-login | `GET /api/me` (`avatar.mjs`'s `ensureMe`/`meLogin`) | — | No, by explicit reviewer decision: "wie ben ik moet uit GitHub komen" |
 | Wie ben ik — extra @mention-aliassen | `GET /api/settings` (`me.aliases`) | new `app_settings` tracker, Kind `"aliases"` (see below) | Yes — new |
@@ -107,6 +108,50 @@ explanation when there is no `originPr` at all — the reviewer's own decision:
 "rij blijft staan maar grijs/inactief, met de uitleg dat je dit vanuit een PR
 moet openen." Changing the checkout directory still happens on the PR page
 itself, via the existing chip.
+
+### Inloggegevens: one row, one shared store, one global popup
+
+Reviewer request: "ik wil een popup als er iets groots fout gaat (waar ik een
+knop in kan drukken om te re-checken), betreft acli jira auth status, maar ook
+andere auth dingen — laat in de config page zien hoe ik eraan kom, met een link
+en input velden enzo (het is toch allemaal local, dus encrypten heeft geen
+zin)".
+
+Three credentials, checked by `GET /api/auth/status` (`auth_status.go`, a
+read-only operational carve-out): `gh auth status`, `acli jira auth status`,
+and one minimal live feed call with the Jira API token. `claude` is
+deliberately NOT checked — it has no queryable auth-status command, so the only
+way to know would be a real billable call, and a failing Claude call already
+shows up as a genuinely failed run in the failed-tasks popup.
+
+`src/authStatus.mjs` owns both surfaces from ONE reactive store (`as`), so the
+row and the popup can never disagree:
+
+- **The global popup** — same contract as `failedTasks.mjs` (a real modal
+  owning the keyboard, checked FIRST in every page's own keydown handler,
+  Escape = a 5-minute localStorage snooze), mounted on all three pages and
+  **suppressed on `/settings` itself** (`initAuthStatusPopup({suppressPopup:
+  true})`), where the same rows are already on screen. It **outranks** the
+  failed-tasks dialog (`isFailedTasksOpen` checks `isAuthProblemOpen` first):
+  an expired credential is usually why those tasks failed, and two stacked
+  modals help nobody.
+- **It only fires on state `"error"`** — a credential that WAS configured and
+  is now rejected. `"missing"` (the optional Jira feed was never set up) and
+  `"skipped"` (`SLASH_GITHUB=off`/`SLASH_JIRA=off`, i.e. an offline or
+  Playwright run) never open it; both are still shown on the settings row.
+  Without that rule every test run would sit behind a keyboard-owning modal.
+- Every state carries a WORD plus a glyph (`✓ Werkt`, `✕ Niet ingelogd`,
+  `✕ Afgekeurd` for a rejected token, `○ Niet ingesteld`, `– Uitgeschakeld`);
+  colour is decoration only, per the colourblind rule.
+
+**The Jira token is write-only from the browser's point of view.**
+`/api/auth/status` reports `tokenSet` plus a masked tail (`••••abcd`), never
+the value — `GET /api/settings` is served verbatim to the browser, which is
+also why these credentials live in `.env` and not in `settings.json`. An EMPTY
+token field therefore means "keep the stored one", so correcting only the
+e-mail address never wipes the token the page could not send back. Not
+encrypted, by explicit reviewer decision: it is a local file on a local
+machine.
 
 ### The new write path: `app_settings` tracker
 
@@ -166,6 +211,18 @@ their own doc comments in `workflows.go`). Each `Kind` runs its own Activity:
   sees why instead of a silent "changed to defaults". The frontend mirrors
   this: `removePraiseWord` (`settings.mjs`) refuses to remove the last
   remaining chip, disabling its own remove button instead.
+
+- **`saveJiraCredentials`** (Activity, Kind `"jiraCreds"`) → `saveEnvValues`
+  (`env.go`, the only programmatic writer of `.env`): a MERGE, never a
+  rewrite — an existing key is replaced in place, a commented-out
+  `# SLASH_JIRA_EMAIL=…` template line is replaced rather than duplicated, every
+  other line and comment survives, and the file is written atomically (temp +
+  rename) like `settings.json`. It then `os.Setenv`s the values, so the change
+  is live without a restart (every reader — `notifyConfig`, `auth_status.go` —
+  reads `os.Getenv` lazily on each call), and drops the auth-status cache so
+  the page does not keep showing the old verdict for up to a minute. The HTTP
+  handler validates first (an e-mail is required; a token is required unless
+  one is already stored). Tests: `env_save_test.go`.
 
 **`TaskManager.dataDir` is NOT the settings/praise-words directory** — a real
 bug caught and fixed while building this: `dataDir` on `TaskManager` is the
@@ -283,6 +340,13 @@ row, plus a `ui` switch reloading into English. Backend:
 `modules/langpref/langpref_test.go` (defaults, per-kind/per-repo isolation,
 `All`) and `langdirective_test.go` (the empty tail for Dutch, the override for
 English, the chat tail naming both rules).
+
+The auth row/popup have no Playwright spec of their own: under the harness's
+`SLASH_GITHUB=off`/`SLASH_JIRA=off` every check reports `skipped`, so there is
+nothing to assert without faking the endpoint. The regression-sensitive half —
+the `.env` merge, the "empty token keeps the stored one" rule, and the CLI
+output parsing — is covered by `env_save_test.go` instead. Verified by hand
+against a real, genuinely expired `acli` session.
 
 `tests/settings-page.spec.mjs` — both entry buttons + the `?from=` round trip
 (including the open-redirect fallback), `↑`/`↓`/`Enter`/`Space` row

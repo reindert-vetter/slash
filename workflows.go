@@ -682,9 +682,26 @@ type AppSettingsInput struct{}
 // ReactionSignal.Action/PRStateSignal, because a workflow can only WaitSignal
 // on one name at a time.
 type AppSettingsSignal struct {
-	Kind        string   `json:"kind"` // "aliases" | "praiseWords"
+	Kind        string   `json:"kind"` // "aliases" | "praiseWords" | "jiraCreds"
 	Aliases     []string `json:"aliases,omitempty"`
 	PraiseWords []string `json:"praiseWords,omitempty"`
+	// JiraCreds carries the Atlassian notification-feed credentials of the
+	// settings page's auth row (Kind "jiraCreds"). They land in the gitignored
+	// .env, NOT in settings.json — that file is served verbatim to the browser
+	// by GET /api/settings, so a token in it would leak to every page. See
+	// auth_status.go.
+	JiraCreds *JiraCredsSignal `json:"jiraCreds,omitempty"`
+}
+
+// JiraCredsSignal is one settings-page edit of the Jira API-token trio. An
+// EMPTY Token deliberately means "keep whatever is stored": the settings page
+// never receives the current token back (only a masked tail), so it cannot
+// send it back either, and a reviewer correcting just the e-mail address must
+// not wipe the token by doing so.
+type JiraCredsSignal struct {
+	Email string `json:"email"`
+	Site  string `json:"site"`
+	Token string `json:"token"`
 }
 
 // IgnoreCommentInput starts an ignore_comment Execution — one tracker per PR.
@@ -2477,6 +2494,33 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		}
 		_, err := savePraiseWordsFile(m.appDataDirOrDefault(), words)
 		return nil, err
+	})
+
+	// Activity: persist the settings page's Jira-credential edit into the
+	// gitignored .env (write, workflow-driven) — saveEnvValues (env.go) is that
+	// file's only programmatic writer. Deliberately .env and not settings.json:
+	// GET /api/settings is served verbatim to the browser (see auth_status.go).
+	// An empty Token keeps the stored one, so correcting the e-mail address
+	// alone never wipes the token the page could not send back.
+	engine.RegisterActivity("saveJiraCredentials", func(ctx context.Context, in []byte) ([]byte, error) {
+		var creds JiraCredsSignal
+		if err := json.Unmarshal(in, &creds); err != nil {
+			return nil, err
+		}
+		vals := map[string]string{
+			"SLASH_JIRA_EMAIL": strings.TrimSpace(creds.Email),
+			"SLASH_JIRA_SITE":  strings.TrimSpace(creds.Site),
+		}
+		if token := strings.TrimSpace(creds.Token); token != "" {
+			vals["SLASH_JIRA_TOKEN"] = token
+		}
+		if err := saveEnvValues(envFile, vals); err != nil {
+			return nil, err
+		}
+		// The auth-status cache would otherwise keep reporting the old verdict
+		// for up to a minute after the reviewer pressed "Opslaan".
+		invalidateAuthStatus()
+		return nil, nil
 	})
 
 	// Activity: append one batch of debug-mode events to debug-log.jsonl
@@ -4370,6 +4414,10 @@ func appSettingsWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		case "praiseWords":
 			if err := w.ExecuteActivity("savePraiseWords", sig.PraiseWords, nil); err != nil {
 				return nil, fmt.Errorf("save praise words: %w", err)
+			}
+		case "jiraCreds":
+			if err := w.ExecuteActivity("saveJiraCredentials", sig.JiraCreds, nil); err != nil {
+				return nil, fmt.Errorf("save jira credentials: %w", err)
 			}
 		}
 	}

@@ -111,6 +111,16 @@ actually cancels — exactly like any other terminal turn result, written the
 usual way, through the workflow's own Activity, not through this endpoint.
 See "Cancelling a running turn" in `.claude/docs/claude-chat-panel.md`.
 
+Eighth example: `GET /api/auth/status` (`auth_status.go`) — "is `gh`/`acli`
+still logged in, and is the Jira API token still accepted?". It runs two
+read-only status commands plus one minimal feed call and keeps the verdict in
+one in-memory struct with a 60s TTL (`?refresh=1` bypasses it). No module, no
+read-model, no workflow-history write, and empty again after a restart. Safe
+because it is not the source of truth about anything: the CLIs' own credential
+stores are, and this only reports what they answer right now. The FIX is a real
+write and goes the sanctioned way — the settings page signals the `app_settings`
+tracker (Kind `"jiraCreds"`), whose Activity writes `.env`.
+
 ## Exception: the Claude chat turn may act through a shell
 
 Deliberately granted by Reindert, overriding the rule above for this one path.

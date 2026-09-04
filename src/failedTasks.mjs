@@ -36,6 +36,11 @@
 // not durable state, so it is outside the workflow write boundary.
 import { reactive, html } from './vendor/arrow.js'
 import { fetchProblems, problemRunRow } from './problems.mjs'
+// The auth dialog wins over this one: an expired credential is usually the
+// CAUSE of the failures listed here, and two stacked modals help nobody. See
+// the header of src/authStatus.mjs. (One-way import — authStatus.mjs knows
+// nothing about this module, so no cycle.)
+import { isAuthProblemOpen } from './authStatus.mjs'
 import { t } from './i18n.mjs'
 
 // SNOOZE_MS — "ik moet het voor 5 minuten kunnen negeren".
@@ -129,6 +134,7 @@ export function initFailedTasksPopup() {
 // keydown handler must check FIRST — same contract as imageLightbox.mjs: while
 // this dialog is up it owns the keyboard completely.
 export function isFailedTasksOpen() {
+  if (isAuthProblemOpen()) return false
   return fs.loaded && fs.rows.length > 0 && Date.now() >= fs.snoozedUntil
 }
 
