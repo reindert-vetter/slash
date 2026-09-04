@@ -16259,6 +16259,27 @@ async function retryFailedRun(runId) {
   await refreshTasks()
 }
 
+// ignoreFailedRun permanently deletes one failed run the reviewer decided
+// needs no action — the review tree's own twin of the "Negeer" button in the
+// global failed-tasks dialog (see ignoreRuns in src/failedTasks.mjs), so a
+// failure can be dismissed from the column it is shown in instead of only
+// from the popup. Same sanctioned write path: starting the ignore_runs
+// Execution, whose own Activity does the deletion.
+async function ignoreFailedRun(runId) {
+  if (!runId) return
+  try {
+    const res = await fetch('/api/workflows/ignore-runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ runIds: [runId] }),
+    })
+    if (!res.ok) console.error('ignore run failed:', res.status, await res.text())
+  } catch (err) {
+    console.error('ignore run failed:', err)
+  }
+  await refreshTasks()
+}
+
 // stepTaskFocus — ↓/↑ while stop 1 owns the keyboard (reviewer: "ik wil met mijn
 // down key naar beneden en daar kunnen navigeren … en naar boven terug naar pr
 // description"). ↓ from the description card walks into the "Taken" list, then
@@ -16444,6 +16465,9 @@ function taskRowAnchor(row) {
 //     no-op that returns the very same failed run (see retryableWorkflow);
 //   - a run linked to a comment → "Open de comment" (openTask), which used to
 //     be the row's whole click behaviour;
+//   - a failed run, retryable or not → "Negeer deze fout", which deletes it
+//     for good (ignoreFailedRun); a failure that can never be retried is
+//     exactly the kind there is nothing else to do with;
 //   - a mirrored log line → "Verberg deze melding" (this tab only, see
 //     hideTaskLogLine);
 //   - anything with an error message → "Kopieer foutmelding".
@@ -16470,6 +16494,12 @@ function taskCommandsFor() {
         run: () => {},
       })
     }
+  }
+  if (row.problem && row.kind === 'run' && !row.retrying) {
+    // "Negeren" is available even for a run that cannot be retried — that is
+    // exactly the kind of failure there is nothing else to do with. See
+    // ignoreFailedRun.
+    items.push({ id: 'task-ignore', label: t('Negeer deze fout'), hint: 'negeer ignore', run: () => ignoreFailedRun(row.runId) })
   }
   if (row.error) {
     items.push({ id: 'task-copy-error', label: t('Kopieer foutmelding'), hint: 'copy kopieer', run: () => copyReviewSummary(row.error) })

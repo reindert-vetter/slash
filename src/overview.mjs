@@ -2233,9 +2233,15 @@ function problemsDrawer() {
             </div>`.key('problems:empty'),
           ]
         return [
+          // Both lists are their OWN `() =>` bindings, never a bare
+          // `.map(...)` snapshot: this template is (re)created by the
+          // conditional closure above, and once its chunk is reused a static
+          // list slot is never re-diffed again — the "fifth variant" in
+          // .claude/rules/arrowjs-pitfalls.md. Which is exactly what a row
+          // ignoring itself needs: the list shrinks in place.
           html`<div class="mt-2 overflow-hidden rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-900/60">
-            ${state.failedRuns.map((run) => problemRunRow(run, state.prTitles))}
-            ${state.logErrors.map((entry, i) => problemLogRow(entry, i, state.prTitles))}
+            ${() => state.failedRuns.map((run) => problemRunRow(run, state.prTitles, { onIgnore: ignoreProblemRun }))}
+            ${() => state.logErrors.map((entry, i) => problemLogRow(entry, i, state.prTitles))}
           </div>`.key('problems:list'),
         ]
       }}
@@ -3345,6 +3351,25 @@ async function loadProblems() {
   state.logErrors = logErrors
   state.prTitles = prTitles
   state.problemsLoaded = true
+}
+
+// ignoreProblemRun permanently deletes one failed run the reviewer decided
+// needs no action, then reloads the list. Same endpoint and same reasoning as
+// the global popup's own "Negeer" (see ignoreRuns in src/failedTasks.mjs):
+// starting the ignore_runs Execution is the sanctioned write path, its own
+// Activity does the deletion.
+async function ignoreProblemRun(run) {
+  if (!run || !run.runId) return
+  try {
+    await fetch('/api/workflows/ignore-runs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ runIds: [run.runId] }),
+    })
+  } catch (err) {
+    console.error('ignore run failed:', err)
+  }
+  await loadProblems()
 }
 
 // loadRunningCount pulls the live "how much is running right now" figure

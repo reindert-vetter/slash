@@ -76,6 +76,9 @@ export const EN = {
   overgeslagen: 'skipped',
   'geen foutmelding vastgelegd': 'no error message recorded',
   Achtergrondtaak: 'Background task',
+  Negeer: 'Ignore',
+  'Negeer deze fout definitief (de taak verdwijnt uit de lijst)':
+    'Ignore this error for good (the task disappears from the list)',
 
   // ── src/workflowLabels.mjs ──────────────────────────────────────────────
   Comment: 'Comment',
@@ -317,6 +320,13 @@ export const EN = {
   'Bezig met opnieuw proberen…': 'Trying again…',
   'Opnieuw proberen is niet gelukt.': 'Trying again failed.',
   '{n} hervat, {s} overgeslagen.': '{n} resumed, {s} skipped.',
+  'Alles negeren': 'Ignore all',
+  'Zeker? Alles negeren': 'Sure? Ignore all',
+  'Verwijder alle mislukte taken uit de lijst zonder ze opnieuw te proberen':
+    'Remove every failed task from the list without trying it again',
+  'Bezig met negeren…': 'Ignoring…',
+  'Negeren is niet gelukt.': 'Ignoring failed.',
+  '{n} genegeerd, {s} overgeslagen.': '{n} ignored, {s} skipped.',
 
   // ── src/overview.mjs ─────────────────────────────────────────────────────
   'Werktrees voorbereiden…': 'Preparing worktrees…',
@@ -649,6 +659,7 @@ export const EN = {
   'Open de comment': 'Open the comment',
   'Kan niet opnieuw proberen — deze taak start alleen bij de bron': 'Cannot retry — this task can only be started from its source',
   'Kopieer foutmelding': 'Copy error message',
+  'Negeer deze fout': 'Ignore this error',
   'Verberg deze melding': 'Hide this notice',
   Verversen: 'Refresh',
   methode: 'method',
