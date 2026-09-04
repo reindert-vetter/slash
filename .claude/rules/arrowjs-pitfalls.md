@@ -19,12 +19,12 @@ owning keyed node is gone. LOCAL PATCH 1/2/2b (below) address this in the vendor
 file; the "orphan bindings" and "bare toggling expression" entries below are the
 app-level consequences of the same gap.
 
-## LOCAL PATCH 1/2/2b/4/5 in `src/vendor/arrow.js` — reapply on every upgrade
+## LOCAL PATCH 1/2/2b/4/5/6 in `src/vendor/arrow.js` — reapply on every upgrade
 
-Five deliberate changes, each marked with a `LOCAL PATCH` comment in the
+Six deliberate changes, each marked with a `LOCAL PATCH` comment in the
 header (LOCAL PATCH 3, the separate memory-leak fix, is documented on its own
 further down in this file — different failure mode, see "Arrow's registries,
-before and after"). **On an arrow.js upgrade all five must be reapplied**; the
+before and after"). **On an arrow.js upgrade all six must be reapplied**; the
 comment blocks in `vendor/arrow.js` hold the original lines and the exact
 restore instructions.
 
@@ -105,6 +105,56 @@ restore instructions.
   entry in this file is a way for a render to throw mid-flush, and none of
   them should be able to take navigation with it. Regression test:
   `tests/index-row-key-collision.spec.mjs` ("a throwing reactive subscriber").
+- **LOCAL PATCH 6** — a one-line guard in `_`, the LIS-based keyed-array diff
+  helper nested inside `re(t)`'s array branch (the same `re`/array-reconcile
+  machinery LOCAL PATCH 2/2b/4 already patch). Its "zero shared keys between
+  the old and new middle range" shortcut grabs two OLD-array boundary DOM
+  nodes (`l`/`a`) and replaces the whole DOM range between them in one shot —
+  via `Node.replaceChildren` when they're literally the parent's first/last
+  child, otherwise via a `Range` (`setStartBefore`/`setEndAfter`/
+  `deleteContents`/`insertNode`). Before this patch only `l.parentNode` was
+  checked for truthiness to pick between those two paths; a falsy
+  `parentNode` (i.e. `l` already detached, no parent at all) fell through to
+  the `Range` branch instead of being treated as an error, and
+  `Range.setStartBefore`/`setEndAfter` throw `Node has no parent` (or
+  `insertNode` throws its own "the node itself" variant) on a parentless
+  argument. The guard now returns `null` — an existing, already-exercised
+  bail-out contract every other early-exit in `_` also uses (duplicate key,
+  shape mismatch, …) — as soon as EITHER boundary node has no parent, before
+  ever constructing the `Range`; the caller already falls back to `re`'s
+  slower, general per-item reconcile path whenever `_` declines.
+  **Reported symptom, under a large (601-block, 3770-unit) fixture PR at
+  `gran=line` with drilled columns, and disproportionately under real CPU
+  contention (several other browser sessions running at once) rather than a
+  quiet repeat of the same key sequence:** 622 caught throws in
+  `data/debug-log.jsonl` (581× `setStartBefore … Node has no parent`, 39×
+  `setEndAfter …`, 2× `insertNode … from the node itself`), all with the
+  same stack shape `_ ← i ← Vt` — each one a render LOCAL PATCH 5 caught and
+  only `console.error`'d, i.e. invisible without debug mode.
+  **ESTABLISHED** (static reading of this file): `setStartBefore`/
+  `setEndAfter`/`insertNode` occur exactly once in the whole bundle, in this
+  exact construction, so that error text with that stack shape can only
+  originate here; nothing in this branch of `_` mutates the DOM before the
+  `parentNode` read, so `l`/`a` must already have been parentless when `_`
+  was entered — the stale state predates this call, in the reconciler's own
+  `e`/`previous` closure (the same array LOCAL PATCH 2/2b already guards
+  elsewhere for being used after disposal).
+  **HYPOTHESIS, not verified against a captured live repro:** the leading
+  theory is the same disposal-timing gap LOCAL PATCH 4 documents for `Gt`
+  (2+ subscribers on one reactive array property, where one listener's own
+  render synchronously disposes — via LOCAL PATCH 2's cascading disposal — a
+  nested reconciler subtree a second, not-yet-run listener for the SAME
+  property still references), here reaching a shortcut branch of `_` that
+  had not been exercised/instrumented before. This was derived from reading
+  the algorithm, not from an isolated Playwright repro or an inspected real
+  stack trace (`data/debug-log.jsonl` in this checkout is empty — the
+  testcampagne that found this ran against a separate instance/datadir).
+  **Investigation to confirm or refute this is intended to follow this
+  patch, not precede it** — see "The `_ ← i ← Vt` Range-boundary throws" in
+  `.claude/docs/frontend-memory.md` for the outcome once it's done. This
+  guard only stops the stale state from reaching a DOM API that throws on
+  it (LOCAL PATCH 1's "skip stale state instead of crashing" philosophy) —
+  it does not by itself fix whatever earlier event left `l`/`a` parentless.
 
 ## Never give two entries of one keyed list the same `.key()`
 

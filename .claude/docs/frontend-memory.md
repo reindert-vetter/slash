@@ -678,3 +678,108 @@ stopped, while `state.selected` was still being written on every keypress.
 Fixed by **LOCAL PATCH 5** (`Vt` + `Gt` per-callback `try/catch`, logging via
 `console.error`) plus the app-level duplicate-key fix in `BlockList.mjs`'s
 `rowKey`. Regression tests: `tests/index-row-key-collision.spec.mjs`.
+
+## The `_ ← i ← Vt` Range-boundary throws — guard landed (LOCAL PATCH 6), root cause NOT reproduced
+
+Reported from a large stress campaign (601-block, 3770-unit fixture PR,
+`reindert-vetter/slash-test` PR #1, `pr/all-cases-1` — 276 changed files):
+622 caught throws in `data/debug-log.jsonl` (581× `setStartBefore … Node has
+no parent`, 39× `setEndAfter …`, 2× `insertNode … from the node itself`), all
+with the identical stack shape `_ ← i ← Vt`. Every one was already caught by
+LOCAL PATCH 5's `try/catch` (only `console.error`d), so each was invisible
+without debug mode — but each is still one aborted render.
+
+**ESTABLISHED, from reading `src/vendor/arrow.js` (see LOCAL PATCH 6 in
+`.claude/rules/arrowjs-pitfalls.md` for the full writeup):**
+`setStartBefore`/`setEndAfter`/`insertNode` occur exactly once in the whole
+bundle, inside `_` — the LIS-based keyed-array diff helper nested in `re(t)`'s
+array branch — in its "zero shared keys between the old and new MIDDLE range"
+shortcut. That shortcut grabs two boundary DOM nodes from the OLD array
+(`l`/`a`) and replaces the whole DOM range between them in one shot; before
+this patch, only `l.parentNode` being falsy (from *either* it being genuinely
+detached *or* it just not being the parent's first/last child) routed to a
+`Range` call that throws when its argument has no parent at all. **LOCAL
+PATCH 6** makes that guard explicit: bail with `return null` (the same
+already-used bail-out contract every other early-exit in `_` uses) as soon as
+either boundary node has no parent, before ever constructing the `Range`.
+
+**HYPOTHESIS going in, INVESTIGATED, NOT CONFIRMED:** the leading theory was
+the same disposal-timing race LOCAL PATCH 4 documents for `Gt`/emit (2+
+subscribers on one reactive array property, one listener's render
+synchronously disposing — via LOCAL PATCH 2's cascading disposal — a nested
+subtree a second, not-yet-run listener for the SAME property still
+references), landing in this specific, previously unexercised branch of `_`.
+
+**What was actually tried** (all against the real `reindert-vetter/slash-test`
+PR #1 fixture — 601 blocks, matching the reported order of magnitude,
+ingested into a throwaway datadir/port, never touching the shared :8765
+instance):
+
+1. A temporary probe (`console.warn`, not committed) at the top of `_`'s
+   `if(!$){...}` branch and inside the new guard, to see how OFTEN this
+   branch is even reached and whether the guard would have fired.
+2. Plain heavy navigation at `gran=line` (hundreds of `↓`/`↑` through the
+   488-block index, repeated drilling into an Onderliggende-code child and
+   hammering its own cursor) under a CDP `Emulation.setCPUThrottlingRate`
+   slowdown (8x, then 20x) applied AFTER load — **0 guard fires** over ~3500
+   keystrokes, even though the probe showed the `if(!$)` branch itself firing
+   constantly and safely (~20-40 times per run, on small 2-5-item related-item
+   lists that differ per block).
+3. The same navigation, this time with **4 real separate browser tabs**
+   running genuine CPU-bound busy-loops in the SAME browser process (actual
+   OS-level contention, not just per-page throttling, to mirror "4 other
+   browser sessions running" as literally as possible) — **0 guard fires**
+   across 8 rounds (~5600 keystrokes), branch still hit safely every round.
+4. Hammering the block-index **search box** with rapidly alternating queries
+   (`Controller`→`Factory`→`a`→…→``, each producing a wildly different
+   filtered subset) under the same 4-tab contention — the branch was hit only
+   at load time, not during search filtering at all (search apparently keeps
+   the underlying array shape stable rather than removing rows from it), so
+   this angle produced no new samples.
+5. One genuinely large sample: the ONE `oldLen:1 → newLen:471` hit captured
+   during step 2's very first page load — BlockList's own top-level array
+   transitioning from a 1-item loading/empty placeholder to the full,
+   491-block list. This is a real full disjoint swap on a LARGE array (unlike
+   the small per-block related-item lists), so 25 repeated fresh page loads
+   (`page.goto` in a loop) under the SAME 4-tab contention plus CPU throttle
+   applied THROUGH the load itself were run to resample this specific
+   transition — **384 branch hits, 0 guard fires**.
+
+**Conclusion, stated as plainly as the evidence allows:** the vulnerable
+branch is not rare in absolute terms — it fired safely **~450 times** across
+these campaigns, on both tiny (2-5 item) and one large (471-item) array, under
+real multi-tab CPU contention — yet not once did a boundary node already lack
+a parent. This weakens (without ruling out) the LOCAL PATCH 4-style
+multi-subscriber race as the whole story: if a hit's crash probability were
+even moderately independent-random, ~450 real hits should very plausibly have
+surfaced at least one failure the way the reported campaign's presumably much
+larger and longer run did. The gap between "622 throws in a real campaign"
+and "0 throws in ~450 reproduced hits here" was **not closed** in this
+session. Candidates not yet tried, for a future session picking this back up:
+a genuine multi-PR/long-duration soak (hours, not minutes) rather than one
+fixture in one sitting; real GitHub API latency (this repro ran with local
+`gh`/network access but no sustained comment/ingest-refresh polling activity
+layered on top); an actual second real browser process (not just extra tabs
+in the same browser) contending for the OS scheduler; or a genuinely
+different code path this session didn't stumble into (something that leaves a
+disposed chunk's *individual* object reachable from a reconciler's own `e`
+array without the whole reconciler being torn down — LOCAL PATCH 2/2b guards
+the latter, not necessarily the former).
+
+**What to do if the guard fires in production:** it will show up as a
+`console.error`-free, silent `return null` today (the guard itself doesn't
+log) — falling back to `_`'s slower general per-item path, which the existing
+duplicate-key bail-outs already rely on and which is exercised on every
+`Playwright` run. If it's ever suspected to be firing (e.g. a list that
+should reorder doesn't, right after a burst of activity), temporarily restore
+a `console.warn` at the guard site (see LOCAL PATCH 6's own comment in
+`src/vendor/arrow.js` for the exact probe used here) rather than assuming
+silence means it never fires.
+
+No regression test added for the crash itself, since it was never
+reproduced; LOCAL PATCH 6 is covered indirectly by the existing arrow.js
+regression suite (`tests/step-preview-stability.spec.mjs`,
+`tests/diff-code-vs-title.spec.mjs`, `tests/drill-listener-array-dispatch.spec.mjs`,
+`tests/index-row-key-collision.spec.mjs`, `tests/related-nested-chip.spec.mjs`,
+`tests/claude-other-tasks-hidden.spec.mjs` — all still pass unchanged with the
+guard in place, confirming it doesn't alter any exercised behaviour).
