@@ -3214,6 +3214,11 @@ func (s *server) handleCodeWarning(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
+	// Canonicalize like every other workflow-start handler: blocks are stored
+	// under the canonical repo string ("" for the primary), so a request naming
+	// the primary repo by its full slug would otherwise resolve to an empty
+	// warning scope and complete "successfully" having reviewed nothing.
+	in.Repo = canonRepo(in.Repo)
 	runID, err := s.tasks.manager.StartCodeWarning(in)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
