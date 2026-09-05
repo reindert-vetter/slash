@@ -784,6 +784,37 @@ regression suite (`tests/step-preview-stability.spec.mjs`,
 `tests/claude-other-tasks-hidden.spec.mjs` — all still pass unchanged with the
 guard in place, confirming it doesn't alter any exercised behaviour).
 
+**UPDATE — root cause found and fixed, LOCAL PATCH 8.** A later session
+(picking up exactly the "candidates not yet tried" list above, but landing on
+a simpler mechanism than any of them) instrumented `He`/`Re`/`qt` directly
+against the `reindert-vetter/slash-test` PR #2 fixture and found the true
+source: `re(t)`'s owner-teardown cleanup (LOCAL PATCH 2) called `qt(e,!0)`,
+claiming the nested content's DOM was "already removed" — false at the exact
+moment it runs, since `Ft` executes every `t.u[i]()` cleanup BEFORE it
+physically removes the owner's own DOM range. Believing the false claim,
+`He(chunk,true)` skipped the one call (`L`) that would have physically
+detached the chunk into its own fragment, yet still added it to the shared,
+shape-keyed reuse pool `Q` — so the chunk sat in the pool "valid" by every
+stash-time check (matching this section's own finding: stash-time
+validation never caught anything) while STILL physically attached wherever
+it happened to be, ready for the next unrelated same-shape mount to rip it
+out from under whatever still held it. That is exactly the "stale
+`l`/`a`, from the reconciler's own `e`/`previous` closure" instinct this
+section's ESTABLISHED reading pointed at — just not through the LOCAL PATCH
+4-style multi-subscriber race this section's HYPOTHESIS explored (that race
+was investigated hard, above, and never reproduced; it turned out not to be
+necessary — a single, deterministic ordering bug in one cleanup was enough).
+Full mechanism, proof, and the fix itself: LOCAL PATCH 8 in
+`.claude/rules/arrowjs-pitfalls.md` and its own comment block in
+`src/vendor/arrow.js`. LOCAL PATCH 6's guard stays in place regardless — this
+fix removes the trigger this session could find, not the class of bug the
+guard defends against. **The landed fix is deliberately narrower than first
+verified working:** it only makes the disposal honest when the thing being
+disposed is a single chunk, not an array — a broader version (fixing arrays
+too) closed the corruption completely but broke the command palette's
+own row list (see "why this stayed narrow" in LOCAL PATCH 8's own comment,
+and the residual-corruption numbers in "The Space-sequence freeze" below).
+
 ## The Space-sequence freeze: `L`'s boundary-cycle walk — guard landed (LOCAL PATCH 7)
 
 The cousin of LOCAL PATCH 6's stale-boundary throws, found during the
@@ -850,13 +881,48 @@ deliberate: debug mode's console hook (`src/debugLog.mjs`) writes it to
 `data/debug-log.jsonl`, so any live occurrence is now diagnosable instead
 of being an unexplained dead tab.
 
-**NOT fixed:** the underlying double-administration that corrupts the pooled
-chunk's boundaries — same open status as PATCH 6's parentless `l`/`a`. If
-that root cause is ever taken on, start from evidence point 5 above (stash
-always valid, corruption in the pool) and the disposal-ordering machinery
-PATCH 2/2b/4 already touch. And check `data/debug-log.jsonl` for the
-`chunk boundary cycle` line first — its frequency in real sessions tells
-whether the corruption is common (masked) or rare.
+**Fixed in a later session: LOCAL PATCH 8.** Evidence point 5 above ("stash
+always valid, corruption in the pool") turned out to be exactly right, down
+to the mechanism: `re(t)`'s owner-teardown cleanup (LOCAL PATCH 2) stashed a
+still-live chunk into the pool via `qt(e,!0)` — the `!0` falsely claims the
+DOM was already removed, so `He` skipped the one call (`L`) that would have
+physically detached it first. The chunk then sat in `Q` looking valid (every
+bookkeeping field correct) while its `ref.f`/`ref.l` still pointed at nodes
+attached wherever they happened to live — exactly "two administrations
+sharing one chunk's DOM". Instrumented `He`/`Re`/`qt` against this same PR #2
+fixture, driving a repeated drill/approve/collapse Playwright script, found
+the identical stack shape on every corrupted stash
+(`He ← qt ← Ft's cleanup-array call ← qt ← Le`) and a 1:1 count match against
+this one cleanup closure, EVERY captured instance being a single chunk (the
+`block-collapsed` rail button matches this shape exactly), never an array.
+Fix: `qt(e,!0)` → `qt(e,Array.isArray(e))` in that cleanup — honest (`e=false`,
+actually calls `L`) for a single chunk, left as the original `e=true` for an
+array. Verified: the single-chunk "stashed/popped while still attached
+elsewhere" counters stayed at 0 across 60+ repeated cycles post-fix, vs.
+1600+ within the FIRST cycle unpatched. **Why not also fix the array case:**
+a broader version (`qt(e)` unconditionally) DID close the corruption fully
+(0/0 including array content) but broke the command palette's own
+persistent row list — `command-list` is one stable, reused container across
+every menu open, and a stale array disposal racing a fresher render into
+that SAME container took its "wipe the whole container" fast-path,
+confirmed live (`childElementCount` 6→0, follow-up menu rows gone). Closing
+the array case properly needs `qt`'s array branch to detach each item via
+`L` WITHOUT ever risking that bulk wipe — the two are currently gated by the
+same boolean, so a future session fixing this needs to decouple them, not
+just flip another `!0`. Residual, measured with the narrow fix: the
+pool-integrity counter (which also catches array-content corruption) still
+grows ~4-5 per drill/approve/collapse cycle (179 over 40 cycles, measured), down from an unbounded rate but
+not zero. Full writeup: LOCAL PATCH 8 in
+`.claude/rules/arrowjs-pitfalls.md` and its own comment block in
+`src/vendor/arrow.js`. LOCAL PATCH 7's guard (and PATCH 6's) stay in place as
+a defense-in-depth net — this fix closes the single-chunk call site proven
+responsible for the majority of instances found so far, not the general "a
+stale ref can reach `L`/`_`" class, and not (yet) the array-content share.
+Check `data/debug-log.jsonl` for the `chunk boundary cycle` line if this is
+ever suspected to still be firing in production — its frequency now tells
+whether the residual array-content gap is common enough to justify the
+deeper fix, or a genuinely different trigger
+exists, not this one.
 
 **Repro recipe:** isolated server on the PR #2 fixture datadir, fresh page,
 `?sel=` at block 0, `→` into diff mode, then dispatch Space via

@@ -19,12 +19,12 @@ owning keyed node is gone. LOCAL PATCH 1/2/2b (below) address this in the vendor
 file; the "orphan bindings" and "bare toggling expression" entries below are the
 app-level consequences of the same gap.
 
-## LOCAL PATCH 1/2/2b/4/5/6/7 in `src/vendor/arrow.js` — reapply on every upgrade
+## LOCAL PATCH 1/2/2b/4/5/6/7/8 in `src/vendor/arrow.js` — reapply on every upgrade
 
-Seven deliberate changes, each marked with a `LOCAL PATCH` comment in the
+Eight deliberate changes, each marked with a `LOCAL PATCH` comment in the
 header (LOCAL PATCH 3, the separate memory-leak fix, is documented on its own
 further down in this file — different failure mode, see "Arrow's registries,
-before and after"). **On an arrow.js upgrade all six must be reapplied**; the
+before and after"). **On an arrow.js upgrade all eight must be reapplied**; the
 comment blocks in `vendor/arrow.js` hold the original lines and the exact
 restore instructions.
 
@@ -155,6 +155,11 @@ restore instructions.
   guard only stops the stale state from reaching a DOM API that throws on
   it (LOCAL PATCH 1's "skip stale state instead of crashing" philosophy) —
   it does not by itself fix whatever earlier event left `l`/`a` parentless.
+  **UPDATE: root-caused and fixed — LOCAL PATCH 8 below.** The hypothesis
+  above (a disposal-timing gap reaching `_`'s stale `e`/`previous`) pointed
+  at the right neighbourhood but not the right mechanism — see PATCH 8's own
+  entry for the proven cause and fix. This guard stays as a defense-in-depth
+  net; it is not removed.
 - **LOCAL PATCH 7** — a cycle guard in `L`, the chunk DOM mover (walks
   `ref.f .. ref.l` via `nextSibling`, `insertBefore`-ing each node into the
   target). With CORRUPTED chunk boundaries (`f`/`l` in different parents, or
@@ -179,7 +184,78 @@ restore instructions.
   hot path allocates nothing. Verified live: the previously-freezing Space
   sequence continues normally past the abort (4 aborts over 650 presses,
   zero freezes). Full evidence chain and repro recipe: "The Space-sequence
-  freeze" in `.claude/docs/frontend-memory.md`.
+  freeze" in `.claude/docs/frontend-memory.md`. **UPDATE: root-caused and
+  fixed — LOCAL PATCH 8 below.** Same "two administrations sharing one
+  chunk's DOM" defect as PATCH 6, now traced to its exact source and closed
+  at that one call site. This guard stays as a defense-in-depth net; it is
+  not removed.
+- **LOCAL PATCH 8** — the actual root cause behind PATCH 6 and PATCH 7,
+  found and fixed: both were different symptoms of the SAME bug, a single
+  wrong boolean at a single call site. `re(t)`'s owner-teardown cleanup
+  (added by PATCH 2 — "when the OWNING chunk is destroyed, also dispose
+  whatever the nested reconciler currently holds") called `qt(e,!0)`: the
+  `!0` claims "this nested content's DOM was already removed from the
+  document, just do the bookkeeping". That claim is false at the moment
+  this cleanup runs — `Ft` (destroyChunk) runs every `t.u[i]()` cleanup
+  (where this fires) BEFORE it physically removes the owner's own DOM range,
+  so the nested content is still a live, attached descendant of the
+  still-attached owner at that point. Believing the false claim,
+  `He(chunk,true)` skips `L(chunk.ref,chunk.dom)` — the one call that
+  physically detaches a chunk into its own fragment — yet still adds it to
+  the shared, shape-keyed reuse pool `Q` as if it were safely stashed there.
+  `Q` is one flat map shared by every reconciler in the app (nested or
+  top-level), so the next unrelated mount of the same template shape pops
+  this exact chunk and physically moves its (still-live-elsewhere) DOM into
+  the new spot — ripping nodes out of whatever they were still part of.
+  That's PATCH 6's parentless boundary node and PATCH 7's circular boundary
+  chain: the same defect, surfacing as whichever of the two shapes of damage
+  the timing happens to produce. **Proven, not hypothesized:** temporary
+  instrumentation (`He`/`Re`/`qt`, not committed) against the
+  `reindert-vetter/slash-test` PR #2 fixture, driving a repeated
+  drill-in/approve/collapse Playwright script, captured the identical stack
+  shape (`He ← qt ← Ft's cleanup-array call ← qt ← Le`) on every corrupted
+  stash, and a direct counter on this one cleanup closure matched the
+  corruption count 1:1 across repeated runs (thousands of fires, every one
+  landing on a chunk still attached to a `parentNode !== chunk.dom` at the
+  moment `He` marked it reusable) — zero corruption came from any other
+  `qt(...,true)` call site, and every captured instance had the disposed
+  value `e` be a SINGLE CHUNK, never an array. **The fix, deliberately
+  narrow:** `qt(e,!0)` → `qt(e,Array.isArray(e))` — honest (`e=false`,
+  actually calls `L`) only when `e` is a single chunk; an ARRAY still gets
+  the original `e=true`. A single chunk now goes through the same verified
+  path every other disposal uses — `He(e,false)` calls `L` first, physically
+  moving the content into its own fragment before it's considered poolable.
+  **Why the array case is deliberately left alone:** a first attempt made
+  this unconditional (`qt(e)`, defaulting arrays to honest too) and DID close
+  the corruption completely (0/0 including array content) — but broke four
+  previously-passing tests (`drill-approve.spec.mjs`,
+  `drill-approve-return-to-ancestor.spec.mjs`, `postapprove-menu.spec.mjs`,
+  `postapprove-tree.spec.mjs`). The command palette's row list
+  (`data-testid=command-list`) is one persistent container reused across
+  every menu open; closing one menu and opening a follow-up coalesces both
+  writes to `menu.open` before this cleanup's own (separately queued)
+  disposal of the FIRST menu's now-stale row array runs — and when it does,
+  `qt`'s array branch found the stale array's boundaries still matching the
+  container's CURRENT first/last child (nothing else had touched it yet) and
+  took its "wipe the whole container" fast path, confirmed live
+  (`childElementCount` 6→0, the follow-up menu's just-rendered rows gone).
+  `qt`'s array branch has no way to take the safe "detach each item via `L`"
+  path without also risking that bulk wipe — the two share one boolean gate
+  — so fixing the array case properly needs decoupling them, a deeper change
+  than this session took on. **Verified:** re-ran the same instrumented
+  stress script against the NARROWED fix — the single-chunk counters stayed
+  at 0 across 60+ repeated drill/approve/collapse cycles (vs. 1600+ within
+  the first cycle unpatched), and the full existing regression suite plus
+  the approval/postApprove/drill-approve/navigate suite pass unchanged. The
+  pool-integrity counter (which also catches array-content corruption)
+  dropped from unbounded growth to a smaller but still nonzero residual
+  (~4-5/cycle, 179 over 40 measured cycles) — the array-content share of
+  this bug is NOT fixed. PATCH 6/7's own guards are deliberately left in
+  place as a defense-in-depth net for whatever disposal-ordering bug (this
+  residual one, or a future one) reaches the same two symptoms — this patch
+  closes the single-chunk call site proven responsible for the majority of
+  instances observed so far, not the general "a stale ref can reach
+  `L`/`_`" class, and not (yet) the array-content share of it.
 
 ## Never give two entries of one keyed list the same `.key()`
 
