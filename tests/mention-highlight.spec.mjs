@@ -134,7 +134,7 @@ test.describe('@mention of the local reviewer', () => {
     await expect(card.getByTestId('mention').first()).toHaveText('@reindert')
   })
 
-  test('a block-anchored comment mentioning me shares its row with any OTHER comment on the same line, under "Comments op regels"', async ({
+  test('a block-anchored comment mentioning me gets its OWN row, next to any other comment on the same line, under "Comments op regels"', async ({
     page,
   }) => {
     await mockSettings(page)
@@ -151,11 +151,12 @@ test.describe('@mention of the local reviewer', () => {
         body: `graag @${ME} hiernaar laten kijken`,
       }),
       // A block-anchored comment WITHOUT a mention, on the EXACT SAME line —
-      // it groups into the SAME row (commentGroupKeyOf/commentBlockItem,
-      // comments-panel.md), which is `mentioned: true` as a whole once ANY
-      // comment in the group mentions me — still sorts under "Comments op
-      // regels" (b.lineAnchored), not "Mentioned": that heading is only for
-      // a mentioned comment with NO regel at all (PR-wide/orphan).
+      // per-line grouping was deliberately REVERTED (commentGroupKeyOf always
+      // returns null, see "Comment-index rows: grouping per source line was
+      // reverted" in comments-panel.md), so it gets its OWN row next to the
+      // mentioning one. Both still sort under "Comments op regels"
+      // (b.lineAnchored), not "Mentioned": that heading is only for a
+      // mentioned comment with NO regel at all (PR-wide/orphan).
       comment({
         id: 'anchored-plain',
         runId: 'run-anchored-plain',
@@ -174,18 +175,17 @@ test.describe('@mention of the local reviewer', () => {
 
     await expect(page.getByTestId('line-comment-heading')).toBeVisible()
     await expect(page.getByTestId('mention-heading')).toHaveCount(0)
-    // Exactly ONE row for both comments — the dedup in indexComments plus the
-    // per-line grouping, which merges them since they share file+label+line.
-    // Two rows would share the same state.blocks id ('comment:' + c.id) if it
-    // weren't for the grouping, which is what selection preservation and
-    // ?sel=comment:<id> resolve through.
+    // ONE row per comment — the per-line grouping is reverted, so the two
+    // same-line comments each keep their own selectable row (and their own
+    // right-hand card once selected, the invariant the revert exists for).
     const row = page.locator('[data-idx]').filter({ hasText: 'hiernaar laten kijken' })
     await expect(row).toHaveCount(1)
-    await expect(row).toContainText('· +1')
-    // The un-mentioning comment does NOT get an ordinary row of its own next
-    // to it — it is folded into the same group/row instead.
-    await expect(page.locator('[data-idx]').filter({ hasText: 'please rename this variable' })).toHaveCount(0)
-    await expect(row.getByTestId('block-approval')).toHaveText('0/2')
+    // No group, so no `· +N` suffix on the row label.
+    await expect(row).not.toContainText('· +1')
+    // The un-mentioning comment gets an ordinary row of its own next to it.
+    await expect(page.locator('[data-idx]').filter({ hasText: 'please rename this variable' })).toHaveCount(1)
+    // "Resolved == approved": a solo open comment row counts 0/1.
+    await expect(row.getByTestId('block-approval')).toHaveText('0/1')
 
     // Its own block still shows both comments in the inline index — the index
     // row is an addition, not a move. Select the block directly by its own
