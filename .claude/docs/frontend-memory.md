@@ -867,3 +867,82 @@ with a 1.5s stuck-timeout and an `ArrowDown` recovery press on timeout.
 Freeze (before the patch) lands within ~200 presses. Detect it from outside
 the page: `Promise.race([page.evaluate(...), timeout])` — a frozen page
 times out even on `1+1`.
+
+## Navigation latency: the 200ms budget, measured per kind (Sep 2026 campaign)
+
+Reviewer requirement: **every navigation action under 200ms**, measured from
+keydown to the frame that paints the new content — distributions, never
+averages. Fixture: `reindert-vetter/slash-test` PR #2 (601 blocks, 3770
+units, 276 files), isolated server, 2500-step warmup before sampling (the
+JIT trap above), machine at load average ~2-3 (moderate — an idle-machine
+rerun of a suspicious number is cheaper than a wrong conclusion, see "pariteit,
+geen regressie" in the earlier campaign).
+
+**Measurement recipe (harness deliberately not committed, same policy as the
+heap harness):** dispatch a synthetic `KeyboardEvent` in-page, then poll each
+`requestAnimationFrame` until a DOM SIGNATURE changes — the signature is
+(selected index row's `data-idx` + every `[data-change-active]` anchor's
+`data-row` + `location.search`). Two traps this recipe exists to avoid,
+both of which produced convincing-looking garbage first:
+- **`location.search` alone is NOT a sufficient predicate**: an added/removed
+  pair shares one `file:line`, so a real step between the two sides reads as
+  "stuck"; and diff-mode `↓` legitimately stops at a file boundary, so a
+  no-op press then "measures" whatever unrelated mutation (the 5s poll)
+  lands next — that artifact read as "p90 948ms in diff mode", which was
+  entirely false (real p90 with the signature predicate: 105ms, before any
+  fix).
+- **Space measurements MUST exclude no-op presses and use per-chunk stats**:
+  the interesting failures only appear hundreds of presses in.
+
+**Result after the fixes below (600-press Space run + 250-step runs per
+kind): every kind p90 < 200ms.** list ↓/↑ p50 ~17ms; long jumps (far index
+click) max 45ms; diff ↓ group p50 30 / p99 119ms; gran=line/call p99 < 55ms;
+list↔diff, panels ↔, drill in/uit, search keystrokes all p99 < 110ms. Space:
+p50 45-165ms depending on region (heaviest diffs ~165), p90 < 200 in every
+100-press chunk, 8/600 presses in 200-227ms. Holding Space at key-repeat
+rate (400 presses, 30ms interval): ~12 processed approvals/s, worst frame
+gap 290ms, drain after release < 300ms, no freeze (LOCAL PATCH 7 above).
+
+**What made Space slow (all fixed, worst first):**
+
+1. **The freeze** — see "The Space-sequence freeze" above (LOCAL PATCH 7).
+2. **`findNextUnapproved` re-walked every already-approved block with an
+   awaited `ensureCode` each** — press latency grew linearly with approvals
+   (p50 46 → 196ms after ~400 approvals; 0.7-1.5s over long approved
+   stretches). Fixed in `firstUnapprovedInSubtree` (home.mjs): a subtree
+   whose `state.approvalSummaries` entry says done === total is skipped
+   without fetching code. Post-fix p50 is flat across 600 presses.
+3. **One approve-signal POST per press starved the connection pool.** The
+   approve tracker's history makes each `signals/set` O(history) server-side
+   (measured ~0.9s/signal at 6.5k events / 49MB payloads, curl against an
+   idle server): several such POSTs in flight exhausted the browser's 6
+   connections and the NEXT press's `/api/code` fetch sat queued behind them
+   (server read itself sub-ms from a separate connection, so this was purely
+   client-side head-of-line blocking). Fixed twice: `approveSignalQueue`
+   (home.mjs) serializes to one in-flight signal and coalesces per key
+   (latest full-state body wins — that's the tracker contract), and
+   `Engine.SignalWorkflow` (tembed) now passes its already-loaded history to
+   `advanceLoaded` instead of a second full `LoadRun`, halving per-signal
+   cost. NOT fixed (recommendation): the tracker history's unbounded growth
+   itself — a real fix needs history compaction/continue-as-new in tembed,
+   an architecture decision. With coalescing the growth is far slower, but a
+   very long review still degrades the (async, off-path) signal drain.
+4. **Render-path costs of the landing** (~180 → ~155ms on the heaviest
+   blocks): `updateHints` measured a rect per changed row on every scroll
+   event (now: first+last row only, coalesced to one rAF per frame, and
+   style writes are skipped when unchanged — an unconditional write dirtied
+   layout and made every scroll-tween frame's `scrollTop` assignment force a
+   full re-layout); Prism re-tokenised every row on each pane rebuild (now:
+   `highlight` memo per (lang, text), Block.mjs); and a cross-block landing
+   glided a freshly mounted pane from scrollTop 0 (now: a fresh pane jumps,
+   only steps within an already-visible card keep the glide —
+   `scrollChangeIntoView`'s freshPane/`glidPanes`).
+
+**What remains above the line, with numbers:** ~1.3% of Space presses on the
+very heaviest diff blocks land at 200-227ms. The residual per-press CPU
+there is the genuine rebuild of a large diff card: ~50ms layout under the
+scroll tween/paint, ~36ms Tailwind Play-CDN MutationObserver scan of the
+freshly-built class-carrying rows (irreducible without a build step — the
+known ~20% post from the earlier campaign), ~30ms arrow.js flush, ~25ms
+paneHTML string build. Getting those presses under 200ms would need
+virtualizing/trimming the biggest diff DOMs — a design change, not a tweak.
