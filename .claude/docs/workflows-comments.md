@@ -1920,9 +1920,16 @@ instead of racing.
      worktree with the Edit tool, using the new
      `claude.ChatConflictSystemPrompt`
      (`modules/claude/prompts/chat_conflict.md`). The result is **never
-     trusted on the model's own say-so** — `chatShadowConflictedPaths` is
-     re-checked afterwards; only a genuinely clean tree gets `git add -A` +
-     `git commit --no-edit` + the landing.
+     trusted on the model's own say-so** — the conflicted FILES are scanned
+     for leftover conflict markers (`pathsWithConflictMarkers`,
+     `chat_checkout.go`); only marker-free files get `git add -A` +
+     `git commit --no-edit` + the landing. Deliberately NOT the unmerged-index
+     check (`checkoutConflictedPaths`) used to DETECT the conflict: an
+     unmerged index entry only clears on `git add`, which an Edit-only run can
+     never do — with that check the success path was dead code, and even a
+     perfectly resolved conflict was aborted and degraded to the consult
+     message (regression test:
+     `TestProcessChatMergeLandsAConflictClaudeResolved`).
   4. **Bounded to one merge/resolve attempt per tip, no retry loop.** Any
      failure at any step — the merge command itself failing for a non-conflict
      reason, an unresolved conflict, a landing that fails again after a
@@ -2245,7 +2252,10 @@ edits with zero `claude.Fake` calls, two requests processed back-to-back in
 arrival order both landing on the real branch, and a genuine same-line
 conflict where the one begrensde Claude attempt — via `claude.Fake`, which
 never really edits a file — is invoked exactly once, fails to clear the
-conflict, and the merge is aborted without touching the remote; plus
+conflict, and the merge is aborted without touching the remote; the mirrored
+SUCCESS half (`TestProcessChatMergeLandsAConflictClaudeResolved`, via a
+test-local client whose `Run` really rewrites the conflicted file, Edit-only
+like the real run) landing the resolved merge on the pending ref; plus
 `chatMergeQueueWorkflow`'s own ordering guarantee against a bare tembed engine
 with a stub Activity, and `EnsureChatMergeQueue`'s idempotency) — all offline,
 no live `claude`/`gh`/network call.

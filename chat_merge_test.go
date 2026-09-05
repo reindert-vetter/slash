@@ -548,3 +548,87 @@ func TestChatMergeQueueDispatchesCheckoutActions(t *testing.T) {
 		t.Fatalf("checkoutAnswer's own Reply not forwarded correctly, got replies %v", gotReplies)
 	}
 }
+
+// resolvingClient is a claude.Client whose Run really resolves the conflict in
+// its WorkDir (claude.Fake never touches a file by itself): it rewrites the
+// conflicted file without markers, exactly like a successful Edit-only Claude
+// run would — and, like the real thing, it CANNOT `git add` (no Bash in the
+// tool set), so the index entry stays unmerged until the caller's own
+// `git add -A`.
+type resolvingClient struct {
+	*claude.Fake
+	file    string
+	content string
+	calls   int
+}
+
+func (c *resolvingClient) Run(ctx context.Context, req claude.RunRequest) (string, error) {
+	c.calls++
+	if err := os.WriteFile(filepath.Join(req.WorkDir, c.file), []byte(c.content), 0o644); err != nil {
+		return "", err
+	}
+	return "resolved", nil
+}
+
+// TestProcessChatMergeLandsAConflictClaudeResolved pins the SUCCESS half of
+// the one begrensde Claude conflict attempt. This used to be dead code:
+// resolveConflictWithClaude verified with checkoutConflictedPaths, which reads
+// git's unmerged INDEX entries — and those only clear on `git add`, which an
+// Edit-only run can never do. So even a perfectly resolved conflict always
+// reported "unresolved", the merge was aborted, Claude's finished work thrown
+// away, and the reviewer always got the consult message. The verification now
+// scans the conflicted FILES for leftover markers instead.
+func TestProcessChatMergeLandsAConflictClaudeResolved(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	cm := testChatModule(t)
+
+	dir := cloneCheckoutDir(t, bareDir, "feature/x")
+	assignCheckoutForTest(t, "", 2004, dir)
+	// Same line, two sides — a genuine conflict.
+	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("foo edited by this conversation\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pushToBare(t, bareDir, "feature/x", "foo edited by someone else\n")
+
+	cl := &resolvingClient{Fake: claude.NewFake(), file: "foo.txt", content: "both edits, reconciled\n"}
+	msg := processChatMergeAt(ctx, nil, cm, cl, dataDir, chatMergeInput{
+		PR: 2004, ConversationID: "conv-d", TurnID: "turn-d",
+	}, "feature/x")
+
+	if msg.Kind == chat.KindError {
+		t.Fatalf("expected the resolved conflict to land, got error: %q", msg.Body)
+	}
+	if !strings.Contains(msg.Body, "automatisch opgelost door Claude") {
+		t.Fatalf("expected the Claude-resolved wording, got: %q", msg.Body)
+	}
+	if cl.calls != 1 {
+		t.Fatalf("expected exactly one begrensde Claude attempt, got %d", cl.calls)
+	}
+
+	// The pending ref must hold the resolved content, reachable from the shared
+	// clone, without anything being pushed.
+	ref, headRef := pendingPushRefFor(ctx, "", 2004)
+	if ref == "" || headRef != "feature/x" {
+		t.Fatalf("pending ref = %q (%q), want one for feature/x", ref, headRef)
+	}
+	out, err := runGitFor(ctx, "", "show", ref+":foo.txt")
+	if err != nil || string(out) != "both edits, reconciled\n" {
+		t.Fatalf("pending ref content = %q, %v; want the reconciled text", out, err)
+	}
+
+	// And the real branch on the bare origin stays untouched (no push).
+	verify := t.TempDir()
+	if out, err := exec.Command("git", "clone", "--branch", "feature/x", bareDir, verify).CombinedOutput(); err != nil {
+		t.Fatalf("clone to verify: %v: %s", err, out)
+	}
+	if got, _ := os.ReadFile(filepath.Join(verify, "foo.txt")); string(got) != "foo edited by someone else\n" {
+		t.Fatalf("bare repo content = %q, want it untouched (nothing may be pushed)", got)
+	}
+
+	// The checkout itself ends clean: merge committed, no unmerged paths left.
+	if remaining, err := checkoutConflictedPaths(ctx, dir); err != nil || len(remaining) != 0 {
+		t.Fatalf("unmerged paths after a resolved landing = %v, %v", remaining, err)
+	}
+}

@@ -45,6 +45,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -2191,10 +2192,19 @@ func checkoutConflictedPaths(ctx context.Context, dir string) ([]string, error) 
 
 // resolveConflictWithClaude asks Claude, agentically and read/write-scoped to
 // dir (the PR's own assigned checkout), to resolve the given conflicted
-// files, and reports whether the working tree is genuinely clean afterwards —
-// it never trusts the model's own claim, only git's own conflict list. A
-// one-shot Run (not RunChat): this is a mechanical fix, not a turn in the
-// reviewer's own conversation.
+// files, and reports whether every conflicted file is genuinely free of
+// conflict markers afterwards — it never trusts the model's own claim, only
+// the file contents. A one-shot Run (not RunChat): this is a mechanical fix,
+// not a turn in the reviewer's own conversation.
+//
+// Deliberately NOT checkoutConflictedPaths here: that reads git's unmerged
+// INDEX entries, which only a `git add` clears — and Claude's tool set here is
+// Edit-only (no Bash, on purpose), so the index stayed unmerged no matter how
+// perfectly the files were resolved. With that check this function could never
+// return true: every real conflict degraded to the consult message and
+// Claude's finished resolution was thrown away by the caller's
+// `merge --abort`. The caller's own `git add -A` (resolveCheckoutMerge,
+// chat_merge.go) is what clears the index right after this returns true.
 func resolveConflictWithClaude(ctx context.Context, cl claude.Client, dir, conversationID string, conflicted []string) bool {
 	if cl == nil {
 		return false
@@ -2209,11 +2219,28 @@ func resolveConflictWithClaude(ctx context.Context, cl claude.Client, dir, conve
 	if _, err := cl.Run(ctx, req); err != nil {
 		return false
 	}
-	remaining, err := checkoutConflictedPaths(ctx, dir)
-	if err != nil {
-		return false
+	return len(pathsWithConflictMarkers(dir, conflicted)) == 0
+}
+
+// conflictMarkerRe matches git's own conflict-marker lines (default marker
+// size 7): the <<<<<<< / ||||||| / >>>>>>> lines with their label tail, and a
+// bare ======= separator. A line of exactly seven '=' in legitimate content
+// would false-positive, but the failure direction is safe — the merge then
+// degrades to the consult message instead of committing broken content.
+var conflictMarkerRe = regexp.MustCompile(`(?m)^(<{7}( |$)|\|{7}( |$)|>{7}( |$)|={7}$)`)
+
+// pathsWithConflictMarkers reports which of paths (relative to dir) still
+// contain a conflict-marker line. An unreadable file counts as unresolved —
+// "unknown" must never pass a merge off as resolved.
+func pathsWithConflictMarkers(dir string, paths []string) []string {
+	var out []string
+	for _, p := range paths {
+		b, err := os.ReadFile(filepath.Join(dir, p))
+		if err != nil || conflictMarkerRe.Match(b) {
+			out = append(out, p)
+		}
 	}
-	return len(remaining) == 0
+	return out
 }
 
 // chatConflictPrompt is the call-specific half of the conflict-resolution
