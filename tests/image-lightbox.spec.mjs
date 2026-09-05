@@ -7,7 +7,7 @@ import { test, expect, seededPr } from './_fixtures.mjs'
 // to close. "Overal waar markdown staat" (reviewer's explicit answer) means
 // this is ONE mechanism (src/imageLightbox.mjs), so a single comment-body
 // spec is enough to cover the wiring end to end; every other render point
-// (PR description, Claude-chat bubbles, /inbox task description) shares the
+// (PR description, Claude-chat bubbles) shares the
 // exact same `.markdown-body` scoping hook and needs no separate wiring.
 const PIXEL = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
 const IMG1 = `data:image/png;base64,${PIXEL}#one`

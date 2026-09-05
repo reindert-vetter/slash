@@ -95,8 +95,8 @@ test.describe('PR Review Tree — Markdown rendering', () => {
   //
   // Both are asserted against the exact argument shapes the real call sites
   // use: renderMarkdown(text) for the PR summary/description (home.mjs), the
-  // block description (Block.mjs, per paragraph) and the inbox task
-  // description (inbox.mjs); renderMarkdown(text, 0, true) for a comment body
+  // block description (Block.mjs, per paragraph);
+  // renderMarkdown(text, 0, true) for a comment body
   // (RelatedPanel.mjs's commentBody) and a Claude bubble (ClaudeChat.mjs); and
   // hardBreaks() + renderMarkdown for the reviewer's own chat bubble.
   test('keeps an intra-word underscore and an unpaired ** / __ literal, at every render point', async ({

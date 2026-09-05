@@ -4,9 +4,8 @@
 // volledig scherm en moet ik door alle afbeeldingen kunnen gaan met pijltjes
 // naar rechts"). "Overal waar markdown staat" (explicit follow-up answer) —
 // so this is ONE mechanism reused everywhere `renderMarkdown` (markdown.mjs)
-// renders: the PR description, comment bodies, Claude-chat bubbles, and the
-// /inbox task description. It needed no per-call-site wiring because every
-// one of those already sits inside a `.markdown-body`-classed container (see
+// renders: the PR description, comment bodies and Claude-chat bubbles. It
+// needed no per-call-site wiring because every one of those already sits inside a `.markdown-body`-classed container (see
 // `.claude/rules/conventions.md`) — that shared class is this module's only
 // scoping hook.
 //
@@ -23,10 +22,9 @@ import { t } from './i18n.mjs'
 const lb = reactive({ open: false, images: [], index: 0 })
 
 // initImageLightbox wires the one document-level click listener. Idempotent
-// — safe to call once per page from each entry module (home.mjs, inbox.mjs)
+// — safe to call once per page from each entry module (today only home.mjs)
 // without double-binding, since a page only ever loads its own module graph
-// once. (inbox.mjs was the task-inbox page, since removed; home.mjs is the
-// only surviving call site — the shape still holds for any future page.)
+// once. The shape still holds for any future page.
 let initialized = false
 export function initImageLightbox() {
   if (initialized) return

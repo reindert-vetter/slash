@@ -159,8 +159,7 @@ that set stays small on purpose; a new topic file belongs in `.claude/docs/`.
   (`build_relations`, `resolve_call`, `resolve_test_covers`) and the two
   LLM passes (`explain_code`, `code_warning`).
 - `workflows-trackers.md` — the long-lived trackers (`pr_status` incl. ingest
-  refresh + the re-anchor pass, `pr_inbox`, `approve`, the inbox/snooze
-  trackers) and the one-shot operational ones (`ingest`, `cleanup`, …).
+  refresh + the re-anchor pass, `pr_inbox`, `approve`, `jira_inbox`) and the one-shot operational ones (`ingest`, `cleanup`, …).
 - `server-events.md` — the one multiplexed SSE stream per tab: an event is
   never the source of truth, which is why it sits outside the write boundary.
 

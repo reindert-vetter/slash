@@ -246,7 +246,7 @@ site, not a per-feature reimplementation. Two pieces:
   rendered Markdown body" via `.closest('.markdown-body')` — the shared class
   every `renderMarkdown` render point already carries (see above), so this
   needed **no** per-call-site wiring: the PR description, comment bodies,
-  Claude-chat bubbles and the `/inbox` task description all get it for free.
+  Claude-chat bubbles all get it for free.
   Opens a fullscreen overlay (`ImageLightboxHost`, mounted top-level next to
   `MenuHost`/`App` in each page, exactly like the command palette); →/←
   **wrap around** the image list, Escape closes. `isLightboxOpen()`/
@@ -553,8 +553,8 @@ block, even `settings.html`/`overview.html`, which otherwise have no (or a
 much smaller) Prism/markdown block.
 
 **Every selector inside the `@media` block carries a
-`:root:not([data-theme='light'])` gate** (in `index.html` AND `inbox.html` —
-keep it when editing): a media query only sees the OS preference, so without the
+`:root:not([data-theme='light'])` gate** (in `index.html` — keep it when
+editing): a media query only sees the OS preference, so without the
 gate an OS on dark + the manual **light** toggle (`data-theme="light"`, no
 `.dark` class, all Tailwind light) still applied these dark Prism/markdown
 colors, leaving near-black `pre` blocks and lavender inline-code pills inside

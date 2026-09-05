@@ -4724,9 +4724,9 @@ whole block, since it is fully duplicated in the preview card underneath.
   `RelatedPanel.mjs`'s `commentBody` (every comment/reply/reaction bubble) and
   `ClaudeChat.mjs`'s three body renderers (`claudeMessageBody`, the partial
   streaming bubble, a still-open question's own body). **Not** `home.mjs`'s
-  `prInfoCard` (the PR summary/description) or `inbox.mjs`'s task description
-  — neither sits next to a code-preview column, so both keep the
-  pre-existing, untruncated rendering via the default.
+  `prInfoCard` (the PR summary/description) — it does not sit next to a
+  code-preview column, so it keeps the pre-existing, untruncated rendering
+  via the default.
 
 Test: `tests/code-fence-preview.spec.mjs` (or a sibling spec) asserts a
 >2-line fence renders truncated (a `<pre>` with fewer lines than the source,

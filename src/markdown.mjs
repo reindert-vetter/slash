@@ -525,9 +525,8 @@ export function hardBreaks(text) {
 // `ClaudeChat.mjs`'s bubble renderers), where the full code is already shown
 // in full size in the code-preview card below (see "A full-size code-preview
 // column" in .claude/docs/claude-chat-panel.md) — everywhere else (the PR
-// summary/description in `prInfoCard`, the task-inbox description) there is no
-// such card to point at, so those keep the untruncated, pre-existing
-// rendering (the default `false`).
+// summary/description in `prInfoCard`) there is no such card to point at, so
+// those keep the untruncated, pre-existing rendering (the default `false`).
 export function renderMarkdown(text, startIndex = 0, truncate = false) {
   if (!text) return ''
   const store = []

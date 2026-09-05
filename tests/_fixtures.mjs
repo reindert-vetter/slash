@@ -1008,7 +1008,7 @@ export function seededPr(testInfo, slot = 0) {
 //     render, so an idle window that happened to be sampled BEFORE that render
 //     passed and everything after it hung for the full timeout. That is the
 //     "flaky, worse under load" signature.
-//   • /pr-overview and /inbox have no stream but poll continuously (800ms
+//   • /pr-overview has no stream but polls continuously (800ms
 //     ingest stage, 1500ms repoll, 2500ms workflows, 5000ms comments, 15s
 //     snapshot, 60s heartbeats), so under 4 parallel workers the quiet gap
 //     between two polls shrinks below 500ms and idle is missed there too.

@@ -95,7 +95,7 @@ forever. Tests: `save_reaction_retry_test.go`.
   `github.Fake` for tests; **`SLASH_GITHUB=off`** → the Fake.
 - **`modules/jira`** via the local `acli` CLI: `Issue(key)` (the `key` is
   validated against `^[A-Z][A-Z0-9]+-\d+$` before `exec`) flattens the ADF
-  `description` tree into plain text; `AssignedToMe` for the task inbox.
+  `description` tree into plain text.
   **`SLASH_JIRA=off`** → `jira.Fake`.
 
 **Each CLI-bridge module enforces its own default `exec.CommandContext`

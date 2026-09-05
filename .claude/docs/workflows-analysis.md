@@ -1229,7 +1229,7 @@ a manually triggered, low-frequency action.
   once (the exact scenario after downtime: every `pollIngestRefresh` poller
   wakes and finds a newer head SHA) never launches more than one Opus call
   concurrently. That worker (and `pollIngestRefresh`/`pollImportComments`/
-  `EnsureInbox`/`EnsureTaskInbox`'s initial fetch) additionally waits on the
+  `EnsureInbox`'s initial fetch) additionally waits on the
   `TaskManager`'s ready gate (`ArmReadyGate`/`MarkReady`/`waitReady`), armed in
   `newTasks` and opened only after `runServe` (`main.go`) has actually bound
   the HTTP listener (`net.Listen`, before `http.Serve`) — so this whole class

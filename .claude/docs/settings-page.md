@@ -25,8 +25,8 @@ colourblind rule about colour-only state therefore doesn't apply to it the way
 it does to the toggles beside it).
 
 **Why `settingsButton` lives in its own module, not in `settings.mjs`
-itself:** `settings.mjs` is a PAGE module — like `inbox.mjs`, it mounts
-`App()` into `#app` and registers its own `window` keydown listener at
+itself:** `settings.mjs` is a PAGE module — like `home.mjs`/`overview.mjs`
+it mounts `App()` into `#app` and registers its own `window` keydown listener at
 load. Importing it from `home.mjs`/`overview.mjs` just to reuse the button
 would run all of that top-level code on `/pr/<id>` and `/pr-overview` too
 (a second `App()` fighting over `#app`, a stray global keydown listener
@@ -58,7 +58,7 @@ module `const`s (mirrors `originPr`/`originSel` in `overview.mjs`):
 'langreply', 'langcommit', 'autowarn', 'autoingestpref', 'debug', 'auth', 'checkout',
 'aliases', 'praisewords']` is simultaneously the `↑`/`↓` nav order and the DOM render
 order, kept as one array so the two can never drift apart. A platt
-`window.addEventListener('keydown', …)` (mirrors `inbox.mjs`, not the
+`window.addEventListener('keydown', …)` (one flat listener, not the
 `/pr/<id>` nav chain's `Cmd+[`/`Cmd+]` remap — this page has no per-stop
 granularity to remap onto):
 

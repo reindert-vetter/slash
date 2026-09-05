@@ -11,7 +11,7 @@
       // src/theme.mjs, which re-applies this reactively once the app module
       // loads and keeps 'system' live via a matchMedia listener. Duplicated
       // here (not imported) because ES modules load async and this must run
-      // before the very first paint. Identical to inbox.html/index.html.
+      // before the very first paint. Identical to index.html/overview.html.
       ;(function () {
         var pref = 'system'
         try {
@@ -60,7 +60,7 @@
         display: none;
       }
       /* Deliberately NO Prism/.markdown-body CSS block here (unlike
-         index.html/inbox.html/overview.html): this page shows no code or
+         index.html/overview.html): this page shows no code or
          rendered Markdown, so there is nothing for those rules to style — see
          .claude/docs/settings-page.md. */
     </style>
