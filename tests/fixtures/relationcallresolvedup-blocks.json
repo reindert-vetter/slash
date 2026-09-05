@@ -1,0 +1,24 @@
+[
+  {
+    "pr": 131,
+    "file": "app/Http/Controllers/DiscountController.php",
+    "class": "DiscountController",
+    "name": "store",
+    "category": "CONTROLLER",
+    "line": 7,
+    "endLine": 10,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 131,
+    "file": "app/Http/Resources/DiscountResource.php",
+    "class": "DiscountResource",
+    "name": "toArray",
+    "category": "RESOURCE",
+    "line": 7,
+    "endLine": 11,
+    "status": "modified",
+    "side": "new"
+  }
+]

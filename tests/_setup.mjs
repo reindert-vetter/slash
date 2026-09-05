@@ -72,6 +72,7 @@ export default function globalSetup() {
   materializeStaleAnchorWorktrees()
   materializeCategoryOrderWorktrees()
   materializeNewObjectFirstMethodWorktrees()
+  materializeRelationCallresolveDupWorktrees()
 }
 
 // materializeNewObjectFirstMethodWorktrees writes the synthetic PR 128
@@ -104,6 +105,50 @@ class NewObjectFirstMethodAction
   const write = worktreeWriter(128)
   write('base', 'app/Actions/NewObjectFirstMethodAction.php', action(0, 'null'))
   write('head', 'app/Actions/NewObjectFirstMethodAction.php', action(1, 'new MaxLengthWithoutHtml(3000)'))
+}
+
+// materializeRelationCallresolveDupWorktrees writes the base/head worktrees
+// for the synthetic PR 131 fixture (related-relation-callresolve-dup.spec.mjs):
+// one caller (DiscountController::store) reaching the SAME changed target
+// (DiscountResource::toArray) via BOTH a relation edge (kind
+// controller_resource, relationsCallresolveDup-relations.json) AND three
+// different callresolve callKeys that all resolve to it
+// (relationCallresolveDup-callresolve.json) — the real case reported live:
+// preferredCallRows (home.mjs) already collapses the three callresolve rows
+// down to one, but that survivor still duplicated the relation card until
+// relatedChildren started dropping a callresolve child whose own target block
+// is already covered by a relation. See .claude/docs/underlying-code.md.
+function materializeRelationCallresolveDupWorktrees() {
+  const controller = (call) => `<?php
+
+namespace App\\Http\\Controllers;
+
+class DiscountController
+{
+    public function store()
+    {
+        $result = ${call};
+    }
+}
+`
+  const resource = (extra) => `<?php
+
+namespace App\\Http\\Resources;
+
+class DiscountResource
+{
+    public function toArray()
+    {
+        ${extra}
+        return [];
+    }
+}
+`
+  const write = worktreeWriter(131)
+  write('base', 'app/Http/Controllers/DiscountController.php', controller('null'))
+  write('head', 'app/Http/Controllers/DiscountController.php', controller('(new DiscountResource($this))->toArray()'))
+  write('base', 'app/Http/Resources/DiscountResource.php', resource('$unused = 0;'))
+  write('head', 'app/Http/Resources/DiscountResource.php', resource('$unused = 1;'))
 }
 
 // materializeBlockMoveWorktrees writes the base/head worktrees for the

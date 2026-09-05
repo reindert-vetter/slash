@@ -5853,7 +5853,20 @@ function relatedChildren(b) {
       })
   // Resolved/found method calls (Go statically or LLM). Their code + descriptor
   // ride along in the callresolve row (unchanged file → no /api/code fetch).
-  const calls = resolvedCallChildren(b)
+  // A relation child (`evt`) is by definition a real PR block (its `id` IS
+  // that block's id — see the descriptor above), so any callresolve row whose
+  // OWN target block (`blockId`) is already covered by a relation gets
+  // dropped here: `preferredCallRows` only dedups two callresolve rows
+  // against EACH OTHER (a class-entry-point row vs. the real call landing on
+  // the same target), it never looks at the relation children this same
+  // function already built. Real case: DiscountController::store gets
+  // DiscountResource::toArray both via a `controller_resource` relation AND
+  // via three separate callKeys (`toArray`/`class_method:DiscountResource`/
+  // `resource:DiscountResource`) that all resolve to it — without this
+  // filter the reviewer saw the identical card twice. See
+  // .claude/docs/underlying-code.md.
+  const evtBlockIds = new Set(evt.map((c) => c.id))
+  const calls = resolvedCallChildren(b).filter((c) => !c.blockId || !evtBlockIds.has(c.blockId))
   // Test-coverage children — block-level like event listeners, not tied to a
   // diff line/call, so they're dropped at the same line/call scoping as the
   // listeners: b → the method(s) it covers (if b is a test), and the test(s)

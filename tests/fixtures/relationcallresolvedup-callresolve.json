@@ -1,0 +1,40 @@
+[
+  {
+    "pr": 131,
+    "callerId": "131:app/Http/Controllers/DiscountController.php:DiscountController::store",
+    "callKey": "toArray",
+    "status": "resolved",
+    "kind": "method_call",
+    "childFile": "app/Http/Resources/DiscountResource.php",
+    "childClass": "DiscountResource",
+    "childMethod": "toArray",
+    "childLine": 7,
+    "childCode": "public function toArray()\n{\n    $unused = 1;\n    return [];\n}"
+  },
+  {
+    "pr": 131,
+    "callerId": "131:app/Http/Controllers/DiscountController.php:DiscountController::store",
+    "callKey": "class_method:DiscountResource",
+    "status": "resolved",
+    "kind": "class_first_method",
+    "childFile": "app/Http/Resources/DiscountResource.php",
+    "childClass": "DiscountResource",
+    "childMethod": "toArray",
+    "childLine": 7,
+    "childCode": "public function toArray()\n{\n    $unused = 1;\n    return [];\n}"
+  },
+  {
+    "pr": 131,
+    "callerId": "131:app/Http/Controllers/DiscountController.php:DiscountController::store",
+    "callKey": "resource:DiscountResource",
+    "status": "found",
+    "kind": "method_call",
+    "model": "haiku",
+    "confidence": "high",
+    "childFile": "app/Http/Resources/DiscountResource.php",
+    "childClass": "DiscountResource",
+    "childMethod": "toArray",
+    "childLine": 7,
+    "childCode": "public function toArray()\n{\n    $unused = 1;\n    return [];\n}"
+  }
+]

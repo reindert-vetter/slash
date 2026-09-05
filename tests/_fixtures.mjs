@@ -673,6 +673,26 @@ function seed(db) {
     ],
     { stdio: 'ignore' },
   )
+  // Relation + callresolve pointing at the SAME target fixture (PR 131,
+  // related-relation-callresolve-dup.spec.mjs): DiscountController::store
+  // reaches DiscountResource::toArray both via a relation edge AND via three
+  // callresolve callKeys that all resolve to it. See
+  // materializeRelationCallresolveDupWorktrees (tests/_setup.mjs).
+  execFileSync(
+    BIN,
+    [
+      'seed',
+      '-db',
+      db,
+      '-from',
+      'tests/fixtures/relationcallresolvedup-blocks.json',
+      '-relations',
+      'tests/fixtures/relationcallresolvedup-relations.json',
+      '-callresolve',
+      'tests/fixtures/relationcallresolvedup-callresolve.json',
+    ],
+    { stdio: 'ignore', env: SEED_ENV },
+  )
 }
 
 function canConnect(port) {

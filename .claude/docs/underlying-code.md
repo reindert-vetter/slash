@@ -329,6 +329,25 @@ Test: `tests/related-duplicate-call-target.spec.mjs` (fixture PR 122,
 branches: one target covered by an entry point + an LLM row, another by an
 entry point + a Go-resolved real call.
 
+### One card per target, ALSO across a relation and a resolved call
+
+`preferredCallRows` above only dedups two `callresolve` rows against EACH
+OTHER. A relation child (`evt` in `relatedChildren`, home.mjs — by definition
+a real, both-changed PR block, so its descriptor `id` IS that block's id) can
+point at the exact same definition a `callresolve` row also resolves to, and
+nothing compared the two lists — the reviewer saw the identical card twice.
+Real case: `DiscountController::store` shows `DiscountResource::toArray` via
+BOTH the `controller_resource` relation AND three callresolve callKeys
+(`toArray`, `class_method:DiscountResource`, `resource:DiscountResource`) that
+all resolve to it — `preferredCallRows` already collapses those three down to
+one survivor, but that survivor still duplicated the relation card.
+`relatedChildren` now drops a `calls` entry whose own `blockId` is already
+covered by an `evt` id, computed right where `calls` itself is built (so it
+stays the single place these two lists are combined, rather than a second
+dedup mechanism bolted on elsewhere). Test:
+`tests/related-relation-callresolve-dup.spec.mjs` (fixture PR 131,
+`relationcallresolvedup-*.json` + `materializeRelationCallresolveDupWorktrees`).
+
 ## "loading code…" vs. "no code found"
 
 Every child descriptor carries a `loading` flag, set in `home.mjs` (the
