@@ -108,7 +108,7 @@ export function initAuthStatusPopup(opts) {
 }
 
 // brokenChecks — the checks a modal over the whole screen is justified for:
-// ONLY a credential that was configured and has since been REJECTED. Three
+// ONLY a credential that was configured and has since been REJECTED. Four
 // states deliberately do not qualify:
 //
 //   - "missing" (never set up — the optional Jira notification feed): nothing
@@ -116,6 +116,9 @@ export function initAuthStatusPopup(opts) {
 //     settings page, which is where you go to turn it on; a modal on every
 //     page for a feature you never asked for is nagging, not a warning.
 //   - "skipped" (SLASH_GITHUB=off / SLASH_JIRA=off): an offline or test run.
+//   - "unavailable" (jiraToken only): the token itself is fine, only the
+//     undocumented feed endpoint isn't reachable — nothing the reviewer can fix
+//     by re-authenticating, so nagging them with the modal would be pointless.
 //   - "ok".
 export function brokenChecks() {
   return (as.checks || []).filter((c) => c.state === 'error')
@@ -143,18 +146,24 @@ export function handleAuthProblemKeydown(e) {
 }
 
 // STATE_WORD — the word IS the state. Never rely on the colour beside it.
+// "unavailable": credentials are fine (verified against a stable, documented
+// endpoint), but the feature's own endpoint isn't reachable right now — see
+// checkJiraToken (auth_status.go). Deliberately its own word, not "error": that
+// word would wrongly suggest the token needs replacing.
 const STATE_WORD = {
   ok: 'Werkt',
   error: 'Niet ingelogd',
   missing: 'Niet ingesteld',
   skipped: 'Uitgeschakeld',
+  unavailable: 'Tijdelijk niet bereikbaar',
 }
-const STATE_GLYPH = { ok: '✓', error: '✕', missing: '○', skipped: '–' }
+const STATE_GLYPH = { ok: '✓', error: '✕', missing: '○', skipped: '–', unavailable: '!' }
 const STATE_CLS = {
   ok: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300',
   error: 'bg-rose-50 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300',
   missing: 'bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300',
   skipped: 'bg-slate-100 text-slate-500 dark:bg-zinc-800 dark:text-zinc-400',
+  unavailable: 'bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300',
 }
 
 // authStateBadge — the shared status pill, used by the dialog below AND by the

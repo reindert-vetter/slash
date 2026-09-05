@@ -1248,6 +1248,8 @@ func (e errJira) Notifications(context.Context, int) ([]jira.Notification, error
 	return nil, nil
 }
 
+func (e errJira) VerifyCredentials(context.Context) error { return nil }
+
 // TestPRStatusJiraFailureLogsPR pins the fix for a Jira-issue-fetch failure
 // (e.g. `acli` not logged in) that skipped silently in the terminal but never
 // reached the review tree's own "Taken" block: pollProblems (home.mjs) filters

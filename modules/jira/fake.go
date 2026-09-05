@@ -13,6 +13,10 @@ type Fake struct {
 	issues map[string]Issue
 	notifs []Notification
 	Calls  []string // keys requested, in order
+	// VerifyErr, if set, is what VerifyCredentials returns — lets a test
+	// exercise checkJiraToken's "credentials rejected" branch without a real
+	// HTTP call. nil (the default) means "credentials accepted".
+	VerifyErr error
 }
 
 // SetIssue programs Issue to return issue for key.
@@ -49,4 +53,11 @@ func (f *Fake) Notifications(_ context.Context, limit int) ([]Notification, erro
 		return append([]Notification(nil), f.notifs[:limit]...), nil
 	}
 	return append([]Notification(nil), f.notifs...), nil
+}
+
+// VerifyCredentials returns the programmed VerifyErr (nil by default).
+func (f *Fake) VerifyCredentials(_ context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.VerifyErr
 }

@@ -49,6 +49,11 @@ type Client interface {
 	Issue(ctx context.Context, key string) (Issue, error)
 	// Notifications reads the reviewer's own bell feed (see notifications.go).
 	Notifications(ctx context.Context, limit int) ([]Notification, error)
+	// VerifyCredentials confirms the configured email/token are accepted by
+	// Jira via a stable, documented endpoint (see notifications.go) — kept
+	// separate from Notifications so a broken undocumented feed endpoint is
+	// never mistaken for a bad token.
+	VerifyCredentials(ctx context.Context) error
 }
 
 // Module is the production Client: it shells out to `acli jira workitem view`.

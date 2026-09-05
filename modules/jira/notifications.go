@@ -1,6 +1,7 @@
 package jira
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -18,23 +19,55 @@ import (
 // the Jira UI ("Notifications", tabs Direct/Watching, toggle "Only show
 // unread") — to this module. It is the one thing `acli` cannot do: it has no
 // notifications command at all, and the Jira Cloud platform REST API has no
-// "my notifications" endpoint either. The feed comes from Atlassian's own
-// notification-log gateway:
+// "my notifications" endpoint either.
+//
+// HISTORY, kept because it explains why this looks the way it does. This used
+// to call an undocumented REST gateway:
 //
 //	GET https://<site>/gateway/api/notification-log/api/3/notifications?category=direct
 //
-// which is **not a documented/supported API** — a deliberate, explicit choice
-// by Reindert ("ik wil de echte bell-feed"), recorded here so nobody later
-// mistakes it for a public endpoint. Consequences, accepted:
+// That gateway route was found WITHDRAWN (investigated live, 2026-09-05): a
+// real, valid token got a clean 200 from `/rest/api/2/myself`, while EVERY
+// path tried under `/gateway/api/notification-log/...` (several plausible
+// API-version/sub-path variants) returned the exact same generic gateway 404
+// as a deliberately made-up path (`/gateway/api/totally-bogus-xyz123`) — a
+// dead route at the edge, not a broken sub-path of a live service.
 //
-//   - Atlassian can change or withdraw the shape at any time. That is why
-//     parsing below is deliberately LENIENT (see extractNotification): every
-//     field is optional, an entry that yields no link is skipped, and a shape
-//     change degrades to "no notifications" instead of an error wall.
-//   - It authenticates with an ordinary Atlassian API token over HTTP basic
-//     auth (email:token), like every documented Jira REST call. If Atlassian
-//     only honours a browser session there, this returns 401 and the UI simply
-//     shows nothing — see ErrNotConfigured/the handler.
+// The reviewer asked to keep looking instead of only reporting the
+// breakage, so the next stop was `/gateway/api/graphql`: alive (confirmed via
+// a `{__typename}` query), and with introspection ENABLED — `__schema`/
+// `__type` queries worked, which is how every field/type name below was
+// found, not guessed. The bell feed lives at
+// `Query.notifications.notificationFeed(first, filter)`, an
+// `InfluentsNotificationFeedConnection` whose `nodes` are
+// `InfluentsNotificationHeadItem` (one per notification GROUP — `groupId` +
+// `groupSize` + a `headNotification`, so a burst of activity on one thread
+// collapses to its most recent item, matching what the bell UI itself shows).
+// `headNotification.content` carries the flat, already-rendered pieces this
+// module needs: `message` (String, no ADF to flatten), `url`, and
+// `actor{displayName, avatarURL}`. Same auth as before — HTTP Basic with the
+// ordinary Atlassian API token — confirmed live: a `notificationFeed` query
+// against the real site returned a clean, well-formed (if empty for this
+// account at the time) result via `POST`.
+//
+// Both are still **not documented/supported APIs** — a deliberate, explicit
+// choice by Reindert ("ik wil de echte bell-feed" / "zoek het zelf uit"),
+// recorded here so nobody later mistakes either for a public endpoint.
+// Consequences, accepted:
+//
+//   - Atlassian can change or withdraw this GraphQL shape too, exactly like it
+//     did the REST one. parseGraphQLNotifications degrades to "no
+//     notifications" (or a reported error — see below) rather than a panic,
+//     but there is no lenient/tolerant field-walking here anymore: introspection
+//     gave an exact, typed schema, so the mapping is a plain, direct struct
+//     decode. A future shape change is expected to surface as a GraphQL
+//     `errors` entry (still handled) or as an empty `nodes` list, not as
+//     garbled data.
+//   - If Atlassian ever stops honouring an API token here (only a browser
+//     session works), the request fails and the caller degrades the same way
+//     as any other feed failure — see ErrNotConfigured/checkJiraToken
+//     (auth_status.go), which treats "credentials verified fine but the feed
+//     itself errors" as a distinct, non-alarming state.
 //
 // Credentials come from the environment (loaded from the gitignored .env, see
 // env.go / .env.example): SLASH_JIRA_EMAIL + SLASH_JIRA_TOKEN, optionally
@@ -47,14 +80,16 @@ import (
 // on every poll.
 var ErrNotConfigured = errors.New("jira: no API token configured (SLASH_JIRA_EMAIL/SLASH_JIRA_TOKEN)")
 
-// notifyTimeout bounds one notification-log call. Same reasoning as cliTimeout
-// above: an Activity runs inline inside a workflow run, so an unbounded hang
-// would block that run (and every later signal on it) forever.
+// notifyTimeout bounds one notification-feed call. Same reasoning as
+// cliTimeout above: an Activity runs inline inside a workflow run, so an
+// unbounded hang would block that run (and every later signal on it) forever.
 var notifyTimeout = 15 * time.Second
 
-// defaultSite is the workspace this project talks to; overridable with
-// SLASH_JIRA_SITE for another Atlassian site.
-const defaultSite = "plugandpaybv.atlassian.net"
+// DefaultSite is the workspace this project talks to; overridable with
+// SLASH_JIRA_SITE for another Atlassian site. Exported so auth_status.go can
+// prefill the settings page's site field with the value that is actually used
+// at runtime, instead of only showing it as an HTML placeholder hint.
+const DefaultSite = "plugandpaybv.atlassian.net"
 
 // Notification is one entry of the bell feed, flattened to exactly what the
 // overview row renders and links to.
@@ -69,7 +104,76 @@ type Notification struct {
 	Unread    bool   `json:"unread"` // as Jira itself reports it
 }
 
-// Notifications fetches the newest limit entries of the "direct" feed.
+// notifyFeedQuery is the GraphQL query behind the bell feed, run against
+// `/gateway/api/graphql` — see the big comment above for how every field/type
+// name here was confirmed (schema introspection against the real site, not
+// guessed).
+const notifyFeedQuery = `query ReviewTreeNotifications($first: Int!, $category: InfluentsNotificationCategory!) {
+  notifications {
+    notificationFeed(first: $first, filter: {categoryFilter: $category}) {
+      nodes {
+        groupId
+        headNotification {
+          notificationId
+          timestamp
+          readState
+          content {
+            message
+            url
+            actor { displayName avatarURL }
+          }
+        }
+      }
+    }
+  }
+}`
+
+// graphQLRequest is the standard POST body shape the gateway expects.
+type graphQLRequest struct {
+	OperationName string         `json:"operationName"`
+	Query         string         `json:"query"`
+	Variables     map[string]any `json:"variables"`
+}
+
+// notifyFeedResponse mirrors notifyFeedQuery's exact result shape — a plain,
+// typed decode rather than the old lenient field-walker, because introspection
+// gave an exact schema instead of a guess (see the file header).
+type notifyFeedResponse struct {
+	Data struct {
+		Notifications struct {
+			NotificationFeed struct {
+				Nodes []notifyFeedNode `json:"nodes"`
+			} `json:"notificationFeed"`
+		} `json:"notifications"`
+	} `json:"data"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+}
+
+// notifyFeedNode is one InfluentsNotificationHeadItem — one notification
+// GROUP (groupId/groupSize), collapsed to its most recent item
+// (headNotification), matching what the bell UI itself shows for a burst of
+// activity on one thread.
+type notifyFeedNode struct {
+	GroupID          string `json:"groupId"`
+	HeadNotification struct {
+		NotificationID string `json:"notificationId"`
+		Timestamp      string `json:"timestamp"`
+		ReadState      string `json:"readState"`
+		Content        struct {
+			Message string `json:"message"`
+			URL     string `json:"url"`
+			Actor   struct {
+				DisplayName string `json:"displayName"`
+				AvatarURL   string `json:"avatarURL"`
+			} `json:"actor"`
+		} `json:"content"`
+	} `json:"headNotification"`
+}
+
+// Notifications fetches the newest limit entries of the "direct" feed via the
+// GraphQL gateway (see the file header for why not the old REST endpoint).
 func (m *Module) Notifications(ctx context.Context, limit int) ([]Notification, error) {
 	email, token, site := notifyConfig()
 	if email == "" || token == "" {
@@ -81,11 +185,20 @@ func (m *Module) Notifications(ctx context.Context, limit int) ([]Notification, 
 	ctx, cancel := context.WithTimeout(ctx, notifyTimeout)
 	defer cancel()
 
-	url := fmt.Sprintf("https://%s/gateway/api/notification-log/api/3/notifications?category=direct&limit=%d", site, limit)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	reqBody, err := json.Marshal(graphQLRequest{
+		OperationName: "ReviewTreeNotifications",
+		Query:         notifyFeedQuery,
+		Variables:     map[string]any{"first": limit, "category": "direct"},
+	})
 	if err != nil {
 		return nil, err
 	}
+	url := fmt.Sprintf("https://%s/gateway/api/graphql", site)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(email+":"+token)))
 	resp, err := http.DefaultClient.Do(req)
@@ -100,7 +213,42 @@ func (m *Module) Notifications(ctx context.Context, limit int) ([]Notification, 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("jira: notification feed: http %d", resp.StatusCode)
 	}
-	return parseNotifications(body, site), nil
+	return parseGraphQLNotifications(body, site)
+}
+
+// VerifyCredentials confirms the configured email/token are still accepted by
+// Jira, via the documented, stable `/rest/api/2/myself` endpoint — deliberately
+// NOT the notification feed itself, so checkJiraToken (auth_status.go) can
+// tell "your token is rejected" apart from "the feed itself errors, but your
+// token is still fine" instead of blaming the token for both.
+func (m *Module) VerifyCredentials(ctx context.Context) error {
+	email, token, site := notifyConfig()
+	if email == "" || token == "" {
+		return ErrNotConfigured
+	}
+	ctx, cancel := context.WithTimeout(ctx, notifyTimeout)
+	defer cancel()
+
+	url := fmt.Sprintf("https://%s/rest/api/2/myself", site)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(email+":"+token)))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("jira: verify credentials: %w", err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<20))
+	switch {
+	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+		return fmt.Errorf("jira: verify credentials: http %d — e-mailadres of token is niet (meer) geldig", resp.StatusCode)
+	case resp.StatusCode != http.StatusOK:
+		return fmt.Errorf("jira: verify credentials: http %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // notifyConfig reads the credentials from the environment on every call (not
@@ -109,265 +257,83 @@ func (m *Module) Notifications(ctx context.Context, limit int) ([]Notification, 
 func notifyConfig() (email, token, site string) {
 	site = strings.TrimSpace(os.Getenv("SLASH_JIRA_SITE"))
 	if site == "" {
-		site = defaultSite
+		site = DefaultSite
 	}
 	return strings.TrimSpace(os.Getenv("SLASH_JIRA_EMAIL")), strings.TrimSpace(os.Getenv("SLASH_JIRA_TOKEN")), site
-}
-
-// notifyEnvelope is the only structure this parser insists on: a list of
-// entries under one of the names the feed has used. Everything INSIDE an entry
-// is walked generically (extractNotification), because that part is the
-// undocumented half most likely to change.
-type notifyEnvelope struct {
-	NotificationGroups []json.RawMessage `json:"notificationGroups"`
-	Notifications      []json.RawMessage `json:"notifications"`
-}
-
-// parseNotifications maps a feed response onto Notifications, skipping every
-// entry it cannot make a usable row out of (no link → nothing to open).
-func parseNotifications(body []byte, site string) []Notification {
-	var env notifyEnvelope
-	entries := []json.RawMessage(nil)
-	if err := json.Unmarshal(body, &env); err == nil {
-		entries = env.NotificationGroups
-		if len(entries) == 0 {
-			entries = env.Notifications
-		}
-	}
-	if len(entries) == 0 {
-		// A bare array is the other shape seen in the wild.
-		var arr []json.RawMessage
-		if err := json.Unmarshal(body, &arr); err == nil {
-			entries = arr
-		}
-	}
-	out := make([]Notification, 0, len(entries))
-	for _, raw := range entries {
-		var node map[string]any
-		if err := json.Unmarshal(raw, &node); err != nil {
-			continue
-		}
-		if n, ok := extractNotification(node, site); ok {
-			out = append(out, n)
-		}
-	}
-	return out
 }
 
 // reIssueKey finds a Jira issue key inside a URL (…/browse/KEY,
 // ?selectedIssue=KEY, …/issues/KEY).
 var reIssueKey = regexp.MustCompile(`[A-Z][A-Z0-9]+-\d+`)
 
-// extractNotification flattens one feed entry. It never assumes a fixed nesting
-// depth: it walks the whole entry and picks the first value it finds per field,
-// preferring the shallowest one (breadth-first), which in every observed shape
-// is the entry's own value rather than one belonging to a nested actor/object.
-func extractNotification(node map[string]any, site string) (Notification, bool) {
-	var n Notification
-	n.ID = firstString(node, "id", "notificationId")
-	if n.ID == "" {
-		if ids := firstStrings(node, "notificationIds"); len(ids) > 0 {
-			n.ID = ids[0]
+// parseGraphQLNotifications maps notifyFeedQuery's response onto
+// Notifications. A GraphQL-level error (a real query/schema problem, distinct
+// from an empty result) is surfaced as an error rather than silently degraded
+// to "no notifications" — that distinction is exactly what lets
+// checkJiraToken tell a live-but-empty feed apart from one that broke again.
+func parseGraphQLNotifications(body []byte, site string) ([]Notification, error) {
+	var resp notifyFeedResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("jira: notification feed: parse: %w", err)
+	}
+	if len(resp.Errors) > 0 {
+		return nil, fmt.Errorf("jira: notification feed: %s", resp.Errors[0].Message)
+	}
+	nodes := resp.Data.Notifications.NotificationFeed.Nodes
+	out := make([]Notification, 0, len(nodes))
+	for _, node := range nodes {
+		hn := node.HeadNotification
+		url := resolveNotificationURL(hn.Content.URL, site)
+		if url == "" {
+			continue // no link → nothing to open
 		}
+		id := hn.NotificationID
+		if id == "" {
+			id = node.GroupID
+		}
+		if id == "" {
+			continue
+		}
+		n := Notification{
+			ID:        id,
+			At:        hn.Timestamp,
+			Title:     strings.TrimSpace(hn.Content.Message),
+			Actor:     hn.Content.Actor.DisplayName,
+			AvatarURL: hn.Content.Actor.AvatarURL,
+			URL:       url,
+			Unread:    !strings.EqualFold(hn.ReadState, "read"),
+		}
+		if key := reIssueKey.FindString(n.URL); key != "" {
+			n.IssueKey = key
+		}
+		if n.Title == "" {
+			n.Title = n.IssueKey
+		}
+		if n.At == "" {
+			n.At = time.Now().UTC().Format(time.RFC3339)
+		}
+		out = append(out, n)
 	}
-	n.At = firstString(node, "timestamp", "time", "created", "createdAt", "updated")
-	n.Unread = isUnread(node)
-	n.Title = strings.TrimSpace(collapseSpace(firstString(node, "message", "title", "text", "body")))
-	n.Actor = firstString(node, "displayName", "name", "actorName")
-	n.AvatarURL = firstString(node, "avatarUrl", "avatarURL", "avatar")
-	n.URL = firstURL(node, site)
-	if n.ID == "" || n.URL == "" {
-		return Notification{}, false
-	}
-	if key := reIssueKey.FindString(n.URL); key != "" {
-		n.IssueKey = key
-	}
-	if n.Title == "" {
-		n.Title = n.IssueKey
-	}
-	if n.At == "" {
-		n.At = time.Now().UTC().Format(time.RFC3339)
-	}
-	return n, true
+	return out, nil
 }
 
-// isUnread reads the entry's read state under any of the spellings seen, and
-// defaults to UNREAD: a notification we cannot classify is better shown once
-// too often than silently swallowed.
-func isUnread(node map[string]any) bool {
-	if s := firstString(node, "readState", "state"); s != "" {
-		return !strings.EqualFold(s, "read") && !strings.EqualFold(s, "seen")
-	}
-	if v, ok := firstBool(node, "read", "isRead"); ok {
-		return !v
-	}
-	if v, ok := firstBool(node, "unread", "isUnread"); ok {
-		return v
-	}
-	return true
-}
-
-// walk visits every map in the entry breadth-first, so a shallower match always
-// wins over a deeper one. fn returns true to stop the walk.
-func walk(node map[string]any, fn func(m map[string]any) bool) {
-	queue := []map[string]any{node}
-	for len(queue) > 0 {
-		cur := queue[0]
-		queue = queue[1:]
-		if fn(cur) {
-			return
-		}
-		for _, k := range sortedKeys(cur) {
-			switch v := cur[k].(type) {
-			case map[string]any:
-				queue = append(queue, v)
-			case []any:
-				for _, item := range v {
-					if m, ok := item.(map[string]any); ok {
-						queue = append(queue, m)
-					}
-				}
-			}
-		}
+// resolveNotificationURL turns content.url into an absolute link, or "" when
+// it cannot: an already-absolute URL is kept verbatim (including any
+// query/fragment the feed put on it, e.g. ?focusedCommentId=… — that is what
+// makes a row land on the exact comment instead of the issue's top), a
+// relative path is resolved against site, and anything else (empty, or some
+// other unexpected shape) yields no link — that notification is skipped by
+// the caller, same as before.
+func resolveNotificationURL(raw, site string) string {
+	raw = strings.TrimSpace(raw)
+	switch {
+	case raw == "":
+		return ""
+	case strings.HasPrefix(raw, "http://"), strings.HasPrefix(raw, "https://"):
+		return raw
+	case strings.HasPrefix(raw, "/"):
+		return "https://" + site + raw
+	default:
+		return ""
 	}
 }
-
-// sortedKeys keeps the walk order stable (a map iteration order would make the
-// extracted values vary between two runs over the same payload).
-func sortedKeys(m map[string]any) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	for i := 1; i < len(keys); i++ {
-		for j := i; j > 0 && keys[j] < keys[j-1]; j-- {
-			keys[j], keys[j-1] = keys[j-1], keys[j]
-		}
-	}
-	return keys
-}
-
-// firstString returns the first non-empty string value stored under any of
-// names, anywhere in the entry (shallowest first). A nested {"text": "…"} /
-// ADF-ish object under such a name is flattened to its text.
-func firstString(node map[string]any, names ...string) string {
-	found := ""
-	walk(node, func(m map[string]any) bool {
-		for _, name := range names {
-			v, ok := m[name]
-			if !ok {
-				continue
-			}
-			switch t := v.(type) {
-			case string:
-				if strings.TrimSpace(t) != "" {
-					found = strings.TrimSpace(t)
-					return true
-				}
-			case map[string]any, []any:
-				if s := strings.TrimSpace(flattenText(v)); s != "" {
-					found = s
-					return true
-				}
-			}
-		}
-		return false
-	})
-	return found
-}
-
-// firstStrings returns the first non-empty []string under any of names.
-func firstStrings(node map[string]any, names ...string) []string {
-	var found []string
-	walk(node, func(m map[string]any) bool {
-		for _, name := range names {
-			arr, ok := m[name].([]any)
-			if !ok {
-				continue
-			}
-			for _, item := range arr {
-				if s, ok := item.(string); ok && s != "" {
-					found = append(found, s)
-				}
-			}
-			if len(found) > 0 {
-				return true
-			}
-		}
-		return false
-	})
-	return found
-}
-
-// firstBool returns the first boolean under any of names.
-func firstBool(node map[string]any, names ...string) (bool, bool) {
-	var val, ok bool
-	walk(node, func(m map[string]any) bool {
-		for _, name := range names {
-			if b, is := m[name].(bool); is {
-				val, ok = b, true
-				return true
-			}
-		}
-		return false
-	})
-	return val, ok
-}
-
-// firstURL returns the first absolute link into this Jira site — the thing the
-// row opens in a new window. A relative path (the feed's own shape for an issue
-// link) is resolved against the site. Any query/fragment the feed put on it
-// (notably ?focusedCommentId=…) is kept verbatim: that is exactly what makes
-// the row land on the comment instead of the issue's top.
-func firstURL(node map[string]any, site string) string {
-	found := ""
-	walk(node, func(m map[string]any) bool {
-		for _, name := range []string{"url", "href", "link", "path"} {
-			s, ok := m[name].(string)
-			if !ok || strings.TrimSpace(s) == "" {
-				continue
-			}
-			s = strings.TrimSpace(s)
-			switch {
-			case strings.HasPrefix(s, "https://"+site):
-				found = s
-				return true
-			case strings.HasPrefix(s, "/"):
-				found = "https://" + site + s
-				return true
-			}
-		}
-		return false
-	})
-	return found
-}
-
-// flattenText concatenates every string leaf of a nested value, so a message
-// stored as an ADF-ish {"content":[{"text":"…"}]} still yields a readable line.
-func flattenText(v any) string {
-	var b strings.Builder
-	var rec func(any)
-	rec = func(x any) {
-		switch t := x.(type) {
-		case string:
-			b.WriteString(t)
-		case []any:
-			for _, item := range t {
-				rec(item)
-			}
-		case map[string]any:
-			for _, k := range sortedKeys(t) {
-				if k == "type" || k == "url" || k == "href" {
-					continue
-				}
-				rec(t[k])
-			}
-		}
-	}
-	rec(v)
-	return b.String()
-}
-
-// collapseSpace squashes runs of whitespace/newlines into single spaces — a
-// feed message can carry hard line breaks that would wreck the one-line row.
-func collapseSpace(s string) string { return strings.Join(strings.Fields(s), " ") }

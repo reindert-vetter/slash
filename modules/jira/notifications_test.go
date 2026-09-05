@@ -2,40 +2,64 @@ package jira
 
 import "testing"
 
-// A representative notification-log payload: one unread comment notification
+// A representative notifyFeedQuery response: one unread comment notification
 // carrying a relative link WITH a focusedCommentId (the deep link the overview
-// row opens in a new window), and one already-read entry.
+// row opens in a new window), and one already-read entry, plus one entry with
+// no usable link. This shape was CONFIRMED live via schema introspection
+// against the real Atlassian site (see the big comment at the top of
+// notifications.go) — it is the actual `notifications.notificationFeed`
+// GraphQL query result, not a guess.
 const feedJSON = `{
-  "notificationGroups": [
-    {
-      "notificationIds": ["ari:cloud:notifications::notification/abc-123"],
-      "timestamp": "2026-09-03T10:15:00.000Z",
-      "readState": "unread",
-      "content": {
-        "message": {"content": [{"text": "commented on "}, {"text": "PAYM-813"}]},
-        "actors": [{"displayName": "Dennis Sloove", "avatarUrl": "https://avatar.example/d.png"}],
-        "entity": {"url": "/browse/PAYM-813?focusedCommentId=98765"}
+  "data": {
+    "notifications": {
+      "notificationFeed": {
+        "nodes": [
+          {
+            "groupId": "ari:cloud:notifications::group/abc-123",
+            "headNotification": {
+              "notificationId": "ari:cloud:notifications::notification/abc-123",
+              "timestamp": "2026-09-03T10:15:00.000Z",
+              "readState": "unread",
+              "content": {
+                "message": "commented on PAYM-813",
+                "url": "/browse/PAYM-813?focusedCommentId=98765",
+                "actor": {"displayName": "Dennis Sloove", "avatarURL": "https://avatar.example/d.png"}
+              }
+            }
+          },
+          {
+            "groupId": "ari:cloud:notifications::group/abc-456",
+            "headNotification": {
+              "notificationId": "abc-456",
+              "timestamp": "2026-09-02T08:00:00.000Z",
+              "readState": "read",
+              "content": {
+                "message": "assigned an issue to you",
+                "url": "https://plugandpaybv.atlassian.net/browse/PAYM-99",
+                "actor": {"displayName": ""}
+              }
+            }
+          },
+          {
+            "groupId": "no-link",
+            "headNotification": {
+              "notificationId": "no-link",
+              "timestamp": "2026-09-01T08:00:00.000Z",
+              "readState": "unread",
+              "content": {"message": "something without a link", "url": ""}
+            }
+          }
+        ]
       }
-    },
-    {
-      "id": "abc-456",
-      "timestamp": "2026-09-02T08:00:00.000Z",
-      "readState": "read",
-      "content": {
-        "message": "assigned an issue to you",
-        "entity": {"url": "https://plugandpaybv.atlassian.net/browse/PAYM-99"}
-      }
-    },
-    {
-      "id": "no-link",
-      "timestamp": "2026-09-01T08:00:00.000Z",
-      "content": {"message": "something without a link"}
     }
-  ]
+  }
 }`
 
-func TestParseNotifications(t *testing.T) {
-	got := parseNotifications([]byte(feedJSON), "plugandpaybv.atlassian.net")
+func TestParseGraphQLNotifications(t *testing.T) {
+	got, err := parseGraphQLNotifications([]byte(feedJSON), "plugandpaybv.atlassian.net")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(got) != 2 {
 		t.Fatalf("want 2 usable notifications (the third has no link), got %d: %+v", len(got), got)
 	}
@@ -75,20 +99,49 @@ func TestParseNotifications(t *testing.T) {
 	}
 }
 
-// A shape change in this undocumented feed must degrade to "no notifications",
-// never to a panic or an error wall.
-func TestParseNotificationsTolerantOfJunk(t *testing.T) {
-	for _, body := range []string{`{}`, `[]`, `null`, `{"notificationGroups": [{"nothing": true}]}`, `not json at all`} {
-		if got := parseNotifications([]byte(body), "example.atlassian.net"); len(got) != 0 {
+// A shape change in this still-undocumented feed must degrade to "no
+// notifications", never to a panic.
+func TestParseGraphQLNotificationsTolerantOfJunk(t *testing.T) {
+	for _, body := range []string{`{}`, `{"data":{}}`, `{"data":{"notifications":{}}}`, `null`} {
+		got, err := parseGraphQLNotifications([]byte(body), "example.atlassian.net")
+		if err != nil {
+			t.Errorf("body %q: unexpected error: %v", body, err)
+		}
+		if len(got) != 0 {
 			t.Errorf("body %q: want no notifications, got %+v", body, got)
 		}
 	}
 }
 
-// An entry whose read state the feed does not report at all counts as unread:
-// showing it once too often beats swallowing it.
+// Invalid JSON is a real parse failure and must be reported, not silently
+// swallowed into an empty list — that distinction is what lets checkJiraToken
+// tell a genuinely empty feed apart from one that broke.
+func TestParseGraphQLNotificationsInvalidJSON(t *testing.T) {
+	if _, err := parseGraphQLNotifications([]byte("not json at all"), "example.atlassian.net"); err == nil {
+		t.Fatal("want an error for invalid JSON, got nil")
+	}
+}
+
+// A GraphQL-level error (a real query/schema problem) must be reported as an
+// error, never silently degraded to "no notifications" — that would hide a
+// broken feed behind an innocent-looking empty bell.
+func TestParseGraphQLNotificationsSurfacesGraphQLErrors(t *testing.T) {
+	body := `{"errors":[{"message":"Validation error: unknown field notificationFeed"}]}`
+	if _, err := parseGraphQLNotifications([]byte(body), "example.atlassian.net"); err == nil {
+		t.Fatal("want an error when the response carries a GraphQL error, got nil")
+	}
+}
+
+// An entry whose read state is anything other than exactly "read" counts as
+// unread: showing it once too often beats swallowing it.
 func TestUnknownReadStateIsUnread(t *testing.T) {
-	got := parseNotifications([]byte(`{"notifications":[{"id":"x","content":{"entity":{"url":"/browse/AB-1"}}}]}`), "s.atlassian.net")
+	body := `{"data":{"notifications":{"notificationFeed":{"nodes":[
+		{"groupId":"g1","headNotification":{"notificationId":"x","content":{"url":"/browse/AB-1"}}}
+	]}}}}`
+	got, err := parseGraphQLNotifications([]byte(body), "s.atlassian.net")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(got) != 1 || !got[0].Unread {
 		t.Fatalf("want one unread notification, got %+v", got)
 	}

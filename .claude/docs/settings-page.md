@@ -124,10 +124,43 @@ zin)".
 
 Three credentials, checked by `GET /api/auth/status` (`auth_status.go`, a
 read-only operational carve-out): `gh auth status`, `acli jira auth status`,
-and one minimal live feed call with the Jira API token. `claude` is
-deliberately NOT checked — it has no queryable auth-status command, so the only
-way to know would be a real billable call, and a failing Claude call already
-shows up as a genuinely failed run in the failed-tasks popup.
+and the Jira API token, verified in TWO separate steps (see `checkJiraToken`):
+first `jira.Client.VerifyCredentials` against the stable, documented
+`/rest/api/2/myself` endpoint, then — only if that passes — one minimal live
+call to the notification feed itself (`jira.Client.Notifications`, currently
+the GraphQL query described in `modules/jira/notifications.go`). `claude` is
+deliberately NOT checked — it has no queryable auth-status command, so the
+only way to know would be a real billable call, and a failing Claude call
+already shows up as a genuinely failed run in the failed-tasks popup.
+
+**Why the token check has two steps, not one, and a fourth state
+(`"unavailable"`) exists at all.** Investigated live (2026-09-05): the feed
+used to call an undocumented REST gateway
+(`/gateway/api/notification-log/api/3/notifications`) which turned out to have
+been WITHDRAWN by Atlassian — every path variant tried under it returned the
+exact same generic gateway 404 as a deliberately made-up path, while a real,
+valid token still got a clean `200` from `/rest/api/2/myself`. Reporting that
+as `"error"` ("Afgekeurd") would have told the reviewer their token is bad and
+sent them off to needlessly regenerate it — so `checkJiraToken` verifies the
+token itself SEPARATELY from the feed call, and a feed failure with a
+verified-fine token becomes `"unavailable"` instead: excluded from
+`brokenChecks()` (no popup, same as `"missing"`/`"skipped"` — nothing the
+reviewer can fix by re-authenticating), its own word/glyph,
+`! Tijdelijk niet bereikbaar`.
+
+The feed itself was then FIXED, not just degraded gracefully: `/gateway/api/graphql`
+turned out to still be alive with introspection enabled, and
+`notifications.notificationFeed(first, filter)` (schema found via `__schema`/
+`__type` queries, not guessed) is confirmed live to return the same kind of
+data the old REST gateway used to. `modules/jira/notifications.go` now calls
+that GraphQL query instead — full mechanism, exact field/type names, and how
+they were found is documented in that file's own header. Both this and
+`/rest/api/2/myself` remain **undocumented/unsupported** APIs by explicit
+choice; the `"unavailable"` state and the two-step check stay in place as a
+defensive fallback for if Atlassian withdraws this GraphQL shape too, exactly
+like it did the REST one — this is not expected to be the common case in
+practice anymore, but the honest-degradation path is deliberately kept rather
+than removed.
 
 `src/authStatus.mjs` owns both surfaces from ONE reactive store (`as`), so the
 row and the popup can never disagree:

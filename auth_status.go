@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"slash/modules/jira"
 )
 
 // auth_status.go answers one question the app could not answer before: "are the
@@ -55,6 +57,12 @@ const (
 	authStateError   = "error"   // configured but rejected/expired — needs action
 	authStateMissing = "missing" // never configured at all
 	authStateSkipped = "skipped" // switched off for this run (SLASH_*=off)
+	// authStateUnavailable: the credentials themselves are still accepted (see
+	// checkJiraToken's VerifyCredentials call), but the feature's own endpoint
+	// is unreachable. Deliberately NOT authStateError: that word ("Afgekeurd")
+	// would wrongly tell the reviewer their token is bad, when regenerating it
+	// would not help — see the investigation note on checkJiraToken.
+	authStateUnavailable = "unavailable"
 )
 
 // AuthCheck is one credential slash depends on.
@@ -118,7 +126,7 @@ func (m *TaskManager) checkAuthStatus(ctx context.Context) AuthStatus {
 	st.Jira = jiraCredsView()
 	st.OK = true
 	for _, c := range st.Checks {
-		if c.State == authStateError || c.State == authStateMissing {
+		if c.State == authStateError || c.State == authStateMissing || c.State == authStateUnavailable {
 			st.OK = false
 		}
 	}
@@ -173,8 +181,25 @@ func checkJiraCLIAuth(ctx context.Context) AuthCheck {
 
 // checkJiraToken reports on the Atlassian API token behind the notification
 // feed. Configured is not enough — an expired/revoked token looks identical
-// until it is used — so a configured token is verified with one real, minimal
-// feed call through the module the feed itself uses.
+// until it is used — so a configured token is verified in TWO separate steps:
+//
+//  1. m.jira.VerifyCredentials, against the stable, documented
+//     `/rest/api/2/myself` endpoint — this alone answers "is the token itself
+//     still accepted".
+//  2. only if that passes, one real, minimal call to the feed itself
+//     (m.jira.Notifications), which uses an undocumented Atlassian gateway
+//     endpoint (see the big comment at the top of notifications.go).
+//
+// Splitting these matters: investigated live (2026-09-05) against the real
+// site with a real, valid token — `/rest/api/2/myself` returned 200, while
+// EVERY path tried under `/gateway/api/notification-log/...` (several plausible
+// API-version/sub-path variants) returned the exact same generic gateway 404 as
+// a deliberately made-up path (`/gateway/api/totally-bogus-xyz123`), meaning
+// that whole undocumented service looks to have been withdrawn by Atlassian —
+// independent of the token. Reporting that as authStateError ("Afgekeurd")
+// would tell the reviewer their token is bad and send them off to regenerate it
+// for nothing; authStateUnavailable says the honest thing instead: token is
+// fine, the (unofficial) feed just isn't reachable right now.
 func (m *TaskManager) checkJiraToken(ctx context.Context) AuthCheck {
 	c := AuthCheck{
 		ID:       "jiraToken",
@@ -200,9 +225,16 @@ func (m *TaskManager) checkJiraToken(ctx context.Context) AuthCheck {
 	}
 	ctx, cancel := context.WithTimeout(ctx, authCheckTimeout)
 	defer cancel()
-	if _, err := m.jira.Notifications(ctx, 1); err != nil {
+	if err := m.jira.VerifyCredentials(ctx); err != nil {
 		c.State = authStateError
-		c.Detail = firstMeaningfulLine(err.Error(), "de notificatiefeed weigerde het token")
+		c.Detail = firstMeaningfulLine(err.Error(), "e-mailadres of token is niet (meer) geldig")
+		return c
+	}
+	if _, err := m.jira.Notifications(ctx, 1); err != nil {
+		c.State = authStateUnavailable
+		c.Detail = "Token is geldig, maar de (niet-officiële) notificatiefeed van Atlassian zelf is niet bereikbaar (" +
+			firstMeaningfulLine(err.Error(), "onbekende fout") +
+			") — dit interne endpoint lijkt gewijzigd of verwijderd, opnieuw inloggen lost dit niet op"
 		return c
 	}
 	c.State = authStateOK
@@ -258,9 +290,16 @@ func jiraCredsFromEnv() (email, token, site string) {
 		strings.TrimSpace(os.Getenv("SLASH_JIRA_SITE"))
 }
 
-// jiraCredsView builds the browser-safe view of those credentials.
+// jiraCredsView builds the browser-safe view of those credentials. Site falls
+// back to jira.DefaultSite when unset, so the settings page's form shows the
+// domain that will actually be used (modules/jira's own notifyConfig applies
+// the exact same fallback) instead of only a placeholder hint the reviewer
+// might think they still need to type themselves.
 func jiraCredsView() JiraCredsView {
 	email, token, site := jiraCredsFromEnv()
+	if site == "" {
+		site = jira.DefaultSite
+	}
 	v := JiraCredsView{Email: email, Site: site, TokenSet: token != ""}
 	if v.TokenSet {
 		v.TokenMasked = maskSecret(token)
