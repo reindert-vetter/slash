@@ -20,13 +20,33 @@ an "Only show unread" toggle, tabs Direct/Watching.
 - **The data is the real bell feed**, not an approximation. Jira has no
   supported API for it: `acli` has no notifications command and the Jira Cloud
   platform REST API has no "my notifications" endpoint, so
-  `modules/jira/notifications.go` calls Atlassian's own
-  `…/gateway/api/notification-log/api/3/notifications?category=direct` with an
-  ordinary API token over basic auth. **That endpoint is undocumented and
-  unsupported** — a deliberate, explicit choice by Reindert, recorded in that
-  file's header along with what it costs. Parsing is therefore lenient (every
-  field optional, an entry without a link is skipped): a shape change degrades
-  to "no notifications", never to an error wall.
+  `modules/jira/notifications.go` calls a still-undocumented Atlassian
+  endpoint over basic auth with an ordinary API token — **that endpoint is
+  undocumented and unsupported**, a deliberate, explicit choice by Reindert,
+  recorded in that file's header along with what it costs. It used to be the
+  REST notification-log gateway; that was found withdrawn (2026-09-05, see the
+  file header and `.claude/docs/settings-page.md`'s auth-check section) and
+  replaced with a GraphQL query (`notifications.notificationFeed`) discovered
+  via schema introspection against `/gateway/api/graphql`, which is still
+  alive. A shape change (of either) degrades to "no notifications", never to
+  an error wall — see `checkJiraToken`/`"unavailable"` for how a real failure
+  is still surfaced without crying wolf over a bad token.
+- **A second, always-reachable entry point sits in the header icon row**
+  (`jiraBellButton`, next to the theme/settings icons, reviewer screenshot
+  request): a bell icon with an unread dot (`jiraBellDot`, shown whenever
+  `jiraUnreadCount() > 0` — shape plus dot, never colour alone) that opens a
+  compact dropdown (`jiraBellPanel`) with the 5 most recent notifications
+  (read or unread), reusing `jiraRow` verbatim so a click still marks it read
+  and opens the deep link in a new window exactly like the inline section's
+  own rows. Its own small `state.jiraBellOpen` flag, closed by an outside
+  `mousedown` (mirroring the existing row-popover pattern: the toggle button
+  itself sits inside `[data-testid=jira-bell-wrapper]`, so opening/closing
+  never races against that same listener) or by Escape (checked in
+  `kbHandler`, right after the row-popover branch). Deliberately separate from
+  the inline section below (`jiraBlock`, which only renders once there is at
+  least one notification at all) rather than folded into it or into the
+  row-popover machinery (`ui.openPopover`, which also resets unrelated
+  row-popover state on close).
 - **Credentials come from the environment** (`SLASH_JIRA_EMAIL`,
   `SLASH_JIRA_TOKEN`, optional `SLASH_JIRA_SITE`, all in the gitignored `.env`
   — see `.env.example`). Deliberately **not** `data/settings.json`: that file is

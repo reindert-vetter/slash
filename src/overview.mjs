@@ -51,6 +51,12 @@ const state = reactive({
   jira: [],
   jiraUnreadOnly: true, // mirrors Jira's own "Only show unread" toggle, on by default
   jiraRunId: '', // jira_inbox Run ID — target for the "read" signal
+  // jiraBellOpen — the compact header bell's own dropdown (top 5 most recent
+  // notifications, read or unread). Separate from the always-visible inline
+  // "Jira" section above the PR list (jiraBlock): the reviewer asked for a
+  // second, always-reachable entry point in the header icon row itself
+  // (screenshot), badge-dotted when jiraUnreadCount() > 0.
+  jiraBellOpen: false,
   sections: [], // [{ title, prs: Row[] }]
   statuses: {}, // prUid -> Status, backfilled async
   approvals: {}, // prUid -> { done, total }, backfilled async (ingested PRs only)
@@ -194,6 +200,10 @@ const ICON_PATHS = {
   // same 24x24/stroke-2 set.
   folder:
     '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+  // 'bell' — the header's Jira-notifications entry point (jiraBellButton).
+  // Lucide's own bell, same 24x24/stroke-2 set.
+  bell:
+    '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
 }
 
 // icon renders one outline SVG (24x24 viewBox, stroke=currentColor). The path
@@ -1792,6 +1802,7 @@ function headerBlock() {
         >
         ${autoIngestPrefToggleButton()}
         ${autoWarnToggleButton()}
+        ${jiraBellButton()}
         ${themeToggleButton('h-7 w-7')}
         ${settingsButton('h-7 w-7')}
       </div>
@@ -2163,6 +2174,83 @@ function jiraBlock() {
 function jiraSlot() {
   const block = jiraBlock()
   return block ? [block] : []
+}
+
+// ── Jira bell (header icon row) ─────────────────────────────────────────────
+// Reviewer request (screenshot of the header icon row): "ik wil hier een
+// belletje zien. als ik daarop druk wil ik top 5 notifications zien. als er
+// ongelezen zijn wil ik een rondje zien bij het belletje." A second, always-
+// reachable entry point next to jiraBlock's always-visible inline section
+// above the PR list: that section only appears once state.jira has any items
+// at all, while the bell sits permanently in the header, right where the
+// theme/settings icons already are.
+
+// closeJiraBell / toggleJiraBell — a small, independent open/close flag
+// (state.jiraBellOpen), deliberately NOT folded into the row-popover
+// mechanism (ui.openPopover): that one also resets row-specific state
+// (ingestError, readyFor, reviewersError) on close, which has nothing to do
+// with this dropdown.
+function closeJiraBell() {
+  state.jiraBellOpen = false
+}
+
+function toggleJiraBell() {
+  state.jiraBellOpen = !state.jiraBellOpen
+}
+
+// jiraBellDot — the unread signal ON THE BELL ITSELF. Same colourblind-safe
+// shape as jiraUnreadMark (a filled dot, never colour alone; the bell shape
+// plus this dot together are unambiguous regardless of colour vision).
+function jiraBellDot() {
+  if (!jiraUnreadCount()) return html`<span class="hidden"></span>`
+  return html`<span
+    data-testid="jira-bell-dot"
+    title="${() => jiraUnreadCount() + ' ' + t('ongelezen')}"
+    class="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-indigo-500 ring-2 ring-white dark:bg-indigo-400 dark:ring-zinc-950"
+  ></span>`
+}
+
+// jiraBellPanel — the top-5 dropdown, most-recent-first (state.jira is
+// already ordered that way by the jira_inbox read-model, newest first).
+// Reuses jiraRow verbatim for each entry, so a click marks it read and opens
+// it in a new window exactly like the inline section's own rows do.
+function jiraBellPanel() {
+  const top5 = state.jira.slice(0, 5)
+  return html`
+    <div
+      data-testid="jira-bell-panel"
+      class="absolute right-0 top-full z-20 mt-2 w-80 max-w-[90vw] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg dark:border-zinc-800 dark:bg-zinc-900"
+    >
+      <div class="border-b border-slate-100 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:border-zinc-800 dark:text-zinc-500">
+        ${t('Jira notificaties')}
+      </div>
+      ${() =>
+        top5.length
+          ? html`<div>${() => top5.map((n) => jiraRow(n))}</div>`.key('jira-bell:list')
+          : html`<p class="px-4 py-6 text-center text-sm text-slate-500 dark:text-zinc-500">${t('Geen notificaties.')}</p>`.key(
+              'jira-bell:empty',
+            )}
+    </div>
+  `
+}
+
+// jiraBellButton — the header icon, same compact size/style as
+// themeToggleButton/settingsButton next to it.
+function jiraBellButton() {
+  return html`
+    <div class="relative" data-testid="jira-bell-wrapper">
+      <button
+        type="button"
+        data-testid="jira-bell-button"
+        title="${t('Jira notificaties')}"
+        class="relative inline-flex h-7 w-7 items-center justify-center rounded-full text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+        @click="${toggleJiraBell}"
+      >
+        ${icon('bell', 'h-4 w-4')} ${() => jiraBellDot()}
+      </button>
+      <div class="contents">${() => (state.jiraBellOpen ? jiraBellPanel() : '')}</div>
+    </div>
+  `
 }
 
 function mainContent() {
@@ -3329,6 +3417,16 @@ function setupKeyboard() {
     // mirroring home.mjs's own menu branch (and the popover branch below).
     if (menu.open) return handleMenuKey(e)
     if (ui.openPopover != null) return handlePopoverKey(e)
+    // The Jira bell dropdown is a light, non-modal popover — only Escape does
+    // something; every other key is swallowed so list navigation can't fire
+    // underneath an open dropdown (same reasoning as the row popover above).
+    if (state.jiraBellOpen) {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        closeJiraBell()
+      }
+      return
+    }
     const active = document.activeElement
     const typing = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')
     if (e.key === '/' && !typing) {
@@ -3417,6 +3515,18 @@ window.addEventListener('mousedown', (e) => {
   if (ui.openPopover == null) return
   const row = e.target.closest && e.target.closest('[data-pr="' + ui.openPopover + '"]')
   if (!row) closePopover()
+})
+
+// Close the Jira bell dropdown on any click outside it — same pattern as the
+// row-popover listener right above: the toggle button itself sits INSIDE
+// [data-testid=jira-bell-wrapper], so clicking it to open/close never
+// races with this closing on its own mousedown (unlike a naive
+// stopPropagation-on-click approach, which fires one event type too late —
+// mousedown always precedes click).
+window.addEventListener('mousedown', (e) => {
+  if (!state.jiraBellOpen) return
+  const wrap = e.target.closest && e.target.closest('[data-testid="jira-bell-wrapper"]')
+  if (!wrap) closeJiraBell()
 })
 
 // Repaint the nav whenever the visible row set could have changed.

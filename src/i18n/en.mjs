@@ -334,6 +334,8 @@ export const EN = {
   ongelezen: 'unread',
   Ongelezen: 'Unread',
   'Alles gelezen.': 'All caught up.',
+  'Jira notificaties': 'Jira notifications',
+  'Geen notificaties.': 'No notifications.',
   'Werktrees voorbereiden…': 'Preparing worktrees…',
   'Blocks scannen…': 'Scanning blocks…',
   'Relaties opbouwen…': 'Building relations…',
