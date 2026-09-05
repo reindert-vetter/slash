@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -51,6 +52,23 @@ func (s *server) routes(staticDir string) *http.ServeMux {
 	}
 
 	fileServer := http.FileServer(http.Dir(staticDir))
+	// GET /data/inbox.json — the offline snapshot loadInbox (src/overview.mjs)
+	// falls back to once /api/inbox reports no live snapshot yet (a fresh
+	// datadir on its very first load, before pr_inbox has ever fetched, or a
+	// genuine gh outage). The file is an optional, manually-placed fixture, not
+	// something the app ever generates — so on a fresh install it never exists,
+	// and every page load logged a bare "404" from the static file server for
+	// no functional reason (the client already handles a non-ok response, see
+	// applyCached). Answer with the same "no data" shape /api/inbox itself uses
+	// instead, so a missing snapshot is unremarkable rather than console noise.
+	mux.HandleFunc("/data/inbox.json", func(w http.ResponseWriter, r *http.Request) {
+		path := filepath.Join(staticDir, "data", "inbox.json")
+		if _, err := os.Stat(path); err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false})
+			return
+		}
+		http.ServeFile(w, r, path)
+	})
 	// App pages are served as static HTML shells; the front-end reads the PR id
 	// from the path (/pr/<id>) and the overview lists the PRs (/pr-overview).
 	mux.HandleFunc("/pr/", serveFile(staticDir, "index.html"))

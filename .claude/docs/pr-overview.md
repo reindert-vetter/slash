@@ -931,7 +931,18 @@ the read model, so `GET /api/inbox` has data right away (no race in tests).
 `hasGraph` comes from the DB, so the seeded PR (12903) shows "Open review tree"
 pointing at `/pr/12903`. If the first fetch fails (no fixture, no snapshot) →
 `/api/inbox` `{ok:false}` → the client falls back to `GET /data/inbox.json`
-(label "cached").
+(label "cached"). That route (`api.go`, registered in `server.routes` right
+next to the static file server) answers `{"ok":false}` itself, the same shape
+`/api/inbox` uses, whenever `<static>/data/inbox.json` doesn't exist on disk —
+which is normal: the file is an optional, hand-placed offline fixture the app
+never generates, so a fresh datadir (or the very first load, before `pr_inbox`
+has fetched once) never has it. Serving through the ordinary static
+`http.FileServer` there used to bubble a bare 404 to the browser console on
+every such load, for no functional reason (the client already treats a
+non-`ok` body as "no luck" — see `applyCached`, `src/overview.mjs`). A real
+snapshot file, when one has been placed, is still served as-is. Tests:
+`TestDataInboxSnapshotMissingIsNotA404`/`TestDataInboxSnapshotServesRealFile`
+(`data_inbox_snapshot_test.go`).
 
 ## Client (`src/overview.mjs`, arrow.js, dark zinc)
 
