@@ -219,7 +219,9 @@ func TestCodeWarningTurnCounterUnlimitedNeverNudges(t *testing.T) {
 }
 
 // codeWarningMaxTurns: the env override, its "unlimited" spellings, and its
-// fallback for an unparsable value.
+// fallback (the scope-scaled formula) for an unparsable value — checked at a
+// fixed scope of 5 files, since the override/fallback behaviour doesn't
+// depend on which scope size is passed.
 func TestCodeWarningMaxTurnsEnvOverride(t *testing.T) {
 	const envKey = "SLASH_CODE_WARNING_MAX_TURNS"
 	prev, hadPrev := os.LookupEnv(envKey)
@@ -231,17 +233,19 @@ func TestCodeWarningMaxTurnsEnvOverride(t *testing.T) {
 		}
 	})
 
+	const fileCount = 5
+	fallback := codeWarningMaxTurnsForScope(fileCount)
 	cases := []struct {
 		env  string
 		want int
 	}{
-		{"", codeWarningDefaultMaxTurns},
+		{"", fallback},
 		{"12", 12},
 		{"0", 0},
 		{"unlimited", 0},
 		{"UNLIMITED", 0},
-		{"not-a-number", codeWarningDefaultMaxTurns},
-		{"-5", codeWarningDefaultMaxTurns},
+		{"not-a-number", fallback},
+		{"-5", fallback},
 	}
 	for _, c := range cases {
 		if c.env == "" {
@@ -249,9 +253,44 @@ func TestCodeWarningMaxTurnsEnvOverride(t *testing.T) {
 		} else {
 			os.Setenv(envKey, c.env)
 		}
-		if got := codeWarningMaxTurns(); got != c.want {
-			t.Errorf("codeWarningMaxTurns() with env %q = %d, want %d", c.env, got, c.want)
+		if got := codeWarningMaxTurns(fileCount); got != c.want {
+			t.Errorf("codeWarningMaxTurns(%d) with env %q = %d, want %d", fileCount, c.env, got, c.want)
 		}
+	}
+}
+
+// codeWarningMaxTurnsForScope: the pure scaling formula, independent of any
+// env override — edge cases (0/1 files), the lower bound, a mid-scope value,
+// and that the upper bound clamps for a very large scope. Values mirror the
+// worked examples in the constants' own doc comment.
+func TestCodeWarningMaxTurnsForScope(t *testing.T) {
+	cases := []struct {
+		files int
+		want  int
+	}{
+		{0, codeWarningScopeFloor}, // no files: the bare floor, never below it
+		{1, 9},                     // smallest real scope
+		{5, 15},                    // a mid-sized PR
+		{25, 21},                   // still below the ceiling
+		{88, codeWarningScopeCeil}, // the largest sampled bucket clamps
+		{276, codeWarningScopeCeil},
+	}
+	for _, c := range cases {
+		if got := codeWarningMaxTurnsForScope(c.files); got != c.want {
+			t.Errorf("codeWarningMaxTurnsForScope(%d) = %d, want %d", c.files, got, c.want)
+		}
+	}
+	// Monotonic (non-decreasing) up to the ceiling, and never above it.
+	prev := 0
+	for n := 0; n <= 500; n++ {
+		got := codeWarningMaxTurnsForScope(n)
+		if got < prev {
+			t.Fatalf("codeWarningMaxTurnsForScope(%d) = %d, decreased from %d", n, got, prev)
+		}
+		if got > codeWarningScopeCeil {
+			t.Fatalf("codeWarningMaxTurnsForScope(%d) = %d, exceeds ceiling %d", n, got, codeWarningScopeCeil)
+		}
+		prev = got
 	}
 }
 

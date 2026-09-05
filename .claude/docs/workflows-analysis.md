@@ -1302,26 +1302,57 @@ a manually triggered, low-frequency action.
     (`codeWarningTurnCounter`) that counts a new `claude.ChatEventTurn` event
     — fired once per agentic step (a CLI "assistant" frame), matching the
     CLI's own final `num_turns` — and a `Steer` channel wired on every call.
-  - The first time the count reaches `codeWarningMaxTurns()`, the counter
-    sends **one** message on that channel (`codeWarningStopNudge`) and closes
-    it: "stop investigating, answer now with the JSON array based on what you
-    found so far". This is what makes a truncated run still useful — the
-    model's own next step is its real, final answer (parsed exactly like an
-    unbounded run's), not an aborted context cancellation that would return
-    nothing. A context-cancel approach was rejected for exactly that reason:
-    the model only ever produces its JSON answer at the very end, so killing
-    the process mid-exploration would throw away everything, not just the
-    unexplored tail.
-  - **Default 8** (`codeWarningDefaultMaxTurns`, a `var` for testability, same
-    pattern as `modules/claude/claude.go`'s `contextTimeout`/`agenticTimeout`)
-    — close to the observed "half the turns already carry 94% of the
-    findings" point above. **Configurable** via
-    `SLASH_CODE_WARNING_MAX_TURNS` (read inside the `runAgenticReview`
-    Activity, never the workflow body — an env read is a side effect, see
-    `.claude/rules/workflow-determinism.md`): a positive integer overrides
-    the default, `"0"`/`"unlimited"` (case-insensitive) disables the budget
-    entirely, anything unparsable falls back to the default rather than
-    silently meaning unlimited.
+  - The first time the count reaches `codeWarningMaxTurns(len(arg.Files))`,
+    the counter sends **one** message on that channel
+    (`codeWarningStopNudge`) and closes it: "stop investigating, answer now
+    with the JSON array based on what you found so far". This is what makes
+    a truncated run still useful — the model's own next step is its real,
+    final answer (parsed exactly like an unbounded run's), not an aborted
+    context cancellation that would return nothing. A context-cancel
+    approach was rejected for exactly that reason: the model only ever
+    produces its JSON answer at the very end, so killing the process
+    mid-exploration would throw away everything, not just the unexplored
+    tail.
+  - **The budget scales with the run's own scope size** (`len(arg.Files)`,
+    from `resolveWarningScope`), rather than one fixed number for every PR —
+    `codeWarningMaxTurnsForScope(fileCount)`. Bucketing the same 106-run
+    measurement by scope size shows the growth is real but weak and
+    sublinear:
+
+    | scope files | n  | mean scope | mean turns | ctx tokens/run |
+    |---|---|---|---|---|
+    | 1     | 24 | 1.0  | 11.9 | 1.07 M |
+    | 2-3   | 28 | 2.3  | 12.0 | 1.16 M |
+    | 4-8   | 31 | 5.2  | 18.1 | 1.93 M |
+    | 9-25  | 17 | 12.5 | 19.1 | 2.17 M |
+    | >25   | 6  | 88.3 | 27.0 | 4.01 M |
+
+    Pearson r = 0.16 against the raw file count, r = 0.34 against
+    log(scope) — an 88-file run took barely over double the turns a 1-file
+    run took, not 88 times as many, so a linear "N turns per file" cap is
+    provably wrong (it would allow 276 turns on a 276-file PR, where the
+    model itself used only 27 on an 88-file one). Combined with the "half
+    the turns already carry 94% of the findings" measurement above (a
+    generous cap costs more than it looks, since context — and thus cost —
+    keeps growing per turn regardless of scope), the budget grows
+    **logarithmically**: `codeWarningScopeFloor (6) +
+    codeWarningScopeStep (3) * bits.Len(fileCount)`, clamped to
+    `codeWarningScopeCeil (24)` — one +3 step per **doubling** of the file
+    count, not per file. Worked examples: 1 file → 9, 5 files → 15, 25
+    files → 21 (each close to that bucket's own mean-turns column above,
+    without extrapolating past it), 88 files and up (e.g. 276) → clamped at
+    24 — comfortably above every bucket mean yet well under the 77 turns the
+    single largest fixture actually took unbounded (see the A/B below): the
+    point of the ceiling is to cut the expensive long tail, not match it,
+    since more files does not reliably mean proportionally more to find.
+  - **Configurable override** via `SLASH_CODE_WARNING_MAX_TURNS` (read
+    inside the `runAgenticReview` Activity, never the workflow body — an env
+    read is a side effect, see `.claude/rules/workflow-determinism.md`): a
+    positive integer wins over the scaled formula unconditionally,
+    `"0"`/`"unlimited"` (case-insensitive) disables the budget entirely
+    (used for the unbounded measurement baseline itself), anything
+    unparsable falls back to the scaled formula rather than silently meaning
+    unlimited.
   - **Measured A/B** (own `slash` instance, own port/data dir, PR
     `reindert-vetter/slash-test#1`, 276 changed files / 601 blocks — a
     synthetic "every case at once" fixture, deliberately far larger/more
@@ -1340,15 +1371,17 @@ a manually triggered, low-frequency action.
     free lunch, and this fixture's 77-turn unbounded baseline is itself an
     outlier next to the 15.7-turn population average, meaning a typical PR
     likely keeps a larger fraction of its findings at the same cap than this
-    stress test shows. 12 turns kept the best ratio (75% of findings for 25%
-    of the cost) even on this worst case; 8 stays the shipped default for the
-    common (much smaller) PR, per the population-level "half the turns, 94%
-    of the findings" measurement above.
+    stress test shows. This 276-file fixture's own scaled cap is the
+    ceiling, 24 — between the measured 12- and 8-turn points above, i.e.
+    still on the favourable part of the cost/recall curve, not past it.
   - Tests: `TestCodeWarningTurnCounterNudgesAtLimit`/
     `TestCodeWarningTurnCounterUnlimitedNeverNudges` (the counter in
-    isolation), `TestCodeWarningMaxTurnsEnvOverride` (the env parsing),
-    `TestCodeWarningReviewReturnsFindingsWhenTurnBudgetHit` (a truncated run
-    still returns its findings) — all in `code_warning_test.go`.
+    isolation), `TestCodeWarningMaxTurnsEnvOverride` (the env override wins,
+    its "unlimited" spellings, and its fallback to the scaled formula on an
+    unparsable value), `TestCodeWarningMaxTurnsForScope` (the formula itself:
+    0/1-file edge cases, the floor, a mid-scope value, the ceiling clamp, and
+    monotonicity), `TestCodeWarningReviewReturnsFindingsWhenTurnBudgetHit` (a
+    truncated run still returns its findings) — all in `code_warning_test.go`.
 - **A file already reviewed at its current content is skipped — no Opus call
   at all** (`modules/warnreviewed`, `data/warnreviewed.db`:
   `reviewed_files(repo, pr, file, hash, reviewed_at)`, same shape as

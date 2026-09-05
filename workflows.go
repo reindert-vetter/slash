@@ -2883,8 +2883,9 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		arg.Lang = m.LangFor(ctx, langpref.KindExplain)
 		// The turn budget (see codeWarningMaxTurns's own doc comment for why
 		// it's read here, inside the Activity, rather than in the workflow
-		// body).
-		arg.MaxTurns = codeWarningMaxTurns()
+		// body) — scaled with this run's own scope size, see
+		// codeWarningMaxTurnsForScope.
+		arg.MaxTurns = codeWarningMaxTurns(len(arg.Files))
 		findings, ok := runCodeWarningReview(ctx, m.claude, m.dataDir, arg)
 		// Record every file the model was actually asked to review as
 		// "reviewed at this hash" (modules/warnreviewed), so the next run can

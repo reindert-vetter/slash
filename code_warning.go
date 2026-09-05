@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/bits"
 	"os"
 	"path/filepath"
 	"sort"
@@ -120,40 +121,85 @@ type warningFinding struct {
 // circle, since these comments never carry an avatar URL).
 const warningAuthor = "AI-controle"
 
-// codeWarningDefaultMaxTurns is the turn budget applied to an agentic
-// code_warning run when SLASH_CODE_WARNING_MAX_TURNS is unset/invalid — see
-// codeWarningMaxTurns. Measured against 106 real runs (week
-// 2026-08-29..09-04, no turn limit existed yet): 15.7 turns/run and 1.70M
-// tokens/run on average, 96% of which is the accumulated prefix resent
-// unchanged on every turn (context grows ~3.5k tokens/turn, turn 1 ≈ 66k,
-// turn 30 ≈ 148k). Turn count does not track PR size (1 file already costs
-// 11.9 turns, 88 files costs 27; Pearson r = 0.16) — nothing was bounding it,
-// so the model simply kept exploring until it judged itself done. Of 406
-// findings sampled, 94% were already anchored to a file the model had
-// touched by the FIRST HALF of its own turns; the second half only
-// reshuffled the list in ~5% of runs while accounting for 58% of the tokens.
-// 8 sits close to that observed halfway point across the sampled runs — see
-// .claude/docs/workflows-analysis.md for the full write-up, including the
-// A/B findings-vs-turns comparison this default was picked from.
+// Turn-budget scaling constants for codeWarningMaxTurnsForScope. Measured
+// against 106 real, UNBOUNDED runs (week 2026-08-29..09-04 — no turn limit
+// existed yet, so this is what the model spent when left to decide for
+// itself), bucketed by review-scope file count:
 //
-// var, not const, purely for testability (same reasoning as
-// modules/claude/claude.go's contextTimeout/agenticTimeout).
-var codeWarningDefaultMaxTurns = 8
+//	scope files   n    mean scope   mean turns   ctx tokens/run
+//	1             24   1.0          11.9         1.07 M
+//	2-3           28   2.3          12.0         1.16 M
+//	4-8           31   5.2          18.1         1.93 M
+//	9-25          17   12.5         19.1         2.17 M
+//	>25            6   88.3         27.0         4.01 M
+//
+// Population mean 15.7 turns / 1.70 M tokens per run. Turns grow with scope,
+// but only weakly and sublinearly: Pearson r = 0.16 against the raw file
+// count, r = 0.34 against log(scope) — an 88-file run took barely over
+// double the turns a 1-file run took, not 88 times as many. A per-file
+// linear cap is therefore provably wrong (it would allow 276 turns on a
+// 276-file PR, where the model itself only used 27 on an 88-file one).
+// Separately, 94% of findings were already anchored to a file the model had
+// touched within the FIRST HALF of its own turns, while that second half
+// alone accounted for 58% of the tokens (context grows ~3.5k tokens/turn and
+// every turn resends the whole prefix) — so a generous cap is more expensive
+// than it looks, and there is little to gain past a modest ceiling.
+//
+// codeWarningMaxTurnsForScope therefore grows the cap logarithmically with
+// the file count (one "step" per doubling, via bits.Len — the integer
+// analogue of floor(log2(n))+1) between a floor and a ceiling:
+//
+//   - Floor 6: close to the mean-turns floor already observed for the
+//     smallest scopes (a 1-2 file PR), so a tiny PR still gets enough room to
+//     read the file, follow a caller, and answer.
+//   - Step 3 turns per doubling of file count: 1 file -> 9, 5 files -> 15,
+//     25 files -> 21 — each roughly matching the mean-turns column above for
+//     that scope bucket, without extrapolating linearly past it.
+//   - Ceiling 24: comfortably above every bucket mean up to >25 files (27
+//     turns unbounded) yet well under the 77 turns the single largest
+//     fixture (88 files) actually took unbounded — the point is to cut off
+//     the expensive long tail, not to match it. A >25-file scope (e.g. 276
+//     files) clamps at this ceiling rather than growing further, since the
+//     weak scope->turns correlation means more files does not reliably mean
+//     proportionally more to find.
+const (
+	codeWarningScopeFloor = 6
+	codeWarningScopeStep  = 3
+	codeWarningScopeCeil  = 24
+)
+
+// codeWarningMaxTurnsForScope is the pure formula behind the default turn
+// budget: codeWarningScopeFloor + codeWarningScopeStep * bits.Len(fileCount),
+// clamped to codeWarningScopeCeil. bits.Len(n) is 0 for n==0 and otherwise
+// floor(log2(n))+1, so the budget grows by one step per doubling of the
+// scope's file count — see the constants' own doc comment for the
+// measurement this is calibrated against.
+func codeWarningMaxTurnsForScope(fileCount int) int {
+	if fileCount < 0 {
+		fileCount = 0
+	}
+	n := codeWarningScopeFloor + codeWarningScopeStep*bits.Len(uint(fileCount))
+	if n > codeWarningScopeCeil {
+		return codeWarningScopeCeil
+	}
+	return n
+}
 
 // codeWarningMaxTurns resolves the turn budget for one code_warning run:
-// SLASH_CODE_WARNING_MAX_TURNS when it parses as a positive integer, "0" or
-// "unlimited" (case-insensitive) to explicitly disable the budget (used for
-// the "onbeperkt" measurement baseline), otherwise codeWarningDefaultMaxTurns
-// — including when the env var is set but unparsable, so a typo falls back
-// to a sane bound rather than silently meaning unlimited. Called from inside
-// the runAgenticReview Activity (workflows.go), never from the workflow body
-// itself: reading an environment variable is a side effect, and the
-// workflow body must stay a pure function of (input + history) — see
-// .claude/rules/workflow-determinism.md.
-func codeWarningMaxTurns() int {
+// SLASH_CODE_WARNING_MAX_TURNS when it parses as a positive integer (an
+// explicit override always wins), "0" or "unlimited" (case-insensitive) to
+// explicitly disable the budget (used for the "onbeperkt" measurement
+// baseline), otherwise codeWarningMaxTurnsForScope(fileCount) — including
+// when the env var is set but unparsable, so a typo falls back to the
+// scope-scaled default rather than silently meaning unlimited. Called from
+// inside the runAgenticReview Activity (workflows.go), never from the
+// workflow body itself: reading an environment variable is a side effect,
+// and the workflow body must stay a pure function of (input + history) —
+// see .claude/rules/workflow-determinism.md.
+func codeWarningMaxTurns(fileCount int) int {
 	s := strings.TrimSpace(os.Getenv("SLASH_CODE_WARNING_MAX_TURNS"))
 	if s == "" {
-		return codeWarningDefaultMaxTurns
+		return codeWarningMaxTurnsForScope(fileCount)
 	}
 	if s == "0" || strings.EqualFold(s, "unlimited") {
 		return 0
@@ -161,7 +207,7 @@ func codeWarningMaxTurns() int {
 	if n, err := strconv.Atoi(s); err == nil && n > 0 {
 		return n
 	}
-	return codeWarningDefaultMaxTurns
+	return codeWarningMaxTurnsForScope(fileCount)
 }
 
 // codeWarningStopNudge is the one steer message sent to a running review
@@ -258,8 +304,8 @@ func runCodeWarningReview(ctx context.Context, cl claude.Client, dataDir string,
 	// count codeWarningWorkflow logs) — see the turn-budget measurement in
 	// .claude/docs/workflows-analysis.md.
 	u := res.Usage
-	log.Printf("code_warning: pr %d review done — maxTurns=%d cliTurns=%d nudged=%v cost=$%.4f tokens(in=%d out=%d cacheRead=%d cacheCreate=%d)",
-		arg.PR, arg.MaxTurns, u.NumTurns, *nudged, u.TotalCostUSD, u.InputTokens, u.OutputTokens, u.CacheReadInputTokens, u.CacheCreationInputTokens)
+	log.Printf("code_warning: pr %d review done — scopeFiles=%d maxTurns=%d cliTurns=%d nudged=%v cost=$%.4f tokens(in=%d out=%d cacheRead=%d cacheCreate=%d)",
+		arg.PR, len(arg.Files), arg.MaxTurns, u.NumTurns, *nudged, u.TotalCostUSD, u.InputTokens, u.OutputTokens, u.CacheReadInputTokens, u.CacheCreationInputTokens)
 	findings := parseWarningFindings(res.Text)
 
 	// Hallucination guard: only trust a finding whose file is one we actually
