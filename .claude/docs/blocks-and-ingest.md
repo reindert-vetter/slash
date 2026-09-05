@@ -65,6 +65,31 @@ ancestor of head. Test: `TestMergeBaseSHAPinsTheBranchPoint`
 (`ingest_merge_base_test.go`), which asserts the phantom deletion is present in
 the two-dot diff and gone from the three-dot one.
 
+#### `commitExists` can say yes and the diff still fails: `fatal: bad object`
+
+Reported on plug-and-pay PRs 13535/13628, against a partial-clone checkout of
+`~/dev/plug-and-pay`: `ensureCommits`' `commitExists` (`git cat-file -e
+<sha>^{commit}`) found both SHAs reachable, yet the LATER `git diff`
+(`diffBetweenSHAs`) or `git diff --name-status` (`detectRenames`) still failed
+with `fatal: bad object <sha>`. Not reproduced live in this session — setting
+up a genuinely flaky partial clone on demand wasn't practical — so treat this
+as a defensive fix from code analysis, not a confirmed root cause. Most likely
+explanation: a partial clone's promisor remote resolves a missing object
+on-demand at the moment it's first read, so `commitExists`' own `cat-file -e`
+can trigger (and succeed at) exactly that lazy fetch — which only proves the
+object was reachable at that instant, not that it stays resolvable for the
+`git diff` moments later.
+
+Fix is defensive, not preventive: `diffBetweenSHAs`/`detectRenames`
+(`gh.go`) each retry once via `retryAfterRefetch` — an explicit
+`git fetch origin <sha>` for both base and head, the same per-SHA fallback
+`ensureCommits` already uses — whenever the underlying git command's error
+matches `isBadObjectErr` (`strings.Contains(err.Error(), "bad object")`). A
+genuinely missing/invalid SHA still fails the same way as before, just after
+one extra (equally failing) fetch attempt. Test:
+`TestIsBadObjectErr`/`TestDiffBetweenSHAsSurfacesErrorAfterRetryingAGenuinelyMissingObject`
+(`gh_bad_object_test.go`).
+
 ### Runs as the `ingest` workflow (write boundary)
 
 The blocks-table write and the git-worktree mutations happen inside a tembed

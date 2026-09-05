@@ -229,6 +229,41 @@ func commitExists(ctx context.Context, repo string, sha string) bool {
 	return err == nil
 }
 
+// isBadObjectErr recognizes git's "fatal: bad object <sha>" failure — the
+// symptom of a commit that `commitExists` (ensureCommits) found reachable but
+// that a LATER command (the actual diff) can't resolve after all. Observed on
+// plug-and-pay PRs 13535/13628 against a partial-clone checkout of
+// ~/dev/plug-and-pay: `git cat-file -e <sha>^{commit}` can succeed via the
+// promisor remote's on-demand object fetch, yet a second on-demand fetch
+// triggered moments later by `git diff`/`git diff --name-status` fails (flaky
+// network, a raced concurrent lazy-fetch, or similar) — so "the object is
+// reachable" was never a durable fact, just true at the moment it was
+// checked. Not proven live (this exact failure wasn't reproduced in this
+// session — a partial clone is hard to set up on demand — but this matches
+// the reported error text and the ensureCommits/diffBetweenSHAs call order
+// exactly).
+func isBadObjectErr(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "bad object")
+}
+
+// retryAfterRefetch re-fetches both SHAs by exact object id (the same
+// fallback ensureCommits already uses when commitExists first comes back
+// false) and retries the given git command once. Used by diffBetweenSHAs and
+// detectRenames as a defensive recovery from isBadObjectErr — see its doc
+// comment for why a commit that passed ensureCommits can still fail here.
+func retryAfterRefetch(ctx context.Context, repo, baseSHA, headSHA string, args []string) ([]byte, error) {
+	var fetchErr error
+	for _, sha := range []string{baseSHA, headSHA} {
+		if _, err := runGitFor(ctx, repo, "fetch", "origin", sha); err != nil {
+			fetchErr = err
+		}
+	}
+	if fetchErr != nil {
+		log.Printf("retryAfterRefetch: re-fetch failed, retrying diff anyway: %v", fetchErr)
+	}
+	return runGitFor(ctx, repo, args...)
+}
+
 // ensureWorktree creates (idempotently) a detached worktree at sha in dir, owned
 // by repo's clone.
 func ensureWorktree(ctx context.Context, repo, dir, sha string) error {
@@ -301,6 +336,9 @@ func diffBetweenSHAs(ctx context.Context, repo, baseSHA, headSHA string, files [
 	args := []string{"diff", "--no-color", "--find-renames", "--unified=0", baseSHA, headSHA, "--"}
 	args = append(args, files...)
 	out, err := runGitFor(ctx, repo, args...)
+	if isBadObjectErr(err) {
+		out, err = retryAfterRefetch(ctx, repo, baseSHA, headSHA, args)
+	}
 	if err != nil {
 		return "", err
 	}
@@ -315,7 +353,11 @@ func diffBetweenSHAs(ctx context.Context, repo, baseSHA, headSHA string, files [
 // (.claude/docs/blocks-and-ingest.md). Best-effort caller: on error the full
 // ingest just proceeds with no rename pairing.
 func detectRenames(ctx context.Context, repo, baseSHA, headSHA string) (map[string]string, error) {
-	out, err := runGitFor(ctx, repo, "diff", "--find-renames", "--name-status", baseSHA, headSHA)
+	args := []string{"diff", "--find-renames", "--name-status", baseSHA, headSHA}
+	out, err := runGitFor(ctx, repo, args...)
+	if isBadObjectErr(err) {
+		out, err = retryAfterRefetch(ctx, repo, baseSHA, headSHA, args)
+	}
 	if err != nil {
 		return nil, err
 	}
