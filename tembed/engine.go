@@ -277,11 +277,21 @@ func (e *Engine) SignalWorkflow(runID, signal string, payload any) error {
 	if rec.Status == StatusCompleted || rec.Status == StatusFailed {
 		return fmt.Errorf("tembed: run %s already %s", runID, rec.Status)
 	}
-	ev := Event{Seq: len(hist), Type: EventSignalReceived, Name: signal, Payload: pl, Time: e.now()}
+	// Round(0) strips the monotonic clock reading, so the in-memory event
+	// passed to advanceLoaded below is byte-identical to what a reload would
+	// parse back out of the store (RFC3339Nano is lossless for wall time).
+	ev := Event{Seq: len(hist), Type: EventSignalReceived, Name: signal, Payload: pl, Time: e.now().Round(0)}
 	if err := e.store.AppendEvent(runID, ev); err != nil {
 		return err
 	}
-	e.advance(runID)
+	// Reuse the history this function already loaded instead of a second full
+	// LoadRun inside advance: a long-lived tracker's history (the per-PR
+	// approve tracker on a large PR) runs into tens of MB of payloads, and
+	// loading it twice per signal doubled the dominant cost of every signal
+	// delivery (measured ~0.9s per LoadRun at ~6.5k events / 49MB). Safe
+	// because the run lock is held across both: nothing can have appended in
+	// between, so rec + hist + ev IS what LoadRun would return.
+	e.advanceLoaded(runID, rec, append(hist, ev), false)
 	return nil
 }
 
@@ -308,6 +318,15 @@ func (e *Engine) advanceMode(runID string, deferLow bool) (deferred bool) {
 		e.logf("tembed: advance load %s: %v", runID, err)
 		return
 	}
+	return e.advanceLoaded(runID, rec, hist, deferLow)
+}
+
+// advanceLoaded is advanceMode with the run's metadata and history already
+// loaded by the caller — which must hold the run lock and guarantee rec/hist
+// reflect the store's current state (SignalWorkflow appends its signal event
+// under that same lock and passes the extended history, saving a second full
+// LoadRun of a potentially huge tracker history).
+func (e *Engine) advanceLoaded(runID string, rec RunRecord, hist []Event, deferLow bool) (deferred bool) {
 	if rec.Status == StatusCompleted || rec.Status == StatusFailed {
 		return
 	}
