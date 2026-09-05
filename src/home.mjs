@@ -8018,9 +8018,10 @@ async function deleteCommentAndSelectRow() {
   const b = focusedBlock()
   const wasCommentIndexRow = isCommentIndexRowActive()
   const beforeIdx = state.selected
+  const beforeId = curBlock() && curBlock().id
   await deleteFocusedComment()
   if (wasCommentIndexRow) {
-    await afterCommentRowRemoved(beforeIdx)
+    await afterCommentRowRemoved(beforeIdx, beforeId)
     return
   }
   if (!c || !b) return
@@ -8232,8 +8233,9 @@ function commentCommandsFor() {
             run: async () => {
               const wasCommentIndexRow = isCommentIndexRowActive()
               const beforeIdx = state.selected
+              const beforeId = curBlock() && curBlock().id
               await resolveFocusedComment()
-              await afterResolveAction(wasCommentIndexRow, beforeIdx)
+              await afterResolveAction(wasCommentIndexRow, beforeIdx, beforeId)
             },
           },
     )
@@ -8322,8 +8324,9 @@ function claudeChatClearConfirmCommandsFor(warning) {
 async function runClearClaudeChat() {
   const wasCommentIndexRow = isCommentIndexRowActive()
   const beforeIdx = state.selected
+  const beforeId = curBlock() && curBlock().id
   const removed = await clearClaudeChat()
-  if (removed && wasCommentIndexRow) await afterCommentRowRemoved(beforeIdx)
+  if (removed && wasCommentIndexRow) await afterCommentRowRemoved(beforeIdx, beforeId)
 }
 
 // claudeChatCommandsFor — the root list for Enter on the Claude column (see
@@ -8587,8 +8590,9 @@ function prCommentCommandsFor() {
           if (!sel) return
           const wasCommentIndexRow = isCommentIndexRowActive()
           const beforeIdx = state.selected
+          const beforeId = curBlock() && curBlock().id
           await resolvePrCommentItem(sel)
-          await afterResolveAction(wasCommentIndexRow, beforeIdx)
+          await afterResolveAction(wasCommentIndexRow, beforeIdx, beforeId)
         },
       }
   // "Verwijder comment" — the same delete Signal the block-scoped menu has
@@ -8610,8 +8614,9 @@ function prCommentCommandsFor() {
       const sel = selectedComment()
       if (!sel) return
       const beforeIdx = state.selected
+      const beforeId = curBlock() && curBlock().id
       await deletePrCommentItem(sel)
-      await afterCommentRowRemoved(beforeIdx)
+      await afterCommentRowRemoved(beforeIdx, beforeId)
     },
   }
   // An AI finding (isAiComment) gets NO resolve/unresolve item at all — see
@@ -12580,10 +12585,24 @@ function afterApproveAction(approving, blockId, auto = false) {
 // the removed row"). "The next remaining row" is whatever now sits at the
 // removed row's OLD index, i.e. beforeIdx itself, so the scan must start
 // there (inclusive), not at beforeIdx + 1.
-function findNextUnresolvedCommentFrom(startIdx) {
+//
+// `skipId` (optional) is the stable id of the row the caller just resolved or
+// removed. A DELETED (or resolved block-anchored) row is gone from
+// state.blocks by the time this runs, so the inclusive start alone was
+// enough — but a resolved PR-WIDE row STAYS in the index (it merely folds
+// into the approved section), and whether it still counts as open here
+// depends on the refetched read-model having caught up with the resolve.
+// Skipping it by id keeps "go to the NEXT row" honest regardless of that
+// timing (the "snapshot by stable ID, never raw index" rule in
+// conventions.md). Regression this fixes: comment-index-items.spec.mjs's
+// "resolving moves the item into Toon N goedgekeurde blocks", silently
+// broken since the inclusive-start change (87a99cd) whenever the row's
+// status read back as still open.
+function findNextUnresolvedCommentFrom(startIdx, skipId) {
   for (let idx = startIdx; idx < state.blocks.length; idx++) {
     const candidate = state.blocks[idx]
     if (candidate.kind !== 'comment') continue
+    if (skipId != null && candidate.id === skipId) continue
     const { done, total } = blockApproveCount(candidate)
     if (done < total) return idx
   }
@@ -12638,8 +12657,8 @@ function isCommentIndexRowActive() {
 // this row) is UNAFFECTED — see each call site's own isCommentIndexRowActive
 // gate; afterApproveAction (the ordinary approve flow) never calls this at
 // all.
-async function afterCommentRowRemoved(startIdx) {
-  const idx = findNextUnresolvedCommentFrom(startIdx)
+async function afterCommentRowRemoved(startIdx, skipId) {
+  const idx = findNextUnresolvedCommentFrom(startIdx, skipId)
   if (idx != null) {
     state.selected = idx
     scrollSelectedIntoView()
@@ -12702,9 +12721,9 @@ async function afterCommentRowRemoved(startIdx) {
 // never drills into a diff — instead of unexpectedly dropping them into a
 // block's diff/drilled column just because the next unapproved unit happens
 // to live inside one.
-async function afterResolveAction(wasCommentIndexRow, beforeIdx) {
+async function afterResolveAction(wasCommentIndexRow, beforeIdx, beforeId) {
   if (wasCommentIndexRow) {
-    await afterCommentRowRemoved(beforeIdx)
+    await afterCommentRowRemoved(beforeIdx, beforeId)
     return
   }
   const keepList = state.mode !== 'diff'

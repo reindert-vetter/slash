@@ -1206,6 +1206,19 @@ function row(state, b, i) {
         // summary) is still showing next to the shifted-right index — see
         // rowFocused's own comment above.
         state.blockIndexEntered = true
+        // …and the KEYBOARD follows that choice, exactly like enterDiff's
+        // mouse path (home.mjs): while stop 1 still owned the keyboard
+        // (state.showDescription), every Enter/→/↓ after this click kept
+        // acting on the PR-description column — Enter on a just-clicked
+        // comment-index row opened the PR-wide menu instead of the row's own
+        // "Beantwoorden"/"Resolve comment" menu (found live: fresh open →
+        // click a "Start" row → Enter). Hand ownership to the index but keep
+        // the description COLUMN visible via the same pin the diff click
+        // uses — visibility, not ownership (state.descriptionPinned).
+        if (state.showDescription) {
+          state.showDescription = false
+          state.descriptionPinned = true
+        }
       }}"
       @contextmenu="${(e) => {
         // Right-click lands the cursor here exactly like the @click above,

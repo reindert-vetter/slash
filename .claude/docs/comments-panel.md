@@ -1600,6 +1600,21 @@ Deliberately **not** the same action (reversed on explicit request, so → mirro
 (`curBlock().kind === 'comment' ? curBlock().comment : null`) gates a branch in
 `onKeydown` checked **before** the generic block-palette Enter handling.
 
+That branch is gated on `!state.showDescription` (a row selected earlier, then
+← back to stop 1 → Enter must open the PR-wide menu, not this one). A **mouse
+click** on the row therefore also hands the keyboard over: BlockList's row
+`@click` clears `state.showDescription` (keeping the column visible via
+`state.descriptionPinned`, the same pin `enterDiff`'s mouse path uses) — before
+that, a fresh open → click a "Start" row → Enter opened the PR-wide menu while
+the row read as selected, leaving these comment actions keyboard-unreachable
+until a stray →. Test: `tests/comment-row-click-owns-keyboard.spec.mjs`.
+The follow-up walk after resolving/deleting FROM such a row
+(`afterCommentRowRemoved` → `findNextUnresolvedCommentFrom`) skips the acted-on
+row by its stable **id**, not only by starting at its old index: a resolved
+PR-wide row stays in the index (it folds into the approved section), and
+whether it still counts as open at that instant depends on the refetched
+read-model — see the skipId doc comment in `home.mjs`.
+
 **`Enter`** (`ms.mode = 'prComment'`, `prCommentCommandsFor`, `home.mjs`) opens:
 **"Sluit menu"** (pinned, per `withClose`) then **"Beantwoorden"** and
 **"Resolve comment"** in an order that depends on `isOwnComment(c)` — for the
