@@ -336,6 +336,8 @@ export const EN = {
   'Alles gelezen.': 'All caught up.',
   'Jira notificaties': 'Jira notifications',
   'Geen notificaties.': 'No notifications.',
+  'Alles gelezen maken': 'Mark all as read',
+  'Markeer als gelezen': 'Mark as read',
   'Werktrees voorbereiden…': 'Preparing worktrees…',
   'Blocks scannen…': 'Scanning blocks…',
   'Relaties opbouwen…': 'Building relations…',

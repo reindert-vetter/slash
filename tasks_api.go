@@ -1287,22 +1287,26 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// The jira_notify signal carries the reviewer's own action on the Jira
-		// notification feed: "read" marks one notification read (the only write
-		// this page does), anything else is a plain refresh. Only these two
-		// kinds are forwarded, and a "read" without an id is rejected — the
-		// same "whatever the body says, only what the UI may do is passed on"
-		// restriction the pr_status branch above applies.
+		// notification feed: "read" marks one notification read (an open, or
+		// an explicit per-row tick), "read_all" marks every unread row read in
+		// one go — the only writes this page does — anything else is a plain
+		// refresh. Only these three kinds are forwarded, and a "read" without
+		// an id is rejected — the same "whatever the body says, only what the
+		// UI may do is passed on" restriction the pr_status branch above
+		// applies.
 		if parts[2] == SignalJiraNotify {
 			var body JiraNotifySignal
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				http.Error(w, "invalid jira signal", http.StatusBadRequest)
 				return
 			}
-			if body.Kind != "read" {
-				body = JiraNotifySignal{Kind: "refresh"}
-			} else if strings.TrimSpace(body.ID) == "" {
+			if body.Kind == "read" && strings.TrimSpace(body.ID) == "" {
 				http.Error(w, "invalid jira signal", http.StatusBadRequest)
 				return
+			} else if body.Kind == "read_all" {
+				body = JiraNotifySignal{Kind: "read_all"}
+			} else if body.Kind != "read" {
+				body = JiraNotifySignal{Kind: "refresh"}
 			}
 			if err := s.tasks.engine.SignalWorkflow(runID, SignalJiraNotify, body); err != nil {
 				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})

@@ -131,6 +131,39 @@ test.describe('PR overview — Jira bell', () => {
     await expect(row.locator('img[src="https://example.atlassian.net/bug.png"]')).toBeVisible()
   })
 
+  test('an explicit per-row tick marks one notification read without opening it, and the bulk button marks the rest', async ({ page, context }) => {
+    const items = [
+      { id: '1', at: new Date().toISOString(), title: 'One', issueKey: 'AB-1', actor: '', avatarUrl: '', url: 'https://example.atlassian.net/browse/AB-1', unread: true },
+      { id: '2', at: new Date().toISOString(), title: 'Two', issueKey: 'AB-2', actor: '', avatarUrl: '', url: 'https://example.atlassian.net/browse/AB-2', unread: true },
+    ]
+    await stubNotifications(page, items)
+    await page.goto('/pr-overview')
+    await appReady(page)
+
+    await page.locator('[data-testid="jira-bell-button"]').click()
+    const panel = page.locator('[data-testid="jira-bell-panel"]')
+    await expect(panel).toContainText('2 ongelezen')
+
+    // Ticking the first row's own "mark as read" button must not navigate —
+    // the row is a target="_blank" <a>, so a real navigation would open a
+    // second tab.
+    const pagesBefore = context.pages().length
+    await panel.locator('[data-jira-id="1"] [data-testid="jira-mark-read"]').click()
+    await expect(panel).toContainText('1 ongelezen')
+    expect(context.pages().length).toBe(pagesBefore)
+    // "Alleen ongelezen" is on by default, so the just-ticked row (now read)
+    // drops out of the list entirely; only the still-unread row remains.
+    await expect(panel.locator('[data-testid="jira-row"]')).toHaveCount(1)
+    await expect(panel.locator('[data-jira-id="1"]')).toHaveCount(0)
+
+    // "Alles gelezen maken" clears the rest in one go.
+    const bulk = panel.locator('[data-testid="jira-mark-all-read"]')
+    await expect(bulk).toBeEnabled()
+    await bulk.click()
+    await expect(panel).toContainText('0 ongelezen')
+    await expect(bulk).toBeDisabled()
+  })
+
   test('Escape closes the dropdown', async ({ page }) => {
     await stubNotifications(page, [
       { id: '1', at: new Date().toISOString(), title: 'X', issueKey: 'AB-1', actor: '', avatarUrl: '', url: 'https://example.atlassian.net/browse/AB-1', unread: true },

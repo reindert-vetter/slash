@@ -46,6 +46,44 @@ func TestMarkReadSurvivesTheNextRefresh(t *testing.T) {
 	}
 }
 
+// TestMarkAllReadMarksEveryUnreadRow pins the "Alles gelezen maken" bulk
+// action: every row still unread here (read_at == '') gets the given
+// timestamp, and a row already marked read earlier keeps its ORIGINAL
+// read_at rather than being overwritten — the same "don't reset an earlier
+// read_at" guarantee MarkRead already gives per row, just applied in bulk.
+func TestMarkAllReadMarksEveryUnreadRow(t *testing.T) {
+	m := openTest(t)
+	ctx := context.Background()
+	if err := m.Upsert(ctx, []Item{
+		{ID: "n1", At: "2026-09-03T10:00:00Z", URL: "https://x/browse/A-1", Unread: true},
+		{ID: "n2", At: "2026-09-03T09:00:00Z", URL: "https://x/browse/A-2", Unread: true},
+	}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if err := m.MarkRead(ctx, "n2", "2026-09-03T09:30:00Z"); err != nil {
+		t.Fatalf("mark read n2: %v", err)
+	}
+	if err := m.MarkAllRead(ctx, "2026-09-03T12:00:00Z"); err != nil {
+		t.Fatalf("mark all read: %v", err)
+	}
+	list, err := m.List(ctx, 10)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	for _, it := range list {
+		if it.Unread {
+			t.Errorf("id=%s still reports unread after MarkAllRead", it.ID)
+		}
+	}
+	var readAtN2 string
+	if err := m.db.QueryRowContext(ctx, `SELECT read_at FROM jira_notifications WHERE id = ?`, "n2").Scan(&readAtN2); err != nil {
+		t.Fatalf("query n2 read_at: %v", err)
+	}
+	if readAtN2 != "2026-09-03T09:30:00Z" {
+		t.Errorf("n2's earlier read_at was overwritten: got %q", readAtN2)
+	}
+}
+
 // Retention: anything older than the cutoff goes, everything newer stays.
 func TestPurgeDropsOnlyOldRows(t *testing.T) {
 	m := openTest(t)

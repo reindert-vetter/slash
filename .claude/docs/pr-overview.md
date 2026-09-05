@@ -92,6 +92,32 @@ the ONLY place this feed is shown) moved into the bell's own dropdown.
   **in Jira** — this app does not write into an undocumented endpoint on the
   reviewer's behalf, which is exactly why the read-model keeps its own
   `read_at` (see `modules/jiranotify`).
+- **Two more explicit ways to mark read, on top of opening a row** (reviewer
+  request: "ik wil ook alles op gelezen kunnen zetten in 1 keer, en per
+  stuk"):
+  - **Per row** (`jiraMarkReadButton`, `data-testid=jira-mark-read`): a small
+    tick next to the unread dot, shown only while the row is unread. It sits
+    inside the row's own `<a target="_blank">`, so its handler calls
+    `e.preventDefault()` (no new window) and `e.stopPropagation()` before
+    calling the same `markJiraRead(n)` the row's own click uses — same
+    nested-`@click` ordering rule as elsewhere
+    (`.claude/rules/arrowjs-pitfalls.md`).
+  - **All at once** (`jiraMarkAllReadButton`, `data-testid=jira-mark-all-read`,
+    next to `jiraUnreadToggle` in the panel header): `markAllJiraRead()` signals
+    `{"kind":"read_all"}` (no id) instead of `{"kind":"read","id":…}` — same
+    Signal name, same tracker, same optimistic-update shape. `disabled` (the
+    plain attribute with a function binding) once `jiraUnreadCount() === 0`.
+    Both `markJiraRead`/`markAllJiraRead` share one `ensureJiraRunId()` helper
+    for starting/reusing the tracker.
+  - **Backend**: `JiraNotifySignal.Kind` gained `"read_all"`
+    (`jira_notifications.go`); `jiraInboxWorkflow` runs a third Activity,
+    `markAllJiraNotificationsRead`, calling the new
+    `jiranotify.Module.MarkAllRead(ctx, at)` — `UPDATE … SET read_at = ?
+    WHERE read_at = ''`, so a row already marked read earlier (a different
+    `read_at`) is never overwritten by a later bulk click. No new endpoint:
+    the existing generic `.../signals/jira_notify` forwarder
+    (`tasks_api.go`) just allow-lists this third kind alongside `"read"` and
+    the `"refresh"` fallback.
 - **The dropdown is its own small state machine**, deliberately NOT folded
   into the row-popover mechanism (`ui.openPopover`, which also resets
   unrelated row-popover state on close): `state.jiraBellOpen`, closed by an

@@ -2040,22 +2040,33 @@ function jiraUnreadCount() {
   return state.jira.filter((n) => n.unread).length
 }
 
-// markJiraRead is the ONE write this page does, and it goes the sanctioned
-// way: start (or reuse) the jira_inbox Execution, then Signal it — the
-// tracker's own Activity is what touches the read-model
+// ensureJiraRunId starts (or reuses) the single jira_inbox Execution and
+// returns its Run ID — the write target every jira_notify Signal needs.
+// Shared by markJiraRead and markAllJiraRead so there's only one place that
+// knows how to bootstrap the tracker.
+async function ensureJiraRunId() {
+  let runId = state.jiraRunId
+  if (!runId) {
+    const started = await fetch('/api/workflows/jira_inbox', { method: 'POST' })
+    const body = await started.json()
+    runId = (body && body.runId) || ''
+    state.jiraRunId = runId
+  }
+  return runId
+}
+
+// markJiraRead is one of the two writes this page does, and it goes the
+// sanctioned way: start (or reuse) the jira_inbox Execution, then Signal it —
+// the tracker's own Activity is what touches the read-model
 // (.claude/rules/workflows-write-boundary.md). The row is updated optimistically
-// so the filter reacts immediately; the next poll confirms it.
+// so the filter reacts immediately; the next poll confirms it. Two callers:
+// opening the row (jiraRow's own @click) and the explicit per-row tick
+// (jiraMarkReadButton) — both just call this with the same notification.
 async function markJiraRead(n) {
   if (!n || !n.unread) return
   state.jira = state.jira.map((it) => (it.id === n.id ? { ...it, unread: false } : it))
   try {
-    let runId = state.jiraRunId
-    if (!runId) {
-      const started = await fetch('/api/workflows/jira_inbox', { method: 'POST' })
-      const body = await started.json()
-      runId = (body && body.runId) || ''
-      state.jiraRunId = runId
-    }
+    const runId = await ensureJiraRunId()
     if (!runId) return
     await fetch('/api/workflows/' + encodeURIComponent(runId) + '/signals/jira_notify', {
       method: 'POST',
@@ -2064,6 +2075,25 @@ async function markJiraRead(n) {
     })
   } catch (err) {
     console.error('mark jira notification read failed:', err)
+  }
+}
+
+// markAllJiraRead is the "Alles gelezen maken" bulk action (jiraMarkAllReadButton)
+// — the other write this page does, same shape as markJiraRead but for every
+// currently unread row at once via the "read_all" signal kind.
+async function markAllJiraRead() {
+  if (!jiraUnreadCount()) return
+  state.jira = state.jira.map((it) => (it.unread ? { ...it, unread: false } : it))
+  try {
+    const runId = await ensureJiraRunId()
+    if (!runId) return
+    await fetch('/api/workflows/' + encodeURIComponent(runId) + '/signals/jira_notify', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'read_all' }),
+    })
+  } catch (err) {
+    console.error('mark all jira notifications read failed:', err)
   }
 }
 
@@ -2078,6 +2108,32 @@ function jiraUnreadMark(n) {
     title="${t('Ongelezen')}"
     class="inline-block h-2 w-2 shrink-0 rounded-full bg-indigo-500 dark:bg-indigo-400"
   ></span>`
+}
+
+// jiraMarkReadButton — the explicit "per stuk" action (Reindert: "ik wil ook
+// alles op gelezen kunnen zetten in 1 keer, en per stuk"): a small tick next
+// to the unread dot that marks THIS notification read without opening it, a
+// sibling of the existing "opening the row marks it read" behaviour. It sits
+// inside the row's own <a>, so its handler must stop the click from also
+// navigating: e.preventDefault() (no new window) and e.stopPropagation()
+// first, per the nested-@click ordering rule in
+// .claude/rules/arrowjs-pitfalls.md, before calling markJiraRead. Only
+// rendered while the notification is still unread — once read there is
+// nothing left to tick.
+function jiraMarkReadButton(n) {
+  return html`<button
+    type="button"
+    data-testid="jira-mark-read"
+    title="${t('Markeer als gelezen')}"
+    class="rounded-md p-0.5 text-slate-400 hover:bg-slate-100 hover:text-indigo-600 dark:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-indigo-400"
+    @click="${(e) => {
+      e.preventDefault()
+      e.stopPropagation()
+      markJiraRead(n)
+    }}"
+  >
+    ${icon('check', 'h-3.5 w-3.5')}
+  </button>`
 }
 
 // avatarHTML returns an arrow.js TEMPLATE, not an HTML string — so it goes in
@@ -2162,6 +2218,7 @@ function jiraRow(n) {
         <div class="contents">${() => preview}</div>
       </div>
       <div class="flex shrink-0 items-center gap-2 self-start pt-0.5">
+        <div class="contents">${() => (n.unread ? jiraMarkReadButton(n) : '')}</div>
         ${() => jiraUnreadMark(n)}
         ${chevronFilled('h-4 w-4 text-slate-400 dark:text-zinc-600 group-hover:text-slate-600 dark:group-hover:text-zinc-300')}
       </div>
@@ -2223,6 +2280,25 @@ function jiraBellDot() {
   ></span>`
 }
 
+// jiraMarkAllReadButton — the "in 1 keer" bulk action (Reindert: "ik wil ook
+// alles op gelezen kunnen zetten in 1 keer, en per stuk"), a sibling of
+// jiraMarkReadButton's single-row tick. Sits next to jiraUnreadToggle in the
+// panel header. `disabled` is the plain attribute with a function binding
+// (not `?disabled=`, which does not toggle a real boolean attribute in this
+// vendored arrow.js build — see .claude/rules/arrowjs-pitfalls.md), so there
+// is nothing to click once every notification is already read.
+function jiraMarkAllReadButton() {
+  return html`<button
+    type="button"
+    data-testid="jira-mark-all-read"
+    class="ml-auto shrink-0 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800"
+    disabled="${() => jiraUnreadCount() === 0}"
+    @click="${() => markAllJiraRead()}"
+  >
+    ${t('Alles gelezen maken')}
+  </button>`
+}
+
 // jiraBellPanel — the dropdown, styled after Jira's own notification panel:
 // a title, unread count, "Alleen ongelezen" toggle, then a scrollable row
 // list (most-recent-first — state.jira is already ordered that way by the
@@ -2245,6 +2321,7 @@ function jiraBellPanel() {
           >${() => jiraUnreadCount() + ' ' + t('ongelezen')}</span
         >
         ${jiraUnreadToggle()}
+        ${jiraMarkAllReadButton()}
       </div>
       <div class="max-h-96 overflow-y-auto">
         ${() =>

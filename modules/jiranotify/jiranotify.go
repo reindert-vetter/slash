@@ -153,6 +153,20 @@ func (m *Module) MarkRead(ctx context.Context, id, at string) error {
 	return err
 }
 
+// MarkAllRead marks every currently-unread-in-this-app row read at once — the
+// bulk "Alles gelezen maken" action, a sibling of MarkRead's per-row action.
+// Deliberately WHERE read_at = '' (not "every row"), so a re-run (workflow
+// replay, or a second bulk click) never overwrites an earlier read_at with a
+// later one. WRITE — workflow-driven only.
+func (m *Module) MarkAllRead(ctx context.Context, at string) error {
+	if at == "" {
+		at = time.Now().UTC().Format(time.RFC3339)
+	}
+	_, err := m.db.ExecContext(ctx,
+		`UPDATE jira_notifications SET read_at = ? WHERE read_at = ''`, at)
+	return err
+}
+
 // List returns the newest limit notifications, unread ones included. READ —
 // safe for the UI.
 func (m *Module) List(ctx context.Context, limit int) ([]Item, error) {

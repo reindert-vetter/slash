@@ -19,11 +19,12 @@ import (
 // trackers.
 //
 // Shape: ONE long-lived Execution for the whole process (the feed is per-USER,
-// not per-repo — unlike pr_inbox), waiting on a single Signal in a loop. Two
+// not per-repo — unlike pr_inbox), waiting on a single Signal in a loop. Three
 // things travel through that one Signal, distinguished by its payload's `kind`:
 //
 //	{"kind":"refresh"}          — the 5-minute poller and the UI on load
-//	{"kind":"read","id":"…"}    — the reviewer opened a notification here
+//	{"kind":"read","id":"…"}    — the reviewer opened (or explicitly ticked) one notification
+//	{"kind":"read_all"}         — the reviewer's "Alles gelezen maken" bulk action
 //
 // One Signal name rather than two because tembed's WaitSignal takes exactly one
 // name; branching on a payload that comes straight out of the recorded history
@@ -57,7 +58,8 @@ const jiraNotifyRetention = 30 * 24 * time.Hour
 type JiraNotifyInput struct{}
 
 // JiraNotifySignal is the one Signal payload the tracker reacts to. Kind is
-// "refresh" (default, also for an empty payload) or "read".
+// "refresh" (default, also for an empty payload), "read" (one notification,
+// ID required) or "read_all" (every currently unread row, no ID).
 type JiraNotifySignal struct {
 	Kind string `json:"kind"`
 	ID   string `json:"id"`
@@ -98,6 +100,12 @@ func jiraInboxWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			}
 			continue
 		}
+		if sig.Kind == "read_all" {
+			if err := w.ExecuteActivity("markAllJiraNotificationsRead", sig, nil); err != nil {
+				return nil, fmt.Errorf("mark all jira notifications read: %w", err)
+			}
+			continue
+		}
 		var res jiraNotifyResult
 		if err := w.ExecuteActivity("refreshJiraNotifications", JiraNotifyInput{}, &res); err != nil {
 			return nil, fmt.Errorf("refresh jira notifications: %w", err)
@@ -105,7 +113,7 @@ func jiraInboxWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	}
 }
 
-// registerJiraNotifyActivities wires the two Activities. Called from
+// registerJiraNotifyActivities wires the three Activities. Called from
 // registerWorkflows in workflows.go.
 func (m *TaskManager) registerJiraNotifyActivities(engine *tembed.Engine) {
 	// The jiranotify module is the only writer of this read-model.
@@ -121,6 +129,12 @@ func (m *TaskManager) registerJiraNotifyActivities(engine *tembed.Engine) {
 			return nil, nil
 		}
 		return nil, m.jiranotify.MarkRead(ctx, sig.ID, time.Now().UTC().Format(time.RFC3339))
+	})
+	engine.RegisterActivity("markAllJiraNotificationsRead", func(ctx context.Context, in []byte) ([]byte, error) {
+		if m.jiranotify == nil {
+			return nil, nil
+		}
+		return nil, m.jiranotify.MarkAllRead(ctx, time.Now().UTC().Format(time.RFC3339))
 	})
 }
 
