@@ -19,9 +19,9 @@ owning keyed node is gone. LOCAL PATCH 1/2/2b (below) address this in the vendor
 file; the "orphan bindings" and "bare toggling expression" entries below are the
 app-level consequences of the same gap.
 
-## LOCAL PATCH 1/2/2b/4/5/6 in `src/vendor/arrow.js` — reapply on every upgrade
+## LOCAL PATCH 1/2/2b/4/5/6/7 in `src/vendor/arrow.js` — reapply on every upgrade
 
-Six deliberate changes, each marked with a `LOCAL PATCH` comment in the
+Seven deliberate changes, each marked with a `LOCAL PATCH` comment in the
 header (LOCAL PATCH 3, the separate memory-leak fix, is documented on its own
 further down in this file — different failure mode, see "Arrow's registries,
 before and after"). **On an arrow.js upgrade all six must be reapplied**; the
@@ -155,6 +155,31 @@ restore instructions.
   guard only stops the stale state from reaching a DOM API that throws on
   it (LOCAL PATCH 1's "skip stale state instead of crashing" philosophy) —
   it does not by itself fix whatever earlier event left `l`/`a` parentless.
+- **LOCAL PATCH 7** — a cycle guard in `L`, the chunk DOM mover (walks
+  `ref.f .. ref.l` via `nextSibling`, `insertBefore`-ing each node into the
+  target). With CORRUPTED chunk boundaries (`f`/`l` in different parents, or
+  reversed within one), inserting each walked node can rewire the sibling
+  chain into a CIRCLE, and upstream's walk then never exits: a genuine,
+  permanent, 100%-CPU **main-thread freeze** — no throw, so LOCAL PATCH 5
+  never sees it, no error anywhere, Chrome's "Page Unresponsive" dialog is
+  the only symptom. Reproduced 5/5 against the 601-block fixture PR
+  (`reindert-vetter/slash-test` #2): a plain approve-and-continue **Space
+  sequence froze the tab hard at press ~190-203**, always on the same state
+  (a `test_class` row with a two-level drill open, Space approving the last
+  drilled unit — `applyNextUnapproved` peels `state.drill` while the block
+  column swaps its `block-collapsed` rail in the same flush). Ten
+  `Debugger.pause` samples during the freeze all sat in this exact loop
+  (`L ← He ← qt ← Le`, the unmount-queue drain). Boundary-validation probes
+  showed every STASH still valid — the refs get crossed while the chunk sits
+  in the per-template reuse pool, i.e. two administrations sharing one
+  chunk's DOM; the underlying corruption is NOT fixed by this patch (same
+  status as PATCH 6's stale `l`/`a`). The guard: past 1024 iterations (no
+  legitimate chunk has that many TOP-LEVEL nodes) start tracking visited
+  nodes in a Set and abort with one `console.error` on the first repeat —
+  hot path allocates nothing. Verified live: the previously-freezing Space
+  sequence continues normally past the abort (4 aborts over 650 presses,
+  zero freezes). Full evidence chain and repro recipe: "The Space-sequence
+  freeze" in `.claude/docs/frontend-memory.md`.
 
 ## Never give two entries of one keyed list the same `.key()`
 

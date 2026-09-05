@@ -783,3 +783,87 @@ regression suite (`tests/step-preview-stability.spec.mjs`,
 `tests/index-row-key-collision.spec.mjs`, `tests/related-nested-chip.spec.mjs`,
 `tests/claude-other-tasks-hidden.spec.mjs` — all still pass unchanged with the
 guard in place, confirming it doesn't alter any exercised behaviour).
+
+## The Space-sequence freeze: `L`'s boundary-cycle walk — guard landed (LOCAL PATCH 7)
+
+The cousin of LOCAL PATCH 6's stale-boundary throws, found during the
+navigation-latency campaign against `reindert-vetter/slash-test` **PR #2**
+(601 blocks, 3770 approvable units, 276 files) — and, unlike PATCH 6's class,
+**reproduced deterministically, 5 out of 5 runs**. Very likely the same bug
+the reviewer hits live regularly ("het kan zijn dat het vastliep in de
+browser ... dat heb ik live ook heel vaak").
+
+**Symptom:** a plain approve-and-continue **Space sequence** (synthetic
+keydowns, one per settled predicate, ~15ms gap) froze the tab **hard** at
+press ~190-203, every run, always on the same navigation state:
+`?sel=testclass:tests/Feature/CartServiceTest.php::CartServiceTest&mode=diff&
+tcol=1&chg=1&drill=…CartService::__construct>…PricingCalculator::__construct&
+dcur=group:0>group:0&tmethod=…` — i.e. Space approving the last unit of a
+two-level drilled subtree under a test-class method, the moment
+`applyNextUnapproved` peels `state.drill` back while the block column swaps
+between its cards and its `block-collapsed` rail in the same flush. "Hard"
+means: renderer at 100% CPU forever, `page.evaluate(() => 1 + 1)` never
+returns, no `pageerror`, no `console.error` — LOCAL PATCH 5 catches throws,
+but this is not a throw.
+
+**Evidence chain (in scratchpad harnesses, deliberately not committed — the
+recipe below rebuilds them):**
+
+1. A native `sample` of the frozen renderer: main thread 100% busy in JIT
+   frames. Ten CDP `Debugger.pause` interrupts during the freeze: **all ten**
+   landed on the identical 4-frame stack `L ← He ← qt ← Le` — the
+   unmount-queue drain (`Le`) stashing a chunk for reuse (`He`), whose DOM
+   move (`L`) never terminates.
+2. Counter probes ruled out the queue itself: neither an `Le` re-queue chain
+   (>400 chained drains) nor a `qt` call storm (>150k calls) ever fired —
+   the loop is **inside one `L` call**.
+3. A cycle detector inside `L` fired and captured the state: the chunk's
+   `ref.f` and `ref.l` both detached text nodes, in **different parents**
+   (or reversed within one parent at the first corruption, caught via a
+   reachability pre-walk) — so the `f → nextSibling → … → l` walk never
+   finds `l`, and because each visited node is `insertBefore`'d into the
+   target as it goes, the sibling chain rewires into a **circle**.
+4. The corrupted chunk was identified via its template/key: the
+   **`block-collapsed` rail** (`railButtonHTML`, `collapsedRail.mjs` — the
+   same template shape as the `drill-collapsed` rails, so they share one
+   per-template reuse pool bucket).
+5. A validation probe at STASH time (`He` entry) never fired across a full
+   run: every chunk enters the reuse pool with **valid** boundaries. The
+   refs get crossed **while the chunk sits in the pool** — i.e. its DOM is
+   also still referenced/moved by a second administration (a mounted
+   template), the "two administrations fight over the same chunks" class
+   already described under "Never key a template whose entire body is one
+   toggling expression" in `.claude/rules/arrowjs-pitfalls.md`. The first
+   corrupt `L` call's stack ran through the keyed reconciler's
+   disjoint-keys fast path adopting pooled chunks
+   (`Vt ← s(rt effect) ← Ve-binding ← i ← _ ← y ← template ← je ← L`).
+
+**What landed: LOCAL PATCH 7** (`src/vendor/arrow.js`) — `L` counts its
+iterations; past 1024 it starts tracking visited nodes in a `Set` and aborts
+with one `console.error("arrow: chunk boundary cycle detected, move
+aborted")` on the first repeat. Hot path: two integer ops, zero allocation.
+Verified live against the same fixture: the identical Space sequence ran
+**650+ presses straight through the old freeze point**, with 4 bounded
+aborts logged and navigation continuing normally after each — the
+corrupted rail is rebuilt by the next re-render. The `console.error` is
+deliberate: debug mode's console hook (`src/debugLog.mjs`) writes it to
+`data/debug-log.jsonl`, so any live occurrence is now diagnosable instead
+of being an unexplained dead tab.
+
+**NOT fixed:** the underlying double-administration that corrupts the pooled
+chunk's boundaries — same open status as PATCH 6's parentless `l`/`a`. If
+that root cause is ever taken on, start from evidence point 5 above (stash
+always valid, corruption in the pool) and the disposal-ordering machinery
+PATCH 2/2b/4 already touch. And check `data/debug-log.jsonl` for the
+`chunk boundary cycle` line first — its frequency in real sessions tells
+whether the corruption is common (masked) or rare.
+
+**Repro recipe:** isolated server on the PR #2 fixture datadir, fresh page,
+`?sel=` at block 0, `→` into diff mode, then dispatch Space via
+`document.body.dispatchEvent(new KeyboardEvent('keydown', {key:' ',
+bubbles:true}))` in a loop that waits per press for a DOM-signature change
+(selected index row + `[data-change-active]` anchors + `location.search`)
+with a 1.5s stuck-timeout and an `ArrowDown` recovery press on timeout.
+Freeze (before the patch) lands within ~200 presses. Detect it from outside
+the page: `Promise.race([page.evaluate(...), timeout])` — a frozen page
+times out even on `1+1`.
