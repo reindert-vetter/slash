@@ -276,6 +276,15 @@ check whether the PR is merged/closed and stop. The poller wakes on the fast
 tick but gates the actual GitHub calls on the desired cadence, so a heartbeat
 mid-idle switches back to fast immediately.
 
+**Every poller runs on the server-lifetime context (`SetRuntime`), never on a
+request context.** `StartCodeComment` used to hand its own `ctx` — the HTTP
+request context when called from `handleTaskCodeComment` — to `go m.poll(...)`,
+which cancelled the poller at its first tick: a GitHub reply to an app-placed
+comment was silently never imported until a restart's `ResumePolling` picked
+the thread up again (found live against the slash-test fixture; the imported
+threads never showed it because `importPRComments` runs under `m.baseCtx`).
+Regression test: `TestStartCodeCommentPollerSurvivesRequestContext`.
+
 ## Importing existing GitHub comments (living threads)
 
 Comments placed **outside the app** (or before ingest) are pulled in as **full,

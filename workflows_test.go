@@ -167,6 +167,40 @@ func TestTaskCodeCommentFlow(t *testing.T) {
 	}
 }
 
+// The reply poller a StartCodeComment launches must survive its caller: the
+// real caller is handleTaskCodeComment, whose request context is cancelled the
+// moment the response is written. Regression test for the poller being started
+// on that request context — it then exited at its first tick, so a GitHub
+// reply to an app-placed comment was never imported until a server restart's
+// ResumePolling happened to pick the thread up again. The poller must run on
+// the server-lifetime context (SetRuntime) instead.
+func TestStartCodeCommentPollerSurvivesRequestContext(t *testing.T) {
+	m, gh, cs := newTestManager(t)
+	// The server-lifetime context, as newTasks wires it.
+	baseCtx, baseCancel := context.WithCancel(context.Background())
+	defer baseCancel()
+	m.SetRuntime(baseCtx, true)
+
+	// The "HTTP request": cancelled immediately after StartCodeComment returns,
+	// exactly like a real handler's r.Context().
+	reqCtx, reqCancel := context.WithCancel(context.Background())
+	runID, err := m.StartCodeComment(reqCtx, CodeCommentInput{
+		PR: 42, File: "src/Order.php", Line: 10, Author: "reindert",
+		Body: "poller lifetime check",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reqCancel()
+
+	gh.EnqueueReply(github.Reply{ID: 601, Author: "colleague", Body: "still here"})
+	waitFor(t, func() bool {
+		l, _ := cs.List(baseCtx, "", 42)
+		return len(l) == 1 && l[0].ReactionCount == 1
+	})
+	_ = runID
+}
+
 // A normal (non-local, non-imported) comment gets its GitHub-posted comment id
 // persisted into the read model (comments.Comment.GithubID) once the post
 // completes — the frontend uses this to build a "view on GitHub" deep link

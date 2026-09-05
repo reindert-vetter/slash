@@ -5793,7 +5793,19 @@ func (m *TaskManager) StartCodeComment(ctx context.Context, in CodeCommentInput)
 		return runID, err
 	}
 	if rootID != 0 {
-		go m.poll(ctx, runID, canonRepo(in.Repo), in.PR, rootID, prRunID)
+		// The poller must outlive this call: ctx here is typically the HTTP
+		// request context (handleTaskCodeComment), which is cancelled the
+		// moment the response is written — a poller started on it exits at
+		// its first tick, so replies to an app-placed comment silently never
+		// arrived until a restart's ResumePolling picked the thread up again.
+		// Use the server-lifetime context (SetRuntime), exactly like the
+		// reopenComment Activity does; fall back to ctx for a one-shot caller
+		// that never called SetRuntime (tests, CLI).
+		pollCtx := m.baseCtx
+		if pollCtx == nil {
+			pollCtx = ctx
+		}
+		go m.poll(pollCtx, runID, canonRepo(in.Repo), in.PR, rootID, prRunID)
 	}
 	return runID, nil
 }
