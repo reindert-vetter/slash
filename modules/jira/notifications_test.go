@@ -146,3 +146,37 @@ func TestUnknownReadStateIsUnread(t *testing.T) {
 		t.Fatalf("want one unread notification, got %+v", got)
 	}
 }
+
+// TestJiraSiteARI pins the exact format notificationFeed's
+// collabContextRoutingAri argument needs — confirmed live against the real
+// Atlassian site (see the file header's "PITFALL THAT COST A ROUND-TRIP").
+func TestJiraSiteARI(t *testing.T) {
+	got := jiraSiteARI("d1788971-83f3-466c-ab39-27a0b4b24228")
+	want := "ari:cloud:jira::site/d1788971-83f3-466c-ab39-27a0b4b24228"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestParseTenantInfo covers the tiny, undocumented `_edge/tenant_info`
+// response shape resolveCloudID depends on.
+func TestParseTenantInfo(t *testing.T) {
+	id, err := parseTenantInfo([]byte(`{"cloudId":"abc-123"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "abc-123" {
+		t.Errorf("cloudId: got %q", id)
+	}
+}
+
+// TestParseTenantInfoRejectsEmpty guards against silently building an ARI out
+// of an empty cloudId (which would just resolve to an empty-context feed
+// again — the exact bug this whole mechanism exists to avoid).
+func TestParseTenantInfoRejectsEmpty(t *testing.T) {
+	for _, body := range []string{`{}`, `{"cloudId":""}`, `not json`} {
+		if _, err := parseTenantInfo([]byte(body)); err == nil {
+			t.Errorf("body %q: want an error, got nil", body)
+		}
+	}
+}

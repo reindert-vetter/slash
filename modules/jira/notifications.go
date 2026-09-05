@@ -12,6 +12,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -46,9 +47,25 @@ import (
 // `headNotification.content` carries the flat, already-rendered pieces this
 // module needs: `message` (String, no ADF to flatten), `url`, and
 // `actor{displayName, avatarURL}`. Same auth as before — HTTP Basic with the
-// ordinary Atlassian API token — confirmed live: a `notificationFeed` query
-// against the real site returned a clean, well-formed (if empty for this
-// account at the time) result via `POST`.
+// ordinary Atlassian API token.
+//
+// PITFALL THAT COST A ROUND-TRIP: the very first working version of this
+// query returned 200 with an empty `nodes: []` for an account that, per a
+// side-by-side screenshot, very much had unread notifications in the real
+// Jira bell — so the query looked "done" while silently returning nothing.
+// The missing piece is `notificationFeed`'s `collabContextRoutingAri`
+// argument (a nullable String, easy to omit and still get a syntactically
+// valid, successfully-executing query back): without it the resolver has no
+// site/product to scope the feed to, and it apparently just resolves against
+// an empty context. The value that works is the SITE's own ARI,
+// `ari:cloud:jira::site/<cloudId>` — confirmed live, returns the exact same
+// items the real bell shows. `<cloudId>` is fetched once per site via another
+// small, undocumented, unauthenticated endpoint,
+// `GET https://<site>/_edge/tenant_info` → `{"cloudId": "…"}`, and cached in
+// memory (see resolveCloudID). Lesson for next time this feed breaks again: a
+// 200 with an empty result is NOT proof the query is complete — cross-check
+// against the real bell (or `unseenNotificationCount`) before concluding
+// "this account just has nothing".
 //
 // Both are still **not documented/supported APIs** — a deliberate, explicit
 // choice by Reindert ("ik wil de echte bell-feed" / "zoek het zelf uit"),
@@ -108,9 +125,9 @@ type Notification struct {
 // `/gateway/api/graphql` — see the big comment above for how every field/type
 // name here was confirmed (schema introspection against the real site, not
 // guessed).
-const notifyFeedQuery = `query ReviewTreeNotifications($first: Int!, $category: InfluentsNotificationCategory!) {
+const notifyFeedQuery = `query ReviewTreeNotifications($first: Int!, $category: InfluentsNotificationCategory!, $collabContextRoutingAri: String) {
   notifications {
-    notificationFeed(first: $first, filter: {categoryFilter: $category}) {
+    notificationFeed(first: $first, collabContextRoutingAri: $collabContextRoutingAri, filter: {categoryFilter: $category}) {
       nodes {
         groupId
         headNotification {
@@ -173,7 +190,9 @@ type notifyFeedNode struct {
 }
 
 // Notifications fetches the newest limit entries of the "direct" feed via the
-// GraphQL gateway (see the file header for why not the old REST endpoint).
+// GraphQL gateway (see the file header for why not the old REST endpoint, and
+// for why collabContextRoutingAri below is not optional in practice even
+// though the schema allows omitting it).
 func (m *Module) Notifications(ctx context.Context, limit int) ([]Notification, error) {
 	email, token, site := notifyConfig()
 	if email == "" || token == "" {
@@ -185,10 +204,19 @@ func (m *Module) Notifications(ctx context.Context, limit int) ([]Notification, 
 	ctx, cancel := context.WithTimeout(ctx, notifyTimeout)
 	defer cancel()
 
+	cloudID, err := resolveCloudID(ctx, email, token, site)
+	if err != nil {
+		return nil, fmt.Errorf("jira: notification feed: %w", err)
+	}
+
 	reqBody, err := json.Marshal(graphQLRequest{
 		OperationName: "ReviewTreeNotifications",
 		Query:         notifyFeedQuery,
-		Variables:     map[string]any{"first": limit, "category": "direct"},
+		Variables: map[string]any{
+			"first":                   limit,
+			"category":                "direct",
+			"collabContextRoutingAri": jiraSiteARI(cloudID),
+		},
 	})
 	if err != nil {
 		return nil, err
@@ -249,6 +277,84 @@ func (m *Module) VerifyCredentials(ctx context.Context) error {
 		return fmt.Errorf("jira: verify credentials: http %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// cloudIDCache memoizes resolveCloudID per site: a site's cloudId is
+// effectively immutable, and this avoids one extra HTTP round-trip on every
+// single notification-feed call (the jira_inbox tracker polls every 5
+// minutes, see jiraNotifyInterval in jira_notifications.go).
+var (
+	cloudIDMu    sync.Mutex
+	cloudIDCache = map[string]string{}
+)
+
+// resolveCloudID fetches the site's Atlassian cloud id — needed to build the
+// collabContextRoutingAri argument notificationFeed silently needs (see the
+// file header's "PITFALL THAT COST A ROUND-TRIP"). `GET
+// https://<site>/_edge/tenant_info` is itself undocumented but, confirmed
+// live, needs no authentication at all; the Basic auth header is added anyway
+// for consistency and in case that ever changes.
+func resolveCloudID(ctx context.Context, email, token, site string) (string, error) {
+	cloudIDMu.Lock()
+	if id, ok := cloudIDCache[site]; ok {
+		cloudIDMu.Unlock()
+		return id, nil
+	}
+	cloudIDMu.Unlock()
+
+	url := fmt.Sprintf("https://%s/_edge/tenant_info", site)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/json")
+	if email != "" && token != "" {
+		req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(email+":"+token)))
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("tenant_info: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	if err != nil {
+		return "", fmt.Errorf("tenant_info: read: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("tenant_info: http %d", resp.StatusCode)
+	}
+	id, err := parseTenantInfo(body)
+	if err != nil {
+		return "", err
+	}
+	cloudIDMu.Lock()
+	cloudIDCache[site] = id
+	cloudIDMu.Unlock()
+	return id, nil
+}
+
+// parseTenantInfo extracts the cloudId from a tenant_info response body. A
+// pure function, split out from resolveCloudID, so the parsing itself is
+// unit-testable without a live HTTP call.
+func parseTenantInfo(body []byte) (string, error) {
+	var v struct {
+		CloudID string `json:"cloudId"`
+	}
+	if err := json.Unmarshal(body, &v); err != nil {
+		return "", fmt.Errorf("tenant_info: parse: %w", err)
+	}
+	if v.CloudID == "" {
+		return "", errors.New("tenant_info: empty cloudId")
+	}
+	return v.CloudID, nil
+}
+
+// jiraSiteARI builds the site-scoped ARI notificationFeed's
+// collabContextRoutingAri argument needs — confirmed live against the real
+// site (see the file header). A pure function so the format itself is
+// unit-tested without a live call.
+func jiraSiteARI(cloudID string) string {
+	return "ari:cloud:jira::site/" + cloudID
 }
 
 // notifyConfig reads the credentials from the environment on every call (not
