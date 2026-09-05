@@ -16,6 +16,8 @@ const feedJSON = `{
         "nodes": [
           {
             "groupId": "ari:cloud:notifications::group/abc-123",
+            "groupSize": 3,
+            "additionalActors": [{"displayName": "Alex", "avatarURL": "https://avatar.example/a.png"}],
             "headNotification": {
               "notificationId": "ari:cloud:notifications::notification/abc-123",
               "timestamp": "2026-09-03T10:15:00.000Z",
@@ -23,7 +25,9 @@ const feedJSON = `{
               "content": {
                 "message": "commented on PAYM-813",
                 "url": "/browse/PAYM-813?focusedCommentId=98765",
-                "actor": {"displayName": "Dennis Sloove", "avatarURL": "https://avatar.example/d.png"}
+                "actor": {"displayName": "Dennis Sloove", "avatarURL": "https://avatar.example/d.png"},
+                "entity": {"title": "Fix the checkout flow", "status": "To Do", "iconUrl": "https://avatar.example/bug.png"},
+                "bodyItems": [{"type": "comment", "document": {"data": "{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"Helemaal top!\"}]}]}", "format": "adf"}}]
               }
             }
           },
@@ -89,6 +93,24 @@ func TestParseGraphQLNotifications(t *testing.T) {
 	if !first.Unread {
 		t.Error("first entry should be unread")
 	}
+	if first.IssueTitle != "Fix the checkout flow" {
+		t.Errorf("issue title: got %q", first.IssueTitle)
+	}
+	if first.IssueStatus != "To Do" {
+		t.Errorf("issue status: got %q", first.IssueStatus)
+	}
+	if first.IssueIconURL != "https://avatar.example/bug.png" {
+		t.Errorf("issue icon: got %q", first.IssueIconURL)
+	}
+	if first.GroupSize != 3 {
+		t.Errorf("group size: got %d", first.GroupSize)
+	}
+	if first.OtherActor != "Alex" {
+		t.Errorf("other actor: got %q", first.OtherActor)
+	}
+	if first.CommentPreview != "Helemaal top!" {
+		t.Errorf("comment preview: got %q", first.CommentPreview)
+	}
 
 	second := got[1]
 	if second.Unread {
@@ -96,6 +118,14 @@ func TestParseGraphQLNotifications(t *testing.T) {
 	}
 	if second.URL != "https://plugandpaybv.atlassian.net/browse/PAYM-99" {
 		t.Errorf("absolute url: got %q", second.URL)
+	}
+	// No "groupSize" field at all in the fixture — must default to 1
+	// (ungrouped), never 0, and carry no "+N updates from X" note.
+	if second.GroupSize != 1 {
+		t.Errorf("group size: got %d, want 1 (ungrouped default)", second.GroupSize)
+	}
+	if second.OtherActor != "" {
+		t.Errorf("other actor: got %q, want empty (ungrouped)", second.OtherActor)
 	}
 }
 
@@ -178,5 +208,30 @@ func TestParseTenantInfoRejectsEmpty(t *testing.T) {
 		if _, err := parseTenantInfo([]byte(body)); err == nil {
 			t.Errorf("body %q: want an error, got nil", body)
 		}
+	}
+}
+
+// TestFirstCommentPreview covers both document shapes this must handle: real
+// ADF (Jira's normal comment storage format) and a document whose Data isn't
+// valid ADF JSON at all, which must still surface as-is rather than being
+// dropped (this feed is undocumented — see the "degrade, never drop" rule at
+// the top of the file).
+func TestFirstCommentPreview(t *testing.T) {
+	adf := `{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Great work"}]}]}`
+	got := firstCommentPreview([]notifyFeedBodyItem{{Document: notifyFeedDocument{Data: adf, Format: "adf"}}})
+	if got != "Great work" {
+		t.Errorf("ADF preview: got %q", got)
+	}
+
+	got = firstCommentPreview([]notifyFeedBodyItem{{Document: notifyFeedDocument{Data: "plain text body", Format: "plain_text"}}})
+	if got != "plain text body" {
+		t.Errorf("plain-text fallback: got %q", got)
+	}
+
+	if got := firstCommentPreview(nil); got != "" {
+		t.Errorf("nil body items: got %q, want empty", got)
+	}
+	if got := firstCommentPreview([]notifyFeedBodyItem{{Document: notifyFeedDocument{Data: ""}}}); got != "" {
+		t.Errorf("empty document data: got %q, want empty", got)
 	}
 }

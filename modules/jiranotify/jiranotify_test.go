@@ -69,3 +69,41 @@ func TestPurgeDropsOnlyOldRows(t *testing.T) {
 		t.Fatalf("want only the recent row left, got %+v", list)
 	}
 }
+
+// TestUpsertRoundTripsRichFields pins the columns added for the richer
+// per-notification detail (issue summary/status/type icon, the "+N updates
+// from X" grouping note, a comment preview) — a plain Upsert→List round trip
+// must return exactly what was stored, and a GroupSize of 0 (an ungrouped
+// notification the caller forgot to normalize) must come back as 1, never 0.
+func TestUpsertRoundTripsRichFields(t *testing.T) {
+	m := openTest(t)
+	ctx := context.Background()
+	if err := m.Upsert(ctx, []Item{
+		{
+			ID: "n1", At: "2026-09-03T10:00:00Z", URL: "https://x/browse/A-1", Unread: true,
+			IssueTitle: "Fix the checkout flow", IssueStatus: "To Do",
+			IssueIconURL: "https://x/bug.png", GroupSize: 3, OtherActor: "Alex",
+			CommentPreview: "Helemaal top!",
+		},
+		{ID: "n2", At: "2026-09-03T09:00:00Z", URL: "https://x/browse/A-2", Unread: true}, // GroupSize left zero
+	}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	list, err := m.List(ctx, 10)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("want 2 rows, got %d", len(list))
+	}
+	first := list[0] // newest first
+	if first.IssueTitle != "Fix the checkout flow" || first.IssueStatus != "To Do" ||
+		first.IssueIconURL != "https://x/bug.png" || first.GroupSize != 3 ||
+		first.OtherActor != "Alex" || first.CommentPreview != "Helemaal top!" {
+		t.Errorf("rich fields did not round-trip: %+v", first)
+	}
+	second := list[1]
+	if second.GroupSize != 1 {
+		t.Errorf("GroupSize: got %d, want 1 (zero-value normalized)", second.GroupSize)
+	}
+}

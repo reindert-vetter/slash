@@ -2067,9 +2067,10 @@ async function markJiraRead(n) {
   }
 }
 
-// jiraUnreadMark — the unread signal. Per the colourblind rule the SHAPE and
-// the WORD carry it (a filled dot plus a bold title, see jiraRow), never the
-// colour on its own.
+// jiraUnreadMark — the unread signal, on the RIGHT edge of the row (mirroring
+// Jira's own layout — the dot sits there, not next to the avatar). Per the
+// colourblind rule the SHAPE and the WORD carry it (a filled dot plus a bold
+// title, see jiraRow), never the colour on its own.
 function jiraUnreadMark(n) {
   if (!n.unread) return html`<span class="inline-block h-2 w-2 shrink-0"></span>`
   return html`<span
@@ -2093,7 +2094,40 @@ function jiraAvatarMark(n) {
 // jiraRow — one notification. An <a target="_blank"> (not a popover row like
 // prRow): the reviewer asked for "openen in een new venster naar jira comment",
 // and the href already carries Jira's own focusedCommentId deep link.
+//
+// Reviewer request, comparing two side-by-side screenshots of the real Jira
+// bell panel: "ik zie hier zoveel meer informatie... ik wil hetzelfde hebben."
+// Beyond the original single title+meta line, a row now also shows (all
+// read-only, sourced from jira.Notification's own richer fields — see that
+// struct's doc comment): the issue's own type icon + summary (`issueIconUrl`/
+// `issueTitle`), its key + workflow status ("PROD-254 • To Do"), a "+N updates
+// from X" note when several notifications on the same thread collapsed into
+// one (`groupSize`/`otherActor`), and — for a mention/comment notification —
+// a short preview of what was actually said (`commentPreview`), in a bordered
+// box mirroring Jira's own comment-preview card. No reactions/reply button:
+// this app never writes into Jira (see the file header), so only the
+// read-only preview is shown, not the write affordances around it.
 function jiraRow(n) {
+  const icon = n.issueIconUrl
+    ? html`<img src="${n.issueIconUrl}" alt="" class="mt-0.5 h-3.5 w-3.5 shrink-0" />`.key('icon')
+    : ''
+  // Deliberately NOT run through t(): like n.title/n.issueStatus (Jira's own
+  // feed content, always in whatever language Jira itself used), this mirrors
+  // Jira's own "+2 updates from X" activity-log wording verbatim rather than
+  // being interface chrome we author and translate ourselves.
+  const groupNote =
+    n.groupSize > 1 && n.otherActor
+      ? html`<p class="mt-1 truncate text-xs font-medium text-indigo-600 dark:text-indigo-400">
+          +${n.groupSize - 1} updates from ${n.otherActor}
+        </p>`.key('group')
+      : ''
+  const preview = n.commentPreview
+    ? html`<p
+        class="mt-1.5 line-clamp-3 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-700 dark:border-zinc-700 dark:bg-zinc-950/60 dark:text-zinc-300"
+      >
+        ${n.commentPreview}
+      </p>`.key('preview')
+    : ''
   return html`
     <a
       href="${n.url}"
@@ -2103,22 +2137,34 @@ function jiraRow(n) {
       data-jira-id="${n.id}"
       data-nav-row
       data-nav-key="${'jira:' + n.id}"
-      class="${ROW_CLASS}"
+      class="${ROW_CLASS + ' items-start'}"
       @click="${() => markJiraRead(n)}"
     >
-      ${() => jiraUnreadMark(n)} ${() => jiraAvatarMark(n)}
+      ${() => jiraAvatarMark(n)}
       <div class="min-w-0 flex-1">
         <h3
           class="${'truncate text-[13.5px] text-slate-900 dark:text-zinc-100 group-hover:text-black dark:group-hover:text-white ' +
           (n.unread ? 'font-semibold' : 'font-normal')}"
         >
           ${n.title || n.issueKey || n.url}
+          <span class="font-normal text-slate-400 dark:text-zinc-600">· ${relativeTime(n.at)}</span>
         </h3>
+        ${() =>
+          n.issueTitle
+            ? html`<p class="mt-0.5 flex items-start gap-1 text-xs text-slate-600 dark:text-zinc-400">
+                ${icon}<span class="line-clamp-2">${n.issueTitle}</span>
+              </p>`.key('issue-title')
+            : ''}
         <p class="mt-0.5 truncate text-xs text-slate-500 dark:text-zinc-500">
-          ${(n.issueKey ? n.issueKey + ' · ' : '') + (n.actor ? n.actor + ' · ' : '') + relativeTime(n.at)}
+          ${(n.issueKey ? n.issueKey + ' • ' : '') + (n.issueStatus || n.actor)}
         </p>
+        <div class="contents">${() => groupNote}</div>
+        <div class="contents">${() => preview}</div>
       </div>
-      ${chevronFilled('h-4 w-4 text-slate-400 dark:text-zinc-600 group-hover:text-slate-600 dark:group-hover:text-zinc-300')}
+      <div class="flex shrink-0 items-center gap-2 self-start pt-0.5">
+        ${() => jiraUnreadMark(n)}
+        ${chevronFilled('h-4 w-4 text-slate-400 dark:text-zinc-600 group-hover:text-slate-600 dark:group-hover:text-zinc-300')}
+      </div>
     </a>
   `.key('jira:' + n.id)
 }

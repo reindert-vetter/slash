@@ -42,18 +42,41 @@ CREATE TABLE IF NOT EXISTS jira_notifications (
 );
 `
 
+// migrate adds the columns introduced after the first release: the richer
+// per-notification detail (issue summary/status/type-icon, the "+N updates
+// from X" grouping note, a comment preview) a reviewer asked for after
+// comparing this feed side-by-side with Jira's own bell panel. Light
+// ALTER TABLE, ignoring the "duplicate column" error, same shape as the
+// avatar_url migration in modules/comments.
+func migrate(db *sql.DB) {
+	_, _ = db.Exec(`ALTER TABLE jira_notifications ADD COLUMN issue_title TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE jira_notifications ADD COLUMN issue_status TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE jira_notifications ADD COLUMN issue_icon_url TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE jira_notifications ADD COLUMN group_size INTEGER NOT NULL DEFAULT 1`)
+	_, _ = db.Exec(`ALTER TABLE jira_notifications ADD COLUMN other_actor TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE jira_notifications ADD COLUMN comment_preview TEXT NOT NULL DEFAULT ''`)
+}
+
 // Item is one stored notification. Unread is the effective state the UI
 // filters on: the feed still calls it unread AND the reviewer never opened it
-// here.
+// here. IssueTitle/IssueStatus/IssueIconURL/GroupSize/OtherActor/
+// CommentPreview mirror jira.Notification's own fields of the same name — see
+// that struct's doc comment for what each backs on screen.
 type Item struct {
-	ID        string `json:"id"`
-	At        string `json:"at"`
-	Title     string `json:"title"`
-	IssueKey  string `json:"issueKey"`
-	Actor     string `json:"actor"`
-	AvatarURL string `json:"avatarUrl"`
-	URL       string `json:"url"`
-	Unread    bool   `json:"unread"`
+	ID             string `json:"id"`
+	At             string `json:"at"`
+	Title          string `json:"title"`
+	IssueKey       string `json:"issueKey"`
+	Actor          string `json:"actor"`
+	AvatarURL      string `json:"avatarUrl"`
+	URL            string `json:"url"`
+	Unread         bool   `json:"unread"`
+	IssueTitle     string `json:"issueTitle,omitempty"`
+	IssueStatus    string `json:"issueStatus,omitempty"`
+	IssueIconURL   string `json:"issueIconUrl,omitempty"`
+	GroupSize      int    `json:"groupSize"`
+	OtherActor     string `json:"otherActor,omitempty"`
+	CommentPreview string `json:"commentPreview,omitempty"`
 }
 
 // Module is the notification read-model service.
@@ -69,6 +92,7 @@ func Open(path string) (*Module, error) {
 		db.Close()
 		return nil, fmt.Errorf("jiranotify: apply schema: %w", err)
 	}
+	migrate(db)
 	return &Module{db: db}, nil
 }
 
@@ -91,14 +115,23 @@ func (m *Module) Upsert(ctx context.Context, items []Item) error {
 		if it.Unread {
 			unread = 1
 		}
+		if it.GroupSize < 1 {
+			it.GroupSize = 1 // never store 0 — see jira.Notification's own doc comment
+		}
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO jira_notifications (id, at, title, issue_key, actor, avatar_url, url, feed_unread, read_at)
-			 VALUES (?,?,?,?,?,?,?,?,'')
+			`INSERT INTO jira_notifications
+			   (id, at, title, issue_key, actor, avatar_url, url, feed_unread, read_at,
+			    issue_title, issue_status, issue_icon_url, group_size, other_actor, comment_preview)
+			 VALUES (?,?,?,?,?,?,?,?,'',?,?,?,?,?,?)
 			 ON CONFLICT(id) DO UPDATE SET
 			   at=excluded.at, title=excluded.title, issue_key=excluded.issue_key,
 			   actor=excluded.actor, avatar_url=excluded.avatar_url, url=excluded.url,
-			   feed_unread=excluded.feed_unread`,
-			it.ID, it.At, it.Title, it.IssueKey, it.Actor, it.AvatarURL, it.URL, unread); err != nil {
+			   feed_unread=excluded.feed_unread,
+			   issue_title=excluded.issue_title, issue_status=excluded.issue_status,
+			   issue_icon_url=excluded.issue_icon_url, group_size=excluded.group_size,
+			   other_actor=excluded.other_actor, comment_preview=excluded.comment_preview`,
+			it.ID, it.At, it.Title, it.IssueKey, it.Actor, it.AvatarURL, it.URL, unread,
+			it.IssueTitle, it.IssueStatus, it.IssueIconURL, it.GroupSize, it.OtherActor, it.CommentPreview); err != nil {
 			return err
 		}
 	}
@@ -127,7 +160,8 @@ func (m *Module) List(ctx context.Context, limit int) ([]Item, error) {
 		limit = 50
 	}
 	rows, err := m.db.QueryContext(ctx,
-		`SELECT id, at, title, issue_key, actor, avatar_url, url, feed_unread, read_at
+		`SELECT id, at, title, issue_key, actor, avatar_url, url, feed_unread, read_at,
+		        issue_title, issue_status, issue_icon_url, group_size, other_actor, comment_preview
 		 FROM jira_notifications ORDER BY at DESC, id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
@@ -138,7 +172,8 @@ func (m *Module) List(ctx context.Context, limit int) ([]Item, error) {
 		var it Item
 		var feedUnread int
 		var readAt string
-		if err := rows.Scan(&it.ID, &it.At, &it.Title, &it.IssueKey, &it.Actor, &it.AvatarURL, &it.URL, &feedUnread, &readAt); err != nil {
+		if err := rows.Scan(&it.ID, &it.At, &it.Title, &it.IssueKey, &it.Actor, &it.AvatarURL, &it.URL, &feedUnread, &readAt,
+			&it.IssueTitle, &it.IssueStatus, &it.IssueIconURL, &it.GroupSize, &it.OtherActor, &it.CommentPreview); err != nil {
 			return nil, err
 		}
 		it.Unread = feedUnread == 1 && readAt == ""

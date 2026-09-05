@@ -56,10 +56,35 @@ the ONLY place this feed is shown) moved into the bell's own dropdown.
   ("Alleen ongelezen" — on by default, mirroring Jira's own toggle, its state
   spelled out in words "aan"/"uit", never colour alone), then a scrollable
   (`max-h-96 overflow-y-auto`) list of every matching row, most-recent-first.
-  Each row is `jiraRow`, unchanged: a plain `<a href target="_blank">` onto the
-  feed's own deep link (which already carries Jira's `focusedCommentId`, so it
-  opens **on the comment**, in a **new window**) with an unread dot **plus** a
-  bold title. Opening a row marks it read (`markJiraRead`) — the one write this
+  Each row is `jiraRow`: a plain `<a href target="_blank">` onto the feed's own
+  deep link (which already carries Jira's `focusedCommentId`, so it opens **on
+  the comment**, in a **new window**) with an unread dot **plus** a bold title
+  — the dot sits on the row's right edge, mirroring Jira's own layout, not
+  next to the avatar.
+- **A row shows the same density of information as the real Jira bell**
+  (reviewer request, comparing two side-by-side screenshots of it: "ik zie
+  hier zoveel meer informatie... ik wil hetzelfde hebben"). On top of the
+  original single title+meta line, `jiraRow` also renders, all read-only and
+  sourced from `jira.Notification`'s richer fields (added to the GraphQL query
+  and to the `jiranotify` read-model's schema — see both files' own doc
+  comments for the exact new columns/query fields):
+  - the target issue's own type icon + summary (`issueIconUrl`/`issueTitle` —
+    the icon is a public Jira asset, confirmed live to load with no auth) and
+    its key + workflow status ("PROD-254 • To Do", `issueKey`/`issueStatus`);
+  - a "+N updates from X" note (`groupSize`/`otherActor`) when several
+    notifications on the same thread collapsed into one — deliberately NOT
+    run through `t()`, same as `n.title`/`n.issueStatus`: it mirrors Jira's own
+    English activity-log wording verbatim rather than being interface chrome
+    this app authors and translates itself;
+  - for a mention/comment notification, a short preview of what was actually
+    said (`commentPreview`, extracted from the feed's `bodyItems` — Jira
+    comments are normally ADF, so this reuses the same ADF-to-text flattening
+    `Issue.Description` already does, `adfText`, falling back to the raw text
+    if it isn't valid ADF) in a bordered box mirroring Jira's own
+    comment-preview card. Deliberately **no reactions/reply button** next to
+    it: this app never writes into Jira (see the file header), so only the
+    read-only preview is shown, never the write affordances around it.
+  Opening a row marks it read (`markJiraRead`) — the one write this
   page does, going the sanctioned way: start/reuse the tracker
   (`POST /api/workflows/jira_inbox`), then Signal it (`…/signals/jira_notify`,
   `{"kind":"read","id":…}`); the tracker's Activity writes the read-model.

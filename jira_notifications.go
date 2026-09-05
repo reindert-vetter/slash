@@ -150,6 +150,8 @@ func (m *TaskManager) refreshJiraNotifications(ctx context.Context) jiraNotifyRe
 		items = append(items, jiranotify.Item{
 			ID: n.ID, At: n.At, Title: n.Title, IssueKey: n.IssueKey,
 			Actor: n.Actor, AvatarURL: n.AvatarURL, URL: n.URL, Unread: n.Unread,
+			IssueTitle: n.IssueTitle, IssueStatus: n.IssueStatus, IssueIconURL: n.IssueIconURL,
+			GroupSize: n.GroupSize, OtherActor: n.OtherActor, CommentPreview: n.CommentPreview,
 		})
 	}
 	if err := m.jiranotify.Upsert(ctx, items); err != nil {

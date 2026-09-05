@@ -100,6 +100,37 @@ test.describe('PR overview — Jira bell', () => {
     await expect(panel).toContainText('Geen notificaties.')
   })
 
+  test('a row shows the issue summary/status, a group note and a comment preview', async ({ page }) => {
+    await stubNotifications(page, [
+      {
+        id: '1',
+        at: new Date().toISOString(),
+        title: 'Nick van Dalen mentioned you in a comment',
+        issueKey: 'BUG-5241',
+        actor: 'Nick van Dalen',
+        avatarUrl: '',
+        url: 'https://example.atlassian.net/browse/BUG-5241',
+        unread: true,
+        issueTitle: "'Volgende incassodatum' ongewenst aangepast door 'P&P Support' (#7887)",
+        issueStatus: 'Closed',
+        issueIconUrl: 'https://example.atlassian.net/bug.png',
+        groupSize: 2,
+        otherActor: 'Nick van Dalen',
+        commentPreview: '@Reindert Vetter Helemaal top! Ik sluit deze.',
+      },
+    ])
+    await page.goto('/pr-overview')
+    await appReady(page)
+
+    await page.locator('[data-testid="jira-bell-button"]').click()
+    const row = page.locator('[data-testid="jira-row"]')
+    await expect(row).toContainText("'Volgende incassodatum' ongewenst aangepast door 'P&P Support' (#7887)")
+    await expect(row).toContainText('BUG-5241 • Closed')
+    await expect(row).toContainText('+1 updates from Nick van Dalen')
+    await expect(row).toContainText('@Reindert Vetter Helemaal top! Ik sluit deze.')
+    await expect(row.locator('img[src="https://example.atlassian.net/bug.png"]')).toBeVisible()
+  })
+
   test('Escape closes the dropdown', async ({ page }) => {
     await stubNotifications(page, [
       { id: '1', at: new Date().toISOString(), title: 'X', issueKey: 'AB-1', actor: '', avatarUrl: '', url: 'https://example.atlassian.net/browse/AB-1', unread: true },

@@ -109,7 +109,12 @@ var notifyTimeout = 15 * time.Second
 const DefaultSite = "plugandpaybv.atlassian.net"
 
 // Notification is one entry of the bell feed, flattened to exactly what the
-// overview row renders and links to.
+// overview row renders and links to. IssueTitle/IssueStatus/IssueIconURL,
+// GroupSize/OtherActor and CommentPreview were added on top of the original,
+// minimal shape (see notifyFeedQuery below) once a reviewer, comparing
+// side-by-side screenshots, asked for the same density of information the
+// real Jira bell shows — the issue's own summary/status/type icon, the
+// "+N updates from X" grouping note, and a short comment preview.
 type Notification struct {
 	ID        string `json:"id"`
 	At        string `json:"at"`    // RFC3339, when it happened
@@ -119,6 +124,26 @@ type Notification struct {
 	AvatarURL string `json:"avatarUrl"`
 	URL       string `json:"url"`    // deep link, opened in a new window
 	Unread    bool   `json:"unread"` // as Jira itself reports it
+	// IssueTitle/IssueStatus/IssueIconURL mirror the target issue's own
+	// summary/workflow status/issue-type icon (entity.{title,status,iconUrl}
+	// below) — e.g. "BE: Statistieken in clickhouse..." / "To Do" / a bug or
+	// story glyph. IssueIconURL is a public Jira asset (confirmed live: 200
+	// with no auth), safe to load directly as an <img src>.
+	IssueTitle   string `json:"issueTitle,omitempty"`
+	IssueStatus  string `json:"issueStatus,omitempty"`
+	IssueIconURL string `json:"issueIconUrl,omitempty"`
+	// GroupSize/OtherActor back the "+N updates from X" note Jira's own bell
+	// shows when several notifications on the same thread collapsed into one
+	// (see notifyFeedNode's groupSize/additionalActors) — N = GroupSize-1,
+	// "X" = the first additional actor's display name. GroupSize is 1 (never
+	// 0) for an ungrouped notification, so the caller checks `GroupSize > 1`.
+	GroupSize  int    `json:"groupSize"`
+	OtherActor string `json:"otherActor,omitempty"`
+	// CommentPreview is a short plain-text extract of the notification's own
+	// comment/mention body (content.bodyItems below), when it carries one —
+	// e.g. a "mentioned you in a comment" notification. Empty for every other
+	// kind (an issue field update carries no body text at all).
+	CommentPreview string `json:"commentPreview,omitempty"`
 }
 
 // notifyFeedQuery is the GraphQL query behind the bell feed, run against
@@ -130,6 +155,8 @@ const notifyFeedQuery = `query ReviewTreeNotifications($first: Int!, $category: 
     notificationFeed(first: $first, collabContextRoutingAri: $collabContextRoutingAri, filter: {categoryFilter: $category}) {
       nodes {
         groupId
+        groupSize
+        additionalActors { displayName avatarURL }
         headNotification {
           notificationId
           timestamp
@@ -138,6 +165,8 @@ const notifyFeedQuery = `query ReviewTreeNotifications($first: Int!, $category: 
             message
             url
             actor { displayName avatarURL }
+            entity { title status iconUrl url }
+            bodyItems { type document { data format } }
           }
         }
       }
@@ -168,23 +197,59 @@ type notifyFeedResponse struct {
 	} `json:"errors"`
 }
 
+// notifyFeedActor mirrors InfluentsNotificationActor.
+type notifyFeedActor struct {
+	DisplayName string `json:"displayName"`
+	AvatarURL   string `json:"avatarURL"`
+}
+
+// notifyFeedEntity mirrors InfluentsNotificationEntity — the target issue's
+// own summary/status/type icon, confirmed live to carry exactly what the
+// real bell shows under a notification's title (e.g. "PROD-254 • To Do" plus
+// a bug/story glyph).
+type notifyFeedEntity struct {
+	Title   string `json:"title"`
+	Status  string `json:"status"`
+	IconURL string `json:"iconUrl"`
+	URL     string `json:"url"`
+}
+
+// notifyFeedDocument mirrors InfluentsNotificationDocument — Data is the
+// document's own serialized text; Format was introspected as a bare String
+// (its actual values were never observed live in this account's current
+// notifications, all of which had a null bodyItems), so firstCommentPreview
+// below deliberately does not branch on it and instead tries ADF-decoding
+// Data unconditionally, falling back to the raw string.
+type notifyFeedDocument struct {
+	Data   string `json:"data"`
+	Format string `json:"format"`
+}
+
+// notifyFeedBodyItem mirrors InfluentsNotificationBodyItem.
+type notifyFeedBodyItem struct {
+	Type     string             `json:"type"`
+	Document notifyFeedDocument `json:"document"`
+}
+
 // notifyFeedNode is one InfluentsNotificationHeadItem — one notification
 // GROUP (groupId/groupSize), collapsed to its most recent item
 // (headNotification), matching what the bell UI itself shows for a burst of
-// activity on one thread.
+// activity on one thread. AdditionalActors/GroupSize back the "+N updates
+// from X" note the real bell shows for such a group.
 type notifyFeedNode struct {
-	GroupID          string `json:"groupId"`
+	GroupID          string            `json:"groupId"`
+	GroupSize        int               `json:"groupSize"`
+	AdditionalActors []notifyFeedActor `json:"additionalActors"`
 	HeadNotification struct {
 		NotificationID string `json:"notificationId"`
 		Timestamp      string `json:"timestamp"`
 		ReadState      string `json:"readState"`
 		Content        struct {
-			Message string `json:"message"`
-			URL     string `json:"url"`
-			Actor   struct {
-				DisplayName string `json:"displayName"`
-				AvatarURL   string `json:"avatarURL"`
-			} `json:"actor"`
+			Message   string               `json:"message"`
+			URL       string               `json:"url"`
+			Actor     notifyFeedActor      `json:"actor"`
+			Entity    notifyFeedEntity     `json:"entity"`
+			BodyItems []notifyFeedBodyItem `json:"bodyItems"`
 		} `json:"content"`
 	} `json:"headNotification"`
 }
@@ -401,14 +466,22 @@ func parseGraphQLNotifications(body []byte, site string) ([]Notification, error)
 			continue
 		}
 		n := Notification{
-			ID:        id,
-			At:        hn.Timestamp,
-			Title:     strings.TrimSpace(hn.Content.Message),
-			Actor:     hn.Content.Actor.DisplayName,
-			AvatarURL: hn.Content.Actor.AvatarURL,
-			URL:       url,
-			Unread:    !strings.EqualFold(hn.ReadState, "read"),
+			ID:           id,
+			At:           hn.Timestamp,
+			Title:        strings.TrimSpace(hn.Content.Message),
+			Actor:        hn.Content.Actor.DisplayName,
+			AvatarURL:    hn.Content.Actor.AvatarURL,
+			URL:          url,
+			Unread:       !strings.EqualFold(hn.ReadState, "read"),
+			IssueTitle:   strings.TrimSpace(hn.Content.Entity.Title),
+			IssueStatus:  strings.TrimSpace(hn.Content.Entity.Status),
+			IssueIconURL: strings.TrimSpace(hn.Content.Entity.IconURL),
+			GroupSize:    node.GroupSize,
 		}
+		if len(node.AdditionalActors) > 0 {
+			n.OtherActor = node.AdditionalActors[0].DisplayName
+		}
+		n.CommentPreview = firstCommentPreview(hn.Content.BodyItems)
 		if key := reIssueKey.FindString(n.URL); key != "" {
 			n.IssueKey = key
 		}
@@ -418,9 +491,33 @@ func parseGraphQLNotifications(body []byte, site string) ([]Notification, error)
 		if n.At == "" {
 			n.At = time.Now().UTC().Format(time.RFC3339)
 		}
+		if n.GroupSize < 1 {
+			n.GroupSize = 1 // never observed live, but never let a caller divide/compare against 0
+		}
 		out = append(out, n)
 	}
 	return out, nil
+}
+
+// firstCommentPreview extracts a short plain-text preview from the first
+// body item that carries a document, so a comment/mention notification shows
+// what was actually said. Jira comments are normally stored as ADF, so this
+// tries the same ADF-to-text flattening Issue.Description already uses
+// (adfText) first; a document whose Data is not valid ADF JSON (plain text,
+// or some other future shape) is returned as-is instead of dropped, per this
+// file's "degrade, never drop" rule for an undocumented feed.
+func firstCommentPreview(items []notifyFeedBodyItem) string {
+	for _, item := range items {
+		data := strings.TrimSpace(item.Document.Data)
+		if data == "" {
+			continue
+		}
+		if text := strings.TrimSpace(adfText(json.RawMessage(data))); text != "" {
+			return text
+		}
+		return data
+	}
+	return ""
 }
 
 // resolveNotificationURL turns content.url into an absolute link, or "" when
