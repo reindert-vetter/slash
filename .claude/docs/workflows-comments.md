@@ -2266,12 +2266,18 @@ Three product decisions shape the whole thing:
    row** (`spaceKey`, `home.mjs` → the existing `reply` Signal with
    `done: true`). So this workflow signals no comment thread at all — unlike
    `code_warning`, which creates comments of its own.
-2. **The normal landing route.** The edits are made in the very same
-   per-conversation shadow worktree a chat turn uses (`chat_shadow.go`), under
+2. **The normal landing route.** The edits are made in the very same shared
+   local checkout a chat turn of this PR uses (`chat_checkout.go`), under
    the synthetic conversation id `commentBatchConvID(pr)` = `"batch-<pr>"`, and
    are landed by the existing `chat_merge` queue — so they end up on the PR's
    local pending ref and the reviewer pushes them himself from the todo row (see
-   `.claude/docs/pending-push.md`). No new git path.
+   `.claude/docs/pending-push.md`). No new git path. Because it edits that
+   shared checkout with Edit/Bash, `runCommentBatch` holds the PR's one
+   **checkout write slot** (`acquireCheckoutWriteSlot`, `chat_write_gate.go`)
+   for the whole run, exactly like a write chat turn and a test run — while it
+   waits for a concurrent write turn the snapshot's phase reads
+   `chatPhaseWaiting` ("Wacht op een andere codewijziging…"). Test:
+   `TestRunCommentBatchWaitsForCheckoutWriteSlot`.
 3. **Skipping is a first-class outcome.** A comment that is only a question, a
    compliment, or genuinely unclear is skipped WITH a reason and the run moves
    on; it stays an ordinary open comment.

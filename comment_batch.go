@@ -148,6 +148,31 @@ func runCommentBatch(ctx context.Context, tm *TaskManager, cmod *comments.Module
 		}
 	}
 
+	// Same shared checkout every chat turn/test run uses, and the same
+	// write-gate (chat_write_gate.go): this run edits code in that checkout
+	// with Edit/Bash, so it must hold the PR's one write slot — otherwise its
+	// edits race a concurrently running write chat turn (whose
+	// commitCheckoutEditsAt does `git add -A` and would sweep this run's
+	// half-done edits into that other turn's commit) or a test run relying on
+	// the checkout staying put. Every other checkout-mutating path already
+	// takes this slot (runOneClaudeTurn, runTestRun, the landing and the
+	// checkout-menu Activities); this one had been missed.
+	waited := false
+	release := acquireCheckoutWriteSlot(ctx, dataDir, arg.Repo, arg.PR, func() {
+		waited = true
+		advanceCommentBatchProgress(arg.Repo, arg.PR, chatPhaseWaiting)
+	})
+	defer release()
+	if ctx.Err() != nil {
+		// Gave up waiting because the context died (shutdown) — degrade like
+		// every other failure here: recorded reason, zero result.
+		failCommentBatchProgress(arg.Repo, arg.PR, "Claude kon de comments niet verwerken. Probeer het opnieuw.")
+		return commentBatchResult{}
+	}
+	if waited {
+		advanceCommentBatchProgress(arg.Repo, arg.PR, chatPhasePreparing)
+	}
+
 	dir, decision, ok := prepareChatShellWorkDir(ctx, tm, dataDir, arg.Repo, arg.PR, "")
 	if decision != nil || checkoutChoiceOpen(dataDir, arg.Repo, arg.PR) {
 		failCommentBatchProgress(arg.Repo, arg.PR, "Er staat nog een keuze open over de werkmap van deze PR. Maak die keuze en probeer het daarna opnieuw.")

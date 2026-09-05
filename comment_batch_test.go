@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"slash/modules/claude"
 	"slash/modules/comments"
@@ -181,5 +182,64 @@ func TestCommentBatchProgressSinkMarkers(t *testing.T) {
 	p, _ := commentBatchProgressFor("", pr)
 	if p.Done != 1 || p.Items[0].Note != "aangepast" || p.Current != "" {
 		t.Fatalf("done marker: %+v", p)
+	}
+}
+
+// TestRunCommentBatchWaitsForCheckoutWriteSlot pins that the one agentic batch
+// run takes the PR's checkout write slot (chat_write_gate.go) before touching
+// the shared checkout — the same gate every other checkout-mutating path
+// (a write chat turn, a test run, the landing) already holds. Without it the
+// batch's Edit/Bash work races a concurrently running write turn on the SAME
+// checkout, whose commitCheckoutEditsAt `git add -A` would sweep the batch's
+// half-done edits into that other turn's commit.
+func TestRunCommentBatchWaitsForCheckoutWriteSlot(t *testing.T) {
+	stubUnreachableGh(t)
+	m, _, cm, fake := newChatManager(t)
+	ctx := context.Background()
+	const pr = 999003
+	if err := m.comments.Save(ctx, comments.Comment{
+		ID: "c1", RunID: "c1", PR: pr, File: "src/A.php", Line: 3, Body: "graag nullsafe", Status: "open",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		commentBatchMu.Lock()
+		delete(commentBatchByPR, prKey{"", pr})
+		commentBatchMu.Unlock()
+	})
+
+	// Hold this PR's own write-turn slot, exactly like a concurrent
+	// code-editing chat turn on the SAME PR would.
+	dataDir := t.TempDir()
+	release := acquireWriteTurnSlot(ctx, checkoutWriteSlotKey(dataDir, "", pr), nil)
+
+	done := make(chan commentBatchResult, 1)
+	go func() {
+		done <- runCommentBatch(ctx, m, m.comments, cm, fake, dataDir, commentBatchArg{
+			PR: pr, CommentIDs: []string{"c1"}, TurnID: "run-1",
+		})
+	}()
+
+	// The run must report itself as waiting for the slot, never start silently.
+	waitFor(t, func() bool {
+		p, ok := commentBatchProgressFor("", pr)
+		return ok && p.Phase == chatPhaseWaiting
+	})
+	select {
+	case <-done:
+		t.Fatal("runCommentBatch finished while another turn still held the write slot")
+	default:
+	}
+
+	release()
+	select {
+	case res := <-done:
+		// With gh stubbed unreachable the run degrades at the work-copy step —
+		// the point here is only that it proceeded once the slot freed up.
+		if res.Done != 0 {
+			t.Fatalf("want a zero result on the degrade path, got %+v", res)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("runCommentBatch never proceeded after the slot was released")
 	}
 }
