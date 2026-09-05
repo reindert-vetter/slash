@@ -60,7 +60,12 @@ the ONLY place this feed is shown) moved into the bell's own dropdown.
   deep link (which already carries Jira's `focusedCommentId`, so it opens **on
   the comment**, in a **new window**) with an unread dot **plus** a bold title
   — the dot sits on the row's right edge, mirroring Jira's own layout, not
-  next to the avatar.
+  next to the avatar. The panel's own width (`w-[30rem] max-w-[95vw]`,
+  deliberately wider than a generic dropdown) is sized to fit its own header
+  row — the "Jira" title, the unread-count badge, `jiraUnreadToggle` and
+  `jiraMarkAllReadButton` side by side without wrapping or clipping — and to
+  leave enough room for a row title to stay readable before `truncate` kicks
+  in; don't shrink it back without re-checking that header row still fits.
 - **A row shows the same density of information as the real Jira bell**
   (reviewer request, comparing two side-by-side screenshots of it: "ik zie
   hier zoveel meer informatie... ik wil hetzelfde hebben"). On top of the

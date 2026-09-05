@@ -2313,7 +2313,7 @@ function jiraBellPanel() {
   return html`
     <div
       data-testid="jira-bell-panel"
-      class="absolute right-0 top-full z-20 mt-2 w-96 max-w-[90vw] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg dark:border-zinc-800 dark:bg-zinc-900"
+      class="absolute right-0 top-full z-20 mt-2 w-[30rem] max-w-[95vw] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg dark:border-zinc-800 dark:bg-zinc-900"
     >
       <div class="flex items-center gap-2 border-b border-slate-100 px-3 py-2.5 dark:border-zinc-800">
         <h2 class="text-[13px] font-semibold text-slate-900 dark:text-zinc-100">Jira</h2>
