@@ -38,7 +38,21 @@ everything (see "Progressive loading" in `.claude/docs/detail-layout.md`):
 1. **`fetchPRBasics`** — `PRMeta` (title/URL/body/author/diff-stats/head-ref,
    best-effort), derives a Jira key from the title (`\b([A-Z][A-Z0-9]+-\d+)\b`,
    same regex as the frontend) and fetches that ticket (best-effort), then
-   `prmeta.SaveBasics`.
+   `prmeta.SaveBasics`. A failed Jira fetch (e.g. `acli` not logged in, or the
+   issue key doesn't exist) never fails the tracker — it only `m.logf`s
+   `"pr_status: fetch jira %s pr=%d skipped: %v"` and moves on with no
+   `JiraKey`/`JiraTitle` on the stored basics. **The `pr=%d` is load-bearing**:
+   `GET /api/problems` mirrors every `m.logf` line into a ring buffer
+   (`run_errors.go`), and the review tree's own "Taken" block
+   (`pollProblems`, `home.mjs`) filters that list to `e.pr === state.pr` since
+   the endpoint itself is repo-wide — a line missing `pr=<n>` silently stays
+   PR 0 forever and never reaches that per-PR block, even though it still
+   shows up in the repo-wide `/pr-overview` "Mislukte taken" drawer. Every
+   other `pr_status` log line already carried `pr=%d`; this was the one that
+   didn't. `modules/jira/jira.go`'s `Issue` also surfaces `acli`'s own stderr
+   in the wrapped error (mirroring `modules/github`'s `api`), so that log line
+   names the real reason instead of a bare `exit status 1`. Test:
+   `TestPRStatusJiraFailureLogsPR` (`workflows_test.go`).
 2. **`generatePRSummary`** — prompts Haiku (context-only) with the stored basics
    + the distinct changed files from `blocks` + the Jira ticket for a 2-4
    sentence summary → `prmeta.SaveSummary`.

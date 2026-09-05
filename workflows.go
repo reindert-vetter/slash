@@ -2206,7 +2206,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if key := jiraKeyFromTitle(meta.Title); key != "" && m.jira != nil {
 			issue, err := m.jira.Issue(ctx, key)
 			if err != nil {
-				m.logf("pr_status: fetch jira %s skipped: %v", key, err)
+				m.logf("pr_status: fetch jira %s pr=%d skipped: %v", key, arg.PR, err)
 			} else {
 				out.JiraKey = key
 				out.JiraTitle = issue.Title

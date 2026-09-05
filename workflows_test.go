@@ -1239,6 +1239,62 @@ func TestPRStatusFetchesMeta(t *testing.T) {
 	}
 }
 
+// errJira is a jira.Client whose Issue call always fails, for exercising the
+// "skipped" log path fetchPRBasics takes on a Jira hiccup.
+type errJira struct{ err error }
+
+func (e errJira) Issue(context.Context, string) (jira.Issue, error) { return jira.Issue{}, e.err }
+func (e errJira) Notifications(context.Context, int) ([]jira.Notification, error) {
+	return nil, nil
+}
+
+// TestPRStatusJiraFailureLogsPR pins the fix for a Jira-issue-fetch failure
+// (e.g. `acli` not logged in) that skipped silently in the terminal but never
+// reached the review tree's own "Taken" block: pollProblems (home.mjs) filters
+// GET /api/problems' logErrors by `e.pr === state.pr`, and the fetchPRBasics
+// log line used to carry no `pr=<n>` fragment at all, so recordProblem's
+// rePRField never found one and every such line stayed PR 0 forever — visible
+// only in the repo-wide /pr-overview drawer, never on the PR it was actually
+// about. This drives the real fetchPRBasics Activity (via EnsurePRStatus, the
+// same path TestPRStatusFetchesMeta uses) with a PR title that resolves to a
+// Jira key and a Jira client that always errors, and asserts the mirrored log
+// line names this PR.
+func TestPRStatusJiraFailureLogsPR(t *testing.T) {
+	t.Setenv("SLASH_GITHUB", "off")
+	pm := testPRMeta(t)
+	cs, err := comments.Open(filepath.Join(t.TempDir(), "comments.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cs.Close() })
+	gh := &github.Fake{}
+	gh.SetPRMeta(github.Meta{Title: "STAT-1103 fix the thing", URL: "https://github.com/x/y/pull/7"})
+	engine := tembed.New(tembed.NewMemoryStore())
+	m := NewTaskManager(engine, gh, cs, testInbox(t), testRelations(t), pm, nil, nil, nil, nil, nil,
+		errJira{err: fmt.Errorf("acli jira workitem view STAT-1103: exit status 1")}, nil, "", "test/repo")
+
+	var logs []string
+	m.logf = func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }
+
+	if _, err := m.EnsurePRStatus("", 7); err != nil {
+		t.Fatal(err)
+	}
+
+	var found string
+	for _, l := range logs {
+		if strings.Contains(l, "fetch jira") {
+			found = l
+			break
+		}
+	}
+	if found == "" {
+		t.Fatalf("no 'fetch jira' log line, got: %v", logs)
+	}
+	if !strings.Contains(found, "pr=7") {
+		t.Fatalf("jira failure log line missing pr=7: %q", found)
+	}
+}
+
 // TestPRStatusThreeStages asserts the pr_status tracker fills the prmeta
 // read-model in its three stages — basics (incl. the linked Jira issue),
 // Claude summary, review/CI statuses — all at start, before the tracker parks
