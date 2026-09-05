@@ -6,6 +6,7 @@
 package jira
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -90,8 +91,13 @@ func (m *Module) Issue(ctx context.Context, key string) (Issue, error) {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "acli", "jira", "workitem", "view", key,
 		"--fields", "summary,description", "--json")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return Issue{}, fmt.Errorf("acli jira workitem view %s: %w: %s", key, err, msg)
+		}
 		return Issue{}, fmt.Errorf("acli jira workitem view %s: %w", key, err)
 	}
 	var parsed acliIssue
