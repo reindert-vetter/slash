@@ -3096,6 +3096,16 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if err := m.chat.SaveMessage(ctx, msg); err != nil {
 			return nil, err
 		}
+		// The event must be scoped to the conversation's REAL repo, or a tab
+		// watching a non-primary repo's PR never hears it (eventbus.go scopes
+		// subscribers by statusKey(repo, pr)). Most constructors don't thread
+		// Repo (SaveMessage backfills the stored row the same way), so resolve
+		// it from the conversation row rather than trusting the payload.
+		if msg.Repo == "" {
+			if repo, ok := m.chat.ConversationRepo(ctx, msg.ConversationID); ok {
+				msg.Repo = repo
+			}
+		}
 		publishChatChanged(msg.Repo, msg.PR, msg.ConversationID)
 		return nil, nil
 	})

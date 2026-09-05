@@ -281,3 +281,51 @@ func TestClearConversation(t *testing.T) {
 		t.Fatalf("c2 messages wrongly affected: %+v, %v", list, err)
 	}
 }
+
+// TestSaveMessageBackfillsRepoFromConversation pins the multi-repo backfill:
+// most message constructors never thread Repo through (they predate
+// multi-repo), and "" is a VALID value (the primary repo) — so a non-primary
+// repo's message used to be silently filed under the primary repo, invisible
+// to every repo-scoped read (ConversationsWithMessages, SeenAtForPR) and
+// unreachable for Purge(repo, pr).
+func TestSaveMessageBackfillsRepoFromConversation(t *testing.T) {
+	m := testModule(t)
+	ctx := context.Background()
+	const convID, repo = "comment-multi", "acme/ops"
+
+	if err := m.EnsureConversation(ctx, convID, repo, 12); err != nil {
+		t.Fatal(err)
+	}
+	// Deliberately no Repo on the message — the shape nearly every writer has.
+	if err := m.SaveMessage(ctx, Message{ID: "m1", ConversationID: convID, PR: 12, Role: "user", Body: "hoi"}); err != nil {
+		t.Fatal(err)
+	}
+
+	list, err := m.List(ctx, convID)
+	if err != nil || len(list) != 1 {
+		t.Fatalf("List = %v, %v", list, err)
+	}
+	if list[0].Repo != repo {
+		t.Fatalf("stored repo = %q, want %q (backfilled from the conversation row)", list[0].Repo, repo)
+	}
+	ids, err := m.ConversationsWithMessages(ctx, repo, 12)
+	if err != nil || len(ids) != 1 || ids[0] != convID {
+		t.Fatalf("ConversationsWithMessages(%q, 12) = %v, %v — the conversation must be visible under its own repo", repo, ids, err)
+	}
+	if ids, _ := m.ConversationsWithMessages(ctx, "", 12); len(ids) != 0 {
+		t.Fatalf("the message must not ALSO be filed under the primary repo, got %v", ids)
+	}
+	if n, err := m.Purge(ctx, repo, 12); err != nil || n != 1 {
+		t.Fatalf("Purge(%q, 12) = %d, %v — want the one message removed", repo, n, err)
+	}
+
+	// An explicit Repo on the message still wins; a message for a conversation
+	// nobody ensured degrades to what it carries (here: the primary repo).
+	if err := m.SaveMessage(ctx, Message{ID: "m2", ConversationID: "ghost", PR: 12, Role: "user", Body: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	list, _ = m.List(ctx, "ghost")
+	if len(list) != 1 || list[0].Repo != "" {
+		t.Fatalf("ghost conversation message repo = %+v, want \"\"", list)
+	}
+}

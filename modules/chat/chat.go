@@ -355,11 +355,39 @@ func (m *Module) SeenAtForPR(ctx context.Context, repo string, pr int) (map[stri
 	return out, rows.Err()
 }
 
+// ConversationRepo returns the canonical repo string stored on a
+// conversation's own row ("" = the primary repo) and whether the row exists.
+// READ — safe for anyone. The conversation row is the one place a
+// conversation's repo is always recorded (EnsureConversation runs before any
+// message is written), which is why SaveMessage backfills from it below.
+func (m *Module) ConversationRepo(ctx context.Context, conversationID string) (string, bool) {
+	var repo string
+	if err := m.db.QueryRowContext(ctx,
+		`SELECT repo FROM chat_conversations WHERE id = ?`, conversationID).Scan(&repo); err != nil {
+		return "", false
+	}
+	return repo, true
+}
+
 // SaveMessage persists one turn (idempotent on ID, so a retried Activity never
 // double-inserts). WRITE — workflow-Activity-only.
+//
+// An empty msg.Repo is backfilled from the conversation's own row: "" is a
+// VALID value (the primary repo), so a caller that simply never threads the
+// repo through — most message constructors predate multi-repo — would
+// otherwise silently file a non-primary repo's message under the primary one,
+// making it invisible to every repo-scoped read (ConversationsWithMessages,
+// SeenAtForPR) and unreachable for Purge(repo, pr). For a genuinely
+// primary-repo conversation the lookup returns "" anyway, so nothing changes
+// there.
 func (m *Module) SaveMessage(ctx context.Context, msg Message) error {
 	if msg.CreatedAt == "" {
 		msg.CreatedAt = now()
+	}
+	if msg.Repo == "" {
+		if repo, ok := m.ConversationRepo(ctx, msg.ConversationID); ok {
+			msg.Repo = repo
+		}
 	}
 	optsJSON := ""
 	if len(msg.Options) > 0 {

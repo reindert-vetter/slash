@@ -548,6 +548,23 @@ tree. **All four phases built**: backbone, frontend panel, agentic tool access
 influencing the left comment thread (see "Opt-in influence on the left comment
 thread (Phase 4)" below).
 
+**Multi-repo and the message rows**: nearly every `chat.Message` constructor
+(the outcome bubbles in `chat_workflow.go`/`chat_checkout.go`/`chat_merge.go`,
+the user message the `saveChatMessage` Activity stores) predates multi-repo and
+sets no `Repo` — and `""` is a VALID value (the primary repo), so those rows
+used to be silently filed under the primary repo for a non-primary repo's PR:
+invisible to every repo-scoped read (`ConversationsWithMessages` behind
+`GET /api/chat?pr=N` — the "Andere chats in deze PR" list and the
+openstaande-chats indicator — and `SeenAtForPR`), unreachable for
+`Purge(repo, pr)`, and the Activity's own `publishChatChanged` event landed on
+the wrong SSE scope. `chat.Module.SaveMessage` therefore **backfills an empty
+`msg.Repo` from the conversation's own row** (written by `EnsureConversation`,
+which always runs first and does carry the real repo), and the
+`saveChatMessage` Activity resolves the repo the same way
+(`ConversationRepo`) before publishing. Constructors that DO set `Repo`
+(`processChatMerge`'s meta-failure bubble) win unchanged. Test:
+`TestSaveMessageBackfillsRepoFromConversation` (`modules/chat`).
+
 ### Scope: one conversation per comment thread
 
 **A `claude_chat` Execution always hangs off an existing `task_code_comment`
