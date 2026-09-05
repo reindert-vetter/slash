@@ -113,3 +113,24 @@ func TestAuthOutputHelpers(t *testing.T) {
 		t.Errorf("maskSecret = %q", got)
 	}
 }
+
+// A result poisoned by a canceled context (e.g. the client disconnected
+// mid-check when the reviewer refreshed the page) must never be cached — see
+// the write-up in handleAuthStatus. hasCanceledCheck is what guards that.
+func TestHasCanceledCheck(t *testing.T) {
+	killed := AuthStatus{Checks: []AuthCheck{{ID: "jiraCli", State: authStateError, Detail: "signal: killed"}}}
+	if !hasCanceledCheck(killed) {
+		t.Error("a killed subprocess check should be flagged as canceled")
+	}
+	canceled := AuthStatus{Checks: []AuthCheck{{ID: "jiraToken", State: authStateError, Detail: `Get "https://x": context canceled`}}}
+	if !hasCanceledCheck(canceled) {
+		t.Error("a context-canceled HTTP check should be flagged as canceled")
+	}
+	genuine := AuthStatus{Checks: []AuthCheck{
+		{ID: "github", State: authStateOK, Detail: "Logged in to github.com account reindert-vetter"},
+		{ID: "jiraCli", State: authStateError, Detail: "unauthorized: use 'acli jira auth login' to authenticate"},
+	}}
+	if hasCanceledCheck(genuine) {
+		t.Error("a genuine rejection must not be flagged as canceled")
+	}
+}

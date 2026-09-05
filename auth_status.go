@@ -339,14 +339,41 @@ func (s *server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 	if s.tasks != nil {
 		m = s.tasks.manager
 	}
-	st := m.checkAuthStatus(r.Context())
+	// Deliberately NOT r.Context(): this result is cached for authStatusTTL and
+	// shared across every tab/page load, not just the request that happened to
+	// trigger it. A reviewer refreshing the page while this request is still
+	// in flight makes the browser drop that old connection, which cancels
+	// r.Context() — and since checkJiraCLIAuth/checkJiraToken derive their own
+	// timeout straight from the passed-in ctx, that killed the `acli` subprocess
+	// and aborted the Jira HTTP call mid-check ("signal: killed" /
+	// "context canceled"), and the resulting false failure then got cached and
+	// served to the freshly reloaded page for up to a minute. Each check still
+	// has its own bounded authCheckTimeout, so this cannot hang forever.
+	st := m.checkAuthStatus(context.Background())
 
 	authStatusMu.Lock()
-	authStatusCache = &st
-	authStatusCached = time.Now()
+	// Defense in depth: never let a result poisoned by a canceled context (a
+	// disconnected client, here or from a future regression) sit in the cache
+	// for other requests — serve it once, but let the next poll try again.
+	if !hasCanceledCheck(st) {
+		authStatusCache = &st
+		authStatusCached = time.Now()
+	}
 	authStatusMu.Unlock()
 
 	writeJSON(w, http.StatusOK, st)
+}
+
+// hasCanceledCheck reports whether any check's detail looks like it failed
+// because its context was canceled mid-flight, rather than a genuine
+// rejection — see the write-up in handleAuthStatus above.
+func hasCanceledCheck(st AuthStatus) bool {
+	for _, c := range st.Checks {
+		if strings.Contains(c.Detail, context.Canceled.Error()) || strings.Contains(c.Detail, "signal: killed") {
+			return true
+		}
+	}
+	return false
 }
 
 // invalidateAuthStatus drops the cache, so the very next poll re-runs the
