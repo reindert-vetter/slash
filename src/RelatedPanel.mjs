@@ -10342,32 +10342,93 @@ export function buildTaskRows(state) {
     .filter((row) => !taskUi.hiddenLogs.includes(row.key))
   const trouble = [...failed, ...logs].sort((a, b) => b.at - a.at)
   const failedIds = new Set(failed.map((r) => r.runId))
-  const live = visibleWorkflowRuns(state)
-    .filter((r) => r.status !== 'failed' && !failedIds.has(r.runId))
-    .map((run) => {
-      const badge = STATUS_BADGES[run.status] || {
-        label: run.status,
-        cls: 'bg-slate-50 dark:bg-zinc-800/60 text-slate-500 dark:text-zinc-500 ring-slate-200 dark:ring-zinc-800',
-      }
-      return {
-        kind: 'run',
-        problem: false,
-        key: 'run:' + run.runId + ':' + run.status,
-        at: new Date(run.updatedAt).getTime() || 0,
-        word: t(badge.label),
-        wordCls: TASK_WORD_BASE + badge.cls,
-        status: run.status,
-        runId: run.runId,
-        label: labelForWorkflow(run.workflow),
-        note: workflowNote(run, state),
-        when: relTime(run.updatedAt),
-        error: '',
-        comment: run.comment || null,
-        retryable: false,
-        run,
-      }
-    })
+  const live = foldIdenticalRuns(
+    visibleWorkflowRuns(state)
+      .filter((r) => r.status !== 'failed' && !failedIds.has(r.runId))
+      .map((run) => {
+        const badge = STATUS_BADGES[run.status] || {
+          label: run.status,
+          cls: 'bg-slate-50 dark:bg-zinc-800/60 text-slate-500 dark:text-zinc-500 ring-slate-200 dark:ring-zinc-800',
+        }
+        return {
+          kind: 'run',
+          problem: false,
+          key: 'run:' + run.runId + ':' + run.status,
+          at: new Date(run.updatedAt).getTime() || 0,
+          word: t(badge.label),
+          wordCls: TASK_WORD_BASE + badge.cls,
+          status: run.status,
+          runId: run.runId,
+          label: labelForWorkflow(run.workflow),
+          note: workflowNote(run, state),
+          when: relTime(run.updatedAt),
+          error: '',
+          comment: run.comment || null,
+          retryable: false,
+          run,
+        }
+      })
+  )
   return [...trouble, ...live].sort((a, b) => b.at - a.at)
+}
+
+// foldIdenticalRuns collapses several rows that are indistinguishable to the
+// reviewer into one, with a "· N×" count on the label — instead of listing
+// each one separately. A workflow like `explain_code`/`resolve_call` starts
+// one Execution PER unit (a distinct piece of code each time), and once
+// several of those are simultaneously visible (see `visibleWorkflowRuns`)
+// they carry an identical, generic label+status+note: there is no comment ref
+// to tell them apart (unlike a `task_code_comment` run, whose note already
+// names which comment it's about — see `workflowNote`). Reviewer report: 22
+// separate, pixel-identical "klaar | AI-omschrijving | … | omschrijving
+// gegenereerd" rows for one PR. `resolve_call` rarely shows this in practice
+// only because the Go side already groups many unresolved calls into ONE
+// Execution per caller (`groupUnresolvedCalls`, workflows.go) — a
+// server-side reduction of run COUNT that doesn't apply to `explain_code`
+// (each unit genuinely needs its own distinct explanation, so it can't be
+// merged into one Execution). This fold is therefore the general,
+// display-side fix: extend the one existing "merge many rows into a
+// readable list" mechanism (`buildTaskRows`) rather than build a second,
+// workflow-specific grouping path — so ANY workflow type with the same
+// "many generic, indistinguishable rows" shape is folded for free, not just
+// `explain_code`.
+//
+// Only rows WITHOUT a `comment` ref are eligible: a `task_code_comment` row's
+// note is per-instance information (which comment), never a duplicate-note
+// signal. The group key includes the note itself (not just workflow+status)
+// so two runs of the same workflow+status that legitimately say different
+// things (`code_warning`'s "N risico's gevonden", `build_relations`'s
+// `buildRelationsSummary`) are never folded together. The row's `.key()` is
+// derived from that same content, so it stays stable across polls as long as
+// the folded group's membership keeps producing the same content — no
+// needless remount, per the keyed-node rules in arrowjs-pitfalls.md.
+function foldIdenticalRuns(rows) {
+  const folded = new Map() // groupKey -> the one row kept for that group
+  const order = []
+  for (const row of rows) {
+    if (row.comment) {
+      order.push(row)
+      continue
+    }
+    const workflowType = (row.run && row.run.workflow) || row.label
+    const groupKey = workflowType + '|' + row.status + '|' + row.note
+    const existing = folded.get(groupKey)
+    if (!existing) {
+      const copy = { ...row, count: 1, key: 'fold:' + groupKey }
+      folded.set(groupKey, copy)
+      order.push(copy)
+    } else {
+      existing.count += 1
+      if (row.at > existing.at) {
+        existing.at = row.at
+        existing.when = row.when
+      }
+    }
+  }
+  for (const row of order) {
+    if (row.count > 1) row.label = row.label + ' · ' + row.count + '×'
+  }
+  return order
 }
 
 // TASK_ROW_H_REM — every row is exactly this tall, which is what makes the

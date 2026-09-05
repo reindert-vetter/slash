@@ -991,6 +991,23 @@ descriptors:
   `/pr-overview` keeps its own drawer and `src/problems.mjs` rows unchanged
   (`showPr: true`, see `tests/overview-problems.spec.mjs`); only `baseName` is
   still imported from that module here, so both pages name a file identically.
+- **`foldIdenticalRuns` collapses indistinguishable rows into one, with a
+  "· N×" count on the label.** A workflow like `explain_code` starts one
+  Execution PER unit — a distinct piece of code each time — so once several
+  of those are simultaneously visible they carry an identical, generic
+  label+status+note (no `comment` ref to tell them apart, unlike a
+  `task_code_comment` run). Reported bug: 22 pixel-identical "klaar |
+  AI-omschrijving | … | omschrijving gegenereerd" rows. `resolve_call` mostly
+  avoids this only because the Go side already groups many unresolved calls
+  into one Execution per caller (`groupUnresolvedCalls`, `workflows.go`) — a
+  reduction of run COUNT that doesn't generalize to `explain_code` (each unit
+  genuinely needs its own explanation). Only rows without a `comment` ref are
+  eligible, and the fold key includes the note itself (not just
+  workflow+status), so two runs that legitimately say different things
+  (`code_warning`'s "N risico's gevonden", `build_relations`'s
+  `buildRelationsSummary`) never fold together. This is the ONE grouping
+  mechanism — extend it for a future workflow type with the same shape rather
+  than adding a second, type-specific fold. Test: `tests/task-row-fold.spec.mjs`.
 
 **The word carries the state, the rose tint is decoration** (colorblind rule):
 a problem row leads with `⚠ mislukt` / `⚠ overgeslagen`
