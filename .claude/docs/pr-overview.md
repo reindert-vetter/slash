@@ -9,13 +9,22 @@ diff stats. `overview.html` → `src/overview.mjs`. Routing/shells live in
 It is **fully read-only** in the sense that it never writes directly to a
 module/table (per `.claude/rules/workflows-write-boundary.md`).
 
-## Jira notifications are the FIRST block on the page
+## Jira notifications live in the header bell
 
-Reviewer request: "deze feature van jira wil ik in pr-overview als eerste row
-item zien. elke notification wil ik als pr (net als need action) in een lijst
-zien. filter by ongelezen. een item moet openen in een new venster naar jira
-comment." The screenshot he attached is Jira's own bell panel — "Notifications",
-an "Only show unread" toggle, tabs Direct/Watching.
+Reviewer requests, in order — kept here because the end state only makes sense
+with the history: (1) "deze feature van jira wil ik in pr-overview als eerste
+row item zien. elke notification wil ik als pr (net als need action) in een
+lijst zien. filter by ongelezen. een item moet openen in een new venster naar
+jira comment" — an always-visible inline section above the PR list, screenshot
+attached was Jira's own bell panel ("Notifications", "Only show unread",
+Direct/Watching tabs); (2) "ik wil hier een belletje zien [header icon row].
+als ik daarop druk wil ik top 5 notifications zien. als er ongelezen zijn wil
+ik een rondje zien bij het belletje" — a bell icon added next to the
+theme/settings icons; (3) "haal deze sectie weg, onder het belletje wil ik dat
+het hetzelfde eruit ziet als in jira" — the pinned section from (1) was
+removed and everything it rendered (title, unread count, "Alleen ongelezen"
+toggle, the full row list — no 5-item cap anymore, since the dropdown became
+the ONLY place this feed is shown) moved into the bell's own dropdown.
 
 - **The data is the real bell feed**, not an approximation. Jira has no
   supported API for it: `acli` has no notifications command and the Jira Cloud
@@ -30,55 +39,60 @@ an "Only show unread" toggle, tabs Direct/Watching.
   via schema introspection against `/gateway/api/graphql`, which is still
   alive. A shape change (of either) degrades to "no notifications", never to
   an error wall — see `checkJiraToken`/`"unavailable"` for how a real failure
-  is still surfaced without crying wolf over a bad token.
-- **A second, always-reachable entry point sits in the header icon row**
-  (`jiraBellButton`, next to the theme/settings icons, reviewer screenshot
-  request): a bell icon with an unread dot (`jiraBellDot`, shown whenever
-  `jiraUnreadCount() > 0` — shape plus dot, never colour alone) that opens a
-  compact dropdown (`jiraBellPanel`) with the 5 most recent notifications
-  (read or unread), reusing `jiraRow` verbatim so a click still marks it read
-  and opens the deep link in a new window exactly like the inline section's
-  own rows. Its own small `state.jiraBellOpen` flag, closed by an outside
-  `mousedown` (mirroring the existing row-popover pattern: the toggle button
-  itself sits inside `[data-testid=jira-bell-wrapper]`, so opening/closing
+  is still surfaced without crying wolf over a bad token. **Second pitfall,
+  cost a full round-trip of its own**: the GraphQL query alone returned a
+  clean, successful, permanently EMPTY result — looking done, while the real
+  bell (side-by-side screenshot) clearly had unread items. The missing piece
+  was `notificationFeed`'s `collabContextRoutingAri` argument (the site's own
+  ARI, `ari:cloud:jira::site/<cloudId>`, `<cloudId>` fetched once per site via
+  another small undocumented endpoint, `GET https://<site>/_edge/tenant_info`)
+  — without it the resolver has no site/product to scope the feed to. See
+  `resolveCloudID`/`jiraSiteARI` in `modules/jira/notifications.go`.
+- **The ONE entry point is the header bell** (`jiraBellButton`, next to the
+  theme/settings icons): a bell icon with an unread dot (`jiraBellDot`, shown
+  whenever `jiraUnreadCount() > 0` — shape plus dot, never colour alone) that
+  opens `jiraBellPanel` — a dropdown styled after Jira's own notification
+  panel: a "Jira" title, the unread count badge, the `jiraUnreadToggle`
+  ("Alleen ongelezen" — on by default, mirroring Jira's own toggle, its state
+  spelled out in words "aan"/"uit", never colour alone), then a scrollable
+  (`max-h-96 overflow-y-auto`) list of every matching row, most-recent-first.
+  Each row is `jiraRow`, unchanged: a plain `<a href target="_blank">` onto the
+  feed's own deep link (which already carries Jira's `focusedCommentId`, so it
+  opens **on the comment**, in a **new window**) with an unread dot **plus** a
+  bold title. Opening a row marks it read (`markJiraRead`) — the one write this
+  page does, going the sanctioned way: start/reuse the tracker
+  (`POST /api/workflows/jira_inbox`), then Signal it (`…/signals/jira_notify`,
+  `{"kind":"read","id":…}`); the tracker's Activity writes the read-model.
+  Optimistic update so the filter reacts at once. Nothing is ever marked read
+  **in Jira** — this app does not write into an undocumented endpoint on the
+  reviewer's behalf, which is exactly why the read-model keeps its own
+  `read_at` (see `modules/jiranotify`).
+- **The dropdown is its own small state machine**, deliberately NOT folded
+  into the row-popover mechanism (`ui.openPopover`, which also resets
+  unrelated row-popover state on close): `state.jiraBellOpen`, closed by an
+  outside `mousedown` (mirroring the existing row-popover pattern — the toggle
+  button sits inside `[data-testid=jira-bell-wrapper]`, so opening/closing
   never races against that same listener) or by Escape (checked in
-  `kbHandler`, right after the row-popover branch). Deliberately separate from
-  the inline section below (`jiraBlock`, which only renders once there is at
-  least one notification at all) rather than folded into it or into the
-  row-popover machinery (`ui.openPopover`, which also resets unrelated
-  row-popover state on close).
+  `kbHandler`, right after the row-popover branch). **While it is open it owns
+  the keyboard**, same shape as the other dialogs on this page: every key
+  other than Escape is swallowed, so ↑/↓/Enter/→ do NOT walk these rows (that
+  is a deliberate change from the old pinned section, whose rows — via
+  `data-nav-row`/`data-nav-key="jira:<id>"` — used to join the page's normal
+  `currentRows()`/`paintSelection` arrow-key nav; a click is now the only way
+  into a row). `activateSelected`/`activateSelectedForward`'s branch for an
+  `a[href][target=_blank]` row (`el.click()` instead of `location.href`, so
+  Enter/→ still open the new window AND run the row's own mark-read `@click`)
+  is therefore dead for Jira rows specifically now, but is left in place: the
+  recent-generated drawer's own anchor rows still rely on it.
 - **Credentials come from the environment** (`SLASH_JIRA_EMAIL`,
   `SLASH_JIRA_TOKEN`, optional `SLASH_JIRA_SITE`, all in the gitignored `.env`
   — see `.env.example`). Deliberately **not** `data/settings.json`: that file is
   served verbatim to the browser by `GET /api/settings`, so a token in it would
-  leak to every page. With no token nothing is fetched and the block simply
-  never appears.
+  leak to every page. With no token nothing is fetched and the dropdown just
+  shows "Geen notificaties."
 - **The fetching + storing is a tracker**, `jira_inbox` — see
   `.claude/docs/workflows-trackers.md`. The page itself only reads
   `GET /api/jira/notifications`, exactly like every other list here.
-- **Rows** (`jiraBlock`/`jiraRow`, `src/overview.mjs`) sit above the stacks and
-  every PR section, styled with the same `ROW_CLASS` as a PR row and carrying
-  `data-nav-row`/`data-nav-key="jira:<id>"`, so ↑/↓/Enter walk them through the
-  existing `currentRows()`/`paintSelection` machinery with no new keyboard code.
-  Each row is a plain `<a href target="_blank">` onto the feed's own deep link,
-  which already carries Jira's `focusedCommentId` — that is what makes it open
-  **on the comment**, in a **new window**.
-- **`activateSelected`/`activateSelectedForward` grew one branch for this**: an
-  `a[href]` with `target="_blank"` is `el.click()`ed instead of assigned to
-  `location.href`, so Enter/→ open the new window AND run the row's own
-  `@click` (mark read). Every other anchor row (the recent drawer) is unchanged.
-- **"Alleen ongelezen" is on by default** (`state.jiraUnreadOnly`), mirroring
-  Jira's own toggle; `jiraUnreadToggle` spells its state out in words
-  ("aan"/"uit") and the unread rows carry a dot **plus** a bold title — per the
-  colourblind rule the shape/word carries the meaning, never the colour.
-- **Opening a row marks it read**, and that is the one write this page does. It
-  goes the sanctioned way (`markJiraRead`): start/reuse the tracker
-  (`POST /api/workflows/jira_inbox`), then Signal it
-  (`…/signals/jira_notify`, `{"kind":"read","id":…}`); the tracker's Activity
-  writes the read-model. The row updates optimistically so the filter reacts at
-  once. Nothing is ever marked read **in Jira** — this app does not write into
-  an undocumented endpoint on the reviewer's behalf, which is exactly why the
-  read-model keeps its own `read_at` (see `modules/jiranotify`).
 
 ## The general `/` command menu
 

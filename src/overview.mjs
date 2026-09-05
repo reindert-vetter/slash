@@ -45,17 +45,16 @@ const state = reactive({
   error: '',
   cached: false,
   inboxRunId: '', // pr_inbox workflow Run ID — target for refresh signal + heartbeat
-  // jira — the reviewer's own Jira notification feed (the bell menu), read
-  // from GET /api/jira/notifications (the jira_inbox tracker's read-model).
-  // Rendered as the FIRST block of the page, above every PR section.
+  // jira — the reviewer's own Jira notification feed, read from
+  // GET /api/jira/notifications (the jira_inbox tracker's read-model). Shown
+  // ONLY inside the header bell's dropdown (jiraBellButton/jiraBellPanel) —
+  // it used to also pin an always-visible section above the PR list, removed
+  // per reviewer request once the bell existed ("haal deze sectie weg").
   jira: [],
   jiraUnreadOnly: true, // mirrors Jira's own "Only show unread" toggle, on by default
   jiraRunId: '', // jira_inbox Run ID — target for the "read" signal
-  // jiraBellOpen — the compact header bell's own dropdown (top 5 most recent
-  // notifications, read or unread). Separate from the always-visible inline
-  // "Jira" section above the PR list (jiraBlock): the reviewer asked for a
-  // second, always-reachable entry point in the header icon row itself
-  // (screenshot), badge-dotted when jiraUnreadCount() > 0.
+  // jiraBellOpen — whether the header bell's own dropdown is open, badge-dotted
+  // via jiraBellDot whenever jiraUnreadCount() > 0.
   jiraBellOpen: false,
   sections: [], // [{ title, prs: Row[] }]
   statuses: {}, // prUid -> Status, backfilled async
@@ -2139,51 +2138,19 @@ function jiraUnreadToggle() {
   </button>`
 }
 
-// jiraBlock renders the whole section. Its key encodes the visible row set
-// (same reasoning as sectionBlock: the row list is a static interpolation, so
-// only a changed key re-reconciles it) plus the filter, so toggling it really
-// repaints.
-function jiraBlock() {
-  const rows = visibleJiraNotifications()
-  if (!state.jira.length) return null
-  return html`
-    <section data-testid="jira-section">
-      <div class="mb-3 mt-6 flex items-center gap-2">
-        <h2 class="text-[15px] font-semibold text-slate-900 dark:text-zinc-100">Jira</h2>
-        <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600 dark:bg-zinc-800 dark:text-zinc-400"
-          >${() => jiraUnreadCount() + ' ' + t('ongelezen')}</span
-        >
-        ${jiraUnreadToggle()}
-      </div>
-      ${() =>
-        rows.length
-          ? html`<div class="rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-900/60">
-              ${() => visibleJiraNotifications().map((n) => jiraRow(n))}
-            </div>`.key('jira:list')
-          : html`<p class="rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-900/60 px-4 py-6 text-center text-sm text-slate-500 dark:text-zinc-500">
-              ${t('Alles gelezen.')}
-            </p>`.key('jira:empty')}
-    </section>
-  `.key('jira:' + (state.jiraUnreadOnly ? 'unread' : 'all') + ':' + rows.map((n) => n.id + (n.unread ? '!' : '')).join(','))
-}
-
-// jiraSlot is the toggling wrapper. It sits in its OWN reactive slot with a
-// stable element root (see "Never key a template whose entire body is one
-// toggling expression" in .claude/rules/arrowjs-pitfalls.md), so the Jira feed
-// arriving/changing never re-runs mainContent's own section closure.
-function jiraSlot() {
-  const block = jiraBlock()
-  return block ? [block] : []
-}
-
 // ── Jira bell (header icon row) ─────────────────────────────────────────────
-// Reviewer request (screenshot of the header icon row): "ik wil hier een
-// belletje zien. als ik daarop druk wil ik top 5 notifications zien. als er
-// ongelezen zijn wil ik een rondje zien bij het belletje." A second, always-
-// reachable entry point next to jiraBlock's always-visible inline section
-// above the PR list: that section only appears once state.jira has any items
-// at all, while the bell sits permanently in the header, right where the
-// theme/settings icons already are.
+// Reviewer requests, in order: (1) "deze feature van jira wil ik in
+// pr-overview als eerste row item zien" — an always-visible inline section
+// above the PR list (the original jiraBlock/jiraSlot); (2) "ik wil hier een
+// belletje zien... als ik daarop druk wil ik top 5 notifications zien... een
+// rondje als er ongelezen zijn" — a bell icon in the header row; (3) "haal
+// deze sectie weg, onder het belletje wil ik dat het hetzelfde eruit ziet als
+// in jira" — the reviewer decided the bell dropdown should be the ONE place
+// this feed lives, styled like request (1)'s section (title, unread count,
+// "Alleen ongelezen" toggle, the same row list) rather than a page-pinned
+// block, and closer to Jira's own scrollable notification panel. So
+// jiraBlock/jiraSlot (the pinned section) are gone; everything they used to
+// render now lives inside jiraBellPanel, which the bell opens.
 
 // closeJiraBell / toggleJiraBell — a small, independent open/close flag
 // (state.jiraBellOpen), deliberately NOT folded into the row-popover
@@ -2210,28 +2177,39 @@ function jiraBellDot() {
   ></span>`
 }
 
-// jiraBellPanel — the top-5 dropdown, most-recent-first (state.jira is
-// already ordered that way by the jira_inbox read-model, newest first).
-// Reuses jiraRow verbatim for each entry, so a click marks it read and opens
-// it in a new window exactly like the inline section's own rows do.
+// jiraBellPanel — the dropdown, styled after Jira's own notification panel:
+// a title, unread count, "Alleen ongelezen" toggle, then a scrollable row
+// list (most-recent-first — state.jira is already ordered that way by the
+// jira_inbox read-model). Reuses jiraRow verbatim for each entry, so a click
+// marks it read and opens it in a new window exactly as before. Its own key
+// encodes the visible row set plus the filter (same reasoning as the old
+// jiraBlock: the row list is a static interpolation, so only a changed key
+// re-reconciles it), scoped to this panel's own reactive slot in
+// jiraBellButton so toggling it never re-runs the header row's own closure.
 function jiraBellPanel() {
-  const top5 = state.jira.slice(0, 5)
+  const rows = visibleJiraNotifications()
   return html`
     <div
       data-testid="jira-bell-panel"
-      class="absolute right-0 top-full z-20 mt-2 w-80 max-w-[90vw] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg dark:border-zinc-800 dark:bg-zinc-900"
+      class="absolute right-0 top-full z-20 mt-2 w-96 max-w-[90vw] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg dark:border-zinc-800 dark:bg-zinc-900"
     >
-      <div class="border-b border-slate-100 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:border-zinc-800 dark:text-zinc-500">
-        ${t('Jira notificaties')}
+      <div class="flex items-center gap-2 border-b border-slate-100 px-3 py-2.5 dark:border-zinc-800">
+        <h2 class="text-[13px] font-semibold text-slate-900 dark:text-zinc-100">Jira</h2>
+        <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600 dark:bg-zinc-800 dark:text-zinc-400"
+          >${() => jiraUnreadCount() + ' ' + t('ongelezen')}</span
+        >
+        ${jiraUnreadToggle()}
       </div>
-      ${() =>
-        top5.length
-          ? html`<div>${() => top5.map((n) => jiraRow(n))}</div>`.key('jira-bell:list')
-          : html`<p class="px-4 py-6 text-center text-sm text-slate-500 dark:text-zinc-500">${t('Geen notificaties.')}</p>`.key(
-              'jira-bell:empty',
-            )}
+      <div class="max-h-96 overflow-y-auto">
+        ${() =>
+          rows.length
+            ? html`<div>${() => visibleJiraNotifications().map((n) => jiraRow(n))}</div>`.key('jira-bell:list')
+            : html`<p class="px-4 py-6 text-center text-sm text-slate-500 dark:text-zinc-500">
+                ${() => (state.jira.length ? t('Alles gelezen.') : t('Geen notificaties.'))}
+              </p>`.key('jira-bell:empty')}
+      </div>
     </div>
-  `
+  `.key('jira-bell:' + (state.jiraUnreadOnly ? 'unread' : 'all') + ':' + rows.map((n) => n.id + (n.unread ? '!' : '')).join(','))
 }
 
 // jiraBellButton — the header icon, same compact size/style as
@@ -2256,7 +2234,6 @@ function jiraBellButton() {
 function mainContent() {
   return html`
     <div>
-      <div class="contents">${() => jiraSlot()}</div>
       <div data-testid="inbox-sections">
       ${() => {
         if (state.loading) return loadingSkeletonList()
