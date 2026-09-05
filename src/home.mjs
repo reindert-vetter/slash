@@ -3687,9 +3687,31 @@ function recomputeLeftList() {
   const underlying = {}
   for (const b of state.blocks) if (childIds.has(b.id)) underlying[b.id] = true
   state.underlyingIds = underlying
-  const at = state.blocks.findIndex((b) => b.id === selId)
+  let at = state.blocks.findIndex((b) => b.id === selId)
   // The previously selected id survives a reindex (id-preserving, see
   // conventions.md's "snapshot a selection by stable ID" entry) → keep it.
+  //
+  // NOT genuinely gone: a selected block that just became panel-only — the
+  // callresolve load marked it a resolved-call target (`hidden` above), so
+  // its standalone index row disappeared while the block itself still exists
+  // in state.allBlocks, shown as an Onderliggende-code child under its
+  // caller. This is exactly what a fresh `?sel=` deep link to such a block
+  // hits: applyBlockRefRestore resolves it fine against the pre-callresolve
+  // list, and moments later this reindex would silently clamp the restored
+  // selection to row 0 (measured 8/8 on the fixture PR). Land on the CALLER's
+  // row instead — the one place the target is actually visible (its panel).
+  if (at < 0 && selId != null) {
+    const prefix = blockIdPrefix() + ':'
+    for (const r of state.callResolve || []) {
+      const childId = prefix + r.childFile + ':' + (r.childClass ? r.childClass + '::' + r.childMethod : r.childMethod)
+      if (childId !== selId) continue
+      const callerAt = state.blocks.findIndex((b) => b.id === r.callerId)
+      if (callerAt >= 0) {
+        at = callerAt
+        break
+      }
+    }
+  }
   // Genuinely GONE (e.g. the selected PR-wide/anchored comment just got
   // resolved elsewhere while the reviewer was deep in a drilled subtree —
   // indexComments drops a resolved block-anchored comment entirely, see its
