@@ -2836,23 +2836,96 @@ function approvalAnchors(b) {
     }))
 }
 
+// approveSignalQueue — every "set" Signal to the durable approve tracker goes
+// through ONE in-flight POST at a time, with per-key coalescing (latest body
+// wins). Two measured reasons, both from a Space-spam session on the 601-block
+// fixture PR (see the navigation-latency notes in
+// .claude/docs/frontend-memory.md):
+//
+// 1. A signal is cheap when the tracker's history is short but grows linearly
+//    with it (the engine re-reads and replays the whole history per signal —
+//    ~0.9s per signal at ~6.5k events, measured with curl against an idle
+//    server). Firing one fetch per Space press therefore piles up multiple
+//    seconds-long POSTs, which exhausts the browser's 6-connection pool and
+//    starves the /api/code fetch the NEXT Space press needs for its landing:
+//    the visible symptom was Space presses of 0.7-1.5s (server read itself
+//    sub-ms throughout, verified from a separate connection).
+// 2. Each signal carries the block's FULL approved state (that's the tracker
+//    contract — the read-model write is idempotent per block), so a queue may
+//    safely coalesce per key: while row-by-row approving one block, only the
+//    latest state matters, collapsing an N-press burst into a couple of
+//    signals and keeping the tracker's history (and thus its per-signal
+//    replay cost) much smaller.
+//
+// Order stays FIFO across keys (a later fullyApproved signal never overtakes
+// the block signals that made it true). Loss window on tab close is no worse
+// than before (fetches were already fire-and-forget); pagehide flushes what's
+// still queued via sendBeacon, which is MORE durable than the old in-flight
+// fetches that a navigation could abort.
+const approveSignalPending = new Map()
+const approveSignalOrder = []
+let approveSignalBusy = false
+function queueApproveSignal(key, body) {
+  if (!state.approveRunId) return
+  if (!approveSignalPending.has(key)) approveSignalOrder.push(key)
+  approveSignalPending.set(key, body)
+  drainApproveSignals()
+}
+async function drainApproveSignals() {
+  if (approveSignalBusy) return
+  approveSignalBusy = true
+  try {
+    while (approveSignalOrder.length) {
+      const key = approveSignalOrder.shift()
+      const body = approveSignalPending.get(key)
+      approveSignalPending.delete(key)
+      try {
+        await fetch(`/api/workflows/${state.approveRunId}/signals/set`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        })
+      } catch (_) {
+        /* best-effort — the local state is already updated */
+      }
+    }
+  } finally {
+    approveSignalBusy = false
+  }
+  // A key queued between the loop's last iteration and the busy reset above
+  // saw busy === true and returned — pick it up now.
+  if (approveSignalOrder.length) drainApproveSignals()
+}
+window.addEventListener('pagehide', () => {
+  if (!state.approveRunId) return
+  for (const key of approveSignalOrder) {
+    const body = approveSignalPending.get(key)
+    if (!body) continue
+    try {
+      navigator.sendBeacon(
+        `/api/workflows/${state.approveRunId}/signals/set`,
+        new Blob([JSON.stringify(body)], { type: 'application/json' }),
+      )
+    } catch (_) {
+      /* best-effort */
+    }
+  }
+  approveSignalOrder.length = 0
+  approveSignalPending.clear()
+})
+
 // persistApproval signals a block's full approved state to the durable approve
 // tracker — the ONLY write path (the UI never writes a read-model directly). A
-// no-op until approveRunId is known (offline); fire-and-forget, best-effort.
+// no-op until approveRunId is known (offline); fire-and-forget, best-effort,
+// serialized/coalesced through approveSignalQueue above.
 function persistApproval(b) {
   if (!b || !state.approveRunId) return
   const anchors = approvalAnchors(b)
-  fetch(`/api/workflows/${state.approveRunId}/signals/set`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      blockId: b.id,
-      rows: b.approvedRows || [],
-      calls: b.approvedCalls || [],
-      ...(anchors ? { anchors } : {}),
-    }),
-  }).catch(() => {
-    /* best-effort — the local state is already updated */
+  queueApproveSignal('block:' + b.id, {
+    blockId: b.id,
+    rows: b.approvedRows || [],
+    calls: b.approvedCalls || [],
+    ...(anchors ? { anchors } : {}),
   })
   syncViewedFiles()
 }
@@ -2905,13 +2978,9 @@ function syncViewedFiles() {
 const viewedFiles = new Set()
 
 function signalFileViewed(file, viewed) {
-  fetch(`/api/workflows/${state.approveRunId}/signals/set`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ file, viewed }),
-  }).catch(() => {
-    /* best-effort */
-  })
+  // Latest-wins per file is exactly right here: only the final viewed state
+  // matters to GitHub's checkbox (see approveSignalQueue above).
+  queueApproveSignal('viewed:' + file, { file, viewed })
 }
 
 // wasFullyApproved — module scope, not on `state`, same reasoning as
@@ -2933,13 +3002,9 @@ function notifyFullyApprovedIfNeeded() {
   const isFullyApproved =
     state.approvalTotal.total > 0 && state.approvalTotal.done === state.approvalTotal.total
   if (isFullyApproved && !wasFullyApproved && state.approveRunId) {
-    fetch(`/api/workflows/${state.approveRunId}/signals/set`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fullyApproved: true }),
-    }).catch(() => {
-      /* best-effort */
-    })
+    // Through the same FIFO queue, so it never overtakes the block signals
+    // that made the PR fully approved (see approveSignalQueue above).
+    queueApproveSignal('fullyApproved', { fullyApproved: true })
   }
   wasFullyApproved = isFullyApproved
 }
@@ -7403,6 +7468,9 @@ function scrollSelectedIntoView() {
 // fight each other. Setting scrollTop fires a scroll event, which syncScroll
 // (Block.mjs) mirrors to the other pane, so both sides animate in lockstep.
 let scrollAnim = 0
+// Panes that have had at least one programmatic centring — see the freshPane
+// jump in scrollChangeIntoView.
+const glidPanes = new WeakSet()
 const SCROLL_MS = 160 // fast, but still a visible glide
 function animateScrollTop(container, to) {
   cancelAnimationFrame(scrollAnim)
@@ -7453,7 +7521,22 @@ function scrollChangeIntoView(animate = true, tries = 10, settle = true) {
       container.scrollTop +
       (eRect.top - cRect.top) -
       (container.clientHeight - eRect.height) / 2
-    if (animate) {
+    // A FRESHLY MOUNTED pane (never glided before, still at scrollTop 0 —
+    // i.e. the landing of a cross-block jump like Space's approve-and-
+    // continue, or the first centring after entering a diff) jumps straight
+    // to position: there is no previous in-card position for the eye to
+    // glide FROM, and the ~10 tween frames each pay a scrollTop write against
+    // a style/layout-dirty fresh DOM — measured at ~25% of an approve-and-
+    // continue press's CPU on the 601-block fixture (see the
+    // navigation-latency notes in .claude/docs/frontend-memory.md). Steps
+    // WITHIN an already-visible card (the case the glide exists for, see
+    // animateScrollTop's own comment) keep gliding: their pane carries the
+    // data-glid marker from this very branch.
+    // (a WeakSet, not a data- attribute: tests/navigate.spec.mjs asserts a
+    // same-block step's only attribute mutations are the cards' own class.)
+    const freshPane = !glidPanes.has(container) && container.scrollTop === 0
+    glidPanes.add(container)
+    if (animate && !freshPane) {
       animateScrollTop(container, to)
     } else {
       cancelAnimationFrame(scrollAnim) // kill any running glide
@@ -12050,6 +12133,24 @@ function firstUnapprovedOwnUnit(b, gran, afterIndex) {
 async function firstUnapprovedInSubtree(b, seen = new Set()) {
   if (!b || seen.has(b.id)) return null
   seen.add(b.id)
+  // Skip a subtree the combined-approval summary already proves DONE (or
+  // empty: total 0 has nothing to approve either) — WITHOUT fetching its
+  // code. The summary (state.approvalSummaries, the same map the sidebar's
+  // isFullyApproved/hide-approved-rows read, filled off-render from the
+  // server-backed blockstats totals + the approvals read-model) covers the
+  // block's WHOLE subtree, so nothing under it can be a hit. Measured
+  // reason, not a micro-optimization: every entry here used to cost an
+  // `await ensureCode(b)` — a sequential fetch round trip for a cold block,
+  // a resolved-promise microtask hop for a warm one — and findNextUnapproved
+  // walks EVERY remaining sidebar block through this function. On the
+  // 601-block fixture PR that made a single Space press degrade linearly
+  // with the number of already-approved blocks it had to re-walk (p50 46ms
+  // fresh → 196ms after ~400 approvals, with 0.7-1.5s spikes when a long
+  // fully-approved stretch sat between the cursor and the next open unit).
+  // No summary entry yet (a nested Onderliggende-code child, or the very
+  // first flush after load) → fall through to the full walk, as before.
+  const sum = state.approvalSummaries && state.approvalSummaries[b.id]
+  if (sum && sum.done === sum.total) return null
   await ensureCode(b)
   const change = firstUnapprovedOwnUnit(b, 'group', -1)
   if (change !== null) return { path: [], gran: 'group', change }
