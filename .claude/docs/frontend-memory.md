@@ -912,8 +912,9 @@ same boolean, so a future session fixing this needs to decouple them, not
 just flip another `!0`. Residual, measured with the narrow fix: the
 pool-integrity counter (which also catches array-content corruption) still
 grows ~4-5 per drill/approve/collapse cycle (179 over 40 cycles, measured), down from an unbounded rate but
-not zero. Full writeup: LOCAL PATCH 8 in
-`.claude/rules/arrowjs-pitfalls.md` and its own comment block in
+not zero. Full writeup: LOCAL PATCH 8 (and its sibling LOCAL PATCH 6b, a
+second, independent gap found while verifying this) in
+`.claude/rules/arrowjs-pitfalls.md` and their own comment blocks in
 `src/vendor/arrow.js`. LOCAL PATCH 7's guard (and PATCH 6's) stay in place as
 a defense-in-depth net — this fix closes the single-chunk call site proven
 responsible for the majority of instances found so far, not the general "a

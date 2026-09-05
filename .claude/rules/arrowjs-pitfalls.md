@@ -159,7 +159,24 @@ restore instructions.
   above (a disposal-timing gap reaching `_`'s stale `e`/`previous`) pointed
   at the right neighbourhood but not the right mechanism — see PATCH 8's own
   entry for the proven cause and fix. This guard stays as a defense-in-depth
-  net; it is not removed.
+  net; it is not removed. **Also, this patch's own doc comment (and this
+  file's) once claimed `setStartBefore`/`setEndAfter`/`insertNode` "occur
+  exactly once in the whole bundle" — that was WRONG, see LOCAL PATCH 6b.**
+- **LOCAL PATCH 6b** — a second, separate occurrence of the exact same
+  `setStartBefore`/`setEndAfter`/`Range.deleteContents` construction PATCH 6
+  guards in `_`, found only while verifying PATCH 8: `qt` (upstream
+  `removeUnmounted`) has its OWN "the whole array is being cleared, try one
+  fast Range delete" shortcut, with a PARTIAL upstream guard (`if(f){...}`,
+  `f` being the first item's parent) that never checked the LAST item's
+  parent — so `setEndAfter` on an already-parentless last boundary threw the
+  identical error, unguarded. This call site was **never reached** before
+  PATCH 8: the old, wrong `qt(e,!0)` in PATCH 2's cleanup made this
+  shortcut's own entry condition (`!e&&t.length`) always false, so PATCH 8
+  fixing that call newly exposed this pre-existing blind spot (30 uncaught
+  `setEndAfter … Node has no parent` page errors across 60 cycles with PATCH
+  8 alone; 0 across 80 with this guard added on top). Fix: extend the
+  existing check to `if(f&&s.parentNode){...}` — same "bail, fall through to
+  the safe per-item path" shape as PATCH 6.
 - **LOCAL PATCH 7** — a cycle guard in `L`, the chunk DOM mover (walks
   `ref.f .. ref.l` via `nextSibling`, `insertBefore`-ing each node into the
   target). With CORRUPTED chunk boundaries (`f`/`l` in different parents, or
@@ -242,8 +259,10 @@ restore instructions.
   `qt`'s array branch has no way to take the safe "detach each item via `L`"
   path without also risking that bulk wipe — the two share one boolean gate
   — so fixing the array case properly needs decoupling them, a deeper change
-  than this session took on. **Verified:** re-ran the same instrumented
-  stress script against the NARROWED fix — the single-chunk counters stayed
+  than this session took on; see LOCAL PATCH 6b right above (found while
+  chasing this) for a related, independent gap in that same bulk-wipe path.
+  **Verified:** re-ran the same instrumented stress script against the
+  NARROWED fix — the single-chunk counters stayed
   at 0 across 60+ repeated drill/approve/collapse cycles (vs. 1600+ within
   the first cycle unpatched), and the full existing regression suite plus
   the approval/postApprove/drill-approve/navigate suite pass unchanged. The
