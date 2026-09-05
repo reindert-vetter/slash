@@ -245,9 +245,14 @@ function removePraiseWord(idx) {
 }
 
 // ── keyboard: ↑/↓ over the row list, Enter/Space runs that row's primary
-// action (exactly what a click on it runs — mouse-navigation.md), ← goes
-// back to originFrom. Escape, while a text input owns focus, blurs back to
-// row navigation (mirrors home.mjs's own input-focus guard). ─────────────
+// action (exactly what a click on it runs — mouse-navigation.md), ←/Escape
+// both go back to originFrom (goBack) — reviewer report: only the visible
+// "← Terug" button worked, Escape did nothing (it only blurred a focused text
+// input, see the input-focus guard right below, mirrored from home.mjs).
+// Escape, while a text input owns focus, still blurs back to row navigation
+// instead of leaving the page outright — the same "Escape closes the
+// nearest thing, not the whole page" precedent as everywhere else Escape
+// appears in this app (a menu/popover/overlay). ─────────────
 
 function focusRowInput(row) {
   const el = document.querySelector('[data-testid="settings-' + row + '-input"]')
@@ -317,7 +322,7 @@ window.addEventListener('keydown', (e) => {
   } else if (e.key === 'Enter' || e.key === ' ') {
     e.preventDefault()
     activateRow(ROWS[state.activeRow])
-  } else if (e.key === 'ArrowLeft') {
+  } else if (e.key === 'ArrowLeft' || e.key === 'Escape') {
     e.preventDefault()
     goBack()
   }

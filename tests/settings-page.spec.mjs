@@ -25,6 +25,17 @@ test.describe('settings page — entry buttons', () => {
     await expect(page).toHaveURL(/\/pr\/12903/)
   })
 
+  test('Escape also returns from /settings, same as ←', async ({ page }) => {
+    await page.goto('/pr-overview')
+    await expect(page.getByTestId('inbox')).toBeVisible()
+
+    await page.getByTestId('settings-button').click()
+    await expect(page).toHaveURL(/\/settings\?from=/)
+
+    await page.keyboard.press('Escape')
+    await expect(page).toHaveURL(/\/pr-overview/)
+  })
+
   test('the gear button on /pr-overview opens /settings and ← returns there', async ({ page }) => {
     await page.goto('/pr-overview')
     await expect(page.getByTestId('inbox')).toBeVisible()

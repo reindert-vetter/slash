@@ -74,7 +74,12 @@ granularity to remap onto):
   aliases/praise-words text input, or `toggleLang('ui'|'explain'|'reply')`.
   The checkout row is read-only here (see below), so its activation is a
   no-op, and so is the `langcommit` row (always English, by rule).
-- `←` calls the same `goBack()` the "← Terug" button's click runs.
+- `←` **and `Escape`** both call the same `goBack()` the "← Terug" button's
+  click runs (only reached while no text input owns focus — see the guard
+  above, which lets Escape blur an open aliases/praise-words input instead).
+  Reviewer report: only the visible button worked, Escape did nothing. Test:
+  `tests/settings-page.spec.mjs` ("Escape also returns from /settings, same
+  as ←").
 
 ## Per-setting source and write path
 
