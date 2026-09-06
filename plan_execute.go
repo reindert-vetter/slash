@@ -10,11 +10,18 @@
 // Modelled on test_run.go/comment_batch.go — read those headers first; this one
 // only calls out where a plan execution differs:
 //
-//  1. NO PR exists yet. There is no shared local checkout to borrow
-//     (chat_checkout.go is PR-scoped), so this workflow makes its own git
-//     worktree at data/worktrees/plan-<KEY>, branched off the repo's base
-//     branch. It is rebuilt from scratch on every attempt, so a failed run
-//     never poisons the next one.
+//  1. NO PR exists yet, but the reviewer's own WERKMAP is used all the same —
+//     the same standing local checkout a review-tree write turn edits
+//     (chat_checkout.go), resolved through that very same selection ladder
+//     (settings.json's chatCheckoutDirs, then the bounded home scan, matched on
+//     the repo slug). Reviewer decision: "voor het uitvoeren moet je een
+//     werkmap gebruiken net als bij de tree" — this workflow used to build its
+//     own disposable git worktree at data/worktrees/plan-<KEY> instead, which
+//     put the plan's work somewhere the reviewer never looks. Since the plan's
+//     branch does not exist anywhere yet, the ladder is asked for a checkout
+//     that is on the BASE branch (or on some other branch already merged into
+//     it, i.e. genuinely free), and the plan branch is created there with
+//     `git checkout -B <branch> origin/<base>`. See resolvePlanWorkDir.
 //  2. ALWAYS the primary repo (plug-and-pay/plug-and-pay, base develop). A plan
 //     hangs off a Jira ticket, which carries no repo, and the page offers no
 //     repo choice — an explicit reviewer decision, not an oversight.
@@ -26,7 +33,11 @@
 //     than something scraped out of the model's prose.
 //  4. TWO Activities around the agentic one: preparing/committing and opening
 //     the PR are split, so a failed push or a `gh` hiccup can be retried
-//     without paying for the whole Claude run again.
+//     without paying for the whole Claude run again. The resolved werkmap
+//     travels between them on the Activity's own recorded result/input
+//     (planExecuteResult.Dir -> planExecutePRArg.Dir), so the second one never
+//     re-runs the ladder and can never land on a different directory than the
+//     one Claude actually edited.
 //  5. NO deterministic Run ID (unlike the `plan` tracker itself). A plan may be
 //     executed more than once — a second attempt is simply a second run, and
 //     RunsForPlan finds every one of them by the `key` on their input, so they
@@ -42,9 +53,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -93,12 +102,18 @@ type planExecutePRArg struct {
 	Branch string   `json:"branch"`
 	URL    string   `json:"url,omitempty"`
 	Tasks  []string `json:"tasks,omitempty"`
+	// Dir is the werkmap the agent Activity actually used — carried over
+	// rather than re-resolved, see the file header (point 4).
+	Dir string `json:"dir,omitempty"`
 }
 
 // planExecuteResult is what the workflow records — deliberately bounded (a
 // branch, a PR reference, one short note), never the run's transcript.
 type planExecuteResult struct {
-	Branch   string `json:"branch,omitempty"`
+	Branch string `json:"branch,omitempty"`
+	// Dir is the werkmap this attempt ran in (chat_checkout.go's own selection
+	// ladder), so the page can say WHERE the plan was implemented.
+	Dir      string `json:"dir,omitempty"`
 	Commit   string `json:"commit,omitempty"`
 	PRURL    string `json:"prUrl,omitempty"`
 	PRNumber int    `json:"prNumber,omitempty"`
@@ -135,7 +150,7 @@ func planExecuteWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		return json.Marshal(res)
 	}
 	var pr planExecuteResult
-	arg := planExecutePRArg{Key: doc.Key, Title: doc.Title, Branch: branch, URL: doc.URL, Tasks: planTaskTitles(doc)}
+	arg := planExecutePRArg{Key: doc.Key, Title: doc.Title, Branch: branch, URL: doc.URL, Tasks: planTaskTitles(doc), Dir: res.Dir}
 	if err := w.ExecuteActivity("planExecuteOpenPR", arg, &pr); err != nil {
 		return nil, fmt.Errorf("plan execute: open pr: %w", err)
 	}
@@ -179,6 +194,7 @@ type PlanExecView struct {
 	RunID    string `json:"runId"`
 	Status   string `json:"status"`
 	Branch   string `json:"branch,omitempty"`
+	Dir      string `json:"dir,omitempty"`
 	PRURL    string `json:"prUrl,omitempty"`
 	PRNumber int    `json:"prNumber,omitempty"`
 	Note     string `json:"note,omitempty"`
@@ -221,7 +237,7 @@ func (m *TaskManager) PlanExecution(key string) (PlanExecView, bool) {
 	out = PlanExecView{RunID: newest.ID, Status: newest.Status}
 	var res planExecuteResult
 	if m.engine.Result(newest.ID, &res) == nil {
-		out.Branch, out.PRURL, out.PRNumber, out.Note = res.Branch, res.PRURL, res.PRNumber, res.Note
+		out.Branch, out.Dir, out.PRURL, out.PRNumber, out.Note = res.Branch, res.Dir, res.PRURL, res.PRNumber, res.Note
 	}
 	return out, true
 }
@@ -262,16 +278,66 @@ func planBranchName(key, title string) string {
 	return base + "-" + slug
 }
 
-// planWorktreeDir is the worktree one plan is implemented in. Its own name
-// space (plan-<key>) next to the ingest pipeline's pr-<n>-base|head dirs, so
-// cleanup.go's PR-scoped sweep never touches it and it never collides with one.
-func planWorktreeDir(dataDir, key string) string {
-	root, err := filepath.Abs(dataDir)
-	if err != nil {
-		root = dataDir
+// resolvePlanWorkDir picks the WERKMAP a plan is implemented in: one of the
+// reviewer's own standing local checkouts of the primary repo, through the
+// exact same selection ladder a review-tree write turn uses
+// (listCheckoutCandidates, chat_checkout.go) — settings.json's
+// chatCheckoutDirs first, the bounded home scan only when that yields
+// nothing, matched on the repo slug (never a fork).
+//
+// Two deliberate differences from the tree's own use of that ladder, both
+// forced by "there is no PR yet":
+//
+//   - headRef is the BASE branch. The plan's own branch does not exist
+//     anywhere at this point, so "already on the target branch" cannot mean
+//     anything; asking for the base branch instead makes a checkout sitting on
+//     develop count as OnTargetBranch (and thus win via prioritizeOnTargetBranch),
+//     while a checkout on some other, already-merged branch still qualifies as
+//     MergedIntoBase. Both are exactly the ladder's own notion of "genuinely
+//     free, not someone's unfinished work".
+//   - The choice is AUTOMATIC, never put to the reviewer. The tree asks
+//     (checkoutStageChooseDirectory, src/workDirOverlay.mjs) because a chat
+//     turn has a conversation to ask in; the plan page deliberately has no
+//     such overlay — see the accepted gaps in .claude/docs/plan-page.md. So
+//     the first usable candidate wins, deterministically: registry before home
+//     scan, on-the-base-branch before merely-merged.
+//
+// A DIRTY candidate is skipped rather than asked about: this run is about to
+// put a fresh branch in that directory, and dragging the reviewer's own
+// uncommitted work onto it (or into the draft PR's commit) is never a guess
+// worth making. A directory another PR's chat already claims is held back the
+// same way the tree holds it back (checkoutDirClaimsByOtherPRs; pr 0 is never
+// a real PR number, so every claim counts as "someone else's").
+//
+// Returns ("", note) when there is nothing usable — a reviewer-facing sentence
+// naming what was actually in the way, never a fallback to a disposable
+// worktree.
+func resolvePlanWorkDir(ctx context.Context, dataDir string) (dir string, note string) {
+	slug := repoSlugFor("")
+	base := baseBranchFor("")
+	hold := checkoutHoldback{Claimed: checkoutDirClaimsByOtherPRs("", 0)}
+	candidates, diag := listCheckoutCandidates(ctx, dataDir, slug, base, base, hold)
+
+	var usable []checkoutCandidate
+	var dirty []string
+	for _, c := range candidates {
+		if c.Dirty {
+			dirty = append(dirty, c.Dir)
+			continue
+		}
+		usable = append(usable, c)
 	}
-	safe := planBranchSlugRe.ReplaceAllString(strings.ToLower(key), "-")
-	return filepath.Join(root, "worktrees", "plan-"+strings.Trim(safe, "-"))
+	if usable = prioritizeOnTargetBranch(usable); len(usable) > 0 {
+		return usable[0].Dir, ""
+	}
+	if len(dirty) > 0 {
+		return "", fmt.Sprintf("De werkmap(pen) van deze repo (%s) hebben nog niet-vastgelegde wijzigingen; die laat ik met rust. Commit of stash ze, of voeg een vrije map toe aan chatCheckoutDirs in settings.json.",
+			strings.Join(dirty, ", "))
+	}
+	if reason := diag.reason(); reason != "" {
+		return "", reason
+	}
+	return "", "Ik vond geen lokale werkmap van " + slug + ". Voeg er een toe aan chatCheckoutDirs in settings.json, of clone de repo lokaal."
 }
 
 // registerPlanExecuteActivities wires the three Activities. Called from
@@ -322,23 +388,43 @@ func (m *TaskManager) runPlanExecuteAgent(ctx context.Context, arg planExecuteAg
 		res.Note = "Claude is niet beschikbaar, dus er is niets uitgevoerd."
 		return res
 	}
-	dir := planWorktreeDir(m.dataDir, arg.Doc.Key)
 	base := baseBranchFor("")
-	// A fresh worktree per attempt: remove whatever is there (best-effort, an
-	// absent path is fine), fetch the base branch, then branch off it.
-	_, _ = runGitFor(ctx, "", "worktree", "remove", "--force", dir)
-	if err := os.RemoveAll(dir); err != nil {
-		res.Note = "Kon de oude werkmap niet opruimen: " + err.Error()
+	dir, note := resolvePlanWorkDir(ctx, m.dataDir)
+	if dir == "" {
+		m.logf("plan execute %s: no werkmap: %s", arg.Doc.Key, note)
+		res.Note = note
 		return res
 	}
-	if _, err := runGitFor(ctx, "", "fetch", "origin", base); err != nil {
+	res.Dir = dir
+
+	// One writer per checkout, exactly like the tree: a review-tree write
+	// turn, its landing and the werkmap overlay's own actions all take this
+	// same per-directory slot (chat_write_gate.go / checkoutWriteSlotKey), so
+	// a plan execution can never run its `checkout -B` into a directory
+	// another turn is mid-edit in.
+	release := acquireWriteTurnSlot(ctx, "dir:"+dir, func() {
+		m.logf("plan execute %s: waiting for the werkmap %s", arg.Doc.Key, dir)
+	})
+	defer release()
+
+	// Re-check after the wait: the turn we queued behind may have left work
+	// behind, and the reviewer's uncommitted work is never ours to move.
+	if dirty, err := checkoutIsDirty(ctx, dir); err != nil || dirty {
+		res.Note = "De werkmap " + dir + " heeft nog niet-vastgelegde wijzigingen; die laat ik met rust."
+		return res
+	}
+	if _, err := runGitIn(ctx, dir, "fetch", "origin", base); err != nil {
 		m.logf("plan execute %s: fetch %s: %v", arg.Doc.Key, base, err)
 		res.Note = "Kon de basisbranch niet ophalen: " + err.Error()
 		return res
 	}
-	if _, err := runGitFor(ctx, "", "worktree", "add", "-B", arg.Branch, dir, "origin/"+base); err != nil {
-		m.logf("plan execute %s: worktree add: %v", arg.Doc.Key, err)
-		res.Note = "Kon geen werkmap klaarzetten voor branch " + arg.Branch + "."
+	// The branch is created IN the reviewer's own checkout and deliberately
+	// left there afterwards: once the draft PR exists, the tree's own ladder
+	// finds this very directory already on that PR's head branch, so reviewing
+	// what was just planned continues in the same werkmap.
+	if _, err := runGitIn(ctx, dir, "checkout", "-B", arg.Branch, "origin/"+base); err != nil {
+		m.logf("plan execute %s: checkout -B: %v", arg.Doc.Key, err)
+		res.Note = "Kon in werkmap " + dir + " geen branch " + arg.Branch + " klaarzetten."
 		return res
 	}
 
@@ -411,8 +497,16 @@ func planBranchAheadOfBase(ctx context.Context, dir, base string) (string, bool)
 // runPlanExecuteOpenPR is the planExecuteOpenPR Activity's body: push the
 // branch and open the draft PR.
 func (m *TaskManager) runPlanExecuteOpenPR(ctx context.Context, arg planExecutePRArg) planExecuteResult {
-	res := planExecuteResult{Branch: arg.Branch, Changed: true}
-	dir := planWorktreeDir(m.dataDir, arg.Key)
+	res := planExecuteResult{Branch: arg.Branch, Dir: arg.Dir, Changed: true}
+	dir := arg.Dir
+	if dir == "" {
+		res.Note = "De werkmap van deze uitvoering is niet meer bekend; voer het plan opnieuw uit."
+		return res
+	}
+	// Same per-checkout slot as the agent Activity above — the push reads the
+	// directory's own branch state.
+	release := acquireWriteTurnSlot(ctx, "dir:"+dir, nil)
+	defer release()
 	if _, err := runGitIn(ctx, dir, "push", "-u", "origin", arg.Branch); err != nil {
 		m.logf("plan execute %s: push: %v", arg.Key, err)
 		res.Note = "Kon de branch niet pushen: " + err.Error()
@@ -514,7 +608,7 @@ func planCommitMessage(doc planDoc) string {
 // bounded function of a model-authored document.
 func planExecutePrompt(doc planDoc) string {
 	var b strings.Builder
-	b.WriteString("Je voert een uitgewerkt plan uit in deze repository. De werkmap is al klaargezet op een verse branch vanaf de basisbranch.\n\n")
+	b.WriteString("Je voert een uitgewerkt plan uit in deze repository. Je werkt in de werkmap van de reviewer, die al op een verse branch vanaf de basisbranch is gezet.\n\n")
 	fmt.Fprintf(&b, "TICKET %s: %s\n\n", doc.Key, strings.TrimSpace(doc.Title))
 	desc := strings.TrimSpace(doc.Description)
 	if len(desc) > 4000 {

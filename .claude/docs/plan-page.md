@@ -165,15 +165,47 @@ header for the full reasoning; the essentials:
 - **Always the primary repo** (`plug-and-pay/plug-and-pay`, base `develop`), an
   explicit reviewer decision: a plan hangs off a Jira ticket, which carries no
   repo, and the page deliberately offers no repo choice.
-- **Its own worktree**, `data/worktrees/plan-<KEY>`, branched off
-  `origin/<baseBranch>` onto `planBranchName(key, title)` (`paym-813-<slug>` —
-  the key up front so `git branch` and the session-rename hook still find it,
-  the slug built from a strict allow-list because it reaches `git`/`gh` as an
-  argument). Rebuilt from scratch on every attempt, so a failed run never
-  poisons the next one. There is no PR yet, so `chat_checkout.go`'s shared
-  per-PR checkout does not apply.
+- **The reviewer's own werkmap, exactly like the review tree** — reviewer
+  request, verbatim: *"voor het uitvoeren moet je een werkmap gebruiken net als
+  bij de tree"*. It used to build its own disposable worktree at
+  `data/worktrees/plan-<KEY>`, which put the plan's work somewhere the reviewer
+  never looks; `resolvePlanWorkDir` (`plan_execute.go`) now runs
+  `listCheckoutCandidates` — **the very same selection ladder**
+  `chat_checkout.go` uses for a write turn: `chatCheckoutDirs` from
+  `settings.json` first, the bounded home scan only when that yields nothing,
+  matched exactly on the repo slug (never a fork). The plan branch
+  (`planBranchName(key, title)` → `paym-813-<slug>`, the key up front so
+  `git branch` and the session-rename hook still find it, the slug from a
+  strict allow-list because it reaches `git`/`gh` as an argument) is created
+  **in that directory** with `git checkout -B <branch> origin/<base>`.
+  Three deliberate differences from the tree's own use of that ladder, all
+  forced by "there is no PR yet":
+  - **`headRef` is the BASE branch.** The plan's branch does not exist
+    anywhere, so "already on the target branch" cannot mean anything; asking
+    for the base branch makes a checkout sitting on `develop` count as
+    `OnTargetBranch` (and win via `prioritizeOnTargetBranch`), while a checkout
+    on another, already-merged branch still qualifies as `MergedIntoBase` —
+    both being the ladder's own notion of "genuinely free".
+  - **A dirty candidate is skipped, never asked about.** This run is about to
+    put a fresh branch in that directory; dragging the reviewer's uncommitted
+    work onto it (or into the draft PR's commit) is not a guess worth making.
+    Same for a directory another PR's chat already claims
+    (`checkoutDirClaimsByOtherPRs`, asked with `pr` 0 — never a real PR number,
+    so every claim counts as somebody else's).
+  - **Nothing usable → a reviewer-facing note, never a worktree fallback**
+    (`checkoutDiscovery.reason()`, or "configure `chatCheckoutDirs` / clone one").
+  The run takes the same **per-directory write slot** every other
+  checkout-mutating operation takes (`acquireWriteTurnSlot("dir:"+dir)`, see
+  `chat_write_gate.go`/`checkoutWriteSlotKey`), re-checks dirtiness after that
+  wait, and afterwards **leaves the werkmap on the plan branch** — so once the
+  draft PR exists, the tree's own ladder finds this very directory already on
+  that PR's head branch and the review continues in the same werkmap. The
+  chosen directory travels from the agent Activity to the PR Activity on their
+  own recorded result/input (`planExecuteResult.Dir` → `planExecutePRArg.Dir`),
+  never re-resolved, and reaches the page as `exec.dir`
+  (`data-testid=plan-execute-dir`, under the branch line).
 - **Three Activities in a fixed order**: `planExecuteLoad` (read the stored
-  document), `planExecuteAgent` (worktree + ONE agentic Opus run with
+  document), `planExecuteAgent` (werkmap + ONE agentic Opus run with
   `Read/Grep/Glob/Edit/Bash` — the same shell carve-out a chat turn has, see
   `.claude/rules/workflows-write-boundary.md` — then commit), and
   `planExecuteOpenPR` (`git push -u` + `gh pr create --draft`). The last one is
@@ -266,9 +298,19 @@ and the block nesting is arbitrarily deep. `Save` is called only from the
   minutes, `modules/claude`) — the same ceiling every other agentic workflow
   has. A plan too big for that lands whatever it got to; the PR is a draft
   precisely because the result still needs a human.
-- **The `data/worktrees/plan-<KEY>` worktree is not swept by `cleanup`** (that
-  sweep is PR-scoped). It is rebuilt from scratch on the next attempt, so it
-  costs one stale directory per ticket, never a wrong state.
+- **The werkmap is chosen AUTOMATICALLY; the plan page has no werkmap
+  overlay.** The tree asks (`checkoutStageChooseDirectory`,
+  `src/workDirOverlay.mjs`) because a chat turn has a conversation to ask in;
+  on `/plan/<KEY>` the first usable candidate simply wins, deterministically
+  (registry before home scan, on-the-base-branch before merely-merged) — an
+  explicit reviewer decision, taken when the werkmap switch was built. A
+  second, interactive round trip on this page was judged not worth it: when
+  nothing is usable the run says why, in words, on the execute card.
+- **The werkmap is left on the plan branch** after a run, and a failed attempt
+  leaves it there too. That is deliberate (the follow-up PR review continues in
+  the same directory), but it does mean a plan executed against a checkout the
+  reviewer was using for something else moves that checkout — which is exactly
+  why only a genuinely free, clean candidate is ever taken.
 - **No Jira update.** Executing the plan does not transition the ticket.
 - **A main task whose reviewer picked a SUBTASK keeps a tracker parked on the
   scope question**, forever, until someone opens that main task's plan page
@@ -295,7 +337,10 @@ context in the prompt),
 `modules/jira/jira_test.go` (the `parent`/`subtasks` payload shape),
 `plan_execute_test.go` (the branch name stays git-safe and bounded, the
 execute prompt carries the fixed choices and every task's nested example code
-capped per block, the PR URL parsed off `gh`'s stdout) and
+capped per block, the PR URL parsed off `gh`'s stdout, and — against
+`chat_checkout_test.go`'s own throwaway repo fixtures — that
+`resolvePlanWorkDir` picks a clean registered checkout on the base branch,
+refuses a dirty one by name, and leaves a directory another PR claims alone) and
 `modules/plan/plan_test.go` (the document round trip). Verified in the running
 app; screenshots in `data/review-shots/plan-page.png` (a chosen option with two
 block columns open) `plan-page-tasks.png` (the task list with its own

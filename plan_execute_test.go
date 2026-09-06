@@ -1,6 +1,10 @@
 package main
 
 import (
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -87,5 +91,56 @@ func TestPlanFirstPRURL(t *testing.T) {
 	}
 	if planFirstPRURL("something went wrong") != "" {
 		t.Fatalf("a failure line must not yield a URL")
+	}
+}
+
+// TestResolvePlanWorkDirPicksTheReviewersWerkmap covers the switch from a
+// throwaway data/worktrees/plan-<KEY> worktree to the reviewer's OWN standing
+// checkout (resolvePlanWorkDir, plan_execute.go) — the same selection ladder
+// the review tree's write turns use. Three behaviours that are easy to break
+// and impossible to see from the outside: a clean, registered checkout on the
+// base branch IS picked, a dirty one is refused with a reviewer-facing reason
+// rather than having the reviewer's uncommitted work dragged onto a new
+// branch, and a directory another PR's chat already claims is left alone.
+//
+// Uses chat_checkout_test.go's own fixtures (a throwaway bare origin plus a
+// separate checkout dir), so no real developer clone is ever touched.
+func TestResolvePlanWorkDirPicksTheReviewersWerkmap(t *testing.T) {
+	base := baseBranchFor("")
+	bareDir, _ := setupChatShadowRepo(t, base, "hello\n")
+	checkout := cloneCheckoutDir(t, bareDir, base)
+	dataDir := t.TempDir()
+	writeCheckoutSettings(t, dataDir, checkout)
+
+	dir, note := resolvePlanWorkDir(context.Background(), dataDir)
+	if dir != checkout {
+		t.Fatalf("clean checkout on %s: got dir %q (note %q), want %q", base, dir, note, checkout)
+	}
+
+	// Dirty: never touched, and the reason says so.
+	if err := os.WriteFile(filepath.Join(checkout, "foo.txt"), []byte("local work\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir, note = resolvePlanWorkDir(context.Background(), dataDir)
+	if dir != "" {
+		t.Fatalf("a dirty werkmap must not be used, got %q", dir)
+	}
+	if !strings.Contains(note, checkout) || !strings.Contains(note, "niet-vastgelegde") {
+		t.Fatalf("note must name the dirty werkmap, got %q", note)
+	}
+
+	// Clean again, but claimed by another PR's chat: held back, same as in the
+	// tree, with a reason that is not the "configure settings.json" dead end.
+	if out, err := exec.Command("git", "-C", checkout, "checkout", "--", "foo.txt").CombinedOutput(); err != nil {
+		t.Fatalf("git checkout --: %v: %s", err, out)
+	}
+	assignCheckoutForTest(t, "", 99123, checkout)
+	t.Cleanup(func() { assignCheckoutForTest(t, "", 99123, "") })
+	dir, note = resolvePlanWorkDir(context.Background(), dataDir)
+	if dir != "" {
+		t.Fatalf("a werkmap claimed by another PR must not be taken, got %q", dir)
+	}
+	if !strings.Contains(note, checkout) {
+		t.Fatalf("note must name the held-back werkmap, got %q", note)
 	}
 }

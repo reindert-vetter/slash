@@ -966,6 +966,9 @@ function execButtonWord() {
   return t('Plan uitvoeren en draft-PR maken')
 }
 
+// executeCard also names the WERKMAP the newest attempt ran in: the reviewer's
+// own local checkout, picked through the review tree's own selection ladder
+// (plan_execute.go's resolvePlanWorkDir), never a throwaway worktree any more.
 function executeCard(row) {
   return html`
     <div
@@ -1036,6 +1039,17 @@ function executeCard(row) {
         ${() =>
           state.exec && state.exec.branch
             ? html`<p class="mt-1 truncate font-mono text-[11px] text-slate-400 dark:text-zinc-500">${state.exec.branch}</p>`
+            : ''}
+      </div>
+      <div class="contents">
+        ${() =>
+          state.exec && state.exec.dir
+            ? html`<p
+                class="mt-0.5 truncate font-mono text-[11px] text-slate-400 dark:text-zinc-500"
+                data-testid="plan-execute-dir"
+              >
+                ${t('werkmap')}: ${state.exec.dir}
+              </p>`
             : ''}
       </div>
     </div>
