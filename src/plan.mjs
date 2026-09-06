@@ -796,7 +796,10 @@ function blockCard(block, level, index) {
       <div class="contents">
         ${() =>
           block.note
-            ? html`<p class="border-b border-slate-100 bg-white px-3 py-1.5 text-[12px] leading-relaxed text-slate-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300">
+            ? html`<p
+                class="border-b border-slate-100 bg-white px-3 py-1.5 text-[12px] leading-relaxed text-slate-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300"
+                data-testid="plan-block-note"
+              >
                 ${block.note}
               </p>`
             : ''}

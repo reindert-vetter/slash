@@ -47,8 +47,8 @@ func planPrompt(doc planDoc, mode string) string {
 	}
 
 	b.WriteString("Antwoord met UITSLUITEND één JSON-object, zonder tekst eromheen en zonder code-fence:\n")
-	b.WriteString(`{"questions":[{"question":"…","why":"…","options":[{"label":"…","detail":"…","blocks":[{"title":"app/Foo.php","label":"handle()","lang":"php","note":"…","code":"…","children":[]}]}]}],`)
-	b.WriteString(`"tasks":[{"title":"…","explanation":"…","blocks":[{"title":"…","lang":"php","code":"…","children":[]}]}]}`)
+	b.WriteString(`{"questions":[{"question":"…","why":"…","options":[{"label":"…","detail":"…","blocks":[{"title":"app/Foo.php","label":"handle()","lang":"php","note":"…","code":"…","children":[{"title":"app/Support/Bar.php","label":"apply()","lang":"php","note":"…","code":"…","children":[]}]}]}]}],`)
+	b.WriteString(`"tasks":[{"title":"…","explanation":"…","blocks":[{"title":"…","lang":"php","note":"…","code":"…","children":[{"title":"…","lang":"php","note":"…","code":"…","children":[]}]}]}]}`)
 	b.WriteString("\n\nRegels:\n")
 	if mode == "all" {
 		fmt.Fprintf(&b, "- \"questions\": maximaal %d vragen die je ECHT nog nodig hebt om het plan te perfectioneren. Geen vraag waarvan het antwoord al in het ticket staat.\n", maxPlanQuestions)
@@ -59,6 +59,7 @@ func planPrompt(doc planDoc, mode string) string {
 	}
 	fmt.Fprintf(&b, "- \"tasks\": maximaal %d taken, in uitvoervolgorde: alles wat er moet gebeuren, met per taak een korte uitleg en voorbeeldcode.\n", maxPlanTasks)
 	b.WriteString("- NEST je blokken: elk blok dat iets aanroept of aanpast krijgt \"children\" met de onderliggende stukken (de helper die het aanroept, de test die het dekt, de call-site die mee moet). Nest zo diep als het plan duidelijker maakt — twee of drie niveaus is normaal, één plat blok is te weinig.\n")
+	b.WriteString("- ELK blok heeft een \"note\": één of twee zinnen uitleg over wat dat blok doet en waarom het nodig is. Dat geldt net zo hard voor ELK onderliggend blok, op ELK nestniveau — bij een kind-blok legt de note uit waarom het onder zijn ouder hangt (welke aanroep, welke dekking, welke call-site). Laat geen enkel blok zonder note.\n")
 	b.WriteString("- \"code\" is echte, compileerbare voorbeeldcode, hooguit ~25 regels per blok. \"lang\" is php, typescript, javascript, sql, json, bash of yaml.\n")
 	b.WriteString("- Prozateksten in het Nederlands, code en identifiers in het Engels.\n")
 	return b.String()

@@ -46,15 +46,21 @@ rebuilt rather than imported.
    gebeuren"**: the task list, each task with its explanation.
 3. **The example code** (`plan-block-column`, `w-[40rem]`, `data-level=0`) — the
    blocks of whatever the cursor is on (an option or a task): a card per block
-   with a file/label/language header, an optional note, and Prism-highlighted
-   code.
+   with a file/label/language header, its explanation (`note`,
+   `data-testid=plan-block-note`) and Prism-highlighted code.
 4. **… and one more column per nesting level.** A block with `children` shows a
    `N onderliggende blokken →` button; `→` (or a click on it) opens those
    children as their **own** column to the right, arbitrarily deep — the
    requested "meer dan 3 kolommen voor diepere onderliggende code". Same
    drill-shaped navigation as the review tree's Underlying-code columns, but its
    own implementation: `state.path` holds one cursor index per open block
-   column, so its **length IS the number of block columns**.
+   column, so its **length IS the number of block columns**. A nested block is
+   rendered by the very same `blockCard`, so **every** block carries its own
+   explanation, at every level — a child's `note` says why it hangs under its
+   parent (which call, which coverage, which call-site). The prompt asks for
+   that per block explicitly; it used to show `"note"` only on a top-level
+   block and an empty `"children":[]`, and the model then left every nested
+   block's note empty (measured across all stored documents).
 
 ## Keyboard
 
@@ -141,12 +147,18 @@ and the block nesting is arbitrarily deep. `Save` is called only from the
 - **Whether the model nests its blocks is up to the model.** The prompt asks for
   it explicitly and the UI supports any depth, but a small ticket legitimately
   comes back one level deep.
+- **A document stored before the per-block-note rule keeps its empty nested
+  notes.** The document is written and read as a whole, and there is no
+  backfill: an existing plan only gains explanations on its nested blocks once
+  it is regenerated (a new `plan` run, or the `tasks` regeneration an answer
+  triggers — which rewrites the task blocks, not the question blocks).
 - **A language the vendored Prism doesn't carry** (e.g. `markdown`) renders as
   escaped plain text with the language word still in the header — the same
   fallback as a fenced block in a comment (`.claude/rules/conventions.md`).
 
 Tests: `plan_workflow_test.go` (id numbering + caps, junk rejected, the
-per-question answer fold, the regenerate prompt carrying the fixed choices) and
+per-question answer fold, the regenerate prompt carrying the fixed choices, a
+nested block's note surviving the trim at every level) and
 `modules/plan/plan_test.go` (the document round trip). Verified in the running
 app; screenshots in `data/review-shots/plan-page.png` (a chosen option with two
 block columns open) and `plan-page-tasks.png` (the task list with its own

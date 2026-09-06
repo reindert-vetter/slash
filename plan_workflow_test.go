@@ -90,3 +90,30 @@ func TestPlanPromptCarriesAnswers(t *testing.T) {
 		}
 	}
 }
+
+// TestNormalizePlanBlocksKeepsNestedNotes — the per-block explanation is what
+// the reviewer reads in a drilled column, so it must survive the trim at EVERY
+// nesting level, not only on the top-level block.
+func TestNormalizePlanBlocksKeepsNestedNotes(t *testing.T) {
+	out := normalizePlanBlocks([]planBlock{{
+		Title: "app/Foo.php",
+		Note:  " roept de helper aan ",
+		Code:  "<?php\n",
+		Children: []planBlock{{
+			Title:    "app/Support/Bar.php",
+			Note:     " de helper zelf ",
+			Code:     "<?php\n",
+			Children: []planBlock{{Title: "tests/BarTest.php", Note: "dekt de helper", Code: "<?php"}},
+		}},
+	}})
+	if len(out) != 1 || out[0].Note != "roept de helper aan" {
+		t.Fatalf("top-level note = %+v", out)
+	}
+	kid := out[0].Children
+	if len(kid) != 1 || kid[0].Note != "de helper zelf" {
+		t.Fatalf("child note = %+v", kid)
+	}
+	if len(kid[0].Children) != 1 || kid[0].Children[0].Note != "dekt de helper" {
+		t.Fatalf("grandchild note = %+v", kid[0].Children)
+	}
+}
