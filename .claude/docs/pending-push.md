@@ -94,6 +94,13 @@ each resolves a real checkout, wipes the in-memory map directly
 (`resetInMemoryCheckoutAssignments`, simulating a restart without touching
 disk), and asserts the durable mirror alone is enough.
 
+**The same DB file also carries one row per PLAN** (`plan_checkout`, keyed by
+the Jira issue key — `chat_checkout_store.go`'s
+`loadPersistedPlanCheckout`/`savePersistedPlanCheckout`), for the same
+cache-hint reason but a different failure: a plan execution runs before any PR
+exists, and after an attempt its werkmap sits on the plan branch, which the
+ladder can only read as somebody else's unfinished work. See "The same werkmap per plan" in `.claude/docs/plan-page.md`.
+
 ## The landing target: `refs/slash/pending/pr-<n>/<headRef>`
 
 `prPendingRef` (`chat_checkout.go`). One ref per PR, holding every landed chat

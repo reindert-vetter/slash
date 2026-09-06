@@ -112,7 +112,7 @@ func TestResolvePlanWorkDirPicksTheReviewersWerkmap(t *testing.T) {
 	dataDir := t.TempDir()
 	writeCheckoutSettings(t, dataDir, checkout)
 
-	dir, note := resolvePlanWorkDir(context.Background(), dataDir, "")
+	dir, note := resolvePlanWorkDir(context.Background(), dataDir, "PAYM-1", "paym-1-x", "")
 	if dir != checkout {
 		t.Fatalf("clean checkout on %s: got dir %q (note %q), want %q", base, dir, note, checkout)
 	}
@@ -121,7 +121,7 @@ func TestResolvePlanWorkDirPicksTheReviewersWerkmap(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(checkout, "foo.txt"), []byte("local work\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	dir, note = resolvePlanWorkDir(context.Background(), dataDir, "")
+	dir, note = resolvePlanWorkDir(context.Background(), dataDir, "PAYM-1", "paym-1-x", "")
 	if dir != "" {
 		t.Fatalf("a dirty werkmap must not be used, got %q", dir)
 	}
@@ -136,11 +136,92 @@ func TestResolvePlanWorkDirPicksTheReviewersWerkmap(t *testing.T) {
 	}
 	assignCheckoutForTest(t, "", 99123, checkout)
 	t.Cleanup(func() { assignCheckoutForTest(t, "", 99123, "") })
-	dir, note = resolvePlanWorkDir(context.Background(), dataDir, "")
+	dir, note = resolvePlanWorkDir(context.Background(), dataDir, "PAYM-1", "paym-1-x", "")
 	if dir != "" {
 		t.Fatalf("a werkmap claimed by another PR must not be taken, got %q", dir)
 	}
 	if !strings.Contains(note, checkout) {
 		t.Fatalf("note must name the held-back werkmap, got %q", note)
+	}
+}
+
+// TestResolvePlanWorkDirReturnsToTheSameWerkmap covers "per plan naar dezelfde
+// map": a second execution of the same plan must land in the directory the
+// first one used, even though that directory now sits on the plan's own branch
+// with a commit origin/<base> does not have — which is exactly what makes the
+// selection ladder classify it as somebody else's unfinished work and stop
+// offering it (listCheckoutCandidates' diag.Busy). Without the per-plan
+// memory the second attempt silently moves to another checkout, or to none.
+func TestResolvePlanWorkDirReturnsToTheSameWerkmap(t *testing.T) {
+	base := baseBranchFor("")
+	bareDir, _ := setupChatShadowRepo(t, base, "hello\n")
+	checkout := cloneCheckoutDir(t, bareDir, base)
+	dataDir := t.TempDir()
+	writeCheckoutSettings(t, dataDir, checkout)
+
+	const key, branch = "PAYM-901", "paym-901-iets"
+	dir, note := resolvePlanWorkDir(context.Background(), dataDir, key, branch, "")
+	if dir != checkout {
+		t.Fatalf("first attempt: got dir %q (note %q), want %q", dir, note, checkout)
+	}
+
+	// What the first attempt leaves behind: the plan's branch, one commit
+	// ahead of the base branch.
+	git := func(args ...string) {
+		t.Helper()
+		if out, err := exec.Command("git", append([]string{"-C", checkout}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
+		}
+	}
+	git("checkout", "-B", branch, "origin/"+base)
+	if err := os.WriteFile(filepath.Join(checkout, "plan.txt"), []byte("done\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "-A")
+	git("commit", "-m", "plan")
+
+	// The ladder alone would refuse it now — proving this test is about the
+	// per-plan memory and not about a directory that happens to still qualify.
+	cands, _ := listCheckoutCandidates(context.Background(), dataDir, repoSlug, base, base, checkoutHoldback{})
+	if len(cands) != 0 {
+		t.Fatalf("ladder still offers %d candidate(s); fixture no longer exercises the sticky path", len(cands))
+	}
+
+	dir, note = resolvePlanWorkDir(context.Background(), dataDir, key, branch, "")
+	if dir != checkout {
+		t.Fatalf("second attempt: got dir %q (note %q), want the same werkmap %q", dir, note, checkout)
+	}
+
+	// Another plan is not dragged into it: it has no memory of its own, so it
+	// runs the ladder and correctly finds nothing.
+	if dir, _ = resolvePlanWorkDir(context.Background(), dataDir, "PAYM-902", "paym-902-anders", ""); dir != "" {
+		t.Fatalf("another plan must not inherit this werkmap, got %q", dir)
+	}
+}
+
+// TestAdoptPlanCheckoutForPR covers the other half of the reviewer's request —
+// "sync met als de chat een aanpassing moet maken vanuit de tree": once the
+// draft PR exists, the tree's chat for that PR must already be pointed at the
+// werkmap the plan ran in, in memory as well as durably, instead of re-running
+// the ladder (which would refuse that very directory, see the test above).
+func TestAdoptPlanCheckoutForPR(t *testing.T) {
+	dataDir := t.TempDir()
+	const pr = 99871
+	const dir, branch = "/tmp/plan-werkmap", "paym-903-iets"
+	t.Cleanup(func() { assignCheckoutForTest(t, "", pr, "") })
+
+	adoptPlanCheckoutForPR(dataDir, pr, dir, branch)
+
+	a := getCheckoutAssignment(dataDir, "", pr)
+	if a == nil || a.Dir != dir || a.Branch != branch {
+		t.Fatalf("assignment = %+v, want dir %q branch %q", a, dir, branch)
+	}
+	if gotDir, gotBranch, ok := loadPersistedCheckout(dataDir, "", pr); !ok || gotDir != dir || gotBranch != branch {
+		t.Fatalf("persisted = (%q, %q, %v), want (%q, %q, true)", gotDir, gotBranch, ok, dir, branch)
+	}
+	// And the directory now counts as claimed, so no other PR's chat can take
+	// it while the reviewer is reviewing this draft PR.
+	if claims := checkoutDirClaimsByOtherPRs("", 0); claims[dir] != pr {
+		t.Fatalf("claims[%q] = %d, want %d", dir, claims[dir], pr)
 	}
 }

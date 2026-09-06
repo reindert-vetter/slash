@@ -56,7 +56,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -355,10 +357,17 @@ func planBranchName(key, title string) string {
 // Returns ("", note) when there is nothing usable — a reviewer-facing sentence
 // naming what was actually in the way, never a fallback to a disposable
 // worktree.
-func resolvePlanWorkDir(ctx context.Context, dataDir, base string) (dir string, note string) {
+func resolvePlanWorkDir(ctx context.Context, dataDir, key, branch, base string) (dir string, note string) {
 	slug := repoSlugFor("")
 	if strings.TrimSpace(base) == "" {
 		base = planDefaultBaseBranch()
+	}
+	// Per plan, always the SAME werkmap: a directory this plan already ran in
+	// sits on the plan's own branch, which the ladder below can only read as
+	// "someone else's unfinished work" (listCheckoutCandidates' diag.Busy), so
+	// without this a second attempt would land somewhere else entirely.
+	if remembered, ok := reusablePlanWorkDir(ctx, dataDir, key, branch, slug); ok {
+		return remembered, ""
 	}
 	hold := checkoutHoldback{Claimed: checkoutDirClaimsByOtherPRs("", 0)}
 	candidates, diag := listCheckoutCandidates(ctx, dataDir, slug, base, base, hold)
@@ -373,6 +382,7 @@ func resolvePlanWorkDir(ctx context.Context, dataDir, base string) (dir string, 
 		usable = append(usable, c)
 	}
 	if usable = prioritizeOnTargetBranch(usable); len(usable) > 0 {
+		savePersistedPlanCheckout(dataDir, key, usable[0].Dir, branch)
 		return usable[0].Dir, ""
 	}
 	if len(dirty) > 0 {
@@ -383,6 +393,60 @@ func resolvePlanWorkDir(ctx context.Context, dataDir, base string) (dir string, 
 		return "", reason
 	}
 	return "", "Ik vond geen lokale werkmap van " + slug + ". Voeg er een toe aan chatCheckoutDirs in settings.json, of clone de repo lokaal."
+}
+
+// reusablePlanWorkDir answers "is the werkmap this plan used last time still
+// the right one?" — the sticky half of resolvePlanWorkDir. It deliberately
+// does NOT re-run the ladder's classification: the whole point is that a
+// directory already on the plan's branch is unusable BY the ladder while
+// being exactly the directory this plan belongs in. What it does check is
+// that the directory is still a real, clean checkout of this repo that
+// nobody else has taken over.
+//
+// A claim by the PR this very plan opened (the handoff in
+// adoptPlanCheckoutForPR below) is not somebody else's claim: it is the same
+// werkmap, held for the same branch, so it never blocks the plan itself.
+func reusablePlanWorkDir(ctx context.Context, dataDir, key, branch, slug string) (string, bool) {
+	dir, _, ok := loadPersistedPlanCheckout(dataDir, key)
+	if !ok {
+		return "", false
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
+		return "", false
+	}
+	if !checkoutRemoteMatchesSlug(ctx, dir, slug) {
+		return "", false
+	}
+	if dirty, err := checkoutIsDirty(ctx, dir); err != nil || dirty {
+		return "", false
+	}
+	if pr, claimed := checkoutDirClaimsByOtherPRs("", 0)[dir]; claimed {
+		a := getCheckoutAssignment(dataDir, "", pr)
+		if a == nil || a.Branch != branch || branch == "" {
+			return "", false
+		}
+	}
+	return dir, true
+}
+
+// adoptPlanCheckoutForPR hands the plan's werkmap over to the review tree the
+// moment the draft PR exists: the chat of THAT PR then starts in the very
+// directory the plan was implemented in, without running the selection ladder
+// at all, and the directory counts as claimed so no other PR's chat can take
+// it (checkoutDirClaimsByOtherPRs). It is the same in-memory assignment plus
+// durable mirror every chat write turn maintains — see chat_checkout.go — so
+// the checkout chip, the write slot (checkoutWriteSlotKey, already keyed on
+// "dir:"+dir) and the landing machinery all line up on one directory.
+func adoptPlanCheckoutForPR(dataDir string, pr int, dir, branch string) {
+	if pr <= 0 || dir == "" {
+		return
+	}
+	releaseCheckoutDirFromOtherPRs(dataDir, "", pr, dir)
+	a := getOrCreateCheckoutAssignment(dataDir, "", pr)
+	chatCheckoutMu.Lock()
+	a.Dir, a.Branch = dir, branch
+	chatCheckoutMu.Unlock()
+	persistCheckoutAssignment(dataDir, "", pr, a)
 }
 
 // registerPlanExecuteActivities wires the three Activities. Called from
@@ -437,7 +501,20 @@ func (m *TaskManager) runPlanExecuteAgent(ctx context.Context, arg planExecuteAg
 		res.Note = "Claude is niet beschikbaar, dus er is niets uitgevoerd."
 		return res
 	}
-	dir, note := resolvePlanWorkDir(ctx, m.dataDir, base)
+	// A second execution is REFUSED once this plan's branch already carries a
+	// draft PR (reviewer decision). Because the plan now always returns to the
+	// same werkmap, a re-run would `checkout -B` that branch back onto
+	// origin/<base> — throwing away the first attempt's commit — and its push
+	// would then be refused as a non-fast-forward anyway. Saying so up front,
+	// with the existing PR linked, beats a failed push after a ten-minute
+	// Claude run. Best-effort: a `gh` that cannot answer never blocks a run.
+	if url, number, exists := planBranchHasOpenPR(ctx, arg.Branch); exists {
+		res.PRURL, res.PRNumber = url, number
+		res.Note = "Er staat al een draft-PR voor branch " + arg.Branch + "; deze uitvoering is overgeslagen. Rond die PR af of pas hem aan via de review-tree."
+		m.logf("plan execute %s: branch %s already has PR %d, refusing", arg.Doc.Key, arg.Branch, number)
+		return res
+	}
+	dir, note := resolvePlanWorkDir(ctx, m.dataDir, arg.Doc.Key, arg.Branch, base)
 	if dir == "" {
 		m.logf("plan execute %s: no werkmap: %s", arg.Doc.Key, note)
 		res.Note = note
@@ -542,6 +619,33 @@ func planBranchAheadOfBase(ctx context.Context, dir, base string) (string, bool)
 	return strings.TrimSpace(string(sha)), true
 }
 
+// planBranchHasOpenPR reports the open pull request of this plan's branch, if
+// any — the guard behind "a plan is executed once per branch" above. Purely
+// best-effort: any gh failure (offline, not logged in, no such repo) answers
+// "no PR" so it can never turn into a reason not to run.
+func planBranchHasOpenPR(ctx context.Context, branch string) (url string, number int, exists bool) {
+	if strings.TrimSpace(branch) == "" {
+		return "", 0, false
+	}
+	out, err := runPlanGH(ctx, "pr", "list",
+		"--repo", repoSlugFor(""),
+		"--head", branch,
+		"--state", "open",
+		"--limit", "1",
+		"--json", "number,url")
+	if err != nil {
+		return "", 0, false
+	}
+	var prs []struct {
+		Number int    `json:"number"`
+		URL    string `json:"url"`
+	}
+	if err := json.Unmarshal(out, &prs); err != nil || len(prs) == 0 {
+		return "", 0, false
+	}
+	return prs[0].URL, prs[0].Number, true
+}
+
 // runPlanExecuteOpenPR is the planExecuteOpenPR Activity's body: push the
 // branch and open the draft PR.
 func (m *TaskManager) runPlanExecuteOpenPR(ctx context.Context, arg planExecutePRArg) planExecuteResult {
@@ -578,6 +682,9 @@ func (m *TaskManager) runPlanExecuteOpenPR(ctx context.Context, arg planExecuteP
 	}
 	res.PRURL = planFirstPRURL(string(out))
 	res.PRNumber = planPRNumberFromURL(res.PRURL)
+	// Sync with the tree: from here on the chat of this PR edits the very
+	// werkmap the plan was implemented in (see adoptPlanCheckoutForPR).
+	adoptPlanCheckoutForPR(m.dataDir, res.PRNumber, dir, arg.Branch)
 	if res.PRURL == "" {
 		res.Note = "De draft-PR is aangemaakt, maar het adres kwam niet terug."
 	}

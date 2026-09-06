@@ -268,6 +268,39 @@ header for the full reasoning; the essentials:
     so every claim counts as somebody else's).
   - **Nothing usable → a reviewer-facing note, never a worktree fallback**
     (`checkoutDiscovery.reason()`, or "configure `chatCheckoutDirs` / clone one").
+
+  **The same werkmap per plan, and then the same one as the chat.** Reviewer
+  request, verbatim: *"per plan naar dezelfde map, sync met als de chat een
+  aanpassing moet maken vanuit de tree"*. Two halves, both in
+  `plan_execute.go`:
+  - **Sticky per plan key.** The chosen directory is remembered in
+    `plan_checkout` (`chat_checkout_store.go`, the same `chat_checkout.db`,
+    keyed by the Jira key — the same cache-hint carve-out as the per-PR row,
+    see `.claude/docs/pending-push.md`), and `reusablePlanWorkDir` returns to
+    it before the ladder is ever run. It has to bypass the ladder's own
+    classification on purpose: after an attempt the directory sits on the plan
+    branch with a commit `origin/<base>` does not have, which
+    `listCheckoutCandidates` can only read as somebody else's unfinished work
+    (`diag.Busy`) — so without this memory a second attempt landed in a
+    *different* checkout, or in none at all. What it does re-check is that the
+    directory still exists, is still a clean checkout of this repo, and has not
+    been taken over by another PR; anything else falls back to the ordinary
+    ladder.
+  - **Handed to the tree once the draft PR exists.** `adoptPlanCheckoutForPR`
+    writes that same directory into the PR's own `chatCheckoutAssignment`
+    (in-memory **and** the durable mirror) the moment `gh pr create` returns a
+    number. So the chat that has to make a change from the tree starts in the
+    werkmap the plan was implemented in — no ladder run, the checkout chip
+    right away, and the directory counts as claimed
+    (`checkoutDirClaimsByOtherPRs`) so no other PR's chat takes it. The write
+    slot needed nothing: `checkoutWriteSlotKey` already keys on `"dir:"+dir`.
+  - **A second execution is refused once the branch has an open PR**
+    (`planBranchHasOpenPR`, one `gh pr list --head`, best-effort — a `gh` that
+    cannot answer never blocks a run). Because the plan now returns to the same
+    werkmap, a re-run would `checkout -B` the branch back onto `origin/<base>`,
+    discarding the first attempt's commit, and its push would be refused as a
+    non-fast-forward anyway. The run stops before the Claude call and the
+    execute card says so in words, with the existing draft PR linked.
   The run takes the same **per-directory write slot** every other
   checkout-mutating operation takes (`acquireWriteTurnSlot("dir:"+dir)`, see
   `chat_write_gate.go`/`checkoutWriteSlotKey`), re-checks dirtiness after that
@@ -387,6 +420,15 @@ and the block nesting is arbitrarily deep. `Save` is called only from the
   the same directory), but it does mean a plan executed against a checkout the
   reviewer was using for something else moves that checkout — which is exactly
   why only a genuinely free, clean candidate is ever taken.
+- **A plan cannot be re-executed onto the same branch** (see above): once its
+  draft PR is open, a new attempt is skipped with a note instead of moving the
+  branch. Genuinely wanting a fresh run means closing that PR (or renaming the
+  ticket, which changes the branch name).
+- **The plan's werkmap is only claimed against other PRs once the draft PR
+  exists.** While an execution is still running there is no PR number to claim
+  under, so the guarantee during the run is the per-directory write slot, plus
+  the fact that a directory on the plan branch is never offered to another
+  PR's chat automatically.
 - **No Jira update.** Executing the plan does not transition the ticket.
 - **A main task whose reviewer picked a SUBTASK keeps a tracker parked on the
   scope question**, forever, until someone opens that main task's plan page
@@ -433,7 +475,10 @@ execute prompt carries the fixed choices and every task's nested example code
 capped per block, the PR URL parsed off `gh`'s stdout, and — against
 `chat_checkout_test.go`'s own throwaway repo fixtures — that
 `resolvePlanWorkDir` picks a clean registered checkout on the base branch,
-refuses a dirty one by name, and leaves a directory another PR claims alone) and
+refuses a dirty one by name, leaves a directory another PR claims alone,
+returns to the SAME werkmap on a second attempt while the ladder itself
+already refuses it, and that `adoptPlanCheckoutForPR` hands that werkmap to
+the PR's chat in memory, durably and as a claim) and
 `modules/plan/plan_test.go` (the document round trip). Verified in the running
 app; screenshots in `data/review-shots/plan-page.png` (a chosen option with two
 block columns open) `plan-page-tasks.png` (the task list with its own

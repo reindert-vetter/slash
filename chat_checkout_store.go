@@ -24,6 +24,7 @@ package main
 
 import (
 	"database/sql"
+	"strings"
 	"sync"
 
 	_ "modernc.org/sqlite"
@@ -67,7 +68,7 @@ func chatCheckoutStoreFor(dataDir string) *sql.DB {
 	if err != nil {
 		return nil
 	}
-	if _, err := db.Exec(chatCheckoutStoreSchema); err != nil {
+	if _, err := db.Exec(chatCheckoutStoreSchema + planCheckoutStoreSchema); err != nil {
 		db.Close()
 		return nil
 	}
@@ -107,4 +108,58 @@ func savePersistedCheckout(dataDir, repo string, pr int, dir, branch string) {
 	_, _ = db.Exec(`INSERT INTO chat_checkout (repo, pr, dir, branch) VALUES (?, ?, ?, ?)
 		ON CONFLICT(repo, pr) DO UPDATE SET dir = excluded.dir, branch = excluded.branch`,
 		repo, pr, dir, branch)
+}
+
+// ---------------------------------------------------------------------------
+// Per-PLAN werkmap (plan_execute.go)
+//
+// Same cache-hint reasoning as the per-PR table above, keyed by the Jira issue
+// key instead of a PR number, because a plan execution runs BEFORE any PR
+// exists. It exists for one concrete failure: after an attempt, the werkmap
+// sits on the plan's own branch with a commit origin/<base> does not have, so
+// listCheckoutCandidates classifies it as "someone else's unfinished work"
+// (diag.Busy) and never offers it again — a second execution of the same plan
+// would silently land in a DIFFERENT directory, or in none at all. Remembering
+// the directory per plan key is what makes "per plan naar dezelfde map" hold.
+//
+// Losing a row costs one extra run of the selection ladder, nothing more.
+// ---------------------------------------------------------------------------
+
+const planCheckoutStoreSchema = `
+CREATE TABLE IF NOT EXISTS plan_checkout (
+  key    TEXT NOT NULL PRIMARY KEY,
+  dir    TEXT NOT NULL DEFAULT '',
+  branch TEXT NOT NULL DEFAULT ''
+);
+`
+
+// loadPersistedPlanCheckout returns the werkmap last used for this plan key.
+// ok is false when nothing was saved, the saved dir is empty, or persistence
+// is unavailable — every case where the ladder should simply run fresh.
+func loadPersistedPlanCheckout(dataDir, key string) (dir, branch string, ok bool) {
+	db := chatCheckoutStoreFor(dataDir)
+	if db == nil || strings.TrimSpace(key) == "" {
+		return "", "", false
+	}
+	err := db.QueryRow(`SELECT dir, branch FROM plan_checkout WHERE key = ?`, key).Scan(&dir, &branch)
+	if err != nil || dir == "" {
+		return "", "", false
+	}
+	return dir, branch, true
+}
+
+// savePersistedPlanCheckout durably remembers the werkmap of a plan key.
+// dir == "" removes the row. Best-effort, exactly like its per-PR sibling.
+func savePersistedPlanCheckout(dataDir, key, dir, branch string) {
+	db := chatCheckoutStoreFor(dataDir)
+	if db == nil || strings.TrimSpace(key) == "" {
+		return
+	}
+	if dir == "" {
+		_, _ = db.Exec(`DELETE FROM plan_checkout WHERE key = ?`, key)
+		return
+	}
+	_, _ = db.Exec(`INSERT INTO plan_checkout (key, dir, branch) VALUES (?, ?, ?)
+		ON CONFLICT(key) DO UPDATE SET dir = excluded.dir, branch = excluded.branch`,
+		key, dir, branch)
 }
