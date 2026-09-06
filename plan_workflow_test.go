@@ -444,3 +444,58 @@ func TestParsePlanAnswerKeepsTheConcreteTaskFields(t *testing.T) {
 		t.Fatalf("an all-empty list must yield nil")
 	}
 }
+
+// TestPlanChatPromptCarriesContextAndTranscript — the general chat about a
+// ticket (reused from the review tree, see .claude/docs/plan-page.md) must
+// discuss the SAME facts the plan itself was built from, not a second,
+// drifted picture: the ticket, the answers so far, the task list, and the
+// conversation itself (ending on the reviewer's own last message).
+func TestPlanChatPromptCarriesContextAndTranscript(t *testing.T) {
+	doc := planDoc{
+		Key:   "PAYM-813",
+		Title: "Iets bouwen",
+		Tasks: []planTask{{ID: "t1", Title: "De service aanpassen"}},
+		Chat: []planChatMessage{
+			{Role: "user", Body: "Waarom kiezen we hier voor een facade?"},
+		},
+	}
+	got := planChatPrompt(doc)
+	for _, want := range []string{"PAYM-813", "Iets bouwen", "De service aanpassen", "Waarom kiezen we hier voor een facade?", "Reviewer:"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("chat prompt is missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, `"questions"`) {
+		t.Fatalf("chat prompt must ask for prose, not the plan's own JSON shape:\n%s", got)
+	}
+}
+
+// TestTrimPlanChatBounds — the transcript is capped so neither the prompt nor
+// the page grows unbounded, keeping the NEWEST messages. Built from complete
+// (user, assistant) pairs, the shape every real turn appends, so the kept
+// window still starts on a user turn.
+func TestTrimPlanChatBounds(t *testing.T) {
+	var list []planChatMessage
+	for i := 0; i < (maxPlanChatMessages+6)/2; i++ {
+		list = append(list,
+			planChatMessage{Role: "user", Body: fmt.Sprintf("q%d", i)},
+			planChatMessage{Role: "assistant", Body: fmt.Sprintf("a%d", i)},
+		)
+	}
+	got := trimPlanChat(list)
+	if len(got) > maxPlanChatMessages {
+		t.Fatalf("trimmed length = %d, want at most %d", len(got), maxPlanChatMessages)
+	}
+	if got[0].Role != "user" {
+		t.Fatalf("first kept message = %+v, want it to start on a user turn", got[0])
+	}
+	last := list[len(list)-1]
+	if got[len(got)-1] != last {
+		t.Fatalf("last kept message = %+v, want the newest %+v", got[len(got)-1], last)
+	}
+	// A list already within bounds is untouched.
+	small := []planChatMessage{{Role: "user", Body: "hoi"}}
+	if got := trimPlanChat(small); len(got) != 1 {
+		t.Fatalf("a short list should not be trimmed: %+v", got)
+	}
+}

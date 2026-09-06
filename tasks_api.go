@@ -1377,12 +1377,17 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 		// tracker folds it into the document and regenerates the task list.
 		if parts[2] == SignalPlanAnswer {
 			var body PlanAnswerSignal
-			// The same Signal carries a second kind of message: "genereer
-			// vervolgvragen" (tembed can only WaitSignal on one name at a
-			// time). That one has no question to point at, so it is the only
-			// shape allowed through without a questionId.
+			// The same Signal carries two more kinds of message (tembed can
+			// only WaitSignal on one name at a time): "genereer vervolgvragen"
+			// (planAnswerFollowup, no question to point at) and the general
+			// chat about this ticket (planAnswerChat, Text carries the typed
+			// message instead of an answer — see .claude/docs/plan-page.md).
+			// Both are the only shapes allowed through without a questionId;
+			// a chat message additionally needs real text, or there is
+			// nothing to signal at all.
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil ||
-				(body.QuestionID == "" && body.Kind != planAnswerFollowup) {
+				(body.QuestionID == "" && body.Kind != planAnswerFollowup && body.Kind != planAnswerChat) ||
+				(body.Kind == planAnswerChat && strings.TrimSpace(body.Text) == "") {
 				http.Error(w, "invalid plan answer", http.StatusBadRequest)
 				return
 			}
@@ -1405,10 +1410,20 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "invalid plan hotfix", http.StatusBadRequest)
 				return
 			}
-			body.Branch = strings.TrimSpace(body.Branch)
-			if body.Branch != "" && !planBranchRefPattern.MatchString(body.Branch) {
-				http.Error(w, "invalid plan hotfix", http.StatusBadRequest)
-				return
+			// The general chat about this ticket rides on this same signal
+			// while the gate stands (Kind "chat", see handlePlanChat in
+			// plan_workflow.go) — needs real text and nothing else validated.
+			if body.Kind == planAnswerChat {
+				if strings.TrimSpace(body.Text) == "" {
+					http.Error(w, "invalid plan hotfix", http.StatusBadRequest)
+					return
+				}
+			} else {
+				body.Branch = strings.TrimSpace(body.Branch)
+				if body.Branch != "" && !planBranchRefPattern.MatchString(body.Branch) {
+					http.Error(w, "invalid plan hotfix", http.StatusBadRequest)
+					return
+				}
 			}
 			if err := s.tasks.engine.SignalWorkflow(runID, SignalPlanHotfix, body); err != nil {
 				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
@@ -1427,7 +1442,16 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "invalid plan scope", http.StatusBadRequest)
 				return
 			}
-			if body.Choice != "parent" {
+			// The general chat about this ticket rides on this same signal
+			// while the gate stands (Kind "chat", see handlePlanChat in
+			// plan_workflow.go) — the only shape allowed through without
+			// Choice == "parent".
+			if body.Kind == planAnswerChat {
+				if strings.TrimSpace(body.Text) == "" {
+					http.Error(w, "invalid plan scope", http.StatusBadRequest)
+					return
+				}
+			} else if body.Choice != "parent" {
 				http.Error(w, "invalid plan scope", http.StatusBadRequest)
 				return
 			}

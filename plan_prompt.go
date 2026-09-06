@@ -17,13 +17,14 @@ import (
 	"strings"
 )
 
-// planPrompt builds the Dutch prompt. mode "all" asks for questions + tasks
-// (the first pass), "tasks" only for the task list (after an answer) — the
-// questions themselves must not move while the reviewer is answering them.
-func planPrompt(doc planDoc, mode string) string {
-	var b strings.Builder
-	b.WriteString("Je helpt een ontwikkelaar een Jira-ticket om te zetten in een scherp uitvoerplan.\n\n")
-	fmt.Fprintf(&b, "TICKET %s: %s\n\n", doc.Key, doc.Title)
+// writePlanContext writes the shared "everything known about this ticket"
+// block both planPrompt and planChatPrompt open with: the ticket itself, the
+// parent/subtask relation, the Jira comments, the already-merged work, the
+// base-branch constraint and the answers so far. Extracted so the general
+// chat prompt (planChatPrompt) discusses the SAME facts the plan itself was
+// built from, instead of drifting from a second, hand-maintained copy.
+func writePlanContext(b *strings.Builder, doc planDoc) {
+	fmt.Fprintf(b, "TICKET %s: %s\n\n", doc.Key, doc.Title)
 	desc := planTrim(doc.Description, 6000)
 	if desc == "" {
 		desc = "(geen omschrijving in Jira)"
@@ -35,7 +36,7 @@ func planPrompt(doc planDoc, mode string) string {
 	// subtask); a main task is planned knowing which parts already hang under
 	// it as their own tickets, so those are named rather than planned twice.
 	if doc.ParentKey != "" {
-		fmt.Fprintf(&b, "HOOFDTAAK %s: %s\n", doc.ParentKey, doc.ParentTitle)
+		fmt.Fprintf(b, "HOOFDTAAK %s: %s\n", doc.ParentKey, doc.ParentTitle)
 		if pd := planTrim(doc.ParentDescription, 3000); pd != "" {
 			b.WriteString(pd + "\n")
 		}
@@ -44,9 +45,9 @@ func planPrompt(doc planDoc, mode string) string {
 	if len(doc.Subtasks) > 0 {
 		b.WriteString("SUBTAKEN VAN DIT TICKET (elk een eigen ticket, apart opgepakt):\n")
 		for _, st := range doc.Subtasks {
-			fmt.Fprintf(&b, "- %s: %s", st.Key, st.Title)
+			fmt.Fprintf(b, "- %s: %s", st.Key, st.Title)
 			if st.Status != "" {
-				fmt.Fprintf(&b, " (%s)", st.Status)
+				fmt.Fprintf(b, " (%s)", st.Status)
 			}
 			b.WriteString("\n")
 		}
@@ -57,8 +58,8 @@ func planPrompt(doc planDoc, mode string) string {
 	// walks the description back, narrows the scope, or names the constraint
 	// nobody wrote down. Reviewer request: plan with the comments of the main
 	// task and the subtasks in view, not just their descriptions.
-	writePlanComments(&b, "OPMERKINGEN OP DIT TICKET (nieuwste onderaan):", doc.Comments)
-	writePlanComments(&b, "OPMERKINGEN OP DE HOOFDTAAK EN DE SUBTAKEN:", doc.RelatedComments)
+	writePlanComments(b, "OPMERKINGEN OP DIT TICKET (nieuwste onderaan):", doc.Comments)
+	writePlanComments(b, "OPMERKINGEN OP DE HOOFDTAAK EN DE SUBTAKEN:", doc.RelatedComments)
 	if len(doc.Comments)+len(doc.RelatedComments) > 0 {
 		b.WriteString("Een opmerking die iets terugdraait, inperkt of aanscherpt weegt ZWAARDER dan de oorspronkelijke omschrijving: de laatste stand van zaken is wat telt.\n\n")
 	}
@@ -67,12 +68,12 @@ func planPrompt(doc planDoc, mode string) string {
 	if len(doc.RelatedPRs) > 0 {
 		b.WriteString("AL GEMERGED WERK DAT HIERBIJ HOORT (de meest relevante, nieuwste eerst):\n")
 		for _, pr := range doc.RelatedPRs {
-			fmt.Fprintf(&b, "- PR #%d: %s", pr.Number, pr.Title)
+			fmt.Fprintf(b, "- PR #%d: %s", pr.Number, pr.Title)
 			if pr.Key != "" {
-				fmt.Fprintf(&b, " [gevonden via %s]", pr.Key)
+				fmt.Fprintf(b, " [gevonden via %s]", pr.Key)
 			}
 			if pr.MergedAt != "" {
-				fmt.Fprintf(&b, " (gemerged %s)", pr.MergedAt)
+				fmt.Fprintf(b, " (gemerged %s)", pr.MergedAt)
 			}
 			b.WriteString("\n")
 			if len(pr.Files) > 0 {
@@ -85,23 +86,32 @@ func planPrompt(doc planDoc, mode string) string {
 	// on where plan_execute branches from: a hotfix goes straight to production.
 	if base := strings.TrimSpace(doc.BaseBranch); base != "" {
 		if doc.Hotfix {
-			fmt.Fprintf(&b, "HOTFIX: dit gaat als hotfix vanaf `%s` rechtstreeks naar productie. Houd het plan zo klein en risicoloos mogelijk: alleen wat dit ticket nodig heeft, geen refactor en geen meeliftende verbeteringen.\n\n", base)
+			fmt.Fprintf(b, "HOTFIX: dit gaat als hotfix vanaf `%s` rechtstreeks naar productie. Houd het plan zo klein en risicoloos mogelijk: alleen wat dit ticket nodig heeft, geen refactor en geen meeliftende verbeteringen.\n\n", base)
 		} else {
-			fmt.Fprintf(&b, "BASISBRANCH: dit plan wordt uitgevoerd vanaf `%s`.\n\n", base)
+			fmt.Fprintf(b, "BASISBRANCH: dit plan wordt uitgevoerd vanaf `%s`.\n\n", base)
 		}
 	}
 	if len(doc.Answers) > 0 {
 		b.WriteString("AL BEANTWOORDE VRAGEN (gebruik deze keuzes als vaststaand):\n")
 		for _, a := range doc.Answers {
 			q, opt := planLookupAnswer(doc, a)
-			fmt.Fprintf(&b, "- %s → %s", q, opt)
+			fmt.Fprintf(b, "- %s → %s", q, opt)
 			if a.Text != "" {
-				fmt.Fprintf(&b, " (toelichting: %s)", a.Text)
+				fmt.Fprintf(b, " (toelichting: %s)", a.Text)
 			}
 			b.WriteString("\n")
 		}
 		b.WriteString("\n")
 	}
+}
+
+// planPrompt builds the Dutch prompt. mode "all" asks for questions + tasks
+// (the first pass), "tasks" only for the task list (after an answer) — the
+// questions themselves must not move while the reviewer is answering them.
+func planPrompt(doc planDoc, mode string) string {
+	var b strings.Builder
+	b.WriteString("Je helpt een ontwikkelaar een Jira-ticket om te zetten in een scherp uitvoerplan.\n\n")
+	writePlanContext(&b, doc)
 
 	// A follow-up round must not ask the same thing twice, so it sees every
 	// question already on the document (answered or not) — appendPlanQuestions
@@ -390,3 +400,41 @@ func writePlanComments(b *strings.Builder, header string, list []planComment) {
 // maxPlanCommentLen bounds ONE comment in the prompt: a pasted stack trace must
 // not push the ticket itself out of the context window.
 const maxPlanCommentLen = 1200
+
+// planChatPrompt builds the prompt for ONE reply in the general chat about
+// this ticket — the review tree's own Claude chat, reused (see
+// planChatMessage/.claude/docs/plan-page.md). Shares the exact same "what do
+// we know about this ticket" context planPrompt opens with (writePlanContext)
+// so the chat never drifts from a second, hand-maintained picture of the
+// ticket, then adds the plan built so far and the conversation itself.
+// Deliberately asks for plain prose, not JSON: this is a side conversation
+// next to the plan, not another way to edit the questions/tasks.
+func planChatPrompt(doc planDoc) string {
+	var b strings.Builder
+	b.WriteString("Je bent Claude en voert een los gesprek met een ontwikkelaar die dit Jira-ticket aan het plannen is — naast de vragen en de takenlijst die al apart worden opgesteld.\n\n")
+	writePlanContext(&b, doc)
+	if len(doc.Questions) > 0 {
+		b.WriteString("VRAGEN DIE HET PLAN AL STELT:\n")
+		for _, q := range doc.Questions {
+			fmt.Fprintf(&b, "- %s\n", q.Question)
+		}
+		b.WriteString("\n")
+	}
+	if len(doc.Tasks) > 0 {
+		b.WriteString("HUIDIGE TAKENLIJST:\n")
+		for i, tk := range doc.Tasks {
+			fmt.Fprintf(&b, "%d. %s\n", i+1, tk.Title)
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("GESPREK TOT NU TOE:\n")
+	for _, m := range doc.Chat {
+		who := "Reviewer"
+		if m.Role == "assistant" {
+			who = "Jij (Claude)"
+		}
+		fmt.Fprintf(&b, "%s: %s\n", who, planTrim(m.Body, 4000))
+	}
+	b.WriteString("\nBeantwoord de LAATSTE reviewer-boodschap hierboven. Kort en concreet, in het Nederlands, in gewoon proza (geen JSON, en alleen een code-fence als dat echt iets verduidelijkt). Als het antwoord de vragen of de takenlijst zou moeten veranderen, zeg dat in woorden — jij past dat document hier niet zelf aan.\n")
+	return b.String()
+}

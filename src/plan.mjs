@@ -27,6 +27,17 @@ import { initTheme, themeToggleButton } from './theme.mjs'
 import { settingsButton } from './settingsLink.mjs'
 import { labelForWorkflow } from './workflowLabels.mjs'
 import { bindUrlState, num } from './urlState.mjs'
+import CommandMenu, { filterCommands } from './CommandMenu.mjs'
+// claudeChatColumn is the review tree's own Claude chat component (a pure
+// template layer, see ClaudeChat.mjs's own file header) — reused here for the
+// general chat about this ticket (reviewer request: "die mag je hergebruiken",
+// see .claude/docs/plan-page.md). Only the PRESENTATION is reused: the
+// backend behind it is this page's own (the plan_answer Signal's "chat" Kind,
+// keyed on the Jira key rather than a GitHub PR number, since there is no PR
+// yet at planning time) — never home.mjs/RelatedPanel.mjs's PR-scoped chat
+// engine (SSE progress, cancel, checkout), which this page has no PR to hang
+// on. See planChatOverlay below.
+import { claudeChatColumn } from './ClaudeChat.mjs'
 
 initTheme()
 
@@ -43,7 +54,12 @@ const planKey = (() => {
 // plan appears on its own while the reviewer is still reading the ticket.
 const POLL_MS = 3000
 
-const EMPTY_DOC = { key: planKey, title: '', description: '', url: '', questions: [], tasks: [], answers: [], error: '' }
+const EMPTY_DOC = { key: planKey, title: '', description: '', url: '', questions: [], tasks: [], answers: [], error: '', chat: [] }
+
+// JIRA_BASE mirrors home.mjs/overview.mjs's own constant — used as the
+// fallback link when the document hasn't loaded (yet), or never resolved a
+// real url, a Jira ticket.
+const JIRA_BASE = 'https://plugandpaybv.atlassian.net/browse/'
 
 const state = reactive({
   key: planKey,
@@ -100,7 +116,82 @@ const state = reactive({
   // so the stored document only grows its new questions once it lands. Local,
   // exactly like scopePending/hotfixPending.
   followupPending: false,
+  // The general chat about this ticket (reused from the review tree, see the
+  // import comment above and planChatOverlay below). chatOpen gates the
+  // fullscreen overlay (ephemeral — not in the URL/localStorage, exactly like
+  // the tree's own generalChatOverlay.mjs: Escape simply hides it again, the
+  // conversation itself is durable on the document). chatBusy/chatError cover
+  // the one in-flight Signal round trip: there is no streaming here (a single
+  // blocking Claude call, not a multi-tool agentic turn), so "busy" is the
+  // whole status this page can show.
+  chatOpen: false,
+  chatBusy: false,
+  chatError: '',
 })
+
+// menu is the stable {open} flag the Enter-menu on the ticket column renders
+// off (mirrors the review tree's own `menu`/`ms` split, see
+// .claude/rules/arrowjs-pitfalls.md's "ms-swap" note: `ms` itself is
+// replaced wholesale on every open, so a stale binding from a torn-down menu
+// never fires against a freed slot). PLAN_COMMANDS is a tiny, fixed list —
+// this page has no GitHub PR/approve actions yet, only what genuinely exists
+// before one: the Jira ticket and the way back to the overview.
+const menu = reactive({ open: false })
+let ms = null
+
+const PLAN_COMMANDS = [
+  { id: 'close-menu', label: t('Sluit menu'), hint: 'sluit', run: () => {} },
+  {
+    id: 'plan-jira-open',
+    label: () => t('Open in Jira ({key})', { key: state.key }),
+    hint: 'jira',
+    run: () => window.open(state.doc.url || JIRA_BASE + state.key, '_blank'),
+  },
+  {
+    id: 'plan-back-overview',
+    label: t('Terug naar overzicht'),
+    hint: 'overzicht',
+    run: () => {
+      location.href = '/pr-overview'
+    },
+  },
+]
+
+function resolvePlanCommands(query) {
+  return filterCommands(PLAN_COMMANDS, query)
+}
+
+// openPlanMenu/closeMenu/runCommand mirror home.mjs's own menu machinery
+// (openMenu/closeMenu/runCommand) at the scale this page actually needs: no
+// submenus, no native (right-click) variant, no positioning math — the
+// popover is simply anchored under the ticket card's own menu button via
+// plain CSS (planMenuOverlay below), so there is nothing to reposition on
+// scroll/resize the way the tree's own anchored-to-a-list-row menu needs.
+function openPlanMenu() {
+  ms = reactive({ query: '', sel: Math.min(1, PLAN_COMMANDS.length - 1), mode: 'plan', commands: PLAN_COMMANDS, native: false })
+  menu.open = true
+  requestAnimationFrame(() => {
+    const el = document.querySelector('[data-testid="command-input"]')
+    if (el) el.focus()
+  })
+}
+
+function closeMenu() {
+  // Only flip the flag; `ms` is replaced wholesale on the next openPlanMenu,
+  // so the just-closed instance's own bindings are never touched again (see
+  // the arrowjs-pitfalls.md note above).
+  menu.open = false
+}
+
+// runCommand closes the menu first and runs the command a frame later — the
+// menu's own (keyed) row list unmounts in the same reactive flush that
+// closing it triggers, so running the command's own state change in that
+// same flush risks losing it if the teardown throws before later-queued
+// effects run. See the identical reasoning in home.mjs's own runCommand.
+function runCommand(cmd) {
+  closeMenu()
+  requestAnimationFrame(() => cmd.run())
+}
 
 bindUrlState(state, [
   { key: 'cur', param: 'cur', default: '' },
@@ -393,6 +484,118 @@ function execRunning() {
   return !!state.exec && state.exec.status === 'running'
 }
 
+// ---------------------------------------------------- the general chat ----
+// "die mag je hergebruiken" — the review tree's own Claude chat component
+// (ClaudeChat.mjs's claudeChatColumn), fed by this page's OWN, much simpler
+// backend: one blocking Signal (plan_answer, Kind "chat") that appends the
+// reviewer's message, runs ONE Claude call and appends the reply — all on
+// the SAME per-ticket document every other answer already lives on, keyed
+// by the Jira key (from the URL) rather than a GitHub PR number, since
+// planning happens before a PR exists. See .claude/docs/plan-page.md.
+
+// chatMessages adapts the stored transcript into the small, stable shape
+// claudeChatColumn/claudeBubble expect (id/role/body) — no kind/model/
+// noShell/options: those all describe review-tree turn machinery (retry
+// ladders, agentic tool use, questions with options) this page's own single
+// one-shot Claude call never produces.
+function chatMessages() {
+  return (state.doc.chat || []).map((m, i) => ({ id: 'chat:' + i, role: m.role, body: m.body }))
+}
+
+// chatSignalName picks which signal the chat message rides on: tembed can
+// only WaitSignal on one name at a time, and the tracker is parked on a
+// DIFFERENT signal while the scope/hotfix gate stands (see needsScope/
+// needsHotfix and handlePlanChat in plan_workflow.go) — the chat must keep
+// working there too, not only once every gate is answered.
+function chatSignalName() {
+  if (needsScope()) return 'plan_scope'
+  if (needsHotfix()) return 'plan_hotfix'
+  return 'plan_answer'
+}
+
+// sendChatMessage sends one reviewer message. The message is echoed onto
+// state.doc locally FIRST (optimistic — the same "local pick wins until the
+// document catches up" shape answerFor uses) so it appears immediately; the
+// Signal round trip both stores it for real and runs the Claude reply inline
+// (see handlePlanChat in plan_workflow.go), so the very next loadPlan()
+// already carries both.
+async function sendChatMessage(text) {
+  const trimmed = (text || '').trim()
+  if (!trimmed || state.chatBusy) return
+  if (!state.runId) await ensureTracker()
+  if (!state.runId) return
+  state.chatBusy = true
+  state.chatError = ''
+  state.doc = { ...state.doc, chat: [...(state.doc.chat || []), { role: 'user', body: trimmed }] }
+  lastPayload = ''
+  try {
+    const res = await fetch('/api/workflows/' + encodeURIComponent(state.runId) + '/signals/' + chatSignalName(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'chat', text: trimmed }),
+    })
+    if (!res.ok) state.chatError = t('Kon niet verstuurd worden.')
+    await loadPlan()
+  } catch (err) {
+    state.chatError = t('Kon niet verstuurd worden.')
+  }
+  state.chatBusy = false
+}
+
+// chatView/chatCallbacks are claudeChatColumn's own two arguments (see
+// ClaudeChat.mjs's file header: getters + plain callbacks, no reactive state
+// of its own). Every field the review tree's richer engine needs for
+// streaming progress/retry/cancel/queueing/scroll-pinning is stubbed to its
+// inert value here on purpose — this page's chat has none of that (a single
+// blocking call per message, no agentic tool use, no werkmap) — so nothing
+// in claudeChatColumn's template ever tries to render a control this page
+// cannot back.
+function chatView() {
+  return {
+    messages: () => chatMessages(),
+    status: () => 'ok',
+    busy: () => state.chatBusy,
+    retryAllBusy: () => false,
+    active: () => state.chatBusy,
+    sendError: () => state.chatError,
+    claudePos: () => 0,
+    pinned: () => true,
+    claudeOptionSel: () => 0,
+    anchorHint: () => '',
+    progress: () => null,
+    queued: () => [],
+    elapsed: () => 0,
+  }
+}
+
+function chatCallbacks() {
+  return {
+    onSend: (text) => sendChatMessage(text),
+    onRetry: () => {},
+    onRetryAll: () => {},
+    onCleanup: () => {},
+    onCancel: () => {},
+    onFocus: () => {},
+    onEmptyEnter: () => {},
+    onInput: () => {},
+    onSent: () => {},
+    onThreadScroll: () => {},
+    onJumpToBottom: () => {},
+  }
+}
+
+function openPlanChat() {
+  state.chatOpen = true
+  requestAnimationFrame(() => {
+    const el = document.querySelector('[data-testid=claude-chat-compose]')
+    if (el) el.focus()
+  })
+}
+
+function closePlanChat() {
+  state.chatOpen = false
+}
+
 // ------------------------------------------------------------------ cursors
 
 // navRows is the flat, ordered list column 2 navigates: every option of every
@@ -653,6 +856,42 @@ function stepLeft() {
 
 function onKeydown(e) {
   if (e.metaKey || e.ctrlKey || e.altKey) return
+  // The general-chat overlay owns the keyboard completely while open — same
+  // shape as the review tree's own generalChatOverlay.mjs: Escape hides it
+  // (ClaudeChat.mjs's own composer @keydown only intercepts Escape while a
+  // turn is genuinely active, see view.active() above, so an idle Escape
+  // reaches here and closes the overlay), every other key is left alone so
+  // it keeps reaching the composer textarea exactly as ClaudeChat.mjs wires
+  // it. Checked before isEditableFocused() below: that branch would
+  // otherwise just blur the composer on Escape instead of closing the
+  // overlay around it.
+  if (state.chatOpen) {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      closePlanChat()
+    }
+    return
+  }
+  // The ticket-column Enter-menu owns the keyboard the same way — mirrors
+  // home.mjs's own `if (menu.open) {...}` branch, at the scale this page's
+  // tiny, submenu-less PLAN_COMMANDS list needs.
+  if (menu.open) {
+    const list = resolvePlanCommands(ms.query)
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      closeMenu()
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      ms.sel = Math.min(ms.sel + 1, Math.max(0, list.length - 1))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      ms.sel = Math.max(ms.sel - 1, 0)
+    } else if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      if (list[ms.sel]) runCommand(list[ms.sel])
+    }
+    return
+  }
   if (isEditableFocused()) {
     if (e.key === 'Escape') document.activeElement.blur()
     return
@@ -676,8 +915,24 @@ function onKeydown(e) {
       e.preventDefault()
       stepLeft()
       return
+    case '/':
+      // Always opens the general chat about this ticket — mirrors the review
+      // tree's own rule ("/ wordt altijd het PR-menu", here: altijd de chat),
+      // wherever the keyboard currently is.
+      e.preventDefault()
+      openPlanChat()
+      return
     case 'Enter':
     case ' ': {
+      // Enter on the ticket column (stop 0, no block/question context there)
+      // opens the small ticket menu instead — mirrors the review tree's own
+      // "Enter on stop 1 opens the PR-wide menu" rule. Checked first so it
+      // wins regardless of what curRow() below would otherwise resolve to.
+      if (state.col === 0) {
+        e.preventDefault()
+        openPlanMenu()
+        return
+      }
       const row = curRow()
       if (state.col === 1 && row && row.kind === 'option') {
         e.preventDefault()
@@ -904,6 +1159,56 @@ function ticketCard() {
             data-testid="plan-back"
             >← ${t('Overzicht')}</a
           >
+          <button
+            type="button"
+            title="${t('Chat over dit ticket')}"
+            data-testid="plan-chat-button"
+            class="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-50 text-slate-500 ring-1 ring-slate-200 hover:bg-slate-100 dark:bg-zinc-800 dark:text-zinc-400 dark:ring-zinc-700"
+            @click="${(e) => {
+              e.stopPropagation()
+              openPlanChat()
+            }}"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              class="h-3.5 w-3.5"
+            >
+              <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path>
+            </svg>
+          </button>
+          <div class="relative">
+            <button
+              type="button"
+              title="${t('Menu')}"
+              data-testid="plan-menu-button"
+              class="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-50 text-slate-500 ring-1 ring-slate-200 hover:bg-slate-100 dark:bg-zinc-800 dark:text-zinc-400 dark:ring-zinc-700"
+              @click="${(e) => {
+                e.stopPropagation()
+                menu.open ? closeMenu() : openPlanMenu()
+              }}"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                class="h-3.5 w-3.5"
+              >
+                <circle cx="12" cy="5" r="1.5"></circle>
+                <circle cx="12" cy="12" r="1.5"></circle>
+                <circle cx="12" cy="19" r="1.5"></circle>
+              </svg>
+            </button>
+          </div>
           ${themeToggleButton('h-7 w-7 bg-slate-50 dark:bg-zinc-800 ring-1 ring-slate-200 dark:ring-zinc-700')}
           ${settingsButton('h-7 w-7 bg-slate-50 dark:bg-zinc-800 ring-1 ring-slate-200 dark:ring-zinc-700')}
         </div>
@@ -1709,6 +2014,53 @@ function blockColumn(list, level) {
   `.key('blockcol:' + level + ':' + (state.cur || '-'))
 }
 
+// -------------------------------------------------------- overlays: menu + chat
+
+// planMenuOverlay is the ticket column's own small command menu (Enter on
+// column 0, or the mouse's plan-menu-button) — CommandMenu.mjs, the exact
+// review-tree component, anchored under the ticket card via plain CSS (no
+// per-anchor positioning math: this page's layout is fixed, unlike the
+// tree's scrolling index). A fixed, click-through-to-close backdrop mirrors
+// home.mjs's own menuOverlay.
+function planMenuOverlay() {
+  return html`
+    <div class="fixed inset-0 z-30" data-testid="plan-menu-overlay" @click="${() => closeMenu()}">
+      <div class="absolute right-5 top-20 z-40 w-72" data-testid="plan-menu-anchor" @click="${(e) => e.stopPropagation()}">
+        ${CommandMenu(ms, resolvePlanCommands, runCommand, {})}
+      </div>
+    </div>
+  `.key('plan-menu-overlay')
+}
+
+// planChatOverlay is the general chat about this ticket — mirrors the review
+// tree's own generalChatOverlay.mjs shape (a fullscreen backdrop, Escape/an
+// outside click closes it) around the SAME claudeChatColumn, fed by this
+// page's own chatView/chatCallbacks above.
+function planChatOverlay() {
+  return html`
+    <div
+      class="fixed inset-0 z-40 flex items-stretch justify-center bg-slate-900/40 p-4 backdrop-blur-sm dark:bg-black/60"
+      data-testid="plan-chat-overlay"
+      @click="${(e) => {
+        if (e.target === e.currentTarget) closePlanChat()
+      }}"
+    >
+      <div
+        class="flex min-h-0 w-full max-w-[720px] flex-col overflow-hidden rounded-xl bg-white shadow-2xl ring-1 ring-slate-200 dark:bg-zinc-900 dark:ring-zinc-700"
+        data-testid="plan-chat-card"
+      >
+        <div class="flex shrink-0 items-center justify-between border-b border-slate-100 px-3 py-2 dark:border-zinc-800">
+          <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-zinc-400"
+            >${() => t('Chat over dit ticket · {key}', { key: state.key })}</span
+          >
+          <span class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500 dark:bg-zinc-800 dark:text-zinc-400">esc</span>
+        </div>
+        <div class="flex min-h-0 flex-1 flex-col overflow-y-auto p-2">${() => claudeChatColumn(chatView(), chatCallbacks(), false, () => {})}</div>
+      </div>
+    </div>
+  `.key('plan-chat-overlay')
+}
+
 // ------------------------------------------------------------------ the page
 
 function App() {
@@ -1727,6 +2079,8 @@ function App() {
               </div>`
             : ''}
       </div>
+      <div class="contents">${() => (menu.open ? [planMenuOverlay()] : [])}</div>
+      <div class="contents">${() => (state.chatOpen ? [planChatOverlay()] : [])}</div>
     </div>
   `
 }

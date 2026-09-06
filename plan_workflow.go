@@ -90,6 +90,19 @@ const (
 // Kind (every signal recorded before this existed) is an ordinary answer.
 const planAnswerFollowup = "followup"
 
+// planAnswerChat is the PlanAnswerSignal Kind for a free-form chat message
+// about this ticket ("de algemene chat", reused from the review tree — see
+// .claude/docs/plan-page.md, "The general chat: keyed on the Jira ticket, not
+// a PR"). Text carries the reviewer's message; QuestionID/OptionID are unused
+// for this kind, same shape as planAnswerFollowup above.
+const planAnswerChat = "chat"
+
+// maxPlanChatMessages bounds how long the chat transcript on the document is
+// allowed to grow (oldest dropped first, always in pairs so a lone orphaned
+// reply/question is never left dangling) — the same reasoning as
+// maxPlanQuestionsTotal: the prompt and the page both stay bounded.
+const maxPlanChatMessages = 40
+
 // PlanInput starts a plan Execution.
 type PlanInput struct {
 	Key string `json:"key"`
@@ -197,6 +210,12 @@ type planSubtask struct {
 type PlanHotfixSignal struct {
 	Hotfix bool   `json:"hotfix"`
 	Branch string `json:"branch,omitempty"`
+	// Kind/Text: the same "chat" carve-out plan_answer's Kind already uses
+	// (planAnswerChat) — tembed can only WaitSignal on one name at a time,
+	// and the general chat about this ticket must keep working regardless of
+	// which question the tracker is currently parked on. See handlePlanChat.
+	Kind string `json:"kind,omitempty"`
+	Text string `json:"text,omitempty"`
 }
 
 // PlanScopeSignal answers the scope question. Choice is always "parent" today
@@ -204,6 +223,9 @@ type PlanHotfixSignal struct {
 // a later third option does not need a new Signal.
 type PlanScopeSignal struct {
 	Choice string `json:"choice"`
+	// Kind/Text: same chat carve-out as PlanHotfixSignal above.
+	Kind string `json:"kind,omitempty"`
+	Text string `json:"text,omitempty"`
 }
 
 // planAnswer is one stored reviewer answer (the Signal, kept on the document).
@@ -211,6 +233,18 @@ type planAnswer struct {
 	QuestionID string `json:"questionId"`
 	OptionID   string `json:"optionId"`
 	Text       string `json:"text,omitempty"`
+}
+
+// planChatMessage is one turn of the free-form "algemene chat" about this
+// ticket — the review tree's own Claude chat, reused (.claude/docs/
+// plan-page.md): Role is "user" (the reviewer) or "assistant" (Claude), Body
+// its text. Deliberately NOT the tree's chat.Message (no streaming progress,
+// no kind/model/noShell — this is a single blocking Signal + one Claude call,
+// not a multi-tool agentic turn), see planChatReply.
+type planChatMessage struct {
+	Role      string `json:"role"`
+	Body      string `json:"body"`
+	CreatedAt string `json:"createdAt,omitempty"`
 }
 
 // planDoc is the whole document the page renders — see modules/plan.
@@ -268,7 +302,12 @@ type planDoc struct {
 	Questions       []planQuestion  `json:"questions"`
 	Tasks           []planTask      `json:"tasks"`
 	Answers         []planAnswer    `json:"answers"`
-	UpdatedAt       string          `json:"updatedAt,omitempty"`
+	// Chat is the free-form "algemene chat" transcript about this ticket — the
+	// review tree's own Claude chat component, reused, but keyed on the Jira
+	// KEY (this document) rather than a GitHub PR number: there is no PR yet
+	// at planning time. See planChatReply/the plan_answer Kind "chat".
+	Chat      []planChatMessage `json:"chat,omitempty"`
+	UpdatedAt string            `json:"updatedAt,omitempty"`
 	// Error is a short reason the questions/tasks are empty (Jira or Claude
 	// unreachable, SLASH_CLAUDE=off). The page shows it as a note, never as an
 	// error wall — same "never cry wolf" rule as the Jira sections.
@@ -286,6 +325,37 @@ type planGenerateArg struct {
 
 // planRunID is the deterministic Run ID: one tracker per ticket, forever.
 func planRunID(key string) string { return "plan-" + key }
+
+// handlePlanChat is the ONE body behind every "chat" Kind this workflow can
+// receive — the two upfront gates (SignalPlanScope/SignalPlanHotfix) AND the
+// main SignalPlanAnswer loop each ride the general chat on their own already-
+// waited-on signal (tembed can only WaitSignal on one name at a time), so the
+// chat about a ticket keeps working regardless of which question the tracker
+// happens to be parked on right now — reviewer request: "die mag je
+// hergebruiken" (see .claude/docs/plan-page.md) should not come with the
+// caveat "only once every gate is answered". Saves the reviewer's own message
+// first (so a poll landing mid-call already shows what was just typed), then
+// runs ONE Claude call for the reply and saves again — both their own
+// Activity, so a hiccup in the (much slower) Claude call never loses the
+// reviewer's own message.
+func handlePlanChat(w *tembed.Workflow, doc *planDoc, text string) error {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	doc.Chat = append(doc.Chat, planChatMessage{Role: "user", Body: text, CreatedAt: time.Now().UTC().Format(time.RFC3339)})
+	doc.Chat = trimPlanChat(doc.Chat)
+	if err := w.ExecuteActivity("planSave", *doc, nil); err != nil {
+		return fmt.Errorf("plan: save chat message: %w", err)
+	}
+	if err := w.ExecuteActivity("planChatReply", *doc, doc); err != nil {
+		return fmt.Errorf("plan: chat reply: %w", err)
+	}
+	if err := w.ExecuteActivity("planSave", *doc, nil); err != nil {
+		return fmt.Errorf("plan: save chat reply: %w", err)
+	}
+	return nil
+}
 
 // planWorkflow is the tracker described at the top of this file.
 func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
@@ -309,8 +379,21 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		if err := w.ExecuteActivity("planSave", doc, nil); err != nil {
 			return nil, fmt.Errorf("plan: save scope question: %w", err)
 		}
-		var scope PlanScopeSignal
-		w.WaitSignal(SignalPlanScope, &scope)
+		// The general chat must keep working while this gate stands (see
+		// handlePlanChat's own doc comment) — a chat message rides on the
+		// SAME SignalPlanScope wait (Kind "chat"), handled inline, and the
+		// tracker simply waits again for the real scope answer.
+		for {
+			var scope PlanScopeSignal
+			w.WaitSignal(SignalPlanScope, &scope)
+			if scope.Kind == planAnswerChat {
+				if err := handlePlanChat(w, &doc, scope.Text); err != nil {
+					return nil, err
+				}
+				continue
+			}
+			break
+		}
 		doc.NeedsScope = false
 	}
 	// EVERY ticket is asked ONE more thing before anything is generated: does
@@ -331,8 +414,19 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		if err := w.ExecuteActivity("planSave", doc, nil); err != nil {
 			return nil, fmt.Errorf("plan: save hotfix question: %w", err)
 		}
+		// Same chat carve-out as the scope gate above.
 		var hf PlanHotfixSignal
-		w.WaitSignal(SignalPlanHotfix, &hf)
+		for {
+			w.WaitSignal(SignalPlanHotfix, &hf)
+			if hf.Kind == planAnswerChat {
+				if err := handlePlanChat(w, &doc, hf.Text); err != nil {
+					return nil, err
+				}
+				hf = PlanHotfixSignal{}
+				continue
+			}
+			break
+		}
 		doc.NeedsHotfix = false
 		doc.Hotfix, doc.BaseBranch = resolvePlanBase(doc, hf)
 	}
@@ -376,6 +470,14 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			}
 			if err := w.ExecuteActivity("planSave", doc, nil); err != nil {
 				return nil, fmt.Errorf("plan: save: %w", err)
+			}
+			continue
+		}
+		// The general chat about this ticket (reused from the review tree, see
+		// planChatMessage/.claude/docs/plan-page.md) — see handlePlanChat.
+		if sig.Kind == planAnswerChat {
+			if err := handlePlanChat(w, &doc, sig.Text); err != nil {
+				return nil, err
 			}
 			continue
 		}
@@ -446,6 +548,20 @@ func resolvePlanBase(doc planDoc, sig PlanHotfixSignal) (bool, string) {
 		return true, hotfix
 	}
 	return false, def
+}
+
+// trimPlanChat bounds the chat transcript to maxPlanChatMessages, dropping
+// the OLDEST messages first. Called once right after the reviewer's own
+// message is appended (an odd-length list, mid-turn — the reply hasn't
+// landed yet) and once more after the reply — a strict "always even" rule
+// would be meaningless on the first of those two calls, so this simply caps
+// the length; in steady state (every completed turn appends a pair) the kept
+// window still starts on a user turn.
+func trimPlanChat(list []planChatMessage) []planChatMessage {
+	if len(list) <= maxPlanChatMessages {
+		return list
+	}
+	return list[len(list)-maxPlanChatMessages:]
 }
 
 // upsertPlanAnswer replaces the answer for a question, or appends a new one —
@@ -677,6 +793,42 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 			return json.Marshal(doc)
 		}
 		doc.Tasks = tasks
+		return json.Marshal(doc)
+	})
+	// Activity: ONE Claude call answering the reviewer's latest chat message
+	// (the general chat about this ticket — reused from the review tree, see
+	// planChatMessage/.claude/docs/plan-page.md). Unlike planGenerate this is
+	// plain prose, not a JSON object, and it never touches Questions/Tasks —
+	// the chat is a side conversation next to the plan, not another way to
+	// edit it. Best-effort: a hiccup (or SLASH_CLAUDE=off) still appends an
+	// assistant turn saying so, exactly like the tree's own failed-turn
+	// bubbles, rather than leaving the reviewer's own message unanswered
+	// forever.
+	engine.RegisterActivity("planChatReply", func(ctx context.Context, in []byte) ([]byte, error) {
+		var doc planDoc
+		if err := json.Unmarshal(in, &doc); err != nil {
+			return nil, err
+		}
+		now := time.Now().UTC().Format(time.RFC3339)
+		doc.UpdatedAt = now
+		if m.claude == nil {
+			doc.Chat = append(doc.Chat, planChatMessage{Role: "assistant", Body: "Claude is nu niet beschikbaar.", CreatedAt: now})
+			doc.Chat = trimPlanChat(doc.Chat)
+			return json.Marshal(doc)
+		}
+		raw, err := m.claude.Run(ctx, claude.RunRequest{
+			Model:  claude.ModelSonnet,
+			Prompt: planChatPrompt(doc) + explainLangTail(m.LangFor(ctx, langpref.KindExplain)),
+		})
+		reply := strings.TrimSpace(raw)
+		if err != nil || reply == "" {
+			if err != nil {
+				m.logf("plan: chat reply %s: %v", doc.Key, err)
+			}
+			reply = "Kon geen antwoord genereren, probeer het opnieuw."
+		}
+		doc.Chat = append(doc.Chat, planChatMessage{Role: "assistant", Body: reply, CreatedAt: now})
+		doc.Chat = trimPlanChat(doc.Chat)
 		return json.Marshal(doc)
 	})
 	// Activity: persist the document (write, workflow-driven).

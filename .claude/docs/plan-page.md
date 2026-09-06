@@ -330,6 +330,100 @@ in a block column it drills. A keydown while an input has focus is left alone
 Which column owns the keyboard is spelled out **in words** in its header
 (`◆ actief`, `data-testid=column-active`), never by a colour alone.
 
+## Enter on the ticket column opens a small menu
+
+Reviewer request, verbatim: *"enter op pr description blok moet een menu
+geven om bijvoorbeeld jira ticket te kunnen openen"*. `Enter` on column 0 (the
+ticket) opens `CommandMenu.mjs` — the exact review-tree component reused
+as-is (see command-palette.md) — with a tiny, fixed, submenu-less list
+(`PLAN_COMMANDS`): "Open in Jira" (`state.doc.url`, falling back to
+`JIRA_BASE + state.key` before the document has loaded) and "Terug naar
+overzicht". Deliberately not `PR_COMMANDS`' full menu: this page has no
+GitHub PR yet, no approve/review actions, nothing that menu offers beyond
+those two.
+
+Its own tiny menu machinery in `plan.mjs` (`menu`/`ms`/`openPlanMenu`/
+`closeMenu`/`runCommand`) mirrors home.mjs's at the scale this page needs: no
+submenus, no native (right-click) variant, no per-anchor positioning math —
+the popover (`planMenuOverlay`) is a fixed backdrop plus an absolutely
+positioned box under the ticket card, not repositioned on scroll/resize the
+way the tree's list-row-anchored menu is. Same `ms`-swap discipline as the
+tree (`.claude/rules/arrowjs-pitfalls.md`): `ms` is replaced wholesale on
+every open, so a just-closed instance's bindings never fire against a freed
+slot. `↑`/`↓`/`Enter`/`Escape` are handled in `onKeydown`'s own
+`if (menu.open) {...}` branch, checked before `isEditableFocused()` so it
+takes priority. Mouse entry point: `plan-menu-button` in `ticketCard`'s
+"Weergave" row (next to the back link, chat button, theme and settings
+buttons).
+
+## The general chat about this ticket (`/`)
+
+Reviewer request, verbatim: *"ik wil de algemene chat openen door / te
+drukken. precies zoals in de tree. die mag je hergebruiken"* — an explicit,
+one-off exception to this page's own "same style, own code" rule (see the
+top of this file): the review tree's Claude chat component
+(`ClaudeChat.mjs`'s `claudeChatColumn`, a pure template layer with no
+reactive state of its own) is reused **unchanged**. What is NOT reused is
+`RelatedPanel.mjs`'s chat ENGINE behind it — that engine is keyed on a real
+GitHub PR number (SSE progress, cancel, checkout/werkmap, the `comments`
+module's `pr INTEGER NOT NULL` column with every handler rejecting `pr <= 0`)
+and this page exists **before** a PR does. Following the reviewer's own
+answer to that exact question ("aan jira ticket die ook in de url staat"),
+the conversation is instead keyed on the **Jira key**, on the SAME per-ticket
+document every answer already lives on.
+
+- **Backend**: `planChatMessage{Role, Body, CreatedAt}` — a new, deliberately
+  minimal shape (no kind/model/noShell/options: none of the tree's retry
+  ladder, agentic tool use, or inline questions apply to one blocking Claude
+  call) — lives on `planDoc.Chat`, alongside `Questions`/`Tasks`/`Answers`.
+  One more `Kind` on the EXISTING `plan_answer` Signal, `"chat"`
+  (`planAnswerChat`, the same one-signal-multiplexed-by-Kind convention
+  `"followup"` already uses): the reviewer's message (`Text`) is appended to
+  `doc.Chat`, saved, then `planChatReply` — ONE Claude call
+  (`m.claude.Run`, no tools, plain prose — never JSON, unlike
+  `planGenerate`) — answers it and is appended too. `planChatPrompt`
+  (`plan_prompt.go`) shares `writePlanContext` with `planPrompt` (extracted
+  from it) so the chat discusses the exact same ticket/comments/merged-work/
+  answers-so-far facts the plan itself was built from, plus the current
+  questions/tasks and the transcript itself. `trimPlanChat` bounds the
+  transcript (`maxPlanChatMessages`, 40), dropping the oldest first.
+- **The chat must keep working while a gate stands.** The scope
+  (`SignalPlanScope`) and hotfix (`SignalPlanHotfix`) gates each `WaitSignal`
+  on their OWN name, and tembed can only wait on one name at a time — a
+  ticket freshly opened for planning is, in practice, ALMOST ALWAYS sitting
+  on the hotfix gate (every issue type is asked it now, see "Which branch does
+  this go out from?" above), so requiring every gate to be answered first
+  would leave the chat unusable exactly when a reviewer is most likely to
+  reach for it. `PlanScopeSignal`/`PlanHotfixSignal` therefore ALSO carry the
+  same `Kind`/`Text` pair `PlanAnswerSignal` does; `handlePlanChat` (the one
+  body shared by all three call sites) runs on a `Kind:"chat"` message and the
+  workflow simply `WaitSignal`s again afterwards — a loop around each gate's
+  own wait, not a new concurrency primitive. The frontend's `sendChatMessage`
+  picks the right signal name itself (`chatSignalName`: `needsScope()` →
+  `plan_scope`, `needsHotfix()` → `plan_hotfix`, otherwise `plan_answer`) —
+  same reasoning as `answerFor`'s "local pick wins" overlay: the reviewer's own
+  message is echoed onto `state.doc` optimistically before the round trip
+  lands.
+- **Frontend**: `chatView()`/`chatCallbacks()` (`plan.mjs`) are
+  `claudeChatColumn`'s own two arguments — getters + plain callbacks, see
+  `ClaudeChat.mjs`'s file header. Every field the tree's richer engine needs
+  (streaming `progress`, `retryAllBusy`, `queued`, scroll-pinning, …) is
+  stubbed to its inert value on purpose: this page's chat is a single
+  blocking call per message, never an agentic multi-tool turn, so nothing in
+  `claudeChatColumn`'s template ever tries to render a control this page
+  cannot back (no retry ladder, no cancel, no werkmap). `openPlanChat`/
+  `closePlanChat` (`state.chatOpen`) gate a fullscreen overlay
+  (`planChatOverlay`) that mirrors the tree's own `generalChatOverlay.mjs`
+  shape (backdrop click / Escape closes it) — ephemeral, not in the URL or
+  `localStorage`, exactly like that overlay. `/` always opens it, from any
+  column, mirroring the tree's own "`/` always opens the PR menu" rule; mouse
+  entry point: `plan-chat-button` in `ticketCard`'s "Weergave" row.
+- **Accepted gap**: no streaming, no cancel, no retry, no werkmap/code-edit
+  capability — this chat can only talk, never touch code (that is what "Plan
+  uitvoeren" is for). A hiccup (`SLASH_CLAUDE=off`, or the CLI erroring) still
+  appends a fixed assistant line saying so, rather than leaving the
+  reviewer's own message answered by nothing.
+
 ### Never two selections visible at once
 
 Reviewer report, verbatim (with screenshot
@@ -603,10 +697,10 @@ and the block nesting is arbitrarily deep. `Save` is called only from the
 | `GET /api/plan?key=KEY` | read-only → `{ok, key, doc, runs, generating, exec?}` (`exec` = the newest `plan_execute` attempt of this ticket). An unknown ticket answers ok with an empty document, never an error. |
 | `POST /api/workflows/plan` | `{key}` → `{runId}`; starts or idempotently reuses the tracker. |
 | `POST /api/workflows/plan_execute` | `{key}` → `{runId}`; the index's last action — implement the plan on a fresh branch and open a draft PR. 409 while one is already running. |
-| `POST /api/workflows/{runID}/signals/plan_answer` | `{questionId, optionId, text}` — one answer; or `{kind:"followup"}` — generate follow-up questions and rebuild the task list (the only shape allowed without a `questionId`). |
+| `POST /api/workflows/{runID}/signals/plan_answer` | `{questionId, optionId, text}` — one answer; `{kind:"followup"}` — generate follow-up questions and rebuild the task list; or `{kind:"chat", text}` — one general-chat message (the only shapes allowed without a `questionId`). |
 | `GET /api/branches` | read-only → `{ok, branches:[{name, own, updated}]}` — the primary repo's remote branches, the reviewer's own first, for the hotfix question's dropdown. |
-| `POST /api/workflows/{runID}/signals/plan_hotfix` | `{hotfix, branch?}` — a bug's base branch: the hotfix branch, the ordinary one, or a branch picked from the dropdown (validated against the ref allow-list). |
-| `POST /api/workflows/{runID}/signals/plan_scope` | `{choice:"parent"}` — plan the main task itself; anything else is rejected (a subtask choice is plain navigation, not a Signal). |
+| `POST /api/workflows/{runID}/signals/plan_hotfix` | `{hotfix, branch?}` — a bug's base branch: the hotfix branch, the ordinary one, or a branch picked from the dropdown (validated against the ref allow-list); or `{kind:"chat", text}` — a chat message while this gate stands (see "The general chat" above). |
+| `POST /api/workflows/{runID}/signals/plan_scope` | `{choice:"parent"}` — plan the main task itself (a subtask choice is plain navigation, not a Signal); or `{kind:"chat", text}` — a chat message while this gate stands. |
 | `GET /api/workflows?plan=KEY` | the ticket's own runs (the same read as `?pr=N`, filtered on the input's `key` instead — so a later per-ticket workflow lands in the "Taken" card for free). |
 
 ## Accepted gaps (deliberate, don't "fix" by accident)
@@ -710,7 +804,10 @@ on: `planRelatedKeys`' tier order, `rankPlanRelatedPRs` picking the three most
 relevant (own ticket first, newest within a tier, deduplicated),
 `appendPlanQuestions` numbering a follow-up round AFTER the existing ids
 without moving them, and the prompt carrying the comments, the merged work and
-the "elke if / elke config" rules while asking nothing about tests),
+the "elke if / elke config" rules while asking nothing about tests,
+and the general chat: `planChatPrompt` carrying the ticket/questions/tasks
+context plus the transcript ending on the reviewer's own last message, and
+`trimPlanChat` keeping the newest messages within `maxPlanChatMessages`),
 `modules/jira/jira_test.go` (the `parent`/`subtasks` payload shape,
 `issuetype` reaching `Issue.Type`, and the `comment` field reaching
 `Issue.Comments` — including a mention's own text and the newest-20 cap),
@@ -736,3 +833,10 @@ type gets it)
 field with the reviewer's own branches on top) and
 `task12-plan-concrete-tasks.png` (the merged-work card in the first column, the
 follow-up-questions row, and a task with every concrete field filled in).
+`tests/plan-ticket-menu.spec.mjs` (Enter on the ticket column opens the menu,
+its "Open in Jira" item, Escape, the mouse entry point) and
+`tests/plan-chat.spec.mjs` (`/` opens the overlay, a sent message round-trips
+through the Signal — against a freshly opened ticket, which in this harness
+means the chat is answered while the tracker still sits on the hotfix gate,
+exercising the gate-tolerant carve-out above — the mouse entry point, and the
+backdrop click).

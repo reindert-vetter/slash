@@ -122,8 +122,10 @@ that set stays small on purpose; a new topic file belongs in `.claude/docs/`.
   running workflow tasks, the multiple-choice questions (each choice with its
   own input) plus the "wat er moet gebeuren" list, the example-code blocks and
   their arbitrarily deep drilled columns, the two gates before generation (a
-  main task's subtask scope, a bug's hotfix/base-branch question) and the
-  `plan` tracker behind it.
+  main task's subtask scope, a bug's hotfix/base-branch question), the `plan`
+  tracker behind it, the ticket column's own Enter-menu, and the general chat
+  (`/`) — the review tree's own `ClaudeChat.mjs` reused, keyed on the Jira key
+  rather than a PR number.
 - `pr-overview.md` — the `/pr-overview` GitHub inbox in full (sections, the
   per-row popover, filters, failed tasks, its client).
 - `debug-mode.md` — the settings-page "Debug mode" switch: it records every
