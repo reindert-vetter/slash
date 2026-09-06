@@ -159,17 +159,60 @@ non-PR sections were added for the two stages that have no pull request yet,
 sitting **directly under "Needs your review"** (Planning first, then Todo) —
 explicitly *not* appended at the bottom of the page.
 
-- **Planning** — everything assigned to the reviewer in the **active sprint**,
-  whatever its status ("alles wat in de actieve sprint op zijn naam staat").
-  Deliberately literal: a `Done` sprint issue is shown too, because that is
-  what was asked for. JQL: `assignee = currentUser() AND sprint in
-  openSprints() ORDER BY updated DESC`.
+- **Planning** — what the reviewer still has to **do** in the **active
+  sprint**. It started out literal ("alles wat in de actieve sprint op zijn
+  naam staat", `Done` included) and was narrowed on sight of the result:
+  "hier niet in review laten zien en niet done". JQL: `assignee =
+  currentUser() AND sprint in openSprints() AND statusCategory != Done AND
+  status != "In Review" ORDER BY updated DESC`. **`statusCategory != Done`
+  rather than `status != "Done"`** so every finished status (Closed,
+  Resolved, …) drops out, not just the one literally named "Done"; "In
+  Review" is an ordinary in-progress status *name* and therefore needs its
+  own clause.
 - **Todo** — the queue feeding that sprint: `assignee = currentUser() AND
   status = "To Do" AND resolution = EMPTY ORDER BY updated DESC`.
 - **An issue matching both is shown once, in Planning** (`fetchJiraIssues`) —
   it is already being planned, so it appears in the section furthest along the
   pipeline. Without this, every To Do issue pulled into the sprint would sit in
   both lists at once.
+
+### A Sub-task is grouped under its main task, which is pulled in if missing
+
+Second half of the same request: "subtaken moeten gegroepeerd zijn en horen
+bij de main taak". `groupPlanning` (`jira_issues.go`) reorders the Planning
+rows so a Sub-task sits **directly under its parent**, with the group placed
+at the position of its **earliest member** — so the sprint's own `updated
+DESC` recency still drives the page order.
+
+A parent that is not in the list itself (not assigned to the reviewer, or
+outside the sprint) is **pulled in as a CONTEXT row** — explicitly asked for
+over the cheaper "leave the Sub-task loose" alternative: the main task must be
+named above its subtasks "ook als die hoofdtaak niet van hem is of buiten de
+sprint valt". Such a row is **not a link** and carries no `data-nav-row`
+(there is nothing of yours to open), its meta line says so in a **word**
+(`Story • hoofdtaak, alleen ter context`, never colour alone), and the
+section's count badge counts only the rows that *are* your work.
+
+Both halves need **per-issue reads**, because `acli jira workitem search`
+cannot return a parent at all: its `--fields` whitelist is roughly
+`issuetype,key,assignee,priority,status,summary,description,labels` and
+rejects `parent` outright ("field 'parent' is not allowed") — so
+`Search()` deliberately does **not** ask for it and `groupPlanning` runs two
+rounds of `readIssues` instead (round 1: each Sub-task's own parent key;
+round 2: the parents that are not in the list). Those reads are bounded
+(`jiraIssueReadsMax` 12 per round, `jiraIssueReadsPar` 4 at a time — an `acli
+jira workitem view` takes seconds) and sit behind the endpoint's own 5-minute
+cache, so they cost once per refresh, not once per page load. A cold
+`?refresh=1` was measured at ~36s for a 6-row sprint, which is why the cache
+matters. The whole enrichment is **best-effort**: a parent that cannot be read
+yields no context row and its Sub-task stays an ordinary top-level row.
+
+The Planning list therefore no longer serializes as `[]jira.Issue` but as
+`[]planningRow` — the issue embedded, plus one flag `context`. The Todo list
+is unchanged. The dedupe rule above still runs against the **raw** sprint
+search, so a context parent that is itself To Do can legitimately appear both
+as a Planning context header and as its own Todo row: it is genuinely the
+reviewer's own queued work, only shown once as *context* in the section above.
 
 **Backend** (`jira_issues.go` + `modules/jira/search.go`): both JQL strings are
 **constants** — no reviewer input ever reaches `acli` — and go through the new
@@ -190,7 +233,10 @@ may be called from anywhere — see `.claude/rules/workflows-write-boundary.md`.
 
 **Frontend** (`src/overview.mjs`): `state.jiraPlanning`/`state.jiraTodo`, filled
 by `loadJiraIssues()` at load and on the existing 60s cadence (no timer of its
-own, like `loadJiraNotifications`). `jiraIssueRow` is an ordinary `ROW_CLASS`
+own, like `loadJiraNotifications`). A row whose `parentKey` is also in the same
+list is indented one level (`indentStyle({depth:1})`, shared with the PR
+stacks) and prefixed with a `↳` glyph; a `context` row renders through
+`jiraContextRow` instead. `jiraIssueRow` is an ordinary `ROW_CLASS`
 row — a plain `<a>` to **`/plan/<KEY>`**, the ticket's own planning page
 (`.claude/docs/plan-page.md`), in the same tab, key + title + "type • status" in
 **words**, carrying `data-nav-row` so it joins the shared row navigation for
@@ -203,8 +249,9 @@ stacks, preset filters, the status backfill or the "N PRs" count, and the
 search/preset views (`currentView`) do not show them.
 
 Tests: `modules/jira/search_test.go` (the `acli` payload shape; an empty result
-is not an error) and `jira_issues_test.go` (the dedupe rule, and
-`SLASH_JIRA=off` giving empty lists rather than an error).
+is not an error) and `jira_issues_test.go` (the dedupe rule, `SLASH_JIRA=off`
+giving empty lists rather than an error, and `groupPlanning`'s three cases —
+parent in the list, parent pulled in as context, parent unreadable).
 
 ## The general `/` command menu
 

@@ -43,6 +43,12 @@ type acliSearchIssue struct {
 // issues, most recent first (the ordering is the caller's own ORDER BY).
 // Description is deliberately not requested: these rows only ever show a
 // title, and asking for it would pull a full ADF document per issue.
+//
+// `parent` is deliberately absent from --fields too, but for a different
+// reason: acli rejects it ("field 'parent' is not allowed" — its --fields
+// whitelist is roughly issuetype/key/assignee/priority/status/summary/
+// description/labels and nothing else). A Sub-task's parent is therefore read
+// per issue via Issue(), see groupPlanning in jira_issues.go.
 func (m *Module) Search(ctx context.Context, jql string, limit int) ([]Issue, error) {
 	jql = strings.TrimSpace(jql)
 	if jql == "" {

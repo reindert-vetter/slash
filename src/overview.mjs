@@ -2393,7 +2393,8 @@ async function loadJiraIssues() {
 // jiraIssueRow — one Jira issue as an ordinary inbox row. The key + status are
 // spelled out in words next to the title, never carried by colour alone
 // (.claude/rules/conventions.md).
-function jiraIssueRow(is, kind) {
+function jiraIssueRow(is, kind, child) {
+  if (is.context) return jiraContextRow(is, kind)
   return html`
     <a
       href="${'/plan/' + is.key}"
@@ -2402,18 +2403,19 @@ function jiraIssueRow(is, kind) {
       data-nav-row
       data-nav-key="${'jiraissue:' + kind + ':' + is.key}"
       class="${ROW_CLASS}"
+      style="${child ? indentStyle({ depth: 1 }) : ''}"
     >
       <span
         class="w-20 shrink-0 truncate text-xs font-semibold text-slate-500 dark:text-zinc-400"
         data-testid="jira-issue-key"
-        >${is.key}</span
+        >${(child ? '\u21b3 ' : '') + is.key}</span
       >
       <div class="min-w-0 flex-1">
         <h3 class="truncate text-[13.5px] text-slate-900 dark:text-zinc-100 group-hover:text-black dark:group-hover:text-white">
           ${is.title || is.key}
         </h3>
         <p class="mt-0.5 truncate text-xs text-slate-500 dark:text-zinc-500">
-          ${(is.type ? is.type + ' • ' : '') + (is.status || '')}
+          ${(is.type ? is.type + ' \u2022 ' : '') + (is.status || '')}
         </p>
       </div>
       ${chevronFilled('h-4 w-4 shrink-0 text-slate-400 dark:text-zinc-600 group-hover:text-slate-600 dark:group-hover:text-zinc-300')}
@@ -2421,20 +2423,51 @@ function jiraIssueRow(is, kind) {
   `.key('jiraissue:' + kind + ':' + is.key)
 }
 
+// jiraContextRow — the main task a Sub-task of yours hangs under, shown purely
+// to name that parent (jira_issues.go marks it `context`). It is deliberately
+// NOT a link and carries no `data-nav-row`: the work is not yours, so there is
+// nothing to open and nothing to step onto with the keyboard. What sets it
+// apart is spelled out in a WORD on its meta line, never by colour alone
+// (.claude/rules/conventions.md).
+function jiraContextRow(is, kind) {
+  return html`
+    <div
+      data-testid="jira-context-row"
+      data-jira-issue="${is.key}"
+      class="${ROW_CLASS + ' cursor-default'}"
+    >
+      <span class="w-20 shrink-0 truncate text-xs font-semibold text-slate-400 dark:text-zinc-500" data-testid="jira-issue-key"
+        >${is.key}</span
+      >
+      <div class="min-w-0 flex-1">
+        <h3 class="truncate text-[13.5px] text-slate-500 dark:text-zinc-400">${is.title || is.key}</h3>
+        <p class="mt-0.5 truncate text-xs text-slate-400 dark:text-zinc-600">
+          ${(is.type ? is.type + ' \u2022 ' : '') + t('hoofdtaak, alleen ter context')}
+        </p>
+      </div>
+    </div>
+  `.key('jiracontext:' + kind + ':' + is.key)
+}
+
 // jiraIssueSection renders one titled issue list, or null when it is empty —
 // same "an empty section simply is not there" rule as sectionBlock.
 function jiraIssueSection(title, kind, list) {
   if (!list.length) return null
+  // A row is a child when its parent is right there in the same list — which,
+  // after groupPlanning, it always is: either as your own row or as a context
+  // header. The count badge deliberately counts only rows that are YOUR work.
+  const keys = new Set(list.map((is) => is.key))
+  const own = list.filter((is) => !is.context).length
   return html`
     <section data-testid="issue-section" data-title="${title}">
       <div class="mb-3 mt-16 flex items-center gap-2 first:mt-6">
         <h2 class="text-[15px] font-semibold text-slate-900 dark:text-zinc-100">${title}</h2>
         <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500 dark:bg-zinc-800/80 dark:text-zinc-400"
-          >${list.length}</span
+          >${own}</span
         >
       </div>
       <div class="rounded-xl border border-slate-200 bg-slate-50 dark:border-zinc-800 dark:bg-zinc-900/60">
-        ${list.map((is) => jiraIssueRow(is, kind))}
+        ${list.map((is) => jiraIssueRow(is, kind, !!(is.parentKey && keys.has(is.parentKey))))}
       </div>
     </section>
   `.key('issue-section:' + kind + ':' + list.map((is) => is.key).join(','))

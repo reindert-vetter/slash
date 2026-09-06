@@ -360,6 +360,7 @@ export const EN = {
   'Ongepusht {n}': 'Not pushed {n}',
   'Huidige branch': 'Current branch',
   'Bijgewerkt {time}': 'Updated {time}',
+  'hoofdtaak, alleen ter context': 'main task, context only',
   Samengevoegd: 'Merged',
   Gesloten: 'Closed',
   'Deze PR is niet meer open': 'This PR is no longer open',
