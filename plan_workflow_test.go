@@ -153,6 +153,30 @@ func TestPlanPromptCarriesParentAndSubtaskContext(t *testing.T) {
 	}
 }
 
+// TestPlanNeedsBaseQuestion pins the gate's replay safety: WHICH Executions
+// ask the base-branch question. tembed matches history positionally, so an
+// Execution that already ran past this point must keep skipping it — its
+// recorded planLoadIssue document has no askBase — while one recorded when
+// only a bug was asked must keep reaching it via its issue type alone.
+func TestPlanNeedsBaseQuestion(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		doc  planDoc
+		want bool
+	}{
+		{"pre-gate story replays past it", planDoc{IssueType: "Story"}, false},
+		{"pre-gate document without any type", planDoc{}, false},
+		{"bug-only era keeps its gate", planDoc{IssueType: "Bug"}, true},
+		{"fresh story asks", planDoc{IssueType: "Story", AskBase: true}, true},
+		{"fresh bug asks once", planDoc{IssueType: "Bug", AskBase: true}, true},
+		{"fresh document without a type asks", planDoc{AskBase: true}, true},
+	} {
+		if got := planNeedsBaseQuestion(c.doc); got != c.want {
+			t.Fatalf("%s: planNeedsBaseQuestion(%+v) = %v, want %v", c.name, c.doc, got, c.want)
+		}
+	}
+}
+
 // TestPlanIsBugAndBaseBranch covers the hotfix gate's two pure decisions: WHEN
 // a ticket is asked at all (Jira's own issue-type name), and WHICH branch the
 // answer settles on. Both drive where plan_execute branches from and which

@@ -84,9 +84,9 @@ const state = reactive({
   // answered instead of on the next poll (the stored document still says
   // needsScope until that generation lands).
   scopePending: false,
-  // Same for the hotfix question a BUG ticket is asked right after it (see
-  // needsHotfix): the answer runs the first generation inline, so the stored
-  // document still says needsHotfix until it lands.
+  // Same for the base-branch question every ticket is asked right after it
+  // (see needsHotfix): the answer runs the first generation inline, so the
+  // stored document still says needsHotfix until it lands.
   hotfixPending: false,
   // The hotfix question's third choice — "another branch" — is a dropdown with
   // its own search field. branchOpen is whether it is unfolded, branchQuery
@@ -245,7 +245,7 @@ async function chooseScope(row) {
   state.saving = ''
 }
 
-// needsHotfix is true while the tracker is parked on the question a BUG ticket
+// needsHotfix is true while the tracker is parked on the question EVERY ticket
 // is asked before anything is generated: hotfix (from master), the ordinary
 // base branch, or another branch entirely? It comes AFTER the scope question,
 // so only one gate is ever on screen.
@@ -285,7 +285,7 @@ function visibleBranches() {
   return list.slice(0, MAX_BRANCH_ROWS)
 }
 
-// chooseHotfix answers the hotfix question. "other" only UNFOLDS the dropdown —
+// chooseHotfix answers the base-branch question. "other" only UNFOLDS the dropdown —
 // the answer follows once a branch is picked from it (chooseBranch).
 async function chooseHotfix(row) {
   if (row.target === 'other') {
@@ -381,7 +381,8 @@ function navRows() {
     ;(state.doc.subtasks || []).forEach((st) => out.push({ id: 'scope:' + st.key, kind: 'scope', target: 'subtask', subtask: st }))
     return out
   }
-  // The hotfix question replaces the index the same way, for the same reason.
+  // The base-branch question replaces the index the same way, for the same
+  // reason.
   if (needsHotfix()) {
     out.push({ id: 'hotfix:yes', kind: 'hotfix', target: 'yes' })
     out.push({ id: 'hotfix:no', kind: 'hotfix', target: 'no' })
@@ -997,7 +998,7 @@ function scopeCard() {
   `.key('scope-card')
 }
 
-// hotfixRow is one choice of the hotfix question: from the hotfix branch, from
+// hotfixRow is one choice of the base-branch question: from the hotfix branch, from
 // the ordinary base branch, or another branch entirely. Same shape as
 // scopeRow — a glyph plus a WORD, never a colour on its own.
 function hotfixRow(row) {
@@ -1132,7 +1133,7 @@ function hotfixCard() {
           >${t('Eerst dit')}</span
         >
         <h2 class="min-w-0 flex-1 text-[13.5px] font-semibold leading-snug text-slate-900 dark:text-zinc-100">
-          ${t('Dit ticket is een bug. Vanaf welke branch gaat dit?')}
+          ${t('Vanaf welke branch gaat dit?')}
         </h2>
       </div>
       <p class="mb-2 text-[12px] leading-relaxed text-slate-500 dark:text-zinc-400">

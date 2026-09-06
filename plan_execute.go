@@ -770,7 +770,7 @@ func planExecutePrompt(doc planDoc) string {
 	b.WriteString("Je voert een uitgewerkt plan uit in deze repository. Je werkt in de werkmap van de reviewer, die al op een verse branch vanaf de basisbranch is gezet.\n\n")
 	if base := strings.TrimSpace(doc.BaseBranch); base != "" {
 		if doc.Hotfix {
-			fmt.Fprintf(&b, "HOTFIX vanaf `%s`: dit gaat rechtstreeks naar productie. Houd de wijziging zo klein en risicoloos mogelijk — alleen wat de bug verhelpt, geen refactor, geen meeliftende verbeteringen.\n\n", base)
+			fmt.Fprintf(&b, "HOTFIX vanaf `%s`: dit gaat rechtstreeks naar productie. Houd de wijziging zo klein en risicoloos mogelijk — alleen wat dit ticket nodig heeft, geen refactor, geen meeliftende verbeteringen.\n\n", base)
 		} else {
 			fmt.Fprintf(&b, "Je branch is gemaakt vanaf `%s`.\n\n", base)
 		}

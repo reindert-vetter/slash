@@ -113,29 +113,48 @@ them. Both sides land on the document (`parentKey`/`parentTitle`/
   local-pick-wins overlay `answerFor` uses for an answer.
 
 
-## Bug and hotfix: which branch does this go out from?
+## Which branch does this go out from?
 
 Reviewer request, verbatim: *"is het een bug, vraag dan eerst of het een hotfix
 is vanuit master of niet"*, followed by *"Het kan namelijk ook vanaf een andere
 branche zijn, 3e keuze moet een drop down zijn waarbij eigen branches bovenaan
-staan, met search input"*.
+staan, met search input"* and, later, *"ook andere soorten Jira tickets moeten
+die vraag krijgen"*.
 
-A **bug** is asked one more thing before anything is generated — the second
-gate, straight after the scope question, so only ever one of the two is on
-screen:
+**Every** ticket is asked one more thing before anything is generated — the
+second gate, straight after the scope question, so only ever one of the two is
+on screen. It started as a bug-only question; the three choices are unchanged
+now that every type gets it, so a story can still go out as a hotfix from
+`master` (an explicit reviewer decision — the same question, not a narrower
+one).
 
-- **The trigger is the ticket's own issue type.** `modules/jira`'s `Issue` now
-  also asks for `issuetype` (`--fields …,issuetype`) — it previously only came
-  back from `Search`, so a plan page could not tell a bug from a story — and
-  `planLoadIssue` carries it onto the document as `issueType`. `planIsBug`
-  matches the lowercased name *containing* "bug", so "Bug", "Bugfix" and a
-  renamed "Bug (productie)" all count.
+- **The trigger is a flag on the recorded document, not the issue type.**
+  `planLoadIssue` sets `askBase` on every ticket it really managed to read (a
+  failed Jira read has no plan to build either way, so it is not parked on a
+  branch question), and `planNeedsBaseQuestion(doc)` is what the workflow
+  branches on. It is deliberately `doc.AskBase || planIsBug(doc.IssueType)`,
+  because tembed matches history **positionally**
+  (`nthOf`, `tembed/workflow.go`) and the `plan` Run ID is deterministic, so
+  every still-living tracker replays this decision on every later Signal:
+  - an Execution recorded **before** the question existed for its type has no
+    `askBase` and is not a bug, so it keeps skipping the gate exactly as its
+    history says — inserting the extra `planSave` + `WaitSignal` there would
+    shift every later Activity by one and park the tracker forever on a signal
+    its history never carries, silently refusing every further `plan_answer`;
+  - an Execution from the **bug-only** era has the gate in its history and no
+    `askBase`, which is why `planIsBug` stays in the condition. `modules/jira`'s
+    `Issue` asks for `issuetype` (`--fields …,issuetype`) — it previously only
+    came back from `Search` — and `planIsBug` matches the lowercased name
+    *containing* "bug", so "Bug", "Bugfix" and a renamed "Bug (productie)" all
+    count.
+  - a fresh run has both, which is still one gate.
 - **The gate sits in the WORKFLOW**, exactly like the scope gate and for the
   same two reasons: `planGenerate` is a minutes-long Claude call that must not
   be paid before the answer is in, and the answer changes what the plan should
   *contain* — a hotfix goes straight to production, so `planPrompt` (and
   `planExecutePrompt`) tell the model to keep it small and risk-free, no
-  refactor and no meeliftende verbeteringen. The tracker saves the document
+  refactor and no meeliftende verbeteringen (phrased around "dit ticket", not
+  around "de bug", since any type can be a hotfix). The tracker saves the document
   with `needsHotfix:true` plus the two named branches (`defaultBranch`,
   `hotfixBranch`) and parks on the **`plan_hotfix`** Signal.
 - **Three choices** (`navRows()` returns exactly those while `needsHotfix()`
@@ -175,9 +194,8 @@ screen:
 - `GET /api/plan` reports `generating:false` while `needsHotfix`, same as for
   `needsScope`, and the page keeps its own `state.hotfixPending` for the gap
   right after the answer.
-- **An Execution started before this gate existed replays past it untouched**:
-  its recorded `planLoadIssue` result carries no `issueType`, so `planIsBug` is
-  false and no new `WaitSignal` is ever reached
+- **An Execution started before this gate applied to its type replays past it
+  untouched** — see the trigger bullet above for the full mechanism
   (`.claude/rules/workflow-determinism.md`).
 
 ## Keyboard
@@ -445,6 +463,9 @@ and the block nesting is arbitrarily deep. `Save` is called only from the
 - **The hotfix choice cannot be taken back either**, for the same reason as the
   scope choice: it is one Signal in the history, and it already steered the
   generated plan.
+- **`issueType` is now only kept for replay.** It no longer decides anything for
+  a new run (`askBase` does), but it must keep deciding it for a bug-only-era
+  Execution, so neither the field nor `planIsBug` can be dropped.
 - **The scope choice cannot be taken back** (see above). Reversing it would have
   to invalidate a plan that was already generated from it.
 - **Whether the model nests its blocks is up to the model.** The prompt asks for
@@ -460,7 +481,9 @@ and the block nesting is arbitrarily deep. `Save` is called only from the
   fallback as a fenced block in a comment (`.claude/rules/conventions.md`).
 
 Tests: `plan_workflow_test.go` (id numbering + caps, junk rejected, the
-hotfix gate's two pure decisions — `planIsBug` on every issue-type spelling and
+hotfix gate's pure decisions — `planNeedsBaseQuestion` on a pre-gate, a
+bug-only-era and a fresh document (the replay safety), `planIsBug` on every
+issue-type spelling and
 `resolvePlanBase`/`planBaseBranch` on all three choices including a branch git
 would read as a flag — the hotfix constraint reaching both prompts, and
 `parseBranchRefs` putting the reviewer's own branches first while dropping
@@ -485,6 +508,8 @@ block columns open) `plan-page-tasks.png` (the task list with its own
 nested block column), `plan-scope-question.png` (a main task asking which of its
 six subtasks — or itself — is being planned) `plan-subtask-parent.png` (a
 subtask's plan, with the main task linked in the first column),
-`plan-hotfix-question.png` (a bug being asked which branch it goes out from)
+`plan-hotfix-question.png` (a bug being asked which branch it goes out from),
+`plan-branch-question-story.png` (the same question on a Story, now that every
+type gets it)
 and `plan-hotfix-branch-dropdown.png` (its third choice unfolded: the search
 field with the reviewer's own branches on top).

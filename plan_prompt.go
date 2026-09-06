@@ -53,11 +53,11 @@ func planPrompt(doc planDoc, mode string) string {
 		b.WriteString("Het plan gaat over de hoofdtaak. Noem waar nodig hoe die subtaken erin passen, maar werk hun werk niet opnieuw uit.\n\n")
 	}
 
-	// The hotfix answer is a fixed constraint on the plan itself, not just on
-	// where plan_execute branches from: a hotfix goes straight to production.
+	// The base-branch answer is a fixed constraint on the plan itself, not just
+	// on where plan_execute branches from: a hotfix goes straight to production.
 	if base := strings.TrimSpace(doc.BaseBranch); base != "" {
 		if doc.Hotfix {
-			fmt.Fprintf(&b, "HOTFIX: dit is een bug die als hotfix vanaf `%s` naar productie gaat. Houd het plan zo klein en risicoloos mogelijk: alleen wat de bug verhelpt, geen refactor en geen meeliftende verbeteringen.\n\n", base)
+			fmt.Fprintf(&b, "HOTFIX: dit gaat als hotfix vanaf `%s` rechtstreeks naar productie. Houd het plan zo klein en risicoloos mogelijk: alleen wat dit ticket nodig heeft, geen refactor en geen meeliftende verbeteringen.\n\n", base)
 		} else {
 			fmt.Fprintf(&b, "BASISBRANCH: dit plan wordt uitgevoerd vanaf `%s`.\n\n", base)
 		}

@@ -167,11 +167,15 @@ type planDoc struct {
 	ParentDescription string        `json:"parentDescription,omitempty"`
 	Subtasks          []planSubtask `json:"subtasks,omitempty"`
 	NeedsScope        bool          `json:"needsScope,omitempty"`
-	// IssueType is the ticket's own kind as Jira names it ("Bug", "Story"). It
-	// drives the hotfix gate below and nothing else.
+	// IssueType is the ticket's own kind as Jira names it ("Bug", "Story").
+	// AskBase says this Execution asks the base-branch question below at all —
+	// set by planLoadIssue, so an older Execution's recorded document lacks it
+	// and replays past the gate. Both feed planNeedsBaseQuestion; neither is
+	// used for anything else.
 	IssueType string `json:"issueType,omitempty"`
-	// NeedsHotfix is true while the tracker is parked on the hotfix question a
-	// BUG ticket is asked (the mirror of NeedsScope). DefaultBranch and
+	AskBase   bool   `json:"askBase,omitempty"`
+	// NeedsHotfix is true while the tracker is parked on the base-branch
+	// question every ticket is asked (the mirror of NeedsScope). DefaultBranch and
 	// HotfixBranch are the two named choices, carried on the document so the
 	// page shows the real branch names instead of hardcoding them; BaseBranch
 	// is the ANSWER — the branch this plan is built on and the one
@@ -230,18 +234,19 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		w.WaitSignal(SignalPlanScope, &scope)
 		doc.NeedsScope = false
 	}
-	// A BUG is asked ONE more thing before anything is generated: does this go
-	// out as a hotfix (from the hotfix branch), from the ordinary base branch,
-	// or from another branch entirely? Same reasoning as the scope gate above —
-	// the answer changes what the plan should contain (a hotfix is kept small
-	// and risk-free) and where plan_execute branches from, and planGenerate is
-	// a minutes-long Claude call that must not be paid before that is settled.
+	// EVERY ticket is asked ONE more thing before anything is generated: does
+	// this go out as a hotfix (from the hotfix branch), from the ordinary base
+	// branch, or from another branch entirely? Same reasoning as the scope gate
+	// above — the answer changes what the plan should contain (a hotfix is kept
+	// small and risk-free) and where plan_execute branches from, and
+	// planGenerate is a minutes-long Claude call that must not be paid before
+	// that is settled.
 	//
-	// An Execution started before this gate existed replays past it untouched:
-	// its recorded planLoadIssue result carries no issueType at all, so
-	// planIsBug is false and no WaitSignal is reached
+	// An Execution started before this gate reached its own issue type replays
+	// past it untouched — see planNeedsBaseQuestion for why the trigger is read
+	// off the RECORDED planLoadIssue result and why planIsBug stays in it
 	// (.claude/rules/workflow-determinism.md).
-	if planIsBug(doc.IssueType) {
+	if planNeedsBaseQuestion(doc) {
 		doc.NeedsHotfix = true
 		doc.DefaultBranch, doc.HotfixBranch = planDefaultBaseBranch(), planHotfixBranch
 		if err := w.ExecuteActivity("planSave", doc, nil); err != nil {
@@ -279,8 +284,28 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	}
 }
 
+// planNeedsBaseQuestion reports whether this Execution asks which branch the
+// plan goes out from. It is a pure function of the RECORDED planLoadIssue
+// result, because tembed matches history POSITIONALLY (tembed/workflow.go's
+// nthOf): flipping this decision for an Execution that already ran past it
+// would shift every later Activity by one and park the tracker on a signal its
+// history never carries.
+//
+//   - askBase is set by planLoadIssue itself and therefore absent from every
+//     document recorded before the question applied to all issue types — those
+//     Executions keep skipping the gate exactly as their history says.
+//   - planIsBug stays in the condition for the mirror image: an Execution
+//     started while only a bug was asked HAS the gate in its history, and its
+//     recorded document carries the issue type rather than askBase.
+//
+// A fresh run has both, which is still one gate.
+func planNeedsBaseQuestion(doc planDoc) bool {
+	return doc.AskBase || planIsBug(doc.IssueType)
+}
+
 // planIsBug reports whether Jira's own issue-type name means "a bug" — the
-// gate's only trigger. Matched on the lowercased name containing "bug" so
+// gate's original trigger, kept for replay (see planNeedsBaseQuestion).
+// Matched on the lowercased name containing "bug" so
 // "Bug", "Bugfix" and a renamed "Bug (production)" all count; a ticket whose
 // type never reached the document (an older Execution, or a Jira read that
 // failed) is not a bug and is never asked.
@@ -406,6 +431,10 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 		}
 		doc.Title, doc.Description, doc.URL = issue.Title, issue.Description, issue.URL
 		doc.IssueType = issue.Type
+		// Only once the ticket really was read: a document that failed to load
+		// has no plan to build either way, and parking it on a branch question
+		// would ask for nothing.
+		doc.AskBase = true
 		doc.ParentKey, doc.ParentTitle = issue.ParentKey, issue.ParentTitle
 		for _, st := range issue.Subtasks {
 			doc.Subtasks = append(doc.Subtasks, planSubtask{Key: st.Key, Title: st.Title, Status: st.Status})
