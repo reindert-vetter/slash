@@ -29,6 +29,7 @@ import (
 	"slash/modules/github"
 	"slash/modules/inbox"
 	"slash/modules/jira"
+	"slash/modules/jiraissues"
 	"slash/modules/jiranotify"
 	"slash/modules/langpref"
 	"slash/modules/plan"
@@ -301,6 +302,28 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		wr.Close()
 		return nil, nil, err
 	}
+	ji, err := jiraissues.Open(dataDir + "/jiraissues.db")
+	if err != nil {
+		sq.Close()
+		cs.Close()
+		ib.Close()
+		rel.Close()
+		pm.Close()
+		cr.Close()
+		tc.Close()
+		ap.Close()
+		ex.Close()
+		ru.Close()
+		ci.Close()
+		ch.Close()
+		aw.Close()
+		wd.Close()
+		aip.Close()
+		lp.Close()
+		wr.Close()
+		jn.Close()
+		return nil, nil, err
+	}
 	pl, err := plan.Open(dataDir + "/plan.db")
 	if err != nil {
 		sq.Close()
@@ -321,6 +344,7 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		lp.Close()
 		wr.Close()
 		jn.Close()
+		ji.Close()
 		return nil, nil, err
 	}
 
@@ -417,6 +441,10 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 	// Same pattern for the Jira-notification read-model: a nil store makes the
 	// jira_inbox Activities no-ops and leaves the feed list empty.
 	mgr.jiranotify = jn
+	// Same pattern for the Jira-issues read-model: a nil store makes the
+	// jira_issues Activity a no-op and leaves /pr-overview's Planning/Todo
+	// sections empty.
+	mgr.jiraissues = ji
 	// Same pattern for the plan read-model: a nil store makes the `plan`
 	// tracker's Activities no-ops and leaves GET /api/plan empty.
 	mgr.plan = pl
@@ -455,6 +483,10 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		// jira_notifications.go). Costs nothing when no API token is
 		// configured — the Activity then records "not configured" and stops.
 		mgr.StartJiraInboxPolling(ctx)
+		// Own the reviewer's own Jira issues (the Planning/Todo sections) the
+		// same way: one process-wide tracker refreshing the read-model every 5
+		// minutes, so the page never waits on acli (see jira_issues.go).
+		mgr.StartJiraIssuesPolling(ctx)
 		// Own the per-repo auto-warn tracker so the toggle next to the theme
 		// button has a Run ID to signal to (no poller — it only reacts to UI
 		// signals).

@@ -2,13 +2,17 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/reindert-vetter/tembed"
 	"slash/modules/jira"
+	"slash/modules/jiraissues"
 )
 
 // jira_issues.go serves the two ISSUE sections of the PR overview — the work
@@ -17,21 +21,30 @@ import (
 // is in the active sprint), then "Todo" (what is still queued). See
 // .claude/docs/pr-overview.md.
 //
-// WRITE BOUNDARY: GET /api/jira/issues writes nothing durable — it runs two
-// read-only `acli` searches and keeps the outcome in one in-memory struct that
-// is empty again after a restart. A module's READ methods may be called from
-// anywhere (.claude/rules/workflows-write-boundary.md); only writes need a
-// workflow. Same operational shape as auth_status.go, whose cache/TTL/?refresh
-// pattern this deliberately mirrors.
+// SHAPE: a tracker + read-model, exactly like the Jira bell feed next door
+// (jira_notifications.go). The `jira_issues` Workflow below owns the fetching —
+// ONE Execution for the whole process, since these issues are the reviewer's
+// own (`assignee = currentUser()`) and thus per-USER, not per-repo — and writes
+// both lists into the jiraissues read-model; GET /api/jira/issues only READS
+// that snapshot. Per .claude/rules/workflows-write-boundary.md the module's
+// write method is therefore reachable only from this workflow's Activity.
 //
-// Deliberately NOT a tracker + read-model like the Jira bell feed
-// (jira_notifications.go): nothing here has to survive a restart or be
-// diffed against a previous state — there is no per-row read/unread state to
-// remember, so a plain cached read is the smaller solution.
+// This used to be an on-demand fetch behind a 5-minute in-memory cache. It was
+// changed on request ("lijst met jira dingen moet je in workflows bijwerken.
+// dan kan ik sneller navigeren"): a cold call was measured at ~36s because of
+// groupPlanning's extra per-issue parent reads, and after a restart the cache
+// was empty again, so the first visit to /pr-overview paid that price in full.
+// With the tracker the page always finds a snapshot lying ready.
+//
+// Deliberately its OWN Workflow Type rather than another `kind` on the
+// jira_inbox tracker's Signal: Engine.SignalWorkflow drives a Signal INLINE
+// under that run's own lock, so a slow issues refresh sharing the run would
+// block the bell's "mark as read" for as long as it takes. Two runs, two locks.
 
-// jiraIssuesTTL is how long a fetched list is reused. Two `acli` searches cost
-// several seconds each, and the overview polls; ?refresh=1 bypasses it.
-const jiraIssuesTTL = 5 * time.Minute
+// jiraIssuesInterval is the poll cadence — the same 5 minutes the old cache
+// TTL used, and the same as the notification feed's. Every tick costs real
+// `acli` subprocesses, so it stays a fixed ticker rather than a heartbeat.
+const jiraIssuesInterval = 5 * time.Minute
 
 // jiraIssuesLimit caps each of the two searches.
 const jiraIssuesLimit = 40
@@ -70,7 +83,7 @@ type planningRow struct {
 	Context bool `json:"context,omitempty"`
 }
 
-// jiraIssues is the whole answer of GET /api/jira/issues.
+// jiraIssues is one fetch's outcome, on its way into the read-model.
 type jiraIssues struct {
 	OK        bool          `json:"ok"`
 	FetchedAt time.Time     `json:"fetchedAt"`
@@ -82,45 +95,240 @@ type jiraIssues struct {
 	Error string `json:"error,omitempty"`
 }
 
-var (
-	jiraIssuesMu     sync.Mutex
-	jiraIssuesCache  *jiraIssues
-	jiraIssuesCached time.Time
-)
+// jiraIssuesResponse is the whole answer of GET /api/jira/issues — the stored
+// snapshot, in the exact JSON shape the overview already reads (the lists pass
+// through as the opaque JSON the read-model holds, so the row shape lives in
+// one place: planningRow/jira.Issue above). FetchedAt is the moment of the
+// refresh that produced it, not of this request.
+type jiraIssuesResponse struct {
+	OK        bool            `json:"ok"`
+	FetchedAt string          `json:"fetchedAt"`
+	Planning  json.RawMessage `json:"planning"`
+	Todo      json.RawMessage `json:"todo"`
+	Error     string          `json:"error,omitempty"`
+}
 
-// handleJiraIssues serves GET /api/jira/issues[?refresh=1] — read-only.
+// JiraIssuesInput starts the single jira_issues Execution.
+type JiraIssuesInput struct{}
+
+// JiraIssuesSignal is the one Signal payload the tracker reacts to. Only
+// "refresh" exists today; the field is there so a later action can be added
+// without a second Signal name, the same way JiraNotifySignal carries three.
+type JiraIssuesSignal struct {
+	Kind string `json:"kind"`
+}
+
+// jiraIssuesResult is the small summary the refresh Activity returns, so the
+// endlessly-refreshing history stays compact. A FETCH FAILURE is reported in
+// here rather than returned as an error: acli not being logged in must not
+// fail the tracker permanently — it would then never poll again until a
+// restart. Same reasoning as jiraNotifyResult.
+type jiraIssuesResult struct {
+	Planning int    `json:"planning"`
+	Todo     int    `json:"todo"`
+	Error    string `json:"error,omitempty"`
+}
+
+// jiraIssuesWorkflow owns both issue lists. Deterministic: one Signal per loop
+// iteration and a branch that reads only that Signal's recorded payload. It
+// never completes — a long-lived tracker.
+func jiraIssuesWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
+	for {
+		var sig JiraIssuesSignal
+		w.WaitSignal(SignalJiraIssues, &sig)
+		var res jiraIssuesResult
+		if err := w.ExecuteActivity("refreshJiraIssues", JiraIssuesInput{}, &res); err != nil {
+			return nil, fmt.Errorf("refresh jira issues: %w", err)
+		}
+	}
+}
+
+// registerJiraIssuesActivities wires the one Activity. Called from
+// registerWorkflows in workflows.go.
+func (m *TaskManager) registerJiraIssuesActivities(engine *tembed.Engine) {
+	// The jiraissues module is the only writer of this read-model.
+	engine.RegisterActivity("refreshJiraIssues", func(ctx context.Context, in []byte) ([]byte, error) {
+		return json.Marshal(m.refreshJiraIssues(ctx))
+	})
+}
+
+// refreshJiraIssues runs both searches plus the grouping and stores the
+// result. Like refreshJiraNotifications it never returns an error; a failure
+// is recorded on the result and stored with the snapshot, so the endpoint can
+// say why the sections are empty.
+func (m *TaskManager) refreshJiraIssues(ctx context.Context) jiraIssuesResult {
+	out := fetchJiraIssues(ctx, m.jira)
+	res := jiraIssuesResult{Planning: len(out.Planning), Todo: len(out.Todo), Error: out.Error}
+	if m.jiraissues == nil {
+		return res
+	}
+	planning, err := json.Marshal(out.Planning)
+	if err != nil {
+		res.Error = err.Error()
+		return res
+	}
+	todo, err := json.Marshal(out.Todo)
+	if err != nil {
+		res.Error = err.Error()
+		return res
+	}
+	// A failed fetch keeps whatever was stored before — an acli hiccup must
+	// not blank a perfectly usable list. Only the reason is refreshed.
+	if out.Error != "" {
+		if prev, err := m.jiraissues.Get(ctx); err == nil && prev != nil {
+			prev.Error = out.Error
+			if err := m.jiraissues.Save(ctx, *prev); err != nil {
+				res.Error = err.Error()
+			}
+			return res
+		}
+	}
+	if err := m.jiraissues.Save(ctx, jiraissues.Snapshot{
+		UpdatedAt: out.FetchedAt.UTC().Format(time.RFC3339),
+		Planning:  planning,
+		Todo:      todo,
+		Error:     out.Error,
+	}); err != nil {
+		res.Error = err.Error()
+	}
+	return res
+}
+
+// EnsureJiraIssues starts (or reuses) the single jira_issues Execution.
+// Mirrors EnsureJiraInbox; idempotent across restarts.
+func (m *TaskManager) EnsureJiraIssues(ctx context.Context) string {
+	m.mu.Lock()
+	runID := m.jiraIssuesRun
+	if runID == "" {
+		runID = m.findJiraIssuesRunLocked()
+	}
+	m.mu.Unlock()
+
+	if runID == "" {
+		id, err := m.engine.StartWorkflow(WorkflowJiraIssues, JiraIssuesInput{})
+		if err != nil {
+			m.logf("jira_issues: start: %v", err)
+			return ""
+		}
+		runID = id
+	}
+	m.mu.Lock()
+	m.jiraIssuesRun = runID
+	m.mu.Unlock()
+	return runID
+}
+
+// StartJiraIssuesPolling runs the initial refresh and the poller behind the
+// ready gate, so the startup burst never delays the HTTP listener binding.
+func (m *TaskManager) StartJiraIssuesPolling(ctx context.Context) {
+	runID := m.EnsureJiraIssues(ctx)
+	if runID == "" {
+		return
+	}
+	go func() {
+		m.waitReady()
+		m.signalJiraIssues(runID, JiraIssuesSignal{Kind: "refresh"})
+		m.pollJiraIssues(ctx, runID)
+	}()
+}
+
+// pollJiraIssues signals a refresh every jiraIssuesInterval. It never stops on
+// its own — only when the context is cancelled or the run is gone.
+func (m *TaskManager) pollJiraIssues(ctx context.Context, runID string) {
+	ticker := time.NewTicker(jiraIssuesInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		status, err := m.engine.Status(runID)
+		if err != nil || status == tembed.StatusFailed || status == tembed.StatusCompleted {
+			return
+		}
+		m.signalJiraIssues(runID, JiraIssuesSignal{Kind: "refresh"})
+	}
+}
+
+// signalJiraIssues delivers one Signal, logging (never returning) a failure —
+// the poller must survive a bad tick.
+func (m *TaskManager) signalJiraIssues(runID string, sig JiraIssuesSignal) {
+	payload, err := json.Marshal(sig)
+	if err != nil {
+		m.logf("jira_issues: marshal signal: %v", err)
+		return
+	}
+	if err := m.engine.SignalWorkflow(runID, SignalJiraIssues, json.RawMessage(payload)); err != nil {
+		m.logf("jira_issues: signal %s run=%s: %v", sig.Kind, runID, err)
+	}
+}
+
+// findJiraIssuesRunLocked scans for a running/waiting jira_issues Execution.
+func (m *TaskManager) findJiraIssuesRunLocked() string {
+	runs, err := m.engine.Runs()
+	if err != nil {
+		return ""
+	}
+	for _, r := range runs {
+		if r.Workflow != WorkflowJiraIssues {
+			continue
+		}
+		if r.Status == tembed.StatusRunning || r.Status == tembed.StatusWaiting {
+			return r.ID
+		}
+	}
+	return ""
+}
+
+// JiraIssuesSnapshot returns the stored snapshot. READ-only.
+func (m *TaskManager) JiraIssuesSnapshot(ctx context.Context) (*jiraissues.Snapshot, error) {
+	if m.jiraissues == nil {
+		return nil, nil
+	}
+	return m.jiraissues.Get(ctx)
+}
+
+// handleJiraIssues serves GET /api/jira/issues[?refresh=1] — read-only. It
+// answers straight from the read-model, so it costs one SQLite row read no
+// matter how slow Jira is. ?refresh=1 asks the tracker for a fresh fetch IN
+// THE BACKGROUND and still answers with the current snapshot: signalling
+// inline would make the request wait for the whole (measured ~36s) fetch,
+// which is exactly what this tracker exists to avoid.
 func (s *server) handleJiraIssues(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	force := r.URL.Query().Get("refresh") == "1"
-
-	jiraIssuesMu.Lock()
-	if !force && jiraIssuesCache != nil && time.Since(jiraIssuesCached) < jiraIssuesTTL {
-		cached := *jiraIssuesCache
-		jiraIssuesMu.Unlock()
-		writeJSON(w, http.StatusOK, cached)
+	var mgr *TaskManager
+	if s.tasks != nil {
+		mgr = s.tasks.manager
+	}
+	out := jiraIssuesResponse{OK: true, Planning: json.RawMessage("[]"), Todo: json.RawMessage("[]")}
+	if mgr == nil {
+		writeJSON(w, http.StatusOK, out)
 		return
 	}
-	jiraIssuesMu.Unlock()
-
-	var cl jira.Client
-	if s.tasks != nil && s.tasks.manager != nil {
-		cl = s.tasks.manager.jira
+	if r.URL.Query().Get("refresh") == "1" {
+		if runID := mgr.EnsureJiraIssues(r.Context()); runID != "" {
+			go mgr.signalJiraIssues(runID, JiraIssuesSignal{Kind: "refresh"})
+		}
 	}
-	// Deliberately NOT r.Context(), for the same reason as handleAuthStatus:
-	// the result is cached and shared across tabs, so a reviewer refreshing
-	// mid-flight must not kill the acli subprocess and poison the cache. Each
-	// search still carries the module's own bounded timeout.
-	out := fetchJiraIssues(context.Background(), cl)
-
-	jiraIssuesMu.Lock()
-	if out.Error == "" {
-		jiraIssuesCache = &out
-		jiraIssuesCached = time.Now()
+	snap, err := mgr.JiraIssuesSnapshot(r.Context())
+	if err != nil {
+		http.Error(w, "query failed", http.StatusInternalServerError)
+		return
 	}
-	jiraIssuesMu.Unlock()
+	if snap != nil {
+		out.FetchedAt = snap.UpdatedAt
+		out.Error = snap.Error
+		if len(snap.Planning) > 0 {
+			out.Planning = snap.Planning
+		}
+		if len(snap.Todo) > 0 {
+			out.Todo = snap.Todo
+		}
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 

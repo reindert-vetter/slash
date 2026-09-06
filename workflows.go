@@ -26,6 +26,7 @@ import (
 	"slash/modules/github"
 	"slash/modules/inbox"
 	"slash/modules/jira"
+	"slash/modules/jiraissues"
 	"slash/modules/jiranotify"
 	"slash/modules/langpref"
 	"slash/modules/plan"
@@ -127,6 +128,13 @@ const (
 	// Signal either refreshes the feed into the jiranotify read-model or marks
 	// one notification read. See jira_notifications.go.
 	WorkflowJiraInbox = "jira_inbox"
+	// WorkflowJiraIssues is the Workflow Type that owns the reviewer's own Jira
+	// issues behind /pr-overview's "Planning" and "Todo" sections: ONE
+	// Execution for the whole process, since those issues are assigned to the
+	// reviewer and thus per-user rather than per-repo. Each "jira_issues"
+	// Signal refreshes both lists into the jiraissues read-model, which the
+	// HTTP handler only reads. See jira_issues.go.
+	WorkflowJiraIssues = "jira_issues"
 	// WorkflowBuildRelations is the Workflow Type that derives block relations
 	// (the call-graph edges): one Execution per PR. It runs a build once on start
 	// and again on each "rebuild" Signal (re-ingest). Designed to be extended with
@@ -350,6 +358,11 @@ const (
 	// from every other Signal name (the generic .../signals/{name} route
 	// dispatches purely on it).
 	SignalJiraNotify = "jira_notify"
+	// SignalJiraIssues asks the jira_issues tracker to refresh both issue
+	// lists (the 5-minute poller, and ?refresh=1 in the background).
+	// Deliberately a distinct literal from every other Signal name (the
+	// generic .../signals/{name} route dispatches purely on it).
+	SignalJiraIssues = "jira_issues"
 	// SignalAutoIngestPref delivers the desired mode ("off"|"own"|"all") to the
 	// auto_ingest_pref tracker (from the UI toggle on /settings and in the
 	// /pr-overview header). Deliberately a distinct literal from the other
@@ -1012,6 +1025,11 @@ type TaskManager struct {
 	// post-construction like the stores above; a nil store makes those
 	// Activities no-ops and leaves GET /api/jira/notifications empty.
 	jiranotify *jiranotify.Module
+	// jiraissues is the read-model behind /pr-overview's "Planning" and "Todo"
+	// sections, written by the jira_issues tracker's Activity. Set
+	// post-construction like the stores above; a nil store makes that Activity
+	// a no-op and leaves GET /api/jira/issues empty.
+	jiraissues *jiraissues.Module
 	// plan is the read-model behind the /plan/<JIRA-KEY> planning page, written
 	// by the `plan` tracker's Activities (see plan_workflow.go). Set
 	// post-construction like the stores above; a nil store makes those
@@ -1072,6 +1090,7 @@ type TaskManager struct {
 	inboxRun          string           // pr_inbox Run ID (one per repo/process)
 	jiraRun           string           // jira_inbox Run ID (one per process — the feed is per-user, not per-repo)
 	jiraStatus        jiraNotifyStatus // last refresh outcome, in-memory only (see jira_notifications.go)
+	jiraIssuesRun     string           // jira_issues Run ID (one per process — the issue lists are per-user, see jira_issues.go)
 	autoWarnRun       string           // auto_warn Run ID (one per repo/process)
 	autoIngestPrefRun string           // auto_ingest_pref Run ID (one per repo/process)
 	langPrefRun       string           // lang_pref Run ID (one per repo/process)
@@ -3455,6 +3474,8 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 
 	// The Jira-notification tracker's two Activities (see jira_notifications.go).
 	m.registerJiraNotifyActivities(engine)
+	// The Jira-issues tracker's one Activity (see jira_issues.go).
+	m.registerJiraIssuesActivities(engine)
 	m.registerPlanActivities(engine)
 	m.registerPlanExecuteActivities(engine)
 
@@ -3462,6 +3483,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowPRStatus, prStatusWorkflow)
 	engine.RegisterWorkflow(WorkflowPRInbox, prInboxWorkflow)
 	engine.RegisterWorkflow(WorkflowJiraInbox, jiraInboxWorkflow)
+	engine.RegisterWorkflow(WorkflowJiraIssues, jiraIssuesWorkflow)
 	engine.RegisterWorkflow(WorkflowPlan, planWorkflow)
 	engine.RegisterWorkflow(WorkflowPlanExecute, planExecuteWorkflow)
 	engine.RegisterWorkflow(WorkflowBuildRelations, buildRelationsWorkflow)

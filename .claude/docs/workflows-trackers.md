@@ -430,6 +430,52 @@ notification has no PR at all.
   because this app never marks anything read in Jira — without it every row the
   reviewer opened would come back unread on the very next poll.
 
+## `jira_issues` (one per process)
+
+The reviewer's **own Jira issues** behind `/pr-overview`'s "Planning" and
+"Todo" sections (see `.claude/docs/pr-overview.md`). One Execution for the
+whole process, like `jira_inbox` and for the same reason: both JQL queries are
+`assignee = currentUser()`, so the list is per-**user** and has no repo to key
+on.
+
+- **It replaced an on-demand fetch behind a 5-minute in-memory cache**, on
+  request ("lijst met jira dingen moet je in workflows bijwerken. dan kan ik
+  sneller navigeren"). A cold call was measured at ~36s — two `acli` searches
+  plus `groupPlanning`'s bounded rounds of per-issue parent reads — and the
+  cache started empty after every restart, so the first visit to the overview
+  paid that in full. `GET /api/jira/issues` now reads one SQLite row (~1ms
+  measured) and the fetching happens on the tracker's own 5-minute ticker.
+- **Its own Workflow Type, deliberately not a third `kind` on `jira_inbox`'s
+  Signal.** `Engine.SignalWorkflow` drives a Signal **inline** under that run's
+  lock, so a ~36s issues refresh sharing the run would block the bell's
+  "mark as read" for exactly that long. Two runs, two locks.
+- **One Signal, `jira_issues`, kind `"refresh"`** (the poller, and
+  `?refresh=1`). The `kind` field exists so a later action needs no second
+  Signal name; branching on a payload out of the recorded history stays
+  deterministic.
+- **`?refresh=1` signals in the BACKGROUND** and still answers with the stored
+  snapshot — signalling inline would make the request wait for the whole fetch,
+  which is what this tracker exists to avoid. (The frontend does not use it;
+  `loadJiraIssues()` just polls the plain `GET` on the page's existing
+  cadence.)
+- **A fetch failure is a RESULT, not an error** (`jiraIssuesResult`, same as
+  `jiraNotifyResult`): a failing Activity would leave the tracker dead until a
+  restart. On top of that, a failed refresh **keeps the last good snapshot**
+  and only refreshes its `error` field — an `acli` hiccup must not blank a
+  perfectly usable list.
+- **`modules/jiraissues`** is the read-model: one row (`id = 1`), the two lists
+  as opaque JSON plus `updated_at`/`error`, mirroring `modules/inbox`'s
+  "snapshot as opaque JSON" so the module stays decoupled from `planningRow`.
+  Durable on purpose: after a restart the page shows the last known lists
+  instantly instead of waiting for the first refresh.
+- **No retention/cleanup** — one row, overwritten in place.
+- The JQL queries, the dedupe rule and `groupPlanning` are untouched by this
+  move; only *when* they run changed. Tests: `modules/jiraissues`, plus
+  `TestJiraIssuesTrackerStoresBothLists`/
+  `TestJiraIssuesTrackerSurvivesAFailedFetch` (`jira_issues_test.go`), which
+  drive the real tracker end to end and thereby also pin the Workflow Type and
+  the `refreshJiraIssues` Activity name.
+
 ## `plan` (one per Jira ticket)
 
 One long-lived Execution per ticket (Run ID `plan-<KEY>`, so a repeated start is

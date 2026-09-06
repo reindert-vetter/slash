@@ -201,10 +201,10 @@ rejects `parent` outright ("field 'parent' is not allowed") — so
 rounds of `readIssues` instead (round 1: each Sub-task's own parent key;
 round 2: the parents that are not in the list). Those reads are bounded
 (`jiraIssueReadsMax` 12 per round, `jiraIssueReadsPar` 4 at a time — an `acli
-jira workitem view` takes seconds) and sit behind the endpoint's own 5-minute
-cache, so they cost once per refresh, not once per page load. A cold
-`?refresh=1` was measured at ~36s for a 6-row sprint, which is why the cache
-matters. The whole enrichment is **best-effort**: a parent that cannot be read
+jira workitem view` takes seconds) and run inside the tracker's own refresh, so
+they cost once per 5-minute tick, never once per page load. One such refresh
+was measured at ~36s for a 6-row sprint, which is exactly why it happens in the
+background. The whole enrichment is **best-effort**: a parent that cannot be read
 yields no context row and its Sub-task stays an ordinary top-level row.
 
 The Planning list therefore no longer serializes as `[]jira.Issue` but as
@@ -218,18 +218,23 @@ reviewer's own queued work, only shown once as *context* in the section above.
 **constants** — no reviewer input ever reaches `acli` — and go through the new
 `jira.Client.Search(ctx, jql, limit)` (`acli jira workitem search --jql … --fields
 key,summary,status,issuetype --limit N --json`, the module's own `cliTimeout`,
-limit clamped). The result is cached in memory for 5 minutes and shared across
-tabs, computed off `context.Background()` for the same reason as
-`handleAuthStatus`: a reviewer refreshing mid-flight must not kill the `acli`
-subprocess and poison the cache. A failing search yields **empty lists plus a
+limit clamped). A failing search yields **empty lists plus a
 reason**, never an HTTP error — the sections are then simply absent, and a real
 credential problem is already reported by `GET /api/auth/status`.
 
-**Deliberately not a tracker + read-model** like the Jira bell feed: nothing
-here has to survive a restart or be diffed against a previous state (there is
-no per-row read/unread to remember), so a plain cached read is the smaller
-solution. It stays inside the write boundary because a module's READ methods
-may be called from anywhere — see `.claude/rules/workflows-write-boundary.md`.
+**A tracker + read-model, like the Jira bell feed next door.** The
+`jira_issues` Workflow (one Execution per process) refreshes both lists every 5
+minutes into `modules/jiraissues`; `GET /api/jira/issues` only READS that
+snapshot, so it answers in ~1ms whatever Jira is doing, and a restart shows the
+last known lists immediately. This **replaced** an on-demand fetch behind a
+5-minute in-memory cache, on request ("lijst met jira dingen moet je in
+workflows bijwerken. dan kan ik sneller navigeren") — don't move it back: the
+cache was empty after every restart, and the ~36s cold fetch above then landed
+on whoever opened the page first. The JQL, the dedupe rule and `groupPlanning`
+are unchanged by that move — only *when* they run. Full mechanism (why its own
+Workflow Type rather than a `kind` on `jira_notify`, why a failed fetch keeps
+the previous snapshot): "`jira_issues`" in
+`.claude/docs/workflows-trackers.md`.
 
 **Frontend** (`src/overview.mjs`): `state.jiraPlanning`/`state.jiraTodo`, filled
 by `loadJiraIssues()` at load and on the existing 60s cadence (no timer of its
@@ -249,9 +254,11 @@ stacks, preset filters, the status backfill or the "N PRs" count, and the
 search/preset views (`currentView`) do not show them.
 
 Tests: `modules/jira/search_test.go` (the `acli` payload shape; an empty result
-is not an error) and `jira_issues_test.go` (the dedupe rule, `SLASH_JIRA=off`
-giving empty lists rather than an error, and `groupPlanning`'s three cases —
-parent in the list, parent pulled in as context, parent unreadable).
+is not an error), `jira_issues_test.go` (the dedupe rule, `SLASH_JIRA=off`
+giving empty lists rather than an error, `groupPlanning`'s three cases —
+parent in the list, parent pulled in as context, parent unreadable — plus the
+tracker storing both lists and surviving a failed fetch) and
+`modules/jiraissues/jiraissues_test.go` (the snapshot round-trip).
 
 ## The general `/` command menu
 
@@ -943,7 +950,7 @@ default" section.
 | `POST /api/workflows/jira_inbox` | Start/reuse the notification tracker → `{runId}`, so the UI can signal a "read" to it. |
 | `POST /api/workflows/{runID}/signals/jira_notify` | `{"kind":"read","id":…}` marks one notification read; any other kind is forwarded as a plain refresh. |
 | `GET /api/plan?key=KEY` | Read-only plan document + the ticket's runs, behind the `/plan/<KEY>` page these rows link to (`plan_api.go`, see `.claude/docs/plan-page.md`). |
-| `GET /api/jira/issues[?refresh=1]` | Read-only → `{ok, fetchedAt, planning, todo, error?}`, the two Jira issue sections below. Two `acli` JQL searches behind a 5-minute in-memory cache (`jira_issues.go`); `?refresh=1` bypasses it. |
+| `GET /api/jira/issues[?refresh=1]` | Read-only → `{ok, fetchedAt, planning, todo, error?}`, the two Jira issue sections below, straight out of the `jiraissues` read-model the `jira_issues` tracker fills every 5 minutes (`jira_issues.go`); `?refresh=1` asks for a fresh fetch in the BACKGROUND and still answers with the current snapshot. |
 | `GET /api/prs` | (existing) ingested PRs + counts, for the recent drawer. |
 
 ### "Recent gegenereerd" rows are enriched from the SAME local prmeta read, no extra request
