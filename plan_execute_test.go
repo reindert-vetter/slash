@@ -225,3 +225,38 @@ func TestAdoptPlanCheckoutForPR(t *testing.T) {
 		t.Fatalf("claims[%q] = %d, want %d", dir, claims[dir], pr)
 	}
 }
+
+// TestPlanExecutePromptCarriesTheConcreteFields asserts the agent that
+// implements the plan sees the concrete half of every task (reviewer request:
+// "elke if statement moet in de plan, elke config ook") and the merged work the
+// plan was built on.
+func TestPlanExecutePromptCarriesTheConcreteFields(t *testing.T) {
+	doc := planDoc{
+		Key: "PROD-254", Title: "Statistieken",
+		RelatedPRs: []planRelatedPR{{Number: 12953, Title: "Clickhouse TTL", URL: "https://github.com/x/y/pull/12953", Files: []string{"app/Stats/Ttl.php"}}},
+		Tasks: []planTask{{
+			ID: "t1", Title: "Kolom toevoegen", Explanation: "x",
+			Location: "app/Stats", Conditions: []string{"als de vlag aan staat"},
+			Config: []string{"STATS_TTL=2y"}, Migration: "ALTER TABLE stats_events",
+			Endpoints: []string{"GET /api/stats"}, Errors: "log en val terug",
+			Rollout: "vlag uit", EdgeCases: []string{"geen rijen"}, OutOfScope: []string{"de frontend"},
+		}},
+	}
+	p := planExecutePrompt(doc)
+	for _, want := range []string{
+		"AL GEMERGED WERK ROND DIT TICKET", "PR #12953", "app/Stats/Ttl.php",
+		"Waar: app/Stats", "Voorwaarden (elke if)", "als de vlag aan staat",
+		"Config", "STATS_TTL=2y", "Migratie: ALTER TABLE stats_events",
+		"Endpoints", "GET /api/stats", "Foutafhandeling: log en val terug",
+		"Uitrol/terugdraaien: vlag uit", "Randgevallen", "geen rijen", "Buiten scope", "de frontend",
+	} {
+		if !strings.Contains(p, want) {
+			t.Fatalf("prompt misses %q:\n%s", want, p)
+		}
+	}
+	// A task with nothing filled in writes no labelled lines at all.
+	bare := planExecutePrompt(planDoc{Key: "X-1", Tasks: []planTask{{ID: "t1", Title: "Alleen dit"}}})
+	if strings.Contains(bare, "Waar:") || strings.Contains(bare, "Randgevallen") {
+		t.Fatalf("an empty task must write no detail lines:\n%s", bare)
+	}
+}

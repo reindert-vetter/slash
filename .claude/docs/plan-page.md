@@ -66,6 +66,120 @@ rebuilt rather than imported.
    block and an empty `"children":[]`, and the model then left every nested
    block's note empty (measured across all stored documents).
 
+## The context a plan is built on: comments and already-merged work
+
+Two reviewer requests, verbatim: *"hier moeten we kijke naar de hoofdtaak en
+andere subtaken en wat er er allemaal gemerged is wat ermee te maken heeft. als
+dat meer dan 3 prs zijn, moet je de 3 meest relevante prs vinden"* and *"met
+het inplannen moet je ook kijken naar de comments die zijn gegeven in de jira
+tickets, hoofd en sub"*.
+
+- **The Jira comments come back for free.** `modules/jira`'s `Issue` asks for
+  one more field (`--fields …,comment`) and flattens each body with the same
+  `adfText` a description uses, newest `maxIssueComments` (20) kept, in
+  chronological order. `adfText` learned two node types a comment carries and a
+  description usually does not: a **mention** (its text lives in `attrs.text`,
+  so "@Dennis Sloove" used to vanish) and a `hardBreak`. So this ticket's own
+  comments (`doc.comments`) and — because the parent is already read for its
+  description — the main task's (`doc.relatedComments`) cost **no extra call**.
+- **The rest of the family costs one Activity**, `planLoadContext`
+  (`plan_context.go`), which reads the comments of the subtasks/siblings
+  (`maxPlanContextIssues`, 5) and searches GitHub for the merged PRs.
+  `doc.siblings` is filled by `planLoadIssue` from the parent's own `subtasks`
+  field, so a subtask knows its siblings without a second lookup.
+- **Which PRs**: one `gh pr list --state merged --search "<KEY> in:title,body"`
+  per family key (`planRelatedKeys`, bounded by `maxPlanSearchKeys`).
+  `in:title,body` rather than a bare term — a free-text search matches fuzzily
+  and drags in PRs of unrelated tickets (measured).
+- **"De 3 meest relevante" is a pure Go decision, not a second Claude call**
+  (`rankPlanRelatedPRs`): a PR found via THIS ticket's key beats one found via
+  the main task, which beats one found via a subtask — `planRelatedKeys`'
+  output order IS that tier — and within a tier the most recently merged wins;
+  a PR found twice counts once, under its best tier. Then `maxPlanRelatedPRs`
+  (3). Deterministic, testable, replay-stable, and the relevance question here
+  is genuinely about which ticket a PR belongs to, which we know exactly. The
+  three survivors then get their changed-file list (`gh pr view --json files`,
+  capped at `maxPlanPRFiles`), which is what makes the context concrete: where
+  the earlier work landed.
+- **Both reach the prompt** (`planPrompt`): an "OPMERKINGEN…" section per group
+  with the rule that a comment which walks the description back outranks the
+  description itself (exactly the PROD-254 case: *"-- hoeft dus niet. het moet
+  gewoon blijven werken"*), and an "AL GEMERGED WERK DAT HIERBIJ HOORT" section
+  with the instruction to build on it rather than re-invent it.
+  `planExecutePrompt` carries a shorter form of the PR list (title, URL, up to
+  `planExecuteMaxPRFiles` files).
+- **The PR list is visible on the page** — a small card in the first column
+  (`data-testid=plan-related-prs`, one `plan-related-pr` link each with the key
+  it was found via), so the context the plan was built on is checkable.
+- **Replay:** `planLoadContext` is a NEW Activity in the middle of the body, so
+  it is gated on `doc.loadsContext`, a flag `planLoadIssue` sets. An Execution
+  recorded before this existed has no such flag and replays straight past the
+  call — the same positional-history rule `askBase` documents
+  (`.claude/rules/workflow-determinism.md`). It also sits AFTER both gates on
+  purpose: it costs a handful of `acli`/`gh` calls, and the page's own start
+  POST (which runs inline until the first block) must not wait for them.
+
+## Follow-up questions: sharpening the plan further
+
+Reviewer request, verbatim: *"maak het mogelijk om vervolg vragen te genereren
+om je plan te perfectioneren"*.
+
+The index's flat nav list gets one more kind of row between the questions and
+"Wat er moet gebeuren": **`FOLLOWUP_ROW_ID = 'followup'`**
+(`data-testid=plan-followup`, its state in words via
+`plan-followup-state` — never a colour on its own). `Enter`/click sends it.
+
+- **It rides on the EXISTING `plan_answer` Signal** with `kind:"followup"`
+  (`planAnswerFollowup`), because tembed can only `WaitSignal` on one name at a
+  time — the same one-signal-with-a-kind convention `ReactionSignal`/
+  `PRStateSignal` follow. An empty `kind` (every signal recorded before this
+  existed) is an ordinary answer, so no history changes meaning. The signal
+  handler in `tasks_api.go` accepts an empty `questionId` **only** for this
+  kind.
+- **The tracker generates, appends, and then rebuilds the task list** — an
+  explicit reviewer decision: a follow-up round ends with the same regeneration
+  an answer triggers, so the plan never lags behind its own questions.
+  `planGenerate` mode **`followup`** asks for new questions only (the prompt
+  lists the ones already asked as off-limits and tells it to leave `tasks`
+  empty), `appendPlanQuestions` **appends** them and renumbers only the new ones
+  (`q6`, `q6o1`, …) — the reviewer's stored answers hang off the existing ids,
+  so those may never move — dropping a literal repeat and capping the total at
+  `maxPlanQuestionsTotal` (15). Then mode `tasks` + save, exactly like an
+  answer.
+- The row only exists once there IS a plan to sharpen (a question or a task),
+  so a still-generating page does not park the default cursor on it.
+
+## Every if, every config: what a task must name
+
+Reviewer request, verbatim: *"elke if statement moet in de plan, elke config
+ook"*, plus the checklist agreed with it. `planTask` therefore carries a
+concrete half next to its explanation, each field optional and only rendered
+when the model filled it in (`data-testid=plan-task-detail`,
+`data-detail=<field>`; the LABEL carries the meaning, per the colourblind
+rule):
+
+| field | what |
+| --- | --- |
+| `location` | the module or `/app` directory it lands in |
+| `conditions` | EVERY if/branch/condition, in words |
+| `config` | EVERY config/env var/setting, with value and default |
+| `migration` | data migration / schema change |
+| `endpoints` | new or changed endpoints/routes |
+| `errors` | error handling of this step |
+| `rollout` | feature flag / rollout and how to roll back |
+| `edgeCases` | empty, zero, large, several at once |
+| `outOfScope` | what explicitly is NOT part of this task |
+
+Bounded on our side (`maxPlanDetailItems` 8, `maxPlanDetailLen` 300 —
+`normalizePlanDetails`), carried into `planExecutePrompt` by
+`writePlanTaskDetails`, so the run that implements the plan is held to the same
+concreteness.
+
+**Deliberately NO `tests` field, and no questions about tests** — an explicit
+reviewer decision: the plan does not name which test belongs to which task and
+must not make the reviewer choose about it. Both rules are stated in
+`planPrompt`.
+
 ## Subtask and main task
 
 Reviewer request, verbatim: *"als het een subtaak betreft, kijk dan ook naar de
@@ -373,6 +487,8 @@ idempotent reuse (the page fires it on every load).
    answers hang off those ids. Caps: `maxPlanQuestions`/`maxPlanOptions`/
    `maxPlanTasks`.
 3. `planSave` — the whole document into `modules/plan`.
+3b. `planLoadContext` (only when `doc.loadsContext`, see the context section
+   above) — the family's Jira comments plus the three most relevant merged PRs.
 4. Then a loop on the **`plan_answer`** Signal (`{questionId, optionId, text}`):
    fold the answer into the document (`upsertPlanAnswer`, pure — one answer per
    question, an empty option clears it), **save it first**, then regenerate the
@@ -409,7 +525,7 @@ and the block nesting is arbitrarily deep. `Save` is called only from the
 | `GET /api/plan?key=KEY` | read-only → `{ok, key, doc, runs, generating, exec?}` (`exec` = the newest `plan_execute` attempt of this ticket). An unknown ticket answers ok with an empty document, never an error. |
 | `POST /api/workflows/plan` | `{key}` → `{runId}`; starts or idempotently reuses the tracker. |
 | `POST /api/workflows/plan_execute` | `{key}` → `{runId}`; the index's last action — implement the plan on a fresh branch and open a draft PR. 409 while one is already running. |
-| `POST /api/workflows/{runID}/signals/plan_answer` | `{questionId, optionId, text}` — one answer. |
+| `POST /api/workflows/{runID}/signals/plan_answer` | `{questionId, optionId, text}` — one answer; or `{kind:"followup"}` — generate follow-up questions and rebuild the task list (the only shape allowed without a `questionId`). |
 | `GET /api/branches` | read-only → `{ok, branches:[{name, own, updated}]}` — the primary repo's remote branches, the reviewer's own first, for the hotfix question's dropdown. |
 | `POST /api/workflows/{runID}/signals/plan_hotfix` | `{hotfix, branch?}` — a bug's base branch: the hotfix branch, the ordinary one, or a branch picked from the dropdown (validated against the ref allow-list). |
 | `POST /api/workflows/{runID}/signals/plan_scope` | `{choice:"parent"}` — plan the main task itself; anything else is rejected (a subtask choice is plain navigation, not a Signal). |
@@ -448,6 +564,27 @@ and the block nesting is arbitrarily deep. `Save` is called only from the
   the fact that a directory on the plan branch is never offered to another
   PR's chat automatically.
 - **No Jira update.** Executing the plan does not transition the ticket.
+- **The related-PR search is a heuristic on the issue key.** A PR that never
+  names its ticket in the title or body is not found, and one that only
+  mentions it in passing can be. The ranking then only orders what the search
+  returned — deliberately, since the alternative (a Claude pass over every
+  candidate) costs a minutes-long call for context, not for the plan itself.
+- **The three most relevant PRs are picked deterministically**, so "relevant"
+  means "belongs to a closer ticket, merged more recently" — not "touches the
+  same code". Good enough for context; anything smarter needs the model.
+- **A document from before this context existed keeps its empty comment/PR
+  fields**: the document is written and read as a whole and there is no
+  backfill, and an Execution recorded before `planLoadContext` existed replays
+  straight past that Activity forever (that is the point of the
+  `loadsContext` flag). Such a plan only gains the context if its ticket gets a
+  fresh tracker.
+- **Follow-up questions cannot be taken back either.** Appending is the only
+  operation: a question the reviewer finds useless is simply left unanswered,
+  and the total is capped at `maxPlanQuestionsTotal` rather than pruned.
+- **The concrete task fields are only as good as the model.** Nothing verifies
+  that EVERY if or config really is listed; the prompt demands it and the page
+  renders whatever came back (an empty field is omitted, never shown as
+  "n.v.t.").
 - **A main task whose reviewer picked a SUBTASK keeps a tracker parked on the
   scope question**, forever, until someone opens that main task's plan page
   again and answers it. It costs one waiting Execution per ticket and no Claude
@@ -490,9 +627,15 @@ would read as a flag — the hotfix constraint reaching both prompts, and
 `origin/HEAD`, the
 per-question answer fold, the regenerate prompt carrying the fixed choices, a
 nested block's note surviving the trim at every level, the parent/subtask
-context in the prompt),
-`modules/jira/jira_test.go` (the `parent`/`subtasks` payload shape, and
-`issuetype` reaching `Issue.Type`),
+context in the prompt, plus the four things this page's own concreteness rests
+on: `planRelatedKeys`' tier order, `rankPlanRelatedPRs` picking the three most
+relevant (own ticket first, newest within a tier, deduplicated),
+`appendPlanQuestions` numbering a follow-up round AFTER the existing ids
+without moving them, and the prompt carrying the comments, the merged work and
+the "elke if / elke config" rules while asking nothing about tests),
+`modules/jira/jira_test.go` (the `parent`/`subtasks` payload shape,
+`issuetype` reaching `Issue.Type`, and the `comment` field reaching
+`Issue.Comments` — including a mention's own text and the newest-20 cap),
 `plan_execute_test.go` (the branch name stays git-safe and bounded, the
 execute prompt carries the fixed choices and every task's nested example code
 capped per block, the PR URL parsed off `gh`'s stdout, and — against
@@ -511,5 +654,7 @@ subtask's plan, with the main task linked in the first column),
 `plan-hotfix-question.png` (a bug being asked which branch it goes out from),
 `plan-branch-question-story.png` (the same question on a Story, now that every
 type gets it)
-and `plan-hotfix-branch-dropdown.png` (its third choice unfolded: the search
-field with the reviewer's own branches on top).
+`plan-hotfix-branch-dropdown.png` (its third choice unfolded: the search
+field with the reviewer's own branches on top) and
+`task12-plan-concrete-tasks.png` (the merged-work card in the first column, the
+follow-up-questions row, and a task with every concrete field filled in).

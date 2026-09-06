@@ -795,6 +795,19 @@ func planExecutePrompt(doc planDoc) string {
 		}
 		b.WriteString("\n")
 	}
+	if len(doc.RelatedPRs) > 0 {
+		b.WriteString("AL GEMERGED WERK ROND DIT TICKET (kijk hierin hoe het eerder is gedaan en sluit erop aan):\n")
+		for _, pr := range doc.RelatedPRs {
+			fmt.Fprintf(&b, "- PR #%d: %s (%s)\n", pr.Number, pr.Title, pr.URL)
+			if files := pr.Files; len(files) > 0 {
+				if len(files) > planExecuteMaxPRFiles {
+					files = files[:planExecuteMaxPRFiles]
+				}
+				b.WriteString("  bestanden: " + strings.Join(files, ", ") + "\n")
+			}
+		}
+		b.WriteString("\n")
+	}
 	b.WriteString("HET PLAN, in uitvoervolgorde:\n")
 	for i, task := range doc.Tasks {
 		if i >= planExecuteMaxTasks {
@@ -804,6 +817,7 @@ func planExecutePrompt(doc planDoc) string {
 		if note := truncatePlanText(task.Explanation, planExecuteMaxNoteLen); note != "" {
 			b.WriteString("   " + note + "\n")
 		}
+		writePlanTaskDetails(&b, task)
 		for _, blk := range task.Blocks {
 			writePlanPromptBlock(&b, blk, 1)
 		}
@@ -860,4 +874,42 @@ func truncatePlanText(s string, max int) string {
 		return s
 	}
 	return s[:max] + "…"
+}
+
+// planExecuteMaxPRFiles bounds the file list one related PR contributes here:
+// the execute prompt already carries the whole plan, so this is a pointer, not
+// a manifest.
+const planExecuteMaxPRFiles = 8
+
+// writePlanTaskDetails renders the concrete half of one task into the execute
+// prompt — the module it lands in, every condition, every config, the
+// migration, the endpoints, the error handling, the rollout/rollback, the edge
+// cases and what is explicitly out of scope (see planTask). An empty field
+// writes nothing: a "n.v.t." line only invites the agent to reason about it.
+func writePlanTaskDetails(b *strings.Builder, task planTask) {
+	line := func(label, text string) {
+		if text = truncatePlanText(text, planExecuteMaxNoteLen); text != "" {
+			fmt.Fprintf(b, "   %s: %s\n", label, text)
+		}
+	}
+	list := func(label string, items []string) {
+		if len(items) == 0 {
+			return
+		}
+		fmt.Fprintf(b, "   %s:\n", label)
+		for _, item := range items {
+			if item = truncatePlanText(item, planExecuteMaxNoteLen); item != "" {
+				b.WriteString("     - " + item + "\n")
+			}
+		}
+	}
+	line("Waar", task.Location)
+	list("Voorwaarden (elke if)", task.Conditions)
+	list("Config", task.Config)
+	line("Migratie", task.Migration)
+	list("Endpoints", task.Endpoints)
+	line("Foutafhandeling", task.Errors)
+	line("Uitrol/terugdraaien", task.Rollout)
+	list("Randgevallen", task.EdgeCases)
+	list("Buiten scope", task.OutOfScope)
 }

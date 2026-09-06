@@ -1377,7 +1377,12 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 		// tracker folds it into the document and regenerates the task list.
 		if parts[2] == SignalPlanAnswer {
 			var body PlanAnswerSignal
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.QuestionID == "" {
+			// The same Signal carries a second kind of message: "genereer
+			// vervolgvragen" (tembed can only WaitSignal on one name at a
+			// time). That one has no question to point at, so it is the only
+			// shape allowed through without a questionId.
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil ||
+				(body.QuestionID == "" && body.Kind != planAnswerFollowup) {
 				http.Error(w, "invalid plan answer", http.StatusBadRequest)
 				return
 			}

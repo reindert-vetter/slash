@@ -768,4 +768,22 @@ export const EN = {
   'De comment-thread kan niet meer worden bijgewerkt.': 'The comment thread can no longer be updated.',
   'Er is niets lokaal te landen.': 'There is nothing to land locally.',
   'Er is nog geen Claude-wijziging klaargezet om te committen.': 'No Claude change has been prepared for committing yet.',
+  // The planning page's follow-up questions and the concrete half of a task
+  // (see .claude/docs/plan-page.md).
+  'Al gemerged hierover': 'Already merged on this',
+  'Vervolgvragen om het plan te perfectioneren': 'Follow-up questions to perfect the plan',
+  'Claude stelt nieuwe vragen op basis van je antwoorden en stelt daarna de takenlijst opnieuw op.':
+    'Claude asks new questions based on your answers and then rebuilds the task list.',
+  'meer vragen genereren': 'generate more questions',
+  'vragen worden bedacht…': 'thinking up questions…',
+  'bezig…': 'working…',
+  Waar: 'Where',
+  Voorwaarden: 'Conditions',
+  Config: 'Config',
+  Migratie: 'Migration',
+  Endpoints: 'Endpoints',
+  Foutafhandeling: 'Error handling',
+  'Uitrol/terugdraaien': 'Rollout/rollback',
+  Randgevallen: 'Edge cases',
+  'Buiten scope': 'Out of scope',
 }

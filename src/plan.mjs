@@ -96,6 +96,10 @@ const state = reactive({
   branchQuery: '',
   branchList: [],
   branchLoading: false,
+  // "Meer vragen" was just asked for: the signal runs the generation inline,
+  // so the stored document only grows its new questions once it lands. Local,
+  // exactly like scopePending/hotfixPending.
+  followupPending: false,
 })
 
 bindUrlState(state, [
@@ -203,6 +207,37 @@ async function sendAnswer(question, option, text) {
   state.saving = ''
 }
 
+// FOLLOWUP_ROW_ID is the stable id of the "meer vragen" action row — the same
+// id space as an option ("q1o2") or a task ("t3"), so ?cur= restores it like
+// any other row.
+const FOLLOWUP_ROW_ID = 'followup'
+
+// sendFollowup asks the tracker for follow-up questions to sharpen the plan
+// further. It rides on the SAME plan_answer Signal with kind:"followup" — a
+// workflow can only wait on one signal name at a time — and the tracker
+// appends the new questions and then rebuilds the task list, exactly as an
+// answer does.
+async function sendFollowup() {
+  if (state.saving || state.followupPending) return
+  if (!state.runId) await ensureTracker()
+  if (!state.runId) return
+  state.saving = FOLLOWUP_ROW_ID
+  state.followupPending = true
+  lastPayload = ''
+  try {
+    await fetch('/api/workflows/' + encodeURIComponent(state.runId) + '/signals/plan_answer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ questionId: '', optionId: '', text: '', kind: 'followup' }),
+    })
+  } catch (err) {
+    // Nothing to undo: the next poll shows what the tracker really stored.
+  }
+  state.saving = ''
+  state.followupPending = false
+  lastPayload = ''
+}
+
 // needsScope is true while the tracker is parked on ITS first question: this
 // ticket has subtasks, so what is being planned — the main task, or one of the
 // subtasks? Nothing else of the index is shown until that is answered.
@@ -214,7 +249,7 @@ function needsScope() {
 // right after the scope answer, where the generation runs inline in that very
 // request and the stored document still reads as unanswered.
 function busyGenerating() {
-  return state.generating || state.scopePending || state.hotfixPending
+  return state.generating || state.scopePending || state.hotfixPending || state.followupPending
 }
 
 // chooseScope answers the scope question. A SUBTASK is not signalled at all —
@@ -392,6 +427,11 @@ function navRows() {
   ;(state.doc.questions || []).forEach((q, qi) => {
     ;(q.options || []).forEach((o, oi) => out.push({ id: o.id, kind: 'option', q, o, qi, oi }))
   })
+  // "Meer vragen om het plan te perfectioneren" — only once there IS a plan to
+  // sharpen, so a still-generating page does not park the default cursor on it.
+  if ((state.doc.questions || []).length || (state.doc.tasks || []).length) {
+    out.push({ id: FOLLOWUP_ROW_ID, kind: 'followup' })
+  }
   ;(state.doc.tasks || []).forEach((task, ti) => out.push({ id: task.id, kind: 'task', task, ti }))
   // The LAST action of the index: run the plan and open a draft PR. Only once
   // there is a task list to run — the workflow itself refuses an empty plan,
@@ -574,6 +614,9 @@ function onKeydown(e) {
       } else if (state.col === 1 && row && row.kind === 'hotfix') {
         e.preventDefault()
         chooseHotfix(row)
+      } else if (state.col === 1 && row && row.kind === 'followup') {
+        e.preventDefault()
+        sendFollowup()
       } else if (state.col === 1 && row && row.kind === 'action') {
         e.preventDefault()
         triggerExecute()
@@ -699,6 +742,23 @@ function columnHeader(title, focused, extra) {
 
 // ------------------------------------------------------- column 1: the ticket
 
+// relatedPRRow is one already-merged pull request of this ticket family — the
+// context the plan was built on, shown so it is checkable (see
+// plan_context.go for how the three are picked).
+function relatedPRRow(pr) {
+  return html`
+    <a
+      href="${pr.url}"
+      target="_blank"
+      rel="noreferrer"
+      class="block rounded-md px-1 py-0.5 text-[11.5px] leading-snug text-slate-600 hover:bg-slate-100 dark:text-zinc-300 dark:hover:bg-zinc-700"
+      data-testid="plan-related-pr"
+      ><span>${'#' + pr.number + ' ' + (pr.title || '')}</span>
+      <span class="ml-1 font-mono text-[10.5px] text-slate-400 dark:text-zinc-500">${pr.key || ''}</span></a
+    >
+  `.key('relpr:' + pr.number)
+}
+
 function ticketCard() {
   return html`
     <div
@@ -743,6 +803,17 @@ function ticketCard() {
                 data-testid="plan-base-branch"
                 >${(state.doc.hotfix ? '⚡ ' + t('Hotfix vanaf') : '◆ ' + t('Vanaf')) + ' ' + state.doc.baseBranch}</div
               >`
+            : ''}
+      </div>
+      <div class="contents">
+        ${() =>
+          (state.doc.relatedPRs || []).length
+            ? html`<div class="mt-2 shrink-0 rounded-lg bg-slate-50 px-2 py-1.5 ring-1 ring-slate-200 dark:bg-zinc-800 dark:ring-zinc-700" data-testid="plan-related-prs">
+                <div class="${LABEL + ' mb-1'}">${t('Al gemerged hierover')}</div>
+                <div class="flex flex-col gap-1">
+                  ${() => (state.doc.relatedPRs || []).map((pr) => relatedPRRow(pr))}
+                </div>
+              </div>`
             : ''}
       </div>
       <div class="mt-3 flex shrink-0 items-center justify-between">
@@ -1166,6 +1237,43 @@ function questionCard(q, qi) {
   `.key('q:' + q.id)
 }
 
+// TASK_DETAILS is the concrete half of a task, in the order it reads best:
+// where it lands, every condition, every config, the migration, the endpoints,
+// the error handling, the rollout/rollback, the edge cases and what is
+// explicitly out of scope (reviewer request: "elke if statement moet in de
+// plan, elke config ook"). Each entry is [field, label, kind]; a "list" field
+// is an array, a "text" field a string. A field the model left empty is not
+// rendered at all — an empty labelled row says nothing and costs a line.
+const TASK_DETAILS = [
+  ['location', 'Waar', 'text'],
+  ['conditions', 'Voorwaarden', 'list'],
+  ['config', 'Config', 'list'],
+  ['migration', 'Migratie', 'text'],
+  ['endpoints', 'Endpoints', 'list'],
+  ['errors', 'Foutafhandeling', 'text'],
+  ['rollout', 'Uitrol/terugdraaien', 'text'],
+  ['edgeCases', 'Randgevallen', 'list'],
+  ['outOfScope', 'Buiten scope', 'list'],
+]
+
+// taskDetailRows renders those fields as one labelled line each. The LABEL
+// carries the meaning (never a colour on its own, per the colourblind rule),
+// and a list is joined into that same line so a task stays one readable block
+// instead of a nested tree.
+function taskDetailRows(task) {
+  return TASK_DETAILS.map(([field, label, kind]) => {
+    const raw = task[field]
+    const text = kind === 'list' ? (Array.isArray(raw) ? raw.filter(Boolean).join(' · ') : '') : (raw || '').trim()
+    if (!text) return null
+    return html`
+      <div class="flex gap-1.5 text-[11.5px] leading-snug" data-testid="plan-task-detail" data-detail="${field}">
+        <span class="shrink-0 font-medium text-slate-400 dark:text-zinc-500">${t(label)}</span>
+        <span class="min-w-0 flex-1 text-slate-600 dark:text-zinc-400">${text}</span>
+      </div>
+    `.key('detail:' + task.id + ':' + field)
+  }).filter(Boolean)
+}
+
 function taskRow(row) {
   const task = row.task
   return html`
@@ -1195,6 +1303,7 @@ function taskRow(row) {
                 ? html`<p class="mt-0.5 text-[12px] leading-relaxed text-slate-500 dark:text-zinc-400">${task.explanation}</p>`
                 : ''}
           </div>
+          <div class="mt-1 flex flex-col gap-0.5">${() => taskDetailRows(task)}</div>
         </div>
         <div class="contents">
           ${() =>
@@ -1319,6 +1428,48 @@ function executeCard(row) {
   `.key('exec:' + (row ? row.id : EXEC_ROW_ID))
 }
 
+// followupCard is the row that asks the tracker for MORE questions (reviewer
+// request: "maak het mogelijk om vervolg vragen te genereren om je plan te
+// perfectioneren"). Its state is spelled out in WORDS, never a colour on its
+// own — the colourblind rule, exactly like the execute card below.
+function followupWord() {
+  if (state.followupPending || state.saving === FOLLOWUP_ROW_ID) return t('vragen worden bedacht…')
+  if (state.generating) return t('bezig…')
+  return t('meer vragen genereren')
+}
+
+function followupCard() {
+  return html`
+    <section
+      class="${() =>
+        'mb-3 cursor-pointer rounded-2xl border px-3 py-2 ' +
+        (state.cur === FOLLOWUP_ROW_ID
+          ? 'border-indigo-300 ring-2 ring-inset ring-indigo-400 dark:border-indigo-500 dark:ring-indigo-500 ' +
+            (state.col === 1 ? 'bg-indigo-50/50 dark:bg-indigo-500/10' : '')
+          : 'border-slate-200 dark:border-zinc-800')}"
+      data-testid="plan-followup"
+      data-cursor="${() => (state.cur === FOLLOWUP_ROW_ID ? 'true' : 'false')}"
+      @click="${() => {
+        state.cur = FOLLOWUP_ROW_ID
+        state.col = 1
+        sendFollowup()
+      }}"
+    >
+      <div class="flex items-center gap-2">
+        <span class="min-w-0 flex-1 text-[13px] font-medium text-slate-900 dark:text-zinc-100">${t('Vervolgvragen om het plan te perfectioneren')}</span>
+        <span
+          class="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10.5px] font-medium text-slate-600 dark:bg-zinc-800 dark:text-zinc-300"
+          data-testid="plan-followup-state"
+          >${() => followupWord()}</span
+        >
+      </div>
+      <p class="mt-0.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
+        ${t('Claude stelt nieuwe vragen op basis van je antwoorden en stelt daarna de takenlijst opnieuw op.')}
+      </p>
+    </section>
+  `.key('followup')
+}
+
 function tasksSection() {
   return html`
         <section class="${CARD + CARD_IDLE}" data-testid="plan-tasks">
@@ -1369,6 +1520,9 @@ function questionsColumn() {
             : []}
         <div class="contents">${() => (needsScope() ? [scopeCard()] : [])}</div>
         <div class="contents">${() => (needsHotfix() ? [hotfixCard()] : [])}</div>
+        <div class="contents">
+          ${() => (!gateOpen() && navRows().some((r) => r.kind === 'followup') ? [followupCard()] : [])}
+        </div>
         <div class="contents">${() => (gateOpen() ? [] : [tasksSection()])}</div>
       </div>
     </div>

@@ -4,7 +4,7 @@
 // start is an idempotent reuse). It:
 //
 //  1. reads the ticket (title + description) via the jira module,
-//  1b. asks the two questions that come BEFORE the plan: which of a ticket's
+//     1b. asks the two questions that come BEFORE the plan: which of a ticket's
 //     subtasks is being planned (`plan_scope`), and — for a BUG — whether this
 //     goes out as a hotfix from the hotfix branch, from the ordinary base
 //     branch, or from another branch entirely (`plan_hotfix`),
@@ -68,7 +68,27 @@ const (
 	maxPlanQuestions = 5
 	maxPlanOptions   = 4
 	maxPlanTasks     = 12
+	// maxPlanQuestionsTotal bounds the questions a plan can grow to over
+	// several "meer vragen" rounds (each round itself still adds at most
+	// maxPlanQuestions), so the column stays readable.
+	maxPlanQuestionsTotal = 15
+	// maxPlanRelatedPRs is what "de 3 meest relevante" means: the merged work
+	// around this ticket family is only context, so the prompt gets the best
+	// three and nothing more (see rankPlanRelatedPRs).
+	maxPlanRelatedPRs = 3
+	// maxPlanContextIssues bounds how many OTHER issues of the family are read
+	// for their comments (each one is its own acli call).
+	maxPlanContextIssues = 5
+	// maxPlanSearchKeys bounds how many issue keys are searched for merged PRs.
+	maxPlanSearchKeys = 8
 )
+
+// planAnswerFollowup is the PlanAnswerSignal Kind that asks for MORE questions
+// instead of recording an answer. tembed can only WaitSignal on one name at a
+// time, so a second kind of message rides on the same Signal with a Kind field
+// — the same convention ReactionSignal/PRStateSignal already follow. An empty
+// Kind (every signal recorded before this existed) is an ordinary answer.
+const planAnswerFollowup = "followup"
 
 // PlanInput starts a plan Execution.
 type PlanInput struct {
@@ -81,6 +101,9 @@ type PlanAnswerSignal struct {
 	QuestionID string `json:"questionId"`
 	OptionID   string `json:"optionId"`
 	Text       string `json:"text"`
+	// Kind is empty for an answer and planAnswerFollowup for "generate follow-up
+	// questions so I can sharpen the plan further".
+	Kind string `json:"kind,omitempty"`
 }
 
 // planBlock is one example-code block, as rendered in the page's third column.
@@ -117,6 +140,46 @@ type planTask struct {
 	Title       string      `json:"title"`
 	Explanation string      `json:"explanation,omitempty"`
 	Blocks      []planBlock `json:"blocks,omitempty"`
+	// The concrete half of a task, reviewer request: "elke if statement moet in
+	// de plan, elke config ook", plus the checklist agreed with it. Every field
+	// is optional and only rendered when the model filled it in — a task that
+	// genuinely has no migration says nothing rather than "n.v.t.".
+	// Deliberately NO "tests" field: the reviewer does not want the plan to
+	// name tests or ask about them (see planPrompt's own rule).
+	Location   string   `json:"location,omitempty"`   // module / /app directory
+	Conditions []string `json:"conditions,omitempty"` // every if / branch / condition
+	Config     []string `json:"config,omitempty"`     // every config, env var, setting
+	Migration  string   `json:"migration,omitempty"`  // data migration / schema change
+	Endpoints  []string `json:"endpoints,omitempty"`  // new or changed endpoints/routes
+	Errors     string   `json:"errors,omitempty"`     // error handling of this step
+	Rollout    string   `json:"rollout,omitempty"`    // feature flag / rollout / rollback
+	EdgeCases  []string `json:"edgeCases,omitempty"`  // empty, zero, large, several at once
+	OutOfScope []string `json:"outOfScope,omitempty"` // explicitly not part of this task
+}
+
+// planComment is one Jira comment reaching the plan: the reviewer asked that
+// planning look at "de comments die zijn gegeven in de jira tickets, hoofd en
+// sub", because a comment routinely walks the description back. Key names the
+// issue it came from (empty means this ticket itself).
+type planComment struct {
+	Key     string `json:"key,omitempty"`
+	Author  string `json:"author,omitempty"`
+	Created string `json:"created,omitempty"`
+	Body    string `json:"body"`
+}
+
+// planRelatedPR is one already-merged pull request around this ticket family —
+// the three most relevant ones (see rankPlanRelatedPRs) are context for the
+// plan: what already landed, and in which files.
+type planRelatedPR struct {
+	Number   int    `json:"number"`
+	Title    string `json:"title"`
+	URL      string `json:"url"`
+	MergedAt string `json:"mergedAt,omitempty"`
+	// Key is the issue key whose search found this PR — this ticket, its main
+	// task, or one of the subtasks — which is also its relevance tier.
+	Key   string   `json:"key,omitempty"`
+	Files []string `json:"files,omitempty"`
 }
 
 // planSubtask is one child issue hanging under this ticket, as shown in the
@@ -166,7 +229,11 @@ type planDoc struct {
 	ParentTitle       string        `json:"parentTitle,omitempty"`
 	ParentDescription string        `json:"parentDescription,omitempty"`
 	Subtasks          []planSubtask `json:"subtasks,omitempty"`
-	NeedsScope        bool          `json:"needsScope,omitempty"`
+	// Siblings are the OTHER subtasks of this ticket's main task — context
+	// only (never the scope question, which is about this ticket's own
+	// children).
+	Siblings   []planSubtask `json:"siblings,omitempty"`
+	NeedsScope bool          `json:"needsScope,omitempty"`
 	// IssueType is the ticket's own kind as Jira names it ("Bug", "Story").
 	// AskBase says this Execution asks the base-branch question below at all —
 	// set by planLoadIssue, so an older Execution's recorded document lacks it
@@ -181,15 +248,27 @@ type planDoc struct {
 	// is the ANSWER — the branch this plan is built on and the one
 	// plan_execute branches from and opens its draft PR against. Empty means
 	// "never asked", which reads as the repo's own base branch.
-	NeedsHotfix   bool           `json:"needsHotfix,omitempty"`
-	Hotfix        bool           `json:"hotfix,omitempty"`
-	BaseBranch    string         `json:"baseBranch,omitempty"`
-	DefaultBranch string         `json:"defaultBranch,omitempty"`
-	HotfixBranch  string         `json:"hotfixBranch,omitempty"`
-	Questions     []planQuestion `json:"questions"`
-	Tasks         []planTask     `json:"tasks"`
-	Answers       []planAnswer   `json:"answers"`
-	UpdatedAt     string         `json:"updatedAt,omitempty"`
+	NeedsHotfix   bool   `json:"needsHotfix,omitempty"`
+	Hotfix        bool   `json:"hotfix,omitempty"`
+	BaseBranch    string `json:"baseBranch,omitempty"`
+	DefaultBranch string `json:"defaultBranch,omitempty"`
+	HotfixBranch  string `json:"hotfixBranch,omitempty"`
+	// Comments are this ticket's own Jira comments; RelatedComments are the
+	// ones of the main task and of the subtasks around it, each carrying its
+	// own Key. RelatedPRs is the already-merged work of that same family.
+	// LoadsContext says this Execution runs the planLoadContext Activity at
+	// all: it is set by planLoadIssue, so a document recorded before that
+	// Activity existed lacks it and replays past the call — the same
+	// positional-history rule AskBase documents above
+	// (.claude/rules/workflow-determinism.md).
+	Comments        []planComment   `json:"comments,omitempty"`
+	RelatedComments []planComment   `json:"relatedComments,omitempty"`
+	RelatedPRs      []planRelatedPR `json:"relatedPRs,omitempty"`
+	LoadsContext    bool            `json:"loadsContext,omitempty"`
+	Questions       []planQuestion  `json:"questions"`
+	Tasks           []planTask      `json:"tasks"`
+	Answers         []planAnswer    `json:"answers"`
+	UpdatedAt       string          `json:"updatedAt,omitempty"`
 	// Error is a short reason the questions/tasks are empty (Jira or Claude
 	// unreachable, SLASH_CLAUDE=off). The page shows it as a note, never as an
 	// error wall — same "never cry wolf" rule as the Jira sections.
@@ -257,6 +336,19 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		doc.NeedsHotfix = false
 		doc.Hotfix, doc.BaseBranch = resolvePlanBase(doc, hf)
 	}
+	// Everything around the ticket that makes the plan concrete: the Jira
+	// comments of the main task and the subtasks, and the already-merged pull
+	// requests of that same family (the three most relevant ones). It sits
+	// AFTER the gates on purpose — it costs a handful of acli/gh calls, and the
+	// page's own start POST must not wait for them; by the time this runs the
+	// reviewer has answered a gate and is already waiting on the (minutes-long)
+	// generation. Gated on the recorded LoadsContext flag so an Execution from
+	// before this Activity existed replays past it untouched.
+	if doc.LoadsContext {
+		if err := w.ExecuteActivity("planLoadContext", doc, &doc); err != nil {
+			return nil, fmt.Errorf("plan: load context: %w", err)
+		}
+	}
 	if err := w.ExecuteActivity("planGenerate", planGenerateArg{Doc: doc, Mode: "all"}, &doc); err != nil {
 		return nil, fmt.Errorf("plan: generate: %w", err)
 	}
@@ -266,6 +358,27 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	for {
 		var sig PlanAnswerSignal
 		w.WaitSignal(SignalPlanAnswer, &sig)
+		// "Meer vragen om het plan te perfectioneren": generate follow-up
+		// questions, APPEND them to the ones already there (the reviewer's
+		// stored answers hang off the existing ids, so those may never move),
+		// and then rebuild the task list exactly like an answer does. The
+		// branch is a pure function of the recorded Signal payload, so replay
+		// reproduces it (.claude/rules/workflow-determinism.md).
+		if sig.Kind == planAnswerFollowup {
+			if err := w.ExecuteActivity("planGenerate", planGenerateArg{Doc: doc, Mode: "followup"}, &doc); err != nil {
+				return nil, fmt.Errorf("plan: follow-up questions: %w", err)
+			}
+			if err := w.ExecuteActivity("planSave", doc, nil); err != nil {
+				return nil, fmt.Errorf("plan: save follow-up questions: %w", err)
+			}
+			if err := w.ExecuteActivity("planGenerate", planGenerateArg{Doc: doc, Mode: "tasks"}, &doc); err != nil {
+				return nil, fmt.Errorf("plan: regenerate tasks: %w", err)
+			}
+			if err := w.ExecuteActivity("planSave", doc, nil); err != nil {
+				return nil, fmt.Errorf("plan: save: %w", err)
+			}
+			continue
+		}
 		doc.Answers = upsertPlanAnswer(doc.Answers, sig)
 		// Store the answer FIRST, then regenerate: the regeneration is a
 		// minute-long Claude call, and until it lands the page would otherwise
@@ -435,6 +548,13 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 		// has no plan to build either way, and parking it on a branch question
 		// would ask for nothing.
 		doc.AskBase = true
+		// Context loading (comments of the family, merged PRs) only makes sense
+		// once the ticket really was read; the flag is what keeps an older
+		// Execution replaying past that Activity.
+		doc.LoadsContext = true
+		for _, c := range issue.Comments {
+			doc.Comments = append(doc.Comments, planComment{Author: c.Author, Created: c.Created, Body: c.Body})
+		}
 		doc.ParentKey, doc.ParentTitle = issue.ParentKey, issue.ParentTitle
 		for _, st := range issue.Subtasks {
 			doc.Subtasks = append(doc.Subtasks, planSubtask{Key: st.Key, Title: st.Title, Status: st.Status})
@@ -451,7 +571,64 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 				if strings.TrimSpace(parent.Title) != "" {
 					doc.ParentTitle = parent.Title
 				}
+				for _, c := range parent.Comments {
+					doc.RelatedComments = append(doc.RelatedComments, planComment{
+						Key: doc.ParentKey, Author: c.Author, Created: c.Created, Body: c.Body,
+					})
+				}
+				// A subtask's SIBLINGS are the parent's other children: the
+				// same family the merged-PR search and the comment sweep below
+				// walk (the ticket itself already knows its own children).
+				for _, st := range parent.Subtasks {
+					if st.Key != "" && st.Key != doc.Key {
+						doc.Siblings = append(doc.Siblings, planSubtask{Key: st.Key, Title: st.Title, Status: st.Status})
+					}
+				}
 			}
+		}
+		return json.Marshal(doc)
+	})
+	// Activity: everything around the ticket that makes the plan concrete —
+	// the Jira comments of the OTHER issues in the family (the main task's own
+	// comments already came back with the parent read in planLoadIssue) and the
+	// merged pull requests of that family, ranked down to the three most
+	// relevant (see plan_context.go). Best-effort throughout: a missing gh or a
+	// Jira hiccup costs context, never the tracker.
+	engine.RegisterActivity("planLoadContext", func(ctx context.Context, in []byte) ([]byte, error) {
+		var doc planDoc
+		if err := json.Unmarshal(in, &doc); err != nil {
+			return nil, err
+		}
+		keys := planRelatedKeys(doc)
+		// The comments of the subtasks/siblings — one acli call each, so
+		// bounded. This ticket's own and its main task's comments are already
+		// on the document.
+		if m.jira != nil {
+			read := 0
+			for _, key := range keys {
+				if key == doc.Key || key == strings.ToUpper(doc.ParentKey) || read >= maxPlanContextIssues {
+					continue
+				}
+				read++
+				issue, err := m.jira.Issue(ctx, key)
+				if err != nil {
+					m.logf("plan: context comments %s of %s: %v", key, doc.Key, err)
+					continue
+				}
+				for _, c := range issue.Comments {
+					doc.RelatedComments = append(doc.RelatedComments, planComment{
+						Key: key, Author: c.Author, Created: c.Created, Body: c.Body,
+					})
+				}
+			}
+		}
+		found := make([]planRelatedPR, 0, 8)
+		for _, key := range keys {
+			found = append(found, searchMergedPRs(ctx, key)...)
+		}
+		doc.RelatedPRs = rankPlanRelatedPRs(found, keys)
+		for i := range doc.RelatedPRs {
+			doc.RelatedPRs[i].Files = prChangedFiles(ctx, doc.RelatedPRs[i].Number)
 		}
 		return json.Marshal(doc)
 	})
@@ -487,8 +664,17 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 			return json.Marshal(doc)
 		}
 		doc.Error = ""
-		if arg.Mode == "all" {
+		switch arg.Mode {
+		case "all":
 			doc.Questions = qs
+		case "followup":
+			// APPEND: the reviewer's stored answers hang off the existing ids,
+			// so those questions may never move or be renumbered. The task list
+			// that came back with a follow-up round is ignored here — the
+			// workflow regenerates it in its own step right after, from the
+			// document that now holds the new questions.
+			doc.Questions = appendPlanQuestions(doc.Questions, qs)
+			return json.Marshal(doc)
 		}
 		doc.Tasks = tasks
 		return json.Marshal(doc)

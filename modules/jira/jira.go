@@ -55,7 +55,25 @@ type Issue struct {
 	ParentKey   string     `json:"parentKey,omitempty"`
 	ParentTitle string     `json:"parentTitle,omitempty"`
 	Subtasks    []IssueRef `json:"subtasks,omitempty"`
+	// Comments are the issue's own Jira comments, oldest first and bounded by
+	// maxIssueComments. They come back from the very same `acli` call as the
+	// description (one extra field name, no extra round trip) and are what the
+	// plan page plans WITH: a comment that walks the description back is worth
+	// more than the description itself (see .claude/docs/plan-page.md).
+	Comments []Comment `json:"comments,omitempty"`
 }
+
+// Comment is one Jira comment, flattened the same way a description is.
+type Comment struct {
+	Author  string `json:"author,omitempty"`
+	Created string `json:"created,omitempty"`
+	Body    string `json:"body"`
+}
+
+// maxIssueComments bounds how many comments one issue contributes: a long
+// ticket can carry dozens, and only the recent ones still describe the plan.
+// The NEWEST ones are kept, in chronological order.
+const maxIssueComments = 20
 
 // IssueRef is the little an issue link carries: enough to name and open the
 // other issue, never its description (Jira does not include one in a
@@ -111,7 +129,21 @@ type acliIssue struct {
 		IssueType struct {
 			Name string `json:"name"`
 		} `json:"issuetype"`
+		// comment is Jira's own paged envelope; asking for the field yields
+		// {"comments":[...]} with each body in ADF, exactly like description.
+		Comment struct {
+			Comments []acliComment `json:"comments"`
+		} `json:"comment"`
 	} `json:"fields"`
+}
+
+// acliComment is one entry of the comment field.
+type acliComment struct {
+	Author struct {
+		DisplayName string `json:"displayName"`
+	} `json:"author"`
+	Created string          `json:"created"`
+	Body    json.RawMessage `json:"body"`
 }
 
 // acliIssueLink is one entry of the parent/subtasks fields.
@@ -141,8 +173,14 @@ func issueRef(l acliIssueLink) IssueRef {
 // adfNode is a minimal Atlassian Document Format node: enough structure to walk
 // the tree and collect every "text" leaf.
 type adfNode struct {
-	Type    string    `json:"type"`
-	Text    string    `json:"text"`
+	Type string `json:"type"`
+	Text string `json:"text"`
+	// Attrs carries the text of the nodes that have no text LEAF of their own —
+	// a mention ("@Dennis Sloove") is the one that matters here: a comment
+	// addressing someone by name loses its subject without it.
+	Attrs struct {
+		Text string `json:"text"`
+	} `json:"attrs"`
 	Content []adfNode `json:"content"`
 }
 
@@ -159,7 +197,7 @@ func (m *Module) Issue(ctx context.Context, key string) (Issue, error) {
 	ctx, cancel := context.WithTimeout(ctx, cliTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "acli", "jira", "workitem", "view", key,
-		"--fields", "summary,description,parent,subtasks,issuetype", "--json")
+		"--fields", "summary,description,parent,subtasks,issuetype,comment", "--json")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -195,6 +233,21 @@ func issueFromACLI(key string, parsed acliIssue) Issue {
 			issue.Subtasks = append(issue.Subtasks, ref)
 		}
 	}
+	all := parsed.Fields.Comment.Comments
+	if len(all) > maxIssueComments {
+		all = all[len(all)-maxIssueComments:]
+	}
+	for _, c := range all {
+		body := strings.TrimSpace(adfText(c.Body))
+		if body == "" {
+			continue
+		}
+		issue.Comments = append(issue.Comments, Comment{
+			Author:  strings.TrimSpace(c.Author.DisplayName),
+			Created: strings.TrimSpace(c.Created),
+			Body:    body,
+		})
+	}
 	return issue
 }
 
@@ -214,6 +267,12 @@ func adfText(raw json.RawMessage) string {
 	walk = func(n adfNode) string {
 		if n.Type == "text" {
 			return n.Text
+		}
+		if n.Type == "mention" {
+			return n.Attrs.Text
+		}
+		if n.Type == "hardBreak" {
+			return "\n"
 		}
 		var b strings.Builder
 		for _, c := range n.Content {

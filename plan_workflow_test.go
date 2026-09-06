@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -266,5 +267,180 @@ func TestParseBranchRefsPutsMyBranchesFirst(t *testing.T) {
 	}
 	if got[0].Updated != "1 day ago" {
 		t.Fatalf("updated = %q", got[0].Updated)
+	}
+}
+
+// TestPlanRelatedKeysIsTheFamilyInTierOrder pins the order the ticket family is
+// searched in — this ticket, its main task, then the subtasks/siblings around
+// it — because that order IS the relevance tier rankPlanRelatedPRs uses.
+func TestPlanRelatedKeysIsTheFamilyInTierOrder(t *testing.T) {
+	doc := planDoc{
+		Key:       "PAYM-813",
+		ParentKey: "PAYM-800",
+		Subtasks:  []planSubtask{{Key: "PAYM-814"}, {Key: "PAYM-813"}, {Key: "not a key"}},
+		Siblings:  []planSubtask{{Key: "PAYM-801"}, {Key: "PAYM-814"}},
+	}
+	got := planRelatedKeys(doc)
+	want := []string{"PAYM-813", "PAYM-800", "PAYM-814", "PAYM-801"}
+	if len(got) != len(want) {
+		t.Fatalf("keys = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("keys = %v, want %v", got, want)
+		}
+	}
+}
+
+// TestRankPlanRelatedPRsPicksTheThreeMostRelevant covers the reviewer's own
+// wording: "als dat meer dan 3 prs zijn, moet je de 3 meest relevante prs
+// vinden". Own ticket beats main task beats subtask, newest merged wins within
+// a tier, and one PR found twice counts once (under its best tier).
+func TestRankPlanRelatedPRsPicksTheThreeMostRelevant(t *testing.T) {
+	keys := []string{"PAYM-813", "PAYM-800", "PAYM-814"}
+	list := []planRelatedPR{
+		{Number: 1, Key: "PAYM-814", MergedAt: "2026-01-01T00:00:00Z"},
+		{Number: 2, Key: "PAYM-800", MergedAt: "2026-02-01T00:00:00Z"},
+		{Number: 3, Key: "PAYM-813", MergedAt: "2026-01-01T00:00:00Z"},
+		{Number: 4, Key: "PAYM-813", MergedAt: "2026-03-01T00:00:00Z"},
+		{Number: 2, Key: "PAYM-814", MergedAt: "2026-02-01T00:00:00Z"},
+		{Number: 5, Key: "PAYM-800", MergedAt: "2026-05-01T00:00:00Z"},
+	}
+	got := rankPlanRelatedPRs(list, keys)
+	if len(got) != maxPlanRelatedPRs {
+		t.Fatalf("got %d PRs, want %d: %+v", len(got), maxPlanRelatedPRs, got)
+	}
+	if got[0].Number != 4 || got[1].Number != 3 {
+		t.Fatalf("own-ticket PRs first, newest first: %+v", got)
+	}
+	if got[2].Number != 5 || got[2].Key != "PAYM-800" {
+		t.Fatalf("third = %+v, want the newest main-task PR", got[2])
+	}
+}
+
+// TestPlanPromptCarriesCommentsAndMergedWork asserts the two context sections
+// the reviewer asked for really reach the model, including the rule that a
+// later comment outranks the description.
+func TestPlanPromptCarriesCommentsAndMergedWork(t *testing.T) {
+	doc := planDoc{
+		Key: "PROD-254", Title: "Statistieken", Description: "Moet blijven werken",
+		Comments:        []planComment{{Author: "Reindert", Created: "2026-09-04", Body: "hoeft dus niet"}},
+		RelatedComments: []planComment{{Key: "PROD-200", Author: "Dennis", Body: "kolom toevoegen"}},
+		RelatedPRs: []planRelatedPR{
+			{Number: 12953, Title: "Clickhouse TTL", Key: "PROD-200", MergedAt: "2026-07-14T13:43:23Z", Files: []string{"app/Stats/Ttl.php"}},
+		},
+	}
+	p := planPrompt(doc, "all")
+	for _, want := range []string{
+		"OPMERKINGEN OP DIT TICKET", "hoeft dus niet",
+		"OPMERKINGEN OP DE HOOFDTAAK EN DE SUBTAKEN", "PROD-200 · Dennis", "kolom toevoegen",
+		"ZWAARDER",
+		"AL GEMERGED WERK", "PR #12953: Clickhouse TTL", "app/Stats/Ttl.php", "Bouw hierop VOORT",
+	} {
+		if !strings.Contains(p, want) {
+			t.Fatalf("prompt misses %q:\n%s", want, p)
+		}
+	}
+}
+
+// TestPlanPromptDemandsEveryIfAndConfig pins the reviewer's own rule — "elke if
+// statement moet in de plan, elke config ook" — plus the rest of the agreed
+// checklist, and the deliberate absence of tests.
+func TestPlanPromptDemandsEveryIfAndConfig(t *testing.T) {
+	p := planPrompt(planDoc{Key: "PAYM-813", Title: "Refund"}, "all")
+	for _, want := range []string{
+		"ELKE if/voorwaarde", "ELKE config", `"location"`, `"migration"`, `"endpoints"`,
+		`"errors"`, `"rollout"`, `"edgeCases"`, `"outOfScope"`,
+		"Stel GEEN vragen over tests", "Noem GEEN tests",
+	} {
+		if !strings.Contains(p, want) {
+			t.Fatalf("prompt misses %q:\n%s", want, p)
+		}
+	}
+}
+
+// TestPlanFollowupPromptAsksForNewQuestions covers the follow-up round: the
+// questions already asked are listed as off-limits, and the task list is left
+// to the separate regeneration step right after it.
+func TestPlanFollowupPromptAsksForNewQuestions(t *testing.T) {
+	doc := planDoc{Key: "PAYM-813", Title: "Refund", Questions: []planQuestion{{ID: "q1", Question: "Welke gateway?"}}}
+	p := planPrompt(doc, "followup")
+	for _, want := range []string{"VRAGEN DIE AL GESTELD ZIJN", "Welke gateway?", "VERVOLGVRAGEN", `Laat "tasks" leeg`} {
+		if !strings.Contains(p, want) {
+			t.Fatalf("prompt misses %q:\n%s", want, p)
+		}
+	}
+}
+
+// TestAppendPlanQuestionsNumbersAfterTheExistingOnes is the load-bearing half
+// of the follow-up round: the reviewer's stored answers hang off the existing
+// ids, so those may never move — the new questions continue the numbering, a
+// literal repeat is dropped, and the total stays bounded.
+func TestAppendPlanQuestionsNumbersAfterTheExistingOnes(t *testing.T) {
+	existing := []planQuestion{
+		{ID: "q1", Question: "Welke gateway?", Options: []planOption{{ID: "q1o1", Label: "Mollie"}}},
+		{ID: "q2", Question: "Wanneer?", Options: []planOption{{ID: "q2o1", Label: "Nu"}}},
+	}
+	fresh := []planQuestion{
+		{ID: "q1", Question: "welke gateway?", Options: []planOption{{ID: "q1o1", Label: "dubbel"}}},
+		{ID: "q2", Question: "Welke feature flag?", Options: []planOption{{ID: "q2o1", Label: "aan"}, {ID: "q2o2", Label: "uit"}}},
+	}
+	got := appendPlanQuestions(existing, fresh)
+	if len(got) != 3 {
+		t.Fatalf("questions = %d, want the two existing plus one new: %+v", len(got), got)
+	}
+	if got[0].ID != "q1" || got[1].ID != "q2" || got[0].Options[0].ID != "q1o1" {
+		t.Fatalf("existing questions moved: %+v", got)
+	}
+	if got[2].ID != "q3" || got[2].Question != "Welke feature flag?" {
+		t.Fatalf("new question = %+v, want q3", got[2])
+	}
+	if got[2].Options[0].ID != "q3o1" || got[2].Options[1].ID != "q3o2" {
+		t.Fatalf("new options = %+v", got[2].Options)
+	}
+	// The total is bounded however many rounds are asked for.
+	big := make([]planQuestion, 0, maxPlanQuestionsTotal+3)
+	for i := 0; i < maxPlanQuestionsTotal+3; i++ {
+		big = append(big, planQuestion{Question: fmt.Sprintf("v%d", i)})
+	}
+	if capped := appendPlanQuestions(nil, big); len(capped) != maxPlanQuestionsTotal {
+		t.Fatalf("capped = %d, want %d", len(capped), maxPlanQuestionsTotal)
+	}
+}
+
+// TestParsePlanAnswerKeepsTheConcreteTaskFields asserts the concrete half of a
+// task survives parsing, trimmed and bounded (see planTask).
+func TestParsePlanAnswerKeepsTheConcreteTaskFields(t *testing.T) {
+	raw := `{"questions":[],"tasks":[{"title":"Kolom toevoegen","explanation":"x",
+		"location":" app/Stats ","conditions":["als de vlag aan staat","","als hij uit staat"],
+		"config":["STATS_TTL=2y (default 30d)"],"migration":"ALTER TABLE stats_events",
+		"endpoints":["GET /api/stats"],"errors":"faalt de query, log en val terug",
+		"rollout":"achter STATS_TTL, terugdraaien = vlag uit","edgeCases":["geen rijen","heel veel rijen"],
+		"outOfScope":["de frontend"]}]}`
+	_, tasks, err := parsePlanAnswer(raw)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	task := tasks[0]
+	if task.Location != "app/Stats" {
+		t.Fatalf("location = %q", task.Location)
+	}
+	if len(task.Conditions) != 2 || task.Conditions[0] != "als de vlag aan staat" {
+		t.Fatalf("conditions = %+v, want the empty one dropped", task.Conditions)
+	}
+	if task.Migration == "" || task.Errors == "" || task.Rollout == "" ||
+		len(task.Config) != 1 || len(task.Endpoints) != 1 || len(task.EdgeCases) != 2 || len(task.OutOfScope) != 1 {
+		t.Fatalf("task = %+v", task)
+	}
+	// Bounded: a model that lists twenty conditions is cut, not rendered whole.
+	many := make([]string, 0, maxPlanDetailItems+4)
+	for i := 0; i < maxPlanDetailItems+4; i++ {
+		many = append(many, fmt.Sprintf("c%d", i))
+	}
+	if got := normalizePlanDetails(many); len(got) != maxPlanDetailItems {
+		t.Fatalf("details = %d, want %d", len(got), maxPlanDetailItems)
+	}
+	if normalizePlanDetails([]string{" ", ""}) != nil {
+		t.Fatalf("an all-empty list must yield nil")
 	}
 }

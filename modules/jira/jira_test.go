@@ -3,7 +3,9 @@ package jira
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -148,5 +150,63 @@ func TestIssueReadsIssueType(t *testing.T) {
 	}
 	if issueFromACLI("PAYM-1", bare).Type != "" {
 		t.Fatalf("a payload without issuetype must yield an empty type")
+	}
+}
+
+// TestIssueReadsComments pins the field the plan page plans WITH: a comment
+// that walks the description back (reviewer request: "kijken naar de comments
+// die zijn gegeven in de jira tickets, hoofd en sub"). It also covers the two
+// ADF nodes a comment carries that a description usually does not — a mention
+// (whose text lives in attrs, not in a text leaf) and a hardBreak.
+func TestIssueReadsComments(t *testing.T) {
+	raw := []byte(`{"key":"PROD-254","fields":{"summary":"Statistieken","comment":{"comments":[
+		{"author":{"displayName":"Reindert Vetter"},"created":"2026-09-04T13:56:44.191+0200",
+		 "body":{"type":"doc","content":[{"type":"paragraph","content":[
+			{"type":"mention","attrs":{"text":"@Dennis Sloove"}},
+			{"type":"text","text":" waarom een nieuwe kolom?"},
+			{"type":"hardBreak"},
+			{"type":"text","text":"-- hoeft dus niet."}]}]}},
+		{"author":{"displayName":"Leeg"},"body":{"type":"doc","content":[]}}]}}}`)
+	var parsed acliIssue
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	got := issueFromACLI("PROD-254", parsed)
+	if len(got.Comments) != 1 {
+		t.Fatalf("comments = %+v, want only the non-empty one", got.Comments)
+	}
+	c := got.Comments[0]
+	if c.Author != "Reindert Vetter" || c.Created == "" {
+		t.Fatalf("comment meta = %+v", c)
+	}
+	for _, want := range []string{"@Dennis Sloove", "waarom een nieuwe kolom?", "-- hoeft dus niet."} {
+		if !strings.Contains(c.Body, want) {
+			t.Fatalf("comment body %q misses %q", c.Body, want)
+		}
+	}
+}
+
+// TestIssueCapsComments keeps ONE long ticket from flooding the plan prompt:
+// the newest maxIssueComments survive, in chronological order.
+func TestIssueCapsComments(t *testing.T) {
+	var b strings.Builder
+	b.WriteString(`{"key":"PROD-1","fields":{"comment":{"comments":[`)
+	for i := 0; i < maxIssueComments+5; i++ {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		fmt.Fprintf(&b, `{"author":{"displayName":"A"},"body":{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"c%d"}]}]}}`, i)
+	}
+	b.WriteString(`]}}}`)
+	var parsed acliIssue
+	if err := json.Unmarshal([]byte(b.String()), &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	got := issueFromACLI("PROD-1", parsed)
+	if len(got.Comments) != maxIssueComments {
+		t.Fatalf("comments = %d, want %d", len(got.Comments), maxIssueComments)
+	}
+	if got.Comments[0].Body != "c5" || got.Comments[len(got.Comments)-1].Body != fmt.Sprintf("c%d", maxIssueComments+4) {
+		t.Fatalf("kept the wrong window: %q…%q", got.Comments[0].Body, got.Comments[len(got.Comments)-1].Body)
 	}
 }
