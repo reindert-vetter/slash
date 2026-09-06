@@ -9389,13 +9389,10 @@ function isTestColumnActive() {
 // exit back to the index and land on the next/previous VISIBLE row (never
 // across into a further class's methods, see stepTestMethod's own doc comment
 // above for why the diff-mode flow-through is a deliberately separate
-// mechanism). Shared by the plain ArrowDown/ArrowUp handling below and by a
-// plain Enter with no active multi-selection (see the Enter branch's own
-// isTestColumnActive() case) — reviewer request: "als ik enter druk, wil ik
-// dat de volgende blokken test index blok item wordt geselecteerd, dus dat ik
-// hetzelfde ziet als naar beneden." An active Shift+↓ range still opens
-// "Keur deze N methodes goed" on Enter instead (hasMultiSelection()), so this
-// helper is never called for that case.
+// mechanism). Used by the plain ArrowDown/ArrowUp handling below. It used to
+// also be shared with a plain Enter (no active multi-selection) — reverted on
+// a later reviewer request, Enter now opens the ordinary block palette
+// instead (see the Enter branch's own comment above).
 function stepTestColumnRow(dir) {
   const row = curTestClassRow()
   const nextMethod = state.classMethodSel + dir
@@ -14584,15 +14581,12 @@ function onKeydown(e) {
   // it opens the same PR-wide menu as `/` instead of the block-scoped palette —
   // block 0 in the list is a different stop (showDescription is false there)
   // and keeps the normal block palette. Stop 2b (the methodes-kolom, see
-  // isTestColumnActive) is a deliberate exception, handled inside this block
-  // below: a plain Enter there mirrors ↓ (stepTestColumnRow) instead of
-  // opening the palette — reviewer request: "als ik enter druk, wil ik dat de
-  // volgende blokken test index blok item wordt geselecteerd, dus dat ik
-  // hetzelfde ziet als naar beneden." An active Shift+↓ range still opens the
-  // palette on Enter ("Keur deze N methodes goed", hasMultiSelection()), same
-  // as everywhere else in the list. Only → (handled further below,
-  // isTestColumnActive's own ArrowRight branch) keeps stepping into the
-  // active method's diff.
+  // isTestColumnActive) used to be a deliberate exception here (a plain Enter
+  // mirrored ↓ via stepTestColumnRow instead of opening the palette) — that
+  // was reverted on a later reviewer request, so Enter on a method row now
+  // opens the ordinary block palette for the active method, exactly like a
+  // plain block row. → (handled further below, isTestColumnActive's own
+  // ArrowRight branch) still steps into the active method's diff, unchanged.
   if (e.key === 'Enter') {
     e.preventDefault()
     // A focused "Taken" row is its own stop within stop 1, so Enter there opens
@@ -14633,15 +14627,13 @@ function onKeydown(e) {
       openTaskRowMenu(taskRow, null)
       return
     }
-    // Stop 2b (the methodes-kolom): a plain Enter mirrors ↓ instead of
-    // opening the block palette — see this branch's own comment above. Gated
-    // on !hasMultiSelection() the same way the comment-index Enter branch
-    // above is, so an active Shift+↓ range still falls through to the
-    // ordinary openMenu('block') -> rangeCommandsFor() palette.
-    if (isTestColumnActive() && !hasMultiSelection()) {
-      stepTestColumnRow(1)
-      return
-    }
+    // Stop 2b (the methodes-kolom): a plain Enter used to mirror ↓ instead of
+    // opening the block palette (an earlier reviewer request) — reverted on a
+    // later reviewer request: Enter on a method row now opens the ordinary
+    // block palette for the active method, exactly like Enter on a plain
+    // block row. An active Shift+↓ range already fell through to
+    // openMenu('block') -> rangeCommandsFor() before this revert too, so
+    // hasMultiSelection() needs no change here.
     openMenu(state.showDescription ? 'pr' : 'block')
     return
   }
