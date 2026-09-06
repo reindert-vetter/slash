@@ -839,6 +839,7 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// plus the workflow runs of that ticket. POST /api/workflows/plan {key}
 	// starts (idempotently reuses) its tracker. See plan_api.go.
 	mux.HandleFunc("/api/plan", s.handlePlan)
+	mux.HandleFunc("/api/branches", s.handleBranches)
 	mux.HandleFunc("/api/workflows/plan", s.handlePlanStart)
 	// POST /api/workflows/plan_execute {key} → the index's last action on
 	// /plan/<KEY>: let Claude implement the plan on a fresh branch and open a
@@ -1353,6 +1354,30 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			writeJSON(w, http.StatusOK, map[string]string{"status": "answered"})
+			return
+		}
+		// The plan_hotfix signal answers the question a BUG ticket is asked
+		// before the plan is generated: a hotfix from the hotfix branch, the
+		// ordinary base branch, or another branch the reviewer picked from the
+		// dropdown. That branch reaches `git`/`gh` as an argument later, so it
+		// is validated against the ref allow-list here as well as in the
+		// workflow (.claude/rules/conventions.md).
+		if parts[2] == SignalPlanHotfix {
+			var body PlanHotfixSignal
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "invalid plan hotfix", http.StatusBadRequest)
+				return
+			}
+			body.Branch = strings.TrimSpace(body.Branch)
+			if body.Branch != "" && !planBranchRefPattern.MatchString(body.Branch) {
+				http.Error(w, "invalid plan hotfix", http.StatusBadRequest)
+				return
+			}
+			if err := s.tasks.engine.SignalWorkflow(runID, SignalPlanHotfix, body); err != nil {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"status": "hotfix"})
 			return
 		}
 		// The plan_scope signal answers the question a ticket WITH subtasks is

@@ -84,6 +84,18 @@ const state = reactive({
   // answered instead of on the next poll (the stored document still says
   // needsScope until that generation lands).
   scopePending: false,
+  // Same for the hotfix question a BUG ticket is asked right after it (see
+  // needsHotfix): the answer runs the first generation inline, so the stored
+  // document still says needsHotfix until it lands.
+  hotfixPending: false,
+  // The hotfix question's third choice — "another branch" — is a dropdown with
+  // its own search field. branchOpen is whether it is unfolded, branchQuery
+  // what is typed in it, branchList what GET /api/branches answered (own
+  // branches first) and branchLoading whether that read is in flight.
+  branchOpen: false,
+  branchQuery: '',
+  branchList: [],
+  branchLoading: false,
 })
 
 bindUrlState(state, [
@@ -127,6 +139,7 @@ async function loadPlan() {
     state.error = ''
     state.loading = false
     if (!state.doc.needsScope) state.scopePending = false
+    if (!state.doc.needsHotfix) state.hotfixPending = false
     dropSettledPending()
     clampCursor()
   } catch (err) {
@@ -201,7 +214,7 @@ function needsScope() {
 // right after the scope answer, where the generation runs inline in that very
 // request and the stored document still reads as unanswered.
 function busyGenerating() {
-  return state.generating || state.scopePending
+  return state.generating || state.scopePending || state.hotfixPending
 }
 
 // chooseScope answers the scope question. A SUBTASK is not signalled at all —
@@ -224,6 +237,87 @@ async function chooseScope(row) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ choice: 'parent' }),
+    })
+    await loadPlan()
+  } catch (err) {
+    // Nothing to undo: the next poll shows what the tracker really recorded.
+  }
+  state.saving = ''
+}
+
+// needsHotfix is true while the tracker is parked on the question a BUG ticket
+// is asked before anything is generated: hotfix (from master), the ordinary
+// base branch, or another branch entirely? It comes AFTER the scope question,
+// so only one gate is ever on screen.
+function needsHotfix() {
+  return !state.hotfixPending && !!state.doc.needsHotfix && !needsScope()
+}
+
+// gateOpen is "one of the two questions that come BEFORE the plan still
+// stands", so nothing of the index itself is built yet.
+function gateOpen() {
+  return needsScope() || needsHotfix()
+}
+
+// loadBranches fills the "another branch" dropdown, once per unfold. Read-only
+// (GET /api/branches): the primary repo's remote branches, the reviewer's own
+// first. The search itself is client-side over this one list.
+async function loadBranches() {
+  if (state.branchLoading || state.branchList.length) return
+  state.branchLoading = true
+  try {
+    const res = await fetch('/api/branches')
+    const body = res.ok ? await res.json() : null
+    state.branchList = body && Array.isArray(body.branches) ? body.branches : []
+  } catch (err) {
+    state.branchList = []
+  }
+  state.branchLoading = false
+}
+
+// visibleBranches is the dropdown's own list: everything matching the typed
+// search, own branches still first (the server already ordered them), capped
+// so a repo with hundreds of branches stays a dropdown.
+const MAX_BRANCH_ROWS = 40
+function visibleBranches() {
+  const q = state.branchQuery.trim().toLowerCase()
+  const list = q ? state.branchList.filter((b) => b.name.toLowerCase().includes(q)) : state.branchList
+  return list.slice(0, MAX_BRANCH_ROWS)
+}
+
+// chooseHotfix answers the hotfix question. "other" only UNFOLDS the dropdown —
+// the answer follows once a branch is picked from it (chooseBranch).
+async function chooseHotfix(row) {
+  if (row.target === 'other') {
+    state.branchOpen = true
+    loadBranches()
+    return
+  }
+  await sendHotfix({ hotfix: row.target === 'yes' }, row.id)
+}
+
+// chooseBranch answers with a branch picked from the dropdown (the third
+// choice). The branch travels as a name; the server validates it against the
+// same ref allow-list `git`/`gh` will see it through.
+async function chooseBranch(name) {
+  await sendHotfix({ hotfix: false, branch: name }, 'hotfix:other')
+}
+
+// sendHotfix signals the answer to the tracker, which releases it into its
+// first generation — the mirror of chooseScope.
+async function sendHotfix(body, rowID) {
+  if (state.saving) return
+  if (!state.runId) await ensureTracker()
+  if (!state.runId) return
+  state.saving = rowID
+  state.hotfixPending = true
+  state.branchOpen = false
+  lastPayload = ''
+  try {
+    await fetch('/api/workflows/' + encodeURIComponent(state.runId) + '/signals/plan_hotfix', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
     })
     await loadPlan()
   } catch (err) {
@@ -285,6 +379,13 @@ function navRows() {
   if (needsScope()) {
     out.push({ id: SCOPE_PARENT_ID, kind: 'scope', target: 'parent' })
     ;(state.doc.subtasks || []).forEach((st) => out.push({ id: 'scope:' + st.key, kind: 'scope', target: 'subtask', subtask: st }))
+    return out
+  }
+  // The hotfix question replaces the index the same way, for the same reason.
+  if (needsHotfix()) {
+    out.push({ id: 'hotfix:yes', kind: 'hotfix', target: 'yes' })
+    out.push({ id: 'hotfix:no', kind: 'hotfix', target: 'no' })
+    out.push({ id: 'hotfix:other', kind: 'hotfix', target: 'other' })
     return out
   }
   ;(state.doc.questions || []).forEach((q, qi) => {
@@ -469,6 +570,9 @@ function onKeydown(e) {
       } else if (state.col === 1 && row && row.kind === 'scope') {
         e.preventDefault()
         chooseScope(row)
+      } else if (state.col === 1 && row && row.kind === 'hotfix') {
+        e.preventDefault()
+        chooseHotfix(row)
       } else if (state.col === 1 && row && row.kind === 'action') {
         e.preventDefault()
         triggerExecute()
@@ -627,6 +731,16 @@ function ticketCard() {
                 class="mt-2 flex shrink-0 items-center gap-1.5 rounded-lg bg-slate-50 px-2 py-1 text-[11.5px] text-slate-600 ring-1 ring-slate-200 hover:bg-slate-100 dark:bg-zinc-800 dark:text-zinc-300 dark:ring-zinc-700"
                 data-testid="plan-parent-link"
                 >${'↑ ' + t('Hoofdtaak') + ' ' + state.doc.parentKey + (state.doc.parentTitle ? ' — ' + state.doc.parentTitle : '')}</a
+              >`
+            : ''}
+      </div>
+      <div class="contents">
+        ${() =>
+          state.doc.baseBranch
+            ? html`<div
+                class="mt-2 flex shrink-0 items-center gap-1.5 rounded-lg bg-slate-50 px-2 py-1 text-[11.5px] text-slate-600 ring-1 ring-slate-200 dark:bg-zinc-800 dark:text-zinc-300 dark:ring-zinc-700"
+                data-testid="plan-base-branch"
+                >${(state.doc.hotfix ? '⚡ ' + t('Hotfix vanaf') : '◆ ' + t('Vanaf')) + ' ' + state.doc.baseBranch}</div
               >`
             : ''}
       </div>
@@ -883,6 +997,152 @@ function scopeCard() {
   `.key('scope-card')
 }
 
+// hotfixRow is one choice of the hotfix question: from the hotfix branch, from
+// the ordinary base branch, or another branch entirely. Same shape as
+// scopeRow — a glyph plus a WORD, never a colour on its own.
+function hotfixRow(row) {
+  const branch = row.target === 'yes' ? state.doc.hotfixBranch || 'master' : row.target === 'no' ? state.doc.defaultBranch || 'develop' : ''
+  const title =
+    row.target === 'yes'
+      ? t('Ja, hotfix') + ' — ' + branch
+      : row.target === 'no'
+        ? t('Nee, gewoon') + ' — ' + branch
+        : t('Vanaf een andere branch…')
+  const why =
+    row.target === 'yes'
+      ? t('Rechtstreeks naar productie: het plan blijft zo klein en risicoloos mogelijk.')
+      : row.target === 'no'
+        ? t('De gewone route, mee met de eerstvolgende release.')
+        : t('Kies zelf een branch; jouw eigen branches staan bovenaan.')
+  return html`
+    <div
+      class="${() =>
+        'cursor-pointer rounded-lg border px-2.5 py-2 ' +
+        (state.cur === row.id
+          ? 'border-indigo-300 ring-2 ring-inset ring-indigo-400 dark:border-indigo-500 dark:ring-indigo-500 ' +
+            (state.col === 1 ? 'bg-indigo-50/50 dark:bg-indigo-500/10' : '')
+          : 'border-slate-200 dark:border-zinc-800')}"
+      data-testid="plan-hotfix-option"
+      data-hotfix-target="${row.target}"
+      data-cursor="${() => (state.cur === row.id ? 'true' : 'false')}"
+      @click="${(e) => {
+        if (e) e.stopPropagation()
+        state.cur = row.id
+        state.col = 1
+        chooseHotfix(row)
+      }}"
+    >
+      <div class="flex items-start gap-2">
+        <span class="shrink-0 font-mono text-[12px] text-slate-500 dark:text-zinc-400"
+          >${row.target === 'yes' ? '⚡' : row.target === 'no' ? '◆' : '⌥'}</span
+        >
+        <div class="min-w-0 flex-1">
+          <div class="text-[13px] font-medium leading-snug text-slate-900 dark:text-zinc-100">${title}</div>
+          <p class="mt-0.5 text-[12px] leading-relaxed text-slate-500 dark:text-zinc-400">${why}</p>
+        </div>
+      </div>
+      <div class="contents">
+        ${() => (state.saving === row.id ? html`<p class="mt-1 text-[10.5px] text-slate-400 dark:text-zinc-500">${t('opslaan…')}</p>` : '')}
+      </div>
+      <div class="contents">${() => (row.target === 'other' && state.branchOpen ? [branchPicker()] : [])}</div>
+    </div>
+  `.key('hotfix:' + row.id)
+}
+
+// branchPicker is the third choice unfolded: a search field over the repo's own
+// branches, the reviewer's own first (GET /api/branches already ordered them).
+// A row says "van jou" in words next to its own last-commit date — never a
+// colour carrying that meaning. The search field has NO reactive value binding:
+// the list below it is what reacts, and re-setting the attribute on every
+// keystroke would fight the caret.
+function branchPicker() {
+  return html`
+    <div
+      class="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-2 dark:border-zinc-700 dark:bg-zinc-800/60"
+      data-testid="plan-branch-picker"
+    >
+      <input
+        type="text"
+        autofocus
+        placeholder="${t('zoek een branch…')}"
+        data-testid="plan-branch-search"
+        class="w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-[12px] text-slate-800 placeholder:text-slate-400 focus:border-indigo-300 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-500"
+        @input="${(e) => e && (state.branchQuery = e.target.value)}"
+        @click="${(e) => e && e.stopPropagation()}"
+        @keydown="${(e) => {
+          if (!e) return
+          e.stopPropagation()
+          if (e.key === 'Escape') {
+            state.branchOpen = false
+            e.target.blur()
+          } else if (e.key === 'Enter') {
+            const first = visibleBranches()[0]
+            if (first) chooseBranch(first.name)
+          }
+        }}"
+      />
+      <div class="mt-1.5 max-h-56 overflow-y-auto">
+        ${() =>
+          state.branchLoading
+            ? [html`<p class="px-1 py-1 text-[11.5px] italic text-slate-400 dark:text-zinc-500">${t('branches laden…')}</p>`.key('branches-loading')]
+            : visibleBranches().length
+              ? visibleBranches().map((b) => branchRow(b))
+              : [html`<p class="px-1 py-1 text-[11.5px] italic text-slate-400 dark:text-zinc-500">${t('geen branch gevonden')}</p>`.key('branches-empty')]}
+      </div>
+    </div>
+  `.key('branch-picker')
+}
+
+// branchRow is one branch in that dropdown.
+function branchRow(b) {
+  return html`
+    <div
+      class="flex cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 hover:bg-white dark:hover:bg-zinc-900"
+      data-testid="plan-branch-option"
+      data-branch="${b.name}"
+      @click="${(e) => {
+        if (e) e.stopPropagation()
+        chooseBranch(b.name)
+      }}"
+    >
+      <span class="min-w-0 flex-1 truncate font-mono text-[11.5px] text-slate-700 dark:text-zinc-200">${b.name}</span>
+      <div class="contents">
+        ${() =>
+          b.own
+            ? html`<span
+                class="shrink-0 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600 ring-1 ring-inset ring-indigo-200 dark:bg-indigo-500/15 dark:text-indigo-300 dark:ring-indigo-500/30"
+                >${t('van jou')}</span
+              >`
+            : ''}
+      </div>
+      <div class="contents">
+        ${() => (b.updated ? html`<span class="shrink-0 text-[10px] text-slate-400 dark:text-zinc-500">${b.updated}</span>` : '')}
+      </div>
+    </div>
+  `.key('branch:' + b.name)
+}
+
+// hotfixCard is the whole question — the only thing column 2 shows while it
+// stands, exactly like scopeCard.
+function hotfixCard() {
+  return html`
+    <section class="${CARD + CARD_IDLE}" data-testid="plan-hotfix">
+      <div class="mb-2 flex items-start gap-2">
+        <span class="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10.5px] font-semibold text-slate-600 dark:bg-zinc-800 dark:text-zinc-300"
+          >${t('Eerst dit')}</span
+        >
+        <h2 class="min-w-0 flex-1 text-[13.5px] font-semibold leading-snug text-slate-900 dark:text-zinc-100">
+          ${t('Dit ticket is een bug. Vanaf welke branch gaat dit?')}
+        </h2>
+      </div>
+      <p class="mb-2 text-[12px] leading-relaxed text-slate-500 dark:text-zinc-400">
+        ${t('De keuze bepaalt waar de werkmap vandaan vertakt en tegen welke branch de draft-PR komt te staan.')}
+      </p>
+      <div class="flex flex-col gap-1.5">${() => navRows().map((r) => hotfixRow(r))}</div>
+    </section>
+  `.key('hotfix-card')
+}
+
 function questionCard(q, qi) {
   return html`
     <section class="${'mb-3 ' + CARD + CARD_IDLE}" data-testid="plan-question" data-question-id="${q.id}">
@@ -1038,7 +1298,9 @@ function executeCard(row) {
       <div class="contents">
         ${() =>
           state.exec && state.exec.branch
-            ? html`<p class="mt-1 truncate font-mono text-[11px] text-slate-400 dark:text-zinc-500">${state.exec.branch}</p>`
+            ? html`<p class="mt-1 truncate font-mono text-[11px] text-slate-400 dark:text-zinc-500" data-testid="plan-execute-branch">
+                ${state.exec.branch + (state.exec.base ? ' → ' + state.exec.base : '')}
+              </p>`
             : ''}
       </div>
       <div class="contents">
@@ -1095,9 +1357,9 @@ function questionsColumn() {
     >
       ${columnHeader(t('Vragen over het plan'), () => state.col === 1)}
       <div class="min-h-0 flex-1 overflow-y-auto pr-1">
-        ${() => (needsScope() ? [] : (state.doc.questions || []).map((q, qi) => questionCard(q, qi)))}
+        ${() => (gateOpen() ? [] : (state.doc.questions || []).map((q, qi) => questionCard(q, qi)))}
         ${() =>
-          !needsScope() && !state.loading && !(state.doc.questions || []).length
+          !gateOpen() && !state.loading && !(state.doc.questions || []).length
             ? [
                 html`<p class="mb-3 rounded-2xl border border-dashed border-slate-300 p-4 text-[12.5px] italic text-slate-400 dark:border-zinc-700 dark:text-zinc-500">
                   ${busyGenerating() ? t('Claude stelt de vragen op…') : t('geen vragen')}
@@ -1105,7 +1367,8 @@ function questionsColumn() {
               ]
             : []}
         <div class="contents">${() => (needsScope() ? [scopeCard()] : [])}</div>
-        <div class="contents">${() => (needsScope() ? [] : [tasksSection()])}</div>
+        <div class="contents">${() => (needsHotfix() ? [hotfixCard()] : [])}</div>
+        <div class="contents">${() => (gateOpen() ? [] : [tasksSection()])}</div>
       </div>
     </div>
   `

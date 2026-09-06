@@ -22,9 +22,12 @@
 //     that is on the BASE branch (or on some other branch already merged into
 //     it, i.e. genuinely free), and the plan branch is created there with
 //     `git checkout -B <branch> origin/<base>`. See resolvePlanWorkDir.
-//  2. ALWAYS the primary repo (plug-and-pay/plug-and-pay, base develop). A plan
-//     hangs off a Jira ticket, which carries no repo, and the page offers no
-//     repo choice — an explicit reviewer decision, not an oversight.
+//  2. ALWAYS the primary repo (plug-and-pay/plug-and-pay). A plan hangs off a
+//     Jira ticket, which carries no repo, and the page offers no repo choice —
+//     an explicit reviewer decision, not an oversight. The BASE BRANCH is not
+//     fixed though: `develop` normally, `master` for a bug the reviewer marked
+//     as a hotfix, or any branch they picked in the hotfix question's dropdown
+//     (planBaseBranch, answered on the plan document — see plan_workflow.go).
 //  3. Claude EDITS, Go COMMITS. The run gets Read/Grep/Glob/Edit/Bash (the same
 //     shell carve-out a chat turn has, see
 //     .claude/rules/workflows-write-boundary.md), but the commit, the push and
@@ -67,6 +70,12 @@ import (
 const (
 	// WorkflowPlanExecute is the Workflow Type behind the index's last action.
 	WorkflowPlanExecute = "plan_execute"
+	// planHotfixBranch is the branch a HOTFIX is cut from and merged back
+	// into: production, not the ordinary base branch. Deliberately a constant
+	// here rather than a field on the repo registry (repos.go) — a plan only
+	// ever runs against the primary repo (see the file header, point 2), so a
+	// registry field would be surface nobody else uses.
+	planHotfixBranch = "master"
 )
 
 // planExecuteMaxTasks/planExecuteMaxBlockLines bound what of the plan document
@@ -80,6 +89,27 @@ const (
 	planExecuteMaxBodyEntries = 12
 )
 
+// planBranchRefPattern is the allow-list a reviewer-picked base branch (the
+// hotfix question's third choice) must match before it ever reaches `git` or
+// `gh` as an argument (.claude/rules/conventions.md). Ordinary ref characters
+// only, never a leading dash (which git would read as a flag) and never "..".
+var planBranchRefPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]{0,120}$`)
+
+// planDefaultBaseBranch is the branch a plan is built on unless the reviewer
+// answered otherwise: the primary repo's own base branch (develop).
+func planDefaultBaseBranch() string { return baseBranchFor("") }
+
+// planBaseBranch is the branch THIS plan branches from and opens its draft PR
+// against: whatever the hotfix question settled on, falling back to the repo's
+// own base branch for every plan that was never asked (a non-bug, or a
+// document stored before the gate existed).
+func planBaseBranch(doc planDoc) string {
+	if b := strings.TrimSpace(doc.BaseBranch); b != "" && planBranchRefPattern.MatchString(b) {
+		return b
+	}
+	return planDefaultBaseBranch()
+}
+
 // PlanExecuteInput starts a plan_execute Execution. Only the ticket key: the
 // repo is always the primary one (see the file header, point 2).
 type PlanExecuteInput struct {
@@ -92,6 +122,11 @@ type PlanExecuteInput struct {
 type planExecuteAgentArg struct {
 	Doc    planDoc `json:"doc"`
 	Branch string  `json:"branch"`
+	// Base is the branch the fresh branch is cut from — the hotfix question's
+	// answer (planBaseBranch), computed ONCE in the workflow body and carried
+	// on both Activity arguments so the agent and the PR can never disagree
+	// about it.
+	Base string `json:"base,omitempty"`
 }
 
 // planExecutePRArg is what the PR Activity gets: the branch that now carries a
@@ -102,6 +137,9 @@ type planExecutePRArg struct {
 	Branch string   `json:"branch"`
 	URL    string   `json:"url,omitempty"`
 	Tasks  []string `json:"tasks,omitempty"`
+	// Base is the branch the draft PR is opened against, see
+	// planExecuteAgentArg.Base.
+	Base string `json:"base,omitempty"`
 	// Dir is the werkmap the agent Activity actually used — carried over
 	// rather than re-resolved, see the file header (point 4).
 	Dir string `json:"dir,omitempty"`
@@ -111,6 +149,9 @@ type planExecutePRArg struct {
 // branch, a PR reference, one short note), never the run's transcript.
 type planExecuteResult struct {
 	Branch string `json:"branch,omitempty"`
+	// Base is the branch this attempt cut from and opened its PR against, so
+	// the page can say a hotfix really went out from master.
+	Base string `json:"base,omitempty"`
 	// Dir is the werkmap this attempt ran in (chat_checkout.go's own selection
 	// ladder), so the page can say WHERE the plan was implemented.
 	Dir      string `json:"dir,omitempty"`
@@ -142,15 +183,16 @@ func planExecuteWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		return json.Marshal(planExecuteResult{Note: "Er staat nog geen takenlijst in dit plan."})
 	}
 	branch := planBranchName(doc.Key, doc.Title)
+	base := planBaseBranch(doc)
 	var res planExecuteResult
-	if err := w.ExecuteActivity("planExecuteAgent", planExecuteAgentArg{Doc: doc, Branch: branch}, &res); err != nil {
+	if err := w.ExecuteActivity("planExecuteAgent", planExecuteAgentArg{Doc: doc, Branch: branch, Base: base}, &res); err != nil {
 		return nil, fmt.Errorf("plan execute: agent: %w", err)
 	}
 	if !res.Changed || res.Commit == "" {
 		return json.Marshal(res)
 	}
 	var pr planExecuteResult
-	arg := planExecutePRArg{Key: doc.Key, Title: doc.Title, Branch: branch, URL: doc.URL, Tasks: planTaskTitles(doc), Dir: res.Dir}
+	arg := planExecutePRArg{Key: doc.Key, Title: doc.Title, Branch: branch, Base: base, URL: doc.URL, Tasks: planTaskTitles(doc), Dir: res.Dir}
 	if err := w.ExecuteActivity("planExecuteOpenPR", arg, &pr); err != nil {
 		return nil, fmt.Errorf("plan execute: open pr: %w", err)
 	}
@@ -194,6 +236,7 @@ type PlanExecView struct {
 	RunID    string `json:"runId"`
 	Status   string `json:"status"`
 	Branch   string `json:"branch,omitempty"`
+	Base     string `json:"base,omitempty"`
 	Dir      string `json:"dir,omitempty"`
 	PRURL    string `json:"prUrl,omitempty"`
 	PRNumber int    `json:"prNumber,omitempty"`
@@ -237,7 +280,7 @@ func (m *TaskManager) PlanExecution(key string) (PlanExecView, bool) {
 	out = PlanExecView{RunID: newest.ID, Status: newest.Status}
 	var res planExecuteResult
 	if m.engine.Result(newest.ID, &res) == nil {
-		out.Branch, out.Dir, out.PRURL, out.PRNumber, out.Note = res.Branch, res.Dir, res.PRURL, res.PRNumber, res.Note
+		out.Branch, out.Base, out.Dir, out.PRURL, out.PRNumber, out.Note = res.Branch, res.Base, res.Dir, res.PRURL, res.PRNumber, res.Note
 	}
 	return out, true
 }
@@ -312,9 +355,11 @@ func planBranchName(key, title string) string {
 // Returns ("", note) when there is nothing usable — a reviewer-facing sentence
 // naming what was actually in the way, never a fallback to a disposable
 // worktree.
-func resolvePlanWorkDir(ctx context.Context, dataDir string) (dir string, note string) {
+func resolvePlanWorkDir(ctx context.Context, dataDir, base string) (dir string, note string) {
 	slug := repoSlugFor("")
-	base := baseBranchFor("")
+	if strings.TrimSpace(base) == "" {
+		base = planDefaultBaseBranch()
+	}
 	hold := checkoutHoldback{Claimed: checkoutDirClaimsByOtherPRs("", 0)}
 	candidates, diag := listCheckoutCandidates(ctx, dataDir, slug, base, base, hold)
 
@@ -383,13 +428,16 @@ func (m *TaskManager) registerPlanExecuteActivities(engine *tembed.Engine) {
 // runPlanExecuteAgent is the planExecuteAgent Activity's body — see its
 // registration above.
 func (m *TaskManager) runPlanExecuteAgent(ctx context.Context, arg planExecuteAgentArg) planExecuteResult {
-	res := planExecuteResult{Branch: arg.Branch}
+	base := arg.Base
+	if strings.TrimSpace(base) == "" {
+		base = planBaseBranch(arg.Doc)
+	}
+	res := planExecuteResult{Branch: arg.Branch, Base: base}
 	if m.claude == nil {
 		res.Note = "Claude is niet beschikbaar, dus er is niets uitgevoerd."
 		return res
 	}
-	base := baseBranchFor("")
-	dir, note := resolvePlanWorkDir(ctx, m.dataDir)
+	dir, note := resolvePlanWorkDir(ctx, m.dataDir, base)
 	if dir == "" {
 		m.logf("plan execute %s: no werkmap: %s", arg.Doc.Key, note)
 		res.Note = note
@@ -497,7 +545,11 @@ func planBranchAheadOfBase(ctx context.Context, dir, base string) (string, bool)
 // runPlanExecuteOpenPR is the planExecuteOpenPR Activity's body: push the
 // branch and open the draft PR.
 func (m *TaskManager) runPlanExecuteOpenPR(ctx context.Context, arg planExecutePRArg) planExecuteResult {
-	res := planExecuteResult{Branch: arg.Branch, Dir: arg.Dir, Changed: true}
+	base := arg.Base
+	if strings.TrimSpace(base) == "" {
+		base = planDefaultBaseBranch()
+	}
+	res := planExecuteResult{Branch: arg.Branch, Base: base, Dir: arg.Dir, Changed: true}
 	dir := arg.Dir
 	if dir == "" {
 		res.Note = "De werkmap van deze uitvoering is niet meer bekend; voer het plan opnieuw uit."
@@ -515,7 +567,7 @@ func (m *TaskManager) runPlanExecuteOpenPR(ctx context.Context, arg planExecuteP
 	out, err := runPlanGH(ctx, "pr", "create",
 		"--repo", repoSlugFor(""),
 		"--draft",
-		"--base", baseBranchFor(""),
+		"--base", base,
 		"--head", arg.Branch,
 		"--title", planPRTitle(arg),
 		"--body", planPRBody(arg))
@@ -609,6 +661,13 @@ func planCommitMessage(doc planDoc) string {
 func planExecutePrompt(doc planDoc) string {
 	var b strings.Builder
 	b.WriteString("Je voert een uitgewerkt plan uit in deze repository. Je werkt in de werkmap van de reviewer, die al op een verse branch vanaf de basisbranch is gezet.\n\n")
+	if base := strings.TrimSpace(doc.BaseBranch); base != "" {
+		if doc.Hotfix {
+			fmt.Fprintf(&b, "HOTFIX vanaf `%s`: dit gaat rechtstreeks naar productie. Houd de wijziging zo klein en risicoloos mogelijk — alleen wat de bug verhelpt, geen refactor, geen meeliftende verbeteringen.\n\n", base)
+		} else {
+			fmt.Fprintf(&b, "Je branch is gemaakt vanaf `%s`.\n\n", base)
+		}
+	}
 	fmt.Fprintf(&b, "TICKET %s: %s\n\n", doc.Key, strings.TrimSpace(doc.Title))
 	desc := strings.TrimSpace(doc.Description)
 	if len(desc) > 4000 {

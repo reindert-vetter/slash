@@ -40,8 +40,10 @@ type Issue struct {
 	Title       string `json:"title"`
 	Description string `json:"description"` // flattened plain text (ADF extracted)
 	URL         string `json:"url"`
-	// Status and Type are only populated by Search (the issue-list endpoints);
-	// Issue() asks for summary+description only, so they stay empty there.
+	// Status is only populated by Search (the issue-list endpoints); Issue()
+	// does not ask for it, so it stays empty there. Type comes back from BOTH
+	// (Issue() asks for `issuetype` because the plan page's hotfix gate keys
+	// off "is this a bug?" — see .claude/docs/plan-page.md).
 	// `omitempty` keeps every pre-existing payload/fixture byte-identical.
 	Status string `json:"status,omitempty"`
 	Type   string `json:"type,omitempty"`
@@ -105,6 +107,10 @@ type acliIssue struct {
 		// `fields` envelope as the issue itself.
 		Parent   *acliIssueLink  `json:"parent"`
 		Subtasks []acliIssueLink `json:"subtasks"`
+		// issuetype is the ticket's own kind ("Bug", "Story", "Sub-task").
+		IssueType struct {
+			Name string `json:"name"`
+		} `json:"issuetype"`
 	} `json:"fields"`
 }
 
@@ -153,7 +159,7 @@ func (m *Module) Issue(ctx context.Context, key string) (Issue, error) {
 	ctx, cancel := context.WithTimeout(ctx, cliTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "acli", "jira", "workitem", "view", key,
-		"--fields", "summary,description,parent,subtasks", "--json")
+		"--fields", "summary,description,parent,subtasks,issuetype", "--json")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -178,6 +184,7 @@ func issueFromACLI(key string, parsed acliIssue) Issue {
 		Title:       parsed.Fields.Summary,
 		Description: adfText(parsed.Fields.Description),
 		URL:         baseURL + key,
+		Type:        strings.TrimSpace(parsed.Fields.IssueType.Name),
 	}
 	if p := parsed.Fields.Parent; p != nil {
 		ref := issueRef(*p)

@@ -112,6 +112,74 @@ them. Both sides land on the document (`parentKey`/`parentTitle`/
   request, so the stored document still reads as unanswered), the same
   local-pick-wins overlay `answerFor` uses for an answer.
 
+
+## Bug and hotfix: which branch does this go out from?
+
+Reviewer request, verbatim: *"is het een bug, vraag dan eerst of het een hotfix
+is vanuit master of niet"*, followed by *"Het kan namelijk ook vanaf een andere
+branche zijn, 3e keuze moet een drop down zijn waarbij eigen branches bovenaan
+staan, met search input"*.
+
+A **bug** is asked one more thing before anything is generated — the second
+gate, straight after the scope question, so only ever one of the two is on
+screen:
+
+- **The trigger is the ticket's own issue type.** `modules/jira`'s `Issue` now
+  also asks for `issuetype` (`--fields …,issuetype`) — it previously only came
+  back from `Search`, so a plan page could not tell a bug from a story — and
+  `planLoadIssue` carries it onto the document as `issueType`. `planIsBug`
+  matches the lowercased name *containing* "bug", so "Bug", "Bugfix" and a
+  renamed "Bug (productie)" all count.
+- **The gate sits in the WORKFLOW**, exactly like the scope gate and for the
+  same two reasons: `planGenerate` is a minutes-long Claude call that must not
+  be paid before the answer is in, and the answer changes what the plan should
+  *contain* — a hotfix goes straight to production, so `planPrompt` (and
+  `planExecutePrompt`) tell the model to keep it small and risk-free, no
+  refactor and no meeliftende verbeteringen. The tracker saves the document
+  with `needsHotfix:true` plus the two named branches (`defaultBranch`,
+  `hotfixBranch`) and parks on the **`plan_hotfix`** Signal.
+- **Three choices** (`navRows()` returns exactly those while `needsHotfix()`
+  holds, `data-testid=plan-hotfix-option`, `data-hotfix-target=yes|no|other`):
+  "Ja, hotfix — master", "Nee, gewoon — develop", and "Vanaf een andere
+  branch…". Glyph plus a word, never a colour on its own.
+- **The third choice is a dropdown with a search field**
+  (`branchPicker`, `data-testid=plan-branch-picker`/`plan-branch-search`/
+  `plan-branch-option`): it unfolds inside the row rather than answering, and
+  the answer follows once a branch is picked. It reads **`GET /api/branches`**
+  once (`plan_branches.go` — one `git for-each-ref` in the primary repo's own
+  local clone, read-only, so no workflow: nothing durable is touched), and the
+  search itself filters that one list **client-side** — the list is bounded
+  (`maxBranchList`, 300) so an instant field beats a round trip per keystroke.
+  **The reviewer's own branches sort to the top** (`parseBranchRefs`: last
+  commit's author e-mail equals the clone's `git config user.email`, marked
+  with the word "van jou" next to git's own relative date), newest first within
+  each group. `origin/HEAD` and anything outside the ref allow-list are never
+  offered.
+- **`resolvePlanBase`** folds the Signal into `(hotfix?, baseBranch)` — pure,
+  so replay reproduces it: a picked branch wins over the flag, an
+  unrecognisable one falls back to the ordinary base branch rather than to a
+  branch that may not exist. The branch is validated against
+  `planBranchRefPattern` **twice** (the Signal handler in `tasks_api.go` and
+  the workflow itself), because it reaches `git`/`gh` as an argument
+  (`.claude/rules/conventions.md`).
+- **The answer drives `plan_execute`**, not just the prompt: `planBaseBranch`
+  is computed ONCE in the workflow body and travels on both Activity arguments
+  (`planExecuteAgentArg.Base` → `planExecutePRArg.Base`, the same
+  never-re-resolve discipline as `Dir`), so the werkmap ladder looks for a
+  checkout free on THAT branch, `git checkout -B <branch> origin/<base>` cuts
+  from it and `gh pr create --base` opens the draft PR against it.
+- **The choice stays visible after the gate closes** — a pill in the first
+  column (`data-testid=plan-base-branch`, "⚡ Hotfix vanaf master" / "◆ Vanaf
+  develop") and, on the execute card, the branch line reading
+  `<branch> → <base>` (`data-testid=plan-execute-branch`).
+- `GET /api/plan` reports `generating:false` while `needsHotfix`, same as for
+  `needsScope`, and the page keeps its own `state.hotfixPending` for the gap
+  right after the answer.
+- **An Execution started before this gate existed replays past it untouched**:
+  its recorded `planLoadIssue` result carries no `issueType`, so `planIsBug` is
+  false and no new `WaitSignal` is ever reached
+  (`.claude/rules/workflow-determinism.md`).
+
 ## Keyboard
 
 `←`/`→` move between columns (`state.col`: 0 = ticket, 1 = questions, 2 + n =
@@ -120,6 +188,9 @@ the n-th block column); `←` on the ticket column leaves to `/pr-overview`.
 list** of every option of every question followed by every task, so `↓` walks
 from the last option straight into the task list exactly as the column reads.
 `Enter`/`Space` on an option chooses it (with whatever is typed in its field);
+on a gate row (scope or hotfix) it answers that question — the hotfix
+question's third row only unfolds its branch dropdown, whose own search field
+owns the keyboard while it is focused;
 on the last row (the execute action) it arms and then starts the execution;
 in a block column it drills. A keydown while an input has focus is left alone
 (`Escape` blurs it), and `Enter` inside the field answers with that text.
@@ -162,9 +233,12 @@ rule.
 `plan_execute.go`, Workflow Type **`plan_execute`** — read that file's own
 header for the full reasoning; the essentials:
 
-- **Always the primary repo** (`plug-and-pay/plug-and-pay`, base `develop`), an
-  explicit reviewer decision: a plan hangs off a Jira ticket, which carries no
-  repo, and the page deliberately offers no repo choice.
+- **Always the primary repo** (`plug-and-pay/plug-and-pay`), an explicit
+  reviewer decision: a plan hangs off a Jira ticket, which carries no repo, and
+  the page deliberately offers no repo choice. The **base branch** is not fixed
+  though — `develop` normally, `master` for a bug marked as a hotfix, or
+  whatever branch the reviewer picked (`planBaseBranch`, see "Bug and hotfix"
+  above).
 - **The reviewer's own werkmap, exactly like the review tree** — reviewer
   request, verbatim: *"voor het uitvoeren moet je een werkmap gebruiken net als
   bij de tree"*. It used to build its own disposable worktree at
@@ -285,6 +359,8 @@ and the block nesting is arbitrarily deep. `Save` is called only from the
 | `POST /api/workflows/plan` | `{key}` → `{runId}`; starts or idempotently reuses the tracker. |
 | `POST /api/workflows/plan_execute` | `{key}` → `{runId}`; the index's last action — implement the plan on a fresh branch and open a draft PR. 409 while one is already running. |
 | `POST /api/workflows/{runID}/signals/plan_answer` | `{questionId, optionId, text}` — one answer. |
+| `GET /api/branches` | read-only → `{ok, branches:[{name, own, updated}]}` — the primary repo's remote branches, the reviewer's own first, for the hotfix question's dropdown. |
+| `POST /api/workflows/{runID}/signals/plan_hotfix` | `{hotfix, branch?}` — a bug's base branch: the hotfix branch, the ordinary one, or a branch picked from the dropdown (validated against the ref allow-list). |
 | `POST /api/workflows/{runID}/signals/plan_scope` | `{choice:"parent"}` — plan the main task itself; anything else is rejected (a subtask choice is plain navigation, not a Signal). |
 | `GET /api/workflows?plan=KEY` | the ticket's own runs (the same read as `?pr=N`, filtered on the input's `key` instead — so a later per-ticket workflow lands in the "Taken" card for free). |
 
@@ -316,6 +392,17 @@ and the block nesting is arbitrarily deep. `Save` is called only from the
   scope question**, forever, until someone opens that main task's plan page
   again and answers it. It costs one waiting Execution per ticket and no Claude
   call, which is exactly the point of the gate.
+- **The hotfix branch is a CONSTANT** (`planHotfixBranch = "master"`,
+  `plan_execute.go`), not a field on the repo registry: a plan only ever runs
+  against the primary repo, so a registry field would be surface nothing else
+  uses.
+- **The branch dropdown reads the local clone, and does not fetch first.** A
+  branch pushed seconds ago is only offered once something else fetched it into
+  `repoDirFor("")` — a read endpoint deliberately does not fetch a clone the
+  ingest pipeline shares.
+- **The hotfix choice cannot be taken back either**, for the same reason as the
+  scope choice: it is one Signal in the history, and it already steered the
+  generated plan.
 - **The scope choice cannot be taken back** (see above). Reversing it would have
   to invalidate a plan that was already generated from it.
 - **Whether the model nests its blocks is up to the model.** The prompt asks for
@@ -331,10 +418,16 @@ and the block nesting is arbitrarily deep. `Save` is called only from the
   fallback as a fenced block in a comment (`.claude/rules/conventions.md`).
 
 Tests: `plan_workflow_test.go` (id numbering + caps, junk rejected, the
+hotfix gate's two pure decisions — `planIsBug` on every issue-type spelling and
+`resolvePlanBase`/`planBaseBranch` on all three choices including a branch git
+would read as a flag — the hotfix constraint reaching both prompts, and
+`parseBranchRefs` putting the reviewer's own branches first while dropping
+`origin/HEAD`, the
 per-question answer fold, the regenerate prompt carrying the fixed choices, a
 nested block's note surviving the trim at every level, the parent/subtask
 context in the prompt),
-`modules/jira/jira_test.go` (the `parent`/`subtasks` payload shape),
+`modules/jira/jira_test.go` (the `parent`/`subtasks` payload shape, and
+`issuetype` reaching `Issue.Type`),
 `plan_execute_test.go` (the branch name stays git-safe and bounded, the
 execute prompt carries the fixed choices and every task's nested example code
 capped per block, the PR URL parsed off `gh`'s stdout, and — against
@@ -345,5 +438,8 @@ refuses a dirty one by name, and leaves a directory another PR claims alone) and
 app; screenshots in `data/review-shots/plan-page.png` (a chosen option with two
 block columns open) `plan-page-tasks.png` (the task list with its own
 nested block column), `plan-scope-question.png` (a main task asking which of its
-six subtasks — or itself — is being planned) and `plan-subtask-parent.png` (a
-subtask's plan, with the main task linked in the first column).
+six subtasks — or itself — is being planned) `plan-subtask-parent.png` (a
+subtask's plan, with the main task linked in the first column),
+`plan-hotfix-question.png` (a bug being asked which branch it goes out from)
+and `plan-hotfix-branch-dropdown.png` (its third choice unfolded: the search
+field with the reviewer's own branches on top).

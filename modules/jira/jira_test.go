@@ -128,3 +128,25 @@ func TestIssueParsesParentAndSubtasks(t *testing.T) {
 		t.Fatalf("subtask = %+v", got.Subtasks[0])
 	}
 }
+
+// TestIssueReadsIssueType pins the field the plan page's hotfix gate keys off:
+// Issue() now asks for `issuetype` too, so a bug is recognisable without a
+// second Search() call.
+func TestIssueReadsIssueType(t *testing.T) {
+	var parsed acliIssue
+	if err := json.Unmarshal([]byte(`{"key":"PAYM-813","fields":{"summary":"Refund faalt","issuetype":{"name":"Bug"}}}`), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	got := issueFromACLI("PAYM-813", parsed)
+	if got.Type != "Bug" {
+		t.Fatalf("type = %q, want Bug", got.Type)
+	}
+	// An issue whose payload carries no issuetype simply has none.
+	var bare acliIssue
+	if err := json.Unmarshal([]byte(`{"key":"PAYM-1","fields":{"summary":"x"}}`), &bare); err != nil {
+		t.Fatal(err)
+	}
+	if issueFromACLI("PAYM-1", bare).Type != "" {
+		t.Fatalf("a payload without issuetype must yield an empty type")
+	}
+}

@@ -112,7 +112,7 @@ func TestResolvePlanWorkDirPicksTheReviewersWerkmap(t *testing.T) {
 	dataDir := t.TempDir()
 	writeCheckoutSettings(t, dataDir, checkout)
 
-	dir, note := resolvePlanWorkDir(context.Background(), dataDir)
+	dir, note := resolvePlanWorkDir(context.Background(), dataDir, "")
 	if dir != checkout {
 		t.Fatalf("clean checkout on %s: got dir %q (note %q), want %q", base, dir, note, checkout)
 	}
@@ -121,7 +121,7 @@ func TestResolvePlanWorkDirPicksTheReviewersWerkmap(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(checkout, "foo.txt"), []byte("local work\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	dir, note = resolvePlanWorkDir(context.Background(), dataDir)
+	dir, note = resolvePlanWorkDir(context.Background(), dataDir, "")
 	if dir != "" {
 		t.Fatalf("a dirty werkmap must not be used, got %q", dir)
 	}
@@ -136,7 +136,7 @@ func TestResolvePlanWorkDirPicksTheReviewersWerkmap(t *testing.T) {
 	}
 	assignCheckoutForTest(t, "", 99123, checkout)
 	t.Cleanup(func() { assignCheckoutForTest(t, "", 99123, "") })
-	dir, note = resolvePlanWorkDir(context.Background(), dataDir)
+	dir, note = resolvePlanWorkDir(context.Background(), dataDir, "")
 	if dir != "" {
 		t.Fatalf("a werkmap claimed by another PR must not be taken, got %q", dir)
 	}

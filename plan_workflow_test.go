@@ -152,3 +152,95 @@ func TestPlanPromptCarriesParentAndSubtaskContext(t *testing.T) {
 		t.Fatalf("parent prompt should carry no parent context:\n%s", parent)
 	}
 }
+
+// TestPlanIsBugAndBaseBranch covers the hotfix gate's two pure decisions: WHEN
+// a ticket is asked at all (Jira's own issue-type name), and WHICH branch the
+// answer settles on. Both drive where plan_execute branches from and which
+// branch the draft PR is opened against, and neither is visible from the
+// outside once the tracker has moved on.
+func TestPlanIsBugAndBaseBranch(t *testing.T) {
+	for _, c := range []struct {
+		typ  string
+		want bool
+	}{
+		{"Bug", true}, {"bug", true}, {"Bugfix", true}, {"Bug (productie)", true},
+		{"Story", false}, {"Sub-task", false}, {"", false},
+	} {
+		if got := planIsBug(c.typ); got != c.want {
+			t.Fatalf("planIsBug(%q) = %v, want %v", c.typ, got, c.want)
+		}
+	}
+
+	doc := planDoc{DefaultBranch: "develop", HotfixBranch: "master"}
+	for _, c := range []struct {
+		name       string
+		sig        PlanHotfixSignal
+		wantHotfix bool
+		wantBase   string
+	}{
+		{"hotfix", PlanHotfixSignal{Hotfix: true}, true, "master"},
+		{"ordinary", PlanHotfixSignal{}, false, "develop"},
+		{"picked branch", PlanHotfixSignal{Branch: "release/2026-09"}, false, "release/2026-09"},
+		{"picked the hotfix branch itself", PlanHotfixSignal{Branch: "master"}, true, "master"},
+		{"a branch git would read as a flag", PlanHotfixSignal{Branch: "--exec=rm"}, false, "develop"},
+	} {
+		gotHotfix, gotBase := resolvePlanBase(doc, c.sig)
+		if gotHotfix != c.wantHotfix || gotBase != c.wantBase {
+			t.Fatalf("%s: resolvePlanBase = (%v, %q), want (%v, %q)", c.name, gotHotfix, gotBase, c.wantHotfix, c.wantBase)
+		}
+	}
+
+	// A plan that was never asked (a non-bug, or a document stored before the
+	// gate existed) still branches from the repo's own base branch.
+	if got := planBaseBranch(planDoc{}); got != baseBranchFor("") {
+		t.Fatalf("planBaseBranch(empty) = %q, want %q", got, baseBranchFor(""))
+	}
+	if got := planBaseBranch(planDoc{BaseBranch: "master"}); got != "master" {
+		t.Fatalf("planBaseBranch(master) = %q", got)
+	}
+}
+
+// TestPlanPromptCarriesTheHotfixConstraint — the hotfix answer is a constraint
+// on the PLAN, not only on where the branch is cut: a hotfix goes straight to
+// production, so both the planning prompt and the executing one have to say so.
+func TestPlanPromptCarriesTheHotfixConstraint(t *testing.T) {
+	doc := planDoc{Key: "PAYM-813", Title: "Refund faalt", IssueType: "Bug", Hotfix: true, BaseBranch: "master"}
+	for name, out := range map[string]string{"planPrompt": planPrompt(doc, "all"), "planExecutePrompt": planExecutePrompt(doc)} {
+		if !strings.Contains(out, "HOTFIX") || !strings.Contains(out, "master") {
+			t.Fatalf("%s must name the hotfix and its branch:\n%s", name, out)
+		}
+	}
+	plain := planPrompt(planDoc{Key: "PAYM-813", Title: "Refund faalt", BaseBranch: "develop"}, "all")
+	if strings.Contains(plain, "HOTFIX") {
+		t.Fatalf("a non-hotfix plan must not be told it is one:\n%s", plain)
+	}
+}
+
+// TestParseBranchRefsPutsMyBranchesFirst pins the dropdown's ordering rule
+// (the reviewer's own branches on top, git's newest-first order kept within
+// each group) plus the two refs that must never be offered: origin/HEAD, and
+// anything git would not accept back as a ref argument.
+func TestParseBranchRefsPutsMyBranchesFirst(t *testing.T) {
+	raw := strings.Join([]string{
+		"origin/HEAD\t<someone@example.com>\t1 day ago",
+		"origin/feature-new\t<other@example.com>\t2 hours ago",
+		"origin/my-fix\t<Me@Example.com>\t1 day ago",
+		"origin/--evil\t<me@example.com>\t3 days ago",
+		"origin/my-older\t<me@example.com>\t4 days ago",
+	}, "\n")
+	got := parseBranchRefs(raw, "me@example.com")
+	var names []string
+	for _, b := range got {
+		names = append(names, b.Name)
+	}
+	want := []string{"my-fix", "my-older", "feature-new"}
+	if strings.Join(names, ",") != strings.Join(want, ",") {
+		t.Fatalf("branches = %v, want %v", names, want)
+	}
+	if !got[0].Own || got[2].Own {
+		t.Fatalf("own flags wrong: %+v", got)
+	}
+	if got[0].Updated != "1 day ago" {
+		t.Fatalf("updated = %q", got[0].Updated)
+	}
+}

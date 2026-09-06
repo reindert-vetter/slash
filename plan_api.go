@@ -53,7 +53,8 @@ func (s *server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	// A tracker parked on the scope question IS running, but it is waiting for
 	// the reviewer, not working — saying "plan wordt opgesteld…" there would be
 	// a lie the page cannot recover from (it never resolves on its own).
-	if doc.NeedsScope {
+	// Same for the hotfix question a bug ticket is parked on.
+	if doc.NeedsScope || doc.NeedsHotfix {
 		generating = false
 	}
 	if !ok {

@@ -4,6 +4,10 @@
 // start is an idempotent reuse). It:
 //
 //  1. reads the ticket (title + description) via the jira module,
+//  1b. asks the two questions that come BEFORE the plan: which of a ticket's
+//     subtasks is being planned (`plan_scope`), and — for a BUG — whether this
+//     goes out as a hotfix from the hotfix branch, from the ordinary base
+//     branch, or from another branch entirely (`plan_hotfix`),
 //  2. asks Claude for the CLARIFYING QUESTIONS it still has before the plan is
 //     good enough — each with concrete answer options, each option carrying
 //     example-code blocks (possibly nested) — plus the "what has to be done"
@@ -41,6 +45,10 @@ const (
 	// SignalPlanAnswer carries ONE answer of the reviewer: which option of
 	// which question, plus the free-text detail typed next to it.
 	SignalPlanAnswer = "plan_answer"
+	// SignalPlanHotfix answers the question a BUG ticket is asked before the
+	// plan is generated: does this go out as a hotfix from the hotfix branch,
+	// from the ordinary base branch, or from some other branch entirely?
+	SignalPlanHotfix = "plan_hotfix"
 	// SignalPlanScope answers the question a ticket WITH subtasks is asked
 	// before anything else: plan the main task itself, or one of its subtasks?
 	// Only "the main task" is ever signalled — picking a subtask is plain
@@ -119,6 +127,15 @@ type planSubtask struct {
 	Status string `json:"status,omitempty"`
 }
 
+// PlanHotfixSignal answers the hotfix question of a bug ticket. Hotfix picks
+// the hotfix branch; Branch is the THIRD choice — any other branch the reviewer
+// picked from the dropdown — and wins over Hotfix when it is set. Neither set
+// means the ordinary base branch.
+type PlanHotfixSignal struct {
+	Hotfix bool   `json:"hotfix"`
+	Branch string `json:"branch,omitempty"`
+}
+
 // PlanScopeSignal answers the scope question. Choice is always "parent" today
 // (the only choice that keeps THIS tracker going); it is carried explicitly so
 // a later third option does not need a new Signal.
@@ -145,15 +162,30 @@ type planDoc struct {
 	// image — the children of a main task, which is what the scope question
 	// below offers. NeedsScope is true while the tracker is parked on the
 	// SignalPlanScope wait, i.e. the page must ask before showing the rest.
-	ParentKey         string         `json:"parentKey,omitempty"`
-	ParentTitle       string         `json:"parentTitle,omitempty"`
-	ParentDescription string         `json:"parentDescription,omitempty"`
-	Subtasks          []planSubtask  `json:"subtasks,omitempty"`
-	NeedsScope        bool           `json:"needsScope,omitempty"`
-	Questions         []planQuestion `json:"questions"`
-	Tasks             []planTask     `json:"tasks"`
-	Answers           []planAnswer   `json:"answers"`
-	UpdatedAt         string         `json:"updatedAt,omitempty"`
+	ParentKey         string        `json:"parentKey,omitempty"`
+	ParentTitle       string        `json:"parentTitle,omitempty"`
+	ParentDescription string        `json:"parentDescription,omitempty"`
+	Subtasks          []planSubtask `json:"subtasks,omitempty"`
+	NeedsScope        bool          `json:"needsScope,omitempty"`
+	// IssueType is the ticket's own kind as Jira names it ("Bug", "Story"). It
+	// drives the hotfix gate below and nothing else.
+	IssueType string `json:"issueType,omitempty"`
+	// NeedsHotfix is true while the tracker is parked on the hotfix question a
+	// BUG ticket is asked (the mirror of NeedsScope). DefaultBranch and
+	// HotfixBranch are the two named choices, carried on the document so the
+	// page shows the real branch names instead of hardcoding them; BaseBranch
+	// is the ANSWER — the branch this plan is built on and the one
+	// plan_execute branches from and opens its draft PR against. Empty means
+	// "never asked", which reads as the repo's own base branch.
+	NeedsHotfix   bool           `json:"needsHotfix,omitempty"`
+	Hotfix        bool           `json:"hotfix,omitempty"`
+	BaseBranch    string         `json:"baseBranch,omitempty"`
+	DefaultBranch string         `json:"defaultBranch,omitempty"`
+	HotfixBranch  string         `json:"hotfixBranch,omitempty"`
+	Questions     []planQuestion `json:"questions"`
+	Tasks         []planTask     `json:"tasks"`
+	Answers       []planAnswer   `json:"answers"`
+	UpdatedAt     string         `json:"updatedAt,omitempty"`
 	// Error is a short reason the questions/tasks are empty (Jira or Claude
 	// unreachable, SLASH_CLAUDE=off). The page shows it as a note, never as an
 	// error wall — same "never cry wolf" rule as the Jira sections.
@@ -198,6 +230,28 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		w.WaitSignal(SignalPlanScope, &scope)
 		doc.NeedsScope = false
 	}
+	// A BUG is asked ONE more thing before anything is generated: does this go
+	// out as a hotfix (from the hotfix branch), from the ordinary base branch,
+	// or from another branch entirely? Same reasoning as the scope gate above —
+	// the answer changes what the plan should contain (a hotfix is kept small
+	// and risk-free) and where plan_execute branches from, and planGenerate is
+	// a minutes-long Claude call that must not be paid before that is settled.
+	//
+	// An Execution started before this gate existed replays past it untouched:
+	// its recorded planLoadIssue result carries no issueType at all, so
+	// planIsBug is false and no WaitSignal is reached
+	// (.claude/rules/workflow-determinism.md).
+	if planIsBug(doc.IssueType) {
+		doc.NeedsHotfix = true
+		doc.DefaultBranch, doc.HotfixBranch = planDefaultBaseBranch(), planHotfixBranch
+		if err := w.ExecuteActivity("planSave", doc, nil); err != nil {
+			return nil, fmt.Errorf("plan: save hotfix question: %w", err)
+		}
+		var hf PlanHotfixSignal
+		w.WaitSignal(SignalPlanHotfix, &hf)
+		doc.NeedsHotfix = false
+		doc.Hotfix, doc.BaseBranch = resolvePlanBase(doc, hf)
+	}
 	if err := w.ExecuteActivity("planGenerate", planGenerateArg{Doc: doc, Mode: "all"}, &doc); err != nil {
 		return nil, fmt.Errorf("plan: generate: %w", err)
 	}
@@ -223,6 +277,37 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			return nil, fmt.Errorf("plan: save: %w", err)
 		}
 	}
+}
+
+// planIsBug reports whether Jira's own issue-type name means "a bug" — the
+// gate's only trigger. Matched on the lowercased name containing "bug" so
+// "Bug", "Bugfix" and a renamed "Bug (production)" all count; a ticket whose
+// type never reached the document (an older Execution, or a Jira read that
+// failed) is not a bug and is never asked.
+func planIsBug(issueType string) bool {
+	return strings.Contains(strings.ToLower(strings.TrimSpace(issueType)), "bug")
+}
+
+// resolvePlanBase folds the hotfix answer into (hotfix?, base branch) — pure,
+// so replay reproduces it exactly. An explicitly picked branch (the dropdown's
+// third choice) wins over the hotfix flag; anything unrecognisable falls back
+// to the ordinary base branch rather than to a branch that may not exist.
+func resolvePlanBase(doc planDoc, sig PlanHotfixSignal) (bool, string) {
+	def := doc.DefaultBranch
+	if def == "" {
+		def = planDefaultBaseBranch()
+	}
+	hotfix := doc.HotfixBranch
+	if hotfix == "" {
+		hotfix = planHotfixBranch
+	}
+	if b := strings.TrimSpace(sig.Branch); b != "" && planBranchRefPattern.MatchString(b) {
+		return b == hotfix, b
+	}
+	if sig.Hotfix {
+		return true, hotfix
+	}
+	return false, def
 }
 
 // upsertPlanAnswer replaces the answer for a question, or appends a new one —
@@ -320,6 +405,7 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 			return json.Marshal(doc)
 		}
 		doc.Title, doc.Description, doc.URL = issue.Title, issue.Description, issue.URL
+		doc.IssueType = issue.Type
 		doc.ParentKey, doc.ParentTitle = issue.ParentKey, issue.ParentTitle
 		for _, st := range issue.Subtasks {
 			doc.Subtasks = append(doc.Subtasks, planSubtask{Key: st.Key, Title: st.Title, Status: st.Status})
