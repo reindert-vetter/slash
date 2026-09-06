@@ -43,7 +43,9 @@ rebuilt rather than imported.
    question, every option a row with a `●`/`○` glyph plus the word "gekozen"
    (never colour alone, per the colourblind rule) **and its own free-text
    field**. Underneath, in the same scrolling column, **"Wat er moet
-   gebeuren"**: the task list, each task with its explanation.
+   gebeuren"**: the task list, each task with its explanation, and as the
+   **last row of the whole index** the action that runs the plan (see "The last
+   action" below).
 3. **The example code** (`plan-block-column`, `w-[40rem]`, `data-level=0`) — the
    blocks of whatever the cursor is on (an option or a task): a card per block
    with a file/label/language header, its explanation (`note`,
@@ -70,6 +72,7 @@ the n-th block column); `←` on the ticket column leaves to `/pr-overview`.
 list** of every option of every question followed by every task, so `↓` walks
 from the last option straight into the task list exactly as the column reads.
 `Enter`/`Space` on an option chooses it (with whatever is typed in its field);
+on the last row (the execute action) it arms and then starts the execution;
 in a block column it drills. A keydown while an input has focus is left alone
 (`Escape` blurs it), and `Enter` inside the field answers with that text.
 
@@ -83,6 +86,70 @@ Which column owns the keyboard is spelled out **in words** in its header
 `path` (the drill path, joined with `.`, omitted while only one block column is
 open). So a refresh or a shared link reopens the same question, the same option
 and the same drilled block column.
+
+## The last action: run the plan → a draft PR
+
+Reviewer request, verbatim: *"als laatste actie in de index wil ik het in
+kunnen zetten naar een draft pr, dan moet het plan uitvoeren"* — the closing
+link of the chain todo → planning → needs your review → **draft PR**.
+
+The index's flat nav list (`navRows`) therefore ends in a third kind of row
+next to `option`/`task`: one **action** row (`EXEC_ROW_ID = 'exec'`,
+`data-testid=plan-execute`), rendered as the last card under "Wat er moet
+gebeuren". It only exists once there IS a task list — without that guard a
+still-loading page would park the default cursor on the execute row instead of
+on the first question, and the workflow refuses an empty plan anyway. It
+carries no example code, so `curBlocks` yields nothing for it and `→` opens no
+block column.
+
+Because pressing it pushes a branch and opens a PR, **the first `Enter`/click
+only arms it** (`state.confirmExec`, the button then reads "Zeker weten? Druk
+nog een keer"); moving the cursor away disarms it again. Its state is always
+spelled out in WORDS (`nog niet uitgevoerd` / `draait…` / `klaar` /
+`draft-PR klaar` / `mislukt`), never a colour on its own — the colourblind
+rule.
+
+### The `plan_execute` workflow
+
+`plan_execute.go`, Workflow Type **`plan_execute`** — read that file's own
+header for the full reasoning; the essentials:
+
+- **Always the primary repo** (`plug-and-pay/plug-and-pay`, base `develop`), an
+  explicit reviewer decision: a plan hangs off a Jira ticket, which carries no
+  repo, and the page deliberately offers no repo choice.
+- **Its own worktree**, `data/worktrees/plan-<KEY>`, branched off
+  `origin/<baseBranch>` onto `planBranchName(key, title)` (`paym-813-<slug>` —
+  the key up front so `git branch` and the session-rename hook still find it,
+  the slug built from a strict allow-list because it reaches `git`/`gh` as an
+  argument). Rebuilt from scratch on every attempt, so a failed run never
+  poisons the next one. There is no PR yet, so `chat_checkout.go`'s shared
+  per-PR checkout does not apply.
+- **Three Activities in a fixed order**: `planExecuteLoad` (read the stored
+  document), `planExecuteAgent` (worktree + ONE agentic Opus run with
+  `Read/Grep/Glob/Edit/Bash` — the same shell carve-out a chat turn has, see
+  `.claude/rules/workflows-write-boundary.md` — then commit), and
+  `planExecuteOpenPR` (`git push -u` + `gh pr create --draft`). The last one is
+  split off deliberately: a failed push or a `gh` hiccup is retried without
+  paying for the whole Claude run again.
+- **Claude edits, Go commits.** The run is told not to commit; `planExecuteAgent`
+  stages and commits whatever it left behind, so "did it actually commit?" is
+  never a question and the PR's URL is parsed off `gh`'s own stdout rather than
+  scraped from the model's prose. A run that DID commit through its own Bash
+  tool is recognised too (`planBranchAheadOfBase`), so the two can't fight.
+- **No deterministic Run ID**, unlike the `plan` tracker: a plan may be executed
+  more than once, and each attempt is simply another run. `RunsForPlan` finds
+  every one of them by the `key` on their input, so they appear in the page's
+  own "Taken" card for free (label `plan_execute` → "Plan uitvoeren",
+  `src/workflowLabels.mjs`). A second start while one is still running is
+  refused with 409, the precedent `handleTestRunStart` sets.
+- **The result lives in the workflow's own history** (`engine.Result`), read
+  back by `PlanExecution` as the `exec` field of `GET /api/plan` —
+  deliberately NOT written into the plan document, which the `plan` tracker
+  holds in memory and rewrites on every answer, so a shared row would clobber
+  one or the other.
+- Started with `StartWorkflowDeferLow` + `SetWorkflowPriority(…, PriorityLow)`
+  so the POST returns immediately and the minutes-long run drains in the
+  background (same as `test_run`/`comment_batch`).
 
 ## The `plan` workflow (one tracker per ticket)
 
@@ -134,16 +201,26 @@ and the block nesting is arbitrarily deep. `Save` is called only from the
 | Endpoint | What |
 | --- | --- |
 | `GET /plan/<KEY>` | the static shell (`plan.html`, same anti-flash/theme/Prism/markdown blocks as `index.html`). A path that isn't a Jira key or a bare number → `location.replace('/pr-overview')`. |
-| `GET /api/plan?key=KEY` | read-only → `{ok, key, doc, runs, generating}`. An unknown ticket answers ok with an empty document, never an error. |
+| `GET /api/plan?key=KEY` | read-only → `{ok, key, doc, runs, generating, exec?}` (`exec` = the newest `plan_execute` attempt of this ticket). An unknown ticket answers ok with an empty document, never an error. |
 | `POST /api/workflows/plan` | `{key}` → `{runId}`; starts or idempotently reuses the tracker. |
+| `POST /api/workflows/plan_execute` | `{key}` → `{runId}`; the index's last action — implement the plan on a fresh branch and open a draft PR. 409 while one is already running. |
 | `POST /api/workflows/{runID}/signals/plan_answer` | `{questionId, optionId, text}` — one answer. |
 | `GET /api/workflows?plan=KEY` | the ticket's own runs (the same read as `?pr=N`, filtered on the input's `key` instead — so a later per-ticket workflow lands in the "Taken" card for free). |
 
 ## Accepted gaps (deliberate, don't "fix" by accident)
 
-- **The plan is not turned into anything else yet** — no commit, no PR, no Jira
-  update. Answering sharpens the task list; acting on it is still the reviewer's
-  own job.
+- **A plan execution has no per-task live progress** — only the run's own
+  status (via the "Taken" card and the `exec` field) and, at the end, the draft
+  PR or a short note. Deliberately no `test_run`-style marker/progress
+  plumbing: the run is one agentic pass, not a list of known items.
+- **The agentic run is bounded by the module's own `agenticTimeout`** (10
+  minutes, `modules/claude`) — the same ceiling every other agentic workflow
+  has. A plan too big for that lands whatever it got to; the PR is a draft
+  precisely because the result still needs a human.
+- **The `data/worktrees/plan-<KEY>` worktree is not swept by `cleanup`** (that
+  sweep is PR-scoped). It is rebuilt from scratch on the next attempt, so it
+  costs one stale directory per ticket, never a wrong state.
+- **No Jira update.** Executing the plan does not transition the ticket.
 - **Whether the model nests its blocks is up to the model.** The prompt asks for
   it explicitly and the UI supports any depth, but a small ticket legitimately
   comes back one level deep.
@@ -158,7 +235,10 @@ and the block nesting is arbitrarily deep. `Save` is called only from the
 
 Tests: `plan_workflow_test.go` (id numbering + caps, junk rejected, the
 per-question answer fold, the regenerate prompt carrying the fixed choices, a
-nested block's note surviving the trim at every level) and
+nested block's note surviving the trim at every level),
+`plan_execute_test.go` (the branch name stays git-safe and bounded, the
+execute prompt carries the fixed choices and every task's nested example code
+capped per block, the PR URL parsed off `gh`'s stdout) and
 `modules/plan/plan_test.go` (the document round trip). Verified in the running
 app; screenshots in `data/review-shots/plan-page.png` (a chosen option with two
 block columns open) and `plan-page-tasks.png` (the task list with its own

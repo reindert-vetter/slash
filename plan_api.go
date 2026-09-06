@@ -4,6 +4,10 @@
 //
 //	workflow runs belonging to this ticket.
 //
+// POST /api/workflows/plan_execute  run the plan: implement it on a fresh
+//
+//	branch and open a draft PR → {runId}.
+//
 // POST /api/workflows/plan      start (idempotently reuse) the per-ticket
 //
 //	`plan` tracker → {runId}.
@@ -49,9 +53,53 @@ func (s *server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		doc = planDoc{Key: key, Questions: []planQuestion{}, Tasks: []planTask{}, Answers: []planAnswer{}}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	payload := map[string]any{
 		"ok": true, "key": key, "doc": doc, "runs": runs, "generating": generating,
-	})
+	}
+	// The index's LAST action (plan_execute, see plan_execute.go): the newest
+	// attempt for this ticket, absent when it was never run. Read from the
+	// workflow's own history rather than from the plan document — the `plan`
+	// tracker holds that document in memory and rewrites it on every answer, so
+	// a shared row would clobber one or the other.
+	if exec, ok := mgr.PlanExecution(key); ok {
+		payload["exec"] = exec
+	}
+	writeJSON(w, http.StatusOK, payload)
+}
+
+// handlePlanExecuteStart serves POST /api/workflows/plan_execute {key} — the
+// index's last action: implement the stored plan on a fresh branch and open a
+// DRAFT pull request (see plan_execute.go). A run already going for this ticket
+// is refused with 409 rather than started a second time — the same precedent
+// handleTestRunStart sets, for the same reason: both would work in the same
+// worktree at once.
+func (s *server) handlePlanExecuteStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Key string `json:"key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	key := strings.ToUpper(strings.TrimSpace(body.Key))
+	if !planKeyPattern.MatchString(key) {
+		http.Error(w, "invalid issue key", http.StatusBadRequest)
+		return
+	}
+	if s.tasks.manager.PlanExecuteRunning(key) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "plan execution already running"})
+		return
+	}
+	runID, err := s.tasks.manager.StartPlanExecute(key)
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
 }
 
 // handlePlanStart serves POST /api/workflows/plan {key} — start or reuse the

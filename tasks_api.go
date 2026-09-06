@@ -840,6 +840,10 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// starts (idempotently reuses) its tracker. See plan_api.go.
 	mux.HandleFunc("/api/plan", s.handlePlan)
 	mux.HandleFunc("/api/workflows/plan", s.handlePlanStart)
+	// POST /api/workflows/plan_execute {key} → the index's last action on
+	// /plan/<KEY>: let Claude implement the plan on a fresh branch and open a
+	// DRAFT pull request (plan_execute.go).
+	mux.HandleFunc("/api/workflows/plan_execute", s.handlePlanExecuteStart)
 	// POST /api/workflows/jira_inbox → start (or reuse) the notification
 	// tracker and return its Run ID. Starting an Execution is the sanctioned UI
 	// write path.

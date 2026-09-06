@@ -3456,12 +3456,14 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// The Jira-notification tracker's two Activities (see jira_notifications.go).
 	m.registerJiraNotifyActivities(engine)
 	m.registerPlanActivities(engine)
+	m.registerPlanExecuteActivities(engine)
 
 	engine.RegisterWorkflow(WorkflowTaskCodeComment, taskCodeCommentWorkflow)
 	engine.RegisterWorkflow(WorkflowPRStatus, prStatusWorkflow)
 	engine.RegisterWorkflow(WorkflowPRInbox, prInboxWorkflow)
 	engine.RegisterWorkflow(WorkflowJiraInbox, jiraInboxWorkflow)
 	engine.RegisterWorkflow(WorkflowPlan, planWorkflow)
+	engine.RegisterWorkflow(WorkflowPlanExecute, planExecuteWorkflow)
 	engine.RegisterWorkflow(WorkflowBuildRelations, buildRelationsWorkflow)
 	engine.RegisterWorkflow(WorkflowIngest, ingestWorkflow)
 	engine.RegisterWorkflow(WorkflowResolveCall, resolveCallWorkflow)
@@ -3521,6 +3523,11 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// reasoning, plus this is what makes StartTestRun's StartWorkflowDeferLow
 	// hand the run off to the background instead of holding the HTTP request.
 	engine.SetWorkflowPriority(WorkflowTestRun, tembed.PriorityLow)
+	// plan_execute's middle Activity IS a long agentic run (minutes) that also
+	// pushes and opens a PR — same reasoning, plus this is what makes
+	// StartPlanExecute's StartWorkflowDeferLow hand the run off to the
+	// background instead of holding the HTTP request.
+	engine.SetWorkflowPriority(WorkflowPlanExecute, tembed.PriorityLow)
 
 	// pr_status itself is important (merge/close detection + ingest refresh) and
 	// stays Normal — but its one slow LLM step, generatePRSummary (a Haiku call),

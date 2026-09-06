@@ -70,6 +70,14 @@ const state = reactive({
   // The answers picked in this tab that the stored document has not caught up
   // with yet, keyed by question id (see answerFor).
   pending: {},
+  // The newest plan_execute run of this ticket (GET /api/plan's `exec`), or
+  // null when the plan was never executed — see the execute card below.
+  exec: null,
+  // Executing the plan pushes a branch and opens a PR, so it takes a SECOND
+  // Enter/click to confirm. Reset as soon as the cursor moves away.
+  confirmExec: false,
+  // The start request is in flight (a word, never a spinner colour).
+  startingExec: false,
 })
 
 bindUrlState(state, [
@@ -109,6 +117,7 @@ async function loadPlan() {
     state.doc = body.doc || EMPTY_DOC
     state.runs = Array.isArray(body.runs) ? body.runs : []
     state.generating = !!body.generating
+    state.exec = body.exec || null
     state.error = ''
     state.loading = false
     dropSettledPending()
@@ -174,17 +183,58 @@ async function sendAnswer(question, option, text) {
   state.saving = ''
 }
 
+// triggerExecute is the index's LAST action: implement the plan on a fresh
+// branch and open a DRAFT pull request (plan_execute.go). It pushes and opens
+// a PR, so the first press only ARMS it — the second one really starts it. The
+// armed state is shown in words, never by a colour alone.
+async function triggerExecute() {
+  if (state.startingExec || execRunning()) return
+  if (!state.confirmExec) {
+    state.confirmExec = true
+    return
+  }
+  state.confirmExec = false
+  state.startingExec = true
+  try {
+    const res = await fetch('/api/workflows/plan_execute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: state.key }),
+    })
+    if (res.ok) {
+      lastPayload = ''
+      await loadPlan()
+    }
+  } catch (err) {
+    // Nothing to undo: the next poll shows what the tracker really recorded.
+  }
+  state.startingExec = false
+}
+
+function execRunning() {
+  return !!state.exec && state.exec.status === 'running'
+}
+
 // ------------------------------------------------------------------ cursors
 
 // navRows is the flat, ordered list column 2 navigates: every option of every
 // question, then every task. One list, so ↓ walks from the last option
 // straight into the task list, exactly as the column reads on screen.
+// EXEC_ROW_ID is the stable id of that last action row — the same id space as
+// an option ("q1o2") or a task ("t3"), so ?cur= restores it like any other.
+const EXEC_ROW_ID = 'exec'
+
 function navRows() {
   const out = []
   ;(state.doc.questions || []).forEach((q, qi) => {
     ;(q.options || []).forEach((o, oi) => out.push({ id: o.id, kind: 'option', q, o, qi, oi }))
   })
   ;(state.doc.tasks || []).forEach((task, ti) => out.push({ id: task.id, kind: 'task', task, ti }))
+  // The LAST action of the index: run the plan and open a draft PR. Only once
+  // there is a task list to run — the workflow itself refuses an empty plan,
+  // and without this guard a still-loading page would park the cursor on the
+  // execute row instead of on the first question.
+  if ((state.doc.tasks || []).length) out.push({ id: EXEC_ROW_ID, kind: 'action' })
   return out
 }
 
@@ -210,11 +260,15 @@ function clampCursor() {
 }
 
 // curBlocks are the blocks of whatever the cursor is on — an option's example
-// code, or a task's.
+// code, or a task's. The last row of the index is an ACTION (see EXEC_ROW_ID)
+// and carries neither, so it yields nothing and → simply doesn't open a block
+// column.
 function curBlocks() {
   const row = curRow()
   if (!row) return []
-  const list = row.kind === 'option' ? row.o.blocks : row.task.blocks
+  let list = null
+  if (row.kind === 'option') list = row.o.blocks
+  else if (row.kind === 'task') list = row.task.blocks
   return Array.isArray(list) ? list : []
 }
 
@@ -269,6 +323,7 @@ function moveRow(delta) {
   if (rows[next].id === state.cur) return
   state.cur = rows[next].id
   state.path = [0]
+  state.confirmExec = false
   scrollCurIntoView()
 }
 
@@ -350,6 +405,9 @@ function onKeydown(e) {
       if (state.col === 1 && row && row.kind === 'option') {
         e.preventDefault()
         sendAnswer(row.q, row.o, answerTextFor(row.q.id))
+      } else if (state.col === 1 && row && row.kind === 'action') {
+        e.preventDefault()
+        triggerExecute()
       } else if (state.col > 1) {
         e.preventDefault()
         stepRight()
@@ -722,6 +780,102 @@ function taskRow(row) {
   `.key('task:' + task.id)
 }
 
+// executeCard is the last card of the index: one action row that runs the
+// plan. It reports its state in WORDS (never a colour on its own, per the
+// colourblind rule) and links to the draft PR once there is one.
+function execStatusWord() {
+  if (state.startingExec) return t('starten…')
+  if (!state.exec) return t('nog niet uitgevoerd')
+  if (state.exec.status === 'running') return t('draait…')
+  if (state.exec.status === 'failed') return t('mislukt')
+  if (state.exec.prUrl) return t('draft-PR klaar')
+  return t('klaar')
+}
+
+function execButtonWord() {
+  if (state.startingExec) return t('starten…')
+  if (execRunning()) return t('draait…')
+  if (state.confirmExec) return t('Zeker weten? Druk nog een keer')
+  if (state.exec) return t('Opnieuw uitvoeren en draft-PR maken')
+  return t('Plan uitvoeren en draft-PR maken')
+}
+
+function executeCard(row) {
+  return html`
+    <div
+      class="${() =>
+        'mt-3 rounded-lg border px-2.5 py-2 ' +
+        (state.cur === EXEC_ROW_ID
+          ? 'border-indigo-300 ring-2 ring-inset ring-indigo-400 dark:border-indigo-500 dark:ring-indigo-500 ' +
+            (state.col === 1 ? 'bg-indigo-50/50 dark:bg-indigo-500/10' : '')
+          : 'border-slate-200 dark:border-zinc-800')}"
+      data-testid="plan-execute"
+      data-cursor="${() => (state.cur === EXEC_ROW_ID ? 'true' : 'false')}"
+      @click="${() => {
+        state.cur = EXEC_ROW_ID
+        state.col = 1
+        state.path = [0]
+      }}"
+    >
+      <div class="flex items-start gap-2">
+        <span class="shrink-0 font-mono text-[12px] text-slate-400 dark:text-zinc-500">→</span>
+        <div class="min-w-0 flex-1">
+          <div class="text-[13px] font-medium leading-snug text-slate-900 dark:text-zinc-100">${t('Naar een draft-PR')}</div>
+          <p class="mt-0.5 text-[12px] leading-relaxed text-slate-500 dark:text-zinc-400">
+            ${t('Claude voert het plan uit op een verse branch en zet het klaar als draft-PR.')}
+          </p>
+        </div>
+        <span
+          class="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600 dark:bg-zinc-800 dark:text-zinc-300"
+          data-testid="plan-execute-status"
+          >${() => execStatusWord()}</span
+        >
+      </div>
+      <button
+        type="button"
+        data-testid="plan-execute-button"
+        disabled="${() => state.startingExec || execRunning()}"
+        class="mt-2 w-full rounded-md bg-indigo-600 px-2 py-1 text-[12px] font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+        @click="${(e) => {
+          if (e && e.stopPropagation) e.stopPropagation()
+          state.cur = EXEC_ROW_ID
+          state.col = 1
+          triggerExecute()
+        }}"
+      >
+        ${() => execButtonWord()}
+      </button>
+      <div class="contents">
+        ${() =>
+          state.exec && state.exec.prUrl
+            ? html`<a
+                href="${state.exec.prUrl}"
+                target="_blank"
+                rel="noreferrer"
+                data-testid="plan-execute-pr"
+                class="mt-1.5 block truncate text-[12px] font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                >${t('Draft-PR')} #${state.exec.prNumber || ''} →</a
+              >`
+            : ''}
+      </div>
+      <div class="contents">
+        ${() =>
+          state.exec && state.exec.note
+            ? html`<p class="mt-1.5 text-[11.5px] leading-relaxed text-amber-700 dark:text-amber-300" data-testid="plan-execute-note">
+                ${state.exec.note}
+              </p>`
+            : ''}
+      </div>
+      <div class="contents">
+        ${() =>
+          state.exec && state.exec.branch
+            ? html`<p class="mt-1 truncate font-mono text-[11px] text-slate-400 dark:text-zinc-500">${state.exec.branch}</p>`
+            : ''}
+      </div>
+    </div>
+  `.key('exec:' + (row ? row.id : EXEC_ROW_ID))
+}
+
 function questionsColumn() {
   return html`
     <div
@@ -757,6 +911,12 @@ function questionsColumn() {
                 : [html`<p class="text-[12.5px] italic text-slate-400 dark:text-zinc-500">
                     ${state.generating ? t('de takenlijst wordt opgesteld…') : t('nog geen taken')}
                   </p>`.key('no-tasks')]}
+          </div>
+          <div class="contents">
+            ${() => {
+              const row = navRows().find((r) => r.kind === 'action')
+              return row ? executeCard(row) : ''
+            }}
           </div>
         </section>
       </div>

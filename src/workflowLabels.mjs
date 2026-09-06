@@ -32,6 +32,7 @@ export const WORKFLOW_LABELS = {
   remove_reviewer: 'Mijzelf als reviewer verwijderen',
   cleanup: 'Opruimen',
   plan: 'Plan',
+  plan_execute: 'Plan uitvoeren',
 }
 
 // labelForWorkflow names a Workflow Type, falling back to the raw type name
