@@ -41,6 +41,11 @@ const (
 	// SignalPlanAnswer carries ONE answer of the reviewer: which option of
 	// which question, plus the free-text detail typed next to it.
 	SignalPlanAnswer = "plan_answer"
+	// SignalPlanScope answers the question a ticket WITH subtasks is asked
+	// before anything else: plan the main task itself, or one of its subtasks?
+	// Only "the main task" is ever signalled — picking a subtask is plain
+	// navigation to that subtask's own /plan page, which has its own tracker.
+	SignalPlanScope = "plan_scope"
 )
 
 // planKeyPattern is the same shape modules/jira validates against, plus the
@@ -106,6 +111,21 @@ type planTask struct {
 	Blocks      []planBlock `json:"blocks,omitempty"`
 }
 
+// planSubtask is one child issue hanging under this ticket, as shown in the
+// scope question.
+type planSubtask struct {
+	Key    string `json:"key"`
+	Title  string `json:"title,omitempty"`
+	Status string `json:"status,omitempty"`
+}
+
+// PlanScopeSignal answers the scope question. Choice is always "parent" today
+// (the only choice that keeps THIS tracker going); it is carried explicitly so
+// a later third option does not need a new Signal.
+type PlanScopeSignal struct {
+	Choice string `json:"choice"`
+}
+
 // planAnswer is one stored reviewer answer (the Signal, kept on the document).
 type planAnswer struct {
 	QuestionID string `json:"questionId"`
@@ -115,14 +135,25 @@ type planAnswer struct {
 
 // planDoc is the whole document the page renders — see modules/plan.
 type planDoc struct {
-	Key         string         `json:"key"`
-	Title       string         `json:"title"`
-	Description string         `json:"description"`
-	URL         string         `json:"url"`
-	Questions   []planQuestion `json:"questions"`
-	Tasks       []planTask     `json:"tasks"`
-	Answers     []planAnswer   `json:"answers"`
-	UpdatedAt   string         `json:"updatedAt,omitempty"`
+	Key         string `json:"key"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	URL         string `json:"url"`
+	// ParentKey/ParentTitle/ParentDescription describe the MAIN task when this
+	// ticket is a subtask: context for the prompt and a link in the first
+	// column, never something the plan itself covers. Subtasks is the mirror
+	// image — the children of a main task, which is what the scope question
+	// below offers. NeedsScope is true while the tracker is parked on the
+	// SignalPlanScope wait, i.e. the page must ask before showing the rest.
+	ParentKey         string         `json:"parentKey,omitempty"`
+	ParentTitle       string         `json:"parentTitle,omitempty"`
+	ParentDescription string         `json:"parentDescription,omitempty"`
+	Subtasks          []planSubtask  `json:"subtasks,omitempty"`
+	NeedsScope        bool           `json:"needsScope,omitempty"`
+	Questions         []planQuestion `json:"questions"`
+	Tasks             []planTask     `json:"tasks"`
+	Answers           []planAnswer   `json:"answers"`
+	UpdatedAt         string         `json:"updatedAt,omitempty"`
 	// Error is a short reason the questions/tasks are empty (Jira or Claude
 	// unreachable, SLASH_CLAUDE=off). The page shows it as a note, never as an
 	// error wall — same "never cry wolf" rule as the Jira sections.
@@ -150,6 +181,22 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	var doc planDoc
 	if err := w.ExecuteActivity("planLoadIssue", in, &doc); err != nil {
 		return nil, fmt.Errorf("plan: load issue: %w", err)
+	}
+	// A ticket with subtasks is not planned until the reviewer says WHAT is
+	// being planned: this main task, or one of its subtasks. The gate sits in
+	// the workflow rather than only in the page because planGenerate is a
+	// minutes-long Claude call — one that must not be paid for a main task the
+	// reviewer immediately trades for a subtask. The document is saved first so
+	// the page can render the question at all; picking a subtask simply opens
+	// that subtask's own /plan page and leaves this tracker parked here.
+	if len(doc.Subtasks) > 0 {
+		doc.NeedsScope = true
+		if err := w.ExecuteActivity("planSave", doc, nil); err != nil {
+			return nil, fmt.Errorf("plan: save scope question: %w", err)
+		}
+		var scope PlanScopeSignal
+		w.WaitSignal(SignalPlanScope, &scope)
+		doc.NeedsScope = false
 	}
 	if err := w.ExecuteActivity("planGenerate", planGenerateArg{Doc: doc, Mode: "all"}, &doc); err != nil {
 		return nil, fmt.Errorf("plan: generate: %w", err)
@@ -273,6 +320,24 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 			return json.Marshal(doc)
 		}
 		doc.Title, doc.Description, doc.URL = issue.Title, issue.Description, issue.URL
+		doc.ParentKey, doc.ParentTitle = issue.ParentKey, issue.ParentTitle
+		for _, st := range issue.Subtasks {
+			doc.Subtasks = append(doc.Subtasks, planSubtask{Key: st.Key, Title: st.Title, Status: st.Status})
+		}
+		// A subtask is planned WITH its main task in view: read the parent's
+		// own description too (the parent field itself carries only a summary).
+		// Best-effort — a failure here leaves the plan without that context
+		// rather than sinking the tracker.
+		if doc.ParentKey != "" {
+			if parent, perr := m.jira.Issue(ctx, doc.ParentKey); perr != nil {
+				m.logf("plan: load parent %s of %s: %v", doc.ParentKey, arg.Key, perr)
+			} else {
+				doc.ParentDescription = parent.Description
+				if strings.TrimSpace(parent.Title) != "" {
+					doc.ParentTitle = parent.Title
+				}
+			}
+		}
 		return json.Marshal(doc)
 	})
 	// Activity: ask Claude for the questions and/or the task list (shells out to

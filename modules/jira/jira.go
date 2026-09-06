@@ -45,6 +45,24 @@ type Issue struct {
 	// `omitempty` keeps every pre-existing payload/fixture byte-identical.
 	Status string `json:"status,omitempty"`
 	Type   string `json:"type,omitempty"`
+	// ParentKey/ParentTitle name the issue this one hangs under (a Sub-task's
+	// own parent); Subtasks are the children hanging under this one. Both are
+	// only populated by Issue() — Search() does not ask for those fields — and
+	// both stay empty for an issue that has neither, which is what the plan
+	// page's scope question keys off (see .claude/docs/plan-page.md).
+	ParentKey   string     `json:"parentKey,omitempty"`
+	ParentTitle string     `json:"parentTitle,omitempty"`
+	Subtasks    []IssueRef `json:"subtasks,omitempty"`
+}
+
+// IssueRef is the little an issue link carries: enough to name and open the
+// other issue, never its description (Jira does not include one in a
+// parent/subtasks field anyway — reading it costs a second Issue() call).
+type IssueRef struct {
+	Key    string `json:"key"`
+	Title  string `json:"title"`
+	Status string `json:"status,omitempty"`
+	Type   string `json:"type,omitempty"`
 }
 
 // Client is the module's behaviour, so callers (workflows, tests) can depend on
@@ -82,7 +100,36 @@ type acliIssue struct {
 	Fields struct {
 		Summary     string          `json:"summary"`
 		Description json.RawMessage `json:"description"`
+		// parent is absent entirely for an ordinary issue; subtasks is an
+		// empty array for one without children. Both carry the same nested
+		// `fields` envelope as the issue itself.
+		Parent   *acliIssueLink  `json:"parent"`
+		Subtasks []acliIssueLink `json:"subtasks"`
 	} `json:"fields"`
+}
+
+// acliIssueLink is one entry of the parent/subtasks fields.
+type acliIssueLink struct {
+	Key    string `json:"key"`
+	Fields struct {
+		Summary string `json:"summary"`
+		Status  struct {
+			Name string `json:"name"`
+		} `json:"status"`
+		IssueType struct {
+			Name string `json:"name"`
+		} `json:"issuetype"`
+	} `json:"fields"`
+}
+
+// issueRef turns one such link into the trimmed form callers see.
+func issueRef(l acliIssueLink) IssueRef {
+	return IssueRef{
+		Key:    strings.TrimSpace(l.Key),
+		Title:  strings.TrimSpace(l.Fields.Summary),
+		Status: strings.TrimSpace(l.Fields.Status.Name),
+		Type:   strings.TrimSpace(l.Fields.IssueType.Name),
+	}
 }
 
 // adfNode is a minimal Atlassian Document Format node: enough structure to walk
@@ -93,7 +140,10 @@ type adfNode struct {
 	Content []adfNode `json:"content"`
 }
 
-// Issue fetches key's summary + description via `acli jira workitem view`. The
+// Issue fetches key's summary + description via `acli jira workitem view`,
+// plus the parent/subtasks links around it (the plan page asks whether a plan
+// is about the main task or one of its subtasks — see
+// .claude/docs/plan-page.md). The
 // key is validated against keyPattern before it ever reaches exec.CommandContext
 // (never a shell string with user input).
 func (m *Module) Issue(ctx context.Context, key string) (Issue, error) {
@@ -103,7 +153,7 @@ func (m *Module) Issue(ctx context.Context, key string) (Issue, error) {
 	ctx, cancel := context.WithTimeout(ctx, cliTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "acli", "jira", "workitem", "view", key,
-		"--fields", "summary,description", "--json")
+		"--fields", "summary,description,parent,subtasks", "--json")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -117,12 +167,28 @@ func (m *Module) Issue(ctx context.Context, key string) (Issue, error) {
 	if err := json.Unmarshal(out, &parsed); err != nil {
 		return Issue{}, fmt.Errorf("jira: parse %s: %w", key, err)
 	}
-	return Issue{
+	return issueFromACLI(key, parsed), nil
+}
+
+// issueFromACLI maps one parsed `acli jira workitem view` payload onto an
+// Issue — pure, so the parent/subtasks mapping is testable without a CLI.
+func issueFromACLI(key string, parsed acliIssue) Issue {
+	issue := Issue{
 		Key:         key,
 		Title:       parsed.Fields.Summary,
 		Description: adfText(parsed.Fields.Description),
 		URL:         baseURL + key,
-	}, nil
+	}
+	if p := parsed.Fields.Parent; p != nil {
+		ref := issueRef(*p)
+		issue.ParentKey, issue.ParentTitle = ref.Key, ref.Title
+	}
+	for _, st := range parsed.Fields.Subtasks {
+		if ref := issueRef(st); ref.Key != "" {
+			issue.Subtasks = append(issue.Subtasks, ref)
+		}
+	}
+	return issue
 }
 
 // adfText extracts the plain text of an ADF document (or node) by recursively

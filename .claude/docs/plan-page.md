@@ -39,7 +39,9 @@ rebuilt rather than imported.
    `GET /api/workflows?plan=KEY` (a `plan wordt opgesteld…` chip while one is
    running). Explicitly not every running run repo-wide — only what belongs to
    this plan.
-2. **The questions** (`plan-questions-column`, `w-[31rem]`) — one card per
+2. **The questions** (`plan-questions-column`, `w-[31rem]`) — or, while the
+   scope question stands, ONLY that question (see "Subtask and main task"
+   below) — one card per
    question, every option a row with a `●`/`○` glyph plus the word "gekozen"
    (never colour alone, per the colourblind rule) **and its own free-text
    field**. Underneath, in the same scrolling column, **"Wat er moet
@@ -63,6 +65,52 @@ rebuilt rather than imported.
    that per block explicitly; it used to show `"note"` only on a top-level
    block and an empty `"children":[]`, and the model then left every nested
    block's note empty (measured across all stored documents).
+
+## Subtask and main task
+
+Reviewer request, verbatim: *"als het een subtaak betreft, kijk dan ook naar de
+hoofdtaak. als het een hoofdtaak is, en er zijn subtaken, vraag dan of je de
+hoofdtaak wil oppakken of de subtaak voordat je de rest laat zien"*.
+
+`modules/jira`'s `Issue` now also reads the two link fields around an issue —
+`ParentKey`/`ParentTitle` and `Subtasks []IssueRef` (`--fields
+summary,description,parent,subtasks`; `parent` is absent entirely for an
+ordinary issue, `subtasks` is `[]`). `Search` is untouched: it never asks for
+them. Both sides land on the document (`parentKey`/`parentTitle`/
+`parentDescription`/`subtasks`).
+
+- **A subtask is planned WITH its main task in view.** `planLoadIssue` does one
+  extra `Issue(parentKey)` for the parent's own description (the `parent` field
+  carries only a summary) — best-effort, a failure there costs the context, not
+  the tracker. `planPrompt` then opens with a `HOOFDTAAK <key>: <title>` section
+  plus that description (capped at 3000 bytes), and the rule that the plan
+  covers **only** the subtask. The first column shows the same relation as a
+  link (`data-testid=plan-parent-link` → `/plan/<PARENTKEY>`) with the parent's
+  description underneath (`plan-parent-description`).
+- **A main task WITH subtasks is asked what is being planned, before anything
+  else is shown.** The tracker saves the document with `needsScope:true` and
+  parks on the **`plan_scope`** Signal (`{choice:"parent"}`) *before*
+  `planGenerate`. The gate sits in the WORKFLOW rather than only in the page on
+  purpose: `planGenerate` is a minutes-long Claude call, and it must not be paid
+  for a main task the reviewer immediately trades for a subtask.
+- **Column 2 then shows only the scope card** (`data-testid=plan-scope`, one
+  `plan-scope-option` row per choice): "De hoofdtaak zelf" plus every subtask
+  (key — title, its Jira status in words). `navRows()` returns exactly those
+  rows while `needsScope()` holds, so the questions, the task list and the
+  execute action are not built at all — literally "voordat je de rest laat
+  zien" — and `↑`/`↓`/`Enter` walk them like any other row.
+- **Picking a subtask sends no Signal at all**: it is plain navigation to
+  `/plan/<SUBKEY>`, which has its own tracker. Only "the main task" is
+  signalled, which releases this tracker into its first generation.
+- **The choice is definitive per plan** (an explicit reviewer decision): it is
+  one Signal in the workflow's history, and there is no way back to the
+  question. The subtask always still has its own page.
+- `GET /api/plan` reports `generating:false` while `needsScope` — the tracker IS
+  running, but it is waiting for the reviewer, and "plan wordt opgesteld…" would
+  be a lie that never resolves. The page keeps its own `state.scopePending` for
+  the gap right after the answer (the generation runs inline in that very
+  request, so the stored document still reads as unanswered), the same
+  local-pick-wins overlay `answerFor` uses for an answer.
 
 ## Keyboard
 
@@ -205,6 +253,7 @@ and the block nesting is arbitrarily deep. `Save` is called only from the
 | `POST /api/workflows/plan` | `{key}` → `{runId}`; starts or idempotently reuses the tracker. |
 | `POST /api/workflows/plan_execute` | `{key}` → `{runId}`; the index's last action — implement the plan on a fresh branch and open a draft PR. 409 while one is already running. |
 | `POST /api/workflows/{runID}/signals/plan_answer` | `{questionId, optionId, text}` — one answer. |
+| `POST /api/workflows/{runID}/signals/plan_scope` | `{choice:"parent"}` — plan the main task itself; anything else is rejected (a subtask choice is plain navigation, not a Signal). |
 | `GET /api/workflows?plan=KEY` | the ticket's own runs (the same read as `?pr=N`, filtered on the input's `key` instead — so a later per-ticket workflow lands in the "Taken" card for free). |
 
 ## Accepted gaps (deliberate, don't "fix" by accident)
@@ -221,6 +270,12 @@ and the block nesting is arbitrarily deep. `Save` is called only from the
   sweep is PR-scoped). It is rebuilt from scratch on the next attempt, so it
   costs one stale directory per ticket, never a wrong state.
 - **No Jira update.** Executing the plan does not transition the ticket.
+- **A main task whose reviewer picked a SUBTASK keeps a tracker parked on the
+  scope question**, forever, until someone opens that main task's plan page
+  again and answers it. It costs one waiting Execution per ticket and no Claude
+  call, which is exactly the point of the gate.
+- **The scope choice cannot be taken back** (see above). Reversing it would have
+  to invalidate a plan that was already generated from it.
 - **Whether the model nests its blocks is up to the model.** The prompt asks for
   it explicitly and the UI supports any depth, but a small ticket legitimately
   comes back one level deep.
@@ -235,11 +290,15 @@ and the block nesting is arbitrarily deep. `Save` is called only from the
 
 Tests: `plan_workflow_test.go` (id numbering + caps, junk rejected, the
 per-question answer fold, the regenerate prompt carrying the fixed choices, a
-nested block's note surviving the trim at every level),
+nested block's note surviving the trim at every level, the parent/subtask
+context in the prompt),
+`modules/jira/jira_test.go` (the `parent`/`subtasks` payload shape),
 `plan_execute_test.go` (the branch name stays git-safe and bounded, the
 execute prompt carries the fixed choices and every task's nested example code
 capped per block, the PR URL parsed off `gh`'s stdout) and
 `modules/plan/plan_test.go` (the document round trip). Verified in the running
 app; screenshots in `data/review-shots/plan-page.png` (a chosen option with two
-block columns open) and `plan-page-tasks.png` (the task list with its own
-nested block column).
+block columns open) `plan-page-tasks.png` (the task list with its own
+nested block column), `plan-scope-question.png` (a main task asking which of its
+six subtasks — or itself — is being planned) and `plan-subtask-parent.png` (a
+subtask's plan, with the main task linked in the first column).

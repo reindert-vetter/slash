@@ -434,7 +434,9 @@ notification has no PR at all.
 
 One long-lived Execution per ticket (Run ID `plan-<KEY>`, so a repeated start is
 an idempotent reuse) behind the `/plan/<JIRA-KEY>` page: it reads the ticket,
-asks Claude for the clarifying questions + the task list, stores the whole
+parks on the **`plan_scope`** Signal when that ticket has subtasks (plan the
+main task, or one of its subtasks?), asks Claude for the clarifying questions +
+the task list, stores the whole
 document in `modules/plan`, and then waits on the `plan_answer` Signal to fold
 in a reviewer's choice and regenerate the tasks. Documented in full — the
 document shape, the prompt, the save-before-regenerate ordering and the page

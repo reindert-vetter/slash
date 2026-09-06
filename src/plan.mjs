@@ -78,6 +78,12 @@ const state = reactive({
   confirmExec: false,
   // The start request is in flight (a word, never a spinner colour).
   startingExec: false,
+  // The scope question ("hoofdtaak of subtaak?") was just answered with "the
+  // main task", but the signal — which runs the first generation inline — has
+  // not come back yet. Local, so the question disappears the moment it is
+  // answered instead of on the next poll (the stored document still says
+  // needsScope until that generation lands).
+  scopePending: false,
 })
 
 bindUrlState(state, [
@@ -120,6 +126,7 @@ async function loadPlan() {
     state.exec = body.exec || null
     state.error = ''
     state.loading = false
+    if (!state.doc.needsScope) state.scopePending = false
     dropSettledPending()
     clampCursor()
   } catch (err) {
@@ -183,6 +190,48 @@ async function sendAnswer(question, option, text) {
   state.saving = ''
 }
 
+// needsScope is true while the tracker is parked on ITS first question: this
+// ticket has subtasks, so what is being planned — the main task, or one of the
+// subtasks? Nothing else of the index is shown until that is answered.
+function needsScope() {
+  return !state.scopePending && !!state.doc.needsScope && (state.doc.subtasks || []).length > 0
+}
+
+// busyGenerating covers both "the tracker says it is generating" and the gap
+// right after the scope answer, where the generation runs inline in that very
+// request and the stored document still reads as unanswered.
+function busyGenerating() {
+  return state.generating || state.scopePending
+}
+
+// chooseScope answers the scope question. A SUBTASK is not signalled at all —
+// it simply has its own /plan page with its own tracker, and this one stays
+// parked (see .claude/docs/plan-page.md). Only "the main task" is signalled,
+// which releases this tracker into its first generation.
+async function chooseScope(row) {
+  if (row.target === 'subtask') {
+    location.href = '/plan/' + encodeURIComponent(row.subtask.key)
+    return
+  }
+  if (state.saving) return
+  if (!state.runId) await ensureTracker()
+  if (!state.runId) return
+  state.saving = row.id
+  state.scopePending = true
+  lastPayload = ''
+  try {
+    await fetch('/api/workflows/' + encodeURIComponent(state.runId) + '/signals/plan_scope', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ choice: 'parent' }),
+    })
+    await loadPlan()
+  } catch (err) {
+    // Nothing to undo: the next poll shows what the tracker really recorded.
+  }
+  state.saving = ''
+}
+
 // triggerExecute is the index's LAST action: implement the plan on a fresh
 // branch and open a DRAFT pull request (plan_execute.go). It pushes and opens
 // a PR, so the first press only ARMS it — the second one really starts it. The
@@ -224,8 +273,20 @@ function execRunning() {
 // an option ("q1o2") or a task ("t3"), so ?cur= restores it like any other.
 const EXEC_ROW_ID = 'exec'
 
+// SCOPE_PARENT_ID is the stable id of the "plan the main task itself" row —
+// the same id space as an option ("q1o2") or a task ("t3"), so ?cur= restores
+// it like any other row.
+const SCOPE_PARENT_ID = 'scope:parent'
+
 function navRows() {
   const out = []
+  // The scope question REPLACES the whole index while it stands: the reviewer
+  // is asked what is being planned before anything else is shown.
+  if (needsScope()) {
+    out.push({ id: SCOPE_PARENT_ID, kind: 'scope', target: 'parent' })
+    ;(state.doc.subtasks || []).forEach((st) => out.push({ id: 'scope:' + st.key, kind: 'scope', target: 'subtask', subtask: st }))
+    return out
+  }
   ;(state.doc.questions || []).forEach((q, qi) => {
     ;(q.options || []).forEach((o, oi) => out.push({ id: o.id, kind: 'option', q, o, qi, oi }))
   })
@@ -405,6 +466,9 @@ function onKeydown(e) {
       if (state.col === 1 && row && row.kind === 'option') {
         e.preventDefault()
         sendAnswer(row.q, row.o, answerTextFor(row.q.id))
+      } else if (state.col === 1 && row && row.kind === 'scope') {
+        e.preventDefault()
+        chooseScope(row)
       } else if (state.col === 1 && row && row.kind === 'action') {
         e.preventDefault()
         triggerExecute()
@@ -555,6 +619,17 @@ function ticketCard() {
               : html`<span class="shrink-0 font-mono text-[11px] text-slate-400 dark:text-zinc-500">${state.key}</span>`}
         </div>
       </div>
+      <div class="contents">
+        ${() =>
+          state.doc.parentKey
+            ? html`<a
+                href="${'/plan/' + encodeURIComponent(state.doc.parentKey)}"
+                class="mt-2 flex shrink-0 items-center gap-1.5 rounded-lg bg-slate-50 px-2 py-1 text-[11.5px] text-slate-600 ring-1 ring-slate-200 hover:bg-slate-100 dark:bg-zinc-800 dark:text-zinc-300 dark:ring-zinc-700"
+                data-testid="plan-parent-link"
+                >${'↑ ' + t('Hoofdtaak') + ' ' + state.doc.parentKey + (state.doc.parentTitle ? ' — ' + state.doc.parentTitle : '')}</a
+              >`
+            : ''}
+      </div>
       <div class="mt-3 flex shrink-0 items-center justify-between">
         <span class="${LABEL}">${t('Weergave')}</span>
         <div class="flex items-center gap-1.5">
@@ -579,6 +654,18 @@ function ticketCard() {
             : html`<p class="text-[13px] italic text-slate-400 dark:text-zinc-500">
                 ${() => (state.loading ? t('laden…') : t('geen omschrijving'))}
               </p>`}
+        <div class="contents">
+          ${() =>
+            state.doc.parentDescription
+              ? html`<div class="mt-3 border-t border-slate-100 pt-2 dark:border-zinc-800" data-testid="plan-parent-description">
+                  <div class="${LABEL + ' mb-1'}">${t('Omschrijving hoofdtaak')}</div>
+                  <div
+                    class="markdown-body text-[12.5px] leading-relaxed text-slate-500 dark:text-zinc-400"
+                    .innerHTML="${() => renderMarkdown(state.doc.parentDescription)}"
+                  ></div>
+                </div>`
+              : ''}
+        </div>
       </div>
       <div class="contents">
         ${() =>
@@ -620,7 +707,7 @@ function tasksCard() {
         <span class="${LABEL}">${t('Taken')}</span>
         <div class="contents">
           ${() =>
-            state.generating
+            busyGenerating()
               ? html`<span
                   class="rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-semibold text-sky-700 ring-1 ring-inset ring-sky-200 dark:bg-sky-500/15 dark:text-sky-300 dark:ring-sky-500/30"
                   data-testid="plan-generating"
@@ -715,6 +802,85 @@ function optionRow(row) {
       </div>
     </div>
   `.key('opt:' + o.id)
+}
+
+// scopeRow is one choice of the scope question: the main task itself, or one
+// of its subtasks. Same shape as optionRow (glyph + word, never a colour on its
+// own), but it answers a question that comes BEFORE the plan exists.
+function scopeRow(row) {
+  const isParent = row.target === 'parent'
+  const key = isParent ? state.doc.key || state.key : row.subtask.key
+  const title = isParent ? state.doc.title || '' : row.subtask.title || ''
+  const status = isParent ? '' : row.subtask.status || ''
+  return html`
+    <div
+      class="${() =>
+        'cursor-pointer rounded-lg border px-2.5 py-2 ' +
+        (state.cur === row.id
+          ? 'border-indigo-300 ring-2 ring-inset ring-indigo-400 dark:border-indigo-500 dark:ring-indigo-500 ' +
+            (state.col === 1 ? 'bg-indigo-50/50 dark:bg-indigo-500/10' : '')
+          : 'border-slate-200 dark:border-zinc-800')}"
+      data-testid="plan-scope-option"
+      data-scope-target="${isParent ? 'parent' : 'subtask'}"
+      data-scope-key="${key}"
+      data-cursor="${() => (state.cur === row.id ? 'true' : 'false')}"
+      @click="${() => {
+        state.cur = row.id
+        state.col = 1
+        chooseScope(row)
+      }}"
+    >
+      <div class="flex items-start gap-2">
+        <span class="shrink-0 font-mono text-[12px] text-slate-500 dark:text-zinc-400">${isParent ? '◆' : '↳'}</span>
+        <div class="min-w-0 flex-1">
+          <div class="text-[13px] font-medium leading-snug text-slate-900 dark:text-zinc-100">
+            ${isParent ? t('De hoofdtaak zelf') : key + (title ? ' — ' + title : '')}
+          </div>
+          <div class="contents">
+            ${() =>
+              isParent
+                ? html`<p class="mt-0.5 text-[12px] leading-relaxed text-slate-500 dark:text-zinc-400">
+                    ${key + (title ? ' — ' + title : '')}
+                  </p>`
+                : ''}
+          </div>
+        </div>
+        <div class="contents">
+          ${() =>
+            status
+              ? html`<span class="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600 dark:bg-zinc-800 dark:text-zinc-300"
+                  >${status}</span
+                >`
+              : ''}
+        </div>
+      </div>
+      <div class="contents">
+        ${() => (state.saving === row.id ? html`<p class="mt-1 text-[10.5px] text-slate-400 dark:text-zinc-500">${t('opslaan…')}</p>` : '')}
+      </div>
+    </div>
+  `.key('scope:' + row.id)
+}
+
+// scopeCard is the whole question — the only thing column 2 shows while it
+// stands, so the rest of the index (questions, tasks, the execute action) is
+// not even built yet.
+function scopeCard() {
+  return html`
+    <section class="${CARD + CARD_IDLE}" data-testid="plan-scope">
+      <div class="mb-2 flex items-start gap-2">
+        <span class="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10.5px] font-semibold text-slate-600 dark:bg-zinc-800 dark:text-zinc-300"
+          >${t('Eerst dit')}</span
+        >
+        <h2 class="min-w-0 flex-1 text-[13.5px] font-semibold leading-snug text-slate-900 dark:text-zinc-100">
+          ${t('Dit ticket heeft subtaken. Waar gaat dit plan over?')}
+        </h2>
+      </div>
+      <p class="mb-2 text-[12px] leading-relaxed text-slate-500 dark:text-zinc-400">
+        ${t('Een subtaak opent zijn eigen planpagina. De keuze voor de hoofdtaak is definitief voor dit plan.')}
+      </p>
+      <div class="flex flex-col gap-1.5">${() => navRows().map((r) => scopeRow(r))}</div>
+    </section>
+  `.key('scope-card')
 }
 
 function questionCard(q, qi) {
@@ -876,25 +1042,8 @@ function executeCard(row) {
   `.key('exec:' + (row ? row.id : EXEC_ROW_ID))
 }
 
-function questionsColumn() {
+function tasksSection() {
   return html`
-    <div
-      class="flex w-[31rem] shrink-0 flex-col"
-      data-testid="plan-questions-column"
-      data-column-focused="${() => (state.col === 1 ? 'true' : 'false')}"
-      @click="${() => (state.col = 1)}"
-    >
-      ${columnHeader(t('Vragen over het plan'), () => state.col === 1)}
-      <div class="min-h-0 flex-1 overflow-y-auto pr-1">
-        ${() => (state.doc.questions || []).map((q, qi) => questionCard(q, qi))}
-        ${() =>
-          !state.loading && !(state.doc.questions || []).length
-            ? [
-                html`<p class="mb-3 rounded-2xl border border-dashed border-slate-300 p-4 text-[12.5px] italic text-slate-400 dark:border-zinc-700 dark:text-zinc-500">
-                  ${state.generating ? t('Claude stelt de vragen op…') : t('geen vragen')}
-                </p>`.key('no-questions'),
-              ]
-            : []}
         <section class="${CARD + CARD_IDLE}" data-testid="plan-tasks">
           <div class="mb-2 flex items-center gap-2">
             <span class="${LABEL}">${t('Wat er moet gebeuren')}</span>
@@ -909,7 +1058,7 @@ function questionsColumn() {
                     .filter((r) => r.kind === 'task')
                     .map((r) => taskRow(r))
                 : [html`<p class="text-[12.5px] italic text-slate-400 dark:text-zinc-500">
-                    ${state.generating ? t('de takenlijst wordt opgesteld…') : t('nog geen taken')}
+                    ${busyGenerating() ? t('de takenlijst wordt opgesteld…') : t('nog geen taken')}
                   </p>`.key('no-tasks')]}
           </div>
           <div class="contents">
@@ -919,6 +1068,30 @@ function questionsColumn() {
             }}
           </div>
         </section>
+  `.key('tasks')
+}
+
+function questionsColumn() {
+  return html`
+    <div
+      class="flex w-[31rem] shrink-0 flex-col"
+      data-testid="plan-questions-column"
+      data-column-focused="${() => (state.col === 1 ? 'true' : 'false')}"
+      @click="${() => (state.col = 1)}"
+    >
+      ${columnHeader(t('Vragen over het plan'), () => state.col === 1)}
+      <div class="min-h-0 flex-1 overflow-y-auto pr-1">
+        ${() => (needsScope() ? [] : (state.doc.questions || []).map((q, qi) => questionCard(q, qi)))}
+        ${() =>
+          !needsScope() && !state.loading && !(state.doc.questions || []).length
+            ? [
+                html`<p class="mb-3 rounded-2xl border border-dashed border-slate-300 p-4 text-[12.5px] italic text-slate-400 dark:border-zinc-700 dark:text-zinc-500">
+                  ${busyGenerating() ? t('Claude stelt de vragen op…') : t('geen vragen')}
+                </p>`.key('no-questions'),
+              ]
+            : []}
+        <div class="contents">${() => (needsScope() ? [scopeCard()] : [])}</div>
+        <div class="contents">${() => (needsScope() ? [] : [tasksSection()])}</div>
       </div>
     </div>
   `

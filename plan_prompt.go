@@ -24,14 +24,34 @@ func planPrompt(doc planDoc, mode string) string {
 	var b strings.Builder
 	b.WriteString("Je helpt een ontwikkelaar een Jira-ticket om te zetten in een scherp uitvoerplan.\n\n")
 	fmt.Fprintf(&b, "TICKET %s: %s\n\n", doc.Key, doc.Title)
-	desc := strings.TrimSpace(doc.Description)
-	if len(desc) > 6000 {
-		desc = desc[:6000] + "\n…(afgekapt)"
-	}
+	desc := planTrim(doc.Description, 6000)
 	if desc == "" {
 		desc = "(geen omschrijving in Jira)"
 	}
 	b.WriteString("OMSCHRIJVING:\n" + desc + "\n\n")
+
+	// Context from the other side of the parent/subtask relation. A subtask is
+	// planned WITH its main task in view (but the plan covers only the
+	// subtask); a main task is planned knowing which parts already hang under
+	// it as their own tickets, so those are named rather than planned twice.
+	if doc.ParentKey != "" {
+		fmt.Fprintf(&b, "HOOFDTAAK %s: %s\n", doc.ParentKey, doc.ParentTitle)
+		if pd := planTrim(doc.ParentDescription, 3000); pd != "" {
+			b.WriteString(pd + "\n")
+		}
+		b.WriteString("Dit ticket is een SUBTAAK van die hoofdtaak. Gebruik de hoofdtaak als context (waar past dit in), maar maak het plan UITSLUITEND voor de subtaak hierboven — plan niets wat bij de hoofdtaak of een andere subtaak hoort.\n\n")
+	}
+	if len(doc.Subtasks) > 0 {
+		b.WriteString("SUBTAKEN VAN DIT TICKET (elk een eigen ticket, apart opgepakt):\n")
+		for _, st := range doc.Subtasks {
+			fmt.Fprintf(&b, "- %s: %s", st.Key, st.Title)
+			if st.Status != "" {
+				fmt.Fprintf(&b, " (%s)", st.Status)
+			}
+			b.WriteString("\n")
+		}
+		b.WriteString("Het plan gaat over de hoofdtaak. Noem waar nodig hoe die subtaken erin passen, maar werk hun werk niet opnieuw uit.\n\n")
+	}
 
 	if len(doc.Answers) > 0 {
 		b.WriteString("AL BEANTWOORDE VRAGEN (gebruik deze keuzes als vaststaand):\n")
@@ -63,6 +83,15 @@ func planPrompt(doc planDoc, mode string) string {
 	b.WriteString("- \"code\" is echte, compileerbare voorbeeldcode, hooguit ~25 regels per blok. \"lang\" is php, typescript, javascript, sql, json, bash of yaml.\n")
 	b.WriteString("- Prozateksten in het Nederlands, code en identifiers in het Engels.\n")
 	return b.String()
+}
+
+// planTrim trims s and caps it at max bytes, marking that it was cut.
+func planTrim(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if len(s) > max {
+		s = s[:max] + "\n…(afgekapt)"
+	}
+	return s
 }
 
 // planLookupAnswer turns a stored answer back into readable text for the

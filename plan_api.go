@@ -50,6 +50,12 @@ func (s *server) handlePlan(w http.ResponseWriter, r *http.Request) {
 			generating = true
 		}
 	}
+	// A tracker parked on the scope question IS running, but it is waiting for
+	// the reviewer, not working — saying "plan wordt opgesteld…" there would be
+	// a lie the page cannot recover from (it never resolves on its own).
+	if doc.NeedsScope {
+		generating = false
+	}
 	if !ok {
 		doc = planDoc{Key: key, Questions: []planQuestion{}, Tasks: []planTask{}, Answers: []planAnswer{}}
 	}

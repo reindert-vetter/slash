@@ -117,3 +117,38 @@ func TestNormalizePlanBlocksKeepsNestedNotes(t *testing.T) {
 		t.Fatalf("grandchild note = %+v", kid[0].Children)
 	}
 }
+
+// TestPlanPromptCarriesParentAndSubtaskContext — a subtask is planned WITH its
+// main task in view but only for itself, and a main task knows which parts are
+// already separate tickets. Both sides of that relation must reach the model.
+func TestPlanPromptCarriesParentAndSubtaskContext(t *testing.T) {
+	sub := planPrompt(planDoc{
+		Key: "INTL-145", Title: "Payment link vertalingen",
+		ParentKey: "INTL-139", ParentTitle: "Spaans toevoegen",
+		ParentDescription: "Alle klantpagina's ook in het Spaans.",
+	}, "all")
+	for _, want := range []string{"HOOFDTAAK INTL-139: Spaans toevoegen", "Alle klantpagina's ook in het Spaans.", "SUBTAAK"} {
+		if !strings.Contains(sub, want) {
+			t.Fatalf("subtask prompt misses %q:\n%s", want, sub)
+		}
+	}
+	if strings.Contains(sub, "SUBTAKEN VAN DIT TICKET") {
+		t.Fatalf("subtask prompt should not list children:\n%s", sub)
+	}
+
+	parent := planPrompt(planDoc{
+		Key: "INTL-139", Title: "Spaans toevoegen",
+		Subtasks: []planSubtask{
+			{Key: "INTL-140", Title: "ES toevoegen aan locales", Status: "In Progress"},
+			{Key: "INTL-145", Title: "Payment link vertalingen"},
+		},
+	}, "all")
+	for _, want := range []string{"SUBTAKEN VAN DIT TICKET", "INTL-140: ES toevoegen aan locales (In Progress)", "INTL-145: Payment link vertalingen"} {
+		if !strings.Contains(parent, want) {
+			t.Fatalf("parent prompt misses %q:\n%s", want, parent)
+		}
+	}
+	if strings.Contains(parent, "HOOFDTAAK") {
+		t.Fatalf("parent prompt should carry no parent context:\n%s", parent)
+	}
+}

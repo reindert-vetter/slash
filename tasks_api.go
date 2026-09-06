@@ -1355,6 +1355,27 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]string{"status": "answered"})
 			return
 		}
+		// The plan_scope signal answers the question a ticket WITH subtasks is
+		// asked before the plan is generated at all: plan the main task, or one
+		// of its subtasks? Only "parent" is ever sent — a subtask choice is
+		// plain navigation to that subtask's own /plan page.
+		if parts[2] == SignalPlanScope {
+			var body PlanScopeSignal
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "invalid plan scope", http.StatusBadRequest)
+				return
+			}
+			if body.Choice != "parent" {
+				http.Error(w, "invalid plan scope", http.StatusBadRequest)
+				return
+			}
+			if err := s.tasks.engine.SignalWorkflow(runID, SignalPlanScope, body); err != nil {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"status": "scoped"})
+			return
+		}
 		// The jira_notify signal carries the reviewer's own action on the Jira
 		// notification feed: "read" marks one notification read (an open, or
 		// an explicit per-row tick), "read_all" marks every unread row read in

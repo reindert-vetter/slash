@@ -2,6 +2,8 @@ package jira
 
 import (
 	"context"
+	"encoding/json"
+	"reflect"
 	"testing"
 )
 
@@ -30,7 +32,7 @@ func TestFakeRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if empty != (Issue{}) {
+	if !reflect.DeepEqual(empty, Issue{}) {
 		t.Fatalf("empty = %+v, want zero value", empty)
 	}
 }
@@ -81,5 +83,48 @@ func TestModuleRejectsInvalidKey(t *testing.T) {
 	m := New()
 	if _, err := m.Issue(context.Background(), "not a key; rm -rf /"); err == nil {
 		t.Fatal("want error for invalid key")
+	}
+}
+
+// TestIssueParsesParentAndSubtasks pins down the two link fields the plan
+// page's scope question depends on, against the real `acli jira workitem view`
+// shape (a nested `fields` envelope per link, `parent` absent entirely for an
+// ordinary issue).
+func TestIssueParsesParentAndSubtasks(t *testing.T) {
+	subtask := []byte(`{"key":"INTL-145","fields":{"summary":"Payment link vertalingen",
+		"parent":{"key":"INTL-139","id":"101780","fields":{"summary":"Spaans toevoegen",
+			"status":{"name":"To Do"},"issuetype":{"name":"Story"}}},
+		"subtasks":[]}}`)
+	var parsed acliIssue
+	if err := json.Unmarshal(subtask, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	got := issueFromACLI("INTL-145", parsed)
+	if got.ParentKey != "INTL-139" || got.ParentTitle != "Spaans toevoegen" {
+		t.Fatalf("parent = %q/%q", got.ParentKey, got.ParentTitle)
+	}
+	if len(got.Subtasks) != 0 {
+		t.Fatalf("subtasks = %v, want none", got.Subtasks)
+	}
+
+	parent := []byte(`{"key":"INTL-139","fields":{"summary":"Spaans toevoegen",
+		"subtasks":[
+			{"key":"INTL-140","fields":{"summary":"ES toevoegen aan locales",
+				"status":{"name":"In Progress"},"issuetype":{"name":"Sub-task"}}},
+			{"key":"","fields":{"summary":"kapotte link"}}]}}`)
+	parsed = acliIssue{}
+	if err := json.Unmarshal(parent, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	got = issueFromACLI("INTL-139", parsed)
+	if got.ParentKey != "" {
+		t.Fatalf("parent = %q, want none", got.ParentKey)
+	}
+	if len(got.Subtasks) != 1 {
+		t.Fatalf("subtasks = %v, want the one with a key", got.Subtasks)
+	}
+	if got.Subtasks[0].Key != "INTL-140" || got.Subtasks[0].Title != "ES toevoegen aan locales" ||
+		got.Subtasks[0].Status != "In Progress" || got.Subtasks[0].Type != "Sub-task" {
+		t.Fatalf("subtask = %+v", got.Subtasks[0])
 	}
 }
