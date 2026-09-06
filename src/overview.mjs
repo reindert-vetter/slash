@@ -56,6 +56,12 @@ const state = reactive({
   // jiraBellOpen — whether the header bell's own dropdown is open, badge-dotted
   // via jiraBellDot whenever jiraUnreadCount() > 0.
   jiraBellOpen: false,
+  // jiraPlanning / jiraTodo — the reviewer's own Jira issues behind the two
+  // non-PR sections under "Needs your review", read from GET /api/jira/issues
+  // (see jira_issues.go). Plain rows, never PRs: they take no part in stacks,
+  // filters, the status backfill or the "N PRs" count.
+  jiraPlanning: [],
+  jiraTodo: [],
   sections: [], // [{ title, prs: Row[] }]
   statuses: {}, // prUid -> Status, backfilled async
   approvals: {}, // prUid -> { done, total }, backfilled async (ingested PRs only)
@@ -2354,6 +2360,94 @@ function jiraBellButton() {
   `
 }
 
+// ── Jira issue sections: Planning + Todo ─────────────────────────────
+// Reviewer request: the page should read as ONE pipeline, from work that has
+// not started yet down to a PR that is ready. "Todo" (a Jira issue still
+// queued) becomes "Planning" (an issue in the active sprint), becomes a PR in
+// "Needs your review", and ends in the draft/own-PR sections that already
+// exist. The two new sections therefore sit DIRECTLY under "Needs your
+// review", Planning first, and are deliberately NOT at the bottom of the page.
+//
+// Both are plain, read-only lists: no popover, no keyboard actions beyond the
+// shared row navigation, no writes. Clicking a row opens the issue in Jira in
+// a new window — the same shape as jiraRow (the bell feed).
+
+// loadJiraIssues pulls both lists in one read-only GET. A failure keeps
+// whatever was already shown (same reasoning as loadJiraNotifications).
+async function loadJiraIssues() {
+  try {
+    const res = await fetch('/api/jira/issues')
+    if (!res.ok) return
+    const body = await res.json()
+    if (!body || !body.ok) return
+    state.jiraPlanning = Array.isArray(body.planning) ? body.planning : []
+    state.jiraTodo = Array.isArray(body.todo) ? body.todo : []
+  } catch (err) {
+    // Keep the previous lists.
+  }
+}
+
+// jiraIssueRow — one Jira issue as an ordinary inbox row. The key + status are
+// spelled out in words next to the title, never carried by colour alone
+// (.claude/rules/conventions.md).
+function jiraIssueRow(is, kind) {
+  return html`
+    <a
+      href="${is.url}"
+      target="_blank"
+      rel="noopener noreferrer"
+      data-testid="jira-issue-row"
+      data-jira-issue="${is.key}"
+      data-nav-row
+      data-nav-key="${'jiraissue:' + kind + ':' + is.key}"
+      class="${ROW_CLASS}"
+    >
+      <span
+        class="w-20 shrink-0 truncate text-xs font-semibold text-slate-500 dark:text-zinc-400"
+        data-testid="jira-issue-key"
+        >${is.key}</span
+      >
+      <div class="min-w-0 flex-1">
+        <h3 class="truncate text-[13.5px] text-slate-900 dark:text-zinc-100 group-hover:text-black dark:group-hover:text-white">
+          ${is.title || is.key}
+        </h3>
+        <p class="mt-0.5 truncate text-xs text-slate-500 dark:text-zinc-500">
+          ${(is.type ? is.type + ' • ' : '') + (is.status || '')}
+        </p>
+      </div>
+      ${chevronFilled('h-4 w-4 shrink-0 text-slate-400 dark:text-zinc-600 group-hover:text-slate-600 dark:group-hover:text-zinc-300')}
+    </a>
+  `.key('jiraissue:' + kind + ':' + is.key)
+}
+
+// jiraIssueSection renders one titled issue list, or null when it is empty —
+// same "an empty section simply is not there" rule as sectionBlock.
+function jiraIssueSection(title, kind, list) {
+  if (!list.length) return null
+  return html`
+    <section data-testid="issue-section" data-title="${title}">
+      <div class="mb-3 mt-16 flex items-center gap-2 first:mt-6">
+        <h2 class="text-[15px] font-semibold text-slate-900 dark:text-zinc-100">${title}</h2>
+        <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500 dark:bg-zinc-800/80 dark:text-zinc-400"
+          >${list.length}</span
+        >
+      </div>
+      <div class="rounded-xl border border-slate-200 bg-slate-50 dark:border-zinc-800 dark:bg-zinc-900/60">
+        ${list.map((is) => jiraIssueRow(is, kind))}
+      </div>
+    </section>
+  `.key('issue-section:' + kind + ':' + list.map((is) => is.key).join(','))
+}
+
+// jiraIssueBlocks — the two sections in pipeline order, empty ones dropped.
+// Titles stay untranslated, like every section heading on this page (they come
+// from GitHub's own dashboard wording, which this app does not translate).
+function jiraIssueBlocks() {
+  return [jiraIssueSection('Planning', 'planning', state.jiraPlanning), jiraIssueSection('Todo', 'todo', state.jiraTodo)].filter(
+    Boolean,
+  )
+}
+
 function mainContent() {
   return html`
     <div>
@@ -2389,12 +2483,23 @@ function mainContent() {
         }
         // Stacks render as their own group, above every section.
         chains.forEach((chain) => out.push(stackGroup(chain, sectionOf)))
+        // Where the two Jira issue sections go: directly after "Needs your
+        // review", so the page reads as one pipeline (see jiraIssueBlocks).
+        // If that section has no rows at all it is not rendered, and they fall
+        // back to the end of the list rather than disappearing with it.
+        let issuesAt = -1
         state.sections.forEach((sec) => {
           const filtered = sec.prs.filter((pr) => !stacked.has(prUid(pr)))
           const block = sectionBlock(sec, filtered)
           if (block) out.push(block)
+          if (block && sec.title === 'Needs your review') issuesAt = out.length
         })
-        if (!chains.length && state.sections.every((s) => s.prs.length === 0)) {
+        const issueBlocks = jiraIssueBlocks()
+        if (issueBlocks.length) {
+          if (issuesAt >= 0) out.splice(issuesAt, 0, ...issueBlocks)
+          else out.push(...issueBlocks)
+        }
+        if (!chains.length && !issueBlocks.length && state.sections.every((s) => s.prs.length === 0)) {
           out.push(
             html`<p class="py-10 text-center text-sm text-slate-500 dark:text-zinc-500">${t('Even geen open pull requests.')}</p>`.key('empty'),
           )
@@ -3812,6 +3917,7 @@ function startLiveSync() {
       loadProblems()
       loadRunningCount()
       loadJiraNotifications()
+      loadJiraIssues()
     }
   }, RELOAD_MS)
   document.addEventListener('visibilitychange', sendHeartbeat)
@@ -3826,6 +3932,7 @@ loadInbox()
 loadProblems()
 loadRunningCount()
 loadJiraNotifications()
+loadJiraIssues()
 ensureAutoIngestPref()
 ensureAutoWarn()
 scheduleRepaint()

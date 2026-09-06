@@ -12,7 +12,13 @@ type Fake struct {
 	mu     sync.Mutex
 	issues map[string]Issue
 	notifs []Notification
-	Calls  []string // keys requested, in order
+	// search is what Search returns per JQL string; an unprogrammed query
+	// returns nothing, so an offline run simply has no issues rather than an
+	// error (same best-effort shape as issues/notifs above).
+	search map[string][]Issue
+	// SearchCalls records every JQL Search was asked for, in order.
+	SearchCalls []string
+	Calls       []string // keys requested, in order
 	// VerifyErr, if set, is what VerifyCredentials returns — lets a test
 	// exercise checkJiraToken's "credentials rejected" branch without a real
 	// HTTP call. nil (the default) means "credentials accepted".
@@ -60,4 +66,26 @@ func (f *Fake) VerifyCredentials(_ context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.VerifyErr
+}
+
+// SetSearch programs Search to return issues for exactly this JQL.
+func (f *Fake) SetSearch(jql string, issues []Issue) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.search == nil {
+		f.search = map[string][]Issue{}
+	}
+	f.search[jql] = issues
+}
+
+// Search returns the programmed issues for jql (nil if none were set).
+func (f *Fake) Search(_ context.Context, jql string, limit int) ([]Issue, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.SearchCalls = append(f.SearchCalls, jql)
+	list := f.search[jql]
+	if limit > 0 && limit < len(list) {
+		return append([]Issue(nil), list[:limit]...), nil
+	}
+	return append([]Issue(nil), list...), nil
 }

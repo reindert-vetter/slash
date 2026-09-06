@@ -40,6 +40,11 @@ type Issue struct {
 	Title       string `json:"title"`
 	Description string `json:"description"` // flattened plain text (ADF extracted)
 	URL         string `json:"url"`
+	// Status and Type are only populated by Search (the issue-list endpoints);
+	// Issue() asks for summary+description only, so they stay empty there.
+	// `omitempty` keeps every pre-existing payload/fixture byte-identical.
+	Status string `json:"status,omitempty"`
+	Type   string `json:"type,omitempty"`
 }
 
 // Client is the module's behaviour, so callers (workflows, tests) can depend on
@@ -47,6 +52,9 @@ type Issue struct {
 type Client interface {
 	// Issue fetches a single Jira issue by key (e.g. "INTEG-562").
 	Issue(ctx context.Context, key string) (Issue, error)
+	// Search runs a JQL query and returns the matching issues (see search.go).
+	// The JQL is always a caller-side CONSTANT, never reviewer input.
+	Search(ctx context.Context, jql string, limit int) ([]Issue, error)
 	// Notifications reads the reviewer's own bell feed (see notifications.go).
 	Notifications(ctx context.Context, limit int) ([]Notification, error)
 	// VerifyCredentials confirms the configured email/token are accepted by

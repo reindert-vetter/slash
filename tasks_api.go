@@ -805,6 +805,9 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// bell menu) out of the jiranotify read-model, plus the tracker's Run ID so
 	// the UI can signal a "read" to it via .../signals/jira_notify.
 	mux.HandleFunc("/api/jira/notifications", s.handleJiraNotifications)
+	// GET /api/jira/issues[?refresh=1] → the reviewer's own Jira issues behind
+	// the overview's "Planning"/"Todo" sections (jira_issues.go). Read-only.
+	mux.HandleFunc("/api/jira/issues", s.handleJiraIssues)
 	// POST /api/workflows/jira_inbox → start (or reuse) the notification
 	// tracker and return its Run ID. Starting an Execution is the sanctioned UI
 	// write path.

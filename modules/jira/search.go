@@ -1,0 +1,96 @@
+package jira
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"os/exec"
+	"strconv"
+	"strings"
+)
+
+// search.go adds the second read this module can do: a JQL search returning a
+// LIST of issues, next to jira.go's single-issue view. It feeds the two
+// issue sections of the PR overview ("Planning" and "Todo", see
+// .claude/docs/pr-overview.md) through the read-only GET /api/jira/issues.
+//
+// The JQL is always a constant owned by the caller (jira_issues.go), never
+// anything a reviewer typed — it still reaches exec.CommandContext as one
+// argv entry (never a shell string), and the limit is clamped below.
+
+// searchLimitMax bounds one search, so a runaway JQL can never turn into a
+// multi-page acli crawl inside an HTTP request.
+const searchLimitMax = 100
+
+// acliSearchIssue is the subset of `acli jira workitem search --json` this
+// module reads: a bare JSON array of issue objects, each with the same
+// `fields` envelope the single-issue view uses.
+type acliSearchIssue struct {
+	Key    string `json:"key"`
+	Fields struct {
+		Summary string `json:"summary"`
+		Status  struct {
+			Name string `json:"name"`
+		} `json:"status"`
+		IssueType struct {
+			Name string `json:"name"`
+		} `json:"issuetype"`
+	} `json:"fields"`
+}
+
+// Search runs jql via `acli jira workitem search` and returns the matching
+// issues, most recent first (the ordering is the caller's own ORDER BY).
+// Description is deliberately not requested: these rows only ever show a
+// title, and asking for it would pull a full ADF document per issue.
+func (m *Module) Search(ctx context.Context, jql string, limit int) ([]Issue, error) {
+	jql = strings.TrimSpace(jql)
+	if jql == "" {
+		return nil, fmt.Errorf("jira: empty jql")
+	}
+	if limit <= 0 || limit > searchLimitMax {
+		limit = searchLimitMax
+	}
+	ctx, cancel := context.WithTimeout(ctx, cliTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "acli", "jira", "workitem", "search",
+		"--jql", jql, "--fields", "key,summary,status,issuetype",
+		"--limit", strconv.Itoa(limit), "--json")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return nil, fmt.Errorf("acli jira workitem search: %w: %s", err, msg)
+		}
+		return nil, fmt.Errorf("acli jira workitem search: %w", err)
+	}
+	return parseSearch(out)
+}
+
+// parseSearch turns one `acli jira workitem search --json` payload into Issues.
+// An empty result set prints an empty array (or nothing at all when the CLI has
+// no match to render), which is not an error.
+func parseSearch(out []byte) ([]Issue, error) {
+	if len(bytes.TrimSpace(out)) == 0 {
+		return nil, nil
+	}
+	var parsed []acliSearchIssue
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		return nil, fmt.Errorf("jira: parse search result: %w", err)
+	}
+	issues := make([]Issue, 0, len(parsed))
+	for _, p := range parsed {
+		if p.Key == "" {
+			continue
+		}
+		issues = append(issues, Issue{
+			Key:    p.Key,
+			Title:  p.Fields.Summary,
+			Status: p.Fields.Status.Name,
+			Type:   p.Fields.IssueType.Name,
+			URL:    baseURL + p.Key,
+		})
+	}
+	return issues, nil
+}

@@ -150,6 +150,59 @@ the ONLY place this feed is shown) moved into the bell's own dropdown.
   `.claude/docs/workflows-trackers.md`. The page itself only reads
   `GET /api/jira/notifications`, exactly like every other list here.
 
+## "Planning" and "Todo": the pipeline before a PR exists
+
+Reviewer request: the page should read top to bottom as **one pipeline**, from
+work that has not started to a PR that is ready — "het moet gaan van todo,
+naar needs your review, naar draft pr achtige categorie wat al bestaat". Two
+non-PR sections were added for the two stages that have no pull request yet,
+sitting **directly under "Needs your review"** (Planning first, then Todo) —
+explicitly *not* appended at the bottom of the page.
+
+- **Planning** — everything assigned to the reviewer in the **active sprint**,
+  whatever its status ("alles wat in de actieve sprint op zijn naam staat").
+  Deliberately literal: a `Done` sprint issue is shown too, because that is
+  what was asked for. JQL: `assignee = currentUser() AND sprint in
+  openSprints() ORDER BY updated DESC`.
+- **Todo** — the queue feeding that sprint: `assignee = currentUser() AND
+  status = "To Do" AND resolution = EMPTY ORDER BY updated DESC`.
+- **An issue matching both is shown once, in Planning** (`fetchJiraIssues`) —
+  it is already being planned, so it appears in the section furthest along the
+  pipeline. Without this, every To Do issue pulled into the sprint would sit in
+  both lists at once.
+
+**Backend** (`jira_issues.go` + `modules/jira/search.go`): both JQL strings are
+**constants** — no reviewer input ever reaches `acli` — and go through the new
+`jira.Client.Search(ctx, jql, limit)` (`acli jira workitem search --jql … --fields
+key,summary,status,issuetype --limit N --json`, the module's own `cliTimeout`,
+limit clamped). The result is cached in memory for 5 minutes and shared across
+tabs, computed off `context.Background()` for the same reason as
+`handleAuthStatus`: a reviewer refreshing mid-flight must not kill the `acli`
+subprocess and poison the cache. A failing search yields **empty lists plus a
+reason**, never an HTTP error — the sections are then simply absent, and a real
+credential problem is already reported by `GET /api/auth/status`.
+
+**Deliberately not a tracker + read-model** like the Jira bell feed: nothing
+here has to survive a restart or be diffed against a previous state (there is
+no per-row read/unread to remember), so a plain cached read is the smaller
+solution. It stays inside the write boundary because a module's READ methods
+may be called from anywhere — see `.claude/rules/workflows-write-boundary.md`.
+
+**Frontend** (`src/overview.mjs`): `state.jiraPlanning`/`state.jiraTodo`, filled
+by `loadJiraIssues()` at load and on the existing 60s cadence (no timer of its
+own, like `loadJiraNotifications`). `jiraIssueRow` is an ordinary `ROW_CLASS`
+row — a plain `<a target="_blank">` to the issue in Jira, key + title + "type •
+status" in **words**, carrying `data-nav-row` so it joins the shared row
+navigation for free. `mainContent()` splices `jiraIssueBlocks()` in right after
+the "Needs your review" block, falling back to the end of the list when that
+section has no rows at all. These rows are never PRs: they take no part in
+stacks, preset filters, the status backfill or the "N PRs" count, and the
+search/preset views (`currentView`) do not show them.
+
+Tests: `modules/jira/search_test.go` (the `acli` payload shape; an empty result
+is not an error) and `jira_issues_test.go` (the dedupe rule, and
+`SLASH_JIRA=off` giving empty lists rather than an error).
+
 ## The general `/` command menu
 
 `/` used to focus the search box. It now opens a **general command menu**
@@ -839,6 +892,7 @@ default" section.
 | `GET /api/jira/notifications` | Read-only Jira bell feed from the `jiranotify` read-model → `{ok, configured, items, runId, error?}`. `configured:false` = no API token; never a live Atlassian call. |
 | `POST /api/workflows/jira_inbox` | Start/reuse the notification tracker → `{runId}`, so the UI can signal a "read" to it. |
 | `POST /api/workflows/{runID}/signals/jira_notify` | `{"kind":"read","id":…}` marks one notification read; any other kind is forwarded as a plain refresh. |
+| `GET /api/jira/issues[?refresh=1]` | Read-only → `{ok, fetchedAt, planning, todo, error?}`, the two Jira issue sections below. Two `acli` JQL searches behind a 5-minute in-memory cache (`jira_issues.go`); `?refresh=1` bypasses it. |
 | `GET /api/prs` | (existing) ingested PRs + counts, for the recent drawer. |
 
 ### "Recent gegenereerd" rows are enriched from the SAME local prmeta read, no extra request

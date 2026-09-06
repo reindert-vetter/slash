@@ -69,6 +69,10 @@ func (unreachableFeedJira) Notifications(context.Context, int) ([]jira.Notificat
 	return nil, fmt.Errorf("jira: notification feed: http 404")
 }
 
+func (unreachableFeedJira) Search(context.Context, string, int) ([]jira.Issue, error) {
+	return nil, nil
+}
+
 func (unreachableFeedJira) VerifyCredentials(context.Context) error { return nil }
 
 // TestJiraCredsViewFallsBackToDefaultSite pins the fix for the settings page's
