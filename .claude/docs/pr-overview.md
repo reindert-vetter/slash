@@ -191,9 +191,12 @@ may be called from anywhere — see `.claude/rules/workflows-write-boundary.md`.
 **Frontend** (`src/overview.mjs`): `state.jiraPlanning`/`state.jiraTodo`, filled
 by `loadJiraIssues()` at load and on the existing 60s cadence (no timer of its
 own, like `loadJiraNotifications`). `jiraIssueRow` is an ordinary `ROW_CLASS`
-row — a plain `<a target="_blank">` to the issue in Jira, key + title + "type •
-status" in **words**, carrying `data-nav-row` so it joins the shared row
-navigation for free. `mainContent()` splices `jiraIssueBlocks()` in right after
+row — a plain `<a>` to **`/plan/<KEY>`**, the ticket's own planning page
+(`.claude/docs/plan-page.md`), in the same tab, key + title + "type • status" in
+**words**, carrying `data-nav-row` so it joins the shared row navigation for
+free. It used to link straight to Jira in a new tab; that link now lives on the
+planning page itself (its ticket card's key chip), so the row has one
+destination instead of two. `mainContent()` splices `jiraIssueBlocks()` in right after
 the "Needs your review" block, falling back to the end of the list when that
 section has no rows at all. These rows are never PRs: they take no part in
 stacks, preset filters, the status backfill or the "N PRs" count, and the
@@ -892,6 +895,7 @@ default" section.
 | `GET /api/jira/notifications` | Read-only Jira bell feed from the `jiranotify` read-model → `{ok, configured, items, runId, error?}`. `configured:false` = no API token; never a live Atlassian call. |
 | `POST /api/workflows/jira_inbox` | Start/reuse the notification tracker → `{runId}`, so the UI can signal a "read" to it. |
 | `POST /api/workflows/{runID}/signals/jira_notify` | `{"kind":"read","id":…}` marks one notification read; any other kind is forwarded as a plain refresh. |
+| `GET /api/plan?key=KEY` | Read-only plan document + the ticket's runs, behind the `/plan/<KEY>` page these rows link to (`plan_api.go`, see `.claude/docs/plan-page.md`). |
 | `GET /api/jira/issues[?refresh=1]` | Read-only → `{ok, fetchedAt, planning, todo, error?}`, the two Jira issue sections below. Two `acli` JQL searches behind a 5-minute in-memory cache (`jira_issues.go`); `?refresh=1` bypasses it. |
 | `GET /api/prs` | (existing) ingested PRs + counts, for the recent drawer. |
 

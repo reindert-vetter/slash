@@ -118,6 +118,10 @@ that set stays small on purpose; a new topic file belongs in `.claude/docs/`.
 
 - `pages-and-routing.md` — the three routes and their static shells, plus the
   state that travels between the review tree and the PR overview.
+- `plan-page.md` — the `/plan/<JIRA-KEY>` planning page: the ticket + its own
+  running workflow tasks, the multiple-choice questions (each choice with its
+  own input) plus the "wat er moet gebeuren" list, the example-code blocks and
+  their arbitrarily deep drilled columns, and the `plan` tracker behind it.
 - `pr-overview.md` — the `/pr-overview` GitHub inbox in full (sections, the
   per-row popover, filters, failed tasks, its client).
 - `debug-mode.md` — the settings-page "Debug mode" switch: it records every

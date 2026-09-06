@@ -28,6 +28,7 @@ import (
 	"slash/modules/jira"
 	"slash/modules/jiranotify"
 	"slash/modules/langpref"
+	"slash/modules/plan"
 	"slash/modules/prmeta"
 	"slash/modules/relations"
 	"slash/modules/reviewerusage"
@@ -1011,10 +1012,15 @@ type TaskManager struct {
 	// post-construction like the stores above; a nil store makes those
 	// Activities no-ops and leaves GET /api/jira/notifications empty.
 	jiranotify *jiranotify.Module
-	claude     claude.Client
-	jira       jira.Client
-	db         *sql.DB
-	dataDir    string
+	// plan is the read-model behind the /plan/<JIRA-KEY> planning page, written
+	// by the `plan` tracker's Activities (see plan_workflow.go). Set
+	// post-construction like the stores above; a nil store makes those
+	// Activities no-ops and leaves GET /api/plan empty.
+	plan    *plan.Module
+	claude  claude.Client
+	jira    jira.Client
+	db      *sql.DB
+	dataDir string
 	// appDataDir is the directory settings.json/praise-words.json live in
 	// (server.dataDir in api.go — the same dir /api/settings, /api/names and
 	// /api/praisewords already read from). NOT the same as dataDir above:
@@ -3449,11 +3455,13 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 
 	// The Jira-notification tracker's two Activities (see jira_notifications.go).
 	m.registerJiraNotifyActivities(engine)
+	m.registerPlanActivities(engine)
 
 	engine.RegisterWorkflow(WorkflowTaskCodeComment, taskCodeCommentWorkflow)
 	engine.RegisterWorkflow(WorkflowPRStatus, prStatusWorkflow)
 	engine.RegisterWorkflow(WorkflowPRInbox, prInboxWorkflow)
 	engine.RegisterWorkflow(WorkflowJiraInbox, jiraInboxWorkflow)
+	engine.RegisterWorkflow(WorkflowPlan, planWorkflow)
 	engine.RegisterWorkflow(WorkflowBuildRelations, buildRelationsWorkflow)
 	engine.RegisterWorkflow(WorkflowIngest, ingestWorkflow)
 	engine.RegisterWorkflow(WorkflowResolveCall, resolveCallWorkflow)

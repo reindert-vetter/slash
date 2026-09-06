@@ -2369,8 +2369,11 @@ function jiraBellButton() {
 // review", Planning first, and are deliberately NOT at the bottom of the page.
 //
 // Both are plain, read-only lists: no popover, no keyboard actions beyond the
-// shared row navigation, no writes. Clicking a row opens the issue in Jira in
-// a new window — the same shape as jiraRow (the bell feed).
+// shared row navigation, no writes. Clicking a row opens the ticket's own
+// PLANNING PAGE, /plan/<KEY> (src/plan.mjs, see .claude/docs/plan-page.md) —
+// in the same tab, like "Open review tree" does for a PR. The link to the
+// issue in Jira itself moved onto that page (its ticket card's key chip), so
+// the row is one destination, not two.
 
 // loadJiraIssues pulls both lists in one read-only GET. A failure keeps
 // whatever was already shown (same reasoning as loadJiraNotifications).
@@ -2393,9 +2396,7 @@ async function loadJiraIssues() {
 function jiraIssueRow(is, kind) {
   return html`
     <a
-      href="${is.url}"
-      target="_blank"
-      rel="noopener noreferrer"
+      href="${'/plan/' + is.key}"
       data-testid="jira-issue-row"
       data-jira-issue="${is.key}"
       data-nav-row

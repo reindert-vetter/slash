@@ -430,6 +430,16 @@ notification has no PR at all.
   because this app never marks anything read in Jira — without it every row the
   reviewer opened would come back unread on the very next poll.
 
+## `plan` (one per Jira ticket)
+
+One long-lived Execution per ticket (Run ID `plan-<KEY>`, so a repeated start is
+an idempotent reuse) behind the `/plan/<JIRA-KEY>` page: it reads the ticket,
+asks Claude for the clarifying questions + the task list, stores the whole
+document in `modules/plan`, and then waits on the `plan_answer` Signal to fold
+in a reviewer's choice and regenerate the tasks. Documented in full — the
+document shape, the prompt, the save-before-regenerate ordering and the page
+itself — in `.claude/docs/plan-page.md`.
+
 ## Persisting reviewer approval (`approve` + `modules/approvals`)
 
 One Execution per PR, making approval durable across a refresh.

@@ -32,6 +32,12 @@ Every route is a static HTML shell with no build step; the Go server
   tree". The read-only "recently generated" drawer feeds from
   **`GET /api/prs`** (`handlePRs` → `listPRs`, block/file counts per PR from
   `PRSummary`).
+- **`/plan/<JIRA-KEY>`** — the **planning page** for a ticket that has no pull
+  request yet (`plan.html` → `src/plan.mjs`), reached by clicking a row in the
+  "Planning"/"Todo" sections of `/pr-overview`. The key comes from the **path**
+  (`/plan/PAYM-813`, a bare number is accepted too), like `/pr/<id>`; an
+  unparseable path does a `location.replace('/pr-overview')`. See
+  `.claude/docs/plan-page.md`.
 - **`/settings`** — the one general **settings page** (`settings.html` →
   `src/settings.mjs`), reached via a gear-icon entry button on both `/pr/<id>`
   and `/pr-overview`; `←` returns to wherever the reviewer came from via a

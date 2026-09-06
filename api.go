@@ -73,6 +73,10 @@ func (s *server) routes(staticDir string) *http.ServeMux {
 	// from the path (/pr/<id>) and the overview lists the PRs (/pr-overview).
 	mux.HandleFunc("/pr/", serveFile(staticDir, "index.html"))
 	mux.HandleFunc("/pr-overview", serveFile(staticDir, "overview.html"))
+	// /plan/<JIRA-KEY> is the planning page for a ticket that has no pull
+	// request yet (src/plan.mjs) — reached from the "Planning"/"Todo" rows on
+	// /pr-overview. See .claude/docs/plan-page.md.
+	mux.HandleFunc("/plan/", serveFile(staticDir, "plan.html"))
 	// /settings is the one general settings page (src/settings.mjs), reached
 	// from a gear-icon entry button next to the theme toggle on both /pr/<id>
 	// and /pr-overview — see .claude/docs/settings-page.md.

@@ -31,6 +31,7 @@ import (
 	"slash/modules/jira"
 	"slash/modules/jiranotify"
 	"slash/modules/langpref"
+	"slash/modules/plan"
 	"slash/modules/prmeta"
 	"slash/modules/relations"
 	"slash/modules/reviewerusage"
@@ -300,6 +301,28 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		wr.Close()
 		return nil, nil, err
 	}
+	pl, err := plan.Open(dataDir + "/plan.db")
+	if err != nil {
+		sq.Close()
+		cs.Close()
+		ib.Close()
+		rel.Close()
+		pm.Close()
+		cr.Close()
+		tc.Close()
+		ap.Close()
+		ex.Close()
+		ru.Close()
+		ci.Close()
+		ch.Close()
+		aw.Close()
+		wd.Close()
+		aip.Close()
+		lp.Close()
+		wr.Close()
+		jn.Close()
+		return nil, nil, err
+	}
 
 	// Under test (SLASH_GITHUB=off) use a no-network Fake so runs never touch a
 	// real repo; otherwise talk to GitHub via gh.
@@ -394,6 +417,9 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 	// Same pattern for the Jira-notification read-model: a nil store makes the
 	// jira_inbox Activities no-ops and leaves the feed list empty.
 	mgr.jiranotify = jn
+	// Same pattern for the plan read-model: a nil store makes the `plan`
+	// tracker's Activities no-ops and leaves GET /api/plan empty.
+	mgr.plan = pl
 	// Mirror every glue-level log line (poller/startup errors that are not a
 	// workflow run of their own) into the in-memory problem buffer behind
 	// GET /api/problems — see run_errors.go.
@@ -477,6 +503,7 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		_ = wd.Close()
 		_ = wr.Close()
 		_ = jn.Close()
+		_ = pl.Close()
 		return cs.Close()
 	}
 	return &tasks{engine: engine, manager: mgr, comments: cs, inbox: ib, relations: rel, prmeta: pm, callresolve: cr, testcovers: tc, approvals: ap, explain: ex, reviewerusage: ru, commentignore: ci, chat: ch}, closeFn, nil
@@ -808,6 +835,11 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// GET /api/jira/issues[?refresh=1] → the reviewer's own Jira issues behind
 	// the overview's "Planning"/"Todo" sections (jira_issues.go). Read-only.
 	mux.HandleFunc("/api/jira/issues", s.handleJiraIssues)
+	// GET /api/plan?key=KEY → read-only: the plan document behind /plan/<KEY>
+	// plus the workflow runs of that ticket. POST /api/workflows/plan {key}
+	// starts (idempotently reuses) its tracker. See plan_api.go.
+	mux.HandleFunc("/api/plan", s.handlePlan)
+	mux.HandleFunc("/api/workflows/plan", s.handlePlanStart)
 	// POST /api/workflows/jira_inbox → start (or reuse) the notification
 	// tracker and return its Run ID. Starting an Execution is the sanctioned UI
 	// write path.
@@ -1056,6 +1088,20 @@ func (s *server) handleWorkflowsList(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	// ?plan=<JIRA-KEY> scopes the list to one PLANNING ticket instead of one PR
+	// — the same read, a different input field (see RunsForPlan).
+	if key := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("plan"))); key != "" {
+		if !planKeyPattern.MatchString(key) {
+			http.Error(w, "invalid issue key", http.StatusBadRequest)
+			return
+		}
+		runs := s.tasks.manager.RunsForPlan(key)
+		if runs == nil {
+			runs = []WorkflowRunView{}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "runs": runs})
+		return
+	}
 	pr := 0
 	if v := r.URL.Query().Get("pr"); v != "" {
 		pr, _ = strconv.Atoi(v)
@@ -1192,7 +1238,7 @@ func (s *server) handleIgnoreRuns(w http.ResponseWriter, r *http.Request) {
 // /api/workflows/{runID}/signals/{signalName} (POST signal).
 func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/workflows/")
-	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "remove_reviewer" || rest == "code_warning" || rest == "ignore_comment" || rest == "cleanup" || rest == "claude_chat" || rest == "auto_warn" || rest == "lang_pref" || rest == "app_settings" || rest == "comment_batch" || rest == "test_run" || rest == "comment_titles" || rest == "retry" || rest == "retry-all" || rest == "ignore-runs" {
+	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "remove_reviewer" || rest == "code_warning" || rest == "ignore_comment" || rest == "cleanup" || rest == "claude_chat" || rest == "auto_warn" || rest == "lang_pref" || rest == "app_settings" || rest == "comment_batch" || rest == "test_run" || rest == "comment_titles" || rest == "plan" || rest == "retry" || rest == "retry-all" || rest == "ignore-runs" {
 		http.NotFound(w, r)
 		return
 	}
@@ -1287,6 +1333,22 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			writeJSON(w, http.StatusOK, map[string]string{"status": "set"})
+			return
+		}
+		// The plan_answer signal carries ONE answer of the planning page: which
+		// option of which question, plus the free text typed next to it. The
+		// tracker folds it into the document and regenerates the task list.
+		if parts[2] == SignalPlanAnswer {
+			var body PlanAnswerSignal
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.QuestionID == "" {
+				http.Error(w, "invalid plan answer", http.StatusBadRequest)
+				return
+			}
+			if err := s.tasks.engine.SignalWorkflow(runID, SignalPlanAnswer, body); err != nil {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"status": "answered"})
 			return
 		}
 		// The jira_notify signal carries the reviewer's own action on the Jira
