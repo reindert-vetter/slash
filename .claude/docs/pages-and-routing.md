@@ -231,6 +231,18 @@ open points — see "A thread ending in 'just praise' is not an open point" in
 `.claude/docs/command-palette.md`. Unlike `data/names.json` that one is
 deliberately **not** committed: it is personal, not team-wide.
 
+**Negative caching only covers a lookup that actually SUCCEEDED.** A *failed*
+`UsersByLogin` (a killed/cancelled `gh` call) leaves the cache untouched, so the
+next request retries; caching it as "these logins don't exist" turned one
+aborted call into permanently avatar-less, bare-login rows for that whole batch
+— in practice the entire team, since `ensureCollaboratorsLoaded` warms the cache
+with one batch over every collaborator. For the same reason the lookup runs on
+`context.WithoutCancel(ctx)` (its own bounded `cliTimeout` still applies)
+instead of the triggering request's context: a reviewer refreshing the inbox or
+typing on in the search box must not be able to cancel a process-wide cached
+result. Same shape as `handleAuthStatus` (`auth_status.go`). Test:
+`TestDisplayNamesDoesNotCacheAFailedLookup`.
+
 **Write boundary:** a pure read plus a **process-lifetime, in-memory** cache
 (including negative caching, so a bot/deleted login is never re-queried), so it
 is allowed outside a workflow — the same operational carve-out as `/api/me`'s

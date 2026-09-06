@@ -55,6 +55,7 @@ type Fake struct {
 	users          map[string]User // seeded by SetUser, returned by UsersByLogin
 	userLookups    int             // how often UsersByLogin was called
 	userLoginsSeen []string        // every login UsersByLogin was asked for, in order
+	usersErr       error           // set by SetUsersErr: UsersByLogin fails instead of resolving
 }
 
 func (f *Fake) PostReviewComment(_ context.Context, pr int, file string, startLine, endLine int, side, body string) (int64, error) {
@@ -460,6 +461,12 @@ func (f *Fake) UsersByLogin(_ context.Context, logins []string) (map[string]User
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.userLookups++
+	if f.usersErr != nil {
+		for _, l := range logins {
+			f.userLoginsSeen = append(f.userLoginsSeen, l)
+		}
+		return nil, f.usersErr
+	}
 	out := map[string]User{}
 	for _, l := range logins {
 		f.userLoginsSeen = append(f.userLoginsSeen, l)
@@ -468,6 +475,15 @@ func (f *Fake) UsersByLogin(_ context.Context, logins []string) (map[string]User
 		}
 	}
 	return out, nil
+}
+
+// SetUsersErr makes UsersByLogin fail with err (nil clears it) — for
+// simulating a killed/cancelled `gh` call, which must NOT be cached as
+// "these logins don't exist" (see DisplayNames in usernames.go).
+func (f *Fake) SetUsersErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.usersErr = err
 }
 
 // SetUser seeds one profile returned by UsersByLogin (keyed on u.Login).

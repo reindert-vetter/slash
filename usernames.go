@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-
-	"slash/modules/github"
 )
 
 // usernames.go resolves a GitHub login to a human name + avatar, so the UI can
@@ -137,6 +135,10 @@ func ensureCollaboratorsLoaded(ctx context.Context, tm *TaskManager) {
 	if collabLoaded {
 		return
 	}
+	// Detached from the triggering request for the same reason as DisplayNames
+	// above: this warm-up runs once per process and its result is shared, so a
+	// reviewer typing on in the search box must not be able to cancel it.
+	ctx = context.WithoutCancel(ctx)
 	collabs, err := tm.gh.ListCollaborators(ctx)
 	if err != nil {
 		return
@@ -217,17 +219,33 @@ func (m *TaskManager) DisplayNames(ctx context.Context, logins []string) map[str
 	userNameMu.Unlock()
 
 	if len(missing) > 0 && m.gh != nil {
-		found, err := m.gh.UsersByLogin(ctx, missing)
+		// Deliberately NOT the caller's own ctx: the outcome is cached for the
+		// whole process and shared by every later request, so it must not
+		// depend on the one request that happened to trigger it. A reviewer
+		// refreshing the inbox (or typing on in the search box) makes the
+		// browser drop that connection, which cancelled r.Context() and killed
+		// the `gh` subprocess mid-lookup. UsersByLogin derives its own bounded
+		// cliTimeout from this ctx, so it still cannot hang forever. Same
+		// reasoning as handleAuthStatus (auth_status.go).
+		found, err := m.gh.UsersByLogin(context.WithoutCancel(ctx), missing)
 		if err != nil {
 			m.logf("names: lookup of %d login(s) failed: %v", len(missing), err)
-			found = map[string]github.User{}
+		} else {
+			// Only a lookup that actually SUCCEEDED may write the cache — a
+			// miss inside a successful batch is a genuine "no such user" and is
+			// cached as an empty entry (negative caching), but a FAILED call
+			// says nothing about these logins. Caching it anyway turned one
+			// cancelled/killed `gh` call into permanently name- and
+			// avatar-less rows for every login in that batch, for the rest of
+			// the process lifetime; leaving them uncached simply retries on the
+			// next request.
+			userNameMu.Lock()
+			for _, login := range missing {
+				u := found[login] // zero value for a login that didn't resolve
+				userNameCache[login] = displayUser{Name: u.Name, AvatarURL: u.AvatarURL}
+			}
+			userNameMu.Unlock()
 		}
-		userNameMu.Lock()
-		for _, login := range missing {
-			u := found[login] // zero value for a login that didn't resolve
-			userNameCache[login] = displayUser{Name: u.Name, AvatarURL: u.AvatarURL}
-		}
-		userNameMu.Unlock()
 	}
 
 	out := make(map[string]displayUser, len(want))

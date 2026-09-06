@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -111,6 +112,32 @@ func TestDisplayNamesBatchesAndCaches(t *testing.T) {
 	m.DisplayNames(context.Background(), []string{"dennissloove", "ghost"})
 	if calls := gh.UserLookups(); calls != 1 {
 		t.Fatalf("UserLookups = %d after a repeat call, want still 1 (cached, misses included)", calls)
+	}
+}
+
+// TestDisplayNamesDoesNotCacheAFailedLookup pins the fix for "the PR inbox
+// suddenly shows initials circles and bare logins": a failed UsersByLogin call
+// (a cancelled request killing the `gh` subprocess) used to be cached as an
+// empty entry for every login in the batch, permanently, so the name and avatar
+// never came back until a restart. A failure must leave the cache untouched and
+// simply be retried on the next call.
+func TestDisplayNamesDoesNotCacheAFailedLookup(t *testing.T) {
+	gh := &github.Fake{}
+	gh.SetUser(github.User{Login: "dennissloove", Name: "Dennis Sloove", AvatarURL: "https://avatars.githubusercontent.com/u/2?v=4"})
+	gh.SetUsersErr(errors.New("signal: killed"))
+	m, _ := nameManager(t, gh, "")
+
+	if got := m.DisplayNames(context.Background(), []string{"dennissloove"}); got["dennissloove"].Name != "" {
+		t.Fatalf("dennissloove = %+v during the failing lookup, want an empty fallback", got["dennissloove"])
+	}
+
+	gh.SetUsersErr(nil)
+	got := m.DisplayNames(context.Background(), []string{"dennissloove"})
+	if got["dennissloove"].Name != "Dennis Sloove" || got["dennissloove"].AvatarURL == "" {
+		t.Fatalf("dennissloove = %+v after the retry, want the seeded name + avatar (the failure must not be cached)", got["dennissloove"])
+	}
+	if calls := gh.UserLookups(); calls != 2 {
+		t.Fatalf("UserLookups = %d, want 2 (the failure is retried, not cached)", calls)
 	}
 }
 
