@@ -10500,6 +10500,11 @@ function focusedColumnEl(level = state.focusLevel) {
 // view — <main> scrolls horizontally, so stepping across drilled columns (or
 // back to the original block) could otherwise land off-screen. Deferred a
 // frame so a freshly-pushed drill column exists in the DOM first.
+//
+// `behavior: 'smooth'` (reviewer request: "als ik naar rechts ga [in de
+// planpagina], dan zie ik een prachtige animatie, dat wil ik ook in de tree
+// hebben") — matches plan.mjs's own scrollFocusIntoView, which already
+// animates every column-focus change; this one used to jump instantly.
 function scrollFocusIntoView(level = state.focusLevel) {
   requestAnimationFrame(() => {
     // Stop 2b (the methodes-kolom, see .claude/docs/test-class-grouping.md) is
@@ -10522,7 +10527,7 @@ function scrollFocusIntoView(level = state.focusLevel) {
     // should land flush against <main>'s left edge too (rather than its right
     // edge) so the columns it was drilled from stay hinted-at via the
     // left-edge chevron below instead of scrolling fully out of reach.
-    if (el) el.scrollIntoView({ inline: 'start', block: 'nearest' })
+    if (el) el.scrollIntoView({ behavior: 'smooth', inline: 'start', block: 'nearest' })
   })
 }
 

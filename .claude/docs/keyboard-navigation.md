@@ -62,7 +62,12 @@ code).
 4. **Drilled columns** (`state.drill`/`focusLevel>0`) — a **side branch**, not a
    strict stop: reachable only via Enter/click on an Underlying-code child (see
    `.claude/docs/drilling.md`), never via `→`. `←` does peel them back one by
-   one like any other stop.
+   one like any other stop. Stepping across a drilled column (either
+   direction) scrolls it into view via `scrollFocusIntoView` with
+   `behavior:'smooth'` — reviewer request, matching the equivalent smooth
+   column-focus scroll `/plan/<KEY>` already had (see "The scroll-into-view
+   animation now also matches the review tree" in
+   `.claude/docs/plan-page.md`); it used to jump instantly.
 5. **Inline comment block(s)** (`cs.focus` one of `'new'`/`'comment'`/
    `'thread'`) — **conditional**: only reachable when the selected unit actually
    has a comment (`hasVisibleComments()`, see

@@ -330,6 +330,84 @@ in a block column it drills. A keydown while an input has focus is left alone
 Which column owns the keyboard is spelled out **in words** in its header
 (`◆ actief`, `data-testid=column-active`), never by a colour alone.
 
+### Never two selections visible at once
+
+Reviewer report, verbatim (with screenshot
+`data/review-shots/task18-double-selection.png`): *"ik zie hier 2 dingen
+selectie, ik wil dat maximaal 1 blok en/of inner selectie hebben"*. The row
+cursor ring (`optionRow`/`scopeRow`/`hotfixRow`/`taskRow`/`executeCard`/
+`followupCard` — six identical copies of the same `state.cur === id ? ring :
+idle` ternary) stayed visible even while column 0 (the ticket card) had
+genuinely moved the keyboard away from it: a `←` back to the ticket left both
+the ticket's own `CARD_FOCUS` border AND the previously-focused row's ring on
+screen at once. Fix: every one of the six now also requires
+`state.col !== 0` before showing the ring — the doc comment above `optionRow`
+("the cursor row keeps its ring while the keyboard is in a BLOCK column")
+still holds for `state.col >= 2`, this only closes the `state.col === 0` gap.
+`data-cursor` itself is untouched (still tracks the raw cursor identity, used
+by `scrollCurIntoView`'s selector) — only the visible ring is gated.
+
+### Choosing an option focuses its own input; Enter there jumps to the next question
+
+Reviewer request, verbatim: *"als ik een antwoord selecteer binnen een vraag,
+moet de input gelijk actief zijn zodat ik kan typen. als ik enter druk, moet
+ik gelijk naar de volgende vraag springen."* Two-step flow:
+
+1. `Enter` on an option row (`onKeydown`, `state.col===1 && kind==='option'`)
+   calls `sendAnswer` as before, then `focusOptionInput(optionId)` — a
+   `requestAnimationFrame`-deferred `querySelector` + `.focus()` + `.select()`
+   on that option's own `data-testid=plan-option-input` field, so the reviewer
+   can start typing immediately instead of needing an extra click/Tab.
+2. `Enter` inside that field still saves the typed text (`sendAnswer`) and
+   blurs, but now also calls `advanceToNextQuestion()` — `moveRow`'s sibling
+   that walks `navRows()` forward past every remaining row that still shares
+   the current option's `q.id`, landing on the next QUESTION's first option
+   (or the follow-up/task/execute row at the end of the list) instead of the
+   next option of the SAME question `moveRow(1)` would give.
+
+### Column 0 slides out of view, and the example-code column follows the cursor
+
+Reviewer request, verbatim: *"wat ik selecteer moet altijd in beeld zijn. als
+ik in de vragen index blokken ben, wil ik de eerste pr overview niet meer
+zien, het mag dan buiten beeld naar links toe. als ik dan naar links ga, wil
+ik eerste kolom weer zien"*, plus the follow-up: *"ook verticaal navigeren,
+moet de blok in beeld zijn, als ik eerste antwoord selecteer, moet ook gelijk
+het blok worden gezien als dat het geselecteerd is en volledig in beeld
+zijn."*
+
+`stepRight`/`stepLeft` already called `scrollFocusIntoView()` (the
+`behavior:'smooth'` scroll-into-view — see below) for every column transition
+EXCEPT the very first one, ticket (0) ↔ questions (1): that one used to just
+flip `state.col` with no scroll at all, so the ticket card never animated away
+and could sit on screen wasting width once the reviewer moved on, and `←`
+back to it wasn't guaranteed to bring it back into view either. Both
+directions now call `scrollFocusIntoView()` too, so every `state.col` change
+scrolls its `data-column-focused` column flush against `<main>`'s left edge —
+which is what pushes the ticket card off-screen once you leave it, and what
+brings it back on `←`.
+
+The vertical half is a separate gap: `moveRow` (↑/↓ within column 1) can
+change WHICH option/task's example code the block column shows without
+`state.col` ever leaving `1`, so `scrollFocusIntoView` (which only reacts to a
+`state.col` change) never ran for it — `scrollCurIntoView` only keeps the
+cursor row itself in view, vertically, within column 1. `moveRow` now also
+calls the new `scrollBlockPreviewIntoView()`, which brings
+`[data-testid="plan-block-column"][data-level="0"]` into view with
+`inline:'nearest'` (not `'start'`) whenever the new cursor has blocks — nearest
+so it never hides column 1 itself while the keyboard is still there, unlike
+`scrollFocusIntoView`'s deliberate `'start'` alignment for an actual
+column-focus change.
+
+### The scroll-into-view animation now also matches the review tree
+
+The `scrollFocusIntoView` above already animated (`behavior:'smooth'`) every
+column transition it was called for — this is the "prachtige animatie" a
+reviewer asked to also see in the review tree (`src/home.mjs`'s own
+`scrollFocusIntoView`, used when stepping across drilled Onderliggende-code
+columns): that one used to jump instantly (no `behavior` = `'auto'`). Fixed by
+adding the same `behavior:'smooth'` there — see
+`.claude/docs/keyboard-navigation.md`.
+
 ## URL state
 
 `bindUrlState` (the shared helper): `cur` (the cursor's stable **id** —

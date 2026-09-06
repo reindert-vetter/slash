@@ -528,6 +528,69 @@ function moveRow(delta) {
   state.path = [0]
   state.confirmExec = false
   scrollCurIntoView()
+  // Reviewer request: "als ik eerste antwoord selecteer, moet ook gelijk het
+  // blok worden gezien" — a step here can change WHICH example-code column
+  // renders (a different option/task's own blocks) without state.col moving
+  // off 1, so scrollCurIntoView's vertical-only scroll never brings it into
+  // view on its own.
+  scrollBlockPreviewIntoView()
+}
+
+// scrollBlockPreviewIntoView brings the cursor's own example-code column
+// (blockLevels()[0], data-level="0") into view WITHOUT stealing keyboard
+// focus away from column 1 — 'nearest', not 'start', so it only scrolls the
+// minimum needed and never hides column 1 itself while the reviewer is still
+// walking the questions/tasks list (see .claude/docs/plan-page.md, "Column 0
+// slides out of view, and the example-code column follows the cursor").
+function scrollBlockPreviewIntoView() {
+  if (!curBlocks().length) return
+  requestAnimationFrame(() => {
+    const el = document.querySelector('[data-testid="plan-block-column"][data-level="0"]')
+    if (el) el.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' })
+  })
+}
+
+// focusOptionInput hands DOM focus to one option's own free-text field —
+// called right after choosing that option via Enter (onKeydown) so the
+// reviewer can start typing immediately. Deferred a frame like every other
+// helper here that reaches into freshly-relevant DOM (though this node is
+// always mounted already; the defer is just cheap insurance against a
+// same-tick rebuild). `select()` so a re-chosen option with existing text
+// starts fully selected rather than leaving the caret buried mid-word.
+function focusOptionInput(optionId) {
+  requestAnimationFrame(() => {
+    const el = document.querySelector(
+      '[data-testid="plan-option"][data-option-id="' + optionId + '"] input[data-testid="plan-option-input"]',
+    )
+    if (el) {
+      el.focus()
+      el.select()
+    }
+  })
+}
+
+// advanceToNextQuestion is moveRow's sibling for the one case where "next"
+// must skip past sibling rows: pressing Enter inside an option's own
+// free-text field should jump to the NEXT QUESTION, not to the next option of
+// the SAME question (reviewer request: "als ik enter druk, moet ik gelijk
+// naar de volgende vraag springen"). Walks navRows() forward from the current
+// cursor past every row that still shares this question's id, landing on
+// whatever comes after — the next question's first option, or, at the end of
+// the list, the follow-up/task/execute row exactly like moveRow would.
+function advanceToNextQuestion() {
+  const rows = navRows()
+  const at = rows.findIndex((r) => r.id === state.cur)
+  if (at < 0) return
+  const curQ = rows[at].q
+  let next = at + 1
+  while (next < rows.length && rows[next].kind === 'option' && curQ && rows[next].q && rows[next].q.id === curQ.id) next++
+  if (next >= rows.length) next = rows.length - 1
+  if (next === at || !rows[next]) return
+  state.cur = rows[next].id
+  state.path = [0]
+  state.confirmExec = false
+  scrollCurIntoView()
+  scrollBlockPreviewIntoView()
 }
 
 function moveBlock(level, delta) {
@@ -547,11 +610,19 @@ function moveBlock(level, delta) {
 function stepRight() {
   if (state.col === 0) {
     state.col = 1
+    // Reviewer request: "als ik naar rechts ga, dan zie ik een prachtige
+    // animatie ... als ik te ver naar rechts ga" — this very first
+    // ticket→questions step used to skip scrollFocusIntoView entirely (only
+    // the block-column steps further right called it), so the ticket card
+    // never animated away and could linger on screen wasting width. Now every
+    // column-focus change gets the same smooth scroll (see that helper).
+    scrollFocusIntoView()
     return
   }
   if (state.col === 1) {
     if (!curBlocks().length) return
     state.col = 2
+    scrollFocusIntoView()
     return
   }
   const level = state.col - 2
@@ -569,6 +640,9 @@ function stepLeft() {
   }
   if (state.col === 1) {
     state.col = 0
+    // Symmetric with stepRight above: bring the ticket card back into view
+    // (it may have scrolled off to the left while column 1+ had the focus).
+    scrollFocusIntoView()
     return
   }
   const level = state.col - 2
@@ -608,6 +682,11 @@ function onKeydown(e) {
       if (state.col === 1 && row && row.kind === 'option') {
         e.preventDefault()
         sendAnswer(row.q, row.o, answerTextFor(row.q.id))
+        // Reviewer request: "als ik een antwoord selecteer binnen een vraag,
+        // moet de input gelijk actief zijn zodat ik kan typen" — choosing the
+        // option via Enter here hands the caret straight to its own free-text
+        // field, instead of leaving the reviewer to click/Tab into it.
+        focusOptionInput(row.o.id)
       } else if (state.col === 1 && row && row.kind === 'scope') {
         e.preventDefault()
         chooseScope(row)
@@ -930,7 +1009,13 @@ function optionRow(row) {
         // column: those columns show this very row's example code, so losing
         // the marker would leave nothing saying what they belong to. Only the
         // background tint follows the focus itself.
-        (state.cur === o.id
+        // `&& state.col !== 0` — never show this ring while the TICKET card
+        // (column 0) itself has the focus: without it, a stale cursor left
+        // on an option/task row from an earlier column visit kept its ring
+        // even after `←` moved the keyboard back to the ticket, showing two
+        // "selected" things on screen at once (reviewer report, see "Never
+        // two selections visible at once" in .claude/docs/plan-page.md).
+        (state.cur === o.id && state.col !== 0
           ? 'border-indigo-300 ring-2 ring-inset ring-indigo-400 dark:border-indigo-500 dark:ring-indigo-500 ' +
             (state.col === 1 ? 'bg-indigo-50/50 dark:bg-indigo-500/10 ' : '')
           : 'border-slate-200 dark:border-zinc-800 ') +
@@ -975,6 +1060,11 @@ function optionRow(row) {
             e.stopPropagation()
             sendAnswer(q, o, e.target.value)
             e.target.blur()
+            // Reviewer request: "als ik enter druk, moet ik gelijk naar de
+            // volgende vraag springen" — the second half of the flow
+            // focusOptionInput above starts (choose → type → Enter → next
+            // question), rather than leaving the cursor parked here.
+            advanceToNextQuestion()
           }
         }}"
         @focus="${() => {
@@ -1002,7 +1092,7 @@ function scopeRow(row) {
     <div
       class="${() =>
         'cursor-pointer rounded-lg border px-2.5 py-2 ' +
-        (state.cur === row.id
+        (state.cur === row.id && state.col !== 0
           ? 'border-indigo-300 ring-2 ring-inset ring-indigo-400 dark:border-indigo-500 dark:ring-indigo-500 ' +
             (state.col === 1 ? 'bg-indigo-50/50 dark:bg-indigo-500/10' : '')
           : 'border-slate-200 dark:border-zinc-800')}"
@@ -1090,7 +1180,7 @@ function hotfixRow(row) {
     <div
       class="${() =>
         'cursor-pointer rounded-lg border px-2.5 py-2 ' +
-        (state.cur === row.id
+        (state.cur === row.id && state.col !== 0
           ? 'border-indigo-300 ring-2 ring-inset ring-indigo-400 dark:border-indigo-500 dark:ring-indigo-500 ' +
             (state.col === 1 ? 'bg-indigo-50/50 dark:bg-indigo-500/10' : '')
           : 'border-slate-200 dark:border-zinc-800')}"
@@ -1280,7 +1370,7 @@ function taskRow(row) {
     <div
       class="${() =>
         'rounded-lg border px-2.5 py-2 ' +
-        (state.cur === task.id
+        (state.cur === task.id && state.col !== 0
           ? 'border-indigo-300 ring-2 ring-inset ring-indigo-400 dark:border-indigo-500 dark:ring-indigo-500 ' +
             (state.col === 1 ? 'bg-indigo-50/50 dark:bg-indigo-500/10' : '')
           : 'border-slate-200 dark:border-zinc-800')}"
@@ -1344,7 +1434,7 @@ function executeCard(row) {
     <div
       class="${() =>
         'mt-3 rounded-lg border px-2.5 py-2 ' +
-        (state.cur === EXEC_ROW_ID
+        (state.cur === EXEC_ROW_ID && state.col !== 0
           ? 'border-indigo-300 ring-2 ring-inset ring-indigo-400 dark:border-indigo-500 dark:ring-indigo-500 ' +
             (state.col === 1 ? 'bg-indigo-50/50 dark:bg-indigo-500/10' : '')
           : 'border-slate-200 dark:border-zinc-800')}"
@@ -1443,7 +1533,7 @@ function followupCard() {
     <section
       class="${() =>
         'mb-3 cursor-pointer rounded-2xl border px-3 py-2 ' +
-        (state.cur === FOLLOWUP_ROW_ID
+        (state.cur === FOLLOWUP_ROW_ID && state.col !== 0
           ? 'border-indigo-300 ring-2 ring-inset ring-indigo-400 dark:border-indigo-500 dark:ring-indigo-500 ' +
             (state.col === 1 ? 'bg-indigo-50/50 dark:bg-indigo-500/10' : '')
           : 'border-slate-200 dark:border-zinc-800')}"
