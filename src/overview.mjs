@@ -58,12 +58,14 @@ const state = reactive({
   // jiraBellOpen — whether the header bell's own dropdown is open, badge-dotted
   // via jiraBellDot whenever jiraUnreadCount() > 0.
   jiraBellOpen: false,
-  // jiraPlanning / jiraTodo — the reviewer's own Jira issues behind the two
-  // non-PR sections under "Needs your review", read from GET /api/jira/issues
-  // (see jira_issues.go). Plain rows, never PRs: they take no part in stacks,
-  // filters, the status backfill or the "N PRs" count.
-  jiraPlanning: [],
-  jiraTodo: [],
+  // jiraIssues — the reviewer's own Jira sprint work behind the ONE non-PR
+  // section under "Needs your review", read from GET /api/jira/issues (see
+  // jira_issues.go). One list, already ordered by the backend: the planning
+  // lane (In Progress) first, the todo lane under it, each row carrying its
+  // own `lane`. It used to be two lists/sections (jiraPlanning/jiraTodo).
+  // Plain rows, never PRs: they take no part in stacks, filters, the status
+  // backfill or the "N PRs" count.
+  jiraIssues: [],
   sections: [], // [{ title, prs: Row[] }]
   statuses: {}, // prUid -> Status, backfilled async
   approvals: {}, // prUid -> { done, total }, backfilled async (ingested PRs only)
@@ -2424,68 +2426,91 @@ function jiraBellButton() {
   `
 }
 
-// ── Jira issue sections: Planning + Todo ─────────────────────────────
+// ── The Jira issue section ────────────────────────────────────────────
 // Reviewer request: the page should read as ONE pipeline, from work that has
-// not started yet down to a PR that is ready. "Todo" (a Jira issue still
-// queued) becomes "Planning" (an issue in the active sprint), becomes a PR in
-// "Needs your review", and ends in the draft/own-PR sections that already
-// exist. The two new sections therefore sit DIRECTLY under "Needs your
-// review", Planning first, and are deliberately NOT at the bottom of the page.
+// not started yet down to a PR that is ready. A queued Jira issue becomes work
+// in progress, becomes a PR in "Needs your review", and ends in the draft/
+// own-PR sections that already exist. This section therefore sits DIRECTLY
+// under "Needs your review" and is deliberately NOT at the bottom of the page.
 //
-// Both are plain, read-only lists: no popover, no keyboard actions beyond the
+// It started as TWO sections, "Planning" (the active sprint) above "Todo" (the
+// queue feeding it), and became one list on request ("bij nader inzien, gooi
+// todo en planning bij elkaar, maar dan todo items onder de planning items").
+// The two lanes still exist — they are just rows of one list now, ordered by
+// the backend (see groupIssues in jira_issues.go).
+//
+// It is a plain, read-only list: no popover, no keyboard actions beyond the
 // shared row navigation, no writes. Clicking a row opens the ticket's own
 // PLANNING PAGE, /plan/<KEY> (src/plan.mjs, see .claude/docs/plan-page.md) —
 // in the same tab, like "Open review tree" does for a PR. The link to the
 // issue in Jira itself moved onto that page (its ticket card's key chip), so
 // the row is one destination, not two.
 
-// loadJiraIssues pulls both lists in one read-only GET. A failure keeps
-// whatever was already shown (same reasoning as loadJiraNotifications).
+// loadJiraIssues pulls the list in one read-only GET. A failure keeps whatever
+// was already shown (same reasoning as loadJiraNotifications). The ORDER is
+// the backend's (planning lane above todo lane, subtasks under their main
+// task) — the page never re-sorts it, see groupIssues in jira_issues.go.
 async function loadJiraIssues() {
   try {
     const res = await fetch('/api/jira/issues')
     if (!res.ok) return
     const body = await res.json()
     if (!body || !body.ok) return
-    state.jiraPlanning = Array.isArray(body.planning) ? body.planning : []
-    state.jiraTodo = Array.isArray(body.todo) ? body.todo : []
+    state.jiraIssues = Array.isArray(body.issues) ? body.issues : []
   } catch (err) {
-    // Keep the previous lists.
+    // Keep the previous list.
   }
 }
 
-// jiraIssueRow — one Jira issue as an ordinary inbox row. The key + status are
-// spelled out in words next to the title, never carried by colour alone
-// (.claude/rules/conventions.md).
-function jiraIssueRow(is, kind, child) {
-  if (is.context) return jiraContextRow(is, kind)
+// jiraIssueRow — one Jira issue as an ordinary inbox row. The key, the type,
+// the status AND (for a Sub-task) the main task it belongs to are all spelled
+// out in words next to the title, never carried by colour or by a connector
+// glyph alone (.claude/rules/conventions.md).
+//
+// Two reviewer requests shape this row:
+//
+//   - "avatar links net als prs daarboven" — the assignee opens the row in the
+//     same fixed-width avatar+name column authorMark gives every PR row above
+//     (assigneeMark's `stacked` shape). It used to sit at the far right, next
+//     to the chevron.
+//   - "elke subtaak moet een parent hebben … haal daartussen de verticale
+//     lijn weg, ook als er meerdere subtaken zijn" — the `↳` glyph that used
+//     to prefix a child's key is gone (that is the vertical line: one hook per
+//     subtask, stacking up under a main task with several of them), and the
+//     relation is carried by the WORDS "onderdeel van <KEY>" on the meta line
+//     instead. That is deliberately independent of the context row above it:
+//     a parent that could not be read (see groupIssues) leaves no header row,
+//     and this line is then the only thing naming it — which is exactly the
+//     complaint ("ik zie het niet bij alle subtaken").
+function jiraIssueRow(is, child) {
+  if (is.context) return jiraContextRow(is)
+  const meta = [is.type, is.status, is.parentKey ? t('onderdeel van') + ' ' + is.parentKey : ''].filter(Boolean).join(' \u2022 ')
   return html`
     <a
       href="${'/plan/' + is.key}"
       data-testid="jira-issue-row"
       data-jira-issue="${is.key}"
+      data-jira-lane="${is.lane || ''}"
       data-nav-row
-      data-nav-key="${'jiraissue:' + kind + ':' + is.key}"
+      data-nav-key="${'jiraissue:' + is.key}"
       class="${ROW_CLASS}"
       style="${child ? indentStyle({ depth: 1 }) : ''}"
     >
+      ${assigneeMark(is.assignee, is.assigneeAvatarUrl, 'h-10 w-10', true)}
       <span
         class="w-20 shrink-0 truncate text-xs font-semibold text-slate-500 dark:text-zinc-400"
         data-testid="jira-issue-key"
-        >${(child ? '\u21b3 ' : '') + is.key}</span
+        >${is.key}</span
       >
       <div class="min-w-0 flex-1">
         <h3 class="truncate text-[13.5px] text-slate-900 dark:text-zinc-100 group-hover:text-black dark:group-hover:text-white">
           ${is.title || is.key}
         </h3>
-        <p class="mt-0.5 truncate text-xs text-slate-500 dark:text-zinc-500">
-          ${(is.type ? is.type + ' \u2022 ' : '') + (is.status || '')}
-        </p>
+        <p class="mt-0.5 truncate text-xs text-slate-500 dark:text-zinc-500" data-testid="jira-issue-meta">${meta}</p>
       </div>
-      ${assigneeMark(is.assignee, is.assigneeAvatarUrl, 'h-6 w-6')}
       ${chevronFilled('h-4 w-4 shrink-0 text-slate-400 dark:text-zinc-600 group-hover:text-slate-600 dark:group-hover:text-zinc-300')}
     </a>
-  `.key('jiraissue:' + kind + ':' + is.key)
+  `.key('jiraissue:' + is.key)
 }
 
 // jiraContextRow — the main task a Sub-task of yours hangs under, shown purely
@@ -2493,14 +2518,13 @@ function jiraIssueRow(is, kind, child) {
 // NOT a link and carries no `data-nav-row`: the work is not yours, so there is
 // nothing to open and nothing to step onto with the keyboard. What sets it
 // apart is spelled out in a WORD on its meta line, never by colour alone
-// (.claude/rules/conventions.md).
-function jiraContextRow(is, kind) {
+// (.claude/rules/conventions.md). Its assignee sits in the same left-hand
+// column as every other row — that main task is often somebody ELSE's, which
+// is half of what this row is here to say.
+function jiraContextRow(is) {
   return html`
-    <div
-      data-testid="jira-context-row"
-      data-jira-issue="${is.key}"
-      class="${ROW_CLASS + ' cursor-default'}"
-    >
+    <div data-testid="jira-context-row" data-jira-issue="${is.key}" class="${ROW_CLASS + ' cursor-default'}">
+      ${assigneeMark(is.assignee, is.assigneeAvatarUrl, 'h-10 w-10', true)}
       <span class="w-20 shrink-0 truncate text-xs font-semibold text-slate-400 dark:text-zinc-500" data-testid="jira-issue-key"
         >${is.key}</span
       >
@@ -2510,42 +2534,46 @@ function jiraContextRow(is, kind) {
           ${(is.type ? is.type + ' \u2022 ' : '') + t('hoofdtaak, alleen ter context')}
         </p>
       </div>
-      ${assigneeMark(is.assignee, is.assigneeAvatarUrl, 'h-6 w-6')}
     </div>
-  `.key('jiracontext:' + kind + ':' + is.key)
+  `.key('jiracontext:' + is.key)
 }
 
-// jiraIssueSection renders one titled issue list, or null when it is empty —
-// same "an empty section simply is not there" rule as sectionBlock.
-function jiraIssueSection(title, kind, list) {
+// jiraIssueSection renders the ONE issue list, or null when it is empty — same
+// "an empty section simply is not there" rule as sectionBlock.
+//
+// It used to be two sections ("Planning" above "Todo"). They were merged on
+// request ("gooi todo en planning bij elkaar, maar dan todo items onder de
+// planning items"); the ORDER inside this one list is entirely the backend's
+// (groupIssues in jira_issues.go), so the two lanes and the subtask grouping
+// are decided in ONE place instead of half here and half there.
+function jiraIssueSection(list) {
   if (!list.length) return null
-  // A row is a child when its parent is right there in the same list — which,
-  // after groupPlanning, it always is: either as your own row or as a context
-  // header. The count badge deliberately counts only rows that are YOUR work.
+  // A row is indented when its parent is right there in the same list — which,
+  // after groupIssues, it is whenever that parent could be read at all: either
+  // as your own row or as a context header. The count badge deliberately
+  // counts only rows that are YOUR work.
   const keys = new Set(list.map((is) => is.key))
   const own = list.filter((is) => !is.context).length
   return html`
-    <section data-testid="issue-section" data-title="${title}">
+    <section data-testid="issue-section" data-title="Planning">
       <div class="mb-3 mt-16 flex items-center gap-2 first:mt-6">
-        <h2 class="text-[15px] font-semibold text-slate-900 dark:text-zinc-100">${title}</h2>
+        <h2 class="text-[15px] font-semibold text-slate-900 dark:text-zinc-100">Planning</h2>
         <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500 dark:bg-zinc-800/80 dark:text-zinc-400"
           >${own}</span
         >
       </div>
       <div class="rounded-xl border border-slate-200 bg-slate-50 dark:border-zinc-800 dark:bg-zinc-900/60">
-        ${list.map((is) => jiraIssueRow(is, kind, !!(is.parentKey && keys.has(is.parentKey))))}
+        ${list.map((is) => jiraIssueRow(is, !!(is.parentKey && keys.has(is.parentKey))))}
       </div>
     </section>
-  `.key('issue-section:' + kind + ':' + list.map((is) => is.key).join(','))
+  `.key('issue-section:' + list.map((is) => is.key).join(','))
 }
 
-// jiraIssueBlocks — the two sections in pipeline order, empty ones dropped.
-// Titles stay untranslated, like every section heading on this page (they come
-// from GitHub's own dashboard wording, which this app does not translate).
+// jiraIssueBlocks — the one issue section, dropped when empty. The title stays
+// untranslated, like every section heading on this page (they come from
+// GitHub's own dashboard wording, which this app does not translate).
 function jiraIssueBlocks() {
-  return [jiraIssueSection('Planning', 'planning', state.jiraPlanning), jiraIssueSection('Todo', 'todo', state.jiraTodo)].filter(
-    Boolean,
-  )
+  return [jiraIssueSection(state.jiraIssues)].filter(Boolean)
 }
 
 function mainContent() {
@@ -2583,9 +2611,9 @@ function mainContent() {
         }
         // Stacks render as their own group, above every section.
         chains.forEach((chain) => out.push(stackGroup(chain, sectionOf)))
-        // Where the two Jira issue sections go: directly after "Needs your
+        // Where the Jira issue section goes: directly after "Needs your
         // review", so the page reads as one pipeline (see jiraIssueBlocks).
-        // If that section has no rows at all it is not rendered, and they fall
+        // If that section has no rows at all it is not rendered, and it falls
         // back to the end of the list rather than disappearing with it.
         let issuesAt = -1
         state.sections.forEach((sec) => {
@@ -3064,7 +3092,7 @@ function storeSelKey(key) {
 // just came through (.claude/docs/pages-and-routing.md).
 //
 // Adopting it is deliberately RETRIED on every repaint instead of applied
-// once next to trySelectPendingPr: the Planning/Todo rows arrive from their
+// once next to trySelectPendingPr: the issue rows arrive from their
 // own later fetch (loadJiraIssues), so a remembered Jira issue row simply
 // does not exist yet at the moment the GitHub sections land.
 let pendingRestoreSelKey = pendingSelectPr == null && approvedPr == null ? readStoredSelKey() : null
@@ -3491,7 +3519,7 @@ const SELECT_RING_CLS = ['ring-1', 'ring-indigo-500/50', 'rounded-lg', 'z-10', '
 // all doesn't count as "already scrolled to null".
 //
 // paintSelection() runs on EVERY repaint, not just on a real navigation step
-// — a data-driven change (the Planning/Todo rows landing, a 60s inbox
+// — a data-driven change (the Jira issue rows landing, a 60s inbox
 // reload, a Jira poll tick) reruns it via scheduleRepaint just as much as a
 // keypress or a click does (see reanchorSelection above). Unconditionally
 // calling scrollIntoView() here used to yank the viewport back to the
@@ -4002,13 +4030,12 @@ watch(
       // and the unread filter change how many there are.
       state.jira.length,
       state.jiraUnreadOnly,
-      // Same for the Planning/Todo issue rows, which come from their own
-      // later fetch (loadJiraIssues) — without these two the ring was never
-      // re-derived when they landed, so a remembered issue row could not be
-      // adopted (see pendingRestoreSelKey) and a reshuffled list kept the
-      // ring wherever it was.
-      state.jiraPlanning.length,
-      state.jiraTodo.length,
+      // Same for the issue rows, which come from their own later fetch
+      // (loadJiraIssues) — without this the ring was never re-derived when
+      // they landed, so a remembered issue row could not be adopted (see
+      // pendingRestoreSelKey) and a reshuffled list kept the ring wherever it
+      // was.
+      state.jiraIssues.length,
     ]),
   () => scheduleRepaint(),
 )

@@ -337,11 +337,21 @@ type planDoc struct {
 	// is the ANSWER — the branch this plan is built on and the one
 	// plan_execute branches from and opens its draft PR against. Empty means
 	// "never asked", which reads as the repo's own base branch.
-	NeedsHotfix   bool   `json:"needsHotfix,omitempty"`
-	Hotfix        bool   `json:"hotfix,omitempty"`
-	BaseBranch    string `json:"baseBranch,omitempty"`
-	DefaultBranch string `json:"defaultBranch,omitempty"`
-	HotfixBranch  string `json:"hotfixBranch,omitempty"`
+	// StartsProgress says this Execution moves the ticket to "In Progress" in
+	// Jira once that branch question is answered — the reviewer picked a
+	// branch, so the work has begun and the row belongs in the planning lane
+	// of /pr-overview rather than in its todo lane (Reindert: "als je in todo
+	// een branch hebt aangemaakt (eerste vraag), moet het naar in planning en
+	// in jira naar in progress"). Like AskBase/LoadsContext it is set by
+	// planLoadIssue and therefore ABSENT from every document recorded before
+	// the Activity existed, which is what keeps those Executions replaying
+	// past the extra call (.claude/rules/workflow-determinism.md).
+	StartsProgress bool   `json:"startsProgress,omitempty"`
+	NeedsHotfix    bool   `json:"needsHotfix,omitempty"`
+	Hotfix         bool   `json:"hotfix,omitempty"`
+	BaseBranch     string `json:"baseBranch,omitempty"`
+	DefaultBranch  string `json:"defaultBranch,omitempty"`
+	HotfixBranch   string `json:"hotfixBranch,omitempty"`
 	// Comments are this ticket's own Jira comments; RelatedComments are the
 	// ones of the main task and of the subtasks around it, each carrying its
 	// own Key. RelatedPRs is the already-merged work of that same family.
@@ -516,6 +526,19 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		}
 		doc.NeedsHotfix = false
 		doc.Hotfix, doc.BaseBranch = resolvePlanBase(doc, hf)
+		// Answering this question is where the work STARTS: a branch has been
+		// chosen, so the ticket moves to "In Progress" in Jira and with it out
+		// of /pr-overview's todo lane into its planning lane (see
+		// jira_issues.go). Gated on the recorded flag so an Execution from
+		// before this Activity existed replays past it untouched. The Activity
+		// itself never fails (it logs), because a ticket whose workflow cannot
+		// reach that status — or that is already there — must not sink the
+		// tracker the reviewer is waiting on.
+		if doc.StartsProgress {
+			if err := w.ExecuteActivity("jiraStartProgress", doc, nil); err != nil {
+				return nil, fmt.Errorf("plan: start progress: %w", err)
+			}
+		}
 	}
 	// Everything around the ticket that makes the plan concrete: the Jira
 	// comments of the main task and the subtasks, and the already-merged pull
@@ -605,6 +628,30 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		if err := w.ExecuteActivity("planSave", doc, nil); err != nil {
 			return nil, fmt.Errorf("plan: save: %w", err)
 		}
+	}
+}
+
+// startJiraProgress is the body of that Activity: move the ticket to "In
+// Progress" and nudge the tracker that owns the overview's issue list, so the
+// row climbs into its planning lane now rather than at the next 5-minute tick
+// (a Signal — never a write of our own, see
+// .claude/rules/workflows-write-boundary.md).
+//
+// Best-effort by design, hence no error: the ways this can fail are all
+// "nothing to do" or "not ours to fix" — the ticket is already In Progress, its
+// project's workflow has no such transition from where it is, or acli is not
+// logged in. None of them are worth failing a plan the reviewer is waiting on;
+// the reason is logged and reaches the UI through GET /api/problems.
+func (m *TaskManager) startJiraProgress(ctx context.Context, key string) {
+	if m == nil || m.jira == nil || key == "" {
+		return
+	}
+	if err := m.jira.Transition(ctx, key, jiraInProgressStatus); err != nil {
+		m.logf("plan: %s -> %s: %v", key, jiraInProgressStatus, err)
+		return
+	}
+	if runID := m.EnsureJiraIssues(ctx); runID != "" {
+		m.signalJiraIssues(runID, JiraIssuesSignal{Kind: "refresh"})
 	}
 }
 
@@ -910,6 +957,9 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 		// has no plan to build either way, and parking it on a branch question
 		// would ask for nothing.
 		doc.AskBase = true
+		// Same rule for the "move it to In Progress" Activity behind that
+		// question: only a document that really loaded runs it.
+		doc.StartsProgress = true
 		// Context loading (comments of the family, merged PRs) only makes sense
 		// once the ticket really was read; the flag is what keeps an older
 		// Execution replaying past that Activity.
@@ -1144,5 +1194,24 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 			return nil, err
 		}
 		return nil, m.plan.Save(ctx, doc.Key, string(raw), doc.UpdatedAt)
+	})
+
+	// Activity: the ticket moves to "In Progress" in Jira, now that the
+	// reviewer answered which branch the plan goes out from. The one WRITE
+	// into Jira this tracker does (per
+	// .claude/rules/workflows-write-boundary.md a module write lives in an
+	// Activity, never in a handler), and deliberately BEST-EFFORT: it returns
+	// no error, because the reasons it can fail are all "nothing to do" or
+	// "not ours to fix" — the ticket is already In Progress, its project's
+	// workflow has no such transition from where it is, or acli is not logged
+	// in — and none of them are worth failing a plan the reviewer is waiting
+	// for. The failure is logged and reaches the UI through GET /api/problems.
+	engine.RegisterActivity("jiraStartProgress", func(ctx context.Context, in []byte) ([]byte, error) {
+		var doc planDoc
+		if err := json.Unmarshal(in, &doc); err != nil {
+			return nil, err
+		}
+		m.startJiraProgress(ctx, doc.Key)
+		return nil, nil
 	})
 }

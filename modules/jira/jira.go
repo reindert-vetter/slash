@@ -136,6 +136,12 @@ type Client interface {
 	// separate from Notifications so a broken undocumented feed endpoint is
 	// never mistaken for a bad token.
 	VerifyCredentials(ctx context.Context) error
+	// Transition moves an issue to another workflow status by NAME ("In
+	// Progress"). A WRITE, so it is called from a workflow Activity only
+	// (.claude/rules/workflows-write-boundary.md) — today the plan tracker's
+	// jiraStartProgress, once the reviewer answered which branch the plan goes
+	// out from. See transition.go.
+	Transition(ctx context.Context, key, status string) error
 }
 
 // Module is the production Client: it shells out to `acli jira workitem view`.

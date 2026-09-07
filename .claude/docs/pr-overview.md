@@ -238,96 +238,164 @@ the ONLY place this feed is shown) moved into the bell's own dropdown.
   `.claude/docs/workflows-trackers.md`. The page itself only reads
   `GET /api/jira/notifications`, exactly like every other list here.
 
-## "Planning" and "Todo": the pipeline before a PR exists
+## "Planning": the one list of sprint work before a PR exists
 
 Reviewer request: the page should read top to bottom as **one pipeline**, from
 work that has not started to a PR that is ready — "het moet gaan van todo,
-naar needs your review, naar draft pr achtige categorie wat al bestaat". Two
-non-PR sections were added for the two stages that have no pull request yet,
-sitting **directly under "Needs your review"** (Planning first, then Todo) —
-explicitly *not* appended at the bottom of the page.
+naar needs your review, naar draft pr achtige categorie wat al bestaat". One
+non-PR section covers the stages that have no pull request yet, sitting
+**directly under "Needs your review"** — explicitly *not* appended at the
+bottom of the page.
 
-- **Planning** — what the reviewer still has to **do** in the **active
-  sprint**. It started out literal ("alles wat in de actieve sprint op zijn
-  naam staat", `Done` included) and was narrowed on sight of the result:
-  "hier niet in review laten zien en niet done". JQL: `assignee =
-  currentUser() AND sprint in openSprints() AND statusCategory != Done AND
-  status != "In Review" ORDER BY updated DESC`. **`statusCategory != Done`
-  rather than `status != "Done"`** so every finished status (Closed,
-  Resolved, …) drops out, not just the one literally named "Done"; "In
-  Review" is an ordinary in-progress status *name* and therefore needs its
-  own clause.
-- **Todo** — the queue feeding that sprint: `assignee = currentUser() AND
-  status = "To Do" AND resolution = EMPTY ORDER BY updated DESC`.
-- **An issue matching both is shown once, in Planning** (`fetchJiraIssues`) —
-  it is already being planned, so it appears in the section furthest along the
-  pipeline. Without this, every To Do issue pulled into the sprint would sit in
-  both lists at once.
+It started as **two** sections, "Planning" (the active sprint) above "Todo"
+(the queue feeding it), and became **one list** on request: "bij nader inzien,
+gooi todo en planning bij elkaar, maar dan todo items onder de planning items
+(als er een groep is, met verschillende statussen, gooi ze boven todo)". The
+two stages survive as the two **lanes** of that one list.
 
-### A Sub-task is grouped under its main task, which is pulled in if missing
+### The filter rule: my own work, active sprint, two statuses
 
-Second half of the same request: "subtaken moeten gegroepeerd zijn en horen
-bij de main taak". `groupPlanning` (`jira_issues.go`) reorders the Planning
-rows so a Sub-task sits **directly under its parent**, with the group placed
-at the position of its **earliest member** — so the sprint's own `updated
-DESC` recency still drives the page order.
+Two JQL **constants** (`jira_issues.go`), so no reviewer input ever reaches
+`acli`:
 
-A parent that is not in the list itself (not assigned to the reviewer, or
-outside the sprint) is **pulled in as a CONTEXT row** — explicitly asked for
-over the cheaper "leave the Sub-task loose" alternative: the main task must be
-named above its subtasks "ook als die hoofdtaak niet van hem is of buiten de
-sprint valt". Such a row is **not a link** and carries no `data-nav-row`
-(there is nothing of yours to open), its meta line says so in a **word**
-(`Story • hoofdtaak, alleen ter context`, never colour alone), and the
-section's count badge counts only the rows that *are* your work.
+| lane | JQL |
+| --- | --- |
+| planning | `assignee = currentUser() AND sprint in openSprints() AND status = "In Progress" ORDER BY updated DESC` |
+| todo | `assignee = currentUser() AND sprint in openSprints() AND status = "To Do" AND resolution = EMPTY ORDER BY updated DESC` |
+
+- **The planning lane is what you are working on**: "planning; moet alle in
+  progress stories zijn". Deliberately the status **name**, not
+  `statusCategory = "In Progress"` — that category also holds "In Review",
+  a stage the reviewer explicitly does not want here ("hier niet in review
+  laten zien en niet done"). Its predecessor was every non-Done sprint status,
+  which is why a To Do sprint issue used to sit in the planning section.
+- **The todo lane is To Do only** ("todo, alleen todo").
+- **Both are limited to an ACTIVE sprint** ("ik wil in todo en in planning
+  alleen items zien uit active sprints"). The todo lane used to be the whole
+  backlog queue, sprint or not — that is what pulled in the loose rows the
+  reviewer saw under "Todo".
+- **Only your own subtasks are listed** ("laat alleen subtaken zien die op
+  mijn naam staan"), and that needs no filter of its own: every row of either
+  lane is `assignee = currentUser()` by construction. The one row that is not
+  yours is a main task pulled in as **context** (below) — marked as such, not
+  a link, not counted. `TestIssueJQLScopesBothLanes` pins all four clauses.
+- **An issue matching both queries is shown once, in the planning lane** — the
+  lane furthest along the pipeline. The two statuses are disjoint today, so
+  this is a rule kept rather than one that fires.
+
+### The sort rule: groups, then lanes, then recency
+
+`groupIssues` (`jira_issues.go`) turns the two search results into the one
+ordered list the page renders verbatim — the frontend never re-sorts, so the
+whole rule lives in one place. Three steps, in this order:
+
+1. **A Sub-task sits directly under its main task**, instead of floating
+   somewhere else in the `updated DESC` order. A main task that is in neither
+   list itself is pulled in as a **context row** (see below).
+2. **A GROUP's lane is the planning lane as soon as ANY of its own members is
+   in it** — "als er een groep is, met verschillende statussen, gooi ze boven
+   todo". A lone row is a group of one, so its own lane decides. The head row
+   keeps its **own** status/lane: only the group's POSITION is lifted, so a
+   To Do main task above an In Progress subtask still reads "To Do" in words.
+3. **Every planning-lane group comes before every todo-lane group**, and
+   within a lane a group sits at the position of its **earliest** member — so
+   Jira's own recency ordering still drives the page.
+
+Tests: `TestFetchJiraIssuesPutsThePlanningLaneFirst`,
+`TestGroupIssuesLiftsAMixedStatusGroupAboveTodo`,
+`TestGroupIssuesNestsSubtasksUnderTheirParent` (both lanes),
+`TestGroupIssuesKeepsAnUnreadableParentOut`,
+`TestFetchJiraIssuesDedupesAnIssueInBothLanes` (`jira_issues_test.go`).
+
+### Every Sub-task NAMES its main task, in words
+
+"elke subtaak moet een parent hebben zoals hier 216 is van 254, ik zie het
+niet bij alle subtaken" — the grouping used to run over the Planning list
+**only**, so a queued Sub-task in "Todo" had no main task named anywhere. Two
+things carry it now, and the second is the one that always holds:
+
+- **The context row** (`jiraContextRow`): the main task a Sub-task of yours
+  hangs under, pulled in even when it is not yours and not in the sprint ("ook
+  als die hoofdtaak niet van hem is of buiten de sprint valt"). It is **not a
+  link** and carries no `data-nav-row` (there is nothing of yours to open), its
+  meta line says so in a **word** (`Story • hoofdtaak, alleen ter context`,
+  never colour alone), and the count badge counts only rows that *are* your
+  work.
+- **The Sub-task's own meta line** says `Sub-task • To Do • onderdeel van
+  PROD-216`. This is independent of the context row above it, deliberately:
+  the parent read is best-effort, so a parent that cannot be read leaves no
+  header row at all — and then this line is the only thing naming it.
+
+**The `↳` glyph in front of a child's key is gone** ("haal daartussen de
+verticale lijn weg, ook als er meerdere subtaken zijn" — that hook IS the
+vertical line, and it stacks up once a main task has several subtasks). The
+indent stays, and the relation is carried by the WORDS above, which is what
+keeps it readable without the shape (the colourblind rule in
+`.claude/rules/conventions.md`).
 
 Both halves need **per-issue reads**, because `acli jira workitem search`
 cannot return a parent at all: its `--fields` whitelist is roughly
 `issuetype,key,assignee,priority,status,summary,description,labels` and
 rejects `parent` outright ("field 'parent' is not allowed") — so
-`Search()` deliberately does **not** ask for it and `groupPlanning` runs two
+`Search()` deliberately does **not** ask for it and `groupIssues` runs two
 rounds of `readIssues` instead (round 1: each Sub-task's own parent key;
 round 2: the parents that are not in the list). Those reads are bounded
-(`jiraIssueReadsMax` 12 per round, `jiraIssueReadsPar` 4 at a time — an `acli
-jira workitem view` takes seconds) and run inside the tracker's own refresh, so
-they cost once per 5-minute tick, never once per page load. One such refresh
-was measured at ~36s for a 6-row sprint, which is exactly why it happens in the
-background. The whole enrichment is **best-effort**: a parent that cannot be read
-yields no context row and its Sub-task stays an ordinary top-level row.
+(`jiraIssueReadsMax` 20 per round — raised from 12 when one round started
+covering the Sub-tasks of both lanes — `jiraIssueReadsPar` 4 at a time, since
+an `acli jira workitem view` takes seconds) and run inside the tracker's own
+refresh, so they cost once per 5-minute tick, never once per page load. One
+such refresh was measured at ~36s for a 6-row sprint, which is exactly why it
+happens in the background. The whole enrichment is **best-effort**: a parent
+that cannot be read yields no context row and its Sub-task stays an ordinary
+top-level row that still names its parent by key.
 
-The Planning list therefore no longer serializes as `[]jira.Issue` but as
-`[]planningRow` — the issue embedded, plus one flag `context`. The Todo list
-is unchanged. The dedupe rule above still runs against the **raw** sprint
-search, so a context parent that is itself To Do can legitimately appear both
-as a Planning context header and as its own Todo row: it is genuinely the
-reviewer's own queued work, only shown once as *context* in the section above.
+The list serializes as `[]issueRow` — the issue embedded, plus `context` and
+`lane` (`"planning"`/`"todo"`, mirrored onto the row as `data-jira-lane` so a
+test can tell the lanes apart without reading statuses).
 
-### Every issue row names its ASSIGNEE, also when that is you
+### Every issue row names its ASSIGNEE, on the LEFT, also when that is you
 
 Reviewer request (task 24): who owns a ticket must be visible everywhere a
 ticket is shown — "ook bij eigen tickets", because "het is vermoedelijk mij"
-is not an answer when you are scanning a list. Both `jiraIssueRow` and
-`jiraContextRow` therefore end with `assigneeMark(is.assignee,
-is.assigneeAvatarUrl, 'h-6 w-6')` (`src/avatar.mjs`, `data-testid=assignee`,
-`data-assignee` = the display name), between the title block and the chevron.
-The context row is the interesting one in practice: that main task is often
-**someone else's**, which is exactly what the row is there to say.
+is not an answer when you are scanning a list. It sat at the far right of the
+row until the merge moved it to the **head** of the row: "avatar links net als
+prs daarboven".
 
-`assigneeMark` is the ONE renderer for this, shared with the plan page's
-ticket card and scope question (see `.claude/docs/plan-page.md`) so the two
-can't drift apart. **Unassigned** (no name at all) is a circle with a
-**question mark** plus the words "Niet toegewezen" — never an empty spot, and
-the SHAPE + the WORD carry it, never a colour (the colourblind rule in
-`.claude/rules/conventions.md`). That circle is `avatarHTML`'s own initials
-fallback, which already yields `?` for an empty name (`initialsOf`), so an
-assigned and an unassigned row line up pixel for pixel. The picture itself is
-a Jira avatar (an Atlassian CDN host, on `avatar_proxy.go`'s allowlist since
-`79aa80f`), so it really loads through `/api/avatar`; the name is Jira's own
-`displayName` and needs no `/api/names` resolution — this is not a GitHub
-login.
+Both `jiraIssueRow` and `jiraContextRow` therefore **open** with
+`assigneeMark(is.assignee, is.assigneeAvatarUrl, 'h-10 w-10', true)`
+(`src/avatar.mjs`, `data-testid=assignee`, `data-assignee` = the display name).
+That fourth argument is the **stacked** shape added for this: the avatar with
+the first name right under it, in the same fixed-width column `authorMark`
+gives every PR row above — one renderer, two layouts, so the two cannot drift
+apart. The plan page's ticket card and scope question keep the inline shape
+(see `.claude/docs/plan-page.md`). The context row is the interesting one in
+practice: that main task is often **someone else's**, which is exactly what
+the row is there to say.
+
+**Unassigned** (no name at all) is a circle with a **question mark** plus the
+words "Niet toegewezen" — never an empty spot, and the SHAPE + the WORD carry
+it, never a colour (the colourblind rule in `.claude/rules/conventions.md`).
+That circle is `avatarHTML`'s own initials fallback, which already yields `?`
+for an empty name (`initialsOf`), so an assigned and an unassigned row line up
+pixel for pixel. The picture itself is a Jira avatar (an Atlassian CDN host, on
+`avatar_proxy.go`'s allowlist since `79aa80f`), so it really loads through
+`/api/avatar`; the name is Jira's own `displayName` and needs no `/api/names`
+resolution — this is not a GitHub login.
+
+### A branch on the plan page moves the row into the planning lane
+
+"als je in todo een branch hebt aangemaakt (eerste vraag), moet het naar in
+planning en in jira naar in progress." The first question the `/plan/<KEY>`
+page asks is which branch the plan goes out from; answering it means the work
+has started. The plan tracker then transitions the ticket to **In Progress** in
+Jira — which is exactly what `planningJQL` selects on, so the row climbs into
+the planning lane by the same rule everything else in it got there, with no
+second source of truth on this page. Full mechanism (the Activity, the
+determinism gate, why it is best-effort): "The branch question also starts the
+work" in `.claude/docs/plan-page.md`.
 
 **Backend** (`jira_issues.go` + `modules/jira/search.go`): both JQL strings are
-**constants** — no reviewer input ever reaches `acli` — and go through the new
+**constants** — no reviewer input ever reaches `acli` — and go through
 `jira.Client.Search(ctx, jql, limit)` (`acli jira workitem search --jql … --fields
 key,summary,status,issuetype,assignee --limit N --json`, the module's own
 `cliTimeout`, limit clamped). `assignee` comes back as a full user object or as
@@ -335,47 +403,48 @@ a literal `null` for an unassigned issue, so `acliSearchIssue.Assignee` is a
 **pointer** — absent must read as "nobody", never as a person with an empty
 name (`TestParseSearchReadsAssignee`). `Issue()` asks for the same field and
 maps it the same way, which is what feeds the context rows (`readIssues`) and
-the whole plan page. A failing search yields **empty lists plus a
-reason**, never an HTTP error — the sections are then simply absent, and a real
+the whole plan page. A failing search yields an **empty list plus a
+reason**, never an HTTP error — the section is then simply absent, and a real
 credential problem is already reported by `GET /api/auth/status`.
 
 **A tracker + read-model, like the Jira bell feed next door.** The
-`jira_issues` Workflow (one Execution per process) refreshes both lists every 5
+`jira_issues` Workflow (one Execution per process) refreshes the list every 5
 minutes into `modules/jiraissues`; `GET /api/jira/issues` only READS that
 snapshot, so it answers in ~1ms whatever Jira is doing, and a restart shows the
-last known lists immediately. This **replaced** an on-demand fetch behind a
+last known list immediately. This **replaced** an on-demand fetch behind a
 5-minute in-memory cache, on request ("lijst met jira dingen moet je in
 workflows bijwerken. dan kan ik sneller navigeren") — don't move it back: the
 cache was empty after every restart, and the ~36s cold fetch above then landed
-on whoever opened the page first. The JQL, the dedupe rule and `groupPlanning`
-are unchanged by that move — only *when* they run. Full mechanism (why its own
-Workflow Type rather than a `kind` on `jira_notify`, why a failed fetch keeps
-the previous snapshot): "`jira_issues`" in
+on whoever opened the page first. Full mechanism (why its own Workflow Type,
+why a failed fetch keeps the previous snapshot, why the table was replaced
+rather than migrated): "`jira_issues`" in
 `.claude/docs/workflows-trackers.md`.
 
-**Frontend** (`src/overview.mjs`): `state.jiraPlanning`/`state.jiraTodo`, filled
-by `loadJiraIssues()` at load and on the existing 60s cadence (no timer of its
+**Frontend** (`src/overview.mjs`): `state.jiraIssues`, filled by
+`loadJiraIssues()` at load and on the existing 60s cadence (no timer of its
 own, like `loadJiraNotifications`). A row whose `parentKey` is also in the same
 list is indented one level (`indentStyle({depth:1})`, shared with the PR
-stacks) and prefixed with a `↳` glyph; a `context` row renders through
-`jiraContextRow` instead. `jiraIssueRow` is an ordinary `ROW_CLASS`
-row — a plain `<a>` to **`/plan/<KEY>`**, the ticket's own planning page
-(`.claude/docs/plan-page.md`), in the same tab, key + title + "type • status" in
-**words**, carrying `data-nav-row` so it joins the shared row navigation for
-free. It used to link straight to Jira in a new tab; that link now lives on the
-planning page itself (its ticket card's key chip), so the row has one
-destination instead of two. `mainContent()` splices `jiraIssueBlocks()` in right after
-the "Needs your review" block, falling back to the end of the list when that
-section has no rows at all. These rows are never PRs: they take no part in
-stacks, preset filters, the status backfill or the "N PRs" count, and the
-search/preset views (`currentView`) do not show them.
+stacks); a `context` row renders through `jiraContextRow` instead.
+`jiraIssueRow` is an ordinary `ROW_CLASS` row — a plain `<a>` to
+**`/plan/<KEY>`**, the ticket's own planning page
+(`.claude/docs/plan-page.md`), in the same tab, assignee + key + title +
+"type • status[ • onderdeel van KEY]" in **words**, carrying `data-nav-row` so
+it joins the shared row navigation for free. It used to link straight to Jira
+in a new tab; that link now lives on the planning page itself (its ticket
+card's key chip), so the row has one destination instead of two.
+`mainContent()` splices `jiraIssueBlocks()` in right after the "Needs your
+review" block, falling back to the end of the list when that section has no
+rows at all. These rows are never PRs: they take no part in stacks, preset
+filters, the status backfill or the "N PRs" count, and the search/preset views
+(`currentView`) do not show them.
 
 Tests: `modules/jira/search_test.go` (the `acli` payload shape; an empty result
-is not an error), `jira_issues_test.go` (the dedupe rule, `SLASH_JIRA=off`
-giving empty lists rather than an error, `groupPlanning`'s three cases —
-parent in the list, parent pulled in as context, parent unreadable — plus the
-tracker storing both lists and surviving a failed fetch) and
-`modules/jiraissues/jiraissues_test.go` (the snapshot round-trip).
+is not an error), `jira_issues_test.go` (the filter rule, the sort rule, the
+dedupe rule, `SLASH_JIRA=off` giving an empty list rather than an error, the
+three grouping cases — parent in the list, parent pulled in as context, parent
+unreadable — plus the tracker storing the list and surviving a failed fetch)
+and `modules/jiraissues/jiraissues_test.go` (the snapshot round-trip).
+Screenshot: `data/review-shots/task35-planning-todo-merged.png`.
 
 ## The general `/` command menu
 

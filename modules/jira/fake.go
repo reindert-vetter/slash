@@ -32,6 +32,30 @@ type Fake struct {
 	PostErr error
 	// users is what Users returns for any query (a fake never searches).
 	users []User
+	// Transitions records every Transition call, in order, so a test can
+	// assert which issue was moved to which status without touching Jira.
+	Transitions []TransitionCall
+	// TransitionErr, if set, is what Transition returns instead of recording —
+	// the "that status is not reachable from here" case its one caller treats
+	// as best-effort.
+	TransitionErr error
+}
+
+// TransitionCall is one recorded Transition call.
+type TransitionCall struct {
+	Key    string
+	Status string
+}
+
+// Transition records the call (or fails with the programmed error).
+func (f *Fake) Transition(_ context.Context, key, status string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.TransitionErr != nil {
+		return f.TransitionErr
+	}
+	f.Transitions = append(f.Transitions, TransitionCall{Key: key, Status: status})
+	return nil
 }
 
 // PostedComment is one recorded AddComment call.

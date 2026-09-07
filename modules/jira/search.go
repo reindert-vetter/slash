@@ -51,7 +51,7 @@ type acliSearchIssue struct {
 // reason: acli rejects it ("field 'parent' is not allowed" — its --fields
 // whitelist is roughly issuetype/key/assignee/priority/status/summary/
 // description/labels and nothing else). A Sub-task's parent is therefore read
-// per issue via Issue(), see groupPlanning in jira_issues.go.
+// per issue via Issue(), see groupIssues in jira_issues.go.
 func (m *Module) Search(ctx context.Context, jql string, limit int) ([]Issue, error) {
 	jql = strings.TrimSpace(jql)
 	if jql == "" {

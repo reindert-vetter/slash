@@ -15,11 +15,19 @@ import (
 	"slash/modules/jiraissues"
 )
 
-// jira_issues.go serves the two ISSUE sections of the PR overview — the work
-// that comes BEFORE a pull request exists. The page reads top to bottom as one
-// pipeline: "Needs your review" (a PR waiting for you), then "Planning" (what
-// is in the active sprint), then "Todo" (what is still queued). See
-// .claude/docs/pr-overview.md.
+// jira_issues.go serves the ISSUE section of the PR overview — the work that
+// comes BEFORE a pull request exists. The page reads top to bottom as one
+// pipeline: "Needs your review" (a PR waiting for you), then this one list of
+// your own sprint work. See .claude/docs/pr-overview.md.
+//
+// It used to be TWO sections, "Planning" and "Todo". They were merged on
+// request ("bij nader inzien, gooi todo en planning bij elkaar, maar dan todo
+// items onder de planning items (als er een groep is, met verschillende
+// statussen, gooi ze boven todo)") into one list with two LANES: the planning
+// lane (what you are working on right now) above the todo lane (what is queued
+// in the same sprint). A GROUP — a main task with its subtasks — carries the
+// planning lane as soon as ANY of its own members is in it, so a group with
+// mixed statuses lands above the plain todo rows. See groupIssues.
 //
 // SHAPE: a tracker + read-model, exactly like the Jira bell feed next door
 // (jira_notifications.go). The `jira_issues` Workflow below owns the fetching —
@@ -32,7 +40,7 @@ import (
 // This used to be an on-demand fetch behind a 5-minute in-memory cache. It was
 // changed on request ("lijst met jira dingen moet je in workflows bijwerken.
 // dan kan ik sneller navigeren"): a cold call was measured at ~36s because of
-// groupPlanning's extra per-issue parent reads, and after a restart the cache
+// groupIssues's extra per-issue parent reads, and after a restart the cache
 // was empty again, so the first visit to /pr-overview paid that price in full.
 // With the tracker the page always finds a snapshot lying ready.
 //
@@ -49,62 +57,90 @@ const jiraIssuesInterval = 5 * time.Minute
 // jiraIssuesLimit caps each of the two searches.
 const jiraIssuesLimit = 40
 
-// The two JQL queries behind the sections. Both are CONSTANTS — no reviewer
-// input ever reaches acli (see modules/jira/search.go).
+// The two JQL queries behind the two LANES of the one list. Both are
+// CONSTANTS — no reviewer input ever reaches acli (see modules/jira/search.go).
 //
-// planningJQL is what you still have to DO in the active sprint: assigned to
-// you, most recently updated first, minus the two stages that are no longer
-// planning ("hier niet in review laten zien en niet done"). `statusCategory !=
-// Done` rather than `status != "Done"` so every finished status (Closed,
-// Resolved, …) drops out, not just the one literally named "Done"; "In Review"
-// is an ordinary in-progress status name and therefore needs its own clause.
-const planningJQL = `assignee = currentUser() AND sprint in openSprints() AND statusCategory != Done AND status != "In Review" ORDER BY updated DESC`
+// Both are scoped to `assignee = currentUser()`, which is also what makes
+// "laat alleen subtaken zien die op mijn naam staan" hold: every row of either
+// lane is the reviewer's own work by construction. The one row that is NOT is
+// a main task pulled in as CONTEXT (see groupIssues) — it is marked as such,
+// is not a link, and is not counted.
+//
+// planningJQL is what you are working on right now: "planning; moet alle in
+// progress stories zijn". Deliberately the status NAME rather than
+// `statusCategory = "In Progress"`, which would also drag "In Review" back in
+// — a stage the reviewer explicitly does not want here ("hier niet in review
+// laten zien en niet done"). Its predecessor was every non-Done sprint status,
+// which is why a To Do sprint issue used to sit in this lane.
+const planningJQL = `assignee = currentUser() AND sprint in openSprints() AND status = "In Progress" ORDER BY updated DESC`
 
-// todoJQL is the queue feeding that sprint: still To Do, still unresolved.
-const todoJQL = `assignee = currentUser() AND status = "To Do" AND resolution = EMPTY ORDER BY updated DESC`
+// todoJQL is the queue feeding that same sprint: still To Do, still
+// unresolved — "todo, alleen todo". `sprint in openSprints()` was added with
+// the merge ("ik wil in todo en in planning alleen items zien uit active
+// sprints"): the lane used to be the whole backlog queue, sprint or not.
+const todoJQL = `assignee = currentUser() AND sprint in openSprints() AND status = "To Do" AND resolution = EMPTY ORDER BY updated DESC`
+
+// jiraInProgressStatus is the Jira status the plan tracker moves a ticket to
+// once the reviewer answered which branch it goes out from — the very status
+// planningJQL above selects on, so the row climbs into the planning lane by
+// the same rule everything else in it got there (see jiraStartProgress in
+// plan_workflow.go).
+const jiraInProgressStatus = "In Progress"
+
+// The two lanes of the one list, in render order. A row carries its own lane
+// (its own status decides it); a GROUP carries the earliest lane of any of its
+// members, which is what puts a mixed-status group above the todo rows.
+const (
+	lanePlanning = "planning"
+	laneTodo     = "todo"
+)
 
 // jiraIssueReadsMax bounds how many extra per-issue reads one grouping round
 // may do, and jiraIssueReadsPar how many run at a time. Each is its own `acli
 // jira workitem view` of several seconds, so an unusual sprint full of orphan
-// Sub-tasks can never turn one refresh into a minutes-long crawl.
+// Sub-tasks can never turn one refresh into a minutes-long crawl. The cap grew
+// from 12 to 20 when the two sections merged: one round now walks the Sub-tasks
+// of BOTH lanes, and a Sub-task whose parent read is skipped is exactly the row
+// that ends up without the parent the reviewer asked to always see.
 const (
-	jiraIssueReadsMax = 12
+	jiraIssueReadsMax = 20
 	jiraIssueReadsPar = 4
 )
 
-// planningRow is one row of the Planning section: an issue plus the single bit
-// the grouping adds. Context marks a row that is only there to NAME the main
-// task a Sub-task of yours hangs under — it is not your work (it may not even
-// be in the sprint), so the UI renders it as an unclickable header rather than
-// as a row you can open. Everything else about the row is the issue itself,
-// embedded so the JSON keeps the exact shape the frontend already reads.
-type planningRow struct {
+// issueRow is one row of the list: an issue plus the two bits the grouping
+// adds. Context marks a row that is only there to NAME the main task a
+// Sub-task of yours hangs under — it is not your work (it may not even be in
+// the sprint), so the UI renders it as an unclickable header rather than as a
+// row you can open. Lane is which half of the pipeline the row itself belongs
+// to, so the frontend can keep rendering one flat list while the two lanes
+// stay tellable apart. Everything else about the row is the issue itself,
+// embedded so the JSON stays one flat object per row.
+type issueRow struct {
 	jira.Issue
-	Context bool `json:"context,omitempty"`
+	Context bool   `json:"context,omitempty"`
+	Lane    string `json:"lane,omitempty"`
 }
 
 // jiraIssues is one fetch's outcome, on its way into the read-model.
 type jiraIssues struct {
-	OK        bool          `json:"ok"`
-	FetchedAt time.Time     `json:"fetchedAt"`
-	Planning  []planningRow `json:"planning"`
-	Todo      []jira.Issue  `json:"todo"`
-	// Error is a short reason the lists are empty (acli not logged in,
-	// SLASH_JIRA=off, …). The UI shows the sections as simply absent rather
+	OK        bool       `json:"ok"`
+	FetchedAt time.Time  `json:"fetchedAt"`
+	Issues    []issueRow `json:"issues"`
+	// Error is a short reason the list is empty (acli not logged in,
+	// SLASH_JIRA=off, …). The UI shows the section as simply absent rather
 	// than as an error wall — same "never cry wolf" rule as the bell feed.
 	Error string `json:"error,omitempty"`
 }
 
 // jiraIssuesResponse is the whole answer of GET /api/jira/issues — the stored
-// snapshot, in the exact JSON shape the overview already reads (the lists pass
+// snapshot, in the exact JSON shape the overview reads (the list passes
 // through as the opaque JSON the read-model holds, so the row shape lives in
-// one place: planningRow/jira.Issue above). FetchedAt is the moment of the
-// refresh that produced it, not of this request.
+// one place: issueRow above). FetchedAt is the moment of the refresh that
+// produced it, not of this request.
 type jiraIssuesResponse struct {
 	OK        bool            `json:"ok"`
 	FetchedAt string          `json:"fetchedAt"`
-	Planning  json.RawMessage `json:"planning"`
-	Todo      json.RawMessage `json:"todo"`
+	Issues    json.RawMessage `json:"issues"`
 	Error     string          `json:"error,omitempty"`
 }
 
@@ -124,12 +160,11 @@ type JiraIssuesSignal struct {
 // fail the tracker permanently — it would then never poll again until a
 // restart. Same reasoning as jiraNotifyResult.
 type jiraIssuesResult struct {
-	Planning int    `json:"planning"`
-	Todo     int    `json:"todo"`
-	Error    string `json:"error,omitempty"`
+	Issues int    `json:"issues"`
+	Error  string `json:"error,omitempty"`
 }
 
-// jiraIssuesWorkflow owns both issue lists. Deterministic: one Signal per loop
+// jiraIssuesWorkflow owns the issue list. Deterministic: one Signal per loop
 // iteration and a branch that reads only that Signal's recorded payload. It
 // never completes — a long-lived tracker.
 func jiraIssuesWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
@@ -158,16 +193,11 @@ func (m *TaskManager) registerJiraIssuesActivities(engine *tembed.Engine) {
 // say why the sections are empty.
 func (m *TaskManager) refreshJiraIssues(ctx context.Context) jiraIssuesResult {
 	out := fetchJiraIssues(ctx, m.jira)
-	res := jiraIssuesResult{Planning: len(out.Planning), Todo: len(out.Todo), Error: out.Error}
+	res := jiraIssuesResult{Issues: len(out.Issues), Error: out.Error}
 	if m.jiraissues == nil {
 		return res
 	}
-	planning, err := json.Marshal(out.Planning)
-	if err != nil {
-		res.Error = err.Error()
-		return res
-	}
-	todo, err := json.Marshal(out.Todo)
+	issues, err := json.Marshal(out.Issues)
 	if err != nil {
 		res.Error = err.Error()
 		return res
@@ -185,8 +215,7 @@ func (m *TaskManager) refreshJiraIssues(ctx context.Context) jiraIssuesResult {
 	}
 	if err := m.jiraissues.Save(ctx, jiraissues.Snapshot{
 		UpdatedAt: out.FetchedAt.UTC().Format(time.RFC3339),
-		Planning:  planning,
-		Todo:      todo,
+		Issues:    issues,
 		Error:     out.Error,
 	}); err != nil {
 		res.Error = err.Error()
@@ -304,7 +333,7 @@ func (s *server) handleJiraIssues(w http.ResponseWriter, r *http.Request) {
 	if s.tasks != nil {
 		mgr = s.tasks.manager
 	}
-	out := jiraIssuesResponse{OK: true, Planning: json.RawMessage("[]"), Todo: json.RawMessage("[]")}
+	out := jiraIssuesResponse{OK: true, Issues: json.RawMessage("[]")}
 	if mgr == nil {
 		writeJSON(w, http.StatusOK, out)
 		return
@@ -322,22 +351,20 @@ func (s *server) handleJiraIssues(w http.ResponseWriter, r *http.Request) {
 	if snap != nil {
 		out.FetchedAt = snap.UpdatedAt
 		out.Error = snap.Error
-		if len(snap.Planning) > 0 {
-			out.Planning = snap.Planning
-		}
-		if len(snap.Todo) > 0 {
-			out.Todo = snap.Todo
+		if len(snap.Issues) > 0 {
+			out.Issues = snap.Issues
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
-// fetchJiraIssues runs both searches. A failing search yields an empty list
-// plus a reason, never an HTTP error: the overview treats "no issues" and "Jira
-// unreachable" the same way (no section), and the real credential problem is
-// already reported by GET /api/auth/status.
+// fetchJiraIssues runs both searches and folds them into the ONE list the
+// page renders. A failing search yields an empty list plus a reason, never an
+// HTTP error: the overview treats "no issues" and "Jira unreachable" the same
+// way (no section), and the real credential problem is already reported by
+// GET /api/auth/status.
 func fetchJiraIssues(ctx context.Context, cl jira.Client) jiraIssues {
-	out := jiraIssues{OK: true, FetchedAt: time.Now(), Planning: []planningRow{}, Todo: []jira.Issue{}}
+	out := jiraIssues{OK: true, FetchedAt: time.Now(), Issues: []issueRow{}}
 	if os.Getenv("SLASH_JIRA") == "off" {
 		out.Error = "SLASH_JIRA=off"
 		return out
@@ -356,77 +383,98 @@ func fetchJiraIssues(ctx context.Context, cl jira.Client) jiraIssues {
 		out.Error = err.Error()
 		return out
 	}
-	out.Planning = append(out.Planning, groupPlanning(ctx, cl, planning)...)
-	// An issue that is both To Do and in the active sprint is already being
-	// planned, so it is shown once, in the section furthest along the pipeline.
+	// The two JQL queries are disjoint on status today, but an issue that
+	// somehow matches both belongs in the lane furthest along the pipeline —
+	// it is already being worked on, so it is shown once, in planning.
 	inPlanning := map[string]bool{}
 	for _, is := range planning {
 		inPlanning[is.Key] = true
 	}
+	queued := make([]jira.Issue, 0, len(todo))
 	for _, is := range todo {
 		if !inPlanning[is.Key] {
-			out.Todo = append(out.Todo, is)
+			queued = append(queued, is)
 		}
 	}
+	out.Issues = append(out.Issues, groupIssues(ctx, cl, planning, queued)...)
 	return out
 }
 
-// groupPlanning reorders the Planning rows so a Sub-task sits directly under
-// the main task it belongs to, instead of floating somewhere else in the
-// "updated DESC" order. A group is placed at the position of its EARLIEST
-// member, so the sprint's own recency ordering still drives the page.
+// groupIssues folds the two lanes into one ordered list. Three rules, in this
+// order:
 //
-// A Sub-task whose parent is not in the list gets that parent pulled in as a
-// CONTEXT row (Reindert: the main task must be shown above its subtasks "ook
-// als die hoofdtaak niet van hem is of buiten de sprint valt"). Both halves
-// need per-issue reads, because the search cannot return a parent at all (see
-// modules/jira/search.go), so this costs up to two rounds of `acli jira
-// workitem view` — bounded, concurrent, and behind the endpoint's own 5-minute
-// cache, so they happen once per refresh rather than once per page load. A
-// parent that cannot be read simply does not appear; the Sub-task then stays
-// an ordinary top-level row and nothing else changes.
-func groupPlanning(ctx context.Context, cl jira.Client, list []jira.Issue) []planningRow {
+//  1. A Sub-task sits directly under the main task it belongs to, instead of
+//     floating somewhere else in the "updated DESC" order. A main task that is
+//     not in either list itself is pulled in as a CONTEXT row (Reindert: the
+//     main task must be shown above its subtasks "ook als die hoofdtaak niet
+//     van hem is of buiten de sprint valt").
+//  2. A GROUP's lane is the planning lane as soon as ANY of its own members is
+//     in it — "als er een groep is, met verschillende statussen, gooi ze boven
+//     todo". A lone row is a group of one, so its own lane decides.
+//  3. Every planning-lane group comes before every todo-lane group; WITHIN a
+//     lane a group sits at the position of its EARLIEST member, so Jira's own
+//     recency ordering still drives the page.
+//
+// Rule 1 needs per-issue reads, because the search cannot return a parent at
+// all (see modules/jira/search.go): two rounds of `acli jira workitem view` —
+// bounded, concurrent, and inside the tracker's own refresh, so they cost once
+// per 5-minute tick rather than once per page load. A parent that cannot be
+// read simply does not appear; the Sub-task then stays an ordinary top-level
+// row and names its parent by KEY on its own meta line instead (the frontend
+// does that from ParentKey, which round 1 filled in).
+func groupIssues(ctx context.Context, cl jira.Client, planning, todo []jira.Issue) []issueRow {
+	// One merged sequence, planning first, each row remembering its own lane.
+	merged := make([]issueRow, 0, len(planning)+len(todo))
+	for _, is := range planning {
+		merged = append(merged, issueRow{Issue: is, Lane: lanePlanning})
+	}
+	for _, is := range todo {
+		merged = append(merged, issueRow{Issue: is, Lane: laneTodo})
+	}
+
 	// Round 1: learn each Sub-task's own parent.
 	var want []string
-	for _, is := range list {
-		if isSubtask(is) && is.ParentKey == "" {
-			want = append(want, is.Key)
+	for _, r := range merged {
+		if isSubtask(r.Issue) && r.ParentKey == "" {
+			want = append(want, r.Key)
 		}
 	}
 	read := readIssues(ctx, cl, want)
-	rows := make([]jira.Issue, len(list))
-	copy(rows, list)
-	for i, is := range rows {
-		if full, ok := read[is.Key]; ok {
-			rows[i].ParentKey, rows[i].ParentTitle = full.ParentKey, full.ParentTitle
+	for i := range merged {
+		if full, ok := read[merged[i].Key]; ok {
+			merged[i].ParentKey, merged[i].ParentTitle = full.ParentKey, full.ParentTitle
 		}
 	}
 
-	var order []string                    // group head keys, in output order
-	heads := map[string]jira.Issue{}      // head key -> its own row, when it is in the list
-	children := map[string][]jira.Issue{} // head key -> its Sub-tasks, in list order
-	titles := map[string]string{}         // head key -> the title its child knows it by
+	var order []string                  // group head keys, in encounter order
+	heads := map[string]issueRow{}      // head key -> its own row, when it is in the list
+	children := map[string][]issueRow{} // head key -> its Sub-tasks, in list order
+	titles := map[string]string{}       // head key -> the title its child knows it by
+	lanes := map[string]string{}        // head key -> the GROUP's lane (rule 2)
 	seen := map[string]bool{}
-	place := func(key string) {
+	place := func(key, lane string) {
 		if !seen[key] {
 			seen[key] = true
 			order = append(order, key)
 		}
+		if lane == lanePlanning || lanes[key] == "" {
+			lanes[key] = lane
+		}
 	}
-	for _, is := range rows {
-		if is.ParentKey == "" || is.ParentKey == is.Key {
-			place(is.Key)
-			heads[is.Key] = is
+	for _, r := range merged {
+		if r.ParentKey == "" || r.ParentKey == r.Key {
+			place(r.Key, r.Lane)
+			heads[r.Key] = r
 			continue
 		}
-		children[is.ParentKey] = append(children[is.ParentKey], is)
-		if titles[is.ParentKey] == "" {
-			titles[is.ParentKey] = is.ParentTitle
+		children[r.ParentKey] = append(children[r.ParentKey], r)
+		if titles[r.ParentKey] == "" {
+			titles[r.ParentKey] = r.ParentTitle
 		}
-		place(is.ParentKey)
+		place(r.ParentKey, r.Lane)
 	}
 
-	// Round 2: read the parents that are not in the list themselves.
+	// Round 2: read the parents that are not in either list themselves.
 	want = want[:0]
 	for _, key := range order {
 		if _, ok := heads[key]; !ok {
@@ -435,26 +483,33 @@ func groupPlanning(ctx context.Context, cl jira.Client, list []jira.Issue) []pla
 	}
 	parents := readIssues(ctx, cl, want)
 
-	out := make([]planningRow, 0, len(rows)+len(want))
-	for _, key := range order {
-		if head, ok := heads[key]; ok {
-			out = append(out, planningRow{Issue: head})
-		} else if parent, ok := parents[key]; ok {
-			if parent.Title == "" {
-				parent.Title = titles[key]
+	out := make([]issueRow, 0, len(merged)+len(want))
+	// Rule 3: the planning lane first, then the todo lane, each in `order`.
+	for _, lane := range []string{lanePlanning, laneTodo} {
+		for _, key := range order {
+			if lanes[key] != lane {
+				continue
 			}
-			// The row only ever shows key/title/type; a full ADF description
-			// would otherwise travel to the browser for nothing.
-			parent.Description = ""
-			parent.Subtasks = nil
-			// A context row is a group HEAD here, whatever it hangs under in
-			// Jira itself — keeping its own parent would let the frontend
-			// indent it under an unrelated row that happens to be in the list.
-			parent.ParentKey, parent.ParentTitle = "", ""
-			out = append(out, planningRow{Issue: parent, Context: true})
-		}
-		for _, c := range children[key] {
-			out = append(out, planningRow{Issue: c})
+			if head, ok := heads[key]; ok {
+				out = append(out, head)
+			} else if parent, ok := parents[key]; ok {
+				if parent.Title == "" {
+					parent.Title = titles[key]
+				}
+				// The row only ever shows key/title/type; a full ADF
+				// description or the ticket's comments would otherwise travel
+				// to the browser for nothing.
+				parent.Description = ""
+				parent.Comments = nil
+				parent.Subtasks = nil
+				// A context row is a group HEAD here, whatever it hangs under
+				// in Jira itself — keeping its own parent would let the
+				// frontend indent it under an unrelated row that happens to
+				// be in the list.
+				parent.ParentKey, parent.ParentTitle = "", ""
+				out = append(out, issueRow{Issue: parent, Context: true, Lane: lane})
+			}
+			out = append(out, children[key]...)
 		}
 	}
 	return out

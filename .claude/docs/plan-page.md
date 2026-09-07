@@ -321,7 +321,9 @@ them. Both sides land on the document (`parentKey`/`parentTitle`/
   assignee "overal", "ook bij eigen tickets"): `scopeRow` renders
   `assigneeMark(assignee, assigneeAvatar, 'h-5 w-5')` (`src/avatar.mjs`,
   shared with `/pr-overview`'s issue rows — see
-  "Every issue row names its ASSIGNEE" in `.claude/docs/pr-overview.md`) for
+  "Every issue row names its ASSIGNEE, on the LEFT" in
+  `.claude/docs/pr-overview.md`; this page uses the INLINE shape, the overview
+  rows the `stacked` one, same renderer) for
   the main-task choice as well as for every subtask, since deciding what to
   plan partly means seeing who is already on it. Unassigned is a circle with a
   **question mark** plus the words "Niet toegewezen" — shape + word, never
@@ -449,6 +451,45 @@ one).
 - **An Execution started before this gate applied to its type replays past it
   untouched** — see the trigger bullet above for the full mechanism
   (`.claude/rules/workflow-determinism.md`).
+
+### The branch question also starts the work (Jira → In Progress)
+
+Reviewer request: *"als je in todo een branch hebt aangemaakt (eerste vraag),
+moet het naar in planning en in jira naar in progress"*. Answering this
+question means the work has begun, so the ticket moves to **In Progress** in
+Jira right there.
+
+- **It is the ONE write into Jira this tracker does**, and it goes the
+  sanctioned way: a workflow **Activity** (`jiraStartProgress`, body
+  `TaskManager.startJiraProgress`) calling the module's own write method
+  `jira.Client.Transition` — `acli jira workitem transition --key K --status
+  "In Progress" --yes` (`modules/jira/transition.go`). Never from an HTTP
+  handler or the UI (`.claude/rules/workflows-write-boundary.md`). `acli`
+  rather than REST because the documented REST route needs the numeric
+  *transition id* of the target status, i.e. two round trips plus a name→id
+  match that differs per project workflow.
+- **`/pr-overview` needs no flag of its own.** Its planning lane is exactly
+  `status = "In Progress"` (see `.claude/docs/pr-overview.md`), so the row
+  climbs out of the todo lane by the rule that put everything else there.
+  `startJiraProgress` additionally Signals the `jira_issues` tracker a
+  `"refresh"`, so that happens now instead of at its next 5-minute tick.
+- **Best-effort on purpose: the Activity never returns an error.** Every way
+  it can fail is either "nothing to do" or "not ours to fix" — the ticket is
+  already In Progress, its project's workflow has no such transition from
+  where it is, or `acli` is not logged in — and none of them are worth
+  failing a plan the reviewer is waiting minutes for. The reason is logged and
+  reaches the UI through `GET /api/problems`.
+- **A pre-existing Execution replays past it untouched.** The call is gated on
+  `doc.StartsProgress`, which `planLoadIssue` sets on the document it records —
+  the same positional-history rule `AskBase`/`LoadsContext` follow, and the
+  reason this is not simply unconditional: tembed matches history positionally
+  and the plan Run ID is deterministic, so an extra Activity in an already-run
+  Execution's history would park the tracker on a signal it never carries
+  (`.claude/rules/workflow-determinism.md`).
+- Tests: `TestStartJiraProgressMovesTheTicket` /
+  `TestStartJiraProgressSurvivesARefusedTransition` (`jira_issues_test.go`,
+  next to the lane rule the transition feeds). Verified live against the test
+  ticket **PAYM-813** (To Do → In Progress → back to To Do).
 
 ## Keyboard
 

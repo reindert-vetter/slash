@@ -88,6 +88,8 @@ func (unreachableFeedJira) Users(context.Context, string, int) ([]jira.User, err
 	return nil, nil
 }
 
+func (unreachableFeedJira) Transition(context.Context, string, string) error { return nil }
+
 // TestJiraCredsViewFallsBackToDefaultSite pins the fix for the settings page's
 // domain field showing only a placeholder hint instead of the real default: a
 // fresh install with no SLASH_JIRA_SITE configured must still report the

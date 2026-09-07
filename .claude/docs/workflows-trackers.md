@@ -438,16 +438,17 @@ notification has no PR at all.
 
 ## `jira_issues` (one per process)
 
-The reviewer's **own Jira issues** behind `/pr-overview`'s "Planning" and
-"Todo" sections (see `.claude/docs/pr-overview.md`). One Execution for the
-whole process, like `jira_inbox` and for the same reason: both JQL queries are
-`assignee = currentUser()`, so the list is per-**user** and has no repo to key
-on.
+The reviewer's **own Jira issues** behind `/pr-overview`'s one issue section
+(see `.claude/docs/pr-overview.md`; it used to be two sections, "Planning" and
+"Todo", which are now the two **lanes** of a single list). One Execution for
+the whole process, like `jira_inbox` and for the same reason: both JQL queries
+are `assignee = currentUser()`, so the list is per-**user** and has no repo to
+key on.
 
 - **It replaced an on-demand fetch behind a 5-minute in-memory cache**, on
   request ("lijst met jira dingen moet je in workflows bijwerken. dan kan ik
   sneller navigeren"). A cold call was measured at ~36s — two `acli` searches
-  plus `groupPlanning`'s bounded rounds of per-issue parent reads — and the
+  plus `groupIssues`'s bounded rounds of per-issue parent reads — and the
   cache started empty after every restart, so the first visit to the overview
   paid that in full. `GET /api/jira/issues` now reads one SQLite row (~1ms
   measured) and the fetching happens on the tracker's own 5-minute ticker.
@@ -469,15 +470,28 @@ on.
   restart. On top of that, a failed refresh **keeps the last good snapshot**
   and only refreshes its `error` field — an `acli` hiccup must not blank a
   perfectly usable list.
-- **`modules/jiraissues`** is the read-model: one row (`id = 1`), the two lists
-  as opaque JSON plus `updated_at`/`error`, mirroring `modules/inbox`'s
-  "snapshot as opaque JSON" so the module stays decoupled from `planningRow`.
-  Durable on purpose: after a restart the page shows the last known lists
-  instantly instead of waiting for the first refresh.
+- **`modules/jiraissues`** is the read-model: one row (`id = 1`), the list as
+  opaque JSON plus `updated_at`/`error`, mirroring `modules/inbox`'s "snapshot
+  as opaque JSON" so the module stays decoupled from `issueRow`. Durable on
+  purpose: after a restart the page shows the last known list instantly instead
+  of waiting for the first refresh. Its table was **replaced** (not migrated
+  column by column) when the two lists became one — `jira_issues`
+  (`planning_json`/`todo_json`) → `jira_issue_list` (`issues_json`), with a
+  `DROP TABLE IF EXISTS` in the schema: this row is derived state the tracker
+  rebuilds on its very next tick (and once at startup), so dropping it costs
+  nothing a refresh does not restore.
 - **No retention/cleanup** — one row, overwritten in place.
-- The JQL queries, the dedupe rule and `groupPlanning` are untouched by this
-  move; only *when* they run changed. Tests: `modules/jiraissues`, plus
-  `TestJiraIssuesTrackerStoresBothLists`/
+- **The `plan` tracker signals a refresh out of band**: answering the plan
+  page's branch question moves the ticket to "In Progress" in Jira, which is
+  exactly what the planning lane selects on, so `jiraStartProgress`
+  (`plan_workflow.go`) sends this tracker a `"refresh"` Signal instead of
+  letting the row climb five minutes later. See "The branch question also
+  starts the work" in `.claude/docs/plan-page.md`.
+- The JQL queries changed with the merge (both lanes are now active-sprint
+  only, planning is `status = "In Progress"`); the dedupe rule and the
+  subtask grouping (`groupIssues`) are unchanged in *shape* — see
+  `.claude/docs/pr-overview.md` for the sort/filter rule itself. Tests:
+  `modules/jiraissues`, plus `TestJiraIssuesTrackerStoresTheList`/
   `TestJiraIssuesTrackerSurvivesAFailedFetch` (`jira_issues_test.go`), which
   drive the real tracker end to end and thereby also pin the Workflow Type and
   the `refreshJiraIssues` Activity name.

@@ -366,6 +366,7 @@ export const EN = {
   'Huidige branch': 'Current branch',
   'Bijgewerkt {time}': 'Updated {time}',
   'hoofdtaak, alleen ter context': 'main task, context only',
+  'onderdeel van': 'part of',
   Samengevoegd: 'Merged',
   Gesloten: 'Closed',
   'Deze PR is niet meer open': 'This PR is no longer open',

@@ -18,7 +18,7 @@ func openTest(t *testing.T) *Module {
 }
 
 // Nothing stored yet (a fresh install, or the first refresh still in flight)
-// is not an error — the endpoint then simply serves empty sections.
+// is not an error — the endpoint then simply serves an empty section.
 func TestGetWithoutASnapshotIsNotAnError(t *testing.T) {
 	got, err := openTest(t).Get(context.Background())
 	if err != nil {
@@ -34,13 +34,12 @@ func TestGetWithoutASnapshotIsNotAnError(t *testing.T) {
 func TestSaveReplacesTheSingleSnapshot(t *testing.T) {
 	m := openTest(t)
 	ctx := context.Background()
-	if err := m.Save(ctx, Snapshot{Planning: json.RawMessage(`[{"key":"PROD-1"}]`)}); err != nil {
+	if err := m.Save(ctx, Snapshot{Issues: json.RawMessage(`[{"key":"PROD-1"}]`)}); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 	if err := m.Save(ctx, Snapshot{
 		UpdatedAt: "2026-09-06T10:00:00Z",
-		Planning:  json.RawMessage(`[{"key":"PROD-2"}]`),
-		Todo:      json.RawMessage(`[{"key":"PROD-9"}]`),
+		Issues:    json.RawMessage(`[{"key":"PROD-2"},{"key":"PROD-9"}]`),
 		Error:     "acli not logged in",
 	}); err != nil {
 		t.Fatalf("save again: %v", err)
@@ -52,8 +51,8 @@ func TestSaveReplacesTheSingleSnapshot(t *testing.T) {
 	if got == nil {
 		t.Fatal("got nil, want the stored snapshot")
 	}
-	if string(got.Planning) != `[{"key":"PROD-2"}]` || string(got.Todo) != `[{"key":"PROD-9"}]` {
-		t.Fatalf("lists = %s / %s, want the second save", got.Planning, got.Todo)
+	if string(got.Issues) != `[{"key":"PROD-2"},{"key":"PROD-9"}]` {
+		t.Fatalf("issues = %s, want the second save", got.Issues)
 	}
 	if got.UpdatedAt != "2026-09-06T10:00:00Z" || got.Error != "acli not logged in" {
 		t.Fatalf("got %+v, want the second save's stamp and reason", got)
@@ -62,7 +61,7 @@ func TestSaveReplacesTheSingleSnapshot(t *testing.T) {
 
 // An empty list round-trips as an empty JSON array, never as invalid JSON the
 // handler would have to special-case.
-func TestSaveDefaultsEmptyListsToJSONArrays(t *testing.T) {
+func TestSaveDefaultsAnEmptyListToAJSONArray(t *testing.T) {
 	m := openTest(t)
 	ctx := context.Background()
 	if err := m.Save(ctx, Snapshot{}); err != nil {
@@ -72,8 +71,8 @@ func TestSaveDefaultsEmptyListsToJSONArrays(t *testing.T) {
 	if err != nil || got == nil {
 		t.Fatalf("get: %v / %+v", err, got)
 	}
-	if string(got.Planning) != "[]" || string(got.Todo) != "[]" {
-		t.Fatalf("lists = %s / %s, want empty arrays", got.Planning, got.Todo)
+	if string(got.Issues) != "[]" {
+		t.Fatalf("issues = %s, want an empty array", got.Issues)
 	}
 	if got.UpdatedAt == "" {
 		t.Fatal("updatedAt is empty, want a stamp filled in by Save")

@@ -228,16 +228,36 @@ export function avatarHTML(name, avatarUrl, sizeCls = 'h-6 w-6', extraCls = '') 
 // .claude/rules/arrowjs-pitfalls.md). Measured symptom without it: the name
 // text updated to the real assignee while the circle kept showing the `?` of
 // the first, still-empty render.
-export function assigneeMark(name, avatarUrl, sizeCls = 'h-5 w-5') {
+// STACKED is the second shape: the avatar with the name right UNDER it, in a
+// fixed-width column at the LEFT edge of a row — the exact shape authorMark
+// gives every PR row on /pr-overview (Reindert, on the issue rows: "avatar
+// links net als prs daarboven"). Same data, same colourblind-safe unassigned
+// fallback; only the layout differs, so the two never drift apart. The inline
+// shape stays the default and is what the plan page uses.
+export function assigneeMark(name, avatarUrl, sizeCls = 'h-5 w-5', stacked = false) {
   const who = (name || '').trim()
+  const label = who ? who : t('Niet toegewezen')
+  if (stacked) {
+    return html`<span
+      class="flex w-20 shrink-0 flex-col items-center gap-1"
+      data-testid="assignee"
+      data-assignee="${who}"
+      title="${label}"
+    >
+      ${() => avatarHTML(who, who ? avatarUrl : '', sizeCls)}
+      <span class="max-w-full truncate text-[12px] font-semibold leading-none text-slate-700 dark:text-zinc-300"
+        >${who ? who.split(/\s+/)[0] : label}</span
+      >
+    </span>`
+  }
   return html`<span
     class="inline-flex shrink-0 items-center gap-1.5"
     data-testid="assignee"
     data-assignee="${who}"
-    title="${who ? who : t('Niet toegewezen')}"
+    title="${label}"
   >
     ${() => avatarHTML(who, who ? avatarUrl : '', sizeCls)}
-    <span class="max-w-[8rem] truncate text-[11px] text-slate-500 dark:text-zinc-400">${who ? who : t('Niet toegewezen')}</span>
+    <span class="max-w-[8rem] truncate text-[11px] text-slate-500 dark:text-zinc-400">${label}</span>
   </span>`
 }
 

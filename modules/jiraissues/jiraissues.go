@@ -1,7 +1,8 @@
-// Package jiraissues is the read-model behind the two non-PR sections of
-// /pr-overview — "Planning" (the active sprint) and "Todo" (the queue feeding
-// it). It owns a tiny SQLite table holding ONE row: the latest snapshot of
-// both lists, plus the reason they are empty when a fetch failed.
+// Package jiraissues is the read-model behind the non-PR issue section of
+// /pr-overview — the reviewer's own sprint work, in one list whose planning
+// rows sit above its todo rows (see jira_issues.go). It owns a tiny SQLite
+// table holding ONE row: the latest snapshot of that list, plus the reason it
+// is empty when a fetch failed.
 //
 // One row, not one per repo like modules/inbox: these issues are assigned to
 // the reviewer (`assignee = currentUser()`), so the list is per-USER and has
@@ -10,9 +11,15 @@
 //
 // Its WRITE method (Save) is driven only by the jira_issues tracker's Activity
 // (per the project rule that only workflows mutate state); its READ method
-// (Get) backs the read-only GET /api/jira/issues. The two lists are stored as
-// opaque JSON so this module stays decoupled from the main package's row
-// types, exactly like modules/inbox's sections/statuses.
+// (Get) backs the read-only GET /api/jira/issues. The list is stored as opaque
+// JSON so this module stays decoupled from the main package's row types,
+// exactly like modules/inbox's sections/statuses.
+//
+// The table used to hold TWO lists (planning_json/todo_json), one per section.
+// Those sections were merged into one list, so the table was replaced rather
+// than migrated column by column: this row is derived state that the tracker
+// rebuilds on its very next tick (and once at startup), so dropping the old
+// one costs nothing a refresh does not restore.
 package jiraissues
 
 import (
@@ -30,24 +37,24 @@ import (
 const schema = `
 PRAGMA journal_mode = WAL;
 
-CREATE TABLE IF NOT EXISTS jira_issues (
-  id            INTEGER PRIMARY KEY CHECK (id = 1),
-  updated_at    TEXT NOT NULL,
-  planning_json TEXT NOT NULL,
-  todo_json     TEXT NOT NULL,
-  error         TEXT NOT NULL DEFAULT ''
+DROP TABLE IF EXISTS jira_issues;
+
+CREATE TABLE IF NOT EXISTS jira_issue_list (
+  id          INTEGER PRIMARY KEY CHECK (id = 1),
+  updated_at  TEXT NOT NULL,
+  issues_json TEXT NOT NULL,
+  error       TEXT NOT NULL DEFAULT ''
 );
 `
 
-// Snapshot is the latest state of both lists. Planning and Todo are opaque
-// JSON arrays (the main package owns their shape). Error is a short reason the
-// lists are empty (acli not logged in, SLASH_JIRA=off, …) — kept alongside the
-// lists rather than instead of them, so a failed refresh never blanks a
-// perfectly usable previous snapshot.
+// Snapshot is the latest state of the list. Issues is an opaque JSON array
+// (the main package owns its row shape). Error is a short reason the list is
+// empty (acli not logged in, SLASH_JIRA=off, …) — kept alongside the list
+// rather than instead of it, so a failed refresh never blanks a perfectly
+// usable previous snapshot.
 type Snapshot struct {
 	UpdatedAt string          `json:"updatedAt"`
-	Planning  json.RawMessage `json:"planning"`
-	Todo      json.RawMessage `json:"todo"`
+	Issues    json.RawMessage `json:"issues"`
 	Error     string          `json:"error,omitempty"`
 }
 
@@ -74,18 +81,14 @@ func (m *Module) Save(ctx context.Context, s Snapshot) error {
 	if s.UpdatedAt == "" {
 		s.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	}
-	planning := s.Planning
-	if len(planning) == 0 {
-		planning = json.RawMessage("[]")
-	}
-	todo := s.Todo
-	if len(todo) == 0 {
-		todo = json.RawMessage("[]")
+	issues := s.Issues
+	if len(issues) == 0 {
+		issues = json.RawMessage("[]")
 	}
 	_, err := m.db.ExecContext(ctx,
-		`INSERT OR REPLACE INTO jira_issues (id, updated_at, planning_json, todo_json, error)
-		 VALUES (1,?,?,?,?)`,
-		s.UpdatedAt, string(planning), string(todo), s.Error)
+		`INSERT OR REPLACE INTO jira_issue_list (id, updated_at, issues_json, error)
+		 VALUES (1,?,?,?)`,
+		s.UpdatedAt, string(issues), s.Error)
 	return err
 }
 
@@ -94,17 +97,16 @@ func (m *Module) Save(ctx context.Context, s Snapshot) error {
 // UI.
 func (m *Module) Get(ctx context.Context) (*Snapshot, error) {
 	var s Snapshot
-	var planning, todo string
+	var issues string
 	err := m.db.QueryRowContext(ctx,
-		`SELECT updated_at, planning_json, todo_json, error FROM jira_issues WHERE id = 1`).
-		Scan(&s.UpdatedAt, &planning, &todo, &s.Error)
+		`SELECT updated_at, issues_json, error FROM jira_issue_list WHERE id = 1`).
+		Scan(&s.UpdatedAt, &issues, &s.Error)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	s.Planning = json.RawMessage(planning)
-	s.Todo = json.RawMessage(todo)
+	s.Issues = json.RawMessage(issues)
 	return &s, nil
 }
