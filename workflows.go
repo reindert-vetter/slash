@@ -351,9 +351,10 @@ const (
 	// .../signals/{name} route (tasks_api.go) dispatches purely on this literal,
 	// so it must not collide with an existing one.
 	SignalAutoWarn = "autowarn"
-	// SignalJiraNotify carries both actions of the jira_inbox tracker — a
-	// refresh (the poller/the UI on load) and a "the reviewer opened this one"
-	// mark-read — distinguished by the payload's `kind`. One name, because
+	// SignalJiraNotify carries every action of the jira_inbox tracker — a
+	// refresh (the poller/the UI on load), a "the reviewer opened this one"
+	// mark-read, its "mark unread again" mirror, and the mark-all-read bulk
+	// action — distinguished by the payload's `kind`. One name, because
 	// tembed's WaitSignal takes exactly one. Deliberately a distinct literal
 	// from every other Signal name (the generic .../signals/{name} route
 	// dispatches purely on it).

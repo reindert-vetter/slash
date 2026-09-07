@@ -145,3 +145,77 @@ func TestUpsertRoundTripsRichFields(t *testing.T) {
 		t.Errorf("GroupSize: got %d, want 1 (zero-value normalized)", second.GroupSize)
 	}
 }
+
+// TestMarkUnreadSurvivesTheNextRefresh is the mirror of
+// TestMarkReadSurvivesTheNextRefresh and the whole point of the local
+// forced_unread column: the reviewer's right-click "Markeer als ongelezen"
+// must hold even when the FEED itself calls the row read (this app never writes
+// into Jira), so the very next poll's Upsert may not undo it. Marking it read
+// again afterwards clears the override.
+func TestMarkUnreadSurvivesTheNextRefresh(t *testing.T) {
+	m := openTest(t)
+	ctx := context.Background()
+	// A row Jira itself already considers read.
+	item := Item{ID: "n1", At: "2026-09-03T10:00:00Z", Title: "commented", URL: "https://x/browse/A-1", Unread: false}
+	if err := m.Upsert(ctx, []Item{item}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if err := m.MarkUnread(ctx, "n1"); err != nil {
+		t.Fatalf("mark unread: %v", err)
+	}
+	if list, err := m.List(ctx, 10); err != nil {
+		t.Fatalf("list: %v", err)
+	} else if len(list) != 1 || !list[0].Unread {
+		t.Fatalf("want the row unread right after MarkUnread, got %+v", list)
+	}
+	// The next poll reports it read again — the override must win.
+	if err := m.Upsert(ctx, []Item{item}); err != nil {
+		t.Fatalf("re-upsert: %v", err)
+	}
+	if list, err := m.List(ctx, 10); err != nil {
+		t.Fatalf("list: %v", err)
+	} else if !list[0].Unread {
+		t.Error("a notification marked unread here must stay unread across refreshes")
+	}
+	// And marking it read again drops the override for good.
+	if err := m.MarkRead(ctx, "n1", "2026-09-03T12:00:00Z"); err != nil {
+		t.Fatalf("mark read: %v", err)
+	}
+	if err := m.Upsert(ctx, []Item{item}); err != nil {
+		t.Fatalf("re-upsert 2: %v", err)
+	}
+	if list, err := m.List(ctx, 10); err != nil {
+		t.Fatalf("list: %v", err)
+	} else if list[0].Unread {
+		t.Error("marking read again must clear the forced-unread override")
+	}
+}
+
+// TestMarkAllReadClearsAForcedUnreadRow: the bulk "Alles gelezen maken" is the
+// escape hatch for a row the reviewer marked unread, so it must clear the
+// override too — otherwise one such row would stay unread forever and keep the
+// "N ongelezen" counter above zero.
+func TestMarkAllReadClearsAForcedUnreadRow(t *testing.T) {
+	m := openTest(t)
+	ctx := context.Background()
+	item := Item{ID: "n1", At: "2026-09-03T10:00:00Z", URL: "https://x/browse/A-1", Unread: false}
+	if err := m.Upsert(ctx, []Item{item}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if err := m.MarkUnread(ctx, "n1"); err != nil {
+		t.Fatalf("mark unread: %v", err)
+	}
+	if err := m.MarkAllRead(ctx, "2026-09-03T13:00:00Z"); err != nil {
+		t.Fatalf("mark all read: %v", err)
+	}
+	if err := m.Upsert(ctx, []Item{item}); err != nil {
+		t.Fatalf("re-upsert: %v", err)
+	}
+	list, err := m.List(ctx, 10)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if list[0].Unread {
+		t.Error("MarkAllRead must clear a forced-unread row")
+	}
+}

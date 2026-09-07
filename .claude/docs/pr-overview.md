@@ -123,6 +123,57 @@ the ONLY place this feed is shown) moved into the bell's own dropdown.
     the existing generic `.../signals/jira_notify` forwarder
     (`tasks_api.go`) just allow-lists this third kind alongside `"read"` and
     the `"refresh"` fallback.
+- **Right-click a notification row → "Markeer als ongelezen"** (reviewer
+  request: "ik wil rechtermuisknop kunnen drukken en het op ongelezen kunnen
+  markeren" — the browser's own "Open Link in New Tab" menu was all a
+  right-click on these rows gave). The reverse direction of the read path
+  above, and deliberately the SAME mechanism the review tree already has, not
+  a second one — see "The right-click context menu" in
+  `.claude/docs/command-palette.md`:
+  - **The menu** is this page's own already-existing `CommandMenu`/`openMenu`
+    (the `/` palette), now with the `native` variant `/pr/<id>` uses:
+    `openMenu({native, x, y, jira})` replaces `omenu` wholesale on every open
+    (the stable-`menu` + fresh-`omenu` split, unchanged — the notification
+    itself rides on the DISPOSABLE half, so an orphaned binding from a
+    previous open can only read that open's own object, see "Orphan bindings
+    of a dropped subtree" in `.claude/rules/arrowjs-pitfalls.md`),
+    `positionNativeMenu()` places the box at the click point clamped into the
+    viewport (a straight port of `home.mjs`'s function of the same name), and
+    `resolveOverviewCommands` drops the pinned "Sluit menu" row while
+    `omenu.native` — in the ONE place both the render and `handleMenuKey`'s
+    ↑/↓/Enter index into, exactly as `home.mjs`'s own `resolveCommands` does.
+  - **The rows** (`jiraNotificationCommands`) are the read/unread write path
+    the panel already had, per row: "Markeer als ongelezen" for a read row,
+    "Markeer als gelezen" for an unread one (never an action that would be a
+    no-op), plus "Alles gelezen maken". They are WORDS, which is also what
+    makes the state readable without leaning on the unread dot's colour.
+  - **The binding** is one `@contextmenu` on `jiraRow`'s own `<a>`, calling
+    `e.preventDefault()` (suppress the browser menu — the row really is a
+    link) and `e.stopPropagation()` **before** opening the menu, per the
+    nested-`@click`/`@contextmenu` ordering rule.
+  - **The bell panel stays open** while its own context menu is up: the
+    outside-`mousedown` closer skips a click inside
+    `[data-testid=command-overlay]` (the menu is mounted at the page root, not
+    inside `jira-bell-wrapper`) — marking a row unread and then not seeing it
+    turn bold again is exactly what the action is for.
+  - **The write** is `markJiraUnread(n)`, `markJiraRead`'s mirror down to the
+    optimistic update and the shared `ensureJiraRunId()`: Signal
+    `{"kind":"unread","id":…}`.
+  - **Backend**: a fourth `JiraNotifySignal.Kind`, a fourth Activity
+    (`markJiraNotificationUnread`) and
+    `jiranotify.Module.MarkUnread(ctx, id)`. It clears `read_at` **and**
+    raises a new local `forced_unread` column, because the feed itself may
+    well call the row read — this app never writes into Jira, so without that
+    override the very next poll's `Upsert` would silently undo it (`Upsert`
+    leaves both local columns alone, the same way it already preserved
+    `read_at`). `Item.Unread` is therefore
+    `forced_unread == 1 || (feed_unread == 1 && read_at == '')`, and both
+    `MarkRead`/`MarkAllRead` clear the override so a forced-unread row can
+    always be marked read again. The generic forwarder allow-lists the new
+    kind and rejects it without an id, exactly like `"read"`. Tests:
+    `TestMarkUnreadSurvivesTheNextRefresh` /
+    `TestMarkAllReadClearsAForcedUnreadRow`
+    (`modules/jiranotify/jiranotify_test.go`).
 - **The dropdown is its own small state machine**, deliberately NOT folded
   into the row-popover mechanism (`ui.openPopover`, which also resets
   unrelated row-popover state on close): `state.jiraBellOpen`, closed by an

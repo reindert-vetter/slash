@@ -338,6 +338,7 @@ export const EN = {
   'Geen notificaties.': 'No notifications.',
   'Alles gelezen maken': 'Mark all as read',
   'Markeer als gelezen': 'Mark as read',
+  'Markeer als ongelezen': 'Mark as unread',
   'Werktrees voorbereiden…': 'Preparing worktrees…',
   'Blocks scannen…': 'Scanning blocks…',
   'Relaties opbouwen…': 'Building relations…',

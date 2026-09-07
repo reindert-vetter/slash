@@ -862,7 +862,7 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 
 	// GET /api/jira/notifications → the read-only Jira notification feed (the
 	// bell menu) out of the jiranotify read-model, plus the tracker's Run ID so
-	// the UI can signal a "read" to it via .../signals/jira_notify.
+	// the UI can signal a "read"/"unread" to it via .../signals/jira_notify.
 	mux.HandleFunc("/api/jira/notifications", s.handleJiraNotifications)
 	// GET /api/jira/issues[?refresh=1] → the reviewer's own Jira issues behind
 	// the overview's "Planning"/"Todo" sections (jira_issues.go). Read-only.
@@ -1486,24 +1486,26 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 		}
 		// The jira_notify signal carries the reviewer's own action on the Jira
 		// notification feed: "read" marks one notification read (an open, or
-		// an explicit per-row tick), "read_all" marks every unread row read in
+		// an explicit per-row tick), "unread" is its mirror (the right-click
+		// "Markeer als ongelezen"), "read_all" marks every unread row read in
 		// one go — the only writes this page does — anything else is a plain
-		// refresh. Only these three kinds are forwarded, and a "read" without
-		// an id is rejected — the same "whatever the body says, only what the
-		// UI may do is passed on" restriction the pr_status branch above
-		// applies.
+		// refresh. Only these four kinds are forwarded, and a per-row kind
+		// without an id is rejected — the same "whatever the body says, only
+		// what the UI may do is passed on" restriction the pr_status branch
+		// above applies.
 		if parts[2] == SignalJiraNotify {
 			var body JiraNotifySignal
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				http.Error(w, "invalid jira signal", http.StatusBadRequest)
 				return
 			}
-			if body.Kind == "read" && strings.TrimSpace(body.ID) == "" {
+			perRow := body.Kind == "read" || body.Kind == "unread"
+			if perRow && strings.TrimSpace(body.ID) == "" {
 				http.Error(w, "invalid jira signal", http.StatusBadRequest)
 				return
 			} else if body.Kind == "read_all" {
 				body = JiraNotifySignal{Kind: "read_all"}
-			} else if body.Kind != "read" {
+			} else if !perRow {
 				body = JiraNotifySignal{Kind: "refresh"}
 			}
 			if err := s.tasks.engine.SignalWorkflow(runID, SignalJiraNotify, body); err != nil {
@@ -2314,7 +2316,7 @@ func (s *server) handleAutoWarn(w http.ResponseWriter, r *http.Request) {
 
 // handleJiraInboxStart starts (or reuses) the process-wide jira_inbox tracker
 // and returns its Run ID. The UI then marks a notification read by signalling
-// {"kind":"read","id":…} to .../signals/jira_notify.
+// {"kind":"read"|"unread","id":…} to .../signals/jira_notify.
 func (s *server) handleJiraInboxStart(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

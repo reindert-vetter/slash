@@ -25,6 +25,7 @@ import (
 //	{"kind":"refresh"}          — the 5-minute poller and the UI on load
 //	{"kind":"read","id":"…"}    — the reviewer opened (or explicitly ticked) one notification
 //	{"kind":"read_all"}         — the reviewer's "Alles gelezen maken" bulk action
+//	{"kind":"unread","id":"…"}  — the reviewer marked one notification unread again
 //
 // One Signal name rather than two because tembed's WaitSignal takes exactly one
 // name; branching on a payload that comes straight out of the recorded history
@@ -59,7 +60,8 @@ type JiraNotifyInput struct{}
 
 // JiraNotifySignal is the one Signal payload the tracker reacts to. Kind is
 // "refresh" (default, also for an empty payload), "read" (one notification,
-// ID required) or "read_all" (every currently unread row, no ID).
+// ID required), "read_all" (every currently unread row, no ID) or "unread"
+// (one notification back to unread, ID required).
 type JiraNotifySignal struct {
 	Kind string `json:"kind"`
 	ID   string `json:"id"`
@@ -100,6 +102,12 @@ func jiraInboxWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			}
 			continue
 		}
+		if sig.Kind == "unread" {
+			if err := w.ExecuteActivity("markJiraNotificationUnread", sig, nil); err != nil {
+				return nil, fmt.Errorf("mark jira notification unread: %w", err)
+			}
+			continue
+		}
 		if sig.Kind == "read_all" {
 			if err := w.ExecuteActivity("markAllJiraNotificationsRead", sig, nil); err != nil {
 				return nil, fmt.Errorf("mark all jira notifications read: %w", err)
@@ -113,7 +121,7 @@ func jiraInboxWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	}
 }
 
-// registerJiraNotifyActivities wires the three Activities. Called from
+// registerJiraNotifyActivities wires the tracker's Activities. Called from
 // registerWorkflows in workflows.go.
 func (m *TaskManager) registerJiraNotifyActivities(engine *tembed.Engine) {
 	// The jiranotify module is the only writer of this read-model.
@@ -129,6 +137,16 @@ func (m *TaskManager) registerJiraNotifyActivities(engine *tembed.Engine) {
 			return nil, nil
 		}
 		return nil, m.jiranotify.MarkRead(ctx, sig.ID, time.Now().UTC().Format(time.RFC3339))
+	})
+	engine.RegisterActivity("markJiraNotificationUnread", func(ctx context.Context, in []byte) ([]byte, error) {
+		var sig JiraNotifySignal
+		if err := json.Unmarshal(in, &sig); err != nil {
+			return nil, err
+		}
+		if m.jiranotify == nil || sig.ID == "" {
+			return nil, nil
+		}
+		return nil, m.jiranotify.MarkUnread(ctx, sig.ID)
 	})
 	engine.RegisterActivity("markAllJiraNotificationsRead", func(ctx context.Context, in []byte) ([]byte, error) {
 		if m.jiranotify == nil {

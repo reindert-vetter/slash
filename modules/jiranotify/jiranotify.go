@@ -4,7 +4,7 @@
 // (feed_unread) and what THIS app knows (read_at — set when the reviewer opened
 // the row here).
 //
-// Its WRITE methods (Upsert/MarkRead/Purge) are driven only by the jira_inbox
+// Its WRITE methods (Upsert/MarkRead/MarkUnread/Purge) are driven only by the jira_inbox
 // and cleanup workflows' Activities, per the project rule that only workflows
 // mutate state; its READ method (List) backs the read-only GET
 // /api/jira/notifications.
@@ -55,11 +55,17 @@ func migrate(db *sql.DB) {
 	_, _ = db.Exec(`ALTER TABLE jira_notifications ADD COLUMN group_size INTEGER NOT NULL DEFAULT 1`)
 	_, _ = db.Exec(`ALTER TABLE jira_notifications ADD COLUMN other_actor TEXT NOT NULL DEFAULT ''`)
 	_, _ = db.Exec(`ALTER TABLE jira_notifications ADD COLUMN comment_preview TEXT NOT NULL DEFAULT ''`)
+	// forced_unread backs "mark as unread" (the right-click action on a
+	// notification row, see .claude/docs/pr-overview.md). A local override
+	// like read_at, and for the same reason: this app never writes into Jira,
+	// so the feed keeps reporting its own read state and the next Upsert would
+	// otherwise flip the row straight back to read.
+	_, _ = db.Exec(`ALTER TABLE jira_notifications ADD COLUMN forced_unread INTEGER NOT NULL DEFAULT 0`)
 }
 
 // Item is one stored notification. Unread is the effective state the UI
-// filters on: the feed still calls it unread AND the reviewer never opened it
-// here. IssueTitle/IssueStatus/IssueIconURL/GroupSize/OtherActor/
+// filters on: the reviewer explicitly marked it unread here, OR the feed still
+// calls it unread AND the reviewer never opened it here. IssueTitle/IssueStatus/IssueIconURL/GroupSize/OtherActor/
 // CommentPreview mirror jira.Notification's own fields of the same name — see
 // that struct's doc comment for what each backs on screen.
 type Item struct {
@@ -98,9 +104,9 @@ func Open(path string) (*Module, error) {
 
 func (m *Module) Close() error { return m.db.Close() }
 
-// Upsert stores the fetched feed. An existing row keeps its read_at — the whole
-// point of the local column — while every other field is refreshed from the
-// feed. WRITE — workflow-driven only.
+// Upsert stores the fetched feed. An existing row keeps its read_at AND its
+// forced_unread — the whole point of those two local columns — while every
+// other field is refreshed from the feed. WRITE — workflow-driven only.
 func (m *Module) Upsert(ctx context.Context, items []Item) error {
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -121,8 +127,9 @@ func (m *Module) Upsert(ctx context.Context, items []Item) error {
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO jira_notifications
 			   (id, at, title, issue_key, actor, avatar_url, url, feed_unread, read_at,
-			    issue_title, issue_status, issue_icon_url, group_size, other_actor, comment_preview)
-			 VALUES (?,?,?,?,?,?,?,?,'',?,?,?,?,?,?)
+			    issue_title, issue_status, issue_icon_url, group_size, other_actor, comment_preview,
+			    forced_unread)
+			 VALUES (?,?,?,?,?,?,?,?,'',?,?,?,?,?,?,0)
 			 ON CONFLICT(id) DO UPDATE SET
 			   at=excluded.at, title=excluded.title, issue_key=excluded.issue_key,
 			   actor=excluded.actor, avatar_url=excluded.avatar_url, url=excluded.url,
@@ -149,7 +156,23 @@ func (m *Module) MarkRead(ctx context.Context, id, at string) error {
 		at = time.Now().UTC().Format(time.RFC3339)
 	}
 	_, err := m.db.ExecContext(ctx,
-		`UPDATE jira_notifications SET read_at = ? WHERE id = ? AND read_at = ''`, at, id)
+		`UPDATE jira_notifications SET read_at = ?, forced_unread = 0 WHERE id = ? AND read_at = ''`, at, id)
+	return err
+}
+
+// MarkUnread is MarkRead's mirror: the reviewer marked this notification
+// unread again here (the right-click action on a notification row). It clears
+// the local read_at AND raises forced_unread, because the feed itself may well
+// call the row read — this app never writes into Jira, so without the override
+// the very next Upsert would silently undo it. Marking an unknown id is not an
+// error, and re-running is a no-op, so replaying the Activity is safe.
+// WRITE — workflow-driven only.
+func (m *Module) MarkUnread(ctx context.Context, id string) error {
+	if id == "" {
+		return nil
+	}
+	_, err := m.db.ExecContext(ctx,
+		`UPDATE jira_notifications SET read_at = '', forced_unread = 1 WHERE id = ?`, id)
 	return err
 }
 
@@ -163,7 +186,7 @@ func (m *Module) MarkAllRead(ctx context.Context, at string) error {
 		at = time.Now().UTC().Format(time.RFC3339)
 	}
 	_, err := m.db.ExecContext(ctx,
-		`UPDATE jira_notifications SET read_at = ? WHERE read_at = ''`, at)
+		`UPDATE jira_notifications SET read_at = ?, forced_unread = 0 WHERE read_at = ''`, at)
 	return err
 }
 
@@ -175,7 +198,8 @@ func (m *Module) List(ctx context.Context, limit int) ([]Item, error) {
 	}
 	rows, err := m.db.QueryContext(ctx,
 		`SELECT id, at, title, issue_key, actor, avatar_url, url, feed_unread, read_at,
-		        issue_title, issue_status, issue_icon_url, group_size, other_actor, comment_preview
+		        issue_title, issue_status, issue_icon_url, group_size, other_actor, comment_preview,
+		        forced_unread
 		 FROM jira_notifications ORDER BY at DESC, id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
@@ -186,11 +210,13 @@ func (m *Module) List(ctx context.Context, limit int) ([]Item, error) {
 		var it Item
 		var feedUnread int
 		var readAt string
+		var forcedUnread int
 		if err := rows.Scan(&it.ID, &it.At, &it.Title, &it.IssueKey, &it.Actor, &it.AvatarURL, &it.URL, &feedUnread, &readAt,
-			&it.IssueTitle, &it.IssueStatus, &it.IssueIconURL, &it.GroupSize, &it.OtherActor, &it.CommentPreview); err != nil {
+			&it.IssueTitle, &it.IssueStatus, &it.IssueIconURL, &it.GroupSize, &it.OtherActor, &it.CommentPreview,
+			&forcedUnread); err != nil {
 			return nil, err
 		}
-		it.Unread = feedUnread == 1 && readAt == ""
+		it.Unread = forcedUnread == 1 || (feedUnread == 1 && readAt == "")
 		out = append(out, it)
 	}
 	return out, rows.Err()

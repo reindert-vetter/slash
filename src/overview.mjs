@@ -2103,6 +2103,32 @@ async function markAllJiraRead() {
   }
 }
 
+// markJiraUnread is markJiraRead's mirror — the reviewer's right-click
+// "Markeer als ongelezen" (Reindert: "ik wil rechtermuisknop kunnen drukken en
+// het op ongelezen kunnen markeren"). Same sanctioned write path as the other
+// two: start (or reuse) the jira_inbox Execution, then Signal it with the
+// "unread" kind; the tracker's own Activity is the only thing that touches the
+// read-model (.claude/rules/workflows-write-boundary.md). Optimistic locally so
+// the row, the "N ongelezen" counter and the "Alleen ongelezen" filter react on
+// the spot; the next poll confirms it (the backend keeps a local
+// forced_unread override precisely so a poll cannot undo it — see
+// modules/jiranotify).
+async function markJiraUnread(n) {
+  if (!n || n.unread) return
+  state.jira = state.jira.map((it) => (it.id === n.id ? { ...it, unread: true } : it))
+  try {
+    const runId = await ensureJiraRunId()
+    if (!runId) return
+    await fetch('/api/workflows/' + encodeURIComponent(runId) + '/signals/jira_notify', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'unread', id: n.id }),
+    })
+  } catch (err) {
+    console.error('mark jira notification unread failed:', err)
+  }
+}
+
 // jiraUnreadMark — the unread signal, on the RIGHT edge of the row (mirroring
 // Jira's own layout — the dot sits there, not next to the avatar). Per the
 // colourblind rule the SHAPE and the WORD carry it (a filled dot plus a bold
@@ -2201,6 +2227,18 @@ function jiraRow(n) {
       data-nav-key="${'jira:' + n.id}"
       class="${ROW_CLASS + ' items-start'}"
       @click="${() => markJiraRead(n)}"
+      @contextmenu="${(e) => {
+        // preventDefault (suppress Arc/Chrome's own "Open Link in New Tab"
+        // menu — the row is an <a>, so the browser really does offer one) and
+        // stopPropagation FIRST, before the state mutation that opens our own
+        // menu: the nested-@click/@contextmenu ordering rule in
+        // .claude/rules/arrowjs-pitfalls.md. Without it the same event would
+        // keep bubbling and the outside-click/keyboard owners would close the
+        // menu we just opened.
+        e.preventDefault()
+        e.stopPropagation()
+        openMenu({ native: true, x: e.clientX, y: e.clientY, jira: n })
+      }}"
     >
       ${() => jiraAvatarMark(n)}
       <div class="min-w-0 flex-1">
@@ -3534,7 +3572,15 @@ const menu = reactive({ open: false })
 // (orphaned) CommandMenu bindings would otherwise fire against this open's
 // state. See "Orphan bindings of a dropped subtree" in
 // .claude/rules/arrowjs-pitfalls.md.
-let omenu = reactive({ query: '', sel: 0, sub: null, mode: 'overview', commands: [] })
+// `native`/`x`/`y` are the right-click context-menu variant (the same
+// CommandMenu `native` opt /pr/<id> uses, see "The right-click context menu"
+// in .claude/docs/command-palette.md): the box is placed at the exact click
+// point instead of under a row anchor. `jira` carries the notification the
+// right-click landed on, so its commands act on that row and nothing else —
+// it lives on the DISPOSABLE half deliberately, so an orphaned binding from a
+// previous open can only ever read that open's own (never-touched-again)
+// object.
+let omenu = reactive({ query: '', sel: 0, sub: null, mode: 'overview', commands: [], native: false, x: 0, y: 0, jira: null })
 
 // OVERVIEW_COMMANDS is deliberately empty for now: the menu exists, you can
 // type in it, and the pinned "Sluit menu" (mirroring withClose in home.mjs) is
@@ -3547,12 +3593,61 @@ function overviewCommands() {
   return [{ id: 'close-menu', label: t('Sluit menu'), hint: 'esc', run: () => closeMenu() }, ...OVERVIEW_COMMANDS]
 }
 
-function resolveOverviewCommands(query) {
-  return filterCommands(omenu.commands, query)
+// jiraNotificationCommands is the right-click menu of ONE notification row.
+// Both rows are the same read/unread write path the panel already had, just
+// reachable per row from the mouse: the tick button's markJiraRead and its new
+// markJiraUnread mirror. Which one is offered follows the row's current state,
+// so the menu never shows an action that would be a no-op. No pinned
+// "Sluit menu" row — a native menu drops it (resolveOverviewCommands below),
+// same as /pr/<id>'s own context menu.
+//
+// The labels are WORDS ("Markeer als ongelezen"/"Markeer als gelezen"), which
+// is also what makes the state itself readable without relying on the unread
+// dot's colour (.claude/rules/conventions.md).
+function jiraNotificationCommands(n) {
+  const list = []
+  if (n.unread) {
+    list.push({ id: 'jira-mark-read', label: t('Markeer als gelezen'), hint: 'gelezen', run: () => markJiraRead(n) })
+  } else {
+    list.push({ id: 'jira-mark-unread', label: t('Markeer als ongelezen'), hint: 'ongelezen', run: () => markJiraUnread(n) })
+  }
+  list.push({ id: 'jira-mark-all-read', label: t('Alles gelezen maken'), hint: 'alles', run: () => markAllJiraRead() })
+  return list
 }
 
-function openMenu() {
-  omenu = reactive({ query: '', sel: Math.min(1, Math.max(0, overviewCommands().length - 1)), sub: null, mode: 'overview', commands: overviewCommands() })
+// resolveOverviewCommands is the ONE list both CommandMenu's render and
+// handleMenuKey's ↑/↓/Enter index into, so they can never disagree — the same
+// single-source rule home.mjs's own resolveCommands documents. It also drops
+// the pinned "Sluit menu" row for a native (right-click) menu, for the same
+// reason: Esc and an outside click already close it.
+function resolveOverviewCommands(query) {
+  const list = filterCommands(omenu.commands, query)
+  if (!omenu.native) return list
+  return list.filter((c) => c.id !== 'close-menu')
+}
+
+// openMenu opens either the general `/` palette (no opts) or the right-click
+// context menu of one Jira notification row (`{native, x, y, jira}`) — one
+// function, one CommandMenu, exactly as on /pr/<id>. omenu is REPLACED
+// wholesale on every open (see its own comment above).
+function openMenu(opts = {}) {
+  const native = !!opts.native
+  const commands = opts.jira ? jiraNotificationCommands(opts.jira) : overviewCommands()
+  // A native menu's first row is already a real action (the pinned close row
+  // is filtered out), so its default selection is 0 rather than "skip the
+  // pinned row" — mirrors home.mjs's defaultSel.
+  const sel = native ? 0 : Math.min(1, Math.max(0, commands.length - 1))
+  omenu = reactive({
+    query: '',
+    sel,
+    sub: null,
+    mode: opts.jira ? 'jiraNotification' : 'overview',
+    commands,
+    native,
+    x: opts.x || 0,
+    y: opts.y || 0,
+    jira: opts.jira || null,
+  })
   menu.open = true
   requestAnimationFrame(() => {
     positionMenu()
@@ -3579,6 +3674,7 @@ function runOverviewCommand(cmd) {
 // (this page has exactly one menu). Clamped inside the viewport, and flipped
 // above its anchor when it would not fit below.
 function positionMenu() {
+  if (omenu.native) return positionNativeMenu()
   const el = document.querySelector('[data-testid="command-anchor"]')
   if (!el) return
   const rows = currentRows()
@@ -3595,6 +3691,22 @@ function positionMenu() {
   el.style.visibility = 'visible'
 }
 
+// positionNativeMenu places the right-click menu at the exact point clicked
+// (omenu.x/omenu.y), clamped into the viewport so it never renders partially
+// off-screen — a straight port of home.mjs's own positionNativeMenu, including
+// the intrinsic (never row-width-stretched) box.
+function positionNativeMenu() {
+  const el = document.querySelector('[data-testid="command-anchor"]')
+  if (!el) return
+  el.style.width = 'auto'
+  const gap = 4
+  const mh = el.offsetHeight
+  const mw = el.offsetWidth
+  el.style.left = Math.max(gap, Math.min(omenu.x, window.innerWidth - mw - gap)) + 'px'
+  el.style.top = Math.max(gap, Math.min(omenu.y, window.innerHeight - mh - gap)) + 'px'
+  el.style.visibility = 'visible'
+}
+
 window.addEventListener('resize', () => menu.open && positionMenu())
 window.addEventListener('scroll', () => menu.open && positionMenu(), true)
 
@@ -3607,7 +3719,7 @@ function menuOverlay() {
         data-testid="command-anchor"
         @click="${(e) => e.stopPropagation()}"
       >
-        ${CommandMenu(omenu, resolveOverviewCommands, runOverviewCommand)}
+        ${CommandMenu(omenu, resolveOverviewCommands, runOverviewCommand, { native: omenu.native })}
       </div>
     </div>
   `
@@ -3764,6 +3876,11 @@ window.addEventListener('mousedown', (e) => {
 // mousedown always precedes click).
 window.addEventListener('mousedown', (e) => {
   if (!state.jiraBellOpen) return
+  // A click in the row's own right-click context menu (which is mounted at the
+  // PAGE root, not inside the wrapper — see MenuHost) must not close the panel
+  // the menu was opened from: marking a row unread and then not being able to
+  // see it turn bold again is exactly what the action is for.
+  if (e.target.closest && e.target.closest('[data-testid="command-overlay"]')) return
   const wrap = e.target.closest && e.target.closest('[data-testid="jira-bell-wrapper"]')
   if (!wrap) closeJiraBell()
 })

@@ -402,10 +402,13 @@ block of `/pr-overview` (see `.claude/docs/pr-overview.md`). One Execution for
 the whole process, not one per repo: that feed is per-**user**, and a Jira
 notification has no PR at all.
 
-- **One Signal, `jira_notify`, carries both actions**, distinguished by its
+- **One Signal, `jira_notify`, carries every action**, distinguished by its
   payload's `kind`: `{"kind":"refresh"}` (the 5-minute poller and the UI on
   load) drives `refreshJiraNotifications`, `{"kind":"read","id":…}` drives
-  `markJiraNotificationRead`. One name because tembed's `WaitSignal` takes
+  `markJiraNotificationRead`, `{"kind":"unread","id":…}` its mirror
+  `markJiraNotificationUnread` (the row's right-click "Markeer als ongelezen",
+  see `.claude/docs/pr-overview.md`), and `{"kind":"read_all"}` the bulk
+  `markAllJiraNotificationsRead`. One name because tembed's `WaitSignal` takes
   exactly one; branching on a payload that comes straight out of the recorded
   history stays deterministic.
 - **A fetch failure is a RESULT, not an error.** `refreshJiraNotifications`
@@ -425,10 +428,13 @@ notification has no PR at all.
   next to the `test_run` residue one — unconditional and PR-independent, since
   a notification belongs to a Jira issue, never to a PR.
 - **`modules/jiranotify`** is the read-model: one row per notification with
-  both the feed's own `feed_unread` and a local `read_at` (set when the
-  reviewer opened it here). Effective unread = both. The local column exists
-  because this app never marks anything read in Jira — without it every row the
-  reviewer opened would come back unread on the very next poll.
+  the feed's own `feed_unread` plus TWO local columns — `read_at` (set when the
+  reviewer opened it here) and `forced_unread` (set by "Markeer als
+  ongelezen"). Effective unread = `forced_unread` OR (feed unread AND never
+  read here). Both local columns exist because this app never writes a read
+  state into Jira: without them every row the reviewer opened would come back
+  unread on the very next poll, and every row marked unread here would come
+  back read.
 
 ## `jira_issues` (one per process)
 

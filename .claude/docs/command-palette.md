@@ -400,6 +400,13 @@ alive for free — it is that write's row-DOM teardown which otherwise wipes it
 (the same mechanism `restoreExactSelection` exists to repair for a drag). Test:
 `tests/selection-menu.spec.mjs`.
 
+**`/pr-overview` reuses this same `native` variant** for its Jira
+notification rows (`openMenu({native, x, y, jira})`, `positionNativeMenu`,
+the "Sluit menu" row filtered out of the one shared command list) — that page
+has its own `menu`/`omenu` pair and its own `CommandMenu` call, but not a
+second implementation of the context menu itself. See "Right-click a
+notification row" in `.claude/docs/pr-overview.md`.
+
 `rightClickMenuMode()` (`home.mjs`) is the general-purpose resolver for
 "which menu would `Enter` open right here, right now" — it deliberately does
 **not** reuse `/`'s own `contextMenuMode()` verbatim, because `/` and `Enter`
