@@ -841,7 +841,7 @@ means the chat is answered while the tracker still sits on the hotfix gate,
 exercising the gate-tolerant carve-out above — the mouse entry point, and the
 backdrop click).
 
-## Jira-opmerkingen: lezen, beantwoorden, @-mentions — backend done, UI not wired yet
+## Jira-opmerkingen: lezen, beantwoorden, @-mentions
 
 Read-only backend: `plan_comments.go`'s `PlanComments` reads this ticket's own
 comments plus the main task's and every subtask's (`planCommentFamily`, self
@@ -884,10 +884,78 @@ reactions, no resolve/ignore, no AI-generated titles — unlike the review
 tree's PR-comment panel, which has all of those; a smaller, read-mostly
 feature was the explicit ask here.
 
-**Not yet wired into the UI.** `src/plan.mjs` has no comment panel, no reply
-composer, and no mention picker calling any of the three endpoints above —
-this session (task 23 of `todo/plan-page-workflow.md`) only finished and
-verified the backend half (Go build/vet/tests). Placing it "bovenaan de
-vragen-index (kolom 2)" per the reviewer's instruction, reusing the tree's own
-blocks-index component, is the next, separate piece of work; see
-`todo/plan-page-workflow.md` for the up-to-date status.
+**The frontend (task 23b of `todo/plan-page-workflow.md`).** `commentsPanel()`
+in `src/plan.mjs` sits at the very TOP of the questions column
+(`questionsColumn()`, kolom 2), above the question cards — per the reviewer's
+own instruction — and is `state.col`/keyboard-nav-agnostic: it is not part of
+`navRows()`/the cursor chain, only a scrolling card above it, since replying
+is a mouse/typing action, not something to walk with ↑/↓. It does NOT reuse
+the review tree's `BlockList.mjs` component (that component carries the whole
+review-tree's block/approval model); the panel is its own small set of
+functions (`commentGroupCard`, `commentRow`, `commentReplyComposer`,
+`commentMentionPicker`) built the same way every other card on this page is,
+consistent with this page's own header comment ("nothing is imported from
+home.mjs/Block.mjs/RelatedPanel.mjs").
+
+- **Reading:** `loadComments(refresh)` calls `GET /api/jira/comments` once at
+  page load (`state.comments`, no polling — the day-long server cache means a
+  poll would just re-ask for the same answer) and again with `refresh:true`
+  right after a reply is posted, or from the panel's own "Ververs" button
+  (`data-testid=plan-comments-refresh`). Each group (`planCommentGroup`)
+  renders as its own card: the ticket key (linking out to Jira), a relation
+  WORD next to it (`COMMENT_RELATION_WORD`: "dit ticket"/"hoofdtaak"/"subtaak"
+  — never a colour alone, the colourblind rule), the title, a comment count,
+  and every comment (`avatarHTML` + author + `relativeTime` + `renderMarkdown`
+  body, reusing the exact shared helpers the rest of the app uses for this).
+- **Replying:** one composer open at a time (`state.commentReplyKey`, the
+  same single-cursor discipline the rest of the page follows), a plain
+  UNCONTROLLED `<textarea>` (`data-testid=plan-comment-reply-input`, same
+  shape as `ClaudeChat.mjs`'s composer — a reactive `value=` binding would
+  fight the caret while typing) posted via `sendCommentReply` →
+  `POST /api/workflows/jira_comment`. The "Beantwoorden" toggle
+  (`data-testid=plan-comment-reply-toggle`) only renders when
+  `state.comments.canPost` is true; without a token the panel says so in
+  words instead ("Antwoorden vereist een Jira API-token…").
+- **@-mentions:** `onCommentReplyInput` watches the text typed so far for a
+  trailing, unresolved `@word` (anchored to the END of the string, not the
+  real caret — this composer, like every other one on this page, is typed
+  top-to-bottom) and, after a 200ms debounce, looks it up via
+  `GET /api/jira/users?q=…` (`commentMentionTimer`). A match shown in
+  `commentMentionPicker()` (avatar + display name) is only ever ADDED by the
+  reviewer clicking it (`pickCommentMention`) — never inferred — which
+  replaces the trailing `@word` in the DOM textarea with the full
+  `@Display Name` and appends `{accountId, text}` to `state.commentMentions`,
+  exactly the `jira.Mention` shape `BuildCommentADF` expects. A mention whose
+  text the reviewer later edits away simply contributes nothing when posted
+  (see `BuildCommentADF`'s own doc comment) — no cleanup needed here.
+- **Feeding back into the plan:** right after a successful post,
+  `sendCommentReply` sends the plan tracker's OWN third `plan_answer` Signal
+  Kind, `"comment"` (`planAnswerComment`), exactly as `.claude/docs` above
+  already documents — this is the piece that actually makes a new comment
+  regenerate the task list.
+- **Jira avatars needed a second allowed host on the avatar proxy.**
+  `avatar.mjs`'s `avatarHTML` always routes an `avatarUrl` through
+  `GET /api/avatar` (`avatar_proxy.go`), which used to allow only
+  `avatars.githubusercontent.com`. A Jira comment/user's `AvatarURL` is served
+  from Atlassian's own CDN
+  (`avatar-management--avatars.us-west-2.prod.public.atl-paas.net`), so
+  without this the proxy 400'd on every Jira avatar and the fallback-on-error
+  wiring silently degraded every one of them to an initials circle. Fixed by
+  turning the single `avatarAllowedHost` constant into a small
+  `avatarAllowedHosts` allowlist map (exact host match, same as before — no
+  wildcarding, so this can't become an open proxy/SSRF vector). Verified
+  against the real `PAYM-813` ticket: the proxy request for a real Jira
+  avatar now returns 200 and the `<img>` actually loads (`naturalWidth` > 0),
+  where it previously 400'd. Tests:
+  `TestHandleAvatarAllowsJiraAvatarHost` (the new host is reachable),
+  the extended `TestHandleAvatarRejectsDisallowedHost` (a look-alike host
+  that merely contains the Atlassian host as a substring is still rejected —
+  the allowlist is an exact map-key match, not a suffix/contains check).
+- **Not covered by an automated test:** the reply composer and mention
+  picker's full round trip (they need a configured Jira API token, which the
+  Playwright harness's `SLASH_JIRA=off` fixture doesn't guarantee is absent —
+  see `tests/plan-comments.spec.mjs`'s own header comment). Verified by hand
+  instead against the real `PAYM-813` ticket: opening the composer, typing an
+  `@` mention, picking a suggestion, sending, and seeing the new comment
+  reappear in the panel after the automatic refresh — all with zero console
+  errors.
