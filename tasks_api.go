@@ -872,6 +872,10 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// starts (idempotently reuses) its tracker. See plan_api.go.
 	mux.HandleFunc("/api/plan", s.handlePlan)
 	mux.HandleFunc("/api/branches", s.handleBranches)
+	// GET /api/plan/current?key=KEY&file=path → read-only: what that file looks
+	// like right now in the plan's own werkmap, shown next to a block's
+	// proposed code. See plan_current_code.go.
+	mux.HandleFunc("/api/plan/current", s.handlePlanCurrentCode)
 	// GET /api/jira/comments?key=KEY[&refresh=1] → the Jira comments around one
 	// ticket (its own, the main task's, the subtasks'), read-only and served
 	// from a day-long in-memory cache; GET /api/jira/users?q=… → the people who
@@ -1396,12 +1400,16 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 			// comments and rebuild the task list after a reply was posted
 			// (planAnswerComment — the posting itself is its own
 			// jira_comment workflow, see jira_comment.go).
-			// All three are the only shapes allowed through without a
-			// questionId; a chat message additionally needs real text, or
-			// there is nothing to signal at all.
+			// A fourth records the reviewer's checkbox/field on ONE task
+			// (planAnswerTask — TaskTitle points at the task instead of a
+			// questionId, since a task id is positional; see planTaskState).
+			// Those four are the only shapes allowed through without a
+			// questionId; a chat message additionally needs real text, and a
+			// task message a real title, or there is nothing to signal at all.
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil ||
-				(body.QuestionID == "" && body.Kind != planAnswerFollowup && body.Kind != planAnswerChat && body.Kind != planAnswerComment) ||
-				(body.Kind == planAnswerChat && strings.TrimSpace(body.Text) == "") {
+				(body.QuestionID == "" && body.Kind != planAnswerFollowup && body.Kind != planAnswerChat && body.Kind != planAnswerComment && body.Kind != planAnswerTask) ||
+				(body.Kind == planAnswerChat && strings.TrimSpace(body.Text) == "") ||
+				(body.Kind == planAnswerTask && strings.TrimSpace(body.TaskTitle) == "") {
 				http.Error(w, "invalid plan answer", http.StatusBadRequest)
 				return
 			}

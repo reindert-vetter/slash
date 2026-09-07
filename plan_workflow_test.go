@@ -499,3 +499,105 @@ func TestTrimPlanChatBounds(t *testing.T) {
 		t.Fatalf("a short list should not be trimmed: %+v", got)
 	}
 }
+
+// TestPlanTaskStateFoldAndRegeneration covers the whole of task 22's backend:
+// the checkbox/note fold is a pure function of the recorded Signal, an
+// unchecked task never comes back from a regeneration but keeps its row (so it
+// can be ticked again), and the off-list reaches the prompt. The keying is by
+// TITLE on purpose — a task id is positional and every regeneration renumbers
+// the list — which is exactly what makes this worth a regression test.
+func TestPlanTaskStateFoldAndRegeneration(t *testing.T) {
+	var states []planTaskState
+	// Default: nothing stored, everything ticked.
+	if !planTaskEnabled(states, "Voeg de checkbox toe") {
+		t.Fatalf("a task with no stored state must default to CHECKED")
+	}
+	// A note alone is stored; the checkbox stays on.
+	states = upsertPlanTaskState(states, PlanAnswerSignal{Kind: planAnswerTask, TaskTitle: "Voeg de checkbox toe", TaskNote: "  gebruik de tree-weergave  "})
+	if len(states) != 1 || states[0].Note != "gebruik de tree-weergave" || states[0].Off {
+		t.Fatalf("note-only state wrong: %+v", states)
+	}
+	// The same task again, now unchecked — one row per task, never two.
+	states = upsertPlanTaskState(states, PlanAnswerSignal{Kind: planAnswerTask, TaskTitle: "VOEG de   checkbox toe", TaskOff: true})
+	if len(states) != 1 || !states[0].Off {
+		t.Fatalf("expected one unchecked state (title matched case/whitespace-insensitively): %+v", states)
+	}
+	if planTaskEnabled(states, "voeg de checkbox toe") {
+		t.Fatalf("an unchecked task must not read as enabled")
+	}
+	// Back to the default (checked, no note) drops the row again.
+	settled := upsertPlanTaskState(states, PlanAnswerSignal{Kind: planAnswerTask, TaskTitle: "Voeg de checkbox toe"})
+	if len(settled) != 0 {
+		t.Fatalf("a state back at the default must be removed, got %+v", settled)
+	}
+
+	prev := []planTask{{ID: "t1", Title: "Voeg de checkbox toe"}, {ID: "t2", Title: "Toon de huidige code"}}
+	// The regeneration answers with the unchecked task again (models do) plus a
+	// new one: the unchecked one must not reappear in the plan, but its row
+	// must survive at the end so the checkbox is still there.
+	fresh := []planTask{{ID: "t1", Title: "Voeg de checkbox toe"}, {ID: "t2", Title: "Toon de huidige code"}, {ID: "t3", Title: "Werk de docs bij"}}
+	got := mergePlanTasks(fresh, prev, states)
+	if len(got) != 3 {
+		t.Fatalf("expected 3 tasks (2 kept + the unchecked one re-appended), got %d: %+v", len(got), got)
+	}
+	if got[0].Title != "Toon de huidige code" || got[1].Title != "Werk de docs bij" {
+		t.Fatalf("the enabled tasks must come first, in the generated order: %+v", got)
+	}
+	if got[2].Title != "Voeg de checkbox toe" {
+		t.Fatalf("the unchecked task must be re-appended last, got %+v", got[2])
+	}
+	for i, tk := range got {
+		if want := fmt.Sprintf("t%d", i+1); tk.ID != want {
+			t.Fatalf("ids must be renumbered across the result: task %d is %q, want %q", i, tk.ID, want)
+		}
+	}
+	// Duplicated exactly once, even when it survives several rounds.
+	again := mergePlanTasks(fresh, got, states)
+	if len(again) != 3 {
+		t.Fatalf("a second regeneration must not duplicate the unchecked task: %+v", again)
+	}
+
+	// The prompt tells the model to leave it out.
+	doc := planDoc{Key: "PAYM-1", Title: "Titel", Description: "Omschrijving", TaskStates: states}
+	p := planPrompt(doc, "tasks")
+	if !strings.Contains(p, "UITGEVINKT") || !strings.Contains(p, "VOEG de   checkbox toe") {
+		t.Fatalf("the tasks prompt must list the unchecked tasks as off-limits:\n%s", p)
+	}
+}
+
+// TestPlanExecutePromptSkipsUncheckedTasksAndCarriesTheNote is the other half:
+// only ticked tasks are executed, and the reviewer's own field travels along.
+func TestPlanExecutePromptSkipsUncheckedTasksAndCarriesTheNote(t *testing.T) {
+	doc := planDoc{
+		Key:   "PAYM-1",
+		Title: "Titel",
+		Tasks: []planTask{{ID: "t1", Title: "Doe dit"}, {ID: "t2", Title: "Doe dat niet"}},
+		TaskStates: []planTaskState{
+			{Key: planTaskKey("Doe dat niet"), Title: "Doe dat niet", Off: true},
+			{Key: planTaskKey("Doe dit"), Title: "Doe dit", Note: "let op de rechten"},
+		},
+	}
+	p := planExecutePrompt(doc)
+	if !strings.Contains(p, "1. Doe dit") {
+		t.Fatalf("the ticked task must be in the prompt:\n%s", p)
+	}
+	if strings.Contains(p, "Doe dat niet") {
+		t.Fatalf("an unchecked task must NOT reach the execute prompt:\n%s", p)
+	}
+	if !strings.Contains(p, "let op de rechten") {
+		t.Fatalf("the reviewer's own field must travel to the execution:\n%s", p)
+	}
+	if !planHasEnabledTask(doc) {
+		t.Fatalf("planHasEnabledTask must be true while one task is still ticked")
+	}
+	doc.TaskStates = append(doc.TaskStates, planTaskState{Key: planTaskKey("Doe dit"), Title: "Doe dit", Off: true})
+	// The later state wins in a lookup, so with both unchecked there is nothing
+	// to run and the workflow says so instead of opening an empty draft PR.
+	doc.TaskStates[1].Off = true
+	if planHasEnabledTask(doc) {
+		t.Fatalf("with every task unchecked there must be nothing to execute")
+	}
+	if titles := planTaskTitles(doc); len(titles) != 0 {
+		t.Fatalf("the PR body must only list ticked tasks, got %v", titles)
+	}
+}

@@ -123,6 +123,17 @@ func planPrompt(doc planDoc, mode string) string {
 		}
 		b.WriteString("\n")
 	}
+	// The tasks the reviewer unchecked are off-limits for every later round:
+	// unchecking a task means "dit hoort niet in dit plan", so a regeneration
+	// must not quietly bring it back. mergePlanTasks drops a repeat anyway, but
+	// the model should not spend a slot on one either.
+	if off := planDisabledTaskTitles(doc.TaskStates); len(off) > 0 {
+		b.WriteString("TAKEN DIE DE REVIEWER HEEFT UITGEVINKT (deze horen NIET in het plan, neem ze niet opnieuw op en verzin er geen variant van):\n")
+		for _, title := range off {
+			fmt.Fprintf(&b, "- %s\n", title)
+		}
+		b.WriteString("\n")
+	}
 	b.WriteString("Antwoord met UITSLUITEND één JSON-object, zonder tekst eromheen en zonder code-fence:\n")
 	b.WriteString(`{"questions":[{"question":"…","why":"…","options":[{"label":"…","detail":"…","blocks":[{"title":"app/Foo.php","label":"handle()","lang":"php","note":"…","code":"…","children":[{"title":"app/Support/Bar.php","label":"apply()","lang":"php","note":"…","code":"…","children":[]}]}]}]}],`)
 	b.WriteString(`"tasks":[{"title":"…","explanation":"…","location":"…","conditions":["…"],"config":["…"],"migration":"…","endpoints":["…"],"errors":"…","rollout":"…","edgeCases":["…"],"outOfScope":["…"],"blocks":[{"title":"…","lang":"php","note":"…","code":"…","children":[{"title":"…","lang":"php","note":"…","code":"…","children":[]}]}]}]}`)

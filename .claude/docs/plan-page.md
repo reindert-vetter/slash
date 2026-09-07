@@ -23,7 +23,11 @@ onderliggende code"*.
 url-state bindings, watches) and none of it applies here. It reuses only the
 shared **page-level** utilities every page already uses (`theme.mjs`,
 `i18n.mjs`, `markdown.mjs`, `urlState.mjs`, `workflowLabels.mjs`,
-`settingsLink.mjs`) plus the vendored Prism, and it repeats the tree's *shape*
+`settingsLink.mjs`) plus the vendored Prism — the two deliberate exceptions
+being `ClaudeChat.mjs`'s `claudeChatColumn` (the general chat, see below) and
+`lineDiff.mjs`'s `alignRows` (the current-vs-proposed code panes, see below),
+both pure layers with no review-tree state of their own — and it repeats the
+tree's *shape*
 (a horizontally scrolling column flow, a card per column, one column owning the
 keyboard) in ~700 lines of its own. The one thing the request called "een beetje
 hergebruiken" is the **first column**: the same two-card stack as the review
@@ -179,6 +183,106 @@ concreteness.
 reviewer decision: the plan does not name which test belongs to which task and
 must not make the reviewer choose about it. Both rules are stated in
 `planPrompt`.
+
+## A checkbox and an own field per task, and the current code next to the proposal
+
+Reviewer decisions (task 22+26 of `todo/plan-page-workflow.md`): **een checkbox
+per taak, default aan** — uitvinken laat de taak óók uit de hergeneratie
+verdwijnen; **een invoerveld per taak** dat alleen meereist naar het uitvoeren
+en géén hergeneratie triggert; en **de huidige code naast de voorgestelde
+code**, in de blok-weergave van de review-tree, gelezen uit **de eigen
+werkmap**.
+
+### The checkbox and the field: one more `plan_answer` Kind
+
+- **State lives on the document**, `planTaskState{Key, Title, Off, Note}` in
+  `doc.TaskStates` — keyed by **`planTaskKey(title)`** (lowercased, whitespace
+  runs collapsed), deliberately **not by the task id**: an id is positional
+  (`t1`..`tn`, assigned in `parsePlanAnswer`) and every regeneration renumbers
+  the whole list, so an id-keyed state would silently land on a different task.
+  A row only exists while it DEVIATES from the default, so "checked, no note"
+  stores nothing at all.
+- **Kind `"task"`** (`planAnswerTask`) on the EXISTING `plan_answer` Signal —
+  the same one-signal-multiplexed-by-Kind convention `followup`/`chat`/
+  `comment` already use, for the same reason (tembed can only `WaitSignal` on
+  one name at a time). Payload: `taskTitle` + `taskOff` + `taskNote`
+  (`taskId` travels for readability only, nothing matches on it). The Signal
+  handler in `tasks_api.go` accepts an empty `questionId` for this Kind too,
+  but demands a real `taskTitle`.
+- **The workflow branch SAVES and nothing else** — `upsertPlanTaskState` (pure,
+  folded from the recorded Signal like `upsertPlanAnswer`) then one `planSave`,
+  then `continue`. No regeneration: the field must not cost a minutes-long
+  Claude call per keystroke, and unchecking takes effect at the next
+  regeneration anyway. Because it is a pure Signal-payload branch and **no new
+  Activity**, the deterministic `plan-<KEY>` Run ID needs no `askBase`-style
+  flag here (contrast `planLoadContext`).
+- **"Uitvinken laat de taak óók uit de hergeneratie verdwijnen"** is
+  `mergePlanTasks(fresh, prev, states)`, applied inside the `planGenerate`
+  Activity: a freshly generated list keeps only the tasks that are still
+  ticked, and the unchecked ones are **re-appended from the previous list** so
+  their row (and its checkbox) stays on the page and can be ticked again — a
+  checkbox that deletes its own row would be a delete button. Ids are
+  renumbered across the result. `planPrompt` additionally lists the unchecked
+  titles under "TAKEN DIE DE REVIEWER HEEFT UITGEVINKT", so the model does not
+  spend a slot re-proposing one.
+- **Only ticked tasks are executed.** `planExecutePrompt` skips an unchecked
+  task (numbering follows what is kept, so the prompt never shows a gap) and
+  carries the reviewer's own field as "Aanvulling van de reviewer (volg dit)";
+  `planTaskTitles` (the PR body) does the same, and `planHasEnabledTask` stops
+  a run where everything is unchecked with a note instead of an empty draft PR.
+- **Frontend** (`src/plan.mjs`): `taskRow` gains a real checkbox
+  (`data-testid=plan-task-check`, the plain `checked="${() => …}"` binding —
+  never a `?`/`.` prefix, see `.claude/rules/arrowjs-pitfalls.md`) with the
+  state **in words** next to it (`plan-task-state`: "meenemen"/"overslaan",
+  plus a strikethrough title — never a colour on its own, the colourblind
+  rule), and an uncontrolled field (`plan-task-note`, saved on `Enter`/blur,
+  same shape as `plan-option-input`: a reactive `value=` binding would fight
+  the caret). `taskPending`/`dropSettledTaskPending` are the same
+  local-pick-wins overlay `answerFor`/`dropSettledPending` are.
+  **`Enter`/`Space` on a task row toggles the checkbox** (an agreed default);
+  the field is reached by clicking/Tabbing into it, exactly like an option's.
+
+### The current code next to the proposed code
+
+- **`GET /api/plan/current?key=KEY&file=path`** (`plan_current_code.go`) —
+  read-only, so no workflow (`.claude/rules/workflows-write-boundary.md`): it
+  opens one file for reading inside a checkout the reviewer already has and
+  writes nothing, not even the sticky-werkmap row. The werkmap is the one
+  `plan_execute` would implement the plan in: the plan's own sticky
+  `plan_checkout` row first (read, never written), else the first candidate of
+  the shared `listCheckoutCandidates` ladder. That resolution is cached in
+  memory per plan key for `planCurrentDirTTL` (5 min) — the same operational
+  carve-out the heartbeat map has: not the source of truth (the ladder is), and
+  gone after a restart. Without it every block card would pay for a handful of
+  `git` calls.
+- **The path is validated twice**: `planCurrentFilePattern` (repo-relative
+  segments of word chars/dot/dash, never absolute, never `..`) and, after the
+  join, a `filepath.Rel` re-check against the directory — it reaches the
+  filesystem, so it is never trusted. The answer is bounded at
+  `planCurrentMaxBytes` (256 KB) and the pane renders at most
+  `maxCurrentLines` (400) lines, saying in words that it was cut.
+- **`found:false` is an ordinary ok answer**, not an error: it is what the page
+  renders as the word **"nieuw bestand"** (`plan-block-new-file`, an agreed
+  default), and it is also the answer when there is no werkmap at all.
+- **Three stands in `blockCodeBody`** (`src/plan.mjs`): a title that is not a
+  file path at all → the proposed code alone, as before; the file exists → two
+  panes side by side (`plan-block-split`, `plan-block-current` /
+  `plan-block-proposed`) with "Huidige code" and "Voorgestelde code" as their
+  headers; the file does not exist → the proposed code plus "nieuw bestand".
+- **`alignRows` is genuinely reused from the review tree.** It (and
+  `diffLines`) moved verbatim out of `src/Block.mjs` into
+  **`src/lineDiff.mjs`**, which Block.mjs now imports — so the plan page gets
+  the tree's own alignment without importing that whole card (BlockList,
+  translationDiff, columnWidth, shortcut hints…). This is the SECOND deliberate
+  exception to this page's "same style, own code" rule, next to
+  `claudeChatColumn`.
+- **Deliberately NOT rendered as a two-sided del/ins diff.** A plan block is a
+  ~25-line SKETCH of one function while the current code is the whole file, so
+  every unmatched file line would show up as a "removal" the plan never asked
+  for. `newProposedLines` therefore uses the alignment only to mark, in the
+  PROPOSED pane, the lines the file does not have yet — a `+` glyph in the
+  gutter carries it (the tint is decoration, per the colourblind rule), which
+  is the question a reviewer actually has: which of these lines is new?
 
 ## Subtask and main task
 
@@ -697,7 +801,8 @@ and the block nesting is arbitrarily deep. `Save` is called only from the
 | `GET /api/plan?key=KEY` | read-only → `{ok, key, doc, runs, generating, exec?}` (`exec` = the newest `plan_execute` attempt of this ticket). An unknown ticket answers ok with an empty document, never an error. |
 | `POST /api/workflows/plan` | `{key}` → `{runId}`; starts or idempotently reuses the tracker. |
 | `POST /api/workflows/plan_execute` | `{key}` → `{runId}`; the index's last action — implement the plan on a fresh branch and open a draft PR. 409 while one is already running. |
-| `POST /api/workflows/{runID}/signals/plan_answer` | `{questionId, optionId, text}` — one answer; `{kind:"followup"}` — generate follow-up questions and rebuild the task list; or `{kind:"chat", text}` — one general-chat message (the only shapes allowed without a `questionId`). |
+| `POST /api/workflows/{runID}/signals/plan_answer` | `{questionId, optionId, text}` — one answer; `{kind:"followup"}` — generate follow-up questions and rebuild the task list; `{kind:"chat", text}` — one general-chat message; or `{kind:"task", taskTitle, taskOff, taskNote}` — one task's checkbox/field (the only shapes allowed without a `questionId`). |
+| `GET /api/plan/current?key=KEY&file=path` | read-only → `{ok, found, file, dir?, code?, truncated?}` — what that file looks like right now in the plan's own werkmap, shown next to a block's proposed code. `found:false` is an ordinary answer (the page's "nieuw bestand"). |
 | `GET /api/branches` | read-only → `{ok, branches:[{name, own, updated}]}` — the primary repo's remote branches, the reviewer's own first, for the hotfix question's dropdown. |
 | `POST /api/workflows/{runID}/signals/plan_hotfix` | `{hotfix, branch?}` — a bug's base branch: the hotfix branch, the ordinary one, or a branch picked from the dropdown (validated against the ref allow-list); or `{kind:"chat", text}` — a chat message while this gate stands (see "The general chat" above). |
 | `POST /api/workflows/{runID}/signals/plan_scope` | `{choice:"parent"}` — plan the main task itself (a subtask choice is plain navigation, not a Signal); or `{kind:"chat", text}` — a chat message while this gate stands. |
@@ -735,6 +840,27 @@ and the block nesting is arbitrarily deep. `Save` is called only from the
   under, so the guarantee during the run is the per-directory write slot, plus
   the fact that a directory on the plan branch is never offered to another
   PR's chat automatically.
+- **A task's checkbox/field is keyed by its TITLE, so a rephrased title loses
+  it.** That is the price of not keying on a positional id (see above): a
+  regeneration that renames "Voeg de checkbox toe" to "Checkbox per taak
+  toevoegen" reads as a new task — ticked, no note. Deliberate: the alternative
+  (an id) would silently move the state onto a DIFFERENT task, which is worse
+  than losing it.
+- **Existing plan documents get `taskStates` no more retroactively than any
+  other new field** — the document is written and read as a whole and there is
+  no backfill. Here that costs nothing: an absent state IS the default (every
+  task ticked, no notes), so an older plan behaves exactly as before. Fourth
+  time this shape is recorded as an accepted gap.
+- **The current-code pane reads the werkmap, not the base branch.** A checkout
+  sitting on somebody else's branch (or with uncommitted work) is shown as it
+  is — for a read that is arguably the most truthful picture, and unlike
+  `resolvePlanWorkDir` this endpoint therefore never refuses a dirty or
+  claimed directory. With no local checkout at all, every block simply reads as
+  "nieuw bestand".
+- **The proposal is never diffed against the file two-sidedly** (see above), so
+  the page never says which existing lines a plan REPLACES — only which of the
+  proposed lines are new. A plan block is a sketch; the real diff is the draft
+  PR.
 - **No Jira update.** Executing the plan does not transition the ticket.
 - **The related-PR search is a heuristic on the issue key.** A PR that never
   names its ticket in the title or body is not found, and one that only
@@ -789,7 +915,13 @@ and the block nesting is arbitrarily deep. `Save` is called only from the
   escaped plain text with the language word still in the header — the same
   fallback as a fenced block in a comment (`.claude/rules/conventions.md`).
 
-Tests: `plan_workflow_test.go` (id numbering + caps, junk rejected, the
+Tests: `plan_workflow_test.go` (the task checkbox/field fold plus
+`mergePlanTasks` — an unchecked task never comes back from a regeneration but
+keeps its re-tickable row, ids renumbered, the off-list reaching the prompt —
+and `planExecutePrompt` skipping an unchecked task while carrying the
+reviewer's own field; `plan_current_code_test.go` (a traversal, a missing file
+and a directory all read as not-found, and the file pattern refusing an
+absolute/shell-ish path); id numbering + caps, junk rejected, the
 hotfix gate's pure decisions — `planNeedsBaseQuestion` on a pre-gate, a
 bug-only-era and a fresh document (the replay safety), `planIsBug` on every
 issue-type spelling and
@@ -833,6 +965,11 @@ type gets it)
 field with the reviewer's own branches on top) and
 `task12-plan-concrete-tasks.png` (the merged-work card in the first column, the
 follow-up-questions row, and a task with every concrete field filled in).
+`task22-task-checkboxes.png`/`task22-task-unchecked.png` (a task's checkbox,
+its state in words, the strikethrough title and the reviewer's own field) and
+`task26-current-vs-proposed.png`/`task26-new-file.png` (the two panes, with the
+`+` gutter on the lines the file does not have yet — and the "nieuw bestand"
+stand).
 `tests/plan-ticket-menu.spec.mjs` (Enter on the ticket column opens the menu,
 its "Open in Jira" item, Escape, the mouse entry point) and
 `tests/plan-chat.spec.mjs` (`/` opens the overlay, a sent message round-trips

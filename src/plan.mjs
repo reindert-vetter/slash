@@ -40,6 +40,13 @@ import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { claudeChatColumn } from './ClaudeChat.mjs'
 import { avatarHTML } from './avatar.mjs'
 import { relativeTime } from './relativeTime.mjs'
+// alignRows is the review tree's OWN line aligner, extracted to its own module
+// so this page can reuse the exact same comparison without importing
+// Block.mjs's whole card (see src/lineDiff.mjs). The second deliberate
+// exception to this page's "own code" rule, next to claudeChatColumn above —
+// reviewer request for task 26: "huidige code naast de voorgestelde code, de
+// blok-weergave van de review-tree overnemen".
+import { alignRows } from './lineDiff.mjs' 
 
 initTheme()
 
@@ -118,6 +125,19 @@ const state = reactive({
   // so the stored document only grows its new questions once it lands. Local,
   // exactly like scopePending/hotfixPending.
   followupPending: false,
+  // The reviewer's own bookkeeping per task (task 22): the CHECKBOX (default
+  // on — unchecking drops the task from the plan and from every later
+  // regeneration) and the FIELD next to it (which travels to the execution
+  // only). Keyed by the normalized task TITLE, exactly like the backend's
+  // planTaskState — a task id is positional and every regeneration renumbers
+  // the list. This is the local "my pick wins until the document catches up"
+  // overlay, same shape as state.pending for an answer.
+  taskPending: {},
+  // The current code of a block's own file, read out of the plan's werkmap
+  // (GET /api/plan/current), keyed by the file path: {loading, found, code,
+  // dir, truncated}. Plain per-file cache — nothing here is the source of
+  // truth, so a miss simply shows the proposed code on its own.
+  current: {},
   // The general chat about this ticket (reused from the review tree, see the
   // import comment above and planChatOverlay below). chatOpen gates the
   // fullscreen overlay (ephemeral — not in the URL/localStorage, exactly like
@@ -284,6 +304,24 @@ function dropSettledPending() {
     else keep[qid] = a
   }
   if (changed) state.pending = keep
+  dropSettledTaskPending()
+}
+
+// dropSettledTaskPending is the same for a task's checkbox/field: the stored
+// document only carries a state that DEVIATES from the default (checked, no
+// note), so a local pick that is itself the default settles as soon as the
+// document has no row for it either.
+function dropSettledTaskPending() {
+  const stored = state.doc.taskStates || []
+  const keep = {}
+  let changed = false
+  for (const [key, st] of Object.entries(state.taskPending)) {
+    const on = stored.find((s) => s.key === key)
+    const isDefault = !st.off && !(st.note || '')
+    if (on ? !!on.off === !!st.off && (on.note || '') === (st.note || '') : isDefault) changed = true
+    else keep[key] = st
+  }
+  if (changed) state.taskPending = keep
 }
 
 // ensureTracker starts (or idempotently reuses) the ticket's own `plan`
@@ -324,6 +362,74 @@ async function sendAnswer(question, option, text) {
     // Nothing to undo: the next poll shows what the tracker really stored.
   }
   state.saving = ''
+}
+
+// ------------------------------------------------ task checkbox + own field
+
+// taskKeyOf mirrors the backend's planTaskKey: lowercased, whitespace runs
+// collapsed. The checkbox/note state hangs off the task TITLE rather than its
+// id, because a task id is positional (t1..tn) and every regeneration
+// renumbers the list — see planTaskState in plan_workflow.go.
+function taskKeyOf(title) {
+  return String(title || '')
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .join(' ')
+}
+
+// taskStateFor merges the just-made local pick over the stored document, the
+// same "an event/read is never the source of truth" overlay answerFor uses:
+// the tracker saves within a second, but a poll in between must not make the
+// checkbox jump back.
+function taskStateFor(task) {
+  const key = taskKeyOf(task && task.title)
+  if (!key) return null
+  const pending = state.taskPending[key]
+  if (pending) return pending
+  return (state.doc.taskStates || []).find((st) => st.key === key) || null
+}
+
+// taskEnabled: the DEFAULT is on. A task the reviewer never touched (and every
+// document written before this existed) carries no state at all.
+function taskEnabled(task) {
+  const st = taskStateFor(task)
+  return !(st && st.off)
+}
+
+function taskNoteFor(task) {
+  const st = taskStateFor(task)
+  return (st && st.note) || ''
+}
+
+// sendTaskState signals one task's checkbox + field to the tracker. It rides on
+// the SAME plan_answer Signal with kind:"task" (a workflow can only wait on one
+// signal name at a time) and the tracker only SAVES it — no regeneration, so
+// typing in the field never costs a Claude call. Unchecking takes effect on the
+// next regeneration, which is exactly the reviewer's own decision.
+async function sendTaskState(task, off, note) {
+  const key = taskKeyOf(task && task.title)
+  if (!key) return
+  state.taskPending = { ...state.taskPending, [key]: { key, title: task.title, off: !!off, note: note || '' } }
+  lastPayload = ''
+  if (!state.runId) await ensureTracker()
+  if (!state.runId) return
+  try {
+    await fetch('/api/workflows/' + encodeURIComponent(state.runId) + '/signals/plan_answer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'task', taskId: task.id || '', taskTitle: task.title || '', taskOff: !!off, taskNote: note || '' }),
+    })
+  } catch (err) {
+    // Nothing to undo: the next poll shows what the tracker really stored.
+  }
+}
+
+// toggleTask flips the checkbox, keeping whatever is typed in the field. This
+// is what Enter/Space on a task row does (an agreed default, see
+// todo/plan-page-workflow.md) as well as a click on the box itself.
+function toggleTask(task) {
+  sendTaskState(task, taskEnabled(task), taskNoteFor(task))
 }
 
 // FOLLOWUP_ROW_ID is the stable id of the "meer vragen" action row — the same
@@ -1135,6 +1241,12 @@ function onKeydown(e) {
       } else if (state.col === 1 && row && row.kind === 'hotfix') {
         e.preventDefault()
         chooseHotfix(row)
+      } else if (state.col === 1 && row && row.kind === 'task') {
+        // An agreed default (todo/plan-page-workflow.md): Enter on a task row
+        // toggles its checkbox. The row's own field is reached by clicking/
+        // Tabbing into it, exactly like an option's is.
+        e.preventDefault()
+        toggleTask(row.task)
       } else if (state.col === 1 && row && row.kind === 'followup') {
         e.preventDefault()
         sendFollowup()
@@ -1232,6 +1344,107 @@ function highlight(code, lang) {
 
 function escapeHtml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
+// ------------------------------------- the CURRENT code next to the proposal
+
+// PLAN_FILE_RE is the same allow-list the endpoint validates against
+// (plan_current_code.go's planCurrentFilePattern): a block titles itself with a
+// repo-relative path, but the model is free to title one "de nieuwe check" —
+// only something that really reads as a file path is ever looked up.
+const PLAN_FILE_RE = /^[A-Za-z0-9_.-]+(\/[A-Za-z0-9_.-]+)*$/
+
+// maxCurrentLines bounds what the current-code pane renders. The endpoint
+// already caps the bytes; this keeps a 3000-line file from turning one block
+// card into a wall (the word says it was cut, per the colourblind rule).
+const maxCurrentLines = 400
+
+function blockFilePath(block) {
+  const title = String((block && block.title) || '').trim()
+  if (!title || !title.includes('.') || !PLAN_FILE_RE.test(title)) return ''
+  return title
+}
+
+// ensureCurrentCode reads what that file looks like RIGHT NOW in the plan's own
+// werkmap (GET /api/plan/current — read-only, see plan_current_code.go). One
+// request per file, cached on state.current: a block column re-renders on every
+// cursor step and must not re-fetch.
+function ensureCurrentCode(file) {
+  if (!file || state.current[file]) return
+  state.current = { ...state.current, [file]: { loading: true, found: false, code: '' } }
+  fetch('/api/plan/current?key=' + encodeURIComponent(state.key) + '&file=' + encodeURIComponent(file))
+    .then((res) => (res.ok ? res.json() : null))
+    .then((body) => {
+      state.current = {
+        ...state.current,
+        [file]: body
+          ? { loading: false, found: !!body.found, code: body.code || '', dir: body.dir || '', truncated: !!body.truncated }
+          : { loading: false, found: false, code: '' },
+      }
+    })
+    .catch(() => {
+      state.current = { ...state.current, [file]: { loading: false, found: false, code: '' } }
+    })
+}
+
+// currentFor returns the cached entry, kicking off the read on first sight.
+// Called from inside a reactive binding, so the state write it may schedule is
+// the fetch's own (async) one — never a synchronous write during the render.
+function currentFor(file) {
+  if (!file) return null
+  if (!state.current[file]) {
+    requestAnimationFrame(() => ensureCurrentCode(file))
+    return { loading: true, found: false, code: '' }
+  }
+  return state.current[file]
+}
+
+// newProposedLines marks which lines of the PROPOSED sketch are not already in
+// the current file, using the review tree's own line aligner (alignRows, see
+// src/lineDiff.mjs — the same function its split diff panes are built on).
+// Deliberately NOT rendered as a two-sided del/ins diff: a plan block is a
+// ~25-line SKETCH of one function and the current code is the whole file, so
+// every unmatched file line would show up as a "removal" the plan never asked
+// for. Marking the proposal's own new lines is the honest half of that
+// comparison, and it is what a reviewer actually wants to know: which of these
+// lines does the file not have yet?
+function newProposedLines(currentCode, proposedCode) {
+  const marks = []
+  for (const row of alignRows(currentCode || '', proposedCode || '')) {
+    if (row.right === null || row.right === undefined) continue
+    marks.push(row.rightMark === 'ins')
+  }
+  return marks
+}
+
+// codeLinesHTML renders one pane: a gutter glyph per line ('+' for a line the
+// current file does not have yet — the WORD/GLYPH carries it, the tint is
+// decoration, per the colourblind rule) plus the Prism-highlighted line.
+function codeLinesHTML(code, lang, marks) {
+  const lines = String(code || '').split('\n')
+  const cut = lines.length > maxCurrentLines
+  const shown = cut ? lines.slice(0, maxCurrentLines) : lines
+  const rows = shown.map((line, i) => {
+    const isNew = !!(marks && marks[i])
+    const cls = isNew ? 'bg-emerald-50 dark:bg-emerald-500/15' : ''
+    return (
+      '<div class="flex ' +
+      cls +
+      '"><span class="w-4 shrink-0 select-none text-center text-slate-400 dark:text-zinc-600">' +
+      (isNew ? '+' : '') +
+      '</span><span class="min-w-0 flex-1 whitespace-pre-wrap break-words">' +
+      (highlight(line, lang) || '&nbsp;') +
+      '</span></div>'
+    )
+  })
+  if (cut) {
+    rows.push(
+      '<div class="flex pt-1 text-[11px] italic text-slate-400 dark:text-zinc-500"><span class="w-4 shrink-0"></span><span>' +
+        escapeHtml('…(afgekapt na ' + maxCurrentLines + ' van ' + lines.length + ' regels)') +
+        '</span></div>'
+    )
+  }
+  return rows.join('')
 }
 
 const CARD = 'rounded-2xl border bg-white p-5 shadow-sm dark:bg-zinc-900 '
@@ -1868,6 +2081,7 @@ function taskRow(row) {
           : 'border-slate-200 dark:border-zinc-800')}"
       data-testid="plan-task"
       data-task-id="${task.id}"
+      data-task-enabled="${() => (taskEnabled(task) ? 'true' : 'false')}"
       data-cursor="${() => (state.cur === task.id ? 'true' : 'false')}"
       @click="${() => {
         state.cur = task.id
@@ -1877,8 +2091,37 @@ function taskRow(row) {
     >
       <div class="flex items-start gap-2">
         <span class="shrink-0 font-mono text-[12px] text-slate-400 dark:text-zinc-500">${row.ti + 1}.</span>
+        <label
+          class="flex shrink-0 cursor-pointer items-center gap-1 pt-0.5"
+          @click="${(e) => {
+            if (e && e.stopPropagation) e.stopPropagation()
+          }}"
+        >
+          <input
+            type="checkbox"
+            data-testid="plan-task-check"
+            checked="${() => taskEnabled(task)}"
+            class="h-3.5 w-3.5 shrink-0 accent-indigo-600"
+            @change="${() => {
+              state.cur = task.id
+              state.col = 1
+              toggleTask(task)
+            }}"
+          />
+          <span
+            class="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-zinc-400"
+            data-testid="plan-task-state"
+            >${() => (taskEnabled(task) ? t('meenemen') : t('overslaan'))}</span
+          >
+        </label>
         <div class="min-w-0 flex-1">
-          <div class="text-[13px] font-medium leading-snug text-slate-900 dark:text-zinc-100">${task.title}</div>
+          <div
+            class="${() =>
+              'text-[13px] font-medium leading-snug ' +
+              (taskEnabled(task) ? 'text-slate-900 dark:text-zinc-100' : 'text-slate-400 line-through dark:text-zinc-500')}"
+          >
+            ${task.title}
+          </div>
           <div class="contents">
             ${() =>
               task.explanation
@@ -1886,6 +2129,29 @@ function taskRow(row) {
                 : ''}
           </div>
           <div class="mt-1 flex flex-col gap-0.5">${() => taskDetailRows(task)}</div>
+          <input
+            type="text"
+            placeholder="${t('eigen aanvulling bij deze taak…')}"
+            value="${taskNoteFor(task)}"
+            data-testid="plan-task-note"
+            class="mt-1.5 w-full rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[12px] text-slate-800 placeholder:text-slate-400 focus:border-indigo-300 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500"
+            @keydown="${(e) => {
+              if (!e) return
+              if (e.key === 'Enter') {
+                e.stopPropagation()
+                sendTaskState(task, !taskEnabled(task), e.target.value)
+                e.target.blur()
+              }
+            }}"
+            @blur="${(e) => {
+              if (!e) return
+              if ((e.target.value || '') !== taskNoteFor(task)) sendTaskState(task, !taskEnabled(task), e.target.value)
+            }}"
+            @focus="${() => {
+              state.cur = task.id
+              state.col = 1
+            }}"
+          />
         </div>
         <div class="contents">
           ${() =>
@@ -2307,6 +2573,77 @@ function questionsColumn() {
 
 // -------------------------------------------- columns 3+: the example blocks
 
+// blockCodeBody is a block's code half: the CURRENT code of its own file (read
+// out of the plan's werkmap) next to the code the plan proposes — the review
+// tree's own two-pane block shape, reviewer request for task 26. Three stands:
+//
+//   - the block's title is not a file path at all (the model titled it "de
+//     nieuwe check") → only the proposed code, as before;
+//   - the file exists in the werkmap → two panes, "Huidige code" left and
+//     "Voorgestelde code" right, with the lines the file does not have yet
+//     marked '+' in the proposal's gutter (see newProposedLines);
+//   - the file does not exist (or there is no werkmap) → only the proposed
+//     code, with the word "nieuw bestand" — an agreed default, see
+//     todo/plan-page-workflow.md.
+//
+// Always returns ONE template (never a bare string ↔ template toggle), and it
+// is embedded through a `${() => [...]}` function binding, per
+// .claude/rules/arrowjs-pitfalls.md.
+function proposedPane(block, marks, label) {
+  return html`
+    <div class="min-w-0">
+      <div class="flex items-center gap-1.5 border-b border-slate-100 px-3 py-1 dark:border-zinc-800">
+        <span class="text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500">${label}</span>
+      </div>
+      <pre
+        class="overflow-x-auto bg-white px-3 py-2 font-mono text-[12px] leading-relaxed dark:bg-zinc-900"
+        data-testid="plan-block-proposed"
+      ><code class="${'language-' + prismName(block.lang)}" .innerHTML="${() => codeLinesHTML(block.code, block.lang, marks)}"></code></pre>
+    </div>
+  `.key('proposed:' + (block.title || '') + ':' + label)
+}
+
+function blockCodeBody(block) {
+  const file = blockFilePath(block)
+  if (!file) return proposedPane(block, null, t('Voorgestelde code'))
+  const cur = currentFor(file)
+  if (cur && cur.loading) {
+    return html`
+      <div>
+        <p class="px-3 pt-1.5 text-[11px] text-slate-400 dark:text-zinc-500" data-testid="plan-block-current-state">
+          ${t('huidige code laden…')}
+        </p>
+        ${[proposedPane(block, null, t('Voorgestelde code'))]}
+      </div>
+    `.key('body:loading:' + file)
+  }
+  if (!cur || !cur.found) {
+    return html`
+      <div>
+        <p class="px-3 pt-1.5 text-[11px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-300" data-testid="plan-block-new-file">
+          ${t('nieuw bestand')}
+        </p>
+        ${[proposedPane(block, null, t('Voorgestelde code'))]}
+      </div>
+    `.key('body:new:' + file)
+  }
+  const marks = newProposedLines(cur.code, block.code)
+  return html`
+    <div class="grid grid-cols-2 divide-x divide-slate-200 dark:divide-zinc-800" data-testid="plan-block-split">
+      <div class="min-w-0">
+        <div class="flex items-center gap-1.5 border-b border-slate-100 px-3 py-1 dark:border-zinc-800">
+          <span class="text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500">${t('Huidige code')}</span>
+        </div>
+        <pre
+          class="max-h-[28rem] overflow-auto bg-white px-3 py-2 font-mono text-[12px] leading-relaxed dark:bg-zinc-900"
+          data-testid="plan-block-current"
+        ><code class="${'language-' + prismName(block.lang)}" .innerHTML="${() => codeLinesHTML(cur.code, block.lang, null)}"></code></pre>
+      </div>
+      ${[proposedPane(block, marks, t('Voorgestelde code'))]}
+    </div>
+  `.key('body:split:' + file + ':' + (cur.code || '').length)
+}
+
 function blockCard(block, level, index) {
   const focused = () => state.col === level + 2 && cursorAt(level, blockLevels()[level] || []) === index
   const kids = Array.isArray(block.children) ? block.children : []
@@ -2345,9 +2682,7 @@ function blockCard(block, level, index) {
               </p>`
             : ''}
       </div>
-      <pre
-        class="overflow-x-auto bg-white px-3 py-2 text-[12px] leading-relaxed dark:bg-zinc-900"
-      ><code class="${'language-' + prismName(block.lang) + ' whitespace-pre-wrap break-words'}" .innerHTML="${() => highlight(block.code, block.lang)}"></code></pre>
+      <div class="contents">${() => [blockCodeBody(block)]}</div>
       <div class="contents">
         ${() =>
           kids.length

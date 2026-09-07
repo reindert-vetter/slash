@@ -184,6 +184,11 @@ func planExecuteWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	if len(doc.Tasks) == 0 {
 		return json.Marshal(planExecuteResult{Note: "Er staat nog geen takenlijst in dit plan."})
 	}
+	// Every task unchecked is not an empty plan but an empty RUN: nothing to
+	// implement, and a branch + draft PR for nothing is worse than a note.
+	if !planHasEnabledTask(doc) {
+		return json.Marshal(planExecuteResult{Note: "Alle taken staan uitgevinkt: er is niets om uit te voeren."})
+	}
 	branch := planBranchName(doc.Key, doc.Title)
 	base := planBaseBranch(doc)
 	var res planExecuteResult
@@ -205,12 +210,27 @@ func planExecuteWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	return json.Marshal(res)
 }
 
+// planHasEnabledTask reports whether at least one task is still ticked (see
+// planTaskState) — pure, so the workflow body may branch on it.
+func planHasEnabledTask(doc planDoc) bool {
+	for _, t := range doc.Tasks {
+		if planTaskEnabled(doc.TaskStates, t.Title) {
+			return true
+		}
+	}
+	return false
+}
+
 // planTaskTitles is the bounded list of task titles that goes into the PR body.
+// Only the ticked tasks: the PR body describes what was actually implemented.
 func planTaskTitles(doc planDoc) []string {
 	out := make([]string, 0, len(doc.Tasks))
 	for _, t := range doc.Tasks {
 		if len(out) >= planExecuteMaxBodyEntries {
 			break
+		}
+		if !planTaskEnabled(doc.TaskStates, t.Title) {
+			continue
 		}
 		out = append(out, t.Title)
 	}
@@ -809,13 +829,27 @@ func planExecutePrompt(doc planDoc) string {
 		b.WriteString("\n")
 	}
 	b.WriteString("HET PLAN, in uitvoervolgorde:\n")
-	for i, task := range doc.Tasks {
-		if i >= planExecuteMaxTasks {
+	// Only the tasks the reviewer left CHECKED are executed: unchecking one is
+	// how they say "dit hoort niet in dit plan" (see planTaskState). Numbering
+	// follows the kept tasks, so the prompt never mentions a gap.
+	n := 0
+	for _, task := range doc.Tasks {
+		if !planTaskEnabled(doc.TaskStates, task.Title) {
+			continue
+		}
+		if n >= planExecuteMaxTasks {
 			break
 		}
-		fmt.Fprintf(&b, "\n%d. %s\n", i+1, task.Title)
+		n++
+		fmt.Fprintf(&b, "\n%d. %s\n", n, task.Title)
 		if note := truncatePlanText(task.Explanation, planExecuteMaxNoteLen); note != "" {
 			b.WriteString("   " + note + "\n")
+		}
+		// What the reviewer typed in the field next to this task — their own
+		// instruction for it, which only ever travels here (it never triggers a
+		// regeneration, see planAnswerTask).
+		if own := truncatePlanText(planTaskStateFor(doc.TaskStates, task.Title).Note, planExecuteMaxNoteLen); own != "" {
+			b.WriteString("   Aanvulling van de reviewer (volg dit): " + own + "\n")
 		}
 		writePlanTaskDetails(&b, task)
 		for _, blk := range task.Blocks {

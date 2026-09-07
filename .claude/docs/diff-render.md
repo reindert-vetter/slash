@@ -8,6 +8,14 @@ see `.claude/docs/diff-card.md`.
 
 ## Old/new line alignment (`blockRows`/`alignRows`/`diffLines`)
 
+**`alignRows`/`diffLines` live in `src/lineDiff.mjs`**, not in `Block.mjs`
+itself: they were extracted verbatim (they used to be module-private at the
+bottom of `Block.mjs`, which now imports them) so `/plan/<JIRA-KEY>` can reuse
+the exact same alignment without importing this whole card — see "The current
+code next to the proposed code" in `.claude/docs/plan-page.md`. Keep that
+module free of DOM/arrow.js/state: both call sites rely on it being a plain
+`(oldText, newText) → rows` function.
+
 `GET /api/code?pr=N&file=..&class=..&name=..` returns the old + new source of one
 block from the base/head worktrees. `Block.mjs` aligns them **line by line** with
 its own LCS line diff (`alignRows`/`diffLines`, pure JS — no AI): matching lines

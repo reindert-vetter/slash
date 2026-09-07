@@ -105,6 +105,17 @@ const planAnswerChat = "chat"
 // QuestionID/OptionID are unused, same shape as the two Kinds above.
 const planAnswerComment = "comment"
 
+// planAnswerTask is the PlanAnswerSignal Kind that records the reviewer's own
+// bookkeeping on ONE task of the plan (reviewer decision, task 22 of
+// todo/plan-page-workflow.md): the CHECKBOX next to it — default on, and
+// unchecking it drops the task from the plan AND from every later
+// regeneration — plus the free-text FIELD next to it, which travels to the
+// execution only. Neither triggers a regeneration: this Kind saves the
+// document and nothing else, so typing a note never costs a minutes-long
+// Claude call. Text/QuestionID/OptionID are unused; the payload is the
+// Task* fields below.
+const planAnswerTask = "task"
+
 // maxPlanChatMessages bounds how long the chat transcript on the document is
 // allowed to grow (oldest dropped first, always in pairs so a lone orphaned
 // reply/question is never left dangling) — the same reasoning as
@@ -125,6 +136,14 @@ type PlanAnswerSignal struct {
 	// Kind is empty for an answer and planAnswerFollowup for "generate follow-up
 	// questions so I can sharpen the plan further".
 	Kind string `json:"kind,omitempty"`
+	// TaskTitle/TaskOff/TaskNote are the planAnswerTask Kind's payload: which
+	// task (by its TITLE — see planTaskKey for why not by its id), whether the
+	// reviewer unchecked it, and what they typed next to it. TaskID is carried
+	// for readability only; nothing matches on it.
+	TaskID    string `json:"taskId,omitempty"`
+	TaskTitle string `json:"taskTitle,omitempty"`
+	TaskOff   bool   `json:"taskOff,omitempty"`
+	TaskNote  string `json:"taskNote,omitempty"`
 }
 
 // planBlock is one example-code block, as rendered in the page's third column.
@@ -176,6 +195,20 @@ type planTask struct {
 	Rollout    string   `json:"rollout,omitempty"`    // feature flag / rollout / rollback
 	EdgeCases  []string `json:"edgeCases,omitempty"`  // empty, zero, large, several at once
 	OutOfScope []string `json:"outOfScope,omitempty"` // explicitly not part of this task
+}
+
+// planTaskState is the reviewer's own bookkeeping on ONE task: the checkbox
+// (Off — default is CHECKED, so an absent state means "meenemen") and the
+// free-text field next to it. Keyed by planTaskKey(title) rather than by the
+// task id, because a task id is POSITIONAL (t1..tn, assigned in
+// parsePlanAnswer) and every regeneration renumbers the list — an id-keyed
+// state would silently jump to a different task. Title keeps the original
+// spelling for the prompt.
+type planTaskState struct {
+	Key   string `json:"key"`
+	Title string `json:"title,omitempty"`
+	Off   bool   `json:"off,omitempty"`
+	Note  string `json:"note,omitempty"`
 }
 
 // planComment is one Jira comment reaching the plan: the reviewer asked that
@@ -309,7 +342,11 @@ type planDoc struct {
 	LoadsContext    bool            `json:"loadsContext,omitempty"`
 	Questions       []planQuestion  `json:"questions"`
 	Tasks           []planTask      `json:"tasks"`
-	Answers         []planAnswer    `json:"answers"`
+	// TaskStates is the reviewer's checkbox/note per task (see planTaskState).
+	// Absent for every document written before task 22 existed, which reads as
+	// "every task checked, no notes" — the default.
+	TaskStates []planTaskState `json:"taskStates,omitempty"`
+	Answers    []planAnswer    `json:"answers"`
 	// Chat is the free-form "algemene chat" transcript about this ticket — the
 	// review tree's own Claude chat component, reused, but keyed on the Jira
 	// KEY (this document) rather than a GitHub PR number: there is no PR yet
@@ -509,6 +546,20 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			}
 			continue
 		}
+		// The reviewer ticked/unticked a task's checkbox, or typed something in
+		// the field next to it. Deliberately a save and NOTHING else: the note
+		// only travels to plan_execute, and an unchecked task is dropped by
+		// mergePlanTasks at the NEXT regeneration (whichever answer triggers
+		// it) rather than paying for a minutes-long Claude call per keystroke.
+		// A pure fold of the recorded Signal, exactly like upsertPlanAnswer, so
+		// replay reproduces it (.claude/rules/workflow-determinism.md).
+		if sig.Kind == planAnswerTask {
+			doc.TaskStates = upsertPlanTaskState(doc.TaskStates, sig)
+			if err := w.ExecuteActivity("planSave", doc, nil); err != nil {
+				return nil, fmt.Errorf("plan: save task state: %w", err)
+			}
+			continue
+		}
 		// A reply was posted on one of the ticket's Jira comments: re-read them
 		// and rebuild the task list (see handlePlanComments).
 		if sig.Kind == planAnswerComment {
@@ -620,6 +671,99 @@ func upsertPlanAnswer(list []planAnswer, sig PlanAnswerSignal) []planAnswer {
 	}
 	if sig.OptionID != "" || strings.TrimSpace(sig.Text) != "" {
 		out = append(out, planAnswer{QuestionID: sig.QuestionID, OptionID: sig.OptionID, Text: strings.TrimSpace(sig.Text)})
+	}
+	return out
+}
+
+// planTaskKey normalizes a task title into the key its checkbox/note state
+// hangs off: lowercased, with every whitespace run collapsed to one space.
+// Deliberately NOT the task id — ids are positional (t1..tn) and a
+// regeneration renumbers the whole list, so an id-keyed state would end up on
+// a different task. A title the model rephrases loses its state instead, which
+// is the accepted trade-off (see .claude/docs/plan-page.md).
+func planTaskKey(title string) string {
+	return strings.ToLower(strings.Join(strings.Fields(title), " "))
+}
+
+// upsertPlanTaskState folds one planAnswerTask Signal into the state list —
+// pure, so replay reproduces it. A state that is both checked and note-less is
+// removed again, so the list only ever holds real deviations from the default.
+func upsertPlanTaskState(list []planTaskState, sig PlanAnswerSignal) []planTaskState {
+	key := planTaskKey(sig.TaskTitle)
+	if key == "" {
+		return list
+	}
+	note := strings.TrimSpace(sig.TaskNote)
+	out := make([]planTaskState, 0, len(list)+1)
+	for _, st := range list {
+		if st.Key != key {
+			out = append(out, st)
+		}
+	}
+	if !sig.TaskOff && note == "" {
+		return out
+	}
+	return append(out, planTaskState{Key: key, Title: strings.TrimSpace(sig.TaskTitle), Off: sig.TaskOff, Note: note})
+}
+
+// planTaskStateFor looks up one task's state; the zero value is the default
+// (checked, no note).
+func planTaskStateFor(states []planTaskState, title string) planTaskState {
+	key := planTaskKey(title)
+	for _, st := range states {
+		if st.Key == key {
+			return st
+		}
+	}
+	return planTaskState{}
+}
+
+// planTaskEnabled reports whether a task is still part of the plan. Default is
+// TRUE: a document written before task 22 (and every task the reviewer never
+// touched) carries no state at all.
+func planTaskEnabled(states []planTaskState, title string) bool {
+	return !planTaskStateFor(states, title).Off
+}
+
+// mergePlanTasks is what makes "uitvinken laat de taak ook uit de hergeneratie
+// verdwijnen" hold: a freshly generated list keeps only the tasks the reviewer
+// did NOT uncheck, and the unchecked ones are re-appended from the PREVIOUS
+// list so their row (and its checkbox) stays on the page and can be ticked
+// again. Ids are renumbered across the result, since they are positional
+// anyway. Pure, so the Activity's recorded result replays identically.
+func mergePlanTasks(fresh, prev []planTask, states []planTaskState) []planTask {
+	out := make([]planTask, 0, len(fresh)+len(prev))
+	for _, tk := range fresh {
+		if planTaskEnabled(states, tk.Title) {
+			out = append(out, tk)
+		}
+	}
+	seen := make(map[string]bool, len(out))
+	for _, tk := range out {
+		seen[planTaskKey(tk.Title)] = true
+	}
+	for _, tk := range prev {
+		key := planTaskKey(tk.Title)
+		if planTaskEnabled(states, tk.Title) || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, tk)
+	}
+	for i := range out {
+		out[i].ID = fmt.Sprintf("t%d", i+1)
+	}
+	return out
+}
+
+// planDisabledTaskTitles lists the tasks the reviewer unchecked, in the order
+// they were unchecked — what planPrompt tells the model to leave out.
+func planDisabledTaskTitles(states []planTaskState) []string {
+	out := make([]string, 0, len(states))
+	for _, st := range states {
+		if st.Off && strings.TrimSpace(st.Title) != "" {
+			out = append(out, st.Title)
+		}
 	}
 	return out
 }
@@ -878,7 +1022,9 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 			doc.Questions = appendPlanQuestions(doc.Questions, qs)
 			return json.Marshal(doc)
 		}
-		doc.Tasks = tasks
+		// The reviewer's unchecked tasks never come back (and their rows stay
+		// visible so they can be ticked again) — see mergePlanTasks.
+		doc.Tasks = mergePlanTasks(tasks, doc.Tasks, doc.TaskStates)
 		return json.Marshal(doc)
 	})
 	// Activity: ONE Claude call answering the reviewer's latest chat message
