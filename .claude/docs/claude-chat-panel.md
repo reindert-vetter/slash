@@ -2635,6 +2635,25 @@ resync, never re-appends the same text twice):
    its own `appliedDraftReplyIds` entry, so it merges in too — "daarnaast mag
    die input overschreven/samengevoegd worden door vervolg chat met claude"
    (Reindert's own words).
+
+   **But "already applied" must survive a reload too.** Reviewer report: "als
+   ik in de tree een comment verstuur is de input niet gelijk leeg (ik heb het
+   laten genereren vanuit de chat)". `postThreadReply`/`sendReaction`
+   (`RelatedPanel.mjs`) already clear `reaction-compose` synchronously, before
+   the send even starts — that part always worked. The bug was one level up:
+   a `chat.KindDraftReply` message is never deleted from the transcript
+   (`saveChatDraftReply`, `chat_workflow.go`), so `GET /api/chat` keeps
+   returning it forever. `appliedDraftReplyIds` used to be a plain, in-memory
+   `Set` — reset to empty on every fresh page load/reload — so the very next
+   time the reviewer reopened that SAME conversation, `applyPendingDraftReplies`
+   saw the id as "unseen" again and rewrote the already-sent draft straight
+   back into the now-empty field. Fixed by backing `appliedDraftReplyIds` with
+   `draftStorage.mjs` (`isDraftReplyApplied`/`markDraftReplyApplied`,
+   `RelatedPanel.mjs`, keyed via the same PR-scoped `dsKey` every other
+   composer draft already uses) — once a draft id has been applied, in THIS
+   page load or an earlier one, it never seeds the field again. Test:
+   "a drafted reply already sent is not written back into the reply field
+   after a reload" in `tests/claude-chat-panel.spec.mjs`.
 2. **Focus only moves onto `reaction-compose` when the reviewer is NOT
    currently MID-TYPING an unsent follow-up in the Claude composer**
    (`document.activeElement` checked against

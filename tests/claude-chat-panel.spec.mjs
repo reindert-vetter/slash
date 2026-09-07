@@ -1562,6 +1562,83 @@ test('Claude chat: a pure, unedited Claude draft is select-all\'d and posts stra
   await expect(page.getByTestId('comment-thread')).toContainText(draftBody)
 })
 
+// Reviewer bug report with a screenshot: "als ik in de tree een comment
+// verstuur is de input niet gelijk leeg (ik heb het laten genereren vanuit
+// de chat)". Root cause: a chat.KindDraftReply message stays in the
+// transcript forever (chat_workflow.go's saveChatDraftReply never deletes
+// it), while appliedDraftReplyIds — the guard that stops
+// applyPendingDraftReplies from re-seeding the reply field with a draft it
+// already merged in — used to be a plain in-memory Set, reset on every page
+// load. So the field really was cleared right after sending (postThreadReply
+// clears it synchronously), but reopening the SAME conversation after a
+// refresh replayed the very same, already-sent draft straight back into the
+// now-empty field. Fixed by persisting "this draft id was already applied"
+// via draftStorage.mjs (isDraftReplyApplied/markDraftReplyApplied,
+// RelatedPanel.mjs), mirroring how every other composer draft already
+// survives a refresh.
+test('Claude chat: a drafted reply already sent is not written back into the reply field after a reload', async ({
+  page,
+}, testInfo) => {
+  const pr = seededPr(testInfo)
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: {
+      pr,
+      file: 'test.php',
+      line: 1,
+      author: 'reviewer',
+      body: 'kan dit anders?',
+      local: true,
+      code: '$order->total();',
+      gran: 'call',
+      label: 'Order::total',
+    },
+  })
+  const conversationId = (await start.json()).runId
+  const draftBody = 'Concept van Claude: gebruik hier liever een DTO.'
+  await page.route('**/api/chat?commentId=' + conversationId, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ messages: [{ id: 'draft-1', role: 'assistant', kind: 'draft_reply', body: draftBody }] }),
+    }),
+  )
+  await page.goto('/pr/' + pr)
+  const item = page.getByTestId('comment-item').first()
+  await expect(item).toBeVisible()
+  await item.click()
+  const reply = page.getByTestId('reaction-compose')
+  await expect(reply).toHaveValue('')
+  await page.keyboard.press('ArrowRight') // comment -> claude, applies the draft
+  await expect(page.getByTestId('claude-chat-compose')).toBeVisible()
+  await expect(reply).toHaveValue(draftBody)
+  await page.keyboard.press('ArrowLeft')
+  await expect(reply).toBeFocused()
+  await reply.press('Enter') // pure draft: sends straight to GitHub, no menu
+  await expect
+    .poll(async () => {
+      const res = await page.request.get('/api/comments?pr=' + pr)
+      const list = await res.json()
+      const c = list.find((x) => x.body === 'kan dit anders?')
+      return (c && c.reactions && c.reactions.some((r) => r.body === draftBody && r.githubId)) || false
+    })
+    .toBe(true)
+  await expect(reply).toHaveValue('')
+
+  // Reload and reopen the same conversation: /api/chat still returns the
+  // SAME draft_reply message (it is never deleted from the transcript) —
+  // it must not be written back into the now-empty field.
+  await page.reload()
+  const item2 = page.getByTestId('comment-item').first()
+  await expect(item2).toBeVisible()
+  await item2.click()
+  const reply2 = page.getByTestId('reaction-compose')
+  await expect(reply2).toBeVisible()
+  await expect(reply2).toHaveValue('')
+  await page.keyboard.press('ArrowRight')
+  await expect(page.getByTestId('claude-chat-compose')).toBeVisible()
+  await expect(reply2).toHaveValue('')
+})
+
 // The composer grows in height as its content grows (textareaAutoGrow.mjs,
 // shared with the comment composers in RelatedPanel.mjs — see
 // .claude/docs/claude-chat-panel.md's "Auto-grow composer textareas"), and

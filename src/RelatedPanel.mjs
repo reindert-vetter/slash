@@ -2350,15 +2350,40 @@ async function ensureAndLoadChat(pr, commentId) {
 }
 
 // appliedDraftReplyIds tracks which chat.KindDraftReply turns have already
-// been merged into replyDrafts — a plain, session-only Set (mirrors
-// replyDrafts itself), so a later re-render of the SAME turn (a poll, a
-// resync, a page that happened to fetch the transcript twice) never
-// re-appends the same text a second time. A genuinely NEW draft turn (a
-// distinct id — see chatMessageID's turnID-derived, per-turn id in
-// chat_workflow.go) always gets its own entry, so a follow-up Claude proposal
-// in the SAME conversation still merges in — this is deliberately NOT a
+// been merged into replyDrafts — an in-memory Set (mirrors replyDrafts
+// itself) BACKED by draftStorage.mjs (isDraftReplyApplied/markDraftReplyApplied
+// below), so a later re-render of the SAME turn (a poll, a resync, a page
+// that happened to fetch the transcript twice) never re-appends the same
+// text a second time. A genuinely NEW draft turn (a distinct id — see
+// chatMessageID's turnID-derived, per-turn id in chat_workflow.go) always
+// gets its own entry, so a follow-up Claude proposal in the SAME
+// conversation still merges in — this is deliberately NOT a
 // one-shot-then-frozen mechanism (Reindert's explicit request).
+//
+// The persistence is load-bearing, not defensive: a chat.KindDraftReply
+// message stays in the transcript FOREVER (chat_workflow.go's
+// saveChatDraftReply never deletes it), so a plain in-memory-only Set went
+// back to empty on every fresh page load/reload — the very next time the
+// reviewer reopened this conversation, applyPendingDraftReplies saw an
+// "unseen" id again and rewrote the ALREADY-SENT draft straight back into
+// the now-empty reply field (reviewer report: "als ik in de tree een
+// comment verstuur is de input niet gelijk leeg (ik heb het laten genereren
+// vanuit de chat)" — the field really was cleared right after sending, it
+// just got refilled again the moment the conversation was reopened).
+// draftKeyFor's own PR-scoped dsKey convention is reused via
+// draftAppliedKey below so this can never collide across PRs.
 const appliedDraftReplyIds = new Set()
+
+function draftAppliedKey(msgId) {
+  return dsKey('draftapplied', msgId)
+}
+function isDraftReplyApplied(msgId) {
+  return appliedDraftReplyIds.has(msgId) || !!loadDraft(draftAppliedKey(msgId))
+}
+function markDraftReplyApplied(msgId) {
+  appliedDraftReplyIds.add(msgId)
+  saveDraft(draftAppliedKey(msgId), '1')
+}
 
 // pureChatDraftReplyIds tracks which comment threads currently hold a reply
 // composer whose ENTIRE content is a still-unedited Claude draft — i.e. the
@@ -2422,8 +2447,8 @@ function applyPendingDraftReplies(commentId) {
   let appended = false
   let pure = false
   for (const m of cc.messages) {
-    if (m.kind !== 'draft_reply' || appliedDraftReplyIds.has(m.id)) continue
-    appliedDraftReplyIds.add(m.id)
+    if (m.kind !== 'draft_reply' || isDraftReplyApplied(m.id)) continue
+    markDraftReplyApplied(m.id)
     const existing = getReplyDraft(commentId) || ''
     setReplyDraft(commentId, existing ? existing + '\n\n' + m.body : m.body)
     appended = true
