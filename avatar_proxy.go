@@ -12,11 +12,16 @@ import (
 
 var errAvatarFetchFailed = errors.New("avatar fetch: upstream did not return 200")
 
-// avatarAllowedHost is the only host this codebase ever stores as an
-// avatarUrl (GitHub's user.avatar_url — see src/avatar.mjs's own comment).
-// The proxy below refuses anything else, so it can never become an open
-// proxy/SSRF vector for an arbitrary URL.
-const avatarAllowedHost = "avatars.githubusercontent.com"
+// avatarAllowedHosts are the only hosts this codebase ever stores as an
+// avatarUrl: GitHub's user.avatar_url (see src/avatar.mjs's own comment) and,
+// since task 23b (the plan page's Jira-comment panel), Atlassian's own avatar
+// CDN (jira.Comment.AvatarURL / jira.User.AvatarURL — modules/jira). The proxy
+// below refuses anything else, so it can never become an open proxy/SSRF
+// vector for an arbitrary URL.
+var avatarAllowedHosts = map[string]bool{
+	"avatars.githubusercontent.com":                                 true,
+	"avatar-management--avatars.us-west-2.prod.public.atl-paas.net": true,
+}
 
 // avatarCacheMaxEntries caps the in-memory avatar cache. Avatars are small and
 // few per PR, so this is generous headroom, not a tight budget — once hit we
@@ -100,7 +105,7 @@ func (s *server) handleAvatar(w http.ResponseWriter, r *http.Request) {
 	}
 	raw := r.URL.Query().Get("url")
 	u, err := url.Parse(raw)
-	if raw == "" || err != nil || u.Scheme != "https" || u.Host != avatarAllowedHost {
+	if raw == "" || err != nil || u.Scheme != "https" || !avatarAllowedHosts[u.Host] {
 		http.Error(w, "invalid avatar url", http.StatusBadRequest)
 		return
 	}

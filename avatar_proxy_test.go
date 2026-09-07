@@ -85,6 +85,10 @@ func TestHandleAvatarRejectsDisallowedHost(t *testing.T) {
 		upstream.URL + "/evil",                     // wrong host entirely
 		"https://evil.example.com/avatar.png",      // not a github host
 		"http://avatars.githubusercontent.com/u/1", // right host, wrong scheme
+		// a near-miss of the Atlassian avatar host added for task 23b (the
+		// plan page's Jira-comment panel) — a look-alike host must not slip
+		// through the exact map-key match.
+		"https://avatar-management--avatars.us-west-2.prod.public.atl-paas.net.evil.com/x",
 	} {
 		req := httptest.NewRequest(http.MethodGet, "/api/avatar?url="+url.QueryEscape(disallowed), nil)
 		rr := httptest.NewRecorder()
@@ -135,6 +139,35 @@ func TestHandleAvatarServesAndCaches(t *testing.T) {
 	}
 	if requests != 1 {
 		t.Fatalf("want exactly 1 upstream request across both handler calls, got %d", requests)
+	}
+}
+
+// TestHandleAvatarAllowsJiraAvatarHost proves the second allowed host added
+// for task 23b (the plan page's Jira-comment panel, see plan_comments.go and
+// modules/jira/comments.go's User.AvatarURL/Comment.AvatarURL) is actually
+// reachable through the same allowlist as the pre-existing GitHub host —
+// same shape as TestHandleAvatarServesAndCaches, just the other host.
+func TestHandleAvatarAllowsJiraAvatarHost(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write([]byte("bytes"))
+	}))
+	defer upstream.Close()
+
+	client := upstream.Client()
+	client.Transport = rewriteHostTransport{upstream: upstream.URL, inner: client.Transport}
+
+	s := &server{avatars: newAvatarCache(), avatarHTTPClient: client}
+	target := "https://avatar-management--avatars.us-west-2.prod.public.atl-paas.net/638f4ddf8fd2d2d5f1320c73/x/24"
+
+	req := httptest.NewRequest(http.MethodGet, "/api/avatar?url="+url.QueryEscape(target), nil)
+	rr := httptest.NewRecorder()
+	s.handleAvatar(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d (%s)", rr.Code, rr.Body.String())
+	}
+	if rr.Body.String() != "bytes" {
+		t.Fatalf("unexpected body %q", rr.Body.String())
 	}
 }
 

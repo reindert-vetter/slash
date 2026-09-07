@@ -38,6 +38,8 @@ import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 // engine (SSE progress, cancel, checkout), which this page has no PR to hang
 // on. See planChatOverlay below.
 import { claudeChatColumn } from './ClaudeChat.mjs'
+import { avatarHTML } from './avatar.mjs'
+import { relativeTime } from './relativeTime.mjs'
 
 initTheme()
 
@@ -127,6 +129,32 @@ const state = reactive({
   chatOpen: false,
   chatBusy: false,
   chatError: '',
+  // The Jira-comments panel above the questions index (task 23b, see
+  // .claude/docs/plan-page.md). comments mirrors GET /api/jira/comments's own
+  // shape plus a loading/error flag; loaded is false until the first read
+  // returns, so the panel shows "laden…" instead of "geen opmerkingen" while
+  // the very first fetch is still in flight.
+  comments: { loaded: false, loading: true, error: '', groups: [], canPost: false, canMention: false },
+  // Which group's (ticket's own key) reply composer is open — '' means none.
+  // Only one at a time, mirroring the option/hotfix rows' own single-cursor
+  // discipline elsewhere on this page.
+  commentReplyKey: '',
+  commentReplyText: '',
+  // Mentions picked for the OPEN composer, each {accountId, text} exactly as
+  // jira.Mention expects — only ever added by the reviewer picking a
+  // suggestion, never inferred from typed text (reviewer decision: "alleen
+  // als ik ze zelf typ").
+  commentMentions: [],
+  // The @-query currently being typed (text after the last unresolved '@' in
+  // the composer) and what it resolved to; '' means no mention is being typed
+  // right now, so the picker stays hidden.
+  commentMentionQuery: '',
+  commentMentionResults: [],
+  commentMentionLoading: false,
+  // The reply currently being posted (a group key, so only that group's own
+  // button shows "versturen…" — never a colour-only spinner).
+  commentSending: '',
+  commentSendError: '',
 })
 
 // menu is the stable {open} flag the Enter-menu on the ticket column renders
@@ -327,6 +355,165 @@ async function sendFollowup() {
   state.saving = ''
   state.followupPending = false
   lastPayload = ''
+}
+
+// ------------------------------------------------- Jira comments (task 23b)
+//
+// The panel above the questions index (see .claude/docs/plan-page.md,
+// "Jira-opmerkingen: lezen, beantwoorden, @-mentions"): read-only comment
+// reading from GET /api/jira/comments, replying via the jira_comment
+// workflow, and an @-mention picker off GET /api/jira/users. Deliberately
+// small — no drafts, no reactions, no resolve/ignore, no AI titles.
+
+// loadComments reads the whole family's comments in one GET. Called once at
+// startup and again with refresh:true right after a reply lands (and behind
+// the panel's own "Ververs" button) — otherwise the day-long server cache
+// (plan_comments.go) answers from memory.
+async function loadComments(refresh) {
+  state.comments = { ...state.comments, loading: true }
+  try {
+    const res = await fetch('/api/jira/comments?key=' + encodeURIComponent(state.key) + (refresh ? '&refresh=1' : ''))
+    const body = res.ok ? await res.json() : null
+    if (!body || !body.ok) {
+      state.comments = { ...state.comments, loading: false, loaded: true, error: t('Kon de Jira-opmerkingen niet laden.') }
+      return
+    }
+    state.comments = {
+      loaded: true,
+      loading: false,
+      error: body.error ? t('Kon de Jira-opmerkingen niet laden.') : '',
+      groups: Array.isArray(body.groups) ? body.groups : [],
+      canPost: !!body.canPost,
+      canMention: !!body.canMention,
+    }
+  } catch (err) {
+    state.comments = { ...state.comments, loading: false, loaded: true, error: t('Kon de Jira-opmerkingen niet laden.') }
+  }
+}
+
+// openCommentReply/closeCommentReply gate ONE open composer at a time (a
+// group's own ticket key, '' meaning none) — the same single-cursor
+// discipline the rest of this page follows.
+function openCommentReply(key) {
+  state.commentReplyKey = key
+  state.commentReplyText = ''
+  state.commentMentions = []
+  state.commentMentionQuery = ''
+  state.commentMentionResults = []
+  state.commentSendError = ''
+  requestAnimationFrame(() => {
+    const el = document.querySelector('[data-testid="plan-comment-reply-input"]')
+    if (el) el.focus()
+  })
+}
+
+function closeCommentReply() {
+  state.commentReplyKey = ''
+  state.commentReplyText = ''
+  state.commentMentions = []
+  state.commentMentionQuery = ''
+  state.commentMentionResults = []
+  state.commentSendError = ''
+}
+
+// commentMentionTimer debounces the @-picker's own lookup — a plain module
+// variable, not state: it holds a timer handle, not something to render.
+let commentMentionTimer = null
+
+// onCommentReplyInput tracks the typed body and, while the caret sits right
+// after an unresolved "@word" at the END of the text, looks that word up as a
+// possible mention. Deliberately anchored to the END of the string rather than
+// the real caret position — simpler, and the reviewer types the reply
+// top-to-bottom like every other composer on this page (no existing composer
+// here supports inserting a mention mid-sentence either).
+function onCommentReplyInput(e) {
+  const value = e.target.value
+  state.commentReplyText = value
+  const m = /@([^\s@]{1,40})$/.exec(value)
+  if (!m) {
+    state.commentMentionQuery = ''
+    state.commentMentionResults = []
+    return
+  }
+  state.commentMentionQuery = m[1]
+  clearTimeout(commentMentionTimer)
+  if (!state.comments.canMention) return
+  commentMentionTimer = setTimeout(async () => {
+    state.commentMentionLoading = true
+    try {
+      const res = await fetch('/api/jira/users?q=' + encodeURIComponent(m[1]))
+      const body = res.ok ? await res.json() : null
+      state.commentMentionResults = body && Array.isArray(body.users) ? body.users : []
+    } catch (err) {
+      state.commentMentionResults = []
+    }
+    state.commentMentionLoading = false
+  }, 200)
+}
+
+// pickCommentMention replaces the trailing "@query" with the picked person's
+// full "@Display Name" and records the mention — the ONLY way a mention is
+// ever added (reviewer decision: never inferred from typed text alone). The
+// textarea is uncontrolled (no reactive `value=`, same shape as
+// ClaudeChat.mjs's composer — a controlled value would fight the caret while
+// typing), so the DOM is the source of truth here: read it, patch it, write
+// it back, and mirror the result onto state.commentReplyText for
+// sendCommentReply to read.
+function pickCommentMention(user) {
+  const el = document.querySelector('[data-testid="plan-comment-reply-input"]')
+  const mentionText = '@' + user.displayName
+  const current = el ? el.value : state.commentReplyText
+  const next = current.replace(/@[^\s@]{1,40}$/, mentionText + ' ')
+  state.commentReplyText = next
+  state.commentMentions = state.commentMentions.concat([{ accountId: user.accountId, text: mentionText }])
+  state.commentMentionQuery = ''
+  state.commentMentionResults = []
+  requestAnimationFrame(() => {
+    const input = document.querySelector('[data-testid="plan-comment-reply-input"]')
+    if (input) {
+      input.value = next
+      input.focus()
+      input.setSelectionRange(input.value.length, input.value.length)
+    }
+  })
+}
+
+// sendCommentReply posts the composer's body via the jira_comment workflow
+// (the sanctioned write path — .claude/rules/workflows-write-boundary.md),
+// then re-reads the panel fresh and feeds the new comment back into the plan
+// exactly like an answer does (the plan_answer Signal's "comment" Kind, see
+// plan_workflow.go's planAnswerComment).
+async function sendCommentReply(key) {
+  const body = state.commentReplyText.trim()
+  if (!body || state.commentSending) return
+  state.commentSending = key
+  state.commentSendError = ''
+  try {
+    const res = await fetch('/api/workflows/jira_comment', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key, body, mentions: state.commentMentions }),
+    })
+    if (!res.ok) {
+      state.commentSendError = t('Versturen mislukt.')
+      state.commentSending = ''
+      return
+    }
+    closeCommentReply()
+    await loadComments(true)
+    if (!state.runId) await ensureTracker()
+    if (state.runId) {
+      lastPayload = ''
+      fetch('/api/workflows/' + encodeURIComponent(state.runId) + '/signals/plan_answer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ questionId: '', optionId: '', text: '', kind: 'comment' }),
+      }).catch(() => {})
+    }
+  } catch (err) {
+    state.commentSendError = t('Versturen mislukt.')
+  }
+  state.commentSending = ''
 }
 
 // needsScope is true while the tracker is parked on ITS first question: this
@@ -1894,6 +2081,199 @@ function tasksSection() {
   `.key('tasks')
 }
 
+// -------------------------------------------- Jira comments panel (23b)
+
+// COMMENT_RELATION_WORD is the word next to a group's key — never a colour
+// alone, per the colourblind rule (Reindert).
+const COMMENT_RELATION_WORD = { self: t('dit ticket'), parent: t('hoofdtaak'), subtask: t('subtaak') }
+
+// commentMentionPicker is the @-suggestion dropdown, shown right under the
+// composer while state.commentMentionQuery is non-empty.
+function commentMentionPicker() {
+  return html`
+    <div
+      class="mt-1 max-h-40 overflow-y-auto rounded-md border border-slate-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-800"
+      data-testid="plan-comment-mention-picker"
+    >
+      ${() =>
+        state.commentMentionLoading
+          ? html`<p class="px-2 py-1 text-[11px] italic text-slate-400 dark:text-zinc-500">${t('zoeken…')}</p>`.key('m-loading')
+          : ''}
+      <div class="contents">
+        ${() =>
+          !state.commentMentionLoading && !state.commentMentionResults.length
+            ? [html`<p class="px-2 py-1 text-[11px] italic text-slate-400 dark:text-zinc-500">${t('geen mensen gevonden')}</p>`.key('m-empty')]
+            : []}
+      </div>
+      ${() =>
+        state.commentMentionResults.map(
+          (u) => html`
+            <button
+              type="button"
+              class="flex w-full items-center gap-2 px-2 py-1 text-left text-[12px] text-slate-700 hover:bg-indigo-50 dark:text-zinc-200 dark:hover:bg-indigo-500/10"
+              data-testid="plan-comment-mention-item"
+              @click="${() => pickCommentMention(u)}"
+            >
+              ${avatarHTML(u.displayName, u.avatarUrl, 'h-4 w-4')}
+              <span>${u.displayName}</span>
+            </button>
+          `.key('m:' + u.accountId),
+        )}
+    </div>
+  `
+}
+
+// commentReplyComposer is one group's own reply field — only rendered while
+// state.commentReplyKey equals that group's key (single-composer discipline).
+function commentReplyComposer(group) {
+  return html`
+    <div class="mt-2 rounded-md border border-slate-200 bg-slate-50 p-2 dark:border-zinc-700 dark:bg-zinc-800/60" data-testid="plan-comment-composer">
+      <textarea
+        rows="2"
+        placeholder="${t('Typ een antwoord… (@ om iemand te noemen)')}"
+        data-testid="plan-comment-reply-input"
+        class="w-full resize-none rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[12px] text-slate-800 placeholder:text-slate-400 focus:border-indigo-300 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-500"
+        @input="${(e) => onCommentReplyInput(e)}"
+        @keydown="${(e) => {
+          e.stopPropagation()
+          if (e.key === 'Escape') closeCommentReply()
+        }}"
+      ></textarea>
+      <div class="contents">${() => (state.commentMentionQuery ? commentMentionPicker() : '')}</div>
+      <div class="mt-1.5 flex items-center gap-2">
+        <button
+          type="button"
+          class="rounded-md bg-indigo-500 px-2.5 py-1 text-[11.5px] font-medium text-white hover:bg-indigo-600 disabled:cursor-not-allowed disabled:opacity-50"
+          data-testid="plan-comment-reply-send"
+          disabled="${() => state.commentSending === group.key}"
+          @click="${() => sendCommentReply(group.key)}"
+        >
+          ${() => (state.commentSending === group.key ? t('versturen…') : t('Versturen'))}
+        </button>
+        <button
+          type="button"
+          class="rounded-md px-2 py-1 text-[11.5px] text-slate-500 hover:bg-slate-100 dark:text-zinc-400 dark:hover:bg-zinc-700"
+          @click="${() => closeCommentReply()}"
+        >
+          ${t('Annuleren')}
+        </button>
+        <div class="contents">
+          ${() =>
+            state.commentSendError
+              ? html`<span class="text-[11px] text-rose-600 dark:text-rose-400">${state.commentSendError}</span>`.key('send-err')
+              : ''}
+        </div>
+      </div>
+    </div>
+  `
+}
+
+function commentRow(c, groupKey) {
+  return html`
+    <div class="border-t border-slate-100 py-1.5 first:border-t-0 dark:border-zinc-800" data-testid="plan-comment-row">
+      <div class="flex items-start gap-2">
+        ${avatarHTML(c.author, c.avatarUrl, 'h-5 w-5')}
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-zinc-400">
+            <span class="font-medium text-slate-700 dark:text-zinc-200">${c.author || t('onbekend')}</span>
+            <span title="${c.created || ''}">${relativeTime(c.created)}</span>
+          </div>
+          <div class="markdown-body mt-0.5 text-[12px] leading-relaxed text-slate-700 dark:text-zinc-300" .innerHTML="${() => renderMarkdown(c.body || '')}"></div>
+        </div>
+      </div>
+    </div>
+  `.key('c:' + groupKey + ':' + (c.id || c.created || c.body))
+}
+
+// commentGroupCard is one ticket's own block: header (key + relation word +
+// external link), its comments, and the reply toggle/composer.
+function commentGroupCard(group) {
+  const comments = Array.isArray(group.comments) ? group.comments : []
+  return html`
+    <div class="mb-2 rounded-lg border border-slate-200 p-2.5 dark:border-zinc-800" data-testid="plan-comment-group" data-group-key="${group.key}">
+      <div class="flex items-center gap-2">
+        <a
+          href="${group.url || JIRA_BASE + group.key}"
+          target="_blank"
+          rel="noreferrer"
+          class="font-mono text-[11.5px] font-semibold text-indigo-600 hover:underline dark:text-indigo-300"
+          >${group.key}</a
+        >
+        <span
+          class="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:bg-zinc-800 dark:text-zinc-400"
+          >${COMMENT_RELATION_WORD[group.relation] || group.relation}</span
+        >
+        <span class="min-w-0 flex-1 truncate text-[11.5px] text-slate-500 dark:text-zinc-400">${group.title || ''}</span>
+        <span class="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500 dark:bg-zinc-800 dark:text-zinc-400"
+          >${comments.length}</span
+        >
+      </div>
+      <div class="contents">
+        ${() =>
+          comments.length
+            ? comments.map((c) => commentRow(c, group.key))
+            : [html`<p class="py-1 text-[11.5px] italic text-slate-400 dark:text-zinc-500">${t('geen opmerkingen')}</p>`.key('empty:' + group.key)]}
+      </div>
+      <div class="contents">
+        ${() =>
+          state.comments.canPost && state.commentReplyKey !== group.key
+            ? html`<button
+                type="button"
+                class="mt-1.5 rounded-md px-2 py-1 text-[11px] font-medium text-indigo-600 hover:bg-indigo-50 dark:text-indigo-300 dark:hover:bg-indigo-500/10"
+                data-testid="plan-comment-reply-toggle"
+                @click="${() => openCommentReply(group.key)}"
+              >
+                ${t('Beantwoorden')}
+              </button>`
+            : ''}
+      </div>
+      <div class="contents">${() => (state.commentReplyKey === group.key ? commentReplyComposer(group) : '')}</div>
+    </div>
+  `.key('cg:' + group.key)
+}
+
+// commentsPanel sits at the TOP of the questions index (kolom 2), per
+// Reindert's own instruction. Always shown, independent of the scope/hotfix
+// gate — reading a ticket's comments is useful before a plan exists too.
+function commentsPanel() {
+  return html`
+    <section class="${CARD + CARD_IDLE + ' mb-3'}" data-testid="plan-comments-panel">
+      <div class="mb-1.5 flex items-center gap-2">
+        <span class="${LABEL}">${t('Jira-opmerkingen')}</span>
+        <button
+          type="button"
+          class="ml-auto rounded-md px-1.5 py-0.5 text-[10.5px] text-slate-500 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:text-zinc-400 dark:hover:bg-zinc-700"
+          data-testid="plan-comments-refresh"
+          disabled="${() => state.comments.loading}"
+          @click="${() => loadComments(true)}"
+        >
+          ${() => (state.comments.loading ? t('laden…') : t('Ververs'))}
+        </button>
+      </div>
+      <div class="contents">
+        ${() =>
+          !state.comments.canPost && state.comments.loaded
+            ? html`<p class="mb-1.5 text-[11px] italic text-slate-400 dark:text-zinc-500">
+                ${t('Antwoorden vereist een Jira API-token (SLASH_JIRA_EMAIL/SLASH_JIRA_TOKEN).')}
+              </p>`.key('no-token')
+            : ''}
+      </div>
+      <div class="contents">
+        ${() =>
+          state.comments.error
+            ? html`<p class="mb-1.5 text-[11.5px] text-rose-600 dark:text-rose-400">${state.comments.error}</p>`.key('c-error')
+            : ''}
+      </div>
+      <div class="contents">
+        ${() =>
+          !state.comments.loaded
+            ? [html`<p class="text-[12px] italic text-slate-400 dark:text-zinc-500">${t('laden…')}</p>`.key('c-loading')]
+            : state.comments.groups.map((g) => commentGroupCard(g))}
+      </div>
+    </section>
+  `
+}
+
 function questionsColumn() {
   return html`
     <div
@@ -1904,6 +2284,7 @@ function questionsColumn() {
     >
       ${columnHeader(t('Vragen over het plan'), () => state.col === 1)}
       <div class="min-h-0 flex-1 overflow-y-auto pr-1">
+        ${commentsPanel()}
         ${() => (gateOpen() ? [] : (state.doc.questions || []).map((q, qi) => questionCard(q, qi)))}
         ${() =>
           !gateOpen() && !state.loading && !(state.doc.questions || []).length
@@ -2099,4 +2480,5 @@ if (!planKey) {
   // .claude/rules/arrowjs-pitfalls.md).
   ensureTracker().then(loadPlan)
   setInterval(loadPlan, POLL_MS)
+  loadComments()
 }
