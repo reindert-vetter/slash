@@ -175,6 +175,15 @@ const state = reactive({
   // button shows "versturen…" — never a colour-only spinner).
   commentSending: '',
   commentSendError: '',
+  // The Jira-opmerkingen block is a stop of its own in the → chain (like an
+  // ordinary option/task row, cur === COMMENTS_ROW_ID) and Enter on it hands
+  // ↑/↓ to the comments themselves — the same "block is a stop, Enter moves
+  // the keyboard into a nested list" shape the review tree's methodes-kolom
+  // uses (see .claude/docs/test-class-grouping.md). commentsFocused mirrors
+  // that column's own testColumnFocused; commentCursor is the active
+  // comment's stable id (see commentId below).
+  commentsFocused: false,
+  commentCursor: '',
 })
 
 // menu is the stable {open} flag the Enter-menu on the ticket column renders
@@ -251,6 +260,12 @@ bindUrlState(state, [
     format: (v) => (Array.isArray(v) && v.length > 1 ? v.join('.') : null),
     default: null,
   },
+  // ccol mirrors a real "the comments block has the keyboard" focus — same
+  // shape as the review tree's own ?tcol=, only present while it's really
+  // true, so a plain refresh on an ordinary question/task doesn't silently
+  // steal ↑/↓ away from the index.
+  { key: 'commentsFocused', param: 'ccol', parse: (raw) => raw === '1', format: (v) => (v ? '1' : ''), default: false },
+  { key: 'commentCursor', param: 'ccur', default: '' },
 ])
 
 // ---------------------------------------------------------------- data reads
@@ -903,10 +918,43 @@ const EXEC_ROW_ID = 'exec'
 // it like any other row.
 const SCOPE_PARENT_ID = 'scope:parent'
 
+// COMMENTS_ROW_ID is the stable id of the Jira-opmerkingen block, the FIRST
+// row of the index whenever the ticket family has any comment at all —
+// reviewer request: "als ik naar rechts ga, wil ik eerst jira opmerkingen
+// blok volledig selecteren". It carries no example code (curBlocks() below
+// only recognises 'option'/'task'), so → never opens a block column for it.
+const COMMENTS_ROW_ID = 'comments'
+
+// commentId gives one comment a stable id across a re-fetch (the panel has no
+// polling, but "Ververs"/a posted reply re-reads the whole list) — the same
+// group-key + comment-id-or-created-or-index shape commentRow's own `.key()`
+// already used, now also the identity the keyboard cursor walks by (never a
+// raw index, .claude/rules/conventions.md).
+function commentId(groupKey, c, i) {
+  return groupKey + ':' + (c.id || c.created || i)
+}
+
+// commentFlatList flattens every group's comments into ONE ordered list —
+// exactly like navRows() flattens every question's options — so ↓ walks
+// straight from one ticket's last comment into the next ticket's first one.
+function commentFlatList() {
+  const out = []
+  ;(state.comments.groups || []).forEach((g) => {
+    ;(g.comments || []).forEach((c, i) => out.push({ id: commentId(g.key, c, i), group: g, c }))
+  })
+  return out
+}
+
 function navRows() {
   const out = []
-  // The scope question REPLACES the whole index while it stands: the reviewer
-  // is asked what is being planned before anything else is shown.
+  // The Jira-opmerkingen block is always the first stop, independent of the
+  // scope/hotfix gate below — commentsPanel() itself renders unconditionally
+  // for the same reason (reading comments is useful before a plan exists).
+  // Guarded on having any comment at all, same as the follow-up row's own
+  // "only once there is something" guard.
+  if (commentFlatList().length) out.push({ id: COMMENTS_ROW_ID, kind: 'comments' })
+  // The scope question REPLACES the rest of the index while it stands: the
+  // reviewer is asked what is being planned before anything else is shown.
   if (needsScope()) {
     out.push({ id: SCOPE_PARENT_ID, kind: 'scope', target: 'parent' })
     ;(state.doc.subtasks || []).forEach((st) => out.push({ id: 'scope:' + st.key, kind: 'scope', target: 'subtask', subtask: st }))
@@ -956,6 +1004,65 @@ function clampCursor() {
   const levels = blockLevels()
   if (state.path.length > levels.length && levels.length) state.path = state.path.slice(0, levels.length)
   if (state.col > 1 + levels.length) state.col = 1 + Math.max(1, levels.length)
+  // A stale nested comment focus (the comments row itself disappeared, or the
+  // cursor moved off it some other way) must never keep ↑/↓ hijacked.
+  if (state.commentsFocused && state.cur !== COMMENTS_ROW_ID) state.commentsFocused = false
+  if (state.commentCursor && !commentFlatList().some((c) => c.id === state.commentCursor)) state.commentCursor = ''
+}
+
+// isCommentsRowSelected/commentsActive mirror the review tree's own
+// isTestColumnActive(): the block-level ring (isCommentsRowSelected, not
+// focused) and the per-comment ring (commentsActive) are mutually exclusive —
+// .claude/rules/conventions.md's "never two selections visible at once".
+function isCommentsRowSelected() {
+  return state.cur === COMMENTS_ROW_ID && state.col !== 0
+}
+
+function commentsActive() {
+  return isCommentsRowSelected() && state.col === 1 && state.commentsFocused
+}
+
+// selectCommentsRow is what a click on the panel's own background does — the
+// block-level selection stepRight() already lands on with a plain →, kept as
+// its own function so the mouse can run it too (mouse-navigation.md rule 1).
+function selectCommentsRow() {
+  state.cur = COMMENTS_ROW_ID
+  state.col = 1
+  state.path = [0]
+  state.commentsFocused = false
+}
+
+// enterCommentsFocus hands ↑/↓ to the comments themselves — Enter on the
+// block (kind: 'comments' in onKeydown) or a direct click on one comment
+// (commentRow, which passes its own id so the click can jump straight to it —
+// mouse-navigation.md rule 2, still reachable in two keyboard steps).
+function enterCommentsFocus(startId) {
+  const list = commentFlatList()
+  if (!list.length) return
+  state.cur = COMMENTS_ROW_ID
+  state.col = 1
+  state.path = [0]
+  state.commentsFocused = true
+  const want = startId || state.commentCursor
+  state.commentCursor = list.some((c) => c.id === want) ? want : list[0].id
+  scrollCommentCursorIntoView()
+}
+
+function exitCommentsFocus() {
+  state.commentsFocused = false
+}
+
+function moveCommentCursor(delta) {
+  const list = commentFlatList()
+  if (!list.length) return
+  const at = Math.max(
+    0,
+    list.findIndex((c) => c.id === state.commentCursor),
+  )
+  const next = Math.min(Math.max(at + delta, 0), list.length - 1)
+  if (list[next].id === state.commentCursor) return
+  state.commentCursor = list[next].id
+  scrollCommentCursorIntoView()
 }
 
 // curBlocks are the blocks of whatever the cursor is on — an option's example
@@ -1023,6 +1130,10 @@ function moveRow(delta) {
   state.cur = rows[next].id
   state.path = [0]
   state.confirmExec = false
+  // Moving to a different top-level row always leaves any nested comment
+  // focus behind, exactly like selectRow resets classMethodSel/
+  // testColumnFocused in the review tree.
+  state.commentsFocused = false
   scrollCurIntoView()
   // Reviewer request: "als ik eerste antwoord selecteer, moet ook gelijk het
   // blok worden gezien" — a step here can change WHICH example-code column
@@ -1192,20 +1303,33 @@ function onKeydown(e) {
   switch (e.key) {
     case 'ArrowDown':
       e.preventDefault()
-      if (state.col === 1) moveRow(1)
+      // The comments block owns ↑/↓ once Enter has focused it — see the
+      // 'comments' branch below and .claude/docs/plan-page.md.
+      if (commentsActive()) moveCommentCursor(1)
+      else if (state.col === 1) moveRow(1)
       else if (state.col > 1) moveBlock(state.col - 2, 1)
       return
     case 'ArrowUp':
       e.preventDefault()
-      if (state.col === 1) moveRow(-1)
+      if (commentsActive()) moveCommentCursor(-1)
+      else if (state.col === 1) moveRow(-1)
       else if (state.col > 1) moveBlock(state.col - 2, -1)
       return
     case 'ArrowRight':
       e.preventDefault()
+      // No nested column to step into from inside the comments — a plain
+      // no-op, same as f/d/s/a on stop 1 in the review tree.
+      if (commentsActive()) return
       stepRight()
       return
     case 'ArrowLeft':
       e.preventDefault()
+      // ← leaves the per-comment cursor and hands ↑/↓ back to the block row,
+      // without changing state.col — mirrors the methodes-kolom's own ←.
+      if (commentsActive()) {
+        exitCommentsFocus()
+        return
+      }
       stepLeft()
       return
     case '/':
@@ -1226,8 +1350,20 @@ function onKeydown(e) {
         openPlanMenu()
         return
       }
+      // Already navigating the comments themselves — nothing further to do
+      // with Enter/Space here (← is what leaves that mode, see ArrowLeft
+      // above); without this guard curRow() below would just re-enter it.
+      if (commentsActive()) {
+        e.preventDefault()
+        return
+      }
       const row = curRow()
-      if (state.col === 1 && row && row.kind === 'option') {
+      if (state.col === 1 && row && row.kind === 'comments') {
+        // "als ik enter druk, wil ik tussen de opmerkingen heen kunnen
+        // navigeren" — hand ↑/↓ to the comments themselves.
+        e.preventDefault()
+        enterCommentsFocus()
+      } else if (state.col === 1 && row && row.kind === 'option') {
         e.preventDefault()
         sendAnswer(row.q, row.o, answerTextFor(row.q.id))
         // Reviewer request: "als ik een antwoord selecteer binnen een vraag,
@@ -1267,13 +1403,16 @@ function onKeydown(e) {
   }
 }
 
-// scrollCurIntoView keeps the cursor row in view WITHOUT touching the
+// scrollRowIntoView keeps a cursor row in view WITHOUT touching the
 // horizontal axis — the column flow scrolls horizontally, so a plain
 // scrollIntoView would drag the whole page sideways (the same rule as
-// scrollIntoViewVertical in the review tree).
-function scrollCurIntoView() {
+// scrollIntoViewVertical in the review tree). Shared by scrollCurIntoView
+// (the top-level index cursor) and scrollCommentCursorIntoView (the nested
+// comment cursor) — same walk-up-to-the-first-scrollable-ancestor logic,
+// only the selector differs.
+function scrollRowIntoView(selector) {
   requestAnimationFrame(() => {
-    const el = document.querySelector('[data-cursor="true"]')
+    const el = document.querySelector(selector)
     if (!el) return
     let box = el.parentElement
     while (box && box.scrollHeight <= box.clientHeight) box = box.parentElement
@@ -1283,6 +1422,16 @@ function scrollCurIntoView() {
     if (top < box.scrollTop) box.scrollTop = top - 12
     else if (bottom > box.scrollTop + box.clientHeight) box.scrollTop = bottom - box.clientHeight + 12
   })
+}
+
+function scrollCurIntoView() {
+  scrollRowIntoView('[data-cursor="true"]')
+}
+
+// scrollCommentCursorIntoView keeps the active comment (commentsActive()'s
+// own cursor) in view while walking ↑/↓ inside the Jira-opmerkingen block.
+function scrollCommentCursorIntoView() {
+  scrollRowIntoView('[data-comment-cursor="true"]')
 }
 
 // scrollFocusIntoView aligns the newly focused column's left edge — the one
@@ -2434,21 +2583,46 @@ function commentReplyComposer(group) {
   `
 }
 
-function commentRow(c, groupKey) {
+// commentRow's own id is what the keyboard cursor and a direct click both
+// walk by — commentId's group-key + comment-id/created/index shape (see
+// above). data-comment-cursor is a SEPARATE marker from the top-level
+// navRows() data-cursor, so scrollCommentCursorIntoView never picks up a
+// stray top-level row.
+function commentRow(c, groupKey, i) {
+  const id = commentId(groupKey, c, i)
+  const active = () => commentsActive() && state.commentCursor === id
   return html`
-    <div class="border-t border-slate-100 py-1.5 first:border-t-0 dark:border-zinc-800" data-testid="plan-comment-row">
+    <div
+      class="${() =>
+        'rounded-md py-1.5 px-1.5 -mx-1.5 border-t border-slate-100 first:border-t-0 dark:border-zinc-800 ' +
+        (active() ? 'ring-2 ring-inset ring-indigo-400 bg-indigo-50/50 dark:ring-indigo-500 dark:bg-indigo-500/10' : '')}"
+      data-testid="plan-comment-row"
+      data-comment-cursor="${() => (active() ? 'true' : 'false')}"
+      @click="${(e) => {
+        e.stopPropagation()
+        enterCommentsFocus(id)
+      }}"
+    >
       <div class="flex items-start gap-2">
         ${avatarHTML(c.author, c.avatarUrl, 'h-5 w-5')}
         <div class="min-w-0 flex-1">
           <div class="flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-zinc-400">
             <span class="font-medium text-slate-700 dark:text-zinc-200">${c.author || t('onbekend')}</span>
             <span title="${c.created || ''}">${relativeTime(c.created)}</span>
+            <div class="contents">
+              ${() =>
+                active()
+                  ? html`<span class="ml-auto text-[10px] font-semibold text-indigo-600 dark:text-indigo-300" data-testid="plan-comment-active"
+                      >● ${t('actief')}</span
+                    >`.key('active:' + id)
+                  : ''}
+            </div>
           </div>
           <div class="markdown-body mt-0.5 text-[12px] leading-relaxed text-slate-700 dark:text-zinc-300" .innerHTML="${() => renderMarkdown(c.body || '')}"></div>
         </div>
       </div>
     </div>
-  `.key('c:' + groupKey + ':' + (c.id || c.created || c.body))
+  `.key('c:' + id)
 }
 
 // commentGroupCard is one ticket's own block: header (key + relation word +
@@ -2477,7 +2651,7 @@ function commentGroupCard(group) {
       <div class="contents">
         ${() =>
           comments.length
-            ? comments.map((c) => commentRow(c, group.key))
+            ? comments.map((c, i) => commentRow(c, group.key, i))
             : [html`<p class="py-1 text-[11.5px] italic text-slate-400 dark:text-zinc-500">${t('geen opmerkingen')}</p>`.key('empty:' + group.key)]}
       </div>
       <div class="contents">
@@ -2501,17 +2675,45 @@ function commentGroupCard(group) {
 // commentsPanel sits at the TOP of the questions index (kolom 2), per
 // Reindert's own instruction. Always shown, independent of the scope/hotfix
 // gate — reading a ticket's comments is useful before a plan exists too.
+//
+// It is a stop of its own in the → chain, exactly like an option/task row
+// (see COMMENTS_ROW_ID / isCommentsRowSelected / commentsActive above): a
+// plain → (or a click on the panel's own background) selects the WHOLE
+// block, Enter (or a click on one comment, see commentRow) hands ↑/↓ to the
+// comments themselves. The two selection levels are told apart in WORDS
+// (the "blok geselecteerd"/"opmerking actief" badge below), never by ring
+// colour alone — the colourblind rule — and are mutually exclusive so only
+// one ring ever shows (isCommentsRowSelected() && !commentsFocused for the
+// whole card, commentsActive() for one row inside it).
 function commentsPanel() {
   return html`
-    <section class="${CARD + CARD_IDLE + ' mb-3'}" data-testid="plan-comments-panel">
+    <section
+      class="${() => CARD + ' mb-3 ' + (isCommentsRowSelected() && !commentsActive() ? CARD_FOCUS : CARD_IDLE)}"
+      data-testid="plan-comments-panel"
+      data-cursor="${() => (state.cur === COMMENTS_ROW_ID ? 'true' : 'false')}"
+      @click="${() => selectCommentsRow()}"
+    >
       <div class="mb-1.5 flex items-center gap-2">
         <span class="${LABEL}">${t('Jira-opmerkingen')}</span>
+        <div class="contents">
+          ${() =>
+            isCommentsRowSelected()
+              ? html`<span
+                  class="rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-600 ring-1 ring-inset ring-indigo-200 dark:bg-indigo-500/15 dark:text-indigo-300 dark:ring-indigo-500/30"
+                  data-testid="plan-comments-state"
+                  >◆ ${commentsActive() ? t('opmerking actief') : t('blok geselecteerd')}</span
+                >`
+              : ''}
+        </div>
         <button
           type="button"
           class="ml-auto rounded-md px-1.5 py-0.5 text-[10.5px] text-slate-500 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:text-zinc-400 dark:hover:bg-zinc-700"
           data-testid="plan-comments-refresh"
           disabled="${() => state.comments.loading}"
-          @click="${() => loadComments(true)}"
+          @click="${(e) => {
+            e.stopPropagation()
+            loadComments(true)
+          }}"
         >
           ${() => (state.comments.loading ? t('laden…') : t('Ververs'))}
         </button>
@@ -2813,7 +3015,17 @@ if (!planKey) {
   // itself forever — a hung tab, not a render bug (see the "watch fires even
   // when the write reassigns the SAME value" pitfall in
   // .claude/rules/arrowjs-pitfalls.md).
-  ensureTracker().then(loadPlan)
   setInterval(loadPlan, POLL_MS)
-  loadComments()
+  // The Jira-opmerkingen block only enters navRows() once commentFlatList()
+  // has something in it, and loadPlan()'s own clampCursor() only defaults
+  // state.cur when it isn't found at all — so on a genuinely cold cache
+  // (loadComments can cost several `acli` calls, plan_comments.go) the FIRST
+  // clampCursor() run can land the default cursor on the first question
+  // before the comments have even arrived. Re-clamping once both initial
+  // loads have settled (not a watch — a single explicit call, see the note
+  // above) makes the very-first default landing on the comments block
+  // deterministic regardless of which of the two wins the race; it never
+  // moves a cursor the reviewer already put somewhere else, since clampCursor
+  // only touches state.cur when the current value isn't a row at all.
+  Promise.all([ensureTracker().then(loadPlan), loadComments()]).then(clampCursor)
 }

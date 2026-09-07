@@ -421,12 +421,17 @@ one).
 `←`/`→` move between columns (`state.col`: 0 = ticket, 1 = questions, 2 + n =
 the n-th block column); `←` on the ticket column leaves to `/pr-overview`.
 `↑`/`↓` move the cursor within the focused column — in column 2 over **one flat
-list** of every option of every question followed by every task, so `↓` walks
-from the last option straight into the task list exactly as the column reads.
+list** whose FIRST row is the Jira-opmerkingen block (only while the family has
+any comment — see "The comments block is a stop of its own in the → chain"
+below), then every option of every question, then every task, so `↓` walks from
+the comments block, through the last option, straight into the task list
+exactly as the column reads.
 `Enter`/`Space` on an option chooses it (with whatever is typed in its field);
-on a gate row (scope or hotfix) it answers that question — the hotfix
-question's third row only unfolds its branch dropdown, whose own search field
-owns the keyboard while it is focused;
+on the comments block it hands `↑`/`↓` to the individual comments (`←` leaves
+that mode again, without changing `state.col`); on a gate row (scope or
+hotfix) it answers that question — the hotfix question's third row only
+unfolds its branch dropdown, whose own search field owns the keyboard while it
+is focused;
 on the last row (the execute action) it arms and then starts the execution;
 in a block column it drills. A keydown while an input has focus is left alone
 (`Escape` blurs it), and `Enter` inside the field answers with that text.
@@ -1024,13 +1029,11 @@ feature was the explicit ask here.
 **The frontend (task 23b of `todo/plan-page-workflow.md`).** `commentsPanel()`
 in `src/plan.mjs` sits at the very TOP of the questions column
 (`questionsColumn()`, kolom 2), above the question cards — per the reviewer's
-own instruction — and is `state.col`/keyboard-nav-agnostic: it is not part of
-`navRows()`/the cursor chain, only a scrolling card above it, since replying
-is a mouse/typing action, not something to walk with ↑/↓. It does NOT reuse
-the review tree's `BlockList.mjs` component (that component carries the whole
-review-tree's block/approval model); the panel is its own small set of
-functions (`commentGroupCard`, `commentRow`, `commentReplyComposer`,
-`commentMentionPicker`) built the same way every other card on this page is,
+own instruction. It does NOT reuse the review tree's `BlockList.mjs` component
+(that component carries the whole review-tree's block/approval model); the
+panel is its own small set of functions (`commentGroupCard`, `commentRow`,
+`commentReplyComposer`, `commentMentionPicker`) built the same way every other
+card on this page is,
 consistent with this page's own header comment ("nothing is imported from
 home.mjs/Block.mjs/RelatedPanel.mjs").
 
@@ -1096,3 +1099,104 @@ home.mjs/Block.mjs/RelatedPanel.mjs").
   `@` mention, picking a suggestion, sending, and seeing the new comment
   reappear in the panel after the automatic refresh — all with zero console
   errors.
+
+### The comments block is a stop of its own in the → chain
+
+Reviewer request, verbatim: *"als ik naar rechts ga, wil ik eerst jira
+opmerkingen blok volledig selecteren, als ik enter druk, wil ik tussen de
+opmerkingen heen kunnen navigeren"* — this reverses an earlier, deliberate
+choice (see the "23b" section above's original wording, now corrected): the
+panel was built as `state.col`/`navRows()`-agnostic ("replying is a
+mouse/typing action, not something to walk with ↑/↓"). It is now a genuine
+stop, reusing the review tree's own "a block is a stop, Enter hands ↑/↓ to a
+nested list" shape (the methodes-kolom/`tcol`, see
+`.claude/docs/test-class-grouping.md`) rather than inventing a new mechanism.
+
+- **`COMMENTS_ROW_ID` (`'comments'`) is the FIRST entry `navRows()` returns**,
+  whenever the family has any comment at all (`commentFlatList().length`,
+  guarded the same way the follow-up row only appears "once there is
+  something") — pushed before the scope/hotfix gate branches even `return`,
+  since `commentsPanel()` itself already renders unconditionally, independent
+  of that gate. A plain `→` (or `←` back from a block column) therefore lands
+  on it before anything else, exactly like a plain `→` already lands on the
+  first option/scope/hotfix row when there is no comment at all — no special
+  case needed, `navRows()`'s existing "cursor walks the flat list" machinery
+  does this for free.
+- **`commentFlatList()`** flattens every group's comments into ONE ordered
+  list, the same shape `navRows()` itself flattens options into — so ↓ walks
+  from one ticket's last comment straight into the next ticket's first one.
+  Each entry's id (`commentId(groupKey, c, i)`) is the SAME
+  group-key + comment-id/created/index shape `commentRow`'s own `.key()`
+  already used — never a raw index (`.claude/rules/conventions.md`).
+- **`state.commentsFocused`/`state.commentCursor`** mirror `testColumnFocused`/
+  `classMethodSel`: `commentsActive()` (`isCommentsRowSelected() &&
+  state.col === 1 && state.commentsFocused`) is the single source of truth
+  both the keyboard and the rendering read, exactly like the tree's
+  `isTestColumnActive()` — so a stale `commentsFocused` left over after the
+  cursor moved to an unrelated row (any of the many inline `@click`
+  assignments across option/task/scope/hotfix/followup/exec rows, none of
+  which explicitly clear it) can never hijack `↑`/`↓`: the moment `state.cur`
+  no longer equals `COMMENTS_ROW_ID`, `commentsActive()` is false regardless.
+  `clampCursor()` additionally resets `commentsFocused`/`commentCursor`
+  outright once the comments row (or the specific comment) genuinely stops
+  existing.
+- **Enter on the block (`row.kind === 'comments'`) calls `enterCommentsFocus()`**,
+  which focuses the first not-yet-invalid comment (or the previously active
+  one, if it still exists) and hands `↑`/`↓` to `moveCommentCursor`, clamped
+  at the family's first/last comment — no wraparound, no cross-block
+  fall-through, mirroring `moveRow`'s own clamp. `←` (not `Escape` — this
+  block has no submenu-style overlay) calls `exitCommentsFocus()`, which
+  drops back to the block-level selection WITHOUT changing `state.col` —
+  exactly like the methodes-kolom's own `←` stays on stop 2b. `→` and a plain
+  `Enter`/`Space` are no-ops while focused: there is no nested column or
+  action to reach from inside a comment.
+- **Two selection levels, told apart in words, never ring colour alone**
+  (the colourblind rule): the panel's own header carries a badge
+  (`data-testid=plan-comments-state`) reading **"◆ blok geselecteerd"**
+  while the whole card carries the ring, or **"◆ opmerking actief"** once
+  `commentsActive()` — mirroring `columnHeader`'s own "◆ actief" word. The
+  active comment ALSO gets its own inline word next to its author line
+  (`data-testid=plan-comment-active`, "● actief"), on top of the ring being a
+  visibly different SHAPE (a small comment row vs. the whole card) — belt and
+  suspenders. The two rings are mutually exclusive by construction
+  (`isCommentsRowSelected() && !commentsActive()` for the card,
+  `commentsActive() && state.commentCursor === id` for a row), so only one
+  shows at a time (the "never two selections visible at once" rule, commit
+  `27ce93c`).
+- **Mouse**: a click on the panel's own background runs `selectCommentsRow()`
+  — the same block-level selection a plain `→` already lands on
+  (mouse-navigation.md rule 1). A click directly on one comment
+  (`commentRow`'s own `@click`, `e.stopPropagation()` first so it doesn't also
+  re-run the panel's own click) calls `enterCommentsFocus(id)` and jumps
+  straight to it, focused — a mouse-only shortcut (rule 2), still reachable
+  via `→` then `Enter` then `↓` in several keyboard steps. Every other
+  interactive element inside the panel (the "Ververs" button, "Beantwoorden",
+  the composer, a mention suggestion) is left exactly as it was; nothing there
+  needed a `stopPropagation()` add, since bubbling into `selectCommentsRow()`
+  only sets selection state and never fights with any of them.
+- **The initial default-cursor race.** `clampCursor()` only defaults
+  `state.cur` when the current value doesn't match any row at all, and it is
+  called from `loadPlan()` (not from a `watch`, see that function's own doc
+  comment on why). On a genuinely cold cache `GET /api/jira/comments` can cost
+  several `acli` calls (`plan_comments.go`), so the very FIRST `loadPlan()`
+  resolution can beat it and default the cursor onto the first question
+  before the comments block even exists in `navRows()`. The page's own
+  bootstrap therefore does `Promise.all([ensureTracker().then(loadPlan),
+  loadComments()]).then(clampCursor)` — one extra, explicit `clampCursor()`
+  call once BOTH initial reads have settled, deterministic regardless of
+  which finished first. Harmless once the reviewer has genuinely navigated
+  elsewhere: `clampCursor()` never moves a `state.cur` that is still found
+  among the (now longer) row list.
+- **Not reused for the reply composer/mention picker** — those stay exactly
+  the mouse/typing surfaces they always were; only the READING/walking half
+  of the panel gained a keyboard cursor.
+
+Test: `tests/plan-comments.spec.mjs` ("→ selects the whole block first;
+Enter walks the individual comments; ← leaves it" — mocks
+`GET /api/jira/comments` directly at the HTTP layer with a real two-comment
+fixture, since the Playwright harness's `Fake` Jira client always answers a
+comment-less issue and this is a purely frontend nav-chain change). Verified
+by hand against the real `PAYM-813` ticket too — screenshots
+`task27-jira-comments-block-selected.png` (block-level ring, "blok
+geselecteerd") and `task27-jira-comments-navigating.png` (the per-comment
+ring, "opmerking actief", the block-level ring gone) in `data/review-shots/`.

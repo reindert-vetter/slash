@@ -42,3 +42,76 @@ test.describe('Plan page — Jira comments panel', () => {
     await expect(page.getByTestId('plan-comment-group')).toContainText('TEST-802')
   })
 })
+
+// The comments block is now a stop of its own in the → chain, and Enter on
+// it hands ↑/↓ to the individual comments — reviewer request: "als ik naar
+// rechts ga, wil ik eerst jira opmerkingen blok volledig selecteren, als ik
+// enter druk, wil ik tussen de opmerkingen heen kunnen navigeren" (see
+// .claude/docs/plan-page.md). The Fake jira client always answers a
+// comment-less issue (see the header comment above), so this mocks
+// GET /api/jira/comments directly at the HTTP layer — the one seam the
+// harness offers for a real, non-empty comment list — rather than adding a
+// backend-only test fixture for a purely frontend nav-chain change.
+test.describe('Plan page — Jira comments as a nav-chain stop', () => {
+  test('→ selects the whole block first; Enter walks the individual comments; ← leaves it', async ({ page }) => {
+    await page.route('**/api/jira/comments*', (route) =>
+      route.fulfill({
+        json: {
+          ok: true,
+          groups: [
+            {
+              key: 'TEST-901',
+              title: 'Nav-chain test ticket',
+              relation: 'self',
+              comments: [
+                { id: 'c1', author: 'Alice', created: '2026-01-01T10:00:00Z', body: 'Eerste opmerking' },
+                { id: 'c2', author: 'Bob', created: '2026-01-02T10:00:00Z', body: 'Tweede opmerking' },
+              ],
+            },
+          ],
+          canPost: false,
+          canMention: false,
+        },
+      }),
+    )
+
+    await page.goto('/plan/TEST-901')
+    await appReady(page)
+
+    const panel = page.getByTestId('plan-comments-panel')
+    await expect(panel).toBeVisible()
+    await expect(page.getByTestId('plan-comment-row')).toHaveCount(2)
+
+    // A fresh page load lands the default cursor on the comments block
+    // itself (rows[0] of navRows()), block-level, not yet drilled in.
+    await expect(page.getByTestId('plan-comments-state')).toHaveText('◆ blok geselecteerd')
+    await expect(panel).toHaveAttribute('data-cursor', 'true')
+
+    // Enter hands ↑/↓ to the comments themselves.
+    await page.keyboard.press('Enter')
+    await expect(page.getByTestId('plan-comments-state')).toHaveText('◆ opmerking actief')
+    const rows = page.getByTestId('plan-comment-row')
+    await expect(rows.nth(0)).toHaveAttribute('data-comment-cursor', 'true')
+    await expect(rows.nth(0).getByTestId('plan-comment-active')).toBeVisible()
+
+    await page.keyboard.press('ArrowDown')
+    await expect(rows.nth(1)).toHaveAttribute('data-comment-cursor', 'true')
+    await expect(rows.nth(0)).toHaveAttribute('data-comment-cursor', 'false')
+
+    // ↓ clamps at the last comment instead of leaving the block.
+    await page.keyboard.press('ArrowDown')
+    await expect(rows.nth(1)).toHaveAttribute('data-comment-cursor', 'true')
+
+    // ← leaves the per-comment cursor and hands ↑/↓ back to the block row,
+    // without stepping state.col back to the ticket column.
+    await page.keyboard.press('ArrowLeft')
+    await expect(page.getByTestId('plan-comments-state')).toHaveText('◆ blok geselecteerd')
+    await expect(page.getByTestId('plan-questions-column')).toHaveAttribute('data-column-focused', 'true')
+
+    // A click on one comment jumps straight to it, focused (mouse-navigation
+    // rule 2: still reachable via → then Enter then ↓).
+    await rows.nth(0).click()
+    await expect(page.getByTestId('plan-comments-state')).toHaveText('◆ opmerking actief')
+    await expect(rows.nth(0)).toHaveAttribute('data-comment-cursor', 'true')
+  })
+})
