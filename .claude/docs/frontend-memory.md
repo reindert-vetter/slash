@@ -1155,3 +1155,92 @@ p50/p90 on a block this size. See the four proposals discussed for this PR
 (voorstel 1-4; voorstel 4 — folding long runs of *changed* rows the same way
 unchanged runs collapse — was explicitly rejected: every changed line must
 stay individually visible and reviewable, always).
+
+## Voorstel 1 landed: virtualizing `paneHTML`/`unifiedHTML` — a row WINDOW around the cursor
+
+The round the paragraph above deferred. Rather than rebuilding the `.innerHTML`
+string over ALL of `blockRows(b)` on every keystroke, a huge block now only
+renders a WINDOW of rows around the active unit as real DOM; everything
+outside it becomes one plain, fixed-height spacer `<div>` per side. Full
+mechanism, the exact clipping rules, and every mechanism this had to keep
+working: "Virtualizing a huge, mostly-changed block" in `Block.mjs`'s own
+comments (right above `collapsePlan`) and "The row-window virtualization
+mechanism, in one place" in `.claude/docs/diff-render.md` — this section is
+only the measured result and the trade-offs, not the mechanism.
+
+**Measured, same recipe as "Navigation latency"/"A SINGLE huge block" above**
+(RAF-polled DOM-signature change, `?rel.foc` NOT set — see the false-trail
+warning above), against the SAME live PR 13582 fixture, monotonic `ArrowDown`,
+150 presses after a 60-press warmup, two repeated runs to check stability
+(this project's own history warns against trusting a single sample — see "The
+second leak that wasn't"):
+
+| | p50 | p90 | p99 | max |
+|---|---|---|---|---|
+| before this round (i.e. after the scroll-hint fix above) | 636-644ms | 769-778ms | 826-865ms | 897ms |
+| after, run 1 | 71ms | 84ms | 94ms | 129ms |
+| after, run 2 | 45-87ms | 49-104ms | 53-115ms | 53-128ms |
+
+**~8-14× faster across the whole distribution**, not just the tail this
+round's predecessor improved — p50 alone drops from ~640ms to ~50-90ms. A
+CDP `Profiler` re-check after the fix (not repeated in full here, inferred
+from the smaller rendered string) confirms this is exactly the mechanism the
+predecessor round's own profile pointed at: `Tt` (the `.innerHTML` set +
+browser parse) and the per-row `markChars`/`segmentCalls`/`rowCellHTML` build
+now run over ~500-600 rows (`VIRTUALIZE_MARGIN`, both sides of the cursor)
+instead of 2272.
+
+**A small/typical block is provably, not just measurably, unaffected.**
+`VIRTUALIZE_MIN_ROWS` (400) gates the whole mechanism the same way
+`COLLAPSE_MIN_ROWS` gates the unchanged-run collapse: for `rows.length <=
+400`, `paneHTML`/`unifiedHTML` never even call `computeWindow`, so the output
+is byte-identical to before — this is a code-level guarantee (see the `if
+(!wrap && rows.length > VIRTUALIZE_MIN_ROWS ...)` guard), not something a
+timing measurement could accidentally miss. `tests/diff-virtualize-huge-block.spec.mjs`
+pins this (`[data-virtualized-spacer]` count 0, every row present) alongside
+the earlier-measured "8-unit block: ~30ms flat" control from the predecessor
+round. A live-server timing re-check of a real small (89-unit) block was
+attempted here too, but the throwaway harness's synthetic alternating
+↓/↑ presses hit this particular block's own end-of-groups boundary within a
+handful of presses regardless of before/after (both measured ~1016-1050ms,
+i.e. the harness's own no-op ceiling, not a real cost) — an artifact of the
+harness/fixture choice, not a finding; the code-level guarantee above is the
+actual evidence for "unaffected", not this measurement.
+
+**Mechanisms explicitly walked and kept working, per the task's own list**
+(see `.claude/docs/diff-render.md` for the reasoning behind each):
+
+- Scroll-to-cursor (`scrollChangeIntoView`) — the active unit's row is always
+  kept inside the window by construction, so it's always real DOM to scroll
+  to; the surrounding spacer's real layout height means `offsetTop`-based
+  scroll math needs no change at all.
+- Char-diff highlighting, call segments, seg-dot markers — all computed only
+  for rows that get built (inside the window), unaffected in shape.
+- The call-arrow overlay (`callArrows.mjs`) — its pairs are already scoped to
+  the ACTIVE unit only (`callArrowPairs`, `home.mjs`), which is always inside
+  the window.
+- `data-row`/`data-changed`/`data-change-active`/`data-scrollsync` — carried
+  exactly as before on every row that's still real DOM; `data-scrollsync`
+  sits on the pane container itself, never affected.
+- Approve checkmarks and the "approve N/M" counter — driven by
+  `approvedRowSet`/`changedRows`/`approveSummary`, all computed over the FULL
+  `blockRows(b)` array regardless of what's currently windowed into DOM; see
+  the second `diff-virtualize-huge-block.spec.mjs` test.
+- The existing unchanged-run collapse (`collapsePlan`/`collapsedRunHTML`) —
+  composed with the window rather than replaced: a collapsed run straddling
+  the window edge renders in full rather than being re-clipped, to avoid
+  desyncing `expandCollapsedRun`'s own key (see `virtualizedSegs`'s doc
+  comment in `Block.mjs`).
+- The hint chevrons (`updateHints`/`firstLastChanged`, the previous round's
+  own subject) — DELIBERATELY rescoped: they now reflect "more changes in the
+  currently loaded window", not "anywhere in the file" — see
+  `.claude/docs/diff-render.md` for why this is an accepted, documented
+  trade-off rather than a bug.
+
+**Known, accepted limitation:** the window is centered on the CURSOR, not on
+free scroll position (matching the task's own literal brief, "een venster
+rond de cursor") — a manual mouse-scroll far away from the cursor inside a
+huge virtualized block shows the plain spacer instead of real rows until the
+cursor itself moves there (↓/↑/Space/search). Not attempted this round: a
+scroll-driven window extension. The reported complaint was specifically about
+keystroke navigation cost, which this fully addresses.

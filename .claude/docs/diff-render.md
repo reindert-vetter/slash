@@ -98,10 +98,110 @@ keystroke for a multi-thousand-row one. `updateHints`/`syncScroll`'s own
 children get replaced) and the layout-forcing `updateHints` call itself is
 throttled to a trailing-edge cadence during a scroll glide — see "A SINGLE
 huge block" in `.claude/docs/frontend-memory.md` for the measured before/
-after and why that only closes part of the gap (the `.innerHTML`
+after and why that only closed part of the gap at the time (the `.innerHTML`
 reassignment/reparse cost itself — the median navigation-latency cost on
-such a block — is untouched; virtualizing this rendering path is a separate,
-not-yet-started round).
+such a block — was still untouched; that's the round covered next).
+
+### The row-window virtualization mechanism, in one place
+
+A follow-up round actually closed the gap above: `paneHTML`/`unifiedHTML`
+(`Block.mjs`) now render a WINDOW of rows around the cursor instead of the
+whole block, for a block large enough that this matters. Measured
+before/after: "Voorstel 1 landed" in `.claude/docs/frontend-memory.md`. This
+section is the mechanism; that one is the numbers.
+
+**Gate and shape**, all in `Block.mjs`, right above `collapsePlan`:
+
+- `VIRTUALIZE_MIN_ROWS` (400) — the same "smaller blocks render
+  byte-identically to before" gate `COLLAPSE_MIN_ROWS` uses for the
+  unchanged-run collapse just above it. Below the threshold,
+  `cursorGroupFn`/`computeWindow` are never even called — a code-level
+  guarantee, not a coincidence of the numbers happening to match.
+- Never engaged while `wrap` is true (a prose/config file in 'fit', see
+  `isProseFile`) — such a row has no fixed height (it can wrap to several
+  visual lines), so the fixed-height spacer estimate below would be actively
+  wrong there, not just approximate.
+- `VIRTUALIZE_MARGIN` (250) rows stay live on each side of the active unit's
+  own row span; `VIRTUALIZE_HYSTERESIS` (100) means the window only
+  re-centers once the cursor gets that close to an edge — most keystrokes
+  don't shift (or rebuild) the window at all, only the active-row highlight
+  *inside* it moves.
+- `computeWindow(rows, cursorStart, cursorEnd)` remembers the last window
+  PER `rows` array (`windowByRows`, a `WeakMap` — the same reference-identity
+  idiom as `blockRowsCache`/`expandedRunsByRows`: `blockRows` only ever
+  replaces `rows` wholesale on a fresh code load, never mutates it in place).
+- `virtualizedSegs(baseSegs, win)` folds collapsePlan's own segs (or, when
+  there's no collapse plan at all — the common case for a mostly-CHANGED huge
+  block, exactly the one the collapse above can't help — the single
+  "everything" span) against the window: a real-row segment that only
+  PARTIALLY overlaps the window is CLIPPED to it (this is the actual
+  virtualization — without clipping, a plan-less huge block's one giant
+  segment would always cover the whole file); an already-COLLAPSED segment
+  straddling the window edge is deliberately rendered in full instead,
+  because clipping it would desync its `"${start}-${end}"` key from
+  `expandCollapsedRun`/`collapsePlan`'s own `expanded` Set, breaking "click to
+  expand" for that run.
+- `virtualSpacerHTML(count, pos)` — one plain, fixed-height `<div>` per side
+  standing in for the skipped rows, sized via a rough `VIRTUALIZE_ROW_PX`
+  (18px) estimate so the scrollbar's thumb size/position stays roughly
+  proportional. Deliberately NOT required to be pixel-exact — the existing
+  collapsed-run spacer (`collapsedRunHTML`) already accepts the same kind of
+  approximation (folding N unchanged rows into one short text line already
+  breaks exact row-for-row height parity for that stretch).
+
+**Keeping the two panes of a 'split' diff aligned — the one genuinely tricky
+part.** "Only the new/right pane drives selection" (below) means the
+old/left pane's own `activeGroup` argument is a permanently-null stub
+(`NO_ACTIVE_GROUP`) — reading it can never tell you where the cursor
+actually is. Both panes MUST still render the exact same row window (they're
+two independent `.innerHTML` bindings over the SAME `rows` array, and a
+different window per side would desync their row-for-row vertical
+alignment). `codePane` therefore takes a SEPARATE `cursorGroupFn` parameter —
+defaulting to the same value as its own `activeGroup` (correct for every
+call site except one) — used ONLY to compute the window, never for display;
+`codeDiff`'s split-stand old/left `codePane` call is the one site that
+overrides it, passing the REAL `activeGroup` through `cursorGroupFn` while
+keeping its own display `activeGroup` argument at `NO_ACTIVE_GROUP`. Because
+`paneHTML` only calls `cursorGroupFn()` at all once a block is actually large
+enough to virtualize, a normal/small block's left pane keeps its pre-existing
+property of never re-rendering on a pure cursor step at all (see "Only the
+new/right pane drives selection" below) — this change is scoped to huge
+blocks only. For a huge block, the old/left pane's binding does now also
+re-run per cursor step (previously it didn't, for any block size) — accepted:
+its rebuild is bounded to the window size, not the full row count, so the net
+cost is still far below the unvirtualized whole-block rebuild it replaces.
+The unified stand needs none of this — it was always a single binding/pane
+(see "Only the new/right pane drives selection" below), so its own
+`unifiedHTML` computes the window straight from its one real `group`.
+
+**What changes on purpose, for a genuinely huge (virtualized) block:**
+
+- The hint chevrons (`updateHints`/`firstLastChanged`) now only see
+  `[data-changed]` rows INSIDE the current window — they answer "is there a
+  change I've scrolled past within what's currently loaded", not "anywhere in
+  the whole file". Manually scrolling past the window shows blank spacer
+  space rather than more content until the cursor itself moves there
+  (keyboard-driven, not scroll-driven — see the next point). Given the
+  reported complaint was specifically about keystroke navigation cost, this
+  was accepted rather than building a scroll-position-driven window as well.
+- A manual mouse-scroll far from the cursor inside a virtualized block shows
+  the plain spacer, not real rows, until the cursor moves there. The window
+  literally is "around the cursor" (per the task's own brief), not a general
+  scroll-driven virtualization.
+- The unified stand's spacer height estimate (`VIRTUALIZE_ROW_PX` per hidden
+  row) assumes one row = one visual line; a PAIRED row there
+  (`unifiedRowHTML`, old line directly above new) actually occupies two
+  lines, so the estimate under-counts when many hidden rows are paired —
+  cosmetic only (the scrollbar thumb is a little off), never a correctness
+  issue.
+
+Everything else — scroll-to-cursor, char-diff, call segments, seg-dot
+markers, `data-row`/`data-changed`/`data-change-active`/`data-scrollsync`,
+approve checkmarks/the approve counter, the existing collapse-run mechanism —
+is unaffected, because each operates either on the FULL `blockRows(b)` array
+(approve state, navigation units) or only on whatever row is actually
+rendered (which always includes the active unit, by construction). Test:
+`tests/diff-virtualize-huge-block.spec.mjs`.
 
 ### A collapsed run in a yaml/yml file shows its key hierarchy as a breadcrumb
 

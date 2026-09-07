@@ -2204,7 +2204,7 @@ function codeDiff(
       data-testid="code-diff"
       data-hints="${() => (hintsEnabled() ? 'on' : 'off')}"
     >
-      ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', NO_ACTIVE_GROUP, SPLIT_LEFT_PANE_WIDTH_CLS, approvedFn, commentedFn, approvedCallsFn, false, lineSummaryFn, diffActive, isYaml, undefined, false, lang)}
+      ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', NO_ACTIVE_GROUP, SPLIT_LEFT_PANE_WIDTH_CLS, approvedFn, commentedFn, approvedCallsFn, false, lineSummaryFn, diffActive, isYaml, undefined, false, lang, activeGroup)}
       <div class="w-px shrink-0 bg-slate-100 dark:bg-zinc-800"></div>
       ${codePane('new', c.new, rows, 'right', 'border-emerald-100 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', activeGroup, 'flex-1 min-w-0', approvedFn, commentedFn, approvedCallsFn, false, lineSummaryFn, diffActive, isYaml, commentRangeFn, true, lang)}
       ${scrollHint('up')}
@@ -2519,6 +2519,29 @@ function codePane(
   // TypeScript tokenisation. The whole class value is one slot (never a
   // literal+dynamic mix) per the arrow.js template rule.
   lang = 'php',
+  // cursorGroupFn: the REAL cursor-group getter, used ONLY to decide which
+  // row WINDOW gets rendered on a huge, virtualized block (see paneHTML's
+  // own doc comment on virtualization) — never for display. Defaults to
+  // `activeGroup` itself, which is already the real one for every call site
+  // except the split stand's old/left pane (that pane's own `activeGroup`
+  // argument is the permanently-null NO_ACTIVE_GROUP stub, see codeDiff's
+  // "Only the new/right pane drives selection"). Without this, a virtualized
+  // split diff's two independent `.innerHTML` bindings would each pick their
+  // own row window — the old/left pane frozen on row 0 forever (its display
+  // group never reflects a real cursor) while the new/right pane's window
+  // follows the cursor — breaking the two panes' row-for-row alignment the
+  // moment the window ever shifts. Passing the real `activeGroup` here for
+  // that one call site keeps both panes' windows identical (same `rows`
+  // reference ⇒ same `windowByRows` entry) without giving the old pane back
+  // any of its display state. This DOES mean that pane's binding now also
+  // re-runs on every cursor step for a block large enough to virtualize
+  // (previously it never did, see codeDiff's own comment) — accepted: its
+  // rebuild is bounded to the window size, not the full row count, so the
+  // net cost is still far below the unvirtualized full-block rebuild it
+  // replaces. A small/typical block never triggers this at all (paneHTML's
+  // virtualization threshold gates BEFORE `cursorGroupFn` is ever called —
+  // see paneHTML), so nothing changes there.
+  cursorGroupFn = activeGroup,
 ) {
   return html`
     <div class="${'flex min-w-0 min-h-0 flex-col ' + widthCls}" data-pane="${side}">
@@ -2528,7 +2551,7 @@ function codePane(
           @click="${(e) => onPaneClick(rows, e)}"
           .innerHTML="${() => {
             disarmRowPairHover()
-            return paneHTML(rows, sideKey, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn(), wrap, diffActive(), lineSummaryFn(), isYaml, commentRangeFn(), emitMeta, lang)
+            return paneHTML(rows, sideKey, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn(), wrap, diffActive(), lineSummaryFn(), isYaml, commentRangeFn(), emitMeta, lang, cursorGroupFn)
           }}"
         ></code>
       </div>
@@ -3110,6 +3133,132 @@ const COLLAPSE_MIN_RUN = 10
 const collapseUi = reactive({ v: 0 })
 const expandedRunsByRows = new WeakMap()
 
+// ── Virtualizing a huge, mostly-CHANGED block ───────────────────────────────
+// The collapse mechanism above only helps a huge block with long UNCHANGED
+// runs — a schema-dump-shaped file (almost entirely added/changed) gets no
+// benefit from it at all, and paneHTML/unifiedHTML still rebuild ONE
+// `.innerHTML` string over every one of `blockRows(b)` on every navigation
+// step: cheap for an ordinary block, O(row count) per keystroke for a
+// multi-thousand-row one. See "A SINGLE huge block" in
+// .claude/docs/frontend-memory.md for the measured before/after this
+// section fixes.
+//
+// VIRTUALIZE_MIN_ROWS gates this the same way COLLAPSE_MIN_ROWS gates the
+// unchanged-run collapse above — a block at or under the threshold renders
+// byte-identically to before, so nothing here changes its behaviour at all.
+const VIRTUALIZE_MIN_ROWS = 400
+// How many rows stay live above/below the active unit's own row span. Large
+// enough that a reviewer can freely glance a screenful or two around the
+// cursor without hitting a spacer; small enough that rebuilding the window
+// (at most 2*VIRTUALIZE_MARGIN + the unit's own span rows) stays cheap even
+// on a mostly-changed file.
+const VIRTUALIZE_MARGIN = 250
+// The window only re-centers once the cursor gets this close to either
+// edge — so most keystrokes don't shift (or rebuild) the window at all: the
+// common case is "the cursor is nowhere near either edge", and then
+// paneHTML's window stays byte-identical to the previous step, only the
+// active-row highlight *inside* it moves.
+const VIRTUALIZE_HYSTERESIS = 100
+// Estimated row height in px, used only to size the two spacer divs that
+// stand in for the rows currently outside the window — so the scrollbar's
+// thumb size/position stays roughly proportional to the block's real
+// length. Deliberately NOT required to be pixel-exact: the existing
+// collapsed-run spacer above already accepts the same kind of
+// approximation (folding 10+ unchanged rows into one short "⋯ N
+// ongewijzigde regels" line already breaks exact row-for-row height parity
+// for that stretch — nothing new here). Derived from the row's own
+// Tailwind classes (`text-[11px] leading-relaxed`, i.e. line-height 1.625 ⇒
+// 11 * 1.625 ≈ 18px).
+const VIRTUALIZE_ROW_PX = 18
+
+// windowByRows remembers the last rendered window PER `rows` array — the
+// same reference-identity idiom as blockRowsCache/expandedRunsByRows above
+// (blockRows only ever replaces `rows` wholesale on a fresh code load, never
+// mutates it in place). This is what lets a split diff's two INDEPENDENT
+// reactive `.innerHTML` bindings (one per pane, see codePane) agree on
+// exactly the same row range without either of them needing to read the
+// other's state — see codePane's own `cursorGroupFn` doc comment for why the
+// old/left pane's *display* group stays a stub (NO_ACTIVE_GROUP) while its
+// *window* still has to follow the real cursor.
+const windowByRows = new WeakMap()
+
+// computeWindow decides which row range actually gets rendered as real DOM
+// for a huge, virtualized block. `cursorStart`/`cursorEnd` is the active
+// unit's own row span — always kept fully inside the returned window, so
+// nothing that needs a `data-row`/an active bar/a call-arrow anchor/a
+// `data-change-active` marker is ever virtualized away. Returns null when
+// this block isn't (or no longer needs to be) virtualized at all.
+function computeWindow(rows, cursorStart, cursorEnd) {
+  const n = rows.length
+  if (n <= VIRTUALIZE_MIN_ROWS) return null
+  const cached = windowByRows.get(rows)
+  if (cached && cursorStart >= cached.start + VIRTUALIZE_HYSTERESIS && cursorEnd <= cached.end - VIRTUALIZE_HYSTERESIS) {
+    return cached
+  }
+  const start = Math.max(0, cursorStart - VIRTUALIZE_MARGIN)
+  const end = Math.min(n - 1, cursorEnd + VIRTUALIZE_MARGIN)
+  const win = { start, end }
+  windowByRows.set(rows, win)
+  return win
+}
+
+// virtualizedSegs splits `baseSegs` (either the single-segment "everything"
+// span used when there's no collapse plan at all — the common case for a
+// mostly-CHANGED huge block, exactly the one collapsePlan can't help — or
+// collapsePlan's own segs; both already row-index-ordered, see
+// paneHTML/unifiedHTML) against `win` into { segs, beforeCount, afterCount }:
+// `segs` is only the row range that actually falls inside `win`, and
+// `beforeCount`/`afterCount` are the total row counts folded away on each
+// side. A REAL-ROW segment (`skip: false`) that only PARTIALLY overlaps the
+// window is CLIPPED to the window bounds — this is the actual virtualization:
+// without clipping, the single "everything" segment of a plan-less huge block
+// would always cover the whole file, and nothing would ever be skipped. A
+// COLLAPSED segment (`skip: true`, an already-folded run from collapsePlan)
+// straddling the window edge is deliberately left UNCLIPPED and rendered in
+// full instead: its own start/end round-trips through
+// expandCollapsedRun/collapsePlan's `expanded` Set as a literal
+// `"${start}-${end}"` key (see collapsePlan above) — clipping it here would
+// desync that key from the one collapsePlan itself will look for on the next
+// render, breaking "click to expand". A small, harmless, bounded over-render
+// at the boundary instead (at most one collapsed run's worth of rows, i.e.
+// one short spacer div — not real per-row HTML).
+function virtualizedSegs(baseSegs, win) {
+  if (!win) return { segs: baseSegs, beforeCount: 0, afterCount: 0 }
+  const segs = []
+  let beforeCount = 0
+  let afterCount = 0
+  for (const seg of baseSegs) {
+    if (seg.end < win.start) {
+      beforeCount += seg.end - seg.start + 1
+      continue
+    }
+    if (seg.start > win.end) {
+      afterCount += seg.end - seg.start + 1
+      continue
+    }
+    if (seg.skip) {
+      segs.push(seg)
+      continue
+    }
+    const clippedStart = Math.max(seg.start, win.start)
+    const clippedEnd = Math.min(seg.end, win.end)
+    if (clippedStart > seg.start) beforeCount += clippedStart - seg.start
+    if (clippedEnd < seg.end) afterCount += seg.end - clippedEnd
+    segs.push({ skip: false, start: clippedStart, end: clippedEnd })
+  }
+  return { segs, beforeCount, afterCount }
+}
+
+// virtualSpacerHTML stands in for `count` rows currently outside the
+// rendered window — plain height, no content, so the scrollbar stays roughly
+// proportional (see VIRTUALIZE_ROW_PX above). `data-virtualized-spacer` is
+// used only by tests (asserting a row outside the window has no real DOM,
+// while the block's approve counter/approval state still accounts for it).
+function virtualSpacerHTML(count, pos) {
+  if (count <= 0) return ''
+  return `<div class="block" style="height:${count * VIRTUALIZE_ROW_PX}px" data-virtualized-spacer="${pos}" data-virtualized-count="${count}"></div>`
+}
+
 function expandCollapsedRun(rows, runKey) {
   let set = expandedRunsByRows.get(rows)
   if (!set) {
@@ -3480,7 +3629,11 @@ function yamlBreadcrumbsForSegs(rows, segs) {
 // height. The only unescaped bits are our own static class strings, so the
 // result is safe to hand to the .innerHTML binding. A huge block renders
 // through collapsePlan (see above): long unchanged runs become one clickable
-// spacer row instead — identical in both panes, so they stay aligned.
+// spacer row instead — identical in both panes, so they stay aligned. A huge
+// MOSTLY-CHANGED block (collapsePlan can't help there, see its own doc
+// comment) additionally renders through a row WINDOW around the cursor (see
+// "Virtualizing a huge, mostly-changed block" above) — everything outside
+// that window becomes one plain spacer div per side instead.
 function paneHTML(
   rows,
   sideKey,
@@ -3498,7 +3651,22 @@ function paneHTML(
   emitMeta = true,
   // lang: threaded straight from codePane — see its own doc comment.
   lang = 'php',
+  // cursorGroupFn: threaded straight from codePane — see its own doc
+  // comment. Only ever CALLED when this block is actually large enough to
+  // virtualize (see below) — for a normal/small block this function is
+  // never invoked at all, so it establishes no new reactive dependency and
+  // nothing here changes for the common case (byte-identical output).
+  cursorGroupFn = null,
 ) {
+  // Virtualization: decide the row window BEFORE building anything. `wrap`
+  // (a prose/config file in 'fit') never virtualizes — its rows have no
+  // fixed height (see VIRTUALIZE_ROW_PX's own doc comment), so a fixed-height
+  // spacer estimate would be actively wrong there, not just approximate.
+  let win = null
+  if (!wrap && rows.length > VIRTUALIZE_MIN_ROWS && typeof cursorGroupFn === 'function') {
+    const cg = cursorGroupFn()
+    win = computeWindow(rows, cg ? cg.start : 0, cg ? cg.end : 0)
+  }
   const parts = []
   const pushRow = (i) => {
     const r = rows[i]
@@ -3531,15 +3699,15 @@ function paneHTML(
     )
   }
   const plan = collapsePlan(rows, commented)
-  if (!plan) {
-    for (let i = 0; i < rows.length; i++) pushRow(i)
-  } else {
-    const breadcrumbs = isYaml ? yamlBreadcrumbsForSegs(rows, plan) : null
-    for (const seg of plan) {
-      if (seg.skip) parts.push(collapsedRunHTML(seg.start, seg.end, breadcrumbs && breadcrumbs.get(seg.start + '-' + seg.end)))
-      else for (let i = seg.start; i <= seg.end; i++) pushRow(i)
-    }
+  const baseSegs = plan || [{ skip: false, start: 0, end: rows.length - 1 }]
+  const { segs, beforeCount, afterCount } = virtualizedSegs(baseSegs, win)
+  if (beforeCount) parts.push(virtualSpacerHTML(beforeCount, 'before'))
+  const breadcrumbs = isYaml && plan ? yamlBreadcrumbsForSegs(rows, plan) : null
+  for (const seg of segs) {
+    if (seg.skip) parts.push(collapsedRunHTML(seg.start, seg.end, breadcrumbs && breadcrumbs.get(seg.start + '-' + seg.end)))
+    else for (let i = seg.start; i <= seg.end; i++) pushRow(i)
   }
+  if (afterCount) parts.push(virtualSpacerHTML(afterCount, 'after'))
   return parts.join('')
 }
 
@@ -3610,6 +3778,12 @@ function unifiedHTML(
   // comment.
   lang = 'php',
 ) {
+  // Virtualization, same mechanism/threshold as paneHTML (see "Virtualizing a
+  // huge, mostly-changed block" above) — the unified stand is always ONE
+  // pane/one binding (see this function's own call site,
+  // unifiedCodeDiff), so `group` is already the real cursor group, no
+  // cursorGroupFn indirection needed.
+  const win = rows.length > VIRTUALIZE_MIN_ROWS ? computeWindow(rows, group ? group.start : 0, group ? group.end : 0) : null
   const parts = []
   const pushRow = (i) => {
     const r = rows[i]
@@ -3622,15 +3796,15 @@ function unifiedHTML(
     parts.push(unifiedRowHTML(r, i, group, approved, commented, focused, lineSummaries, segDots, commentRange, lang))
   }
   const plan = collapsePlan(rows, commented)
-  if (!plan) {
-    for (let i = 0; i < rows.length; i++) pushRow(i)
-  } else {
-    const breadcrumbs = isYaml ? yamlBreadcrumbsForSegs(rows, plan) : null
-    for (const seg of plan) {
-      if (seg.skip) parts.push(collapsedRunHTML(seg.start, seg.end, breadcrumbs && breadcrumbs.get(seg.start + '-' + seg.end)))
-      else for (let i = seg.start; i <= seg.end; i++) pushRow(i)
-    }
+  const baseSegs = plan || [{ skip: false, start: 0, end: rows.length - 1 }]
+  const { segs, beforeCount, afterCount } = virtualizedSegs(baseSegs, win)
+  if (beforeCount) parts.push(virtualSpacerHTML(beforeCount, 'before'))
+  const breadcrumbs = isYaml && plan ? yamlBreadcrumbsForSegs(rows, plan) : null
+  for (const seg of segs) {
+    if (seg.skip) parts.push(collapsedRunHTML(seg.start, seg.end, breadcrumbs && breadcrumbs.get(seg.start + '-' + seg.end)))
+    else for (let i = seg.start; i <= seg.end; i++) pushRow(i)
   }
+  if (afterCount) parts.push(virtualSpacerHTML(afterCount, 'after'))
   return parts.join('')
 }
 
