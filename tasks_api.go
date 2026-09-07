@@ -872,6 +872,16 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// starts (idempotently reuses) its tracker. See plan_api.go.
 	mux.HandleFunc("/api/plan", s.handlePlan)
 	mux.HandleFunc("/api/branches", s.handleBranches)
+	// GET /api/jira/comments?key=KEY[&refresh=1] → the Jira comments around one
+	// ticket (its own, the main task's, the subtasks'), read-only and served
+	// from a day-long in-memory cache; GET /api/jira/users?q=… → the people who
+	// can be @-mentioned in a reply. See plan_comments.go.
+	mux.HandleFunc("/api/jira/comments", s.handlePlanComments)
+	mux.HandleFunc("/api/jira/users", s.handleJiraUsers)
+	// POST /api/workflows/jira_comment {key, body, mentions} → post one comment
+	// on a Jira issue (jira_comment.go). The sanctioned write path for the
+	// plan page's comment panel.
+	mux.HandleFunc("/api/workflows/jira_comment", s.handleJiraCommentStart)
 	mux.HandleFunc("/api/workflows/plan", s.handlePlanStart)
 	// POST /api/workflows/plan_execute {key} → the index's last action on
 	// /plan/<KEY>: let Claude implement the plan on a fresh branch and open a
@@ -1275,7 +1285,7 @@ func (s *server) handleIgnoreRuns(w http.ResponseWriter, r *http.Request) {
 // /api/workflows/{runID}/signals/{signalName} (POST signal).
 func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/workflows/")
-	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "remove_reviewer" || rest == "code_warning" || rest == "ignore_comment" || rest == "cleanup" || rest == "claude_chat" || rest == "auto_warn" || rest == "lang_pref" || rest == "app_settings" || rest == "comment_batch" || rest == "test_run" || rest == "comment_titles" || rest == "plan" || rest == "retry" || rest == "retry-all" || rest == "ignore-runs" {
+	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "remove_reviewer" || rest == "code_warning" || rest == "ignore_comment" || rest == "cleanup" || rest == "claude_chat" || rest == "auto_warn" || rest == "lang_pref" || rest == "app_settings" || rest == "comment_batch" || rest == "test_run" || rest == "comment_titles" || rest == "plan" || rest == "jira_comment" || rest == "retry" || rest == "retry-all" || rest == "ignore-runs" {
 		http.NotFound(w, r)
 		return
 	}
@@ -1382,11 +1392,15 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 			// (planAnswerFollowup, no question to point at) and the general
 			// chat about this ticket (planAnswerChat, Text carries the typed
 			// message instead of an answer — see .claude/docs/plan-page.md).
-			// Both are the only shapes allowed through without a questionId;
-			// a chat message additionally needs real text, or there is
-			// nothing to signal at all.
+			// A third one asks the tracker to re-read the ticket's Jira
+			// comments and rebuild the task list after a reply was posted
+			// (planAnswerComment — the posting itself is its own
+			// jira_comment workflow, see jira_comment.go).
+			// All three are the only shapes allowed through without a
+			// questionId; a chat message additionally needs real text, or
+			// there is nothing to signal at all.
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil ||
-				(body.QuestionID == "" && body.Kind != planAnswerFollowup && body.Kind != planAnswerChat) ||
+				(body.QuestionID == "" && body.Kind != planAnswerFollowup && body.Kind != planAnswerChat && body.Kind != planAnswerComment) ||
 				(body.Kind == planAnswerChat && strings.TrimSpace(body.Text) == "") {
 				http.Error(w, "invalid plan answer", http.StatusBadRequest)
 				return

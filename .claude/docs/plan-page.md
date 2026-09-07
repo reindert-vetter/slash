@@ -840,3 +840,54 @@ through the Signal — against a freshly opened ticket, which in this harness
 means the chat is answered while the tracker still sits on the hotfix gate,
 exercising the gate-tolerant carve-out above — the mouse entry point, and the
 backdrop click).
+
+## Jira-opmerkingen: lezen, beantwoorden, @-mentions — backend done, UI not wired yet
+
+Read-only backend: `plan_comments.go`'s `PlanComments` reads this ticket's own
+comments plus the main task's and every subtask's (`planCommentFamily`, self
+first, then parent, then subtasks, deduplicated), served from an in-memory
+per-key cache good for `planCommentsTTL` (24h — the reviewer's own "een dag
+mag" instruction), single-flighted so two tabs on the same ticket don't each
+pay for `1+maxCommentIssues` `acli` calls. `GET /api/jira/comments?key=KEY[&refresh=1]`
+serves the panel; `GET /api/jira/users?q=…` answers the `@`-mention picker
+(`modules/jira/comments.go`'s `Users`, a short-lived per-query cache). Both
+read `CanPost`/`CanMention` off whether the Atlassian API token
+(`SLASH_JIRA_EMAIL`/`SLASH_JIRA_TOKEN`, `jiraCredsFromEnv`) is configured —
+reading comments works via `acli` regardless, but posting/searching needs the
+token, since `acli` has no comment-post or user-search command at all.
+
+Posting a reply is its own one-shot Workflow Type, `jira_comment`
+(`jira_comment.go`), started via `POST /api/workflows/jira_comment
+{key, body, mentions}` — deliberately NOT another Kind on the `plan`
+tracker's `plan_answer` Signal (unlike the general chat), because the tracker
+can be sitting on the scope/hotfix gate when a reply is posted, and a Signal
+aimed at a name it isn't currently waiting on would just sit unconsumed.
+`modules/jira/comments.go`'s `BuildCommentADF` turns the typed body plus the
+picked `Mention`s into a real Atlassian Document Format document (longest
+mention text wins on overlap), posted via the Jira Cloud REST API (`acli` has
+no write endpoint for this) on the same `SLASH_JIRA_EMAIL`/`SLASH_JIRA_TOKEN`
+credentials as the notification feed. Mentions are only ever what the
+reviewer typed and picked — never automatic. After a successful post the
+Activity calls `invalidatePlanComments(key)` so the panel's own cache doesn't
+keep serving a list that predates the new comment.
+
+A posted reply also feeds back into the plan: the page sends a THIRD
+`plan_answer` Signal Kind, `planAnswerComment` (`plan_workflow.go`), which
+re-reads the whole family's comments onto the document
+(`planRefreshComments` Activity — replacing, never appending, so a re-read
+never duplicates) and, if a task list already exists, regenerates it
+(`planGenerate` with `Mode:"tasks"`) — the reviewer's own instruction that a
+new comment must feed the task list exactly like an answer does.
+
+Scope, deliberately: reading + replying + mentions only. No drafts, no
+reactions, no resolve/ignore, no AI-generated titles — unlike the review
+tree's PR-comment panel, which has all of those; a smaller, read-mostly
+feature was the explicit ask here.
+
+**Not yet wired into the UI.** `src/plan.mjs` has no comment panel, no reply
+composer, and no mention picker calling any of the three endpoints above —
+this session (task 23 of `todo/plan-page-workflow.md`) only finished and
+verified the backend half (Go build/vet/tests). Placing it "bovenaan de
+vragen-index (kolom 2)" per the reviewer's instruction, reusing the tree's own
+blocks-index component, is the next, separate piece of work; see
+`todo/plan-page-workflow.md` for the up-to-date status.

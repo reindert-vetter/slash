@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 
@@ -74,6 +75,14 @@ func (unreachableFeedJira) Search(context.Context, string, int) ([]jira.Issue, e
 }
 
 func (unreachableFeedJira) VerifyCredentials(context.Context) error { return nil }
+
+func (unreachableFeedJira) AddComment(context.Context, string, json.RawMessage) (string, error) {
+	return "", nil
+}
+
+func (unreachableFeedJira) Users(context.Context, string, int) ([]jira.User, error) {
+	return nil, nil
+}
 
 // TestJiraCredsViewFallsBackToDefaultSite pins the fix for the settings page's
 // domain field showing only a placeholder hint instead of the real default: a

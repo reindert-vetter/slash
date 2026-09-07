@@ -2,6 +2,8 @@ package jira
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"sync"
 )
 
@@ -23,6 +25,47 @@ type Fake struct {
 	// exercise checkJiraToken's "credentials rejected" branch without a real
 	// HTTP call. nil (the default) means "credentials accepted".
 	VerifyErr error
+	// Posted records every comment AddComment was asked to post, in order, so
+	// a test can assert the ADF that reached Jira without a network.
+	Posted []PostedComment
+	// PostErr, if set, is what AddComment returns instead of posting.
+	PostErr error
+	// users is what Users returns for any query (a fake never searches).
+	users []User
+}
+
+// PostedComment is one recorded AddComment call.
+type PostedComment struct {
+	Key string
+	ADF json.RawMessage
+}
+
+// SetUsers programs Users to return list for every query.
+func (f *Fake) SetUsers(list []User) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.users = list
+}
+
+// AddComment records the call and returns a synthetic comment id.
+func (f *Fake) AddComment(_ context.Context, key string, adf json.RawMessage) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.PostErr != nil {
+		return "", f.PostErr
+	}
+	f.Posted = append(f.Posted, PostedComment{Key: key, ADF: adf})
+	return fmt.Sprintf("fake-%d", len(f.Posted)), nil
+}
+
+// Users returns the programmed user list, bounded by limit.
+func (f *Fake) Users(_ context.Context, _ string, limit int) ([]User, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if limit > 0 && len(f.users) > limit {
+		return append([]User(nil), f.users[:limit]...), nil
+	}
+	return append([]User(nil), f.users...), nil
 }
 
 // SetIssue programs Issue to return issue for key.

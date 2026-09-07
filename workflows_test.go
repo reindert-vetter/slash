@@ -1252,6 +1252,12 @@ func (e errJira) Search(context.Context, string, int) ([]jira.Issue, error) { re
 
 func (e errJira) VerifyCredentials(context.Context) error { return nil }
 
+func (e errJira) AddComment(context.Context, string, json.RawMessage) (string, error) {
+	return "", e.err
+}
+
+func (e errJira) Users(context.Context, string, int) ([]jira.User, error) { return nil, nil }
+
 // TestPRStatusJiraFailureLogsPR pins the fix for a Jira-issue-fetch failure
 // (e.g. `acli` not logged in) that skipped silently in the terminal but never
 // reached the review tree's own "Taken" block: pollProblems (home.mjs) filters

@@ -64,10 +64,17 @@ type Issue struct {
 }
 
 // Comment is one Jira comment, flattened the same way a description is.
+// ID/AccountID/AvatarURL only matter to the plan page's comment panel (a
+// stable key per row, the author's picture, and who to @-mention back — see
+// .claude/docs/plan-page.md); every one of them is `omitempty`, so a payload
+// stored before they existed stays byte-identical.
 type Comment struct {
-	Author  string `json:"author,omitempty"`
-	Created string `json:"created,omitempty"`
-	Body    string `json:"body"`
+	ID        string `json:"id,omitempty"`
+	Author    string `json:"author,omitempty"`
+	AccountID string `json:"accountId,omitempty"`
+	AvatarURL string `json:"avatarUrl,omitempty"`
+	Created   string `json:"created,omitempty"`
+	Body      string `json:"body"`
 }
 
 // maxIssueComments bounds how many comments one issue contributes: a long
@@ -95,6 +102,14 @@ type Client interface {
 	Search(ctx context.Context, jql string, limit int) ([]Issue, error)
 	// Notifications reads the reviewer's own bell feed (see notifications.go).
 	Notifications(ctx context.Context, limit int) ([]Notification, error)
+	// AddComment posts one comment (an ADF document, see BuildCommentADF) on
+	// an issue and returns the new comment's id. The ONLY write method of this
+	// module: called from the postJiraComment Activity, never from a handler
+	// (.claude/rules/workflows-write-boundary.md).
+	AddComment(ctx context.Context, key string, adf json.RawMessage) (string, error)
+	// Users searches the people who can be @-mentioned in a comment (read-only,
+	// see comments.go).
+	Users(ctx context.Context, query string, limit int) ([]User, error)
 	// VerifyCredentials confirms the configured email/token are accepted by
 	// Jira via a stable, documented endpoint (see notifications.go) — kept
 	// separate from Notifications so a broken undocumented feed endpoint is
@@ -139,8 +154,13 @@ type acliIssue struct {
 
 // acliComment is one entry of the comment field.
 type acliComment struct {
+	ID     string `json:"id"`
 	Author struct {
+		AccountID   string `json:"accountId"`
 		DisplayName string `json:"displayName"`
+		AvatarURLs  struct {
+			Small string `json:"24x24"`
+		} `json:"avatarUrls"`
 	} `json:"author"`
 	Created string          `json:"created"`
 	Body    json.RawMessage `json:"body"`
@@ -243,9 +263,12 @@ func issueFromACLI(key string, parsed acliIssue) Issue {
 			continue
 		}
 		issue.Comments = append(issue.Comments, Comment{
-			Author:  strings.TrimSpace(c.Author.DisplayName),
-			Created: strings.TrimSpace(c.Created),
-			Body:    body,
+			ID:        strings.TrimSpace(c.ID),
+			Author:    strings.TrimSpace(c.Author.DisplayName),
+			AccountID: strings.TrimSpace(c.Author.AccountID),
+			AvatarURL: strings.TrimSpace(c.Author.AvatarURLs.Small),
+			Created:   strings.TrimSpace(c.Created),
+			Body:      body,
 		})
 	}
 	return issue

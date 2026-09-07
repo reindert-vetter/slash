@@ -3477,6 +3477,8 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// The Jira-issues tracker's one Activity (see jira_issues.go).
 	m.registerJiraIssuesActivities(engine)
 	m.registerPlanActivities(engine)
+	// The one Activity that posts a Jira comment (see jira_comment.go).
+	m.registerJiraCommentActivities(engine)
 	m.registerPlanExecuteActivities(engine)
 
 	engine.RegisterWorkflow(WorkflowTaskCodeComment, taskCodeCommentWorkflow)
@@ -3486,6 +3488,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowJiraIssues, jiraIssuesWorkflow)
 	engine.RegisterWorkflow(WorkflowPlan, planWorkflow)
 	engine.RegisterWorkflow(WorkflowPlanExecute, planExecuteWorkflow)
+	engine.RegisterWorkflow(WorkflowJiraComment, jiraCommentWorkflow)
 	engine.RegisterWorkflow(WorkflowBuildRelations, buildRelationsWorkflow)
 	engine.RegisterWorkflow(WorkflowIngest, ingestWorkflow)
 	engine.RegisterWorkflow(WorkflowResolveCall, resolveCallWorkflow)

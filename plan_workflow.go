@@ -97,6 +97,14 @@ const planAnswerFollowup = "followup"
 // for this kind, same shape as planAnswerFollowup above.
 const planAnswerChat = "chat"
 
+// planAnswerComment is the PlanAnswerSignal Kind the page sends right after a
+// reply was posted on a Jira comment (the jira_comment workflow did the actual
+// posting — see jira_comment.go): re-read the family's Jira comments onto the
+// document and rebuild the task list from them. Reviewer decision: a new
+// comment must feed back into the plan, exactly like an answer does. Text and
+// QuestionID/OptionID are unused, same shape as the two Kinds above.
+const planAnswerComment = "comment"
+
 // maxPlanChatMessages bounds how long the chat transcript on the document is
 // allowed to grow (oldest dropped first, always in pairs so a lone orphaned
 // reply/question is never left dangling) — the same reasoning as
@@ -357,6 +365,34 @@ func handlePlanChat(w *tembed.Workflow, doc *planDoc, text string) error {
 	return nil
 }
 
+// handlePlanComments folds a freshly posted Jira comment back into the plan:
+// re-read the family's comments (the panel and the prompt then agree on what
+// was said) and regenerate the task list from them. Saved before AND after the
+// regeneration for the same reason an ordinary answer is: the regeneration is
+// a minute-long Claude call, and until it lands the page would otherwise keep
+// reading a document that does not know about the comment yet.
+//
+// The task list is only rebuilt when there IS one — a tracker whose plan has
+// not been generated yet reads the same comments in planLoadContext anyway.
+func handlePlanComments(w *tembed.Workflow, doc *planDoc) error {
+	if err := w.ExecuteActivity("planRefreshComments", *doc, doc); err != nil {
+		return fmt.Errorf("plan: refresh comments: %w", err)
+	}
+	if err := w.ExecuteActivity("planSave", *doc, nil); err != nil {
+		return fmt.Errorf("plan: save comments: %w", err)
+	}
+	if len(doc.Tasks) == 0 {
+		return nil
+	}
+	if err := w.ExecuteActivity("planGenerate", planGenerateArg{Doc: *doc, Mode: "tasks"}, doc); err != nil {
+		return fmt.Errorf("plan: regenerate tasks after comment: %w", err)
+	}
+	if err := w.ExecuteActivity("planSave", *doc, nil); err != nil {
+		return fmt.Errorf("plan: save after comment: %w", err)
+	}
+	return nil
+}
+
 // planWorkflow is the tracker described at the top of this file.
 func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	var in PlanInput
@@ -470,6 +506,14 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			}
 			if err := w.ExecuteActivity("planSave", doc, nil); err != nil {
 				return nil, fmt.Errorf("plan: save: %w", err)
+			}
+			continue
+		}
+		// A reply was posted on one of the ticket's Jira comments: re-read them
+		// and rebuild the task list (see handlePlanComments).
+		if sig.Kind == planAnswerComment {
+			if err := handlePlanComments(w, &doc); err != nil {
+				return nil, err
 			}
 			continue
 		}
@@ -745,6 +789,48 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 		doc.RelatedPRs = rankPlanRelatedPRs(found, keys)
 		for i := range doc.RelatedPRs {
 			doc.RelatedPRs[i].Files = prChangedFiles(ctx, doc.RelatedPRs[i].Number)
+		}
+		return json.Marshal(doc)
+	})
+	// Activity: re-read the family's Jira comments onto the document, after the
+	// reviewer replied to one of them (see handlePlanComments). Same reads as
+	// planLoadIssue/planLoadContext do at start-up, bounded the same way, and
+	// REPLACING both lists rather than appending — a re-read must not duplicate
+	// what is already there. Best-effort per issue: one unreachable ticket
+	// costs its comments, never the tracker.
+	engine.RegisterActivity("planRefreshComments", func(ctx context.Context, in []byte) ([]byte, error) {
+		var doc planDoc
+		if err := json.Unmarshal(in, &doc); err != nil {
+			return nil, err
+		}
+		if m.jira == nil {
+			return json.Marshal(doc)
+		}
+		doc.Comments = nil
+		doc.RelatedComments = nil
+		if issue, err := m.jira.Issue(ctx, doc.Key); err != nil {
+			m.logf("plan: refresh comments %s: %v", doc.Key, err)
+		} else {
+			for _, c := range issue.Comments {
+				doc.Comments = append(doc.Comments, planComment{Author: c.Author, Created: c.Created, Body: c.Body})
+			}
+		}
+		read := 0
+		for _, key := range planRelatedKeys(doc) {
+			if key == strings.ToUpper(doc.Key) || read >= maxPlanContextIssues {
+				continue
+			}
+			read++
+			issue, err := m.jira.Issue(ctx, key)
+			if err != nil {
+				m.logf("plan: refresh comments %s of %s: %v", key, doc.Key, err)
+				continue
+			}
+			for _, c := range issue.Comments {
+				doc.RelatedComments = append(doc.RelatedComments, planComment{
+					Key: key, Author: c.Author, Created: c.Created, Body: c.Body,
+				})
+			}
 		}
 		return json.Marshal(doc)
 	})
