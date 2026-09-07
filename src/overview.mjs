@@ -3485,6 +3485,30 @@ function reanchorSelection(rows) {
 // was removed on explicit request; see .claude/docs/pages-and-routing.md.
 const SELECT_RING_CLS = ['ring-1', 'ring-indigo-500/50', 'rounded-lg', 'z-10', 'bg-indigo-500/10']
 
+// lastScrolledSelKey — the selKey identity paintSelection() last scrolled to.
+// A plain `undefined` sentinel (never written by setSelKey, which only ever
+// stores a string or `null`), so the very first paint with no selection at
+// all doesn't count as "already scrolled to null".
+//
+// paintSelection() runs on EVERY repaint, not just on a real navigation step
+// — a data-driven change (the Planning/Todo rows landing, a 60s inbox
+// reload, a Jira poll tick) reruns it via scheduleRepaint just as much as a
+// keypress or a click does (see reanchorSelection above). Unconditionally
+// calling scrollIntoView() here used to yank the viewport back to the
+// selected row on every one of those data ticks — including while the
+// reviewer was mid-scroll with the mouse, since nothing here is aware of
+// mouse input at all; it's the render loop firing, not the wheel (per Rule 4
+// in .claude/docs/mouse-navigation.md, the mouse itself never runs this
+// function). Comparing the CURRENT selKey against the key the LAST scroll
+// already targeted turns that into "only scroll when the selection actually
+// became a different row" — true for a keyboard step (move/moveTo), a click
+// (togglePopover claims selKey directly), and the one-time adoption of a
+// remembered/URL-carried selection below, but false for a mere repaint that
+// leaves selKey exactly as it was (even if the row's on-screen INDEX shifted
+// under a reshuffled list) — so it never fights a reviewer who is just
+// looking around while data refreshes in the background.
+let lastScrolledSelKey
+
 function paintSelection() {
   const rows = currentRows()
   // Adopt the remembered selection the first time its row is actually there
@@ -3513,7 +3537,12 @@ function paintSelection() {
       el.classList.remove(...SELECT_RING_CLS)
     }
   })
-  if (selIndex >= 0 && rows[selIndex]) rows[selIndex].scrollIntoView({ block: 'nearest' })
+  // See lastScrolledSelKey above: only scroll when the SELECTED ROW ITSELF
+  // just changed, never on a plain repaint of an unchanged selection.
+  if (selIndex >= 0 && rows[selIndex] && selKey !== lastScrolledSelKey) {
+    rows[selIndex].scrollIntoView({ block: 'nearest' })
+  }
+  lastScrolledSelKey = selKey
 }
 
 function move(delta) {

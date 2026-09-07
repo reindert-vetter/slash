@@ -1322,6 +1322,54 @@ still move it as before, and a click still opens the popover and claims the
 ring. The browser-native scroll-triggered synthetic-`mousemove` case that used
 to matter here is now moot — there is no listener left for it to fool.
 
+### Scrolling to the selection only happens on a real navigation step
+
+`paintSelection()` runs on **every** repaint, not just the ones a keyboard
+step or a click triggers — `scheduleRepaint()` reruns it for any data/UI
+change the `watch` at the bottom of the file lists (the Planning/Todo rows
+landing, a background inbox reload, the "Mislukte taken" drawer expanding,
+…), and `reanchorSelection()` deliberately re-derives `selIndex` on every one
+of those so a reshuffled row set never leaves the ring on the wrong row (see
+"Selection identity" below). `paintSelection()` used to end with an
+**unconditional** `rows[selIndex].scrollIntoView({ block: 'nearest' })` —
+so any of those data-driven repaints yanked the viewport back to the still-
+selected row, even while the reviewer had scrolled away from it with the
+mouse/trackpad to look at something else. Reviewer request ("als je in pr
+overview omhoog of naar beneden scroll, moet het geselecteerde niet
+gescrolled worden, wel als ik navigeer met mijn keys") — the mouse itself
+never ran this code (no scroll/wheel listener touches selection at all, per
+Rule 4 in `.claude/docs/mouse-navigation.md`); the bug was that the render
+loop scrolled on the reviewer's behalf on every repaint, keyboard-driven or
+not.
+
+**Fix, at the one call site, not a second suppression layer on top:**
+`lastScrolledSelKey` (a plain module `let`, sentinel `undefined`) remembers
+which `selKey` the last `scrollIntoView()` call targeted. `paintSelection()`
+now only scrolls when the **current** `selKey` differs from that remembered
+one — i.e. only when the selected row's own identity just changed (a
+keyboard step via `move`/`moveTo`, a click claiming the ring via
+`togglePopover`, or the one-time adoption of a remembered/URL-carried
+selection via `pendingRestoreSelKey`/`trySelectPendingPr`/
+`trySelectTopAfterApprove` — all of which call `setSelKey` with a new value)
+— never on a repaint that leaves `selKey` exactly as it was, even if the
+row's on-screen **index** shifted under a reshuffled list (reanchoring, see
+below). `lastScrolledSelKey` is updated on every call regardless of whether
+a scroll happened, so a row that briefly drops out of the row set (a typed
+search query) and reappears with the *same* `selKey` does not re-trigger a
+scroll either — it was never a real navigation event.
+
+This also means a data change landing while the reviewer is scrolled away
+(e.g. the `?pr=`/`?approved=`/`localStorage`-remembered selection getting
+adopted right after `?filter=`/Jira issues arrive) still scrolls exactly
+once, at the moment `selKey` first becomes non-null — the initial-load cases
+the reviewer still needs to land on their remembered row all keep working.
+
+Test: `tests/overview-scroll-selection.spec.mjs` — toggling the "Mislukte
+taken" drawer (a data/UI-driven repaint with the selection unchanged) leaves
+`window.scrollY` untouched after a manual scroll-away, while walking the
+selection to the end with `ArrowDown` still scrolls the newly selected row
+into view.
+
 ### Selection identity (`selKey`/`data-nav-key`), not an array position
 
 Every navigable row (`prRow` and `recentItem`) carries, alongside
