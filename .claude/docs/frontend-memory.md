@@ -1013,3 +1013,145 @@ freshly-built class-carrying rows (irreducible without a build step — the
 known ~20% post from the earlier campaign), ~30ms arrow.js flush, ~25ms
 paneHTML string build. Getting those presses under 200ms would need
 virtualizing/trimming the biggest diff DOMs — a design change, not a tweak.
+
+## A SINGLE huge block — a different scaling axis than the campaign above
+
+The Sep 2026 campaign above measured PR 13451/13255 (601/166 blocks, many
+small-to-medium diffs) — its costs scale with the NUMBER OF BLOCKS in the
+tree (cross-block subtree walks, `directChildBlocks`/`nestedPrBlocks`).
+Reported symptom on a *different* PR (13582): `↓` inside ONE block —
+`database/schema/mysql-schema.sql`, a schema dump, `OTHER`/`modified`,
+**2272 approvable units in a single block** (`GET /api/blockstats?pr=13582`)
+— was "traag". This is the ORTHOGONAL scaling axis: cost per keystroke
+scaling with the ROW COUNT of one block, not with how many blocks the PR
+has. None of the fixes above touch it — a PR can have very few blocks and
+still hit this if one of them is huge.
+
+**Measured** (throwaway Playwright harness, same recipe as "Navigation
+latency" above — `requestAnimationFrame`-polled DOM-signature change, not a
+naive `location.search`-only predicate; harness not committed):
+`?sel=database%2Fschema%2Fmysql-schema.sql%3A1&mode=diff` on the live PR
+13582, 150× `ArrowDown`:
+
+| | p50 | p90 | p99 | max |
+|---|---|---|---|---|
+| the 2272-unit block | 820ms | 1632ms | 4645ms | 9882ms |
+| an 8-unit block, same PR (control) | ~30ms flat | — | — | — |
+
+**A false trail worth recording so nobody re-chases it:** the reviewer's own
+link carried `&rel.foc=claude` (the embedded Claude chat panel has the
+keyboard, see `.claude/docs/keyboard-navigation.md`'s `relatedActive()`
+guard) — with that param, `↓` never reaches the diff at all (every press is
+silently absorbed by the chat panel, no DOM signature ever changes). That
+reads as "stuck", not "slow", and is not this bug — drop `rel.foc` before
+reproducing this one.
+
+**CDP `Profiler` burst (12 presses), self-time breakdown, before any fix:**
+`Tt` (arrow.js's `.innerHTML`/attribute setter — where `pane.innerHTML =
+<huge string>` lands; the browser's parse/DOM-build for the whole pane is
+attributed here) 3546ms, an unidentified native/inlined `pf` 2948ms,
+`getBoundingClientRect` 2737+946ms, `syncScroll` (Block.mjs) 1651ms, plus
+~1140ms combined in `markChars`/`segmentCalls`/`paneHTML`/`rowCellHTML` (the
+per-row HTML-string build itself). **Root cause, read from
+`.claude/docs/diff-render.md`, not guessed:** each diff pane is ONE reactive
+`.innerHTML` binding, rebuilt as one string over ALL of `blockRows(b)` on
+every `state.change` step — cheap for a normal block, O(row count) per
+keystroke for a multi-thousand-row one. The existing huge-block
+`COLLAPSE_MIN_ROWS`/`collapsedRunHTML` measure (see "Huge blocks" above)
+does not help this file: it only folds runs of ≥10 UNCHANGED rows, and a
+schema dump is almost entirely changed/added — nothing to fold.
+
+### The scoped fix landed this round: cache + throttle the scroll-hint layout reads
+
+Deliberately the narrow, low-risk slice — **not** virtualizing `paneHTML`
+(a separate, larger round). Three changes, all in `syncScroll`/
+`scheduleHints`/`updateHints` (`Block.mjs`), none touching `paneHTML`/
+`codePane`/`home.mjs`'s `scrollChangeIntoView` (the glide's own 160ms tween/
+easing is untouched — same visible animation as before):
+
+1. **`firstLastChanged(pane)`** caches a pane's first/last `[data-changed]`
+   row (a `WeakMap` keyed on the pane element) instead of
+   `pane.querySelectorAll('[data-changed]')` walking every row on every
+   `updateHints` call. Same "reference identity as cache key" idiom as
+   `blockRowsCache` — but the identity check here is on the CHILD
+   (`cached[0].isConnected`), because the pane element itself is stable
+   (only its row CHILDREN get replaced by a keystroke's `.innerHTML`
+   reassignment) — a disconnected cached row is the exact, free
+   invalidation signal.
+2. **`scrollSyncPanes(container)`** caches the `[data-scrollsync]` pane
+   lookup the same way (also a subtree walk over every row otherwise),
+   validated via `.every((p) => p.isConnected)`.
+3. **`scheduleHints`/`runScheduledHints`** now also THROTTLE the actual
+   layout-forcing `updateHints` call to at most once per `HINT_THROTTLE_MS`
+   (48ms, ~3 frames) on top of the existing "1 per rAF" coalesce — a
+   scroll-into-view glide fires a scroll event on ~10 of its own animation
+   frames over 160ms, and each used to force one full synchronous layout of
+   the pane's DOM. The throttle is TRAILING-EDGE, not a drop: a call inside
+   the window re-queues for the next frame instead of being discarded, so
+   the hints still always settle into the correct final state once the
+   scroll burst stops.
+
+**Measured A/B, same harness, same 150× `ArrowDown` on the 2272-unit block**
+(two post-fix runs, to check run-to-run stability rather than trust a single
+sample — this project's own history warns against that, see "The second
+leak that wasn't" above):
+
+| | p50 | p90 | p99 | max |
+|---|---|---|---|---|
+| before | 820ms | 1632ms | 4645ms | 9882ms |
+| after, run 1 | 795ms | 1597ms | 3112ms | 3368ms |
+| after, run 2 | 793ms | 1598ms | 2201ms | 4557ms |
+
+**Honest reading: p50/p90 barely moved (~3%, within run-to-run noise); the
+TAIL (p99, max) improved substantially (p99 -33% to -53%, max -54% to
+-66%).** This is not a data-collection mistake — a repeat CDP profile burst
+after the fix confirms it: `getBoundingClientRect` self-time stayed roughly
+flat (2397+988+337ms ≈ before's 2737+946ms) and `syncScroll` even went UP
+(3591ms) — the cache/throttle mainly cuts the worst-case spikes (a scroll
+burst landing badly), not the median cost. The MEDIAN press is still
+dominated by `Tt` (4397ms in the post-fix profile, still the largest single
+item) — i.e. the `.innerHTML`-reassignment/reparse cost this round
+deliberately did not touch. **This is exactly the expected, scoped result:**
+voorstel 3 (this section) targeted the scroll-hint layout reads
+specifically; the still-large median is voorstel 1's territory (virtualize
+`paneHTML` so a keystroke only touches the rows near the cursor, not all
+2272) — a separate, larger round, not started here.
+
+**Verified no visible behaviour change:** the glide's own tween code
+(`animateScrollTop`/`scrollChangeIntoView`, home.mjs) is untouched — same
+160ms duration, same easing, same per-frame `scrollTop` write. What changed
+is only how often the up/down hint chevrons' opacity/position get
+recomputed WHILE a glide is in flight (now ~every 48ms instead of every
+~16ms) — imperceptible for a `transition-opacity duration-150` fade, and the
+trailing-edge design guarantees the final state is still exactly correct
+once the glide settles. Manually checked (headless, both a 2272-unit and an
+8-unit block): the active row stays fully within its scroll container after
+a burst of `↓` presses in both cases, zero page errors. 46 targeted specs
+(`hints`/`navigate`/`diff-*`/`scroll-*`/`translation-hints`/
+`translation-scroll`/`related-scroll-into-view`/`step-preview-stability`/
+`diff-code-vs-title`/…) plus the full suite pass unchanged (same
+pre-existing flaky set as on `main`: `claude-chat-ring-clipped`,
+`claude-other-tasks-reorder`, `comment-batch`, `debug-mode` (×2),
+`overview-popover-keyboard` — all confirmed to pass in isolation, i.e.
+parallel-run flakiness, not a regression from this change).
+
+Regression test: `tests/hints.spec.mjs` ("a re-rendered pane invalidates the
+cached first/last changed row instead of reusing a detached one") —
+deliberately NOT a timing assertion (see the warning above); it hand-builds
+a minimal `[data-testid=code-diff]` fixture, warms the cache, replaces the
+SAME pane's row children (the exact shape a real keystroke produces via its
+own `.innerHTML` reassignment), and asserts `updateHints` reflects the NEW
+content rather than a stale, now-detached cached row. Verified this test
+actually catches the bug it targets: temporarily reverting the
+`cached[0].isConnected` guard makes it fail (a detached row's
+`getBoundingClientRect()` is an all-zero rect, which reads as "still above
+the fold" and wrongly keeps the up hint on); restoring the guard makes it
+pass again.
+
+**Next round (not started here):** virtualize `paneHTML`/`codePane` so a
+navigation step only touches the rows near the cursor instead of rebuilding
+the whole pane string — the only change that would move the still-large
+p50/p90 on a block this size. See the four proposals discussed for this PR
+(voorstel 1-4; voorstel 4 — folding long runs of *changed* rows the same way
+unchanged runs collapse — was explicitly rejected: every changed line must
+stay individually visible and reviewable, always).

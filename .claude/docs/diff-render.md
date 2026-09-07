@@ -85,6 +85,24 @@ the memoized `rows` array, ephemeral — resets on a code reload) and a reactive
 block's `collapsePlan` early-returns before that read, so it never subscribes).
 Test: `tests/diff-trim-collapse.spec.mjs`.
 
+**This collapse only helps a huge block with long UNCHANGED runs — a huge
+block that is almost entirely changed (e.g. a schema-dump `.sql` file with
+thousands of added lines) gets no benefit from it at all**, because
+`COLLAPSE_MIN_RUN` only folds ≥10 consecutive *unchanged* rows. Each pane is
+still one reactive `.innerHTML` binding rebuilt over ALL of `blockRows(b)` on
+every navigation step — cheap for an ordinary block, but O(row count) per
+keystroke for a multi-thousand-row one. `updateHints`/`syncScroll`'s own
+`[data-changed]`/`[data-scrollsync]` lookups are cached (`firstLastChanged`/
+`scrollSyncPanes`, keyed on the pane element, invalidated via
+`.isConnected` — the pane element is stable across a keystroke, only its row
+children get replaced) and the layout-forcing `updateHints` call itself is
+throttled to a trailing-edge cadence during a scroll glide — see "A SINGLE
+huge block" in `.claude/docs/frontend-memory.md` for the measured before/
+after and why that only closes part of the gap (the `.innerHTML`
+reassignment/reparse cost itself — the median navigation-latency cost on
+such a block — is untouched; virtualizing this rendering path is a separate,
+not-yet-started round).
+
 ### A collapsed run in a yaml/yml file shows its key hierarchy as a breadcrumb
 
 A whole-file yaml/yml fallback block (e.g. an OpenAPI spec) can collapse a run

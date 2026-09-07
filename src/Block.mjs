@@ -2293,6 +2293,31 @@ export function scrollHint(dir) {
 // row is out of view in a direction, that hint shows. The hints are anchored to
 // the scroll body's edges (top sits below the pane headers) so they float over
 // the code, not over the OLD/NEW header row.
+// firstLastChanged returns [firstChangedRow, lastChangedRow] for a pane,
+// cached per pane element — `pane.querySelectorAll('[data-changed]')` walks
+// every row of the pane's DOM to find them, which is O(row count) and ran
+// once per updateHints call (up to once per scroll/tween frame, see
+// syncScroll/scheduleHints below). Since a pane's own `.innerHTML` is only
+// ever reassigned WHOLESALE (never patched in place — see "Old/new line
+// alignment" in .claude/docs/diff-render.md), its rows are the SAME DOM
+// elements for as long as the pane element itself is still connected: the
+// cache is keyed on the pane, and `firstChanged.isConnected` (which goes
+// false the instant a re-render replaces the pane's children) is the exact,
+// free invalidation check — same "reference identity as cache key" idiom as
+// `blockRowsCache`. On a huge block (thousands of rows) this turns what used
+// to be one full-subtree scan per animation frame of a scroll glide into one
+// scan per actual content change. See "Navigation latency" in
+// .claude/docs/frontend-memory.md for the measured before/after.
+const firstLastChangedCache = new WeakMap()
+function firstLastChanged(pane) {
+  const cached = firstLastChangedCache.get(pane)
+  if (cached && (cached[0] === null || cached[0].isConnected)) return cached
+  const changed = pane.querySelectorAll('[data-changed]')
+  const result = changed.length ? [changed[0], changed[changed.length - 1]] : [null, null]
+  firstLastChangedCache.set(pane, result)
+  return result
+}
+
 export function updateHints(container) {
   // Prefer the new/right pane's scroller: it's the only one that still
   // carries `data-changed` in a split diff (the old/left pane is
@@ -2327,12 +2352,12 @@ export function updateHints(container) {
   // and the per-row rect walk was 23% of the CPU of an approve-and-continue
   // press on a large block (see the navigation-latency notes in
   // .claude/docs/frontend-memory.md).
-  const changed = pane.querySelectorAll('[data-changed]')
+  const [firstChanged, lastChanged] = firstLastChanged(pane)
   let above = false
   let below = false
-  if (changed.length) {
-    above = changed[0].getBoundingClientRect().bottom <= vRect.top + 0.5
-    below = changed[changed.length - 1].getBoundingClientRect().top >= vRect.bottom - 0.5
+  if (firstChanged) {
+    above = firstChanged.getBoundingClientRect().bottom <= vRect.top + 0.5
+    below = lastChanged.getBoundingClientRect().top >= vRect.bottom - 0.5
   }
   // This green in-block chevron only ever means "there are more changed lines
   // out of view in this direction — scroll to reveal them". Stepping to the
@@ -2362,11 +2387,29 @@ export function updateHints(container) {
 // scrollTop maps 1:1. The `!==` guards stop the mirrored write from bouncing
 // back — once both panes share a value the loop is a no-op. This also carries
 // home.mjs's scrollIntoView (which scrolls only the left pane) over to the right.
+// scrollSyncPanesCache mirrors firstLastChangedCache's reasoning: the two
+// `[data-scrollsync]` pane elements themselves are the stable nodes that
+// CARRY the reactive `.innerHTML` binding (see codePane/paneHTML in
+// .claude/docs/diff-render.md) — a keystroke's re-render replaces their ROW
+// children, never the pane elements themselves — so `container`'s own
+// `querySelectorAll('[data-scrollsync]')` result (which also has to walk the
+// whole, possibly thousands-of-rows subtree to confirm there's nothing else
+// matching) can be cached per container and reused for as long as those pane
+// elements stay connected.
+const scrollSyncPanesCache = new WeakMap()
+function scrollSyncPanes(container) {
+  const cached = scrollSyncPanesCache.get(container)
+  if (cached && cached.every((p) => p.isConnected)) return cached
+  const panes = [...container.querySelectorAll('[data-scrollsync]')]
+  scrollSyncPanesCache.set(container, panes)
+  return panes
+}
+
 function syncScroll(e) {
   const src = e.target
   const container = src.closest('[data-testid="code-diff"]')
   if (!container) return
-  for (const p of container.querySelectorAll('[data-scrollsync]')) {
+  for (const p of scrollSyncPanes(container)) {
     if (p === src) continue
     if (p.scrollLeft !== src.scrollLeft) p.scrollLeft = src.scrollLeft
     if (p.scrollTop !== src.scrollTop) p.scrollTop = src.scrollTop
@@ -2386,18 +2429,49 @@ function syncScroll(e) {
 }
 
 // scheduleHints coalesces updateHints calls to one run per container per
-// animation frame — see syncScroll above.
+// animation frame — see syncScroll above. On top of that per-frame coalesce,
+// it also THROTTLES the actual layout-forcing updateHints call itself to at
+// most once per HINT_THROTTLE_MS: a scroll-into-view glide
+// (`animateScrollTop`/`scrollChangeIntoView`, home.mjs) fires a scroll event
+// on every one of its ~10 animation frames over its 160ms run, and each of
+// those used to force one full synchronous layout of the diff's own DOM (the
+// getBoundingClientRect reads in updateHints) — negligible on an ordinary
+// block, but measured at up to ~30ms per layout on a several-thousand-row
+// block (mysql-schema.sql, PR 13582, 2272 units — see "Navigation latency"
+// in .claude/docs/frontend-memory.md for the full before/after numbers),
+// i.e. up to ~300ms of forced layout for ONE arrow-key press. The throttle
+// is trailing-edge, not dropped: a call that arrives before the window has
+// elapsed re-queues itself for the next frame instead of being discarded, so
+// the hints still always settle into the correct final state once the burst
+// of scroll events stops — this only thins out how often they're
+// recomputed WHILE scrolling, which is not perceptible for a chevron fade.
+const HINT_THROTTLE_MS = 48 // ~3 frames at 60fps
 const pendingHintContainers = new Set()
+const lastHintRun = new WeakMap()
 let hintRafId = 0
 function scheduleHints(container) {
   pendingHintContainers.add(container)
-  if (hintRafId) return
-  hintRafId = requestAnimationFrame(() => {
-    hintRafId = 0
-    const list = [...pendingHintContainers]
-    pendingHintContainers.clear()
-    for (const c of list) if (c.isConnected) updateHints(c)
-  })
+  if (!hintRafId) hintRafId = requestAnimationFrame(runScheduledHints)
+}
+function runScheduledHints() {
+  hintRafId = 0
+  const now = performance.now()
+  const list = [...pendingHintContainers]
+  pendingHintContainers.clear()
+  for (const c of list) {
+    if (!c.isConnected) continue
+    const last = lastHintRun.get(c) || 0
+    if (now - last < HINT_THROTTLE_MS) {
+      // Still within the throttle window — defer to the next frame instead
+      // of running the layout-forcing read now, but keep it pending so the
+      // trailing call still happens once the window has passed.
+      pendingHintContainers.add(c)
+      continue
+    }
+    lastHintRun.set(c, now)
+    updateHints(c)
+  }
+  if (pendingHintContainers.size) hintRafId = requestAnimationFrame(runScheduledHints)
 }
 
 // codePane is one half of the diff: a fixed-width, horizontally scrolling column

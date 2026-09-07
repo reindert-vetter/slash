@@ -161,4 +161,92 @@ test.describe('PR Review Tree — out-of-view change hints', () => {
     await expect(container.locator('[data-hint="up"]')).toHaveCSS('opacity', '0')
     await expect(container.locator('[data-hint="down"]')).toHaveCSS('opacity', '0')
   })
+
+  // updateHints caches the pane's first/last `[data-changed]` row per pane
+  // element (firstLastChangedCache, Block.mjs) instead of re-querying the
+  // whole subtree on every scroll-tween frame — see "Navigation latency" in
+  // .claude/docs/frontend-memory.md for why. A real navigation keystroke
+  // reassigns the SAME pane's `.innerHTML` wholesale (a fresh set of row
+  // elements, the old ones detached — see paneHTML/codePane in
+  // .claude/docs/diff-render.md), so the cache must invalidate the moment
+  // that happens. This builds a minimal hand-rolled `[data-testid=code-diff]`
+  // (bypassing Block.mjs's own rendering, which — as a real keystroke does —
+  // reassigns the row container's innerHTML while the pane element itself
+  // stays the SAME node, the exact shape a stale cache needs) so the
+  // assertion is about `updateHints`'s own caching, not about Block's
+  // render pipeline. Deliberately not a timing assertion (this repo's own
+  // history warns against trusting a single-run timing number, see
+  // frontend-memory.md's "The second leak that wasn't"); it only checks
+  // correctness of the cached value, which is what a stale-cache bug would
+  // actually break.
+  test('a re-rendered pane invalidates the cached first/last changed row instead of reusing a detached one', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+
+    await appReady(page)
+
+    await page.evaluate(() => {
+      const rowsHTML = (changedIdx) =>
+        Array.from({ length: 30 }, (_, i) => {
+          const changed = changedIdx.includes(i) ? ' data-changed="1"' : ''
+          return `<div data-row="${i}" style="height:20px"${changed}>row ${i}</div>`
+        }).join('')
+
+      const host = document.createElement('div')
+      host.id = 'hint-host'
+      host.setAttribute('data-testid', 'code-diff')
+      host.setAttribute('data-hints', 'on')
+      host.style.position = 'relative'
+      host.innerHTML = `
+        <div data-hint="up" style="opacity:0"></div>
+        <div data-hint="down" style="opacity:0"></div>
+        <div data-pane="new">
+          <div data-scrollsync style="height:100px;overflow:auto">
+            <div id="rows">${rowsHTML([0, 29])}</div>
+          </div>
+        </div>
+      `
+      document.body.appendChild(host)
+      window.__hintRowsHTML = rowsHTML
+    })
+
+    async function scrollToBottomAndUpdate() {
+      return page.evaluate(async () => {
+        const { updateHints } = await import('/src/Block.mjs')
+        const container = document.getElementById('hint-host')
+        const pane = container.querySelector('[data-pane="new"] [data-scrollsync]')
+        pane.scrollTop = pane.scrollHeight
+        updateHints(container)
+      })
+    }
+
+    const container = page.locator('#hint-host')
+    const up = container.locator('[data-hint="up"]')
+    const down = container.locator('[data-hint="down"]')
+
+    // Scrolled to the bottom: row 0 (changed) is out of view above the fold,
+    // row 29 (changed, the last row) is the visible bottom row → up on, down
+    // off. This also warms the first/last cache.
+    await scrollToBottomAndUpdate()
+    await expect(up).toHaveCSS('opacity', '1')
+    await expect(down).toHaveCSS('opacity', '0')
+
+    // Re-render the SAME pane's rows — only row 29 stays changed, exactly
+    // what one keystroke's `.innerHTML` reassignment does (the pane element
+    // itself is untouched, only its row children are replaced). The old row
+    // 0 element is now detached; a stale cache would still return it, and a
+    // detached element's getBoundingClientRect() is an all-zero rect, which
+    // reads as "above the fold" and would wrongly keep the up hint on.
+    await page.evaluate(() => {
+      const pane = document.querySelector('#hint-host [data-pane="new"] [data-scrollsync]')
+      pane.querySelector('#rows').innerHTML = window.__hintRowsHTML([29])
+    })
+
+    await scrollToBottomAndUpdate()
+    // The only remaining change (row 29) is itself the visible bottom row,
+    // so nothing is out of view in either direction any more.
+    await expect(up).toHaveCSS('opacity', '0')
+    await expect(down).toHaveCSS('opacity', '0')
+  })
 })
