@@ -265,11 +265,40 @@ search, so a context parent that is itself To Do can legitimately appear both
 as a Planning context header and as its own Todo row: it is genuinely the
 reviewer's own queued work, only shown once as *context* in the section above.
 
+### Every issue row names its ASSIGNEE, also when that is you
+
+Reviewer request (task 24): who owns a ticket must be visible everywhere a
+ticket is shown — "ook bij eigen tickets", because "het is vermoedelijk mij"
+is not an answer when you are scanning a list. Both `jiraIssueRow` and
+`jiraContextRow` therefore end with `assigneeMark(is.assignee,
+is.assigneeAvatarUrl, 'h-6 w-6')` (`src/avatar.mjs`, `data-testid=assignee`,
+`data-assignee` = the display name), between the title block and the chevron.
+The context row is the interesting one in practice: that main task is often
+**someone else's**, which is exactly what the row is there to say.
+
+`assigneeMark` is the ONE renderer for this, shared with the plan page's
+ticket card and scope question (see `.claude/docs/plan-page.md`) so the two
+can't drift apart. **Unassigned** (no name at all) is a circle with a
+**question mark** plus the words "Niet toegewezen" — never an empty spot, and
+the SHAPE + the WORD carry it, never a colour (the colourblind rule in
+`.claude/rules/conventions.md`). That circle is `avatarHTML`'s own initials
+fallback, which already yields `?` for an empty name (`initialsOf`), so an
+assigned and an unassigned row line up pixel for pixel. The picture itself is
+a Jira avatar (an Atlassian CDN host, on `avatar_proxy.go`'s allowlist since
+`79aa80f`), so it really loads through `/api/avatar`; the name is Jira's own
+`displayName` and needs no `/api/names` resolution — this is not a GitHub
+login.
+
 **Backend** (`jira_issues.go` + `modules/jira/search.go`): both JQL strings are
 **constants** — no reviewer input ever reaches `acli` — and go through the new
 `jira.Client.Search(ctx, jql, limit)` (`acli jira workitem search --jql … --fields
-key,summary,status,issuetype --limit N --json`, the module's own `cliTimeout`,
-limit clamped). A failing search yields **empty lists plus a
+key,summary,status,issuetype,assignee --limit N --json`, the module's own
+`cliTimeout`, limit clamped). `assignee` comes back as a full user object or as
+a literal `null` for an unassigned issue, so `acliSearchIssue.Assignee` is a
+**pointer** — absent must read as "nobody", never as a person with an empty
+name (`TestParseSearchReadsAssignee`). `Issue()` asks for the same field and
+maps it the same way, which is what feeds the context rows (`readIssues`) and
+the whole plan page. A failing search yields **empty lists plus a
 reason**, never an HTTP error — the sections are then simply absent, and a real
 credential problem is already reported by `GET /api/auth/status`.
 
@@ -1285,6 +1314,55 @@ typing/clearing a search, a background `reloadSnapshot` (60s), or opening/closin
 the recent drawer — with a bare positional `selIndex` the ring would stick to
 "whatever is in that spot". Test:
 `tests/overview-selection-identity.spec.mjs`.
+
+### The selection is REMEMBERED across visits (`localStorage`)
+
+Reviewer request (task 21): coming back to `/pr-overview` — out of a review
+tree, out of a `/plan/<KEY>` page, or after a plain refresh — must put the ring
+back on the row you were standing on, instead of dropping you on an unselected
+list every single time.
+
+- **What is stored is the identity, not a position:** the very `data-nav-key`
+  `selKey` already is (see "Selection identity" above), so a remembered row is
+  found again even if the list reordered, and simply **not found** (no ring)
+  once it left the inbox — the existing `reanchorSelection` release, nothing
+  new. It works for every navigable row kind, `row:`/`recent:`/`jiraissue:`
+  alike, because it is the same one identity string.
+- **Where:** `localStorage` key `overview-sel`, wrapped in `try/catch` (a
+  private window / blocked site data must not break the page). Deliberately
+  **not** the query string and deliberately **not** a workflow: this is a UI
+  preference that has to survive a refresh, exactly like the theme
+  (`src/theme.mjs`) — not a navigation position worth putting in a shareable
+  link (the round trip already has `?pr=`/`?sel=` for that, see
+  `.claude/docs/pages-and-routing.md`), and not domain state, so it never goes
+  near a workflow write (`.claude/rules/workflows-write-boundary.md`).
+- **One writer:** `setSelKey(key)` is now the ONLY place `selKey` is assigned
+  — `move`/`moveTo`/`focusSearch`/`togglePopover`/`trySelectPendingPr`/
+  `selectTopRow` all go through it — so persisting needed no second
+  bookkeeping anywhere. It also drops the pending restore: a choice the
+  reviewer just made always wins over a remembered one. Note what it
+  deliberately does NOT do: `reanchorSelection` releasing a row that is
+  momentarily out of the row set (a typed search query, a closed drawer) only
+  clears `selIndex`, never `selKey` — so the memory keeps that row and the
+  ring comes back the moment it does, this session and the next.
+  `focusSearch` genuinely releases it (`setSelKey(null)`), and that erases the
+  memory too: the next visit then starts clean.
+- **`?pr=` and `?approved=` WIN over the memory.** `pendingRestoreSelKey` is
+  read once at load and left `null` whenever either param is present — those
+  two say "select exactly this" / "select the new top row", and a remembered
+  row must never fight the round trip the reviewer just came through.
+- **The restore is retried on every repaint**, not applied once next to
+  `trySelectPendingPr`: `paintSelection()` adopts the remembered key as soon
+  as a row carrying it is really in the DOM (and only while nothing else is
+  selected). The Planning/Todo rows arrive from their **own later fetch**
+  (`loadJiraIssues`), so a remembered Jira issue row does not exist yet at the
+  moment the GitHub sections land. That is also why `state.jiraPlanning.length`
+  / `state.jiraTodo.length` joined the row-set `watch`'s dep list — a
+  pre-existing gap: those rows are navigable, but their arrival scheduled no
+  repaint at all, so the ring was never re-derived for them.
+
+Test: `tests/overview-selection-memory.spec.mjs` (remembered on return, `?pr=`
+wins, a released selection stays released).
 
 ### The selected-row highlight
 

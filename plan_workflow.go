@@ -36,6 +36,7 @@ import (
 
 	"github.com/reindert-vetter/tembed"
 	"slash/modules/claude"
+	"slash/modules/jira"
 	"slash/modules/langpref"
 )
 
@@ -242,6 +243,13 @@ type planSubtask struct {
 	Key    string `json:"key"`
 	Title  string `json:"title,omitempty"`
 	Status string `json:"status,omitempty"`
+	// Assignee/AssigneeAvatarURL name who owns this subtask, both empty when
+	// nobody does (the page then shows a circle with a question mark, see
+	// .claude/docs/plan-page.md). Jira's own subtasks field carries no
+	// assignee, so planLoadIssue pays for one extra search to learn them —
+	// explicitly accepted by Reindert as worth its ~2-6s.
+	Assignee          string `json:"assignee,omitempty"`
+	AssigneeAvatarURL string `json:"assigneeAvatarUrl,omitempty"`
 }
 
 // PlanHotfixSignal answers the hotfix question of a bug ticket. Hotfix picks
@@ -316,6 +324,12 @@ type planDoc struct {
 	// used for anything else.
 	IssueType string `json:"issueType,omitempty"`
 	AskBase   bool   `json:"askBase,omitempty"`
+	// Assignee/AssigneeAvatarURL name who owns THIS ticket — shown on the
+	// ticket card and in the scope question's "de hoofdtaak zelf" choice, also
+	// when that is the reviewer himself. Empty means unassigned, which the page
+	// spells out (a question-mark circle plus the word), never as a blank.
+	Assignee          string `json:"assignee,omitempty"`
+	AssigneeAvatarURL string `json:"assigneeAvatarUrl,omitempty"`
 	// NeedsHotfix is true while the tracker is parked on the base-branch
 	// question every ticket is asked (the mirror of NeedsScope). DefaultBranch and
 	// HotfixBranch are the two named choices, carried on the document so the
@@ -778,6 +792,49 @@ func (m *TaskManager) StartPlan(key string) (string, error) {
 	return m.engine.StartWorkflowID(planRunID(key), WorkflowPlan, PlanInput{Key: key})
 }
 
+// fillPlanSubtaskAssignees fills the Assignee/AssigneeAvatarURL of every
+// subtask and sibling row IN PLACE, from one extra Jira search over their keys
+// (jira.IssuesByKey). Jira's parent/subtasks link carries no assignee, so
+// there is no cheaper source; the cost — one `acli` call of a few seconds per
+// planLoadIssue — was weighed and accepted, because the scope question is
+// exactly where the reviewer decides based on who owns what.
+//
+// Best-effort by design: a failure (acli hiccup, no client) is logged and
+// leaves the rows as they were, which reads as "unassigned" and is never worse
+// than not showing the question at all. Both lists are handled in ONE call.
+func fillPlanSubtaskAssignees(ctx context.Context, m *TaskManager, key string, lists ...[]planSubtask) {
+	if m == nil || m.jira == nil {
+		return
+	}
+	var keys []string
+	for _, list := range lists {
+		for _, st := range list {
+			if st.Key != "" {
+				keys = append(keys, st.Key)
+			}
+		}
+	}
+	if len(keys) == 0 {
+		return
+	}
+	found, err := m.jira.IssuesByKey(ctx, keys)
+	if err != nil {
+		m.logf("plan: assignees of %s subtasks: %v", key, err)
+		return
+	}
+	byKey := make(map[string]jira.Issue, len(found))
+	for _, is := range found {
+		byKey[is.Key] = is
+	}
+	for _, list := range lists {
+		for i := range list {
+			if is, ok := byKey[list[i].Key]; ok {
+				list[i].Assignee, list[i].AssigneeAvatarURL = is.Assignee, is.AssigneeAvatarURL
+			}
+		}
+	}
+}
+
 // PlanDoc reads the stored document for key (read-only, for GET /api/plan).
 func (m *TaskManager) PlanDoc(ctx context.Context, key string) (planDoc, bool) {
 	var doc planDoc
@@ -848,6 +905,7 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 		}
 		doc.Title, doc.Description, doc.URL = issue.Title, issue.Description, issue.URL
 		doc.IssueType = issue.Type
+		doc.Assignee, doc.AssigneeAvatarURL = issue.Assignee, issue.AssigneeAvatarURL
 		// Only once the ticket really was read: a document that failed to load
 		// has no plan to build either way, and parking it on a branch question
 		// would ask for nothing.
@@ -890,6 +948,15 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 				}
 			}
 		}
+		// The scope question offers the subtasks by name, and the reviewer
+		// wants to see WHO owns each one before picking (Reindert, task 24) —
+		// but Jira's subtasks field carries no assignee at all, so this is one
+		// extra `key in (…)` search over exactly the keys we already have. One
+		// call for both lists, inside this same Activity: adding an Activity of
+		// its own would break the replay of every existing plan-<KEY> Execution
+		// (.claude/rules/workflow-determinism.md). Best-effort — a failure
+		// leaves the rows without an assignee, never sinks the tracker.
+		fillPlanSubtaskAssignees(ctx, m, arg.Key, doc.Subtasks, doc.Siblings)
 		return json.Marshal(doc)
 	})
 	// Activity: everything around the ticket that makes the plan concrete —

@@ -38,7 +38,7 @@ import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 // engine (SSE progress, cancel, checkout), which this page has no PR to hang
 // on. See planChatOverlay below.
 import { claudeChatColumn } from './ClaudeChat.mjs'
-import { avatarHTML } from './avatar.mjs'
+import { assigneeMark, avatarHTML } from './avatar.mjs'
 import { relativeTime } from './relativeTime.mjs'
 // alignRows is the review tree's OWN line aligner, extracted to its own module
 // so this page can reuse the exact same comparison without importing
@@ -1667,6 +1667,10 @@ function ticketCard() {
               : html`<span class="shrink-0 font-mono text-[11px] text-slate-400 dark:text-zinc-500">${state.key}</span>`}
         </div>
       </div>
+      <div class="mt-2 flex shrink-0 items-center gap-1.5" data-testid="plan-assignee-row">
+        <span class="${LABEL}">${t('Toegewezen aan')}</span>
+        ${() => assigneeMark(state.doc.assignee, state.doc.assigneeAvatarUrl, 'h-6 w-6')}
+      </div>
       <div class="contents">
         ${() =>
           state.doc.parentKey
@@ -1942,6 +1946,12 @@ function scopeRow(row) {
   const key = isParent ? state.doc.key || state.key : row.subtask.key
   const title = isParent ? state.doc.title || '' : row.subtask.title || ''
   const status = isParent ? '' : row.subtask.status || ''
+  // Who owns this choice — the whole point of task 24: the reviewer decides
+  // what to plan partly on who is already on it. Shown for the main task as
+  // well as for every subtask, also when that is himself; unassigned reads as
+  // a question-mark circle plus the word (see assigneeMark).
+  const assignee = isParent ? state.doc.assignee || '' : row.subtask.assignee || ''
+  const assigneeAvatar = isParent ? state.doc.assigneeAvatarUrl || '' : row.subtask.assigneeAvatarUrl || ''
   return html`
     <div
       class="${() =>
@@ -1975,6 +1985,7 @@ function scopeRow(row) {
                 : ''}
           </div>
         </div>
+        ${assigneeMark(assignee, assigneeAvatar, 'h-5 w-5')}
         <div class="contents">
           ${() =>
             status
@@ -1994,6 +2005,13 @@ function scopeRow(row) {
 // scopeCard is the whole question — the only thing column 2 shows while it
 // stands, so the rest of the index (questions, tasks, the execute action) is
 // not even built yet.
+//
+// It renders only the SCOPE rows of navRows(): that list also carries the
+// Jira-comments row (COMMENTS_ROW_ID, present whenever this ticket has
+// comments), which has no `subtask` of its own — without the filter scopeRow
+// threw on it on every render, and invisibly so, because LOCAL PATCH 5
+// catches a throwing reactive effect and only console.error's it (see
+// .claude/rules/arrowjs-pitfalls.md).
 function scopeCard() {
   return html`
     <section class="${CARD + CARD_IDLE}" data-testid="plan-scope">
@@ -2008,7 +2026,7 @@ function scopeCard() {
       <p class="mb-2 text-[12px] leading-relaxed text-slate-500 dark:text-zinc-400">
         ${t('Een subtaak opent zijn eigen planpagina. De keuze voor de hoofdtaak is definitief voor dit plan.')}
       </p>
-      <div class="flex flex-col gap-1.5">${() => navRows().map((r) => scopeRow(r))}</div>
+      <div class="flex flex-col gap-1.5">${() => navRows().filter((r) => r.kind === 'scope').map((r) => scopeRow(r))}</div>
     </section>
   `.key('scope-card')
 }

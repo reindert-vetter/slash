@@ -47,6 +47,15 @@ type Issue struct {
 	// `omitempty` keeps every pre-existing payload/fixture byte-identical.
 	Status string `json:"status,omitempty"`
 	Type   string `json:"type,omitempty"`
+	// Assignee/AssigneeAvatarURL name the person this issue is assigned to (the
+	// display name Jira shows plus their 24x24 profile picture), both empty for
+	// an unassigned issue — which the UI renders as a circle with a QUESTION
+	// MARK rather than as a blank spot (see .claude/docs/pr-overview.md and
+	// .claude/docs/plan-page.md). Populated by BOTH Issue() and Search(): the
+	// assignee is shown everywhere an issue is shown, also when it is the
+	// reviewer himself.
+	Assignee          string `json:"assignee,omitempty"`
+	AssigneeAvatarURL string `json:"assigneeAvatarUrl,omitempty"`
 	// ParentKey/ParentTitle name the issue this one hangs under (a Sub-task's
 	// own parent); Subtasks are the children hanging under this one. Both are
 	// only populated by Issue() — Search() does not ask for those fields — and
@@ -90,6 +99,15 @@ type IssueRef struct {
 	Title  string `json:"title"`
 	Status string `json:"status,omitempty"`
 	Type   string `json:"type,omitempty"`
+	// Assignee/AssigneeAvatarURL stay EMPTY here as far as this module's own
+	// parsing goes: Jira's parent/subtasks field carries only
+	// summary/status/priority/issuetype per link, never an assignee (verified
+	// against the live `acli jira workitem view --fields subtasks --json`).
+	// They are filled by a caller that pays for the extra read — one
+	// IssuesByKey search over the subtask keys, see planLoadIssue in
+	// plan_workflow.go.
+	Assignee          string `json:"assignee,omitempty"`
+	AssigneeAvatarURL string `json:"assigneeAvatarUrl,omitempty"`
 }
 
 // Client is the module's behaviour, so callers (workflows, tests) can depend on
@@ -100,6 +118,9 @@ type Client interface {
 	// Search runs a JQL query and returns the matching issues (see search.go).
 	// The JQL is always a caller-side CONSTANT, never reviewer input.
 	Search(ctx context.Context, jql string, limit int) ([]Issue, error)
+	// IssuesByKey reads a known set of issues in one search, for the fields a
+	// parent/subtasks link does not carry — the assignee (see search.go).
+	IssuesByKey(ctx context.Context, keys []string) ([]Issue, error)
 	// Notifications reads the reviewer's own bell feed (see notifications.go).
 	Notifications(ctx context.Context, limit int) ([]Notification, error)
 	// AddComment posts one comment (an ADF document, see BuildCommentADF) on
@@ -144,6 +165,9 @@ type acliIssue struct {
 		IssueType struct {
 			Name string `json:"name"`
 		} `json:"issuetype"`
+		// assignee is null for an unassigned issue, hence the pointer: an
+		// absent one must read as "nobody", not as an empty-named person.
+		Assignee *acliUser `json:"assignee"`
 		// comment is Jira's own paged envelope; asking for the field yields
 		// {"comments":[...]} with each body in ADF, exactly like description.
 		Comment struct {
@@ -152,16 +176,22 @@ type acliIssue struct {
 	} `json:"fields"`
 }
 
+// acliUser is one person as every Jira payload spells them — a comment author,
+// an assignee. The 24x24 avatar is the size this app shows (see avatarHTML in
+// src/avatar.mjs); the host it points at is on the avatar proxy's allowlist
+// (avatar_proxy.go), so it really loads in the browser.
+type acliUser struct {
+	AccountID   string `json:"accountId"`
+	DisplayName string `json:"displayName"`
+	AvatarURLs  struct {
+		Small string `json:"24x24"`
+	} `json:"avatarUrls"`
+}
+
 // acliComment is one entry of the comment field.
 type acliComment struct {
-	ID     string `json:"id"`
-	Author struct {
-		AccountID   string `json:"accountId"`
-		DisplayName string `json:"displayName"`
-		AvatarURLs  struct {
-			Small string `json:"24x24"`
-		} `json:"avatarUrls"`
-	} `json:"author"`
+	ID      string          `json:"id"`
+	Author  acliUser        `json:"author"`
 	Created string          `json:"created"`
 	Body    json.RawMessage `json:"body"`
 }
@@ -217,7 +247,7 @@ func (m *Module) Issue(ctx context.Context, key string) (Issue, error) {
 	ctx, cancel := context.WithTimeout(ctx, cliTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "acli", "jira", "workitem", "view", key,
-		"--fields", "summary,description,parent,subtasks,issuetype,comment", "--json")
+		"--fields", "summary,description,parent,subtasks,issuetype,comment,assignee", "--json")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -243,6 +273,10 @@ func issueFromACLI(key string, parsed acliIssue) Issue {
 		Description: adfText(parsed.Fields.Description),
 		URL:         baseURL + key,
 		Type:        strings.TrimSpace(parsed.Fields.IssueType.Name),
+	}
+	if a := parsed.Fields.Assignee; a != nil {
+		issue.Assignee = strings.TrimSpace(a.DisplayName)
+		issue.AssigneeAvatarURL = strings.TrimSpace(a.AvatarURLs.Small)
 	}
 	if p := parsed.Fields.Parent; p != nil {
 		ref := issueRef(*p)

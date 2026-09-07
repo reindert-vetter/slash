@@ -195,6 +195,52 @@ export function avatarHTML(name, avatarUrl, sizeCls = 'h-6 w-6', extraCls = '') 
   </span>`
 }
 
+// assigneeMark — who a JIRA issue is assigned to: the avatar plus the name,
+// as one inline mark. The single renderer for it, shared by /pr-overview's
+// Planning/Todo rows and /plan/<KEY>'s ticket card + scope question, so those
+// never drift apart (see .claude/docs/pr-overview.md and
+// .claude/docs/plan-page.md).
+//
+// It is shown EVERYWHERE an issue is shown, also when the assignee is the
+// reviewer himself — explicit request: not knowing at a glance who owns a
+// ticket was the whole complaint, and "it is probably me" is not an answer.
+//
+// UNASSIGNED (no name at all) renders as a circle with a QUESTION MARK plus
+// the words "Niet toegewezen" — never an empty spot, and never a colour that
+// carries the meaning on its own (the colourblind rule in
+// .claude/rules/conventions.md): the SHAPE (?) and the WORD do. The circle
+// itself is avatarHTML's own initials fallback, which already yields '?' for
+// an empty name (see initialsOf) — deliberately the same component, so an
+// assigned and an unassigned row line up pixel for pixel.
+//
+// The avatar URL comes from Jira (an Atlassian avatar CDN host, which
+// avatar_proxy.go's allowlist covers), so it really loads through
+// /api/avatar; a name is Jira's own displayName and needs no /api/names
+// resolution — this is not a GitHub login.
+//
+// The avatar slot is a `${() => …}` FUNCTION binding, not a statically
+// interpolated template, and that is load-bearing: a caller inside a
+// reactive slot (the plan page's ticket card, whose doc arrives after the
+// first paint) re-renders this mark with a different person, and arrow.js
+// then PATCHES the existing chunk instead of remounting it — a path that
+// updates a text slot and a function binding, but never re-renders a nested
+// template baked in at construction time (see the chunk-reuse pitfalls in
+// .claude/rules/arrowjs-pitfalls.md). Measured symptom without it: the name
+// text updated to the real assignee while the circle kept showing the `?` of
+// the first, still-empty render.
+export function assigneeMark(name, avatarUrl, sizeCls = 'h-5 w-5') {
+  const who = (name || '').trim()
+  return html`<span
+    class="inline-flex shrink-0 items-center gap-1.5"
+    data-testid="assignee"
+    data-assignee="${who}"
+    title="${who ? who : t('Niet toegewezen')}"
+  >
+    ${() => avatarHTML(who, who ? avatarUrl : '', sizeCls)}
+    <span class="max-w-[8rem] truncate text-[11px] text-slate-500 dark:text-zinc-400">${who ? who : t('Niet toegewezen')}</span>
+  </span>`
+}
+
 // escapeAttr is a minimal HTML-attribute escape for avatarHtmlString below —
 // its output is a plain string spliced into a larger plain-string template
 // (Block.mjs's paneHTML/rowCellHTML), not an arrow.js html`` template, so

@@ -159,6 +159,10 @@ export const EN = {
 
   // ── src/avatar.mjs ──────────────────────────────────────────────────────
   onbekend: 'unknown',
+  'Niet toegewezen': 'Unassigned',
+  // The one plan-page label that sits next to that same mark (src/plan.mjs's
+  // ticket card); the rest of the plan page is not translated yet.
+  'Toegewezen aan': 'Assigned to',
 
   // ── src/testRun.mjs (TEST_RUN_STATE_LABEL, read from home.mjs) ─────────
   bezig: 'running',

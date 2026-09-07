@@ -98,6 +98,11 @@ restore-then-clear pattern):
   hover doesn't immediately override the auto-selection.
 - The `?pr=` param is deliberately **not** cleaned up (no `history.replaceState`)
   — harmless on a refresh, which simply selects the same PR again.
+- **It WINS over the remembered selection.** `/pr-overview` also restores the
+  row you had selected on your last visit from `localStorage` (see "The
+  selection is REMEMBERED across visits" in `.claude/docs/pr-overview.md`);
+  a present `?pr=` (or `?approved=`) disables that restore outright, so the
+  round trip is never fought by a remembered row.
 
 Test: `tests/overview-pr-select.spec.mjs` (in-sections, drawer-only, and the
 silent no-op).
@@ -134,7 +139,9 @@ ik dat het al uit het overzicht is, en selecteer dan de bovenste item".
   discipline as every other programmatic selection.
 - Like `?pr=`, `?approved=` is **not** cleaned up from the URL — harmless on a
   refresh, which simply keeps filtering the same (by then long-gone) PR
-  number.
+  number. And like `?pr=`, it **wins over the remembered selection** — here
+  that matters twice over: the remembered row is very often the one that was
+  just approved and filtered out.
 
 Test: `tests/review-submit-menu.spec.mjs` ("submits, then lands on
 /pr-overview with that PR already gone and the top row selected").

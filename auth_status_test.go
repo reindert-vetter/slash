@@ -74,6 +74,10 @@ func (unreachableFeedJira) Search(context.Context, string, int) ([]jira.Issue, e
 	return nil, nil
 }
 
+func (unreachableFeedJira) IssuesByKey(context.Context, []string) ([]jira.Issue, error) {
+	return nil, nil
+}
+
 func (unreachableFeedJira) VerifyCredentials(context.Context) error { return nil }
 
 func (unreachableFeedJira) AddComment(context.Context, string, json.RawMessage) (string, error) {

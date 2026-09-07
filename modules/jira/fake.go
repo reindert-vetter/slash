@@ -86,6 +86,23 @@ func (f *Fake) Issue(_ context.Context, key string) (Issue, error) {
 	return f.issues[key], nil
 }
 
+// IssuesByKey answers from the same programmed issues SetIssue fills, so a
+// test never has to program a second, key-set-shaped search: an unprogrammed
+// key is simply absent from the result, exactly as a real Jira search would
+// leave out an issue that does not exist.
+func (f *Fake) IssuesByKey(_ context.Context, keys []string) ([]Issue, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []Issue
+	for _, k := range keys {
+		f.Calls = append(f.Calls, k)
+		if is, ok := f.issues[k]; ok {
+			out = append(out, is)
+		}
+	}
+	return out, nil
+}
+
 // SetNotifications programs the list Notifications returns.
 func (f *Fake) SetNotifications(list []Notification) {
 	f.mu.Lock()

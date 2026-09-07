@@ -15,7 +15,7 @@ import { initDebugLog } from './debugLog.mjs'
 import { ensureAutoIngestPref, autoIngestPrefToggleButton } from './autoingestpref.mjs'
 import { ensureAutoWarn, autoWarnToggleButton } from './autowarn.mjs'
 import { settingsButton } from './settingsLink.mjs'
-import { avatarHTML, avatarUrlOf, displayNameOf, ensureMe, ensureNames, fullNameOf, meLogin } from './avatar.mjs'
+import { assigneeMark, avatarHTML, avatarUrlOf, displayNameOf, ensureMe, ensureNames, fullNameOf, meLogin } from './avatar.mjs'
 import { relativeTime } from './relativeTime.mjs'
 import { fetchProblems, problemRunRow, problemLogRow } from './problems.mjs'
 import FailedTasksHost, { initFailedTasksPopup, isFailedTasksOpen, handleFailedTasksKeydown } from './failedTasks.mjs'
@@ -877,7 +877,7 @@ function togglePopover(uid) {
     // (see reanchorSelection/paintSelection below). Hover deliberately does
     // NOT move the ring — see "Rule 4: hover carries no state" in
     // .claude/docs/mouse-navigation.md.
-    selKey = 'row:' + uid
+    setSelKey('row:' + uid)
     paintSelection()
     requestAnimationFrame(() => {
       positionPopover(uid)
@@ -2457,6 +2457,7 @@ function jiraIssueRow(is, kind, child) {
           ${(is.type ? is.type + ' \u2022 ' : '') + (is.status || '')}
         </p>
       </div>
+      ${assigneeMark(is.assignee, is.assigneeAvatarUrl, 'h-6 w-6')}
       ${chevronFilled('h-4 w-4 shrink-0 text-slate-400 dark:text-zinc-600 group-hover:text-slate-600 dark:group-hover:text-zinc-300')}
     </a>
   `.key('jiraissue:' + kind + ':' + is.key)
@@ -2484,6 +2485,7 @@ function jiraContextRow(is, kind) {
           ${(is.type ? is.type + ' \u2022 ' : '') + t('hoofdtaak, alleen ter context')}
         </p>
       </div>
+      ${assigneeMark(is.assignee, is.assigneeAvatarUrl, 'h-6 w-6')}
     </div>
   `.key('jiracontext:' + kind + ':' + is.key)
 }
@@ -2991,6 +2993,57 @@ const approvedPr = (() => {
 })()
 let pendingSelectTop = approvedPr != null
 
+// ── the selection survives leaving the page ───────────────────────────────
+// Reviewer request (task 21): coming back to /pr-overview — from a review
+// tree, from a /plan/<KEY> page, or from a plain refresh — must put the ring
+// back on the row you were standing on, instead of dropping you on an
+// unselected list every time.
+//
+// The store is `localStorage`, deliberately, and neither the query string nor
+// a workflow: this is a UI PREFERENCE that has to survive a refresh, exactly
+// like the theme (src/theme.mjs) — not a navigation position worth putting in
+// a shareable link (the round trip already has `?pr=`/`?sel=` for that, see
+// .claude/docs/pages-and-routing.md), and not domain state, so it never goes
+// near a workflow write (.claude/rules/workflows-write-boundary.md). What is
+// stored is the same stable `data-nav-key` identity `selKey` already is (see
+// "Selection identity" in .claude/docs/pr-overview.md), so a remembered row
+// is found again by identity even if it moved, and simply not found (no ring)
+// once it left the inbox.
+const SEL_STORAGE_KEY = 'overview-sel'
+
+function readStoredSelKey() {
+  try {
+    return localStorage.getItem(SEL_STORAGE_KEY) || null
+  } catch (e) {
+    // A private window / blocked site data must not break the page.
+    return null
+  }
+}
+
+function storeSelKey(key) {
+  try {
+    if (key) localStorage.setItem(SEL_STORAGE_KEY, key)
+    else localStorage.removeItem(SEL_STORAGE_KEY)
+  } catch (e) {
+    // ignore
+  }
+}
+
+// pendingRestoreSelKey — the row identity remembered from the LAST visit
+// (stored by setSelKey below), waiting to be adopted as soon as its row is
+// really in the DOM. Read once here, at load, before any paint.
+//
+// An explicit `?pr=` or `?approved=` in the URL WINS over the memory and
+// leaves this null: those two say "select exactly this" / "select the top
+// one", and a remembered row must never fight the round trip the reviewer
+// just came through (.claude/docs/pages-and-routing.md).
+//
+// Adopting it is deliberately RETRIED on every repaint instead of applied
+// once next to trySelectPendingPr: the Planning/Todo rows arrive from their
+// own later fetch (loadJiraIssues), so a remembered Jira issue row simply
+// does not exist yet at the moment the GitHub sections land.
+let pendingRestoreSelKey = pendingSelectPr == null && approvedPr == null ? readStoredSelKey() : null
+
 function trySelectTopAfterApprove() {
   if (!pendingSelectTop) return
   if (!selectTopRow()) return
@@ -3006,7 +3059,7 @@ function trySelectTopAfterApprove() {
 function selectTopRow() {
   const firstRow = state.sections.flatMap((s) => s.prs)[0]
   if (!firstRow) return false
-  selKey = 'row:' + prUid(firstRow)
+  setSelKey('row:' + prUid(firstRow))
   return true
 }
 
@@ -3102,7 +3155,7 @@ async function trySelectPendingPr() {
   let match = null
   state.sections.forEach((sec) => sec.prs.forEach((row) => (match = match || (matchesPrRef(row, uid) ? row : null))))
   if (match) {
-    selKey = 'row:' + prUid(match)
+    setSelKey('row:' + prUid(match))
     pendingSelectPr = null
     return
   }
@@ -3119,7 +3172,7 @@ async function trySelectPendingPr() {
   const recentMatch = recent.find((r) => matchesPrRef({ repo: r.repo, number: r.pr }, uid))
   if (recentMatch) {
     state.recentOpen = true
-    selKey = 'recent:' + recentUid(recentMatch)
+    setSelKey('recent:' + recentUid(recentMatch))
   }
 }
 
@@ -3271,10 +3324,28 @@ async function runSearch(q) {
 // selKey at all, so that whole gate (the coordinate-delta mousemove
 // listener, the scheduleRepaint/move/moveTo disarming) was removed as dead
 // code along with it. A click still claims the ring exactly as before
-// (`togglePopover` sets `selKey` directly, see below) — that is the
+// (`togglePopover` claims it via setSelKey, see below) — that is the
 // click-is-the-Enter-equivalent path, not hover.
 let selIndex = -1
 let selKey = null
+
+// setSelKey is the ONE writer of selKey, so remembering it needs no second
+// bookkeeping anywhere: every place that claims or releases the selection (a
+// keyboard step, a click opening a popover, focusing the search box, the
+// ?pr=/?approved= restores) goes through here. It also drops the pending
+// restore (pendingRestoreSelKey, above) — the reviewer has now made their own
+// choice, which always wins over a remembered one.
+//
+// Note what it deliberately does NOT do: reanchorSelection releasing a row
+// that is momentarily out of the row set (a typed search query, a closed
+// drawer) only clears selIndex, never selKey — so the memory keeps the row
+// and the ring comes back the moment it does, in the same session and in the
+// next one.
+function setSelKey(key) {
+  selKey = key
+  pendingRestoreSelKey = null
+  storeSelKey(key)
+}
 
 // ── popover keyboard navigation ─────────────────────────────────────────
 // While a popover is open it owns ↑/↓ (and Enter/Escape) outright — the row
@@ -3391,6 +3462,14 @@ const SELECT_RING_CLS = ['ring-1', 'ring-indigo-500/50', 'rounded-lg', 'z-10', '
 
 function paintSelection() {
   const rows = currentRows()
+  // Adopt the remembered selection the first time its row is actually there
+  // (see pendingRestoreSelKey). Only while nothing is selected, so it can
+  // never take the ring away from a row the reviewer already picked; and only
+  // when the row exists, so it keeps waiting for a list that is still loading
+  // instead of being spent on a miss.
+  if (selKey == null && pendingRestoreSelKey != null && rows.some((el) => el.dataset.navKey === pendingRestoreSelKey)) {
+    setSelKey(pendingRestoreSelKey)
+  }
   reanchorSelection(rows)
   rows.forEach((el, i) => {
     el.dataset.navIndex = String(i)
@@ -3417,7 +3496,7 @@ function move(delta) {
   if (!rows.length) return
   const base = selIndex < 0 ? (delta > 0 ? -1 : 0) : selIndex
   selIndex = Math.max(0, Math.min(rows.length - 1, base + delta))
-  selKey = rows[selIndex] ? rows[selIndex].dataset.navKey || null : null
+  setSelKey(rows[selIndex] ? rows[selIndex].dataset.navKey || null : null)
   paintSelection()
 }
 
@@ -3425,7 +3504,7 @@ function moveTo(idx) {
   const rows = currentRows()
   if (!rows.length) return
   selIndex = Math.max(0, Math.min(rows.length - 1, idx))
-  selKey = rows[selIndex] ? rows[selIndex].dataset.navKey || null : null
+  setSelKey(rows[selIndex] ? rows[selIndex].dataset.navKey || null : null)
   paintSelection()
 }
 
@@ -3435,7 +3514,7 @@ function moveTo(idx) {
 function focusSearch() {
   const el = document.querySelector('[data-testid="search"]')
   if (el) el.focus()
-  selKey = null
+  setSelKey(null)
   selIndex = -1
   paintSelection()
 }
@@ -3869,6 +3948,13 @@ watch(
       // and the unread filter change how many there are.
       state.jira.length,
       state.jiraUnreadOnly,
+      // Same for the Planning/Todo issue rows, which come from their own
+      // later fetch (loadJiraIssues) — without these two the ring was never
+      // re-derived when they landed, so a remembered issue row could not be
+      // adopted (see pendingRestoreSelKey) and a reshuffled list kept the
+      // ring wherever it was.
+      state.jiraPlanning.length,
+      state.jiraTodo.length,
     ]),
   () => scheduleRepaint(),
 )

@@ -36,6 +36,9 @@ type acliSearchIssue struct {
 		IssueType struct {
 			Name string `json:"name"`
 		} `json:"issuetype"`
+		// assignee is null for an unassigned issue (verified live), so it is a
+		// pointer: absent must read as "nobody", never as an empty-named person.
+		Assignee *acliUser `json:"assignee"`
 	} `json:"fields"`
 }
 
@@ -60,7 +63,7 @@ func (m *Module) Search(ctx context.Context, jql string, limit int) ([]Issue, er
 	ctx, cancel := context.WithTimeout(ctx, cliTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "acli", "jira", "workitem", "search",
-		"--jql", jql, "--fields", "key,summary,status,issuetype",
+		"--jql", jql, "--fields", "key,summary,status,issuetype,assignee",
 		"--limit", strconv.Itoa(limit), "--json")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -90,13 +93,54 @@ func parseSearch(out []byte) ([]Issue, error) {
 		if p.Key == "" {
 			continue
 		}
-		issues = append(issues, Issue{
+		is := Issue{
 			Key:    p.Key,
 			Title:  p.Fields.Summary,
 			Status: p.Fields.Status.Name,
 			Type:   p.Fields.IssueType.Name,
 			URL:    baseURL + p.Key,
-		})
+		}
+		if a := p.Fields.Assignee; a != nil {
+			is.Assignee = strings.TrimSpace(a.DisplayName)
+			is.AssigneeAvatarURL = strings.TrimSpace(a.AvatarURLs.Small)
+		}
+		issues = append(issues, is)
 	}
 	return issues, nil
+}
+
+// issuesByKeyMax bounds one IssuesByKey lookup. A `key in (…)` search is one
+// acli call whatever its length, but the JQL still has to stay a sane size, and
+// no caller has more subtasks than this to enrich.
+const issuesByKeyMax = 50
+
+// IssuesByKey reads a known SET of issues in one search — the cheap way to
+// learn something Jira does not include in a parent/subtasks link, today the
+// ASSIGNEE (see IssueRef). Only issues that really exist come back, in Jira's
+// own order, so a caller matches them up by Key rather than by position.
+//
+// The JQL is built here rather than by the caller precisely because it is the
+// one query in this module that is not a constant: every key is validated
+// against keyPattern first (the same gate Issue() uses), so nothing but
+// `PROJ-123` shapes can ever reach the argv entry — an invalid key is skipped,
+// never passed on. Zero usable keys is not an error: it yields no issues and
+// makes no call at all.
+func (m *Module) IssuesByKey(ctx context.Context, keys []string) ([]Issue, error) {
+	var safe []string
+	seen := map[string]bool{}
+	for _, k := range keys {
+		k = strings.TrimSpace(k)
+		if k == "" || seen[k] || !keyPattern.MatchString(k) {
+			continue
+		}
+		seen[k] = true
+		safe = append(safe, k)
+		if len(safe) == issuesByKeyMax {
+			break
+		}
+	}
+	if len(safe) == 0 {
+		return nil, nil
+	}
+	return m.Search(ctx, "key in ("+strings.Join(safe, ",")+")", len(safe))
 }

@@ -317,6 +317,40 @@ them. Both sides land on the document (`parentKey`/`parentTitle`/
   rows while `needsScope()` holds, so the questions, the task list and the
   execute action are not built at all — literally "voordat je de rest laat
   zien" — and `↑`/`↓`/`Enter` walk them like any other row.
+- **Every choice names its ASSIGNEE** (task 24, reviewer request: show the
+  assignee "overal", "ook bij eigen tickets"): `scopeRow` renders
+  `assigneeMark(assignee, assigneeAvatar, 'h-5 w-5')` (`src/avatar.mjs`,
+  shared with `/pr-overview`'s issue rows — see
+  "Every issue row names its ASSIGNEE" in `.claude/docs/pr-overview.md`) for
+  the main-task choice as well as for every subtask, since deciding what to
+  plan partly means seeing who is already on it. Unassigned is a circle with a
+  **question mark** plus the words "Niet toegewezen" — shape + word, never
+  colour (the colourblind rule).
+  **Where the subtask assignees come from:** Jira's own `subtasks` field
+  carries only summary/status/priority/issuetype per link, **never an
+  assignee** (verified against the live payload), so `planLoadIssue` pays for
+  **one** extra read — `jira.IssuesByKey(ctx, keys)`, a single `key in (…)`
+  search over the subtask + sibling keys it already has
+  (`fillPlanSubtaskAssignees`). Every key passes the same `keyPattern` gate
+  `Issue()` uses before it reaches the argv entry: this is the one non-constant
+  JQL in `modules/jira`, and that validation is what keeps it safe
+  (`TestIssuesByKeyRejectsUnusableKeys`). The ~2-6s it costs was weighed and
+  accepted. It runs INSIDE the existing `planLoadIssue` Activity, never as a
+  new Activity of its own — `plan-<KEY>` is a deterministic Run ID and an
+  extra Activity in the workflow body would wedge the replay of every existing
+  Execution (`.claude/rules/workflow-determinism.md`).
+- **The ticket card names it too** (`data-testid=plan-assignee-row`,
+  "Toegewezen aan" + the same mark), fed by the document's own
+  `assignee`/`assigneeAvatarUrl` — which `Issue()` now reads for every issue,
+  so it needs no extra call. Deliberately NOT on the `plan-parent-link` chip:
+  the reviewer explicitly left that one out of scope.
+- **`scopeCard` renders only the SCOPE rows of `navRows()`.** That list also
+  carries the Jira-comments row (`COMMENTS_ROW_ID`, present whenever the
+  ticket has comments), which has no `subtask` of its own — before this filter
+  `scopeRow` threw on it on every single render, and invisibly, because LOCAL
+  PATCH 5 catches a throwing reactive effect and only `console.error`s it (see
+  `.claude/rules/arrowjs-pitfalls.md`). Found while verifying task 24 against
+  a real ticket, fixed in the same change.
 - **Picking a subtask sends no Signal at all**: it is plain navigation to
   `/plan/<SUBKEY>`, which has its own tracker. Only "the main task" is
   signalled, which releases this tracker into its first generation.
@@ -815,6 +849,13 @@ and the block nesting is arbitrarily deep. `Save` is called only from the
 
 ## Accepted gaps (deliberate, don't "fix" by accident)
 
+- **An existing plan document has no assignee until it is regenerated.** The
+  assignee fields land on the document from `planLoadIssue`, whose result is
+  already RECORDED in the history of every Execution that ran before them, so
+  a replay hands back the old document — the ticket card and the scope
+  question then show "Niet toegewezen" for a ticket that does have an
+  assignee. The same accepted gap every earlier plan-document field has (it is
+  now the fifth); the fix is a fresh plan for that ticket, not a migration.
 - **A plan execution has no per-task live progress** — only the run's own
   status (via the "Taken" card and the `exec` field) and, at the end, the draft
   PR or a short note. Deliberately no `test_run`-style marker/progress
