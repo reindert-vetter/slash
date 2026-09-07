@@ -41,9 +41,13 @@ function goBack() {
 const state = reactive({
   loading: true,
   activeRow: 0, // index into ROWS
-  editing: null, // null | 'aliases' | 'praisewords' — which row owns a focused text input
+  editing: null, // null | 'aliases' | 'praisewords' | 'notifyfilters' — which row owns a focused text input
   aliases: [],
   praiseWords: [],
+  // The reviewer's own Jira-notification noise filter (GET /api/notifyfilters,
+  // notifyfilters.go). A list he adds to himself; an EMPTY list is a real
+  // state here ("hide nothing"), unlike praiseWords.
+  notifyFilters: [],
   appSettingsRunId: '',
   checkoutLoading: originPr != null,
   checkout: null, // the batch-fetched checkoutView for originPr, or null
@@ -95,6 +99,7 @@ const ROWS = [
   'checkout',
   'aliases',
   'praisewords',
+  'notifyfilters',
 ]
 
 // ── data loading ─────────────────────────────────────────────────────────
@@ -122,6 +127,18 @@ async function loadAliases() {
     }
   } catch (err) {
     console.error('settings load failed:', err)
+  }
+}
+
+async function loadNotifyFilters() {
+  try {
+    const res = await fetch('/api/notifyfilters')
+    if (res.ok) {
+      const data = await res.json()
+      state.notifyFilters = data.filters || []
+    }
+  } catch (err) {
+    console.error('notifyfilters load failed:', err)
   }
 }
 
@@ -160,7 +177,13 @@ async function refreshDebugCount() {
 async function init() {
   await ensureMe()
   state.githubLogin = meLogin()
-  await Promise.all([loadAliases(), loadPraiseWords(), loadCheckout(), refreshDebugCount()])
+  await Promise.all([
+    loadAliases(),
+    loadPraiseWords(),
+    loadNotifyFilters(),
+    loadCheckout(),
+    refreshDebugCount(),
+  ])
   state.loading = false
 }
 
@@ -209,6 +232,25 @@ async function savePraiseWords(next) {
   }
 }
 
+// saveNotifyFilters mirrors savePraiseWords, on the same app_settings tracker
+// with its own Kind. An empty list is deliberately allowed all the way through
+// (the handler accepts it, notify-filters.json stores it) — that is the
+// reviewer saying "show me every notification again".
+async function saveNotifyFilters(next) {
+  state.notifyFilters = next
+  const runId = await ensureAppSettingsRun()
+  if (!runId) return
+  try {
+    await fetch('/api/workflows/' + encodeURIComponent(runId) + '/signals/app_settings_update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'notifyFilters', notifyFilters: next }),
+    })
+  } catch (err) {
+    console.error('save notify filters failed:', err)
+  }
+}
+
 // addAlias/addPraiseWord read the input's DOM value directly and clear it
 // imperatively (`el.value = ''`) rather than a reactive `.value="${...}"`
 // binding — deliberately, the same uncontrolled-input shape
@@ -242,6 +284,19 @@ function addPraiseWord(inputEl) {
 function removePraiseWord(idx) {
   if (state.praiseWords.length <= 1) return
   savePraiseWords(state.praiseWords.filter((_, i) => i !== idx))
+}
+
+function addNotifyFilter(inputEl) {
+  const v = (inputEl.value || '').trim()
+  inputEl.value = ''
+  if (!v) return
+  saveNotifyFilters([...state.notifyFilters, v])
+}
+
+// Unlike removePraiseWord there is no "at least one" floor: removing the last
+// filter text is a legitimate, supported state (see notifyfilters.go).
+function removeNotifyFilter(idx) {
+  saveNotifyFilters(state.notifyFilters.filter((_, i) => i !== idx))
 }
 
 // ── keyboard: ↑/↓ over the row list, Enter/Space runs that row's primary
@@ -287,6 +342,9 @@ function activateRow(row) {
   } else if (row === 'praisewords') {
     state.editing = 'praisewords'
     requestAnimationFrame(() => focusRowInput('praisewords'))
+  } else if (row === 'notifyfilters') {
+    state.editing = 'notifyfilters'
+    requestAnimationFrame(() => focusRowInput('notifyfilters'))
   }
   // 'checkout' is read-only on this page (see checkoutRow) — no action, and
   // neither is 'langcommit': code/commits are always English by rule, so that
@@ -666,6 +724,40 @@ function praiseWordsRow() {
   </div>`
 }
 
+// The Jira-notification noise filter — a list the reviewer adds to himself,
+// same chips+input shape as praiseWordsRow. Its own remove button is never
+// disabled: an empty list means "hide nothing".
+function notifyFiltersRow() {
+  return html`<div
+    data-testid="settings-row-notifyfilters"
+    class="${() => rowCls('notifyfilters')}"
+    @click="${() => (state.activeRow = ROWS.indexOf('notifyfilters'))}"
+  >
+    ${rowLabel(
+      t('Jira-notificaties verbergen'),
+      t(
+        'Notificaties waarvan de titel een van deze teksten bevat, verdwijnen uit het belletje en tellen niet mee als ongelezen. Zonder teksten wordt niets verborgen.',
+      ),
+    )}
+    <div class="mb-2 flex flex-wrap gap-1.5" data-testid="settings-notifyfilters-chips">
+      ${() => state.notifyFilters.map((f, i) => chip(f, () => removeNotifyFilter(i), false))}
+    </div>
+    <input
+      type="text"
+      data-testid="settings-notifyfilters-input"
+      placeholder="${t('Tekst toevoegen, bv. assigned a work item to you…')}"
+      class="w-full rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-2.5 py-1.5 text-[13px] text-slate-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-indigo-300 dark:focus:ring-indigo-500/40"
+      @keydown="${(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          addNotifyFilter(e.target)
+        }
+      }}"
+      @focus="${() => (state.editing = 'notifyfilters')}"
+    />
+  </div>`
+}
+
 function App() {
   return html`
     <div class="flex h-screen flex-col overflow-hidden">
@@ -704,7 +796,7 @@ function App() {
           )}
           ${langCommitRow()} ${autoWarnRow()} ${autoIngestPrefRow()} ${debugRow()} ${authRow()} ${checkoutRow()}
           ${aliasesRow()}
-          ${praiseWordsRow()}
+          ${praiseWordsRow()} ${notifyFiltersRow()}
         </div>
         <p class="mx-auto mt-4 max-w-xl text-[12px] text-slate-400 dark:text-zinc-500">
           ${t('↑/↓ om te navigeren, Enter/Space om te wisselen of te bewerken, ← om terug te gaan.')}

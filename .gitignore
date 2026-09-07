@@ -40,6 +40,9 @@ data/settings.json
 # Per-reviewer praise-word list (praisewords.go) — personal vocabulary, never
 # committed, same reasoning as settings.json above.
 data/praise-words.json
+# Per-reviewer Jira-notification filter list (notifyfilters.go) — his own noise
+# filter, never committed, same reasoning as settings.json above.
+data/notify-filters.json
 # Per-reviewer debug-mode recording (debug_log.go) — one reviewer's own
 # navigation/click history, only exists while Debug mode is on, same reasoning
 # as the two files above.

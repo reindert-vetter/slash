@@ -174,6 +174,43 @@ the ONLY place this feed is shown) moved into the bell's own dropdown.
     `TestMarkUnreadSurvivesTheNextRefresh` /
     `TestMarkAllReadClearsAForcedUnreadRow`
     (`modules/jiranotify/jiranotify_test.go`).
+- **A noise filter the reviewer manages himself** (Reindert: "filter
+  notificaties weg met: assigned a work item to you. en assigned a story to
+  you", then "maak daar een instelling van in de instellingen pagina", "met
+  een list die je kan aanvullen"). The list of texts lives on `/settings`
+  ("Jira-notificaties verbergen", see `.claude/docs/settings-page.md`) and is
+  stored in `notify-filters.json` via the `app_settings` tracker; the two
+  texts he named are the built-in DEFAULT list, so the bell is quiet out of
+  the box, but they are ordinary removable entries and not hardcoded
+  behaviour.
+  - **It is applied at READ time**, in `handleJiraNotifications`
+    (`tasks_api.go`) via `notificationFilteredOut` (`notifyfilters.go`), and
+    deliberately NOT in the `jira_inbox` tracker's own refresh: the
+    read-model keeps every notification, so REMOVING a filter text brings its
+    rows straight back on the very next poll — a tracker-side drop would be
+    unrecoverable. Verified live: removing "assigned a story to you" made
+    STAT-1027 reappear, re-adding it hid it again.
+  - **The whole bell derives from that one filtered array**, which is exactly
+    why this is the right place: `visibleJiraNotifications`, `jiraUnreadCount`
+    and the bell's own unread dot all read `state.jira`, so a hidden
+    notification can never keep counting silently in "N ongelezen". "Alles
+    gelezen maken" still signals `read_all`, which marks every STORED row
+    read (hidden ones included), so nothing can stay unread-but-invisible
+    behind the filter either.
+  - **Matching is plain and explainable**: case-insensitive "contains"
+    against the notification's own title line ("Robin Landweer assigned a
+    work item to you"), so one text covers every actor's variant. No regex or
+    glob — the reviewer types notification text, not a pattern language — and
+    deliberately the title only, never the issue summary or comment preview
+    (hiding a notification because the TICKET it points at contains a phrase
+    would be surprising).
+  - **The panel says how many rows it is holding back**, in words:
+    `jiraHiddenNote` (`data-testid=jira-hidden-note`) renders "N verborgen
+    door je filter" under the header while `hidden > 0` (the count comes from
+    the same response). A word plus a number, never colour alone, and it
+    keeps rows from just silently disappearing. One always-present element
+    with a precomputed whole-value class, per
+    `.claude/rules/arrowjs-pitfalls.md`.
 - **The dropdown is its own small state machine**, deliberately NOT folded
   into the row-popover mechanism (`ui.openPopover`, which also resets
   unrelated row-popover state on close): `state.jiraBellOpen`, closed by an

@@ -697,9 +697,14 @@ type AppSettingsInput struct{}
 // ReactionSignal.Action/PRStateSignal, because a workflow can only WaitSignal
 // on one name at a time.
 type AppSettingsSignal struct {
-	Kind        string   `json:"kind"` // "aliases" | "praiseWords" | "jiraCreds"
+	Kind        string   `json:"kind"` // "aliases" | "praiseWords" | "notifyFilters" | "jiraCreds"
 	Aliases     []string `json:"aliases,omitempty"`
 	PraiseWords []string `json:"praiseWords,omitempty"`
+	// NotifyFilters carries the Jira-notification noise filter of the settings
+	// page (Kind "notifyFilters") — the texts whose notifications the bell on
+	// /pr-overview hides. An EMPTY list is a real value here ("show me
+	// everything again"), unlike PraiseWords; see notifyfilters.go.
+	NotifyFilters []string `json:"notifyFilters,omitempty"`
 	// JiraCreds carries the Atlassian notification-feed credentials of the
 	// settings page's auth row (Kind "jiraCreds"). They land in the gitignored
 	// .env, NOT in settings.json — that file is served verbatim to the browser
@@ -2519,6 +2524,18 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			return nil, err
 		}
 		_, err := savePraiseWordsFile(m.appDataDirOrDefault(), words)
+		return nil, err
+	})
+
+	// Activity: persist the settings page's Jira-notification filter edit into
+	// notify-filters.json (write, workflow-driven) — saveNotifyFiltersFile
+	// (notifyfilters.go) is the only writer of that file.
+	engine.RegisterActivity("saveNotifyFilters", func(ctx context.Context, in []byte) ([]byte, error) {
+		var filters []string
+		if err := json.Unmarshal(in, &filters); err != nil {
+			return nil, err
+		}
+		_, err := saveNotifyFiltersFile(m.appDataDirOrDefault(), filters)
 		return nil, err
 	})
 
@@ -4452,7 +4469,7 @@ func langPrefWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 }
 
 // appSettingsWorkflow persists the settings-page edits — the mention-alias
-// list and the praise-word list — for the whole process (see
+// list, the praise-word list and the Jira-notification filter list — for the whole process (see
 // AppSettingsInput: there is no per-repo/per-PR scope here). Deterministic:
 // the only side effect is the ONE Activity each Signal's Kind selects, so the
 // number and order of Activities is exactly the order Signals arrived in. It
@@ -4470,6 +4487,16 @@ func appSettingsWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		case "praiseWords":
 			if err := w.ExecuteActivity("savePraiseWords", sig.PraiseWords, nil); err != nil {
 				return nil, fmt.Errorf("save praise words: %w", err)
+			}
+		case "notifyFilters":
+			// An empty list must reach the Activity as an empty JSON array, not
+			// null: it is a real value ("filter nothing"), see notifyfilters.go.
+			filters := sig.NotifyFilters
+			if filters == nil {
+				filters = []string{}
+			}
+			if err := w.ExecuteActivity("saveNotifyFilters", filters, nil); err != nil {
+				return nil, fmt.Errorf("save notify filters: %w", err)
 			}
 		case "jiraCreds":
 			if err := w.ExecuteActivity("saveJiraCredentials", sig.JiraCreds, nil); err != nil {

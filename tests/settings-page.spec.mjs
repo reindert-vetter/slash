@@ -155,3 +155,55 @@ test.describe('settings page — praise words (write path)', () => {
     await expect(removeButtons.first()).toBeDisabled()
   })
 })
+
+test.describe('settings page — Jira notification filters (write path)', () => {
+  test('a filter text can be added and removed again, and it really reaches the read model', async ({
+    page,
+  }) => {
+    await page.goto('/settings')
+
+    const chips = page.getByTestId('settings-notifyfilters-chips')
+    // The two texts the reviewer named are the built-in default list.
+    await expect(chips).toContainText('assigned a work item to you')
+
+    const input = page.getByTestId('settings-notifyfilters-input')
+    await input.click()
+    await input.fill('e2e-filter-text')
+    await input.press('Enter')
+    await expect(chips).toContainText('e2e-filter-text')
+
+    // Same fire-and-forget write as the alias/praise-word rows: wait for it to
+    // land server-side before reloading, or the reload races it away.
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          fetch('/api/notifyfilters')
+            .then((r) => r.json())
+            .then((d) => d.filters),
+        ),
+      )
+      .toContain('e2e-filter-text')
+    await page.reload()
+    await expect(page.getByTestId('settings-notifyfilters-chips')).toContainText('e2e-filter-text')
+
+    // Removing it is a supported state right down to an empty list (unlike a
+    // praise word) — here we only take the one text back off again, so the run
+    // leaves no residue.
+    await page
+      .getByTestId('settings-notifyfilters-chips')
+      .locator('span', { hasText: 'e2e-filter-text' })
+      .locator('button')
+      .click()
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          fetch('/api/notifyfilters')
+            .then((r) => r.json())
+            .then((d) => d.filters),
+        ),
+      )
+      .not.toContain('e2e-filter-text')
+    await page.reload()
+    await expect(page.getByTestId('settings-notifyfilters-chips')).not.toContainText('e2e-filter-text')
+  })
+})

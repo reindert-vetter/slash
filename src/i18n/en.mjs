@@ -711,6 +711,12 @@ export const EN = {
   'Woorden die de review-samenvatting niet als open punt telt (bv. "nice", "top").':
     'Words the review summary does not count as an open point (e.g. "nice", "top").',
   'Woord toevoegen…': 'Add a word…',
+  'Jira-notificaties verbergen': 'Hide Jira notifications',
+  'Notificaties waarvan de titel een van deze teksten bevat, verdwijnen uit het belletje en tellen niet mee als ongelezen. Zonder teksten wordt niets verborgen.':
+    'Notifications whose title contains one of these texts disappear from the bell and no longer count as unread. With no texts, nothing is hidden.',
+  'Tekst toevoegen, bv. assigned a work item to you…':
+    'Add a text, e.g. assigned a work item to you…',
+  '{n} verborgen door je filter': '{n} hidden by your filter',
   'Minstens één woord vereist': 'At least one word is required',
   Verwijderen: 'Remove',
   '↑/↓ om te navigeren, Enter/Space om te wisselen of te bewerken, ← om terug te gaan.':

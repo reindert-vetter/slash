@@ -51,6 +51,8 @@ const state = reactive({
   // it used to also pin an always-visible section above the PR list, removed
   // per reviewer request once the bell existed ("haal deze sectie weg").
   jira: [],
+  // Notifications the reviewer's filter list hid from the response above.
+  jiraHidden: 0,
   jiraUnreadOnly: true, // mirrors Jira's own "Only show unread" toggle, on by default
   jiraRunId: '', // jira_inbox Run ID — target for the "read" signal
   // jiraBellOpen — whether the header bell's own dropdown is open, badge-dotted
@@ -2031,6 +2033,12 @@ async function loadJiraNotifications() {
     if (!body || !body.ok) return
     state.jiraRunId = body.runId || ''
     state.jira = Array.isArray(body.items) ? body.items : []
+    // How many notifications the reviewer's own filter list is holding back
+    // (settings page → "Jira-notificaties verbergen", notifyfilters.go). The
+    // filtering itself happens server-side, at read time, so `items` above is
+    // already the visible set — this is only there to SAY so, in words, rather
+    // than leaving rows to vanish unexplained.
+    state.jiraHidden = Number(body.hidden) || 0
   } catch (err) {
     // Keep whatever we already showed — a transient failure must never blank
     // the list (same reasoning as loadRunningCount).
@@ -2368,6 +2376,7 @@ function jiraBellPanel() {
         ${jiraUnreadToggle()}
         ${jiraMarkAllReadButton()}
       </div>
+      ${jiraHiddenNote()}
       <div class="max-h-96 overflow-y-auto">
         ${() =>
           rows.length
@@ -2378,6 +2387,22 @@ function jiraBellPanel() {
       </div>
     </div>
   `.key('jira-bell:' + (state.jiraUnreadOnly ? 'unread' : 'all') + ':' + rows.map((n) => n.id + (n.unread ? '!' : '')).join(','))
+}
+
+// jiraHiddenNote says IN WORDS how many notifications the reviewer's own
+// filter list is hiding right now, so rows never just silently disappear (the
+// colourblind rule's "a word or a number, never colour alone", applied to an
+// absence). One always-present element with a precomputed whole-value class —
+// never a template↔'' toggle, per .claude/rules/arrowjs-pitfalls.md.
+function jiraHiddenNote() {
+  return html`<div
+    data-testid="jira-hidden-note"
+    class="${() =>
+      'border-b border-slate-100 px-3 py-1.5 text-[11px] text-slate-500 dark:border-zinc-800 dark:text-zinc-500 ' +
+      (state.jiraHidden ? 'block' : 'hidden')}"
+  >
+    ${() => (state.jiraHidden ? t('{n} verborgen door je filter', { n: state.jiraHidden }) : '')}
+  </div>`
 }
 
 // jiraBellButton — the header icon, same compact size/style as

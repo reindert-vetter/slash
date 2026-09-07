@@ -56,7 +56,7 @@ module `const`s (mirrors `originPr`/`originSel` in `overview.mjs`):
 
 `src/settings.mjs`'s `ROWS = ['theme', 'keyboardhints', 'langui', 'langexplain',
 'langreply', 'langcommit', 'autowarn', 'autoingestpref', 'debug', 'auth', 'checkout',
-'aliases', 'praisewords']` is simultaneously the `↑`/`↓` nav order and the DOM render
+'aliases', 'praisewords', 'notifyfilters']` is simultaneously the `↑`/`↓` nav order and the DOM render
 order, kept as one array so the two can never drift apart. A platt
 `window.addEventListener('keydown', …)` (one flat listener, not the
 `/pr/<id>` nav chain's `Cmd+[`/`Cmd+]` remap — this page has no per-stop
@@ -99,6 +99,7 @@ granularity to remap onto):
 | Wie ben ik — GitHub-login | `GET /api/me` (`avatar.mjs`'s `ensureMe`/`meLogin`) | — | No, by explicit reviewer decision: "wie ben ik moet uit GitHub komen" |
 | Wie ben ik — extra @mention-aliassen | `GET /api/settings` (`me.aliases`) | new `app_settings` tracker, Kind `"aliases"` (see below) | Yes — new |
 | Praise-woorden | `GET /api/praisewords` | new `app_settings` tracker, Kind `"praiseWords"` (see below) | Yes — new |
+| Jira-notificaties verbergen (`settings-row-notifyfilters`) | `GET /api/notifyfilters` (`notifyfilters.go`) | `app_settings` tracker, Kind `"notifyFilters"` → `notify-filters.json` (see below) | Yes — a list of texts he adds to himself |
 
 ### Werkmap: read-only here, by design
 
@@ -262,6 +263,30 @@ their own doc comments in `workflows.go`). Each `Kind` runs its own Activity:
   handler validates first (an e-mail is required; a token is required unless
   one is already stored). Tests: `env_save_test.go`.
 
+- **`saveNotifyFilters`** (Activity, Kind `"notifyFilters"`) →
+  `saveNotifyFiltersFile(dataDir, filters)` (`notifyfilters.go`, that file's
+  only writer): the reviewer's own Jira-notification noise filter — the texts
+  whose notifications the header bell on `/pr-overview` hides ("filter
+  notificaties weg met: assigned a work item to you. en assigned a story to
+  you" → "maak daar een instelling van in de instellingen pagina" → "met een
+  list die je kan aanvullen"). Same shape as `savePraiseWords` down to the
+  atomic write and the cache update in the same locked section, with ONE
+  deliberate difference: an **empty list is a real, preserved value** here,
+  both in the HTTP handler (which accepts it, where `"praiseWords"` rejects
+  it) and on disk (only a MISSING/unparsable file falls back to the built-in
+  defaults, where `savePraiseWordsFile` also falls back on an empty one).
+  Removing the last filter text means "show me every notification again", and
+  silently reinstating the defaults would make a filtered notification
+  unrecoverable. The frontend mirrors that: `removeNotifyFilter`
+  (`settings.mjs`) has no "at least one" floor, unlike `removePraiseWord`.
+  The two texts the reviewer named are the DEFAULT list
+  (`defaultNotifyFilters`), so the bell is quiet before he ever opens this
+  page — but they are ordinary, removable chips, not built-in behaviour.
+  **Matching, and where it is applied**, are documented in `notifyfilters.go`'s
+  own header and in `.claude/docs/pr-overview.md`: case-insensitive "contains"
+  against the notification's TITLE, applied at READ time in
+  `handleJiraNotifications`, never in the `jira_inbox` tracker.
+
 **`TaskManager.dataDir` is NOT the settings/praise-words directory** — a real
 bug caught and fixed while building this: `dataDir` on `TaskManager` is the
 workflow-store/worktree directory (next to the DB, threaded through
@@ -385,6 +410,13 @@ nothing to assert without faking the endpoint. The regression-sensitive half —
 the `.env` merge, the "empty token keeps the stored one" rule, and the CLI
 output parsing — is covered by `env_save_test.go` instead. Verified by hand
 against a real, genuinely expired `acli` session.
+
+`tests/settings-page.spec.mjs` also covers the notification-filter row's own
+write path (add a text, confirm it reaches `GET /api/notifyfilters`, survive a
+reload, remove it again). Backend: `notifyfilters_test.go` — the matching rule
+itself (`notificationFilteredOut`: case-insensitive, substring, an empty list
+hides nothing), the defaults without a file, the immediate cache refresh, and
+the preserved empty list.
 
 `tests/settings-page.spec.mjs` — both entry buttons + the `?from=` round trip
 (including the open-redirect fallback), `↑`/`↓`/`Enter`/`Space` row

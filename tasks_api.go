@@ -1593,9 +1593,10 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// The app_settings signal carries a settings-page edit to the single,
-		// global app_settings tracker: either the extra @mention alias
-		// spellings ("aliases") or the review-clipboard praise-word list
-		// ("praiseWords") — see settings-page.md. Validated here, before the
+		// global app_settings tracker: the extra @mention alias spellings
+		// ("aliases"), the review-clipboard praise-word list ("praiseWords")
+		// or the Jira-notification filter list ("notifyFilters") — see
+		// settings-page.md. Validated here, before the
 		// Signal is even sent: an "aliases" edit may legitimately clear the
 		// list to empty (no extra spellings), but a "praiseWords" edit must
 		// normalize to at least one word — otherwise a reviewer clearing the
@@ -1616,6 +1617,14 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 				if len(normalizePraiseWordList(body.PraiseWords)) == 0 {
 					http.Error(w, "at least one praise word is required", http.StatusBadRequest)
 					return
+				}
+			case "notifyFilters":
+				// The MIRROR of "praiseWords" above: an empty list is
+				// explicitly ALLOWED here and means "hide nothing anymore",
+				// which is exactly what removing the last filter text is for
+				// (see notifyfilters.go).
+				if body.NotifyFilters == nil {
+					body.NotifyFilters = []string{}
 				}
 			case "jiraCreds":
 				// The Jira notification feed needs an e-mail address AND a
@@ -2348,11 +2357,30 @@ func (s *server) handleJiraNotifications(w http.ResponseWriter, r *http.Request)
 	if items == nil {
 		items = []jiranotify.Item{}
 	}
+	// The reviewer's own noise filter (notifyfilters.go) is applied HERE, at
+	// read time, and nowhere else: the read-model keeps every notification, so
+	// removing a filter text brings its rows straight back, and this one place
+	// feeds the whole bell — src/overview.mjs derives the row list, the
+	// "N ongelezen" count AND the unread dot from this same array, so a hidden
+	// notification can never keep counting silently. `hidden` is reported so
+	// the panel can say IN WORDS how many rows the filter is holding back.
+	filters := notifyFilters(s.dataDir)
+	kept := make([]jiranotify.Item, 0, len(items))
+	hidden := 0
+	for _, it := range items {
+		if notificationFilteredOut(it.Title, filters) {
+			hidden++
+			continue
+		}
+		kept = append(kept, it)
+	}
+	items = kept
 	st := s.tasks.manager.JiraNotifyStatus()
 	out := map[string]any{
 		"ok":         true,
 		"configured": st.Configured,
 		"items":      items,
+		"hidden":     hidden,
 		"runId":      s.tasks.manager.JiraInboxRunID(),
 	}
 	if st.Error != "" {

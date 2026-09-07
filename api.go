@@ -41,6 +41,10 @@ func (s *server) routes(staticDir string) *http.ServeMux {
 	// praise" rule (see praisewords.go). Registered here rather than in
 	// routesTasks: it reads a file next to the DBs, not the workflow engine.
 	mux.HandleFunc("/api/praisewords", s.handlePraiseWords)
+	// The reviewer's own "hide this kind of Jira notification" list behind the
+	// header bell (see notifyfilters.go). Same reasoning as /api/praisewords:
+	// it reads a file next to the DBs, not the workflow engine.
+	mux.HandleFunc("/api/notifyfilters", s.handleNotifyFilters)
 	// GET /api/debug/log → the recorded debug-mode navigation/action log
 	// (debug_log.go). Registered here rather than in routesTasks for the same
 	// reason as /api/praisewords: it reads a file next to the DBs, not the
