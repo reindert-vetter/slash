@@ -92,20 +92,26 @@ Two surfaces have no keyboard cursor at all, and both are deliberate:
 Adding a keyboard cursor to either would mean adding a nav stop, which is a
 change to the chain in `.claude/docs/keyboard-navigation.md` — not a local one.
 
-## Rule 4: hover carries no state in the review tree
+## Rule 4: hover carries no state — app-wide, no exceptions
 
 On `/pr/<id>` nothing is reached by hovering: a comment thread, a detail card
 and a drilled column all appear from **selection** only. Hover is limited to CSS
 affordances (a row tint, a cursor change). Keep it that way — a hover-revealed
 control is unreachable by keyboard and invisible on touch.
 
-The one place with real hover machinery is the `/pr-overview` row list, where a
-`mouseenter` may move the selection ring. That needs a gate against a **parked**
-pointer: a scroll or a layout change can slide a row under a stationary cursor
-and fire a genuine `mouseenter` that hijacks the keyboard selection. Both halves
-of that gate (`hoverEnabled` — a coordinate-delta check on `mousemove`, plus
-disarming on a data-driven repaint) are documented with the feature, in
-"The hover-vs-keyboard flag" in `.claude/docs/pr-overview.md`.
+`/pr-overview`'s row list used to be the one documented exception: a plain
+`mouseenter` could move the keyboard-selection ring, guarded by a
+`hoverEnabled` flag against a parked pointer (a scroll/layout change sliding a
+row under a stationary cursor, firing a genuine `mouseenter` that would
+otherwise hijack the selection). Reviewer request ("in de pr overview, wil ik
+dat een mouse hover het niet gelijk selecteerd, key navigatie moet zo
+blijven") removed that exception outright — hovering a row on `/pr-overview`
+now does nothing beyond the ordinary CSS `hover:` tint, same as everywhere
+else. A row's own **click** still claims the selection ring, same as before
+— that path never went through hover (`togglePopover` sets it directly). See
+"Hover never selects — only a click or a keyboard step does" in
+`.claude/docs/pr-overview.md` for the removed mechanism and the regression
+test.
 
 **A second, narrower exception**: `main-scroll-left-hint`/`main-scroll-right-hint`
 (see "Every menu also has a mouse entry point" below) additionally reveal on

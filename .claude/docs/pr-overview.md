@@ -723,9 +723,9 @@ Load-bearing frontend properties:
 - **The rows carry no `data-nav-row`**, so they never join the keyboard
   navigation (`paintSelection()` iterates every `[data-nav-row]` and would
   otherwise ring a failure line). Expanding the drawer *is* in the row-set
-  `watch` that drives `scheduleRepaint()` though — it changes document height,
-  the exact scroll-clamp case where a row slides under a parked cursor (see the
-  `hoverEnabled` gate below).
+  `watch` that drives `scheduleRepaint()` though, so the selection ring
+  re-derives correctly if the drawer opening shifts the still-navigable rows
+  around it.
 - **A row names the PR and the comment, not just numbers.**
   `problemPrChip(pr)` renders `#13098 · <PR title>` (both row kinds), fed by the
   response's `prTitles` map — a `{"<pr>": "<title>"}` side map the handler fills
@@ -1158,9 +1158,7 @@ content region is **one flat, heading-less list** of rows:
 - **The inbox sections were already gone** — `currentView()` has always routed
   a non-empty query away from `mainContent()`. Nothing changed there.
 - The row-set `watch` already lists `state.query` as a dep, so
-  `scheduleRepaint()` fires as these blocks come and go — exactly the
-  scroll-clamp case its `hoverEnabled` disarming exists for (the document
-  height changes without the pointer moving). `currentRows()` reads
+  `scheduleRepaint()` fires as these blocks come and go. `currentRows()` reads
   `[data-nav-row]` from the DOM, so the recent-drawer rows leave the `↓` chain
   by themselves and `reanchorSelection` releases a selection that stood in one.
 
@@ -1227,38 +1225,36 @@ trees with ≥ 2 nodes count as a stack. Test:
 shared, worker-wide read model several other overview tests hold exact row
 counts against, so a second inbox fixture can't coexist there.
 
-### The hover-vs-keyboard gate (`hoverEnabled`)
+### Hover never selects — only a click or a keyboard step does
 
-Every keyboard step (`move`/`moveTo`) sets `hoverEnabled = false` before
-`paintSelection()` — which always calls `scrollIntoView` — precisely so the
-following scroll can't fire a `mouseenter` that hijacks the keyboard
-selection. Two distinct cases have to be caught, and each needs its own half:
+This page used to be the one documented exception to "Rule 4: hover carries
+no state" (`.claude/docs/mouse-navigation.md`): a plain `mouseenter` on a row
+moved the keyboard-selection ring, gated by a `hoverEnabled` flag that tried
+to tell a genuine mouse move apart from (1) a synthetic `mousemove` browsers
+dispatch to resync `:hover` after `paintSelection()`'s own `scrollIntoView`,
+and (2) a row sliding under an otherwise-stationary pointer (e.g. closing the
+"Recent gegenereerd" drawer clamping `scrollTop`). Reviewer request ("in de
+pr overview, wil ik dat een mouse hover het niet gelijk selecteerd, key
+navigatie moet zo blijven") removed the mechanism outright rather than
+patching it further: `paintSelection()` no longer attaches any
+`mouseenter` handler at all, so hovering a row is purely the pre-existing CSS
+`hover:` tint (`ROW_CLASS`) — no `state`/module-level flag, per rule 4. The
+`hoverEnabled`/coordinate-delta `mousemove` listener and the
+`scheduleRepaint`/`move`/`moveTo` disarming that existed only to gate it were
+deleted along with it, not left dormant.
 
-1. **A synthetic `mousemove` at an unchanged cursor position.** Browsers
-   (Chromium) synthesize one to resync `:hover` after a scroll/layout change, so
-   a bare `addEventListener('mousemove', () => hoverEnabled = true)` can't tell
-   it from a real move and re-arms hover immediately — after which the row under
-   the stationary cursor pulls the selection back. The listener therefore stores
-   the last-seen `clientX`/`clientY` and only re-arms on an actual delta.
-2. **A row sliding under a stationary pointer.** The coordinate delta only
-   proves *the pointer* moved; the hijack also happens with the pointer parked
-   while the **content** moves under it (closing the recent drawer shrinks the
-   document, the browser clamps `scrollTop`, and whatever row lands under the
-   idle cursor fires a perfectly **genuine** `mouseenter` — no coordinate is
-   stale). What distinguishes it is that no real mouse movement happened *since
-   the row set changed*, so `scheduleRepaint` — which only ever runs from the
-   row-set `watch`, never from a keypress or from `onmouseenter`'s own
-   `paintSelection()` — sets `hoverEnabled = false` both synchronously **and**
-   again inside its `rAF`, so an event on either side of that frame is ignored.
-   A genuine `mousemove` re-arms hover immediately; hovering is unchanged apart
-   from needing one pixel of movement after the list changed.
+**A click still claims the selection ring, unchanged** — `togglePopover`
+already set `selKey` directly on every open (see "Selection identity" right
+below), so removing hover took nothing away from the click path; a click was
+never routed through the hover mechanism. Keyboard `move`/`moveTo` are
+likewise untouched.
 
-Both halves are covered by `tests/overview-hover-gate.spec.mjs`, which dispatches
-its own `mousemove`/`mouseenter` DOM events — the browser-native
-scroll-triggered case does not reproduce deterministically under Playwright (see
-also the `selectRowByKeyboard` note in `overview.spec.mjs`). Half 2 was a real
-source of flakiness in `tests/overview-selection-identity.spec.mjs`'s drawer
-case.
+Covered by `tests/overview-hover-selection.spec.mjs`: hovering several rows in
+turn (dispatching real `mousemove`/`mouseenter` DOM events, before and after a
+keyboard selection is active) never lights up any ring, `Home`/`ArrowDown`
+still move it as before, and a click still opens the popover and claims the
+ring. The browser-native scroll-triggered synthetic-`mousemove` case that used
+to matter here is now moot — there is no listener left for it to fool.
 
 ### Selection identity (`selKey`/`data-nav-key`), not an array position
 
@@ -1302,10 +1298,9 @@ is a static string set once at mount), so no arrow.js keyed-node/whole-value
 pitfall applies. Deliberately **no** separate `dark:` ring/bg variant — a
 semi-transparent indigo ring/tint reads fine on both white and `zinc-900`.
 Applies identically to `prRow` and `recentItem` (both carry `data-nav-row`, both
-painted by the same `rows.forEach` loop). Hover is unaffected: the
-`hoverEnabled` gate only decides whether a `mouseenter` may call
-`paintSelection()`; the CSS-only `hover:bg-slate-100 …` tint on `ROW_CLASS` is a
-separate, always-active affordance.
+painted by the same `rows.forEach` loop). Hover never touches this ring at
+all — see "Hover never selects" above; the CSS-only `hover:bg-slate-100 …`
+tint on `ROW_CLASS` is the only hover affordance left on a row.
 
 ⚠ **The `›` selection-mark glyph (`selectMark()`,
 `SELECT_MARK_ON`/`SELECT_MARK_OFF`, `data-testid=row-select-mark`) was REMOVED on

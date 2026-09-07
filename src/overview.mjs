@@ -871,12 +871,13 @@ function togglePopover(uid) {
     // review-boom" gave no visible "this is the row I'm working on" cue
     // during/after the async ingest (reviewer request: "laat item tijdens
     // en na genereren geselecteerd"). Nothing else needs to change to keep
-    // it released "as soon as I want to do something else" — hovering a
-    // different row, clicking a different row (this same branch moves the
-    // ring there), a keyboard step, or focusing the search box already
-    // reassign/clear `selKey` (see reanchorSelection/paintSelection below).
+    // it released "as soon as I want to do something else" — clicking a
+    // different row (this same branch moves the ring there), a keyboard
+    // step, or focusing the search box already reassign/clear `selKey`
+    // (see reanchorSelection/paintSelection below). Hover deliberately does
+    // NOT move the ring — see "Rule 4: hover carries no state" in
+    // .claude/docs/mouse-navigation.md.
     selKey = 'row:' + uid
-    hoverEnabled = false
     paintSelection()
     requestAnimationFrame(() => {
       positionPopover(uid)
@@ -2815,9 +2816,8 @@ function App() {
 // loadProblems() keeps running on its own interval regardless.
 //
 // The row-set watch already lists state.query as a dep, so scheduleRepaint()
-// fires when these blocks come and go — which is exactly the scroll-clamp case
-// its hoverEnabled disarming exists for (the document height changes without
-// the pointer moving).
+// fires when these blocks come and go, keeping the keyboard-selection ring
+// (paintSelection/reanchorSelection) in sync with the row set.
 function drawersSlot() {
   return html`<div class="contents">
     ${() =>
@@ -3007,7 +3007,6 @@ function selectTopRow() {
   const firstRow = state.sections.flatMap((s) => s.prs)[0]
   if (!firstRow) return false
   selKey = 'row:' + prUid(firstRow)
-  hoverEnabled = false
   return true
 }
 
@@ -3104,7 +3103,6 @@ async function trySelectPendingPr() {
   state.sections.forEach((sec) => sec.prs.forEach((row) => (match = match || (matchesPrRef(row, uid) ? row : null))))
   if (match) {
     selKey = 'row:' + prUid(match)
-    hoverEnabled = false
     pendingSelectPr = null
     return
   }
@@ -3122,7 +3120,6 @@ async function trySelectPendingPr() {
   if (recentMatch) {
     state.recentOpen = true
     selKey = 'recent:' + recentUid(recentMatch)
-    hoverEnabled = false
   }
 }
 
@@ -3246,25 +3243,8 @@ async function runSearch(q) {
 
 // ── keyboard navigation ──────────────────────────────────────────────────
 // A capture-phase window keydown, rebuilt whenever the set of navigable rows
-// could have changed (see scheduleRepaint). Every keyboard move resets
-// hoverEnabled so a synthetic mouseenter fired by scrollIntoView can't
-// hijack the selection; hoverEnabled only turns back on from a real
-// mousemove.
+// could have changed (see scheduleRepaint).
 //
-// "Real" is load-bearing here: browsers (Chromium in particular) dispatch a
-// synthetic `mousemove` DOM event at the cursor's last known position to
-// resync :hover state whenever content scrolls/re-lays-out underneath a
-// stationary cursor — exactly what our own `scrollIntoView` in
-// paintSelection() triggers on every keyboard step. A plain
-// `addEventListener('mousemove', ...)` can't tell that synthetic event apart
-// from a genuine mouse move, so it kept re-enabling hoverEnabled right after
-// a keypress disabled it, and the very next mouseenter (on whatever row now
-// happens to sit under the idle cursor because the list scrolled) yanked
-// selIndex back — which is exactly what looked like "the items keep sliding
-// along" when navigating with the arrow keys. The fix: only treat a
-// mousemove as real if the pointer's coordinates actually changed since the
-// last one we saw.
-
 // selIndex is the derived position used for painting/scrolling; selKey is
 // the actual source of truth — the stable `data-nav-key` of the row the
 // reviewer selected (see prRow/recentItem). Tracking identity instead of a
@@ -3280,9 +3260,21 @@ async function runSearch(q) {
 // selIndex from selKey on every repaint; if the selected row is genuinely
 // gone it releases the selection (no ring) instead of drifting onto an
 // unrelated row.
+//
+// Mouse hover deliberately moves NOTHING here — per "Rule 4: hover carries
+// no state" in .claude/docs/mouse-navigation.md, this page used to be the
+// one documented exception (a `mouseenter` could move the keyboard selection
+// ring, gated by a `hoverEnabled` flag against a scroll-triggered synthetic
+// `mousemove`/a row sliding under a parked pointer). Reviewer request: "in
+// de pr overview, wil ik dat een mouse hover het niet gelijk selecteerd, key
+// navigatie moet zo blijven" — hovering a row no longer touches selIndex/
+// selKey at all, so that whole gate (the coordinate-delta mousemove
+// listener, the scheduleRepaint/move/moveTo disarming) was removed as dead
+// code along with it. A click still claims the ring exactly as before
+// (`togglePopover` sets `selKey` directly, see below) — that is the
+// click-is-the-Enter-equivalent path, not hover.
 let selIndex = -1
 let selKey = null
-let hoverEnabled = false
 
 // ── popover keyboard navigation ─────────────────────────────────────────
 // While a popover is open it owns ↑/↓ (and Enter/Escape) outright — the row
@@ -3402,12 +3394,6 @@ function paintSelection() {
   reanchorSelection(rows)
   rows.forEach((el, i) => {
     el.dataset.navIndex = String(i)
-    el.onmouseenter = () => {
-      if (!hoverEnabled) return
-      selIndex = i
-      selKey = el.dataset.navKey || null
-      paintSelection()
-    }
     // Note: `relative` is deliberately NOT part of this toggle set. prRow's
     // own template already carries `relative` permanently (its click-opened
     // popover is `position:absolute` and needs the row as its containing
@@ -3432,7 +3418,6 @@ function move(delta) {
   const base = selIndex < 0 ? (delta > 0 ? -1 : 0) : selIndex
   selIndex = Math.max(0, Math.min(rows.length - 1, base + delta))
   selKey = rows[selIndex] ? rows[selIndex].dataset.navKey || null : null
-  hoverEnabled = false
   paintSelection()
 }
 
@@ -3441,7 +3426,6 @@ function moveTo(idx) {
   if (!rows.length) return
   selIndex = Math.max(0, Math.min(rows.length - 1, idx))
   selKey = rows[selIndex] ? rows[selIndex].dataset.navKey || null : null
-  hoverEnabled = false
   paintSelection()
 }
 
@@ -3823,43 +3807,15 @@ function setupKeyboard() {
 }
 
 // scheduleRepaint runs on a data-driven change of the visible row set (see the
-// watch below), never on a keypress. It disarms hoverEnabled for the same
-// reason every keyboard move does: the row set just changed underneath a
-// possibly stationary cursor, so the *next* mouseenter is very likely not the
-// reviewer pointing at that row but a row sliding under the pointer — closing
-// the "Recent gegenereerd" drawer, for instance, shrinks the document, the
-// browser clamps scrollTop, and whatever row now lands under the idle cursor
-// fires a perfectly genuine mouseenter that would hijack the selection.
-//
-// The coordinate gate on the mousemove listener below can't catch that case on
-// its own: the pointer really is at the coordinates it last moved to (e.g. the
-// drawer toggle it was just clicked on), so nothing distinguishes "moved here
-// and stopped" from "content moved under here". What does distinguish them is
-// that no real mouse movement happened *since the layout changed* — hence
-// disarming here, synchronously as well as inside the frame, so a boundary
-// event dispatched either side of the rAF is ignored either way. A genuine
-// mousemove re-arms hover immediately, so hovering keeps working as before.
+// watch below), never on a keypress — it rebuilds the keydown handler (the
+// row set it closes over may have changed) and re-derives the selection ring
+// from selKey via paintSelection()/reanchorSelection().
 function scheduleRepaint() {
-  hoverEnabled = false
   requestAnimationFrame(() => {
-    hoverEnabled = false
     setupKeyboard()
     paintSelection()
   })
 }
-
-let lastMouseX = null
-let lastMouseY = null
-window.addEventListener(
-  'mousemove',
-  (e) => {
-    if (lastMouseX !== null && e.clientX === lastMouseX && e.clientY === lastMouseY) return
-    lastMouseX = e.clientX
-    lastMouseY = e.clientY
-    hoverEnabled = true
-  },
-  { passive: true },
-)
 
 // Close an open popover on any click outside its owning row.
 window.addEventListener('mousedown', (e) => {
@@ -3903,10 +3859,9 @@ watch(
       state.presetLoading,
       state.presetResults.length,
       // The "Mislukte taken" drawer adds no navigable rows, but expanding it
-      // (or a row arriving in it) still changes the document height — exactly
-      // the scroll-clamp case scheduleRepaint's own comment describes, where a
-      // row can slide under a parked cursor. Repainting disarms hoverEnabled
-      // for that frame, same as the recent drawer above.
+      // (or a row arriving in it) still changes the document height, so the
+      // selection ring needs the same re-derive/repaint as the recent drawer
+      // above.
       state.problemsOpen,
       state.failedRuns.length,
       state.logErrors.length,
