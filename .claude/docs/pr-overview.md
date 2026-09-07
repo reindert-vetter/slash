@@ -279,6 +279,20 @@ Two JQL **constants** (`jira_issues.go`), so no reviewer input ever reaches
   lane is `assignee = currentUser()` by construction. The one row that is not
   yours is a main task pulled in as **context** (below) — marked as such, not
   a link, not counted. `TestIssueJQLScopesBothLanes` pins all four clauses.
+- **A shown Sub-task ALWAYS brings its main task, and the sprint clause does
+  NOT apply to that parent** (asked and confirmed: "als er iets in deze sprint
+  zit, dan dat laten zien en de hoofdtaak als het een subitem is"). This holds
+  structurally, not by a second filter: the parent lookup never goes through
+  either JQL above — `readIssues` reads it **by key** (`jira.Client.Issue` →
+  `acli jira workitem view <key>`), a path carrying no sprint, status or
+  assignee clause at all. So a main task that is out of sprint, Done, and
+  somebody else's still arrives (as a context row). Don't "optimize" that
+  lookup into a `key in (…)` search alongside the sprint clause — that is
+  exactly what would drop it. Test:
+  `TestGroupIssuesPullsInAParentOutsideTheSprint`, which also asserts no
+  search was used for it; verified live too (PAYM-813 matches
+  `sprint in openSprints()` zero times, and the same by-key read returns it
+  fine).
 - **An issue matching both queries is shown once, in the planning lane** — the
   lane furthest along the pipeline. The two statuses are disjoint today, so
   this is a rule kept rather than one that fires.

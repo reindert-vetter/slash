@@ -163,6 +163,43 @@ func TestGroupIssuesNestsSubtasksUnderTheirParent(t *testing.T) {
 	}
 }
 
+// TestGroupIssuesPullsInAParentOutsideTheSprint pins the rule Reindert
+// confirmed when the sprint filter was questioned: "als er iets in deze sprint
+// zit, dan dat laten zien en de hoofdtaak als het een subitem is". A shown
+// Sub-task ALWAYS brings its main task, whatever that main task's own sprint,
+// status or assignee is — which holds because the parent lookup does not go
+// through the two sprint-scoped JQL queries at all: readIssues reads the
+// parent BY KEY (cl.Issue -> `acli jira workitem view <key>`), a path with no
+// sprint/assignee/status clause anywhere. This test locks that in: the parent
+// here is in neither search result (out of sprint), is somebody else's and is
+// Done, and it still arrives — as a context row, uncounted and unclickable.
+func TestGroupIssuesPullsInAParentOutsideTheSprint(t *testing.T) {
+	f := &jira.Fake{}
+	f.SetIssue("PROD-216", jira.Issue{
+		Key: "PROD-216", Title: "Out of sprint, someone else's", Type: "Story",
+		Status: "Done", Assignee: "Dennis Sloove",
+	})
+
+	got := groupIssues(context.Background(), f, nil, []jira.Issue{
+		{Key: "PROD-254", Type: "Sub-task", Status: "To Do", ParentKey: "PROD-216", Assignee: "Reindert Vetter"},
+	})
+
+	if !sameKeys(got, "PROD-216", "PROD-254") {
+		t.Fatalf("keys = %v, want the main task above its Sub-task", keysOf(got))
+	}
+	if !got[0].Context || got[0].Title != "Out of sprint, someone else's" || got[0].Assignee != "Dennis Sloove" {
+		t.Fatalf("parent = %+v, want a context row naming its own assignee", got[0])
+	}
+	// It was read BY KEY, never searched — a search would have applied
+	// `sprint in openSprints()` and dropped it.
+	if len(f.SearchCalls) != 0 {
+		t.Fatalf("searches = %v, want the parent read by key instead", f.SearchCalls)
+	}
+	if len(f.Calls) == 0 || f.Calls[len(f.Calls)-1] != "PROD-216" {
+		t.Fatalf("reads = %v, want a per-key read of PROD-216", f.Calls)
+	}
+}
+
 // TestGroupIssuesLiftsAMixedStatusGroupAboveTodo — the sort rule the merge
 // added: a GROUP carries the planning lane as soon as ANY of its own members is
 // in it, so a main task that is still To Do rides ABOVE the plain todo rows
