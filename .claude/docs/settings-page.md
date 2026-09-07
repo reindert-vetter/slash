@@ -5,7 +5,8 @@ One general, keyboard-navigable settings page (`settings.html` →
 scattered across `/pr/<id>` and `/pr-overview`: theme, "Live AI assistent",
 the checkout-directory chip, praise-words, and "wie ben ik" — plus the two
 extra @mention alias spellings and the praise-word list becoming genuinely
-editable from the page, which they never were before.
+editable from the page, which they never were before. The settings are
+grouped into four **tabs** — see "Tabs, categorization, and keyboard" below.
 
 ## Split out of this file
 
@@ -52,34 +53,99 @@ module `const`s (mirrors `originPr`/`originSel` in `overview.mjs`):
   checkout-directory row (below) knows which PR's checkout state to show, or
   that there is none.
 
-## Row list and keyboard
+## Tabs, categorization, and keyboard
 
-`src/settings.mjs`'s `ROWS = ['theme', 'keyboardhints', 'langui', 'langexplain',
-'langreply', 'langcommit', 'autowarn', 'autoingestpref', 'debug', 'auth', 'checkout',
-'aliases', 'praisewords', 'notifyfilters']` is simultaneously the `↑`/`↓` nav order and the DOM render
-order, kept as one array so the two can never drift apart. A platt
-`window.addEventListener('keydown', …)` (one flat listener, not the
+The page groups its settings into four **tabs** (`TAB_DEFS` in
+`src/settings.mjs`) instead of one long flat list — the grouping follows the
+settings that already existed rather than an invented taxonomy:
+
+| Tab (`id`) | Rows | Why they're together |
+|---|---|---|
+| Weergave (`display`) | `theme`, `keyboardhints`, `debug` | how the app looks, plus local recording — the reviewer's own "weergave/debug" grouping |
+| Taal (`language`) | `langui`, `langexplain`, `langreply`, `langcommit` | one setting per translatable output type, plus the fixed read-only commit-language row |
+| AI-assistent (`assistant`) | `autowarn`, `autoingestpref`, `praisewords` | everything that steers what the built-in AI assistant does automatically (including which words it doesn't count as an open point) |
+| Account & Jira (`account`) | `auth`, `checkout`, `aliases`, `notifyfilters` | who I am and which outside services/credentials this install talks to (gh/acli/Jira login, the PR-scoped checkout dir, GitHub identity/@mention aliases, Jira notification noise) |
+
+`TAB_DEFS` is simultaneously the tab bar's own order, each tab's `↑`/`↓` nav
+order, and each tab's DOM render order — one structure so the three can never
+drift apart (the old flat `ROWS` array is now `TAB_DEFS.flatMap(t => t.rows)`,
+kept only as a lookup helper). **Every tab's rows stay mounted at all times**
+— only a static Tailwind class (`hidden` vs `space-y-3`) toggles which panel
+is visible (`tabPanelCls`), never a conditionally (re)built template. This
+deliberately sidesteps the "single↔array"/"toggling expression" arrow.js
+pitfalls (`.claude/rules/arrowjs-pitfalls.md`) rather than working around
+them: every row's bindings keep reacting regardless of which tab is on
+screen, and data loading (`init()`) is unaffected — it was already
+tab-agnostic, loading everything up front.
+
+**Which tab is active is a navigation position**, so it lives in the URL
+query string via `bindUrlState` (`?tab=<id>`, `src/urlState.mjs`) — not
+`localStorage` (that's for a preference like the theme). `display` is the
+default and therefore omitted from the URL, keeping it short, exactly like
+`gran`/`mode` on `/pr/<id>`. This doesn't collide with the pre-existing
+`?from=` param — `settingsLink.mjs` reads that one directly, outside
+`bindUrlState`, and `bindUrlState` only ever touches the params it's told
+about.
+
+**Active-tab indicator is shape/position, never colour alone** (Reindert is
+colourblind): the active tab gets a bold label plus a bottom underline that
+visibly shifts to it, and `aria-selected="true"`/`"false"` — not just a
+colour change on an otherwise identical button.
+
+### Keyboard: an extra stop above the first row, not a second `←`/`→` chain
+
+A platt `window.addEventListener('keydown', …)` (one flat listener, not the
 `/pr/<id>` nav chain's `Cmd+[`/`Cmd+]` remap — this page has no per-stop
-granularity to remap onto):
+granularity to remap onto). Reusing `←`/`→` for tab-switching the way the
+review tree uses them for its stop chain was considered and rejected: `←`
+already means "leave the page" here (see `goBack()` below), and every row's
+own `↑`/`↓` needed to keep meaning "next/previous row within this tab" so an
+existing habit (and the existing tests) don't silently change meaning.
 
-- input-focus guard first: while a `TEXTAREA`/`INPUT` owns focus, every key
-  is a no-op except `Escape`, which blurs it back to row navigation.
-- `↑`/`↓` move `state.activeRow`, scrolling the new active row into view
-  (`scrollIntoView({block:'nearest'})` — no horizontal-scroll concern here,
-  unlike `<main>`'s column flow on `/pr/<id>`, see
-  `.claude/rules/arrowjs-pitfalls.md`'s `scrollIntoView` note).
-- `Enter`/`Space` run `activateRow(ROWS[activeRow])` — **exactly the same
-  function a click on that row's own control runs** (mouse-navigation
-  convention): `cycleTheme()`, `toggleAutoWarn()`, or focusing the
-  aliases/praise-words text input, or `toggleLang('ui'|'explain'|'reply')`.
-  The checkout row is read-only here (see below), so its activation is a
-  no-op, and so is the `langcommit` row (always English, by rule).
-- `←` **and `Escape`** both call the same `goBack()` the "← Terug" button's
-  click runs (only reached while no text input owns focus — see the guard
-  above, which lets Escape blur an open aliases/praise-words input instead).
-  Reviewer report: only the visible button worked, Escape did nothing. Test:
-  `tests/settings-page.spec.mjs` ("Escape also returns from /settings, same
-  as ←").
+Instead the tab bar is reached the same way `Block.mjs`'s description strip
+or stop 1's since-review cursor are reached in the review tree — **an extra
+stop above the first row**, entered by `↑`:
+
+- `state.tabFocused` (ephemeral, not in the URL — a cursor position like
+  `state.activeRow`) is `false` by default: `↑`/`↓` move `state.activeRow`
+  within the ACTIVE tab's own `rows` list (`currentRows()`), clamped at the
+  bottom as before. `↑` **off the topmost row** (`activeRow === 0`) instead
+  sets `tabFocused = true` — one more step up, mirroring "the block
+  description is an extra ↑ stop above the first change" in
+  `.claude/docs/keyboard-navigation.md`.
+- **While `tabFocused`**, `←`/`→` switch tabs directly (`moveTabFocus`,
+  clamped at the first/last tab — no wraparound) — the same
+  `selectTab(id)` function a click on a tab button runs (mouse-navigation
+  convention), which also resets `state.activeRow` to `0` so the reviewer
+  always lands on the new tab's first row rather than an index that may not
+  exist there. `↓` or `Enter`/`Space` hand the keyboard back to the row list
+  (`enterActiveTabRows`: `tabFocused = false`, `activeRow = 0`). `↑` is a
+  no-op (already at the top). **`←`/`Escape` still leave the page** from the
+  tab bar too (`goBack()`) — consistent with every other stop on this page,
+  so `←` never means two different things depending on how deep you are.
+- input-focus guard first, unchanged: while a `TEXTAREA`/`INPUT` owns focus,
+  every key is a no-op except `Escape`, which blurs it back to row
+  navigation.
+- `Enter`/`Space` on an ordinary row run `activateRow(currentRows()[activeRow])`
+  — **exactly the same function a click on that row's own control runs**
+  (mouse-navigation convention): `cycleTheme()`, `toggleAutoWarn()`, or
+  focusing the aliases/praise-words/notify-filters text input, or
+  `toggleLang('ui'|'explain'|'reply')`. The checkout row is read-only here
+  (see below), so its activation is a no-op, and so is the `langcommit` row
+  (always English, by rule).
+- `←` **and `Escape`**, while the row list (not the tab bar) owns the
+  keyboard, both call the same `goBack()` the "← Terug" button's click runs
+  (only reached while no text input owns focus — see the guard above, which
+  lets Escape blur an open aliases/praise-words/notify-filters input
+  instead). Reviewer report: only the visible button worked, Escape did
+  nothing. Test: `tests/settings-page.spec.mjs` ("Escape also returns from
+  /settings, same as ←").
+
+So the walk is: row 0 of a tab → (`↑`) the tab bar → (`←`/`→`) a different
+tab, highlighted immediately → (`↓`/`Enter`) that tab's own row 0. Test:
+`tests/settings-page.spec.mjs` ("↑ off the top row reaches the tab bar…",
+"the open tab survives a refresh via ?tab=", "every existing setting is
+still reachable, one per tab-panel").
 
 ## Per-setting source and write path
 
@@ -422,7 +488,15 @@ the preserved empty list.
 (including the open-redirect fallback), `↑`/`↓`/`Enter`/`Space` row
 navigation, the checkout row's grey/inactive state without a PR origin, and
 both write paths end-to-end (add/remove an alias across a reload; add a
-praise word and confirm the last remaining one can't be removed). Backend:
+praise word and confirm the last remaining one can't be removed) — plus the
+tab bar itself: `↑` off the top row reaching it, `←`/`→` switching tabs and
+`↓` handing the keyboard back, `?tab=` surviving a refresh (and being
+omitted for the default tab), and every existing row still being reachable,
+one tab-panel at a time. Every OTHER spec that reaches a row not on the
+default (`display`) tab clicks that row's own `settings-tab-<id>` button
+first — see `tests/langpref.spec.mjs` (`language`), `tests/auto-ingest-pref.spec.mjs`
+(`assistant`), and the mention-alias/praise-word/notify-filter tests here
+(`account`/`assistant`). Backend:
 `TestSaveMentionAliasesTakesEffectImmediately`/
 `TestSaveMentionAliasesPreservesLoginAndRepos` (`settings_test.go`),
 `TestSavePraiseWordsFileTakesEffectImmediately`/

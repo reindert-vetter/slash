@@ -8,6 +8,7 @@
 // reviewer came from. See .claude/docs/settings-page.md for the full
 // mechanism and the per-setting source/write-path table.
 import { reactive, html, watch } from './vendor/arrow.js'
+import { bindUrlState } from './urlState.mjs'
 import { initTheme, themeToggleButton, cycleTheme } from './theme.mjs'
 import { ensureAutoWarn, autoWarnToggleButton, toggleAutoWarn } from './autowarn.mjs'
 import { keyboardHintsToggleButton, toggleKeyboardHints } from './keyboardHints.mjs'
@@ -40,7 +41,19 @@ function goBack() {
 
 const state = reactive({
   loading: true,
-  activeRow: 0, // index into ROWS
+  // Which tab is open — a navigation position, so it lives in the URL (see
+  // bindUrlState below), not localStorage (that's for a preference like the
+  // theme). Defaults to the first tab and falls out of the URL there, per the
+  // project's "default value omitted" convention.
+  activeTab: 'display',
+  activeRow: 0, // index into the ACTIVE tab's own row list (TAB_DEFS[..].rows), not the flat ROWS list
+  // True while the tab bar itself owns ↑/↓/←/→ instead of the row list — the
+  // same "extra stop above the first row" idiom as Block.mjs's description
+  // strip / stop 1's since-review cursor (see keyboard-navigation.md): ↑ off
+  // the topmost row of a tab enters the tab bar, ←/→ switch tabs there, and
+  // ↓/Enter hands the keyboard back to that tab's first row. Ephemeral, not
+  // in the URL — a cursor position, like state.activeRow itself.
+  tabFocused: false,
   editing: null, // null | 'aliases' | 'praisewords' | 'notifyfilters' — which row owns a focused text input
   aliases: [],
   praiseWords: [],
@@ -83,24 +96,40 @@ watch(
   },
 )
 
-// Row order IS the ↑/↓ nav order, and IS the DOM order rendered below — kept
-// as one array so the two can never drift apart.
-const ROWS = [
-  'theme',
-  'keyboardhints',
-  'langui',
-  'langexplain',
-  'langreply',
-  'langcommit',
-  'autowarn',
-  'autoingestpref',
-  'debug',
-  'auth',
-  'checkout',
-  'aliases',
-  'praisewords',
-  'notifyfilters',
+// TAB_DEFS is simultaneously the tab bar's own order, each tab's ↑/↓ nav
+// order, and each tab's DOM render order — kept as one structure so none of
+// the three can drift apart (same reasoning as the old flat ROWS array).
+// The grouping follows the settings that already existed, not an invented
+// taxonomy: display/keyboard-hints/debug are all "how the app looks and what
+// it records locally"; the three language rows plus the fixed commit-language
+// row are "translate per output type"; autowarn/autoingestpref/praisewords
+// all steer what the built-in AI assistant does automatically; auth/
+// checkout/aliases/notifyfilters are all "who I am and which outside
+// services this install talks to" (gh/acli/Jira credentials, the PR-scoped
+// checkout dir, GitHub identity, Jira notification noise). See
+// .claude/docs/settings-page.md for the full table.
+const TAB_DEFS = [
+  { id: 'display', label: 'Weergave', rows: ['theme', 'keyboardhints', 'debug'] },
+  { id: 'language', label: 'Taal', rows: ['langui', 'langexplain', 'langreply', 'langcommit'] },
+  { id: 'assistant', label: 'AI-assistent', rows: ['autowarn', 'autoingestpref', 'praisewords'] },
+  { id: 'account', label: 'Account & Jira', rows: ['auth', 'checkout', 'aliases', 'notifyfilters'] },
 ]
+const ROWS = TAB_DEFS.flatMap((tab) => tab.rows) // flat lookup, e.g. for input-focus targeting by row name
+
+function currentTab() {
+  return TAB_DEFS.find((tab) => tab.id === state.activeTab) || TAB_DEFS[0]
+}
+function currentRows() {
+  return currentTab().rows
+}
+
+// The open tab is a navigation position (which "page" of settings you're
+// looking at), so it belongs in the query string, exactly like `gran`/`mode`
+// on /pr/<id> — never localStorage. Bound right after the state is created,
+// before the first render reads it. Doesn't collide with the pre-existing
+// `?from=` param (settingsLink.mjs reads that one directly, outside
+// bindUrlState).
+bindUrlState(state, [{ key: 'activeTab', param: 'tab', default: 'display', parse: (raw) => (TAB_DEFS.some((t) => t.id === raw) ? raw : undefined) }])
 
 // ── data loading ─────────────────────────────────────────────────────────
 
@@ -351,12 +380,56 @@ function activateRow(row) {
   // row has nothing to toggle (see langCommitRow).
 }
 
+// moveRow walks the ACTIVE tab's own rows. ↑ off the topmost row hands the
+// keyboard to the tab bar instead of clamping — the "extra stop above the
+// first row" idiom (see state.tabFocused's own comment above).
 function moveRow(delta) {
-  state.activeRow = Math.max(0, Math.min(ROWS.length - 1, state.activeRow + delta))
+  const rows = currentRows()
+  const next = state.activeRow + delta
+  if (next < 0) {
+    state.tabFocused = true
+    return
+  }
+  state.activeRow = Math.max(0, Math.min(rows.length - 1, next))
   requestAnimationFrame(() => {
-    const el = document.querySelector('[data-testid="settings-row-' + ROWS[state.activeRow] + '"]')
+    const el = document.querySelector('[data-testid="settings-row-' + rows[state.activeRow] + '"]')
     if (el) el.scrollIntoView({ block: 'nearest' })
   })
+}
+
+// selectRow — the same function a click on a row runs (mouse-navigation
+// convention): picks it as the active row and, since a mouse click always
+// lands inside the currently visible tab's own row list, also makes sure the
+// tab bar isn't left holding keyboard focus from an earlier ↑ press.
+function selectRow(row) {
+  state.tabFocused = false
+  state.activeRow = currentRows().indexOf(row)
+}
+
+// selectTab switches the open tab — the same function a click on a tab
+// button runs (mouse-navigation convention) and what ←/→ run while the tab
+// bar owns the keyboard. Always resets the row cursor to the top of the
+// newly active tab, mirroring how selecting a fresh block resets its cursor
+// elsewhere in the app.
+function selectTab(id) {
+  if (state.activeTab === id) return
+  state.activeTab = id
+  state.activeRow = 0
+}
+
+// moveTabFocus is only called while state.tabFocused is true — ←/→ there
+// switch tabs directly (no separate "highlight then confirm" step, same as a
+// toggle row's own Enter/click doing its action immediately).
+function moveTabFocus(delta) {
+  const idx = Math.max(0, Math.min(TAB_DEFS.length - 1, TAB_DEFS.findIndex((t) => t.id === state.activeTab) + delta))
+  selectTab(TAB_DEFS[idx].id)
+}
+
+// enterActiveTabRows hands the keyboard from the tab bar back to that tab's
+// row list — ↓ or Enter/Space while state.tabFocused.
+function enterActiveTabRows() {
+  state.tabFocused = false
+  state.activeRow = 0
 }
 
 window.addEventListener('keydown', (e) => {
@@ -371,6 +444,25 @@ window.addEventListener('keydown', (e) => {
     }
     return
   }
+  if (state.tabFocused) {
+    // The tab bar owns ↑/↓/←/→/Enter/Escape while focused: ←/→ switch tabs,
+    // ↓/Enter hand the keyboard to the row list, ↑ is a no-op (already at the
+    // top), ←/Escape still leave the page like everywhere else on this page.
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault()
+      moveTabFocus(-1)
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault()
+      moveTabFocus(1)
+    } else if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      enterActiveTabRows()
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      goBack()
+    }
+    return
+  }
   if (e.key === 'ArrowDown') {
     e.preventDefault()
     moveRow(1)
@@ -379,7 +471,7 @@ window.addEventListener('keydown', (e) => {
     moveRow(-1)
   } else if (e.key === 'Enter' || e.key === ' ') {
     e.preventDefault()
-    activateRow(ROWS[state.activeRow])
+    activateRow(currentRows()[state.activeRow])
   } else if (e.key === 'ArrowLeft' || e.key === 'Escape') {
     e.preventDefault()
     goBack()
@@ -403,7 +495,7 @@ function rowCls(row) {
   const base = 'rounded-xl border p-4 transition-colors '
   return (
     base +
-    (state.activeRow === ROWS.indexOf(row)
+    (state.activeRow === currentRows().indexOf(row)
       ? 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30 bg-white dark:bg-zinc-900'
       : 'border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900')
   )
@@ -417,7 +509,7 @@ function rowLabel(title, sub) {
 }
 
 function themeRow() {
-  return html`<div data-testid="settings-row-theme" class="${() => rowCls('theme')}" @click="${() => (state.activeRow = ROWS.indexOf('theme'))}">
+  return html`<div data-testid="settings-row-theme" class="${() => rowCls('theme')}" @click="${() => selectRow('theme')}">
     ${rowLabel(t('Thema'), t('Systeem / licht / donker — opgeslagen in deze browser.'))}
     <div class="flex items-center gap-2">${themeToggleButton('h-8 w-8 bg-slate-50 dark:bg-zinc-800 ring-1 ring-slate-200 dark:ring-zinc-700')}</div>
   </div>`
@@ -427,7 +519,7 @@ function keyboardHintsRow() {
   return html`<div
     data-testid="settings-row-keyboardhints"
     class="${() => rowCls('keyboardhints')}"
-    @click="${() => (state.activeRow = ROWS.indexOf('keyboardhints'))}"
+    @click="${() => selectRow('keyboardhints')}"
   >
     ${rowLabel(t('Keyboard hints'), t('De hintregel met sneltoetsen onder elke kaart, aan/uit — standaard aan.'))}
     ${keyboardHintsToggleButton()}
@@ -438,7 +530,7 @@ function keyboardHintsRow() {
 // kunnen vertalen". Each row's Enter/Space runs exactly the function its own
 // button's click runs (see activateRow), per the mouse-navigation convention.
 function langRow(row, kind, title, sub) {
-  return html`<div data-testid="${'settings-row-' + row}" class="${() => rowCls(row)}" @click="${() => (state.activeRow = ROWS.indexOf(row))}">
+  return html`<div data-testid="${'settings-row-' + row}" class="${() => rowCls(row)}" @click="${() => selectRow(row)}">
     ${rowLabel(t(title), t(sub))} ${langToggleButton(kind)}
   </div>`
 }
@@ -452,7 +544,7 @@ function langCommitRow() {
   return html`<div
     data-testid="settings-row-langcommit"
     class="${() => rowCls('langcommit')}"
-    @click="${() => (state.activeRow = ROWS.indexOf('langcommit'))}"
+    @click="${() => selectRow('langcommit')}"
   >
     ${rowLabel(
       t('Taal van code en commits'),
@@ -469,7 +561,7 @@ function langCommitRow() {
 }
 
 function autoWarnRow() {
-  return html`<div data-testid="settings-row-autowarn" class="${() => rowCls('autowarn')}" @click="${() => (state.activeRow = ROWS.indexOf('autowarn'))}">
+  return html`<div data-testid="settings-row-autowarn" class="${() => rowCls('autowarn')}" @click="${() => selectRow('autowarn')}">
     ${rowLabel(t('Live AI assistent'), t('Automatische risicocontrole en AI-beschrijvingen aan/uit — geldt voor alle PR’s.'))}
     ${autoWarnToggleButton()}
   </div>`
@@ -479,7 +571,7 @@ function autoIngestPrefRow() {
   return html`<div
     data-testid="settings-row-autoingestpref"
     class="${() => rowCls('autoingestpref')}"
-    @click="${() => (state.activeRow = ROWS.indexOf('autoingestpref'))}"
+    @click="${() => selectRow('autoingestpref')}"
   >
     ${rowLabel(
       t('Automatisch review-boom genereren'),
@@ -490,7 +582,7 @@ function autoIngestPrefRow() {
 }
 
 function debugRow() {
-  return html`<div data-testid="settings-row-debug" class="${() => rowCls('debug')}" @click="${() => (state.activeRow = ROWS.indexOf('debug'))}">
+  return html`<div data-testid="settings-row-debug" class="${() => rowCls('debug')}" @click="${() => selectRow('debug')}">
     ${rowLabel(
       t('Debug mode'),
       t(
@@ -524,7 +616,7 @@ function debugRow() {
 // rows themselves are authStatus.mjs's own authCheckRow, the same component
 // the global dialog renders, so the two can never disagree about a state.
 function authRow() {
-  return html`<div data-testid="settings-row-auth" class="${() => rowCls('auth')}" @click="${() => (state.activeRow = ROWS.indexOf('auth'))}">
+  return html`<div data-testid="settings-row-auth" class="${() => rowCls('auth')}" @click="${() => selectRow('auth')}">
     ${rowLabel(
       t('Inloggegevens'),
       t('gh, acli en het Jira API-token. Werkt er één niet, dan slaat slash het werk dat daarop leunt stilzwijgend over.'),
@@ -642,7 +734,7 @@ function checkoutRow() {
   return html`<div
     data-testid="settings-row-checkout"
     class="${() => rowCls('checkout') + (originPr == null ? ' opacity-50' : '')}"
-    @click="${() => (state.activeRow = ROWS.indexOf('checkout'))}"
+    @click="${() => selectRow('checkout')}"
   >
     ${rowLabel(t('Werkmap'), t('Welke lokale werkmap Claude voor deze PR gebruikt — alleen te wijzigen vanuit een PR-pagina.'))}
     <div class="text-[13px] text-slate-600 dark:text-zinc-400" data-testid="settings-checkout-status">
@@ -674,7 +766,7 @@ function chip(text, onRemove, disabled) {
 }
 
 function aliasesRow() {
-  return html`<div data-testid="settings-row-aliases" class="${() => rowCls('aliases')}" @click="${() => (state.activeRow = ROWS.indexOf('aliases'))}">
+  return html`<div data-testid="settings-row-aliases" class="${() => rowCls('aliases')}" @click="${() => selectRow('aliases')}">
     ${rowLabel(t('Wie ben ik'), t('De login komt uit GitHub; alleen de extra @mention-spellingen hieronder zijn aanpasbaar.'))}
     <div class="mb-2 text-[13px] text-slate-600 dark:text-zinc-400" data-testid="settings-github-login">
       ${() => t('GitHub-login: {login}', { login: state.githubLogin || '…' })}
@@ -702,7 +794,7 @@ function praiseWordsRow() {
   return html`<div
     data-testid="settings-row-praisewords"
     class="${() => rowCls('praisewords')}"
-    @click="${() => (state.activeRow = ROWS.indexOf('praisewords'))}"
+    @click="${() => selectRow('praisewords')}"
   >
     ${rowLabel(t('Praise-woorden'), t('Woorden die de review-samenvatting niet als open punt telt (bv. "nice", "top").'))}
     <div class="mb-2 flex flex-wrap gap-1.5" data-testid="settings-praise-chips">
@@ -731,7 +823,7 @@ function notifyFiltersRow() {
   return html`<div
     data-testid="settings-row-notifyfilters"
     class="${() => rowCls('notifyfilters')}"
-    @click="${() => (state.activeRow = ROWS.indexOf('notifyfilters'))}"
+    @click="${() => selectRow('notifyfilters')}"
   >
     ${rowLabel(
       t('Jira-notificaties verbergen'),
@@ -758,6 +850,57 @@ function notifyFiltersRow() {
   </div>`
 }
 
+// The tab bar. Which tab is active is shown by shape/position (a bold label
+// plus a bottom underline that shifts, `aria-selected`), never by colour
+// alone (Reindert is colourblind, see .claude/rules and MEMORY.md). Each
+// button is `.key(id)`ed — a plain always-rendered ${() => TAB_DEFS.map(...)}
+// binding, not a static value inside a conditionally (re)built template, per
+// .claude/rules/arrowjs-pitfalls.md.
+function tabButtonCls(id) {
+  return () =>
+    'border-b-2 -mb-px px-3 py-2 text-[13px] transition-colors ' +
+    (state.activeTab === id
+      ? 'border-indigo-500 dark:border-indigo-400 font-semibold text-indigo-700 dark:text-indigo-300'
+      : 'border-transparent font-medium text-slate-500 dark:text-zinc-400 hover:text-slate-700 dark:hover:text-zinc-200')
+}
+
+function tabButton(tab) {
+  return html`<button
+    type="button"
+    data-testid="${'settings-tab-' + tab.id}"
+    aria-selected="${() => String(state.activeTab === tab.id)}"
+    class="${tabButtonCls(tab.id)}"
+    @click="${() => selectTab(tab.id)}"
+  >
+    ${() => t(tab.label)}
+  </button>`.key(tab.id)
+}
+
+function tabBar() {
+  return html`<div
+    data-testid="settings-tabs"
+    class="${() =>
+      'mb-4 flex gap-1 overflow-x-auto border-b border-slate-200 dark:border-zinc-800 ' +
+      (state.tabFocused ? 'ring-1 ring-inset ring-indigo-200 dark:ring-indigo-500/30' : '')}"
+  >
+    ${() => TAB_DEFS.map((tab) => tabButton(tab))}
+  </div>`
+}
+
+// A tab's rows stay MOUNTED at all times and only toggle visibility via a
+// static Tailwind class — never a conditionally (re)built template — so every
+// binding inside keeps reacting regardless of which tab is on screen (see the
+// "toggling expression"/"single↔array" pitfalls in
+// .claude/rules/arrowjs-pitfalls.md, which this sidesteps entirely rather
+// than working around).
+function tabPanelCls(id) {
+  return () => (state.activeTab === id ? 'space-y-3' : 'hidden')
+}
+
+function tabPanel(id, testid, rows) {
+  return html`<div data-testid="${testid}" class="${tabPanelCls(id)}">${rows}</div>`
+}
+
 function App() {
   return html`
     <div class="flex h-screen flex-col overflow-hidden">
@@ -774,32 +917,35 @@ function App() {
         <h1 class="text-lg font-semibold text-slate-900 dark:text-zinc-100">${t('Instellingen')}</h1>
       </header>
       <div class="flex-1 overflow-auto px-6 py-5">
-        <div class="mx-auto max-w-xl space-y-3" data-testid="settings-rows">
-          ${themeRow()} ${keyboardHintsRow()}
-          ${langRow(
-            'langui',
-            'ui',
-            'Taal van de interface',
-            'Alle titels, omschrijvingen en labels in deze app. Wisselen herlaadt de pagina.',
-          )}
-          ${langRow(
-            'langexplain',
-            'explain',
-            'Taal van AI-uitleg',
-            'De AI-omschrijving, de risicocheck, de PR-samenvatting, comment-titels en het testrapport. Een antwoord in een gesprek volgt altijd de taal van je eigen bericht.',
-          )}
-          ${langRow(
-            'langreply',
-            'reply',
-            'Taal van reacties op GitHub',
-            'De tekst die Claude voor je opschrijft als reactie op een reviewopmerking, en die onder jouw naam op GitHub komt.',
-          )}
-          ${langCommitRow()} ${autoWarnRow()} ${autoIngestPrefRow()} ${debugRow()} ${authRow()} ${checkoutRow()}
-          ${aliasesRow()}
-          ${praiseWordsRow()} ${notifyFiltersRow()}
+        <div class="mx-auto max-w-xl" data-testid="settings-rows">
+          ${tabBar()}
+          ${tabPanel('display', 'settings-tab-panel-display', [themeRow(), keyboardHintsRow(), debugRow()])}
+          ${tabPanel('language', 'settings-tab-panel-language', [
+            langRow(
+              'langui',
+              'ui',
+              'Taal van de interface',
+              'Alle titels, omschrijvingen en labels in deze app. Wisselen herlaadt de pagina.',
+            ),
+            langRow(
+              'langexplain',
+              'explain',
+              'Taal van AI-uitleg',
+              'De AI-omschrijving, de risicocheck, de PR-samenvatting, comment-titels en het testrapport. Een antwoord in een gesprek volgt altijd de taal van je eigen bericht.',
+            ),
+            langRow(
+              'langreply',
+              'reply',
+              'Taal van reacties op GitHub',
+              'De tekst die Claude voor je opschrijft als reactie op een reviewopmerking, en die onder jouw naam op GitHub komt.',
+            ),
+            langCommitRow(),
+          ])}
+          ${tabPanel('assistant', 'settings-tab-panel-assistant', [autoWarnRow(), autoIngestPrefRow(), praiseWordsRow()])}
+          ${tabPanel('account', 'settings-tab-panel-account', [authRow(), checkoutRow(), aliasesRow(), notifyFiltersRow()])}
         </div>
         <p class="mx-auto mt-4 max-w-xl text-[12px] text-slate-400 dark:text-zinc-500">
-          ${t('↑/↓ om te navigeren, Enter/Space om te wisselen of te bewerken, ← om terug te gaan.')}
+          ${t('←/→ wisselt tabblad (druk ↑ op de bovenste rij om de tabbalk te bereiken), ↑/↓ navigeert rijen, Enter/Space wisselt of bewerkt, ← om terug te gaan.')}
         </p>
       </div>
     </div>

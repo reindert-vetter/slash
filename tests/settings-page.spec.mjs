@@ -59,24 +59,74 @@ test.describe('settings page — entry buttons', () => {
 })
 
 test.describe('settings page — keyboard row navigation', () => {
-  test('↑/↓ move the active row, Enter toggles theme, Space toggles Live AI assistent', async ({ page }) => {
+  test('↑/↓ move the active row within a tab, Enter toggles theme', async ({ page }) => {
     await page.goto('/settings')
     const themeRow = page.getByTestId('settings-row-theme')
-    const autoWarnRow = page.getByTestId('settings-row-autowarn')
     await expect(themeRow).toBeVisible()
 
     const stored = () => page.evaluate(() => localStorage.getItem('theme'))
     expect(await stored()).toBeNull()
-    await page.keyboard.press('Enter') // row 0 = theme, cycles system -> light
+    await page.keyboard.press('Enter') // row 0 = theme (Weergave tab), cycles system -> light
     await expect.poll(stored).toBe('light')
 
-    // theme -> keyboardhints -> langui -> langexplain -> langreply -> langcommit -> autowarn
-    for (let i = 0; i < 6; i++) await page.keyboard.press('ArrowDown')
-    await expect(autoWarnRow).toHaveAttribute('data-testid', 'settings-row-autowarn')
+    // theme -> keyboardhints -> debug, all within the "Weergave" tab.
+    await page.keyboard.press('ArrowDown')
+    await page.keyboard.press('ArrowDown')
+    await expect(page.getByTestId('settings-row-debug')).toHaveAttribute('data-testid', 'settings-row-debug')
+  })
+
+  test('↑ off the top row reaches the tab bar; ←/→ switch tabs, ↓ re-enters the row list', async ({ page }) => {
+    await page.goto('/settings')
+    await expect(page.getByTestId('settings-tab-panel-display')).toBeVisible()
+    await expect(page.getByTestId('settings-tab-panel-assistant')).toHaveClass(/hidden/)
+
+    // Row 0 (theme) -> ↑ hands the keyboard to the tab bar.
+    await page.keyboard.press('ArrowUp')
+    await expect(page.getByTestId('settings-tabs')).toHaveClass(/ring-indigo-200|ring-indigo-500/)
+
+    // display -> language -> assistant
+    await page.keyboard.press('ArrowRight')
+    await page.keyboard.press('ArrowRight')
+    await expect(page.getByTestId('settings-tab-assistant')).toHaveAttribute('aria-selected', 'true')
+    await expect(page.getByTestId('settings-tab-panel-assistant')).toBeVisible()
+    await expect(page.getByTestId('settings-tab-panel-display')).toHaveClass(/hidden/)
+
+    // ↓ hands the keyboard back to the row list, landing on the assistant
+    // tab's own first row (autowarn) — Space toggles it, same as a click.
+    await page.keyboard.press('ArrowDown')
     const autoWarnLabel = () => page.getByTestId('auto-warn-toggle').innerText()
     const before = await autoWarnLabel()
     await page.keyboard.press(' ')
     await expect.poll(autoWarnLabel).not.toBe(before)
+  })
+
+  test('the open tab survives a refresh via ?tab=', async ({ page }) => {
+    await page.goto('/settings')
+    await page.getByTestId('settings-tab-account').click()
+    await expect(page).toHaveURL(/[?&]tab=account/)
+    await expect(page.getByTestId('settings-tab-panel-account')).toBeVisible()
+
+    await page.reload()
+    await expect(page.getByTestId('settings-tab-account')).toHaveAttribute('aria-selected', 'true')
+    await expect(page.getByTestId('settings-tab-panel-account')).toBeVisible()
+
+    // The default tab (Weergave) is omitted from the URL, keeping it short.
+    await page.getByTestId('settings-tab-display').click()
+    await expect(page).not.toHaveURL(/[?&]tab=/)
+  })
+
+  test('every existing setting is still reachable, one per tab-panel', async ({ page }) => {
+    await page.goto('/settings')
+    const rows = {
+      display: ['settings-row-theme', 'settings-row-keyboardhints', 'settings-row-debug'],
+      language: ['settings-row-langui', 'settings-row-langexplain', 'settings-row-langreply', 'settings-row-langcommit'],
+      assistant: ['settings-row-autowarn', 'settings-row-autoingestpref', 'settings-row-praisewords'],
+      account: ['settings-row-auth', 'settings-row-checkout', 'settings-row-aliases', 'settings-row-notifyfilters'],
+    }
+    for (const [tab, rowIds] of Object.entries(rows)) {
+      await page.getByTestId('settings-tab-' + tab).click()
+      for (const rowId of rowIds) await expect(page.getByTestId(rowId)).toBeVisible()
+    }
   })
 })
 
@@ -85,6 +135,7 @@ test.describe('settings page — checkout-directory row', () => {
     await page.goto('/pr-overview')
     await page.getByTestId('settings-button').click()
     await expect(page).toHaveURL(/\/settings\?from=/)
+    await page.getByTestId('settings-tab-account').click() // checkout lives in the "Account & Jira" tab
     const row = page.getByTestId('settings-row-checkout')
     await expect(row).toBeVisible()
     await expect(row).toHaveClass(/opacity-50/)
@@ -97,6 +148,7 @@ test.describe('settings page — mention aliases (write path)', () => {
     page,
   }) => {
     await page.goto('/settings')
+    await page.getByTestId('settings-tab-account').click() // "wie ben ik"/aliases live in the "Account & Jira" tab
     await expect(page.getByTestId('settings-github-login')).toBeVisible()
 
     const input = page.getByTestId('settings-aliases-input')
@@ -135,6 +187,7 @@ test.describe('settings page — mention aliases (write path)', () => {
 test.describe('settings page — praise words (write path)', () => {
   test('adding a word works and the last remaining word cannot be removed', async ({ page }) => {
     await page.goto('/settings')
+    await page.getByTestId('settings-tab-assistant').click() // praise words live in the "AI-assistent" tab
     const input = page.getByTestId('settings-praisewords-input')
     await input.click()
     await input.fill('fantastisch')
@@ -161,6 +214,7 @@ test.describe('settings page — Jira notification filters (write path)', () => 
     page,
   }) => {
     await page.goto('/settings')
+    await page.getByTestId('settings-tab-account').click() // Jira notification filters live in the "Account & Jira" tab
 
     const chips = page.getByTestId('settings-notifyfilters-chips')
     // The two texts the reviewer named are the built-in default list.

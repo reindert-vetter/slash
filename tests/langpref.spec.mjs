@@ -20,6 +20,7 @@ const readPref = (page, kind) =>
 
 test('every kind defaults to Dutch, and the commit row is a fixed rule without a toggle', async ({ page }) => {
   await page.goto('/settings')
+  await page.getByTestId('settings-tab-language').click() // lang rows live in the "Taal" tab
   await expect(page.getByTestId('settings-rows')).toBeVisible()
 
   for (const kind of ['ui', 'explain', 'reply']) {
@@ -36,6 +37,7 @@ test('every kind defaults to Dutch, and the commit row is a fixed rule without a
 
 test('switching the AI-explanation language persists, and does not touch the other kinds', async ({ page }) => {
   await page.goto('/settings')
+  await page.getByTestId('settings-tab-language').click() // lang rows live in the "Taal" tab
   const toggle = page.getByTestId('lang-toggle-explain')
   await expect(toggle).toContainText('Nederlands')
 
@@ -57,6 +59,7 @@ test('switching the AI-explanation language persists, and does not touch the oth
 
 test('switching the interface language reloads the page in English, and back again', async ({ page }) => {
   await page.goto('/settings')
+  await page.getByTestId('settings-tab-language').click() // lang rows live in the "Taal" tab
   await expect(page.getByTestId('settings-rows')).toBeVisible()
   await expect(page.getByTestId('settings-back')).toContainText('Terug')
 

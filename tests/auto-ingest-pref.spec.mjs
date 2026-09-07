@@ -44,6 +44,7 @@ test('defaults to "own", cycles own -> all -> off on /pr-overview, and persists 
 
 test('the same toggle is reachable and reusable from the /settings row', async ({ page }) => {
   await page.goto('/settings')
+  await page.getByTestId('settings-tab-assistant').click() // lives in the "AI-assistent" tab
   const row = page.getByTestId('settings-row-autoingestpref')
   await expect(row).toBeVisible()
   const toggle = row.getByTestId('auto-ingest-pref-toggle')
