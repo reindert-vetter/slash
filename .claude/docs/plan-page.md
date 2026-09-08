@@ -669,27 +669,31 @@ retry-once from the fix above, so a fresh plan can now survive up to 4 raw
 accepted extra cost for a smaller, less truncation-prone answer per call.
 
 Three call sites now share this one helper, all of which start from a
-document with no questions yet:
+document with no questions yet — each also has its own OLD, single-call
+fallback for a document recorded before the split existed (see
+"`SplitGenerate`: the split had to be replay-safe too" right below):
 
 - the very first generation (`planWorkflow`'s own body, after `planLoadContext`);
 - `planAnswerRegenerate` ("Plan opnieuw opstellen" — discards the current
   plan first, then calls `planGenerateFresh` exactly like a brand-new
   document);
 - `planAnswerRetry` when `planRetryMode(doc) == "questions"` (no questions
-  exist yet — the very first call never got that far) — `planRetryMode`
-  itself was renamed from returning `"all"` to `"questions"` for this, still
-  a pure function of `len(doc.Questions)` and still bounded to `"questions"`
-  vs `"tasks"` (an answer-triggered regeneration, where the questions must
-  stay put).
+  exist yet — the very first call never got that far) — still a pure
+  function of `len(doc.Questions)` (plus, now, `doc.SplitGenerate`) and still
+  bounded to `"questions"`/`"tasks"` (an answer-triggered regeneration, where
+  the questions must stay put) — or `"all"` for a pre-split document.
 
 **`planPrompt`'s per-mode switch** (`plan_prompt.go`) gained a `"questions"`
-case (the old `"all"` case's own question-generation rules, plus an explicit
-"Laat `tasks` leeg" instruction) and the whole task-detail checklist block
-(the `location`/`conditions`/`config`/… fields, ~14 lines) is now SKIPPED
-entirely for `mode` `"questions"` or `"followup"` — both already say
-"tasks leeg" and previously still received the full task-instructions wall
-right after, wastefully (and slightly self-contradictorily) bloating the
-smaller call's own prompt. The universal block-formatting rules (nesting,
+case (the SAME question-generation rules `"all"` still uses, plus an explicit
+"Laat `tasks` leeg" instruction only for `"questions"`) and the whole
+task-detail checklist block (the `location`/`conditions`/`config`/… fields,
+~14 lines) is now SKIPPED entirely for `mode` `"questions"` or `"followup"` —
+both already say "tasks leeg" and previously still received the full
+task-instructions wall right after, wastefully (and slightly
+self-contradictorily) bloating the smaller call's own prompt. `"all"` itself
+is UNCHANGED (still gets the full checklist, still asks for both questions and
+tasks at once) — kept alongside `"questions"`, not replaced by it, for the
+same replay-safety reason. The universal block-formatting rules (nesting,
 `note`, `code`/`lang`, Dutch prose) are unaffected — every mode's questions
 still need example-code blocks with the same shape.
 
@@ -699,6 +703,75 @@ in order, each carrying the right "leeg"/checklist instructions; the two
 existing malformed-JSON tests above were updated to reflect that a failed
 first call now logs as `(questions)` and, per `planGenerateFresh`'s own early
 return, never reaches a second (`tasks`) call at all.
+
+### `SplitGenerate`: the split had to be replay-safe too — a full server outage, and how it was found
+
+Reported incident (task 51), right after the split above first shipped: a
+FRESH `go run .` restart stopped answering ANY request at all — not just the
+plan page, `curl` to `/` itself timed out. Root cause, confirmed by reading
+the LIVE `data/workflows.db`/`data/plan.db` directly (not guessed) and by
+sending `kill -QUIT` at the hung process to capture a real goroutine dump:
+tembed matches a run's history POSITIONALLY
+(`.claude/rules/workflow-determinism.md`), and `planGenerateFresh` issues a
+DIFFERENT number of `ExecuteActivity` calls than the original single
+`Mode:"all"` call it replaced. Every plan Execution recorded BEFORE the split
+existed still had the OLD, single-call shape in its own history — so
+replaying one of them against the NEW code (as `engine.Recover()` does for
+every `waiting`/`running` run at startup) walked straight off the end of that
+history and re-executed a REAL, live `planGenerate` Activity — a genuine
+`claude -p` subprocess, caught mid-call in the goroutine dump
+(`os/exec.(*Cmd).Start`/`watchCtx`). `Recover()` runs SYNCHRONOUSLY inside
+`newTasks`, itself called BEFORE `http.Serve` starts consuming the
+already-bound listener (`main.go`) — so that one blocked subprocess call
+answered NOTHING, for anyone, until it finished or timed out.
+
+**Fix: `planDoc.SplitGenerate`** (`plan_workflow.go`), the exact same
+replay-safety shape this file already documents for `AskBase`/`LoadsContext`/
+`StartsProgress` — set to `true` by `planLoadIssue` for every FRESH document,
+absent (`false`) on every document recorded before it existed. Each of the
+three `planGenerateFresh` call sites now branches on it: `true` → the new
+two-call sequence; `false` → the EXACT original single
+`ExecuteActivity("planGenerate", Mode:"all")` + one `planSave` shape, byte-for-
+-byte what that position in an old run's history already recorded.
+`planRetryMode` gained the same branch (`"questions"` vs `"all"` when no
+questions exist yet, `SplitGenerate` decides which) for the SAME reason:
+STAT-1117's own history shows its very first `planAnswerRetry` Signal arrived
+while `doc.Questions` was still empty — precisely the shape that hung the
+server, since a wrongly-chosen `"questions"` retry issues MORE
+`ExecuteActivity` calls than that history segment ever recorded.
+
+**Verified against the real incident, not just synthetic tests**: copied the
+live `data/workflows.db`+`data/plan.db` (the actual STAT-1117 history) into a
+scratch data dir, ran the FIXED binary against it with
+`SLASH_CLAUDE=off SLASH_JIRA=off SLASH_GITHUB=off`, and confirmed `curl /`
+answers within ~3s (matching the pre-incident baseline) on a cold start, that
+sending the SAME kind of `plan_answer` "retry" Signal that originally hung the
+server completes instantly and leaves the server responsive, and that a
+second fresh restart (replaying the now slightly longer history) is equally
+fast.
+
+**Second, independent safety net — `planGenerate`/`planChatReply` are now
+`PriorityLow`** (`engine.SetActivityPriority`, `workflows.go`, the exact
+mechanism `pr_status`'s `generatePRSummary` already uses): the `plan` workflow
+itself stays `Normal` priority (its fast steps — load, save, the gates — still
+recover synchronously and quickly), but if replay ever reaches a live,
+unrecorded call to either of these two real `claude -p` activities, `Recover()`
+now DEFERS that one run to its background drain instead of blocking the
+synchronous startup phase at all. This does not replace the `SplitGenerate`
+fix (the root cause is closed either way), but it means a FUTURE bug of this
+same shape — or simply a legitimately slow call still in flight when the
+process was killed — can no longer take the whole server down with it.
+
+Regression test: `TestPlanWorkflowReplaysAPreSplitHistoryWithoutHanging`
+(`plan_workflow_test.go`) hand-builds a pre-split history (a `tembed.Store`
+populated directly via `CreateRun`/`AppendEvent`, no `splitGenerate` key
+anywhere) ending on exactly STAT-1117's own seq8 shape — a `plan_answer`
+Signal with `kind:"retry"` while `doc.Questions` is still empty — then calls
+`engine.Recover()` under a hard timeout and asserts it returns promptly, the
+one live call it correctly makes uses mode `"all"` (never `"questions"`), and
+the run ends up parked `waiting` again. Confirmed to actually catch the
+regression: reverting `planRetryMode`'s `SplitGenerate` branch alone (leaving
+everything else fixed) makes this test fail.
 
 ## Follow-up questions: sharpening the plan further
 

@@ -166,11 +166,17 @@ func planPrompt(doc planDoc, mode string) string {
 	b.WriteString(`"tasks":[{"title":"…","explanation":"…","location":"…","conditions":["…"],"config":["…"],"migration":"…","endpoints":["…"],"errors":"…","rollout":"…","edgeCases":["…"],"outOfScope":["…"],"blocks":[{"title":"…","lang":"php","note":"…","code":"…","children":[{"title":"…","lang":"php","note":"…","code":"…","children":[]}]}]}]}`)
 	b.WriteString("\n\nRegels:\n")
 	switch mode {
-	case "questions":
+	case "all", "questions":
+		// "all" is the replay-only, pre-split shape (see SplitGenerate's own
+		// doc comment in plan_workflow.go): one combined call asking for both
+		// questions AND tasks, so it must NOT be told to leave tasks empty.
+		// "questions" is the new, split first call.
 		fmt.Fprintf(&b, "- \"questions\": maximaal %d vragen die je ECHT nog nodig hebt om het plan te perfectioneren. Geen vraag waarvan het antwoord al in het ticket staat.\n", maxPlanQuestions)
 		fmt.Fprintf(&b, "- Elke vraag heeft 2 tot %d concrete keuzes (\"options\"), geen open vraag.\n", maxPlanOptions)
 		b.WriteString("- Elke keuze heeft minstens één blok met VOORBEELDCODE die laat zien hoe die keuze eruitziet.\n")
-		b.WriteString("- Laat \"tasks\" leeg ([]): de takenlijst wordt in een aparte, kleinere call opgesteld.\n")
+		if mode == "questions" {
+			b.WriteString("- Laat \"tasks\" leeg ([]): de takenlijst wordt in een aparte, kleinere call opgesteld.\n")
+		}
 	case "followup":
 		// The reviewer asked for MORE questions to sharpen the plan further.
 		// The existing questions are listed above as fixed choices; these are

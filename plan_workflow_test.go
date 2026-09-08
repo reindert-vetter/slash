@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/reindert-vetter/tembed"
 	"slash/modules/claude"
@@ -188,19 +190,23 @@ func TestPlanNeedsBaseQuestion(t *testing.T) {
 
 // TestPlanRetryMode pins which planGenerate mode a planAnswerRetry Signal
 // re-runs: the reported bug was a swallowed parse/timeout error on either the
-// FIRST generation (no questions exist yet, so "questions" must repeat, via
-// planGenerateFresh, THEN "tasks") or a LATER regeneration after an answer
-// (questions already exist and must stay put, so only "tasks" repeats) —
-// retrying the wrong one would either silently redo questions the reviewer is
-// mid-way through answering, or never produce the first round's questions at
-// all.
+// FIRST generation (no questions exist yet, so "questions" must repeat via
+// planGenerateFresh — THEN "tasks" — for a document with SplitGenerate, or
+// "all" for one recorded before the split existed, see SplitGenerate's own
+// doc comment) or a LATER regeneration after an answer (questions already
+// exist and must stay put, so only "tasks" repeats regardless) — retrying the
+// wrong one would either silently redo questions the reviewer is mid-way
+// through answering, never produce the first round's questions at all, or
+// (the "all" vs "questions" mix-up specifically) run replay off the end of
+// an already-recorded history.
 func TestPlanRetryMode(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		doc  planDoc
 		want string
 	}{
-		{"no questions yet: first generation failed", planDoc{}, "questions"},
+		{"no questions yet, pre-split document: first generation failed", planDoc{}, "all"},
+		{"no questions yet, split document: first generation failed", planDoc{SplitGenerate: true}, "questions"},
 		{"questions exist: a later regeneration failed", planDoc{Questions: []planQuestion{{ID: "q1"}}}, "tasks"},
 	} {
 		if got := planRetryMode(c.doc); got != c.want {
@@ -791,5 +797,129 @@ func TestPlanGenerateFreshSplitsQuestionsAndTasksIntoTwoCalls(t *testing.T) {
 	}
 	if len(doc.Questions) != 1 || len(doc.Tasks) != 1 {
 		t.Fatalf("doc = %+v, want one question and one task from the two calls combined", doc)
+	}
+}
+
+// TestPlanWorkflowReplaysAPreSplitHistoryWithoutHanging — reported incident
+// (task 51): right after the split (planGenerateFresh, 9d49dbe) shipped, a
+// FRESH server restart stopped answering ANY request at all. Root cause:
+// tembed matches history POSITIONALLY, and the split changed the NUMBER of
+// ExecuteActivity calls a fresh generation makes. Every Execution recorded
+// BEFORE the split (no `splitGenerate` key on its document at all) still had
+// the OLD, single-call shape in its history — so replaying it against the NEW
+// code ran straight off the end of that history into a REAL, live
+// `planGenerate` Activity call. Confirmed live against a real ticket's own
+// production `data/workflows.db`/`data/plan.db` (STAT-1117): a genuine
+// `os/exec` subprocess was blocked mid-call, captured via SIGQUIT's goroutine
+// dump, during `engine.Recover()` — which runs SYNCHRONOUSLY inside
+// `newTasks`, itself called BEFORE `http.Serve` starts consuming the
+// already-bound listener (main.go) — so that one blocked call answered
+// NOTHING, not just the plan page.
+//
+// This test reproduces the EXACT trigger with a hand-built, pre-split history
+// (no `planLoadIssue` result event carries a `splitGenerate` key) ending on a
+// `plan_answer` Signal with `kind:"retry"` while `doc.Questions` is still
+// empty — precisely STAT-1117's own seq8, the signal that hung the server.
+// `doc.SplitGenerate` (plan_workflow.go) fixes it: a pre-split document keeps
+// resuming via the OLD single Mode:"all" call (planRetryMode), so replay
+// never runs past what its own history actually recorded for anything before
+// this Signal, and the resulting live call (this Signal's own consequence,
+// never before recorded, and therefore correctly executed once) is bounded by
+// `engine.Recover()` returning promptly — planGenerate's own PriorityLow
+// marking (workflows.go) additionally defers that one live call to the
+// background rather than ever blocking Recover() itself, a second,
+// independent safety net against the same class of incident.
+func TestPlanWorkflowReplaysAPreSplitHistoryWithoutHanging(t *testing.T) {
+	fake := claude.NewFake()
+	jr := &jira.Fake{}
+	store := tembed.NewMemoryStore()
+	engine := tembed.New(store)
+	NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, fake, jr, nil, "", "test/repo")
+
+	const runID = "plan-OLD-1"
+	now := time.Now()
+	if err := store.CreateRun(tembed.RunRecord{ID: runID, Workflow: WorkflowPlan, Status: tembed.StatusWaiting, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	seq := 0
+	add := func(ev tembed.Event) {
+		ev.Seq, ev.Time = seq, now
+		if err := store.AppendEvent(runID, ev); err != nil {
+			t.Fatal(err)
+		}
+		seq++
+	}
+	marshal := func(v any) json.RawMessage {
+		b, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+
+	add(tembed.Event{Type: tembed.EventWorkflowStarted, Payload: marshal(PlanInput{Key: "OLD-1"})})
+	// planLoadIssue's OLD recorded result — no "splitGenerate" key at all,
+	// exactly what every Execution before this flag existed carries.
+	loadDoc := planDoc{
+		Key: "OLD-1", Title: "Oud plan", Description: "Iets ouds.",
+		AskBase: true, StartsProgress: true, LoadsContext: true,
+		Questions: []planQuestion{}, Tasks: []planTask{}, Answers: []planAnswer{},
+	}
+	add(tembed.Event{Type: tembed.EventActivityCompleted, Name: "planLoadIssue", Payload: marshal(loadDoc)})
+	add(tembed.Event{Type: tembed.EventActivityCompleted, Name: "planSave"})
+	add(tembed.Event{Type: tembed.EventSignalReceived, Name: SignalPlanHotfix, Payload: marshal(PlanHotfixSignal{})})
+	add(tembed.Event{Type: tembed.EventActivityCompleted, Name: "jiraStartProgress"})
+	add(tembed.Event{Type: tembed.EventActivityCompleted, Name: "planLoadContext", Payload: marshal(loadDoc)})
+	// The original combined "all" call FAILED — no questions, no tasks —
+	// exactly the reported production shape (STAT-1117's own seq6).
+	failDoc := loadDoc
+	failDoc.Error = "plan: parse answer: unexpected end of JSON input"
+	add(tembed.Event{Type: tembed.EventActivityCompleted, Name: "planGenerate", Payload: marshal(failDoc)})
+	add(tembed.Event{Type: tembed.EventActivityCompleted, Name: "planSave"})
+	// The reviewer clicked "Opnieuw plannen" while there were STILL no
+	// questions at all — STAT-1117's own seq8, the exact signal that hung the
+	// server. Its own consequence (a fresh planGenerate call) was never
+	// itself recorded, so THIS one call is correctly live during replay.
+	add(tembed.Event{Type: tembed.EventSignalReceived, Name: SignalPlanAnswer, Payload: marshal(PlanAnswerSignal{Kind: planAnswerRetry})})
+
+	done := make(chan error, 1)
+	go func() { done <- engine.Recover() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Recover: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Recover() did not return within 5s — replay ran off the end of history into a blocking live Activity call (the exact production incident, task 51)")
+	}
+
+	// planGenerate is PriorityLow (workflows.go), so the one live call this
+	// history's own retry Signal triggers is deferred to Recover's background
+	// drain rather than run inline — Wait() blocks until that drain settles.
+	waitDone := make(chan struct{})
+	go func() { engine.Wait(); close(waitDone) }()
+	select {
+	case <-waitDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("engine.Wait() did not return within 5s — the deferred retry never completed")
+	}
+
+	// 2, not 1: the Fake has no output programmed, so parsePlanAnswer fails and
+	// planGenerate's own retry-once (267cf9d) fires — both calls use mode
+	// "all", never "questions"/"tasks", which is the actual assertion here.
+	if n := fake.CallCount(); n != 2 {
+		t.Fatalf("claude called %d times, want exactly 2 (the retry Signal's own planGenerate call, retried once)", n)
+	}
+	for i, call := range fake.Calls {
+		if !strings.Contains(call.Prompt, `"tasks": maximaal`) {
+			t.Fatalf("call %d must be mode \"all\" (asks for tasks too, unlike \"questions\"):\n%s", i, call.Prompt)
+		}
+	}
+	status, err := engine.Status(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != tembed.StatusWaiting {
+		t.Fatalf("run status = %q, want %q (parked back on the plan_answer Signal)", status, tembed.StatusWaiting)
 	}
 }

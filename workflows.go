@@ -3597,6 +3597,26 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// just that activity PriorityLow defers such a run to the background at
 	// exactly that step, without demoting the whole workflow.
 	engine.SetActivityPriority("generatePRSummary", tembed.PriorityLow)
+	// Same reasoning for `plan`: the tracker itself (loading the ticket,
+	// saving, the scope/hotfix gates) is fast and stays Normal, but its two
+	// genuinely slow steps are real `claude -p` calls (planGenerate up to
+	// planClaudeTimeout — 5 minutes — planChatReply the same). Reported
+	// incident (task 51): a determinism bug elsewhere made a `plan` run's
+	// replay reach a live, unrecorded planGenerate call during Recover() —
+	// which, with `plan` at the default Normal priority, ran SYNCHRONOUSLY on
+	// the startup path (main.go: Recover() inside newTasks, itself called
+	// BEFORE http.Serve starts consuming the already-bound listener), and a
+	// blocked real subprocess call there meant the server answered NOTHING,
+	// not just the plan page, until that one call finished or timed out. The
+	// actual bug is fixed at its root (planDoc.SplitGenerate, see
+	// plan_workflow.go), but marking these two activities PriorityLow is
+	// cheap, proportionate defense-in-depth: it is the exact same mechanism
+	// generatePRSummary already uses, and it means a FUTURE bug of this same
+	// shape (or simply a legitimately slow call still in flight when the
+	// process was killed) demotes to the background instead of ever blocking
+	// startup again.
+	engine.SetActivityPriority("planGenerate", tembed.PriorityLow)
+	engine.SetActivityPriority("planChatReply", tembed.PriorityLow)
 	return m
 }
 

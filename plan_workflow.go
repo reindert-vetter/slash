@@ -440,10 +440,27 @@ type planDoc struct {
 	// and renderPlanIntent (plan_artifacts.go). Empty means "show the
 	// auto-generated one", the default for every document recorded before
 	// this existed.
-	IntentOverride string         `json:"intentOverride,omitempty"`
-	LoadsContext   bool           `json:"loadsContext,omitempty"`
-	Questions      []planQuestion `json:"questions"`
-	Tasks          []planTask     `json:"tasks"`
+	IntentOverride string `json:"intentOverride,omitempty"`
+	LoadsContext   bool   `json:"loadsContext,omitempty"`
+	// SplitGenerate says this Execution asks Claude for a brand-new plan as
+	// TWO separate calls (planGenerateFresh — see its own doc comment) rather
+	// than the original single Mode:"all" call. Set by planLoadIssue, same
+	// replay-safety shape as AskBase/LoadsContext/StartsProgress above: tembed
+	// matches history POSITIONALLY (`.claude/rules/workflow-determinism.md`),
+	// and planGenerateFresh issues a DIFFERENT number of ExecuteActivity calls
+	// than the old single-call shape — so an Execution recorded before this
+	// flag existed MUST keep taking the old, single-call path on replay, or
+	// its recorded history no longer lines up with what the workflow body
+	// does and replay runs straight off the end of it into a REAL, live
+	// Activity call (a genuine `claude -p` subprocess) during startup
+	// recovery. That is exactly what happened without this flag: reported as
+	// "the server no longer responds to anything after a restart" — Recover()
+	// runs synchronously in newTasks, itself called before http.Serve starts
+	// consuming the already-bound listener (main.go), so a live subprocess
+	// call blocked there hangs EVERY request, not just the plan page's own.
+	SplitGenerate bool           `json:"splitGenerate,omitempty"`
+	Questions     []planQuestion `json:"questions"`
+	Tasks         []planTask     `json:"tasks"`
 	// TaskStates is the reviewer's checkbox/note per task (see planTaskState).
 	// Absent for every document written before task 22 existed, which reads as
 	// "every task checked, no notes" — the default.
@@ -710,8 +727,21 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			return nil, fmt.Errorf("plan: load context: %w", err)
 		}
 	}
-	if err := planGenerateFresh(w, &doc); err != nil {
-		return nil, err
+	if doc.SplitGenerate {
+		if err := planGenerateFresh(w, &doc); err != nil {
+			return nil, err
+		}
+	} else {
+		// Replay-only path for an Execution recorded before the split existed
+		// (see SplitGenerate's own doc comment) — must keep this exact shape
+		// (one ExecuteActivity("planGenerate", Mode:"all") + one planSave)
+		// forever, since tembed matches history positionally.
+		if err := w.ExecuteActivity("planGenerate", planGenerateArg{Doc: doc, Mode: "all"}, &doc); err != nil {
+			return nil, fmt.Errorf("plan: generate: %w", err)
+		}
+		if err := w.ExecuteActivity("planSave", doc, nil); err != nil {
+			return nil, fmt.Errorf("plan: save: %w", err)
+		}
 	}
 	for {
 		var sig PlanAnswerSignal
@@ -747,8 +777,18 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			doc.Tasks = nil
 			doc.TaskStates = nil
 			doc.Error = ""
-			if err := planGenerateFresh(w, &doc); err != nil {
-				return nil, fmt.Errorf("plan: regenerate: %w", err)
+			if doc.SplitGenerate {
+				if err := planGenerateFresh(w, &doc); err != nil {
+					return nil, fmt.Errorf("plan: regenerate: %w", err)
+				}
+			} else {
+				// Replay-only path — see SplitGenerate's own doc comment.
+				if err := w.ExecuteActivity("planGenerate", planGenerateArg{Doc: doc, Mode: "all"}, &doc); err != nil {
+					return nil, fmt.Errorf("plan: regenerate: %w", err)
+				}
+				if err := w.ExecuteActivity("planSave", doc, nil); err != nil {
+					return nil, fmt.Errorf("plan: save regenerated plan: %w", err)
+				}
 			}
 			continue
 		}
@@ -769,14 +809,25 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		// Re-run a swallowed-error generation in place (see planAnswerRetry's own
 		// doc comment and planRetryMode).
 		if sig.Kind == planAnswerRetry {
-			if planRetryMode(doc) == "questions" {
+			switch planRetryMode(doc) {
+			case "questions":
 				// No questions exist yet — the very first call ("questions",
 				// see planGenerateFresh) never got that far, so redo BOTH
 				// steps, same as a brand-new plan.
 				if err := planGenerateFresh(w, &doc); err != nil {
 					return nil, fmt.Errorf("plan: retry generate: %w", err)
 				}
-			} else {
+			case "all":
+				// Replay-only path: this retry was recorded before the split
+				// existed (see SplitGenerate's own doc comment) — must keep
+				// resuming via the exact single-call shape it originally used.
+				if err := w.ExecuteActivity("planGenerate", planGenerateArg{Doc: doc, Mode: "all"}, &doc); err != nil {
+					return nil, fmt.Errorf("plan: retry generate: %w", err)
+				}
+				if err := w.ExecuteActivity("planSave", doc, nil); err != nil {
+					return nil, fmt.Errorf("plan: save after retry: %w", err)
+				}
+			default:
 				if err := w.ExecuteActivity("planGenerate", planGenerateArg{Doc: doc, Mode: "tasks"}, &doc); err != nil {
 					return nil, fmt.Errorf("plan: retry generate: %w", err)
 				}
@@ -883,16 +934,24 @@ func planIsBug(issueType string) bool {
 }
 
 // planRetryMode picks how a planAnswerRetry Signal re-runs — pure, so replay
-// reproduces it and it is testable on its own. "questions" when the very
-// first generation never produced any questions at all (there is nothing to
-// keep stable yet, so the whole from-scratch sequence repeats via
-// planGenerateFresh — questions, THEN tasks); "tasks" once questions exist,
-// matching planWorkflow's own choice between its first call and every later
+// reproduces it and it is testable on its own. When the very first generation
+// never produced any questions at all (there is nothing to keep stable yet,
+// so the whole from-scratch sequence repeats): "questions" for a document
+// with SplitGenerate (redo BOTH calls via planGenerateFresh), "all" for one
+// recorded before the split existed — this SAME retry Kind already shipped
+// before planGenerateFresh did (see SplitGenerate's own doc comment), so a
+// retry recorded against a pre-split document must keep resuming via the old,
+// single Mode:"all" call it originally used, or replay runs off the end of
+// its own history. "tasks" once questions exist either way, matching
+// planWorkflow's own choice between its first call and every later
 // regeneration (an answer never asks Claude to redo the questions the
 // reviewer may already be answering).
 func planRetryMode(doc planDoc) string {
 	if len(doc.Questions) == 0 {
-		return "questions"
+		if doc.SplitGenerate {
+			return "questions"
+		}
+		return "all"
 	}
 	return "tasks"
 }
@@ -1178,6 +1237,10 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 		// once the ticket really was read; the flag is what keeps an older
 		// Execution replaying past that Activity.
 		doc.LoadsContext = true
+		// Same replay-safety reason: only a freshly loaded document takes the
+		// two-call (questions, then tasks) generation path — see
+		// SplitGenerate's own doc comment.
+		doc.SplitGenerate = true
 		for _, c := range issue.Comments {
 			doc.Comments = append(doc.Comments, planComment{Author: c.Author, Created: c.Created, Body: c.Body})
 		}
@@ -1386,6 +1449,12 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 		}
 		doc.Error = ""
 		switch arg.Mode {
+		case "all":
+			// Replay-only mode (see SplitGenerate's own doc comment): the
+			// original combined call, both questions AND tasks in one answer.
+			// Falls through to the tasks-merge below, exactly as before the
+			// split existed.
+			doc.Questions = qs
 		case "questions":
 			// A brand-new plan's first call — questions only, so this response
 			// stays small (see planGenerateFresh). The tasks step follows as its
