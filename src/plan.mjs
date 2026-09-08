@@ -2312,17 +2312,6 @@ function ticketCard() {
         </div>
       </div>
       <div class="contents">${() => (intentInQuestionsColumn() ? '' : intentField('ticket'))}</div>
-      <div class="contents">
-        ${() =>
-          state.doc.error
-            ? html`<p
-                class="mt-3 shrink-0 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11.5px] text-amber-700 dark:bg-amber-500/15 dark:text-amber-300"
-                data-testid="plan-note"
-              >
-                ${state.doc.error}
-              </p>`
-            : ''}
-      </div>
     </div>
   `
 }
@@ -2332,6 +2321,31 @@ const RUN_STATUS_WORD = {
   waiting: 'wacht',
   completed: 'klaar',
   failed: 'mislukt',
+}
+
+// planRunStatusWord derives the "Plan" tracker row's status word/pill class:
+// an error on the document (e.g. a killed/timed-out `claude -p` call, see
+// planGenerate in plan_workflow.go) or the "still generating" state both used
+// to show as a note/pill OUTSIDE the Taken block (a separate `plan-note`
+// banner in the ticket column, and a pill next to the "TAKEN" header) even
+// though both are really just this one workflow run's current status —
+// reviewer request: "dat moet gewoon een status zijn van een workflow die
+// onder taken zichtbaar moet zijn". The Activity swallows its own error onto
+// the document rather than failing the Execution (best-effort, see
+// planGenerate's own doc comment), so `run.status` alone never carries this —
+// hence reading `state.doc.error` here too. The word itself carries the
+// meaning (colourblind rule: never colour alone), so the error text/label is
+// shown verbatim rather than replaced by a generic "mislukt".
+function planRunStatusWord(run) {
+  if (run.workflow === 'plan' && state.doc.error) return { text: state.doc.error, cls: 'amber' }
+  if (run.workflow === 'plan' && busyGenerating()) return { text: t('plan wordt opgesteld…'), cls: 'sky' }
+  return { text: t(RUN_STATUS_WORD[run.status] || run.status || 'onbekend'), cls: 'slate' }
+}
+
+const STATUS_PILL_CLS = {
+  slate: 'bg-slate-100 text-slate-600 dark:bg-zinc-800 dark:text-zinc-300',
+  sky: 'bg-sky-50 text-sky-700 ring-1 ring-inset ring-sky-200 dark:bg-sky-500/15 dark:text-sky-300 dark:ring-sky-500/30',
+  amber: 'bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200 dark:bg-amber-500/15 dark:text-amber-300 dark:ring-amber-500/30',
 }
 
 // runRow's own "opnieuw plannen" button: only for the ticket's `plan` tracker
@@ -2346,7 +2360,7 @@ const RUN_STATUS_WORD = {
 function runRow(run) {
   const retrying = !!state.retryingRuns[run.runId]
   const canRetry = run.workflow === 'plan' && run.status === 'failed' && !retrying
-  const statusWord = retrying ? t('opnieuw gestart') : t(RUN_STATUS_WORD[run.status] || run.status || 'onbekend')
+  const status = retrying ? { text: t('opnieuw gestart'), cls: 'slate' } : planRunStatusWord(run)
   return html`
     <div class="flex items-center gap-2 border-t border-slate-100 px-1 py-1.5 first:border-t-0 dark:border-zinc-800" data-testid="plan-run">
       <span class="min-w-0 flex-1 truncate text-[12.5px] text-slate-700 dark:text-zinc-300">${labelForWorkflow(run.workflow)}</span>
@@ -2363,8 +2377,10 @@ function runRow(run) {
               </button>`
             : ''}
       </div>
-      <span class="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10.5px] font-medium text-slate-600 dark:bg-zinc-800 dark:text-zinc-300"
-        >${statusWord}</span
+      <span
+        class="${'shrink-0 max-w-[60%] truncate rounded-full px-2 py-0.5 text-[10.5px] font-medium ' + STATUS_PILL_CLS[status.cls]}"
+        data-testid="plan-run-status"
+        >${status.text}</span
       >
     </div>
   `.key('run:' + run.runId)
@@ -2375,25 +2391,27 @@ function tasksCard() {
     <div class="${'shrink-0 ' + CARD + CARD_IDLE}" data-testid="plan-runs-card">
       <div class="mb-1 flex items-center gap-2">
         <span class="${LABEL}">${t('Taken')}</span>
-        <div class="contents">
-          ${() =>
-            busyGenerating()
-              ? html`<span
-                  class="rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-semibold text-sky-700 ring-1 ring-inset ring-sky-200 dark:bg-sky-500/15 dark:text-sky-300 dark:ring-sky-500/30"
-                  data-testid="plan-generating"
-                  >${t('plan wordt opgesteld…')}</span
-                >`
-              : ''}
-        </div>
       </div>
-      ${() =>
-        state.runs.length
-          ? state.runs.map((run) => runRow(run))
-          : [html`<p class="px-1 py-1 text-[12.5px] italic text-slate-400 dark:text-zinc-500">${t('geen taken voor dit ticket')}</p>`.key(
-              'no-runs',
-            )]}
+      ${() => (state.runs.length ? state.runs.map((run) => runRow(run)) : [noRunsRow()])}
     </div>
   `
+}
+
+// noRunsRow: the placeholder shown before the first "Plan" run row exists at
+// all (early in the ticket's lifecycle). Same shape every time — a single
+// `<p>`, class and text both computed reactively inside — never two
+// differently-shaped `html` templates sharing one `.key('no-runs')` (that hit
+// the "a keyed node is reused without re-running its bindings" pitfall in
+// .claude/rules/arrowjs-pitfalls.md the first time this was written).
+function noRunsRow() {
+  return html`<p
+    class="${() =>
+      'px-1 py-1 text-[12.5px] ' +
+      (busyGenerating() || state.doc.error ? 'text-sky-700 dark:text-sky-300' : 'italic text-slate-400 dark:text-zinc-500')}"
+    data-testid="${() => (busyGenerating() || state.doc.error ? 'plan-generating' : 'plan-no-runs')}"
+  >
+    ${() => (state.doc.error ? state.doc.error : busyGenerating() ? t('plan wordt opgesteld…') : t('geen taken voor dit ticket'))}
+  </p>`.key('no-runs')
 }
 
 // ---------------------------------------------- column 2: questions + tasks
