@@ -123,9 +123,18 @@ func writePlanContext(b *strings.Builder, doc planDoc) {
 	}
 }
 
-// planPrompt builds the Dutch prompt. mode "all" asks for questions + tasks
-// (the first pass), "tasks" only for the task list (after an answer) — the
-// questions themselves must not move while the reviewer is answering them.
+// planPrompt builds the Dutch prompt. mode "questions" asks for the
+// clarifying questions only (the first pass); "tasks" only for the task list
+// (after an answer, or right after "questions" on a brand-new plan — see
+// planGenerateFresh) — the questions themselves must not move while the
+// reviewer is answering them. These used to be ONE combined "all" call (both
+// questions and tasks in a single answer); split into two smaller calls
+// (reviewer decision, task 50) because a single big answer — up to
+// maxPlanQuestions questions and maxPlanTasks tasks, each with their own
+// nested example-code blocks — could run into the model's own output-length
+// limit and come back truncated ("unexpected end of JSON input"), which no
+// amount of retrying the SAME oversized prompt reliably fixes. See
+// planGenerateFresh's own doc comment and ".claude/docs/plan-page.md".
 func planPrompt(doc planDoc, mode string) string {
 	var b strings.Builder
 	b.WriteString("Je helpt een ontwikkelaar een Jira-ticket om te zetten in een scherp uitvoerplan.\n\n")
@@ -157,10 +166,11 @@ func planPrompt(doc planDoc, mode string) string {
 	b.WriteString(`"tasks":[{"title":"…","explanation":"…","location":"…","conditions":["…"],"config":["…"],"migration":"…","endpoints":["…"],"errors":"…","rollout":"…","edgeCases":["…"],"outOfScope":["…"],"blocks":[{"title":"…","lang":"php","note":"…","code":"…","children":[{"title":"…","lang":"php","note":"…","code":"…","children":[]}]}]}]}`)
 	b.WriteString("\n\nRegels:\n")
 	switch mode {
-	case "all":
+	case "questions":
 		fmt.Fprintf(&b, "- \"questions\": maximaal %d vragen die je ECHT nog nodig hebt om het plan te perfectioneren. Geen vraag waarvan het antwoord al in het ticket staat.\n", maxPlanQuestions)
 		fmt.Fprintf(&b, "- Elke vraag heeft 2 tot %d concrete keuzes (\"options\"), geen open vraag.\n", maxPlanOptions)
 		b.WriteString("- Elke keuze heeft minstens één blok met VOORBEELDCODE die laat zien hoe die keuze eruitziet.\n")
+		b.WriteString("- Laat \"tasks\" leeg ([]): de takenlijst wordt in een aparte, kleinere call opgesteld.\n")
 	case "followup":
 		// The reviewer asked for MORE questions to sharpen the plan further.
 		// The existing questions are listed above as fixed choices; these are
@@ -172,21 +182,28 @@ func planPrompt(doc planDoc, mode string) string {
 		b.WriteString("- Laat \"questions\" leeg ([]): die zijn al gesteld.\n")
 	}
 	b.WriteString("- Stel GEEN vragen over tests en laat de reviewer daar niets over kiezen.\n")
-	fmt.Fprintf(&b, "- \"tasks\": maximaal %d taken, in uitvoervolgorde: alles wat er moet gebeuren, met per taak een korte uitleg en voorbeeldcode.\n", maxPlanTasks)
-	// Reviewer request, verbatim: "elke if statement moet in de plan, elke
-	// config ook", plus the checklist agreed with it. These fields are what
-	// makes a task executable instead of a heading.
-	b.WriteString("- Elke taak is CONCREET. Vul per taak in wat van toepassing is (laat een veld weg als het echt niet speelt, verzin niets):\n")
-	b.WriteString("  - \"location\": in welke module of /app-map dit terechtkomt (het echte pad).\n")
-	b.WriteString("  - \"conditions\": ELKE if/voorwaarde/branch die je toevoegt of aanpast, in woorden — welke conditie, wat gebeurt er als hij waar is en wat als hij niet waar is. Laat er geen weg.\n")
-	b.WriteString("  - \"config\": ELKE config, env-variabele of instelling die erbij komt of verandert, met naam, waarde en standaardwaarde.\n")
-	b.WriteString("  - \"migration\": datamigratie of schemawijziging (welke tabel/kolom, en hoe bestaande rijen meegaan).\n")
-	b.WriteString("  - \"endpoints\": nieuwe of gewijzigde endpoints/routes, met methode en pad.\n")
-	b.WriteString("  - \"errors\": foutafhandeling van deze stap — wat er misgaat en wat er dan gebeurt.\n")
-	b.WriteString("  - \"rollout\": feature flag/uitrol en hoe je dit terugdraait als het misgaat.\n")
-	b.WriteString("  - \"edgeCases\": randgevallen van de data — leeg, nul, heel groot, meerdere tegelijk.\n")
-	b.WriteString("  - \"outOfScope\": wat expliciet NIET bij deze taak hoort.\n")
-	b.WriteString("- Noem GEEN tests: welke test bij welke taak hoort bepaalt de uitvoerder zelf.\n")
+	// The task-detail checklist only applies once tasks are actually being
+	// asked for — "questions" and "followup" mode already say "Laat tasks
+	// leeg" above, and this whole block would otherwise needlessly contradict
+	// that (and, now that questions/tasks are two separate calls, bloat the
+	// smaller call's prompt for no reason — see planGenerateFresh).
+	if mode != "questions" && mode != "followup" {
+		fmt.Fprintf(&b, "- \"tasks\": maximaal %d taken, in uitvoervolgorde: alles wat er moet gebeuren, met per taak een korte uitleg en voorbeeldcode.\n", maxPlanTasks)
+		// Reviewer request, verbatim: "elke if statement moet in de plan, elke
+		// config ook", plus the checklist agreed with it. These fields are what
+		// makes a task executable instead of a heading.
+		b.WriteString("- Elke taak is CONCREET. Vul per taak in wat van toepassing is (laat een veld weg als het echt niet speelt, verzin niets):\n")
+		b.WriteString("  - \"location\": in welke module of /app-map dit terechtkomt (het echte pad).\n")
+		b.WriteString("  - \"conditions\": ELKE if/voorwaarde/branch die je toevoegt of aanpast, in woorden — welke conditie, wat gebeurt er als hij waar is en wat als hij niet waar is. Laat er geen weg.\n")
+		b.WriteString("  - \"config\": ELKE config, env-variabele of instelling die erbij komt of verandert, met naam, waarde en standaardwaarde.\n")
+		b.WriteString("  - \"migration\": datamigratie of schemawijziging (welke tabel/kolom, en hoe bestaande rijen meegaan).\n")
+		b.WriteString("  - \"endpoints\": nieuwe of gewijzigde endpoints/routes, met methode en pad.\n")
+		b.WriteString("  - \"errors\": foutafhandeling van deze stap — wat er misgaat en wat er dan gebeurt.\n")
+		b.WriteString("  - \"rollout\": feature flag/uitrol en hoe je dit terugdraait als het misgaat.\n")
+		b.WriteString("  - \"edgeCases\": randgevallen van de data — leeg, nul, heel groot, meerdere tegelijk.\n")
+		b.WriteString("  - \"outOfScope\": wat expliciet NIET bij deze taak hoort.\n")
+		b.WriteString("- Noem GEEN tests: welke test bij welke taak hoort bepaalt de uitvoerder zelf.\n")
+	}
 	b.WriteString("- NEST je blokken: elk blok dat iets aanroept of aanpast krijgt \"children\" met de onderliggende stukken (de helper die het aanroept, de test die het dekt, de call-site die mee moet). Nest zo diep als het plan duidelijker maakt — twee of drie niveaus is normaal, één plat blok is te weinig.\n")
 	b.WriteString("- ELK blok heeft een \"note\": één of twee zinnen uitleg over wat dat blok doet en waarom het nodig is. Dat geldt net zo hard voor ELK onderliggend blok, op ELK nestniveau — bij een kind-blok legt de note uit waarom het onder zijn ouder hangt (welke aanroep, welke dekking, welke call-site). Laat geen enkel blok zonder note.\n")
 	b.WriteString("- \"code\" is echte, compileerbare voorbeeldcode, hooguit ~25 regels per blok. \"lang\" is php, typescript, javascript, sql, json, bash of yaml.\n")

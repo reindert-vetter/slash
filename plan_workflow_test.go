@@ -135,7 +135,7 @@ func TestPlanPromptCarriesParentAndSubtaskContext(t *testing.T) {
 		Key: "INTL-145", Title: "Payment link vertalingen",
 		ParentKey: "INTL-139", ParentTitle: "Spaans toevoegen",
 		ParentDescription: "Alle klantpagina's ook in het Spaans.",
-	}, "all")
+	}, "questions")
 	for _, want := range []string{"HOOFDTAAK INTL-139: Spaans toevoegen", "Alle klantpagina's ook in het Spaans.", "SUBTAAK"} {
 		if !strings.Contains(sub, want) {
 			t.Fatalf("subtask prompt misses %q:\n%s", want, sub)
@@ -151,7 +151,7 @@ func TestPlanPromptCarriesParentAndSubtaskContext(t *testing.T) {
 			{Key: "INTL-140", Title: "ES toevoegen aan locales", Status: "In Progress"},
 			{Key: "INTL-145", Title: "Payment link vertalingen"},
 		},
-	}, "all")
+	}, "questions")
 	for _, want := range []string{"SUBTAKEN VAN DIT TICKET", "INTL-140: ES toevoegen aan locales (In Progress)", "INTL-145: Payment link vertalingen"} {
 		if !strings.Contains(parent, want) {
 			t.Fatalf("parent prompt misses %q:\n%s", want, parent)
@@ -188,18 +188,19 @@ func TestPlanNeedsBaseQuestion(t *testing.T) {
 
 // TestPlanRetryMode pins which planGenerate mode a planAnswerRetry Signal
 // re-runs: the reported bug was a swallowed parse/timeout error on either the
-// FIRST generation (no questions exist yet, so "all" must repeat) or a LATER
-// regeneration after an answer (questions already exist and must stay put, so
-// only "tasks" repeats) — retrying the wrong one would either silently redo
-// questions the reviewer is mid-way through answering, or never produce the
-// first round's questions at all.
+// FIRST generation (no questions exist yet, so "questions" must repeat, via
+// planGenerateFresh, THEN "tasks") or a LATER regeneration after an answer
+// (questions already exist and must stay put, so only "tasks" repeats) —
+// retrying the wrong one would either silently redo questions the reviewer is
+// mid-way through answering, or never produce the first round's questions at
+// all.
 func TestPlanRetryMode(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		doc  planDoc
 		want string
 	}{
-		{"no questions yet: first generation failed", planDoc{}, "all"},
+		{"no questions yet: first generation failed", planDoc{}, "questions"},
 		{"questions exist: a later regeneration failed", planDoc{Questions: []planQuestion{{ID: "q1"}}}, "tasks"},
 	} {
 		if got := planRetryMode(c.doc); got != c.want {
@@ -260,12 +261,12 @@ func TestPlanIsBugAndBaseBranch(t *testing.T) {
 // production, so both the planning prompt and the executing one have to say so.
 func TestPlanPromptCarriesTheHotfixConstraint(t *testing.T) {
 	doc := planDoc{Key: "PAYM-813", Title: "Refund faalt", IssueType: "Bug", Hotfix: true, BaseBranch: "master"}
-	for name, out := range map[string]string{"planPrompt": planPrompt(doc, "all"), "planExecutePrompt": planExecutePrompt(doc)} {
+	for name, out := range map[string]string{"planPrompt": planPrompt(doc, "questions"), "planExecutePrompt": planExecutePrompt(doc)} {
 		if !strings.Contains(out, "HOTFIX") || !strings.Contains(out, "master") {
 			t.Fatalf("%s must name the hotfix and its branch:\n%s", name, out)
 		}
 	}
-	plain := planPrompt(planDoc{Key: "PAYM-813", Title: "Refund faalt", BaseBranch: "develop"}, "all")
+	plain := planPrompt(planDoc{Key: "PAYM-813", Title: "Refund faalt", BaseBranch: "develop"}, "questions")
 	if strings.Contains(plain, "HOTFIX") {
 		t.Fatalf("a non-hotfix plan must not be told it is one:\n%s", plain)
 	}
@@ -360,7 +361,7 @@ func TestPlanPromptCarriesCommentsAndMergedWork(t *testing.T) {
 			{Number: 12953, Title: "Clickhouse TTL", Key: "PROD-200", MergedAt: "2026-07-14T13:43:23Z", Files: []string{"app/Stats/Ttl.php"}},
 		},
 	}
-	p := planPrompt(doc, "all")
+	p := planPrompt(doc, "questions")
 	for _, want := range []string{
 		"OPMERKINGEN OP DIT TICKET", "hoeft dus niet",
 		"OPMERKINGEN OP DE HOOFDTAAK EN DE SUBTAKEN", "PROD-200 · Dennis", "kolom toevoegen",
@@ -377,7 +378,7 @@ func TestPlanPromptCarriesCommentsAndMergedWork(t *testing.T) {
 // statement moet in de plan, elke config ook" — plus the rest of the agreed
 // checklist, and the deliberate absence of tests.
 func TestPlanPromptDemandsEveryIfAndConfig(t *testing.T) {
-	p := planPrompt(planDoc{Key: "PAYM-813", Title: "Refund"}, "all")
+	p := planPrompt(planDoc{Key: "PAYM-813", Title: "Refund"}, "tasks")
 	for _, want := range []string{
 		"ELKE if/voorwaarde", "ELKE config", `"location"`, `"migration"`, `"endpoints"`,
 		`"errors"`, `"rollout"`, `"edgeCases"`, `"outOfScope"`,
@@ -660,8 +661,10 @@ func TestPlanGenerateRetriesOnceOnMalformedJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Every fresh ticket is asked the base-branch question before planGenerate
-	// ever runs (planNeedsBaseQuestion) — answer it so mode "all" actually
-	// fires.
+	// ever runs (planNeedsBaseQuestion) — answer it so planGenerateFresh's
+	// "questions" call actually fires. A malformed answer there stops
+	// planGenerateFresh before its "tasks" call, so only ONE planGenerate
+	// Activity (with its own internal retry-once) runs here.
 	if err := engine.SignalWorkflow(runID, SignalPlanHotfix, PlanHotfixSignal{}); err != nil {
 		t.Fatal(err)
 	}
@@ -675,5 +678,118 @@ func TestPlanGenerateRetriesOnceOnMalformedJSON(t *testing.T) {
 	}
 	if doc.Error == "" || !strings.Contains(doc.Error, "parse answer") {
 		t.Fatalf("doc.Error = %q, want the parse failure to still be recorded once both attempts fail", doc.Error)
+	}
+}
+
+// TestPlanGenerateSuccessClearsAStaleError — reported bug (task 50): a
+// perfectly successful generation kept showing an OLD "mislukt" error from a
+// previous failed attempt, even though the plan itself had genuinely
+// regenerated cleanly. Root cause was `planDoc.Error`'s `json:"error,omitempty"`:
+// tembed's `ExecuteActivity(..., &doc)` decodes an Activity's JSON result INTO
+// the already-populated workflow-level `doc` (`json.Unmarshal`), which never
+// clears a destination field whose key is simply ABSENT from the incoming
+// JSON — and a successful planGenerate's own `doc.Error = ""` marshaled to no
+// "error" key at all under `omitempty`. This drives the exact same sequence
+// that exposed it live (STAT-1117): a failed "questions" generation, followed
+// by a genuinely successful retry.
+func TestPlanGenerateSuccessClearsAStaleError(t *testing.T) {
+	fake := claude.NewFake()
+	// A dropped colon after a key, same reproduced shape as the other test —
+	// this is the FIRST, failing attempt.
+	fake.SetOutput(claude.ModelOpus, `{"questions":[{"question" niet:"test"}],"tasks":[]}`)
+	jr := &jira.Fake{}
+	jr.SetIssue("PAYM-813", jira.Issue{Title: "Iets plannen", Description: "Een omschrijving."})
+	pl, err := plan.Open(filepath.Join(t.TempDir(), "plan.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := tembed.New(tembed.NewMemoryStore())
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, fake, jr, nil, "", "test/repo")
+	m.plan = pl
+
+	runID, err := m.StartPlan("PAYM-813")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.SignalWorkflow(runID, SignalPlanHotfix, PlanHotfixSignal{}); err != nil {
+		t.Fatal(err)
+	}
+	doc, ok := m.PlanDoc(context.Background(), "PAYM-813")
+	if !ok || doc.Error == "" {
+		t.Fatalf("doc = %+v, ok=%v, want the first (failed) generation recorded", doc, ok)
+	}
+
+	// Now program a genuinely valid answer (both questions and tasks, so it
+	// satisfies whichever of planGenerateFresh's two calls asks for it) and
+	// retry in place.
+	fake.SetOutput(claude.ModelOpus, `{"questions":[{"question":"Waar hoort dit?","options":[{"label":"In de service"}]}],`+
+		`"tasks":[{"title":"Endpoint toevoegen","explanation":"Waarom"}]}`)
+	if err := engine.SignalWorkflow(runID, SignalPlanAnswer, PlanAnswerSignal{Kind: planAnswerRetry}); err != nil {
+		t.Fatal(err)
+	}
+
+	doc, ok = m.PlanDoc(context.Background(), "PAYM-813")
+	if !ok {
+		t.Fatalf("no document stored")
+	}
+	if doc.Error != "" {
+		t.Fatalf("doc.Error = %q, want it CLEARED now that the retry genuinely succeeded", doc.Error)
+	}
+	if len(doc.Questions) != 1 || doc.Questions[0].Question != "Waar hoort dit?" {
+		t.Fatalf("questions = %+v, want the freshly generated one", doc.Questions)
+	}
+	if len(doc.Tasks) != 1 || doc.Tasks[0].Title != "Endpoint toevoegen" {
+		t.Fatalf("tasks = %+v, want the freshly generated one", doc.Tasks)
+	}
+}
+
+// TestPlanGenerateFreshSplitsQuestionsAndTasksIntoTwoCalls — reported bug
+// (task 50): a single combined answer (up to maxPlanQuestions questions AND
+// maxPlanTasks tasks, each with their own nested example-code blocks) could
+// run into the model's own output-length limit and come back truncated
+// ("unexpected end of JSON input") — confirmed against a real ticket's
+// workflow history. planGenerateFresh now asks in two separate, smaller
+// calls; this pins that BOTH calls happen, in order, each with the mode its
+// own prompt rule expects.
+func TestPlanGenerateFreshSplitsQuestionsAndTasksIntoTwoCalls(t *testing.T) {
+	fake := claude.NewFake()
+	fake.SetOutput(claude.ModelOpus, `{"questions":[{"question":"Waar hoort dit?","options":[{"label":"In de service"}]}],`+
+		`"tasks":[{"title":"Endpoint toevoegen","explanation":"Waarom"}]}`)
+	jr := &jira.Fake{}
+	jr.SetIssue("PAYM-813", jira.Issue{Title: "Iets plannen", Description: "Een omschrijving."})
+	pl, err := plan.Open(filepath.Join(t.TempDir(), "plan.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := tembed.New(tembed.NewMemoryStore())
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, fake, jr, nil, "", "test/repo")
+	m.plan = pl
+
+	runID, err := m.StartPlan("PAYM-813")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.SignalWorkflow(runID, SignalPlanHotfix, PlanHotfixSignal{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if n := fake.CallCount(); n != 2 {
+		t.Fatalf("claude called %d times, want 2 (one for questions, one for tasks)", n)
+	}
+	if !strings.Contains(fake.Calls[0].Prompt, `"tasks" leeg`) {
+		t.Fatalf("first call's prompt must ask to leave tasks empty:\n%s", fake.Calls[0].Prompt)
+	}
+	if strings.Contains(fake.Calls[0].Prompt, "ELKE if/voorwaarde") {
+		t.Fatalf("first call's prompt must not carry the task-detail checklist (smaller prompt):\n%s", fake.Calls[0].Prompt)
+	}
+	if !strings.Contains(fake.Calls[1].Prompt, `"questions" leeg`) {
+		t.Fatalf("second call's prompt must ask to leave questions empty:\n%s", fake.Calls[1].Prompt)
+	}
+	doc, ok := m.PlanDoc(context.Background(), "PAYM-813")
+	if !ok {
+		t.Fatalf("no document stored")
+	}
+	if len(doc.Questions) != 1 || len(doc.Tasks) != 1 {
+		t.Fatalf("doc = %+v, want one question and one task from the two calls combined", doc)
 	}
 }

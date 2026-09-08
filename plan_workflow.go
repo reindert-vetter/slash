@@ -159,7 +159,7 @@ const planAnswerRetry = "retry"
 // planAnswerRegenerate is the PlanAnswerSignal Kind that throws away the
 // CURRENT plan — every generated question, its answers, every task and its
 // per-task reviewer state — and asks Claude for a brand new one from
-// scratch, exactly like the very first generation (Mode "all"). Reviewer
+// scratch, exactly like the very first generation (planGenerateFresh). Reviewer
 // request: a second button next to "meer vragen genereren" — "vervolgvragen
 // genereren OF plan opstellen [opnieuw]" — for when sharpening the existing
 // plan isn't what's wanted, a genuinely fresh take is. Unlike every other
@@ -458,13 +458,36 @@ type planDoc struct {
 	// Error is a short reason the questions/tasks are empty (Jira or Claude
 	// unreachable, SLASH_CLAUDE=off). The page shows it as a note, never as an
 	// error wall — same "never cry wolf" rule as the Jira sections.
-	Error string `json:"error,omitempty"`
+	//
+	// Deliberately NO `omitempty` (reported bug, task 50 — "ik kan nog steeds
+	// niet plan opstellen" even though later generations were quietly
+	// succeeding): every `ExecuteActivity(..., &doc)` call in planWorkflow
+	// decodes an Activity's JSON result INTO the ALREADY-POPULATED workflow-
+	// level `doc` (tembed's `decode` is a plain `json.Unmarshal(payload,
+	// out)`, tembed/workflow.go), which never zeroes a destination field whose
+	// key is simply ABSENT from the incoming JSON. planGenerate's own
+	// `doc.Error = ""` on success is only ever visible on its Activity-local
+	// copy; with `omitempty` that success response carried no "error" key at
+	// all, so the workflow's `doc.Error` kept whatever an EARLIER failed
+	// attempt had set — forever, even after the plan had genuinely
+	// regenerated cleanly many times since. Confirmed against a real ticket's
+	// event history (STAT-1117): the last-completed planGenerate's own
+	// recorded payload carried no error field, yet the persisted document
+	// still showed a `parse answer` message from three attempts earlier.
+	// Every other omitempty field on this struct that a workflow ever resets
+	// to zero (NeedsScope, NeedsHotfix, IntentOverride, …) is assigned
+	// directly on the workflow's own `doc`, never round-tripped through an
+	// Activity's decoded output, so none of them share this gap.
+	Error string `json:"error"`
 }
 
 // planGenerateArg is what the generate Activity gets: the document so far plus
-// what it should (re)generate. "all" is the first pass (questions + tasks);
-// "tasks" runs after every answer, so the questions the reviewer is halfway
-// through answering never move under their hands.
+// what it should (re)generate. "questions" is the first pass's own call
+// (questions only — see planGenerateFresh, which always follows it with a
+// separate "tasks" call); "tasks" runs after every answer (and right after
+// "questions" on a brand-new plan), so the questions the reviewer is halfway
+// through answering never move under their hands; "followup" asks for MORE
+// questions only, same shape as "questions".
 type planGenerateArg struct {
 	Doc  planDoc `json:"doc"`
 	Mode string  `json:"mode"`
@@ -540,6 +563,50 @@ func handlePlanComments(w *tembed.Workflow, doc *planDoc) error {
 	}
 	if err := w.ExecuteActivity("planSave", *doc, nil); err != nil {
 		return fmt.Errorf("plan: save after comment: %w", err)
+	}
+	return nil
+}
+
+// planGenerateFresh builds a brand-new plan from scratch as TWO separate,
+// smaller Claude calls — "questions" first, then "tasks" — instead of the
+// single, combined "all" call this used to be. Reviewer decision (task 50,
+// "ja, splits de call"): a single answer asking for up to maxPlanQuestions
+// questions AND up to maxPlanTasks tasks, each with their own nested
+// example-code blocks, could run into the model's own output-length limit and
+// come back truncated ("plan: parse answer: unexpected end of JSON input") —
+// confirmed against a real ticket's (STAT-1117) workflow history, where this
+// happened on 3 of ~9 generations. Splitting the call in two keeps each
+// individual answer smaller, at the cost of one extra Claude round trip; the
+// existing retry-once-per-call (see planGenerate's own doc comment) still
+// applies to EACH of the two calls independently.
+//
+// Used for the very first generation (planWorkflow), "Plan opnieuw opstellen"
+// (planAnswerRegenerate — the current plan is discarded first, same as a
+// fresh document), and a planAnswerRetry Signal when there are no questions
+// yet (planRetryMode) — all three cases start from a document with no
+// questions, so all three need the exact same two-step sequence.
+//
+// Stops after the questions call if IT failed (doc.Error set — see the
+// question-mode branch of planGenerate's own switch) rather than pressing on
+// into a tasks-only call with nothing to build a plan's own questions column
+// around; the reviewer's existing "Opnieuw plannen" action resumes from
+// there via planRetryMode, which is exactly why that function checks
+// len(doc.Questions) rather than doc.Error.
+func planGenerateFresh(w *tembed.Workflow, doc *planDoc) error {
+	if err := w.ExecuteActivity("planGenerate", planGenerateArg{Doc: *doc, Mode: "questions"}, doc); err != nil {
+		return fmt.Errorf("plan: generate questions: %w", err)
+	}
+	if err := w.ExecuteActivity("planSave", *doc, nil); err != nil {
+		return fmt.Errorf("plan: save questions: %w", err)
+	}
+	if doc.Error != "" {
+		return nil
+	}
+	if err := w.ExecuteActivity("planGenerate", planGenerateArg{Doc: *doc, Mode: "tasks"}, doc); err != nil {
+		return fmt.Errorf("plan: generate tasks: %w", err)
+	}
+	if err := w.ExecuteActivity("planSave", *doc, nil); err != nil {
+		return fmt.Errorf("plan: save tasks: %w", err)
 	}
 	return nil
 }
@@ -643,11 +710,8 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			return nil, fmt.Errorf("plan: load context: %w", err)
 		}
 	}
-	if err := w.ExecuteActivity("planGenerate", planGenerateArg{Doc: doc, Mode: "all"}, &doc); err != nil {
-		return nil, fmt.Errorf("plan: generate: %w", err)
-	}
-	if err := w.ExecuteActivity("planSave", doc, nil); err != nil {
-		return nil, fmt.Errorf("plan: save: %w", err)
+	if err := planGenerateFresh(w, &doc); err != nil {
+		return nil, err
 	}
 	for {
 		var sig PlanAnswerSignal
@@ -683,11 +747,8 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			doc.Tasks = nil
 			doc.TaskStates = nil
 			doc.Error = ""
-			if err := w.ExecuteActivity("planGenerate", planGenerateArg{Doc: doc, Mode: "all"}, &doc); err != nil {
+			if err := planGenerateFresh(w, &doc); err != nil {
 				return nil, fmt.Errorf("plan: regenerate: %w", err)
-			}
-			if err := w.ExecuteActivity("planSave", doc, nil); err != nil {
-				return nil, fmt.Errorf("plan: save regenerated plan: %w", err)
 			}
 			continue
 		}
@@ -708,11 +769,20 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		// Re-run a swallowed-error generation in place (see planAnswerRetry's own
 		// doc comment and planRetryMode).
 		if sig.Kind == planAnswerRetry {
-			if err := w.ExecuteActivity("planGenerate", planGenerateArg{Doc: doc, Mode: planRetryMode(doc)}, &doc); err != nil {
-				return nil, fmt.Errorf("plan: retry generate: %w", err)
-			}
-			if err := w.ExecuteActivity("planSave", doc, nil); err != nil {
-				return nil, fmt.Errorf("plan: save after retry: %w", err)
+			if planRetryMode(doc) == "questions" {
+				// No questions exist yet — the very first call ("questions",
+				// see planGenerateFresh) never got that far, so redo BOTH
+				// steps, same as a brand-new plan.
+				if err := planGenerateFresh(w, &doc); err != nil {
+					return nil, fmt.Errorf("plan: retry generate: %w", err)
+				}
+			} else {
+				if err := w.ExecuteActivity("planGenerate", planGenerateArg{Doc: doc, Mode: "tasks"}, &doc); err != nil {
+					return nil, fmt.Errorf("plan: retry generate: %w", err)
+				}
+				if err := w.ExecuteActivity("planSave", doc, nil); err != nil {
+					return nil, fmt.Errorf("plan: save after retry: %w", err)
+				}
 			}
 			continue
 		}
@@ -812,16 +882,17 @@ func planIsBug(issueType string) bool {
 	return strings.Contains(strings.ToLower(strings.TrimSpace(issueType)), "bug")
 }
 
-// planRetryMode picks the planGenerate mode a planAnswerRetry Signal re-runs —
-// pure, so replay reproduces it and it is testable on its own. "all" when the
-// very first generation never produced any questions at all (there is nothing
-// to keep stable yet, so the whole first pass repeats); "tasks" once questions
-// exist, matching planWorkflow's own choice between its first call and every
-// later regeneration (an answer never asks Claude to redo the questions the
+// planRetryMode picks how a planAnswerRetry Signal re-runs — pure, so replay
+// reproduces it and it is testable on its own. "questions" when the very
+// first generation never produced any questions at all (there is nothing to
+// keep stable yet, so the whole from-scratch sequence repeats via
+// planGenerateFresh — questions, THEN tasks); "tasks" once questions exist,
+// matching planWorkflow's own choice between its first call and every later
+// regeneration (an answer never asks Claude to redo the questions the
 // reviewer may already be answering).
 func planRetryMode(doc planDoc) string {
 	if len(doc.Questions) == 0 {
-		return "all"
+		return "questions"
 	}
 	return "tasks"
 }
@@ -1315,8 +1386,12 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 		}
 		doc.Error = ""
 		switch arg.Mode {
-		case "all":
+		case "questions":
+			// A brand-new plan's first call — questions only, so this response
+			// stays small (see planGenerateFresh). The tasks step follows as its
+			// OWN, separate call right after, so nothing here touches doc.Tasks.
 			doc.Questions = qs
+			return json.Marshal(doc)
 		case "followup":
 			// APPEND: the reviewer's stored answers hang off the existing ids,
 			// so those questions may never move or be renumbered. The task list

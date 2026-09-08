@@ -602,6 +602,104 @@ explicit JSON-escaping rule (colon after every key, `\"`/`\n` escaped inside a
 text/code value, no trailing comma) to reduce how often this happens at all,
 though it cannot eliminate it — hence the retry.
 
+### A cleared `doc.Error` never actually reached the stored document — the sticky-error bug
+
+Reported bug (task 50), verbatim: *"ik kan nog steeds niet plan opstellen, ook
+taken heeft een plan mislukt"* — reproduced against a REAL ticket (STAT-1117)
+by reading its tembed event history (`data/workflows.db`) and its stored
+document (`data/plan.db`) directly, not guessed: the last-completed
+`planGenerate` Activity's own recorded JSON payload carried NO `error` key at
+all (a genuine success — fresh questions, fresh tasks), yet the persisted
+document still showed a `parse answer` message from THREE attempts earlier,
+word for word, with the newer `tasks`/`updatedAt` sitting right next to it.
+
+**Root cause:** `planDoc.Error` was `json:"error,omitempty"`. Every
+`ExecuteActivity(name, input, &doc)` call in `planWorkflow` decodes an
+Activity's JSON result INTO the ALREADY-POPULATED workflow-level `doc` —
+tembed's `decode` (`tembed/workflow.go`) is a plain
+`json.Unmarshal(payload, out)`, and `encoding/json` never clears a
+destination field whose key is simply ABSENT from the incoming JSON. A
+successful `planGenerate` explicitly sets `doc.Error = ""` on its own LOCAL
+copy before marshaling, but `omitempty` then drops the key entirely from that
+JSON — so the WORKFLOW's `doc.Error`, still holding whatever an EARLIER failed
+attempt had set, was never touched by the successful call's result and stayed
+stuck forever (until the process restarts and the run replays from a fresh
+`var doc planDoc`). Every OTHER field a workflow ever resets to zero
+(`NeedsScope`, `NeedsHotfix`, `IntentOverride`, …) is assigned directly on the
+workflow's own `doc` in the workflow body, never round-tripped through an
+Activity's decoded output, so none of them share this gap — `Error` was the
+only field bitten by it.
+
+**Fix:** drop `omitempty` from `Error` (`json:"error"`), so a successful
+generation's response always carries an explicit `"error":""`, which
+`json.Unmarshal` DOES apply. One line, no schema-consumer impact (every
+reader, Go and JS, already treats a missing key and an empty string the
+same way). Test: `TestPlanGenerateSuccessClearsAStaleError`
+(`plan_workflow_test.go`) — programs a failing generation, then a genuinely
+successful retry, and asserts `doc.Error` is empty afterward; reverting the
+`omitempty` removal makes it fail exactly as STAT-1117 did live.
+
+**Practical consequence:** a "mislukt" Taken-block row could be, and often
+was, stale — the plan may already have regenerated cleanly one or more times
+since. The busyGenerating() masking fix above (task 46) only suppressed the
+row WHILE a fresh generation was running; it never addressed the row
+surviving a generation that had already finished successfully. Both fixes
+together are what makes the Taken block's "mislukt" row trustworthy: present
+only while the LATEST attempt is truly still broken.
+
+### The first-pass call is split in two: "questions", then "tasks"
+
+Reviewer decision (task 50, "ja, splits de call"): a single combined answer
+(up to `maxPlanQuestions` questions AND up to `maxPlanTasks` tasks, each with
+their own nested example-code blocks) could run into the model's own
+output-length limit and come back truncated (`plan: parse answer: unexpected
+end of JSON input`) — confirmed against STAT-1117's own workflow history,
+where this happened on 3 of ~9 real generations, and where the once-blind
+retry-once fix above cannot help against a genuinely oversized answer that
+hits the SAME limit again on the immediate retry.
+
+**`planGenerateFresh(w, &doc)`** (`plan_workflow.go`) replaces what used to be
+one `planGenerate` call with `Mode:"all"`: it runs `Mode:"questions"` (asks
+for the clarifying questions only, `Tasks` explicitly left `[]`) and, only if
+that call succeeded (`doc.Error == ""`), follows it with the EXISTING
+`Mode:"tasks"` call (the same one an ordinary answer already regenerates from
+— no new machinery there). Each of the two calls still gets its own
+retry-once from the fix above, so a fresh plan can now survive up to 4 raw
+`claude -p` attempts before failing outright (2 per call) — deliberately
+accepted extra cost for a smaller, less truncation-prone answer per call.
+
+Three call sites now share this one helper, all of which start from a
+document with no questions yet:
+
+- the very first generation (`planWorkflow`'s own body, after `planLoadContext`);
+- `planAnswerRegenerate` ("Plan opnieuw opstellen" — discards the current
+  plan first, then calls `planGenerateFresh` exactly like a brand-new
+  document);
+- `planAnswerRetry` when `planRetryMode(doc) == "questions"` (no questions
+  exist yet — the very first call never got that far) — `planRetryMode`
+  itself was renamed from returning `"all"` to `"questions"` for this, still
+  a pure function of `len(doc.Questions)` and still bounded to `"questions"`
+  vs `"tasks"` (an answer-triggered regeneration, where the questions must
+  stay put).
+
+**`planPrompt`'s per-mode switch** (`plan_prompt.go`) gained a `"questions"`
+case (the old `"all"` case's own question-generation rules, plus an explicit
+"Laat `tasks` leeg" instruction) and the whole task-detail checklist block
+(the `location`/`conditions`/`config`/… fields, ~14 lines) is now SKIPPED
+entirely for `mode` `"questions"` or `"followup"` — both already say
+"tasks leeg" and previously still received the full task-instructions wall
+right after, wastefully (and slightly self-contradictorily) bloating the
+smaller call's own prompt. The universal block-formatting rules (nesting,
+`note`, `code`/`lang`, Dutch prose) are unaffected — every mode's questions
+still need example-code blocks with the same shape.
+
+Test: `TestPlanGenerateFreshSplitsQuestionsAndTasksIntoTwoCalls`
+(`plan_workflow_test.go`) — asserts exactly 2 Claude calls for a fresh plan,
+in order, each carrying the right "leeg"/checklist instructions; the two
+existing malformed-JSON tests above were updated to reflect that a failed
+first call now logs as `(questions)` and, per `planGenerateFresh`'s own early
+return, never reaches a second (`tasks`) call at all.
+
 ## Follow-up questions: sharpening the plan further
 
 Reviewer request, verbatim: *"maak het mogelijk om vervolg vragen te genereren
