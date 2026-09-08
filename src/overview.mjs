@@ -272,13 +272,26 @@ function chip(text, cls, testid, iconName) {
 // distinguished only by color also stay distinguishable by shape (see
 // user_colorblind.md) — `title`/`aria-label` are plain static attribute
 // values (never mixed with a ${} slot, see .claude/rules/arrowjs-pitfalls.md).
-function iconChip(iconName, cls, testid, title) {
+// `iconCls` defaults to the plain static icon size; graphChip's busy state
+// passes an animated variant (`animate-spin`) so the shape itself — not just
+// the color — signals "in progress", same colorblind reasoning as above.
+// The nested `icon(...)` call is a `${() => ...}` FUNCTION binding, not a
+// bare interpolation: iconChip is reused for graphChip, whose icon NAME
+// itself changes across recomputes of the same `${() => graphChip(pr)}`
+// slot (tree → loader → sparkles as a PR goes idle → generating → done).
+// A bare `${icon(iconName, iconCls)}` is a nested-mounted template value
+// (see "A statically interpolated template↔string slot" in
+// .claude/rules/arrowjs-pitfalls.md) — arrow's chunk-reuse pool then kept
+// whichever icon happened to mount FIRST for this shape (measured live: the
+// busy chip's `title` updated to "Blocks scannen…" but the glyph stayed the
+// idle tree, never swapping to the spinning loader).
+function iconChip(iconName, cls, testid, title, iconCls = 'h-3 w-3') {
   return html`<span
     class="${'inline-flex items-center justify-center rounded-full p-1 ring-1 ring-inset ' + cls}"
     data-testid="${testid || ''}"
     title="${title}"
     aria-label="${title}"
-    >${icon(iconName, 'h-3 w-3')}</span
+    >${() => icon(iconName, iconCls)}</span
   >`
 }
 
@@ -604,7 +617,14 @@ function statusArea(pr) {
   `
 }
 
+// A PR that is currently being ingested (ingestBusy) used to fall through to
+// the plain "Op GitHub" branch below — indistinguishable in the row itself
+// from a PR nothing has happened to yet. Checked first so "busy" always wins
+// over "no tree yet"; the spinning loader + amber color + real stage label
+// (ingestLabel, same text the popover's own busy button already shows) give
+// this its own shape, not just its own color, from either of the other two.
 function graphChip(pr) {
+  if (ingestBusy(pr)) return iconChip('loader', 'bg-amber-500/15 text-amber-700 dark:text-amber-300 ring-amber-500/30', 'graph-chip', ingestLabel(pr, 'Bezig met genereren…'), 'h-3 w-3 animate-spin')
   if (pr.hasGraph) return iconChip('sparkles', 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 ring-emerald-500/30', 'graph-chip', t('Gegenereerd'))
   return iconChip('tree', 'bg-sky-500/15 text-sky-700 dark:text-sky-300 ring-sky-500/30', 'graph-chip', t('Op GitHub'))
 }
