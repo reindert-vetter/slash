@@ -60,6 +60,16 @@ func (s *server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		doc = planDoc{Key: key, Questions: []planQuestion{}, Tasks: []planTask{}, Answers: []planAnswer{}}
 	}
+	// The stored document's own Assignee can be permanently stale (an older
+	// Execution's planLoadIssue Activity result, frozen in tembed's replay
+	// history — see plan_assignee_live.go's own doc comment); a live,
+	// cached-for-a-few-minutes Jira read fills that gap without ever writing
+	// it back into the document.
+	if doc.Assignee == "" {
+		if assignee, avatarURL := liveAssigneeFallback(r.Context(), mgr, key); assignee != "" {
+			doc.Assignee, doc.AssigneeAvatarURL = assignee, avatarURL
+		}
+	}
 	payload := map[string]any{
 		"ok": true, "key": key, "doc": doc, "runs": runs, "generating": generating,
 	}
