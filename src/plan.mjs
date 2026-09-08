@@ -287,14 +287,20 @@ const PLAN_COMMANDS = [
 ]
 
 // planCommands adds "Opnieuw plannen" to the fixed PLAN_COMMANDS list, but
-// only while there is a genuinely failed `plan` tracker run to resume — same
-// "never offer an action that would be a no-op" rule as
-// jiraNotificationCommands (overview.mjs). Resolved ONCE, at open time (see
-// openPlanMenu below), never as a reactive label — a still-open menu keeps
-// showing the item it opened with even if the run resolves itself a moment
-// later; the next open re-evaluates.
+// only while there is a `plan` tracker run to resume — either genuinely
+// failed, or a swallowed generation error (state.pageProblems.failedRuns'
+// synthetic entry, see planProblemsForPanel) — same "never offer an action
+// that would be a no-op" rule as jiraNotificationCommands (overview.mjs).
+// Reading state.pageProblems here (not state.runs directly) is what used to
+// be missing: this menu never offered a retry at all for the swallowed-error
+// case, leaving the Taken block's row click as the only way in — and THAT
+// path silently failed too before retryPlanRun learned the synthetic branch
+// (see its own doc comment). Resolved ONCE, at open time (see openPlanMenu
+// below), never as a reactive label — a still-open menu keeps showing the
+// item it opened with even if the run resolves itself a moment later; the
+// next open re-evaluates.
 function planCommands() {
-  const failed = state.runs.find((r) => r.workflow === 'plan' && r.status === 'failed')
+  const failed = (state.pageProblems && state.pageProblems.failedRuns || []).find((r) => r.workflow === 'plan')
   if (!failed || isRetryingRun(failed.runId)) return PLAN_COMMANDS
   return [
     ...PLAN_COMMANDS,
@@ -302,7 +308,7 @@ function planCommands() {
       id: 'plan-retry',
       label: t('Opnieuw plannen'),
       hint: 'opnieuw retry',
-      run: () => retryPlanRun(failed.runId),
+      run: () => retryPlanRun(failed.runId, !!failed.synthetic),
     },
   ]
 }
@@ -461,25 +467,44 @@ function dropSettledTaskPending() {
   if (changed) state.taskPending = keep
 }
 
-// retryPlanRun resumes a failed workflow run of this ticket in place
-// (POST /api/workflows/retry — the same sanctioned, generic resume-in-place
-// endpoint the review tree's own retryFailedRun (home.mjs) and the global
-// failed-tasks dialog use, see .claude/docs/tembed-endpoints.md). Used for
-// "opnieuw plannen": a failed `plan` run just re-asks Claude for
-// questions/tasks from where it left off. markTaskRetrying (RelatedPanel.mjs,
-// shared with the review tree's own retryFailedRun) marks the run busy
-// immediately, cleared again right away on a failed POST (so the row honestly
-// returns to "mislukt") — the same "mark it optimistically" shape as
-// home.mjs, at the same shared spot rather than a second, page-local map.
-async function retryPlanRun(runId) {
+// retryPlanRun resumes a failed workflow run of this ticket in place. Two
+// mechanisms, chosen by `synthetic` (see planProblemsForPanel's own doc
+// comment for why they cannot share one):
+//
+//   - a GENUINELY failed run (`synthetic` false) resumes via
+//     POST /api/workflows/retry — the same sanctioned, generic resume-in-place
+//     endpoint the review tree's own retryFailedRun (home.mjs) and the global
+//     failed-tasks dialog use, see .claude/docs/tembed-endpoints.md. That
+//     endpoint requires the run to actually BE `failed` (TaskManager.RetryRun).
+//   - a SWALLOWED generation error (`synthetic` true — planGenerate recorded
+//     the error onto the document instead of failing the Execution, so the
+//     run itself is still `waiting`) instead sends the plan_answer Signal's
+//     "retry" Kind, which re-runs the generation in place without requiring a
+//     `failed` status at all. Reported bug: every retry
+//     click here used to go through the generic endpoint above, which
+//     silently refused ("run is waiting, not failed") and left the reviewer
+//     with no way to make a parse-error'd plan try again.
+//
+// markTaskRetrying (RelatedPanel.mjs, shared with the review tree's own
+// retryFailedRun) marks the run busy immediately, cleared again right away on
+// a failed request (so the row honestly returns to "mislukt") — the same
+// "mark it optimistically" shape as home.mjs, at the same shared spot rather
+// than a second, page-local map.
+async function retryPlanRun(runId, synthetic) {
   if (!runId) return
   markTaskRetrying(runId)
   try {
-    const res = await fetch('/api/workflows/retry', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ runId }),
-    })
+    const res = synthetic
+      ? await fetch('/api/workflows/' + encodeURIComponent(runId) + '/signals/plan_answer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ questionId: '', optionId: '', text: '', kind: 'retry' }),
+        })
+      : await fetch('/api/workflows/retry', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ runId }),
+        })
     if (!res.ok) {
       clearTaskRetrying(runId)
       console.error('plan retry failed:', res.status, await res.text())
@@ -2496,14 +2521,23 @@ function planWorkflowsForPanel() {
 // status PLUS the swallowed-generation-error case (planGenerate's Activity
 // records the error onto the document instead of failing the Execution, see
 // plan_workflow.go, so `run.status` alone never carries it). Only the `plan`
-// tracker's own run is ever retryable, matching the one thing retryPlanRun
-// can actually resume.
+// tracker's own run is ever retryable, matching what retryPlanRun can resume.
+//
+// The swallowed-error entry is tagged `synthetic: true` — its run status was
+// NEVER genuinely `failed` (the workflow is still `waiting`, parked back on
+// its own Signal), unlike the first branch's real failure. retryPlanRun reads
+// this to pick the right resume mechanism: a real failure resumes via the
+// generic POST /api/workflows/retry (TaskManager.RetryRun, which requires the
+// run to actually BE `failed`), while a synthetic one sends the plan_answer
+// Signal's "retry" Kind instead — that endpoint would otherwise refuse it
+// with "run is waiting, not failed" and silently do nothing (the reported
+// bug: a parse-error'd generation had no way to be retried at all).
 function planProblemsForPanel() {
   const failedRuns = []
   for (const run of state.runs || []) {
     const isPlan = run.workflow === 'plan'
     if (run.status === 'failed') failedRuns.push({ ...run, retryable: isPlan })
-    else if (isPlan && state.doc.error) failedRuns.push({ ...run, status: 'failed', error: state.doc.error, retryable: true })
+    else if (isPlan && state.doc.error) failedRuns.push({ ...run, status: 'failed', error: state.doc.error, retryable: true, synthetic: true })
   }
   return { failedRuns, logErrors: [] }
 }
@@ -2540,7 +2574,7 @@ async function refreshTasks() {
 // subsystem for a single item — deliberately simpler, see "The Taken block is
 // the literal TasksPanel" in .claude/docs/plan-page.md.
 function openPlanTaskRowMenu(row) {
-  if (row && row.retryable && !row.retrying) retryPlanRun(row.runId)
+  if (row && row.retryable && !row.retrying) retryPlanRun(row.runId, !!(row.run && row.run.synthetic))
 }
 
 function tasksCard() {

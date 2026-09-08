@@ -146,12 +146,14 @@ reactive):
   endpoint is PR-scoped). `failedRuns` holds every run genuinely
   `status === 'failed'`, PLUS — if the `plan` run isn't itself `failed` but
   `state.doc.error` is set — a synthesized failed-run entry for it
-  (`{...run, status:'failed', error: state.doc.error, retryable:true}`):
-  `planGenerate`'s Activity swallows its own error onto the document instead
-  of failing the Execution (see plan_workflow.go), so `run.status` alone
-  never carries a killed/timed-out `claude -p` call. Only the `plan`
-  workflow is ever `retryable:true` here, matching the one thing
-  `retryPlanRun` can resume — same restriction the old `canRetry` had.
+  (`{...run, status:'failed', error: state.doc.error, retryable:true,
+  synthetic:true}`): `planGenerate`'s Activity swallows its own error onto the
+  document instead of failing the Execution (see plan_workflow.go), so
+  `run.status` alone never carries a killed/timed-out `claude -p` call. Only
+  the `plan` workflow is ever `retryable:true` here. The `synthetic` tag is
+  what lets `retryPlanRun` pick the right resume mechanism for this entry —
+  see "Opnieuw plannen" below for why a real failed run and this one cannot
+  share one endpoint.
 - **`syncTaskPanelState`** (a `watch`, inline deps per
   `.claude/rules/arrowjs-pitfalls.md`) recomputes both on every change to
   `state.runs`/`state.doc.error`/`state.generating`/`state.scopePending`/
@@ -181,9 +183,10 @@ comment" option, nothing is ever ignorable/hideable in the same sense), and
 this page's own menu machinery is deliberately anchor-less (see "Opnieuw
 plannen — retrying a failed plan run" below). Standing up a second, matching
 anchored-menu subsystem for exactly one item was judged not worth it:
-`openPlanTaskRowMenu(row)` just calls `retryPlanRun(row.runId)` directly when
-`row.retryable && !row.retrying`, no menu opens at all. A row with nothing to
-do (any other status, or already retrying) is inert on click, same as before.
+`openPlanTaskRowMenu(row)` just calls `retryPlanRun(row.runId, synthetic)`
+directly when `row.retryable && !row.retrying`, no menu opens at all. A row
+with nothing to do (any other status, or already retrying) is inert on click,
+same as before.
 
 ### Accepted gap: a ticket with a `plan` run in the API response but the run isn't found yet
 
@@ -372,6 +375,17 @@ je halen uit jira taak en is een taak wat te maken heeft met de hoofdtaak."*
   `sendIntentOverride(text)` posts the Signal; a `data-testid=plan-intent-reset`
   button appears only while `doc.intentOverride` is set, clearing it (empty
   text) to revert to the auto-generated one.
+- **Bug, found and fixed alongside the retry fix above**: `tasks_api.go`'s
+  `plan_answer` handler validates which Kinds may arrive with an empty
+  `questionId` (`followup`/`chat`/`comment`/`task` only) and never added
+  `intent` to that list, so **every** intent edit was rejected outright with
+  `400 invalid plan answer` before it ever reached the workflow —
+  `sendIntentOverride` always failed silently. Only looked like it worked
+  because `tests/plan-intent-sections.spec.mjs` mocks the signal route at the
+  Playwright level rather than exercising the real Go handler. Fixed by
+  adding `planAnswerIntent` (and `planAnswerRetry`, see above) to the allowed
+  Kinds; verified against the real handler (not a mocked route) with a live
+  `POST /api/workflows/<runId>/signals/plan_answer` round trip.
 
 ### A sectioned, GitHub-style editor: headings are fixed, only the text below them is editable
 
@@ -913,28 +927,60 @@ those two — plus, conditionally, "Opnieuw plannen" (see below).
 ### "Opnieuw plannen" — retrying a failed `plan` run
 
 Reviewer request: *"er moet een retry knop komen om opnieuw te plannen"*.
-Offered in two places, both driving the same `retryPlanRun(runId)`
-(`plan.mjs`), which resumes the run in place via the generic, sanctioned
-`POST /api/workflows/retry` (`.claude/docs/tembed-endpoints.md` — the same
-endpoint the review tree's own `retryFailedRun`/the global failed-tasks dialog
-use, not a plan-specific write path):
+Offered in two places, both driving `retryPlanRun(runId, synthetic)`
+(`plan.mjs`):
 
 - **A click on the failed run's row in the "Taken" list** retries it —
-  `openPlanTaskRowMenu(row)` calls `retryPlanRun(row.runId)` directly when
-  `row.retryable && !row.retrying`, no menu; see "The Taken block is the
-  literal TasksPanel" above for why this stays a direct call instead of a
-  matching anchored-menu subsystem. Only the ticket's own `plan` tracker run
-  is ever `retryable` (not `plan_execute` or anything else), and only while
-  it is really `failed` (or the swallowed-generation-error case, see above) —
-  a running/waiting/completed row is inert on click.
+  `openPlanTaskRowMenu(row)` calls `retryPlanRun(row.runId, !!(row.run &&
+  row.run.synthetic))` when `row.retryable && !row.retrying`, no menu; see
+  "The Taken block is the literal TasksPanel" above for why this stays a
+  direct call instead of a matching anchored-menu subsystem. Only the
+  ticket's own `plan` tracker run is ever `retryable` (not `plan_execute` or
+  anything else), and only while it is really `failed` or the
+  swallowed-generation-error case (see above) — a running/waiting/completed
+  row is inert on click.
 - **The ticket column's own Enter-menu** (`PLAN_COMMANDS` above) gains the
   same "Opnieuw plannen" item, but only when `planCommands()` finds a
-  `failed` `plan` run at OPEN time — resolved once, not as a reactive label,
-  so an already-open menu keeps showing what it opened with even if the run
-  resolves itself a moment later (the next open re-evaluates). This is why
-  `resolvePlanCommands` reads `ms.commands` rather than the fixed
-  `PLAN_COMMANDS` constant directly — same "ONE list both the render and the
-  ↑/↓/Enter index into" rule as `resolveOverviewCommands` (`overview.mjs`).
+  `plan` entry in `state.pageProblems.failedRuns` at OPEN time (genuinely
+  failed OR the synthetic swallowed-error case — reading the merged
+  `pageProblems` view rather than `state.runs` directly is what makes the
+  synthetic case reachable from here too, see the bug below) — resolved
+  once, not as a reactive label, so an already-open menu keeps showing what
+  it opened with even if the run resolves itself a moment later (the next
+  open re-evaluates). This is why `resolvePlanCommands` reads `ms.commands`
+  rather than the fixed `PLAN_COMMANDS` constant directly — same "ONE list
+  both the render and the ↑/↓/Enter index into" rule as
+  `resolveOverviewCommands` (`overview.mjs`).
+
+**Two different resume mechanisms hide behind one function, chosen by
+`synthetic`** (reported bug, fixed): `planGenerate`'s Activity never fails the
+Execution on a bad Claude answer (a timeout, or `parsePlanAnswer`'s JSON parse
+failure) — it records the reason onto `doc.Error` and returns success, so the
+tracker's own run status stays whatever it already was (almost always
+`waiting`, parked back on the `plan_answer` `WaitSignal`) and **never**
+becomes `failed`. `planProblemsForPanel` still shows this as a "mislukt" row
+(tagging it `synthetic: true`, since its `run.status` was never genuinely
+`failed`), but the generic, sanctioned `POST /api/workflows/retry`
+(`TaskManager.RetryRun`, `.claude/docs/tembed-endpoints.md` — the same
+endpoint the review tree's own `retryFailedRun`/the global failed-tasks dialog
+use) **requires the run to actually BE `failed`** and refuses with
+`"run is waiting, not failed"` otherwise. Before this fix `retryPlanRun`
+always went through that one endpoint, so clicking "Opnieuw plannen" on a
+swallowed generation error silently failed (only `console.error`'d, invisible
+without debug mode) and left the reviewer with **no way at all** to make a
+parse-error'd plan try again — the questions/task list stayed stuck forever.
+`retryPlanRun`'s `synthetic` branch instead sends the `plan_answer` Signal's
+**`"retry"` Kind** (`planAnswerRetry`, `plan_workflow.go`) — no payload beyond
+the Kind itself, handled inline in the workflow's main loop exactly like
+`followup`/`task`/`intent` above: it re-runs `planGenerate` with the mode
+`planRetryMode(doc)` picks (`"all"` when `len(doc.Questions) == 0` — the very
+first generation never produced anything — else `"tasks"`, matching the exact
+choice `planWorkflow` itself already makes between its own first call and
+every later regeneration), then saves, then waits again. Because this rides
+on the SAME Signal name the reviewer's real answers use, it needs no new
+Execution and no replay-gating flag. Test:
+`tests/plan-retry.spec.mjs` ("retry a swallowed generation error (run still
+waiting)").
 
 `markTaskRetrying`/`clearTaskRetrying`/`isRetryingRun` (`RelatedPanel.mjs`, the
 shared spot — see "The Taken block is the literal TasksPanel" above) mark a run

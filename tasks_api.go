@@ -1403,11 +1403,18 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 			// A fourth records the reviewer's checkbox/field on ONE task
 			// (planAnswerTask — TaskTitle points at the task instead of a
 			// questionId, since a task id is positional; see planTaskState).
-			// Those four are the only shapes allowed through without a
+			// A fifth replaces the "Intentie" document wholesale (planAnswerIntent
+			// — Text is the whole edited text, empty clears the override; a
+			// missing questionId was wrongly not allowed through here before,
+			// which made every intent edit fail with this same "invalid plan
+			// answer" 400 — see planAnswerIntent's own doc comment).
+			// A sixth re-runs a swallowed-error generation in place with no
+			// payload of its own (planAnswerRetry — see its own doc comment).
+			// Those six are the only shapes allowed through without a
 			// questionId; a chat message additionally needs real text, and a
 			// task message a real title, or there is nothing to signal at all.
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil ||
-				(body.QuestionID == "" && body.Kind != planAnswerFollowup && body.Kind != planAnswerChat && body.Kind != planAnswerComment && body.Kind != planAnswerTask) ||
+				(body.QuestionID == "" && body.Kind != planAnswerFollowup && body.Kind != planAnswerChat && body.Kind != planAnswerComment && body.Kind != planAnswerTask && body.Kind != planAnswerIntent && body.Kind != planAnswerRetry) ||
 				(body.Kind == planAnswerChat && strings.TrimSpace(body.Text) == "") ||
 				(body.Kind == planAnswerTask && strings.TrimSpace(body.TaskTitle) == "") {
 				http.Error(w, "invalid plan answer", http.StatusBadRequest)

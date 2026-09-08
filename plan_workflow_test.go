@@ -178,6 +178,28 @@ func TestPlanNeedsBaseQuestion(t *testing.T) {
 	}
 }
 
+// TestPlanRetryMode pins which planGenerate mode a planAnswerRetry Signal
+// re-runs: the reported bug was a swallowed parse/timeout error on either the
+// FIRST generation (no questions exist yet, so "all" must repeat) or a LATER
+// regeneration after an answer (questions already exist and must stay put, so
+// only "tasks" repeats) — retrying the wrong one would either silently redo
+// questions the reviewer is mid-way through answering, or never produce the
+// first round's questions at all.
+func TestPlanRetryMode(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		doc  planDoc
+		want string
+	}{
+		{"no questions yet: first generation failed", planDoc{}, "all"},
+		{"questions exist: a later regeneration failed", planDoc{Questions: []planQuestion{{ID: "q1"}}}, "tasks"},
+	} {
+		if got := planRetryMode(c.doc); got != c.want {
+			t.Fatalf("%s: planRetryMode(%+v) = %q, want %q", c.name, c.doc, got, c.want)
+		}
+	}
+}
+
 // TestPlanIsBugAndBaseBranch covers the hotfix gate's two pure decisions: WHEN
 // a ticket is asked at all (Jira's own issue-type name), and WHICH branch the
 // answer settles on. Both drive where plan_execute branches from and which

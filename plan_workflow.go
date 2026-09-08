@@ -140,6 +140,22 @@ const planAnswerTask = "task"
 // regeneration.
 const planAnswerIntent = "intent"
 
+// planAnswerRetry is the PlanAnswerSignal Kind that re-runs a swallowed-error
+// generation IN PLACE, without a new answer. planGenerate never fails the
+// Execution on a bad Claude answer (a timeout, or a JSON parse failure — see
+// parsePlanAnswer/plan_prompt.go): it records the reason onto doc.Error and
+// returns success, so the tracker's own run status stays whatever it already
+// was (usually `waiting`, parked back on this very Signal) and never becomes
+// `failed`. That is deliberate (a hiccup must not sink the whole tracker), but
+// it also means the generic "resume a failed run" endpoint
+// (POST /api/workflows/retry, TaskManager.RetryRun) has nothing to resume —
+// it refuses with "run is waiting, not failed", so the reviewer's "Opnieuw
+// plannen" click silently did nothing (reported bug: parse error left the
+// plan stuck, with no way to make it try again). This Kind is the fix: no
+// questionId, no payload beyond the Kind itself, handled inline exactly like
+// planAnswerFollowup/planAnswerTask/planAnswerIntent above.
+const planAnswerRetry = "retry"
+
 // maxPlanChatMessages bounds how long the chat transcript on the document is
 // allowed to grow (oldest dropped first, always in pairs so a lone orphaned
 // reply/question is never left dangling) — the same reasoning as
@@ -656,6 +672,17 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			}
 			continue
 		}
+		// Re-run a swallowed-error generation in place (see planAnswerRetry's own
+		// doc comment and planRetryMode).
+		if sig.Kind == planAnswerRetry {
+			if err := w.ExecuteActivity("planGenerate", planGenerateArg{Doc: doc, Mode: planRetryMode(doc)}, &doc); err != nil {
+				return nil, fmt.Errorf("plan: retry generate: %w", err)
+			}
+			if err := w.ExecuteActivity("planSave", doc, nil); err != nil {
+				return nil, fmt.Errorf("plan: save after retry: %w", err)
+			}
+			continue
+		}
 		// The reviewer edited the "Intentie" field: replace intent.md wholesale
 		// (see planAnswerIntent's own doc comment).
 		if sig.Kind == planAnswerIntent {
@@ -750,6 +777,20 @@ func planNeedsBaseQuestion(doc planDoc) bool {
 // failed) is not a bug and is never asked.
 func planIsBug(issueType string) bool {
 	return strings.Contains(strings.ToLower(strings.TrimSpace(issueType)), "bug")
+}
+
+// planRetryMode picks the planGenerate mode a planAnswerRetry Signal re-runs —
+// pure, so replay reproduces it and it is testable on its own. "all" when the
+// very first generation never produced any questions at all (there is nothing
+// to keep stable yet, so the whole first pass repeats); "tasks" once questions
+// exist, matching planWorkflow's own choice between its first call and every
+// later regeneration (an answer never asks Claude to redo the questions the
+// reviewer may already be answering).
+func planRetryMode(doc planDoc) string {
+	if len(doc.Questions) == 0 {
+		return "all"
+	}
+	return "tasks"
 }
 
 // resolvePlanBase folds the hotfix answer into (hotfix?, base branch) — pure,
