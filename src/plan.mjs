@@ -1831,42 +1831,70 @@ function referencedIssueRow(r) {
 // exactly the bug plan-task-note's own key discipline avoids. A REMOTE change
 // (another tab/reviewer editing the same ticket at the same time) is a known,
 // accepted gap, same as plan-task-note.
+//
+// Collapsed while the questions column has the keyboard (reviewer request:
+// "2e kolom mag dubbel breed en intent inklappen als ik in vragen kolom
+// zit") — the questions column doubles in width at the same time
+// (questionsColumn), so this block gets out of the way rather than fighting
+// it for space. Collapsing hides only the textarea; the header (label +
+// reset button) stays, plus the word "ingeklapt" next to it — never a colour
+// alone, per the colourblind rule. Both are nested `${() => ...}` bindings in
+// their own stable `contents` root (never a bare toggling expression, see
+// `.claude/rules/arrowjs-pitfalls.md`) so the outer node's `intent:ready`/
+// `intent:pending` key — and thus the textarea's one-time seed — is
+// untouched by a col change.
 function intentField() {
   const loaded = !state.loading
   const seed = state.doc.intentOverride || state.intentText
+  const collapsed = () => state.col === 1
   return html`
-    <div class="mt-3 border-t border-slate-100 pt-2 dark:border-zinc-800" data-testid="plan-intent">
+    <div class="mt-3 border-t border-slate-100 pt-2 dark:border-zinc-800" data-testid="plan-intent" data-collapsed="${() => (collapsed() ? 'true' : 'false')}">
       <div class="mb-1 flex items-center justify-between">
         <span class="${LABEL}">${t('Intentie')}</span>
-        <div class="contents">
-          ${() =>
-            state.doc.intentOverride
-              ? html`<button
-                  type="button"
-                  data-testid="plan-intent-reset"
-                  class="text-[10.5px] text-slate-400 underline hover:text-slate-600 dark:text-zinc-500 dark:hover:text-zinc-300"
-                  @click="${(e) => {
-                    e.stopPropagation()
-                    sendIntentOverride('')
-                  }}"
-                >
-                  ${t('Terug naar automatisch gegenereerd')}
-                </button>`
-              : ''}
+        <div class="flex items-center gap-1.5">
+          <div class="contents">
+            ${() =>
+              collapsed()
+                ? html`<span class="text-[10.5px] text-slate-400 dark:text-zinc-500" data-testid="plan-intent-collapsed-label"
+                    >${t('ingeklapt')}</span
+                  >`.key('intent-collapsed-label')
+                : ''}
+          </div>
+          <div class="contents">
+            ${() =>
+              state.doc.intentOverride
+                ? html`<button
+                    type="button"
+                    data-testid="plan-intent-reset"
+                    class="text-[10.5px] text-slate-400 underline hover:text-slate-600 dark:text-zinc-500 dark:hover:text-zinc-300"
+                    @click="${(e) => {
+                      e.stopPropagation()
+                      sendIntentOverride('')
+                    }}"
+                  >
+                    ${t('Terug naar automatisch gegenereerd')}
+                  </button>`
+                : ''}
+          </div>
         </div>
       </div>
-      <textarea
-        data-testid="plan-intent-field"
-        rows="6"
-        placeholder="${t('Intentie wordt automatisch gegenereerd…')}"
-        class="w-full resize-y rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-[12px] leading-relaxed text-slate-800 placeholder:text-slate-400 focus:border-indigo-300 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500"
-        @blur="${(e) => {
-          if (!e) return
-          const val = e.target.value || ''
-          if (val !== seed) sendIntentOverride(val)
-        }}"
-      >${seed}</textarea
-      >
+      <div class="contents">
+        ${() =>
+          collapsed()
+            ? ''
+            : html`<textarea
+                data-testid="plan-intent-field"
+                rows="6"
+                placeholder="${t('Intentie wordt automatisch gegenereerd…')}"
+                class="w-full resize-y rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-[12px] leading-relaxed text-slate-800 placeholder:text-slate-400 focus:border-indigo-300 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500"
+                @blur="${(e) => {
+                  if (!e) return
+                  const val = e.target.value || ''
+                  if (val !== seed) sendIntentOverride(val)
+                }}"
+              >${seed}</textarea
+              >`}
+      </div>
     </div>
   `.key('intent:' + (loaded ? 'ready' : 'pending'))
 }
@@ -3168,7 +3196,7 @@ function commentsPanel() {
 function questionsColumn() {
   return html`
     <div
-      class="flex w-[31rem] shrink-0 flex-col"
+      class="${() => 'flex shrink-0 flex-col ' + (state.col === 1 ? 'w-[62rem]' : 'w-[31rem]')}"
       data-testid="plan-questions-column"
       data-column-focused="${() => (state.col === 1 ? 'true' : 'false')}"
       @click="${() => (state.col = 1)}"

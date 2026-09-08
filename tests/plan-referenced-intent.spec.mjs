@@ -81,6 +81,11 @@ test.describe('Plan page — referenced tickets and the editable Intentie field'
     await page.goto('/plan/PROD-254')
     await appReady(page)
 
+    // The intent field collapses while the questions column (col 1, the
+    // default) has the keyboard — see intentField's own doc comment. Focus
+    // the ticket column (col 0) first to expand it.
+    await page.getByTestId('plan-ticket-card').click()
+
     const field = page.getByTestId('plan-intent-field')
     await expect(field).toHaveValue('Auto-generated intent text.')
 
@@ -122,6 +127,9 @@ test.describe('Plan page — referenced tickets and the editable Intentie field'
 
     await page.goto('/plan/PROD-254')
     await appReady(page)
+
+    // Same collapse-by-default reason as the previous test.
+    await page.getByTestId('plan-ticket-card').click()
 
     await expect(page.getByTestId('plan-intent-field')).toHaveValue('Mijn eigen intentie.')
     await page.getByTestId('plan-intent-reset').click()

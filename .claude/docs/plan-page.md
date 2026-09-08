@@ -830,6 +830,31 @@ so it never hides column 1 itself while the keyboard is still there, unlike
 `scrollFocusIntoView`'s deliberate `'start'` alignment for an actual
 column-focus change.
 
+### The questions column doubles in width, and the Intentie block collapses, while column 1 has the keyboard
+
+Reviewer request, verbatim: *"in planning mag 2e kolom dubbel breed en intent
+inklappen als ik in vragen kolom zit"*. Two small, purely `state.col`-driven
+effects, no URL state of their own (derived, not navigational):
+
+- **`questionsColumn`**'s outer `<div>` class became a whole-value function
+  binding (`.claude/rules/arrowjs-pitfalls.md`'s mixed-literal-and-dynamic
+  rule) instead of a static `w-[31rem]`: `w-[62rem]` (double) while
+  `state.col === 1`, back to `w-[31rem]` for every other column.
+- **`intentField`**'s textarea hides while `state.col === 1`
+  (`data-collapsed` on the block's own wrapper, `plan-intent-collapsed-label`
+  showing the word **"ingeklapt"** next to the header — never a colour alone,
+  per the colourblind rule). The header row (label + the reset button, when an
+  override is active) stays visible either way. Both the label and the
+  textarea are nested `${() => ...}` bindings in their own stable `contents`
+  root, so the outer `intent:ready`/`intent:pending` key (and thus the
+  textarea's one-time seed, see `intentField`'s own doc comment) is untouched
+  by a `col` change.
+- **`state.col` defaults to `1`** (the questions column already owns the
+  keyboard on a fresh load), so the Intentie field is collapsed **by
+  default** and only expands once the reviewer focuses column 0 (click the
+  ticket card, or `←`) — `tests/plan-referenced-intent.spec.mjs`'s two
+  editing tests click `plan-ticket-card` first for exactly this reason.
+
 ### The scroll-into-view animation now also matches the review tree
 
 The `scrollFocusIntoView` above already animated (`behavior:'smooth'`) every
