@@ -864,6 +864,119 @@ overlay (`answerFor`/`dropSettledPending` in `plan.mjs`): the local pick wins
 until the stored document reports exactly the same one — an event/read is never
 the source of truth (`.claude/docs/server-events.md`).
 
+## Three stages, three files (intent → spec → plan)
+
+Reviewer request, verbatim: *"op de planning/tijdens de planning heb je 3
+stages: intent (die kan je zelf genereren vanuit de jira tickt (en hoofdtaak
+als het om een subticket gaat), daarna specs en daarna plan. Kijk wat standaard
+is van claude, maar volgens mij moet je intent.md spec en plan.md ofzo maken.
+check dat even goed. dat mag dan in een losse directory die mag worden
+weggegooid als de pr is gemerged (even gitignored in een dir (misschien heb je
+al een data dir of zoiets)"*.
+
+**The file names are the convention, not our invention.** `intent.md` →
+`spec.md` → `plan.md` is the artifact chain of **Anthropic's own AI-Native SDLC
+Playbook** (claude.com / Claude Academy): *"each stage ends by writing one to
+version control (including intent.md, spec.md, plan.md, the diff and its tests,
+the PR with its review findings, and the incident record) and the next stage
+begins by reading it"*, with intent.md's own template covering *"problem,
+proposed outcome, affected users and systems, constraints, and open questions"*.
+GitHub's spec-kit uses the same middle and last name (`specs/<feature>/spec.md`
+→ `plan.md` → `tasks.md`) but has no intent stage at all, so the playbook is the
+one that matches the reviewer's own three stages one-for-one. **Our own
+choices**, on top of that: the DIRECTORY (the playbook keeps intent in a
+committed `intent/` folder; these files are derived and disposable, so they live
+in gitignored `data/plans/<KEY>/` next to `data/worktrees/`), and the mapping of
+each file onto what this page already has.
+
+| phase | file | what it holds |
+| --- | --- | --- |
+| `intent` | `intent.md` | the ticket itself: problem (the description), proposed outcome, affected users and systems (the main task, the subtasks, the merged PRs), constraints (the base branch / hotfix, the assignee), open questions (the family's Jira comments). Generated straight from the document — **no Claude call at all**, which is exactly the "die kan je zelf genereren" half of the request; a subtask's own intent carries its **main task** and that parent's description. |
+| `specs` | `spec.md` | the WHAT: every generated question with its options as a checklist (`- [x]` on the picked one), the reviewer's own typed addition, `**Still open**` for an unanswered one, plus the scope/branch decisions. |
+| `plan` | `plan.md` | the HOW: every task with its concrete fields (`location`/`conditions`/`config`/…, an empty one omitted exactly as the page omits it), its checkbox state in words (`meenemen`/`overslaan`), the reviewer's own field, and its example-code blocks (nested `<details>`, each keeping its own note at every level). |
+
+**The phase is derived, never stored** (`planPhase`, `plan_artifacts.go`), so it
+can never drift out of sync and no existing document needs a migration:
+`intent` while nothing is generated, `specs` while a generated question is
+still unanswered, `plan` once every question is answered and there are tasks.
+Deliberately keyed on the ANSWERS rather than on "are there tasks": mode `all`
+generates questions AND tasks in one call, so a content-only rule would jump
+straight from `intent` to `plan` and the middle stage — the one the reviewer
+actually spends the planning in — would never be visible.
+
+Which files EXIST is a second, separate rule (`planHasPhaseContent`): intent.md
+always, spec.md once there are questions, plan.md once there are tasks. So an
+intent-only plan really has one file (three stubs would make the stages
+unreadable on disk), and plan.md appears as the current draft while the spec is
+still being sharpened — the page says exactly that, with the word **concept**.
+
+- **Written inside the `planSave` Activity**, not as an Activity of its own.
+  That is the whole replay story: the `plan` Run ID is deterministic
+  (`plan-<KEY>`) and tembed matches history positionally, so an extra
+  `ExecuteActivity` in the body would park every existing Execution on a step
+  its history does not carry — the trap `askBase`/`loadsContext`/
+  `startsProgress` each needed their own flag for
+  (`.claude/rules/workflow-determinism.md`). `planSave` is already called at
+  exactly the moments a phase advances (after the issue loaded, at each gate,
+  after every generation), so riding along inside it needs **no flag and
+  changes no history at all**. It is still a write inside an Activity, so the
+  write boundary holds (`.claude/rules/workflows-write-boundary.md`).
+  Best-effort: the files are derived from the document that was just stored, so
+  a disk hiccup is logged and costs a regenerable file, never the plan.
+- **Every write is atomic** (temp file + `chmod 0644` + rename, in the same
+  directory), so a crash or a full disk never leaves a half-written artifact or
+  a stray temp file behind, and a reader never sees a truncated file.
+- **The key is validated against `planKeyPattern` before it is joined onto a
+  path** — it reaches the filesystem, so it is never trusted
+  (`.claude/rules/conventions.md`).
+- **On the page**: its own card in the first column (`data-testid=plan-phase`,
+  `data-phase-current`), one row per phase (`plan-phase-row`,
+  `data-phase-state=done|now|todo`) with a `✓`/`◆`/`○` **shape** plus the
+  **word** `klaar`/`nu`/`nog niet` (or `concept`), the file name, and the
+  directory underneath (`plan-phase-dir`). Never a colour on its own — the
+  colourblind rule. Fed by `GET /api/plan`'s new read-only `artifacts` field
+  (`{dir, phase, files:[{phase, file, path, exists}]}`, `planArtifactsView`),
+  whose `exists` is read off disk so a directory cleanup already removed stops
+  being claimed the moment it is gone.
+
+### Thrown away with the PR (and swept if it never got one)
+
+- **`plan_execute` drops a `.pr` marker** in the directory the moment
+  `gh pr create` returns a number (next to `adoptPlanCheckoutForPR`). Not a
+  `.md` file (it is bookkeeping, not an artifact) and deliberately not a field
+  on the plan document — the tracker holds that document in memory and rewrites
+  it on every answer, so a `plan_execute` write into it would clobber one or the
+  other, the same reasoning the `exec` field already records.
+- **`purgePR` removes the directory** whose marker names that PR
+  (`removePlanArtifactsForPR`, counted as `planArtifactsRemoved`). That is the
+  reviewer's own "mag worden weggegooid als de pr is gemerged", riding on the
+  **existing** merged-and-`cleanupMergedAge` gate rather than becoming a second
+  cleanup mechanism — and inside the existing Activity, so the `cleanup`
+  workflow's own history is unchanged. Idempotent, like every other purge step.
+- **A directory that never reached a PR is swept on its OWN age**
+  (`sweepPlanArtifacts`, `planArtifactAge` 30 days, `planArtifactsSwept`) — an
+  abandoned plan, or a run that broke halfway, would otherwise be the one thing
+  in `data/` nobody ever cleans. Same shape as the `test_run` residue sweep: one
+  unconditional Activity per cleanup pass, about the directory's own age and
+  never about a PR. It is appended as the **last** step of `cleanupWorkflow`, so
+  every existing position in that workflow's history stays put. A directory WITH
+  a marker is left alone however old it is — its PR may still be open, and
+  `purgePR` owns it either way.
+- **`data/plans/` is gitignored**, with the reasoning in `.gitignore` itself.
+
+Tests: `plan_artifacts_test.go` — the phase transitions (including the
+half-answered case that must NOT read as `plan`), the separate file-existence
+rule, the three renderers really carrying three different things (the main task
+of a subtask, an unanswered question, a nested block's note, an unchecked task,
+an omitted empty field), the key validation, the per-PR removal leaving another
+PR's directory alone and being idempotent, the age sweep skipping a fresh plan
+and one with an open PR, and `planArtifactsView`. Verified live against the real
+`PAYM-813` ticket through all three stages — screenshots
+`task28-phase-1-intent.png` (only intent.md, "nu" on stage 1),
+`task28-phase-2-specs.png` (intent klaar, specs nu, plan.md as `concept`) and
+`task28-phase-3-plan.png` (both questions answered, stage 3) in
+`data/review-shots/`.
+
 ## Storage
 
 `modules/plan` — one row per issue key holding the whole document as **JSON**

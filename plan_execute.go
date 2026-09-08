@@ -705,6 +705,11 @@ func (m *TaskManager) runPlanExecuteOpenPR(ctx context.Context, arg planExecuteP
 	// Sync with the tree: from here on the chat of this PR edits the very
 	// werkmap the plan was implemented in (see adoptPlanCheckoutForPR).
 	adoptPlanCheckoutForPR(m.dataDir, res.PRNumber, dir, arg.Branch)
+	// Link the plan's three phase artifacts to this PR, so the existing
+	// merged-and-old cleanup gate throws the directory away with the rest of
+	// that PR's data — the reviewer's own "mag worden weggegooid als de pr is
+	// gemerged" (see plan_artifacts.go / purgePR).
+	writePlanArtifactPR(m.dataDir, arg.Key, res.PRNumber)
 	if res.PRURL == "" {
 		res.Note = "De draft-PR is aangemaakt, maar het adres kwam niet terug."
 	}

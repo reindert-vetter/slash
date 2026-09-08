@@ -3094,6 +3094,25 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return json.Marshal(map[string]int{"deleted": n})
 	})
 
+	// Activity: remove every planning-phase artifact directory
+	// (data/plans/<KEY>, see plan_artifacts.go) that never reached a pull
+	// request and has not been touched for planArtifactAge — the age-based
+	// half of the plan cleanup, exactly like the test_run residue sweep above.
+	// A directory that DOES carry a .pr marker is left alone here: purgePR
+	// owns it, under the merged-and-old gate.
+	engine.RegisterActivity("sweepPlanArtifacts", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg CleanupInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		before := arg.Cutoff.Add(cleanupMergedAge - planArtifactAge)
+		n, err := sweepPlanArtifacts(m.dataDir, before)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]int{"swept": n})
+	})
+
 	// Activity: delete the completed one-shot debug_log runs (see
 	// sweepDebugLogRuns, cleanup.go). The debug log itself lives in a file and
 	// is deliberately kept — only the run rows those one-shots leave behind
@@ -3939,6 +3958,18 @@ func cleanupWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		}
 		res.Purged = append(res.Purged, purged)
 	}
+	// LAST, deliberately: appending a step keeps every position above
+	// unchanged, so an Execution recorded before this Activity existed replays
+	// its whole history and only then finds one more step
+	// (.claude/rules/workflow-determinism.md). Unconditional and once per
+	// pass, like the sweeps at the top.
+	var planArtifacts struct {
+		Swept int `json:"swept"`
+	}
+	if err := w.ExecuteActivity("sweepPlanArtifacts", in, &planArtifacts); err != nil {
+		return nil, fmt.Errorf("sweep plan artifacts: %w", err)
+	}
+	res.PlanArtifactsSwept = planArtifacts.Swept
 	return json.Marshal(res)
 }
 

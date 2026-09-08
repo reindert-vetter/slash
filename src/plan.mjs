@@ -98,6 +98,10 @@ const state = reactive({
   // The newest plan_execute run of this ticket (GET /api/plan's `exec`), or
   // null when the plan was never executed — see the execute card below.
   exec: null,
+  // The three planning phases (intent -> specs -> plan) and the files behind
+  // them, as GET /api/plan reports them (see plan_artifacts.go): {dir, phase,
+  // files:[{phase, file, path, exists}]}. Null until the first read lands.
+  artifacts: null,
   // Executing the plan pushes a branch and opens a PR, so it takes a SECOND
   // Enter/click to confirm. Reset as soon as the cursor moves away.
   confirmExec: false,
@@ -294,6 +298,7 @@ async function loadPlan() {
     state.runs = Array.isArray(body.runs) ? body.runs : []
     state.generating = !!body.generating
     state.exec = body.exec || null
+    state.artifacts = body.artifacts || null
     state.error = ''
     state.loading = false
     if (!state.doc.needsScope) state.scopePending = false
@@ -1642,6 +1647,61 @@ function relatedPRRow(pr) {
   `.key('relpr:' + pr.number)
 }
 
+// PHASE_WORD is the reviewer-facing word of each phase. The WORD carries the
+// meaning, never a colour on its own (Reindert is colourblind), and the glyph
+// (a filled/open/checked shape) is a second, non-colour signal on top of it.
+const PHASE_WORD = { intent: 'intent', specs: 'specs', plan: 'plan' }
+
+// phaseRow is one of the three phases: its number, glyph, word and file name.
+// The state is POSITIONAL — "klaar" for a phase behind us, "nu" for the one the
+// plan is in, "nog niet" for one still ahead — told apart by SHAPE (✓/◆/○) and
+// by that WORD, never by a colour (Reindert is colourblind). A phase still
+// ahead whose file is nonetheless already on disk says "concept": plan.md is
+// written as a draft as soon as there are tasks, while the spec is still being
+// sharpened (see planHasPhaseContent vs planPhase in plan_artifacts.go).
+function phaseRow(f, i, current) {
+  const order = ['intent', 'specs', 'plan']
+  const at = order.indexOf(current)
+  const isNow = f.phase === current
+  const done = i < at
+  const glyph = isNow ? '\u25c6' : done ? '\u2713' : '\u25cb'
+  const word = isNow ? t('nu') : done ? t('klaar') : f.exists ? t('concept') : t('nog niet')
+  return html`
+    <div
+      class="flex items-baseline gap-1.5 rounded-md px-1 py-0.5 text-[11.5px] leading-snug"
+      data-testid="plan-phase-row"
+      data-phase="${f.phase}"
+      data-phase-state="${isNow ? 'now' : done ? 'done' : 'todo'}"
+    >
+      <span class="w-3 shrink-0 text-slate-400 dark:text-zinc-500">${glyph}</span>
+      <span class="${isNow ? 'font-semibold text-slate-900 dark:text-zinc-100' : 'text-slate-600 dark:text-zinc-300'}"
+        >${i + 1 + '. ' + PHASE_WORD[f.phase]}</span
+      >
+      <span class="font-mono text-[10.5px] text-slate-400 dark:text-zinc-500">${f.file}</span>
+      <span class="ml-auto shrink-0 text-[10.5px] text-slate-500 dark:text-zinc-400">${word}</span>
+    </div>
+  `.key('phase:' + f.phase)
+}
+
+// phaseCard shows which of the three planning stages this plan is in and where
+// the files live (see plan_artifacts.go). Its own card in the first column,
+// under the ticket — the phase is a property of the plan, not of a question.
+function phaseCard() {
+  const a = state.artifacts
+  if (!a || !Array.isArray(a.files) || !a.files.length) return ''
+  return html`
+    <div
+      class="mt-2 shrink-0 rounded-lg bg-slate-50 px-2 py-1.5 ring-1 ring-slate-200 dark:bg-zinc-800 dark:ring-zinc-700"
+      data-testid="plan-phase"
+      data-phase-current="${a.phase}"
+    >
+      <div class="${LABEL + ' mb-1'}">${t('Fase') + ' \u2014 ' + PHASE_WORD[a.phase]}</div>
+      <div class="flex flex-col gap-0.5">${() => (state.artifacts.files || []).map((f, i) => phaseRow(f, i, state.artifacts.phase))}</div>
+      <div class="mt-1 break-all font-mono text-[10px] text-slate-400 dark:text-zinc-500" data-testid="plan-phase-dir">${a.dir}</div>
+    </div>
+  `
+}
+
 function ticketCard() {
   return html`
     <div
@@ -1692,6 +1752,7 @@ function ticketCard() {
               >`
             : ''}
       </div>
+      <div class="contents">${() => phaseCard()}</div>
       <div class="contents">
         ${() =>
           (state.doc.relatedPRs || []).length

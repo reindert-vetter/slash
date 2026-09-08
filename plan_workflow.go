@@ -1181,6 +1181,18 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 		return json.Marshal(doc)
 	})
 	// Activity: persist the document (write, workflow-driven).
+	//
+	// It also writes the three planning-phase artifacts (intent.md → spec.md →
+	// plan.md, see plan_artifacts.go). Deliberately HERE rather than as an
+	// Activity of its own in the workflow body: the plan Run ID is
+	// deterministic, tembed matches history positionally, and an extra
+	// ExecuteActivity would park every existing Execution on a step its
+	// history does not carry (.claude/rules/workflow-determinism.md). planSave
+	// is already called at exactly the moments a phase advances — after the
+	// issue loaded, after a gate, after every generation — so riding along
+	// inside it needs no replay flag at all. Best-effort: the files are
+	// derived from the document that was JUST stored, so a disk hiccup costs a
+	// regenerable file, never the plan the reviewer is waiting on.
 	engine.RegisterActivity("planSave", func(ctx context.Context, in []byte) ([]byte, error) {
 		var doc planDoc
 		if err := json.Unmarshal(in, &doc); err != nil {
@@ -1193,7 +1205,13 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 		if err != nil {
 			return nil, err
 		}
-		return nil, m.plan.Save(ctx, doc.Key, string(raw), doc.UpdatedAt)
+		if err := m.plan.Save(ctx, doc.Key, string(raw), doc.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if _, err := writePlanArtifacts(m.dataDir, doc); err != nil {
+			m.logf("plan: write artifacts %s: %v", doc.Key, err)
+		}
+		return nil, nil
 	})
 
 	// Activity: the ticket moves to "In Progress" in Jira, now that the

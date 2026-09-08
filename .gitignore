@@ -60,3 +60,7 @@ tests/.tmp/
 
 # Local scratch notes
 /todo/
+# Per-ticket planning-phase artifacts (intent.md/spec.md/plan.md, see
+# plan_artifacts.go) — derived from the plan document, thrown away once the
+# PR is merged (cleanup.go), so never committed.
+data/plans/

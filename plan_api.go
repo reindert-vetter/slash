@@ -71,6 +71,13 @@ func (s *server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	if exec, ok := mgr.PlanExecution(key); ok {
 		payload["exec"] = exec
 	}
+	// The three planning phases (intent → specs → plan) and the files behind
+	// them — read-only, derived from the document plus what is really on disk,
+	// so a file cleanup already removed stops being claimed the moment it is
+	// gone (see plan_artifacts.go).
+	if artifacts, ok := planArtifactsView(mgr.dataDir, doc); ok {
+		payload["artifacts"] = artifacts
+	}
 	writeJSON(w, http.StatusOK, payload)
 }
 

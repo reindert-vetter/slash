@@ -829,6 +829,19 @@ Signal-less, one Execution per run.
   `.claude/docs/tembed-endpoints.md`). The log FILE is deliberately never
   touched, and a **failed** run of either type is left in place so it stays
   visible in "Mislukte taken". See `.claude/docs/debug-mode.md`.
+- **Also removes the planning-phase artifacts of a purged PR, and sweeps the
+  ones that never got a PR.** `data/plans/<KEY>/` holds one plan's three stage
+  files (`intent.md`/`spec.md`/`plan.md`, see `.claude/docs/plan-page.md`).
+  `purgePR` removes the directory whose `.pr` marker names that PR
+  (`removePlanArtifactsForPR`, reported as `planArtifactsRemoved`) — inside the
+  EXISTING Activity, so the workflow's own history is unchanged, and under the
+  same merged-and-`cleanupMergedAge` gate as everything else it purges. A
+  directory that never reached a PR is instead swept on its OWN age
+  (`sweepPlanArtifacts`, `planArtifactAge` 30 days, `planArtifactsSwept`), one
+  unconditional Activity per pass, appended as the **last** step of
+  `cleanupWorkflow` so every existing history position stays put — the same
+  age-based shape as the `test_run` residue sweep. A directory WITH a marker is
+  never swept on age: its PR may still be open, and `purgePR` owns it.
 - **Also purges orphaned `task_code_comment` runs whose own comment is gone**
   (`purgeOrphanCommentRuns`, `cleanup.go`), unconditionally, once per pass —
   not scoped to the merged/age gate above or to any resolved PR target,

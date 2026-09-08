@@ -132,6 +132,14 @@ type CleanupPurgeResult struct {
 	WorktreesRemoved    int            `json:"worktreesRemoved"`
 	WorkflowRunsDeleted int            `json:"workflowRunsDeleted"`
 	RowsDeleted         map[string]int `json:"rowsDeleted"` // table/module name -> row count
+	// PlanArtifactsRemoved is the number of planning-phase directories
+	// (data/plans/<KEY>, holding intent.md/spec.md/plan.md — see
+	// plan_artifacts.go) removed with this PR. Normally 0 or 1: only a plan
+	// whose plan_execute really opened this PR carries its marker. This is the
+	// reviewer's own "mag worden weggegooid als de pr is gemerged", riding on
+	// the merged-and-old gate that already decided this PR is purgeable rather
+	// than becoming a second cleanup mechanism.
+	PlanArtifactsRemoved int `json:"planArtifactsRemoved,omitempty"`
 }
 
 // CleanupResult is the cleanup workflow's overall result.
@@ -162,6 +170,13 @@ type CleanupResult struct {
 	// jira_notifications.go. Unconditional and PR-independent: a notification
 	// belongs to a Jira issue, never to a PR.
 	JiraNotificationsPurged int `json:"jiraNotificationsPurged"`
+	// PlanArtifactsSwept is the number of planning-phase directories removed
+	// this pass because they never reached a pull request AND have not been
+	// touched for planArtifactAge (see sweepPlanArtifacts). The safety net
+	// under the per-PR rule above, so an abandoned or half-finished plan is
+	// not the one thing in data/ nobody ever cleans. Unconditional and
+	// PR-independent, exactly like the test_run residue sweep.
+	PlanArtifactsSwept int `json:"planArtifactsSwept"`
 }
 
 // reWorktreeDir extracts a PR number from a worktrees dir name: "pr-<n>-base"
@@ -510,8 +525,18 @@ func purgePR(ctx context.Context, d purgeDeps, pr int) (CleanupPurgeResult, erro
 		res.RowsDeleted["chat"] = int(n)
 	}
 
-	log.Printf("cleanup pr %d: worktrees=%d workflow_runs=%d rows=%v",
-		pr, res.WorktreesRemoved, res.WorkflowRunsDeleted, res.RowsDeleted)
+	// The plan that produced this PR: its three phase artifacts go with it (see
+	// plan_artifacts.go). Inside the EXISTING purgePR Activity rather than as
+	// an Activity of its own, so the cleanup workflow's own history is
+	// unchanged.
+	planDirs, err := removePlanArtifactsForPR(d.dataDir, pr)
+	if err != nil {
+		return res, fmt.Errorf("remove plan artifacts: %w", err)
+	}
+	res.PlanArtifactsRemoved = planDirs
+
+	log.Printf("cleanup pr %d: worktrees=%d workflow_runs=%d plan_artifacts=%d rows=%v",
+		pr, res.WorktreesRemoved, res.WorkflowRunsDeleted, res.PlanArtifactsRemoved, res.RowsDeleted)
 	return res, nil
 }
 
