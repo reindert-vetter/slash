@@ -151,10 +151,12 @@ test.describe('PR overview — Jira bell', () => {
     await panel.locator('[data-jira-id="1"] [data-testid="jira-mark-read"]').click()
     await expect(panel).toContainText('1 ongelezen')
     expect(context.pages().length).toBe(pagesBefore)
-    // "Alleen ongelezen" is on by default, so the just-ticked row (now read)
-    // drops out of the list entirely; only the still-unread row remains.
-    await expect(panel.locator('[data-testid="jira-row"]')).toHaveCount(1)
-    await expect(panel.locator('[data-jira-id="1"]')).toHaveCount(0)
+    // "Alleen ongelezen" is on, but the just-ticked row stays visible for its
+    // own 5-minute grace period (jiraReadRespite) — it must not vanish out
+    // from under the reviewer the instant it's read. See the dedicated grace
+    // period test below for the expiry itself.
+    await expect(panel.locator('[data-testid="jira-row"]')).toHaveCount(2)
+    await expect(panel.locator('[data-jira-id="1"]')).toBeVisible()
 
     // "Alles gelezen maken" clears the rest in one go.
     const bulk = panel.locator('[data-testid="jira-mark-all-read"]')
@@ -162,6 +164,58 @@ test.describe('PR overview — Jira bell', () => {
     await bulk.click()
     await expect(panel).toContainText('0 ongelezen')
     await expect(bulk).toBeDisabled()
+  })
+
+  test('a just-read row stays visible for its own grace period, then disappears once it expires', async ({ page }) => {
+    const items = [
+      { id: '1', at: new Date().toISOString(), title: 'One', issueKey: 'AB-1', actor: '', avatarUrl: '', url: 'https://example.atlassian.net/browse/AB-1', unread: true },
+      { id: '2', at: new Date().toISOString(), title: 'Two', issueKey: 'AB-2', actor: '', avatarUrl: '', url: 'https://example.atlassian.net/browse/AB-2', unread: true },
+    ]
+    // A mutable route (not stubNotifications' fixed body) so the periodic
+    // poll triggered by fast-forwarding the clock still reflects the read we
+    // make locally below, instead of resetting it back to unread from a
+    // stale snapshot.
+    await page.route('**/api/jira/notifications', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ok: true, runId: 'fake-run', items }),
+      })
+    })
+
+    // Fake clock so the 5-minute grace period (jiraReadRespite,
+    // JIRA_READ_RESPITE_MS in overview.mjs) can be tested without a real
+    // 5-minute wait.
+    await page.clock.install({ time: new Date() })
+    await page.goto('/pr-overview')
+    await appReady(page)
+
+    await page.locator('[data-testid="jira-bell-button"]').click()
+    const panel = page.locator('[data-testid="jira-bell-panel"]')
+    await expect(panel.locator('[data-testid="jira-row"]')).toHaveCount(2)
+
+    await panel.locator('[data-jira-id="1"] [data-testid="jira-mark-read"]').click()
+    items[0].unread = false // keep the mocked feed in sync with the local read
+    await expect(panel).toContainText('1 ongelezen')
+    // Still visible — in its own grace period, marked in words (never colour
+    // alone), and not counted as unread any more.
+    await expect(panel.locator('[data-testid="jira-row"]')).toHaveCount(2)
+    await expect(panel.locator('[data-jira-id="1"]')).toBeVisible()
+    await expect(panel.locator('[data-jira-id="1"] [data-testid="jira-respite-mark"]')).toContainText('net gelezen')
+
+    // Fast-forward past the 5-minute grace period.
+    await page.clock.fastForward('06:00')
+
+    // Close and reopen the panel (a fresh render) to observe the expiry —
+    // deliberately not relying on the background poll alone to repaint an
+    // already-open panel.
+    await page.locator('[data-testid="jira-bell-button"]').click()
+    await expect(panel).toHaveCount(0)
+    await page.locator('[data-testid="jira-bell-button"]').click()
+    await expect(panel.locator('[data-testid="jira-row"]')).toHaveCount(1)
+    await expect(panel.locator('[data-jira-id="1"]')).toHaveCount(0)
+    // Item "2" was never read — the grace period only ever applied to "1".
+    await expect(panel).toContainText('1 ongelezen')
   })
 
   test('Escape closes the dropdown', async ({ page }) => {

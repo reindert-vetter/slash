@@ -2041,18 +2041,70 @@ async function loadJiraNotifications() {
     // already the visible set — this is only there to SAY so, in words, rather
     // than leaving rows to vanish unexplained.
     state.jiraHidden = Number(body.hidden) || 0
+    // A notification that dropped out of the read-model entirely (purged, see
+    // .claude/docs/workflows-trackers.md's jira_inbox retention) can never be
+    // shown again, grace period or not — drop its stray map entry so
+    // jiraReadRespite doesn't grow forever across a long session.
+    const liveIds = new Set(state.jira.map((n) => n.id))
+    for (const id of jiraReadRespite.keys()) {
+      if (!liveIds.has(id)) jiraReadRespite.delete(id)
+    }
   } catch (err) {
     // Keep whatever we already showed — a transient failure must never blank
     // the list (same reasoning as loadRunningCount).
   }
 }
 
-// visibleJiraNotifications applies the "Alleen ongelezen" filter.
-function visibleJiraNotifications() {
-  if (!state.jiraUnreadOnly) return state.jira
-  return state.jira.filter((n) => n.unread)
+// A just-read notification stays visible for a short grace period instead of
+// vanishing the instant "Alleen ongelezen" is on (Reindert: "met alleen
+// ongelezen aan verdwijnt een item nu meteen zodra het gelezen is — ook door
+// je eigen klik — en dan ben je je context kwijt op het moment dat je erop
+// klikt"). JIRA_READ_RESPITE_MS is that grace period.
+//
+// It counts from the moment THIS TAB marked the row read (markJiraRead's own
+// Date.now(), not a server timestamp — the read-model's read_at column exists
+// but is never sent to the client, see modules/jiranotify's Item, and adding
+// that would be a new field for a purely client-side display grace period).
+// A row that's genuinely still unread never enters this map at all.
+//
+// jiraReadRespite is deliberately a PLAIN, non-reactive module-level Map, not
+// state — this is a display fact, not domain state (.claude/rules/
+// workflows-write-boundary.md: only a workflow writes anything durable, and
+// this writes nothing at all). It therefore does NOT survive a page refresh
+// (the module reinitializes, the map is empty again) — a refresh mid-grace
+// simply ends the grace early rather than "coming back" or restarting the
+// countdown, which is the explicit request. It also isn't wiped by
+// loadJiraNotifications' periodic `state.jira = ...` reassignment, unlike a
+// reactive property would be, so the grace period survives the ordinary
+// 60s poll.
+const JIRA_READ_RESPITE_MS = 5 * 60 * 1000
+const jiraReadRespite = new Map() // notification id -> Date.now() when marked read here
+
+// jiraRespiteActive: is this row still within its own grace period. Lazily
+// forgets an expired entry so the map never grows with stale ids.
+function jiraRespiteActive(n) {
+  const at = jiraReadRespite.get(n.id)
+  if (typeof at !== 'number') return false
+  if (Date.now() - at >= JIRA_READ_RESPITE_MS) {
+    jiraReadRespite.delete(n.id)
+    return false
+  }
+  return true
 }
 
+// visibleJiraNotifications applies the "Alleen ongelezen" filter — a row
+// stays visible while it's genuinely unread OR still in its own read-grace
+// period (see jiraRespiteActive above).
+function visibleJiraNotifications() {
+  if (!state.jiraUnreadOnly) return state.jira
+  return state.jira.filter((n) => n.unread || jiraRespiteActive(n))
+}
+
+// jiraUnreadCount deliberately only counts n.unread — a row in its grace
+// period is still VISIBLE (see visibleJiraNotifications) but no longer counts
+// as unread, so "N ongelezen" always agrees with what a truly-unread filter
+// would show; the grace period is a display carve-out on top of that, not a
+// second definition of "unread".
 function jiraUnreadCount() {
   return state.jira.filter((n) => n.unread).length
 }
@@ -2079,8 +2131,12 @@ async function ensureJiraRunId() {
 // so the filter reacts immediately; the next poll confirms it. Two callers:
 // opening the row (jiraRow's own @click) and the explicit per-row tick
 // (jiraMarkReadButton) — both just call this with the same notification.
+// Both callers (the row's own click and the per-row tick) start this row's
+// read-grace period (see jiraReadRespite above) — a reviewer clicking a row
+// to open it is exactly the case that must not vanish out from under them.
 async function markJiraRead(n) {
   if (!n || !n.unread) return
+  jiraReadRespite.set(n.id, Date.now())
   state.jira = state.jira.map((it) => (it.id === n.id ? { ...it, unread: false } : it))
   try {
     const runId = await ensureJiraRunId()
@@ -2098,6 +2154,11 @@ async function markJiraRead(n) {
 // markAllJiraRead is the "Alles gelezen maken" bulk action (jiraMarkAllReadButton)
 // — the other write this page does, same shape as markJiraRead but for every
 // currently unread row at once via the "read_all" signal kind.
+// Deliberately does NOT start a read-grace period for the rows it clears
+// (unlike markJiraRead): "Alles gelezen maken" is itself the explicit "I'm
+// done looking at these" action, the opposite of the single-row-click case
+// the grace period exists for — granting it here would make the button not
+// actually clear the "Alleen ongelezen" list.
 async function markAllJiraRead() {
   if (!jiraUnreadCount()) return
   state.jira = state.jira.map((it) => (it.unread ? { ...it, unread: false } : it))
@@ -2126,6 +2187,9 @@ async function markAllJiraRead() {
 // modules/jiranotify).
 async function markJiraUnread(n) {
   if (!n || n.unread) return
+  // Forget any leftover grace-period entry: the row is unread again now, so
+  // there is nothing left to hold it visible past its own real unread state.
+  jiraReadRespite.delete(n.id)
   state.jira = state.jira.map((it) => (it.id === n.id ? { ...it, unread: true } : it))
   try {
     const runId = await ensureJiraRunId()
@@ -2254,11 +2318,19 @@ function jiraRow(n) {
       ${() => jiraAvatarMark(n)}
       <div class="min-w-0 flex-1">
         <h3
-          class="${'truncate text-[13.5px] text-slate-900 dark:text-zinc-100 group-hover:text-black dark:group-hover:text-white ' +
+          class="${'line-clamp-2 text-[13.5px] text-slate-900 dark:text-zinc-100 group-hover:text-black dark:group-hover:text-white ' +
           (n.unread ? 'font-semibold' : 'font-normal')}"
         >
           ${n.title || n.issueKey || n.url}
           <span class="font-normal text-slate-400 dark:text-zinc-600">· ${relativeTime(n.at)}</span>
+          ${() =>
+            !n.unread && jiraRespiteActive(n)
+              ? html`<span
+                  data-testid="jira-respite-mark"
+                  class="font-normal text-indigo-500 dark:text-indigo-400"
+                  >· ${t('net gelezen')}</span
+                >`.key('respite')
+              : ''}
         </h3>
         ${() =>
           n.issueTitle
@@ -2368,7 +2440,7 @@ function jiraBellPanel() {
   return html`
     <div
       data-testid="jira-bell-panel"
-      class="absolute right-0 top-full z-20 mt-2 w-[30rem] max-w-[95vw] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg dark:border-zinc-800 dark:bg-zinc-900"
+      class="absolute right-0 top-full z-20 mt-2 w-[45rem] max-w-[calc(100vw-6rem)] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg dark:border-zinc-800 dark:bg-zinc-900"
     >
       <div class="flex items-center gap-2 border-b border-slate-100 px-3 py-2.5 dark:border-zinc-800">
         <h2 class="text-[13px] font-semibold text-slate-900 dark:text-zinc-100">Jira</h2>

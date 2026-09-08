@@ -60,12 +60,23 @@ the ONLY place this feed is shown) moved into the bell's own dropdown.
   deep link (which already carries Jira's `focusedCommentId`, so it opens **on
   the comment**, in a **new window**) with an unread dot **plus** a bold title
   — the dot sits on the row's right edge, mirroring Jira's own layout, not
-  next to the avatar. The panel's own width (`w-[30rem] max-w-[95vw]`,
-  deliberately wider than a generic dropdown) is sized to fit its own header
-  row — the "Jira" title, the unread-count badge, `jiraUnreadToggle` and
-  `jiraMarkAllReadButton` side by side without wrapping or clipping — and to
-  leave enough room for a row title to stay readable before `truncate` kicks
-  in; don't shrink it back without re-checking that header row still fits.
+  next to the avatar. The panel's own width (`w-[45rem] max-w-[95vw]`,
+  deliberately wider than a generic dropdown — widened 50% from the original
+  `w-[30rem]`, Reindert: "ik zie de titel niet, maak het 50% breeder") is
+  sized to fit its own header row — the "Jira" title, the unread-count badge,
+  `jiraUnreadToggle` and `jiraMarkAllReadButton` side by side without wrapping
+  or clipping — and to leave enough room for a row title to stay readable;
+  don't shrink it back without re-checking that header row still fits.
+  `max-w-[95vw]` keeps the panel from overflowing a narrow viewport — verified
+  live down to a ~500px window, where the panel still sits fully inside the
+  page instead of running off the right edge. **The title itself
+  (`jiraRow`'s `<h3>`) is `line-clamp-2`, not `truncate`**: a long title (e.g.
+  "Alex van der Schans changed a bug from Waiting for support to In Progress")
+  used to be cut to one ellipsized line regardless of the panel's own width —
+  widening the panel alone would not have fixed that, since `truncate` clips
+  at one line no matter how wide its container is. Wrapping to two lines
+  mirrors how `issueTitle`'s own `<p>` (right below it) was already allowed
+  to wrap.
 - **A row shows the same density of information as the real Jira bell**
   (reviewer request, comparing two side-by-side screenshots of it: "ik zie
   hier zoveel meer informatie... ik wil hetzelfde hebben"). On top of the
@@ -174,6 +185,56 @@ the ONLY place this feed is shown) moved into the bell's own dropdown.
     `TestMarkUnreadSurvivesTheNextRefresh` /
     `TestMarkAllReadClearsAForcedUnreadRow`
     (`modules/jiranotify/jiranotify_test.go`).
+- **A just-read row stays visible for a 5-minute grace period, purely on the
+  client** (Reindert: "met alleen ongelezen aan verdwijnt een item nu meteen
+  zodra het gelezen is — ook door je eigen klik — en dan ben je je context
+  kwijt op het moment dat je erop klikt"). Opening a row (or ticking
+  `jiraMarkReadButton`) both call `markJiraRead`, which — besides the
+  optimistic `unread: false` write already described above — records
+  `jiraReadRespite.set(n.id, Date.now())`: a **plain, non-reactive
+  module-level `Map`** in `src/overview.mjs`, `JIRA_READ_RESPITE_MS = 5 *
+  60_000`. `visibleJiraNotifications` (the "Alleen ongelezen" filter) keeps a
+  row while `n.unread || jiraRespiteActive(n)`; `jiraRespiteActive` lazily
+  forgets an entry once its 5 minutes are up. The row itself gets a small
+  in-words marker while this is active, `jiraRow`'s `data-testid=
+  jira-respite-mark` ("· net gelezen", indigo text — a word, never colour
+  alone, per the colourblind rule) next to its relative-time stamp.
+  - **Deliberately does NOT count toward "N ongelezen"** —
+    `jiraUnreadCount()` still only counts `n.unread`, so the badge and the
+    filter never disagree about what is genuinely unread; the grace period is
+    a pure display carve-out on top of that, not a second definition of
+    unread.
+  - **Counts from the moment THIS TAB marked the row read**, not a server
+    timestamp. `modules/jiranotify`'s `read_at` column exists (see above) but
+    is never sent to the client (`Item`'s JSON only carries the derived
+    `Unread` bool) — adding that field, or any new write, would be exactly
+    the "new write path" the write-boundary rule forbids for what is a
+    purely client-side display fact
+    (`.claude/rules/workflows-write-boundary.md`). `markAllJiraRead` ("Alles
+    gelezen maken") deliberately does **not** grant this grace period to the
+    rows it clears — that button's whole point is "I'm done looking at
+    these", the opposite of the single-row-click case the grace period
+    exists for.
+  - **Lives only in this tab's memory, on purpose.** It is not `state`
+    (arrow.js reactive) and not `localStorage` — a page refresh re-runs the
+    module and the map starts empty again, so a row mid-grace simply loses
+    its grace early on refresh rather than reappearing or restarting its
+    countdown (the explicit request: "het moet niet zo zijn dat zo'n item na
+    een refresh weer terugkomt of dat de vijf minuten opnieuw beginnen"). It
+    also isn't cleared by the ordinary 60s `loadJiraNotifications` poll's
+    `state.jira = ...` reassignment (a reactive property would be), which is
+    what lets the grace period survive that poll — `loadJiraNotifications`
+    only prunes an entry whose notification id is no longer present at all
+    (purged by the 30-day retention sweep), so the map can't grow forever
+    across a long session.
+  - **Interaction with `forced_unread`** (the right-click "Markeer als
+    ongelezen" above): `markJiraUnread` deletes any grace-period entry for
+    that id — the row is unread again for a real reason, so there is nothing
+    left for the grace period to hold it visible past.
+  - Test: `tests/jira-bell.spec.mjs` ("a just-read row stays visible for its
+    own grace period, then disappears once it expires"), driven with
+    Playwright's `page.clock` (`fastForward`) rather than a real 5-minute
+    wait.
 - **A noise filter the reviewer manages himself** (Reindert: "filter
   notificaties weg met: assigned a work item to you. en assigned a story to
   you", then "maak daar een instelling van in de instellingen pagina", "met
