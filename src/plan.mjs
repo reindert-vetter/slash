@@ -427,6 +427,7 @@ async function loadPlan() {
     if (!state.doc.needsScope) state.scopePending = false
     if (!state.doc.needsHotfix) state.hotfixPending = false
     dropSettledPending()
+    dropSettledRetrying()
     clampCursor()
   } catch (err) {
     state.error = t('Kon dit ticket niet laden.')
@@ -489,9 +490,12 @@ function dropSettledTaskPending() {
 // retryFailedRun) marks the run busy immediately, cleared again right away on
 // a failed request (so the row honestly returns to "mislukt") — the same
 // "mark it optimistically" shape as home.mjs, at the same shared spot rather
-// than a second, page-local map.
+// than a second, page-local map. dropSettledRetrying (below) clears it again
+// once the retry has actually run.
 async function retryPlanRun(runId, synthetic) {
   if (!runId) return
+  const before = (state.runs || []).find((r) => r.runId === runId)
+  planRetryStamps.set(runId, (before && before.updatedAt) || '')
   markTaskRetrying(runId)
   try {
     const res = synthetic
@@ -506,17 +510,48 @@ async function retryPlanRun(runId, synthetic) {
           body: JSON.stringify({ runId }),
         })
     if (!res.ok) {
-      clearTaskRetrying(runId)
+      clearRetryMark(runId)
       console.error('plan retry failed:', res.status, await res.text())
       return
     }
   } catch (err) {
-    clearTaskRetrying(runId)
+    clearRetryMark(runId)
     console.error('plan retry failed:', err)
     return
   }
   lastPayload = ''
   await loadPlan()
+}
+
+// planRetryStamps — the `updatedAt` each retried run carried at the moment of
+// the click, so dropSettledRetrying can tell "the retry has actually run" from
+// "nothing has happened yet". A plain, non-reactive Map: purely display
+// bookkeeping, like RelatedPanel.mjs's own taskUi.retrying it accompanies.
+const planRetryStamps = new Map()
+
+function clearRetryMark(runId) {
+  planRetryStamps.delete(runId)
+  clearTaskRetrying(runId)
+}
+
+// dropSettledRetrying forgets a run marked "↻ opnieuw gestart" as soon as a
+// freshly loaded document shows the retry has run — the problem row is gone,
+// or the run's own `updatedAt` moved past what it was at the click. Without
+// this the mark never went away at all: it lives in RelatedPanel.mjs's SHARED
+// taskUi.retrying, which the review tree only ever gets rid of because
+// /api/problems replaces the failure row with a new Run ID. Both retry
+// mechanisms here resume IN PLACE (see retryPlanRun), so the Run ID never
+// changes and the row stayed "opnieuw gestart" forever — inert on a second
+// click (openPlanTaskRowMenu bails on `row.retrying`) and dropped from the
+// ticket column's Enter-menu (planCommands' isRetryingRun gate), so a
+// recurring parse error was stuck again until the tab was reloaded.
+function dropSettledRetrying() {
+  if (!planRetryStamps.size) return
+  const failing = new Map((planProblemsForPanel().failedRuns || []).map((r) => [r.runId, r.updatedAt]))
+  for (const runId of [...planRetryStamps.keys()]) {
+    const now = failing.get(runId)
+    if (now === undefined || now !== planRetryStamps.get(runId)) clearRetryMark(runId)
+  }
 }
 
 // ensureTracker starts (or idempotently reuses) the ticket's own `plan`
@@ -2029,6 +2064,18 @@ function parseIntentSections(text) {
   return sections.map((s) => ({ heading: s.heading, body: s.body.join('\n').trim() })).filter((s) => s.heading || s.body)
 }
 
+// intentSections is what intentField actually renders: the CURRENT intent.md
+// text split into sections, never an empty list. An empty/not-yet-generated
+// intent parses to zero sections, which used to render zero textareas — so in
+// stage 1 (intent), where writing the intent is the whole job, there was
+// literally nothing to type into and the "wordt automatisch gegenereerd…"
+// placeholder the single-textarea version always showed was gone. One empty,
+// heading-less section is the honest equivalent of that old empty field.
+function intentSections() {
+  const parsed = parseIntentSections(state.doc.intentOverride || state.intentText)
+  return parsed.length ? parsed : [{ heading: null, body: '' }]
+}
+
 function buildIntentFromSections(sections) {
   return sections
     .map((s) => (s.heading ? s.heading + (s.body ? '\n\n' + s.body : '') : s.body))
@@ -2040,21 +2087,29 @@ function buildIntentFromSections(sections) {
 // under a fixed, non-editable heading — see parseIntentSections above). On
 // blur it reconstructs the WHOLE intent.md text from every sibling section's
 // CURRENT (possibly just-edited) value — found via the shared
-// `data-testid=plan-intent-sections` container, never via `sections` itself
-// (which is a snapshot from the moment this component mounted) — and sends
-// it as one `plan_answer` Signal, same "seed once, save on blur" discipline
-// as the single-textarea version this replaces.
-function intentSectionBody(sections, i, place, locked) {
-  const s = sections[i]
+// `data-testid=plan-intent-sections` container, and each heading read back off
+// the field's OWN `data-section-heading`, never off a section array captured
+// when this component mounted: arrow.js reuses a keyed node without re-running
+// its bindings, so such a snapshot goes stale the moment the list grows (the
+// empty→generated case) and a blur would then rebuild the document with the
+// wrong headings. Same "seed once, save on blur" discipline as the
+// single-textarea version this replaces.
+//
+// Its .key() carries the section's own CONTENT, not just its position, for
+// that same keyed-node-reuse reason: a position-only key left the very first
+// field showing the empty text it mounted with even after the generated
+// intent arrived. Keying on the content re-seeds exactly that case and
+// nothing else — a poll bringing back the same text keeps the same key, so an
+// edit in progress is still never clobbered.
+function intentSectionBody(s, i, place, locked) {
   const inTicket = place === 'ticket'
   const rows = Math.max(3, Math.min(16, s.body.split('\n').length + 2))
   const save = (container) => {
     if (!container) return
     const bodies = Array.from(container.querySelectorAll('[data-testid="plan-intent-section-body"]'))
-    const next = bodies.map((el) => ({ heading: sections[Number(el.dataset.sectionIdx)].heading, body: el.value }))
+    const next = bodies.map((el) => ({ heading: el.dataset.sectionHeading || null, body: el.value }))
     const text = buildIntentFromSections(next)
-    const seed = buildIntentFromSections(sections)
-    if (text !== seed) sendIntentOverride(text)
+    if (text !== buildIntentFromSections(intentSections())) sendIntentOverride(text)
   }
   return html`
     <div class="mb-2" data-testid="plan-intent-section" data-section-idx="${i}">
@@ -2072,13 +2127,21 @@ function intentSectionBody(sections, i, place, locked) {
       <textarea
         data-testid="plan-intent-section-body"
         data-section-idx="${i}"
+        data-section-heading="${s.heading || ''}"
         rows="${rows}"
         placeholder="${t('Intentie wordt automatisch gegenereerd…')}"
         readonly="${() => (locked() ? 'true' : false)}"
         class="w-full resize-y rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-[12px] leading-relaxed text-slate-800 placeholder:text-slate-400 focus:border-indigo-300 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500"
         @click="${(e) => {
           if (!e || !inTicket) return
+          // stopPropagation FIRST (the nested-@click rule in
+          // arrowjs-pitfalls.md), then take the keyboard to the ticket
+          // column — `state.col = 0` is what the description block's own
+          // click already did and this one forgot, so clicking the intent
+          // field from a block column set col0Focus but never satisfied
+          // intentCommentsColumnVisible()'s own `state.col === 0`.
           e.stopPropagation()
+          state.col = 0
           state.col0Focus = 'intent'
         }}"
         @keydown="${(e) => {
@@ -2104,7 +2167,7 @@ function intentSectionBody(sections, i, place, locked) {
       >${s.body}</textarea
       >
     </div>
-  `.key('intent-sec-' + place + '-' + i)
+  `.key('intent-sec-' + place + '-' + i + ':' + (s.heading || '') + ' ' + s.body)
 }
 
 // intentField is the "Intentie" block — reviewer request: "in taak
@@ -2131,6 +2194,15 @@ function intentSectionBody(sections, i, place, locked) {
 // tab/reviewer editing the same ticket at the same time) is a known, accepted
 // gap, same as plan-task-note.
 //
+// The section LIST itself is its own `${() => intentSections().map(...)}`
+// binding (never a static `.map()` inside this conditional template — the
+// "fifth variant" pitfall in .claude/rules/arrowjs-pitfalls.md), so a section
+// that only EXISTS later still appears: an intent that was still empty at
+// first load (or was generated while the page was open) used to leave this
+// block permanently blank until a collapse toggle or a reload. An
+// already-mounted field keeps its own key and therefore its own seed, so this
+// costs nothing for an edit in progress.
+//
 // TWO placements, one function (see intentInQuestionsColumn):
 //
 //   - 'questions' (stage intent) — top of the questions column, never
@@ -2156,11 +2228,9 @@ function intentSectionBody(sections, i, place, locked) {
 // every section's one-time seed — is untouched by a col/lock change.
 function intentField(place) {
   const loaded = !state.loading
-  const seed = state.doc.intentOverride || state.intentText
   const inTicket = place === 'ticket'
   const collapsed = () => inTicket && state.col === 1
   const locked = () => inTicket && !state.intentEditing
-  const sections = parseIntentSections(seed)
   return html`
     <div
       class="${inTicket ? 'mt-3 border-t border-slate-100 pt-2 dark:border-zinc-800' : 'mb-3 rounded-2xl bg-white p-3 ring-1 ring-slate-200 dark:bg-zinc-900 dark:ring-zinc-800'}"
@@ -2211,7 +2281,7 @@ function intentField(place) {
           collapsed()
             ? ''
             : html`<div class="flex flex-col" data-testid="plan-intent-sections">
-                ${sections.map((s, i) => intentSectionBody(sections, i, place, locked))}
+                ${() => intentSections().map((s, i) => intentSectionBody(s, i, place, locked))}
               </div>`.key('sections')}
       </div>
     </div>
@@ -3588,6 +3658,14 @@ function commentsPanel() {
   `
 }
 
+// questionsColumn holds ONE Jira-opmerkingen panel at a time: while the
+// dedicated column next to the ticket is up (intentCommentsColumnVisible),
+// this copy stands down. Both rendering at once put the same panel twice on
+// screen, side by side, and — worse — gave the single-composer machinery two
+// `plan-comment-reply-input` fields, of which openCommentReply/
+// sendCommentReply's document.querySelector only ever sees the FIRST (the
+// dedicated column, which comes earlier in the DOM), so a reply typed in this
+// one was never read back.
 function questionsColumn() {
   return html`
     <div
@@ -3600,7 +3678,7 @@ function questionsColumn() {
       <div class="min-h-0 flex-1 overflow-y-auto pr-1">
         <div class="contents">${() => (intentInQuestionsColumn() ? [intentField('questions')] : [])}</div>
         <div class="contents">${() => (intentInQuestionsColumn() ? [intentToSpecsHint()] : [])}</div>
-        ${commentsPanel()}
+        <div class="contents">${() => (intentCommentsColumnVisible() ? [] : [commentsPanel()])}</div>
         ${() => (gateOpen() ? [] : (state.doc.questions || []).map((q, qi) => questionCard(q, qi)))}
         ${() =>
           !gateOpen() && !state.loading && !(state.doc.questions || []).length

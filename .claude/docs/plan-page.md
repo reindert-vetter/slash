@@ -161,7 +161,8 @@ reactive):
   every optimistic local flag that flips `busyGenerating()` before the next
   poll would otherwise notice.
 - **Retry bookkeeping moved to the shared spot**: the old page-local
-  `state.retryingRuns` map + `dropSettledRetrying` are gone; `retryPlanRun`
+  `state.retryingRuns` map is gone (`dropSettledRetrying` went with it and had
+  to come back — see "Opnieuw plannen" below); `retryPlanRun`
   now calls `markTaskRetrying`/`clearTaskRetrying` (RelatedPanel.mjs, the same
   functions `home.mjs`'s own `retryFailedRun` uses), and the ticket column's
   own Enter-menu guard (`planCommands`, "only offer 'Opnieuw plannen' when
@@ -407,9 +408,11 @@ section's own `@blur` handler (`intentSectionBody`'s `save`) walks EVERY
 sibling `[data-testid=plan-intent-section-body]` inside the shared
 `data-testid=plan-intent-sections` container — reading each one's LIVE current
 `.value`, never the `sections` array snapshot taken at mount time — pairs each
-with its own (unchanged) heading from that snapshot, and reconstructs the
-document via `buildIntentFromSections` (heading + blank line + body, joined
-with a blank line between sections) before calling `sendIntentOverride` once.
+with its own (unchanged) heading, read back off that same field's own
+`data-section-heading` attribute (also not a snapshot, see the bug below), and
+reconstructs the document via `buildIntentFromSections` (heading + blank line +
+body, joined with a blank line between sections) before calling
+`sendIntentOverride` once.
 Deliberately not a per-section override on the document: `doc.intentOverride`
 stays the single wholesale field described above, so nothing on the backend
 needed to change — this is purely a frontend editing affordance on top of it.
@@ -426,6 +429,33 @@ fixed/max height.
 
 Test: `tests/plan-intent-sections.spec.mjs` ("a heading is a fixed label, only
 the text below it is editable, and an edit saves the whole document").
+
+**Bug, fixed afterwards: an empty intent left NO field at all, and generated
+text never showed up on its own.** `parseIntentSections('')` returns an empty
+list, so the block rendered zero textareas — in stage 1 (intent), where writing
+the intent IS the job, there was nothing to type into, and the placeholder the
+old single textarea always carried was gone with it. `intentSections()` is the
+fix: the same parse, but never empty — one heading-less `{heading: null, body:
+''}` section stands in, the honest equivalent of that old empty field. Two
+arrow.js-shaped follow-ons came with it, both straight out of
+`.claude/rules/arrowjs-pitfalls.md`:
+
+- the list is now its own `${() => intentSections().map(...)}` FUNCTION
+  binding instead of a static `.map()` of a mount-time snapshot inside the
+  conditional template (the "fifth variant"), so a section that only exists
+  after a later poll actually appears;
+- `intentSectionBody`'s `.key()` carries the section's own CONTENT next to its
+  position, because a keyed node is reused WITHOUT re-running its bindings —
+  with a position-only key the first field kept showing the empty text it
+  mounted with even once the generated intent had arrived. A poll bringing
+  back the same text keeps the same key, so an edit in progress is still never
+  clobbered; only genuinely changed text re-seeds.
+
+The same staleness is why `save` reads each heading off the field's own
+`data-section-heading` rather than a captured array: that array goes stale the
+moment the list grows, and a blur would then rebuild intent.md with the wrong
+headings. Test: `tests/plan-intent-sections.spec.mjs` ("an empty intent still
+offers one field, and generated text arrives without a reload").
 
 ### Where it sits, and when it can be typed in, depends on the phase
 
@@ -489,11 +519,25 @@ sub-block); the description block and each section body's own `@click`
 `overview.mjs`'s popover close button
 (`.claude/rules/arrowjs-pitfalls.md`) — so their own, more specific
 `col0Focus` write is never immediately overwritten by the card's own bubbling
-handler.
+handler. Both of those handlers also set `state.col = 0` — the section body's
+own click did not at first, so clicking the intent field from a block column
+set `col0Focus` but never satisfied `intentCommentsColumnVisible()`'s own
+`state.col === 0`, and the column silently stayed away.
+
+**ONE panel at a time.** The questions column renders `commentsPanel()` behind
+its own `${() => intentCommentsColumnVisible() ? [] : [commentsPanel()]}`
+binding (a stable `contents` root, like the two `intentField`/
+`intentToSpecsHint` slots above it), so it stands down while the dedicated
+column is up. Rendering both put the same panel twice on screen side by side,
+and — worse — gave the single-composer machinery two
+`plan-comment-reply-input` fields, of which
+`openCommentReply`/`sendCommentReply`'s `document.querySelector` only ever
+sees the FIRST (the dedicated column comes earlier in the DOM), so a reply
+typed into the questions column's copy was never read back.
 
 Test: `tests/plan-intent-sections.spec.mjs` ("selecting the ticket description
 or the intent field shows a dedicated Jira-opmerkingen column, hidden
-otherwise").
+otherwise" — which also asserts the panel count stays 1).
 
 ### Both plan Claude calls run on Opus, with their own 5-minute timeout
 
@@ -987,11 +1031,24 @@ shared spot — see "The Taken block is the literal TasksPanel" above) mark a ru
 busy the moment the click fires, so the row/status word flips to "↻ opnieuw
 gestart" immediately instead of still reading "mislukt" until the next
 3-second poll notices — same reasoning as `home.mjs`'s own `retryFailedRun`.
-There is no plan-page-local settling logic any more (the old
-`dropSettledRetrying` is gone): the row simply stops being fed as `failed`
-once a freshly loaded document no longer reports it that way (see
-`planProblemsForPanel` above), and `buildTaskRows` then renders it from the
-live/idle side instead.
+
+**That mark needs plan-page-local settling after all** (`dropSettledRetrying`,
+`plan.mjs`, called from `loadPlan` next to `dropSettledPending`). Dropping it
+along with the page's own retry map was a bug: `taskUi.retrying` is SHARED
+state that nothing clears on its own, and the review tree only gets away with
+that because `/api/problems` replaces a resumed failure with a run under a NEW
+Run ID, so the marked row disappears entirely. Both retry mechanisms here
+resume IN PLACE, so the Run ID never changes — the row stayed "↻ opnieuw
+gestart" forever, inert on a second click (`openPlanTaskRowMenu` bails on
+`row.retrying`) and dropped from the ticket column's Enter-menu (`planCommands`'
+`isRetryingRun` gate), so a retry that hit the same parse error again could
+never be repeated until the tab was reloaded. `dropSettledRetrying` clears the
+mark as soon as a freshly loaded document shows the retry actually ran: the
+problem row is gone, or the run's own `updatedAt` moved past what it was at the
+click (`planRetryStamps`, a plain non-reactive Map next to it — a Signal round
+trip always bumps `updatedAt`, since the engine flips the run
+running→waiting around it). Test: `tests/plan-retry.spec.mjs` ("a retry that
+runs into the same error can be retried again").
 
 Its own tiny menu machinery in `plan.mjs` (`menu`/`ms`/`openPlanMenu`/
 `closeMenu`/`runCommand`) mirrors home.mjs's at the scale this page needs: no

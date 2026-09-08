@@ -109,6 +109,13 @@ test.describe('Plan page — the sectioned Intentie editor and its comments colu
     await expect(col).toBeVisible()
     await expect(col).toContainText('Een opmerking')
 
+    // ONE panel on screen, never two: the questions column's own copy stands
+    // down while this dedicated column is up. Two of them not only showed the
+    // same comments twice side by side, they also gave the single-composer
+    // machinery two reply fields, of which sendCommentReply only ever reads
+    // the first (see questionsColumn's own doc comment in src/plan.mjs).
+    await expect(page.getByTestId('plan-comments-panel')).toHaveCount(1)
+
     // Moving the keyboard to the questions column hides it again — and
     // collapses the intent field itself, since it lives under the ticket
     // description while column 1 has the keyboard.
@@ -122,5 +129,30 @@ test.describe('Plan page — the sectioned Intentie editor and its comments colu
     const firstBody = page.getByTestId('plan-intent-section-body').first()
     await firstBody.click()
     await expect(page.getByTestId('plan-intent-comments-column')).toBeVisible()
+    await expect(page.getByTestId('plan-comments-panel')).toHaveCount(1)
+  })
+
+  // An intent.md that is still empty (or not generated yet) parsed to ZERO
+  // sections, so the block rendered no field at all — in stage 1, where
+  // writing the intent is the whole job, there was nothing to type into — and
+  // the text arriving on a later poll did not show up either, because the
+  // section list was a static `.map()` of a mount-time snapshot.
+  test('an empty intent still offers one field, and generated text arrives without a reload', async ({ page }) => {
+    let intent = ''
+    await page.route('**/api/plan?*', (route) => route.fulfill({ json: { ...planJson(), intent } }))
+
+    await page.goto('/plan/SECT-1')
+    await appReady(page)
+    await page.getByTestId('plan-ticket-card').click()
+
+    const bodies = page.getByTestId('plan-intent-section-body')
+    await expect(bodies).toHaveCount(1)
+    await expect(bodies.first()).toHaveValue('')
+    await expect(page.getByTestId('plan-intent-heading')).toHaveCount(0)
+
+    // The generation lands on a later poll — the sections appear on their own.
+    intent = '# Intent — SECT-1\n\nDe gegenereerde intentie.'
+    await expect(page.getByTestId('plan-intent-heading')).toHaveCount(1, { timeout: 10000 })
+    await expect(page.getByTestId('plan-intent-section-body').first()).toHaveValue('De gegenereerde intentie.')
   })
 })

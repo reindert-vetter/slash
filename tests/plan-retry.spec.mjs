@@ -137,4 +137,58 @@ test.describe('Plan page — retry a swallowed generation error (run still waiti
     await page.getByTestId('command-row').filter({ hasText: 'Opnieuw plannen' }).click()
     await expect.poll(() => signalled).toEqual({ questionId: '', optionId: '', text: '', kind: 'retry' })
   })
+
+  // Both retry mechanisms resume the run IN PLACE, so its Run ID never
+  // changes — unlike the PR tree, where /api/problems replaces the failure
+  // row and the shared "↻ opnieuw gestart" mark disappears with it. Without
+  // dropSettledRetrying (src/plan.mjs) that mark therefore stuck forever: the
+  // row stayed "opnieuw gestart", a second click did nothing at all, and the
+  // Enter-menu dropped the item — so a retry that hits the same error again
+  // could never be repeated.
+  test('a retry that runs into the same error can be retried again', async ({ page }) => {
+    let updatedAt = '2026-01-01T10:00:00Z'
+    let signals = 0
+    await page.route('**/api/plan?*', (route) =>
+      route.fulfill({
+        json: {
+          ok: true,
+          key: 'RETRY-2',
+          doc: {
+            key: 'RETRY-2',
+            title: 'Retry a swallowed error',
+            description: 'desc',
+            url: '',
+            questions: [],
+            tasks: [],
+            answers: [],
+            error: 'plan: parse answer: unexpected end of JSON input',
+            chat: [],
+          },
+          runs: [{ runId: 'run-plan-2', workflow: 'plan', status: 'waiting', createdAt: '2026-01-01T09:00:00Z', updatedAt }],
+          generating: false,
+        },
+      }),
+    )
+    await page.route('**/api/workflows/run-plan-2/signals/plan_answer', (route) => {
+      signals += 1
+      // The Signal really ran the generation again: the run's own updatedAt
+      // moves, even though the same error is recorded once more.
+      updatedAt = '2026-01-01T10:0' + signals + ':00Z'
+      route.fulfill({ json: { status: 'answered' } })
+    })
+
+    await page.goto('/plan/RETRY-2')
+    await appReady(page)
+
+    const row = page.getByTestId('workflow-row').filter({ hasText: 'Plan' })
+    await expect(row.getByTestId('workflow-status')).toContainText('mislukt')
+    await row.click()
+    await expect.poll(() => signals).toBe(1)
+
+    // Back to an honest "mislukt" once the retry has run, so a second click
+    // is possible at all.
+    await expect(row.getByTestId('workflow-status')).toContainText('mislukt')
+    await row.click()
+    await expect.poll(() => signals).toBe(2)
+  })
 })
