@@ -242,6 +242,56 @@ je halen uit jira taak en is een taak wat te maken heeft met de hoofdtaak."*
   button appears only while `doc.intentOverride` is set, clearing it (empty
   text) to revert to the auto-generated one.
 
+### Where it sits, and when it can be typed in, depends on the phase
+
+Follow-up request: *"laat mij intentie in 2e kolom zien als je nog in stap 1
+zit, als je in stap 2 zit, dan mag het zoals nu, maar alleen editbaar als je
+enter erop drukt"*. ONE component, two placements, decided by
+`intentInQuestionsColumn()` on top of `planPhaseNow()` — the frontend mirror of
+`planPhase` (`plan_artifacts.go`): it prefers the server's own
+`state.artifacts.phase` and falls back to the same "nothing generated yet is
+stage 1" rule, so a response without an `artifacts` block still lands on a real
+phase.
+
+- **Phase `intent` (stage 1)** — the field renders at the TOP of the questions
+  column (`questionsColumn`, `data-intent-place="questions"`), as its own card,
+  never collapsed and directly typable. Writing the intent IS stage 1's work,
+  so nothing stands between the reviewer and the caret; column 0 shows no
+  intent block at all in this phase.
+- **Phase `specs`/`plan` (stage 2+)** — the historical spot under the ticket
+  description (`data-intent-place="ticket"`), still collapsing while the
+  questions column has the keyboard (see "The questions column doubles in
+  width…" below), and **read-only until Enter unlocks it**
+  (`state.intentEditing`, `data-locked`): click/Tab focuses, `Enter` (never a
+  newline — the handler `preventDefault`s its own key) unlocks, `Escape` and
+  blur lock it again. By then the reviewer is answering questions, and a stray
+  keystroke in a passed stage should not silently rewrite the intent. The state
+  is carried by a WORD next to the label ("vergrendeld — Enter om te bewerken"
+  / "bewerken", `data-testid=plan-intent-lock-label`), never by a colour, per
+  the colourblind rule.
+
+The `readonly` attribute is bound as the plain, undecorated name with a
+function binding returning `'true'`/`false` — not `?readonly=`/`.readonly=`,
+which this vendored arrow.js does not support (see
+`.claude/rules/arrowjs-pitfalls.md`). The component's `.key()` now carries the
+placement too (`intent:<place>:<ready|pending>`), so each spot keeps its own
+one-time seed. Test: `tests/plan-intent-phase.spec.mjs`.
+
+### Both plan Claude calls run on Opus, with their own 5-minute timeout
+
+Reviewer request: *"ik wil dat je opus gebruikt voor het plannen"* — applied to
+BOTH of this page's calls, `planGenerate` (the questions + task list) and
+`planChatReply` (the ticket chat). They also pass
+`Timeout: planClaudeTimeout` (5 minutes, `plan_workflow.go`), a per-call
+override of `modules/claude`'s own `contextTimeout`: that 90s default was sized
+for a ~30s single-purpose completion, while these two send a whole Jira ticket
+plus its comments and the related issues' comments as one prompt. Without the
+override the run was SIGKILLed mid-answer and the page showed the raw
+`claude -p (claude-sonnet-5): signal: killed`. Deliberately per-call rather
+than a raised global default (`RunRequest.Timeout`, honoured by both `Run` and
+`RunChat`), so a hung claude in every other, genuinely short call site still
+cannot sit on a workflow run for minutes.
+
 ## Follow-up questions: sharpening the plan further
 
 Reviewer request, verbatim: *"maak het mogelijk om vervolg vragen te genereren
@@ -1095,7 +1145,7 @@ idempotent reuse (the page fires it on every load).
 1. `planLoadIssue` — the ticket via `modules/jira`'s `Issue` (title +
    description). A failure yields a document carrying the reason, never a failed
    tracker.
-2. `planGenerate` (mode `all`) — ONE Sonnet call, context-only (no tools),
+2. `planGenerate` (mode `all`) — ONE **Opus** call, context-only (no tools),
    answering with one JSON object: the questions with their options and example
    blocks, plus the task list. Ids (`q1`, `q1o2`, `t3`) are assigned **on our
    side** from the position in the answer — a model reproduces "the second

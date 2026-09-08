@@ -440,6 +440,18 @@ type planGenerateArg struct {
 }
 
 // planRunID is the deterministic Run ID: one tracker per ticket, forever.
+// planClaudeTimeout bounds both of the plan page's own Claude calls
+// (planGenerate and planChatReply). Both run on Opus — the reviewer asked for
+// the planning itself to be planned by the strongest model — and both send a
+// whole Jira ticket, its comments and the related issues' comments as one
+// prompt. That combination does not fit modules/claude's own 90s
+// contextTimeout, which was sized for a ~30s single-purpose completion: the
+// run was SIGKILLed mid-answer and the page showed the raw
+// "claude -p (claude-sonnet-5): signal: killed". Five minutes is generous for
+// one planning answer but still finite, so a wedged CLI cannot sit on the
+// plan run forever.
+const planClaudeTimeout = 5 * time.Minute
+
 func planRunID(key string) string { return "plan-" + key }
 
 // handlePlanChat is the ONE body behind every "chat" Kind this workflow can
@@ -1192,8 +1204,9 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 			return json.Marshal(doc)
 		}
 		raw, err := m.claude.Run(ctx, claude.RunRequest{
-			Model:  claude.ModelSonnet,
-			Prompt: planPrompt(doc, arg.Mode) + explainLangTail(m.LangFor(ctx, langpref.KindExplain)),
+			Model:   claude.ModelOpus,
+			Prompt:  planPrompt(doc, arg.Mode) + explainLangTail(m.LangFor(ctx, langpref.KindExplain)),
+			Timeout: planClaudeTimeout,
 		})
 		if err != nil {
 			m.logf("plan: generate %s (%s): %v", doc.Key, arg.Mode, err)
@@ -1263,9 +1276,10 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 		defer finishChatProgress("", 0, convID)
 		var checkoutDir string
 		result, err := m.claude.RunChat(ctx, claude.RunRequest{
-			Model:   claude.ModelSonnet,
+			Model:   claude.ModelOpus,
 			Prompt:  planChatPrompt(doc) + explainLangTail(m.LangFor(ctx, langpref.KindExplain)),
 			OnEvent: chatProgressSink("", 0, convID, &checkoutDir),
+			Timeout: planClaudeTimeout,
 		})
 		reply := strings.TrimSpace(result.Text)
 		if err != nil || reply == "" {

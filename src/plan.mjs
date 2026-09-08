@@ -106,6 +106,12 @@ const state = reactive({
   // GET /api/plan field, same as `artifacts` — the "Intentie" field in
   // column 0 seeds itself with this. See .claude/docs/plan-page.md.
   intentText: '',
+  // The intent textarea in the TICKET column (phase specs/plan) is read-only
+  // until Enter unlocks it — see intentField. Reactive because both the
+  // textarea's own `readonly` and the word next to the label follow it.
+  // Always false while the field lives in the questions column (phase
+  // intent), where typing straight into it is the whole point.
+  intentEditing: false,
   // Which column owns the keyboard: 0 = the ticket, 1 = questions/tasks,
   // 2 + n = the n-th block column (2 is the first one).
   col: 1,
@@ -1943,38 +1949,78 @@ function referencedIssueRow(r) {
   `.key('ref:' + r.key)
 }
 
+// planPhaseNow mirrors planPhase() in plan_artifacts.go: which of the three
+// planning stages this ticket is in. It prefers the server's own answer
+// (state.artifacts.phase) and falls back to the same rule that answer is
+// derived from — nothing generated yet is stage 1 — so a response that
+// carries no artifacts block at all (a ticket whose files were never written)
+// still lands on a real phase instead of on nothing.
+function planPhaseNow() {
+  const p = state.artifacts && state.artifacts.phase
+  if (p) return p
+  return (state.doc.questions || []).length || (state.doc.tasks || []).length ? 'specs' : 'intent'
+}
+
+// intentInQuestionsColumn: during stage 1 the intent IS the work, so the field
+// moves to the questions column (reviewer request: "laat mij intentie in 2e
+// kolom zien als je nog in stap 1 zit"). From stage 2 on it goes back to its
+// old spot under the ticket description, where the plan itself has taken over
+// the questions column.
+function intentInQuestionsColumn() {
+  return planPhaseNow() === 'intent'
+}
+
 // intentField is the "Intentie" block — reviewer request: "in taak
 // description eerste kolom moet de intentie zichtbaar zijn, maar dat moeten
 // we ook kunnen aanpassen". Shows the CURRENT intent.md text (auto-generated
 // via state.intentText, or the reviewer's own state.doc.intentOverride once
-// they edited it) in an editable, uncontrolled textarea — same "static
-// value=, save on blur" pattern as plan-task-note above, so a slow poll never
-// clobbers a half-typed edit.
+// they edited it) in an uncontrolled textarea — same "static value=, save on
+// blur" pattern as plan-task-note above, so a slow poll never clobbers a
+// half-typed edit.
 //
-// Keyed on the loading state (not on state.intentText/doc.updatedAt) so the
-// textarea's static `value=` is seeded exactly ONCE, right after the first
-// real load — remounting on every later poll would wipe an in-progress edit,
-// exactly the bug plan-task-note's own key discipline avoids. A REMOTE change
-// (another tab/reviewer editing the same ticket at the same time) is a known,
-// accepted gap, same as plan-task-note.
+// Keyed on the loading state AND on where it renders (not on
+// state.intentText/doc.updatedAt) so the textarea's static `value=` is seeded
+// exactly ONCE per placement, right after the first real load — remounting on
+// every later poll would wipe an in-progress edit, exactly the bug
+// plan-task-note's own key discipline avoids. A REMOTE change (another
+// tab/reviewer editing the same ticket at the same time) is a known, accepted
+// gap, same as plan-task-note.
 //
-// Collapsed while the questions column has the keyboard (reviewer request:
-// "2e kolom mag dubbel breed en intent inklappen als ik in vragen kolom
-// zit") — the questions column doubles in width at the same time
-// (questionsColumn), so this block gets out of the way rather than fighting
-// it for space. Collapsing hides only the textarea; the header (label +
-// reset button) stays, plus the word "ingeklapt" next to it — never a colour
-// alone, per the colourblind rule. Both are nested `${() => ...}` bindings in
-// their own stable `contents` root (never a bare toggling expression, see
-// `.claude/rules/arrowjs-pitfalls.md`) so the outer node's `intent:ready`/
-// `intent:pending` key — and thus the textarea's one-time seed — is
-// untouched by a col change.
-function intentField() {
+// TWO placements, one function (see intentInQuestionsColumn):
+//
+//   - 'questions' (stage intent) — top of the questions column, never
+//     collapsed, directly typable. Writing the intent is stage 1's whole job,
+//     so nothing should stand between the reviewer and the caret.
+//   - 'ticket' (stage specs/plan) — the historical spot under the ticket
+//     description, collapsed while the questions column has the keyboard
+//     (reviewer request: "2e kolom mag dubbel breed en intent inklappen als ik
+//     in vragen kolom zit"), and READ-ONLY until Enter unlocks it ("alleen
+//     editbaar als je enter erop drukt"): by then the reviewer is answering
+//     questions, and a stray keystroke in a passed stage should not silently
+//     rewrite the intent. Click/Tab focuses, Enter unlocks, Escape and blur
+//     lock it again.
+//
+// Collapsing hides only the textarea; the header (label + reset button) stays,
+// plus the WORD "ingeklapt" — and, in the ticket placement, the word
+// "vergrendeld"/"bewerken" — never a colour alone, per the colourblind rule.
+// Every one of those is a nested `${() => ...}` binding in its own stable
+// `contents` root (never a bare toggling expression, see
+// `.claude/rules/arrowjs-pitfalls.md`) so the outer node's key — and thus the
+// textarea's one-time seed — is untouched by a col/lock change.
+function intentField(place) {
   const loaded = !state.loading
   const seed = state.doc.intentOverride || state.intentText
-  const collapsed = () => state.col === 1
+  const inTicket = place === 'ticket'
+  const collapsed = () => inTicket && state.col === 1
+  const locked = () => inTicket && !state.intentEditing
   return html`
-    <div class="mt-3 border-t border-slate-100 pt-2 dark:border-zinc-800" data-testid="plan-intent" data-collapsed="${() => (collapsed() ? 'true' : 'false')}">
+    <div
+      class="${inTicket ? 'mt-3 border-t border-slate-100 pt-2 dark:border-zinc-800' : 'mb-3 rounded-2xl bg-white p-3 ring-1 ring-slate-200 dark:bg-zinc-900 dark:ring-zinc-800'}"
+      data-testid="plan-intent"
+      data-intent-place="${place}"
+      data-collapsed="${() => (collapsed() ? 'true' : 'false')}"
+      data-locked="${() => (locked() ? 'true' : 'false')}"
+    >
       <div class="mb-1 flex items-center justify-between">
         <span class="${LABEL}">${t('Intentie')}</span>
         <div class="flex items-center gap-1.5">
@@ -1984,6 +2030,14 @@ function intentField() {
                 ? html`<span class="text-[10.5px] text-slate-400 dark:text-zinc-500" data-testid="plan-intent-collapsed-label"
                     >${t('ingeklapt')}</span
                   >`.key('intent-collapsed-label')
+                : ''}
+          </div>
+          <div class="contents">
+            ${() =>
+              inTicket && !collapsed()
+                ? html`<span class="text-[10.5px] text-slate-400 dark:text-zinc-500" data-testid="plan-intent-lock-label"
+                    >${() => (state.intentEditing ? t('bewerken') : t('vergrendeld — Enter om te bewerken'))}</span
+                  >`.key('intent-lock-label')
                 : ''}
           </div>
           <div class="contents">
@@ -2012,9 +2066,26 @@ function intentField() {
                 data-testid="plan-intent-field"
                 rows="6"
                 placeholder="${t('Intentie wordt automatisch gegenereerd…')}"
+                readonly="${() => (locked() ? 'true' : false)}"
                 class="w-full resize-y rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-[12px] leading-relaxed text-slate-800 placeholder:text-slate-400 focus:border-indigo-300 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500"
+                @keydown="${(e) => {
+                  if (!e || !inTicket) return
+                  // Enter on the locked field is what unlocks it — never a
+                  // newline, so the first Enter can't also edit the text.
+                  if (e.key === 'Enter' && !e.shiftKey && !state.intentEditing) {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    state.intentEditing = true
+                    return
+                  }
+                  // Escape locks it again; the page's own onKeydown blurs the
+                  // textarea right after (isEditableFocused branch), which is
+                  // also where the blur handler saves.
+                  if (e.key === 'Escape') state.intentEditing = false
+                }}"
                 @blur="${(e) => {
                   if (!e) return
+                  if (inTicket) state.intentEditing = false
                   const val = e.target.value || ''
                   if (val !== seed) sendIntentOverride(val)
                 }}"
@@ -2022,7 +2093,7 @@ function intentField() {
               >`}
       </div>
     </div>
-  `.key('intent:' + (loaded ? 'ready' : 'pending'))
+  `.key('intent:' + place + ':' + (loaded ? 'ready' : 'pending'))
 }
 
 // PHASE_WORD is the reviewer-facing word of each phase. The WORD carries the
@@ -2240,7 +2311,7 @@ function ticketCard() {
               : ''}
         </div>
       </div>
-      <div class="contents">${() => intentField()}</div>
+      <div class="contents">${() => (intentInQuestionsColumn() ? '' : intentField('ticket'))}</div>
       <div class="contents">
         ${() =>
           state.doc.error
@@ -3338,6 +3409,7 @@ function questionsColumn() {
     >
       ${columnHeader(t('Vragen over het plan'), () => state.col === 1)}
       <div class="min-h-0 flex-1 overflow-y-auto pr-1">
+        <div class="contents">${() => (intentInQuestionsColumn() ? [intentField('questions')] : [])}</div>
         ${commentsPanel()}
         ${() => (gateOpen() ? [] : (state.doc.questions || []).map((q, qi) => questionCard(q, qi)))}
         ${() =>

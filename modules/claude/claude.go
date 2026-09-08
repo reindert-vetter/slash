@@ -105,6 +105,17 @@ type RunRequest struct {
 	// that produced it, never inferred from the turn's own result — see
 	// chat_steer.go and .claude/docs/claude-chat-panel.md.
 	Steer <-chan string
+	// Timeout overrides this module's own contextTimeout/agenticTimeout for
+	// THIS call only (honoured by both Run and RunChat); zero keeps the
+	// default. It exists for a caller whose prompt is legitimately far bigger
+	// and whose model is slower than the ~30s completion those defaults were
+	// sized for: the plan page's own two Opus calls (planGenerate,
+	// planChatReply) send a whole Jira ticket plus its comments and were
+	// being SIGKILLed at 90s, which reached the reviewer as
+	// "claude -p (...): signal: killed". Deliberately per-call rather than a
+	// raised global default, so a hung claude in every other, genuinely short
+	// call site still can't sit on a workflow run for minutes.
+	Timeout time.Duration
 }
 
 // ChatEventKind labels what a streamed ChatEvent reports. Deliberately a tiny,
@@ -320,6 +331,9 @@ func (m *Module) Run(ctx context.Context, req RunRequest) (string, error) {
 	if len(req.Tools) > 0 {
 		timeout = agenticTimeout
 	}
+	if req.Timeout > 0 {
+		timeout = req.Timeout
+	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "claude", args...)
@@ -399,6 +413,9 @@ func (m *Module) RunChat(ctx context.Context, req RunRequest) (ChatResult, error
 	timeout := contextTimeout
 	if len(req.Tools) > 0 {
 		timeout = agenticTimeout
+	}
+	if req.Timeout > 0 {
+		timeout = req.Timeout
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
