@@ -145,6 +145,9 @@ type Client interface {
 	// IssuesByKey reads a known set of issues in one search, for the fields a
 	// parent/subtasks link does not carry — the assignee (see search.go).
 	IssuesByKey(ctx context.Context, keys []string) ([]Issue, error)
+	// IssueSprints reads the sprints one issue sits in (see sprints.go). Its
+	// own call, because the JQL search cannot return the sprint field at all.
+	IssueSprints(ctx context.Context, key string) ([]Sprint, error)
 	// Notifications reads the reviewer's own bell feed (see notifications.go).
 	Notifications(ctx context.Context, limit int) ([]Notification, error)
 	// AddComment posts one comment (an ADF document, see BuildCommentADF) on

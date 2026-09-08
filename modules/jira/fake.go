@@ -18,6 +18,9 @@ type Fake struct {
 	// returns nothing, so an offline run simply has no issues rather than an
 	// error (same best-effort shape as issues/notifs above).
 	search map[string][]Issue
+	// sprints is what IssueSprints returns per issue key; an unprogrammed key
+	// has no sprint, which is a legitimate answer (see sprints.go).
+	sprints map[string][]Sprint
 	// SearchCalls records every JQL Search was asked for, in order.
 	SearchCalls []string
 	Calls       []string // keys requested, in order
@@ -172,4 +175,22 @@ func (f *Fake) Search(_ context.Context, jql string, limit int) ([]Issue, error)
 		return append([]Issue(nil), list[:limit]...), nil
 	}
 	return append([]Issue(nil), list...), nil
+}
+
+// SetSprints programs IssueSprints to return these sprints for one key.
+func (f *Fake) SetSprints(key string, sprints []Sprint) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.sprints == nil {
+		f.sprints = map[string][]Sprint{}
+	}
+	f.sprints[key] = sprints
+}
+
+// IssueSprints returns the programmed sprints for key (none if unprogrammed,
+// which reads as "this issue is in no sprint" — never an error).
+func (f *Fake) IssueSprints(_ context.Context, key string) ([]Sprint, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]Sprint(nil), f.sprints[key]...), nil
 }

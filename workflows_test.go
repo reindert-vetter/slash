@@ -1252,6 +1252,8 @@ func (e errJira) Search(context.Context, string, int) ([]jira.Issue, error) { re
 
 func (e errJira) IssuesByKey(context.Context, []string) ([]jira.Issue, error) { return nil, nil }
 
+func (e errJira) IssueSprints(context.Context, string) ([]jira.Sprint, error) { return nil, nil }
+
 func (e errJira) VerifyCredentials(context.Context) error { return nil }
 
 func (e errJira) AddComment(context.Context, string, json.RawMessage) (string, error) {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -72,13 +73,21 @@ const jiraIssuesLimit = 40
 // — a stage the reviewer explicitly does not want here ("hier niet in review
 // laten zien en niet done"). Its predecessor was every non-Done sprint status,
 // which is why a To Do sprint issue used to sit in this lane.
-const planningJQL = `assignee = currentUser() AND sprint in openSprints() AND status = "In Progress" ORDER BY updated DESC`
+const planningJQL = `assignee = currentUser() AND (sprint in openSprints() OR sprint in futureSprints()) AND status = "In Progress" ORDER BY updated DESC`
 
 // todoJQL is the queue feeding that same sprint: still To Do, still
 // unresolved — "todo, alleen todo". `sprint in openSprints()` was added with
 // the merge ("ik wil in todo en in planning alleen items zien uit active
 // sprints"): the lane used to be the whole backlog queue, sprint or not.
-const todoJQL = `assignee = currentUser() AND sprint in openSprints() AND status = "To Do" AND resolution = EMPTY ORDER BY updated DESC`
+const todoJQL = `assignee = currentUser() AND (sprint in openSprints() OR sprint in futureSprints()) AND status = "To Do" AND resolution = EMPTY ORDER BY updated DESC`
+
+// `futureSprints()` sits next to `openSprints()` in BOTH queries on request
+// ("laat ook van andere sprints zien wat ik dan als extra blok daaronder zie
+// (ook al zijn die niet actief)"): a ticket already planned into a NEXT sprint
+// is shown too, in its own block below the active one. Which block a row lands
+// in is decided by its own sprint, read per issue (see sprintBuckets) — the
+// board is never pinned down anywhere, so "alles waar ik assigned items in
+// heb" holds by construction.
 
 // jiraInProgressStatus is the Jira status the plan tracker moves a ticket to
 // once the reviewer answered which branch it goes out from — the very status
@@ -119,6 +128,13 @@ type issueRow struct {
 	jira.Issue
 	Context bool   `json:"context,omitempty"`
 	Lane    string `json:"lane,omitempty"`
+	// Sprint is the NAME of the sprint block this row is rendered under
+	// ("Team Core Sprint 71"), empty for a row that is in no sprint at all.
+	// The frontend cuts the one flat list into sections wherever this value
+	// changes, so the block ORDER stays the backend's (see sprintBuckets).
+	// A context row inherits the sprint of the group it heads, which is why
+	// this is set per BUCKET rather than per issue.
+	Sprint string `json:"sprint,omitempty"`
 }
 
 // jiraIssues is one fetch's outcome, on its way into the read-model.
@@ -396,7 +412,174 @@ func fetchJiraIssues(ctx context.Context, cl jira.Client) jiraIssues {
 			queued = append(queued, is)
 		}
 	}
-	out.Issues = append(out.Issues, groupIssues(ctx, cl, planning, queued)...)
+	// One block per sprint, in sprint order; the grouping itself runs per
+	// block so lanes, Sub-task nesting and context rows behave inside a block
+	// exactly as they did when there was only one.
+	for _, b := range sprintBuckets(ctx, cl, planning, queued) {
+		rows := groupIssues(ctx, cl, b.planning, b.todo)
+		for i := range rows {
+			rows[i].Sprint = b.name
+		}
+		out.Issues = append(out.Issues, rows...)
+	}
+	return out
+}
+
+// jiraSprintReads bounds the per-issue sprint reads of ONE refresh, the same
+// way jiraIssueReadsMax/Par bound the parent reads: each is its own `acli jira
+// workitem view` of a few seconds. Slightly wider than the parent cap because
+// EVERY row needs one (a parent read is only for Sub-tasks), and a bit more
+// parallel so a full sprint still costs seconds rather than a minute.
+const (
+	jiraSprintReadsMax = 40
+	jiraSprintReadsPar = 6
+)
+
+// sprintBucket is one rendered block: a sprint (or, with an empty name, the
+// rows that are in no sprint at all) plus its own two lanes.
+type sprintBucket struct {
+	name     string
+	sprint   jira.Sprint
+	planning []jira.Issue
+	todo     []jira.Issue
+}
+
+// sprintBuckets splits both lanes into one bucket per sprint. Order —
+// deliberately decided HERE rather than in the frontend, like every other
+// ordering rule of this list:
+//
+//  1. active sprints first, oldest start first (normally there is exactly one,
+//     but a reviewer working across boards can genuinely have several);
+//  2. then the FUTURE sprints, again by start date, so the next sprint sits
+//     directly under the one being worked on;
+//  3. finally, the rows that are in no sprint at all, in a nameless block —
+//     they would otherwise silently disappear from the page.
+//
+// A closed sprint never forms a block: an issue that also sits in one (every
+// issue that moved sprints does) is placed by pickSprint below.
+func sprintBuckets(ctx context.Context, cl jira.Client, planning, todo []jira.Issue) []sprintBucket {
+	keys := make([]string, 0, len(planning)+len(todo))
+	for _, is := range planning {
+		keys = append(keys, is.Key)
+	}
+	for _, is := range todo {
+		keys = append(keys, is.Key)
+	}
+	byKey := readSprints(ctx, cl, keys)
+
+	order := []string{}
+	buckets := map[string]*sprintBucket{}
+	add := func(is jira.Issue, lane string) {
+		sp := pickSprint(byKey[is.Key])
+		b, ok := buckets[sp.Name]
+		if !ok {
+			b = &sprintBucket{name: sp.Name, sprint: sp}
+			buckets[sp.Name] = b
+			order = append(order, sp.Name)
+		}
+		if lane == lanePlanning {
+			b.planning = append(b.planning, is)
+		} else {
+			b.todo = append(b.todo, is)
+		}
+	}
+	for _, is := range planning {
+		add(is, lanePlanning)
+	}
+	for _, is := range todo {
+		add(is, laneTodo)
+	}
+
+	sort.SliceStable(order, func(i, j int) bool {
+		return sprintBefore(buckets[order[i]].sprint, buckets[order[j]].sprint)
+	})
+	out := make([]sprintBucket, 0, len(order))
+	for _, name := range order {
+		out = append(out, *buckets[name])
+	}
+	return out
+}
+
+// sprintBefore is rule 1-3 of sprintBuckets as one comparison: a sprintless
+// bucket last, an active sprint before a future one, and within a state the
+// earliest start first (falling back to the name, so the order is stable for a
+// sprint without a start date).
+func sprintBefore(a, b jira.Sprint) bool {
+	rank := func(sp jira.Sprint) int {
+		switch {
+		case sp.Name == "":
+			return 2
+		case sp.State == sprintStateActive:
+			return 0
+		default:
+			return 1
+		}
+	}
+	if ra, rb := rank(a), rank(b); ra != rb {
+		return ra < rb
+	}
+	if a.StartDate != b.StartDate {
+		return a.StartDate < b.StartDate
+	}
+	return a.Name < b.Name
+}
+
+// The two sprint states this list renders a block for. Jira also has
+// "closed", which never gets one.
+const (
+	sprintStateActive = "active"
+	sprintStateFuture = "future"
+)
+
+// pickSprint decides which of an issue's sprints it is SHOWN under. An issue
+// that has moved carries every sprint it was ever in, so: the active one
+// wins (that is where the work is happening), otherwise the earliest future
+// one (where it is planned to happen), and a purely closed history counts as
+// no sprint at all rather than as a block of its own.
+func pickSprint(list []jira.Sprint) jira.Sprint {
+	var best jira.Sprint
+	for _, sp := range list {
+		if sp.Name == "" || (sp.State != sprintStateActive && sp.State != sprintStateFuture) {
+			continue
+		}
+		if best.Name == "" || sprintBefore(sp, best) {
+			best = sp
+		}
+	}
+	return best
+}
+
+// readSprints reads the sprints of the given keys, at most jiraSprintReadsMax
+// of them and jiraSprintReadsPar at a time — same best-effort, bounded shape
+// as readIssues below: a key that fails to read is simply absent, and its row
+// then lands in the nameless block instead of disappearing.
+func readSprints(ctx context.Context, cl jira.Client, keys []string) map[string][]jira.Sprint {
+	out := map[string][]jira.Sprint{}
+	if cl == nil || len(keys) == 0 {
+		return out
+	}
+	if len(keys) > jiraSprintReadsMax {
+		keys = keys[:jiraSprintReadsMax]
+	}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, jiraSprintReadsPar)
+	for _, key := range keys {
+		wg.Add(1)
+		go func(key string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			list, err := cl.IssueSprints(ctx, key)
+			if err != nil || len(list) == 0 {
+				return
+			}
+			mu.Lock()
+			out[key] = list
+			mu.Unlock()
+		}(key)
+	}
+	wg.Wait()
 	return out
 }
 

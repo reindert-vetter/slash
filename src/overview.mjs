@@ -2657,15 +2657,17 @@ function jiraContextRow(is) {
   `.key('jiracontext:' + is.key)
 }
 
-// jiraIssueSection renders the ONE issue list, or null when it is empty — same
-// "an empty section simply is not there" rule as sectionBlock.
+// jiraIssueSection renders ONE sprint's issue list under its own title, or
+// null when it is empty — same "an empty section simply is not there" rule as
+// sectionBlock. Which lists exist, and in which order, is jiraIssueBlocks'
+// (and ultimately the backend's) call.
 //
 // It used to be two sections ("Planning" above "Todo"). They were merged on
 // request ("gooi todo en planning bij elkaar, maar dan todo items onder de
 // planning items"); the ORDER inside this one list is entirely the backend's
 // (groupIssues in jira_issues.go), so the two lanes and the subtask grouping
 // are decided in ONE place instead of half here and half there.
-function jiraIssueSection(list) {
+function jiraIssueSection(list, title) {
   if (!list.length) return null
   // A row is indented when its parent is right there in the same list — which,
   // after groupIssues, it is whenever that parent could be read at all: either
@@ -2674,9 +2676,9 @@ function jiraIssueSection(list) {
   const keys = new Set(list.map((is) => is.key))
   const own = list.filter((is) => !is.context).length
   return html`
-    <section data-testid="issue-section" data-title="Planning">
+    <section data-testid="issue-section" data-title="${title}">
       <div class="mb-3 mt-16 flex items-center gap-2 first:mt-6">
-        <h2 class="text-[15px] font-semibold text-slate-900 dark:text-zinc-100">Planning</h2>
+        <h2 class="text-[15px] font-semibold text-slate-900 dark:text-zinc-100">${title}</h2>
         <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500 dark:bg-zinc-800/80 dark:text-zinc-400"
           >${own}</span
         >
@@ -2686,14 +2688,34 @@ function jiraIssueSection(list) {
         ${list.map((is) => jiraIssueRow(is, !!(is.parentKey && keys.has(is.parentKey))))}
       </div>
     </section>
-  `.key('issue-section:' + list.map((is) => is.key).join(','))
+  `.key('issue-section:' + title + ':' + list.map((is) => is.key).join(','))
 }
 
-// jiraIssueBlocks — the one issue section, dropped when empty. The title stays
-// untranslated, like every section heading on this page (they come from
-// GitHub's own dashboard wording, which this app does not translate).
+// jiraIssueBlocks — ONE section per sprint, each dropped when empty. Reviewer
+// request: 'vervang "Planning" met "Planning Team Core Sprint 71" en laat ook
+// van andere sprints zien wat ik dan als extra blok daaronder zie (ook al zijn
+// die niet actief)'. So the heading names the sprint the rows are actually in,
+// and a ticket already planned into a NEXT sprint gets its own block below.
+//
+// The split is a walk over CONSECUTIVE rows with the same `sprint`, never a
+// re-sort: the block order (active sprint, then the future ones, then the rows
+// in no sprint at all) is entirely the backend's, exactly like the order
+// inside a block — see sprintBuckets in jira_issues.go. A row without a sprint
+// name keeps the original plain "Planning" heading, which is also what an
+// older snapshot (no `sprint` field yet) renders as.
+//
+// Every block gets its own header, so each also carries its own refresh button
+// (refreshButton) — they all ask the same tracker for the same refresh.
+// Titles stay untranslated, like every section heading on this page.
 function jiraIssueBlocks() {
-  return [jiraIssueSection(state.jiraIssues)].filter(Boolean)
+  const runs = []
+  state.jiraIssues.forEach((is) => {
+    const sprint = is.sprint || ''
+    const last = runs[runs.length - 1]
+    if (last && last.sprint === sprint) last.rows.push(is)
+    else runs.push({ sprint, rows: [is] })
+  })
+  return runs.map((run) => jiraIssueSection(run.rows, run.sprint ? 'Planning ' + run.sprint : 'Planning')).filter(Boolean)
 }
 
 function mainContent() {

@@ -314,15 +314,61 @@ gooi todo en planning bij elkaar, maar dan todo items onder de planning items
 (als er een groep is, met verschillende statussen, gooi ze boven todo)". The
 two stages survive as the two **lanes** of that one list.
 
-### The filter rule: my own work, active sprint, two statuses
+### One block per sprint, headed by the sprint's own name
+
+Reviewer request: 'vervang "Planning" met "Planning Team Core Sprint 71" en
+laat ook van andere sprints zien wat ik dan als extra blok daaronder zie (ook
+al zijn die niet actief)'. So the single "Planning" heading became **one
+section per sprint** — `Planning Team Core Sprint 71`, then
+`Planning Team Core Sprint 72` below it, and so on.
+
+- **The sprint of a row is read PER ISSUE**, never derived from a board.
+  `acli jira workitem search --fields` rejects both `sprint` and the custom
+  field behind it (`field 'sprint' is not allowed`, verified live), while
+  `acli jira workitem view --fields key,customfield_10020` returns the full
+  sprint objects. `modules/jira/sprints.go` (`IssueSprints`) is that one call;
+  `readSprints` (`jira_issues.go`) runs it bounded and concurrent, exactly like
+  the existing parent reads (`jiraSprintReadsMax`/`Par`). The field id is a
+  documented **constant** — it is per Jira site and this `acli` build has no
+  field-listing command to discover it — and an issue that comes back without
+  it simply has no sprint.
+- **No board is ever pinned down.** That was the alternative
+  (`acli jira board search --project … → list-sprints → one search per
+  sprint`) and it was rejected: the reviewer's own four projects already map
+  to eight boards, i.e. ~30 `acli` calls per refresh, and it would have
+  answered "the boards I picked" instead of "alles waar ik assigned items in
+  heb".
+- **Which sprint a row is shown under** (`pickSprint`): an issue carries every
+  sprint it was ever in, so the **active** one wins, else the earliest
+  **future** one; a purely closed history counts as no sprint at all. A closed
+  sprint therefore never forms a block.
+- **Block order** (`sprintBuckets`, the backend — like every other ordering
+  rule of this list): active sprints first (oldest start first; a reviewer
+  working across boards can genuinely have several), then the future sprints
+  by start date, and finally the rows in **no** sprint at all under the plain
+  old `Planning` heading — they would otherwise silently disappear.
+- **`groupIssues` runs per block**, so lanes, Sub-task nesting and context rows
+  behave inside a block exactly as they did when there was one list. A context
+  row inherits its block's sprint (its main task may sit outside the sprint
+  entirely), which is why `issueRow.Sprint` is set per bucket, not per issue.
+- **The frontend never re-sorts**: `jiraIssueBlocks` (`src/overview.mjs`) cuts
+  the one flat list wherever `sprint` changes and titles each section
+  `Planning <name>`. Every block has its own header and therefore its own
+  refresh button; they all ask the same tracker for the same refresh.
+
+Tests: `TestFetchJiraIssuesSplitsPerSprint` (`jira_issues_test.go`),
+`TestParseSprintViewReadsTheCustomField` (`modules/jira/sprints_test.go`), and
+the "one block per sprint" case in `tests/overview-jira-issues.spec.mjs`.
+
+### The filter rule: my own work, a sprint, two statuses
 
 Two JQL **constants** (`jira_issues.go`), so no reviewer input ever reaches
 `acli`:
 
 | lane | JQL |
 | --- | --- |
-| planning | `assignee = currentUser() AND sprint in openSprints() AND status = "In Progress" ORDER BY updated DESC` |
-| todo | `assignee = currentUser() AND sprint in openSprints() AND status = "To Do" AND resolution = EMPTY ORDER BY updated DESC` |
+| planning | `assignee = currentUser() AND (sprint in openSprints() OR sprint in futureSprints()) AND status = "In Progress" ORDER BY updated DESC` |
+| todo | `assignee = currentUser() AND (sprint in openSprints() OR sprint in futureSprints()) AND status = "To Do" AND resolution = EMPTY ORDER BY updated DESC` |
 
 - **The planning lane is what you are working on**: "planning; moet alle in
   progress stories zijn". Deliberately the status **name**, not
@@ -331,10 +377,13 @@ Two JQL **constants** (`jira_issues.go`), so no reviewer input ever reaches
   laten zien en niet done"). Its predecessor was every non-Done sprint status,
   which is why a To Do sprint issue used to sit in the planning section.
 - **The todo lane is To Do only** ("todo, alleen todo").
-- **Both are limited to an ACTIVE sprint** ("ik wil in todo en in planning
-  alleen items zien uit active sprints"). The todo lane used to be the whole
-  backlog queue, sprint or not — that is what pulled in the loose rows the
-  reviewer saw under "Todo".
+- **Both are limited to a sprint** ("ik wil in todo en in planning alleen
+  items zien uit active sprints"). The todo lane used to be the whole backlog
+  queue, sprint or not — that is what pulled in the loose rows the reviewer
+  saw under "Todo". `futureSprints()` was added next to `openSprints()` later
+  ("laat ook van andere sprints zien wat ik dan als extra blok daaronder zie
+  (ook al zijn die niet actief)"), which is what fills the extra sprint blocks
+  below — see "One block per sprint" above.
 - **Only your own subtasks are listed** ("laat alleen subtaken zien die op
   mijn naam staan"), and that needs no filter of its own: every row of either
   lane is `assignee = currentUser()` by construction. The one row that is not
@@ -822,10 +871,12 @@ own cadence.
   header row**, next to its `<h2>`: `sectionBlock` (every PR section,
   `data-testid=section-refresh`) and `jiraIssueSection` ("Planning",
   `data-testid=jira-issue-refresh`). It sits in the header of the section
-  function itself, not once above the whole page, so a section that later
-  splits into several (e.g. one Planning block per sprint) keeps getting its
-  own button for free, with no assumption elsewhere that there is exactly one
-  such section. `disabled` uses the plain-attribute-name + function-binding
+  function itself, not once above the whole page, so a section that
+  splits into several keeps getting its own button for free, with no
+  assumption elsewhere that there is exactly one such section — which is
+  exactly what happened when Planning became one block per sprint (see "One
+  block per sprint" above): every sprint block carries its own button, all
+  asking the same tracker for the same refresh. `disabled` uses the plain-attribute-name + function-binding
   convention (`.claude/rules/arrowjs-pitfalls.md`), never `?disabled=`.
 - **No backend change was needed — both write-boundary-sanctioned mechanisms
   already existed**, just not wired to a manual button yet:

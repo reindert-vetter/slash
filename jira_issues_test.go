@@ -46,7 +46,7 @@ func sameKeys(rows []issueRow, want ...string) bool {
 // zijn") and the todo lane is To Do only ("todo, alleen todo").
 func TestIssueJQLScopesBothLanes(t *testing.T) {
 	for _, jql := range []string{planningJQL, todoJQL} {
-		for _, want := range []string{"assignee = currentUser()", "sprint in openSprints()"} {
+		for _, want := range []string{"assignee = currentUser()", "sprint in openSprints()", "sprint in futureSprints()"} {
 			if !strings.Contains(jql, want) {
 				t.Fatalf("jql %q is missing %q", jql, want)
 			}
@@ -83,6 +83,45 @@ func TestFetchJiraIssuesPutsThePlanningLaneFirst(t *testing.T) {
 		t.Fatalf("issues = %v, want the planning lane first", keysOf(got.Issues))
 	}
 	for i, want := range []string{lanePlanning, lanePlanning, laneTodo, laneTodo} {
+		if got.Issues[i].Lane != want {
+			t.Fatalf("row %s lane = %q, want %q", got.Issues[i].Key, got.Issues[i].Lane, want)
+		}
+	}
+}
+
+// TestFetchJiraIssuesSplitsPerSprint — the reviewer asked for one block per
+// sprint ("vervang \"Planning\" met \"Planning Team Core Sprint 71\" en laat ook
+// van andere sprints zien wat ik dan als extra blok daaronder zie (ook al zijn
+// die niet actief)"). Three rules in one list: the ACTIVE sprint's rows first,
+// the FUTURE sprint's below it, and a row in no sprint at all last instead of
+// disappearing. Inside a block the lanes still hold (In Progress above To Do).
+func TestFetchJiraIssuesSplitsPerSprint(t *testing.T) {
+	t.Setenv("SLASH_JIRA", "")
+	f := &jira.Fake{}
+	f.SetSearch(planningJQL, []jira.Issue{{Key: "STAT-1", Status: "In Progress"}, {Key: "PROD-7", Status: "In Progress"}})
+	f.SetSearch(todoJQL, []jira.Issue{{Key: "BUG-2", Status: "To Do"}, {Key: "CLUS-3", Status: "To Do"}})
+	active := jira.Sprint{ID: 8556, Name: "Team Core Sprint 71", State: "active", StartDate: "2026-08-31T09:01:45.040Z"}
+	future := jira.Sprint{ID: 8926, Name: "Team Core Sprint 72", State: "future", StartDate: "2026-09-14T09:01:45.000Z"}
+	// STAT-1 moved sprints, so it also carries a closed one: the active sprint
+	// must win, and the closed one must never become a block of its own.
+	f.SetSprints("STAT-1", []jira.Sprint{{ID: 8024, Name: "Team Core Sprint 69", State: "closed"}, active})
+	f.SetSprints("BUG-2", []jira.Sprint{active})
+	f.SetSprints("PROD-7", []jira.Sprint{future})
+	// CLUS-3 is in no sprint at all (nothing programmed).
+
+	got := fetchJiraIssues(context.Background(), f)
+	if got.Error != "" {
+		t.Fatalf("error = %q", got.Error)
+	}
+	if !sameKeys(got.Issues, "STAT-1", "BUG-2", "PROD-7", "CLUS-3") {
+		t.Fatalf("issues = %v, want the active sprint, then the future one, then the sprintless row", keysOf(got.Issues))
+	}
+	for i, want := range []string{"Team Core Sprint 71", "Team Core Sprint 71", "Team Core Sprint 72", ""} {
+		if got.Issues[i].Sprint != want {
+			t.Fatalf("row %s sprint = %q, want %q", got.Issues[i].Key, got.Issues[i].Sprint, want)
+		}
+	}
+	for i, want := range []string{lanePlanning, laneTodo, lanePlanning, laneTodo} {
 		if got.Issues[i].Lane != want {
 			t.Fatalf("row %s lane = %q, want %q", got.Issues[i].Key, got.Issues[i].Lane, want)
 		}

@@ -70,6 +70,40 @@ test.describe('PR overview — the merged Jira issue list', () => {
     }
   })
 
+  test('one block per sprint, each headed "Planning <sprint>", the sprintless rows last', async ({ page }) => {
+    // Reviewer request: 'vervang "Planning" met "Planning Team Core Sprint 71"
+    // en laat ook van andere sprints zien wat ik dan als extra blok daaronder
+    // zie (ook al zijn die niet actief)'. The block ORDER is the backend's
+    // (sprintBuckets, pinned in jira_issues_test.go) — what is asserted here
+    // is that the page cuts the one flat list wherever `sprint` changes and
+    // names each block after it.
+    const sprinted = [
+      { key: 'STAT-1', title: 'Nu bezig', type: 'Story', status: 'In Progress', lane: 'planning', sprint: 'Team Core Sprint 71' },
+      { key: 'BUG-2', title: 'Straks', type: 'Bug', status: 'To Do', lane: 'todo', sprint: 'Team Core Sprint 71' },
+      { key: 'PROD-7', title: 'Volgende sprint', type: 'Story', status: 'To Do', lane: 'todo', sprint: 'Team Core Sprint 72' },
+      { key: 'CLUS-3', title: 'Sprintloos', type: 'Story', status: 'To Do', lane: 'todo' },
+    ]
+    await page.route('**/api/jira/issues**', (route) => route.fulfill({ json: { ok: true, fetchedAt: '', issues: sprinted } }))
+
+    await page.goto('/pr-overview')
+    await appReady(page)
+
+    const sections = page.locator('[data-testid="issue-section"]')
+    await expect(sections).toHaveCount(3)
+    await expect(sections.nth(0)).toHaveAttribute('data-title', 'Planning Team Core Sprint 71')
+    await expect(sections.nth(1)).toHaveAttribute('data-title', 'Planning Team Core Sprint 72')
+    // A row in no sprint at all keeps the original plain heading rather than
+    // vanishing from the page.
+    await expect(sections.nth(2)).toHaveAttribute('data-title', 'Planning')
+
+    await expect(sections.nth(0).locator('[data-testid="jira-issue-row"]')).toHaveCount(2)
+    await expect(sections.nth(1).locator('[data-testid="jira-issue-key"]')).toHaveText('PROD-7')
+    await expect(sections.nth(2).locator('[data-testid="jira-issue-key"]')).toHaveText('CLUS-3')
+    // Every block carries its own header, so every block has its own refresh
+    // button (they all ask the same tracker for the same refresh).
+    await expect(page.getByTestId('jira-issue-refresh')).toHaveCount(3)
+  })
+
   test('a row opens the ticket’s planning page and joins the row navigation', async ({ page }) => {
     await page.goto('/pr-overview')
     await appReady(page)
