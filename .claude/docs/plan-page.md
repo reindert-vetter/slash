@@ -2124,11 +2124,13 @@ home.mjs/Block.mjs/RelatedPanel.mjs").
   A comment longer than `COMMENT_BODY_TRUNCATE_AT` (160 chars) starts
   clamped (`line-clamp-3`) with a "meer… (Enter)" hint — mirrors
   `Block.mjs`'s own `descExpanded`/`blockDescCollapsible` pattern for the
-  block-description strip. It expands the moment that ONE comment becomes
-  the active cursor (`enterCommentsFocus`/`commentsActive() &&
-  state.commentCursor === id`, i.e. Enter pressed or a direct click — see
-  the nav-chain section right below), and re-clamps on ← (`exitCommentsFocus`).
-  A short comment never shows the hint at all.
+  block-description strip. It expands only once that ONE comment is both the
+  cursor AND explicitly opened (`state.commentExpandedId === id` — Enter
+  pressed on it, or a direct click, which opens the one it jumps straight to;
+  arrowing PAST it with ↑/↓ does not — see "commentExpandedId" in the
+  nav-chain section right below for why that split exists), and re-clamps on
+  Enter again or ← (`exitCommentsFocus`). A short comment never shows the hint
+  at all.
 - **Replying:** one composer open at a time (`state.commentReplyKey`, the
   same single-cursor discipline the rest of the page follows), a plain
   UNCONTROLLED `<textarea>` (`data-testid=plan-comment-reply-input`, same
@@ -2229,22 +2231,45 @@ nested list" shape (the methodes-kolom/`tcol`, see
   fall-through, mirroring `moveRow`'s own clamp. `←` (not `Escape` — this
   block has no submenu-style overlay) calls `exitCommentsFocus()`, which
   drops back to the block-level selection WITHOUT changing `state.col` —
-  exactly like the methodes-kolom's own `←` stays on stop 2b. `→` and a plain
-  `Enter`/`Space` are no-ops while focused: there is no nested column or
-  action to reach from inside a comment.
+  exactly like the methodes-kolom's own `←` stays on stop 2b. `→` is a no-op
+  while focused: there is no nested column to reach from inside a comment.
+- **`state.commentExpandedId` — a SEPARATE, narrower concept from the cursor
+  above (reviewer report, task 47/48: "jira opmerkingen inklappen als ik niet
+  enter erop heb gedrukt", "per jira comment zie ik elke keer uitklappen, ook
+  als er niks uit te klappen is").** Before this, "is this comment the
+  cursor" and "is this comment shown uncollapsed" were the SAME boolean
+  (`commentsActive() && state.commentCursor === id`), so arrowing past several
+  comments auto-expanded every one of them in turn, whether or not it had
+  anything to expand — pure visual noise for a short comment. Now:
+  `moveCommentCursor` (↑/↓) moves ONLY the ring and always clears
+  `commentExpandedId` — a freshly landed-on comment starts collapsed, exactly
+  "tenzij ik enter erop heb gedrukt". A plain `Enter`/`Space` while
+  `commentsActive()` (previously a no-op) now **toggles**
+  `commentExpandedId` for whichever comment the ring is on, open ↔ closed,
+  without leaving per-comment mode. `enterCommentsFocus` — the FIRST Enter
+  (from the block level) or a direct click on one comment — still opens the
+  comment it lands on immediately, since that transition itself already IS an
+  explicit Enter/click on it. `commentRow`'s own `cursorHere()` (the ring —
+  `commentsActive() && state.commentCursor === id`) and `expanded()`
+  (`cursorHere() && state.commentExpandedId === id`) are the two, now
+  genuinely separate, predicates: the body clamp/toggle text follow
+  `expanded()` only, while the ring/border and `data-comment-cursor` (what
+  `scrollCommentCursorIntoView` queries) follow `cursorHere()` regardless of
+  whether that comment is open.
 - **Two selection levels, told apart in words, never ring colour alone**
   (the colourblind rule): the panel's own header carries a badge
   (`data-testid=plan-comments-state`) reading **"◆ blok geselecteerd"**
   while the whole card carries the ring, or **"◆ opmerking actief"** once
   `commentsActive()` — mirroring `columnHeader`'s own "◆ actief" word. The
-  active comment ALSO gets its own inline word next to its author line
-  (`data-testid=plan-comment-active`, "● actief"), on top of the ring being a
-  visibly different SHAPE (a small comment row vs. the whole card) — belt and
-  suspenders. The two rings are mutually exclusive by construction
-  (`isCommentsRowSelected() && !commentsActive()` for the card,
-  `commentsActive() && state.commentCursor === id` for a row), so only one
-  shows at a time (the "never two selections visible at once" rule, commit
-  `27ce93c`).
+  two rings are mutually exclusive by construction
+  (`isCommentsRowSelected() && !commentsActive()` for the card, `cursorHere()`
+  for a row), so only one shows at a time (the "never two selections visible
+  at once" rule, commit `27ce93c`). **The per-row "● actief" word badge next
+  to a comment's author line is gone** (reviewer request, task 48: "'actief'
+  kan weg omdat het al duidelijk is door die border") — the ring/border was
+  always the SHAPE cue next to that word (belt and suspenders), and stays as
+  the row's only "here" indicator now that the word is removed; nothing lost
+  for the colourblind rule, since a border/ring is a shape, not a colour.
 - **Mouse**: a click on the panel's own background runs `selectCommentsRow()`
   — the same block-level selection a plain `→` already lands on
   (mouse-navigation.md rule 1). A click directly on one comment
@@ -2282,3 +2307,7 @@ by hand against the real `PAYM-813` ticket too — screenshots
 `task27-jira-comments-block-selected.png` (block-level ring, "blok
 geselecteerd") and `task27-jira-comments-navigating.png` (the per-comment
 ring, "opmerking actief", the block-level ring gone) in `data/review-shots/`.
+The same file also has "arrowing between comments moves the ring only — each
+stays collapsed until its own Enter" (task 48: two long comments, ↓ between
+them proven to leave both collapsed, Enter opens whichever one the ring is
+currently on).

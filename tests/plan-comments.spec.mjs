@@ -87,12 +87,12 @@ test.describe('Plan page — Jira comments as a nav-chain stop', () => {
     await expect(page.getByTestId('plan-comments-state')).toHaveText('◆ blok geselecteerd')
     await expect(panel).toHaveAttribute('data-cursor', 'true')
 
-    // Enter hands ↑/↓ to the comments themselves.
+    // Enter hands ↑/↓ to the comments themselves, and (being the reviewer's
+    // own Enter press) opens the one it lands on.
     await page.keyboard.press('Enter')
     await expect(page.getByTestId('plan-comments-state')).toHaveText('◆ opmerking actief')
     const rows = page.getByTestId('plan-comment-row')
     await expect(rows.nth(0)).toHaveAttribute('data-comment-cursor', 'true')
-    await expect(rows.nth(0).getByTestId('plan-comment-active')).toBeVisible()
 
     await page.keyboard.press('ArrowDown')
     await expect(rows.nth(1)).toHaveAttribute('data-comment-cursor', 'true')
@@ -162,11 +162,67 @@ test.describe('Plan page — long comments collapse until Enter', () => {
     // expands the one under the cursor.
     await page.keyboard.press('Enter')
     await expect(body).not.toHaveClass(/line-clamp-3/)
-    await expect(toggle).toHaveText('Inklappen (←)')
+    await expect(toggle).toHaveText('Inklappen (Enter)')
 
     // ← collapses it again.
     await page.keyboard.press('ArrowLeft')
     await expect(body).toHaveClass(/line-clamp-3/)
     await expect(toggle).toHaveText('meer… (Enter)')
+  })
+
+  // Reported bug: arrowing past several comments used to auto-expand each one
+  // in turn — the ring (data-comment-cursor) moved, but so did the "opened"
+  // style, with no extra Enter press needed. Only an explicit Enter on the
+  // highlighted comment may open it now; ↑/↓ only ever moves the ring.
+  test('arrowing between comments moves the ring only — each stays collapsed until its own Enter', async ({ page }) => {
+    const longBody = 'Uitgewerkt plan: '.repeat(20)
+    await page.route('**/api/jira/comments*', (route) =>
+      route.fulfill({
+        json: {
+          ok: true,
+          groups: [
+            {
+              key: 'TEST-903',
+              title: 'Two long comments',
+              relation: 'self',
+              comments: [
+                { id: 'c1', author: 'Alice', created: '2026-01-01T10:00:00Z', body: longBody },
+                { id: 'c2', author: 'Bob', created: '2026-01-02T10:00:00Z', body: longBody },
+              ],
+            },
+          ],
+          canPost: false,
+          canMention: false,
+        },
+      }),
+    )
+
+    await page.goto('/plan/TEST-903')
+    await appReady(page)
+
+    const rows = page.getByTestId('plan-comment-row')
+    const body0 = rows.nth(0).getByTestId('plan-comment-body')
+    const body1 = rows.nth(1).getByTestId('plan-comment-body')
+
+    // Enter opens the first comment (it IS the reviewer's own Enter press).
+    await page.keyboard.press('Enter')
+    await expect(body0).not.toHaveClass(/line-clamp-3/)
+
+    // ArrowDown to the second comment: the ring moves, but NEITHER comment is
+    // expanded — the first re-collapses, the second never auto-opened.
+    await page.keyboard.press('ArrowDown')
+    await expect(rows.nth(1)).toHaveAttribute('data-comment-cursor', 'true')
+    await expect(body0).toHaveClass(/line-clamp-3/)
+    await expect(body1).toHaveClass(/line-clamp-3/)
+
+    // Pressing Enter again opens the one the ring is now on.
+    await page.keyboard.press('Enter')
+    await expect(body1).not.toHaveClass(/line-clamp-3/)
+
+    // ArrowUp back to the first: still collapsed, has to be opened again too.
+    await page.keyboard.press('ArrowUp')
+    await expect(rows.nth(0)).toHaveAttribute('data-comment-cursor', 'true')
+    await expect(body0).toHaveClass(/line-clamp-3/)
+    await expect(body1).toHaveClass(/line-clamp-3/)
   })
 })

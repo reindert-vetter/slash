@@ -258,10 +258,17 @@ const state = reactive({
   // ↑/↓ to the comments themselves — the same "block is a stop, Enter moves
   // the keyboard into a nested list" shape the review tree's methodes-kolom
   // uses (see .claude/docs/test-class-grouping.md). commentsFocused mirrors
-  // that column's own testColumnFocused; commentCursor is the active
-  // comment's stable id (see commentId below).
+  // that column's own testColumnFocused; commentCursor is the RING/selection
+  // — which comment ↑/↓ is currently on, regardless of whether it is opened.
+  // commentExpandedId is a SEPARATE, narrower concept (reviewer report: "jira
+  // opmerkingen inklappen als ik niet enter erop heb gedrukt" — arrowing past
+  // several comments used to auto-expand every one of them in turn, even a
+  // short one with nothing to expand): only the comment whose id equals BOTH
+  // commentCursor AND commentExpandedId is actually shown uncollapsed — see
+  // commentRow's own `expanded()`.
   commentsFocused: false,
   commentCursor: '',
+  commentExpandedId: '',
 })
 
 // menu is the stable {open} flag the Enter-menu on the ticket column renders
@@ -1407,7 +1414,10 @@ function clampCursor() {
   // A stale nested comment focus (the comments row itself disappeared, or the
   // cursor moved off it some other way) must never keep ↑/↓ hijacked.
   if (state.commentsFocused && state.cur !== COMMENTS_ROW_ID) state.commentsFocused = false
-  if (state.commentCursor && !commentFlatList().some((c) => c.id === state.commentCursor)) state.commentCursor = ''
+  if (state.commentCursor && !commentFlatList().some((c) => c.id === state.commentCursor)) {
+    state.commentCursor = ''
+    state.commentExpandedId = ''
+  }
 }
 
 // isCommentsRowSelected/commentsActive mirror the review tree's own
@@ -1445,11 +1455,18 @@ function enterCommentsFocus(startId) {
   state.commentsFocused = true
   const want = startId || state.commentCursor
   state.commentCursor = list.some((c) => c.id === want) ? want : list[0].id
+  // Entering — via Enter on the block, or a direct click on one comment —
+  // opens the landed comment right away: this IS the reviewer pressing
+  // Enter/clicking on it, matching "inklappen tenzij ik enter erop heb
+  // gedrukt". Arrowing to a DIFFERENT comment afterwards (moveCommentCursor
+  // below) does NOT carry this forward.
+  state.commentExpandedId = state.commentCursor
   scrollCommentCursorIntoView()
 }
 
 function exitCommentsFocus() {
   state.commentsFocused = false
+  state.commentExpandedId = ''
 }
 
 function moveCommentCursor(delta) {
@@ -1462,6 +1479,11 @@ function moveCommentCursor(delta) {
   const next = Math.min(Math.max(at + delta, 0), list.length - 1)
   if (list[next].id === state.commentCursor) return
   state.commentCursor = list[next].id
+  // Reviewer report: arrowing past several comments used to auto-expand
+  // every one of them in turn, even one with nothing to expand. Landing on a
+  // new comment via ↑/↓ therefore only moves the ring — it starts collapsed
+  // until Enter is pressed on it (see the Enter branch in onKeydown below).
+  state.commentExpandedId = ''
   scrollCommentCursorIntoView()
 }
 
@@ -1804,11 +1826,16 @@ function onKeydown(e) {
         openPlanMenu()
         return
       }
-      // Already navigating the comments themselves — nothing further to do
-      // with Enter/Space here (← is what leaves that mode, see ArrowLeft
-      // above); without this guard curRow() below would just re-enter it.
+      // Already navigating the comments themselves: Enter/Space toggles
+      // whether the comment under the cursor is opened (without this,
+      // curRow() below would just re-enter the block) — "inklappen tenzij ik
+      // enter erop heb gedrukt": arrowing between comments never opens one on
+      // its own (see moveCommentCursor), pressing Enter on the highlighted
+      // one does, and pressing it again collapses it back. ← still leaves the
+      // per-comment mode entirely (see ArrowLeft above).
       if (commentsActive()) {
         e.preventDefault()
+        state.commentExpandedId = state.commentExpandedId === state.commentCursor ? '' : state.commentCursor
         return
       }
       const row = curRow()
@@ -3761,14 +3788,21 @@ function commentReplyComposer(group) {
 // stray top-level row.
 function commentRow(c, groupKey, i) {
   const id = commentId(groupKey, c, i)
-  const active = () => commentsActive() && state.commentCursor === id
+  // cursorHere is the RING — where ↑/↓ currently is, regardless of whether
+  // this comment is opened. It alone carries the "here" meaning now that the
+  // per-row "● actief" word badge is gone (the ring/border already says it —
+  // reviewer request). expanded is the narrower, separate "is THIS one
+  // actually opened" state (see commentExpandedId's own doc comment above) —
+  // only it gates the body clamp/toggle text.
+  const cursorHere = () => commentsActive() && state.commentCursor === id
+  const expanded = () => cursorHere() && state.commentExpandedId === id
   return html`
     <div
       class="${() =>
         'rounded-md py-1.5 px-1.5 -mx-1.5 border-t border-slate-100 first:border-t-0 dark:border-zinc-800 ' +
-        (active() ? 'ring-2 ring-inset ring-indigo-400 bg-indigo-50/50 dark:ring-indigo-500 dark:bg-indigo-500/10' : '')}"
+        (cursorHere() ? 'ring-2 ring-inset ring-indigo-400 bg-indigo-50/50 dark:ring-indigo-500 dark:bg-indigo-500/10' : '')}"
       data-testid="plan-comment-row"
-      data-comment-cursor="${() => (active() ? 'true' : 'false')}"
+      data-comment-cursor="${() => (cursorHere() ? 'true' : 'false')}"
       @click="${(e) => {
         e.stopPropagation()
         enterCommentsFocus(id)
@@ -3780,19 +3814,11 @@ function commentRow(c, groupKey, i) {
           <div class="flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-zinc-400">
             <span class="font-medium text-slate-700 dark:text-zinc-200">${c.author || t('onbekend')}</span>
             <span title="${c.created || ''}">${relativeTime(c.created)}</span>
-            <div class="contents">
-              ${() =>
-                active()
-                  ? html`<span class="ml-auto text-[10px] font-semibold text-indigo-600 dark:text-indigo-300" data-testid="plan-comment-active"
-                      >● ${t('actief')}</span
-                    >`.key('active:' + id)
-                  : ''}
-            </div>
           </div>
           <div
             class="${() =>
               'markdown-body mt-0.5 text-[12px] leading-relaxed text-slate-700 dark:text-zinc-300 ' +
-              (active() ? '' : 'line-clamp-3 [&>p]:my-0')}"
+              (expanded() ? '' : 'line-clamp-3 [&>p]:my-0')}"
             data-testid="plan-comment-body"
             .innerHTML="${() => renderMarkdown(c.body || '')}"
           ></div>
@@ -3800,7 +3826,7 @@ function commentRow(c, groupKey, i) {
             ${() =>
               commentBodyCollapsible(c)
                 ? html`<div class="mt-0.5 text-[10.5px] font-medium text-indigo-600 dark:text-indigo-400" data-testid="plan-comment-toggle">
-                    ${() => (active() ? t('Inklappen (←)') : t('meer… (Enter)'))}
+                    ${() => (expanded() ? t('Inklappen (Enter)') : t('meer… (Enter)'))}
                   </div>`.key('toggle:' + id)
                 : ''}
           </div>
