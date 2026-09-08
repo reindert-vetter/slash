@@ -16,7 +16,10 @@ import { t } from './i18n.mjs'
 // alignRows/diffLines used to live at the bottom of this file; they were
 // extracted to their own module so /plan/<KEY> can reuse the exact same
 // alignment without importing this whole card (see src/lineDiff.mjs).
-import { alignRows, diffLines } from './lineDiff.mjs'
+import { alignRows, diffLines, tokenize, diffChars, markChars } from './lineDiff.mjs'
+// Re-exported: Footer.mjs imports markChars from here (its own char-marker use,
+// unrelated to the plan page) — keep that import path working.
+export { markChars }
 
 // highlight turns raw source into Prism-tokenised HTML (keywords, strings,
 // variables, …). Prism.highlight escapes the text itself, so the result is safe
@@ -4078,120 +4081,9 @@ function charDiffSides(left, right) {
   return { leftMarked, rightMarked }
 }
 
-// tokenize splits a line into { text, start } tokens: each maximal `[A-Za-z0-9]`
-// run is one token (so identifiers/numbers match whole), and every other
-// character (operators, punctuation, each whitespace char) is its own token.
-function tokenize(s) {
-  const toks = []
-  const re = /[A-Za-z0-9]+|[^A-Za-z0-9]/g
-  let m
-  while ((m = re.exec(s)) !== null) {
-    toks.push({ text: m[0], start: m.index })
-  }
-  return toks
-}
-
-// diffChars is diffLines over an arbitrary sequence (characters or tokens): a
-// classic LCS returning 'eq'/'del'/'ins' ops turning `a` into `b`, comparing
-// elements with `===`. Lines are short, so the O(n·m) table is cheap.
-function diffChars(a, b) {
-  const n = a.length
-  const m = b.length
-  const dp = Array.from({ length: n + 1 }, () => new Int32Array(m + 1))
-  for (let i = n - 1; i >= 0; i--) {
-    for (let j = m - 1; j >= 0; j--) {
-      dp[i][j] =
-        a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1])
-    }
-  }
-  const ops = []
-  let i = 0
-  let j = 0
-  while (i < n && j < m) {
-    if (a[i] === b[j]) {
-      ops.push('eq')
-      i++
-      j++
-    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
-      ops.push('del')
-      i++
-    } else {
-      ops.push('ins')
-      j++
-    }
-  }
-  while (i < n) {
-    ops.push('del')
-    i++
-  }
-  while (j < m) {
-    ops.push('ins')
-    j++
-  }
-  return ops
-}
-
-// markChars wraps the characters of a Prism-highlighted HTML string in marker
-// spans, where `classOf(plaintextIndex)` returns the class string for that source
-// char (`''` for none). It walks the HTML tracking the plaintext offset — copying
-// tags verbatim (they don't advance the offset) and counting each entity
-// (`&amp;` etc.) as one source char — so char-offset-based classifiers (e.g. the
-// active call-segment underline, or the whitespace-only tint) line up with the
-// escaped output. Consecutive chars that map to the *same* class string share
-// one span, and a span is always closed before a tag, so a marker never
-// straddles a Prism token boundary (it nests inside or sits between tokens) and
-// the markup stays well-formed.
-// `attrOf(plaintextIndex)` is optional and returns EXTRA attributes for that
-// char's span (a leading-space-prefixed string like ` data-seg-dot="8"`, `''`
-// for none) — used by the call-approval dot markers, which need a test/query
-// hook next to their class. It takes part in the "same span" comparison, so two
-// neighbouring chars only share a span when class AND attributes match.
-export function markChars(html, classOf, attrOf = null) {
-  let out = ''
-  let pi = 0 // plaintext index into the original line
-  let i = 0
-  let open = '' // the class string of the currently-open span ('' = none)
-  let openAttr = ''
-  const ensure = (cls, attr = '') => {
-    if (cls === open && attr === openAttr) return
-    if (open || openAttr) out += '</span>'
-    open = ''
-    openAttr = ''
-    if (cls || attr) {
-      out += `<span class="${cls}"${attr}>`
-      open = cls
-      openAttr = attr
-    }
-  }
-  while (i < html.length) {
-    const ch = html[i]
-    if (ch === '<') {
-      // A tag — copy it whole, and never let a marker span straddle it.
-      ensure('')
-      const end = html.indexOf('>', i)
-      const to = end === -1 ? html.length : end + 1
-      out += html.slice(i, to)
-      i = to
-      continue
-    }
-    if (ch === '&') {
-      // An HTML entity stands for a single source char.
-      const end = html.indexOf(';', i)
-      const to = end === -1 ? i + 1 : end + 1
-      ensure(classOf(pi), attrOf ? attrOf(pi) : '')
-      out += html.slice(i, to)
-      pi++
-      i = to
-      continue
-    }
-    ensure(classOf(pi), attrOf ? attrOf(pi) : '')
-    out += ch
-    pi++
-    i++
-  }
-  ensure('')
-  return out
-}
+// tokenize/diffChars/markChars moved to src/lineDiff.mjs (imported above) so
+// the plan page's proposed-code pane can reuse the same token/char-diff
+// machinery for its own partial-line marking — see .claude/docs/plan-page.md.
 
 // dedent4 strips one level of leading indent from the diff: only when every
 // non-blank line of BOTH sides starts with 4 spaces does it drop those 4 spaces

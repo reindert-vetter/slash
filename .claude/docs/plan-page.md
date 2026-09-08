@@ -47,7 +47,7 @@ ticket on top, the "Taken" block below it.
    **"Taken"** block: the literal review-tree `TasksPanel` (RelatedPanel.mjs),
    fed the workflow runs of THIS ticket from `GET /api/workflows?plan=KEY` —
    see "The Taken block is the literal TasksPanel" below.
-2. **The questions** (`plan-questions-column`, `w-[31rem]`) — or, while the
+2. **The questions** (`plan-questions-column`, `w-[27rem]`) — or, while the
    scope question stands, ONLY that question (see "Subtask and main task"
    below) — one card per
    question, every option a row with a `●`/`○` glyph plus the word "gekozen"
@@ -66,7 +66,7 @@ ticket on top, the "Taken" block below it.
    same scrolling column, **"Wat er moet gebeuren"**: the task list, each task
    with its explanation, and as the **last row of the whole index** the action
    that runs the plan (see "The last action" below).
-3. **The example code** (`plan-block-column`, `w-[40rem]`, `data-level=0`) — the
+3. **The example code** (`plan-block-column`, `w-[46rem]`, `data-level=0`) — the
    blocks of whatever the cursor is on (an option or a task): a card per block
    with a file/label/language header, its explanation (`note`,
    `data-testid=plan-block-note`) and Prism-highlighted code.
@@ -701,19 +701,37 @@ werkmap**.
   `plan-block-proposed`) with "Huidige code" and "Voorgestelde code" as their
   headers; the file does not exist → the proposed code plus "nieuw bestand".
 - **`alignRows` is genuinely reused from the review tree.** It (and
-  `diffLines`) moved verbatim out of `src/Block.mjs` into
-  **`src/lineDiff.mjs`**, which Block.mjs now imports — so the plan page gets
-  the tree's own alignment without importing that whole card (BlockList,
-  translationDiff, columnWidth, shortcut hints…). This is the SECOND deliberate
-  exception to this page's "same style, own code" rule, next to
-  `claudeChatColumn`.
+  `diffLines`, and — since task 43 below — `tokenize`/`diffChars`/`markChars`)
+  moved verbatim out of `src/Block.mjs` into **`src/lineDiff.mjs`**, which
+  Block.mjs now imports (and re-exports `markChars` from, since `Footer.mjs`
+  already imported it from `Block.mjs`) — so the plan page gets the tree's own
+  alignment and char-diff machinery without importing that whole card
+  (BlockList, translationDiff, columnWidth, shortcut hints…). This is the
+  SECOND deliberate exception to this page's "same style, own code" rule, next
+  to `claudeChatColumn`.
 - **Deliberately NOT rendered as a two-sided del/ins diff.** A plan block is a
   ~25-line SKETCH of one function while the current code is the whole file, so
   every unmatched file line would show up as a "removal" the plan never asked
   for. `newProposedLines` therefore uses the alignment only to mark, in the
-  PROPOSED pane, the lines the file does not have yet — a `+` glyph in the
-  gutter carries it (the tint is decoration, per the colourblind rule), which
-  is the question a reviewer actually has: which of these lines is new?
+  PROPOSED pane, the PART of each line the file does not have yet — a `+`
+  glyph in the gutter still carries the row-level "this line changed" (the
+  tint is decoration, per the colourblind rule), which is the question a
+  reviewer actually has: which of these lines is new?
+- **A partially-changed line only tints/underlines its new fragment**
+  (reviewer request, task 43: *"het kan ook zijn dat een gedeelte van een line
+  nieuw is"*). `alignRows` pairs a genuinely modified line as one del row + one
+  ins row; `newProposedLines` token-diffs that pair (`newRangesInRight`, using
+  the shared `tokenize`/`diffChars` from `src/lineDiff.mjs`) instead of
+  marking the whole proposed line new, so e.g. an existing call that only
+  gained one new argument highlights just that argument. A row with no
+  counterpart at all (pure `ins`) is still new in full, and a paired row that
+  differs only in whitespace (a re-indent) stays unmarked — same as before.
+  `codeLinesHTML` renders this via `markChars` (walks the Prism-highlighted
+  HTML by plaintext char offset, wrapping only the marked ranges), tinting
+  **and underlining** the new fragment — the underline is the shape/word-
+  adjacent, non-colour cue the colourblind rule requires next to the tint
+  (same pairing as the `@`-mention highlight, `src/mentions.mjs`); the row-level
+  `+` glyph is unaffected, still shown whenever a line has any new range.
 
 ## Subtask and main task
 
@@ -1278,8 +1296,11 @@ effects, no URL state of their own (derived, not navigational):
 
 - **`questionsColumn`**'s outer `<div>` class became a whole-value function
   binding (`.claude/rules/arrowjs-pitfalls.md`'s mixed-literal-and-dynamic
-  rule) instead of a static `w-[31rem]`: `w-[62rem]` (double) while
-  `state.col === 1`, back to `w-[31rem]` for every other column.
+  rule) instead of a static width: `w-[62rem]` while `state.col === 1`, back to
+  `w-[27rem]` for every other column (originally `w-[31rem]`/exactly double
+  `w-[62rem]`; narrowed on reviewer request — task 43, "kolom 2 mag iets
+  smaller" — to make room for the wider example-code column below, so the two
+  widths are no longer an exact double).
 - **`intentField`**'s textarea hides while `state.col === 1`
   (`data-collapsed` on the block's own wrapper, `plan-intent-collapsed-label`
   showing the word **"ingeklapt"** next to the header — never a colour alone,

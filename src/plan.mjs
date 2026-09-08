@@ -55,7 +55,7 @@ import { relativeTime } from './relativeTime.mjs'
 // exception to this page's "own code" rule, next to claudeChatColumn above —
 // reviewer request for task 26: "huidige code naast de voorgestelde code, de
 // blok-weergave van de review-tree overnemen".
-import { alignRows } from './lineDiff.mjs'
+import { alignRows, tokenize, diffChars, markChars } from './lineDiff.mjs'
 // TasksPanel is the review tree's own merged "Taken" block (RelatedPanel.mjs)
 // — reused OUTRIGHT, visual style included, per explicit reviewer request
 // ("dit blokje met workflows, mag exact hetzelfde werken als in pr tree"). A
@@ -1893,41 +1893,98 @@ function currentFor(file) {
   return state.current[file]
 }
 
-// newProposedLines marks which lines of the PROPOSED sketch are not already in
-// the current file, using the review tree's own line aligner (alignRows, see
-// src/lineDiff.mjs — the same function its split diff panes are built on).
-// Deliberately NOT rendered as a two-sided del/ins diff: a plan block is a
-// ~25-line SKETCH of one function and the current code is the whole file, so
-// every unmatched file line would show up as a "removal" the plan never asked
-// for. Marking the proposal's own new lines is the honest half of that
-// comparison, and it is what a reviewer actually wants to know: which of these
-// lines does the file not have yet?
+// newRangesInRight token-diffs two lines and returns the merged char ranges
+// ({start, end}, half-open) in `right` that are genuinely new — a token
+// present in `right` with no counterpart in `left`. Reuses the review tree's
+// own token/char-diff (tokenize/diffChars, moved to src/lineDiff.mjs
+// specifically so this page could reuse them without importing Block.mjs).
+function newRangesInRight(left, right) {
+  const a = tokenize(left || '')
+  const b = tokenize(right || '')
+  const ops = diffChars(
+    a.map((t) => t.text),
+    b.map((t) => t.text),
+  )
+  const ranges = []
+  let ai = 0
+  let bi = 0
+  for (const op of ops) {
+    if (op === 'eq') {
+      ai++
+      bi++
+    } else if (op === 'del') {
+      ai++
+    } else {
+      const tok = b[bi++]
+      const start = tok.start
+      const end = start + tok.text.length
+      const last = ranges[ranges.length - 1]
+      if (last && last.end === start) last.end = end
+      else ranges.push({ start, end })
+    }
+  }
+  return ranges
+}
+
+// newProposedLines marks which PART of each line of the PROPOSED sketch is not
+// already in the current file, using the review tree's own line aligner
+// (alignRows, see src/lineDiff.mjs — the same function its split diff panes
+// are built on). Deliberately NOT rendered as a two-sided del/ins diff: a plan
+// block is a ~25-line SKETCH of one function and the current code is the whole
+// file, so every unmatched file line would show up as a "removal" the plan
+// never asked for. Marking the proposal's own new fragments is the honest half
+// of that comparison, and it is what a reviewer actually wants to know: which
+// part of these lines does the file not have yet?
+//
+// Returns one char-range array per proposed line (index-aligned with the
+// proposed code's own lines, same as the old boolean array): a line with no
+// counterpart at all (a pure `ins` row) is new in full; an unchanged row (or a
+// paired row that differs only in whitespace — a re-indent, not real new
+// content) is `[]`; a genuinely changed paired row is token-diffed so only its
+// new fragment is marked.
 function newProposedLines(currentCode, proposedCode) {
   const marks = []
   for (const row of alignRows(currentCode || '', proposedCode || '')) {
     if (row.right === null || row.right === undefined) continue
-    marks.push(row.rightMark === 'ins')
+    if (row.left === null || row.left === undefined) {
+      marks.push([{ start: 0, end: row.right.length }])
+    } else if (row.rightMark !== 'ins') {
+      marks.push([])
+    } else if (row.left.replace(/\s+/g, '') === row.right.replace(/\s+/g, '')) {
+      marks.push([]) // a pure re-indent, not real new content
+    } else {
+      marks.push(newRangesInRight(row.left, row.right))
+    }
   }
   return marks
 }
 
-// codeLinesHTML renders one pane: a gutter glyph per line ('+' for a line the
-// current file does not have yet — the WORD/GLYPH carries it, the tint is
-// decoration, per the colourblind rule) plus the Prism-highlighted line.
+// The tint on a new char range is decoration; the underline is the shape/word-
+// adjacent cue a colourblind reviewer relies on (per the colourblind rule,
+// never colour alone) — same background+non-colour-cue pairing as the
+// `@`-mention highlight (src/mentions.mjs).
+const NEW_CHARS_CLS =
+  'bg-emerald-50 underline decoration-emerald-600 decoration-2 underline-offset-2 dark:bg-emerald-500/15 dark:decoration-emerald-400'
+
+// codeLinesHTML renders one pane: a gutter glyph per line ('+' for a line that
+// has any new fragment — the WORD/GLYPH carries the row-level "this changed",
+// the tint is decoration, per the colourblind rule) plus the Prism-highlighted
+// line, with only the NEW char ranges (which may be the whole line, or just
+// part of it — see newProposedLines) tinted+underlined.
 function codeLinesHTML(code, lang, marks) {
   const lines = String(code || '').split('\n')
   const cut = lines.length > maxCurrentLines
   const shown = cut ? lines.slice(0, maxCurrentLines) : lines
   const rows = shown.map((line, i) => {
-    const isNew = !!(marks && marks[i])
-    const cls = isNew ? 'bg-emerald-50 dark:bg-emerald-500/15' : ''
+    const ranges = (marks && marks[i]) || []
+    const isNew = ranges.length > 0
+    const inRange = (pi) => ranges.some((r) => pi >= r.start && pi < r.end)
+    const body = markChars(highlight(line, lang), (pi) => (inRange(pi) ? NEW_CHARS_CLS : ''))
     return (
-      '<div class="flex ' +
-      cls +
-      '"><span class="w-4 shrink-0 select-none text-center text-slate-400 dark:text-zinc-600">' +
+      '<div class="flex"><span class="w-4 shrink-0 select-none text-center text-slate-400 dark:text-zinc-600">' +
       (isNew ? '+' : '') +
       '</span><span class="min-w-0 flex-1 whitespace-pre-wrap break-words">' +
-      (highlight(line, lang) || '&nbsp;') +
+      (body || '&nbsp;') +
       '</span></div>'
     )
   })
@@ -3669,7 +3726,7 @@ function commentsPanel() {
 function questionsColumn() {
   return html`
     <div
-      class="${() => 'flex shrink-0 flex-col ' + (state.col === 1 ? 'w-[62rem]' : 'w-[31rem]')}"
+      class="${() => 'flex shrink-0 flex-col ' + (state.col === 1 ? 'w-[62rem]' : 'w-[27rem]')}"
       data-testid="plan-questions-column"
       data-column-focused="${() => (state.col === 1 ? 'true' : 'false')}"
       @click="${() => (state.col = 1)}"
@@ -3846,7 +3903,7 @@ function blockColumn(list, level) {
       : t('Onderliggend: {name}', { name: (parent && parent.title) || '' })
   return html`
     <div
-      class="flex w-[40rem] shrink-0 flex-col"
+      class="flex w-[46rem] shrink-0 flex-col"
       data-testid="plan-block-column"
       data-level="${String(level)}"
       data-column-focused="${() => (state.col === level + 2 ? 'true' : 'false')}"
