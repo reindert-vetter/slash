@@ -1045,6 +1045,19 @@ function commentFlatList() {
   return out
 }
 
+// ownOptionId/ownOptionFor synthesize the always-present, no-generated-
+// content last option of every question (see the comment above its push in
+// navRows below) — never persisted on the document, built fresh on every
+// render, purely a client-side rendering concern. `.own = true` is the flag
+// optionRow/ownOptionRow branch on.
+function ownOptionId(q) {
+  return q.id + ':own'
+}
+
+function ownOptionFor(q) {
+  return { id: ownOptionId(q), own: true }
+}
+
 function navRows() {
   const out = []
   // The Jira-opmerkingen block is always the first stop, independent of the
@@ -1070,6 +1083,14 @@ function navRows() {
   }
   ;(state.doc.questions || []).forEach((q, qi) => {
     ;(q.options || []).forEach((o, oi) => out.push({ id: o.id, kind: 'option', q, o, qi, oi }))
+    // Reviewer request: "altijd een laatste optie met alleen input velden" —
+    // every question also gets one synthetic, generated-content-free option
+    // at the end, so a reviewer whose real cause isn't among Claude's
+    // suggested choices can still type it instead of forcing a pick among
+    // options that don't fit. Its id (`<questionId>:own`) never collides with
+    // a real option's (`q1o1`, `q1o2`, …) — a real option id never contains
+    // a `:` — so it's safe alongside whatever the model generated.
+    out.push({ id: ownOptionId(q), kind: 'option', q, o: ownOptionFor(q), qi, oi: (q.options || []).length })
   })
   // "Meer vragen om het plan te perfectioneren" — only once there IS a plan to
   // sharpen, so a still-generating page does not park the default cursor on it.
@@ -2040,6 +2061,7 @@ function tasksCard() {
 // row's key is stable so the field survives a re-render either way.
 function optionRow(row) {
   const { q, o } = row
+  if (o.own) return ownOptionRow(row)
   return html`
     <div
       class="${() =>
@@ -2111,6 +2133,74 @@ function optionRow(row) {
           state.col = 1
         }}"
       />
+      <div class="contents">
+        ${() =>
+          state.saving === o.id ? html`<p class="mt-1 text-[10.5px] text-slate-400 dark:text-zinc-500">${t('opslaan…')}</p>` : ''}
+      </div>
+    </div>
+  `.key('opt:' + o.id)
+}
+
+// ownOptionRow is the always-present, generated-content-free last choice of
+// every question (reviewer request: "altijd een laatste optie met alleen
+// input velden") — unlike a real option there is no label/detail to show,
+// since the reviewer's own free text IS the entire answer, so the row is
+// just the selection glyph plus its input field. Same selection/chosen/
+// saving mechanics as optionRow otherwise.
+function ownOptionRow(row) {
+  const { q, o } = row
+  return html`
+    <div
+      class="${() =>
+        'rounded-lg border px-2.5 py-2 ' +
+        (state.cur === o.id && state.col !== 0
+          ? 'border-indigo-300 ring-2 ring-inset ring-indigo-400 dark:border-indigo-500 dark:ring-indigo-500 ' +
+            (state.col === 1 ? 'bg-indigo-50/50 dark:bg-indigo-500/10 ' : '')
+          : 'border-slate-200 dark:border-zinc-800 ') +
+        (isChosen(q, o) ? 'bg-emerald-50/60 dark:bg-emerald-500/10' : '')}"
+      data-testid="plan-option"
+      data-option-id="${o.id}"
+      data-own-option="true"
+      data-cursor="${() => (state.cur === o.id ? 'true' : 'false')}"
+      data-chosen="${() => (isChosen(q, o) ? 'true' : 'false')}"
+      @click="${() => {
+        state.cur = o.id
+        state.col = 1
+        state.path = [0]
+      }}"
+    >
+      <div class="flex items-center gap-2">
+        <span class="shrink-0 font-mono text-[12px] text-slate-500 dark:text-zinc-400">${() => (isChosen(q, o) ? '●' : '○')}</span>
+        <div class="contents">
+          ${() =>
+            isChosen(q, o)
+              ? html`<span
+                  class="shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-300 dark:ring-emerald-500/30"
+                  >${t('gekozen')}</span
+                >`
+              : ''}
+        </div>
+        <input
+          type="text"
+          placeholder="${t('eigen antwoord…')}"
+          value="${isChosen(q, o) ? answerTextFor(q.id) : ''}"
+          data-testid="plan-option-input"
+          class="min-w-0 flex-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[12px] text-slate-800 placeholder:text-slate-400 focus:border-indigo-300 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500"
+          @keydown="${(e) => {
+            if (!e) return
+            if (e.key === 'Enter') {
+              e.stopPropagation()
+              sendAnswer(q, o, e.target.value)
+              e.target.blur()
+              advanceToNextQuestion()
+            }
+          }}"
+          @focus="${() => {
+            state.cur = o.id
+            state.col = 1
+          }}"
+        />
+      </div>
       <div class="contents">
         ${() =>
           state.saving === o.id ? html`<p class="mt-1 text-[10.5px] text-slate-400 dark:text-zinc-500">${t('opslaan…')}</p>` : ''}

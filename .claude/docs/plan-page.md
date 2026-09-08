@@ -48,10 +48,20 @@ rebuilt rather than imported.
    below) — one card per
    question, every option a row with a `●`/`○` glyph plus the word "gekozen"
    (never colour alone, per the colourblind rule) **and its own free-text
-   field**. Underneath, in the same scrolling column, **"Wat er moet
-   gebeuren"**: the task list, each task with its explanation, and as the
-   **last row of the whole index** the action that runs the plan (see "The last
-   action" below).
+   field**. Every question also gets one extra, always-present **last** row —
+   `ownOptionRow`/`ownOptionId` (`src/plan.mjs`), reviewer request "altijd een
+   laatste optie met alleen input velden" — for when the real cause isn't
+   among Claude's generated options: no label/detail (there is nothing
+   generated to show), just the glyph and its own free-text field, so typing
+   an answer there and pressing Enter chooses it. Purely a client-side
+   rendering concern: `navRows()` synthesizes it fresh on every render with id
+   `<questionId>:own` (never collides with a real `q1o1`-shaped id), it is
+   never part of the stored `planOption` model, and the signal endpoint
+   accepts any `optionId` string (`upsertPlanAnswer`, `plan_workflow.go`) so it
+   persists/reloads exactly like a real option's answer. Underneath, in the
+   same scrolling column, **"Wat er moet gebeuren"**: the task list, each task
+   with its explanation, and as the **last row of the whole index** the action
+   that runs the plan (see "The last action" below).
 3. **The example code** (`plan-block-column`, `w-[40rem]`, `data-level=0`) — the
    blocks of whatever the cursor is on (an option or a task): a card per block
    with a file/label/language header, its explanation (`note`,
