@@ -2576,7 +2576,16 @@ function branchRow(b) {
 }
 
 // hotfixCard is the whole question — the only thing column 2 shows while it
-// stands, exactly like scopeCard.
+// stands, exactly like scopeCard. It renders only the HOTFIX rows of
+// navRows(): that list also carries the Jira-comments row (COMMENTS_ROW_ID,
+// present whenever this ticket has comments), which has no `target` of its
+// own — without the filter it rendered as a phantom "Vanaf een andere
+// branch…" row (hotfixRow's fallback branch for an unset target), and
+// because its id was the SAME as the real comments row, it also picked up
+// that row's own selection ring: two rings visible at once (reviewer
+// report, see "Never two selections visible at once" in
+// .claude/docs/plan-page.md). Same fix scopeCard already applies to its own
+// rows for the same reason.
 function hotfixCard() {
   return html`
     <section class="${CARD + CARD_IDLE}" data-testid="plan-hotfix">
@@ -2591,7 +2600,7 @@ function hotfixCard() {
       <p class="mb-2 text-[12px] leading-relaxed text-slate-500 dark:text-zinc-400">
         ${t('De keuze bepaalt waar de werkmap vandaan vertakt en tegen welke branch de draft-PR komt te staan.')}
       </p>
-      <div class="flex flex-col gap-1.5">${() => navRows().map((r) => hotfixRow(r))}</div>
+      <div class="flex flex-col gap-1.5">${() => navRows().filter((r) => r.kind === 'hotfix').map((r) => hotfixRow(r))}</div>
     </section>
   `.key('hotfix-card')
 }

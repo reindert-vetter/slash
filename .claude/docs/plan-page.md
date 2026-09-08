@@ -534,6 +534,17 @@ one).
   holds, `data-testid=plan-hotfix-option`, `data-hotfix-target=yes|no|other`):
   "Ja, hotfix — master", "Nee, gewoon — develop", and "Vanaf een andere
   branch…". Glyph plus a word, never a colour on its own.
+- **`hotfixCard` renders only the HOTFIX rows of `navRows()`** — the same
+  filter `scopeCard` already needed (see its own bullet above), for the exact
+  same reason: `navRows()` always puts the Jira-comments row
+  (`COMMENTS_ROW_ID`) first, even while this gate stands. Before this filter,
+  that row rendered a SECOND time through `hotfixRow` too — with no `target`
+  of its own it fell into `hotfixRow`'s fallback branch and rendered as a
+  phantom "Vanaf een andere branch…" row — and because its id was literally
+  `COMMENTS_ROW_ID` (the actual default cursor), that phantom row lit up with
+  the exact same selection ring as the real Jira-opmerkingen block. Reviewer
+  report: "er zijn nu 2 dingen geselecteerd, vreemd". Regression test:
+  `tests/plan-hotfix-gate.spec.mjs`.
 - **The third choice is a dropdown with a search field**
   (`branchPicker`, `data-testid=plan-branch-picker`/`plan-branch-search`/
   `plan-branch-option`): it unfolds inside the row rather than answering, and
