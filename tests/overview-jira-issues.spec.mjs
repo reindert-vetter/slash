@@ -78,4 +78,60 @@ test.describe('PR overview — the merged Jira issue list', () => {
     await expect(row).toHaveAttribute('href', '/plan/INTEG-445')
     await expect(row).toHaveAttribute('data-nav-row', '')
   })
+
+  // Reviewer request: "in planning overzicht moet ook met enter menu komen
+  // met open in jira ofzo" — Enter opens a small menu instead of navigating
+  // straight away; a plain click still navigates unchanged (see
+  // jiraIssueCommands' own doc comment in overview.mjs).
+  test('Enter on a todo-lane row opens a menu offering "Start plannen"; a planning-lane row does not', async ({ page }) => {
+    await page.route('**/api/workflows/plan', (route) => route.fulfill({ json: { ok: true, runId: 'run-x' } }))
+    await page.evaluate(() => {
+      window.__openedUrl = null
+      window.open = (url) => {
+        window.__openedUrl = url
+        return null
+      }
+    })
+
+    await page.goto('/pr-overview')
+    await appReady(page)
+
+    // This worker's fixture data can also carry ordinary PR rows above the
+    // Jira issue section (unrelated to this test), so `Home` alone doesn't
+    // reliably land on a jira-issue row — walk down from `Home` to the exact
+    // row by its own `data-nav-key` (paintSelection/currentRows, overview.mjs)
+    // instead of assuming an index.
+    async function selectJiraRow(key) {
+      await page.keyboard.press('Home')
+      const idx = await page.evaluate(
+        (navKey) => Array.from(document.querySelectorAll('[data-nav-row]')).findIndex((el) => el.dataset.navKey === navKey),
+        'jiraissue:' + key,
+      )
+      expect(idx).toBeGreaterThanOrEqual(0)
+      for (let i = 0; i < idx; i++) await page.keyboard.press('ArrowDown')
+    }
+
+    // The planning-lane row (INTEG-445) — Enter opens the menu without
+    // "Start plannen".
+    await selectJiraRow('INTEG-445')
+    await page.keyboard.press('Enter')
+    await expect(page.getByTestId('command-menu')).toBeVisible()
+    await expect(page.getByTestId('command-row')).toContainText(['Sluit menu', 'Open planning', 'Open in Jira'])
+    await page.keyboard.press('Escape')
+    await expect(page.getByTestId('command-menu')).toBeHidden()
+
+    // The todo-lane row (STAT-1081) — Enter's menu also offers "Start plannen".
+    await selectJiraRow('STAT-1081')
+    await page.keyboard.press('Enter')
+    const rows = page.getByTestId('command-row')
+    await expect(rows).toContainText(['Sluit menu', 'Open planning', 'Open in Jira', 'Start plannen'])
+
+    let startedKey = null
+    await page.route('**/api/workflows/plan', (route) => {
+      startedKey = route.request().postDataJSON()
+      route.fulfill({ json: { ok: true, runId: 'run-x' } })
+    })
+    await rows.nth(3).click()
+    await expect.poll(() => startedKey).toEqual({ key: 'STAT-1081' })
+  })
 })

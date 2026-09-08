@@ -2511,12 +2511,17 @@ function jiraBellButton() {
 // The two lanes still exist — they are just rows of one list now, ordered by
 // the backend (see groupIssues in jira_issues.go).
 //
-// It is a plain, read-only list: no popover, no keyboard actions beyond the
-// shared row navigation, no writes. Clicking a row opens the ticket's own
-// PLANNING PAGE, /plan/<KEY> (src/plan.mjs, see .claude/docs/plan-page.md) —
-// in the same tab, like "Open review tree" does for a PR. The link to the
-// issue in Jira itself moved onto that page (its ticket card's key chip), so
-// the row is one destination, not two.
+// Clicking a row opens the ticket's own PLANNING PAGE, /plan/<KEY>
+// (src/plan.mjs, see .claude/docs/plan-page.md) — in the same tab, like "Open
+// review tree" does for a PR. Enter instead opens a small menu (`jiraIssueCommands`,
+// reviewer request: "in planning overzicht moet ook met enter menu komen met
+// open in jira ofzo") with "Open planning" (what a click already does),
+// "Open in Jira", and — only for a TODO-lane row — "Start plannen" (starts
+// the `plan` tracker without navigating there first). → still navigates
+// straight to /plan/<KEY>, same "Enter opens a menu, → acts now" split a PR
+// row's popover/openOrGenerate already uses. No writes beyond that "Start
+// plannen" item, which is the same sanctioned tracker start /plan/<KEY>'s own
+// load already does (ensureTracker).
 
 // loadJiraIssues pulls the list in one read-only GET. A failure keeps whatever
 // was already shown (same reasoning as loadJiraNotifications). The ORDER is
@@ -3677,6 +3682,18 @@ function activateSelected() {
   const rows = currentRows()
   const el = rows[selIndex]
   if (!el) return
+  // A Planning/Todo row (jiraIssueRow) opens its own small menu on Enter
+  // instead of navigating straight to /plan/<KEY> — a plain click still does
+  // (unchanged, see jiraIssueCommands' own doc comment); → (activateSelectedForward)
+  // also still navigates straight there, same "Enter opens a menu, → acts
+  // now" split as a PR row's popover vs. openOrGenerate.
+  if (el.matches('[data-testid="jira-issue-row"]')) {
+    const is = findJiraIssueByKey(el.dataset.jiraIssue)
+    if (is) {
+      openMenu({ jiraIssue: is })
+      return
+    }
+  }
   if (el.matches('a[href]')) {
     // A row that opens in a new window (the Jira notifications) must do so
     // from the keyboard too — and its own @click handler (mark read) has to
@@ -3832,6 +3849,67 @@ function jiraNotificationCommands(n) {
   return list
 }
 
+// findJiraIssueByKey resolves the plain issue object a jiraIssueRow's
+// data-jira-issue attribute names, so activateSelected (Enter) can hand the
+// real thing to openMenu instead of just its key.
+function findJiraIssueByKey(key) {
+  return state.jiraIssues.find((is) => is.key === key) || null
+}
+
+// startPlanningFor kicks off the ticket's own `plan` tracker directly from the
+// overview row's menu — the same idempotent start ensureTracker() calls on
+// /plan/<KEY>'s own load (POST /api/workflows/plan, the sanctioned write
+// path), just reachable without navigating there first. Best-effort: a
+// failure here still leaves the row's "Open planning" item, which starts it
+// (or shows whatever went wrong) the ordinary way.
+async function startPlanningFor(is) {
+  try {
+    await fetch('/api/workflows/plan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: is.key }),
+    })
+  } catch (err) {
+    // Nothing to show here — opening the planning page itself reports it.
+  }
+}
+
+// jiraIssueCommands is Enter's menu on a Planning/Todo row (reviewer request:
+// "in planning overzicht moet ook met enter menu komen met open in jira
+// ofzo"). Unlike jiraNotificationCommands this is the non-native palette
+// (pinned "Sluit menu", anchored under the row like the general `/` menu),
+// so a plain click still opens /plan/<KEY> directly and unchanged — only the
+// keyboard path (Enter) gained this menu.
+//
+// "Start plannen" is offered only for a TODO-lane issue: a branch created on
+// the plan page moves the row into the planning lane (see
+// .claude/docs/pr-overview.md, "A branch on the plan page moves the row into
+// the planning lane"), so `lane === 'todo'` is the same signal already used
+// everywhere else in this page for "nothing has started on this ticket yet" —
+// same "never offer a no-op action" rule as jiraNotificationCommands.
+function jiraIssueCommands(is) {
+  const list = [
+    {
+      id: 'jira-issue-open-plan',
+      label: t('Open planning'),
+      hint: 'planning',
+      run: () => {
+        location.href = '/plan/' + is.key
+      },
+    },
+    {
+      id: 'jira-issue-open-jira',
+      label: () => t('Open in Jira ({key})', { key: is.key }),
+      hint: 'jira',
+      run: () => window.open(is.url || JIRA_BASE + is.key, '_blank'),
+    },
+  ]
+  if (is.lane === 'todo') {
+    list.push({ id: 'jira-issue-start-plan', label: t('Start plannen'), hint: 'plan', run: () => startPlanningFor(is) })
+  }
+  return list
+}
+
 // resolveOverviewCommands is the ONE list both CommandMenu's render and
 // handleMenuKey's ↑/↓/Enter index into, so they can never disagree — the same
 // single-source rule home.mjs's own resolveCommands documents. It also drops
@@ -3849,7 +3927,11 @@ function resolveOverviewCommands(query) {
 // wholesale on every open (see its own comment above).
 function openMenu(opts = {}) {
   const native = !!opts.native
-  const commands = opts.jira ? jiraNotificationCommands(opts.jira) : overviewCommands()
+  const commands = opts.jira
+    ? jiraNotificationCommands(opts.jira)
+    : opts.jiraIssue
+      ? [{ id: 'close-menu', label: t('Sluit menu'), hint: 'esc', run: () => closeMenu() }, ...jiraIssueCommands(opts.jiraIssue)]
+      : overviewCommands()
   // A native menu's first row is already a real action (the pinned close row
   // is filtered out), so its default selection is 0 rather than "skip the
   // pinned row" — mirrors home.mjs's defaultSel.
@@ -3858,7 +3940,7 @@ function openMenu(opts = {}) {
     query: '',
     sel,
     sub: null,
-    mode: opts.jira ? 'jiraNotification' : 'overview',
+    mode: opts.jira ? 'jiraNotification' : opts.jiraIssue ? 'jiraIssue' : 'overview',
     commands,
     native,
     x: opts.x || 0,

@@ -95,6 +95,12 @@ const state = reactive({
   // The answers picked in this tab that the stored document has not caught up
   // with yet, keyed by question id (see answerFor).
   pending: {},
+  // Run IDs currently being resumed via retryPlanRun, so the "opnieuw
+  // plannen" button flips to a busy word right away instead of still reading
+  // "mislukt" until the next poll notices the run is running again — same
+  // "mark it optimistically" reasoning as home.mjs's markTaskRetrying, at the
+  // small scale this page needs (a plain map, no shared module).
+  retryingRuns: {},
   // The newest plan_execute run of this ticket (GET /api/plan's `exec`), or
   // null when the plan was never executed — see the execute card below.
   exec: null,
@@ -218,8 +224,34 @@ const PLAN_COMMANDS = [
   },
 ]
 
+// planCommands adds "Opnieuw plannen" to the fixed PLAN_COMMANDS list, but
+// only while there is a genuinely failed `plan` tracker run to resume — same
+// "never offer an action that would be a no-op" rule as
+// jiraNotificationCommands (overview.mjs). Resolved ONCE, at open time (see
+// openPlanMenu below), never as a reactive label — a still-open menu keeps
+// showing the item it opened with even if the run resolves itself a moment
+// later; the next open re-evaluates.
+function planCommands() {
+  const failed = state.runs.find((r) => r.workflow === 'plan' && r.status === 'failed')
+  if (!failed || state.retryingRuns[failed.runId]) return PLAN_COMMANDS
+  return [
+    ...PLAN_COMMANDS,
+    {
+      id: 'plan-retry',
+      label: t('Opnieuw plannen'),
+      hint: 'opnieuw retry',
+      run: () => retryPlanRun(failed.runId),
+    },
+  ]
+}
+
+// resolvePlanCommands reads `ms.commands` (not the fixed PLAN_COMMANDS
+// constant) so the conditional "Opnieuw plannen" item planCommands() may have
+// added at open time is actually offered/filtered/run — the ONE list both
+// CommandMenu's render and its own ↑/↓/Enter index into, same single-source
+// rule as home.mjs's resolveCommands.
 function resolvePlanCommands(query) {
-  return filterCommands(PLAN_COMMANDS, query)
+  return filterCommands(ms ? ms.commands : PLAN_COMMANDS, query)
 }
 
 // openPlanMenu/closeMenu/runCommand mirror home.mjs's own menu machinery
@@ -229,7 +261,8 @@ function resolvePlanCommands(query) {
 // plain CSS (planMenuOverlay below), so there is nothing to reposition on
 // scroll/resize the way the tree's own anchored-to-a-list-row menu needs.
 function openPlanMenu() {
-  ms = reactive({ query: '', sel: Math.min(1, PLAN_COMMANDS.length - 1), mode: 'plan', commands: PLAN_COMMANDS, native: false })
+  const commands = planCommands()
+  ms = reactive({ query: '', sel: Math.min(1, commands.length - 1), mode: 'plan', commands, native: false })
   menu.open = true
   requestAnimationFrame(() => {
     const el = document.querySelector('[data-testid="command-input"]')
@@ -296,6 +329,7 @@ async function loadPlan() {
     lastPayload = payload
     state.doc = body.doc || EMPTY_DOC
     state.runs = Array.isArray(body.runs) ? body.runs : []
+    dropSettledRetrying()
     state.generating = !!body.generating
     state.exec = body.exec || null
     state.artifacts = body.artifacts || null
@@ -342,6 +376,55 @@ function dropSettledTaskPending() {
     else keep[key] = st
   }
   if (changed) state.taskPending = keep
+}
+
+// dropSettledRetrying forgets a marked-busy run as soon as the freshly
+// loaded document no longer reports it as `failed` — resumed successfully
+// (now `running`/`completed`) or gone. Mirrors dropSettledPending's "the
+// document is the only source of truth the moment it can be" shape.
+function dropSettledRetrying() {
+  if (!Object.keys(state.retryingRuns).length) return
+  const stillFailed = new Set(state.runs.filter((r) => r.status === 'failed').map((r) => r.runId))
+  const keep = {}
+  let changed = false
+  for (const runId of Object.keys(state.retryingRuns)) {
+    if (stillFailed.has(runId)) keep[runId] = true
+    else changed = true
+  }
+  if (changed) state.retryingRuns = keep
+}
+
+// retryPlanRun resumes a failed workflow run of this ticket in place
+// (POST /api/workflows/retry — the same sanctioned, generic resume-in-place
+// endpoint the review tree's own retryFailedRun (home.mjs) and the global
+// failed-tasks dialog use, see .claude/docs/tembed-endpoints.md). Used for
+// "opnieuw plannen": a failed `plan` run just re-asks Claude for
+// questions/tasks from where it left off. state.retryingRuns marks the run
+// busy immediately, cleared again on the next successful loadPlan() (or right
+// away on a failed POST, so the button honestly returns to "mislukt").
+async function retryPlanRun(runId) {
+  if (!runId) return
+  state.retryingRuns = { ...state.retryingRuns, [runId]: true }
+  try {
+    const res = await fetch('/api/workflows/retry', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ runId }),
+    })
+    if (!res.ok) {
+      const { [runId]: _drop, ...rest } = state.retryingRuns
+      state.retryingRuns = rest
+      console.error('plan retry failed:', res.status, await res.text())
+      return
+    }
+  } catch (err) {
+    const { [runId]: _drop, ...rest } = state.retryingRuns
+    state.retryingRuns = rest
+    console.error('plan retry failed:', err)
+    return
+  }
+  lastPayload = ''
+  await loadPlan()
 }
 
 // ensureTracker starts (or idempotently reuses) the ticket's own `plan`
@@ -1873,12 +1956,37 @@ const RUN_STATUS_WORD = {
   failed: 'mislukt',
 }
 
+// runRow's own "opnieuw plannen" button: only for the ticket's `plan` tracker
+// run itself (the questions/tasks generation), and only while it is really
+// `failed` — a running/waiting/completed run has nothing to retry.
+// retryPlanRun resumes it in place via the generic /api/workflows/retry
+// endpoint (see its own doc comment above). The button sits in its own
+// `${() => ...}` nested slot (a stable `contents` root, following the "never
+// key a template whose entire body is one toggling expression" rule in
+// .claude/rules/arrowjs-pitfalls.md) so the template↔'' toggle is handled by
+// arrow's reactive path rather than a bare static interpolation.
 function runRow(run) {
+  const retrying = !!state.retryingRuns[run.runId]
+  const canRetry = run.workflow === 'plan' && run.status === 'failed' && !retrying
+  const statusWord = retrying ? t('opnieuw gestart') : t(RUN_STATUS_WORD[run.status] || run.status || 'onbekend')
   return html`
     <div class="flex items-center gap-2 border-t border-slate-100 px-1 py-1.5 first:border-t-0 dark:border-zinc-800" data-testid="plan-run">
       <span class="min-w-0 flex-1 truncate text-[12.5px] text-slate-700 dark:text-zinc-300">${labelForWorkflow(run.workflow)}</span>
+      <div class="contents">
+        ${() =>
+          canRetry
+            ? html`<button
+                type="button"
+                data-testid="plan-retry"
+                class="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-[10.5px] font-medium text-amber-700 ring-1 ring-inset ring-amber-200 transition-colors hover:bg-amber-100 dark:bg-amber-500/15 dark:text-amber-300 dark:ring-amber-500/30"
+                @click="${() => retryPlanRun(run.runId)}"
+              >
+                ${t('Opnieuw plannen')}
+              </button>`
+            : ''}
+      </div>
       <span class="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10.5px] font-medium text-slate-600 dark:bg-zinc-800 dark:text-zinc-300"
-        >${t(RUN_STATUS_WORD[run.status] || run.status || 'onbekend')}</span
+        >${statusWord}</span
       >
     </div>
   `.key('run:' + run.runId)

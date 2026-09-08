@@ -524,7 +524,42 @@ as-is (see command-palette.md) — with a tiny, fixed, submenu-less list
 `JIRA_BASE + state.key` before the document has loaded) and "Terug naar
 overzicht". Deliberately not `PR_COMMANDS`' full menu: this page has no
 GitHub PR yet, no approve/review actions, nothing that menu offers beyond
-those two.
+those two — plus, conditionally, "Opnieuw plannen" (see below).
+
+### "Opnieuw plannen" — retrying a failed `plan` run
+
+Reviewer request: *"er moet een retry knop komen om opnieuw te plannen"*.
+Offered in two places, both driving the same `retryPlanRun(runId)`
+(`plan.mjs`), which resumes the run in place via the generic, sanctioned
+`POST /api/workflows/retry` (`.claude/docs/tembed-endpoints.md` — the same
+endpoint the review tree's own `retryFailedRun`/the global failed-tasks dialog
+use, not a plan-specific write path):
+
+- **A run row in the "Taken" list** (`runRow`) shows a small "Opnieuw
+  plannen" button next to the status pill, but only while that row is the
+  ticket's own `plan` tracker run (not `plan_execute` or anything else) AND
+  its status is really `failed` — a running/waiting/completed run has
+  nothing to retry. The button sits in its own `${() => ...}` nested slot
+  (a stable `contents` root) so the template↔`''` toggle goes through arrow's
+  reactive path rather than a bare static interpolation, per
+  `.claude/rules/arrowjs-pitfalls.md`.
+- **The ticket column's own Enter-menu** (`PLAN_COMMANDS` above) gains the
+  same "Opnieuw plannen" item, but only when `planCommands()` finds a
+  `failed` `plan` run at OPEN time — resolved once, not as a reactive label,
+  so an already-open menu keeps showing what it opened with even if the run
+  resolves itself a moment later (the next open re-evaluates). This is why
+  `resolvePlanCommands` reads `ms.commands` rather than the fixed
+  `PLAN_COMMANDS` constant directly — same "ONE list both the render and the
+  ↑/↓/Enter index into" rule as `resolveOverviewCommands` (`overview.mjs`).
+
+`state.retryingRuns` (a plain `{runId: true}` map, no shared module — this
+page's whole menu/retry machinery is intentionally small) marks a run busy
+the moment the click fires, so the button/status word flips to "opnieuw
+gestart" immediately instead of still reading "mislukt" until the next
+3-second poll notices — same reasoning as `home.mjs`'s `markTaskRetrying`.
+`dropSettledRetrying()` (mirrors `dropSettledPending`'s "the document is the
+only source of truth" shape) forgets the mark again as soon as a freshly
+loaded document no longer reports that run as `failed`.
 
 Its own tiny menu machinery in `plan.mjs` (`menu`/`ms`/`openPlanMenu`/
 `closeMenu`/`runCommand`) mirrors home.mjs's at the scale this page needs: no

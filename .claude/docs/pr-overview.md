@@ -506,7 +506,39 @@ stacks); a `context` row renders through `jiraContextRow` instead.
 "type • status[ • onderdeel van KEY]" in **words**, carrying `data-nav-row` so
 it joins the shared row navigation for free. It used to link straight to Jira
 in a new tab; that link now lives on the planning page itself (its ticket
-card's key chip), so the row has one destination instead of two.
+card's key chip), so a plain **click** still has one destination — but
+**Enter** no longer navigates straight away.
+
+### Enter opens a small menu; → still navigates straight there
+
+Reviewer request: *"in planning overzicht moet ook met enter menu komen met
+open in jira ofzo"*. `activateSelected()` special-cases a `jira-issue-row`
+(checked before the generic `a[href]` branch every other plain-anchor row
+still falls through to) and calls `openMenu({jiraIssue: is})` instead of
+setting `location.href` — the same non-native `omenu`/`CommandMenu.mjs`
+machinery the general `/` palette and the Jira-bell right-click menu already
+share, just a third `mode` (`'jiraIssue'`) and a third command resolver,
+`jiraIssueCommands(is)`:
+
+- **"Open planning"** — exactly what a click already does
+  (`location.href = '/plan/' + is.key`).
+- **"Open in Jira"** — `is.url` (falling back to `JIRA_BASE + is.key`),
+  `window.open(..., '_blank')`, mirroring the ticket page's own "Open in
+  Jira" menu item.
+- **"Start plannen"** — only for a **todo-lane** row (`is.lane === 'todo'`):
+  posts `POST /api/workflows/plan {key: is.key}` directly (`startPlanningFor`,
+  the same idempotent tracker-start `/plan/<KEY>`'s own load already does via
+  `ensureTracker`) without navigating there first. Offered only for the todo
+  lane because a branch created on the plan page moves the row into the
+  **planning** lane (see "A branch on the plan page moves the row into the
+  planning lane" below) — `lane === 'todo'` is therefore already the
+  page-wide signal for "nothing has started on this ticket yet", same
+  "never offer a no-op action" rule `jiraNotificationCommands` uses for its
+  own read/unread item.
+
+**→** (`activateSelectedForward`) is untouched and still navigates straight
+to `/plan/<KEY>` — the same "Enter opens a menu, → acts now" split a PR row's
+popover vs. `openOrGenerate` already uses.
 `mainContent()` splices `jiraIssueBlocks()` in right after the "Needs your
 review" block, falling back to the end of the list when that section has no
 rows at all. These rows are never PRs: they take no part in stacks, preset
