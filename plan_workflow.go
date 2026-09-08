@@ -156,6 +156,21 @@ const planAnswerIntent = "intent"
 // planAnswerFollowup/planAnswerTask/planAnswerIntent above.
 const planAnswerRetry = "retry"
 
+// planAnswerRegenerate is the PlanAnswerSignal Kind that throws away the
+// CURRENT plan — every generated question, its answers, every task and its
+// per-task reviewer state — and asks Claude for a brand new one from
+// scratch, exactly like the very first generation (Mode "all"). Reviewer
+// request: a second button next to "meer vragen genereren" — "vervolgvragen
+// genereren OF plan opstellen [opnieuw]" — for when sharpening the existing
+// plan isn't what's wanted, a genuinely fresh take is. Unlike every other
+// Kind above, this one intentionally does NOT preserve anything of the prior
+// document's Questions/Answers/Tasks/TaskStates: "huidige plan moet dan weg
+// en worden vervangen met een nieuwe" (the reviewer's own words). The ticket
+// itself (comments/related PRs/referenced issues/scope/hotfix answers) is
+// untouched — only the plan content restarts. No questionId, no payload
+// beyond the Kind itself, same shape as planAnswerRetry/planAnswerFollowup.
+const planAnswerRegenerate = "regenerate"
+
 // maxPlanChatMessages bounds how long the chat transcript on the document is
 // allowed to grow (oldest dropped first, always in pairs so a lone orphaned
 // reply/question is never left dangling) — the same reasoning as
@@ -655,6 +670,24 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			}
 			if err := w.ExecuteActivity("planSave", doc, nil); err != nil {
 				return nil, fmt.Errorf("plan: save: %w", err)
+			}
+			continue
+		}
+		// "Plan opstellen [opnieuw]": discard the current plan entirely and
+		// generate a fresh one from scratch (see planAnswerRegenerate's own doc
+		// comment) — a pure, deterministic reset of the recorded Signal, so
+		// replay reproduces it (.claude/rules/workflow-determinism.md).
+		if sig.Kind == planAnswerRegenerate {
+			doc.Questions = nil
+			doc.Answers = nil
+			doc.Tasks = nil
+			doc.TaskStates = nil
+			doc.Error = ""
+			if err := w.ExecuteActivity("planGenerate", planGenerateArg{Doc: doc, Mode: "all"}, &doc); err != nil {
+				return nil, fmt.Errorf("plan: regenerate: %w", err)
+			}
+			if err := w.ExecuteActivity("planSave", doc, nil); err != nil {
+				return nil, fmt.Errorf("plan: save regenerated plan: %w", err)
 			}
 			continue
 		}

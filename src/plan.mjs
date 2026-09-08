@@ -192,6 +192,11 @@ const state = reactive({
   // so the stored document only grows its new questions once it lands. Local,
   // exactly like scopePending/hotfixPending.
   followupPending: false,
+  // "Plan opstellen [opnieuw]" was just asked for: the signal wipes the whole
+  // plan and regenerates from scratch inline, so the stored document still
+  // shows the OLD questions/tasks until it lands. Local, exactly like
+  // followupPending/scopePending/hotfixPending.
+  regeneratePending: false,
   // The reviewer's own bookkeeping per task (task 22): the CHECKBOX (default
   // on — unchecking drops the task from the plan and from every later
   // regeneration) and the FIELD next to it (which travels to the execution
@@ -653,6 +658,7 @@ async function sendTaskState(task, off, note) {
   lastPayload = ''
   if (!state.runId) await ensureTracker()
   if (!state.runId) return
+  state.saving = task.id
   try {
     await fetch('/api/workflows/' + encodeURIComponent(state.runId) + '/signals/plan_answer', {
       method: 'POST',
@@ -662,6 +668,7 @@ async function sendTaskState(task, off, note) {
   } catch (err) {
     // Nothing to undo: the next poll shows what the tracker really stored.
   }
+  state.saving = ''
 }
 
 // sendIntentOverride replaces the auto-generated intent.md WHOLESALE with the
@@ -673,6 +680,7 @@ async function sendIntentOverride(text) {
   lastPayload = ''
   if (!state.runId) await ensureTracker()
   if (!state.runId) return
+  state.saving = INTENT_SAVE_ID
   try {
     await fetch('/api/workflows/' + encodeURIComponent(state.runId) + '/signals/plan_answer', {
       method: 'POST',
@@ -682,7 +690,13 @@ async function sendIntentOverride(text) {
   } catch (err) {
     // Nothing to undo: the next poll shows what the tracker really stored.
   }
+  state.saving = ''
 }
+
+// INTENT_SAVE_ID is the state.saving marker for an intent-field edit — the
+// same shared "id of whatever is being saved right now" state every
+// option/scope/hotfix/task row already uses (never a colour-only spinner).
+const INTENT_SAVE_ID = 'intent'
 
 // toggleTask flips the checkbox, keeping whatever is typed in the field. This
 // is what Enter/Space on a task row does (an agreed default, see
@@ -719,6 +733,36 @@ async function sendFollowup() {
   }
   state.saving = ''
   state.followupPending = false
+  lastPayload = ''
+}
+
+// REGENERATE_ROW_ID is the stable id of the "plan opstellen" action row —
+// same id space as FOLLOWUP_ROW_ID above.
+const REGENERATE_ROW_ID = 'regenerate'
+
+// sendRegenerate asks the tracker to throw away the current plan entirely and
+// generate a fresh one from scratch (kind:"regenerate" — see
+// planAnswerRegenerate's own doc comment in plan_workflow.go). Reviewer
+// request: a second button next to "meer vragen genereren" for when
+// sharpening the existing plan isn't the ask, a genuinely new one is.
+async function sendRegenerate() {
+  if (state.saving || state.regeneratePending) return
+  if (!state.runId) await ensureTracker()
+  if (!state.runId) return
+  state.saving = REGENERATE_ROW_ID
+  state.regeneratePending = true
+  lastPayload = ''
+  try {
+    await fetch('/api/workflows/' + encodeURIComponent(state.runId) + '/signals/plan_answer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ questionId: '', optionId: '', text: '', kind: 'regenerate' }),
+    })
+  } catch (err) {
+    // Nothing to undo: the next poll shows what the tracker really stored.
+  }
+  state.saving = ''
+  state.regeneratePending = false
   lastPayload = ''
 }
 
@@ -892,7 +936,7 @@ function needsScope() {
 // right after the scope answer, where the generation runs inline in that very
 // request and the stored document still reads as unanswered.
 function busyGenerating() {
-  return state.generating || state.scopePending || state.hotfixPending || state.followupPending
+  return state.generating || state.scopePending || state.hotfixPending || state.followupPending || state.regeneratePending
 }
 
 // chooseScope answers the scope question. A SUBTASK is not signalled at all —
@@ -1325,10 +1369,12 @@ function navRows() {
     // a `:` — so it's safe alongside whatever the model generated.
     out.push({ id: ownOptionId(q), kind: 'option', q, o: ownOptionFor(q), qi, oi: (q.options || []).length })
   })
-  // "Meer vragen om het plan te perfectioneren" — only once there IS a plan to
-  // sharpen, so a still-generating page does not park the default cursor on it.
+  // "Meer vragen om het plan te perfectioneren" and "Plan opstellen [opnieuw]"
+  // — only once there IS a plan to perfect/replace, so a still-generating
+  // page does not park the default cursor on either.
   if ((state.doc.questions || []).length || (state.doc.tasks || []).length) {
     out.push({ id: FOLLOWUP_ROW_ID, kind: 'followup' })
+    out.push({ id: REGENERATE_ROW_ID, kind: 'regenerate' })
   }
   ;(state.doc.tasks || []).forEach((task, ti) => out.push({ id: task.id, kind: 'task', task, ti }))
   // The LAST action of the index: run the plan and open a draft PR. Only once
@@ -1795,6 +1841,9 @@ function onKeydown(e) {
       } else if (state.col === 1 && row && row.kind === 'followup') {
         e.preventDefault()
         sendFollowup()
+      } else if (state.col === 1 && row && row.kind === 'regenerate') {
+        e.preventDefault()
+        sendRegenerate()
       } else if (state.col === 1 && row && row.kind === 'action') {
         e.preventDefault()
         triggerExecute()
@@ -2397,6 +2446,14 @@ function intentField(place) {
           </div>
           <div class="contents">
             ${() =>
+              state.saving === INTENT_SAVE_ID
+                ? html`<span class="text-[10.5px] text-slate-400 dark:text-zinc-500" data-testid="plan-intent-saving">${t('opslaan…')}</span>`.key(
+                    'intent-saving',
+                  )
+                : ''}
+          </div>
+          <div class="contents">
+            ${() =>
               state.doc.intentOverride
                 ? html`<button
                     type="button"
@@ -2770,7 +2827,7 @@ function planProblemsForPanel() {
 // busyGenerating() before the very next poll would otherwise notice (see the
 // "watch — enumerate reactive deps INLINE" rule in arrowjs-pitfalls.md).
 watch(
-  () => [state.runs, state.doc.error, state.generating, state.scopePending, state.hotfixPending, state.followupPending],
+  () => [state.runs, state.doc.error, state.generating, state.scopePending, state.hotfixPending, state.followupPending, state.regeneratePending],
   () => {
     state.workflows = planWorkflowsForPanel()
     state.pageProblems = planProblemsForPanel()
@@ -3310,9 +3367,9 @@ function taskRow(row) {
       }}"
     >
       <div class="flex items-start gap-2">
-        <span class="shrink-0 font-mono text-[12px] text-slate-400 dark:text-zinc-500">${row.ti + 1}.</span>
+        <span class="w-5 shrink-0 pt-0.5 text-right font-mono text-[12px] text-slate-400 dark:text-zinc-500">${row.ti + 1}.</span>
         <label
-          class="flex shrink-0 cursor-pointer items-center gap-1 pt-0.5"
+          class="flex shrink-0 cursor-pointer items-center pt-0.5"
           @click="${(e) => {
             if (e && e.stopPropagation) e.stopPropagation()
           }}"
@@ -3328,11 +3385,6 @@ function taskRow(row) {
               toggleTask(task)
             }}"
           />
-          <span
-            class="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-zinc-400"
-            data-testid="plan-task-state"
-            >${() => (taskEnabled(task) ? t('meenemen') : t('overslaan'))}</span
-          >
         </label>
         <div class="min-w-0 flex-1">
           <div
@@ -3372,6 +3424,9 @@ function taskRow(row) {
               focusColumn1()
             }}"
           />
+          <div class="contents">
+            ${() => (state.saving === task.id ? html`<p class="mt-1 text-[10.5px] text-slate-400 dark:text-zinc-500">${t('opslaan…')}</p>` : '')}
+          </div>
         </div>
         <div class="contents">
           ${() =>
@@ -3538,11 +3593,56 @@ function followupCard() {
   `.key('followup')
 }
 
+// regenerateCard is the row next to followupCard that asks the tracker to
+// discard the current plan and generate a brand new one from scratch
+// (reviewer request: two buttons here — "vervolgvragen genereren" of "plan
+// opstellen [opnieuw]" — see .claude/docs/plan-page.md). Its own row/id,
+// mirroring followupCard's own shape exactly, so it is a genuine keyboard
+// stop with its own cursor, not a second button bolted onto the follow-up
+// card.
+function regenerateWord() {
+  if (state.regeneratePending || state.saving === REGENERATE_ROW_ID) return t('nieuw plan wordt opgesteld…')
+  if (state.generating) return t('bezig…')
+  return t('plan opstellen')
+}
+
+function regenerateCard() {
+  return html`
+    <section
+      class="${() =>
+        'mb-3 cursor-pointer rounded-2xl border px-3 py-2 ' +
+        (state.cur === REGENERATE_ROW_ID && state.col !== 0
+          ? 'border-indigo-300 ring-2 ring-inset ring-indigo-400 dark:border-indigo-500 dark:ring-indigo-500 ' +
+            (state.col === 1 ? 'bg-indigo-50/50 dark:bg-indigo-500/10' : '')
+          : 'border-slate-200 dark:border-zinc-800')}"
+      data-testid="plan-regenerate"
+      data-cursor="${() => (state.cur === REGENERATE_ROW_ID ? 'true' : 'false')}"
+      @click="${() => {
+        state.cur = REGENERATE_ROW_ID
+        focusColumn1()
+        sendRegenerate()
+      }}"
+    >
+      <div class="flex items-center gap-2">
+        <span class="min-w-0 flex-1 text-[13px] font-medium text-slate-900 dark:text-zinc-100">${t('Plan opnieuw opstellen')}</span>
+        <span
+          class="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10.5px] font-medium text-slate-600 dark:bg-zinc-800 dark:text-zinc-300"
+          data-testid="plan-regenerate-state"
+          >${() => regenerateWord()}</span
+        >
+      </div>
+      <p class="mt-0.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
+        ${t('Het huidige plan (vragen en taken) wordt weggegooid en Claude stelt een volledig nieuw plan op.')}
+      </p>
+    </section>
+  `.key('regenerate')
+}
+
 function tasksSection() {
   return html`
         <section class="${CARD + CARD_IDLE}" data-testid="plan-tasks">
           <div class="mb-2 flex items-center gap-2">
-            <span class="${LABEL}">${t('Wat er moet gebeuren')}</span>
+            <span class="${LABEL}">${t('Plan')}</span>
             <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[10.5px] text-slate-500 dark:bg-zinc-800 dark:text-zinc-400"
               >${() => (state.doc.tasks || []).length}</span
             >
@@ -3861,6 +3961,9 @@ function questionsColumn() {
         <div class="contents">${() => (needsHotfix() ? [hotfixCard()] : [])}</div>
         <div class="contents">
           ${() => (!gateOpen() && navRows().some((r) => r.kind === 'followup') ? [followupCard()] : [])}
+        </div>
+        <div class="contents">
+          ${() => (!gateOpen() && navRows().some((r) => r.kind === 'regenerate') ? [regenerateCard()] : [])}
         </div>
         <div class="contents">${() => (gateOpen() ? [] : [tasksSection()])}</div>
       </div>

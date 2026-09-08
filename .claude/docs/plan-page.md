@@ -71,9 +71,10 @@ read-only `GET`. No direct-write violation found; nothing needed changing for
    never part of the stored `planOption` model, and the signal endpoint
    accepts any `optionId` string (`upsertPlanAnswer`, `plan_workflow.go`) so it
    persists/reloads exactly like a real option's answer. Underneath, in the
-   same scrolling column, **"Wat er moet gebeuren"**: the task list, each task
-   with its explanation, and as the **last row of the whole index** the action
-   that runs the plan (see "The last action" below).
+   same scrolling column, **"Plan"** (renamed from "Wat er moet gebeuren" —
+   reviewer request, freeing up horizontal room for the task titles): the task
+   list, each task with its explanation, and as the **last row of the whole
+   index** the action that runs the plan (see "The last action" below).
 3. **The example code** (`plan-block-column`, `w-[46rem]`, `data-level=0`) — the
    blocks of whatever the cursor is on (an option or a task): a card per block
    with a file/label/language header, its explanation (`note`,
@@ -607,7 +608,8 @@ Reviewer request, verbatim: *"maak het mogelijk om vervolg vragen te genereren
 om je plan te perfectioneren"*.
 
 The index's flat nav list gets one more kind of row between the questions and
-"Wat er moet gebeuren": **`FOLLOWUP_ROW_ID = 'followup'`**
+"Plan" (the task list — see "The columns" above): **`FOLLOWUP_ROW_ID =
+'followup'`**
 (`data-testid=plan-followup`, its state in words via
 `plan-followup-state` — never a colour on its own). `Enter`/click sends it.
 
@@ -630,6 +632,49 @@ The index's flat nav list gets one more kind of row between the questions and
   answer.
 - The row only exists once there IS a plan to sharpen (a question or a task),
   so a still-generating page does not park the default cursor on it.
+
+### A second button right below it: "Plan opnieuw opstellen" (discard and regenerate)
+
+Reviewer request, verbatim: *"hier moeten 2 knoppen komen: vervolgvragen
+genereren of plan opstellen. huidige plan moet dan weg en worden vervangen
+met een nieuwe"*, confirmed (when asked whether this should be a second
+button bolted onto the follow-up card or its own row) to be *"eigen rij
+eronder"* — its own card, own keyboard stop, directly under `followupCard`.
+
+- **`REGENERATE_ROW_ID = 'regenerate'`** (`data-testid=plan-regenerate`, state
+  word via `plan-regenerate-state`) is built exactly like `FOLLOWUP_ROW_ID`
+  above — same gate ("only once there IS a plan"), same `navRows()`
+  neighbourhood (pushed right after the follow-up row), same
+  card shape (`regenerateCard`/`regenerateWord`, `sendRegenerate`). It is
+  deliberately **not** a second button inside `followupCard` itself: every
+  other action on this page (an option, a task, the execute row, follow-up
+  itself) is its own `navRows()` stop with its own cursor, and this stays
+  consistent with that rather than being the one exception.
+- **A NEW `plan_answer` Signal Kind, `planAnswerRegenerate` ("regenerate")**
+  (`plan_workflow.go`) — same one-signal-multiplexed-by-Kind convention as
+  `followup`/`task`/`retry`/…, added to the allowed empty-`questionId` Kinds in
+  `tasks_api.go`. Unlike every other Kind on this Signal, it does **not**
+  preserve anything of the existing document: it clears
+  `Questions`/`Answers`/`Tasks`/`TaskStates`/`Error` and runs `planGenerate`
+  with **`Mode:"all"`** — the exact same call the very first generation uses —
+  then saves. `planPhase` (`plan_artifacts.go`) is derived purely from those
+  fields, so the page falls back to stage `intent`/`specs` on its own with no
+  separate phase-reset logic needed. The ticket-level context (Jira
+  comments/related PRs/referenced issues, and the scope/hotfix answers) is
+  untouched — only the plan CONTENT restarts, not the whole tracker.
+- **`state.regeneratePending`** is the same "the signal runs its work inline,
+  so the stored document hasn't caught up yet" local flag
+  `followupPending`/`scopePending`/`hotfixPending` already are, folded into
+  `busyGenerating()` so the Taken block's "plan wordt opgesteld…" row (see
+  "The Taken block is the literal TasksPanel" above) covers this action too.
+- **Distinct from "Opnieuw plannen" in the ticket's own Enter-menu**
+  (`planCommands`, `retryPlanRun`): that one resumes a run that is genuinely
+  `failed` or swallowed an error, IN PLACE, from wherever it left off
+  (`planRetryMode`) — this button is for a HEALTHY plan the reviewer simply
+  wants to throw away and redo from scratch. Two different problems, two
+  different mechanisms; neither replaces the other.
+
+Test: `tests/plan-regenerate.spec.mjs`.
 
 ## Every if, every config: what a task must name
 
@@ -710,15 +755,27 @@ werkmap**.
   a run where everything is unchecked with a note instead of an empty draft PR.
 - **Frontend** (`src/plan.mjs`): `taskRow` gains a real checkbox
   (`data-testid=plan-task-check`, the plain `checked="${() => …}"` binding —
-  never a `?`/`.` prefix, see `.claude/rules/arrowjs-pitfalls.md`) with the
-  state **in words** next to it (`plan-task-state`: "meenemen"/"overslaan",
-  plus a strikethrough title — never a colour on its own, the colourblind
-  rule), and an uncontrolled field (`plan-task-note`, saved on `Enter`/blur,
-  same shape as `plan-option-input`: a reactive `value=` binding would fight
-  the caret). `taskPending`/`dropSettledTaskPending` are the same
-  local-pick-wins overlay `answerFor`/`dropSettledPending` are.
+  never a `?`/`.` prefix, see `.claude/rules/arrowjs-pitfalls.md`) and an
+  uncontrolled field (`plan-task-note`, saved on `Enter`/blur, same shape as
+  `plan-option-input`: a reactive `value=` binding would fight the caret).
+  `taskPending`/`dropSettledTaskPending` are the same local-pick-wins overlay
+  `answerFor`/`dropSettledPending` are.
   **`Enter`/`Space` on a task row toggles the checkbox** (an agreed default);
   the field is reached by clicking/Tabbing into it, exactly like an option's.
+  Saving the note shows the same shared **"opslaan…"** word `state.saving`
+  already drives for an option/scope/hotfix row (`state.saving === task.id`
+  around `sendTaskState`'s fetch) — a reviewer-requested audit ("overal waar
+  acties plaatsvinden loading/status zichtbaar") found this one, and the
+  Intentie field's own save (see "The 'Intentie' field" below), had none at
+  all before.
+  **The state-in-words label next to the checkbox (`plan-task-state`,
+  "meenemen"/"overslaan") was removed** (reviewer request: it crowded the row
+  and gave the title less room) — the checkbox's own checked/unchecked glyph
+  plus the title's strikethrough when off already carry the same meaning
+  without it, so the colourblind rule still holds with nothing to read. The
+  row's leading number (`${row.ti + 1}.`) got a fixed width
+  (`w-5 text-right`, was unbounded) so a two-digit task number no longer shifts
+  every title one character to the right relative to a one-digit one.
 
 ### The current code next to the proposed code
 
