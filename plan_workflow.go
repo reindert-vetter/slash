@@ -1231,6 +1231,17 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 	// Activity: ask Claude for the questions and/or the task list (shells out to
 	// the claude CLI). Best-effort: a hiccup (or SLASH_CLAUDE=off) leaves the
 	// document as it was, with the reason on it.
+	//
+	// A malformed-JSON answer (parsePlanAnswer fails — reported bug, task 46:
+	// "invalid character 'n' after object key") is retried ONCE with a fresh
+	// Claude call before giving up: the model's JSON generation is
+	// probabilistic, so a single dropped colon/unescaped quote in a deeply
+	// nested `blocks`/`children` tree is usually NOT reproducible on a second
+	// try. This is plain Go code inside one Activity (not the workflow body
+	// itself), so it needs no replay-determinism flag — see planLoadContext's
+	// own doc comment for the same reasoning. If the retry also fails to
+	// parse, the ORIGINAL swallow-onto-doc.Error + synthetic-failed-run +
+	// "Opnieuw plannen" path (unchanged) is still the fallback.
 	engine.RegisterActivity("planGenerate", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg planGenerateArg
 		if err := json.Unmarshal(in, &arg); err != nil {
@@ -1244,19 +1255,28 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 			}
 			return json.Marshal(doc)
 		}
-		raw, err := m.claude.Run(ctx, claude.RunRequest{
-			Model:   claude.ModelOpus,
-			Prompt:  planPrompt(doc, arg.Mode) + explainLangTail(m.LangFor(ctx, langpref.KindExplain)),
-			Timeout: planClaudeTimeout,
-		})
-		if err != nil {
-			m.logf("plan: generate %s (%s): %v", doc.Key, arg.Mode, err)
-			doc.Error = err.Error()
-			return json.Marshal(doc)
+		prompt := planPrompt(doc, arg.Mode) + explainLangTail(m.LangFor(ctx, langpref.KindExplain))
+		var qs []planQuestion
+		var tasks []planTask
+		var perr error
+		for attempt := 1; attempt <= 2; attempt++ {
+			raw, err := m.claude.Run(ctx, claude.RunRequest{
+				Model:   claude.ModelOpus,
+				Prompt:  prompt,
+				Timeout: planClaudeTimeout,
+			})
+			if err != nil {
+				m.logf("plan: generate %s (%s): %v", doc.Key, arg.Mode, err)
+				doc.Error = err.Error()
+				return json.Marshal(doc)
+			}
+			qs, tasks, perr = parsePlanAnswer(raw)
+			if perr == nil {
+				break
+			}
+			m.logf("plan: parse %s (%s) attempt %d/2: %v", doc.Key, arg.Mode, attempt, perr)
 		}
-		qs, tasks, perr := parsePlanAnswer(raw)
 		if perr != nil {
-			m.logf("plan: parse %s (%s): %v", doc.Key, arg.Mode, perr)
 			doc.Error = perr.Error()
 			return json.Marshal(doc)
 		}

@@ -39,6 +39,14 @@ The one thing the request called "een beetje hergebruiken" is the **first
 column**: the same two-card stack as the review tree's PR-info column — the
 ticket on top, the "Taken" block below it.
 
+**Write-boundary audit (task 46):** every state-changing action on this whole
+page already goes exclusively through a sanctioned `/api/workflows/...` start
+(`plan`, `plan_execute`, `jira_comment`) or signal (`plan_answer` in its
+various Kinds, `plan_scope`, `plan_hotfix`, the chat signal) POST, plus the
+generic `/api/workflows/retry` — every other `fetch` in `src/plan.mjs` is a
+read-only `GET`. No direct-write violation found; nothing needed changing for
+`.claude/rules/workflows-write-boundary.md`.
+
 ## The columns
 
 1. **The ticket** (`plan-info-column`, `w-[34rem]`) — key, title, a link to the
@@ -153,7 +161,25 @@ reactive):
   the `plan` workflow is ever `retryable:true` here. The `synthetic` tag is
   what lets `retryPlanRun` pick the right resume mechanism for this entry —
   see "Opnieuw plannen" below for why a real failed run and this one cannot
-  share one endpoint.
+  share one endpoint. **The synthetic entry is suppressed while
+  `busyGenerating()` is true** (reported bug, task 46): a follow-up round, an
+  answer, or "opnieuw plannen" starts a FRESH `planGenerate` call —
+  `planWorkflowsForPanel` right above already flips this same run to
+  `running`/"plan wordt opgesteld…" for exactly that gap, but `state.doc.error`
+  still carries the PREVIOUS attempt's error until the next poll lands, and
+  `buildTaskRows` (`RelatedPanel.mjs`) always prefers a `failedRuns` entry over
+  the live one for the same `runId` — so without this guard the stale
+  "mislukt" row kept hiding the running task for as long as the new attempt
+  was in flight, and the follow-up-questions badge ("vragen worden bedacht…")
+  never showed up as a Taken-block task at all, even though the generation
+  itself already runs entirely inside the existing `plan` tracker via the
+  sanctioned `plan_answer` Signal (`kind:"followup"`) — no separate workflow
+  was needed, only this client-side fix. Unaffected: `retryPlanRun`'s own "↻
+  opnieuw gestart" row never sets `busyGenerating()` (it uses the separate
+  `taskUi.retrying`/`markTaskRetrying` mechanism, `RelatedPanel.mjs`), so a
+  manual retry click keeps rendering from this same branch throughout. Test:
+  `tests/plan-retry.spec.mjs` ("a fresh generation hides the stale error
+  row").
 - **`syncTaskPanelState`** (a `watch`, inline deps per
   `.claude/rules/arrowjs-pitfalls.md`) recomputes both on every change to
   `state.runs`/`state.doc.error`/`state.generating`/`state.scopePending`/
@@ -553,6 +579,27 @@ override the run was SIGKILLed mid-answer and the page showed the raw
 than a raised global default (`RunRequest.Timeout`, honoured by both `Run` and
 `RunChat`), so a hung claude in every other, genuinely short call site still
 cannot sit on a workflow run for minutes.
+
+### A malformed-JSON answer gets ONE automatic retry before it is swallowed
+
+Reported bug (task 46): the "mislukt" row read `plan: parse answer: invalid
+character 'n' after object key` — Go's `encoding/json` error for a key whose
+colon is missing (reproduced exactly in `TestPlanGenerateRetriesOnceOnMalformedJSON`,
+`plan_workflow_test.go`, via `{"questions":[{"question" niet:"test"}], ...}`).
+Claude's JSON generation is probabilistic, especially across the deeply nested
+`blocks`/`children` tree `planPrompt` asks for, so a single dropped colon or
+unescaped quote is usually NOT reproducible on an immediate second try. The
+`planGenerate` Activity (`plan_workflow.go`) now calls Claude and
+`parsePlanAnswer` up to twice with the SAME prompt before giving up; only if
+BOTH attempts fail to parse does the existing fallback apply unchanged — the
+error lands on `doc.Error`, the Execution itself still succeeds (never
+`failed`), and the reviewer's existing "Opnieuw plannen" action (see below)
+still resumes it. This is plain Go code inside one Activity, not the workflow
+body, so — like `planLoadContext` — it needs no replay-determinism flag
+(`.claude/rules/workflow-determinism.md`). `planPrompt` also gained one
+explicit JSON-escaping rule (colon after every key, `\"`/`\n` escaped inside a
+text/code value, no trailing comma) to reduce how often this happens at all,
+though it cannot eliminate it — hence the retry.
 
 ## Follow-up questions: sharpening the plan further
 

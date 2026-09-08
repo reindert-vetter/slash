@@ -191,6 +191,7 @@ func planPrompt(doc planDoc, mode string) string {
 	b.WriteString("- ELK blok heeft een \"note\": één of twee zinnen uitleg over wat dat blok doet en waarom het nodig is. Dat geldt net zo hard voor ELK onderliggend blok, op ELK nestniveau — bij een kind-blok legt de note uit waarom het onder zijn ouder hangt (welke aanroep, welke dekking, welke call-site). Laat geen enkel blok zonder note.\n")
 	b.WriteString("- \"code\" is echte, compileerbare voorbeeldcode, hooguit ~25 regels per blok. \"lang\" is php, typescript, javascript, sql, json, bash of yaml.\n")
 	b.WriteString("- Prozateksten in het Nederlands, code en identifiers in het Engels.\n")
+	b.WriteString("- Geldige JSON: elke sleutel gevolgd door een dubbele punt, elk dubbel aanhalingsteken en elke newline BINNEN een tekst-/code-waarde correct ge-escaped (\\\" en \\n), en geen komma vlak voor een sluitende } of ].\n")
 	return b.String()
 }
 

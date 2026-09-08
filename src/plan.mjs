@@ -2659,12 +2659,27 @@ function planWorkflowsForPanel() {
 // Signal's "retry" Kind instead — that endpoint would otherwise refuse it
 // with "run is waiting, not failed" and silently do nothing (the reported
 // bug: a parse-error'd generation had no way to be retried at all).
+//
+// The synthetic entry is deliberately suppressed while busyGenerating() is
+// true: reported bug (task 46) — a follow-up round (or an answer, or "opnieuw
+// plannen") starts a FRESH planGenerate call, planWorkflowsForPanel already
+// flips this same run to `running`/"plan wordt opgesteld…" for exactly that
+// gap, but state.doc.error still carries the PREVIOUS attempt's error until
+// the next poll lands — and buildTaskRows (RelatedPanel.mjs) always prefers a
+// failedRuns entry over the live one for the same runId. So the stale
+// "mislukt" row kept hiding the running task for as long as the new attempt
+// was in flight, and "vragen worden bedacht…" never showed as a task at all.
+// Unaffected: retryPlanRun's own "↻ opnieuw gestart" row, which never sets
+// busyGenerating() (it uses the separate taskUi.retrying/markTaskRetrying
+// mechanism, RelatedPanel.mjs) and so keeps rendering from this same
+// failedRuns branch throughout a retry click.
 function planProblemsForPanel() {
   const failedRuns = []
   for (const run of state.runs || []) {
     const isPlan = run.workflow === 'plan'
     if (run.status === 'failed') failedRuns.push({ ...run, retryable: isPlan })
-    else if (isPlan && state.doc.error) failedRuns.push({ ...run, status: 'failed', error: state.doc.error, retryable: true, synthetic: true })
+    else if (isPlan && state.doc.error && !busyGenerating())
+      failedRuns.push({ ...run, status: 'failed', error: state.doc.error, retryable: true, synthetic: true })
   }
   return { failedRuns, logErrors: [] }
 }

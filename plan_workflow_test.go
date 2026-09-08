@@ -1,9 +1,17 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/reindert-vetter/tembed"
+	"slash/modules/claude"
+	"slash/modules/github"
+	"slash/modules/jira"
+	"slash/modules/plan"
 )
 
 // TestParsePlanAnswerNumbersAndCaps pins the two non-obvious rules of the
@@ -621,5 +629,51 @@ func TestPlanExecutePromptSkipsUncheckedTasksAndCarriesTheNote(t *testing.T) {
 	}
 	if titles := planTaskTitles(doc); len(titles) != 0 {
 		t.Fatalf("the PR body must only list ticked tasks, got %v", titles)
+	}
+}
+
+// TestPlanGenerateRetriesOnceOnMalformedJSON — a malformed answer (the
+// reported bug: "invalid character 'n' after object key") gets ONE fresh
+// Claude call before the swallowed-error fallback kicks in, because the
+// model's JSON generation is probabilistic and a single dropped colon/quote
+// is usually not reproducible on a second try. Drives the real `plan`
+// workflow end to end (StartPlan + the hotfix gate every fresh ticket asks,
+// see planNeedsBaseQuestion) so this exercises the actual registered
+// Activity, not a reimplementation of it.
+func TestPlanGenerateRetriesOnceOnMalformedJSON(t *testing.T) {
+	fake := claude.NewFake()
+	// A dropped colon after a key — the reproduced shape of the reported bug
+	// ("invalid character 'n' after object key").
+	fake.SetOutput(claude.ModelOpus, `{"questions":[{"question" niet:"test"}],"tasks":[]}`)
+	jr := &jira.Fake{}
+	jr.SetIssue("PAYM-813", jira.Issue{Title: "Iets plannen", Description: "Een omschrijving."})
+	pl, err := plan.Open(filepath.Join(t.TempDir(), "plan.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := tembed.New(tembed.NewMemoryStore())
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, fake, jr, nil, "", "test/repo")
+	m.plan = pl
+
+	runID, err := m.StartPlan("PAYM-813")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Every fresh ticket is asked the base-branch question before planGenerate
+	// ever runs (planNeedsBaseQuestion) — answer it so mode "all" actually
+	// fires.
+	if err := engine.SignalWorkflow(runID, SignalPlanHotfix, PlanHotfixSignal{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if n := fake.CallCount(); n != 2 {
+		t.Fatalf("claude called %d times, want 2 (the original attempt plus one retry)", n)
+	}
+	doc, ok := m.PlanDoc(context.Background(), "PAYM-813")
+	if !ok {
+		t.Fatalf("no document stored")
+	}
+	if doc.Error == "" || !strings.Contains(doc.Error, "parse answer") {
+		t.Fatalf("doc.Error = %q, want the parse failure to still be recorded once both attempts fail", doc.Error)
 	}
 }

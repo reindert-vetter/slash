@@ -192,3 +192,52 @@ test.describe('Plan page — retry a swallowed generation error (run still waiti
     await expect.poll(() => signals).toBe(2)
   })
 })
+
+// Reported bug (task 46): the leftover "mislukt" row of a swallowed
+// generation error kept hiding a FRESH generation in progress (a follow-up
+// round, an answer, "opnieuw plannen") — planWorkflowsForPanel correctly
+// flipped the `plan` run to `running`, but planProblemsForPanel kept
+// resurrecting the same old doc.error as a synthetic failed row for as long
+// as the new attempt was in flight (buildTaskRows always prefers a failed
+// row over the live one for the same runId), so the Taken block never showed
+// a "bezig" task at all — see .claude/docs/plan-page.md.
+test.describe('Plan page — a fresh generation hides the stale error row', () => {
+  test('while busyGenerating() is true, the Taken block shows the plan run as running, not mislukt', async ({ page }) => {
+    let generating = true
+    await page.route('**/api/plan?*', (route) =>
+      route.fulfill({
+        json: {
+          ok: true,
+          key: 'RETRY-3',
+          doc: {
+            key: 'RETRY-3',
+            title: 'Fresh generation over a stale error',
+            description: 'desc',
+            url: '',
+            questions: [{ id: 'q1', question: 'Eerste vraag?', options: [{ id: 'q1o1', label: 'Optie A' }] }],
+            tasks: [],
+            answers: [],
+            error: 'plan: parse answer: invalid character \'n\' after object key',
+            chat: [],
+          },
+          runs: [{ runId: 'run-plan-3', workflow: 'plan', status: 'waiting', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }],
+          generating,
+        },
+      }),
+    )
+
+    await page.goto('/plan/RETRY-3')
+    await appReady(page)
+
+    const row = page.getByTestId('workflow-row').filter({ hasText: 'Plan' })
+    await expect(row).toBeVisible()
+    await expect(row.getByTestId('workflow-status')).toContainText('draait')
+    await expect(row.getByTestId('workflow-status')).not.toContainText('mislukt')
+
+    // Once the fresh attempt is done (generating flips back to false) and the
+    // error is still on the document, the honest "mislukt" row returns — the
+    // page's own poll (POLL_MS, 3s) picks this up on its own.
+    generating = false
+    await expect(row.getByTestId('workflow-status')).toContainText('mislukt', { timeout: 6000 })
+  })
+})
