@@ -228,11 +228,12 @@ je halen uit jira taak en is een taak wat te maken heeft met de hoofdtaak."*
   already rewrites the artifact files on every save, so intent.md on disk
   reflects the override immediately). An empty `Text` clears the override.
   Triggers no regeneration, same as `planAnswerTask`.
-- **Frontend** (`intentField`, `plan.mjs`): an uncontrolled `<textarea
-  data-testid=plan-intent-field>` in column 0, seeded via a plain (non-`() =>
-  `) static `value=`-equivalent (element CONTENT here, since a `<textarea>`'s
-  default value is its text content) — same "seed once, save on blur" pattern
-  as `plan-task-note`. Keyed on the loading state
+- **Frontend** (`intentField`, `plan.mjs`): renders as one uncontrolled
+  `<textarea data-testid=plan-intent-section-body>` PER SECTION of intent.md
+  (see "A sectioned, GitHub-style editor" below) in column 0, each seeded via
+  a plain (non-`() =>`) static `value=`-equivalent (element CONTENT here,
+  since a `<textarea>`'s default value is its text content) — same "seed
+  once, save on blur" pattern as `plan-task-note`. Keyed on the loading state
   (`'intent:' + (loading ? 'pending' : 'ready')`) rather than on
   `state.intentText`/`doc.updatedAt`, so it remounts (and re-seeds) exactly
   ONCE, right after the first real load — remounting on every later poll
@@ -241,6 +242,46 @@ je halen uit jira taak en is een taak wat te maken heeft met de hoofdtaak."*
   `sendIntentOverride(text)` posts the Signal; a `data-testid=plan-intent-reset`
   button appears only while `doc.intentOverride` is set, clearing it (empty
   text) to revert to the auto-generated one.
+
+### A sectioned, GitHub-style editor: headings are fixed, only the text below them is editable
+
+Reviewer request, verbatim: *"maak intentie hoger en toegankelijker om aan te
+passen. misschien dat de markdown titels niet aangepast kan worden, alleen de
+description daaronder, meer github markdown editor ofzo."* `parseIntentSections`
+(`plan.mjs`) splits the seed text on every markdown heading line (`#`..`######`)
+into `{heading, body}` pairs; `intentField` renders each `heading` as a plain,
+non-editable `<div data-testid=plan-intent-heading>` and only the `body` below
+it as its own `<textarea data-testid=plan-intent-section-body>`
+(`intentSectionBody`) — so intent.md's own H1 title and every `##` section
+name can be READ but never accidentally retyped, only the prose under them
+can. A section with no heading at all (the leading segment before intent.md's
+own first `#`, normally empty) is rendered the same way, just without the
+label above it.
+
+**One edit still saves the WHOLE document, not just that section.** Every
+section's own `@blur` handler (`intentSectionBody`'s `save`) walks EVERY
+sibling `[data-testid=plan-intent-section-body]` inside the shared
+`data-testid=plan-intent-sections` container — reading each one's LIVE current
+`.value`, never the `sections` array snapshot taken at mount time — pairs each
+with its own (unchanged) heading from that snapshot, and reconstructs the
+document via `buildIntentFromSections` (heading + blank line + body, joined
+with a blank line between sections) before calling `sendIntentOverride` once.
+Deliberately not a per-section override on the document: `doc.intentOverride`
+stays the single wholesale field described above, so nothing on the backend
+needed to change — this is purely a frontend editing affordance on top of it.
+The reconstructed text does not byte-for-byte preserve the original's blank-line
+layout, which is accepted: once an override exists the document is no longer
+regenerated from scratch anyway.
+
+**"Hoger" (taller), literally:** stacking one heading + textarea per section
+(instead of the previous single 6-row textarea for the whole document) makes
+the block noticeably taller on its own, satisfying the reviewer's separate
+"the field's bottom edge should move down, the top stays where it is" request
+— no page layout change was needed for this, the wrapping card already had no
+fixed/max height.
+
+Test: `tests/plan-intent-sections.spec.mjs` ("a heading is a fixed label, only
+the text below it is editable, and an edit saves the whole document").
 
 ### Where it sits, and when it can be typed in, depends on the phase
 
@@ -276,6 +317,39 @@ which this vendored arrow.js does not support (see
 `.claude/rules/arrowjs-pitfalls.md`). The component's `.key()` now carries the
 placement too (`intent:<place>:<ready|pending>`), so each spot keeps its own
 one-time seed. Test: `tests/plan-intent-phase.spec.mjs`.
+
+### A dedicated Jira-opmerkingen column next to the ticket
+
+Reviewer request, verbatim: *"als je dat selecteerd, alleen dan opmerkingen
+rechts daarvan zien (ook als je pr description selecteerd hebt)"* — a NEW
+column (`intentCommentsColumn`, `data-testid=plan-intent-comments-column`,
+inserted in `App()` between `plan-info-column` and `plan-questions-column`)
+that shows ONLY the Jira-opmerkingen (it reuses `commentsPanel()` verbatim, the
+same component the questions column's own first row renders) once the
+reviewer clicks into either the ticket description
+(`data-testid=plan-description`) or the intent field's own section body
+(`intentSectionBody`, only while `place === 'ticket'` — the `'questions'`
+placement already sits directly above `commentsPanel()` in that same column,
+so it needs no extra column of its own).
+
+`state.col0Focus` (`'description' | 'intent' | null`, ephemeral/local, not
+URL-persisted — same category as `state.descExpanded`) records which of the
+two was clicked last; `intentCommentsColumnVisible()` gates the column on
+`state.col === 0 && (state.col0Focus === 'description' || state.col0Focus ===
+'intent')`, so moving the keyboard away from column 0 (a click on the
+questions column, a block column, `→`/`←`) hides it again immediately rather
+than leaving it stale. The ticket card's own outer `@click` resets
+`col0Focus` to `null` (selecting the card in general, without either specific
+sub-block); the description block and each section body's own `@click`
+`stopPropagation()` first — the same nested-click ordering rule as
+`overview.mjs`'s popover close button
+(`.claude/rules/arrowjs-pitfalls.md`) — so their own, more specific
+`col0Focus` write is never immediately overwritten by the card's own bubbling
+handler.
+
+Test: `tests/plan-intent-sections.spec.mjs` ("selecting the ticket description
+or the intent field shows a dedicated Jira-opmerkingen column, hidden
+otherwise").
 
 ### Both plan Claude calls run on Opus, with their own 5-minute timeout
 

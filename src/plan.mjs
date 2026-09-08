@@ -115,6 +115,13 @@ const state = reactive({
   // Which column owns the keyboard: 0 = the ticket, 1 = questions/tasks,
   // 2 + n = the n-th block column (2 is the first one).
   col: 1,
+  // Which sub-block of the ticket card (column 0) was last clicked into:
+  // 'description' | 'intent' | null. Purely local/ephemeral UI state (not
+  // URL-persisted, like state.descExpanded) — it only decides whether the
+  // dedicated Jira-opmerkingen side column (intentCommentsColumn) shows next
+  // to the ticket, see "A dedicated Jira-opmerkingen column next to the
+  // ticket" in .claude/docs/plan-page.md.
+  col0Focus: null,
   // The cursor in column 2, as the stable id of an OPTION ("q1o2") or a TASK
   // ("t3") — never a raw index, so a regenerated task list can't silently move
   // the cursor onto something else (.claude/rules/conventions.md).
@@ -1970,16 +1977,131 @@ function intentInQuestionsColumn() {
   return planPhaseNow() === 'intent'
 }
 
+// parseIntentSections/buildIntentFromSections: reviewer request ("misschien
+// dat de markdown titels niet aangepast kan worden, alleen de description
+// daaronder, meer github markdown editor ofzo") — split intent.md's own
+// markdown on every heading line (`#`..`######`) into {heading, body} pairs,
+// so intentField (below) can render each heading as a fixed, non-editable
+// label and only the text below it as its own editable field. The leading
+// segment before the very first heading (normally empty — intent.md always
+// starts with "# Intent — …") gets `heading: null` and is only rendered/kept
+// when it actually has content. buildIntentFromSections is the inverse, used
+// to reconstruct the single intent.md text sent to the `plan_answer` Signal —
+// deliberately joined with a blank line between every part rather than
+// preserving the original's exact blank-line layout, since the document is
+// regenerated from scratch by Claude whenever there is no override anyway.
+function parseIntentSections(text) {
+  const lines = (text || '').split('\n')
+  const sections = []
+  let cur = { heading: null, body: [] }
+  for (const line of lines) {
+    if (/^#{1,6}\s+/.test(line)) {
+      sections.push(cur)
+      cur = { heading: line, body: [] }
+    } else {
+      cur.body.push(line)
+    }
+  }
+  sections.push(cur)
+  return sections.map((s) => ({ heading: s.heading, body: s.body.join('\n').trim() })).filter((s) => s.heading || s.body)
+}
+
+function buildIntentFromSections(sections) {
+  return sections
+    .map((s) => (s.heading ? s.heading + (s.body ? '\n\n' + s.body : '') : s.body))
+    .filter((s) => s.trim().length)
+    .join('\n\n')
+}
+
+// intentSectionBody is one section's own editable field (the "description"
+// under a fixed, non-editable heading — see parseIntentSections above). On
+// blur it reconstructs the WHOLE intent.md text from every sibling section's
+// CURRENT (possibly just-edited) value — found via the shared
+// `data-testid=plan-intent-sections` container, never via `sections` itself
+// (which is a snapshot from the moment this component mounted) — and sends
+// it as one `plan_answer` Signal, same "seed once, save on blur" discipline
+// as the single-textarea version this replaces.
+function intentSectionBody(sections, i, place, locked) {
+  const s = sections[i]
+  const inTicket = place === 'ticket'
+  const rows = Math.max(3, Math.min(16, s.body.split('\n').length + 2))
+  const save = (container) => {
+    if (!container) return
+    const bodies = Array.from(container.querySelectorAll('[data-testid="plan-intent-section-body"]'))
+    const next = bodies.map((el) => ({ heading: sections[Number(el.dataset.sectionIdx)].heading, body: el.value }))
+    const text = buildIntentFromSections(next)
+    const seed = buildIntentFromSections(sections)
+    if (text !== seed) sendIntentOverride(text)
+  }
+  return html`
+    <div class="mb-2" data-testid="plan-intent-section" data-section-idx="${i}">
+      <div class="contents">
+        ${() =>
+          s.heading
+            ? html`<div
+                class="mb-1 select-none font-mono text-[11px] font-semibold text-slate-500 dark:text-zinc-400"
+                data-testid="plan-intent-heading"
+              >
+                ${s.heading}
+              </div>`.key('heading')
+            : ''}
+      </div>
+      <textarea
+        data-testid="plan-intent-section-body"
+        data-section-idx="${i}"
+        rows="${rows}"
+        placeholder="${t('Intentie wordt automatisch gegenereerd…')}"
+        readonly="${() => (locked() ? 'true' : false)}"
+        class="w-full resize-y rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-[12px] leading-relaxed text-slate-800 placeholder:text-slate-400 focus:border-indigo-300 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500"
+        @click="${(e) => {
+          if (!e || !inTicket) return
+          e.stopPropagation()
+          state.col0Focus = 'intent'
+        }}"
+        @keydown="${(e) => {
+          if (!e || !inTicket) return
+          // Enter on the locked field is what unlocks it — never a
+          // newline, so the first Enter can't also edit the text.
+          if (e.key === 'Enter' && !e.shiftKey && !state.intentEditing) {
+            e.preventDefault()
+            e.stopPropagation()
+            state.intentEditing = true
+            return
+          }
+          // Escape locks it again; the page's own onKeydown blurs the
+          // textarea right after (isEditableFocused branch), which is
+          // also where the blur handler saves.
+          if (e.key === 'Escape') state.intentEditing = false
+        }}"
+        @blur="${(e) => {
+          if (!e) return
+          if (inTicket) state.intentEditing = false
+          save(e.target.closest('[data-testid="plan-intent-sections"]'))
+        }}"
+      >${s.body}</textarea
+      >
+    </div>
+  `.key('intent-sec-' + place + '-' + i)
+}
+
 // intentField is the "Intentie" block — reviewer request: "in taak
 // description eerste kolom moet de intentie zichtbaar zijn, maar dat moeten
 // we ook kunnen aanpassen". Shows the CURRENT intent.md text (auto-generated
 // via state.intentText, or the reviewer's own state.doc.intentOverride once
-// they edited it) in an uncontrolled textarea — same "static value=, save on
+// they edited it) as one editable field PER SECTION (see parseIntentSections
+// above) — each section's own markdown heading is a fixed label, only the
+// text below it can be typed in, closer to a GitHub-style structured editor
+// than one big free-form textarea (reviewer request, verbatim: "misschien dat
+// de markdown titels niet aangepast kan worden, alleen de description
+// daaronder, meer github markdown editor ofzo"). Same "static seed, save on
 // blur" pattern as plan-task-note above, so a slow poll never clobbers a
-// half-typed edit.
+// half-typed edit — and, stacking one field per section, the whole block
+// reads noticeably taller than the old single 6-row textarea by itself,
+// covering the reviewer's other request ("intentie hoger": the box's bottom
+// edge moves down, its top edge/position is unchanged).
 //
 // Keyed on the loading state AND on where it renders (not on
-// state.intentText/doc.updatedAt) so the textarea's static `value=` is seeded
+// state.intentText/doc.updatedAt) so every section's static seed is set
 // exactly ONCE per placement, right after the first real load — remounting on
 // every later poll would wipe an in-progress edit, exactly the bug
 // plan-task-note's own key discipline avoids. A REMOTE change (another
@@ -1998,21 +2120,24 @@ function intentInQuestionsColumn() {
 //     editbaar als je enter erop drukt"): by then the reviewer is answering
 //     questions, and a stray keystroke in a passed stage should not silently
 //     rewrite the intent. Click/Tab focuses, Enter unlocks, Escape and blur
-//     lock it again.
+//     lock it again. A click into any section body also selects this ticket
+//     placement as `state.col0Focus = 'intent'` — see "A dedicated
+//     Jira-opmerkingen column next to the ticket" in .claude/docs/plan-page.md.
 //
-// Collapsing hides only the textarea; the header (label + reset button) stays,
-// plus the WORD "ingeklapt" — and, in the ticket placement, the word
+// Collapsing hides only the sections, the header (label + reset button)
+// stays, plus the WORD "ingeklapt" — and, in the ticket placement, the word
 // "vergrendeld"/"bewerken" — never a colour alone, per the colourblind rule.
 // Every one of those is a nested `${() => ...}` binding in its own stable
 // `contents` root (never a bare toggling expression, see
-// `.claude/rules/arrowjs-pitfalls.md`) so the outer node's key — and thus the
-// textarea's one-time seed — is untouched by a col/lock change.
+// `.claude/rules/arrowjs-pitfalls.md`) so the outer node's key — and thus
+// every section's one-time seed — is untouched by a col/lock change.
 function intentField(place) {
   const loaded = !state.loading
   const seed = state.doc.intentOverride || state.intentText
   const inTicket = place === 'ticket'
   const collapsed = () => inTicket && state.col === 1
   const locked = () => inTicket && !state.intentEditing
+  const sections = parseIntentSections(seed)
   return html`
     <div
       class="${inTicket ? 'mt-3 border-t border-slate-100 pt-2 dark:border-zinc-800' : 'mb-3 rounded-2xl bg-white p-3 ring-1 ring-slate-200 dark:bg-zinc-900 dark:ring-zinc-800'}"
@@ -2062,35 +2187,9 @@ function intentField(place) {
         ${() =>
           collapsed()
             ? ''
-            : html`<textarea
-                data-testid="plan-intent-field"
-                rows="6"
-                placeholder="${t('Intentie wordt automatisch gegenereerd…')}"
-                readonly="${() => (locked() ? 'true' : false)}"
-                class="w-full resize-y rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-[12px] leading-relaxed text-slate-800 placeholder:text-slate-400 focus:border-indigo-300 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500"
-                @keydown="${(e) => {
-                  if (!e || !inTicket) return
-                  // Enter on the locked field is what unlocks it — never a
-                  // newline, so the first Enter can't also edit the text.
-                  if (e.key === 'Enter' && !e.shiftKey && !state.intentEditing) {
-                    e.preventDefault()
-                    e.stopPropagation()
-                    state.intentEditing = true
-                    return
-                  }
-                  // Escape locks it again; the page's own onKeydown blurs the
-                  // textarea right after (isEditableFocused branch), which is
-                  // also where the blur handler saves.
-                  if (e.key === 'Escape') state.intentEditing = false
-                }}"
-                @blur="${(e) => {
-                  if (!e) return
-                  if (inTicket) state.intentEditing = false
-                  const val = e.target.value || ''
-                  if (val !== seed) sendIntentOverride(val)
-                }}"
-              >${seed}</textarea
-              >`}
+            : html`<div class="flex flex-col" data-testid="plan-intent-sections">
+                ${sections.map((s, i) => intentSectionBody(sections, i, place, locked))}
+              </div>`.key('sections')}
       </div>
     </div>
   `.key('intent:' + place + ':' + (loaded ? 'ready' : 'pending'))
@@ -2190,7 +2289,10 @@ function ticketCard() {
     <div
       class="${() => 'flex min-h-0 flex-1 flex-col ' + CARD + (state.col === 0 ? CARD_FOCUS : CARD_IDLE)}"
       data-testid="plan-ticket-card"
-      @click="${() => (state.col = 0)}"
+      @click="${() => {
+        state.col = 0
+        state.col0Focus = null
+      }}"
     >
       <div class="flex items-start gap-2">
         <h1 class="min-w-0 flex-1 text-lg font-semibold leading-snug text-slate-900 dark:text-zinc-100" data-testid="plan-title">
@@ -2321,7 +2423,15 @@ function ticketCard() {
           ${settingsButton('h-7 w-7 bg-slate-50 dark:bg-zinc-800 ring-1 ring-slate-200 dark:ring-zinc-700')}
         </div>
       </div>
-      <div class="mt-3 min-h-0 flex-1 overflow-auto" data-testid="plan-description">
+      <div
+        class="mt-3 min-h-0 flex-1 overflow-auto"
+        data-testid="plan-description"
+        @click="${(e) => {
+          e.stopPropagation()
+          state.col = 0
+          state.col0Focus = 'description'
+        }}"
+      >
         <div class="${LABEL + ' mb-1'}">${t('Omschrijving')}</div>
         ${() =>
           state.doc.description
@@ -3690,6 +3800,31 @@ function planChatOverlay() {
   `.key('plan-chat-overlay')
 }
 
+// intentCommentsColumnVisible: reviewer request ("als je dat selecteerd,
+// alleen dan opmerkingen rechts daarvan zien (ook als je pr description
+// selecteerd hebt)") — a DEDICATED column, separate from the questions
+// column, that shows only the Jira-opmerkingen (reusing commentsPanel()
+// as-is) while the reviewer has just clicked into either the ticket
+// description or the intent field (state.col0Focus, set by the description
+// block's own @click and by intentSectionBody's own @click, both only while
+// `place === 'ticket'` — the questions-column placement already sits right
+// above commentsPanel() in that same column, so it needs no extra column of
+// its own). Scoped to `state.col === 0` too, so leaving the ticket column
+// hides it again immediately rather than leaving a stale panel around. See
+// "A dedicated Jira-opmerkingen column next to the ticket" in
+// .claude/docs/plan-page.md.
+function intentCommentsColumnVisible() {
+  return state.col === 0 && (state.col0Focus === 'description' || state.col0Focus === 'intent')
+}
+
+function intentCommentsColumn() {
+  return html`
+    <div class="flex w-[26rem] shrink-0 flex-col gap-2" data-testid="plan-intent-comments-column">
+      <div class="min-h-0 flex-1 overflow-y-auto pr-1">${commentsPanel()}</div>
+    </div>
+  `.key('intent-comments-column')
+}
+
 // ------------------------------------------------------------------ the page
 
 function App() {
@@ -3698,6 +3833,7 @@ function App() {
       <div class="flex w-[34rem] shrink-0 flex-col gap-4" data-testid="plan-info-column" data-column-focused="${() => (state.col === 0 ? 'true' : 'false')}">
         ${ticketCard()} ${tasksCard()}
       </div>
+      <div class="contents">${() => (intentCommentsColumnVisible() ? [intentCommentsColumn()] : [])}</div>
       ${questionsColumn()}
       ${() => blockLevels().map((list, level) => blockColumn(list, level))}
       <div class="contents">

@@ -41,7 +41,7 @@ test.describe('Plan page — the Intentie field per planning phase', () => {
     await expect(field).toHaveAttribute('data-locked', 'false')
 
     // No lock to open: typing lands straight in the textarea.
-    const area = page.getByTestId('plan-intent-field')
+    const area = page.getByTestId('plan-intent-section-body')
     await expect(area).not.toHaveAttribute('readonly', /.*/)
     await area.fill('Mijn eigen intentie.')
     await expect(area).toHaveValue('Mijn eigen intentie.')
@@ -70,7 +70,7 @@ test.describe('Plan page — the Intentie field per planning phase', () => {
     await expect(field).toHaveAttribute('data-intent-place', 'ticket')
     await expect(field).toHaveAttribute('data-locked', 'true')
 
-    const area = page.getByTestId('plan-intent-field')
+    const area = page.getByTestId('plan-intent-section-body')
     await expect(area).toHaveAttribute('readonly', 'true')
     await expect(page.getByTestId('plan-intent-lock-label')).toContainText('vergrendeld')
 
