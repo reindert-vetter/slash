@@ -24,6 +24,7 @@ import Prism from './vendor/prism.js'
 import { t } from './i18n.mjs'
 import { renderMarkdown } from './markdown.mjs'
 import { initTheme, themeToggleButton } from './theme.mjs'
+import { initDebugLog, logAction } from './debugLog.mjs'
 import { settingsButton } from './settingsLink.mjs'
 import { bindUrlState, num } from './urlState.mjs'
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
@@ -577,6 +578,14 @@ async function ensureTracker() {
 // instead of only after the next poll (an event/read is never the source of
 // truth, the tracker's own document is).
 async function sendAnswer(question, option, text) {
+  // Reviewer report (task4, no screenshot, debug mode on): "typen in eigen
+  // antwoord submit direct" — not reproduced (this is the ONLY place an
+  // answer is actually signalled to the tracker, and it's only ever called
+  // from optionInputKeydown's Enter branch or onKeydown's own Enter-on-row
+  // branch, never from an `@input`/keystroke handler). Logged anyway so a
+  // future real occurrence leaves a line in data/debug-log.jsonl instead of
+  // being unfalsifiable after the fact — see .claude/docs/debug-mode.md.
+  logAction('plan-answer-submit', question.id + ':' + option.id + (option.own ? ':own' : '') + ' len=' + (text || '').length)
   state.pending = { ...state.pending, [question.id]: { questionId: question.id, optionId: option.id, text: text || '' } }
   lastPayload = ''
   if (!state.runId) await ensureTracker()
@@ -1372,7 +1381,7 @@ function commentsActive() {
 // its own function so the mouse can run it too (mouse-navigation.md rule 1).
 function selectCommentsRow() {
   state.cur = COMMENTS_ROW_ID
-  state.col = 1
+  focusColumn1()
   state.path = [0]
   state.commentsFocused = false
 }
@@ -1385,7 +1394,7 @@ function enterCommentsFocus(startId) {
   const list = commentFlatList()
   if (!list.length) return
   state.cur = COMMENTS_ROW_ID
-  state.col = 1
+  focusColumn1()
   state.path = [0]
   state.commentsFocused = true
   const want = startId || state.commentCursor
@@ -1486,6 +1495,27 @@ function moveRow(delta) {
   // off 1, so scrollCurIntoView's vertical-only scroll never brings it into
   // view on its own.
   scrollBlockPreviewIntoView()
+  syncOptionFocus(rows[next])
+}
+
+// syncOptionFocus keeps DOM focus in sync with the ARROW-KEY cursor —
+// reviewer request: "de auto-focus moet zijn als je er gewoon overheen gaat
+// met pijltjes, niet als gevolg van enter". Landing on an option row (real or
+// the always-present "eigen antwoord" one) via ↑/↓ focuses its own free-text
+// field right away, so the reviewer can start typing without an extra
+// click/Tab/Enter; landing on any other kind of row blurs a still-focused
+// option field, so a stale caret never lingers on a row that no longer
+// carries the visible cursor ring (see "Never two selections visible at
+// once"). Never called from advanceToNextQuestion — Enter must NOT trigger
+// this, per the same reviewer request.
+function syncOptionFocus(row) {
+  if (row && row.kind === 'option') {
+    focusOptionInput(row.o.id)
+    return
+  }
+  if (isEditableFocused() && document.activeElement.closest('[data-testid="plan-option"]')) {
+    document.activeElement.blur()
+  }
 }
 
 // scrollBlockPreviewIntoView brings the cursor's own example-code column
@@ -1503,8 +1533,8 @@ function scrollBlockPreviewIntoView() {
 }
 
 // focusOptionInput hands DOM focus to one option's own free-text field —
-// called right after choosing that option via Enter (onKeydown) so the
-// reviewer can start typing immediately. Deferred a frame like every other
+// called by syncOptionFocus as the arrow-key cursor lands on an option row, so
+// the reviewer can start typing immediately. Deferred a frame like every other
 // helper here that reaches into freshly-relevant DOM (though this node is
 // always mounted already; the defer is just cheap insurance against a
 // same-tick rebuild). `select()` so a re-chosen option with existing text
@@ -1522,13 +1552,16 @@ function focusOptionInput(optionId) {
 }
 
 // advanceToNextQuestion is moveRow's sibling for the one case where "next"
-// must skip past sibling rows: pressing Enter inside an option's own
-// free-text field should jump to the NEXT QUESTION, not to the next option of
-// the SAME question (reviewer request: "als ik enter druk, moet ik gelijk
-// naar de volgende vraag springen"). Walks navRows() forward from the current
-// cursor past every row that still shares this question's id, landing on
-// whatever comes after — the next question's first option, or, at the end of
-// the list, the follow-up/task/execute row exactly like moveRow would.
+// must skip past sibling rows: pressing Enter — on an option row itself, or
+// inside its own free-text field — should jump to the NEXT QUESTION, not to
+// the next option of the SAME question (reviewer request: "als ik enter druk,
+// moet ik gelijk naar de volgende vraag springen", confirmed/tightened to
+// "één enter = door", i.e. no second Enter needed). Walks navRows() forward
+// from the current cursor past every row that still shares this question's
+// id, landing on whatever comes after — the next question's first option, or,
+// at the end of the list, the follow-up/task/execute row exactly like moveRow
+// would. Deliberately does NOT call syncOptionFocus: the free-text field only
+// auto-focuses while ARROWING over options, never as a side effect of Enter.
 function advanceToNextQuestion() {
   const rows = navRows()
   const at = rows.findIndex((r) => r.id === state.cur)
@@ -1601,6 +1634,36 @@ function stepLeft() {
   state.col = state.col - 1
   if (level > 0) state.path = state.path.slice(0, level)
   scrollFocusIntoView()
+}
+
+// focusColumn1 is the CLICK-driven counterpart of stepRight/stepLeft's own
+// `state.col` change — every option/scope/hotfix/task/comments row's own
+// click handler (plus the questions column's own background click) forces
+// the keyboard back onto column 1 this way. Reviewer report (task45's sibling
+// bug, no screenshot the second time): clicking any of those from a deeper
+// column (an open block/example-code column) silently, uncontrolled, dumped
+// column 1 back to its double width and could reveal column 0 again with no
+// explanation — because every one of these ~15 call sites used to just
+// assign `state.col = 1` directly, unlike stepRight/stepLeft's own change
+// (which always calls scrollFocusIntoView right after). The width class on
+// the questions column really does flip between `w-[27rem]`/`w-[62rem]` on
+// this (see "The questions column doubles in width…" in
+// .claude/docs/plan-page.md), so this is a REAL layout width change, not a
+// no-op — dropping an open block column shrinks the total scrollable width
+// too, and the browser then silently clamps the stale scrollLeft to the new,
+// smaller max, which is what actually moved column 0 back into view. One
+// shared helper instead of every call site repeating the raw assignment, so
+// the missing re-anchor can't quietly reoccur at a future call site. Also
+// logs the jump to the debug-mode recording (.claude/docs/debug-mode.md) —
+// only when state.col actually changes — since a reviewer reported a related
+// "typing in eigen antwoord submits/changes something immediately" with no
+// screenshot, debug mode on, and no confirmed mechanism; see sendAnswer's own
+// logAction call for the matching "did a real answer get saved" line.
+function focusColumn1() {
+  const changed = state.col !== 1
+  if (changed) logAction('plan-col-jump', 'col:' + state.col + '->1')
+  state.col = 1
+  if (changed) scrollFocusIntoView()
 }
 
 function onKeydown(e) {
@@ -1711,11 +1774,12 @@ function onKeydown(e) {
       } else if (state.col === 1 && row && row.kind === 'option') {
         e.preventDefault()
         sendAnswer(row.q, row.o, answerTextFor(row.q.id))
-        // Reviewer request: "als ik een antwoord selecteer binnen een vraag,
-        // moet de input gelijk actief zijn zodat ik kan typen" — choosing the
-        // option via Enter here hands the caret straight to its own free-text
-        // field, instead of leaving the reviewer to click/Tab into it.
-        focusOptionInput(row.o.id)
+        // Reviewer request, tightened: "één enter = door" — choosing an
+        // option via Enter immediately advances to the next question, same as
+        // Enter inside the option's own free-text field below. The free-text
+        // field itself is focused while ARROWING over options (moveRow →
+        // syncOptionFocus), not as a side effect of Enter.
+        advanceToNextQuestion()
       } else if (state.col === 1 && row && row.kind === 'scope') {
         e.preventDefault()
         chooseScope(row)
@@ -1762,10 +1826,26 @@ function scrollRowIntoView(selector) {
     let box = el.parentElement
     while (box && box.scrollHeight <= box.clientHeight) box = box.parentElement
     if (!box) return
-    const top = el.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop
-    const bottom = top + el.offsetHeight
-    if (top < box.scrollTop) box.scrollTop = top - 12
-    else if (bottom > box.scrollTop + box.clientHeight) box.scrollTop = bottom - box.clientHeight + 12
+    // Reviewer request (screenshot task45): "laat dat hele blokje volledig
+    // zichtbaar zien" — landing on a new question left only the cursor's own
+    // OPTION row in view, cutting off the rest of that question's card
+    // (title/why + every other option) at the bottom. Prefer the whole
+    // enclosing question card (header + all its options) as the element that
+    // must fit, so switching questions doesn't leave the new one half
+    // offscreen while the previous one still occupies the top of the view.
+    const card = el.closest('[data-testid="plan-question"]')
+    const fit = (target) => {
+      const top = target.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop
+      const bottom = top + target.offsetHeight
+      if (top < box.scrollTop) box.scrollTop = top - 12
+      else if (bottom > box.scrollTop + box.clientHeight) box.scrollTop = bottom - box.clientHeight + 12
+    }
+    // Falls back to the row itself when there's no such wrapper (scope/
+    // hotfix/task/followup/action/comments rows), or when the whole card is
+    // taller than the viewport — that's exactly the old row-only behaviour,
+    // kept for a question long enough it could never fully fit anyway.
+    if (card && card.offsetHeight <= box.clientHeight) fit(card)
+    else fit(el)
   })
 }
 
@@ -2735,6 +2815,43 @@ function tasksCard() {
 // one answer, option + text, per question). A reactive value binding would
 // overwrite whatever the reviewer is typing on the very next poll, and the
 // row's key is stable so the field survives a re-render either way.
+// optionInputKeydown is shared by optionRow's and ownOptionRow's own
+// free-text field (both call it from their `@keydown`). Enter always saves
+// and advances — "één enter = door" (see advanceToNextQuestion's own doc
+// comment). ArrowUp/ArrowDown re-implement moveRow here because the
+// document-level onKeydown bails out entirely while an editable element has
+// focus (isEditableFocused()) — without this, arrowing through options would
+// freeze solid the moment the first option's own field took focus (see
+// syncOptionFocus). ArrowLeft/ArrowRight: reviewer request "escape eerst
+// behalve als er niks getyped is" — an EMPTY field still lets ←/→ step
+// columns (stepLeft/stepRight, blurring first so keyboard control fully
+// returns to the document-level handler, exactly like Enter does); a field
+// that already has typed text keeps ordinary caret movement, and Escape (the
+// existing isEditableFocused() branch in onKeydown) is what hands ←/→ back.
+function optionInputKeydown(e, q, o) {
+  if (!e) return
+  if (e.key === 'Enter') {
+    e.stopPropagation()
+    sendAnswer(q, o, e.target.value)
+    e.target.blur()
+    advanceToNextQuestion()
+  } else if (e.key === 'ArrowDown') {
+    e.preventDefault()
+    e.stopPropagation()
+    moveRow(1)
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault()
+    e.stopPropagation()
+    moveRow(-1)
+  } else if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !e.target.value) {
+    e.preventDefault()
+    e.stopPropagation()
+    e.target.blur()
+    if (e.key === 'ArrowRight') stepRight()
+    else stepLeft()
+  }
+}
+
 function optionRow(row) {
   const { q, o } = row
   if (o.own) return ownOptionRow(row)
@@ -2763,7 +2880,7 @@ function optionRow(row) {
       data-chosen="${() => (isChosen(q, o) ? 'true' : 'false')}"
       @click="${() => {
         state.cur = o.id
-        state.col = 1
+        focusColumn1()
         state.path = [0]
       }}"
     >
@@ -2791,22 +2908,10 @@ function optionRow(row) {
         value="${isChosen(q, o) ? answerTextFor(q.id) : ''}"
         data-testid="plan-option-input"
         class="mt-1.5 w-full rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[12px] text-slate-800 placeholder:text-slate-400 focus:border-indigo-300 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500"
-        @keydown="${(e) => {
-          if (!e) return
-          if (e.key === 'Enter') {
-            e.stopPropagation()
-            sendAnswer(q, o, e.target.value)
-            e.target.blur()
-            // Reviewer request: "als ik enter druk, moet ik gelijk naar de
-            // volgende vraag springen" — the second half of the flow
-            // focusOptionInput above starts (choose → type → Enter → next
-            // question), rather than leaving the cursor parked here.
-            advanceToNextQuestion()
-          }
-        }}"
+        @keydown="${(e) => optionInputKeydown(e, q, o)}"
         @focus="${() => {
           state.cur = o.id
-          state.col = 1
+          focusColumn1()
         }}"
       />
       <div class="contents">
@@ -2841,7 +2946,7 @@ function ownOptionRow(row) {
       data-chosen="${() => (isChosen(q, o) ? 'true' : 'false')}"
       @click="${() => {
         state.cur = o.id
-        state.col = 1
+        focusColumn1()
         state.path = [0]
       }}"
     >
@@ -2862,18 +2967,10 @@ function ownOptionRow(row) {
           value="${isChosen(q, o) ? answerTextFor(q.id) : ''}"
           data-testid="plan-option-input"
           class="min-w-0 flex-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[12px] text-slate-800 placeholder:text-slate-400 focus:border-indigo-300 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500"
-          @keydown="${(e) => {
-            if (!e) return
-            if (e.key === 'Enter') {
-              e.stopPropagation()
-              sendAnswer(q, o, e.target.value)
-              e.target.blur()
-              advanceToNextQuestion()
-            }
-          }}"
+          @keydown="${(e) => optionInputKeydown(e, q, o)}"
           @focus="${() => {
             state.cur = o.id
-            state.col = 1
+            focusColumn1()
           }}"
         />
       </div>
@@ -2913,7 +3010,7 @@ function scopeRow(row) {
       data-cursor="${() => (state.cur === row.id ? 'true' : 'false')}"
       @click="${() => {
         state.cur = row.id
-        state.col = 1
+        focusColumn1()
         chooseScope(row)
       }}"
     >
@@ -3009,7 +3106,7 @@ function hotfixRow(row) {
       @click="${(e) => {
         if (e) e.stopPropagation()
         state.cur = row.id
-        state.col = 1
+        focusColumn1()
         chooseHotfix(row)
       }}"
     >
@@ -3208,7 +3305,7 @@ function taskRow(row) {
       data-cursor="${() => (state.cur === task.id ? 'true' : 'false')}"
       @click="${() => {
         state.cur = task.id
-        state.col = 1
+        focusColumn1()
         state.path = [0]
       }}"
     >
@@ -3227,7 +3324,7 @@ function taskRow(row) {
             class="h-3.5 w-3.5 shrink-0 accent-indigo-600"
             @change="${() => {
               state.cur = task.id
-              state.col = 1
+              focusColumn1()
               toggleTask(task)
             }}"
           />
@@ -3272,7 +3369,7 @@ function taskRow(row) {
             }}"
             @focus="${() => {
               state.cur = task.id
-              state.col = 1
+              focusColumn1()
             }}"
           />
         </div>
@@ -3323,7 +3420,7 @@ function executeCard(row) {
       data-cursor="${() => (state.cur === EXEC_ROW_ID ? 'true' : 'false')}"
       @click="${() => {
         state.cur = EXEC_ROW_ID
-        state.col = 1
+        focusColumn1()
         state.path = [0]
       }}"
     >
@@ -3349,7 +3446,7 @@ function executeCard(row) {
         @click="${(e) => {
           if (e && e.stopPropagation) e.stopPropagation()
           state.cur = EXEC_ROW_ID
-          state.col = 1
+          focusColumn1()
           triggerExecute()
         }}"
       >
@@ -3422,7 +3519,7 @@ function followupCard() {
       data-cursor="${() => (state.cur === FOLLOWUP_ROW_ID ? 'true' : 'false')}"
       @click="${() => {
         state.cur = FOLLOWUP_ROW_ID
-        state.col = 1
+        focusColumn1()
         sendFollowup()
       }}"
     >
@@ -3744,7 +3841,7 @@ function questionsColumn() {
       class="${() => 'flex shrink-0 flex-col ' + (state.col === 1 ? 'w-[62rem]' : 'w-[27rem]')}"
       data-testid="plan-questions-column"
       data-column-focused="${() => (state.col === 1 ? 'true' : 'false')}"
-      @click="${() => (state.col = 1)}"
+      @click="${() => focusColumn1()}"
     >
       ${columnHeader(t('Vragen over het plan'), () => state.col === 1)}
       <div class="min-h-0 flex-1 overflow-y-auto pr-1">
@@ -4031,6 +4128,13 @@ if (!planKey) {
   location.replace('/pr-overview')
 } else {
   html`${App()}`(document.getElementById('app'))
+  // Debug mode ("record my navigation so a later session can replay a
+  // reported bug", .claude/docs/debug-mode.md) was wired into home.mjs/
+  // overview.mjs/settings.mjs but never into this page — so a reviewer with
+  // the switch on got zero session/nav/key/click lines from /plan/<KEY>.
+  // Found while adding the two logAction() calls below (see focusColumn1 and
+  // sendAnswer).
+  initDebugLog()
   document.addEventListener('keydown', onKeydown)
   // clampCursor is called from loadPlan (the one place the document is
   // replaced), deliberately NOT from a watch on state.doc/state.cur: the

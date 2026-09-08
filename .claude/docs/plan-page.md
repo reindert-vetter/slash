@@ -1284,23 +1284,51 @@ still holds for `state.col >= 2`, this only closes the `state.col === 0` gap.
 `data-cursor` itself is untouched (still tracks the raw cursor identity, used
 by `scrollCurIntoView`'s selector) — only the visible ring is gated.
 
-### Choosing an option focuses its own input; Enter there jumps to the next question
+### One `Enter` chooses AND advances; the free-text field auto-focuses only while ARROWING
 
-Reviewer request, verbatim: *"als ik een antwoord selecteer binnen een vraag,
-moet de input gelijk actief zijn zodat ik kan typen. als ik enter druk, moet
-ik gelijk naar de volgende vraag springen."* Two-step flow:
+Reviewer request, verbatim (first pass): *"als ik een antwoord selecteer
+binnen een vraag, moet de input gelijk actief zijn zodat ik kan typen. als ik
+enter druk, moet ik gelijk naar de volgende vraag springen."* First
+implementation made `Enter` on an option row focus its own free-text field
+(`focusOptionInput`), requiring a SECOND `Enter` inside that field to actually
+advance. Follow-up report (screenshot `task44-volgende-vraag-na-keuze.png`):
+*"als ik heb gekozen, moet ik de volgende vraag zien"* — landing on "chosen +
+field focused" wasn't enough; tightened, verbatim, to *"Eén enter = door. Die
+automatische focus moet zijn als je er gewoon over heen gaat met pijltjes,
+maar als je nog niet enter hebt gedaan"*. Final shape:
 
-1. `Enter` on an option row (`onKeydown`, `state.col===1 && kind==='option'`)
-   calls `sendAnswer` as before, then `focusOptionInput(optionId)` — a
-   `requestAnimationFrame`-deferred `querySelector` + `.focus()` + `.select()`
-   on that option's own `data-testid=plan-option-input` field, so the reviewer
-   can start typing immediately instead of needing an extra click/Tab.
-2. `Enter` inside that field still saves the typed text (`sendAnswer`) and
-   blurs, but now also calls `advanceToNextQuestion()` — `moveRow`'s sibling
-   that walks `navRows()` forward past every remaining row that still shares
-   the current option's `q.id`, landing on the next QUESTION's first option
-   (or the follow-up/task/execute row at the end of the list) instead of the
-   next option of the SAME question `moveRow(1)` would give.
+1. **`↑`/`↓` (`moveRow`) auto-focuses the free-text field of whichever option
+   row the cursor lands on** (`syncOptionFocus`, called from `moveRow` only —
+   never from `advanceToNextQuestion`): a `requestAnimationFrame`-deferred
+   `querySelector` + `.focus()` + `.select()` on that option's own
+   `data-testid=plan-option-input` field (`focusOptionInput`, unchanged),
+   so the reviewer can start typing immediately without an extra click/Tab.
+   Leaving an option row for a different KIND of row blurs a still-focused
+   option field, so a stale caret never lingers behind (see "Never two
+   selections visible at once" above).
+2. **`Enter` chooses and immediately advances**, whether pressed on the
+   option row itself (`onKeydown`, `state.col===1 && kind==='option'`) or
+   inside that row's own now-focused free-text field
+   (`optionInputKeydown`, shared by `optionRow`/`ownOptionRow`'s
+   `@keydown` — previously two near-identical inline handlers): both call
+   `sendAnswer` then `advanceToNextQuestion()` — `moveRow`'s sibling that
+   walks `navRows()` forward past every remaining row sharing the current
+   option's `q.id`, landing on the next QUESTION's first option (or the
+   follow-up/task/execute row at the end of the list).
+3. **Because the field can now have real DOM focus while just arrowing
+   through options** (point 1), `optionInputKeydown` also re-implements
+   `ArrowUp`/`ArrowDown` (→ `moveRow`) itself — the document-level
+   `onKeydown` bails out entirely once an editable element has focus
+   (`isEditableFocused()`), so without this arrowing would freeze solid the
+   instant the first option's field took focus.
+4. **`ArrowLeft`/`ArrowRight` inside that field**, follow-up clarification:
+   *"escape eerst behalve als er niks getyped is"* — an EMPTY field still
+   lets `←`/`→` step columns (`stepLeft`/`stepRight`, blurring first so
+   keyboard control fully returns to the document-level handler, same as
+   `Enter`); a field that already has typed text keeps ordinary caret
+   movement, and `Escape` (the existing `isEditableFocused()` branch in
+   `onKeydown`) is what hands `←`/`→` back — same precedent as the
+   "Intentie" field's own "Escape locks it again".
 
 ### Column 0 slides out of view, and the example-code column follows the cursor
 
@@ -1334,6 +1362,88 @@ calls the new `scrollBlockPreviewIntoView()`, which brings
 so it never hides column 1 itself while the keyboard is still there, unlike
 `scrollFocusIntoView`'s deliberate `'start'` alignment for an actual
 column-focus change.
+
+### `scrollCurIntoView` fits the WHOLE question card, not just the cursor's own option row
+
+Reviewer report, verbatim (screenshot `task45-vraagblok-volledig-in-beeld.png`):
+*"als ik naar de volgende input ga, dan is alleen de eerste vraag volledig
+zichtbaar, maar niet de laatste. laat dat hele blokje volledig zichtbaar
+zien."* `scrollRowIntoView` (which `scrollCurIntoView` calls with
+`[data-cursor="true"]`) only ever computed the bounding box of the cursor's
+own row — landing on a NEW question's first option kept that one option
+visible, but left the rest of that question's card (its own title/why line,
+and every other option below the cursor) cut off at the bottom, while the
+PREVIOUS question's card still occupied the top of the scrollable area. Fix:
+`scrollRowIntoView` now resolves the cursor's closest
+`[data-testid="plan-question"]` ancestor and fits THAT whole element instead,
+falling back to the row itself when there's no such wrapper (scope/hotfix/
+task/followup/action/comments rows have none) or when the whole card is
+taller than the viewport (that longer-than-the-screen case is exactly what
+already produced the old, row-only behaviour, and stays unchanged for it).
+Shared by every `scrollCurIntoView` caller (`moveRow`,
+`advanceToNextQuestion`), so a question switch via either `↑`/`↓` or `Enter`
+gets the same fix.
+
+### `focusColumn1` — every click back to column 1 must re-anchor the scroll, or the browser silently reveals column 0
+
+Reviewer report, verbatim (no screenshot, two separate but likely related
+complaints): *"input 'Eigen antwoord' laat opeens ook eerste kolom zien, echt
+vreemd. het moet fundamenteel beter"* and, possibly the same symptom
+mis-described, *"als ik begin te typen in 'eigen antwoord' kan is het gelijk
+submitted, pas submitten als ik enter druk"*.
+
+**Root cause, reproduced with a real (not JS-dispatched) mouse click, not
+guessed:** every option/scope/hotfix/task/comments row's own `@click` handler
+(and the questions column's own background `@click`) used to just assign
+`state.col = 1` directly — one of ~15 near-identical inline assignments
+scattered across `plan.mjs`. That assignment is not a no-op the way it looks:
+the questions column's own width class flips between `w-[27rem]`/`w-[62rem]`
+on `state.col === 1` (see "The questions column doubles in width…" below), so
+clicking any such row from a DEEPER column (an open block/example-code view,
+`state.col >= 2`) drops that block column AND doubles column 1's width in the
+same tick — a real, large layout-width change with **no** corresponding
+`scrollFocusIntoView()` call (unlike `stepRight`/`stepLeft`'s own `state.col`
+change, which always calls it). The browser then silently CLAMPS the now-stale
+`scrollLeft` to the new, smaller total scroll width — which is what actually
+moved column 0 back into view, with nothing in the app ever deciding to show
+it. Measured live (mocked fixture, a real `page.mouse` click, not
+Playwright's element-based `.click()` which pre-scrolls its target and would
+have hidden the effect): `scrollLeft` dropped from 504 to 316 purely from
+clicking a different option's own field while a block column was open.
+A raw JS-dispatched `click` event, and a real click while `state.col` was
+already `1`, both produced ZERO shift — confirming it's this specific
+`state.col`-change-without-re-anchor path, not something inherent to focusing
+an input or to the "eigen antwoord" row specifically (every option row's
+`@click` had the same gap; "eigen antwoord" was just the one the reviewer
+happened to click).
+
+**Fix**: one shared `focusColumn1()` helper — sets `state.col = 1` and calls
+`scrollFocusIntoView()` only when the value actually changed — replacing every
+one of those ~15 raw assignments (left `stepRight`/`stepLeft`'s own,
+already-correct assignments untouched, since those already call
+`scrollFocusIntoView()` right after). Structural fix, not a per-symptom patch:
+a future click handler now has one correct helper to call instead of a raw
+assignment it could just as easily forget to pair with a scroll re-anchor.
+
+**The literal "submits on typing" claim was not reproduced.** `sendAnswer` —
+the only place an answer actually reaches the tracker — is called exclusively
+from `Enter` (`optionInputKeydown`'s own branch, or `onKeydown`'s Enter-on-row
+branch), never from an `@input`/keystroke handler; typing several characters
+into "eigen antwoord" with the network route intercepted produced zero
+signals until `Enter`. The leading theory is that the `focusColumn1` jump
+above, triggered by the CLICK used to get into the field before typing,
+read as "something happened the instant I started" even though nothing was
+actually saved. Left unresolved rather than guessed away: **both** the real
+`sendAnswer` call and a genuine `focusColumn1` column jump now write a
+`logAction` line to the debug-mode recording (`plan-answer-submit` /
+`plan-col-jump`, `.claude/docs/debug-mode.md`) so a future real occurrence —
+reported with debug mode on — leaves an actual line in
+`data/debug-log.jsonl` to read back, instead of staying unfalsifiable.
+**Debug mode itself was never wired into this page at all** before this
+change (`initDebugLog()` is called from `home.mjs`/`overview.mjs`/
+`settings.mjs`, but `plan.mjs` never called it) — found while adding those two
+`logAction` calls, since neither would ever have reached the log otherwise.
+Now called once at bootstrap, same as the other three pages.
 
 ### The questions column doubles in width, and the Intentie block collapses, while column 1 has the keyboard
 
