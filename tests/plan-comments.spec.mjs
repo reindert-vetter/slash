@@ -115,3 +115,58 @@ test.describe('Plan page — Jira comments as a nav-chain stop', () => {
     await expect(rows.nth(0)).toHaveAttribute('data-comment-cursor', 'true')
   })
 })
+
+// Reviewer request ("berichten inklappen als er nog niet enter op gedrukt
+// is"): a long Jira comment used to fill the whole column. It now stays
+// clamped (line-clamp-3) until the reviewer presses Enter/clicks it —
+// mirrors Block.mjs's own descExpanded/blockDescCollapsible pattern for the
+// block description strip. A short comment (below COMMENT_BODY_TRUNCATE_AT)
+// never shows the toggle at all — see the first two rows in the "nav-chain"
+// test above, which stay silent about it on purpose.
+test.describe('Plan page — long comments collapse until Enter', () => {
+  test('a long comment body clamps until Enter, expands, and re-collapses on ←', async ({ page }) => {
+    const longBody = 'Uitgewerkt plan: '.repeat(20) // well past COMMENT_BODY_TRUNCATE_AT (160 chars)
+    await page.route('**/api/jira/comments*', (route) =>
+      route.fulfill({
+        json: {
+          ok: true,
+          groups: [
+            {
+              key: 'TEST-902',
+              title: 'Long-comment test ticket',
+              relation: 'self',
+              comments: [{ id: 'c1', author: 'Alice', created: '2026-01-01T10:00:00Z', body: longBody }],
+            },
+          ],
+          canPost: false,
+          canMention: false,
+        },
+      }),
+    )
+
+    await page.goto('/plan/TEST-902')
+    await appReady(page)
+
+    const row = page.getByTestId('plan-comment-row').first()
+    await expect(row).toBeVisible()
+    const body = row.getByTestId('plan-comment-body')
+    const toggle = row.getByTestId('plan-comment-toggle')
+
+    // Collapsed by default — the hint says "meer… (Enter)", never colour alone.
+    await expect(toggle).toBeVisible()
+    await expect(toggle).toHaveText('meer… (Enter)')
+    await expect(body).toHaveClass(/line-clamp-3/)
+
+    // A fresh load already lands the cursor on the comments block itself
+    // (see the nav-chain test above); Enter hands ↑/↓ to the comments and
+    // expands the one under the cursor.
+    await page.keyboard.press('Enter')
+    await expect(body).not.toHaveClass(/line-clamp-3/)
+    await expect(toggle).toHaveText('Inklappen (←)')
+
+    // ← collapses it again.
+    await page.keyboard.press('ArrowLeft')
+    await expect(body).toHaveClass(/line-clamp-3/)
+    await expect(toggle).toHaveText('meer… (Enter)')
+  })
+})

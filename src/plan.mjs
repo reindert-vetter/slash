@@ -70,6 +70,18 @@ const EMPTY_DOC = { key: planKey, title: '', description: '', url: '', questions
 // real url, a Jira ticket.
 const JIRA_BASE = 'https://plugandpaybv.atlassian.net/browse/'
 
+// COMMENT_BODY_TRUNCATE_AT / commentBodyCollapsible — is a Jira comment long
+// enough to have something to open? Same deterministic character-count
+// shape as Block.mjs's BLOCK_DESC_TRUNCATE_AT/blockDescCollapsible: the real
+// question ("does it overflow the line-clamp?") can only be answered by
+// measuring the laid-out DOM, and the "meer… (Enter)" hint below must agree
+// without a layout read.
+const COMMENT_BODY_TRUNCATE_AT = 160
+
+function commentBodyCollapsible(c) {
+  return !!c && String(c.body || '').length > COMMENT_BODY_TRUNCATE_AT
+}
+
 const state = reactive({
   key: planKey,
   loading: true,
@@ -2805,7 +2817,21 @@ function commentRow(c, groupKey, i) {
                   : ''}
             </div>
           </div>
-          <div class="markdown-body mt-0.5 text-[12px] leading-relaxed text-slate-700 dark:text-zinc-300" .innerHTML="${() => renderMarkdown(c.body || '')}"></div>
+          <div
+            class="${() =>
+              'markdown-body mt-0.5 text-[12px] leading-relaxed text-slate-700 dark:text-zinc-300 ' +
+              (active() ? '' : 'line-clamp-3 [&>p]:my-0')}"
+            data-testid="plan-comment-body"
+            .innerHTML="${() => renderMarkdown(c.body || '')}"
+          ></div>
+          <div class="contents">
+            ${() =>
+              commentBodyCollapsible(c)
+                ? html`<div class="mt-0.5 text-[10.5px] font-medium text-indigo-600 dark:text-indigo-400" data-testid="plan-comment-toggle">
+                    ${() => (active() ? t('Inklappen (←)') : t('meer… (Enter)'))}
+                  </div>`.key('toggle:' + id)
+                : ''}
+          </div>
         </div>
       </div>
     </div>

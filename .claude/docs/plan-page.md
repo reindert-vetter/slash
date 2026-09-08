@@ -1277,6 +1277,14 @@ home.mjs/Block.mjs/RelatedPanel.mjs").
   — never a colour alone, the colourblind rule), the title, a comment count,
   and every comment (`avatarHTML` + author + `relativeTime` + `renderMarkdown`
   body, reusing the exact shared helpers the rest of the app uses for this).
+  A comment longer than `COMMENT_BODY_TRUNCATE_AT` (160 chars) starts
+  clamped (`line-clamp-3`) with a "meer… (Enter)" hint — mirrors
+  `Block.mjs`'s own `descExpanded`/`blockDescCollapsible` pattern for the
+  block-description strip. It expands the moment that ONE comment becomes
+  the active cursor (`enterCommentsFocus`/`commentsActive() &&
+  state.commentCursor === id`, i.e. Enter pressed or a direct click — see
+  the nav-chain section right below), and re-clamps on ← (`exitCommentsFocus`).
+  A short comment never shows the hint at all.
 - **Replying:** one composer open at a time (`state.commentReplyKey`, the
   same single-cursor discipline the rest of the page follows), a plain
   UNCONTROLLED `<textarea>` (`data-testid=plan-comment-reply-input`, same
