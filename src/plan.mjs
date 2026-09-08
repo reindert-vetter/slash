@@ -95,18 +95,6 @@ const EMPTY_DOC = { key: planKey, title: '', description: '', url: '', questions
 // real url, a Jira ticket.
 const JIRA_BASE = 'https://plugandpaybv.atlassian.net/browse/'
 
-// COMMENT_BODY_TRUNCATE_AT / commentBodyCollapsible — is a Jira comment long
-// enough to have something to open? Same deterministic character-count
-// shape as Block.mjs's BLOCK_DESC_TRUNCATE_AT/blockDescCollapsible: the real
-// question ("does it overflow the line-clamp?") can only be answered by
-// measuring the laid-out DOM, and the "meer… (Enter)" hint below must agree
-// without a layout read.
-const COMMENT_BODY_TRUNCATE_AT = 160
-
-function commentBodyCollapsible(c) {
-  return !!c && String(c.body || '').length > COMMENT_BODY_TRUNCATE_AT
-}
-
 const state = reactive({
   key: planKey,
   loading: true,
@@ -258,17 +246,13 @@ const state = reactive({
   // ↑/↓ to the comments themselves — the same "block is a stop, Enter moves
   // the keyboard into a nested list" shape the review tree's methodes-kolom
   // uses (see .claude/docs/test-class-grouping.md). commentsFocused mirrors
-  // that column's own testColumnFocused; commentCursor is the RING/selection
-  // — which comment ↑/↓ is currently on, regardless of whether it is opened.
-  // commentExpandedId is a SEPARATE, narrower concept (reviewer report: "jira
-  // opmerkingen inklappen als ik niet enter erop heb gedrukt" — arrowing past
-  // several comments used to auto-expand every one of them in turn, even a
-  // short one with nothing to expand): only the comment whose id equals BOTH
-  // commentCursor AND commentExpandedId is actually shown uncollapsed — see
-  // commentRow's own `expanded()`.
+  // that column's own testColumnFocused; commentCursor is the active
+  // comment's stable id (see commentId below). commentsFocused ALSO doubles
+  // as "is the whole comments list expanded" (see commentsListExpanded) —
+  // collapsed by default, showing only the last ~2.5 comments (see
+  // "Collapsed by default" below).
   commentsFocused: false,
   commentCursor: '',
-  commentExpandedId: '',
 })
 
 // menu is the stable {open} flag the Enter-menu on the ticket column renders
@@ -1309,6 +1293,17 @@ const SCOPE_PARENT_ID = 'scope:parent'
 // only recognises 'option'/'task'), so → never opens a block column for it.
 const COMMENTS_ROW_ID = 'comments'
 
+// COMMENTS_COLLAPSED_CLS caps the collapsed comments list's height to roughly
+// 2.5 short comments and bottom-anchors its content — see commentsPanel's own
+// doc comment for the full reasoning (task 48b).
+const COMMENTS_COLLAPSED_CLS = 'max-h-[260px] justify-end plan-comments-fade-top'
+
+// COMMENTS_COLLAPSE_HINT_MIN: below this many comments in the whole flattened
+// list, the fold cannot plausibly be hiding anything worth naming, so
+// `plan-comments-expand-hint` stays silent — same "never offer a no-op
+// affordance" reasoning as e.g. planCommands' conditional "Opnieuw plannen".
+const COMMENTS_COLLAPSE_HINT_MIN = 3
+
 // commentId gives one comment a stable id across a re-fetch (the panel has no
 // polling, but "Ververs"/a posted reply re-reads the whole list) — the same
 // group-key + comment-id-or-created-or-index shape commentRow's own `.key()`
@@ -1414,10 +1409,7 @@ function clampCursor() {
   // A stale nested comment focus (the comments row itself disappeared, or the
   // cursor moved off it some other way) must never keep ↑/↓ hijacked.
   if (state.commentsFocused && state.cur !== COMMENTS_ROW_ID) state.commentsFocused = false
-  if (state.commentCursor && !commentFlatList().some((c) => c.id === state.commentCursor)) {
-    state.commentCursor = ''
-    state.commentExpandedId = ''
-  }
+  if (state.commentCursor && !commentFlatList().some((c) => c.id === state.commentCursor)) state.commentCursor = ''
 }
 
 // isCommentsRowSelected/commentsActive mirror the review tree's own
@@ -1430,6 +1422,16 @@ function isCommentsRowSelected() {
 
 function commentsActive() {
   return isCommentsRowSelected() && state.col === 1 && state.commentsFocused
+}
+
+// commentsListExpanded reuses commentsFocused itself as the "is the whole
+// Jira-opmerkingen list expanded" flag (reviewer request, task 48b — see
+// "Collapsed by default" in commentsPanel's own doc comment): the exact same
+// action that hands ↑/↓ to the individual comments (Enter on the block, or a
+// click on one) is what should reveal the full history, and leaving that mode
+// (←) is exactly when it should fold back down. No separate state needed.
+function commentsListExpanded() {
+  return state.commentsFocused
 }
 
 // selectCommentsRow is what a click on the panel's own background does — the
@@ -1455,18 +1457,11 @@ function enterCommentsFocus(startId) {
   state.commentsFocused = true
   const want = startId || state.commentCursor
   state.commentCursor = list.some((c) => c.id === want) ? want : list[0].id
-  // Entering — via Enter on the block, or a direct click on one comment —
-  // opens the landed comment right away: this IS the reviewer pressing
-  // Enter/clicking on it, matching "inklappen tenzij ik enter erop heb
-  // gedrukt". Arrowing to a DIFFERENT comment afterwards (moveCommentCursor
-  // below) does NOT carry this forward.
-  state.commentExpandedId = state.commentCursor
   scrollCommentCursorIntoView()
 }
 
 function exitCommentsFocus() {
   state.commentsFocused = false
-  state.commentExpandedId = ''
 }
 
 function moveCommentCursor(delta) {
@@ -1479,11 +1474,6 @@ function moveCommentCursor(delta) {
   const next = Math.min(Math.max(at + delta, 0), list.length - 1)
   if (list[next].id === state.commentCursor) return
   state.commentCursor = list[next].id
-  // Reviewer report: arrowing past several comments used to auto-expand
-  // every one of them in turn, even one with nothing to expand. Landing on a
-  // new comment via ↑/↓ therefore only moves the ring — it starts collapsed
-  // until Enter is pressed on it (see the Enter branch in onKeydown below).
-  state.commentExpandedId = ''
   scrollCommentCursorIntoView()
 }
 
@@ -1826,16 +1816,11 @@ function onKeydown(e) {
         openPlanMenu()
         return
       }
-      // Already navigating the comments themselves: Enter/Space toggles
-      // whether the comment under the cursor is opened (without this,
-      // curRow() below would just re-enter the block) — "inklappen tenzij ik
-      // enter erop heb gedrukt": arrowing between comments never opens one on
-      // its own (see moveCommentCursor), pressing Enter on the highlighted
-      // one does, and pressing it again collapses it back. ← still leaves the
-      // per-comment mode entirely (see ArrowLeft above).
+      // Already navigating the comments themselves — nothing further to do
+      // with Enter/Space here (← is what leaves that mode, see ArrowLeft
+      // above); without this guard curRow() below would just re-enter it.
       if (commentsActive()) {
         e.preventDefault()
-        state.commentExpandedId = state.commentExpandedId === state.commentCursor ? '' : state.commentCursor
         return
       }
       const row = curRow()
@@ -3788,21 +3773,18 @@ function commentReplyComposer(group) {
 // stray top-level row.
 function commentRow(c, groupKey, i) {
   const id = commentId(groupKey, c, i)
-  // cursorHere is the RING — where ↑/↓ currently is, regardless of whether
-  // this comment is opened. It alone carries the "here" meaning now that the
-  // per-row "● actief" word badge is gone (the ring/border already says it —
-  // reviewer request). expanded is the narrower, separate "is THIS one
-  // actually opened" state (see commentExpandedId's own doc comment above) —
-  // only it gates the body clamp/toggle text.
-  const cursorHere = () => commentsActive() && state.commentCursor === id
-  const expanded = () => cursorHere() && state.commentExpandedId === id
+  // active is the RING — where ↑/↓ currently is. A comment's own text is
+  // ALWAYS shown in full, never clamped: "collapsing" this page's comments is
+  // a PANEL-level concern now (see "Collapsed by default" below), not a
+  // per-comment one.
+  const active = () => commentsActive() && state.commentCursor === id
   return html`
     <div
       class="${() =>
         'rounded-md py-1.5 px-1.5 -mx-1.5 border-t border-slate-100 first:border-t-0 dark:border-zinc-800 ' +
-        (cursorHere() ? 'ring-2 ring-inset ring-indigo-400 bg-indigo-50/50 dark:ring-indigo-500 dark:bg-indigo-500/10' : '')}"
+        (active() ? 'ring-2 ring-inset ring-indigo-400 bg-indigo-50/50 dark:ring-indigo-500 dark:bg-indigo-500/10' : '')}"
       data-testid="plan-comment-row"
-      data-comment-cursor="${() => (cursorHere() ? 'true' : 'false')}"
+      data-comment-cursor="${() => (active() ? 'true' : 'false')}"
       @click="${(e) => {
         e.stopPropagation()
         enterCommentsFocus(id)
@@ -3816,20 +3798,10 @@ function commentRow(c, groupKey, i) {
             <span title="${c.created || ''}">${relativeTime(c.created)}</span>
           </div>
           <div
-            class="${() =>
-              'markdown-body mt-0.5 text-[12px] leading-relaxed text-slate-700 dark:text-zinc-300 ' +
-              (expanded() ? '' : 'line-clamp-3 [&>p]:my-0')}"
+            class="markdown-body mt-0.5 text-[12px] leading-relaxed text-slate-700 dark:text-zinc-300"
             data-testid="plan-comment-body"
             .innerHTML="${() => renderMarkdown(c.body || '')}"
           ></div>
-          <div class="contents">
-            ${() =>
-              commentBodyCollapsible(c)
-                ? html`<div class="mt-0.5 text-[10.5px] font-medium text-indigo-600 dark:text-indigo-400" data-testid="plan-comment-toggle">
-                    ${() => (expanded() ? t('Inklappen (Enter)') : t('meer… (Enter)'))}
-                  </div>`.key('toggle:' + id)
-                : ''}
-          </div>
         </div>
       </div>
     </div>
@@ -3896,6 +3868,30 @@ function commentGroupCard(group) {
 // colour alone — the colourblind rule — and are mutually exclusive so only
 // one ring ever shows (isCommentsRowSelected() && !commentsFocused for the
 // whole card, commentsActive() for one row inside it).
+//
+// Collapsed by default (reviewer request, task 48b, correcting an earlier,
+// wrong reading of "opmerkingen inklappen": *"niet verticaal inklappen …
+// comments moeten horizontaal inklappen tot 2,5 laatste comments … breedte
+// blijft altijd hetzelfde"*) — this is a HEIGHT-only fold, over the WHOLE
+// flattened list (not per ticket/group), never a width change and never a
+// per-comment text clamp any more (see commentRow — a comment's own body is
+// always shown in full). `COMMENTS_COLLAPSED_CLS` caps the list's height at
+// roughly 2.5 short comments (`max-h-[…]`, necessarily an approximation —
+// an individual comment's real height varies with its text) and bottom-
+// anchors the content (`flex flex-col justify-end`) so it's the NEWEST
+// comments that stay visible and the older ones that scroll out of view at
+// the top — a `max-h` (not a fixed height) so a short list that already fits
+// is never padded with blank space. `.plan-comments-fade-top` (`plan.html`)
+// softens the cut edge, the mirror of the existing `.code-fence-fade-bottom`
+// mask facing the opposite direction. `commentsListExpanded()` reuses
+// `commentsFocused` itself — the exact same action that hands ↑/↓ to the
+// comments (Enter on the block, or a click on one, see commentRow) is what
+// reveals the full history, and leaving that mode (←) is exactly when it
+// should fold back down — so no new state was needed for this. A discrete
+// `plan-comments-expand-hint` button underneath names the same action in
+// words (never relying on the fade alone), but only once there's enough
+// comments for the fold to plausibly be hiding anything
+// (`COMMENTS_COLLAPSE_HINT_MIN`).
 function commentsPanel() {
   return html`
     <section
@@ -3943,11 +3939,32 @@ function commentsPanel() {
             ? html`<p class="mb-1.5 text-[11.5px] text-rose-600 dark:text-rose-400">${state.comments.error}</p>`.key('c-error')
             : ''}
       </div>
-      <div class="contents">
+      <div
+        class="${() =>
+          'flex flex-col overflow-hidden ' + (commentsListExpanded() ? '' : COMMENTS_COLLAPSED_CLS)}"
+        data-testid="plan-comments-list"
+        data-collapsed="${() => (commentsListExpanded() ? 'false' : 'true')}"
+      >
         ${() =>
           !state.comments.loaded
             ? [html`<p class="text-[12px] italic text-slate-400 dark:text-zinc-500">${t('laden…')}</p>`.key('c-loading')]
             : state.comments.groups.map((g) => commentGroupCard(g))}
+      </div>
+      <div class="contents">
+        ${() =>
+          !commentsListExpanded() && commentFlatList().length > COMMENTS_COLLAPSE_HINT_MIN
+            ? html`<button
+                type="button"
+                class="mt-1 w-full rounded-md py-1 text-center text-[10.5px] font-medium text-indigo-600 hover:bg-indigo-50 dark:text-indigo-300 dark:hover:bg-indigo-500/10"
+                data-testid="plan-comments-expand-hint"
+                @click="${(e) => {
+                  e.stopPropagation()
+                  enterCommentsFocus()
+                }}"
+              >
+                ${t('Toon alle opmerkingen (Enter)')}
+              </button>`.key('expand-hint')
+            : ''}
       </div>
     </section>
   `

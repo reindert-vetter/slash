@@ -71,6 +71,19 @@
         mask-image: linear-gradient(to bottom, black, black calc(100% - 1.4em), transparent);
       }
 
+      /* Top fade for the collapsed Jira-opmerkingen list (src/plan.mjs's
+         commentsPanel) — reviewer request: the panel collapses to show only
+         the last ~2.5 comments (height only, never width), bottom-anchored
+         (flex-col + justify-end) so the NEWEST comments stay visible and the
+         older ones scroll out of view at the TOP. This fades that top edge
+         instead of the bottom `code-fence-fade-bottom` does — same "there's
+         more, hidden this way" cue, just the opposite direction. A plain
+         alpha mask, not colour, so no dark-mode variant is needed. */
+      .plan-comments-fade-top {
+        -webkit-mask-image: linear-gradient(to bottom, transparent, black 2.5em);
+        mask-image: linear-gradient(to bottom, transparent, black 2.5em);
+      }
+
       /* A small, subtle one-shot entrance animation for a newly-opened drilled
          Onderliggende-code column (see the drillOpenMarker comment in
          home.mjs) — a short fade + slight slide-in, never a repeating/looping

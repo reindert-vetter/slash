@@ -116,16 +116,15 @@ test.describe('Plan page — Jira comments as a nav-chain stop', () => {
   })
 })
 
-// Reviewer request ("berichten inklappen als er nog niet enter op gedrukt
-// is"): a long Jira comment used to fill the whole column. It now stays
-// clamped (line-clamp-3) until the reviewer presses Enter/clicks it —
-// mirrors Block.mjs's own descExpanded/blockDescCollapsible pattern for the
-// block description strip. A short comment (below COMMENT_BODY_TRUNCATE_AT)
-// never shows the toggle at all — see the first two rows in the "nav-chain"
-// test above, which stay silent about it on purpose.
-test.describe('Plan page — long comments collapse until Enter', () => {
-  test('a long comment body clamps until Enter, expands, and re-collapses on ←', async ({ page }) => {
-    const longBody = 'Uitgewerkt plan: '.repeat(20) // well past COMMENT_BODY_TRUNCATE_AT (160 chars)
+// Reviewer request, corrected after an earlier, wrong reading of "opmerkingen
+// inklappen" (a per-comment text clamp — reverted): *"niet verticaal
+// inklappen … comments moeten horizontaal inklappen tot 2,5 laatste comments
+// … breedte blijft altijd hetzelfde"*. The PANEL folds by HEIGHT only, over
+// the whole flattened list, never per comment (a comment's own body is
+// always shown in full, see commentRow) and never by width.
+test.describe('Plan page — the comments panel folds to the last ~2.5 comments', () => {
+  test('collapsed by default (data-collapsed=true), Enter expands it, ← folds it back', async ({ page }) => {
+    const body = (n) => `Opmerking nummer ${n}. `.repeat(10)
     await page.route('**/api/jira/comments*', (route) =>
       route.fulfill({
         json: {
@@ -133,9 +132,9 @@ test.describe('Plan page — long comments collapse until Enter', () => {
           groups: [
             {
               key: 'TEST-902',
-              title: 'Long-comment test ticket',
+              title: 'Fold test ticket',
               relation: 'self',
-              comments: [{ id: 'c1', author: 'Alice', created: '2026-01-01T10:00:00Z', body: longBody }],
+              comments: [1, 2, 3, 4, 5].map((n) => ({ id: 'c' + n, author: 'Alice', created: '2026-01-0' + n + 'T10:00:00Z', body: body(n) })),
             },
           ],
           canPost: false,
@@ -147,47 +146,70 @@ test.describe('Plan page — long comments collapse until Enter', () => {
     await page.goto('/plan/TEST-902')
     await appReady(page)
 
-    const row = page.getByTestId('plan-comment-row').first()
-    await expect(row).toBeVisible()
-    const body = row.getByTestId('plan-comment-body')
-    const toggle = row.getByTestId('plan-comment-toggle')
+    const list = page.getByTestId('plan-comments-list')
+    await expect(list).toHaveAttribute('data-collapsed', 'true')
+    await expect(page.getByTestId('plan-comments-expand-hint')).toBeVisible()
+    // No comment body is ever clamped, collapsed or not — this fold is
+    // purely a container height, never a per-comment text cut.
+    for (const row of await page.getByTestId('plan-comment-row').all()) {
+      await expect(row.getByTestId('plan-comment-body')).not.toHaveClass(/line-clamp/)
+    }
 
-    // Collapsed by default — the hint says "meer… (Enter)", never colour alone.
-    await expect(toggle).toBeVisible()
-    await expect(toggle).toHaveText('meer… (Enter)')
-    await expect(body).toHaveClass(/line-clamp-3/)
-
-    // A fresh load already lands the cursor on the comments block itself
-    // (see the nav-chain test above); Enter hands ↑/↓ to the comments and
-    // expands the one under the cursor.
+    // Enter (on the block-level row) hands ↑/↓ to the comments AND unfolds
+    // the whole list — the same action, no separate toggle.
     await page.keyboard.press('Enter')
-    await expect(body).not.toHaveClass(/line-clamp-3/)
-    await expect(toggle).toHaveText('Inklappen (Enter)')
+    await expect(list).toHaveAttribute('data-collapsed', 'false')
+    await expect(page.getByTestId('plan-comments-expand-hint')).toHaveCount(0)
 
-    // ← collapses it again.
+    // ← leaves per-comment navigation and folds the list back down.
     await page.keyboard.press('ArrowLeft')
-    await expect(body).toHaveClass(/line-clamp-3/)
-    await expect(toggle).toHaveText('meer… (Enter)')
+    await expect(list).toHaveAttribute('data-collapsed', 'true')
+    await expect(page.getByTestId('plan-comments-expand-hint')).toBeVisible()
   })
 
-  // Reported bug: arrowing past several comments used to auto-expand each one
-  // in turn — the ring (data-comment-cursor) moved, but so did the "opened"
-  // style, with no extra Enter press needed. Only an explicit Enter on the
-  // highlighted comment may open it now; ↑/↓ only ever moves the ring.
-  test('arrowing between comments moves the ring only — each stays collapsed until its own Enter', async ({ page }) => {
-    const longBody = 'Uitgewerkt plan: '.repeat(20)
+  test('the expand-hint button itself unfolds the list', async ({ page }) => {
+    const body = (n) => `Opmerking nummer ${n}. `.repeat(10)
     await page.route('**/api/jira/comments*', (route) =>
       route.fulfill({
         json: {
           ok: true,
           groups: [
             {
-              key: 'TEST-903',
-              title: 'Two long comments',
+              key: 'TEST-904',
+              title: 'Fold test ticket 2',
+              relation: 'self',
+              comments: [1, 2, 3, 4].map((n) => ({ id: 'c' + n, author: 'Bob', created: '2026-02-0' + n + 'T10:00:00Z', body: body(n) })),
+            },
+          ],
+          canPost: false,
+          canMention: false,
+        },
+      }),
+    )
+
+    await page.goto('/plan/TEST-904')
+    await appReady(page)
+
+    const list = page.getByTestId('plan-comments-list')
+    await expect(list).toHaveAttribute('data-collapsed', 'true')
+    await page.getByTestId('plan-comments-expand-hint').click()
+    await expect(list).toHaveAttribute('data-collapsed', 'false')
+    await expect(page.getByTestId('plan-comments-state')).toHaveText('◆ opmerking actief')
+  })
+
+  test('a short list (nothing to fold) shows no expand-hint at all', async ({ page }) => {
+    await page.route('**/api/jira/comments*', (route) =>
+      route.fulfill({
+        json: {
+          ok: true,
+          groups: [
+            {
+              key: 'TEST-905',
+              title: 'Short list',
               relation: 'self',
               comments: [
-                { id: 'c1', author: 'Alice', created: '2026-01-01T10:00:00Z', body: longBody },
-                { id: 'c2', author: 'Bob', created: '2026-01-02T10:00:00Z', body: longBody },
+                { id: 'c1', author: 'Alice', created: '2026-01-01T10:00:00Z', body: 'Korte opmerking een.' },
+                { id: 'c2', author: 'Bob', created: '2026-01-02T10:00:00Z', body: 'Korte opmerking twee.' },
               ],
             },
           ],
@@ -197,32 +219,10 @@ test.describe('Plan page — long comments collapse until Enter', () => {
       }),
     )
 
-    await page.goto('/plan/TEST-903')
+    await page.goto('/plan/TEST-905')
     await appReady(page)
 
-    const rows = page.getByTestId('plan-comment-row')
-    const body0 = rows.nth(0).getByTestId('plan-comment-body')
-    const body1 = rows.nth(1).getByTestId('plan-comment-body')
-
-    // Enter opens the first comment (it IS the reviewer's own Enter press).
-    await page.keyboard.press('Enter')
-    await expect(body0).not.toHaveClass(/line-clamp-3/)
-
-    // ArrowDown to the second comment: the ring moves, but NEITHER comment is
-    // expanded — the first re-collapses, the second never auto-opened.
-    await page.keyboard.press('ArrowDown')
-    await expect(rows.nth(1)).toHaveAttribute('data-comment-cursor', 'true')
-    await expect(body0).toHaveClass(/line-clamp-3/)
-    await expect(body1).toHaveClass(/line-clamp-3/)
-
-    // Pressing Enter again opens the one the ring is now on.
-    await page.keyboard.press('Enter')
-    await expect(body1).not.toHaveClass(/line-clamp-3/)
-
-    // ArrowUp back to the first: still collapsed, has to be opened again too.
-    await page.keyboard.press('ArrowUp')
-    await expect(rows.nth(0)).toHaveAttribute('data-comment-cursor', 'true')
-    await expect(body0).toHaveClass(/line-clamp-3/)
-    await expect(body1).toHaveClass(/line-clamp-3/)
+    await expect(page.getByTestId('plan-comments-list')).toHaveAttribute('data-collapsed', 'true')
+    await expect(page.getByTestId('plan-comments-expand-hint')).toHaveCount(0)
   })
 })

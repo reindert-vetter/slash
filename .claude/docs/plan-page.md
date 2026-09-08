@@ -2121,16 +2121,9 @@ home.mjs/Block.mjs/RelatedPanel.mjs").
   — never a colour alone, the colourblind rule), the title, a comment count,
   and every comment (`avatarHTML` + author + `relativeTime` + `renderMarkdown`
   body, reusing the exact shared helpers the rest of the app uses for this).
-  A comment longer than `COMMENT_BODY_TRUNCATE_AT` (160 chars) starts
-  clamped (`line-clamp-3`) with a "meer… (Enter)" hint — mirrors
-  `Block.mjs`'s own `descExpanded`/`blockDescCollapsible` pattern for the
-  block-description strip. It expands only once that ONE comment is both the
-  cursor AND explicitly opened (`state.commentExpandedId === id` — Enter
-  pressed on it, or a direct click, which opens the one it jumps straight to;
-  arrowing PAST it with ↑/↓ does not — see "commentExpandedId" in the
-  nav-chain section right below for why that split exists), and re-clamps on
-  Enter again or ← (`exitCommentsFocus`). A short comment never shows the hint
-  at all.
+  A comment's own body is always shown in FULL — never clamped, whatever its
+  length (see "Collapsed by default: a HEIGHT fold, over the whole list, never
+  per comment" below for why not, and what folds instead).
 - **Replying:** one composer open at a time (`state.commentReplyKey`, the
   same single-cursor discipline the rest of the page follows), a plain
   UNCONTROLLED `<textarea>` (`data-testid=plan-comment-reply-input`, same
@@ -2233,43 +2226,86 @@ nested list" shape (the methodes-kolom/`tcol`, see
   drops back to the block-level selection WITHOUT changing `state.col` —
   exactly like the methodes-kolom's own `←` stays on stop 2b. `→` is a no-op
   while focused: there is no nested column to reach from inside a comment.
-- **`state.commentExpandedId` — a SEPARATE, narrower concept from the cursor
-  above (reviewer report, task 47/48: "jira opmerkingen inklappen als ik niet
-  enter erop heb gedrukt", "per jira comment zie ik elke keer uitklappen, ook
-  als er niks uit te klappen is").** Before this, "is this comment the
-  cursor" and "is this comment shown uncollapsed" were the SAME boolean
-  (`commentsActive() && state.commentCursor === id`), so arrowing past several
-  comments auto-expanded every one of them in turn, whether or not it had
-  anything to expand — pure visual noise for a short comment. Now:
-  `moveCommentCursor` (↑/↓) moves ONLY the ring and always clears
-  `commentExpandedId` — a freshly landed-on comment starts collapsed, exactly
-  "tenzij ik enter erop heb gedrukt". A plain `Enter`/`Space` while
-  `commentsActive()` (previously a no-op) now **toggles**
-  `commentExpandedId` for whichever comment the ring is on, open ↔ closed,
-  without leaving per-comment mode. `enterCommentsFocus` — the FIRST Enter
-  (from the block level) or a direct click on one comment — still opens the
-  comment it lands on immediately, since that transition itself already IS an
-  explicit Enter/click on it. `commentRow`'s own `cursorHere()` (the ring —
-  `commentsActive() && state.commentCursor === id`) and `expanded()`
-  (`cursorHere() && state.commentExpandedId === id`) are the two, now
-  genuinely separate, predicates: the body clamp/toggle text follow
-  `expanded()` only, while the ring/border and `data-comment-cursor` (what
-  `scrollCommentCursorIntoView` queries) follow `cursorHere()` regardless of
-  whether that comment is open.
 - **Two selection levels, told apart in words, never ring colour alone**
   (the colourblind rule): the panel's own header carries a badge
   (`data-testid=plan-comments-state`) reading **"◆ blok geselecteerd"**
   while the whole card carries the ring, or **"◆ opmerking actief"** once
   `commentsActive()` — mirroring `columnHeader`'s own "◆ actief" word. The
   two rings are mutually exclusive by construction
-  (`isCommentsRowSelected() && !commentsActive()` for the card, `cursorHere()`
-  for a row), so only one shows at a time (the "never two selections visible
-  at once" rule, commit `27ce93c`). **The per-row "● actief" word badge next
-  to a comment's author line is gone** (reviewer request, task 48: "'actief'
-  kan weg omdat het al duidelijk is door die border") — the ring/border was
-  always the SHAPE cue next to that word (belt and suspenders), and stays as
-  the row's only "here" indicator now that the word is removed; nothing lost
-  for the colourblind rule, since a border/ring is a shape, not a colour.
+  (`isCommentsRowSelected() && !commentsActive()` for the card,
+  `commentsActive() && state.commentCursor === id` for a row), so only one
+  shows at a time (the "never two selections visible at once" rule, commit
+  `27ce93c`). **The per-row "● actief" word badge next to a comment's author
+  line is gone** (reviewer request, task 48: "'actief' kan weg omdat het al
+  duidelijk is door die border") — the ring/border was always the SHAPE cue
+  next to that word (belt and suspenders), and stays as the row's only "here"
+  indicator now that the word is removed; nothing lost for the colourblind
+  rule, since a border/ring is a shape, not a colour.
+
+### Collapsed by default: a HEIGHT fold, over the whole list, never per comment
+
+Reviewer request, task 48b — a correction of an earlier, wrong reading of
+"opmerkingen inklappen" (task 48 above had built a PER-COMMENT text clamp/
+toggle, since reverted): *"ik bedoel niet verticaal inklappen, nee comments
+moeten horizontaal inklappen tot 2,5 laatste comments"*, then, asked which of
+two concrete readings was meant (a horizontal card carousel, or a vertical
+list whose visible HEIGHT folds): *"paneel smal, laatste ~2,5: de lijst
+blijft verticaal, maar het opmerkingen-paneel staat standaard smal ingeklapt
+en toont alleen de laatste ~2,5 comments (volledige tekst); Enter/klik klapt
+het volledig open"* — with the explicit addition **"maar breedte blijft
+altijd hetzelfde"** (the column's width never changes) and **over the WHOLE
+flattened list**, not per ticket/group.
+
+- **`commentsListExpanded()` reuses `commentsFocused` itself** — no new state
+  field. The exact same action that already hands `↑`/`↓` to the individual
+  comments (`enterCommentsFocus`: Enter on the block, or a click on one
+  comment) is what reveals the full history, and leaving that mode
+  (`exitCommentsFocus`, `←`) is exactly when it should fold back down.
+- **`COMMENTS_COLLAPSED_CLS`** (`'max-h-[260px] justify-end
+  plan-comments-fade-top'`, applied to the `data-testid=plan-comments-list`
+  wrapper around every `commentGroupCard`) caps the list's height at roughly
+  2.5 short comments — necessarily an APPROXIMATION, an individual comment's
+  real height varies with its text, exactly as imprecise as the reviewer's
+  own "~2,5" — and bottom-anchors the content (`flex flex-col justify-end`)
+  so the NEWEST comments (rendered last, at the bottom of the flattened list)
+  stay visible and the OLDER ones scroll out of view at the top. A `max-h`
+  rather than a fixed height, so a short list that already fits inside that
+  budget is never padded with blank space above it.
+- **`.plan-comments-fade-top`** (`plan.html`) softens the cut edge — the
+  mirror of the existing `.code-fence-fade-bottom` mask (same "there's more,
+  hidden this way" cue), just fading the OPPOSITE edge (top, since content is
+  bottom-anchored here). A plain alpha mask, not colour, so no dark-mode
+  variant needed, same as the original.
+- **`plan-comments-expand-hint`** — a small button under the (possibly)
+  clipped list naming the same unfold action in WORDS ("Toon alle
+  opmerkingen (Enter)"), never relying on the fade alone (the colourblind
+  rule) — clicking it calls `enterCommentsFocus()` directly, same as
+  clicking any individual comment does. Hidden once expanded, and also
+  hidden below `COMMENTS_COLLAPSE_HINT_MIN` (3) comments in the whole
+  flattened list — "never offer an affordance for a fold that can't
+  plausibly be hiding anything", the same reasoning `planCommands`'
+  conditional "Opnieuw plannen" item already follows.
+- **A comment's own body is never text-clamped any more, at any width** —
+  `commentRow` always renders the full `renderMarkdown` output; the earlier
+  `COMMENT_BODY_TRUNCATE_AT`/`commentBodyCollapsible`/`line-clamp-3`
+  machinery (task 48's own per-comment expand toggle, and the original
+  pre-task-47 clamp it was itself layered on) is gone outright. The visible
+  content NOW gets exactly as tall as its text needs; only the outer list's
+  overall HEIGHT folds.
+- **Visual trade-off, accepted rather than engineered around**: because the
+  fold is a plain CSS height clip over the WHOLE list rather than a
+  per-comment data slice, a collapsed view can cut a `commentGroupCard`
+  (one ticket's own bordered card, header + comments) off mid-height when
+  its comments straddle the visible/hidden boundary — an earlier group's
+  header can end up invisible while its last comment(s) still show. Given
+  "over de hele lijst heen" (across the whole list, not per group) was the
+  explicit scope, and the fade + expand-hint already communicate "there's
+  more", this was accepted as the simplest correct implementation rather than
+  reflowing per-group boundaries around the fold.
+
+Test: `tests/plan-comments.spec.mjs` ("the comments panel folds to the last
+~2.5 comments" — collapsed-by-default, Enter/click-to-expand, the expand-hint
+button, and a short list showing no hint at all).
 - **Mouse**: a click on the panel's own background runs `selectCommentsRow()`
   — the same block-level selection a plain `→` already lands on
   (mouse-navigation.md rule 1). A click directly on one comment
@@ -2307,7 +2343,5 @@ by hand against the real `PAYM-813` ticket too — screenshots
 `task27-jira-comments-block-selected.png` (block-level ring, "blok
 geselecteerd") and `task27-jira-comments-navigating.png` (the per-comment
 ring, "opmerking actief", the block-level ring gone) in `data/review-shots/`.
-The same file also has "arrowing between comments moves the ring only — each
-stays collapsed until its own Enter" (task 48: two long comments, ↓ between
-them proven to leave both collapsed, Enter opens whichever one the ring is
-currently on).
+The same file's "the comments panel folds to the last ~2.5 comments" describe
+block covers the HEIGHT fold (task 48b) — see "Collapsed by default" above.
