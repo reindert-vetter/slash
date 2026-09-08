@@ -34,10 +34,20 @@ import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 // see .claude/docs/plan-page.md). Only the PRESENTATION is reused: the
 // backend behind it is this page's own (the plan_answer Signal's "chat" Kind,
 // keyed on the Jira key rather than a GitHub PR number, since there is no PR
-// yet at planning time) — never home.mjs/RelatedPanel.mjs's PR-scoped chat
-// engine (SSE progress, cancel, checkout), which this page has no PR to hang
-// on. See planChatOverlay below.
+// yet at planning time) — never home.mjs/RelatedPanel.mjs's whole PR-scoped
+// chat engine (retry ladder, queueing, checkout/werkmap), which this page has
+// no PR to hang on. The one piece of that engine THIS page does reuse is the
+// live progress channel (events.mjs + claudeTurns.mjs) — see
+// ensurePlanChatEvents/chatView below and "Live progress" in
+// .claude/docs/plan-page.md. See planChatOverlay below.
 import { claudeChatColumn } from './ClaudeChat.mjs'
+// The live "what is Claude doing right now" wiring behind this chat is
+// reused unchanged from the review tree: events.mjs's one multiplexed SSE
+// stream and claudeTurns.mjs's per-conversation snapshot store are both pure,
+// component-less utilities that only need a conversation id — see
+// ensurePlanChatEvents below and "Live progress" in .claude/docs/plan-page.md.
+import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
+import { setTurnProgress, turnProgress, lastTurnProgressAt } from './claudeTurns.mjs'
 import { assigneeMark, avatarHTML } from './avatar.mjs'
 import { relativeTime } from './relativeTime.mjs'
 // alignRows is the review tree's OWN line aligner, extracted to its own module
@@ -171,12 +181,18 @@ const state = reactive({
   // fullscreen overlay (ephemeral — not in the URL/localStorage, exactly like
   // the tree's own generalChatOverlay.mjs: Escape simply hides it again, the
   // conversation itself is durable on the document). chatBusy/chatError cover
-  // the one in-flight Signal round trip: there is no streaming here (a single
-  // blocking Claude call, not a multi-tool agentic turn), so "busy" is the
-  // whole status this page can show.
+  // the one in-flight Signal round trip (the reviewer's own "did my send go
+  // through" state); the LIVE turn itself — what Claude is doing right now,
+  // streamed token by token — lives in claudeTurns.mjs's shared per-
+  // conversation store instead (see chatConvId/ensurePlanChatEvents), keyed
+  // by the same conversation id as every other conversation this tab knows
+  // about. chatTick is read purely to register a reactive dependency for the
+  // 1s elapsed-seconds heartbeat (see syncPlanChatTicker) — the value itself
+  // is never used, same trick as RelatedPanel.mjs's own cc.tick.
   chatOpen: false,
   chatBusy: false,
   chatError: '',
+  chatTick: 0,
   // The Jira-comments panel above the questions index (task 23b, see
   // .claude/docs/plan-page.md). comments mirrors GET /api/jira/comments's own
   // shape plus a loading/error flag; loaded is false until the first read
@@ -328,6 +344,24 @@ bindUrlState(state, [
 // loadPlan reads the whole document in one read-only GET. The response is
 // compared as text first: the poll runs every few seconds and a reassignment
 // would rebuild the option rows (and thereby wipe a half-typed answer field).
+//
+// MEASURED BUG, fixed here: sendChatMessage echoes the reviewer's own message
+// onto state.doc.chat optimistically and then awaits a BLOCKING Signal POST
+// (handlePlanChat runs the whole Claude reply inline, which can take many
+// seconds) — but the 3s poll below keeps running meanwhile, and it used to
+// overwrite state.doc (chat included) with whatever the server still had
+// stored, i.e. WITHOUT the just-sent message, the moment it landed before the
+// blocking POST returned. Reported as "ik typ hier iets, maar de chat is
+// opeens weg" (data/review-shots/task7-ticket-chat-gone.png: the overlay back
+// to "Nog geen gesprek…"). Fix: keep the locally-echoed chat array for as
+// long as the server's own chat still reports FEWER messages than we already
+// show — the moment it catches up (its own count is at least as high,
+// whether that arrives via the chat.message push, sendChatMessage's own
+// post-Signal refetch, or an ordinary poll) its version wins again, chatBusy
+// or not. A plain length comparison, not object equality: the reviewer never
+// has two messages in flight at once (sendChatMessage refuses a second send
+// while chatBusy), so "server has caught up" only ever means "at least as
+// many rows".
 let lastPayload = ''
 async function loadPlan() {
   try {
@@ -345,7 +379,10 @@ async function loadPlan() {
       return
     }
     lastPayload = payload
-    state.doc = body.doc || EMPTY_DOC
+    const freshDoc = body.doc || EMPTY_DOC
+    const freshChat = freshDoc.chat || []
+    const localChat = state.doc.chat || []
+    state.doc = freshChat.length < localChat.length ? { ...freshDoc, chat: localChat } : freshDoc
     state.runs = Array.isArray(body.runs) ? body.runs : []
     dropSettledRetrying()
     state.generating = !!body.generating
@@ -937,6 +974,86 @@ function chatMessages() {
   return (state.doc.chat || []).map((m, i) => ({ id: 'chat:' + i, role: m.role, body: m.body }))
 }
 
+// chatConvId is the conversation id this ticket's chat pushes/polls live
+// progress under — planChatConversationID(key) on the Go side (plan_workflow.go),
+// mirrored here so both sides agree without either reading the other's code.
+// Prefixed (never a bare Jira key) so it can never collide with a real GitHub
+// comment id, which is always numeric.
+function chatConvId() {
+  return 'plan:' + state.key
+}
+
+// syncPlanChatTicker runs a 1s heartbeat only while this ticket's own chat
+// turn is actually running — mirrors RelatedPanel.mjs's syncChatTicker
+// (module-private there, so a small copy lives here too), trimmed to the one
+// conversation this page ever has.
+let chatTickTimer = null
+function syncPlanChatTicker() {
+  const p = turnProgress(chatConvId())
+  const running = !!(p && p.running)
+  if (running && !chatTickTimer) {
+    chatTickTimer = setInterval(() => {
+      state.chatTick = Date.now()
+    }, 1000)
+  } else if (!running && chatTickTimer) {
+    clearInterval(chatTickTimer)
+    chatTickTimer = null
+  }
+}
+
+// loadChatProgressResync is the RESYNC read for the live-progress channel
+// (GET /api/chat/progress?commentId=...) — same generic, conversation-id-keyed
+// endpoint the review tree's own loadChatProgress uses (RelatedPanel.mjs),
+// just for this page's single fixed conversation. Runs on first connect and on
+// every SSE reconnect, never as a poll.
+async function loadChatProgressResync() {
+  const convId = chatConvId()
+  const startedAt = Date.now()
+  try {
+    const res = await fetch('/api/chat/progress?commentId=' + encodeURIComponent(convId))
+    if (!res.ok) return
+    const json = await res.json()
+    // A pushed event that landed WHILE this request was in flight is newer —
+    // it must win, same guard as RelatedPanel.mjs's loadChatProgress.
+    if (lastTurnProgressAt(convId) > startedAt) return
+    setTurnProgress(convId, json.running && json.progress ? json.progress : null)
+    syncPlanChatTicker()
+  } catch (_) {
+    // a missing snapshot just means "no live turn known" — nothing to show
+  }
+}
+
+// ensurePlanChatEvents wires this ticket's chat into the shared SSE stream
+// (events.mjs) and the shared per-conversation progress store (claudeTurns.mjs)
+// — called once at page load, next to setInterval(loadPlan, POLL_MS) below.
+// This page has no PR, so ensureEvents() opens the plain, unscoped connection
+// (every PR-less push, plus a plan chat's own — see eventbus.go's publish,
+// which never scopes a pr:0 event to one PR); every handler below filters on
+// this ticket's OWN conversation id, so an unrelated event from another open
+// tab (a review-tree turn, another ticket's chat) is simply ignored.
+let planChatEventsBound = false
+function ensurePlanChatEvents() {
+  ensureEvents()
+  if (planChatEventsBound) return
+  planChatEventsBound = true
+  const convId = chatConvId()
+  onEvent('chat.progress', (ev) => {
+    if (ev.key !== convId) return
+    setTurnProgress(convId, ev.data || null)
+    syncPlanChatTicker()
+  })
+  onEvent('chat.message', (ev) => {
+    if (ev.key !== convId) return
+    // The transcript changed server-side (the reply landed) — refetch it the
+    // ordinary way, same "an event is never the source of truth" rule as
+    // every other SSE consumer (see .claude/docs/server-events.md).
+    lastPayload = ''
+    loadPlan()
+  })
+  onEventsResync(loadChatProgressResync)
+  loadChatProgressResync()
+}
+
 // chatSignalName picks which signal the chat message rides on: tembed can
 // only WaitSignal on one name at a time, and the tracker is parked on a
 // DIFFERENT signal while the scope/hotfix gate stands (see needsScope/
@@ -950,10 +1067,14 @@ function chatSignalName() {
 
 // sendChatMessage sends one reviewer message. The message is echoed onto
 // state.doc locally FIRST (optimistic — the same "local pick wins until the
-// document catches up" shape answerFor uses) so it appears immediately; the
-// Signal round trip both stores it for real and runs the Claude reply inline
-// (see handlePlanChat in plan_workflow.go), so the very next loadPlan()
-// already carries both.
+// document catches up" shape answerFor uses) so it appears immediately. The
+// Signal round trip still blocks until the whole reply is generated
+// (handlePlanChat runs it inline), but the reviewer no longer just waits on a
+// blank overlay for that: the LIVE turn — status/streamed text — arrives
+// meanwhile over the same SSE channel the review tree's own chat uses, see
+// ensurePlanChatEvents/chatView. This await is only the belt-and-braces
+// refetch for the reviewer's OWN send, exactly like RelatedPanel.mjs's
+// sendClaudeMessage.
 async function sendChatMessage(text) {
   const trimmed = (text || '').trim()
   if (!trimmed || state.chatBusy) return
@@ -962,7 +1083,6 @@ async function sendChatMessage(text) {
   state.chatBusy = true
   state.chatError = ''
   state.doc = { ...state.doc, chat: [...(state.doc.chat || []), { role: 'user', body: trimmed }] }
-  lastPayload = ''
   try {
     const res = await fetch('/api/workflows/' + encodeURIComponent(state.runId) + '/signals/' + chatSignalName(), {
       method: 'POST',
@@ -970,6 +1090,7 @@ async function sendChatMessage(text) {
       body: JSON.stringify({ kind: 'chat', text: trimmed }),
     })
     if (!res.ok) state.chatError = t('Kon niet verstuurd worden.')
+    lastPayload = ''
     await loadPlan()
   } catch (err) {
     state.chatError = t('Kon niet verstuurd worden.')
@@ -979,12 +1100,12 @@ async function sendChatMessage(text) {
 
 // chatView/chatCallbacks are claudeChatColumn's own two arguments (see
 // ClaudeChat.mjs's file header: getters + plain callbacks, no reactive state
-// of its own). Every field the review tree's richer engine needs for
-// streaming progress/retry/cancel/queueing/scroll-pinning is stubbed to its
-// inert value here on purpose — this page's chat has none of that (a single
-// blocking call per message, no agentic tool use, no werkmap) — so nothing
-// in claudeChatColumn's template ever tries to render a control this page
-// cannot back.
+// of its own). Most fields the review tree's richer engine needs stay
+// stubbed to their inert value on purpose — this page's chat still has no
+// retry ladder, queueing, or werkmap — but progress/busy/elapsed now read the
+// SAME live per-conversation snapshot the tree's own chat does (turnProgress,
+// claudeTurns.mjs), keyed by chatConvId(), so claudeChatColumn's existing
+// status line/partial-answer bubble render for real here too.
 function chatView() {
   return {
     messages: () => chatMessages(),
@@ -997,9 +1118,14 @@ function chatView() {
     pinned: () => true,
     claudeOptionSel: () => 0,
     anchorHint: () => '',
-    progress: () => null,
+    progress: () => turnProgress(chatConvId()),
     queued: () => [],
-    elapsed: () => 0,
+    elapsed: () => {
+      const p = turnProgress(chatConvId())
+      if (!p || !p.startedAt) return 0
+      void state.chatTick
+      return Math.max(0, Math.round((Date.now() - p.startedAt) / 1000))
+    },
   }
 }
 
@@ -3476,6 +3602,7 @@ if (!planKey) {
   // when the write reassigns the SAME value" pitfall in
   // .claude/rules/arrowjs-pitfalls.md).
   setInterval(loadPlan, POLL_MS)
+  ensurePlanChatEvents()
   // The Jira-opmerkingen block only enters navRows() once commentFlatList()
   // has something in it, and loadPlan()'s own clampCursor() only defaults
   // state.cur when it isn't found at all — so on a genuinely cold cache

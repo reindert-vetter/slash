@@ -729,7 +729,7 @@ document every answer already lives on.
   (`planAnswerChat`, the same one-signal-multiplexed-by-Kind convention
   `"followup"` already uses): the reviewer's message (`Text`) is appended to
   `doc.Chat`, saved, then `planChatReply` — ONE Claude call
-  (`m.claude.Run`, no tools, plain prose — never JSON, unlike
+  (`m.claude.RunChat`, no tools, plain prose — never JSON, unlike
   `planGenerate`) — answers it and is appended too. `planChatPrompt`
   (`plan_prompt.go`) shares `writePlanContext` with `planPrompt` (extracted
   from it) so the chat discusses the exact same ticket/comments/merged-work/
@@ -755,23 +755,93 @@ document every answer already lives on.
   lands.
 - **Frontend**: `chatView()`/`chatCallbacks()` (`plan.mjs`) are
   `claudeChatColumn`'s own two arguments — getters + plain callbacks, see
-  `ClaudeChat.mjs`'s file header. Every field the tree's richer engine needs
-  (streaming `progress`, `retryAllBusy`, `queued`, scroll-pinning, …) is
-  stubbed to its inert value on purpose: this page's chat is a single
-  blocking call per message, never an agentic multi-tool turn, so nothing in
-  `claudeChatColumn`'s template ever tries to render a control this page
-  cannot back (no retry ladder, no cancel, no werkmap). `openPlanChat`/
-  `closePlanChat` (`state.chatOpen`) gate a fullscreen overlay
-  (`planChatOverlay`) that mirrors the tree's own `generalChatOverlay.mjs`
-  shape (backdrop click / Escape closes it) — ephemeral, not in the URL or
-  `localStorage`, exactly like that overlay. `/` always opens it, from any
-  column, mirroring the tree's own "`/` always opens the PR menu" rule; mouse
-  entry point: `plan-chat-button` in `ticketCard`'s "Weergave" row.
-- **Accepted gap**: no streaming, no cancel, no retry, no werkmap/code-edit
+  `ClaudeChat.mjs`'s file header. `retryAllBusy`/`queued` stay stubbed to their
+  inert value on purpose: this page's chat still has no retry ladder or
+  queueing (a single blocking call per message, never an agentic multi-tool
+  turn). `openPlanChat`/`closePlanChat` (`state.chatOpen`) gate a fullscreen
+  overlay (`planChatOverlay`) that mirrors the tree's own
+  `generalChatOverlay.mjs` shape (backdrop click / Escape closes it) —
+  ephemeral, not in the URL or `localStorage`, exactly like that overlay. `/`
+  always opens it, from any column, mirroring the tree's own "`/` always opens
+  the PR menu" rule; mouse entry point: `plan-chat-button` in `ticketCard`'s
+  "Weergave" row.
+- **Remaining accepted gap**: no cancel, no retry, no werkmap/code-edit
   capability — this chat can only talk, never touch code (that is what "Plan
   uitvoeren" is for). A hiccup (`SLASH_CLAUDE=off`, or the CLI erroring) still
   appends a fixed assistant line saying so, rather than leaving the
   reviewer's own message answered by nothing.
+
+### Live progress (reviewer request: "ik wil daar ook progress zien net zoals in claude chat in een pr")
+
+The "no streaming" line above used to be part of the accepted-gap list — it no
+longer is. The reviewer explicitly asked for the SAME live-progress experience
+the PR review tree's own chat has (a status line, a streamed partial answer),
+not merely a busy indicator, so this chat now reuses the tree's live-progress
+machinery outright rather than reinventing a plan-specific version of it:
+
+- **`chat_progress.go`/`eventbus.go` needed NO change at all.** Both were
+  already generic per-**conversation-id** machinery (`chatProgress`,
+  `startChatProgress`/`advanceChatProgress`/`finishChatProgress`/
+  `chatProgressSink`, the `chat.progress`/`chat.message` SSE events) — `repo`/
+  `pr` only matter for the PR-scoped bookkeeping this chat never touches
+  (`runningChatProgressForPR`, `markChatFilesPending`), so a plan turn simply
+  passes `""`/`0` for both. `GET /api/chat/progress?commentId=...` (the SSE
+  resync read) already accepts any string id too.
+- **The one real gap was `m.claude.Run`**, which has no `OnEvent`/streaming
+  support at all (confirmed by reading `modules/claude/claude.go`) — only
+  `m.claude.RunChat` streams. `planChatReply` (`plan_workflow.go`) therefore
+  switched from `Run` to `RunChat`, wrapped with
+  `startChatProgress("", 0, convID)` / `defer finishChatProgress("", 0, convID)`
+  and `OnEvent: chatProgressSink("", 0, convID, &checkoutDir)` — the exact
+  same three calls `runOneClaudeTurn` (`chat_workflow.go`) makes, just with an
+  always-empty `checkoutDir` (this call gets no `Tools`, so `ChatEventTool`
+  never fires and the edited-files bookkeeping stays untouched). No
+  `SessionID` is passed — `planChatPrompt` already reconstructs the whole
+  transcript as text on every call, so the CLI needs no session memory across
+  turns; each call is a fresh, independent `RunChat` session.
+  `publishChatChanged("", 0, convID)` is called once the reply (or the
+  Claude-unavailable fallback) is appended, so the frontend's `chat.message`
+  handler refetches instead of trusting a pushed payload — same rule as every
+  other SSE consumer (`.claude/docs/server-events.md`).
+- **`planChatConversationID(key) = "plan:" + key`** (`plan_workflow.go`) is the
+  conversation id this rides under — prefixed so it can never collide with a
+  real GitHub comment id (always numeric). `src/plan.mjs`'s `chatConvId()`
+  mirrors it verbatim; the two sides agree without reading each other's code.
+- **Frontend wiring reuses two existing shared, component-less modules
+  outright**: `events.mjs` (`ensureEvents`/`onEvent`/`onEventsResync` — the
+  one multiplexed SSE stream) and `claudeTurns.mjs` (`setTurnProgress`/
+  `turnProgress`/`lastTurnProgressAt` — the per-conversation snapshot store
+  the tree's own chat also reads). `ensurePlanChatEvents()` (`plan.mjs`,
+  called once next to `setInterval(loadPlan, POLL_MS)`) calls `ensureEvents()`
+  with no `pr` (this page has none — the broadcast connection, since
+  `eventbus.go`'s `publish` never scopes a `pr:0` event to one PR) and filters
+  every handler on `ev.key === chatConvId()`, so an unrelated event from
+  another open tab (a review-tree turn, another ticket's chat) is simply
+  ignored. `chatView()`'s `progress`/`elapsed` now read `turnProgress(...)` for
+  real (a small local `state.chatTick` + `syncPlanChatTicker` drive the 1s
+  heartbeat, mirroring `RelatedPanel.mjs`'s module-private `cc.tick`/
+  `syncChatTicker`) — `claudeChatColumn`'s existing status line/partial-answer
+  bubble (`claudePartialBubble`, `ClaudeChat.mjs`) therefore render for real
+  here too, with **no change needed in `ClaudeChat.mjs` itself**.
+- **The verified bug this landed alongside**: `sendChatMessage` echoes the
+  reviewer's message onto `state.doc.chat` optimistically and then awaits the
+  BLOCKING Signal POST (`handlePlanChat` runs the whole reply inline, which
+  can take many seconds) — but `loadPlan`'s 3s poll kept running meanwhile and
+  used to overwrite `state.doc` (chat included) with whatever the server still
+  had stored, i.e. without the just-sent message, the moment a poll landed
+  before the blocking POST returned. Reported verbatim: *"ik typ hier iets,
+  maar de chat is opeens weg"* (`data/review-shots/task7-ticket-chat-gone.png`
+  — the overlay back to "Nog geen gesprek…"). Fix, in `loadPlan`: keep the
+  locally-echoed `chat` array for as long as the server's own reports FEWER
+  messages than already shown — a plain length comparison, not object
+  equality, safe because `sendChatMessage` refuses a second send while
+  `state.chatBusy` (never two messages in flight for one ticket at once). The
+  moment the server catches up (chat.message push, `sendChatMessage`'s own
+  post-Signal refetch, or an ordinary poll) its version wins again, `chatBusy`
+  or not. Regression test: `tests/plan-chat.spec.mjs` ("the reviewer's own
+  message survives a poll tick…" — delays the signals response past one poll
+  tick via `page.route`, without touching the Go side at all, to make the race
+  deterministic).
 
 ### Never two selections visible at once
 

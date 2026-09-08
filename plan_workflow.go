@@ -98,6 +98,17 @@ const planAnswerFollowup = "followup"
 // for this kind, same shape as planAnswerFollowup above.
 const planAnswerChat = "chat"
 
+// planChatConversationID is the conversation id this ticket's chat pushes/
+// polls its LIVE progress under (chat_progress.go/eventbus.go — both already
+// keyed purely by an opaque conversation-id string, no PR needed). Prefixed
+// so it can never collide with a real GitHub comment id (always numeric) —
+// mirrored verbatim in src/plan.mjs's chatConvId, since both sides must agree
+// without reading each other's code. See planChatReply below and "Live
+// progress" in .claude/docs/plan-page.md.
+func planChatConversationID(key string) string {
+	return "plan:" + key
+}
+
 // planAnswerComment is the PlanAnswerSignal Kind the page sends right after a
 // reply was posted on a Jira comment (the jira_comment workflow did the actual
 // posting — see jira_comment.go): re-read the family's Jira comments onto the
@@ -299,9 +310,11 @@ type planAnswer struct {
 // planChatMessage is one turn of the free-form "algemene chat" about this
 // ticket — the review tree's own Claude chat, reused (.claude/docs/
 // plan-page.md): Role is "user" (the reviewer) or "assistant" (Claude), Body
-// its text. Deliberately NOT the tree's chat.Message (no streaming progress,
-// no kind/model/noShell — this is a single blocking Signal + one Claude call,
-// not a multi-tool agentic turn), see planChatReply.
+// its text. Deliberately NOT the tree's chat.Message (no kind/model/noShell —
+// this is a single blocking Signal + one Claude call, not a multi-tool agentic
+// turn). The LIVE progress of that call is not stored here either: it rides
+// the same volatile chat_progress.go snapshot the tree's chat uses, keyed on
+// planChatConversationID — see planChatReply.
 type planChatMessage struct {
 	Role      string `json:"role"`
 	Body      string `json:"body"`
@@ -1220,6 +1233,18 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 	// assistant turn saying so, exactly like the tree's own failed-turn
 	// bubbles, rather than leaving the reviewer's own message unanswered
 	// forever.
+	//
+	// Live progress (reviewer request: "ik wil daar ook progress zien net
+	// zoals in claude chat in een pr"): reuses the review tree's own volatile
+	// snapshot + SSE push (chat_progress.go/eventbus.go) verbatim, keyed on
+	// planChatConversationID rather than a GitHub comment id — those are
+	// already generic per-conversation-id machinery, nothing PR-specific
+	// leaks in as long as repo/pr stay ""/0 (only used elsewhere for
+	// PR-scoped bookkeeping this chat never touches: runningChatProgressForPR,
+	// markChatFilesPending). This is also why the call switches from
+	// m.claude.Run (no streaming support at all) to m.claude.RunChat, mirroring
+	// runOneClaudeTurn (chat_workflow.go); checkoutDir stays permanently empty
+	// since this call gets no Tools and therefore never fires ChatEventTool.
 	engine.RegisterActivity("planChatReply", func(ctx context.Context, in []byte) ([]byte, error) {
 		var doc planDoc
 		if err := json.Unmarshal(in, &doc); err != nil {
@@ -1227,16 +1252,22 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 		}
 		now := time.Now().UTC().Format(time.RFC3339)
 		doc.UpdatedAt = now
+		convID := planChatConversationID(doc.Key)
 		if m.claude == nil {
 			doc.Chat = append(doc.Chat, planChatMessage{Role: "assistant", Body: "Claude is nu niet beschikbaar.", CreatedAt: now})
 			doc.Chat = trimPlanChat(doc.Chat)
+			publishChatChanged("", 0, convID)
 			return json.Marshal(doc)
 		}
-		raw, err := m.claude.Run(ctx, claude.RunRequest{
-			Model:  claude.ModelSonnet,
-			Prompt: planChatPrompt(doc) + explainLangTail(m.LangFor(ctx, langpref.KindExplain)),
+		startChatProgress("", 0, convID)
+		defer finishChatProgress("", 0, convID)
+		var checkoutDir string
+		result, err := m.claude.RunChat(ctx, claude.RunRequest{
+			Model:   claude.ModelSonnet,
+			Prompt:  planChatPrompt(doc) + explainLangTail(m.LangFor(ctx, langpref.KindExplain)),
+			OnEvent: chatProgressSink("", 0, convID, &checkoutDir),
 		})
-		reply := strings.TrimSpace(raw)
+		reply := strings.TrimSpace(result.Text)
 		if err != nil || reply == "" {
 			if err != nil {
 				m.logf("plan: chat reply %s: %v", doc.Key, err)
@@ -1245,6 +1276,7 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 		}
 		doc.Chat = append(doc.Chat, planChatMessage{Role: "assistant", Body: reply, CreatedAt: now})
 		doc.Chat = trimPlanChat(doc.Chat)
+		publishChatChanged("", 0, convID)
 		return json.Marshal(doc)
 	})
 	// Activity: persist the document (write, workflow-driven).
