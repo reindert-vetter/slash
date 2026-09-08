@@ -147,6 +147,14 @@ const ui = reactive({
   readyFor: null, reviewers: [], reviewersLoading: false, reviewersError: null, selectedReviewers: {}, readySubmitting: false,
   removingReviewer: null, removeReviewerError: null,
   popoverAbove: false,
+  // sectionsRefreshing/jiraIssuesRefreshing — the busy flag behind the manual
+  // "Refresh" button now shown above every category (see refreshButton
+  // below). Each is ONE SHARED flag, not per-section: every PR section reads
+  // the same pr_inbox read-model, and every Jira-issue section (today just
+  // "Planning"; a later change may split it per sprint — see jiraIssueSection)
+  // reads the same jira_issues read-model, so there is no per-section tracker
+  // to target individually.
+  sectionsRefreshing: false, jiraIssuesRefreshing: false,
 })
 
 // INGEST_STAGE_LABELS — Dutch labels for the busy button while /api/ingest is
@@ -213,6 +221,11 @@ const ICON_PATHS = {
   // Lucide's own bell, same 24x24/stroke-2 set.
   bell:
     '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
+  // 'refresh-cw' — the manual per-category "Refresh" button above a PR
+  // section and above the Planning section (refreshButton). Lucide's own
+  // refresh-cw, same 24x24/stroke-2 set.
+  'refresh-cw':
+    '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
 }
 
 // icon renders one outline SVG (24x24 viewBox, stroke=currentColor). The path
@@ -1752,12 +1765,41 @@ function stackGroup(nodes, sectionOf) {
 // same "let the key force a fresh node" pattern the block cards in home.mjs use
 // (see .claude/rules/arrowjs-pitfalls.md). It only fires on a real set change,
 // so an unchanged poll still repaints nothing.
+// refreshButton — the manual "Refresh" affordance shown in a category's own
+// header (reviewer request: "in pr overview wil ik een refresh knop boven
+// elke categorie. zo kan ik nieuwe taken laten zien onder planning" — the
+// Planning section otherwise only picks up a newly created ticket on its own
+// 5-minute tracker tick, see jira_issues.go). It sits INSIDE each section's
+// header row rather than once above the whole page, so a section that later
+// splits into several (e.g. one Planning block per sprint, see
+// jiraIssueSection) keeps getting one on every block for free, with no
+// assumption elsewhere that there is exactly one such section.
+//
+// Read-only from this button's own point of view, per
+// .claude/rules/workflows-write-boundary.md: it only asks the existing
+// tracker (pr_inbox / jira_issues) for a fresh fetch, exactly like the
+// automatic refresh this page already sends once per load
+// (sendRefresh/repollAfterRefresh) or the Jira bell's own `?refresh=1`.
+function refreshButton(busy, onClick, testid) {
+  return html`<button
+    type="button"
+    data-testid="${testid}"
+    class="ml-auto shrink-0 rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 disabled:opacity-50 dark:text-zinc-500 dark:hover:bg-zinc-800 dark:hover:text-zinc-300"
+    title="${t('Vernieuwen')}"
+    aria-label="${t('Vernieuwen')}"
+    disabled="${() => busy()}"
+    @click="${onClick}"
+    >${() => icon('refresh-cw', busy() ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5')}</button
+  >`
+}
+
 function sectionBlock(sec, filteredPrs) {
   if (!filteredPrs.length) return null
   return html`
     <section data-testid="section" data-title="${sec.title}">
       <div class="mb-3 mt-16 flex items-center gap-2 first:mt-6">
         <h2 class="text-[15px] font-semibold text-slate-900 dark:text-zinc-100">${sec.title}</h2>
+        ${refreshButton(() => ui.sectionsRefreshing, refreshSectionsNow, 'section-refresh')}
       </div>
       ${listBox(filteredPrs.map((pr) => ({ pr })))}
     </section>
@@ -2638,6 +2680,7 @@ function jiraIssueSection(list) {
         <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500 dark:bg-zinc-800/80 dark:text-zinc-400"
           >${own}</span
         >
+        ${refreshButton(() => ui.jiraIssuesRefreshing, refreshJiraIssuesNow, 'jira-issue-refresh')}
       </div>
       <div class="rounded-xl border border-slate-200 bg-slate-50 dark:border-zinc-800 dark:bg-zinc-900/60">
         ${list.map((is) => jiraIssueRow(is, !!(is.parentKey && keys.has(is.parentKey))))}
@@ -4258,17 +4301,60 @@ async function reloadSnapshot() {
 }
 
 // After a refresh signal the workflow fetches in the background, so pull the
-// fresh snapshot in a few times shortly after (then settle to the slow cadence).
-function repollAfterRefresh() {
+// fresh snapshot in a few times shortly after (then settle to the slow
+// cadence). onDone (optional) fires once the poll loop stops, whichever way —
+// used by the manual refresh button to clear its own busy flag.
+function repollAfterRefresh(onDone) {
   let n = 0
   const id = setInterval(() => {
     n++
     if (n > 4 || !activeTab()) {
       clearInterval(id)
+      if (onDone) onDone()
       return
     }
     reloadSnapshot()
   }, 1500)
+}
+
+// refreshSectionsNow — the per-section "Refresh" button above every PR
+// section (sectionBlock, see refreshButton). All PR sections share the ONE
+// pr_inbox read-model, so clicking any of them sends the exact same signal +
+// repoll this page already sends once on load.
+function refreshSectionsNow() {
+  if (ui.sectionsRefreshing || !state.inboxRunId) return
+  ui.sectionsRefreshing = true
+  sendRefresh().then(() => repollAfterRefresh(() => (ui.sectionsRefreshing = false)))
+}
+
+// refreshJiraIssuesNow — the "Refresh" button above the Planning section
+// (see refreshButton). GET /api/jira/issues?refresh=1 asks the jira_issues
+// tracker for a fresh fetch IN THE BACKGROUND and still answers with the
+// current snapshot immediately (jira_issues.go's handleJiraIssues — the same
+// read-GET-with-a-trigger shape as the Jira bell's own ?refresh=1), so this
+// re-polls loadJiraIssues a few times afterwards to pick up the tracker's own
+// (slow, ~seconds) fetch, mirroring repollAfterRefresh's shape.
+function refreshJiraIssuesNow() {
+  if (ui.jiraIssuesRefreshing) return
+  ui.jiraIssuesRefreshing = true
+  fetch('/api/jira/issues?refresh=1')
+    .then((res) => (res.ok ? res.json() : null))
+    .then((body) => {
+      if (body && body.ok) state.jiraIssues = Array.isArray(body.issues) ? body.issues : []
+    })
+    .catch(() => {})
+    .then(() => {
+      let n = 0
+      const id = setInterval(() => {
+        n++
+        if (n > 4 || !activeTab()) {
+          clearInterval(id)
+          ui.jiraIssuesRefreshing = false
+          return
+        }
+        loadJiraIssues()
+      }, 1500)
+    })
 }
 
 // loadProblems pulls the failure list (GET /api/problems, read-only).

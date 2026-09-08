@@ -134,4 +134,36 @@ test.describe('PR overview — the merged Jira issue list', () => {
     await rows.nth(3).click()
     await expect.poll(() => startedKey).toEqual({ key: 'STAT-1081' })
   })
+
+  test('the Planning section\'s own refresh button asks for a fresh Jira fetch', async ({ page }) => {
+    // Reviewer request: "in pr overview wil ik een refresh knop boven elke
+    // categorie. zo kan ik nieuwe taken laten zien onder planning" — the
+    // section otherwise only picks up a new ticket on the jira_issues
+    // tracker's own 5-minute tick. See refreshButton/refreshJiraIssuesNow in
+    // src/overview.mjs.
+    let refreshCalls = 0
+    await page.route('**/api/jira/issues**', (route) => {
+      const url = new URL(route.request().url())
+      if (url.searchParams.get('refresh') === '1') refreshCalls++
+      route.fulfill({ json: { ok: true, fetchedAt: '', issues: rows } })
+    })
+
+    await page.goto('/pr-overview')
+    await appReady(page)
+
+    const btn = page.getByTestId('jira-issue-refresh')
+    await expect(btn).toBeVisible()
+    await expect(btn).toBeEnabled()
+
+    await btn.click()
+    // Busy while the manual refresh + its repoll is in flight.
+    await expect(btn).toBeDisabled()
+    await expect.poll(() => refreshCalls).toBeGreaterThan(0)
+    // Settles back to enabled once the repoll loop stops.
+    await expect(btn).toBeEnabled({ timeout: 10_000 })
+
+    // The section stays intact — the button asks for fresh data, it doesn't
+    // replace the current list until a real fetch returns one.
+    await expect(page.locator('[data-testid="jira-issue-row"], [data-testid="jira-context-row"]')).toHaveCount(4)
+  })
 })

@@ -646,4 +646,32 @@ test.describe('PR Review Tree — PR inbox', () => {
     const focused = await page.evaluate(() => document.activeElement?.getAttribute('data-testid'))
     expect(focused).toBe('search')
   })
+
+  // Reviewer request: "in pr overview wil ik een refresh knop boven elke
+  // categorie" — every PR section (sectionBlock) reads the one shared
+  // pr_inbox read-model, so its own refresh button signals that same tracker
+  // (refreshSectionsNow/repollAfterRefresh, src/overview.mjs), same as the
+  // Jira "Planning" section's own button (tests/overview-jira-issues.spec.mjs).
+  test('a PR section\'s own refresh button asks the pr_inbox tracker for a fresh fetch', async ({ page }) => {
+    await page.goto('/pr-overview')
+    await appReady(page)
+
+    let refreshCalls = 0
+    await page.route('**/api/workflows/*/signals/refresh', async (route) => {
+      refreshCalls++
+      await route.continue()
+    })
+
+    const section = page.locator('[data-testid="section"][data-title="Needs your review"]')
+    const btn = section.locator('[data-testid="section-refresh"]')
+    await expect(btn).toBeVisible()
+    await expect(btn).toBeEnabled()
+
+    await btn.click()
+    // Busy while the signal + its repoll are in flight.
+    await expect(btn).toBeDisabled()
+    await expect.poll(() => refreshCalls).toBeGreaterThan(0)
+    // Settles back to enabled once the repoll loop stops.
+    await expect(btn).toBeEnabled({ timeout: 10_000 })
+  })
 })

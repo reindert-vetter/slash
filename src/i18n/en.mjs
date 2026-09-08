@@ -333,6 +333,9 @@ export const EN = {
   '{n} genegeerd, {s} overgeslagen.': '{n} ignored, {s} skipped.',
 
   // ── src/overview.mjs ─────────────────────────────────────────────────────
+  // The manual per-category refresh button (above a PR section and above
+  // "Planning").
+  Vernieuwen: 'Refresh',
   // Jira notification feed (the bell menu as rows, above the PR sections).
   'Alleen ongelezen': 'Only show unread',
   ongelezen: 'unread',

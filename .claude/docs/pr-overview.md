@@ -807,6 +807,51 @@ The row is never an `<a href="/pr/<id>">`, so the old hover-only
 `regenerateButton` and the separate `data-row` wrapper were removed — they only
 existed to avoid nesting an interactive element in an `<a>`.
 
+## A manual "Refresh" button above every category
+
+Reviewer request: "in pr overview wil ik een refresh knop boven elke
+categorie. zo kan ik nieuwe taken laten zien onder planning" — the Planning
+section otherwise only picks up a newly created ticket on the `jira_issues`
+tracker's own 5-minute tick (see "'Planning': the one list of sprint work
+before a PR exists" above), and a PR section only on the `pr_inbox` tracker's
+own cadence.
+
+- **One shared component, `refreshButton(busy, onClick, testid)`**
+  (`src/overview.mjs`) — a small icon-only button (the `refresh-cw` glyph,
+  spinning via `animate-spin` while busy) rendered **inside a section's own
+  header row**, next to its `<h2>`: `sectionBlock` (every PR section,
+  `data-testid=section-refresh`) and `jiraIssueSection` ("Planning",
+  `data-testid=jira-issue-refresh`). It sits in the header of the section
+  function itself, not once above the whole page, so a section that later
+  splits into several (e.g. one Planning block per sprint) keeps getting its
+  own button for free, with no assumption elsewhere that there is exactly one
+  such section. `disabled` uses the plain-attribute-name + function-binding
+  convention (`.claude/rules/arrowjs-pitfalls.md`), never `?disabled=`.
+- **No backend change was needed — both write-boundary-sanctioned mechanisms
+  already existed**, just not wired to a manual button yet:
+  - **PR sections** share the ONE `pr_inbox` read-model, so there is no
+    per-section tracker to target: `refreshSectionsNow()` calls the existing
+    `sendRefresh()` (a Signal to `state.inboxRunId`, previously only sent once
+    on page load by `startLiveSync`) then `repollAfterRefresh()` (also
+    pre-existing, now taking an optional `onDone` callback so the manual
+    button can clear its own busy flag once the poll loop settles).
+  - **The Planning section** reads the `jiraissues` read-model behind the
+    `jira_issues` tracker; `refreshJiraIssuesNow()` calls
+    `GET /api/jira/issues?refresh=1` (`jira_issues.go`'s `handleJiraIssues` —
+    already supported `?refresh=1` before this button existed, the same
+    read-GET-with-a-trigger shape as the Jira bell's own `?refresh=1`), then
+    re-polls `loadJiraIssues()` a few times to pick up the tracker's own slow
+    (~seconds) background fetch, mirroring `repollAfterRefresh`'s shape.
+- **Each busy flag (`ui.sectionsRefreshing`/`ui.jiraIssuesRefreshing`) is ONE
+  SHARED flag, not per-section** — for the same "one read-model behind
+  several rendered sections" reason above. Clicking any PR section's button
+  spins every PR section's button at once (they all reflect the same
+  underlying refresh); likewise for however many Planning-lane sections a
+  later per-sprint split renders.
+- Tests: "a PR section's own refresh button asks the `pr_inbox` tracker for a
+  fresh fetch" (`tests/overview.spec.mjs`), "the Planning section's own
+  refresh button asks for a fresh Jira fetch" (`tests/overview-jira-issues.spec.mjs`).
+
 ## "Nieuw sinds jouw comment/review" (`newSinceKind`)
 
 The "Bijgewerkt … geleden" line (`rowMeta`, `src/overview.mjs`) can carry one
