@@ -70,6 +70,30 @@ type Issue struct {
 	// plan page plans WITH: a comment that walks the description back is worth
 	// more than the description itself (see .claude/docs/plan-page.md).
 	Comments []Comment `json:"comments,omitempty"`
+	// Links are the issue's OFFICIAL Jira issue links ("relates to", "blocks",
+	// "is blocked by", …) — distinct from Parent/Subtasks, which are Jira's own
+	// separate hierarchy field. Only populated by Issue(). Used by the plan
+	// page to notice "PROD-254 relates to PROD-216" and pull that OTHER
+	// ticket's own context in (.claude/docs/plan-page.md, "Referenced tickets
+	// outside this one's own family").
+	Links []IssueLink `json:"links,omitempty"`
+}
+
+// IssueLink is one official Jira issue link: the OTHER issue plus the relation
+// phrase in Jira's own words ("relates to", "blocks", "is blocked by", …) —
+// always phrased from THIS issue's point of view, so the page can say
+// "PROD-254 relates to PROD-216" without knowing which side of the link is
+// stored as inward/outward in Jira's own payload.
+type IssueLink struct {
+	Key    string `json:"key"`
+	Title  string `json:"title"`
+	Status string `json:"status,omitempty"`
+	// Relation is the phrase in THIS issue's own voice ("relates to", "is
+	// blocked by", …) — Jira's issuelinks field stores one type name plus an
+	// inward/outward phrasing pair and names which SIDE of the pair the other
+	// issue sits on (outwardIssue/inwardIssue); relationFromACLI resolves that
+	// once so callers never have to.
+	Relation string `json:"relation,omitempty"`
 }
 
 // Comment is one Jira comment, flattened the same way a description is.
@@ -179,6 +203,10 @@ type acliIssue struct {
 		Comment struct {
 			Comments []acliComment `json:"comments"`
 		} `json:"comment"`
+		// issuelinks is Jira's own official link list — a type name plus an
+		// inward/outward phrasing pair, and the OTHER issue on whichever one of
+		// inwardIssue/outwardIssue is actually present (never both).
+		IssueLinks []acliIssueLinkEntry `json:"issuelinks"`
 	} `json:"fields"`
 }
 
@@ -220,6 +248,57 @@ type acliIssueLink struct {
 	} `json:"fields"`
 }
 
+// acliIssueLinkEntry is one entry of the issuelinks field — Jira's official
+// "relates to"/"blocks"/… link, as opposed to acliIssueLink (parent/subtasks,
+// a separate hierarchy field with its own, simpler shape).
+type acliIssueLinkEntry struct {
+	Type struct {
+		Inward  string `json:"inward"`
+		Outward string `json:"outward"`
+	} `json:"type"`
+	// Exactly one of these is present per entry — which one tells us which
+	// phrasing (inward/outward) applies from THIS issue's point of view.
+	OutwardIssue *acliLinkedIssue `json:"outwardIssue"`
+	InwardIssue  *acliLinkedIssue `json:"inwardIssue"`
+}
+
+// acliLinkedIssue is the OTHER issue named by one issuelinks entry — same
+// summary/status/issuetype envelope as acliIssueLink.
+type acliLinkedIssue struct {
+	Key    string `json:"key"`
+	Fields struct {
+		Summary string `json:"summary"`
+		Status  struct {
+			Name string `json:"name"`
+		} `json:"status"`
+	} `json:"fields"`
+}
+
+// issueLinkFromACLI turns one issuelinks entry into the trimmed IssueLink
+// callers see, phrased from THIS issue's own point of view. Returns the zero
+// value (Key == "") for a malformed entry (neither side present) — the caller
+// skips those.
+func issueLinkFromACLI(e acliIssueLinkEntry) IssueLink {
+	var other *acliLinkedIssue
+	var relation string
+	if e.OutwardIssue != nil {
+		other = e.OutwardIssue
+		relation = e.Type.Outward
+	} else if e.InwardIssue != nil {
+		other = e.InwardIssue
+		relation = e.Type.Inward
+	}
+	if other == nil || strings.TrimSpace(other.Key) == "" {
+		return IssueLink{}
+	}
+	return IssueLink{
+		Key:      strings.TrimSpace(other.Key),
+		Title:    strings.TrimSpace(other.Fields.Summary),
+		Status:   strings.TrimSpace(other.Fields.Status.Name),
+		Relation: strings.TrimSpace(relation),
+	}
+}
+
 // issueRef turns one such link into the trimmed form callers see.
 func issueRef(l acliIssueLink) IssueRef {
 	return IssueRef{
@@ -257,7 +336,7 @@ func (m *Module) Issue(ctx context.Context, key string) (Issue, error) {
 	ctx, cancel := context.WithTimeout(ctx, cliTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "acli", "jira", "workitem", "view", key,
-		"--fields", "summary,description,parent,subtasks,issuetype,comment,assignee", "--json")
+		"--fields", "summary,description,parent,subtasks,issuetype,comment,assignee,issuelinks", "--json")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -295,6 +374,11 @@ func issueFromACLI(key string, parsed acliIssue) Issue {
 	for _, st := range parsed.Fields.Subtasks {
 		if ref := issueRef(st); ref.Key != "" {
 			issue.Subtasks = append(issue.Subtasks, ref)
+		}
+	}
+	for _, e := range parsed.Fields.IssueLinks {
+		if l := issueLinkFromACLI(e); l.Key != "" {
+			issue.Links = append(issue.Links, l)
 		}
 	}
 	all := parsed.Fields.Comment.Comments

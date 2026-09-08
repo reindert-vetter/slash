@@ -117,6 +117,18 @@ const planAnswerComment = "comment"
 // Task* fields below.
 const planAnswerTask = "task"
 
+// planAnswerIntent is the PlanAnswerSignal Kind the reviewer's edit of the
+// "Intentie" field (column 0) sends — reviewer request: "in taak description
+// eerste kolom moet de intentie zichtbaar zijn, maar dat moeten we ook kunnen
+// aanpassen". Text is the WHOLE edited intent text, replacing the
+// auto-generated intent.md wholesale (doc.IntentOverride) — never merged
+// section-by-section, which would be brittle against free-form edits. An
+// empty Text clears the override, reverting to the auto-generated one. Like
+// planAnswerTask this only saves the document (via planSave, which already
+// rewrites the artifact files — see writePlanArtifacts) and triggers no
+// regeneration.
+const planAnswerIntent = "intent"
+
 // maxPlanChatMessages bounds how long the chat transcript on the document is
 // allowed to grow (oldest dropped first, always in pairs so a lone orphaned
 // reply/question is never left dangling) — the same reasoning as
@@ -363,9 +375,31 @@ type planDoc struct {
 	Comments        []planComment   `json:"comments,omitempty"`
 	RelatedComments []planComment   `json:"relatedComments,omitempty"`
 	RelatedPRs      []planRelatedPR `json:"relatedPRs,omitempty"`
-	LoadsContext    bool            `json:"loadsContext,omitempty"`
-	Questions       []planQuestion  `json:"questions"`
-	Tasks           []planTask      `json:"tasks"`
+	// Referenced are the OTHER tickets this ticket's family points at, outside
+	// its own family — a Jira link or a bare key mention — each with its own
+	// best-effort branch, see plan_context.go's "Referenced tickets outside
+	// this one's own family". Filled by the same planLoadContext Activity as
+	// RelatedPRs, gated by the same LoadsContext replay flag.
+	Referenced []planReferencedIssue `json:"referenced,omitempty"`
+	// Links/ParentLinks are the OFFICIAL Jira issue links of this ticket and
+	// (if this is a subtask) its main task — read once in planLoadIssue since
+	// Issue() is already called for both; collectPlanReferencedKeys
+	// (planLoadContext, plan_context.go) reads them from here rather than
+	// paying for a second call. Not rendered directly anywhere; Referenced
+	// above is the reader-facing result.
+	Links       []jira.IssueLink `json:"links,omitempty"`
+	ParentLinks []jira.IssueLink `json:"parentLinks,omitempty"`
+	// IntentOverride replaces the auto-generated intent.md wholesale once the
+	// reviewer edits the "Intentie" field in column 0 (reviewer request: "in
+	// taak description eerste kolom moet de intentie zichtbaar zijn, maar dat
+	// moeten we ook kunnen aanpassen") — see the planAnswerIntent Kind below
+	// and renderPlanIntent (plan_artifacts.go). Empty means "show the
+	// auto-generated one", the default for every document recorded before
+	// this existed.
+	IntentOverride string         `json:"intentOverride,omitempty"`
+	LoadsContext   bool           `json:"loadsContext,omitempty"`
+	Questions      []planQuestion `json:"questions"`
+	Tasks          []planTask     `json:"tasks"`
 	// TaskStates is the reviewer's checkbox/note per task (see planTaskState).
 	// Absent for every document written before task 22 existed, which reads as
 	// "every task checked, no notes" — the default.
@@ -594,6 +628,15 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			doc.TaskStates = upsertPlanTaskState(doc.TaskStates, sig)
 			if err := w.ExecuteActivity("planSave", doc, nil); err != nil {
 				return nil, fmt.Errorf("plan: save task state: %w", err)
+			}
+			continue
+		}
+		// The reviewer edited the "Intentie" field: replace intent.md wholesale
+		// (see planAnswerIntent's own doc comment).
+		if sig.Kind == planAnswerIntent {
+			doc.IntentOverride = strings.TrimSpace(sig.Text)
+			if err := w.ExecuteActivity("planSave", doc, nil); err != nil {
+				return nil, fmt.Errorf("plan: save intent override: %w", err)
 			}
 			continue
 		}
@@ -953,6 +996,7 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 		doc.Title, doc.Description, doc.URL = issue.Title, issue.Description, issue.URL
 		doc.IssueType = issue.Type
 		doc.Assignee, doc.AssigneeAvatarURL = issue.Assignee, issue.AssigneeAvatarURL
+		doc.Links = issue.Links
 		// Only once the ticket really was read: a document that failed to load
 		// has no plan to build either way, and parking it on a branch question
 		// would ask for nothing.
@@ -980,6 +1024,7 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 				m.logf("plan: load parent %s of %s: %v", doc.ParentKey, arg.Key, perr)
 			} else {
 				doc.ParentDescription = parent.Description
+				doc.ParentLinks = parent.Links
 				if strings.TrimSpace(parent.Title) != "" {
 					doc.ParentTitle = parent.Title
 				}
@@ -1021,6 +1066,16 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 			return nil, err
 		}
 		keys := planRelatedKeys(doc)
+		// linksByKey seeds collectPlanReferencedKeys below with the official
+		// Jira links already read for this ticket and its parent (planLoadIssue)
+		// — no second call.
+		linksByKey := map[string][]jira.IssueLink{}
+		if len(doc.Links) > 0 {
+			linksByKey[doc.Key] = doc.Links
+		}
+		if doc.ParentKey != "" && len(doc.ParentLinks) > 0 {
+			linksByKey[strings.ToUpper(doc.ParentKey)] = doc.ParentLinks
+		}
 		// The comments of the subtasks/siblings — one acli call each, so
 		// bounded. This ticket's own and its main task's comments are already
 		// on the document.
@@ -1041,6 +1096,9 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 						Key: key, Author: c.Author, Created: c.Created, Body: c.Body,
 					})
 				}
+				if len(issue.Links) > 0 {
+					linksByKey[key] = issue.Links
+				}
 			}
 		}
 		found := make([]planRelatedPR, 0, 8)
@@ -1051,6 +1109,15 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 		for i := range doc.RelatedPRs {
 			doc.RelatedPRs[i].Files = prChangedFiles(ctx, doc.RelatedPRs[i].Number)
 		}
+		// Referenced tickets outside this one's own family — every Jira link
+		// and every bare key mention, each enriched with its own title/url and
+		// (best-effort) the branch it already has work on. See
+		// plan_context.go.
+		refs := collectPlanReferencedKeys(doc, linksByKey)
+		for i := range refs {
+			refs[i] = resolvePlanReferencedIssue(ctx, m.jira, refs[i])
+		}
+		doc.Referenced = refs
 		return json.Marshal(doc)
 	})
 	// Activity: re-read the family's Jira comments onto the document, after the

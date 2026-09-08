@@ -376,3 +376,46 @@ func TestPlanArtifactsView(t *testing.T) {
 		t.Error("planArtifactsView accepted an unusable key")
 	}
 }
+
+// TestRenderPlanIntentListsReferencedIssuesWithBranch pins the "Related
+// tickets" section: an authoritative GitHub-PR branch is phrased differently
+// from a Jira-text guess (never presented as fact), and a ticket with no
+// known branch at all still says so plainly.
+func TestRenderPlanIntentListsReferencedIssuesWithBranch(t *testing.T) {
+	doc := planDoc{
+		Key: "PROD-254", Title: "Statistieken in clickhouse",
+		Referenced: []planReferencedIssue{
+			{Key: "PROD-216", Title: "Productgroepen", Reason: "relates to", Branch: "feature/PROD-216-groepen", BranchSource: "pr:#4211"},
+			{Key: "PROD-300", Title: "Migratie", Reason: "vermeld in tekst", Branch: "prod-300-migratie", BranchSource: "jira-tekst"},
+			{Key: "PROD-9", Title: "Oud ticket", Reason: "vermeld in tekst"},
+		},
+	}
+	got := renderPlanIntent(doc)
+	for _, want := range []string{
+		"## Related tickets",
+		"**PROD-216** (Productgroepen) — relates to; work already on branch `feature/PROD-216-groepen` (pr:#4211)",
+		"**PROD-300** (Migratie) — vermeld in tekst; possibly on branch `prod-300-migratie` (guessed from jira-tekst — unverified)",
+		"**PROD-9** (Oud ticket) — vermeld in tekst; no known branch yet",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("intent misses %q\n---\n%s", want, got)
+		}
+	}
+}
+
+// TestRenderPlanIntentHonorsOverride asserts the reviewer's own edit of the
+// "Intentie" field replaces the auto-generated document WHOLESALE — the
+// generated sections (Problem/Constraints/…) must not leak through.
+func TestRenderPlanIntentHonorsOverride(t *testing.T) {
+	doc := planDoc{
+		Key: "PROD-254", Title: "Statistieken", Description: "auto-generated problem text",
+		IntentOverride: "Mijn eigen intentie: dit ticket bouwt voort op PROD-216.",
+	}
+	got := renderPlanIntent(doc)
+	if got != doc.IntentOverride {
+		t.Fatalf("renderPlanIntent = %q, want the override verbatim", got)
+	}
+	if strings.Contains(got, "auto-generated problem text") || strings.Contains(got, "## Problem") {
+		t.Error("the override must replace the generated document, not merge with it")
+	}
+}

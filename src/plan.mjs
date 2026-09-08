@@ -90,6 +90,12 @@ const state = reactive({
   runs: [],
   generating: false,
   runId: '',
+  // The CURRENT intent.md text — the auto-generated document, or the
+  // reviewer's own override (state.doc.intentOverride) once they edit it.
+  // Computed server-side (renderPlanIntent) and sent as its own top-level
+  // GET /api/plan field, same as `artifacts` — the "Intentie" field in
+  // column 0 seeds itself with this. See .claude/docs/plan-page.md.
+  intentText: '',
   // Which column owns the keyboard: 0 = the ticket, 1 = questions/tasks,
   // 2 + n = the n-th block column (2 is the first one).
   col: 1,
@@ -345,6 +351,7 @@ async function loadPlan() {
     state.generating = !!body.generating
     state.exec = body.exec || null
     state.artifacts = body.artifacts || null
+    state.intentText = body.intent || ''
     state.error = ''
     state.loading = false
     if (!state.doc.needsScope) state.scopePending = false
@@ -534,6 +541,26 @@ async function sendTaskState(task, off, note) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ kind: 'task', taskId: task.id || '', taskTitle: task.title || '', taskOff: !!off, taskNote: note || '' }),
+    })
+  } catch (err) {
+    // Nothing to undo: the next poll shows what the tracker really stored.
+  }
+}
+
+// sendIntentOverride replaces the auto-generated intent.md WHOLESALE with the
+// reviewer's own edited text (planAnswerIntent Kind, see plan_workflow.go) —
+// an empty text clears the override, reverting to the auto-generated one.
+// lastPayload is reset so the very next poll's (possibly slower-arriving)
+// response is not mistaken for "nothing changed" and skipped.
+async function sendIntentOverride(text) {
+  lastPayload = ''
+  if (!state.runId) await ensureTracker()
+  if (!state.runId) return
+  try {
+    await fetch('/api/workflows/' + encodeURIComponent(state.runId) + '/signals/plan_answer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'intent', text: text || '' }),
     })
   } catch (err) {
     // Nothing to undo: the next poll shows what the tracker really stored.
@@ -1763,6 +1790,87 @@ function relatedPRRow(pr) {
   `.key('relpr:' + pr.number)
 }
 
+// referencedIssueRow is one ticket referenced by this one's family but
+// OUTSIDE it — a Jira link or a bare key mention (see collectPlanReferencedKeys,
+// plan_context.go) — with the branch it already has work on, if any was
+// found. Reviewer request: "als het goed is moet PROD-254 dan rekening
+// houden met PROD-216. kan je ervoor zorgen dat je achterhaalt wat de branch
+// is waar PROD-216 al iets in heeft gedaan?". A Jira-text-guessed branch is
+// worded as a guess ("vermoedelijk"), never presented as fact — only a real
+// GitHub PR's own branch (BranchSource starting with "pr:") is stated
+// plainly, same distinction renderPlanIntent's own text makes.
+function referencedIssueRow(r) {
+  const branchLine = r.branch
+    ? (r.branchSource || '').startsWith('pr:')
+      ? t('branch {branch} ({source})', { branch: r.branch, source: r.branchSource })
+      : t('vermoedelijk branch {branch} (uit jira-tekst, ongeverifieerd)', { branch: r.branch })
+    : t('nog geen bekende branch')
+  return html`
+    <a
+      href="${'/plan/' + encodeURIComponent(r.key)}"
+      class="block rounded-md px-1 py-0.5 text-[11.5px] leading-snug text-slate-600 hover:bg-slate-100 dark:text-zinc-300 dark:hover:bg-zinc-700"
+      data-testid="plan-referenced-issue"
+      ><span class="font-mono text-[10.5px] text-slate-400 dark:text-zinc-500">${r.key}</span>
+      <span>${' ' + (r.title || '') + ' — ' + (r.reason || '')}</span>
+      <span class="block text-[10.5px] text-slate-400 dark:text-zinc-500">${branchLine}</span></a
+    >
+  `.key('ref:' + r.key)
+}
+
+// intentField is the "Intentie" block — reviewer request: "in taak
+// description eerste kolom moet de intentie zichtbaar zijn, maar dat moeten
+// we ook kunnen aanpassen". Shows the CURRENT intent.md text (auto-generated
+// via state.intentText, or the reviewer's own state.doc.intentOverride once
+// they edited it) in an editable, uncontrolled textarea — same "static
+// value=, save on blur" pattern as plan-task-note above, so a slow poll never
+// clobbers a half-typed edit.
+//
+// Keyed on the loading state (not on state.intentText/doc.updatedAt) so the
+// textarea's static `value=` is seeded exactly ONCE, right after the first
+// real load — remounting on every later poll would wipe an in-progress edit,
+// exactly the bug plan-task-note's own key discipline avoids. A REMOTE change
+// (another tab/reviewer editing the same ticket at the same time) is a known,
+// accepted gap, same as plan-task-note.
+function intentField() {
+  const loaded = !state.loading
+  const seed = state.doc.intentOverride || state.intentText
+  return html`
+    <div class="mt-3 border-t border-slate-100 pt-2 dark:border-zinc-800" data-testid="plan-intent">
+      <div class="mb-1 flex items-center justify-between">
+        <span class="${LABEL}">${t('Intentie')}</span>
+        <div class="contents">
+          ${() =>
+            state.doc.intentOverride
+              ? html`<button
+                  type="button"
+                  data-testid="plan-intent-reset"
+                  class="text-[10.5px] text-slate-400 underline hover:text-slate-600 dark:text-zinc-500 dark:hover:text-zinc-300"
+                  @click="${(e) => {
+                    e.stopPropagation()
+                    sendIntentOverride('')
+                  }}"
+                >
+                  ${t('Terug naar automatisch gegenereerd')}
+                </button>`
+              : ''}
+        </div>
+      </div>
+      <textarea
+        data-testid="plan-intent-field"
+        rows="6"
+        placeholder="${t('Intentie wordt automatisch gegenereerd…')}"
+        class="w-full resize-y rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-[12px] leading-relaxed text-slate-800 placeholder:text-slate-400 focus:border-indigo-300 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500"
+        @blur="${(e) => {
+          if (!e) return
+          const val = e.target.value || ''
+          if (val !== seed) sendIntentOverride(val)
+        }}"
+      >${seed}</textarea
+      >
+    </div>
+  `.key('intent:' + (loaded ? 'ready' : 'pending'))
+}
+
 // PHASE_WORD is the reviewer-facing word of each phase. The WORD carries the
 // meaning, never a colour on its own (Reindert is colourblind), and the glyph
 // (a filled/open/checked shape) is a second, non-colour signal on top of it.
@@ -1880,6 +1988,17 @@ function ticketCard() {
               </div>`
             : ''}
       </div>
+      <div class="contents">
+        ${() =>
+          (state.doc.referenced || []).length
+            ? html`<div class="mt-2 shrink-0 rounded-lg bg-slate-50 px-2 py-1.5 ring-1 ring-slate-200 dark:bg-zinc-800 dark:ring-zinc-700" data-testid="plan-referenced-issues">
+                <div class="${LABEL + ' mb-1'}">${t('Gerelateerde tickets')}</div>
+                <div class="flex flex-col gap-1">
+                  ${() => (state.doc.referenced || []).map((r) => referencedIssueRow(r))}
+                </div>
+              </div>`
+            : ''}
+      </div>
       <div class="mt-3 flex shrink-0 items-center justify-between">
         <span class="${LABEL}">${t('Weergave')}</span>
         <div class="flex items-center gap-1.5">
@@ -1967,6 +2086,7 @@ function ticketCard() {
               : ''}
         </div>
       </div>
+      <div class="contents">${() => intentField()}</div>
       <div class="contents">
         ${() =>
           state.doc.error

@@ -215,3 +215,33 @@ func TestIssueCapsComments(t *testing.T) {
 		t.Fatalf("kept the wrong window: %q…%q", got.Comments[0].Body, got.Comments[len(got.Comments)-1].Body)
 	}
 }
+
+// TestIssueParsesIssueLinks pins the official-link parsing the plan page's
+// "referenced tickets" feature depends on: an outwardIssue entry is phrased
+// with the TYPE's outward word, an inwardIssue entry with the inward word, and
+// a malformed entry (neither side present) is dropped rather than producing a
+// blank link.
+func TestIssueParsesIssueLinks(t *testing.T) {
+	raw := []byte(`{"key":"PROD-254","fields":{"summary":"Statistieken",
+		"issuelinks":[
+			{"type":{"inward":"is blocked by","outward":"relates to"},
+			 "outwardIssue":{"key":"PROD-216","fields":{"summary":"Productgroepen","status":{"name":"In Progress"}}}},
+			{"type":{"inward":"is blocked by","outward":"blocks"},
+			 "inwardIssue":{"key":"PROD-300","fields":{"summary":"Migratie","status":{"name":"To Do"}}}},
+			{"type":{"inward":"is blocked by","outward":"relates to"}}
+		]}}`)
+	var parsed acliIssue
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	got := issueFromACLI("PROD-254", parsed)
+	if len(got.Links) != 2 {
+		t.Fatalf("links = %+v, want 2 (the malformed entry dropped)", got.Links)
+	}
+	if got.Links[0].Key != "PROD-216" || got.Links[0].Title != "Productgroepen" || got.Links[0].Relation != "relates to" {
+		t.Fatalf("outward link = %+v", got.Links[0])
+	}
+	if got.Links[1].Key != "PROD-300" || got.Links[1].Relation != "is blocked by" {
+		t.Fatalf("inward link = %+v", got.Links[1])
+	}
+}

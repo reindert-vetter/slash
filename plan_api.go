@@ -78,6 +78,11 @@ func (s *server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	if artifacts, ok := planArtifactsView(mgr.dataDir, doc); ok {
 		payload["artifacts"] = artifacts
 	}
+	// intent is the CURRENT intent.md text (auto-generated, or the reviewer's
+	// own override — see renderPlanIntent) — computed here, at read time, same
+	// as artifacts above, rather than stored twice: it is what column 0's
+	// editable "Intentie" field seeds itself with (.claude/docs/plan-page.md).
+	payload["intent"] = renderPlanIntent(doc)
 	writeJSON(w, http.StatusOK, payload)
 }
 

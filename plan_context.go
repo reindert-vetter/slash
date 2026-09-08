@@ -28,10 +28,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"slash/modules/jira"
 )
 
 // planContextTimeout bounds one gh/acli read, so a hung CLI costs this Activity
@@ -190,4 +193,214 @@ func prChangedFiles(ctx context.Context, number int) []string {
 		files = append(files, f.Path)
 	}
 	return files
+}
+
+// ---------------------------------------------------------------------------
+// Referenced tickets OUTSIDE this one's own family — a Jira link or a bare
+// key mention, plus (best-effort) the branch that ticket already has work on.
+//
+// Reviewer request, verbatim: *"als het goed is moet PROD-254 dan rekening
+// houden met PROD-216. kan je ervoor zorgen dat je achterhaalt wat de branch
+// is waar PROD-216 al iets in heeft gedaan? waarschijnlijk zit dat in een
+// subtaak, soms ook in een description."* — every Jira link AND every bare
+// key-shaped mention (description/subtask/comment) is followed, and the
+// branch is looked for in BOTH the PR/branch text on GitHub and the Jira
+// text itself. See .claude/docs/plan-page.md.
+// ---------------------------------------------------------------------------
+
+// maxPlanReferencedIssues bounds how many OTHER tickets (outside this
+// ticket's own family, see planRelatedKeys) get their own context pulled in —
+// each one costs its own acli (+ a few more, see
+// maxPlanReferencedSubtaskTextReads) and gh read.
+const maxPlanReferencedIssues = 3
+
+// maxPlanReferencedSubtaskTextReads bounds how many of a referenced ticket's
+// OWN subtasks get read while looking for a branch mention in their text —
+// the reviewer's own hint that the actual work often sits one level down
+// ("waarschijnlijk zit dat in een subtaak").
+const maxPlanReferencedSubtaskTextReads = 2
+
+// planKeyMentionPattern matches a Jira-key-shaped token in free text
+// (description, comment) — the same shape planKeyPattern validates, minus the
+// bare-numeric form (a free-text "42" is never a ticket reference).
+var planKeyMentionPattern = regexp.MustCompile(`\b[A-Z][A-Z0-9]+-\d+\b`)
+
+// planReferencedIssue is one ticket referenced by this one's family but
+// OUTSIDE it — via an official Jira link, or a bare mention in free text.
+type planReferencedIssue struct {
+	Key    string `json:"key"`
+	Title  string `json:"title,omitempty"`
+	Status string `json:"status,omitempty"`
+	URL    string `json:"url,omitempty"`
+	// Reason is in WORDS, never a colour/icon alone (the colourblind rule):
+	// the Jira link's own relation phrase ("relates to", "is blocked by", …)
+	// or "vermeld in tekst" for a bare mention with no official link.
+	Reason string `json:"reason"`
+	// Branch/BranchSource are best-effort — Jira has no fixed convention for
+	// stating a branch name, so a Jira-text match is a HEURISTIC and always
+	// labelled as such (BranchSource starting with "jira-tekst"), never shown
+	// as fact. A GitHub PR's own headRefName is authoritative and preferred.
+	Branch       string `json:"branch,omitempty"`
+	BranchSource string `json:"branchSource,omitempty"`
+}
+
+// collectPlanReferencedKeys gathers every OTHER ticket key this ticket's
+// family (doc + parent + subtasks + siblings) points at, deduplicated,
+// excluding the family's own keys, bounded by maxPlanReferencedIssues.
+// linksByKey carries the official Links already read for each family member
+// (planLoadContext already fetches every member's own Issue() for its
+// comments, so this reuses that read rather than paying for a second one).
+// An official link is collected before a bare mention, so when both name the
+// same ticket the real relation phrase wins as the recorded Reason (seen[]
+// keeps only the first).
+func collectPlanReferencedKeys(doc planDoc, linksByKey map[string][]jira.IssueLink) []planReferencedIssue {
+	family := map[string]bool{}
+	for _, k := range planRelatedKeys(doc) {
+		family[strings.ToUpper(k)] = true
+	}
+	out := make([]planReferencedIssue, 0, maxPlanReferencedIssues)
+	seen := map[string]bool{}
+	add := func(key, reason string) {
+		key = strings.ToUpper(strings.TrimSpace(key))
+		if key == "" || family[key] || seen[key] || !planKeyPattern.MatchString(key) || len(out) >= maxPlanReferencedIssues {
+			return
+		}
+		seen[key] = true
+		out = append(out, planReferencedIssue{Key: key, Reason: orDash(reason)})
+	}
+	for _, links := range linksByKey {
+		for _, l := range links {
+			add(l.Key, l.Relation)
+		}
+	}
+	var text strings.Builder
+	text.WriteString(doc.Description)
+	text.WriteString(" ")
+	text.WriteString(doc.ParentDescription)
+	for _, c := range doc.Comments {
+		text.WriteString(" " + c.Body)
+	}
+	for _, c := range doc.RelatedComments {
+		text.WriteString(" " + c.Body)
+	}
+	for _, k := range planKeyMentionPattern.FindAllString(text.String(), -1) {
+		add(k, "vermeld in tekst")
+	}
+	return out
+}
+
+// branchMentionPattern finds a plausible branch NAME containing key in free
+// Jira text — best-effort only (Jira has no fixed convention for stating a
+// branch name): a slash/dash/dot-delimited token with no whitespace that
+// contains the key, case-insensitively (a branch name is often lowercased
+// even though the Jira key itself is upper).
+func branchMentionPattern(key string) *regexp.Regexp {
+	return regexp.MustCompile(`(?i)[\w./-]*` + regexp.QuoteMeta(strings.ToUpper(key)) + `[\w./-]*`)
+}
+
+// findBranchInText returns the first plausible branch-shaped match, trimmed
+// of surrounding punctuation a reviewer might have typed around it
+// ("branch: `foo`." → "foo").
+func findBranchInText(key, text string) string {
+	m := branchMentionPattern(key).FindString(text)
+	return strings.Trim(m, "`'\".,;: ")
+}
+
+// findBranchViaGH is searchMergedPRs's sibling: ANY PR state (open, draft,
+// closed, merged) mentioning key, plus its own branch name — "al iets gedaan"
+// does not require having merged yet. An OPEN PR (work genuinely in
+// progress) is preferred over a merged/closed one; within a tier, the most
+// recently updated wins. A gh that cannot answer yields "", never an error.
+func findBranchViaGH(ctx context.Context, key string) (branch, source string) {
+	if !planKeyPattern.MatchString(key) {
+		return "", ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, planContextTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "gh", "pr", "list",
+		"--repo", repoSlugFor(""),
+		"--state", "all",
+		"--search", key+" in:title,body",
+		"--limit", "10",
+		"--json", "number,state,headRefName,updatedAt")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", ""
+	}
+	var raw []struct {
+		Number      int    `json:"number"`
+		State       string `json:"state"`
+		HeadRefName string `json:"headRefName"`
+		UpdatedAt   string `json:"updatedAt"`
+	}
+	if json.Unmarshal(out, &raw) != nil || len(raw) == 0 {
+		return "", ""
+	}
+	sort.SliceStable(raw, func(i, j int) bool {
+		oi, oj := raw[i].State == "OPEN", raw[j].State == "OPEN"
+		if oi != oj {
+			return oi
+		}
+		return raw[i].UpdatedAt > raw[j].UpdatedAt // RFC3339 sorts lexically
+	})
+	best := raw[0]
+	if best.HeadRefName == "" {
+		return "", ""
+	}
+	return best.HeadRefName, fmt.Sprintf("pr:#%d", best.Number)
+}
+
+// resolvePlanReferencedIssue enriches one referenced key (found via
+// collectPlanReferencedKeys) with its own title/url and — best-effort — the
+// branch it already has work on: a GitHub PR/branch mentioning the key wins
+// (authoritative) over a Jira-text guess (a heuristic, always labelled as
+// such); the Jira-text guess itself looks at the ticket's own
+// description+comments, then — the reviewer's own hint that the work often
+// sits one level down — up to maxPlanReferencedSubtaskTextReads of its own
+// subtasks. Best-effort throughout: a missing gh/acli costs context, never
+// fails the caller.
+func resolvePlanReferencedIssue(ctx context.Context, jc jira.Client, ref planReferencedIssue) planReferencedIssue {
+	out := ref
+	var issue jira.Issue
+	if jc != nil {
+		if got, err := jc.Issue(ctx, ref.Key); err == nil {
+			issue = got
+			out.Title, out.URL = issue.Title, issue.URL
+		}
+	}
+	if branch, source := findBranchViaGH(ctx, ref.Key); branch != "" {
+		out.Branch, out.BranchSource = branch, source
+		return out
+	}
+	ownText := issue.Description
+	for _, c := range issue.Comments {
+		ownText += " " + c.Body
+	}
+	if b := findBranchInText(ref.Key, ownText); b != "" {
+		out.Branch, out.BranchSource = b, "jira-tekst"
+		return out
+	}
+	if jc == nil {
+		return out
+	}
+	reads := 0
+	for _, st := range issue.Subtasks {
+		if reads >= maxPlanReferencedSubtaskTextReads {
+			break
+		}
+		reads++
+		sub, err := jc.Issue(ctx, st.Key)
+		if err != nil {
+			continue
+		}
+		subText := sub.Description
+		for _, c := range sub.Comments {
+			subText += " " + c.Body
+		}
+		if b := findBranchInText(ref.Key, subText); b != "" {
+			out.Branch, out.BranchSource = b, "jira-tekst ("+st.Key+")"
+			return out
+		}
+	}
+	return out
 }

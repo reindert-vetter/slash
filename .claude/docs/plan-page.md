@@ -133,6 +133,115 @@ tickets, hoofd en sub"*.
   purpose: it costs a handful of `acli`/`gh` calls, and the page's own start
   POST (which runs inline until the first block) must not wait for them.
 
+## Referenced tickets outside this one's own family
+
+Reviewer request, verbatim: *"als het goed is moet PROD-254 dan rekening
+houden met PROD-216. kan je ervoor zorgen dat je achterhaalt wat de branch is
+waar PROD-216 al iets in heeft gedaan? waarschijnlijk zit dat in een subtaak,
+soms ook in een description."* Follow-up answers: every Jira link AND every
+bare key-shaped mention counts (not just an official link), and the branch is
+looked for in BOTH the PR/branch text on GitHub and the Jira text itself.
+
+This is deliberately a SEPARATE mechanism from "Comments and merged work"
+above: that section is about THIS ticket's own family (main task + subtasks +
+siblings); this one is about a DIFFERENT ticket that family merely points at —
+PROD-216 is not PROD-254's parent or subtask, it is named in a link or in
+free text.
+
+- **`modules/jira`'s `Issue` gained `Links []IssueLink`** — Jira's official
+  `issuelinks` field (`--fields …,issuelinks`), distinct from the
+  parent/subtasks hierarchy field. Each entry names the OTHER issue on
+  whichever side (`outwardIssue`/`inwardIssue`) is actually present, phrased
+  from THIS issue's own point of view (`type.outward`/`type.inward` picked to
+  match) — so the page can say "PROD-254 relates to PROD-216" without caring
+  which side Jira itself stored it on. A malformed entry (neither side
+  present) is dropped.
+- **`collectPlanReferencedKeys(doc, linksByKey)`** (`plan_context.go`)
+  collects every OTHER key the family points at: the official `Links` of this
+  ticket and (if this is a subtask) its main task — read once in
+  `planLoadIssue`, since `Issue()` is already called for both, and carried on
+  the document as `doc.links`/`doc.parentLinks` purely to reach
+  `planLoadContext` without a second call — PLUS a bare Jira-key-shaped regex
+  match (`planKeyMentionPattern`) over the family's own description/comments.
+  The family's own keys (`planRelatedKeys`) are excluded, and an official
+  link's own relation phrase wins as the Reason over a duplicate bare
+  mention of the same key. Bounded by `maxPlanReferencedIssues` (3).
+- **`resolvePlanReferencedIssue`** enriches one referenced key with its own
+  title/url (`Issue()`) and — best-effort — the branch it already has work
+  on: **a GitHub PR wins over a Jira-text guess.** `findBranchViaGH` is
+  `searchMergedPRs`'s sibling with `--state all` instead of `--state merged`
+  (already-started, not-yet-merged work still counts as "al iets gedaan") and
+  asks for `headRefName`; an OPEN PR wins over a closed/merged one, then the
+  most recently updated. Only when GitHub finds nothing does the Jira-text
+  heuristic run: `branchMentionPattern`/`findBranchInText` looks for a
+  slash/dash/dot-delimited token containing the key (case-insensitive — a
+  branch name is often lowercased) in the referenced ticket's own
+  description+comments, then — the reviewer's own hint that the work often
+  sits one level down — up to `maxPlanReferencedSubtaskTextReads` (2) of its
+  own subtasks.
+- **Never presented as fact.** A Jira-text match is a HEURISTIC — Jira has no
+  fixed convention for stating a branch name — so both `renderPlanIntent`'s
+  "Related tickets" section and the page's own `plan-referenced-issue` rows
+  word it as a guess ("vermoedelijk … ongeverifieerd") whenever
+  `branchSource` is anything other than a `pr:#N` reference; only a real PR's
+  own `headRefName` is stated plainly.
+- **Reaches BOTH the human-readable intent and the actual generation
+  prompt** — `doc.referenced` is rendered in `renderPlanIntent`'s own
+  "## Related tickets" section AND threaded into `planPrompt`'s
+  "GERELATEERDE TICKETS" block with an explicit instruction to plan in line
+  with that other ticket's existing work rather than duplicate or ignore it —
+  this is what makes generation actually "rekening houden met" the other
+  ticket, not just a cosmetic note in intent.md.
+- **Visible on the page**: a small card in the first column
+  (`data-testid=plan-referenced-issues`, one `plan-referenced-issue` link
+  each — key, title, reason, branch line), right under the existing
+  `plan-related-prs` card.
+- **Replay**: filled inside the EXISTING `planLoadContext` Activity (the same
+  one "Comments and merged work" describes), so no new Activity and no new
+  replay-gating flag — everything here runs as ordinary Go code inside an
+  Activity body, which is not subject to the workflow-determinism rule at all
+  (only the workflow FUNCTION's own control flow is,
+  `.claude/rules/workflow-determinism.md`).
+
+## The "Intentie" field: shown, and editable
+
+Reviewer request, verbatim: *"in taak description eerste kolom moet de
+intentie zichtbaar zijn, maar dat moeten we ook kunnen aanpassen. intentie kan
+je halen uit jira taak en is een taak wat te maken heeft met de hoofdtaak."*
+
+- **No new generation** — the existing, always-generated `intent.md`
+  (`renderPlanIntent`, see "Three stages, three files" above) IS the intent
+  text; `GET /api/plan` now also returns it as a top-level `intent` field
+  (`payload["intent"] = renderPlanIntent(doc)`), computed at read time next to
+  `artifacts`, never stored twice.
+- **Editable, but wholesale, not per-section** — `doc.intentOverride` (a new,
+  `omitempty` field on `planDoc`, absent/empty for every document before this
+  existed) replaces the auto-generated document ENTIRELY once set; merging a
+  free-form edit back into the Problem/Constraints/… sections would be
+  brittle, so `renderPlanIntent` just returns the override verbatim when it is
+  non-empty.
+- **No new Signal name** — tembed can only `WaitSignal` on one name at a time
+  (the same reason `planAnswerFollowup`/`planAnswerChat`/`planAnswerTask`
+  exist), so the edit rides on the EXISTING `plan_answer` Signal with
+  `kind:"intent"` (`planAnswerIntent`): `doc.IntentOverride =
+  strings.TrimSpace(sig.Text)`, then the ordinary `planSave` Activity (which
+  already rewrites the artifact files on every save, so intent.md on disk
+  reflects the override immediately). An empty `Text` clears the override.
+  Triggers no regeneration, same as `planAnswerTask`.
+- **Frontend** (`intentField`, `plan.mjs`): an uncontrolled `<textarea
+  data-testid=plan-intent-field>` in column 0, seeded via a plain (non-`() =>
+  `) static `value=`-equivalent (element CONTENT here, since a `<textarea>`'s
+  default value is its text content) — same "seed once, save on blur" pattern
+  as `plan-task-note`. Keyed on the loading state
+  (`'intent:' + (loading ? 'pending' : 'ready')`) rather than on
+  `state.intentText`/`doc.updatedAt`, so it remounts (and re-seeds) exactly
+  ONCE, right after the first real load — remounting on every later poll
+  would wipe an in-progress edit. A REMOTE edit from another tab while this
+  one is open is a known, accepted gap, same as `plan-task-note`.
+  `sendIntentOverride(text)` posts the Signal; a `data-testid=plan-intent-reset`
+  button appears only while `doc.intentOverride` is set, clearing it (empty
+  text) to revert to the auto-generated one.
+
 ## Follow-up questions: sharpening the plan further
 
 Reviewer request, verbatim: *"maak het mogelijk om vervolg vragen te genereren
@@ -1036,7 +1145,7 @@ and the block nesting is arbitrarily deep. `Save` is called only from the
 | Endpoint | What |
 | --- | --- |
 | `GET /plan/<KEY>` | the static shell (`plan.html`, same anti-flash/theme/Prism/markdown blocks as `index.html`). A path that isn't a Jira key or a bare number → `location.replace('/pr-overview')`. |
-| `GET /api/plan?key=KEY` | read-only → `{ok, key, doc, runs, generating, exec?}` (`exec` = the newest `plan_execute` attempt of this ticket). An unknown ticket answers ok with an empty document, never an error. |
+| `GET /api/plan?key=KEY` | read-only → `{ok, key, doc, runs, generating, exec?, artifacts?, intent}` (`exec` = the newest `plan_execute` attempt of this ticket; `artifacts` = the three-phase file view; `intent` = the CURRENT intent.md text, auto-generated or `doc.intentOverride`, computed at read time — see "The 'Intentie' field" above). An unknown ticket answers ok with an empty document, never an error. |
 | `POST /api/workflows/plan` | `{key}` → `{runId}`; starts or idempotently reuses the tracker. |
 | `POST /api/workflows/plan_execute` | `{key}` → `{runId}`; the index's last action — implement the plan on a fresh branch and open a draft PR. 409 while one is already running. |
 | `POST /api/workflows/{runID}/signals/plan_answer` | `{questionId, optionId, text}` — one answer; `{kind:"followup"}` — generate follow-up questions and rebuild the task list; `{kind:"chat", text}` — one general-chat message; or `{kind:"task", taskTitle, taskOff, taskNote}` — one task's checkbox/field (the only shapes allowed without a `questionId`). |

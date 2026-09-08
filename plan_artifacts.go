@@ -416,6 +416,13 @@ func planArtifactsView(dataDir string, doc planDoc) (planArtifactView, bool) {
 // proposed outcome, affected users and systems, constraints, open questions.
 // No Claude call: everything here is already on the document.
 func renderPlanIntent(doc planDoc) string {
+	// The reviewer's own edit of the "Intentie" field (column 0) replaces the
+	// auto-generated document WHOLESALE — never merged section-by-section,
+	// which would be brittle against a free-form edit. See planAnswerIntent's
+	// own doc comment (plan_workflow.go).
+	if strings.TrimSpace(doc.IntentOverride) != "" {
+		return doc.IntentOverride
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Intent — %s\n\n", planArtifactTitle(doc))
 	writePlanArtifactHeader(&b, doc, planPhaseIntent)
@@ -481,6 +488,27 @@ func renderPlanIntent(doc planDoc) string {
 		b.WriteString("The comments on this ticket family, newest last — a comment that walks the description back outranks the description:\n\n")
 		for _, c := range append(append([]planComment{}, doc.Comments...), doc.RelatedComments...) {
 			fmt.Fprintf(&b, "- **%s** (%s%s): %s\n", orDash(c.Author), orDash(c.Created), keySuffix(c.Key), oneLine(c.Body))
+		}
+	}
+
+	// Related tickets OUTSIDE this one's own family (a Jira link or a bare key
+	// mention) — reviewer request: "als het goed is moet PROD-254 dan rekening
+	// houden met PROD-216. kan je ervoor zorgen dat je achterhaalt wat de
+	// branch is waar PROD-216 al iets in heeft gedaan?" — so plan generation
+	// (plan_prompt.go) and a human reader both see what work already exists on
+	// a referenced ticket, not just this ticket's own parent/subtasks above.
+	if len(doc.Referenced) > 0 {
+		b.WriteString("\n## Related tickets\n\n")
+		for _, r := range doc.Referenced {
+			fmt.Fprintf(&b, "- **%s** (%s) — %s", r.Key, oneLine(orDash(r.Title)), orDash(r.Reason))
+			if strings.HasPrefix(r.BranchSource, "pr:") {
+				fmt.Fprintf(&b, "; work already on branch `%s` (%s)", r.Branch, r.BranchSource)
+			} else if r.Branch != "" {
+				fmt.Fprintf(&b, "; possibly on branch `%s` (guessed from %s — unverified)", r.Branch, r.BranchSource)
+			} else {
+				b.WriteString("; no known branch yet")
+			}
+			b.WriteString("\n")
 		}
 	}
 	return b.String()

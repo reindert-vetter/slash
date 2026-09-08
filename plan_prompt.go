@@ -82,6 +82,24 @@ func writePlanContext(b *strings.Builder, doc planDoc) {
 		}
 		b.WriteString("Bouw hierop VOORT: hergebruik de patronen, bestanden en keuzes die hierboven al gemerged zijn in plaats van ze opnieuw te bedenken, en plan niets wat daar al gedaan is.\n\n")
 	}
+	// Referenced tickets OUTSIDE this one's own family — a Jira link or a bare
+	// key mention (collectPlanReferencedKeys, plan_context.go) — with the
+	// branch that ticket already has work on, if any was found. Reviewer
+	// request: "als het goed is moet PROD-254 dan rekening houden met
+	// PROD-216. kan je ervoor zorgen dat je achterhaalt wat de branch is waar
+	// PROD-216 al iets in heeft gedaan?" — this is what makes generation
+	// actually TAKE INTO ACCOUNT the other ticket, not just intent.md.
+	if len(doc.Referenced) > 0 {
+		b.WriteString("GERELATEERDE TICKETS (buiten deze hoofdtaak/subtaken-familie):\n")
+		for _, r := range doc.Referenced {
+			fmt.Fprintf(b, "- %s (%s) — %s", r.Key, r.Title, r.Reason)
+			if r.Branch != "" {
+				fmt.Fprintf(b, "; mogelijk al werk op branch `%s` (%s)", r.Branch, r.BranchSource)
+			}
+			b.WriteString("\n")
+		}
+		b.WriteString("Houd hier rekening mee: als dit ticket voortbouwt op of raakt aan het hierboven genoemde werk, plan dan in lijn daarmee (zelfde branch/patroon waar dat past) in plaats van dat werk te negeren of te dupliceren.\n\n")
+	}
 	// The base-branch answer is a fixed constraint on the plan itself, not just
 	// on where plan_execute branches from: a hotfix goes straight to production.
 	if base := strings.TrimSpace(doc.BaseBranch); base != "" {
