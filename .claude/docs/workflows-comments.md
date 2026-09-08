@@ -1232,6 +1232,81 @@ second call), `TestRunOneClaudeTurnDegradesWhenShellUnavailableAfterEscalating`,
 `TestRunOneClaudeTurnDegeneratesGracefullyOnRepeatedNeedWrite` (the repeated
 directive above).
 
+#### A read-only history question ("wie/sinds wanneer") also escalates via `need_write` — `git blame`/`git log` need a real shell
+
+Reported bug (screenshot): asked "sinds wanneer staat kolom `fbp` op
+`address`?", attempt 1 answered "Wie hem toen heeft toegevoegd kan ik deze
+beurt niet zien: daarvoor is `git log`/`git blame` nodig en ik heb nu alleen
+leesrechten op de bestanden, geen shell" — correct (`Read`/`Grep`/`Glob`
+cannot run a git subcommand), but the turn never asked for more, because
+`prompts/chat_readonly.md`'s `need_write` trigger only covered *write* intent
+("pas dit aan", "commit dit", "voer dit uit") — a pure information request
+about history had no path to escalate at all.
+
+**Investigated and rejected: a narrower, scoped Bash for attempt 1 instead of
+escalating.** The claude CLI's own `--allowedTools "Bash(git blame:*)"` /
+`"Bash(git *)"` syntax looks like exactly this — grant Bash but only for
+specific commands. Verified live against the real repo with the exact flags
+this codebase uses (`--permission-mode acceptEdits`/`dontAsk`/`manual` +
+`--permission-prompts none`, `--tools "Read,Grep,Glob,Bash,Skill"`): in every
+one of those non-interactive modes, as soon as `Bash` is present in `--tools`
+at all, **every** Bash invocation ran regardless of the specific
+`--allowedTools` pattern — `git status` and even a plain `echo hello` ran
+under `--allowedTools "Bash(git *)"` with no denial, no prompt, no error. The
+fine-grained per-command scoping is not enforced in this CLI's headless `-p`
+mode (only interactive sessions apparently honor it). So scoped Bash cannot
+safely be added to attempt 1's **shared, unlocked** head worktree — that
+directory is read concurrently by `blockstats.go`/`/api/code`/other
+conversations with no locking at all, precisely because it was assumed
+read-only; an unscoped Bash tool there (even nominally "for git blame only")
+could just as easily run something that mutates it.
+
+**Fix: reuse the existing, already-vetted shell escalation instead of adding
+a new tool.** `chat_readonly.md` gained one more `need_write` trigger: a
+question about the code's *history* (who added/changed something, since
+when, which commit) escalates exactly like a write request — attempt 2 then
+gets `Edit`+`Bash` in the reviewer's own real, standing checkout
+(`chat_checkout.go`), where the risk of an unscoped shell is already the
+accepted `workflows-write-boundary.md` exception, and `chat_shell.md`
+already permits a non-destructive shell command for a "gewone vraag" ("voor
+een gewone vraag ... draai je geen enkel **schrijvend** commando" — `git
+blame`/`git log`/`git show` are not writing commands, so this needed no
+change). Nothing edits/commits: the reviewer's own message stays a plain
+question, Claude just now has the tool it needs to answer it. Verified live
+(`claude -p` with the exact same flags/prompts `chat_workflow.go` builds,
+against `~/dev/plug-and-pay`, the "wie voegde `fbp` toe" question from the
+report): attempt 1 (`Read`/`Grep`/`Glob`, `chat_readonly.md`) now replies
+`{"type":"need_write"}`; attempt 2 (`Edit`/`Bash`, `chat_shell.md`) answers
+"Alex van der Schans … commit f3108cfb26 … 2021-04-22" via `git blame`, and
+`git status --porcelain` is byte-identical before and after — nothing was
+touched.
+
+**No new worktree, no unshallow needed.** The reviewer's own checkout
+(`~/dev/plug-and-pay`, or whatever `SLASH_REPO_DIR`/`chatCheckoutDirs`
+points at) is a real, full clone (`git rev-parse
+--is-shallow-repository` → `false`, checked live) — the whole point of
+`chat_checkout.go` replacing the old disposable shadow worktree was reusing
+the reviewer's OWN permanent clone, which already carries full history, not
+a fresh partial one this app would have to deepen. `git blame`/`git log -L`
+need no working-tree checkout of every historical commit either way — both
+walk the object database directly against a given revision+path
+(`git -C <dir> blame -l <sha> -- <path>`, `git -C <dir> log -L
+<range>:<path>`), the same "no checkout" shape `showFileAtSHA` (`gh.go`)
+already uses for reading an old file's contents. **Cleanup:** nothing new to
+remove on merge — the reviewer's standing checkout is never created/owned by
+this app (so `cleanup.go` never touches it, same as today), and the shared
+head worktree attempt 1 already uses gets removed by `cleanup.go`'s existing
+merged-PR sweep exactly as before; this fix added no new worktree or clone
+anywhere.
+
+The label the reviewer sees while attempt 2 runs (`PHASE_LABEL.escalating`
+"Schrijfrechten ophalen…", `waiting` "Wacht op een andere codewijziging…",
+`ClaudeChat.mjs`) is technically about TOOL access rather than an actual
+write, and now also briefly shows for a pure history question — left as is,
+deliberately minimal: the label is not literally wrong (attempt 2 really is
+fetching a checkout with write-capable tools), and a separate "looking up
+history" label was judged not worth a second UI state for this.
+
 #### The pending checkout decision is scoped to the conversation that raised it, not the whole PR
 
 Reported bug, screenshot: a reviewer typed a plain, purely conversational

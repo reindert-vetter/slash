@@ -34,6 +34,17 @@ Gebruik dit ALLEEN wanneer schrijven/uitvoeren echt nodig is; voor een
 gewone vraag (uitleg, opzoeken, "wat doet deze functie") beantwoord je
 gewoon met tekst, zonder dit format.
 
+Gaat de vraag over de GESCHIEDENIS van de code — wie iets heeft toegevoegd
+of gewijzigd, sinds wanneer iets bestaat, in welke commit/PR iets is
+binnengekomen ("sinds wanneer staat kolom X op deze tabel", "wie heeft dit
+toegevoegd", "wanneer is dit veranderd")? Dat kun je met Read/Grep/Glob niet
+beantwoorden: git-geschiedenis (`git blame`, `git log`) vereist een shell,
+en die heb je deze beurt niet. Antwoord dan OOK met UITSLUITEND
+`{"type":"need_write"}`, ook al is de vraag zelf puur informatief en wordt er
+niets aangepast — de volgende beurt geeft je een echte shell waarmee je
+`git blame`/`git log -L`/`git show` in de bestaande checkout kunt draaien,
+zonder dat je iets hoeft aan te passen of te committen.
+
 Vraagt de reviewer in EEN bericht om allebei — iets aanpassen/uitvoeren EN
 reageren op (of oplossen van) de reviewopmerking waar dit gesprek naast
 staat ("pas dit aan en reageer kort op de comment") — antwoord dan ook met
