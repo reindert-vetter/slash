@@ -160,7 +160,7 @@ func TestIssueReadsIssueType(t *testing.T) {
 // (whose text lives in attrs, not in a text leaf) and a hardBreak.
 func TestIssueReadsComments(t *testing.T) {
 	raw := []byte(`{"key":"PROD-254","fields":{"summary":"Statistieken","comment":{"comments":[
-		{"id":"10142","author":{"displayName":"Reindert Vetter","accountId":"638f","avatarUrls":{"24x24":"https://x/24"}},"created":"2026-09-04T13:56:44.191+0200",
+		{"id":"10142","author":{"displayName":"Reindert Vetter","accountId":"638f","avatarUrls":{"48x48":"https://x/48"}},"created":"2026-09-04T13:56:44.191+0200",
 		 "body":{"type":"doc","content":[{"type":"paragraph","content":[
 			{"type":"mention","attrs":{"text":"@Dennis Sloove"}},
 			{"type":"text","text":" waarom een nieuwe kolom?"},
@@ -181,7 +181,7 @@ func TestIssueReadsComments(t *testing.T) {
 	}
 	// The plan page's comment panel keys its rows on the id and mentions the
 	// author back by accountId (see .claude/docs/plan-page.md).
-	if c.ID != "10142" || c.AccountID != "638f" || c.AvatarURL != "https://x/24" {
+	if c.ID != "10142" || c.AccountID != "638f" || c.AvatarURL != "https://x/48" {
 		t.Fatalf("comment identity = %+v", c)
 	}
 	for _, want := range []string{"@Dennis Sloove", "waarom een nieuwe kolom?", "-- hoeft dus niet."} {

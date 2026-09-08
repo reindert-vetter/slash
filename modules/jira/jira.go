@@ -183,14 +183,18 @@ type acliIssue struct {
 }
 
 // acliUser is one person as every Jira payload spells them — a comment author,
-// an assignee. The 24x24 avatar is the size this app shows (see avatarHTML in
-// src/avatar.mjs); the host it points at is on the avatar proxy's allowlist
-// (avatar_proxy.go), so it really loads in the browser.
+// an assignee. 48x48 is Jira's largest fixed avatar size; the Planning/Todo
+// rows (src/overview.mjs's jiraIssueRow/jiraContextRow) show it via
+// assigneeMark at h-10 w-10 (40 CSS px, ~80 physical px on a 2x screen) — the
+// previously requested 24x24 upscaled that far and rendered visibly blurry
+// next to the sharp, full-resolution GitHub avatars in "Needs your review"
+// (avatarHTML in src/avatar.mjs). The host it points at is on the avatar
+// proxy's allowlist (avatar_proxy.go), so it really loads in the browser.
 type acliUser struct {
 	AccountID   string `json:"accountId"`
 	DisplayName string `json:"displayName"`
 	AvatarURLs  struct {
-		Small string `json:"24x24"`
+		Small string `json:"48x48"`
 	} `json:"avatarUrls"`
 }
 
