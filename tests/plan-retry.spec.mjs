@@ -5,6 +5,12 @@ import { test, expect, appReady } from './_fixtures.mjs'
 // two places: the run row in the "Taken" list, and the ticket column's own
 // Enter-menu (see .claude/docs/plan-page.md). Both resume the SAME run via
 // the generic, sanctioned /api/workflows/retry endpoint.
+//
+// The "Taken" block is now the literal TasksPanel the PR review tree uses
+// (see "The Taken block is the literal TasksPanel" in
+// .claude/docs/plan-page.md), so there is no dedicated "plan-retry" button
+// any more — a click on the row itself (data-testid=workflow-row) retries,
+// mirroring "every row is clickable" there.
 test.describe('Plan page — retry a failed plan run', () => {
   test.beforeEach(async ({ page }) => {
     await page.route('**/api/plan?*', (route) =>
@@ -20,7 +26,7 @@ test.describe('Plan page — retry a failed plan run', () => {
     )
   })
 
-  test('the run row shows a retry button that resumes the run', async ({ page }) => {
+  test('clicking the failed run row resumes the run', async ({ page }) => {
     let retried = null
     await page.route('**/api/workflows/retry', (route) => {
       retried = route.request().postDataJSON()
@@ -30,11 +36,11 @@ test.describe('Plan page — retry a failed plan run', () => {
     await page.goto('/plan/RETRY-1')
     await appReady(page)
 
-    const retryBtn = page.getByTestId('plan-retry')
-    await expect(retryBtn).toBeVisible()
-    await expect(retryBtn).toContainText('Opnieuw plannen')
+    const row = page.getByTestId('workflow-row').filter({ hasText: 'Plan' })
+    await expect(row).toBeVisible()
+    await expect(row.getByTestId('workflow-status')).toContainText('mislukt')
 
-    await retryBtn.click()
+    await row.click()
     await expect.poll(() => retried).toEqual({ runId: 'run-plan-1' })
   })
 

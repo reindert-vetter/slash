@@ -10157,6 +10157,15 @@ function relTime(iso) {
 // is available, falling back to the static WORKFLOW_STATUS_NOTE text
 // otherwise.
 function workflowNote(run, state) {
+  // run.note — a precomputed override, read FIRST. Every run this file itself
+  // produces (WorkflowRunView, straight off the Go JSON) never carries this
+  // field, so this is a no-op for every existing PR-tree call site; it exists
+  // for a caller building its own run-like objects client-side (plan.mjs's
+  // "Taken" block, see .claude/docs/plan-page.md) to say something this
+  // function has no other way to express — e.g. "plan wordt opgesteld…"
+  // during the gap right after an answer, before the run itself has visibly
+  // flipped to `running`.
+  if (run.note) return run.note
   const c = run.comment
   if (c) {
     const parts = [c.label]
@@ -10257,6 +10266,15 @@ export function markTaskRetrying(runId) {
 export function clearTaskRetrying(runId) {
   if (!runId || !taskUi.retrying.includes(runId)) return
   taskUi.retrying = taskUi.retrying.filter((id) => id !== runId)
+}
+
+// isRetryingRun — a read-only peek at the same mark, for a caller that needs
+// to know "is this already being retried?" before it acts (planCommands' own
+// Enter-menu item, plan.mjs — see "The Taken block is the literal TasksPanel"
+// in .claude/docs/plan-page.md). markTaskRetrying/clearTaskRetrying only ever
+// WRITE the mark; this is the one read added alongside them.
+export function isRetryingRun(runId) {
+  return !!runId && taskUi.retrying.includes(runId)
 }
 
 // hideTaskLogLine drops one mirrored log line from the merged list (the row
@@ -10577,7 +10595,12 @@ function tasksRefreshButton(actions) {
 //   focusState              — the reactive object carrying `taskFocus` (the
 //                             focused row's key); home.mjs passes its own
 //                             `state`, so the rows follow the keyboard cursor
-export function TasksPanel(state, actions = {}) {
+//   subtitle                 — override for the small line under "Taken"
+//                             (default "workflow-runs · deze PR"); plan.mjs
+//                             passes its own wording since a planning ticket
+//                             has no PR yet — see .claude/docs/plan-page.md.
+export function TasksPanel(state, actions) {
+  actions = actions || {}
   return html`
     <section
       class="flex w-full shrink-0 flex-col overflow-hidden rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 ring-1 ring-black/5"
@@ -10586,7 +10609,7 @@ export function TasksPanel(state, actions = {}) {
       <div class="flex items-start gap-2 border-b border-slate-100 dark:border-zinc-800/60 px-3 py-2.5">
         <div class="min-w-0 flex-1">
           <h2 class="text-sm font-semibold text-slate-800 dark:text-zinc-200">${t('Taken')}</h2>
-          <p class="text-[11px] text-slate-400 dark:text-zinc-500">${t('workflow-runs · deze PR')}</p>
+          <p class="text-[11px] text-slate-400 dark:text-zinc-500">${actions.subtitle || t('workflow-runs · deze PR')}</p>
         </div>
         ${tasksRefreshButton(actions)}
       </div>

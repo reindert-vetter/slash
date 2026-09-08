@@ -19,13 +19,12 @@
 //
 // See .claude/docs/plan-page.md.
 
-import { html, reactive } from './vendor/arrow.js'
+import { html, reactive, watch } from './vendor/arrow.js'
 import Prism from './vendor/prism.js'
 import { t } from './i18n.mjs'
 import { renderMarkdown } from './markdown.mjs'
 import { initTheme, themeToggleButton } from './theme.mjs'
 import { settingsButton } from './settingsLink.mjs'
-import { labelForWorkflow } from './workflowLabels.mjs'
 import { bindUrlState, num } from './urlState.mjs'
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 // claudeChatColumn is the review tree's own Claude chat component (a pure
@@ -56,7 +55,22 @@ import { relativeTime } from './relativeTime.mjs'
 // exception to this page's "own code" rule, next to claudeChatColumn above —
 // reviewer request for task 26: "huidige code naast de voorgestelde code, de
 // blok-weergave van de review-tree overnemen".
-import { alignRows } from './lineDiff.mjs' 
+import { alignRows } from './lineDiff.mjs'
+// TasksPanel is the review tree's own merged "Taken" block (RelatedPanel.mjs)
+// — reused OUTRIGHT, visual style included, per explicit reviewer request
+// ("dit blokje met workflows, mag exact hetzelfde werken als in pr tree"). A
+// third deliberate exception to this page's "own code" rule, next to
+// claudeChatColumn/alignRows above — see "The Taken block is the literal
+// TasksPanel" in .claude/docs/plan-page.md for what this pulls in and the
+// small client-side shim (planWorkflowsForPanel/planProblemsForPanel below)
+// that feeds it plan-shaped data.
+import {
+  TasksPanel,
+  markTaskRetrying,
+  clearTaskRetrying,
+  isRetryingRun,
+  setTasksRefreshBusy,
+} from './RelatedPanel.mjs'
 
 initTheme()
 
@@ -136,12 +150,13 @@ const state = reactive({
   // The answers picked in this tab that the stored document has not caught up
   // with yet, keyed by question id (see answerFor).
   pending: {},
-  // Run IDs currently being resumed via retryPlanRun, so the "opnieuw
-  // plannen" button flips to a busy word right away instead of still reading
-  // "mislukt" until the next poll notices the run is running again — same
-  // "mark it optimistically" reasoning as home.mjs's markTaskRetrying, at the
-  // small scale this page needs (a plain map, no shared module).
-  retryingRuns: {},
+  // workflows/pageProblems — the two properties TasksPanel's own
+  // buildTaskRows/visibleWorkflowRuns (RelatedPanel.mjs) read off whatever
+  // state object they're given. Recomputed by syncTaskPanelState (below)
+  // from state.runs/state.doc.error/busyGenerating() — see "The Taken block
+  // is the literal TasksPanel" in .claude/docs/plan-page.md.
+  workflows: [],
+  pageProblems: { failedRuns: [], logErrors: [] },
   // The newest plan_execute run of this ticket (GET /api/plan's `exec`), or
   // null when the plan was never executed — see the execute card below.
   exec: null,
@@ -280,7 +295,7 @@ const PLAN_COMMANDS = [
 // later; the next open re-evaluates.
 function planCommands() {
   const failed = state.runs.find((r) => r.workflow === 'plan' && r.status === 'failed')
-  if (!failed || state.retryingRuns[failed.runId]) return PLAN_COMMANDS
+  if (!failed || isRetryingRun(failed.runId)) return PLAN_COMMANDS
   return [
     ...PLAN_COMMANDS,
     {
@@ -397,7 +412,6 @@ async function loadPlan() {
     const localChat = state.doc.chat || []
     state.doc = freshChat.length < localChat.length ? { ...freshDoc, chat: localChat } : freshDoc
     state.runs = Array.isArray(body.runs) ? body.runs : []
-    dropSettledRetrying()
     state.generating = !!body.generating
     state.exec = body.exec || null
     state.artifacts = body.artifacts || null
@@ -447,33 +461,19 @@ function dropSettledTaskPending() {
   if (changed) state.taskPending = keep
 }
 
-// dropSettledRetrying forgets a marked-busy run as soon as the freshly
-// loaded document no longer reports it as `failed` — resumed successfully
-// (now `running`/`completed`) or gone. Mirrors dropSettledPending's "the
-// document is the only source of truth the moment it can be" shape.
-function dropSettledRetrying() {
-  if (!Object.keys(state.retryingRuns).length) return
-  const stillFailed = new Set(state.runs.filter((r) => r.status === 'failed').map((r) => r.runId))
-  const keep = {}
-  let changed = false
-  for (const runId of Object.keys(state.retryingRuns)) {
-    if (stillFailed.has(runId)) keep[runId] = true
-    else changed = true
-  }
-  if (changed) state.retryingRuns = keep
-}
-
 // retryPlanRun resumes a failed workflow run of this ticket in place
 // (POST /api/workflows/retry — the same sanctioned, generic resume-in-place
 // endpoint the review tree's own retryFailedRun (home.mjs) and the global
 // failed-tasks dialog use, see .claude/docs/tembed-endpoints.md). Used for
 // "opnieuw plannen": a failed `plan` run just re-asks Claude for
-// questions/tasks from where it left off. state.retryingRuns marks the run
-// busy immediately, cleared again on the next successful loadPlan() (or right
-// away on a failed POST, so the button honestly returns to "mislukt").
+// questions/tasks from where it left off. markTaskRetrying (RelatedPanel.mjs,
+// shared with the review tree's own retryFailedRun) marks the run busy
+// immediately, cleared again right away on a failed POST (so the row honestly
+// returns to "mislukt") — the same "mark it optimistically" shape as
+// home.mjs, at the same shared spot rather than a second, page-local map.
 async function retryPlanRun(runId) {
   if (!runId) return
-  state.retryingRuns = { ...state.retryingRuns, [runId]: true }
+  markTaskRetrying(runId)
   try {
     const res = await fetch('/api/workflows/retry', {
       method: 'POST',
@@ -481,14 +481,12 @@ async function retryPlanRun(runId) {
       body: JSON.stringify({ runId }),
     })
     if (!res.ok) {
-      const { [runId]: _drop, ...rest } = state.retryingRuns
-      state.retryingRuns = rest
+      clearTaskRetrying(runId)
       console.error('plan retry failed:', res.status, await res.text())
       return
     }
   } catch (err) {
-    const { [runId]: _drop, ...rest } = state.retryingRuns
-    state.retryingRuns = rest
+    clearTaskRetrying(runId)
     console.error('plan retry failed:', err)
     return
   }
@@ -2460,102 +2458,97 @@ function ticketCard() {
   `
 }
 
-const RUN_STATUS_WORD = {
-  running: 'draait',
-  waiting: 'wacht',
-  completed: 'klaar',
-  failed: 'mislukt',
+// ── The Taken block: the literal TasksPanel (RelatedPanel.mjs) ─────────────
+// Reviewer request: "dit blokje met workflows, mag exact hetzelfde werken als
+// in pr tree" — so this is no longer its own render, it is the SAME
+// TasksPanel/buildTaskRows/workflowNote machinery the PR review tree uses,
+// imported at the top of this file (a third deliberate exception to this
+// page's "own code" rule — see "The Taken block is the literal TasksPanel" in
+// .claude/docs/plan-page.md for the full mechanism and its accepted gaps).
+//
+// buildTaskRows reads two properties off whatever state object it's given:
+// `state.workflows` (the live/idle runs, via visibleWorkflowRuns) and
+// `state.pageProblems` (`{failedRuns, logErrors}`, the merged failure view).
+// Neither exists on GET /api/plan's own shape, so syncTaskPanelState below
+// derives both from what this page already has (state.runs, state.doc.error,
+// busyGenerating()) and keeps them on `state` itself, reactively.
+
+// planWorkflowsForPanel is `state.workflows`: state.runs, verbatim, except the
+// ticket's own `plan` tracker run gets a client-computed `note` + a `running`
+// status override while busyGenerating() is true — the gap right after an
+// answer where generation is happening but the run's own stored status may
+// not have visibly flipped yet (see busyGenerating's own doc comment).
+// workflowNote (RelatedPanel.mjs) reads `run.note` first, before its own
+// workflow/status table, exactly so this override works with no change to
+// what "trouble" rows the tree itself ever produces.
+function planWorkflowsForPanel() {
+  return (state.runs || []).map((run) => {
+    if (run.workflow === 'plan' && run.status !== 'failed' && busyGenerating()) {
+      return { ...run, status: 'running', note: t('plan wordt opgesteld…') }
+    }
+    return run
+  })
 }
 
-// planRunStatusWord derives the "Plan" tracker row's status word/pill class:
-// an error on the document (e.g. a killed/timed-out `claude -p` call, see
-// planGenerate in plan_workflow.go) or the "still generating" state both used
-// to show as a note/pill OUTSIDE the Taken block (a separate `plan-note`
-// banner in the ticket column, and a pill next to the "TAKEN" header) even
-// though both are really just this one workflow run's current status —
-// reviewer request: "dat moet gewoon een status zijn van een workflow die
-// onder taken zichtbaar moet zijn". The Activity swallows its own error onto
-// the document rather than failing the Execution (best-effort, see
-// planGenerate's own doc comment), so `run.status` alone never carries this —
-// hence reading `state.doc.error` here too. The word itself carries the
-// meaning (colourblind rule: never colour alone), so the error text/label is
-// shown verbatim rather than replaced by a generic "mislukt".
-function planRunStatusWord(run) {
-  if (run.workflow === 'plan' && state.doc.error) return { text: state.doc.error, cls: 'amber' }
-  if (run.workflow === 'plan' && busyGenerating()) return { text: t('plan wordt opgesteld…'), cls: 'sky' }
-  return { text: t(RUN_STATUS_WORD[run.status] || run.status || 'onbekend'), cls: 'slate' }
+// planProblemsForPanel is `state.pageProblems`: this page has no repo-wide
+// /api/problems equivalent (a plan ticket isn't a PR), so `logErrors` is
+// always empty — only `failedRuns`, built from state.runs' own `failed`
+// status PLUS the swallowed-generation-error case (planGenerate's Activity
+// records the error onto the document instead of failing the Execution, see
+// plan_workflow.go, so `run.status` alone never carries it). Only the `plan`
+// tracker's own run is ever retryable, matching the one thing retryPlanRun
+// can actually resume.
+function planProblemsForPanel() {
+  const failedRuns = []
+  for (const run of state.runs || []) {
+    const isPlan = run.workflow === 'plan'
+    if (run.status === 'failed') failedRuns.push({ ...run, retryable: isPlan })
+    else if (isPlan && state.doc.error) failedRuns.push({ ...run, status: 'failed', error: state.doc.error, retryable: true })
+  }
+  return { failedRuns, logErrors: [] }
 }
 
-const STATUS_PILL_CLS = {
-  slate: 'bg-slate-100 text-slate-600 dark:bg-zinc-800 dark:text-zinc-300',
-  sky: 'bg-sky-50 text-sky-700 ring-1 ring-inset ring-sky-200 dark:bg-sky-500/15 dark:text-sky-300 dark:ring-sky-500/30',
-  amber: 'bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200 dark:bg-amber-500/15 dark:text-amber-300 dark:ring-amber-500/30',
+// syncTaskPanelState keeps state.workflows/state.pageProblems in step with
+// every input that can change the merged view — not just a fresh poll
+// (state.runs/state.doc.error), but also the optimistic local flags that flip
+// busyGenerating() before the very next poll would otherwise notice (see the
+// "watch — enumerate reactive deps INLINE" rule in arrowjs-pitfalls.md).
+watch(
+  () => [state.runs, state.doc.error, state.generating, state.scopePending, state.hotfixPending, state.followupPending],
+  () => {
+    state.workflows = planWorkflowsForPanel()
+    state.pageProblems = planProblemsForPanel()
+  },
+)
+
+// refreshTasks — the panel's own ⟳ button, wired to the same poll everything
+// else here already uses (mirrors home.mjs's refreshTasks, at the scale this
+// page needs: one poll, not two).
+async function refreshTasks() {
+  setTasksRefreshBusy(true)
+  try {
+    await loadPlan()
+  } finally {
+    setTasksRefreshBusy(false)
+  }
 }
 
-// runRow's own "opnieuw plannen" button: only for the ticket's `plan` tracker
-// run itself (the questions/tasks generation), and only while it is really
-// `failed` — a running/waiting/completed run has nothing to retry.
-// retryPlanRun resumes it in place via the generic /api/workflows/retry
-// endpoint (see its own doc comment above). The button sits in its own
-// `${() => ...}` nested slot (a stable `contents` root, following the "never
-// key a template whose entire body is one toggling expression" rule in
-// .claude/rules/arrowjs-pitfalls.md) so the template↔'' toggle is handled by
-// arrow's reactive path rather than a bare static interpolation.
-function runRow(run) {
-  const retrying = !!state.retryingRuns[run.runId]
-  const canRetry = run.workflow === 'plan' && run.status === 'failed' && !retrying
-  const status = retrying ? { text: t('opnieuw gestart'), cls: 'slate' } : planRunStatusWord(run)
-  return html`
-    <div class="flex items-center gap-2 border-t border-slate-100 px-1 py-1.5 first:border-t-0 dark:border-zinc-800" data-testid="plan-run">
-      <span class="min-w-0 flex-1 truncate text-[12.5px] text-slate-700 dark:text-zinc-300">${labelForWorkflow(run.workflow)}</span>
-      <div class="contents">
-        ${() =>
-          canRetry
-            ? html`<button
-                type="button"
-                data-testid="plan-retry"
-                class="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-[10.5px] font-medium text-amber-700 ring-1 ring-inset ring-amber-200 transition-colors hover:bg-amber-100 dark:bg-amber-500/15 dark:text-amber-300 dark:ring-amber-500/30"
-                @click="${() => retryPlanRun(run.runId)}"
-              >
-                ${t('Opnieuw plannen')}
-              </button>`
-            : ''}
-      </div>
-      <span
-        class="${'shrink-0 max-w-[60%] truncate rounded-full px-2 py-0.5 text-[10.5px] font-medium ' + STATUS_PILL_CLS[status.cls]}"
-        data-testid="plan-run-status"
-        >${status.text}</span
-      >
-    </div>
-  `.key('run:' + run.runId)
+// openPlanTaskRowMenu — a click on any row. The tree's own openTaskRowMenu
+// opens a whole native context menu; this page's Taken block only ever has
+// ONE possible action (retry the ticket's own failed `plan` run), so a click
+// runs that action directly rather than standing up a matching anchored-menu
+// subsystem for a single item — deliberately simpler, see "The Taken block is
+// the literal TasksPanel" in .claude/docs/plan-page.md.
+function openPlanTaskRowMenu(row) {
+  if (row && row.retryable && !row.retrying) retryPlanRun(row.runId)
 }
 
 function tasksCard() {
-  return html`
-    <div class="${'shrink-0 ' + CARD + CARD_IDLE}" data-testid="plan-runs-card">
-      <div class="mb-1 flex items-center gap-2">
-        <span class="${LABEL}">${t('Taken')}</span>
-      </div>
-      ${() => (state.runs.length ? state.runs.map((run) => runRow(run)) : [noRunsRow()])}
-    </div>
-  `
-}
-
-// noRunsRow: the placeholder shown before the first "Plan" run row exists at
-// all (early in the ticket's lifecycle). Same shape every time — a single
-// `<p>`, class and text both computed reactively inside — never two
-// differently-shaped `html` templates sharing one `.key('no-runs')` (that hit
-// the "a keyed node is reused without re-running its bindings" pitfall in
-// .claude/rules/arrowjs-pitfalls.md the first time this was written).
-function noRunsRow() {
-  return html`<p
-    class="${() =>
-      'px-1 py-1 text-[12.5px] ' +
-      (busyGenerating() || state.doc.error ? 'text-sky-700 dark:text-sky-300' : 'italic text-slate-400 dark:text-zinc-500')}"
-    data-testid="${() => (busyGenerating() || state.doc.error ? 'plan-generating' : 'plan-no-runs')}"
-  >
-    ${() => (state.doc.error ? state.doc.error : busyGenerating() ? t('plan wordt opgesteld…') : t('geen taken voor dit ticket'))}
-  </p>`.key('no-runs')
+  return TasksPanel(state, {
+    openRowMenu: openPlanTaskRowMenu,
+    refresh: refreshTasks,
+    subtitle: t('workflow-runs · dit ticket'),
+  })
 }
 
 // ---------------------------------------------- column 2: questions + tasks

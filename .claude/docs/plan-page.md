@@ -18,31 +18,35 @@ onderliggende code"*.
 
 ## Same style as the review tree, deliberately its OWN code
 
-`src/plan.mjs` imports **nothing** from `home.mjs`/`Block.mjs`/
-`RelatedPanel.mjs` — those carry the whole review-tree state (comment cursors,
-url-state bindings, watches) and none of it applies here. It reuses only the
-shared **page-level** utilities every page already uses (`theme.mjs`,
-`i18n.mjs`, `markdown.mjs`, `urlState.mjs`, `workflowLabels.mjs`,
-`settingsLink.mjs`) plus the vendored Prism — the two deliberate exceptions
-being `ClaudeChat.mjs`'s `claudeChatColumn` (the general chat, see below) and
-`lineDiff.mjs`'s `alignRows` (the current-vs-proposed code panes, see below),
-both pure layers with no review-tree state of their own — and it repeats the
-tree's *shape*
-(a horizontally scrolling column flow, a card per column, one column owning the
-keyboard) in ~700 lines of its own. The one thing the request called "een beetje
-hergebruiken" is the **first column**: the same two-card stack as the review
-tree's PR-info column — the ticket on top, the running workflow tasks below it —
-rebuilt rather than imported.
+`src/plan.mjs` imports **nothing** from `home.mjs`/`Block.mjs` — those carry
+the whole review-tree navigation state (comment cursors, url-state bindings,
+drilling) and none of it applies here. It reuses only the shared **page-level**
+utilities every page already uses (`theme.mjs`, `i18n.mjs`, `markdown.mjs`,
+`urlState.mjs`, `settingsLink.mjs`) plus the vendored Prism — plus THREE
+deliberate exceptions: `ClaudeChat.mjs`'s `claudeChatColumn` (the general chat,
+see below), `lineDiff.mjs`'s `alignRows` (the current-vs-proposed code panes,
+see below), and `RelatedPanel.mjs`'s `TasksPanel` (the "Taken" block — see "The
+Taken block is the literal TasksPanel" below). This third exception is a later
+addition and a step further than the first two: `claudeChatColumn`/`alignRows`
+are pure, component-less template/comparison layers with no state of their
+own, while `TasksPanel` really does pull in a slice of `RelatedPanel.mjs`'s own
+module-private state (`taskUi`, via the exported
+`markTaskRetrying`/`clearTaskRetrying`/`isRetryingRun`) — an explicit,
+reviewer-requested exception to "reuses nothing from RelatedPanel.mjs", not an
+oversight. It repeats the tree's *shape* (a horizontally scrolling column flow,
+a card per column, one column owning the keyboard) in ~700 lines of its own.
+The one thing the request called "een beetje hergebruiken" is the **first
+column**: the same two-card stack as the review tree's PR-info column — the
+ticket on top, the "Taken" block below it.
 
 ## The columns
 
 1. **The ticket** (`plan-info-column`, `w-[34rem]`) — key, title, a link to the
    issue in Jira, the description as Markdown (`renderMarkdown`), plus the
    back-link/theme/settings row. Below it, as its own `shrink-0` card, the
-   **"Taken"** list: the workflow runs of THIS ticket, from
-   `GET /api/workflows?plan=KEY` (a `plan wordt opgesteld…` chip while one is
-   running). Explicitly not every running run repo-wide — only what belongs to
-   this plan.
+   **"Taken"** block: the literal review-tree `TasksPanel` (RelatedPanel.mjs),
+   fed the workflow runs of THIS ticket from `GET /api/workflows?plan=KEY` —
+   see "The Taken block is the literal TasksPanel" below.
 2. **The questions** (`plan-questions-column`, `w-[31rem]`) — or, while the
    scope question stands, ONLY that question (see "Subtask and main task"
    below) — one card per
@@ -79,6 +83,132 @@ rebuilt rather than imported.
    that per block explicitly; it used to show `"note"` only on a top-level
    block and an empty `"children":[]`, and the model then left every nested
    block's note empty (measured across all stored documents).
+
+## The Taken block is the literal TasksPanel
+
+Reviewer request, verbatim: *"dit blokje met workflows, mag exact hetzelfde
+werken als in pr tree"*. The "Taken" card used to be its own small render
+(`runRow`/`tasksCard`/`planRunStatusWord`, ~90 lines) with its own status-word
+map, its own always-visible "Opnieuw plannen" button and no note/relative-time
+line at all. It is now the **exact same component** the PR review tree uses —
+`TasksPanel`, `buildTaskRows`, `visibleWorkflowRuns`, `workflowNote`,
+`STATUS_BADGES` (all `RelatedPanel.mjs`) — imported and mounted unchanged, a
+third exception to this page's "own code" rule (see above). `tasksCard()` is
+now one line: `TasksPanel(state, { openRowMenu, refresh, subtitle })`.
+
+### What this pulls in, verbatim, for free
+
+- The two-line row (status-word badge + label + relative time, then a
+  truncated note line), the 3,5-row scroll cap with "nog N meer — scroll voor
+  de rest", and the ⟳ refresh button in the header — pixel-identical to the
+  tree's own.
+- **The merged failed/skipped view**: a genuinely failed run and a swallowed
+  `planGenerate` error (see below) both render exactly like any other failed
+  run in the tree (rose "⚠ mislukt" badge, the recorded message as the note),
+  not a page-specific amber pill anymore.
+- **`visibleWorkflowRuns`'s own visibility rule, UNCHANGED**: a run only shows
+  while genuinely `running`, or stale (5+ minutes) and not `waiting`. The
+  ticket's own `plan` tracker sits `waiting` almost all the time (parked on
+  `WaitSignal` between questions) — exactly the same "long-lived tracker
+  idling on a Signal is not actionable, just noise" case `build_relations`/
+  `approve`/`pr_status` already are on the PR tree (see `workflowNote`'s own
+  doc comment in RelatedPanel.mjs) — so **the "Plan" row disappears from the
+  Taken block whenever it is simply waiting for the reviewer**, same as any
+  idling tracker on the PR tree. This is a real, visible behavior change from
+  the old always-a-"Plan"-row version, accepted deliberately as the direct
+  consequence of literal reuse rather than carved out as a plan-specific
+  exception.
+
+### The shim: two client-side properties, no backend change
+
+`buildTaskRows`/`visibleWorkflowRuns` read two properties off whatever state
+object they're given — `state.workflows` and `state.pageProblems`
+(`{failedRuns, logErrors}`) — neither of which exists on `GET /api/plan`'s own
+shape (that's PR-tree vocabulary: `GET /api/workflows?pr=N` +
+`GET /api/problems`). `plan.mjs` derives both, purely client-side, and keeps
+them on its own `state` (so TasksPanel's own `${() => ...}` bindings, which
+read `state.workflows`/`state.pageProblems` by property access, stay
+reactive):
+
+- **`planWorkflowsForPanel()`** → `state.workflows`: `state.runs` verbatim,
+  except the ticket's own `plan` run gets `{status:'running', note:'plan
+  wordt opgesteld…'}` while `busyGenerating()` is true (the tracker's own
+  "generating right now, including the gap right after an answer before the
+  run's stored status has visibly flipped" signal — see `busyGenerating`'s
+  own doc comment). `workflowNote` (RelatedPanel.mjs) reads a run's own
+  `.note` field FIRST, before its `workflow:status` table — a one-line,
+  backward-compatible addition (every real `WorkflowRunView` off the Go JSON
+  never carries this field, so every PR-tree call site is unaffected) added
+  specifically so this override works with no other change to the shared
+  function.
+- **`planProblemsForPanel()`** → `state.pageProblems`: `logErrors` is always
+  `[]` (a planning ticket has no repo-wide `/api/problems` equivalent — that
+  endpoint is PR-scoped). `failedRuns` holds every run genuinely
+  `status === 'failed'`, PLUS — if the `plan` run isn't itself `failed` but
+  `state.doc.error` is set — a synthesized failed-run entry for it
+  (`{...run, status:'failed', error: state.doc.error, retryable:true}`):
+  `planGenerate`'s Activity swallows its own error onto the document instead
+  of failing the Execution (see plan_workflow.go), so `run.status` alone
+  never carries a killed/timed-out `claude -p` call. Only the `plan`
+  workflow is ever `retryable:true` here, matching the one thing
+  `retryPlanRun` can resume — same restriction the old `canRetry` had.
+- **`syncTaskPanelState`** (a `watch`, inline deps per
+  `.claude/rules/arrowjs-pitfalls.md`) recomputes both on every change to
+  `state.runs`/`state.doc.error`/`state.generating`/`state.scopePending`/
+  `state.hotfixPending`/`state.followupPending` — not just a fresh poll, but
+  every optimistic local flag that flips `busyGenerating()` before the next
+  poll would otherwise notice.
+- **Retry bookkeeping moved to the shared spot**: the old page-local
+  `state.retryingRuns` map + `dropSettledRetrying` are gone; `retryPlanRun`
+  now calls `markTaskRetrying`/`clearTaskRetrying` (RelatedPanel.mjs, the same
+  functions `home.mjs`'s own `retryFailedRun` uses), and the ticket column's
+  own Enter-menu guard (`planCommands`, "only offer 'Opnieuw plannen' when
+  not already retrying") reads the new `isRetryingRun(runId)` export — a
+  read-only peek at the same module-private `taskUi.retrying`, added
+  alongside the two existing write-only exports.
+- **`TasksPanel` gained one new, optional `actions.subtitle`** (default
+  "workflow-runs · deze PR"): the PR-tree wording is wrong on a page with no
+  PR, so `plan.mjs` passes `t('workflow-runs · dit ticket')`.
+
+### Deliberately simplified: no anchored row menu
+
+The tree's own `openTaskRowMenu` opens a whole native, cursor-anchored context
+menu (retry / open comment / ignore / hide / copy error) — built on
+`home.mjs`'s general `openMenu('task', {native:true, ...})` machinery. This
+page's Taken block only has ONE possible action (retry the ticket's own failed
+`plan` run — nothing here is ever a `task_code_comment` run with an "open the
+comment" option, nothing is ever ignorable/hideable in the same sense), and
+this page's own menu machinery is deliberately anchor-less (see "Opnieuw
+plannen — retrying a failed plan run" below). Standing up a second, matching
+anchored-menu subsystem for exactly one item was judged not worth it:
+`openPlanTaskRowMenu(row)` just calls `retryPlanRun(row.runId)` directly when
+`row.retryable && !row.retrying`, no menu opens at all. A row with nothing to
+do (any other status, or already retrying) is inert on click, same as before.
+
+### Accepted gap: a ticket with a `plan` run in the API response but the run isn't found yet
+
+`buildTaskRows` on an entirely empty `state.workflows`/`state.pageProblems`
+(both `[]`) renders the tree's own generic "Geen taken." — the old page had
+its own placeholder here (`noRunsRow`) that kept showing "plan wordt
+opgesteld…"/the doc error even with zero runs at all. In practice `state.runs`
+already contains the `plan` tracker's own run within moments of the tracker
+existing (`ensureTracker` starts it immediately), so this only matters for the
+first instant of a brand-new ticket, or a hand-built test fixture that sets
+`generating:true` with `runs:[]` (see `tests/plan-phase-busy.spec.mjs`, which
+asserts the PHASE card, not this block, so it is unaffected). Not fixed —
+literal reuse means literal behavior, including this edge.
+
+### No focus keyboard-navigation into this block (yet)
+
+The PR tree's Taken rows are their own keyboard stop (`state.taskFocus`, ↓ from
+the description walks in — see "Walking into the Taken block" in
+`.claude/docs/keyboard-navigation.md`). `plan.mjs` does not wire this up:
+`TasksPanel(state, actions)`'s `actions.focusState` is left `undefined`, so no
+row ever shows the focus ring and ↓/↑ from the ticket card does not enter this
+list. Out of scope for this change (not requested, and this page's own
+keyboard model — `state.col`/`state.cur` — has no equivalent "sub-cursor within
+column 0" concept yet); a future request to add it would extend `state.col0Focus`
+the same way the Jira-opmerkingen column already does.
 
 ## The context a plan is built on: comments and already-merged work
 
@@ -789,14 +919,14 @@ Offered in two places, both driving the same `retryPlanRun(runId)`
 endpoint the review tree's own `retryFailedRun`/the global failed-tasks dialog
 use, not a plan-specific write path):
 
-- **A run row in the "Taken" list** (`runRow`) shows a small "Opnieuw
-  plannen" button next to the status pill, but only while that row is the
-  ticket's own `plan` tracker run (not `plan_execute` or anything else) AND
-  its status is really `failed` — a running/waiting/completed run has
-  nothing to retry. The button sits in its own `${() => ...}` nested slot
-  (a stable `contents` root) so the template↔`''` toggle goes through arrow's
-  reactive path rather than a bare static interpolation, per
-  `.claude/rules/arrowjs-pitfalls.md`.
+- **A click on the failed run's row in the "Taken" list** retries it —
+  `openPlanTaskRowMenu(row)` calls `retryPlanRun(row.runId)` directly when
+  `row.retryable && !row.retrying`, no menu; see "The Taken block is the
+  literal TasksPanel" above for why this stays a direct call instead of a
+  matching anchored-menu subsystem. Only the ticket's own `plan` tracker run
+  is ever `retryable` (not `plan_execute` or anything else), and only while
+  it is really `failed` (or the swallowed-generation-error case, see above) —
+  a running/waiting/completed row is inert on click.
 - **The ticket column's own Enter-menu** (`PLAN_COMMANDS` above) gains the
   same "Opnieuw plannen" item, but only when `planCommands()` finds a
   `failed` `plan` run at OPEN time — resolved once, not as a reactive label,
@@ -806,14 +936,16 @@ use, not a plan-specific write path):
   `PLAN_COMMANDS` constant directly — same "ONE list both the render and the
   ↑/↓/Enter index into" rule as `resolveOverviewCommands` (`overview.mjs`).
 
-`state.retryingRuns` (a plain `{runId: true}` map, no shared module — this
-page's whole menu/retry machinery is intentionally small) marks a run busy
-the moment the click fires, so the button/status word flips to "opnieuw
+`markTaskRetrying`/`clearTaskRetrying`/`isRetryingRun` (`RelatedPanel.mjs`, the
+shared spot — see "The Taken block is the literal TasksPanel" above) mark a run
+busy the moment the click fires, so the row/status word flips to "↻ opnieuw
 gestart" immediately instead of still reading "mislukt" until the next
-3-second poll notices — same reasoning as `home.mjs`'s `markTaskRetrying`.
-`dropSettledRetrying()` (mirrors `dropSettledPending`'s "the document is the
-only source of truth" shape) forgets the mark again as soon as a freshly
-loaded document no longer reports that run as `failed`.
+3-second poll notices — same reasoning as `home.mjs`'s own `retryFailedRun`.
+There is no plan-page-local settling logic any more (the old
+`dropSettledRetrying` is gone): the row simply stops being fed as `failed`
+once a freshly loaded document no longer reports it that way (see
+`planProblemsForPanel` above), and `buildTaskRows` then renders it from the
+live/idle side instead.
 
 Its own tiny menu machinery in `plan.mjs` (`menu`/`ms`/`openPlanMenu`/
 `closeMenu`/`runCommand`) mirrors home.mjs's at the scale this page needs: no
@@ -1303,9 +1435,10 @@ flag scoped to exactly the phase ONE AHEAD of `current` (`i === at + 1`,
 `busyGenerating()` true — the transition can never skip ahead or lag behind
 more than one phase) and shows it with a fourth glyph plus the word **bezig**
 (`data-phase-state="busy"`) — never colour alone, same rule as the other
-three states. This mirrors `planRunStatusWord`'s own `busyGenerating()` read
-for the Plan run row's `plan wordt opgesteld…` pill (see "The Taken block"
-below) — same signal, two places it needed to be visible.
+three states. This mirrors `planWorkflowsForPanel`'s own `busyGenerating()`
+read for the "Plan" run row's `plan wordt opgesteld…` note (see "The Taken
+block is the literal TasksPanel" above) — same signal, two places it needed to
+be visible.
 
 **Column 2 spells out the intent → specs step in words, no button.**
 Reviewer request: *"in kolom 2 moet het duidelijk zijn hoe ik van intent naar
