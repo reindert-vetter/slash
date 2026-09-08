@@ -1220,6 +1220,30 @@ intent-only plan really has one file (three stubs would make the stages
 unreadable on disk), and plan.md appears as the current draft while the spec is
 still being sharpened — the page says exactly that, with the word **concept**.
 
+**A fourth state, "bezig": the phase right after the current one, while
+Claude is actually generating it.** Reviewer report (screenshot): the phase
+card kept reading `1. intent … nu` while Claude was already generating specs
+— indistinguishable from "nothing is happening yet" for the `specs` row,
+which still said `nog niet`. `phaseRow` (`plan.mjs`) now derives a `busy`
+flag scoped to exactly the phase ONE AHEAD of `current` (`i === at + 1`,
+`busyGenerating()` true — the transition can never skip ahead or lag behind
+more than one phase) and shows it with a fourth glyph plus the word **bezig**
+(`data-phase-state="busy"`) — never colour alone, same rule as the other
+three states. This mirrors `planRunStatusWord`'s own `busyGenerating()` read
+for the Plan run row's `plan wordt opgesteld…` pill (see "The Taken block"
+below) — same signal, two places it needed to be visible.
+
+**Column 2 spells out the intent → specs step in words, no button.**
+Reviewer request: *"in kolom 2 moet het duidelijk zijn hoe ik van intent naar
+specs ga"*. There is deliberately no manual "generate specs" action — the
+transition already happens automatically (the gate answered, if any, then
+`planGenerate Mode:"all"` runs inline, see `planWorkflow` above) — so
+`intentToSpecsHint()` (`plan.mjs`) just says so, directly under the intent
+field while stage 1 is active (`intentInQuestionsColumn()`):
+"Specs worden automatisch gegenereerd zodra de intentie compleet is.", or,
+while `busyGenerating()`, "Specs (de vragen hieronder) worden nu gegenereerd
+vanuit deze intentie…" (`data-testid=plan-intent-to-specs-hint`).
+
 - **Written inside the `planSave` Activity**, not as an Activity of its own.
   That is the whole replay story: the `plan` Run ID is deterministic
   (`plan-<KEY>`) and tembed matches history positionally, so an extra

@@ -2096,6 +2096,28 @@ function intentField(place) {
   `.key('intent:' + place + ':' + (loaded ? 'ready' : 'pending'))
 }
 
+// intentToSpecsHint answers the reviewer's own question ("in kolom 2 moet het
+// duidelijk zijn hoe ik van intent naar specs ga"): a short, status-aware line
+// directly under the intent field while stage 1 (intent) is active, saying in
+// words what happens next — there is deliberately no button here, the
+// transition to specs (spec.md) happens automatically as soon as the intent is
+// complete (the gate answered, if there is one), see planWorkflow's own
+// `planGenerate Mode:"all"` call in plan_workflow.go. `busyGenerating()` picks
+// between "not yet" and "happening right now", the same signal `phaseRow`'s
+// own "bezig" state and `planRunStatusWord`'s pill read.
+function intentToSpecsHint() {
+  return html`
+    <p
+      class="mb-3 rounded-xl bg-sky-50 px-3 py-2 text-[11.5px] leading-relaxed text-sky-700 dark:bg-sky-500/10 dark:text-sky-300"
+      data-testid="plan-intent-to-specs-hint"
+    >
+      ${busyGenerating()
+        ? t('Specs (de vragen hieronder) worden nu gegenereerd vanuit deze intentie…')
+        : t('Specs worden automatisch gegenereerd zodra de intentie compleet is.')}
+    </p>
+  `.key('intent-to-specs-hint')
+}
+
 // PHASE_WORD is the reviewer-facing word of each phase. The WORD carries the
 // meaning, never a colour on its own (Reindert is colourblind), and the glyph
 // (a filled/open/checked shape) is a second, non-colour signal on top of it.
@@ -2108,19 +2130,31 @@ const PHASE_WORD = { intent: 'intent', specs: 'specs', plan: 'plan' }
 // ahead whose file is nonetheless already on disk says "concept": plan.md is
 // written as a draft as soon as there are tasks, while the spec is still being
 // sharpened (see planHasPhaseContent vs planPhase in plan_artifacts.go).
+//
+// A FOURTH state, "bezig": reviewer report (screenshot) — with the phase card
+// stuck reading "1. intent … nu" while Claude was already generating specs
+// (busyGenerating() true; the same signal also drives the Plan run row's own
+// "plan wordt opgesteld…" pill, see planRunStatusWord below), the phase
+// directly AFTER the current one still read "nog niet" — indistinguishable
+// from "nothing is happening yet". Only the phase immediately following
+// `current` can ever be the one actually being generated right now (never two
+// at once, never one further ahead), so `busy` is scoped to exactly
+// `i === at + 1`. A distinct glyph (a fourth shape, not one of the other
+// three) plus the word "bezig" — never colour alone.
 function phaseRow(f, i, current) {
   const order = ['intent', 'specs', 'plan']
   const at = order.indexOf(current)
   const isNow = f.phase === current
   const done = i < at
-  const glyph = isNow ? '\u25c6' : done ? '\u2713' : '\u25cb'
-  const word = isNow ? t('nu') : done ? t('klaar') : f.exists ? t('concept') : t('nog niet')
+  const busy = !isNow && !done && i === at + 1 && busyGenerating()
+  const glyph = isNow ? '\u25c6' : done ? '\u2713' : busy ? '\u23f3' : '\u25cb'
+  const word = isNow ? t('nu') : done ? t('klaar') : busy ? t('bezig') : f.exists ? t('concept') : t('nog niet')
   return html`
     <div
       class="flex items-baseline gap-1.5 rounded-md px-1 py-0.5 text-[11.5px] leading-snug"
       data-testid="plan-phase-row"
       data-phase="${f.phase}"
-      data-phase-state="${isNow ? 'now' : done ? 'done' : 'todo'}"
+      data-phase-state="${isNow ? 'now' : done ? 'done' : busy ? 'busy' : 'todo'}"
     >
       <span class="w-3 shrink-0 text-slate-400 dark:text-zinc-500">${glyph}</span>
       <span class="${isNow ? 'font-semibold text-slate-900 dark:text-zinc-100' : 'text-slate-600 dark:text-zinc-300'}"
@@ -3428,6 +3462,7 @@ function questionsColumn() {
       ${columnHeader(t('Vragen over het plan'), () => state.col === 1)}
       <div class="min-h-0 flex-1 overflow-y-auto pr-1">
         <div class="contents">${() => (intentInQuestionsColumn() ? [intentField('questions')] : [])}</div>
+        <div class="contents">${() => (intentInQuestionsColumn() ? [intentToSpecsHint()] : [])}</div>
         ${commentsPanel()}
         ${() => (gateOpen() ? [] : (state.doc.questions || []).map((q, qi) => questionCard(q, qi)))}
         ${() =>
