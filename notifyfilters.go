@@ -36,13 +36,23 @@ import (
 //
 // MATCHING (notificationFilteredOut): case-insensitive "contains" against the
 // notification's own TITLE — the "Robin Landweer assigned a work item to you"
-// line — so "assigned a work item to you" hides every actor's variant of it.
-// Deliberately substring rather than a regex or a glob: the reviewer types
-// plain notification text, not a pattern language, and nothing else in this
-// app asks him to. Deliberately the title only, not the issue summary or the
-// comment preview: those are the CONTENT of the notification, and hiding a
-// notification because the ticket it points at happens to contain a phrase
-// would be surprising.
+// line — so "assigned a work item to you" hides every actor's variant of it,
+// OR against its ACTOR, the display name behind the row's avatar ("Automation
+// for Jira"). Deliberately substring rather than a regex or a glob: the
+// reviewer types plain notification text, not a pattern language, and nothing
+// else in this app asks him to.
+//
+// The actor axis exists because a whole SENDER is a filter a reviewer really
+// wants ("ik wil geen automation meldingen krijgen. dus niks van Automation"),
+// and the title alone cannot express it reliably: Jira's own message sentence
+// only sometimes opens with the actor's name, so "automation for jira" would
+// hide some of that sender's notifications and not others. One list, one rule,
+// two fields.
+//
+// Still deliberately NOT the issue summary or the comment preview: those are
+// the CONTENT of the notification, and hiding a notification because the
+// ticket it points at happens to contain a phrase would be surprising. The
+// actor is not content — it is who sent it.
 //
 // WHERE the filter is applied is a deliberate choice too: at READ time, in
 // handleJiraNotifications (tasks_api.go), never in the jira_inbox tracker's
@@ -63,9 +73,18 @@ import (
 // below — the only writer of notify-filters.json.
 
 // defaultNotifyFilters is the built-in list, used whenever there is no
-// readable override file: the two texts the reviewer named when asking for
-// this. Lowercase, because matching is case-insensitive anyway.
-var defaultNotifyFilters = []string{"assigned a work item to you", "assigned a story to you"}
+// readable override file: the texts the reviewer named when asking for this.
+// Lowercase, because matching is case-insensitive anyway.
+//
+// "automation for jira" is the third one and matches on the ACTOR axis (see
+// MATCHING above): a Jira automation rule flipping a work item's status is
+// never addressed at a person, so the bell is quiet about it out of the box.
+// Like the other two it is an ordinary, REMOVABLE entry, not hardcoded
+// behaviour — a reviewer who does want to see his automation rules firing
+// deletes it on /settings. Note that an existing notify-filters.json is NOT
+// migrated: a reviewer who already curated his own list keeps exactly the list
+// he curated, and adds this text himself if he wants it.
+var defaultNotifyFilters = []string{"assigned a work item to you", "assigned a story to you", "automation for jira"}
 
 // notifyFilters returns the effective filter list for one data dir, reading
 // <dataDir>/notify-filters.json once (so a hand edit takes a restart, like
@@ -120,17 +139,22 @@ func normalizeNotifyFilterList(list []string) []string {
 
 // notificationFilteredOut answers "should this notification be hidden?" — the
 // whole matching rule, in one testable function: case-insensitive substring of
-// the notification's title. An empty filter list hides nothing.
-func notificationFilteredOut(title string, filters []string) bool {
+// the notification's title OR of its actor (the sender's display name). An
+// empty filter list hides nothing.
+func notificationFilteredOut(title, actor string, filters []string) bool {
 	if len(filters) == 0 {
 		return false
 	}
-	lower := strings.ToLower(title)
+	lowerTitle, lowerActor := strings.ToLower(title), strings.ToLower(actor)
 	for _, f := range filters {
 		if f == "" {
 			continue
 		}
-		if strings.Contains(lower, strings.ToLower(f)) {
+		f = strings.ToLower(f)
+		if strings.Contains(lowerTitle, f) {
+			return true
+		}
+		if lowerActor != "" && strings.Contains(lowerActor, f) {
 			return true
 		}
 	}

@@ -2374,11 +2374,13 @@ func (s *server) handleJiraNotifications(w http.ResponseWriter, r *http.Request)
 	// "N ongelezen" count AND the unread dot from this same array, so a hidden
 	// notification can never keep counting silently. `hidden` is reported so
 	// the panel can say IN WORDS how many rows the filter is holding back.
+	// A filter text matches the title OR the actor, so a whole sender (e.g.
+	// "Automation for Jira") can be filtered out too — see notifyfilters.go.
 	filters := notifyFilters(s.dataDir)
 	kept := make([]jiranotify.Item, 0, len(items))
 	hidden := 0
 	for _, it := range items {
-		if notificationFilteredOut(it.Title, filters) {
+		if notificationFilteredOut(it.Title, it.Actor, filters) {
 			hidden++
 			continue
 		}

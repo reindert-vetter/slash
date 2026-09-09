@@ -241,9 +241,19 @@ the ONLY place this feed is shown) moved into the bell's own dropdown.
   een list die je kan aanvullen"). The list of texts lives on `/settings`
   ("Jira-notificaties verbergen", see `.claude/docs/settings-page.md`) and is
   stored in `notify-filters.json` via the `app_settings` tracker; the two
-  texts he named are the built-in DEFAULT list, so the bell is quiet out of
-  the box, but they are ordinary removable entries and not hardcoded
-  behaviour.
+  texts he named — plus `automation for jira` (see the actor axis below) — are
+  the built-in DEFAULT list, so the bell is quiet out of the box, but they are
+  ordinary removable entries and not hardcoded behaviour.
+  - **A filter text matches the notification's TITLE or its ACTOR**, both
+    case-insensitive substrings (Reindert: "ik wil geen automation meldingen
+    krijgen. dus niks van Automation"). The actor axis is what makes a whole
+    SENDER filterable: Jira's message sentence only sometimes opens with the
+    actor's display name, so a title-only match hid some of "Automation for
+    Jira"'s notifications and not others. Still deliberately NOT the issue
+    summary or the comment preview — those are the notification's content, and
+    the actor is not content but who sent it. An existing
+    `notify-filters.json` is NOT migrated when a default is added: a curated
+    list stays exactly as curated.
   - **It is applied at READ time**, in `handleJiraNotifications`
     (`tasks_api.go`) via `notificationFilteredOut` (`notifyfilters.go`), and
     deliberately NOT in the `jira_inbox` tracker's own refresh: the

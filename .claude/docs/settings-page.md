@@ -335,7 +335,11 @@ their own doc comments in `workflows.go`). Each `Kind` runs its own Activity:
   whose notifications the header bell on `/pr-overview` hides ("filter
   notificaties weg met: assigned a work item to you. en assigned a story to
   you" → "maak daar een instelling van in de instellingen pagina" → "met een
-  list die je kan aanvullen"). Same shape as `savePraiseWords` down to the
+  list die je kan aanvullen"). A text matches a notification's title OR its
+  actor, so an entry can name a whole sender ("ik wil geen automation
+  meldingen krijgen. dus niks van Automation" → `automation for jira`, the
+  third built-in default); see `.claude/docs/pr-overview.md` for why the actor
+  axis was needed. Same shape as `savePraiseWords` down to the
   atomic write and the cache update in the same locked section, with ONE
   deliberate difference: an **empty list is a real, preserved value** here,
   both in the HTTP handler (which accepts it, where `"praiseWords"` rejects
@@ -480,9 +484,12 @@ against a real, genuinely expired `acli` session.
 `tests/settings-page.spec.mjs` also covers the notification-filter row's own
 write path (add a text, confirm it reaches `GET /api/notifyfilters`, survive a
 reload, remove it again). Backend: `notifyfilters_test.go` — the matching rule
-itself (`notificationFilteredOut`: case-insensitive, substring, an empty list
-hides nothing), the defaults without a file, the immediate cache refresh, and
-the preserved empty list.
+itself (`notificationFilteredOut`: case-insensitive, substring, against the
+title AND the actor, an empty list hides nothing), the actor axis on its own
+(`TestNotificationFilteredOutMatchesTheActor`: the same sender hidden even
+when the message sentence never names him, a human sender kept on a similar
+sentence, an empty actor never matching), the defaults without a file, the
+immediate cache refresh, and the preserved empty list.
 
 `tests/settings-page.spec.mjs` — both entry buttons + the `?from=` round trip
 (including the open-redirect fallback), `↑`/`↓`/`Enter`/`Space` row

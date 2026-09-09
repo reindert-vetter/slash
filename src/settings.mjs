@@ -828,7 +828,7 @@ function notifyFiltersRow() {
     ${rowLabel(
       t('Jira-notificaties verbergen'),
       t(
-        'Notificaties waarvan de titel een van deze teksten bevat, verdwijnen uit het belletje en tellen niet mee als ongelezen. Zonder teksten wordt niets verborgen.',
+        'Notificaties waarvan de titel of de afzender een van deze teksten bevat, verdwijnen uit het belletje en tellen niet mee als ongelezen. Zo verberg je ook een hele afzender, bv. "Automation for Jira". Zonder teksten wordt niets verborgen.',
       ),
     )}
     <div class="mb-2 flex flex-wrap gap-1.5" data-testid="settings-notifyfilters-chips">

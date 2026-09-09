@@ -717,8 +717,8 @@ export const EN = {
     'Words the review summary does not count as an open point (e.g. "nice", "top").',
   'Woord toevoegen…': 'Add a word…',
   'Jira-notificaties verbergen': 'Hide Jira notifications',
-  'Notificaties waarvan de titel een van deze teksten bevat, verdwijnen uit het belletje en tellen niet mee als ongelezen. Zonder teksten wordt niets verborgen.':
-    'Notifications whose title contains one of these texts disappear from the bell and no longer count as unread. With no texts, nothing is hidden.',
+  'Notificaties waarvan de titel of de afzender een van deze teksten bevat, verdwijnen uit het belletje en tellen niet mee als ongelezen. Zo verberg je ook een hele afzender, bv. "Automation for Jira". Zonder teksten wordt niets verborgen.':
+    'Notifications whose title or sender contains one of these texts disappear from the bell and no longer count as unread. That is also how you hide a whole sender, e.g. "Automation for Jira". With no texts, nothing is hidden.',
   'Tekst toevoegen, bv. assigned a work item to you…':
     'Add a text, e.g. assigned a work item to you…',
   '{n} verborgen door je filter': '{n} hidden by your filter',
