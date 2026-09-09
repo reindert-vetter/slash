@@ -34,6 +34,7 @@ type Fake struct {
 	repoInaccessible  bool                 // set by SetRepoAccessible(false): RepoAccessible reports false
 	repoAccessibleErr error                // RepoAccessible fails outright instead of reporting a bool
 	prState           string               // "" reads as "open"
+	prStateErr        error                // set by SetPRStateErr: PRState fails instead of reporting a state
 	prMeta            Meta                 // returned by PRMeta (SetPRMeta overrides), PR-independent fallback
 	prMetas           map[int]Meta         // per-PR override (SetPRMetaFor), checked first
 	prMetaErrs        map[int]error        // per-PR error override (SetPRMetaErr), checked before prMetas
@@ -183,10 +184,24 @@ func (f *Fake) SetGeneralComments(cs []GeneralComment) {
 func (f *Fake) PRState(_ context.Context, pr int) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.prStateErr != nil {
+		return "", f.prStateErr
+	}
 	if f.prState == "" {
 		return "open", nil
 	}
 	return f.prState, nil
+}
+
+// SetPRStateErr makes every later PRState call fail with err instead of
+// reporting a state — mirrors SetFetchRepliesErr/SetRepoAccessible's own
+// error-injection shape. PR-independent, like prState itself: this Fake has
+// no notion of "a specific PR's live state", only "the one PR the current
+// test cares about".
+func (f *Fake) SetPRStateErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.prStateErr = err
 }
 
 // RepoAccessible reports repoAccessible (defaults to true — a fresh Fake

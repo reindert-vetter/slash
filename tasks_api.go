@@ -475,6 +475,10 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		// Resume the ingest-refresh poller for every pr_status tracker that was
 		// already running before this restart (mirrors ResumePolling).
 		mgr.ResumePRStatusPolling(ctx)
+		// A second, independent way for a pr_status tracker to learn its PR
+		// merged/closed — never dependent on any comment-thread poller being
+		// alive (see pr_status_poll.go's own header for the gap this closes).
+		mgr.StartPRMergeSweep(ctx)
 		// Own the PR inbox via the workflow: fetch an initial snapshot into the
 		// read-model and start the refresh poller (the UI reads only the read-model).
 		mgr.EnsureInbox(ctx)
