@@ -48,6 +48,7 @@ import { claudeChatColumn } from './ClaudeChat.mjs'
 // ensurePlanChatEvents below and "Live progress" in .claude/docs/plan-page.md.
 import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
 import { setTurnProgress, turnProgress, lastTurnProgressAt } from './claudeTurns.mjs'
+import { updateScrollHints } from './scrollFade.mjs'
 import { assigneeMark, avatarHTML } from './avatar.mjs'
 import { relativeTime } from './relativeTime.mjs'
 // alignRows is the review tree's OWN line aligner, extracted to its own module
@@ -1116,6 +1117,28 @@ function syncPlanChatTicker() {
   }
 }
 
+// scrollPlanChatThreadToBottom mirrors RelatedPanel.mjs's
+// scrollClaudeThreadToBottom (`claude-chat-thread` scrolls ITSELF, never an
+// ancestor — see .claude/docs/claude-chat-panel.md) — this page's own
+// implementation of the same call, since plan.mjs deliberately imports none
+// of RelatedPanel.mjs's chat engine. Trimmed to what this page actually
+// needs: no claudePos/pinned guard, since this chat has no turn-by-turn `↑`
+// navigation and chatView().pinned() is hard-coded `true` anyway. Reviewer
+// report (data/review-shots/task53-reactie-niet-in-conversatie.png): a long
+// reply never scrolled into view at all, reading as "the reply just doesn't
+// appear" — because nothing ever moved this div's own scrollTop.
+function scrollPlanChatThreadToBottom() {
+  requestAnimationFrame(() => {
+    const el = document.querySelector('[data-testid=claude-chat-thread]')
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+    // A JS-driven scrollTop write isn't guaranteed to fire a native 'scroll'
+    // event in every browser — update the scroll hints directly too, same
+    // reasoning as scrollClaudeThreadToBottom's own comment.
+    updateScrollHints(el)
+  })
+}
+
 // loadChatProgressResync is the RESYNC read for the live-progress channel
 // (GET /api/chat/progress?commentId=...) — same generic, conversation-id-keyed
 // endpoint the review tree's own loadChatProgress uses (RelatedPanel.mjs),
@@ -1133,6 +1156,7 @@ async function loadChatProgressResync() {
     if (lastTurnProgressAt(convId) > startedAt) return
     setTurnProgress(convId, json.running && json.progress ? json.progress : null)
     syncPlanChatTicker()
+    scrollPlanChatThreadToBottom()
   } catch (_) {
     // a missing snapshot just means "no live turn known" — nothing to show
   }
@@ -1156,6 +1180,7 @@ function ensurePlanChatEvents() {
     if (ev.key !== convId) return
     setTurnProgress(convId, ev.data || null)
     syncPlanChatTicker()
+    scrollPlanChatThreadToBottom()
   })
   onEvent('chat.message', (ev) => {
     if (ev.key !== convId) return
@@ -1163,7 +1188,7 @@ function ensurePlanChatEvents() {
     // ordinary way, same "an event is never the source of truth" rule as
     // every other SSE consumer (see .claude/docs/server-events.md).
     lastPayload = ''
-    loadPlan()
+    loadPlan().then(scrollPlanChatThreadToBottom)
   })
   onEventsResync(loadChatProgressResync)
   loadChatProgressResync()
@@ -1198,6 +1223,7 @@ async function sendChatMessage(text) {
   state.chatBusy = true
   state.chatError = ''
   state.doc = { ...state.doc, chat: [...(state.doc.chat || []), { role: 'user', body: trimmed }] }
+  scrollPlanChatThreadToBottom()
   try {
     const res = await fetch('/api/workflows/' + encodeURIComponent(state.runId) + '/signals/' + chatSignalName(), {
       method: 'POST',
@@ -1207,6 +1233,7 @@ async function sendChatMessage(text) {
     if (!res.ok) state.chatError = t('Kon niet verstuurd worden.')
     lastPayload = ''
     await loadPlan()
+    scrollPlanChatThreadToBottom()
   } catch (err) {
     state.chatError = t('Kon niet verstuurd worden.')
   }
@@ -1266,6 +1293,10 @@ function openPlanChat() {
     const el = document.querySelector('[data-testid=claude-chat-compose]')
     if (el) el.focus()
   })
+  // Reopening an already-running conversation should land on its latest
+  // turn, not scrolled to the top — see scrollPlanChatThreadToBottom's own
+  // doc comment.
+  scrollPlanChatThreadToBottom()
 }
 
 function closePlanChat() {
@@ -4258,7 +4289,15 @@ function planChatOverlay() {
           >
           <span class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500 dark:bg-zinc-800 dark:text-zinc-400">esc</span>
         </div>
-        <div class="flex min-h-0 flex-1 flex-col overflow-y-auto p-2">${() => claudeChatColumn(chatView(), chatCallbacks(), false, () => {})}</div>
+        <div class="flex min-h-0 flex-1 flex-col overflow-y-auto p-2">
+          ${() =>
+            // `{ inOverlay: true }` drops claudeChatColumn's tree-only
+            // `max-h-[38vh]` cap — this overlay, like generalChatOverlay.mjs's
+            // GeneralChatCard, already has a real, bounded height, so the
+            // thread should fill it instead of leaving a dead gap above the
+            // composer (see scrollPlanChatThreadToBottom's own doc comment).
+            claudeChatColumn(chatView(), chatCallbacks(), false, () => {}, { inOverlay: true })}
+        </div>
       </div>
     </div>
   `.key('plan-chat-overlay')

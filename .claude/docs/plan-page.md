@@ -1447,6 +1447,44 @@ document every answer already lives on.
   appends a fixed assistant line saying so, rather than leaving the
   reviewer's own message answered by nothing.
 
+### A reply landing below the fold never scrolled into view
+
+Reviewer report (`data/review-shots/task53-reactie-niet-in-conversatie.png`,
+"reactie hierop zie ik niet in mijn conversatie verschijnen"): the persisted
+transcript was actually complete (checked directly against
+`data/plan.db`'s stored `planDoc.Chat`) — the reply just never came into
+view. Two separate gaps, both because `plan.mjs` is its OWN chat
+implementation and had copied `ClaudeChat.mjs`'s presentation without also
+copying two small pieces of `RelatedPanel.mjs`'s chat ENGINE that make it
+usable inside a fullscreen overlay:
+
+- `planChatOverlay()` called `claudeChatColumn(...)` without
+  `{ inOverlay: true }`, so the thread kept the tree-only `max-h-[38vh]` cap
+  instead of filling the overlay's own real, bounded height — a big dead gap
+  between a short conversation and the composer (exactly the "large empty
+  area" in the screenshot). `generalChatOverlay.mjs`'s `GeneralChatCard`
+  already passes this option for the same reason; `plan.mjs` just hadn't.
+- `claude-chat-thread` scrolls **itself**, never an ancestor (see "`claude-
+  chat-thread` scrolls itself to the bottom, not an ancestor" in
+  `.claude/docs/claude-chat-panel.md`) — `RelatedPanel.mjs`'s
+  `scrollClaudeThreadToBottom()` is the only thing that ever moves that
+  scrollTop, and `plan.mjs` never had an equivalent of its own. A reply
+  overflowing the thread therefore just sat below the fold forever, reading
+  as "the reply doesn't appear" even though it was fully rendered in the DOM.
+
+**Fix**: `scrollPlanChatThreadToBottom()` (`plan.mjs`) is a small, trimmed
+local copy of `scrollClaudeThreadToBottom` — no `claudePos`/`pinned` guard,
+since this chat has no turn-by-turn `↑` navigation and `chatView().pinned()`
+is hard-coded `true` anyway. Called from every place new content can land:
+`sendChatMessage` (right after the optimistic echo, and again once the
+Signal round trip's refetch lands), the `chat.progress`/`chat.message` SSE
+handlers and `loadChatProgressResync` in `ensurePlanChatEvents`, and
+`openPlanChat` (so reopening an already-running conversation lands on its
+latest turn, not the top). Test: "a reply landing below the fold still
+scrolls into view" (`tests/plan-chat.spec.mjs`), same forced-`max-height`
+technique as `tests/claude-chat-panel.spec.mjs`'s "a just-sent Claude message
+scrolls into view…".
+
 ### Live progress (reviewer request: "ik wil daar ook progress zien net zoals in claude chat in een pr")
 
 The "no streaming" line above used to be part of the accepted-gap list — it no

@@ -80,6 +80,42 @@ test.describe('Plan page — the general chat (/)', () => {
     await expect(page.getByTestId('plan-chat-overlay')).toBeVisible()
   })
 
+  // Reviewer report: "reactie hierop zie ik niet in mijn conversatie
+  // verschijnen" (data/review-shots/task53-reactie-niet-in-conversatie.png) —
+  // the stored reply was actually complete, but `claude-chat-thread` (its own
+  // `overflow-y-auto` scroll container, see .claude/docs/claude-chat-panel.md
+  // "`claude-chat-thread` scrolls itself to the bottom, not an ancestor")
+  // never moved its own scrollTop, so a reply landing below the fold just
+  // never came into view. Unlike RelatedPanel.mjs's chat engine, plan.mjs is
+  // its own, separate implementation and had never wired up the equivalent of
+  // scrollClaudeThreadToBottom. `max-height` is forced small via an injected
+  // style so the thread overflows deterministically, same technique as
+  // "a just-sent Claude message scrolls into view…" in
+  // tests/claude-chat-panel.spec.mjs.
+  test('a reply landing below the fold still scrolls into view', async ({ page }) => {
+    await page.goto('/plan/TEST-906')
+    await appReady(page)
+    await page.addStyleTag({ content: '[data-testid="claude-chat-thread"] { max-height: 90px !important; }' })
+    await page.keyboard.press('/')
+    const composer = page.getByTestId('claude-chat-compose')
+    await expect(composer).toBeFocused()
+    const thread = page.getByTestId('claude-chat-thread')
+    const distanceFromBottom = () => thread.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)
+
+    await composer.fill('Waarom kiezen we hier voor een facade?')
+    await composer.press('Enter')
+    await expect(thread).toContainText('Ik heb naar de code gekeken', { timeout: 15000 })
+    await expect.poll(distanceFromBottom).toBeLessThanOrEqual(2)
+
+    // A second turn must also stay pinned to the bottom.
+    await composer.fill('En wat betekent dat voor de tests?')
+    await composer.press('Enter')
+    await expect(thread.getByTestId('claude-message-body').last()).toContainText('Ik heb naar de code gekeken', {
+      timeout: 15000,
+    })
+    await expect.poll(distanceFromBottom).toBeLessThanOrEqual(2)
+  })
+
   test('a click on the backdrop closes the overlay', async ({ page }) => {
     await page.goto('/plan/TEST-903')
     await appReady(page)
