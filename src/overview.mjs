@@ -1847,13 +1847,6 @@ function headerBlock() {
     <header class="mb-4 flex items-end justify-between">
       <div>
         <h1 class="text-xl font-semibold text-slate-900 dark:text-zinc-100">Needs your review</h1>
-        <p class="mt-1 text-sm text-slate-500 dark:text-zinc-500">
-          ${() =>
-            t('Pull requests die je aandacht nodig hebben — {repo}{forPart}', {
-              repo: state.repo || '…',
-              forPart: state.generatedFor ? t(' · voor {name}', { name: state.generatedFor }) : '',
-            })}
-        </p>
       </div>
       <div class="flex items-center gap-2">
         <span
