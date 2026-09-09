@@ -372,12 +372,18 @@ func planBranchName(key, title string) string {
 // uncommitted work onto it (or into the draft PR's commit) is never a guess
 // worth making. A directory another PR's chat already claims is held back the
 // same way the tree holds it back (checkoutDirClaimsByOtherPRs; pr 0 is never
-// a real PR number, so every claim counts as "someone else's").
+// a real PR number, so every claim counts as "someone else's") — UNLESS that
+// claim is stale (see activeCheckoutClaims below): a merged/closed PR whose
+// checkout assignment was never explicitly released blocked every later
+// attempt forever (reviewer report, task 56: "ik kom elke keer niet een stap
+// verder", the map genuinely free but reported as claimed by a PR merged
+// days earlier).
 //
 // Returns ("", note) when there is nothing usable — a reviewer-facing sentence
 // naming what was actually in the way, never a fallback to a disposable
 // worktree.
-func resolvePlanWorkDir(ctx context.Context, dataDir, key, branch, base string) (dir string, note string) {
+func resolvePlanWorkDir(ctx context.Context, m *TaskManager, key, branch, base string) (dir string, note string) {
+	dataDir := m.dataDir
 	slug := repoSlugFor("")
 	if strings.TrimSpace(base) == "" {
 		base = planDefaultBaseBranch()
@@ -386,10 +392,10 @@ func resolvePlanWorkDir(ctx context.Context, dataDir, key, branch, base string) 
 	// sits on the plan's own branch, which the ladder below can only read as
 	// "someone else's unfinished work" (listCheckoutCandidates' diag.Busy), so
 	// without this a second attempt would land somewhere else entirely.
-	if remembered, ok := reusablePlanWorkDir(ctx, dataDir, key, branch, slug); ok {
+	if remembered, ok := reusablePlanWorkDir(ctx, m, key, branch, slug); ok {
 		return remembered, ""
 	}
-	hold := checkoutHoldback{Claimed: checkoutDirClaimsByOtherPRs("", 0)}
+	hold := checkoutHoldback{Claimed: activeCheckoutClaims(m, dataDir, checkoutDirClaimsByOtherPRs("", 0))}
 	candidates, diag := listCheckoutCandidates(ctx, dataDir, slug, base, base, hold)
 
 	var usable []checkoutCandidate
@@ -426,7 +432,8 @@ func resolvePlanWorkDir(ctx context.Context, dataDir, key, branch, base string) 
 // A claim by the PR this very plan opened (the handoff in
 // adoptPlanCheckoutForPR below) is not somebody else's claim: it is the same
 // werkmap, held for the same branch, so it never blocks the plan itself.
-func reusablePlanWorkDir(ctx context.Context, dataDir, key, branch, slug string) (string, bool) {
+func reusablePlanWorkDir(ctx context.Context, m *TaskManager, key, branch, slug string) (string, bool) {
+	dataDir := m.dataDir
 	dir, _, ok := loadPersistedPlanCheckout(dataDir, key)
 	if !ok {
 		return "", false
@@ -440,13 +447,54 @@ func reusablePlanWorkDir(ctx context.Context, dataDir, key, branch, slug string)
 	if dirty, err := checkoutIsDirty(ctx, dir); err != nil || dirty {
 		return "", false
 	}
-	if pr, claimed := checkoutDirClaimsByOtherPRs("", 0)[dir]; claimed {
+	if pr, claimed := activeCheckoutClaims(m, dataDir, checkoutDirClaimsByOtherPRs("", 0))[dir]; claimed {
 		a := getCheckoutAssignment(dataDir, "", pr)
 		if a == nil || a.Branch != branch || branch == "" {
 			return "", false
 		}
 	}
 	return dir, true
+}
+
+// activeCheckoutClaims filters raw checkout claims (checkoutDirClaimsByOtherPRs)
+// down to the PRs that are still genuinely open, actively releasing any stale
+// one it finds along the way. A claim is only ever released by an explicit
+// reviewer "uit" (checkoutSetOff) or by another PR taking the directory over
+// (releaseCheckoutDirFromOtherPRs) — never by the ORIGINAL PR simply finishing
+// (merged/closed), so a directory a long-done PR once used stayed reported as
+// busy forever (reviewer report, task 56: "ik kom elke keer niet een stap
+// verder" — every one of 4 local checkouts came back claimed, one of them by
+// a PR merged 6 days earlier). This needs no extra gh/network call: the
+// pr_status tracker already recorded the merged/closed outcome once, at the
+// moment it happened (prStatusWorkflow returns right after, its run therefore
+// `completed`) — reading that via m.RunsForPR is a plain, already-cached
+// history read.
+func activeCheckoutClaims(m *TaskManager, dataDir string, claims map[string]int) map[string]int {
+	if m == nil || len(claims) == 0 {
+		return claims
+	}
+	out := make(map[string]int, len(claims))
+	for dir, pr := range claims {
+		if prIsDone(m, pr) {
+			checkoutSetOff(dataDir, "", pr)
+			continue
+		}
+		out[dir] = pr
+	}
+	return out
+}
+
+// prIsDone reports whether pr's own pr_status tracker already recorded it as
+// merged/closed. No pr_status run at all (an unknown/synthetic PR number, as
+// in the test fixtures) is deliberately treated as "still open" — never wrongly
+// releasing a claim this app simply has no data about.
+func prIsDone(m *TaskManager, pr int) bool {
+	for _, r := range m.RunsForPR(pr) {
+		if r.Workflow == WorkflowPRStatus {
+			return r.Status == tembed.StatusCompleted
+		}
+	}
+	return false
 }
 
 // adoptPlanCheckoutForPR hands the plan's werkmap over to the review tree the
@@ -553,7 +601,7 @@ func (m *TaskManager) runPlanExecuteAgent(ctx context.Context, arg planExecuteAg
 		m.logf("plan execute %s: branch %s already has PR %d, refusing", arg.Doc.Key, arg.Branch, number)
 		return res
 	}
-	dir, note := resolvePlanWorkDir(ctx, m.dataDir, arg.Doc.Key, arg.Branch, base)
+	dir, note := resolvePlanWorkDir(ctx, m, arg.Doc.Key, arg.Branch, base)
 	if dir == "" {
 		m.logf("plan execute %s: no werkmap: %s", arg.Doc.Key, note)
 		res.Note = note

@@ -2,12 +2,50 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/reindert-vetter/tembed"
 )
+
+// testManagerAt builds the minimal *TaskManager resolvePlanWorkDir/
+// reusablePlanWorkDir need: a real (in-memory) engine for m.RunsForPR, and
+// dataDir wired up exactly like the tests' own settings.json/persisted-
+// checkout files. The returned store lets a test seed a run directly
+// (markPRStatusDoneForTest) without registering/running the real pr_status
+// workflow (which needs gh/Claude Activities this file has no business
+// pulling in).
+func testManagerAt(dataDir string) (*TaskManager, *tembed.MemoryStore) {
+	store := tembed.NewMemoryStore()
+	return &TaskManager{engine: tembed.New(store), dataDir: dataDir}, store
+}
+
+// markPRStatusDoneForTest seeds a COMPLETED pr_status run for pr, straight in
+// the store — the terminal state prStatusWorkflow only ever reaches once a
+// merged/closed PRStateSignal lands (workflows.go). This is exactly what
+// activeCheckoutClaims/prIsDone (plan_execute.go) read to decide a checkout
+// claim is stale.
+func markPRStatusDoneForTest(t *testing.T, store *tembed.MemoryStore, pr int) {
+	t.Helper()
+	runID := fmt.Sprintf("test-pr-status-%d", pr)
+	now := time.Now()
+	if err := store.CreateRun(tembed.RunRecord{ID: runID, Workflow: WorkflowPRStatus, Status: tembed.StatusCompleted, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(PRStatusInput{PR: pr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendEvent(runID, tembed.Event{Seq: 0, Type: tembed.EventWorkflowStarted, Payload: payload, Time: now}); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // TestPlanBranchNameIsGitSafe pins the branch name a plan is implemented on:
 // the ticket key up front (so `git branch` — and the session-rename hook —
@@ -111,8 +149,9 @@ func TestResolvePlanWorkDirPicksTheReviewersWerkmap(t *testing.T) {
 	checkout := cloneCheckoutDir(t, bareDir, base)
 	dataDir := t.TempDir()
 	writeCheckoutSettings(t, dataDir, checkout)
+	m, _ := testManagerAt(dataDir)
 
-	dir, note := resolvePlanWorkDir(context.Background(), dataDir, "PAYM-1", "paym-1-x", "")
+	dir, note := resolvePlanWorkDir(context.Background(), m, "PAYM-1", "paym-1-x", "")
 	if dir != checkout {
 		t.Fatalf("clean checkout on %s: got dir %q (note %q), want %q", base, dir, note, checkout)
 	}
@@ -121,7 +160,7 @@ func TestResolvePlanWorkDirPicksTheReviewersWerkmap(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(checkout, "foo.txt"), []byte("local work\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	dir, note = resolvePlanWorkDir(context.Background(), dataDir, "PAYM-1", "paym-1-x", "")
+	dir, note = resolvePlanWorkDir(context.Background(), m, "PAYM-1", "paym-1-x", "")
 	if dir != "" {
 		t.Fatalf("a dirty werkmap must not be used, got %q", dir)
 	}
@@ -136,12 +175,41 @@ func TestResolvePlanWorkDirPicksTheReviewersWerkmap(t *testing.T) {
 	}
 	assignCheckoutForTest(t, "", 99123, checkout)
 	t.Cleanup(func() { assignCheckoutForTest(t, "", 99123, "") })
-	dir, note = resolvePlanWorkDir(context.Background(), dataDir, "PAYM-1", "paym-1-x", "")
+	dir, note = resolvePlanWorkDir(context.Background(), m, "PAYM-1", "paym-1-x", "")
 	if dir != "" {
 		t.Fatalf("a werkmap claimed by another PR must not be taken, got %q", dir)
 	}
 	if !strings.Contains(note, checkout) {
 		t.Fatalf("note must name the held-back werkmap, got %q", note)
+	}
+}
+
+// TestResolvePlanWorkDirIgnoresAndReleasesAStaleClaim covers the flip side of
+// the test above (reviewer report, task 56: "ik kom elke keer niet een stap
+// verder" — every one of 4 local checkouts came back "claimed", one of them
+// by a PR merged 6 days earlier). A claim by a PR whose OWN pr_status tracker
+// already recorded it merged/closed must not hold a directory back, and the
+// stale claim itself must be released so a LATER lookup (or another PR) does
+// not hit the same dead end again.
+func TestResolvePlanWorkDirIgnoresAndReleasesAStaleClaim(t *testing.T) {
+	base := baseBranchFor("")
+	bareDir, _ := setupChatShadowRepo(t, base, "hello\n")
+	checkout := cloneCheckoutDir(t, bareDir, base)
+	dataDir := t.TempDir()
+	writeCheckoutSettings(t, dataDir, checkout)
+	m, store := testManagerAt(dataDir)
+
+	const stalePR = 88001
+	assignCheckoutForTest(t, "", stalePR, checkout)
+	t.Cleanup(func() { assignCheckoutForTest(t, "", stalePR, "") })
+	markPRStatusDoneForTest(t, store, stalePR)
+
+	dir, note := resolvePlanWorkDir(context.Background(), m, "PAYM-2", "paym-2-x", "")
+	if dir != checkout {
+		t.Fatalf("a claim by an already merged/closed PR must not block it: got dir %q (note %q), want %q", dir, note, checkout)
+	}
+	if a := getCheckoutAssignment(dataDir, "", stalePR); a != nil && a.Dir != "" {
+		t.Fatalf("the stale claim must be released, still assigned to %q", a.Dir)
 	}
 }
 
@@ -158,9 +226,10 @@ func TestResolvePlanWorkDirReturnsToTheSameWerkmap(t *testing.T) {
 	checkout := cloneCheckoutDir(t, bareDir, base)
 	dataDir := t.TempDir()
 	writeCheckoutSettings(t, dataDir, checkout)
+	m, _ := testManagerAt(dataDir)
 
 	const key, branch = "PAYM-901", "paym-901-iets"
-	dir, note := resolvePlanWorkDir(context.Background(), dataDir, key, branch, "")
+	dir, note := resolvePlanWorkDir(context.Background(), m, key, branch, "")
 	if dir != checkout {
 		t.Fatalf("first attempt: got dir %q (note %q), want %q", dir, note, checkout)
 	}
@@ -187,14 +256,14 @@ func TestResolvePlanWorkDirReturnsToTheSameWerkmap(t *testing.T) {
 		t.Fatalf("ladder still offers %d candidate(s); fixture no longer exercises the sticky path", len(cands))
 	}
 
-	dir, note = resolvePlanWorkDir(context.Background(), dataDir, key, branch, "")
+	dir, note = resolvePlanWorkDir(context.Background(), m, key, branch, "")
 	if dir != checkout {
 		t.Fatalf("second attempt: got dir %q (note %q), want the same werkmap %q", dir, note, checkout)
 	}
 
 	// Another plan is not dragged into it: it has no memory of its own, so it
 	// runs the ladder and correctly finds nothing.
-	if dir, _ = resolvePlanWorkDir(context.Background(), dataDir, "PAYM-902", "paym-902-anders", ""); dir != "" {
+	if dir, _ = resolvePlanWorkDir(context.Background(), m, "PAYM-902", "paym-902-anders", ""); dir != "" {
 		t.Fatalf("another plan must not inherit this werkmap, got %q", dir)
 	}
 }

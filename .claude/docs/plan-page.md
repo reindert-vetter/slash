@@ -1935,7 +1935,22 @@ header for the full reasoning; the essentials:
     work onto it (or into the draft PR's commit) is not a guess worth making.
     Same for a directory another PR's chat already claims
     (`checkoutDirClaimsByOtherPRs`, asked with `pr` 0 — never a real PR number,
-    so every claim counts as somebody else's).
+    so every claim counts as somebody else's) — **unless that claim is
+    stale**. `activeCheckoutClaims` filters the raw claims through
+    `prIsDone` (a PR's own `pr_status` tracker recorded it merged/closed —
+    `prStatusWorkflow`, `workflows.go`, returns right after that Signal, so
+    its run is `completed`; no extra `gh` call needed) and actively releases
+    a stale one via `checkoutSetOff` as it finds it. Reviewer report (task
+    56): *"ik kom elke keer niet een stap verder"* — a claim used to be
+    released only by an explicit reviewer "uit" or by another PR taking the
+    directory over, **never** by the original PR simply finishing, so a
+    directory a long-merged PR once used stayed reported as busy forever. A
+    PR this app has no `pr_status` data for at all (a synthetic/unknown
+    number) is deliberately left as "still open" — never wrongly releasing a
+    claim there is no data about. Same fix applied to `reusablePlanWorkDir`'s
+    own claim check just below. Test:
+    `TestResolvePlanWorkDirIgnoresAndReleasesAStaleClaim`
+    (`plan_execute_test.go`).
   - **Nothing usable → a reviewer-facing note, never a worktree fallback**
     (`checkoutDiscovery.reason()`, or "configure `chatCheckoutDirs` / clone one").
 
