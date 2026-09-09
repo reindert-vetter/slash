@@ -124,6 +124,13 @@ type Client interface {
 	FetchGeneralComments(ctx context.Context, pr int) ([]GeneralComment, error)
 	// PRState reports the lifecycle state of a PR: "open", "merged", or "closed".
 	PRState(ctx context.Context, pr int) (string, error)
+	// RepoAccessible reports whether the repo itself can currently be read at
+	// all (a single lightweight `gh api repos/<repo>` call) — distinct from
+	// PRState, which assumes the repo is reachable. Used to tell apart "this
+	// PR/comment is gone" from "we lost access to the whole repo" when a
+	// per-thread poll hits a 404: only the former may delete anything locally.
+	// See IsNotFound below.
+	RepoAccessible(ctx context.Context) (bool, error)
 	// PRMeta fetches the PR's title and web URL.
 	PRMeta(ctx context.Context, pr int) (Meta, error)
 	// DeleteComment removes a review comment (the root of a thread) from the PR.
@@ -453,6 +460,31 @@ func (m *Module) PRState(ctx context.Context, pr int) (string, error) {
 		return "merged", nil
 	}
 	return meta.State, nil
+}
+
+// IsNotFound reports whether err is a `gh api` "404 Not Found" failure — the
+// exact stderr text `gh` writes for a missing/inaccessible resource
+// ("gh: Not Found (HTTP 404)"), wrapped by api() above. Used by the
+// task_code_comment poller to recognize a permanently-gone thread/PR instead
+// of treating it as just another transient fetch error.
+func IsNotFound(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "HTTP 404")
+}
+
+// RepoAccessible reports whether the repo itself can currently be read at all.
+// See the Client interface doc for why this exists: a 404 on a PR/comment call
+// alone can't tell "that PR/comment is gone" apart from "we lost access to the
+// whole repo" (e.g. an expired/narrowed fine-grained PAT) — this makes that
+// second case checkable on its own.
+func (m *Module) RepoAccessible(ctx context.Context) (bool, error) {
+	_, err := m.api(ctx, "GET", fmt.Sprintf("repos/%s", m.repo))
+	if err == nil {
+		return true, nil
+	}
+	if IsNotFound(err) {
+		return false, nil
+	}
+	return false, err
 }
 
 // PRMeta fetches the PR's title, web URL, body, author, diff-stats, head

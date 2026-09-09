@@ -285,6 +285,45 @@ the thread up again (found live against the slash-test fixture; the imported
 threads never showed it because `importPRComments` runs under `m.baseCtx`).
 Regression test: `TestStartCodeCommentPollerSurvivesRequestContext`.
 
+### A 404 on `FetchReplies` — two different causes, only one may delete anything
+
+`FetchReplies` returning a `gh` "Not Found (HTTP 404)" is ambiguous on its
+own: the identical error fires whether (a) this thread's own root comment was
+removed on GitHub, or (b) the whole repo has become unreachable (an
+expired/narrowed `gh` credential, a repo rename) — found live when a stale PAT
+made every PR in `/pr-overview` disappear and flooded the "Mislukte taken"
+ring buffer (`run_errors.go`) with the same 4-5 repeated lines forever, since
+the poller used to just log-and-`continue` on any fetch error, never
+distinguishing the two. Only (a) may ever remove local data; (b) must leave
+the comment untouched, since it still exists on GitHub — we've just lost the
+ability to see it.
+
+`github.IsNotFound(err)` recognizes the failure; when it fires, `poll()`
+(`workflows.go`) makes one extra, cheap call — `Client.RepoAccessible(ctx)`
+(`repos/<repo>`, a single `gh api` round trip) — to tell the two apart:
+
+- **Repo unreachable** (`RepoAccessible` reports `false`): log once per
+  outage (`repoAccessLogged`, a local, in-memory bool in the poll goroutine —
+  reset the moment a fetch succeeds again, and naturally reset on a restart
+  too, like every other poller-local flag) instead of every cycle, and keep
+  polling at the normal cadence so the thread picks back up the moment access
+  returns. Nothing is deleted, nothing is signalled.
+- **Repo reachable, comment still 404s**: the comment/thread itself was
+  removed on GitHub. The poller reuses the existing delete flow (see "Deleting
+  a comment" above) via a synthetic `ReactionSignal{Action:"delete",
+  Source:"ai"}` — the same one `supersedeFileWarnings`/`purgeOrphanWarnings`
+  already use to delete a comment from outside a reviewer's own click — so
+  cleanup (comment + its reactions, best-effort GitHub delete which itself
+  also just 404s and is ignored) goes through the one existing path rather
+  than a second ad hoc removal, and the Execution completing stops this
+  poller for good.
+- **`RepoAccessible` itself errors** (rather than cleanly reporting
+  `true`/`false`): stay conservative — fall through to the ordinary
+  log-and-`continue`, exactly as before this change. Never delete on an
+  uncertain signal.
+
+Tests: `TestPollPausesOnRepoInaccessible404`, `TestPollDeletesCommentOnGoneButRepoAccessible404`.
+
 ## Importing existing GitHub comments (living threads)
 
 Comments placed **outside the app** (or before ingest) are pulled in as **full,

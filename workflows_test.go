@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -1036,6 +1037,68 @@ func TestHeartbeatKeepsActive(t *testing.T) {
 	// ...but the merged PR is ignored while active: the tracker stays waiting.
 	if s, _ := m.engine.Status(prRunID); s != tembed.StatusWaiting {
 		t.Fatalf("pr_status = %q, want waiting (active reviewer ignores PR state)", s)
+	}
+}
+
+// A 404 fetching replies while the repo itself is unreachable (an
+// expired/narrowed `gh` credential, say) must never delete the comment: the
+// data still exists on GitHub, we just can't currently see it. The poller
+// keeps running (so it picks the thread back up once access returns) and
+// logs the outage once, not on every cycle.
+func TestPollPausesOnRepoInaccessible404(t *testing.T) {
+	m, gh, cs := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runID, err := m.StartCodeComment(ctx, CodeCommentInput{
+		PR: 51, File: "a.php", Line: 1, Author: "reindert", Body: "q",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gh.SetFetchRepliesErr(errors.New(`gh api GET repos/plug-and-pay/plug-and-pay/pulls/51/comments?per_page=100: exit status 1: gh: Not Found (HTTP 404)`))
+	gh.SetRepoAccessible(false)
+
+	// Give the poller several cycles (m.interval/idle are 3ms) to hit this
+	// path repeatedly; nothing should ever get deleted.
+	time.Sleep(30 * time.Millisecond)
+
+	if s, _ := m.engine.Status(runID); s != tembed.StatusWaiting {
+		t.Fatalf("status = %q, want waiting (comment untouched while repo is inaccessible)", s)
+	}
+	list, _ := cs.List(ctx, "", 51)
+	if len(list) != 1 {
+		t.Fatalf("comments = %+v, want the comment still present", list)
+	}
+}
+
+// A 404 fetching replies while the repo IS reachable means the comment/thread
+// itself was removed on GitHub — the poller reuses the existing delete flow
+// to clean up its own record and stop.
+func TestPollDeletesCommentOnGoneButRepoAccessible404(t *testing.T) {
+	m, gh, cs := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runID, err := m.StartCodeComment(ctx, CodeCommentInput{
+		PR: 52, File: "a.php", Line: 1, Author: "reindert", Body: "q",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gh.SetFetchRepliesErr(errors.New(`gh api GET repos/plug-and-pay/plug-and-pay/pulls/52/comments?per_page=100: exit status 1: gh: Not Found (HTTP 404)`))
+	// RepoAccessible defaults to true on a fresh Fake — the repo is reachable,
+	// only this thread's comment is gone.
+
+	waitFor(t, func() bool {
+		s, _ := m.engine.Status(runID)
+		return s == tembed.StatusCompleted
+	})
+	list, _ := cs.List(ctx, "", 52)
+	if len(list) != 0 {
+		t.Fatalf("comments = %+v, want none after the gone-comment cleanup", list)
 	}
 }
 

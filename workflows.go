@@ -7225,6 +7225,11 @@ func (m *TaskManager) poll(ctx context.Context, runID string, repo string, pr in
 	ticker := time.NewTicker(m.interval)
 	defer ticker.Stop()
 	var lastPoll time.Time
+	// repoAccessLogged makes the "no access to repo" line log once per outage
+	// instead of every poll cycle (reset below once a fetch succeeds again) —
+	// purely in-memory, like the rest of this goroutine's own state, so it
+	// resets on restart too.
+	repoAccessLogged := false
 	for {
 		select {
 		case <-ctx.Done():
@@ -7267,9 +7272,42 @@ func (m *TaskManager) poll(ctx context.Context, runID string, repo string, pr in
 
 		replies, err := m.ghFor(repo).FetchReplies(ctx, pr, rootID)
 		if err != nil {
+			// A 404 here is ambiguous on its own: it fires identically whether
+			// the PR/comment itself is gone, or the whole repo has become
+			// unreachable (an expired/narrowed `gh` credential) — the latter
+			// must never be read as "delete the comment", since the data still
+			// exists on GitHub. RepoAccessible tells the two apart with one
+			// extra, cheap call, made only in this already-erroring branch.
+			if github.IsNotFound(err) {
+				accessible, accErr := m.ghFor(repo).RepoAccessible(ctx)
+				if accErr == nil && !accessible {
+					if !repoAccessLogged {
+						m.logf("task_code_comment: no access to repo %s — pausing poll for run=%s (comment left untouched)", repo, runID)
+						repoAccessLogged = true
+					}
+					continue
+				}
+				if accErr == nil && accessible {
+					// The repo is reachable but this specific thread's root
+					// comment 404s: it was deleted on GitHub itself. Reuse the
+					// existing delete flow so nothing is duplicated here — it
+					// removes our own record (comment + reactions) and ends
+					// the Execution, which also stops this poller for good.
+					m.logf("task_code_comment: comment gone on GitHub (404, repo reachable) — deleting run=%s", runID)
+					if err := m.Signal(runID, ReactionSignal{
+						ID: "sys-" + newUIReactionID(), Source: "ai", Action: "delete",
+					}); err != nil {
+						m.logf("task_code_comment: delete-gone-comment signal run=%s: %v", runID, err)
+					}
+					return
+				}
+				// RepoAccessible itself failed (e.g. its own call errored, not
+				// a clean 404) — stay conservative, don't delete anything.
+			}
 			m.logf("task_code_comment: fetch replies pr=%d root=%d: %v", pr, rootID, err)
 			continue
 		}
+		repoAccessLogged = false
 		for _, r := range replies {
 			if seen[r.ID] {
 				continue

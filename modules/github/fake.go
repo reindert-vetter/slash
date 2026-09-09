@@ -24,18 +24,21 @@ type Fake struct {
 	// resolved during the test) — the import path exists precisely for threads
 	// resolved OUTSIDE the app, so a test must be able to seed one without the
 	// app having touched it. Seeded via SetResolvedOnGithub.
-	resolvedOnGithub map[int64]bool
-	EditedReviews    map[int64]string // review-comment id -> its last edited body
-	EditedIssues     map[int64]string // issue-comment id -> its last edited body
-	replies          []Reply
-	reviewComments   []ReviewComment
-	general          []GeneralComment
-	prState          string               // "" reads as "open"
-	prMeta           Meta                 // returned by PRMeta (SetPRMeta overrides), PR-independent fallback
-	prMetas          map[int]Meta         // per-PR override (SetPRMetaFor), checked first
-	prMetaErrs       map[int]error        // per-PR error override (SetPRMetaErr), checked before prMetas
-	changesSince     map[int]SinceChanges // per-PR ChangesSince stub (SetChangesSince)
-	viewed           map[string]bool      // "pr|path" -> viewed
+	resolvedOnGithub  map[int64]bool
+	EditedReviews     map[int64]string // review-comment id -> its last edited body
+	EditedIssues      map[int64]string // issue-comment id -> its last edited body
+	replies           []Reply
+	repliesErr        error // set by SetFetchRepliesErr: FetchReplies fails instead of returning replies
+	reviewComments    []ReviewComment
+	general           []GeneralComment
+	repoInaccessible  bool                 // set by SetRepoAccessible(false): RepoAccessible reports false
+	repoAccessibleErr error                // RepoAccessible fails outright instead of reporting a bool
+	prState           string               // "" reads as "open"
+	prMeta            Meta                 // returned by PRMeta (SetPRMeta overrides), PR-independent fallback
+	prMetas           map[int]Meta         // per-PR override (SetPRMetaFor), checked first
+	prMetaErrs        map[int]error        // per-PR error override (SetPRMetaErr), checked before prMetas
+	changesSince      map[int]SinceChanges // per-PR ChangesSince stub (SetChangesSince)
+	viewed            map[string]bool      // "pr|path" -> viewed
 
 	lastStartLine int
 	lastEndLine   int
@@ -131,9 +134,20 @@ func (f *Fake) IssuePostedCount() int {
 func (f *Fake) FetchReplies(_ context.Context, pr int, rootID int64) ([]Reply, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.repliesErr != nil {
+		return nil, f.repliesErr
+	}
 	out := make([]Reply, len(f.replies))
 	copy(out, f.replies)
 	return out, nil
+}
+
+// SetFetchRepliesErr makes every later FetchReplies call return err instead of
+// the enqueued replies — used to simulate a 404 (see github.IsNotFound).
+func (f *Fake) SetFetchRepliesErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.repliesErr = err
 }
 
 func (f *Fake) FetchReviewComments(_ context.Context, pr int) ([]ReviewComment, error) {
@@ -173,6 +187,24 @@ func (f *Fake) PRState(_ context.Context, pr int) (string, error) {
 		return "open", nil
 	}
 	return f.prState, nil
+}
+
+// RepoAccessible reports repoAccessible (defaults to true — a fresh Fake
+// represents a reachable repo, like a real one with valid credentials).
+func (f *Fake) RepoAccessible(_ context.Context) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.repoAccessibleErr != nil {
+		return false, f.repoAccessibleErr
+	}
+	return !f.repoInaccessible, nil
+}
+
+// SetRepoAccessible makes the next RepoAccessible calls report accessible.
+func (f *Fake) SetRepoAccessible(accessible bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.repoInaccessible = !accessible
 }
 
 // SetPRState makes the next PRState calls report state ("open"|"merged"|"closed").
