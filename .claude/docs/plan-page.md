@@ -1871,6 +1871,35 @@ effects, no URL state of their own (derived, not navigational):
   ticket card, or `←`) — `tests/plan-referenced-intent.spec.mjs`'s two
   editing tests click `plan-ticket-card` first for exactly this reason.
 
+### The wide questions column stays wide once you step into a block/example-code column too
+
+Reviewer follow-up, verbatim (with two screenshots): *"normaal goed selectie
+van iets in kolom 2 #43 / als ik chat selecteer is kolom 2 smal"*. Read
+literally the two screenshots show `state.col === 1` (an option/task itself
+focused — wide, "normaal goed") versus `state.col >= 2` (its own
+example-code column focused, e.g. "Voorbeeldcode bij de taak" — narrow,
+reported as jarring). Verified live (a real key-driven walk into a task's
+block column against BUG-5463): opening/closing the general chat overlay
+(`state.chatOpen`) itself never touches `state.col` at all — the narrowing
+the reviewer saw is purely `questionsColumn`'s own width condition losing its
+`=== 1` match the moment a block column takes the keyboard, which is exactly
+what task 43 (see above) had deliberately arranged. The "chat" in the
+reviewer's own words is this page's informal name for that
+column — an example-code card's own explanatory `note` reads like Claude
+talking you through the code, which is the block column, not the ticket-wide
+chat overlay.
+
+**Fix**: the width condition widened from `state.col === 1` to `state.col >= 1`
+— column 2 now stays at `w-[50rem]` whenever the keyboard is anywhere to its
+right (a block column at any nesting level), narrowing to `w-[22rem]` only
+while column 0 (the ticket) has the keyboard. This is a deliberate,
+reviewer-approved partial reversal of task 43's own narrowing (which existed
+specifically to make room for an open block column) — the reviewer now wants
+that room ceded from column 0's side instead. `data-column-focused` and the
+"actief" badge (`columnHeader`'s own `focused` argument) are untouched —
+still exactly `state.col === 1`, since those describe which column literally
+owns the keyboard, not its width.
+
 ### The scroll-into-view animation now also matches the review tree
 
 The `scrollFocusIntoView` above already animated (`behavior:'smooth'`) every
