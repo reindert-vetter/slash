@@ -868,14 +868,20 @@ eronder"* — its own card, own keyboard stop, directly under `followupCard`.
   (`plan_workflow.go`) — same one-signal-multiplexed-by-Kind convention as
   `followup`/`task`/`retry`/…, added to the allowed empty-`questionId` Kinds in
   `tasks_api.go`. Unlike every other Kind on this Signal, it does **not**
-  preserve anything of the existing document: it clears
-  `Questions`/`Answers`/`Tasks`/`TaskStates`/`Error` and runs `planGenerate`
-  with **`Mode:"all"`** — the exact same call the very first generation uses —
-  then saves. `planPhase` (`plan_artifacts.go`) is derived purely from those
-  fields, so the page falls back to stage `intent`/`specs` on its own with no
-  separate phase-reset logic needed. The ticket-level context (Jira
-  comments/related PRs/referenced issues, and the scope/hotfix answers) is
-  untouched — only the plan CONTENT restarts, not the whole tracker.
+  preserve anything of the existing document: the pure `resetPlanForRegenerate`
+  clears `Questions`/`Answers`/`Tasks`/`TaskStates`/`Error` **and** (widened for
+  BUG-5463, *"alsof er nog niks is gekozen"*) the general chat transcript
+  (`Chat`) and the manual "Intentie" override (`IntentOverride`) — both reflect
+  discussion/choices about this same plan draft, so a genuine "start over"
+  clears them too. It then runs `planGenerate` with **`Mode:"all"`** (or, for a
+  `SplitGenerate` document, the same two-call `planGenerateFresh` the very
+  first generation uses) — then saves. `planPhase` (`plan_artifacts.go`) is
+  derived purely from those fields, so the page falls back to stage
+  `intent`/`specs` on its own with no separate phase-reset logic needed. The
+  ticket-level context (Jira comments/related PRs/referenced issues, and the
+  scope/hotfix answers) is untouched — only the plan CONTENT restarts, not the
+  whole tracker; see "Restarting the whole tracker" right below for the one
+  thing this Signal structurally cannot do.
 - **`state.regeneratePending`** is the same "the signal runs its work inline,
   so the stored document hasn't caught up yet" local flag
   `followupPending`/`scopePending`/`hotfixPending` already are, folded into
@@ -889,6 +895,57 @@ eronder"* — its own card, own keyboard stop, directly under `followupCard`.
   different mechanisms; neither replaces the other.
 
 Test: `tests/plan-regenerate.spec.mjs`.
+
+### Restarting the whole tracker: re-asking the branch/hotfix question
+
+Follow-up reviewer request (BUG-5463, "alsof er nog niks is gekozen. even
+helemaal opnieuw beginnen"): besides the plan content, the branch/hotfix
+answer itself should also be askable again — but literally "alleen branch
+keuze": the Jira "In Progress" transition that answering it originally
+triggered must NOT be undone.
+
+This cannot be a Signal at all: `planNeedsBaseQuestion`'s `WaitSignal(
+SignalPlanHotfix, …)` sits **structurally before** the `plan_answer` loop in
+`planWorkflow`'s own body (see the top of `plan_workflow.go`), and tembed
+matches a run's history **positionally**
+(`.claude/rules/workflow-determinism.md`) — a signal aimed at an already-
+running Execution can never rewind it to a `WaitSignal` it already passed.
+The only way to re-ask it is to throw away the whole Execution and start a
+genuinely fresh one.
+
+- **`TaskManager.RestartPlanBranch(key)`** does exactly that: it starts a
+  tiny one-shot Execution, `plan_restart_branch`
+  (`planRestartBranchWorkflow`/`WorkflowPlanRestartBranch`), whose single
+  Activity (`deletePlanRunForRestart`) calls `engine.DeleteRun` on the
+  ticket's `plan-<key>` run — the same delete-via-Activity shape
+  `deleteIgnoredRun`/`ignoreRunsWorkflow` already use for the "negeer" half of
+  the failed-tasks popup, so this stays inside
+  `.claude/rules/workflows-write-boundary.md` (DeleteRun is only ever called
+  from a workflow Activity in this codebase). It skips (reports
+  `deleted:false`) rather than deletes when the run is unknown or genuinely
+  `tembed.StatusRunning` right now — a live generation must not be torn out
+  from under itself. `RestartPlanBranch` then calls the ordinary `StartPlan(
+  key)` (the same direct "start an Execution" call `handlePlanStart` already
+  makes from a handler) — since the old run is gone, `StartWorkflowID`'s
+  idempotent-reuse-by-ID no longer finds anything and creates a genuinely
+  fresh run, replaying `planLoadIssue` → the hotfix gate → … from scratch.
+- **The Jira status is deliberately left alone by construction, not by a
+  special case**: `jiraStartProgress` (the Activity that moves the ticket to
+  "In Progress") is already best-effort/idempotent — see its own doc comment,
+  "the ticket is already In Progress … none of them are worth failing a plan
+  the reviewer is waiting for" — so answering the hotfix question again on
+  the fresh Execution simply no-ops against Jira instead of reverting
+  anything. No code needed to skip it.
+- **Administrative, not (yet) a UI button**: exposed as
+  `POST /api/workflows/plan_restart_branch {key}` (`handlePlanRestartBranch`,
+  `plan_api.go`) for this kind of one-off reset — nothing in `plan.mjs` calls
+  it. A future request for a "opnieuw beginnen, ook de branchkeuze"-button
+  would wire this endpoint in next to `plan-regenerate`, reusing the same
+  `busyGenerating()`-style pending flag.
+- Test: `TestRestartPlanBranchReAsksTheHotfixQuestion` (`plan_workflow_test.go`)
+  — drives a real plan Execution through the hotfix gate and a chat message,
+  restarts it, and asserts the fresh run (same deterministic `plan-<key>` run
+  ID) is parked back on `NeedsHotfix` with the old answer and chat gone.
 
 ## Every if, every config: what a task must name
 

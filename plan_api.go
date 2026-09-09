@@ -153,3 +153,31 @@ func (s *server) handlePlanStart(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
 }
+
+// handlePlanRestartBranch serves POST /api/workflows/plan_restart_branch
+// {key} — discards this ticket's WHOLE plan Execution and starts a fresh one,
+// so the branch/hotfix question is asked again (the ONE thing "Plan opnieuw
+// opstellen"/planAnswerRegenerate cannot do — see
+// TaskManager.RestartPlanBranch's own doc comment for why). An administrative
+// action, not (yet) wired to a button in the UI; used for the one-off reset
+// this shape was built for (BUG-5463: "alsof er nog niks is gekozen"). Starts
+// an Execution, so it stays inside the workflow write-boundary.
+func (s *server) handlePlanRestartBranch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Key string `json:"key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	runID, err := s.tasks.manager.RestartPlanBranch(body.Key)
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
+}

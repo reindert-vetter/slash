@@ -192,17 +192,25 @@ const planAnswerRetry = "retry"
 
 // planAnswerRegenerate is the PlanAnswerSignal Kind that throws away the
 // CURRENT plan — every generated question, its answers, every task and its
-// per-task reviewer state — and asks Claude for a brand new one from
-// scratch, exactly like the very first generation (planGenerateFresh). Reviewer
+// per-task reviewer state, the general chat transcript, and any manual
+// "Intentie" override — and asks Claude for a brand new one from scratch,
+// exactly like the very first generation (planGenerateFresh). Reviewer
 // request: a second button next to "meer vragen genereren" — "vervolgvragen
 // genereren OF plan opstellen [opnieuw]" — for when sharpening the existing
 // plan isn't what's wanted, a genuinely fresh take is. Unlike every other
 // Kind above, this one intentionally does NOT preserve anything of the prior
-// document's Questions/Answers/Tasks/TaskStates: "huidige plan moet dan weg
-// en worden vervangen met een nieuwe" (the reviewer's own words). The ticket
-// itself (comments/related PRs/referenced issues/scope/hotfix answers) is
-// untouched — only the plan content restarts. No questionId, no payload
-// beyond the Kind itself, same shape as planAnswerRetry/planAnswerFollowup.
+// document's Questions/Answers/Tasks/TaskStates/Chat/IntentOverride:
+// "huidige plan moet dan weg en worden vervangen met een nieuwe" (the
+// reviewer's own words) — later widened (BUG-5463, "alsof er nog niks is
+// gekozen") to also clear the chat and the intent override, since both
+// reflect discussion/choices about this same plan draft. The ticket itself
+// (comments/related PRs/referenced issues/scope/hotfix answers) is untouched
+// — only the plan content restarts; see RestartPlanBranch for the separate,
+// more invasive mechanism that also re-asks the branch/hotfix question. No
+// questionId, no payload beyond the Kind itself, same shape as
+// planAnswerRetry/planAnswerFollowup. The actual reset is the pure
+// resetPlanForRegenerate, so it can be unit-tested without a live Claude
+// call.
 const planAnswerRegenerate = "regenerate"
 
 // maxPlanChatMessages bounds how long the chat transcript on the document is
@@ -662,6 +670,27 @@ func planGenerateFresh(w *tembed.Workflow, doc *planDoc) error {
 	return nil
 }
 
+// resetPlanForRegenerate is the pure fold behind the planAnswerRegenerate
+// Kind ("Plan opnieuw opstellen"): it wipes every piece of the CURRENT plan
+// draft — questions, answers, tasks, per-task reviewer state, the swallowed
+// error, the general chat transcript, and any manual "Intentie" override —
+// so the next planGenerateFresh call starts from a genuinely blank slate.
+// Deliberately leaves everything about the TICKET itself alone (title,
+// description, comments, related PRs, referenced issues, the branch/hotfix
+// answer) — see RestartPlanBranch for the separate mechanism that also
+// re-asks the branch question. A pure function of the document, so it is
+// unit-testable without a live Claude call and remains a deterministic fold
+// of the recorded Signal either way (.claude/rules/workflow-determinism.md).
+func resetPlanForRegenerate(doc *planDoc) {
+	doc.Questions = nil
+	doc.Answers = nil
+	doc.Tasks = nil
+	doc.TaskStates = nil
+	doc.Error = ""
+	doc.Chat = nil
+	doc.IntentOverride = ""
+}
+
 // planWorkflow is the tracker described at the top of this file.
 func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	var in PlanInput
@@ -806,11 +835,7 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		// comment) — a pure, deterministic reset of the recorded Signal, so
 		// replay reproduces it (.claude/rules/workflow-determinism.md).
 		if sig.Kind == planAnswerRegenerate {
-			doc.Questions = nil
-			doc.Answers = nil
-			doc.Tasks = nil
-			doc.TaskStates = nil
-			doc.Error = ""
+			resetPlanForRegenerate(&doc)
 			if doc.SplitGenerate {
 				if err := planGenerateFresh(w, &doc); err != nil {
 					return nil, fmt.Errorf("plan: regenerate: %w", err)
@@ -1143,6 +1168,66 @@ func (m *TaskManager) StartPlan(key string) (string, error) {
 		return "", fmt.Errorf("plan: invalid issue key %q", key)
 	}
 	return m.engine.StartWorkflowID(planRunID(key), WorkflowPlan, PlanInput{Key: key})
+}
+
+// WorkflowPlanRestartBranch is the Workflow Type of the one-shot Execution
+// behind RestartPlanBranch below.
+const WorkflowPlanRestartBranch = "plan_restart_branch"
+
+// PlanRestartBranchInput is the one-shot Execution that re-asks a ticket's
+// branch/hotfix question. Reviewer request (BUG-5463): "alleen branch keuze"
+// moet ook opnieuw gevraagd worden — but that question sits STRUCTURALLY
+// before the plan_answer wait loop in planWorkflow (see planWorkflow itself),
+// so a running Execution can never rewind to it: tembed matches a run's
+// history POSITIONALLY (.claude/rules/workflow-determinism.md), and a
+// WaitSignal already answered cannot be asked again within the SAME
+// Execution. The only way to re-ask it is to discard the whole Execution and
+// start a fresh one — this one-shot workflow does exactly that, and nothing
+// else: the ticket's Jira "In Progress" transition is deliberately NOT
+// undone (jiraStartProgress is best-effort/idempotent, see its own doc
+// comment, so answering the question again on the fresh Execution simply
+// no-ops against Jira instead of reverting it).
+type PlanRestartBranchInput struct {
+	Key string `json:"key"`
+}
+
+// planRestartBranchWorkflow deletes the ticket's current plan-<key> run (one
+// Activity — deletePlanRunForRestart, the same delete-via-Activity shape
+// deleteIgnoredRun already uses) so the next StartWorkflowID call for that
+// same Run ID creates a genuinely fresh Execution instead of idempotently
+// reusing the existing one. One-shot and deterministic: exactly one
+// Activity, no signals, no clock, no loop.
+func planRestartBranchWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
+	var in PlanRestartBranchInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return nil, err
+	}
+	var out struct {
+		Deleted bool `json:"deleted"`
+	}
+	if err := w.ExecuteActivity("deletePlanRunForRestart", in, &out); err != nil {
+		return nil, fmt.Errorf("plan restart branch: delete run: %w", err)
+	}
+	return json.Marshal(out)
+}
+
+// RestartPlanBranch throws away the ticket's ENTIRE plan Execution and starts
+// a brand new one, so the branch/hotfix question (and every gate before it)
+// is asked again — see PlanRestartBranchInput's own doc comment for why a
+// Signal cannot do this. Deliberately narrower than it sounds: it is only
+// safe to delete a run that is not genuinely StatusRunning right now (see
+// deletePlanRunForRestart), so a plan mid-generation is left alone and this
+// returns the OLD run's ID unchanged in that case — same "skip rather than
+// tear out live work" caution as IgnoreFailedRuns/deleteIgnoredRun.
+func (m *TaskManager) RestartPlanBranch(key string) (string, error) {
+	key = strings.ToUpper(strings.TrimSpace(key))
+	if !planKeyPattern.MatchString(key) {
+		return "", fmt.Errorf("plan: invalid issue key %q", key)
+	}
+	if _, err := m.engine.StartWorkflow(WorkflowPlanRestartBranch, PlanRestartBranchInput{Key: key}); err != nil {
+		return "", fmt.Errorf("plan: restart branch: %w", err)
+	}
+	return m.StartPlan(key)
 }
 
 // fillPlanSubtaskAssignees fills the Assignee/AssigneeAvatarURL of every
@@ -1639,5 +1724,31 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 		}
 		m.startJiraProgress(ctx, doc.Key)
 		return nil, nil
+	})
+
+	// Activity: delete the CURRENT plan-<key> run so a fresh Execution can take
+	// its place (see planRestartBranchWorkflow/RestartPlanBranch). Mirrors
+	// deleteIgnoredRun's own write primitive (engine.DeleteRun, workflow-
+	// driven per .claude/rules/workflows-write-boundary.md), guarded the same
+	// cautious way: an unknown run, or one that is genuinely StatusRunning
+	// right now (a live generation must not be torn out from under itself),
+	// is reported as skipped instead of deleted.
+	engine.RegisterActivity("deletePlanRunForRestart", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg PlanRestartBranchInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		runID := planRunID(arg.Key)
+		status, err := m.engine.Status(runID)
+		if err != nil {
+			return json.Marshal(map[string]bool{"deleted": false})
+		}
+		if status == tembed.StatusRunning {
+			return json.Marshal(map[string]bool{"deleted": false})
+		}
+		if err := m.engine.DeleteRun(runID); err != nil {
+			return nil, fmt.Errorf("delete plan run %s: %w", runID, err)
+		}
+		return json.Marshal(map[string]bool{"deleted": true})
 	})
 }

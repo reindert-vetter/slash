@@ -891,6 +891,10 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// plan page's comment panel.
 	mux.HandleFunc("/api/workflows/jira_comment", s.handleJiraCommentStart)
 	mux.HandleFunc("/api/workflows/plan", s.handlePlanStart)
+	// POST /api/workflows/plan_restart_branch {key} → discard a ticket's whole
+	// plan Execution and start a fresh one, re-asking the branch/hotfix
+	// question. See TaskManager.RestartPlanBranch.
+	mux.HandleFunc("/api/workflows/plan_restart_branch", s.handlePlanRestartBranch)
 	// POST /api/workflows/plan_execute {key} → the index's last action on
 	// /plan/<KEY>: let Claude implement the plan on a fresh branch and open a
 	// DRAFT pull request (plan_execute.go).
@@ -1293,7 +1297,7 @@ func (s *server) handleIgnoreRuns(w http.ResponseWriter, r *http.Request) {
 // /api/workflows/{runID}/signals/{signalName} (POST signal).
 func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/workflows/")
-	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "remove_reviewer" || rest == "code_warning" || rest == "ignore_comment" || rest == "cleanup" || rest == "claude_chat" || rest == "auto_warn" || rest == "lang_pref" || rest == "app_settings" || rest == "comment_batch" || rest == "test_run" || rest == "comment_titles" || rest == "plan" || rest == "jira_comment" || rest == "retry" || rest == "retry-all" || rest == "ignore-runs" {
+	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "remove_reviewer" || rest == "code_warning" || rest == "ignore_comment" || rest == "cleanup" || rest == "claude_chat" || rest == "auto_warn" || rest == "lang_pref" || rest == "app_settings" || rest == "comment_batch" || rest == "test_run" || rest == "comment_titles" || rest == "plan" || rest == "plan_restart_branch" || rest == "jira_comment" || rest == "retry" || rest == "retry-all" || rest == "ignore-runs" {
 		http.NotFound(w, r)
 		return
 	}

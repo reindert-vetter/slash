@@ -602,6 +602,43 @@ func TestPlanTaskStateFoldAndRegeneration(t *testing.T) {
 	}
 }
 
+// TestResetPlanForRegenerateClearsTheWholeDraft — "Plan opnieuw opstellen"
+// (BUG-5463: "alsof er nog niks is gekozen") must wipe the chat transcript
+// and the manual "Intentie" override alongside the questions/answers/tasks it
+// already cleared, while leaving everything about the TICKET itself
+// (branch/hotfix answer, comments, referenced issues) untouched.
+func TestResetPlanForRegenerateClearsTheWholeDraft(t *testing.T) {
+	doc := planDoc{
+		Key:            "PAYM-1",
+		Hotfix:         true,
+		BaseBranch:     "hotfix/PAYM-1",
+		Questions:      []planQuestion{{ID: "q1"}},
+		Answers:        []planAnswer{{QuestionID: "q1", OptionID: "q1o1"}},
+		Tasks:          []planTask{{ID: "t1", Title: "Iets doen"}},
+		TaskStates:     []planTaskState{{Title: "Iets doen", Off: true}},
+		Error:          "plan: parse answer: eerdere mislukking",
+		Chat:           []planChatMessage{{Role: "user", Body: "waar dispatchen we dit?"}},
+		IntentOverride: "## Mijn eigen intentie",
+	}
+	resetPlanForRegenerate(&doc)
+
+	if doc.Questions != nil || doc.Answers != nil || doc.Tasks != nil || doc.TaskStates != nil {
+		t.Fatalf("questions/answers/tasks/taskStates must all be cleared: %+v", doc)
+	}
+	if doc.Error != "" {
+		t.Fatalf("Error must be cleared, got %q", doc.Error)
+	}
+	if doc.Chat != nil {
+		t.Fatalf("Chat must be cleared, got %+v", doc.Chat)
+	}
+	if doc.IntentOverride != "" {
+		t.Fatalf("IntentOverride must be cleared, got %q", doc.IntentOverride)
+	}
+	if !doc.Hotfix || doc.BaseBranch != "hotfix/PAYM-1" {
+		t.Fatalf("the branch/hotfix answer must be left untouched: %+v", doc)
+	}
+}
+
 // TestPlanExecutePromptSkipsUncheckedTasksAndCarriesTheNote is the other half:
 // only ticked tasks are executed, and the reviewer's own field travels along.
 func TestPlanExecutePromptSkipsUncheckedTasksAndCarriesTheNote(t *testing.T) {
@@ -797,6 +834,79 @@ func TestPlanGenerateFreshSplitsQuestionsAndTasksIntoTwoCalls(t *testing.T) {
 	}
 	if len(doc.Questions) != 1 || len(doc.Tasks) != 1 {
 		t.Fatalf("doc = %+v, want one question and one task from the two calls combined", doc)
+	}
+}
+
+// TestRestartPlanBranchReAsksTheHotfixQuestion covers the mechanism behind
+// BUG-5463's "alleen branch keuze" follow-up: RestartPlanBranch must discard
+// the ticket's whole plan Execution and start a fresh one that is parked back
+// on the hotfix/base-branch question, even though the original Execution had
+// already answered it and gone on to accumulate chat/answers of its own.
+func TestRestartPlanBranchReAsksTheHotfixQuestion(t *testing.T) {
+	jr := &jira.Fake{}
+	jr.SetIssue("TEST-1", jira.Issue{Key: "TEST-1", Title: "Iets kapots", Type: "Bug"})
+	engine := tembed.New(tembed.NewMemoryStore())
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, claude.NewFake(), jr, nil, "", "test/repo")
+	pl, err := plan.Open(filepath.Join(t.TempDir(), "plan.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.plan = pl
+
+	runID, err := m.StartPlan("TEST-1")
+	if err != nil {
+		t.Fatalf("StartPlan: %v", err)
+	}
+	if status, _ := engine.Status(runID); status != tembed.StatusWaiting {
+		t.Fatalf("status after start = %q, want waiting (parked on the hotfix question)", status)
+	}
+
+	// Answer the hotfix question so the tracker moves on and accumulates a
+	// chat message — everything RestartPlanBranch is supposed to throw away
+	// along with the branch answer itself.
+	if err := engine.SignalWorkflow(runID, SignalPlanHotfix, PlanHotfixSignal{Hotfix: true}); err != nil {
+		t.Fatalf("answer hotfix question: %v", err)
+	}
+	if err := engine.SignalWorkflow(runID, SignalPlanAnswer, PlanAnswerSignal{Kind: planAnswerChat, Text: "waar dispatchen we dit?"}); err != nil {
+		t.Fatalf("send chat message: %v", err)
+	}
+
+	raw, ok, err := pl.Get(context.Background(), "TEST-1")
+	if err != nil || !ok {
+		t.Fatalf("plan doc not stored before restart: ok=%v err=%v", ok, err)
+	}
+	var before planDoc
+	if err := json.Unmarshal([]byte(raw), &before); err != nil {
+		t.Fatal(err)
+	}
+	if !before.Hotfix || len(before.Chat) == 0 {
+		t.Fatalf("precondition not met, expected an answered hotfix question and a chat message: %+v", before)
+	}
+
+	newRunID, err := m.RestartPlanBranch("TEST-1")
+	if err != nil {
+		t.Fatalf("RestartPlanBranch: %v", err)
+	}
+	if newRunID != runID {
+		t.Fatalf("run id = %q, want the same deterministic plan-<key> id %q", newRunID, runID)
+	}
+	if status, err := engine.Status(newRunID); err != nil || status != tembed.StatusWaiting {
+		t.Fatalf("status after restart = %q (%v), want waiting again", status, err)
+	}
+
+	raw, ok, err = pl.Get(context.Background(), "TEST-1")
+	if err != nil || !ok {
+		t.Fatalf("plan doc not stored after restart: ok=%v err=%v", ok, err)
+	}
+	var after planDoc
+	if err := json.Unmarshal([]byte(raw), &after); err != nil {
+		t.Fatal(err)
+	}
+	if !after.NeedsHotfix {
+		t.Fatalf("fresh Execution must be parked on the hotfix question again: %+v", after)
+	}
+	if after.Hotfix || len(after.Chat) != 0 {
+		t.Fatalf("the old branch answer and chat must be gone: %+v", after)
 	}
 }
 

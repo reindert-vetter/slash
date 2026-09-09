@@ -3565,6 +3565,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowJiraIssues, jiraIssuesWorkflow)
 	engine.RegisterWorkflow(WorkflowPlan, planWorkflow)
 	engine.RegisterWorkflow(WorkflowPlanExecute, planExecuteWorkflow)
+	engine.RegisterWorkflow(WorkflowPlanRestartBranch, planRestartBranchWorkflow)
 	engine.RegisterWorkflow(WorkflowJiraComment, jiraCommentWorkflow)
 	engine.RegisterWorkflow(WorkflowBuildRelations, buildRelationsWorkflow)
 	engine.RegisterWorkflow(WorkflowIngest, ingestWorkflow)
