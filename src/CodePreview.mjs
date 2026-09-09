@@ -242,62 +242,12 @@ function pane(titleText, code, lang) {
 // other state, not just a convenience alongside Enter. Same
 // mouse-navigation.md rule as before ("a click runs the same function a key
 // runs"), just on a bigger, glyph-less target instead of a dedicated button.
-// pendingEditLink — one row inside the pending-edits card's expanded body: a
-// clickable link when the touched file matched a block in the currently
-// loaded tree (it.blockId set), a plain, non-clickable line otherwise
-// (reviewer's own answer: "wel tonen, als platte tekst zonder
-// navigatiedoel"). `active` mirrors previewCard's own getter shape — a
-// nested cursor (RelatedPanel.mjs's cs.editLinkSel), not part of `.key()` for
-// the same reason active/expanded aren't: walking it must not re-render the
-// whole list.
-function pendingEditLink(link, i, active, onJump) {
-  if (!link.blockId) {
-    return html`<div
-      class="truncate rounded px-2 py-1 text-xs text-slate-400 dark:text-zinc-500"
-      data-testid="pending-edit-link"
-    >
-      ${link.label}
-    </div>`.key('edit-' + i)
-  }
-  return html`
-    <button
-      type="button"
-      class="${() =>
-        'flex items-center gap-1 truncate rounded px-2 py-1 text-left text-xs ' +
-        (active()
-          ? 'bg-indigo-50 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 ring-1 ring-indigo-200 dark:ring-indigo-500/30'
-          : 'text-slate-600 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800')}"
-      data-testid="pending-edit-link"
-      data-active="${() => (active() ? 'true' : 'false')}"
-      @click="${(e) => {
-        if (e && e.stopPropagation) e.stopPropagation()
-        onJump(link.blockId)
-      }}"
-    >
-      <span class="shrink-0 text-indigo-500 dark:text-indigo-400">${() => (active() ? '▸' : '')}</span>
-      ${link.label}
-    </button>
-  `.key('edit-' + i)
-}
-
-// pendingEditLinks — the pending-edits card's body while expanded: one
-// pendingEditLink per touched file/block, `linkSel` (1-based, 0 = none) the
-// nested keyboard cursor (RelatedPanel.mjs's cs.editLinkSel — see
-// "↓ walks the chat's own code blocks, PLUS a pending-edits card" in
-// claude-chat-panel.md).
-function pendingEditLinks(links, linkSel, onJump) {
-  return links.map((l, i) => pendingEditLink(l, i, () => linkSel() === i + 1, onJump))
-}
-
-// previewCard renders ONE card in the stack below the chat: either an
-// ordinary fence's "Huidig (PR)"/"Voorgesteld (chat)" pair (it.kind is unset)
-// or the pending-edits summary card (it.kind === 'edits', see
-// RelatedPanel.mjs's pendingEditsItem) — same shell (border/ring, active
-// marker, click-to-toggle header, collapse/expand), different body. `active`/
+//
+// previewCard renders ONE card in the stack below the chat: an ordinary
+// fence's "Huidig (PR)"/"Voorgesteld (chat)" pair (same shell — border/ring,
+// active marker, click-to-toggle header, collapse/expand). `active`/
 // `expanded` are getters, same reasoning as before: walking/toggling must not
-// re-key (and thereby re-Prism-highlight) the rest of the stack. `linkSel`/
-// `onJump` only matter for the edits-kind card — an ordinary fence card
-// ignores them (its default no-ops).
+// re-key (and thereby re-Prism-highlight) the rest of the stack.
 //
 // MEASURED CRASH (PR 13535, 2026-08-28, found via debug mode's console.error
 // hook — see .claude/docs/debug-mode.md): this card is `.key(it.key)`'d, and
@@ -305,23 +255,22 @@ function pendingEditLinks(links, linkSel, onJump) {
 // bindings", a reused chunk's inner `${() => ...}` bindings stay wired to
 // whichever closure was passed the FIRST time this key was ever mounted —
 // they are never re-created on a later render. `codePreviewColumn` used to
-// pass `expanded`/`linkSel` as `() => isExpanded(i)`/`() => getLinkSel(i)`,
-// closures over a captured array INDEX; RelatedPanel.mjs's `isExpanded`/
-// `getLinkSel` then re-derived the item via `combinedPreviewItems()[i]`. Once
-// `combinedPreviewItems()` shrank or reordered (a fence arriving/leaving
-// while a Claude turn streams, the pending-edits card appearing/
-// disappearing) — the reused card's frozen `i` could point past the new,
-// shorter array: `combinedPreviewItems()[i]` came back `undefined`, and
-// `isPreviewExpanded(undefined)` threw on `it.key`. LOCAL PATCH 4/5 in
-// vendor/arrow.js caught it (console.error, never rethrown — see the
-// "arrow.js's own CAUGHT throws" section in debug-mode.md), but the binding
-// never recovers: since the closure is frozen, EVERY subsequent reactive
-// trigger re-threw the same error, forever, for that one card — 832 error
-// lines over ~7 minutes in the reported session, reading as "the browser is
-// frozen" even though the rest of the reactive graph kept working. Fixed by
-// passing the already-available `it` (this map iteration's own array
-// element, guaranteed non-undefined) into `isExpanded`/`getLinkSel` instead
-// of re-deriving via a captured index — see `codePreviewColumn` below.
+// pass `expanded` as `() => isExpanded(i)`, a closure over a captured array
+// INDEX; RelatedPanel.mjs's `isExpanded` then re-derived the item via
+// `cp.items[i]`. Once `cp.items` shrank or reordered (a fence
+// arriving/leaving while a Claude turn streams) — the reused card's frozen
+// `i` could point past the new, shorter array: `cp.items[i]` came back
+// `undefined`, and `isPreviewExpanded(undefined)` threw on `it.key`. LOCAL
+// PATCH 4/5 in vendor/arrow.js caught it (console.error, never rethrown —
+// see the "arrow.js's own CAUGHT throws" section in debug-mode.md), but the
+// binding never recovers: since the closure is frozen, EVERY subsequent
+// reactive trigger re-threw the same error, forever, for that one card — 832
+// error lines over ~7 minutes in the reported session, reading as "the
+// browser is frozen" even though the rest of the reactive graph kept
+// working. Fixed by passing the already-available `it` (this map
+// iteration's own array element, guaranteed non-undefined) into `isExpanded`
+// instead of re-deriving via a captured index — see `codePreviewColumn`
+// below.
 // `isActive` stays index-based on purpose: cs.previewPos is a POSITION, not
 // an item identity, and comparing a stale `i` can never throw.
 //
@@ -350,7 +299,7 @@ function fenceTitle(it) {
   return html`<span class="flex items-center">${it.label}<span class="ml-2 uppercase tracking-wide">${it.lang}</span></span>`
 }
 
-function previewCard(it, active, expanded, onToggle, linkSel = () => 0, onJump = () => {}) {
+function previewCard(it, active, expanded, onToggle) {
   return html`
     <div
       class="${() =>
@@ -383,24 +332,17 @@ function previewCard(it, active, expanded, onToggle, linkSel = () => 0, onJump =
             ${() => (active() ? '▸' : '')}
           </span>
           ${() =>
-            it.kind === 'edits'
+            it.classLabel
               ? html`<span
                   class="truncate text-[11px] font-medium text-slate-500 dark:text-zinc-500"
                   data-testid="code-preview-title"
                 >
-                  ✎ ${t('Aanpassingen van Claude')} · ${it.links.length}
+                  ${it.classLabel}
                 </span>`
-              : it.classLabel
-                ? html`<span
-                    class="truncate text-[11px] font-medium text-slate-500 dark:text-zinc-500"
-                    data-testid="code-preview-title"
-                  >
-                    ${it.classLabel}
-                  </span>`
-                : ''}
+              : ''}
         </div>
         ${() =>
-          it.kind !== 'edits' && it.context
+          it.context
             ? html`<span
                 class="${() =>
                   'markdown-body [&_p]:inline text-xs leading-relaxed text-slate-700 dark:text-zinc-300 ' +
@@ -413,23 +355,21 @@ function previewCard(it, active, expanded, onToggle, linkSel = () => 0, onJump =
       <div class="flex flex-col gap-2" data-testid="code-preview-body">
         ${() =>
           expanded()
-            ? it.kind === 'edits'
-              ? pendingEditLinks(it.links, linkSel, onJump)
-              : [
-                  it.oldCode != null ? pane(t('Huidig (PR)'), it.oldCode, it.lang).key('old') : '',
-                  pane(it.oldCode != null ? t('Voorgesteld (chat)') : fenceTitle(it), it.code, it.lang).key('new'),
-                  // trailing — the chat text after this fence (only set on the
-                  // LAST fence of its message, see markdown.mjs's
-                  // `data-fence-trailing`) — reviewer request: "laat de laatste
-                  // tekst ook zien", so nothing typed after the code is lost.
-                  it.trailing
-                    ? html`<span
-                        class="markdown-body [&_p]:inline text-xs leading-relaxed text-slate-700 dark:text-zinc-300"
-                        data-testid="code-preview-trailing"
-                        .innerHTML="${() => renderMarkdown(it.trailing)}"
-                      ></span>`.key('trailing')
-                    : '',
-                ].filter(Boolean)
+            ? [
+                it.oldCode != null ? pane(t('Huidig (PR)'), it.oldCode, it.lang).key('old') : '',
+                pane(it.oldCode != null ? t('Voorgesteld (chat)') : fenceTitle(it), it.code, it.lang).key('new'),
+                // trailing — the chat text after this fence (only set on the
+                // LAST fence of its message, see markdown.mjs's
+                // `data-fence-trailing`) — reviewer request: "laat de laatste
+                // tekst ook zien", so nothing typed after the code is lost.
+                it.trailing
+                  ? html`<span
+                      class="markdown-body [&_p]:inline text-xs leading-relaxed text-slate-700 dark:text-zinc-300"
+                      data-testid="code-preview-trailing"
+                      .innerHTML="${() => renderMarkdown(it.trailing)}"
+                    ></span>`.key('trailing')
+                  : '',
+              ].filter(Boolean)
             : []}
       </div>
     </div>
@@ -451,7 +391,7 @@ function previewCard(it, active, expanded, onToggle, linkSel = () => 0, onJump =
 // position, not an item identity, and a stale captured `i` merely compares
 // wrong — it can never dereference anything.
 //
-// `isExpanded(it)`/`getLinkSel(it)`/`onToggle` back the collapse state above
+// `isExpanded(it)`/`onToggle` back the collapse state above
 // (RelatedPanel.mjs's `isPreviewExpanded`/`toggleCodePreviewExpanded`) and
 // are DELIBERATELY item-based, not index-based — see the "measured crash"
 // paragraph right below `previewCard`'s own `.key(it.key)` line for why.
@@ -487,8 +427,6 @@ export function codePreviewColumn(
   isExpanded = () => true,
   onToggle = () => {},
   getWidthCls = () => 'w-full',
-  getLinkSel = () => 0,
-  onJumpToBlock = () => {},
 ) {
   return html`
     <div class="${() => 'flex shrink-0 flex-col ' + getWidthCls()}" data-testid="code-preview-column">
@@ -502,14 +440,12 @@ export function codePreviewColumn(
             // closure captured at first mount (arrowjs-pitfalls.md's "keyed node
             // reused without re-running its bindings"), so re-deriving via a
             // captured INDEX into a list that can since have shrunk/reordered
-            // (`combinedPreviewItems()[i]`) reads past the end and throws. `it`
+            // (`cp.items[i]`) reads past the end and throws. `it`
             // is the guaranteed-valid object from THIS map iteration — it can
             // never be undefined, only (rarely) stale in value, which is the
             // same accepted trade-off every other keyed-reuse case already has.
             () => isExpanded(it),
             onToggle,
-            () => getLinkSel(it),
-            onJumpToBlock,
           )
           // Spacing between cards, per pair: two cards from the SAME message
           // (`groupWithPrev`) get a dashed divider and no gap at all (see

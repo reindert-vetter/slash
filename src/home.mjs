@@ -142,8 +142,6 @@ import RelatedPanel, {
   CodePreviewPanel,
   toggleCodePreviewExpanded,
   activeCodePreviewKey,
-  setEditsJumpCallback,
-  selectHighlightedEditLink,
   commentTitleOf,
   enterRelatedFromClaudeChat,
   firstReviewerReplyOnPlaceholder,
@@ -7872,27 +7870,6 @@ async function jumpToClaudeConversation(c) {
 }
 setClaudeTaskJump(jumpToClaudeConversation)
 
-// jumpToPendingEditBlock lands the keyboard on the block a pending-edits
-// link points at (see setEditsJumpCallback, RelatedPanel.mjs's
-// pendingEditsItem) — Enter/click on one of the links in the pending-edits
-// card shown below the chat (see "A pending-edits card, walked the same way
-// as the chat's own code blocks" in .claude/docs/claude-chat-panel.md).
-// blockId is only ever a real match here — RelatedPanel.mjs never calls this
-// for a plain, non-clickable entry (a touched file with no matching block in
-// the currently loaded tree).
-function jumpToPendingEditBlock(blockId) {
-  const idx = state.blocks.findIndex((b) => b.id === blockId)
-  if (idx < 0) return
-  state.selected = idx
-  state.mode = 'diff'
-  state.drill = []
-  state.drillCursor = []
-  state.focusLevel = 0
-  state.rangeAnchor = null
-  resetMainScroll()
-}
-setEditsJumpCallback(jumpToPendingEditBlock)
-
 // ── Command palette (`/`) ─────────────────────────────────────────────────────
 // The `/` key opens a searchable command menu overlaid on the next-block preview
 // slot (see DetailPanel). The state is split across two reactives on purpose:
@@ -14359,16 +14336,6 @@ function onKeydown(e) {
     // all (enterFooterTasks, cs.focus === 'tasks') — see
     // .claude/docs/claude-chat-panel.md.
     if (e.key === 'Enter' && (isClaudeChatFocused() || isFooterTasksFocused()) && selectHighlightedClaudeTask()) {
-      e.preventDefault()
-      return
-    }
-    // Enter while one of the pending-edits card's own links is highlighted
-    // (↓ walked into it — see cs.editLinkSel in RelatedPanel.mjs) jumps to
-    // that block, exactly like clicking it — checked for the same reason as
-    // the task/option branches above: a highlighted link also blurs the
-    // composer, so it would otherwise match the generic toggle branch below
-    // (which only ever collapses/expands the card, never navigates).
-    if (e.key === 'Enter' && isClaudeChatFocused() && selectHighlightedEditLink()) {
       e.preventDefault()
       return
     }
