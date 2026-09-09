@@ -894,6 +894,14 @@ type chatCheckoutAssignment struct {
 	// the way instead of always pointing at settings.json. Empty means "no
 	// checkout of this repo found at all", which IS the configuration case.
 	LastReason string
+	// LastReasonTransient marks LastReason as something that resolves BY
+	// ITSELF, with no reviewer action needed — currently only the "another
+	// conversation's edits are still landing" case below. runOneClaudeTurn
+	// (chat_workflow.go) uses this to automatically wait+retry instead of
+	// dead-ending in a terminal message the reviewer would have to notice and
+	// retype. Every other LastReason assignment in this file explicitly resets
+	// this to false, so a stale true can never leak onto an unrelated reason.
+	LastReasonTransient bool
 }
 
 var (
@@ -1111,12 +1119,17 @@ func checkoutPendingStillNeeded(ctx context.Context, a *chatCheckoutAssignment, 
 // checkout of this repo (or none has been attempted). Same plain in-memory
 // read as checkoutChoiceOpen right above it, for the same reason: it keeps
 // the three callers of prepareChatShellWorkDir on their existing signature.
-func checkoutFailureReason(dataDir, repo string, pr int) string {
+//
+// transient reports whether that reason resolves BY ITSELF (currently only
+// "another conversation's edits are still landing") — runOneClaudeTurn
+// (chat_workflow.go) uses it to wait+retry automatically instead of
+// dead-ending in a message the reviewer would have to notice and retype.
+func checkoutFailureReason(dataDir, repo string, pr int) (reason string, transient bool) {
 	a := getCheckoutAssignment(dataDir, repo, pr)
 	if a == nil {
-		return ""
+		return "", false
 	}
-	return a.LastReason
+	return a.LastReason, a.LastReasonTransient
 }
 
 // ---------------------------------------------------------------------------
@@ -1563,6 +1576,7 @@ func prepareChatShellWorkDirAt(ctx context.Context, tm *TaskManager, dataDir, re
 					// isn't ready yet, and will succeed on its own once that
 					// landing completes.
 					a.LastReason = "Een andere Claude-conversatie van deze PR is deze werkmap nog aan het landen. Probeer het zo weer."
+					a.LastReasonTransient = true
 					if tm != nil && tm.logf != nil {
 						tm.logf("chat_checkout: pr %d: %s dirty with only another conversation's pending edit(s), not asking", pr, a.Dir)
 					}
@@ -1612,10 +1626,12 @@ func prepareChatShellWorkDirAt(ctx context.Context, tm *TaskManager, dataDir, re
 		case ready != "":
 			a.Dir = ready
 			a.LastReason = ""
+			a.LastReasonTransient = false
 			continue
 		case dec != nil:
 			a.Pending = dec
 			a.LastReason = ""
+			a.LastReasonTransient = false
 			publishCheckoutChanged(repo, pr)
 			return "", dec, false
 		}
@@ -1639,12 +1655,14 @@ func prepareChatShellWorkDirAt(ctx context.Context, tm *TaskManager, dataDir, re
 				// The dead-end wording of the FIRST pass, kept for the moment
 				// the reviewer answers "geen van deze" below.
 				a.LastReason = diag.reason()
+				a.LastReasonTransient = false
 				publishCheckoutChanged(repo, pr)
 				return "", a.Pending, false
 			}
 			diag = allDiag
 		}
 		a.LastReason = diag.reason()
+		a.LastReasonTransient = false
 		return "", nil, false
 	}
 	return "", nil, false
@@ -2338,6 +2356,7 @@ func relistCheckoutCandidates(ctx context.Context, tm *TaskManager, dataDir, rep
 		tm.logf("chat_checkout: pr %d: relist: listing candidates: %v", pr, diag.Err)
 	}
 	a.LastReason = diag.reason()
+	a.LastReasonTransient = false
 	dec := listAllCheckoutChoices(candidates, diag, hold)
 	if len(dec.Options) > 0 {
 		a.Pending = dec

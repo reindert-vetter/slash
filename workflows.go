@@ -3216,6 +3216,32 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		}
 		return nil, m.chat.SetAnswer(ctx, arg.ID, arg.Answer)
 	})
+	// Activity: register a claude_chat conversation as waiting for a checkout
+	// to free up (chat_write_gate.go's in-memory checkoutWaiters registry) —
+	// the fast half of the SignalCheckoutFreed hook (chat_workflow.go). A
+	// plain in-memory write, run fresh on every real (non-replay) attempt.
+	engine.RegisterActivity("registerCheckoutWaiter", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg checkoutWaiterInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		registerCheckoutWaiter(arg.Key, arg.RunID)
+		return nil, nil
+	})
+	// Activity: checkoutWaitFallbackWorkflow's own durable-timer half of the
+	// SignalCheckoutFreed hook — signal the waiting claude_chat run once this
+	// rung's sleep elapses, regardless of whether the real landing (the OTHER
+	// sender, chat_merge.go's broadcastCheckoutFreed) already woke it.
+	engine.RegisterActivity("signalCheckoutFreed", func(ctx context.Context, in []byte) ([]byte, error) {
+		var runID string
+		if err := json.Unmarshal(in, &runID); err != nil {
+			return nil, err
+		}
+		if err := m.engine.SignalWorkflow(runID, SignalCheckoutFreed, CheckoutFreedSignal{}); err != nil {
+			m.logf("checkout_wait_fallback: signal %s: %v", runID, err)
+		}
+		return nil, nil
+	})
 	// Activity: run one ATTEMPT of a conversational Claude turn (side effect:
 	// shells out via claude.Client.RunChat) and persist the assistant's reply +
 	// the conversation's (possibly new) session id. Returns the saved
@@ -3264,7 +3290,21 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		// or raised its choice — nudge the chip/badge and the work-directory
 		// overlay too, same low-cost "refetch me" broadcast as above.
 		publishCheckoutChanged(arg.Repo, arg.PR)
-		return json.Marshal(chatTurnResult{Message: msg, Action: action, NeedsLand: needsLand})
+		// chatTurnResult.WaitCheckoutKey's own doc comment: computed here,
+		// right after the turn, for the same reason NeedsLand is — a fresh,
+		// independent state read rather than a change to runOneClaudeTurn's
+		// own signature/tests. Only set when this specific retry is "another
+		// conversation's edits are still landing" (chat_checkout.go's
+		// dirtyIsOnlyPendingEdits) — never for an ordinary failed-CLI-call
+		// retry, which also encodes as chat.KindRetrying but carries no such
+		// checkout reason.
+		waitCheckoutKey := ""
+		if msg.Kind == chat.KindRetrying && msg.NoShell {
+			if _, transient := checkoutFailureReason(m.dataDir, arg.Repo, arg.PR); transient {
+				waitCheckoutKey = checkoutWriteSlotKey(m.dataDir, arg.Repo, arg.PR)
+			}
+		}
+		return json.Marshal(chatTurnResult{Message: msg, Action: action, NeedsLand: needsLand, WaitCheckoutKey: waitCheckoutKey})
 	})
 	// Activity (Phase 4): apply a validated comment_action directive — reply to
 	// or resolve the comment thread this conversation hangs on, ONLY on the
@@ -3545,6 +3585,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowIgnoreComment, ignoreCommentWorkflow)
 	engine.RegisterWorkflow(WorkflowCleanup, cleanupWorkflow)
 	engine.RegisterWorkflow(WorkflowClaudeChat, claudeChatWorkflow)
+	engine.RegisterWorkflow(WorkflowCheckoutWaitFallback, checkoutWaitFallbackWorkflow)
 	engine.RegisterWorkflow(WorkflowChatMerge, chatMergeQueueWorkflow)
 	engine.RegisterWorkflow(WorkflowChatSteer, chatSteerWorkflow)
 	engine.RegisterWorkflow(WorkflowCommentBatch, commentBatchWorkflow)

@@ -448,6 +448,55 @@ func claudeChatWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 // SaveMessage (INSERT OR REPLACE) would silently overwrite the first.
 const chatAutoLandTurnSuffix = "-autoland"
 
+// SignalCheckoutFreed wakes a claude_chat conversation that is waiting
+// (runChatTurnWithRetries, via its WaitCheckoutKey handling) for ANOTHER
+// conversation's edits to finish landing before its own turn can get shell
+// access (see chat_checkout.go's dirtyIsOnlyPendingEdits) — a real hook
+// instead of only the blind chatRetryDelays ladder. Two independent senders
+// can deliver it for the same waiting run: chat_merge.go's
+// broadcastCheckoutFreed (the real landing completion) and
+// checkoutWaitFallbackWorkflow below (a durable timer, in case the first is
+// ever missed — e.g. a restart drops the in-memory checkoutWaiters registry,
+// chat_write_gate.go). Whichever arrives first is what the waiting run acts
+// on; it never needs to know which. Payload is deliberately empty — only the
+// signal's ARRIVAL matters, never its content.
+const SignalCheckoutFreed = "checkoutFreed"
+
+// CheckoutFreedSignal is SignalCheckoutFreed's (empty) payload.
+type CheckoutFreedSignal struct{}
+
+// WorkflowCheckoutWaitFallback is a tiny, disposable per-attempt workflow
+// started as a CHILD of the waiting claude_chat conversation
+// (runChatTurnWithRetries). Its entire job is the safety-net half of the hook
+// above: sleep durably for one chatRetryDelays rung, then signal the parent
+// with SignalCheckoutFreed regardless of whether the real landing finished by
+// then. Never started directly from the UI.
+const WorkflowCheckoutWaitFallback = "checkout_wait_fallback"
+
+// checkoutWaitFallbackInput is WorkflowCheckoutWaitFallback's own input.
+type checkoutWaitFallbackInput struct {
+	ParentRunID string        `json:"parentRunId"`
+	Delay       time.Duration `json:"delay"`
+}
+
+// checkoutWaitFallbackWorkflow is WorkflowCheckoutWaitFallback's durable
+// definition. w.Sleep is a real timer — it survives a restart exactly like
+// chatRetryDelays' own use in runChatTurnWithRetries — so this fires even when
+// the in-memory checkoutWaiters registry entry the FAST path (chat_merge.go's
+// broadcast) depends on was lost across a restart. Deterministic: the only
+// calls are Sleep and one ExecuteActivity, both driven purely by the input.
+func checkoutWaitFallbackWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
+	var in checkoutWaitFallbackInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return nil, err
+	}
+	w.Sleep(in.Delay)
+	if err := w.ExecuteActivity("signalCheckoutFreed", in.ParentRunID, nil); err != nil {
+		return nil, fmt.Errorf("signal checkout freed: %w", err)
+	}
+	return nil, nil
+}
+
 // chatTurnInput is runClaudeTurn's own Activity input — deliberately not
 // ClaudeChatInput + a DB read of the transcript: the CLI's own --resume
 // session already carries prior turns, so only the new message body needs to
@@ -516,8 +565,38 @@ func runChatTurnWithRetries(w *tembed.Workflow, turn chatTurnInput) (chatTurnRes
 		if result.Message.Kind != chat.KindRetrying {
 			return result, nil
 		}
+		if result.WaitCheckoutKey != "" {
+			// Genuine hook: wait for chat_merge.go's landing to actually free
+			// this checkout, rather than blindly sleeping out this rung.
+			// registerCheckoutWaiter is itself an Activity (a side effect —
+			// populating chat_write_gate.go's in-memory waiter registry), run
+			// fresh on every real (non-replay) attempt. The child workflow
+			// started right after is the durable safety net: see
+			// checkoutWaitFallbackWorkflow's own doc comment for why this can
+			// never block forever even if the real broadcast is missed.
+			if err := w.ExecuteActivity("registerCheckoutWaiter", checkoutWaiterInput{
+				Key: result.WaitCheckoutKey, RunID: w.RunID(),
+			}, nil); err != nil {
+				return result, fmt.Errorf("register checkout waiter: %w", err)
+			}
+			if _, err := w.ExecuteChildWorkflow(WorkflowCheckoutWaitFallback, checkoutWaitFallbackInput{
+				ParentRunID: w.RunID(), Delay: chatRetryDelays[attempt],
+			}); err != nil {
+				return result, fmt.Errorf("start checkout wait fallback: %w", err)
+			}
+			var freed CheckoutFreedSignal
+			w.WaitSignal(SignalCheckoutFreed, &freed)
+			continue
+		}
 		w.Sleep(chatRetryDelays[attempt])
 	}
+}
+
+// checkoutWaiterInput is registerCheckoutWaiter's own Activity input
+// (chat_write_gate.go's registerCheckoutWaiter helper).
+type checkoutWaiterInput struct {
+	Key   string `json:"key"`
+	RunID string `json:"runId"`
 }
 
 // chatCommitInput is commitCheckoutEditsAt's own Activity input (chat_checkout.go).
@@ -589,6 +668,16 @@ type chatTurnResult struct {
 	Message   chat.Message            `json:"message"`
 	Action    *commentActionDirective `json:"action,omitempty"`
 	NeedsLand bool                    `json:"needsLand,omitempty"`
+	// WaitCheckoutKey is set (to checkoutWriteSlotKey's value) only when
+	// Message.Kind is chat.KindRetrying because ANOTHER conversation's edits
+	// are still landing (chat_checkout.go's dirtyIsOnlyPendingEdits) — never
+	// for an ordinary failed-CLI-call retry. Computed by the "runClaudeTurn"
+	// Activity registration (workflows.go), right after runOneClaudeTurn
+	// returns, the same way NeedsLand is — see that field's own doc comment
+	// for why: keeps runOneClaudeTurn's signature/tests unchanged and keeps
+	// this a plain, STORED decision runChatTurnWithRetries can act on without
+	// any live read of its own (workflow-determinism.md).
+	WaitCheckoutKey string `json:"waitCheckoutKey,omitempty"`
 }
 
 // commentActionDirective is the parsed, but NOT YET validated, shape of a
@@ -1122,15 +1211,27 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 			// A dead end with a KNOWN cause says that cause instead — the
 			// checkout may well exist and simply not be readable/free right
 			// now (see checkoutDiscovery.reason, chat_checkout.go).
-			if reason := checkoutFailureReason(dataDir, arg.Repo, arg.PR); reason != "" {
+			reason, transient := checkoutFailureReason(dataDir, arg.Repo, arg.PR)
+			if reason != "" {
 				body = "Ik kan nu geen code aanpassen. " + reason + " Los dat op en vraag het opnieuw."
 			}
 			if checkoutChoiceOpen(dataDir, arg.Repo, arg.PR) {
 				body = "Ik kan nu geen code aanpassen: er staat nog een keuze open over de werkmap van deze PR. Maak die keuze en vraag het daarna opnieuw."
+				transient = false // an open question needs the reviewer, never automatic
+			}
+			kind := ""
+			if transient {
+				// Resolves BY ITSELF (another conversation of this PR is still
+				// landing its own edits) — wait+retry automatically instead of
+				// dead-ending in a message the reviewer would have to notice
+				// and retype. See runClaudeTurn's Activity registration
+				// (workflows.go) for how WaitCheckoutKey gets set on the
+				// result, and runChatTurnWithRetries for the actual wait.
+				kind, body = chatCheckoutRetryTurn(arg.Attempt, reason)
 			}
 			msg := chat.Message{
 				ID: chatMessageID(arg.TurnID, ""), ConversationID: arg.ConversationID, PR: arg.PR,
-				Role: "assistant", Model: model, NoShell: true,
+				Role: "assistant", Kind: kind, Model: model, NoShell: true,
 				Body: body,
 			}
 			_ = cm.SaveMessage(ctx, msg)
@@ -1272,6 +1373,25 @@ func chatFailureTurn(attempt int, model string, callErr error) (kind, body strin
 	next := chatModelForAttempt(attempt + 1)
 	return chat.KindRetrying, fmt.Sprintf("%s — nieuwe poging over %d seconden met %s.",
 		failed, int(chatRetryDelays[attempt].Seconds()), chatModelLabel(next))
+}
+
+// chatCheckoutRetryTurn words one "another conversation's edits are still
+// landing" wait (chat_checkout.go's dirtyIsOnlyPendingEdits) as a visible
+// turn, mirroring chatFailureTurn's own ladder shape/wording — same familiar
+// "nieuwe poging over N seconden" bubble, same eventual "Probeer het
+// handmatig opnieuw" once the ladder is exhausted. Unlike chatFailureTurn
+// this was never a genuine failure: runChatTurnWithRetries' WaitCheckoutKey
+// handling actually WAITS for a real wake (chat_merge.go's
+// broadcastCheckoutFreed, once the landing that was in the way finishes)
+// rather than blindly sleeping out the rung — this ladder only bounds how
+// long that can take before falling back to a manual retry, in case the wake
+// is ever missed (see checkoutWaitFallbackWorkflow).
+func chatCheckoutRetryTurn(attempt int, reason string) (kind, body string) {
+	if attempt >= len(chatRetryDelays) {
+		return chat.KindError, "Ik kan nu geen code aanpassen. " + reason + " Dat duurde te lang — probeer het handmatig opnieuw."
+	}
+	return chat.KindRetrying, fmt.Sprintf("Ik kan nu geen code aanpassen. %s Nieuwe poging zodra dat klaar is (uiterlijk over %d seconden).",
+		reason, int(chatRetryDelays[attempt].Seconds()))
 }
 
 // chatProgressThrottle bounds how often a text delta is pushed to the browser.

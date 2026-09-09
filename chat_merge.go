@@ -312,8 +312,32 @@ func processChatMergeAt(ctx context.Context, tm *TaskManager, cm *chat.Module, c
 		// pending (see chat_edit_pending.go's own doc comment).
 		clearChatPendingFiles(arg.Repo, arg.PR)
 		publishCheckoutChanged(arg.Repo, arg.PR)
+		// Only NOW — dirtyIsOnlyPendingEdits (chat_checkout.go) classifies a
+		// directory by chatPendingEditedFilesFor, which clearChatPendingFiles
+		// just emptied — does a conversation waiting on THIS checkout
+		// actually have something new to find if it retries.
+		broadcastCheckoutFreed(tm, checkoutWriteSlotKey(dataDir, arg.Repo, arg.PR))
 	}
 	return msg
+}
+
+// broadcastCheckoutFreed wakes every claude_chat conversation currently
+// waiting (registerCheckoutWaiter, chat_write_gate.go) for checkoutKey to
+// free up, via SignalCheckoutFreed — the real "hook" half of
+// runChatTurnWithRetries' checkout wait (chat_workflow.go);
+// checkoutWaitFallbackWorkflow's durable timer is the other half, in case
+// this is ever missed (e.g. a restart drops the in-memory registry entry).
+// Best-effort/log-only on failure, same shape as refreshTreeAfterLanding
+// above.
+func broadcastCheckoutFreed(tm *TaskManager, checkoutKey string) {
+	if tm == nil || tm.engine == nil {
+		return
+	}
+	for _, runID := range takeCheckoutWaiters(checkoutKey) {
+		if err := tm.engine.SignalWorkflow(runID, SignalCheckoutFreed, CheckoutFreedSignal{}); err != nil {
+			tm.logf("chat_merge: signal checkout freed to %s: %v", runID, err)
+		}
+	}
 }
 
 // saveChatOutcomeMessage persists one landing/merge outcome bubble — unless

@@ -1791,8 +1791,8 @@ func TestPrepareChatShellWorkDirSurvivesUnreachableOrigin(t *testing.T) {
 	if !ok || dir != checkout {
 		t.Fatalf("dir = %q, ok = %v; want %q, true", dir, ok, checkout)
 	}
-	if r := checkoutFailureReason("", "", 970901); r != "" {
-		t.Fatalf("resolved fine but kept a failure reason: %q", r)
+	if r, transient := checkoutFailureReason("", "", 970901); r != "" || transient {
+		t.Fatalf("resolved fine but kept a failure reason: %q (transient=%v)", r, transient)
 	}
 }
 

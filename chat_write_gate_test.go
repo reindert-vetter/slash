@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/reindert-vetter/tembed"
 )
 
 // One code turn at a time PER KEY: the second acquire on the SAME key WAITS
@@ -92,5 +95,88 @@ func TestWriteTurnSlotDoesNotSerializeAcrossDifferentKeys(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("a different key's acquire was blocked by an unrelated key's held slot")
+	}
+}
+
+// TestCheckoutWaitersDedupesAndDrains: the SignalCheckoutFreed hook's registry
+// (chat_workflow.go/chat_merge.go) must (1) never register the same waiting
+// run twice for one key — a replayed/recovered attempt re-registering itself
+// must not wake it twice — and (2) takeCheckoutWaiters must both return and
+// FORGET every waiter for a key in one call, so a later, unrelated freeing of
+// the same key never re-wakes a run that already moved on.
+func TestCheckoutWaitersDedupesAndDrains(t *testing.T) {
+	const key = "dir:/tmp/does-not-matter"
+	t.Cleanup(func() { takeCheckoutWaiters(key) }) // leave no residue for other tests
+
+	registerCheckoutWaiter(key, "chat-a")
+	registerCheckoutWaiter(key, "chat-b")
+	registerCheckoutWaiter(key, "chat-a") // duplicate, must not double-add
+
+	got := takeCheckoutWaiters(key)
+	want := []string{"chat-a", "chat-b"}
+	if len(got) != len(want) {
+		t.Fatalf("takeCheckoutWaiters(%q) = %v, want %v (no duplicate)", key, got, want)
+	}
+	for i, id := range want {
+		if got[i] != id {
+			t.Fatalf("takeCheckoutWaiters(%q) = %v, want %v", key, got, want)
+		}
+	}
+
+	// The take above must have DRAINED the registry: nobody is registered any
+	// more, so a second take (as broadcastCheckoutFreed would do on a LATER,
+	// unrelated landing of the same checkout) finds nothing left to signal.
+	if again := takeCheckoutWaiters(key); len(again) != 0 {
+		t.Fatalf("takeCheckoutWaiters(%q) a second time = %v, want empty (registry must drain)", key, again)
+	}
+}
+
+// TestCheckoutWaitFallbackWorkflowWakesTheWaitingRun is the durable-safety-net
+// half of the SignalCheckoutFreed hook, tested end to end against a real
+// tembed engine (a fresh, isolated one — not the full app's, so this can
+// register a throwaway target workflow without colliding with any real
+// registered name): checkoutWaitFallbackWorkflow (chat_workflow.go) must
+// actually deliver SignalCheckoutFreed to its ParentRunID once its own
+// w.Sleep elapses, exactly as chat_merge.go's broadcastCheckoutFreed does on
+// the real-landing path — this is the mechanism that guarantees
+// runChatTurnWithRetries' checkout wait can never block forever even if the
+// real broadcast is missed.
+func TestCheckoutWaitFallbackWorkflowWakesTheWaitingRun(t *testing.T) {
+	engine := tembed.New(tembed.NewMemoryStore())
+	engine.RegisterWorkflow(WorkflowCheckoutWaitFallback, checkoutWaitFallbackWorkflow)
+	engine.RegisterActivity("signalCheckoutFreed", func(ctx context.Context, in []byte) ([]byte, error) {
+		var runID string
+		if err := json.Unmarshal(in, &runID); err != nil {
+			return nil, err
+		}
+		return nil, engine.SignalWorkflow(runID, SignalCheckoutFreed, CheckoutFreedSignal{})
+	})
+
+	woke := make(chan struct{}, 1)
+	engine.RegisterWorkflow("__test_checkout_wait_target", func(w *tembed.Workflow, input []byte) ([]byte, error) {
+		var freed CheckoutFreedSignal
+		w.WaitSignal(SignalCheckoutFreed, &freed)
+		select {
+		case woke <- struct{}{}:
+		default:
+		}
+		return nil, nil
+	})
+
+	parentRunID, err := engine.StartWorkflow("__test_checkout_wait_target", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := engine.StartWorkflow(WorkflowCheckoutWaitFallback, checkoutWaitFallbackInput{
+		ParentRunID: parentRunID, Delay: 10 * time.Millisecond,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-woke:
+	case <-time.After(2 * time.Second):
+		t.Fatal("checkoutWaitFallbackWorkflow never woke the waiting run after its own delay elapsed")
 	}
 }

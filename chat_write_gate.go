@@ -125,3 +125,46 @@ func acquireCheckoutWriteSlot(ctx context.Context, dataDir, repo string, pr int,
 		release()
 	}
 }
+
+// checkoutWaiters registers which claude_chat conversation Run IDs are
+// currently waiting (runChatTurnWithRetries' w.WaitSignal, chat_workflow.go)
+// for a given checkout (keyed the same way as writeTurnSlots above,
+// checkoutWriteSlotKey) to free up — the fast half of the SignalCheckoutFreed
+// hook: chat_merge.go's broadcastCheckoutFreed reads this to know who to wake
+// once a landing that was in the way finishes.
+//
+// Best-effort/in-memory only, same carve-out as writeTurnSlots: losing an
+// entry across a restart is safe, because checkoutWaitFallbackWorkflow's own
+// durable w.Sleep timer wakes that same run regardless — the slow, always-
+// correct safety-net half of the same hook.
+var (
+	checkoutWaitersMu sync.Mutex
+	checkoutWaiters   = map[string][]string{}
+)
+
+// registerCheckoutWaiter adds runID to key's waiter list, deduplicated so a
+// replayed/recovered attempt (which re-executes this Activity only when it
+// wasn't already recorded — see registerCheckoutWaiter's Activity
+// registration in workflows.go) never adds itself twice.
+func registerCheckoutWaiter(key, runID string) {
+	checkoutWaitersMu.Lock()
+	defer checkoutWaitersMu.Unlock()
+	for _, id := range checkoutWaiters[key] {
+		if id == runID {
+			return
+		}
+	}
+	checkoutWaiters[key] = append(checkoutWaiters[key], runID)
+}
+
+// takeCheckoutWaiters removes and returns every run ID currently registered
+// for key, so broadcastCheckoutFreed (chat_merge.go) can signal each of them
+// exactly once and nobody is left registered against a checkout that already
+// froze.
+func takeCheckoutWaiters(key string) []string {
+	checkoutWaitersMu.Lock()
+	defer checkoutWaitersMu.Unlock()
+	ids := checkoutWaiters[key]
+	delete(checkoutWaiters, key)
+	return ids
+}

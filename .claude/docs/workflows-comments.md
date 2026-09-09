@@ -1695,7 +1695,38 @@ open over de werkmap van deze PR" forever. `dirtyIsOnlyPendingEdits`
 whose paths are ENTIRELY covered by `chatPendingEditedFilesFor` (a not-yet-
 landed edit this SAME PR's checkout is known to be holding) never raises that
 decision at all — it's simply not ready yet, and resolves itself once the
-landing that already owns the slot finishes. Any wait on this shared slot
+landing that already owns the slot finishes.
+
+That "resolves itself" is a real, automatic wait, not just a claim the
+reviewer has to take on faith: `runOneClaudeTurn` (`chat_workflow.go`) marks
+this ONE `LastReason` (`a.LastReasonTransient`, `chat_checkout.go` — every
+other `LastReason` assignment resets it to false) and turns the dead end into
+a `chat.KindRetrying` turn instead (`chatCheckoutRetryTurn`, same
+"nieuwe poging over N seconden"/"probeer het handmatig opnieuw" shape as an
+ordinary failed CLI call, `chatFailureTurn`). `runChatTurnWithRetries` then
+does not blindly sleep out that rung: it registers the waiting run
+(`registerCheckoutWaiter`, `chat_write_gate.go`'s in-memory
+`checkoutWaiters` registry, keyed the same as the write slot above) and
+`w.WaitSignal`s a new **`SignalCheckoutFreed`**. Two independent, durable
+senders can deliver it — `chat_merge.go`'s `broadcastCheckoutFreed`, called
+right after `processChatMergeAt`'s landing actually clears
+`chatPendingEditedFilesFor` (the real hook: near-instant in the common
+case), and a small disposable child workflow,
+**`checkoutWaitFallbackWorkflow`** (`WorkflowCheckoutWaitFallback`), started
+alongside the registration and doing nothing but a durable
+`w.Sleep(chatRetryDelays[attempt])` followed by the same signal — the safety
+net, in case the real broadcast is ever missed (e.g. a restart drops the
+in-memory registry entry the fast path depends on). Whichever arrives first
+is what wakes the waiting run; `runChatTurnWithRetries` never needs to know
+which. The existing `chatRetryDelays` ladder still bounds the total wait
+(same ~93s ceiling, same terminal `chat.KindError` once exhausted) — this
+only replaces *how* each rung is waited out, never how many rungs there are.
+Tests: `TestCheckoutWaitersDedupesAndDrains`,
+`TestCheckoutWaitFallbackWorkflowWakesTheWaitingRun`
+(`chat_write_gate_test.go`), `TestChatCheckoutRetryTurnKeepsTheLadderThenGivesUp`
+(`chat_workflow_test.go`).
+
+Any wait on this shared slot
 (including the checkout-menu Activities and the automatic landing, which have
 no live chat-turn progress line of their own) is also mirrored onto the
 always-visible checkout chip (`isCheckoutWaiting`/`setCheckoutWaiting`,

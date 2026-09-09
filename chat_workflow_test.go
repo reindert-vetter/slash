@@ -1600,6 +1600,39 @@ func TestChatFailureTurnUnchangedForAPlainError(t *testing.T) {
 	}
 }
 
+// TestChatCheckoutRetryTurnKeepsTheLadderThenGivesUp: chatCheckoutRetryTurn is
+// a pure function (mirrors chatFailureTurn's own tests above), so this is
+// tested directly rather than through a full workflow round trip. It must
+// retry (chat.KindRetrying, a countdown in the body) for every rung still on
+// the chatRetryDelays ladder, and only turn terminal (chat.KindError, "probeer
+// het handmatig opnieuw") once the ladder is exhausted — the automatic
+// checkout-wait must never promise a retry it isn't actually going to make.
+func TestChatCheckoutRetryTurnKeepsTheLadderThenGivesUp(t *testing.T) {
+	reason := "Een andere Claude-conversatie van deze PR is deze werkmap nog aan het landen. Probeer het zo weer."
+
+	kind, body := chatCheckoutRetryTurn(0, reason)
+	if kind != chat.KindRetrying {
+		t.Fatalf("expected chat.KindRetrying on the first attempt, got %q", kind)
+	}
+	if !strings.Contains(body, reason) {
+		t.Fatalf("expected the checkout reason verbatim in the message, got %q", body)
+	}
+	if !strings.Contains(body, "Nieuwe poging") {
+		t.Fatalf("expected a retry promise while the ladder still has a rung, got %q", body)
+	}
+
+	kind, body = chatCheckoutRetryTurn(len(chatRetryDelays), reason)
+	if kind != chat.KindError {
+		t.Fatalf("expected chat.KindError once the ladder is exhausted, got %q", kind)
+	}
+	if !strings.Contains(body, "handmatig opnieuw") {
+		t.Fatalf("expected the manual-retry wording once exhausted, got %q", body)
+	}
+	if strings.Contains(body, "Nieuwe poging") {
+		t.Fatalf("must not promise a further automatic retry once exhausted, got %q", body)
+	}
+}
+
 // TestCancelledTurnDoesNotAutoRetry is THE regression test for this feature:
 // a reviewer-triggered cancel (POST /api/chat/cancel → cancelChatTurn,
 // chat_cancel.go) must produce a terminal chat.KindCancelled turn and must
