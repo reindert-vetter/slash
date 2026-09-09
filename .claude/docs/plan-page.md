@@ -921,6 +921,24 @@ reviewer decision: the plan does not name which test belongs to which task and
 must not make the reviewer choose about it. Both rules are stated in
 `planPrompt`.
 
+**No research task, and no task conditional on another task's outcome.**
+`plan_execute` hands the WHOLE task list to ONE agentic pass
+(`planExecutePrompt`), so there is no moment between two tasks at which
+"alleen als taak 1 uitwijst dat…" could still be decided — such a task reaches
+the executor as a condition nobody resolves. An open uncertainty therefore
+belongs in the intent/specs stage (a question), and a task must name the
+assumption it picked in its own explanation/`conditions` instead. Observed on
+BUG-5463: the reviewer answered a question WITH a question ("is dit nodig?
+checken we niet bij het versturen…"), and the next task generation turned that
+into a "vaststellen of…" task plus a second task conditional on its outcome.
+**Granularity, next to it:** the only bound is `maxPlanTasks` (12), so
+`planPrompt` also says that a small but separately checkable step stays its own
+task — tasks are not merged into a vague heading, and not split per file
+either. Eight tasks for one subtask is the normal, intended shape (the
+intent → spec → plan chain above is modelled on a playbook of small,
+independently verifiable steps); combining them would only make the plan
+vaguer, since it never reduces the number of runs, branches or PRs.
+
 ## A checkbox and an own field per task, and the current code next to the proposal
 
 Reviewer decisions (task 22+26 of `todo/plan-page-workflow.md`): **een checkbox

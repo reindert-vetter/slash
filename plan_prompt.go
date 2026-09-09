@@ -209,6 +209,19 @@ func planPrompt(doc planDoc, mode string) string {
 		b.WriteString("  - \"edgeCases\": randgevallen van de data — leeg, nul, heel groot, meerdere tegelijk.\n")
 		b.WriteString("  - \"outOfScope\": wat expliciet NIET bij deze taak hoort.\n")
 		b.WriteString("- Noem GEEN tests: welke test bij welke taak hoort bepaalt de uitvoerder zelf.\n")
+		// A task must be executable exactly as it stands. An open uncertainty
+		// belongs in the intent/specs stage (the questions), never in the task
+		// list: plan_execute hands the WHOLE list to ONE agentic pass, so
+		// there is no moment between two tasks at which "only if task 1 shows
+		// …" could still be decided — such a task reaches the executor as a
+		// condition nobody resolves. Observed on BUG-5463, where a reviewer
+		// answering a question WITH a question ("is dit nodig?") produced a
+		// research task plus a second task conditional on its outcome.
+		b.WriteString("- GEEN onderzoekstaak (\"vaststellen of…\", \"uitzoeken of…\") en GEEN taak die afhangt van de uitkomst van een andere taak (\"alleen als taak 1 uitwijst dat…\"): de uitvoerder werkt de hele lijst in één keer af en kan zo'n voorwaarde nergens meer beslissen. Weet je iets nog niet, kies dan het meest waarschijnlijke pad en noem die aanname in de uitleg en in \"conditions\" van de taak zelf.\n")
+		// The granularity answer, in the direction we actually recommend: the
+		// only cap is maxPlanTasks, so without this the model has nothing to
+		// go on and may collapse separately checkable steps into a heading.
+		b.WriteString("- Een kleine stap die je apart kunt nalopen blijft zijn eigen taak: voeg taken niet samen tot een vage kop, en splits ook niet kunstmatig op per bestand.\n")
 	}
 	b.WriteString("- NEST je blokken: elk blok dat iets aanroept of aanpast krijgt \"children\" met de onderliggende stukken (de helper die het aanroept, de test die het dekt, de call-site die mee moet). Nest zo diep als het plan duidelijker maakt — twee of drie niveaus is normaal, één plat blok is te weinig.\n")
 	b.WriteString("- ELK blok heeft een \"note\": één of twee zinnen uitleg over wat dat blok doet en waarom het nodig is. Dat geldt net zo hard voor ELK onderliggend blok, op ELK nestniveau — bij een kind-blok legt de note uit waarom het onder zijn ouder hangt (welke aanroep, welke dekking, welke call-site). Laat geen enkel blok zonder note.\n")
