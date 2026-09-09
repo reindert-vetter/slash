@@ -29,7 +29,7 @@ not json at all
 
 func TestReadChatStreamParsesResultAndEvents(t *testing.T) {
 	var got []ChatEvent
-	res, err := readChatStream(strings.NewReader(sampleStream), func(ev ChatEvent) { got = append(got, ev) }, nil)
+	res, err := readChatStream(strings.NewReader(sampleStream), func(ev ChatEvent) { got = append(got, ev) }, nil, nil)
 	if err != nil {
 		t.Fatalf("readChatStream: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestReadChatStreamParsesResultAndEvents(t *testing.T) {
 // Nothing listening must still work (and must not need the partial frames at
 // all) — that is the path every non-chat caller takes.
 func TestReadChatStreamWithoutListener(t *testing.T) {
-	res, err := readChatStream(strings.NewReader(sampleStream), nil, nil)
+	res, err := readChatStream(strings.NewReader(sampleStream), nil, nil, nil)
 	if err != nil {
 		t.Fatalf("readChatStream: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestReadChatStreamWithoutListener(t *testing.T) {
 // would happily persist as an empty assistant message.
 func TestReadChatStreamWithoutResultIsAnError(t *testing.T) {
 	partial := `{"type":"system","subtype":"init","session_id":"s-2"}` + "\n"
-	if _, err := readChatStream(strings.NewReader(partial), nil, nil); err == nil {
+	if _, err := readChatStream(strings.NewReader(partial), nil, nil, nil); err == nil {
 		t.Fatal("expected an error when the stream carries no result frame")
 	}
 }
@@ -89,7 +89,7 @@ func TestReadChatStreamHandlesVeryLongLines(t *testing.T) {
 	stream := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"` + huge + `"}}]}}` + "\n" +
 		`{"type":"result","result":"ok","session_id":"s-3"}` + "\n"
 	var got []ChatEvent
-	res, err := readChatStream(strings.NewReader(stream), func(ev ChatEvent) { got = append(got, ev) }, nil)
+	res, err := readChatStream(strings.NewReader(stream), func(ev ChatEvent) { got = append(got, ev) }, nil, nil)
 	if err != nil {
 		t.Fatalf("readChatStream: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestReadChatStreamHandlesVeryLongLines(t *testing.T) {
 // <invalid>` run — see ChatCallError's doc comment in claude.go).
 func TestReadChatStreamParsesIsError(t *testing.T) {
 	stream := `{"type":"result","subtype":"success","is_error":true,"result":"Claude AI usage limit reached.","session_id":"s-4"}` + "\n"
-	res, err := readChatStream(strings.NewReader(stream), nil, nil)
+	res, err := readChatStream(strings.NewReader(stream), nil, nil, nil)
 	if err != nil {
 		t.Fatalf("readChatStream: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestReadChatStreamJoinsASecondResultFrame(t *testing.T) {
 {"type":"result","result":"PINEAPPLE","session_id":"s1"}
 `
 	closed := 0
-	res, err := readChatStream(strings.NewReader(stream), nil, func() { closed++ })
+	res, err := readChatStream(strings.NewReader(stream), nil, func() { closed++ }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

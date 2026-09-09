@@ -2238,8 +2238,24 @@ and the block nesting is arbitrarily deep. `Save` is called only from the
   plumbing: the run is one agentic pass, not a list of known items.
 - **The agentic run is bounded by the module's own `agenticTimeout`** (10
   minutes, `modules/claude`) — the same ceiling every other agentic workflow
-  has. A plan too big for that lands whatever it got to; the PR is a draft
-  precisely because the result still needs a human.
+  has, but since task 56/57 it is a **heartbeat**, not a fixed deadline from
+  the call's start: `RunChat`'s `HeartbeatContext` (`modules/claude/
+  heartbeat.go`) resets the 10-minute clock on every stream-json line the CLI
+  produces (any sign of life — a reviewer-confirmed "elk teken van leven"
+  scope, not just a recognized tool-step frame), so a plan execution that is
+  genuinely still working — editing files, running tests, minute after
+  minute — is never killed just for taking a while; only a truly wedged run
+  (no output at all for 10 straight minutes) still hits the ceiling. Reviewer
+  report: a real BUG-5463 execution doing substantial, real work (several
+  file edits, `php artisan test` runs) got SIGKILLed mid-implementation by
+  the old fixed timeout. Since `HeartbeatContext` lives in `RunChat` itself,
+  every other caller (`chat_workflow.go`, `code_warning.go`,
+  `comment_batch.go`, `test_run.go`, this file's own `planChatReply`) gets
+  the same heartbeat for free — see its own doc comment for the primitive
+  and `.claude/docs/workflows-analysis.md`/`workflows-test-run.md` for where
+  `agenticTimeout` is otherwise mentioned. A plan too big even for a
+  genuinely-progressing 10 minutes of heartbeats lands whatever it got to;
+  the PR is a draft precisely because the result still needs a human.
 - **The werkmap is chosen AUTOMATICALLY; the plan page has no werkmap
   overlay.** The tree asks (`checkoutStageChooseDirectory`,
   `src/workDirOverlay.mjs`) because a chat turn has a conversation to ask in;

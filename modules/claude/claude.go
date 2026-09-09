@@ -417,8 +417,14 @@ func (m *Module) RunChat(ctx context.Context, req RunRequest) (ChatResult, error
 	if req.Timeout > 0 {
 		timeout = req.Timeout
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
+	// A heartbeat deadline, not a fixed one: readChatStream calls ping for
+	// every line the CLI streams (any sign of life), so a run that keeps
+	// genuinely progressing — however long overall — is never killed just
+	// for taking a while, while a truly stuck one (no output at all for
+	// `timeout`) still cannot hang forever. See HeartbeatContext's own doc
+	// comment.
+	ctx, ping, stop := HeartbeatContext(ctx, timeout)
+	defer stop()
 	cmd := exec.CommandContext(ctx, "claude", args...)
 	killOwnProcessGroup(cmd)
 	switch {
@@ -487,7 +493,7 @@ func (m *Module) RunChat(ctx context.Context, req RunRequest) (ChatResult, error
 	}
 	// Read to EOF first, then Wait — a Wait before the pipe is drained would
 	// close it out from under the reader.
-	res, parseErr := readChatStream(stdout, req.OnEvent, closeStdin)
+	res, parseErr := readChatStream(stdout, req.OnEvent, closeStdin, ping)
 	waitErr := cmd.Wait()
 
 	// The CLI ran to completion and told us, in its own words, that the turn
@@ -595,13 +601,23 @@ func writeUserFrame(w io.Writer, text string) error {
 // bufio.Reader, not bufio.Scanner: a single line can be very large (the init
 // frame lists every tool, a thinking signature is a long base64 blob, a tool
 // result can be a whole file) and Scanner has a hard token limit.
-func readChatStream(r io.Reader, onEvent func(ChatEvent), onResult func()) (ChatResult, error) {
+//
+// onLine, when non-nil, is called for every non-blank line BEFORE it is
+// parsed — including one that fails to parse — so it fires purely on "the
+// CLI produced output", the heartbeat RunChat needs (see HeartbeatContext).
+// Deliberately separate from onEvent: onEvent stays the UI-facing, "which
+// kind of frame was this" classification, unaffected by whether anything
+// downstream also wants a raw liveness signal.
+func readChatStream(r io.Reader, onEvent func(ChatEvent), onResult func(), onLine func()) (ChatResult, error) {
 	br := bufio.NewReader(r)
 	var res ChatResult
 	seenResult := false
 	for {
 		line, err := br.ReadString('\n')
 		if s := strings.TrimSpace(line); s != "" {
+			if onLine != nil {
+				onLine()
+			}
 			var l chatStreamLine
 			if json.Unmarshal([]byte(s), &l) == nil {
 				if l.Type == "result" {
