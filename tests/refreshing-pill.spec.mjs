@@ -141,6 +141,57 @@ test('a plain blocks.changed with no landedFiles payload still falls back to the
   await expect(page.getByTestId('blocks-stale')).toHaveCount(1)
 })
 
+// The vangnet: a blocks.changed frame whose OWN payload came back empty (the
+// exact race a server-side ordering bug can produce) must still be recognised
+// as OUR OWN landing — not the manual stale-tree fallback above — whenever the
+// separately-polled checkout read model already knows a landed edit is being
+// re-ingested for this file (see checkoutRefreshingFiles' own doc comment and
+// the onEvent('blocks.changed', ...) branch it feeds). Before this fix,
+// ensureCode's codeRequested guard for the touched file never got invalidated
+// in this case, leaving the block on its pre-landing source and the
+// TopLoadingBar spinning forever ("oneindig aan het laden").
+test('a blocks.changed event with no landedFiles payload, but the checkout read model already known to be refreshing this file, still auto-refreshes', async ({
+  page,
+}) => {
+  let release
+  const released = new Promise((r) => (release = r))
+  let landed = false
+
+  await mockCheckout(page, () => ['app/Actions/RangeSelectAction.php'])
+  await mockApprovals(page)
+  await mockLandedCode(page, () => landed)
+  await page.route('**/api/events*', async (route) => {
+    await released
+    landed = true
+    await route.fulfill({
+      status: 200,
+      headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' },
+      // Deliberately no data.landedFiles at all — the same shape as the
+      // "colleague pushed" test above, but this time the checkout read model
+      // (mocked above) says otherwise.
+      body: 'retry: 300\n\n' + `data: ${JSON.stringify({ type: 'blocks.changed', pr: 102, seq: 1 })}\n\n`,
+    })
+  })
+
+  await page.goto('/pr/102')
+  const row = page.getByTestId('block-row').filter({ hasText: 'RangeSelectAction::execute' })
+  await row.click()
+  const diff = selectedCard(page)
+  await expect(diff).toContainText('$a = 1;')
+  const bar = page.getByTestId('top-loading-bar')
+  await expect(bar).toBeHidden()
+
+  release()
+
+  // Recognised as our own landing via the checkout read model — never the
+  // manual stale-tree notice.
+  await expect(page.getByTestId('blocks-stale')).toHaveCount(0)
+  // The landed source arrives without a manual reload, and the loading bar
+  // never gets stuck spinning.
+  await expect(diff).toContainText('$a = 4242;')
+  await expect(bar).toBeHidden()
+})
+
 // PR 102's head worktree holds `$a = 1;` in RangeSelectAction::execute (see
 // materializeRangeSelectWorktrees, tests/_setup.mjs). Patching the LIVE
 // /api/code response is how these two tests simulate "the ingest refresh moved

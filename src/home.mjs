@@ -9567,8 +9567,18 @@ function dHintUsable() {
 // (afterApproveAction/spaceKey) this was built for — no separate "was this an
 // auto-advance" flag. See "A separate, always-visible progress bar" sibling
 // note for TopLoadingBar in footer.md.
+//
+// Also reads state.codeVersion (bumped by every ensureCode completion) purely
+// as a dependency-hardening no-op: this binding's own read of `b.code` can,
+// like the DetailPanel's diff pane, intermittently miss a null→loaded update
+// (see "arrow.js reuses a keyed node..." in arrowjs-pitfalls.md) — codeVersion
+// is the same established fallback trigger the diff pane already relies on,
+// so a dropped `b.code` notification no longer leaves this bar spinning
+// forever. Reported symptom this guards against: "oneindig aan het laden"
+// after a chat-landed edit refreshed the block underneath the reviewer.
 function topLoadingActive() {
   if (state.mode !== 'diff' || state.focusLevel !== 0) return false
+  void state.codeVersion
   const b = curBlock()
   return !!b && b.kind !== 'comment' && b.kind !== 'test_class' && (b.code === undefined || b.code === null)
 }
@@ -18027,19 +18037,37 @@ onEvent('blocks.changed', (ev) => {
   // that swapped the blocks table (see blocksChangedPayload, eventbus.go, and
   // "Wordt bijgewerkt" in .claude/docs/pending-push.md). Reading it straight
   // off the event is deliberate: state.checkout.refreshingFiles (a SEPARATELY
-  // fetched read model) cannot be trusted for this decision — tembed drives a
-  // landing's whole ingest-refresh fully inline/synchronously, so blocks.changed
-  // can reach this tab before any fetch of that other read model would ever
-  // see it non-empty. Still only a ROUTING hint, never the truth: either
-  // branch below still does a real read (refreshBlocksAfterOwnLanding fetches
-  // GET /api/blocks for real; the manual path re-reads on the reviewer's own
-  // reload) — a missing/dropped frame simply falls back to the existing
-  // manual staleTreeRow path, exactly as before this feature existed.
+  // fetched read model) cannot be trusted as the PRIMARY signal for this
+  // decision — tembed drives a landing's whole ingest-refresh fully inline/
+  // synchronously, so blocks.changed can reach this tab before any fetch of
+  // that other read model would ever see it non-empty. Still only a ROUTING
+  // hint, never the truth: either branch below still does a real read
+  // (refreshBlocksAfterOwnLanding fetches GET /api/blocks for real; the
+  // manual path re-reads on the reviewer's own reload) — a missing/dropped
+  // frame simply falls back to the existing manual staleTreeRow path, exactly
+  // as before this feature existed. It IS used below as a narrow FALLBACK,
+  // once this event's own payload has already come back empty — see that
+  // branch's own comment.
   const files = ev && ev.data && Array.isArray(ev.data.landedFiles) ? ev.data.landedFiles : []
   if (files.length) {
     refreshBlocksAfterOwnLanding(files)
     // Best-effort refresh of the (purely cosmetic) "wordt bijgewerkt" pill —
     // unrelated to the decision above, which never depends on this read model.
+    loadCheckout()
+  } else if (checkoutRefreshingFiles().size) {
+    // Vangnet: this ONE frame's own payload carried no landedFiles, but the
+    // separately-polled checkout read model (state.checkout.refreshingFiles)
+    // already knows OUR OWN chat edit is what's being re-ingested right now —
+    // it's cleared server-side in the very same Activity call that publishes
+    // this event (see clearChatRefreshPendingFiles' own doc comment), so at
+    // the moment a landedFiles-less frame reaches us it is still a reliable,
+    // if slightly stale, positive signal that this is NOT "a colleague
+    // pushed" (the case the plain else branch below stays scoped to). Without
+    // this, ensureCode's codeRequested guard for the touched file(s) never
+    // gets invalidated, and the block stays on its pre-landing (or code-less,
+    // post-refresh) object forever — the reported "oneindig aan het laden"
+    // TopLoadingBar, see topLoadingActive's own doc comment.
+    refreshBlocksAfterOwnLanding([...checkoutRefreshingFiles()])
     loadCheckout()
   } else {
     state.blocksStale = true

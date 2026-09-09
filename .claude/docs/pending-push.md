@@ -359,6 +359,52 @@ anywhere depends on whether this frame ever reaches a browser.
   net hebt aangepast, als dat mogelijk is"). No such candidate → the generic
   index-0 fallback stands, untouched.
 
+#### The vangnet: a `blocks.changed` frame with no `landedFiles`, but `state.checkout.refreshingFiles` already knows better
+
+Reviewer report ("oneindig aan het laden"): a chat edit landed and was
+confirmed "meteen zichtbaar in de review-tree" by Claude itself, yet the
+diff card the reviewer had open kept `TopLoadingBar` (`src/TopLoadingBar.mjs`)
+spinning forever. Root cause traced to `data/debug-log.jsonl` plus a live
+`GET /api/code` check against the exact block, which answered instantly with
+the already-landed source — so this was never a server hang, and not one of
+the documented arrow.js main-thread freezes either (`.claude/rules/
+arrowjs-pitfalls.md`): the reactive graph and the server were both healthy,
+only `ensureCode`'s own `codeRequested` guard for this one block never got
+invalidated, because the `blocks.changed` frame that (should have) triggered
+`refreshBlocksAfterOwnLanding` reached the tab with an empty/missing
+`data.landedFiles` — the exact routing-hint gap the "Still just a routing
+hint" paragraph above already calls out, just never closed on the FRONT END
+before now (only the `pendingPushView.TreeCaughtUp` poll below closed it, and
+only on its own 10s cadence).
+
+`onEvent('blocks.changed', ...)` (`home.mjs`) now has a narrow fallback branch
+between the two existing ones: `data.landedFiles` empty, but
+`checkoutRefreshingFiles().size` (the SAME `state.checkout.refreshingFiles`
+registry the "wordt bijgewerkt" pill already reads) non-empty →
+`refreshBlocksAfterOwnLanding([...checkoutRefreshingFiles()])` anyway, instead
+of falling all the way through to the manual `staleTreeRow` notice. Safe to
+use here even though the primary decision above deliberately does NOT trust
+this registry as its first signal (a landing's OWN `blocks.changed` can beat a
+fresh fetch of this separately-polled read model there): `chat_refresh_pending.go`'s
+own doc comment states the registry is "cleared once an ingest-refresh
+actually swapped the blocks table... the same moment `blocks.changed` is
+published" — i.e. server-side these two happen in the SAME Activity call, so
+whatever stale-but-still-populated snapshot the tab already holds for
+`state.checkout.refreshingFiles` at the moment a landedFiles-less frame
+arrives is exactly the positive signal needed to tell "this is still my own
+landing, the payload just didn't say so" apart from "a colleague pushed"
+(where this registry is empty by construction). `topLoadingActive()`
+(`home.mjs`) also now reads `state.codeVersion` as a defensive, additional
+dependency — the same established fallback trigger the DetailPanel's own
+keyed diff card already relies on — so a dropped `b.code` notification alone
+can no longer leave the bar stuck even in some other, not-yet-identified
+scenario.
+
+Test: the new case in `tests/refreshing-pill.spec.mjs` (a `blocks.changed`
+frame with no `landedFiles`, `mockCheckout` returning the touched file as
+`refreshingFiles`) — asserts no `blocks-stale` notice, the landed source
+replacing the old, and `top-loading-bar` never stuck visible.
+
 #### Refreshing the blocks is not enough: the CODE and the approvals live outside them
 
 Reviewer report: "ik zie de aanpassing niet verschijnen, ook na 10 seconden
