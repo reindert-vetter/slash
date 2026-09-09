@@ -2782,13 +2782,41 @@ function ticketCard() {
 // workflowNote (RelatedPanel.mjs) reads `run.note` first, before its own
 // workflow/status table, exactly so this override works with no change to
 // what "trouble" rows the tree itself ever produces.
+//
+// Reviewer report (task 52): pressing "meer vragen genereren"/"plan
+// opstellen" gave no sense that anything had started — the Taken block IS
+// meant to show this (that's the whole point of the override above), but two
+// gaps made it read as "nothing happening" rather than "busy right now":
+// `updatedAt` stayed at the run's OLD timestamp, so the row said e.g. "bezig"
+// right next to "3 uur geleden" — a contradiction easy to dismiss as stale —
+// and both actions shared one generic note, giving no link back to which
+// button was just pressed. Both are fixed here: `updatedAt` is bumped to now
+// on every override, and the note matches the row's own wording
+// (followupWord/regenerateWord). A THIRD gap — no `plan` run in state.runs at
+// all yet (the very first action on a fresh ticket, before ensureTracker's
+// run has ever been polled back) — is covered by synthesizing one row instead
+// of silently having nothing to override.
+function busyGeneratingNote() {
+  if (state.followupPending) return t('vragen worden bedacht…')
+  if (state.regeneratePending) return t('nieuw plan wordt opgesteld…')
+  return t('plan wordt opgesteld…')
+}
+
 function planWorkflowsForPanel() {
-  return (state.runs || []).map((run) => {
-    if (run.workflow === 'plan' && run.status !== 'failed' && busyGenerating()) {
-      return { ...run, status: 'running', note: t('plan wordt opgesteld…') }
+  const runs = state.runs || []
+  if (!busyGenerating()) return runs
+  const note = busyGeneratingNote()
+  const nowIso = new Date().toISOString()
+  let found = false
+  const mapped = runs.map((run) => {
+    if (run.workflow === 'plan' && run.status !== 'failed') {
+      found = true
+      return { ...run, status: 'running', note, updatedAt: nowIso }
     }
     return run
   })
+  if (!found) mapped.push({ runId: 'plan-pending', workflow: 'plan', status: 'running', note, updatedAt: nowIso })
+  return mapped
 }
 
 // planProblemsForPanel is `state.pageProblems`: this page has no repo-wide
@@ -3592,10 +3620,18 @@ function followupCard() {
     >
       <div class="flex items-center gap-2">
         <span class="min-w-0 flex-1 text-[13px] font-medium text-slate-900 dark:text-zinc-100">${t('Vervolgvragen om het plan te perfectioneren')}</span>
-        <span
-          class="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10.5px] font-medium text-slate-600 dark:bg-zinc-800 dark:text-zinc-300"
+        <button
+          type="button"
+          class="shrink-0 rounded-md bg-indigo-500 px-2.5 py-1 text-[10.5px] font-medium text-white hover:bg-indigo-600 disabled:cursor-not-allowed disabled:opacity-50"
           data-testid="plan-followup-state"
-          >${() => followupWord()}</span
+          disabled="${() => busyGenerating() || !!state.saving}"
+          @click="${(e) => {
+            e.stopPropagation()
+            state.cur = FOLLOWUP_ROW_ID
+            focusColumn1()
+            sendFollowup()
+          }}"
+          >${() => followupWord()}</button
         >
       </div>
       <p class="mt-0.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
@@ -3637,10 +3673,18 @@ function regenerateCard() {
     >
       <div class="flex items-center gap-2">
         <span class="min-w-0 flex-1 text-[13px] font-medium text-slate-900 dark:text-zinc-100">${t('Plan opnieuw opstellen')}</span>
-        <span
-          class="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10.5px] font-medium text-slate-600 dark:bg-zinc-800 dark:text-zinc-300"
+        <button
+          type="button"
+          class="shrink-0 rounded-md bg-indigo-500 px-2.5 py-1 text-[10.5px] font-medium text-white hover:bg-indigo-600 disabled:cursor-not-allowed disabled:opacity-50"
           data-testid="plan-regenerate-state"
-          >${() => regenerateWord()}</span
+          disabled="${() => busyGenerating() || !!state.saving}"
+          @click="${(e) => {
+            e.stopPropagation()
+            state.cur = REGENERATE_ROW_ID
+            focusColumn1()
+            sendRegenerate()
+          }}"
+          >${() => regenerateWord()}</button
         >
       </div>
       <p class="mt-0.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">

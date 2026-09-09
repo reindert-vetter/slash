@@ -149,7 +149,20 @@ reactive):
   backward-compatible addition (every real `WorkflowRunView` off the Go JSON
   never carries this field, so every PR-tree call site is unaffected) added
   specifically so this override works with no other change to the shared
-  function.
+  function. **Also bumps `updatedAt` to now, and picks an action-specific
+  note** (reviewer report, task 52, screenshot "ik zie het niet als een taak
+  wat bezig is"): without the timestamp bump the row said "bezig" right next
+  to its OLD `relTime` ("3 uur geleden"), reading as stale/contradictory
+  rather than "started just now"; the note used to be one generic "plan
+  wordt opgesteld…" for both `followupPending` and `regeneratePending`,
+  now `busyGeneratingNote()` matches each action's own row wording
+  (`followupWord`/`regenerateWord`) so the Taken-block row is recognizably
+  the task that button just started. **If no `plan` run has been polled back
+  at all yet** (the very first click on a fresh ticket), a synthetic
+  `{runId:'plan-pending', workflow:'plan', status:'running', ...}` entry is
+  pushed instead of silently having nothing to override — the next real poll
+  replaces it with the genuine run. Test:
+  `tests/plan-followup-taken-row.spec.mjs`.
 - **`planProblemsForPanel()`** → `state.pageProblems`: `logErrors` is always
   `[]` (a planning ticket has no repo-wide `/api/problems` equivalent — that
   endpoint is PR-scoped). `failedRuns` holds every run genuinely
@@ -803,6 +816,17 @@ The index's flat nav list gets one more kind of row between the questions and
   answer.
 - The row only exists once there IS a plan to sharpen (a question or a task),
   so a still-generating page does not park the default cursor on it.
+- **The action itself (`plan-followup-state`/`plan-regenerate-state`) is a
+  real `<button>`**, not a plain status `<span>` (reviewer report, task 52,
+  screenshot: "dit ziet er niet uit als een knop, erop drukken heeft geen
+  zin") — styled with the app's own primary-button classes (solid indigo,
+  white text, `hover:`/`disabled:` states), `disabled` while
+  `busyGenerating() || state.saving` so it visibly greys out instead of
+  silently no-opping a click. Its own `@click` calls `e.stopPropagation()`
+  first (per the nested-click ordering rule in
+  `.claude/rules/arrowjs-pitfalls.md`) before doing exactly what the row's own
+  click already did; the rest of the card (title/description) stays clickable
+  via that same row-level handler.
 
 ### A second button right below it: "Plan opnieuw opstellen" (discard and regenerate)
 
