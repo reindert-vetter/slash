@@ -4056,7 +4056,7 @@ function commentsPanel() {
 function questionsColumn() {
   return html`
     <div
-      class="${() => 'flex shrink-0 flex-col ' + (state.col === 1 ? 'w-[62rem]' : 'w-[27rem]')}"
+      class="${() => 'flex shrink-0 flex-col ' + (state.col === 1 ? 'w-[50rem]' : 'w-[22rem]')}"
       data-testid="plan-questions-column"
       data-column-focused="${() => (state.col === 1 ? 'true' : 'false')}"
       @click="${() => focusColumn1()}"
