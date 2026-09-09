@@ -1293,6 +1293,17 @@ const chatProgressThrottle = 120 * time.Millisecond
 // only to turn an Edit/Write tool's absolute file_path into the repo-relative
 // path EditedFiles/the "wordt aangepast" pill actually compares against.
 func chatProgressSink(repo string, pr int, conversationID string, checkoutDir *string) func(claude.ChatEvent) {
+	return chatProgressSinkLogging(repo, pr, conversationID, checkoutDir, false)
+}
+
+// chatProgressSinkLogging is chatProgressSink with one extra choice: with
+// keepSteps set, every tool call is ALSO appended to the snapshot's own
+// growing Steps log instead of only overwriting Tool/Detail. Opt-in because
+// the whole snapshot travels over SSE on every frame — see
+// chatProgress.Steps. Only the plan page's own runs (plan_execute.go,
+// plan_workflow.go's planGenerate) ask for it; the review-tree chat keeps the
+// leaner frame it always had.
+func chatProgressSinkLogging(repo string, pr int, conversationID string, checkoutDir *string, keepSteps bool) func(claude.ChatEvent) {
 	var lastPublish time.Time
 	return func(ev claude.ChatEvent) {
 		snap, ok := mutateChatProgress(conversationID, func(p *chatProgress) {
@@ -1313,6 +1324,9 @@ func chatProgressSink(repo string, pr int, conversationID string, checkoutDir *s
 				}
 				if (ev.Tool == "Edit" || ev.Tool == "Write") && ev.Detail != "" {
 					addEditedFile(p, relativeToCheckout(*checkoutDir, ev.Detail))
+				}
+				if keepSteps {
+					appendChatStep(p, ev.Tool, ev.Detail)
 				}
 			case claude.ChatEventText:
 				// A tool/thinking block in between means this delta starts a
@@ -1340,6 +1354,29 @@ func chatProgressSink(repo string, pr int, conversationID string, checkoutDir *s
 		}
 		lastPublish = time.Now()
 		publishChatProgress(repo, pr, conversationID, snap)
+	}
+}
+
+// appendChatStep records one tool call in the snapshot's growing Steps log
+// (see chatProgress.Steps), oldest first, dropping the oldest entries once
+// maxChatProgressSteps is reached.
+//
+// One subtlety it has to absorb: a tool block is announced TWICE — the name
+// first, its arguments once they have streamed in (the same reason the
+// Tool/Detail branch above never lets an empty Detail overwrite a filled
+// one). So a second announcement of the same tool that only ADDS the detail
+// fills the entry already there instead of logging the same call twice.
+func appendChatStep(p *chatProgress, tool, detail string) {
+	if tool == "" {
+		return
+	}
+	if n := len(p.Steps); n > 0 && p.Steps[n-1].Tool == tool && p.Steps[n-1].Detail == "" {
+		p.Steps[n-1].Detail = detail
+		return
+	}
+	p.Steps = append(p.Steps, chatStep{Tool: tool, Detail: detail, At: nowMillis()})
+	if over := len(p.Steps) - maxChatProgressSteps; over > 0 {
+		p.Steps = append([]chatStep(nil), p.Steps[over:]...)
 	}
 }
 

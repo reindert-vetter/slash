@@ -109,6 +109,40 @@ func planChatConversationID(key string) string {
 	return "plan:" + key
 }
 
+// planGenerateConversationID and planExecuteConversationID are the same idea
+// for this page's two OTHER Claude runs — drafting the plan (planGenerate,
+// below) and executing it (plan_execute.go). Both are minutes long and used
+// to report nothing at all while they ran; they now stream through the very
+// same snapshot machinery the chat above uses, each under its own id so the
+// page can watch all three at once. Mirrored verbatim in src/plan.mjs
+// (genConvId/execConvId). Reviewer request: "ik wil heel uitgebreid zien wat
+// er nu gebeurd. dus llm moet output doorstreamen enzo".
+func planGenerateConversationID(key string) string {
+	return "plangen:" + key
+}
+
+func planExecuteConversationID(key string) string {
+	return "planexec:" + key
+}
+
+// planGenerateLabel words one generation PASS for the live-progress pane (see
+// chatProgress.Label): the reviewer sees which of planGenerate's modes is
+// running, not just "something is generating". Dutch, like every other
+// backend phrase that reaches the UI (translated at its render site through
+// src/i18n.mjs, see .claude/rules/conventions.md).
+func planGenerateLabel(mode string) string {
+	switch mode {
+	case "questions":
+		return "vragen bedenken"
+	case "followup":
+		return "vervolgvragen bedenken"
+	case "tasks":
+		return "taken bedenken"
+	default:
+		return "vragen en taken bedenken"
+	}
+}
+
 // planAnswerComment is the PlanAnswerSignal Kind the page sends right after a
 // reply was posted on a Jira comment (the jira_comment workflow did the actual
 // posting — see jira_comment.go): re-read the family's Jira comments onto the
@@ -1423,21 +1457,44 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 			return json.Marshal(doc)
 		}
 		prompt := planPrompt(doc, arg.Mode) + explainLangTail(m.LangFor(ctx, langpref.KindExplain))
+		// Live progress, same machinery as planChatReply below and
+		// plan_execute.go: this call has NO Tools, so it never reports a tool
+		// step — what makes it worth watching is the answer itself arriving
+		// token by token instead of five silent minutes. One snapshot per
+		// PASS (a fresh plan is two: questions, then tasks — see
+		// planGenerateFresh), each labelled, so the page can say which one is
+		// running rather than showing an anonymous stream.
+		genConv := planGenerateConversationID(doc.Key)
+		startChatProgress("", 0, genConv)
+		defer finishChatProgress("", 0, genConv)
+		setChatProgressLabel("", 0, genConv, "plan opstellen — "+planGenerateLabel(arg.Mode))
 		var qs []planQuestion
 		var tasks []planTask
 		var perr error
+		var checkoutDir string
 		for attempt := 1; attempt <= 2; attempt++ {
-			raw, err := m.claude.Run(ctx, claude.RunRequest{
+			if attempt > 1 {
+				// Attempt 1's unparseable answer is already in the snapshot;
+				// without this it stays glued in front of the retry's own
+				// text (the very reason resetChatProgressPartial exists, see
+				// runOneClaudeTurn).
+				resetChatProgressPartial("", 0, genConv)
+			}
+			advanceChatProgress("", 0, genConv, chatPhaseStarting)
+			result, err := m.claude.RunChat(ctx, claude.RunRequest{
 				Model:   claude.ModelOpus,
 				Prompt:  prompt,
 				Timeout: planClaudeTimeout,
+				OnEvent: chatProgressSinkLogging("", 0, genConv, &checkoutDir, true),
 			})
 			if err != nil {
 				m.logf("plan: generate %s (%s): %v", doc.Key, arg.Mode, err)
 				doc.Error = err.Error()
 				return json.Marshal(doc)
 			}
-			qs, tasks, perr = parsePlanAnswer(raw)
+			// TrimSpace because Run (which this call replaced) trimmed its own
+			// output and parsePlanAnswer has been fed trimmed text ever since.
+			qs, tasks, perr = parsePlanAnswer(strings.TrimSpace(result.Text))
 			if perr == nil {
 				break
 			}

@@ -1557,6 +1557,77 @@ machinery outright rather than reinventing a plan-specific version of it:
   tick via `page.route`, without touching the Go side at all, to make the race
   deterministic).
 
+### The generation AND the execution stream their output too ("ik wil heel uitgebreid zien wat er nu gebeurd. dus llm moet output doorstreamen enzo")
+
+The chat above was the first of this page's three Claude runs to stream; the
+other two — **drafting** the plan (`planGenerate`, `plan_workflow.go`) and
+**executing** it into a draft PR (`runPlanExecuteAgent`, `plan_execute.go`) —
+still reported a single word (`bezig…` / `draait…`) for the minutes they run,
+which is what the reviewer's screenshot
+(`data/review-shots/task55-draft-pr-live-output-streamen.png`) is about. Both
+now ride the exact same machinery, so nothing plan-specific was invented:
+
+- **Two more conversation ids**, mirrored verbatim in `src/plan.mjs`
+  (`genConvId`/`execConvId`): `planGenerateConversationID(key) =
+  "plangen:" + key` and `planExecuteConversationID(key) = "planexec:" + key`.
+  `repo`/`pr` stay `""`/`0`, exactly like the chat.
+- **`Run` → `RunChat`** in both, the same one-gap fix as `planChatReply`:
+  `Run` cannot stream at all. Both keep their own timeout behaviour unchanged
+  (`RunChat` computes `contextTimeout`/`agenticTimeout` identically, and
+  `planGenerate` still passes `planClaudeTimeout`), and `planGenerate` still
+  feeds `parsePlanAnswer` a `strings.TrimSpace`d answer, since `Run` used to
+  trim its own output.
+- **Two additive fields on `chatProgress`** (`chat_progress.go`), both
+  `omitempty`, both ignored by the review tree's own chat:
+  - `Label` — WHICH run this snapshot is, in words, set once via
+    `setChatProgressLabel`: `"plan uitvoeren"`, or
+    `"plan opstellen — " + planGenerateLabel(mode)`. The generation needs it
+    because one generation walks through several PASSES (`planGenerateFresh`:
+    questions, then tasks), each its own Activity and therefore its own
+    snapshot — without a label the pane would be an anonymous stream of text.
+  - `Steps` — the GROWING log of tool calls (where `Tool`/`Detail` only ever
+    hold the current one), capped at `maxChatProgressSteps` (80, oldest
+    dropped). **Opt-in**: `chatProgressSink` keeps its exact old behaviour and
+    delegates to the new `chatProgressSinkLogging(..., keepSteps)`, which only
+    these two runs pass `true` — the whole snapshot travels over SSE on every
+    frame, and the tree's chat renders only the one status line. `appendChatStep`
+    absorbs the CLI's double announcement of a tool block (name first,
+    arguments once they streamed in): the second one fills the entry already
+    there instead of logging the same call twice.
+- **`livePane(convId)`** (`src/plan.mjs`) renders one snapshot in four layers:
+  the label + `bezig`/`klaar` (a WORD, never a colour on its own), the status
+  line via **`claudeStatusText`** imported from `ClaudeChat.mjs` (so "Claude
+  leest X · 42s" reads identically wherever it appears), the step log, the
+  streamed text, and the edited files. Mounted twice: in the questions column
+  above the questions (`plan-generate-live`) and inside `executeCard` under its
+  button (`plan-execute-live`). Every binding reads the snapshot FRESH through
+  a local `cur()` rather than closing over one — a keyed node is reused without
+  re-running its bindings, so a captured snapshot would freeze the pane on
+  whichever frame mounted it (`.claude/rules/arrowjs-pitfalls.md`).
+- **The streamed text is Markdown for the execution, preformatted for the
+  generation** (`livePartialHTML`). The generation's answer is one big JSON
+  document by construction, and Markdown ate its braces/quotes into
+  emphasis — verified live against PAYM-813, before and after.
+- **`planConvIds()`** is the single list of the three conversations this page
+  watches, so the SSE filter, the resync read (`loadChatProgressResync` now
+  reads all three, so a tab opened mid-run catches up) and the 1s
+  elapsed-seconds ticker cannot drift apart. Only the chat's own thread
+  auto-scrolls via `scrollPlanChatThreadToBottom`; the two panes scroll
+  themselves (`scrollLivePaneToBottom`, `data-live-scroll`).
+- **One wart, deliberately handled rather than lived with**:
+  `finishChatProgress` hands a run's `EditedFiles` to `markChatFilesPending`
+  (`chat_edit_pending.go`), which is PR-scoped — for the execution that means
+  an entry under `prKey{"", 0}` nothing ever reads. `runPlanExecuteAgent`
+  therefore `defer`s `clearChatPendingFiles("", 0)` **before** it defers
+  `finishChatProgress`, so LIFO order runs the clear last.
+
+Tests: `TestChatProgressStepLogIsOptIn`, `TestChatProgressLabel`,
+`TestPlanGenerateLabelPerMode` (`chat_progress_test.go`) — the log's cap and
+de-duplication, the label, and the two conversation ids matching their
+frontend mirrors. The panes themselves were verified live against PAYM-813
+(a real follow-up generation: label per pass, seconds counting up, JSON
+streaming in, then `klaar`, zero page errors).
+
 ### Never two selections visible at once
 
 Reviewer report, verbatim (with screenshot
@@ -1786,6 +1857,11 @@ and the same drilled block column.
 Reviewer request, verbatim: *"als laatste actie in de index wil ik het in
 kunnen zetten naar een draft pr, dan moet het plan uitvoeren"* — the closing
 link of the chain todo → planning → needs your review → **draft PR**.
+
+While it runs, the card shows a **live pane** — the streamed answer text, the
+log of tool calls and the elapsed seconds — see "The generation AND the
+execution stream their output too" above; the run reports nothing else about
+itself until it finishes.
 
 The index's flat nav list (`navRows`) therefore ends in a third kind of row
 next to `option`/`task`: one **action** row (`EXEC_ROW_ID = 'exec'`,

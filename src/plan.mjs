@@ -40,7 +40,11 @@ import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 // live progress channel (events.mjs + claudeTurns.mjs) — see
 // ensurePlanChatEvents/chatView below and "Live progress" in
 // .claude/docs/plan-page.md. See planChatOverlay below.
-import { claudeChatColumn } from './ClaudeChat.mjs'
+// claudeStatusText comes from the same module: the one formatter that turns a
+// live progress snapshot into a status line ("Claude leest X · 42s"), reused
+// verbatim by this page's own live panes (livePane) so a running plan
+// generation/execution reads exactly like a running chat turn.
+import { claudeChatColumn, claudeStatusText } from './ClaudeChat.mjs'
 // The live "what is Claude doing right now" wiring behind this chat is
 // reused unchanged from the review tree: events.mjs's one multiplexed SSE
 // stream and claudeTurns.mjs's per-conversation snapshot store are both pure,
@@ -1099,14 +1103,39 @@ function chatConvId() {
   return 'plan:' + state.key
 }
 
-// syncPlanChatTicker runs a 1s heartbeat only while this ticket's own chat
-// turn is actually running — mirrors RelatedPanel.mjs's syncChatTicker
-// (module-private there, so a small copy lives here too), trimmed to the one
-// conversation this page ever has.
+// genConvId/execConvId are the same for this page's two OTHER Claude runs —
+// drafting the plan and executing it into a draft PR — mirroring
+// planGenerateConversationID/planExecuteConversationID (plan_workflow.go).
+// Both used to report nothing at all while they ran, for minutes; they now
+// stream through the very same snapshot machinery the chat above uses.
+// Reviewer request: "ik wil heel uitgebreid zien wat er nu gebeurd. dus llm
+// moet output doorstreamen enzo".
+function genConvId() {
+  return 'plangen:' + state.key
+}
+
+function execConvId() {
+  return 'planexec:' + state.key
+}
+
+// planConvIds is every conversation this page watches — the one place the set
+// is written down, so the SSE filter, the resync read and the elapsed-seconds
+// ticker below can never drift apart on which runs they cover.
+function planConvIds() {
+  return [chatConvId(), genConvId(), execConvId()]
+}
+
+// syncPlanChatTicker runs a 1s heartbeat while ANY of this page's runs is
+// actually going — mirrors RelatedPanel.mjs's syncChatTicker (module-private
+// there, so a small copy lives here too). One timer for all three: it only
+// bumps state.chatTick, which every elapsed-seconds reader already depends
+// on.
 let chatTickTimer = null
 function syncPlanChatTicker() {
-  const p = turnProgress(chatConvId())
-  const running = !!(p && p.running)
+  const running = planConvIds().some((id) => {
+    const p = turnProgress(id)
+    return !!(p && p.running)
+  })
   if (running && !chatTickTimer) {
     chatTickTimer = setInterval(() => {
       state.chatTick = Date.now()
@@ -1142,10 +1171,16 @@ function scrollPlanChatThreadToBottom() {
 // loadChatProgressResync is the RESYNC read for the live-progress channel
 // (GET /api/chat/progress?commentId=...) — same generic, conversation-id-keyed
 // endpoint the review tree's own loadChatProgress uses (RelatedPanel.mjs),
-// just for this page's single fixed conversation. Runs on first connect and on
-// every SSE reconnect, never as a poll.
+// just for this page's own conversations. Runs on first connect and on every
+// SSE reconnect, never as a poll. It reads all three (see planConvIds) so a
+// tab opened or reloaded halfway through a generation/execution catches up on
+// what is already running instead of showing a silent card until the next
+// event happens to land.
 async function loadChatProgressResync() {
-  const convId = chatConvId()
+  await Promise.all(planConvIds().map(loadOneChatProgress))
+}
+
+async function loadOneChatProgress(convId) {
   const startedAt = Date.now()
   try {
     const res = await fetch('/api/chat/progress?commentId=' + encodeURIComponent(convId))
@@ -1156,7 +1191,7 @@ async function loadChatProgressResync() {
     if (lastTurnProgressAt(convId) > startedAt) return
     setTurnProgress(convId, json.running && json.progress ? json.progress : null)
     syncPlanChatTicker()
-    scrollPlanChatThreadToBottom()
+    if (convId === chatConvId()) scrollPlanChatThreadToBottom()
   } catch (_) {
     // a missing snapshot just means "no live turn known" — nothing to show
   }
@@ -1177,10 +1212,15 @@ function ensurePlanChatEvents() {
   planChatEventsBound = true
   const convId = chatConvId()
   onEvent('chat.progress', (ev) => {
-    if (ev.key !== convId) return
-    setTurnProgress(convId, ev.data || null)
+    // Any of this ticket's three runs (chat, generation, execution) — an
+    // unrelated conversation from another tab is still ignored.
+    if (!planConvIds().includes(ev.key)) return
+    setTurnProgress(ev.key, ev.data || null)
     syncPlanChatTicker()
-    scrollPlanChatThreadToBottom()
+    // Only the chat's own thread scrolls; the two live panes below scroll
+    // themselves (scrollLivePaneToBottom).
+    if (ev.key === convId) scrollPlanChatThreadToBottom()
+    else scrollLivePaneToBottom(ev.key)
   })
   onEvent('chat.message', (ev) => {
     if (ev.key !== convId) return
@@ -3510,6 +3550,152 @@ function taskRow(row) {
   `.key('task:' + task.id)
 }
 
+// ------------------------------------------ the live pane of a running run
+
+// livePane is the "what is Claude doing right now" block of ONE of this
+// page's Claude runs — the plan generation (genConvId) and the plan execution
+// (execConvId) each render their own. Reviewer request: "ik wil heel
+// uitgebreid zien wat er nu gebeurd. dus llm moet output doorstreamen enzo" —
+// both runs take minutes and used to show a single word while they ran.
+//
+// It renders the volatile per-conversation snapshot (chat_progress.go, pushed
+// over SSE and mirrored into claudeTurns.mjs) in four layers, coarsest first:
+//
+//   1. the run's own name plus a status line — the SAME formatter the review
+//      tree's chat uses (claudeStatusText), so "Claude leest X · 42s" reads
+//      identically wherever it appears,
+//   2. the growing log of tool calls (`steps`, only filled for these two runs
+//      — see chatProgress.Steps), so the reviewer sees the whole path taken
+//      and not just the current step,
+//   3. the streamed answer text itself (`partial`), as Markdown,
+//   4. the files it has edited so far, when there are any.
+//
+// One snapshot per run: once it finishes the pane stays, headed by the WORD
+// "klaar" (never a colour on its own), so what just happened is still
+// readable — the same choice test_run_progress.go makes server-side.
+function liveTestid(convId) {
+  return convId === execConvId() ? 'plan-execute-live' : 'plan-generate-live'
+}
+
+// scrollLivePaneToBottom keeps a streaming pane pinned to its newest line.
+// Both panes scroll THEMSELVES (never an ancestor — see the scrollIntoView
+// axis rule in .claude/rules/arrowjs-pitfalls.md, and this page's own
+// scrollPlanChatThreadToBottom).
+function scrollLivePaneToBottom(convId) {
+  const testid = liveTestid(convId)
+  requestAnimationFrame(() => {
+    document.querySelectorAll('[data-testid=' + testid + '] [data-live-scroll]').forEach((el) => {
+      el.scrollTop = el.scrollHeight
+    })
+  })
+}
+
+// liveElapsedSeconds reads state.chatTick purely to register the 1s heartbeat
+// as a reactive dependency (see syncPlanChatTicker) — the value itself is
+// never used, exactly like chatView's own elapsed getter.
+function liveElapsedSeconds(p) {
+  void state.chatTick
+  if (!p || !p.startedAt) return 0
+  return Math.max(0, Math.round((Date.now() - p.startedAt) / 1000))
+}
+
+// liveStepsHTML renders the tool log as ONE escaped HTML string rather than a
+// keyed list: it is append-only and capped server-side, so a keyed list would
+// only buy the reuse pitfalls (a reused node whose bindings never re-run, see
+// .claude/rules/arrowjs-pitfalls.md) for a block of plain text.
+function liveStepsHTML(steps) {
+  return (steps || [])
+    .map(
+      (s) =>
+        '<div class="truncate"><span class="font-medium">' +
+        escapeHtml(s.tool || '') +
+        '</span>' +
+        (s.detail ? ' <span class="text-slate-500 dark:text-zinc-400">' + escapeHtml(s.detail) + '</span>' : '') +
+        '</div>',
+    )
+    .join('')
+}
+
+// Every binding below reads the snapshot FRESH through cur() instead of
+// closing over the one livePane was called with: arrow.js reuses a keyed node
+// without re-running its bindings, so a captured snapshot would freeze the
+// pane on whichever frame happened to mount it (see "A keyed node is reused
+// without re-running its bindings" in .claude/rules/arrowjs-pitfalls.md).
+// Reading it inside the binding also registers the dependency on the store,
+// which is what makes each new SSE frame repaint this pane.
+// livePartialHTML renders the streamed answer text — as Markdown for the
+// EXECUTION (prose: Claude explaining what it is doing), as preformatted text
+// for the GENERATION, whose answer is one big JSON document by construction
+// (parsePlanAnswer, plan_workflow.go). Running that through Markdown ate its
+// braces and quotes into emphasis/headings, which made the one thing the
+// reviewer wanted to watch harder to read, not easier. Verified live against
+// PAYM-813.
+function livePartialHTML(convId, text) {
+  if (convId === execConvId()) return renderMarkdown(text)
+  return '<pre class="whitespace-pre-wrap break-words font-mono text-[10.5px]">' + escapeHtml(text) + '</pre>'
+}
+
+function livePane(convId) {
+  if (!turnProgress(convId)) return []
+  const cur = () => turnProgress(convId) || {}
+  return [
+    html`
+      <div
+        class="mt-2 rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 dark:border-zinc-800 dark:bg-zinc-900/60"
+        data-testid="${liveTestid(convId)}"
+      >
+        <div class="flex items-baseline gap-1.5">
+          <span class="min-w-0 flex-1 truncate text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-zinc-400"
+            >${() => t(cur().label || 'Claude')}</span
+          >
+          <span class="shrink-0 text-[10.5px] text-slate-500 dark:text-zinc-400" data-testid="${liveTestid(convId) + '-state'}"
+            >${() => (cur().running ? t('bezig') : t('klaar'))}</span
+          >
+        </div>
+        <p class="mt-0.5 text-[11.5px] leading-relaxed text-slate-600 dark:text-zinc-300" data-testid="${liveTestid(convId) + '-status'}">
+          ${() =>
+            cur().running
+              ? claudeStatusText(cur(), liveElapsedSeconds(cur()))
+              : t('klaar') + ' \u00b7 ' + liveElapsedSeconds(cur()) + 's'}
+        </p>
+        <div class="contents">
+          ${() =>
+            (cur().steps || []).length
+              ? html`<div
+                  class="mt-1 max-h-32 overflow-y-auto font-mono text-[10.5px] leading-relaxed text-slate-600 dark:text-zinc-300"
+                  data-live-scroll="true"
+                  data-testid="${liveTestid(convId) + '-log'}"
+                  .innerHTML="${() => liveStepsHTML(cur().steps)}"
+                ></div>`
+              : ''}
+        </div>
+        <div class="contents">
+          ${() =>
+            cur().partial
+              ? html`<div
+                  class="markdown-body mt-1 max-h-48 overflow-y-auto rounded border border-slate-200 bg-white px-1.5 py-1 text-[11.5px] leading-relaxed dark:border-zinc-800 dark:bg-zinc-950/40"
+                  data-live-scroll="true"
+                  data-testid="${liveTestid(convId) + '-partial'}"
+                  .innerHTML="${() => livePartialHTML(convId, cur().partial || '')}"
+                ></div>`
+              : ''}
+        </div>
+        <div class="contents">
+          ${() =>
+            (cur().editedFiles || []).length
+              ? html`<p
+                  class="mt-1 text-[10.5px] leading-relaxed text-slate-500 dark:text-zinc-400"
+                  data-testid="${liveTestid(convId) + '-files'}"
+                >
+                  ${t('aangepast')}: ${(cur().editedFiles || []).join(', ')}
+                </p>`
+              : ''}
+        </div>
+      </div>
+    `.key('live:' + convId),
+  ]
+}
+
 // executeCard is the last card of the index: one action row that runs the
 // plan. It reports its state in WORDS (never a colour on its own, per the
 // colourblind rule) and links to the draft PR once there is one.
@@ -3578,6 +3764,7 @@ function executeCard(row) {
       >
         ${() => execButtonWord()}
       </button>
+      <div class="contents">${() => livePane(execConvId())}</div>
       <div class="contents">
         ${() =>
           state.exec && state.exec.prUrl
@@ -4066,6 +4253,7 @@ function questionsColumn() {
         <div class="contents">${() => (intentInQuestionsColumn() ? [intentField('questions')] : [])}</div>
         <div class="contents">${() => (intentInQuestionsColumn() ? [intentToSpecsHint()] : [])}</div>
         <div class="contents">${() => (intentCommentsColumnVisible() ? [] : [commentsPanel()])}</div>
+        <div class="contents">${() => livePane(genConvId())}</div>
         ${() => (gateOpen() ? [] : (state.doc.questions || []).map((q, qi) => questionCard(q, qi)))}
         ${() =>
           !gateOpen() && !state.loading && !(state.doc.questions || []).length

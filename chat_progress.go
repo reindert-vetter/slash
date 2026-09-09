@@ -74,8 +74,26 @@ type chatProgress struct {
 	// er een status bij elk blok uit dat bestand met dat het bezig met een
 	// aanpassing, dat moet weg als het is aangepast").
 	EditedFiles []string `json:"editedFiles,omitempty"`
-	StartedAt   int64    `json:"startedAt"` // unix ms
-	UpdatedAt   int64    `json:"updatedAt"` // unix ms
+	// Label names WHICH run this snapshot describes, in the reviewer's own
+	// words ("plan uitvoeren", "plan opstellen — vragen bedenken"). A chat
+	// turn needs none (the panel it renders in already says what it is), but
+	// the plan page watches several DIFFERENT runs through this very same
+	// per-conversation machinery, and a generation that walks through more
+	// than one pass (planGenerateFresh: questions, then tasks) would
+	// otherwise show an anonymous stream of text. Set once, at start —
+	// setChatProgressLabel.
+	Label string `json:"label,omitempty"`
+	// Steps is the GROWING log of tool calls this run made, oldest first and
+	// capped at maxChatProgressSteps — where Tool/Detail hold only the
+	// CURRENT one. Filled exclusively for a caller that opted in
+	// (chatProgressSinkLogging's keepSteps), because every snapshot travels
+	// whole over SSE on each frame and the review-tree chat, which renders
+	// only the one status line, has no use for the extra bytes. Reviewer
+	// request behind it: "ik wil heel uitgebreid zien wat er nu gebeurd" for
+	// the plan page's own minutes-long agentic run.
+	Steps     []chatStep `json:"steps,omitempty"`
+	StartedAt int64      `json:"startedAt"` // unix ms
+	UpdatedAt int64      `json:"updatedAt"` // unix ms
 	// repo/pr are unexported on purpose: they exist only so the PR-wide read
 	// (runningChatProgressForPR, GET /api/chat/progress?pr=N) can filter the
 	// map, and encoding/json skips them — the pushed frame's shape is
@@ -83,6 +101,21 @@ type chatProgress struct {
 	repo string
 	pr   int
 }
+
+// chatStep is one entry of chatProgress.Steps: a tool call as it happened.
+// Detail arrives already truncated by modules/claude (maxEventDetail), so a
+// huge Bash command or Edit payload can never travel along in full.
+type chatStep struct {
+	Tool   string `json:"tool,omitempty"`
+	Detail string `json:"detail,omitempty"`
+	At     int64  `json:"at"` // unix ms
+}
+
+// maxChatProgressSteps bounds that log. A long agentic run makes hundreds of
+// tool calls; the reviewer is watching what it is doing NOW plus the recent
+// history, and the whole snapshot is re-sent on every frame — so the OLDEST
+// entries are dropped once the cap is reached, never the newest.
+const maxChatProgressSteps = 80
 
 var (
 	chatProgressMu     sync.Mutex
@@ -115,6 +148,19 @@ func startChatProgress(repo string, pr int, conversationID string) {
 func advanceChatProgress(repo string, pr int, conversationID, phase string) {
 	snap, ok := mutateChatProgress(conversationID, func(p *chatProgress) {
 		p.Phase = phase
+	})
+	if !ok {
+		return
+	}
+	publishChatProgress(repo, pr, conversationID, snap)
+}
+
+// setChatProgressLabel names the running snapshot (see chatProgress.Label) —
+// the same mutate+publish pair advanceChatProgress uses. A no-op once the run
+// finished, like every other mutator here.
+func setChatProgressLabel(repo string, pr int, conversationID, label string) {
+	snap, ok := mutateChatProgress(conversationID, func(p *chatProgress) {
+		p.Label = label
 	})
 	if !ok {
 		return

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -203,5 +204,101 @@ func TestChatProgressSeparatesTextBlocksAfterATool(t *testing.T) {
 	p, _ = chatProgressFor("conv-sep")
 	if p.Partial != want+" Klaar." {
 		t.Fatalf("partial after same-block delta = %q", p.Partial)
+	}
+}
+
+// The plan page's own runs (plan_execute.go, plan_workflow.go's planGenerate)
+// need the WHOLE path Claude took, not just its current step — reviewer
+// request "ik wil heel uitgebreid zien wat er nu gebeurd". That log is opt-in
+// (chatProgressSinkLogging's keepSteps), because every snapshot travels whole
+// over SSE and the review-tree chat renders only the one status line.
+func TestChatProgressStepLogIsOptIn(t *testing.T) {
+	resetChatProgress()
+	defer resetChatProgress()
+
+	var dir string
+	startChatProgress("", 0, "conv-plain")
+	plain := chatProgressSink("", 0, "conv-plain", &dir)
+	plain(claude.ChatEvent{Kind: claude.ChatEventTool, Tool: "Read", Detail: "foo.go"})
+	if p, _ := chatProgressFor("conv-plain"); len(p.Steps) != 0 {
+		t.Fatalf("the default sink must log no steps, got %v", p.Steps)
+	} else if p.Tool != "Read" {
+		t.Fatalf("the default sink must still report the current tool, got %+v", p)
+	}
+
+	startChatProgress("", 0, "conv-log")
+	logged := chatProgressSinkLogging("", 0, "conv-log", &dir, true)
+	// A tool block is announced twice — the name first, its arguments once
+	// they streamed in. That is ONE call, not two log lines.
+	logged(claude.ChatEvent{Kind: claude.ChatEventTool, Tool: "Read"})
+	logged(claude.ChatEvent{Kind: claude.ChatEventTool, Tool: "Read", Detail: "foo.go"})
+	logged(claude.ChatEvent{Kind: claude.ChatEventTool, Tool: "Bash", Detail: "go build ./..."})
+	logged(claude.ChatEvent{Kind: claude.ChatEventText, TextDelta: "eerste stuk "})
+	logged(claude.ChatEvent{Kind: claude.ChatEventText, TextDelta: "tweede stuk"})
+	p, _ := chatProgressFor("conv-log")
+	if len(p.Steps) != 2 {
+		t.Fatalf("Steps = %+v, want one entry per tool CALL", p.Steps)
+	}
+	if p.Steps[0].Tool != "Read" || p.Steps[0].Detail != "foo.go" {
+		t.Fatalf("the second announcement must fill the entry already there, got %+v", p.Steps[0])
+	}
+	if p.Steps[1].Tool != "Bash" || p.Steps[1].Detail != "go build ./..." {
+		t.Fatalf("Steps[1] = %+v", p.Steps[1])
+	}
+	if p.Partial != "eerste stuk tweede stuk" {
+		t.Fatalf("Partial = %q, want the streamed answer text accumulated", p.Partial)
+	}
+
+	// Past the cap the OLDEST entries go, never the newest: the reviewer is
+	// watching what it is doing now plus the recent history.
+	for i := 0; i < maxChatProgressSteps+10; i++ {
+		logged(claude.ChatEvent{Kind: claude.ChatEventTool, Tool: "Grep", Detail: "pattern-" + strconv.Itoa(i)})
+	}
+	p, _ = chatProgressFor("conv-log")
+	if len(p.Steps) != maxChatProgressSteps {
+		t.Fatalf("len(Steps) = %d, want the cap %d", len(p.Steps), maxChatProgressSteps)
+	}
+	if last := p.Steps[len(p.Steps)-1]; last.Detail != "pattern-"+strconv.Itoa(maxChatProgressSteps+9) {
+		t.Fatalf("the newest step must survive the cap, got %+v", last)
+	}
+	if p.Steps[0].Detail == "foo.go" {
+		t.Fatal("the oldest step should have been dropped by the cap")
+	}
+	finishChatProgress("", 0, "conv-log")
+}
+
+// setChatProgressLabel names WHICH run a snapshot describes — the plan page
+// watches three different ones through this same per-conversation machinery.
+func TestChatProgressLabel(t *testing.T) {
+	resetChatProgress()
+	defer resetChatProgress()
+
+	setChatProgressLabel("", 0, "conv-none", "plan uitvoeren") // no run: a no-op
+	if _, ok := chatProgressFor("conv-none"); ok {
+		t.Fatal("labelling a finished/unknown run must not create a snapshot")
+	}
+	startChatProgress("", 0, "conv-label")
+	setChatProgressLabel("", 0, "conv-label", "plan opstellen — taken bedenken")
+	if p, _ := chatProgressFor("conv-label"); p.Label != "plan opstellen — taken bedenken" {
+		t.Fatalf("Label = %q", p.Label)
+	}
+	finishChatProgress("", 0, "conv-label")
+}
+
+// planGenerateLabel words one generation pass for that label.
+func TestPlanGenerateLabelPerMode(t *testing.T) {
+	for mode, want := range map[string]string{
+		"questions": "vragen bedenken",
+		"followup":  "vervolgvragen bedenken",
+		"tasks":     "taken bedenken",
+		"all":       "vragen en taken bedenken",
+		"":          "vragen en taken bedenken",
+	} {
+		if got := planGenerateLabel(mode); got != want {
+			t.Errorf("planGenerateLabel(%q) = %q, want %q", mode, got, want)
+		}
+	}
+	if planExecuteConversationID("BUG-1") != "planexec:BUG-1" || planGenerateConversationID("BUG-1") != "plangen:BUG-1" {
+		t.Fatal("the conversation ids must match src/plan.mjs's execConvId/genConvId")
 	}
 }

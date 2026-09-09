@@ -802,4 +802,15 @@ export const EN = {
   'Uitrol/terugdraaien': 'Rollout/rollback',
   Randgevallen: 'Edge cases',
   'Buiten scope': 'Out of scope',
+  // The live panes of a running plan generation/execution (livePane,
+  // src/plan.mjs) plus the run labels the Go side sets on the snapshot
+  // (planGenerateLabel, plan_workflow.go / plan_execute.go).
+  bezig: 'working',
+  klaar: 'done',
+  aangepast: 'edited',
+  'plan uitvoeren': 'executing the plan',
+  'plan opstellen \u2014 vragen bedenken': 'drafting the plan \u2014 thinking up questions',
+  'plan opstellen \u2014 vervolgvragen bedenken': 'drafting the plan \u2014 thinking up follow-up questions',
+  'plan opstellen \u2014 taken bedenken': 'drafting the plan \u2014 thinking up tasks',
+  'plan opstellen \u2014 vragen en taken bedenken': 'drafting the plan \u2014 thinking up questions and tasks',
 }

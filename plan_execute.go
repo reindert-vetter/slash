@@ -521,6 +521,25 @@ func (m *TaskManager) runPlanExecuteAgent(ctx context.Context, arg planExecuteAg
 		res.Note = "Claude is niet beschikbaar, dus er is niets uitgevoerd."
 		return res
 	}
+	// Live progress (reviewer request: "ik wil heel uitgebreid zien wat er nu
+	// gebeurd. dus llm moet output doorstreamen enzo"): the same volatile
+	// snapshot + SSE push the review tree's chat and this page's own ticket
+	// chat already use (chat_progress.go, planChatReply), keyed on this
+	// ticket's execute conversation id. Nothing PR-specific leaks in as long
+	// as repo/pr stay ""/0 — see planChatReply's own doc comment. This is
+	// also why the Claude call below is RunChat rather than Run: only the
+	// streaming variant reports anything while it works.
+	convID := planExecuteConversationID(arg.Doc.Key)
+	// finishChatProgress hands whatever this run edited to the PR-scoped
+	// "wordt aangepast" registry (chat_edit_pending.go). There is no PR here,
+	// so that entry (prKey{"", 0}) is never read by anything — dropping it
+	// again keeps the map the size of the real PRs it is for. Registered
+	// FIRST on purpose: deferred calls run last-in-first-out, so this one has
+	// to sit below finishChatProgress to run after it.
+	defer clearChatPendingFiles("", 0)
+	startChatProgress("", 0, convID)
+	defer finishChatProgress("", 0, convID)
+	setChatProgressLabel("", 0, convID, "plan uitvoeren")
 	// A second execution is REFUSED once this plan's branch already carries a
 	// draft PR (reviewer decision). Because the plan now always returns to the
 	// same werkmap, a re-run would `checkout -B` that branch back onto
@@ -549,6 +568,7 @@ func (m *TaskManager) runPlanExecuteAgent(ctx context.Context, arg planExecuteAg
 	// another turn is mid-edit in.
 	release := acquireWriteTurnSlot(ctx, "dir:"+dir, func() {
 		m.logf("plan execute %s: waiting for the werkmap %s", arg.Doc.Key, dir)
+		advanceChatProgress("", 0, convID, chatPhaseWaiting)
 	})
 	defer release()
 
@@ -576,11 +596,18 @@ func (m *TaskManager) runPlanExecuteAgent(ctx context.Context, arg planExecuteAg
 	// The shell carve-out a chat turn already has: Claude may run git/tests
 	// itself while implementing (see .claude/rules/workflows-write-boundary.md,
 	// "the Claude chat turn may act through a shell").
-	if _, err := m.claude.Run(ctx, claude.RunRequest{
+	advanceChatProgress("", 0, convID, chatPhaseStarting)
+	if _, err := m.claude.RunChat(ctx, claude.RunRequest{
 		Model:   claude.ModelOpus,
 		Prompt:  planExecutePrompt(arg.Doc) + explainLangTail(m.LangFor(ctx, langpref.KindExplain)),
 		WorkDir: dir,
 		Tools:   []string{"Read", "Grep", "Glob", "Edit", "Bash"},
+		// The streamed tool calls and answer text the card renders live. Both
+		// RunChat and Run bound the call by the module's own agenticTimeout
+		// (Tools set), so the switch changes nothing about how long this may
+		// take. dir is already resolved here, so an Edit's absolute path is
+		// logged repo-relative.
+		OnEvent: chatProgressSinkLogging("", 0, convID, &dir, true),
 	}); err != nil {
 		m.logf("plan execute %s: claude: %v", arg.Doc.Key, err)
 		res.Note = "Claude kon het plan niet uitvoeren: " + err.Error()
