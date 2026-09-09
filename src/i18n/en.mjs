@@ -792,6 +792,8 @@ export const EN = {
     'Claude asks new questions based on your answers and then rebuilds the task list.',
   'meer vragen genereren': 'generate more questions',
   'vragen worden bedacht…': 'thinking up questions…',
+  'Kon geen verbinding maken met de tracker — probeer het nog eens.': 'Could not connect to the tracker — please try again.',
+  'Versturen is mislukt — probeer het nog eens.': 'Sending failed — please try again.',
   'bezig…': 'working…',
   Waar: 'Where',
   Voorwaarden: 'Conditions',

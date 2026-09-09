@@ -827,6 +827,25 @@ The index's flat nav list gets one more kind of row between the questions and
   `.claude/rules/arrowjs-pitfalls.md`) before doing exactly what the row's own
   click already did; the rest of the card (title/description) stays clickable
   via that same row-level handler.
+- **A failed signal is now visible** (task 54, reviewer report: "Plan
+  opstellen doet hier niets" on a live ticket — the click DID fire both
+  requests and the button DID show its busy word correctly, confirmed with a
+  network-intercepted repro; end-to-end driving of the real flow found no
+  reproducible backend failure either, questions/tasks/a draft-PR all
+  completed cleanly). `sendFollowup`/`sendRegenerate` used to swallow a
+  non-2xx response (or a thrown fetch) in an empty `catch` with zero trace —
+  neither a console error nor anything on screen, so a genuine transport-level
+  failure (as opposed to the tracker's own generation failing, which already
+  surfaces via `state.doc.error`/the Taken block's failed-run row) would have
+  read as "the button does nothing". `state.followupError`/
+  `state.regenerateError` (plain local strings, cleared at the start of the
+  next attempt) now render as a small `⚠ …` line under the card's own
+  description on a non-`res.ok` response or a caught exception —
+  deliberately **not** routed through `state.doc.error`/the Taken block's
+  retryable failed-run row: that row's own "retry" resends a swallowed
+  GENERATION error the tracker itself recorded (`kind:"retry"`), which is the
+  wrong mechanism for a signal that may never have reached the tracker at
+  all.
 
 ### A second button right below it: "Plan opnieuw opstellen" (discard and regenerate)
 

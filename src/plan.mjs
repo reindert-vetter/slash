@@ -190,6 +190,16 @@ const state = reactive({
   // shows the OLD questions/tasks until it lands. Local, exactly like
   // followupPending/scopePending/hotfixPending.
   regeneratePending: false,
+  // followupError/regenerateError: a non-2xx response (or a thrown fetch) on
+  // the follow-up/regenerate signal used to vanish into an empty `catch` with
+  // no trace anywhere (task 52/54 — a reviewer-reported "de knop doet niets").
+  // Purely local, own card only — deliberately NOT routed through
+  // state.doc.error/the Taken block's failed-run row: that mechanism's own
+  // "retry" resends a swallowed GENERATION error the tracker itself recorded,
+  // which is a different failure than the SIGNAL never reaching the tracker
+  // at all. Cleared at the start of the next attempt.
+  followupError: '',
+  regenerateError: '',
   // The reviewer's own bookkeeping per task (task 22): the CHECKBOX (default
   // on — unchecking drops the task from the plan and from every later
   // regeneration) and the FIELD next to it (which travels to the execution
@@ -713,19 +723,24 @@ const FOLLOWUP_ROW_ID = 'followup'
 // answer does.
 async function sendFollowup() {
   if (state.saving || state.followupPending) return
+  state.followupError = ''
   if (!state.runId) await ensureTracker()
-  if (!state.runId) return
+  if (!state.runId) {
+    state.followupError = t('Kon geen verbinding maken met de tracker — probeer het nog eens.')
+    return
+  }
   state.saving = FOLLOWUP_ROW_ID
   state.followupPending = true
   lastPayload = ''
   try {
-    await fetch('/api/workflows/' + encodeURIComponent(state.runId) + '/signals/plan_answer', {
+    const res = await fetch('/api/workflows/' + encodeURIComponent(state.runId) + '/signals/plan_answer', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ questionId: '', optionId: '', text: '', kind: 'followup' }),
     })
+    if (!res.ok) state.followupError = t('Versturen is mislukt — probeer het nog eens.')
   } catch (err) {
-    // Nothing to undo: the next poll shows what the tracker really stored.
+    state.followupError = t('Versturen is mislukt — probeer het nog eens.')
   }
   state.saving = ''
   state.followupPending = false
@@ -743,19 +758,24 @@ const REGENERATE_ROW_ID = 'regenerate'
 // sharpening the existing plan isn't the ask, a genuinely new one is.
 async function sendRegenerate() {
   if (state.saving || state.regeneratePending) return
+  state.regenerateError = ''
   if (!state.runId) await ensureTracker()
-  if (!state.runId) return
+  if (!state.runId) {
+    state.regenerateError = t('Kon geen verbinding maken met de tracker — probeer het nog eens.')
+    return
+  }
   state.saving = REGENERATE_ROW_ID
   state.regeneratePending = true
   lastPayload = ''
   try {
-    await fetch('/api/workflows/' + encodeURIComponent(state.runId) + '/signals/plan_answer', {
+    const res = await fetch('/api/workflows/' + encodeURIComponent(state.runId) + '/signals/plan_answer', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ questionId: '', optionId: '', text: '', kind: 'regenerate' }),
     })
+    if (!res.ok) state.regenerateError = t('Versturen is mislukt — probeer het nog eens.')
   } catch (err) {
-    // Nothing to undo: the next poll shows what the tracker really stored.
+    state.regenerateError = t('Versturen is mislukt — probeer het nog eens.')
   }
   state.saving = ''
   state.regeneratePending = false
@@ -3855,6 +3875,14 @@ function followupCard() {
       <p class="mt-0.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
         ${t('Claude stelt nieuwe vragen op basis van je antwoorden en stelt daarna de takenlijst opnieuw op.')}
       </p>
+      <div class="contents">
+        ${() =>
+          state.followupError
+            ? html`<p class="mt-1 text-[11px] font-medium text-rose-600 dark:text-rose-400" data-testid="plan-followup-error">
+                ⚠ ${state.followupError}
+              </p>`
+            : ''}
+      </div>
     </section>
   `.key('followup')
 }
@@ -3908,6 +3936,14 @@ function regenerateCard() {
       <p class="mt-0.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
         ${t('Het huidige plan (vragen en taken) wordt weggegooid en Claude stelt een volledig nieuw plan op.')}
       </p>
+      <div class="contents">
+        ${() =>
+          state.regenerateError
+            ? html`<p class="mt-1 text-[11px] font-medium text-rose-600 dark:text-rose-400" data-testid="plan-regenerate-error">
+                ⚠ ${state.regenerateError}
+              </p>`
+            : ''}
+      </div>
     </section>
   `.key('regenerate')
 }
