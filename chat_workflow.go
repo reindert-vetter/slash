@@ -907,6 +907,70 @@ func shouldEscalateForEmbeddedNeedWrite(text string) bool {
 	return d == nil || d.Type != "question"
 }
 
+// The three dead-end replies a write turn ends with when
+// prepareChatShellWorkDir cannot hand it a work directory (see the !ok branch
+// in runOneClaudeTurn). Named here rather than written inline because
+// isCheckoutDeadEnd has to recognise them again on the NEXT turn.
+// src/RelatedPanel.mjs duplicates the same three strings for its own
+// isCheckoutDeadEnd — keep both sides in sync if a sentence ever changes.
+const (
+	chatCheckoutChoiceOpenBody = "Ik kan nu geen code aanpassen: er staat nog een keuze open over de werkmap van deze PR. Maak die keuze en vraag het daarna opnieuw."
+	chatNoCheckoutBody         = "Voor dit verzoek heb ik schrijftoegang tot een lokale werkmap nodig, maar die is er niet. Voeg een pad toe aan `chatCheckoutDirs` in settings.json of clone de repo lokaal, en vraag het opnieuw."
+	chatCheckoutBlockedPrefix  = "Ik kan nu geen code aanpassen. "
+)
+
+// isCheckoutDeadEnd reports whether msg is one of those three replies: an
+// assistant turn that WANTED to change code and never got a work directory.
+// Mirrors src/RelatedPanel.mjs's function of the same name, which decides
+// whether to send the "Werkmap gekozen: … Ga verder met mijn vorige verzoek."
+// resume message at all.
+func isCheckoutDeadEnd(msg chat.Message) bool {
+	if msg.Role != "assistant" || !msg.NoShell {
+		return false
+	}
+	return msg.Body == chatCheckoutChoiceOpenBody ||
+		msg.Body == chatNoCheckoutBody ||
+		strings.HasPrefix(msg.Body, chatCheckoutBlockedPrefix)
+}
+
+// lastTurnWasCheckoutDeadEnd reports whether the LAST assistant message of
+// this conversation is such a dead end — i.e. the previous turn wanted write
+// access, was refused a work directory, and nothing has answered since.
+//
+// runOneClaudeTurn forces the escalation to attempt 2 on that basis alone,
+// without waiting for Claude to emit {"type":"need_write"} itself. Reason
+// (reviewer-reported, PR 13730, confirmed in the stored CLI transcript): the
+// read-only attempt of a RESUMED session whose earlier turn did have Edit and
+// Bash gets an explicit CLI notice that those two tools were retracted with
+// cause "denied" (a deferred_tools_delta plus a "do not call these tools"
+// system reminder). Claude then reads that as a permission RULE and explains
+// in prose that it is blocked, instead of emitting the directive — so the
+// werkmap choice the reviewer just made resolved nothing and the turn dead
+// ended a second time. That notice appears on every later read-only attempt
+// of any conversation that once escalated, so the prose net below
+// (looksLikeWriteRefusal) cannot be the only defence here: after a dead end
+// we already KNOW the pending request needs write access.
+//
+// A read method, so it is free to run inside this Activity (see
+// .claude/rules/workflows-write-boundary.md). A failed read simply means no
+// forced escalation — the ordinary directive/prose path still applies.
+func lastTurnWasCheckoutDeadEnd(ctx context.Context, cm *chat.Module, conversationID string) bool {
+	if cm == nil {
+		return false
+	}
+	msgs, err := cm.List(ctx, conversationID)
+	if err != nil {
+		return false
+	}
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role != "assistant" {
+			continue
+		}
+		return isCheckoutDeadEnd(msgs[i])
+	}
+	return false
+}
+
 // writeRefusalPhrases are the literal, lowercased fragments that mean "this
 // reply is Claude saying it cannot write here" — the prose it falls back to
 // instead of emitting {"type":"need_write"} (see looksLikeWriteRefusal). Kept
@@ -923,6 +987,27 @@ var writeRefusalPhrases = []string{
 	"geen schrijfrechten", //
 	"kan niets aanpassen", // "ik kan niets aanpassen, committen of uitvoeren"
 	"kan ik niets aanpassen",
+}
+
+// writeToolNamePattern matches a NAMED write tool as a whole word, so an
+// absence word next to "credit"/"editor" cannot pass for a refusal. The
+// boundaries still allow the shapes Claude actually writes: "Edit/Bash",
+// "Edit-tool", "`Bash`".
+var writeToolNamePattern = regexp.MustCompile(`\b(edit|bash|shell)\b`)
+
+// writeRefusalAbsenceWords are the "this tool is not available" words that,
+// combined with a named tool (writeToolNamePattern), also mean a write
+// refusal — see the second half of looksLikeWriteRefusal.
+// "geblokkeerd"/"geweigerd" were added after PR 13730: the CLI itself now
+// tells a resumed session that Edit and Bash were retracted with cause
+// "denied", and Claude echoes that back as a permission rule ("door een
+// permissieregel geblokkeerd … elke aanroep wordt geweigerd") rather than as
+// a missing tool.
+var writeRefusalAbsenceWords = []string{
+	"uitgeschakeld",
+	"geblokkeerd",
+	"geweigerd",
+	"niet beschikbaar",
 }
 
 // stripCodeFencesForScan removes every ```-fenced block from text so a phrase
@@ -972,12 +1057,19 @@ func looksLikeWriteRefusal(text string) bool {
 			return true
 		}
 	}
-	// "Edit en Bash zijn in deze sessie uitgeschakeld" — the second observed
-	// wording, which names the tools and the absence in separate clauses, so
-	// no single fragment above can catch it.
-	if strings.Contains(prose, "uitgeschakeld") &&
-		(strings.Contains(prose, "edit") || strings.Contains(prose, "bash") || strings.Contains(prose, "shell")) {
-		return true
+	// "Edit en Bash zijn in deze sessie uitgeschakeld", "…zijn door een
+	// permissieregel geblokkeerd … elke aanroep wordt geweigerd" — the
+	// wordings that name the tools and their absence in SEPARATE clauses, so
+	// no single fragment above can catch them. Kept as an equally short,
+	// explicit word list for the "absent" half, never a general negativity
+	// test; the tool half must always be named too.
+	if !writeToolNamePattern.MatchString(prose) {
+		return false
+	}
+	for _, word := range writeRefusalAbsenceWords {
+		if strings.Contains(prose, word) {
+			return true
+		}
 	}
 	return false
 }
@@ -1062,6 +1154,11 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 
 	sessionID, _ := cm.GetSession(ctx, arg.ConversationID)
 
+	// Read BEFORE the read-only attempt runs: this turn's own reply is not
+	// saved yet, but reading it up front keeps the decision independent of
+	// whatever attempt 1 answers.
+	deadEndBefore := lastTurnWasCheckoutDeadEnd(ctx, cm, arg.ConversationID)
+
 	// The work-directory choice is a PR-wide setting, answered in its own
 	// overlay (chat_checkout.go, .claude/docs/command-palette.md) — never a
 	// question inside a conversation. A turn's message is therefore always
@@ -1144,6 +1241,15 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 	// falls back to instead (looksLikeWriteRefusal) — the reviewer never has
 	// to ask twice for write access, and never gets a button for it either.
 	escalate := isNeedWriteDirective(result.Text)
+	// A turn that follows a checkout dead end escalates unconditionally: the
+	// pending request already asked for write access last turn, so waiting
+	// for Claude to say so again is a guess we don't have to make. See
+	// lastTurnWasCheckoutDeadEnd for the reviewer report behind it.
+	if !escalate && deadEndBefore {
+		escalate = true
+		logTurnMilestone("previous turn dead ended on the work directory, escalating after %v", time.Since(t0))
+		advanceChatProgress(arg.Repo, arg.PR, arg.ConversationID, chatPhaseEscalating)
+	}
 	if !escalate && looksLikeWriteRefusal(result.Text) {
 		escalate = true
 		logTurnMilestone("read-only attempt refused to write in prose after %v, escalating anyway", time.Since(t0))
@@ -1207,16 +1313,16 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 			// path in settings.json. Saying the latter while the former is
 			// true sent the reviewer looking for a configuration problem that
 			// wasn't there.
-			body := "Voor dit verzoek heb ik schrijftoegang tot een lokale werkmap nodig, maar die is er niet. Voeg een pad toe aan `chatCheckoutDirs` in settings.json of clone de repo lokaal, en vraag het opnieuw."
+			body := chatNoCheckoutBody
 			// A dead end with a KNOWN cause says that cause instead — the
 			// checkout may well exist and simply not be readable/free right
 			// now (see checkoutDiscovery.reason, chat_checkout.go).
 			reason, transient := checkoutFailureReason(dataDir, arg.Repo, arg.PR)
 			if reason != "" {
-				body = "Ik kan nu geen code aanpassen. " + reason + " Los dat op en vraag het opnieuw."
+				body = chatCheckoutBlockedPrefix + reason + " Los dat op en vraag het opnieuw."
 			}
 			if checkoutChoiceOpen(dataDir, arg.Repo, arg.PR) {
-				body = "Ik kan nu geen code aanpassen: er staat nog een keuze open over de werkmap van deze PR. Maak die keuze en vraag het daarna opnieuw."
+				body = chatCheckoutChoiceOpenBody
 				transient = false // an open question needs the reviewer, never automatic
 			}
 			kind := ""

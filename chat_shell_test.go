@@ -350,6 +350,11 @@ func TestLooksLikeWriteRefusalStaysNarrow(t *testing.T) {
 		"Edit en Bash zijn in deze sessie uitgeschakeld, dus dit is de voorgestelde regel.",
 		"Ik heb geen shell om dit te committen.",
 		"Zonder schrijftoegang kan ik niets aanpassen; hier is het voorstel.",
+		// PR 13730, verbatim from the stored transcript: the CLI retracted
+		// Edit/Bash with cause "denied" on a resumed session and Claude
+		// reported that as a permission rule instead of emitting the
+		// need_write directive.
+		"Ik kan deze beurt niets schrijven of draaien: `Edit` en `Bash` zijn door een permissieregel geblokkeerd (de tools zijn er wel, maar elke aanroep wordt geweigerd).",
 	}
 	for _, text := range fire {
 		if !looksLikeWriteRefusal(text) {
@@ -364,10 +369,70 @@ func TestLooksLikeWriteRefusalStaysNarrow(t *testing.T) {
 		// The words only appear INSIDE a fence — source/comment text must
 		// never be able to trigger an escalation.
 		"Zo ziet de regel eruit:\n\n```php\n// geen Edit hier, Bash is uitgeschakeld\n```",
+		// An absence word next to a word that merely CONTAINS a tool name is
+		// not a refusal — see writeToolNamePattern.
+		"De creditfactuur werd geweigerd door de provider.",
 	}
 	for _, text := range silent {
 		if looksLikeWriteRefusal(text) {
 			t.Fatalf("did not expect an escalation for %q", text)
 		}
+	}
+}
+
+// TestCheckoutDeadEndForcesEscalation is the PR 13730 regression: the turn
+// AFTER a checkout dead end must escalate to attempt 2 on that fact alone,
+// without Claude having to emit {"type":"need_write"} again. In the reported
+// session the resumed read-only attempt was told by the CLI that Edit/Bash
+// were retracted with cause "denied" and answered in prose about a
+// "permissieregel", so the werkmap choice the reviewer had just made resolved
+// nothing and the turn dead ended a second time.
+func TestCheckoutDeadEndForcesEscalation(t *testing.T) {
+	cm := testChatModule(t)
+	ctx := context.Background()
+	const conv = "conv-deadend"
+	if err := cm.EnsureConversation(ctx, conv, "plug-and-pay/plug-and-pay", 13730); err != nil {
+		t.Fatalf("ensure conversation: %v", err)
+	}
+	save := func(id, role, body string, noShell bool) {
+		t.Helper()
+		if err := cm.SaveMessage(ctx, chat.Message{
+			ID: id, ConversationID: conv, PR: 13730,
+			Role: role, Body: body, NoShell: noShell,
+		}); err != nil {
+			t.Fatalf("save %s: %v", id, err)
+		}
+	}
+
+	save("m1", "user", "oke, doe wat je moet doen", false)
+	save("m2", "assistant", chatCheckoutChoiceOpenBody, true)
+	if !lastTurnWasCheckoutDeadEnd(ctx, cm, conv) {
+		t.Fatal("an open work-directory choice must count as a dead end")
+	}
+
+	// The reviewer's resume message does not clear it — only a real answer does.
+	save("m3", "user", "Werkmap gekozen: Meenemen in de commit. Ga verder met mijn vorige verzoek.", false)
+	if !lastTurnWasCheckoutDeadEnd(ctx, cm, conv) {
+		t.Fatal("a following user message must not clear the dead end")
+	}
+
+	save("m4", "assistant", "Aangepast en gecommit.", false)
+	if lastTurnWasCheckoutDeadEnd(ctx, cm, conv) {
+		t.Fatal("a real answer after the dead end must clear it")
+	}
+
+	// The other two dead-end shapes the same branch produces.
+	for i, body := range []string{chatNoCheckoutBody, chatCheckoutBlockedPrefix + "De checkout is bezet."} {
+		id := fmt.Sprintf("m5-%d", i)
+		save(id, "assistant", body, true)
+		if !lastTurnWasCheckoutDeadEnd(ctx, cm, conv) {
+			t.Fatalf("expected a dead end for %q", body)
+		}
+	}
+
+	// A read-only turn that simply had no shell is NOT a dead end.
+	save("m6", "assistant", "Deze functie registreert de statistiek via de bus.", true)
+	if lastTurnWasCheckoutDeadEnd(ctx, cm, conv) {
+		t.Fatal("an ordinary no-shell answer must not count as a dead end")
 	}
 }

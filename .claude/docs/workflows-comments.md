@@ -1652,6 +1652,48 @@ costs 2 calls, the second one with `Edit`+`Bash`, and only its reply is
 saved) and `TestLooksLikeWriteRefusalStaysNarrow` (the boundaries, including
 a fence that merely contains those words), both in `chat_shell_test.go`.
 
+**A third round, and this one is not prose-based at all: after a checkout
+dead end the escalation is unconditional.** Reviewer report on PR 13730,
+confirmed in the stored CLI transcript
+(`~/.claude/projects/…-pr-13730-head/e071b82f-….jsonl`, lines 492-523): a
+write turn had dead-ended on the open work-directory choice, the reviewer
+answered the werkmap overlay, and the resulting
+`resumeStuckClaudeAfterCheckout` message ("Werkmap gekozen: … Ga verder met
+mijn vorige verzoek.", `src/RelatedPanel.mjs`) dead-ended a SECOND time. The
+cause is environmental and permanent: attempt 1 resumes the same CLI session,
+and because an EARLIER turn of that session did have `Edit`/`Bash`, the CLI
+now answers the shrunken tool set with a `deferred_tools_delta` carrying
+`retractedTools: [{Bash, denied}, {Edit, denied}]` plus a "do not call these
+tools" system reminder. Claude called `Bash`, got
+`No such tool available: Bash. Bash is disabled for this session`, read the
+whole thing as a **permission rule**, and explained that in prose — *"Ik kan
+deze beurt niets schrijven of draaien: `Edit` en `Bash` zijn door een
+permissieregel geblokkeerd"* — which none of `writeRefusalPhrases` above
+matched. That notice appears on every later read-only attempt of any
+conversation that once escalated, so the prose net cannot be the only defence.
+
+Two changes, both in `chat_workflow.go`. `lastTurnWasCheckoutDeadEnd` reads
+the conversation once, before attempt 1, and reports whether its last
+ASSISTANT message is one of the three dead-end replies the `!ok` branch of
+`prepareChatShellWorkDir` writes (`chatCheckoutChoiceOpenBody`,
+`chatNoCheckoutBody`, `chatCheckoutBlockedPrefix` — now named constants,
+mirrored by `isCheckoutDeadEnd` in `src/RelatedPanel.mjs`, which decides
+whether to send that resume message at all). If so, `escalate` is forced
+true whatever attempt 1 answers: the pending request already asked for write
+access last turn, so nothing has to be guessed from its wording. Attempt 1
+still runs — deliberately, per the reviewer: it is the cheap pass and it
+re-reads the code, and skipping it would mean feeding the real reviewer
+message to the shell attempt instead of `chatNeedWriteContinuationPrompt`, a
+much larger change for no reported benefit. Second, the prose net's
+two-clause branch was generalised: `writeRefusalAbsenceWords`
+("uitgeschakeld", "geblokkeerd", "geweigerd", "niet beschikbaar") combined
+with a NAMED tool, matched as a whole word (`writeToolNamePattern`, so
+"creditfactuur … geweigerd" cannot fire). `chat_readonly.md` also states
+outright that a retracted/denied `Edit`/`Bash` notice is expected and must be
+answered with the directive, never explained in prose. Tests:
+`TestCheckoutDeadEndForcesEscalation` and the two added cases in
+`TestLooksLikeWriteRefusalStaysNarrow`, both `chat_shell_test.go`.
+
 **That escalation is also the ONE code-turn-at-a-time gate, PER CHECKOUT**
 (`chat_write_gate.go`). Reviewer decision: a turn that only ANSWERS may run
 unlimited in parallel (chatting on another selection while an earlier answer is

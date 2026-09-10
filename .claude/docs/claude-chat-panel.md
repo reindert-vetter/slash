@@ -1825,7 +1825,10 @@ One more phase sits between those two, and only sometimes:
 read-only attempt answered in PROSE that it cannot write instead of emitting
 `{"type":"need_write"}`, and the turn escalates to the shell attempt anyway
 (`looksLikeWriteRefusal`, `chat_workflow.go` — see "The prompt fix above was
-not enough" in `.claude/docs/workflows-comments.md`). Momentary by design:
+not enough" in `.claude/docs/workflows-comments.md`), and equally when the
+PREVIOUS turn dead-ended on the work-directory choice
+(`lastTurnWasCheckoutDeadEnd`, same file — see "A third round" in that same
+doc). Momentary by design:
 `waiting`/`starting` replaces it as soon as the escalated call really begins,
 and there is deliberately no bubble, no stored message and no reviewer-facing
 control for any of it — this brief line is the whole visible surface.
