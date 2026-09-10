@@ -132,4 +132,34 @@ test.describe('PR Review Tree — footer AI description for if-units', () => {
     await expect(page.getByTestId('app-columns')).not.toHaveClass(/bottom-\[140px\]/)
     await expect(page.getByTestId('app-columns')).not.toHaveClass(/bottom-6\b/)
   })
+
+  // Reviewer request: "alleen als ik in hoofddiff zit, wil ik de footer zien"
+  // — the footer must hide once the keyboard leaves the diff for the
+  // Onderliggende-code chip list (relatedActive()===true), and reappear the
+  // instant it steps back out, WITHOUT drilling (drilling is covered by the
+  // "follows a drilled column" test above, which stays in a diff column the
+  // whole time).
+  test('hides while the keyboard is in the Onderliggende-code panel, reappears on leaving it', async ({
+    page,
+  }) => {
+    await page.goto('/pr/97')
+    await expect(page.getByTestId('block-row')).toHaveCount(3)
+    await page.keyboard.press('Escape')
+    await page.keyboard.press('ArrowRight')
+
+    const footer = page.getByTestId('footer')
+    const description = footer.getByTestId('footer-description')
+    await expect(description).toContainText('Deze groep introduceert een if-statement')
+    await expect(footer).toBeVisible()
+
+    // Step into the Onderliggende-code panel (→) without drilling.
+    await page.keyboard.press('ArrowRight')
+    await expect(page.getByTestId('related-item').first()).toHaveAttribute('data-active', 'true')
+    await expect(footer).toBeHidden()
+
+    // Step back out (←) to the parent's diff — the footer follows back.
+    await page.keyboard.press('ArrowLeft')
+    await expect(footer).toBeVisible()
+    await expect(description).toContainText('Deze groep introduceert een if-statement')
+  })
 })

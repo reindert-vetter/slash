@@ -11553,6 +11553,13 @@ const MAX_EXPLAIN_LINES = 10
 // cursor, so a drilled column previews its own unit.
 function footerUnitInfo() {
   if (state.mode !== 'diff') return null
+  // The keyboard sitting in the comment thread / composer / Claude chat / the
+  // Underlying-code chip list (relatedActive()) means the footer's own "what
+  // is the focused diff unit" preview no longer matches what the reviewer is
+  // looking at — reviewer request: only show it while actually in a diff
+  // column (the top-level block OR a drilled Underlying-code column, both of
+  // which call leaveRelated() on entry), never while relatedActive().
+  if (relatedActive()) return null
   const b = focusedBlock()
   if (!b) return null
   const level = state.focusLevel
@@ -11754,6 +11761,10 @@ watch(
     // watch like any other — named INLINE, per the arrow.js watch rule.
     autoWarn.enabled,
     focusedBlock() && focusedBlock().code,
+    // relatedActive() — the keyboard entering/leaving the comment/chat/
+    // Underlying-code panel must hide/reveal the footer at once too. Same
+    // established inline-read pattern as scrollRelatedIntoView's own watch.
+    relatedActive(),
   ],
   () => updateFooter(),
 )

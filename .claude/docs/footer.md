@@ -17,6 +17,23 @@ the stable `<footer>` root — the class string stays one whole-value
 `footerUnitInfo` (`home.mjs`) returns `null` outside `state.mode==='diff'`, so
 `footerVisible` is always `false` in list mode.
 
+**Also hidden whenever `relatedActive()` is true** — the keyboard sitting in
+the comment thread/composer, the embedded Claude chat, or a selection in the
+Underlying-code chip list (`RelatedPanel.mjs`'s `cs.focus !== null`).
+Reviewer request: "alleen als ik in hoofddiff zit, wil ik de footer zien" — a
+stale preview of whichever diff unit was focused before stepping `→` into one
+of those panels reads as wrong once the keyboard has actually moved there.
+`footerUnitInfo` returns `null` as soon as `relatedActive()` is true (one
+choke point feeding both `state.footerUnit`/`state.footerExplain`, so both
+disappear together), and the footer's own `watch` (`home.mjs`) lists
+`relatedActive()` inline among its dependencies (the same established pattern
+`scrollRelatedIntoView`'s own watch already uses) so it repaints the instant
+`cs.focus` changes. **A drilled Underlying-code column (`state.focusLevel >
+0`) still counts as "hoofddiff"** — explicit reviewer answer — and keeps
+showing the footer for its own cursor exactly as before: `drillIntoChild`
+already calls `leaveRelated()` on entry, so `relatedActive()` is false there,
+same as at the top level.
+
 ## A separate, always-visible progress bar (`src/ProgressBar.mjs`)
 
 A very thin (`PROGRESS_BAR_PX`, 3px), full-width strip sits at the TRUE
