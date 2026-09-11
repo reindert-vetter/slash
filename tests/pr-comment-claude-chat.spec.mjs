@@ -315,16 +315,28 @@ test('→ steps from a PR-comment item into its thread and on into the Claude ch
 
   await page.goto('/pr/' + pr)
   await leaveSearchBox(page)
-  await expect(page.getByTestId('comment-detail-card')).toBeVisible()
+  const card = page.getByTestId('comment-detail-card')
+  await expect(card).toBeVisible()
+
+  // Reviewer request: "ik wil dat de chat alleen geselecteerd is als ik het
+  // ook echt selecteer door naar rechts te gaan... de border moet een color
+  // krijgen als ik naar rechts ga, niet daarvoor". Plain ↑/↓ selection (this
+  // item is already the sidebar selection at this point) must NOT paint the
+  // card's border indigo yet — only an actual → does.
+  await expect(card).not.toHaveClass(/border-indigo-300/)
+  await expect(card).toHaveClass(/border-slate-300/)
 
   const thread = page.getByTestId('comment-detail-thread')
   const compose = page.getByTestId('claude-chat-compose')
 
   // First → : into the item's own thread (the ring on the thread container is
-  // the only visible signal at the rest position pct.pos === 0).
+  // the only visible signal at the rest position pct.pos === 0). The card's
+  // own border now turns indigo too, since the keyboard has genuinely
+  // entered it.
   await page.keyboard.press('ArrowRight')
   await expect(thread).toHaveClass(/ring-2/)
   await expect(compose).not.toBeFocused()
+  await expect(card).toHaveClass(/border-indigo-300/)
 
   // Second → : on into the Claude column, and the thread ring hands off so
   // only one thing reads as focused — at this (default, narrow) viewport the

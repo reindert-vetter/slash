@@ -10962,6 +10962,21 @@ export function isPrCommentThreadFocused(c) {
   return !!c && pct.commentId === c.id
 }
 
+// isCommentDetailEntered — the merged commentDetailCard's own "has the
+// keyboard actually stepped in via →" check (see that card's border comment).
+// True once the reviewer is either in comment `c`'s own thread (pct) or has
+// gone one step further into its Claude conversation (cs.focus === 'claude',
+// anchored via cc.commentId — set by enterClaudeChat/syncClaudeAnchorForSelection
+// only once cs.focus genuinely becomes 'claude', never by mere selection).
+// Both the keyboard's own → (handlePrCommentThreadKey/enterClaudeChat) and
+// the mouse equivalents (startPrCommentReply's own field focus,
+// startPrCommentChat's focusEl → the composer's @focus → onClaudeComposeFocus
+// → enterClaudeChat) end up flipping the same pct/cs.focus state, so this
+// needs no separate mouse-specific check.
+function isCommentDetailEntered(c) {
+  return isPrCommentThreadFocused(c) || (cs.focus === 'claude' && cc.commentId === c.id)
+}
+
 // exitPrCommentThread releases the thread cursor — called on ← out of the
 // thread and whenever the sidebar selection moves off the comment it belongs
 // to (mirrors the reasoning behind the selection-change watch that already
@@ -11374,10 +11389,30 @@ export function commentDetailCard(c, opts) {
         // The same on/off indigo/slate border every Block() diff card gets
         // (see Block.mjs's diffActive) — this card, after all, replaces a
         // Block() card in the same column position for a comment-index item
-        // (see detail-layout.md). Unlike a real block there's no further
-        // "stop" (drilled column / Onderliggende code) the keyboard can step
-        // into that would steal this border away, so non-preview here is
-        // simply the whole of the selected/focused state.
+        // (see detail-layout.md). For the non-merged (home.mjs block-column)
+        // call site there's no further "stop" (drilled column / Onderliggende
+        // code) the keyboard can step into that would steal this border away,
+        // so non-preview there is simply the whole of the selected/focused
+        // state, unchanged.
+        //
+        // For the MERGED call site (isPrCommentScope, InlineComments —
+        // opts.merged), there IS a further stop: → first steps into this
+        // item's own thread (pct, enterPrCommentThread) and, one step
+        // further, into the Claude column right next to this card
+        // (cs.focus === 'claude'). Reviewer request: "ik wil dat de chat
+        // alleen geselecteerd is als ik het ook echt selecteer door naar
+        // rechts te gaan... de border moet een color krijgen als ik naar
+        // rechts ga, niet daarvoor" — until the reviewer has actually
+        // entered via →, `preview:false` used to already paint this card
+        // indigo the moment the row was merely selected with ↑/↓, which read
+        // as "the chat is already selected". So for `merged`, non-preview
+        // splits further into "selected but not entered" (neutral slate,
+        // full opacity — it IS the current selection, just not entered) and
+        // "entered" (the indigo look). Mirrors the drilled anchor column's
+        // own diffActive border, which already gets this exact "no color
+        // until the first →" treatment — see
+        // tests/comment-anchor-expanded-view.spec.mjs.
+        //
         // Widened by 50px on top of the previous 42rem — reviewer request,
         // room for the footer meta line below to stay readable now that it
         // carries the file path that used to sit in its own header pill.
@@ -11387,7 +11422,9 @@ export function commentDetailCard(c, opts) {
         (merged ? 'w-full ' : 'w-[calc(42rem+50px)] shrink-0 ') +
         (preview
           ? 'border-slate-300 dark:border-zinc-700 opacity-60 '
-          : 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30 ') +
+          : merged && !isCommentDetailEntered(c)
+            ? 'border-slate-300 dark:border-zinc-700 '
+            : 'border-indigo-300 dark:border-indigo-500 ring-1 ring-indigo-200 dark:ring-indigo-500/30 ') +
         (c.status === 'resolved' ? 'bg-emerald-50 dark:bg-emerald-500/15 ' : 'bg-white dark:bg-zinc-900 ')}"
       data-testid="comment-detail-card"
       data-readonly="${readOnly ? 'true' : 'false'}"

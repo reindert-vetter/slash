@@ -1206,6 +1206,50 @@ and `tests/comment-index-items.spec.mjs`'s ai_warning-item case (which
 exercises exactly the "step from one unanchored item to another" gap the
 `setCommentScope` fix closes).
 
+### The merged card's own border waits for an actual →, unlike an ordinary block's
+
+`commentDetailCard`'s border used to be a plain `preview ? dimmed-slate :
+indigo` — for the `merged` (unanchored/PR-wide, `isPrCommentScope()`) call
+site above, `preview` is hardcoded `false`, so the card turned indigo the
+INSTANT such a row was merely selected with ↑/↓, before the reviewer ever
+pressed →. Reviewer report: "ik wil dat de chat alleen geselecteerd is als ik
+het ook echt selecteer door naar rechts te gaan... de border moet een color
+krijgen als ik naar rechts ga, niet daarvoor" — the merged card (comment +
+the Claude column right next to it, with no visual separator distinguishing
+them the way an anchored comment's dashed `comment-claude-connector` does
+once a Claude column exists) read as "already selected/entered" the moment
+it was merely the current sidebar item.
+
+This is deliberately the OPPOSITE convention from an ordinary `Block()` diff
+card, which does get its indigo `diffActive` border immediately on plain
+selection (no further "stop" a real block's own comment/Claude/Onderliggende
+code panel can steal it away from) — see this card's own border comment for
+why: `commentDetailCard` stands in for a `Block()` card in the SAME column
+position, but for the merged case it has its own further stops (→ into its
+thread, → again into Claude) the way a real block doesn't. The **anchored**
+comment's own drilled diff card already got exactly this same "no color
+until the first →" treatment earlier, for the same reason — see "only one
+blue border at a time..." in `tests/comment-anchor-expanded-view.spec.mjs` —
+this closes the one place (`merged: true`) that had been left out.
+
+Fix: for `merged`, `!preview` splits further into "selected but not
+entered" (`border-slate-300`, full opacity — still the real selection, just
+not the indigo "entered" look) and "entered" (today's indigo/ring look) —
+`isCommentDetailEntered(c)`, a small private helper next to
+`isPrCommentThreadFocused`, true once the keyboard is in the item's own
+thread (`pct.commentId === c.id`) or has gone one step further into its
+Claude column (`cs.focus === 'claude' && cc.commentId === c.id`). Both
+`→` and its mouse equivalents (`startPrCommentReply`'s field focus,
+`startPrCommentChat`'s `focusEl` → the composer's own `@focus` →
+`onClaudeComposeFocus` → `enterClaudeChat`) end up flipping the same
+`pct`/`cs.focus` state, so no separate mouse-specific check is needed. The
+non-`merged` call site (home.mjs's block-column, an anchored comment-index
+item reached differently) is untouched — its `preview` already ties
+correctly to the ordinary `i !== sel || !focusedHere` selection check, same
+as any other `Block()` card. Test: the border assertions in
+`tests/pr-comment-claude-chat.spec.mjs`'s "→ steps from a PR-comment item
+into its thread and on into the Claude chat" case.
+
 ### A bare Claude-chat anchor is not a comment and gets no row
 
 A conversation with Claude always hangs on an existing comment (the backend's
