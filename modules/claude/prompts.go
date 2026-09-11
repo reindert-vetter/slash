@@ -87,6 +87,20 @@ var codeWarningPatternsPrompt string
 
 var CodeWarningSystemPrompt = codeWarningTaskPrompt + "\n" + codeWarningPatternsPrompt
 
+// CodeWarningVerifySystemPrompt is the static instruction block for the
+// code_warning workflow's SECOND agentic call: an independent pass, on
+// claude.ModelSonnet rather than the first pass's Opus, that tries to
+// DISPROVE each finding the first pass reported (with the same Read/Grep/Glob
+// access to the head worktree) before it is ever created as a comment on the
+// tree — see runCodeWarningVerification (code_warning.go) and "A second pass
+// verifies each finding is actually true" in
+// .claude/docs/workflows-analysis.md. A different model than the exploratory
+// first pass on purpose: a genuinely independent second opinion, not the same
+// conversation agreeing with itself.
+//
+//go:embed prompts/code_warning_verify.md
+var CodeWarningVerifySystemPrompt string
+
 // CommentRemovalSystemPrompt is the static instruction block for the
 // auto-resolve check that runs when a comment's row anchor becomes orphaned
 // (the symbol it was placed on is gone from the PR — see reanchor.go's doc

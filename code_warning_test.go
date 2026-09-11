@@ -386,6 +386,72 @@ func TestCodeWarningAnchorsToBlock(t *testing.T) {
 	}
 }
 
+// The second, independent verify pass (claude.ModelSonnet) can drop a
+// specific finding the FIRST pass reported, before it ever becomes a
+// comment — the exact scenario this whole feature exists for: a reviewer
+// asking "klopt dit?" and getting back a well-reasoned "no, that scenario
+// isn't reachable" should mean the finding never lands on the tree.
+func TestCodeWarningVerifyDropsRejectedFinding(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 32
+	writeWarningFixtureRepo(t, dataDir, pr)
+	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), "", pr, []Block{warningFixtureBlock(pr)}); err != nil {
+		t.Fatal(err)
+	}
+
+	fake := claude.NewFake()
+	fake.SetOutput(claude.ModelOpus, `[{"file":"app/Services/OrderService.php","line":5,"text":"First finding."},{"file":"app/Services/OrderService.php","line":6,"text":"Second finding."}]`)
+	// index 0 is the sorted (file,line) position of the "First finding." —
+	// see runCodeWarningReview's sort — so this rejects exactly that one.
+	fake.SetOutput(claude.ModelSonnet, `[{"index":0,"reason":"That scenario is not reachable."}]`)
+	m, cs, _ := warningManager(t, dataDir, fake)
+
+	if _, err := m.StartCodeWarning(CodeWarningInput{PR: pr}); err != nil {
+		t.Fatal(err)
+	}
+	list, err := cs.List(context.Background(), "", pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("comments = %d, want 1 (the rejected finding must never become a comment): %+v", len(list), list)
+	}
+	if list[0].Body != "Second finding." {
+		t.Errorf("body = %q, want the surviving (non-rejected) finding", list[0].Body)
+	}
+}
+
+// The verify pass is deliberately fail-open: an unparseable/empty response
+// (the same shape as an unprogrammed claude.Fake model, which is every
+// OTHER test in this file that never programs claude.ModelSonnet at all)
+// must never silently drop a real finding — only an explicit, parsed
+// rejection does. This pins that default directly, with a garbage response
+// rather than simply relying on it being implicitly exercised elsewhere.
+func TestCodeWarningVerifyKeepsFindingOnUnparseableResponse(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 33
+	writeWarningFixtureRepo(t, dataDir, pr)
+	if err := replacePRBlocks(mustOpenGraphDB(t, dataDir), "", pr, []Block{warningFixtureBlock(pr)}); err != nil {
+		t.Fatal(err)
+	}
+
+	fake := claude.NewFake()
+	fake.SetOutput(claude.ModelOpus, `[{"file":"app/Services/OrderService.php","line":6,"text":"Some finding."}]`)
+	fake.SetOutput(claude.ModelSonnet, "not valid json at all")
+	m, cs, _ := warningManager(t, dataDir, fake)
+
+	if _, err := m.StartCodeWarning(CodeWarningInput{PR: pr}); err != nil {
+		t.Fatal(err)
+	}
+	list, err := cs.List(context.Background(), "", pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("comments = %d, want 1 (an inconclusive verify pass must keep the finding): %+v", len(list), list)
+	}
+}
+
 // A finding whose line falls inside a block's declared range but isn't a row
 // rowForLine can actually find (e.g. a docblock line enrichedCodeSide drops,
 // or — as reproduced here — a line beyond the block's real extracted source
@@ -545,6 +611,60 @@ func TestCodeWarningSupersedesPreviousRun(t *testing.T) {
 // code_warning last reviewed (reviewedHash, modules/warnreviewed). Table-
 // driven since the interesting behaviour is entirely in this decision, not in
 // any I/O around it — see hashHeadFiles for the disk-reading half.
+// parseWarningRejections must trust only a well-formed, in-range, non-repeat
+// index — the same defensive shape parseWarningFindings/the hallucination
+// guard already apply to the first pass's own output.
+func TestParseWarningRejections(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		n    int
+		want []warningRejection
+	}{
+		{name: "empty response", raw: "", n: 3, want: nil},
+		{name: "no JSON array at all", raw: "nope, all findings hold up", n: 3, want: nil},
+		{name: "valid single rejection", raw: `[{"index":1,"reason":"not reachable"}]`, n: 3,
+			want: []warningRejection{{Index: 1, Reason: "not reachable"}}},
+		{name: "out-of-range index dropped", raw: `[{"index":5,"reason":"x"}]`, n: 3, want: nil},
+		{name: "negative index dropped", raw: `[{"index":-1,"reason":"x"}]`, n: 3, want: nil},
+		{name: "duplicate index keeps only the first", raw: `[{"index":0,"reason":"a"},{"index":0,"reason":"b"}]`, n: 3,
+			want: []warningRejection{{Index: 0, Reason: "a"}}},
+		{name: "prose wrapped around the array is stripped", raw: "Here you go:\n[{\"index\":2,\"reason\":\"x\"}]\nDone.", n: 3,
+			want: []warningRejection{{Index: 2, Reason: "x"}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := parseWarningRejections(c.raw, c.n)
+			if len(got) != len(c.want) {
+				t.Fatalf("got %+v, want %+v", got, c.want)
+			}
+			for i := range got {
+				if got[i] != c.want[i] {
+					t.Errorf("got[%d] = %+v, want %+v", i, got[i], c.want[i])
+				}
+			}
+		})
+	}
+}
+
+// dropRejectedWarnings must remove exactly the rejected indices and leave
+// everything else (including the order) untouched — a nil/empty rejection
+// list must be a true no-op, not a copy that merely looks the same.
+func TestDropRejectedWarnings(t *testing.T) {
+	list := []warningToCreate{
+		{Comment: CodeCommentInput{Body: "a"}},
+		{Comment: CodeCommentInput{Body: "b"}},
+		{Comment: CodeCommentInput{Body: "c"}},
+	}
+	got := dropRejectedWarnings(list, []warningRejection{{Index: 1, Reason: "x"}})
+	if len(got) != 2 || got[0].Comment.Body != "a" || got[1].Comment.Body != "c" {
+		t.Fatalf("got %+v, want [a c]", got)
+	}
+	if got := dropRejectedWarnings(list, nil); len(got) != 3 {
+		t.Fatalf("got %+v, want the unchanged list of 3", got)
+	}
+}
+
 func TestFilesNeedingReview(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -1014,8 +1134,10 @@ func TestCodeWarningDropsFindingOnUnchangedLine(t *testing.T) {
 		t.Fatalf("kept finding = %q, want the one on the changed line", list[0].Body)
 	}
 
-	if len(fake.Calls) != 1 {
-		t.Fatalf("claude calls = %d, want 1", len(fake.Calls))
+	// One Opus review call plus one Sonnet verify call on the single
+	// surviving (changed-line) finding — see verifyCodeWarningFindings.
+	if len(fake.Calls) != 2 {
+		t.Fatalf("claude calls = %d, want 2 (review + verify)", len(fake.Calls))
 	}
 	if prompt := fake.Calls[0].Prompt; !strings.Contains(prompt, "changed lines: 2, 5-7") {
 		t.Fatalf("prompt does not name the changed lines: %s", prompt)

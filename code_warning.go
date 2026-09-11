@@ -489,6 +489,111 @@ func parseWarningFindings(raw string) []warningFinding {
 	return findings
 }
 
+// warningVerifyArg is the payload of the verifyCodeWarningFindings Activity —
+// the SECOND, independent agentic pass that tries to DISPROVE each finding
+// the first pass (runCodeWarningReview) reported, before any of them is
+// created as a comment. See .claude/docs/workflows-analysis.md, "A second
+// pass verifies each finding is actually true".
+type warningVerifyArg struct {
+	Repo string `json:"repo,omitempty"`
+	PR   int    `json:"pr"`
+	// Findings is the finished, anchored batch (already through the orphan
+	// retry) restated as plain file/line/text — Text is the comment body the
+	// first pass produced. Order defines each finding's 0-based index, which
+	// warningRejection.Index refers back to.
+	Findings []warningFinding `json:"findings"`
+}
+
+// warningRejection is one entry of the verify pass's JSON answer: a finding
+// (by its 0-based index into warningVerifyArg.Findings) that pass could
+// actually demonstrate is NOT true, plus why. A finding the pass did not
+// (or could not) disprove simply has no entry here — see
+// runCodeWarningVerification's own doc comment for why that is a deliberate
+// fail-open default rather than requiring every finding to be confirmed.
+type warningRejection struct {
+	Index  int    `json:"index"`
+	Reason string `json:"reason"`
+}
+
+// runCodeWarningVerification makes the second, independent agentic call
+// (claude.ModelSonnet — deliberately NOT the first pass's Opus, so this is a
+// genuinely separate opinion rather than the same conversation agreeing with
+// itself) that tries to DISPROVE each finding against the real code, with the
+// same Read/Grep/Glob access to the head worktree the first pass had.
+//
+// Deliberately FAIL-OPEN: a nil client, no findings to check, a CLI/model
+// error, or an unparseable/empty response all return nil (nothing rejected,
+// every finding survives) rather than treating uncertainty as "reject
+// everything". That is the opposite default from runCodeWarningReview's own
+// "a CLI failure means no findings" — but the two failures aren't
+// symmetrical: there, a failed FIRST pass has found nothing yet, so
+// degrading to zero findings loses nothing real. Here, a failed SECOND pass
+// would otherwise silently discard findings the first pass already
+// established with its own agentic exploration — the same "uncertainty must
+// never silently skip a review" reasoning filesNeedingReview already applies
+// to the unrelated per-file-hash skip above. Only an EXPLICIT, parsed
+// rejection (the model naming a specific index it could actually disprove)
+// removes a finding.
+func runCodeWarningVerification(ctx context.Context, cl claude.Client, dataDir string, arg warningVerifyArg) []warningRejection {
+	if cl == nil || len(arg.Findings) == 0 {
+		return nil
+	}
+	_, headDir := worktreeDirs(dataDir, arg.Repo, arg.PR)
+	req := claude.RunRequest{
+		Model:        claude.ModelSonnet,
+		Prompt:       warningVerifyPrompt(arg),
+		SystemPrompt: claude.CodeWarningVerifySystemPrompt,
+		WorkDir:      headDir,
+		Tools:        []string{"Read", "Grep", "Glob"},
+	}
+	res, err := cl.RunChat(ctx, req)
+	if err != nil {
+		log.Printf("code_warning: pr %d verify pass failed (%v) — keeping all %d finding(s) unverified", arg.PR, err, len(arg.Findings))
+		return nil
+	}
+	return parseWarningRejections(res.Text, len(arg.Findings))
+}
+
+// warningVerifyPrompt lists every finding to verify, numbered — the number is
+// what the model echoes back in warningRejection.Index, the same "an index is
+// far more reliable to reproduce than an id" reasoning comment_titles.go uses
+// for its own numbered list.
+func warningVerifyPrompt(arg warningVerifyArg) string {
+	var b strings.Builder
+	b.WriteString("Findings to verify:\n")
+	for i, f := range arg.Findings {
+		fmt.Fprintf(&b, "%d. %s:%d — %s\n", i, f.File, f.Line, f.Text)
+	}
+	return b.String()
+}
+
+// parseWarningRejections extracts the first [...] JSON array from the verify
+// pass's output and keeps only well-formed entries: an index that is out of
+// range for the n findings actually sent, or a repeat of an already-seen
+// index, is dropped rather than trusted — same defensive shape as
+// parseWarningFindings/the hallucination guard in runCodeWarningReview.
+func parseWarningRejections(raw string, n int) []warningRejection {
+	start := strings.IndexByte(raw, '[')
+	end := strings.LastIndexByte(raw, ']')
+	if start < 0 || end <= start {
+		return nil
+	}
+	var out []warningRejection
+	if err := json.Unmarshal([]byte(raw[start:end+1]), &out); err != nil {
+		return nil
+	}
+	kept := make([]warningRejection, 0, len(out))
+	seen := make(map[int]bool, len(out))
+	for _, r := range out {
+		if r.Index < 0 || r.Index >= n || seen[r.Index] {
+			continue
+		}
+		seen[r.Index] = true
+		kept = append(kept, r)
+	}
+	return kept
+}
+
 // existingLineCommentsInScope collects the PR's open, non-AI conversation as
 // context for the model (warningReviewArg.Existing), so it can tell whether a
 // risk it wants to flag has already been raised — and, just as often, already

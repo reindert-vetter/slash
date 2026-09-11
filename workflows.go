@@ -2966,6 +2966,24 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return json.Marshal(out)
 	})
 
+	// Activity: the SECOND, independent agentic call (claude.ModelSonnet) that
+	// tries to DISPROVE each of the first pass's findings against the real
+	// code before any of them is created as a comment — see
+	// runCodeWarningVerification's own doc comment (code_warning.go) for the
+	// deliberate fail-open default, and "A second pass verifies each finding
+	// is actually true" in .claude/docs/workflows-analysis.md.
+	engine.RegisterActivity("verifyCodeWarningFindings", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg warningVerifyArg
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		rejected := runCodeWarningVerification(ctx, m.claude, m.dataDir, arg)
+		if len(rejected) > 0 {
+			m.logf("code_warning: pr %d verify pass rejected %d/%d finding(s) as not actually true", arg.PR, len(rejected), len(arg.Findings))
+		}
+		return json.Marshal(rejected)
+	})
+
 	// Activity: create one AI-authored warning comment (write, workflow-driven)
 	// by starting a normal task_code_comment Execution — Source "ai" + Local
 	// true (never posted to GitHub) — reusing the exact same sanctioned write
@@ -4328,11 +4346,14 @@ const warningsPerBlock = 2
 const maxOrphanWarnings = 5
 
 // codeWarningWorkflow agentically reviews a PR's changed files for risks. It
-// is deterministic: every side effect (the DB reads, the Sonnet call, the
-// comment reads/deletes/creates) is an Activity, run in a fixed order, and the
-// number of createWarningComment calls is exactly len(findings) — a function
-// of runAgenticReview's own (already-recorded) result, so it replays safely.
-// No signal — it runs straight through and completes, mirroring
+// is deterministic: every side effect (the DB reads, the Opus call, the
+// second, independent verify call, the comment reads/deletes/creates) is an
+// Activity, run in a fixed order — scope → supersede → the Opus review →
+// (retry once on too many orphans) → the Sonnet verify pass → one
+// createWarningComment per surviving finding — and the number of
+// createWarningComment calls is a function of runAgenticReview's and
+// verifyCodeWarningFindings's own (already-recorded) results, so it replays
+// safely. No signal — it runs straight through and completes, mirroring
 // submitReviewWorkflow/ingestWorkflow.
 func codeWarningWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	var in CodeWarningInput
@@ -4398,6 +4419,22 @@ func codeWarningWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		}
 	}
 
+	// A second, independent pass tries to DISPROVE each surviving finding
+	// against the real code before any of them ever becomes a comment on the
+	// tree — see "A second pass verifies each finding is actually true" in
+	// .claude/docs/workflows-analysis.md. Skipped entirely when there is
+	// nothing left to verify. Deterministic like the orphan-retry branch
+	// above: the condition and the resulting filter are both functions of
+	// already-recorded Activity results, so a replay takes the same branch.
+	if len(toCreate) > 0 {
+		verifyArg := warningVerifyArg{Repo: in.Repo, PR: in.PR, Findings: findingsForVerify(toCreate)}
+		var rejected []warningRejection
+		if err := w.ExecuteActivity("verifyCodeWarningFindings", verifyArg, &rejected); err != nil {
+			return nil, fmt.Errorf("verify code warning findings: %w", err)
+		}
+		toCreate = dropRejectedWarnings(toCreate, rejected)
+	}
+
 	// A finding NEVER retracts the reviewer's approval of the row it anchors
 	// to — an AI risk check is a hint to look again, not a verdict that the
 	// reviewer never read the code. Mirrors the same decision on the frontend
@@ -4429,6 +4466,41 @@ func countOrphanWarnings(list []warningToCreate) int {
 		}
 	}
 	return n
+}
+
+// findingsForVerify turns the (already anchored) comments-to-create back into
+// plain warningFindings for the verify pass: same File/Line, Text is the
+// comment's own Body. Order defines each finding's 0-based index, which
+// dropRejectedWarnings later maps a warningRejection.Index back onto.
+func findingsForVerify(list []warningToCreate) []warningFinding {
+	out := make([]warningFinding, len(list))
+	for i, item := range list {
+		out[i] = warningFinding{File: item.Comment.File, Line: item.Comment.Line, Text: item.Comment.Body}
+	}
+	return out
+}
+
+// dropRejectedWarnings removes every finding the verify pass could
+// demonstrably disprove (see runCodeWarningVerification) — everything else,
+// including a finding the pass simply never examined, is kept: an
+// inconclusive or failed verify call must never silently swallow a real
+// risk, only an EXPLICIT rejection does.
+func dropRejectedWarnings(list []warningToCreate, rejected []warningRejection) []warningToCreate {
+	if len(rejected) == 0 {
+		return list
+	}
+	reject := make(map[int]bool, len(rejected))
+	for _, r := range rejected {
+		reject[r.Index] = true
+	}
+	kept := make([]warningToCreate, 0, len(list))
+	for i, item := range list {
+		if reject[i] {
+			continue
+		}
+		kept = append(kept, item)
+	}
+	return kept
 }
 
 // StartCodeWarning launches a code_warning Execution and runs it to

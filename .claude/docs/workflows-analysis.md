@@ -1616,6 +1616,64 @@ a manually triggered, low-frequency action.
   machinery: `createWarningComment` calls `StartCodeComment` with `Source:"ai"`
   + `Local:true` (never to GitHub) and `Author:"AI check"`. Being a full
   Execution, the reviewer can resolve or delete it like any other comment.
+- **A second, independent agentic pass tries to DISPROVE each finding against
+  the real code before it is ever created as a comment**
+  (`verifyCodeWarningFindings` Activity, `runCodeWarningVerification` in
+  `code_warning.go`) — run once, right after the orphan-retry above settles,
+  on whatever `toCreate` ends up being reviewed. Reviewer report: the first
+  pass claimed a new filter left a gap, the reviewer asked the embedded
+  Claude chat "klopt dit?", and a fresh, independent look concluded the
+  scenario described was not actually reachable — the finding should never
+  have reached the tree as a comment in the first place.
+  - **A DIFFERENT model, `claude.ModelSonnet`, not the first pass's Opus** —
+    deliberately not the same conversation re-asked "are you sure?", which
+    tends to just agree with itself. Also cheaper: verifying a specific,
+    already-stated claim against the code is a narrower task than the first
+    pass's open-ended exploration, so a less expensive model is an accepted
+    trade — same reasoning `resolve_call`/`explain_code` already apply
+    elsewhere (Haiku first, escalate only when needed).
+  - **Same `Read`/`Grep`/`Glob` access to the head worktree** as the first
+    pass, so the second pass can trace the actual code paths involved rather
+    than judge the finding's wording alone.
+  - **Contract, and why it's asymmetric with the first pass's own
+    hallucination guards:** the model is handed every surviving finding,
+    numbered (`warningVerifyPrompt`), and may answer with only the indices it
+    can actually **disprove** —
+    `[{"index":<n>,"reason":"..."}]`, `[]` when every finding holds up. A
+    finding with no entry — including one the model never got around to, or a
+    response that failed to parse at all — **survives**. This is
+    deliberately **fail-open**, the opposite default from
+    `runCodeWarningReview`'s own "a CLI failure means no findings": there, a
+    failed FIRST pass has found nothing yet, so degrading to zero loses
+    nothing real; here, a failed SECOND pass would otherwise silently discard
+    findings the first pass already established through its own agentic
+    exploration — the same "uncertainty must never silently skip a review"
+    reasoning `filesNeedingReview` already applies to the unrelated
+    per-file-hash skip earlier in this same file. Only an **explicit,
+    parsed** rejection (`parseWarningRejections`, same defensive shape as
+    `parseWarningFindings`: out-of-range/negative/duplicate index dropped)
+    removes a finding.
+  - **No turn budget of its own** (unlike the first pass's
+    `codeWarningMaxTurns`) — deliberately: verifying a handful of specific,
+    already-stated claims is a narrower task than the first pass's
+    open-ended exploration, so it was not expected to need the same
+    cost-bounding. Revisit with the same `codeWarningTurnCounter`/`Steer`
+    mechanism if that turns out to be wrong in practice.
+  - **Deterministic:** one more `ExecuteActivity` at a fixed position in
+    `codeWarningWorkflow`, skipped entirely when there is nothing left to
+    verify (`len(toCreate) == 0`) — that condition, and the resulting filter
+    (`dropRejectedWarnings`), are both functions of already-recorded Activity
+    results, so a replay takes the same branch. The `"found"` count the
+    workflow returns is computed **after** this filter, so it reports only
+    what actually became a comment.
+  - Tests: `TestCodeWarningVerifyDropsRejectedFinding` (an explicit rejection
+    removes exactly that finding, the other survives),
+    `TestCodeWarningVerifyKeepsFindingOnUnparseableResponse` (the fail-open
+    default), `TestParseWarningRejections`/`TestDropRejectedWarnings` (the
+    pure functions in isolation). Every OTHER `code_warning` test needed no
+    change: an unprogrammed `claude.ModelSonnet` output (the default for
+    every `claude.Fake`/`scriptedClaude` in this file that never scripts it)
+    resolves to the same fail-open "nothing rejected" outcome.
 - **A finding never touches the reviewer's approval.** It used to retract the
   approval of the exact row it anchored to, once per `(pr, blockId, row)`
   (`revokeApprovalForWarning`/`markWarningRevocation` + `modules/warnrevoke`);
@@ -1624,8 +1682,9 @@ a manually triggered, low-frequency action.
   check runs on every ingest refresh, so a recurring finding kept silently
   eating approvals the reviewer had already given.
 - **Determinism:** the body only does `ExecuteActivity` calls in a fixed order
-  (scope → supersede → the one Opus call → `createWarningComment` per finding),
-  and every count comes from a **stored** Activity result — never a live check.
+  (scope → supersede → the Opus review call → the Sonnet verify pass →
+  `createWarningComment` per surviving finding), and every count comes from a
+  **stored** Activity result — never a live check.
 - **Frontend:** the same warning-triangle SVG as `related-covers-warning`, now
   as an `aiWarningBadge` pill; the Taken card shows the run as "Risk check" with
   either "searching the PR for risks…" or the **exact** number of findings —
