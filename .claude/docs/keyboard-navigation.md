@@ -831,11 +831,45 @@ kunnen uitklappen, dan wil ik ook weer naar beneden kunnen."*
   `watch` — a `watch` on `state.selected` also fires on a same-value reassign
   from the 5s comment poll and would close what the reviewer just opened (see
   that pitfall in `.claude/rules/arrowjs-pitfalls.md`).
-- **Deliberate scope limit:** top level only (`focusLevel === 0`). A drilled
-  Onderliggende-code column keeps its own `{change, gran}` cursor and has no
-  description stop.
+- **Also reaches a drilled Onderliggende-code column's own description**, not
+  just the top-level block. A drilled column keeps its own `{change, gran}`
+  cursor (`state.drillCursor`) — `↑` off ITS first unit lands on that same
+  column's own strip first, exactly like the top-level case (`focusedBlock()`
+  resolves whichever block/level currently owns the keyboard, used throughout
+  `blockDescStopAvailable`/`blockDescFocused`/`focusBlockDesc`/
+  `toggleBlockDescExpanded` instead of the always-top-level `curBlock()`).
+  Reviewer report, against a drilled child's own strip: *"als ik hier naar
+  boven druk, moet meer... (Enter) geselecteerd worden, ik moet daar enter op
+  kunnen drukken. als ik daarna nog een keer naar boven ga, moet het zoals
+  normaal soms naar bovenstaande blok kunnen gaan."* Two differences from the
+  top-level walk, both because a drilled column has no same-file-neighbour
+  concept of its own:
+  - A second `↑` off a drilled column's strip calls `drillPrevChange()` (the
+    same sibling walk `↑` off its first unit already used before this strip
+    existed) instead of `stepBlock(-1)` — the previous sibling in the parent's
+    Onderliggende-code list when one exists, else it just clamps and the
+    strip releases with the column staying open ("zoals normaal **soms** naar
+    bovenstaande blok").
+  - `←` from the focused strip calls `closeDrilledColumn()` instead of
+    `leaveDiffToList()`, mirroring the ordinary (non-strip) `←` handling one
+    line below it.
+  `↓` releases the strip back onto that column's own first unit
+  (`setDrillChange(level, 0)`, the drilled twin of the top-level `state.change
+  = 0`) exactly as before. The drilled column's own `Block(b, {...})` call
+  (`home.mjs`, the `drillPreviewColumns`/main drill-render loop) is wired with
+  `descFocused`/`descExpanded`/`onDescriptionClick` the same way the top-level
+  card is — a click needs no `ensureTopLevelDiffFocus` equivalent there, since
+  that card is only ever rendered in full for the already-focused drilled
+  column (a non-focused one collapses to a rail instead). The rare exception
+  this does NOT cover: a comment-index item's drilled anchor opened directly
+  from LIST mode (`state.focusLevel > 1` while `state.mode` never flips to
+  `'diff'`, see "Only one thing reads as selected at a time" in
+  `.claude/docs/comments-panel.md`) — `blockDescStopAvailable` gates on
+  `state.mode === 'diff'`, so that flow is unaffected, matching its own
+  pre-existing separate `↑`/`↓` handling in `onKeydown`.
 
-Test: `tests/block-description-stop.spec.mjs`.
+Tests: `tests/block-description-stop.spec.mjs` (top level),
+`tests/block-description-stop-drilled.spec.mjs` (drilled column).
 
 **Two different chevrons, deliberately distinct:**
 

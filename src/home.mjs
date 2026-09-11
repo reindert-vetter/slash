@@ -2459,13 +2459,15 @@ function prevChange() {
 // ---------------------------------------------------------------------------
 
 // blockDescStopAvailable — does the block the keyboard is on have a description
-// strip to step onto at all? Only at the top level (focusLevel === 0): a
-// drilled Onderliggende-code column keeps its own {change, gran} cursor with no
-// description stop of its own (deliberate scope limit, see
-// .claude/docs/keyboard-navigation.md).
+// strip to step onto at all? Works both at the top level (focusLevel === 0)
+// and inside a drilled Onderliggende-code column (focusedBlock() resolves to
+// whichever one currently owns the keyboard) — a drilled column keeps its own
+// {change, gran} cursor (state.drillCursor), but reaches this same strip
+// exactly like the top-level block does, see
+// .claude/docs/keyboard-navigation.md.
 function blockDescStopAvailable() {
-  if (state.mode !== 'diff' || state.focusLevel > 0) return false
-  const b = curBlock()
+  if (state.mode !== 'diff') return false
+  const b = focusedBlock()
   return !!(b && b.description)
 }
 
@@ -2473,7 +2475,7 @@ function blockDescStopAvailable() {
 // stale id (the reviewer navigated to another block without a clear running)
 // never counts, because it is re-resolved against the block the cursor is on.
 function blockDescFocused() {
-  const b = curBlock()
+  const b = focusedBlock()
   return !!(state.descFocusId && b && b.id === state.descFocusId && blockDescStopAvailable())
 }
 
@@ -2497,7 +2499,7 @@ function blockDescExpanded(b) {
 }
 
 function toggleBlockDescExpanded({ focus = false } = {}) {
-  const b = curBlock()
+  const b = focusedBlock()
   if (!b || !b.description) return
   if (focus) state.descFocusId = b.id
   if (!blockDescCollapsible(b)) return
@@ -2509,7 +2511,7 @@ function toggleBlockDescExpanded({ focus = false } = {}) {
 // focusBlockDesc / leaveBlockDesc — the ↑ onto the strip from the block's first
 // change, and the ↓ back off it onto that same first change.
 function focusBlockDesc() {
-  const b = curBlock()
+  const b = focusedBlock()
   if (!b) return false
   state.descFocusId = b.id
   scrollBlockDescIntoView()
@@ -2518,7 +2520,8 @@ function focusBlockDesc() {
 
 function leaveBlockDesc() {
   clearBlockDescFocus()
-  state.change = 0
+  if (state.focusLevel > 0) setDrillChange(state.focusLevel, 0)
+  else state.change = 0
   scrollChangeIntoView()
 }
 
@@ -14849,11 +14852,21 @@ function onKeydown(e) {
         leaveBlockDesc()
       } else if (e.key === 'ArrowUp') {
         clearBlockDescFocus()
-        if (curTestClassRow()) stepTestMethodChange(-1)
+        // A drilled column has no same-file neighbour concept — a second ↑
+        // continues the SAME sibling-walk drillPrevChange already uses when
+        // stepping off its own first unit (previous sibling in the parent's
+        // Onderliggende-code list when one exists, else it just clamps —
+        // "zoals normaal soms naar bovenstaande blok").
+        if (state.focusLevel > 0) drillPrevChange()
+        else if (curTestClassRow()) stepTestMethodChange(-1)
         else stepBlock(-1)
       } else if (e.key === 'ArrowLeft') {
         clearBlockDescFocus()
-        leaveDiffToList()
+        // Mirrors the ordinary (non-strip) ArrowLeft handling right below —
+        // a drilled column closes back into its parent rather than leaving
+        // the whole diff session.
+        if (state.focusLevel > 0) closeDrilledColumn()
+        else leaveDiffToList()
       } else {
         clearBlockDescFocus()
         clearRangeAnchor()
@@ -14873,7 +14886,15 @@ function onKeydown(e) {
       if (e.shiftKey) {
         if (state.focusLevel > 0) drillExtendRange(state.focusLevel, -1)
         else extendRange(-1)
-      } else if (state.focusLevel > 0) drillPrevChange()
+      } else if (state.focusLevel > 0) {
+        // ↑ off a drilled column's FIRST unit lands on ITS OWN description
+        // strip first, exactly like the top-level case right below — see the
+        // blockDescFocused branch above for the second ↑ that continues past
+        // it.
+        const cur = state.drillCursor[state.focusLevel - 1]
+        if ((!cur || cur.change <= 0) && blockDescStopAvailable()) focusBlockDesc()
+        else drillPrevChange()
+      }
       // ↑ off the block's FIRST unit lands on the description strip first (one
       // extra step) when this block has one, instead of flowing straight into
       // the previous same-file block — reviewer request: "ik moet naar boven
@@ -17421,6 +17442,19 @@ function DetailPanel(state) {
                   // Same gate as hintsEnabled above, minus the diff-mode
                   // restriction (blockShortcutHints covers both modes itself).
                   shortcutHints: () => (state.focusLevel === level ? blockShortcutHints() : []),
+                  // The description strip's own cursor/disclosure state — same
+                  // mechanism as the top-level card's own wiring below (see its
+                  // comment there), just keyed on this drilled block's id.
+                  // Extends the block-description keyboard stop into drilled
+                  // Onderliggende-code columns, see
+                  // .claude/docs/keyboard-navigation.md.
+                  descFocused: () => state.descFocusId === b.id,
+                  descExpanded: () => state.descExpanded.includes(b.id),
+                  // Mouse twin of Enter on the strip. No ensureTopLevelDiffFocus
+                  // equivalent needed here: this card is only ever rendered in
+                  // full (never as a collapsed rail) for the FOCUSED drilled
+                  // column, see the onCloseColumn comment right below.
+                  onDescriptionClick: focusedHere ? () => toggleBlockDescExpanded({ focus: true }) : undefined,
                   approvedRows: () => approvedRowSet(b),
                   approvedCalls: () => approvedCallSet(b),
                   onApprove: (blk) => persistApproval(blk),

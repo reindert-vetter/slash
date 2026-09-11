@@ -19,6 +19,7 @@
     "line": 7,
     "endLine": 11,
     "status": "modified",
-    "side": "new"
+    "side": "new",
+    "description": "Runs the child step of the tree action, invoked once per parent execution. It only ever fires inside the parent's own transaction, so a failure here rolls the whole run back rather than leaving a partial state behind."
   }
 ]
