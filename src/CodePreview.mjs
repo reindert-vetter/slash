@@ -223,8 +223,12 @@ function pane(titleText, code, lang) {
 // thereby re-Prism-highlighting) the whole card on every step. The cursor is
 // deliberately NOT part of `.key(it.key)` for exactly that reason. Same
 // border/ring pair as every other selected card in this file
-// (`related-item`), plus a leading ▸ glyph on the title so the state is
-// carried by a SHAPE, not only by colour (colourblind rule).
+// (`related-item`). A dedicated `▸` marker glyph on the title used to sit
+// next to the active card too (`code-preview-active-marker`), but it was
+// removed as redundant once the collapsed-card expand button below got its
+// own always-visible glyph — reviewer request ("stipje bovenin kan dan
+// weg"). The border/ring pair alone still carries the active state as a
+// SHAPE, not only by colour (colourblind rule).
 //
 // `expanded` is the same kind of getter, backed by RelatedPanel.mjs's
 // `cp.expandedOverride` (default: only the last answer's own cards start
@@ -252,13 +256,16 @@ function pane(titleText, code, lang) {
 // else — cursor-pointer and a hover-only title tooltip were not enough of a
 // cue that there is more hidden here). `code-preview-expand-btn`, rendered
 // only while `!expanded()`, right below the (possibly truncated) context
-// line: a labelled word ("Blok ingeklapt — klik om uit te klappen") plus a
-// ▾ glyph, per the colourblind rule — never colour alone. It is a SIBLING
-// of the `code-preview-toggle` header block, not nested inside it — its own
-// `@click` calls `onToggle(it.key)` directly, with the same
-// `stopPropagation`-first ordering as the header's handler above as a
-// defensive habit (this file's established pattern), even though this
-// button's own click never actually reaches the header. No symmetrical
+// line. It originally carried a labelled word ("Blok ingeklapt — klik om
+// uit te klappen") plus a ▾ glyph; the reviewer later asked for the word to
+// go too ("vervang [de tekst] met een pijltje naar beneden"), so the button
+// is now icon-only — a bare ▾ — with the former label preserved as its
+// `title`/`aria-label` for accessibility/discoverability instead of on-screen
+// text. It is a SIBLING of the `code-preview-toggle` header block, not
+// nested inside it — its own `@click` calls `onToggle(it.key)` directly,
+// with the same `stopPropagation`-first ordering as the header's handler
+// above as a defensive habit (this file's established pattern), even though
+// this button's own click never actually reaches the header. No symmetrical
 // "collapse" button once expanded — the header's own
 // click-to-toggle (still present) already covers that direction, and the
 // reviewer's request was specifically about discoverability of the
@@ -266,7 +273,7 @@ function pane(titleText, code, lang) {
 //
 // previewCard renders ONE card in the stack below the chat: an ordinary
 // fence's "Huidig (PR)"/"Voorgesteld (chat)" pair (same shell — border/ring,
-// active marker, click-to-toggle header, collapse/expand). `active`/
+// click-to-toggle header, collapse/expand). `active`/
 // `expanded` are getters, same reasoning as before: walking/toggling must not
 // re-key (and thereby re-Prism-highlight) the rest of the stack.
 //
@@ -346,12 +353,6 @@ function previewCard(it, active, expanded, onToggle) {
         }}"
       >
         <div class="flex items-center gap-1">
-          <span
-            class="shrink-0 text-[11px] font-semibold text-indigo-500 dark:text-indigo-400"
-            data-testid="code-preview-active-marker"
-          >
-            ${() => (active() ? '▸' : '')}
-          </span>
           ${() =>
             it.classLabel
               ? html`<span
@@ -379,7 +380,9 @@ function previewCard(it, active, expanded, onToggle) {
           : html`<button
               type="button"
               data-testid="code-preview-expand-btn"
-              class="self-start inline-flex items-center gap-1 rounded-md border border-indigo-200 bg-indigo-50 px-2 py-1 text-[11px] font-semibold text-indigo-600 hover:bg-indigo-100 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-300 dark:hover:bg-indigo-500/20"
+              class="self-start inline-flex items-center justify-center rounded-md border border-indigo-200 bg-indigo-50 px-2 py-1 text-[11px] font-semibold text-indigo-600 hover:bg-indigo-100 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-300 dark:hover:bg-indigo-500/20"
+              title="${() => t('Blok ingeklapt — klik om uit te klappen')}"
+              aria-label="${() => t('Blok ingeklapt — klik om uit te klappen')}"
               @click="${(e) => {
                 // stopPropagation FIRST, before the toggle mutates the
                 // reactive state this button's own ancestor re-renders off —
@@ -388,7 +391,6 @@ function previewCard(it, active, expanded, onToggle) {
                 onToggle(it.key)
               }}"
             >
-              ${t('Blok ingeklapt — klik om uit te klappen')}
               <span aria-hidden="true">▾</span>
             </button>`}
       <div class="flex flex-col gap-2" data-testid="code-preview-body">

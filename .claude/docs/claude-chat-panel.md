@@ -4295,11 +4295,14 @@ changes, all in the same three files (`markdown.mjs`, `RelatedPanel.mjs`'s
   (`markdown.mjs`'s `fenceLabel`/`data-fence-label`), so repeating it here was
   pure clutter with no information of its own — a card with no detected class
   now shows no title line at all. The `▸` "this card is under the ↓/↑
-  cursor" marker (colourblind rule: shape, not colour alone — see
-  `tests/code-fence-preview.spec.mjs`) used to live glued to that same title
-  text; it is now its own always-mounted `data-testid=code-preview-
-  active-marker` span next to (not inside) the conditional title, so it
-  still renders even on a title-less card. The "over: …" context line
+  cursor" marker used to live glued to that same title text, then became its
+  own always-mounted `data-testid=code-preview-active-marker` span next to
+  (not inside) the conditional title so it still rendered even on a
+  title-less card — **later removed entirely** (reviewer request, "stipje
+  bovenin kan dan weg", alongside the icon-only expand button below): the
+  border/ring pair every active card already gets is enough of a shape cue
+  on its own, so the separate marker glyph was redundant. The "over: …"
+  context line
   (`data-testid=code-preview-context`, below) also switched from a small
   muted `text-[11px] text-slate-400` to the SAME size/colour ordinary chat
   bubble text uses (`text-xs leading-relaxed text-slate-700`/`dark:text-zinc-300`)
@@ -4310,7 +4313,7 @@ changes, all in the same three files (`markdown.mjs`, `RelatedPanel.mjs`'s
   reviewer follow-up ("uitklap ding... kan helemaal weg") — the glyph itself
   removed too: there is no visible collapse affordance left at all. The click
   target moved from that small button onto the card's own header row (the
-  active-marker + title + context block, still `data-testid=
+  title + context block, still `data-testid=
   code-preview-toggle`, `cursor-pointer`), with the Dutch wording surviving
   only as its `title` tooltip. This click had to keep working, not just stay
   as a convenience alongside `Enter`: a fence embedded in a plain PR-comment
@@ -4406,21 +4409,29 @@ unremarkable text; `cursor-pointer` plus a hover-only `title` tooltip
 ("Uitklappen (Enter)") gave no visible cue at all that there was more to see,
 or how to get to it.
 
-`CodePreview.mjs`'s `previewCard` now renders a small, clearly labelled
-button — `data-testid="code-preview-expand-btn"`, text **"Blok ingeklapt —
-klik om uit te klappen"** plus a `▾` glyph (colourblind rule: the word carries
-the meaning, the glyph is decoration) — directly below the (possibly
-CSS-truncated) context line, but ONLY while `!expanded()`. It is a SIBLING of
-the `code-preview-toggle` header block, not nested inside it, so its own
-`@click` (still `stopPropagation`-first, this file's established habit, even
-though the click can't actually reach the header here) calling
-`onToggle(it.key)` is the only handler that fires. No symmetrical "collapse"
-button once expanded — the header's own click-to-toggle (unchanged, still the
-only way to collapse a card again) already covers that direction; the
-reviewer's request was specifically about discoverability of the COLLAPSED
-state, not about undoing the earlier "uitklap ding... kan helemaal weg"
-removal for the expanded one. Test: the `code-preview-expand-btn` assertions
-in `tests/codeblock-card-collapse.spec.mjs`.
+`CodePreview.mjs`'s `previewCard` now renders a small, clearly visible
+button — `data-testid="code-preview-expand-btn"` — directly below the
+(possibly CSS-truncated) context line, but ONLY while `!expanded()`. It
+originally carried a labelled word, **"Blok ingeklapt — klik om uit te
+klappen"**, plus a `▾` glyph (colourblind rule: the word carries the meaning,
+the glyph is decoration). A further reviewer request ("vervang [de tekst] met
+een pijltje naar beneden") dropped the on-screen word entirely — the button
+is now icon-only (a bare `▾`), with the former label text preserved as its
+`title`/`aria-label` instead, so it stays accessible/discoverable without a
+visible word. It is a SIBLING of the `code-preview-toggle` header block, not
+nested inside it, so its own `@click` (still `stopPropagation`-first, this
+file's established habit, even though the click can't actually reach the
+header here) calling `onToggle(it.key)` is the only handler that fires. No
+symmetrical "collapse" button once expanded — the header's own click-to-toggle
+(unchanged, still the only way to collapse a card again) already covers that
+direction; the reviewer's request was specifically about discoverability of
+the COLLAPSED state, not about undoing the earlier "uitklap ding... kan
+helemaal weg" removal for the expanded one. The same reviewer request also
+removed the separate `code-preview-active-marker` glyph (see "Default-collapsed
+cards…" above) as redundant now that the collapsed-card affordance is a
+glyph of its own. Test: the `code-preview-expand-btn` assertions in
+`tests/codeblock-card-collapse.spec.mjs` (including the `title`/`aria-label`
+check).
 
 Test: `tests/codeblock-card-collapse.spec.mjs`.
 

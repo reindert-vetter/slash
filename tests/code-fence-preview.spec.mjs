@@ -346,9 +346,6 @@ test('↓/↑ at the bottom of the Claude chat walk the code-preview cards', asy
   await expect(cards.nth(0)).toHaveAttribute('data-active', 'true')
   await expect(cards.nth(1)).toHaveAttribute('data-active', 'false')
   await expect(page.getByTestId('claude-chat-compose')).not.toBeFocused()
-  // The word/shape carries the state, not only the ring colour — its own
-  // always-mounted marker now, independent of the (conditional) title line.
-  await expect(page.getByTestId('code-preview-active-marker').first()).toContainText('▸')
 
   await page.keyboard.press('ArrowDown')
   await expect(cards.nth(1)).toHaveAttribute('data-active', 'true')
