@@ -92,7 +92,48 @@ export function highlightForLang(code, lang) {
   const grammarName = LANGUAGE_ALIASES[key] || key
   const grammar = Prism.languages[grammarName]
   if (!grammar) return escapeHtml(code)
-  return Prism.highlight(code, grammar, grammarName)
+  const out = Prism.highlight(code, grammar, grammarName)
+  return grammarName === 'php' ? wrapSqlLineComments(out) : out
+}
+
+// wrapSqlLineComments — reviewer report (screenshot): a raw SQL query
+// embedded as a PHP string (e.g. `$sql = /** @lang ClickHouse */ "select
+// ... -- comment ..."`) has no SQL grammar of its own here — there's no
+// vendored/switched-to `sql` tokeniser for a PHP string literal, only the
+// `php` grammar itself (see `langForFile`/`highlightForLang` above) — so a
+// `-- ...` SQL-style comment inside it tokenises as plain STRING content,
+// same colour as the rest of the query, and doesn't read as a comment at
+// all. Reusing a dedicated SQL grammar for this would mean re-parsing PHP's
+// own string boundaries just to switch grammars mid-string — out of
+// proportion for one cosmetic fix — so instead this is a narrow POST-PROCESS
+// over the already-highlighted HTML: wrap a `--` run (to the end of its
+// line, so both a comment that starts its OWN line and a trailing
+// `code -- comment` on the same line are covered) in a `<span class="token
+// comment">`, reusing the EXACT class Prism's own comment tokens already
+// get — no new CSS needed at all, it inherits the already AA-contrast-tuned
+// grey/italic rule that exists in all three theme spots in index.html (see
+// "Syntax highlighting (Prism)" in .claude/rules/conventions.md).
+//
+// Only requires that `--` is followed by a space/tab or the end of the
+// line — the actual SQL comment convention (`-- text` or a bare `--`) — to
+// tell it apart from PHP's OWN `--` decrement operator (`$i--`/`--$i`),
+// which is never legitimately followed by a space and more text on the
+// same line. Safe to run unscoped over the FULL highlighted HTML string
+// (not just inside `token string` spans) without a real HTML/DOM parse:
+// PHP's own `--` operator always tokenises into its own
+// `<span class="token operator">--</span>`, so in the underlying HTML TEXT
+// the two characters `--` are immediately followed by `<` (the closing
+// tag) — never by a literal space — regardless of whether the source has
+// whitespace around the operator (`$i --;`: the space sits AFTER the
+// closing `</span>`, not adjacent to the raw `--` text). Only plain,
+// untokenised text — string/heredoc content, or already-grey comment
+// content — can have `--` directly abutted by a real space or newline in
+// the HTML string, and that's exactly the content this is meant to catch.
+// Only gated to grammarName === 'php' (not e.g. `sql`, which already
+// tokenises its own comments correctly, or `typescript`/others, which
+// aren't expected to embed a raw SQL string like this).
+function wrapSqlLineComments(html) {
+  return html.replace(/--(?=[ \t]|$)[^\n]*/gm, (m) => `<span class="token comment">${m}</span>`)
 }
 
 // langForFile picks the Prism grammar (and CSS-scope class, see index.html's

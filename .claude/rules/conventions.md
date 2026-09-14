@@ -69,6 +69,31 @@ Underlying-code cards, the comment hint and the footer all get the same
 colors regardless of which grammar tokenised them. (Scoping it to
 `[data-testid=code-diff]` left everything outside the diff panes colorless.)
 
+### A SQL comment (`-- ...`) embedded in a PHP string
+
+There is no SQL grammar switch for a raw query embedded in a PHP string
+(`$sql = /** @lang ClickHouse */ "select ... -- comment ..."`) — the `php`
+grammar tokenises the whole string as one `token string`, so a `-- ...` SQL
+comment inside it used to read as plain string text, same colour as the rest
+of the query (reviewer report, screenshot). `highlightForLang`
+(`Block.mjs`) now runs a narrow post-process, `wrapSqlLineComments`, over the
+already-highlighted HTML **only when `grammarName === 'php'`**: it wraps a
+`--` run (to the end of its line — both a comment on its own line and a
+trailing `code -- comment` on the same line) in a `<span class="token
+comment">`, reusing the exact class Prism's own comments already get — no
+new CSS, it inherits the existing AA-contrast-tuned grey/italic rule that's
+already in all three theme spots in `index.html` (see "Syntax highlighting
+(Prism)" above). Told apart from PHP's own `--` decrement operator
+(`$i--`/`--$i`) by requiring `--` to be followed by a space/tab or end of
+line — PHP's operator always tokenises into its own
+`<span class="token operator">--</span>`, so in the raw HTML *text* the
+characters `--` are immediately followed by `<` (the closing tag), never a
+literal space, even when the source itself has whitespace around the
+operator (that whitespace sits outside the operator's own span). This makes
+the regex safe to run unscoped over the whole HTML string, no real
+HTML/DOM parse needed. The `sql` grammar itself (an explicit ` ```sql `
+fence) is untouched — it already tokenises its own comments correctly.
+
 ## Markdown rendering
 
 `snarkdown` (v2.0.0, MIT, ~1kb) is vendored as an ES module in
