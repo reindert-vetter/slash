@@ -72,27 +72,65 @@ colors regardless of which grammar tokenised them. (Scoping it to
 ### A SQL comment (`-- ...`) embedded in a PHP string
 
 There is no SQL grammar switch for a raw query embedded in a PHP string
-(`$sql = /** @lang ClickHouse */ "select ... -- comment ..."`) — the `php`
-grammar tokenises the whole string as one `token string`, so a `-- ...` SQL
-comment inside it used to read as plain string text, same colour as the rest
-of the query (reviewer report, screenshot). `highlightForLang`
-(`Block.mjs`) now runs a narrow post-process, `wrapSqlLineComments`, over the
-already-highlighted HTML **only when `grammarName === 'php'`**: it wraps a
-`--` run (to the end of its line — both a comment on its own line and a
-trailing `code -- comment` on the same line) in a `<span class="token
-comment">`, reusing the exact class Prism's own comments already get — no
-new CSS, it inherits the existing AA-contrast-tuned grey/italic rule that's
-already in all three theme spots in `index.html` (see "Syntax highlighting
-(Prism)" above). Told apart from PHP's own `--` decrement operator
-(`$i--`/`--$i`) by requiring `--` to be followed by a space/tab or end of
-line — PHP's operator always tokenises into its own
-`<span class="token operator">--</span>`, so in the raw HTML *text* the
-characters `--` are immediately followed by `<` (the closing tag), never a
-literal space, even when the source itself has whitespace around the
-operator (that whitespace sits outside the operator's own span). This makes
-the regex safe to run unscoped over the whole HTML string, no real
-HTML/DOM parse needed. The `sql` grammar itself (an explicit ` ```sql `
-fence) is untouched — it already tokenises its own comments correctly.
+(`$sql = /** @lang ClickHouse */ "select ... -- comment ..."`) — only the
+`php` grammar is ever used for it (see `langForFile`/`highlightForLang`
+above), so a `-- ...` SQL comment inside it used to read as plain query
+text, same colour as the rest (reviewer report, screenshot).
+
+**First attempt (reverted):** post-process Prism's own HTML output,
+wrapping a literal `--`-to-end-of-line run in `<span class="token
+comment">`. That worked for a block's FULL code highlighted in ONE
+`Prism.highlight()` call (Underlying-code cards, the footer, "list" mode):
+inside real surrounding string quotes Prism already treats the whole query
+as one plain-text `token string`, so `--` and the words after it are
+un-tokenised text, safe to wrap wholesale. It silently did **not** fix the
+diff view at `gran=line`: `rowCellHTML`/`highlightChanges` (`Block.mjs`)
+call `highlight(text, lang)` **per row**, one bare line at a time, with no
+enclosing quote characters. Handed a lone line like `-- ... or a product
+switch ...` with no surrounding `"..."`, Prism has no way to know it's
+string content — it tokenises it as top-level PHP, so ordinary English
+words that happen to be PHP keywords (`and`, `or`, `not`, `use`, `switch`,
+`as`, ...) got their own coloured `token keyword` span underneath, and
+even `--` itself became its own `token operator` (followed by `<` in the
+HTML, not a space, so the old regex never matched it either). A child
+span's own `color` always wins over an ancestor's, so wrapping the OUTER
+text in a comment span after the fact can never grey out an
+already-nested, more specific token.
+
+**Fix:** `highlightPhpWithSqlComments` (`Block.mjs`) splits on the RAW,
+not-yet-highlighted `code` instead, so a `-- ...` comment run never reaches
+Prism at all — nothing left for it to mis-tokenise. Everything between
+matches is Prism-highlighted normally; each match is HTML-escaped and
+wrapped directly in `<span class="token comment">`, reusing the exact class
+Prism's own comments get — no new CSS, it inherits the existing
+AA-contrast-tuned grey/italic rule already in all three theme spots of
+`index.html` (see "Syntax highlighting (Prism)" above). Works identically
+for a whole multi-line block and for one bare diff row.
+
+The match only covers a comment that STARTS its own line (optional leading
+whitespace, then `--`, then either a space/tab and the rest of the line, or
+end of line right away) — narrowed from an earlier "anywhere on a line"
+version after a reviewer follow-up ("mag wel alleen -- grijs maken als het
+aan het begin staat"): a trailing `code -- comment` on the same line as
+real code is no longer greyed, only a comment on its own line. That
+line-start anchor also excludes PHP's own `--` decrement operator more
+robustly than the earlier "followed by a space/tab or EOL" rule alone:
+`$i--;`/`--$i;` still don't match, and unlike the earlier version,
+`$i -- ;` (decrement with unusual spacing on both sides) doesn't match
+EITHER anymore — the `$i` before `--` means it isn't preceded by
+whitespace-only, so the line-start anchor rules it out too. No accepted
+false-positive edge case survives. Verified against the vendored Prism
+grammar directly.
+
+Trade-off for the "whole block, one Prism call" sites: pulling a whole
+comment LINE out of the raw code before Prism sees it means that line no
+longer shares Prism's string-tokenisation context with its neighbours (moot
+— it's grey now anyway). Every actual code line, including one immediately
+next to a comment, is unaffected and still sits inside one unbroken Prism
+call, since a comment is only ever pulled out whole-line, never mid-line.
+Only gated to `grammarName === 'php'` — not `sql` (an explicit ` ```sql `
+fence, which already tokenises its own comments correctly) or
+`typescript`/others, not expected to embed a raw SQL string like this.
 
 ## Markdown rendering
 

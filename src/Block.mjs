@@ -92,48 +92,89 @@ export function highlightForLang(code, lang) {
   const grammarName = LANGUAGE_ALIASES[key] || key
   const grammar = Prism.languages[grammarName]
   if (!grammar) return escapeHtml(code)
-  const out = Prism.highlight(code, grammar, grammarName)
-  return grammarName === 'php' ? wrapSqlLineComments(out) : out
+  return grammarName === 'php' ? highlightPhpWithSqlComments(code, grammar, grammarName) : Prism.highlight(code, grammar, grammarName)
 }
 
-// wrapSqlLineComments — reviewer report (screenshot): a raw SQL query
-// embedded as a PHP string (e.g. `$sql = /** @lang ClickHouse */ "select
-// ... -- comment ..."`) has no SQL grammar of its own here — there's no
-// vendored/switched-to `sql` tokeniser for a PHP string literal, only the
-// `php` grammar itself (see `langForFile`/`highlightForLang` above) — so a
-// `-- ...` SQL-style comment inside it tokenises as plain STRING content,
-// same colour as the rest of the query, and doesn't read as a comment at
-// all. Reusing a dedicated SQL grammar for this would mean re-parsing PHP's
-// own string boundaries just to switch grammars mid-string — out of
-// proportion for one cosmetic fix — so instead this is a narrow POST-PROCESS
-// over the already-highlighted HTML: wrap a `--` run (to the end of its
-// line, so both a comment that starts its OWN line and a trailing
-// `code -- comment` on the same line are covered) in a `<span class="token
-// comment">`, reusing the EXACT class Prism's own comment tokens already
-// get — no new CSS needed at all, it inherits the already AA-contrast-tuned
-// grey/italic rule that exists in all three theme spots in index.html (see
-// "Syntax highlighting (Prism)" in .claude/rules/conventions.md).
+// highlightPhpWithSqlComments — reviewer report (screenshot): a raw SQL
+// query embedded as a PHP string (e.g. `$sql = /** @lang ClickHouse */
+// "select ... -- comment ..."`) has no SQL grammar of its own here — see
+// `langForFile`/`highlightForLang` above, only the `php` grammar is ever
+// used — so a `-- ...` SQL-style comment inside it read as ordinary query
+// text, same colour as the rest, and didn't look like a comment at all.
 //
-// Only requires that `--` is followed by a space/tab or the end of the
-// line — the actual SQL comment convention (`-- text` or a bare `--`) — to
-// tell it apart from PHP's OWN `--` decrement operator (`$i--`/`--$i`),
-// which is never legitimately followed by a space and more text on the
-// same line. Safe to run unscoped over the FULL highlighted HTML string
-// (not just inside `token string` spans) without a real HTML/DOM parse:
-// PHP's own `--` operator always tokenises into its own
-// `<span class="token operator">--</span>`, so in the underlying HTML TEXT
-// the two characters `--` are immediately followed by `<` (the closing
-// tag) — never by a literal space — regardless of whether the source has
-// whitespace around the operator (`$i --;`: the space sits AFTER the
-// closing `</span>`, not adjacent to the raw `--` text). Only plain,
-// untokenised text — string/heredoc content, or already-grey comment
-// content — can have `--` directly abutted by a real space or newline in
-// the HTML string, and that's exactly the content this is meant to catch.
-// Only gated to grammarName === 'php' (not e.g. `sql`, which already
-// tokenises its own comments correctly, or `typescript`/others, which
-// aren't expected to embed a raw SQL string like this).
-function wrapSqlLineComments(html) {
-  return html.replace(/--(?=[ \t]|$)[^\n]*/gm, (m) => `<span class="token comment">${m}</span>`)
+// FIRST ATTEMPT (reverted): post-process Prism's own HTML output, wrapping
+// a literal `--`-to-end-of-line run in a `<span class="token comment">`.
+// That worked for a block's FULL, multi-line code highlighted in ONE
+// `Prism.highlight()` call (`RelatedPanel.mjs`'s Underlying-code cards, the
+// footer, "list" mode) — inside real surrounding string quotes, Prism
+// already recognises the whole query as one plain-text `token string`, so
+// `--` and the words after it are un-tokenised text, safe to wrap wholesale.
+// It silently did NOT fix the DIFF view at `gran=line`: `rowCellHTML`/
+// `highlightChanges` (this file) call `highlight(text, lang)` PER ROW, one
+// bare line at a time, with no surrounding quote characters at all. Handed
+// a lone line like `-- Still paying when the month ended, ... or a product
+// switch ...` with no enclosing `"..."`, Prism has no way to know it's
+// string content — it tokenises it as top-level PHP, so ordinary English
+// words that happen to be PHP keywords (`and`, `or`, `not`, `use`,
+// `switch`, `as`, ...) got their own coloured `token keyword` span, and
+// even `--` itself became its own `token operator` (immediately followed
+// by `<` in the HTML, not a space, so the old regex never matched it
+// either). A child span's own `color` always wins over an ancestor's, so
+// wrapping the OUTER text in a comment span post-hoc can never grey out an
+// ALREADY-nested, more specific token underneath it.
+//
+// FIX: split on the RAW, not-yet-highlighted `code` instead, so a `-- ...`
+// comment run NEVER reaches Prism at all — nothing for it to
+// mis-tokenise. Everything between matches is Prism-highlighted normally;
+// each match is HTML-escaped and wrapped directly in a `<span
+// class="token comment">` — reusing the exact class Prism's own comments
+// get, so it inherits the existing AA-contrast-tuned grey/italic rule
+// already in all three theme spots of index.html, no new CSS. Works
+// identically for a whole multi-line block and for one bare diff row.
+//
+// The match itself only covers a comment that STARTS its own line
+// (optional leading whitespace, then `--`, then either a space/tab and the
+// rest of the line, or end of line right away) — deliberately narrower
+// than "anywhere on a line", a later reviewer simplification ("mag wel
+// alleen -- grijs maken als het aan het begin staat"): a trailing
+// `code -- comment` on the same line as real code is no longer greyed, only
+// a comment on its own line. That line-start anchor is also what excludes
+// PHP's own `--` decrement operator, and does it more robustly than the
+// first attempt's "followed by a space/tab or EOL" alone: `$i--;` and
+// `--$i;` still don't match (nothing after `--` but `;`/`$i`, neither a
+// space/tab nor end of line), and unlike the first attempt, `$i -- ;`
+// (decrement with unusual spacing on both sides) doesn't match EITHER now
+// — the `$i` before `--` means `--` isn't preceded by whitespace-only, so
+// the line-start anchor rules it out too. No accepted edge case survives.
+// Verified against the vendored Prism grammar directly, see the Node check
+// in this change's PR description.
+//
+// Trade-off for the "whole block, one Prism call" call sites (Underlying-
+// code cards, the footer, "list" mode): pulling a whole comment LINE out
+// of the raw code before it reaches Prism means that line no longer shares
+// Prism's string-tokenisation context with its neighbours, so it can't
+// itself be coloured as "part of the string" (moot — it's grey now anyway).
+// Every actual code line, including one immediately next to a comment, is
+// untouched and still sits inside one unbroken Prism call, since a comment
+// is only ever pulled out whole-line, never mid-line.
+// Only gated to `grammarName === 'php'` (not `sql`, which already
+// tokenises its own comments correctly, or `typescript`/others, not
+// expected to embed SQL).
+const SQL_LINE_COMMENT_RE = /^[ \t]*--(?:[ \t][^\n]*)?$/gm
+function highlightPhpWithSqlComments(code, grammar, grammarName) {
+  let result = ''
+  let lastIndex = 0
+  let m
+  SQL_LINE_COMMENT_RE.lastIndex = 0
+  while ((m = SQL_LINE_COMMENT_RE.exec(code))) {
+    const codePart = code.slice(lastIndex, m.index)
+    if (codePart) result += Prism.highlight(codePart, grammar, grammarName)
+    result += `<span class="token comment">${escapeHtml(m[0])}</span>`
+    lastIndex = SQL_LINE_COMMENT_RE.lastIndex
+  }
+  const rest = code.slice(lastIndex)
+  if (rest) result += Prism.highlight(rest, grammar, grammarName)
+  return result
 }
 
 // langForFile picks the Prism grammar (and CSS-scope class, see index.html's
