@@ -4694,6 +4694,54 @@ still did was CARRY data, so that moved one level up:
 already the element the preview walks, and a rendered button that isn't a
 control is exactly what the reviewer asked to get rid of.
 
+## A "Kopieer" button IS reintroduced later — a real control, not a dead data-carrier
+
+Reviewer request: "maak een copy knop in alle codeblok dingen die uit een
+check of comment komt. die kan je dan rechts in dit balkje plaatsen" — the
+slim header bar every fence already has (label + language word on the left,
+`justify-between` leaving the right side empty) gets a small "Kopieer" button
+on that right side. This does not contradict the "don't reintroduce a button"
+rule right above it — that rule is about a button with no action (the old
+"Bekijk volledig" once the preview column went always-on); a copy action is a
+genuine control.
+
+Two render points share one mechanism, `src/codeCopy.mjs`:
+
+- **`markdown.mjs`'s inline fence header** (`extractCodeFences`,
+  `data-testid="code-fence-copy"`, both the ordinary and the `suggestion`
+  emerald header variant) — raw HTML string, so the click is handled by
+  `initMarkdownCodeCopy()`, ONE document-level delegated listener (called once
+  from `home.mjs`, same shape as `imageLightbox.mjs`'s `initImageLightbox`)
+  matching a click on that testid and reading the fence's full raw code off
+  the ancestor `[data-fence-code]` wrapper — the exact same attribute
+  `recomputeCodePreviews` already reads (see "The dead 'Bekijk volledig'
+  button" above), so no new data plumbing was needed.
+- **`CodePreview.mjs`'s `pane()` header** (`data-testid="code-preview-copy"`)
+  — a real arrow.js template, so a plain `@click` calling
+  `copyCodeToClipboard(e.currentTarget, code)` is enough; `stopPropagation`
+  first, per the nested-`@click` ordering rule in arrowjs-pitfalls.md
+  (this pane sits inside `previewCard`'s own click-to-toggle header). Added to
+  every `pane()` call uniformly (both the "Huidig (PR)" and "Voorgesteld
+  (chat)"/single "Codeblok" panes) — `pane()` is only ever used inside this
+  comment/chat-derived preview card, never elsewhere.
+
+**Feedback is the button's own label swapping "Kopieer" → "Gekopieerd!"**
+(reusing the `'Gekopieerd!'` i18n key `overview.mjs`'s copy-URL button already
+established for this exact pattern) for 1.5s, then reverting — a WORD, not a
+colour change, per the colourblind rule. Applied via a direct DOM
+`textContent`/attribute write on the clicked button (`flashCopied` in
+`codeCopy.mjs`) rather than through arrow.js reactive state: the
+`markdown.mjs` button has no arrow.js binding to hang state off at all (it's
+a plain string in an `.innerHTML` blob), so both call sites share the exact
+same mechanism instead of inventing a second one for the arrow.js side.
+
+**Deliberately excluded: `Block.mjs`'s diff code panes.** Those show the PR's
+own diff code, not something "uit een check of comment" — copying that is a
+different, pre-existing feature (`copySelectedCode`/"Kopieer deze regel",
+`home.mjs`).
+
+Test: `tests/code-fence-copy.spec.mjs`.
+
 ## The INLINE fence is capped to ~2 lines, faded — the full code is already below
 
 Reviewer follow-up, once the preview card above always shows the full code

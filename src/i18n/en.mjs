@@ -390,6 +390,8 @@ export const EN = {
   'Sluit menu': 'Close menu',
   'Open op GitHub': 'Open on GitHub',
   'Gekopieerd!': 'Copied!',
+  Kopieer: 'Copy',
+  'Kopieer code': 'Copy code',
   'Kopieer GitHub URL': 'Copy GitHub URL',
   'Open Jira-ticket': 'Open Jira ticket',
   'Repo is niet beschikbaar': 'Repo is not available',

@@ -166,6 +166,7 @@ import { bindUrlState, num } from './urlState.mjs'
 import { renderMarkdown } from './markdown.mjs'
 import { commentMentionsMe } from './mentions.mjs'
 import ImageLightboxHost, { initImageLightbox, isLightboxOpen, handleLightboxKeydown } from './imageLightbox.mjs'
+import { initMarkdownCodeCopy } from './codeCopy.mjs'
 // The global failed-tasks dialog (failedTasks.mjs) — same top-level-mount +
 // owns-the-keyboard contract as the lightbox above.
 import FailedTasksHost, { initFailedTasksPopup, isFailedTasksOpen, handleFailedTasksKeydown } from './failedTasks.mjs'
@@ -205,6 +206,7 @@ import {
 initTheme()
 syncUiLang()
 initImageLightbox()
+initMarkdownCodeCopy()
 initFailedTasksPopup()
 initAuthStatusPopup()
 // Debug mode (off unless the reviewer switched it on, see src/debugLog.mjs):

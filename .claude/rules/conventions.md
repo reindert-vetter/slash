@@ -220,6 +220,13 @@ arbitrary-value class next to its `truncate`/`line-clamp`/no-wrap class —
 without it a long spaceless token (URL, hash, path) sticks out of the
 card/bubble, since the default only breaks at word boundaries.
 
+**Every fence's own header bar also carries a "Kopieer" button** on its right
+side (`src/codeCopy.mjs`, one mechanism shared with the bigger preview card's
+own header in `CodePreview.mjs`) — see "A 'Kopieer' button IS reintroduced
+later" in `.claude/docs/claude-chat-panel.md` for the full mechanism
+(delegated click for the raw-HTML fence header, a plain `@click` for the
+preview card, word-based "Gekopieerd!" feedback).
+
 ### Markdown images: grouped side by side, click-to-fullscreen, →/← to cycle
 
 Reviewer request ("ik wil screenshots uit readme kunnen inzien... als er

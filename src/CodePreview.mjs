@@ -44,6 +44,7 @@ import { html } from './vendor/arrow.js'
 import { highlightForLang, scrollHint } from './Block.mjs'
 import { updateScrollHints } from './scrollFade.mjs'
 import { renderMarkdown } from './markdown.mjs'
+import { copyCodeToClipboard } from './codeCopy.mjs'
 import { t } from './i18n.mjs'
 
 // splitCodeByClasses(code) — best-effort split of a snippet into per-class
@@ -194,9 +195,26 @@ function pane(titleText, code, lang) {
   return html`
     <div class="relative rounded border border-slate-200 dark:border-zinc-700 overflow-hidden">
       <div
-        class="flex items-center px-2 py-1 text-[11px] font-medium text-slate-500 dark:text-zinc-400 bg-slate-50 dark:bg-zinc-800/60 border-b border-slate-200 dark:border-zinc-700"
+        class="flex items-center justify-between px-2 py-1 text-[11px] font-medium text-slate-500 dark:text-zinc-400 bg-slate-50 dark:bg-zinc-800/60 border-b border-slate-200 dark:border-zinc-700"
       >
-        ${() => titleText}
+        <span class="flex items-center">${() => titleText}</span>
+        <button
+          type="button"
+          class="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 dark:text-zinc-400 hover:bg-slate-200 dark:hover:bg-zinc-700"
+          data-testid="code-preview-copy"
+          data-copy-label="${t('Kopieer')}"
+          title="${t('Kopieer code')}"
+          aria-label="${t('Kopieer code')}"
+          @click="${(e) => {
+            // stopPropagation FIRST, per the nested-@click ordering rule in
+            // arrowjs-pitfalls.md — this pane sits inside a card whose own
+            // header toggles expanded/collapsed on click.
+            if (e && e.stopPropagation) e.stopPropagation()
+            copyCodeToClipboard(e.currentTarget, code)
+          }}"
+        >
+          ${t('Kopieer')}
+        </button>
       </div>
       ${body}
       ${scrollHint('up')}
