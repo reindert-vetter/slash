@@ -4394,6 +4394,34 @@ changes, all in the same three files (`markdown.mjs`, `RelatedPanel.mjs`'s
   "Default-collapsed cards" bullet above and `stepChevronSlot` already work
   around elsewhere.
 
+### A collapsed card's own affordance is back — a labelled button, not the removed chevron
+
+The chevron-less, click-anywhere header from the section above turned out to
+be TOO quiet: reviewer report (screenshot) — "onder de chat en comment blok
+komen dezelfde teksten opnieuw in blokken maar dan groter, die zijn ingeklapt
+als er nieuwe thread dingen zijn gekomen, dus die moeten duidelijk zijn dat
+het ingeklapt is" — a card demoted to "not the last answer" (see "A card not
+belonging to the LAST answer starts collapsed" above) reads as plain,
+unremarkable text; `cursor-pointer` plus a hover-only `title` tooltip
+("Uitklappen (Enter)") gave no visible cue at all that there was more to see,
+or how to get to it.
+
+`CodePreview.mjs`'s `previewCard` now renders a small, clearly labelled
+button — `data-testid="code-preview-expand-btn"`, text **"Blok ingeklapt —
+klik om uit te klappen"** plus a `▾` glyph (colourblind rule: the word carries
+the meaning, the glyph is decoration) — directly below the (possibly
+CSS-truncated) context line, but ONLY while `!expanded()`. It is a SIBLING of
+the `code-preview-toggle` header block, not nested inside it, so its own
+`@click` (still `stopPropagation`-first, this file's established habit, even
+though the click can't actually reach the header here) calling
+`onToggle(it.key)` is the only handler that fires. No symmetrical "collapse"
+button once expanded — the header's own click-to-toggle (unchanged, still the
+only way to collapse a card again) already covers that direction; the
+reviewer's request was specifically about discoverability of the COLLAPSED
+state, not about undoing the earlier "uitklap ding... kan helemaal weg"
+removal for the expanded one. Test: the `code-preview-expand-btn` assertions
+in `tests/codeblock-card-collapse.spec.mjs`.
+
 Test: `tests/codeblock-card-collapse.spec.mjs`.
 
 ### A pending-edits card: links to what the latest chat-driven edit touched — REMOVED

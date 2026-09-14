@@ -108,6 +108,7 @@ export const EN = {
   // ── src/CodePreview.mjs ─────────────────────────────────────────────────
   Inklappen: 'Collapse',
   'Uitklappen (Enter)': 'Expand (Enter)',
+  'Blok ingeklapt — klik om uit te klappen': 'Block collapsed — click to expand',
   'Huidig (PR)': 'Current (PR)',
   'Voorgesteld (chat)': 'Suggested (chat)',
   Codeblok: 'Code block',

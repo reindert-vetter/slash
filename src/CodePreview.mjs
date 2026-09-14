@@ -243,6 +243,27 @@ function pane(titleText, code, lang) {
 // mouse-navigation.md rule as before ("a click runs the same function a key
 // runs"), just on a bigger, glyph-less target instead of a dedicated button.
 //
+// A dedicated button is BACK for the collapsed state specifically (reviewer
+// report, screenshot: "onder de chat en comment blok komen dezelfde teksten
+// opnieuw in blokken maar dan groter, die zijn ingeklapt als er nieuwe
+// thread dingen zijn gekomen, dus die moeten duidelijk zijn dat het
+// ingeklapt is" — a card whose own answer is no longer the LATEST one
+// collapses to just its one-line, truncated `context` text with nothing
+// else — cursor-pointer and a hover-only title tooltip were not enough of a
+// cue that there is more hidden here). `code-preview-expand-btn`, rendered
+// only while `!expanded()`, right below the (possibly truncated) context
+// line: a labelled word ("Blok ingeklapt — klik om uit te klappen") plus a
+// ▾ glyph, per the colourblind rule — never colour alone. It is a SIBLING
+// of the `code-preview-toggle` header block, not nested inside it — its own
+// `@click` calls `onToggle(it.key)` directly, with the same
+// `stopPropagation`-first ordering as the header's handler above as a
+// defensive habit (this file's established pattern), even though this
+// button's own click never actually reaches the header. No symmetrical
+// "collapse" button once expanded — the header's own
+// click-to-toggle (still present) already covers that direction, and the
+// reviewer's request was specifically about discoverability of the
+// COLLAPSED state, not about removing the header affordance again.
+//
 // previewCard renders ONE card in the stack below the chat: an ordinary
 // fence's "Huidig (PR)"/"Voorgesteld (chat)" pair (same shell — border/ring,
 // active marker, click-to-toggle header, collapse/expand). `active`/
@@ -352,6 +373,24 @@ function previewCard(it, active, expanded, onToggle) {
               ></span>`
             : ''}
       </div>
+      ${() =>
+        expanded()
+          ? ''
+          : html`<button
+              type="button"
+              data-testid="code-preview-expand-btn"
+              class="self-start inline-flex items-center gap-1 rounded-md border border-indigo-200 bg-indigo-50 px-2 py-1 text-[11px] font-semibold text-indigo-600 hover:bg-indigo-100 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-300 dark:hover:bg-indigo-500/20"
+              @click="${(e) => {
+                // stopPropagation FIRST, before the toggle mutates the
+                // reactive state this button's own ancestor re-renders off —
+                // see the nested-@click ordering rule in arrowjs-pitfalls.md.
+                if (e && e.stopPropagation) e.stopPropagation()
+                onToggle(it.key)
+              }}"
+            >
+              ${t('Blok ingeklapt — klik om uit te klappen')}
+              <span aria-hidden="true">▾</span>
+            </button>`}
       <div class="flex flex-col gap-2" data-testid="code-preview-body">
         ${() =>
           expanded()

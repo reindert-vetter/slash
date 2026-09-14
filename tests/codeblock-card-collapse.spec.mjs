@@ -124,6 +124,20 @@ test('code-preview cards: richer title, collapsed-only truncation, newest on top
   await expect(olderCard.locator('pre.code')).toHaveCount(0)
   await expect(olderCard.getByTestId('code-preview-toggle')).toHaveAttribute('title', 'Uitklappen (Enter)')
   await expect(olderCard.getByTestId('code-preview-context')).toHaveClass(/truncate/)
+  // Reviewer report: a card demoted to "not the last answer" read as plain,
+  // unremarkable text — nothing said it was collapsed or how to open it
+  // (cursor-pointer + a hover-only tooltip is not enough). A labelled button
+  // sits right below the (truncated) context text; clicking it expands the
+  // card exactly like clicking the header does, and disappears once expanded.
+  const expandBtn = olderCard.getByTestId('code-preview-expand-btn')
+  await expect(expandBtn).toBeVisible()
+  await expect(newestCard.getByTestId('code-preview-expand-btn')).toHaveCount(0)
+  await expandBtn.click()
+  await expect(olderCard).toHaveAttribute('data-expanded', 'true')
+  await expect(olderCard.getByTestId('code-preview-expand-btn')).toHaveCount(0)
+  // Collapse it again via the header, ready for the keyboard-driven checks below.
+  await olderCard.getByTestId('code-preview-toggle').click()
+  await expect(olderCard).toHaveAttribute('data-expanded', 'false')
 
   // Enter on the focused (collapsed) older card — now the SECOND card, two
   // ArrowDowns from the composer's rest position — expands it. A brief
