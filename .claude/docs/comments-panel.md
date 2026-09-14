@@ -36,85 +36,86 @@ the comment, but there is no code to step into. The PR-wide/orphan kinds and an
 Consequences documented elsewhere: it makes every open comment a stop on the ↑/↓
 walk and an unapproved unit of the PR total, resolved via the row's own
 **`Enter` menu** ("Resolve comment" — see `.claude/docs/approval.md`; `Space`
-does NOT resolve a comment row, see "The comment_batch checkboxes and the
-bottom action row" below), and it is what the `comment_batch` progress
+does NOT resolve a comment row, it HIDES it — see "`Space` hides the row
+(Ignore) and moves on" below), and it is what the `comment_batch` progress
 hangs off (`batchPill` on the row, the log line in the card's footer — see
 `.claude/docs/workflows-comments.md`).
 
-### The comment_batch checkboxes and the bottom action row
+### `Space` hides the row (Ignore) and moves on
 
-Reviewer request: "verplaats deze lijst naar de index, dat moet dan checkboxes
-krijgen met de actie row onderin" — followed by "die zijn toch hetzelfde? dat
-moet hetzelfde zijn" once asked whether the palette's comment_batch list and
-this very index were meant to be two different things. They weren't: the
-`comment_batch` run (`.claude/docs/workflows-comments.md`) now works entirely
-off THIS list, not a separate one.
+Reviewer request: "spatie in de comment op regel en ai warning index blokken
+index item, dan wil ik het verwijderen en naar de volgende gaan". Answered with
+**Ignore, not delete and not resolve** (explicitly confirmed when asked): the
+row disappears from the index and comes straight back via "Toon N verborgen
+comments", so a mis-hit costs one click. That choice is the whole point of this
+entry — `Space` is one keypress with no confirm, and BOTH destructive readings
+had already been rejected here: an earlier cut let `Space` resolve outright and
+was reverted ("ik wil niet comments kunnen resolven met een spatiebalk in de
+blokken index, dat gaat te snel"), and deleting removes a real GitHub comment
+with no undo at all. Resolving and deleting stay where they are, in the row's
+own `Enter` menu (`prCommentCommandsFor`).
 
-- **Eligibility is the one existing rule, reused verbatim** — `isBatchEligible`
-  (`commentBatch.mjs`): still open, not one of our own AI findings
-  (`source==='ai'`/`kind==='ai_warning'`). `batchEligibleRows(state)`
-  (`BlockList.mjs`) applies it to `state.blocks` itself — deliberately the rows
-  ALREADY in this list, not the wider `commentListSnapshot()` the removed
-  palette read: the checkbox lives on the row, so a comment with no row (e.g.
-  its block isn't in this tree, see "Every UNRESOLVED..." above) simply can't
-  be checked. A kilo-review bot summary needs no separate exclusion here either
-  — it never gets a row at all (see `isKiloReview`'s call sites in
-  `prWideComments`), so it never reaches `batchEligibleRows`.
-- **The checkbox** (`batchCheckbox`, `data-testid=batch-checkbox`) renders on
-  every eligible row, right before its avatar/category badge — **checked by
-  default** (`state.batchChecked` only ever records an explicit *un*check,
-  mirroring `state.ignoredComments`' shape, and is ephemeral/session-only,
-  unlike that durable map: excluding one comment from THIS run is a momentary
-  curation, not a standing reviewer decision). Toggling it never touches
-  `state.selected` (`e.stopPropagation()` first, per the nested-`@click` rule
-  in `.claude/rules/arrowjs-pitfalls.md`).
-- **`Space` toggles it — reworked after a follow-up reviewer report.** The
-  first cut left `Space` resolving the comment (unrelated to the checkbox) and
-  added a separate `x` key for the checkbox itself; reported back as "does not
-  work well with keyboard navigation" — resolving via a single, easy-to-hit
-  key next to a checkbox was "too easy to trigger by accident", and clicking
-  the checkbox with the MOUSE first (to test it) left the input holding real
-  DOM focus, which silently broke every later `Enter`/`Space` on that row (see
-  "Generic input-focus guard" in `.claude/docs/keyboard-navigation.md` for the
-  `isEditableFocused()` root cause and its fix). Now: `Space` on a
-  comment-index row (`spaceKey`, checked BEFORE any approve logic) toggles the
-  SELECTED row's own checkbox (`toggleBatchChecked`, same function the
-  checkbox's own click uses) when it has one; on a row with **no** checkbox
-  (an AI finding, or an ignored-and-revealed comment) it instead **advances to
-  the next row**, mirroring the existing "↓ falls through" convention rather
-  than doing nothing. Resolving a comment no longer has ANY single-keypress
-  shortcut — it only happens through the row's own `Enter` menu ("Resolve
-  comment", already the default item for the reviewer's own comment). The `x`
-  key from the first cut is gone outright (not kept as an alias): `Space` now
-  covers the same ground and is the more discoverable, checkbox-native key.
-- **The bottom action row** (`batchActionRow`, `data-testid=batch-action-row`)
-  sits right after the two toggle rows and before the push-todo section (it
-  acts on comments that are already in this list, so it belongs with the rest
-  of the comment machinery rather than with the branch-level push todo) —
-  "Verwerk N comments met Claude (Opus 5)", `N` = `checkedBatchComments(state)`,
-  and shown only while at least one eligible row exists at all. Disabled while
-  a batch is already running (the label then switches to the three-line
-  running state — counter, "Bezig met: &lt;comment&gt;", and the live
-  `claudeStatusText` activity, see "Where the reviewer sees it" in
-  `.claude/docs/workflows-comments.md`) or while nothing is checked. Enter/click run
-  `startBatchFromRow()` **directly — no confirm submenu**, since the
-  checkboxes above already are the deliberate curation step (contrast the
-  push-todo row right below it, which DOES open a confirm menu because pushing
-  writes to a branch other people work on). It is itself a stop of the
-  sidebar's `↑`/`↓` loop (`state.batchRowFocused`) — see "The sidebar's `↑`/`↓`
-  cursor forms one circular loop" in `.claude/docs/keyboard-navigation.md`.
-- **Starting the run** jumps to the first CHECKED comment (`jumpToCommentRow`),
-  where the live pill/log show up, exactly as the removed palette did for its
-  own first row.
+- **Scope: the two sections the request names** —
+  `isSpaceIgnorableCommentRow` (`home.mjs`): a "Comments op regels" row
+  (`b.lineAnchored`, the same flag `renderList` groups that section by) and
+  every AI risk finding (`isAiComment`), wherever its row happens to sit.
+  Deliberately NOT the PR-wide human comments, the "Genoemd" section's PR-wide
+  rows, the "Openstaande chats" rows (`b.chatOnly`) or an already-ignored,
+  revealed one — those keep the pre-existing "↓ falls through" behaviour:
+  `Space` advances to the next row rather than doing nothing.
+- **The write is the existing one** — `toggleIgnoreComment`, i.e. the same
+  durable `ignore_comment` tracker Signal the `Enter` menu's own "Ignore" item
+  uses. For a row standing for a group of comments on one line the flag is
+  keyed on the ROW id, so the primary comment carries the whole row, exactly as
+  that menu item already did.
+- **"…en naar de volgende"** reuses `afterCommentRowRemoved` — the same
+  follow-up resolve/delete already share: the next still-open comment/chat row,
+  else the review-submit offer. Its scan (`findNextUnresolvedCommentFrom`) now
+  **skips an ignored row** unless `state.showIgnored` reveals it, like the
+  three other index scans (`stepVisibleFrom`/`lastVisibleIndex`/
+  `firstVisibleIndex`) always did: without that, walking a section with `Space`
+  keeps landing the cursor on rows nobody can see.
+- **The hint line follows the key**: `spaceHint()` (`home.mjs`) words `Space`
+  as "verbergen + door" instead of "goedkeuren + door" while the cursor sits on
+  such a row — its anchor block is shown as a drilled column with its own hint
+  line, so the two must not disagree.
+
+Test: `tests/comment-space-ignore.spec.mjs` (plus the `Space` half of
+`tests/comment-line-grouping.spec.mjs`).
+
+### The comment_batch checkboxes and the bottom action row were removed
+
+They existed between those two changes and are gone again, on request
+("checkbox weghalen", then confirmed as "het hele selectie-UI weg"): every
+eligible row carried a `batch-checkbox` (checked by default, `Space` toggled
+it) and the sidebar ended in a `batch-action-row` — "Verwerk N comments met
+Claude (Opus 5)" — that handed the checked comments to one `comment_batch`
+agent. `Space` needed the key for the Ignore above, and a checkbox nobody could
+reach from the keyboard was not worth keeping.
+
+Removed with them: `batchEligibleRows`/`checkedBatchComments`/
+`toggleBatchChecked`/`batchCheckbox`/`batchActionRow` (`BlockList.mjs`),
+`state.batchChecked`/`state.batchRowFocused`/`batchRowVisible`/
+`startBatchFromRow`/`onBatchRow` (`home.mjs`, including that row's stop in the
+sidebar's `↑`/`↓` loop) and `isBatchEligible`/`startCommentBatch`
+(`commentBatch.mjs`).
+
+**The `comment_batch` workflow itself stays** (`comment_batch.go`) — only the
+UI entry point is gone, so a run is started by POSTing
+`/api/workflows/comment_batch` directly. Everything that REPORTS on a running
+one is deliberately untouched and still works for such a run: `batchPill` on
+the row, the log line in the comment's footer, the shared snapshot in
+`commentBatch.mjs` (see `.claude/docs/workflows-comments.md`).
 
 ### The old palette entry point was removed
 
 `REVIEW_BATCH_COMMENTS_ITEM` (the "Laat Claude alle openstaande comments
 verwerken" row in both review-submit follow-ups, and thus in `/` → GitHub →
 "PR keuren") and the `'bulkComments'` palette mode it opened are gone —
-**deliberately with no replacement shortcut**: the bottom action row above is
-now always visible in the sidebar whenever there's something to batch, which
-already covers that entry point. See `.claude/docs/command-palette.md`.
+**deliberately with no replacement shortcut**: the bottom action row that
+replaced it is meanwhile gone too (see the section right above), so the index
+no longer starts a `comment_batch` run at all. See
+`.claude/docs/command-palette.md`.
 
 ### Selecting a "Start" item empties the block-scoped index
 
@@ -1672,8 +1673,8 @@ Then optionally **"Comment hiervan maken"** (AI findings only, see below) and
 finally **"Ignore"**.
 
 **An AI finding gets no resolve/unresolve item at all** (`isAiComment(c)` —
-`source === 'ai'` or `kind === 'ai_warning'`, the same pair `isBatchEligible`
-uses): reviewer request, "ai comments wil ik niet resolven, maar wil ik
+`source === 'ai'` or `kind === 'ai_warning'`, the same pair `comment_batch`'s
+own server-side eligibility check uses): reviewer request, "ai comments wil ik niet resolven, maar wil ik
 verwijderen". Both halves go, not just "Resolve comment" — resolving is a
 conversation concept that doesn't apply to a `code_warning` finding. So this
 menu reads **"Beantwoorden"** then **"Verwijder comment"** there, with

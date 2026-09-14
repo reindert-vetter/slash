@@ -6,8 +6,14 @@
 //   - the left index row of a comment (BlockList.mjs — the pulsing "Claude
 //     bezig" / "verwerkt" pill),
 //   - the log line under the selected comment (CommentClaudeFooter,
-//     RelatedPanel.mjs — the SAME status element a Claude chat turn uses),
-//   - the palette list that starts the run (home.mjs).
+//     RelatedPanel.mjs — the SAME status element a Claude chat turn uses).
+//
+// This module only REPORTS on a run; it can no longer start one. The sidebar's
+// checkbox selection + "Verwerk N comments met Claude" action row were removed
+// on request (Space on such a row now hides it instead, see spaceKey in
+// home.mjs), and with them the last UI entry point — a run is started by
+// POSTing /api/workflows/comment_batch directly. Everything below keeps
+// working unchanged for a run started that way.
 //
 // A shared pure-ish utility module like theme.mjs/events.mjs: it owns one
 // reactive object plus its fetch/SSE plumbing and imports no component.
@@ -18,7 +24,7 @@
 // thread, which stays the reviewer's own call. So a server restart simply
 // leaves the comments as ordinary open comments again.
 import { reactive } from './vendor/arrow.js'
-import { repoParam, repoField } from './prContext.mjs'
+import { repoParam } from './prContext.mjs'
 import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
 import { t } from './i18n.mjs'
 
@@ -120,25 +126,6 @@ export function syncCommentBatch(pr) {
   onEventsResync(() => refreshCommentBatch(batch.pr))
 }
 
-// isBatchEligible is the reviewer's own rule for what a comment_batch run may
-// touch — "van GitHub + eigen, geen AI": still open, and not one of our own AI
-// findings (source:'ai'/kind:'ai_warning'). Used by BlockList.mjs's
-// batchEligibleRows (which comment-index rows get a batch-selection checkbox)
-// AND, through it, by home.mjs's checkedBatchComments (which comments the
-// sidebar's bottom action row actually hands to Claude) — one predicate, so
-// the checkbox and the run always agree on the same set by construction.
-// Kept here rather than in RelatedPanel.mjs/home.mjs to avoid a circular
-// import: RelatedPanel.mjs already imports FROM BlockList.mjs, so
-// BlockList.mjs can never import back from it (or from home.mjs) — this
-// module has no imports of its own and is exactly the neutral, shared spot
-// both sides already use for batch state. A kilo-review bot summary needs no
-// explicit exclusion here: it never gets a comment-index row in the first
-// place (see isKiloReview's call sites in RelatedPanel.mjs's
-// prWideComments), so it never reaches batchEligibleRows either.
-export function isBatchEligible(c) {
-  return !!c && c.status !== 'resolved' && c.source !== 'ai' && c.kind !== 'ai_warning'
-}
-
 // batchItemFor returns {state, note} for one comment, or null when this run
 // knows nothing about it (the normal case for most comments).
 export function batchItemFor(commentId) {
@@ -167,35 +154,4 @@ export function batchNoteFor(commentId) {
   const label = t(BATCH_STATE_LABEL[it.state] || it.state)
   if (it.state === 'busy' || it.state === 'open') return batch.running ? label : ''
   return it.note ? t('{label}: {note}', { label, note: it.note }) : label
-}
-
-// startCommentBatch confirms the run: POST the exact ids the reviewer just saw.
-// Returns true when the run was accepted. Writing only ever happens by starting
-// a workflow (see .claude/rules/workflows-write-boundary.md).
-export async function startCommentBatch(pr, commentIds) {
-  if (!pr || !commentIds || !commentIds.length) return false
-  try {
-    const res = await fetch('/api/workflows/comment_batch', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pr, repo: repoField(), commentIds }),
-    })
-    if (!res.ok) {
-      console.error('comment_batch failed:', res.status, await res.text().catch(() => ''))
-      return false
-    }
-    // Show "in de wachtrij" right away instead of waiting for the first push —
-    // the run's own first snapshot overwrites this within a second.
-    applySnapshot({
-      running: true,
-      total: commentIds.length,
-      phase: 'preparing',
-      startedAt: Date.now(),
-      items: commentIds.map((id) => ({ commentId: id, state: 'open' })),
-    })
-    return true
-  } catch (err) {
-    console.error('comment_batch network error:', err)
-    return false
-  }
 }

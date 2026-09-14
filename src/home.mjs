@@ -3,14 +3,7 @@
 // up/down keyboard navigation through the flat list.
 
 import { reactive, html, watch } from './vendor/arrow.js'
-import BlockList, {
-  isFullyApproved,
-  isIgnoredComment,
-  batchEligibleRows,
-  checkedBatchComments,
-  toggleBatchChecked,
-} from './BlockList.mjs'
-import { isBatchEligible, startCommentBatch } from './commentBatch.mjs'
+import BlockList, { isFullyApproved, isIgnoredComment } from './BlockList.mjs'
 import { testRun, syncTestRun, startTestRun, cancelTestRun, hasTestRunActivity, TEST_RUN_STATE_LABEL } from './testRun.mjs'
 import { claudeStatusText } from './ClaudeChat.mjs'
 import Footer, { footerBoxPx } from './Footer.mjs'
@@ -598,25 +591,8 @@ const state = reactive({
   // BlockList.mjs): true once the keyboard cursor sits on THAT row. Mutually
   // exclusive with the two stops above and with searchActive. Ephemeral.
   pushTodoFocused: false,
-  // batchChecked — { commentId: false } of comments the reviewer explicitly
-  // UNchecked from the comment_batch selection (see batchCheckbox,
-  // BlockList.mjs) — absence means checked, so every batch-eligible comment
-  // starts checked, reproducing the removed 'bulkComments' palette's "hand
-  // over everything" default. Ephemeral, session-only: unlike ignoredComments
-  // this is a momentary curation of ONE upcoming run, not a durable reviewer
-  // decision, so it's neither persisted nor bound to the URL. Reassigned
-  // wholesale on every toggle so arrow.js re-renders (see toggleBatchChecked).
-  batchChecked: {},
-  // batchRowFocused — the same idea as toggleFocused/ignoreToggleFocused/
-  // pushTodoFocused above, for the bottom "Verwerk N comments met Claude"
-  // action row (batchActionRow, BlockList.mjs): true once the keyboard cursor
-  // sits on THAT row instead of a block. Sits between ignoreToggleFocused and
-  // pushTodoFocused in the sidebar's ↑/↓ loop (see stepListSelection) because
-  // that's also the row's render position — mirroring toggleFocused's own
-  // spot for the row right above it. Ephemeral.
-  batchRowFocused: false,
   // staleRowFocused — the mirror-image stop of toggleFocused/ignoreToggleFocused/
-  // batchRowFocused/pushTodoFocused, but at the TOP of the sidebar's ↑/↓ loop
+  // pushTodoFocused, but at the TOP of the sidebar's ↑/↓ loop
   // instead of the bottom: true once the keyboard cursor sits on the
   // "Nieuwe commits in deze PR" notice (staleTreeRow, BlockList.mjs) instead of
   // a block. Only ever reachable while state.blocksStale is true (see
@@ -699,18 +675,6 @@ const state = reactive({
     state.staleRowFocused = false
     state.pushTodoFocused = true
     openMenu('pushTodo', opts)
-  },
-  // onBatchRow — the batch action row's click handler. A click runs the same
-  // function the row's own Enter runs (see .claude/docs/mouse-navigation.md):
-  // it moves the keyboard stop onto the row AND starts the run directly — see
-  // startBatchFromRow's own doc comment for why this one has no confirm step.
-  onBatchRow: () => {
-    state.toggleFocused = false
-    state.ignoreToggleFocused = false
-    state.pushTodoFocused = false
-    state.staleRowFocused = false
-    state.batchRowFocused = true
-    startBatchFromRow()
   },
   // onRowContextMenu — a sidebar row's right-click handler (BlockList.mjs's
   // row(), which lands the selection first, exactly like its own @click).
@@ -3391,10 +3355,10 @@ watch(
 // the line — only blockApproveCount looks at the full `comments` array (to sum
 // done/total across the whole group). A solo comment (the overwhelmingly
 // common case) is a "group" of exactly one, so nothing about its own row
-// changes. Space's own batch-checkbox toggle (spaceKey) deliberately stays
-// scoped to just `b.comment` (the primary), mirroring batchCheckbox's own
-// scope — see "The comment_batch checkboxes and the bottom action row" in
-// comments-panel.md.
+// changes. Space's own Ignore (spaceKey) deliberately stays scoped to just
+// `b.comment` (the primary) as well — the ignore flag is keyed on the ROW id,
+// so hiding the primary hides the whole group's row, exactly like the Enter
+// menu's own "Ignore" item does.
 function commentBlockItem(comments) {
   const c = comments[0]
   // The generated short title (comment_titles, see commentTitleOf in
@@ -3916,14 +3880,6 @@ function ignoreToggleRowVisible() {
   return state.blocks.some((b) => isIgnoredComment(state, b))
 }
 
-// batchRowVisible mirrors toggleRowVisible/ignoreToggleRowVisible for the
-// bottom "Verwerk N comments met Claude" action row — it exists whenever at
-// least one comment-index item is batch-eligible (batchEligibleRows,
-// BlockList.mjs), regardless of how many of them are currently checked.
-function batchRowVisible() {
-  return batchEligibleRows(state).length > 0
-}
-
 // pushTodoRowVisible mirrors the two above for the push-todo row at the very
 // bottom of the index (pushTodoRow in BlockList.mjs) — it exists exactly while
 // this PR has landed Claude commits that are not pushed to GitHub yet
@@ -4021,7 +3977,6 @@ function extendListRange(dir) {
   if (
     state.toggleFocused ||
     state.ignoreToggleFocused ||
-    state.batchRowFocused ||
     state.pushTodoFocused ||
     state.searchActive
   )
@@ -4183,10 +4138,10 @@ async function approveAllForPr() {
 // itself (see searchStepSelection for that case). It closes the sidebar into
 // one circular loop:
 //   stale-tree? → block0 → … → blockN → toggle-approved? → toggle-ignored? →
-//   batch-action? → push-todo? → search → stale-tree?/block0
+//   push-todo? → search → stale-tree?/block0
 // (↑ walks the exact same loop backwards). Each trailing row (and the leading
 // stale-tree stop) is only a stop when actually rendered
-// (toggleRowVisible/ignoreToggleRowVisible/batchRowVisible/pushTodoRowVisible/
+// (toggleRowVisible/ignoreToggleRowVisible/pushTodoRowVisible/
 // state.blocksStale for the stale-tree row); the search box is always the
 // loop's other end, reached via activateSearch() (which also drives real DOM
 // focus, so BlockList's existing searchActive ring lights up) — stepping
@@ -4209,23 +4164,15 @@ function stepListSelection(dir) {
       activateSearch()
       return
     }
-    if (state.batchRowFocused) {
-      state.batchRowFocused = false
-      if (pushTodoRowVisible()) state.pushTodoFocused = true
-      else activateSearch()
-      return
-    }
     if (state.ignoreToggleFocused) {
       state.ignoreToggleFocused = false
-      if (batchRowVisible()) state.batchRowFocused = true
-      else if (pushTodoRowVisible()) state.pushTodoFocused = true
+      if (pushTodoRowVisible()) state.pushTodoFocused = true
       else activateSearch()
       return
     }
     if (state.toggleFocused) {
       state.toggleFocused = false
       if (ignoreToggleRowVisible()) state.ignoreToggleFocused = true
-      else if (batchRowVisible()) state.batchRowFocused = true
       else if (pushTodoRowVisible()) state.pushTodoFocused = true
       else activateSearch()
       return
@@ -4234,7 +4181,6 @@ function stepListSelection(dir) {
     if (next === state.selected) {
       if (toggleRowVisible()) state.toggleFocused = true
       else if (ignoreToggleRowVisible()) state.ignoreToggleFocused = true
-      else if (batchRowVisible()) state.batchRowFocused = true
       else if (pushTodoRowVisible()) state.pushTodoFocused = true
       else activateSearch()
       return
@@ -4244,17 +4190,10 @@ function stepListSelection(dir) {
   }
   if (state.pushTodoFocused) {
     state.pushTodoFocused = false
-    if (batchRowVisible()) state.batchRowFocused = true
-    else if (ignoreToggleRowVisible()) state.ignoreToggleFocused = true
+    if (ignoreToggleRowVisible()) state.ignoreToggleFocused = true
     else if (toggleRowVisible()) state.toggleFocused = true
     // Nothing above: state.selected already holds the last visible block
     // (unchanged all the way through the trailing rows) — nothing to do.
-    return
-  }
-  if (state.batchRowFocused) {
-    state.batchRowFocused = false
-    if (ignoreToggleRowVisible()) state.ignoreToggleFocused = true
-    else if (toggleRowVisible()) state.toggleFocused = true
     return
   }
   if (state.ignoreToggleFocused) {
@@ -4333,10 +4272,6 @@ function searchStepSelection(dir) {
     if (last >= 0) selectRow(last)
     if (pushTodoRowVisible()) {
       state.pushTodoFocused = true
-      return
-    }
-    if (batchRowVisible()) {
-      state.batchRowFocused = true
       return
     }
     if (ignoreToggleRowVisible()) {
@@ -4419,7 +4354,6 @@ function revealApprovedBlocks() {
   selectRow(idx)
   state.toggleFocused = false
   state.ignoreToggleFocused = false
-  state.batchRowFocused = false
   state.pushTodoFocused = false
   state.staleRowFocused = false
   state.blockIndexEntered = true
@@ -4529,7 +4463,6 @@ function applyDefaultUnapprovedSelection() {
     if (state.blocks[idx].kind === 'comment') state.mode = 'list'
     state.toggleFocused = false
     state.pushTodoFocused = false
-    state.batchRowFocused = false
     state.staleRowFocused = false
     scrollSelectedIntoView()
     freshDefaultSelectionAt = { blockId: state.blocks[idx].id }
@@ -4614,7 +4547,6 @@ function setSearch(q) {
   // parked on the toggle-approved row from a previous, now-irrelevant walk.
   state.toggleFocused = false
   state.pushTodoFocused = false
-  state.batchRowFocused = false
   state.staleRowFocused = false
   // Typing is also a deliberate switch to the "browse while typing" feature
   // (see searchStepSelection): it must win over an earlier, still-pending
@@ -7446,13 +7378,11 @@ function scrollSelectedIntoView() {
     const el = document.querySelector(
       state.pushTodoFocused
         ? '[data-testid="push-todo"]'
-        : state.batchRowFocused
-          ? '[data-testid="batch-action-row"]'
-          : state.ignoreToggleFocused
-            ? '[data-testid="toggle-ignored"]'
-            : state.toggleFocused
-              ? '[data-testid="toggle-approved"]'
-              : `[data-idx="${state.selected}"]`
+        : state.ignoreToggleFocused
+          ? '[data-testid="toggle-ignored"]'
+          : state.toggleFocused
+            ? '[data-testid="toggle-approved"]'
+            : `[data-idx="${state.selected}"]`
     )
     if (el) el.scrollIntoView({ block: 'nearest' })
   })
@@ -7620,8 +7550,8 @@ function enterDiff() {
     state.descriptionPinned = true
     state.blockIndexEntered = true
   }
-  // The four trailing-row focus flags (toggle-approved/toggle-ignored/
-  // batch-action/push-todo) only ever mean something in LIST mode, at the
+  // The trailing-row focus flags (toggle-approved/toggle-ignored/push-todo)
+  // only ever mean something in LIST mode, at the
   // bottom of the sidebar — being in diff mode with one of them still true is
   // an invalid combination. The ordinary keyboard path can never reach here
   // with one set (onKeydown's own trailing-row guard swallows ArrowRight/f/d/
@@ -7643,7 +7573,6 @@ function enterDiff() {
   // focus" in fresh-open-default-selection.spec.mjs.
   state.toggleFocused = false
   state.ignoreToggleFocused = false
-  state.batchRowFocused = false
   state.pushTodoFocused = false
   state.staleRowFocused = false
   // Stepping into a diff leaves the sidebar's own multi-row selection behind.
@@ -9119,30 +9048,6 @@ const REVIEW_APPROVE_CONFIRM_COMMANDS = withClose([
   },
 ])
 
-// startBatchFromRow is the bottom action row's Enter/click action (see
-// onBatchRow and the batchRowFocused Enter branch below): confirm the run
-// over exactly the CHECKED comments (checkedBatchComments, BlockList.mjs —
-// unchecking a row is the curation step, so there is no separate confirm
-// submenu here, unlike the push-todo row) and immediately put the reviewer
-// on the FIRST checked comment, where the pulsing pill and the log line show
-// what Claude is doing (his own request: "na het verwerken van de comments
-// moet je gaan naar de eerste comment in de lijst"). A refused start
-// (already running, network) or an empty selection leaves things as they are.
-//
-// This replaces the removed 'bulkComments' palette entry point
-// (REVIEW_BATCH_COMMENTS_ITEM) — deliberately with no replacement shortcut in
-// the review-submit menus: the action row is now always visible in the
-// sidebar whenever there's something to batch, which already covers that
-// entry point (explicitly agreed, see comments-panel.md).
-async function startBatchFromRow() {
-  const items = checkedBatchComments(state)
-  if (!items.length) return
-  const ok = await startCommentBatch(state.pr, items.map((c) => c.id))
-  if (!ok) return
-  pollWorkflows()
-  jumpToCommentRow(items[0].id)
-}
-
 // jumpToCommentRow lands the sidebar selection on one comment's own index row.
 // Every open comment has such a row (see indexComments in RelatedPanel.mjs), and
 // the row may still be a poll tick away, which is exactly what blockRefPending +
@@ -9461,13 +9366,24 @@ function unanchoredCommentSelected() {
 // dense would defeat the point of a quick hint line. Empty once the keyboard
 // has moved into the related panel (relatedActive()): that panel shows its
 // own hints instead (see RelatedPanel.mjs's commentClaudeShortcutHints).
+// spaceHint — the Space entry of the hint lines below. Space does NOT approve
+// while the sidebar cursor sits on a comment row it can hide instead (see
+// spaceKey/isSpaceIgnorableCommentRow), and that row's own anchor block is
+// shown as a drilled column with its own hint line, so the hint must name what
+// the key really does at that spot.
+function spaceHint() {
+  return isSpaceIgnorableCommentRow(curBlock())
+    ? { key: 'Space', label: t('verbergen + door') }
+    : { key: 'Space', label: t('goedkeuren + door') }
+}
+
 function blockShortcutHints() {
   if (relatedActive()) return []
   if (state.mode === 'list') {
     return [
       { key: '→', label: 'in diff/thread' },
       { key: 'Enter', label: 'menu' },
-      { key: 'Space', label: t('goedkeuren + door') },
+      spaceHint(),
       { key: '/', label: 'PR-menu' },
     ]
   }
@@ -9497,7 +9413,7 @@ function blockShortcutHints() {
     { key: 'a', label: t('weergave') },
     { key: 'f', label: t('Ga dieper') },
     { key: '←→', label: t('kolom') },
-    { key: 'Space', label: t('goedkeuren + door') },
+    spaceHint(),
     { key: 'Enter', label: 'menu' },
   ]
 }
@@ -10813,7 +10729,6 @@ function leaveDiffToList() {
 function enterDescriptionFromList() {
   state.toggleFocused = false
   state.ignoreToggleFocused = false
-  state.batchRowFocused = false
   state.pushTodoFocused = false
   state.staleRowFocused = false
   state.showDescription = true // step left out of the list into stop 1 (the description)
@@ -12606,6 +12521,14 @@ function findNextUnresolvedCommentFrom(startIdx, skipId) {
     const candidate = state.blocks[idx]
     if (candidate.kind !== 'comment') continue
     if (skipId != null && candidate.id === skipId) continue
+    // A HIDDEN row is no landing spot: BlockList's renderList skips an ignored
+    // comment unless state.showIgnored reveals it, exactly like the three
+    // other index scans (stepVisibleFrom/lastVisibleIndex/firstVisibleIndex)
+    // already do. Without this the cursor could land on a row nobody can see
+    // — reachable on every Space press now that Space itself IGNORES the row
+    // it stands on (spaceKey), so walking a whole section with it would keep
+    // landing on the ones just hidden.
+    if (!state.showIgnored && isIgnoredComment(state, candidate)) continue
     const { done, total } = blockApproveCount(candidate)
     if (done < total) return idx
   }
@@ -12898,6 +12821,23 @@ async function descendIntoUnapprovedCall(ctx) {
   return true
 }
 
+// isSpaceIgnorableCommentRow — the comment-index rows whose Space press hides
+// the row instead of stepping past it (see spaceKey): the "Comments op regels"
+// section (b.lineAnchored, the same flag BlockList's renderList groups that
+// section by) and every AI risk finding (isAiComment), wherever its own row
+// happens to sit. Deliberately NOT the PR-wide human comments, the "Genoemd"
+// section's PR-wide rows, the "Openstaande chats" rows (b.chatOnly) or an
+// already-ignored, revealed one — the reviewer scoped the request to those two
+// sections, and an already-hidden row has nothing left to hide.
+// For a row standing for a GROUP of comments on one line (commentGroupKeyOf)
+// this hides the row via its PRIMARY comment, exactly like the Enter menu's own
+// "Ignore" item does — the ignore flag is keyed on the row id either way.
+function isSpaceIgnorableCommentRow(b) {
+  if (!b || b.kind !== 'comment' || b.chatOnly || !b.comment) return false
+  if (isIgnoredComment(state, b)) return false
+  return !!b.lineAnchored || isAiComment(b.comment)
+}
+
 // spaceKey — Space is a one-key shortcut for exactly what the block palette's
 // "Keur ... goed" already does, immediately followed by "Ga door": it reuses
 // toggleApprove/toggleCallApprove (via approveContext, same as the palette
@@ -12928,24 +12868,34 @@ function spaceKey() {
     toggleRangeApproval()
     return
   }
-  // A comment index row: Space used to RESOLVE the comment outright — one
-  // keypress, no confirm — which turned out to be too easy to trigger by
-  // accident once the row also carries a comment_batch checkbox (reviewer
-  // report: "ik wil niet comments kunnen resolven met een spatiebalk in de
-  // blokken index, dat gaat te snel"). Resolving now only happens through the
-  // row's own Enter menu ("Resolve comment", already the default item for
-  // the reviewer's own comment — see prCommentCommandsFor). Space here
-  // instead TOGGLES the row's own batch-selection checkbox
-  // (toggleBatchChecked, mirrors clicking it — see batchCheckbox,
-  // BlockList.mjs) when it has one, or — when it doesn't (an AI finding, or
-  // an ignored-and-revealed comment, neither of which comment_batch may ever
-  // touch — isBatchEligible/isIgnoredComment) — advances to the next row,
-  // mirroring the existing "↓ falls through" convention elsewhere in this
-  // file rather than doing nothing.
+  // A comment index row: Space HIDES the row (Ignore) and moves on to the next
+  // comment row. Reviewer request: "spatie in de comment op regel en ai
+  // warning index item, dan wil ik het verwijderen en naar de volgende gaan".
+  // Deliberately Ignore (toggleIgnoreComment — reversible, the row comes back
+  // via "Toon N verborgen comments") rather than resolve or delete: Space is
+  // one keypress with no confirm, and the destructive variants both already
+  // proved too easy to trigger by accident here (an earlier cut had Space
+  // resolve outright — "ik wil niet comments kunnen resolven met een
+  // spatiebalk in de blokken index, dat gaat te snel"). Resolving and deleting
+  // stay where they are: the row's own Enter menu (prCommentCommandsFor).
+  // Scoped to the two sections the request names — see
+  // isSpaceIgnorableCommentRow. Every OTHER comment row (a PR-wide human
+  // comment, a bare "Openstaande chats" anchor, an already-ignored and
+  // revealed one) keeps the old "↓ falls through" behaviour: advance to the
+  // next row rather than doing nothing.
   const curB = curBlock()
   if (curB && curB.kind === 'comment') {
-    if (isBatchEligible(curB.comment) && !isIgnoredComment(state, curB)) {
-      toggleBatchChecked(state, curB.comment.id)
+    if (isSpaceIgnorableCommentRow(curB)) {
+      // Snapshotted BEFORE the write, exactly like the resolve/delete call
+      // sites — see afterResolveAction's own doc comment for why a fresh read
+      // afterwards is unreliable. afterCommentRowRemoved is the same "next
+      // still-open comment row, else offer the review submit" follow-up those
+      // two already share; nothing here needs its promise, so it is not
+      // awaited (spaceKey itself is synchronous).
+      const beforeIdx = state.selected
+      const beforeId = curB.id
+      toggleIgnoreComment(curB.comment)
+      afterCommentRowRemoved(beforeIdx, beforeId)
     } else {
       stepListSelection(1)
       scrollSelectedIntoView()
@@ -13162,12 +13112,10 @@ const PR_COMMANDS = withClose([
     id: 'pr-test-run',
     // "Tests laten draaien" (test_run.go): Claude itself decides which
     // existing tests are relevant to this PR and runs only those — no
-    // selection step here, unlike "Comments laten verwerken" (batchActionRow)
-    // which needs the reviewer's confirmed comment ids first. Deliberately a
-    // `/`-menu item, not its own bottom action row (reviewer decision: the
-    // sidebar is busy enough) — progress renders in prInfoCard's status
-    // block instead (testRunStatusBlock, testRun.mjs). No confirm step, same
-    // reasoning as the batch action row: nothing here can change code (no
+    // selection step here. Deliberately a `/`-menu item, not its own bottom
+    // action row (reviewer decision: the sidebar is busy enough) — progress
+    // renders in prInfoCard's status block instead (testRunStatusBlock,
+    // testRun.mjs). No confirm step either: nothing here can change code (no
     // Edit tool at all), so there's nothing destructive to confirm.
     label: () => (testRun.running ? t('Testrun loopt al…') : t('Tests laten draaien')),
     hint: 'test',
@@ -13912,16 +13860,14 @@ function contextMenuMode() {
   // branch below for why a column drilled from INSIDE the anchor's own panel
   // (focusLevel > 1) must not reopen this comment-row menu either.
   if (!state.showDescription && !hasMultiSelection() && selectedComment() && state.focusLevel <= 1) return 'prComment'
-  // Stop 1 (the PR description), the two toggle rows and the batch action row
-  // have no block context; so does a PR whose blocks aren't loaded (or a
-  // genuinely block-less one). The batch row has no menu of its own — Enter
-  // there runs the batch directly (see below) — so `/` falls through to the
-  // general PR-wide one, same as the toggle rows.
+  // Stop 1 (the PR description) and the two toggle rows have no block
+  // context; neither does a PR whose blocks aren't loaded (or a genuinely
+  // block-less one). They have no menu of their own, so `/` falls through to
+  // the general PR-wide one.
   if (
     state.showDescription ||
     state.toggleFocused ||
     state.ignoreToggleFocused ||
-    state.batchRowFocused ||
     state.staleRowFocused ||
     !curBlock()
   )
@@ -13935,11 +13881,11 @@ function contextMenuMode() {
 // "rechtsklik opent hetzelfde menu dat Enter op die plek zou openen. Is er op
 // die plek geen zo'n menu ... dan onderdruk je niets en blijft het native
 // menu staan." Unlike `/`'s own contextMenuMode (which deliberately treats
-// the description/toggle/ignoreToggle/batch rows as "fall back to the
+// the description/toggle/ignoreToggle rows as "fall back to the
 // general PR menu", since `/` always wants to show SOMETHING searchable),
 // this mirrors Enter's ACTUAL behaviour at each of those spots: three of them
 // run a direct action with no menu at all (see onKeydown's own
-// toggleFocused/ignoreToggleFocused/batchRowFocused branches), so this
+// toggleFocused/ignoreToggleFocused branches), so this
 // returns null there — a right-click leaves the native browser menu in
 // place, exactly like an unchanged diff line does. `compose`/`comment`/
 // `claude` — deliberately absent from contextMenuMode's own table for the
@@ -13966,7 +13912,7 @@ function rightClickMenuMode() {
     // branch — so a right-click there leaves the native menu alone too.
     return null
   }
-  if (state.toggleFocused || state.ignoreToggleFocused || state.batchRowFocused || state.staleRowFocused)
+  if (state.toggleFocused || state.ignoreToggleFocused || state.staleRowFocused)
     return null
   return contextMenuMode()
 }
@@ -14123,8 +14069,7 @@ function onKeydown(e) {
       exitSearch()
       state.toggleFocused = false
       state.ignoreToggleFocused = false
-      state.batchRowFocused = false
-      state.pushTodoFocused = false
+        state.pushTodoFocused = false
       state.staleRowFocused = false
       state.showDescription = true
       state.blockIndexEntered = true
@@ -14146,10 +14091,6 @@ function onKeydown(e) {
       }
       if (state.ignoreToggleFocused) {
         state.showIgnored = !state.showIgnored
-        return
-      }
-      if (state.batchRowFocused) {
-        startBatchFromRow()
         return
       }
       if (state.pushTodoFocused) {
@@ -14229,7 +14170,6 @@ function onKeydown(e) {
     !isEditableFocused() &&
     !state.toggleFocused &&
     !state.ignoreToggleFocused &&
-    !state.batchRowFocused &&
     !state.pushTodoFocused &&
     !state.staleRowFocused &&
     !isTestColumnActive()
@@ -14508,15 +14448,6 @@ function onKeydown(e) {
     return
   }
 
-  // The batch action row runs the comment_batch run directly, no confirm
-  // step — see startBatchFromRow's own doc comment for why (unlike the
-  // push-todo row right below, which DOES need one).
-  if (e.key === 'Enter' && state.batchRowFocused) {
-    e.preventDefault()
-    startBatchFromRow()
-    return
-  }
-
   // The push-todo row (the bottom-most stop, see stepListSelection) is the one
   // trailing row whose Enter does something to the outside world, so — unlike
   // the two toggles — it never acts directly: it opens a one-more-step confirm
@@ -14706,8 +14637,7 @@ function onKeydown(e) {
   if (
     (state.toggleFocused ||
       state.ignoreToggleFocused ||
-      state.batchRowFocused ||
-      state.pushTodoFocused ||
+        state.pushTodoFocused ||
       state.staleRowFocused) &&
     !isModifiedKey(e) &&
     ['f', 'd', 's', 'a', ' ', 'ArrowRight'].includes(e.key)

@@ -150,17 +150,16 @@ is resolved — **including other people's**.
 
 **Space does NOT resolve a comment row — that was reverted.** An earlier cut
 had `spaceKey` (`home.mjs`) resolve the comment directly
-(`resolvePrCommentItem`, the ordinary `reply` Signal with `done: true`) the
-moment the row also grew a comment_batch checkbox (see "The comment_batch
-checkboxes and the bottom action row" in `.claude/docs/comments-panel.md`);
-reported back as "too easy to trigger by accident" ("dat gaat te snel") once
-`Space` also had to do checkbox duty on the same row. `spaceKey`'s comment-row
-branch now toggles the checkbox instead (or advances to the next row when
-there is no checkbox), and **resolving only happens through the row's own
-`Enter` menu** ("Resolve comment", already the default item for the
+(`resolvePrCommentItem`, the ordinary `reply` Signal with `done: true`);
+reported back as "too easy to trigger by accident" ("dat gaat te snel").
+`spaceKey`'s comment-row branch now HIDES the row instead — the reversible
+`Ignore` (`toggleIgnoreComment`), followed by the jump to the next open comment
+row; see "`Space` hides the row (Ignore) and moves on" in
+`.claude/docs/comments-panel.md`. **Resolving only happens through the row's
+own `Enter` menu** ("Resolve comment", already the default item for the
 reviewer's own comment — `prCommentCommandsFor`). Not a toggle there either: a
 resolved block-anchored comment leaves the index, and "Unresolve" stays in
-that same menu. Test: `tests/comment-batch.spec.mjs`.
+that same menu. Test: `tests/comment-space-ignore.spec.mjs`.
 
 ## Placing a comment (or an AI finding) does NOT retract an approval
 

@@ -91,8 +91,8 @@ verdwijnen of als geslaagd gelezen worden.
 **Waar de reviewer het ziet:** `testRunStatusBlock` (`home.mjs`), een kaartje
 in `prInfoCard`, onder de gewone GitHub-statuspillen — alleen gerenderd zolang
 `hasTestRunActivity()` (`testRun.mjs`) iets te melden heeft. Er is **bewust
-geen eigen bottom action-row** in de sidebar (zoals `comment_batch`'s
-`batchActionRow`) — reviewer-beslissing: de sidebar is al druk genoeg. De
+geen eigen bottom action-row** in de sidebar (zoals `comment_batch` er ooit
+een had) — reviewer-beslissing: de sidebar is al druk genoeg. De
 trigger is een item in het `/`-PR-menu (`PR_COMMANDS`, `home.mjs`): "Tests
 laten draaien". `src/testRun.mjs` is de gedeelde reactive module (fetch + SSE,
 geen component), qua vorm identiek aan `commentBatch.mjs`.

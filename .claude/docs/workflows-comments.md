@@ -2508,8 +2508,9 @@ Three product decisions shape the whole thing:
 **Which comments** ("van GitHub + eigen, geen AI"): `commentBatchEligible` —
 open, `source != "ai"`, `kind != "ai_warning"`. Checked server-side against the
 stored comments before the run starts (a browser list can be stale), and
-mirrored in the frontend's own `isBatchEligible` (`commentBatch.mjs`) — see
-"The comment_batch checkboxes and the bottom action row" below.
+the frontend used to mirror it in its own `isBatchEligible`
+(`commentBatch.mjs`), removed together with the sidebar's selection UI — see
+"Where the reviewer sees it" below.
 
 **Per-comment progress out of one agent** comes from marker lines the run
 prints, fixed by `claude.CommentBatchSystemPrompt`:
@@ -2532,26 +2533,19 @@ are simply open comments again.
 
 ### Where the reviewer sees it
 
-**Entirely in the sidebar — there is no palette entry point anymore** (an
-earlier version opened a `'bulkComments'` palette mode with the comments
-listed under each other; removed on request, see "The old palette entry point
-was removed" in `.claude/docs/comments-panel.md` for the reasoning). Every
-batch-eligible comment-index row (`batchEligibleRows`, `BlockList.mjs` — same
-`isBatchEligible` predicate the server mirrors) gets its own checkbox,
-checked by default; a bottom action row ("Verwerk N comments met Claude
-(Opus 5)", `batchActionRow`) runs the batch over exactly the CHECKED ones
-(`checkedBatchComments`) and is itself a stop of the sidebar's `↑`/`↓` loop
-(`state.batchRowFocused`, see `.claude/docs/keyboard-navigation.md`) — Enter,
-click, or the row's own click all run `startBatchFromRow` (`home.mjs`)
-directly, no confirm step. Unchecking a row is mouse-click **or** `Space` on
-the selected row (see keyboard-navigation.md) — the deliberate curation step
-that replaces the removed palette's "read the list, then confirm" shape.
-`Space` deliberately does NOT resolve a comment anymore either way — see "The
-comment_batch checkboxes and the bottom action row" in
-`.claude/docs/comments-panel.md`.
+**There is no UI entry point anymore — only progress.** Two removals, both on
+request: an earlier version opened a `'bulkComments'` palette mode listing the
+comments under each other (see "The old palette entry point was removed" in
+`.claude/docs/comments-panel.md`), which moved into the sidebar as a checkbox
+per eligible comment-index row plus a bottom "Verwerk N comments met Claude
+(Opus 5)" action row — and that sidebar UI is gone too (`Space` on such a row
+now hides it instead, see "`Space` hides the row (Ignore) and moves on" and
+"The comment_batch checkboxes and the bottom action row were removed" in the
+same doc). A run is therefore started by POSTing `/api/workflows/comment_batch`
+directly.
 
-Starting it jumps straight to the FIRST checked comment, because that is
-where the progress lives:
+Everything that REPORTS on a running one is untouched and still works for such
+a run — the progress lives on the comment's own row and card:
 
 - `batchPill` (`BlockList.mjs`) on the comment's index row — a pulsing dot
   plus the WORD ("Claude bezig" / "verwerkt" / "overgeslagen");
@@ -2581,9 +2575,9 @@ where the progress lives:
   `RelatedPanel.mjs`'s own batch call: no ticker for a decoration line.
 
 `src/commentBatch.mjs` is the one shared reactive snapshot behind all of the
-above (one read + the SSE push, no poll of its own) — it also now exports
-`isBatchEligible`, the single predicate `batchEligibleRows` (`BlockList.mjs`)
-and thus `checkedBatchComments`/`startBatchFromRow` (`home.mjs`) build on.
+above (one read + the SSE push, no poll of its own). It only REPORTS: its
+`isBatchEligible` predicate and its `startCommentBatch` POST were removed with
+the sidebar's selection UI, since nothing called them anymore.
 
 ### The index change it rides on
 
@@ -2596,10 +2590,10 @@ and — because `blockApproveCount` already scores a comment row as
 "resolved == approved" — the PR is only fully approved once every comment is
 resolved, **including other people's**. Resolving such a row (via its own
 `Enter` menu — see `.claude/docs/approval.md`, `Space` deliberately does NOT
-resolve it) is what makes that walk finishable.
+resolve it but HIDES it) is what makes that walk finishable.
 
 Tests: `comment_batch_test.go` (marker parsing incl. prose that must not match,
 the progress lifecycle, eligibility + prompt content, the no-work-copy degrade
 path, and the streamed sink with a marker split across two text deltas) and
-`tests/comment-batch.spec.mjs` (the index row, the checkboxes + bottom action
-row + Space toggling them, and resolving via the Enter menu).
+`tests/comment-space-ignore.spec.mjs` (the index row, `Space` hiding it, the
+absence of the checkbox/action row, and resolving via the Enter menu).

@@ -6,8 +6,7 @@ import { html } from './vendor/arrow.js'
 import { movedLabel, removedLabel } from './Block.mjs'
 import { avatarHTML, identityOf } from './avatar.mjs'
 import { paletteClass } from './blockPath.mjs'
-import { batch, batchItemFor, BATCH_STATE_LABEL, isBatchEligible } from './commentBatch.mjs'
-import { claudeStatusText } from './ClaudeChat.mjs'
+import { batch, batchItemFor, BATCH_STATE_LABEL } from './commentBatch.mjs'
 import { claudeTurnFor } from './claudeTurns.mjs'
 import { isChatUnread, ensureChatUnread } from './chatUnread.mjs'
 import { t } from './i18n.mjs'
@@ -346,49 +345,11 @@ function renderList(state, onRevealApproved) {
   })
   if (approvedCount > 0) items.push(toggleRow(state, approvedCount, onRevealApproved))
   if (ignoredCount > 0) items.push(ignoreToggleRow(state, ignoredCount))
-  // The batch action row sits below both toggle rows but above the push-todo
-  // section: it acts on comments that ARE in this list (see
-  // batchEligibleRows below), so it belongs with the rest of the comment
-  // machinery rather than with the branch-level push todo.
-  if (batchEligibleRows(state).length > 0) items.push(batchActionRow(state))
   // The push todo goes LAST, below both toggle rows: it is not about a block at
   // all but about the branch, and it is deliberately a thing for the end of the
   // review — see pushTodoRow.
   if (hasPendingPush(state)) items.push(pushTodoHeading().key('push-todo-heading'), pushTodoRow(state))
   return items
-}
-
-// batchEligibleRows is the set of comment-index items comment_batch may work
-// on — every row already IN this list (see "Every UNRESOLVED comment gets
-// such a row too" in comments-panel.md) whose own comment passes
-// isBatchEligible, EXCLUDING one the reviewer explicitly ignored
-// (isIgnoredComment): an ignored row is hidden from the sidebar by default, so
-// it must not silently carry a checkbox (or count toward the action row) that
-// nobody can see without first revealing the "Verborgen comments" section.
-// Deliberately scoped to state.blocks rather than the whole PR-wide cs.list
-// (which is what the removed bulkComments palette read): the batch-selection
-// checkbox lives on the row itself, so a comment with no row (e.g. its block
-// isn't in this tree) simply can't be checked — a deliberate narrowing that
-// came with moving the list into the index, not an oversight.
-export function batchEligibleRows(state) {
-  return state.blocks.filter(
-    // b.chatOnly (see chatBlockItem/openChatComments, home.mjs) is excluded —
-    // its own "comment" is either a bare Claude-chat anchor placeholder (no
-    // real reviewer text to process) or an already-resolved one, neither of
-    // which comment_batch was ever meant to reach; this section only exists
-    // to make an existing conversation navigable again, not to fold into the
-    // bulk-comment-processing action.
-    (b) => b.kind === 'comment' && !b.chatOnly && isBatchEligible(b.comment) && !isIgnoredComment(state, b),
-  )
-}
-
-// checkedBatchComments is the subset of batchEligibleRows the reviewer hasn't
-// unchecked (state.batchChecked, see home.mjs) — every eligible row starts
-// checked, mirroring the removed palette's "hand over everything" default.
-export function checkedBatchComments(state) {
-  return batchEligibleRows(state)
-    .filter((b) => state.batchChecked[b.comment.id] !== false)
-    .map((b) => b.comment)
 }
 
 // hasPendingPush reports whether this PR has landed-but-unpushed Claude commits
@@ -823,102 +784,6 @@ function ignoreToggleRow(state, count) {
   `.key('toggle-ignored')
 }
 
-// batchActionRow is the bottom action that replaces the removed 'bulkComments'
-// palette entry: hand every CHECKED comment (checkedBatchComments) to ONE
-// Claude agent (comment_batch.go). A stop of the sidebar's ↑/↓ loop like the
-// two toggle rows above it (state.batchRowFocused, see stepListSelection in
-// home.mjs) — Enter/click run the batch directly, no confirm submenu, because
-// the checkboxes above already are the deliberate curation step (contrast the
-// push-todo row, which DOES open a confirm menu because pushing writes to a
-// branch other people work on).
-function batchActionRow(state) {
-  const n = checkedBatchComments(state).length
-  const running = !!batch.running
-  return html`
-    <button
-      data-testid="batch-action-row"
-      class="${() =>
-        'w-full border px-3 py-2 text-left text-xs font-medium ' +
-        (state.batchRowFocused
-          ? 'border-indigo-300 dark:border-indigo-500 bg-indigo-50 dark:bg-indigo-500/15 ring-1 ring-inset ring-indigo-200 dark:ring-indigo-500/30 text-indigo-700 dark:text-indigo-300'
-          : 'border-slate-300 dark:border-zinc-700 text-slate-600 dark:text-zinc-400 hover:bg-slate-50 dark:hover:bg-zinc-800/60')}"
-      disabled="${() => running || n === 0}"
-      @click="${() => state.onBatchRow && state.onBatchRow()}"
-    >
-      ${() =>
-        running
-          ? batchRunningLines(state)
-          : t('Verwerk {n} {plural} met Claude (Opus 5)', { n, plural: n === 1 ? 'comment' : 'comments' })}
-    </button>
-  `.key('batch-action-row-' + (running ? 'busy' : 'idle') + '-' + n)
-}
-
-// batchRunningLines is what that row says WHILE a run is in flight. Reviewer
-// request ("geef meer feedback als claude bezig is, bijvoorbeeld met welke
-// comment hij bezig is en hoeveel van de hoeveel hij heeft verwerkt"): the old
-// single sentence "Claude bezig met de comments…" stood still for minutes and
-// named neither the comment nor the progress. Three lines instead, all from the
-// volatile PR-wide snapshot (commentBatch.mjs):
-//
-//   1. the counter — handled (done + skipped) of total, plus the skipped count
-//      when there is one;
-//   2. WHICH comment Claude announced it is on ([slash:start], batch.current),
-//      named by the very label its own index row carries;
-//   3. WHAT it is doing right now, formatted by claudeStatusText — the SAME
-//      formatter the chat turn and the comment footer use, so there is no
-//      second wording of "Claude leest src/Foo.php". Deliberately repeated here
-//      even though the footer of the selected comment may show the same
-//      sentence: the reviewer must see the run is alive without standing on the
-//      exact comment it is working on.
-//
-// Every line is a plain STRING in an always-present element (never a
-// template↔'' slot), so no keyed/static-interpolation pitfall applies — see
-// .claude/rules/arrowjs-pitfalls.md. Elapsed seconds are deliberately 0, like
-// RelatedPanel.mjs's own batch call: no ticker for a decoration line.
-function batchRunningLines(state) {
-  const total = batch.total
-  const handled = batch.done + batch.skipped
-  let counter = t('Claude verwerkt comments · {handled} van {total}', { handled, total })
-  if (batch.skipped > 0) counter += ' · ' + t('{n} overgeslagen', { n: batch.skipped })
-  const current = batchCurrentLabel(state)
-  // An error replaces the activity line: a run that could not start says why
-  // instead of pretending Claude is still thinking.
-  const activity = batch.error
-    ? t(batch.error)
-    : claudeStatusText(
-        { running: true, phase: batch.phase || 'starting', tool: batch.tool, detail: batch.detail },
-        0,
-      )
-  return html`
-    <span class="block">
-      <span class="block tabular-nums">${counter}</span>
-      <span class="block truncate font-normal text-[11px] text-slate-500 dark:text-zinc-400"
-        >${current ? t('Bezig met: {current}', { current }) : ''}</span
-      >
-      <span class="block truncate font-normal text-[11px] text-slate-500 dark:text-zinc-400"
-        >${activity}</span
-      >
-    </span>
-  `
-}
-
-// batchCurrentLabel names the comment batch.current points at, reusing the
-// label its own index row already shows (the 60-char body snippet built by
-// commentBlockItem in home.mjs) — so the action row and the row it refers to
-// can never word the same comment differently. '' when the run has no current
-// comment yet (the preparing phase) or when that comment has no row in this
-// tree; the counter and activity lines then carry the feedback on their own.
-function batchCurrentLabel(state) {
-  const id = batch.current
-  if (!id) return ''
-  for (const b of state.blocks || []) {
-    if (b.kind !== 'comment') continue
-    const group = b.comments || (b.comment ? [b.comment] : [])
-    for (const c of group) if (c && c.id === id) return b.label || ''
-  }
-  return ''
-}
-
 // approvalSummaryLine is the PR-wide combined-approval counter in the header,
 // fed by the server-backed total (state.approvalTotal). Hidden until there's
 // anything to approve.
@@ -994,13 +859,13 @@ function rowHandedOff(state, i) {
 // (the reviewer is colourblind, see conventions.md).
 //
 // Must exclude EVERY trailing-row focus flag stepListSelection's loop can set
-// (home.mjs: toggle-approved, toggle-ignored, batch-action, push-todo, and
-// the leading stale-tree notice) — state.selected still points at whichever
+// (home.mjs: toggle-approved, toggle-ignored, push-todo, and the leading
+// stale-tree notice) — state.selected still points at whichever
 // block/comment row was last the cursor while the keyboard sits on one of
 // those rows, so missing even one here highlights that stale row AND the
 // trailing row at once. Reported bug: stepping `↓` from the last comment row
 // onto the push-todo row left both highlighted simultaneously, because
-// batchRowFocused/pushTodoFocused were missing from this list.
+// pushTodoFocused was missing from this list.
 function rowIsCursor(state, i) {
   if (state.showDescription && !state.blockIndexEntered) return false
   return (
@@ -1008,7 +873,6 @@ function rowIsCursor(state, i) {
     !state.toggleFocused &&
     !state.ignoreToggleFocused &&
     !state.staleRowFocused &&
-    !state.batchRowFocused &&
     !state.pushTodoFocused
   )
 }
@@ -1024,7 +888,6 @@ function rowInListRange(state, i) {
     state.toggleFocused ||
     state.ignoreToggleFocused ||
     state.staleRowFocused ||
-    state.batchRowFocused ||
     state.pushTodoFocused
   )
     return false
@@ -1082,57 +945,6 @@ function aiWarningIcon() {
         <line x1="12" y1="17" x2="12.01" y2="17"></line>
       </svg>
     </span>
-  `
-}
-
-// toggleBatchChecked flips one comment's inclusion in the batch — shared by
-// the checkbox's own click handler and home.mjs's `spaceKey`, so mouse and
-// keyboard do the exact same thing (see .claude/docs/mouse-navigation.md).
-export function toggleBatchChecked(state, id) {
-  const checkedNow = state.batchChecked[id] !== false
-  state.batchChecked = { ...state.batchChecked, [id]: !checkedNow }
-}
-
-// batchCheckbox — the per-row selection box for comment_batch (see
-// isBatchEligible, commentBatch.mjs): '' for every real PR block and for a
-// comment the batch may never touch (an AI finding, or one already resolved).
-// Checked by default (state.batchChecked only ever records an explicit
-// UNcheck, mirroring state.ignoredComments' shape) — reproducing the removed
-// bulkComments palette's "hand over everything" default. Reachable by mouse
-// (its own click, stopPropagation FIRST per the nested-@click rule in
-// arrowjs-pitfalls.md, so it never also re-selects/deselects the row via the
-// row's own @click) AND by keyboard: `Space` on the SELECTED row (spaceKey,
-// home.mjs) toggles this same checkbox — see "Generic input-focus guard" in
-// keyboard-navigation.md for why the click handler below ALSO blurs the
-// input immediately.
-function batchCheckbox(state, b) {
-  // Mirrors batchEligibleRows exactly (kind + !chatOnly + isBatchEligible +
-  // not ignored) — an ignored row, once revealed via "Toon N verborgen
-  // comments", must not show a checkbox that the action row's own count
-  // silently ignores.
-  if (b.kind !== 'comment' || b.chatOnly || !isBatchEligible(b.comment) || isIgnoredComment(state, b)) return ''
-  const id = b.comment.id
-  return html`
-    <input
-      type="checkbox"
-      data-testid="batch-checkbox"
-      class="h-3.5 w-3.5 shrink-0 accent-indigo-600"
-      checked="${() => state.batchChecked[id] !== false}"
-      @click="${(e) => {
-        e.stopPropagation()
-        toggleBatchChecked(state, id)
-        // A checkbox that keeps real DOM focus after a click poisons every
-        // later keydown app-wide: isEditableFocused() (home.mjs) treats ANY
-        // focused INPUT/TEXTAREA as "typing, let it flow through" and swallows
-        // Enter/Space/etc. — reproduced as a real bug (Enter on the row
-        // stopped opening its menu at all after clicking this checkbox).
-        // Blurring immediately hands keyboard control straight back to the
-        // document-level handler, which is where the checkbox's OWN Space
-        // toggle lives anyway (see keyboard-navigation.md's "Generic
-        // input-focus guard").
-        e.target.blur()
-      }}"
-    />
   `
 }
 
@@ -1194,7 +1006,6 @@ function row(state, b, i) {
         state.toggleFocused = false
         state.ignoreToggleFocused = false
         state.pushTodoFocused = false
-        state.batchRowFocused = false
         state.staleRowFocused = false
         // A stale "which method"/"is the methodes-kolom focused" from a
         // PREVIOUSLY selected test_class row (see testClassRowItem in
@@ -1226,7 +1037,7 @@ function row(state, b, i) {
         // block's own COMMANDS, or the PR-comment menu for a comment-index
         // row — resolved by state.onRowContextMenu, threaded down from
         // home.mjs's rightClickMenuMode/handleContextMenu, same shape as
-        // onPushTodo/onBatchRow above). See "The right-click context menu" in
+        // onPushTodo above). See "The right-click context menu" in
         // command-palette.md.
         state.selected = i
         state.listAnchor = null
@@ -1234,7 +1045,6 @@ function row(state, b, i) {
         state.toggleFocused = false
         state.ignoreToggleFocused = false
         state.pushTodoFocused = false
-        state.batchRowFocused = false
         state.staleRowFocused = false
         state.classMethodSel = 0
         state.testColumnFocused = false
@@ -1247,7 +1057,6 @@ function row(state, b, i) {
           rowIsCursor(state, i) && !state.indexHandedOff ? 'text-indigo-500 dark:text-indigo-400' : 'text-transparent'}"
         >›</span
       >
-      ${() => batchCheckbox(state, b)}
       ${() => categoryOrAvatar(b)}
       ${() => chatUnreadIcon(b)}
       <span

@@ -604,6 +604,7 @@ export const EN = {
   'Push opnieuw naar GitHub': 'Push again to GitHub',
   'Push naar GitHub': 'Push to GitHub',
   'goedkeuren + door': 'approve + continue',
+  'verbergen + door': 'hide + continue',
   uitzoomen: 'zoom out',
   inzoomen: 'zoom in',
   weergave: 'view',

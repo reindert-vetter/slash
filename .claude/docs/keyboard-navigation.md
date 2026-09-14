@@ -470,12 +470,12 @@ every KEYBOARD path — is never stopped by the trailing-row guard (that guard
 only intercepts `ArrowRight`/`f`/`d`/`s`/`Space`/`Enter` typed while
 `state.toggleFocused` is true; a click bypasses it entirely). `enterDiff()`
 used to leave `state.toggleFocused` (and its `ignoreToggleFocused`/
-`batchRowFocused`/`pushTodoFocused` siblings) untouched, so the stale flag rode
+`pushTodoFocused` siblings) untouched, so the stale flag rode
 along into diff mode and silently hijacked the next `Enter`/`f`/`d`/`s`/`Space`
 there (the SAME trailing-row guard, and the toggle-row `Enter` branches further
 down in `onKeydown`, both still saw it as true) — symptom: `Enter` on a
 selected diff row toggled "Show N approved blocks" instead of opening
-`COMMANDS`. Fixed by clearing all four flags inside `enterDiff()` itself — the
+`COMMANDS`. Fixed by clearing those flags inside `enterDiff()` itself — the
 one function every "enter diff" path (keyboard **and** mouse) funnels through
 — rather than in the `state.showDescription` `ArrowRight` branch above:
 clearing them there would incorrectly break the very "everything approved →
@@ -662,7 +662,6 @@ stale-tree notice (if the tree is out of date)
   → first visible block → … → last visible block
   → toggle-approved (if any hidden approved blocks exist)
   → toggle-ignored  (if any hidden ignored comments exist)
-  → batch-action    (if any comment-index row is eligible for comment_batch)
   → push-todo       (if this PR has landed-but-unpushed chat edits)
   → the search box
   → back to the stale-tree notice / first visible block
@@ -670,8 +669,8 @@ stale-tree notice (if the tree is out of date)
 
 `↑` walks the same loop backwards. Each trailing row (and the leading
 stale-tree row) is only a stop when actually rendered
-(`toggleRowVisible()`/`ignoreToggleRowVisible()`/`batchRowVisible()`/
-`pushTodoRowVisible()`/`state.blocksStale`); the search box is
+(`toggleRowVisible()`/`ignoreToggleRowVisible()`/`pushTodoRowVisible()`/
+`state.blocksStale`); the search box is
 always the loop's other end. `stepListSelection(1)` first tries
 `stepVisibleSelected` and only when that finds nothing further
 (`next === state.selected`) steps onto the next existing stop —
@@ -681,7 +680,7 @@ replacement.
 
 **The stale-tree notice** (`state.staleRowFocused`, `staleTreeRow` in
 `BlockList.mjs`, see its own doc comment there) sits at the OPPOSITE end of
-the loop from the four rows above — above the first block rather than below
+the loop from the rows above — above the first block rather than below
 the last — because that mirrors where it renders (see "staleTreeRow" comment
 in `BlockList.mjs`): `↑` off the topmost visible block reaches it (only while
 `state.blocksStale`), `↓` off it returns to the first visible block, and a
@@ -729,15 +728,11 @@ already exists), the jump is threaded in as an `onRevealApproved` callback:
 `revealApprovedBlocks()` directly. Test:
 `tests/toggle-approved-reveal-jump.spec.mjs`.
 
-**The batch action row** (`state.batchRowFocused`, between `toggle-ignored` and
-`push-todo` because that is also its render position, see
-`.claude/docs/comments-panel.md`'s "The comment_batch checkboxes and the
-bottom action row") acts DIRECTLY on `Enter`/`→`/click, like a toggle row and
-UNLIKE the push-todo row right below it — it starts the `comment_batch` run
-over whatever is currently checked (`startBatchFromRow`), no confirm step,
-because the checkboxes on the rows above already are the deliberate curation
-step. `f`/`d`/`s`/`a`/`Space` are no-ops there, same reasoning as a toggle
-row.
+A **batch action row** used to sit between `toggle-ignored` and `push-todo`
+(`state.batchRowFocused`, starting a `comment_batch` run over the checked
+comment rows). It was removed together with the per-row checkboxes — see "The
+comment_batch checkboxes and the bottom action row were removed" in
+`.claude/docs/comments-panel.md`.
 
 **The push-todo row** (`state.pushTodoFocused`, the bottom-most stop — see
 `.claude/docs/pending-push.md`) mirrors the toggle rows with one deliberate
@@ -1376,14 +1371,17 @@ same functions — no second approve/continue implementation:
   rejecting the whole PR stays a manual, two-step choice regardless of how the
   last unit got approved.
 
-**On a comment-index row, Space does something else entirely: toggle the
-comment_batch checkbox, or advance.** `spaceKey`'s very first branch checks
+**On a comment-index row, Space does something else entirely: HIDE the row
+(Ignore) and move on, or advance.** `spaceKey`'s very first branch checks
 `curBlock().kind === 'comment'` before any of the approve logic above ever
-runs — see "The comment_batch checkboxes and the bottom action row" in
-`.claude/docs/comments-panel.md` for the full mechanism (this used to RESOLVE
-the comment outright in one keypress; reverted as "too easy to trigger by
-accident" once the row also carries a checkbox — resolving now only happens
-through the row's own `Enter` menu).
+runs — on a "Comments op regels" row or an AI risk finding
+(`isSpaceIgnorableCommentRow`) it ignores the row (reversible, back via "Toon N
+verborgen comments") and lands on the next open comment row; on every other
+comment row it just advances. See "`Space` hides the row (Ignore) and moves on"
+in `.claude/docs/comments-panel.md` for the full mechanism, including why it is
+neither resolve (tried, reverted as "too easy to trigger by accident") nor
+delete — both still live in the row's own `Enter` menu. The hint line words the
+key as "verbergen + door" there (`spaceHint`, `home.mjs`).
 
 **Guards** (`onKeydown`): `!isModifiedKey(e)` (a held Cmd/Ctrl falls through
 untouched, same as `f`/`d`/`s`/`a`) and `!state.showDescription` — stop 1 (the
@@ -1533,8 +1531,8 @@ earlier branch claimed the key, no remaining global shortcut (`/`, `f`/`d`/`s`,
   after which the next keystroke doesn't hit this branch anyway.
 - **A control that is an `<input>` but ISN'T meant to hold onto real DOM focus
   must blur itself right after use.** `isEditableFocused()` matches ANY
-  focused `INPUT`, not just a text field — the comment_batch checkbox
-  (`batchCheckbox`, `BlockList.mjs`) is an `<input type="checkbox">`, and a
+  focused `INPUT`, not just a text field — the (since removed) comment_batch
+  checkbox in `BlockList.mjs` was an `<input type="checkbox">`, and a
   plain mouse click on it (before this fix) left it holding real DOM focus
   indefinitely, since nothing else in this app ever moves focus away from a
   clicked checkbox. Every subsequent keydown — `Enter` on that same row not

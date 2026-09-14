@@ -119,7 +119,7 @@ test.describe('comment-index rows are no longer grouped per line', () => {
     await expect(rowB).toHaveCount(1)
   })
 
-  test('Space toggles a row\'s own batch checkbox; "Resolve comment" resolves only that row\'s comment', async ({
+  test('Space hides only this row; "Resolve comment" resolves only that row\'s comment', async ({
     page,
   }) => {
     const resolved = []
@@ -142,11 +142,14 @@ test.describe('comment-index rows are no longer grouped per line', () => {
     await row.click()
     await expect(row.getByTestId('block-approval')).toHaveText('0/1')
 
-    const checkbox = row.getByTestId('batch-checkbox')
-    await expect(checkbox).toBeChecked()
+    // Space hides the row (Ignore, see spaceKey in home.mjs) and never
+    // resolves anything; revealing it again puts the cursor back on it.
     await page.keyboard.press('Space')
-    await expect(checkbox).not.toBeChecked()
+    await expect(row).toHaveCount(0)
     await expect(resolved).toEqual([])
+    await page.getByTestId('toggle-ignored').click()
+    await expect(row).toHaveCount(1)
+    await row.click()
 
     // "Resolve comment" resolves only THIS row's own comment (grp-1) — the
     // other line comment (grp-2) is untouched, unlike the old group behavior.

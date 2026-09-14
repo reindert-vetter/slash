@@ -26,9 +26,10 @@ Arrow-key navigation of the tree itself lives in
 | `task` | a click (left OR right) on any row of the "Taken" block — `openTaskRowMenu`, always `native`-styled at the cursor | `taskCommandsFor()` — "Open de comment" / "Opnieuw proberen" (dropped while that retry is still in flight; or the honest "kan niet opnieuw proberen" line) / "Negeer deze fout" (deletes the failed run for good) / "Kopieer foutmelding" / "Verberg deze melding" / "Verversen", each present only when the clicked row's own descriptor supports it. See "Refreshing and the per-row menu" in `.claude/docs/detail-layout.md` |
 
 There is deliberately no `bulkComments` mode anymore — "Laat Claude alle
-openstaande comments verwerken" moved out of the palette entirely, into the
-sidebar itself. See "The comment_batch checkboxes and the bottom action row"
-in `.claude/docs/comments-panel.md`.
+openstaande comments verwerken" moved out of the palette into the sidebar, and
+that sidebar UI has since been removed too, so the index no longer starts a
+`comment_batch` run at all. See "The comment_batch checkboxes and the bottom
+action row were removed" in `.claude/docs/comments-panel.md`.
 
 `openMenu(mode, opts)` sets the mode (and, via `opts`, the right-click
 `native`/`x`/`y` styling — see "The right-click context menu" below),
@@ -410,11 +411,11 @@ notification row" in `.claude/docs/pr-overview.md`.
 `rightClickMenuMode()` (`home.mjs`) is the general-purpose resolver for
 "which menu would `Enter` open right here, right now" — it deliberately does
 **not** reuse `/`'s own `contextMenuMode()` verbatim, because `/` and `Enter`
-genuinely disagree at three spots: the toggle-approved/toggle-ignored/batch
-rows run a **direct action** on `Enter` (no menu at all), while `/` falls back
+genuinely disagree at two spots: the toggle-approved/toggle-ignored rows run a
+**direct action** on `Enter` (no menu at all), while `/` falls back
 to the general `pr` menu there since `/` always wants to show something
 searchable. `rightClickMenuMode()` mirrors `Enter`, not `/`: `null` (native
-menu stays) for those three rows, and — unlike `contextMenuMode()`, which
+menu stays) for those two rows, and — unlike `contextMenuMode()`, which
 `/` never reaches from inside a panel at all — it DOES cover `compose`/
 `comment`/`claude` when the target is inside one of those panels (since a
 right-click, unlike `/`, can land directly there), falling back to
@@ -1223,10 +1224,10 @@ regardless of completion, a deliberate, separate manual action. Test:
 a `'bulkComments'` palette mode that listed every open comment before handing
 them to `comment_batch`. Removed on request — the whole feature moved into the
 sidebar itself (a checkbox per eligible comment-index row plus a bottom
-"Verwerk N comments met Claude" action row), with no menu shortcut left in its
-place: that action row is now always visible whenever there's something to
-batch, which already covers this entry point. See "The comment_batch
-checkboxes and the bottom action row" in `.claude/docs/comments-panel.md`.
+"Verwerk N comments met Claude" action row) — and that sidebar UI was removed
+on request in turn, leaving NO UI entry point for `comment_batch` at all. See
+"The comment_batch checkboxes and the bottom action row were removed" in
+`.claude/docs/comments-panel.md`.
 
 ### After a successful submit: copy a one-line summary to the clipboard
 
@@ -1661,12 +1662,11 @@ opens (see the section above). Seven root items:
    `.claude/docs/workflows-test-run.md`) — starts the one agentic `test_run`
    run: Claude itself picks which EXISTING tests are relevant to this PR and
    runs only those (no Edit tool, so nothing here can change code — hence no
-   confirm step, same reasoning as the batch action row). The label is a
+   confirm step). The label is a
    function reading `testRun.running` ("Testrun loopt al…" while one is
    already going, same snapshotted-at-open-time pattern as item 4's label).
-   Deliberately a `/`-menu item, not its own bottom action row like
-   `comment_batch`'s `batchActionRow` — reviewer decision: the sidebar is
-   busy enough. Progress renders in `prInfoCard`'s status block
+   Deliberately a `/`-menu item, not its own bottom action row (as
+   `comment_batch` once had) — reviewer decision: the sidebar is busy enough. Progress renders in `prInfoCard`'s status block
    (`testRunStatusBlock`, `testRun.mjs`), not here.
 6. **"Alles keuren"** (submenu, three items — same lightweight "one extra
    Enter" confirm as "PR keuren" above: opening the submenu is the confirm

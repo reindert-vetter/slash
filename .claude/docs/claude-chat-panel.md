@@ -880,8 +880,8 @@ once at module load (the same one-shot wiring shape as `setPrRepo`), so
 `activateClaudeTask` can call it without a new import cycle. The general chat
 (`isGeneralChatAnchor`) is checked FIRST — see "Two more origins the jump used
 to silently drop" below. A comment carrying its own `kind` (and not the
-general chat) is a PR-wide/comment-index row, landed via `jumpToCommentRow`
-(same mechanism `startBatchFromRow` uses); anything else is an ordinary
+general chat) is a PR-wide/comment-index row, landed via `jumpToCommentRow`;
+anything else is an ordinary
 inline comment anchored to a real block, landed via `openTask`'s own
 file/label lookup (test_class rows, and — see below — a block reachable only
 as an Onderliggende-code child, included) — then `enterClaudeChat` takes the
