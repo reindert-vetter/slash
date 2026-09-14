@@ -23,12 +23,17 @@ An explicit product decision, not a default:
   every column kind would make a shared link unreadably long, and a width
   preference isn't "where you were", it's "how you like to look at code" —
   the same category of decision the cookie already fits.
-- **30 days, not indefinite** — long enough to matter across a multi-day PR
-  review, short enough that a stale entry for a since-merged/deleted block
-  eventually ages out on its own; there is no cleanup workflow for this
-  cookie (deliberately — see `.claude/rules/workflows-write-boundary.md`: a
-  cookie write is a pure browser-local operation, not a durable write that
-  needs a workflow at all).
+- **30 minutes, not indefinite** — the reviewer's own explicit choice: a
+  width preference is "how I like to look at code in THIS session", not a
+  setting worth carrying across days. Short enough that a stale entry for a
+  since-merged/deleted block, or for a block the reviewer simply isn't
+  looking at anymore, ages out quickly rather than accumulating; there is no
+  cleanup workflow for this cookie (deliberately — see
+  `.claude/rules/workflows-write-boundary.md`: a cookie write is a pure
+  browser-local operation, not a durable write that needs a workflow at
+  all). Superseded a much longer-lived 30-day cookie — see "Cookie-size cap"
+  below for the bug that longer retention (and the underlying unbounded map)
+  exposed.
 
 ## Mechanism: an inline style always wins over the class
 
@@ -257,6 +262,44 @@ listener is a safety net for the case a `keyup` never arrives (e.g. Alt-Tab
 away while still holding the key) — without it the animation frame loop would
 keep running, silently growing/shrinking the column forever in the
 background.
+
+## Cookie-size cap: a write past the browser's own cookie-size limit used to silently fail FOR EVERYTHING
+
+Reviewer report: "als ik met v een custom breedte maak (of sleep), overleeft
+dat de refresh niet" — but a fresh cookie reproduced fine (`v`-hold and drag,
+every `kind`, against a live PR): the mechanism itself works. The actual bug
+only shows up after enough usage. `writeCookie` re-serializes the **entire**
+`state.colWidths` map on every single write, with no size cap. Reproduced
+directly: a ~12.7KB encoded map is **rejected outright** by
+`document.cookie`'s write — not truncated, the assignment is silently a
+no-op and `document.cookie` reads back with the cookie simply absent
+afterwards. Browsers cap a single cookie's name+value around 4093 bytes.
+
+Since a reviewer's map grows one key per distinct `${kind}:${id}` ever
+resized (every block/PR combination is its own key, see "Column identity"
+above), a reviewer who has used this feature for a while eventually crosses
+that limit — and from that point on, **every future resize silently stops
+persisting**, not just the one that tipped the map over the edge, because
+each write re-serializes the whole (now-too-large) map. In the current
+session nothing looks wrong (`state.colWidths` still holds the new value in
+memory), which is exactly why this only surfaces as "it doesn't survive a
+refresh".
+
+**Fix, `columnWidth.mjs`:** `writeCookie` now runs the map through
+`boundedMap(map)` first — drop the OLDEST entry (by the object's own
+insertion order) one at a time until the encoded JSON fits under
+`MAX_COOKIE_BYTES` (3800, a safety margin under the real ~4093 limit).
+`setColumnWidth` additionally `delete`s a key before re-setting it, even
+when it already exists, so a re-resized column moves to the END of
+insertion order — turning "oldest key" into genuinely "least-recently-set",
+a cheap LRU-ish approximation with no extra bookkeeping (no timestamps
+stored). `boundedMap` never mutates its input; only the persisted COOKIE is
+bounded, the in-memory `state.colWidths` for the current session is
+untouched. Shortening the retention window to 30 minutes (above) also
+reduces how large the map can realistically grow, but does not by itself
+prevent this — a single busy review session touching enough distinct
+columns could still cross the limit, hence the cap is the real fix and the
+shorter retention is a separate, independent product decision.
 
 ## Test
 

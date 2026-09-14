@@ -8,11 +8,11 @@ test.use({ viewport: { width: 2200, height: 900 } })
 // Manual column resize (see .claude/docs/column-resize.md): dragging the
 // right-edge handle of the selected block-diff card sets an inline
 // `style="width:...px"` that wins over the card's own Tailwind width class,
-// persists across a reload (a 30-day cookie, not the URL/localStorage), and
-// can be reset either by dragging back close to the auto width (snap-back)
-// or by double-clicking the handle. PR 12903 is the shared, read-only anchor
-// fixture (no write happens here, so no APPROVAL_RESET_PRS/seededPr concern —
-// see testing-playwright.md).
+// persists across a reload (a 30-minute cookie, not the URL/localStorage),
+// and can be reset either by dragging back close to the auto width
+// (snap-back) or by double-clicking the handle. PR 12903 is the shared,
+// read-only anchor fixture (no write happens here, so no
+// APPROVAL_RESET_PRS/seededPr concern — see testing-playwright.md).
 test('dragging the block-card handle sets a width override that persists and resets', async ({ page }) => {
   const errors = []
   page.on('pageerror', (err) => errors.push(err.message))
@@ -196,4 +196,73 @@ test('two quick taps of v never reset the column — it just keeps growing', asy
   expect(styleAfterSecondTap).toMatch(/width:\d+px/)
   const pxAfterSecondTap = Number(/width:(\d+)px/.exec(styleAfterSecondTap)[1])
   expect(pxAfterSecondTap).toBeGreaterThanOrEqual(pxAfterFirstTap)
+})
+
+// Reviewer report: "als ik met v een custom breedte maak (of sleep), sla dat
+// dan op in een cookie ... zodat het een refresh overleeft" — but in
+// practice it stopped surviving a refresh at all. Root cause (see
+// column-resize.md, "Cookie-size cap"): writeCookie re-serializes the WHOLE
+// colWidths map on every write with no size cap, and a browser silently
+// REJECTS the entire document.cookie write once the encoded value crosses
+// its own ~4093-byte per-cookie limit — not just the newest entry, the
+// whole cookie disappears. A reviewer who resizes enough distinct columns
+// over time (every block/PR combination is its own key) eventually crosses
+// that limit, after which every FUTURE resize silently stops persisting.
+//
+// This exercises columnWidth.mjs's own write path directly (via a dynamic
+// import + a throwaway fake state/DOM root), independent of any real app
+// UI flow — the point is the module-level write behavior, not a specific
+// screen.
+test('a resize still persists once the stored map has grown past the cookie size limit', async ({ page }) => {
+  await page.goto('/pr/12903')
+  await leaveSearchBox(page)
+
+  const result = await page.evaluate(async () => {
+    const mod = await import('/src/columnWidth.mjs')
+    const state = { colWidths: {}, colWidthVersion: 0 }
+    const root = document.createElement('div')
+    document.body.appendChild(root)
+
+    const drag = (key) => {
+      const e = { preventDefault() {}, stopPropagation() {}, clientX: 0, currentTarget: { closest: () => root } }
+      mod.startColumnResize(e, state, key, () => null) // autoWidthPxFn: null disables snap-back
+      document.dispatchEvent(new MouseEvent('mousemove', { clientX: 300 }))
+      document.dispatchEvent(new MouseEvent('mouseup'))
+    }
+
+    // Seed enough distinct, long-ish keys to comfortably cross the cap once
+    // serialized — simulating a reviewer who has resized many columns
+    // across many blocks/PRs.
+    for (let i = 0; i < 80; i++) {
+      drag(
+        'diff:13756:app/Very/Long/Namespace/Path/To/A/Controller/File' +
+          i +
+          '.php:SomeLongClassName' +
+          i +
+          '::someLongMethodNameForTesting' +
+          i
+      )
+    }
+
+    const newKey = 'diff:13756:app/final-resize-target.php:FinalClass::finalMethod'
+    drag(newKey)
+
+    // document.cookie is every cookie in the jar concatenated — isolate our
+    // own value before measuring its size (other app cookies, e.g. theme,
+    // would otherwise inflate this unrelated check).
+    const m = document.cookie.match(/(?:^|; )slash_colw=([^;]*)/)
+    const ourValue = m ? m[1] : ''
+    return {
+      hasCookie: !!m,
+      includesNewKey: decodeURIComponent(ourValue).includes(newKey),
+      valueByteLen: ourValue.length,
+    }
+  })
+
+  // The write must not have silently failed: the cookie exists, its own
+  // value is under the browser's own size limit, and it carries the most
+  // recently set override.
+  expect(result.hasCookie).toBe(true)
+  expect(result.includesNewKey).toBe(true)
+  expect(result.valueByteLen).toBeLessThan(4093)
 })

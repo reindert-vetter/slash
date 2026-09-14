@@ -21,16 +21,53 @@ import { html } from './vendor/arrow.js'
 import { suspendCallArrows, resumeCallArrows } from './callArrows.mjs'
 
 const COOKIE_NAME = 'slash_colw'
-const MAX_AGE_S = 60 * 60 * 24 * 30 // 30 days — the reviewer's explicit choice
+const MAX_AGE_S = 60 * 30 // 30 minutes — the reviewer's explicit choice: a
+// width preference is a "how I like to look at this session's code" thing,
+// not a multi-day setting — see column-resize.md.
 
 function readCookieRaw() {
   const m = document.cookie.match(new RegExp('(?:^|; )' + COOKIE_NAME + '=([^;]*)'))
   return m ? decodeURIComponent(m[1]) : ''
 }
 
+// MAX_COOKIE_BYTES — a safety margin under the ~4093-byte limit browsers
+// place on a single cookie's name+value. Reproduced directly (see
+// column-resize.md, "Cookie-size cap"): a ~12.7KB encoded value is REJECTED
+// ENTIRELY by document.cookie's write — not truncated, the whole assignment
+// silently becomes a no-op, and document.cookie reads back with the cookie
+// simply absent. Without a cap, a reviewer who resizes enough distinct
+// columns over time (every kind/block combination is its own key) eventually
+// crosses that limit, and every FUTURE resize — not just the one that tipped
+// it over — quietly stops persisting, since every write re-serializes the
+// whole map.
+const MAX_COOKIE_BYTES = 3800
+
+// boundedMap — drop the OLDEST entries (in the object's own insertion order)
+// one at a time until the encoded map fits under MAX_COOKIE_BYTES.
+// setColumnWidth (below) re-inserts an already-existing key on every write
+// (delete then set), so "oldest" here really means "least recently set", a
+// cheap LRU-ish approximation with no extra bookkeeping. Never mutates the
+// input map — callers keep whatever they had in memory; only the PERSISTED
+// cookie is bounded.
+function boundedMap(map) {
+  let keys = Object.keys(map)
+  while (keys.length) {
+    const candidate = {}
+    for (const k of keys) candidate[k] = map[k]
+    if (encodeURIComponent(JSON.stringify(candidate)).length <= MAX_COOKIE_BYTES) return candidate
+    keys = keys.slice(1) // drop the oldest key, try again
+  }
+  return {}
+}
+
 function writeCookie(map) {
   document.cookie =
-    COOKIE_NAME + '=' + encodeURIComponent(JSON.stringify(map)) + '; path=/; max-age=' + MAX_AGE_S + '; samesite=lax'
+    COOKIE_NAME +
+    '=' +
+    encodeURIComponent(JSON.stringify(boundedMap(map))) +
+    '; path=/; max-age=' +
+    MAX_AGE_S +
+    '; samesite=lax'
 }
 
 // loadColumnWidths — read once at page load. Cookies are available
@@ -81,6 +118,13 @@ export function colWidthStyle(state, key) {
 }
 
 function setColumnWidth(state, key, px) {
+  // Delete before re-setting, even for an already-existing key: a plain
+  // object's key order is insertion order and is otherwise never touched on
+  // update, so a re-resized column would stay stuck at its ORIGINAL
+  // insertion position and be evicted first by boundedMap despite being the
+  // most recently touched. This makes "oldest key" in boundedMap genuinely
+  // mean "least recently set".
+  delete state.colWidths[key]
   state.colWidths[key] = Math.round(px)
   state.colWidthVersion++
   writeCookie(state.colWidths)
