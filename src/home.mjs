@@ -173,7 +173,12 @@ import FailedTasksHost, { initFailedTasksPopup, isFailedTasksOpen, handleFailedT
 // The global auth dialog (authStatus.mjs) — same top-level-mount + keyboard
 // contract as FailedTasksHost, and checked before it.
 import AuthStatusHost, { initAuthStatusPopup, isAuthProblemOpen, handleAuthProblemKeydown } from './authStatus.mjs'
-import WorkDirOverlayHost, { initWorkDirOverlay, isWorkDirOverlayOpen, handleWorkDirOverlayKeydown } from './workDirOverlay.mjs'
+import WorkDirOverlayHost, {
+  initWorkDirOverlay,
+  isWorkDirOverlayOpen,
+  handleWorkDirOverlayKeydown,
+  reopenWorkDirOverlay,
+} from './workDirOverlay.mjs'
 import GeneralChatOverlayHost, {
   initGeneralChatOverlay,
   isGeneralChatOverlayOpen,
@@ -8330,6 +8335,25 @@ function checkoutChipCommandsFor() {
   const c = state.checkout || {}
   const items = []
   const decision = c.decision
+  // The files the open choice is ABOUT, first and by count (chatCheckoutDecision
+  // .Paths — currently the dirtyTree stage's already-changed, uncommitted
+  // files). A palette row is a single truncating line, so it names the number
+  // here and hands the actual list back to the werkmap overlay, which has room
+  // for it — see reopenWorkDirOverlay's own doc comment. Without this the chip
+  // was the one entry point where the reviewer answered "Meenemen in de
+  // commit"/"Verwijderen" without ever being shown what that covers.
+  const dirtyPaths = decision && Array.isArray(decision.paths) ? decision.paths : []
+  if (dirtyPaths.length) {
+    items.push({
+      id: 'checkout-dirty-files',
+      label:
+        dirtyPaths.length === 1
+          ? t('Bekijk het ene bestand dat hier al is aangepast')
+          : t('Bekijk de {n} bestanden die hier al zijn aangepast', { n: dirtyPaths.length }),
+      hint: 'bestanden',
+      run: () => reopenWorkDirOverlay(),
+    })
+  }
   if (decision && Array.isArray(decision.options) && decision.options.length) {
     decision.options.forEach((opt, i) => {
       items.push({

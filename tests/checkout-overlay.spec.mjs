@@ -80,6 +80,59 @@ test.describe('Werkmap overlay', () => {
     expect(signals[0]).toMatchObject({ action: 'checkoutAnswer', reply: '/home/reindert/dev/b' })
   })
 
+  // Reviewer report: he answered the dirty-tree choice ("Meenemen in de
+  // commit") without ever being told WHICH already-changed files that covered,
+  // and only found out afterwards. The choice now names them —
+  // chatCheckoutDecision.Paths, chat_checkout.go.
+  test('a dirty-tree choice lists the files it is about, in the overlay and from the chip', async ({ page }) => {
+    const paths = Array.from({ length: 14 }, (_, i) => `src/File${i + 1}.php`)
+    await mockCheckout(page, {
+      pr: 12903,
+      runId: 'chatmerge-12903',
+      dir: '/home/reindert/dev/pnp',
+      dirName: 'pnp',
+      branch: 'feature/x',
+      decision: {
+        stage: 'dirtyTree',
+        dir: '/home/reindert/dev/pnp',
+        body: '`/home/reindert/dev/pnp` heeft nog niet-gerelateerde, niet-gecommitte wijzigingen.',
+        options: ['Verwijderen', 'Meenemen in de commit'],
+        paths,
+      },
+    })
+    await page.goto('/pr/12903' + SEL)
+    await appReady(page)
+
+    await expect(page.getByTestId('workdir-overlay')).toBeVisible()
+    // The count and the file names carry the meaning — no colour involved.
+    await expect(page.getByTestId('workdir-overlay-paths-title')).toContainText('14 bestanden')
+    await expect(page.getByTestId('workdir-overlay-path')).toHaveCount(12)
+    await expect(page.getByTestId('workdir-overlay-path').first()).toHaveText('src/File1.php')
+    await expect(page.getByTestId('workdir-overlay-paths-more')).toContainText('2')
+
+    // The chip is the second entry point to the same choice. A palette row is
+    // one truncating line, so it names the number and hands the list back to
+    // the overlay (reopenWorkDirOverlay).
+    await page.keyboard.press('Escape')
+    await expect(page.getByTestId('workdir-overlay')).toHaveCount(0)
+    await leaveSearchBox(page)
+    await page.keyboard.press('ArrowLeft')
+    await page.getByTestId('checkout-chip').click()
+    const filesRow = page.getByTestId('command-row').filter({ hasText: 'Bekijk de 14 bestanden' })
+    await expect(filesRow).toHaveCount(1)
+    await filesRow.click()
+    await expect(page.getByTestId('workdir-overlay')).toBeVisible()
+    await expect(page.getByTestId('workdir-overlay-path')).toHaveCount(12)
+  })
+
+  test('a choice without files shows no file list at all', async ({ page }) => {
+    await mockCheckout(page, DECISION)
+    await page.goto('/pr/12903' + SEL)
+    await appReady(page)
+    await expect(page.getByTestId('workdir-overlay')).toBeVisible()
+    await expect(page.getByTestId('workdir-overlay-paths')).toHaveCount(0)
+  })
+
   test('Escape dismisses it and hands the keyboard back to the review tree', async ({ page }) => {
     await mockCheckout(page, DECISION)
     await page.goto('/pr/12903' + SEL)

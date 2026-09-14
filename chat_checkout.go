@@ -740,6 +740,20 @@ type chatCheckoutDecision struct {
 	Dir     string   `json:"dir,omitempty"` // the candidate this decision is about (all stages but chooseDirectory)
 	Body    string   `json:"body"`
 	Options []string `json:"options,omitempty"`
+	// Paths are the repo-relative files the choice is ABOUT — currently only
+	// checkoutStageDirtyTree, where they are the already-changed, uncommitted
+	// files sitting in the work directory (checkoutCandidate.DirtyPaths, from
+	// the same `git status --porcelain` call that set Dirty, so this costs no
+	// extra git invocation). Purely informational: the werkmap overlay
+	// (src/workDirOverlay.mjs) lists them so the reviewer can SEE what
+	// "Verwijderen"/"Meenemen in de commit"/… is about to act on. Reported
+	// bug: a reviewer answered "Meenemen in de commit" for changes he could
+	// not see and only found out afterwards which files had been swept along.
+	// Never part of the answer matching (matchCheckoutOption reads Options
+	// only) and never part of the overlay's own choiceFingerprint, so a path
+	// list that shifts between two refetches of the SAME choice does not
+	// re-open a dismissed overlay.
+	Paths []string `json:"paths,omitempty"`
 }
 
 const (
@@ -808,6 +822,7 @@ func chatCheckoutDirtyDecision(c checkoutCandidate) *chatCheckoutDecision {
 		Stage: checkoutStageDirtyTree, Dir: c.Dir,
 		Body:    fmt.Sprintf("`%s` heeft nog niet-gerelateerde, niet-gecommitte wijzigingen. Wat moet daarmee gebeuren voordat ik hier iets aanpas?", c.Dir),
 		Options: []string{optDiscard, optStashManual, optStashAuto, optKeepSeparate, optKeepCombined},
+		Paths:   c.DirtyPaths,
 	}
 }
 

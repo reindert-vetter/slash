@@ -243,6 +243,19 @@ function dismiss() {
   wd.dismissed = choiceFingerprint()
 }
 
+// reopenWorkDirOverlay undoes an Escape dismissal for the choice that is open
+// right now — the ONE way back in, used by the checkout chip's own menu row
+// (checkoutChipCommandsFor, home.mjs) when the reviewer asks to see which
+// files the choice is about. The command palette renders single-line,
+// truncating rows and has no place for a file list, so the chip deliberately
+// hands that job back to this overlay instead of growing a second, worse copy
+// of the list. A no-op when no choice is open (dismissed is keyed on the
+// choice's own fingerprint, see isWorkDirOverlayOpen).
+export function reopenWorkDirOverlay() {
+  wd.dismissed = ''
+  wd.sel = 0
+}
+
 export function handleWorkDirOverlayKeydown(e) {
   const list = rows()
   if (e.key === 'Escape') {
@@ -318,6 +331,57 @@ function rowClass(row, i) {
   )
 }
 
+// PATHS_SHOWN caps the visible file list — a work directory can legitimately
+// hold dozens of dirty files, and the overlay must stay a dialog, not a
+// directory listing. The rest is named by a "+N meer" line rather than
+// silently dropped, and the list itself scrolls.
+const PATHS_SHOWN = 12
+
+// decisionPaths — the files this choice is about (chatCheckoutDecision.Paths,
+// currently only the dirtyTree stage). Always an array, so the slot's shape is
+// stable.
+function decisionPaths() {
+  const d = decision()
+  return d && Array.isArray(d.paths) ? d.paths : []
+}
+
+// pathsPanel — "welke bestanden zijn hier al aangepast". Without it the
+// reviewer answered "Meenemen in de commit"/"Verwijderen" about changes he
+// could not see (reported bug: a change was swept into Claude's commit and
+// only noticed afterwards). Per the colourblind rule the COUNT and the file
+// names carry the meaning; nothing here is colour-coded.
+function pathsPanel() {
+  const paths = decisionPaths()
+  const shown = paths.slice(0, PATHS_SHOWN)
+  const rest = paths.length - shown.length
+  return html`
+    <div class="mt-2 rounded-lg bg-slate-50 dark:bg-zinc-800/60 px-3 py-2" data-testid="workdir-overlay-paths">
+      <p class="text-[11px] font-medium text-slate-600 dark:text-zinc-300" data-testid="workdir-overlay-paths-title">
+        ${() =>
+          paths.length === 1
+            ? t('Dit ene bestand is hier al aangepast:')
+            : t('Deze {n} bestanden zijn hier al aangepast:', { n: paths.length })}
+      </p>
+      <ul class="mt-1 max-h-32 overflow-y-auto space-y-0.5 font-mono text-[11px] text-slate-500 dark:text-zinc-400">
+        ${() =>
+          shown.map((path) =>
+            html`<li class="truncate" data-testid="workdir-overlay-path" title="${path}">${path}</li>`.key(
+              'workdir-path:' + path,
+            ),
+          )}
+      </ul>
+      <div class="contents">
+        ${() =>
+          rest > 0
+            ? html`<p class="mt-1 text-[11px] text-slate-500 dark:text-zinc-400" data-testid="workdir-overlay-paths-more">
+                ${t('+ nog {n} bestanden', { n: rest })}
+              </p>`.key('workdir-paths-more')
+            : ''}
+      </div>
+    </div>
+  `
+}
+
 // progressPanel — the live log of real git commands the in-flight action is
 // running (checkout_progress.go via GET /api/chat/checkout/progress), the
 // answer to "laten zien wat het echt doet": not just a label repeated, the
@@ -366,6 +430,7 @@ function overlayPanel() {
             ${() => (decision() ? decision().body || '' : '')}
           </p>
           <p class="mt-1 text-[11px] text-slate-500 dark:text-zinc-400" data-testid="workdir-overlay-current">${() => currentDirLine()}</p>
+          <div class="contents">${() => (decisionPaths().length ? pathsPanel().key('workdir-paths') : '')}</div>
         </div>
         <ul class="max-h-[60vh] overflow-y-auto p-2" data-testid="workdir-overlay-options">
           ${() =>

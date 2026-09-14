@@ -93,12 +93,45 @@ arriving later opens the overlay again while a mere refetch of the same one does
 not. Nothing persists it — not `localStorage`, not the URL.
 
 **Accepted consequence, deliberately chosen (do not "fix" it as a bug):** there
-is **no** `/`-menu entry or any other way to reopen the overlay, so after an
-Escape it stays closed until the page is reloaded or a different choice arrives.
+is **no** `/`-menu entry to reopen the overlay, so after an Escape it stays
+closed until the page is reloaded or a different choice arrives (the one
+exception, added later and for one specific reason, is the chip's own "bekijk
+de bestanden" row — see "The chip names the count" below).
 That was an explicit answer ("geen `/`-menu-item — weglaten"). The choice itself
 is never stranded: the **checkout chip** in `prInfoCard` (nav stop 1, unchanged,
 see `checkoutChipCommandsFor`) offers exactly the same options through the same
 `checkoutAnswer` Action.
+
+**A dirty-tree choice NAMES the files it is about.** Reported bug: the
+reviewer answered "Meenemen in de commit" for changes he had never been shown,
+and only discovered afterwards which files had been swept into Claude's
+commit. `chatCheckoutDecision.Paths` (`chat_checkout.go`) now carries the
+already-changed, uncommitted repo-relative paths straight from
+`checkoutCandidate.DirtyPaths` — the same `git status --porcelain` call that
+set `Dirty`, so this costs no extra git invocation and `buildCheckoutView`
+stays the pure in-memory read it has to be. The overlay renders them under the
+body as `workdir-overlay-paths` (first 12, then a "+ nog N bestanden" line, the
+list itself scrolling); per the colourblind rule the COUNT and the file names
+carry the meaning, nothing is colour-coded. No new option and no extra confirm
+step was added: `optDiscard` ("Verwijderen") already restores the files to the
+branch's committed state (`git checkout -- .` + `git clean -fd`), and the
+reviewer's own ruling was *"verwijderen is prima, maar moet het dan duidelijk
+zijn wat je verwijderd"* — the gap was visibility, not a missing action.
+
+`Paths` is deliberately **not** part of `choiceFingerprint` (stage + options),
+so a path list that shifts between two refetches of the SAME choice never
+re-opens a dismissed overlay. It is also a snapshot taken when the choice was
+RAISED — a file changed while the overlay sits open is not reflected until the
+ladder re-raises the question, the price of keeping the read model git-free.
+
+**The chip names the count and hands the list back to the overlay.** A palette
+row is one truncating line, so `checkoutChipCommandsFor` (`home.mjs`) cannot
+show a file list; with `decision.paths` present it prepends one row ("Bekijk de
+N bestanden die hier al zijn aangepast") that calls `reopenWorkDirOverlay()`
+(`workDirOverlay.mjs`) — clearing the Escape dismissal for the choice that is
+open right now. That is the ONE exception to the "no way to reopen the overlay"
+consequence right above, and it exists precisely because the chip would
+otherwise be the one entry point where the destructive answer is given blind.
 
 **Answering does not close it optimistically.** A row's `run` fires the Action;
 the overlay disappears only when the read model says the choice is gone, so

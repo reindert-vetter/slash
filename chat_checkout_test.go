@@ -408,6 +408,12 @@ func TestPrepareChatShellWorkDirAsksAboutDirtyCandidate(t *testing.T) {
 	if decision == nil || decision.Stage != checkoutStageDirtyTree {
 		t.Fatalf("expected a dirtyTree decision, got %+v", decision)
 	}
+	// The choice must NAME the files it is about — the reviewer used to
+	// answer "Meenemen in de commit"/"Verwijderen" about changes he could not
+	// see (see chatCheckoutDecision.Paths).
+	if len(decision.Paths) != 1 || decision.Paths[0] != "foo.txt" {
+		t.Fatalf("expected the dirty file listed on the decision, got %v", decision.Paths)
+	}
 
 	// An unrecognized reply re-asks the SAME thing rather than guessing — but
 	// now says so explicitly, instead of silently repeating an identical

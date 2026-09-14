@@ -1492,6 +1492,18 @@ again — not on a passive refresh.
 Tests: `TestPrepareChatShellWorkDirDropsAStaleDirtyChoice` and its mirror
 `...KeepsAStillNeededDirtyChoice` (`chat_checkout_test.go`).
 
+#### The dirty-tree question names the files (chatCheckoutDecision.Paths)
+
+`chatCheckoutDirtyDecision` puts `checkoutCandidate.DirtyPaths` on the decision
+as `Paths`, so the werkmap overlay can list exactly which already-changed,
+uncommitted files "Verwijderen"/"Los laten"/"Meenemen in de commit" is about —
+the reviewer used to answer that question blind. Same `git status --porcelain`
+output that set `Dirty`, so no extra git call and `buildCheckoutView` stays a
+pure in-memory read. Purely informational: `matchCheckoutOption` reads
+`Options` only. Frontend half (the list, the cap, the chip's own row):
+"A dirty-tree choice NAMES the files" in `.claude/docs/command-palette.md`.
+Test: `TestPrepareChatShellWorkDirAsksAboutDirtyCandidate`.
+
 #### A "leave it dirty" answer stays answered (DirtyAcceptedDir/DirtyAcceptedPaths)
 
 Reported bug, two screenshots: the reviewer answered the dirty-tree question
