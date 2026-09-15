@@ -11,6 +11,60 @@ touches anything. **No new write path at all** — this rides entirely on the
 existing `claude_chat`/`chat_checkout`/`chat_merge` pipeline
 (`.claude/rules/workflows-write-boundary.md`).
 
+## Three entry points, one shared gate
+
+Opening the editor now has **three** ways in, all funnelling through the
+exact same `openInlineEdit(b, unit)` and the same eligibility gate
+(`inlineEditEligibleNow()`, `home.mjs`: `state.mode === 'diff' &&
+state.focusLevel === 0 && isInlineEditable(curBlock(), blockRows(curBlock()))`):
+the header toggle button, the `"Bewerk deze code"` command-palette item, and
+the **`e` key** (`eKey()`, `home.mjs`, wired in `onKeydown` right after the
+`f`/`d`/`s` zoom keys) — reviewer request: "als ik e druk op een code blokje
+die ik kan editen, dan wil ik het gelijk editen". `e` needs no separate
+`isEditableFocused()` guard: `onKeydown`'s existing fallback
+(`isEditableFocused()`, checked well before this branch) already returns
+whenever real DOM focus sits in a text field — including the inline-edit
+`<textarea>` itself once editing is open — so pressing `e` while already
+editing (or while typing anywhere else) is just an ordinary character, never
+a toggle.
+
+## Escape (close, keep draft) / Cmd+Enter (save) — handled by the textarea itself
+
+Reviewer request: "esc moet edit sluiten zonder op te slaan (mag het wel
+onthouden als dat nu het geval is), cmd + enter moet het opslaan." Both are
+bound directly on the editor's own `<textarea>` via `@keydown`
+(`onTextareaKeyDown`, `Block.mjs`'s `inlineEditorSlot`) rather than through
+`home.mjs`'s global `onKeydown`: a Cmd/Ctrl-modified key pressed while a real
+editable field holds DOM focus is claimed FIRST by `onKeydown`'s own
+`isNativeTextEditKey` guard (`isModifiedKey(e) && isEditableFocused()`,
+see `.claude/rules/arrowjs-pitfalls.md`'s nested-handler-ordering rule), so a
+global `Cmd+Enter` branch would never be reached while the textarea is
+focused — the editor has to own both keys itself. `Escape` mirrors
+`onCancelClick`/"Annuleren" exactly (`closeInlineEdit()`, draft untouched —
+only a real save clears it); `Cmd+Enter`/`Ctrl+Enter` mirrors `onSaveClick`/
+"Opslaan" exactly (reads the textarea's own current value, `closeInlineEdit()`,
+then `onSave(b, text, originalSource)`).
+
+## A keyboard hint for both states (gated on the reviewer's keyboard-hints setting)
+
+`home.mjs`'s `blockShortcutHints()` — the function behind every card's
+`ShortcutHintBar` (`src/shortcutHints.mjs`, itself gated on
+`keyboardHints.enabled`, the settings-page "Keyboard hints" toggle, see
+`.claude/docs/settings-page.md`) — short-circuits to two edit-specific hints
+whenever the card it's asked about is the one currently mid-edit
+(`inlineEditState.id === curBlock().id`): `Esc` → "annuleren",
+`Cmd+Enter` → "opslaan". This is safe to key purely on `curBlock()` (the
+top-level selected block) with no `focusLevel` check of its own: editing is
+only ever open for the top-level card (v1 scope, see below), and DOM focus is
+trapped in the `<textarea>` while it's open — every arrow-key/drilling path
+is intercepted by `onKeydown`'s `isEditableFocused()` fallback first — so a
+drilled column's own hint request can never collide with an open top-level
+edit. Not editing: the **group**-granularity hint list gains an `e` →
+"bewerk code" entry, shown only while `inlineEditEligibleNow()` is true — the
+**line/call** list stays untouched (deliberately `s`/`d`/`f`-only, an earlier,
+separate reviewer decision, see `blockShortcutHints`' own comment) even though
+the `e` key itself still works at any granularity there, it just isn't hinted.
+
 ## Scope (v1, deliberately narrow)
 
 - Only the **new/right side**, and only the **whole block** at once (not a
@@ -184,24 +238,27 @@ types their own follow-up message by hand; nothing is sent automatically.
   module (no import of `Block.mjs`/`home.mjs`/`RelatedPanel.mjs`), so both
   `Block.mjs` and `home.mjs` import it directly with no cycle.
 - `src/Block.mjs` — `isInlineEditable`, `inlineEditToggleButton`,
-  `inlineEditorSlot`, the `allowInlineEdit`/`onSaveInlineEdit` opts.
-- `src/home.mjs` — `saveInlineEdit`, wiring `allowInlineEdit: true` /
-  `onSaveInlineEdit: saveInlineEdit` only at the top-level `Block()` call
-  site in `DetailPanel`, and the `"Bewerk deze code"` entry in `COMMANDS`
-  (see "Two entry points, one shared flag" above).
+  `inlineEditorSlot` (including `onTextareaKeyDown`, see "Escape (close, keep
+  draft) / Cmd+Enter (save)" above), the `allowInlineEdit`/`onSaveInlineEdit`
+  opts.
+- `src/home.mjs` — `saveInlineEdit`, `inlineEditEligibleNow`/`eKey` (the `e`
+  key, see "Three entry points, one shared gate" above), wiring
+  `allowInlineEdit: true` / `onSaveInlineEdit: saveInlineEdit` only at the
+  top-level `Block()` call site in `DetailPanel`, the `"Bewerk deze code"`
+  entry in `COMMANDS`, and the edit-mode branch of `blockShortcutHints()`.
 - `src/RelatedPanel.mjs` — `claudeContextBlock`'s additive `proposedCode`/
   `proposedStale` branch.
 
 Test: `tests/inline-edit.spec.mjs` — direct-mount `Block()` unit tests
 (mirroring `tests/diffview.spec.mjs`'s own pattern — eligibility, the overlay
 editor's content, the draft surviving a remount and being cleared once
-saved), plus a real-app test against a seeded PR for the `COMMANDS` entry
-point (absent in list mode, present and functional once the block owns the
-diff keyboard), plus a pure-function test of
-`computeInlineEditCaretOffset`'s row→offset arithmetic and a direct-mount
-test asserting the textarea is focused with the caret strictly inside a
-given `activeGroup()` unit's own text. The actual `startClaudeChat`/
-`claude_chat` hand-off itself is already covered by
+saved, `Escape`/`Cmd+Enter` inside the textarea), plus real-app tests against
+a seeded PR for the `COMMANDS` entry point and the `e` key (each absent in
+list mode, present and functional once the block owns the diff keyboard),
+plus a pure-function test of `computeInlineEditCaretOffset`'s row→offset
+arithmetic and a direct-mount test asserting the textarea is focused with the
+caret strictly inside a given `activeGroup()` unit's own text. The actual
+`startClaudeChat`/`claude_chat` hand-off itself is already covered by
 `tests/claude-chat-panel.spec.mjs` and is unrelated to this feature's own
 logic, so the direct-mount tests assert it only via a spy on
 `onSaveInlineEdit`.

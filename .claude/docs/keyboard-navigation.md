@@ -1711,3 +1711,21 @@ alleen zien als de blok actief/geselecteerd is") — already the design from
 the start (see the `isActiveCard`/`state.focusLevel` gating above), verified
 live: a look-ahead preview card's own hint bar element is present (so the
 fixed-slot shape stays stable) but carries a `hidden` class, showing nothing.
+
+### `e` opens inline editing; the editor itself owns Escape/Cmd+Enter
+
+The `'group'`-granularity hint list also grows an `e` → "bewerk code" entry
+whenever the current block is eligible for inline editing
+(`inlineEditEligibleNow()`, `home.mjs` — the same gate the `e` key itself and
+the "Bewerk deze code" command use, see `.claude/docs/inline-edit.md`); the
+`'line'`/`'call'` s/d/f-only list above is deliberately left untouched (an
+earlier, separate reviewer decision) even though `e` still works there. While
+a card is mid-edit, `blockShortcutHints()` shows two DIFFERENT hints instead
+(`Esc` → "annuleren", `Cmd+Enter` → "opslaan") — `Escape` and `Cmd+Enter` are
+handled locally by the editor's own `<textarea>` (`Block.mjs`'s
+`onTextareaKeyDown`), not through this file's `onKeydown` chain: a
+Cmd/Ctrl-modified key is claimed FIRST by `isNativeTextEditKey` (a few lines
+above, "A Cmd/Ctrl chord inside a text field stays native") whenever a real
+editable field holds DOM focus, so a global `Cmd+Enter` branch could never
+fire while the textarea itself is focused. Full mechanism:
+`.claude/docs/inline-edit.md`.

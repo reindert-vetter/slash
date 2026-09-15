@@ -1180,6 +1180,32 @@ function inlineEditorSlot(b, onSave) {
     closeInlineEdit()
     onSave(b, text, originalSource)
   }
+  // onTextareaKeyDown — the editor's own two shortcuts (reviewer request:
+  // "esc moet edit sluiten zonder op te slaan ... cmd + enter moet het
+  // opslaan"). Handled locally, on the textarea itself, rather than through
+  // home.mjs's global onKeydown: a Cmd/Ctrl-modified key while a real
+  // editable field holds DOM focus is claimed FIRST by onKeydown's own
+  // isNativeTextEditKey guard (see .claude/rules/arrowjs-pitfalls.md's
+  // nested-handler-ordering rule), so Cmd+Enter would never reach a global
+  // branch anyway — this mirrors onCancelClick/onSaveClick's own actions
+  // exactly, just from the keyboard instead of a click. Escape never clears
+  // the draft (same as clicking "Annuleren") — only a real save does, via
+  // onSave -> home.mjs's saveInlineEdit -> clearInlineEditDraft.
+  function onTextareaKeyDown(e) {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      e.stopPropagation()
+      closeInlineEdit()
+      return
+    }
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault()
+      e.stopPropagation()
+      const text = e.target.value
+      closeInlineEdit()
+      onSave(b, text, originalSource)
+    }
+  }
 
   // Place the caret in the MIDDLE of whatever the diff's own selection
   // covered at the moment "Bewerk deze code" was invoked (reviewer request:
@@ -1204,6 +1230,7 @@ function inlineEditorSlot(b, onSave) {
           spellcheck="false"
           data-testid="inline-edit-textarea"
           @input="${onInput}"
+          @keydown="${onTextareaKeyDown}"
         >${initialText}</textarea>
       </div>
       <div

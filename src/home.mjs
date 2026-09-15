@@ -9407,6 +9407,21 @@ function spaceHint() {
 
 function blockShortcutHints() {
   if (relatedActive()) return []
+  // While the top-level card is mid inline-edit (inlineEditState.id, see
+  // inlineEdit.mjs) the ordinary group/line/call hints make no sense — show
+  // the editor's own two keys instead. Only reachable at focusLevel===0 (the
+  // v1 scope of inline editing) and only for curBlock() itself: DOM focus is
+  // trapped in the editor's own <textarea> while this is open (every
+  // arrow-key/drill path is intercepted by onKeydown's isEditableFocused()
+  // fallback first), so a drilled column can never be mid-edit at the same
+  // time this function is asked for ITS hints.
+  const editingBlock = curBlock()
+  if (editingBlock && inlineEditState.id === editingBlock.id) {
+    return [
+      { key: 'Esc', label: t('annuleren') },
+      { key: 'Cmd+Enter', label: t('opslaan') },
+    ]
+  }
   if (state.mode === 'list') {
     return [
       { key: '→', label: 'in diff/thread' },
@@ -9440,6 +9455,13 @@ function blockShortcutHints() {
   return [
     { key: 'a', label: t('weergave') },
     { key: 'f', label: t('Ga dieper') },
+    // Only shown when the current block is actually eligible for inline
+    // editing (isInlineEditable, see inlineEditEligibleNow()) — the same
+    // gate the `e` key itself uses, so the hint never appears where the key
+    // would be a no-op. `e` still works at 'line'/'call' granularity too
+    // (isInlineEditable doesn't depend on gran), it just isn't hinted there —
+    // that list is deliberately s/d/f-only, see the comment above.
+    ...(inlineEditEligibleNow() ? [{ key: 'e', label: t('bewerk code') }] : []),
     { key: '←→', label: t('kolom') },
     spaceHint(),
     { key: 'Enter', label: 'menu' },
@@ -9546,6 +9568,29 @@ function topLevelActiveUnit(b) {
   if (state.mode !== 'diff') return groupsFor(b)[0] || null
   const units = unitsOf(b)
   return isRangeGran(state.gran) ? rangeUnit(units, state.change, state.rangeAnchor) : units[state.change] || null
+}
+
+// inlineEditEligibleNow — the ONE shared gate for "can the `e` key/the
+// 'Bewerk deze code' command open inline editing right now": the true
+// top-level selected card owns the diff keyboard (state.mode==='diff',
+// state.focusLevel===0 — v1 scope, see .claude/docs/inline-edit.md) and its
+// block is eligible (isInlineEditable, Block.mjs). Shared by COMMANDS'
+// `edit-code` item's own `when` and eKey below, so the two can never
+// disagree, same reasoning as inlineEditToggleButton/`edit-code` already
+// sharing isInlineEditable itself.
+function inlineEditEligibleNow() {
+  const b = curBlock()
+  return state.mode === 'diff' && state.focusLevel === 0 && isInlineEditable(b, blockRows(b))
+}
+
+// eKey — opens inline editing on the top-level selected card, the exact same
+// action as clicking the header toggle button or running the "Bewerk deze
+// code" command (openInlineEdit is the one shared entry point, see
+// inlineEdit.mjs) — reviewer request: "als ik e druk op een code blokje die
+// ik kan editen, dan wil ik het gelijk editen".
+function eKey() {
+  const b = curBlock()
+  if (b) openInlineEdit(b, topLevelActiveUnit(b))
 }
 
 // focusedActiveUnit — the active unit of whichever card currently owns the
@@ -13041,10 +13086,7 @@ const COMMANDS = withClose([
       // mounted, see inlineEdit.mjs and .claude/docs/inline-edit.md.
       if (b) openInlineEdit(b, topLevelActiveUnit(b))
     },
-    when: () => {
-      const b = curBlock()
-      return state.mode === 'diff' && state.focusLevel === 0 && isInlineEditable(b, blockRows(b))
-    },
+    when: () => inlineEditEligibleNow(),
   },
   {
     id: 'comment',
@@ -14793,6 +14835,24 @@ function onKeydown(e) {
   if (e.key === 's' && !isModifiedKey(e)) {
     e.preventDefault()
     sKey()
+    return
+  }
+
+  // `e` opens inline editing directly on the top-level selected card, the
+  // keyboard twin of the header toggle button/"Bewerk deze code" — reviewer
+  // request. Gated by the same inlineEditEligibleNow() the command palette
+  // item uses, so it's a no-op wherever that item would be absent too (a
+  // block not eligible for inline editing, a drilled column, list mode). No
+  // separate isEditableFocused() guard needed here: the fallback further up
+  // this function (isEditableFocused()) already returns before this point
+  // whenever real DOM focus sits in a text field — including the inline-edit
+  // textarea itself once editing is open — so typing "e" while already
+  // editing (or in any other field) never reaches this branch and just types
+  // a literal "e" as normal. See eKey/inlineEditEligibleNow above and
+  // .claude/docs/inline-edit.md.
+  if (e.key === 'e' && !isModifiedKey(e) && inlineEditEligibleNow()) {
+    e.preventDefault()
+    eKey()
     return
   }
 

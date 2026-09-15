@@ -81,6 +81,73 @@ test.describe('Inline code editing (Block.mjs)', () => {
     expect(saves[0].originalSource).toContain('return 2;')
   })
 
+  // Reviewer request: "esc moet edit sluiten zonder op te slaan (mag het wel
+  // onthouden als dat nu het geval is), cmd + enter moet het opslaan" —
+  // handled locally by the textarea's own @keydown (Block.mjs's
+  // onTextareaKeyDown), not through home.mjs's global onKeydown (see
+  // .claude/docs/inline-edit.md).
+  test('Escape closes the editor without saving (draft kept), Cmd+Enter saves', async ({ page }) => {
+    await page.goto('/pr/12903')
+    await appReady(page)
+
+    await evaluateSettled(page, async () => {
+      const { reactive } = await import('/src/vendor/arrow.js')
+      const Block = (await import('/src/Block.mjs')).default
+      const b = reactive({
+        id: 'inline-edit-test:Foo::keys',
+        pr: 12903,
+        category: 'ACTION',
+        label: 'Foo::keys',
+        status: 'modified',
+        file: 'app/Foo.php',
+        line: 26,
+        endLine: 29,
+        name: 'keys',
+        class: 'Foo',
+        approved: false,
+        code: {
+          old: { start: 26, end: 28, text: 'public function keys(): int {\n    return 1;\n}' },
+          new: { start: 26, end: 29, text: 'public function keys(): int {\n    return 2;\n}' },
+        },
+      })
+      const host = document.createElement('div')
+      host.id = 'inline-edit-keys-host'
+      host.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#fff;overflow:auto'
+      document.body.appendChild(host)
+      window.__inlineEditKeysSaves = []
+      Block(b, {
+        allowInlineEdit: true,
+        diffActive: () => true,
+        onSaveInlineEdit: (blk, text, originalSource) => {
+          window.__inlineEditKeysSaves.push({ text, originalSource })
+        },
+      })(host)
+    })
+
+    const host = page.locator('#inline-edit-keys-host')
+    await host.locator('[data-testid="block-inline-edit-toggle"]').click()
+    const textarea = host.locator('[data-testid="inline-edit-textarea"]')
+    await expect(textarea).toBeVisible()
+
+    await textarea.fill('public function keys(): int {\n    return 42;\n}')
+    await textarea.press('Escape')
+    // Closed, nothing saved.
+    await expect(host.locator('[data-testid="inline-edit-wrapper"]')).toHaveCount(0)
+    expect(await page.evaluate(() => window.__inlineEditKeysSaves)).toHaveLength(0)
+
+    // Reopening shows the SAME (draft) text — Escape never clears it, same
+    // as "Annuleren".
+    await host.locator('[data-testid="block-inline-edit-toggle"]').click()
+    await expect(host.locator('[data-testid="inline-edit-textarea"]')).toHaveValue(/return 42;/)
+
+    // Cmd+Enter saves the current textarea value.
+    await host.locator('[data-testid="inline-edit-textarea"]').press('Meta+Enter')
+    await expect(host.locator('[data-testid="inline-edit-wrapper"]')).toHaveCount(0)
+    const saves = await page.evaluate(() => window.__inlineEditKeysSaves)
+    expect(saves).toHaveLength(1)
+    expect(saves[0].text).toContain('return 42;')
+  })
+
   test('a removed block never shows the edit toggle', async ({ page }) => {
     await page.goto('/pr/12903')
     await appReady(page)
@@ -238,6 +305,40 @@ test.describe('Inline code editing — the block palette entry (home.mjs COMMAND
     await expect(page.getByTestId('command-menu')).not.toBeVisible()
     await expect(page.getByTestId('inline-edit-wrapper')).toBeVisible()
     await expect(page.getByTestId('inline-edit-textarea')).toBeVisible()
+  })
+})
+
+// Reviewer request: "als ik e druk op een code blokje die ik kan editen, dan
+// wil ik het gelijk editen" — the `e` key (home.mjs's eKey/
+// inlineEditEligibleNow) is a third entry point into the SAME openInlineEdit,
+// gated identically to the header button/"Bewerk deze code" command.
+test.describe('Inline code editing — the `e` key (home.mjs onKeydown)', () => {
+  test('`e` opens the editor once the block owns the diff keyboard, and is a no-op before that', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+    await expect(page.getByTestId('block-column')).toBeVisible()
+    await leaveSearchBox(page)
+
+    await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
+    await leaveSearchBox(page)
+
+    // Still list mode: `e` does nothing (not eligible yet, same gate as the
+    // header button/command).
+    await page.keyboard.press('e')
+    await expect(page.getByTestId('inline-edit-wrapper')).toHaveCount(0)
+
+    await page.keyboard.press('ArrowRight')
+    await expect(page.getByTestId('block-inline-edit-toggle')).toBeVisible()
+
+    await page.keyboard.press('e')
+    await expect(page.getByTestId('inline-edit-wrapper')).toBeVisible()
+    await expect(page.getByTestId('inline-edit-textarea')).toBeFocused()
+
+    // While already editing, `e` is an ordinary character typed into the
+    // textarea (DOM focus already sits there) — never toggles anything.
+    await page.keyboard.press('e')
+    await expect(page.getByTestId('inline-edit-wrapper')).toBeVisible()
   })
 })
 
