@@ -3297,6 +3297,27 @@ function claudeContextBlock(commentTarget) {
         lines.push('Nieuwe regels: ' + t.newStartLine + (t.newEndLine > t.newStartLine ? '-' + t.newEndLine : ''))
       if (t.label) lines.push('Onderdeel: ' + t.label)
       lines.push('Voorbeeldcode:', '```php', t.code, '```')
+      // proposedCode — the reviewer's own inline-edited draft (Block.mjs's
+      // inline editor, "Opslaan"), set only by home.mjs's saveInlineEdit.
+      // Every other caller's target has no proposedCode, so this branch is a
+      // pure addition for every existing chat entry point (startClaudeChat/
+      // startComment/etc.) — unchanged behaviour there. Deliberately sent as
+      // plain, visible-to-Claude context (not the reviewer's own typed
+      // message, see the file header) so the reviewer's own follow-up
+      // question ("pas dit ook op andere plekken aan") is what they typed,
+      // nothing more.
+      if (t.proposedCode) {
+        lines.push('Door de reviewer voorgestelde nieuwe code (nog niet doorgevoerd):', '```php', t.proposedCode, '```')
+        // proposedStale — set true only when home.mjs's saveInlineEdit found
+        // the new-side source had genuinely changed since this edit started
+        // (a landing in between, this reviewer's own or a colleague's) — a
+        // precise, computed fact, never a guess, see blockNewSourceText's own
+        // doc comment (inlineEdit.mjs).
+        if (t.proposedStale)
+          lines.push(
+            'Let op: dit voorstel is getypt tegen een eerdere versie van dit bestand — de huidige code hierboven kan intussen zijn gewijzigd.',
+          )
+      }
       parts.push(lines.join('\n'))
     } else if (t && t.file) {
       // A block WITHOUT navigable changes (commentTarget's own `!unit`

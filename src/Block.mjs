@@ -13,6 +13,12 @@ import { parseAutoWidthPx, resizeHandle } from './columnWidth.mjs'
 import { ShortcutHintBar } from './shortcutHints.mjs'
 import Prism from './vendor/prism.js'
 import { t } from './i18n.mjs'
+import {
+  inlineEditState,
+  blockNewSourceText,
+  loadInlineEditDraft,
+  saveInlineEditDraft,
+} from './inlineEdit.mjs'
 // alignRows/diffLines used to live at the bottom of this file; they were
 // extracted to their own module so /plan/<KEY> can reuse the exact same
 // alignment without importing this whole card (see src/lineDiff.mjs).
@@ -370,6 +376,24 @@ export function isImageFile(b) {
 // see below).
 function isYamlFile(b) {
   return !!(b.file && /\.ya?ml$/i.test(b.file))
+}
+
+// isInlineEditable — whether b's new/right side can be inline-edited at all
+// (see inlineEditorSlot below): a plain code file, not one of the categories
+// that already replace the text diff with their own render (TRANSLATION/
+// SVG/IMAGE, see diff-render.md), with a real new side to edit (`modified`/
+// `added` — a `removed` block has no new side left, and the synthetic
+// `unchanged` drilled call-frame has nothing of this PR's own to change),
+// and small enough that the ordinary, unvirtualized diff still renders
+// every row (VIRTUALIZE_MIN_ROWS, below) — editing a virtualized window
+// would silently drop whatever sits outside it.
+function isInlineEditable(b, rows) {
+  if (!b) return false
+  if (b.status !== 'modified' && b.status !== 'added') return false
+  if (b.category === 'TRANSLATION') return false
+  if (isSvgFile(b) || isImageFile(b)) return false
+  if (!rows || rows.length > VIRTUALIZE_MIN_ROWS) return false
+  return true
 }
 
 // isProseFile — the discriminator between 'fit''s two different behaviors
@@ -1040,6 +1064,151 @@ function viewModeIndicator(viewModeFn, setViewMode) {
   `
 }
 
+// toggleInlineEdit flips the single shared inlineEditState.id flag — see
+// inlineEditState's own doc comment (inlineEdit.mjs) for why this is one
+// shared flag rather than per-block state.
+function toggleInlineEdit(b) {
+  inlineEditState.id = inlineEditState.id === b.id ? null : b.id
+}
+
+// inlineEditToggleButton — the mouse entry point into inline editing
+// (reviewer request: "ik wil in de diff blok ... de code kunnen editen in de
+// blok zelf"). Sits next to viewModeIndicator, same small-icon-button shape,
+// only ever rendered for a card that both owns the diff keyboard AND is
+// eligible (see the call site's own isInlineEditable/allowInlineEdit gate) —
+// never on a preview/look-ahead card or a drilled column (v1 scope, see
+// CLAUDE.md's inline-edit design notes).
+function inlineEditToggleButton(b) {
+  return html`<div class="contents">
+    <button
+      type="button"
+      title="${() => (inlineEditState.id === b.id ? t('Stop met bewerken') : t('Bewerk deze code'))}"
+      data-testid="block-inline-edit-toggle"
+      class="${() =>
+        'flex h-6 w-6 shrink-0 items-center justify-center rounded transition ' +
+        (inlineEditState.id === b.id
+          ? 'bg-indigo-100 text-indigo-600 ring-1 ring-indigo-300 dark:bg-indigo-500/20 dark:text-indigo-300 dark:ring-indigo-500/40'
+          : 'text-slate-400 hover:bg-slate-100 hover:text-indigo-600 dark:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-indigo-400')}"
+      @click="${(e) => {
+        if (!e) return
+        e.stopPropagation()
+        toggleInlineEdit(b)
+      }}"
+    >
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="h-3.5 w-3.5" aria-hidden="true">
+        <path d="M11 2l3 3-8 8-3.5 1 1-3.5 8-8z" stroke-linecap="round" stroke-linejoin="round"></path>
+      </svg>
+    </button>
+  </div>`
+}
+
+// inlineEditorSlot — the inline, IDE-style editor for a block's new/right
+// side. Replaces the ordinary diff body while active (codeDiff/
+// translationSlot/svgSlot/imageSlot are all skipped, see the call site in
+// Block() below) — editing the WHOLE block as one free-form text, so there
+// is no per-row alignment against the old side left to keep meaningful
+// during an edit.
+//
+// Two-layer technique, no contenteditable (see "A statically interpolated
+// template..."/the keyed-node-reuse family of pitfalls in
+// arrowjs-pitfalls.md — a live re-tokenizing contenteditable would hit the
+// exact same class of caret-loss bug on every keystroke, just far more
+// often than the read-only mouse-selection case already documented there):
+// a plain, transparent-text <textarea> is the REAL, native editing surface
+// (caret, native selection, copy/paste — all free); a Prism-highlighted
+// <pre> sits absolutely positioned UNDER it, showing the same text in
+// colour, kept in sync by hand on every @input (never through an arrow.js
+// binding — nothing here is driven by reactive `state`, only by plain DOM
+// events, so this stays outside arrow.js's reactive system entirely,
+// mirroring how updateHints/syncScroll already operate imperatively).
+//
+// Both layers are children of the SAME overflow-auto container: the
+// textarea sits in normal flow (driving the container's own scroll height),
+// the <pre> is absolutely positioned with only top/left/right pinned
+// (never bottom/height), so its natural content height matches the
+// textarea's and scrolling the shared container moves both together with
+// zero JS scroll-sync code.
+//
+// Nothing here writes anywhere. "Opslaan" (onSave) hands the edited text to
+// a brand-new Claude chat instead of committing it directly — see
+// home.mjs's saveInlineEdit. No new write path, see
+// .claude/rules/workflows-write-boundary.md.
+function inlineEditorSlot(b, onSave) {
+  const rows = blockRows(b)
+  const lang = langForFile(b.file)
+  const draft = loadInlineEditDraft(b)
+  const currentSource = blockNewSourceText(rows)
+  const initialText = draft ? draft.text : currentSource
+  const originalSource = draft ? draft.originalSource : currentSource
+  const initialHighlightHtml = highlightForLang(initialText, lang)
+  const initialHeightPx = Math.max(60, (initialText.split('\n').length + 1) * 16)
+
+  function highlightCodeEl(ta) {
+    const wrapper = ta.closest('[data-testid="inline-edit-wrapper"]')
+    return wrapper && wrapper.querySelector('[data-testid="inline-edit-highlight"] code')
+  }
+  function growEl(ta) {
+    ta.style.height = 'auto'
+    ta.style.height = ta.scrollHeight + 'px'
+  }
+  function onInput(e) {
+    const ta = e.target
+    growEl(ta)
+    const code = highlightCodeEl(ta)
+    if (code) code.innerHTML = highlightForLang(ta.value, lang)
+    saveInlineEditDraft(b, ta.value, originalSource)
+  }
+  function onCancelClick(e) {
+    if (!e) return
+    e.stopPropagation()
+    inlineEditState.id = null
+  }
+  function onSaveClick(e) {
+    if (!e) return
+    e.stopPropagation()
+    const wrapper = e.target.closest('[data-testid="inline-edit-wrapper"]')
+    const ta = wrapper && wrapper.querySelector('[data-testid="inline-edit-textarea"]')
+    const text = ta ? ta.value : initialText
+    inlineEditState.id = null
+    onSave(b, text, originalSource)
+  }
+
+  return html`
+    <div class="flex min-h-0 flex-1 flex-col" data-testid="inline-edit-wrapper">
+      <div class="relative min-h-[45vh] flex-1 overflow-auto no-scrollbar bg-white dark:bg-zinc-900">
+        <pre
+          class="pointer-events-none absolute inset-x-0 top-0 m-0 whitespace-pre p-3 font-mono text-[11px] leading-relaxed"
+          aria-hidden="true"
+          data-testid="inline-edit-highlight"
+        ><code class="${'language-' + lang}" .innerHTML="${initialHighlightHtml}"></code></pre>
+        <textarea
+          class="relative w-full resize-none border-0 bg-transparent p-3 font-mono text-[11px] leading-relaxed text-transparent caret-slate-900 outline-none focus:outline-none dark:caret-zinc-100"
+          style="${'height:' + initialHeightPx + 'px'}"
+          spellcheck="false"
+          data-testid="inline-edit-textarea"
+          @input="${onInput}"
+        >${initialText}</textarea>
+      </div>
+      <div
+        class="flex items-center justify-end gap-2 border-t border-slate-100 px-3 py-2 dark:border-zinc-800"
+      >
+        <button
+          type="button"
+          data-testid="inline-edit-cancel"
+          class="rounded px-2 py-1 text-xs font-medium text-slate-500 hover:bg-slate-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+          @click="${onCancelClick}"
+        >${t('Annuleren')}</button>
+        <button
+          type="button"
+          data-testid="inline-edit-save"
+          class="rounded bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-indigo-500"
+          @click="${onSaveClick}"
+        >${t('Opslaan')}</button>
+      </div>
+    </div>
+  `
+}
+
 // blockCloseColumnButton — the mouse entry point that closes a drilled
 // Underlying-code column and hands focus back to its parent column, the
 // click equivalent of ← at state.focusLevel>0 (closeDrilledColumn,
@@ -1216,6 +1385,16 @@ export default function Block(b, opts = {}) {
   // no-op) so the render slot below can tell "not wired up at all" apart
   // from "wired up" — same reasoning as onRowMouseDown/onApproveClick above.
   const onCloseColumn = opts.onCloseColumn || null
+  // allowInlineEdit / onSaveInlineEdit — inline, IDE-style editing of this
+  // block's new/right side (see inlineEditorSlot below). v1 scope is
+  // deliberately narrow: only the top-level selected card wires this up
+  // (home.mjs's DetailPanel) — a preview/look-ahead card and a drilled
+  // Onderliggende-code column never do, so allowInlineEdit defaults to false
+  // and the edit affordance/editor never appear where "Opslaan" would have
+  // nothing wired to call. onSaveInlineEdit defaults to a no-op for the same
+  // reason (never actually reachable when allowInlineEdit is false).
+  const allowInlineEdit = !!opts.allowInlineEdit
+  const onSaveInlineEdit = opts.onSaveInlineEdit || (() => {})
   const preview = !!opts.preview
   // collapsedFn is a function returning whether this card should shrink to just
   // its header + meta row (category/title/status, file:line + approve pill) —
@@ -1545,6 +1724,12 @@ export default function Block(b, opts = {}) {
           // cycling the diff view" section in keyboard-navigation.md.
           diffActive() ? viewModeIndicator(viewModeFn, setViewMode) : ''}
         ${() =>
+          // Mouse entry point into inline editing — see inlineEditToggleButton's
+          // own doc comment for the exact eligibility/scope gate.
+          !preview && allowInlineEdit && diffActive() && isInlineEditable(b, blockRows(b))
+            ? inlineEditToggleButton(b)
+            : ''}
+        ${() =>
           // Mouse-only way back out of a DRILLED column — the click
           // equivalent of ←, same gate as viewModeIndicator right above,
           // never on a preview/look-ahead card. The top-level card's own way
@@ -1717,6 +1902,8 @@ export default function Block(b, opts = {}) {
       ${() =>
         collapsedFn()
           ? ''
+          : !preview && allowInlineEdit && inlineEditState.id === b.id
+          ? inlineEditorSlot(b, onSaveInlineEdit)
           : b.category === 'TRANSLATION'
           ? translationSlot(b, activeGroup, approvedFn, langSiblingsFn, hintsEnabled, lineSummaryFn, diffActive)
           : isSvgFile(b)

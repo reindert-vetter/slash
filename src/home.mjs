@@ -32,6 +32,7 @@ import Block, {
   fitCapCharsFor,
   blockDescCollapsible,
 } from './Block.mjs'
+import { blockNewSourceText, clearInlineEditDraft } from './inlineEdit.mjs'
 import RelatedPanel, {
   InlineComments,
   ClaudeChatPanel,
@@ -11111,6 +11112,55 @@ function commentTarget() {
   }
 }
 
+// saveInlineEdit — the "Opslaan" action of the inline code editor
+// (Block.mjs's inlineEditorSlot, opts.onSaveInlineEdit). Deliberately NOT a
+// commit of its own: it hands the reviewer's edited code to a brand-new
+// "Chat over deze regel" conversation (startClaudeChat, the exact same
+// entry point COMMANDS/the no-match palette fallback already use above) as
+// invisible first-turn context, so the reviewer can add a follow-up
+// instruction ("pas dit ook op andere plekken aan") before anything is
+// actually written. No new write path at all — this rides on the existing
+// claude_chat/chat_checkout/chat_merge pipeline unchanged (see
+// .claude/rules/workflows-write-boundary.md and claude-chat-panel.md).
+//
+// The target this builds mirrors commentTarget()'s own shape (so the lazily
+// created anchor comment/GitHub anchoring behaves exactly like any other
+// "Chat over deze regel") but scoped to the WHOLE block — v1 edits the
+// entire new/right side, not a sub-range — plus two additive fields
+// (proposedCode/proposedStale) claudeContextBlock (RelatedPanel.mjs) reads
+// to attach the reviewer's draft and, only when precisely true, a note that
+// it may be based on an older version of the code.
+function saveInlineEdit(b, text, originalSource) {
+  const rows = blockRows(b)
+  const currentSource = blockNewSourceText(rows)
+  // Precise, not guessed: only note staleness when the new-side source has
+  // genuinely changed since this draft started (a landing in between — this
+  // reviewer's own or a colleague's).
+  const stale = currentSource !== originalSource
+  const target = () => ({
+    gran: 'group',
+    label: b.label,
+    file: b.file,
+    line: b.line,
+    code: currentSource,
+    rowStart: 0,
+    rowEnd: Math.max(0, rows.length - 1),
+    seg: '',
+    startLine: b.line,
+    endLine: b.endLine,
+    side: 'RIGHT',
+    segment: '',
+    oldStartLine: 0,
+    oldEndLine: 0,
+    newStartLine: b.line,
+    newEndLine: b.endLine,
+    proposedCode: text,
+    proposedStale: stale,
+  })
+  clearInlineEditDraft(b)
+  startClaudeChat(target)
+}
+
 // unitLineRange maps a navigation unit (an aligned-row range, see unitsFor) to
 // the real source line range GitHub needs: which side ('RIGHT' new / 'LEFT'
 // old) the comment should anchor on, and the first/last source line number of
@@ -16977,6 +17027,13 @@ function DetailPanel(state) {
             // Marks a block whose file was just landed but the tree hasn't
             // re-ingested it yet (see checkoutRefreshingFiles/loadCheckout).
             refreshing: () => checkoutRefreshingFiles().has(b.file),
+            // Inline, IDE-style editing (see .claude/docs — inline-edit design
+            // notes, Block.mjs's inlineEditorSlot): v1 scope is deliberately
+            // only the true top-level selected card, never a preview/
+            // look-ahead card or a drilled Onderliggende-code column (neither
+            // of those wires this opt at all, so it defaults to false there).
+            allowInlineEdit: true,
+            onSaveInlineEdit: saveInlineEdit,
             // Dimmed like the look-ahead preview whenever it isn't the selected
             // card, OR the keyboard focus has stepped off it onto a drilled
             // column (state.focusLevel > 0).

@@ -92,6 +92,10 @@ that set stays small on purpose; a new topic file belongs in `.claude/docs/`.
   stands, and the `/api/image` endpoint behind it).
 - `drilling.md` — opening an Underlying-code child as its own column
   (`state.drill`/`focusLevel`), rails, the enter/return animations.
+- `inline-edit.md` — editing a diff block's new/right side directly in the
+  card (no textarea look: a transparent `<textarea>` over a Prism-highlighted
+  `<pre>`), and why "Opslaan" hands the edit to a brand-new Claude chat as
+  invisible context instead of committing it directly.
 - `underlying-code.md` — the `RelatedPanel` card: which children it shows, the
   cursor scoping, drill-hint chips, the call-arrow overlay, its column width.
 - `comments-panel.md` — PR-wide comments as navigable sidebar rows, the inline
