@@ -150,6 +150,75 @@ func TestProcessChatMergeClearsPendingEditedFilesOnSuccess(t *testing.T) {
 	}
 }
 
+// TestProcessChatMergeClearsPendingEditedFilesOnFailureToo is the regression
+// for the "nieuwe poging" stuck-forever bug: a failed landing (here, a
+// pre-commit hook rejecting the commit AFTER commitCheckoutEditsAt already
+// `git add -A`d everything, leaving the tree genuinely dirty) must ALSO clear
+// the pending-files registry, exactly like a successful landing does. Before
+// this fix the registry stayed populated forever on a failed landing, so
+// dirtyIsOnlyPendingEdits (chat_checkout.go) kept classifying that same
+// leftover dirty tree as "another conversation is still landing it" — and
+// since nothing ever re-lands a failed attempt on its own, every later write
+// turn for that PR waited out the whole chatRetryDelays ladder and ended in
+// "Dat duurde te lang", forever, with no way out.
+func TestProcessChatMergeClearsPendingEditedFilesOnFailureToo(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "foo v1\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	cm := testChatModule(t)
+	defer clearChatPendingFiles("", 2011)
+	defer clearChatRefreshPendingFiles("", 2011)
+
+	dir := cloneCheckoutDir(t, bareDir, "feature/x")
+	assignCheckoutForTest(t, "", 2011, dir)
+	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("foo edited by claude\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	markChatFilesPending("", 2011, []string{"foo.txt"})
+
+	// A pre-commit hook that always rejects — deterministically reproduces
+	// "git add -A succeeded, the commit itself failed", the exact state a
+	// real `git commit --amend` failure (chat_checkout.go's
+	// commitCheckoutEditsAt) leaves behind.
+	hooksDir := filepath.Join(dir, ".git", "hooks")
+	hook := filepath.Join(hooksDir, "pre-commit")
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	msg := processChatMergeAt(ctx, nil, cm, &claude.Fake{}, dataDir, chatMergeInput{
+		PR: 2011, ConversationID: "conv-fail", TurnID: "turn-fail",
+	}, "feature/x")
+	if msg.Kind != chat.KindError {
+		t.Fatalf("expected the commit to fail, got: %+v", msg)
+	}
+	if msg.Body == checkoutBranchMovedOnMsg {
+		t.Fatalf("expected an ordinary commit failure, not the branch-moved-on retry path: %+v", msg)
+	}
+
+	if got := chatPendingEditedFilesFor("", 2011); len(got) != 0 {
+		t.Fatalf("expected the pending-files registry cleared after a FAILED landing too, got %v", got)
+	}
+
+	// The tree really is still dirty (the hook rejected the commit, but the
+	// `git add -A` staging that ran before it is untouched) — this fix does
+	// not clean up the checkout itself, it only stops that dirty state from
+	// being silently mistaken for "safe, still being landed by someone else".
+	paths, err := snapshotDirtyPaths(ctx, dir)
+	if err != nil {
+		t.Fatalf("snapshotDirtyPaths: %v", err)
+	}
+	if len(paths) == 0 {
+		t.Fatalf("expected the checkout to remain dirty after the failed commit")
+	}
+	// With the pending registry cleared, that same dirty state is no longer
+	// classified as "only pending edits" — a later turn now gets asked the
+	// ordinary dirty-tree question instead of waiting forever.
+	if dirtyIsOnlyPendingEdits(paths, "", 2011) {
+		t.Fatalf("expected the leftover dirty tree to no longer read as 'only pending edits'")
+	}
+}
+
 // TestRefreshTreeAfterLandingPublishesLandedFilesThroughTheRealSignalChain
 // pins the race-free fix for the "wordt bijgewerkt" ordering bug: it drives
 // the ACTUAL synchronous chain responsible for the original bug —

@@ -317,6 +317,28 @@ func processChatMergeAt(ctx context.Context, tm *TaskManager, cm *chat.Module, c
 		// just emptied — does a conversation waiting on THIS checkout
 		// actually have something new to find if it retries.
 		broadcastCheckoutFreed(tm, checkoutWriteSlotKey(dataDir, arg.Repo, arg.PR))
+	} else {
+		// This landing attempt is OVER, even though it failed — the checkout
+		// is done being "another conversation is still landing this", it is
+		// simply stuck (e.g. commitCheckoutEditsAt's own `git commit --amend`
+		// failed after `git add -A` already staged everything). Leaving the
+		// pending-files registry populated here used to make
+		// dirtyIsOnlyPendingEdits (chat_checkout.go) keep classifying that
+		// same leftover dirty tree as "safe, still being landed by someone
+		// else" forever: nothing ever re-lands it (chat_merge only reacts to
+		// a NEW "merge" Signal, never retries a failed one on its own), so
+		// every future write turn for this PR waited out the whole
+		// chatRetryDelays ladder and ended in "Dat duurde te lang", over and
+		// over, with no way out — see the reported bug this fixes.
+		//
+		// Clearing it here lets the NEXT candidate classification see the
+		// tree for what it now is: an ordinary dirty checkout with unknown
+		// origin, which falls through to the existing checkoutStageDirtyTree
+		// question (discard / stash / keep-in-commit) instead of silently
+		// waiting on a landing that will never come.
+		clearChatPendingFiles(arg.Repo, arg.PR)
+		publishCheckoutChanged(arg.Repo, arg.PR)
+		broadcastCheckoutFreed(tm, checkoutWriteSlotKey(dataDir, arg.Repo, arg.PR))
 	}
 	return msg
 }
