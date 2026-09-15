@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -68,7 +70,7 @@ func TestChildWorkflowsRunConcurrently(t *testing.T) {
 }
 
 // TestExecuteChildWorkflowIDUsesTheGivenID proves the explicit-ID variant: the
-// child run really carries that ID (not the positional <parent>/child-0), it
+// child run really carries that ID (not the positional <parent>-child-0), it
 // records the parent, and calling it a second time with the same ID reuses that
 // child instead of starting a second one.
 func TestExecuteChildWorkflowIDUsesTheGivenID(t *testing.T) {
@@ -166,7 +168,7 @@ func TestRecoverResumesParentWaitingOnChild(t *testing.T) {
 	store := NewMemoryStore()
 	now := time.Now()
 	const parentID = "parent-1"
-	childID := parentID + "/child-0"
+	childID := parentID + "-child-0"
 
 	if err := store.CreateRun(RunRecord{ID: parentID, Workflow: "parent", Status: StatusWaiting, CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
@@ -224,5 +226,75 @@ func TestRecoverResumesParentWaitingOnChild(t *testing.T) {
 	}
 	if got != "awake" {
 		t.Fatalf("parent result = %q, want %q", got, "awake")
+	}
+}
+
+// TestExecuteChildWorkflowIDHasNoSlash guards against a regression of the
+// "checkout_wait_fallback" bug: ExecuteChildWorkflow used to derive
+// "<parent>/child-<n>" (a literal "/"), which JSONLStore's flat
+// "<id>.events.jsonl"/"<id>.meta.jsonl" naming cannot address without a
+// subdirectory that is never created — CreateRun/AppendEvent then partially
+// succeeded across a MultiStore (a SQLite row with no matching JSONL file),
+// leaving an orphaned run with metadata but no EventWorkflowStarted event.
+// Run against the real production store combination (SQLite + JSONL through a
+// MultiStore, like TestSQLiteAndJSONLStores) so a reintroduced "/" would
+// reproduce the exact failure instead of only being caught by MemoryStore,
+// which has no filesystem to trip over.
+func TestExecuteChildWorkflowIDHasNoSlash(t *testing.T) {
+	dir := t.TempDir()
+	sq, err := NewSQLiteStore(filepath.Join(dir, "graph.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sq.Close()
+	jsonlDir := filepath.Join(dir, "jsonl")
+	jl, err := NewJSONLStore(jsonlDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewMultiStore(sq, jl)
+	e := New(store)
+
+	var childID string
+	e.RegisterWorkflow("napChild", func(w *Workflow, _ []byte) ([]byte, error) {
+		return json.Marshal("awake")
+	})
+	e.RegisterWorkflow("parent", func(w *Workflow, _ []byte) ([]byte, error) {
+		id, err := w.ExecuteChildWorkflow("napChild", nil)
+		if err != nil {
+			return nil, err
+		}
+		childID = id
+		var res string
+		if err := w.WaitChildWorkflow(id, &res); err != nil {
+			return nil, err
+		}
+		return json.Marshal(res)
+	})
+
+	id, err := e.StartWorkflow("parent", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Wait()
+
+	if strings.Contains(childID, "/") {
+		t.Fatalf("child run id %q contains a %q", childID, "/")
+	}
+	if s, _ := e.Status(childID); s != StatusCompleted {
+		t.Fatalf("child status = %s, want completed", s)
+	}
+	if s, _ := e.Status(id); s != StatusCompleted {
+		t.Fatalf("parent status = %s, want completed", s)
+	}
+
+	// Both stores must independently hold the completed child run, and the
+	// JSONL side must carry its EventWorkflowStarted — the event a "/" in the
+	// id used to make CreateRun/AppendEvent lose partway through the
+	// MultiStore fan-out.
+	if _, hist, err := jl.LoadRun(childID); err != nil {
+		t.Fatalf("jsonl LoadRun(%s): %v", childID, err)
+	} else if len(hist) == 0 || hist[0].Type != EventWorkflowStarted {
+		t.Fatalf("jsonl history for child = %+v, want it to start with EventWorkflowStarted", hist)
 	}
 }

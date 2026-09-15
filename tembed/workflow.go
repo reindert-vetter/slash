@@ -223,10 +223,21 @@ func (w *Workflow) record(e Event) {
 // finish. Call WaitChildWorkflow to block until it completes. Starting
 // several children back to back before waiting on any of them lets them
 // progress independently rather than one at a time.
+//
+// The derived ID is deliberately joined with "-", never "/": a run ID is used
+// verbatim as a filename by JSONLStore ("<id>.events.jsonl"/"<id>.meta.jsonl")
+// and is split on "/" by the HTTP router (handleWorkflows in tasks_api.go,
+// "/api/workflows/{runID}/..."). A "/" in an id used to require a store-level
+// subdirectory that was never created, so CreateRun/AppendEvent could
+// partially fail across a MultiStore (one backend written, the next erroring
+// on the missing directory) — leaving an orphaned run with metadata but no
+// EventWorkflowStarted, and in the worse case a raw panic (Workflow.record,
+// above) escaping a synchronous Recover(). See the "checkout_wait_fallback"
+// bug writeup for the full chain.
 func (w *Workflow) ExecuteChildWorkflow(name string, input any) (string, error) {
 	idx := w.childIdx
 	w.childIdx++
-	return w.ExecuteChildWorkflowID(fmt.Sprintf("%s/child-%d", w.runID, idx), name, input)
+	return w.ExecuteChildWorkflowID(fmt.Sprintf("%s-child-%d", w.runID, idx), name, input)
 }
 
 // ExecuteChildWorkflowID is ExecuteChildWorkflow with an EXPLICIT child run ID
