@@ -508,3 +508,17 @@ first — see `tests/langpref.spec.mjs` (`language`), `tests/auto-ingest-pref.sp
 `TestSaveMentionAliasesPreservesLoginAndRepos` (`settings_test.go`),
 `TestSavePraiseWordsFileTakesEffectImmediately`/
 `TestSavePraiseWordsFileEmptyFallsBackToDefaults` (`praisewords_test.go`).
+
+## The speech-to-text row (dictation)
+
+`checkWhisper` (`auth_status.go`) adds a fourth entry to the credentials list,
+next to gh/acli/the Jira token, reporting whether `whisper-cli` and its model
+are present. It is never `authStateError` — only `authStateMissing` — because
+`brokenChecks()` opens the global keyboard-owning dialog on exactly `"error"`,
+and dictation is optional. When the binary is there but the model is not, the
+check carries `action: "whisperModel"` and `whisperBlock` (`src/settings.mjs`)
+renders a "Model downloaden (1,6 GB)" button next to it; installing the binary
+itself stays a `FixCommand` the reviewer runs. The button only STARTS the
+`whisper_model` workflow (the download is a durable write), then polls the
+cosmetic `GET /api/whisper/progress` and re-runs the check. See
+`.claude/docs/dictation.md`.

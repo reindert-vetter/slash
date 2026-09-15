@@ -1729,3 +1729,16 @@ above, "A Cmd/Ctrl chord inside a text field stays native") whenever a real
 editable field holds DOM focus, so a global `Cmd+Enter` branch could never
 fire while the textarea itself is focused. Full mechanism:
 `.claude/docs/inline-edit.md`.
+
+### `F5` (hold) dictates into the Claude composer
+
+Outside the nav chain entirely: holding `F5` opens this PR's general chat and
+records, releasing it transcribes locally and drops the text in the composer
+(the reviewer still presses Enter). Its branch sits high in `onKeydown` — after
+the auth-problem and failed-tasks dialogs, before every overlay guard — because
+those guards `return` early and would otherwise make it impossible to dictate a
+second paragraph into an already-open chat. It also works while the composer
+itself has focus, since `F5` is not a character. `plan.mjs` carries the mirror
+branch for `/plan/<KEY>`. Full mechanism, including the macOS function-key
+setting it depends on and the push-to-talk safety nets:
+`.claude/docs/dictation.md`.

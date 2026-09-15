@@ -741,9 +741,29 @@ export const EN = {
 
   // ── src/authStatus.mjs + the settings page's auth row ──────────────────
   'Inloggegevens': 'Credentials',
-  'gh, acli en het Jira API-token. Werkt er één niet, dan slaat slash het werk dat daarop leunt stilzwijgend over.':
-    'gh, acli and the Jira API token. If one of them stops working, slash silently skips the work that depends on it.',
+  'gh, acli, het Jira API-token en spraak naar tekst. Werkt er één niet, dan slaat slash het werk dat daarop leunt stilzwijgend over.':
+    'gh, acli, the Jira API token and speech-to-text. If one of them stops working, slash silently skips the work that depends on it.',
   'Inloggegevens werken niet meer': 'Credentials no longer work',
+
+  // ── F5 dictation (src/dictation.mjs) + its settings block ──────────────
+  'Spraak naar tekst': 'Speech to text',
+  'Nodig om met F5 in te spreken. Het model draait volledig op deze computer; er gaat geen audio naar buiten.':
+    'Needed to dictate with F5. The model runs entirely on this computer; no audio leaves it.',
+  'Model downloaden (1,6 GB)': 'Download model (1.6 GB)',
+  'Bezig met downloaden…': 'Downloading…',
+  van: 'of',
+  Opnemen: 'Recording',
+  'laat F5 los om te stoppen': 'release F5 to stop',
+  'Uitschrijven…': 'Transcribing…',
+  'Geen toegang tot de microfoon': 'No access to the microphone',
+  'Opnemen lukt niet: ': 'Cannot record: ',
+  'Maximale opnameduur bereikt': 'Maximum recording length reached',
+  'Te kort — houd F5 ingedrukt terwijl je praat': 'Too short — hold F5 while you speak',
+  'Spraak naar tekst is nog niet ingesteld — zie Instellingen':
+    'Speech to text is not set up yet — see Settings',
+  'Uitschrijven mislukt: ': 'Transcribing failed: ',
+  'Niets verstaan': 'Nothing understood',
+  'Geen invoerveld gevonden voor de tekst': 'No input field found for the text',
   'Zolang dit zo blijft slaat slash het werk dat hierop leunt stilzwijgend over.':
     'While this lasts, slash silently skips the work that depends on it.',
   Werkt: 'Working',

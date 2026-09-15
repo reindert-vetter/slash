@@ -931,6 +931,11 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// (workflows.go) and .claude/docs/debug-mode.md. The matching read is the
 	// plain GET /api/debug/log, registered in api.go next to /api/praisewords.
 	mux.HandleFunc("/api/workflows/debug_log", s.handleDebugLogStart)
+	// POST /api/workflows/whisper_model → download the speech model for
+	// dictation. The only write path for that file; see whisper.go and
+	// WorkflowWhisperModel. Progress is read separately from the cosmetic
+	// GET /api/whisper/progress.
+	mux.HandleFunc("/api/workflows/whisper_model", s.handleWhisperModelStart)
 	// POST /api/workflows/claude_chat {pr, commentId} → ensure the claude_chat
 	// Execution for an existing comment thread (idempotent, Run ID derived from
 	// commentId); the UI then signals reviewer turns to its Run ID via
@@ -2522,6 +2527,27 @@ func (s *server) handleDebugLogStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
+}
+
+// handleWhisperModelStart serves POST /api/workflows/whisper_model — the only
+// write path for the speech model file, since putting 1.6 GB on disk is a
+// durable write and must go through a workflow (see
+// .claude/rules/workflows-write-boundary.md).
+//
+// No body to validate: the URL and destination are constants in whisper.go, on
+// purpose — a browser-triggered download must not be able to name what the
+// server fetches or where it lands. Returns immediately; the page follows the
+// download through GET /api/whisper/progress.
+func (s *server) handleWhisperModelStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := s.tasks.manager.StartWhisperModel(); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // handleClaudeChatStart serves POST /api/workflows/claude_chat {pr, commentId}

@@ -209,9 +209,14 @@ import {
   startKeyResize,
   clearColumnWidth,
 } from './columnWidth.mjs'
+import { initDictation, handleDictationKeydown } from './dictation.mjs'
 
 initTheme()
 syncUiLang()
+// F5 push-to-talk dictation into this PR's general chat (src/dictation.mjs).
+// openGeneralChat is a hoisted function declaration further down this file, so
+// wrapping it in a closure here is safe at module-evaluation time.
+initDictation({ openChat: () => openGeneralChat() })
 initImageLightbox()
 initMarkdownCodeCopy()
 initFailedTasksPopup()
@@ -14113,6 +14118,13 @@ function onKeydown(e) {
     handleFailedTasksKeydown(e)
     return
   }
+
+  // F5 (hold) dictates into the general chat — see src/dictation.mjs. It sits
+  // HERE, after the two blocking dialogs but before every overlay guard below,
+  // because those guards return early: with it further down (next to `/`, say)
+  // it would never run once the chat overlay it opens is actually open, so a
+  // second dictated paragraph into the same chat would be impossible.
+  if (handleDictationKeydown(e)) return
 
   // While the image lightbox is open it owns the keyboard completely — →/←
   // walk the other screenshots from the same Markdown body, Escape closes —

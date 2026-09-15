@@ -684,6 +684,35 @@ trivially deterministic.
 - Tests: `remove_reviewer_test.go`,
   `tests/overview-remove-reviewer.spec.mjs`.
 
+## Downloading the speech model (`whisper_model`)
+
+Fetches `ggml-large-v3-turbo.bin` into `<appDataDir>/models/` for F5 dictation
+(see `.claude/docs/dictation.md`), driven from the "Model downloaden" button in
+the settings page's credentials row. Signal-less, one Activity, no input to
+branch on — replay is trivially deterministic, and the Activity is idempotent
+(an existing model returns immediately).
+
+- It **exists as a workflow at all** because putting 1.6 GB on disk is a durable
+  write, which may only happen inside an Activity. The `brew install
+  whisper.cpp` half is not automated: that stays a `FixCommand` the reviewer
+  runs in their own terminal.
+- **The URL and destination are constants** in `whisper.go`, never request
+  fields — a browser-triggered download must not be able to name what the
+  server fetches. (`SLASH_WHISPER_MODEL_URL` overrides the source for a local
+  mirror or an end-to-end test; an env var, not a request field.)
+- **`downloadWhisperModelTo` is atomic**: it writes to a temp name in the same
+  directory and renames only after the body has been read in full and checked
+  against `Content-Length`. Without that, an interrupted download would leave a
+  file `checkWhisper` reports as "klaar voor gebruik" while every dictation
+  fails on it.
+- **`StartWhisperModel` starts the Execution in a goroutine**, deliberately: a
+  signal-less workflow is driven INLINE by `StartWorkflow` (see `startCleanup`/
+  `IgnoreFailedRuns`), so a caller that waited would hold the HTTP request open
+  for the whole download. A `claimWhisperDownload` compare-and-set stops two
+  quick presses from starting two fetches; progress is reported separately
+  through the in-memory `GET /api/whisper/progress`.
+- Tests: `whisper_test.go`, `tests/dictation.spec.mjs`.
+
 ## Surfacing failures (`run_errors.go` + `GET /api/problems`)
 
 Background work here fails quietly by design: nearly every Activity talking to

@@ -278,6 +278,19 @@ const (
 	// run lock). The completed runs carry nothing worth keeping — the file
 	// does — so the cleanup workflow sweeps them (sweepDebugLogRuns).
 	WorkflowDebugLog = "debug_log"
+	// WorkflowWhisperModel is the Workflow Type behind the settings page's
+	// "Model downloaden" button: it fetches the whisper.cpp speech model into
+	// <appDataDir>/models/ so dictation (F5) can transcribe locally — see
+	// whisper.go and .claude/docs/dictation.md. ONE-SHOT and signal-less,
+	// exactly like WorkflowDebugLog above: a single Activity, no WaitSignal
+	// loop to replay.
+	//
+	// It exists at all because putting a 1.6 GB file on disk is a real,
+	// durable write, and those may only happen inside a workflow Activity
+	// (.claude/rules/workflows-write-boundary.md). The button therefore starts
+	// an Execution and nothing else; the byte counter the page shows while it
+	// runs is separate, in-memory and cosmetic (whisperDownloadStatus).
+	WorkflowWhisperModel = "whisper_model"
 	// WorkflowIgnoreRuns is the Workflow Type behind "negeren" in the global
 	// failed-tasks popup: the reviewer decided a failure needs no action, so
 	// its run is permanently deleted from the tembed store and thereby from
@@ -2586,6 +2599,22 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return nil, clearDebugLogFile(m.appDataDirOrDefault())
 	})
 
+	// Activity: download the whisper.cpp speech model (write, workflow-driven)
+	// — downloadWhisperModel (whisper.go) is that file's only writer. Same
+	// appDataDirOrDefault() reasoning as the debug-log Activities right above:
+	// the model sits next to settings.json, not in the workflow-store dir.
+	// Idempotent on replay: it returns immediately when the file is already
+	// there.
+	engine.RegisterActivity("downloadWhisperModel", func(ctx context.Context, in []byte) ([]byte, error) {
+		if err := downloadWhisperModel(ctx, m.appDataDirOrDefault()); err != nil {
+			return nil, err
+		}
+		// The auth-status cache would otherwise keep reporting "model
+		// ontbreekt" for up to a minute after the download finished.
+		invalidateAuthStatus()
+		return nil, nil
+	})
+
 	// Activity: fire-and-forget the automatic code_warning trigger for pr. This
 	// Activity itself does no slow work — it only queues pr onto the single
 	// serial code_warning worker and returns immediately — so
@@ -3600,6 +3629,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowLangPref, langPrefWorkflow)
 	engine.RegisterWorkflow(WorkflowAppSettings, appSettingsWorkflow)
 	engine.RegisterWorkflow(WorkflowDebugLog, debugLogWorkflow)
+	engine.RegisterWorkflow(WorkflowWhisperModel, whisperModelWorkflow)
 	engine.RegisterWorkflow(WorkflowIgnoreRuns, ignoreRunsWorkflow)
 	engine.RegisterWorkflow(WorkflowIgnoreComment, ignoreCommentWorkflow)
 	engine.RegisterWorkflow(WorkflowCleanup, cleanupWorkflow)
@@ -4689,6 +4719,17 @@ func debugLogWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	}
 	if err := w.ExecuteActivity("appendDebugLog", in, nil); err != nil {
 		return nil, fmt.Errorf("append debug log: %w", err)
+	}
+	return nil, nil
+}
+
+// whisperModelWorkflow downloads the speech model. One-shot and deterministic
+// in the strictest sense: exactly one Activity, no input to branch on, no
+// signals, no clock, no loop. See WorkflowWhisperModel above for why a
+// download needs a workflow at all.
+func whisperModelWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
+	if err := w.ExecuteActivity("downloadWhisperModel", nil, nil); err != nil {
+		return nil, fmt.Errorf("download whisper model: %w", err)
 	}
 	return nil, nil
 }
@@ -6544,6 +6585,39 @@ func (m *TaskManager) StartDebugLog(in DebugLogInput) (string, error) {
 		return "", fmt.Errorf("no engine")
 	}
 	return m.engine.StartWorkflow(WorkflowDebugLog, in)
+}
+
+// StartWhisperModel kicks off ONE whisper_model Execution and returns straight
+// away.
+//
+// The goroutine is load-bearing, not a convenience: a signal-less Workflow is
+// driven INLINE by StartWorkflow (see startCleanup/IgnoreFailedRuns above), and
+// this one's single Activity downloads 1.6 GB — a caller that waited for it
+// would hold the HTTP request open for minutes. The settings page does not need
+// a Run ID either: it follows the download through GET /api/whisper/progress
+// and then re-runs the auth check, whose verdict comes from the file itself.
+//
+// Only one download at a time: a second press while one is running is a no-op
+// rather than a second 1.6 GB fetch into the same temp directory.
+func (m *TaskManager) StartWhisperModel() error {
+	if m.engine == nil {
+		return fmt.Errorf("no engine")
+	}
+	if !claimWhisperDownload() {
+		return nil
+	}
+	go func() {
+		if _, err := m.engine.StartWorkflow(WorkflowWhisperModel, nil); err != nil {
+			m.logf("whisper_model: %v", err)
+			// Release the claim taken above; the Activity never ran, so
+			// nothing else is going to clear it.
+			setWhisperDownload(func(st *whisperDownloadState) {
+				st.Active = false
+				st.Error = err.Error()
+			})
+		}
+	}()
+	return nil
 }
 
 // IgnoreFailedRuns runs ONE ignore_runs Execution to completion (signal-less,

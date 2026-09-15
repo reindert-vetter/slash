@@ -51,6 +51,16 @@ func (s *server) routes(staticDir string) *http.ServeMux {
 	// workflow engine. Read-only — the WRITE side is a workflow
 	// (POST /api/workflows/debug_log), because the file is durable.
 	mux.HandleFunc("/api/debug/log", s.handleDebugLog)
+	// POST /api/transcribe → raw PCM in, Dutch text out, via a local
+	// whisper.cpp run (whisper.go). Registered here rather than in routesTasks
+	// for the same reason as /api/praisewords: it shells out to a local binary
+	// and touches a file next to the DBs, not the workflow engine. It writes
+	// nothing durable — see the WRITE BOUNDARY note in whisper.go.
+	mux.HandleFunc("/api/transcribe", s.handleTranscribe)
+	// GET /api/whisper/progress → the cosmetic byte counter of the running
+	// model download, same in-memory carve-out as /api/ingest/progress. The
+	// download ITSELF is a workflow (POST /api/workflows/whisper_model).
+	mux.HandleFunc("/api/whisper/progress", s.handleWhisperProgress)
 	if s.tasks != nil {
 		s.routesTasks(mux)
 	}

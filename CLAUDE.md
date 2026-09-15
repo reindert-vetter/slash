@@ -71,6 +71,12 @@ that set stays small on purpose; a new topic file belongs in `.claude/docs/`.
 - `keyboard-navigation.md` — the left→right nav chain of stops, list/diff
   modes, selection granularity (`f`/`d`/`s`: group/line/call), Shift+↑/↓
   ranges, the `a` diff-view cycle. Start here for any keyboard change.
+- `dictation.md` — hold `F5` to dictate into the Claude composer on both
+  `/pr/<id>` and `/plan/<KEY>`: why Fn is impossible and F5 needs one macOS
+  setting, the push-to-talk contract and its four "the keyup never arrived"
+  safety nets, the local whisper.cpp path (`POST /api/transcribe`), why there
+  is no live transcription and no streamed upload, and the settings row plus
+  its workflow-driven model download.
 - `mouse-navigation.md` — the app-wide rules for click/hover: a click runs the
   same function a key runs, hover carries no state.
 - `command-palette.md` — every menu (`Enter` block palette, `/` PR menu, the

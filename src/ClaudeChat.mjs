@@ -21,6 +21,10 @@ import { html } from './vendor/arrow.js'
 import { avatarHTML } from './avatar.mjs'
 import { renderMarkdown, hardBreaks } from './markdown.mjs'
 import { autoGrowTextarea, resetTextareaHeight } from './textareaAutoGrow.mjs'
+// The "Opnemen…"/"Uitschrijven…" pill for F5 push-to-talk dictation. It lives
+// in the composer row because that is where the transcript lands — one import
+// here covers both pages that render this column (see src/dictation.mjs).
+import { dictationStatusPill } from './dictation.mjs'
 import { updateScrollHints } from './scrollFade.mjs'
 import { scrollHint } from './Block.mjs'
 import { t } from './i18n.mjs'
@@ -1225,6 +1229,7 @@ export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly, opt
           ? ''
           : html`<div class="contents">
               ${() => claudeSendError(view)}
+              ${() => dictationStatusPill()}
               <div class="flex items-end gap-2 border-t border-slate-100 dark:border-zinc-800/60 pt-2">
         <textarea
           rows="1"

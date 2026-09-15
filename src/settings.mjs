@@ -79,6 +79,13 @@ const state = reactive({
   jiraEmail: '',
   jiraSite: '',
   jiraToken: '',
+  // The speech model download behind the "Spraak naar tekst" block (see
+  // whisperBlock below). Progress is polled from the cosmetic
+  // GET /api/whisper/progress; the download itself is a workflow.
+  whisperBusy: false,
+  whisperDone: 0,
+  whisperTotal: 0,
+  whisperError: '',
 })
 
 // Prefill the credential form once the status has loaded, and never again —
@@ -610,6 +617,122 @@ function debugRow() {
   </div>`
 }
 
+// ── speech-to-text: the one repair slash can perform itself ──────────────
+
+// whisperCheck finds the dictation check in the shared auth status, if the
+// server reported one.
+function whisperCheck() {
+  return (authState.checks || []).find((c) => c.id === 'whisper') || null
+}
+
+// startWhisperDownload starts the whisper_model Execution and then follows it.
+// The POST is the sanctioned write path — the page only STARTS a workflow, the
+// Activity does the writing (see .claude/rules/workflows-write-boundary.md) —
+// and the polling afterwards reads a purely cosmetic, in-memory byte counter.
+// When it finishes, the auth check is re-run: whether the model is installed is
+// answered by the file itself, never by this progress state.
+async function startWhisperDownload() {
+  if (state.whisperBusy) return
+  state.whisperBusy = true
+  state.whisperError = ''
+  state.whisperDone = 0
+  state.whisperTotal = 0
+  try {
+    const res = await fetch('/api/workflows/whisper_model', { method: 'POST' })
+    if (!res.ok) throw new Error('HTTP ' + res.status)
+  } catch (err) {
+    state.whisperBusy = false
+    state.whisperError = String((err && err.message) || err)
+    return
+  }
+  pollWhisperProgress()
+}
+
+function pollWhisperProgress() {
+  const tick = async () => {
+    let st = null
+    try {
+      const res = await fetch('/api/whisper/progress')
+      st = await res.json()
+    } catch {
+      // A failed poll says nothing about the download itself — keep trying.
+      setTimeout(tick, 1500)
+      return
+    }
+    state.whisperDone = st.done || 0
+    state.whisperTotal = st.total || 0
+    if (st.active) {
+      setTimeout(tick, 1000)
+      return
+    }
+    state.whisperBusy = false
+    if (st.error) state.whisperError = st.error
+    refreshAuthStatus(true)
+  }
+  setTimeout(tick, 600)
+}
+
+function formatGB(bytes) {
+  return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB'
+}
+
+// whisperProgressText — the percentage as WORDS, not only a bar, per the
+// colourblind rule: the number is the state, the bar only decorates it.
+function whisperProgressText() {
+  if (!state.whisperTotal) return t('Bezig met downloaden…')
+  const pct = Math.floor((state.whisperDone / state.whisperTotal) * 100)
+  return pct + '% — ' + formatGB(state.whisperDone) + ' ' + t('van') + ' ' + formatGB(state.whisperTotal)
+}
+
+// whisperBlock — the extra block inside the credentials row for the one piece
+// of setup slash can complete itself: downloading the speech model. Shown only
+// when the server says so (check.action === 'whisperModel'), i.e. whisper-cli
+// is installed but its model is not. Installing whisper-cli itself stays a
+// command the reviewer runs (shown as the check's own FixCommand) — running a
+// package manager on someone's behalf is a different order of thing than
+// writing one file.
+//
+// Modelled on the Jira-token block below it: a per-check extra inside authRow
+// rather than a change to the shared authCheckRow, which the global auth dialog
+// also renders.
+function whisperBlock() {
+  return html`<div class="contents">
+    ${() => {
+      const check = whisperCheck()
+      if (!check || check.action !== 'whisperModel') return ''
+      return html`<div class="mb-3 rounded-lg border border-slate-200 p-3 dark:border-zinc-800">
+        <p class="text-[13px] font-semibold text-slate-800 dark:text-zinc-100">${t('Spraak naar tekst')}</p>
+        <p class="mt-0.5 text-[12px] text-slate-500 dark:text-zinc-500">
+          ${t(
+            'Nodig om met F5 in te spreken. Het model draait volledig op deze computer; er gaat geen audio naar buiten.',
+          )}
+        </p>
+        <div class="mt-2 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            data-testid="settings-whisper-download"
+            disabled="${() => state.whisperBusy}"
+            class="${() =>
+              'rounded-lg px-3 py-1.5 text-[12px] font-semibold text-white ' +
+              (state.whisperBusy ? 'bg-slate-400 dark:bg-zinc-700' : 'bg-indigo-600 hover:bg-indigo-500')}"
+            @click="${(e) => {
+              if (e) e.stopPropagation()
+              startWhisperDownload()
+            }}"
+          >
+            ${() => (state.whisperBusy ? t('Bezig met downloaden…') : t('Model downloaden (1,6 GB)'))}
+          </button>
+          <span
+            data-testid="settings-whisper-progress"
+            class="min-w-0 flex-1 truncate text-[12px] text-slate-500 dark:text-zinc-500"
+            >${() => (state.whisperBusy ? whisperProgressText() : state.whisperError)}</span
+          >
+        </div>
+      </div>`.key('whisper-block')
+    }}
+  </div>`
+}
+
 // authRow — every credential slash runs on, its state in WORDS (never colour
 // alone), how to repair it, and — for the one credential that is a plain
 // token rather than a CLI login — the fields to fill it in right here. The
@@ -619,7 +742,9 @@ function authRow() {
   return html`<div data-testid="settings-row-auth" class="${() => rowCls('auth')}" @click="${() => selectRow('auth')}">
     ${rowLabel(
       t('Inloggegevens'),
-      t('gh, acli en het Jira API-token. Werkt er één niet, dan slaat slash het werk dat daarop leunt stilzwijgend over.'),
+      t(
+        'gh, acli, het Jira API-token en spraak naar tekst. Werkt er één niet, dan slaat slash het werk dat daarop leunt stilzwijgend over.',
+      ),
     )}
     <div
       data-testid="settings-auth-checks"
@@ -649,6 +774,7 @@ function authRow() {
         >${() => authState.note}</span
       >
     </div>
+    ${() => whisperBlock()}
     <div class="rounded-lg border border-slate-200 p-3 dark:border-zinc-800">
       <p class="text-[13px] font-semibold text-slate-800 dark:text-zinc-100">${t('Jira API-token')}</p>
       <p class="mt-0.5 text-[12px] text-slate-500 dark:text-zinc-500">

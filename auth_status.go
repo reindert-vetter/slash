@@ -84,6 +84,12 @@ type AuthCheck struct {
 	// Editable marks a check the settings page can actually repair in-place
 	// (the Jira API token trio), as opposed to one that needs a terminal.
 	Editable bool `json:"editable,omitempty"`
+	// Action names a repair the app can perform itself, for the settings page
+	// to render a button for. Currently only "whisperModel" (download the
+	// speech model). A machine-readable field rather than the page matching on
+	// Detail text: that text is Dutch prose meant for a human, and translating
+	// or rewording it must never silently remove a button.
+	Action string `json:"action,omitempty"`
 }
 
 // AuthStatus is the whole answer of GET /api/auth/status.
@@ -122,7 +128,7 @@ const jiraTokenPageURL = "https://id.atlassian.com/manage-profile/security/api-t
 // handleAuthStatus; force bypasses that cache.
 func (m *TaskManager) checkAuthStatus(ctx context.Context) AuthStatus {
 	st := AuthStatus{CheckedAt: time.Now()}
-	st.Checks = append(st.Checks, checkGitHubAuth(ctx), checkJiraCLIAuth(ctx), m.checkJiraToken(ctx))
+	st.Checks = append(st.Checks, checkGitHubAuth(ctx), checkJiraCLIAuth(ctx), m.checkJiraToken(ctx), m.checkWhisper())
 	st.Jira = jiraCredsView()
 	st.OK = true
 	for _, c := range st.Checks {
@@ -239,6 +245,46 @@ func (m *TaskManager) checkJiraToken(ctx context.Context) AuthCheck {
 	}
 	c.State = authStateOK
 	c.Detail = "Token werkt"
+	return c
+}
+
+// checkWhisper reports whether local speech-to-text is usable: the whisper-cli
+// binary plus the model file it needs (see whisper.go). Two separate pieces
+// with two different fixes, so the Detail always says WHICH one is missing —
+// "niet ingesteld" without saying what to install would be useless.
+//
+// It NEVER reports authStateError, only authStateMissing. brokenChecks()
+// (src/authStatus.mjs) filters on exactly "error" to decide whether to throw up
+// the global, keyboard-owning dialog, and dictation is an optional extra: a
+// reviewer who has never installed whisper must not be nagged by a modal on
+// every page load. "Niet ingesteld" in the settings list is the right volume
+// for this.
+//
+// Unlike its three neighbours this check shells out to nothing — it is two
+// stat() calls and a PATH lookup — so it needs no context and no timeout.
+func (m *TaskManager) checkWhisper() AuthCheck {
+	c := AuthCheck{ID: "whisper", Label: "Spraak naar tekst (whisper.cpp)"}
+	appDir := ""
+	if m != nil {
+		appDir = m.appDataDirOrDefault()
+	}
+	model := whisperModelPath(appDir)
+	if whisperBinPath() == "" {
+		c.State = authStateMissing
+		c.Detail = "whisper-cli is niet gevonden — zonder dat kan F5 (inspreken) niets uitschrijven"
+		c.FixCommand = "brew install whisper.cpp"
+		return c
+	}
+	if !fileExistsNonEmpty(model) {
+		c.State = authStateMissing
+		c.Detail = "whisper-cli is er, maar het taalmodel ontbreekt nog (" + model + ")"
+		// The one piece slash can fetch itself — the settings page turns this
+		// into its "Model downloaden" button.
+		c.Action = "whisperModel"
+		return c
+	}
+	c.State = authStateOK
+	c.Detail = "Klaar voor gebruik — houd F5 ingedrukt om in te spreken"
 	return c
 }
 
