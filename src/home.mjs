@@ -33,7 +33,7 @@ import Block, {
   blockDescCollapsible,
   isInlineEditable,
 } from './Block.mjs'
-import { inlineEditState, blockNewSourceText, clearInlineEditDraft } from './inlineEdit.mjs'
+import { inlineEditState, blockNewSourceText, clearInlineEditDraft, openInlineEdit } from './inlineEdit.mjs'
 import RelatedPanel, {
   InlineComments,
   ClaudeChatPanel,
@@ -13034,7 +13034,12 @@ const COMMANDS = withClose([
     hint: 'edit bewerk',
     run: () => {
       const b = curBlock()
-      if (b) inlineEditState.id = b.id
+      // topLevelActiveUnit(b) is the SAME unit the top-level card's own
+      // activeGroup opt highlights (this item's `when` already scopes to
+      // exactly that card, state.focusLevel===0) — openInlineEdit stores its
+      // row range so the editor places the caret in the middle of it once
+      // mounted, see inlineEdit.mjs and .claude/docs/inline-edit.md.
+      if (b) openInlineEdit(b, topLevelActiveUnit(b))
     },
     when: () => {
       const b = curBlock()

@@ -43,11 +43,58 @@ no duplicated logic, no drift between them:
   exact same list (`.claude/docs/command-palette.md`, "The right-click
   context menu" — one shared implementation, not two), so this single
   addition covers both of the reviewer's named expectations at once. Its
-  `run` sets the identical shared `inlineEditState.id = b.id` the header
-  button toggles; its `when` mirrors that button's own gate exactly
-  (`state.mode === 'diff' && state.focusLevel === 0 &&
-  isInlineEditable(curBlock(), blockRows(curBlock()))`) so the item is
+  `run` calls the shared `openInlineEdit(b, topLevelActiveUnit(b))`
+  (`inlineEdit.mjs`) the header button also calls; its `when` mirrors that
+  button's own gate exactly (`state.mode === 'diff' && state.focusLevel ===
+  0 && isInlineEditable(curBlock(), blockRows(curBlock()))`) so the item is
   absent everywhere the button would be too — never present-but-non-functional.
+
+### Opening the editor focuses it and places the caret in the middle of the active selection
+
+Reviewer request: "'bewerk deze code' dat moet gelijk de cursor zetten in
+het midden van wat is geselecteerd" — the editor used to mount with no
+focus at all (a click into the textarea was needed before typing worked)
+and, once focused, the caret defaulted to wherever the browser puts an
+uncontrolled `<textarea>`'s caret (its own end), regardless of what the
+reviewer had actually selected in the diff.
+
+`inlineEdit.mjs` is the ONE place both entry points funnel through now:
+
+- **`openInlineEdit(b, unit)`** — replaces a bare `inlineEditState.id = b.id`
+  write at both call sites. `unit` is the diff's own active navigation unit
+  (`{start, end}`, aligned-row indices) — `activeGroup()`'s current value at
+  the header button (`inlineEditToggleButton(b, activeGroup)`), or
+  `topLevelActiveUnit(b)` at the `COMMANDS` item (the exact function the
+  top-level card's own `activeGroup` opt is built from, see `home.mjs`) — so
+  the two entry points can never disagree about "what's selected". Stores
+  `unit.start`/`unit.end` on `inlineEditState.selRowStart`/`selRowEnd`
+  (`-1`/`-1` when nothing was selected, e.g. list mode).
+- **`closeInlineEdit()`** — replaces every `inlineEditState.id = null` write
+  (Annuleren, Opslaan, toggling the header button off) and also resets the
+  caret-placement guard below, so reopening the SAME block later places the
+  caret again instead of silently doing nothing the second time.
+- **`computeInlineEditCaretOffset(rows, rowStart, rowEnd)`** — maps that row
+  range onto a character offset into `blockNewSourceText(rows)` (the exact
+  text the textarea is seeded with), using the identical per-row rule that
+  function applies, and returns the **middle** of the selection's own
+  start/end offset — not the start, per the reviewer's explicit wording.
+  Returns `null` when there was no selection.
+- **`scheduleInlineEditCaret(b, offset)`** — `inlineEditorSlot` (`Block.mjs`)
+  calls this right after computing the offset above. Deferred via
+  `requestAnimationFrame` (mirrors `RelatedPanel.mjs`'s `focusThread`
+  pattern) since the textarea mounts asynchronously, not synchronously with
+  the state write that revealed it. Guarded by a **plain, non-reactive**
+  module-level token (deliberately outside arrow.js's reactive system, same
+  discipline as `inlineEditorSlot`'s own `highlightCodeEl`/`growEl`): the
+  toggling slot that mounts `inlineEditorSlot` can re-run for an unrelated
+  reason while editing stays open (see `.claude/rules/arrowjs-pitfalls.md`),
+  and re-focusing/re-placing the caret on every such re-render would yank it
+  away from wherever the reviewer has since typed/moved it — so this only
+  ever runs once per "open", reset by `closeInlineEdit`.
+
+`offset == null` (no selection to center on) leaves the caret at the text's
+own end — the pre-existing default a plain `<textarea>` already gives an
+uncontrolled value, unchanged for that case.
 
 ## The editor: no textarea look, no contenteditable
 
@@ -129,7 +176,11 @@ types their own follow-up message by hand; nothing is sent automatically.
 ## Files
 
 - `src/inlineEdit.mjs` — the shared `inlineEditState` flag (one block at a
-  time), `blockNewSourceText`, and the draft persistence helpers. A pure leaf
+  time, plus its `selRowStart`/`selRowEnd` caret-placement fields),
+  `openInlineEdit`/`closeInlineEdit` (the one entry/exit point both call
+  sites and both close actions use), `computeInlineEditCaretOffset`/
+  `scheduleInlineEditCaret` (see "Opening the editor focuses it…" above),
+  `blockNewSourceText`, and the draft persistence helpers. A pure leaf
   module (no import of `Block.mjs`/`home.mjs`/`RelatedPanel.mjs`), so both
   `Block.mjs` and `home.mjs` import it directly with no cycle.
 - `src/Block.mjs` — `isInlineEditable`, `inlineEditToggleButton`,
@@ -146,8 +197,11 @@ Test: `tests/inline-edit.spec.mjs` — direct-mount `Block()` unit tests
 editor's content, the draft surviving a remount and being cleared once
 saved), plus a real-app test against a seeded PR for the `COMMANDS` entry
 point (absent in list mode, present and functional once the block owns the
-diff keyboard). The actual `startClaudeChat`/`claude_chat` hand-off itself is
-already covered by `tests/claude-chat-panel.spec.mjs` and is unrelated to
-this feature's own logic, so the direct-mount tests assert it only via a spy
-on
+diff keyboard), plus a pure-function test of
+`computeInlineEditCaretOffset`'s row→offset arithmetic and a direct-mount
+test asserting the textarea is focused with the caret strictly inside a
+given `activeGroup()` unit's own text. The actual `startClaudeChat`/
+`claude_chat` hand-off itself is already covered by
+`tests/claude-chat-panel.spec.mjs` and is unrelated to this feature's own
+logic, so the direct-mount tests assert it only via a spy on
 `onSaveInlineEdit`.

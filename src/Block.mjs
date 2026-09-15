@@ -18,6 +18,10 @@ import {
   blockNewSourceText,
   loadInlineEditDraft,
   saveInlineEditDraft,
+  openInlineEdit,
+  closeInlineEdit,
+  computeInlineEditCaretOffset,
+  scheduleInlineEditCaret,
 } from './inlineEdit.mjs'
 // alignRows/diffLines used to live at the bottom of this file; they were
 // extracted to their own module so /plan/<KEY> can reuse the exact same
@@ -1066,9 +1070,13 @@ function viewModeIndicator(viewModeFn, setViewMode) {
 
 // toggleInlineEdit flips the single shared inlineEditState.id flag — see
 // inlineEditState's own doc comment (inlineEdit.mjs) for why this is one
-// shared flag rather than per-block state.
-function toggleInlineEdit(b) {
-  inlineEditState.id = inlineEditState.id === b.id ? null : b.id
+// shared flag rather than per-block state. `unit` is the diff's currently
+// active navigation unit (the same shape/value activeGroup() already
+// highlights) — openInlineEdit stores its row range so the editor can place
+// the caret in the middle of it once mounted, see inlineEditorSlot below.
+function toggleInlineEdit(b, unit) {
+  if (inlineEditState.id === b.id) closeInlineEdit()
+  else openInlineEdit(b, unit)
 }
 
 // inlineEditToggleButton — the mouse entry point into inline editing
@@ -1078,7 +1086,7 @@ function toggleInlineEdit(b) {
 // eligible (see the call site's own isInlineEditable/allowInlineEdit gate) —
 // never on a preview/look-ahead card or a drilled column (v1 scope, see
 // CLAUDE.md's inline-edit design notes).
-function inlineEditToggleButton(b) {
+function inlineEditToggleButton(b, activeGroup) {
   return html`<div class="contents">
     <button
       type="button"
@@ -1092,7 +1100,7 @@ function inlineEditToggleButton(b) {
       @click="${(e) => {
         if (!e) return
         e.stopPropagation()
-        toggleInlineEdit(b)
+        toggleInlineEdit(b, activeGroup && activeGroup())
       }}"
     >
       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="h-3.5 w-3.5" aria-hidden="true">
@@ -1161,7 +1169,7 @@ function inlineEditorSlot(b, onSave) {
   function onCancelClick(e) {
     if (!e) return
     e.stopPropagation()
-    inlineEditState.id = null
+    closeInlineEdit()
   }
   function onSaveClick(e) {
     if (!e) return
@@ -1169,9 +1177,18 @@ function inlineEditorSlot(b, onSave) {
     const wrapper = e.target.closest('[data-testid="inline-edit-wrapper"]')
     const ta = wrapper && wrapper.querySelector('[data-testid="inline-edit-textarea"]')
     const text = ta ? ta.value : initialText
-    inlineEditState.id = null
+    closeInlineEdit()
     onSave(b, text, originalSource)
   }
+
+  // Place the caret in the MIDDLE of whatever the diff's own selection
+  // covered at the moment "Bewerk deze code" was invoked (reviewer request:
+  // "moet gelijk de cursor zetten in het midden van wat is geselecteerd") —
+  // see computeInlineEditCaretOffset/scheduleInlineEditCaret's own doc
+  // comments (inlineEdit.mjs) for the row→offset mapping and the
+  // once-per-open guard.
+  const initialCaretOffset = computeInlineEditCaretOffset(rows, inlineEditState.selRowStart, inlineEditState.selRowEnd)
+  scheduleInlineEditCaret(b, initialCaretOffset)
 
   return html`
     <div class="flex min-h-0 flex-1 flex-col" data-testid="inline-edit-wrapper">
@@ -1727,7 +1744,7 @@ export default function Block(b, opts = {}) {
           // Mouse entry point into inline editing — see inlineEditToggleButton's
           // own doc comment for the exact eligibility/scope gate.
           !preview && allowInlineEdit && diffActive() && isInlineEditable(b, blockRows(b))
-            ? inlineEditToggleButton(b)
+            ? inlineEditToggleButton(b, activeGroup)
             : ''}
         ${() =>
           // Mouse-only way back out of a DRILLED column — the click

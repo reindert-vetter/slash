@@ -23,7 +23,95 @@ import { loadDraft, saveDraft, clearDraft } from './draftStorage.mjs'
 // inlineEditState.id — the id of the block currently in inline-edit mode, or
 // null. A single shared flag, not per-block state: only one block can be
 // edited at a time in v1 (the top-level selected card only).
-export const inlineEditState = reactive({ id: null })
+//
+// selRowStart/selRowEnd — the aligned-row range (blockRows() indices) of the
+// diff's own active navigation unit at the moment editing was opened — set
+// together with `id` by openInlineEdit below, -1/-1 when nothing was
+// selected. Used only once, by inlineEditorSlot (Block.mjs), to place the
+// caret in the MIDDLE of that same code once the editor mounts (reviewer
+// request: "moet gelijk de cursor zetten in het midden van wat is
+// geselecteerd") — see computeInlineEditCaretOffset/scheduleInlineEditCaret.
+export const inlineEditState = reactive({ id: null, selRowStart: -1, selRowEnd: -1 })
+
+// openInlineEdit — the ONE entry point that turns inline editing on for a
+// block, used by both Block.mjs's header toggle button (activeGroup()'s own
+// unit) and home.mjs's "Bewerk deze code" command (topLevelActiveUnit(b)) —
+// see inlineEditToggleButton/the `edit-code` COMMANDS item — so the two
+// never disagree about what "the selection" means. `unit` is the diff's
+// currently active navigation unit shape ({start,end}, aligned-row indices),
+// or null when nothing is selected (e.g. list mode).
+export function openInlineEdit(b, unit) {
+  inlineEditState.id = b.id
+  inlineEditState.selRowStart = unit ? unit.start : -1
+  inlineEditState.selRowEnd = unit ? unit.end : -1
+}
+
+// closeInlineEdit — the ONE way editing turns back off (Annuleren, Opslaan,
+// or toggling the header button while already open), so
+// scheduleInlineEditCaret's own "already placed the caret for this open"
+// guard resets every time, not just once per block id.
+export function closeInlineEdit() {
+  inlineEditState.id = null
+  caretScheduledFor = null
+}
+
+// computeInlineEditCaretOffset maps a stored row range onto a character
+// offset into blockNewSourceText(rows) — the SAME text inlineEditorSlot's
+// textarea is seeded with — using the identical per-row rule that function
+// applies (one line per row unless a row carries no text on either side), so
+// the row index and the line index always agree. Returns the MIDDLE of the
+// selection's own start/end offset (reviewer asked for the middle, not the
+// start), or null when there was no selection (rowStart<0) or it isn't found
+// in `rows` at all (defensive — inlineEditorSlot then just leaves the caret
+// wherever the browser puts it by default, i.e. the end).
+export function computeInlineEditCaretOffset(rows, rowStart, rowEnd) {
+  if (rowStart == null || rowStart < 0 || rowEnd == null || rowEnd < 0) return null
+  let offset = 0
+  let start = null
+  let end = null
+  for (let i = 0; i < (rows || []).length; i++) {
+    const r = rows[i]
+    const text = r && (r.right != null ? r.right : r.left)
+    if (text == null) continue
+    if (i === rowStart) start = offset
+    if (i >= rowStart && i <= rowEnd) end = offset + text.length
+    offset += text.length + 1
+  }
+  if (start == null) return null
+  return Math.round((start + (end == null ? start : end)) / 2)
+}
+
+// caretScheduledFor — a PLAIN (non-reactive) guard, deliberately outside
+// arrow.js's reactive system (same discipline as inlineEditorSlot's own
+// highlightCodeEl/growEl): the toggling slot that mounts inlineEditorSlot can
+// re-run for an unrelated reason while editing stays open (see
+// arrowjs-pitfalls.md), and re-focusing/re-placing the caret on every such
+// re-render would yank it away from wherever the reviewer has since
+// typed/moved it. Tracks which block id the caret has already been placed
+// for; reset to null by closeInlineEdit so reopening the SAME block later
+// places it again.
+let caretScheduledFor = null
+
+// scheduleInlineEditCaret focuses the just-mounted textarea and puts the
+// caret at `offset` (or the end of the text when `offset` is null — no
+// selection to center on). Deferred via requestAnimationFrame because the
+// textarea mounts asynchronously (an arrow.js reactive flush, not
+// synchronous with the state write that revealed it) — same pattern as
+// RelatedPanel.mjs's focusThread. Guarded by both caretScheduledFor (above)
+// and a re-check of inlineEditState.id (the editor may have already been
+// closed again by the time the animation frame runs).
+export function scheduleInlineEditCaret(b, offset) {
+  if (caretScheduledFor === b.id) return
+  caretScheduledFor = b.id
+  requestAnimationFrame(() => {
+    if (inlineEditState.id !== b.id) return
+    const ta = document.querySelector('[data-testid="inline-edit-textarea"]')
+    if (!ta) return
+    ta.focus()
+    const pos = offset == null ? ta.value.length : Math.max(0, Math.min(ta.value.length, offset))
+    ta.setSelectionRange(pos, pos)
+  })
+}
 
 // blockNewSourceText — a block's current new/right-side source as one plain
 // string, built from the same aligned rows blockRows()/commentTarget()

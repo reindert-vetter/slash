@@ -240,3 +240,101 @@ test.describe('Inline code editing — the block palette entry (home.mjs COMMAND
     await expect(page.getByTestId('inline-edit-textarea')).toBeVisible()
   })
 })
+
+// Reviewer request: "'bewerk deze code' dat moet gelijk de cursor zetten in
+// het midden van wat is geselecteerd" — opening the editor must focus the
+// textarea AND place the caret in the middle of whatever navigation unit was
+// active in the diff, not always at offset 0. See inlineEdit.mjs's
+// computeInlineEditCaretOffset/scheduleInlineEditCaret and .claude/docs/
+// inline-edit.md.
+test.describe('Inline code editing — caret placed in the middle of the active selection', () => {
+  test('computeInlineEditCaretOffset returns the middle of the given row range', async ({ page }) => {
+    // A pure-function unit test (no DOM/diff dependency) for the row→offset
+    // arithmetic itself — the row shape mirrors blockRows()'s own aligned
+    // rows (one line per row via r.right ?? r.left).
+    await page.goto('/pr/12903')
+    const offsets = await page.evaluate(async () => {
+      const { computeInlineEditCaretOffset } = await import('/src/inlineEdit.mjs')
+      const rows = [{ right: 'aaaa' }, { right: 'bb' }, { right: 'cccccc' }]
+      return {
+        // row 1 ("bb") spans absolute offsets 5..7 — its own middle is 6.
+        singleRow: computeInlineEditCaretOffset(rows, 1, 1),
+        // rows 0..1 ("aaaa\nbb") span 0..7 — the middle of the WHOLE range.
+        multiRow: computeInlineEditCaretOffset(rows, 0, 1),
+        // no selection at all.
+        none: computeInlineEditCaretOffset(rows, -1, -1),
+      }
+    })
+    expect(offsets.singleRow).toBe(6)
+    expect(offsets.multiRow).toBe(4)
+    expect(offsets.none).toBe(null)
+  })
+
+  test('opening the editor for a specific selected unit focuses the textarea with the caret inside it', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+    await appReady(page)
+
+    await evaluateSettled(page, async () => {
+      const { reactive } = await import('/src/vendor/arrow.js')
+      const Block = (await import('/src/Block.mjs')).default
+      const b = reactive({
+        id: 'inline-edit-test:Foo::caret',
+        pr: 12903,
+        category: 'ACTION',
+        label: 'Foo::caret',
+        status: 'modified',
+        file: 'app/Foo.php',
+        line: 26,
+        endLine: 30,
+        name: 'caret',
+        class: 'Foo',
+        approved: false,
+        code: {
+          old: {
+            start: 26,
+            end: 29,
+            text: 'public function caret(): int {\n    return 1;\n}',
+          },
+          new: {
+            start: 26,
+            end: 30,
+            // 4 lines — the active unit below points at row 2 only
+            // ("    return 2;"), which sits neither at the very start nor
+            // the very end of the whole new-side text.
+            text: 'public function caret(): ?int {\n    // changed\n    return 2;\n}',
+          },
+        },
+      })
+      const host = document.createElement('div')
+      host.id = 'inline-edit-caret-host'
+      host.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#fff;overflow:auto'
+      document.body.appendChild(host)
+      Block(b, {
+        allowInlineEdit: true,
+        diffActive: () => true,
+        // Simulates the reviewer's cursor sitting on row 2 ("    return
+        // 2;") when "Bewerk deze code" is invoked — the SAME {start,end}
+        // shape activeGroup()/topLevelActiveUnit() return.
+        activeGroup: () => ({ start: 2, end: 2 }),
+      })(host)
+    })
+
+    const host = page.locator('#inline-edit-caret-host')
+    await host.locator('[data-testid="block-inline-edit-toggle"]').click()
+    const textarea = host.locator('[data-testid="inline-edit-textarea"]')
+    await expect(textarea).toBeVisible()
+    await expect(textarea).toBeFocused()
+
+    const value = await textarea.inputValue()
+    const lines = value.split('\n')
+    const rowStartOffset = lines.slice(0, 2).join('\n').length + 1 // start of line index 2
+    const rowEndOffset = rowStartOffset + lines[2].length
+    const pos = await textarea.evaluate((el) => el.selectionStart)
+    // The caret must land strictly inside row 2's own text — never at 0
+    // (the very start of the whole block) and never past its own end.
+    expect(pos).toBeGreaterThan(rowStartOffset)
+    expect(pos).toBeLessThan(rowEndOffset)
+  })
+})
