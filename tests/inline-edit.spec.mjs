@@ -1,4 +1,4 @@
-import { test, expect, evaluateSettled, appReady } from './_fixtures.mjs'
+import { test, expect, evaluateSettled, appReady, leaveSearchBox } from './_fixtures.mjs'
 
 // Inline, IDE-style editing of a diff block's new/right side (Block.mjs's
 // inlineEditToggleButton/inlineEditorSlot, home.mjs's saveInlineEdit). See
@@ -193,5 +193,50 @@ test.describe('Inline code editing (Block.mjs)', () => {
     host = page.locator('#inline-edit-draft-host')
     await host.locator('[data-testid="block-inline-edit-toggle"]').click()
     await expect(host.locator('[data-testid="inline-edit-textarea"]')).toHaveValue(/return 2;/)
+  })
+})
+
+// Reviewer report: "ik zie niks in het menu als ik op geselecteerde code
+// klik" — Enter and a right-click both open the SAME COMMANDS list
+// (.claude/docs/command-palette.md, "The right-click context menu": one
+// shared implementation, not two), so a real block-palette entry is
+// exercised here via Enter — the right-click path reuses the identical
+// list/openMenu('block', ...) call, unchanged by this feature, and is
+// already covered by the existing right-click suite.
+test.describe('Inline code editing — the block palette entry (home.mjs COMMANDS)', () => {
+  test('"Bewerk deze code" only appears once the block owns the diff keyboard, and opens the same editor as the header button', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+    await expect(page.getByTestId('block-column')).toBeVisible()
+    await leaveSearchBox(page)
+
+    // By label, not by raw index — see "Sort order of the left list" in
+    // blocks-and-ingest.md. CreatePaymentAction::execute reliably has one
+    // changed row and is an ordinary `modified` PHP block.
+    await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
+    await leaveSearchBox(page)
+
+    // Still list mode (no → yet): the header button isn't shown either
+    // (both gate on the same diffActive()/state.mode==='diff' condition), so
+    // the menu item must not appear — same rule, same result, not a special
+    // case for the menu.
+    await page.keyboard.press('Enter')
+    await expect(page.getByTestId('command-menu')).toBeVisible()
+    await expect(page.getByTestId('command-row').filter({ hasText: 'Bewerk deze code' })).toHaveCount(0)
+    await page.keyboard.press('Escape')
+
+    // → steps into the diff — now both entry points agree it's eligible.
+    await page.keyboard.press('ArrowRight')
+    await expect(page.getByTestId('block-inline-edit-toggle')).toBeVisible()
+
+    await page.keyboard.press('Enter')
+    const editItem = page.getByTestId('command-row').filter({ hasText: 'Bewerk deze code' })
+    await expect(editItem).toBeVisible()
+    await editItem.click()
+
+    await expect(page.getByTestId('command-menu')).not.toBeVisible()
+    await expect(page.getByTestId('inline-edit-wrapper')).toBeVisible()
+    await expect(page.getByTestId('inline-edit-textarea')).toBeVisible()
   })
 })

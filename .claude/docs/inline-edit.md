@@ -29,6 +29,26 @@ existing `claude_chat`/`chat_checkout`/`chat_merge` pipeline
   opts default to `false`/a no-op, so a card that never wires them up simply
   never shows the affordance — there is no "Opslaan does nothing" trap.
 
+## Two entry points, one shared flag
+
+`isInlineEditable(b, rows)` is **exported** from `Block.mjs` (not just used
+internally) so both entry points share the exact same eligibility check —
+no duplicated logic, no drift between them:
+
+- The card header's own edit-toggle button (`inlineEditToggleButton`), shown
+  only while `diffActive()` on the top-level card.
+- **`COMMANDS`'s `"Bewerk deze code"` item** (`home.mjs`, right after
+  `approve`) — added after a reviewer report: "ik zie niks in het menu als
+  ik op geselecteerde code klik". `Enter` and a right-click both open this
+  exact same list (`.claude/docs/command-palette.md`, "The right-click
+  context menu" — one shared implementation, not two), so this single
+  addition covers both of the reviewer's named expectations at once. Its
+  `run` sets the identical shared `inlineEditState.id = b.id` the header
+  button toggles; its `when` mirrors that button's own gate exactly
+  (`state.mode === 'diff' && state.focusLevel === 0 &&
+  isInlineEditable(curBlock(), blockRows(curBlock()))`) so the item is
+  absent everywhere the button would be too — never present-but-non-functional.
+
 ## The editor: no textarea look, no contenteditable
 
 "Alsof er geen tekstveld is" — the editor must look identical to the
@@ -114,16 +134,20 @@ types their own follow-up message by hand; nothing is sent automatically.
   `Block.mjs` and `home.mjs` import it directly with no cycle.
 - `src/Block.mjs` — `isInlineEditable`, `inlineEditToggleButton`,
   `inlineEditorSlot`, the `allowInlineEdit`/`onSaveInlineEdit` opts.
-- `src/home.mjs` — `saveInlineEdit`, and wiring `allowInlineEdit: true` /
+- `src/home.mjs` — `saveInlineEdit`, wiring `allowInlineEdit: true` /
   `onSaveInlineEdit: saveInlineEdit` only at the top-level `Block()` call
-  site in `DetailPanel`.
+  site in `DetailPanel`, and the `"Bewerk deze code"` entry in `COMMANDS`
+  (see "Two entry points, one shared flag" above).
 - `src/RelatedPanel.mjs` — `claudeContextBlock`'s additive `proposedCode`/
   `proposedStale` branch.
 
-Test: `tests/inline-edit.spec.mjs` (direct-mount `Block()` unit tests,
-mirroring `tests/diffview.spec.mjs`'s own pattern — eligibility, the overlay
+Test: `tests/inline-edit.spec.mjs` — direct-mount `Block()` unit tests
+(mirroring `tests/diffview.spec.mjs`'s own pattern — eligibility, the overlay
 editor's content, the draft surviving a remount and being cleared once
-saved). The actual `startClaudeChat`/`claude_chat` hand-off itself is already
-covered by `tests/claude-chat-panel.spec.mjs` and is unrelated to this
-feature's own logic, so it is asserted here only via a spy on
+saved), plus a real-app test against a seeded PR for the `COMMANDS` entry
+point (absent in list mode, present and functional once the block owns the
+diff keyboard). The actual `startClaudeChat`/`claude_chat` hand-off itself is
+already covered by `tests/claude-chat-panel.spec.mjs` and is unrelated to
+this feature's own logic, so the direct-mount tests assert it only via a spy
+on
 `onSaveInlineEdit`.

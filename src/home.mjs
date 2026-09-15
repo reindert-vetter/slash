@@ -31,8 +31,9 @@ import Block, {
   translationRowUnits,
   fitCapCharsFor,
   blockDescCollapsible,
+  isInlineEditable,
 } from './Block.mjs'
-import { blockNewSourceText, clearInlineEditDraft } from './inlineEdit.mjs'
+import { inlineEditState, blockNewSourceText, clearInlineEditDraft } from './inlineEdit.mjs'
 import RelatedPanel, {
   InlineComments,
   ClaudeChatPanel,
@@ -13014,6 +13015,31 @@ const COMMANDS = withClose([
     },
     hint: 'approve',
     run: () => toggleApprove(),
+  },
+  {
+    id: 'edit-code',
+    // Reviewer request/report: "ik zie niks in het menu als ik op
+    // geselecteerde code klik" — inline editing (Block.mjs's
+    // inlineEditToggleButton/inlineEditorSlot) originally only had a header
+    // button of its own, never an entry here, even though Enter and a
+    // right-click both open this exact list (see "The right-click context
+    // menu" in .claude/docs/command-palette.md — one shared implementation,
+    // not two). This item reuses the SAME shared inlineEditState flag the
+    // header button toggles — one source of truth, nothing duplicated.
+    // `when` mirrors the header button's own gate exactly (isInlineEditable
+    // plus the v1 top-level-only scope, see .claude/docs/inline-edit.md) so
+    // this item silently disappears wherever that button would too, instead
+    // of appearing and doing nothing.
+    label: t('Bewerk deze code'),
+    hint: 'edit bewerk',
+    run: () => {
+      const b = curBlock()
+      if (b) inlineEditState.id = b.id
+    },
+    when: () => {
+      const b = curBlock()
+      return state.mode === 'diff' && state.focusLevel === 0 && isInlineEditable(b, blockRows(b))
+    },
   },
   {
     id: 'comment',

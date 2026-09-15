@@ -387,7 +387,7 @@ function isYamlFile(b) {
 // and small enough that the ordinary, unvirtualized diff still renders
 // every row (VIRTUALIZE_MIN_ROWS, below) — editing a virtualized window
 // would silently drop whatever sits outside it.
-function isInlineEditable(b, rows) {
+export function isInlineEditable(b, rows) {
   if (!b) return false
   if (b.status !== 'modified' && b.status !== 'added') return false
   if (b.category === 'TRANSLATION') return false

@@ -717,8 +717,16 @@ the field. Filter + fallback both live in `resolveCommands(query)`.
 
 ## `Enter` — the block palette (`COMMANDS`)
 
-Block actions only: toggle approve, comment on this line (`startComment` from
-`RelatedPanel.mjs`), **"Chat over deze regel"** (`startClaudeChat` — opens the
+Block actions only: toggle approve, **"Bewerk deze code"** (opens the inline,
+IDE-style editor for the block's new/right side — `inlineEditState.id =
+b.id`, the same shared flag the card header's own edit-toggle button uses;
+`when: () => state.mode === 'diff' && state.focusLevel === 0 &&
+isInlineEditable(...)` mirrors that button's gate exactly, so the item is
+absent wherever the button would be too — never present-but-broken. Added
+after a reviewer report ("ik zie niks in het menu als ik op geselecteerde
+code klik") — the header button alone wasn't where a reviewer instinctively
+looked; see `.claude/docs/inline-edit.md`), comment on this line
+(`startComment` from `RelatedPanel.mjs`), **"Chat over deze regel"** (`startClaudeChat` — opens the
 Claude composer directly, with no comment written/placed first; see
 "`Enter` → 'Chat over deze regel'" in `.claude/docs/claude-chat-panel.md`),
 **"Kopieer deze regel"** (`copySelectedCode` — copies the focused unit's own
