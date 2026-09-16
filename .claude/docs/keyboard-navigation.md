@@ -1734,8 +1734,10 @@ fire while the textarea itself is focused. Full mechanism:
 
 Outside the nav chain entirely: pressing `F5` opens a chat and starts
 recording — the currently selected group/line/call's own scoped Claude
-conversation when one is reachable (`claudeColumnVisible()`), otherwise the
-PR-wide general chat — and a second press stops it, transcribes locally and
+conversation, reused if already reachable (`claudeColumnVisible()`) or opened
+fresh otherwise as long as a real unit is selected (`commentTarget()`, same
+as the "Chat over deze regel" command), and only the PR-wide general chat
+when neither applies — and a second press stops it, transcribes locally and
 drops the text in the composer (the reviewer still presses Enter). Not
 push-to-talk — releasing the key does nothing. Escape aborts a running
 recording without transcribing it. Its branch sits high in `onKeydown` — after

@@ -14,18 +14,37 @@ Workflow in `workflows.go`. The settings row lives in `auth_status.go`'s
 press (of a fresh recording) opens — `src/dictation.mjs` itself has no opinion
 here, it only calls whatever the page handed it.
 
-- **`home.mjs` (review tree, `/pr/<id>`):** if the currently selected group/
-  line/call's own scoped Claude conversation is reachable
-  (`claudeColumnVisible()`, `RelatedPanel.mjs` — the same "does the Claude half
-  of the merged comment/chat card render" question `enterCommentsOrRelated`'s
-  own → chain asks), F5 opens THAT conversation via the existing
-  `enterClaudeChat` entry point — no second, parallel way to reach it. Reviewer
-  request: "als ik op f5 druk, en ik heb groep, line of call geselecteerd dan
-  wil ik daarvan de chat openen, niet de algemene chat". Otherwise — nothing
-  meaningfully selected, or this unit has no conversation to hang on yet
-  (`enterClaudeChat` is itself a deliberate no-op without an anchor comment,
-  see its own doc comment in `RelatedPanel.mjs`) — it falls back to the
-  PR-wide general chat (`openGeneralChat`), exactly as before this change.
+- **`home.mjs` (review tree, `/pr/<id>`) — three tiers, in order:**
+  1. If the currently selected group/line/call's own scoped Claude
+     conversation is already reachable (`claudeColumnVisible()`,
+     `RelatedPanel.mjs` — the same "does the Claude half of the merged
+     comment/chat card render" question `enterCommentsOrRelated`'s own →
+     chain asks), F5 opens THAT conversation via the existing
+     `enterClaudeChat` entry point.
+  2. Otherwise, if a real navigation unit is selected at all
+     (`commentTarget()` — works in list mode, diff mode, and inside a
+     drilled column, see its own doc comment), F5 opens (creates) THAT
+     unit's own scoped chat via `startClaudeChat` — the exact same call the
+     "Chat over deze regel" palette command already makes. **First reported
+     gap, since fixed:** with no conversation yet on the selected unit,
+     tier 1 is (correctly) `false`, but F5 used to then fall all the way
+     through to the general chat instead of opening/creating the scoped one
+     — reviewer follow-up: "als ik in de diff zit van code blok, en ik druk
+     op f5, dan wil ik chatblokje rechts ervan openen (wat al bestaat), niet
+     de algemene model/chat". `claudeColumnVisible()` alone was too strict a
+     gate for what F5 should be ALLOWED to open, only for what already
+     happens to be open.
+  3. Only when NEITHER applies — nothing sensible selected at all (no
+     blocks loaded, or a synthetic comment-index row, whose `commentTarget()`
+     deliberately returns `null`, see "A synthetic comment-index item…" in
+     that function's own doc comment) — does F5 fall back to the PR-wide
+     general chat (`openGeneralChat`).
+
+  Reviewer request behind tier 1: "als ik op f5 druk, en ik heb groep, line
+  of call geselecteerd dan wil ik daarvan de chat openen, niet de algemene
+  chat". Never a second, parallel way to reach any of these three — all of
+  `claudeColumnVisible`/`enterClaudeChat`/`commentTarget`/`startClaudeChat`
+  are reused unchanged from their existing call sites.
 - **`plan.mjs` (planning page, `/plan/<KEY>`):** always opens the one ticket
   chat (`openPlanChat`) — there is no per-unit scoped conversation on this
   page to prefer instead.
@@ -300,11 +319,13 @@ behaviour asked for — no separate state was needed for that.
   a truncated response, and the download claim.
 - `tests/dictation.spec.mjs` — the real toggle gesture on both pages (start on
   one press, stop-and-transcribe on the next), which chat F5 opens (the
-  scoped one when a group/line/call with a conversation is selected, the
-  general one otherwise), the auto-repeat guard, Escape aborting a recording
-  both on a scoped chat (chat stays open) and via the general overlay's own
-  capture-phase handler (overlay closes, recording still cancelled), the blur
-  safety net, the too-short discard, the "not set up" message, dictating into
+  scoped one when a group/line/call already has a reachable conversation,
+  opening/creating a fresh scoped one for a plain comment-less block in the
+  diff, and the general one only with genuinely nothing selected), the
+  auto-repeat guard, Escape aborting a recording both on a scoped chat (chat
+  stays open) and via the general overlay's own capture-phase handler
+  (overlay closes, recording still cancelled), the blur safety net, the
+  too-short discard, the "not set up" message, dictating into
   an already-open chat, and the settings button appearing only when the model
   (not the binary) is what is missing. `getUserMedia` is replaced
   by a **real** oscillator-backed MediaStream rather than a stub object, so the

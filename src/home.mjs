@@ -215,18 +215,32 @@ import { initJiraBell, jiraBellButton, isJiraBellOpen, handleJiraBellKeydown } f
 initTheme()
 syncUiLang()
 // F5 toggle dictation (src/dictation.mjs). Reviewer request: when a group/
-// line/call is selected AND that unit's own Claude conversation is reachable
-// (claudeColumnVisible() — the same "does the scoped chat column render"
-// question enterCommentsOrRelated's own → chain asks, RelatedPanel.mjs),
-// open THAT scoped chat via the existing enterClaudeChat entry point — never
-// a second, parallel way to open it. Otherwise (nothing sensible selected, or
-// no conversation exists yet for this unit) fall back to the PR-wide general
-// chat, exactly as before. openGeneralChat is a hoisted function declaration
-// further down this file, so wrapping both in a closure here is safe at
+// line/call is selected, F5 should open THAT unit's own code-scoped Claude
+// conversation — never the PR-wide general chat — whether or not a
+// conversation already exists there:
+//   1. claudeColumnVisible() true — a conversation is already reachable for
+//      the selected unit (RelatedPanel.mjs, the same "does the scoped chat
+//      column render" question enterCommentsOrRelated's own → chain asks) —
+//      reuse it via the existing enterClaudeChat entry point.
+//   2. Otherwise, commentTarget() — a real navigation unit is selected (see
+//      its own doc comment: works in both list and diff mode, and inside a
+//      drilled column) — open/create that unit's chat via startClaudeChat,
+//      the exact same call the "Chat over deze regel" palette command
+//      already makes. First reported gap: with no conversation yet on the
+//      selected unit, claudeColumnVisible() is (correctly) false, but F5
+//      used to then fall all the way through to the general chat instead of
+//      opening the scoped one it should have created.
+//   3. Only when NEITHER applies (nothing sensible selected, e.g. a
+//      comment-index row or nothing at all — commentTarget() returns null)
+//      does F5 fall back to the PR-wide general chat.
+// Never a second, parallel way to open any of these — both functions are
+// reused unchanged. openGeneralChat is a hoisted function declaration further
+// down this file, so wrapping all three in a closure here is safe at
 // module-evaluation time.
 initDictation({
   openChat: () => {
     if (claudeColumnVisible()) enterClaudeChat(state.pr)
+    else if (commentTarget()) startClaudeChat(commentTarget)
     else openGeneralChat()
   },
 })

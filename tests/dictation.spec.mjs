@@ -129,14 +129,47 @@ test.describe('F5 dictation — review tree (/pr/<id>)', () => {
     await expect(page.getByTestId('claude-chat-compose')).toHaveValue('dit is ingesproken tekst')
   })
 
-  test('with nothing selected that has a conversation, F5 falls back to the general chat', async ({ page }) => {
+  test('with nothing selected that has a conversation, F5 falls back to the general chat', async ({
+    page,
+  }, testInfo) => {
+    // A freshly seeded PR number with no blocks and no comments ever posted to
+    // it: commentTarget() has no unit to anchor on (no block at all) and
+    // claudeColumnVisible() has nothing to show either, so this is the one
+    // genuine "nothing scoped applies" case — every ordinary PR with real
+    // diff blocks always has SOME selected unit for F5 to scope to (see the
+    // next test), even before any comment/conversation exists on it.
+    const pr = seededPr(testInfo)
     await stubDictation(page)
-    await page.goto('/pr/12903')
+    await page.goto('/pr/' + pr)
     await appReady(page)
 
     await pressF5(page)
 
     await expect(page.getByTestId('general-chat-overlay')).toBeVisible()
+    await expect(page.getByTestId('claude-chat-compose')).toBeFocused()
+
+    await page.waitForTimeout(500)
+    await pressF5(page)
+    await expect(page.getByTestId('claude-chat-compose')).toHaveValue('dit is ingesproken tekst')
+  })
+
+  test('in the diff of a comment-less block, F5 opens (creates) that unit\'s own code-scoped chat, never the general one', async ({
+    page,
+  }) => {
+    await stubDictation(page)
+    await page.goto('/pr/12903')
+    await appReady(page)
+    // Select the first block and land in its diff — no comment/conversation
+    // exists on it yet, so claudeColumnVisible() is false here. F5 must still
+    // open (create) THIS unit's own scoped chat rather than falling back to
+    // the general one — the reported gap: it used to fall all the way
+    // through to the general overlay instead.
+    await page.locator('[data-idx="0"]').click()
+
+    await pressF5(page)
+
+    await expect(page.getByTestId('general-chat-overlay')).toBeHidden()
+    await expect(page.getByTestId('claude-chat-column')).toBeVisible()
     await expect(page.getByTestId('claude-chat-compose')).toBeFocused()
 
     await page.waitForTimeout(500)
