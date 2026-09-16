@@ -92,6 +92,66 @@ directly — same "reuse the real listener via a dispatched event" pattern
 found) instead of nothing, purely so `stopDictation` has something to call
 `sendComposer` on.
 
+## A second way to end a recording: `c` lands it in the open comment instead
+
+Reviewer request: "f5 en daarna `c` moet als comment verschijnen in de input,
+daarna kan ik zelf enter drukken" — a way to route a dictated recording into
+the currently open **comment** composer instead of a Claude chat, and,
+unlike the chat path, WITHOUT sending it: the reviewer presses Enter
+themselves, exactly as if they had typed it.
+
+- **`handleDictationKeydown`** gained a branch, checked before the F5 branch:
+  a plain (no Cmd/Ctrl/Alt/Shift), non-repeat `c` keydown while
+  `d.state === 'recording'` calls `stopDictation('comment')` instead of the
+  plain `stopDictation()` a second F5 calls. Everything else about ending the
+  recording — teardown, `MIN_MS`, the transcribe request — is identical; only
+  the destination differs.
+- **`stopDictation(target = 'chat')`** now takes that target: `'chat'`
+  (every existing caller — F5, blur, hidden tab, `MAX_MS`) inserts into
+  `[data-testid=claude-chat-compose]` and sends it, unchanged; `'comment'`
+  inserts into `[data-testid=comment-compose]` and does **not** call
+  `sendComposer` — posting stays entirely on the reviewer's own Enter, via the
+  existing typed-comment path in `home.mjs` (`isComposeOpen()` +
+  `runComposePost()`), which needed no change at all.
+  `insertIntoComposer(text, selector)` was generalized with a `selector`
+  parameter to serve both destinations from one function.
+- **No comment field open**: `insertIntoComposer` already falls back to
+  `setNote('Geen invoerveld gevonden voor de tekst')` when the selector
+  matches nothing — reused as-is for the `'comment'` target, no special
+  message needed.
+- **`c` outside a recording is completely untouched** — it stays `home.mjs`'s
+  existing held-key column resize (`c`/`v`, see `startResizeKey`/
+  `stopResizeKey` in `home.mjs`). No change was needed to that resize code
+  itself: `handleDictationKeydown(e)` is called (and, on `true`, returns
+  early) well before `home.mjs`'s own `c`/`v` branch in `onKeydown` — see
+  "Where the keydown branch sits" below — and the new branch only ever
+  matches while `d.state === 'recording'`, a state the resize key never
+  touches.
+- **A pre-existing gap this surfaced, fixed along the way:** `openChatFn`'s
+  first tier (`claudeColumnVisible()` → `enterClaudeChat`) used to no-op
+  silently whenever the Claude column was visible only because a fresh,
+  not-yet-placed comment draft was open (`cs.focus === 'new'`, no anchor
+  comment yet — `enterClaudeChat`'s own `chatAnchorComment()` guard returns
+  early for that). That is exactly the reviewer's own primary use case here —
+  type a comment, F5 to keep dictating into it — so F5 pressed in that state
+  used to do nothing at all instead of switching the keyboard into the
+  already-visible Claude column. Fixed by extracting the ternary
+  `ClaudeChatPanel`'s own read-only-card click handler already used
+  (`cs.focus === 'new' ? enterClaudeChatFromNew() : enterClaudeChat(pr)`) into
+  an exported `enterClaudeChatOrFromNew(pr)` (`RelatedPanel.mjs`), and having
+  `openChatFn` call that instead of the bare `enterClaudeChat`.
+- **The status pill's hint is always shown while recording, spelling out both
+  options, unconditionally** — not gated on whether a comment composer
+  happens to be open right now, or on any other setting. Reviewer request:
+  "met een hint om in de tussentijd te kunnen kiezen voor f5 (mic icon) of op
+  `c` te drukken. laat die hint altijd zien ongeacht de instelling". The old
+  single "druk nogmaals op F5 om te stoppen" sentence was replaced by two
+  small chips: a decorative mic icon (`aria-hidden`) next to "F5 → chat", and
+  a `<kbd>c</kbd>` badge next to "→ comment" (`data-testid=dictation-hint-chat`/
+  `dictation-hint-comment`). Per the colorblind rule the words ("chat"/
+  "comment") carry the meaning; the icon/kbd are decoration on top, not the
+  only cue.
+
 ## Why F5, and the one thing the reviewer must set themselves
 
 The original request was the **Fn/globe key**. That is impossible, not merely
@@ -364,7 +424,8 @@ behaviour asked for — no separate state was needed for that.
   stays open) and via the general overlay's own capture-phase handler
   (overlay closes, recording still cancelled), the blur safety net, the
   too-short discard, the "not set up" message, dictating into
-  an already-open chat, and the settings button appearing only when the model
+  an already-open chat, stopping with `c` into the open comment composer
+  without sending it, and the settings button appearing only when the model
   (not the binary) is what is missing. `getUserMedia` is replaced
   by a **real** oscillator-backed MediaStream rather than a stub object, so the
   AudioContext/AudioWorklet path is genuinely exercised; only `/api/transcribe`

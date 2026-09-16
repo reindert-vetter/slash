@@ -3592,6 +3592,24 @@ function enterClaudeChatFromNew() {
   focusClaudeComposer()
 }
 
+// enterClaudeChatOrFromNew — the shared "hand the keyboard to the Claude
+// column, whichever shape it's currently in" entry point. Extracted from
+// ClaudeChatPanel's own read-only-card click handler (`enterFromReadOnly`,
+// below — now calls this instead of duplicating the ternary) and exported
+// for dictation.mjs's F5 tier-1 open (`openChatFn` in home.mjs):
+// `claudeColumnVisible()` can be true purely because `cs.focus === 'new'`
+// (a still-open, not-yet-placed comment draft — see enterClaudeChatFromNew's
+// own doc comment above), and plain `enterClaudeChat` silently no-ops in
+// that case (`chatAnchorComment()` is null for an unposted draft, so its own
+// `if (!c) return` guard fires) — F5 pressed while dictating into a fresh
+// comment used to do nothing at all instead of handing the keyboard to the
+// already-visible Claude column. See "A second way to end a recording" in
+// .claude/docs/dictation.md.
+export function enterClaudeChatOrFromNew(pr) {
+  if (cs.focus === 'new') enterClaudeChatFromNew()
+  else enterClaudeChat(pr)
+}
+
 // isClaudeChatFocused/claudeChatVisible are the two questions home.mjs/this
 // panel's own render need: whether the KEYBOARD is on the chat column, and
 // whether the column should be VISIBLE at all.
@@ -5116,7 +5134,7 @@ export function ClaudeChatPanel(state, commentTarget) {
   // ANYWHERE on the read-only card itself (claudeChatColumn's own root, see
   // ClaudeChat.mjs), the one exception to "nothing in it is clickable" per
   // "Read-only, not a rail" in .claude/docs/comments-panel.md.
-  const enterFromReadOnly = () => (cs.focus === 'new' ? enterClaudeChatFromNew() : enterClaudeChat(state.pr))
+  const enterFromReadOnly = () => enterClaudeChatOrFromNew(state.pr)
   return html`
     <div class="contents">
       ${() =>

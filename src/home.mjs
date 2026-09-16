@@ -51,6 +51,7 @@ import RelatedPanel, {
   isPrWideComposing,
   startClaudeChat,
   enterClaudeChat,
+  enterClaudeChatOrFromNew,
   sendClaudeChatText,
   startRangeComment,
   startRangeChat,
@@ -240,7 +241,12 @@ syncUiLang()
 // module-evaluation time.
 initDictation({
   openChat: () => {
-    if (claudeColumnVisible()) enterClaudeChat(state.pr)
+    // enterClaudeChatOrFromNew (not the bare enterClaudeChat) — the column
+    // can already be visible purely because a fresh, not-yet-placed comment
+    // is open (cs.focus === 'new'), which has no anchor comment yet;
+    // enterClaudeChat alone silently no-ops for that case. See
+    // .claude/docs/dictation.md, "A second way to end a recording".
+    if (claudeColumnVisible()) enterClaudeChatOrFromNew(state.pr)
     else if (commentTarget()) startClaudeChat(commentTarget)
     else openGeneralChat()
   },

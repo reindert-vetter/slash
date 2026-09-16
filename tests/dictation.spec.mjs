@@ -1,4 +1,4 @@
-import { test, expect, appReady, seededPr } from './_fixtures.mjs'
+import { test, expect, appReady, seededPr, openNewComment } from './_fixtures.mjs'
 
 // F5 toggle dictation (src/dictation.mjs): press F5 to start recording, press
 // it again to stop, transcribe, insert AND send — exactly as if the reviewer
@@ -70,9 +70,12 @@ test.describe('F5 dictation — review tree (/pr/<id>)', () => {
     const status = page.getByTestId('dictation-status')
     await expect(status).toBeVisible()
     await expect(status).toContainText('Opnemen')
-    // The word carries the state, never colour alone — and the stop
-    // instruction is spelled out rather than implied.
-    await expect(status).toContainText('druk nogmaals op F5 om te stoppen')
+    // The word carries the state, never colour alone — and both ways to end
+    // the recording are spelled out, always, not just the one being used.
+    await expect(page.getByTestId('dictation-hint-chat')).toContainText('F5')
+    await expect(page.getByTestId('dictation-hint-chat')).toContainText('chat')
+    await expect(page.getByTestId('dictation-hint-comment')).toContainText('c')
+    await expect(page.getByTestId('dictation-hint-comment')).toContainText('comment')
 
     await page.waitForTimeout(500)
     // Releasing the key does nothing — only a second, separate press stops it.
@@ -339,6 +342,36 @@ test.describe('F5 dictation — review tree (/pr/<id>)', () => {
 
     await expect(page.getByTestId('dictation-note')).toContainText('Instellingen')
     await expect(page.getByTestId('claude-chat-compose')).toHaveValue('')
+  })
+
+  test('stopping with `c` instead of a second F5 lands the transcript in the open comment composer, unsent', async ({
+    page,
+  }) => {
+    await stubDictation(page)
+    await page.goto('/pr/12903')
+    await expect(page.getByTestId('block-row').first()).toBeVisible()
+    await page.locator('[data-idx="1"]').click()
+    await page.keyboard.press('ArrowRight') // list -> diff
+    await openNewComment(page)
+    const composer = page.getByTestId('comment-compose')
+    await expect(composer).toBeFocused()
+
+    await pressF5(page)
+    await expect(page.getByTestId('dictation-status')).toContainText('Opnemen')
+    await page.waitForTimeout(500)
+    // `c`, not F5 — ends the recording into the comment field instead of a
+    // chat, and does not send it.
+    await page.keyboard.down('c')
+    await page.keyboard.up('c')
+
+    await expect(composer).toHaveValue('dit is ingesproken tekst')
+    // Not sent: no comment thread item was posted for it, and the general/
+    // scoped chat never opened or received anything.
+    await expect(page.getByTestId('comment-item')).toHaveCount(0)
+    await expect(page.getByTestId('general-chat-overlay')).toBeHidden()
+    // The reviewer's own Enter still posts it, exactly like a typed comment.
+    await page.keyboard.press('Enter')
+    await expect(page.getByTestId('comment-item')).toHaveCount(1)
   })
 })
 

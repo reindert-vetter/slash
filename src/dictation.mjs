@@ -37,6 +37,17 @@
 //     typed the rest themselves and pressed Enter. An empty transcript
 //     ("Niets verstaan"/too short) is never inserted in the first place, so
 //     nothing is ever sent for it either.
+//   - A SECOND way to end a recording: pressing `c` instead of F5 stops it and
+//     inserts the transcript into the currently open COMMENT composer
+//     ([data-testid=comment-compose]) instead of the chat composer — and does
+//     NOT send it. Reviewer request: "f5 en daarna c moet als comment
+//     verschijnen in de input, daarna kan ik zelf enter drukken". Unlike the
+//     chat path this is a plain insert; posting the comment still goes
+//     through the existing typed-Enter path in home.mjs, unchanged. `c` is
+//     only ever intercepted here while a recording is actually running —
+//     outside a recording it stays home.mjs's existing column-resize key (see
+//     "Where the keydown branch sits" below for why the ordering makes this
+//     safe with no change to that resize code).
 //   - STRICTLY LOCAL. The audio goes to POST /api/transcribe, which runs
 //     whisper.cpp on this machine (whisper.go). Chrome's own
 //     webkitSpeechRecognition would have been far less code and is ruled out
@@ -161,6 +172,29 @@ export function handleDictationKeydown(e) {
     abortDictation()
     return true
   }
+  // `c` is the SECOND way to end a recording — same toggle, different
+  // destination: it stops and transcribes exactly like a second F5, but
+  // lands the text in the open COMMENT composer instead of the chat, and
+  // never sends it (see the module header comment). Only intercepted while a
+  // recording is actually running: this runs before home.mjs's own `c`/`v`
+  // column-resize branch further down onKeydown (handleDictationKeydown is
+  // called first, see "Where the keydown branch sits" in
+  // .claude/docs/dictation.md), so returning true here pre-empts it without
+  // any change to home.mjs. A plain `c` press outside a recording never
+  // matches this branch and falls through to that resize key untouched.
+  if (
+    e.key === 'c' &&
+    d.state === 'recording' &&
+    !e.metaKey &&
+    !e.ctrlKey &&
+    !e.altKey &&
+    !e.shiftKey
+  ) {
+    e.preventDefault()
+    if (e.repeat) return true
+    stopDictation('comment')
+    return true
+  }
   if (e.key !== 'F5' || e.metaKey || e.ctrlKey || e.altKey) return false
   e.preventDefault()
   // Auto-repeat: macOS (and a held BTT trigger) keeps firing keydown for as
@@ -251,11 +285,16 @@ function onFrame(frame) {
   d.level = Math.max(peak, d.level * 0.8)
 }
 
-// stopDictation ends a recording from whichever of the three paths noticed it
-// first (a second F5 press, blur, hidden tab) or the MAX_MS timer, and always
-// transcribes what was captured. It is deliberately safe to call at any
-// moment, including when nothing is running.
-async function stopDictation() {
+// stopDictation ends a recording from whichever of the four paths noticed it
+// first (a second F5 press, a `c` press, blur, hidden tab) or the MAX_MS
+// timer, and always transcribes what was captured. It is deliberately safe to
+// call at any moment, including when nothing is running.
+//
+// `target` decides where the transcript goes once it's back: 'chat' (default
+// — every existing caller besides the `c` branch above) inserts into the
+// Claude chat composer AND sends it; 'comment' inserts into the currently
+// open comment composer and leaves sending to the reviewer's own Enter.
+async function stopDictation(target = 'chat') {
   if (d.state !== 'recording') return
   const heldMs = Date.now() - startedAt
   clearInterval(tickTimer)
@@ -295,8 +334,11 @@ async function stopDictation() {
     }
     d.state = 'idle'
     if (data.text) {
-      const el = insertIntoComposer(data.text)
-      if (el) sendComposer(el)
+      const el =
+        target === 'comment'
+          ? insertIntoComposer(data.text, '[data-testid=comment-compose]')
+          : insertIntoComposer(data.text)
+      if (el && target !== 'comment') sendComposer(el)
     } else setNote(t('Niets verstaan'))
   } catch (err) {
     d.state = 'idle'
@@ -381,12 +423,14 @@ function releaseStream() {
   stream = null
 }
 
-// insertIntoComposer writes the transcript into the chat's textarea at the
-// caret and fires an `input` event, so ClaudeChat.mjs's own @input handler
-// (draft storage) and the auto-grow both run exactly as if it had been typed.
-// Returns the field (for sendComposer below), or null if it wasn't found.
-function insertIntoComposer(text) {
-  const el = document.querySelector('[data-testid=claude-chat-compose]')
+// insertIntoComposer writes the transcript into a textarea at the caret and
+// fires an `input` event, so the field's own @input handler (draft storage,
+// auto-grow) runs exactly as if it had been typed. `selector` defaults to the
+// Claude chat composer; the `c`-to-comment path (stopDictation above) passes
+// [data-testid=comment-compose] instead. Returns the field (for sendComposer
+// below), or null if it wasn't found.
+function insertIntoComposer(text, selector = '[data-testid=claude-chat-compose]') {
+  const el = document.querySelector(selector)
   if (!el) {
     setNote(t('Geen invoerveld gevonden voor de tekst'))
     return null
@@ -466,7 +510,29 @@ export function dictationStatusPill() {
                     <span class="font-semibold">${t('Opnemen')}</span>
                     <span class="flex items-end gap-[2px]">${() => meterBars()}</span>
                     <span>${() => d.seconds + 's'}</span>
-                    <span class="text-slate-400 dark:text-zinc-500">${t('druk nogmaals op F5 om te stoppen')}</span>
+                    <span class="flex items-center gap-1.5 text-slate-400 dark:text-zinc-500">
+                      <span data-testid="dictation-hint-chat" class="flex items-center gap-1">
+                        <svg
+                          aria-hidden="true"
+                          viewBox="0 0 24 24"
+                          class="h-3 w-3 shrink-0 fill-none stroke-current"
+                          stroke-width="2"
+                        >
+                          <rect x="9" y="2" width="6" height="11" rx="3"></rect>
+                          <path d="M5 10a7 7 0 0 0 14 0"></path>
+                          <path d="M12 17v4"></path>
+                        </svg>
+                        <span>F5 → ${t('chat')}</span>
+                      </span>
+                      <span aria-hidden="true">·</span>
+                      <span data-testid="dictation-hint-comment" class="flex items-center gap-1">
+                        <kbd
+                          class="rounded border border-slate-300 px-1 text-[10px] font-semibold text-slate-500 dark:border-zinc-600 dark:text-zinc-400"
+                          >c</kbd
+                        >
+                        <span>→ ${t('comment')}</span>
+                      </span>
+                    </span>
                   </span>`.key('rec')
                 : d.state === 'transcribing'
                   ? html`<span class="flex items-center gap-2">
