@@ -807,8 +807,13 @@ kunnen uitklappen, dan wil ik ook weer naar beneden kunnen."*
   since-review/Omschrijving blocks, and there is no unit context to build a
   palette for while the strip owns the cursor. A description short enough to fit
   in full has nothing to open (`blockDescCollapsible`, a character count exactly
-  like `descCollapsible`'s, so the "meer… (Enter)" hint and `Enter` can never
-  disagree) and `Enter` is a no-op there.
+  like `descCollapsible`'s, so the "Meer …" hint and `Enter` can never
+  disagree) and `Enter` is a no-op there. The collapsed hint reads "Meer …"
+  followed by a round badge (`block-description-line-count`, styled like the
+  "+N" avatar-overflow badge in `RelatedPanel.mjs`'s `authorAvatarStack`) with
+  the total number of lines in the raw description (`descriptionLineCount`,
+  `Block.mjs`) — not just the hidden ones, and never colour-only per the
+  colourblind rule.
 - **`←`/`→`** release the strip and then do what they do from the diff itself
   (back to the list resp. on to the comments/Underlying code).
 - **`f`/`d`/`s`/`a`/Space are no-ops** while the strip owns the cursor, same

@@ -665,6 +665,7 @@ export const EN = {
   'Bijgewerkt {updated} · {kindWord}': 'Updated {updated} · {kindWord}',
   'Sinds jouw laatste review': 'Since your last review',
   'meer… (Enter)': 'more… (Enter)',
+  'Meer …': 'More …',
   'PR-menu (keuren, comment plaatsen, Jira, …)': 'PR menu (review, post comment, Jira, …)',
   'Geen werkmap': 'No working directory',
   'Keuze nodig': 'Choice needed',

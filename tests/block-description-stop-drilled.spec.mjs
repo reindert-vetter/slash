@@ -32,7 +32,9 @@ test('↑ off a drilled column\'s first unit reaches its own description strip, 
   await expect(strip).toBeVisible()
   await expect(strip).toHaveAttribute('data-desc-collapsed', 'true')
   await expect(strip).toHaveAttribute('data-desc-focused', 'false')
-  await expect(drill.getByTestId('block-description-toggle')).toHaveText('meer… (Enter)')
+  // The fixture description (tests/fixtures/tree-blocks.json) is one single
+  // line, so the round badge next to "Meer …" reads 1.
+  await expect(drill.getByTestId('block-description-toggle')).toHaveText('Meer … 1')
 
   // ↑ off the drilled column's first (only) change lands on its own strip.
   await page.keyboard.press('ArrowUp')

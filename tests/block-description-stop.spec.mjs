@@ -25,7 +25,10 @@ test('the block description is capped at 2 lines and is an extra ↑ stop that E
   await expect(strip).toHaveAttribute('data-desc-collapsed', 'true')
   await expect(strip).toHaveAttribute('data-desc-focused', 'false')
   await expect(page.getByTestId('block-description')).toHaveClass(/line-clamp-2/)
-  await expect(page.getByTestId('block-description-toggle')).toHaveText('meer… (Enter)')
+  // "Meer …" plus a round badge holding the total number of lines in the
+  // raw description (3: two sentences separated by a blank line) — see
+  // descriptionLineCount in Block.mjs.
+  await expect(page.getByTestId('block-description-toggle')).toHaveText('Meer … 3')
 
   // "Maximaal 2 regels" is a real height, not just a class: two lines of this
   // 14px/leading-relaxed text measure ~45.5px, so anything under 50 is two

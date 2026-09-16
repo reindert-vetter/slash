@@ -1358,13 +1358,23 @@ function blockMenuButton(onOpenMenu) {
 // enough to have something to open? A deterministic character count, exactly
 // like descCollapsible's own DESC_TRUNCATE_AT for the PR description (home.mjs):
 // the real question ("does it overflow the 2-line cap?") can only be answered by
-// measuring the laid-out DOM, and both the "meer… (Enter)" hint here and the
+// measuring the laid-out DOM, and both the "Meer …" hint here and the
 // Enter branch in home.mjs must agree without a layout read. Exported because
 // home.mjs's Enter/↑ handling needs the same answer.
 const BLOCK_DESC_TRUNCATE_AT = 120
 
 export function blockDescCollapsible(b) {
   return !!b && String(b.description || '').length > BLOCK_DESC_TRUNCATE_AT
+}
+
+// descriptionLineCount — the number shown in the round badge next to "Meer …"
+// (block-description-toggle): the TOTAL number of lines in the raw
+// b.description (not just the hidden ones), same "reviewer sees the size of
+// the whole thing, not just what's cut off" idea as the diffstat badges
+// elsewhere. A plain newline count, deliberately not tied to the 2-line CSS
+// clamp (which depends on wrapping/layout, not on the source text).
+function descriptionLineCount(b) {
+  return String((b && b.description) || '').split('\n').length
 }
 
 function descriptionHtml(text) {
@@ -1936,10 +1946,18 @@ export default function Block(b, opts = {}) {
               ${() =>
                 blockDescCollapsible(b)
                   ? html`<div
-                      class="mt-1 text-[11px] font-medium text-indigo-600 dark:text-indigo-400"
+                      class="mt-1 flex items-center gap-1.5 text-[11px] font-medium text-indigo-600 dark:text-indigo-400"
                       data-testid="block-description-toggle"
                     >
-                      ${() => (descExpanded() ? 'Inklappen' : 'meer… (Enter)')}
+                      <span>${() => (descExpanded() ? t('Inklappen') : t('Meer …'))}</span>
+                      ${() =>
+                        descExpanded()
+                          ? ''
+                          : html`<span
+                              class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-200 dark:bg-zinc-700 text-[9px] font-semibold text-slate-600 dark:text-zinc-300"
+                              data-testid="block-description-line-count"
+                              >${() => descriptionLineCount(b)}</span
+                            >`}
                     </div>`
                   : ''}
             </div>`}
