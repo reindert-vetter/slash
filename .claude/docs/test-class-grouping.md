@@ -278,6 +278,24 @@ things make it work, and both are load-bearing:
 Test: `tests/testclass-column-visible.spec.mjs` (with the param `↓` walks the
 methods; without it the index keeps `↑`/`↓`).
 
+**A stray `?tcol=1` next to a `?sel=` that resolves to an ORDINARY (non-
+`test_class`) block used to permanently hide the whole pr-index.**
+`BlockList.mjs`'s own collapse ternary reads `state.testColumnFocused` alone,
+with no `curTestClassRow()` guard (unlike `isTestColumnActive()`), and
+`bindUrlState` writes a restored `?tcol=1` straight into
+`state.testColumnFocused` at load time, before `applyBlockRefRestore` runs.
+Landing on a `test_class` row goes through `applyTestClassRefRestore`, which
+correctly only applies `testColumnPending` there — but the plain-block branch
+of `applyBlockRefRestore`, and `applyCommentRefRestore`'s own branch, assign
+`state.selected` directly instead of going through `selectRow`, so neither
+used to reset `state.testColumnFocused`/`state.classMethodSel`. A link
+carrying `tcol=1` from an earlier test-class selection, later re-pointed at
+an ordinary block (or a comment row), left the flag stuck true forever with
+no methodes-kolom to take the pr-index's place — reported as "blokken index
+niet meer zichtbaar", no console error. Fixed by resetting both fields in
+both branches, mirroring `selectRow`'s own reset. Test:
+`tests/tcol-stale-restore.spec.mjs`.
+
 **A `mode=diff` restore onto an already-partly-approved method used to show
 the active-row cursor for a split second, then lose it permanently, with no
 console error.** `applyTestClassRefRestore` itself sets `state.selected`/

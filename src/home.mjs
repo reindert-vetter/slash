@@ -1719,7 +1719,21 @@ function applyBlockRefRestore() {
   }
   blockRefPending = null
   const idx = state.blocks.findIndex((b) => b.kind !== 'comment' && b.kind !== 'test_class' && `${b.file}:${b.line}` === ref)
-  if (idx >= 0) state.selected = idx
+  if (idx >= 0) {
+    state.selected = idx
+    // A restored ?tcol=1/?tmethod= only makes sense next to a test_class
+    // selection (see applyTestClassRefRestore, the only place that actually
+    // applies testColumnPending) — bindUrlState already wrote a stray
+    // ?tcol=1 straight into state.testColumnFocused before this ran, and
+    // unlike every other selection-landing path (selectRow) this branch
+    // assigns state.selected directly, so nothing resets it. Left stale,
+    // BlockList.mjs's collapse ternary reads testColumnFocused alone (no
+    // curTestClassRow() guard) and hides the whole pr-index with no
+    // methodes-kolom to take its place — reported as "blocks index no
+    // longer shows".
+    state.classMethodSel = 0
+    state.testColumnFocused = false
+  }
 }
 
 // applyTestClassRefRestore resolves a `?sel=testclass:<file>::<class>`
@@ -1779,6 +1793,11 @@ function applyCommentRefRestore() {
   if (idx < 0) return
   state.selected = idx
   state.mode = 'list'
+  // Same stale-testColumnFocused hazard as applyBlockRefRestore's plain-block
+  // branch above (a comment row is never a test_class row) — see the comment
+  // there.
+  state.classMethodSel = 0
+  state.testColumnFocused = false
   blockRefPending = null
   Promise.resolve()
     .then(() => Promise.resolve())
