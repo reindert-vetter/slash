@@ -59,7 +59,56 @@ function escapeHtml(str) {
 // `annotateFenceNumbers` below, so every caller numbers fences identically —
 // load-bearing: a reviewer types "codeblok 3" in the Claude chat meaning the
 // SAME block the badge shows, see RelatedPanel.mjs's claudeThreadContextBlock.
-const CODE_FENCE_SOURCE = '```[ \\t]*(\\S*)\\n([\\s\\S]*?)\\n```'
+//
+// Group 1 is the opening backtick RUN itself (3 or more, per CommonMark), not
+// a fixed literal ` ``` ` — and `\1` requires the closing run to be that same
+// length. This is what CommonMark itself requires to nest one fence inside
+// another: a fence that CONTAINS a ```-fenced block of its own (e.g. Claude
+// showing the full contents of a Markdown file that itself documents a code
+// sample) must open with a LONGER run (e.g. ````` ```` `````, 4 backticks) so
+// the reader — and this regex — can tell its own closing marker apart from
+// the inner fence's. A fixed 3-backtick-only pattern has no way to encode
+// that length, so it always closed at the FIRST bare "\n```" it found — i.e.
+// the INNER fence's own opening line — silently truncating the outer fence
+// and leaking everything after it (the inner fence's content, both real
+// closing markers, and any following prose) as ordinary paragraph text, with
+// single newlines then collapsed to spaces and the leftover stray backticks
+// mis-parsed as inline code. Reviewer-reported screenshot:
+// data/review-shots/task-fence-truncated-as-text.png, reproduced against the
+// exact stored message in conversation `ee164ada6a52af66907f098b` (PR 13729)
+// — Claude posted the full contents of `.claude/rules/statistics-churn.md`,
+// itself containing a ```bash fence, wrapped in an outer ````markdown fence.
+// A backreference is a deliberate, minimal simplification of CommonMark's
+// real rule (closing run must be AT LEAST as long as opening, not exactly
+// equal) — matches every fence actually produced in practice (Claude, like
+// any Markdown author, always closes with the same length it opened with).
+//
+// `\1[ \t]*(?=\n|$)` — the closing run must be followed by nothing but
+// optional trailing whitespace to end of line: a candidate line that carries
+// an info string after its backticks (e.g. a SAME-length inner ` ```bash `
+// nested inside an outer ` ``` ` fence, no length difference between the
+// two) is NOT a valid closing fence per CommonMark and must be skipped —
+// found live while verifying the fix above, in a LATER message of the exact
+// same conversation (`ee164ada6a52af66907f098b`): Claude opened with a bare
+// ` ``` ` and, further down, closed with a bare ` ``` ` too, but an
+// in-between ` ```bash ` line (same 3-backtick length, immediately preceding
+// two real commands and PRECEDED here by only a blank "(lege regel)" content
+// line) would otherwise have been mistaken for the close, same failure shape
+// as the length-mismatch case just described. Without the end-of-line
+// anchor, a bare backreference match closes AT that inner line instead of
+// continuing on to the real (bare, nothing-but-backticks) closing line
+// further down.
+//
+// Not fixed here: a multi-backtick INLINE span attempted mid-sentence (no
+// newline around it, e.g. an author literally typing `` ```` ```bash ```` ``
+// to show the fence marker itself as inline code) — the vendored
+// `src/vendor/snarkdown.js` only recognises a single-backtick inline code
+// span (see its own tokenizer regex), so that one narrow case can still
+// produce a small, isolated rendering glitch. Deliberately left alone, same
+// "don't patch the vendored file" boundary as the intra-word-underscore/
+// unpaired-emphasis cases above — much smaller than the block-level bug this
+// fixes, and not what was reported.
+const CODE_FENCE_SOURCE = '(`{3,})[ \\t]*(\\S*)\\n([\\s\\S]*?)\\n\\1[ \\t]*(?=\\n|$)'
 const CODE_FENCE_RE = new RegExp(CODE_FENCE_SOURCE, 'g')
 
 // countCodeFences counts the fenced code blocks in `text` without rendering
@@ -182,7 +231,7 @@ function extractCodeFences(text, store, startIndex, truncate) {
   // after it, all the way to the end of the message), see fenceContext's own
   // doc comment above for why this is full text rather than a snippet.
   const totalFences = countCodeFences(text)
-  return text.replace(CODE_FENCE_RE, (m, lang, code, offset) => {
+  return text.replace(CODE_FENCE_RE, (m, marker, lang, code, offset) => {
     counter += 1
     const isLastFence = counter === startIndex + totalFences
     const rawLang = String(lang || '').trim()
@@ -271,7 +320,7 @@ function applyPlaceholders(html, store) {
 export function annotateFenceNumbers(text, startIndex = 0) {
   if (!text) return { text: text || '', count: 0 }
   let counter = startIndex
-  const annotated = String(text).replace(CODE_FENCE_RE, (m, lang) => {
+  const annotated = String(text).replace(CODE_FENCE_RE, (m, marker, lang) => {
     counter += 1
     const label = fenceLabel(counter, isSuggestionLang(lang))
     return `[${label}]\n${m}`
@@ -514,14 +563,24 @@ function enhanceImages(html) {
 // leaves every other render point (comment bodies, the PR description) exactly
 // as it was. A blank line still means a paragraph break: the regex only
 // matches a newline that is neither preceded nor followed by another one.
-// Fenced blocks are split out first so their own lines never gain stray
-// trailing spaces.
+// Fenced blocks are pulled out first (via a placeholder, same mechanism as
+// `extractCodeFences`'s own `store`) so their own lines never gain stray
+// trailing spaces — reusing `CODE_FENCE_SOURCE` rather than a fixed
+// literal ``` ``` `` `` pattern for the same reason `extractCodeFences` needs
+// the backreference: a reviewer-typed message can itself contain a fence
+// nested inside a longer-backtick-run fence (see that regex's own doc
+// comment), and a fixed 3-backtick split would cut such a block in the wrong
+// place too.
 export function hardBreaks(text) {
   if (!text) return ''
-  return String(text)
-    .split(/(```[\s\S]*?```)/g)
-    .map((part, i) => (i % 2 === 1 ? part : part.replace(/([^\n])\n(?!\n)/g, '$1  \n')))
-    .join('')
+  const store = []
+  const withPlaceholders = String(text).replace(new RegExp(CODE_FENCE_SOURCE, 'g'), (m) => {
+    const token = ` HB${store.length} `
+    store.push(m)
+    return token
+  })
+  const transformed = withPlaceholders.replace(/([^\n])\n(?!\n)/g, '$1  \n')
+  return transformed.replace(/ HB(\d+) /g, (m, i) => store[Number(i)])
 }
 
 // renderMarkdown(text, startIndex, truncate) -> safe HTML string, meant for

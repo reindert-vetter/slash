@@ -204,6 +204,39 @@ explicitly accepted, not a bug). A language that isn't vendored at all (e.g.
 grammar — still labelled with the reviewer's own word in the badge, just
 without token colours.
 
+**A fence can nest another fence — the regex tracks the OPENING backtick run's
+length, not a fixed 3.** CommonMark's own rule for showing a fenced block
+*inside* another fenced block (e.g. Claude posting the full contents of a
+Markdown file that itself documents a `` ```bash `` sample) is to open the
+OUTER fence with a LONGER run of backticks (` ```` `, 4+) than anything nested
+inside it, so a reader (and a parser) can tell the outer closing marker apart
+from the inner one. `CODE_FENCE_SOURCE` (`markdown.mjs`) captures that opening
+run as a group and requires the closing run to match it via a backreference
+(`` '(`{3,})[ \t]*(\S*)\n([\s\S]*?)\n\1' ``) instead of a hardcoded literal
+`` ``` ``. Before this, a 4-backtick outer fence containing a 3-backtick inner
+one closed at the FIRST bare "\n```" found — the inner fence's own OPENING
+line — silently truncating the outer fence's card and leaking everything
+after it (the inner fence's real content, both real closing markers, and any
+following prose) as ordinary paragraph text: single newlines collapsed to
+spaces (commands ran together on one line) and the leftover stray backticks
+got mis-parsed as inline code by snarkdown. Reviewer report + screenshot:
+`data/review-shots/task-fence-truncated-as-text.png`, reproduced against a
+real stored message (Claude showing the full contents of a `.claude/rules/`
+file that itself contains a `` ```bash `` block). `hardBreaks`'s own
+fence-skipping (so a reviewer's own fenced lines don't gain stray hard-break
+trailing spaces) reuses the same `CODE_FENCE_SOURCE` for the same reason,
+via a placeholder-token swap (mirrors `extractCodeFences`'s own `store`)
+rather than `String.split` — a capturing group needed for the backreference
+would otherwise land in the split's own result array and break its `i % 2`
+convention. Deliberately NOT fixed: a multi-backtick INLINE attempt with no
+surrounding newlines (an author literally typing `` ```` ```bash ```` `` mid-
+sentence to show a fence marker as inline code) — the vendored
+`src/vendor/snarkdown.js` only recognises a single-backtick inline code span,
+so that one narrow case can still produce a small, isolated glitch; same
+"don't patch the vendored file" boundary as the intra-word-underscore/
+unpaired-emphasis cases above, and much smaller than the block-level bug this
+fixes.
+
 `markdown.mjs`'s `renderMarkdown`/`countCodeFences`/`annotateFenceNumbers`
 number every fence sequentially, starting at an optional `startIndex` so a
 caller can continue the count across several messages instead of resetting to

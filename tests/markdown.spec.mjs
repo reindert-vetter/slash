@@ -53,6 +53,55 @@ test.describe('PR Review Tree — Markdown rendering', () => {
     await expect(host.locator('.token.keyword').first()).toBeVisible()
   })
 
+  test('a fence nested inside a longer-backtick-run fence renders as one card, nothing leaks as text', async ({ page }) => {
+    await page.goto('/pr/12903')
+
+    await appReady(page)
+
+    await evaluateSettled(page, async () => {
+      const { renderMarkdown } = await import('/src/markdown.mjs')
+      // Mirrors the reported real message: Claude posting the full contents
+      // of a file that itself contains a ```bash fence, wrapped in an outer
+      // fence opened with a LONGER (4-backtick) run — CommonMark's own way
+      // to nest one fence inside another. See "A fence can nest another
+      // fence" in .claude/rules/conventions.md.
+      const md = [
+        '````markdown',
+        '# Title',
+        '',
+        '```bash',
+        'php artisan test SomeTest.php',
+        '```',
+        '',
+        'trailing line inside the outer fence',
+        '````',
+        '',
+        'Normal prose after the outer fence.',
+      ].join('\n')
+      const host = document.createElement('div')
+      host.id = 'markdown-nested-fence-host'
+      host.innerHTML = renderMarkdown(md)
+      document.body.appendChild(host)
+    })
+
+    const host = page.locator('#markdown-nested-fence-host')
+    // Exactly ONE fence card — the inner ```bash fence must NOT be extracted
+    // as its own card, it stays verbatim inside the outer fence's content.
+    await expect(host.locator('[data-testid="code-fence"]')).toHaveCount(1)
+    const codeText = await host.locator('[data-testid="code-fence"] pre').innerText()
+    expect(codeText).toContain('```bash')
+    expect(codeText).toContain('php artisan test SomeTest.php')
+    expect(codeText).toContain('trailing line inside the outer fence')
+    // The trailing prose must render as ordinary, clean text OUTSIDE the
+    // fence card — a single line, no leftover stray backticks and no
+    // flattened bash-command text glued onto it (the pre-fix symptom).
+    // snarkdown emits no wrapping element for a bare trailing line (see its
+    // own "no paragraph handling at all" note in conventions.md), so it's a
+    // raw trailing text node after the card, read directly.
+    const trailing = await host.evaluate((el) => el.lastChild.textContent.trim())
+    expect(trailing).toBe('Normal prose after the outer fence.')
+  })
+
   test('escapes a raw <script> in the source and never executes it', async ({ page }) => {
     await page.goto('/pr/12903')
 
