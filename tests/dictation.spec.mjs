@@ -231,4 +231,50 @@ test.describe('Settings — the speech model download', () => {
     await expect(page.getByTestId('settings-whisper-download')).toHaveCount(0)
     await expect(page.getByTestId('settings-auth-checks')).toContainText('brew install whisper.cpp')
   })
+
+  // Regression for the "Niet ingesteld" badge stuck next to a "Klaar voor
+  // gebruik" detail line: authCheckRow's row is keyed by check id
+  // ('authrow:whisper'), so "Opnieuw controleren" reuses the same DOM chunk
+  // instead of remounting it. authStateBadge(check) used to be interpolated
+  // as a bare, non-`() =>` nested template — a static slot that only ever
+  // gets baked in at first mount and is never re-diffed on a reused keyed
+  // node (see "A keyed node is reused without re-running its bindings" in
+  // .claude/rules/arrowjs-pitfalls.md). The detail line right below it is a
+  // genuine `${() => check.detail || ''}` reactive slot and always updated
+  // correctly, which is what made the mismatch so easy to miss.
+  test('re-checking updates the state badge, not just the detail line', async ({ page }) => {
+    let state = 'missing'
+    await page.route('**/api/auth/status*', (route) =>
+      route.fulfill({
+        json: {
+          checkedAt: new Date().toISOString(),
+          ok: state === 'ok',
+          checks: [
+            {
+              id: 'whisper',
+              label: 'Spraak naar tekst (whisper.cpp)',
+              state,
+              detail:
+                state === 'ok'
+                  ? 'Klaar voor gebruik — houd F5 ingedrukt om in te spreken'
+                  : 'whisper-cli is niet gevonden',
+              fixCommand: state === 'ok' ? undefined : 'brew install whisper.cpp',
+            },
+          ],
+          jira: { email: '', site: '', tokenSet: false },
+        },
+      }),
+    )
+
+    await page.goto('/settings')
+    await page.getByTestId('settings-tab-account').click()
+    const row = page.locator('[data-testid="auth-check-row"][data-check="whisper"]')
+    await expect(row.getByTestId('auth-state')).toContainText('Niet ingesteld')
+
+    state = 'ok'
+    await page.getByTestId('settings-auth-recheck').click()
+
+    await expect(row.getByTestId('auth-state')).toContainText('Werkt')
+    await expect(row).toContainText('Klaar voor gebruik — houd F5 ingedrukt om in te spreken')
+  })
 })

@@ -635,6 +635,27 @@ a `.map(...)`ed keyed list as a STATIC value inside a template that a
 give the list its own `() =>` binding, always, even when it sits directly
 inside an already-reactive parent slot.
 
+**Sixth variant — a nested template built by a plain helper FUNCTION call
+(not a list) is the same bug, one level simpler.** `authStatus.mjs`'s
+`authCheckRow(check)` embedded `${authStateBadge(check)}` — a helper that
+returns a whole `html\`<span>…</span>\`` — directly, without `() =>`, inside
+a row keyed `'authrow:' + c.id` (`settings.mjs`'s `authRow`). Reviewer
+report: the settings-page badge for a credential said "Niet ingesteld"
+while the detail line right below it, in the very same row, already said
+"Klaar voor gebruik…" — because `refreshAuthStatus` (e.g. "Opnieuw
+controleren") replaces `authState.checks` with brand-new plain objects, so
+the outer `${() => (authState.checks||[]).map((c) => authCheckRow(c).key(...))}`
+correctly re-runs and calls `authCheckRow` with the fresh check every time,
+but the row's key never changes, so arrow reuses the existing chunk and
+never re-diffs the STATIC `authStateBadge(check)` slot baked in at first
+mount. The `${() => check.detail || ''}` line right next to it is a real
+function binding and updated correctly every time, which is exactly what
+made the mismatch read as "half the row updates, half doesn't" rather than
+"nothing updates". Fix: `${() => authStateBadge(check)}` — same one-line
+fix as every other variant here, wrap the value that must be re-diffed on
+reuse in its own `() => …`. Regression test: "re-checking updates the state
+badge, not just the detail line" in `tests/dictation.spec.mjs`.
+
 ## A `state.x` read inside an outer array-building closure couples the WHOLE closure
 
 Reading `state.x` synchronously inside an outer array-building

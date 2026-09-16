@@ -195,7 +195,7 @@ export function authCheckRow(check) {
     >
       <div class="min-w-0 flex-1">
         <p class="flex items-center gap-2 text-[13px] font-semibold text-slate-800 dark:text-zinc-100">
-          <span class="truncate">${check.label}</span>${authStateBadge(check)}
+          <span class="truncate">${check.label}</span>${() => authStateBadge(check)}
         </p>
         <p class="mt-0.5 break-words text-[12px] text-slate-500 dark:text-zinc-400">${() => check.detail || ''}</p>
         <div class="contents">
