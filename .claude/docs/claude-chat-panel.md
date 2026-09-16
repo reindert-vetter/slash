@@ -879,9 +879,10 @@ navigation.md's rule that a click runs the same function a key runs.
 once at module load (the same one-shot wiring shape as `setPrRepo`), so
 `activateClaudeTask` can call it without a new import cycle. The general chat
 (`isGeneralChatAnchor`) is checked FIRST — see "Two more origins the jump used
-to silently drop" below. A comment carrying its own `kind` (and not the
-general chat) is a PR-wide/comment-index row, landed via `jumpToCommentRow`;
-anything else is an ordinary
+to silently drop" below. A comment carrying its own `kind` **or** an ORPHAN
+comment (`isOrphanComment(c)` — its block was renamed/removed since,
+reanchor.go's `AnchorOrphan`; see "A third dead end" below) is a PR-wide/
+comment-index row, landed via `jumpToCommentRow`; anything else is an ordinary
 inline comment anchored to a real block, landed via `openTask`'s own
 file/label lookup (test_class rows, and — see below — a block reachable only
 as an Onderliggende-code child, included) — then `enterClaudeChat` takes the
@@ -938,6 +939,48 @@ row rendered, was clickable, and did nothing.
   returns `null` for it too, the same already-accepted limitation
   `openCommentAnchorDrill` has. Test:
   `tests/claude-other-tasks-jump-origins.spec.mjs`.
+
+### A third dead end: an ORPHAN comment's own conversation
+
+Reviewer report: clicking a row of "Andere chats in deze PR" whose comment had
+gone `anchorState === 'orphan'` (its test method/block was renamed or removed
+since the comment was written) looked like nothing happened but the row's own
+highlight ring — "hier op drukken kan niet ... alleen de deselectie". It
+wasn't inert: `activateClaudeTask` DID run and DID call
+`jumpToClaudeConversation`, which — before this fix — fell into the `else`
+branch (`openTask`) for an orphan comment, same as any ordinary block-anchored
+one. `openTask` searches `state.blocks`/every `test_class` row's own
+`methods` for `c.file`+`c.label` — for an orphan comment that search always
+misses (that's what "orphan" means), so it fell through to
+`openTaskDrilledAnchor`, whose own `commentAnchorBlock(c)` lookup (against
+`state.allBlocks`) equally comes up empty → silent `return`. The only visible
+effects were then the CALLER's own `cs.claudeTasksPos = 0` (the ring
+disappearing) and `jumpToClaudeConversation`'s own **unconditional** trailing
+`enterClaudeChat` re-focusing whatever conversation was ALREADY open —
+reading exactly like "pressing it does nothing at all".
+
+Fix: an orphan comment now takes the SAME branch as a `c.kind` comment
+(`if (c.kind || isOrphanComment(c))`) instead of `openTask`'s block lookup. An
+orphan comment keeps its own `'comment:'`-prefixed index row unconditionally
+(`commentBlockItem`'s `commentCandidates` filter,
+`c.kind || isOrphanComment(c) || …`, `home.mjs`), so `jumpToCommentRow` finds
+it the same way a PR-wide comment's row is found; `commentScope()` recognizes
+that synthetic row (`b.kind === 'comment'`) and returns
+`{ none: true, prComment: b.comment }`, so `chatAnchorComment()` resolves to
+THIS comment and `syncClaudeAnchorForSelection` anchors `cc` on it — the
+trailing `enterClaudeChat` then opens THIS conversation's real transcript,
+not whatever was open before. Product decision (reviewer): "verweesde chat
+rij mag voor een periode blijven bestaan. als je het opent dan wil de chat
+zien, maar met ergens de duidelijkheid dat gerelateerde code niet meer
+aanwezig is" — the row is deliberately NOT filtered out of
+`otherClaudeChatsAll()` for being orphaned (nothing there reads
+`anchorState` at all), and the already-existing `staleAnchorBadge`
+("verouderd — code verdwenen", a word, never colour-only — see
+`comments-panel.md`) is reused right next to `CommentClaudeFooter`'s own
+"Selected: …" line (via `ccAnchorComment()`, not a bare `c`) so the reviewer
+sees that the code is gone in the SAME full-width bar the opened chat sits
+in, regardless of whether the comment-thread column itself is scrolled into
+view. Test: `tests/claude-other-tasks-orphan-jump.spec.mjs`.
 
 **"A triple-nested toggle can wedge the innermost keyed list empty" — found
 while writing that test, NOT a bug in the fix above.** Building the general

@@ -4917,23 +4917,53 @@ export function CommentClaudeFooter(commentId = '', opts = {}) {
   // unusable placeholder sentence this line used to show) — and the whole
   // line then simply doesn't render, rather than falling back to
   // that placeholder text.
+  //
+  // The reused `staleAnchorBadge` sits right next to this line (not just in
+  // the comment thread/index list, see staleAnchorBadge's own doc comment):
+  // jumping here from an ORPHAN row of "Andere chats in deze PR"
+  // (jumpToClaudeConversation, home.mjs) opens that conversation's own real
+  // transcript even though its code is gone (reviewer request: "als je het
+  // opent dan wil de chat zien, maar met ergens de duidelijkheid dat
+  // gerelateerde code niet meer aanwezig is") — this is the one place that's
+  // visible regardless of whether the comment-thread column itself is in
+  // view, since it sits in the full-width bar under both columns.
+  //
+  // staleBadge() must ALSO gate whether this whole footer/"Selected: …" line
+  // renders at all — not only decorate it once some OTHER condition already
+  // showed it. The most common case for wanting this exact badge is the
+  // reviewer looking at ONLY this one (orphaned) conversation, nothing else
+  // running/finished elsewhere and no own message sent yet — every other
+  // existing condition below (commentFooterText/claudeActive/batchText/
+  // otherClaudeChats().length) is then false and the footer used to render
+  // NOTHING, silently dropping the one thing this fix exists to show.
+  const staleBadge = () => staleAnchorBadge(ccAnchorComment())
   const selectedTitle = () => ownMessageTitle(cc.messages, ccAnchorComment())
   return html`
     <div class="contents">
       ${() =>
         (batchOnly
           ? !!batchText()
-          : commentFooterText() || claudeActive() || batchText() || otherClaudeChats().length > 0)
+          : commentFooterText() ||
+            claudeActive() ||
+            batchText() ||
+            otherClaudeChats().length > 0 ||
+            !!staleBadge())
           ? html`
               <div
                 class="flex w-0 min-w-full flex-col gap-1 border-t border-slate-100 dark:border-zinc-800/60 px-3 py-1.5 text-[11px] text-slate-500 dark:text-zinc-500"
                 data-testid="comment-claude-footer"
               >
                 ${() =>
-                  !batchOnly && selectedTitle()
-                    ? html`<span class="truncate" data-testid="claude-selected-line">
-                        <span class="font-medium text-slate-600 dark:text-zinc-400">Selected:</span>
-                        ${() => selectedTitle()}
+                  !batchOnly && (selectedTitle() || staleBadge())
+                    ? html`<span class="flex min-w-0 items-center gap-1.5" data-testid="claude-selected-line">
+                        ${() =>
+                          selectedTitle()
+                            ? html`<span class="min-w-0 truncate">
+                                <span class="font-medium text-slate-600 dark:text-zinc-400">Selected:</span>
+                                ${() => selectedTitle()}
+                              </span>`
+                            : ''}
+                        ${() => staleBadge()}
                       </span>`
                     : ''}
                 <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
@@ -7803,6 +7833,13 @@ function isStaleAnchor(c) {
 //
 // The word carries the meaning, not the colour (the amber tint is decoration on
 // top) — same rule as the ✓ status mark, see conventions.md.
+//
+// Also called (via ccAnchorComment(), not c) next to CommentClaudeFooter's
+// own "Selected: …" line — jumping to an orphan row of "Andere chats in deze
+// PR" opens that conversation's real transcript (jumpToClaudeConversation,
+// home.mjs), and this badge is what tells the reviewer, right there, that the
+// code it was about is gone — not only in the comment thread/index list this
+// function was originally written for.
 function staleAnchorBadge(c) {
   if (!c) return ''
   const label = c.anchorState === 'orphan' ? t('verouderd — code verdwenen') : ''

@@ -7814,13 +7814,37 @@ async function openTaskDrilledAnchor(c, runId) {
 // as an Onderliggende-code child, included). Best-effort throughout, same as
 // openTask itself: a stale/racy jump (the comment/row gone by the time an
 // await resolves) simply does nothing further.
+//
+// An ORPHAN comment (isOrphanComment — its block was renamed/removed since,
+// reanchor.go's AnchorOrphan) takes the SAME `jumpToCommentRow` branch as a
+// `c.kind` comment, not `openTask`'s file/label lookup — `openTask` searches
+// `state.blocks`/every test_class row's own `methods` for a block that no
+// longer exists, always misses, and falls through to
+// openTaskDrilledAnchor, which ALSO finds nothing (commentAnchorBlock reads
+// state.allBlocks, equally gone) and silently returns. The only visible
+// effect was then the CALLER's own `cs.claudeTasksPos = 0` (the row's
+// highlight ring disappearing) plus this function's own unconditional
+// `enterClaudeChat` below re-focusing whatever conversation was ALREADY
+// open — reported as "hier op drukken kan niet ... alleen de deselectie".
+// An orphan comment keeps its own 'comment:'-prefixed index row exactly like
+// a PR-wide one (commentBlockItem's `commentCandidates` filter,
+// `c.kind || isOrphanComment(c) || …`, unconditionally), so
+// `jumpToCommentRow` finds it the same way, and `commentScope()` recognizes
+// that synthetic row (`b.kind === 'comment'`) and returns
+// `{ none: true, prComment: b.comment }` — `chatAnchorComment()` then
+// resolves to THIS comment, `syncClaudeAnchorForSelection` anchors `cc` on
+// it, and the trailing `enterClaudeChat` below opens THIS conversation's own
+// transcript, not whatever was open before. The reviewer can still see the
+// conversation even though its code is gone — see the reused
+// `staleAnchorBadge` next to CommentClaudeFooter's own "Selected: …" line
+// (RelatedPanel.mjs) for where that's called out.
 async function jumpToClaudeConversation(c) {
   if (!c) return
   if (isGeneralChatAnchor(c)) {
     openGeneralChat()
     return
   }
-  if (c.kind) {
+  if (c.kind || isOrphanComment(c)) {
     jumpToCommentRow(c.id)
     // The row may still be a poll tick away (see jumpToCommentRow's own doc
     // comment) — give it the couple of microtask turns openTask already

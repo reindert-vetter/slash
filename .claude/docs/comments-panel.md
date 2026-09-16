@@ -700,6 +700,15 @@ re-anchor pass — see "Comment/approval anchors are RE-ANCHORED on every refres
 under `pr_status` in `.claude/docs/workflows-trackers.md`. Test:
 `tests/comment-orphan-anchor.spec.mjs`.
 
+The same badge is ALSO shown outside these three spots, next to
+`CommentClaudeFooter`'s own "Selected: …" line (`RelatedPanel.mjs`, via
+`ccAnchorComment()`) — reached by jumping to an orphan comment's own
+conversation from "Andere chats in deze PR" (`jumpToClaudeConversation`,
+"A third dead end" in `.claude/docs/claude-chat-panel.md`): the reviewer can
+read the whole transcript even though the code is gone, and this is what
+tells them so, right there in the opened chat, not only in the comment
+thread they may not have scrolled to.
+
 **`commentRowSet` deliberately has NO bounds check** against the block's row
 count. It looks necessary (a stale `rowStart`) but is dead weight: `paneHTML`
 (`Block.mjs`) walks the block's own rows and asks `commented.has(i)`, so an
