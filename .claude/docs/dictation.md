@@ -199,6 +199,28 @@ Two carve-outs, both of the established kind (see
   after a restart, exactly like `/api/ingest/progress`. It is never the source
   of truth: whether the model is installed is answered by looking at the file.
 
+## The status pill's icons: a blinking red dot, then a spinner
+
+Reviewer follow-up: the existing `dictationStatusPill` (word + level bars) was
+felt to need a clearer at-a-glance cue right next to the composer for "is it
+actually recording right now" — not a second, competing indicator, just two
+small icons added to the pill's two active states:
+
+- **`recording`**: a red dot that blinks (`animate-ping` ring behind a solid
+  dot, `data-testid=dictation-recording-dot`), the conventional "recording"
+  cue.
+- **`transcribing`**: a small CSS ring spinner
+  (`data-testid=dictation-transcribing-spinner`, `animate-spin` on a
+  bordered circle) in place of the earlier static `⋯` glyph.
+
+Both are `aria-hidden="true"` decoration next to the existing word
+(`Opnemen`/`Uitschrijven…`) — the reviewer is colorblind, so the word and the
+**motion** (ping/spin), not the red color, carry the state; see the
+colorblind rule in `.claude/rules/conventions.md`. The pill already goes back
+to nothing (`d.state === 'idle' && !d.note`) the moment a transcript lands in
+the composer, which is exactly the "weg zodra de tekst in de input staat"
+behaviour asked for — no separate state was needed for that.
+
 ## Tests
 
 - `whisper_test.go` — the WAV framing as whisper-cli actually receives it (via a

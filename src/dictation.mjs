@@ -367,7 +367,16 @@ export function dictationStatusPill() {
             ${() =>
               d.state === 'recording'
                 ? html`<span class="flex items-center gap-2">
-                    <span aria-hidden="true">■</span>
+                    <span
+                      data-testid="dictation-recording-dot"
+                      aria-hidden="true"
+                      class="relative flex h-2.5 w-2.5 shrink-0"
+                    >
+                      <span
+                        class="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-500 opacity-75"
+                      ></span>
+                      <span class="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-500"></span>
+                    </span>
                     <span class="font-semibold">${t('Opnemen')}</span>
                     <span class="flex items-end gap-[2px]">${() => meterBars()}</span>
                     <span>${() => d.seconds + 's'}</span>
@@ -375,7 +384,11 @@ export function dictationStatusPill() {
                   </span>`.key('rec')
                 : d.state === 'transcribing'
                   ? html`<span class="flex items-center gap-2">
-                      <span aria-hidden="true">⋯</span>
+                      <span
+                        data-testid="dictation-transcribing-spinner"
+                        aria-hidden="true"
+                        class="inline-block h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600 dark:border-zinc-700 dark:border-t-zinc-200"
+                      ></span>
                       <span class="font-semibold">${t('Uitschrijven…')}</span>
                     </span>`.key('busy')
                   : html`<span data-testid="dictation-note">${() => d.note}</span>`.key('note')}
