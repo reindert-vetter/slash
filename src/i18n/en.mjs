@@ -630,6 +630,7 @@ export const EN = {
   'Keur {noun} goed': 'Approve {noun}',
   'Comment op deze regel': 'Comment on this line',
   'Chat over deze regel': 'Chat about this line',
+  'Voer de hierboven voorgestelde aanpassing door.': 'Apply the change proposed above.',
   'Chat over deze PR': 'Chat about this PR',
   'Chat met Claude over deze PR': 'Chat with Claude about this PR',
   'Algemene chat': 'General chat',

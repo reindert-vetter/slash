@@ -2,14 +2,16 @@ import { test, expect, evaluateSettled, appReady, leaveSearchBox } from './_fixt
 
 // Inline, IDE-style editing of a diff block's new/right side (Block.mjs's
 // inlineEditToggleButton/inlineEditorSlot, home.mjs's saveInlineEdit). See
-// CLAUDE.md's inline-edit design notes: "Opslaan" never commits/writes
-// anything directly — it hands the edited text to a brand-new Claude chat
-// (startClaudeChat) as invisible first-turn context, so this is asserted
-// purely via a spy on the onSaveInlineEdit callback (the actual
-// startClaudeChat/claude_chat wiring is already covered by
-// tests/claude-chat-panel.spec.mjs and is unrelated to this feature's own
-// logic: eligibility, the toggle, the overlay editor, the draft, and the
-// precise staleness detection).
+// .claude/docs/inline-edit.md: "Opslaan" never commits/writes anything
+// directly — it hands the edited text to a brand-new Claude chat
+// (startClaudeChat) as invisible first-turn context and SENDS it right away,
+// so most of this file asserts the hand-off purely via a spy on the
+// onSaveInlineEdit callback (eligibility, the toggle, the overlay editor, the
+// draft, the precise staleness detection — unrelated to the actual
+// startClaudeChat/claude_chat mechanics, which are covered end to end by
+// tests/claude-chat-panel.spec.mjs). The one exception is the real-app test
+// at the bottom of this file, which covers the auto-send regression itself
+// (no reviewer typing, no second Enter).
 test.describe('Inline code editing (Block.mjs)', () => {
   test('edit toggle only shows for an eligible, top-level block and lets the reviewer type + save', async ({
     page,
@@ -437,5 +439,61 @@ test.describe('Inline code editing — caret placed in the middle of the active 
     // (the very start of the whole block) and never past its own end.
     expect(pos).toBeGreaterThan(rowStartOffset)
     expect(pos).toBeLessThan(rowEndOffset)
+  })
+})
+
+// Reviewer report: "als ik iets edit en ik druk cmd + enter, dan zie ik mijn
+// aanpassing niet in de chat. ik wil dat de chat die aanpassing overneemt en
+// direct doorvoerd" — Cmd+Enter used to only open an EMPTY Claude composer
+// (nothing sent until the reviewer typed a follow-up and pressed Enter
+// themselves). This is the one test in this file that goes past
+// `onSaveInlineEdit` into the real `home.mjs`/`RelatedPanel.mjs` hand-off, to
+// cover the actual regression: no reviewer typing, no second Enter, the
+// proposed change is sent straight away. See .claude/docs/inline-edit.md
+// ("'Opslaan': builds a commentTarget-shaped object...") and
+// .claude/docs/claude-chat-panel.md ("Third caller of the 'open, then
+// auto-send' pattern").
+test.describe('Inline code editing — Cmd+Enter auto-sends the change, no manual follow-up needed', () => {
+  test('saving opens a brand-new Claude chat and sends the fixed instruction sentence by itself', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+    await expect(page.getByTestId('block-column')).toBeVisible()
+    await leaveSearchBox(page)
+
+    await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' }).click()
+    await leaveSearchBox(page)
+    await page.keyboard.press('ArrowRight') // list -> diff
+
+    await page.keyboard.press('e') // open the inline editor (see the `e`-key describe block above)
+    const textarea = page.getByTestId('inline-edit-textarea')
+    await expect(textarea).toBeFocused()
+    const original = await textarea.inputValue()
+    await textarea.fill('// edited by the reviewer\n' + original)
+
+    let runId = null
+    const [createRes] = await Promise.all([
+      page.waitForResponse(
+        (res) => res.url().includes('/api/workflows/task_code_comment') && res.request().method() === 'POST',
+      ),
+      textarea.press('Meta+Enter'),
+    ])
+    runId = (await createRes.json()).runId
+    expect(runId).toBeTruthy()
+
+    try {
+      // The editor is gone, and the reviewer's own bubble is the fixed
+      // instruction sentence — never something they had to type or send
+      // themselves.
+      await expect(page.getByTestId('inline-edit-wrapper')).toHaveCount(0)
+      await expect(page.getByTestId('claude-message-body').first()).toContainText(
+        'Voer de hierboven voorgestelde aanpassing door.',
+      )
+      await expect(page.getByTestId('claude-chat-compose')).toHaveValue('')
+    } finally {
+      await page.request.post('/api/workflows/' + runId + '/signals/delete', {
+        data: { author: 'reviewer' },
+      })
+    }
   })
 })

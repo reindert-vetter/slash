@@ -5,11 +5,13 @@ editen in de blok zelf als een idea" — followed by an explicit pivot before
 this was built: **"Opslaan" never commits/writes anything directly.** It
 hands the reviewer's edited code to a brand-new "Chat over deze regel"
 conversation (`startClaudeChat`, `.claude/docs/claude-chat-panel.md`) as
-invisible first-turn context, so the reviewer can add a follow-up
-instruction ("pas dit ook op andere plekken aan") before Claude actually
-touches anything. **No new write path at all** — this rides entirely on the
-existing `claude_chat`/`chat_checkout`/`chat_merge` pipeline
-(`.claude/rules/workflows-write-boundary.md`).
+invisible first-turn context, and **sends it straight away** — reviewer
+follow-up: "ik wil dat de chat die aanpassing overneemt en direct doorvoerd",
+see "'Opslaan': builds a `commentTarget`-shaped object..." below. **No new
+write path at all** — this rides entirely on the existing
+`claude_chat`/`chat_checkout`/`chat_merge` pipeline
+(`.claude/rules/workflows-write-boundary.md`); every turn already gets
+Edit/Bash access, so this first turn can actually apply the change.
 
 ## Three entry points, one shared gate
 
@@ -250,20 +252,37 @@ new-side source at the moment editing started/resumed (`originalSource`).
   tell **precisely** (not by guessing) whether the underlying code changed
   since the draft started — see below.
 
-## "Opslaan": builds a `commentTarget`-shaped object, then `startClaudeChat`
+## "Opslaan": takes `commentTarget()`'s own live value, then `startClaudeChat` — and sends it right away
 
-`home.mjs`'s `saveInlineEdit(b, text, originalSource)` mirrors
-`commentTarget()`'s own return shape (so the lazily-created anchor
-comment/GitHub-anchoring behaves exactly like any other "Chat over deze
-regel") but scoped to the **whole block** (`rowStart:0`, `rowEnd:
-rows.length-1`, `startLine:b.line`, `endLine:b.endLine`), plus two additive
-fields:
+`home.mjs`'s `saveInlineEdit(b, text, originalSource)` spreads
+`commentTarget()`'s OWN return value — the exact same live, current-unit
+object every other "Chat over deze regel" anchor uses — and adds two fields
+on top:
 
-- **`proposedCode`** — the reviewer's edited text.
+- **`proposedCode`** — the reviewer's edited text (the WHOLE new-side source,
+  v1's editing scope — see "Scope (v1, deliberately narrow)" above; this is
+  about what's editABLE, not about the anchor's own row range below).
 - **`proposedStale`** — `true` only when `blockNewSourceText(blockRows(b))`
   (the CURRENT new-side source) genuinely differs from the draft's own
   `originalSource` snapshot — i.e. a landing (this reviewer's own or a
   colleague's) happened in between. A precise, computed fact, never a guess.
+
+**The anchor's row range must be the CURRENT unit's own, never a re-derived
+"whole block" range (`rowStart:0`, `rowEnd:rows.length-1`) — an earlier
+version got this wrong.** `RelatedPanel.mjs`'s `cs.scope` (via
+`commentScope()`, `home.mjs`) — the thing that decides whether the freshly
+created anchor comment is even VISIBLE (`commentUnder`/`selComment`, gating
+whether `ensureClaudeAnchorForNew` can find it right after creating it) — is
+derived from this exact same `commentTarget()` call. A hardcoded whole-block
+range was harmless as long as nothing ever actually SENT through this
+target (the pre-auto-send version, see below), but the moment the auto-send
+started using it for real, the freshly created anchor's row range no longer
+matched `cs.scope`'s (the current, narrower group/line/call unit) and
+`commentUnder` returned false — the anchor silently never became
+selectable, so the turn was never actually sent, and this went undetected
+because no test exercised the real end-to-end path (only a spy on
+`onSaveInlineEdit`, see "Files" below). Caught and fixed while adding
+`tests/inline-edit.spec.mjs`'s own real-app auto-send test.
 
 `RelatedPanel.mjs`'s `claudeContextBlock` (the function that builds a
 conversation's invisible first-turn context, see "Invisible selection
@@ -276,11 +295,31 @@ proposal may be based on an older version of the file. Every other caller's
 target has no `proposedCode`, so this is a pure addition with no effect on
 any existing chat entry point.
 
-`saveInlineEdit` then simply calls `startClaudeChat(target)` — the exact same
-entry point `COMMANDS`'s "Chat over deze regel" and the no-match palette
-fallback already use (`home.mjs`) — which resets the comment/Claude focus
-state and lands the keyboard in the (empty) composer. The reviewer still
-types their own follow-up message by hand; nothing is sent automatically.
+**`saveInlineEdit` no longer stops at an empty composer.** It used to just
+call `startClaudeChat(target)` — the exact same entry point `COMMANDS`'s
+"Chat over deze regel" and the no-match palette fallback already use
+(`home.mjs`) — resetting the comment/Claude focus state and landing the
+keyboard in an EMPTY composer, leaving the reviewer to type their own
+follow-up and press Enter before `claudeContextBlock` (which only reads
+`proposedCode`/`proposedStale` at SEND time, see above) ever attached
+anything. Reviewer report: "als ik iets edit en ik druk cmd + enter, dan zie
+ik mijn aanpassing niet in de chat. ik wil dat de chat die aanpassing
+overneemt en direct doorvoerd" — nothing showed up until a second, manual
+send. Fixed the same way as the `/`-menu no-match fallback right next to it
+in `home.mjs` and dictation's second F5 (`.claude/docs/dictation.md`): reuse
+the composer's real send path instead of inventing a second one.
+`saveInlineEdit` now also calls `sendClaudeChatText(state, target, text)` in a
+`requestAnimationFrame` (waiting one frame for `ensureClaudeAnchorForNew` to
+find the just-mounted composer, same as the no-match fallback) with a fixed
+Dutch instruction sentence (`t('Voer de hierboven voorgestelde aanpassing
+door.')`) as the visible message body — an ordinary turn needs *some* typed
+text (`sendClaudeMessage`'s `needsNoText` gate), and the actual diff never
+needs to be repeated in it since it already travels invisibly as
+`proposedCode`/`proposedStale` in the context. Every `claude_chat` turn
+already gets Edit/Bash access regardless of `action` (`chat_workflow.go`), so
+this first turn can genuinely apply the change, not just discuss it — no new
+write path, still the same `claude_chat`/`chat_checkout`/`chat_merge`
+pipeline.
 
 ## Files
 
@@ -312,8 +351,12 @@ a seeded PR for the `COMMANDS` entry point and the `e` key (each absent in
 list mode, present and functional once the block owns the diff keyboard),
 plus a pure-function test of `computeInlineEditCaretOffset`'s row→offset
 arithmetic and a direct-mount test asserting the textarea is focused with the
-caret strictly inside a given `activeGroup()` unit's own text. The actual
-`startClaudeChat`/`claude_chat` hand-off itself is already covered by
-`tests/claude-chat-panel.spec.mjs` and is unrelated to this feature's own
-logic, so the direct-mount tests assert it only via a spy on
-`onSaveInlineEdit`.
+caret strictly inside a given `activeGroup()` unit's own text. The
+direct-mount tests assert the `startClaudeChat` hand-off only via a spy on
+`onSaveInlineEdit`, since `saveInlineEdit` itself lives in `home.mjs`, not
+`Block.mjs`. A real-app test (same file, seeded PR) covers the actual
+auto-send: pressing `Cmd+Enter` in the editor lands a `claude-message-body`
+with the fixed instruction sentence, with no reviewer-typed text and no
+second Enter — the `claude_chat` mechanics underneath that (progress,
+streaming, the fake-backend reply) are already covered by
+`tests/claude-chat-panel.spec.mjs`.

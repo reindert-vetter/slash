@@ -3307,6 +3307,22 @@ own chat bubble must show exactly what they typed, nothing more.
   reviewer bubble (`claude-message-body`) shows only that typed text; a second
   send in the same conversation asserts `context` is empty/absent.
 
+**Third caller of the "open, then auto-send" pattern: the inline code
+editor's "Opslaan".** Besides the `/`-menu no-match fallback (typed query,
+`sendClaudeChatText(state, commentTarget, q)`, `home.mjs`) and dictation's
+second F5 (the transcript, `sendComposer`'s synthetic Enter,
+`.claude/docs/dictation.md`), `saveInlineEdit` (`home.mjs`) now does the same:
+`startClaudeChat(target)` then, in a `requestAnimationFrame`,
+`sendClaudeChatText(state, target, text)` — but with a **fixed** instruction
+sentence as `text` rather than anything the reviewer typed, since the real
+payload (the reviewer's edited code) already travels invisibly as this
+target's own `proposedCode`/`proposedStale` fields (see "'Opslaan': builds a
+`commentTarget`-shaped object…" in `.claude/docs/inline-edit.md`). Reviewer
+report: "ik wil dat de chat die aanpassing overneemt en direct doorvoerd" —
+before this, `proposedCode` only ever reached `claudeContextBlock` once the
+reviewer typed something themselves and pressed Enter, so nothing showed up
+in the chat until a second, manual step.
+
 ### The already-written comment thread also rides along, chronologically — but only THIS conversation's own thread
 
 `claudeContextBlock` also folds in **`claudeThreadContextBlock()`**

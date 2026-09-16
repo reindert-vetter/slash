@@ -11351,19 +11351,41 @@ function commentTarget() {
 // commit of its own: it hands the reviewer's edited code to a brand-new
 // "Chat over deze regel" conversation (startClaudeChat, the exact same
 // entry point COMMANDS/the no-match palette fallback already use above) as
-// invisible first-turn context, so the reviewer can add a follow-up
-// instruction ("pas dit ook op andere plekken aan") before anything is
-// actually written. No new write path at all — this rides on the existing
+// invisible first-turn context, and then SENDS it right away — reviewer
+// report: "als ik iets edit en ik druk cmd + enter, dan zie ik mijn
+// aanpassing niet in de chat. ik wil dat de chat die aanpassing overneemt en
+// direct doorvoerd". Cmd+Enter used to only open an empty composer, leaving
+// the invisible context unattached (claudeContextBlock only reads it at SEND
+// time) until the reviewer typed something themselves and pressed Enter — so
+// nothing ever showed up on its own. Same fix shape as the `/`-menu no-match
+// fallback right above (`sendClaudeChatText` in a `requestAnimationFrame`,
+// see its own comment) and dictation's second F5 (`.claude/docs/
+// dictation.md`): reuse the composer's real send path instead of a second
+// mechanism. No new write path at all — this rides on the existing
 // claude_chat/chat_checkout/chat_merge pipeline unchanged (see
-// .claude/rules/workflows-write-boundary.md and claude-chat-panel.md).
+// .claude/rules/workflows-write-boundary.md and claude-chat-panel.md); every
+// turn already gets Edit/Bash access (chat_workflow.go), so this first turn
+// can actually apply the proposed change, not just discuss it.
 //
-// The target this builds mirrors commentTarget()'s own shape (so the lazily
-// created anchor comment/GitHub anchoring behaves exactly like any other
-// "Chat over deze regel") but scoped to the WHOLE block — v1 edits the
-// entire new/right side, not a sub-range — plus two additive fields
-// (proposedCode/proposedStale) claudeContextBlock (RelatedPanel.mjs) reads
-// to attach the reviewer's draft and, only when precisely true, a note that
-// it may be based on an older version of the code.
+// The target this builds is `commentTarget()`'s OWN live return value (not a
+// re-derived "whole block" range) plus two additive fields
+// (proposedCode/proposedStale) claudeContextBlock (RelatedPanel.mjs) reads to
+// attach the reviewer's draft and, only when precisely true, a note that it
+// may be based on an older version of the code. This must stay the CURRENT
+// unit's own rowStart/rowEnd/startLine/endLine — not the whole block's —
+// because `cs.scope` (RelatedPanel.mjs, which decides whether the anchor
+// comment this creates is even VISIBLE via commentUnder/selComment,
+// ultimately gating whether `ensureClaudeAnchorForNew` can find it right
+// after creating it) is derived from this exact same `commentTarget()` call
+// via `commentScope()`. An earlier version hardcoded a "whole block" range
+// here (rowStart:0, rowEnd:rows.length-1) — harmless as long as nothing ever
+// actually sent through this target, but once the auto-send below started
+// doing exactly that, the freshly created anchor never matched `cs.scope`
+// and silently never became selectable, so the turn was never sent at all
+// (caught by tests/inline-edit.spec.mjs's own auto-send test). The reviewer's
+// EDITED TEXT still always covers the whole new-side source (v1 scope,
+// unrelated to this) — only the anchor's own row range needs to track the
+// live cursor, exactly like every other "Chat over deze regel" anchor.
 function saveInlineEdit(b, text, originalSource) {
   const rows = blockRows(b)
   const currentSource = blockNewSourceText(rows)
@@ -11371,28 +11393,22 @@ function saveInlineEdit(b, text, originalSource) {
   // genuinely changed since this draft started (a landing in between — this
   // reviewer's own or a colleague's).
   const stale = currentSource !== originalSource
+  const base = commentTarget()
+  if (!base) return
   const target = () => ({
-    gran: 'group',
-    label: b.label,
-    file: b.file,
-    line: b.line,
-    code: currentSource,
-    rowStart: 0,
-    rowEnd: Math.max(0, rows.length - 1),
-    seg: '',
-    startLine: b.line,
-    endLine: b.endLine,
-    side: 'RIGHT',
-    segment: '',
-    oldStartLine: 0,
-    oldEndLine: 0,
-    newStartLine: b.line,
-    newEndLine: b.endLine,
+    ...base,
     proposedCode: text,
     proposedStale: stale,
   })
   clearInlineEditDraft(b)
   startClaudeChat(target)
+  // requestAnimationFrame: ensureClaudeAnchorForNew (RelatedPanel.mjs) reads
+  // the just-mounted comment-compose textarea, so wait one frame for it —
+  // same as the `/`-menu no-match fallback's own `sendClaudeChatText` call
+  // above.
+  requestAnimationFrame(() => {
+    sendClaudeChatText(state, target, t('Voer de hierboven voorgestelde aanpassing door.'))
+  })
 }
 
 // unitLineRange maps a navigation unit (an aligned-row range, see unitsFor) to
