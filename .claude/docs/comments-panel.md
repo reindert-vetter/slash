@@ -709,6 +709,18 @@ read the whole transcript even though the code is gone, and this is what
 tells them so, right there in the opened chat, not only in the comment
 thread they may not have scrolled to.
 
+**An orphan that is ALSO a bare, never-taken-over chat anchor** (its body is
+still exactly `CLAUDE_ANCHOR_PLACEHOLDER` — "Chat over deze regel" and
+nothing else ever typed) is a separate sub-case, covered by the SAME "A
+third dead end" section: such a comment is excluded from `indexComments`
+regardless of being orphan, so it needs `chatItems`' OWN orphan bypass
+(`recomputeLeftList`, `home.mjs`) to get a `'chat:'`-prefixed row instead of
+a `'comment:'`-prefixed one. Once it has been seen and answered
+(`isChatSeenAndAnswered`, reusing `otherClaudeChatsAll`'s existing "bekeken
+en zonder vervolg" rule) it drops out of both "Openstaande chats" and
+"Andere chats in deze PR" — a deliberate, reviewer-chosen middle ground
+between showing every orphaned chat forever and hiding them outright.
+
 **`commentRowSet` deliberately has NO bounds check** against the block's row
 count. It looks necessary (a stale `rowStart`) but is dead weight: `paneHTML`
 (`Block.mjs`) walks the block's own rows and asks `commented.has(i)`, so an

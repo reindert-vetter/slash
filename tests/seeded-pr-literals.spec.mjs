@@ -33,6 +33,7 @@ const ALLOWED = new Map([
   [970500, 'commentactivity-blocks.json / -relations.json'],
   [970600, 'orphan-blocks.json / orphan-comments.json'],
   [970601, 'staleanchor-blocks.json / staleanchor-comments.json'],
+  [970602, 'orphan-chatanchor-blocks.json / orphan-chatanchor-comments.json'],
   // Not a PR in any store: a mocked /api/problems payload rendered by the UI.
   [970099, 'mocked log line in overview-problems.spec.mjs'],
 ])

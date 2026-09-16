@@ -87,6 +87,7 @@ import RelatedPanel, {
   openChatComments,
   chatConversationIds,
   isOrphanComment,
+  isChatSeenAndAnswered,
   commentDetailCard,
   startPrCommentReply,
   cancelPrCommentReply,
@@ -1584,10 +1585,34 @@ let navigatingViaHistory = false
 // that no longer exists any more (a re-ingest, a comment that got resolved
 // and dropped out of the index) by the time Cmd+[/] is pressed, so callers
 // must be ready for -1.
+// A 'comment:'/'chat:' ref is resolved by the underlying COMMENT's own id
+// (b.comment.id), not by the row's own derived b.id string — a chatOnly row
+// (chatBlockItem, "Openstaande chats") reuses commentBlockItem's `kind:
+// 'comment'` but overrides `id` to a 'chat:'-prefixed one, so a ref built as
+// 'comment:'+id (jumpToCommentRow, RelatedPanel.mjs's own '?sel=comment:'
+// mirroring) never matches such a row by b.id alone. See
+// commentOrChatRefCommentId's own doc comment below.
 function resolveRefToIndex(ref) {
-  if (ref.startsWith('comment:')) return state.blocks.findIndex((b) => b.kind === 'comment' && b.id === ref)
+  const commentId = commentOrChatRefCommentId(ref)
+  if (commentId != null) {
+    return state.blocks.findIndex((b) => b.kind === 'comment' && b.comment && String(b.comment.id) === commentId)
+  }
   if (ref.startsWith('testclass:')) return state.blocks.findIndex((b) => b.kind === 'test_class' && b.id === ref)
   return state.blocks.findIndex((b) => b.kind !== 'comment' && b.kind !== 'test_class' && `${b.file}:${b.line}` === ref)
+}
+
+// commentOrChatRefCommentId strips a 'comment:'/'chat:' prefix off a ref and
+// returns the bare comment id underneath, or null for any other ref shape
+// (testclass:/file:line). Shared by resolveRefToIndex and
+// applyCommentRefRestore/applyBlockRefRestore below so both index-lookup
+// paths recognize a chatOnly row's own 'chat:'-prefixed ref the same way —
+// see "A third dead end" / "opgeruimd zodra bekeken" in
+// .claude/docs/claude-chat-panel.md for why a chatOnly row can carry either
+// prefix depending on whether the reviewer ever wrote a real comment on it.
+function commentOrChatRefCommentId(ref) {
+  if (ref.startsWith('comment:')) return ref.slice('comment:'.length)
+  if (ref.startsWith('chat:')) return ref.slice('chat:'.length)
+  return null
 }
 
 // goToPreviousBlock / goToNextBlock — Cmd+[ / Cmd+]'s own action (onKeydown
@@ -1723,7 +1748,16 @@ watch(
 function applyBlockRefRestore() {
   if (blockRefPending == null) return
   const ref = blockRefPending
-  if (ref.startsWith('comment:')) {
+  // 'chat:' (a chatOnly "Openstaande chats" row, see chatBlockItem/
+  // commentOrChatRefCommentId above) takes the exact same restore path as an
+  // ordinary 'comment:' ref — applyCommentRefRestore matches by the
+  // underlying comment id, not by this literal prefix, so it already
+  // recognizes either shape. Without this branch such a ref fell through to
+  // the plain-block lookup below, which requires `b.kind !== 'comment'` —
+  // a chatOnly row's kind IS 'comment' (chatBlockItem only overrides `id`),
+  // so it could never match and a refresh on a manually selected chatOnly
+  // row silently lost the selection.
+  if (ref.startsWith('comment:') || ref.startsWith('chat:')) {
     applyCommentRefRestore()
     return
   }
@@ -1801,9 +1835,22 @@ function applyTestClassRefRestore() {
 // comment branch), deferred a couple of microtask turns so the
 // approvalSummaries watch (which depends on state.blocks) has flushed first —
 // the same wait loadBlocks itself already relies on elsewhere.
+//
+// Also resolves a `?sel=chat:<id>` ref (a chatOnly "Openstaande chats" row,
+// see chatBlockItem/commentOrChatRefCommentId) — matching by the underlying
+// COMMENT's own id (b.comment.id), not by the row's own b.id string: a
+// chatOnly row keeps `kind: 'comment'` but its `id` carries a 'chat:' prefix
+// instead of 'comment:' (chatBlockItem only overrides `id`), so a ref built
+// as 'comment:'+id (jumpToCommentRow's own convention, unchanged) would
+// never string-match such a row directly. Matching by the underlying id
+// instead finds it either way, and is exactly as correct for an ordinary
+// 'comment:' ref (there b.id and 'comment:'+b.comment.id are always the
+// same anyway).
 function applyCommentRefRestore() {
-  if (blockRefPending == null || !blockRefPending.startsWith('comment:')) return
-  const idx = state.blocks.findIndex((b) => b.kind === 'comment' && b.id === blockRefPending)
+  if (blockRefPending == null) return
+  const wantId = commentOrChatRefCommentId(blockRefPending)
+  if (wantId == null) return
+  const idx = state.blocks.findIndex((b) => b.kind === 'comment' && b.comment && String(b.comment.id) === wantId)
   if (idx < 0) return
   state.selected = idx
   state.mode = 'list'
@@ -3767,8 +3814,37 @@ function recomputeLeftList() {
   // a dead end either — it opens the general-chat overlay instead of drilling
   // into code. Same `c.kind ||` carve-out commentCandidates above already
   // makes for a PR-wide comment.
+  //
+  // An ORPHAN comment (isOrphanComment) is exempt from `anchoredBlocks` for
+  // the OPPOSITE reason a general chat is: an orphan has, by definition, no
+  // anchor block left (its symbol was renamed/removed — reanchor.go), so
+  // requiring `anchoredBlocks.has(...)` for it would always fail and hide
+  // the row unconditionally. commentCandidates above already special-cases
+  // isOrphanComment the same way; a bare, never-taken-over chat anchor
+  // (isChatAnchorPlaceholder — a comment with no reviewer-written text,
+  // "Chat over deze regel" and nothing more) is EXCLUDED from
+  // commentCandidates/indexComments for that exact reason (see
+  // jumpToClaudeConversation's own doc comment below), so an orphan of that
+  // shape used to have NO row anywhere — invisible in the sidebar and,
+  // through jumpToClaudeConversation, an unreachable dead end from "Andere
+  // chats in deze PR" too (reported bug, see .claude/docs/claude-chat-panel.md
+  // "A third dead end"). `!isChatSeenAndAnswered(c)` reuses the EXACT same
+  // "bekeken en zonder vervolg" rule otherClaudeChatsAll already applies to
+  // every other chat (RelatedPanel.mjs) instead of a second mechanism: once
+  // such an orphan conversation has settled (seen, answered, nothing left to
+  // expect) it quietly drops out of the sidebar too, the same way it already
+  // drops out of "Andere chats in deze PR" — a dead conversation about
+  // vanished code doesn't linger forever once the reviewer is done with it.
+  // A non-orphan chatOnly row (its code still exists) is NOT subject to this
+  // — there is no reason to fold away an ordinary, still-anchored
+  // "Openstaande chats" row just because it was seen and answered.
   const chatItems = openChatComments()
-    .filter((c) => isGeneralChatAnchor(c) || anchoredBlocks.has(c.file + '|' + c.label))
+    .filter(
+      (c) =>
+        isGeneralChatAnchor(c) ||
+        anchoredBlocks.has(c.file + '|' + c.label) ||
+        (isOrphanComment(c) && !isChatSeenAndAnswered(c)),
+    )
     .map(chatBlockItem)
   state.blocks = [...groupedRows, ...commentItems, ...chatItems]
     // The haystack is label + category + FILE PATH (reviewer request: "ik wil
@@ -7859,11 +7935,11 @@ async function openTaskDrilledAnchor(c, runId) {
 // highlight ring disappearing) plus this function's own unconditional
 // `enterClaudeChat` below re-focusing whatever conversation was ALREADY
 // open — reported as "hier op drukken kan niet ... alleen de deselectie".
-// An orphan comment keeps its own 'comment:'-prefixed index row exactly like
-// a PR-wide one (commentBlockItem's `commentCandidates` filter,
-// `c.kind || isOrphanComment(c) || …`, unconditionally), so
-// `jumpToCommentRow` finds it the same way, and `commentScope()` recognizes
-// that synthetic row (`b.kind === 'comment'`) and returns
+// An orphan comment WITH a written body keeps its own 'comment:'-prefixed
+// index row exactly like a PR-wide one (commentBlockItem's
+// `commentCandidates` filter, `c.kind || isOrphanComment(c) || …`), so
+// `jumpToCommentRow` finds it, and `commentScope()` recognizes that
+// synthetic row (`b.kind === 'comment'`) and returns
 // `{ none: true, prComment: b.comment }` — `chatAnchorComment()` then
 // resolves to THIS comment, `syncClaudeAnchorForSelection` anchors `cc` on
 // it, and the trailing `enterClaudeChat` below opens THIS conversation's own
@@ -7871,6 +7947,25 @@ async function openTaskDrilledAnchor(c, runId) {
 // conversation even though its code is gone — see the reused
 // `staleAnchorBadge` next to CommentClaudeFooter's own "Selected: …" line
 // (RelatedPanel.mjs) for where that's called out.
+//
+// A SECOND, narrower dead end survived that first fix: an orphan comment
+// that is ALSO a bare, never-taken-over chat anchor (isChatAnchorPlaceholder
+// with no firstReviewerReplyOnPlaceholder — "Chat over deze regel" and
+// nothing else ever typed) is EXCLUDED from indexComments/commentCandidates
+// for that reason alone (same carve-out the general chat needed, right
+// above), so it gets NO 'comment:'-prefixed row — `jumpToCommentRow` still
+// silently failed for exactly this shape. `chatItems`'s own filter
+// (recomputeLeftList) now ALSO exempts an orphan from its
+// `anchoredBlocks.has(...)` requirement (mirroring commentCandidates' own
+// exemption, for the identical reason: an orphan has no anchor block to
+// require), so such a comment gets a 'chat:'-prefixed row instead. Since
+// `jumpToCommentRow`/`applyCommentRefRestore` now match by the underlying
+// comment's own id (`b.comment.id`), not by the literal `'comment:'+id`
+// string, they find that 'chat:'-prefixed row the same way — no third
+// branch needed here. See "A third dead end" in claude-chat-panel.md for
+// the full mechanism, including the "opgeruimd zodra bekeken" cleanup rule
+// (isChatSeenAndAnswered) that keeps such a row from lingering forever once
+// the reviewer has actually seen its answer.
 async function jumpToClaudeConversation(c) {
   if (!c) return
   if (isGeneralChatAnchor(c)) {

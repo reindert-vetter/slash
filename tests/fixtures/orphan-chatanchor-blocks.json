@@ -1,0 +1,13 @@
+[
+  {
+    "pr": 970602,
+    "file": "app/Actions/ChatAnchorAction.php",
+    "class": "ChatAnchorAction",
+    "name": "stillHere",
+    "category": "ACTION",
+    "line": 7,
+    "endLine": 13,
+    "status": "modified",
+    "side": "new"
+  }
+]

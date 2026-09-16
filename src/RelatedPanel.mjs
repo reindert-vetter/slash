@@ -4636,6 +4636,22 @@ function chatStateOf(c) {
 
 const CHAT_STATE_RANK = { busy: 0, done: 1, unread: 2, seen: 3 }
 
+// isChatSeenAndAnswered — "bekeken en zonder vervolg": the chat has settled
+// (chatStateOf === 'seen', the 5s dwell passed with nothing busy/unread/
+// just-finished left) AND it actually got an answer at some point
+// (otherTaskAnswered — a chat nobody replied to yet stays 'seen' too but
+// must NOT count as "done with", see otherClaudeChatsAll's own filter
+// below). Both facts are `undefined` until ensureOtherTaskTitle's fetch
+// resolves, so this reads `false` (not yet known to qualify) rather than
+// `true` before that — same fail-open reasoning as the inline filter this
+// was extracted from. Exported so home.mjs's chatItems (recomputeLeftList,
+// the "Openstaande chats" sidebar row) can apply the SAME "bekeken en zonder
+// vervolg" rule to a chatOnly ORPHAN row instead of inventing a second
+// mechanism — see "opgeruimd zodra bekeken" in claude-chat-panel.md.
+export function isChatSeenAndAnswered(c) {
+  return chatStateOf(c) === 'seen' && !!otherTaskAnswered.byId[c.id]
+}
+
 // otherClaudeChatsAll is the uncapped list; otherClaudeChats (below) is what
 // renders. Kept apart so the "+n meer" line can name the difference without
 // a second, differently-filtered walk.
@@ -4678,14 +4694,12 @@ function otherClaudeChatsAll() {
   out.forEach(ensureOtherTaskTitle)
   // Drop an automatically started chat (kilo's own auto-check turn) — always,
   // regardless of its state — and a chat that already has an answer AND was
-  // already viewed (chatStateOf === 'seen' backed by the durable seen_at
-  // dwell; a chat with no answer yet stays 'seen' too but must NOT be hidden
-  // by this, so otherTaskAnswered is checked explicitly). Both facts are
-  // `undefined` until ensureOtherTaskTitle's fetch resolves, so a row is never
-  // hidden before it is actually known to qualify.
+  // already viewed ("bekeken en zonder vervolg", see isChatSeenAndAnswered's
+  // own doc comment for why a chat with no answer yet must NOT be hidden by
+  // this).
   const filtered = out.filter((c) => {
     if (otherTaskAutoStarted.byId[c.id]) return false
-    if (chatStateOf(c) === 'seen' && otherTaskAnswered.byId[c.id]) return false
+    if (isChatSeenAndAnswered(c)) return false
     return true
   })
   // Stable sort (guaranteed in every browser this app targets), so rows only

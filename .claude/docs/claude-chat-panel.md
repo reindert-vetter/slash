@@ -982,6 +982,76 @@ sees that the code is gone in the SAME full-width bar the opened chat sits
 in, regardless of whether the comment-thread column itself is scrolled into
 view. Test: `tests/claude-other-tasks-orphan-jump.spec.mjs`.
 
+**Follow-up report: the fix above still didn't cover every orphan row on a
+real PR.** "ik kan hier niet klikken op de chats waarvan het niet meer
+gekoppeld is aan code. dan opent het gewoon niet." Root cause, found by
+reproducing live: every orphan comment on that PR was ALSO a bare,
+never-taken-over Claude-chat anchor — `isChatAnchorPlaceholder(c)` with no
+`firstReviewerReplyOnPlaceholder(c)` ("Chat over deze regel" and nothing else
+ever typed). Such a comment is EXCLUDED from `indexComments`/
+`commentBlockItem` for that reason alone (same carve-out the general chat
+needed, see "Two more origins…" above) — so `commentBlockItem`'s own orphan
+bypass never even ran for it; it fell to `chatItems` (the "Openstaande
+chats" section, `recomputeLeftList`, `home.mjs`) instead, and THAT filter had
+no orphan bypass of its own:
+
+```js
+const chatItems = openChatComments()
+  .filter((c) => isGeneralChatAnchor(c) || anchoredBlocks.has(c.file + '|' + c.label))
+  .map(chatBlockItem)
+```
+
+`anchoredBlocks.has(...)` requires the comment's `file`+`label` to still be a
+real block — exactly what an orphan by definition no longer has. Result: a
+TRUE dead end, no row anywhere (not `'comment:'`, not `'chat:'`) — worse than
+the first fix's own case, which at least always kept a `'comment:'` row.
+`jumpToCommentRow`/`applyCommentRefRestore` (still building a `'comment:'+id`
+ref) then had nothing to find at all, and the same unconditional
+`enterClaudeChat` masked it as "nothing happened".
+
+**Fix, three pieces:**
+
+1. `chatItems`' own filter gets the identical `isOrphanComment(c)` bypass
+   `commentCandidates` already has, so such a comment gets a
+   `'chat:'`-prefixed row (`chatBlockItem`) instead.
+2. `jumpToCommentRow`/`applyCommentRefRestore`/`resolveRefToIndex` (the
+   Cmd+`[`/`]` stack, `home.mjs`) all now resolve a `'comment:'`/`'chat:'`
+   ref by the underlying comment's own id (`b.comment.id`), via one shared
+   `commentOrChatRefCommentId(ref)` helper, instead of string-matching the
+   row's own `b.id` — a `chatBlockItem` row keeps `kind: 'comment'` but
+   overrides `id` to the `'chat:'` prefix, so the old `b.id === ref` check
+   could never match it. `applyBlockRefRestore` routes a `'chat:'` ref to
+   `applyCommentRefRestore` the same way it already routes `'comment:'`.
+   This ALSO fixes a second, independently-discovered gap: a *manually*
+   selected "Openstaande chats" row (writing `?sel=chat:<id>` via
+   `state.blockRef`, since a chatOnly row's `kind` is `'comment'`) lost its
+   selection on every refresh, because `applyBlockRefRestore` only ever
+   routed `'comment:'`/`'testclass:'`. Test:
+   `tests/claude-other-tasks-orphan-jump.spec.mjs` ("survives a refresh").
+3. **"Opgeruimd zodra bekeken en zonder vervolg"** — reviewer's own product
+   decision, a middle ground between "always show" and "never show" a
+   verweesde (orphaned) chat-only row: reuse the SAME rule
+   `otherClaudeChatsAll()` already applies to every other chat instead of a
+   second mechanism. That rule (`chatStateOf(c) === 'seen' &&
+   otherTaskAnswered.byId[c.id]`) is now its own exported helper,
+   `isChatSeenAndAnswered(c)` (`RelatedPanel.mjs`, right next to
+   `chatStateOf`) — `otherClaudeChatsAll`'s own filter calls it unchanged,
+   and `chatItems`' new orphan bypass ALSO requires `!isChatSeenAndAnswered(c)`.
+   So such a row disappears from BOTH "Openstaande chats" and "Andere chats
+   in deze PR" the moment it has settled (seen, answered, nothing left to
+   expect) — the exact same moment an ordinary chat already drops out of
+   "Andere chats". A non-orphan chatOnly row is NOT subject to this: its
+   code still exists, so there's no reason to fold it away just because it
+   was seen and answered. Test:
+   `tests/claude-other-tasks-orphan-jump.spec.mjs` ("dropped once it is seen
+   and answered").
+
+Own fixture, PR 970602 (`tests/fixtures/orphan-chatanchor-blocks.json`/
+`orphan-chatanchor-comments.json`) — this exact combination (orphan AND
+chat-only) isn't covered by the PR 970600 fixture above (its own orphan
+comment has a real, written body, so it never took the `chatItems` path at
+all).
+
 **"A triple-nested toggle can wedge the innermost keyed list empty" — found
 while writing that test, NOT a bug in the fix above.** Building the general
 chat's row through several chained LIVE UI actions (post a comment through

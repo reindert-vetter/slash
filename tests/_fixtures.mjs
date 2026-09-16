@@ -178,6 +178,32 @@ function seed(db) {
     ],
     { stdio: 'ignore', env: SEED_ENV },
   )
+  // Orphaned CHAT-ONLY-anchor fixture (PR 970602,
+  // claude-other-tasks-orphan-jump.spec.mjs): one block plus one seeded
+  // comment that is BOTH orphan (anchorState 'orphan', its label matches no
+  // block, same as the PR 970600 fixture above) AND a bare, never-taken-over
+  // Claude-chat anchor (its body is exactly CLAUDE_ANCHOR_PLACEHOLDER — "Chat
+  // over deze regel" and nothing else ever typed). That combination is a
+  // separate case from the orphan-blocks.json fixture above: such a comment
+  // is EXCLUDED from indexComments/commentBlockItem (isChatAnchorPlaceholder,
+  // see .claude/docs/claude-chat-panel.md's "A third dead end") and used to
+  // get NO row anywhere at all — worse than the PR 970600 case, which at
+  // least always got an ordinary 'comment:' row. Its own PR number, separate
+  // from 970600/970601, so this spec's assertions can't be disturbed by (or
+  // disturb) either of those.
+  execFileSync(
+    BIN,
+    [
+      'seed',
+      '-db',
+      db,
+      '-from',
+      'tests/fixtures/orphan-chatanchor-blocks.json',
+      '-comments',
+      'tests/fixtures/orphan-chatanchor-comments.json',
+    ],
+    { stdio: 'ignore', env: SEED_ENV },
+  )
   // Stale-anchor (unpinned) fixture (PR 970601,
   // comment-stale-anchor-fold.spec.mjs): one block with three separate
   // change groups (worktree materialized in _setup.mjs,

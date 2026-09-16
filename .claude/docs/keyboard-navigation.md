@@ -308,7 +308,11 @@ an ordinary no-op: there is no "go forward past the start" destination.
 turn a stored ref back into a live index, and both `goToPreviousBlock`/
 `goToNextBlock` skip (pop further) any entry that no longer resolves — the
 tree can change (a re-ingest, a resolved comment dropping out of the index)
-between recording a step and undoing it.
+between recording a step and undoing it. A `'comment:'`/`'chat:'` ref is
+resolved by the underlying comment's own id (`commentOrChatRefCommentId`,
+shared with `applyCommentRefRestore`), not by the row's own `b.id` string —
+see "A third dead end" in `.claude/docs/claude-chat-panel.md` for why a
+`'chat:'`-prefixed "Openstaande chats" row needs that.
 
 **The stack does NOT survive a refresh — explicit reviewer answer** ("de
 stack hoeft een refresh niet te overleven"): both arrays are plain,

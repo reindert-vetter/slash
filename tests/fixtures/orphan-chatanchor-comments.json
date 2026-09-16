@@ -1,0 +1,21 @@
+[
+  {
+    "id": "orphan-chat-1",
+    "runId": "orphan-chat-1",
+    "pr": 970602,
+    "file": "app/Actions/ChatAnchorAction.php",
+    "line": 9,
+    "author": "reviewer",
+    "body": "(Nog geen eigen comment getypt — gesprek met Claude gestart.)",
+    "createdAt": "2026-01-05T10:00:00Z",
+    "status": "open",
+    "code": "        return $this->gone();",
+    "gran": "line",
+    "label": "ChatAnchorAction::vanished",
+    "rowStart": 2,
+    "rowEnd": 2,
+    "anchorState": "orphan",
+    "path": "/pr-970602/app/Actions/ChatAnchorAction.php/ChatAnchorAction::vanished/line-2/comment-orphan-chat-1",
+    "source": "github"
+  }
+]
