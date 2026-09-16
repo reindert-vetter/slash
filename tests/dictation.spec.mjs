@@ -1,8 +1,9 @@
 import { test, expect, appReady, seededPr } from './_fixtures.mjs'
 
 // F5 toggle dictation (src/dictation.mjs): press F5 to start recording, press
-// it again to stop and transcribe — the transcript lands in the Claude
-// composer for the reviewer to send themselves. See .claude/docs/dictation.md.
+// it again to stop, transcribe, insert AND send — exactly as if the reviewer
+// had typed the transcript themselves and pressed Enter. See
+// .claude/docs/dictation.md.
 //
 // Two things are faked here and nothing else:
 //
@@ -77,9 +78,13 @@ test.describe('F5 dictation — review tree (/pr/<id>)', () => {
     // Releasing the key does nothing — only a second, separate press stops it.
     await pressF5(page)
 
-    await expect(page.getByTestId('claude-chat-compose')).toHaveValue('dit is ingesproken tekst')
-    // Nothing is ever sent on the reviewer's behalf: the text sits in the
-    // composer waiting for their own Enter.
+    // The transcript is sent right away, not left for the reviewer's own
+    // Enter — the composer ends up empty again and the message shows up in
+    // the transcript.
+    await expect(
+      page.getByTestId('claude-message').filter({ hasText: 'dit is ingesproken tekst' }),
+    ).toBeVisible()
+    await expect(page.getByTestId('claude-chat-compose')).toHaveValue('')
     await expect(page.getByTestId('claude-chat-compose')).toBeFocused()
   })
 
@@ -126,7 +131,10 @@ test.describe('F5 dictation — review tree (/pr/<id>)', () => {
 
     await page.waitForTimeout(500)
     await pressF5(page)
-    await expect(page.getByTestId('claude-chat-compose')).toHaveValue('dit is ingesproken tekst')
+    await expect(
+      page.getByTestId('claude-message').filter({ hasText: 'dit is ingesproken tekst' }),
+    ).toBeVisible()
+    await expect(page.getByTestId('claude-chat-compose')).toHaveValue('')
   })
 
   test('with nothing selected that has a conversation, F5 falls back to the general chat', async ({
@@ -150,7 +158,10 @@ test.describe('F5 dictation — review tree (/pr/<id>)', () => {
 
     await page.waitForTimeout(500)
     await pressF5(page)
-    await expect(page.getByTestId('claude-chat-compose')).toHaveValue('dit is ingesproken tekst')
+    await expect(
+      page.getByTestId('claude-message').filter({ hasText: 'dit is ingesproken tekst' }),
+    ).toBeVisible()
+    await expect(page.getByTestId('claude-chat-compose')).toHaveValue('')
   })
 
   test('in the diff of a comment-less block, F5 opens (creates) that unit\'s own code-scoped chat, never the general one', async ({
@@ -174,7 +185,10 @@ test.describe('F5 dictation — review tree (/pr/<id>)', () => {
 
     await page.waitForTimeout(500)
     await pressF5(page)
-    await expect(page.getByTestId('claude-chat-compose')).toHaveValue('dit is ingesproken tekst')
+    await expect(
+      page.getByTestId('claude-message').filter({ hasText: 'dit is ingesproken tekst' }),
+    ).toBeVisible()
+    await expect(page.getByTestId('claude-chat-compose')).toHaveValue('')
   })
 
   test('auto-repeat while the key is held does not toggle back and forth', async ({ page }) => {
@@ -200,7 +214,9 @@ test.describe('F5 dictation — review tree (/pr/<id>)', () => {
     await page.waitForTimeout(400)
     await pressF5(page)
 
-    await expect(page.getByTestId('claude-chat-compose')).toHaveValue('dit is ingesproken tekst')
+    await expect(
+      page.getByTestId('claude-message').filter({ hasText: 'dit is ingesproken tekst' }),
+    ).toBeVisible()
     // One microphone session for one recording — 21 would mean every repeat
     // restarted it and threw the earlier audio away.
     expect(await page.evaluate(() => window.__gumCalls)).toBe(1)
@@ -272,7 +288,7 @@ test.describe('F5 dictation — review tree (/pr/<id>)', () => {
     expect(transcribeCalls).toBe(0)
   })
 
-  test('losing window focus while recording still finishes and transcribes it', async ({ page }) => {
+  test('losing window focus while recording still finishes, transcribes and sends it', async ({ page }) => {
     await stubDictation(page, { text: 'afgebroken door focusverlies' })
     await page.goto('/pr/12903')
     await appReady(page)
@@ -285,7 +301,10 @@ test.describe('F5 dictation — review tree (/pr/<id>)', () => {
     // recording (short of the reviewer coming back to press F5 again).
     await page.evaluate(() => window.dispatchEvent(new Event('blur')))
 
-    await expect(page.getByTestId('claude-chat-compose')).toHaveValue('afgebroken door focusverlies')
+    await expect(
+      page.getByTestId('claude-message').filter({ hasText: 'afgebroken door focusverlies' }),
+    ).toBeVisible()
+    await expect(page.getByTestId('claude-chat-compose')).toHaveValue('')
   })
 
   test('two presses in quick succession are discarded instead of transcribed', async ({ page }) => {
@@ -297,6 +316,18 @@ test.describe('F5 dictation — review tree (/pr/<id>)', () => {
 
     await expect(page.getByTestId('dictation-note')).toContainText('Te kort')
     await expect(page.getByTestId('claude-chat-compose')).toHaveValue('')
+  })
+
+  test('an empty transcript ("Niets verstaan") is neither inserted nor sent', async ({ page }) => {
+    await stubDictation(page, { text: '' })
+    await page.goto('/pr/12903')
+    await appReady(page)
+
+    await toggleF5For(page, 500)
+
+    await expect(page.getByTestId('dictation-note')).toContainText('Niets verstaan')
+    await expect(page.getByTestId('claude-chat-compose')).toHaveValue('')
+    await expect(page.getByTestId('claude-message')).toHaveCount(0)
   })
 
   test('without whisper installed it says so and points at the settings page', async ({ page }) => {
@@ -323,10 +354,13 @@ test.describe('F5 dictation — plan page (/plan/<KEY>)', () => {
     await page.waitForTimeout(500)
     await pressF5(page)
 
-    await expect(page.getByTestId('claude-chat-compose')).toHaveValue('ingesproken op de planpagina')
+    await expect(
+      page.getByTestId('claude-message').filter({ hasText: 'ingesproken op de planpagina' }),
+    ).toBeVisible()
+    await expect(page.getByTestId('claude-chat-compose')).toHaveValue('')
   })
 
-  test('F5 still works once the chat is already open', async ({ page }) => {
+  test('F5 still works once the chat is already open, and sends the combined text', async ({ page }) => {
     await stubDictation(page, { text: 'tweede alinea' })
     await page.goto('/plan/TEST-901')
     await appReady(page)
@@ -339,10 +373,15 @@ test.describe('F5 dictation — plan page (/plan/<KEY>)', () => {
     await toggleF5For(page, 500)
 
     // Appended at the caret with a separating space, not replacing what was
-    // already typed. This is the case that forced the keydown branch to sit
-    // ABOVE the chat-overlay guard in both pages' onKeydown: those guards
-    // return early, so a branch further down would never have run here.
-    await expect(composer).toHaveValue('eerste alinea tweede alinea')
+    // already typed — and then the WHOLE field is sent, exactly as if the
+    // reviewer had typed "tweede alinea" themselves and pressed Enter. This
+    // is also the case that forced the keydown branch to sit ABOVE the
+    // chat-overlay guard in both pages' onKeydown: those guards return
+    // early, so a branch further down would never have run here.
+    await expect(
+      page.getByTestId('claude-message').filter({ hasText: 'eerste alinea tweede alinea' }),
+    ).toBeVisible()
+    await expect(composer).toHaveValue('')
   })
 })
 

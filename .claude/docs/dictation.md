@@ -1,8 +1,9 @@
 # Dictation: press F5 to speak into the Claude composer
 
-Press `F5`, talk, press `F5` again — the transcript lands in the Claude chat's
-composer and stops there. The reviewer presses Enter themselves. Everything
-runs on this machine: the audio never leaves it.
+Press `F5`, talk, press `F5` again — the transcript is inserted into the
+Claude chat's composer AND sent straight away, exactly as if the reviewer had
+typed it and pressed Enter themselves. Everything runs on this machine: the
+audio never leaves it.
 
 Frontend: `src/dictation.mjs`. Backend: `whisper.go` plus the `whisper_model`
 Workflow in `workflows.go`. The settings row lives in `auth_status.go`'s
@@ -53,6 +54,43 @@ Only the recording's **START** consults this — the second F5 press that stops
 and transcribes never opens or switches a chat, it only ends the recording
 that is already running (whichever chat is on screen at that point keeps the
 focus it already had).
+
+## The transcript is sent, not just inserted
+
+Reviewer request: "na 2e keer f5 wil ik het gelijk versturen" — the second F5
+press no longer just drops the transcript in the composer for the reviewer to
+send themselves; it sends it right away, the same as if they had typed it and
+pressed Enter.
+
+**No second send path.** `sendComposer(el)` (`dictation.mjs`) dispatches a
+synthetic, plain (non-Shift) `keydown` Enter on the composer field itself —
+the exact event `ClaudeChat.mjs`'s own `@keydown` handler already reacts to
+for a genuinely typed Enter, which calls whichever `onSend` callback that
+particular chat (scoped or general) is currently wired up with. This module
+never needs to know or care which chat is open, or import a send function
+directly — same "reuse the real listener via a dispatched event" pattern
+`tests/dictation.spec.mjs`'s own auto-repeat test already uses for F5 itself.
+
+**Three edge cases, confirmed with the reviewer rather than assumed:**
+
+- **The composer already held reviewer-typed text:** `insertIntoComposer`
+  already appended the transcript to it (with a separating space), as before
+  this change — sending then sends the WHOLE field, exactly as if the
+  reviewer had typed the rest themselves and pressed Enter. No special-casing
+  needed: the synthetic Enter reads `e.target.value` at the moment it fires,
+  same as a real one would.
+- **An empty transcript** ("Niets verstaan", or a recording under `MIN_MS`) —
+  `insertIntoComposer` (and therefore `sendComposer`) is never called for it
+  in the first place (`stopDictation`'s `if (data.text) { … }` guard), so
+  nothing is ever sent either. Sending only ever happens as a consequence of
+  a successful insert, never on its own.
+- **Escape mid-recording** (`abortDictation`) never reaches `insertIntoComposer`
+  or `sendComposer` at all — it is a wholly separate path that only tears down
+  the audio capture. Aborting a recording never inserts and never sends.
+
+`insertIntoComposer` now returns the composer element (or `null` if it wasn't
+found) instead of nothing, purely so `stopDictation` has something to call
+`sendComposer` on.
 
 ## Why F5, and the one thing the reviewer must set themselves
 

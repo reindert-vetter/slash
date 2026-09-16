@@ -1747,7 +1747,8 @@ conversation, reused if already reachable (`claudeColumnVisible()`) or opened
 fresh otherwise as long as a real unit is selected (`commentTarget()`, same
 as the "Chat over deze regel" command), and only the PR-wide general chat
 when neither applies — and a second press stops it, transcribes locally and
-drops the text in the composer (the reviewer still presses Enter). Not
+inserts AND sends the text in the composer, exactly as if the reviewer had
+typed it and pressed Enter themselves. Not
 push-to-talk — releasing the key does nothing. Escape aborts a running
 recording without transcribing it. Its branch sits high in `onKeydown` — after
 the auth-problem and failed-tasks dialogs, before every overlay guard —

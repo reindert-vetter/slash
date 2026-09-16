@@ -26,8 +26,17 @@
 //   - Escape aborts a running recording without transcribing anything — the
 //     "I didn't mean to start that" hatch a toggle needs but push-to-talk
 //     never did (releasing the key there always finished the recording).
-//   - The text lands in the composer and stops there. Nothing is ever sent on
-//     the reviewer's behalf — they press Enter themselves.
+//   - The transcript is inserted AND sent straight away — reviewer request:
+//     "na 2e keer f5 wil ik het gelijk versturen". Sending reuses the
+//     composer's own Enter path (a synthetic `keydown` dispatched on the
+//     field, see sendComposer below) rather than a second send mechanism, so
+//     it goes through whichever chat's own `onSend` is currently wired up —
+//     this module never needs to know which one that is. If the composer
+//     already held reviewer-typed text, the transcript is appended to it (as
+//     always) and the WHOLE field is sent, exactly as if the reviewer had
+//     typed the rest themselves and pressed Enter. An empty transcript
+//     ("Niets verstaan"/too short) is never inserted in the first place, so
+//     nothing is ever sent for it either.
 //   - STRICTLY LOCAL. The audio goes to POST /api/transcribe, which runs
 //     whisper.cpp on this machine (whisper.go). Chrome's own
 //     webkitSpeechRecognition would have been far less code and is ruled out
@@ -285,8 +294,10 @@ async function stopDictation() {
       return
     }
     d.state = 'idle'
-    if (data.text) insertIntoComposer(data.text)
-    else setNote(t('Niets verstaan'))
+    if (data.text) {
+      const el = insertIntoComposer(data.text)
+      if (el) sendComposer(el)
+    } else setNote(t('Niets verstaan'))
   } catch (err) {
     d.state = 'idle'
     setNote(t('Uitschrijven mislukt: ') + (err && err.message ? err.message : String(err)))
@@ -373,11 +384,12 @@ function releaseStream() {
 // insertIntoComposer writes the transcript into the chat's textarea at the
 // caret and fires an `input` event, so ClaudeChat.mjs's own @input handler
 // (draft storage) and the auto-grow both run exactly as if it had been typed.
+// Returns the field (for sendComposer below), or null if it wasn't found.
 function insertIntoComposer(text) {
   const el = document.querySelector('[data-testid=claude-chat-compose]')
   if (!el) {
     setNote(t('Geen invoerveld gevonden voor de tekst'))
-    return
+    return null
   }
   const before = el.value.slice(0, el.selectionStart)
   const after = el.value.slice(el.selectionEnd)
@@ -389,6 +401,18 @@ function insertIntoComposer(text) {
   el.setSelectionRange(caret, caret)
   el.dispatchEvent(new Event('input', { bubbles: true }))
   el.focus()
+  return el
+}
+
+// sendComposer dispatches a synthetic, plain (non-Shift) Enter keydown on the
+// composer — the exact same event ClaudeChat.mjs's own `@keydown` handler
+// reacts to for an ordinary typed Enter, which calls whichever `onSend` this
+// chat (scoped or general) is currently wired up with. Reusing that real
+// listener, rather than importing/calling a send function directly, means
+// this module never needs to know which chat is open or plumb a second send
+// path through to it.
+function sendComposer(el) {
+  el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
 }
 
 // ---------------------------------------------------------------------- view
