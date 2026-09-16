@@ -1,15 +1,31 @@
-// dictation.mjs — hold F5 to dictate into the Claude composer.
+// dictation.mjs — press F5 to dictate into the Claude composer.
 //
-// One module, two pages: the review tree's general chat (/pr/<id>, home.mjs's
-// openGeneralChat) and the planning page's ticket chat (/plan/<KEY>,
-// plan.mjs's openPlanChat). Both render the same composer
-// (data-testid=claude-chat-compose, ClaudeChat.mjs), which is why the text can
-// be inserted straight into the focused field instead of being plumbed back
-// through two different callback chains.
+// One module, two pages: the review tree (/pr/<id>) and the planning page's
+// ticket chat (/plan/<KEY>, plan.mjs's openPlanChat). Both render the same
+// composer (data-testid=claude-chat-compose, ClaudeChat.mjs), which is why the
+// text can be inserted straight into the focused field instead of being
+// plumbed back through two different callback chains.
+//
+// `initDictation({ openChat })`'s `openChat` decides WHICH chat that first F5
+// press opens — this module has no opinion on that itself, it only calls it.
+// `home.mjs` opens the currently selected group/line/call's own scoped Claude
+// conversation when one is reachable (`claudeColumnVisible()` +
+// `enterClaudeChat`, the exact pair `enterCommentsOrRelated`'s own → chain
+// falls back to — reused, not reimplemented), otherwise the PR-wide general
+// chat (`openGeneralChat`). `plan.mjs` has no such per-unit scoped
+// conversation, so it always opens the one ticket chat (`openPlanChat`).
 //
 // The contract, decided by the reviewer:
-//   - PUSH-TO-TALK. Pressing F5 opens the chat and starts recording; holding it
-//     keeps recording; releasing it stops and transcribes. Not a toggle.
+//   - TOGGLE. Pressing F5 opens a chat and starts recording; a second press
+//     stops it and transcribes. Not push-to-talk — releasing the key does
+//     nothing. This replaced an earlier push-to-talk design: the reviewer
+//     triggers F5 via BetterTouchTool from a physical mic button, and BTT
+//     forwards a complete keystroke (down+up back to back) rather than
+//     holding the key for as long as the button is held, so "hold to record"
+//     was never actually reachable from that trigger.
+//   - Escape aborts a running recording without transcribing anything — the
+//     "I didn't mean to start that" hatch a toggle needs but push-to-talk
+//     never did (releasing the key there always finished the recording).
 //   - The text lands in the composer and stops there. Nothing is ever sent on
 //     the reviewer's behalf — they press Enter themselves.
 //   - STRICTLY LOCAL. The audio goes to POST /api/transcribe, which runs
@@ -27,15 +43,15 @@
 import { reactive, html } from './vendor/arrow.js'
 import { t } from './i18n.mjs'
 
-// MIN_MS — anything shorter than this is a key brushed by accident, not a
-// sentence. Transcribing it would paste a stray word (or whisper's own
-// hallucination on near-silence) into the composer, so it is dropped with a
-// word instead.
+// MIN_MS — anything shorter than this is two F5 presses in quick succession
+// (an accidental double-trigger, e.g. a flaky BTT/hardware button) rather than
+// a real sentence. Transcribing it would paste a stray word (or whisper's own
+// hallucination on near-silence) into the composer, so it is dropped instead.
 const MIN_MS = 300
 
 // MAX_MS — the hard stop, matched to whisperMaxAudioBytes on the server side.
-// Also the backstop for the case every listener below somehow misses the key
-// going up.
+// Also the backstop for the case a reviewer forgets a toggled-on recording is
+// still running and none of blur/visibilitychange fires either.
 const MAX_MS = 120000
 
 // SAMPLE_RATE must match whisperSampleRate (whisper.go). Asking the
@@ -96,21 +112,26 @@ export function isDictating() {
 }
 
 // initDictation wires the page-independent half: which function opens that
-// page's chat, plus every listener that ENDS a recording.
+// page's chat, plus every listener that can END a recording besides a second
+// F5 press.
 //
-// The keyup/blur pair mirrors an existing precedent in this codebase — the held
-// c/v column resize in home.mjs, whose own comment says it best: a window blur
-// is "a safety net for the case the keyup itself never arrives (e.g. Alt+Tab
-// away while still holding the key)". A microphone left open because a keyup
-// went missing is the same bug with a worse consequence, so it gets the same
-// treatment plus a visibility listener and a hard timer.
+// With a toggle there is no keyup to end a recording at all, so these three
+// are now the ONLY safety nets against a mic left open indefinitely (e.g. the
+// reviewer forgets a recording is running and walks away) — more load-bearing
+// than they were under push-to-talk, where a lost keyup was the sole failure
+// mode they covered.
+//
+// blur deliberately still stops the recording, even though a toggle lets the
+// reviewer knowingly click away while still meaning to talk: an open
+// microphone that keeps recording while the window isn't even focused is the
+// more surprising (and more privacy-sensitive) outcome of the two, and MAX_MS
+// alone would leave it running for up to two full minutes unattended. One
+// more F5 press starts a fresh recording right away if the reviewer really did
+// just glance elsewhere mid-sentence.
 export function initDictation({ openChat }) {
   if (armed) return
   armed = true
   openChatFn = openChat
-  window.addEventListener('keyup', (e) => {
-    if (e.key === 'F5') stopDictation()
-  })
   window.addEventListener('blur', () => stopDictation())
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') stopDictation()
@@ -124,15 +145,23 @@ export function initDictation({ openChat }) {
 // BEFORE every overlay guard: a real modal still owns the keyboard, but an
 // already-open chat must not block dictating a second paragraph into it.
 export function handleDictationKeydown(e) {
+  // Escape aborts a running recording without transcribing it — checked
+  // before the F5 branch below since it isn't F5 itself, and only consumed
+  // while actually recording so an ordinary Escape elsewhere keeps working.
+  if (e.key === 'Escape' && d.state === 'recording') {
+    abortDictation()
+    return true
+  }
   if (e.key !== 'F5' || e.metaKey || e.ctrlKey || e.altKey) return false
   e.preventDefault()
-  // Auto-repeat: macOS keeps firing keydown for as long as the key is held,
-  // which is the whole point of push-to-talk. Without this guard the recording
-  // would restart dozens of times per second.
+  // Auto-repeat: macOS (and a held BTT trigger) keeps firing keydown for as
+  // long as the key is considered held. Without this guard a single press
+  // would toggle back and forth dozens of times per second instead of once.
   if (e.repeat) return true
-  // A non-repeat keydown while already recording means the keyup was lost
-  // (a system dialog stole it, say). Treat this press as the release it must
-  // have been, so one more tap always gets the reviewer unstuck.
+  // TOGGLE: a non-repeat keydown starts a fresh recording, or — while one is
+  // already running — ends it and transcribes. There is no keyup path at all;
+  // BetterTouchTool forwards a full press+release in one go for its trigger,
+  // so a design relying on release was never reachable there.
   if (d.state === 'recording') {
     stopDictation()
     return true
@@ -144,6 +173,9 @@ export function handleDictationKeydown(e) {
 
 async function startDictation() {
   d.note = ''
+  // Only the START of a recording opens a chat (see openChatFn's own doc
+  // comment at the top of this file) — the second F5 press that stops and
+  // transcribes never touches it, it only calls stopDictation below.
   if (openChatFn) openChatFn()
   d.state = 'recording'
   d.seconds = 0
@@ -210,10 +242,10 @@ function onFrame(frame) {
   d.level = Math.max(peak, d.level * 0.8)
 }
 
-// stopDictation ends a recording from whichever of the four paths noticed it
-// first (keyup, blur, hidden tab, the MAX_MS timer, or a recovery keydown). It
-// is deliberately safe to call at any moment, including when nothing is
-// running.
+// stopDictation ends a recording from whichever of the three paths noticed it
+// first (a second F5 press, blur, hidden tab) or the MAX_MS timer, and always
+// transcribes what was captured. It is deliberately safe to call at any
+// moment, including when nothing is running.
 async function stopDictation() {
   if (d.state !== 'recording') return
   const heldMs = Date.now() - startedAt
@@ -227,7 +259,7 @@ async function stopDictation() {
   chunks = []
   if (heldMs < MIN_MS || pcm.byteLength === 0) {
     d.state = 'idle'
-    if (!d.note) setNote(t('Te kort — houd F5 ingedrukt terwijl je praat'))
+    if (!d.note) setNote(t('Te kort — probeer het opnieuw'))
     return
   }
   d.state = 'transcribing'
@@ -259,6 +291,36 @@ async function stopDictation() {
     d.state = 'idle'
     setNote(t('Uitschrijven mislukt: ') + (err && err.message ? err.message : String(err)))
   }
+}
+
+// abortDictation cancels a running recording without transcribing it — the
+// toggle's "I didn't mean to start that" hatch (Escape). Push-to-talk never
+// needed this: releasing the key there always finished and transcribed
+// whatever was captured. No request is made and nothing is inserted.
+//
+// Exported as abortDictationIfRecording for generalChatOverlay.mjs: its own
+// Escape handler runs on the CAPTURE phase and calls e.stopPropagation()
+// ("esc moet alles weer hidden" is absolute there), so this module's own
+// bubble-phase Escape branch in handleDictationKeydown never gets a turn
+// while that overlay is open — which is exactly the state F5 leaves things
+// in when it had to fall back to the general chat (no scoped conversation to
+// open instead). Without this, closing that overlay with Escape would leave
+// the microphone recording silently in the background.
+export async function abortDictationIfRecording() {
+  await abortDictation()
+}
+
+async function abortDictation() {
+  if (d.state !== 'recording') return
+  clearInterval(tickTimer)
+  clearTimeout(maxTimer)
+  tickTimer = null
+  maxTimer = null
+  await teardownAudio()
+  d.level = 0
+  chunks = []
+  d.state = 'idle'
+  setNote(t('Opname geannuleerd'))
 }
 
 function joinChunks(list) {
@@ -380,7 +442,7 @@ export function dictationStatusPill() {
                     <span class="font-semibold">${t('Opnemen')}</span>
                     <span class="flex items-end gap-[2px]">${() => meterBars()}</span>
                     <span>${() => d.seconds + 's'}</span>
-                    <span class="text-slate-400 dark:text-zinc-500">${t('laat F5 los om te stoppen')}</span>
+                    <span class="text-slate-400 dark:text-zinc-500">${t('druk nogmaals op F5 om te stoppen')}</span>
                   </span>`.key('rec')
                 : d.state === 'transcribing'
                   ? html`<span class="flex items-center gap-2">

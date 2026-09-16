@@ -81,7 +81,7 @@ import { initDictation, handleDictationKeydown } from './dictation.mjs'
 import { initJiraBell, jiraBellButton, isJiraBellOpen, handleJiraBellKeydown } from './jiraBell.mjs'
 
 initTheme()
-// F5 push-to-talk dictation into this ticket's chat (src/dictation.mjs).
+// F5 toggle dictation into this ticket's chat (src/dictation.mjs).
 // openPlanChat is a hoisted function declaration further down this file.
 initDictation({ openChat: () => openPlanChat() })
 // The Jira-notifications bell (see src/jiraBell.mjs) — same one used on
@@ -1825,7 +1825,7 @@ function focusColumn1() {
 
 function onKeydown(e) {
   if (e.metaKey || e.ctrlKey || e.altKey) return
-  // F5 (hold) dictates into this ticket's chat — see src/dictation.mjs. First,
+  // F5 (toggle) dictates into this ticket's chat — see src/dictation.mjs. First,
   // because the chatOpen branch right below returns early: dictating a second
   // paragraph into an already-open chat has to stay possible.
   if (handleDictationKeydown(e)) return

@@ -1,8 +1,8 @@
-import { test, expect, appReady } from './_fixtures.mjs'
+import { test, expect, appReady, seededPr } from './_fixtures.mjs'
 
-// F5 push-to-talk dictation (src/dictation.mjs): hold F5, speak, release, and
-// the transcript lands in the Claude composer for the reviewer to send
-// themselves. See .claude/docs/dictation.md.
+// F5 toggle dictation (src/dictation.mjs): press F5 to start recording, press
+// it again to stop and transcribe — the transcript lands in the Claude
+// composer for the reviewer to send themselves. See .claude/docs/dictation.md.
 //
 // Two things are faked here and nothing else:
 //
@@ -14,7 +14,7 @@ import { test, expect, appReady } from './_fixtures.mjs'
 //   - POST /api/transcribe, so no whisper.cpp binary or 1.6 GB model is needed
 //     on the machine running the suite.
 //
-// Everything in between — the key handling, the four ways a recording ends, the
+// Everything in between — the key handling, the ways a recording ends, the
 // minimum duration, the insertion into the composer — is the real code.
 
 const FAKE_MEDIA = `
@@ -37,32 +37,45 @@ async function stubDictation(page, { text = 'dit is ingesproken tekst', status =
   )
 }
 
-// holdF5 presses and holds F5 for ms, then releases it — the actual gesture.
-async function holdF5(page, ms) {
+// pressF5 dispatches a single, real keydown+keyup pair for F5, back to back —
+// exactly what BetterTouchTool forwards from a physical mic button (it cannot
+// "hold" a key), and the reason the gesture is a toggle rather than
+// push-to-talk in the first place.
+async function pressF5(page) {
   await page.keyboard.down('F5')
-  await page.waitForTimeout(ms)
   await page.keyboard.up('F5')
 }
 
+// toggleF5For starts a recording, waits ms, then presses F5 a second time to
+// stop and transcribe it — the ordinary two-press toggle gesture.
+async function toggleF5For(page, ms) {
+  await pressF5(page)
+  await page.waitForTimeout(ms)
+  await pressF5(page)
+}
+
 test.describe('F5 dictation — review tree (/pr/<id>)', () => {
-  test('holding F5 opens the chat, records, and drops the transcript in the composer', async ({ page }) => {
+  test('one press opens the chat and starts recording, a second press stops and transcribes', async ({
+    page,
+  }) => {
     await stubDictation(page)
     await page.goto('/pr/12903')
     await appReady(page)
 
-    await page.keyboard.down('F5')
-    // The chat opens on the very first keydown, so the reviewer can see where
+    await pressF5(page)
+    // The chat opens on the very first press, so the reviewer can see where
     // their words are going while they are still talking.
     await expect(page.getByTestId('claude-chat-compose')).toBeVisible()
     const status = page.getByTestId('dictation-status')
     await expect(status).toBeVisible()
     await expect(status).toContainText('Opnemen')
-    // The word carries the state, never colour alone — and the release
+    // The word carries the state, never colour alone — and the stop
     // instruction is spelled out rather than implied.
-    await expect(status).toContainText('laat F5 los om te stoppen')
+    await expect(status).toContainText('druk nogmaals op F5 om te stoppen')
 
     await page.waitForTimeout(500)
-    await page.keyboard.up('F5')
+    // Releasing the key does nothing — only a second, separate press stops it.
+    await pressF5(page)
 
     await expect(page.getByTestId('claude-chat-compose')).toHaveValue('dit is ingesproken tekst')
     // Nothing is ever sent on the reviewer's behalf: the text sits in the
@@ -70,52 +83,184 @@ test.describe('F5 dictation — review tree (/pr/<id>)', () => {
     await expect(page.getByTestId('claude-chat-compose')).toBeFocused()
   })
 
-  test('auto-repeat while the key is held does not restart the recording', async ({ page }) => {
+  test('with a group/line/call selected that already has a Claude conversation, F5 opens THAT scoped chat, not the general one', async ({
+    page,
+  }, testInfo) => {
+    const pr = seededPr(testInfo)
+    const start = await page.request.post('/api/workflows/task_code_comment', {
+      data: {
+        pr,
+        file: 'test.php',
+        line: 1,
+        author: 'reviewer',
+        body: 'kan dit sneller?',
+        code: '$order->total();',
+        gran: 'call',
+        label: 'Order::total',
+      },
+    })
+    expect((await start.json()).runId).toBeTruthy()
+    await stubDictation(page)
+
+    await page.goto('/pr/' + pr)
+    await appReady(page)
+    const item = page.getByTestId('comment-item').first()
+    await expect(item).toBeVisible()
+    await item.click() // cs.focus = 'comment' — the unit this comment is on is now selected
+    const claudeCard = page.getByTestId('claude-chat-card')
+    await expect(claudeCard).toBeVisible()
+    // Back to the diff (cs.focus = null): a group/line/call is selected, the
+    // keyboard is not inside the comment/Claude column itself — exactly the
+    // reviewer's "ik heb groep, line of call geselecteerd" state. The card
+    // itself stays visible (claudeColumnVisible() only depends on the
+    // selected unit having a conversation, not on where the keyboard is).
+    await page.keyboard.press('ArrowLeft')
+    await expect(page.getByTestId('claude-chat-compose')).not.toBeFocused()
+
+    await pressF5(page)
+
+    // The scoped chat for this exact unit reopened — never the PR-wide one.
+    await expect(page.getByTestId('general-chat-overlay')).toBeHidden()
+    await expect(claudeCard).toBeVisible()
+    await expect(page.getByTestId('claude-chat-compose')).toBeFocused()
+
+    await page.waitForTimeout(500)
+    await pressF5(page)
+    await expect(page.getByTestId('claude-chat-compose')).toHaveValue('dit is ingesproken tekst')
+  })
+
+  test('with nothing selected that has a conversation, F5 falls back to the general chat', async ({ page }) => {
+    await stubDictation(page)
+    await page.goto('/pr/12903')
+    await appReady(page)
+
+    await pressF5(page)
+
+    await expect(page.getByTestId('general-chat-overlay')).toBeVisible()
+    await expect(page.getByTestId('claude-chat-compose')).toBeFocused()
+
+    await page.waitForTimeout(500)
+    await pressF5(page)
+    await expect(page.getByTestId('claude-chat-compose')).toHaveValue('dit is ingesproken tekst')
+  })
+
+  test('auto-repeat while the key is held does not toggle back and forth', async ({ page }) => {
     await stubDictation(page)
     await page.goto('/pr/12903')
     await appReady(page)
 
     await page.keyboard.down('F5')
     await expect(page.getByTestId('dictation-status')).toContainText('Opnemen')
-    // macOS fires keydown over and over while the key is held. Playwright's
-    // own keyboard.down sends exactly one, so the repeats are dispatched
-    // directly — repeat:true is the only thing that distinguishes them.
+    // macOS (and a held BTT trigger) fires keydown over and over while the key
+    // is considered held. Playwright's own keyboard.down sends exactly one, so
+    // the repeats are dispatched directly — repeat:true is the only thing
+    // that distinguishes them.
     await page.evaluate(() => {
       for (let i = 0; i < 20; i++) {
         window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F5', repeat: true, bubbles: true }))
       }
     })
-    await page.waitForTimeout(400)
     await page.keyboard.up('F5')
+    // Still recording: none of the 20 repeats toggled it off.
+    await expect(page.getByTestId('dictation-status')).toContainText('Opnemen')
+
+    await page.waitForTimeout(400)
+    await pressF5(page)
 
     await expect(page.getByTestId('claude-chat-compose')).toHaveValue('dit is ingesproken tekst')
-    // One microphone session for one press — 21 would mean every repeat
-    // restarted the recording and threw the earlier audio away.
+    // One microphone session for one recording — 21 would mean every repeat
+    // restarted it and threw the earlier audio away.
     expect(await page.evaluate(() => window.__gumCalls)).toBe(1)
   })
 
-  test('losing window focus while the key is held still finishes the recording', async ({ page }) => {
+  test('Escape aborts a running recording without transcribing it', async ({ page }) => {
+    let transcribeCalls = 0
+    await page.addInitScript(FAKE_MEDIA)
+    await page.route('**/api/transcribe', (route) => {
+      transcribeCalls++
+      return route.fulfill({ json: { ok: true, text: 'moet nooit verschijnen' } })
+    })
+    await page.goto('/pr/12903')
+    await appReady(page)
+
+    await pressF5(page)
+    await expect(page.getByTestId('dictation-status')).toContainText('Opnemen')
+    await page.waitForTimeout(400)
+    // F5 fell back to the general chat here (nothing scoped was selected), so
+    // Escape also closes that overlay — its own capture-phase handler runs
+    // first and stops the event, but it still aborts the recording behind it
+    // (see abortDictationIfRecording in generalChatOverlay.mjs) rather than
+    // silently leaving the microphone on.
+    await page.keyboard.press('Escape')
+
+    await expect(page.getByTestId('general-chat-overlay')).toBeHidden()
+    expect(transcribeCalls).toBe(0)
+  })
+
+  test('Escape aborts a recording started on a scoped chat, without closing it', async ({
+    page,
+  }, testInfo) => {
+    const pr = seededPr(testInfo)
+    const start = await page.request.post('/api/workflows/task_code_comment', {
+      data: {
+        pr,
+        file: 'test.php',
+        line: 1,
+        author: 'reviewer',
+        body: 'kan dit sneller?',
+        code: '$order->total();',
+        gran: 'call',
+        label: 'Order::total',
+      },
+    })
+    expect((await start.json()).runId).toBeTruthy()
+
+    let transcribeCalls = 0
+    await page.addInitScript(FAKE_MEDIA)
+    await page.route('**/api/transcribe', (route) => {
+      transcribeCalls++
+      return route.fulfill({ json: { ok: true, text: 'moet nooit verschijnen' } })
+    })
+    await page.goto('/pr/' + pr)
+    await appReady(page)
+    const item = page.getByTestId('comment-item').first()
+    await expect(item).toBeVisible()
+    await item.click()
+    await page.keyboard.press('ArrowLeft') // back to the diff, unit stays selected
+
+    await pressF5(page)
+    await expect(page.getByTestId('dictation-status')).toContainText('Opnemen')
+    await page.waitForTimeout(400)
+    await page.keyboard.press('Escape')
+
+    // The scoped chat card itself is untouched by Escape — only the
+    // recording is cancelled.
+    await expect(page.getByTestId('claude-chat-card')).toBeVisible()
+    expect(transcribeCalls).toBe(0)
+  })
+
+  test('losing window focus while recording still finishes and transcribes it', async ({ page }) => {
     await stubDictation(page, { text: 'afgebroken door focusverlies' })
     await page.goto('/pr/12903')
     await appReady(page)
 
-    await page.keyboard.down('F5')
+    await pressF5(page)
     await expect(page.getByTestId('dictation-status')).toContainText('Opnemen')
     await page.waitForTimeout(400)
-    // Alt-Tab away while still holding the key: no keyup ever arrives, so
-    // without the blur safety net the microphone would stay open forever.
+    // Alt-Tab away while recording: with a toggle there is no keyup at all to
+    // rely on, so the blur safety net is the only thing that ends this
+    // recording (short of the reviewer coming back to press F5 again).
     await page.evaluate(() => window.dispatchEvent(new Event('blur')))
 
     await expect(page.getByTestId('claude-chat-compose')).toHaveValue('afgebroken door focusverlies')
-    await page.keyboard.up('F5')
   })
 
-  test('a key brushed by accident is discarded instead of transcribed', async ({ page }) => {
+  test('two presses in quick succession are discarded instead of transcribed', async ({ page }) => {
     await stubDictation(page)
     await page.goto('/pr/12903')
     await appReady(page)
 
-    await holdF5(page, 40)
+    await toggleF5For(page, 40)
 
     await expect(page.getByTestId('dictation-note')).toContainText('Te kort')
     await expect(page.getByTestId('claude-chat-compose')).toHaveValue('')
@@ -126,7 +271,7 @@ test.describe('F5 dictation — review tree (/pr/<id>)', () => {
     await page.goto('/pr/12903')
     await appReady(page)
 
-    await holdF5(page, 500)
+    await toggleF5For(page, 500)
 
     await expect(page.getByTestId('dictation-note')).toContainText('Instellingen')
     await expect(page.getByTestId('claude-chat-compose')).toHaveValue('')
@@ -140,10 +285,10 @@ test.describe('F5 dictation — plan page (/plan/<KEY>)', () => {
     await appReady(page)
 
     await expect(page.getByTestId('plan-chat-overlay')).toBeHidden()
-    await page.keyboard.down('F5')
+    await pressF5(page)
     await expect(page.getByTestId('plan-chat-overlay')).toBeVisible()
     await page.waitForTimeout(500)
-    await page.keyboard.up('F5')
+    await pressF5(page)
 
     await expect(page.getByTestId('claude-chat-compose')).toHaveValue('ingesproken op de planpagina')
   })
@@ -158,7 +303,7 @@ test.describe('F5 dictation — plan page (/plan/<KEY>)', () => {
     const composer = page.getByTestId('claude-chat-compose')
     await composer.fill('eerste alinea')
 
-    await holdF5(page, 500)
+    await toggleF5For(page, 500)
 
     // Appended at the caret with a separating space, not replacing what was
     // already typed. This is the case that forced the keydown branch to sit
@@ -256,7 +401,7 @@ test.describe('Settings — the speech model download', () => {
               state,
               detail:
                 state === 'ok'
-                  ? 'Klaar voor gebruik — houd F5 ingedrukt om in te spreken'
+                  ? 'Klaar voor gebruik — druk op F5 om in te spreken, nogmaals om te stoppen'
                   : 'whisper-cli is niet gevonden',
               fixCommand: state === 'ok' ? undefined : 'brew install whisper.cpp',
             },
@@ -275,6 +420,6 @@ test.describe('Settings — the speech model download', () => {
     await page.getByTestId('settings-auth-recheck').click()
 
     await expect(row.getByTestId('auth-state')).toContainText('Werkt')
-    await expect(row).toContainText('Klaar voor gebruik — houd F5 ingedrukt om in te spreken')
+    await expect(row).toContainText('Klaar voor gebruik — druk op F5 om in te spreken, nogmaals om te stoppen')
   })
 })

@@ -1,12 +1,39 @@
-# Dictation: hold F5 to speak into the Claude composer
+# Dictation: press F5 to speak into the Claude composer
 
-Hold `F5`, talk, let go — the transcript lands in the Claude chat's composer and
-stops there. The reviewer presses Enter themselves. Everything runs on this
-machine: the audio never leaves it.
+Press `F5`, talk, press `F5` again — the transcript lands in the Claude chat's
+composer and stops there. The reviewer presses Enter themselves. Everything
+runs on this machine: the audio never leaves it.
 
 Frontend: `src/dictation.mjs`. Backend: `whisper.go` plus the `whisper_model`
 Workflow in `workflows.go`. The settings row lives in `auth_status.go`'s
 `checkWhisper` and `src/settings.mjs`'s `whisperBlock`.
+
+## Which chat F5 opens
+
+`initDictation({ openChat })`'s `openChat` decides which chat the first F5
+press (of a fresh recording) opens — `src/dictation.mjs` itself has no opinion
+here, it only calls whatever the page handed it.
+
+- **`home.mjs` (review tree, `/pr/<id>`):** if the currently selected group/
+  line/call's own scoped Claude conversation is reachable
+  (`claudeColumnVisible()`, `RelatedPanel.mjs` — the same "does the Claude half
+  of the merged comment/chat card render" question `enterCommentsOrRelated`'s
+  own → chain asks), F5 opens THAT conversation via the existing
+  `enterClaudeChat` entry point — no second, parallel way to reach it. Reviewer
+  request: "als ik op f5 druk, en ik heb groep, line of call geselecteerd dan
+  wil ik daarvan de chat openen, niet de algemene chat". Otherwise — nothing
+  meaningfully selected, or this unit has no conversation to hang on yet
+  (`enterClaudeChat` is itself a deliberate no-op without an anchor comment,
+  see its own doc comment in `RelatedPanel.mjs`) — it falls back to the
+  PR-wide general chat (`openGeneralChat`), exactly as before this change.
+- **`plan.mjs` (planning page, `/plan/<KEY>`):** always opens the one ticket
+  chat (`openPlanChat`) — there is no per-unit scoped conversation on this
+  page to prefer instead.
+
+Only the recording's **START** consults this — the second F5 press that stops
+and transcribes never opens or switches a chat, it only ends the recording
+that is already running (whichever chat is on screen at that point keeps the
+focus it already had).
 
 ## Why F5, and the one thing the reviewer must set themselves
 
@@ -27,39 +54,81 @@ no code-side workaround; this is a one-time setting.
 A quick way to check what the browser actually receives: a page with a
 `keydown`/`keyup` logger. If pressing F5 logs nothing, that setting is off.
 
-## Push-to-talk, and the four ways a recording ends
+## A toggle, not push-to-talk — and why that changed
 
-Press = record, release = done. Not a toggle — the reviewer asked for this
-explicitly after first considering a toggle.
+Press F5 to start recording, press it again to stop and transcribe. Releasing
+the key does nothing at all.
 
-The whole risk of push-to-talk is a **keyup that never arrives**, which would
-leave the microphone open indefinitely. `src/dictation.mjs` therefore ends a
-recording on any of:
+This **replaced an earlier push-to-talk design** (hold F5, let go to finish).
+The reviewer triggers F5 via BetterTouchTool, mapped from a physical mic
+button — and BTT forwards a *complete* keystroke (down and up, back to back)
+whenever that button is pressed, rather than holding the key down for as long
+as the button is held. Push-to-talk is therefore not reachable from that
+trigger at all: BTT cannot "hold" a key, so every recording would have
+finished (or been discarded as too short) within milliseconds of starting.
+A toggle is the shape BTT can actually drive.
 
-1. `keyup` on F5 — the ordinary path.
+**Escape aborts a running recording without transcribing anything.**
+Push-to-talk never needed this — releasing the key always finished and
+transcribed whatever was captured, so there was no separate "cancel" gesture.
+A toggle does need one: the reviewer can now start a recording by accident (or
+change their mind) with no key still held to just let go of, so Escape is the
+explicit way out. Only consumed while a recording is actually running; an
+ordinary Escape elsewhere is untouched.
+
+**One wrinkle: the general chat overlay's own Escape handler runs on the
+CAPTURE phase** (`generalChatOverlay.mjs`, "esc moet alles weer hidden" — an
+absolute reviewer rule, see that file's own header) and calls
+`e.stopPropagation()`, so `dictation.mjs`'s bubble-phase Escape branch never
+gets a turn at all while that overlay is the thing on screen. This matters
+here specifically because F5 opens that very overlay whenever it had to fall
+back to the general chat (see "Which chat F5 opens" above) — without a fix,
+pressing Escape to leave it would close the overlay but leave the microphone
+recording silently behind it. `abortDictationIfRecording` (exported from
+`dictation.mjs`) is called from that same capture-phase handler, right before
+`closeGeneralChatOverlay()`, so both happen together. The scoped, in-tree chat
+has no such capture-phase Escape owner, so there Escape reaches
+`handleDictationKeydown` the ordinary way and only the recording is
+cancelled — the chat card itself stays exactly as it was.
+
+The remaining risk is a recording **left running indefinitely** — there is no
+keyup to fall back on anymore, so if the reviewer forgets they toggled it on
+and walks away, or a second F5 press never arrives, nothing else would stop
+it. `src/dictation.mjs` still ends a recording on any of:
+
+1. A second, non-repeat `keydown` on F5 — the ordinary path (the toggle
+   itself).
 2. `window` `blur` — ⌘-Tab, Spotlight, a system dialog. The audio recorded so
-   far is kept and transcribed; it was genuinely spoken.
+   far is kept and transcribed; it was genuinely spoken. Deliberately left in,
+   even though a toggle lets the reviewer knowingly click away while still
+   meaning to keep talking: an open microphone that keeps recording while the
+   window isn't even focused is the more surprising (and more
+   privacy-sensitive) outcome of the two choices, and `MAX_MS` alone would
+   leave it running for up to two full minutes unattended. One more F5 press
+   starts a fresh recording immediately if the reviewer really did just glance
+   elsewhere mid-sentence.
 3. `visibilitychange` to `hidden` — tab switch, minimise.
-4. A hard `MAX_MS` (two minutes) timer, matched to the server's own body cap.
+4. A hard `MAX_MS` (two minutes) timer, matched to the server's own body cap —
+   now the backstop of last resort, since nothing else is guaranteed to fire.
 
-Plus a fifth, recovery path: a **non-repeat `keydown` while already recording**
-means a keyup went missing, so that press is treated as the release. One more
-tap always gets the reviewer unstuck.
+This is the same shape as the existing held-key precedent in this codebase —
+the `c`/`v` column resize in `home.mjs`, whose own comment already says a
+window blur is a safety net for "the case the keyup itself never arrives
+(e.g. Alt+Tab away while still holding the key)" — reused here even though
+this module no longer has a keyup of its own to lose.
 
-This is the same shape as the existing held-key precedent in this codebase — the
-`c`/`v` column resize in `home.mjs`, whose own comment already says a window
-blur is the safety net for "the case the keyup itself never arrives (e.g.
-Alt+Tab away while still holding the key)".
+**`e.repeat` must be ignored.** macOS (and a held BTT trigger) keeps firing
+`keydown` for as long as the key is considered held; without that guard a
+single press would flip the toggle back and forth dozens of times per second.
+`tests/dictation.spec.mjs` pins this by dispatching twenty synthetic
+`repeat: true` keydowns and asserting `getUserMedia` was called exactly once.
 
-**`e.repeat` must be ignored.** macOS keeps firing `keydown` for as long as the
-key is held; without that guard the recording restarts dozens of times per
-second and every earlier fragment is thrown away. `tests/dictation.spec.mjs`
-pins this by dispatching twenty synthetic `repeat: true` keydowns and asserting
-`getUserMedia` was called exactly once.
-
-**A tap shorter than `MIN_MS` (300 ms) is discarded** with the word "Te kort"
-rather than transcribed: whisper happily hallucinates a word out of 40 ms of
-near-silence, and pasting that into the composer is worse than pasting nothing.
+**A recording shorter than `MIN_MS` (300 ms) is discarded** with the word "Te
+kort" rather than transcribed. Under push-to-talk this guarded against a key
+brushed by accident; under the toggle it guards against two F5 presses in
+quick succession (an accidental double-trigger, e.g. a flaky hardware
+button) — whisper happily hallucinates a word out of near-silence, and
+pasting that into the composer is worse than pasting nothing.
 
 ## Where the keydown branch sits, and why that position is load-bearing
 
@@ -229,10 +298,15 @@ behaviour asked for — no separate state was needed for that.
   the 503 "not set up" answer given *before* any audio is read, the body cap,
   the three `checkWhisper` states plus "never error", atomic download including
   a truncated response, and the download claim.
-- `tests/dictation.spec.mjs` — the real gesture on both pages, the auto-repeat
-  guard, the blur safety net, the too-short discard, the "not set up" message,
-  dictating into an already-open chat, and the settings button appearing only
-  when the model (not the binary) is what is missing. `getUserMedia` is replaced
+- `tests/dictation.spec.mjs` — the real toggle gesture on both pages (start on
+  one press, stop-and-transcribe on the next), which chat F5 opens (the
+  scoped one when a group/line/call with a conversation is selected, the
+  general one otherwise), the auto-repeat guard, Escape aborting a recording
+  both on a scoped chat (chat stays open) and via the general overlay's own
+  capture-phase handler (overlay closes, recording still cancelled), the blur
+  safety net, the too-short discard, the "not set up" message, dictating into
+  an already-open chat, and the settings button appearing only when the model
+  (not the binary) is what is missing. `getUserMedia` is replaced
   by a **real** oscillator-backed MediaStream rather than a stub object, so the
   AudioContext/AudioWorklet path is genuinely exercised; only `/api/transcribe`
   is faked, so no 1.6 GB model is needed to run the suite.

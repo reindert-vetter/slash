@@ -284,7 +284,7 @@ func (m *TaskManager) checkWhisper() AuthCheck {
 		return c
 	}
 	c.State = authStateOK
-	c.Detail = "Klaar voor gebruik — houd F5 ingedrukt om in te spreken"
+	c.Detail = "Klaar voor gebruik — druk op F5 om in te spreken, nogmaals om te stoppen"
 	return c
 }
 

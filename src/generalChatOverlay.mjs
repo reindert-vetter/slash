@@ -36,6 +36,7 @@ import {
   leaveRelated,
   setGeneralChatOverlayVisible,
 } from './RelatedPanel.mjs'
+import { abortDictationIfRecording } from './dictation.mjs'
 
 // Ephemeral, like menu.open / the werkmap overlay's own dismissal: not in the
 // URL (this is not a navigation position and not something to share) and not
@@ -66,6 +67,12 @@ export function initGeneralChatOverlay(state) {
       if (!isGeneralChatOverlayOpen() || e.key !== 'Escape') return
       e.preventDefault()
       e.stopPropagation()
+      // F5 opens this overlay when there was no scoped conversation to open
+      // instead (src/dictation.mjs); since this handler runs on the capture
+      // phase and stops the event here, dictation's own bubble-phase Escape
+      // branch would otherwise never see this Escape while recording — the
+      // microphone would keep recording after the overlay is gone.
+      abortDictationIfRecording()
       closeGeneralChatOverlay()
     },
     true,

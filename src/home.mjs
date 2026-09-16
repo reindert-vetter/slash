@@ -214,10 +214,22 @@ import { initJiraBell, jiraBellButton, isJiraBellOpen, handleJiraBellKeydown } f
 
 initTheme()
 syncUiLang()
-// F5 push-to-talk dictation into this PR's general chat (src/dictation.mjs).
-// openGeneralChat is a hoisted function declaration further down this file, so
-// wrapping it in a closure here is safe at module-evaluation time.
-initDictation({ openChat: () => openGeneralChat() })
+// F5 toggle dictation (src/dictation.mjs). Reviewer request: when a group/
+// line/call is selected AND that unit's own Claude conversation is reachable
+// (claudeColumnVisible() — the same "does the scoped chat column render"
+// question enterCommentsOrRelated's own → chain asks, RelatedPanel.mjs),
+// open THAT scoped chat via the existing enterClaudeChat entry point — never
+// a second, parallel way to open it. Otherwise (nothing sensible selected, or
+// no conversation exists yet for this unit) fall back to the PR-wide general
+// chat, exactly as before. openGeneralChat is a hoisted function declaration
+// further down this file, so wrapping both in a closure here is safe at
+// module-evaluation time.
+initDictation({
+  openChat: () => {
+    if (claudeColumnVisible()) enterClaudeChat(state.pr)
+    else openGeneralChat()
+  },
+})
 // The Jira-notifications bell (see src/jiraBell.mjs) — same read-only feed
 // and the same two writes (mark read / mark all read) as /pr-overview's own
 // bell, ported into its own small module rather than reused from
@@ -14125,7 +14137,7 @@ function onKeydown(e) {
     return
   }
 
-  // F5 (hold) dictates into the general chat — see src/dictation.mjs. It sits
+  // F5 (toggle) dictates into the general chat — see src/dictation.mjs. It sits
   // HERE, after the two blocking dialogs but before every overlay guard below,
   // because those guards return early: with it further down (next to `/`, say)
   // it would never run once the chat overlay it opens is actually open, so a
