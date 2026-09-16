@@ -337,6 +337,15 @@ func processChatMergeAt(ctx context.Context, tm *TaskManager, cm *chat.Module, c
 		// question (discard / stash / keep-in-commit) instead of silently
 		// waiting on a landing that will never come.
 		clearChatPendingFiles(arg.Repo, arg.PR)
+		// A failure that WON'T naturally surface its own checkoutStageDirtyTree
+		// question this way (the tree came back clean, or the dirt was already
+		// accepted earlier) would otherwise be nothing more than a chat bubble
+		// in whichever conversation triggered it — reviewer request: a genuinely
+		// blocking failure must show as an overlay, not something that can be
+		// missed. Reuses the exact same werkmap overlay (src/workDirOverlay.mjs)
+		// the dirty-tree question already opens; see checkoutStageLandingFailed's
+		// own doc comment.
+		markCheckoutLandingFailedAt(ctx, dataDir, arg.Repo, arg.PR, headRefName, msg.Body)
 		publishCheckoutChanged(arg.Repo, arg.PR)
 		broadcastCheckoutFreed(tm, checkoutWriteSlotKey(dataDir, arg.Repo, arg.PR))
 	}

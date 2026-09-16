@@ -9,8 +9,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"slash/modules/chat"
+	"slash/modules/claude"
 )
 
 // chat_checkout_test.go covers the git-plumbing halves that don't need gh/
@@ -1895,5 +1897,115 @@ func TestCommitCheckoutEditsLandsWithUnreachableOrigin(t *testing.T) {
 	}
 	if strings.TrimSpace(string(parent)) != strings.TrimSpace(string(before)) {
 		t.Fatalf("second commit's parent = %q, want the first commit %q (a stale origin must never amend)", parent, before)
+	}
+}
+
+// TestGitLockContentionRegexMatchesRealIndexLockError pins
+// gitLockContentionRE against git's ACTUAL error text for the one thing it is
+// meant to recognise: another process (or a stray leftover file) already
+// holding this checkout's index.lock. A synthetic string match would only
+// prove the regex matches whatever we made up, not what git really says.
+func TestGitLockContentionRegexMatchesRealIndexLockError(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
+	dir := cloneCheckoutDir(t, bareDir, "feature/x")
+	ctx := context.Background()
+
+	lock := filepath.Join(dir, ".git", "index.lock")
+	if err := os.WriteFile(lock, []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(lock)
+
+	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("edited\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := runGitIn(ctx, dir, "add", "-A")
+	if err == nil {
+		t.Fatal("expected `git add -A` to fail while index.lock exists")
+	}
+	if !gitLockContentionRE.MatchString(err.Error()) {
+		t.Fatalf("gitLockContentionRE did not match git's real error: %q", err.Error())
+	}
+}
+
+// TestRunGitInRetryOnLockSucceedsOnceTheLockReleases is the actual mitigation
+// this regex feeds: a lock held by something else for a moment must not fail
+// the whole landing — one bounded retry after a short wait is enough once
+// the other process (in this test, a goroutine standing in for "an IDE or a
+// terminal the reviewer also has open") releases it.
+func TestRunGitInRetryOnLockSucceedsOnceTheLockReleases(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
+	dir := cloneCheckoutDir(t, bareDir, "feature/x")
+	ctx := context.Background()
+
+	lock := filepath.Join(dir, ".git", "index.lock")
+	if err := os.WriteFile(lock, []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	released := make(chan struct{})
+	go func() {
+		time.Sleep(100 * time.Millisecond) // well inside runGitInRetryOnLock's 300ms wait
+		os.Remove(lock)
+		close(released)
+	}()
+
+	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("edited\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runGitInRetryOnLock(ctx, dir, "add", "-A"); err != nil {
+		t.Fatalf("expected the retry to succeed once the lock released, got: %v", err)
+	}
+	<-released
+}
+
+// TestProcessChatMergeOpensLandingFailedOverlayOnACleanTreeFailure is the
+// regression for the blocking-error overlay: a landing failure that leaves
+// the checkout's working tree CLEAN (here, the exact same unresolved-conflict
+// shape TestProcessChatMergeAbortsAndDegradesOnUnresolvedConflict already
+// covers — the merge is aborted, no unmerged paths remain) has no natural
+// checkoutStageDirtyTree question to fall back on, so it must raise its own
+// checkoutStageLandingFailed decision — which the existing werkmap overlay
+// (src/workDirOverlay.mjs) already renders unchanged, see
+// checkoutStageLandingFailed's own doc comment.
+func TestProcessChatMergeOpensLandingFailedOverlayOnACleanTreeFailure(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "foo v1\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	cm := testChatModule(t)
+
+	dir := cloneCheckoutDir(t, bareDir, "feature/x")
+	assignCheckoutForTest(t, "", 2012, dir)
+	// This conversation edits the SAME line another one already pushed — a
+	// genuine, unavoidable conflict (mirrors
+	// TestProcessChatMergeAbortsAndDegradesOnUnresolvedConflict exactly).
+	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("foo edited by this conversation\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pushToBare(t, bareDir, "feature/x", "foo edited by someone else\n")
+
+	msg := processChatMergeAt(ctx, nil, cm, &claude.Fake{}, dataDir, chatMergeInput{
+		PR: 2012, ConversationID: "conv-cleanfail", TurnID: "turn-cleanfail",
+	}, "feature/x")
+	if msg.Kind != chat.KindError {
+		t.Fatalf("expected the landing to fail, got: %+v", msg)
+	}
+
+	paths, err := snapshotDirtyPaths(ctx, dir)
+	if err != nil {
+		t.Fatalf("snapshotDirtyPaths: %v", err)
+	}
+	if len(paths) != 0 {
+		t.Fatalf("expected a clean working tree after the aborted merge, got dirty paths: %v", paths)
+	}
+
+	a := getCheckoutAssignment(dataDir, "", 2012)
+	if a == nil || a.Pending == nil {
+		t.Fatal("expected a checkoutStageLandingFailed decision to be raised")
+	}
+	if a.Pending.Stage != checkoutStageLandingFailed {
+		t.Fatalf("Pending.Stage = %q, want %q", a.Pending.Stage, checkoutStageLandingFailed)
+	}
+	if a.Pending.Body != msg.Body {
+		t.Fatalf("decision Body = %q, want the same reason as the chat message %q", a.Pending.Body, msg.Body)
 	}
 }

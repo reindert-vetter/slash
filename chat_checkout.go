@@ -760,6 +760,19 @@ const (
 	checkoutStageChooseDirectory = "chooseDirectory"
 	checkoutStageReuseMerged     = "reuseMerged"
 	checkoutStageDirtyTree       = "dirtyTree"
+	// checkoutStageLandingFailed is a PURELY INFORMATIONAL decision — no
+	// Options at all — raised by markCheckoutLandingFailedAt (chat_merge.go's
+	// processChatMergeAt) when a landing attempt failed for a reason that
+	// will NOT otherwise surface as one of the two stages above on the next
+	// write attempt (the checkout isn't left dirty, or the reviewer already
+	// accepted that dirt earlier). Without it, that failure was only a chat
+	// bubble in whichever conversation triggered it — reviewer request: "laat
+	// de error duidelijk zien als een overlay, niet alleen een bubbel die je
+	// kunt missen". Reuses the existing werkmap overlay (src/workDirOverlay.mjs)
+	// unchanged: its row list already falls back to "Andere werkmap kiezen"/
+	// "Uit"/"Chat pauzeren" for a decision with no Options, so this needs no
+	// new frontend code at all.
+	checkoutStageLandingFailed = "landingFailed"
 )
 
 const (
@@ -835,6 +848,33 @@ func chatCheckoutReuseDecision(c checkoutCandidate, headRef string) *chatCheckou
 		Body:    fmt.Sprintf("`%s` staat nu op `%s`, dat al is gemerged — dus vrij. Gebruiken voor deze PR (branch `%s`)?", c.Dir, c.Branch, headRef),
 		Options: []string{optReuseYes, optReuseNo},
 	}
+}
+
+// markCheckoutLandingFailedAt raises a checkoutStageLandingFailed notice for
+// (repo, pr) — called by chat_merge.go's processChatMergeAt right after a
+// landing attempt errored. Deliberately a no-op when the checkout is left in
+// an ORDINARY dirty state that will already ask its own checkoutStageDirtyTree
+// question on the very next write attempt (dirtyIsOnlyPendingEdits no longer
+// hides it there, see processChatMergeAt's own doc comment) — this notice
+// exists only for the failures that would otherwise leave NOTHING for the
+// reviewer to see beyond a chat bubble in whichever conversation triggered
+// it: the checkout's own working tree came back clean (a push-target/ref
+// failure, e.g. advancePendingRefFromCheckout), the dirt was already accepted
+// earlier ("Meenemen in de commit"/"Los laten"), or the reclassification
+// itself errored (best-effort: treated the same as "won't self-explain").
+// dataDir/headRef/body are exactly what processChatMergeAt already has to
+// hand: the failing chat.Message's own Body becomes this decision's Body, so
+// the overlay shows the SAME real reason the conversation's own bubble does.
+func markCheckoutLandingFailedAt(ctx context.Context, dataDir, repo string, pr int, headRef, body string) {
+	a := getCheckoutAssignment(dataDir, repo, pr)
+	if a == nil || a.Dir == "" {
+		return
+	}
+	cand, err := classifyCheckoutCandidate(ctx, a.Dir, headRef, baseBranchFor(repo))
+	if err == nil && cand.Dirty && !dirtyAlreadyAccepted(ctx, a) && !dirtyIsOnlyPendingEdits(cand.DirtyPaths, repo, pr) {
+		return
+	}
+	a.Pending = &chatCheckoutDecision{Stage: checkoutStageLandingFailed, Dir: a.Dir, Body: body}
 }
 
 // ---------------------------------------------------------------------------
@@ -1113,6 +1153,13 @@ func checkoutPendingStillNeeded(ctx context.Context, a *chatCheckoutAssignment, 
 	}
 	switch a.Pending.Stage {
 	case checkoutStageDirtyTree, checkoutStageReuseMerged:
+	case checkoutStageLandingFailed:
+		// Purely informational (see its own doc comment): once a NEW write
+		// turn actually starts running this ladder, that attempt's own
+		// outcome — success or its own fresh message — already supersedes a
+		// notice about the PREVIOUS attempt, so it is never needed by the
+		// time this is asked.
+		return false
 	default:
 		return true
 	}
@@ -1449,6 +1496,15 @@ func applyCheckoutDecisionReply(ctx context.Context, a *chatCheckoutAssignment, 
 			}
 			return &chatCheckoutResolved{Dir: d.Dir, Final: true}, nil
 		}
+		return &chatCheckoutResolved{Dir: d.Dir}, nil
+	case checkoutStageLandingFailed:
+		// Never actually reachable through the overlay's own UI (it offers no
+		// Options for this stage, see checkoutStageLandingFailed's doc
+		// comment), but any reply that DOES arrive for it — a stale click, a
+		// direct API call — simply clears the notice rather than repeating
+		// "Dat antwoord herkende ik niet als een van de keuzes" forever, the
+		// unanswerable-question failure mode this whole file already guards
+		// against for every other stage.
 		return &chatCheckoutResolved{Dir: d.Dir}, nil
 	}
 	return nil, nil
@@ -1830,6 +1886,37 @@ func amendableChatCommit(ctx context.Context, dir, headRefName string) (string, 
 // folded into it via `git commit --amend` instead of stacking a new commit,
 // and the pending ref is moved onto the new (rewritten) SHA. See "Amending a
 // chain of chat commits" in .claude/docs/pending-push.md.
+// gitLockContentionRE matches the handful of git error messages that mean
+// "another git process (or a stray leftover lock file) is holding this
+// checkout's .git directory right now" — the class runGitInRetryOnLock below
+// is meant to self-heal. This checkout is deliberately the reviewer's OWN,
+// permanent local clone (see commitCheckoutEditsAt's own doc comment), not a
+// disposable internal worktree, so it can genuinely have something else
+// (an IDE, a terminal the reviewer is also using) touching it at the exact
+// same moment a landing runs — unlike a real conflict or a rejected commit,
+// this class is transient by nature and normally clears within
+// milliseconds once the other process releases its lock.
+var gitLockContentionRE = regexp.MustCompile(`(?i)\.lock['"]?\s*:|unable to create .*\.lock|cannot lock ref`)
+
+// runGitInRetryOnLock runs one git command and, ONLY when it fails with a
+// gitLockContentionRE-shaped message, waits briefly and tries exactly once
+// more. Any other failure (a real conflict, a rejected commit, a genuine git
+// error) returns immediately after the first attempt — this is deliberately
+// not a general-purpose retry, only a narrow mitigation for the one class of
+// failure that is not this code's own fault and is known to be transient.
+func runGitInRetryOnLock(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	out, err := runGitIn(ctx, dir, args...)
+	if err == nil || !gitLockContentionRE.MatchString(err.Error()) {
+		return out, err
+	}
+	select {
+	case <-time.After(300 * time.Millisecond):
+	case <-ctx.Done():
+		return out, err
+	}
+	return runGitIn(ctx, dir, args...)
+}
+
 func commitCheckoutEditsAt(ctx context.Context, cm *chat.Module, dataDir, repo string, pr int, conversationID, turnID, headRefName string) chat.Message {
 	newMsg := func(body string, isErr bool) chat.Message {
 		kind := ""
@@ -1881,8 +1968,21 @@ func commitCheckoutEditsAt(ctx context.Context, cm *chat.Module, dataDir, repo s
 	}
 	amended := false
 	if strings.TrimSpace(string(statusOut)) != "" {
-		if _, err := runGitIn(ctx, dir, "add", "-A"); err != nil {
-			return newMsg("Kon de wijziging niet stagen.", true)
+		// Every git call in this block goes through runGitInRetryOnLock: this
+		// checkout is the reviewer's own permanent clone, which can genuinely
+		// have something else (an IDE, a terminal) touching its .git
+		// directory at the same moment — see that function's own doc
+		// comment. Not a proven fix for any specific past failure, only a
+		// mitigation for the most likely transient cause; a real conflict or
+		// rejected commit still fails immediately, now with the actual git
+		// error logged AND shown (previously silently discarded here, unlike
+		// the advancePendingRefFromCheckout failure a few lines below, which
+		// already did this right) — a reported "Ik kan nu geen code
+		// aanpassen"/"nieuwe poging" dead end (PR 13729) turned out to be
+		// exactly this kind of failure with no way to find out why.
+		if _, err := runGitInRetryOnLock(ctx, dir, "add", "-A"); err != nil {
+			log.Printf("chat_checkout: pr %d: stage %s: %v", pr, dir, err)
+			return newMsg("Kon de wijziging niet stagen (reden: "+err.Error()+").", true)
 		}
 		// "Los laten": keep the reviewer's own pre-existing, unrelated changes
 		// OUT of Claude's commit, recorded once when that decision was made.
@@ -1893,12 +1993,14 @@ func commitCheckoutEditsAt(ctx context.Context, cm *chat.Module, dataDir, repo s
 		// cannot be answered against a ref we could not refresh, so don't
 		// rewrite history on a guess.
 		if prevMsg, ok := amendableChatCommit(ctx, dir, headRefName); ok && !staleOrigin {
-			if _, err := runGitIn(ctx, dir, "commit", "--amend", "-m", appendChatEditCommitMessage(prevMsg, conversationID)); err != nil {
-				return newMsg("Kon de wijziging niet aan de vorige, nog niet gepushte commit toevoegen.", true)
+			if _, err := runGitInRetryOnLock(ctx, dir, "commit", "--amend", "-m", appendChatEditCommitMessage(prevMsg, conversationID)); err != nil {
+				log.Printf("chat_checkout: pr %d: amend %s: %v", pr, dir, err)
+				return newMsg("Kon de wijziging niet aan de vorige, nog niet gepushte commit toevoegen (reden: "+err.Error()+").", true)
 			}
 			amended = true
-		} else if _, err := runGitIn(ctx, dir, "commit", "-m", chatEditCommitMessage(conversationID)); err != nil {
-			return newMsg("Kon de wijziging niet committen.", true)
+		} else if _, err := runGitInRetryOnLock(ctx, dir, "commit", "-m", chatEditCommitMessage(conversationID)); err != nil {
+			log.Printf("chat_checkout: pr %d: commit %s: %v", pr, dir, err)
+			return newMsg("Kon de wijziging niet committen (reden: "+err.Error()+").", true)
 		}
 	}
 	// Else: nothing new to stage — but an earlier attempt may already have

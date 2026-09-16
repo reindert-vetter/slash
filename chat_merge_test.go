@@ -217,6 +217,14 @@ func TestProcessChatMergeClearsPendingEditedFilesOnFailureToo(t *testing.T) {
 	if dirtyIsOnlyPendingEdits(paths, "", 2011) {
 		t.Fatalf("expected the leftover dirty tree to no longer read as 'only pending edits'")
 	}
+	// No separate checkoutStageLandingFailed overlay notice here — the tree
+	// being genuinely dirty already means the NEXT write attempt's own
+	// classification will raise the ordinary checkoutStageDirtyTree question
+	// on its own (see markCheckoutLandingFailedAt, chat_checkout.go); a
+	// second, redundant notice would be confusing.
+	if a := getCheckoutAssignment(dataDir, "", 2011); a != nil && a.Pending != nil {
+		t.Fatalf("expected no Pending decision yet for a dirty-tree failure, got: %+v", a.Pending)
+	}
 }
 
 // TestRefreshTreeAfterLandingPublishesLandedFilesThroughTheRealSignalChain
