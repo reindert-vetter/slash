@@ -169,7 +169,7 @@ import { bindUrlState, num } from './urlState.mjs'
 import { renderMarkdown } from './markdown.mjs'
 import { commentMentionsMe } from './mentions.mjs'
 import ImageLightboxHost, { initImageLightbox, isLightboxOpen, handleLightboxKeydown } from './imageLightbox.mjs'
-import { initMarkdownCodeCopy } from './codeCopy.mjs'
+import { initMarkdownCodeCopy, copyCodeToClipboard } from './codeCopy.mjs'
 // The global failed-tasks dialog (failedTasks.mjs) — same top-level-mount +
 // owns-the-keyboard contract as the lightbox above.
 import FailedTasksHost, { initFailedTasksPopup, isFailedTasksOpen, handleFailedTasksKeydown } from './failedTasks.mjs'
@@ -16567,7 +16567,14 @@ function prInfoCard(state) {
         ${() => (state.prMeta.headRef ? html`<span class="text-slate-300 dark:text-zinc-600">·</span>` : '')}
         ${() =>
           state.prMeta.headRef
-            ? html`<span class="truncate font-mono text-sky-600 dark:text-sky-400" title="${t('Huidige branch')}">${state.prMeta.headRef}</span>`
+            ? html`<span
+                class="cursor-pointer truncate font-mono text-sky-600 hover:underline dark:text-sky-400"
+                title="${t('Klik om de branchnaam te kopiëren')}"
+                data-testid="pr-info-branch"
+                data-copy-label="${() => state.prMeta.headRef}"
+                @click="${(e) => copyCodeToClipboard(e.currentTarget, state.prMeta.headRef)}"
+                >${state.prMeta.headRef}</span
+              >`
             : ''}
         ${() => (state.prUrl ? html`<span class="text-slate-300 dark:text-zinc-600">·</span>` : '')}
         ${() =>

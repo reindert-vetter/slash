@@ -373,6 +373,7 @@ export const EN = {
   'Push mislukt': 'Push failed',
   'Ongepusht {n}': 'Not pushed {n}',
   'Huidige branch': 'Current branch',
+  'Klik om de branchnaam te kopiëren': 'Click to copy the branch name',
   'Bijgewerkt {time}': 'Updated {time}',
   'hoofdtaak, alleen ter context': 'main task, context only',
   'onderdeel van': 'part of',
