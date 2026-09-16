@@ -82,6 +82,104 @@ test('`/` + a no-match query starts the one general chat, in an overlay, with it
   await expect(page.getByTestId('block-row').filter({ hasText: 'Algemene chat' })).toHaveCount(1)
 })
 
+// "Wis Claude-gesprek" from an EMPTY composer inside the general-chat overlay
+// — reviewer request: "als ik in de algemene chat op een leeg input veld
+// enter druk, wil ik algemene chat kunnen verwijderen (en anders leeg maken),
+// nieuwe chat moet met schone lei beginnen".
+//
+// The mechanism itself already existed (the `claude` mode menu's "Wis
+// Claude-gesprek" — see claudeChatCommandsFor/clearClaudeChat), reached the
+// exact same way as any other Claude column via the composer's own
+// onEmptyEnter (see "Comment hiervan maken' on an empty Claude input" in
+// claude-chat-panel.md), including its existing confirm-submenu gate for
+// real (dirty-shadow-worktree) work. Two gaps stopped it from actually
+// working here, both fixed alongside this test:
+//
+// 1. home.mjs's onKeydown checked isGeneralChatOverlayOpen() BEFORE
+//    menu.open and returned unconditionally either way, so once the menu
+//    opened (moving focus to command-input) every following ↑/↓/Enter aimed
+//    at it was swallowed by the overlay guard instead — the menu was
+//    visible but completely inert.
+// 2. clearClaudeChat's placeholder-anchor branch always called
+//    exitRelated() afterwards, which knows nothing about the overlay: the
+//    composer stayed open but pointed at a conversation id that no longer
+//    existed, so typing a new message and pressing Enter did nothing at
+//    all — no request went out.
+test('empty Enter in the general-chat composer deletes it, and the overlay is ready for a brand-new one', async ({
+  page,
+}, testInfo) => {
+  const pr = seededPr(testInfo)
+  await page.goto('/pr/' + pr)
+  await leaveSearchBox(page)
+
+  // Start the general chat with a first message, like the test above.
+  await page.keyboard.press('/')
+  await page.getByTestId('command-input').fill('eerste gesprek')
+  await page.keyboard.press('Enter')
+
+  const overlay = page.getByTestId('general-chat-overlay')
+  await expect(overlay).toBeVisible()
+  await expect(page.getByTestId('claude-message').filter({ hasText: 'eerste gesprek' }).first()).toBeVisible()
+
+  // Enter on the still-empty composer opens the Claude column's own menu —
+  // reached from right inside the overlay, not from the tree.
+  const compose = page.getByTestId('claude-chat-compose')
+  await compose.click()
+  await page.keyboard.press('Enter')
+  const menu = page.getByTestId('command-menu')
+  await expect(menu).toBeVisible()
+  const rows = page.getByTestId('command-row')
+  await expect(rows.filter({ hasText: 'Wis Claude-gesprek' })).toHaveCount(1)
+
+  // ↑/↓ must actually move the highlight while the overlay sits underneath —
+  // gap 1 above. Down then up lands back on "Wis Claude-gesprek" (the
+  // default 2nd item), which is asserted below by simply pressing Enter.
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('ArrowUp')
+
+  // No dirty shadow worktree in this offline fixture, so the first Enter
+  // clears straight away — no confirm submenu.
+  const clearReq = page.waitForRequest((req) => req.url().includes('/signals/message'))
+  // clearClaudeChat's own recreate (the "schone lei" fix) posts a brand-new
+  // anchor comment right after the clear signal settles — wait for that
+  // response too before typing anything, so the test types at the earliest
+  // moment a real reviewer COULD (the composer only truly re-anchors once
+  // this lands; typing faster than one local round trip isn't a realistic
+  // reviewer speed).
+  const recreateReq = page.waitForResponse('**/api/workflows/task_code_comment')
+  await page.keyboard.press('Enter')
+  await clearReq
+  await expect(menu).toBeHidden()
+  await recreateReq
+
+  // The old conversation is really gone: the overlay stays open (unlike a
+  // per-line chat, which would exitRelated() out of the panel entirely) and
+  // shows a genuinely empty thread, ready for a brand-new one — gap 2 above.
+  // A brand-new anchor already exists at this point too (clearClaudeChat's
+  // own startPrGeneralChat call) — its row keeps the same "Algemene chat"
+  // index label the very first one had.
+  await expect(overlay).toBeVisible()
+  await expect(page.getByTestId('claude-chat-empty')).toBeVisible()
+  await expect(page.getByTestId('claude-message').filter({ hasText: 'eerste gesprek' })).toHaveCount(0)
+
+  // Typing straight into the SAME still-open composer starts a genuinely NEW
+  // conversation — not a resurrection of the deleted one, no dead composer,
+  // no second Enter/menu round trip needed. This is the "schone lei" the
+  // reviewer asked for.
+  await compose.click()
+  await expect(compose).toBeFocused()
+  await compose.fill('tweede, schone chat')
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('claude-message').filter({ hasText: 'tweede, schone chat' }).first()).toBeVisible()
+  await expect(page.getByTestId('claude-message').filter({ hasText: 'eerste gesprek' })).toHaveCount(0)
+
+  // The index reflects the same single, reused "Algemene chat" row — no
+  // stray duplicate anchor left behind by the clear+recreate.
+  await page.keyboard.press('Escape')
+  await expect(overlay).toBeHidden()
+  await expect(page.getByTestId('block-row').filter({ hasText: 'Algemene chat' })).toHaveCount(1)
+})
+
 // A running turn must show live progress in the overlay too — the same
 // shared status line the per-line chat shows below its own columns
 // (CommentClaudeFooter, RelatedPanel.mjs). Reported bug: the overlay showed

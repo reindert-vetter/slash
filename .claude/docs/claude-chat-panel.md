@@ -1422,6 +1422,86 @@ and that a second start reuses the same one; a second test mocks a running
 turn's SSE progress the same way `tests/claude-chat-progress.spec.mjs` does,
 to pin that the shared status line/Stop button render inside the overlay).
 
+### "Wis Claude-gesprek" from the empty composer, inside the overlay: verwijderen met schone lei
+
+Reviewer request: *"als ik in de algemene chat op een leeg input veld enter
+druk, wil ik algemene chat kunnen verwijderen (en anders leeg maken), nieuwe
+chat moet met schone lei beginnen"*. The mechanism already existed — the
+empty-composer `Enter` above opens the exact same `claude` mode menu
+(`claudeChatCommandsFor()`, "'Comment hiervan maken' on an empty Claude
+input"), whose **first, default item is "Wis Claude-gesprek"**
+(`clearClaudeChat`, see "'Wis Claude-gesprek' — clearing a conversation"
+above) — it already deletes the backing comment outright once it is still
+exactly `CLAUDE_ANCHOR_PLACEHOLDER` (always true for the general chat, unless
+it was ever converted via "Comment hiervan maken" — see below), with the
+SAME confirm-submenu gate for real, unsaved agentic-edit work in the shadow
+worktree. Nothing about the write path needed to change: it is a workflow
+Signal (`chatActionClear`) plus a workflow-based comment delete either way,
+both already inside the write boundary.
+
+Two gaps stopped this from actually working from inside the overlay, both
+fixed alongside `tests/general-chat.spec.mjs`'s own "empty Enter…" test:
+
+1. **The menu opened, but was inert.** `home.mjs`'s document-level
+   `onKeydown` checked `isGeneralChatOverlayOpen()` BEFORE `menu.open` and
+   returned unconditionally either way — see "The general-chat overlay" in
+   `.claude/docs/command-palette.md` for why that guard exists at all
+   (swallow nothing but Escape). The composer's own `onEmptyEnter`
+   (`ClaudeChat.mjs`'s `@keydown`, which `stopPropagation()`s before opening
+   the menu — see above) still opened it fine, and moved DOM focus to
+   `command-input`, but every SUBSEQUENT `↑`/`↓`/`Enter` aimed at that menu
+   still bubbles to the same document listener, which kept swallowing it
+   before `if (menu.open)` was ever reached. The menu rendered, visibly, and
+   did nothing. Fix: `isGeneralChatOverlayOpen() && !menu.open` — once a menu
+   is open, it owns the keyboard even from inside this overlay. Escape's own
+   absolute "esc moet alles weer hidden" rule is untouched (a separate,
+   CAPTURE-phase listener in `generalChatOverlay.mjs`, which runs before this
+   bubble-phase check regardless) — so Escape still closes the whole overlay,
+   menu included, exactly as before; that is a deliberate, pre-existing
+   product decision, not something this fix touches.
+2. **After clearing, the still-open composer pointed at nothing.**
+   `clearClaudeChat`'s placeholder-anchor branch always finished with
+   `exitRelated()` — written for the per-line/per-comment Claude column,
+   where "nothing left to focus" means step OUT of the panel entirely. The
+   general chat's own composer, though, stays visible the whole time (the
+   overlay only ever closes on Escape) — so `exitRelated()` there left a
+   perfectly normal-looking, focused composer silently wired to a
+   conversation id that no longer existed: typing a new message and pressing
+   Enter did nothing at all, not even a failed request.
+   Fix: `clearClaudeChat` now checks `cs.generalOverlay && isGeneralChatAnchor(anchor)`
+   right before deleting — `cs.generalOverlay` is the existing flag
+   `setGeneralChatOverlayVisible` (`generalChatOverlay.mjs` → `RelatedPanel.mjs`)
+   already keeps in sync, so this needed no new cross-module import (the
+   overlay module already imports FROM `RelatedPanel.mjs`, never the other
+   way — same import-cycle avoidance as `setReplyPublishMenuOpener`/
+   `setClaudeMenuOpener`). When true, instead of `exitRelated()` it calls
+   `startPrGeneralChat({ pr: cs.pr })` again — the SAME lazy create-or-reuse
+   `startPrGeneralChat` already uses for a first-time reviewer, just handed a
+   minimal `{ pr }` rather than the real `home.mjs` state object (the
+   function only ever reads `state.pr`). That creates a brand-new anchor
+   comment, with a brand-new id, and re-anchors `cc` onto it — a real "schone
+   lei": the still-open composer is now backed by a genuinely new,
+   never-had-messages conversation, ready for the very next Enter, with no
+   second menu round trip needed.
+
+**The one case this correctly leaves as "leegmaken" instead of "verwijderen":**
+if the reviewer had, at some earlier point, used "Comment hiervan maken" on
+the general chat's own placeholder anchor, it is no longer
+`CLAUDE_ANCHOR_PLACEHOLDER` — a real, reviewer-authored comment now. Clearing
+then only wipes the transcript and steps onto that comment (`toComment()`,
+the ordinary non-general-chat branch); no recreate runs, and the next
+`startPrGeneralChat` (the anchor no longer matches `isGeneralChatAnchor`)
+creates a genuinely separate, brand-new general chat, leaving the
+now-converted one behind as an ordinary comment in the index. Not something
+this change had to special-case — it falls out of the existing placeholder
+check unchanged.
+
+Test: the "empty Enter in the general-chat composer…" case in
+`tests/general-chat.spec.mjs` — the menu opens from inside the overlay and
+`↑`/`↓`/`Enter` genuinely move/run it, the old conversation and its message
+are gone, the composer accepts a brand-new message in the SAME still-open
+overlay, and the index still shows exactly one "Algemene chat" row.
+
 ### Cmd+C on a selected bubble copies that turn's own text
 
 Reviewer request: with a keyboard-selected turn (`cs.claudePos >= 1`, walked
@@ -3745,6 +3825,13 @@ by unrelated pending work they'd otherwise only discover later. Backend
 mechanics (the `"clear"` `ChatMessageSignal.Action`, `clearChatConversation`)
 are in `.claude/docs/workflows-comments.md`'s `claude_chat` section; this
 section is the frontend/palette half.
+
+**The general (PR-wide, code-less) chat is the one caller that does NOT end
+in `exitRelated()` after deleting the placeholder anchor** — its own
+still-open composer needs a fresh anchor to re-attach to instead. See
+"'Wis Claude-gesprek' from the empty composer, inside the overlay" under
+"The general chat" above for that branch and the keyboard-precedence fix
+that made reaching it from inside the overlay work at all.
 
 - **Reached via Enter on the Claude column, but only while the composer is
   NOT the focused DOM element** (`home.mjs`'s `onKeydown`, inside the

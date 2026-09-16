@@ -3099,6 +3099,24 @@ export async function resolveCancelCleanup(choice) {
 // drops the caret in the reply field). If nothing is left to land on — the
 // anchor was a placeholder and got deleted above, or there was no anchor at
 // all — fall back to exitRelated(), same as before.
+//
+// The ONE exception: the general (PR-wide, code-less) chat. Its anchor is
+// ALWAYS exactly CLAUDE_ANCHOR_PLACEHOLDER (see startPrGeneralChat/
+// isGeneralChatAnchor — nothing ever replaces its body except "Comment
+// hiervan maken", which turns it into an ordinary comment and thus off this
+// path entirely), and its own composer stays open and visible the whole
+// time (the general-chat overlay, generalChatOverlay.mjs — "esc moet alles
+// weer hidden" is the only thing that closes it). So exitRelated() here
+// would leave that still-open composer pointed at a conversation id that no
+// longer exists — reviewer request ("ik wil algemene chat kunnen
+// verwijderen... nieuwe chat moet met schone lei beginnen") asks for the
+// OPPOSITE: a fresh, empty conversation ready right away, not a dead
+// composer. `cs.generalOverlay` (set by setGeneralChatOverlayVisible) is the
+// only surface that can ever anchor there, so it doubles as a safe,
+// no-import-cycle gate (see its own doc comment: "the overlay imports this
+// module, never the other way round"). startPrGeneralChat only ever reads
+// `state.pr`, so a minimal `{ pr: cs.pr }` is enough — no need to thread the
+// real home.mjs `state` object through here.
 export async function clearClaudeChat() {
   await sendClaudeMessage('', 'clear')
   // Belt-and-braces local reset, same reasoning as sendClaudeMessage's own
@@ -3112,9 +3130,14 @@ export async function clearClaudeChat() {
   cs.claudeTasksPos = 0
   const anchor = cc.commentId != null ? commentById(cc.commentId) : null
   if (anchor && anchor.body === CLAUDE_ANCHOR_PLACEHOLDER) {
+    const wasGeneral = cs.generalOverlay && isGeneralChatAnchor(anchor)
     await deleteComment(anchor)
     await loadComments(cs.pr)
-    exitRelated() // nothing left to focus — hand the keyboard back to the diff
+    if (wasGeneral) {
+      await startPrGeneralChat({ pr: cs.pr }) // schone lei: a brand-new anchor/conversation, right away
+    } else {
+      exitRelated() // nothing left to focus — hand the keyboard back to the diff
+    }
     return true
   }
   if (anchor) {

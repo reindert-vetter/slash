@@ -14235,7 +14235,20 @@ function onKeydown(e) {
   // NOTHING except Escape (which hides it again), because the reviewer is
   // typing in a real composer inside it. Returning here is the whole point:
   // no tree-navigation branch below runs while it is open.
-  if (isGeneralChatOverlayOpen()) {
+  //
+  // Exception: once a menu is open (`menu.open`), IT owns the keyboard
+  // instead — the composer's own empty-Enter (or the claude-chat-menu
+  // button, or a right-click) already opened the `claude` mode menu
+  // (openClaudeMenuFromComposer/claudeMenuOpener) and moved DOM focus to
+  // `command-input`, but that keydown still bubbles to this same document
+  // listener. Without this guard every ↑/↓/Enter aimed at the menu (e.g.
+  // picking "Wis Claude-gesprek") was silently swallowed here instead —
+  // the menu stayed visible but was completely inert. Escape's own "esc
+  // moet alles weer hidden" rule is untouched: it runs on the CAPTURE phase
+  // in generalChatOverlay.mjs, before this bubble-phase check ever fires,
+  // so Escape still closes the whole overlay (menu included) exactly as
+  // before.
+  if (isGeneralChatOverlayOpen() && !menu.open) {
     handleGeneralChatOverlayKeydown(e)
     return
   }

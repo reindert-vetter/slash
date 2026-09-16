@@ -323,6 +323,22 @@ wants out — capturing wins that race by construction, and cancelling stays
 available through the card's own "Stop" button and the Claude menu.
 Reviewer's rule, absolute: *"esc moet alles weer hidden"*.
 
+**Exception: a menu opened from inside it owns the keyboard instead.** The
+composer's own empty-Enter (or the `claude-chat-menu` button, or a
+right-click) can open the `claude` mode command palette right over this
+overlay (`openClaudeMenuFromComposer`/`claudeMenuOpener`, see "'Comment
+hiervan maken' on an empty Claude input" in `.claude/docs/claude-chat-panel.md`)
+— moving DOM focus to `command-input`, but that key still bubbles to the
+same document-level `onKeydown`. `home.mjs`'s guard is therefore
+`isGeneralChatOverlayOpen() && !menu.open`, not a bare
+`isGeneralChatOverlayOpen()`: without the `!menu.open`, every `↑`/`↓`/`Enter`
+aimed at the menu was swallowed here instead, before `if (menu.open)` further
+down was ever reached — the menu rendered but was completely inert (found
+while wiring "Wis Claude-gesprek" to work from inside this overlay). Escape
+is unaffected either way — it is the capture-phase listener above, which
+runs regardless of `menu.open` and still closes the whole overlay (menu
+included), matching the reviewer's own absolute rule.
+
 Closing also calls `leaveRelated()` — `startPrGeneralChat` takes
 `cs.focus = 'claude'`, and leaving it set would keep the tree's keyboard
 routed into a now-hidden composer (`relatedActive()` is checked before every
