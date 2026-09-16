@@ -9582,15 +9582,17 @@ function spaceHint() {
 
 function blockShortcutHints() {
   if (relatedActive()) return []
-  // While the top-level card is mid inline-edit (inlineEditState.id, see
-  // inlineEdit.mjs) the ordinary group/line/call hints make no sense — show
-  // the editor's own two keys instead. Only reachable at focusLevel===0 (the
-  // v1 scope of inline editing) and only for curBlock() itself: DOM focus is
-  // trapped in the editor's own <textarea> while this is open (every
-  // arrow-key/drill path is intercepted by onKeydown's isEditableFocused()
-  // fallback first), so a drilled column can never be mid-edit at the same
-  // time this function is asked for ITS hints.
-  const editingBlock = curBlock()
+  // While the card that owns the keyboard is mid inline-edit
+  // (inlineEditState.id, see inlineEdit.mjs) the ordinary group/line/call
+  // hints make no sense — show the editor's own two keys instead.
+  // focusedBlock(), not curBlock(): inline editing now also reaches a
+  // focused drilled column (see inlineEditEligibleNow's own doc comment), so
+  // this hint must follow the same card. DOM focus is trapped in the
+  // editor's own <textarea> while this is open (every arrow-key/drill path
+  // is intercepted by onKeydown's isEditableFocused() fallback first), so
+  // whichever OTHER card asks this function for ITS OWN hints can never be
+  // mid-edit at the same time.
+  const editingBlock = focusedBlock()
   if (editingBlock && inlineEditState.id === editingBlock.id) {
     return [
       { key: 'Esc', label: t('annuleren') },
@@ -9746,26 +9748,37 @@ function topLevelActiveUnit(b) {
 }
 
 // inlineEditEligibleNow — the ONE shared gate for "can the `e` key/the
-// 'Bewerk deze code' command open inline editing right now": the true
-// top-level selected card owns the diff keyboard (state.mode==='diff',
-// state.focusLevel===0 — v1 scope, see .claude/docs/inline-edit.md) and its
-// block is eligible (isInlineEditable, Block.mjs). Shared by COMMANDS'
-// `edit-code` item's own `when` and eKey below, so the two can never
-// disagree, same reasoning as inlineEditToggleButton/`edit-code` already
-// sharing isInlineEditable itself.
+// 'Bewerk deze code' command open inline editing right now": whichever card
+// currently owns the diff keyboard (focusedBlock() — the top-level selected
+// card at focusLevel===0, or the FOCUSED drilled column otherwise, which also
+// covers a comment/chat-op-regel anchor's own drilled column — see
+// "Extended past v1's top-level-only scope" in .claude/docs/inline-edit.md)
+// and its block is eligible (isInlineEditable, Block.mjs). Mirrors, per
+// level, the exact same condition each Block() call site's own `diffActive`
+// opt already uses (home.mjs's DetailPanel resp. the state.drill.map()
+// render) — not a new rule, just the shared read of an existing one. Shared
+// by COMMANDS' `edit-code` item's own `when` and eKey below, so the two can
+// never disagree, same reasoning as inlineEditToggleButton/`edit-code`
+// already sharing isInlineEditable itself.
 function inlineEditEligibleNow() {
-  const b = curBlock()
-  return state.mode === 'diff' && state.focusLevel === 0 && isInlineEditable(b, blockRows(b))
+  const b = focusedBlock()
+  if (!b) return false
+  const diffActive =
+    state.focusLevel === 0
+      ? state.mode === 'diff' && !relatedActive()
+      : !relatedActive() && !commentAnchorAwaitingEntry(state.focusLevel)
+  return diffActive && isInlineEditable(b, blockRows(b))
 }
 
-// eKey — opens inline editing on the top-level selected card, the exact same
-// action as clicking the header toggle button or running the "Bewerk deze
-// code" command (openInlineEdit is the one shared entry point, see
-// inlineEdit.mjs) — reviewer request: "als ik e druk op een code blokje die
-// ik kan editen, dan wil ik het gelijk editen".
+// eKey — opens inline editing on whichever card currently owns the diff
+// keyboard (focusedBlock()/focusedActiveUnit(), see inlineEditEligibleNow's
+// own doc comment), the exact same action as clicking that card's header
+// toggle button or running the "Bewerk deze code" command (openInlineEdit is
+// the one shared entry point, see inlineEdit.mjs) — reviewer request: "als ik
+// e druk op een code blokje die ik kan editen, dan wil ik het gelijk editen".
 function eKey() {
-  const b = curBlock()
-  if (b) openInlineEdit(b, topLevelActiveUnit(b))
+  const b = focusedBlock()
+  if (b) openInlineEdit(b, focusedActiveUnit())
 }
 
 // focusedActiveUnit — the active unit of whichever card currently owns the
@@ -13246,20 +13259,21 @@ const COMMANDS = withClose([
     // menu" in .claude/docs/command-palette.md — one shared implementation,
     // not two). This item reuses the SAME shared inlineEditState flag the
     // header button toggles — one source of truth, nothing duplicated.
-    // `when` mirrors the header button's own gate exactly (isInlineEditable
-    // plus the v1 top-level-only scope, see .claude/docs/inline-edit.md) so
-    // this item silently disappears wherever that button would too, instead
-    // of appearing and doing nothing.
+    // `when` mirrors the focused card's own gate exactly (isInlineEditable
+    // plus inlineEditEligibleNow's per-level diffActive check, see
+    // .claude/docs/inline-edit.md) so this item silently disappears wherever
+    // that card's own toggle button would too, instead of appearing and
+    // doing nothing.
     label: t('Bewerk deze code'),
     hint: 'edit bewerk',
     run: () => {
-      const b = curBlock()
-      // topLevelActiveUnit(b) is the SAME unit the top-level card's own
+      const b = focusedBlock()
+      // focusedActiveUnit() is the SAME unit the focused card's own
       // activeGroup opt highlights (this item's `when` already scopes to
-      // exactly that card, state.focusLevel===0) — openInlineEdit stores its
-      // row range so the editor places the caret in the middle of it once
-      // mounted, see inlineEdit.mjs and .claude/docs/inline-edit.md.
-      if (b) openInlineEdit(b, topLevelActiveUnit(b))
+      // exactly that card) — openInlineEdit stores its row range so the
+      // editor places the caret in the middle of it once mounted, see
+      // inlineEdit.mjs and .claude/docs/inline-edit.md.
+      if (b) openInlineEdit(b, focusedActiveUnit())
     },
     when: () => inlineEditEligibleNow(),
   },
@@ -17323,11 +17337,14 @@ function DetailPanel(state) {
             // Marks a block whose file was just landed but the tree hasn't
             // re-ingested it yet (see checkoutRefreshingFiles/loadCheckout).
             refreshing: () => checkoutRefreshingFiles().has(b.file),
-            // Inline, IDE-style editing (see .claude/docs — inline-edit design
-            // notes, Block.mjs's inlineEditorSlot): v1 scope is deliberately
-            // only the true top-level selected card, never a preview/
-            // look-ahead card or a drilled Onderliggende-code column (neither
-            // of those wires this opt at all, so it defaults to false there).
+            // Inline, IDE-style editing (see .claude/docs/inline-edit.md,
+            // Block.mjs's inlineEditorSlot). A preview/look-ahead card never
+            // wires this opt at all (defaults to false), so it never shows
+            // the affordance regardless of this `true` — only the true
+            // selected card reaches Block.mjs's own `!preview` gate. The
+            // FOCUSED drilled column gets the exact same wiring at its own
+            // Block() call site (state.drill.map(), below) — see "Extended
+            // past v1's top-level-only scope" in .claude/docs/inline-edit.md.
             allowInlineEdit: true,
             onSaveInlineEdit: saveInlineEdit,
             // Dimmed like the look-ahead preview whenever it isn't the selected
@@ -17748,6 +17765,22 @@ function DetailPanel(state) {
                   hintsEnabled: () => state.focusLevel === level,
                   diffActive: () =>
                     state.focusLevel === level && !relatedActive() && !commentAnchorAwaitingEntry(level),
+                  // Inline, IDE-style editing (see .claude/docs/inline-edit.md,
+                  // "Extended past v1's top-level-only scope") — reuses the
+                  // exact same allowInlineEdit/onSaveInlineEdit wiring as the
+                  // top-level card below. Block.mjs's own gate
+                  // (`!preview && allowInlineEdit && diffActive() &&
+                  // isInlineEditable(...)`) already restricts the editor
+                  // affordance to the FOCUSED drilled column (diffActive
+                  // right above is false for any other one, and a
+                  // non-focused drilled column never even renders this
+                  // Block() call — it collapses to a rail instead, see
+                  // `if (!focusedHere)` above) — including the
+                  // comment/chat-op-regel anchor's own drilled column, which
+                  // is this exact same render (see "The anchored column IS
+                  // the leading column" in .claude/docs/comments-panel.md).
+                  allowInlineEdit: true,
+                  onSaveInlineEdit: saveInlineEdit,
                   // Same gate as hintsEnabled above, minus the diff-mode
                   // restriction (blockShortcutHints covers both modes itself).
                   shortcutHints: () => (state.focusLevel === level ? blockShortcutHints() : []),

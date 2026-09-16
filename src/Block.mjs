@@ -1084,8 +1084,9 @@ function toggleInlineEdit(b, unit) {
 // blok zelf"). Sits next to viewModeIndicator, same small-icon-button shape,
 // only ever rendered for a card that both owns the diff keyboard AND is
 // eligible (see the call site's own isInlineEditable/allowInlineEdit gate) —
-// never on a preview/look-ahead card or a drilled column (v1 scope, see
-// CLAUDE.md's inline-edit design notes).
+// never on a preview/look-ahead card, and on a drilled column only while it
+// is the FOCUSED one (see .claude/docs/inline-edit.md, "Extended past v1's
+// top-level-only scope").
 function inlineEditToggleButton(b, activeGroup) {
   return html`<div class="contents">
     <button
@@ -1440,13 +1441,15 @@ export default function Block(b, opts = {}) {
   // from "wired up" — same reasoning as onRowMouseDown/onApproveClick above.
   const onCloseColumn = opts.onCloseColumn || null
   // allowInlineEdit / onSaveInlineEdit — inline, IDE-style editing of this
-  // block's new/right side (see inlineEditorSlot below). v1 scope is
-  // deliberately narrow: only the top-level selected card wires this up
-  // (home.mjs's DetailPanel) — a preview/look-ahead card and a drilled
-  // Onderliggende-code column never do, so allowInlineEdit defaults to false
-  // and the edit affordance/editor never appear where "Opslaan" would have
-  // nothing wired to call. onSaveInlineEdit defaults to a no-op for the same
-  // reason (never actually reachable when allowInlineEdit is false).
+  // block's new/right side (see inlineEditorSlot below). Wired up at the
+  // top-level selected card (home.mjs's DetailPanel) AND at the FOCUSED
+  // drilled column's own Block() call (home.mjs's state.drill.map(), see
+  // .claude/docs/inline-edit.md, "Extended past v1's top-level-only scope")
+  // — a preview/look-ahead card never wires this up, so allowInlineEdit
+  // defaults to false there and the edit affordance/editor never appear
+  // where "Opslaan" would have nothing wired to call. onSaveInlineEdit
+  // defaults to a no-op for the same reason (never actually reachable when
+  // allowInlineEdit is false).
   const allowInlineEdit = !!opts.allowInlineEdit
   const onSaveInlineEdit = opts.onSaveInlineEdit || (() => {})
   const preview = !!opts.preview

@@ -77,11 +77,66 @@ the `e` key itself still works at any granularity there, it just isn't hinted.
   (`VIRTUALIZE_MIN_ROWS`, 400 rows — editing a windowed view would silently
   drop whatever sits outside it). `isInlineEditable` (`Block.mjs`) is the one
   gate.
-- Only the **true top-level selected card** (`home.mjs`'s `DetailPanel`, the
-  `i === sel` branch) — never a look-ahead preview card, never a drilled
-  Onderliggende-code column. `Block()`'s `allowInlineEdit`/`onSaveInlineEdit`
-  opts default to `false`/a no-op, so a card that never wires them up simply
-  never shows the affordance — there is no "Opslaan does nothing" trap.
+- Only the card that currently owns the diff keyboard — never a look-ahead
+  preview card, and never a drilled Onderliggende-code column that isn't the
+  FOCUSED one (see "Extended past v1's top-level-only scope" right below).
+  `Block()`'s `allowInlineEdit`/`onSaveInlineEdit` opts default to `false`/a
+  no-op, so a card that never wires them up simply never shows the
+  affordance — there is no "Opslaan does nothing" trap.
+
+## Extended past v1's top-level-only scope: the FOCUSED drilled column too
+
+Reviewer report: selecting a "Comment op regel"/"chat op regel" index item
+opens its anchor block as a drilled column (`openCommentAnchorDrill`, see
+"An anchored 'Start' item instead opens its block 'as if fully expanded'" in
+`.claude/docs/comments-panel.md`) that looks exactly like an ordinary diff
+card — but `e`/the header toggle/"Bewerk deze code" did nothing there,
+because v1 (above) wired `allowInlineEdit`/`onSaveInlineEdit` up only at the
+top-level card's own `Block()` call. Follow-up clarification, explicitly
+narrowing scope: an **unfocused** drilled column still needs none of this —
+editing only ever belongs to whichever column currently owns the cursor/
+keyboard, not to every visible Underlying-code card.
+
+That is exactly what already existed: every drilled column's own `Block()`
+call (`home.mjs`'s `state.drill.map(...)`) already computes a per-level
+`diffActive` (`state.focusLevel === level && !relatedActive() &&
+!commentAnchorAwaitingEntry(level)`) — the same condition, generalized, the
+top-level card's own `diffActive` uses. `Block.mjs`'s own gate
+(`!preview && allowInlineEdit && diffActive() && isInlineEditable(...)`)
+already restricts the affordance to the focused column for free; an
+unfocused drilled column never even renders this `Block()` call in the first
+place (it collapses to a rail instead, see "Unfocused columns collapse into
+a narrow rail" in `.claude/docs/drilling.md`). So the fix is additive, not a
+new rule: the drilled column's own `Block()` call gained
+`allowInlineEdit: true, onSaveInlineEdit: saveInlineEdit` — the exact same
+two opts the top-level card already passes. This also covers the
+comment/chat-op-regel anchor's own drilled column for free, since it is
+*the same render* (`focusLevel === level` at `level === 1`, see "The anchored
+column IS the leading column" in `.claude/docs/comments-panel.md`) — no
+separate wiring needed for that case.
+
+Three shared functions were generalized from `curBlock()`/
+`state.focusLevel === 0` to `focusedBlock()`/a per-level `diffActive` check
+(mirroring, not duplicating, what each `Block()` call site's own `diffActive`
+opt already computes), so the keyboard/palette entry points agree with
+whichever card now shows the affordance:
+
+- **`inlineEditEligibleNow()`** — the one shared gate for the `e` key and the
+  `COMMANDS` `edit-code` item's `when`.
+- **`eKey()`** — opens the editor on `focusedBlock()` with
+  `focusedActiveUnit()` (the same unit that card's own `activeGroup` opt
+  highlights), instead of always `curBlock()`/`topLevelActiveUnit(b)`.
+- **`blockShortcutHints()`**'s edit-mode short-circuit (`editingBlock`) —
+  follows `focusedBlock()` too, so the Esc/Cmd+Enter hint shows on whichever
+  card is actually mid-edit.
+
+`saveInlineEdit(b, text, originalSource)` itself needed **no** change — it
+was already generic on `b` (only reads `b.file`/`b.line`/`b.endLine`/
+`blockRows(b)`), so it works unchanged for a drilled block.
+
+Test: `tests/comment-anchor-expanded-view.spec.mjs` and
+`tests/inline-edit.spec.mjs` (existing top-level coverage; both re-verified
+against this change).
 
 ## Two entry points, one shared flag
 
