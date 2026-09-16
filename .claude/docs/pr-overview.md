@@ -309,6 +309,41 @@ the ONLY place this feed is shown) moved into the bell's own dropdown.
   `.claude/docs/workflows-trackers.md`. The page itself only reads
   `GET /api/jira/notifications`, exactly like every other list here.
 
+### The same bell, smaller and independent, on `/pr/<id>` and `/plan/<KEY>`
+
+Reviewer request: "ik wil de notificatie belletje wat in pr overzicht zit, ook
+zien in pr tree en plan, maar alleen als er iets te klikken is". `src/jiraBell.mjs`
+is a **separate, self-contained module** — its own local `reactive()` store, its
+own `loadJiraNotifications`/`markJiraRead`/`markAllJiraRead`, its own
+`jiraBellButton`/`jiraBellPanel`/`jiraRow` — reusing the exact same read-only
+`GET /api/jira/notifications` and the same `jira_inbox` → `jira_notify` Signal
+writes as this page's own bell, but wired into `home.mjs`'s and `plan.mjs`'s own
+`onKeydown`/mount points instead of into `overview.mjs`'s `state`/`omenu`. This
+is a deliberate, small **duplication**, not a shared-component refactor:
+`overview.mjs`'s own bell is entangled with that page's right-click
+`CommandMenu` (the "Markeer als ongelezen" item) and row-popover keyboard
+model, which `home.mjs`/`plan.mjs` do not have and were not worth adopting just
+for this — `overview.mjs` itself is untouched.
+
+- **Gate: hidden unless `jira.length > 0`**, confirmed with Reindert as "at
+  least one notification exists, read or unread" — not "at least one unread".
+  `overview.mjs`'s own bell has no such gate (it always shows, even empty, and
+  says "Geen notificaties." when opened); the two smaller placements hide the
+  icon entirely instead, since there is nothing to click there.
+- **Scoped out on purpose**: the right-click "Markeer als ongelezen" menu.
+  Marking read (a row click, the per-row tick, "Alles gelezen maken") works
+  identically everywhere; marking a row unread again is `/pr-overview`-only for
+  now.
+- Mounted in `home.mjs`'s `prInfoCard` `pr-info-theme-row` (next to
+  `autoWarnToggleButton`/`themeToggleButton`/`settingsButton`) and in
+  `plan.mjs`'s ticket-column "Weergave" icon row (next to `plan-chat-button`/
+  `plan-menu-button`/theme/settings). Both call `initJiraBell()` once at module
+  load (same cadence as `overview.mjs`'s own 60s poll) and check
+  `isJiraBellOpen()`/`handleJiraBellKeydown` early in their own `onKeydown` (same
+  slot as `isLightboxOpen`/`handleLightboxKeydown` — Escape closes, nothing else
+  reaches the tree while it's open); the outside-mousedown closer is registered
+  by `initJiraBell()` itself, not by each host page.
+
 ## "Planning": the one list of sprint work before a PR exists
 
 Reviewer request: the page should read top to bottom as **one pipeline**, from

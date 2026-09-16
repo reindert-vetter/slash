@@ -78,11 +78,15 @@ import {
   setTasksRefreshBusy,
 } from './RelatedPanel.mjs'
 import { initDictation, handleDictationKeydown } from './dictation.mjs'
+import { initJiraBell, jiraBellButton, isJiraBellOpen, handleJiraBellKeydown } from './jiraBell.mjs'
 
 initTheme()
 // F5 push-to-talk dictation into this ticket's chat (src/dictation.mjs).
 // openPlanChat is a hoisted function declaration further down this file.
 initDictation({ openChat: () => openPlanChat() })
+// The Jira-notifications bell (see src/jiraBell.mjs) — same one used on
+// /pr/<id>, independent of overview.mjs's own bell.
+initJiraBell()
 
 // The issue key lives in the PATH (/plan/PAYM-813), like the PR id does on
 // /pr/<id>. A bare numeric form is accepted too — the overview's rows always
@@ -1825,6 +1829,13 @@ function onKeydown(e) {
   // because the chatOpen branch right below returns early: dictating a second
   // paragraph into an already-open chat has to stay possible.
   if (handleDictationKeydown(e)) return
+  // Same discipline for the Jira-notifications bell (src/jiraBell.mjs) — a
+  // light, non-modal dropdown: Escape closes it, checked before every other
+  // overlay/menu guard below.
+  if (isJiraBellOpen()) {
+    handleJiraBellKeydown(e)
+    return
+  }
   // The general-chat overlay owns the keyboard completely while open — same
   // shape as the review tree's own generalChatOverlay.mjs: Escape hides it
   // (ClaudeChat.mjs's own composer @keydown only intercepts Escape while a
@@ -2817,6 +2828,7 @@ function ticketCard() {
               </svg>
             </button>
           </div>
+          ${jiraBellButton('h-7 w-7 bg-slate-50 dark:bg-zinc-800 ring-1 ring-slate-200 dark:ring-zinc-700')}
           ${themeToggleButton('h-7 w-7 bg-slate-50 dark:bg-zinc-800 ring-1 ring-slate-200 dark:ring-zinc-700')}
           ${settingsButton('h-7 w-7 bg-slate-50 dark:bg-zinc-800 ring-1 ring-slate-200 dark:ring-zinc-700')}
         </div>

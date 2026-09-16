@@ -210,6 +210,7 @@ import {
   clearColumnWidth,
 } from './columnWidth.mjs'
 import { initDictation, handleDictationKeydown } from './dictation.mjs'
+import { initJiraBell, jiraBellButton, isJiraBellOpen, handleJiraBellKeydown } from './jiraBell.mjs'
 
 initTheme()
 syncUiLang()
@@ -217,6 +218,11 @@ syncUiLang()
 // openGeneralChat is a hoisted function declaration further down this file, so
 // wrapping it in a closure here is safe at module-evaluation time.
 initDictation({ openChat: () => openGeneralChat() })
+// The Jira-notifications bell (see src/jiraBell.mjs) — same read-only feed
+// and the same two writes (mark read / mark all read) as /pr-overview's own
+// bell, ported into its own small module rather than reused from
+// overview.mjs (see that file's own header comment for why).
+initJiraBell()
 initImageLightbox()
 initMarkdownCodeCopy()
 initFailedTasksPopup()
@@ -14135,6 +14141,15 @@ function onKeydown(e) {
     return
   }
 
+  // Same discipline for the Jira-notifications bell (src/jiraBell.mjs) — a
+  // light, non-modal dropdown, checked right after the lightbox for the same
+  // reason (mirrors /pr-overview's own `state.jiraBellOpen` guard): Escape
+  // closes it, nothing else here reaches the tree while it's open.
+  if (isJiraBellOpen()) {
+    handleJiraBellKeydown(e)
+    return
+  }
+
   // Same discipline for the werkmap overlay (workDirOverlay.mjs): while this
   // PR has an unanswered work-directory choice the overlay is open and owns
   // the keyboard completely — ↑/↓ pick, Enter confirms, Esc dismisses, every
@@ -16377,6 +16392,7 @@ function prInfoCard(state) {
           ${prMenuButton()}
           ${autoWarnToggleButton()}
           ${checkoutChip()}
+          ${jiraBellButton('h-7 w-7 bg-slate-50 dark:bg-zinc-800 ring-1 ring-slate-200 dark:ring-zinc-700')}
           ${themeToggleButton('h-7 w-7 bg-slate-50 dark:bg-zinc-800 ring-1 ring-slate-200 dark:ring-zinc-700')}
           ${settingsButton('h-7 w-7 bg-slate-50 dark:bg-zinc-800 ring-1 ring-slate-200 dark:ring-zinc-700')}
         </div>
