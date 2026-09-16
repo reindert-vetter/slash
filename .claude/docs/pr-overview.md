@@ -334,15 +334,30 @@ for this — `overview.mjs` itself is untouched.
   Marking read (a row click, the per-row tick, "Alles gelezen maken") works
   identically everywhere; marking a row unread again is `/pr-overview`-only for
   now.
-- Mounted in `home.mjs`'s `prInfoCard` `pr-info-theme-row` (next to
-  `autoWarnToggleButton`/`themeToggleButton`/`settingsButton`) and in
-  `plan.mjs`'s ticket-column "Weergave" icon row (next to `plan-chat-button`/
-  `plan-menu-button`/theme/settings). Both call `initJiraBell()` once at module
-  load (same cadence as `overview.mjs`'s own 60s poll) and check
-  `isJiraBellOpen()`/`handleJiraBellKeydown` early in their own `onKeydown` (same
-  slot as `isLightboxOpen`/`handleLightboxKeydown` — Escape closes, nothing else
-  reaches the tree while it's open); the outside-mousedown closer is registered
-  by `initJiraBell()` itself, not by each host page.
+- On `/pr/<id>` it is mounted as its own top-level `JiraBellHost`
+  (`home.mjs`, sibling of `AppColumns`/`MenuHost`, mounted straight into
+  `#app`) — a `fixed right-4 top-4 z-30` corner pinned to the whole page,
+  independent of which stop/column is in view. Reviewer request: "het
+  belletje moet ALTIJD rechtsboven op de pagina staan, los van of de
+  chatkolom open staat" — a generalization of the original, narrower ask,
+  which had first landed the same `jiraBellButton()` call inside
+  `prInfoCard`'s `pr-info-theme-row` (stop 1 only, so invisible for the rest
+  of the nav chain). That in-card call was **removed**, not duplicated:
+  `jiraBellButton()` renders off one shared, module-level `bell` store
+  (`jiraBell.mjs`), so two simultaneously mounted instances would both react
+  to the same `bell.open` and render two copies of `jiraBellPanel`'s dropdown
+  at once. `JiraBellHost` sits outside `AppColumns`' own `position:fixed`
+  z-10 stacking context for the same reason `MenuHost` does (see that
+  function's own doc comment) — a nested `fixed`/z-indexed descendant would
+  otherwise only stack within that subtree.
+- On `plan.mjs`'s ticket-column "Weergave" icon row (next to
+  `plan-chat-button`/`plan-menu-button`/theme/settings). Both host pages call
+  `initJiraBell()` once at module load (same cadence as `overview.mjs`'s own
+  60s poll) and check `isJiraBellOpen()`/`handleJiraBellKeydown` early in
+  their own `onKeydown` (same slot as `isLightboxOpen`/
+  `handleLightboxKeydown` — Escape closes, nothing else reaches the tree
+  while it's open); the outside-mousedown closer is registered by
+  `initJiraBell()` itself, not by each host page.
 
 ## "Planning": the one list of sprint work before a PR exists
 

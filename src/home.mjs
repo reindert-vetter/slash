@@ -16070,6 +16070,31 @@ function MenuHost() {
   return html` <div>${() => (menu.open ? menuOverlay().key('command-overlay') : '')}</div> `
 }
 
+// JiraBellHost — the Jira-notifications bell (src/jiraBell.mjs), always
+// pinned to the top-right corner of the whole /pr/<id> page, independent of
+// which column/stop is currently in view. Reviewer request: "het belletje
+// moet ALTIJD rechtsboven op de pagina staan, los van of de chatkolom open
+// staat" — a generalization of the earlier "ook zien in pr tree" ask, which
+// had originally landed the SAME jiraBellButton() call inside prInfoCard's
+// pr-info-theme-row (stop 1 only, so invisible whenever state.showDescription
+// is false). That in-card call was REMOVED, not duplicated: jiraBellButton()
+// renders off one shared, module-level `bell` store (jiraBell.mjs), so two
+// simultaneously mounted instances would both react to the same `bell.open`
+// and render two copies of jiraBellPanel's dropdown at once. One canonical
+// mount only, here.
+//
+// Top-level (sibling of AppColumns, mounted straight into #app below), same
+// reasoning as MenuHost right above: AppColumns is `position:fixed` with its
+// own z-10 stacking context, so a nested `fixed`/z-indexed descendant would
+// only stack within that subtree. jiraBellButton()'s own internal gate
+// ("alleen als er iets te klikken is", jiraBell.mjs) already renders nothing
+// (an empty, zero-size `.contents` wrapper) while there are no notifications,
+// so this fixed corner is invisible — and un-clickable — until a
+// notification actually exists.
+function JiraBellHost() {
+  return html`<div class="fixed right-4 top-4 z-30">${jiraBellButton('h-8 w-8 shadow-sm')}</div>`
+}
+
 // ── PR-info column ──────────────────────────────────────────────────────────
 // prInfoCard renders the card shown in PrInfoPanel (stop 1 of the nav chain):
 // PR title/Jira badge, meta (author/diffstat/branch/GitHub link), the Claude
@@ -16612,7 +16637,6 @@ function prInfoCard(state) {
           ${prMenuButton()}
           ${autoWarnToggleButton()}
           ${checkoutChip()}
-          ${jiraBellButton('h-7 w-7 bg-slate-50 dark:bg-zinc-800 ring-1 ring-slate-200 dark:ring-zinc-700')}
           ${themeToggleButton('h-7 w-7 bg-slate-50 dark:bg-zinc-800 ring-1 ring-slate-200 dark:ring-zinc-700')}
           ${settingsButton('h-7 w-7 bg-slate-50 dark:bg-zinc-800 ring-1 ring-slate-200 dark:ring-zinc-700')}
         </div>
@@ -18289,6 +18313,7 @@ setupMainOverflowObserver()
 MainScrollRightHint(state)(app)
 MainScrollLeftHint(state)(app)
 MenuHost()(app)
+JiraBellHost()(app)
 ImageLightboxHost()(app)
 FailedTasksHost()(app)
 AuthStatusHost()(app)
