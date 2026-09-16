@@ -345,11 +345,53 @@ func processChatMergeAt(ctx context.Context, tm *TaskManager, cm *chat.Module, c
 		// missed. Reuses the exact same werkmap overlay (src/workDirOverlay.mjs)
 		// the dirty-tree question already opens; see checkoutStageLandingFailed's
 		// own doc comment.
-		markCheckoutLandingFailedAt(ctx, dataDir, arg.Repo, arg.PR, headRefName, msg.Body)
+		//
+		// Only for a GENUINELY blocking outcome, though — isBlockingLandingFailure
+		// below. Guarded here, not inside markCheckoutLandingFailedAt itself: this
+		// is a judgment about the MESSAGE processChatMergeAt just produced, not
+		// about the checkout's current git state (which is all that function
+		// looks at).
+		if isBlockingLandingFailure(msg.Body) {
+			markCheckoutLandingFailedAt(ctx, dataDir, arg.Repo, arg.PR, headRefName, msg.Body)
+		}
 		publishCheckoutChanged(arg.Repo, arg.PR)
 		broadcastCheckoutFreed(tm, checkoutWriteSlotKey(dataDir, arg.Repo, arg.PR))
 	}
 	return msg
+}
+
+// isBlockingLandingFailure tells a genuine checkout-level dead end (a real
+// git failure that will keep failing this way until someone does something
+// about it) apart from a benign, self-resolving outcome that merely HAPPENS
+// to be a chat.KindError message — reported bug: "Er is niets lokaal te
+// landen." (there was simply nothing new to land, commitCheckoutEditsAt's
+// ahead==0 branch — not a problem at all) opened the werkmap overlay with
+// three rows (Andere werkmap kiezen / Uit / Chat pauzeren) that had nothing
+// to do with the reviewer's actual situation.
+//
+// Excluded on purpose, alongside checkoutNothingToLandMsg:
+//   - checkoutBranchMovedOnMsg: "the PR branch moved on, ververs en probeer
+//     opnieuw" is exactly that — try again — not a structural problem the
+//     overlay's directory-choice/off/pause rows could do anything about
+//     either.
+//   - chatMergeConflictConsultPrefix: a real merge conflict already gets its
+//     own actionable, IN-CONVERSATION question (chatMergeConflictConsultMsg)
+//     asking "Hoe wil je verder?" and stored in that same conversation's
+//     transcript — a second, unrelated overlay on top would only compete
+//     with it, not help.
+//
+// Every other chat.KindError body reaching here is a real git/gh failure
+// (fetch/status/add/commit/amend/rev-list/advancePendingRefFromCheckout) that
+// will keep recurring on every future write turn for this PR until the
+// reviewer actually does something about the checkout — hence blocking.
+func isBlockingLandingFailure(body string) bool {
+	if body == checkoutNothingToLandMsg || body == checkoutBranchMovedOnMsg {
+		return false
+	}
+	if strings.HasPrefix(body, chatMergeConflictConsultPrefix) {
+		return false
+	}
+	return true
 }
 
 // broadcastCheckoutFreed wakes every claude_chat conversation currently
@@ -444,6 +486,14 @@ func refreshTreeAfterLanding(ctx context.Context, tm *TaskManager, repo string, 
 //
 // Markdown, like every chat bubble (renderMarkdown, see conventions.md), so the
 // file list reads as a real list.
+// chatMergeConflictConsultPrefix is the fixed opening line of
+// chatMergeConflictConsultMsg's body — everything after it (conflicted
+// files, headRefName) varies per call, so isBlockingLandingFailure below
+// matches on this prefix alone to recognise "this outcome is already an
+// actionable, IN-CONVERSATION question" regardless of which files/branch it
+// names.
+const chatMergeConflictConsultPrefix = "**Samenvoegconflict — hier wil ik even met je overleggen.**"
+
 func chatMergeConflictConsultMsg(headRefName string, conflicted []string) string {
 	// The only remaining source of a real conflict now that a write turn
 	// commits directly onto the checkout's own real branch (chat_checkout.go):
@@ -453,7 +503,7 @@ func chatMergeConflictConsultMsg(headRefName string, conflicted []string) string
 	// one checkout and one write-turn-at-a-time gate (chat_write_gate.go).
 	origin := "een andere, inmiddels op GitHub gepushte wijziging"
 	var b strings.Builder
-	b.WriteString("**Samenvoegconflict — hier wil ik even met je overleggen.**\n\n")
+	b.WriteString(chatMergeConflictConsultPrefix + "\n\n")
 	b.WriteString("Jouw wijziging botst met " + origin + ". Ik heb `git merge` geprobeerd en daarna één poging gedaan om het conflict zelf op te lossen; dat is niet gelukt, dus ik heb de merge afgebroken (er staat niets half samengevoegd).\n\n")
 	b.WriteString("Conflicterende bestanden:\n\n")
 	for _, p := range conflicted {

@@ -1749,6 +1749,18 @@ func prepareChatShellWorkDirAt(ctx context.Context, tm *TaskManager, dataDir, re
 // was last synced (so the landing would not be a plain fast-forward).
 const checkoutBranchMovedOnMsg = "De PR-branch is intussen verder; jouw wijziging kon niet worden geland. Ververs en probeer opnieuw."
 
+// checkoutNothingToLandMsg is commitCheckoutEditsAt's own "there was simply
+// nothing new here" outcome (ahead == 0: the checkout's HEAD already matches
+// origin/<headRefName>) — a chat.KindError only so the reviewer sees why
+// nothing happened, NEVER a sign the checkout itself is broken. See
+// isBlockingLandingFailure (chat_merge.go), which this exists for: this
+// exact text used to raise the werkmap overlay's checkoutStageLandingFailed
+// notice, a false positive reported live against PR 13729 — a "you already
+// have nothing to land" outcome has none of the three generic overlay rows
+// (Andere werkmap kiezen / Uit / Chat pauzeren) doing anything useful about
+// it, because there was never a problem to act on.
+const checkoutNothingToLandMsg = "Er is niets lokaal te landen."
+
 // pendingLandedMsg is the reviewer-facing text for a successful landing —
 // the one place that wording lives. It says three things on purpose: the
 // change IS on the PR branch as slash sees it, it is NOT on GitHub yet (with
@@ -2012,7 +2024,7 @@ func commitCheckoutEditsAt(ctx context.Context, cm *chat.Module, dataDir, repo s
 	}
 	ahead, _ := strconv.Atoi(strings.TrimSpace(string(aheadOut)))
 	if ahead == 0 {
-		return newMsg("Er is niets lokaal te landen.", true)
+		return newMsg(checkoutNothingToLandMsg, true)
 	}
 	behindOut, _ := runGitIn(ctx, dir, "rev-list", "--count", "HEAD..origin/"+headRefName)
 	behind, _ := strconv.Atoi(strings.TrimSpace(string(behindOut)))

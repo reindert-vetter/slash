@@ -1968,20 +1968,28 @@ func TestRunGitInRetryOnLockSucceedsOnceTheLockReleases(t *testing.T) {
 // (src/workDirOverlay.mjs) already renders unchanged, see
 // checkoutStageLandingFailed's own doc comment.
 func TestProcessChatMergeOpensLandingFailedOverlayOnACleanTreeFailure(t *testing.T) {
-	bareDir, _ := setupChatShadowRepo(t, "feature/x", "foo v1\n")
+	bareDir, sharedClone := setupChatShadowRepo(t, "feature/x", "foo v1\n")
 	dataDir := t.TempDir()
 	ctx := context.Background()
 	cm := testChatModule(t)
+	defer clearChatPendingFiles("", 2012)
 
 	dir := cloneCheckoutDir(t, bareDir, "feature/x")
 	assignCheckoutForTest(t, "", 2012, dir)
-	// This conversation edits the SAME line another one already pushed — a
-	// genuine, unavoidable conflict (mirrors
-	// TestProcessChatMergeAbortsAndDegradesOnUnresolvedConflict exactly).
-	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("foo edited by this conversation\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("foo edited by claude\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	pushToBare(t, bareDir, "feature/x", "foo edited by someone else\n")
+	markChatFilesPending("", 2012, []string{"foo.txt"})
+
+	// Block the SHARED clone's own refs/slash namespace (a plain file where
+	// git needs to create a directory) so advancePendingRefFromCheckout's
+	// `git update-ref` fails AFTER the local commit itself already
+	// succeeded — leaving a perfectly clean working tree behind, the exact
+	// shape checkoutStageLandingFailed exists for.
+	refsSlash := filepath.Join(sharedClone, ".git", "refs", "slash")
+	if err := os.WriteFile(refsSlash, []byte("not a directory\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	msg := processChatMergeAt(ctx, nil, cm, &claude.Fake{}, dataDir, chatMergeInput{
 		PR: 2012, ConversationID: "conv-cleanfail", TurnID: "turn-cleanfail",
@@ -1989,13 +1997,16 @@ func TestProcessChatMergeOpensLandingFailedOverlayOnACleanTreeFailure(t *testing
 	if msg.Kind != chat.KindError {
 		t.Fatalf("expected the landing to fail, got: %+v", msg)
 	}
+	if !isBlockingLandingFailure(msg.Body) {
+		t.Fatalf("expected this failure to be classified as blocking, got: %q", msg.Body)
+	}
 
 	paths, err := snapshotDirtyPaths(ctx, dir)
 	if err != nil {
 		t.Fatalf("snapshotDirtyPaths: %v", err)
 	}
 	if len(paths) != 0 {
-		t.Fatalf("expected a clean working tree after the aborted merge, got dirty paths: %v", paths)
+		t.Fatalf("expected a clean working tree after the commit itself succeeded, got dirty paths: %v", paths)
 	}
 
 	a := getCheckoutAssignment(dataDir, "", 2012)
@@ -2007,5 +2018,60 @@ func TestProcessChatMergeOpensLandingFailedOverlayOnACleanTreeFailure(t *testing
 	}
 	if a.Pending.Body != msg.Body {
 		t.Fatalf("decision Body = %q, want the same reason as the chat message %q", a.Pending.Body, msg.Body)
+	}
+}
+
+// TestIsBlockingLandingFailureExcludesBenignOutcomes is the regression for
+// the reported false positive: "Er is niets lokaal te landen." (nothing new
+// to land at all) opened the werkmap overlay with three rows that had
+// nothing to do with the reviewer's actual situation. Pins all three known
+// benign/already-actionable outcomes at once, alongside a real git failure
+// that must still be classified as blocking.
+func TestIsBlockingLandingFailureExcludesBenignOutcomes(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    string
+		blocked bool
+	}{
+		{"nothing to land", checkoutNothingToLandMsg, false},
+		{"branch moved on", checkoutBranchMovedOnMsg, false},
+		{"merge conflict consult", chatMergeConflictConsultMsg("feature/x", []string{"foo.txt"}), false},
+		{"a real git failure", "Kon de wijziging niet committen (reden: exit status 1).", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := isBlockingLandingFailure(c.body); got != c.blocked {
+				t.Fatalf("isBlockingLandingFailure(%q) = %v, want %v", c.body, got, c.blocked)
+			}
+		})
+	}
+}
+
+// TestProcessChatMergeDoesNotOpenOverlayForAConflictConsult is the same
+// regression from processChatMergeAt's own vantage point: an unresolved
+// merge conflict already gets its own actionable, in-conversation question
+// (chatMergeConflictConsultMsg) — this must NOT also raise the werkmap
+// overlay's checkoutStageLandingFailed notice on top of it.
+func TestProcessChatMergeDoesNotOpenOverlayForAConflictConsult(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	cm := testChatModule(t)
+
+	dir := cloneCheckoutDir(t, bareDir, "feature/x")
+	assignCheckoutForTest(t, "", 2013, dir)
+	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("foo edited by this conversation\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pushToBare(t, bareDir, "feature/x", "foo edited by someone else\n")
+
+	msg := processChatMergeAt(ctx, nil, cm, &claude.Fake{}, dataDir, chatMergeInput{
+		PR: 2013, ConversationID: "conv-conflict", TurnID: "turn-conflict",
+	}, "feature/x")
+	if msg.Kind != chat.KindError || !strings.Contains(msg.Body, "Samenvoegconflict") {
+		t.Fatalf("expected the conflict-consultation wording, got: %+v", msg)
+	}
+	if a := getCheckoutAssignment(dataDir, "", 2013); a != nil && a.Pending != nil {
+		t.Fatalf("expected no overlay decision for a conflict already handled in-chat, got: %+v", a.Pending)
 	}
 }
