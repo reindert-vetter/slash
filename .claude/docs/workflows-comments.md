@@ -1111,6 +1111,25 @@ what it saw: `checkoutDiscovery.HeldBack` names those directories, so
 `reason()` reports them instead of pointing at a configuration problem that
 does not exist.
 
+#### A checkout sitting on the repo's own base branch never gets the `reuseMerged` question
+
+Reviewer decision (his own words): *"develop mag je altijd gebruiken zonder
+eerst toestemming te vragen"*. Any OTHER already-merged-but-different branch
+still gets the ordinary `chatCheckoutReuseDecision` consult before switching
+(the base case documented above), but a candidate whose `cand.Branch ==
+baseBranchFor(repo)` is inherently free — nobody's unfinished work is ever
+parked directly on `develop` — so `prepareChatShellWorkDirAt`'s
+`a.Dir != ""` reclassification branch switches it onto the PR's own branch
+(`checkoutOntoBranch`) right away, with no `chat_checkout.go` decision raised
+and no werkmap overlay shown at all. This is the actual path a single
+registered `develop` checkout takes: `selectCheckoutCandidate` auto-picks it
+as `ready` (one candidate), and the very next ladder iteration is this same
+reclassification branch — before this change it unconditionally asked
+`reuseMerged` there regardless of which branch the candidate was on, even for
+a lone base-branch checkout with nothing else to choose between. Test:
+`TestPrepareChatShellWorkDirAutoUsesBaseBranchCheckoutWithoutAsking`
+(`chat_checkout_test.go`).
+
 #### An unreachable `origin` never costs the reviewer their work directory
 
 `classifyCheckoutCandidate` (`chat_checkout.go`) refreshes a candidate's

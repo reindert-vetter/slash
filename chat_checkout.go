@@ -32,7 +32,12 @@
 // candidates -> the reviewer always chooses. A dirty working tree, or local
 // commits that would not fast-forward, or reusing a freed-but-different
 // branch -> a forceful, structured consult (chat.KindDirectoryDecision, see
-// modules/chat) BEFORE anything is touched, never a silent guess.
+// modules/chat) BEFORE anything is touched, never a silent guess — EXCEPT a
+// candidate that sits directly on the repo's own base branch (e.g. develop):
+// that one is inherently free (nobody's unfinished work is ever parked
+// straight on it) and is switched onto the PR's branch automatically, no
+// consult at all (reviewer decision: "develop mag je altijd gebruiken zonder
+// eerst toestemming te vragen").
 //
 // The whole write turn (not just the eventual commit) is serialized per PR
 // (chat_write_gate.go) — this shared checkout has no per-conversation
@@ -841,7 +846,10 @@ func chatCheckoutDirtyDecision(c checkoutCandidate) *chatCheckoutDecision {
 
 // chatCheckoutReuseDecision is the "this directory is currently on a
 // different, already-merged (hence free) branch — mag ik die overnemen?"
-// consult, always shown before switching, even when the directory is clean.
+// consult, shown before switching, even when the directory is clean — EXCEPT
+// when that other branch is the repo's own base branch, which is switched
+// onto automatically instead of asking (see prepareChatShellWorkDirAt's
+// `cand.Branch == baseBranch` check, right where this is called).
 func chatCheckoutReuseDecision(c checkoutCandidate, headRef string) *chatCheckoutDecision {
 	return &chatCheckoutDecision{
 		Stage: checkoutStageReuseMerged, Dir: c.Dir,
@@ -1647,6 +1655,25 @@ func prepareChatShellWorkDirAt(ctx context.Context, tm *TaskManager, dataDir, re
 				continue
 			}
 			if !cand.OnTargetBranch {
+				// The repo's own base branch (develop) is inherently free —
+				// nobody's unfinished work ever sits directly on it, unlike an
+				// arbitrary already-merged FEATURE branch, which could in
+				// principle still be someone's starting point for something
+				// else. Reviewer decision: "develop mag je altijd gebruiken
+				// zonder eerst toestemming te vragen" — auto-switch onto the
+				// PR's branch with no chatCheckoutReuseDecision consult at
+				// all, exactly as if the reviewer had already answered
+				// optReuseYes.
+				if cand.Branch == baseBranch {
+					if err := checkoutOntoBranch(ctx, cand.Dir, headRef); err != nil {
+						if tm != nil && tm.logf != nil {
+							tm.logf("chat_checkout: pr %d: auto-switching %s off base branch %s: %v", pr, cand.Dir, baseBranch, err)
+						}
+						return "", nil, false
+					}
+					a.Branch = headRef
+					continue
+				}
 				a.Pending = chatCheckoutReuseDecision(cand, headRef)
 				publishCheckoutChanged(repo, pr)
 				return "", a.Pending, false

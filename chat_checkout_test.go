@@ -443,6 +443,56 @@ func TestPrepareChatShellWorkDirAsksAboutDirtyCandidate(t *testing.T) {
 	}
 }
 
+// A checkout that sits directly on the repo's own base branch (develop) is
+// auto-switched onto the PR's branch with NO chatCheckoutReuseDecision consult
+// at all — reviewer decision: "develop mag je altijd gebruiken zonder eerst
+// toestemming te vragen". Contrast with
+// TestSelectCheckoutCandidatePrioritizesOnTargetBranch, which is about
+// choosing between several already-classified candidates; this is the actual
+// reported bug: a SINGLE candidate on develop still asked before this fix,
+// because selectCheckoutCandidate auto-picks it as `ready`, and the very next
+// ladder iteration re-classified it and unconditionally raised the reuseMerged
+// consult.
+func TestPrepareChatShellWorkDirAutoUsesBaseBranchCheckoutWithoutAsking(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "develop", "v1\n")
+	seed2 := t.TempDir()
+	if out, err := exec.Command("git", "clone", "--branch", "develop", bareDir, seed2).CombinedOutput(); err != nil {
+		t.Fatalf("clone to branch off develop: %v: %s", err, out)
+	}
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", seed2}, args...)...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
+		}
+	}
+	run("config", "user.email", "test@example.com")
+	run("config", "user.name", "test")
+	run("checkout", "-b", "feature/x")
+	run("push", "origin", "feature/x")
+
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	checkout := cloneCheckoutDir(t, bareDir, "develop")
+	writeCheckoutSettings(t, dataDir, checkout)
+
+	dir, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1300, "", "feature/x")
+	if decision != nil {
+		t.Fatalf("expected no consult at all for a base-branch checkout, got %+v", decision)
+	}
+	if !ok || dir != checkout {
+		t.Fatalf("expected the base-branch checkout auto-picked, got dir=%q ok=%v", dir, ok)
+	}
+	branchOut, err := exec.Command("git", "-C", checkout, "symbolic-ref", "--short", "HEAD").CombinedOutput()
+	if err != nil {
+		t.Fatalf("reading checkout branch: %v: %s", err, branchOut)
+	}
+	if got := strings.TrimSpace(string(branchOut)); got != "feature/x" {
+		t.Fatalf("expected the checkout switched onto feature/x, got %q", got)
+	}
+}
+
 // A "dirty" tree that consists ENTIRELY of another conversation's own
 // not-yet-landed edit is never put to the reviewer as a dirtyTree decision —
 // it is not the reviewer's own unrelated work at all, just a turn whose
