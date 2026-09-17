@@ -2508,6 +2508,17 @@ async function loadChatMessages(commentId, applyDrafts = true) {
     if (applyDrafts) {
       applyPendingDraftReplies(commentId)
     }
+    // A transcript that ENDS on the "er staat nog een keuze open over de
+    // werkmap" dead end means the PR still has an unanswered work-directory
+    // choice — so re-read that read model, which makes the werkmap overlay
+    // ask the question again (workDirOverlay.mjs derives its openness from it
+    // and has no other trigger of its own). The ordinary trigger is the
+    // checkout.changed event published when a choice is RAISED; this covers
+    // the case where that event never reached this tab (reconnect, a choice
+    // raised by another PR's/conversation's turn before this tab was open),
+    // which is how the reviewer ended up with a chat repeating that sentence
+    // while nothing on screen asked anything.
+    if (checkoutRefresher && isCheckoutDeadEnd(cc.messages[cc.messages.length - 1])) checkoutRefresher()
     scrollClaudeThreadToBottom()
   } catch (_) {
     // keep the last good transcript on a transient error
@@ -2741,6 +2752,16 @@ const CHECKOUT_CHOICE_OPEN_BODY =
 const NO_CHECKOUT_BODY =
   'Voor dit verzoek heb ik schrijftoegang tot een lokale werkmap nodig, maar die is er niet. Voeg een pad toe aan `chatCheckoutDirs` in settings.json of clone de repo lokaal, en vraag het opnieuw.'
 const CHECKOUT_BLOCKED_PREFIX = 'Ik kan nu geen code aanpassen. '
+
+// checkoutRefresher is home.mjs's own loadCheckout (GET /api/chat/checkout),
+// injected the same way as setClaudeMenuOpener/setClaudeTaskJump — this panel
+// has no access to the page's read model itself. Read-only, so it stays well
+// inside .claude/rules/workflows-write-boundary.md.
+let checkoutRefresher = null
+
+export function setCheckoutRefresher(fn) {
+  checkoutRefresher = fn
+}
 
 // isCheckoutDeadEnd — "this transcript ends on a write turn that never got a
 // work directory". Deliberately the LAST message only: an older dead-end with

@@ -1,4 +1,4 @@
-import { test, expect, appReady, leaveSearchBox, seededPr } from './_fixtures.mjs'
+import { test, expect, appReady, seededPr } from './_fixtures.mjs'
 
 // The werkmap overlay (src/workDirOverlay.mjs): the PR-wide "which local work
 // directory may Claude edit" choice, which used to be asked as a chat bubble
@@ -36,9 +36,9 @@ function mockCheckout(page, view) {
 
 // Every goto carries a `?sel=` — the harness's own page.goto wrapper presses
 // Escape + ArrowRight on a /pr/<id> URL WITHOUT one (to leave the ambiently
-// focused search box, see appReady/leaveSearchBox in _fixtures.mjs), and that
-// Escape would land on this overlay and dismiss it before the test even
-// starts. The value itself is deliberately not a real block reference: an
+// focused search box, see appReady/leaveSearchBox in _fixtures.mjs), which
+// this overlay would swallow. The value itself is deliberately not a real
+// block reference: an
 // unresolvable `sel` falls back to the ordinary index clamp (see CLAUDE.md's
 // URL-state section), and which block is selected is irrelevant here.
 const SEL = '?sel=' + encodeURIComponent('nothing.php:1')
@@ -84,7 +84,7 @@ test.describe('Werkmap overlay', () => {
   // commit") without ever being told WHICH already-changed files that covered,
   // and only found out afterwards. The choice now names them —
   // chatCheckoutDecision.Paths, chat_checkout.go.
-  test('a dirty-tree choice lists the files it is about, in the overlay and from the chip', async ({ page }) => {
+  test('a dirty-tree choice lists the files it is about', async ({ page }) => {
     const paths = Array.from({ length: 14 }, (_, i) => `src/File${i + 1}.php`)
     await mockCheckout(page, {
       pr: 12903,
@@ -110,19 +110,6 @@ test.describe('Werkmap overlay', () => {
     await expect(page.getByTestId('workdir-overlay-path').first()).toHaveText('src/File1.php')
     await expect(page.getByTestId('workdir-overlay-paths-more')).toContainText('2')
 
-    // The chip is the second entry point to the same choice. A palette row is
-    // one truncating line, so it names the number and hands the list back to
-    // the overlay (reopenWorkDirOverlay).
-    await page.keyboard.press('Escape')
-    await expect(page.getByTestId('workdir-overlay')).toHaveCount(0)
-    await leaveSearchBox(page)
-    await page.keyboard.press('ArrowLeft')
-    await page.getByTestId('checkout-chip').click()
-    const filesRow = page.getByTestId('command-row').filter({ hasText: 'Bekijk de 14 bestanden' })
-    await expect(filesRow).toHaveCount(1)
-    await filesRow.click()
-    await expect(page.getByTestId('workdir-overlay')).toBeVisible()
-    await expect(page.getByTestId('workdir-overlay-path')).toHaveCount(12)
   })
 
   test('a choice without files shows no file list at all', async ({ page }) => {
@@ -133,35 +120,33 @@ test.describe('Werkmap overlay', () => {
     await expect(page.getByTestId('workdir-overlay-paths')).toHaveCount(0)
   })
 
-  test('Escape dismisses it and hands the keyboard back to the review tree', async ({ page }) => {
+  // Reviewer report: the werkmap question disappeared while it was still
+  // open server-side (an accidental Escape / click beside the panel), after
+  // which every write turn kept dead-ending on "er staat nog een keuze open
+  // over de werkmap van deze PR" with nothing on screen asking anything. The
+  // overlay is now genuinely blocking: only a real answer closes it.
+  test('Escape and a click beside the panel do NOT close it — only a real choice does', async ({ page }) => {
     await mockCheckout(page, DECISION)
+    const signals = mockSignals(page)
     await page.goto('/pr/12903' + SEL)
     await appReady(page)
-    await expect(page.getByTestId('workdir-overlay')).toBeVisible()
+    const overlay = page.getByTestId('workdir-overlay')
+    await expect(overlay).toBeVisible()
 
     await page.keyboard.press('Escape')
-    await expect(page.getByTestId('workdir-overlay')).toHaveCount(0)
-
-    // The review tree has the keyboard again — ← really navigates to stop 1,
-    // which it could not do while the overlay was swallowing every key — and
-    // the chip there is still an entry point to the very same choice, so the
-    // dismissal never strands it.
-    await leaveSearchBox(page)
+    await expect(overlay).toBeVisible()
+    // A click on the backdrop itself (the top-left corner is never the panel).
+    await overlay.click({ position: { x: 4, y: 4 } })
+    await expect(overlay).toBeVisible()
+    // Every other key stays swallowed too: ← does not reach the review tree.
     await page.keyboard.press('ArrowLeft')
-    await expect(page.getByTestId('pr-info-column')).toBeVisible()
-    await expect(page.getByTestId('checkout-chip')).toContainText('Keuze nodig')
-  })
+    await expect(overlay).toBeVisible()
+    expect(signals.length).toBe(0)
 
-  test('a dismissal is not persisted: after a reload the overlay is back', async ({ page }) => {
-    await mockCheckout(page, DECISION)
-    await page.goto('/pr/12903' + SEL)
-    await appReady(page)
-    await page.keyboard.press('Escape')
-    await expect(page.getByTestId('workdir-overlay')).toHaveCount(0)
-
-    await page.reload()
-    await appReady(page)
-    await expect(page.getByTestId('workdir-overlay')).toBeVisible()
+    // A click on an option row is an answer, and answers really are sent.
+    await page.getByTestId('workdir-overlay-option').nth(0).click()
+    await expect.poll(() => signals.length).toBe(1)
+    expect(signals[0]).toMatchObject({ action: 'checkoutAnswer', reply: '/home/reindert/dev/a' })
   })
 
   test('no open choice, no overlay', async ({ page }) => {

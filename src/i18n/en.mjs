@@ -130,9 +130,7 @@ export const EN = {
   'Dit ene bestand is hier al aangepast:': 'This one file has already been changed here:',
   'Deze {n} bestanden zijn hier al aangepast:': 'These {n} files have already been changed here:',
   '+ nog {n} bestanden': '+ {n} more files',
-  'Bekijk het ene bestand dat hier al is aangepast': 'Show the one file already changed here',
-  'Bekijk de {n} bestanden die hier al zijn aangepast': 'Show the {n} files already changed here',
-  '↑↓ kiezen · Enter bevestigen · Esc sluiten': '↑↓ select · Enter confirm · Esc close',
+  '↑↓ kiezen · Enter bevestigen · alleen een keuze sluit dit': '↑↓ select · Enter confirm · only a choice closes this',
   'Bezig…': 'Working…',
   'Bezig: {label}…': 'Working: {label}…',
 

@@ -1,4 +1,4 @@
-import { test, expect, appReady, leaveSearchBox } from './_fixtures.mjs'
+import { test, expect, appReady } from './_fixtures.mjs'
 
 // The checkout chip in prInfoCard's pr-info-theme-row (which local checkout,
 // if any, a claude_chat write turn edits directly for this PR —
@@ -76,46 +76,13 @@ test.describe('Checkout chip in prInfoCard', () => {
     expect(signals[0]).toMatchObject({ action: 'checkoutOff' })
   })
 
-  test('a pending decision offers its own options directly (checkoutAnswer), plus "nu terugzetten" while a stash is pending', async ({
-    page,
-  }) => {
-    await mockCheckout(page, {
-      pr: 12903,
-      runId: 'chatmerge-12903',
-      decision: {
-        stage: 'chooseDirectory',
-        body: 'Kies welke lokale directory Claude voor deze PR gebruikt.',
-        options: ['/home/reindert/dev/a', '/home/reindert/dev/b'],
-      },
-      stashPending: true,
-    })
-    const { signals } = mockSignals(page)
-    // `?sel=` so the harness's own goto wrapper does not press Escape (which
-    // the werkmap overlay would eat) — see checkout-overlay.spec.mjs's SEL.
-    await page.goto('/pr/12903?sel=' + encodeURIComponent('nothing.php:1'))
-    await appReady(page)
-    // An open choice opens the werkmap overlay by itself and it owns the
-    // keyboard (see checkout-overlay.spec.mjs) — dismiss it first to reach the
-    // chip, which is the second entry point to the very same choice.
-    await expect(page.getByTestId('workdir-overlay')).toBeVisible()
-    await page.keyboard.press('Escape')
-    await leaveSearchBox(page)
-    await page.keyboard.press('ArrowLeft')
-
-    const chip = page.getByTestId('checkout-chip')
-    await expect(chip).toContainText('Keuze nodig')
-
-    await chip.click()
-    await expect(page.getByTestId('command-row').filter({ hasText: '/home/reindert/dev/a' })).toHaveCount(1)
-    await expect(page.getByTestId('command-row').filter({ hasText: '/home/reindert/dev/b' })).toHaveCount(1)
-    await expect(page.getByTestId('command-row').filter({ hasText: 'Nu terugzetten' })).toHaveCount(1)
-    // A pending decision replaces the ordinary "Andere werkmap kiezen" row.
-    await expect(page.getByTestId('command-row').filter({ hasText: 'Andere werkmap kiezen' })).toHaveCount(0)
-
-    await page.getByTestId('command-row').filter({ hasText: '/home/reindert/dev/b' }).click()
-    await expect.poll(() => signals.length).toBe(1)
-    expect(signals[0]).toMatchObject({ action: 'checkoutAnswer', reply: '/home/reindert/dev/b' })
-  })
+  // There used to be a test here for the chip's own menu WHILE a decision is
+  // pending ("a pending decision offers its own options directly"). It reached
+  // that menu by pressing Escape to dismiss the werkmap overlay first, and the
+  // overlay can no longer be dismissed at all (a blocking choice, see
+  // checkout-overlay.spec.mjs) — so with a decision pending the chip is simply
+  // not reachable any more, and the overlay is the one entry point. The chip's
+  // remaining rows (no decision pending) are covered by the two tests above.
 })
 
 test.describe('Checkout badge on the PR overview', () => {

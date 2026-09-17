@@ -33,14 +33,13 @@ import { cancelClaudeTurn, hasActiveClaudeTurn } from './RelatedPanel.mjs'
 let st = null
 let sendAction = null
 
-// dismissed holds the fingerprint of the choice the reviewer pressed Escape
-// on; busyKey holds the key (see rows() below) of the row currently running,
+// busyKey holds the key (see rows() below) of the row currently running,
 // '' while idle — used both to lock the rest of the list and to say WHICH
 // option is in flight, not just a bare "Bezig…". steps mirrors the real git
 // commands that option is running server-side (checkout_progress.go),
 // polled while busyKey is set. Deliberately NOT persisted anywhere: not in
 // localStorage, not in the URL (see openness rules below).
-const wd = reactive({ dismissed: '', busyKey: '', steps: [], sel: 0 })
+const wd = reactive({ busyKey: '', steps: [], sel: 0 })
 
 // progressTimer drives the poll loop below — a plain module variable, not
 // reactive state, exactly like the other timer/handle module lets in this
@@ -120,16 +119,6 @@ function decision() {
   return c && c.decision ? c.decision : null
 }
 
-// choiceFingerprint identifies WHICH choice is open — stage plus its own
-// options. A brand-new choice therefore reopens the overlay even if the
-// reviewer dismissed the previous one, while a mere read-model refetch of the
-// SAME choice does not.
-function choiceFingerprint() {
-  const d = decision()
-  if (!d) return ''
-  return (d.stage || '') + '|' + (Array.isArray(d.options) ? d.options.join('|') : '')
-}
-
 // isWorkDirOverlayOpen: purely DERIVED from the read model
 // (GET /api/chat/checkout via home.mjs's loadCheckout, refetched on the
 // checkout.changed event). There is no "open" flag anywhere, and deliberately
@@ -139,14 +128,19 @@ function choiceFingerprint() {
 // is genuinely open. Same reasoning as state.showApproved/autowarn in
 // CLAUDE.md's URL-state section.
 //
-// Consequence, chosen deliberately by the reviewer (no `/`-menu entry was
-// wanted): Escape's dismissal lasts until the page is reloaded or a DIFFERENT
-// choice arrives, and until then the overlay itself cannot be reopened. The
-// choice stays reachable through the checkout chip on nav stop 1
-// (prInfoCard), which is unchanged.
+// There is also no LOCAL way to close it: this choice really blocks every
+// write turn of the PR (chat_workflow.go answers "er staat nog een keuze open
+// over de werkmap van deze PR" until it is made), so an accidental Escape or
+// a click beside the panel used to hide the only question that could unblock
+// the chat — reported exactly that way, with the chat dead-ending twice on
+// the same sentence while the choice sat open in the read model and nothing
+// on screen asked it any more. The overlay therefore closes on ONE thing: a
+// real answer (Enter on a row, or a click on it), which resolves the decision
+// server-side and makes this function false by itself. "Uit (geen werkmap
+// koppelen)" is the way out for a reviewer who doesn't want to pick a
+// directory at all.
 export function isWorkDirOverlayOpen() {
-  const fp = choiceFingerprint()
-  return fp !== '' && wd.dismissed !== fp
+  return decision() !== null
 }
 
 // rows: the option list, plus the two always-available escapes. Deliberately
@@ -239,30 +233,10 @@ async function act(action, reply, key) {
   }
 }
 
-function dismiss() {
-  wd.dismissed = choiceFingerprint()
-}
-
-// reopenWorkDirOverlay undoes an Escape dismissal for the choice that is open
-// right now — the ONE way back in, used by the checkout chip's own menu row
-// (checkoutChipCommandsFor, home.mjs) when the reviewer asks to see which
-// files the choice is about. The command palette renders single-line,
-// truncating rows and has no place for a file list, so the chip deliberately
-// hands that job back to this overlay instead of growing a second, worse copy
-// of the list. A no-op when no choice is open (dismissed is keyed on the
-// choice's own fingerprint, see isWorkDirOverlayOpen).
-export function reopenWorkDirOverlay() {
-  wd.dismissed = ''
-  wd.sel = 0
-}
-
 export function handleWorkDirOverlayKeydown(e) {
   const list = rows()
-  if (e.key === 'Escape') {
-    e.preventDefault()
-    dismiss()
-    return
-  }
+  // Escape is deliberately NOT a way out — see isWorkDirOverlayOpen. It falls
+  // through to the swallow-everything tail below like any other key.
   // While an answer is in flight the list is locked (see the busyKey guard in
   // act() above) — swallow navigation/confirm too, so ↑/↓/Enter can't queue
   // up a second row against a menu that visually shows only one is running.
@@ -418,12 +392,8 @@ function overlayPanel() {
     <div
       class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 dark:bg-black/70 p-4"
       data-testid="workdir-overlay"
-      @click="${() => dismiss()}"
     >
-      <div
-        class="w-full max-w-xl rounded-xl bg-white dark:bg-zinc-900 ring-1 ring-slate-200 dark:ring-zinc-700 shadow-xl"
-        @click="${(e) => e && e.stopPropagation()}"
-      >
+      <div class="w-full max-w-xl rounded-xl bg-white dark:bg-zinc-900 ring-1 ring-slate-200 dark:ring-zinc-700 shadow-xl">
         <div class="border-b border-slate-100 dark:border-zinc-800 px-4 py-3">
           <p class="text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500">${t('Werkmap voor deze PR')}</p>
           <p class="mt-1 text-[13px] text-slate-700 dark:text-zinc-300" data-testid="workdir-overlay-body">
@@ -457,7 +427,7 @@ function overlayPanel() {
         </ul>
         <div class="contents">${() => (wd.steps.length ? progressPanel().key('workdir-progress') : '')}</div>
         <div class="flex items-center justify-between border-t border-slate-100 dark:border-zinc-800 px-4 py-2 text-[11px] text-slate-500 dark:text-zinc-400">
-          <span data-testid="workdir-overlay-hint">${t('↑↓ kiezen · Enter bevestigen · Esc sluiten')}</span>
+          <span data-testid="workdir-overlay-hint">${t('↑↓ kiezen · Enter bevestigen · alleen een keuze sluit dit')}</span>
           <span data-testid="workdir-overlay-status">${() => (busyRow() ? t('Bezig: {label}…', { label: busyRow().label }) : '')}</span>
         </div>
       </div>

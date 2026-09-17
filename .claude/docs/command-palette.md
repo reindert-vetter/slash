@@ -59,8 +59,9 @@ the palette: `isWorkDirOverlayOpen()`/`handleWorkDirOverlayKeydown(e)` are
 checked in `home.mjs`'s `onKeydown` right after the image lightbox's own pair
 and before every other branch, so while it is open **every** key belongs to it
 — ↑/↓ move the highlight (a ring **plus** a leading `›`, per the colourblind
-rule), Enter runs the highlighted row, Escape dismisses, and anything else is
-swallowed rather than navigating the tree underneath.
+rule), Enter runs the highlighted row, and anything else — Escape included, see
+"It cannot be closed" below — is swallowed rather than navigating the tree
+underneath.
 
 **Why it exists.** That choice used to be a `chat.KindDirectoryDecision` bubble
 inside whichever conversation happened to trigger it — and a *second*
@@ -87,20 +88,35 @@ share, and it could show an overlay for a choice that no longer exists (or hide
 one that is genuinely open). Same reasoning as `state.showApproved` in
 `CLAUDE.md`'s URL-state section.
 
-**Escape's dismissal is per-choice and ephemeral.** It records the *fingerprint*
-of the choice (its stage plus its own options), so a **different** choice
-arriving later opens the overlay again while a mere refetch of the same one does
-not. Nothing persists it — not `localStorage`, not the URL.
+**It cannot be closed — only answered.** Escape used to dismiss it (per
+choice, ephemeral) and a click on the backdrop did the same. Both are gone:
+Escape falls through to the swallow-everything tail like any other key, and the
+backdrop has no `@click` at all. Reviewer-reported bug behind that change: an
+accidental dismissal hid the only question that could unblock the PR, while the
+choice itself stayed open server-side — the chat then dead-ended twice on
+`chat_workflow.go`'s "er staat nog een keuze open over de werkmap van deze PR"
+with nothing on screen asking anything, and "retry" only repeated it. His own
+words: *"ik wil de vraag opnieuw krijgen en ik wil een blokkende popup niet
+willen sluiten door ernaast te drukken of door niet enter knop (muisklik op menu
+item is ok)"*. So `isWorkDirOverlayOpen()` is now literally "the read model has
+a decision", with no local dismissal state at all, and the overlay closes only
+when an answer resolves the decision server-side.
 
-**Accepted consequence, deliberately chosen (do not "fix" it as a bug):** there
-is **no** `/`-menu entry to reopen the overlay, so after an Escape it stays
-closed until the page is reloaded or a different choice arrives (the one
-exception, added later and for one specific reason, is the chip's own "bekijk
-de bestanden" row — see "The chip names the count" below).
-That was an explicit answer ("geen `/`-menu-item — weglaten"). The choice itself
-is never stranded: the **checkout chip** in `prInfoCard` (nav stop 1, unchanged,
-see `checkoutChipCommandsFor`) offers exactly the same options through the same
-`checkoutAnswer` Action.
+**Accepted consequence, explicitly wanted:** while a choice is open the whole
+review tree is blocked — every key belongs to the overlay and the page behind it
+cannot be clicked. The way out for a reviewer who does not want to pick a
+directory is the overlay's own **"Uit (geen werkmap koppelen)"** row (and
+"Andere werkmap kiezen"/"Chat pauzeren" next to it), never a dismissal. The
+**checkout chip** in `prInfoCard` still offers the same `checkoutAnswer` Action,
+but it is only reachable once nothing is pending — with a choice open, this
+overlay is the single entry point.
+
+**A dead-ended chat re-asks the question.** `loadChatMessages`
+(`RelatedPanel.mjs`) calls the injected `checkoutRefresher` (`home.mjs`'s
+`loadCheckout`, wired with `setCheckoutRefresher`) whenever a transcript ENDS on
+one of the checkout dead ends (`isCheckoutDeadEnd`), so the overlay opens off the
+refreshed read model even if the `checkout.changed` event that normally raises it
+never reached this tab (reconnect, or a choice raised before the tab was open).
 
 **A dirty-tree choice NAMES the files it is about.** Reported bug: the
 reviewer answered "Meenemen in de commit" for changes he had never been shown,
@@ -118,20 +134,14 @@ branch's committed state (`git checkout -- .` + `git clean -fd`), and the
 reviewer's own ruling was *"verwijderen is prima, maar moet het dan duidelijk
 zijn wat je verwijderd"* — the gap was visibility, not a missing action.
 
-`Paths` is deliberately **not** part of `choiceFingerprint` (stage + options),
-so a path list that shifts between two refetches of the SAME choice never
-re-opens a dismissed overlay. It is also a snapshot taken when the choice was
-RAISED — a file changed while the overlay sits open is not reflected until the
-ladder re-raises the question, the price of keeping the read model git-free.
+`Paths` is a snapshot taken when the choice was RAISED — a file changed while
+the overlay sits open is not reflected until the ladder re-raises the question,
+the price of keeping the read model git-free.
 
-**The chip names the count and hands the list back to the overlay.** A palette
-row is one truncating line, so `checkoutChipCommandsFor` (`home.mjs`) cannot
-show a file list; with `decision.paths` present it prepends one row ("Bekijk de
-N bestanden die hier al zijn aangepast") that calls `reopenWorkDirOverlay()`
-(`workDirOverlay.mjs`) — clearing the Escape dismissal for the choice that is
-open right now. That is the ONE exception to the "no way to reopen the overlay"
-consequence right above, and it exists precisely because the chip would
-otherwise be the one entry point where the destructive answer is given blind.
+The chip's old "Bekijk de N bestanden die hier al zijn aangepast" row (which
+re-opened a dismissed overlay to show the list a truncating palette row cannot)
+is **gone** along with `reopenWorkDirOverlay()`: the overlay is now always the
+thing on screen while a choice is open, and it shows those files itself.
 
 **Answering does not close it optimistically.** A row's `run` fires the Action;
 the overlay disappears only when the read model says the choice is gone, so
@@ -150,8 +160,7 @@ appended "…", every OTHER row visibly dims and gets the real `disabled`
 attribute (the plain-name-with-function-binding form, see
 `.claude/rules/arrowjs-pitfalls.md` — `?disabled=`/`.disabled=` do not
 toggle in this vendored build), `↑`/`↓`/`Enter` are swallowed by
-`handleWorkDirOverlayKeydown` while `wd.busyKey` is set (Escape still works —
-dismissal is independent of the in-flight request), and the footer status
+`handleWorkDirOverlayKeydown` while `wd.busyKey` is set, and the footer status
 names the same row (`t('Bezig: {label}…', …)`).
 
 On top of the label, a live panel (`progressPanel()`, `data-testid=

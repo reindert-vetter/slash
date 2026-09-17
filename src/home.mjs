@@ -128,6 +128,7 @@ import RelatedPanel, {
   hasHighlightedClaudeOption,
   selectHighlightedClaudeTask,
   setClaudeTaskJump,
+  setCheckoutRefresher,
   claudeChatShadowWarning,
   sendPendingReply,
   pendingPublishInfo,
@@ -181,7 +182,6 @@ import WorkDirOverlayHost, {
   initWorkDirOverlay,
   isWorkDirOverlayOpen,
   handleWorkDirOverlayKeydown,
-  reopenWorkDirOverlay,
 } from './workDirOverlay.mjs'
 import GeneralChatOverlayHost, {
   initGeneralChatOverlay,
@@ -7991,6 +7991,10 @@ async function jumpToClaudeConversation(c) {
   await enterClaudeChat(state.pr)
 }
 setClaudeTaskJump(jumpToClaudeConversation)
+// So a chat that dead-ends on the open-werkmap-choice sentence re-reads the
+// checkout read model, which is what re-opens the werkmap overlay — see
+// setCheckoutRefresher's own doc comment (RelatedPanel.mjs).
+setCheckoutRefresher(() => loadCheckout())
 
 // ── Command palette (`/`) ─────────────────────────────────────────────────────
 // The `/` key opens a searchable command menu overlaid on the next-block preview
@@ -8518,25 +8522,13 @@ function checkoutChipCommandsFor() {
   const c = state.checkout || {}
   const items = []
   const decision = c.decision
-  // The files the open choice is ABOUT, first and by count (chatCheckoutDecision
-  // .Paths — currently the dirtyTree stage's already-changed, uncommitted
-  // files). A palette row is a single truncating line, so it names the number
-  // here and hands the actual list back to the werkmap overlay, which has room
-  // for it — see reopenWorkDirOverlay's own doc comment. Without this the chip
-  // was the one entry point where the reviewer answered "Meenemen in de
-  // commit"/"Verwijderen" without ever being shown what that covers.
-  const dirtyPaths = decision && Array.isArray(decision.paths) ? decision.paths : []
-  if (dirtyPaths.length) {
-    items.push({
-      id: 'checkout-dirty-files',
-      label:
-        dirtyPaths.length === 1
-          ? t('Bekijk het ene bestand dat hier al is aangepast')
-          : t('Bekijk de {n} bestanden die hier al zijn aangepast', { n: dirtyPaths.length }),
-      hint: 'bestanden',
-      run: () => reopenWorkDirOverlay(),
-    })
-  }
+  // There used to be a "Bekijk de N bestanden" row here, handing the file
+  // list back to the werkmap overlay after an Escape had dismissed it. The
+  // overlay can no longer be dismissed at all (see isWorkDirOverlayOpen,
+  // workDirOverlay.mjs), so while a choice is open the overlay itself is
+  // always the thing on screen showing those files, and this chip is only
+  // reachable once there is nothing pending — which is exactly when that row
+  // had nothing to show.
   if (decision && Array.isArray(decision.options) && decision.options.length) {
     decision.options.forEach((opt, i) => {
       items.push({
