@@ -2435,15 +2435,26 @@ const pureChatDraftReplyIds = new Set()
 // gets neither: it is no longer purely Claude's text, so it goes through the
 // ordinary flow untouched.
 //
-// Deliberately does NOT reuse prefillField's rAF + focusToken-gated wait: that
-// mechanism exists for a field that is only ABOUT to mount because of the very
-// state change that requested the focus (see prefillField's own doc comment),
-// and entering/leaving the Claude column in between can bump focusToken before
-// the deferred write lands — silently dropping the draft. reaction-compose is
-// (per "Also stays expanded once the keyboard moves on into the Claude
-// column" in .claude/docs/comments-panel.md) already mounted whenever this
-// runs, or genuinely not part of the current view at all — either way a
-// synchronous DOM read settles it with no race.
+// Deliberately does NOT reuse prefillField's rAF + focusToken-gated wait for
+// the ORDINARY case: that mechanism exists for a field that is only ABOUT to
+// mount because of the very state change that requested the focus (see
+// prefillField's own doc comment), and entering/leaving the Claude column in
+// between can bump focusToken before the deferred write lands — silently
+// dropping the draft. reaction-compose is (per "Also stays expanded once the
+// keyboard moves on into the Claude column" in .claude/docs/comments-panel.md)
+// already mounted whenever this runs — UNLESS the comment side is currently
+// read-only (see the narrow-viewport branch below, added later).
+//
+// writeIntoReplyField is the actual DOM write (value + auto-grow + focus/
+// select), split out so the narrow-viewport branch below can apply it a frame
+// later, once its own toComment() call has mounted the field.
+function writeIntoReplyField(el, merged, pure) {
+  el.value = merged
+  autoGrowTextarea(el) // .value= fires no input event, so the auto-grow needs an explicit nudge
+  el.focus()
+  if (pure) el.select()
+  else el.setSelectionRange(el.value.length, el.value.length)
+}
 function applyPendingDraftReplies(commentId) {
   let appended = false
   let pure = false
@@ -2459,10 +2470,6 @@ function applyPendingDraftReplies(commentId) {
   if (pure) pureChatDraftReplyIds.add(commentId)
   else pureChatDraftReplyIds.delete(commentId)
   const merged = getReplyDraft(commentId)
-  const el = document.querySelector('[data-testid=reaction-compose]')
-  if (!el) return // not currently mounted — replyDrafts already holds it for the next time this thread opens
-  el.value = merged
-  autoGrowTextarea(el) // .value= fires no input event, so the auto-grow needs an explicit nudge
   const active = document.activeElement
   const typingInClaude = !!(
     active &&
@@ -2471,9 +2478,35 @@ function applyPendingDraftReplies(commentId) {
     active.value.trim()
   )
   if (typingInClaude) return // never steal the keyboard out from under an in-progress, UNSENT follow-up message
-  el.focus()
-  if (pure) el.select()
-  else el.setSelectionRange(el.value.length, el.value.length)
+  const el = document.querySelector('[data-testid=reaction-compose]')
+  if (el) {
+    writeIntoReplyField(el, merged, pure)
+    return
+  }
+  // Not currently mounted. On a wide screen that only means "this comment
+  // isn't the one on screen right now" — replyDrafts already holds the text
+  // for the next time this thread opens, nothing more to do. But below
+  // COMMENT_CLAUDE_WIDE_BREAKPOINT_PX (see "Read-only, not a rail" in
+  // comments-panel.md), the field is ALSO missing while `cs.focus ===
+  // 'claude'` on the very conversation this draft belongs to — the comment
+  // side goes read-only (its composer unmounted entirely) while Claude owns
+  // the keyboard, which is normally correct but leaves this exact draft
+  // invisible and unfocused until the reviewer manually presses `←`.
+  // Reviewer request: "na comment genereren wil ik dat gelijk de input
+  // geselecteerd is dat ik gelijk kan sturen" — so switch the keyboard onto
+  // the comment side ourselves, the same hand-off `←` already performs, and
+  // apply the write once that side has actually mounted (`toComment`'s own
+  // reactive re-render is a microtask, not synchronous with this call).
+  if (cs.focus === 'claude' && cc.commentId === commentId) {
+    toComment(false) // no built-in focus/prefill — this function does both itself, once
+    const want = focusToken // toComment() just bumped it; a LATER transition must still cancel us
+    requestAnimationFrame(() => {
+      if (want !== focusToken) return
+      const el2 = document.querySelector('[data-testid=reaction-compose]')
+      if (!el2) return
+      writeIntoReplyField(el2, merged, pure)
+    })
+  }
 }
 
 // loadChatMessages re-fetches the transcript (read-only GET, safe to poll).

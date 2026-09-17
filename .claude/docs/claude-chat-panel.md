@@ -2869,6 +2869,34 @@ resync, never re-appends the same text twice):
    next time `toComment` opens this thread) — either way a synchronous read
    settles it with no race.
 
+   **That "genuinely not part of the current view" case turned out to have a
+   THIRD shape, missed above: read-only, not absent.** Below
+   `COMMENT_CLAUDE_WIDE_BREAKPOINT_PX` (see "Read-only, not a rail" in
+   `.claude/docs/comments-panel.md`) the comment side goes read-only —
+   composer unmounted entirely — for exactly as long as `cs.focus ===
+   'claude'`, which is precisely the moment a draft lands. On an ordinary
+   laptop-width screen `reaction-compose` is therefore missing every single
+   time, not just "some other unrelated conversation is on screen", and the
+   synchronous read above used to bail out silently — the "concept in
+   comment-veld gezet" badge showed, `replyDrafts` held the text, but the
+   keyboard stayed in the now-empty, still-focused Claude composer with
+   nothing visibly holding the draft at all (reviewer report + screenshot:
+   `data/review-shots/task-focus-comment-input-after-generate.png` — every
+   existing regression test for this feature runs at a forced 2000px
+   viewport, above the threshold, so none of them ever exercised this path).
+   `applyPendingDraftReplies` now calls `toComment(false)` itself in exactly
+   this situation (`cs.focus === 'claude' && cc.commentId === commentId`,
+   after the same "not mid-typing" guard above) — the same hand-off `←`
+   already performs — and applies the write (`writeIntoReplyField`, the
+   shared value+autogrow+focus/select step both branches now call) one
+   `requestAnimationFrame` later, guarded by a **freshly re-read**
+   `focusToken` (snapshotted AFTER `toComment()`'s own `releaseFocus()` bump,
+   not before it, so this continuation isn't cancelled by its own trigger).
+   Test: "a drafted reply still lands in and focuses the comment composer,
+   even though the comment side is read-only..." in
+   `tests/claude-chat-panel.spec.mjs`, in its own narrow-viewport
+   `test.describe`.
+
    **Focus after placing a draft — the empty-vs-non-empty refinement.**
    Reviewer request: "hierna wil ik gelijk een focus hebben in de
    comment-input" (right after sending "maak hier een comment van" and

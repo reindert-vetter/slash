@@ -1999,3 +1999,80 @@ test('the Claude column is a function of the selected code: navigating away hide
     })
   }
 })
+
+// Below COMMENT_CLAUDE_WIDE_BREAKPOINT_PX (home.mjs), the comment side goes
+// read-only WHILE `cs.focus === 'claude'` — its whole composer, including
+// reaction-compose, unmounts entirely (see "Read-only, not a rail" in
+// .claude/docs/comments-panel.md). The "focus lands in the comment field"
+// test above never exercises that: this whole FILE runs at a forced 2000px
+// viewport (test.use at the top), always above the threshold, so
+// reaction-compose is never missing there. On an ordinary laptop-width
+// screen it genuinely is — applyPendingDraftReplies used to bail out the
+// moment `document.querySelector('[data-testid=reaction-compose]')` came
+// back null, leaving the concept text sitting only in replyDrafts: the
+// "concept in comment-veld gezet" badge showed, but the keyboard stayed in
+// the now-empty, still-focused Claude composer (reviewer report + screenshot,
+// data/review-shots/task-focus-comment-input-after-generate.png — the
+// visible field in that screenshot IS claude-chat-compose, not
+// reaction-compose, which was never mounted at all). Fixed by having
+// applyPendingDraftReplies call `toComment(false)` itself in exactly this
+// situation — the same hand-off `←` already performs — and applying the
+// write a frame later, once that mounts the field.
+test.describe('narrow viewport (below the comment/Claude read-only threshold)', () => {
+  test.use({ viewport: { width: 1280, height: 720 } })
+
+  test('Claude chat: a drafted reply still lands in and focuses the comment composer, even though the comment side is read-only while Claude has the keyboard', async ({
+    page,
+  }, testInfo) => {
+    const pr = seededPr(testInfo)
+    const start = await page.request.post('/api/workflows/task_code_comment', {
+      data: {
+        pr,
+        file: 'test.php',
+        line: 1,
+        author: 'reviewer',
+        body: 'is dit nog in gebruik?',
+        code: '$order->total();',
+        gran: 'call',
+        label: 'Order::total',
+      },
+    })
+    const conversationId = (await start.json()).runId
+    expect(conversationId).toBeTruthy()
+
+    let sent = false
+    await page.route('**/signals/message', (route) => {
+      sent = true
+      route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
+    })
+    const draftBody = 'Concept van Claude: maak hiervan een comment.'
+    await page.route('**/api/chat?commentId=' + conversationId, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          messages: sent ? [{ id: 'draft-1', role: 'assistant', kind: 'draft_reply', body: draftBody }] : [],
+        }),
+      }),
+    )
+
+    await page.goto('/pr/' + pr)
+    const item = page.getByTestId('comment-item').first()
+    await expect(item).toBeVisible()
+    await item.click()
+    await page.keyboard.press('ArrowRight') // comment -> claude
+
+    // The comment side is read-only now (narrow viewport, Claude focused) —
+    // reaction-compose genuinely isn't in the DOM yet.
+    await expect(page.getByTestId('reaction-compose')).toHaveCount(0)
+
+    const composer = page.getByTestId('claude-chat-compose')
+    await expect(composer).toBeFocused()
+    await composer.fill('maak hier een comment van')
+    await composer.press('Enter')
+
+    const reply = page.getByTestId('reaction-compose')
+    await expect(reply).toHaveValue(draftBody)
+    await expect(reply).toBeFocused()
+  })
+})
