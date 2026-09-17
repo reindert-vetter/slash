@@ -784,6 +784,30 @@ returning to the list. If the neighbour's code is still loading, `pendingLast`
 remembers that you want the last change and `ensureCode` resolves it once the
 rows are known.
 
+**Exception: ↓ off the very last VISIBLE block in the whole PR leaves the diff
+instead of stopping.** Reported bug: a reviewer down to the PR's one remaining
+unapproved block (everything else already approved and hidden) had no way at
+all to reach the push-todo row with `↓` — the file-boundary stop above is
+correct while another visible block still waits further down the index (the
+reviewer should consciously return to the list and open it), but with nothing
+left to step to it was a genuine dead end (nothing short of `←` got you back to
+the list). `nextChange` (`home.mjs`) now checks, only once `stepBlock`/
+`stepTestMethodChange` itself already failed to move: is this really the last
+visible block going forward (`stepVisibleFrom`, the same scan
+`stepListSelection`'s own sidebar loop uses) **and** does the sidebar have a
+trailing row worth reaching at all (`toggleRowVisible()`/
+`ignoreToggleRowVisible()`/`pushTodoRowVisible()`) — if so, `leaveDiffToList()`
+then `stepListSelection(1)` hands off to the ordinary "sidebar's ↑/↓ loop"
+below, landing on whichever trailing row is next. Deliberately gated on a
+trailing row existing: with nothing approved/ignored/unpushed either, ↓ still
+plainly clamps, exactly as before — falling into an otherwise empty search box
+would be a new behaviour of its own, not this fix (see
+`tests/translation-navigation.spec.mjs`'s "clamps at the last key" case, PR 107
+has no trailing row and must keep clamping). Only the `↓` direction is
+affected; `prevChange`/`↑` is untouched. Test: "↓ past the last change of the
+LAST block leaves the diff and reaches push-todo" in
+`tests/pending-push-todo.spec.mjs`.
+
 ### The block description is an extra ↑ stop above the first change
 
 The card's description strip (`Block.mjs`'s `block-description`, a PHPDoc/AI

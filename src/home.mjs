@@ -2514,8 +2514,34 @@ function stepTestMethodChange(delta) {
 function nextChange() {
   const groups = unitsOf(curBlock())
   if (state.change >= groups.length - 1) {
-    if (curTestClassRow()) stepTestMethodChange(1)
-    else stepBlock(1)
+    const moved = curTestClassRow() ? stepTestMethodChange(1) : stepBlock(1)
+    // stepBlock/stepTestMethodChange only flow into a same-file neighbour resp.
+    // a sibling test method — a deliberate stop at a file/class boundary (see
+    // "'diff' mode" in .claude/docs/keyboard-navigation.md), which stays
+    // completely UNCHANGED while another VISIBLE block still waits further
+    // down the index: the reviewer should consciously return to the list and
+    // open it. But when this is genuinely the last visible block left
+    // ANYWHERE (stepVisibleFrom mirrors the sidebar's own "which index does ↓
+    // land on" scan) AND the sidebar has a trailing row worth reaching
+    // (toggle-approved/toggle-ignored/push-todo — the same predicates
+    // stepListSelection's own loop already gates on), stopping here leaves no
+    // way onward at all except ← — a real dead end. Reported bug: a reviewer
+    // down to the PR's last unapproved block (everything else already
+    // approved and hidden) could not reach the push-todo row with ↓ at all.
+    // Deliberately NOT triggered with no trailing row to reach either (a
+    // small PR with nothing approved/ignored/unpushed) — there ↓ still
+    // clamps, exactly as before: falling into an otherwise-empty search box
+    // would be a new, undocumented behaviour change of its own, not this fix.
+    // See tests/translation-navigation.spec.mjs's "clamps at the last key"
+    // case, which pins that narrower boundary.
+    if (
+      !moved &&
+      stepVisibleFrom(state.selected, 1) === state.selected &&
+      (toggleRowVisible() || ignoreToggleRowVisible() || pushTodoRowVisible())
+    ) {
+      leaveDiffToList()
+      stepListSelection(1)
+    }
   } else {
     clearBlockDescFocus()
     clearRangeAnchor(0)

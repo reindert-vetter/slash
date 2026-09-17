@@ -91,6 +91,43 @@ test.describe('Push todo at the bottom of the index', () => {
     await expect(row).toHaveClass(focused)
   })
 
+  // Regression: reported bug — a reviewer walking ↓ through a block's DIFF
+  // (not the sidebar) could reach the very last change of the very LAST
+  // visible block in the whole PR and then ↓ did nothing at all: nextChange
+  // only ever flows into a same-file neighbour (stepBlock/sameFileNeighbour),
+  // a deliberate stop at a file boundary — but with no next block left
+  // ANYWHERE, that stop is a genuine dead end, with no way to reach the
+  // push-todo row short of ← back to the list first. See "'diff' mode" in
+  // .claude/docs/keyboard-navigation.md.
+  test('↓ past the last change of the LAST block leaves the diff and reaches push-todo', async ({
+    page,
+  }) => {
+    await mockPendingPush(page, ready)
+    await page.goto('/pr/12903')
+    await leaveSearchBox(page)
+
+    // The fixture's last block (tests/fixtures/blocks.json), so there is no
+    // next block — same-file or not — to flow into.
+    await page.getByTestId('block-row').last().click()
+    await page.keyboard.press('ArrowRight') // enter its diff
+    await expect(page).toHaveURL(/mode=diff/)
+
+    // Walk to the end of its own change groups and past it. We don't know the
+    // exact group count, and once out of the diff the sidebar's own trailing
+    // loop keeps cycling (toggle rows → push-todo → search → back to the top)
+    // — so stop as soon as the push-todo row is reached, exactly like the
+    // "bottom-most keyboard stop" test above.
+    const row = page.getByTestId('push-todo')
+    const focused = /bg-indigo-50/
+    for (let i = 0; i < 30; i++) {
+      const cls = (await row.getAttribute('class')) || ''
+      if (focused.test(cls)) break
+      await page.keyboard.press('ArrowDown')
+    }
+    await expect(row).toHaveClass(focused)
+    await expect(page).not.toHaveURL(/mode=diff/)
+  })
+
   // Regression: rowIsCursor/rowInListRange (BlockList.mjs) used to only
   // exclude toggleFocused/ignoreToggleFocused/staleRowFocused, so stepping
   // onto this trailing row left the PREVIOUSLY selected block-row highlighted
