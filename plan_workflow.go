@@ -241,6 +241,11 @@ type PlanAnswerSignal struct {
 	TaskTitle string `json:"taskTitle,omitempty"`
 	TaskOff   bool   `json:"taskOff,omitempty"`
 	TaskNote  string `json:"taskNote,omitempty"`
+	// Attachments carries the images of a Kind planAnswerChat message — ids
+	// only, already stored by their own chat_attachment Execution and
+	// re-validated by the HTTP handler (see chat_attachment.go). Never set for
+	// any other Kind.
+	Attachments []ChatAttachmentRef `json:"attachments,omitempty"`
 }
 
 // planBlock is one example-code block, as rendered in the page's third column.
@@ -361,6 +366,9 @@ type PlanHotfixSignal struct {
 	// which question the tracker is currently parked on. See handlePlanChat.
 	Kind string `json:"kind,omitempty"`
 	Text string `json:"text,omitempty"`
+	// Attachments: the chat carve-out's own carve-out — images the reviewer
+	// pasted/dragged into the composer, ids only (see chat_attachment.go).
+	Attachments []ChatAttachmentRef `json:"attachments,omitempty"`
 }
 
 // PlanScopeSignal answers the scope question. Choice is always "parent" today
@@ -369,8 +377,9 @@ type PlanHotfixSignal struct {
 type PlanScopeSignal struct {
 	Choice string `json:"choice"`
 	// Kind/Text: same chat carve-out as PlanHotfixSignal above.
-	Kind string `json:"kind,omitempty"`
-	Text string `json:"text,omitempty"`
+	Kind        string              `json:"kind,omitempty"`
+	Text        string              `json:"text,omitempty"`
+	Attachments []ChatAttachmentRef `json:"attachments,omitempty"`
 }
 
 // planAnswer is one stored reviewer answer (the Signal, kept on the document).
@@ -389,9 +398,14 @@ type planAnswer struct {
 // the same volatile chat_progress.go snapshot the tree's chat uses, keyed on
 // planChatConversationID — see planChatReply.
 type planChatMessage struct {
-	Role      string `json:"role"`
-	Body      string `json:"body"`
-	CreatedAt string `json:"createdAt,omitempty"`
+	Role string `json:"role"`
+	Body string `json:"body"`
+	// Attachments are the images the reviewer sent with this turn (user turns
+	// only) — the same shape the review tree's own chat stores on its message
+	// rows, so src/ClaudeChat.mjs renders both without knowing which page it
+	// is on. See chat_attachment.go.
+	Attachments []ChatAttachmentRef `json:"attachments,omitempty"`
+	CreatedAt   string              `json:"createdAt,omitempty"`
 }
 
 // planDoc is the whole document the page renders — see modules/plan.
@@ -579,12 +593,18 @@ func planRunID(key string) string { return "plan-" + key }
 // runs ONE Claude call for the reply and saves again — both their own
 // Activity, so a hiccup in the (much slower) Claude call never loses the
 // reviewer's own message.
-func handlePlanChat(w *tembed.Workflow, doc *planDoc, text string) error {
+func handlePlanChat(w *tembed.Workflow, doc *planDoc, text string, attachments []ChatAttachmentRef) error {
 	text = strings.TrimSpace(text)
-	if text == "" {
+	if text == "" && len(attachments) == 0 {
 		return nil
 	}
-	doc.Chat = append(doc.Chat, planChatMessage{Role: "user", Body: text, CreatedAt: time.Now().UTC().Format(time.RFC3339)})
+	if text == "" {
+		// Images with no typed text: one gesture (drag/paste + Enter), same
+		// placeholder the review tree's own chat uses — see
+		// chatAttachmentOnlyBody.
+		text = chatAttachmentOnlyBody(len(attachments))
+	}
+	doc.Chat = append(doc.Chat, planChatMessage{Role: "user", Body: text, Attachments: attachments, CreatedAt: time.Now().UTC().Format(time.RFC3339)})
 	doc.Chat = trimPlanChat(doc.Chat)
 	if err := w.ExecuteActivity("planSave", *doc, nil); err != nil {
 		return fmt.Errorf("plan: save chat message: %w", err)
@@ -721,7 +741,7 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			var scope PlanScopeSignal
 			w.WaitSignal(SignalPlanScope, &scope)
 			if scope.Kind == planAnswerChat {
-				if err := handlePlanChat(w, &doc, scope.Text); err != nil {
+				if err := handlePlanChat(w, &doc, scope.Text, scope.Attachments); err != nil {
 					return nil, err
 				}
 				continue
@@ -753,7 +773,7 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		for {
 			w.WaitSignal(SignalPlanHotfix, &hf)
 			if hf.Kind == planAnswerChat {
-				if err := handlePlanChat(w, &doc, hf.Text); err != nil {
+				if err := handlePlanChat(w, &doc, hf.Text, hf.Attachments); err != nil {
 					return nil, err
 				}
 				hf = PlanHotfixSignal{}
@@ -916,7 +936,7 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		// The general chat about this ticket (reused from the review tree, see
 		// planChatMessage/.claude/docs/plan-page.md) — see handlePlanChat.
 		if sig.Kind == planAnswerChat {
-			if err := handlePlanChat(w, &doc, sig.Text); err != nil {
+			if err := handlePlanChat(w, &doc, sig.Text, sig.Attachments); err != nil {
 				return nil, err
 			}
 			continue
@@ -1655,9 +1675,22 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 		startChatProgress("", 0, convID)
 		defer finishChatProgress("", 0, convID)
 		var checkoutDir string
+		// The images of the LAST reviewer turn, as absolute paths. This call is
+		// otherwise deliberately tool-less (a pure completion over the document
+		// text), so Read is granted only when there is actually something to
+		// look at — together with the --add-dir that lets it out of the scratch
+		// directory. See chat_attachment.go.
+		attachmentPaths := existingChatAttachmentPaths(m.appDataDirOrDefault(), convID, lastPlanChatAttachments(doc))
+		var tools, addDirs []string
+		if len(attachmentPaths) > 0 {
+			tools = []string{"Read"}
+			addDirs = []string{chatAttachmentConvDir(m.appDataDirOrDefault(), convID)}
+		}
 		result, err := m.claude.RunChat(ctx, claude.RunRequest{
 			Model:   claude.ModelOpus,
-			Prompt:  planChatPrompt(doc) + explainLangTail(m.LangFor(ctx, langpref.KindExplain)),
+			Prompt:  planChatPrompt(doc) + chatAttachmentPromptNote(attachmentPaths) + explainLangTail(m.LangFor(ctx, langpref.KindExplain)),
+			Tools:   tools,
+			AddDirs: addDirs,
 			OnEvent: chatProgressSink("", 0, convID, &checkoutDir),
 			Timeout: planClaudeTimeout,
 		})
@@ -1751,4 +1784,19 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 		}
 		return json.Marshal(map[string]bool{"deleted": true})
 	})
+}
+
+// lastPlanChatAttachments returns the images of the most recent REVIEWER turn
+// in this ticket's chat — the turn planChatReply is about to answer. Reading
+// them off the document rather than threading them through the Activity's own
+// input keeps planChatReply's argument exactly what it has always been (the
+// whole planDoc), which is also what makes replay of an older Execution
+// unaffected: a document recorded before attachments existed simply has none.
+func lastPlanChatAttachments(doc planDoc) []ChatAttachmentRef {
+	for i := len(doc.Chat) - 1; i >= 0; i-- {
+		if doc.Chat[i].Role != "assistant" {
+			return doc.Chat[i].Attachments
+		}
+	}
+	return nil
 }

@@ -52,6 +52,9 @@ data/debug-log.jsonl
 # commit: data/ is ignored file by file here, so without this line it would
 # show up as untracked and could be committed by accident.
 data/models/
+# Images a reviewer pasted or dragged into a Claude chat (chat_attachment.go)
+# — their own screenshots, swept by the cleanup workflow, never committed.
+data/chat-attachments/
 data/worktrees/
 data/workflows/
 node_modules/

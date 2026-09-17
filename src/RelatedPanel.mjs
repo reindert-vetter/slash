@@ -29,6 +29,15 @@ import { repoParam, repoField } from './prContext.mjs'
 // gates code_warning and the footer's explain_code — see autowarn.mjs.
 import { autoWarn } from './autowarn.mjs'
 import { claudeChatColumn, claudeStatusText } from './ClaudeChat.mjs'
+// The composer's pasted/dragged images. The module owns the upload + the
+// pending state; this file only decides WHICH bucket a send empties and which
+// Signal the resulting ids ride on — see "Afbeeldingen meesturen" in
+// .claude/docs/claude-chat-panel.md.
+import {
+  hasPendingAttachments,
+  restorePendingAttachments,
+  takePendingAttachments,
+} from './chatAttachments.mjs'
 import { loadDraft, saveDraft, clearDraft } from './draftStorage.mjs'
 import { codePreviewColumn } from './CodePreview.mjs'
 import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
@@ -1301,6 +1310,14 @@ function deletePrReplyDraft(id) {
 // (see enterClaudeChatFromNew) — so a restore always resolves the SAME key
 // composeDraftKey/cc.commentId would.
 const claudeDrafts = new Map()
+// attachmentOnlyBody mirrors chatAttachmentOnlyBody (chat_attachment.go) —
+// the placeholder body a turn gets when the reviewer sent nothing but images.
+// A literal duplicate across the two languages, the same precedent as
+// CHECKOUT_CHOICE_OPEN_BODY above: keep the two in sync.
+function attachmentOnlyBody(n) {
+  return n > 1 ? '(afbeeldingen)' : '(afbeelding)'
+}
+
 function claudeChatDraftKey() {
   return cc.commentId != null ? 'id:' + cc.commentId : 'new:' + composeDraftKey
 }
@@ -2613,11 +2630,13 @@ function sendErrorText(status) {
 // Only a failed/unreachable send never reaches that replacement, which is why
 // sendClaudeMessage explicitly removes it on both failure paths below.
 let pendingOwnMessageSeq = 0
-function addPendingOwnMessage(commentId, body) {
+function addPendingOwnMessage(commentId, body, attachments = []) {
   if (commentId !== cc.commentId) return null
   pendingOwnMessageSeq += 1
   const id = '__pending__' + pendingOwnMessageSeq
-  cc.messages = cc.messages.concat([{ id, role: 'user', kind: '', body }])
+  cc.messages = cc.messages.concat([
+    { id, role: 'user', kind: '', body, conversationId: commentId, attachments },
+  ])
   scrollClaudeThreadToBottom()
   return id
 }
@@ -2626,7 +2645,7 @@ function removePendingOwnMessage(commentId, id) {
   cc.messages = cc.messages.filter((m) => m.id !== id)
 }
 
-async function sendClaudeMessage(text, action = '', context = '', target = null) {
+async function sendClaudeMessage(text, action = '', context = '', target = null, bucket = '') {
   const trimmed = (text || '').trim()
   // 'commit'/'clear'/'retry' need no typed text — commit pushes whatever
   // Claude already changed, clear wipes the conversation, retry re-runs the
@@ -2636,10 +2655,22 @@ async function sendClaudeMessage(text, action = '', context = '', target = null)
   const runId = target ? target.runId : cc.runId
   const commentId = target ? target.commentId : cc.commentId
   if (!runId) return
-  if (!needsNoText && !trimmed) return
+  // The images the reviewer attached to THIS message, taken out of the
+  // composer before anything else can change under it. `bucket` is passed in
+  // whenever it may DIFFER from commentId — a brand-new chat parks its
+  // attachments under the composer draft key, since the conversation only
+  // comes into existence one step earlier (see sendClaudeMessageFromNew and
+  // chatAttachments.mjs). An action turn ('commit'/'clear'/'retry'/an answered
+  // question) never carries any.
+  const attachments = needsNoText ? [] : await takePendingAttachments(bucket || commentId, commentId)
+  if (!needsNoText && !trimmed && !attachments.length) return
   setTurnBusy(commentId, true)
   setTurnSendError(commentId, '')
-  const pendingId = trimmed ? addPendingOwnMessage(commentId, trimmed) : null
+  // Images with no typed text are a complete message; the bubble the server
+  // stores gets the same short placeholder body (chatAttachmentOnlyBody,
+  // chat_attachment.go), so the optimistic one must read the same.
+  const ownBody = trimmed || (attachments.length ? attachmentOnlyBody(attachments.length) : '')
+  const pendingId = ownBody ? addPendingOwnMessage(commentId, ownBody, attachments) : null
   try {
     const res = await fetch('/api/workflows/' + encodeURIComponent(runId) + '/signals/message', {
       method: 'POST',
@@ -2649,6 +2680,7 @@ async function sendClaudeMessage(text, action = '', context = '', target = null)
         body: trimmed,
         action: action || undefined,
         context: context || undefined,
+        attachments: attachments.length ? attachments : undefined,
       }),
     })
     // A rejected Signal used to be swallowed whole: the response was never
@@ -2657,6 +2689,10 @@ async function sendClaudeMessage(text, action = '', context = '', target = null)
     // sendErrorText for the three ways this actually happens.
     if (!res.ok) {
       removePendingOwnMessage(commentId, pendingId)
+      // The files themselves are on disk and fine — only the Signal was
+      // refused — so the thumbnails come back rather than silently vanishing
+      // with the message.
+      restorePendingAttachments(bucket || commentId, commentId, attachments)
       setTurnSendError(commentId, sendErrorText(res.status))
       return
     }
@@ -2670,6 +2706,7 @@ async function sendClaudeMessage(text, action = '', context = '', target = null)
     // unhandled rejection out of the click handler — again with nothing
     // visible in the column.
     removePendingOwnMessage(commentId, pendingId)
+    restorePendingAttachments(bucket || commentId, commentId, attachments)
     setTurnSendError(commentId, t('Geen verbinding met de server — draait slash nog?'))
   } finally {
     setTurnBusy(commentId, false)
@@ -2892,14 +2929,22 @@ async function steerClaudeMessage(pr, commentId, text) {
 // time.
 async function queueClaudeMessage(text, context = '') {
   const trimmed = (text || '').trim()
-  if (!trimmed) return
-  if (!ccBusy()) return sendClaudeMessage(trimmed, '', context)
+  const bucket = cc.commentId || claudeChatDraftKey()
+  if (!trimmed && !hasPendingAttachments(bucket)) return
+  if (!ccBusy()) return sendClaudeMessage(trimmed, '', context, null, bucket)
   if (!cc.runId) return
   const commentId = cc.commentId
-  if (await steerClaudeMessage(cs.pr, commentId, trimmed)) return
+  // Steering hands the text to the RUNNING turn's own stdin, which has no way
+  // to carry a file — so a message with images always becomes an ordinary
+  // queued turn instead.
+  if (!hasPendingAttachments(bucket) && (await steerClaudeMessage(cs.pr, commentId, trimmed))) return
   queuedIdSeq += 1
+  // Taken out of the composer NOW, at queue time: the reviewer keeps typing
+  // their next message in the same field, and these images belong to this
+  // one. They travel on the queue entry until it is actually sent.
+  const attachments = await takePendingAttachments(bucket, commentId)
   cc.queued = cc.queued.concat([
-    { id: 'q' + queuedIdSeq, body: trimmed, context, commentId, runId: cc.runId },
+    { id: 'q' + queuedIdSeq, body: trimmed || attachmentOnlyBody(attachments.length), context, commentId, runId: cc.runId, attachments },
   ])
 }
 
@@ -2921,6 +2966,10 @@ function drainClaudeQueue() {
     seen.add(next.commentId)
     if (isTurnBusy(next.commentId)) continue
     cc.queued = cc.queued.filter((q) => q.id !== next.id)
+    // A queued turn's images were already uploaded when it was queued, so they
+    // are put straight back into that conversation's own bucket for the send
+    // to pick up again.
+    restorePendingAttachments(next.commentId, next.commentId, next.attachments || [])
     sendClaudeMessage(next.body, '', next.context, { runId: next.runId, commentId: next.commentId })
   }
 }
@@ -4143,6 +4192,13 @@ function ensureChatEvents(pr) {
 function claudeChatView() {
   return {
     messages: () => cc.messages,
+    // Which conversation the composer's pasted/dragged images belong to, and
+    // — while there is none yet ("Chat over deze regel", whose anchor comment
+    // is only created by the first message) — the composer draft key they are
+    // parked under until there is. See chatAttachments.mjs's bucket note and
+    // "Afbeeldingen meesturen" in .claude/docs/claude-chat-panel.md.
+    conversationId: () => cc.commentId || '',
+    attachmentBucket: () => cc.commentId || claudeChatDraftKey(),
     status: () => cc.status,
     busy: () => ccBusy(),
     // Whether the "Ook andere opnieuw proberen" bulk retry is currently
@@ -7078,9 +7134,14 @@ async function sendClaudeMessageFromNew(state, commentTarget, text, action) {
   // (claudeContextBlock) — and it would go stale anyway by the time this is
   // actually sent.
   if (ccBusy() && !action) return queueClaudeMessage(text)
+  // Captured BEFORE the anchor step: creating the anchor sets cc.commentId,
+  // which moves the composer's attachment bucket from the draft key to that
+  // id — while the images the reviewer already pasted still sit under the old
+  // one (see chatAttachments.mjs's bucket note).
+  const bucket = cc.commentId || claudeChatDraftKey()
   const c = await ensureClaudeAnchorForNew(state, commentTarget)
   if (c) await ensureAndLoadChat(state.pr, c.id)
-  await sendClaudeMessage(text, action, claudeContextBlock(commentTarget))
+  await sendClaudeMessage(text, action, claudeContextBlock(commentTarget), null, bucket)
 }
 
 // placeComment submits the composer's text as a comment on the current unit.

@@ -291,6 +291,18 @@ const (
 	// an Execution and nothing else; the byte counter the page shows while it
 	// runs is separate, in-memory and cosmetic (whisperDownloadStatus).
 	WorkflowWhisperModel = "whisper_model"
+	// WorkflowChatAttachment is the Workflow Type behind an image the reviewer
+	// pastes or drags into a Claude chat composer — on /pr/<id> and on
+	// /plan/<KEY> alike. ONE-SHOT and signal-less, exactly like
+	// WorkflowWhisperModel above: a single saveChatAttachment Activity, no
+	// WaitSignal loop to replay.
+	//
+	// It exists for the same reason that one does: putting the pasted bytes on
+	// disk is a real, durable write, and those only happen inside a workflow
+	// Activity (.claude/rules/workflows-write-boundary.md). See
+	// chat_attachment.go for why the bytes deliberately do NOT ride along on
+	// the conversation's own message Signal.
+	WorkflowChatAttachment = "chat_attachment"
 	// WorkflowIgnoreRuns is the Workflow Type behind "negeren" in the global
 	// failed-tasks popup: the reviewer decided a failure needs no action, so
 	// its run is permanently deleted from the tembed store and thereby from
@@ -3122,6 +3134,16 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return json.Marshal(map[string]int{"swept": n})
 	})
 
+	// Activity: remove every chat-attachment directory nothing has touched for
+	// chatAttachmentMaxAge — the same age-based, PR-independent shape as the
+	// test_run residue sweep above. See sweepChatAttachments
+	// (chat_attachment.go).
+	engine.RegisterActivity("sweepChatAttachments", func(ctx context.Context, in []byte) ([]byte, error) {
+		return json.Marshal(map[string]int{
+			"swept": sweepChatAttachments(m.appDataDirOrDefault(), time.Now(), chatAttachmentMaxAge),
+		})
+	})
+
 	// Activity: drop Jira notifications older than jiraNotifyRetention (30
 	// days) — the age-based half of the cleanup pass, like the test_run residue
 	// sweep above. Unconditional, unrelated to any PR.
@@ -3194,6 +3216,21 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// (chat_progress.go/eventbus.go), never the new content itself — the read
 	// model stays the only source of truth, so a tab that missed the push is
 	// at most one refetch behind, never wrong.
+	// Activity: store ONE image the reviewer pasted/dragged into a chat
+	// composer (write, workflow-driven — see chat_attachment.go for why this
+	// cannot be an upload handler).
+	engine.RegisterActivity("saveChatAttachment", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg ChatAttachmentInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		ref, err := m.saveChatAttachment(ctx, arg)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(ref)
+	})
+
 	engine.RegisterActivity("saveChatMessage", func(ctx context.Context, in []byte) ([]byte, error) {
 		var msg chat.Message
 		if err := json.Unmarshal(in, &msg); err != nil {
@@ -3233,6 +3270,11 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 				return nil, err
 			}
 		}
+		// The transcript that referenced them is gone, so the images the
+		// reviewer pasted into it are residue — drop them in the same
+		// Activity (see chat_attachment.go). Best-effort: a wiped
+		// conversation must never fail over a leftover file.
+		removeChatAttachments(m.appDataDirOrDefault(), arg.ConversationID)
 		publishChatChanged(arg.Repo, arg.PR, arg.ConversationID)
 		return nil, nil
 	})
@@ -3630,6 +3672,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowAppSettings, appSettingsWorkflow)
 	engine.RegisterWorkflow(WorkflowDebugLog, debugLogWorkflow)
 	engine.RegisterWorkflow(WorkflowWhisperModel, whisperModelWorkflow)
+	engine.RegisterWorkflow(WorkflowChatAttachment, chatAttachmentWorkflow)
 	engine.RegisterWorkflow(WorkflowIgnoreRuns, ignoreRunsWorkflow)
 	engine.RegisterWorkflow(WorkflowIgnoreComment, ignoreCommentWorkflow)
 	engine.RegisterWorkflow(WorkflowCleanup, cleanupWorkflow)
@@ -4046,6 +4089,17 @@ func cleanupWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	}
 	if err := w.ExecuteActivity("purgeJiraNotifications", in, &jiraNotifications); err != nil {
 		return nil, fmt.Errorf("purge jira notifications: %w", err)
+	}
+
+	// Age-based like the two sweeps above, and equally independent of the
+	// resolved PR targets: the images a reviewer pasted into a chat belong to
+	// a conversation, not to a PR, and the planning page's chats have no PR at
+	// all. See sweepChatAttachments (chat_attachment.go).
+	var chatAttachments struct {
+		Swept int `json:"swept"`
+	}
+	if err := w.ExecuteActivity("sweepChatAttachments", nil, &chatAttachments); err != nil {
+		return nil, fmt.Errorf("sweep chat attachments: %w", err)
 	}
 
 	var targets CleanupTargets

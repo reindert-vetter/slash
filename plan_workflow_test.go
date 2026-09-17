@@ -527,7 +527,9 @@ func TestTrimPlanChatBounds(t *testing.T) {
 		t.Fatalf("first kept message = %+v, want it to start on a user turn", got[0])
 	}
 	last := list[len(list)-1]
-	if got[len(got)-1] != last {
+	// Compared field by field rather than with ==: planChatMessage carries an
+	// attachment slice now (see chat_attachment.go), which is not comparable.
+	if got[len(got)-1].Role != last.Role || got[len(got)-1].Body != last.Body {
 		t.Fatalf("last kept message = %+v, want the newest %+v", got[len(got)-1], last)
 	}
 	// A list already within bounds is untouched.

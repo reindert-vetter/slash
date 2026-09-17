@@ -45,6 +45,15 @@ import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 // verbatim by this page's own live panes (livePane) so a running plan
 // generation/execution reads exactly like a running chat turn.
 import { claudeChatColumn, claudeStatusText } from './ClaudeChat.mjs'
+// The chat composer's pasted/dragged images — the same module the review tree
+// uses; only the Signal the resulting ids ride on is this page's own. See
+// .claude/docs/claude-chat-panel.md ("Afbeeldingen meesturen").
+import { restorePendingAttachments, takePendingAttachments } from './chatAttachments.mjs'
+// Click a screenshot in a chat bubble → fullscreen, →/← through the rest.
+// One shared mechanism with every other image in the app, wired exactly as
+// home.mjs wires it (see imageLightbox.mjs); this page had no image to show
+// before attachments existed.
+import ImageLightboxHost, { initImageLightbox, isLightboxOpen, handleLightboxKeydown } from './imageLightbox.mjs'
 // The live "what is Claude doing right now" wiring behind this chat is
 // reused unchanged from the review tree: events.mjs's one multiplexed SSE
 // stream and claudeTurns.mjs's per-conversation snapshot store are both pure,
@@ -1119,7 +1128,19 @@ function execRunning() {
 // ladders, agentic tool use, questions with options) this page's own single
 // one-shot Claude call never produces.
 function chatMessages() {
-  return (state.doc.chat || []).map((m, i) => ({ id: 'chat:' + i, role: m.role, body: m.body }))
+  // conversationId/attachments are what ClaudeChat.mjs's bubble needs to
+  // render the images the reviewer sent with a turn — the same two fields the
+  // review tree's own messages carry from the server. This page's document
+  // stores only the attachments, so the conversation is filled in here (it is
+  // the same for every message of this ticket). See "Afbeeldingen meesturen"
+  // in .claude/docs/claude-chat-panel.md.
+  return (state.doc.chat || []).map((m, i) => ({
+    id: 'chat:' + i,
+    role: m.role,
+    body: m.body,
+    conversationId: chatConvId(),
+    attachments: m.attachments || [],
+  }))
 }
 
 // chatConvId is the conversation id this ticket's chat pushes/polls live
@@ -1285,25 +1306,42 @@ function chatSignalName() {
 // sendClaudeMessage.
 async function sendChatMessage(text) {
   const trimmed = (text || '').trim()
-  if (!trimmed || state.chatBusy) return
+  if (state.chatBusy) return
+  // The images pasted/dragged into the composer, taken out of it before the
+  // optimistic echo below. Images alone are a complete message (the backend
+  // fills in a short placeholder body, see chatAttachmentOnlyBody in
+  // chat_attachment.go).
+  const attachments = await takePendingAttachments(chatConvId(), chatConvId())
+  if (!trimmed && !attachments.length) return
+  const body = trimmed || (attachments.length > 1 ? '(afbeeldingen)' : '(afbeelding)')
   if (!state.runId) await ensureTracker()
   if (!state.runId) return
   state.chatBusy = true
   state.chatError = ''
-  state.doc = { ...state.doc, chat: [...(state.doc.chat || []), { role: 'user', body: trimmed }] }
+  state.doc = { ...state.doc, chat: [...(state.doc.chat || []), { role: 'user', body, attachments }] }
   scrollPlanChatThreadToBottom()
   try {
     const res = await fetch('/api/workflows/' + encodeURIComponent(state.runId) + '/signals/' + chatSignalName(), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind: 'chat', text: trimmed }),
+      body: JSON.stringify({
+        kind: 'chat',
+        text: trimmed,
+        attachments: attachments.length ? attachments : undefined,
+      }),
     })
-    if (!res.ok) state.chatError = t('Kon niet verstuurd worden.')
+    if (!res.ok) {
+      state.chatError = t('Kon niet verstuurd worden.')
+      // The files are on disk and fine — only the Signal was refused — so the
+      // thumbnails come back instead of vanishing with the message.
+      restorePendingAttachments(chatConvId(), chatConvId(), attachments)
+    }
     lastPayload = ''
     await loadPlan()
     scrollPlanChatThreadToBottom()
   } catch (err) {
     state.chatError = t('Kon niet verstuurd worden.')
+    restorePendingAttachments(chatConvId(), chatConvId(), attachments)
   }
   state.chatBusy = false
 }
@@ -1319,6 +1357,10 @@ async function sendChatMessage(text) {
 function chatView() {
   return {
     messages: () => chatMessages(),
+    // This ticket's chat always HAS its conversation id (unlike the review
+    // tree's brand-new chats, see chatAttachments.mjs's bucket note), so the
+    // bucket and the conversation are one and the same here.
+    conversationId: () => chatConvId(),
     status: () => 'ok',
     busy: () => state.chatBusy,
     retryAllBusy: () => false,
@@ -1829,6 +1871,17 @@ function onKeydown(e) {
   // because the chatOpen branch right below returns early: dictating a second
   // paragraph into an already-open chat has to stay possible.
   if (handleDictationKeydown(e)) return
+  // While the fullscreen image viewer is open it owns the keyboard completely
+  // — →/← walk the other screenshots, Escape closes — placed here for the
+  // same reason and in the same order as home.mjs's own onKeydown does it
+  // (right after dictation, before every menu/overlay guard). It reaches this
+  // page because a chat message's attached screenshots are ordinary
+  // `data-md-image` images inside a `.markdown-body` container; see
+  // imageLightbox.mjs.
+  if (isLightboxOpen()) {
+    handleLightboxKeydown(e)
+    return
+  }
   // Same discipline for the Jira-notifications bell (src/jiraBell.mjs) — a
   // light, non-modal dropdown: Escape closes it, checked before every other
   // overlay/menu guard below.
@@ -4601,6 +4654,10 @@ if (!planKey) {
   location.replace('/pr-overview')
 } else {
   html`${App()}`(document.getElementById('app'))
+  // Mounted top-level next to the page itself, exactly as home.mjs mounts it
+  // (a sibling, never inside the flex layout — the host renders a bare <div>
+  // that would otherwise become a flex item of its own).
+  ImageLightboxHost()(document.getElementById('app'))
   // Debug mode ("record my navigation so a later session can replay a
   // reported bug", .claude/docs/debug-mode.md) was wired into home.mjs/
   // overview.mjs/settings.mjs but never into this page — so a reviewer with
@@ -4608,6 +4665,7 @@ if (!planKey) {
   // Found while adding the two logAction() calls below (see focusColumn1 and
   // sendAnswer).
   initDebugLog()
+  initImageLightbox()
   document.addEventListener('keydown', onKeydown)
   // clampCursor is called from loadPlan (the one place the document is
   // replaced), deliberately NOT from a watch on state.doc/state.cur: the

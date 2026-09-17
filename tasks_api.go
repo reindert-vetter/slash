@@ -968,6 +968,17 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// (see modules/chat; the conversation id IS the comment thread's id, so pr
 	// isn't needed to scope the read).
 	mux.HandleFunc("/api/chat", s.handleChat)
+	// GET /api/chat/attachment?conv=X&id=Y → the raw bytes of one image the
+	// reviewer pasted/dragged into a chat composer, so their own bubble can
+	// render it. Read-only; the WRITE side is a workflow
+	// (POST /api/workflows/chat_attachment), because the file is durable —
+	// see chat_attachment.go.
+	mux.HandleFunc("/api/chat/attachment", s.handleChatAttachment)
+	// POST /api/workflows/chat_attachment {conversationId, name, data} → store
+	// one such image and answer with its id, which the composer then puts on
+	// the message Signal. Shared by both chats: the review tree's claude_chat
+	// conversation and the planning page's own ticket chat.
+	mux.HandleFunc("/api/workflows/chat_attachment", s.handleChatAttachmentStart)
 	// GET /api/chat/progress?commentId=X (one conversation) or ?pr=N (all of a
 	// PR's running turns) → the volatile snapshot of a RUNNING
 	// turn (chat_progress.go): the resync read for the SSE stream below, not a
@@ -1302,7 +1313,7 @@ func (s *server) handleIgnoreRuns(w http.ResponseWriter, r *http.Request) {
 // /api/workflows/{runID}/signals/{signalName} (POST signal).
 func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/workflows/")
-	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "remove_reviewer" || rest == "code_warning" || rest == "ignore_comment" || rest == "cleanup" || rest == "claude_chat" || rest == "auto_warn" || rest == "lang_pref" || rest == "app_settings" || rest == "comment_batch" || rest == "test_run" || rest == "comment_titles" || rest == "plan" || rest == "plan_restart_branch" || rest == "jira_comment" || rest == "retry" || rest == "retry-all" || rest == "ignore-runs" {
+	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "remove_reviewer" || rest == "code_warning" || rest == "ignore_comment" || rest == "cleanup" || rest == "claude_chat" || rest == "chat_attachment" || rest == "auto_warn" || rest == "lang_pref" || rest == "app_settings" || rest == "comment_batch" || rest == "test_run" || rest == "comment_titles" || rest == "plan" || rest == "plan_restart_branch" || rest == "jira_comment" || rest == "retry" || rest == "retry-all" || rest == "ignore-runs" {
 		http.NotFound(w, r)
 		return
 	}
@@ -1431,10 +1442,23 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 			// to signal at all.
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil ||
 				(body.QuestionID == "" && body.Kind != planAnswerFollowup && body.Kind != planAnswerChat && body.Kind != planAnswerComment && body.Kind != planAnswerTask && body.Kind != planAnswerIntent && body.Kind != planAnswerRetry && body.Kind != planAnswerRegenerate) ||
-				(body.Kind == planAnswerChat && strings.TrimSpace(body.Text) == "") ||
+				// A chat message needs real text OR at least one image — see
+				// s.planChatAttachments, and chat_attachment.go for why images
+				// alone are a complete message.
+				(body.Kind == planAnswerChat && strings.TrimSpace(body.Text) == "" && len(body.Attachments) == 0) ||
 				(body.Kind == planAnswerTask && strings.TrimSpace(body.TaskTitle) == "") {
 				http.Error(w, "invalid plan answer", http.StatusBadRequest)
 				return
+			}
+			if body.Kind == planAnswerChat {
+				refs, ok := s.planChatAttachments(runID, body.Attachments)
+				if !ok {
+					http.Error(w, "invalid attachment", http.StatusBadRequest)
+					return
+				}
+				body.Attachments = refs
+			} else {
+				body.Attachments = nil
 			}
 			if err := s.tasks.engine.SignalWorkflow(runID, SignalPlanAnswer, body); err != nil {
 				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
@@ -1459,11 +1483,18 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 			// while the gate stands (Kind "chat", see handlePlanChat in
 			// plan_workflow.go) — needs real text and nothing else validated.
 			if body.Kind == planAnswerChat {
-				if strings.TrimSpace(body.Text) == "" {
+				if strings.TrimSpace(body.Text) == "" && len(body.Attachments) == 0 {
 					http.Error(w, "invalid plan hotfix", http.StatusBadRequest)
 					return
 				}
+				refs, ok := s.planChatAttachments(runID, body.Attachments)
+				if !ok {
+					http.Error(w, "invalid attachment", http.StatusBadRequest)
+					return
+				}
+				body.Attachments = refs
 			} else {
+				body.Attachments = nil
 				body.Branch = strings.TrimSpace(body.Branch)
 				if body.Branch != "" && !planBranchRefPattern.MatchString(body.Branch) {
 					http.Error(w, "invalid plan hotfix", http.StatusBadRequest)
@@ -1492,11 +1523,18 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 			// plan_workflow.go) — the only shape allowed through without
 			// Choice == "parent".
 			if body.Kind == planAnswerChat {
-				if strings.TrimSpace(body.Text) == "" {
+				if strings.TrimSpace(body.Text) == "" && len(body.Attachments) == 0 {
 					http.Error(w, "invalid plan scope", http.StatusBadRequest)
 					return
 				}
+				refs, ok := s.planChatAttachments(runID, body.Attachments)
+				if !ok {
+					http.Error(w, "invalid attachment", http.StatusBadRequest)
+					return
+				}
+				body.Attachments = refs
 			} else if body.Choice != "parent" {
+				body.Attachments = nil
 				http.Error(w, "invalid plan scope", http.StatusBadRequest)
 				return
 			}
@@ -1759,22 +1797,41 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 		// see ChatMessageSignal's own doc comment for what each value means.
 		if parts[2] == SignalMessage {
 			var body struct {
-				Author  string `json:"author"`
-				Body    string `json:"body"`
-				Action  string `json:"action"`
-				Context string `json:"context"`
+				Author      string              `json:"author"`
+				Body        string              `json:"body"`
+				Action      string              `json:"action"`
+				Context     string              `json:"context"`
+				Attachments []ChatAttachmentRef `json:"attachments"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				http.Error(w, "invalid message", http.StatusBadRequest)
 				return
 			}
+			// Every attachment id is re-checked here — shape AND existence in
+			// this very conversation's own directory — before it can reach the
+			// prompt as a path (validate-before-exec, see chat_attachment.go).
+			// The conversation id IS the runID's own comment id, which
+			// chatConversationRunID derives, so it is read back from the run
+			// rather than taken from the request body.
+			conversationID := s.tasks.manager.chatConversationForRun(runID)
+			attachments, ok := s.validChatAttachmentRefs(conversationID, body.Attachments)
+			if !ok {
+				http.Error(w, "invalid attachment", http.StatusBadRequest)
+				return
+			}
 			switch body.Action {
 			case "", chatActionEdit:
 				// A plain question or an edit instruction both need real text —
-				// only "commit"/"clear"/"retry" (below) need none.
-				if strings.TrimSpace(body.Body) == "" {
+				// only "commit"/"clear"/"retry" (below) need none, plus a turn
+				// that carries nothing BUT images: dragging a screenshot in and
+				// pressing Enter is one gesture, and the placeholder body below
+				// is what the bubble then shows.
+				if strings.TrimSpace(body.Body) == "" && len(attachments) == 0 {
 					http.Error(w, "invalid message", http.StatusBadRequest)
 					return
+				}
+				if strings.TrimSpace(body.Body) == "" {
+					body.Body = chatAttachmentOnlyBody(len(attachments))
 				}
 			case chatActionCommit, chatActionClear, chatActionRetry, chatActionSeen:
 				// No text required — "commit" pushes whatever Claude already
@@ -1800,7 +1857,7 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 			}
 			sig := ChatMessageSignal{
 				ID: "msg-" + newUIReactionID(), Author: body.Author, Body: body.Body, Action: body.Action,
-				Context: body.Context,
+				Context: body.Context, Attachments: attachments,
 			}
 			if err := s.tasks.engine.SignalWorkflow(runID, SignalMessage, sig); err != nil {
 				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})

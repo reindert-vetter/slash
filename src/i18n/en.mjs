@@ -848,4 +848,17 @@ export const EN = {
   'plan opstellen \u2014 vervolgvragen bedenken': 'drafting the plan \u2014 thinking up follow-up questions',
   'plan opstellen \u2014 taken bedenken': 'drafting the plan \u2014 thinking up tasks',
   'plan opstellen \u2014 vragen en taken bedenken': 'drafting the plan \u2014 thinking up questions and tasks',
+
+  // ── src/chatAttachments.mjs (images in a chat message) ─────────────────
+  'Afbeelding toevoegen': 'Add an image',
+  'Verwijder deze afbeelding': 'Remove this image',
+  'Laat los om de afbeelding toe te voegen': 'Drop to add the image',
+  'uploaden…': 'uploading…',
+  mislukt: 'failed',
+  afbeelding: 'image',
+  'Alleen afbeeldingen kunnen mee — {name} is overgeslagen.': 'Only images can be attached — {name} was skipped.',
+  '{name} is te groot (max 10 MB).': '{name} is too large (max 10 MB).',
+  'Maximaal {n} afbeeldingen per bericht.': 'At most {n} images per message.',
+  '{name} kon niet worden opgeslagen.': '{name} could not be stored.',
+  '{name}: {why}': '{name}: {why}',
 }

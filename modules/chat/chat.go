@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   answer          TEXT NOT NULL DEFAULT '', -- filled once the reviewer responds to a 'question' turn
   model           TEXT NOT NULL DEFAULT '', -- the claude model that produced an assistant turn ('' = unknown/user turn)
   no_shell        INTEGER NOT NULL DEFAULT 0, -- 1 when this assistant turn ran WITHOUT Read/Grep/Glob/Edit/Bash (see NoShell)
+  attachments_json TEXT NOT NULL DEFAULT '', -- JSON array of Attachment (images the reviewer pasted/dragged in, user turns only)
   created_at      TEXT NOT NULL
 );
 
@@ -169,8 +170,24 @@ type Message struct {
 	// where tool availability isn't the point. Surfaced to the reviewer via the
 	// "Geen bestandstoegang" pill (ClaudeChat.mjs) so a silently degraded turn —
 	// one that talks as if it looked at the code but didn't — is never invisible.
-	NoShell   bool   `json:"noShell,omitempty"`
-	CreatedAt string `json:"createdAt"`
+	NoShell bool `json:"noShell,omitempty"`
+	// Attachments are the images the reviewer pasted or dragged into the
+	// composer for THIS turn (user turns only). Stored with the message rather
+	// than derived from the body, so the bubble can render them again after a
+	// refresh and so nothing has to parse prose to find out what was attached.
+	// The bytes live on disk, not here — see chat_attachment.go.
+	Attachments []Attachment `json:"attachments,omitempty"`
+	CreatedAt   string       `json:"createdAt"`
+}
+
+// Attachment is one stored image: an id (the content hash plus its extension),
+// the reviewer's own file name for display, and the sniffed mime type. The
+// same shape the browser posts and reads back — see chat_attachment.go, which
+// owns both the file on disk and the endpoint serving it.
+type Attachment struct {
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+	MIME string `json:"mime,omitempty"`
 }
 
 // Module owns the chat store.
@@ -217,6 +234,9 @@ func migrate(db *sql.DB) {
 		`ALTER TABLE chat_conversations ADD COLUMN summary_status TEXT NOT NULL DEFAULT ''`,
 		// See MarkSeen/SeenAt below.
 		`ALTER TABLE chat_conversations ADD COLUMN seen_at TEXT NOT NULL DEFAULT ''`,
+		// Images the reviewer pasted or dragged into the composer (see
+		// Message.Attachments and chat_attachment.go).
+		`ALTER TABLE chat_messages ADD COLUMN attachments_json TEXT NOT NULL DEFAULT ''`,
 	} {
 		_, _ = db.Exec(col) // ignore "duplicate column name"
 	}
@@ -397,13 +417,21 @@ func (m *Module) SaveMessage(ctx context.Context, msg Message) error {
 		}
 		optsJSON = string(b)
 	}
+	attJSON := ""
+	if len(msg.Attachments) > 0 {
+		b, err := json.Marshal(msg.Attachments)
+		if err != nil {
+			return fmt.Errorf("chat: marshal attachments: %w", err)
+		}
+		attJSON = string(b)
+	}
 	_, err := m.db.ExecContext(ctx,
 		`INSERT OR REPLACE INTO chat_messages
-		   (id, conversation_id, repo, pr, role, kind, body, options_json, answer, model, no_shell, created_at)
+		   (id, conversation_id, repo, pr, role, kind, body, options_json, answer, model, no_shell, attachments_json, created_at)
 		 VALUES (?,?,?,?,?,?,?,?,
 		   COALESCE((SELECT answer FROM chat_messages WHERE id = ?), ''),
-		   ?,?,?)`,
-		msg.ID, msg.ConversationID, msg.Repo, msg.PR, msg.Role, msg.Kind, msg.Body, optsJSON, msg.ID, msg.Model, msg.NoShell, msg.CreatedAt)
+		   ?,?,?,?)`,
+		msg.ID, msg.ConversationID, msg.Repo, msg.PR, msg.Role, msg.Kind, msg.Body, optsJSON, msg.ID, msg.Model, msg.NoShell, attJSON, msg.CreatedAt)
 	return err
 }
 
@@ -475,7 +503,7 @@ func (m *Module) ConversationsWithMessages(ctx context.Context, repo string, pr 
 // for the UI/API.
 func (m *Module) List(ctx context.Context, conversationID string) ([]Message, error) {
 	rows, err := m.db.QueryContext(ctx,
-		`SELECT id, conversation_id, repo, pr, role, kind, body, options_json, answer, model, no_shell, created_at
+		`SELECT id, conversation_id, repo, pr, role, kind, body, options_json, answer, model, no_shell, attachments_json, created_at
 		 FROM chat_messages WHERE conversation_id = ? ORDER BY created_at`, conversationID)
 	if err != nil {
 		return nil, err
@@ -484,13 +512,16 @@ func (m *Module) List(ctx context.Context, conversationID string) ([]Message, er
 	var out []Message
 	for rows.Next() {
 		var msg Message
-		var optsJSON string
+		var optsJSON, attJSON string
 		if err := rows.Scan(&msg.ID, &msg.ConversationID, &msg.Repo, &msg.PR, &msg.Role, &msg.Kind,
-			&msg.Body, &optsJSON, &msg.Answer, &msg.Model, &msg.NoShell, &msg.CreatedAt); err != nil {
+			&msg.Body, &optsJSON, &msg.Answer, &msg.Model, &msg.NoShell, &attJSON, &msg.CreatedAt); err != nil {
 			return nil, err
 		}
 		if optsJSON != "" {
 			_ = json.Unmarshal([]byte(optsJSON), &msg.Options)
+		}
+		if attJSON != "" {
+			_ = json.Unmarshal([]byte(attJSON), &msg.Attachments)
 		}
 		out = append(out, msg)
 	}

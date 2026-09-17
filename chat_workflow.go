@@ -70,6 +70,14 @@ type ChatMessageSignal struct {
 	Body    string `json:"body"`
 	Action  string `json:"action,omitempty"`
 	Context string `json:"context,omitempty"`
+	// Attachments are the images the reviewer pasted or dragged into the
+	// composer for this turn — ids only, never bytes, and every one of them
+	// already stored by its own chat_attachment Execution and re-validated by
+	// the HTTP handler before this Signal is sent (see chat_attachment.go for
+	// why the bytes must stay out of this long-lived run's replayed history).
+	// Unlike Context they ARE part of the visible chat: the reviewer's own
+	// bubble renders them back.
+	Attachments []ChatAttachmentRef `json:"attachments,omitempty"`
 }
 
 // The three non-default ChatMessageSignal.Action values. Validated by the HTTP
@@ -346,7 +354,7 @@ func claudeChatWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		// lastFailedTurn, which itself only ever holds recorded values.
 		turn := chatTurnInput{
 			PR: in.PR, ConversationID: in.CommentID, Body: sig.Body, Action: sig.Action, TurnID: sig.ID,
-			Context: sig.Context,
+			Context: sig.Context, Attachments: sig.Attachments,
 		}
 		if sig.Action == chatActionRetry {
 			if lastFailedTurn == nil {
@@ -371,6 +379,7 @@ func claudeChatWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			}
 			if err := w.ExecuteActivity("saveChatMessage", chat.Message{
 				ID: sig.ID, ConversationID: in.CommentID, PR: in.PR, Role: "user", Body: sig.Body, Kind: userKind,
+				Attachments: chatAttachmentsForMessage(sig.Attachments),
 			}, nil); err != nil {
 				return nil, fmt.Errorf("save chat user message: %w", err)
 			}
@@ -528,6 +537,12 @@ type chatTurnInput struct {
 	Context        string `json:"context,omitempty"`
 	Attempt        int    `json:"attempt,omitempty"`
 	MaxAttempts    int    `json:"maxAttempts,omitempty"`
+	// Attachments mirrors ChatMessageSignal.Attachments — folded into the CLI
+	// prompt as absolute paths for Claude's own Read tool (see
+	// chatAttachmentPromptNote), on both attempts of the two-step turn. A
+	// retry (chatActionRetry) re-runs the very same input, so a failed turn
+	// keeps its images.
+	Attachments []ChatAttachmentRef `json:"attachments,omitempty"`
 }
 
 // runChatTurnWithRetries drives one reviewer turn through the automatic
@@ -1186,18 +1201,40 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 
 	// Attempt 1: the cheap read-only pass (task 3).
 	hadReadOnly := false
+	// The images the reviewer attached to THIS turn, as absolute paths. Both
+	// attempts get the same note and the same --add-dir, so an escalation to
+	// the shell attempt never loses sight of them (that second call resumes the
+	// same session, but its own prompt is the short continuation sentence).
+	// appDataDirOrDefault, not this function's own dataDir: that one is the
+	// workflow store/worktree dir, while an attachment lives next to the DBs —
+	// see saveChatAttachment's own comment.
+	attachmentDir := chatAttachmentConvDir(tm.appDataDirOrDefault(), arg.ConversationID)
+	attachmentPaths := existingChatAttachmentPaths(tm.appDataDirOrDefault(), arg.ConversationID, arg.Attachments)
+	attachmentNote := chatAttachmentPromptNote(attachmentPaths)
+	var attachmentDirs []string
+	if len(attachmentPaths) > 0 {
+		attachmentDirs = []string{attachmentDir}
+	}
 	req := claude.RunRequest{
 		Model:        model,
-		Prompt:       buildChatPrompt(arg.Context, effectiveBody),
+		Prompt:       buildChatPrompt(arg.Context, effectiveBody) + attachmentNote,
 		SessionID:    sessionID,
 		SystemPrompt: claude.ChatSystemPrompt,
 		OnEvent:      onEvent,
+		AddDirs:      attachmentDirs,
 	}
 	if dir, ok := prepareChatReadOnlyWorkDir(runCtx, dataDir, arg.Repo, arg.PR); ok {
 		hadReadOnly = true
 		req.WorkDir = dir
 		req.Tools = []string{"Read", "Grep", "Glob"}
 		req.SystemPrompt = claude.ChatReadOnlySystemPrompt
+	} else if len(attachmentPaths) > 0 {
+		// No worktree for this PR, so this call would otherwise be a tool-less
+		// completion (see modules/claude: no Tools means --allowedTools "") —
+		// and the attached image would be named in the prompt with no way to
+		// open it. Read alone is enough for that, and it can only reach the
+		// attachments directory --add-dir just granted.
+		req.Tools = []string{"Read"}
 	}
 	req.SystemPrompt += chatCommentIDNote(arg.ConversationID) + chatLangTail(langFor(ctx, tm, langpref.KindReply))
 	// From here until RunChat returns, a reviewer message typed meanwhile can
@@ -1362,12 +1399,13 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 		resetChatProgressPartial(arg.Repo, arg.PR, arg.ConversationID)
 		shellReq := claude.RunRequest{
 			Model:        model,
-			Prompt:       chatNeedWriteContinuationPrompt,
+			Prompt:       chatNeedWriteContinuationPrompt + attachmentNote,
 			SessionID:    result.SessionID,
 			SystemPrompt: claude.ChatShellSystemPrompt + chatCommentIDNote(arg.ConversationID) + chatLangTail(langFor(ctx, tm, langpref.KindReply)),
 			WorkDir:      dir,
 			Tools:        []string{"Read", "Grep", "Glob", "Edit", "Bash"},
 			OnEvent:      onEvent,
+			AddDirs:      attachmentDirs,
 		}
 		shellSteerCh, unregisterShellSteer := openSteerSlot(runCtx, arg.ConversationID)
 		shellReq.Steer = shellSteerCh

@@ -2485,6 +2485,23 @@ reclaims the shadow worktree, and reports the outcome under its own message
 id; `TestRunChatTurnWithRetriesResetsResultPerAttempt` guards the
 stale-`Kind`-across-retries bug documented above.
 
+## `chat_attachment` (`chat_attachment.go`) — one pasted image
+
+The smallest workflow in the app: one Activity, no signals, no clock, no loop
+(the same strictest-sense one-shot shape as `whisper_model`). It stores ONE
+image a reviewer pasted or dragged into a chat composer under
+`<appDataDir>/chat-attachments/<conversation>/<sha256>.<ext>`, after verifying
+it by MAGIC BYTES, and returns `{id, name, mime}` — which the composer then
+puts on the ordinary `message` Signal.
+
+It exists because a pasted screenshot is durable state and durable writes only
+happen in an Activity (`.claude/rules/workflows-write-boundary.md`); it is its
+OWN Execution rather than base64 on `ChatMessageSignal` because the
+`claude_chat` run replays its whole history on every later turn. The turn
+itself only ever sees absolute PATHS in its prompt, read with Claude's own
+`Read` tool (plus `--add-dir`). The full chain — UI half included — is
+documented in "Afbeeldingen meesturen" in `.claude/docs/claude-chat-panel.md`.
+
 ## `comment_batch` (`comment_batch.go` + `comment_batch_progress.go`)
 
 "Laat Claude alle openstaande comments verwerken": **ONE** agentic Opus run

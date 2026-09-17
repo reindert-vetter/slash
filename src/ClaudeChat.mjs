@@ -17,7 +17,7 @@
 // same shape (see the "keyed node reused without re-running its bindings"
 // pitfall in arrowjs-pitfalls.md; this is the same class of bug, just for a
 // single nested template instead of a keyed list item).
-import { html } from './vendor/arrow.js'
+import { html, reactive } from './vendor/arrow.js'
 import { avatarHTML } from './avatar.mjs'
 import { renderMarkdown, hardBreaks } from './markdown.mjs'
 import { autoGrowTextarea, resetTextareaHeight } from './textareaAutoGrow.mjs'
@@ -25,6 +25,19 @@ import { autoGrowTextarea, resetTextareaHeight } from './textareaAutoGrow.mjs'
 // in the composer row because that is where the transcript lands — one import
 // here covers both pages that render this column (see src/dictation.mjs).
 import { dictationStatusPill } from './dictation.mjs'
+// Images the reviewer pastes/drags into this composer. The module owns the
+// upload and the pending-thumbnail state for BOTH pages that render this
+// column; this file only decides where those thumbnails sit and which DOM
+// events feed them — see src/chatAttachments.mjs and
+// .claude/docs/claude-chat-panel.md ("Afbeeldingen meesturen").
+import {
+  attachFiles,
+  hasPendingAttachments,
+  hasUploadingAttachments,
+  imageFilesFrom,
+  messageAttachments,
+  pendingAttachmentsBar,
+} from './chatAttachments.mjs'
 import { updateScrollHints } from './scrollFade.mjs'
 import { scrollHint } from './Block.mjs'
 import { t } from './i18n.mjs'
@@ -879,6 +892,7 @@ function claudeBubble(
         style="${() => (readOnly ? 'pointer-events:none' : '')}"
         .innerHTML="${claudeMessageBody(msg)}"
       ></div>
+      ${() => messageAttachments(msg)}
       ${() =>
         msg.answer
           ? html`<span class="pl-1 text-[11px] text-slate-500 dark:text-zinc-500" data-testid="claude-question-answer"
@@ -1009,6 +1023,102 @@ function claudeSendError(view) {
       <span><span class="font-semibold">${t('Niet verstuurd')}</span> — ${text}</span>
     </p>
   `
+}
+
+// dragUI tracks which conversation's card a file is being dragged over right
+// now — module-level and reactive, like nothing else in this file, because the
+// card has no state object of its own and the two pages that render it have
+// very different ones. Only ever ONE at a time: a drag is a single pointer.
+const dragUI = reactive({ over: '' })
+
+// chatAttachmentBucket is the key the composer's own pending attachments hang
+// on, and the one thing that decides whether this composer supports images at
+// all: a view that supplies neither getter simply gets no attachment support,
+// rather than a broken one.
+//
+// It is NOT always a conversation id — a brand-new chat has no conversation
+// until its first message creates one, so RelatedPanel.mjs hands over its
+// composer draft key there instead and the upload happens at send time. See
+// the bucket note in chatAttachments.mjs.
+function chatAttachmentBucket(view) {
+  return (
+    (view.attachmentBucket && view.attachmentBucket()) ||
+    (view.conversationId && view.conversationId()) ||
+    ''
+  )
+}
+
+// chatConversationID is the REAL conversation id, or '' while there is none
+// yet. Only used to decide whether an upload can start right away.
+function chatConversationID(view) {
+  return (view.conversationId && view.conversationId()) || ''
+}
+
+// canSendNow decides whether Enter/"Stuur" has anything to send: typed text,
+// or at least one finished upload. Images alone ARE a complete message (the
+// backend fills in a short placeholder body, see chatAttachmentOnlyBody in
+// chat_attachment.go) — dragging a screenshot in and pressing Enter is one
+// gesture, and making it demand a word first would defeat the point.
+function canSendNow(view, text) {
+  if (text && text.trim()) return true
+  return hasPendingAttachments(chatAttachmentBucket(view))
+}
+
+// attachButton is the composer's paperclip: the third way to attach an image,
+// next to paste and drag-and-drop. It exists because those two both need a
+// pointer with a file already in hand — this one opens the ordinary file
+// picker, which is also the only route for a reviewer working keyboard-first.
+//
+// The hidden <input type="file"> is a sibling rather than a wrapping <label>
+// so the button keeps its own explicit @click (the label-for-input trick would
+// put a second, implicit click path on the same element).
+function attachButton(view) {
+  return html`<div class="contents">
+    <input
+      type="file"
+      accept="image/*"
+      multiple
+      class="hidden"
+      data-testid="chat-attachment-input"
+      @change="${(e) => {
+        const bucket = chatAttachmentBucket(view)
+        if (bucket) attachFiles(bucket, e.target.files, chatConversationID(view))
+        // Clearing the value is what lets the SAME file be picked again right
+        // after removing its chip — without it the input fires no change.
+        e.target.value = ''
+      }}"
+    />
+    <button
+      type="button"
+      class="flex min-h-[2.25rem] shrink-0 items-center justify-center rounded-lg border border-slate-200 px-2 py-1.5 text-slate-500 hover:bg-slate-100 dark:border-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800"
+      title="${t('Afbeelding toevoegen')}"
+      aria-label="${t('Afbeelding toevoegen')}"
+      data-testid="chat-attachment-add"
+      @click="${(e) => {
+        // stopPropagation FIRST, before anything that could unmount this
+        // button — the nested-@click ordering rule in
+        // .claude/rules/arrowjs-pitfalls.md.
+        if (e) e.stopPropagation()
+        const input = e && e.currentTarget.parentNode.querySelector('[data-testid=chat-attachment-input]')
+        if (input) input.click()
+      }}"
+    >
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        class="h-4 w-4"
+      >
+        <path
+          d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"
+        ></path>
+      </svg>
+    </button>
+  </div>`
 }
 
 // claudeChatColumn is the exported render. `view` = { messages, status,
@@ -1158,6 +1268,29 @@ export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly, opt
         e.preventDefault()
         callbacks.onOpenMenu({ native: true, x: e.clientX, y: e.clientY })
       }}"
+      @dragover="${(e) => {
+        // The WHOLE card is the drop zone, not just the textarea: dragging a
+        // screenshot out of Finder rarely lands exactly on a one-line input.
+        // preventDefault on BOTH dragover and drop is what stops the browser
+        // from navigating away to the file instead.
+        if (readOnly || !chatAttachmentBucket(view)) return
+        if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return
+        e.preventDefault()
+        dragUI.over = chatAttachmentBucket(view)
+      }}"
+      @dragleave="${(e) => {
+        // relatedTarget still inside the card = the pointer merely crossed an
+        // inner element's boundary, not the card's own.
+        if (e.relatedTarget && e.currentTarget.contains(e.relatedTarget)) return
+        dragUI.over = ''
+      }}"
+      @drop="${(e) => {
+        if (readOnly || !chatAttachmentBucket(view)) return
+        e.preventDefault()
+        dragUI.over = ''
+        const files = imageFilesFrom(e.dataTransfer)
+        if (files.length) attachFiles(chatAttachmentBucket(view), files, chatConversationID(view))
+      }}"
     >
 
       <div class="absolute right-2 top-2 z-20">
@@ -1230,6 +1363,20 @@ export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly, opt
           : html`<div class="contents">
               ${() => claudeSendError(view)}
               ${() => dictationStatusPill()}
+              <div class="contents">
+                ${() =>
+                  // The drag hint leans on the WORDS and on the dashed shape,
+                  // never on colour alone — the reviewer is colourblind.
+                  dragUI.over && dragUI.over === chatAttachmentBucket(view)
+                    ? html`<p
+                        class="rounded-lg border border-dashed border-indigo-400 px-2 py-1.5 text-center text-[11px] font-medium text-indigo-700 dark:text-indigo-300"
+                        data-testid="chat-attachment-drophint"
+                      >
+                        ${t('Laat los om de afbeelding toe te voegen')}
+                      </p>`
+                    : ''}
+              </div>
+              ${() => pendingAttachmentsBar(chatAttachmentBucket(view), () => {})}
               <div class="flex items-end gap-2 border-t border-slate-100 dark:border-zinc-800/60 pt-2">
         <textarea
           rows="1"
@@ -1238,6 +1385,17 @@ export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly, opt
           title="${t('Enter verstuurt · Shift+Enter nieuwe regel')}"
           data-testid="claude-chat-compose"
           @focus="${() => callbacks.onFocus()}"
+          @paste="${(e) => {
+            // Only an image in the clipboard is intercepted; a plain text
+            // paste falls through untouched, so the ordinary Cmd+V keeps
+            // working exactly as before.
+            const files = imageFilesFrom(e.clipboardData)
+            if (!files.length) return
+            const bucket = chatAttachmentBucket(view)
+            if (!bucket) return
+            e.preventDefault()
+            attachFiles(bucket, files, chatConversationID(view))
+          }}"
           @input="${(e) => {
             autoGrowTextarea(e.target)
             // Keeps the composer's own draft (RelatedPanel.mjs's claudeDrafts)
@@ -1253,7 +1411,14 @@ export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly, opt
               // still runs is QUEUED instead of dropped (queueClaudeMessage in
               // RelatedPanel.mjs), like the Claude CLI. Shift+Enter is left
               // untouched above so it inserts a newline.
-              if (e.target.value.trim()) {
+              if (hasUploadingAttachments(chatAttachmentBucket(view))) {
+                // An upload is still in flight; sending now would name an id
+                // the server does not have yet. The chip already says
+                // "uploaden…", so this is a deliberate silent no-op — press
+                // Enter again a moment later.
+                return
+              }
+              if (canSendNow(view, e.target.value)) {
                 callbacks.onSend(e.target.value)
                 e.target.value = ''
                 resetTextareaHeight(e.target)
@@ -1300,13 +1465,15 @@ export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly, opt
             }
           }}"
         ></textarea>
+        ${() => (chatAttachmentBucket(view) ? attachButton(view) : '')}
         <button
           class="flex min-h-[2.25rem] shrink-0 items-center justify-center rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-600"
           data-testid="claude-chat-send"
           @click="${() => {
             const el = document.querySelector('[data-testid=claude-chat-compose]')
             const text = el && el.value
-            if (text && text.trim()) {
+            if (hasUploadingAttachments(chatAttachmentBucket(view))) return
+            if (canSendNow(view, text)) {
               callbacks.onSend(text)
               el.value = ''
               resetTextareaHeight(el)

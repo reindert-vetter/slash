@@ -64,6 +64,13 @@ type RunRequest struct {
 	Prompt  string   // the user prompt; the caller instructs the model to answer as JSON
 	WorkDir string   // cwd for agentic runs (a checked-out worktree); "" falls back to Module.scratchDir
 	Tools   []string // allowed read-only tools for agentic runs (e.g. Read, Grep, Glob); empty = no tools
+	// AddDirs are extra directories the run may read OUTSIDE WorkDir, passed
+	// through the CLI's own --add-dir. Exactly one caller needs this today: a
+	// chat turn whose reviewer attached an image, which lives next to the DBs
+	// rather than inside the checked-out worktree the turn runs in (see
+	// chat_attachment.go). Without it the Read tool refuses the path and the
+	// turn answers as if no image had been sent.
+	AddDirs []string
 	// SystemPrompt is static, call-independent instruction text appended via
 	// `claude`'s --append-system-prompt (e.g. the embedded modules/claude/prompts/*.md
 	// files). Keeping it out of Prompt lets it stay byte-identical across many
@@ -303,6 +310,21 @@ func killOwnProcessGroup(cmd *exec.Cmd) {
 	}
 }
 
+// addDirArgs turns RunRequest.AddDirs into the CLI's own --add-dir flags. One
+// flag per directory (the CLI also accepts several values after one flag, but
+// repeating it cannot be mis-parsed as the next argument). Empty entries are
+// dropped so a caller can hand over a list it built conditionally.
+func addDirArgs(dirs []string) []string {
+	var out []string
+	for _, d := range dirs {
+		if strings.TrimSpace(d) == "" {
+			continue
+		}
+		out = append(out, "--add-dir", d)
+	}
+	return out
+}
+
 // Run invokes `claude -p <prompt> --model <model>` (plus, for agentic runs, a
 // working directory and a read-only tool allowlist, and — for any run whose
 // caller supplied one — a static --append-system-prompt). Output is captured
@@ -325,6 +347,7 @@ func (m *Module) Run(ctx context.Context, req RunRequest) (string, error) {
 	if req.SystemPrompt != "" {
 		args = append(args, "--append-system-prompt", req.SystemPrompt)
 	}
+	args = append(args, addDirArgs(req.AddDirs)...)
 	// Agentic (Tools set) legitimately needs much more time than a bare
 	// context-only completion — see the contextTimeout/agenticTimeout doc.
 	timeout := contextTimeout
@@ -403,6 +426,7 @@ func (m *Module) RunChat(ctx context.Context, req RunRequest) (ChatResult, error
 	if req.SystemPrompt != "" {
 		args = append(args, "--append-system-prompt", req.SystemPrompt)
 	}
+	args = append(args, addDirArgs(req.AddDirs)...)
 	sessionID := req.SessionID
 	if sessionID == "" {
 		sessionID = newSessionID()

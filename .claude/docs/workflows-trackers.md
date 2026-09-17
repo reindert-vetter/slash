@@ -825,6 +825,16 @@ Signal-less, one Execution per run.
   Every dependency may be `nil` (a caller that doesn't wire a store skips it),
   and every delete is unconditional on `pr`/the path, so **re-running cleanup on
   the same PR is always a no-op** — the idempotency the daily trigger relies on.
+- **Three age-based sweeps run once per pass, independent of the PR targets**
+  (they are about the RESIDUE's own age, not a PR's merge date):
+  `sweepTestRunResidue` (see `.claude/docs/workflows-test-run.md`),
+  `sweepDebugLogRuns`, and **`sweepChatAttachments`** — every
+  `chat-attachments/<conversation>/` directory whose newest file is older than
+  `chatAttachmentMaxAge` (90 days). That last one is age-based rather than
+  reference-counted on purpose: the two chats that store such an image keep
+  their transcripts in two different places (a SQLite read-model and a plan
+  document) and neither is authoritative about the other's. See "Afbeeldingen
+  meesturen" in `.claude/docs/claude-chat-panel.md`.
 - **Triggered two ways:** manually via its endpoint, and **once a day** by
   `StartCleanupScheduler(ctx)` (gated by `resumeRuntime`, so a CLI caller never
   starts it): a plain background goroutine with a 24h ticker — an immediate

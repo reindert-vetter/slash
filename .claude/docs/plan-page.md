@@ -1491,7 +1491,19 @@ answer to that exact question ("aan jira ticket die ook in de url staat"),
 the conversation is instead keyed on the **Jira key**, on the SAME per-ticket
 document every answer already lives on.
 
-- **Backend**: `planChatMessage{Role, Body, CreatedAt}` — a new, deliberately
+- **Afbeeldingen meesturen** werkt hier net zo als in de tree — plakken,
+  slepen of de paperclip — omdat de composer letterlijk dezelfde is
+  (`ClaudeChat.mjs`) en de upload een pagina-onafhankelijke workflow is
+  (`chat_attachment`, zie "Afbeeldingen meesturen" in
+  `.claude/docs/claude-chat-panel.md`). Alleen het laatste stukje is van deze
+  pagina zelf: de ids rijden mee op het `plan_answer`-Signal (en op
+  `plan_hotfix`/`plan_scope` zolang zo'n poort openstaat, precies zoals de
+  chat-tekst dat al deed), worden als `planChatMessage.Attachments` op het
+  document bewaard, en `planChatReply` — normaal een tool-loze completion —
+  krijgt alleen wanneer er echt een afbeelding hangt `Read` plus de
+  `--add-dir` naar de bijlagemap. Deze pagina mount daarvoor ook
+  `imageLightbox.mjs`, dat ze nog niet had.
+- **Backend**: `planChatMessage{Role, Body, Attachments, CreatedAt}` — a new, deliberately
   minimal shape (no kind/model/noShell/options: none of the tree's retry
   ladder, agentic tool use, or inline questions apply to one blocking Claude
   call) — lives on `planDoc.Chat`, alongside `Questions`/`Tasks`/`Answers`.

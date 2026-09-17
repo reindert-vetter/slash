@@ -5074,6 +5074,119 @@ extra stale card flap in and out non-deterministically between runs (a
 repeated remount/teardown cycle of the very bug being tested), so the
 one-shot resync read is both simpler and actually deterministic.
 
+## Afbeeldingen meesturen (paste, sleep, of de paperclip)
+
+Reviewer request, verbatim: "zorg ervoor dat ik ook afbeeldingen in de chat kan
+meegeven. zo kan ik soms een afbeelding vanuit clipboard hebben of een
+afbeelding slepen vanuit finder". Eén mechanisme voor **beide** chats die
+bestaan — de review-tree (`/pr/<id>`: de chat-kolom én de general-chat-overlay)
+en de planpagina (`/plan/<KEY>`) — want die twee verschillen alleen in
+**welk Signal** de ids uiteindelijk meerijden, niet in hoe het bestand wordt
+opgeslagen of getoond.
+
+### De keten in één blik
+
+1. **Composer** (`src/ClaudeChat.mjs`, gedeeld door beide pagina's): een
+   `@paste` op de textarea (alleen wanneer `clipboardData.files` een
+   afbeelding bevat — een gewone tekst-paste valt ongemoeid door), een
+   `@dragover`/`@drop` op de **hele kaart** (`claude-chat-card`, niet alleen
+   het invoerveld: slepen vanuit Finder landt zelden precies op een
+   éénregelig veld), plus een paperclip-knop (`chat-attachment-add`) die een
+   verborgen `<input type=file>` opent — de enige route voor wie
+   toetsenbord-first werkt. Tijdens het slepen verschijnt
+   `chat-attachment-drophint`: een **gestreepte rand plus het woord** "Laat
+   los om de afbeelding toe te voegen" — nooit kleur alleen (de reviewer is
+   kleurenblind), zelfde regel als `scrollHint`/`stepChevron`.
+2. **Upload** (`src/chatAttachments.mjs`): per bestand één
+   `POST /api/workflows/chat_attachment` met base64. De thumbnail staat er
+   meteen (een lokale object-URL), met het **woord** "uploaden…" zolang hij
+   onderweg is en "mislukt" als het misging.
+3. **Opslag** (`chat_attachment.go`): de `chat_attachment`-workflow — één
+   Activity, geen signals, geen klok, geen loop, dezelfde
+   strikt-one-shot-vorm als `whisper_model`. Hij decodeert, controleert de
+   **magic bytes** (de door de browser geclaimde MIME en de bestandsnaam
+   worden nooit vertrouwd) en schrijft naar
+   `<appDataDir>/chat-attachments/<conversatie>/<sha256>.<ext>`.
+4. **Versturen**: het bericht-Signal draagt alleen `attachments: [{id, name,
+   mime}]`. De handler hervalideert elk id — vorm én bestaan, en scoped op
+   *deze* conversatie — vóór het Signal wordt verstuurd.
+5. **Prompt**: de turn krijgt één extra regel met de **absolute paden** plus
+   de opdracht ze met `Read` te bekijken (`chatAttachmentPromptNote`). Meer is
+   niet nodig: Claude's eigen Read-tool rendert een afbeelding als echte
+   vision-input. Het enige extra stukje plumbing is `--add-dir`
+   (`RunRequest.AddDirs`, `modules/claude`), omdat de bijlagen naast de DB's
+   staan en niet in de worktree waarin de turn draait.
+6. **Weergave**: de bubbel van de reviewer toont de thumbnails
+   (`chat-message-attachments`), in een container met `markdown-body` en per
+   `<img>` een `data-md-image` — precies de twee haakjes die
+   `src/imageLightbox.mjs` gebruikt, dus klikken opent dezelfde fullscreen
+   viewer met →/← door alle afbeeldingen als overal elders. Geen tweede
+   implementatie. (De planpagina had die lightbox nog niet en mount hem nu
+   ook, exact zoals `home.mjs` dat doet.)
+
+### Waarom de bytes NIET door het Signal van het gesprek gaan
+
+Base64 op `ChatMessageSignal` zou megabytes in de history van de
+`claude_chat`-run zetten, en tembed **replayt** die history vanaf het begin bij
+iedere volgende turn (`.claude/rules/workflow-determinism.md`). Vandaar een
+eigen, kortlevende Execution voor de upload en alleen een verwijzing op het
+Signal. Idem voor de planpagina: daar zou de base64 anders in het
+`plan`-document belanden dat elke poll opnieuw over de lijn gaat.
+
+### Waarom het een workflow is en geen upload-endpoint
+
+Een geplakte screenshot is **duurzame** state: de bubbel toont hem dagen later
+nog en de turn die hem leest draait mogelijk minuten na de paste. Dat sluit de
+`/api/transcribe`-vorm uit (een handler die een tijdelijk bestand schrijft en
+binnen hetzelfde request weer weggooit, zie de WRITE BOUNDARY-notitie in
+`whisper.go`) — per `.claude/rules/workflows-write-boundary.md` moet dit door
+een Activity. `GET /api/chat/attachment` is de read-only tegenhanger, met
+dezelfde bewaking als `/api/image`: de extensie-allowlist bepaalt de
+Content-Type, `X-Content-Type-Options: nosniff`, en het id is het enige door
+de caller aangeleverde deel van het pad (`^[0-9a-f]{64}\.(png|jpg|gif|webp|avif)$`).
+
+### De "bucket" is niet altijd een conversatie
+
+Een gloednieuwe chat ("Chat over deze regel") **heeft** nog geen conversatie:
+die ontstaat pas doordat het eerste bericht lui zijn anker-comment aanmaakt
+(`ensureClaudeAnchorForNew`). Zo'n bijlage wordt daarom geparkeerd onder de
+eigen draft-key van de composer (status `waiting`, de `File` apart in
+`fileByKey`) en pas geüpload door `takePendingAttachments`, zodra het echte
+conversatie-id bestaat. `sendClaudeMessageFromNew` onthoudt die bucket
+**vóór** de ankerstap, want die stap verzet `cc.commentId` — en daarmee de
+bucket — terwijl de al geplakte afbeeldingen nog onder de oude hangen.
+
+### Losse regels die hierbij horen
+
+- **Alleen afbeeldingen**, max **10 MB** per stuk en max **5** per bericht —
+  in de UI gemeld vóór een zinloze upload, en serverside nog eens afgedwongen.
+- **Een bericht mag uit alleen afbeeldingen bestaan**: slepen/plakken + Enter
+  is één handeling. De handler vult dan een korte placeholder-body in
+  (`chatAttachmentOnlyBody` → "(afbeelding)"), die `RelatedPanel.mjs`/
+  `plan.mjs` letterlijk dupliceren voor hun optimistische bubbel — zelfde
+  precedent als `CHECKOUT_CHOICE_OPEN_BODY`, dus houd ze gelijk.
+- **Steeren gaat niet samen met een bijlage**: een bericht dat de lopende turn
+  in wordt geduwd gaat via stdin en kan geen bestand dragen, dus zo'n bericht
+  wordt altijd een gewone turn in de wachtrij.
+- **Mislukt versturen verliest de afbeeldingen niet**: de bestanden staan al
+  op schijf, dus alleen het Signal faalde — de chips komen terug
+  (`restorePendingAttachments`).
+- **Opruimen**: "wis gesprek" (`chatActionClear`) gooit de map van die
+  conversatie weg, en de `cleanup`-workflow veegt elke map waarvan het
+  nieuwste bestand ouder is dan `chatAttachmentMaxAge` (90 dagen) —
+  leeftijdsgebaseerd, net als de `test_run`-residu-sweep, omdat de twee chats
+  hun transcript op twee verschillende plekken bewaren en geen van beide
+  gezaghebbend is over de ander.
+- **Schrijven gebeurt in `appDataDirOrDefault()`, nooit in `m.dataDir`** — dat
+  laatste is de workflow-store/worktree-map. De twee vallen alleen bij default
+  samen; elke Playwright-worker (en elke deploy met aparte `-db`/`-data`)
+  zou anders schrijven waar niets leest. Dezelfde aanroep die de
+  `app_settings`-Activities voor `settings.json` gebruiken.
+- Test: `tests/chat-attachment.spec.mjs` (paste → chip → versturen zonder
+  tekst → de afbeelding komt terug in de bubbel, en een niet-afbeelding wordt
+  geweigerd), plus `chat_attachment_test.go` voor de opslag-, pad- en
+  scope-bewaking.
+
 ## Open (frontend gaps)
 
 - No draft-persistence (`composeDrafts`/`replyDrafts`-style) for the chat
