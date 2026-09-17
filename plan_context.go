@@ -244,6 +244,93 @@ type planReferencedIssue struct {
 	BranchSource string `json:"branchSource,omitempty"`
 }
 
+// maxPlanBaseBranchCommits/maxPlanBaseBranchFiles bound what the target branch
+// contributes to the prompt: enough to see WHAT was already built there and
+// WHERE it landed, never a full history or a full diff.
+const (
+	maxPlanBaseBranchCommits = 20
+	maxPlanBaseBranchFiles   = 30
+)
+
+// planBaseBranchWork is what already sits on the plan's target branch, on top
+// of the repo's own default branch: the commit subjects and the files they
+// touched. Against names the branch it was compared with, so the prompt can
+// say what "already" is measured from instead of implying it.
+type planBaseBranchWork struct {
+	Branch  string   `json:"branch,omitempty"`
+	Against string   `json:"against,omitempty"`
+	Commits []string `json:"commits,omitempty"`
+	Files   []string `json:"files,omitempty"`
+}
+
+// loadPlanBaseBranchWork reads what the plan's TARGET branch already carries.
+// Reviewer request: a subtask's plan takes its "hoe" from, among other things,
+// the target branch — and a branch NAME alone tells the model nothing, so this
+// reads the work itself (see writePlanSubtaskFocus, plan_prompt.go).
+//
+// Deliberate boundaries, all of them "less context, never a failure" like the
+// rest of this file:
+//
+//   - Nothing at all when the base branch IS the repo's default branch (a plan
+//     from `main` has no "already built here" to speak of), or when either name
+//     fails planBranchRefPattern — these end up in an argv, so they are
+//     validated rather than trusted.
+//   - It reads the LOCAL remote-tracking refs (`origin/<name>`) and does NOT
+//     fetch first: a plan must not wait on the network, so the picture can be
+//     as stale as the reviewer's last fetch.
+//   - Any git error (a branch that was never fetched, a missing clone) yields
+//     nil, i.e. no section in the prompt at all.
+func loadPlanBaseBranchWork(ctx context.Context, base, against string) *planBaseBranchWork {
+	base, against = strings.TrimSpace(base), strings.TrimSpace(against)
+	if base == "" || against == "" || strings.EqualFold(base, against) {
+		return nil
+	}
+	if !planBranchRefPattern.MatchString(base) || !planBranchRefPattern.MatchString(against) {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, planContextTimeout)
+	defer cancel()
+	from, to := "origin/"+against, "origin/"+base
+	logRaw, err := runGitFor(ctx, "", "log", "--no-merges", "--format=%s",
+		"--max-count="+strconv.Itoa(maxPlanBaseBranchCommits), from+".."+to)
+	if err != nil {
+		return nil
+	}
+	// Three dots: what the branch added since it diverged, not the changes the
+	// default branch made in the meantime.
+	diffRaw, err := runGitFor(ctx, "", "diff", "--name-only", from+"..."+to)
+	if err != nil {
+		return nil
+	}
+	work := &planBaseBranchWork{
+		Branch:  base,
+		Against: against,
+		Commits: planBranchLines(string(logRaw), maxPlanBaseBranchCommits),
+		Files:   planBranchLines(string(diffRaw), maxPlanBaseBranchFiles),
+	}
+	if len(work.Commits) == 0 && len(work.Files) == 0 {
+		return nil
+	}
+	return work
+}
+
+// planBranchLines turns one git output into a bounded list of non-empty lines.
+// Pure, so the bounding is testable without a repository.
+func planBranchLines(raw string, max int) []string {
+	out := []string{}
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || len(out) >= max {
+			continue
+		}
+		out = append(out, line)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // collectPlanReferencedKeys gathers every OTHER ticket key this ticket's
 // family (doc + parent + subtasks + siblings) points at, deduplicated,
 // excluding the family's own keys, bounded by maxPlanReferencedIssues.

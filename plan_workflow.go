@@ -481,6 +481,14 @@ type planDoc struct {
 	// this one's own family". Filled by the same planLoadContext Activity as
 	// RelatedPRs, gated by the same LoadsContext replay flag.
 	Referenced []planReferencedIssue `json:"referenced,omitempty"`
+	// BaseBranchWork is what already sits on the TARGET branch this plan is
+	// built on, relative to the repo's default branch — the branch half of
+	// "hoe" for a subtask whose own ticket is little more than a title (see
+	// writePlanSubtaskFocus, plan_prompt.go). Filled best-effort by the same
+	// planLoadContext Activity as RelatedPRs (and gated by the same
+	// LoadsContext replay flag); nil whenever the base branch IS the default
+	// one, or when git had nothing to say.
+	BaseBranchWork *planBaseBranchWork `json:"baseBranchWork,omitempty"`
 	// Links/ParentLinks are the OFFICIAL Jira issue links of this ticket and
 	// (if this is a subtask) its main task — read once in planLoadIssue since
 	// Issue() is already called for both; collectPlanReferencedKeys
@@ -1490,6 +1498,16 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 			refs[i] = resolvePlanReferencedIssue(ctx, m.jira, refs[i])
 		}
 		doc.Referenced = refs
+		// What already sits on the branch this plan departs from — best-effort
+		// and skipped entirely for the repo's own default branch. Inside this
+		// EXISTING Activity on purpose: a new Activity would wedge the replay
+		// of every Execution recorded before it (.claude/rules/
+		// workflow-determinism.md).
+		against := doc.DefaultBranch
+		if against == "" {
+			against = planDefaultBaseBranch()
+		}
+		doc.BaseBranchWork = loadPlanBaseBranchWork(ctx, doc.BaseBranch, against)
 		return json.Marshal(doc)
 	})
 	// Activity: re-read the family's Jira comments onto the document, after the

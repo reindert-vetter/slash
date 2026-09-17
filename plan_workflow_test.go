@@ -1035,3 +1035,99 @@ func TestPlanWorkflowReplaysAPreSplitHistoryWithoutHanging(t *testing.T) {
 		t.Fatalf("run status = %q, want %q (parked back on the plan_answer Signal)", status, tembed.StatusWaiting)
 	}
 }
+
+// TestPlanPromptSubtaskFocus — a subtask's plan stands entirely in the sign of
+// that subtask. Reviewer request: the subtask usually IS just a title, so the
+// title is the assignment (the WAT) and everything else — main task, sibling
+// subtasks, merged work, target branch, related tickets — only answers HOE.
+// Pins all three halves that reach the model: the focus block, the siblings
+// (status as a word), and the target branch's own work.
+func TestPlanPromptSubtaskFocus(t *testing.T) {
+	doc := planDoc{
+		Key: "INTL-145", Title: "Payment link vertalingen",
+		ParentKey: "INTL-139", ParentTitle: "Spaans toevoegen",
+		ParentDescription: "Alle klantpagina's ook in het Spaans.",
+		Siblings: []planSubtask{
+			{Key: "INTL-140", Title: "ES toevoegen aan locales", Status: "Done"},
+			{Key: "INTL-141", Title: "Checkout vertalingen", Status: "To Do"},
+		},
+		BaseBranch: "feature/spanish",
+		BaseBranchWork: &planBaseBranchWork{
+			Branch: "feature/spanish", Against: "main",
+			Commits: []string{"add es locale"}, Files: []string{"resources/lang/es/checkout.php"},
+		},
+	}
+	// The SAME framing must hold while the plan is executed, not only while it
+	// is written — so both prompts are asserted with one list.
+	for name, out := range map[string]string{
+		"planPrompt":        planPrompt(doc, "tasks"),
+		"planExecutePrompt": planExecutePrompt(doc),
+	} {
+		for _, want := range []string{
+			"SUBTAAK — WAT ER MOET GEBEUREN:",
+			`De titel hierboven ("Payment link vertalingen") is de opdracht`,
+			"HOOFDTAAK INTL-139: Spaans toevoegen",
+			"ANDERE SUBTAKEN VAN DEZELFDE HOOFDTAAK",
+			"INTL-140: ES toevoegen aan locales (status: Done)",
+			"INTL-141: Checkout vertalingen (status: To Do)",
+			"WAT ER AL OP DE DOELBRANCH `feature/spanish` STAAT (ten opzichte van `main`)",
+			"resources/lang/es/checkout.php",
+		} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("%s misses %q:\n%s", name, want, out)
+			}
+		}
+	}
+	// A ticket with its own description keeps it; only a title-only subtask is
+	// told that the title IS the whole assignment.
+	titleOnly := planPrompt(doc, "tasks")
+	if !strings.Contains(titleOnly, "de titel IS de opdracht") {
+		t.Fatalf("a subtask without a description must be told so:\n%s", titleOnly)
+	}
+	doc.Description = "Vertaal de payment-linkpagina."
+	if described := planPrompt(doc, "tasks"); strings.Contains(described, "de titel IS de opdracht") {
+		t.Fatalf("a subtask WITH a description must not get the title-only line:\n%s", described)
+	}
+	// A main task is not a subtask: none of the three blocks may appear.
+	parent := planPrompt(planDoc{
+		Key: "INTL-139", Title: "Spaans toevoegen",
+		Siblings: []planSubtask{{Key: "INTL-140", Title: "Mag hier niet staan"}},
+	}, "tasks")
+	for _, unwanted := range []string{"SUBTAAK — WAT ER MOET GEBEUREN", "ANDERE SUBTAKEN VAN DEZELFDE HOOFDTAAK", "DOELBRANCH"} {
+		if strings.Contains(parent, unwanted) {
+			t.Fatalf("a main task's prompt must not carry %q:\n%s", unwanted, parent)
+		}
+	}
+}
+
+// TestLoadPlanBaseBranchWorkSkips pins WHEN the target branch is read at all:
+// never for the repo's own default branch (nothing to tell), never for a name
+// git would not accept back as a ref — these end up in an argv. A branch that
+// IS worth reading is covered by the prompt test above; running git itself is
+// deliberately out of scope for a unit test.
+func TestLoadPlanBaseBranchWorkSkips(t *testing.T) {
+	for _, c := range []struct{ base, against string }{
+		{"", "main"},
+		{"main", ""},
+		{"main", "main"},
+		{"MAIN", "main"},
+		{"--upload-pack=evil", "main"},
+		{"feature/x", "; rm -rf /"},
+	} {
+		if got := loadPlanBaseBranchWork(context.Background(), c.base, c.against); got != nil {
+			t.Fatalf("base %q against %q: expected no read, got %+v", c.base, c.against, got)
+		}
+	}
+}
+
+// TestPlanBranchLines pins the bounding of one git output: blank lines dropped,
+// capped, and an empty read reported as nothing rather than as an empty entry.
+func TestPlanBranchLines(t *testing.T) {
+	got := planBranchLines("a\n\n b \nc\nd\n", 3)
+	if len(got) != 3 || got[0] != "a" || got[1] != "b" || got[2] != "c" {
+		t.Fatalf("lines = %#v", got)
+	}
+	if planBranchLines("\n \n", 5) != nil {
+		t.Fatalf("an empty read must yield nil")
+	}
+}

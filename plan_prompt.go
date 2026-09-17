@@ -35,13 +35,7 @@ func writePlanContext(b *strings.Builder, doc planDoc) {
 	// planned WITH its main task in view (but the plan covers only the
 	// subtask); a main task is planned knowing which parts already hang under
 	// it as their own tickets, so those are named rather than planned twice.
-	if doc.ParentKey != "" {
-		fmt.Fprintf(b, "HOOFDTAAK %s: %s\n", doc.ParentKey, doc.ParentTitle)
-		if pd := planTrim(doc.ParentDescription, 3000); pd != "" {
-			b.WriteString(pd + "\n")
-		}
-		b.WriteString("Dit ticket is een SUBTAAK van die hoofdtaak. Gebruik de hoofdtaak als context (waar past dit in), maar maak het plan UITSLUITEND voor de subtaak hierboven — plan niets wat bij de hoofdtaak of een andere subtaak hoort.\n\n")
-	}
+	writePlanSubtaskFocus(b, doc)
 	if len(doc.Subtasks) > 0 {
 		b.WriteString("SUBTAKEN VAN DIT TICKET (elk een eigen ticket, apart opgepakt):\n")
 		for _, st := range doc.Subtasks {
@@ -53,6 +47,15 @@ func writePlanContext(b *strings.Builder, doc planDoc) {
 		}
 		b.WriteString("Het plan gaat over de hoofdtaak. Noem waar nodig hoe die subtaken erin passen, maar werk hun werk niet opnieuw uit.\n\n")
 	}
+	// The OTHER subtasks of the same main task. They were already on the
+	// document (planLoadIssue fills doc.Siblings from the parent's own
+	// subtasks field) and were already used to search for comments and merged
+	// PRs, but never reached the prompt itself — so a subtask plan could not
+	// see what its neighbours had built, nor what was deliberately theirs.
+	// Each one carries its Jira status as a WORD (never a colour or a code —
+	// the colourblind rule applies to a prompt as much as to the page): a
+	// sibling that is still open is exactly what marks the edge of THIS plan.
+	writePlanSiblings(b, doc)
 
 	// The comments are often where a ticket is really decided: one of them
 	// walks the description back, narrows the scope, or names the constraint
@@ -109,6 +112,7 @@ func writePlanContext(b *strings.Builder, doc planDoc) {
 			fmt.Fprintf(b, "BASISBRANCH: dit plan wordt uitgevoerd vanaf `%s`.\n\n", base)
 		}
 	}
+	writePlanBaseBranchWork(b, doc.BaseBranchWork)
 	if len(doc.Answers) > 0 {
 		b.WriteString("AL BEANTWOORDE VRAGEN (gebruik deze keuzes als vaststaand):\n")
 		for _, a := range doc.Answers {
@@ -121,6 +125,80 @@ func writePlanContext(b *strings.Builder, doc planDoc) {
 		}
 		b.WriteString("\n")
 	}
+}
+
+// writePlanSubtaskFocus writes the block that makes a SUBTASK's plan stand
+// entirely in the sign of that subtask. Reviewer request, verbatim: *"als een
+// plan over een subtaak gaat, moet het plan helemaal in teken zijn van die
+// subtaak. omdat de subtaak meestal uit een titel bestaat, moet je wat je moet
+// doen met de titel kijken wat je moet doen. hoe; dat kan je halen uit de
+// hoofdtaak of wat er al eerder is gebouwd door andere (sub)taken of target
+// branch of gerelateerde jira tickets"*.
+//
+// So the block splits the two halves explicitly. The WAT is the subtask's own
+// title — a subtask usually has no description at all, which is why the title
+// is named as the assignment rather than left as a mere header. The HOE comes
+// from the other sections of this same context block, named here in the order
+// they carry weight, so the model knows they are means and never a licence to
+// widen the scope. Writes nothing at all for a ticket that is not a subtask.
+func writePlanSubtaskFocus(b *strings.Builder, doc planDoc) {
+	if doc.ParentKey == "" {
+		return
+	}
+	b.WriteString("SUBTAAK — WAT ER MOET GEBEUREN:\n")
+	fmt.Fprintf(b, "Dit ticket is een SUBTAAK van hoofdtaak %s. De titel hierboven (\"%s\") is de opdracht: het plan dekt exact dat en niets anders — geen werk van de hoofdtaak, en geen werk van een andere subtaak, ook niet als de omschrijving van de hoofdtaak dat wel beschrijft.\n", doc.ParentKey, strings.TrimSpace(doc.Title))
+	if strings.TrimSpace(doc.Description) == "" {
+		b.WriteString("Dit ticket heeft geen eigen omschrijving: de titel IS de opdracht. Leid het WAT letterlijk uit die titel af en verzin er geen extra scope bij.\n")
+	}
+	b.WriteString("\n")
+	fmt.Fprintf(b, "HOOFDTAAK %s: %s\n", doc.ParentKey, doc.ParentTitle)
+	if pd := planTrim(doc.ParentDescription, 3000); pd != "" {
+		b.WriteString(pd + "\n")
+	}
+	b.WriteString("De hoofdtaak is HOE-context, geen scope-uitbreiding: hij vertelt waar deze subtaak in past en welke keuzes en patronen er al liggen.\n")
+	b.WriteString("HOE je het doet haal je, in deze volgorde, uit: de hoofdtaak hierboven, het al gemergede werk van deze ticketfamilie, de andere subtaken van dezelfde hoofdtaak, wat er al op de doelbranch staat, en de gerelateerde tickets. Staat het in geen van die bronnen, kies dan het meest waarschijnlijke pad en noem die aanname met zoveel woorden in je uitleg.\n\n")
+}
+
+// writePlanSiblings names the OTHER subtasks of the same main task — the
+// "andere (sub)taken" half of the hoe-sources above. They were already on the
+// document (planLoadIssue fills doc.Siblings from the parent's own subtasks
+// field) and were already used to search for comments and merged PRs, but
+// never reached a prompt, so a subtask could not see what its neighbours had
+// built nor what was deliberately theirs. Each one carries its Jira status as
+// a WORD (never a colour or a code — the colourblind rule applies to a prompt
+// as much as to the page): a sibling that is still open is exactly what marks
+// the edge of THIS plan. Writes nothing for a ticket that is not a subtask.
+func writePlanSiblings(b *strings.Builder, doc planDoc) {
+	if doc.ParentKey == "" || len(doc.Siblings) == 0 {
+		return
+	}
+	b.WriteString("ANDERE SUBTAKEN VAN DEZELFDE HOOFDTAAK (elk een eigen ticket, apart opgepakt):\n")
+	for _, sb := range doc.Siblings {
+		fmt.Fprintf(b, "- %s: %s", sb.Key, sb.Title)
+		if sb.Status != "" {
+			fmt.Fprintf(b, " (status: %s)", sb.Status)
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("Sluit aan op wat daar al gebouwd is en hergebruik het; dupliceer het niet. Wat bij zo'n andere subtaak hoort — ook als die nog open staat — hoort NIET in dit plan.\n\n")
+}
+
+// writePlanBaseBranchWork names what already sits on the plan's TARGET branch
+// (see loadPlanBaseBranchWork, plan_context.go) — the branch half of the "hoe"
+// sources above. Nothing is written when the branch is the repo's own default
+// (nothing to tell) or when the read found nothing.
+func writePlanBaseBranchWork(b *strings.Builder, work *planBaseBranchWork) {
+	if work == nil || (len(work.Commits) == 0 && len(work.Files) == 0) {
+		return
+	}
+	fmt.Fprintf(b, "WAT ER AL OP DE DOELBRANCH `%s` STAAT (ten opzichte van `%s`):\n", work.Branch, work.Against)
+	for _, c := range work.Commits {
+		b.WriteString("- " + c + "\n")
+	}
+	if len(work.Files) > 0 {
+		b.WriteString("  gewijzigde bestanden: " + strings.Join(work.Files, ", ") + "\n")
+	}
+	b.WriteString("Dit is al gebouwd op de branch waar dit plan vanaf vertrekt: bouw erop voort, volg dezelfde aanpak en plan niets wat hier al staat.\n\n")
 }
 
 // planPrompt builds the Dutch prompt. mode "questions" asks for the

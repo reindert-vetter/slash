@@ -1208,6 +1208,98 @@ them. Both sides land on the document (`parentKey`/`parentTitle`/
   request, so the stored document still reads as unanswered), the same
   local-pick-wins overlay `answerFor` uses for an answer.
 
+### A subtask's plan stands entirely in the sign of that subtask
+
+Reviewer request, verbatim: *"als een plan over een subtaak gaat, moet het plan
+helemaal in teken zijn van die subtaak. omdat de subtaak meestal uit een titel
+bestaat, moet je wat je moet doen met de titel kijken wat je moet doen. hoe;
+dat kan je halen uit de hoofdtaak of wat er al eerder is gebouwd door andere
+(sub)taken of target branch of gerelateerde jira tickets"*.
+
+Before this, a subtask reached the model as one sentence ("gebruik de
+hoofdtaak als context, plan alleen de subtaak") with the title as a bare
+header — while two of the sources the reviewer names were on the document but
+in no prompt at all (see the two bullets below).
+
+- **Recognising a subtask is `doc.ParentKey != ""`** — nothing new, the same
+  signal the scope gate and the first column already use. There is deliberately
+  no "is the description short enough" threshold: the only extra thing an
+  EMPTY description buys is one extra sentence (below).
+- **The block is an explicit WAT/HOE split** (`writePlanSubtaskFocus`,
+  `plan_prompt.go`). The WAT is the subtask's **own title**, named as the
+  assignment rather than left as a header: "het plan dekt exact dat en niets
+  anders — geen werk van de hoofdtaak, en geen werk van een andere subtaak, ook
+  niet als de omschrijving van de hoofdtaak dat wel beschrijft". A ticket with
+  no description of its own gets one sentence more ("de titel IS de opdracht,
+  verzin er geen extra scope bij"), which is exactly the shape the reviewer
+  describes — a subtask usually IS just a title.
+- **The main task is relabelled as HOE-context**, not as scope. Same
+  `HOOFDTAAK <key>: <title>` + description (still capped at 3000 bytes) as
+  before, now followed by the sources of "hoe" **in order of weight**: the main
+  task, the merged work of this ticket family, the other subtasks of the same
+  main task, what already sits on the target branch, and the related tickets.
+  Not in any of them → pick the most likely path and name the assumption —
+  the same rule the task list already carries for "geen onderzoekstaak".
+- **The sibling subtasks now reach the prompt** (`writePlanSiblings`).
+  `doc.Siblings` was already filled by `planLoadIssue` and already used to
+  search for comments and merged PRs, but `writePlanContext` only ever
+  rendered `doc.Subtasks` (a MAIN task's children) — so a subtask could see
+  neither what its neighbours had built nor what was deliberately theirs. One
+  line per sibling with its Jira status **as a word** (`(status: Done)`), never
+  a colour or a code: a sibling that is still open is precisely what marks the
+  edge of this plan. Reviewer decision: every sibling is listed, not only the
+  finished ones.
+- **All three helpers are reused by `planExecutePrompt`** (`plan_execute.go`),
+  so the boundary holds while the plan is being EXECUTED too and not only while
+  it is written — the same three calls, not a second copy of the story. Each
+  writes nothing at all when it does not apply, so a main task's prompt is
+  byte-identical to what it was.
+- **`intent.md` carries one line of it** (`renderPlanIntent`,
+  `plan_artifacts.go`): a "Subtask of **KEY**: the title above is the
+  assignment…" sentence under "Proposed outcome", plus the siblings and the
+  target-branch work under "Affected users and systems". Deliberately one line
+  rather than the whole prompt — that file is a human-readable artifact, and it
+  already named the main task and its description.
+
+### What already sits on the TARGET branch
+
+The branch half of those "hoe" sources. The prompt used to name the branch
+(`BASISBRANCH: … vanaf 'x'`) and nothing else, which tells the model nothing
+about what was already built there — the case the reviewer means when a chain
+of subtasks lands on one shared feature branch.
+
+`loadPlanBaseBranchWork` (`plan_context.go`) reads it inside the **existing**
+`planLoadContext` Activity (which runs AFTER the base-branch gate, so
+`doc.BaseBranch` is known by then) — no new Activity and no new replay flag,
+the same reasoning the "Referenced tickets" section records
+(`.claude/rules/workflow-determinism.md`). Two bounded reads against the
+primary repo's own clone: `git log --no-merges --format=%s` for the commit
+subjects (`maxPlanBaseBranchCommits`, 20) and `git diff --name-only` with
+**three** dots for the files added since the branch diverged
+(`maxPlanBaseBranchFiles`, 30). The result lands on `doc.baseBranchWork`
+(`planBaseBranchWork`: branch, against, commits, files) and renders as
+`WAT ER AL OP DE DOELBRANCH 'x' STAAT (ten opzichte van 'main')` with the
+instruction to build on it.
+
+Deliberate boundaries, all "less context, never a failure" like the rest of
+`plan_context.go`:
+
+- **Nothing at all when the base branch IS the repo's default branch** — a plan
+  from `main` has no "already built here" to speak of — and nothing when either
+  name fails `planBranchRefPattern`: both end up in an argv, so they are
+  validated, never trusted (`.claude/rules/conventions.md`).
+- **It does not fetch.** It reads the LOCAL remote-tracking refs
+  (`origin/<name>`), so the picture can be as stale as the reviewer's last
+  fetch. A plan must not wait on the network.
+- **Any git error yields nil**, i.e. no section in the prompt at all — a branch
+  that was never fetched costs context, never the tracker.
+
+Tests: `TestPlanPromptSubtaskFocus` (all three blocks, in `planPrompt` **and**
+`planExecutePrompt`, plus the title-only sentence appearing only without a
+description and none of the three appearing for a main task),
+`TestLoadPlanBaseBranchWorkSkips` (the skip rules, no git) and
+`TestPlanBranchLines` (the bounding), all in `plan_workflow_test.go`.
+
 
 ## Which branch does this go out from?
 

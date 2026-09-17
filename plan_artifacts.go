@@ -436,6 +436,13 @@ func renderPlanIntent(doc planDoc) string {
 
 	b.WriteString("## Proposed outcome\n\n")
 	fmt.Fprintf(&b, "%s is done when the work described above is implemented and reviewable as a pull request.\n\n", doc.Key)
+	// The same WHAT/HOW split the generation prompt opens a subtask with (see
+	// writePlanSubtaskFocus, plan_prompt.go), in one line rather than the whole
+	// story: a subtask usually has no description at all, so its title is the
+	// assignment and everything else here is only means.
+	if doc.ParentKey != "" {
+		fmt.Fprintf(&b, "Subtask of **%s**: the title above is the assignment — this covers exactly that, never the main task's own work or another subtask's. How to build it comes from the main task, the merged work, the sibling subtasks, the target branch and the related tickets below.\n\n", doc.ParentKey)
+	}
 
 	b.WriteString("## Affected users and systems\n\n")
 	if doc.ParentKey != "" {
@@ -444,6 +451,19 @@ func renderPlanIntent(doc planDoc) string {
 	for _, st := range doc.Subtasks {
 		fmt.Fprintf(&b, "- Subtask **%s** — %s (%s)\n", st.Key, oneLine(st.Title), orDash(st.Status))
 	}
+	// The sibling subtasks: whose work this plan builds on, and — status in
+	// words, never a colour — whose work it must stay out of.
+	if doc.ParentKey != "" {
+		for _, sb := range doc.Siblings {
+			fmt.Fprintf(&b, "- Sibling subtask **%s** — %s (%s)\n", sb.Key, oneLine(sb.Title), orDash(sb.Status))
+		}
+	}
+	if w := doc.BaseBranchWork; w != nil {
+		fmt.Fprintf(&b, "- Already on target branch `%s` (vs `%s`): %s\n", w.Branch, w.Against, oneLine(strings.Join(w.Commits, "; ")))
+		if len(w.Files) > 0 {
+			fmt.Fprintf(&b, "  - touches %s\n", strings.Join(w.Files, ", "))
+		}
+	}
 	for _, pr := range doc.RelatedPRs {
 		fmt.Fprintf(&b, "- Already merged: [#%d %s](%s)", pr.Number, oneLine(pr.Title), pr.URL)
 		if len(pr.Files) > 0 {
@@ -451,7 +471,7 @@ func renderPlanIntent(doc planDoc) string {
 		}
 		b.WriteString("\n")
 	}
-	if doc.ParentKey == "" && len(doc.Subtasks) == 0 && len(doc.RelatedPRs) == 0 {
+	if doc.ParentKey == "" && len(doc.Subtasks) == 0 && len(doc.RelatedPRs) == 0 && doc.BaseBranchWork == nil {
 		b.WriteString("_No related ticket or merged work found._\n")
 	}
 	b.WriteString("\n")

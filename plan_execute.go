@@ -883,6 +883,15 @@ func planExecutePrompt(doc planDoc) string {
 	if desc != "" {
 		b.WriteString("OMSCHRIJVING:\n" + desc + "\n\n")
 	}
+	// The same subtask framing the plan itself was generated with (the WAT is
+	// this subtask's own title, the HOE comes from the main task, the siblings,
+	// the target branch and the merged work) — the exact three helpers
+	// writePlanContext uses, not a second copy of the story, so the boundary
+	// holds while the plan is being EXECUTED too and not only while it is
+	// written. Each writes nothing at all when it does not apply.
+	writePlanSubtaskFocus(&b, doc)
+	writePlanSiblings(&b, doc)
+	writePlanBaseBranchWork(&b, doc.BaseBranchWork)
 	if len(doc.Answers) > 0 {
 		b.WriteString("VASTSTAANDE KEUZES (de reviewer heeft deze al gemaakt, wijk hier niet van af):\n")
 		for _, a := range doc.Answers {
