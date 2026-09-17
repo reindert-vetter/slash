@@ -3137,7 +3137,7 @@ export async function cancelClaudeTurn() {
 
 // resolveCancelCleanup answers a chat.KindCleanupChoice bubble (the "what do
 // you want to do with what a cancelled turn left in the checkout?" follow-up,
-// offerCancelCleanupIfDirty in chat_workflow.go) with the reviewer's chosen
+// raiseCancelCleanupChoice in chat_workflow.go) with the reviewer's chosen
 // option — the dedicated "cleanup" Signal action (chatActionCleanup), NEVER
 // the ordinary answer/resume round trip a ‘question’/‘directory_decision’
 // turn uses: resolving THIS must never silently start a new Claude call (see

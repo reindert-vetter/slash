@@ -3720,20 +3720,35 @@ colourblind rule. `canRetry` (the "Opnieuw proberen" button) now also fires on
   `SignalWorkflow` unblocks, and `sendClaudeMessage`'s own `finally` calls
   `drainClaudeQueue()` exactly as it does for an ordinary turn).
 
-### Cleaning up after a cancel: `chat.KindCleanupChoice`
+### Cleaning up after a cancel: the blocking werkmap choice
 
 Reviewer decision: if the just-cancelled turn's OWN shell attempt had already
 started editing the PR's shared checkout (its Edit/Bash tool calls run before
-the kill reaches the CLI), offer to discard/stash that — but **only** when
-there really is something dirty. `offerCancelCleanupIfDirty`
-(`chat_workflow.go`) checks `git status --porcelain` on the checkout the shell
+the kill reaches the CLI), ask what should happen to that — but **only** when
+there really is something dirty. `raiseCancelCleanupChoice`
+(`chat_workflow.go`) snapshots the dirty paths of the checkout the shell
 attempt was using right after a cancel is detected on that attempt
 specifically (never on the read-only attempt, which never has file access at
-all) and, only if dirty, saves a second bubble
-(`chat.KindCleanupChoice`, purple tint, same rendering as
-`chat.KindDirectoryDecision`'s option chips) offering the same five choices
+all) and, only if dirty and no other choice is open yet, raises the PR's one
+**blocking werkmap choice** (`a.Pending`, stage `checkoutStageDirtyTree`, i.e.
+the fullscreen `workDirOverlay.mjs`) with the same five options
 `chat_checkout.go` already has for an unrelated dirty tree (`optDiscard`/
 `optStashManual`/`optStashAuto`/`optKeepSeparate`/`optKeepCombined`).
+
+**It used to be a `chat.KindCleanupChoice` bubble in the conversation, and
+that is the bug this replaced.** The bubble scrolled out of sight the moment
+the reviewer typed again, while the leftovers it asked about kept every write
+turn of the PR blocked on a transient "een andere Claude-conversatie is deze
+werkmap nog aan het landen" — an hour of that on PR 13798. Reviewer's rule
+for the fix: a blocking state must be unmissable and you must not get past it
+until it is answered, with exactly one exit rather than two competing
+questions. The overlay is precisely that (no local way to close it, see
+`isWorkDirOverlayOpen`). The full backend half — including the
+`chatLandExpected` liveness flag that stops a cancelled/failed turn's
+leftovers from being read as "still landing" — is in
+`.claude/docs/workflows-comments.md`. Everything below about
+`chatActionCleanup`/`applyCancelCleanup` still applies to a bubble **stored
+before** this change, which keeps its own round trip.
 
 **Deliberately its own small mechanism, NOT `chatCheckoutDecision`/
 `a.Pending`'s existing answer/resume round trip.** That machinery
@@ -3757,8 +3772,9 @@ path; `claudeQuestionOptions` (`ClaudeChat.mjs`) routes a click on a
 `cleanup_choice` bubble's chips through `onCleanup` instead of the ordinary
 `onSend`.
 
-If the reviewer never resolves it (or retries the original request without
-resolving it first), nothing is silently lost: the very next shell attempt
+If such an old bubble is never resolved (or the reviewer retries the original
+request without resolving it first), nothing is silently lost: the very next
+shell attempt
 that reclassifies this same checkout directory
 (`prepareChatShellWorkDirAt`'s ordinary `a.Dir != ""` branch) will find it
 still dirty and raise the SAME kind of "what do you want to do with this"

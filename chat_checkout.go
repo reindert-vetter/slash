@@ -1399,6 +1399,15 @@ func dirtyIsOnlyPendingEdits(paths []string, repo string, pr int) bool {
 	if len(paths) == 0 {
 		return false
 	}
+	// A landing has to actually still be coming for this to be a transient,
+	// self-resolving wait — see chatLandExpected (chat_edit_pending.go). A
+	// cancelled or failed turn's leftovers are marked pending just the same
+	// (finishChatProgress does not care how the turn ended), but nothing will
+	// ever land them, so treating those as "still landing" made every later
+	// write turn of that PR wait for something that could not happen.
+	if !chatLandExpected(repo, pr) {
+		return false
+	}
 	pending := chatPendingEditedFilesFor(repo, pr)
 	if len(pending) == 0 {
 		return false
@@ -1415,7 +1424,7 @@ func dirtyIsOnlyPendingEdits(paths []string, repo string, pr int) bool {
 	return true
 }
 
-func applyCheckoutDecisionReply(ctx context.Context, a *chatCheckoutAssignment, headRef, reply string) (*chatCheckoutResolved, error) {
+func applyCheckoutDecisionReply(ctx context.Context, a *chatCheckoutAssignment, repo string, pr int, headRef, reply string) (*chatCheckoutResolved, error) {
 	d := a.Pending
 	switch d.Stage {
 	case checkoutStageChooseDirectory:
@@ -1465,6 +1474,10 @@ func applyCheckoutDecisionReply(ctx context.Context, a *chatCheckoutAssignment, 
 			// remember (and an older one must not linger, or a future dirty
 			// tree in the same directory would be waved through).
 			a.clearDirtyAccepted()
+			// Nothing of this PR is "wordt aangepast" any more either: the
+			// edit is genuinely gone (same bookkeeping applyCancelCleanup
+			// does for the chat-bubble version of this very question).
+			clearChatPendingFiles(repo, pr)
 		case optStashManual, optStashAuto:
 			label := fmt.Sprintf("slash-chat-%s", time.Now().UTC().Format("20060102-150405"))
 			if err := stashCheckoutDirty(ctx, d.Dir, label); err != nil {
@@ -1474,6 +1487,9 @@ func applyCheckoutDecisionReply(ctx context.Context, a *chatCheckoutAssignment, 
 			a.StashDir = d.Dir
 			a.StashAutoRestore = opt == optStashAuto
 			a.clearDirtyAccepted() // clean tree again, same as optDiscard above
+			// Out of the working tree until it is popped again — not being
+			// edited from the review tree's point of view either.
+			clearChatPendingFiles(repo, pr)
 		case optKeepSeparate:
 			paths, err := snapshotDirtyPaths(ctx, d.Dir)
 			if err != nil {
@@ -1581,7 +1597,7 @@ func prepareChatShellWorkDirAt(ctx context.Context, tm *TaskManager, dataDir, re
 				// to them again, and the turn tells them so in words.
 				return "", a.Pending, false
 			}
-			resolved, applyErr := applyCheckoutDecisionReply(ctx, a, headRef, reviewerReply)
+			resolved, applyErr := applyCheckoutDecisionReply(ctx, a, repo, pr, headRef, reviewerReply)
 			if applyErr != nil {
 				if tm != nil && tm.logf != nil {
 					tm.logf("chat_checkout: pr %d: applying decision reply: %v", pr, applyErr)
@@ -2197,7 +2213,7 @@ func turnChangedCheckout(ctx context.Context, dataDir, repo string, pr int, conv
 }
 
 // checkoutIsDirty is the plain "does the working tree have uncommitted
-// changes right now" check offerCancelCleanupIfDirty (chat_workflow.go) and
+// changes right now" check raiseCancelCleanupChoice (chat_workflow.go) and
 // applyCancelCleanup use — deliberately narrower than
 // chatCheckoutNeedsLanding above (that one also counts local commits ahead of
 // origin, which is irrelevant here: a cancelled turn's own tool calls only
@@ -2213,7 +2229,8 @@ func checkoutIsDirty(ctx context.Context, dir string) (bool, error) {
 // chatCancelCleanupInput is applyCancelCleanup's own Activity input —
 // Choice is one of optDiscard/optStashManual/optStashAuto/optKeepSeparate/
 // optKeepCombined, verbatim, as offered on the chat.KindCleanupChoice bubble
-// (offerCancelCleanupIfDirty).
+// (a chat.KindCleanupChoice bubble stored before raiseCancelCleanupChoice
+// moved that question into the werkmap overlay).
 type chatCancelCleanupInput struct {
 	Repo           string `json:"repo,omitempty"`
 	PR             int    `json:"pr"`

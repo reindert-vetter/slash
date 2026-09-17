@@ -3373,6 +3373,21 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if changedCheckout {
 			m.logf("claude_chat: pr=%d conversation=%s turn changed the checkout, needs landing=%v",
 				arg.PR, arg.ConversationID, needsLand)
+			// claudeChatWorkflow `continue`s past its own result.NeedsLand
+			// branch for exactly these two kinds (chat_workflow.go), so no
+			// landing is ever enqueued for what this turn left behind — even
+			// though needsLand above says there IS something to land. Record
+			// that here, where both facts are known, so the leftovers stop
+			// being classified as "another conversation is still landing
+			// this" (dirtyIsOnlyPendingEdits, chat_checkout.go) and the
+			// reviewer gets the ordinary, answerable werkmap question
+			// instead of an endless transient "probeer het zo weer".
+			// Gated on changedCheckout on purpose: a failed turn that never
+			// touched the checkout must not disown ANOTHER conversation's
+			// genuinely in-flight landing (the registry is PR-wide).
+			if msg.Kind == chat.KindCancelled || msg.Kind == chat.KindError {
+				clearChatLandExpected(arg.Repo, arg.PR)
+			}
 		}
 		publishChatChanged(arg.Repo, arg.PR, arg.ConversationID)
 		// The turn may have assigned/advanced the PR's shared work directory,
@@ -3484,7 +3499,9 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return nil, nil
 	})
 	// Activity: resolve a chat.KindCleanupChoice bubble left by a cancelled
-	// shell attempt (offerCancelCleanupIfDirty, chat_workflow.go) — discard/
+	// shell attempt, for a bubble stored before raiseCancelCleanupChoice
+	// (chat_workflow.go) moved that question into the werkmap overlay —
+	// discard/
 	// stash/keep whatever it left in the PR's shared checkout. Deliberately
 	// never calls a Claude client and never resumes the original request; see
 	// applyCancelCleanup's own doc comment (chat_checkout.go).

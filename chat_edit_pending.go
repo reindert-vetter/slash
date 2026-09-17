@@ -32,6 +32,22 @@ import (
 var (
 	chatPendingEditMu    sync.Mutex
 	chatPendingEditFiles = map[prKey]map[string]bool{}
+	// chatPendingLandExpected says whether a landing for (repo, pr) is still
+	// COMING for the files above — the liveness half of the same registry.
+	// Set together with the files themselves (a turn that just edited
+	// something is followed by its own automatic landing, chat_workflow.go's
+	// result.NeedsLand branch) and cleared the moment that stops being true:
+	// a landing actually ran (successfully or not, chat_merge.go), or the
+	// turn ended in a way that enqueues no landing at all
+	// (clearChatLandExpected, see its own doc comment).
+	//
+	// Without it, dirtyIsOnlyPendingEdits (chat_checkout.go) kept reading a
+	// leftover dirty tree as "another conversation is still landing this" for
+	// as long as the process lived — reported bug: a CANCELLED write turn
+	// left its edits behind, no landing was ever enqueued for them, and every
+	// later write turn of that PR waited out the whole chatRetryDelays ladder
+	// on a transient "probeer het zo weer" that could never come true.
+	chatPendingLandExpected = map[prKey]bool{}
 )
 
 // markChatFilesPending records that files are edited but not yet landed for
@@ -54,6 +70,7 @@ func markChatFilesPending(repo string, pr int, files []string) {
 			set[f] = true
 		}
 	}
+	chatPendingLandExpected[key] = true
 }
 
 // clearChatPendingFiles forgets every file pending for (repo, pr) — called
@@ -66,6 +83,36 @@ func clearChatPendingFiles(repo string, pr int) {
 	chatPendingEditMu.Lock()
 	defer chatPendingEditMu.Unlock()
 	delete(chatPendingEditFiles, key)
+	delete(chatPendingLandExpected, key)
+}
+
+// clearChatLandExpected records that no landing is coming for whatever this
+// PR's checkout is still holding — the files stay marked as "edited, not
+// landed" (the "wordt aangepast" pill is still telling the truth: they really
+// are sitting uncommitted in the checkout), but nobody is going to commit
+// them on their own any more.
+//
+// Called for a turn that ended as chat.KindCancelled/chat.KindError AND
+// actually changed the checkout: claudeChatWorkflow (chat_workflow.go) skips
+// its result.NeedsLand branch for exactly those two kinds, so no landing is
+// ever enqueued for their leftovers. From that moment the dirty tree must be
+// classified as what it is — an ordinary dirty checkout that needs a reviewer
+// decision — instead of "someone else is still landing this", see
+// dirtyIsOnlyPendingEdits (chat_checkout.go).
+func clearChatLandExpected(repo string, pr int) {
+	key := prKey{Repo: repo, PR: pr}
+	chatPendingEditMu.Lock()
+	defer chatPendingEditMu.Unlock()
+	delete(chatPendingLandExpected, key)
+}
+
+// chatLandExpected is dirtyIsOnlyPendingEdits' own liveness check: is a
+// landing for (repo, pr) still on its way?
+func chatLandExpected(repo string, pr int) bool {
+	key := prKey{Repo: repo, PR: pr}
+	chatPendingEditMu.Lock()
+	defer chatPendingEditMu.Unlock()
+	return chatPendingLandExpected[key]
 }
 
 // chatPendingEditedFilesFor is the read-only view buildCheckoutView (chat_

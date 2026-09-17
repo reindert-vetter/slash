@@ -495,6 +495,90 @@ func TestPrepareChatShellWorkDirSkipsDirtyDecisionForOwnPendingEdit(t *testing.T
 	}
 }
 
+// A cancelled (or failed) write turn's own leftovers are marked pending just
+// like any other turn's, but NO landing is ever enqueued for them
+// (claudeChatWorkflow skips its result.NeedsLand branch for
+// chat.KindCancelled/chat.KindError, chat_workflow.go). From that moment the
+// dirty tree must stop being classified as "another conversation is still
+// landing this" and become the ordinary, answerable werkmap question.
+//
+// Reported bug (PR 13798): a cancelled turn left seven edited files behind,
+// nothing ever landed them, and for the next hour every write turn of that PR
+// waited out the whole chatRetryDelays ladder on a transient "een andere
+// Claude-conversatie van deze PR is deze werkmap nog aan het landen. Probeer
+// het zo weer" that could never come true.
+func TestPrepareChatShellWorkDirAsksOnceNoLandingIsComing(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	checkout := cloneCheckoutDir(t, bareDir, "feature/x")
+	writeCheckoutSettings(t, dataDir, checkout)
+
+	const repo, pr = "", 1024
+	if err := os.WriteFile(filepath.Join(checkout, "foo.txt"), []byte("the cancelled turn's own edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	markChatFilesPending(repo, pr, []string{"foo.txt"})
+	t.Cleanup(func() { clearChatPendingFiles(repo, pr) })
+
+	// While a landing is still expected this stays the silent, self-resolving
+	// wait it was built to be.
+	if _, decision, _ := prepareChatShellWorkDirAt(ctx, nil, dataDir, repo, pr, "", "feature/x"); decision != nil {
+		t.Fatalf("expected no decision while a landing is still coming, got %+v", decision)
+	}
+
+	// The turn ended as cancelled/failed: nobody is going to land this.
+	clearChatLandExpected(repo, pr)
+
+	dir, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, repo, pr, "", "feature/x")
+	if ok || dir != "" {
+		t.Fatalf("expected the checkout not ready yet, got dir=%q ok=%v", dir, ok)
+	}
+	if decision == nil || decision.Stage != checkoutStageDirtyTree {
+		t.Fatalf("expected the ordinary dirtyTree question once no landing is coming, got %+v", decision)
+	}
+	if !checkoutChoiceOpen(dataDir, repo, pr) {
+		t.Fatal("expected the blocking werkmap choice to be open for the reviewer")
+	}
+}
+
+// A cancelled shell attempt raises that same blocking werkmap question
+// immediately, instead of the chat.KindCleanupChoice bubble it used to write
+// into the conversation (which scrolled out of sight the moment the reviewer
+// typed anything). One exit, not two — see raiseCancelCleanupChoice.
+func TestRaiseCancelCleanupChoiceOpensTheWerkmapChoice(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	checkout := cloneCheckoutDir(t, bareDir, "feature/x")
+	writeCheckoutSettings(t, dataDir, checkout)
+
+	const repo, pr = "", 1025
+	arg := chatTurnInput{Repo: repo, PR: pr, ConversationID: "c1"}
+
+	// A clean tree: a cancel that beat Claude's own Edit/Bash calls asks
+	// nothing at all.
+	if _, _, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, repo, pr, "", "feature/x"); !ok {
+		t.Fatal("expected the clean checkout to be ready")
+	}
+	raiseCancelCleanupChoice(ctx, dataDir, arg, checkout)
+	if checkoutChoiceOpen(dataDir, repo, pr) {
+		t.Fatal("expected no question for a cancel that left nothing behind")
+	}
+
+	if err := os.WriteFile(filepath.Join(checkout, "foo.txt"), []byte("half-finished edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	raiseCancelCleanupChoice(ctx, dataDir, arg, checkout)
+	a := getCheckoutAssignment(dataDir, repo, pr)
+	if a == nil || a.Pending == nil || a.Pending.Stage != checkoutStageDirtyTree {
+		t.Fatalf("expected a blocking dirtyTree choice after a cancel with leftovers, got %+v", a)
+	}
+	if len(a.Pending.Options) == 0 || !strings.Contains(a.Pending.Body, "afgebroken") {
+		t.Fatalf("expected the cancel-specific, answerable question, got %+v", a.Pending)
+	}
+}
+
 // An open choice is put to the reviewer AGAIN on the next write turn, but
 // only after checking that it is still a real question. Reported bug, in the
 // reviewer's own words: "geef die keuze opnieuw als het nodig is, want alles

@@ -1561,11 +1561,30 @@ event): `kind` values sit in stored chat history, so renaming them would be a
 migration for zero functional gain. When you touch a user-facing string here,
 check it against this rule; when you touch an identifier, leave it.
 
-The cancelled-turn cleanup question (`offerCancelCleanupIfDirty`,
-`chat.KindCleanupChoice`) **stays a chat bubble** — unlike the work-directory
-choice it really is about THAT turn ("de afgebroken beurt liet
-niet-gecommitte wijzigingen achter") — and its badge already reads "opruimen
-na afbreken", with no "checkout" anywhere in it.
+The cancelled-turn cleanup question is **no longer a chat bubble**: it is
+raised as the PR's one blocking werkmap choice (`raiseCancelCleanupChoice`,
+`chat_workflow.go` → a `checkoutStageDirtyTree` decision, i.e. the fullscreen
+overlay), answered through the existing `checkoutAnswer` round trip. Reported
+bug (PR 13798): a cancelled write turn left its edits in the werkmap, the
+`chat.KindCleanupChoice` bubble that asked about them scrolled out of sight
+the moment the reviewer typed again, and because a cancelled/failed turn
+enqueues **no** landing at all (`claudeChatWorkflow` `continue`s past its own
+`result.NeedsLand` branch for `KindCancelled`/`KindError`) those leftovers kept
+being classified as "another conversation is still landing this"
+(`dirtyIsOnlyPendingEdits`) — so for an hour every write turn of that PR waited
+out the whole `chatRetryDelays` ladder on a transient "probeer het zo weer"
+that could never come true. Two halves to the fix: `chat_edit_pending.go` now
+also tracks whether a landing is still **expected** (`chatLandExpected`, set
+with the pending files, cleared by `clearChatLandExpected` from the
+`runClaudeTurn` Activity whenever a cancelled/failed turn that really changed
+the checkout ends), which `dirtyIsOnlyPendingEdits` requires; and the cancel
+path raises the blocking question itself instead of a bubble, so a blocking
+state is unmissable and there is exactly **one** exit, never two competing
+questions about the same leftovers. `chatActionCleanup`/`applyCancelCleanup`
+(and the `cleanup_choice` rendering) stay for a bubble stored before this
+change, like an old `chat.KindDirectoryDecision`. Tests:
+`TestPrepareChatShellWorkDirAsksOnceNoLandingIsComing` and
+`TestRaiseCancelCleanupChoiceOpensTheWerkmapChoice` (`chat_checkout_test.go`).
 
 - **`conversationID == ""` is the one deliberate exception**: the checkout
   settings chip's own direct answer (`checkoutAnswer`, `workflows.go`) and

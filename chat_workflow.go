@@ -109,7 +109,10 @@ const (
 	chatActionRetry = "retry"
 	// chatActionCleanup resolves a chat.KindCleanupChoice bubble (the "what do
 	// you want to do with what a cancelled turn left in the checkout?"
-	// follow-up, see offerCancelCleanupIfDirty) — Body carries the reviewer's
+	// follow-up). Nothing raises such a bubble any more — that question is the
+	// blocking werkmap overlay now, see raiseCancelCleanupChoice — but a
+	// bubble stored before that change keeps its round trip. Body carries the
+	// reviewer's
 	// chosen option verbatim (optDiscard/optStashManual/optStashAuto/
 	// optKeepSeparate/optKeepCombined, chat_checkout.go). Deliberately its own
 	// action rather than an ordinary reply: unlike chat.KindDirectoryDecision,
@@ -318,7 +321,8 @@ func claudeChatWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		}
 
 		// Resolve a chat.KindCleanupChoice bubble left by a cancelled shell
-		// attempt (offerCancelCleanupIfDirty) — no Claude call, ever: this only
+		// attempt, back when that was a bubble rather than the werkmap overlay
+		// (raiseCancelCleanupChoice) — no Claude call, ever: this only
 		// performs git housekeeping and reports the outcome, on purpose (see
 		// chatActionCleanup's own doc comment for why NOT the ordinary
 		// answer/resume path). Decided purely by sig.Action, part of the
@@ -813,32 +817,57 @@ func chatCancelledMessage(ctx context.Context, cm *chat.Module, arg chatTurnInpu
 	return msg
 }
 
-// offerCancelCleanupIfDirty saves a follow-up chat.KindCleanupChoice bubble
-// offering to discard/stash whatever a just-cancelled SHELL attempt left
-// behind in dir, ONLY when dir turns out to actually be dirty — "alleen
-// aanbieden als er echt iets is aangepast" (reviewer decision): a cancel that
-// landed before Claude's own Edit/Bash tool calls touched anything leaves
-// nothing to clean up, and this is then a silent no-op.
+// raiseCancelCleanupChoice puts the question "what should happen to the
+// changes a just-cancelled SHELL attempt left behind in dir" to the reviewer,
+// ONLY when dir turns out to actually be dirty — "alleen aanbieden als er
+// echt iets is aangepast" (reviewer decision): a cancel that landed before
+// Claude's own Edit/Bash tool calls touched anything leaves nothing to clean
+// up, and this is then a silent no-op.
 //
-// Deliberately its own small mechanism, NOT chat_checkout.go's
-// chatCheckoutDecision/a.Pending machinery (see applyCancelCleanup's own doc
-// comment for why): that one is a PR-wide setting answered in its own overlay,
-// while this question is about THIS cancelled turn and belongs exactly where
-// the reviewer cancelled it. Its visible badge says "opruimen na afbreken" —
-// the word "checkout" appears nowhere in it, see the naming rule in
-// .claude/docs/workflows-comments.md.
-func offerCancelCleanupIfDirty(ctx context.Context, cm *chat.Module, arg chatTurnInput, dir string) {
-	dirty, err := checkoutIsDirty(ctx, dir)
-	if err != nil || !dirty {
+// It raises the PR's ONE open werkmap choice (chatCheckoutAssignment.Pending,
+// stage checkoutStageDirtyTree) — i.e. the blocking fullscreen overlay
+// (src/workDirOverlay.mjs), answered through the existing "checkoutAnswer"
+// round trip, which already knows how to discard/stash/keep exactly this.
+//
+// It used to save a chat.KindCleanupChoice bubble in the conversation
+// instead. That bubble was easy to miss and impossible to bump into: it
+// scrolled three messages up the moment the reviewer typed anything, while
+// the leftovers it asked about kept every write turn of the PR blocked.
+// Reported that way (PR 13798): the turn was cancelled, the bubble was never
+// answered, and for the next hour every "retry" dead-ended in "een andere
+// Claude-conversatie is deze werkmap nog aan het landen". Reviewer's own
+// rule for the fix: "doe wat ervoor zorgt dat als er iets blokkend is, we het
+// duidelijk zien en niet verder kunnen todat het beantwoord is" — which is
+// exactly what the overlay already guarantees (it has no local way to close,
+// see isWorkDirOverlayOpen). Deliberately ONE exit, not two: no chat bubble
+// is written alongside it any more. chatActionCleanup/applyCancelCleanup
+// stay for a bubble stored before this change, the same way an old
+// chat.KindDirectoryDecision keeps its round trip.
+//
+// Never overwrites a choice that is already open — that one is blocking the
+// PR already, and the reviewer answering it re-classifies the tree anyway.
+func raiseCancelCleanupChoice(ctx context.Context, dataDir string, arg chatTurnInput, dir string) {
+	paths, err := snapshotDirtyPaths(ctx, dir)
+	if err != nil || len(paths) == 0 {
 		return
 	}
-	msg := chat.Message{
-		ID: chatMessageID(arg.TurnID, "cleanup"), ConversationID: arg.ConversationID, PR: arg.PR,
-		Role: "assistant", Kind: chat.KindCleanupChoice,
-		Body:    fmt.Sprintf("De afgebroken beurt liet niet-gecommitte wijzigingen achter in `%s`. Wat wil je daarmee doen?", dir),
-		Options: []string{optDiscard, optStashManual, optStashAuto, optKeepSeparate, optKeepCombined},
+	a := getCheckoutAssignment(dataDir, arg.Repo, arg.PR)
+	if a == nil || a.Pending != nil {
+		return
 	}
-	_ = cm.SaveMessage(ctx, msg)
+	// A dirty state the reviewer already accepted ("Los laten"/"Meenemen in
+	// de commit") is not a question again — same guard the ordinary ladder
+	// applies before raising this very stage (prepareChatShellWorkDirAt).
+	if dirtyAlreadyAccepted(ctx, a) {
+		return
+	}
+	a.Pending = &chatCheckoutDecision{
+		Stage: checkoutStageDirtyTree, Dir: dir,
+		Body:    fmt.Sprintf("De afgebroken beurt liet niet-gecommitte wijzigingen achter in `%s`. Wat moet daarmee gebeuren voordat ik hier iets aanpas?", dir),
+		Options: []string{optDiscard, optStashManual, optStashAuto, optKeepSeparate, optKeepCombined},
+		Paths:   paths,
+	}
+	publishCheckoutChanged(arg.Repo, arg.PR)
 }
 
 // isNeedWriteDirective reports whether text is exactly the strict
@@ -1420,7 +1449,7 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 				// `dir` before the kill reached it — offer to clean that up, but
 				// ONLY when there really is something dirty (reviewer decision:
 				// "alleen aanbieden als er echt iets is aangepast").
-				offerCancelCleanupIfDirty(ctx, cm, arg, dir)
+				raiseCancelCleanupChoice(ctx, dataDir, arg, dir)
 				return msg, nil
 			}
 			return chatFailureMessage(ctx, cm, arg, model, err2), nil

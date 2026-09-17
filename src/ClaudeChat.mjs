@@ -209,7 +209,7 @@ function claudeQuestionOptions(msg, onSend, optionSel, onCleanup) {
   // chat into its own overlay (workDirOverlay.mjs, and the backend half in
   // .claude/docs/workflows-comments.md) — so this branch only ever renders
   // bubbles already in stored history.
-  // 'cleanup_choice' (offerCancelCleanupIfDirty, chat_workflow.go — "what do
+  // 'cleanup_choice' (raiseCancelCleanupChoice, chat_workflow.go — "what do
   // you want to do with what a cancelled turn left behind?") renders the
   // SAME chip row, but a click there must go through onCleanup (the
   // dedicated chatActionCleanup Signal), never onSend/the ordinary

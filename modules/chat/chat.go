@@ -119,7 +119,8 @@ const (
 	KindCancelled = "cancelled"
 	// KindCleanupChoice offers to discard/stash whatever a cancelled shell
 	// attempt left behind in the PR's shared local checkout
-	// (offerCancelCleanupIfDirty, chat_workflow.go) — visually a question
+	// (raiseCancelCleanupChoice, chat_workflow.go, which now raises this as
+	// the werkmap overlay instead) — visually a question
 	// (Options, same rendering as KindQuestion/KindDirectoryDecision), but
 	// answered through its OWN chatActionCleanup Signal action, never through
 	// the ordinary answer/resume round trip: resolving it must never silently
