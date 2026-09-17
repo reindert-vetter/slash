@@ -314,26 +314,35 @@ the ONLY place this feed is shown) moved into the bell's own dropdown.
 Reviewer request: "ik wil de notificatie belletje wat in pr overzicht zit, ook
 zien in pr tree en plan, maar alleen als er iets te klikken is". `src/jiraBell.mjs`
 is a **separate, self-contained module** — its own local `reactive()` store, its
-own `loadJiraNotifications`/`markJiraRead`/`markAllJiraRead`, its own
-`jiraBellButton`/`jiraBellPanel`/`jiraRow` — reusing the exact same read-only
-`GET /api/jira/notifications` and the same `jira_inbox` → `jira_notify` Signal
-writes as this page's own bell, but wired into `home.mjs`'s and `plan.mjs`'s own
-`onKeydown`/mount points instead of into `overview.mjs`'s `state`/`omenu`. This
-is a deliberate, small **duplication**, not a shared-component refactor:
-`overview.mjs`'s own bell is entangled with that page's right-click
-`CommandMenu` (the "Markeer als ongelezen" item) and row-popover keyboard
-model, which `home.mjs`/`plan.mjs` do not have and were not worth adopting just
-for this — `overview.mjs` itself is untouched.
+own `loadJiraNotifications`, its own `jiraBellButton`/`jiraBellPanel`/`jiraRow`
+— reusing the exact same read-only `GET /api/jira/notifications` and the same
+`jira_inbox` → `jira_notify` Signal writes as this page's own bell, but wired
+into `home.mjs`'s and `plan.mjs`'s own `onKeydown`/mount points instead of into
+`overview.mjs`'s `state`/`omenu`. The duplication is deliberate but covers the
+**rendering only**: `overview.mjs`'s own bell is entangled with that page's
+right-click `CommandMenu` and row-popover keyboard model, which
+`home.mjs`/`plan.mjs` do not have. The **writes are not duplicated** — mark
+read / mark unread / mark all read plus their shared just-read grace period
+(`JIRA_READ_RESPITE_MS`/`jiraRespiteActive`/`pruneJiraRespite`) live in
+`src/jiraNotifyActions.mjs`, which both bells import and bind to their own
+store via `createJiraNotifyActions({getItems, setItems, getRunId, setRunId})`
+(Reindert: "gebruik die van de rest. laat het 1 code zijn .mjs ofzo"). Every
+write still goes the sanctioned way: start-or-reuse the `jira_inbox` Execution,
+then Signal it.
 
 - **Gate: hidden unless `jira.length > 0`**, confirmed with Reindert as "at
   least one notification exists, read or unread" — not "at least one unread".
   `overview.mjs`'s own bell has no such gate (it always shows, even empty, and
   says "Geen notificaties." when opened); the two smaller placements hide the
   icon entirely instead, since there is nothing to click there.
-- **Scoped out on purpose**: the right-click "Markeer als ongelezen" menu.
-  Marking read (a row click, the per-row tick, "Alles gelezen maken") works
-  identically everywhere; marking a row unread again is `/pr-overview`-only for
-  now.
+- **Marking a row unread again works here too** (Reindert: "laat meldingen ook
+  ongelezen kunnen zetten"), but as an explicit per-row button
+  (`jiraMarkUnreadButton`, `data-testid=jira-mark-unread`, an undo glyph where
+  a read row would otherwise show nothing) instead of `/pr-overview`'s
+  right-click menu — this bell has no `CommandMenu` of its own to hang one
+  off. Both call the same shared `markUnread`, so the behaviour (optimistic
+  flip, the `forced_unread` override surviving the next poll) is identical.
+  Test: `tests/jira-bell-tree.spec.mjs`.
 - On `/pr/<id>` it is mounted as its own top-level `JiraBellHost`
   (`home.mjs`, sibling of `AppColumns`/`MenuHost`, mounted straight into
   `#app`) — a `fixed right-4 top-4 z-30` corner pinned to the whole page,

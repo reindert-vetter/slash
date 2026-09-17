@@ -11,12 +11,12 @@
 // wired into that page's own `state`/`omenu`/CommandMenu machinery (the
 // right-click "Markeer als ongelezen" menu, the row-popover keyboard model),
 // which home.mjs/plan.mjs do not share and should not be made to share just
-// for this. So this is a second, small implementation of the same read-only
-// feed + the same two writes (mark read / mark all read), reusing the exact
-// same backend (`GET /api/jira/notifications`, the `jira_inbox` tracker's
-// `jira_notify` Signal) — not a refactor of overview.mjs, which stays
-// untouched and is the more feature-complete of the two (it alone still has
-// the right-click "mark as unread" menu; see below).
+// for this. So this is a second, small RENDERING of the same read-only feed,
+// reusing the exact same backend (`GET /api/jira/notifications`, the
+// `jira_inbox` tracker's `jira_notify` Signal). The WRITES themselves are
+// NOT duplicated: mark read / mark unread / mark all read plus their shared
+// just-read grace period live in src/jiraNotifyActions.mjs, which both bells
+// import (Reindert: "gebruik die van de rest. laat het 1 code zijn .mjs ofzo").
 //
 // The ONE new rule for this rollout, which overview.mjs's own bell does NOT
 // have: the icon renders NOTHING at all while there are zero notifications —
@@ -24,15 +24,16 @@
 // has never had a Jira notification never sees a dead bell that only opens
 // to "Geen notificaties." on these two pages. Confirmed with Reindert.
 //
-// Scoped deliberately OUT of this rollout (present only in overview.mjs):
-// the right-click "Markeer als ongelezen" context menu. Marking read (click a
-// row, the per-row tick, or "Alles gelezen maken") is fully available here;
-// marking a row unread again is not, on these two pages, for now.
+// Marking a row unread again IS available here (Reindert: "laat meldingen ook
+// ongelezen kunnen zetten"), but as an explicit per-row button next to the
+// existing tick rather than overview.mjs's right-click menu — this bell has no
+// CommandMenu of its own to hang a context menu off.
 
 import { reactive, html } from './vendor/arrow.js'
 import { t } from './i18n.mjs'
 import { avatarHTML } from './avatar.mjs'
 import { relativeTime } from './relativeTime.mjs'
+import { createJiraNotifyActions, jiraRespiteActive, pruneJiraRespite } from './jiraNotifyActions.mjs'
 
 // bell — this module's own small reactive store, independent of whichever
 // page's `state`/`ui` mounts it.
@@ -44,23 +45,10 @@ const bell = reactive({
   open: false,
 })
 
-// JIRA_READ_RESPITE_MS / jiraReadRespite — the same 5-minute "just read, stay
-// visible" grace period as overview.mjs's own bell (see that file's own doc
-// comment on jiraReadRespite for the full reasoning). Plain, non-reactive
-// module-level Map here too, for the same reason: a display fact, not domain
-// state.
-const JIRA_READ_RESPITE_MS = 5 * 60 * 1000
-const jiraReadRespite = new Map()
-
-function jiraRespiteActive(n) {
-  const at = jiraReadRespite.get(n.id)
-  if (typeof at !== 'number') return false
-  if (Date.now() - at >= JIRA_READ_RESPITE_MS) {
-    jiraReadRespite.delete(n.id)
-    return false
-  }
-  return true
-}
+// The just-read grace period (jiraRespiteActive) and the three writes below
+// come from src/jiraNotifyActions.mjs — one shared implementation with
+// overview.mjs's own bell, so "markeer (on)gelezen" behaves identically on
+// every page. Only the rendering below is this file's own.
 
 function visibleJiraNotifications() {
   if (!bell.jiraUnreadOnly) return bell.jira
@@ -80,59 +68,29 @@ async function loadJiraNotifications() {
     bell.jiraRunId = body.runId || ''
     bell.jira = Array.isArray(body.items) ? body.items : []
     bell.jiraHidden = Number(body.hidden) || 0
-    const liveIds = new Set(bell.jira.map((n) => n.id))
-    for (const id of jiraReadRespite.keys()) {
-      if (!liveIds.has(id)) jiraReadRespite.delete(id)
-    }
+    pruneJiraRespite(bell.jira)
   } catch (err) {
     // Keep whatever was already shown — a transient failure must never blank
     // the list.
   }
 }
 
-async function ensureJiraRunId() {
-  let runId = bell.jiraRunId
-  if (!runId) {
-    const started = await fetch('/api/workflows/jira_inbox', { method: 'POST' })
-    const body = await started.json()
-    runId = (body && body.runId) || ''
-    bell.jiraRunId = runId
-  }
-  return runId
-}
-
-async function markJiraRead(n) {
-  if (!n || !n.unread) return
-  jiraReadRespite.set(n.id, Date.now())
-  bell.jira = bell.jira.map((it) => (it.id === n.id ? { ...it, unread: false } : it))
-  try {
-    const runId = await ensureJiraRunId()
-    if (!runId) return
-    await fetch('/api/workflows/' + encodeURIComponent(runId) + '/signals/jira_notify', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ kind: 'read', id: n.id }),
-    })
-  } catch (err) {
-    console.error('mark jira notification read failed:', err)
-  }
-}
-
-async function markAllJiraRead() {
-  if (!jiraUnreadCount()) return
-  bell.jira = bell.jira.map((it) => (it.unread ? { ...it, unread: false } : it))
-  try {
-    const runId = await ensureJiraRunId()
-    if (!runId) return
-    await fetch('/api/workflows/' + encodeURIComponent(runId) + '/signals/jira_notify', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ kind: 'read_all' }),
-    })
-  } catch (err) {
-    console.error('mark all jira notifications read failed:', err)
-  }
-}
+// The three writes this bell does, bound to its own `bell` store — one shared
+// implementation (src/jiraNotifyActions.mjs), identical to the overview bell's.
+const {
+  markRead: markJiraRead,
+  markUnread: markJiraUnread,
+  markAllRead: markAllJiraRead,
+} = createJiraNotifyActions({
+  getItems: () => bell.jira,
+  setItems: (list) => {
+    bell.jira = list
+  },
+  getRunId: () => bell.jiraRunId,
+  setRunId: (id) => {
+    bell.jiraRunId = id
+  },
+})
 
 function closeJiraBell() {
   bell.open = false
@@ -177,6 +135,33 @@ function jiraMarkReadButton(n) {
   >
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-3.5 w-3.5">
       <path d="M20 6 9 17l-5-5"></path>
+    </svg>
+  </button>`
+}
+
+// jiraMarkUnreadButton — jiraMarkReadButton's mirror, shown on a row that is
+// already read: it puts the notification back to unread (the shared
+// markJiraUnread, so it behaves exactly like overview.mjs's right-click
+// "Markeer als ongelezen"). Per the colourblind rule the SHAPE and the WORD
+// carry it: a different glyph (an undo arrow, not the tick) plus its own
+// title, never a colour difference. Same nested-@click ordering rule as its
+// sibling — preventDefault/stopPropagation FIRST, before the state mutation,
+// because it sits inside the row's own <a>.
+function jiraMarkUnreadButton(n) {
+  return html`<button
+    type="button"
+    data-testid="jira-mark-unread"
+    title="${t('Markeer als ongelezen')}"
+    class="rounded-md p-0.5 text-slate-400 hover:bg-slate-100 hover:text-indigo-600 dark:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-indigo-400"
+    @click="${(e) => {
+      e.preventDefault()
+      e.stopPropagation()
+      markJiraUnread(n)
+    }}"
+  >
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-3.5 w-3.5">
+      <path d="M3 7v6h6"></path>
+      <path d="M21 17a9 9 0 0 0-15-6.7L3 13"></path>
     </svg>
   </button>`
 }
@@ -238,7 +223,7 @@ function jiraRow(n) {
         <div class="contents">${() => preview}</div>
       </div>
       <div class="flex shrink-0 items-center gap-2 self-start pt-0.5">
-        <div class="contents">${() => (n.unread ? jiraMarkReadButton(n) : '')}</div>
+        <div class="contents">${() => (n.unread ? jiraMarkReadButton(n) : jiraMarkUnreadButton(n))}</div>
         ${() => jiraUnreadMark(n)}
       </div>
     </a>

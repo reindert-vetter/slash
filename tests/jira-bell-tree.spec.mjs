@@ -68,6 +68,49 @@ test.describe('/pr/<id> — Jira bell, fixed top-right corner', () => {
     await expect(page.locator('[data-testid="jira-bell-panel"]')).toBeVisible()
   })
 
+  // Marking a row read and then UNREAD again, from the bell's own per-row
+  // buttons — the writes themselves are the shared ones in
+  // src/jiraNotifyActions.mjs (used by /pr-overview's bell too), so this only
+  // pins that this bell really offers both directions and updates optimistically.
+  test('a row can be marked read and then unread again', async ({ page }) => {
+    await stubNotifications(page, [
+      {
+        id: '1',
+        at: new Date().toISOString(),
+        title: 'Notification',
+        issueKey: 'AB-1',
+        actor: '',
+        avatarUrl: '',
+        url: 'https://example.atlassian.net/browse/AB-1',
+        unread: true,
+      },
+    ])
+    // The jira_notify writes go to the jira_inbox tracker; stub both hops so
+    // the test asserts the UI, not the tracker (which has its own Go tests).
+    const signals = []
+    await page.route('**/api/workflows/jira_inbox', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, runId: 'fake-run' }) }),
+    )
+    await page.route('**/signals/jira_notify', async (route) => {
+      signals.push(JSON.parse(route.request().postData() || '{}'))
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) })
+    })
+
+    await page.goto('/pr/12903')
+    await appReady(page)
+    await page.locator('[data-testid="jira-bell-button"]').click()
+    await expect(page.locator('[data-testid="jira-unread-dot"]')).toHaveCount(1)
+
+    await page.locator('[data-testid="jira-mark-read"]').click()
+    await expect(page.locator('[data-testid="jira-unread-dot"]')).toHaveCount(0)
+    await expect(page.locator('[data-testid="jira-mark-unread"]')).toHaveCount(1)
+
+    await page.locator('[data-testid="jira-mark-unread"]').click()
+    await expect(page.locator('[data-testid="jira-unread-dot"]')).toHaveCount(1)
+    await expect(page.locator('[data-testid="jira-mark-read"]')).toHaveCount(1)
+    await expect.poll(() => signals.map((s) => s.kind)).toEqual(['read', 'unread'])
+  })
+
   test('renders nothing when there are no notifications', async ({ page }, testInfo) => {
     const pr = seededPr(testInfo)
     await stubNotifications(page, [])

@@ -17,6 +17,7 @@ import { ensureAutoWarn, autoWarnToggleButton } from './autowarn.mjs'
 import { settingsButton } from './settingsLink.mjs'
 import { assigneeMark, avatarHTML, avatarUrlOf, displayNameOf, ensureMe, ensureNames, fullNameOf, meLogin } from './avatar.mjs'
 import { relativeTime } from './relativeTime.mjs'
+import { createJiraNotifyActions, jiraRespiteActive, pruneJiraRespite } from './jiraNotifyActions.mjs'
 import { fetchProblems, problemRunRow, problemLogRow } from './problems.mjs'
 import FailedTasksHost, { initFailedTasksPopup, isFailedTasksOpen, handleFailedTasksKeydown } from './failedTasks.mjs'
 import AuthStatusHost, { initAuthStatusPopup, isAuthProblemOpen, handleAuthProblemKeydown } from './authStatus.mjs'
@@ -2096,56 +2097,19 @@ async function loadJiraNotifications() {
     // already the visible set — this is only there to SAY so, in words, rather
     // than leaving rows to vanish unexplained.
     state.jiraHidden = Number(body.hidden) || 0
-    // A notification that dropped out of the read-model entirely (purged, see
-    // .claude/docs/workflows-trackers.md's jira_inbox retention) can never be
-    // shown again, grace period or not — drop its stray map entry so
-    // jiraReadRespite doesn't grow forever across a long session.
-    const liveIds = new Set(state.jira.map((n) => n.id))
-    for (const id of jiraReadRespite.keys()) {
-      if (!liveIds.has(id)) jiraReadRespite.delete(id)
-    }
+    // Drop stray grace-period entries for notifications that dropped out of
+    // the read-model entirely (purged) — see pruneJiraRespite.
+    pruneJiraRespite(state.jira)
   } catch (err) {
     // Keep whatever we already showed — a transient failure must never blank
     // the list (same reasoning as loadRunningCount).
   }
 }
 
-// A just-read notification stays visible for a short grace period instead of
-// vanishing the instant "Alleen ongelezen" is on (Reindert: "met alleen
-// ongelezen aan verdwijnt een item nu meteen zodra het gelezen is — ook door
-// je eigen klik — en dan ben je je context kwijt op het moment dat je erop
-// klikt"). JIRA_READ_RESPITE_MS is that grace period.
-//
-// It counts from the moment THIS TAB marked the row read (markJiraRead's own
-// Date.now(), not a server timestamp — the read-model's read_at column exists
-// but is never sent to the client, see modules/jiranotify's Item, and adding
-// that would be a new field for a purely client-side display grace period).
-// A row that's genuinely still unread never enters this map at all.
-//
-// jiraReadRespite is deliberately a PLAIN, non-reactive module-level Map, not
-// state — this is a display fact, not domain state (.claude/rules/
-// workflows-write-boundary.md: only a workflow writes anything durable, and
-// this writes nothing at all). It therefore does NOT survive a page refresh
-// (the module reinitializes, the map is empty again) — a refresh mid-grace
-// simply ends the grace early rather than "coming back" or restarting the
-// countdown, which is the explicit request. It also isn't wiped by
-// loadJiraNotifications' periodic `state.jira = ...` reassignment, unlike a
-// reactive property would be, so the grace period survives the ordinary
-// 60s poll.
-const JIRA_READ_RESPITE_MS = 5 * 60 * 1000
-const jiraReadRespite = new Map() // notification id -> Date.now() when marked read here
-
-// jiraRespiteActive: is this row still within its own grace period. Lazily
-// forgets an expired entry so the map never grows with stale ids.
-function jiraRespiteActive(n) {
-  const at = jiraReadRespite.get(n.id)
-  if (typeof at !== 'number') return false
-  if (Date.now() - at >= JIRA_READ_RESPITE_MS) {
-    jiraReadRespite.delete(n.id)
-    return false
-  }
-  return true
-}
+// The just-read grace period (JIRA_READ_RESPITE_MS/jiraRespiteActive) and the
+// three writes below live in src/jiraNotifyActions.mjs, shared verbatim with
+// the small bell on /pr/<id> and /plan/<KEY> (jiraBell.mjs) — see that file's
+// own doc comments for the full reasoning behind each.
 
 // visibleJiraNotifications applies the "Alleen ongelezen" filter — a row
 // stays visible while it's genuinely unread OR still in its own read-grace
@@ -2164,100 +2128,24 @@ function jiraUnreadCount() {
   return state.jira.filter((n) => n.unread).length
 }
 
-// ensureJiraRunId starts (or reuses) the single jira_inbox Execution and
-// returns its Run ID — the write target every jira_notify Signal needs.
-// Shared by markJiraRead and markAllJiraRead so there's only one place that
-// knows how to bootstrap the tracker.
-async function ensureJiraRunId() {
-  let runId = state.jiraRunId
-  if (!runId) {
-    const started = await fetch('/api/workflows/jira_inbox', { method: 'POST' })
-    const body = await started.json()
-    runId = (body && body.runId) || ''
-    state.jiraRunId = runId
-  }
-  return runId
-}
-
-// markJiraRead is one of the two writes this page does, and it goes the
-// sanctioned way: start (or reuse) the jira_inbox Execution, then Signal it —
-// the tracker's own Activity is what touches the read-model
-// (.claude/rules/workflows-write-boundary.md). The row is updated optimistically
-// so the filter reacts immediately; the next poll confirms it. Two callers:
-// opening the row (jiraRow's own @click) and the explicit per-row tick
-// (jiraMarkReadButton) — both just call this with the same notification.
-// Both callers (the row's own click and the per-row tick) start this row's
-// read-grace period (see jiraReadRespite above) — a reviewer clicking a row
-// to open it is exactly the case that must not vanish out from under them.
-async function markJiraRead(n) {
-  if (!n || !n.unread) return
-  jiraReadRespite.set(n.id, Date.now())
-  state.jira = state.jira.map((it) => (it.id === n.id ? { ...it, unread: false } : it))
-  try {
-    const runId = await ensureJiraRunId()
-    if (!runId) return
-    await fetch('/api/workflows/' + encodeURIComponent(runId) + '/signals/jira_notify', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ kind: 'read', id: n.id }),
-    })
-  } catch (err) {
-    console.error('mark jira notification read failed:', err)
-  }
-}
-
-// markAllJiraRead is the "Alles gelezen maken" bulk action (jiraMarkAllReadButton)
-// — the other write this page does, same shape as markJiraRead but for every
-// currently unread row at once via the "read_all" signal kind.
-// Deliberately does NOT start a read-grace period for the rows it clears
-// (unlike markJiraRead): "Alles gelezen maken" is itself the explicit "I'm
-// done looking at these" action, the opposite of the single-row-click case
-// the grace period exists for — granting it here would make the button not
-// actually clear the "Alleen ongelezen" list.
-async function markAllJiraRead() {
-  if (!jiraUnreadCount()) return
-  state.jira = state.jira.map((it) => (it.unread ? { ...it, unread: false } : it))
-  try {
-    const runId = await ensureJiraRunId()
-    if (!runId) return
-    await fetch('/api/workflows/' + encodeURIComponent(runId) + '/signals/jira_notify', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ kind: 'read_all' }),
-    })
-  } catch (err) {
-    console.error('mark all jira notifications read failed:', err)
-  }
-}
-
-// markJiraUnread is markJiraRead's mirror — the reviewer's right-click
-// "Markeer als ongelezen" (Reindert: "ik wil rechtermuisknop kunnen drukken en
-// het op ongelezen kunnen markeren"). Same sanctioned write path as the other
-// two: start (or reuse) the jira_inbox Execution, then Signal it with the
-// "unread" kind; the tracker's own Activity is the only thing that touches the
-// read-model (.claude/rules/workflows-write-boundary.md). Optimistic locally so
-// the row, the "N ongelezen" counter and the "Alleen ongelezen" filter react on
-// the spot; the next poll confirms it (the backend keeps a local
-// forced_unread override precisely so a poll cannot undo it — see
-// modules/jiranotify).
-async function markJiraUnread(n) {
-  if (!n || n.unread) return
-  // Forget any leftover grace-period entry: the row is unread again now, so
-  // there is nothing left to hold it visible past its own real unread state.
-  jiraReadRespite.delete(n.id)
-  state.jira = state.jira.map((it) => (it.id === n.id ? { ...it, unread: true } : it))
-  try {
-    const runId = await ensureJiraRunId()
-    if (!runId) return
-    await fetch('/api/workflows/' + encodeURIComponent(runId) + '/signals/jira_notify', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ kind: 'unread', id: n.id }),
-    })
-  } catch (err) {
-    console.error('mark jira notification unread failed:', err)
-  }
-}
+// The three writes this page does, bound to its own `state` — one shared
+// implementation (src/jiraNotifyActions.mjs), used by both bells. markJiraRead
+// has two callers here (opening the row, and the per-row tick), markJiraUnread
+// is its mirror behind the right-click menu, markAllJiraRead the bulk action.
+const {
+  markRead: markJiraRead,
+  markUnread: markJiraUnread,
+  markAllRead: markAllJiraRead,
+} = createJiraNotifyActions({
+  getItems: () => state.jira,
+  setItems: (list) => {
+    state.jira = list
+  },
+  getRunId: () => state.jiraRunId,
+  setRunId: (id) => {
+    state.jiraRunId = id
+  },
+})
 
 // jiraUnreadMark — the unread signal, on the RIGHT edge of the row (mirroring
 // Jira's own layout — the dot sits there, not next to the avatar). Per the
