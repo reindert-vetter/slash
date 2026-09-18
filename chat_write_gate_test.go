@@ -13,14 +13,14 @@ import (
 // (and says so, once) instead of being refused, and gets the slot as soon as
 // the first releases.
 func TestWriteTurnSlotSerializesAndWaits(t *testing.T) {
-	release := acquireWriteTurnSlot(context.Background(), "pr:1", func() {
+	release := acquireWriteTurnSlot(context.Background(), "pr:1", "first", func() {
 		t.Fatal("the first code turn must not have to wait")
 	})
 
 	waited := make(chan struct{}, 4)
 	got := make(chan struct{})
 	go func() {
-		r2 := acquireWriteTurnSlot(context.Background(), "pr:1", func() { waited <- struct{}{} })
+		r2 := acquireWriteTurnSlot(context.Background(), "pr:1", "first", func() { waited <- struct{}{} })
 		close(got)
 		r2()
 	}()
@@ -50,13 +50,13 @@ func TestWriteTurnSlotSerializesAndWaits(t *testing.T) {
 // A cancelled context gives up waiting rather than blocking forever; the
 // returned release is then a no-op that must not free someone else's slot.
 func TestWriteTurnSlotGivesUpOnCancelledContext(t *testing.T) {
-	release := acquireWriteTurnSlot(context.Background(), "pr:2", nil)
+	release := acquireWriteTurnSlot(context.Background(), "pr:2", "first", nil)
 	defer release()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	done := make(chan func())
-	go func() { done <- acquireWriteTurnSlot(ctx, "pr:2", func() {}) }()
+	go func() { done <- acquireWriteTurnSlot(ctx, "pr:2", "second", func() {}) }()
 	select {
 	case r := <-done:
 		r() // no-op: must not release the slot the first turn still holds
@@ -77,14 +77,14 @@ func TestWriteTurnSlotGivesUpOnCancelledContext(t *testing.T) {
 // than process-wide: an action on PR X must never be held up by a write turn
 // on unrelated PR Y.
 func TestWriteTurnSlotDoesNotSerializeAcrossDifferentKeys(t *testing.T) {
-	release := acquireWriteTurnSlot(context.Background(), "pr:10", func() {
+	release := acquireWriteTurnSlot(context.Background(), "pr:10", "first", func() {
 		t.Fatal("the first PR's own turn must not have to wait for itself")
 	})
 	defer release()
 
 	done := make(chan struct{})
 	go func() {
-		r2 := acquireWriteTurnSlot(context.Background(), "pr:20", func() {
+		r2 := acquireWriteTurnSlot(context.Background(), "pr:20", "second", func() {
 			t.Error("a different key must never report waiting on an unrelated key's slot")
 		})
 		r2()
@@ -179,4 +179,122 @@ func TestCheckoutWaitFallbackWorkflowWakesTheWaitingRun(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("checkoutWaitFallbackWorkflow never woke the waiting run after its own delay elapsed")
 	}
+}
+
+// TestWriteTurnSlotForceReleasesStaleHolder: a holder that never calls its
+// own release() (a crashed/permanently wedged goroutine — exactly the
+// reported "hij wacht op een andere chat, maar die kan ik niet stoppen"
+// symptom) must not wedge a WAITING acquire forever once the holder has
+// crossed writeTurnStaleTimeout — the whole point of forceReleaseStaleWriteTurnSlot.
+func TestWriteTurnSlotForceReleasesStaleHolder(t *testing.T) {
+	origTimeout, origInterval := writeTurnStaleTimeout, writeTurnStaleCheckInterval
+	writeTurnStaleTimeout = 30 * time.Millisecond
+	writeTurnStaleCheckInterval = 5 * time.Millisecond
+	t.Cleanup(func() { writeTurnStaleTimeout, writeTurnStaleCheckInterval = origTimeout, origInterval })
+
+	const key = "pr:stale-1"
+	// The "abandoned" holder: acquired, then simply never releases.
+	_ = acquireWriteTurnSlot(context.Background(), key, "abandoned", nil)
+
+	done := make(chan func())
+	go func() { done <- acquireWriteTurnSlot(context.Background(), key, "waiter", func() {}) }()
+
+	select {
+	case r := <-done:
+		r()
+	case <-time.After(2 * time.Second):
+		t.Fatal("a stale holder should have been force-released, but the waiter never got the slot")
+	}
+}
+
+// TestWriteTurnSlotDoesNotForceReleaseFreshHolder: the mirror image — a
+// holder that is well within writeTurnStaleTimeout must NOT be force-released
+// just because something is waiting; the waiter keeps waiting until either
+// the real release or the timeout, whichever comes first.
+func TestWriteTurnSlotDoesNotForceReleaseFreshHolder(t *testing.T) {
+	origTimeout, origInterval := writeTurnStaleTimeout, writeTurnStaleCheckInterval
+	writeTurnStaleTimeout = 2 * time.Second
+	writeTurnStaleCheckInterval = 5 * time.Millisecond
+	t.Cleanup(func() { writeTurnStaleTimeout, writeTurnStaleCheckInterval = origTimeout, origInterval })
+
+	const key = "pr:stale-2"
+	release := acquireWriteTurnSlot(context.Background(), key, "fresh holder", nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	got := acquireWriteTurnSlot(ctx, key, "waiter", func() {})
+	got() // no-op: the context timed out well before writeTurnStaleTimeout
+
+	// The original holder must still hold the ONE token: a non-blocking send
+	// must fail.
+	ch := writeTurnSlotChan(key)
+	select {
+	case ch <- struct{}{}:
+		<-ch
+		t.Fatal("a fresh holder's slot was force-released early")
+	default:
+	}
+	release()
+}
+
+// TestWriteTurnSlotForceReleaseIsIdempotentAgainstTheRealHolder: the race
+// forceReleaseStaleWriteTurnSlot's CompareAndSwap guards against — a holder
+// that gets force-released for having gone stale, but was not actually dead
+// and eventually calls its own deferred release() anyway, must never drain a
+// LATER, unrelated holder's token. Without the CAS guard this would let two
+// acquires succeed concurrently for the same key.
+func TestWriteTurnSlotForceReleaseIsIdempotentAgainstTheRealHolder(t *testing.T) {
+	origTimeout := writeTurnStaleTimeout
+	writeTurnStaleTimeout = 10 * time.Millisecond
+	t.Cleanup(func() { writeTurnStaleTimeout = origTimeout })
+
+	const key = "pr:stale-3"
+	release1 := acquireWriteTurnSlot(context.Background(), key, "holder-1", nil)
+
+	time.Sleep(20 * time.Millisecond) // cross writeTurnStaleTimeout
+	if !forceReleaseStaleWriteTurnSlot(key) {
+		t.Fatal("expected forceReleaseStaleWriteTurnSlot to free the stale holder's slot")
+	}
+
+	// A brand new holder takes the freed slot.
+	release2 := acquireWriteTurnSlot(context.Background(), key, "holder-2", nil)
+
+	// holder-1's own (late, but real) release fires now — must be a no-op.
+	release1()
+
+	// holder-2's slot must still be held: a non-blocking send must fail.
+	ch := writeTurnSlotChan(key)
+	select {
+	case ch <- struct{}{}:
+		<-ch
+		t.Fatal("holder-1's late release incorrectly drained holder-2's token")
+	default:
+	}
+	release2()
+}
+
+// TestForceReleaseCheckoutWriteSlotRespectsStaleness: the manual "Forceer
+// vrijgeven" endpoint (handleCheckoutForceRelease -> forceReleaseCheckoutWriteSlot)
+// must be a no-op against a holder that hasn't gone stale yet, and must
+// actually free it once it has -- the same staleness bar as the automatic
+// check, never an unconditional kill switch.
+func TestForceReleaseCheckoutWriteSlotRespectsStaleness(t *testing.T) {
+	origTimeout := writeTurnStaleTimeout
+	writeTurnStaleTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { writeTurnStaleTimeout = origTimeout })
+
+	dataDir := t.TempDir()
+	const repo = ""
+	const pr = 999001
+	release := acquireCheckoutWriteSlot(context.Background(), dataDir, repo, pr, "holder", nil)
+
+	if forceReleaseCheckoutWriteSlot(dataDir, repo, pr) {
+		t.Fatal("expected no-op: the holder has not gone stale yet")
+	}
+
+	time.Sleep(30 * time.Millisecond)
+	if !forceReleaseCheckoutWriteSlot(dataDir, repo, pr) {
+		t.Fatal("expected the stale holder's slot to be freed")
+	}
+	release() // now a no-op (already force-released) -- must not panic or block
 }

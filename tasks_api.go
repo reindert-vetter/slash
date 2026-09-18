@@ -1032,6 +1032,16 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// werkmap overlay while its own answer is in flight — purely cosmetic,
 	// same carve-out as /api/ingest/progress.
 	mux.HandleFunc("/api/chat/checkout/progress", s.handleCheckoutProgress)
+	// POST /api/checkout/force-release {pr} -> the manual counterpart of the
+	// automatic staleness check in chat_write_gate.go: drain this PR's
+	// checkout write-slot IF its current holder has already crossed
+	// writeTurnStaleTimeout. Same operational, mutates-no-durable-state
+	// carve-out as /api/chat/cancel (see that route's own comment) -- it only
+	// touches the in-memory writeTurnHolders/writeTurnSlots bookkeeping,
+	// never history/module/DB, and it applies the exact same staleness bar an
+	// automatic check would eventually apply on its own, so a reviewer can
+	// never use this to interrupt a turn that is merely slow.
+	mux.HandleFunc("/api/checkout/force-release", s.handleCheckoutForceRelease)
 	// GET /api/pending-push?prs=N[,N…] → read-only: which of these PRs have
 	// landed chat edits that are not pushed to GitHub yet (pending_push.go).
 	// Purely local git reads (for-each-ref/rev-list/diff), no gh call, no
@@ -3091,6 +3101,32 @@ func (s *server) handleCheckoutProgress(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "pr": pr, "steps": checkoutProgressSteps(queryRepo(r), pr)})
+}
+
+// handleCheckoutForceRelease serves POST /api/checkout/force-release {pr} —
+// see the route registration above for why this needs no workflow. Reports
+// {ok, freed} where freed is false whenever there was nothing to free (no
+// holder at all, or one that hasn't crossed writeTurnStaleTimeout yet) — not
+// an error, mirroring handleChatCancel's own "cancelled: false" non-error
+// shape for "nothing running".
+func (s *server) handleCheckoutForceRelease(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		PR int `json:"pr"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	if body.PR <= 0 {
+		http.Error(w, "pr required", http.StatusBadRequest)
+		return
+	}
+	freed := forceReleaseCheckoutWriteSlot(s.tasks.manager.dataDir, queryRepo(r), body.PR)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "freed": freed})
 }
 
 func (s *server) handlePendingPush(w http.ResponseWriter, r *http.Request) {

@@ -121,6 +121,24 @@ stores are, and this only reports what they answer right now. The FIX is a real
 write and goes the sanctioned way — the settings page signals the `app_settings`
 tracker (Kind `"jiraCreds"`), whose Activity writes `.env`.
 
+Ninth example: `POST /api/checkout/force-release` (`chat_write_gate.go`'s
+`forceReleaseCheckoutWriteSlot`, called from `handleCheckoutForceRelease`,
+`tasks_api.go`) — the manual "Forceer vrijgeven" command on the checkout chip
+(`checkoutChipCommandsFor`, `src/home.mjs`), the reviewer-facing counterpart
+of the automatic staleness check `acquireWriteTurnSlot` already runs on its
+own poll cadence (see `writeTurnStaleTimeout`'s own doc comment for the
+measured-history reasoning behind the timeout). It only mutates
+`writeTurnSlots`/`writeTurnHolders`, two purely in-memory maps — no module,
+no read-model, no workflow-history write — and both are empty again after a
+restart, the same shape as `chatCancelByConv`. Safe because it is not the
+source of truth about anything: the checkout's real git state is, and a
+force-release only frees the semaphore token, never touches a file. It also
+cannot be used to interrupt a turn that is merely slow: it applies the exact
+same staleness bar (`writeTurnStaleTimeout`) the automatic check does, so
+pressing it against a fresh holder is a harmless, reported no-op. See
+"Cancelling a running turn" / the write-turn slot's own staleness section in
+`.claude/docs/claude-chat-panel.md`.
+
 ## Exception: the Claude chat turn may act through a shell
 
 Deliberately granted by Reindert, overriding the rule above for this one path.

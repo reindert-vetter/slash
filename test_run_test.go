@@ -137,7 +137,7 @@ func TestRunTestRunCancelWhileWaitingForWriteSlot(t *testing.T) {
 	// acquireWriteTurnSlot call has to wait for it, exactly like a concurrent
 	// code-editing chat turn on the SAME PR would.
 	dataDir := t.TempDir()
-	release := acquireWriteTurnSlot(context.Background(), checkoutWriteSlotKey(dataDir, repo, pr), nil)
+	release := acquireWriteTurnSlot(context.Background(), checkoutWriteSlotKey(dataDir, repo, pr), "test: other holder", nil)
 	defer release()
 
 	done := make(chan testRunResult, 1)

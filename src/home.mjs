@@ -5173,6 +5173,28 @@ async function sendCheckoutAction(action, reply, extra) {
   loadCheckout()
 }
 
+// forceReleaseCheckoutSlot — the manual counterpart of the automatic
+// staleness check chat_write_gate.go already runs on its own poll cadence.
+// POST /api/checkout/force-release, deliberately NOT sendCheckoutAction's
+// workflow-Signal path (this touches no workflow/module state, only the
+// in-memory write-slot bookkeeping — same operational carve-out as
+// cancelClaudeTurn's POST /api/chat/cancel, see chat_write_gate.go's own doc
+// comment). Best-effort: loadCheckout() re-polls regardless, so a dropped
+// request here just means the chip keeps showing "Wachten…" a little
+// longer, same class of failure as any other network hiccup in this app.
+async function forceReleaseCheckoutSlot() {
+  try {
+    await fetch('/api/checkout/force-release', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pr: state.pr, repo: state.repo }),
+    })
+  } catch (_) {
+    /* best-effort */
+  }
+  loadCheckout()
+}
+
 // loadExplanations fetches the PR's AI unit-explanations into state (keyed
 // `${blockId}|${unitKey}`). Best-effort: a transient failure just yields no
 // rows. Reassigns the map wholesale so the footer watch re-fires when a
@@ -8587,6 +8609,24 @@ function checkoutChipCommandsFor() {
       label: t('Nu terugzetten (eerder opgeslagen wijziging)'),
       hint: 'stash',
       run: () => sendCheckoutAction('checkoutRestoreStash'),
+    })
+  }
+  // "Forceer vrijgeven" — only while c.waiting: something is genuinely
+  // queued behind the write-slot right now, so there's something to free.
+  // Always offered while waiting (even before c.holderStale), same
+  // reasoning as the retry item elsewhere in this menu: the endpoint itself
+  // only actually frees anything once the holder has crossed
+  // writeTurnStaleTimeout (chat_write_gate.go), so pressing it early is a
+  // harmless no-op, not a footgun — the label just tells the reviewer
+  // upfront whether it's likely to do anything yet.
+  if (c.waiting) {
+    items.push({
+      id: 'checkout-force-release',
+      label: c.holderStale
+        ? t('Forceer vrijgeven (werkmap lijkt vast te lopen)')
+        : t('Forceer vrijgeven (nog niet lang genoeg vast — waarschijnlijk nog geen effect)'),
+      hint: 'forceer',
+      run: () => forceReleaseCheckoutSlot(),
     })
   }
   items.push({
@@ -16445,7 +16485,20 @@ function checkoutChipTitle() {
   const c = state.checkout
   if (!c) return t('Werkmap voor Claude-aanpassingen: nog niet geladen')
   if (c.decision) return c.decision.body || t('Er moet iets over de werkmap worden besloten')
-  if (c.waiting) return t('Een andere chat-bewerking van deze PR gebruikt de werkmap nu — dit wacht tot die klaar is.')
+  if (c.waiting) {
+    // c.holderLabel names whoever chat_write_gate.go currently has holding
+    // this checkout's write-slot (buildCheckoutView) — added after a
+    // reviewer report where the wait had no visible "who": "hij wacht op
+    // een andere chat, maar die kan ik niet stoppen". Falls back to the
+    // original generic sentence when there's genuinely nothing recorded
+    // (e.g. right at server start, before any holder has ever been tracked).
+    if (c.holderLabel) {
+      return c.holderStale
+        ? t('Wacht op: {holder} — dit lijkt al een tijd vast te zitten. Via het menu kun je het geforceerd vrijgeven.', { holder: c.holderLabel })
+        : t('Wacht op: {holder}', { holder: c.holderLabel })
+    }
+    return t('Een andere chat-bewerking van deze PR gebruikt de werkmap nu — dit wacht tot die klaar is.')
+  }
   if (c.dir) return c.branch ? t('Claude werkt in {dir} (branch {branch})', { dir: c.dir, branch: c.branch }) : t('Claude werkt in {dir}', { dir: c.dir })
   return t('Geen werkmap gekoppeld — klik om een werkmap te kiezen')
 }

@@ -2647,6 +2647,22 @@ type checkoutView struct {
 	// its OWN visible progress line open right now, per the reviewer
 	// requirement that a wait must always be a visible word, never silent.
 	Waiting bool `json:"waiting,omitempty"`
+	// HolderLabel names whoever currently holds this checkout's write-turn
+	// slot (chat_write_gate.go's writeTurnHolders) — empty when nothing is
+	// held right now. Read directly, not gated behind Waiting: a reviewer
+	// who is NOT currently waiting on anything can still ask "who's actually
+	// using it" (e.g. right before starting a turn of their own). Lets the
+	// checkout chip name the other conversation/action instead of a bare
+	// "Wachten…" (see checkoutChipTitle, src/home.mjs) — reviewer report:
+	// "hij wacht op een andere chat, maar die kan ik niet stoppen" had no way
+	// to even see WHICH other chat it was waiting on.
+	HolderLabel string `json:"holderLabel,omitempty"`
+	// HolderStale mirrors forceReleaseStaleWriteTurnSlot's own staleness bar
+	// (writeTurnStaleTimeout) so the "Forceer vrijgeven" command
+	// (checkoutChipCommandsFor) can tell the reviewer whether pressing it
+	// right now would actually do anything, instead of the request silently
+	// no-op'ing when the holder is merely slow.
+	HolderStale bool `json:"holderStale,omitempty"`
 }
 
 // buildCheckoutView reads this PR's assignment (in-memory, seeded from the
@@ -2661,6 +2677,10 @@ func buildCheckoutView(dataDir, repo string, pr int) checkoutView {
 		PendingFiles:    chatPendingEditedFilesFor(repo, pr),
 		RefreshingFiles: chatRefreshPendingFilesFor(repo, pr),
 		Waiting:         isCheckoutWaiting(repo, pr),
+	}
+	if label, stale, ok := currentWriteTurnHolder(checkoutWriteSlotKey(dataDir, repo, pr)); ok {
+		v.HolderLabel = label
+		v.HolderStale = stale
 	}
 	a := getCheckoutAssignment(dataDir, repo, pr)
 	if a == nil {

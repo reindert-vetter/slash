@@ -3548,7 +3548,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		// caller that does).
 		clearCheckoutProgress(arg.Repo, arg.PR)
 		ctx = withCheckoutProgress(ctx, arg.Repo, arg.PR)
-		release := acquireCheckoutWriteSlot(ctx, m.dataDir, arg.Repo, arg.PR, func() {
+		release := acquireCheckoutWriteSlot(ctx, m.dataDir, arg.Repo, arg.PR, "landing chat edits", func() {
 			appendCheckoutWaitingStep(arg.Repo, arg.PR)
 			advanceChatProgress(arg.Repo, arg.PR, arg.ConversationID, chatPhaseWaiting)
 		})
@@ -3597,7 +3597,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		// progress panel (checkout_progress.go) — see its own doc comment.
 		clearCheckoutProgress(arg.Repo, arg.PR)
 		ctx = withCheckoutProgress(ctx, arg.Repo, arg.PR)
-		release := acquireCheckoutWriteSlot(ctx, m.dataDir, arg.Repo, arg.PR, func() {
+		release := acquireCheckoutWriteSlot(ctx, m.dataDir, arg.Repo, arg.PR, "checkout: choosing another directory", func() {
 			appendCheckoutWaitingStep(arg.Repo, arg.PR)
 		})
 		defer release()
@@ -3612,7 +3612,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		}
 		clearCheckoutProgress(arg.Repo, arg.PR)
 		ctx = withCheckoutProgress(ctx, arg.Repo, arg.PR)
-		release := acquireCheckoutWriteSlot(ctx, m.dataDir, arg.Repo, arg.PR, func() {
+		release := acquireCheckoutWriteSlot(ctx, m.dataDir, arg.Repo, arg.PR, "checkout: answering a pending choice", func() {
 			appendCheckoutWaitingStep(arg.Repo, arg.PR)
 		})
 		defer release()
@@ -3629,7 +3629,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			return nil, err
 		}
 		clearCheckoutProgress(arg.Repo, arg.PR)
-		release := acquireCheckoutWriteSlot(ctx, m.dataDir, arg.Repo, arg.PR, func() {
+		release := acquireCheckoutWriteSlot(ctx, m.dataDir, arg.Repo, arg.PR, "checkout: turning it off", func() {
 			appendCheckoutWaitingStep(arg.Repo, arg.PR)
 		})
 		defer release()
@@ -3644,7 +3644,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		}
 		clearCheckoutProgress(arg.Repo, arg.PR)
 		ctx = withCheckoutProgress(ctx, arg.Repo, arg.PR)
-		release := acquireCheckoutWriteSlot(ctx, m.dataDir, arg.Repo, arg.PR, func() {
+		release := acquireCheckoutWriteSlot(ctx, m.dataDir, arg.Repo, arg.PR, "checkout: restoring a stash", func() {
 			appendCheckoutWaitingStep(arg.Repo, arg.PR)
 		})
 		defer release()

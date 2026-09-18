@@ -614,7 +614,7 @@ func (m *TaskManager) runPlanExecuteAgent(ctx context.Context, arg planExecuteAg
 	// same per-directory slot (chat_write_gate.go / checkoutWriteSlotKey), so
 	// a plan execution can never run its `checkout -B` into a directory
 	// another turn is mid-edit in.
-	release := acquireWriteTurnSlot(ctx, "dir:"+dir, func() {
+	release := acquireWriteTurnSlot(ctx, "dir:"+dir, "plan execute "+arg.Doc.Key, func() {
 		m.logf("plan execute %s: waiting for the werkmap %s", arg.Doc.Key, dir)
 		advanceChatProgress("", 0, convID, chatPhaseWaiting)
 	})
@@ -756,7 +756,7 @@ func (m *TaskManager) runPlanExecuteOpenPR(ctx context.Context, arg planExecuteP
 	}
 	// Same per-checkout slot as the agent Activity above — the push reads the
 	// directory's own branch state.
-	release := acquireWriteTurnSlot(ctx, "dir:"+dir, nil)
+	release := acquireWriteTurnSlot(ctx, "dir:"+dir, "plan execute "+arg.Key+" (push)", nil)
 	defer release()
 	if _, err := runGitIn(ctx, dir, "push", "-u", "origin", arg.Branch); err != nil {
 		m.logf("plan execute %s: push: %v", arg.Key, err)

@@ -320,7 +320,7 @@ func runTestRun(ctx context.Context, tm *TaskManager, cl claude.Client, dataDir 
 	// write-gate — see the file header, point 6. A test run never edits
 	// anything, but it still needs the checkout to stay put WHILE it runs.
 	waited := false
-	release := acquireCheckoutWriteSlot(runCtx, dataDir, arg.Repo, arg.PR, func() {
+	release := acquireCheckoutWriteSlot(runCtx, dataDir, arg.Repo, arg.PR, "test run", func() {
 		waited = true
 		advanceTestRunProgress(arg.Repo, arg.PR, chatPhaseWaiting)
 	})

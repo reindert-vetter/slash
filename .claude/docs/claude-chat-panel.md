@@ -3835,6 +3835,79 @@ retry ladder never fires) without a real subprocess. See
 bearing regression test for this entire feature, run on a separate goroutine
 from the blocking `SignalWorkflow` call it is cancelling out from under.
 
+### The write-turn slot's own staleness: nobody could stop the ACTUAL holder
+
+Reported symptom, distinct from the cancel feature above: "hij wacht op een
+andere chat, maar die kan ik niet stoppen" — a chat stuck at `chatPhaseWaiting`
+(`chat_write_gate.go`'s `acquireCheckoutWriteSlot`), with no way to see or
+cancel whichever OTHER turn actually holds the checkout's one write-turn slot.
+The Stop button above only ever cancels the conversation currently open in the
+panel; if that conversation is itself the one WAITING (not holding), cancelling
+it only makes it give up waiting (→ `chat.KindCancelled`) — it was never
+holding the slot, so nothing is freed for the next attempt either.
+
+**The gap:** `chat_write_gate.go`'s `writeTurnSlots` is a plain
+`chan struct{}` (capacity 1) per checkout directory, with no owner identity,
+no timeout, and — before this — no way to recover from a leaked token short of
+restarting the whole server (a crashed/permanently wedged goroutine that never
+reaches its deferred `release()` wedges every later write turn for that
+checkout forever; the in-memory `chatProgressByConv` entry for such a holder
+was observed staying at `phase: waiting` for tens of minutes with no further
+update, live, against `PR 13810`).
+
+**Fix, in `chat_write_gate.go`:**
+
+- **Holder visibility.** `writeTurnHolders map[string]writeTurnHolder` records
+  a short `Label` (e.g. `"chat turn (<conversationId>)"`, `"test run"`,
+  `"checkout: restoring a stash"`) and `AcquiredAt` for whoever currently holds
+  each key. `buildCheckoutView` (`chat_checkout.go`) exposes
+  `holderLabel`/`holderStale` on `GET /api/chat/checkout`, and
+  `checkoutChipTitle` (`src/home.mjs`) now says "Wacht op: \<holder\>" instead
+  of a bare "Wachten…" whenever a label is known.
+- **Automatic staleness release.** `acquireWriteTurnSlot`'s WAITING loop no
+  longer only blocks on the channel send — it also polls every
+  `writeTurnStaleCheckInterval` (30s) and calls
+  `forceReleaseStaleWriteTurnSlot`, which drains the slot once its holder has
+  sat on it for at least `writeTurnStaleTimeout` (90 minutes). That number is
+  **measured, not guessed**: the longest single `claude_chat` write turn that
+  ever completed *successfully* in this deployment's own workflow history
+  (`data/workflows.db`'s `events` table — the gap between a conversation's
+  `SignalReceived("message")` and its own
+  `ActivityCompleted("runClaudeTurn")`) was **~2546s (~42.4 minutes)** — a real
+  `Bash` test-suite run, "1095 passed ... 2821 assertions, 1235s" in its own
+  reply (run `chat-47284166cc7147a9794cf3ba`, PR 13729). The next-highest,
+  independent (different conversation) value in the same history was 766s;
+  every other successful turn was well under that. `writeTurnStaleTimeout` is
+  set to more than 2x the measured maximum so a real, slow-but-alive turn is
+  never mistaken for an abandoned one.
+- **Manual force-release.** `POST /api/checkout/force-release {pr}`
+  (`handleCheckoutForceRelease`, `tasks_api.go`) is the reviewer-facing
+  counterpart — the "Forceer vrijgeven" command on the checkout chip
+  (`checkoutChipCommandsFor`, only offered while `c.waiting`). It calls the
+  exact same `forceReleaseStaleWriteTurnSlot` check, so it can never interrupt
+  a turn that is merely slow — pressing it against a fresh holder is a
+  reported no-op (`{ok:true, freed:false}`), not a kill switch. Stateless
+  operational carve-out per `.claude/rules/workflows-write-boundary.md`
+  (ninth example there): no module, no read-model, no workflow-history write.
+- **The double-release race this had to close.** A force-released holder
+  might not actually be dead — its own deferred `release()` could still fire
+  later. Without a guard, that late call would drain whichever LATER,
+  unrelated acquirer had since taken the freed slot, corrupting the
+  capacity-1 semaphore into allowing two concurrent write turns. Each
+  acquisition now carries its own `*atomic.Bool` (`released`), and both the
+  real release closure and `forceReleaseStaleWriteTurnSlot` gate their actual
+  channel drain behind winning a `CompareAndSwap` on it — exactly one of the
+  two ever runs. Regression test:
+  `TestWriteTurnSlotForceReleaseIsIdempotentAgainstTheRealHolder`
+  (`chat_write_gate_test.go`).
+- Tests: `TestWriteTurnSlotForceReleasesStaleHolder`,
+  `TestWriteTurnSlotDoesNotForceReleaseFreshHolder`,
+  `TestForceReleaseCheckoutWriteSlotRespectsStaleness`
+  (`chat_write_gate_test.go`) — all override the package-level
+  `writeTurnStaleTimeout`/`writeTurnStaleCheckInterval` vars to millisecond
+  scale and restore them via `t.Cleanup`, rather than actually waiting 90
+  minutes.
+
 ### A rejected Signal must not be silent
 
 `sendClaudeMessage` (`RelatedPanel.mjs`) used to `await fetch(...)` and never

@@ -1343,7 +1343,7 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 		// attempt that answers the large majority of turns) stays unlimited
 		// and fully parallel across conversations.
 		waited := false
-		release := acquireCheckoutWriteSlot(runCtx, dataDir, arg.Repo, arg.PR, func() {
+		release := acquireCheckoutWriteSlot(runCtx, dataDir, arg.Repo, arg.PR, "chat turn ("+arg.ConversationID+")", func() {
 			waited = true
 			logTurnMilestone("waiting for the code-turn slot after %v", time.Since(t0))
 			advanceChatProgress(arg.Repo, arg.PR, arg.ConversationID, chatPhaseWaiting)

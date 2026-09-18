@@ -158,7 +158,7 @@ func runCommentBatch(ctx context.Context, tm *TaskManager, cmod *comments.Module
 	// takes this slot (runOneClaudeTurn, runTestRun, the landing and the
 	// checkout-menu Activities); this one had been missed.
 	waited := false
-	release := acquireCheckoutWriteSlot(ctx, dataDir, arg.Repo, arg.PR, func() {
+	release := acquireCheckoutWriteSlot(ctx, dataDir, arg.Repo, arg.PR, "comment batch", func() {
 		waited = true
 		advanceCommentBatchProgress(arg.Repo, arg.PR, chatPhaseWaiting)
 	})

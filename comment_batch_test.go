@@ -211,7 +211,7 @@ func TestRunCommentBatchWaitsForCheckoutWriteSlot(t *testing.T) {
 	// Hold this PR's own write-turn slot, exactly like a concurrent
 	// code-editing chat turn on the SAME PR would.
 	dataDir := t.TempDir()
-	release := acquireWriteTurnSlot(ctx, checkoutWriteSlotKey(dataDir, "", pr), nil)
+	release := acquireWriteTurnSlot(ctx, checkoutWriteSlotKey(dataDir, "", pr), "test: other holder", nil)
 
 	done := make(chan commentBatchResult, 1)
 	go func() {
