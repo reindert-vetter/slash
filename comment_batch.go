@@ -157,6 +157,7 @@ func runCommentBatch(ctx context.Context, tm *TaskManager, cmod *comments.Module
 	// the checkout staying put. Every other checkout-mutating path already
 	// takes this slot (runOneClaudeTurn, runTestRun, the landing and the
 	// checkout-menu Activities); this one had been missed.
+	writeSlotKey := checkoutWriteSlotKey(dataDir, arg.Repo, arg.PR)
 	waited := false
 	release := acquireCheckoutWriteSlot(ctx, dataDir, arg.Repo, arg.PR, "comment batch", func() {
 		waited = true
@@ -191,6 +192,11 @@ func runCommentBatch(ctx context.Context, tm *TaskManager, cmod *comments.Module
 		WorkDir:      dir,
 		Tools:        []string{"Read", "Grep", "Glob", "Edit", "Bash"},
 		OnEvent:      commentBatchProgressSink(arg.Repo, arg.PR, ids),
+		// See touchWriteTurnHolder's own doc comment: a long Bash tool call
+		// (e.g. running the test suite this batch just edited) must keep the
+		// write-turn slot it's holding fresh, not just report classified
+		// progress events.
+		OnHeartbeat: func() { touchWriteTurnHolder(writeSlotKey) },
 	})
 	if err != nil {
 		failCommentBatchProgress(arg.Repo, arg.PR, "Claude kon de comments niet verwerken. Probeer het opnieuw.")

@@ -98,3 +98,34 @@ func TestRunChatHeartbeatStillTimesOutWhenTrulyStuck(t *testing.T) {
 		t.Fatalf("stuck run took %s, want it bounded by agenticTimeout (~80ms), not the fake binary's 30s sleep", elapsed)
 	}
 }
+
+// TestRunChatOnHeartbeatFiresPerRawLine: OnHeartbeat is a caller-facing
+// counterpart of RunChat's own internal `ping` (see RunRequest.OnHeartbeat's
+// doc comment) — a caller with OTHER liveness bookkeeping tied to "is this
+// turn still making any progress at all" (chat_write_gate.go's write-turn
+// slot) needs the same raw, per-line signal, independent of OnEvent's
+// coarser classification. This asserts it fires once per streamed line
+// (result line included) and stops once RunChat returns.
+func TestRunChatOnHeartbeatFiresPerRawLine(t *testing.T) {
+	writeStreamingBinary(t, 0,
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{}}]},"session_id":"s-1"}`,
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{}}]},"session_id":"s-1"}`,
+		`{"type":"result","subtype":"success","is_error":false,"result":"klaar","session_id":"s-1"}`,
+	)
+
+	m := New("")
+	var beats int
+	res, err := m.RunChat(context.Background(), RunRequest{
+		Model: ModelSonnet, Prompt: "hi", Tools: []string{"Read"},
+		OnHeartbeat: func() { beats++ },
+	})
+	if err != nil {
+		t.Fatalf("RunChat failed: %v", err)
+	}
+	if res.Text != "klaar" {
+		t.Fatalf("result = %+v", res)
+	}
+	if beats != 3 {
+		t.Fatalf("OnHeartbeat fired %d times, want 3 (one per streamed line)", beats)
+	}
+}

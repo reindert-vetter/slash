@@ -3859,27 +3859,70 @@ update, live, against `PR 13810`).
 
 - **Holder visibility.** `writeTurnHolders map[string]writeTurnHolder` records
   a short `Label` (e.g. `"chat turn (<conversationId>)"`, `"test run"`,
-  `"checkout: restoring a stash"`) and `AcquiredAt` for whoever currently holds
-  each key. `buildCheckoutView` (`chat_checkout.go`) exposes
+  `"checkout: restoring a stash"`) and `LastHeartbeat` for whoever currently
+  holds each key. `buildCheckoutView` (`chat_checkout.go`) exposes
   `holderLabel`/`holderStale` on `GET /api/chat/checkout`, and
   `checkoutChipTitle` (`src/home.mjs`) now says "Wacht op: \<holder\>" instead
   of a bare "Wachten…" whenever a label is known.
-- **Automatic staleness release.** `acquireWriteTurnSlot`'s WAITING loop no
+- **Automatic staleness release, measured against the last HEARTBEAT, not
+  against total hold duration.** `acquireWriteTurnSlot`'s WAITING loop no
   longer only blocks on the channel send — it also polls every
   `writeTurnStaleCheckInterval` (30s) and calls
   `forceReleaseStaleWriteTurnSlot`, which drains the slot once its holder has
-  sat on it for at least `writeTurnStaleTimeout` (90 minutes). That number is
-  **measured, not guessed**: the longest single `claude_chat` write turn that
-  ever completed *successfully* in this deployment's own workflow history
+  gone at least `writeTurnStaleTimeout` (**20 minutes**) since its last
+  heartbeat.
+  A first version of this measured the longest single successful
+  `claude_chat` write turn in this deployment's own workflow history
   (`data/workflows.db`'s `events` table — the gap between a conversation's
   `SignalReceived("message")` and its own
-  `ActivityCompleted("runClaudeTurn")`) was **~2546s (~42.4 minutes)** — a real
+  `ActivityCompleted("runClaudeTurn")`) — **~2546s (~42.4 minutes)**, a real
   `Bash` test-suite run, "1095 passed ... 2821 assertions, 1235s" in its own
-  reply (run `chat-47284166cc7147a9794cf3ba`, PR 13729). The next-highest,
-  independent (different conversation) value in the same history was 766s;
-  every other successful turn was well under that. `writeTurnStaleTimeout` is
-  set to more than 2x the measured maximum so a real, slow-but-alive turn is
-  never mistaken for an abandoned one.
+  reply (run `chat-47284166cc7147a9794cf3ba`, PR 13729) — and set the timeout
+  to 2x that TOTAL duration (90 minutes). **Reviewer follow-up, correctly:**
+  that conflated "how long a turn may legitimately run" with "how long it may
+  go SILENT" — the 2546s turn was never in danger of anything, it kept
+  producing CLI output the whole time; a holder that goes genuinely silent
+  should not get 90 minutes of benefit of the doubt just because some
+  earlier turn's TOTAL run happened to be long. Fixed by measuring staleness
+  against the holder's **last heartbeat** instead (see the next bullet), which
+  let the timeout itself drop to 20 minutes — comfortably above
+  `modules/claude`'s own idle-kill deadline for an agentic call
+  (`agenticTimeout`, 10 minutes: a run that produces literally zero CLI
+  output for 10 minutes straight is already killed by THAT mechanism on its
+  own, releasing the slot the ordinary way through the failed `RunChat`
+  call's error path) — so `writeTurnStaleTimeout` only ever fires for a hang
+  OUTSIDE that existing protection: a `git`/`gh` call with no comparable
+  timeout, or an OS-level kill signal that somehow never actually landed.
+- **The heartbeat itself: `RunRequest.OnHeartbeat` (`modules/claude`),
+  wired to `touchWriteTurnHolder`.** Investigated first: does a single long
+  Bash tool call (a test suite, a build) produce ANY sign of life the
+  existing per-turn classification (`OnEvent`/`ChatEvent`) would see before
+  the tool itself returns? No — `emitChatEvents` has nothing to emit while a
+  tool call is still in flight, so `OnEvent`/`chatProgressByConv` can go the
+  ENTIRE length of one Bash call with no update, which is exactly as long as
+  the measured 2546s case. But `modules/claude` already has a finer-grained,
+  proven-live signal for a completely different reason:
+  `HeartbeatContext`'s `ping`, called by `readChatStream`'s `onLine` on
+  **every raw stream-json line** the CLI writes (not just classified
+  frames), is what already keeps `agenticTimeout`'s 10-minute idle-kill from
+  firing on a genuinely progressing run — and the 2546s turn's own survival
+  is direct proof that the CLI keeps emitting SOME raw line within every
+  10-minute window even while a long tool call is in flight (it was never
+  killed by that deadline). `RunRequest.OnHeartbeat func()` taps this exact
+  same `onLine` call (`RunChat` calls both `ping()` and `req.OnHeartbeat()`
+  from one wrapped `onLine`), so a caller gets the same underlying liveness
+  signal without needing modules/claude to know anything about
+  `chat_write_gate.go`. Every call site that holds a checkout's write-turn
+  slot while invoking the CLI wires it to
+  `touchWriteTurnHolder(writeSlotKey)`: `chat_workflow.go`'s shell attempt,
+  `comment_batch.go`, `test_run.go` (the ONE call site whose entire purpose
+  is a long Bash test run). **Rejected alternative:** instructing the CLI
+  (via the turn's system prompt) to chunk a long test run into smaller
+  pieces so more tool-call boundaries produce more `OnEvent` frames. Not
+  needed — the raw-line signal above already exists, is already proven live
+  across the exact real-world case this was measured from, and needs no
+  behavioural change to what Claude is asked to do (a chunking instruction
+  can also be ignored by the model, unlike a mechanical stream read).
 - **Manual force-release.** `POST /api/checkout/force-release {pr}`
   (`handleCheckoutForceRelease`, `tasks_api.go`) is the reviewer-facing
   counterpart — the "Forceer vrijgeven" command on the checkout chip
@@ -3902,11 +3945,17 @@ update, live, against `PR 13810`).
   (`chat_write_gate_test.go`).
 - Tests: `TestWriteTurnSlotForceReleasesStaleHolder`,
   `TestWriteTurnSlotDoesNotForceReleaseFreshHolder`,
-  `TestForceReleaseCheckoutWriteSlotRespectsStaleness`
-  (`chat_write_gate_test.go`) — all override the package-level
+  `TestForceReleaseCheckoutWriteSlotRespectsStaleness`,
+  `TestWriteTurnSlotHeartbeatKeepsALongLiveTurnFromGoingStale` (the last one
+  is the load-bearing one for this section: a holder that never releases but
+  keeps calling `touchWriteTurnHolder` faster than `writeTurnStaleTimeout`
+  is never force-released, however long it has been held in total) —
+  all in `chat_write_gate_test.go`, all override the package-level
   `writeTurnStaleTimeout`/`writeTurnStaleCheckInterval` vars to millisecond
-  scale and restore them via `t.Cleanup`, rather than actually waiting 90
-  minutes.
+  scale and restore them via `t.Cleanup`, rather than actually waiting 20
+  minutes. `TestRunChatOnHeartbeatFiresPerRawLine`
+  (`modules/claude/runchat_heartbeat_test.go`) covers the lower-level plumbing:
+  `OnHeartbeat` fires once per streamed line (result line included).
 
 ### A rejected Signal must not be silent
 

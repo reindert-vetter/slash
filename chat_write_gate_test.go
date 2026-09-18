@@ -298,3 +298,54 @@ func TestForceReleaseCheckoutWriteSlotRespectsStaleness(t *testing.T) {
 	}
 	release() // now a no-op (already force-released) -- must not panic or block
 }
+
+// TestWriteTurnSlotHeartbeatKeepsALongLiveTurnFromGoingStale is the exact
+// scenario behind the "Bash test suite ran 42 minutes but was still alive"
+// case (see writeTurnStaleTimeout's own doc comment): a holder that never
+// releases but keeps calling touchWriteTurnHolder faster than
+// writeTurnStaleTimeout must NEVER be force-released, however long it has
+// been held in total.
+func TestWriteTurnSlotHeartbeatKeepsALongLiveTurnFromGoingStale(t *testing.T) {
+	origTimeout, origInterval := writeTurnStaleTimeout, writeTurnStaleCheckInterval
+	writeTurnStaleTimeout = 40 * time.Millisecond
+	writeTurnStaleCheckInterval = 5 * time.Millisecond
+	t.Cleanup(func() { writeTurnStaleTimeout, writeTurnStaleCheckInterval = origTimeout, origInterval })
+
+	const key = "pr:stale-heartbeat"
+	release := acquireWriteTurnSlot(context.Background(), key, "long but alive", nil)
+
+	stopHeartbeat := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(10 * time.Millisecond) // well under writeTurnStaleTimeout
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopHeartbeat:
+				return
+			case <-ticker.C:
+				touchWriteTurnHolder(key)
+			}
+		}
+	}()
+
+	// Outlive writeTurnStaleTimeout several times over while heartbeats keep
+	// arriving; a second acquire attempt must NOT get in.
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	got := acquireWriteTurnSlot(ctx, key, "waiter", nil)
+	got() // no-op if it never actually acquired (the expected outcome)
+
+	close(stopHeartbeat)
+	<-done
+
+	ch := writeTurnSlotChan(key)
+	select {
+	case ch <- struct{}{}:
+		<-ch
+		t.Fatal("a holder that kept heartbeating was force-released")
+	default:
+	}
+	release()
+}

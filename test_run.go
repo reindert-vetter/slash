@@ -319,6 +319,7 @@ func runTestRun(ctx context.Context, tm *TaskManager, cl claude.Client, dataDir 
 	// Same shared checkout every chat turn/comment_batch run uses, and the same
 	// write-gate — see the file header, point 6. A test run never edits
 	// anything, but it still needs the checkout to stay put WHILE it runs.
+	writeSlotKey := checkoutWriteSlotKey(dataDir, arg.Repo, arg.PR)
 	waited := false
 	release := acquireCheckoutWriteSlot(runCtx, dataDir, arg.Repo, arg.PR, "test run", func() {
 		waited = true
@@ -356,6 +357,10 @@ func runTestRun(ctx context.Context, tm *TaskManager, cl claude.Client, dataDir 
 		// Deliberately NO Edit — see the file header, point 1.
 		Tools:   []string{"Read", "Grep", "Glob", "Bash"},
 		OnEvent: testRunProgressSink(arg.Repo, arg.PR),
+		// The whole point of this Activity is a long Bash tool call (the
+		// test suite itself) — see touchWriteTurnHolder's own doc comment
+		// for why that must keep the write-turn slot fresh on its own.
+		OnHeartbeat: func() { touchWriteTurnHolder(writeSlotKey) },
 	})
 	res := testRunResult{}
 	if err != nil {

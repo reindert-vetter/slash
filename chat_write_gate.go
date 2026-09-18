@@ -77,8 +77,8 @@ func writeTurnSlotChan(key string) chan struct{} {
 }
 
 // writeTurnStaleTimeout — how long a checkout's write-turn slot may sit HELD
-// with no sign of the holder ever coming back before a WAITING acquire gives
-// up on it and force-frees the slot for itself instead of blocking forever.
+// with no HEARTBEAT from its holder before a WAITING acquire gives up on it
+// and force-frees the slot for itself instead of blocking forever.
 //
 // Reported symptom this exists for: "hij wacht op een andere chat, maar die
 // kan ik niet stoppen" — chat_write_gate.go's slot is a plain in-memory
@@ -91,19 +91,26 @@ func writeTurnSlotChan(key string) chan struct{} {
 // currently open — cancelling it only makes THAT turn give up waiting, it
 // never frees the slot it was never holding in the first place.
 //
-// The timeout itself is measured, not guessed: the longest single
-// claude_chat write turn that ever completed SUCCESSFULLY in this
-// deployment's own workflow history held its own checkout for ~2546s
-// (~42.4 minutes — a real `Bash` test-suite run: "1095 passed ... 2821
-// assertions, 1235s" in its own reply; run "chat-47284166cc7147a9794cf3ba",
-// PR 13729), measured directly from data/workflows.db's `events` table (the
-// gap between a conversation's SignalReceived("message") and its own
-// ActivityCompleted("runClaudeTurn") — see .claude/docs/claude-chat-panel.md
-// for the exact query and the full top-20 distribution; every other
-// successful turn in that history was well under 800s). This constant is
-// set to more than 2x that measured maximum, so a real, slow-but-alive turn
-// (a long test run, a big refactor) is never mistaken for an abandoned one.
-var writeTurnStaleTimeout = 90 * time.Minute
+// Deliberately measured against the LAST HEARTBEAT, never against how long
+// the slot has been held in total (touchWriteTurnHolder, called from every
+// raw stream-json line a holder's own claude CLI call produces — see
+// modules/claude's RunRequest.OnHeartbeat). A first version of this measured
+// the longest successful write turn in this deployment's own history
+// (~2546s / ~42.4 minutes, a real `Bash` test-suite run — see
+// .claude/docs/claude-chat-panel.md for the exact query) and set the
+// timeout to 2x that. Reviewer follow-up, correctly: that conflates "how
+// long a turn may legitimately run" with "how long it may go SILENT" — a
+// turn that keeps emitting CLI output for 42 minutes is never in danger, and
+// one that goes genuinely silent (no subprocess, no restart, nothing) should
+// not get 90 minutes of benefit of the doubt just because SOME earlier
+// caller's overall turn happened to run long. 20 minutes is comfortably
+// above modules/claude's own idle-kill deadline for an agentic call
+// (`agenticTimeout`, 10 minutes — a run that produces literally zero output
+// for 10 minutes is already killed by that mechanism on its own, releasing
+// the slot the ordinary way), so this only ever fires for a hang OUTSIDE
+// that protection (e.g. a `git`/`gh` call with no comparable timeout, or a
+// subprocess kill that the OS somehow never delivered).
+var writeTurnStaleTimeout = 20 * time.Minute
 
 // writeTurnStaleCheckInterval is how often a WAITING acquire re-checks
 // whether the current holder has gone stale, instead of only ever blocking
@@ -114,16 +121,20 @@ var writeTurnStaleCheckInterval = 30 * time.Second
 // writeTurnHolder describes whoever currently holds one checkout's write
 // slot — purely for the checkout chip (buildCheckoutView, chat_checkout.go)
 // to name it instead of a bare "Wachten…", and for the staleness check
-// above. released is shared with the holder's own release closure: exactly
-// one of {the real holder's eventual release(), a force-release} ever wins
-// the CompareAndSwap on it, so a holder that was force-released and later
-// turns out to not actually be dead after all can never double-drain a
-// LATER, unrelated holder's own token (see forceReleaseStaleWriteTurnSlot's
-// own doc comment for the race this closes).
+// above. LastHeartbeat starts at the acquire moment and is refreshed by
+// touchWriteTurnHolder on every sign of life from the holder's own work (see
+// that function's own doc comment) — it is NOT simply "how long has this
+// been held", precisely so a long-but-alive Bash tool call is never mistaken
+// for an abandoned one. released is shared with the holder's own release
+// closure: exactly one of {the real holder's eventual release(), a
+// force-release} ever wins the CompareAndSwap on it, so a holder that was
+// force-released and later turns out to not actually be dead after all can
+// never double-drain a LATER, unrelated holder's own token (see
+// forceReleaseStaleWriteTurnSlot's own doc comment for the race this closes).
 type writeTurnHolder struct {
-	Label      string
-	AcquiredAt time.Time
-	released   *atomic.Bool
+	Label         string
+	LastHeartbeat time.Time
+	released      *atomic.Bool
 }
 
 var (
@@ -133,9 +144,10 @@ var (
 
 // currentWriteTurnHolder reports who (if anyone) currently holds key's write
 // slot right now, and whether that holder has already crossed
-// writeTurnStaleTimeout — a pure read, no side effect, used by
-// buildCheckoutView (chat_checkout.go) to show the reviewer who's holding it
-// and whether "Forceer vrijgeven" would currently do anything.
+// writeTurnStaleTimeout since its last heartbeat — a pure read, no side
+// effect, used by buildCheckoutView (chat_checkout.go) to show the reviewer
+// who's holding it and whether "Forceer vrijgeven" would currently do
+// anything.
 func currentWriteTurnHolder(key string) (label string, stale, ok bool) {
 	writeTurnHoldersMu.Lock()
 	defer writeTurnHoldersMu.Unlock()
@@ -143,14 +155,37 @@ func currentWriteTurnHolder(key string) (label string, stale, ok bool) {
 	if !present {
 		return "", false, false
 	}
-	return h.Label, time.Since(h.AcquiredAt) >= writeTurnStaleTimeout, true
+	return h.Label, time.Since(h.LastHeartbeat) >= writeTurnStaleTimeout, true
+}
+
+// touchWriteTurnHolder refreshes key's current holder's LastHeartbeat, so a
+// long-running-but-genuinely-progressing piece of work (most importantly a
+// single Bash tool call that can legitimately run for many minutes with no
+// CLASSIFIED chat-progress event in between — a test suite, a build) is
+// never mistaken for an abandoned holder by forceReleaseStaleWriteTurnSlot's
+// staleness check. Wired into modules/claude's RunRequest.OnHeartbeat by
+// every call site that holds this checkout's write-turn slot while invoking
+// the CLI (chat_workflow.go's shell attempt, comment_batch.go, test_run.go)
+// — see that field's own doc comment for why it fires on every raw
+// stream-json line rather than only on OnEvent's coarser classification. A
+// no-op if key currently has no recorded holder at all (already released, or
+// never acquired through acquireWriteTurnSlot in the first place) — a late
+// heartbeat callback racing the holder's own release is expected, not an
+// error.
+func touchWriteTurnHolder(key string) {
+	writeTurnHoldersMu.Lock()
+	defer writeTurnHoldersMu.Unlock()
+	if h, ok := writeTurnHolders[key]; ok {
+		h.LastHeartbeat = time.Now()
+		writeTurnHolders[key] = h
+	}
 }
 
 // forceReleaseStaleWriteTurnSlot drains key's slot when its current holder
-// has been sitting on it for at least writeTurnStaleTimeout, so a genuinely
-// abandoned holder can never wedge every future write turn for that checkout
-// forever — the only recovery before this was a full server restart (which
-// resets writeTurnSlots to empty anyway).
+// has gone at least writeTurnStaleTimeout without a heartbeat, so a
+// genuinely abandoned holder can never wedge every future write turn for
+// that checkout forever — the only recovery before this was a full server
+// restart (which resets writeTurnSlots to empty anyway).
 //
 // Also used directly by the manual "Forceer vrijgeven" action
 // (handleCheckoutForceRelease, tasks_api.go) — deliberately the SAME check,
@@ -172,7 +207,7 @@ func currentWriteTurnHolder(key string) (label string, stale, ok bool) {
 func forceReleaseStaleWriteTurnSlot(key string) bool {
 	writeTurnHoldersMu.Lock()
 	holder, ok := writeTurnHolders[key]
-	stale := ok && time.Since(holder.AcquiredAt) >= writeTurnStaleTimeout
+	stale := ok && time.Since(holder.LastHeartbeat) >= writeTurnStaleTimeout
 	if stale {
 		delete(writeTurnHolders, key)
 	}
@@ -212,7 +247,7 @@ func acquireWriteTurnSlot(ctx context.Context, key, label string, onWaiting func
 	acquire := func() func() {
 		released := &atomic.Bool{}
 		writeTurnHoldersMu.Lock()
-		writeTurnHolders[key] = writeTurnHolder{Label: label, AcquiredAt: time.Now(), released: released}
+		writeTurnHolders[key] = writeTurnHolder{Label: label, LastHeartbeat: time.Now(), released: released}
 		writeTurnHoldersMu.Unlock()
 		return func() {
 			if !released.CompareAndSwap(false, true) {

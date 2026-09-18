@@ -1342,6 +1342,12 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 		// never held up by it. Everything above this line (the read-only
 		// attempt that answers the large majority of turns) stays unlimited
 		// and fully parallel across conversations.
+		// writeSlotKey is recomputed (not returned by acquireCheckoutWriteSlot)
+		// so the shell attempt below can heartbeat the SAME slot it just
+		// acquired — see shellReq.OnHeartbeat and touchWriteTurnHolder's own
+		// doc comment for why a long-running Bash tool call must not be
+		// mistaken for an abandoned holder.
+		writeSlotKey := checkoutWriteSlotKey(dataDir, arg.Repo, arg.PR)
 		waited := false
 		release := acquireCheckoutWriteSlot(runCtx, dataDir, arg.Repo, arg.PR, "chat turn ("+arg.ConversationID+")", func() {
 			waited = true
@@ -1434,7 +1440,15 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 			WorkDir:      dir,
 			Tools:        []string{"Read", "Grep", "Glob", "Edit", "Bash"},
 			OnEvent:      onEvent,
-			AddDirs:      attachmentDirs,
+			// A long-running Bash tool call (a test suite, a build) must not
+			// look abandoned just because it produces no CLASSIFIED event for
+			// minutes at a time — OnHeartbeat fires on every raw stream-json
+			// line the CLI emits, the same underlying signal that already
+			// keeps modules/claude's own idle-kill deadline
+			// (HeartbeatContext) from firing on a genuinely progressing run.
+			// See touchWriteTurnHolder's own doc comment.
+			OnHeartbeat: func() { touchWriteTurnHolder(writeSlotKey) },
+			AddDirs:     attachmentDirs,
 		}
 		shellSteerCh, unregisterShellSteer := openSteerSlot(runCtx, arg.ConversationID)
 		shellReq.Steer = shellSteerCh

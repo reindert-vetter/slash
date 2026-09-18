@@ -123,6 +123,22 @@ type RunRequest struct {
 	// raised global default, so a hung claude in every other, genuinely short
 	// call site still can't sit on a workflow run for minutes.
 	Timeout time.Duration
+	// OnHeartbeat, when non-nil, is called by RunChat for every RAW
+	// stream-json line the CLI produces — the exact same underlying signal
+	// HeartbeatContext's own `ping` already uses to keep a genuinely
+	// progressing run's idle-kill deadline from firing (see RunChat's own
+	// doc comment on that). Deliberately separate from OnEvent: a long
+	// single Bash tool call (a test suite, a build) can go many minutes with
+	// no CLASSIFIED frame (no new "tool"/"writing" event — emitChatEvents has
+	// nothing to emit while the tool itself hasn't returned yet), while the
+	// CLI still emits OTHER raw lines in that window (this module's own idle
+	// timeout is proof: a real turn that ran a 2546s test suite was never
+	// killed by the 10-minute agenticTimeout, so lines kept arriving
+	// throughout). A caller that holds some OTHER liveness bookkeeping tied
+	// to "is this turn still making any progress at all" (chat_write_gate.go's
+	// write-turn slot) wants exactly this, not OnEvent's coarser
+	// classification. Purely observational, same contract as OnEvent.
+	OnHeartbeat func()
 }
 
 // ChatEventKind labels what a streamed ChatEvent reports. Deliberately a tiny,
@@ -517,7 +533,14 @@ func (m *Module) RunChat(ctx context.Context, req RunRequest) (ChatResult, error
 	}
 	// Read to EOF first, then Wait — a Wait before the pipe is drained would
 	// close it out from under the reader.
-	res, parseErr := readChatStream(stdout, req.OnEvent, closeStdin, ping)
+	onLine := ping
+	if req.OnHeartbeat != nil {
+		onLine = func() {
+			ping()
+			req.OnHeartbeat()
+		}
+	}
+	res, parseErr := readChatStream(stdout, req.OnEvent, closeStdin, onLine)
 	waitErr := cmd.Wait()
 
 	// The CLI ran to completion and told us, in its own words, that the turn
