@@ -502,6 +502,38 @@ embedded-child transformation is tested in
 `callresolve_analysis_test.go`/`testcovers_analysis_test.go` and
 `resolve_call_test.go`/`resolve_test_covers_test.go`.
 
+### An edited PHPDoc stays visible as code instead of being folded away
+
+Reviewer request: a PHPDoc that was actually *edited* between old and new
+should read as a real code change, not disappear into the fold/strip above.
+`enrichedCodeSides(oldCS, newCS)` (`codesig.go`) is the paired sibling of
+`enrichedCodeSide`: when a block already carried a leading PHPDoc on **both**
+old and new, and that raw doc text (`leadingPHPDocRaw`, `strings.TrimSpace`d)
+actually differs, the doc is left fully visible as ordinary code on **both**
+sides instead of being folded/stripped — only `trimTrailingBlankLine` still
+applies. It also reports `docChanged`, which `api.go`'s `handleCode` adds to
+`/api/code`'s JSON (`"docChanged"`) so `Block.mjs` can hide the separate
+`Block.Description` strip for that block (`b.code.docChanged` in the
+description-toggle condition) — the same text is already visible in the diff,
+so showing it twice would be redundant.
+
+**Deliberately narrow scope:** this only fires when BOTH sides already have a
+leading PHPDoc. A PHPDoc that was newly added, fully removed, or belongs to a
+block that was itself added/removed keeps the ordinary fold/strip behavior —
+that is a different kind of change than "an edit to an existing PHPDoc" and
+was out of scope for this request.
+
+**Used at both places `enrichedCodeSide` used to be called on an old/new
+pair** — `api.go`'s `handleCode` and `blockstats.go`'s `blockAlignedRows` —
+so the diff display and the approve-counter total (`blockChangedRowCount`)
+stay in lockstep: a changed PHPDoc now counts toward the approve total like
+any other visible changed line. The single-side call sites (the embedded
+"Underlying code" children above, which have no old/new pair to compare)
+keep calling `enrichedCodeSide` directly, unchanged.
+
+Test: `codesig_test.go` (`TestEnrichedCodeSidesKeepsDocVisibleWhenDocChanged`,
+`TestEnrichedCodeSidesFoldsWhenDocUnchanged`).
+
 ### Trimming a blank trailing line
 
 `trimTrailingBlankLine`, independent of the fold above. `classHeaderSentinel`

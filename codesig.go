@@ -174,6 +174,53 @@ func stripLeadingPhpDoc(text string) (out string, removedLines int) {
 	return out, removedLines
 }
 
+// leadingPHPDocRaw returns the raw text of a leading `/** ... */` PHPDoc
+// (delimiters included, nothing removed/rewritten) if text starts with one,
+// and whether one was found. Same leading-only, two-star-only detection as
+// stripLeadingPhpDoc/enrichSignatureWithDocTypes — used by enrichedCodeSides
+// below to compare the old and new side's doc text without touching either.
+func leadingPHPDocRaw(text string) (raw string, ok bool) {
+	trimmed := strings.TrimLeft(text, " \t")
+	if !strings.HasPrefix(trimmed, "/**") {
+		return "", false
+	}
+	docStart := len(text) - len(trimmed)
+	closeRel := strings.Index(text[docStart+3:], "*/")
+	if closeRel < 0 {
+		return "", false
+	}
+	docEnd := docStart + 3 + closeRel + 2
+	return text[docStart:docEnd], true
+}
+
+// enrichedCodeSides is enrichedCodeSide applied to a matched old/new pair,
+// with one addition: if the method already carried a leading PHPDoc on BOTH
+// sides and its raw text actually changed between them (a real edit to the
+// doc, not a reindent or an unrelated code change), the doc is left fully
+// visible as ordinary code on both sides instead of being folded/stripped —
+// reviewer request: a PHPDoc edit should read as a real code change, not
+// disappear into the fold. docChanged also tells the frontend to hide the
+// separate Block.Description strip for this block (Block.mjs), since the
+// same text is now already visible in the diff itself.
+//
+// Deliberately narrow: this only fires when BOTH sides already have a
+// leading PHPDoc. A doc that was newly added or fully removed (or a block
+// that was itself added/removed, so one side has no text at all) is a
+// different kind of change than "an edit to an existing PHPDoc" and keeps
+// the ordinary fold/strip behavior, unchanged from before.
+func enrichedCodeSides(oldCS, newCS codeSide) (old, newSide codeSide, docChanged bool) {
+	oldDoc, oldOk := leadingPHPDocRaw(oldCS.Text)
+	newDoc, newOk := leadingPHPDocRaw(newCS.Text)
+	if oldOk && newOk && strings.TrimSpace(oldDoc) != strings.TrimSpace(newDoc) {
+		oldText, oldRemovedTail := trimTrailingBlankLine(oldCS.Text)
+		newText, newRemovedTail := trimTrailingBlankLine(newCS.Text)
+		return codeSide{Start: oldCS.Start, End: oldCS.End - oldRemovedTail, Text: oldText},
+			codeSide{Start: newCS.Start, End: newCS.End - newRemovedTail, Text: newText},
+			true
+	}
+	return enrichedCodeSide(oldCS), enrichedCodeSide(newCS), false
+}
+
 // trimTrailingBlankLine drops a single, wholly-blank trailing line from text,
 // if there is one, and reports how many lines were removed (0 or 1).
 //

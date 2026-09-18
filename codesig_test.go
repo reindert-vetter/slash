@@ -523,3 +523,94 @@ func TestChangedRowCountAfterFreeTextDocStrip(t *testing.T) {
 		t.Fatalf("expected the raw (unstripped) count to be > 0, got 0")
 	}
 }
+
+func TestEnrichedCodeSidesKeepsDocVisibleWhenDocChanged(t *testing.T) {
+	old := codeSide{Start: 10, End: 16, Text: "/**\n" +
+		" * Old description.\n" +
+		" *\n" +
+		" * @return array<string, mixed>|null\n" +
+		" */\n" +
+		"private function getResource(): ?array\n" +
+		"{\n" +
+		"    return $this->resource;\n" +
+		"}"}
+	newCS := codeSide{Start: 10, End: 16, Text: "/**\n" +
+		" * New, edited description.\n" +
+		" *\n" +
+		" * @return array<string, mixed>|null\n" +
+		" */\n" +
+		"private function getResource(): ?array\n" +
+		"{\n" +
+		"    return $this->resource;\n" +
+		"}"}
+	gotOld, gotNew, docChanged := enrichedCodeSides(old, newCS)
+	if !docChanged {
+		t.Fatalf("docChanged = false, want true (the doc text differs)")
+	}
+	if gotOld.Text != old.Text {
+		t.Fatalf("old side was folded/stripped, want unchanged:\n%s", gotOld.Text)
+	}
+	if gotNew.Text != newCS.Text {
+		t.Fatalf("new side was folded/stripped, want unchanged:\n%s", gotNew.Text)
+	}
+	if gotOld.Start != old.Start || gotNew.Start != newCS.Start {
+		t.Fatalf("Start shifted even though nothing was removed: old=%d new=%d", gotOld.Start, gotNew.Start)
+	}
+}
+
+func TestEnrichedCodeSidesFoldsWhenDocUnchanged(t *testing.T) {
+	text := "/**\n" +
+		" * Same description on both sides.\n" +
+		" *\n" +
+		" * @return array<string, mixed>|null\n" +
+		" */\n" +
+		"private function getResource(): ?array\n" +
+		"{\n" +
+		"    return $this->resource;\n" +
+		"}"
+	old := codeSide{Start: 10, End: 18, Text: text}
+	newCS := codeSide{Start: 10, End: 18, Text: text}
+	gotOld, gotNew, docChanged := enrichedCodeSides(old, newCS)
+	if docChanged {
+		t.Fatalf("docChanged = true, want false (identical doc on both sides)")
+	}
+	wantOld, wantNew := enrichedCodeSide(old), enrichedCodeSide(newCS)
+	if gotOld != wantOld {
+		t.Fatalf("old side = %+v, want %+v (plain enrichedCodeSide)", gotOld, wantOld)
+	}
+	if gotNew != wantNew {
+		t.Fatalf("new side = %+v, want %+v (plain enrichedCodeSide)", gotNew, wantNew)
+	}
+	// Sanity: the doc actually got folded (Start moved), so this test isn't
+	// vacuously true for a doc that never folds.
+	if gotOld.Start == old.Start {
+		t.Fatalf("expected the fold to bump Start, but it stayed %d", gotOld.Start)
+	}
+}
+
+func TestEnrichedCodeSidesAddedDocKeepsOrdinaryFold(t *testing.T) {
+	// Out of scope by design: the OLD side has no leading doc at all (it was
+	// newly added), so this must not be treated as "an edit to an existing
+	// PHPDoc" — the new side still gets the ordinary fold/strip treatment.
+	old := codeSide{Start: 10, End: 12, Text: "private function getResource(): ?array\n{\n    return $this->resource;\n}"}
+	newCS := codeSide{Start: 10, End: 16, Text: "/**\n" +
+		" * A brand new doc.\n" +
+		" *\n" +
+		" * @return array<string, mixed>|null\n" +
+		" */\n" +
+		"private function getResource(): ?array\n" +
+		"{\n" +
+		"    return $this->resource;\n" +
+		"}"}
+	gotOld, gotNew, docChanged := enrichedCodeSides(old, newCS)
+	if docChanged {
+		t.Fatalf("docChanged = true, want false (the doc was added, not edited)")
+	}
+	wantNew := enrichedCodeSide(newCS)
+	if gotNew != wantNew {
+		t.Fatalf("new side = %+v, want ordinary fold %+v", gotNew, wantNew)
+	}
+	if gotOld != old {
+		t.Fatalf("old side = %+v, want unchanged %+v (nothing to fold)", gotOld, old)
+	}
+}

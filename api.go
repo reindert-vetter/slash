@@ -295,10 +295,15 @@ func (s *server) handleCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	oldSide, newSide, docChanged := enrichedCodeSides(
+		extractBlockSource(filepath.Join(baseDir, oldFile), oldFile, oldClass, oldName),
+		extractBlockSource(filepath.Join(headDir, file), file, class, name),
+	)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"file": file,
-		"old":  enrichedCodeSide(extractBlockSource(filepath.Join(baseDir, oldFile), oldFile, oldClass, oldName)),
-		"new":  enrichedCodeSide(extractBlockSource(filepath.Join(headDir, file), file, class, name)),
+		"file":       file,
+		"old":        oldSide,
+		"new":        newSide,
+		"docChanged": docChanged,
 	})
 }
 

@@ -1927,7 +1927,12 @@ export default function Block(b, opts = {}) {
         // keyboard stop (↑ from the block's first change, then Enter) or by
         // clicking the strip; the trailing ellipsis plus the "meer…" hint carry
         // the collapsed state, never colour alone.
-        collapsedFn() || !b.description
+        //
+        // Also hidden once the PHPDoc itself was actually edited (b.code.docChanged,
+        // set by /api/code's enrichedCodeSides — see .claude/docs/blocks-and-ingest.md):
+        // the same doc text is then already visible as ordinary code in the diff
+        // below, so this separate strip would just repeat it.
+        collapsedFn() || !b.description || (b.code && b.code.docChanged)
           ? ''
           : html`<div
               class="${() =>

@@ -30,11 +30,15 @@ import (
 //     file — or a renamed/moved METHOD, see blockmove.go — is diffed against
 //     where its source actually was in the base worktree. Both fall back to the
 //     block's current path/symbol when the PR didn't move it.
-//   - Both sides go through enrichedCodeSide (code.go): fold a leading PHPDoc's
-//     @return/@param types into the signature, else drop the leading doc outright,
-//     then trim one wholly-blank trailing line. Exactly what /api/code applies for
-//     display, so a row index always means the row the reviewer actually sees —
-//     never a since-hidden docblock line.
+//   - Both sides go through enrichedCodeSides (codesig.go): fold a leading
+//     PHPDoc's @return/@param types into the signature, else drop the leading
+//     doc outright, then trim one wholly-blank trailing line — unless the doc
+//     itself was actually edited between old and new, in which case it stays
+//     visible as ordinary code on both sides (see enrichedCodeSides' own doc
+//     comment). Exactly what /api/code applies for display, so a row index
+//     always means the row the reviewer actually sees — never a since-hidden
+//     docblock line, and a changed PHPDoc counts toward the approve total
+//     exactly like any other visible changed line.
 //
 // The returned sides are post-transform, so their Start is already corrected for
 // the removed doc lines: a caller converting between a row index and an absolute
@@ -47,8 +51,10 @@ func blockAlignedRows(baseDir, headDir string, b Block) (rows []alignRow, oldSid
 	if b.OldName != "" {
 		oldClass, oldName = b.OldClass, b.OldName
 	}
-	oldSide = enrichedCodeSide(extractBlockSource(filepath.Join(baseDir, oldRel), oldRel, oldClass, oldName))
-	newSide = enrichedCodeSide(extractBlockSource(filepath.Join(headDir, b.File), b.File, b.Class, b.Name))
+	oldSide, newSide, _ = enrichedCodeSides(
+		extractBlockSource(filepath.Join(baseDir, oldRel), oldRel, oldClass, oldName),
+		extractBlockSource(filepath.Join(headDir, b.File), b.File, b.Class, b.Name),
+	)
 	oldText, newText := dedent4(oldSide.Text, newSide.Text)
 	return alignRows(oldText, newText), oldSide, newSide
 }
