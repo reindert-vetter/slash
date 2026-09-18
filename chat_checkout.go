@@ -759,6 +759,15 @@ type chatCheckoutDecision struct {
 	// list that shifts between two refetches of the SAME choice does not
 	// re-open a dismissed overlay.
 	Paths []string `json:"paths,omitempty"`
+	// ConversationID/TurnID identify the land request that failed — only ever
+	// set by markCheckoutLandingFailedAt (checkoutStageLandingFailed). The
+	// werkmap overlay's "Opnieuw proberen" row for this stage resends the
+	// exact same "merge" Signal these came from (empty Action, i.e.
+	// chatMergeActionLand — the ordinary "land this conversation's edit"
+	// path any ordinary "commit deze wijziging" already uses), so retrying
+	// re-attempts the SAME git landing rather than starting a new one.
+	ConversationID string `json:"conversationId,omitempty"`
+	TurnID         string `json:"turnId,omitempty"`
 }
 
 const (
@@ -773,10 +782,13 @@ const (
 	// accepted that dirt earlier). Without it, that failure was only a chat
 	// bubble in whichever conversation triggered it — reviewer request: "laat
 	// de error duidelijk zien als een overlay, niet alleen een bubbel die je
-	// kunt missen". Reuses the existing werkmap overlay (src/workDirOverlay.mjs)
-	// unchanged: its row list already falls back to "Andere werkmap kiezen"/
-	// "Uit"/"Chat pauzeren" for a decision with no Options, so this needs no
-	// new frontend code at all.
+	// kunt missen". Reuses the existing werkmap overlay (src/workDirOverlay.mjs):
+	// its row list falls back to "Andere werkmap kiezen"/"Uit"/"Chat pauzeren"
+	// for a decision with no Options, PLUS its own "Opnieuw proberen" row (see
+	// ConversationID/TurnID below and workDirOverlay.mjs's retryRowFor) —
+	// reviewer follow-up request: every werkmap decision, not only this one,
+	// always offers a retry, each stage re-running whichever ladder check
+	// raised it.
 	checkoutStageLandingFailed = "landingFailed"
 )
 
@@ -873,7 +885,11 @@ func chatCheckoutReuseDecision(c checkoutCandidate, headRef string) *chatCheckou
 // dataDir/headRef/body are exactly what processChatMergeAt already has to
 // hand: the failing chat.Message's own Body becomes this decision's Body, so
 // the overlay shows the SAME real reason the conversation's own bubble does.
-func markCheckoutLandingFailedAt(ctx context.Context, dataDir, repo string, pr int, headRef, body string) {
+// conversationID/turnID are the very land request that failed (also
+// processChatMergeAt's own arg) — stored on the decision so the overlay's
+// "Opnieuw proberen" row can resend exactly that request, see
+// ConversationID/TurnID's own doc comment on chatCheckoutDecision.
+func markCheckoutLandingFailedAt(ctx context.Context, dataDir, repo string, pr int, headRef, body, conversationID, turnID string) {
 	a := getCheckoutAssignment(dataDir, repo, pr)
 	if a == nil || a.Dir == "" {
 		return
@@ -882,7 +898,10 @@ func markCheckoutLandingFailedAt(ctx context.Context, dataDir, repo string, pr i
 	if err == nil && cand.Dirty && !dirtyAlreadyAccepted(ctx, a) && !dirtyIsOnlyPendingEdits(cand.DirtyPaths, repo, pr) {
 		return
 	}
-	a.Pending = &chatCheckoutDecision{Stage: checkoutStageLandingFailed, Dir: a.Dir, Body: body}
+	a.Pending = &chatCheckoutDecision{
+		Stage: checkoutStageLandingFailed, Dir: a.Dir, Body: body,
+		ConversationID: conversationID, TurnID: turnID,
+	}
 }
 
 // ---------------------------------------------------------------------------

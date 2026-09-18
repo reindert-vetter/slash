@@ -62,9 +62,10 @@ test.describe('Werkmap overlay', () => {
     const overlay = page.getByTestId('workdir-overlay')
     await expect(overlay).toBeVisible()
     await expect(page.getByTestId('workdir-overlay-body')).toContainText('Kies welke lokale werkmap')
-    // Both options, plus the two always-available escapes, plus the always-
-    // present "Chat pauzeren" row (disabled here, no turn is running).
-    await expect(page.getByTestId('workdir-overlay-option')).toHaveCount(5)
+    // Both options, the always-present "Opnieuw proberen" row, plus the two
+    // always-available escapes, plus the always-present "Chat pauzeren" row
+    // (disabled here, no turn is running).
+    await expect(page.getByTestId('workdir-overlay-option')).toHaveCount(6)
     // The first row is highlighted, and the highlight is a glyph, not only a
     // colour (colourblind rule).
     const rows = page.getByTestId('workdir-overlay-option')
@@ -436,6 +437,104 @@ test.describe('Werkmap overlay', () => {
     await expect(page.getByTestId('workdir-overlay')).toBeVisible()
 
     releaseMessage()
+  })
+
+  // Reviewer follow-up request: "retry in élke werkmap-melding", not only
+  // checkoutStageLandingFailed — each stage's "Opnieuw proberen" row re-runs
+  // whichever ladder check raised THAT decision (see retryRowFor's own doc
+  // comment, workDirOverlay.mjs).
+  test('every stage offers "Opnieuw proberen", each re-running its own ladder check', async ({ page }) => {
+    // dirtyTree: re-running the check is an EMPTY-reply checkoutAnswer (the
+    // exact request prepareChatShellWorkDirAt's own reviewerReply === ""
+    // branch expects) — no `reply` field at all, unlike a real answer.
+    await mockCheckout(page, {
+      pr: 12903,
+      runId: 'chatmerge-12903',
+      dir: '/home/reindert/dev/pnp',
+      dirName: 'pnp',
+      branch: 'feature/x',
+      decision: {
+        stage: 'dirtyTree',
+        dir: '/home/reindert/dev/pnp',
+        body: '`/home/reindert/dev/pnp` heeft nog niet-gerelateerde, niet-gecommitte wijzigingen.',
+        options: ['Verwijderen', 'Meenemen in de commit'],
+      },
+    })
+    let signals = mockSignals(page)
+    await page.goto('/pr/12903' + SEL)
+    await appReady(page)
+    let retryRow = page.getByTestId('workdir-overlay-option').filter({ hasText: 'Opnieuw proberen' })
+    await expect(retryRow).toBeVisible()
+    await retryRow.click()
+    await expect.poll(() => signals.length).toBe(1)
+    expect(signals[0]).toEqual({ action: 'checkoutAnswer' })
+  })
+
+  test('reuseMerged: "Opnieuw proberen" is also an empty-reply checkoutAnswer', async ({ page }) => {
+    await mockCheckout(page, {
+      pr: 12903,
+      runId: 'chatmerge-12903',
+      dir: '/home/reindert/dev/pnp',
+      dirName: 'pnp',
+      decision: {
+        stage: 'reuseMerged',
+        dir: '/home/reindert/dev/pnp',
+        body: '`/home/reindert/dev/pnp` staat nu op `oude-feature`, dat al is gemerged.',
+        options: ['Ja, gebruik deze directory voor deze PR', 'Nee, zoek een andere directory'],
+      },
+    })
+    const signals = mockSignals(page)
+    await page.goto('/pr/12903' + SEL)
+    await appReady(page)
+    const retryRow = page.getByTestId('workdir-overlay-option').filter({ hasText: 'Opnieuw proberen' })
+    await expect(retryRow).toBeVisible()
+    await retryRow.click()
+    await expect.poll(() => signals.length).toBe(1)
+    expect(signals[0]).toEqual({ action: 'checkoutAnswer' })
+  })
+
+  test('chooseDirectory: "Opnieuw proberen" re-runs discovery, same as "Andere werkmap kiezen"', async ({ page }) => {
+    await mockCheckout(page, DECISION)
+    const signals = mockSignals(page)
+    await page.goto('/pr/12903' + SEL)
+    await appReady(page)
+    const retryRow = page.getByTestId('workdir-overlay-option').filter({ hasText: 'Opnieuw proberen' })
+    await expect(retryRow).toBeVisible()
+    await retryRow.click()
+    await expect.poll(() => signals.length).toBe(1)
+    expect(signals[0]).toEqual({ action: 'checkoutRelist' })
+  })
+
+  // landingFailed: the one stage with no Options at all — "Opnieuw proberen"
+  // resends the exact land request that failed (empty action, the SAME
+  // conversationId/turnId chatCheckoutDecision carried), never
+  // checkoutAnswer/checkoutRelist.
+  test('landingFailed: "Opnieuw proberen" resends the exact land request that failed', async ({ page }) => {
+    await mockCheckout(page, {
+      pr: 12903,
+      runId: 'chatmerge-12903',
+      dir: '/home/reindert/dev/pnp',
+      dirName: 'pnp',
+      branch: 'feature/x',
+      decision: {
+        stage: 'landingFailed',
+        dir: '/home/reindert/dev/pnp',
+        body: 'De wijziging kon niet op de PR-branch worden gezet (reden: fetch checkout commit into shared clone: ...).',
+        conversationId: 'conv-abc',
+        turnId: 'turn-def',
+      },
+    })
+    const signals = mockSignals(page)
+    await page.goto('/pr/12903' + SEL)
+    await appReady(page)
+    // No Options at all, so this is JUST the retry row plus the three
+    // always-available escapes.
+    await expect(page.getByTestId('workdir-overlay-option')).toHaveCount(4)
+    const retryRow = page.getByTestId('workdir-overlay-option').first()
+    await expect(retryRow).toContainText('Opnieuw proberen')
+    await retryRow.click()
+    await expect.poll(() => signals.length).toBe(1)
+    expect(signals[0]).toEqual({ conversationId: 'conv-abc', turnId: 'turn-def' })
   })
 })
 

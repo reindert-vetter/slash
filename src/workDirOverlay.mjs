@@ -143,11 +143,65 @@ export function isWorkDirOverlayOpen() {
   return decision() !== null
 }
 
-// rows: the option list, plus the two always-available escapes. Deliberately
-// parallel to home.mjs's checkoutChipCommandsFor (the chip's own small command
-// menu) rather than shared with it: that one builds palette commands
-// (withClose, hints, ids) for a different container, and both are three lines
-// over the same read model.
+// retryRowFor — "Opnieuw proberen", present for EVERY werkmap decision, not
+// only checkoutStageLandingFailed. Reviewer follow-up request: "retry in
+// élke werkmap-melding" — each stage re-runs whichever ladder check RAISED
+// that exact decision, never a generic "start over":
+//
+//   - dirtyTree/reuseMerged: both are raised inside prepareChatShellWorkDirAt
+//     while a.Dir is already assigned, purely because THAT candidate's own
+//     git state (dirty tree / not on the target branch yet) failed a check —
+//     re-running the SAME check is exactly what the "checkoutAnswer" Activity
+//     already does with an EMPTY reply (prepareChatShellWorkDirAt's own
+//     reviewerReply === "" branch, via checkoutPendingStillNeeded): it
+//     re-classifies that one candidate right now and either drops the
+//     decision (resolved outside slash — cleaned up, or switched branch
+//     itself) or leaves the identical question in place. No backend change
+//     needed: this reuses the exact request "checkoutAnswer" already sends
+//     for any OTHER reply, just without one.
+//   - chooseDirectory: the step that raised it is candidate discovery
+//     itself (listCheckoutCandidates + selectCheckoutCandidate) — re-running
+//     it is the exact same operation "Andere werkmap kiezen"
+//     (checkoutRelist) already performs a few rows below. The two rows are
+//     therefore deliberately identical in effect (a fresh discovery pass,
+//     resetting exclusions too) — kept as two labelled rows anyway so every
+//     stage predictably has an "Opnieuw proberen" row in the same spot,
+//     rather than special-casing this one stage to omit it.
+//   - landingFailed: see chatCheckoutDecision.ConversationID/TurnID's own
+//     doc comment (chat_checkout.go) — resends the exact land request that
+//     failed, as a plain "merge" Signal with an EMPTY action
+//     (chatMergeActionLand), never through checkoutAnswer/checkoutRelist:
+//     this decision has no Dir/git-candidate check to re-run, only the git
+//     landing (commit/fetch/push-target) itself.
+//
+// Returns null when a decision genuinely has nothing to retry against (only
+// possible for landingFailed without a ConversationID/TurnID — a decision
+// from before this field existed, already answered once, or from a future,
+// as-yet-unattached process).
+function retryRowFor(d) {
+  if (!d) return null
+  if (d.stage === 'landingFailed') {
+    if (!d.conversationId && !d.turnId) return null
+    return {
+      key: 'retry',
+      label: t('Opnieuw proberen'),
+      run: () => act('', undefined, 'retry', { conversationId: d.conversationId, turnId: d.turnId }),
+    }
+  }
+  if (d.stage === 'dirtyTree' || d.stage === 'reuseMerged') {
+    return { key: 'retry', label: t('Opnieuw proberen'), run: () => act('checkoutAnswer', undefined, 'retry') }
+  }
+  if (d.stage === 'chooseDirectory') {
+    return { key: 'retry', label: t('Opnieuw proberen'), run: () => act('checkoutRelist', undefined, 'retry') }
+  }
+  return null
+}
+
+// rows: the option list, the retry row, plus the always-available escapes.
+// Deliberately parallel to home.mjs's checkoutChipCommandsFor (the chip's own
+// small command menu) rather than shared with it: that one builds palette
+// commands (withClose, hints, ids) for a different container, and both are
+// three lines over the same read model.
 function rows() {
   const d = decision()
   const out = []
@@ -157,6 +211,8 @@ function rows() {
       out.push({ key, label: opt, run: () => act('checkoutAnswer', opt, key) })
     })
   }
+  const retry = retryRowFor(d)
+  if (retry) out.push(retry)
   if (st && st.checkout && st.checkout.stashPending) {
     out.push({
       key: 'restore',
@@ -220,12 +276,15 @@ function selIndex() {
 // row instead of a generic "something is happening" state, and used to poll
 // GET /api/chat/checkout/progress for that same action's real git commands
 // (checkout_progress.go) for the duration of the request.
-async function act(action, reply, key) {
+// extra is forwarded verbatim to sendAction (home.mjs's sendCheckoutAction) —
+// only retryRowFor's checkoutStageLandingFailed row uses it, to carry the
+// failed request's own conversationId/turnId.
+async function act(action, reply, key, extra) {
   if (!sendAction || wd.busyKey) return
   wd.busyKey = key || action
   startProgressPolling()
   try {
-    await sendAction(action, reply)
+    await sendAction(action, reply, extra)
   } finally {
     stopProgressPolling()
     wd.busyKey = ''

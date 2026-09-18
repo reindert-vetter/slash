@@ -5135,7 +5135,15 @@ async function refreshBlocksAfterOwnLanding(touchedFiles) {
 // the PR's conversations one at a time and loadCheckout below must not wait
 // for that. See resumeStuckClaudeAfterCheckout's own doc comment
 // (RelatedPanel.mjs).
-async function sendCheckoutAction(action, reply) {
+//
+// `extra` is an optional object merged into the Signal body on top of
+// action/reply — the ONLY user is the werkmap overlay's checkoutStageLandingFailed
+// "Opnieuw proberen" row (workDirOverlay.mjs's retryRowFor), which needs to
+// resend `{conversationId, turnId}` with an EMPTY action (chatMergeActionLand,
+// the queue's own default "land this conversation's edit" branch) — the exact
+// same request an ordinary "commit deze wijziging" already sends, just
+// replayed. Every other caller passes no `extra`, so this is additive.
+async function sendCheckoutAction(action, reply, extra) {
   let runId = state.checkout && state.checkout.runId
   try {
     const res = await fetch('/api/workflows/chat_merge', {
@@ -5152,10 +5160,11 @@ async function sendCheckoutAction(action, reply) {
   }
   if (!runId) return
   try {
+    const payload = { ...(action ? { action } : {}), ...(reply ? { reply } : {}), ...(extra || {}) }
     await fetch(`/api/workflows/${runId}/signals/merge`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(reply ? { action, reply } : { action }),
+      body: JSON.stringify(payload),
     })
   } catch (_) {
     /* best-effort */

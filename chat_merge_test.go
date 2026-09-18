@@ -150,6 +150,49 @@ func TestProcessChatMergeClearsPendingEditedFilesOnSuccess(t *testing.T) {
 	}
 }
 
+// TestProcessChatMergeClearsStaleLandingFailedPendingOnSuccess is the
+// regression for the werkmap overlay's "Opnieuw proberen" row on
+// checkoutStageLandingFailed: that row resends the exact land request that
+// failed as a plain "merge" Signal, bypassing prepareChatShellWorkDirAt's own
+// ladder entirely (unlike an ordinary write turn, whose ladder pass already
+// drops a stale landingFailed Pending BEFORE landing even runs, via
+// checkoutPendingStillNeeded) — so without this fix a successful RETRY would
+// leave the overlay open forever, still showing the very error the retry just
+// resolved.
+func TestProcessChatMergeClearsStaleLandingFailedPendingOnSuccess(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "foo v1\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	cm := testChatModule(t)
+	defer clearChatPendingFiles("", 2013)
+	defer clearChatRefreshPendingFiles("", 2013)
+
+	dir := cloneCheckoutDir(t, bareDir, "feature/x")
+	assignCheckoutForTest(t, "", 2013, dir)
+	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("foo edited by claude\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	markChatFilesPending("", 2013, []string{"foo.txt"})
+
+	// Simulate the stale notice a PREVIOUS, now-fixed landing attempt left
+	// behind — exactly what markCheckoutLandingFailedAt would have set.
+	a := getOrCreateCheckoutAssignment("", "", 2013)
+	a.Pending = &chatCheckoutDecision{
+		Stage: checkoutStageLandingFailed, Dir: dir, Body: "some earlier failure",
+		ConversationID: "conv-retry", TurnID: "turn-retry",
+	}
+
+	msg := processChatMergeAt(ctx, nil, cm, &claude.Fake{}, dataDir, chatMergeInput{
+		PR: 2013, ConversationID: "conv-retry", TurnID: "turn-retry",
+	}, "feature/x")
+	if msg.Kind == chat.KindError {
+		t.Fatalf("expected the retried landing to succeed, got error: %+v", msg)
+	}
+	if a.Pending != nil {
+		t.Fatalf("expected the stale checkoutStageLandingFailed Pending to be cleared on success, got %+v", a.Pending)
+	}
+}
+
 // TestProcessChatMergeClearsPendingEditedFilesOnFailureToo is the regression
 // for the "nieuwe poging" stuck-forever bug: a failed landing (here, a
 // pre-commit hook rejecting the commit AFTER commitCheckoutEditsAt already

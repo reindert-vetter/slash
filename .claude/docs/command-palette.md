@@ -150,6 +150,43 @@ option list is deliberately a small parallel of `checkoutChipCommandsFor`
 rather than shared with it — that one builds palette commands for a different
 container, and both are three lines over the same read model.
 
+**Every decision also gets an "Opnieuw proberen" row** (`retryRowFor`,
+`workDirOverlay.mjs`), inserted right after any Options and before "Andere
+werkmap kiezen" — reviewer follow-up request: "retry in élke werkmap-melding",
+not only the informational failure below. Each stage re-runs whichever ladder
+check specifically RAISED that decision, never a generic "start over":
+
+- **`dirtyTree`/`reuseMerged`** — both are raised while a candidate directory
+  is already assigned, purely because THAT candidate's own git state (a dirty
+  tree / not yet on the target branch) failed a check. Retrying resends the
+  exact same request the `checkoutAnswer` Action already handles for any OTHER
+  reply — just with an EMPTY one, which is `prepareChatShellWorkDirAt`'s own
+  "no answer, just re-check whether this is still a real question"
+  branch (`checkoutPendingStillNeeded`): it reclassifies that one candidate
+  right now and either drops the decision (resolved outside slash — cleaned
+  up, or switched branch) or leaves the identical question in place. No
+  backend addition needed.
+- **`chooseDirectory`** — the step that raised it is candidate discovery
+  itself, which is exactly what `checkoutRelist` ("Andere werkmap kiezen", a
+  few rows below) already performs. The two rows are therefore deliberately
+  identical in effect — kept as two labelled rows anyway so the retry row
+  sits in the same spot for every stage, rather than special-casing this one
+  stage to omit it.
+- **`landingFailed`** (`checkoutStageLandingFailed`, chat_checkout.go — the
+  purely informational, options-less notice for a git landing that failed in
+  a way nothing else would otherwise surface) — resends the exact land request that
+  failed, as a plain "merge" Signal with an EMPTY action
+  (`chatMergeActionLand`), carrying the decision's own
+  `ConversationID`/`TurnID` (`chatCheckoutDecision`, `chat_checkout.go`) —
+  this stage has no directory-side check to re-run, only the git landing
+  itself (commit/fetch/push-target). A successful retry must ALSO clear the
+  stale decision itself: unlike an ordinary write turn (whose own ladder pass
+  always drops a stale `landingFailed` notice BEFORE landing runs), this retry
+  bypasses that ladder entirely, so `processChatMergeAt` (`chat_merge.go`)
+  explicitly clears a leftover `landingFailed` `Pending` the moment ANY
+  landing for this PR succeeds — without it the overlay would keep showing an
+  error the reviewer just fixed.
+
 **The busy state names the running option and streams its real git
 commands, not a bare "Bezig…".** Reviewer request: "moet meer feedback geven
 en laten zien wat het echt doet voor commando's" — a generic corner label said

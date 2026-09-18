@@ -273,6 +273,19 @@ func processChatMergeAt(ctx context.Context, tm *TaskManager, cm *chat.Module, c
 		msg = resolveCheckoutMerge(ctx, cm, cl, dataDir, arg.Repo, arg.PR, arg.ConversationID, arg.TurnID, headRefName)
 	}
 	if msg.Kind != chat.KindError {
+		// A successful landing supersedes any stale checkoutStageLandingFailed
+		// notice still sitting on this PR's assignment — most notably the one
+		// this very call is the RETRY of (the werkmap overlay's "Opnieuw
+		// proberen" row for that stage resends this exact ConversationID/TurnID
+		// as a plain "merge" Signal, bypassing prepareChatShellWorkDirAt's own
+		// ladder entirely, so nothing else here would otherwise drop it — an
+		// ordinary write turn's own ladder pass always clears a stale one
+		// BEFORE landing even runs, see checkoutPendingStillNeeded, which is why
+		// this check was never needed until the retry row existed). Without
+		// this the overlay would keep showing an error the reviewer just fixed.
+		if a := getCheckoutAssignment(dataDir, arg.Repo, arg.PR); a != nil && a.Pending != nil && a.Pending.Stage == checkoutStageLandingFailed {
+			a.Pending = nil
+		}
 		// Those exact files are now landed but the tree hasn't re-ingested them
 		// yet — captured BEFORE clearChatPendingFiles below wipes the set it
 		// reads from.
@@ -352,7 +365,7 @@ func processChatMergeAt(ctx context.Context, tm *TaskManager, cm *chat.Module, c
 		// about the checkout's current git state (which is all that function
 		// looks at).
 		if isBlockingLandingFailure(msg.Body) {
-			markCheckoutLandingFailedAt(ctx, dataDir, arg.Repo, arg.PR, headRefName, msg.Body)
+			markCheckoutLandingFailedAt(ctx, dataDir, arg.Repo, arg.PR, headRefName, msg.Body, arg.ConversationID, arg.TurnID)
 		}
 		publishCheckoutChanged(arg.Repo, arg.PR)
 		broadcastCheckoutFreed(tm, checkoutWriteSlotKey(dataDir, arg.Repo, arg.PR))

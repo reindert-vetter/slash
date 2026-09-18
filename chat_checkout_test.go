@@ -2153,6 +2153,12 @@ func TestProcessChatMergeOpensLandingFailedOverlayOnACleanTreeFailure(t *testing
 	if a.Pending.Body != msg.Body {
 		t.Fatalf("decision Body = %q, want the same reason as the chat message %q", a.Pending.Body, msg.Body)
 	}
+	// ConversationID/TurnID must be the failed land request itself — the
+	// werkmap overlay's "Opnieuw proberen" row resends exactly these as a
+	// plain "merge" Signal to retry the SAME landing.
+	if a.Pending.ConversationID != "conv-cleanfail" || a.Pending.TurnID != "turn-cleanfail" {
+		t.Fatalf("decision ConversationID/TurnID = %q/%q, want conv-cleanfail/turn-cleanfail", a.Pending.ConversationID, a.Pending.TurnID)
+	}
 }
 
 // TestIsBlockingLandingFailureExcludesBenignOutcomes is the regression for
