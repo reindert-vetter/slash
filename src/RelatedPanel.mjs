@@ -5120,7 +5120,10 @@ export function CommentClaudeFooter(commentId = '', opts = {}) {
               >
                 ${() =>
                   !batchOnly && (selectedTitle() || staleBadge())
-                    ? html`<span class="flex min-w-0 items-center gap-1.5" data-testid="claude-selected-line">
+                    ? html`<span
+                        class="flex min-w-0 items-center gap-1.5 rounded-md border border-indigo-200 bg-indigo-50 px-1.5 py-1 dark:border-indigo-500/40 dark:bg-indigo-500/15"
+                        data-testid="claude-selected-line"
+                      >
                         ${() =>
                           selectedTitle()
                             ? html`<span class="min-w-0 truncate">
