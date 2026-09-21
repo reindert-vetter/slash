@@ -11,6 +11,9 @@
 //     the announced language (see below) and highlighted with Prism via
 //     `highlightForLang` (Block.mjs) instead of snarkdown's own bare-escaped
 //     `<pre><code>`.
+//   - GFM tables — snarkdown has no table support at all — are recognised and
+//     rendered to real `<table>` HTML by `extractTables` (see below), with
+//     each cell still run through snarkdown for inline formatting.
 //   - The XSS safety net described below.
 //
 // Safety: the raw Markdown text is fully HTML-escaped (`escapeHtml`) before
@@ -511,6 +514,169 @@ function extractRawImages(text, store) {
   })
 }
 
+// extractTables — GFM tables. snarkdown itself has no table support (see its
+// own header comment); this pulls a recognised table BLOCK out before
+// `escapeHtml`, same placeholder/`store` mechanism as `extractCodeFences`/
+// `extractRawImages` above, and renders it to real `<table>` HTML directly
+// (never handed to snarkdown as a whole — snarkdown wouldn't understand the
+// `|`/`-` syntax anyway, it would just show it as literal text).
+//
+// Runs AFTER `extractCodeFences` and BEFORE `extractRawImages`, both
+// deliberately:
+//   - after fences: a fence's own content is already replaced by a one-line
+//     ` MDn ` placeholder token by the time this scans lines, so a
+//     table-shaped chunk of text *inside* a fenced code block (e.g. Claude
+//     showing an example Markdown table in a ```md fence) can never reach
+//     this line scan at all — it isn't a bespoke table-in-fence check, it
+//     falls out of the extraction order for free, same as every other
+//     fence-first guarantee in this file.
+//   - before raw images: a literal `<img ...>` HTML tag sitting inside a
+//     table cell would otherwise already be a bare ` MDn ` placeholder
+//     token by the time a cell gets `.trim()`-ed while splitting a row —
+//     trimming strips the placeholder's required surrounding spaces
+//     (` MDn `) and corrupts `applyPlaceholders`'s later regex match.
+//     Running before raw-image extraction avoids that: such a tag just ends
+//     up escaped to inert text inside the cell (a deliberate, narrow
+//     degradation — no special raw-image treatment inside a table cell —
+//     rather than corruption). An ordinary Markdown `![]()` image in a cell
+//     is unaffected: it goes through snarkdown per-cell below like any other
+//     inline syntax.
+//
+// Detection follows GFM's own rule: a line containing an unescaped `|`
+// (the header) immediately followed by a delimiter line
+// (`|?  :?-+:?  (| :?-+:? )*  |?`, optionally with leading/trailing pipes).
+// Every following line that also looks like a table row is a body row, until
+// a blank line / non-row line / end of text.
+const TABLE_DELIM_RE = /^\|?[ \t]*:?-+:?[ \t]*(\|[ \t]*:?-+:?[ \t]*)*\|?$/
+
+function isTableRow(line) {
+  if (line === undefined) return false
+  const s = line.trim()
+  if (!s) return false
+  // An unescaped `|`: not immediately preceded by a backslash.
+  return /(^|[^\\])\|/.test(s)
+}
+
+// splitTableRow — splits one row into cell strings, respecting inline code
+// spans (a `|` inside backticks never splits) and an escaped `\|` (a literal
+// pipe, GFM's own escape convention for a pipe inside a cell).
+function splitTableRow(line) {
+  let s = line.trim()
+  if (s.startsWith('|')) s = s.slice(1)
+  if (s.endsWith('|') && !s.endsWith('\\|')) s = s.slice(0, -1)
+  const cells = []
+  let cur = ''
+  let inCode = false
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]
+    if (ch === '`') {
+      inCode = !inCode
+      cur += ch
+    } else if (ch === '\\' && s[i + 1] === '|' && !inCode) {
+      cur += '|'
+      i++
+    } else if (ch === '|' && !inCode) {
+      cells.push(cur)
+      cur = ''
+    } else {
+      cur += ch
+    }
+  }
+  cells.push(cur)
+  return cells.map((c) => c.trim())
+}
+
+// cellAlign — reads a delimiter cell's `:` markers into a `text-align` value.
+// Fixed, internally derived strings only ('left'/'right'/'center'/'') — never
+// interpolated from anything the reviewer/Claude actually typed, so this is
+// safe to place directly in a `style="text-align:…"` attribute.
+function cellAlign(raw) {
+  const s = raw.trim()
+  const left = s.startsWith(':')
+  const right = s.endsWith(':')
+  if (left && right) return 'center'
+  if (right) return 'right'
+  if (left) return 'left'
+  return ''
+}
+
+function padCells(cells, n) {
+  const out = cells.slice(0, n)
+  while (out.length < n) out.push('')
+  return out
+}
+
+// renderTableCell — the same escape → protect-intra-word-underscore →
+// neutralize-unpaired-emphasis → snarkdown → restore pipeline `renderMarkdown`
+// runs for the whole document, just for one cell's plain text, so inline
+// formatting (bold/italic/links/inline code/a `![]()` image) and the XSS
+// escape both work inside a cell exactly like everywhere else. Deliberately
+// skips the block-level extraction steps (fences/tables/raw-images) — a table
+// cell is single-line inline content, so none of those can occur inside it.
+// `sanitizeUrls`/`enhanceImages`/`highlightMentions` are NOT called here: all
+// three already run as the LAST steps of `renderMarkdown`, over the entire
+// final HTML — which by then includes this cell's HTML verbatim (substituted
+// in by `applyPlaceholders`) — so a link/image/mention produced by a cell
+// gets that treatment for free, without a second call here.
+function renderTableCell(raw) {
+  let s = escapeHtml(raw)
+  s = stripProtectedChars(s)
+  s = protectIntraWordUnderscores(s)
+  s = neutralizeUnpairedEmphasis(s)
+  let html = snarkdown(s)
+  html = restoreProtectedChars(html)
+  return html
+}
+
+function tableRowHtml(cells, tag, aligns) {
+  return (
+    '<tr>' +
+    cells
+      .map((c, i) => {
+        const align = aligns[i]
+        const styleAttr = align ? ` style="text-align:${align}"` : ''
+        return `<${tag}${styleAttr}>${renderTableCell(c)}</${tag}>`
+      })
+      .join('') +
+    '</tr>'
+  )
+}
+
+function extractTables(text, store) {
+  const lines = String(text).split('\n')
+  const out = []
+  let i = 0
+  while (i < lines.length) {
+    const header = lines[i]
+    const delim = lines[i + 1]
+    if (isTableRow(header) && delim !== undefined && TABLE_DELIM_RE.test(delim.trim())) {
+      const aligns = splitTableRow(delim).map(cellAlign)
+      const colCount = aligns.length
+      const headCells = padCells(splitTableRow(header), colCount)
+      let j = i + 2
+      const bodyRows = []
+      while (j < lines.length && isTableRow(lines[j])) {
+        bodyRows.push(padCells(splitTableRow(lines[j]), colCount))
+        j++
+      }
+      let html = '<div class="overflow-x-auto my-2"><table class="md-table">'
+      html += '<thead>' + tableRowHtml(headCells, 'th', aligns) + '</thead>'
+      if (bodyRows.length) {
+        html += '<tbody>' + bodyRows.map((r) => tableRowHtml(r, 'td', aligns)).join('') + '</tbody>'
+      }
+      html += '</table></div>'
+      const token = ` MD${store.length} `
+      store.push(html)
+      out.push(token)
+      i = j
+      continue
+    }
+    out.push(header)
+    i++
+  }
+  return out.join('\n')
+}
+
 // enhanceImages — turns snarkdown's bare `<img src alt>` (no styling, no
 // click behaviour at all) into something worth looking at: every image gets
 // a shared border/rounding + `cursor-zoom-in`, and a RUN of 2 or more images
@@ -602,6 +768,7 @@ export function renderMarkdown(text, startIndex = 0, truncate = false) {
   const store = []
   let src = String(text)
   src = extractCodeFences(src, store, startIndex, truncate)
+  src = extractTables(src, store)
   src = extractRawImages(src, store)
   src = escapeHtml(src)
   // Keep snarkdown away from the two emphasis cases it gets wrong (an

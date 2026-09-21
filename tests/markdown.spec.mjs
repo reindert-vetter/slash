@@ -307,4 +307,100 @@ test.describe('PR Review Tree — Markdown rendering', () => {
     await expect(link).toHaveText('click me')
     await expect(link).toHaveAttribute('href', '#')
   })
+
+  // GFM tables: snarkdown has no table support at all, so `extractTables`
+  // (markdown.mjs) recognises the header/delimiter/body-row shape itself and
+  // renders real <table> HTML directly, with each cell still run through
+  // snarkdown for inline formatting (bold, link, inline code).
+  test('renders a GFM table with alignment and inline formatting in a cell', async ({ page }) => {
+    await page.goto('/pr/12903')
+
+    await appReady(page)
+
+    await evaluateSettled(page, async () => {
+      const { renderMarkdown } = await import('/src/markdown.mjs')
+      const md = [
+        '| Name | Count | Notes |',
+        '| :--- | :---: | ----: |',
+        '| **foo** | 1 | see [docs](https://example.com) |',
+        '| `bar` | 2 | plain |',
+      ].join('\n')
+      const host = document.createElement('div')
+      host.id = 'markdown-table-host'
+      host.innerHTML = renderMarkdown(md)
+      document.body.appendChild(host)
+    })
+
+    const host = page.locator('#markdown-table-host')
+    await expect(host.locator('table')).toHaveCount(1)
+    const headerCells = host.locator('thead th')
+    await expect(headerCells).toHaveCount(3)
+    await expect(headerCells.nth(0)).toHaveText('Name')
+    await expect(headerCells.nth(1)).toHaveText('Count')
+    await expect(headerCells.nth(2)).toHaveText('Notes')
+    // Alignment from the delimiter row's `:` markers.
+    await expect(headerCells.nth(0)).toHaveAttribute('style', /text-align:\s*left/)
+    await expect(headerCells.nth(1)).toHaveAttribute('style', /text-align:\s*center/)
+    await expect(headerCells.nth(2)).toHaveAttribute('style', /text-align:\s*right/)
+
+    const bodyRows = host.locator('tbody tr')
+    await expect(bodyRows).toHaveCount(2)
+    // Inline formatting inside a cell still works.
+    await expect(bodyRows.nth(0).locator('td').nth(0).locator('strong')).toHaveText('foo')
+    await expect(bodyRows.nth(0).locator('td').nth(2).locator('a')).toHaveAttribute(
+      'href',
+      'https://example.com',
+    )
+    await expect(bodyRows.nth(1).locator('td').nth(0).locator('code')).toHaveText('bar')
+  })
+
+  test('escapes an XSS attempt inside a table cell instead of rendering it live', async ({ page }) => {
+    await page.goto('/pr/12903')
+
+    const alerted = []
+    page.on('dialog', async (d) => {
+      alerted.push(d.message())
+      await d.dismiss()
+    })
+
+    await evaluateSettled(page, async () => {
+      const { renderMarkdown } = await import('/src/markdown.mjs')
+      const md = ['| A | B |', '| --- | --- |', '| <script>alert(1)</script> | <img src=x onerror="alert(2)"> |'].join(
+        '\n',
+      )
+      const host = document.createElement('div')
+      host.id = 'markdown-table-xss-host'
+      host.innerHTML = renderMarkdown(md)
+      document.body.appendChild(host)
+    })
+
+    expect(alerted).toHaveLength(0)
+    const host = page.locator('#markdown-table-xss-host')
+    await expect(host.locator('table')).toHaveCount(1)
+    await expect(host.locator('script')).toHaveCount(0)
+    await expect(host.locator('img')).toHaveCount(0)
+    await expect(host).toContainText('<script>alert(1)</script>')
+    await expect(host).toContainText('<img src=x onerror="alert(2)">')
+  })
+
+  test('does not render a table-shaped block found inside a fenced code block', async ({ page }) => {
+    await page.goto('/pr/12903')
+
+    await appReady(page)
+
+    await evaluateSettled(page, async () => {
+      const { renderMarkdown } = await import('/src/markdown.mjs')
+      const md = ['```md', '| A | B |', '| --- | --- |', '| 1 | 2 |', '```'].join('\n')
+      const host = document.createElement('div')
+      host.id = 'markdown-table-in-fence-host'
+      host.innerHTML = renderMarkdown(md)
+      document.body.appendChild(host)
+    })
+
+    const host = page.locator('#markdown-table-in-fence-host')
+    // The fence renders as an ordinary highlighted code card, not a table.
+    await expect(host.locator('table')).toHaveCount(0)
+    await expect(host.locator('[data-testid="code-fence"]')).toHaveCount(1)
+    await expect(host.locator('[data-testid="code-fence"]')).toContainText('| A | B |')
+  })
 })

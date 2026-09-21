@@ -348,6 +348,25 @@
         border-top: 1px solid #e2e8f0;
         margin: 0.6em 0;
       }
+      /* GFM tables (markdown.mjs's extractTables) — a minimal grid, no
+         typography-plugin reset: border-collapse, a light header tint, thin
+         cell borders. `.overflow-x-auto` on the wrapper div (markdown.mjs)
+         handles a table wider than a narrow chat bubble. */
+      .markdown-body table {
+        border-collapse: collapse;
+        margin: 0.5em 0;
+        font-size: 0.9em;
+      }
+      .markdown-body th,
+      .markdown-body td {
+        border: 1px solid #e2e8f0;
+        padding: 0.3em 0.6em;
+      }
+      .markdown-body th {
+        background: #f1f5f9;
+        color: #1e293b;
+        font-weight: 600;
+      }
 
       /* Dark-mode overrides for the two colour blocks above. Tailwind's own
          utility classes handle their own dark: variants via the `.dark` class
@@ -451,6 +470,14 @@
         :root:not([data-theme='light']) .markdown-body hr {
           border-top-color: #3f3f46;
         }
+        :root:not([data-theme='light']) .markdown-body th,
+        :root:not([data-theme='light']) .markdown-body td {
+          border-color: #3f3f46;
+        }
+        :root:not([data-theme='light']) .markdown-body th {
+          background: #27272a;
+          color: #e4e4e7;
+        }
       }
 
       /* Same rules as the @media block above, mirrored for the manual theme
@@ -535,6 +562,14 @@
       }
       :root[data-theme='dark'] .markdown-body hr {
         border-top-color: #3f3f46;
+      }
+      :root[data-theme='dark'] .markdown-body th,
+      :root[data-theme='dark'] .markdown-body td {
+        border-color: #3f3f46;
+      }
+      :root[data-theme='dark'] .markdown-body th {
+        background: #27272a;
+        color: #e4e4e7;
       }
     </style>
   </head>

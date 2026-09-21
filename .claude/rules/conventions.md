@@ -137,8 +137,12 @@ fence, which already tokenises its own comments correctly) or
 `snarkdown` (v2.0.0, MIT, ~1kb) is vendored as an ES module in
 `src/vendor/snarkdown.js` (verbatim upstream algorithm, only a vendoring header
 added) and used out of the box: headings, lists, bold/italic/strike,
-blockquotes, inline code, links, images, `---`. **No** GFM tables or task
-checklists (`- [ ]`) — deliberately out of scope, snarkdown doesn't support them.
+blockquotes, inline code, links, images, `---`. It has **no** GFM table
+support at all — GFM tables are added as a pre-processing layer in
+`src/markdown.mjs` (`extractTables`, see point 5 below), same
+extract-before-`escapeHtml`/placeholder-`store` mechanism as the fenced-code
+and raw-`<img>` handling. Task checklists (`- [ ]`) remain deliberately out of
+scope — not asked for, and snarkdown doesn't support them either.
 
 `src/markdown.mjs` is a thin wrapper (`renderMarkdown(text, startIndex) ->
 safeHtmlString`) that adds three things:
@@ -184,6 +188,35 @@ safeHtmlString`) that adds three things:
    ** / __ literal, at every render point"), which asserts all three real
    call-site argument shapes; every render point shares this because
    `markdown.mjs` is the **only** importer of snarkdown.
+5. GFM tables: `extractTables` scans `text` **line by line**, after the fence
+   extraction and before the raw-`<img>` extraction (both orderings are
+   load-bearing, see the function's own doc comment) — a header line
+   containing an unescaped `|` immediately followed by a delimiter line
+   (`|?  :?-+:?  (| :?-+:? )*  |?`, GFM's own detection rule) opens a table;
+   every following line that still looks like a row is a body row, until a
+   blank/non-row line or the end. Column alignment comes from the delimiter's
+   `:` markers. Each recognised table is rendered directly to
+   `<div class="overflow-x-auto my-2"><table>…</table></div>` and stored via
+   the same placeholder/`store` token mechanism as a fence or a raw `<img>` —
+   so the table HTML itself bypasses the top-level `escapeHtml`, exactly like
+   a fence's Prism HTML does. A cell's own text still goes through a smaller
+   copy of the main pipeline (`renderTableCell`: escape → protect intra-word
+   underscore → neutralize unpaired emphasis → snarkdown → restore) so inline
+   formatting and the XSS escape both work inside a cell — `sanitizeUrls`/
+   `enhanceImages`/`highlightMentions` don't need a second call there, since
+   all three already run as the last steps of `renderMarkdown` over the
+   entire final HTML, which by then includes every cell's HTML. Because
+   `extractTables` only ever runs on text that has already had its fences
+   pulled into one-line placeholder tokens, a table-shaped chunk of text
+   *inside* a fenced code block is never even reachable by this line scan —
+   it renders as ordinary highlighted code, not a table. Styling is
+   `.markdown-body table/th/td` in `index.html`/`plan.html` (the two page
+   shells with a `.markdown-body` block — `settings.html`/`overview.html`
+   render no Markdown and stay untouched), in the same three-way
+   base/`@media`/`:root[data-theme='dark']` shape as every other
+   `.markdown-body` rule (see "Theme" below). Test: `tests/markdown.spec.mjs`
+   (a table with alignment + inline formatting, an XSS cell, a table-shaped
+   block inside a fence staying unrendered).
 
 ### Fenced code blocks get a language badge, a running number, and a wider set of Prism grammars
 
