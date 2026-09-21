@@ -805,14 +805,18 @@ const CODE_CHAR_PX = 11 * 0.6023
 // per-row chip at the right edge of a diff row (lineSummaryBadge, the
 // "onderliggende code" ✓ n/n pill). Without that reserve, sizing the card
 // flush to the last character puts the chip straight on top of the longest
-// line's tail. 4rem (reviewer-approved number) leaves ~38px, which fully
-// clears the plain approve-fraction chip; a chip that also carries comment
-// avatars (measured up to 62px) can still overlay the tail of the single
-// longest line in view, which is the same designed-for overlay
-// lineSummaryBadge's own translucent pill background has always handled
-// (every row outside the measured window can already be longer than the
-// card).
-const CARD_CHROME_PX = 64
+// line's tail. 4rem (reviewer-approved number) left ~38px, which was meant
+// to clear the plain approve-fraction chip — but with lineSummaryBadge at
+// `right-3` (see its own doc comment) the pill's LEFT edge still landed on
+// the last character of the longest line (reported: the `;` behind a `0/7`
+// chip on a split-view row, screenshot). Widened by two code characters
+// (2 × CODE_CHAR_PX ≈ 13px, rounded to 14): 78px total, ~52px of chip
+// reserve. A chip that also carries comment avatars (measured up to 62px)
+// can still overlay the tail of the single longest line in view, which is
+// the same designed-for overlay lineSummaryBadge's own translucent pill
+// background has always handled (every row outside the measured window can
+// already be longer than the card).
+const CARD_CHROME_PX = 78
 
 // contentWidthPx — the one chars → px conversion, shared by every
 // content-driven width below so they can never drift apart. Exported (with
@@ -1221,7 +1225,7 @@ function inlineEditorSlot(b, onSave) {
     <div class="flex min-h-0 flex-1 flex-col" data-testid="inline-edit-wrapper">
       <div class="relative min-h-[45vh] flex-1 overflow-auto no-scrollbar bg-white dark:bg-zinc-900">
         <pre
-          class="pointer-events-none absolute inset-x-0 top-0 m-0 whitespace-pre p-3 font-mono text-[11px] leading-relaxed"
+          class="pointer-events-none absolute inset-x-0 top-0 m-0 whitespace-pre-wrap break-words p-3 font-mono text-[11px] leading-relaxed"
           aria-hidden="true"
           data-testid="inline-edit-highlight"
         ><code class="${'language-' + lang}" .innerHTML="${initialHighlightHtml}"></code></pre>

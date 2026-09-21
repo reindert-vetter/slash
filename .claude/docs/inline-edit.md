@@ -207,6 +207,32 @@ reviewer had actually selected in the diff.
 own end — the pre-existing default a plain `<textarea>` already gives an
 uncontrolled value, unchanged for that case.
 
+### Both layers must share the exact same `white-space` behaviour
+
+Reviewer report (with a screenshot): the native text selection inside the
+(invisible) `<textarea>` visibly drifted away from the coloured `<pre>` text
+underneath it, worse the further down the block. Root cause, measured
+against a real PR rather than guessed: the `<pre>` carried `whitespace-pre`
+(never wraps — a long line overflows the box and scrolls horizontally via
+the shared ancestor's `overflow-auto`), while the `<textarea>` had **no**
+`white-space` class at all, so the browser's own `<textarea>` default
+(`white-space: pre-wrap`) applied — it silently wraps a long line instead.
+As soon as one line wraps in the textarea but not in the `<pre>`, every line
+below it lands at a different vertical offset between the two layers, and
+the divergence only grows with each further wrapped line — exactly the
+drifting selection in the report. Fixed by making the `<pre>` match the
+textarea's own (unstyled) default instead of the other way round:
+`whitespace-pre-wrap break-words`, the same class pair already used for
+"a long code line wraps instead of being silently clipped" elsewhere
+(`.claude/rules/conventions.md`, `CodePreview.mjs`'s `highlightedPre`) — no
+JS, no scroll-sync change. Deliberately not the reverse (forcing the
+`<textarea>` to `wrap="off"`/no-wrap): a `<textarea>` has its own internal
+viewport, so a non-wrapping textarea gets its OWN horizontal scrollbar,
+independent from the ancestor `overflow-auto` the `<pre>` relies on — that
+would just swap this bug for a horizontal-scroll desync instead of fixing
+it. **Don't reintroduce this:** any future change to either layer's
+`white-space`/wrap class must change both, together.
+
 ## The editor: no textarea look, no contenteditable
 
 "Alsof er geen tekstveld is" — the editor must look identical to the
