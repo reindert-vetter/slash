@@ -704,10 +704,11 @@ Claude conversation itself, one sentence**:
   — it already runs on every render that needs the list, and that call is
   self-deduping, so no separate watch/poller exists just to kick fetches off.
 - **`chatStateOf(c)` is both the row's own word and the list's sort order**:
-  `'busy'` (a Signal POST in flight, or `progress.running`) → `'done'` (inside
-  `isTurnRecentlyFinished`'s 2-minute window) → `'unread'` (there is an answer
-  the reviewer has NOT dwelt on for the full 5s yet, `isChatUnread`) →
-  `'seen'`. `CHAT_STATE_RANK` sorts by exactly that (a stable sort, so a row
+  `'busy'` (a Signal POST in flight, or `progress.running`) → `'failed'` (the
+  last message needs a manual retry, see `otherTaskFailed` below) → `'done'`
+  (inside `isTurnRecentlyFinished`'s 2-minute window) → `'unread'` (there is
+  an answer the reviewer has NOT dwelt on for the full 5s yet, `isChatUnread`)
+  → `'seen'`. `CHAT_STATE_RANK` sorts by exactly that (a stable sort, so a row
   only moves when its own state really changes). **This is what implements the
   "nog niet x seconden bekeken" criterion**: the 5s dwell
   (`scheduleChatSeenDwell` → the durable `seen_at`, see "Marking it read")
@@ -716,6 +717,36 @@ Claude conversation itself, one sentence**:
   linger as the *inclusion* rule — a finished chat no longer vanishes from the
   list at all, it only changes its word (see "A finished task lingers for 2
   minutes" below, which now only owns the `'done'` word).
+- **`otherTaskFailed` / the `'failed'` row state ("Mislukt", glyph `✕`)** —
+  reviewer report: a chat that hit a session/usage limit (or any other error
+  its last automatic retry attempt couldn't recover from) showed the same
+  green ✓ "Klaar" as a genuinely finished chat, AND disappeared from the list
+  entirely once "bekeken" — both read as "nothing to do here", the opposite of
+  true. Fixed with a third fact read off the SAME transcript fetch
+  `ensureOtherTaskTitle` already does (next to `otherTaskAutoStarted`/
+  `otherTaskAnswered`): `otherTaskFailed.byId[c.id]` = `isChatFailureTurn` of
+  the transcript's LAST message — the exact same condition (`kind === 'error'`
+  or `'cancelled'`) that already drives the "Opnieuw proberen"/"Ook andere
+  opnieuw proberen" buttons (`ClaudeChat.mjs`), confirmed with Reindert to
+  cover **every** failed turn, not narrowed to a session-limit one:
+  `chat.Message` carries no separate "this was a limit" field, only `Kind`
+  plus the CLI's own free-form `Body` text (`chatFailureTurn`,
+  `chat_workflow.go`), so any narrower signal would mean sniffing that English
+  text. `chatStateOf` checks it right after `'busy'`, BEFORE the `'done'`
+  2-minute window, so a just-failed turn never shows `'done'` even during that
+  window; unlike `'done'` it does not expire on its own — only a fresh
+  transcript (a retry that actually lands a non-error last message) clears it,
+  via the same `chat.message` SSE cache-drop `otherTaskTitles`/
+  `otherTaskAnswered` already rely on (`ensureOtherTaskTitle` re-derives all
+  three facts from one fetch). And because `chatStateOf` returns `'failed'`
+  rather than `'seen'`/`'done'` for it, `isChatSeenAndAnswered`'s existing
+  `chatStateOf(c) === 'seen'` guard already excludes it from
+  `otherClaudeChatsAll`'s "bekeken en zonder vervolg" filter for free — no
+  separate exclusion needed, see that function's own doc comment. Glyph `✕`
+  (not the bare ASCII `x`/`×`, and not `!`, already used for `'unread'`) is
+  deliberately a visual counterpart to the existing bold `✓`, badge tinted
+  rose instead of emerald — colour is decoration on top of the word+glyph, per
+  the colourblind rule. Test: `tests/claude-task-failed-status.spec.mjs`.
 - **`MAX_CHAT_ROWS` (12) caps the rendered rows**, with the remainder as one
   plain, non-navigable "+n meer" line (`claudeMoreChatsNote`,
   `data-testid=claude-more-chats`) — the cap is applied AFTER the sort, so a

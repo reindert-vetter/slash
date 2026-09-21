@@ -4602,20 +4602,30 @@ const otherTaskTitles = reactive({ byId: {} })
 // …) concurrent request for the same id.
 const otherTaskTitlesFetching = new Set()
 
-// otherTaskAutoStarted / otherTaskAnswered — two more facts read off the SAME
-// transcript fetch ensureOtherTaskTitle already does, cached the same way
-// (undefined = not yet known → a row stays visible until its own fetch
-// resolves, never hidden speculatively). Reviewer requests, both about
-// "Andere chats in deze PR": "ik wil hier niet de chats zien die automatisch
-// zijn gestart" (a kilo-code auto-check turn, chat.KindAutoCheck /
+// otherTaskAutoStarted / otherTaskAnswered / otherTaskFailed — three more
+// facts read off the SAME transcript fetch ensureOtherTaskTitle already does,
+// cached the same way (undefined = not yet known → a row stays visible until
+// its own fetch resolves, never hidden speculatively). Reviewer requests,
+// about "Andere chats in deze PR": "ik wil hier niet de chats zien die
+// automatisch zijn gestart" (a kilo-code auto-check turn, chat.KindAutoCheck /
 // chatActionAutoCheck in chat_workflow.go — its first user message carries
 // kind 'auto_check') and "ik wil daar ook niet chats zien die antwoord hebben
 // gegeven en die ik bekeken heb" (chatStateOf's existing 'seen' state, but
 // ONLY once there is actually an answer — a chat nobody has replied to yet
 // falls into 'seen' too and must stay visible). See otherClaudeChatsAll's own
-// filter below.
+// filter below. otherTaskFailed answers a THIRD request ("als ik een limit
+// heb, dan wil ik niet een vinkje alsof de chat klaar is ... ook mag de chat
+// niet verdwijnen"): whether the chat's LAST message needs a manual retry —
+// same condition as isChatFailureTurn (kind 'error' or 'cancelled', which
+// already drives the "Opnieuw proberen"/"Ook andere opnieuw proberen"
+// buttons), not narrowed to a session/usage-limit specifically: chat.Message
+// carries no separate "this was a limit" field (only Kind + the CLI's own
+// free-form Body text, see chatFailureTurn in chat_workflow.go), so any other
+// signal would mean sniffing that English text — confirmed with Reindert to
+// cover every failed turn, not just a limit one.
 const otherTaskAutoStarted = reactive({ byId: {} })
 const otherTaskAnswered = reactive({ byId: {} })
+const otherTaskFailed = reactive({ byId: {} })
 
 // ensureOtherTaskTitle lazily fetches `c`'s own transcript (the same
 // read-only GET /api/chat?commentId= loadChatMessages already uses) purely to
@@ -4653,6 +4663,11 @@ function ensureOtherTaskTitle(c) {
         otherTaskAnswered.byId = {
           ...otherTaskAnswered.byId,
           [c.id]: !!lastAssistantMessageAt(json.messages),
+        }
+        const lastMsg = (json.messages || [])[(json.messages || []).length - 1]
+        otherTaskFailed.byId = {
+          ...otherTaskFailed.byId,
+          [c.id]: isChatFailureTurn(lastMsg),
         }
       }
     })
@@ -4748,34 +4763,45 @@ function otherTaskTitleFor(c) {
 const MAX_CHAT_ROWS = 12
 
 // chatStateOf — one row's own state, in priority order. 'busy' wins (it is
-// the newest fact), then the 2-minute "just finished" window, then "has an
-// answer you have not looked at for the full 5s dwell yet" (isChatUnread,
-// chatUnread.mjs), otherwise 'seen'. Every state renders as a WORD plus its
-// own glyph in claudeTaskRow — never a bare colour, per the colourblind rule.
+// the newest fact), then 'failed' (the chat's last message needs a manual
+// retry — see otherTaskFailed's own doc comment; checked BEFORE the 2-minute
+// "just finished" window so a chat that just failed never shows as 'done'
+// even during that window, and unlike 'done' this never expires on its own —
+// only a fresh turn, busy again, clears it), then the 2-minute "just
+// finished" window, then "has an answer you have not looked at for the full
+// 5s dwell yet" (isChatUnread, chatUnread.mjs), otherwise 'seen'. Every state
+// renders as a WORD plus its own glyph in claudeTaskRow — never a bare
+// colour, per the colourblind rule.
 function chatStateOf(c) {
   if (!c) return 'seen'
   const id = String(c.id)
   const p = turnProgress(c.id)
   if (isTurnBusy(c.id) || (p && p.running)) return 'busy'
+  if (otherTaskFailed.byId[id]) return 'failed'
   if (isTurnRecentlyFinished(c.id)) return 'done'
   if (isChatUnread(c)) return 'unread'
   return 'seen'
 }
 
-const CHAT_STATE_RANK = { busy: 0, done: 1, unread: 2, seen: 3 }
+const CHAT_STATE_RANK = { busy: 0, failed: 1, done: 2, unread: 3, seen: 4 }
 
 // isChatSeenAndAnswered — "bekeken en zonder vervolg": the chat has settled
-// (chatStateOf === 'seen', the 5s dwell passed with nothing busy/unread/
-// just-finished left) AND it actually got an answer at some point
+// (chatStateOf === 'seen', the 5s dwell passed with nothing busy/failed/
+// unread/just-finished left) AND it actually got an answer at some point
 // (otherTaskAnswered — a chat nobody replied to yet stays 'seen' too but
 // must NOT count as "done with", see otherClaudeChatsAll's own filter
-// below). Both facts are `undefined` until ensureOtherTaskTitle's fetch
-// resolves, so this reads `false` (not yet known to qualify) rather than
-// `true` before that — same fail-open reasoning as the inline filter this
-// was extracted from. Exported so home.mjs's chatItems (recomputeLeftList,
-// the "Openstaande chats" sidebar row) can apply the SAME "bekeken en zonder
-// vervolg" rule to a chatOnly ORPHAN row instead of inventing a second
-// mechanism — see "opgeruimd zodra bekeken" in claude-chat-panel.md.
+// below). A chat whose last message needs a manual retry never reaches
+// 'seen' at all (chatStateOf returns 'failed' for it, checked before 'done'),
+// so this already never fires for one — a failed/limit-stranded chat must
+// stay visible until the reviewer retries it, not disappear once "bekeken"
+// (see otherTaskFailed's own doc comment). Both facts are `undefined` until
+// ensureOtherTaskTitle's fetch resolves, so this reads `false` (not yet known
+// to qualify) rather than `true` before that — same fail-open reasoning as
+// the inline filter this was extracted from. Exported so home.mjs's chatItems
+// (recomputeLeftList, the "Openstaande chats" sidebar row) can apply the SAME
+// "bekeken en zonder vervolg" rule to a chatOnly ORPHAN row instead of
+// inventing a second mechanism — see "opgeruimd zodra bekeken" in
+// claude-chat-panel.md.
 export function isChatSeenAndAnswered(c) {
   return chatStateOf(c) === 'seen' && !!otherTaskAnswered.byId[c.id]
 }
@@ -5003,11 +5029,12 @@ export function commentClaudeShortcutHints() {
 
 // claudeTaskRow renders one row of otherClaudeChats: a title (the reviewer's
 // own last message, see otherTaskTitleFor/chatTaskTitle) plus its own state
-// as a WORD — 'bezig' (the live claudeStatusText line), 'Klaar', 'nieuw'
-// (there is an answer the reviewer hasn't dwelt on for the full 5s yet) or
-// 'bekeken' — with a glyph next to it, never a bare colour, per the
-// colourblind rule (the pulsing dot on a running row is decoration on top
-// only). Highlighted state mirrors claudeQuestionOptions' own convention
+// as a WORD — 'bezig' (the live claudeStatusText line), 'Mislukt' (the last
+// message needs a manual retry, see otherTaskFailed's own doc comment),
+// 'Klaar', 'nieuw' (there is an answer the reviewer hasn't dwelt on for the
+// full 5s yet) or 'bekeken' — with a glyph next to it, never a bare colour,
+// per the colourblind rule (the pulsing dot on a running row is decoration on
+// top only). Highlighted state mirrors claudeQuestionOptions' own convention
 // exactly: a ring PLUS a leading "› " glyph, never colour alone.
 //
 // LAYOUT, reported bug: the state text used to be `shrink-0` while the title
@@ -5017,14 +5044,21 @@ export function commentClaudeShortcutHints() {
 // the state text is the one that truncates, capped at 45% of the row.
 function claudeTaskRow(c, i) {
   const active = () => cs.claudeTasksPos === i + 1
-  // state — see chatStateOf: 'busy' | 'done' | 'unread' | 'seen'. 'done' is
-  // the 2-minute window after a turn stopped (isTurnRecentlyFinished); it no
-  // longer decides whether the row EXISTS, only what it says.
+  // state — see chatStateOf: 'busy' | 'failed' | 'done' | 'unread' | 'seen'.
+  // 'done' is the 2-minute window after a turn stopped
+  // (isTurnRecentlyFinished); it no longer decides whether the row EXISTS,
+  // only what it says. 'failed' takes priority over 'done' in chatStateOf, so
+  // a chat that just hit e.g. a session limit never shows the ✓/"Klaar" a
+  // reviewer would read as "nothing to do here" — see otherTaskFailed.
   const state = () => chatStateOf(c)
   const done = () => state() === 'done'
-  const glyph = () => (done() ? '✓' : state() === 'unread' ? '!' : state() === 'seen' ? '○' : '')
+  const failed = () => state() === 'failed'
+  const glyph = () =>
+    failed() ? '✕' : done() ? '✓' : state() === 'unread' ? '!' : state() === 'seen' ? '○' : ''
   const stateText = () => {
     switch (state()) {
+      case 'failed':
+        return t('Mislukt')
       case 'done':
         return t('Klaar')
       case 'unread':
@@ -5054,11 +5088,13 @@ function claudeTaskRow(c, i) {
           state() === 'busy'
             ? 'inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-indigo-400'
             : 'inline-flex h-3 w-3 shrink-0 items-center justify-center rounded-full text-[8px] font-bold leading-none ' +
-              (done()
-                ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400'
-                : state() === 'unread'
-                  ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300'
-                  : 'bg-slate-100 text-slate-500 dark:bg-zinc-800 dark:text-zinc-500')}"
+              (failed()
+                ? 'bg-rose-100 text-rose-700 dark:bg-rose-500/20 dark:text-rose-400'
+                : done()
+                  ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400'
+                  : state() === 'unread'
+                    ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300'
+                    : 'bg-slate-100 text-slate-500 dark:bg-zinc-800 dark:text-zinc-500')}"
         >${() => glyph()}</span
       >
       <span class="min-w-0 flex-1 truncate font-medium text-slate-600 dark:text-zinc-300">
