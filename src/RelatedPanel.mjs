@@ -4901,6 +4901,20 @@ export function hasCommentClaudeFooter() {
 // wachtrij"): what the reviewer typed ahead while a turn was running, in words
 // (never a colour or a bare count badge, per the colourblind rule). '' when
 // nothing is waiting.
+// claudeTurnSettled — "Claude has already answered in the conversation on
+// screen": the newest message is Claude's own. Read by CommentClaudeFooter's
+// status line for the busy-but-no-snapshot moment (claudeStatusText's
+// `settled`, ClaudeChat.mjs): the optimistic own bubble a send appends
+// (addPendingOwnMessage) is role 'user', so right after sending this is still
+// false and the line keeps saying "Claude denkt…"; once the SSE refetch has
+// brought in Claude's reply while the Signal POST is still open (the
+// post-turn landing runs inline under it), it flips to the saving text.
+function claudeTurnSettled() {
+  const m = cc.messages
+  const last = m && m.length ? m[m.length - 1] : null
+  return !!last && last.role === 'assistant'
+}
+
 function claudeQueueNote() {
   const n = claudeChatView().queued().length
   if (n === 0) return ''
@@ -5155,7 +5169,7 @@ export function CommentClaudeFooter(commentId = '', opts = {}) {
                           class="line-clamp-3 min-w-0 flex-1 [overflow-wrap:anywhere]"
                           data-testid="claude-chat-status"
                         >
-                          ${() => claudeStatusText(view.progress(), view.elapsed()) + claudeQueueNote()}
+                          ${() => claudeStatusText(view.progress(), view.elapsed(), claudeTurnSettled()) + claudeQueueNote()}
                         </span>
                         <button
                           type="button"

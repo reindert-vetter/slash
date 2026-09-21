@@ -3957,6 +3957,28 @@ update, live, against `PR 13810`).
   (`modules/claude/runchat_heartbeat_test.go`) covers the lower-level plumbing:
   `OnHeartbeat` fires once per streamed line (result line included).
 
+**How a blocked slot showed up in the panel: "Claude denkt…" (without "na")
+plus a Stop button UNDER an already-finished answer.** Reported on PR 13810:
+the transcript already showed Claude's reply and the landing bubble, yet the
+footer kept saying "Claude denkt…" for 20 minutes. Not a stuck status field:
+`hasActiveClaudeTurn` (`RelatedPanel.mjs`) was true through `ccBusy()` alone —
+the Signal POST of `sendClaudeMessage` had not returned, because tembed drives
+the whole turn inline under that request, including `enqueueChatMerge` →
+`processChatMerge`, whose `broadcastCheckoutFreed` in turn drove a waiting
+conversation's turn inline while still holding the slot it was waiting for
+(self-deadlock until the 20-minute staleness bar; fixed backend-side, see
+"`broadcastCheckoutFreed` delivers its Signals from a detached goroutine" in
+`.claude/docs/workflows-comments.md`). The progress snapshot was long gone
+(running:false → cleared), so `claudeStatusText(null)` fell back to the
+"nothing has happened yet" wording. `claudeStatusText`'s third argument,
+`settled` (`ClaudeChat.mjs`), fed by `claudeTurnSettled()` (the newest
+`cc.messages` entry is Claude's own), makes that busy-but-no-snapshot moment
+read "Claude is klaar — bezig met opslaan…" instead — the same sentence the
+running:false snapshot itself uses — so a still-open POST after a visible
+answer is never mistaken for a hung model. Right after sending, the optimistic
+own bubble is role `user`, so the plain "Claude denkt…" fallback still applies
+there.
+
 ### A rejected Signal must not be silent
 
 `sendClaudeMessage` (`RelatedPanel.mjs`) used to `await fetch(...)` and never

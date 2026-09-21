@@ -294,8 +294,18 @@ const LONG_WAIT_SUFFIX = t('het is nu druk, hij blijft proberen')
 // message thread (a `claude-chat-thinking` paragraph); it now feeds the one
 // shared comment+Claude footer instead (see CommentClaudeFooter in
 // RelatedPanel.mjs) — same text/testid (`claude-chat-status`), just relocated.
-export function claudeStatusText(p, elapsed) {
-  if (!p) return t('Claude denkt…')
+//
+// `settled` — a null `p` has a SECOND meaning: the turn already finished (its
+// progress snapshot came through as running:false and was cleared) but the
+// Signal POST that sent the message has not returned yet, because tembed
+// drives the whole turn — including the post-turn landing and its ingest
+// refresh — inline under that request (see "Cancelling a running turn" in
+// .claude/docs/claude-chat-panel.md). Claude's answer is already on screen at
+// that point, so "Claude denkt…" reads as a hang; the caller passes `settled`
+// when the newest message is Claude's own, and the line then says the same
+// thing the running:false snapshot itself says.
+export function claudeStatusText(p, elapsed, settled = false) {
+  if (!p) return t(settled ? 'Claude is klaar — bezig met opslaan…' : 'Claude denkt…')
   let base
   if (p.phase === 'tool' && p.tool) {
     const verb = TOOL_VERB[p.tool] ? t(TOOL_VERB[p.tool]) : t('gebruikt {tool}', { tool: p.tool })
