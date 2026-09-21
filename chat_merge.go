@@ -268,7 +268,7 @@ func processChatMerge(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 // outcome, never the transient "moved on" text this uses internally as a
 // detection signal.
 func processChatMergeAt(ctx context.Context, tm *TaskManager, cm *chat.Module, cl claude.Client, dataDir string, arg chatMergeInput, headRefName string) chat.Message {
-	msg := commitCheckoutEditsAt(ctx, cm, dataDir, arg.Repo, arg.PR, arg.ConversationID, arg.TurnID, headRefName)
+	msg := commitCheckoutEditsAt(ctx, cm, cl, dataDir, arg.Repo, arg.PR, arg.ConversationID, arg.TurnID, headRefName)
 	if msg.Kind == chat.KindError && msg.Body == checkoutBranchMovedOnMsg {
 		msg = resolveCheckoutMerge(ctx, cm, cl, dataDir, arg.Repo, arg.PR, arg.ConversationID, arg.TurnID, headRefName)
 	}

@@ -15,6 +15,7 @@ import (
 
 	"github.com/reindert-vetter/tembed"
 	"slash/modules/chat"
+	"slash/modules/claude"
 )
 
 // pending_push_test.go covers the deferred push: the read model that feeds the
@@ -43,7 +44,7 @@ func landOneEdit(t *testing.T, dataDir string, pr int, conversationID, headRefNa
 	if err := os.WriteFile(filepath.Join(dir, file), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if msg := commitCheckoutEditsAt(ctx, testChatModule(t), dataDir, "", pr, conversationID, "turn-"+conversationID, headRefName); msg.Kind == chat.KindError {
+	if msg := commitCheckoutEditsAt(ctx, testChatModule(t), &claude.Fake{}, dataDir, "", pr, conversationID, "turn-"+conversationID, headRefName); msg.Kind == chat.KindError {
 		t.Fatalf("landing failed: %+v", msg)
 	}
 }
@@ -230,7 +231,7 @@ func TestLoadPendingPushFindsANonPrimaryRepo(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("edited by claude\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if msg := commitCheckoutEditsAt(ctx, testChatModule(t), dataDir, ops, 12, "conv-ops", "turn-ops", "feature/x"); msg.Kind == chat.KindError {
+	if msg := commitCheckoutEditsAt(ctx, testChatModule(t), &claude.Fake{}, dataDir, ops, 12, "conv-ops", "turn-ops", "feature/x"); msg.Kind == chat.KindError {
 		t.Fatalf("landing failed: %+v", msg)
 	}
 

@@ -192,3 +192,15 @@ var TestRunSystemPrompt string
 //
 //go:embed prompts/chat_conflict.md
 var ChatConflictSystemPrompt string
+
+// ChatCommitMessageSystemPrompt frames a small, context-only Haiku action:
+// give a chat-edit landing's git commit ONE short, English, content-aware
+// subject line — see "Content-aware, English subject without 'Claude'" in
+// .claude/docs/pending-push.md. Its call-specific content is the diff being
+// committed (chatCommitSubjectPrompt, chat_commit_message.go); commits are
+// always English regardless of the reviewer's own interface language (see
+// "Who am I" / lang_pref in .claude/rules/conventions.md), so unlike
+// CommentTitleSystemPrompt this never gets an explainLangTail appended.
+//
+//go:embed prompts/chat_commit_message.md
+var ChatCommitMessageSystemPrompt string

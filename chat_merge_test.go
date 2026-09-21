@@ -517,8 +517,14 @@ func TestProcessChatMergeAbortsAndDegradesOnUnresolvedConflict(t *testing.T) {
 	if len(stored) == 0 || stored[len(stored)-1].Body != msg.Body {
 		t.Fatalf("consultation message not stored in the conversation transcript: %+v", stored)
 	}
-	if fake.CallCount() != 1 {
-		t.Fatalf("expected exactly one begrensde Claude attempt, got %d calls", fake.CallCount())
+	// 2, not 1: commitCheckoutEditsAt's own initial (successful) commit makes
+	// its own, separate Haiku call to generate that commit's subject line
+	// (generateChatCommitSubject, chat_commit_message.go) BEFORE the
+	// fast-forward check discovers the branch moved on and this conflict
+	// path even starts — so the one CONFLICT-resolution attempt below is
+	// call #2, not #1.
+	if fake.CallCount() != 2 {
+		t.Fatalf("expected exactly one begrensde Claude attempt (plus the commit's own subject-generation call), got %d calls", fake.CallCount())
 	}
 
 	// The checkout's own working tree must be clean again (merge aborted) — no
@@ -683,6 +689,14 @@ type resolvingClient struct {
 }
 
 func (c *resolvingClient) Run(ctx context.Context, req claude.RunRequest) (string, error) {
+	if req.WorkDir == "" {
+		// A context-only call (e.g. commitCheckoutEditsAt's own Haiku call
+		// generating that commit's subject line, generateChatCommitSubject)
+		// — not the agentic, checkout-scoped conflict-resolution attempt
+		// this double stands in for, so pass it straight to the embedded
+		// Fake rather than writing c.file at a bogus relative path.
+		return c.Fake.Run(ctx, req)
+	}
 	c.calls++
 	if err := os.WriteFile(filepath.Join(req.WorkDir, c.file), []byte(c.content), 0o644); err != nil {
 		return "", err

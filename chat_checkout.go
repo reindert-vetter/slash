@@ -1882,38 +1882,76 @@ func advancePendingRefFromCheckout(ctx context.Context, dir, repo string, pr int
 	return nil
 }
 
-// chatEditCommitSubject is the fixed subject line commitCheckoutEditsAt gives
-// its OWN commits — never Claude's own free-text `git commit` run via Bash in
-// a shell turn (chat_shell.md), which stays deliberately out of scope for
-// amending: there is no fixed convention to recognize those by, and telling
-// one apart from the reviewer's own manual commit in this same shared
-// checkout would mean guessing. Recognition below matches ONLY this exact
-// subject — positively, never "anything that isn't obviously manual".
-const chatEditCommitSubject = "Claude: reviewer-requested edit"
+// chatEditCommitMarker is a fixed trailer line commitCheckoutEditsAt puts at
+// the very end of every commit message it writes — the ONLY thing marking
+// such a commit as its own now that the SUBJECT is a fresh, content-aware
+// summary per landing (see chatCommitSubjectPrompt/generateChatCommitSubject,
+// chat_commit_message.go — "Content-aware, English subject without 'Claude'"
+// in .claude/docs/pending-push.md). Recognition below (amendableChatCommit)
+// looks for this trailer, never the subject text — positively, never
+// "anything that isn't obviously manual". Never Claude's own free-text `git
+// commit` run via Bash in a shell turn (chat_shell.md), which stays
+// deliberately out of scope for amending: there is no way to make that path
+// emit this trailer without guessing at intent, and telling it apart from the
+// reviewer's own manual commit in this same shared checkout would mean
+// guessing too.
+const chatEditCommitMarker = "Chat-landing: true"
 
 // chatEditCommitMessage is the message for a brand-new chat-edit commit (no
-// eligible previous chat commit to fold into) — subject line plus one bullet
-// for this landing's conversation.
-func chatEditCommitMessage(conversationID string) string {
-	return chatEditCommitSubject + "\n\n- " + conversationID
+// eligible previous chat commit to fold into) — a content-aware subject line
+// (generateChatCommitSubject), one bullet for this landing's conversation,
+// and the recognition trailer.
+func chatEditCommitMessage(subject, conversationID string) string {
+	return subject + "\n\n- " + conversationID + "\n\n" + chatEditCommitMarker
 }
 
-// appendChatEditCommitMessage extends an existing chat-edit commit message
-// with one more bullet, so amending several unpushed chat landings into one
-// commit still shows every request that went into it — the reviewer picked
-// "merge both messages" over silently keeping only the latest.
-func appendChatEditCommitMessage(existing, conversationID string) string {
-	return strings.TrimRight(existing, "\n") + "\n- " + conversationID
+// chatEditCommitBullets extracts the "- <conversationId>" bullet lines out of
+// an existing chat-edit commit message (everything between the subject and
+// the trailer), in order — used by appendChatEditCommitMessage to carry every
+// earlier landing's conversation id forward into a rebuilt, re-summarized
+// message.
+func chatEditCommitBullets(existing string) []string {
+	var bullets []string
+	for _, line := range strings.Split(existing, "\n") {
+		if strings.HasPrefix(line, "- ") {
+			bullets = append(bullets, strings.TrimPrefix(line, "- "))
+		}
+	}
+	return bullets
+}
+
+// appendChatEditCommitMessage folds one more chat landing into an existing
+// chat-edit commit message: it carries every earlier landing's conversation
+// id forward (chatEditCommitBullets) plus this new one, and replaces the
+// SUBJECT with newSubject — a fresh summary of the whole squashed diff
+// (generateChatCommitSubject, called by the caller against the diff scoped to
+// the ORIGINAL parent, not just this latest edit) rather than silently
+// keeping the first landing's now-stale, narrower subject. The reviewer
+// picked "merge both messages, give it a good name" over silently keeping
+// only the latest.
+func appendChatEditCommitMessage(existing, conversationID, newSubject string) string {
+	bullets := append(chatEditCommitBullets(existing), conversationID)
+	var b strings.Builder
+	b.WriteString(newSubject)
+	b.WriteString("\n")
+	for _, id := range bullets {
+		b.WriteString("\n- ")
+		b.WriteString(id)
+	}
+	b.WriteString("\n\n")
+	b.WriteString(chatEditCommitMarker)
+	return b.String()
 }
 
 // amendableChatCommit reports whether dir's current HEAD is a safe target to
 // fold a new chat edit into via `git commit --amend`, instead of stacking a
 // new commit. All three must hold:
 //
-//  1. HEAD's subject is EXACTLY chatEditCommitSubject — so this only ever
-//     matches a commit commitCheckoutEditsAt itself made, never Claude's own
-//     free-text Bash commit and never a reviewer's manual commit in this same
-//     checkout.
+//  1. HEAD's message carries the chatEditCommitMarker trailer — so this only
+//     ever matches a commit commitCheckoutEditsAt itself made, never
+//     Claude's own free-text Bash commit and never a reviewer's manual
+//     commit in this same checkout. Checked on the FULL body (%B), not the
+//     subject, since the subject itself is now a fresh summary per landing.
 //  2. HEAD has exactly one parent — never fold into a merge commit (e.g. the
 //     one resolveCheckoutMerge/chat_merge.go makes while resolving a real
 //     conflict).
@@ -1925,8 +1963,12 @@ func appendChatEditCommitMessage(existing, conversationID string) string {
 // Returns HEAD's own current full message on success, so the caller can
 // extend it with appendChatEditCommitMessage.
 func amendableChatCommit(ctx context.Context, dir, headRefName string) (string, bool) {
-	subjOut, err := runGitIn(ctx, dir, "log", "-1", "--format=%s", "HEAD")
-	if err != nil || strings.TrimSpace(string(subjOut)) != chatEditCommitSubject {
+	msgOut, err := runGitIn(ctx, dir, "log", "-1", "--format=%B", "HEAD")
+	if err != nil {
+		return "", false
+	}
+	msg := strings.TrimRight(string(msgOut), "\n")
+	if !chatEditCommitMarkerRE.MatchString(msg) {
 		return "", false
 	}
 	parentsOut, err := runGitIn(ctx, dir, "rev-list", "--parents", "-n", "1", "HEAD")
@@ -1938,12 +1980,13 @@ func amendableChatCommit(ctx context.Context, dir, headRefName string) (string, 
 	if _, err := runGitIn(ctx, dir, "merge-base", "--is-ancestor", "HEAD", "origin/"+headRefName); err == nil {
 		return "", false
 	}
-	msgOut, err := runGitIn(ctx, dir, "log", "-1", "--format=%B", "HEAD")
-	if err != nil {
-		return "", false
-	}
-	return strings.TrimRight(string(msgOut), "\n"), true
+	return msg, true
 }
+
+// chatEditCommitMarkerRE matches chatEditCommitMarker as its own line
+// (anchored, not just a substring) so a coincidental mention of the same text
+// mid-sentence elsewhere in a message could never falsely qualify.
+var chatEditCommitMarkerRE = regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(chatEditCommitMarker) + `$`)
 
 // commitCheckoutEditsAt is the "commit deze wijziging" Activity body once the
 // PR's head branch name is already known: commit whatever Claude changed in
@@ -1991,7 +2034,7 @@ func runGitInRetryOnLock(ctx context.Context, dir string, args ...string) ([]byt
 	return runGitIn(ctx, dir, args...)
 }
 
-func commitCheckoutEditsAt(ctx context.Context, cm *chat.Module, dataDir, repo string, pr int, conversationID, turnID, headRefName string) chat.Message {
+func commitCheckoutEditsAt(ctx context.Context, cm *chat.Module, cl claude.Client, dataDir, repo string, pr int, conversationID, turnID, headRefName string) chat.Message {
 	newMsg := func(body string, isErr bool) chat.Message {
 		kind := ""
 		if isErr {
@@ -2066,15 +2109,29 @@ func commitCheckoutEditsAt(ctx context.Context, cm *chat.Module, dataDir, repo s
 		// staleOrigin: see the fetch above — "is this commit already pushed?"
 		// cannot be answered against a ref we could not refresh, so don't
 		// rewrite history on a guess.
+		//
+		// The diff summarized for the commit subject is scoped to the SAME
+		// base the amend decision itself uses: HEAD^ (the commit BEFORE the
+		// one being folded into) when amending, so the fresh subject covers
+		// the whole squashed change rather than just this latest edit — vs.
+		// plain HEAD for a brand-new commit, i.e. exactly what is about to be
+		// committed. See generateChatCommitSubject/chatCommitSubjectPrompt
+		// (chat_commit_message.go).
 		if prevMsg, ok := amendableChatCommit(ctx, dir, headRefName); ok && !staleOrigin {
-			if _, err := runGitInRetryOnLock(ctx, dir, "commit", "--amend", "-m", appendChatEditCommitMessage(prevMsg, conversationID)); err != nil {
+			diffOut, _ := runGitIn(ctx, dir, "diff", "--cached", "HEAD^")
+			subject := generateChatCommitSubject(ctx, cl, string(diffOut))
+			if _, err := runGitInRetryOnLock(ctx, dir, "commit", "--amend", "-m", appendChatEditCommitMessage(prevMsg, conversationID, subject)); err != nil {
 				log.Printf("chat_checkout: pr %d: amend %s: %v", pr, dir, err)
 				return newMsg("Kon de wijziging niet aan de vorige, nog niet gepushte commit toevoegen (reden: "+err.Error()+").", true)
 			}
 			amended = true
-		} else if _, err := runGitInRetryOnLock(ctx, dir, "commit", "-m", chatEditCommitMessage(conversationID)); err != nil {
-			log.Printf("chat_checkout: pr %d: commit %s: %v", pr, dir, err)
-			return newMsg("Kon de wijziging niet committen (reden: "+err.Error()+").", true)
+		} else {
+			diffOut, _ := runGitIn(ctx, dir, "diff", "--cached", "HEAD")
+			subject := generateChatCommitSubject(ctx, cl, string(diffOut))
+			if _, err := runGitInRetryOnLock(ctx, dir, "commit", "-m", chatEditCommitMessage(subject, conversationID)); err != nil {
+				log.Printf("chat_checkout: pr %d: commit %s: %v", pr, dir, err)
+				return newMsg("Kon de wijziging niet committen (reden: "+err.Error()+").", true)
+			}
 		}
 	}
 	// Else: nothing new to stage — but an earlier attempt may already have

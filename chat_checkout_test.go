@@ -1247,7 +1247,7 @@ func TestCommitCheckoutEditsLandsOnPendingRefWithoutPushingOrRemovingTheCheckout
 		t.Fatal(err)
 	}
 
-	msg := commitCheckoutEditsAt(ctx, cm, dataDir, "", 1008, "conv-g", "turn-conv-g", "feature/x")
+	msg := commitCheckoutEditsAt(ctx, cm, &claude.Fake{}, dataDir, "", 1008, "conv-g", "turn-conv-g", "feature/x")
 	if msg.Kind == chat.KindError {
 		t.Fatalf("commit reported an error: %+v", msg)
 	}
@@ -1294,7 +1294,7 @@ func TestCommitCheckoutEditsRefusesNonFastForward(t *testing.T) {
 	// must never silently force through.
 	pushToBare(t, bareDir, "feature/x", "someone else's commit\n")
 
-	msg := commitCheckoutEditsAt(ctx, cm, dataDir, "", 1009, "conv-h", "turn-conv-h", "feature/x")
+	msg := commitCheckoutEditsAt(ctx, cm, &claude.Fake{}, dataDir, "", 1009, "conv-h", "turn-conv-h", "feature/x")
 	if msg.Kind != chat.KindError {
 		t.Fatalf("expected an error message on a non-fast-forward landing, got: %+v", msg)
 	}
@@ -1318,7 +1318,7 @@ func TestCommitCheckoutEditsNothingToCommit(t *testing.T) {
 	cm := testChatModule(t)
 
 	// No assignment at all — no checkout was ever resolved for this PR.
-	msg := commitCheckoutEditsAt(ctx, cm, dataDir, "", 1010, "conv-i", "turn-conv-i", "feature/x")
+	msg := commitCheckoutEditsAt(ctx, cm, &claude.Fake{}, dataDir, "", 1010, "conv-i", "turn-conv-i", "feature/x")
 	if msg.Kind != chat.KindError {
 		t.Fatalf("expected an informational error when nothing is assigned, got: %+v", msg)
 	}
@@ -1340,7 +1340,7 @@ func TestCommitCheckoutEditsAmendsIntoPreviousUnpushedChatCommit(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("edit one\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if msg := commitCheckoutEditsAt(ctx, cm, dataDir, "", 1020, "conv-first", "turn-1", "feature/x"); msg.Kind == chat.KindError {
+	if msg := commitCheckoutEditsAt(ctx, cm, &claude.Fake{}, dataDir, "", 1020, "conv-first", "turn-1", "feature/x"); msg.Kind == chat.KindError {
 		t.Fatalf("first landing reported an error: %+v", msg)
 	}
 	firstSHA := pendingRefSHA(ctx, "", prPendingRef("", 1020, "feature/x"))
@@ -1352,7 +1352,7 @@ func TestCommitCheckoutEditsAmendsIntoPreviousUnpushedChatCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A different conversation of the same PR — the amend is PR-wide.
-	if msg := commitCheckoutEditsAt(ctx, cm, dataDir, "", 1020, "conv-second", "turn-2", "feature/x"); msg.Kind == chat.KindError {
+	if msg := commitCheckoutEditsAt(ctx, cm, &claude.Fake{}, dataDir, "", 1020, "conv-second", "turn-2", "feature/x"); msg.Kind == chat.KindError {
 		t.Fatalf("second landing reported an error: %+v", msg)
 	}
 	secondSHA := pendingRefSHA(ctx, "", prPendingRef("", 1020, "feature/x"))
@@ -1378,6 +1378,63 @@ func TestCommitCheckoutEditsAmendsIntoPreviousUnpushedChatCommit(t *testing.T) {
 	}
 }
 
+// The commit subject is content-aware (from a Haiku call, see
+// generateChatCommitSubject), never mentions Claude, and a squash gives the
+// AMENDED commit a fresh subject covering the whole folded-in change rather
+// than silently keeping the first landing's now-narrower one — the reviewer
+// picked "merge both messages, give it a good name".
+func TestCommitCheckoutEditsUsesGeneratedSubjectAndSquashRenames(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	cm := testChatModule(t)
+	cl := &claude.Fake{}
+
+	dir := cloneCheckoutDir(t, bareDir, "feature/x")
+	assignCheckoutForTest(t, "", 1022, dir)
+
+	cl.SetOutput(claude.ModelHaiku, "Fix rounding in invoice totals")
+	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("edit one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if msg := commitCheckoutEditsAt(ctx, cm, cl, dataDir, "", 1022, "conv-x", "turn-x", "feature/x"); msg.Kind == chat.KindError {
+		t.Fatalf("first landing reported an error: %+v", msg)
+	}
+	firstSubject, err := exec.Command("git", "-C", dir, "log", "-1", "--format=%s", "HEAD").CombinedOutput()
+	if err != nil {
+		t.Fatalf("log: %v: %s", err, firstSubject)
+	}
+	if got := strings.TrimSpace(string(firstSubject)); got != "Fix rounding in invoice totals" {
+		t.Fatalf("first commit subject = %q, want the generated summary", got)
+	}
+
+	// A second, still-unpushed landing folds in — give it a DIFFERENT
+	// generated subject, summarizing the total squashed change.
+	cl.SetOutput(claude.ModelHaiku, "Fix rounding and refund handling in invoice totals")
+	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("edit two\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if msg := commitCheckoutEditsAt(ctx, cm, cl, dataDir, "", 1022, "conv-y", "turn-y", "feature/x"); msg.Kind == chat.KindError {
+		t.Fatalf("second landing reported an error: %+v", msg)
+	}
+
+	bodyOut, err := exec.Command("git", "-C", dir, "log", "-1", "--format=%B", "HEAD").CombinedOutput()
+	if err != nil {
+		t.Fatalf("log: %v: %s", err, bodyOut)
+	}
+	body := string(bodyOut)
+	lines := strings.SplitN(body, "\n", 2)
+	if lines[0] != "Fix rounding and refund handling in invoice totals" {
+		t.Fatalf("expected the squashed commit's subject to be renamed to the fresh summary, got: %q (full body: %s)", lines[0], body)
+	}
+	if strings.Contains(strings.ToLower(body), "claude") {
+		t.Fatalf("commit message must never mention Claude, got: %s", body)
+	}
+	if !strings.Contains(body, "conv-x") || !strings.Contains(body, "conv-y") {
+		t.Fatalf("expected both conversation ids to survive the rename, got: %s", body)
+	}
+}
+
 // Once a chat commit has actually been pushed, a further edit must create a
 // NEW commit, never amend the already-pushed one — the hard "not yet pushed"
 // safety check.
@@ -1393,7 +1450,7 @@ func TestCommitCheckoutEditsDoesNotAmendAfterAPush(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("edit one\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if msg := commitCheckoutEditsAt(ctx, cm, dataDir, "", 1021, "conv-a", "turn-a", "feature/x"); msg.Kind == chat.KindError {
+	if msg := commitCheckoutEditsAt(ctx, cm, &claude.Fake{}, dataDir, "", 1021, "conv-a", "turn-a", "feature/x"); msg.Kind == chat.KindError {
 		t.Fatalf("first landing reported an error: %+v", msg)
 	}
 
@@ -1407,7 +1464,7 @@ func TestCommitCheckoutEditsDoesNotAmendAfterAPush(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("edit two\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if msg := commitCheckoutEditsAt(ctx, cm, dataDir, "", 1021, "conv-b", "turn-b", "feature/x"); msg.Kind == chat.KindError {
+	if msg := commitCheckoutEditsAt(ctx, cm, &claude.Fake{}, dataDir, "", 1021, "conv-b", "turn-b", "feature/x"); msg.Kind == chat.KindError {
 		t.Fatalf("second landing reported an error: %+v", msg)
 	}
 
@@ -1424,8 +1481,9 @@ func TestCommitCheckoutEditsDoesNotAmendAfterAPush(t *testing.T) {
 	}
 }
 
-// A merge commit — even one carrying the exact chat-edit subject line — must
-// never be amended: only its parent count decides this, not the subject.
+// A merge commit — even one carrying the exact chat-edit recognition trailer
+// — must never be amended: only its parent count decides this, not the
+// message.
 func TestAmendableChatCommitRejectsAMergeCommit(t *testing.T) {
 	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
 	ctx := context.Background()
@@ -1449,10 +1507,10 @@ func TestAmendableChatCommitRejectsAMergeCommit(t *testing.T) {
 	}
 	run("add", "-A")
 	run("commit", "-m", "main change")
-	run("merge", "side", "--no-ff", "-m", chatEditCommitSubject)
+	run("merge", "side", "--no-ff", "-m", chatEditCommitMessage("Fix unrelated bug", "conv-merge"))
 
 	if _, ok := amendableChatCommit(ctx, dir, "feature/x"); ok {
-		t.Fatal("a merge commit must never be reported as amendable, regardless of its subject")
+		t.Fatal("a merge commit must never be reported as amendable, regardless of its message")
 	}
 }
 
@@ -1886,7 +1944,7 @@ func TestTurnChangedCheckoutGatesAutoLanding(t *testing.T) {
 		}
 	}
 	run("add", "-A")
-	run("commit", "-m", chatEditCommitSubject)
+	run("commit", "-m", chatEditCommitFallbackSubject)
 	if !turnChangedCheckout(ctx, "", "", pr, conv) {
 		t.Fatal("a write turn that committed must trigger a landing")
 	}
@@ -2002,7 +2060,7 @@ func TestCommitCheckoutEditsLandsWithUnreachableOrigin(t *testing.T) {
 	}
 	breakOrigin(t, dir)
 
-	msg := commitCheckoutEditsAt(ctx, cm, dataDir, "", 970902, "conv-offline", "turn-offline", "feature/x")
+	msg := commitCheckoutEditsAt(ctx, cm, &claude.Fake{}, dataDir, "", 970902, "conv-offline", "turn-offline", "feature/x")
 	if msg.Kind == chat.KindError {
 		t.Fatalf("landing reported an error with an unreachable origin: %+v", msg)
 	}
@@ -2022,7 +2080,7 @@ func TestCommitCheckoutEditsLandsWithUnreachableOrigin(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "foo.txt"), []byte("edited again\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if msg := commitCheckoutEditsAt(ctx, cm, dataDir, "", 970902, "conv-offline", "turn-offline-2", "feature/x"); msg.Kind == chat.KindError {
+	if msg := commitCheckoutEditsAt(ctx, cm, &claude.Fake{}, dataDir, "", 970902, "conv-offline", "turn-offline-2", "feature/x"); msg.Kind == chat.KindError {
 		t.Fatalf("second landing reported an error: %+v", msg)
 	}
 	parent, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD^").Output()

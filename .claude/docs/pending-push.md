@@ -164,13 +164,18 @@ review/push/revert as a single unit. Scoped deliberately narrow:
   is no safe, positive way to recognize it (a heuristic like "not obviously
   manual" could just as easily match the reviewer's own commit in this same
   shared checkout). No prompt change, no required tag for that path.
-- **Recognition is positive, not "not manual"**: `commitCheckoutEditsAt`'s own
-  commits always carry the exact subject line `chatEditCommitSubject`
-  ("Claude: reviewer-requested edit", `chat_checkout.go`) with the body as a
-  bullet list of the conversation ids that landed into it (see the message
-  format below). `amendableChatCommit` (`chat_checkout.go`) only treats HEAD
-  as a candidate when ALL of:
-  1. its subject is EXACTLY that string;
+- **Recognition is positive, not "not manual" — and now via a TRAILER, not
+  the subject.** Reviewer follow-up request: the subject must never say
+  "Claude" and must be an English, content-aware one-liner instead of a fixed
+  generic string — see "Content-aware, English subject without 'Claude'"
+  below. Since the subject now varies per landing, `commitCheckoutEditsAt`'s
+  own commits are recognized by a fixed trailer line at the very end of the
+  BODY instead: `chatEditCommitMarker` (`"Chat-landing: true"`,
+  `chat_checkout.go`). `amendableChatCommit` (`chat_checkout.go`) only treats
+  HEAD as a candidate when ALL of:
+  1. its full message (`%B`, not just the subject) carries that trailer, as
+     its own line (`chatEditCommitMarkerRE`, anchored so a coincidental
+     mid-sentence mention could never match);
   2. it has exactly one parent (never a merge commit — see
      `resolveCheckoutMerge`'s own `git commit --no-edit` after a real
      conflict);
@@ -183,12 +188,18 @@ review/push/revert as a single unit. Scoped deliberately narrow:
   amended into may belong to a *different* chat thread than the one landing
   now — deliberate, two unrelated reviewer requests can end up folded into one
   commit.
-- **Message format**: `chatEditCommitMessage(conversationID)` builds the
-  FIRST landing's message (subject, blank line, one `- <conversationId>`
-  bullet); `appendChatEditCommitMessage(existing, conversationID)` adds one
-  more bullet to an existing message on every amend — so the message always
-  shows every request that went into the commit, in landing order, never just
-  the latest one silently replacing the rest.
+- **Message format**: `chatEditCommitMessage(subject, conversationID)` builds
+  the FIRST landing's message (a content-aware subject, blank line, one
+  `- <conversationId>` bullet, blank line, the trailer);
+  `appendChatEditCommitMessage(existing, conversationID, newSubject)` carries
+  every earlier bullet forward (`chatEditCommitBullets`), adds one more, and
+  **replaces the subject** with `newSubject` — a fresh summary of the WHOLE
+  squashed diff, not just this latest edit (see below) — so the message
+  always shows every request that went into the commit, in landing order,
+  never just the latest one silently replacing the rest, and the subject
+  itself stays an honest description of everything folded in rather than the
+  first landing's now-stale, narrower one. Reviewer decision: "geef het een
+  goeie naam" meant renaming on every squash, not keeping the first subject.
 - **The pending ref then has to move non-fast-forward.** An amend rewrites
   HEAD rather than extending it (same parent, new SHA), so
   `advancePendingRefFromCheckout` gained an `allowAmend` parameter: only
@@ -213,6 +224,52 @@ review/push/revert as a single unit. Scoped deliberately narrow:
   new commit), `TestAmendableChatCommitRejectsAMergeCommit`,
   `TestAmendableChatCommitRejectsAManualCommit` — all in
   `chat_checkout_test.go`.
+
+### Content-aware, English subject without "Claude"
+
+Reviewer follow-up (screenshot: four stacked commits on one PR, all literally
+titled "STAT-1127: Claude: reviewer-requested edit"): the subject must never
+mention Claude/AI/an assistant, must be English regardless of the reviewer's
+own interface language (commits are always English, see "Who am I"/`lang_pref`
+in `.claude/rules/conventions.md`), and must actually describe the diff.
+
+- **`generateChatCommitSubject`** (`chat_commit_message.go`) is a small,
+  context-only Haiku call — same shape as `comment_titles.go`'s title
+  generation and `chat_summary.go`'s summary: a static system prompt
+  (`claude.ChatCommitMessageSystemPrompt`, `modules/claude/prompts/
+  chat_commit_message.md`) plus the call-specific diff
+  (`chatCommitSubjectPrompt`, clipped via the existing `clipForPrompt`).
+  Best-effort like every other context-only Haiku action in this codebase: a
+  Claude hiccup (offline, `SLASH_CLAUDE=off`, a rate limit, an empty answer)
+  never fails the landing, it just falls back to the fixed, generic
+  `chatEditCommitFallbackSubject` ("Apply reviewer-requested edit" — no
+  Claude/AI mention either).
+- **`sanitizeChatCommitSubject`** is the safety net behind the prompt's own
+  instruction not to mention Claude/AI: it trims quotes/backticks/markdown,
+  collapses the answer to one line, drops a trailing period, caps it at 72
+  characters, and — the hard rule — rejects the whole answer (falling back to
+  `chatEditCommitFallbackSubject`) if it still contains "claude", "ai",
+  "assistant" or "chatbot" as a whole word (`forbiddenChatCommitWordsRE`,
+  word-bounded so an ordinary word like "remains"/"maintain" never
+  misfires).
+- **Which diff gets summarized** depends on whether this landing amends or
+  not, so the subject always matches what the commit actually contains: a
+  brand-new commit summarizes `git diff --cached HEAD` (exactly what is about
+  to be committed); an amend summarizes `git diff --cached HEAD^` — against
+  the parent of the commit being folded into, i.e. the WHOLE squashed change
+  since before the first chat commit in this chain, not just the latest
+  edit. Reviewer decision, made explicit up front: a squash's new name should
+  cover everything folded in, not just dominate with the newest edit.
+- Tests: `TestSanitizeChatCommitSubjectRejectsClaudeMentions`,
+  `TestSanitizeChatCommitSubjectKeepsOrdinaryWordsContainingAi`,
+  `TestSanitizeChatCommitSubjectTrimsQuotesFencesAndLength`,
+  `TestGenerateChatCommitSubjectFallsBackWhenUnavailable` (all in
+  `chat_commit_message_test.go`), and
+  `TestCommitCheckoutEditsUsesGeneratedSubjectAndSquashRenames`
+  (`chat_checkout_test.go`) for the end-to-end plumbing: a fresh landing's
+  subject is the generated one, a squash renames the commit to the SECOND
+  landing's generated subject while keeping both conversation ids, and the
+  message never contains "claude".
 
 ## Visible immediately: the refresh at a local SHA
 
