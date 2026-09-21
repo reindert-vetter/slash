@@ -172,7 +172,19 @@ func parsePRFilesPages(out []byte) ([]prFile, error) {
 }
 
 // ensureCommits makes sure both the base and head SHA are present locally.
+//
+// Both SHAs already reachable → no network at all. That is the common case
+// for the ingest-refresh a landed chat edit triggers (refreshTreeAfterLanding,
+// chat_merge.go): the head is a LOCAL commit that advancePendingRefFromCheckout
+// just fetched into the shared clone, and the base is the one already
+// recorded — nothing GitHub could add. The two unconditional fetches below
+// were the largest single share of the ~8s that refresh took before the
+// reviewer saw his own edit (measured 2026-09-21, PR 13810), on top of the
+// landing's own `git fetch origin <branch>` in commitCheckoutEditsAt.
 func ensureCommits(ctx context.Context, repo string, pr int, baseSHA, headSHA string) error {
+	if commitExists(ctx, repo, baseSHA) && commitExists(ctx, repo, headSHA) {
+		return nil
+	}
 	// Head via the pull ref (most reliable), base via the repo's own base branch
 	// (the registry's baseBranch: "develop" for plug-and-pay — the historical
 	// hardcoded value — "master" for plug-and-pay-ops).

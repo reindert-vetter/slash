@@ -226,6 +226,23 @@ commit is by definition. Cross-workflow Ensure+Signal from inside an Activity,
 best-effort/log-only, the shape `enqueueChatMerge`/`reanchorAfterRefresh`
 already use.
 
+**How long "immediately" is, measured (2026-09-21, PR 13810, a one-line
+edit):** Claude's turn ended at T+0; the landing (`processChatMergeAt`:
+`git fetch origin <branch>` ~2.7s of network, then ms-scale local git) signalled
+`pr_status` at T+5s; `refreshIngestDelta` finished and published
+`blocks.changed` at T+13s; the open tab had fetched `/api/blocks` + `/api/code`
+and was showing the new code at T+13.2s. So the frontend side of the refresh
+costs ~0.2s — the wait a reviewer sees is entirely the backend chain, and a
+manual reload "shows it at once" only because `GET /api/code` reads the head
+worktree live, which `refreshIngestDelta` moves early. Of the ~8s inside
+`refreshIngestDelta`, the largest share was `ensureCommits`' two unconditional
+`git fetch origin` calls for commits that were already local — now skipped
+when both SHAs resolve (`gh.go`); the `gh` file-list call
+(`prChangedFilePaths`) and the PHP scan remain. `buildRelations` (~11s more,
+`callresolve.changed`) and the conversation's own `enqueueChatMerge` Activity
+(which drives the whole landing inline, so it only completes after
+`buildRelations`) follow, but neither gates the code becoming visible.
+
 **`ingestRefreshNeeded` (`workflows.go`) is what keeps it visible.** The poller
 used to signal whenever the live `headRefOid` differed from the stored one —
 with a landed commit that is true on *every* tick, so the tree would be rewound
