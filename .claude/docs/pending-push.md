@@ -291,6 +291,16 @@ independent fetches racing a single inline call chain. The fix below embeds
 the answer directly in the event that matters, computed atomically at the
 exact point of publish, so there is nothing left to race.
 
+**The inverse trap, one step further down the same function:** an inline
+Signal from an Activity to a run whose lock is held by a goroutine waiting on
+something THIS Activity holds deadlocks. `broadcastCheckoutFreed`
+(`chat_merge.go`, the last step of `processChatMergeAt`) hit exactly that
+against a chat turn waiting on the write slot the landing still held, and now
+delivers from a detached goroutine — see "`broadcastCheckoutFreed` delivers
+its Signals from a detached goroutine" in `workflows-comments.md`.
+`refreshTreeAfterLanding` stays inline: the `pr_status` tracker never waits
+on the write slot.
+
 - **`chat_refresh_pending.go`** is a small PR-scoped in-memory registry, the
   same operational shape as `chat_edit_pending.go`'s "wordt aangepast" set:
   `markChatRefreshPendingFiles`/`clearChatRefreshPendingFiles`/

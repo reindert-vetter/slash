@@ -415,15 +415,42 @@ func isBlockingLandingFailure(body string) bool {
 // this is ever missed (e.g. a restart drops the in-memory registry entry).
 // Best-effort/log-only on failure, same shape as refreshTreeAfterLanding
 // above.
+//
+// The Signals are delivered from their OWN goroutine, never inline — unlike
+// refreshTreeAfterLanding, and deliberately so. This runs inside the
+// processChatMerge Activity, which still HOLDS this checkout's write-turn
+// slot (acquireCheckoutWriteSlot + `defer release()` in workflows.go's
+// Activity registration) until the Activity returns. tembed's
+// Engine.SignalWorkflow takes the target run's lock and drives it inline; a
+// waiter that was already woken by its checkoutWaitFallbackWorkflow timer is
+// at that moment sitting INSIDE its own runClaudeTurn Activity, holding that
+// very run lock while blocked in acquireCheckoutWriteSlot on the slot this
+// landing holds. Inline delivery then deadlocks: the landing waits for the
+// waiter's run lock, the waiter waits for the landing's slot, and nothing
+// moves until forceReleaseStaleWriteTurnSlot's 20-minute staleness bar
+// breaks the cycle (measured on PR 13810: a landing whose ingest-refresh
+// finished at 10:30:27 only completed its Activity at 10:50:13, with every
+// later chat turn of that PR queued behind it as "wachten"). And even with
+// no other goroutine involved, an inline wake would run the woken turn on
+// THIS goroutine and block on the slot this same call stack holds — a
+// self-deadlock. Detaching the delivery lets the Activity return and release
+// the slot first; the Signal then lands as soon as the waiter's current
+// advance yields, which is exactly what the waiter needs to make progress.
 func broadcastCheckoutFreed(tm *TaskManager, checkoutKey string) {
 	if tm == nil || tm.engine == nil {
 		return
 	}
-	for _, runID := range takeCheckoutWaiters(checkoutKey) {
-		if err := tm.engine.SignalWorkflow(runID, SignalCheckoutFreed, CheckoutFreedSignal{}); err != nil {
-			tm.logf("chat_merge: signal checkout freed to %s: %v", runID, err)
-		}
+	waiters := takeCheckoutWaiters(checkoutKey)
+	if len(waiters) == 0 {
+		return
 	}
+	go func() {
+		for _, runID := range waiters {
+			if err := tm.engine.SignalWorkflow(runID, SignalCheckoutFreed, CheckoutFreedSignal{}); err != nil {
+				tm.logf("chat_merge: signal checkout freed to %s: %v", runID, err)
+			}
+		}
+	}()
 }
 
 // saveChatOutcomeMessage persists one landing/merge outcome bubble — unless

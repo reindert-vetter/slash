@@ -1818,6 +1818,26 @@ Tests: `TestCheckoutWaitersDedupesAndDrains`,
 (`chat_write_gate_test.go`), `TestChatCheckoutRetryTurnKeepsTheLadderThenGivesUp`
 (`chat_workflow_test.go`).
 
+**`broadcastCheckoutFreed` delivers its Signals from a detached goroutine,
+never inline** — the one place this codebase deliberately does NOT use the
+inline `SignalWorkflow`-from-an-Activity shape `refreshTreeAfterLanding`
+relies on. It runs inside the `processChatMerge` Activity, which still holds
+the checkout's write-turn slot (`defer release()` in the Activity
+registration, `workflows.go`) until it returns. A waiter already woken by its
+`checkoutWaitFallbackWorkflow` timer sits INSIDE its own `runClaudeTurn`
+Activity at that moment, holding its run lock while blocked in
+`acquireCheckoutWriteSlot` on that very slot. `Engine.SignalWorkflow` takes
+the target's run lock first, so an inline wake deadlocked: landing waits for
+the waiter's lock, waiter waits for the landing's slot, until
+`forceReleaseStaleWriteTurnSlot`'s 20-minute bar broke it. Measured on PR
+13810 (2026-09-21): the landing's ingest-refresh was done at 10:30:27, its
+Activity only completed at 10:50:13, and every chat turn of that PR in
+between queued as "wachten" — the reviewer saw "Claude denkt…" hang after a
+landing. Even with no second goroutine an inline wake would run the woken
+turn on the landing's own call stack and block on the slot it holds itself.
+Test: `TestBroadcastCheckoutFreedDoesNotBlockOnABusyWaiter`
+(`chat_write_gate_test.go`) — fails on the inline version.
+
 Any wait on this shared slot
 (including the checkout-menu Activities and the automatic landing, which have
 no live chat-turn progress line of their own) is also mirrored onto the

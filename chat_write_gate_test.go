@@ -349,3 +349,65 @@ func TestWriteTurnSlotHeartbeatKeepsALongLiveTurnFromGoingStale(t *testing.T) {
 	}
 	release()
 }
+
+// TestBroadcastCheckoutFreedDoesNotBlockOnABusyWaiter pins the deadlock fix
+// in chat_merge.go's broadcastCheckoutFreed: a registered waiter whose run
+// lock is currently held — its own runClaudeTurn Activity is mid-flight,
+// blocked on the very write slot the landing calling this still holds — must
+// not make the landing's Activity hang until that turn ends (which, in the
+// real deadlock, was never: only the 20-minute staleness force-release broke
+// the cycle). The broadcast has to return at once and deliver the Signal
+// once the waiter's own advance yields.
+func TestBroadcastCheckoutFreedDoesNotBlockOnABusyWaiter(t *testing.T) {
+	engine := tembed.New(tembed.NewMemoryStore())
+	tm := &TaskManager{engine: engine}
+
+	activityEntered := make(chan struct{}, 1)
+	activityRelease := make(chan struct{})
+	engine.RegisterActivity("__test_hold_run_lock", func(ctx context.Context, in []byte) ([]byte, error) {
+		activityEntered <- struct{}{}
+		<-activityRelease // stands in for acquireCheckoutWriteSlot waiting on the landing's slot
+		return nil, nil
+	})
+	woke := make(chan struct{}, 1)
+	engine.RegisterWorkflow("__test_busy_waiter", func(w *tembed.Workflow, input []byte) ([]byte, error) {
+		if err := w.ExecuteActivity("__test_hold_run_lock", nil, nil); err != nil {
+			return nil, err
+		}
+		var freed CheckoutFreedSignal
+		w.WaitSignal(SignalCheckoutFreed, &freed)
+		woke <- struct{}{}
+		return nil, nil
+	})
+
+	const key = "pr:busy-waiter"
+	const runID = "busy-waiter-run"
+	registerCheckoutWaiter(key, runID)
+	started := make(chan error, 1)
+	go func() {
+		_, err := engine.StartWorkflowID(runID, "__test_busy_waiter", nil)
+		started <- err
+	}()
+	<-activityEntered // the run lock is now held by the blocked Activity
+
+	returned := make(chan struct{})
+	go func() {
+		broadcastCheckoutFreed(tm, key)
+		close(returned)
+	}()
+	select {
+	case <-returned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("broadcastCheckoutFreed blocked on a waiter whose run lock is held — the landing/waiter deadlock")
+	}
+
+	close(activityRelease) // the landing's slot is released; the waiter's advance yields
+	if err := <-started; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-woke:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the detached Signal never reached the waiter once its run lock was free")
+	}
+}
