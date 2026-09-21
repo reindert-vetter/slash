@@ -59,13 +59,15 @@ test('a comment-list reorder while chatting must not list the open conversation 
   await chatCompose.fill('leg dit uit')
   await chatCompose.press('Enter') // held above, so this conversation stays "busy"
 
-  // The Signal POST is held indefinitely (still in flight), so cc.messages
-  // never gets the reviewer's own "leg dit uit" turn — "Selected: …" falls
-  // back to the anchor comment's own body (ownMessageTitle's documented
-  // fallback), same as the existing "eerste vraag over total" case in
-  // claude-chat-other-tasks.spec.mjs. That fallback text is enough to prove
-  // which conversation cc is anchored to.
-  await expect(page.getByTestId('claude-selected-line').first()).toContainText('is dit de juiste aanpak?')
+  // sendClaudeMessage's own addPendingOwnMessage (RelatedPanel.mjs) puts the
+  // reviewer's own turn straight into cc.messages, client-side, before the
+  // (held) Signal POST ever returns — "Selected: …" reads that pending
+  // message via ownMessageTitle's own newest-'user'-message rule, not the
+  // anchor comment's own body fallback (that fallback only applies once
+  // there is no own message at all, see the "eerste vraag over total" case
+  // in claude-chat-other-tasks.spec.mjs). That pending message is enough to
+  // prove which conversation cc is anchored to.
+  await expect(page.getByTestId('claude-selected-line').first()).toContainText('leg dit uit')
 
   // Read back the just-created comment's own shape so the injected synthetic
   // comment below lands in the exact same block-scoped list.
@@ -93,9 +95,13 @@ test('a comment-list reorder while chatting must not list the open conversation 
   await page.waitForTimeout(5300)
 
   // The real, still-open, still-busy conversation must NOT list itself as
-  // "elsewhere" — it's the one currently in view (the "Selected: …" line),
-  // not another task to jump to.
-  await expect(page.getByTestId('claude-selected-line').first()).toContainText('is dit de juiste aanpak?')
+  // "elsewhere" — it's the one currently in view (the "Selected: …" line,
+  // still showing the pending own message), not another task to jump to. A
+  // wrongly-listed "other" row would read its title from the SERVER-fetched
+  // transcript (ensureOtherTaskTitle), which the held Signal POST hasn't
+  // updated yet — so such a row would still say the anchor comment's own
+  // body, not the pending message; that's the string this checks for.
+  await expect(page.getByTestId('claude-selected-line').first()).toContainText('leg dit uit')
   const otherTasks = page.getByTestId('claude-other-tasks')
   if (await otherTasks.count()) {
     await expect(otherTasks.first()).not.toContainText('is dit de juiste aanpak?')
