@@ -988,10 +988,16 @@ func TestPrepareChatShellWorkDirOffersEveryHeldBackDirAsALastResort(t *testing.T
 	dataDir := t.TempDir()
 	ctx := context.Background()
 	claimed := cloneCheckoutDir(t, bareDir, "feature/x")
+	claimed2 := cloneCheckoutDir(t, bareDir, "feature/x")
 	rejected := cloneCheckoutDir(t, bareDir, "feature/x")
-	writeCheckoutSettings(t, dataDir, claimed, rejected)
+	writeCheckoutSettings(t, dataDir, claimed, claimed2, rejected)
 
+	// TWO claimed directories on purpose: a SINGLE claimed one that already
+	// sits on this PR's own branch is taken over silently now (see
+	// autoPickHeldBackOnTargetBranch and the test below), so the choice this
+	// test is about only exists once there is a genuine choice to make.
 	assignCheckoutForTest(t, "", 1030, claimed)
+	assignCheckoutForTest(t, "", 1035, claimed2)
 	getOrCreateCheckoutAssignment(dataDir, "", 1031).Excluded[rejected] = true
 
 	dir, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1031, "", "feature/x")
@@ -1003,6 +1009,7 @@ func TestPrepareChatShellWorkDirOffersEveryHeldBackDirAsALastResort(t *testing.T
 	}
 	want := []string{
 		claimed + checkoutOptionNoteSep + "in gebruik door PR 1030",
+		claimed2 + checkoutOptionNoteSep + "in gebruik door PR 1035",
 		rejected + checkoutOptionNoteSep + "eerder door jou afgewezen",
 		optNoneOfThese,
 	}
@@ -1024,20 +1031,54 @@ func TestPrepareChatShellWorkDirTakesOverAClaimedDirOnAnswer(t *testing.T) {
 	dataDir := t.TempDir()
 	ctx := context.Background()
 	claimed := cloneCheckoutDir(t, bareDir, "feature/x")
-	writeCheckoutSettings(t, dataDir, claimed)
+	claimed2 := cloneCheckoutDir(t, bareDir, "feature/x")
+	writeCheckoutSettings(t, dataDir, claimed, claimed2)
 
+	// Two claimed directories, so this really is a choice — a single claimed
+	// one on this PR's own branch is taken over without asking (see the test
+	// right below).
 	assignCheckoutForTest(t, "", 1032, claimed)
+	assignCheckoutForTest(t, "", 1038, claimed2)
 
 	_, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1033, "", "feature/x")
-	if ok || decision == nil || len(decision.Options) != 2 {
-		t.Fatalf("expected the claimed dir plus a way out: ok=%v decision=%+v", ok, decision)
+	if ok || decision == nil || len(decision.Options) != 3 {
+		t.Fatalf("expected both claimed dirs plus a way out: ok=%v decision=%+v", ok, decision)
 	}
-	dir, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1033, decision.Options[0], "feature/x")
+	answer := claimed + checkoutOptionNoteSep + "in gebruik door PR 1032"
+	if !slices.Contains(decision.Options, answer) {
+		t.Fatalf("options = %v, missing %q", decision.Options, answer)
+	}
+	dir, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1033, answer, "feature/x")
 	if !ok || dir != claimed {
 		t.Fatalf("dir = %q ok = %v decision = %+v, want the claimed dir taken over", dir, ok, decision)
 	}
 	if other := getOrCreateCheckoutAssignment(dataDir, "", 1032); other.Dir != "" {
 		t.Fatalf("PR 1032 still claims %q, want its claim released", other.Dir)
+	}
+}
+
+// Reported case (PR 13848): every local directory of the repo was claimed by
+// some other PR, so the reviewer got the last-resort choice — even though one
+// of them, ~/dev/plug-and-pay-3, already had THIS PR's own branch checked out
+// ("waarom kan dat niet automatisch in dit geval?"). Such a claim is stale by
+// definition, so that one directory is taken over silently, exactly as an
+// ordinary ladder pass would do via prioritizeOnTargetBranch, and the other
+// PR's assignment is released.
+func TestPrepareChatShellWorkDirTakesOverAStaleClaimOnItsOwnBranch(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	claimed := cloneCheckoutDir(t, bareDir, "feature/x")
+	writeCheckoutSettings(t, dataDir, claimed)
+
+	assignCheckoutForTest(t, "", 1036, claimed)
+
+	dir, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, "", 1037, "", "feature/x")
+	if !ok || dir != claimed || decision != nil {
+		t.Fatalf("dir = %q ok = %v decision = %+v, want the stale claim taken over silently", dir, ok, decision)
+	}
+	if other := getOrCreateCheckoutAssignment(dataDir, "", 1036); other.Dir != "" {
+		t.Fatalf("PR 1036 still claims %q, want its claim released", other.Dir)
 	}
 }
 
@@ -1141,6 +1182,47 @@ func TestSelectCheckoutCandidatePrioritizesOnTargetBranch(t *testing.T) {
 	dir, dec = selectCheckoutCandidate([]checkoutCandidate{mergedBase})
 	if dir != mergedBase.Dir || dec != nil {
 		t.Fatalf("expected the merged-base candidate auto-picked when nothing is on-target, got dir=%q dec=%+v", dir, dec)
+	}
+}
+
+// The last-resort choice's ONE exception: a directory held back only by
+// another PR's claim, while it already has THIS PR's branch checked out, is
+// taken over silently — that claim is stale by definition (a directory sits
+// on one branch at a time). Reported case: PR 13848 was asked to choose
+// between ~/dev/plug-and-pay (develop) and ~/dev/plug-and-pay-3, which was
+// already on the PR's own branch.
+func TestAutoPickHeldBackOnTargetBranch(t *testing.T) {
+	onTarget := checkoutCandidate{Dir: "/on-target", OnTargetBranch: true}
+	onTarget2 := checkoutCandidate{Dir: "/on-target-2", OnTargetBranch: true}
+	mergedBase := checkoutCandidate{Dir: "/merged-base", MergedIntoBase: true}
+	claimed := checkoutHoldback{Claimed: map[string]int{
+		onTarget.Dir:   13794,
+		onTarget2.Dir:  13794,
+		mergedBase.Dir: 13835,
+	}}
+
+	// One on-target + one merged-base, both claimed: take the on-target one.
+	if got := autoPickHeldBackOnTargetBranch([]checkoutCandidate{mergedBase, onTarget}, claimed); got != onTarget.Dir {
+		t.Fatalf("expected %q auto-picked, got %q", onTarget.Dir, got)
+	}
+
+	// Two on-target candidates: a real choice between two claimed
+	// directories, so the question stays.
+	if got := autoPickHeldBackOnTargetBranch([]checkoutCandidate{onTarget, onTarget2}, claimed); got != "" {
+		t.Fatalf("expected no auto-pick with two on-target candidates, got %q", got)
+	}
+
+	// The reviewer's own earlier "nee" is never overruled, whatever branch
+	// the directory sits on.
+	rejected := checkoutHoldback{Rejected: map[string]bool{onTarget.Dir: true}}
+	if got := autoPickHeldBackOnTargetBranch([]checkoutCandidate{onTarget, mergedBase}, rejected); got != "" {
+		t.Fatalf("expected no auto-pick for a rejected directory, got %q", got)
+	}
+
+	// Nothing on the target branch: taking a develop checkout off another PR
+	// stays an explicit choice.
+	if got := autoPickHeldBackOnTargetBranch([]checkoutCandidate{mergedBase}, claimed); got != "" {
+		t.Fatalf("expected no auto-pick for a merged-base-only candidate, got %q", got)
 	}
 }
 

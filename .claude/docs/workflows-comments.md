@@ -308,21 +308,66 @@ ability to see it.
   too, like every other poller-local flag) instead of every cycle, and keep
   polling at the normal cadence so the thread picks back up the moment access
   returns. Nothing is deleted, nothing is signalled.
-- **Repo reachable, comment still 404s**: the comment/thread itself was
-  removed on GitHub. The poller reuses the existing delete flow (see "Deleting
-  a comment" above) via a synthetic `ReactionSignal{Action:"delete",
-  Source:"ai"}` — the same one `supersedeFileWarnings`/`purgeOrphanWarnings`
-  already use to delete a comment from outside a reviewer's own click — so
-  cleanup (comment + its reactions, best-effort GitHub delete which itself
-  also just 404s and is ignored) goes through the one existing path rather
-  than a second ad hoc removal, and the Execution completing stops this
-  poller for good.
+- **Repo reachable**: this says nothing yet about the comment. `FetchReplies`
+  fetches the **PR-wide** listing (`GET repos/<repo>/pulls/<pr>/comments`), so
+  its 404 is a statement about that call, never about one comment — and
+  `RepoAccessible` only widens the question, it doesn't narrow it. The poller
+  therefore asks about **this** comment specifically:
+  **`Client.CommentExists(ctx, rootID)`** (`modules/github`), one `gh api` call
+  on `pulls/comments/<id>` with `issues/comments/<id>` as the fallback (a
+  thread root can be either), reporting "gone" only when BOTH answer 404.
+  - *Comment confirmed gone*: reuse the existing delete flow (see "Deleting a
+    comment" above) via a synthetic `ReactionSignal{Action:"delete",
+    Source:"ai"}` — the same one `supersedeFileWarnings`/`purgeOrphanWarnings`
+    already use to delete a comment from outside a reviewer's own click — so
+    cleanup (comment + its reactions) goes through the one existing path
+    rather than a second ad hoc removal, and the Execution completing stops
+    this poller for good.
+  - *Comment still there, or `CommentExists` itself errors*: log and
+    `continue`. Nothing is deleted on an uncertain signal.
 - **`RepoAccessible` itself errors** (rather than cleanly reporting
   `true`/`false`): stay conservative — fall through to the ordinary
-  log-and-`continue`, exactly as before this change. Never delete on an
-  uncertain signal.
+  log-and-`continue`. Never delete on an uncertain signal.
 
-Tests: `TestPollPausesOnRepoInaccessible404`, `TestPollDeletesCommentOnGoneButRepoAccessible404`.
+**Why the targeted check exists — an incident, not a hypothetical.** Before
+it, "repo reachable + listing 404" WAS read as "this comment is gone", and one
+transient 404 on that listing deleted **six live review comments of another
+reviewer** on PR 12112 (15 Sep 2026, 17:20:54-58) — every thread of that PR
+that still had a running poller, in the same second, **on GitHub as well as
+locally** (the runs' own histories show `deleteGithubComment` completing
+without error, i.e. the comments really were there). They were restored by
+hand from the workflow event history, which still held every body. Two rules
+came out of it, both now enforced in code: never conclude "gone" from a
+PR-wide call, and never delete someone else's comment on GitHub at all (next
+section).
+
+Tests: `TestPollPausesOnRepoInaccessible404`,
+`TestPollDeletesCommentOnGoneButRepoAccessible404`,
+`TestPollKeepsCommentWhenOnlyTheListing404s`.
+
+### `deleteGithubComment` only ever deletes OUR OWN comment
+
+The delete flow (`markCommentDeleting` → `deleteGithubComment` →
+`deleteComment`) always removes the local row, but the **GitHub** half is
+gated on ownership: an imported comment (`Source == "github"`) written by
+someone else is **never** deleted on GitHub — the row disappears from the
+review tree, the remark stays on the PR. An imported comment whose author IS
+the local reviewer is still deletable (your own comment is yours to remove),
+matched case-insensitively against `CurrentUser`'s login via
+`TaskManager.ownGithubAuthor`; an unknown/empty login, or a `CurrentUser`
+lookup that fails, answers "not ours" and therefore leaves the comment alone.
+
+The test lives in the **Activity**, not the workflow body, on purpose: it
+needs a live `CurrentUser` lookup (forbidden in a workflow body, see
+`.claude/rules/workflow-determinism.md`) and keeping the Activity **sequence**
+unchanged means no stored history shifts for a thread that is still waiting.
+
+The UI hides the "Verwijder comment" item for exactly the same set (see
+"Ownership" in `.claude/docs/comments-panel.md`), but that is the second line
+of defence, not the rule itself. Tests:
+`TestDeleteLeavesForeignGithubCommentOnGithub`,
+`TestDeleteRemovesOwnImportedCommentOnGithub`,
+`tests/pr-comment-delete.spec.mjs`.
 
 ## Importing existing GitHub comments (living threads)
 
@@ -1121,6 +1166,27 @@ The **hard** filters are untouched, and they are what makes this safe: a
 directory on some other, not-yet-merged branch is real unfinished work
 (`Busy`) and is never offered, so a claimed directory only ever reaches this
 list when it is genuinely free by its git state.
+
+**One exception to "never auto-picked": a claimed directory that already has
+THIS PR's own branch checked out** (`autoPickHeldBackOnTargetBranch`,
+`chat_checkout.go`). A directory sits on exactly one branch at a time, so the
+other PR cannot be working in it while it holds our branch — its assignment is
+the leftover that PR's own next re-classification would drop anyway
+(`releaseCheckoutDirFromOtherPRs`). Reported case (PR 13848): both local
+checkouts were claimed, yet `~/dev/plug-and-pay-3` was already on
+`bugfix/BUG-5415-…` while the other sat on `develop` — *"`-3` zit al op de
+branch, waarom kan dat niet automatisch in dit geval?"*. In an ORDINARY ladder
+pass `prioritizeOnTargetBranch` resolves exactly that shape with no question at
+all; only the last-resort pass, which deliberately does not apply that
+priority, still asked. Deliberately narrow on both sides: it needs **exactly
+one** candidate on the target branch (two claimed on-target directories is a
+real choice, so the question stays), and a directory in `hold.Rejected` is
+**never** taken this way — overruling one's own explicit "nee" stays a
+decision. A `MergedIntoBase`-only candidate is never auto-picked either:
+taking a `develop` checkout off another PR is precisely the takeover this
+question exists for. Tests: `TestAutoPickHeldBackOnTargetBranch` (the pure
+rule) and `TestPrepareChatShellWorkDirTakesOverAStaleClaimOnItsOwnBranch` (the
+wiring plus the claim release).
 
 Reported bug: with three of the reviewer's four `plug-and-pay` checkouts
 claimed by other PRs and the fourth rejected earlier in that same PR, a write

@@ -663,6 +663,48 @@ func prioritizeOnTargetBranch(candidates []checkoutCandidate) []checkoutCandidat
 	return candidates
 }
 
+// autoPickHeldBackOnTargetBranch is the ONE exception to
+// checkoutLastResortDecision's "never auto-picked" rule: a directory that is
+// held back only by another PR's CLAIM while it already has THIS PR's own
+// branch checked out. Such a claim is provably stale — a directory sits on
+// exactly one branch at a time, so the other PR cannot be working in it while
+// it holds our branch; its assignment is the leftover the ordinary
+// re-classification path (prepareChatShellWorkDirAt's `a.Dir != ""` branch,
+// releaseCheckoutDirFromOtherPRs) would drop on that PR's own next touch
+// anyway.
+//
+// Reported bug: with every directory of the repo claimed by some other PR,
+// the reviewer got the last-resort choice for PR 13848 even though
+// `~/dev/plug-and-pay-3` was already ON `bugfix/BUG-5415-…` (the other
+// option, `~/dev/plug-and-pay`, sat on develop) — "waarom kan dat niet
+// automatisch in dit geval?". In an ORDINARY ladder pass
+// prioritizeOnTargetBranch already resolves exactly this shape with no
+// question at all; only the last-resort pass, which deliberately does not
+// apply that priority, still asked.
+//
+// Deliberately narrow, both bounds requested by the reviewer:
+//   - exactly ONE candidate on the target branch — two of them is a real
+//     choice between two claimed directories, so the question stays;
+//   - never a directory in hold.Rejected — overruling one's own explicit
+//     "nee" is a decision, never a guess, whatever branch it sits on.
+//
+// A MergedIntoBase-only candidate is never auto-picked here either: taking a
+// develop checkout off another PR is exactly the takeover this whole
+// last-resort question exists for.
+func autoPickHeldBackOnTargetBranch(candidates []checkoutCandidate, hold checkoutHoldback) string {
+	dir := ""
+	for _, c := range candidates {
+		if !c.OnTargetBranch || hold.Rejected[c.Dir] {
+			continue
+		}
+		if dir != "" {
+			return "" // more than one: the reviewer chooses
+		}
+		dir = c.Dir
+	}
+	return dir
+}
+
 // selectCheckoutCandidate is the ladder's pure decision step, given already-
 // classified candidates: no candidates -> nothing at all; more than one ->
 // the reviewer always chooses (chooseDirectory); exactly one -> auto-picked
@@ -697,7 +739,9 @@ func selectCheckoutCandidate(candidates []checkoutCandidate) (dir string, decisi
 // reason (annotateCheckoutOption; the word carries the meaning, there is no
 // colour involved). Deliberately never auto-picked, not even with a single
 // option left: overruling one's own "nee" or taking a folder off another PR is
-// a decision, never a guess.
+// a decision, never a guess. The ONE case that never reaches this function is
+// a claimed directory already sitting on this PR's own branch — a provably
+// stale claim, see autoPickHeldBackOnTargetBranch and its caller.
 //
 // prioritizeOnTargetBranch is deliberately NOT applied — same reasoning as
 // listAllCheckoutChoices: this list exists so the reviewer can see and pick
@@ -1782,6 +1826,19 @@ func prepareChatShellWorkDirAt(ctx context.Context, tm *TaskManager, dataDir, re
 			all, allDiag := listCheckoutCandidates(ctx, dataDir, slug, headRef, baseBranch, checkoutHoldback{})
 			if allDiag.Err != nil && tm != nil && tm.logf != nil {
 				tm.logf("chat_checkout: pr %d: listing held-back candidates: %v", pr, allDiag.Err)
+			}
+			if dir := autoPickHeldBackOnTargetBranch(all, hold); dir != "" {
+				// The one shape that is not a real choice at all: this
+				// directory already HAS this PR's branch checked out, so the
+				// other PR's claim on it is stale by definition. See
+				// autoPickHeldBackOnTargetBranch.
+				if tm != nil && tm.logf != nil {
+					tm.logf("chat_checkout: pr %d: taking over %s (claimed, but already on %s)", pr, dir, headRef)
+				}
+				a.Dir = dir
+				a.LastReason = ""
+				a.LastReasonTransient = false
+				continue
 			}
 			if len(all) > 0 {
 				a.Pending = checkoutLastResortDecision(all, hold)
