@@ -236,6 +236,26 @@ func mergeBaseSHA(ctx context.Context, repo string, baseSHA, headSHA string) str
 	return mb
 }
 
+// isAncestor reports whether ancestorSHA is part of descendantSHA's history —
+// i.e. whether a plain `prevHead..headSHA` diff is even a meaningful "what
+// changed since the last refresh" question. A rebase or a force-push can
+// rewrite a PR branch's commits without necessarily moving the resolved merge
+// base (see mergeBaseSHA) — e.g. squashing/reordering the PR's own commits
+// onto the same base tip — which leaves the previously-recorded head
+// unreachable from the new one even though refreshIngestDelta's other guard
+// (baseSHA != prevBase) sees no change at all. Diffing two commits with no
+// ancestry relationship is not wrong in the git sense (it always produces
+// *some* result), but "since" no longer means anything, so the caller treats
+// a false answer here as "don't trust a delta, do a full re-ingest instead".
+// Best-effort/conservative: any git failure (the object not resolvable
+// locally, an actual git error) is treated as "not an ancestor" — the safer
+// of the two possible wrong answers, since it only costs an extra full
+// ingest, never a silently incomplete delta.
+func isAncestor(ctx context.Context, repo, ancestorSHA, descendantSHA string) bool {
+	_, err := runGitFor(ctx, repo, "merge-base", "--is-ancestor", ancestorSHA, descendantSHA)
+	return err == nil
+}
+
 func commitExists(ctx context.Context, repo string, sha string) bool {
 	_, err := runGitFor(ctx, repo, "cat-file", "-e", sha+"^{commit}")
 	return err == nil

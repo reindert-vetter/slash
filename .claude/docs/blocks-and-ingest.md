@@ -148,17 +148,55 @@ poller's own `headSHA == prevHead` skip fires before the base check, so once
 widened a PR stayed widened forever.
 
 `refreshIngestDelta` therefore intersects its file set with the PR's **own**
-changed files as GitHub reports them (`prChangedFilePaths` → `fetchPRMeta`, the
-exact same `meta.Files` a full ingest scans, so the delta can only ever converge
-on what a full ingest would produce) and prunes blocks already stored outside
-that set (`pruneBlocksOutsidePRFiles`, `db.go`), so a widened PR heals itself on
-the next refresh instead of needing a manual "Regenereren". Best-effort in both
-directions: no `gh` (offline, `SLASH_GITHUB=off`) means no filter and no prune
+changed files (`prLocalChangedFilePaths`) and prunes blocks already stored
+outside that set (`pruneBlocksOutsidePRFiles`, `db.go`), so a widened PR heals
+itself on the next refresh instead of needing a manual "Regenereren". Best-effort:
+a local diff failure (a SHA somehow not fetched) means no filter and no prune
 rather than a failed refresh, and an **empty** file list is treated as "we don't
 know", never as "this PR has no files". Side effect worth knowing: a rename's
 OLD path — which the `--no-renames` delta lists so its stale rows get deleted —
-is not in GitHub's list either, so its blocks are pruned rather than kept as a
-loose removed side; that matches what a full ingest stores for a rename.
+is not in this set either (`changedFileNames` also runs `--no-renames`), so its
+blocks are pruned rather than kept as a loose removed side; that matches what a
+full ingest stores for a rename.
+
+#### A delta refresh must not depend on `gh` for its own widening guard
+
+`prLocalChangedFilePaths` computes the PR's file set purely from **local git**
+— `changedFileNames(baseSHA, headSHA)`, the already-resolved **merge base**
+against head, the same three-dot comparison GitHub's own "Files changed" tab
+is built on (see "The base side is the MERGE BASE" above). It used to be
+`prChangedFilePaths` → `fetchPRMeta`, a **fresh `gh pr view --json files`**
+call made at refresh time — the exact same source a full ingest scans, which
+sounds equally authoritative, but isn't: GitHub's own `files` list can still
+be **computing right after a push** and briefly under-report, the same kind
+of race the `ghFilesPageSize` truncation guard elsewhere in this file already
+works around. A refresh that happened to land in that window silently
+dropped every just-pushed file from `filterToPRFiles`'s result (one
+`log.Printf("... skipped")`, no error) — and then still saved the new
+`headSHA` as `prevHead` regardless, so the very next poll saw
+`headSHA == prevHead` and skipped the refresh entirely. Nothing about that
+file ever surfaced again until a manual "Regenereren" (full ingest, which
+takes a **fresh** `gh pr view` and no longer races against the delta's own
+narrower timing window).
+
+Found on PR 13810 (`app/Events/Subscriptions/SubscriptionStateEvent.php`,
+reviewer: "waarom zie ik ... niet aangepast, maar wel op github"): the
+recorded ingest's own event history
+(`data/workflows/170b90296c40222e39a1b196.events.jsonl`) showed a full ingest
+had run against an OLDER head with only 16 files in `meta.Files`; a later
+delta refresh advanced `pr_ingest` to the PR's current head (confirmed via
+`git diff` between the stored base/head SHAs, which already contained the
+file) without ever adding 13 of the meanwhile-touched files, including this
+one — because whichever `gh pr view` snapshot that refresh queried had not
+yet caught up with the just-landed commits. A **local** merge-base..head diff
+cannot lag like that: `baseSHA`/`headSHA` are already fetched into the clone
+by the time `refreshIngestDelta` gets here (its own `ensureCommits` ran
+first), so the diff is exact and instantaneous, no network involved. Tests:
+`TestPRLocalChangedFilePathsUsesLocalGitOnly`,
+`TestRefreshIngestDeltaKeepsAJustPushedFile` (`ingest_delta_test.go`) —
+the latter reproduces the PR 13810 symptom end to end with a throwaway local
+git fixture (`setupChatShadowRepo`), deliberately needing **no** `gh`
+stub/fake at all: that absence is exactly what the fix buys.
 
 **For a re-scanned file, "untouched" is not enough.** A comment's
 `row_start`/`row_end` and an approval's row indices are positions in the block's

@@ -294,8 +294,11 @@ manual reload "shows it at once" only because `GET /api/code` reads the head
 worktree live, which `refreshIngestDelta` moves early. Of the ~8s inside
 `refreshIngestDelta`, the largest share was `ensureCommits`' two unconditional
 `git fetch origin` calls for commits that were already local — now skipped
-when both SHAs resolve (`gh.go`); the `gh` file-list call
-(`prChangedFilePaths`) and the PHP scan remain. `buildRelations` (~11s more,
+when both SHAs resolve (`gh.go`); the local merge-base file-list diff
+(`prLocalChangedFilePaths`, see "A delta refresh must not depend on gh for
+its own widening guard" in `.claude/docs/blocks-and-ingest.md` — a `gh`
+call at the time this was measured, since replaced) and the PHP scan
+remain. `buildRelations` (~11s more,
 `callresolve.changed`) and the conversation's own `enqueueChatMerge` Activity
 (which drives the whole landing inline, so it only completes after
 `buildRelations`) follow, but neither gates the code becoming visible.

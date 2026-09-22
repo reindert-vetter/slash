@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"slash/modules/approvals"
@@ -473,5 +475,429 @@ func TestPruneBlocksOutsidePRFiles(t *testing.T) {
 	}
 	if otherLeft != 1 {
 		t.Fatalf("pr 99 has %d block(s) left, want 1 (another PR must be untouched)", otherLeft)
+	}
+}
+
+// checkoutBranch points dir's local HEAD at an existing remote-tracking
+// branch. setupChatShadowRepo's bare "origin" has no default branch matching
+// headRefName (its own HEAD still points at git's default, e.g. master/main,
+// which was never pushed), so a plain `git clone` leaves the clone's local
+// HEAD unborn — `rev-parse HEAD` fails right after setupChatShadowRepo
+// returns, even though `origin/<headRefName>` already holds the seeded
+// commit. Call this first in any test that needs a real local HEAD to commit
+// on top of.
+func checkoutBranch(t *testing.T, dir, branch string) {
+	t.Helper()
+	cmd := exec.Command("git", "-C", dir, "checkout", "-B", branch, "origin/"+branch)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git checkout -B %s origin/%s: %v: %s", branch, branch, err, out)
+	}
+}
+
+// setupDevelopRepo builds a throwaway bare "origin" plus a local clone whose
+// origin/develop already exists and holds one seed commit — prLocalChangedFilePaths
+// resolves the base branch's LIVE tip via `baseBranchFor(repo)`, which defaults
+// to "develop" for the primary repo (repos.go), so any fixture exercising it
+// needs a real origin/develop, unlike setupChatShadowRepo's single arbitrary
+// branch. Returns the clone dir (SLASH_REPO_DIR is already set, same as
+// setupChatShadowRepo) and the seed commit's SHA (develop's tip == the PR's
+// merge base for every fixture below, since nothing else ever commits to
+// develop in these tests).
+func setupDevelopRepo(t *testing.T) (cloneDir, developSHA string) {
+	t.Helper()
+	root := t.TempDir()
+	bareDir := filepath.Join(root, "origin.git")
+	seedDir := filepath.Join(root, "seed")
+	cloneDir = filepath.Join(root, "clone")
+
+	run := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s (in %s): %v: %s", strings.Join(args, " "), dir, err, out)
+		}
+	}
+
+	if err := os.MkdirAll(seedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exec.Command("git", "init", "--bare", bareDir).CombinedOutput(); err != nil {
+		t.Fatalf("git init --bare: %v", err)
+	}
+	run(seedDir, "init")
+	run(seedDir, "config", "user.email", "test@example.com")
+	run(seedDir, "config", "user.name", "test")
+	run(seedDir, "checkout", "-b", "develop")
+	if err := os.WriteFile(filepath.Join(seedDir, "seed.txt"), []byte("v1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(seedDir, "add", "seed.txt")
+	run(seedDir, "commit", "-m", "seed develop")
+	run(seedDir, "remote", "add", "origin", bareDir)
+	run(seedDir, "push", "origin", "develop")
+
+	if _, err := exec.Command("git", "clone", bareDir, cloneDir).CombinedOutput(); err != nil {
+		t.Fatalf("git clone: %v", err)
+	}
+	run(cloneDir, "config", "user.email", "test@example.com")
+	run(cloneDir, "config", "user.name", "test")
+
+	t.Setenv("SLASH_REPO_DIR", cloneDir)
+	remoteHeadCache.Lock()
+	remoteHeadCache.byPR = map[prKey]remoteHeadEntry{}
+	remoteHeadCache.Unlock()
+
+	checkoutBranch(t, cloneDir, "develop")
+	out, err := exec.Command("git", "-C", cloneDir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cloneDir, string(bytesTrim(out))
+}
+
+// commitPHPFile writes a small PHP file with one function into dir and commits
+// it, returning the new commit's SHA. Used by the offline (no gh, no network)
+// fixtures below to build a real local git history for refreshIngestDelta's
+// widening guard.
+func commitPHPFile(t *testing.T, dir, path, funcName, msg string) string {
+	t.Helper()
+	full := filepath.Join(dir, path)
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := "<?php\n\nfunction " + funcName + "() {\n    return true;\n}\n"
+	if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
+		}
+	}
+	run("add", path)
+	run("commit", "-m", msg)
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(bytesTrim(out))
+}
+
+// TestPRLocalChangedFilePathsUsesLocalGitOnly asserts prLocalChangedFilePaths
+// returns the real merge-base..head file set purely from local git, with zero
+// gh/network involvement — the fix for the race documented on
+// refreshIngestDelta's widening-guard call site ("A delta refresh must not
+// depend on gh for its own widening guard", .claude/docs/blocks-and-ingest.md):
+// gh's own `files` list can still be computing right after a push and briefly
+// under-report, silently dropping a just-pushed file from the PR forever. A
+// local merge-base..head diff cannot lag like that.
+func TestPRLocalChangedFilePathsUsesLocalGitOnly(t *testing.T) {
+	cloneDir, developSHA := setupDevelopRepo(t)
+	ctx := context.Background()
+
+	// Branch off develop locally (no push needed — prLocalChangedFilePaths
+	// only ever needs origin/develop, never the head branch itself, so the
+	// PR's own commits stay purely local, exactly like a not-yet-pushed
+	// landed chat edit).
+	if out, err := exec.Command("git", "-C", cloneDir, "checkout", "-b", "feature/x").CombinedOutput(); err != nil {
+		t.Fatalf("git checkout -b feature/x: %v: %s", err, out)
+	}
+
+	commitPHPFile(t, cloneDir, "app/Foo.php", "foo", "add Foo")
+	headSHA := commitPHPFile(t, cloneDir, "app/Bar.php", "bar", "add Bar")
+
+	files, err := prLocalChangedFilePaths(ctx, "", headSHA)
+	if err != nil {
+		t.Fatalf("prLocalChangedFilePaths: %v", err)
+	}
+	want := map[string]bool{"app/Foo.php": true, "app/Bar.php": true}
+	if len(files) != len(want) {
+		t.Fatalf("files = %v, want exactly %v", files, want)
+	}
+	for _, f := range files {
+		if !want[f] {
+			t.Fatalf("unexpected file %q in %v", f, files)
+		}
+	}
+
+	// develop's own tip, unchanged relative to itself: no changed files,
+	// reported as an error (the caller treats an error as "no filter", never
+	// as "the PR has zero files").
+	if _, err := prLocalChangedFilePaths(ctx, "", developSHA); err == nil {
+		t.Fatal("expected an error when head equals the base branch tip, got nil")
+	}
+}
+
+// TestRefreshIngestDeltaKeepsAJustPushedFile reproduces the actual production
+// symptom (PR 13810: app/Events/Subscriptions/SubscriptionStateEvent.php
+// changed on GitHub but never appeared locally): a file that only entered the
+// PR in the very commit a delta refresh is now processing must survive the
+// widening guard, even though it was never part of any earlier-recorded file
+// list. Before the fix this guard intersected the delta against a FRESH `gh pr
+// view` snapshot, which can still be computing right after a push and briefly
+// omit that file — silently dropping it, forever, since the stored head SHA
+// then already matches and no later poll ever retries. This test needs no gh
+// stub/fake at all, which is exactly the point of the fix: the guard is now
+// pure local git and cannot race against GitHub's own backend.
+func TestRefreshIngestDeltaKeepsAJustPushedFile(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 13810
+	ctx := context.Background()
+
+	db, err := openDB(filepath.Join(dataDir, "graph.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	cloneDir, baseSHA := setupDevelopRepo(t)
+	if out, err := exec.Command("git", "-C", cloneDir, "checkout", "-b", "feature/x").CombinedOutput(); err != nil {
+		t.Fatalf("git checkout -b feature/x: %v: %s", err, out)
+	}
+
+	// The previously-ingested head: only app/Foo.php exists in the PR so far.
+	prevHeadSHA := commitPHPFile(t, cloneDir, "app/Foo.php", "foo", "add Foo")
+
+	baseDir, headDir := worktreeDirs(dataDir, "", pr)
+	if err := ensureWorktree(ctx, "", baseDir, baseSHA); err != nil {
+		t.Fatalf("base worktree: %v", err)
+	}
+	if err := ensureWorktree(ctx, "", headDir, prevHeadSHA); err != nil {
+		t.Fatalf("head worktree: %v", err)
+	}
+	if _, err := scanAndStoreIngestBlocksLocked(ctx, db, dataDir, "", pr, worktreeSHAs{
+		BaseSHA: baseSHA, HeadSHA: prevHeadSHA, Paths: []string{"app/Foo.php"},
+	}); err != nil {
+		t.Fatalf("seed initial ingest: %v", err)
+	}
+
+	// A new commit lands on the PR, touching a brand-new file — the moment a
+	// real `gh pr view` snapshot could still be lagging behind.
+	newHeadSHA := commitPHPFile(t, cloneDir, "app/Events/Subscriptions/SubscriptionStateEvent.php", "getProductTags", "touch SubscriptionStateEvent")
+
+	res, err := refreshIngestDelta(ctx, db, dataDir, "", pr, baseSHA, newHeadSHA)
+	if err != nil {
+		t.Fatalf("refreshIngestDelta: %v", err)
+	}
+	if res.FullFallback || res.Skipped {
+		t.Fatalf("expected a plain delta refresh, got %+v", res)
+	}
+
+	blocks, err := blocksByPR(db, "", pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, b := range blocks {
+		if b.File == "app/Events/Subscriptions/SubscriptionStateEvent.php" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("app/Events/Subscriptions/SubscriptionStateEvent.php missing from blocks after refresh: %+v", blocks)
+	}
+}
+
+// stubGHUnreachable prepends a fake `gh` executable that always fails
+// immediately (no network) to PATH, ahead of any real `gh` — so any call
+// this test expects to route through git only (never gh) fails loudly and
+// fast instead of silently succeeding against a real, authenticated `gh` on
+// the machine running the test. git itself is untouched (PATH is prepended,
+// not replaced), so ordinary git plumbing keeps working.
+func stubGHUnreachable(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	script := "#!/bin/sh\necho 'stubbed gh: no network in tests' >&2\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(dir, "gh"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// TestRefreshIngestDeltaFallsBackOnRebasedHead covers "Rebase zonder dat er
+// gepushed is, kan voorkomen": a rebase/force-push can rewrite the PR's own
+// commits without moving the resolved merge base at all (squashed onto the
+// very same base tip), which the existing `baseSHA != prevBase` guard alone
+// cannot see — yet the previously-recorded head is no longer reachable from
+// the new one, so a prevHead..headSHA diff is not a meaningful "what changed
+// since the last refresh" question anymore. refreshIngestDelta must detect
+// that (isAncestor) and fall back to a full ingest instead of risking a delta
+// that silently misses files.
+//
+// Since the full-ingest fallback itself needs gh (prepareIngestWorktreesLocked
+// calls fetchPRMeta), this test stubs `gh` to fail immediately (stubGHUnreachable)
+// and merely asserts refreshIngestDelta actually TOOK the fallback branch (its
+// error names the fallback, coming from the stub's instant failure) rather
+// than silently proceeding with a bogus delta. A companion assertion on the
+// ordinary (non-rebased) path proves that path never touches gh at all, with
+// the exact same stub in place.
+func TestRefreshIngestDeltaFallsBackOnRebasedHead(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 4242
+	ctx := context.Background()
+
+	db, err := openDB(filepath.Join(dataDir, "graph.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	cloneDir, baseSHA := setupDevelopRepo(t)
+	if out, err := exec.Command("git", "-C", cloneDir, "checkout", "-b", "feature/x").CombinedOutput(); err != nil {
+		t.Fatalf("git checkout -b feature/x: %v: %s", err, out)
+	}
+
+	prevHeadSHA := commitPHPFile(t, cloneDir, "app/Foo.php", "foo", "add Foo")
+
+	baseDir, headDir := worktreeDirs(dataDir, "", pr)
+	if err := ensureWorktree(ctx, "", baseDir, baseSHA); err != nil {
+		t.Fatalf("base worktree: %v", err)
+	}
+	if err := ensureWorktree(ctx, "", headDir, prevHeadSHA); err != nil {
+		t.Fatalf("head worktree: %v", err)
+	}
+	if _, err := scanAndStoreIngestBlocksLocked(ctx, db, dataDir, "", pr, worktreeSHAs{
+		BaseSHA: baseSHA, HeadSHA: prevHeadSHA, Paths: []string{"app/Foo.php"},
+	}); err != nil {
+		t.Fatalf("seed initial ingest: %v", err)
+	}
+
+	// A rebase: reset the branch back to the base tip and commit a brand-new,
+	// unrelated commit object on top — same resolved merge base as before
+	// (still just one commit forward from develop), but prevHeadSHA is no
+	// longer an ancestor of the new head at all.
+	if out, err := exec.Command("git", "-C", cloneDir, "reset", "--hard", baseSHA).CombinedOutput(); err != nil {
+		t.Fatalf("git reset --hard: %v: %s", err, out)
+	}
+	rebasedHeadSHA := commitPHPFile(t, cloneDir, "app/Foo.php", "fooRebased", "rebased add Foo")
+
+	if isAncestor(ctx, "", prevHeadSHA, rebasedHeadSHA) {
+		t.Fatal("test setup broken: prevHeadSHA is still an ancestor of the rebased head")
+	}
+
+	stubGHUnreachable(t)
+
+	_, err = refreshIngestDelta(ctx, db, dataDir, "", pr, baseSHA, rebasedHeadSHA)
+	if err == nil {
+		t.Fatal("expected an error (the stubbed gh failing inside the full-ingest fallback), got nil")
+	}
+	if !strings.Contains(err.Error(), "full ingest fallback") {
+		t.Fatalf("error = %v, want it to name the full-ingest fallback (proving refreshIngestDelta took that branch)", err)
+	}
+
+	// Companion check: an ORDINARY (non-rebased) advance over the same stub
+	// must NOT take that branch at all, i.e. must succeed without ever
+	// touching the stubbed gh. Check out prevHeadSHA itself (still a real,
+	// un-gc'd commit object) so the next commit is a genuine descendant of
+	// it, unlike the rebased branch above which moved away from it.
+	if out, err := exec.Command("git", "-C", cloneDir, "checkout", prevHeadSHA).CombinedOutput(); err != nil {
+		t.Fatalf("git checkout prevHeadSHA: %v: %s", err, out)
+	}
+	ordinaryHeadSHA := commitPHPFile(t, cloneDir, "app/Bar.php", "bar", "add Bar (no rebase)")
+	if !isAncestor(ctx, "", prevHeadSHA, ordinaryHeadSHA) {
+		t.Fatal("test setup broken: ordinaryHeadSHA should still be a descendant of prevHeadSHA")
+	}
+	res, err := refreshIngestDelta(ctx, db, dataDir, "", pr, baseSHA, ordinaryHeadSHA)
+	if err != nil {
+		t.Fatalf("refreshIngestDelta on the ordinary (non-rebased) path: %v", err)
+	}
+	if res.FullFallback {
+		t.Fatalf("ordinary advance incorrectly took the full-ingest fallback: %+v", res)
+	}
+}
+
+// TestRefreshIngestDeltaLeavesPrevHeadWhenSomethingWasFiltered is the "sla de
+// head-SHA pas op als verwerkt wanneer er niets is overgeslagen" requirement:
+// when the widening guard drops one or more files from this round's delta,
+// refreshIngestDelta must NOT advance pr_ingest's recorded head — leaving it
+// as-is means the next poll tick (headSHA hasn't "moved" as far as pr_ingest
+// is concerned) simply retries the same delta+filter, rather than
+// permanently freezing on a result that dropped something.
+func TestRefreshIngestDeltaLeavesPrevHeadWhenSomethingWasFiltered(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 5150
+	ctx := context.Background()
+
+	db, err := openDB(filepath.Join(dataDir, "graph.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	cloneDir, developSHA := setupDevelopRepo(t)
+
+	// The PR's own branch: one commit ahead of develop.
+	if out, err := exec.Command("git", "-C", cloneDir, "checkout", "-b", "feature/x").CombinedOutput(); err != nil {
+		t.Fatalf("git checkout -b feature/x: %v: %s", err, out)
+	}
+	prevHeadSHA := commitPHPFile(t, cloneDir, "app/Foo.php", "foo", "add Foo")
+
+	baseDir, headDir := worktreeDirs(dataDir, "", pr)
+	if err := ensureWorktree(ctx, "", baseDir, developSHA); err != nil {
+		t.Fatalf("base worktree: %v", err)
+	}
+	if err := ensureWorktree(ctx, "", headDir, prevHeadSHA); err != nil {
+		t.Fatalf("head worktree: %v", err)
+	}
+	if _, err := scanAndStoreIngestBlocksLocked(ctx, db, dataDir, "", pr, worktreeSHAs{
+		BaseSHA: developSHA, HeadSHA: prevHeadSHA, Paths: []string{"app/Foo.php"},
+	}); err != nil {
+		t.Fatalf("seed initial ingest: %v", err)
+	}
+
+	// develop advances independently (a commit the PR never asked for).
+	if out, err := exec.Command("git", "-C", cloneDir, "checkout", "develop").CombinedOutput(); err != nil {
+		t.Fatalf("git checkout develop: %v: %s", err, out)
+	}
+	developAdvancedSHA := commitPHPFile(t, cloneDir, "modules/Noise/Unrelated.php", "noise", "unrelated develop progress")
+	if out, err := exec.Command("git", "-C", cloneDir, "push", "origin", "develop").CombinedOutput(); err != nil {
+		t.Fatalf("git push origin develop: %v: %s", err, out)
+	}
+
+	// The reviewer merges the (now-advanced) develop into their own branch —
+	// dragging modules/Noise/Unrelated.php along, none of which is really
+	// part of this PR.
+	if out, err := exec.Command("git", "-C", cloneDir, "checkout", "feature/x").CombinedOutput(); err != nil {
+		t.Fatalf("git checkout feature/x: %v: %s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", cloneDir, "merge", "--no-edit", developAdvancedSHA).CombinedOutput(); err != nil {
+		t.Fatalf("git merge develop into feature/x: %v: %s", err, out)
+	}
+	widenedHeadOut, err := exec.Command("git", "-C", cloneDir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	widenedHeadSHA := string(bytesTrim(widenedHeadOut))
+
+	res, err := refreshIngestDelta(ctx, db, dataDir, "", pr, developSHA, widenedHeadSHA)
+	if err != nil {
+		t.Fatalf("refreshIngestDelta: %v", err)
+	}
+	if res.FullFallback {
+		t.Fatalf("expected a plain delta refresh (base unchanged), got a full fallback: %+v", res)
+	}
+
+	// The noise file must never be stored...
+	blocks, err := blocksByPR(db, "", pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range blocks {
+		if b.File == "modules/Noise/Unrelated.php" {
+			t.Fatalf("widening noise file leaked into blocks: %+v", blocks)
+		}
+	}
+
+	// ...and, because something WAS filtered out this round, prevHead must
+	// still be the OLD one — not the widened head — so a later poll (with
+	// headSHA unchanged) keeps retrying instead of freezing forever.
+	_, head, ok, err := loadIngestSHAs(db, "", pr)
+	if err != nil || !ok {
+		t.Fatalf("loadIngestSHAs: ok=%v err=%v", ok, err)
+	}
+	if head != prevHeadSHA {
+		t.Fatalf("pr_ingest head = %s, want it left at the old prevHead %s (something was filtered this round)", short(head), short(prevHeadSHA))
 	}
 }
