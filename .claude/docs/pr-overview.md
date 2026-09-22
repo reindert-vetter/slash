@@ -108,6 +108,34 @@ the ONLY place this feed is shown) moved into the bell's own dropdown.
   **in Jira** — this app does not write into an undocumented endpoint on the
   reviewer's behalf, which is exactly why the read-model keeps its own
   `read_at` (see `modules/jiranotify`).
+- **A "X reacted to your comment" row cannot show WHICH emoji — investigated,
+  closed as not possible.** Reviewer request ("ik wil zien hoe er is
+  gereageerd", screenshot `data/review-shots/task-jira-reaction-emoji-not-shown.png`).
+  Established live against the real site, so nobody re-does it:
+  - The bell feed itself does not carry the emoji anywhere. Full introspection
+    of `InfluentsNotificationContent` gives exactly
+    `actions/actor/bodyItems/entity/message/path/type/url`; a real reaction row
+    has `type: "reacted"`, `message: "<name> reacted to your comment"`,
+    `actions: []`, a `url` pointing at the plain `/browse/<KEY>` (so not even a
+    comment id), and one `PRIMARY` body item holding the ADF of the reviewer's
+    OWN comment that was reacted to. Nothing names the emoji.
+  - The two services that DO hold it refuse an Atlassian API token outright:
+    GraphQL `gravity_reactions` (and `gravity_detailedReaction`, which even has
+    the per-user breakdown) answers
+    `Auth category: API_TOKEN is not allowed in service gravity`,
+    `allowedAuth: ["SESSION"]`; REST
+    `GET /gateway/api/reactions/reactions?ari=…&containerAri=…` answers plain
+    `401` with the same Basic auth every other call on this site accepts. Only
+    a browser session cookie (`cloud.session.token`) reaches them.
+  - Dead ends already checked: `reactionsSummary`/`contentReactionsSummary` are
+    Confluence-only (a Jira comment id gives a `ConfluenceReactionableContentType`
+    error or a 404), `JiraComment`/`JiraCommentItem` have no reactions field,
+    `GET /rest/api/3/issue/…/comment/…?expand=properties` returns empty
+    properties, and `graphStoreV2_atlassianUserReactedToJiraWorkItemCommentInverse`
+    exists but its edge carries only `createdAt`/`node` — no emoji.
+  Reindert's decision: leave it. No session-cookie route (manual copy out of
+  devtools, expires, a second auth mechanism in `modules/jira`) and no
+  consolation label either — the row keeps saying only THAT someone reacted.
 - **Two more explicit ways to mark read, on top of opening a row** (reviewer
   request: "ik wil ook alles op gelezen kunnen zetten in 1 keer, en per
   stuk"):
