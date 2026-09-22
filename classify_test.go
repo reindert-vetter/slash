@@ -802,3 +802,71 @@ func TestBladeTemplateChangeOutsideScriptFunctionsClassifies(t *testing.T) {
 		t.Errorf("expected the changed line 3 to fall inside the block span, got %d-%d", out[0].Line, out[0].EndLine)
 	}
 }
+
+// submoduleDiff is a realistic `git diff` for a changed submodule pointer
+// (a gitlink, mode 160000) — the exact shape found on PR 13810 (reviewer:
+// "ik zie de aanpassing niet van een andere submodule hash aanpassing").
+const submoduleDiff = `diff --git a/modules/Ai b/modules/Ai
+index 217ae1f2207c557d4bc725626d1512660a56493..a4b7f5efe39f5515e49bfcb0948b992a4dbcf696 160000
+--- a/modules/Ai
++++ b/modules/Ai
+@@ -1 +1 @@
+-Subproject commit 217ae1f2207c557d4bc725626d1512660a56493
++Subproject commit a4b7f5efe39f5515e49bfcb0948b992a4dbcf696
+`
+
+// TestParseUnifiedDiffCapturesSubmoduleCommitLines: parseUnifiedDiff must
+// recognize the "index ... 160000" gitlink marker and capture the raw
+// "Subproject commit ..." old/new lines, not just the changed line numbers —
+// parseOneFile has nothing else to build the old/new "source" from, since the
+// path itself is a directory in the worktree, not a readable file.
+func TestParseUnifiedDiffCapturesSubmoduleCommitLines(t *testing.T) {
+	diffs := parseUnifiedDiff(submoduleDiff)
+	fd, ok := diffs["modules/Ai"]
+	if !ok {
+		t.Fatalf("expected a fileDiff for modules/Ai, got keys %v", diffs)
+	}
+	if !fd.submodule {
+		t.Fatalf("expected fd.submodule=true")
+	}
+	if fd.oldCommitLine != "Subproject commit 217ae1f2207c557d4bc725626d1512660a56493" {
+		t.Errorf("unexpected oldCommitLine: %q", fd.oldCommitLine)
+	}
+	if fd.newCommitLine != "Subproject commit a4b7f5efe39f5515e49bfcb0948b992a4dbcf696" {
+		t.Errorf("unexpected newCommitLine: %q", fd.newCommitLine)
+	}
+}
+
+// TestSubmoduleCommitChangeProducesModifiedBlock reproduces the original bug
+// end to end: modules/Ai is a real DIRECTORY in both worktrees (exactly like
+// an (un)initialized git submodule checkout), so os.ReadFile on it fails with
+// "is a directory" in the ordinary path — which used to be misread as "the
+// file doesn't exist on either side", silently dropping the change. With the
+// diff's own submodule commit lines threaded through, the change must now
+// surface as one modified whole-file block.
+func TestSubmoduleCommitChangeProducesModifiedBlock(t *testing.T) {
+	baseDir, headDir := t.TempDir(), t.TempDir()
+	path := "modules/Ai"
+	if err := os.MkdirAll(filepath.Join(baseDir, path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(headDir, path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	diffs := parseUnifiedDiff(submoduleDiff)
+	blocks, errs := parseFiles(13810, []string{path}, nil, baseDir, headDir, diffs)
+	if len(errs) != 0 {
+		t.Fatalf("parseFiles errors: %v", errs)
+	}
+	if len(blocks) != 1 {
+		t.Fatalf("expected exactly 1 block for the submodule change, got %d: %v", len(blocks), symbols(blocks))
+	}
+	b := blocks[0]
+	if b.Status != StatusModified {
+		t.Errorf("expected status=%q, got %q", StatusModified, b.Status)
+	}
+	if b.File != path {
+		t.Errorf("expected File=%q, got %q", path, b.File)
+	}
+}

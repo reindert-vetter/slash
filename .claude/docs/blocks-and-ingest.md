@@ -1020,6 +1020,38 @@ The image itself is served separately by `GET /api/image` and rendered by
 stands, the overlay) lives in "IMAGE blocks" in
 `.claude/docs/diff-render.md`.
 
+### A changed submodule pointer (gitlink) has no readable file to diff
+
+A git submodule is recorded as a **gitlink** (mode `160000`) — the path is a
+**directory** in the worktree, not a file. `parseOneFile`'s ordinary
+`os.ReadFile(baseDir/path)`/`os.ReadFile(headDir/path)` therefore fails on
+**both** sides with "is a directory", which used to be misread as "absent in
+base and head" (the same signal `fileAdded`/`fileDeleted` use for a real
+add/delete) — both `oldBlocks`/`newBlocks` stayed empty and the change
+silently never reached the review tree, with no error anywhere. Found on PR
+13810 (reviewer: "ik zie de aanpassing niet van een andere submodule hash
+aanpassing, dat wil ik wel zien").
+
+`git diff` itself already carries the two commit hashes as an ordinary hunk
+(`-`/`+` "Subproject commit `<sha>`" lines) preceded by an
+`index <old>..<new> 160000` line — no `Binary files ... differ` shortcut like
+an image gets. `parseUnifiedDiff` (`classify.go`) captures that: an
+`index ... 160000` line sets `fileDiff.submodule`, and the following `-`/`+`
+lines are captured verbatim into `oldCommitLine`/`newCommitLine` (in addition
+to marking the changed line, as usual). `parseOneFile` (`parse_pool.go`)
+checks `fd.submodule` **before** touching the filesystem at all: it builds
+`oldSrc`/`newSrc` directly from those two captured lines (empty means "no old/
+new commit" → a newly added/removed submodule) and scans/classifies exactly
+like any other file from there. Since a gitlink path has no `.php`/`.ts`
+extension, `ScanBlocks` falls through to its ordinary whole-file-block
+default — no submodule-specific block shape, category, or frontend change
+needed; it shows up like any other whole-file block, old/new text
+`Subproject commit <sha>`. Tests: `classify_test.go`
+(`TestParseUnifiedDiffCapturesSubmoduleCommitLines`,
+`TestSubmoduleCommitChangeProducesModifiedBlock` — the latter uses a real
+directory at the submodule's path in both worktrees to reproduce the original
+"is a directory" failure).
+
 ## Truly deleted file (`file_deleted`)
 
 "All blocks of this file are `removed`" is not a reliable signal — the blocks

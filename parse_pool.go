@@ -110,6 +110,28 @@ func parseOneFile(pr int, path, oldPath, baseDir, headDir string, fd *fileDiff) 
 		}
 	}()
 
+	// A changed git submodule pointer (gitlink, mode 160000) has no readable
+	// file content in either worktree — the path is a directory there, so
+	// os.ReadFile below fails with "is a directory" for BOTH sides, which the
+	// ordinary logic misreads as "absent in base and head" and silently
+	// drops the change. Build the old/new "source" straight from the diff's
+	// own commit lines instead — see fileDiff's doc comment.
+	if fd != nil && fd.submodule {
+		oldSrc := []byte(fd.oldCommitLine)
+		newSrc := []byte(fd.newCommitLine)
+		fileAdded := fd.oldCommitLine == ""
+		fileDeleted := fd.newCommitLine == ""
+		var oldBlocks, newBlocks []Block
+		if !fileAdded {
+			oldBlocks = ScanBlocks(oldSrc, path)
+		}
+		if !fileDeleted {
+			newBlocks = ScanBlocks(newSrc, path)
+		}
+		res.blocks = classifyFile(pr, path, oldFile, oldBlocks, newBlocks, fd, fileAdded, fileDeleted, string(oldSrc), string(newSrc))
+		return res
+	}
+
 	oldSrc, oldErr := os.ReadFile(filepath.Join(baseDir, oldPath))
 	newSrc, newErr := os.ReadFile(filepath.Join(headDir, path))
 

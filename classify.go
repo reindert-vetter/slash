@@ -10,9 +10,21 @@ import (
 type lineSet map[int]bool
 
 // fileDiff holds the changed lines of one file, in old and new numbering.
+//
+// submodule/oldCommitLine/newCommitLine describe a changed git submodule
+// pointer (a gitlink, mode 160000): that "file" is a directory in the
+// worktree, not a readable file, so parseOneFile cannot get its old/new
+// content by reading the filesystem the way it does for every other file.
+// The diff itself already carries that content as an ordinary hunk (`-`/`+`
+// "Subproject commit <sha>" lines), so parseUnifiedDiff captures it here —
+// see .claude/docs/blocks-and-ingest.md.
 type fileDiff struct {
 	changedOld lineSet
 	changedNew lineSet
+
+	submodule     bool
+	oldCommitLine string
+	newCommitLine string
 }
 
 // parseUnifiedDiff parses `git diff` output into a map file->fileDiff. The keys
@@ -22,27 +34,42 @@ func parseUnifiedDiff(diff string) map[string]*fileDiff {
 	out := map[string]*fileDiff{}
 	var cur *fileDiff
 	var oldLine, newLine int
+	// Set by an "index <old>..<new> 160000" line, which always precedes the
+	// +++/--- lines for the same file; carried into fileDiff.submodule as
+	// soon as cur is (re)created.
+	pendingSubmodule := false
 
 	for _, raw := range strings.Split(diff, "\n") {
 		switch {
 		case strings.HasPrefix(raw, "diff --git"):
 			cur = nil
+			pendingSubmodule = false
+		case strings.HasPrefix(raw, "index ") && strings.HasSuffix(strings.TrimSpace(raw), " 160000"):
+			pendingSubmodule = true
 		case strings.HasPrefix(raw, "+++ "):
 			path := stripDiffPrefix(strings.TrimPrefix(raw, "+++ "))
 			if path == "" { // /dev/null → deleted file; keep the old path
 				continue
 			}
-			cur = &fileDiff{changedOld: lineSet{}, changedNew: lineSet{}}
+			cur = &fileDiff{changedOld: lineSet{}, changedNew: lineSet{}, submodule: pendingSubmodule}
 			out[path] = cur
 		case strings.HasPrefix(raw, "--- "):
 			// Remember the old path in case +++ is /dev/null.
 			path := stripDiffPrefix(strings.TrimPrefix(raw, "--- "))
 			if path != "" && cur == nil {
-				cur = &fileDiff{changedOld: lineSet{}, changedNew: lineSet{}}
+				cur = &fileDiff{changedOld: lineSet{}, changedNew: lineSet{}, submodule: pendingSubmodule}
 				out[path] = cur
 			}
 		case strings.HasPrefix(raw, "@@"):
 			oldLine, newLine = parseHunkHeader(raw)
+		case cur != nil && cur.submodule && strings.HasPrefix(raw, "-") && !strings.HasPrefix(raw, "---"):
+			cur.oldCommitLine = strings.TrimPrefix(raw, "-")
+			cur.changedOld[oldLine] = true
+			oldLine++
+		case cur != nil && cur.submodule && strings.HasPrefix(raw, "+") && !strings.HasPrefix(raw, "+++"):
+			cur.newCommitLine = strings.TrimPrefix(raw, "+")
+			cur.changedNew[newLine] = true
+			newLine++
 		case cur != nil && strings.HasPrefix(raw, "+") && !strings.HasPrefix(raw, "+++"):
 			cur.changedNew[newLine] = true
 			newLine++
