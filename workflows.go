@@ -7333,6 +7333,66 @@ func (m *TaskManager) importPRComments(ctx context.Context, repo string, pr int)
 	}
 
 	m.applyGithubResolves(ctx, repo, pr, existing)
+	m.applyGithubDeletes(ctx, repo, pr, existing, inputs)
+}
+
+// applyGithubDeletes mirrors a comment's deletion on github.com onto the
+// read-model: once imported, nothing else ever removed a thread whose GitHub
+// comment later disappeared (the author deleted it there), so it stayed
+// `open` here forever — reported bug ("deze comment zie ik niet op github
+// staan"), confirmed via `gh api .../pulls/comments/<id>` returning 404 for a
+// comment this app still showed.
+//
+// `inputs` is the SAME fetch importPRComments's caller already did this poll
+// tick (reviews + general comments) — no extra GitHub round-trip needed here,
+// unlike applyGithubResolves's separate ResolvedReviewThreads read. A GitHub
+// comment id present in `inputs` still exists; one that isn't, but is still
+// stored locally with `Source == "github"` (an imported thread, never an
+// app-placed one — see below) and a non-zero GithubID, was deleted there.
+//
+// Deliberately filtered to `Source == "github"`: an app-placed comment also
+// gets its GithubID set once posted (`saveCommentGithubID`), but its Source
+// stays "ui"/"ai" — this must never reconcile those, only genuinely imported
+// threads, so a race where a freshly posted comment's id hasn't shown up yet
+// in this poll's own `inputs` snapshot can't delete it locally.
+//
+// Rides the EXISTING reviewer-facing delete path (`ReactionSignal{Action:
+// "delete"}`), the same one "Verwijderen" sends — no new workflow branch. The
+// workflow's own `deleteGithubComment` Activity gates the GitHub-side call on
+// `in.Source`/`in.Author` (the ORIGINAL comment's, not this signal's), which
+// for an imported comment is already "github" + the original author, so it
+// refuses to call DeleteComment again ("removed locally only") — exactly
+// right, since GitHub already has nothing to delete. Only the local
+// `comments.Delete` + `deleteComment` Activity actually runs.
+func (m *TaskManager) applyGithubDeletes(ctx context.Context, repo string, pr int, existing []comments.Comment, inputs []CodeCommentInput) {
+	if m.comments == nil || len(existing) == 0 {
+		return
+	}
+	live := map[int64]bool{}
+	for _, in := range inputs {
+		if in.ImportedRootID != 0 {
+			live[in.ImportedRootID] = true
+		}
+	}
+	for _, c := range existing {
+		if c.Source != "github" || c.GithubID == 0 || live[c.GithubID] {
+			continue
+		}
+		// A terminal run can never accept a Signal again — same check as
+		// applyGithubResolves/the avatar backfill.
+		switch status, err := m.engine.Status(c.ID); {
+		case err != nil:
+			m.logf("import comments: github delete run=%s: status: %v", c.ID, err)
+		case status == tembed.StatusFailed || status == tembed.StatusCompleted:
+			// Nothing to do.
+		default:
+			if err := m.Signal(c.ID, ReactionSignal{
+				ID: "sys-" + newUIReactionID(), Source: "github", Action: "delete",
+			}); err != nil {
+				m.logf("import comments: github delete run=%s: %v", c.ID, err)
+			}
+		}
+	}
 }
 
 // applyGithubResolves mirrors GitHub's own "Resolve conversation" state onto

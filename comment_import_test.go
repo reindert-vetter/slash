@@ -622,6 +622,71 @@ func TestImportAppliesGithubResolvedState(t *testing.T) {
 	}
 }
 
+// TestImportAppliesGithubDeletedState covers the mirror-image bug of
+// TestImportAppliesGithubResolvedState above: somebody deletes their comment
+// on github.com, and slash never noticed — the thread stayed `open` here
+// forever (reported bug, confirmed against a real PR where the imported
+// comment's id 404'd on GitHub).
+func TestImportAppliesGithubDeletedState(t *testing.T) {
+	m, gh, cs := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pr := 42
+
+	gh.SetReviewComments([]github.ReviewComment{
+		{ID: 100, Author: "colleague", Body: "will be deleted", Path: "src/Order.php", Line: 10, Side: "RIGHT"},
+		{ID: 101, Author: "colleague", Body: "stays", Path: "src/Order.php", Line: 12, Side: "RIGHT"},
+	})
+	gh.SetGeneralComments([]github.GeneralComment{
+		{ID: 200, Author: "colleague", Body: "a PR-wide one", Kind: "issue"},
+	})
+	m.importPRComments(ctx, "", pr)
+
+	idsOf := func() map[string]bool {
+		list, _ := cs.List(ctx, "", pr)
+		out := map[string]bool{}
+		for _, c := range list {
+			out[c.ID] = true
+		}
+		return out
+	}
+	if got := idsOf(); !got["gh-100"] || !got["gh-101"] || !got["gh-200"] {
+		t.Fatalf("comments after the first import = %v, want all three present", got)
+	}
+
+	// The author deletes comment 100 on github.com — it no longer comes back
+	// from FetchReviewComments. The next import tick picks that up.
+	gh.SetReviewComments([]github.ReviewComment{
+		{ID: 101, Author: "colleague", Body: "stays", Path: "src/Order.php", Line: 12, Side: "RIGHT"},
+	})
+	m.importPRComments(ctx, "", pr)
+
+	got := idsOf()
+	if got["gh-100"] {
+		t.Fatalf("gh-100 still present after being deleted on GitHub, want it gone")
+	}
+	if !got["gh-101"] {
+		t.Fatalf("gh-101 missing, want it to stay (it was never deleted on GitHub)")
+	}
+	if !got["gh-200"] {
+		t.Fatalf("gh-200 missing, want it to stay (an issue comment, untouched by the review-comment fetch)")
+	}
+
+	// The comment is already gone from GitHub, so nothing should be posted
+	// back there — deleteGithubComment must recognise this as an imported
+	// ("github"-sourced) comment and skip the DeleteComment call.
+	if n := gh.DeletedCount(); n != 0 {
+		t.Fatalf("DeleteComment called %d times, want 0 (already deleted upstream)", n)
+	}
+
+	// A further tick is a no-op (the run is already completed) rather than
+	// erroring on every restart.
+	m.importPRComments(ctx, "", pr)
+	if got := idsOf(); got["gh-100"] {
+		t.Fatalf("gh-100 reappeared after a further import tick")
+	}
+}
+
 // kiloCheckTestManager wires the comments + chat stores plus a real autowarn
 // module (post-construction, like autoWarnTriggerManager in
 // code_warning_test.go) so the "Live AI assistent" toggle can be flipped from

@@ -504,6 +504,30 @@ change for a one-off backlog.
   `engine.Status` check as the avatar backfill (a thread resolved back when a
   resolve still completed the Execution can never be signalled again). Test:
   `TestImportAppliesGithubResolvedState`.
+- **A comment DELETED on GitHub disappears here too** (`applyGithubDeletes`,
+  also run at the end of every `importPRComments`, right after
+  `applyGithubResolves`). Nothing did this before either: once imported, a
+  thread stayed `open` forever even after the author deleted its GitHub
+  comment — reported bug ("deze comment zie ik niet op github staan"),
+  confirmed via `gh api .../pulls/comments/<id>` 404ing for a comment the app
+  still showed. No extra GitHub round-trip: it reuses the SAME `inputs`
+  (reviews + general comments) `importPRComments` already fetched this poll
+  tick, and flags a locally stored comment as gone when its `GithubID` isn't
+  in that set anymore. Filtered to `Source == "github"` (never an app-placed
+  comment, whose `GithubID` is set the same way but whose `Source` stays
+  `ui`/`ai`) so a freshly posted comment not yet reflected in this tick's
+  `inputs` snapshot can never be mistaken for a deletion. Rides the existing
+  reviewer-facing delete path (`ReactionSignal{Action: "delete"}`, the same
+  one "Verwijderen" sends) — no new workflow branch, Action or endpoint. The
+  workflow's own `deleteGithubComment` Activity gates the GitHub-side call on
+  the comment's ORIGINAL `Source`/`Author` (not this signal's), which for an
+  imported thread is already `"github"` + the original author, so it refuses
+  to call `DeleteComment` again ("removed locally only") — right, since
+  GitHub has nothing left to delete; only the local `comments.Delete` runs.
+  Same terminal-run `engine.Status` guard as the resolve/avatar-backfill
+  paths. No "deleted on GitHub" badge by product decision — it just
+  disappears from the index, the same as a reviewer deleting it themselves.
+  Test: `TestImportAppliesGithubDeletedState`.
 - **Restart:** an imported thread's root id lives in the **input**, not in a
   post event, so `ResumePolling` reads it from there.
 - **Reply dedup relies on the DB, not the poller's `seen` map:** that map is a
