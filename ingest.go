@@ -82,13 +82,19 @@ type worktreeSHAs struct {
 func prepareIngestWorktrees(ctx context.Context, dataDir string, repo string, pr int) (worktreeSHAs, error) {
 	ingestMu.Lock()
 	defer ingestMu.Unlock()
-	return prepareIngestWorktreesLocked(ctx, dataDir, repo, pr)
+	return prepareIngestWorktreesLocked(ctx, dataDir, repo, pr, "")
 }
 
 // prepareIngestWorktreesLocked is prepareIngestWorktrees's body, extracted so
 // refreshIngestDelta (which already holds ingestMu) can fall back to a full
 // ingest without re-locking a non-reentrant mutex.
-func prepareIngestWorktreesLocked(ctx context.Context, dataDir string, repo string, pr int) (worktreeSHAs, error) {
+//
+// wantHead, when non-empty, is the head the caller already knows it is
+// ingesting (refreshIngestDelta's own headSHA: the landed pending ref, or the
+// poller's fresh headRefOid) and wins over gh's snapshot, which can lag a
+// push by a while — observed on PR 13835, where the fallback's gh call still
+// reported the previous head right after a push and stored that instead.
+func prepareIngestWorktreesLocked(ctx context.Context, dataDir string, repo string, pr int, wantHead string) (worktreeSHAs, error) {
 	meta, err := fetchPRMeta(ctx, repo, pr)
 	if err != nil {
 		return worktreeSHAs{}, err
@@ -101,6 +107,37 @@ func prepareIngestWorktreesLocked(ctx context.Context, dataDir string, repo stri
 
 	if err := ensureCommits(ctx, repo, pr, baseSHA, headSHA); err != nil {
 		return worktreeSHAs{}, err
+	}
+
+	paths := make([]string, 0, len(meta.Files))
+	for _, f := range meta.Files {
+		paths = append(paths, f.Path)
+	}
+
+	// A landed-but-unpushed chat edit (the pending ref, see
+	// .claude/docs/pending-push.md) wins over GitHub's head as long as it still
+	// contains that head — the same rule ingestRefreshNeeded applies. Without
+	// this, every full ingest (a manual "Regenereren", and refreshIngestDelta's
+	// own fallback, which every AMENDED chat landing hits because an amend
+	// leaves the previous head unreachable) silently rewound the tree to the
+	// last PUSHED tip, while the "ongepusht" pill kept claiming the edit was
+	// there. The file list then has to come from local git too: gh's list
+	// describes the remote head and misses a file only the local commit adds.
+	// A caller-supplied wantHead (refreshIngestDelta's fallback) takes
+	// precedence over both: it already IS the head this refresh is for.
+	target := wantHead
+	if target == "" {
+		target = pendingHeadFor(ctx, repo, pr, meta.HeadRefName, headSHA)
+	}
+	if target != "" && target != headSHA {
+		if !commitExists(ctx, repo, target) {
+			log.Printf("ingest pr %d: requested head %s is not available locally (using remote head %s)", pr, short(target), short(headSHA))
+		} else if local, lerr := prLocalChangedFilePaths(ctx, repo, target); lerr == nil {
+			log.Printf("ingest pr %d: using head %s instead of gh's head %s", pr, short(target), short(headSHA))
+			headSHA, paths = target, local
+		} else {
+			log.Printf("ingest pr %d: file list for head %s failed (using gh's head %s): %v", pr, short(target), short(headSHA), lerr)
+		}
 	}
 
 	// The base worktree must hold the commit the PR BRANCHED OFF, not the current
@@ -119,11 +156,22 @@ func prepareIngestWorktreesLocked(ctx context.Context, dataDir string, repo stri
 		return worktreeSHAs{}, fmt.Errorf("head worktree: %w", err)
 	}
 
-	paths := make([]string, 0, len(meta.Files))
-	for _, f := range meta.Files {
-		paths = append(paths, f.Path)
-	}
 	return worktreeSHAs{BaseSHA: baseSHA, HeadSHA: headSHA, Paths: paths}, nil
+}
+
+// pendingHeadFor returns the PR's pending-ref tip when a landed chat edit is
+// waiting there on top of remoteHead (the ref contains remoteHead and is not
+// that same commit), or "" otherwise — no ref, no branch name, or someone
+// pushed past it, in which case the tree follows GitHub again.
+func pendingHeadFor(ctx context.Context, repo string, pr int, headRefName, remoteHead string) string {
+	if headRefName == "" {
+		return ""
+	}
+	pending := pendingRefSHA(ctx, repo, prPendingRef(repo, pr, headRefName))
+	if pending == "" || pending == remoteHead || !isAncestor(ctx, repo, remoteHead, pending) {
+		return ""
+	}
+	return pending
 }
 
 // scanAndStoreIngestBlocks diffs the two worktrees, parses+classifies the
@@ -286,7 +334,7 @@ func refreshIngestDelta(ctx context.Context, db *sql.DB, dataDir string, repo st
 		} else {
 			log.Printf("ingest refresh pr %d: prevHead %s is not an ancestor of head %s (rebase/force-push), falling back to full ingest", pr, short(prevHead), short(headSHA))
 		}
-		shas, err := prepareIngestWorktreesLocked(ctx, dataDir, repo, pr)
+		shas, err := prepareIngestWorktreesLocked(ctx, dataDir, repo, pr, headSHA)
 		if err != nil {
 			return nil, fmt.Errorf("full ingest fallback: prepare worktrees: %w", err)
 		}

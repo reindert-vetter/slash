@@ -283,6 +283,30 @@ commit is by definition. Cross-workflow Ensure+Signal from inside an Activity,
 best-effort/log-only, the shape `enqueueChatMerge`/`reanchorAfterRefresh`
 already use.
 
+**A full ingest must never rewind to the pushed tip.** Every landing after
+the first is an amend (see "Amending a chain of chat commits" below), so the
+previously ingested head is no longer an ancestor of the new one and
+`refreshIngestDelta` takes its full-ingest fallback. That fallback used to
+re-resolve the head through `gh` (`prepareIngestWorktreesLocked`) — the last
+PUSHED tip, or even a snapshot still lagging a push — and stored that, so the
+tree silently showed the pre-edit code while the `⇧ ongepusht` pill (which
+reads the pending ref, not the ingest) kept saying the edit was there, and no
+backstop ever repaired it (PR 13835). Now `prepareIngestWorktreesLocked`
+takes the caller's `wantHead` (the fallback passes its own `headSHA`), and
+with none given (a manual "Regenereren") prefers the pending ref whenever it
+still contains GitHub's head (`pendingHeadFor`, the same rule as
+`ingestRefreshNeeded` below); the file list then comes from local git
+(`prLocalChangedFilePaths`), since `gh`'s list describes the remote head.
+Tests: `TestRefreshIngestDeltaFallbackKeepsTheRequestedHead`,
+`TestPendingHeadForPrefersALandedChatEdit` (`ingest_delta_test.go`).
+
+**`landedFiles` only ever holds repo-relative paths.** The read-only first
+attempt of a chat turn shares the progress sink, and the model can still
+announce a (refused) `Edit` there, before the checkout dir is known —
+`relativeToCheckout` (`chat_workflow.go`) used to record that raw absolute
+path, which then rode along as a landed file matching no block. It now
+records nothing for an empty dir or a path outside the checkout.
+
 **How long "immediately" is, measured (2026-09-21, PR 13810, a one-line
 edit):** Claude's turn ended at T+0; the landing (`processChatMergeAt`:
 `git fetch origin <branch>` ~2.7s of network, then ms-scale local git) signalled

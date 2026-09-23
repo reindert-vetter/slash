@@ -901,3 +901,132 @@ func TestRefreshIngestDeltaLeavesPrevHeadWhenSomethingWasFiltered(t *testing.T) 
 		t.Fatalf("pr_ingest head = %s, want it left at the old prevHead %s (something was filtered this round)", short(head), short(prevHeadSHA))
 	}
 }
+
+// TestPendingHeadForPrefersALandedChatEdit pins the rule every full ingest now
+// applies (prepareIngestWorktreesLocked): a pending ref holding a landed,
+// unpushed chat edit on top of GitHub's head wins; no ref, the same commit, or
+// a remote that moved past it (the ref no longer contains the remote head)
+// leaves GitHub's head in charge. Regression for PR 13835, where an AMENDED
+// landing took refreshIngestDelta's full-ingest fallback and rewound the tree
+// to the last pushed tip.
+func TestPendingHeadForPrefersALandedChatEdit(t *testing.T) {
+	cloneDir, _ := setupDevelopRepo(t)
+	ctx := context.Background()
+	pr, branch := 4243, "feature/x"
+	if out, err := exec.Command("git", "-C", cloneDir, "checkout", "-b", branch).CombinedOutput(); err != nil {
+		t.Fatalf("git checkout -b: %v: %s", err, out)
+	}
+	remoteHead := commitPHPFile(t, cloneDir, "app/Foo.php", "foo", "pushed")
+
+	if got := pendingHeadFor(ctx, "", pr, branch, remoteHead); got != "" {
+		t.Fatalf("no pending ref: got %q, want \"\"", got)
+	}
+	setRef := func(sha string) {
+		t.Helper()
+		if out, err := exec.Command("git", "-C", cloneDir, "update-ref", prPendingRef("", pr, branch), sha).CombinedOutput(); err != nil {
+			t.Fatalf("update-ref: %v: %s", err, out)
+		}
+	}
+	setRef(remoteHead)
+	if got := pendingHeadFor(ctx, "", pr, branch, remoteHead); got != "" {
+		t.Fatalf("pending == remote: got %q, want \"\"", got)
+	}
+
+	landed := commitPHPFile(t, cloneDir, "app/Bar.php", "bar", "landed chat edit")
+	setRef(landed)
+	if got := pendingHeadFor(ctx, "", pr, branch, remoteHead); got != landed {
+		t.Fatalf("landed on top of remote: got %q, want %q", got, landed)
+	}
+	if got := pendingHeadFor(ctx, "", pr, "", remoteHead); got != "" {
+		t.Fatalf("unknown branch name: got %q, want \"\"", got)
+	}
+
+	// Someone pushed past the landed commit: the remote head is no longer
+	// contained in the pending ref, so GitHub wins again.
+	if out, err := exec.Command("git", "-C", cloneDir, "reset", "--hard", remoteHead).CombinedOutput(); err != nil {
+		t.Fatalf("git reset: %v: %s", err, out)
+	}
+	pushedByColleague := commitPHPFile(t, cloneDir, "app/Baz.php", "baz", "colleague push")
+	if got := pendingHeadFor(ctx, "", pr, branch, pushedByColleague); got != "" {
+		t.Fatalf("remote moved past pending ref: got %q, want \"\"", got)
+	}
+}
+
+// TestRefreshIngestDeltaFallbackKeepsTheRequestedHead is the PR 13835
+// regression end to end: an AMENDED chat landing leaves the previous head
+// unreachable, so refreshIngestDelta takes the full-ingest fallback — which
+// used to re-resolve the head through gh (the last PUSHED tip, or a snapshot
+// still lagging a push) and store THAT, silently rewinding the tree. Here gh
+// is stubbed to report the stale pre-amend head; the recorded head must still
+// be the amended one refreshIngestDelta was asked for, and its code must be
+// what the head worktree now holds.
+func TestRefreshIngestDeltaFallbackKeepsTheRequestedHead(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 4244
+	ctx := context.Background()
+	db, err := openDB(filepath.Join(dataDir, "graph.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	cloneDir, baseSHA := setupDevelopRepo(t)
+	if out, err := exec.Command("git", "-C", cloneDir, "checkout", "-b", "feature/x").CombinedOutput(); err != nil {
+		t.Fatalf("git checkout -b: %v: %s", err, out)
+	}
+	pushed := commitPHPFile(t, cloneDir, "app/Foo.php", "foo", "pushed")
+	firstLanding := commitPHPFile(t, cloneDir, "app/Bar.php", "bar", "chat landing")
+
+	baseDir, headDir := worktreeDirs(dataDir, "", pr)
+	if err := ensureWorktree(ctx, "", baseDir, baseSHA); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureWorktree(ctx, "", headDir, firstLanding); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanAndStoreIngestBlocksLocked(ctx, db, dataDir, "", pr, worktreeSHAs{
+		BaseSHA: baseSHA, HeadSHA: firstLanding, Paths: []string{"app/Foo.php", "app/Bar.php"},
+	}); err != nil {
+		t.Fatalf("seed ingest: %v", err)
+	}
+
+	// The amend: same parent, new SHA, so firstLanding is no longer an ancestor.
+	if err := os.WriteFile(filepath.Join(cloneDir, "app/Bar.php"), []byte("<?php\nfunction barAmended() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", cloneDir, "commit", "-aq", "--amend", "-m", "chat landing (amended)").CombinedOutput(); err != nil {
+		t.Fatalf("amend: %v: %s", err, out)
+	}
+	out, err := exec.Command("git", "-C", cloneDir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	amended := string(bytesTrim(out))
+
+	// gh still reports the pushed tip (the ref on GitHub never moved).
+	stub := t.TempDir()
+	meta := `{"files":[{"path":"app/Foo.php"}],"baseRefOid":"` + baseSHA + `","headRefOid":"` + pushed + `","baseRefName":"develop","headRefName":"feature/x"}`
+	if err := os.WriteFile(filepath.Join(stub, "gh"), []byte("#!/bin/sh\necho '"+meta+"'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", stub+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	res, err := refreshIngestDelta(ctx, db, dataDir, "", pr, baseSHA, amended)
+	if err != nil {
+		t.Fatalf("refreshIngestDelta: %v", err)
+	}
+	if !res.FullFallback {
+		t.Fatalf("expected the full-ingest fallback, got %+v", res)
+	}
+	_, head, _, err := loadIngestSHAs(db, "", pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if head != amended {
+		t.Fatalf("recorded head = %s, want the amended landing %s (gh's stale head was %s)", short(head), short(amended), short(pushed))
+	}
+	src, err := os.ReadFile(filepath.Join(headDir, "app/Bar.php"))
+	if err != nil || !strings.Contains(string(src), "barAmended") {
+		t.Fatalf("head worktree app/Bar.php = %q (%v), want the amended source", src, err)
+	}
+}
