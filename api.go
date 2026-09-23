@@ -102,6 +102,7 @@ func (s *server) routes(staticDir string) *http.ServeMux {
 			http.Redirect(w, r, "/pr-overview", http.StatusFound)
 			return
 		}
+		w.Header().Set("Cache-Control", "no-cache")
 		fileServer.ServeHTTP(w, r)
 	})
 	return mux
@@ -109,8 +110,18 @@ func (s *server) routes(staticDir string) *http.ServeMux {
 
 // serveFile returns a handler that always serves one file from staticDir — the
 // SPA shell for the /pr/<id> and /pr-overview routes.
+//
+// Every shell and static asset is sent with "Cache-Control: no-cache": without
+// it the browser applies HEURISTIC freshness (~10% of the age since
+// Last-Modified), so a rarely-changed module (src/columnWidth.mjs) stays cached
+// for hours while a frequently-changed importer (src/Block.mjs) is refetched —
+// a mixed old/new module graph that fails to link ("does not provide an export
+// named …") and leaves the page blank. no-cache still allows a cheap 304
+// revalidation. See "Static assets are never served from a heuristic cache" in
+// .claude/docs/pages-and-routing.md.
 func serveFile(staticDir, name string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
 		http.ServeFile(w, r, filepath.Join(staticDir, name))
 	}
 }

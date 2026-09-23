@@ -45,6 +45,20 @@ Every route is a static HTML shell with no build step; the Go server
 - **`/`** redirects (302) to `/pr-overview`; every other path (`/src/*`,
   `/overview.html`, …) is served statically by the `http.FileServer`.
 
+### Static assets are never served from a heuristic cache
+
+Every page shell (`serveFile`) and every static asset (the `/` handler) is sent
+with `Cache-Control: no-cache` (`api.go`). Without it the server only sent
+`Last-Modified`, and the browser applied *heuristic* freshness (~10% of the
+age since that date): a rarely-changed module (`src/columnWidth.mjs`,
+untouched for a week) stayed cached for hours while a frequently-changed
+importer (`src/Block.mjs`) was refetched. The mixed old/new module graph then
+failed to link (`does not provide an export named 'splitDividerHandle'`) and
+`/pr/<id>` stayed **blank**. It never even booted far enough to log a debug
+`session` event, which is how you tell this apart from a render freeze.
+`no-cache` still allows a cheap `304` revalidation. Don't remove it. Test:
+`TestStaticAssetsAreNoCache` (`static_cache_test.go`).
+
 ## A fresh `/pr/<id>` open lands on the PR-description column
 
 A genuinely fresh open — **no `?sel=` at all**: a bare `/pr/<id>` link, "Open
