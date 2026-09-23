@@ -165,9 +165,23 @@ func sniffChatAttachmentType(data []byte) string {
 }
 
 // chatAttachmentsRoot is the one directory every conversation's images live
-// under, next to the DBs.
+// under, next to the DBs — always ABSOLUTE.
+//
+// The server's data dir defaults to the relative "data" (dataDirPath,
+// main.go), but the path built here reaches a claude turn that runs with a
+// DIFFERENT cwd: the PR's head worktree or the reviewer's own assigned
+// checkout (prepareChatReadOnlyWorkDir). A relative path in the prompt note
+// (and in --add-dir, which the CLI resolves against its own cwd) then points
+// into that checkout, where the file does not exist — measured: Claude
+// answered "bestaat niet in de werkkopie" while the image sat under the
+// slash repo's own data/. Resolving it here, against the SERVER's cwd, keeps
+// the same directory on disk and fixes every reader at once.
 func chatAttachmentsRoot(dataDir string) string {
-	return filepath.Join(dataDir, "chat-attachments")
+	root := filepath.Join(dataDir, "chat-attachments")
+	if abs, err := filepath.Abs(root); err == nil {
+		return abs
+	}
+	return root
 }
 
 // chatAttachmentConvDirName turns a conversation id into ONE safe path

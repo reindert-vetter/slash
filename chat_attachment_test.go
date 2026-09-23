@@ -248,6 +248,34 @@ func TestChatAttachmentPromptNoteNamesEveryExistingFile(t *testing.T) {
 	}
 }
 
+// TestChatAttachmentPathsAreAbsoluteForARelativeDataDir pins the fix for a
+// turn running outside the server's cwd (the reviewer's own checkout): the
+// server's default data dir is the relative "data", yet the prompt note and
+// --add-dir must name the image absolutely, or Claude resolves them inside
+// that checkout and finds nothing.
+func TestChatAttachmentPathsAreAbsoluteForARelativeDataDir(t *testing.T) {
+	t.Chdir(t.TempDir())
+	m := &TaskManager{dataDir: "data"}
+	const conv = "gh-8"
+	ref, err := m.saveChatAttachment(context.Background(), ChatAttachmentInput{
+		ConversationID: conv, Data: base64.StdEncoding.EncodeToString([]byte(tinyPNG(0x05))),
+	})
+	if err != nil {
+		t.Fatalf("saveChatAttachment: %v", err)
+	}
+	paths := existingChatAttachmentPaths("data", conv, []ChatAttachmentRef{ref})
+	if len(paths) != 1 || !filepath.IsAbs(paths[0]) {
+		t.Fatalf("paths = %v, want one absolute path", paths)
+	}
+	if dir := chatAttachmentConvDir("data", conv); !filepath.IsAbs(dir) {
+		t.Errorf("conv dir = %q, want absolute (it becomes --add-dir)", dir)
+	}
+	// Still the same file on disk, just spelled absolutely.
+	if _, err := os.Stat(filepath.Join("data", "chat-attachments", chatAttachmentConvDirName(conv), ref.ID)); err != nil {
+		t.Errorf("file not under the relative data dir: %v", err)
+	}
+}
+
 // TestSweepAndClearRemoveAttachments covers the two ways an attachment goes
 // away again: wiping its conversation, and the cleanup workflow's age-based
 // sweep.

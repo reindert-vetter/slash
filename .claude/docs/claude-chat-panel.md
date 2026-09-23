@@ -5335,6 +5335,14 @@ opgeslagen of getoond.
    vision-input. Het enige extra stukje plumbing is `--add-dir`
    (`RunRequest.AddDirs`, `modules/claude`), omdat de bijlagen naast de DB's
    staan en niet in de worktree waarin de turn draait.
+   **Absoluut is hier load-bearing:** de data-dir van de server is standaard
+   het relatieve `data` (`dataDirPath`, `main.go`), maar de turn draait met
+   een andere cwd — de head-worktree of de eigen checkout van de reviewer
+   (`prepareChatReadOnlyWorkDir`). Een relatief pad (in de prompt én in
+   `--add-dir`) wees dan naar een niet-bestaand bestand in díe checkout
+   (gemeten: "bestaat niet in de werkkopie", PR 13810). Daarom maakt
+   `chatAttachmentsRoot` het pad absoluut; test:
+   `TestChatAttachmentPathsAreAbsoluteForARelativeDataDir`.
 6. **Weergave**: de bubbel van de reviewer toont de thumbnails
    (`chat-message-attachments`), in een container met `markdown-body` en per
    `<img>` een `data-md-image` — precies de twee haakjes die
