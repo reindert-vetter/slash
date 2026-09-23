@@ -122,6 +122,13 @@ func TestChatProgressAccumulatesEditedFiles(t *testing.T) {
 	if len(p.EditedFiles) != 0 {
 		t.Fatalf("a Read must never be recorded as an edit, got %v", p.EditedFiles)
 	}
+	// Nor a (refused) Edit the read-only attempt still announced: it changed
+	// nothing, and recording its raw absolute path used to leak into the
+	// landing's landedFiles (PR 13835).
+	sink(claude.ChatEvent{Kind: claude.ChatEventTool, Tool: "Edit", Detail: "/checkout/src/Foo.php"})
+	if p, _ := chatProgressFor("conv-edit"); len(p.EditedFiles) != 0 {
+		t.Fatalf("an Edit before the shell attempt must not be recorded, got %v", p.EditedFiles)
+	}
 
 	// The shell attempt starts: the caller (runOneClaudeTurn) sets the
 	// checkout dir right before invoking it.
@@ -129,6 +136,7 @@ func TestChatProgressAccumulatesEditedFiles(t *testing.T) {
 	sink(claude.ChatEvent{Kind: claude.ChatEventTool, Tool: "Edit", Detail: "/checkout/src/Foo.php"})
 	sink(claude.ChatEvent{Kind: claude.ChatEventTool, Tool: "Edit", Detail: "/checkout/src/Foo.php"}) // same file again
 	sink(claude.ChatEvent{Kind: claude.ChatEventTool, Tool: "Write", Detail: "/checkout/src/Bar.php"})
+	sink(claude.ChatEvent{Kind: claude.ChatEventTool, Tool: "Write", Detail: "/elsewhere/src/Baz.php"}) // outside the checkout
 	p, _ = chatProgressFor("conv-edit")
 	if len(p.EditedFiles) != 2 || p.EditedFiles[0] != "src/Foo.php" || p.EditedFiles[1] != "src/Bar.php" {
 		t.Fatalf("EditedFiles = %v, want [src/Foo.php src/Bar.php] (relative, de-duplicated)", p.EditedFiles)

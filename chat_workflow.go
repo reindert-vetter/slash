@@ -1705,20 +1705,28 @@ func addEditedFile(p *chatProgress, path string) {
 
 // relativeToCheckout turns an Edit/Write tool's absolute file_path (Claude's
 // own working directory is the checkout itself, see prepareChatShellWorkDir)
-// into the repo-relative path a block's own File field uses. Falls back to
-// the raw path unchanged when dir is still empty (checkoutDir not resolved
-// yet — never true for a real Edit/Write event, which can only ever fire
-// once the shell attempt's WorkDir is set) or when path doesn't actually sit
-// under dir (defensive; should not happen in practice).
+// into the repo-relative path a block's own File field uses, or "" (record
+// nothing) when that is impossible: dir still empty, or path outside dir.
+//
+// It used to fall back to the raw absolute path there, on the belief that an
+// Edit/Write event could only fire once the shell attempt's WorkDir was set.
+// Not so: the read-only FIRST attempt shares this sink, and the model can
+// still emit an Edit tool call there (refused, it has no Edit tool) — seen on
+// PR 13835, whose landing carried
+// "/Users/reindert/dev/plug-and-pay/app/..." next to the relative
+// "app/..." of the same file. That absolute path then travelled as a landed
+// file into blocks.changed, where it matches no block. A refused edit
+// changed nothing, and a path outside the checkout is no block of this PR
+// either, so neither is worth a "wordt aangepast" mark.
 func relativeToCheckout(dir, path string) string {
 	if dir == "" {
-		return path
+		return ""
 	}
 	rel, err := filepath.Rel(dir, path)
-	if err != nil || strings.HasPrefix(rel, "..") {
-		return path
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+		return ""
 	}
-	return rel
+	return filepath.ToSlash(rel)
 }
 
 // parseAssistantTurn turns the model's raw text into a chat.Message: a
