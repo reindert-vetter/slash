@@ -210,6 +210,8 @@ import {
   resetColumnWidth,
   startKeyResize,
   clearColumnWidth,
+  startSplitResize,
+  resetSplitDivider,
 } from './columnWidth.mjs'
 import { initDictation, handleDictationKeydown } from './dictation.mjs'
 import { initJiraBell, jiraBellButton, isJiraBellOpen, handleJiraBellKeydown } from './jiraBell.mjs'
@@ -17659,6 +17661,15 @@ function DetailPanel(state) {
             colWidthStyle: () => colWidthStyle(state, 'diff:' + b.id),
             onResizeStart: (e, autoWidthPxFn) => startColumnResize(e, state, 'diff:' + b.id, autoWidthPxFn),
             onResizeReset: () => resetColumnWidth(state, 'diff:' + b.id),
+            // The split stand's own middle-divider drag (see
+            // startSplitResize in columnWidth.mjs): grows/shrinks the left
+            // pane AND this card's own width override ('diff:'+b.id, the
+            // SAME key onResizeStart writes above) in lockstep, so the
+            // right/new pane never shrinks below its own current width —
+            // reviewer request "moet recht meeschuiven naar rechts".
+            splitDividerStyle: () => colWidthStyle(state, 'splitLeft:' + b.id),
+            onSplitResizeStart: (e) => startSplitResize(e, state, 'splitLeft:' + b.id, 'diff:' + b.id),
+            onSplitResizeReset: () => resetSplitDivider(state, 'splitLeft:' + b.id, 'diff:' + b.id),
             // Only the look-ahead PREVIEW card (i !== sel) ever collapses to
             // just its header — never the selected/active card itself (undefined
             // there, so Block()'s own "never collapse" default applies). Always
@@ -17981,6 +17992,9 @@ function DetailPanel(state) {
                   colWidthStyle: () => colWidthStyle(state, 'diff:' + b.id),
                   onResizeStart: (e, autoWidthPxFn) => startColumnResize(e, state, 'diff:' + b.id, autoWidthPxFn),
                   onResizeReset: () => resetColumnWidth(state, 'diff:' + b.id),
+                  splitDividerStyle: () => colWidthStyle(state, 'splitLeft:' + b.id),
+                  onSplitResizeStart: (e) => startSplitResize(e, state, 'splitLeft:' + b.id, 'diff:' + b.id),
+                  onSplitResizeReset: () => resetSplitDivider(state, 'splitLeft:' + b.id, 'diff:' + b.id),
                 })}
               </div>
               ${

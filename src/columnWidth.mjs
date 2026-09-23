@@ -93,6 +93,12 @@ export function loadColumnWidths() {
 // column at all.
 export const MIN_COL_PX = 200
 
+// MIN_SPLIT_PANE_PX — the floor for the split stand's own OLD/LEFT pane when
+// dragging the middle divider (startSplitResize below). Smaller than
+// MIN_COL_PX (a whole COLUMN's floor): this only bounds one half of a
+// two-pane split, not a standalone column.
+export const MIN_SPLIT_PANE_PX = 120
+
 // SNAP_BACK_PX — how close (in px) a drag has to land to the auto width
 // before it resets to "auto" instead of committing an override (the second
 // of the two reset paths, next to the handle's own dblclick).
@@ -232,6 +238,53 @@ export function startColumnResize(e, state, key, autoWidthPxFn) {
   document.addEventListener('mouseup', onUp)
 }
 
+// startSplitResize — drag the middle divider of a 'split' stand's two panes
+// (Block.mjs's codeDiff). Reviewer request: "ik wil het middelste scheiding
+// ook kunnen slepen met mijn muis, dan moet [de kaart] recht meeschuiven naar
+// rechts" — confirmed as: the RIGHT/new pane never shrinks below its own
+// current width, the CARD grows to make room instead. So only the LEFT pane's
+// width (`splitKey`, e.g. 'splitLeft:'+b.id) and the CARD's own whole-width
+// override (`cardKey`, the SAME 'diff:'+b.id key startColumnResize/the
+// right-edge handle already writes) move — both by the identical delta — so
+// the right pane's own share (cardWidth - leftWidth - the 1px/8px divider)
+// stays numerically constant throughout the drag, in either direction. This
+// deliberately reuses the whole-card override key: dragging the divider is
+// equivalent to "grow the card AND hand every extra pixel to the left pane",
+// so a card already manually resized (drag handle or c/v) is picked up from
+// its real current width, exactly like startKeyResize continues from
+// whatever currently renders.
+export function startSplitResize(e, state, splitKey, cardKey) {
+  if (!splitKey || !cardKey) return
+  e.preventDefault()
+  e.stopPropagation()
+  const card = e.currentTarget.closest('[data-col-resize-root]')
+  const container = e.currentTarget.closest('[data-split-root]')
+  if (!card || !container) return
+  const leftPane = container.querySelector('[data-pane="old"]')
+  if (!leftPane) return
+  suspendCallArrows()
+  const startLeftWidth = leftPane.getBoundingClientRect().width
+  const startCardWidth = card.getBoundingClientRect().width
+  const startX = e.clientX
+  const onMove = (ev) => {
+    const nextLeft = Math.max(MIN_SPLIT_PANE_PX, startLeftWidth + (ev.clientX - startX))
+    const applied = nextLeft - startLeftWidth // clamped by the floor above, so
+    // the card only grows/shrinks by however much the left pane actually did
+    state.colWidths[splitKey] = nextLeft
+    state.colWidths[cardKey] = startCardWidth + applied
+    state.colWidthVersion++
+  }
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove)
+    document.removeEventListener('mouseup', onUp)
+    if (state.colWidths[splitKey] != null) setColumnWidth(state, splitKey, state.colWidths[splitKey])
+    if (state.colWidths[cardKey] != null) setColumnWidth(state, cardKey, state.colWidths[cardKey])
+    resumeCallArrows()
+  }
+  document.addEventListener('mousemove', onMove)
+  document.addEventListener('mouseup', onUp)
+}
+
 // KEY_RESIZE_PX_PER_SEC — how fast a held c/v keeps shrinking/growing the
 // focused column (see startKeyResize below). Frame-rate independent (driven
 // off the animation frame's own timestamp delta), so it feels the same on a
@@ -308,6 +361,38 @@ export function startKeyResize(state, key, root, dir) {
 // "A narrow event-listener-only child toggled bare" in
 // .claude/rules/arrowjs-pitfalls.md for what is and isn't established about
 // why a slot like this can misfire.
+// resetSplitDivider — the dblclick reset for the divider handle below: clears
+// BOTH overrides startSplitResize writes (the left pane's own width and the
+// card's whole-width override it grew/shrank in lockstep with), so a
+// double-click genuinely goes back to fully auto, not just "auto split at
+// whatever size the card happens to be".
+export function resetSplitDivider(state, splitKey, cardKey) {
+  clearColumnWidth(state, splitKey)
+  clearColumnWidth(state, cardKey)
+}
+
+// splitDividerHandle — the middle divider between the split stand's old/left
+// and new/right panes, dragging it via startSplitResize above. Same visual
+// language as resizeHandle (thin, cursor-col-resize, subtle hover tint,
+// dblclick reset) but IN-FLOW rather than absolutely positioned — it IS the
+// divider between the two panes, not an overlay glued to one column's edge —
+// so it keeps the thin `w-px` line as a centered child and only the (wider,
+// more easily hit) wrapper carries the interaction.
+export function splitDividerHandle(onDown, onReset) {
+  return html`<div class="contents">
+    <div
+      class="relative w-2 shrink-0 cursor-col-resize select-none group"
+      data-testid="split-divider-handle"
+      @mousedown="${(e) => e && onDown(e)}"
+      @dblclick="${onReset}"
+    >
+      <div
+        class="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-slate-100 dark:bg-zinc-800 group-hover:bg-indigo-300/60 dark:group-hover:bg-indigo-500/50"
+      ></div>
+    </div>
+  </div>`
+}
+
 export function resizeHandle(onDown, onReset) {
   // `right-0` (flush with the INNER right edge), not a negative offset: some
   // resizable roots (related-code, the block-diff `<article>`) carry

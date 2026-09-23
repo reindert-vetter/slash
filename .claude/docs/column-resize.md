@@ -301,6 +301,59 @@ prevent this — a single busy review session touching enough distinct
 columns could still cross the limit, hence the cap is the real fix and the
 shorter retention is a separate, independent product decision.
 
+## The `split` stand's own middle divider: drag it, the RIGHT pane never shrinks
+
+Reviewer request: "ik wil het middelste scheiding ook kunnen slepen met mijn
+muis, dan moet recht meeschuiven naar rechts" — confirmed as: dragging the
+divider between the split stand's old/left and new/right panes (`Block.mjs`'s
+`codeDiff`) may grow the left pane, but the right/new pane must never end up
+NARROWER than its own current width — the CARD grows to make room instead,
+the divider just slides straight along with the pointer.
+
+**Mechanism (`startSplitResize`, `columnWidth.mjs`):** on `mousedown` it reads
+the left pane's (`[data-pane="old"]`, inside the code-diff container's own
+`[data-split-root]`) and the whole card's (`[data-col-resize-root]`) CURRENT
+rendered widths. Every `mousemove` moves both by the **identical** delta —
+`state.colWidths['splitLeft:'+b.id]` (the left pane's own override, read via
+`codePane`'s new `styleFn` opt, applied ONLY to the split stand's old/left
+pane) and `state.colWidths['diff:'+b.id]` (the SAME whole-card override key
+the right-edge `resizeHandle`/`c`/`v` keyboard resize already write, see
+above). Since both move by the same amount, the right/new pane's own share
+(`cardWidth - leftWidth - dividerWidth`) is never touched by this drag at
+all — it stays numerically constant regardless of drag direction, which is
+exactly the "never shrinks below its own current width" guarantee. Dragging
+the divider therefore reuses (and, if one was already active, continues
+from) the exact same card-width override a drag on the right edge writes —
+the two mechanisms are not independent, they share one override.
+
+No container-width clamp is needed for this reason: the card is free to grow
+without bound (`<main>` already scrolls horizontally without limit, same as
+every other width mechanism here). Only `MIN_SPLIT_PANE_PX` (120, smaller
+than `MIN_COL_PX` since this only bounds one half of a two-pane split) floors
+the left pane so it can't collapse to an unusable sliver.
+
+**The divider itself (`splitDividerHandle`, `columnWidth.mjs`)** replaces the
+plain static `w-px` line with a wider (`w-2`) in-flow hit strip — same visual
+language as `resizeHandle` (`cursor-col-resize`, a subtle hover tint) but NOT
+absolutely positioned: it IS the divider between the two panes, not an
+overlay glued to one column's edge. A `@dblclick` resets BOTH overrides at
+once (`resetSplitDivider`), so double-clicking genuinely goes back to fully
+auto rather than "auto split at whatever size the card happens to be".
+
+**Deliberately mouse-only, no keyboard equivalent** (unlike the whole-card
+resize's `c`/`v`) — out of scope for this reviewer request, which only asked
+for the mouse drag; the whole-card `c`/`v` resize still reaches a similar end
+state in several keyboard steps (grow the card, the auto split formula
+still applies), so this isn't a case of new state that's mouse-only reachable.
+
+**No snap-back-to-auto on release**, unlike the right-edge handle's own drag
+(reset path 1 above): that check needs the split-left auto-width formula
+(`splitLeftPaneWidthCls`, `Block.mjs`) parsed back out of a `max-w-[...]px]`
+class shape `parseAutoWidthPx` doesn't recognise (it only understands a bare
+`w-[...]`/`w-[...]rem` token) — not worth teaching it a second shape for this
+one caller when the dblclick reset already covers "I want auto back"
+explicitly, mirroring the keyboard `c`/`v` resize's own same trade-off above.
+
 ## Test
 
 `tests/column-resize.spec.mjs` — drags the block-card handle wider, asserts

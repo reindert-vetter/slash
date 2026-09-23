@@ -9,7 +9,7 @@ import { translationBlockView, translationChangeUnits } from './translationDiff.
 import { avatarHtmlString } from './avatar.mjs'
 import { renderMarkdown } from './markdown.mjs'
 import { splitBlockPath, paletteClass } from './blockPath.mjs'
-import { parseAutoWidthPx, resizeHandle } from './columnWidth.mjs'
+import { parseAutoWidthPx, resizeHandle, splitDividerHandle } from './columnWidth.mjs'
 import { ShortcutHintBar } from './shortcutHints.mjs'
 import Prism from './vendor/prism.js'
 import { t } from './i18n.mjs'
@@ -1455,6 +1455,18 @@ export default function Block(b, opts = {}) {
   // exact card would have without an override.
   const onResizeStart = opts.onResizeStart || (() => {})
   const onResizeReset = opts.onResizeReset || (() => {})
+  // splitDividerStyleFn/onSplitResizeStart/onSplitResizeReset — the split
+  // stand's own middle-divider drag (columnWidth.mjs's startSplitResize):
+  // dragging it grows/shrinks the old/left pane AND this card's own width
+  // override in lockstep, so the new/right pane never shrinks below its
+  // current width — see the doc comment on startSplitResize. Same
+  // decoupled-from-`state` opts convention as colWidthStyleFn/onResizeStart
+  // above; defaults are no-ops for a caller that never wires this up (e.g. a
+  // testClass preview card, which never reaches codeDiff's split branch
+  // anyway since it always renders collapsed).
+  const splitDividerStyleFn = opts.splitDividerStyle || (() => '')
+  const onSplitResizeStart = opts.onSplitResizeStart || (() => {})
+  const onSplitResizeReset = opts.onSplitResizeReset || (() => {})
   // onOpenMenu — opens the same block-scoped command palette (COMMANDS) that
   // Enter already opens on this card (home.mjs's openMenu(state.showDescription
   // ? 'pr' : 'block')), so a mouse-only reviewer can reach "Comment op deze
@@ -2011,7 +2023,7 @@ export default function Block(b, opts = {}) {
           ? svgSlot(b)
           : isImageFile(b)
           ? imageSlot(b, viewModeFn)
-          : codeDiff(b, activeGroup, hintsEnabled, approvedFn, commentedFn, approvedCallsFn, viewModeFn, lineSummaryFn, diffActive, commentRangeFn)}
+          : codeDiff(b, activeGroup, hintsEnabled, approvedFn, commentedFn, approvedCallsFn, viewModeFn, lineSummaryFn, diffActive, commentRangeFn, splitDividerStyleFn, onSplitResizeStart, onSplitResizeReset)}
       ${ShortcutHintBar(shortcutHintsFn)}
     </article>
   `
@@ -2403,6 +2415,13 @@ function codeDiff(
   lineSummaryFn = () => new Map(),
   diffActive = () => false,
   commentRangeFn = () => new Set(),
+  // splitDividerStyleFn/onSplitResizeStart/onSplitResizeReset — only used by
+  // the 'split' stand's own middle divider below (see splitDividerHandle in
+  // columnWidth.mjs); every other branch (single-pane, unified) has no
+  // divider at all and ignores these.
+  splitDividerStyleFn = () => '',
+  onSplitResizeStart = () => {},
+  onSplitResizeReset = () => {},
 ) {
   const c = b.code
   if (c === undefined) return ''
@@ -2581,10 +2600,11 @@ function codeDiff(
       class="${'relative flex flex-1 overflow-hidden border-t border-slate-100 dark:border-zinc-800/60 ' +
       diffFloorCls(rows.length)}"
       data-testid="code-diff"
+      data-split-root
       data-hints="${() => (hintsEnabled() ? 'on' : 'off')}"
     >
-      ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', NO_ACTIVE_GROUP, splitLeftCls, approvedFn, commentedFn, approvedCallsFn, false, lineSummaryFn, diffActive, isYaml, undefined, false, lang, activeGroup)}
-      <div class="w-px shrink-0 bg-slate-100 dark:bg-zinc-800"></div>
+      ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', NO_ACTIVE_GROUP, splitLeftCls, approvedFn, commentedFn, approvedCallsFn, false, lineSummaryFn, diffActive, isYaml, undefined, false, lang, activeGroup, splitDividerStyleFn)}
+      ${splitDividerHandle((e) => onSplitResizeStart(e), () => onSplitResizeReset())}
       ${codePane('new', c.new, rows, 'right', 'border-emerald-100 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', activeGroup, 'flex-1 min-w-0', approvedFn, commentedFn, approvedCallsFn, false, lineSummaryFn, diffActive, isYaml, commentRangeFn, true, lang)}
       ${scrollHint('up')}
       ${scrollHint('down')}
@@ -2921,9 +2941,22 @@ function codePane(
   // virtualization threshold gates BEFORE `cursorGroupFn` is ever called —
   // see paneHTML), so nothing changes there.
   cursorGroupFn = activeGroup,
+  // styleFn — the split stand's own middle-divider drag override (see
+  // splitDividerStyleFn in Block()/startSplitResize in columnWidth.mjs): a
+  // reactive `() => 'width:...px;max-width:...px'` (or '' for auto) applied
+  // ONLY to the old/left pane in the split branch. A plain nested `() => ...`
+  // slot — like codePane's own `.innerHTML` binding right below — so it
+  // reacts independently of codeDiff's own (much less frequent) rebuild.
+  // Every other call site keeps the default (no-op), matching Block()'s own
+  // default.
+  styleFn = () => '',
 ) {
   return html`
-    <div class="${'flex min-w-0 min-h-0 flex-col ' + widthCls}" data-pane="${side}">
+    <div
+      class="${'flex min-w-0 min-h-0 flex-col ' + widthCls}"
+      style="${() => styleFn()}"
+      data-pane="${side}"
+    >
       <div class="no-scrollbar min-h-0 flex-1 overflow-auto" data-scrollsync @scroll="${syncScroll}">
         <code
           class="${'language-' + lang + ' m-0 block py-2 font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300'}"

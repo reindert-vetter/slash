@@ -198,6 +198,63 @@ test('two quick taps of v never reset the column — it just keeps growing', asy
   expect(pxAfterSecondTap).toBeGreaterThanOrEqual(pxAfterFirstTap)
 })
 
+// The split stand's own middle divider (see column-resize.md, "The split
+// stand's own middle divider"): dragging it right grows the left/old pane AND
+// the card's own width in lockstep, so the right/new pane never ends up
+// narrower than it already was — reviewer request "moet recht meeschuiven
+// naar rechts".
+test('dragging the split divider grows the card without shrinking the right pane, and resets on dblclick', async ({
+  page,
+}) => {
+  await page.goto('/pr/12903')
+  await leaveSearchBox(page)
+  await page.locator('[data-idx="1"]').click()
+  await page.keyboard.press('ArrowRight')
+  await expect(page).toHaveURL(/mode=diff/)
+  await page.waitForTimeout(300)
+
+  const article = page.locator('[data-testid="block-column"] article:has([data-testid="col-resize-handle"])')
+  const divider = article.locator('[data-testid="split-divider-handle"]')
+  await expect(divider).toHaveCount(1)
+  expect(await article.getAttribute('style')).toBe('')
+
+  const rightPaneBefore = article.locator('[data-pane="new"]')
+  const cardWidthBefore = (await article.boundingBox()).width
+  const rightWidthBefore = (await rightPaneBefore.boundingBox()).width
+
+  const box = await divider.boundingBox()
+  const startX = box.x + box.width / 2
+  const startY = box.y + box.height / 2
+
+  await page.mouse.move(startX, startY)
+  await page.mouse.down()
+  await page.mouse.move(startX + 120, startY, { steps: 5 })
+  await page.mouse.up()
+
+  const styleAfterDrag = await article.getAttribute('style')
+  expect(styleAfterDrag).toMatch(/width:\d+px/)
+  const cardWidthAfterDrag = Number(/width:(\d+)px/.exec(styleAfterDrag)[1])
+  // The card grew by roughly the drag distance...
+  expect(cardWidthAfterDrag).toBeGreaterThan(cardWidthBefore + 100)
+  // ...and the right pane never shrank below its own pre-drag width.
+  const rightWidthAfterDrag = (await rightPaneBefore.boundingBox()).width
+  expect(rightWidthAfterDrag).toBeGreaterThanOrEqual(rightWidthBefore - 1)
+
+  // Persists across a reload, like the right-edge handle's own drag.
+  await page.reload()
+  await leaveSearchBox(page)
+  const articleAfterReload = page.locator('[data-testid="block-column"] article:has([data-testid="col-resize-handle"])')
+  const styleAfterReload = await articleAfterReload.getAttribute('style')
+  expect(Number(/width:(\d+)px/.exec(styleAfterReload)[1])).toBe(cardWidthAfterDrag)
+
+  // Double-clicking the divider resets BOTH overrides back to auto.
+  const dividerAfterReload = articleAfterReload.locator('[data-testid="split-divider-handle"]')
+  await dividerAfterReload.dispatchEvent('dblclick')
+  await expect(async () => {
+    expect(await articleAfterReload.getAttribute('style')).toBe('')
+  }).toPass()
+})
+
 // Reviewer report: "als ik met v een custom breedte maak (of sleep), sla dat
 // dan op in een cookie ... zodat het een refresh overleeft" — but in
 // practice it stopped surviving a refresh at all. Root cause (see
