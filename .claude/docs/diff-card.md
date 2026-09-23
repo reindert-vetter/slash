@@ -358,18 +358,52 @@ in ONE column, so it still needs whichever side is wider). A one-sided block
 `codeDiff`'s own `effectiveOnly` gate exactly, including the removed-block
 exception.
 
-**`SPLIT_LEFT_PANE_WIDTH_CLS` reproduces that formula using only STATIC
-CSS**, deliberately not a per-render `${() => ...}` computation on the pane
-itself: `'w-1/2 max-w-[<80 * CODE_CHAR_PX + 16>px] shrink-0'` (it was a
-literal `max-w-[calc(80ch_+_1rem)]` until the `ch` unit was replaced, see
-"The chars → px conversion" below) — plain `w-1/2` (the
-original mechanism) capped at a static `max-w`. Since the card's own total is
-`2 * canonicalChars` whenever `canonicalChars <= 80`, `w-1/2` alone already
-equals `canonicalChars` and the cap never engages; only once the total grows
-past that (canonical > 80) does 50% exceed 80 and the cap clamp in, matching
+**`splitLeftPaneWidthCls(canonicalWholeBlockChars)` reproduces that formula
+using only STATIC CSS per render** (a plain function called once from
+`codeDiff`'s split branch, not a per-nav-step `${() => ...}` computation on
+the pane itself): `'w-1/2 max-w-[<min(80,canonicalWholeBlockChars) *
+CODE_CHAR_PX + 16>px] shrink-0'` — plain `w-1/2` (the original mechanism)
+capped at a `max-w` sized to `codeMaxLineChars(c.new.text)` (the block's own
+whole-block canonical-side longest line, a stable per-render fact, not the
+current selection window — see "`v` also widened the left/old split pane"
+below for why). Since the card's own AUTO total is `2 * canonicalChars`
+whenever `canonicalChars <= 80`, `w-1/2` alone already equals `canonicalChars`
+and the cap never engages under auto sizing; only once the total grows past
+that (canonical > 80) does 50% exceed 80 and the cap clamps in, matching
 `Math.min(80, canonicalChars)` exactly. The canonical (new/right) pane gets
 `flex-1 min-w-0` instead of its own `w-1/2` — it simply fills whatever the
 capped left pane doesn't claim.
+
+### `v` also widened the left/old split pane — the cap must track the block's own content, not a flat 80 chars
+
+Reviewer report (2026-09-23): "als ik met `v` de diff breeder maak, maar dan
+tegelijkertijd de linkerkant ook breeder. linkerhelft van de diff mag niet
+breder dan nodig is." The cap above used to be a flat, block-independent
+`MIN_CONTENT_WIDTH_CHARS` (80) always — exactly right for AUTO sizing (the
+card's own width is already content-driven, so `w-1/2` never even reaches the
+cap unless `canonicalChars > 80`), but a manual `c`/`v` keyboard resize or a
+drag (`.claude/docs/column-resize.md`) sets a plain inline
+`width`/`max-width` on the ARTICLE, inflating the flex row `w-1/2` is a
+PERCENTAGE of. For a block whose canonical (new/right) side is genuinely
+short (well under 80 chars), that let the old/left pane keep growing right
+along with the manual widen, all the way up to the flat 546px ceiling, even
+though its own content needed far less.
+
+Fix: the cap is now `Math.min(MIN_CONTENT_WIDTH_CHARS,
+canonicalWholeBlockChars)` — parametrized by the block's own actual content
+(`codeMaxLineChars(c.new.text)`) instead of the flat constant. For
+`canonicalChars > 80` this is unchanged (the cap still lands on
+`MIN_CONTENT_WIDTH_CHARS`, same as before); for a short canonical side, the
+ceiling now equals exactly what the left pane would ever need, so any extra
+width from a manual `c`/`v`/drag resize has nowhere to go but the canonical
+`flex-1` pane. Deliberately the WHOLE-BLOCK longest line, not the current
+selection-window chars `widthCls`/the article's own class react to per nav
+step: reading `activeGroup()`/the active unit here would make this pane's own
+class change per same-block navigation step, which `splitLeftPaneWidthCls`
+must not do (see the "Also deliberately NOT a reactive class" rejection
+below) — a per-render (per new block/collapse-toggle), not per-nav-step,
+value is the right granularity, the same one `diffFloorCls(rows.length)`
+already uses right next to it.
 
 Two alternatives were tried and rejected for this pane, both instructive:
 
@@ -447,13 +481,17 @@ conversion every content-driven width goes through:
   the longest line behind an invisible horizontal scroll — exactly what the
   "floor but no ceiling" rule exists to prevent. Still a pure arithmetic
   constant, never a live DOM measurement.
-- **`CARD_CHROME_PX`** = 64 (4rem), replacing the old `+2rem`: 26px of real
-  chrome (the rows' own `px-3` padding, 2 × 12px, plus the card's 2 × 1px
-  border) plus ~38px reserved for the absolutely-positioned per-row chip at
-  the right edge of a diff row (`lineSummaryBadge`, the "onderliggende code"
-  ✓ n/n pill). Without that reserve, a card sized flush to the last
-  character puts the chip straight on top of the longest line's tail.
-  Reviewer-approved number; a chip that also carries comment avatars
+- **`CARD_CHROME_PX`** = 78 (was 64 = 4rem, replacing the old `+2rem`): 26px
+  of real chrome (the rows' own `px-3` padding, 2 × 12px, plus the card's
+  2 × 1px border) plus ~52px reserved for the absolutely-positioned per-row
+  chip at the right edge of a diff row (`lineSummaryBadge`, the
+  "onderliggende code" ✓ n/n pill). Without that reserve, a card sized flush
+  to the last character puts the chip straight on top of the longest line's
+  tail. The reserve started at ~38px (reviewer-approved 4rem), but once the
+  pill moved to `right-3` its left edge still covered the last character of
+  the longest line (reported: the `;` hidden behind a `0/7` chip, split
+  view), so it grew by two code characters (2 × `CODE_CHAR_PX` ≈ 13px,
+  rounded to 14). A chip that also carries comment avatars
   (measured up to 62px) can still overlay the tail of the single longest line
   in view, which is the same designed-for overlay its own translucent pill
   background has always handled (any row outside the measured window can
@@ -706,7 +744,7 @@ always collapses to just its header anyway (above — no diff body ever
 renders, so its own longest line is never even visible), there's no reason
 for its width to follow its own content at all any more. It now gets a flat
 `MIN_CONTENT_WIDTH_CHARS` (80) + the same `CARD_CHROME_PX` chrome every
-content-driven card uses — `w-[<contentWidthPx(80)>px]`, 595px at the current
+content-driven card uses — `w-[<contentWidthPx(80)>px]`, 609px at the current
 constants — for every file type, regardless of content or of the active
 card's own width.
 

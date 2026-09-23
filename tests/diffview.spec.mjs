@@ -1040,6 +1040,76 @@ test.describe('PR Review Tree — diff view toggle (`a`)', () => {
     expect(chars).toBe(161)
   })
 
+  // Direct-mount unit test: reviewer report (2026-09-23) — "als ik met v de
+  // diff breeder maak, maar dan tegelijkertijd de linkerkant ook breeder.
+  // linkerhelft van de diff mag niet breder dan nodig is." A manual `c`/`v`
+  // keyboard resize (or drag, see column-resize.md) sets a plain inline
+  // width/max-width on the ARTICLE — before the splitLeftPaneWidthCls fix,
+  // the old/left pane's own `w-1/2` grew right along with it (up to the flat
+  // 80-char cap), even for a block whose canonical (new/right) side is short
+  // enough that it never needed anywhere near that much room.
+  test('a manual width override never widens the non-canonical split pane past its own content need', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+    await appReady(page)
+
+    await evaluateSettled(page, async () => {
+      const { reactive } = await import('/src/vendor/arrow.js')
+      const Block = (await import('/src/Block.mjs')).default
+      const b = reactive({
+        category: 'ACTION',
+        label: 'Foo::bar',
+        status: 'modified',
+        file: 'app/Foo.php',
+        line: 10,
+        name: 'bar',
+        class: 'Foo',
+        approved: false,
+        code: {
+          old: { start: 10, end: 11, text: 'public function bar(): void {\n    $a = 1;\n}' },
+          // A deliberately SHORT canonical/new line — well under the
+          // 80-char floor, so the auto-sized card never needs the max-w cap
+          // to engage at all.
+          new: { start: 10, end: 11, text: 'public function bar(): void {\n    $a = 2;\n}' },
+        },
+      })
+      const host = document.createElement('div')
+      host.id = 'manual-resize-split-host'
+      document.body.appendChild(host)
+      // A real reactive() object, mirroring state.colWidths in home.mjs —
+      // colWidthStyleFn's reactive read only re-triggers arrow's style
+      // binding if the value it reads is itself tracked.
+      const override = reactive({ px: 0 })
+      Block(b, {
+        viewMode: () => 'split',
+        activeGroup: () => ({ start: 1, end: 1 }),
+        // The same whole-value inline-style shape colWidthStyle (columnWidth.mjs)
+        // produces for a real c/v hold or drag.
+        colWidthStyle: () => (override.px ? 'width:' + override.px + 'px;max-width:' + override.px + 'px' : ''),
+      })(host)
+      window.__setManualOverridePx = (px) => {
+        override.px = px
+      }
+    })
+
+    const article = page.locator('#manual-resize-split-host article')
+    const leftPane = article.locator('[data-testid="code-diff"] > div').first()
+    const beforeBox = await leftPane.boundingBox()
+
+    // Simulate a `v`-hold growing the card well past its natural auto width.
+    await page.evaluate(() => window.__setManualOverridePx(1400))
+    await page.waitForTimeout(200)
+
+    const afterBox = await leftPane.boundingBox()
+    // The left/old pane must not have grown at all — every extra px from the
+    // manual override goes to the canonical (flex-1) right pane instead.
+    expect(afterBox.width).toBeLessThanOrEqual(beforeBox.width + 1)
+
+    const articleBox = await article.boundingBox()
+    expect(articleBox.width).toBeGreaterThan(1300) // the override itself did apply
+  })
+
   // Direct-mount unit test: reviewer decision (option 2 of 3 offered) — a
   // `gran=group` unit that balloons past GROUP_INTERIOR_FULL_SCAN_ROWS (a
   // wholly-added/removed block's single group can legitimately BE the

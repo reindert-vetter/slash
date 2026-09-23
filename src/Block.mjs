@@ -844,25 +844,49 @@ export function contentWidthChars(px) {
 // content.
 const NARROW_FIXED_WIDTH_CLS = `w-[${contentWidthPx(MIN_CONTENT_WIDTH_CHARS)}px] `
 
-// SPLIT_LEFT_PANE_WIDTH_CLS — the non-canonical (old/left, for a modified
+// splitLeftPaneWidthCls — the non-canonical (old/left, for a modified
 // block) pane's own width in the 'split' stand: `w-1/2` (the ORIGINAL,
 // pre-existing mechanism — half the flex row, same as this pane always
-// used) PLUS a static `max-w-[<80 code characters + 1rem>px]` cap (built
-// once from MIN_CONTENT_WIDTH_CHARS × CODE_CHAR_PX, so it can never drift
-// from the card's own width formula — it used to be a literal
-// `max-w-[calc(80ch_+_1rem)]`, in the same wrong `ch` unit, see
-// CODE_CHAR_PX). This reproduces
-// windowCharsForMode's `Math.min(MIN_CONTENT_WIDTH_CHARS, canonicalChars) +
-// canonicalChars` split-mode total EXACTLY, using only static CSS: whenever
-// canonicalChars <= MIN_CONTENT_WIDTH_CHARS (the common case), that total is
-// `2 * canonicalChars`, so `w-1/2` alone already equals `canonicalChars` —
-// identical to the width this pane always got, unaffected by this whole
-// change; the `max-w` cap never engages. Only once canonicalChars exceeds
-// MIN_CONTENT_WIDTH_CHARS does 50% of the (now larger) total exceed the cap,
-// which then clamps this pane at MIN_CONTENT_WIDTH_CHARS while the
-// canonical/right pane (`flex-1`, absorbing whatever this pane doesn't
-// claim) keeps growing with its own content — the reported bug this whole
-// change exists to fix.
+// used) PLUS a `max-w` cap built from `Math.min(MIN_CONTENT_WIDTH_CHARS,
+// canonicalWholeBlockChars) × CODE_CHAR_PX` (canonicalWholeBlockChars being
+// the TRUE longest non-comment line of the whole block's canonical/new side,
+// `codeMaxLineChars(c.new.text)` — computed once per codeDiff() call, a plain
+// arithmetic pass over the already-loaded source, never a live DOM
+// measurement). This reproduces windowCharsForMode's
+// `Math.min(MIN_CONTENT_WIDTH_CHARS, canonicalChars) + canonicalChars`
+// split-mode total EXACTLY: whenever canonicalChars <= MIN_CONTENT_WIDTH_CHARS
+// (the common case), that total is `2 * canonicalChars`, so `w-1/2` alone
+// already equals `canonicalChars` and the cap never engages under AUTO
+// sizing; only once canonicalChars exceeds MIN_CONTENT_WIDTH_CHARS does 50%
+// of the (now larger) total exceed the cap, which then clamps this pane at
+// MIN_CONTENT_WIDTH_CHARS while the canonical/right pane (`flex-1`,
+// absorbing whatever this pane doesn't claim) keeps growing with its own
+// content.
+//
+// **Superseded (the fix for "v maakt de linkerhelft ook breder"):** the cap
+// used to be the flat MIN_CONTENT_WIDTH_CHARS (80) ALWAYS, regardless of how
+// short the canonical side actually was. That is exactly right for AUTO
+// sizing (the card's own total width is itself content-driven, so `w-1/2`
+// never needs the cap unless canonicalChars > 80) — but a manual `c`/`v`
+// keyboard resize or a drag (`.claude/docs/column-resize.md`) sets a plain
+// inline `width`/`max-width` on the ARTICLE, inflating the flex row `w-1/2`
+// is a PERCENTAGE of. For a block whose canonical side is short
+// (canonicalChars well under 80), that let the old/left pane grow right
+// along with every manual widen, up to the flat 546px ceiling, even though
+// its own content needed far less — reported live ("linkerhelft van de diff
+// mag niet breder dan nodig is"). Parametrizing the cap on the block's own
+// canonicalWholeBlockChars closes that gap: the ceiling now equals exactly
+// what this pane would ever need, in EITHER sizing mode, so all the extra
+// width from a manual widen has nowhere to go but the canonical (flex-1)
+// pane. Unaffected for canonicalChars > 80 (the cap still lands on the
+// same MIN_CONTENT_WIDTH_CHARS as before).
+//
+// Deliberately the WHOLE-BLOCK longest line, not the current
+// selection-window chars widthCls/the article's own class react to: reading
+// activeGroup()/the active unit here would make this value change per
+// same-block navigation step, and this pane's own class must stay static
+// per render (see below) — a per-block-render, not per-nav-step, value is
+// the right granularity, computed once same as diffFloorCls's rowCount.
 //
 // Deliberately NOT `w-max` (CSS `width:max-content`, tried first): sizing
 // this pane off its own RENDERED text needs an actual browser layout pass,
@@ -880,9 +904,12 @@ const NARROW_FIXED_WIDTH_CLS = `w-[${contentWidthPx(MIN_CONTENT_WIDTH_CHARS)}px]
 // class mutates" guarantee (navigate.spec.mjs) — the CSS-variable/`style`
 // attempt additionally collided with column-resize.spec.mjs, which asserts
 // an unresized card's `style` attribute is exactly `''`. `w-1/2` + a static
-// `max-w` needs neither: both are plain, unconditional, content-independent
-// Tailwind utilities.
-const SPLIT_LEFT_PANE_WIDTH_CLS = `w-1/2 max-w-[${Math.ceil(MIN_CONTENT_WIDTH_CHARS * CODE_CHAR_PX + 16)}px] shrink-0`
+// (per-render, not per-nav-step) `max-w` needs neither: both end up as
+// plain, unconditional Tailwind utilities baked into the template once.
+function splitLeftPaneWidthCls(canonicalWholeBlockChars) {
+  const cappedChars = Math.min(MIN_CONTENT_WIDTH_CHARS, canonicalWholeBlockChars || 0)
+  return `w-1/2 max-w-[${Math.ceil(cappedChars * CODE_CHAR_PX + 16)}px] shrink-0`
+}
 
 // contentWidthCls — the card width for a code file (isProseFile false), for
 // EVERY `a`-cycle stand ('split'/'unified'/'fit' alike — see widthCls
@@ -991,7 +1018,7 @@ function windowOrFallbackChars(b, unit, side) {
 // other)` reduces to plain `canonicalChars` whenever the canonical side is
 // the longer of the two (the common case) — and adds the non-canonical
 // (old/left) pane's width, CAPPED at MIN_CONTENT_WIDTH_CHARS but otherwise
-// matching canonicalChars too (`Math.min`, see SPLIT_LEFT_PANE_WIDTH_CLS's
+// matching canonicalChars too (`Math.min`, see splitLeftPaneWidthCls's
 // own doc comment): whenever canonicalChars is already at or under 80 (the
 // common case), the total here is IDENTICAL to the old
 // `2 * Math.max(canonical, other)` formula (both reduce to `2 *
@@ -2530,19 +2557,25 @@ function codeDiff(
   //
   // The two panes are no longer both plain 'w-1/2' — on reviewer decision
   // (2026-08-18) the non-canonical (old/left) pane gets
-  // SPLIT_LEFT_PANE_WIDTH_CLS ('w-1/2' capped at a static
-  // MIN_CONTENT_WIDTH_CHARS-capped `max-w`, see its own doc comment for why this
-  // reproduces the card's new total width formula using only static CSS),
-  // and the canonical (new/right) pane gets `flex-1` — it simply fills
-  // whatever space the capped left pane doesn't claim, which the card's own
-  // outer width (windowCharsForMode's 'split' branch) already sized to fit.
+  // splitLeftPaneWidthCls(...) ('w-1/2' capped at a `max-w` built from this
+  // block's own canonical/new-side longest line, see its own doc comment for
+  // why this reproduces the card's total width formula using only static
+  // CSS, and why a fixed 80-char cap regardless of content let a manual
+  // c/v resize widen this pane needlessly), and the canonical (new/right)
+  // pane gets `flex-1` — it simply fills whatever space the capped left pane
+  // doesn't claim, which the card's own outer width (windowCharsForMode's
+  // 'split' branch) already sized to fit under AUTO sizing, and which a
+  // manual resize's extra width now has nowhere else to go.
   // Deliberately NOT computed here as a reactive `${() => ...}` ch-width on
   // either pane: reading activeGroup()/the current unit directly in
   // codeDiff's own top-level flow (rather than deferred inside codePane's
   // nested innerHTML binding, see the comment above) would make THIS ENTIRE
   // slot re-run on every same-block navigation step instead of only the
   // card's own width class — see "a change-step within the same block only
-  // patches the highlight" in navigate.spec.mjs.
+  // patches the highlight" in navigate.spec.mjs. codeMaxLineChars(c.new.text) is
+  // safe to call here regardless (a WHOLE-BLOCK fact, not the active unit),
+  // same granularity as diffFloorCls(rows.length) right above.
+  const splitLeftCls = splitLeftPaneWidthCls(codeMaxLineChars((c.new && c.new.text) || ''))
   return html`
     <div
       class="${'relative flex flex-1 overflow-hidden border-t border-slate-100 dark:border-zinc-800/60 ' +
@@ -2550,7 +2583,7 @@ function codeDiff(
       data-testid="code-diff"
       data-hints="${() => (hintsEnabled() ? 'on' : 'off')}"
     >
-      ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', NO_ACTIVE_GROUP, SPLIT_LEFT_PANE_WIDTH_CLS, approvedFn, commentedFn, approvedCallsFn, false, lineSummaryFn, diffActive, isYaml, undefined, false, lang, activeGroup)}
+      ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', NO_ACTIVE_GROUP, splitLeftCls, approvedFn, commentedFn, approvedCallsFn, false, lineSummaryFn, diffActive, isYaml, undefined, false, lang, activeGroup)}
       <div class="w-px shrink-0 bg-slate-100 dark:bg-zinc-800"></div>
       ${codePane('new', c.new, rows, 'right', 'border-emerald-100 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', activeGroup, 'flex-1 min-w-0', approvedFn, commentedFn, approvedCallsFn, false, lineSummaryFn, diffActive, isYaml, commentRangeFn, true, lang)}
       ${scrollHint('up')}
