@@ -572,6 +572,50 @@ All of that is **removed**; each such comment is now a synthetic
 `.claude/docs/comments-panel.md`. `prInfoCard` is therefore the only card in
 the column and simply takes its full height (`flex-1`, no ratio logic).
 
+### The PR-titel & omschrijving block (first row of the index)
+
+Reviewer request: *"maak een blok in de blokken index wat pr titel en
+description betreft. ik zou daar hetzelfde moeten kunnen doen alsof het code
+is"*. The PR-info column above stays as it is; next to it, the PR's own title +
+body is ALSO an ordinary block in the index — `prDescriptionBlock` (`home.mjs`),
+`kind: 'pr_description'`, pseudo file `PR_DESC_FILE = 'PR-description'`
+(`Block.mjs`), id `prdesc:<pr>`, always first (`recomputeLeftList`'s rank `-3`,
+above Mentioned).
+
+- **It is a block with inline code, not a special card.** `code.new` is
+  `title + '\n\n' + body` (CRLF normalised), `code.old` is empty — GitHub
+  keeps no usable description history, and an all-"added" block is what makes
+  every line approvable. `ensureCode` never fetches it. Everything else is the
+  code path unchanged: `f`/`d`/`s` selection and Shift ranges, Space/checkbox
+  approval (through the ordinary approve Signal, under `prdesc:<pr>` —
+  the tracker stores any block id), "Comment op deze regel", "Chat over deze
+  regel", "Kopieer deze regel", and `?sel=PR-description:1` restore (the
+  generic `file:line` ref). It counts in the PR-wide total and the Space walk.
+- **What cannot work, and is switched off:** inline edit (`isInlineEditable` —
+  there is no file to write; Claude chat can still run `gh pr edit` if asked),
+  "Regel in Files changed" (not in Files changed), GitHub's Viewed mark
+  (`syncViewedFiles`), the footer's automatic AI description (`explain_code`
+  explains code, not prose). No relations/Underlying code exist for it. It
+  renders as plain text (`langForFile` → an unvendored grammar) with the
+  bounded prose width (`isProseFile`).
+- **Lives in `state.allBlocks`, appended, never prepended**
+  (`withPrDescriptionBlock`): `blockIdPrefix` reads `allBlocks[0]`. `loadBlocks`
+  reads `/api/pr` once alongside the relations so the block is there for the
+  first recompute; a `watch` on `state.prMeta.title/body` adds it later (a
+  first-ever open) or rebuilds it when the author edits the description — and
+  returns the SAME object while the text is unchanged, since `state.prMeta` is
+  replaced on every poll.
+- **Per-line reset after an edit** (`remapPrDescApproval`): an approved row
+  survives when the same index still holds the same text, or moves to the one
+  row that now holds that exact text; a changed line goes back to unapproved.
+  Applied both on load (`loadApprovals`, against the stored anchors) and live
+  (the watch above), and persisted when it changed anything.
+- **A comment on it goes to GitHub as a quoted issue comment** — see
+  `postsAsIssueComment` in `.claude/docs/workflows-comments.md`.
+
+Test: `tests/pr-description-block.spec.mjs`; backend
+`pr_description_comment_test.go`.
+
 ## The block column and its neighbour
 
 **Block column** (`data-testid=block-column`, **`shrink-0`** — not `flex-1`, so

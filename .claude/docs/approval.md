@@ -138,6 +138,11 @@ Tests: `reanchor_test.go` (`TestReanchorApprovalsFollowShiftedRowsViaAnchors`
 — no previous worktree at all — plus the duplicate-context and rewritten-row
 cases), `approvals_test.go`, `tests/space-descends-into-call.spec.mjs`.
 
+The PR title + description block (`prdesc:<pr>`) persists the same way; its
+rows are re-checked against the stored anchors on load, so a line the author
+edited since goes back to unapproved — see "The PR-titel & omschrijving block"
+in `.claude/docs/detail-layout.md`.
+
 ## An open comment is an unapproved unit, resolved via its own Enter menu
 
 Every UNRESOLVED comment gets its own blokken-index row (`indexComments`,

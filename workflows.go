@@ -5680,9 +5680,13 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		posted.RootID = in.ImportedRootID
 	case in.Local:
 		// no GitHub post
-	case isPRWide(in.Kind):
+	case postsAsIssueComment(in):
+		// Also a comment on a line of the PR description block
+		// (prDescriptionFile): that block is not a repo file, so there is no
+		// diff line for a review comment — it goes to the flat conversation
+		// with the commented line quoted above it (descriptionIssueBody).
 		if err := w.ExecuteActivity("postGithubIssueComment", map[string]any{
-			"pr": in.PR, "body": in.Body,
+			"pr": in.PR, "body": descriptionIssueBody(in, in.Body),
 		}, &posted); err != nil {
 			return nil, fmt.Errorf("post github issue comment: %w", err)
 		}
@@ -5743,9 +5747,9 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	// input and values recorded by this same loop.
 	publishThread := func(rootBody string, rootIsOwnBody, history bool) error {
 		var pr postResult
-		if isPRWide(in.Kind) {
+		if postsAsIssueComment(in) {
 			if err := w.ExecuteActivity("postGithubIssueComment", map[string]any{
-				"pr": in.PR, "body": rootBody,
+				"pr": in.PR, "body": descriptionIssueBody(in, rootBody),
 			}, &pr); err != nil {
 				return err
 			}
@@ -5766,7 +5770,7 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		if history {
 			for _, lr := range localReplies {
 				var mirrored postResult
-				if isPRWide(in.Kind) {
+				if postsAsIssueComment(in) {
 					_ = w.ExecuteActivity("postGithubIssueComment", map[string]any{
 						"pr": in.PR, "body": lr.Body,
 					}, &mirrored)
@@ -5900,7 +5904,7 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			}, nil); err != nil {
 				return nil, fmt.Errorf("save reopen reaction: %w", err)
 			}
-			if !isPRWide(in.Kind) && posted.RootID != 0 {
+			if !postsAsIssueComment(in) && posted.RootID != 0 {
 				_ = w.ExecuteActivity("unresolveGithubThread", map[string]any{
 					"pr": in.PR, "rootId": posted.RootID,
 				}, nil)
@@ -5935,9 +5939,9 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 				// reviewer's REPLY, not this body — PATCHing it would rewrite
 				// the wrong message (see rootPublished/publishThread).
 				if posted.RootID != 0 && rootPublished {
-					if isPRWide(in.Kind) {
+					if postsAsIssueComment(in) {
 						_ = w.ExecuteActivity("editGithubIssueComment", map[string]any{
-							"commentId": posted.RootID, "body": r.Body,
+							"commentId": posted.RootID, "body": descriptionIssueBody(in, r.Body),
 						}, nil)
 					} else {
 						_ = w.ExecuteActivity("editGithubReviewComment", map[string]any{
@@ -5952,7 +5956,7 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 					return nil, fmt.Errorf("edit reaction body: %w", err)
 				}
 				if ghID := replyGithubIDs[r.ID]; ghID != 0 {
-					if isPRWide(in.Kind) {
+					if postsAsIssueComment(in) {
 						_ = w.ExecuteActivity("editGithubIssueComment", map[string]any{
 							"commentId": ghID, "body": r.Body,
 						}, nil)
@@ -6077,7 +6081,7 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		//     sendReaction/resolveFocusedComment in RelatedPanel.mjs) is not posted
 		//     as text — it only carries the intent to resolve.
 		if r.Source == "ui" && !publishedAsRoot {
-			if isPRWide(in.Kind) {
+			if postsAsIssueComment(in) {
 				if !r.Done {
 					var mirrored postResult
 					_ = w.ExecuteActivity("postGithubIssueComment", map[string]any{

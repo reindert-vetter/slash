@@ -197,7 +197,22 @@ function highlightPhpWithSqlComments(code, grammar, grammarName) {
 // text/JS/YAML/etc. tolerably and every other card (Onderliggende-code,
 // comment hint, footer) stays on 'php' unchanged.
 export function langForFile(file) {
+  // The PR title + description block is prose, not code: 'markdown' has no
+  // vendored grammar, so it renders as escaped plain text instead of PHP
+  // keyword colours on ordinary English/Dutch words.
+  if (file === PR_DESC_FILE) return 'markdown'
   return /\.ts$/i.test(file || '') ? 'typescript' : 'php'
+}
+
+// PR_DESC_FILE is the pseudo file path of the "PR-titel & omschrijving" index
+// block (prDescriptionBlock, home.mjs): the PR's own title + body, built in the
+// browser so they can be reviewed line by line like code. Not a repo file — the
+// backend recognises the same string (prDescriptionFile, comment_import.go) to
+// post a comment on it as a quoted issue comment instead of a review comment.
+export const PR_DESC_FILE = 'PR-description'
+
+export function isPrDescriptionBlock(b) {
+  return !!b && b.kind === 'pr_description'
 }
 
 function escapeHtml(s) {
@@ -395,6 +410,8 @@ export function isInlineEditable(b, rows) {
   if (!b) return false
   if (b.status !== 'modified' && b.status !== 'added') return false
   if (b.category === 'TRANSLATION') return false
+  // No file to write the edit into — the description lives on GitHub.
+  if (isPrDescriptionBlock(b)) return false
   if (isSvgFile(b) || isImageFile(b)) return false
   if (!rows || rows.length > VIRTUALIZE_MIN_ROWS) return false
   return true
@@ -430,7 +447,11 @@ export function isInlineEditable(b, rows) {
 // giving the preview images room. See .claude/docs/diff-card.md.
 function isProseFile(b) {
   return (
-    !!(b.file && /\.(md|markdown|json|txt)$/i.test(b.file)) || isYamlFile(b) || isSvgFile(b) || isImageFile(b)
+    !!(b.file && /\.(md|markdown|json|txt)$/i.test(b.file)) ||
+    b.file === PR_DESC_FILE ||
+    isYamlFile(b) ||
+    isSvgFile(b) ||
+    isImageFile(b)
   )
 }
 

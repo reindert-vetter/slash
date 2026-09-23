@@ -186,6 +186,7 @@ export const EN = {
   'Openstaande chats': 'Open chats',
   'Verborgen comments': 'Hidden comments',
   'Onderliggende code': 'Underlying code',
+  'PR-titel & omschrijving': 'PR title & description',
   'Aan het einde': 'At the end',
   'pushen…': 'pushing…',
   'push mislukt — Enter probeert opnieuw': 'push failed — Enter tries again',

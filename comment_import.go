@@ -197,6 +197,43 @@ func isPRWide(kind string) bool {
 	return kind == "issue" || kind == "review_summary" || kind == "review" || kind == "ai_warning"
 }
 
+// prDescriptionFile is the pseudo file path of the review tree's "PR-titel &
+// omschrijving" index block (prDescriptionBlock, src/home.mjs): a block the
+// frontend builds from the PR's own title + body so they can be reviewed line
+// by line like code. It is not a file in the repo, so GitHub has no diff line
+// to hang a review comment on — see postsAsIssueComment. Keep in sync with
+// PR_DESC_FILE in src/home.mjs.
+const prDescriptionFile = "PR-description"
+
+// postsAsIssueComment reports whether a code-comment thread mirrors to GitHub
+// as flat issue comments (a new top-level PR comment for the root and for every
+// reply) instead of a review-diff thread: every PR-wide Kind, plus a comment on
+// a line of the PR description block. Input-only, so replay-deterministic —
+// and no history recorded before the description block existed ever carries
+// prDescriptionFile, so every stored run keeps making the same decisions.
+func postsAsIssueComment(in CodeCommentInput) bool {
+	return isPRWide(in.Kind) || in.File == prDescriptionFile
+}
+
+// descriptionIssueBody is the GitHub body for a comment on a line of the PR
+// description block: the commented line(s) quoted first, so a reader of the
+// flat PR conversation can see what the remark is about, then the comment.
+// Any other comment's body is returned unchanged.
+func descriptionIssueBody(in CodeCommentInput, body string) string {
+	if in.File != prDescriptionFile {
+		return body
+	}
+	code := strings.TrimSpace(strings.ReplaceAll(in.Code, "\r\n", "\n"))
+	if code == "" {
+		return body
+	}
+	lines := strings.Split(code, "\n")
+	for i, l := range lines {
+		lines[i] = strings.TrimRight("> "+l, " ")
+	}
+	return strings.Join(lines, "\n") + "\n\n" + body
+}
+
 // isKiloReview reports whether a comment body is a kilo-review bot summary we
 // deliberately never import — matched on BOTH markers (AND) to avoid false
 // positives. Mirrors the frontend isKiloReview in RelatedPanel.mjs; the

@@ -420,6 +420,14 @@ not read-only copies.
     attempt would often just fail, which — unlike the reactions loop's
     best-effort mirrors — would abort the whole workflow.
   - **normal** → post as a review comment + record `RootID`.
+  - **a line of the PR description block** (`File == prDescriptionFile`,
+    `"PR-description"`, see "The PR-titel & omschrijving block" in
+    `.claude/docs/detail-layout.md`) is not a repo file, so GitHub has no diff
+    line for it: `postsAsIssueComment(in)` (`isPRWide(Kind)` OR that file)
+    routes it — and every later reply/edit/publish of the thread — down the
+    PR-wide issue-comment branches, with the commented line(s) quoted above the
+    body (`descriptionIssueBody`, also on a root edit). Input-only, so
+    replay-safe: no older history carries that file.
 - **Reply loop per thread kind** (`isPRWide(kind)` =
   `issue`/`review_summary`/`review`): echo prevention unchanged (only
   `Source == "ui"` mirrors out), but the mirror path differs.

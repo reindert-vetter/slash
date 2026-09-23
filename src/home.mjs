@@ -32,6 +32,8 @@ import Block, {
   fitCapCharsFor,
   blockDescCollapsible,
   isInlineEditable,
+  PR_DESC_FILE,
+  isPrDescriptionBlock,
 } from './Block.mjs'
 import { inlineEditState, blockNewSourceText, clearInlineEditDraft, openInlineEdit } from './inlineEdit.mjs'
 import RelatedPanel, {
@@ -2708,8 +2710,14 @@ async function loadBlocks() {
   const all = Array.isArray(blocks) ? blocks : []
   // Fetch the relations; recomputeLeftList pulls any nested child out of the
   // left list — it is shown under its parent in the RelatedPanel instead.
-  const rels = await loadRelations()
-  state.allBlocks = all
+  // The PR's title/body (prmeta read-model) feed the description block;
+  // read once alongside the relations so it is usually there for this first
+  // recompute and a ?sel=PR-description:1 restore. pollPRMeta keeps
+  // refreshing it independently; a later arrival adds the block through the
+  // prMeta watch below.
+  const [rels] = await Promise.all([loadRelations(), fetchPRMetaOnce().catch(() => false)])
+  state.allBlocks = withPrDescriptionBlock(all)
+  blocksLoaded = true
   state.relations = rels
   recomputeLeftList()
   // hadSelParam reuses the top-level hadInitialSelParam snapshot (whether this
@@ -2806,6 +2814,30 @@ async function loadBlocks() {
   }
 }
 
+// blocksLoaded flips once loadBlocks has put the real blocks in place — before
+// that, the prMeta watch below must not seed state.allBlocks with a lone
+// description block (loadBlocks adds it itself, next to the real ones).
+let blocksLoaded = false
+
+// Keeps the PR title + description block in step with the prmeta read-model:
+// adds it when the title/body arrive after loadBlocks (a first-ever open, where
+// pr_status is still fetching them), and rebuilds it — per-line approval reset
+// included, see prDescriptionBlock — when the author edits them on GitHub.
+// state.prMeta is replaced wholesale on every poll/event refetch, so an
+// unchanged text is the common case: prDescriptionBlock then returns the SAME
+// object and nothing is reassigned. Deps enumerated inline (arrowjs-pitfalls).
+watch(
+  () => [state.prMeta.title, state.prMeta.body],
+  () => {
+    if (!blocksLoaded) return
+    const prev = state.allBlocks.find(isPrDescriptionBlock)
+    const next = prDescriptionBlock(prev)
+    if (next === prev || (!next && !prev)) return
+    state.allBlocks = withPrDescriptionBlock(state.allBlocks, next)
+    recomputeLeftList()
+  },
+)
+
 // loadBlockStats fetches the server-computed per-block approval totals (the number
 // of changed rows to approve, GET /api/blockstats) into state.blockTotals. This is
 // the authoritative "total" — known immediately, before a block's code lazily
@@ -2856,6 +2888,17 @@ async function loadApprovals() {
       if (!b) continue
       b.approvedRows = Array.isArray(a.rows) ? [...a.rows] : []
       b.approvedCalls = Array.isArray(a.calls) ? [...a.calls] : []
+      // The description can change on GitHub between sessions: keep only
+      // the lines whose stored text still matches (per-line reset).
+      if (isPrDescriptionBlock(b)) {
+        const kept = remapPrDescApproval(b, a.anchors, b.approvedRows, b.approvedCalls)
+        const changed =
+          JSON.stringify(kept.rows) !== JSON.stringify(b.approvedRows) ||
+          JSON.stringify(kept.calls) !== JSON.stringify(b.approvedCalls)
+        b.approvedRows = kept.rows
+        b.approvedCalls = kept.calls
+        if (changed) persistApproval(b)
+      }
     }
     // Nudge the reactive summaries/panes to recompute now that approvals landed.
     state.allBlocks = [...state.allBlocks]
@@ -3051,6 +3094,8 @@ function syncViewedFiles() {
   if (!state.approveRunId) return
   const byFile = new Map()
   for (const b of state.blocks) {
+    // Not a file in Files changed — GitHub has no Viewed box for it.
+    if (isPrDescriptionBlock(b)) continue
     if (!byFile.has(b.file)) byFile.set(b.file, [])
     byFile.get(b.file).push(b)
   }
@@ -3491,6 +3536,114 @@ watch(
   },
 )
 
+// prDescriptionText is the "source" of the PR-titel & omschrijving block: the
+// title, one blank line, then the body — CRLF normalised (GitHub stores a body
+// typed in its web editor with \r\n, which would otherwise make every row
+// read as changed-by-whitespace) and trailing blank lines dropped. '' when the
+// PR has neither yet (prMeta still loading, or an untitled/empty PR).
+function prDescriptionText() {
+  const title = (state.prMeta.title || state.title || '').trim()
+  const body = (state.prMeta.body || '').replace(/\r\n?/g, '\n').replace(/\s+$/, '')
+  if (!title && !body) return ''
+  return body ? `${title}\n\n${body}` : title
+}
+
+// prDescriptionBlock builds the "PR-titel & omschrijving" index block: the
+// PR's own title + description as a block with inline code, so every
+// code-review mechanism works on it unchanged — per-line/group/call
+// selection, Space/checkbox approval (persisted through the approve tracker
+// under its own blockId), a comment or a Claude chat on a line, the Enter
+// menu. The OLD side is empty (GitHub keeps no usable description history),
+// so every line is an "added" row with something to approve. It is not a repo
+// file: ensureCode never fetches it, and the few mechanisms that need a real
+// file (inline edit, "Regel in Files changed", GitHub's Viewed mark, the
+// footer's automatic AI description) skip it via isPrDescriptionBlock /
+// PR_DESC_FILE. A comment on it is posted as a quoted issue comment by the
+// backend (postsAsIssueComment, comment_import.go). See "The PR-titel &
+// omschrijving block" in .claude/docs/detail-layout.md.
+//
+// `prev` is the block currently in state.allBlocks (if any): reused as-is when
+// the text did not change, so the approval arrays and every keyed card stay on
+// the same object; rebuilt otherwise, with its approval carried over per line
+// (remapPrDescApproval — a line whose text changed goes back to unapproved).
+function prDescriptionBlock(prev) {
+  const text = prDescriptionText()
+  if (!text) return null
+  if (prev && prev.code && prev.code.new && prev.code.new.text === text) return prev
+  const b = {
+    id: 'prdesc:' + state.pr,
+    kind: 'pr_description',
+    pr: state.pr,
+    file: PR_DESC_FILE,
+    class: '',
+    name: 'description',
+    label: t('PR-titel & omschrijving'),
+    category: 'PR',
+    line: 1,
+    endLine: text.split('\n').length,
+    status: 'added',
+    side: 'new',
+    code: { file: PR_DESC_FILE, old: { start: 0, text: '' }, new: { start: 1, text } },
+    approvedRows: [],
+    approvedCalls: [],
+  }
+  if (prev) {
+    const anchors = approvalAnchors(prev) || []
+    const kept = remapPrDescApproval(b, anchors, prev.approvedRows || [], prev.approvedCalls || [])
+    b.approvedRows = kept.rows
+    b.approvedCalls = kept.calls
+    if (kept.rows.length || kept.calls.length || (prev.approvedRows || []).length || (prev.approvedCalls || []).length) {
+      // Persist the per-line reset — deferred, since persistApproval reads
+      // state that the caller is still in the middle of replacing.
+      queueMicrotask(() => persistApproval(b))
+    }
+  }
+  return b
+}
+
+// remapPrDescApproval carries approved rows/call keys onto the description
+// block's CURRENT rows using the stored per-row anchors (approvalAnchors'
+// {row, text} shape, as saved by the approve tracker): a row stays approved
+// when the same index still holds the same text, or else moves to the one row
+// that now holds that exact (non-blank) text — so inserting a line above does
+// not reset everything below it. A row whose text changed (or is gone) is
+// dropped: "per regel resetten" after the author edits the description.
+// Without anchors (an approval saved before any row text was known) nothing
+// can be verified, so nothing is kept.
+function remapPrDescApproval(b, anchors, rows, calls) {
+  const cur = blockRows(b).map((r) => rowAnchorText(r))
+  const byText = new Map()
+  cur.forEach((txt, i) => {
+    if (!txt.trim()) return
+    byText.set(txt, byText.has(txt) ? -1 : i)
+  })
+  const map = new Map()
+  for (const a of anchors || []) {
+    if (!a || typeof a.row !== 'number') continue
+    if (cur[a.row] === a.text) map.set(a.row, a.row)
+    else if (byText.get(a.text) >= 0) map.set(a.row, byText.get(a.text))
+  }
+  const outRows = [...new Set(rows.filter((r) => map.has(r)).map((r) => map.get(r)))].sort((x, y) => x - y)
+  const outCalls = []
+  for (const key of calls) {
+    const [row, seg] = String(key).split(':')
+    const r = Number(row)
+    // A call key addresses character offsets, only valid on identical text,
+    // which map already guarantees (same text at the target row).
+    if (map.has(r)) outCalls.push(`${map.get(r)}:${seg}`)
+  }
+  return { rows: outRows, calls: outCalls }
+}
+
+// withPrDescriptionBlock returns `list` (real blocks from /api/blocks) plus the
+// description block APPENDED — never prepended: blockIdPrefix reads
+// allBlocks[0]'s id and must keep seeing a real block. Where the block sits in
+// the index is recomputeLeftList's rank, not this order.
+function withPrDescriptionBlock(list, d = prDescriptionBlock(state.allBlocks.find(isPrDescriptionBlock))) {
+  const real = list.filter((b) => !isPrDescriptionBlock(b))
+  return d ? [...real, d] : real
+}
+
 // commentBlockItem now takes a GROUP of one or more comments that all sit on
 // the exact same source line (see commentGroupKeyOf/recomputeLeftList —
 // reviewer request: "comments in de blokken index moeten gegroepeerd worden
@@ -3800,6 +3953,9 @@ function recomputeLeftList() {
     return (2.3 * (idx + 1)) / (fileOrder.length + 1)
   }
   const rank = (b) => {
+    // The PR title + description block always leads the index, above even
+    // a Mentioned comment (-2).
+    if (isPrDescriptionBlock(b)) return -3
     if (b.kind !== 'comment') {
       if (childIds.has(b.id)) return 3
       if (b.category === 'TEST') return 2.39
@@ -5060,7 +5216,7 @@ async function refreshBlocksAfterOwnLanding(touchedFiles) {
     // showing the pre-landing source (or nothing at all). See
     // invalidateCodeCache's own comment.
     invalidateCodeCache(touchedFiles)
-    state.allBlocks = Array.isArray(blocks) ? blocks : []
+    state.allBlocks = withPrDescriptionBlock(Array.isArray(blocks) ? blocks : [])
     state.relations = await loadRelations()
   } catch (_) {
     return // offline — keep whatever we had, the next event/poll retries
@@ -7391,6 +7547,8 @@ async function ensureCode(b) {
   // becomes the active method — see curBlock()), so /api/code would 404
   // uselessly.
   if (b.kind === 'comment' || b.kind === 'test_class') return
+  // The PR description block carries its code inline (prDescriptionBlock).
+  if (isPrDescriptionBlock(b)) return
   const key = b.file + '|' + b.label + '|' + b.side
   if (codeRequested.has(key)) return
   codeRequested.add(key)
@@ -11916,6 +12074,8 @@ function footerUnitInfo() {
   }
   // Only line/group units get an AI description ('call' and list mode don't).
   if (cur.gran !== 'group' && cur.gran !== 'line') return info
+  // explain_code explains CODE; the PR's own title/description is prose.
+  if (isPrDescriptionBlock(b)) return info
   // A Shift+arrow range has no upper size limit of its own (unlike an
   // ordinary 'group', capped at MAX_GROUP=5 rows by changeGroups) — an
   // unsolicited explain_code call over an arbitrarily large, reviewer-merged
@@ -13408,6 +13568,8 @@ const COMMANDS = withClose([
         label: t('Regel in Files changed'),
         hint: 'github',
         run: () => openGithubLine(),
+        // The description block is not in Files changed.
+        when: () => !isPrDescriptionBlock(focusedBlock()),
       },
       {
         id: 'github-pr',
