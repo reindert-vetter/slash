@@ -198,6 +198,17 @@ the latter reproduces the PR 13810 symptom end to end with a throwaway local
 git fixture (`setupChatShadowRepo`), deliberately needing **no** `gh`
 stub/fake at all: that absence is exactly what the fix buys.
 
+**A filtered file never holds the recorded head back.** For a while
+`refreshIngestDelta` deliberately skipped `saveIngestSHAs` whenever
+`filterToPRFiles` dropped anything, so the next poll would "retry". With a
+local-git filter that retry can never turn out differently: a delta file
+missing from merge-base..head is identical at the merge base and the head,
+so it is provably not part of the PR. On PR 13810 one submodule pointer
+(`modules/Ai`), set back to its base value inside the delta, made every poll
+tick redo the same delta + reanchor + `buildRelations` + `code_warning` and
+publish a fresh `blocks.changed`, forever. Reviewer decision: always save the
+head. Test: `TestRefreshIngestDeltaSavesHeadEvenWhenSomethingWasFiltered`.
+
 **For a re-scanned file, "untouched" is not enough.** A comment's
 `row_start`/`row_end` and an approval's row indices are positions in the block's
 **aligned-row space**, and re-scanning rewrites that space: the rows survive, their

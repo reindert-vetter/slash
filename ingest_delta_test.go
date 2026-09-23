@@ -808,14 +808,12 @@ func TestRefreshIngestDeltaFallsBackOnRebasedHead(t *testing.T) {
 	}
 }
 
-// TestRefreshIngestDeltaLeavesPrevHeadWhenSomethingWasFiltered is the "sla de
-// head-SHA pas op als verwerkt wanneer er niets is overgeslagen" requirement:
-// when the widening guard drops one or more files from this round's delta,
-// refreshIngestDelta must NOT advance pr_ingest's recorded head — leaving it
-// as-is means the next poll tick (headSHA hasn't "moved" as far as pr_ingest
-// is concerned) simply retries the same delta+filter, rather than
-// permanently freezing on a result that dropped something.
-func TestRefreshIngestDeltaLeavesPrevHeadWhenSomethingWasFiltered(t *testing.T) {
+// TestRefreshIngestDeltaSavesHeadEvenWhenSomethingWasFiltered: when the
+// widening guard drops a file from this round's delta, refreshIngestDelta
+// still records the new head. A dropped file is identical at the merge base
+// and the head (the guard is pure local git), so holding the head back only
+// made every later poll redo the same filtered delta forever (PR 13810).
+func TestRefreshIngestDeltaSavesHeadEvenWhenSomethingWasFiltered(t *testing.T) {
 	dataDir := t.TempDir()
 	pr := 5150
 	ctx := context.Background()
@@ -890,15 +888,18 @@ func TestRefreshIngestDeltaLeavesPrevHeadWhenSomethingWasFiltered(t *testing.T) 
 		}
 	}
 
-	// ...and, because something WAS filtered out this round, prevHead must
-	// still be the OLD one — not the widened head — so a later poll (with
-	// headSHA unchanged) keeps retrying instead of freezing forever.
+	// ...and the head still advances, so the next poll with the same head is
+	// a Skipped no-op instead of the same filtered delta again.
 	_, head, ok, err := loadIngestSHAs(db, "", pr)
 	if err != nil || !ok {
 		t.Fatalf("loadIngestSHAs: ok=%v err=%v", ok, err)
 	}
-	if head != prevHeadSHA {
-		t.Fatalf("pr_ingest head = %s, want it left at the old prevHead %s (something was filtered this round)", short(head), short(prevHeadSHA))
+	if head != widenedHeadSHA {
+		t.Fatalf("pr_ingest head = %s, want the new head %s even though a file was filtered", short(head), short(widenedHeadSHA))
+	}
+	again, err := refreshIngestDelta(ctx, db, dataDir, "", pr, developSHA, widenedHeadSHA)
+	if err != nil || !again.Skipped {
+		t.Fatalf("second refresh at the same head: res=%+v err=%v, want Skipped", again, err)
 	}
 }
 

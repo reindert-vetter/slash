@@ -380,23 +380,15 @@ func refreshIngestDelta(ctx context.Context, db *sql.DB, dataDir string, repo st
 	// .claude/docs/blocks-and-ingest.md. Best-effort: a local diff failure
 	// (e.g. one of the SHAs somehow not fetched) means no filter, never a
 	// failed refresh.
-	// anySkipped tracks whether the widening filter actually dropped anything
-	// this round. When it did, saveIngestSHAs below is deliberately SKIPPED —
-	// prevHead/prevBase are left exactly as they were — so the next poll tick
-	// (headSHA has not "advanced" as far as pr_ingest is concerned) redoes the
-	// exact same delta+filter rather than permanently committing to a result
-	// that dropped something. This is the same shape of bug as the gh-race
-	// above, one level more defensive: even though the widening guard is now
-	// pure local git and should always be correct, never let "we filtered
-	// something out" and "we successfully captured the whole PR" look like
-	// the same outcome to the next poll. Accepted trade-off: a PR that
-	// legitimately, permanently absorbed a base-branch merge (the very
-	// scenario this filter exists for) re-runs this same filtered delta on
-	// every poll tick forever, since headSHA/prevHead never converge — wasted
-	// work, but idempotent and never incorrect (see "A delta refresh must not
-	// depend on gh for its own widening guard" in
-	// .claude/docs/blocks-and-ingest.md).
-	anySkipped := false
+	// A dropped file is still no reason to hold the recorded head back. The
+	// filter is pure local git: a delta file missing from merge-base..head is,
+	// by definition, identical at the merge base and the head, so it can never
+	// belong to the PR and a retry would drop it again, forever. That retry
+	// used to be the rule (the head was only saved when nothing was filtered),
+	// and on PR 13810 it re-ran the same delta + reanchor + buildRelations +
+	// code_warning on every poll tick, because one submodule pointer
+	// (modules/Ai) was set back to its base value inside the delta. Reviewer
+	// decision: relax it, always save the head.
 	if prFiles, ferr := prLocalChangedFilePaths(ctx, repo, headSHA); ferr != nil {
 		log.Printf("ingest refresh pr %d: pr file list unavailable (%v), delta not filtered", pr, ferr)
 	} else {
@@ -404,7 +396,6 @@ func refreshIngestDelta(ctx context.Context, db *sql.DB, dataDir string, repo st
 			log.Printf("ingest refresh pr %d: %d of %d changed file(s) are outside the PR, skipped",
 				pr, len(deltaFiles)-len(kept), len(deltaFiles))
 			deltaFiles = kept
-			anySkipped = true
 		}
 		// Repair a PR whose blocks were already widened by an earlier refresh (or
 		// whose rename left its old path behind), so this heals itself instead of
@@ -417,12 +408,8 @@ func refreshIngestDelta(ctx context.Context, db *sql.DB, dataDir string, repo st
 	}
 
 	if len(deltaFiles) == 0 {
-		if !anySkipped {
-			if err := saveIngestSHAs(db, repo, pr, baseSHA, headSHA); err != nil {
-				return nil, fmt.Errorf("save ingest shas: %w", err)
-			}
-		} else {
-			log.Printf("ingest refresh pr %d: leaving prevHead at %s (some file(s) were filtered out this round), next poll retries", pr, short(prevHead))
+		if err := saveIngestSHAs(db, repo, pr, baseSHA, headSHA); err != nil {
+			return nil, fmt.Errorf("save ingest shas: %w", err)
 		}
 		return &ingestResult{PR: pr, Skipped: true}, nil
 	}
@@ -443,12 +430,8 @@ func refreshIngestDelta(ctx context.Context, db *sql.DB, dataDir string, repo st
 	if err := upsertPRFileBlocks(db, repo, pr, deltaFiles, blocks); err != nil {
 		return nil, fmt.Errorf("upsert delta blocks: %w", err)
 	}
-	if !anySkipped {
-		if err := saveIngestSHAs(db, repo, pr, baseSHA, headSHA); err != nil {
-			return nil, fmt.Errorf("save ingest shas: %w", err)
-		}
-	} else {
-		log.Printf("ingest refresh pr %d: leaving prevHead at %s (some file(s) were filtered out this round), next poll retries", pr, short(prevHead))
+	if err := saveIngestSHAs(db, repo, pr, baseSHA, headSHA); err != nil {
+		return nil, fmt.Errorf("save ingest shas: %w", err)
 	}
 
 	res := &ingestResult{PR: pr, Stored: len(blocks), ByStatus: map[string]int{},
