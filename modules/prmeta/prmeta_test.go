@@ -199,3 +199,23 @@ func TestSaveFullyApprovedAtRoundTrip(t *testing.T) {
 	}
 	_ = first // both calls may land in the same second under `now()`'s RFC3339 resolution
 }
+
+// TestSaveBaseRefsRoundTrip asserts the target-branch pair round-trips and
+// leaves the basics alone.
+func TestSaveBaseRefsRoundTrip(t *testing.T) {
+	m := open(t)
+	ctx := context.Background()
+	if err := m.SaveBasics(ctx, Meta{PR: 8, Title: "t", HeadRef: "feature/x"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SaveBaseRefs(ctx, "", 8, "feature/PROD-439", "develop"); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := m.Get(ctx, "", 8)
+	if err != nil || !ok {
+		t.Fatalf("get: ok=%v err=%v", ok, err)
+	}
+	if got.BaseRef != "feature/PROD-439" || got.PrevBaseRef != "develop" || got.Title != "t" {
+		t.Fatalf("got base=%q prev=%q title=%q", got.BaseRef, got.PrevBaseRef, got.Title)
+	}
+}

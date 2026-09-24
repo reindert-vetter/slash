@@ -17043,6 +17043,22 @@ function prInfoCard(state) {
               >`
             : ''}
       </div>
+      ${() =>
+        // The PR's target branch was changed on GitHub (prmeta's prevBaseRef,
+        // from the latest BaseRefChangedEvent): say so, old → new, so the
+        // reviewer knows why the tree's old code now diffs against another
+        // branch. The words carry the meaning, not a colour.
+        state.prMeta.prevBaseRef && state.prMeta.baseRef
+          ? html`<div
+              class="flex flex-wrap items-center gap-x-1.5 text-[11.5px] text-slate-500 dark:text-zinc-500"
+              data-testid="pr-info-base-change"
+            >
+              <span>${t('Target gewijzigd:')}</span>
+              <span class="font-mono text-slate-500 line-through dark:text-zinc-500" data-testid="pr-info-base-prev">${state.prMeta.prevBaseRef}</span>
+              <span aria-hidden="true">→</span>
+              <span class="font-mono font-medium text-slate-700 dark:text-zinc-300" data-testid="pr-info-base-current">${state.prMeta.baseRef}</span>
+            </div>`
+          : ''}
       <div class="flex items-center justify-between" data-testid="pr-info-theme-row">
         <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500">${t('Weergave')}</span>
         <div class="flex items-center gap-1.5">

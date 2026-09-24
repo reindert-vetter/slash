@@ -51,6 +51,8 @@ CREATE TABLE IF NOT EXISTS pr_meta (
   since_facts      TEXT NOT NULL DEFAULT '',
   since_summary    TEXT NOT NULL DEFAULT '',
   fully_approved_at TEXT NOT NULL DEFAULT '',
+  base_ref         TEXT NOT NULL DEFAULT '',
+  prev_base_ref    TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (repo, pr)
 );
 `
@@ -112,6 +114,12 @@ type Meta struct {
 	// GitHub review of their own, so this is what makes "nieuw sinds jouw
 	// review" correct on your own PR (PPTD-948).
 	FullyApprovedAt string `json:"fullyApprovedAt,omitempty"`
+	// BaseRef is the PR's current target branch; PrevBaseRef the branch it
+	// was last changed FROM on GitHub ("" = the target never changed). The PR
+	// info column shows "PrevBaseRef → BaseRef" when both are set, so a
+	// reviewer sees why the tree's old code moved. Set by SaveBaseRefs.
+	BaseRef     string `json:"baseRef,omitempty"`
+	PrevBaseRef string `json:"prevBaseRef,omitempty"`
 }
 
 // Module is the prmeta service (owns its own SQLite read-model).
@@ -168,6 +176,8 @@ func migrate(db *sql.DB) {
 		`ALTER TABLE pr_meta ADD COLUMN since_summary TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE pr_meta ADD COLUMN fully_approved_at TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE pr_meta ADD COLUMN summary_source TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE pr_meta ADD COLUMN base_ref TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE pr_meta ADD COLUMN prev_base_ref TEXT NOT NULL DEFAULT ''`,
 	} {
 		_, _ = db.Exec(col) // ignore "duplicate column name"
 	}
@@ -223,6 +233,18 @@ func (m *Module) SaveBasics(ctx context.Context, meta Meta) error {
 			jira_desc=excluded.jira_desc, jira_url=excluded.jira_url, updated_at=excluded.updated_at`,
 		meta.Repo, meta.PR, meta.Title, meta.URL, meta.Body, meta.Author, meta.Additions, meta.Deletions,
 		meta.ChangedFiles, meta.HeadRef, meta.JiraKey, meta.JiraTitle, meta.JiraDesc, meta.JiraURL, now())
+	return err
+}
+
+// SaveBaseRefs upserts the PR's current target branch and the one it was last
+// changed from ("" = never changed). WRITE — workflow-only (fetchPRBasics).
+// Only touches its own two columns.
+func (m *Module) SaveBaseRefs(ctx context.Context, repo string, pr int, baseRef, prevBaseRef string) error {
+	_, err := m.db.ExecContext(ctx, `
+		INSERT INTO pr_meta (repo, pr, base_ref, prev_base_ref, updated_at) VALUES (?,?,?,?,?)
+		ON CONFLICT(repo, pr) DO UPDATE SET base_ref=excluded.base_ref,
+			prev_base_ref=excluded.prev_base_ref, updated_at=excluded.updated_at`,
+		repo, pr, baseRef, prevBaseRef, now())
 	return err
 }
 
@@ -332,12 +354,14 @@ func (m *Module) Get(ctx context.Context, repo string, pr int) (Meta, bool, erro
 		SELECT repo, pr, title, url, body, author, additions, deletions, changed_files, head_ref,
 			summary, summary_source, jira_key, jira_title, jira_desc, jira_url,
 			review_decision, checks_total, checks_passed, reviewers, updated_at,
-			gh_updated_at, new_since_kind, new_since_at, since_facts, since_summary, fully_approved_at
+			gh_updated_at, new_since_kind, new_since_at, since_facts, since_summary, fully_approved_at,
+			base_ref, prev_base_ref
 		FROM pr_meta WHERE repo = ? AND pr = ?`, repo, pr).
 		Scan(&meta.Repo, &meta.PR, &meta.Title, &meta.URL, &meta.Body, &meta.Author, &meta.Additions, &meta.Deletions,
 			&meta.ChangedFiles, &meta.HeadRef, &meta.Summary, &meta.SummarySource, &meta.JiraKey, &meta.JiraTitle, &meta.JiraDesc,
 			&meta.JiraURL, &meta.ReviewDecision, &meta.ChecksTotal, &meta.ChecksPassed, &reviewersJSON, &meta.UpdatedAt,
-			&meta.GhUpdatedAt, &meta.NewSinceKind, &meta.NewSinceAt, &meta.SinceFacts, &meta.SinceSummary, &meta.FullyApprovedAt)
+			&meta.GhUpdatedAt, &meta.NewSinceKind, &meta.NewSinceAt, &meta.SinceFacts, &meta.SinceSummary, &meta.FullyApprovedAt,
+			&meta.BaseRef, &meta.PrevBaseRef)
 	if err == sql.ErrNoRows {
 		return Meta{}, false, nil
 	}

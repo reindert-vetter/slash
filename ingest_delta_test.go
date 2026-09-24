@@ -240,7 +240,7 @@ func TestRefreshIngestDeltaRequiresPriorIngest(t *testing.T) {
 	}
 	defer db.Close()
 
-	if _, err := refreshIngestDelta(context.Background(), db, dataDir, "", 99, "base", "head"); err == nil {
+	if _, err := refreshIngestDelta(context.Background(), db, dataDir, "", 99, "", "base", "head"); err == nil {
 		t.Fatal("refreshIngestDelta without a prior ingest should error, got nil")
 	}
 }
@@ -259,7 +259,7 @@ func TestRefreshIngestDeltaSkipsWhenHeadUnchanged(t *testing.T) {
 	if err := saveIngestSHAs(db, "", 99, "base1", "head1"); err != nil {
 		t.Fatal(err)
 	}
-	res, err := refreshIngestDelta(context.Background(), db, dataDir, "", 99, "base1", "head1")
+	res, err := refreshIngestDelta(context.Background(), db, dataDir, "", 99, "", "base1", "head1")
 	if err != nil {
 		t.Fatalf("refreshIngestDelta: %v", err)
 	}
@@ -315,7 +315,7 @@ func TestRefreshIngestDeltaEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := refreshIngestDelta(ctx, db, dataDir, "", pr, shas.BaseSHA, shas.HeadSHA)
+	res, err := refreshIngestDelta(ctx, db, dataDir, "", pr, "", shas.BaseSHA, shas.HeadSHA)
 	if err != nil {
 		t.Fatalf("refreshIngestDelta: %v", err)
 	}
@@ -608,7 +608,7 @@ func TestPRLocalChangedFilePathsUsesLocalGitOnly(t *testing.T) {
 	commitPHPFile(t, cloneDir, "app/Foo.php", "foo", "add Foo")
 	headSHA := commitPHPFile(t, cloneDir, "app/Bar.php", "bar", "add Bar")
 
-	files, err := prLocalChangedFilePaths(ctx, "", headSHA)
+	files, err := prLocalChangedFilePaths(ctx, "", "", headSHA)
 	if err != nil {
 		t.Fatalf("prLocalChangedFilePaths: %v", err)
 	}
@@ -625,7 +625,7 @@ func TestPRLocalChangedFilePathsUsesLocalGitOnly(t *testing.T) {
 	// develop's own tip, unchanged relative to itself: no changed files,
 	// reported as an error (the caller treats an error as "no filter", never
 	// as "the PR has zero files").
-	if _, err := prLocalChangedFilePaths(ctx, "", developSHA); err == nil {
+	if _, err := prLocalChangedFilePaths(ctx, "", "", developSHA); err == nil {
 		t.Fatal("expected an error when head equals the base branch tip, got nil")
 	}
 }
@@ -677,7 +677,7 @@ func TestRefreshIngestDeltaKeepsAJustPushedFile(t *testing.T) {
 	// real `gh pr view` snapshot could still be lagging behind.
 	newHeadSHA := commitPHPFile(t, cloneDir, "app/Events/Subscriptions/SubscriptionStateEvent.php", "getProductTags", "touch SubscriptionStateEvent")
 
-	res, err := refreshIngestDelta(ctx, db, dataDir, "", pr, baseSHA, newHeadSHA)
+	res, err := refreshIngestDelta(ctx, db, dataDir, "", pr, "", baseSHA, newHeadSHA)
 	if err != nil {
 		t.Fatalf("refreshIngestDelta: %v", err)
 	}
@@ -779,7 +779,7 @@ func TestRefreshIngestDeltaFallsBackOnRebasedHead(t *testing.T) {
 
 	stubGHUnreachable(t)
 
-	_, err = refreshIngestDelta(ctx, db, dataDir, "", pr, baseSHA, rebasedHeadSHA)
+	_, err = refreshIngestDelta(ctx, db, dataDir, "", pr, "", baseSHA, rebasedHeadSHA)
 	if err == nil {
 		t.Fatal("expected an error (the stubbed gh failing inside the full-ingest fallback), got nil")
 	}
@@ -799,7 +799,7 @@ func TestRefreshIngestDeltaFallsBackOnRebasedHead(t *testing.T) {
 	if !isAncestor(ctx, "", prevHeadSHA, ordinaryHeadSHA) {
 		t.Fatal("test setup broken: ordinaryHeadSHA should still be a descendant of prevHeadSHA")
 	}
-	res, err := refreshIngestDelta(ctx, db, dataDir, "", pr, baseSHA, ordinaryHeadSHA)
+	res, err := refreshIngestDelta(ctx, db, dataDir, "", pr, "", baseSHA, ordinaryHeadSHA)
 	if err != nil {
 		t.Fatalf("refreshIngestDelta on the ordinary (non-rebased) path: %v", err)
 	}
@@ -869,7 +869,7 @@ func TestRefreshIngestDeltaSavesHeadEvenWhenSomethingWasFiltered(t *testing.T) {
 	}
 	widenedHeadSHA := string(bytesTrim(widenedHeadOut))
 
-	res, err := refreshIngestDelta(ctx, db, dataDir, "", pr, developSHA, widenedHeadSHA)
+	res, err := refreshIngestDelta(ctx, db, dataDir, "", pr, "", developSHA, widenedHeadSHA)
 	if err != nil {
 		t.Fatalf("refreshIngestDelta: %v", err)
 	}
@@ -897,7 +897,7 @@ func TestRefreshIngestDeltaSavesHeadEvenWhenSomethingWasFiltered(t *testing.T) {
 	if head != widenedHeadSHA {
 		t.Fatalf("pr_ingest head = %s, want the new head %s even though a file was filtered", short(head), short(widenedHeadSHA))
 	}
-	again, err := refreshIngestDelta(ctx, db, dataDir, "", pr, developSHA, widenedHeadSHA)
+	again, err := refreshIngestDelta(ctx, db, dataDir, "", pr, "", developSHA, widenedHeadSHA)
 	if err != nil || !again.Skipped {
 		t.Fatalf("second refresh at the same head: res=%+v err=%v, want Skipped", again, err)
 	}
@@ -1012,7 +1012,7 @@ func TestRefreshIngestDeltaFallbackKeepsTheRequestedHead(t *testing.T) {
 	}
 	t.Setenv("PATH", stub+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	res, err := refreshIngestDelta(ctx, db, dataDir, "", pr, baseSHA, amended)
+	res, err := refreshIngestDelta(ctx, db, dataDir, "", pr, "", baseSHA, amended)
 	if err != nil {
 		t.Fatalf("refreshIngestDelta: %v", err)
 	}

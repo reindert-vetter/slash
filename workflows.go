@@ -623,6 +623,12 @@ type PRStateSignal struct {
 	// input — never re-derived live inside the workflow body, so this stays
 	// replay-safe exactly like BaseSHA/HeadSHA above.
 	LandedFiles []string `json:"landedFiles,omitempty"`
+	// BaseRef is the PR's own target branch name (gh's baseRefName) as the
+	// ingest-refresh poller observed it, so refreshIngestDelta's widening
+	// guard diffs against THAT branch instead of the repo default (develop).
+	// Empty (a landing, or any older recorded signal) falls back to the
+	// default. Recorded signal input, replay-safe like BaseSHA/HeadSHA.
+	BaseRef string `json:"baseRef,omitempty"`
 }
 
 // PRInboxInput starts the pr_inbox Workflow Execution for a repo.
@@ -1673,11 +1679,12 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			// (pollIngestRefresh), which builds a PRStateSignal with no such
 			// files at all.
 			LandedFiles []string `json:"landedFiles,omitempty"`
+			BaseRef     string   `json:"baseRef,omitempty"`
 		}
 		if err := json.Unmarshal(in, &arg); err != nil {
 			return nil, err
 		}
-		res, err := refreshIngestDelta(ctx, m.db, m.dataDir, arg.Repo, arg.PR, arg.BaseSHA, arg.HeadSHA)
+		res, err := refreshIngestDelta(ctx, m.db, m.dataDir, arg.Repo, arg.PR, arg.BaseRef, arg.BaseSHA, arg.HeadSHA)
 		if err != nil {
 			return nil, fmt.Errorf("pr_status: refresh ingest delta: %w", err)
 		}
@@ -2280,6 +2287,18 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		}
 		if err := m.prmeta.SaveBasics(ctx, out); err != nil {
 			return nil, fmt.Errorf("save pr basics: %w", err)
+		}
+		// The PR's target branch and the one it was changed from, for the PR
+		// info column's "old → new" line. Best-effort and only written when it
+		// differs from what's stored, so an unchanged PR publishes nothing.
+		if cur, prev, err := fetchBaseRefChange(ctx, arg.Repo, arg.PR); err == nil && cur != "" {
+			stored, _, _ := m.prmeta.Get(ctx, arg.Repo, arg.PR)
+			if stored.BaseRef != cur || stored.PrevBaseRef != prev {
+				if err := m.prmeta.SaveBaseRefs(ctx, arg.Repo, arg.PR, cur, prev); err != nil {
+					return nil, fmt.Errorf("save pr base refs: %w", err)
+				}
+				publishPRMetaChanged(arg.Repo, arg.PR)
+			}
 		}
 		return nil, nil
 	})
@@ -5419,7 +5438,8 @@ func prStatusWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 				BaseSHA     string   `json:"baseSHA"`
 				HeadSHA     string   `json:"headSHA"`
 				LandedFiles []string `json:"landedFiles,omitempty"`
-			}{PR: in.PR, BaseSHA: s.BaseSHA, HeadSHA: s.HeadSHA, LandedFiles: s.LandedFiles}
+				BaseRef     string   `json:"baseRef,omitempty"`
+			}{PR: in.PR, BaseSHA: s.BaseSHA, HeadSHA: s.HeadSHA, LandedFiles: s.LandedFiles, BaseRef: s.BaseRef}
 			if err := w.ExecuteActivity("refreshIngestDelta", arg, &res); err != nil {
 				return nil, fmt.Errorf("refresh ingest delta: %w", err)
 			}
@@ -7094,6 +7114,38 @@ func ingestRefreshNeeded(ctx context.Context, remoteHead, storedHead string) boo
 	return true
 }
 
+// ingestBaseMoved reports whether the merge base of the PR's LIVE base tip and
+// the stored head differs from the stored (merge-base) base SHA — i.e. the
+// review tree's left side is built against the wrong commit although the head
+// did not move. Seen on PR 13810: its target branch was changed from develop to
+// feature/PROD-439 and the tree kept diffing against the old develop merge
+// base, showing PROD-439's own changes as part of the PR. Pure local git; a
+// live base commit that can't be fetched, or any git error, answers false, so a lookup hiccup
+// never turns into a full re-ingest on every tick. Converges: the full ingest
+// stores exactly this merge base, after which it answers false again.
+func ingestBaseMoved(ctx context.Context, repo, liveBase, storedBase, storedHead string) bool {
+	if liveBase == "" || storedBase == "" || storedHead == "" || liveBase == storedBase {
+		return false
+	}
+	if !commitExists(ctx, repo, storedHead) {
+		return false
+	}
+	if !commitExists(ctx, repo, liveBase) {
+		// A new target branch's tip is often not local yet (ensureCommits only
+		// fetches the repo's default base branch). Fetch it by SHA once;
+		// afterwards it is local and this costs nothing.
+		if _, err := runGitFor(ctx, repo, "fetch", "origin", liveBase); err != nil || !commitExists(ctx, repo, liveBase) {
+			return false
+		}
+	}
+	out, err := runGitFor(ctx, repo, "merge-base", liveBase, storedHead)
+	if err != nil {
+		return false
+	}
+	mb := strings.TrimSpace(string(out))
+	return mb != "" && mb != storedBase
+}
+
 // pollIngestRefresh checks, on the heartbeat-driven cadence (fast while a
 // heartbeat for prRunID arrived within heartbeatWindow, else slow — same gate
 // as poll/pollInbox), whether the PR's live head SHA has moved past what was
@@ -7160,15 +7212,27 @@ func (m *TaskManager) checkIngestRefreshOnce(ctx context.Context, prRunID string
 		m.logf("pr_status: ingest refresh check pr=%d: %v", pr, err)
 		return true
 	}
-	_, head, ok, err := loadIngestSHAs(m.db, repo, pr)
+	base, head, ok, err := loadIngestSHAs(m.db, repo, pr)
 	if err != nil {
 		m.logf("pr_status: load ingest state pr=%d: %v", pr, err)
 		return true
 	}
-	if !ok || !ingestRefreshNeeded(ctx, meta.HeadRefOid, head) {
-		return true // no prior ingest yet, nothing new since, or already ahead
+	if !ok {
+		return true // no prior ingest yet
 	}
-	sig := PRStateSignal{BaseSHA: meta.BaseRefOid, HeadSHA: meta.HeadRefOid}
+	sig := PRStateSignal{BaseSHA: meta.BaseRefOid, HeadSHA: meta.HeadRefOid, BaseRef: meta.BaseRefName}
+	if !ingestRefreshNeeded(ctx, meta.HeadRefOid, head) {
+		// The head did not move (or the stored head is a local commit already
+		// ahead of it) — but the BASE may have: the PR's target branch was
+		// changed on GitHub, or the stored head absorbed its base branch. Then
+		// refresh at the STORED head (never rewind an unpushed pending commit
+		// to the older remote tip), against the live base.
+		if !ingestBaseMoved(ctx, repo, meta.BaseRefOid, base, head) {
+			return true // nothing new since, or already ahead
+		}
+		log.Printf("pr_status: pr=%d base moved (target %s), refreshing at stored head %s", pr, meta.BaseRefName, short(head))
+		sig.HeadSHA = head
+	}
 	if err := m.engine.SignalWorkflow(prRunID, SignalPRState, sig); err != nil {
 		m.logf("pr_status: signal ingest refresh pr=%d: %v", pr, err)
 	}

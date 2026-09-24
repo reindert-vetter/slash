@@ -206,6 +206,24 @@ request.
     that commit is on GitHub — only that it is locally reachable.
   - **Base SHA changed** (e.g. a rebase) makes an incremental diff unsafe → it
     falls back to the **full** pipeline, marked `FullFallback` in the history.
+  - **A changed TARGET branch is detected even when the head did not move**
+    (`ingestBaseMoved`, `checkIngestRefreshOnce`): the check also compares
+    `merge-base(live baseRefOid, stored head)` against the stored base, and on
+    a mismatch signals the same branch with the **stored** head (never
+    rewinding an unpushed pending commit) plus the live base → the full
+    fallback above, then the usual reanchor pass (approvals/comments behave as
+    after a rebase). `refreshIngestDelta` only reports `Skipped` when head
+    **and** normalized base are both unchanged. Pure local git (the new tip is
+    fetched by SHA once if missing; a failure answers "no"), and it converges:
+    the full ingest stores exactly that merge base. Covers both a target
+    changed on GitHub and a landed chat edit that merged its new target in
+    (`refreshTreeAfterLanding` still pins the old base; the next check heals
+    it). Found on PR 13810 (target → `feature/PROD-439`, the tree kept showing
+    PROD-439's own changes as the PR's). The PR info column shows the change as
+    "Target gewijzigd: old → new" (`prmeta` `base_ref`/`prev_base_ref`, written
+    by `fetchPRBasics` from GitHub's latest `BaseRefChangedEvent`;
+    `prSummaryRefreshNeeded` re-runs that stage when the live target differs
+    from the stored one). Test: `ingest_base_moved_test.go`.
   - **`pr_ingest` table** (`pr → base_sha, head_sha`) is updated by both a full
     ingest and a delta refresh. No row = never ingested → the poller/Activity do
     nothing (a refresh requires a prior full ingest).

@@ -440,3 +440,52 @@ func short(sha string) string {
 	}
 	return sha
 }
+
+// fetchBaseRefChange reads the PR's current target branch and, when that target
+// was ever changed on GitHub, the branch it was changed FROM (the most recent
+// BaseRefChangedEvent's previousRefName; "" when it never changed). Read-only
+// (one GraphQL query), used by the fetchPRBasics Activity to store it into the
+// prmeta read-model and by prSummaryRefreshNeeded to notice a change — the PR
+// info column shows "old → new" so a reviewer sees why the tree's left side
+// moved. Never touches the network under SLASH_GITHUB=off.
+func fetchBaseRefChange(ctx context.Context, repo string, pr int) (current, previous string, err error) {
+	if ghDisabled() {
+		return "", "", fmt.Errorf("github disabled")
+	}
+	owner, name, ok := splitSlug(repoSlugFor(repo))
+	if !ok {
+		return "", "", fmt.Errorf("bad repo slug %q", repoSlugFor(repo))
+	}
+	const q = `query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){pullRequest(number:$p){` +
+		`baseRefName timelineItems(itemTypes:[BASE_REF_CHANGED_EVENT],last:1){nodes{` +
+		`... on BaseRefChangedEvent{previousRefName currentRefName}}}}}}`
+	cmd := exec.CommandContext(ctx, "gh", "api", "graphql", "-f", "query="+q,
+		"-f", "o="+owner, "-f", "n="+name, "-F", "p="+strconv.Itoa(pr))
+	out, err := cmd.Output()
+	if err != nil {
+		return "", "", fmt.Errorf("gh base ref change pr %d%s: %w", pr, repoTag(repo), err)
+	}
+	var resp struct {
+		Data struct {
+			Repository struct {
+				PullRequest struct {
+					BaseRefName   string `json:"baseRefName"`
+					TimelineItems struct {
+						Nodes []struct {
+							PreviousRefName string `json:"previousRefName"`
+						} `json:"nodes"`
+					} `json:"timelineItems"`
+				} `json:"pullRequest"`
+			} `json:"repository"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return "", "", fmt.Errorf("parse base ref change: %w", err)
+	}
+	p := resp.Data.Repository.PullRequest
+	current = p.BaseRefName
+	if n := p.TimelineItems.Nodes; len(n) > 0 && n[len(n)-1].PreviousRefName != current {
+		previous = n[len(n)-1].PreviousRefName
+	}
+	return current, previous, nil
+}

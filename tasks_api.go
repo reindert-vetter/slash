@@ -3359,6 +3359,9 @@ func (s *server) handlePR(w http.ResponseWriter, r *http.Request) {
 		// geleden", and the two halves of the block itself.
 		"ghUpdatedAt": meta.GhUpdatedAt, "newSinceKind": meta.NewSinceKind, "newSinceAt": meta.NewSinceAt,
 		"sinceFacts": meta.SinceFacts, "sinceSummary": meta.SinceSummary,
+		// The PR's target branch and the one it was changed from ("" = never
+		// changed): prInfoCard's "old → new" target line.
+		"baseRef": meta.BaseRef, "prevBaseRef": meta.PrevBaseRef,
 	})
 }
 

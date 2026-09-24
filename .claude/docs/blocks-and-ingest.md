@@ -161,6 +161,11 @@ full ingest stores for a rename.
 
 #### A delta refresh must not depend on `gh` for its own widening guard
 
+(Its base is the PR's **own** target branch — `baseRefName`, threaded as
+`PRStateSignal.BaseRef` / `meta.BaseRefName` — not the repo default: for a PR
+targeting another feature branch, diffing against develop counted every file
+of that branch as a PR file. Empty still falls back to `baseBranchFor(repo)`.)
+
 `prLocalChangedFilePaths` computes the PR's file set purely from **local git**
 — `changedFileNames(baseSHA, headSHA)`, the already-resolved **merge base**
 against head, the same three-dot comparison GitHub's own "Files changed" tab

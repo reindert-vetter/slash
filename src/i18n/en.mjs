@@ -681,6 +681,7 @@ export const EN = {
   'Klaar — {passed} geslaagd, {failed} mislukt.': 'Done — {passed} passed, {failed} failed.',
   'Stop deze testrun': 'Stop this test run',
   'op GitHub ›': 'on GitHub ›',
+  'Target gewijzigd:': 'Target changed:',
   Weergave: 'View',
   Doel: 'Goal',
   'samenvatting genereren…': 'generating summary…',

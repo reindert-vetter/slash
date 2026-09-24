@@ -19,7 +19,9 @@ import (
 //   - the PR's live title/description differ from the ones the summary was
 //     generated from (SummarySource). A summary stored before that column
 //     existed has no source; its stored basics are what it was generated from
-//     (stages 1+2 always ran back to back), so those stand in for it.
+//     (stages 1+2 always ran back to back), so those stand in for it, or
+//   - the PR's target branch differs from the stored one (fetchPRBasics then
+//     records the new target plus the one it was changed from).
 //
 // Any lookup failure answers false: the summary simply stays as it is.
 func (m *TaskManager) prSummaryRefreshNeeded(ctx context.Context, runID string) bool {
@@ -39,6 +41,12 @@ func (m *TaskManager) prSummaryRefreshNeeded(ctx context.Context, runID string) 
 		return false
 	}
 	if meta.Summary == "" {
+		return true
+	}
+	// The PR's target branch changed since stage 1 last ran: re-run it so the
+	// PR info column's "old → new" target line appears (generatePRSummary
+	// itself stays a no-op while title/description are unchanged).
+	if cur, _, err := fetchBaseRefChange(ctx, in.Repo, in.PR); err == nil && cur != "" && cur != meta.BaseRef {
 		return true
 	}
 	live, err := m.ghFor(in.Repo).PRMeta(ctx, in.PR)

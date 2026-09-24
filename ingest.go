@@ -132,7 +132,7 @@ func prepareIngestWorktreesLocked(ctx context.Context, dataDir string, repo stri
 	if target != "" && target != headSHA {
 		if !commitExists(ctx, repo, target) {
 			log.Printf("ingest pr %d: requested head %s is not available locally (using remote head %s)", pr, short(target), short(headSHA))
-		} else if local, lerr := prLocalChangedFilePaths(ctx, repo, target); lerr == nil {
+		} else if local, lerr := prLocalChangedFilePaths(ctx, repo, meta.BaseRefName, target); lerr == nil {
 			log.Printf("ingest pr %d: using head %s instead of gh's head %s", pr, short(target), short(headSHA))
 			headSHA, paths = target, local
 		} else {
@@ -290,7 +290,7 @@ const ingestTimeout = 5 * time.Minute
 // scanAndStoreIngestBlocks — the very same full per-PR swap a manual
 // `POST /api/ingest` performs). This is the ingest workflow's
 // "refreshIngestDelta" Activity, driven by pr_status's SignalPRState branch.
-func refreshIngestDelta(ctx context.Context, db *sql.DB, dataDir string, repo string, pr int, baseSHA, headSHA string) (*ingestResult, error) {
+func refreshIngestDelta(ctx context.Context, db *sql.DB, dataDir string, repo string, pr int, baseRef, baseSHA, headSHA string) (*ingestResult, error) {
 	ingestMu.Lock()
 	defer ingestMu.Unlock()
 
@@ -301,7 +301,10 @@ func refreshIngestDelta(ctx context.Context, db *sql.DB, dataDir string, repo st
 	if !ok {
 		return nil, fmt.Errorf("pr %d: no prior ingest recorded, run a full ingest first", pr)
 	}
-	if headSHA == prevHead {
+	// Cheap exact no-op (a stray/duplicate signal carrying the stored pair):
+	// no git needed. A head-unchanged signal with a DIFFERENT raw base is not
+	// decided here — see the post-normalization check below.
+	if headSHA == prevHead && baseSHA == prevBase {
 		return &ingestResult{PR: pr, Skipped: true}, nil
 	}
 
@@ -317,6 +320,16 @@ func refreshIngestDelta(ctx context.Context, db *sql.DB, dataDir string, repo st
 	// the head — exactly what it is for. Idempotent for the caller that already
 	// passes the stored base (chat_merge.go). See mergeBaseSHA.
 	baseSHA = mergeBaseSHA(ctx, repo, baseSHA, headSHA)
+
+	// Skipped only when NEITHER side moved. An unchanged head with a moved
+	// merge base is a real refresh: the PR's target branch was changed (e.g.
+	// develop -> feature/PROD-439) or the head absorbed its base, and the old
+	// base worktree then shows code the PR never changed as removed/added.
+	// checkIngestRefreshOnce signals exactly that case with the stored head
+	// (ingestBaseMoved); it takes the full-fallback path below.
+	if headSHA == prevHead && baseSHA == prevBase {
+		return &ingestResult{PR: pr, Skipped: true}, nil
+	}
 
 	// A rebase/force-push can rewrite the PR's own commits without moving the
 	// resolved merge base at all (e.g. squashing onto the same base tip), which
@@ -389,7 +402,7 @@ func refreshIngestDelta(ctx context.Context, db *sql.DB, dataDir string, repo st
 	// code_warning on every poll tick, because one submodule pointer
 	// (modules/Ai) was set back to its base value inside the delta. Reviewer
 	// decision: relax it, always save the head.
-	if prFiles, ferr := prLocalChangedFilePaths(ctx, repo, headSHA); ferr != nil {
+	if prFiles, ferr := prLocalChangedFilePaths(ctx, repo, baseRef, headSHA); ferr != nil {
 		log.Printf("ingest refresh pr %d: pr file list unavailable (%v), delta not filtered", pr, ferr)
 	} else {
 		if kept := filterToPRFiles(deltaFiles, prFiles); len(kept) != len(deltaFiles) {
@@ -466,8 +479,15 @@ func refreshIngestDelta(ctx context.Context, db *sql.DB, dataDir string, repo st
 // list could), so this closes the widening guard's original gap without
 // depending on gh. Best-effort: a fetch failure just means the fetch is
 // skipped and whatever tip is already known locally is used.
-func prLocalChangedFilePaths(ctx context.Context, repo string, headSHA string) ([]string, error) {
-	branch := baseBranchFor(repo)
+//
+// baseRef is the PR's OWN target branch (gh's baseRefName). Empty falls back to
+// the repo's default base branch — which is wrong for a PR targeting another
+// feature branch: every file that branch changed would count as a PR file.
+func prLocalChangedFilePaths(ctx context.Context, repo, baseRef, headSHA string) ([]string, error) {
+	branch := strings.TrimSpace(baseRef)
+	if branch == "" {
+		branch = baseBranchFor(repo)
+	}
 	if _, err := runGitFor(ctx, repo, "fetch", "origin", branch); err != nil {
 		log.Printf("prLocalChangedFilePaths: fetch %s failed (using local ref as-is): %v", branch, err)
 	}
