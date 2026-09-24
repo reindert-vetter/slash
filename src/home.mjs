@@ -113,6 +113,7 @@ import RelatedPanel, {
   focusedPrThreadMessage,
   activeComposeTargetHint,
   composeTargetHint,
+  commentClaudeRowWidthCls,
   CommentClaudeFooter,
   hasCommentClaudeFooter,
   hasAnyComments,
@@ -18452,7 +18453,9 @@ function DetailPanel(state) {
             // SAME condition as the template it holds, so no bare empty
             // padded strip shows when there's nothing to preview.
             activeComposeTargetHint(commentTarget)
-              ? html`<div class="px-3 pt-3">${composeTargetHint(activeComposeTargetHint(commentTarget))}</div>`
+              ? html`<div class="${() => 'px-3 pt-3 ' + commentClaudeRowWidthCls(state)}">
+                  ${composeTargetHint(activeComposeTargetHint(commentTarget))}
+                </div>`
               : ''}
           <div class="flex items-stretch overflow-hidden" data-testid="comment-claude-columns">
             ${() =>
