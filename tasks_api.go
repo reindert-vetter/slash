@@ -1073,11 +1073,11 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// ignore_runs Execution whose own Activity does every deletion, so it stays
 	// inside the workflow write-boundary; see TaskManager.IgnoreFailedRuns.
 	mux.HandleFunc("/api/workflows/ignore-runs", s.handleIgnoreRuns)
-	// GET /api/running-count → read-only: how many workflow runs are
-	// tembed.StatusRunning RIGHT NOW, repo-wide. Feeds the live badge next to
-	// the PR count on /pr-overview. A separate top-level path, not
+	// GET /api/running-count → read-only: how much is busy RIGHT NOW (runs in
+	// tembed.StatusRunning + active Claude chat turns), repo-wide and per PR.
+	// Feeds the header badge and the per-row chip on /pr-overview. A separate top-level path, not
 	// /api/workflows/…, so it needs no entry in the POST reserved-name guard
-	// in handleWorkflows. See run_errors.go's RunningCount.
+	// in handleWorkflows. See run_errors.go's RunningCounts.
 	mux.HandleFunc("/api/running-count", s.handleRunningCount)
 	// GET /api/prs/filter?preset=<key> → live gh-search for a fixed, allow-listed
 	// preset query (never raw UI text — see handleFilter).
@@ -1155,15 +1155,18 @@ func (s *server) handleTaskCodeComment(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleRunningCount serves GET /api/running-count — the read-only repo-wide
-// count of workflow runs currently tembed.StatusRunning (never StatusWaiting).
-// See run_errors.go's RunningCount.
+// handleRunningCount serves GET /api/running-count — the read-only count of
+// what is busy right now: workflow runs in tembed.StatusRunning (never
+// StatusWaiting) plus actively running Claude chat turns. `running` is the
+// repo-wide total, `byPr` the same per PR (statusKey → n, only PRs with n > 0).
+// See run_errors.go's RunningCounts.
 func (s *server) handleRunningCount(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "running": s.tasks.manager.RunningCount()})
+	total, byPR := s.tasks.manager.RunningCounts()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "running": total, "byPr": byPR})
 }
 
 // handleWorkflowsList serves GET /api/workflows?pr=N — the read-only list of

@@ -1117,6 +1117,28 @@ on the frontend (`authorGroups`/`authorGroupBlock`,
 (`SLASH_GITHUB=off`) `handleFilter` only honors the fixture rows' `draft:`
 qualifier. Test: `tests/overview-filter-presets.spec.mjs`.
 
+## Busy counts: the header "N actief" badge and the per-row "N bezig" chip
+
+Reviewer request: "ik wil in pr overview zien hoeveel taken er bezig zijn, ook
+claude gesprekken die echt actief zijn … als er niks is, mag je het hidden".
+One read-only endpoint, `GET /api/running-count` → `{running, byPr}`
+(`TaskManager.RunningCounts`, `run_errors.go`), feeds both the repo-wide header
+badge (`runningBadge`, `data-testid=running-count`) and a per-row chip
+(`busyPill`, `data-testid=row-running-count`, keyed by `statusKey` = the
+overview's `prUid`). Both are **hidden at 0**, and polled every 10s
+(`RUNNING_MS`), faster than `RELOAD_MS`.
+
+What counts as busy: a workflow run in `tembed.StatusRunning` (never
+`StatusWaiting` — an idle tracker between steps) **plus** a PR chat turn in
+`chatProgressByConv` (`chat_progress.go`, `runningChatTurns`). The second source
+is needed because a turn signalled into a waiting `claude_chat` run executes
+inline while the run STAYS `StatusWaiting` (`advance` never flips it back to
+running), so the status alone never saw an active chat. `claude_chat` runs are
+therefore skipped in the status count, so a first turn (whose run is briefly
+`StatusRunning`) is not counted twice. Plan-page turns (`pr` 0) belong to no PR
+and are left out. Tests: `TestRunningCountsTalliesPerPR`,
+`tests/overview-running-count.spec.mjs`.
+
 ## "Mislukte taken" block (failures that would otherwise only reach the log)
 
 Below `recentDrawer` sits a third expandable block, **"Mislukte taken"**

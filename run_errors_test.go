@@ -486,3 +486,36 @@ func TestFailedRunsDropsRunsOlderThanTheWindow(t *testing.T) {
 		t.Errorf("a failure within problemWindow is missing: %v", got)
 	}
 }
+
+// TestRunningCountsTalliesPerPR covers the busy-count behind /pr-overview's
+// header badge and per-row chip: every unit counts in the total, only a PR-bound
+// one in byPR, keyed like the overview's prUid (bare number for the primary
+// repo), and an active chat turn counts through the progress map.
+func TestRunningCountsTalliesPerPR(t *testing.T) {
+	total, byPR := countActive([]activeUnit{{pr: 12}, {pr: 12}, {pr: 0}, {repo: "", pr: 7}})
+	if total != 4 {
+		t.Fatalf("total = %d, want 4 (a repo-wide unit still counts in the total)", total)
+	}
+	if byPR["12"] != 2 || byPR["7"] != 1 || len(byPR) != 2 {
+		t.Fatalf("byPR = %v, want {12:2, 7:1}", byPR)
+	}
+
+	chatProgressMu.Lock()
+	saved := chatProgressByConv
+	chatProgressByConv = map[string]chatProgress{
+		"conv-a": {Running: true, pr: 12},
+		"conv-b": {Running: true, pr: 0}, // plan-page turn: no PR, skipped
+	}
+	chatProgressMu.Unlock()
+	t.Cleanup(func() {
+		chatProgressMu.Lock()
+		chatProgressByConv = saved
+		chatProgressMu.Unlock()
+	})
+
+	m := NewTaskManager(tembed.New(tembed.NewMemoryStore()), &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, nil, "", "test/repo")
+	total, byPR = m.RunningCounts()
+	if total != 1 || byPR["12"] != 1 {
+		t.Fatalf("RunningCounts() = %d, %v, want 1 and {12:1} from the active chat turn", total, byPR)
+	}
+}

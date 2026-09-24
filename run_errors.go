@@ -416,23 +416,61 @@ func (m *TaskManager) FailedRuns(limit int) []FailedRun {
 	return out
 }
 
-// RunningCount is how many workflow runs (repo-wide, across every PR) are
-// tembed.StatusRunning RIGHT NOW — deliberately NOT tembed.StatusWaiting, which
-// is what a long-lived tracker (pr_status, approve, …) sits in between actual
-// steps, most of the time. StatusRunning is the narrow window a run spends
-// actively executing an Activity, so this answers "how much background work is
-// genuinely in flight", not "how many trackers exist". Feeds the live badge
-// next to the PR count on /pr-overview. Read-only, same shape as FailedRuns.
-func (m *TaskManager) RunningCount() int {
-	runs, err := m.engine.Runs()
-	if err != nil {
-		return 0
-	}
-	n := 0
-	for _, r := range runs {
-		if r.Status == tembed.StatusRunning {
-			n++
+// RunningCounts is "how much is genuinely busy right now" — repo-wide (total)
+// and per PR (byPR, keyed by statusKey so it matches the overview's prUid).
+// Feeds the header badge and the per-row "N bezig" chip on /pr-overview.
+// Read-only, same shape as FailedRuns.
+//
+// Two sources, deliberately combined:
+//   - workflow runs in tembed.StatusRunning — NOT StatusWaiting, which is what a
+//     long-lived tracker (pr_status, approve, …) sits in between actual steps.
+//     StatusRunning is the narrow window a run spends executing an Activity.
+//   - claude_chat turns that are really doing something (chatProgressByConv,
+//     chat_progress.go). A turn signalled into a waiting claude_chat run runs
+//     inline while the run stays StatusWaiting, so the status alone never saw
+//     an active chat. claude_chat runs are therefore skipped in the status
+//     count and counted only through the progress map, so a first turn (whose
+//     run IS briefly StatusRunning) is not counted twice. Plan-page turns
+//     (pr 0) are left out: they belong to no PR.
+func (m *TaskManager) RunningCounts() (total int, byPR map[string]int) {
+	var busy []activeUnit
+	if runs, err := m.engine.Runs(); err == nil {
+		for _, r := range runs {
+			if r.Status != tembed.StatusRunning || r.Workflow == WorkflowClaudeChat {
+				continue
+			}
+			u := activeUnit{}
+			if in, err := m.engine.Input(r.ID); err == nil {
+				var input struct {
+					Repo string `json:"repo"`
+					PR   int    `json:"pr"`
+				}
+				if json.Unmarshal(in, &input) == nil {
+					u.repo, u.pr = input.Repo, input.PR
+				}
+			}
+			busy = append(busy, u)
 		}
 	}
-	return n
+	busy = append(busy, runningChatTurns()...)
+	return countActive(busy)
+}
+
+// activeUnit is one busy thing (a running run or an active chat turn) and the
+// PR it belongs to (pr 0 = repo-wide, counted only in the total).
+type activeUnit struct {
+	repo string
+	pr   int
+}
+
+// countActive is RunningCounts' pure tally, split out so it is testable
+// without driving a real run into StatusRunning.
+func countActive(units []activeUnit) (int, map[string]int) {
+	byPR := map[string]int{}
+	for _, u := range units {
+		if u.pr > 0 {
+			byPR[statusKey(canonRepo(u.repo), u.pr)]++
+		}
+	}
+	return len(units), byPR
 }

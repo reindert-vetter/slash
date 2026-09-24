@@ -101,7 +101,11 @@ const state = reactive({
   // restart (see run_errors.go). Loaded on page load — not lazily on open,
   // unlike "Recent gegenereerd" — because the count shows on the closed
   // button.
-  runningCount: 0, // GET /api/running-count — repo-wide count of tembed.StatusRunning runs
+  // GET /api/running-count — what is busy right now (runs in StatusRunning +
+  // actively running Claude chat turns). runningCount: repo-wide total (header
+  // badge); runningByPr: { prUid → n } for the per-row busyPill.
+  runningCount: 0,
+  runningByPr: {},
   problemsOpen: false,
   problemsLoaded: false,
   failedRuns: [],
@@ -676,6 +680,23 @@ function unpushedPill(pr) {
   ]
 }
 
+// busyPill — how many tasks are busy on this PR right now (workflow runs that
+// are really executing plus Claude chat turns actively working; state.runningByPr
+// from GET /api/running-count). Hidden at 0. Word + pulsing dot, never colour
+// alone; a keyed array like the other pills (async backfill, single↔array rule).
+function busyPill(pr) {
+  const n = state.runningByPr[prUid(pr)] || 0
+  if (!n) return []
+  return [
+    html`<span
+      class="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 ring-indigo-500/30"
+      data-testid="row-running-count"
+      ><span class="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-indigo-400"></span
+      ><span>${t('{n} bezig', { n })}</span></span
+    >`.key('busy:' + n),
+  ]
+}
+
 // checkoutPill — this PR has a local checkout assigned for Claude write turns
 // (state.checkout, from GET /api/chat/checkout via kickOffCheckout). Shows the
 // directory's own last path segment — a colourless, neutral fact, not a
@@ -872,7 +893,7 @@ function rowInner(pr, opts) {
       <div class="flex shrink-0 items-center gap-3">
         ${statusArea(pr)}
         <div class="flex flex-col items-end gap-1">
-          ${() => checkoutPill(pr)} ${() => unpushedPill(pr)} ${() => approvalPill(pr)}
+          ${() => busyPill(pr)} ${() => checkoutPill(pr)} ${() => unpushedPill(pr)} ${() => approvalPill(pr)}
         </div>
         ${commentsBit(pr)} ${() => graphChip(pr)} ${chevronFilled('h-4 w-4 text-slate-400 dark:text-zinc-600 group-hover:text-slate-600 dark:group-hover:text-zinc-300')}
       </div>
@@ -1843,6 +1864,27 @@ function errorCard(msg) {
   </div>`
 }
 
+// runningBadge — the repo-wide "N actief" badge in the header: runs really
+// executing plus actively working Claude chat turns. Hidden at 0 (reviewer:
+// "als er niks is, mag je het hidden"); a keyed array so the 0 ↔ n flip never
+// hits the single↔array slot pitfall.
+function runningBadge() {
+  const n = state.runningCount
+  if (!n) return []
+  return [
+    html`<span
+      data-testid="running-count"
+      class="inline-flex items-center gap-1.5 rounded-full bg-slate-100 dark:bg-zinc-800/80 px-2.5 py-1 text-xs text-slate-500 dark:text-zinc-400"
+    >
+      <span
+        class="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-indigo-400"
+        data-testid="running-count-dot"
+      ></span>
+      <span>${t('{n} actief', { n })}</span>
+    </span>`.key('running:' + n),
+  ]
+}
+
 function headerBlock() {
   return html`
     <header class="mb-4 flex items-end justify-between">
@@ -1850,16 +1892,7 @@ function headerBlock() {
         <h1 class="text-xl font-semibold text-slate-900 dark:text-zinc-100">Needs your review</h1>
       </div>
       <div class="flex items-center gap-2">
-        <span
-          data-testid="running-count"
-          class="inline-flex items-center gap-1.5 rounded-full bg-slate-100 dark:bg-zinc-800/80 px-2.5 py-1 text-xs text-slate-500 dark:text-zinc-400"
-        >
-          <span
-            class="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-indigo-400"
-            data-testid="running-count-dot"
-          ></span>
-          <span>${() => t('{n} actief', { n: state.runningCount })}</span>
-        </span>
+        ${() => runningBadge()}
         <span class="rounded-full bg-slate-100 dark:bg-zinc-800/80 px-2.5 py-1 text-xs text-slate-500 dark:text-zinc-400"
           >${() => {
             const n = state.sections.reduce((acc, s) => acc + s.prs.length, 0)
@@ -4169,6 +4202,7 @@ watch(
 
 const HEARTBEAT_MS = 60_000 // ping cadence while the tab is active
 const RELOAD_MS = 60_000 // re-pull the read-model while the tab is active
+const RUNNING_MS = 10_000 // re-pull the busy counts (header badge + per-row chip)
 let liveSyncStarted = false
 
 // Only beat/refresh when the tab is really being used — visible AND focused —
@@ -4318,9 +4352,9 @@ async function ignoreProblemRun(run) {
   await loadProblems()
 }
 
-// loadRunningCount pulls the live "how much is running right now" figure
+// loadRunningCount pulls the live "how much is running right now" figures
 // (GET /api/running-count, read-only) for the badge next to the PR count in
-// headerBlock(). Its own fetch, same reasoning as loadProblems: unrelated to
+// headerBlock() and the per-row busyPill. Its own fetch, same reasoning as loadProblems: unrelated to
 // reloadSnapshot's author-name priming, and rides along on the same
 // RELOAD_MS cadence in startLiveSync rather than a timer of its own.
 async function loadRunningCount() {
@@ -4330,6 +4364,7 @@ async function loadRunningCount() {
     const body = await res.json()
     if (!body || !body.ok) return
     state.runningCount = typeof body.running === 'number' ? body.running : 0
+    state.runningByPr = body.byPr && typeof body.byPr === 'object' ? body.byPr : {}
   } catch (e) {
     // keep whatever we already showed — a transient failure here must never
     // blank the badge back to 0.
@@ -4344,6 +4379,10 @@ function startLiveSync() {
     repollAfterRefresh()
   })
   setInterval(sendHeartbeat, HEARTBEAT_MS)
+  // The busy counts change on the scale of one chat turn (seconds to
+  // minutes), so they get a faster cadence of their own than RELOAD_MS — a
+  // cheap in-memory read.
+  setInterval(() => activeTab() && loadRunningCount(), RUNNING_MS)
   setInterval(() => {
     if (activeTab()) {
       reloadSnapshot()
@@ -4351,7 +4390,6 @@ function startLiveSync() {
       // Jira read-model itself is refreshed server-side every 5 minutes (see
       // jira_notifications.go); this only re-reads it.
       loadProblems()
-      loadRunningCount()
       loadJiraNotifications()
       loadJiraIssues()
     }

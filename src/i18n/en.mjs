@@ -407,6 +407,7 @@ export const EN = {
     'Pull requests that need your attention — {repo}{forPart}',
   ' · voor {name}': ' · for {name}',
   '{n} actief': '{n} active',
+  '{n} bezig': '{n} busy',
   "Zoek in alle PR's van {repo}… (titel, nummer of auteur; gesloten onderaan)":
     'Search all PRs in {repo}… (title, number or author; closed at the bottom)',
   'Geen resultaten voor “{query}”.': 'No results for “{query}”.',

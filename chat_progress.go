@@ -242,6 +242,21 @@ func chatProgressFor(conversationID string) (chatProgress, bool) {
 	return p, ok
 }
 
+// runningChatTurns lists every PR chat turn that is running right now — one
+// activeUnit per conversation — for RunningCounts (run_errors.go). Plan-page
+// turns (pr 0) are skipped: they belong to no PR.
+func runningChatTurns() []activeUnit {
+	chatProgressMu.Lock()
+	defer chatProgressMu.Unlock()
+	var out []activeUnit
+	for _, p := range chatProgressByConv {
+		if p.Running && p.pr > 0 {
+			out = append(out, activeUnit{repo: p.repo, pr: p.pr})
+		}
+	}
+	return out
+}
+
 // runningChatProgressForPR returns every RUNNING turn of one PR, keyed by
 // conversation id — the resync read for a tab that wants to know about the
 // conversations it is NOT currently showing (a chat running on another
