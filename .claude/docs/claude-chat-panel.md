@@ -903,6 +903,30 @@ shared action (`home.mjs`'s `onKeydown` calls the former right next to
 `selectHighlightedClaudeOption`, mirroring its own shape) — mouse-
 navigation.md's rule that a click runs the same function a key runs.
 
+**Walking `↑` back up through this chain must keep dragging the composer/
+thread along, not just the currently focused rung.** `CodePreviewPanel` and
+`CommentClaudeFooter`'s "Andere chats in deze PR" rows render BELOW
+`comment-claude-row` inside the same outer, vertically scrolling
+`comments-and-related` column (`home.mjs`) — `focusPreviewCard`'s own
+`alignToTopVertical` call already scrolls that outer column down as `↓`
+descends into a card, but `focusClaudeTaskRow` used to only keep ITS OWN row
+in view, never the `claude-chat-card` further up. Reviewer report: "als ik
+hier naar boven ga met mij keys, dan scrol je niet mee en is de chat niet
+zichtbaar" — with several "Andere chats" rows in between (a real PR usually
+has more than one running/finished conversation), the composer/thread stayed
+scrolled out of view for the ENTIRE walk back up through those rows, only
+reappearing once the very last `↑` landed back on the composer itself — and
+even then only by accident, via the browser's own "scroll a newly focused
+input into view" behaviour on `input.focus()` (`focusClaudeComposer`), not
+because anything asked for it. Fix: `nudgeClaudeCardIntoView()`
+(`RelatedPanel.mjs`) — a plain `scrollIntoViewVertical` on
+`[data-testid=claude-chat-card]`, a no-op once it's already reachable — is
+now called from `focusClaudeTaskRow` (so the column starts following on the
+very first `↑` out of the cards, not only the last one) and
+`focusClaudeComposer`'s rest branch now explicitly `alignToTopVertical`s the
+card too, instead of relying on `input.focus()`'s side effect. Test:
+`tests/claude-chat-preview-scroll-up.spec.mjs`.
+
 **The actual jump needs `state` (block selection) and `jumpToCommentRow`
 (comment-index rows can still be a poll tick away) — both belong to
 `home.mjs`, which `RelatedPanel.mjs` never imports state from.**

@@ -3934,6 +3934,19 @@ function focusPreviewCard() {
     if (el) alignToTopVertical(el)
   })
 }
+// nudgeClaudeCardIntoView tries to keep the whole `claude-chat-card`
+// (composer + thread) at least partly reachable while the keyboard cursor
+// walks the rungs BELOW it (cs.claudeTasksPos/cs.previewPos) inside the same
+// outer `comments-and-related` column — see the "Walking back up out of the
+// code-preview cards" note in focusClaudeComposer for the bug this closes.
+// scrollIntoViewVertical is a no-op once the card is already reachable, and
+// it never fights `focusClaudeTaskRow`'s own row-scroll below: that one runs
+// AFTER this, so the active row still wins whenever both can't fit at once.
+function nudgeClaudeCardIntoView() {
+  const card = document.querySelector('[data-testid=claude-chat-card]')
+  if (card) scrollIntoViewVertical(card)
+}
+
 // focusClaudeTaskRow mirrors focusPreviewCard for the "other running Claude
 // tasks" rung (cs.claudeTasksPos, see its own doc comment): blurs the
 // composer and keeps the highlighted row in view. scrollIntoViewVertical,
@@ -3949,6 +3962,14 @@ function focusClaudeTaskRow() {
     if (want !== focusToken) return
     const input = document.querySelector('[data-testid=claude-chat-compose]')
     if (input && document.activeElement === input) input.blur()
+    // Reaching this rung from BELOW (leaving the code-preview cards, see
+    // nudgeClaudeCardIntoView's own doc comment) used to leave the composer/
+    // thread stuck out of view above the fold for as long as the reviewer
+    // was still walking these rows — only the very last ↑, landing back on
+    // the composer itself, ever scrolled the column back up. Nudging here
+    // too means the column starts following on the very first ↑ out of the
+    // cards, not only once the whole rung is behind you.
+    nudgeClaudeCardIntoView()
     const el = document.querySelectorAll('[data-testid=claude-task-row]')[cs.claudeTasksPos - 1]
     if (el) scrollIntoViewVertical(el)
   })
@@ -4036,6 +4057,21 @@ function focusClaudeComposer() {
     if (cs.claudePos === 0 && cs.claudeOptionSel === 0) {
       if (input) input.focus()
       scrollClaudeThreadToBottom()
+      // Walking all the way back up out of the code-preview cards/"Andere
+      // chats in deze PR" rung (cs.previewPos/cs.claudeTasksPos, see
+      // focusClaudeTaskRow's own doc comment) used to leave the OUTER
+      // `comments-and-related` column scrolled exactly where it sat for the
+      // last card — scrollClaudeThreadToBottom above only ever touches the
+      // INNER `claude-chat-thread` scroll, never this column, so the
+      // composer/thread stayed off-screen above the still-scrolled-down
+      // viewport. It only ever came back by accident, via the browser's own
+      // "scroll a newly focused input into view" behaviour on `input.focus()`
+      // above — which happened to land back at the column's rest scrollTop
+      // only because the composer sits there, not because anything here
+      // asked for it. Make that explicit instead of relying on it: bring the
+      // whole Claude-chat card back into view within that outer column.
+      const card = document.querySelector('[data-testid=claude-chat-card]')
+      if (card) alignToTopVertical(card)
     } else {
       if (input && document.activeElement === input) input.blur()
       if (cs.claudePos === 0) scrollClaudeMessageIntoView0Options()
