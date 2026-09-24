@@ -732,6 +732,31 @@ not command rows, and it keeps its own focus-based keyboard model — the
 look-only-sharing note below still stands unchanged. Test:
 `tests/overview-command-menu.spec.mjs`.
 
+## A row's right side is a fixed-width grid, one track per element kind
+
+Reviewer report + screenshot (`data/review-shots/task-overview-right-side-messy.png`):
+"de linkerkant uitgelijnd links mooi, maar rechts vind ik rommelig". The left
+side already lined up (`authorMark` has a fixed `w-20`), but the right side
+(`rowInner`) used to be a single `flex … gap-3` row of five variable-width
+groups (reviewers+status, the 4 optional pills, comments, `graphChip`,
+chevron) — any group narrower or absent on a given row shifted every group
+after it, so nothing lined up between rows.
+
+Fixed with a `grid-cols-[minmax(0,14rem)_9rem_2.5rem_9rem_1.25rem]` on that
+wrapper — one fixed-width TRACK per element kind, content right-aligned
+within its own track, so a missing/narrower chip leaves blank space in its
+track instead of moving its neighbours. `statusArea`'s own div gained
+`flex-wrap justify-end` so a row with several reviewer avatars wraps onto a
+second line within its track instead of overflowing into the next column.
+This is a per-ROW grid (each `rowInner` call builds its own), not a
+page-wide/subgrid one — track widths are fixed constants sized generously for
+the widest known label per column (e.g. `graphChip`'s busy label "Bezig met
+genereren…"), not derived from the other rows on the page. A page-wide
+subgrid (deriving each column's width from every row's content at once) was
+considered and rejected as a first step — bigger diff, touches the
+stack/connector row structure, more test surface — see the discussion this
+came out of for the trade-off if this ever needs to be revisited.
+
 ## The per-row popover
 
 **Every row** — ingested or not — opens the same popover menu on click

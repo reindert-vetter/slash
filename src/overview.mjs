@@ -616,7 +616,7 @@ function statusPills(pr, status) {
 
 function statusArea(pr) {
   return html`
-    <div class="flex min-h-[22px] shrink-0 items-center gap-1.5" data-testid="status-slot">
+    <div class="flex min-h-[22px] flex-wrap items-center justify-end gap-1.5" data-testid="status-slot">
       ${() => statusPills(pr, statusFor(pr))}
     </div>
   `
@@ -876,6 +876,22 @@ function connectorMark() {
   >`
 }
 
+// rowInner — the left side already lines up (authorMark has a fixed w-20),
+// but the right side used to be a single `flex … gap-3` row of five
+// variable-width groups (reviewers+status, the 4 optional pills, comments,
+// graphChip, chevron): any group that was narrower/absent on a given row
+// shifted every group after it, so nothing lined up between rows (reviewer
+// report + screenshot: data/review-shots/task-overview-right-side-messy.png).
+// Fixed with a `grid-cols-[...]` of one fixed-width TRACK per element kind —
+// content right-aligned within its own track — so a missing/narrower chip
+// just leaves blank space in its track instead of moving its neighbours.
+// Column 1 (reviewers + status chip stack) is the one whose natural content
+// varies most (0-5 reviewer avatars); `statusArea`'s own flex-wrap lets it
+// wrap onto a second line within its track instead of overflowing into
+// column 2. This is a per-ROW grid, not a page-wide one (Alt B in the
+// proposal this came from) — a track width is chosen generously enough for
+// the widest known label per column (see graphChip's "Bezig met
+// genereren…"), not derived from the other rows' content.
 function rowInner(pr, opts) {
   return [
     opts.depth ? connectorMark() : null,
@@ -890,12 +906,14 @@ function rowInner(pr, opts) {
       </div>
     `,
     html`
-      <div class="flex shrink-0 items-center gap-3">
+      <div class="grid shrink-0 grid-cols-[minmax(0,14rem)_9rem_2.5rem_9rem_1.25rem] items-center gap-3">
         ${statusArea(pr)}
         <div class="flex flex-col items-end gap-1">
           ${() => busyPill(pr)} ${() => checkoutPill(pr)} ${() => unpushedPill(pr)} ${() => approvalPill(pr)}
         </div>
-        ${commentsBit(pr)} ${() => graphChip(pr)} ${chevronFilled('h-4 w-4 text-slate-400 dark:text-zinc-600 group-hover:text-slate-600 dark:group-hover:text-zinc-300')}
+        <div class="flex justify-end">${commentsBit(pr)}</div>
+        <div class="flex justify-end">${() => graphChip(pr)}</div>
+        <div class="flex justify-end">${chevronFilled('h-4 w-4 text-slate-400 dark:text-zinc-600 group-hover:text-slate-600 dark:group-hover:text-zinc-300')}</div>
       </div>
     `,
   ]
