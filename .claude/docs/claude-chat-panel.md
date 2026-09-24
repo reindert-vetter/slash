@@ -1242,6 +1242,20 @@ rather than a change to `chatStateOf`'s ranking:
   fallback, and must stay visible (there's nothing to have "viewed" there).
   So this only excludes `chatStateOf(c) === 'seen'` **combined with** having
   a real answer (`lastAssistantMessageAt(messages)` non-empty).
+- **"als een comment is resolved, wil ik dat de chat ook klaar is en niet
+  meer zichtbaar is in de lijst met lopende chats"** — `isResolvedChatDone(c)`
+  (`RelatedPanel.mjs`): the comment's own `status === 'resolved'` hides its
+  chat, both here and from the "Openstaande chats" sidebar section
+  (`openChatComments()`, below). Purely derived, no stored chat status, so an
+  unresolve brings the chat back by itself. Exceptions, confirmed with
+  Reindert: a turn still running (`'busy'`) or a failed turn awaiting a retry
+  (`'failed'`) keeps the row visible until neither holds; the general chat
+  anchor has no thread and is never affected. This deliberately reverses the
+  earlier "a resolved line comment's chat keeps its sidebar row" behaviour
+  described above. Accepted gap: the sidebar only knows `'failed'` once the
+  footer list's own transcript fetch (`ensureOtherTaskTitle`) has run for that
+  chat, and it only re-evaluates on its next `recomputeLeftList` (the comment
+  poll), not the instant a turn ends.
 
 Both facts (`otherTaskAutoStarted`/`otherTaskAnswered`, `RelatedPanel.mjs`)
 are read off the SAME `/api/chat?commentId=…` fetch `ensureOtherTaskTitle`

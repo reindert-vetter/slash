@@ -4806,6 +4806,22 @@ export function isChatSeenAndAnswered(c) {
   return chatStateOf(c) === 'seen' && !!otherTaskAnswered.byId[c.id]
 }
 
+// isResolvedChatDone — "de comment is resolved, dus de chat is klaar":
+// reviewer request "als een comment is resolved, wil ik dat de chat ook klaar
+// is en niet meer zichtbaar is in de lijst met lopende chats". Purely derived
+// from the comment's own durable status (no stored chat status of its own), so
+// an unresolve simply brings the chat back. A turn still running or a failed
+// turn awaiting a retry keeps the row visible (confirmed with Reindert) — it
+// only drops out once neither is the case. The general chat anchor has no
+// thread to resolve and is never affected. Applied to both "Andere chats in
+// deze PR" (otherClaudeChatsAll) and the "Openstaande chats" sidebar section
+// (openChatComments).
+function isResolvedChatDone(c) {
+  if (!c || c.status !== 'resolved' || isGeneralChatAnchor(c)) return false
+  const st = chatStateOf(c)
+  return st !== 'busy' && st !== 'failed'
+}
+
 // otherClaudeChatsAll is the uncapped list; otherClaudeChats (below) is what
 // renders. Kept apart so the "+n meer" line can name the difference without
 // a second, differently-filtered walk.
@@ -4854,6 +4870,7 @@ function otherClaudeChatsAll() {
   const filtered = out.filter((c) => {
     if (otherTaskAutoStarted.byId[c.id]) return false
     if (isChatSeenAndAnswered(c)) return false
+    if (isResolvedChatDone(c)) return false
     return true
   })
   // Stable sort (guaranteed in every browser this app targets), so rows only
@@ -11103,7 +11120,10 @@ export function openChatComments() {
   // with it the way back into the overlay) would be missing for exactly as
   // long as the reviewer has not sent anything yet.
   return cs.list.filter(
-    (c) => (cc.conversations.indexOf(c.id) >= 0 || isGeneralChatAnchor(c)) && !existingIds.has(c.id),
+    (c) =>
+      (cc.conversations.indexOf(c.id) >= 0 || isGeneralChatAnchor(c)) &&
+      !existingIds.has(c.id) &&
+      !isResolvedChatDone(c),
   )
 }
 
