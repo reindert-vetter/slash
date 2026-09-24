@@ -544,6 +544,23 @@ the refresh replaces every block OBJECT with a fresh copy:
   carries its source inline and is left alone), so a drilled column gets the new
   code and the fresh approvals too instead of silently staying on the
   pre-landing ones.
+- **A block the landing renamed or removed** (its id is gone — reviewer report:
+  the drilled column went blank, the old name has no source any more).
+  `landingSuccessor` (`home.mjs`) decides from the fresh blocks alone, never
+  from the chat: a candidate is a block in the same file/class/side that did
+  not exist before the refresh. One candidate, or exactly one on the old start
+  line → follow it. Several → the old block's approved rows (snapshotted via
+  `approvalAnchors` BEFORE `invalidateCodeCache`, since approvals are keyed by
+  block id and don't carry over to a new id), last to first; the first one
+  that stands unambiguously in one candidate (unique text, or a unique
+  prev/next context — `reanchor.go`'s rule) wins, cursor on that row at
+  `gran=line`; nothing found or a tie → keep the old object (the pre-existing
+  behaviour). No candidate at all (really removed) → a drilled column steps
+  one level back (closed together with anything drilled deeper) and the parent
+  lands on its last approved unit; the selected index block lands on the last
+  approved line of the same file, else the "another block of a touched file"
+  fallback. Same logic for a drilled level and the index selection. Test:
+  `tests/landing-rename-follow.spec.mjs`.
 
 **Ordering matters, and the trap is the same one `loadBlocks` already avoids:**
 `recomputeLeftList()` runs FIRST, and only then

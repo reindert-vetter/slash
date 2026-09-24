@@ -5180,6 +5180,93 @@ async function loadCheckout() {
   }
 }
 
+// landingSuccessor answers, for a block `old` whose id vanished in an own
+// landing's refresh, where the reviewer should go instead. Reviewer report: a
+// Claude edit renamed the drilled method and the column went blank (the old
+// name has no source any more) — "ik wil dan gaan naar de blok waarnaar het
+// hernoemd is". The chat is deliberately not consulted; the fresh blocks say
+// it: a candidate is a block in the same file/class/side that did not exist
+// before the refresh (`prevIds`).
+//   - exactly one candidate, or exactly one on old's own start line → it;
+//   - several → the old block's approved rows (`anchors`, approvalAnchors
+//     snapshotted before the refresh), last to first: the first one whose
+//     text stands unambiguously in one candidate (unique text, or a unique
+//     prev/next context match — reanchor.go's own rule) → that block, cursor
+//     on that row; nothing found or a tie → null (keep today's behaviour);
+//   - no candidate at all (really removed) → { gone: true }.
+async function landingSuccessor(old, prevIds, anchors) {
+  if (!old || old.synthetic) return null
+  const cands = state.allBlocks.filter(
+    (b) =>
+      !prevIds.has(b.id) &&
+      !b.synthetic &&
+      b.file === old.file &&
+      (b.class || '') === (old.class || '') &&
+      (b.side || '') === (old.side || ''),
+  )
+  if (!cands.length) return { gone: true }
+  if (cands.length === 1) return { block: cands[0], row: null }
+  const sameLine = cands.filter((b) => b.line === old.line)
+  if (sameLine.length === 1) return { block: sameLine[0], row: null }
+  const list = Array.isArray(anchors) ? [...anchors].sort((x, y) => y.row - x.row) : []
+  if (!list.length) return null
+  await Promise.all(cands.map((b) => ensureCode(b)))
+  const ws = (t) => String(t || '').replace(/\s+/g, '')
+  for (const an of list) {
+    const key = ws(an.text)
+    if (!key) continue
+    const hits = []
+    for (const b of cands) {
+      const rows = blockRows(b)
+      rows.forEach((r, i) => {
+        if (ws(rowAnchorText(r)) === key) hits.push({ block: b, row: i, rows })
+      })
+    }
+    if (hits.length === 1) return hits[0]
+    const ctx = hits.filter(
+      (h) =>
+        ws(h.row > 0 ? rowAnchorText(h.rows[h.row - 1]) : '') === ws(an.prev) &&
+        ws(h.row < h.rows.length - 1 ? rowAnchorText(h.rows[h.row + 1]) : '') === ws(an.next),
+    )
+    if (ctx.length === 1) return ctx[0]
+  }
+  return null
+}
+
+// lastApprovedRow returns the highest row index b's approval covers (approved
+// rows plus the rows its call keys sit on), or null when nothing is approved.
+function lastApprovedRow(b) {
+  let best = null
+  for (const r of (b && b.approvedRows) || []) if (best == null || r > best) best = r
+  for (const k of (b && b.approvedCalls) || []) {
+    const r = Number(String(k).split(':')[0])
+    if (Number.isInteger(r) && (best == null || r > best)) best = r
+  }
+  return best
+}
+
+// landCursorOnRow puts the cursor of `level` (0 = the top-level card, n = the
+// n-th drilled column) on the unit holding `row` of block `b` — at gran
+// 'line' for a row found back in a renamed successor, or at that level's
+// current gran when `keepGran` (the "one level back" landing). A null row is
+// a no-op; so is a block whose code isn't loaded (no units to land on).
+function landCursorOnRow(level, b, row, keepGran = false) {
+  if (row == null || !b) return
+  const cur = level > 0 ? state.drillCursor[level - 1] : { gran: state.gran }
+  if (!cur) return
+  const gran = keepGran ? cur.gran || 'group' : 'line'
+  const units = navUnitsOf(b, blockRows(b), gran)
+  if (!units.length) return
+  const change = unitAtRow(units, row)
+  if (level > 0) {
+    state.drillCursor = state.drillCursor.map((c, i) => (i === level - 1 ? { ...c, gran, change, rangeAnchor: null } : c))
+  } else {
+    state.gran = gran
+    state.change = change
+    state.rangeAnchor = null
+  }
+}
+
 // refreshBlocksAfterOwnLanding re-fetches the blocks/relations the moment the
 // ingest-refresh triggered by the REVIEWER'S OWN just-landed Claude edit
 // completes — the `blocks.changed` handler below only calls this when
@@ -5204,7 +5291,16 @@ async function loadCheckout() {
 // the first row" fallback. No such candidate → that generic fallback stands,
 // unchanged.
 async function refreshBlocksAfterOwnLanding(touchedFiles) {
-  const prevId = state.blocks[state.selected] ? state.blocks[state.selected].id : null
+  const prevBlock = state.blocks[state.selected] || null
+  const prevId = prevBlock ? prevBlock.id : null
+  // Snapshot what a renamed/removed block needs to be followed afterwards —
+  // BEFORE invalidateCodeCache below lets ensureCode wipe the old objects'
+  // b.code (see landingSuccessor).
+  const prevIds = new Set(state.allBlocks.map((b) => b.id))
+  const oldAnchors = new Map()
+  for (const b of [prevBlock, ...state.drill]) {
+    if (b && !b.synthetic && b.id && !oldAnchors.has(b.id)) oldAnchors.set(b.id, approvalAnchors(b) || [])
+  }
   try {
     const res = await fetch(`/api/blocks?pr=${state.pr}${repoQuery}`)
     if (!res.ok) return
@@ -5223,7 +5319,28 @@ async function refreshBlocksAfterOwnLanding(touchedFiles) {
   }
   recomputeLeftList()
   const stillThere = prevId != null && state.blocks.some((b) => b.id === prevId)
-  if (prevId != null && !stillThere && Array.isArray(touchedFiles) && touchedFiles.length) {
+  // The selected block vanished: follow it to its renamed successor where that
+  // is unambiguous (landingSuccessor); a real removal is settled below, once
+  // the approvals are back. Meanwhile — and whenever neither applies — land
+  // on another block of one of the files this landing touched.
+  let selSucc = null
+  if (
+    prevId != null &&
+    !stillThere &&
+    !prevBlock.synthetic &&
+    prevBlock.kind !== 'comment' &&
+    prevBlock.kind !== 'test_class' &&
+    !isPrDescriptionBlock(prevBlock)
+  ) {
+    selSucc = await landingSuccessor(prevBlock, prevIds, oldAnchors.get(prevId))
+  }
+  const selIdx = selSucc && selSucc.block ? state.blocks.indexOf(selSucc.block) : -1
+  if (selIdx >= 0) {
+    state.selected = selIdx
+    state.change = 0
+    state.rangeAnchor = null
+    landCursorOnRow(0, selSucc.block, selSucc.row)
+  } else if (prevId != null && !stillThere && Array.isArray(touchedFiles) && touchedFiles.length) {
     const files = new Set(touchedFiles)
     const idx = state.blocks.findIndex((b) => b.file && files.has(b.file))
     if (idx >= 0) state.selected = idx
@@ -5237,10 +5354,38 @@ async function refreshBlocksAfterOwnLanding(touchedFiles) {
   // Reassigned only when something really moved, so the ?drill= mirror and the
   // columns render are not nudged for nothing; the cursor state
   // (state.drillCursor, per level) is index-based and unaffected.
+  //
+  // A level whose id is gone was renamed or removed by this landing: the
+  // shallowest such level is resolved by landingSuccessor — a renamed
+  // successor replaces it (cursor on the approved row found back, if any);
+  // a real removal closes it (and everything drilled deeper from it) after
+  // the approvals are back, below. An unresolved rename keeps the old object.
+  let goneLevel = 0
   if (state.drill.length) {
     const byId = new Map(state.allBlocks.map((b) => [b.id, b]))
     const next = state.drill.map((d) => (d && !d.synthetic && byId.get(d.id)) || d)
-    if (next.some((d, i) => d !== state.drill[i])) state.drill = next
+    const staleIdx = next.findIndex((d) => d && !d.synthetic && !byId.has(d.id))
+    if (staleIdx >= 0) {
+      const stale = next[staleIdx]
+      const succ = await landingSuccessor(stale, prevIds, oldAnchors.get(stale.id))
+      if (succ && succ.block) {
+        next[staleIdx] = succ.block
+        state.drillCursor = state.drillCursor.map((c, i) => (i === staleIdx ? { ...c, change: 0, rangeAnchor: null } : c))
+        if (next.some((d, i) => d !== state.drill[i])) state.drill = next
+        landCursorOnRow(staleIdx + 1, succ.block, succ.row)
+      } else if (succ && succ.gone) {
+        // Really removed: one level back right away (no blank column in the
+        // meantime); the parent's cursor lands once the approvals are back.
+        goneLevel = staleIdx + 1
+        state.drill = next.slice(0, staleIdx)
+        state.drillCursor = state.drillCursor.slice(0, staleIdx)
+        if (state.focusLevel > staleIdx) {
+          state.focusLevel = staleIdx
+          markDrillReturn(staleIdx)
+          scrollFocusIntoView()
+        }
+      } else if (next.some((d, i) => d !== state.drill[i])) state.drill = next
+    } else if (next.some((d, i) => d !== state.drill[i])) state.drill = next
   }
   // The newly landed code can resolve new calls/tests/approval totals — the
   // same fire-and-forget reads loadBlocks itself kicks off.
@@ -5263,6 +5408,29 @@ async function refreshBlocksAfterOwnLanding(touchedFiles) {
   // header-only card. Reproduced and fixed in tests/refreshing-pill.spec.mjs.
   await Promise.all([loadApprovals(), loadBlockStats()])
   recomputeLeftList()
+  // A really removed drilled block: one level back, onto the parent's last
+  // approved unit. A really removed selected block: the last approved line of
+  // the same file (the touched-file fallback above stands when there is none).
+  if (goneLevel > 0 && state.drill.length === goneLevel - 1) {
+    const parentLevel = goneLevel - 1
+    const parent = parentLevel > 0 ? state.drill[parentLevel - 1] : curBlock()
+    if (parent && !parent.synthetic) {
+      await ensureCode(parent)
+      const row = lastApprovedRow(parent)
+      if (row != null && state.drill.length === parentLevel) landCursorOnRow(parentLevel, parent, row, true)
+    }
+    scrollChangeIntoView(false)
+  }
+  if (selSucc && selSucc.gone) {
+    const inFile = state.blocks.filter((b) => b.file === prevBlock.file && lastApprovedRow(b) != null)
+    inFile.sort((a, b) => (a.line || 0) - (b.line || 0))
+    const target = inFile[inFile.length - 1]
+    if (target) {
+      state.selected = state.blocks.indexOf(target)
+      await ensureCode(target)
+      if (state.blocks[state.selected] === target) landCursorOnRow(0, target, lastApprovedRow(target), true)
+    }
+  }
   // Whichever path got here first (the ordinary blocks.changed event, or the
   // loadPendingPush backstop above) — record the sha this tab is now caught up
   // to, so the OTHER path doesn't redundantly refetch again moments later for
