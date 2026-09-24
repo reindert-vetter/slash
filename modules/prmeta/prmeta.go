@@ -8,7 +8,9 @@ package prmeta
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -33,6 +35,7 @@ CREATE TABLE IF NOT EXISTS pr_meta (
   changed_files    INTEGER NOT NULL DEFAULT 0,
   head_ref         TEXT NOT NULL DEFAULT '',
   summary          TEXT NOT NULL DEFAULT '',
+  summary_source   TEXT NOT NULL DEFAULT '',
   jira_key         TEXT NOT NULL DEFAULT '',
   jira_title       TEXT NOT NULL DEFAULT '',
   jira_desc        TEXT NOT NULL DEFAULT '',
@@ -55,17 +58,22 @@ CREATE TABLE IF NOT EXISTS pr_meta (
 // Meta is the stored metadata of one PR.
 type Meta struct {
 	// Repo is the canonical repo string ("" = the primary repo, see repos.go).
-	Repo           string   `json:"repo,omitempty"`
-	PR             int      `json:"pr"`
-	Title          string   `json:"title"`
-	URL            string   `json:"url"`
-	Body           string   `json:"body"`
-	Author         string   `json:"author"`
-	Additions      int      `json:"additions"`
-	Deletions      int      `json:"deletions"`
-	ChangedFiles   int      `json:"changedFiles"`
-	HeadRef        string   `json:"headRef"`
-	Summary        string   `json:"summary"`
+	Repo         string `json:"repo,omitempty"`
+	PR           int    `json:"pr"`
+	Title        string `json:"title"`
+	URL          string `json:"url"`
+	Body         string `json:"body"`
+	Author       string `json:"author"`
+	Additions    int    `json:"additions"`
+	Deletions    int    `json:"deletions"`
+	ChangedFiles int    `json:"changedFiles"`
+	HeadRef      string `json:"headRef"`
+	Summary      string `json:"summary"`
+	// SummarySource is SummarySource(title, body) of the basics the stored
+	// Summary was generated from — how the pr_status tracker tells "the PR's
+	// title/description changed since, regenerate" apart from "still current,
+	// keep it". Empty for a summary stored before this column existed.
+	SummarySource  string   `json:"-"`
 	JiraKey        string   `json:"jiraKey"`
 	JiraTitle      string   `json:"jiraTitle"`
 	JiraDesc       string   `json:"jiraDesc"`
@@ -159,6 +167,7 @@ func migrate(db *sql.DB) {
 		`ALTER TABLE pr_meta ADD COLUMN since_facts TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE pr_meta ADD COLUMN since_summary TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE pr_meta ADD COLUMN fully_approved_at TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE pr_meta ADD COLUMN summary_source TEXT NOT NULL DEFAULT ''`,
 	} {
 		_, _ = db.Exec(col) // ignore "duplicate column name"
 	}
@@ -217,14 +226,24 @@ func (m *Module) SaveBasics(ctx context.Context, meta Meta) error {
 	return err
 }
 
-// SaveSummary upserts stage 2: the Claude-generated PR summary. WRITE —
-// workflow-only. Only touches the summary + updated_at columns.
-func (m *Module) SaveSummary(ctx context.Context, repo string, pr int, summary string) error {
+// SaveSummary upserts stage 2: the Claude-generated PR summary, plus the
+// SummarySource of the title/body it was generated from. WRITE —
+// workflow-only. Only touches the summary + summary_source + updated_at columns.
+func (m *Module) SaveSummary(ctx context.Context, repo string, pr int, summary, source string) error {
 	_, err := m.db.ExecContext(ctx, `
-		INSERT INTO pr_meta (repo, pr, summary, updated_at) VALUES (?,?,?,?)
-		ON CONFLICT(repo, pr) DO UPDATE SET summary=excluded.summary, updated_at=excluded.updated_at`,
-		repo, pr, summary, now())
+		INSERT INTO pr_meta (repo, pr, summary, summary_source, updated_at) VALUES (?,?,?,?,?)
+		ON CONFLICT(repo, pr) DO UPDATE SET summary=excluded.summary,
+			summary_source=excluded.summary_source, updated_at=excluded.updated_at`,
+		repo, pr, summary, source, now())
 	return err
+}
+
+// SummarySource fingerprints the PR fields the summary is derived from (title
+// + description) — a short sha256 hex, compared against Meta.SummarySource.
+// Pure; safe anywhere.
+func SummarySource(title, body string) string {
+	sum := sha256.Sum256([]byte(title + "\x00" + body))
+	return hex.EncodeToString(sum[:16])
 }
 
 // SaveStatuses upserts stage 3: review decision + CI checks + reviewers. WRITE
@@ -311,12 +330,12 @@ func (m *Module) Get(ctx context.Context, repo string, pr int) (Meta, bool, erro
 	var reviewersJSON string
 	err := m.db.QueryRowContext(ctx, `
 		SELECT repo, pr, title, url, body, author, additions, deletions, changed_files, head_ref,
-			summary, jira_key, jira_title, jira_desc, jira_url,
+			summary, summary_source, jira_key, jira_title, jira_desc, jira_url,
 			review_decision, checks_total, checks_passed, reviewers, updated_at,
 			gh_updated_at, new_since_kind, new_since_at, since_facts, since_summary, fully_approved_at
 		FROM pr_meta WHERE repo = ? AND pr = ?`, repo, pr).
 		Scan(&meta.Repo, &meta.PR, &meta.Title, &meta.URL, &meta.Body, &meta.Author, &meta.Additions, &meta.Deletions,
-			&meta.ChangedFiles, &meta.HeadRef, &meta.Summary, &meta.JiraKey, &meta.JiraTitle, &meta.JiraDesc,
+			&meta.ChangedFiles, &meta.HeadRef, &meta.Summary, &meta.SummarySource, &meta.JiraKey, &meta.JiraTitle, &meta.JiraDesc,
 			&meta.JiraURL, &meta.ReviewDecision, &meta.ChecksTotal, &meta.ChecksPassed, &reviewersJSON, &meta.UpdatedAt,
 			&meta.GhUpdatedAt, &meta.NewSinceKind, &meta.NewSinceAt, &meta.SinceFacts, &meta.SinceSummary, &meta.FullyApprovedAt)
 	if err == sql.ErrNoRows {

@@ -53,7 +53,7 @@ func TestSaveSummaryDoesNotClobberBasics(t *testing.T) {
 	if err := m.SaveBasics(ctx, Meta{PR: 1, Title: "T", Body: "B", Author: "a"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.SaveSummary(ctx, "", 1, "a short summary"); err != nil {
+	if err := m.SaveSummary(ctx, "", 1, "a short summary", ""); err != nil {
 		t.Fatal(err)
 	}
 	got, ok, err := m.Get(ctx, "", 1)
@@ -76,7 +76,7 @@ func TestSaveStatusesDoesNotClobberSummary(t *testing.T) {
 	if err := m.SaveBasics(ctx, Meta{PR: 2, Title: "T2"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.SaveSummary(ctx, "", 2, "sum"); err != nil {
+	if err := m.SaveSummary(ctx, "", 2, "sum", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.SaveStatuses(ctx, "", 2, "APPROVED", 5, 4, []string{"bob", "carol"}); err != nil {

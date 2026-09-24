@@ -604,6 +604,14 @@ type PRStateSignal struct {
 	// after, even though the PR overview's own "nieuw sinds jouw review" line
 	// (computed live per poll, inbox.go) already said there was something new.
 	RefreshSince bool `json:"refreshSince,omitempty"`
+	// RefreshSummary re-runs stages 1+2 (fetchPRBasics + generatePRSummary).
+	// Stage 2 otherwise only ran ONCE, at Execution start: a failed/timed-out
+	// Haiku call left the summary empty for the PR's whole lifetime (the
+	// review tree kept showing "samenvatting genereren…"), and an edited
+	// title/description never reached it. Decided OUTSIDE the workflow — by
+	// the page-load signal handler (prSummaryRefreshNeeded) — and recorded in
+	// this payload, so replay stays deterministic.
+	RefreshSummary bool `json:"refreshSummary,omitempty"`
 	// LandedFiles are the repo-relative paths a reviewer's own chat edit just
 	// landed on the PR's branch, threaded through from refreshTreeAfterLanding
 	// (chat_merge.go) so the refreshIngestDelta Activity below can embed them
@@ -2291,6 +2299,13 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if err != nil || !ok {
 			return nil, nil
 		}
+		// Still current: a summary exists and was generated from exactly this
+		// title + description. Never regenerate it — this is what makes the
+		// RefreshSummary branch (and a restarted tracker) cheap.
+		source := prmeta.SummarySource(meta.Title, meta.Body)
+		if meta.Summary != "" && meta.SummarySource == source {
+			return nil, nil
+		}
 		files, _ := changedFilesFor(m.db, arg.PR)
 		prompt := prSummaryPrompt(meta, files)
 		summary, err := m.claude.Run(ctx, claude.RunRequest{
@@ -2302,9 +2317,12 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			m.logf("pr_status: summary pr=%d skipped: %v", arg.PR, err)
 			return nil, nil
 		}
-		if err := m.prmeta.SaveSummary(ctx, arg.Repo, arg.PR, strings.TrimSpace(summary)); err != nil {
+		if err := m.prmeta.SaveSummary(ctx, arg.Repo, arg.PR, strings.TrimSpace(summary), source); err != nil {
 			return nil, fmt.Errorf("save pr summary: %w", err)
 		}
+		// The page's own pollPRMeta has usually stopped by the time a
+		// RefreshSummary retry lands, so tell it to refetch.
+		publishPRMetaChanged(arg.Repo, arg.PR)
 		return nil, nil
 	})
 
@@ -5372,6 +5390,19 @@ func prStatusWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			}
 			if err := w.ExecuteActivity("generateSinceReviewSummary", in, nil); err != nil {
 				return nil, fmt.Errorf("refresh since review summary: %w", err)
+			}
+		}
+		// Retry an empty summary / regenerate one whose title or description
+		// changed. Its own branch for the same positional-history reason as
+		// RefreshSince above: no past signal carried refreshSummary, so every
+		// stored history replays this as the empty branch. Stage 1 first —
+		// stage 2 summarises the basics that stage stores.
+		if s.RefreshSummary {
+			if err := w.ExecuteActivity("fetchPRBasics", in, nil); err != nil {
+				return nil, fmt.Errorf("refresh pr basics: %w", err)
+			}
+			if err := w.ExecuteActivity("generatePRSummary", in, nil); err != nil {
+				return nil, fmt.Errorf("refresh pr summary: %w", err)
 			}
 		}
 		// An ingest-refresh request (pollIngestRefresh observed a newer head

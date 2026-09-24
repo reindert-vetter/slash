@@ -55,7 +55,26 @@ everything (see "Progressive loading" in `.claude/docs/detail-layout.md`):
    `TestPRStatusJiraFailureLogsPR` (`workflows_test.go`).
 2. **`generatePRSummary`** — prompts Haiku (context-only) with the stored basics
    + the distinct changed files from `blocks` + the Jira ticket for a 2-4
-   sentence summary → `prmeta.SaveSummary`.
+   sentence summary → `prmeta.SaveSummary`, together with
+   `prmeta.SummarySource(title, body)` (a short sha256 of the input it
+   summarised, column `summary_source`). It **skips** — no Haiku call — when
+   a summary exists whose source still matches: a stored summary is never
+   regenerated just because the page was opened again.
+   **Re-run only on the page-load `state` signal's `RefreshSummary`** (its
+   own branch in `prStatusWorkflow`: `fetchPRBasics` + `generatePRSummary`,
+   separate from `RefreshSince` for the positional-replay reason noted
+   there). Before this, stage 2 ran exactly once per tracker: one timed-out
+   Haiku call (the 90s `contextTimeout`, seen on PR 13301) left the summary
+   empty for the PR's whole lifetime while the review tree's "Doel" kept
+   saying "samenvatting genereren…", and an edited title/description never
+   reached it. The signal handler decides the flag **outside** the workflow
+   (`prSummaryRefreshNeeded`, `pr_summary_refresh.go`, read-only: prmeta +
+   one live `PRMeta` read) and records it in the payload, so replay stays
+   deterministic: true when the summary is empty, or the live title/body no
+   longer match `summary_source` (a summary from before that column falls
+   back to its stored title/body, which is what it was generated from).
+   Jira-ticket edits deliberately do NOT trigger it. Test:
+   `TestPRSummaryRetriedAndRegeneratedOnEdit` (`pr_summary_refresh_test.go`).
 3. **`fetchPRStatuses`** — reuses the inbox status query (`statusesFor`) for
    this one PR → `prmeta.SaveStatuses`. GitHub's rollup gives only a total + an
    overall state, so `checksPassed` is `checksTotal` on `SUCCESS` and otherwise

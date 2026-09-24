@@ -1386,7 +1386,11 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "invalid state signal", http.StatusBadRequest)
 				return
 			}
-			if err := s.tasks.engine.SignalWorkflow(runID, SignalPRState, PRStateSignal{RefreshSince: true}); err != nil {
+			// RefreshSummary is decided here, outside the workflow (see
+			// prSummaryRefreshNeeded): only when the stored summary is empty or
+			// the PR's title/description changed since it was generated.
+			sig := PRStateSignal{RefreshSince: true, RefreshSummary: s.tasks.manager.prSummaryRefreshNeeded(r.Context(), runID)}
+			if err := s.tasks.engine.SignalWorkflow(runID, SignalPRState, sig); err != nil {
 				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 				return
 			}
